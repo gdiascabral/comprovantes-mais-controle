@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Separa PDFs (uma página = um arquivo) e renomeia os comprovantes no padrão:
+Separa PDFs (uma página = um arquivo) e renomeia os comprovantes.
+
+Modelo de nome PADRÃO:
 
   - com Descrição/Observação (centro de custo + OC/NF):  VALOR - DESCRIÇÃO - DATA
   - aporte/distribuição/transferência:                   VALOR - QUEM PAGOU PARA QUEM RECEBEU - DATA
   - PIX sem descrição (fornecedor):                       VALOR - QUEM RECEBEU - DATA
+
+Também aceita um modelo personalizado escrito com as palavras-chave
+VALOR, DESCRIÇÃO, DATA, PAGADOR e RECEBEDOR (ex.: "DATA - VALOR - RECEBEDOR").
 
 Cobre SICOOB (PIX / Boleto / Convênio) e Inter (PIX / Pagamento / Boleto-Guia).
 Todos os arquivos renomeados vão para UMA pasta só.
@@ -17,6 +22,8 @@ from pathlib import Path
 
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
+
+MODELO_PADRAO = "VALOR - DESCRIÇÃO - DATA"
 
 
 # ------------------------------------------------------------ extração
@@ -84,7 +91,8 @@ def campos(t):
         dest = _nome_apos(t, 'Destinat') or _nome_apos(t, 'Beneficiário') or _nome_apos(t, 'Beneficiario')
     return dict(banco=banco, tipo=tipo, valor=v, data=d, desc=desc, pag=pag, dest=dest)
 
-def nome_arquivo(c):
+def _partes_nome(c):
+    """Retorna (valor, 'miolo' inteligente do nome, data dd-mm)."""
     v = (c['valor'] or 'SEM VALOR').replace('.', '')
     dd = ''
     if c['data']:
@@ -102,8 +110,25 @@ def nome_arquivo(c):
         else:
             meio = desc or 'SEM DESCRICAO'
     meio = re.sub(r'\s+', ' ', (meio or '')).strip()
-    partes = [v] + ([meio] if meio else []) + ([dd] if dd else [])
-    nome = ' - '.join(partes)
+    return v, meio, dd
+
+def nome_arquivo(c, modelo: str | None = None) -> str:
+    """Monta o nome do arquivo. modelo=None (ou igual ao padrão) usa o
+    comportamento clássico; senão substitui as palavras-chave do modelo."""
+    v, meio, dd = _partes_nome(c)
+    usar_padrao = not modelo or modelo.strip().upper() in ("", MODELO_PADRAO.upper())
+    if usar_padrao:
+        partes = [v] + ([meio] if meio else []) + ([dd] if dd else [])
+        nome = ' - '.join(partes)
+    else:
+        nome = modelo
+        for token, valor in (("DESCRIÇÃO", meio), ("DESCRICAO", meio),
+                             ("RECEBEDOR", _limpar_empresa(c['dest']) or 'SEM RECEBEDOR'),
+                             ("PAGADOR", _limpar_empresa(c['pag']) or 'SEM PAGADOR'),
+                             ("VALOR", v),
+                             ("DATA", dd or 'SEM DATA')):
+            nome = nome.replace(token, valor)
+        nome = re.sub(r'\s+', ' ', nome)
     nome = re.sub(r'[<>:"/\\|?*]', '', nome).strip()
     return nome[:150] or 'SEM DADOS'
 
@@ -115,7 +140,7 @@ def _destino_unico(pasta: Path, base: str) -> Path:
         alvo = pasta / f"{base} ({n}).pdf"; n += 1
     return alvo
 
-def processar(pasta_entrada, pasta_saida, log=print):
+def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None):
     pasta_entrada = Path(pasta_entrada); pasta_saida = Path(pasta_saida)
     pasta_saida.mkdir(parents=True, exist_ok=True)
     pdfs = sorted(p for p in pasta_entrada.glob("*.pdf"))
@@ -133,7 +158,7 @@ def processar(pasta_entrada, pasta_saida, log=print):
             try:
                 with pdfplumber.open(str(pdf_path)) as pl:
                     txt = pl.pages[i].extract_text() or ''
-                base = nome_arquivo(campos(txt))
+                base = nome_arquivo(campos(txt), modelo)
                 w = PdfWriter(); w.add_page(reader.pages[i])
                 destino = _destino_unico(pasta_saida, base)
                 with open(destino, 'wb') as fh:
@@ -149,79 +174,109 @@ def processar(pasta_entrada, pasta_saida, log=print):
 
 
 # ------------------------------------------------------------ GUI
-def abrir_gui():
-    import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
 
+
+class SepararFrame(ttk.Frame):
+    """Conteúdo do app Separar e Renomear (usável sozinho ou como aba)."""
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.ent, self.sai = tk.StringVar(), tk.StringVar()
+        self.v_tipo_nome = tk.StringVar(value="padrao")
+        self.v_modelo = tk.StringVar(value=MODELO_PADRAO)
+        self.fila = queue.Queue()
+        self._montar()
+        self.after(150, self._drain)
+
+    def _montar(self):
+        frm = ttk.Frame(self); frm.pack(fill="x", padx=10, pady=8)
+        ttk.Label(frm, text="Pasta de ENTRADA (PDFs originais):").grid(row=0, column=0, sticky="w")
+        ttk.Entry(frm, textvariable=self.ent, width=58).grid(row=0, column=1, sticky="we")
+        ttk.Button(frm, text="…", width=3,
+                   command=lambda: self.ent.set(filedialog.askdirectory() or self.ent.get())).grid(row=0, column=2)
+        ttk.Label(frm, text="Pasta de SAÍDA (renomeados):").grid(row=1, column=0, sticky="w", pady=6)
+        ttk.Entry(frm, textvariable=self.sai, width=58).grid(row=1, column=1, sticky="we")
+        ttk.Button(frm, text="…", width=3,
+                   command=lambda: self.sai.set(filedialog.askdirectory() or self.sai.get())).grid(row=1, column=2)
+        frm.columnconfigure(1, weight=1)
+        self.ent.trace_add("write", self._sugerir_saida)
+
+        nome = ttk.LabelFrame(self, text=" Nome dos arquivos ")
+        nome.pack(fill="x", padx=10, pady=4)
+        ttk.Radiobutton(nome, text=f"PADRÃO: {MODELO_PADRAO}",
+                        variable=self.v_tipo_nome, value="padrao"
+                        ).grid(row=0, column=0, sticky="w", padx=8)
+        ttk.Radiobutton(nome, text="Personalizado:",
+                        variable=self.v_tipo_nome, value="custom"
+                        ).grid(row=1, column=0, sticky="w", padx=8)
+        ttk.Entry(nome, textvariable=self.v_modelo, width=50
+                  ).grid(row=1, column=1, sticky="we", padx=4)
+        ttk.Label(nome, text="Use as palavras VALOR, DESCRIÇÃO, DATA, PAGADOR e RECEBEDOR "
+                             "na ordem que quiser (ex.: DATA - VALOR - RECEBEDOR).",
+                  foreground="#555"
+                  ).grid(row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        nome.columnconfigure(1, weight=1)
+
+        self.barra = ttk.Progressbar(self, mode="indeterminate")
+        self.barra.pack(fill="x", padx=10)
+        self.txt = tk.Text(self, height=18, wrap="word")
+        self.txt.pack(fill="both", expand=True, padx=10, pady=8)
+        self.btn = ttk.Button(self, text="▶ Separar e Renomear", command=self._executar)
+        self.btn.pack(pady=(0, 8))
+
+    def _sugerir_saida(self, *_):
+        if self.ent.get() and not self.sai.get():
+            self.sai.set(str(Path(self.ent.get()) / "RENOMEADOS"))
+
+    def _log(self, m):
+        self.fila.put(("log", m))
+
+    def _drain(self):
+        try:
+            while True:
+                kind, m = self.fila.get_nowait()
+                if kind == "log":
+                    self.txt.insert("end", m + "\n"); self.txt.see("end")
+                else:
+                    self.barra.stop(); self.btn.config(state="normal")
+        except queue.Empty:
+            pass
+        self.after(150, self._drain)
+
+    def _executar(self):
+        if not self.ent.get() or not Path(self.ent.get()).exists():
+            messagebox.showerror("Erro", "Selecione a pasta de entrada."); return
+        if not self.sai.get():
+            self.sai.set(str(Path(self.ent.get()) / "RENOMEADOS"))
+        modelo = None if self.v_tipo_nome.get() == "padrao" else self.v_modelo.get()
+        self.btn.config(state="disabled"); self.barra.start(12)
+        self.txt.delete("1.0", "end")
+
+        def work():
+            try:
+                processar(self.ent.get(), self.sai.get(), self._log, modelo)
+            except Exception as ex:
+                self._log("ERRO FATAL: " + str(ex))
+            self.fila.put(("fim", None))
+        threading.Thread(target=work, daemon=True).start()
+
+
+def main():
     root = tk.Tk(); root.title("Separar e Renomear Comprovantes")
     try:
         root.state("zoomed")          # ocupa a tela inteira (Windows)
     except tk.TclError:
-        root.geometry("900x600")
-    ent, sai = tk.StringVar(), tk.StringVar()
-    q = queue.Queue()
-
-    frm = ttk.Frame(root); frm.pack(fill="x", padx=10, pady=8)
-    ttk.Label(frm, text="Pasta de ENTRADA (PDFs originais):").grid(row=0, column=0, sticky="w")
-    ttk.Entry(frm, textvariable=ent, width=58).grid(row=0, column=1, sticky="we")
-    ttk.Button(frm, text="…", width=3,
-               command=lambda: ent.set(filedialog.askdirectory() or ent.get())).grid(row=0, column=2)
-    ttk.Label(frm, text="Pasta de SAÍDA (renomeados):").grid(row=1, column=0, sticky="w", pady=6)
-    ttk.Entry(frm, textvariable=sai, width=58).grid(row=1, column=1, sticky="we")
-    ttk.Button(frm, text="…", width=3,
-               command=lambda: sai.set(filedialog.askdirectory() or sai.get())).grid(row=1, column=2)
-    frm.columnconfigure(1, weight=1)
-
-    def preencher_saida(*_):
-        if ent.get() and not sai.get():
-            sai.set(str(Path(ent.get()) / "RENOMEADOS"))
-    ent.trace_add("write", preencher_saida)
-
-    barra = ttk.Progressbar(root, mode="indeterminate"); barra.pack(fill="x", padx=10)
-    txt = tk.Text(root, height=20, wrap="word"); txt.pack(fill="both", expand=True, padx=10, pady=8)
-
-    def log(m): q.put(m)
-    def drain():
-        try:
-            while True:
-                txt.insert("end", q.get_nowait() + "\n"); txt.see("end")
-        except queue.Empty:
-            pass
-        root.after(150, drain)
-    root.after(150, drain)
-
-    def run():
-        if not ent.get() or not Path(ent.get()).exists():
-            messagebox.showerror("Erro", "Selecione a pasta de entrada."); return
-        if not sai.get():
-            sai.set(str(Path(ent.get()) / "RENOMEADOS"))
-        btn.config(state="disabled"); barra.start(12); txt.delete("1.0", "end")
-        def work():
-            try:
-                n, e = processar(ent.get(), sai.get(), log)
-                q.put(f"__FIM__{n}|{e}")
-            except Exception as ex:
-                q.put("ERRO FATAL: " + str(ex)); q.put("__FIM__0|1")
-        threading.Thread(target=work, daemon=True).start()
-
-    def checar_fim():
-        # verifica marcador de fim no texto
-        conteudo = txt.get("1.0", "end")
-        if "__FIM__" in conteudo:
-            barra.stop(); btn.config(state="normal")
-            txt.delete("1.0", "end")
-            txt.insert("end", conteudo.replace("__FIM__", "Fim ("))
-        root.after(400, checar_fim)
-    root.after(400, checar_fim)
-
-    btn = ttk.Button(root, text="▶ Separar e Renomear", command=run)
-    btn.pack(pady=(0, 8))
+        root.geometry("900x620")
+    SepararFrame(root).pack(fill="both", expand=True)
     root.mainloop()
 
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) >= 3:
-        processar(sys.argv[1], sys.argv[2])
+        processar(sys.argv[1], sys.argv[2],
+                  modelo=(sys.argv[3] if len(sys.argv) > 3 else None))
     else:
-        abrir_gui()
+        main()
