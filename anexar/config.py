@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-Ajustes do app de anexar. Os caminhos são relativos à pasta deste arquivo,
+Ajustes do app de anexar. Os caminhos são relativos à pasta deste arquivo
+(ou à pasta do executável, quando empacotado como .exe),
 então funciona em qualquer computador sem editar nada.
 """
+import sys
 from pathlib import Path
 
-_AQUI = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    # Rodando como executável (PyInstaller): usa a pasta onde o .exe está,
+    # para o perfil do Chrome e o log persistirem entre execuções.
+    _AQUI = Path(sys.executable).resolve().parent
+else:
+    _AQUI = Path(__file__).resolve().parent
 
 # Perfil do Chrome (mantém o login do Mais Controle salvo entre execuções).
 PASTA_PERFIL_CHROME = _AQUI / ".chrome_profile"
