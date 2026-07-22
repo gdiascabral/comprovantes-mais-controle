@@ -32,6 +32,8 @@ jobs:
         run: >
           pyinstaller --noconfirm --onefile --noconsole
           --name "Separar e Renomear"
+          --collect-all pdfminer
+          --collect-all pdfplumber
           "separar_renomear/separar_renomear.py"
 
       - name: Gerar "Anexar Comprovantes.exe"
