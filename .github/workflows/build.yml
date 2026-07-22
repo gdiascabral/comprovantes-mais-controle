@@ -1,0 +1,60 @@
+name: Gerar executáveis (Windows)
+
+on:
+  workflow_dispatch:      # permite rodar manualmente na aba Actions
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "LICENSE"
+
+permissions:
+  contents: write         # necessário para publicar a Release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Gerar "Separar e Renomear.exe"
+        run: >
+          pyinstaller --noconfirm --onefile --noconsole
+          --name "Separar e Renomear"
+          "separar_renomear/separar_renomear.py"
+
+      - name: Gerar "Anexar Comprovantes.exe"
+        run: >
+          pyinstaller --noconfirm --onefile --noconsole
+          --name "Anexar Comprovantes"
+          --collect-all playwright
+          "anexar/anexar_comprovantes.py"
+
+      - name: Publicar Release com os executáveis
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Executáveis v1.0.${{ github.run_number }}
+          body: |
+            Executáveis para Windows — não precisam de Python instalado.
+            Requisito: Google Chrome instalado (usado pelo Anexar Comprovantes).
+
+            - **Separar e Renomear.exe** — separa e renomeia os comprovantes (App 1)
+            - **Anexar Comprovantes.exe** — anexa os comprovantes no Mais Controle (App 2)
+
+            Dica: coloque cada .exe numa pasta própria; o perfil do Chrome
+            (login salvo) e os logs são criados ao lado do executável.
+          files: |
+            dist/Separar e Renomear.exe
+            dist/Anexar Comprovantes.exe
