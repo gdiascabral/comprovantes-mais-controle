@@ -214,7 +214,9 @@ class SepararFrame(ttk.Frame):
         ttk.Entry(nome, textvariable=self.v_modelo, width=50
                   ).grid(row=1, column=1, sticky="we", padx=4)
         ttk.Label(nome, text="Use as palavras VALOR, DESCRIÇÃO, DATA, PAGADOR e RECEBEDOR "
-                             "na ordem que quiser (ex.: DATA - VALOR - RECEBEDOR).",
+                             "na ordem que quiser (ex.: DATA - VALOR - RECEBEDOR). "
+                             "Inclua sempre o VALOR: é ele que permite o casamento "
+                             "automático na hora de anexar.",
                   foreground="#555"
                   ).grid(row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
         nome.columnconfigure(1, weight=1)
