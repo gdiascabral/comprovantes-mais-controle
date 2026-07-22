@@ -27,14 +27,18 @@ TAG_COMPROVANTE = "Comprovante"
 MC_URL_BASE = "https://acessar.maiscontroleerp.com.br"
 MC_URL_PAGAMENTOS = MC_URL_BASE + "/#/payable-installments"
 
-# Descrições/categorias ignoradas quando a opção "ignorar tarifas/transferências
-# internas" estiver marcada na janela (comparação sem acento, maiúsculas).
-IGNORAR_PADRAO = [
+# Descrições/categorias ignoradas pelas opções da janela
+# (comparação sem acento, maiúsculas).
+IGNORAR_TARIFAS = [
     "IOF",
     "TARIFA PIX",
     "TARIFA BANC",
     "CESTA",
-    "APORTE CAPITAL",
-    "DISTRIBUICAO DE LUCRO",
     "DEBITO PACOTE",
 ]
+IGNORAR_APORTES = [
+    "APORTE CAPITAL",
+    "DISTRIBUICAO DE LUCRO",
+]
+# compatibilidade com versões antigas
+IGNORAR_PADRAO = IGNORAR_TARIFAS + IGNORAR_APORTES

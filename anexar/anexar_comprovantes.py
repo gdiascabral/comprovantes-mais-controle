@@ -55,14 +55,95 @@ def _fmt_val(cents: int) -> str:
     return f"{cents // 100},{cents % 100:02d}"
 
 
-class App(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("Anexar Comprovantes — Mais Controle")
-        try:
-            self.state("zoomed")            # janela ocupando a tela (Windows)
-        except tk.TclError:
-            self.geometry("1100x720")
+class CampoData(ttk.Frame):
+    """Campo de data dd/mm/aaaa: completa as barras sozinho ao digitar e tem
+    um botão que abre um calendário para escolher a data com o mouse."""
+
+    MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+             "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+
+    def __init__(self, master, textvariable, width=11):
+        super().__init__(master)
+        self.var = textvariable
+        self.ent = ttk.Entry(self, textvariable=self.var, width=width)
+        self.ent.pack(side="left")
+        ttk.Button(self, text="📅", width=3, command=self._abrir_cal
+                   ).pack(side="left", padx=(2, 0))
+        self.ent.bind("<KeyRelease>", self._auto_barra)
+
+    def _auto_barra(self, ev):
+        if ev.keysym in ("BackSpace", "Delete", "Left", "Right",
+                         "Home", "End", "Tab", "Shift_L", "Shift_R"):
+            return
+        t = self.var.get()
+        d = "".join(c for c in t if c.isdigit())[:8]
+        if len(d) > 4:
+            novo = d[:2] + "/" + d[2:4] + "/" + d[4:]
+        elif len(d) > 2:
+            novo = d[:2] + "/" + d[2:]
+        else:
+            novo = d
+        if novo != t:
+            self.var.set(novo)
+            self.ent.icursor("end")
+
+    def _abrir_cal(self):
+        import calendar
+        top = tk.Toplevel(self)
+        top.title("Escolher data")
+        top.transient(self.winfo_toplevel())
+        top.resizable(False, False)
+        top.geometry(f"+{self.winfo_rootx()}+{self.winfo_rooty() + self.winfo_height() + 2}")
+        hoje = date.today()
+        m = re.match(r"(\d{2})/(\d{2})/(\d{4})$", (self.var.get() or "").strip())
+        mes = [int(m.group(2))] if m and 1 <= int(m.group(2)) <= 12 else [hoje.month]
+        ano = [int(m.group(3))] if m else [hoje.year]
+
+        cab = ttk.Frame(top); cab.pack(fill="x", padx=6, pady=4)
+        lbl = ttk.Label(cab, text="", width=16, anchor="center")
+        grade = ttk.Frame(top); grade.pack(padx=6, pady=(0, 6))
+
+        def escolher(dia):
+            self.var.set(f"{dia:02d}/{mes[0]:02d}/{ano[0]}")
+            top.destroy()
+
+        def desenhar():
+            for w in grade.winfo_children():
+                w.destroy()
+            lbl.config(text=f"{self.MESES[mes[0] - 1]} {ano[0]}")
+            for i, dsem in enumerate(["S", "T", "Q", "Q", "S", "S", "D"]):
+                ttk.Label(grade, text=dsem, width=3, anchor="center"
+                          ).grid(row=0, column=i)
+            for r, semana in enumerate(
+                    calendar.Calendar().monthdayscalendar(ano[0], mes[0]), 1):
+                for c, dia in enumerate(semana):
+                    if dia:
+                        ttk.Button(grade, text=str(dia), width=3,
+                                   command=lambda d=dia: escolher(d)
+                                   ).grid(row=r, column=c, padx=1, pady=1)
+
+        def mudar(delta):
+            m2 = mes[0] + delta
+            if m2 < 1:
+                mes[0], ano[0] = 12, ano[0] - 1
+            elif m2 > 12:
+                mes[0], ano[0] = 1, ano[0] + 1
+            else:
+                mes[0] = m2
+            desenhar()
+
+        ttk.Button(cab, text="◀", width=3, command=lambda: mudar(-1)).pack(side="left")
+        lbl.pack(side="left", expand=True)
+        ttk.Button(cab, text="▶", width=3, command=lambda: mudar(1)).pack(side="right")
+        desenhar()
+        top.grab_set()
+
+
+class AnexarFrame(ttk.Frame):
+    """Conteúdo do app Anexar Comprovantes (usável sozinho ou como aba)."""
+
+    def __init__(self, master):
+        super().__init__(master)
         self.q = queue.Queue()
         self.worker = None
         # TODO o trabalho com o navegador roda nesta ÚNICA thread (exigência
@@ -81,9 +162,9 @@ class App(tk.Tk):
         self.v_modo = tk.StringVar(value="auto")
         self.v_dry = tk.BooleanVar(value=False)
         self.v_ign = tk.BooleanVar(value=True)
+        self.v_ign_ap = tk.BooleanVar(value=True)
         self._build()
         self.after(150, self._drain)
-        self.protocol("WM_DELETE_WINDOW", self._fechar)
 
     # ---------------------------------------------------------------- layout
     def _build(self):
@@ -102,18 +183,20 @@ class App(tk.Tk):
         self.f_auto.pack(fill="x", **pad)
         fa = self.f_auto
         ttk.Label(fa, text="Data de pagamento — de:").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        ttk.Entry(fa, textvariable=self.v_ini, width=12).grid(row=0, column=1, sticky="w")
+        CampoData(fa, self.v_ini).grid(row=0, column=1, sticky="w")
         ttk.Label(fa, text="até:").grid(row=0, column=2, sticky="e")
-        ttk.Entry(fa, textvariable=self.v_fim, width=12).grid(row=0, column=3, sticky="w")
-        ttk.Label(fa, text="(dd/mm/aaaa)").grid(row=0, column=4, sticky="w")
+        CampoData(fa, self.v_fim).grid(row=0, column=3, sticky="w")
+        ttk.Label(fa, text="(dd/mm/aaaa — digite só os números ou use o 📅)"
+                  ).grid(row=0, column=4, sticky="w")
         ttk.Label(fa, text="Pasta dos PDFs renomeados:").grid(row=1, column=0, sticky="w", padx=8)
         ttk.Entry(fa, textvariable=self.v_pasta, width=70).grid(row=1, column=1, columnspan=3, sticky="we")
         ttk.Button(fa, text="Selecionar…",
                    command=lambda: self.v_pasta.set(filedialog.askdirectory() or self.v_pasta.get())
                    ).grid(row=1, column=4, padx=6)
-        ttk.Checkbutton(fa, text="Ignorar tarifas bancárias, IOF, cesta, aportes, "
-                                 "distribuição de lucros e pacote de serviços",
+        ttk.Checkbutton(fa, text="Ignorar tarifas bancárias, IOF, cesta e pacote de serviços",
                         variable=self.v_ign).grid(row=2, column=0, columnspan=5, sticky="w", padx=8)
+        ttk.Checkbutton(fa, text="Ignorar aportes de capital e distribuição de lucros",
+                        variable=self.v_ign_ap).grid(row=3, column=0, columnspan=5, sticky="w", padx=8)
         fa.columnconfigure(3, weight=1)
 
         self.f_contas = ttk.LabelFrame(self, text=" 2. Contas bancárias (marque as desejadas) ")
@@ -266,12 +349,17 @@ class App(tk.Tk):
             if not contas_sel:
                 self._log("[!] Nenhuma conta marcada."); self.q.put(("reabilitar2", None)); return
             pagos = [p for p in self.pagos if p["conta"] in contas_sel]
+            termos = []
             if self.v_ign.get():
+                termos += config.IGNORAR_TARIFAS
+            if self.v_ign_ap.get():
+                termos += config.IGNORAR_APORTES
+            if termos:
                 antes = len(pagos)
                 pagos = [p for p in pagos
                          if not any(t in (_norm(p["desc"]) + " | " + _norm(p["categoria"]))
-                                    for t in config.IGNORAR_PADRAO)]
-                self._log(f"Ignorados por tipo (tarifas/aportes/etc.): {antes - len(pagos)}")
+                                    for t in termos)]
+                self._log(f"Ignorados por tipo: {antes - len(pagos)}")
             self._log(f"{len(pagos)} pagamento(s) nas contas marcadas. Verificando anexos...")
 
             if pagos and not self.api.capturar_credenciais_anexos(pagos[0]["launchId"]):
@@ -413,7 +501,8 @@ class App(tk.Tk):
             pass
         self.after(150, self._drain)
 
-    def _fechar(self):
+    def fechar(self):
+        """Fecha o navegador e a thread de trabalho (chamar ao sair do app)."""
         try:
             if self.mc:
                 # fecha o navegador na thread dele (exigência do Playwright)
@@ -424,8 +513,24 @@ class App(tk.Tk):
             self.exec.shutdown(wait=False)
         except Exception:
             pass
-        self.destroy()
+
+
+def main():
+    root = tk.Tk()
+    root.title("Anexar Comprovantes — Mais Controle")
+    try:
+        root.state("zoomed")            # janela ocupando a tela (Windows)
+    except tk.TclError:
+        root.geometry("1100x720")
+    app = AnexarFrame(root)
+    app.pack(fill="both", expand=True)
+
+    def _sair():
+        app.fechar()
+        root.destroy()
+    root.protocol("WM_DELETE_WINDOW", _sair)
+    root.mainloop()
 
 
 if __name__ == "__main__":
-    App().mainloop()
+    main()
