@@ -17,8 +17,8 @@ ou de um Excel com aba CERTEZA (coluna link + PDF(s)).
 """
 import queue
 import re
-import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
 
@@ -65,6 +65,9 @@ class App(tk.Tk):
             self.geometry("1100x720")
         self.q = queue.Queue()
         self.worker = None
+        # TODO o trabalho com o navegador roda nesta ÚNICA thread (exigência
+        # do Playwright: os objetos só podem ser usados na thread que os criou).
+        self.exec = ThreadPoolExecutor(max_workers=1)
         self.mc = None                       # MCClient aberto entre as etapas
         self.api = None
         self.pagos = []                      # registros de montar_pagos()
@@ -170,11 +173,10 @@ class App(tk.Tk):
 
     # ---------------------------------------------------------------- etapa 1
     def abrir_mc(self):
-        if self.worker and self.worker.is_alive():
+        if self.worker and not self.worker.done():
             return
         self.b0.config(state="disabled")
-        self.worker = threading.Thread(target=self._t_abrir, daemon=True)
-        self.worker.start()
+        self.worker = self.exec.submit(self._t_abrir)
 
     def _t_abrir(self):
         try:
@@ -199,8 +201,7 @@ class App(tk.Tk):
             messagebox.showerror("Erro", "Selecione a pasta dos PDFs renomeados."); return
         self.b1.config(state="disabled")
         self.log.delete("1.0", "end")
-        self.worker = threading.Thread(target=self._t_conectar, args=(ini, fim), daemon=True)
-        self.worker.start()
+        self.worker = self.exec.submit(self._t_conectar, ini, fim)
 
     def _t_conectar(self, ini, fim):
         try:
@@ -246,7 +247,7 @@ class App(tk.Tk):
 
     # ---------------------------------------------------------------- etapa 2
     def executar(self):
-        if self.worker and self.worker.is_alive():
+        if self.worker and not self.worker.done():
             return
         if self.v_modo.get() == "lista":
             if not Path(self.v_lista.get() or "").exists():
@@ -257,8 +258,7 @@ class App(tk.Tk):
                 messagebox.showerror("Erro", "Primeiro clique em \"2. Carregar contas do período\"."); return
             alvo = self._t_auto
         self.b2.config(state="disabled")
-        self.worker = threading.Thread(target=alvo, daemon=True)
-        self.worker.start()
+        self.worker = self.exec.submit(alvo)
 
     def _t_auto(self):
         try:
@@ -416,7 +416,12 @@ class App(tk.Tk):
     def _fechar(self):
         try:
             if self.mc:
-                self.mc.__exit__(None, None, None)
+                # fecha o navegador na thread dele (exigência do Playwright)
+                self.exec.submit(self.mc.__exit__, None, None, None).result(timeout=8)
+        except Exception:
+            pass
+        try:
+            self.exec.shutdown(wait=False)
         except Exception:
             pass
         self.destroy()
