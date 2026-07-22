@@ -3,10 +3,11 @@
 Anexar Comprovantes — Mais Controle
 
 Fluxo da janela:
-  1) Informe o PERÍODO (data de pagamento dos comprovantes) e a PASTA dos
-     PDFs renomeados (padrão "VALOR - DESCRIÇÃO - DATA").
-  2) "Conectar e carregar contas": abre o Chrome em tela cheia, você faz login
-     e o app busca os títulos PAGOS do período (sempre filtra por Pagos).
+  1) "Abrir Mais Controle e acessar": abre o Chrome em tela cheia e você faz
+     login (só na 1ª vez; o perfil fica salvo).
+  2) Informe o PERÍODO (data de pagamento dos comprovantes) e a PASTA dos
+     PDFs renomeados (padrão "VALOR - DESCRIÇÃO - DATA") e clique em
+     "Carregar contas do período" — o app busca os títulos PAGOS do período.
   3) Marque as CONTAS BANCÁRIAS desejadas (caixas de seleção).
   4) "Casar e anexar": verifica quem já tem comprovante (pula), casa os
      pendentes com os PDFs e anexa. No fim, gera um relatório Excel.
@@ -117,7 +118,7 @@ class App(tk.Tk):
         self.contas_box = ttk.Frame(self.f_contas)
         self.contas_box.pack(fill="x", padx=8, pady=4)
         ttk.Label(self.contas_box,
-                  text="Clique em \"Conectar e carregar contas\" para listar as contas do período."
+                  text="Clique em \"2. Carregar contas do período\" para listar as contas."
                   ).pack(anchor="w")
 
         # ---- modo lista
@@ -132,11 +133,15 @@ class App(tk.Tk):
         acoes = ttk.Frame(self); acoes.pack(fill="x", **pad)
         ttk.Checkbutton(acoes, text="Simular (não anexa de verdade)",
                         variable=self.v_dry).pack(side="left")
-        self.b1 = ttk.Button(acoes, text="▶ 1. Conectar e carregar contas", command=self.conectar)
-        self.b1.pack(side="left", padx=10)
-        self.b2 = ttk.Button(acoes, text="▶ 2. Casar e anexar", command=self.executar,
+        self.b0 = ttk.Button(acoes, text="▶ 1. Abrir Mais Controle e acessar",
+                             command=self.abrir_mc)
+        self.b0.pack(side="left", padx=10)
+        self.b1 = ttk.Button(acoes, text="▶ 2. Carregar contas do período",
+                             command=self.conectar)
+        self.b1.pack(side="left")
+        self.b2 = ttk.Button(acoes, text="▶ 3. Casar e anexar", command=self.executar,
                              state="disabled")
-        self.b2.pack(side="left")
+        self.b2.pack(side="left", padx=10)
         self.lbl = ttk.Label(acoes, text="Pronto.")
         self.lbl.pack(side="left", padx=14)
 
@@ -164,6 +169,28 @@ class App(tk.Tk):
         self.q.put(("log", msg))
 
     # ---------------------------------------------------------------- etapa 1
+    def abrir_mc(self):
+        if self.worker and self.worker.is_alive():
+            return
+        self.b0.config(state="disabled")
+        self.worker = threading.Thread(target=self._t_abrir, daemon=True)
+        self.worker.start()
+
+    def _t_abrir(self):
+        try:
+            if self.mc is None:
+                self._log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
+                self.mc = MCClient().__enter__()
+                self.api = mc_api.MCApi(self.mc.page)
+            self.mc.garantir_login()
+            self._log("Mais Controle aberto. Agora confira o período e a pasta dos "
+                      "PDFs e clique em \"2. Carregar contas do período\".")
+        except Exception as e:
+            self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
+            self.mc = None
+        self.q.put(("reabilitar0", None))
+
+    # ---------------------------------------------------------------- etapa 2
     def conectar(self):
         ini, fim = _data_api(self.v_ini.get()), _data_api(self.v_fim.get())
         if not ini or not fim:
@@ -177,10 +204,11 @@ class App(tk.Tk):
 
     def _t_conectar(self, ini, fim):
         try:
-            self._log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
-            self.mc = MCClient().__enter__()
-            self.api = mc_api.MCApi(self.mc.page)
-            self.mc.garantir_login()
+            if self.mc is None:
+                self._log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
+                self.mc = MCClient().__enter__()
+                self.api = mc_api.MCApi(self.mc.page)
+                self.mc.garantir_login()
             if not self.api.capturar_credenciais(self._log):
                 raise RuntimeError("Não capturei a lista de pagamentos.")
             self._log(f"Buscando títulos PAGOS de {ini} a {fim} (todas as contas)...")
@@ -226,7 +254,7 @@ class App(tk.Tk):
             alvo = self._t_lista
         else:
             if not self.pagos:
-                messagebox.showerror("Erro", "Primeiro clique em \"Conectar e carregar contas\"."); return
+                messagebox.showerror("Erro", "Primeiro clique em \"2. Carregar contas do período\"."); return
             alvo = self._t_auto
         self.b2.config(state="disabled")
         self.worker = threading.Thread(target=alvo, daemon=True)
@@ -363,7 +391,9 @@ class App(tk.Tk):
                     self._montar_contas(val)
                     self.b1.config(state="normal")
                     self.b2.config(state="normal")
-                    self.lbl.config(text="Contas carregadas. Marque as desejadas e clique em 2.")
+                    self.lbl.config(text="Contas carregadas. Marque as desejadas e clique em 3.")
+                elif kind == "reabilitar0":
+                    self.b0.config(state="normal")
                 elif kind == "reabilitar":
                     self.b1.config(state="normal")
                 elif kind == "reabilitar2":

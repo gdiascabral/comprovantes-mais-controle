@@ -4,26 +4,46 @@ Leitura dos pagamentos e dos anexos pela MESMA API que a tela de Pagamentos usa.
 
 Como funciona: com o Chrome aberto e logado (Playwright), o app observa as
 requisições que a própria página faz e reaproveita os cabeçalhos de
-autenticação (o token fica só na memória, nada é salvo em disco). Com eles:
+autenticação (o token fica só na memória, nada é salvo em disco). As chamadas
+são então feitas DE DENTRO da própria página (fetch), com os mesmos cookies,
+User-Agent e origem da tela do sistema — o servidor não distingue do uso
+normal. Com isso:
 
   - lista os títulos PAGOS do período (type=PAID, dateField=DATE_OF_PAYMENT),
     sem filtro de conta — a seleção de contas é feita no app, por checkbox;
   - verifica, pago a pago, se há arquivo anexado no nível do sub-pagamento
-    (endpoint attachments/v2 com entityOrigin=PAID).
+    (endpoint de attachments com entityOrigin=PAID).
 """
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlsplit, parse_qsl
-
-import requests
+from urllib.parse import urlsplit, parse_qsl, urlencode
 
 try:
     from . import config
 except ImportError:
     import config
 
-# cabeçalhos que interessam (o resto é descartado)
+# cabeçalhos que interessam (o resto o navegador completa sozinho)
 _H_PAGOS = {"accept", "authorization", "organization-unit-id", "user-id", "company-id"}
 _H_ANEXO = {"accept", "authorization", "company-id"}
+
+_JS_FETCH_JSON = """async ({ url, headers }) => {
+  const r = await fetch(url, { headers });
+  if (!r.ok) return { __erro: r.status };
+  return await r.json();
+}"""
+
+_JS_FETCH_ANEXOS = """async ({ base, ids, headers }) => {
+  const out = {};
+  await Promise.all(ids.map(async (pid) => {
+    try {
+      const r = await fetch(base + '?entityIds=' + encodeURIComponent(pid) +
+                            '&entityOrigin=PAID', { headers });
+      if (!r.ok) { out[pid] = -1; return; }
+      const j = await r.json();
+      out[pid] = Array.isArray(j) ? j.length : 0;
+    } catch (e) { out[pid] = -1; }
+  }));
+  return out;
+}"""
 
 
 class MCApi:
@@ -31,7 +51,7 @@ class MCApi:
         """page = página do Playwright já criada (MCClient.page)."""
         self.page = page
         self._req_pagos = None    # (url, headers) da lista de pagamentos
-        self._req_anexos = None   # headers do endpoint de anexos
+        self._req_anexos = None   # (url_base, headers) do endpoint de anexos
         page.on("request", self._on_request)
 
     # ------------------------------------------------------------ captura
@@ -42,10 +62,10 @@ class MCApi:
                 h = {k: v for k, v in req.headers.items() if k.lower() in _H_PAGOS}
                 if "authorization" in {k.lower() for k in h}:
                     self._req_pagos = (u, h)
-            elif "/attachments" in u and "prod-erp-api" in u:
+            elif "/attachments" in u and "maiscontrole" in u:
                 h = {k: v for k, v in req.headers.items() if k.lower() in _H_ANEXO}
                 if "authorization" in {k.lower() for k in h}:
-                    self._req_anexos = h
+                    self._req_anexos = (u.split("?")[0], h)
         except Exception:
             pass
 
@@ -76,6 +96,11 @@ class MCApi:
         self.page.goto(config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
         return ok
 
+    # ------------------------------------------------------------ fetch
+    def _fetch_json(self, url: str, headers: dict):
+        """Faz a chamada de dentro da página logada (mesma origem/cookies/UA)."""
+        return self.page.evaluate(_JS_FETCH_JSON, {"url": url, "headers": headers})
+
     # ------------------------------------------------------------ pagos
     def listar_pagos(self, data_inicio: str, data_fim: str, log=print) -> list[dict]:
         """
@@ -97,9 +122,12 @@ class MCApi:
         todos, pagina = [], 0
         while True:
             q = params + [("page", str(pagina)), ("size", "500")]
-            r = requests.get(base, params=q, headers=headers, timeout=120)
-            r.raise_for_status()
-            j = r.json()
+            j = self._fetch_json(base + "?" + urlencode(q), headers)
+            if isinstance(j, dict) and j.get("__erro"):
+                raise RuntimeError(
+                    f"A API respondeu {j['__erro']} ao listar os pagos. "
+                    "Recarregue a tela de Pagamentos no Chrome e tente de novo.")
+            j = j or {}
             lote = j.get("content") or []
             todos.extend(lote)
             log(f"  ... página {pagina + 1}: {len(todos)} lançamento(s)")
@@ -113,43 +141,31 @@ class MCApi:
     # ------------------------------------------------------------ anexos
     def verificar_anexos(self, paid_ids: list[str], log=print,
                          progresso=None) -> dict[str, int]:
-        """Retorna {paidId: quantidade de arquivos anexados}. Requisições em paralelo."""
+        """Retorna {paidId: quantidade de arquivos anexados}. Lotes em paralelo
+        de dentro da própria página (Promise.all)."""
         if not self._req_anexos:
             raise RuntimeError("Credenciais de anexos ainda não capturadas.")
-        headers = self._req_anexos
-        url = "https://prod-erp-api.maiscontroleerp.com.br/attachments/v2"
+        base, headers = self._req_anexos
         resultado: dict[str, int] = {}
+        LOTE = 15
 
-        def um(pid):
-            r = requests.get(url, params={"entityIds": pid, "entityOrigin": "PAID"},
-                             headers=headers, timeout=60)
-            if r.status_code != 200:
-                return pid, -1
-            j = r.json()
-            return pid, (len(j) if isinstance(j, list) else 0)
+        def rodar(ids):
+            parcial = self.page.evaluate(
+                _JS_FETCH_ANEXOS, {"base": base, "ids": ids, "headers": headers})
+            resultado.update(parcial or {})
 
         feitos = 0
-        with ThreadPoolExecutor(max_workers=15) as ex:
-            futs = [ex.submit(um, pid) for pid in paid_ids]
-            for f in as_completed(futs):
-                try:
-                    pid, n = f.result()
-                    resultado[pid] = n
-                except Exception:
-                    pass
-                feitos += 1
-                if progresso:
-                    progresso(feitos, len(paid_ids))
-                elif feitos % 200 == 0:
-                    log(f"  ... {feitos}/{len(paid_ids)} verificados")
+        for i in range(0, len(paid_ids), LOTE):
+            rodar(paid_ids[i:i + LOTE])
+            feitos = min(feitos + LOTE, len(paid_ids))
+            if progresso:
+                progresso(feitos, len(paid_ids))
+            elif feitos and feitos % 195 == 0:
+                log(f"  ... {feitos}/{len(paid_ids)} verificados")
         # tenta de novo os que falharam
-        pendentes = [p for p in paid_ids if resultado.get(p, -1) < 0]
-        for pid in pendentes:
-            try:
-                _, n = um(pid)
-                resultado[pid] = n
-            except Exception:
-                resultado[pid] = -1
+        falhas = [p for p in paid_ids if resultado.get(p, -1) < 0]
+        for i in range(0, len(falhas), LOTE):
+            rodar(falhas[i:i + LOTE])
         return resultado
 
 
