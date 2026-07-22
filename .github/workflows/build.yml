@@ -43,6 +43,16 @@ jobs:
           --collect-all playwright
           "anexar/anexar_comprovantes.py"
 
+      - name: Gerar "Comprovantes Mais Controle.exe" (app unificado)
+        run: >
+          pyinstaller --noconfirm --onefile --noconsole
+          --name "Comprovantes Mais Controle"
+          --paths separar_renomear --paths anexar
+          --collect-all playwright
+          --collect-all pdfminer
+          --collect-all pdfplumber
+          "comprovantes_app.py"
+
       - name: Publicar Release com os executáveis
         uses: softprops/action-gh-release@v2
         with:
@@ -52,11 +62,13 @@ jobs:
             Executáveis para Windows — não precisam de Python instalado.
             Requisito: Google Chrome instalado (usado pelo Anexar Comprovantes).
 
-            - **Separar e Renomear.exe** — separa e renomeia os comprovantes (App 1)
-            - **Anexar Comprovantes.exe** — anexa os comprovantes no Mais Controle (App 2)
+            - **Comprovantes Mais Controle.exe** — app completo, com os dois em abas (recomendado)
+            - **Separar e Renomear.exe** — só o App 1
+            - **Anexar Comprovantes.exe** — só o App 2
 
-            Dica: coloque cada .exe numa pasta própria; o perfil do Chrome
+            Dica: coloque o .exe numa pasta própria; o perfil do Chrome
             (login salvo) e os logs são criados ao lado do executável.
           files: |
+            dist/Comprovantes Mais Controle.exe
             dist/Separar e Renomear.exe
             dist/Anexar Comprovantes.exe
