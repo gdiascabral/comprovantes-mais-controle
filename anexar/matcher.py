@@ -28,25 +28,34 @@ def _norm(s: str) -> str:
 
 # ------------------------------------------------------------------ PDFs
 def parse_pdf(fn: str) -> dict | None:
-    """Extrai valor/descrição/data/OC/NF do NOME do arquivo."""
+    """Extrai valor/descrição/data/OC/NF do NOME do arquivo.
+
+    Funciona com o modelo padrão (VALOR - DESCRIÇÃO - DATA) e também com
+    modelos personalizados: o valor (ex.: 1.234,56) e a data (dd-mm) são
+    reconhecidos em QUALQUER posição do nome; o resto vira a descrição.
+    O nome precisa conter o VALOR para o casamento automático."""
     if not fn.lower().endswith(".pdf"):
         return None
-    base = fn[:-4]
-    partes = base.split(" - ")
+    base = re.sub(r"\s*\(\d+\)$", "", fn[:-4]).strip()   # remove sufixo " (2)"
+    partes = [p.strip() for p in base.split(" - ")]
     if len(partes) < 2:
         return None
-    valstr = partes[0].strip()
-    m = re.match(r"(\d{2})-(\d{2})", partes[-1].strip()) if len(partes) >= 3 else None
-    if m:
-        data = m.group(1) + m.group(2)
-        desc = " - ".join(partes[1:-1]).strip()
-    else:
-        data = ""
-        desc = " - ".join(partes[1:]).strip()
-    try:
-        cents = int(valstr.replace(".", "").replace(",", ""))
-    except ValueError:
+    valstr = None
+    data = ""
+    resto = []
+    for p in partes:
+        if valstr is None and re.fullmatch(r"\d[\d.]*,\d{2}", p):
+            valstr = p
+            continue
+        m = re.fullmatch(r"(\d{2})-(\d{2})", p)
+        if m and not data:
+            data = m.group(1) + m.group(2)
+            continue
+        resto.append(p)
+    if valstr is None:
         return None
+    desc = " - ".join(resto).strip()
+    cents = int(valstr.replace(".", "").replace(",", ""))
     return {
         "fn": fn, "valor": cents, "data": data, "desc": desc, "ndesc": _norm(desc),
         "ocs": set(re.findall(r"\bOC\s*(\d+)", desc, re.I)),
