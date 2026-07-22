@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.chrome_profile/
+build/
+dist/
+*.spec
+log_anexos.csv
+relatorio_anexos_*.xlsx
+nao_anexadas_*.xlsx
+erro_*.png
+tag_debug.png
+.venv/
+venv/
