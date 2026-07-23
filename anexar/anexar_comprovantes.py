@@ -324,19 +324,32 @@ class AnexarFrame(ttk.Frame):
             messagebox.showerror("Erro", "Selecione a pasta dos PDFs renomeados."); return
         self.b1.config(state="disabled")
         self.log.delete("1.0", "end")
+        self.lbl.config(text="Conectando...")
+        self.pb.config(mode="indeterminate")
+        self.pb.start(12)
         self.worker = self.exec.submit(self._t_conectar, ini, fim)
 
     def _t_conectar(self, ini, fim):
+        def st(msg):                      # atualiza o texto de status da janela
+            self.q.put(("status", msg))
         try:
             if self.mc is None:
+                st("Abrindo o Chrome — faça o login se for pedido...")
                 self._log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
                 self.mc = MCClient().__enter__()
                 self.api = mc_api.MCApi(self.mc.page)
                 self.mc.garantir_login()
+            st("Capturando credenciais da tela de Pagamentos...")
             if not self.api.capturar_credenciais(self._log):
                 raise RuntimeError("Não capturei a lista de pagamentos.")
+            st("Buscando títulos pagos do período no servidor...")
             self._log(f"Buscando títulos PAGOS de {ini} a {fim} (todas as contas)...")
-            lanc = self.api.listar_pagos(ini, fim, self._log)
+
+            def log_pg(m):
+                self._log(m)
+                st("Buscando títulos pagos — " + m.strip(" .") + "...")
+            lanc = self.api.listar_pagos(ini, fim, log_pg)
+            st("Organizando as contas bancárias...")
             self.pagos = mc_api.montar_pagos(lanc)
             contas = sorted({p["conta"] for p in self.pagos if p["conta"]})
             self._log(f"{len(lanc)} lançamento(s), {len(self.pagos)} pagamento(s), "
@@ -528,13 +541,18 @@ class AnexarFrame(ttk.Frame):
                 kind, val = self.q.get_nowait()
                 if kind == "log":
                     self.log.insert("end", val + "\n"); self.log.see("end")
+                elif kind == "status":
+                    self.lbl.config(text=val)
                 elif kind == "max":
-                    self.pb.config(maximum=max(val, 1), value=0)
+                    self.pb.stop()
+                    self.pb.config(mode="determinate", maximum=max(val, 1), value=0)
                 elif kind == "prog":
                     i, ok, err = val
                     self.pb.config(value=i)
                     self.lbl.config(text=f"{i} processados — {ok} ok" + (f", {err} erros" if err else ""))
                 elif kind == "contas":
+                    self.pb.stop()
+                    self.pb.config(mode="determinate", value=0)
                     self._montar_contas(val)
                     self.b1.config(state="normal")
                     self.b2.config(state="normal")
@@ -542,7 +560,10 @@ class AnexarFrame(ttk.Frame):
                 elif kind == "reabilitar0":
                     self.b0.config(state="normal")
                 elif kind == "reabilitar":
+                    self.pb.stop()
+                    self.pb.config(mode="determinate", value=0)
                     self.b1.config(state="normal")
+                    self.lbl.config(text="Erro ao carregar — veja o Registro.")
                 elif kind == "reabilitar2":
                     self.b2.config(state="normal")
                     self.b_pause.config(text="⏸ Pausar", state="disabled")
