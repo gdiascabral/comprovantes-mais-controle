@@ -240,11 +240,18 @@ class AnexarFrame(ttk.Frame):
         self.b_stop.pack(side="left", padx=6)
         self.lbl = ttk.Label(acoes, text="Pronto.")
         self.lbl.pack(side="left", padx=14)
+        for _b in (self.b0, self.b1, self.b2):
+            try:
+                _b.configure(style="Accent.TButton")   # botões azuis (tema sv-ttk)
+            except tk.TclError:
+                pass
 
         self.pb = ttk.Progressbar(self, mode="determinate")
         self.pb.pack(fill="x", **pad)
         ttk.Label(self, text="Registro:").pack(anchor="w", padx=10)
-        self.log = tk.Text(self, wrap="word")
+        self.log = tk.Text(self, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=1, highlightbackground="#d0d0d0",
+                           background="#ffffff", font=("Consolas", 10))
         self.log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self._alternar_modo()
 
@@ -572,12 +579,22 @@ class AnexarFrame(ttk.Frame):
 
 
 def main():
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)   # texto nítido em telas HiDPI
+    except Exception:
+        pass
     root = tk.Tk()
     root.title("Anexar Comprovantes — Mais Controle")
     try:
         root.state("zoomed")            # janela ocupando a tela (Windows)
     except tk.TclError:
         root.geometry("1100x720")
+    try:
+        import sv_ttk                   # tema moderno (visual Windows 11)
+        sv_ttk.set_theme("light")
+    except Exception:
+        pass
     app = AnexarFrame(root)
     app.pack(fill="both", expand=True)
 
