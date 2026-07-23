@@ -78,7 +78,10 @@ class MCApi:
         return bool(getattr(self, attr))
 
     def capturar_credenciais(self, log=print) -> bool:
-        """Abre a tela de Pagamentos e espera a página fazer a 1ª requisição."""
+        """Espera a página fazer a 1ª requisição de pagamentos. Se ela já
+        aconteceu (ex.: durante o login), retorna na hora, sem recarregar."""
+        if self._req_pagos:
+            return True
         self.page.goto(config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
         ok = self._esperar("_req_pagos", lambda: None, timeout_s=30)
         if not ok:
@@ -140,9 +143,10 @@ class MCApi:
 
     # ------------------------------------------------------------ anexos
     def verificar_anexos(self, paid_ids: list[str], log=print,
-                         progresso=None) -> dict[str, int]:
+                         progresso=None, cancelar=None) -> dict[str, int]:
         """Retorna {paidId: quantidade de arquivos anexados}. Lotes em paralelo
-        de dentro da própria página (Promise.all)."""
+        de dentro da própria página (Promise.all).
+        cancelar: função chamada entre lotes; retornando True, interrompe."""
         if not self._req_anexos:
             raise RuntimeError("Credenciais de anexos ainda não capturadas.")
         base, headers = self._req_anexos
@@ -156,6 +160,8 @@ class MCApi:
 
         feitos = 0
         for i in range(0, len(paid_ids), LOTE):
+            if cancelar and cancelar():
+                return resultado
             rodar(paid_ids[i:i + LOTE])
             feitos = min(feitos + LOTE, len(paid_ids))
             if progresso:
@@ -165,6 +171,8 @@ class MCApi:
         # tenta de novo os que falharam
         falhas = [p for p in paid_ids if resultado.get(p, -1) < 0]
         for i in range(0, len(falhas), LOTE):
+            if cancelar and cancelar():
+                break
             rodar(falhas[i:i + LOTE])
         return resultado
 

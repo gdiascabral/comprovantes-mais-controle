@@ -17,8 +17,10 @@ ou de um Excel com aba CERTEZA (coluna link + PDF(s)).
 """
 import queue
 import re
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from datetime import date, datetime
 from pathlib import Path
 
@@ -149,6 +151,8 @@ class AnexarFrame(ttk.Frame):
         # TODO o trabalho com o navegador roda nesta ÚNICA thread (exigência
         # do Playwright: os objetos só podem ser usados na thread que os criou).
         self.exec = ThreadPoolExecutor(max_workers=1)
+        self._pausa = Event()   # ⏸ pausado enquanto setado
+        self._parar = Event()   # ⏹ interrompe o processo em andamento
         self.mc = None                       # MCClient aberto entre as etapas
         self.api = None
         self.pagos = []                      # registros de montar_pagos()
@@ -228,6 +232,12 @@ class AnexarFrame(ttk.Frame):
         self.b2 = ttk.Button(acoes, text="▶ 3. Casar e anexar", command=self.executar,
                              state="disabled")
         self.b2.pack(side="left", padx=10)
+        self.b_pause = ttk.Button(acoes, text="⏸ Pausar", command=self._pausar_toggle,
+                                  state="disabled")
+        self.b_pause.pack(side="left")
+        self.b_stop = ttk.Button(acoes, text="⏹ Parar", command=self._parar_click,
+                                 state="disabled")
+        self.b_stop.pack(side="left", padx=6)
         self.lbl = ttk.Label(acoes, text="Pronto.")
         self.lbl.pack(side="left", padx=14)
 
@@ -274,6 +284,29 @@ class AnexarFrame(ttk.Frame):
             self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
             self.mc = None
         self.q.put(("reabilitar0", None))
+
+    # -------------------------------------------------------- pausar / parar
+    def _pausar_toggle(self):
+        if self._pausa.is_set():
+            self._pausa.clear()
+            self.b_pause.config(text="⏸ Pausar")
+            self.lbl.config(text="Retomando...")
+        else:
+            self._pausa.set()
+            self.b_pause.config(text="▶ Continuar")
+            self.lbl.config(text="⏸ Pausado.")
+
+    def _parar_click(self):
+        self._parar.set()
+        self._pausa.clear()
+        self.b_pause.config(text="⏸ Pausar")
+        self.lbl.config(text="Parando...")
+
+    def _checar_pausa(self) -> bool:
+        """Bloqueia enquanto pausado; retorna True se o usuário mandou parar."""
+        while self._pausa.is_set() and not self._parar.is_set():
+            time.sleep(0.3)
+        return self._parar.is_set()
 
     # ---------------------------------------------------------------- etapa 2
     def conectar(self):
@@ -340,6 +373,10 @@ class AnexarFrame(ttk.Frame):
             if not self.pagos:
                 messagebox.showerror("Erro", "Primeiro clique em \"2. Carregar contas do período\"."); return
             alvo = self._t_auto
+        self._parar.clear()
+        self._pausa.clear()
+        self.b_pause.config(text="⏸ Pausar", state="normal")
+        self.b_stop.config(state="normal")
         self.b2.config(state="disabled")
         self.worker = self.exec.submit(alvo)
 
@@ -366,7 +403,12 @@ class AnexarFrame(ttk.Frame):
                 raise RuntimeError("Não capturei as credenciais de anexos.")
             self.q.put(("max", len(pagos)))
             att = self.api.verificar_anexos([p["paidId"] for p in pagos], self._log,
-                                            progresso=lambda i, n: self.q.put(("prog", (i, 0, 0))))
+                                            progresso=lambda i, n: self.q.put(("prog", (i, 0, 0))),
+                                            cancelar=self._checar_pausa)
+            if self._parar.is_set():
+                self._log("⏹ Interrompido pelo usuário durante a verificação.")
+                self.q.put(("reabilitar2", None))
+                return
             pendentes = [p for p in pagos if att.get(p["paidId"], 0) == 0]
             com = len(pagos) - len(pendentes)
             self._log(f"Com comprovante: {com} | SEM comprovante: {len(pendentes)}")
@@ -381,6 +423,10 @@ class AnexarFrame(ttk.Frame):
             self.q.put(("max", len(certezas)))
             pasta = Path(self.v_pasta.get())
             for i, pe in enumerate(certezas, 1):
+                if self._checar_pausa():
+                    self._log("⏹ Interrompido pelo usuário — gerando relatório "
+                              "com o que já foi feito.")
+                    break
                 arq = pasta / pe["pdf"]
                 vals = [_fmt_val(v) for v in pe.get("valores", [pe["valor"]])]
                 r = self.mc.anexar(pe["launchId"], _fmt_val(pe["valor"]), arq,
@@ -415,6 +461,9 @@ class AnexarFrame(ttk.Frame):
             self.q.put(("max", len(tarefas)))
             ok = 0
             for i, t in enumerate(tarefas, 1):
+                if self._checar_pausa():
+                    self._log("⏹ Interrompido pelo usuário.")
+                    break
                 if not t["launchId"] or not t["valor"] or t["arquivo"] is None:
                     r = "erro:linha_incompleta"
                 else:
@@ -489,9 +538,13 @@ class AnexarFrame(ttk.Frame):
                     self.b1.config(state="normal")
                 elif kind == "reabilitar2":
                     self.b2.config(state="normal")
+                    self.b_pause.config(text="⏸ Pausar", state="disabled")
+                    self.b_stop.config(state="disabled")
                 elif kind == "fim":
                     ok, tot, duv, sp, saida = val
                     self.b2.config(state="normal")
+                    self.b_pause.config(text="⏸ Pausar", state="disabled")
+                    self.b_stop.config(state="disabled")
                     self.lbl.config(text=f"Concluído: {ok}/{tot} ok"
                                     + (f" | {duv} dúvidas, {sp} sem par" if duv or sp else ""))
                     msg = f"Anexados/ok: {ok} de {tot}"
