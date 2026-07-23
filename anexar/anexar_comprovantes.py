@@ -382,11 +382,14 @@ class AnexarFrame(ttk.Frame):
             pasta = Path(self.v_pasta.get())
             for i, pe in enumerate(certezas, 1):
                 arq = pasta / pe["pdf"]
+                vals = [_fmt_val(v) for v in pe.get("valores", [pe["valor"]])]
                 r = self.mc.anexar(pe["launchId"], _fmt_val(pe["valor"]), arq,
-                                   doc=pe["doc"] or None, dry_run=self.v_dry.get())
+                                   doc=pe["doc"] or None, dry_run=self.v_dry.get(),
+                                   valores=vals)
                 if r.startswith("erro:"):
                     r = self.mc.anexar(pe["launchId"], _fmt_val(pe["valor"]), arq,
-                                       doc=pe["doc"] or None, dry_run=self.v_dry.get())
+                                       doc=pe["doc"] or None, dry_run=self.v_dry.get(),
+                                       valores=vals)
                 pe["resultado"] = r
                 resultados.append(pe)
                 self.q.put(("prog", (i, sum(1 for x in resultados if not x["resultado"].startswith("erro")), 0)))

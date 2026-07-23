@@ -95,10 +95,17 @@ def _features(pe: dict, pd: dict) -> tuple[bool, bool, bool]:
 
 
 # ------------------------------------------------------------------ casamento
+def _vals(pe) -> set:
+    """Valores aceitos do pagamento (nominal e valor pago com juros/desconto)."""
+    return set(pe.get("valores") or [pe["valor"]])
+
+
 def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     """
     pendentes: registros de mc_api.montar_pagos SEM anexo.
     Retorna (certezas, duvidas, sem_par). Em cada certeza: pend['pdf'] e pend['motivo'].
+    O PDF casa se o valor do nome bater com QUALQUER um dos valores do
+    pagamento (nominal ou valor pago com juros/multa/desconto).
     """
     byval = defaultdict(list)
     for p in pdfs:
@@ -107,10 +114,15 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     for pe in pendentes:
         pe["status"] = None
         pe["cands"] = []
-        for pd in byval.get(pe["valor"], []):
-            ocnf, cc, date = _features(pe, pd)
-            pe["cands"].append({"pdf": pd, "ocnf": ocnf, "cc": cc, "date": date,
-                                "score": (100 if ocnf else 0) + (10 if cc else 0) + (1 if date else 0)})
+        vistos = set()
+        for v in sorted(_vals(pe)):
+            for pd in byval.get(v, []):
+                if id(pd) in vistos:
+                    continue
+                vistos.add(id(pd))
+                ocnf, cc, date = _features(pe, pd)
+                pe["cands"].append({"pdf": pd, "ocnf": ocnf, "cc": cc, "date": date,
+                                    "score": (100 if ocnf else 0) + (10 if cc else 0) + (1 if date else 0)})
 
     def atribuir(filtro):
         mudou = True
@@ -150,13 +162,13 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     for pe in pendentes:
         if pe["status"]:
             continue
-        todos_val = byval.get(pe["valor"], [])
+        todos_val = [c["pdf"] for c in pe["cands"]]
         livres = [c for c in pe["cands"] if c["pdf"]["used_by"] is None]
         if not todos_val or not livres:
             pe["status"] = "SEM PAR"
             continue
         concorrentes = [q for q in pendentes if q is not pe and not q["status"]
-                        and q["valor"] == pe["valor"]]
+                        and (_vals(q) & _vals(pe))]
         if len(todos_val) == 1 and len(livres) == 1 and livres[0]["score"] > 0 \
                 and not concorrentes:
             livres[0]["pdf"]["used_by"] = pe["paidId"]

@@ -170,8 +170,22 @@ class MCApi:
 
 
 # ---------------------------------------------------------------- utilidades
+def _cents(x):
+    """Converte um número da API para centavos (int) ou None."""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    c = round(v * 100)
+    return c if c else None
+
+
 def montar_pagos(lancamentos: list[dict]) -> list[dict]:
-    """Achata lançamentos -> um registro por sub-pagamento (paid)."""
+    """Achata lançamentos -> um registro por sub-pagamento (paid).
+
+    Além do valor principal, guarda em "valores" todas as variações
+    conhecidas — valor nominal e VALOR PAGO (nominal + juros/multa − desconto)
+    — para o casamento aceitar boletos pagos com acréscimos ou descontos."""
     pagos = []
     for l in lancamentos:
         cat = l.get("category")
@@ -179,10 +193,27 @@ def montar_pagos(lancamentos: list[dict]) -> list[dict]:
                                   else (cat.get("name") or cat.get("description") or ""))
         for p in (l.get("paids") or []):
             pd = (p.get("payingDate") or "")[:10]  # aaaa-mm-dd
+            valores = set()
+            for k in ("paidValue", "value", "paymentValue", "totalValue",
+                      "netValue", "amount"):
+                c = _cents(p.get(k))
+                if c:
+                    valores.add(c)
+            base = _cents(p.get("value"))
+            acrescimos = sum(c for c in (_cents(p.get(k)) for k in
+                             ("interest", "interestValue", "fine", "fineValue",
+                              "addition", "additionValue", "fees", "feeValue"))
+                             if c)
+            descontos = sum(c for c in (_cents(p.get(k)) for k in
+                            ("discount", "discountValue")) if c)
+            if base and (acrescimos or descontos):
+                valores.add(base + acrescimos - descontos)
+            valor = _cents(p.get("paidValue")) or base or (max(valores) if valores else 0)
             pagos.append({
                 "launchId": l.get("id") or l.get("tradePayableId"),
                 "paidId": p.get("id"),
-                "valor": round(float(p.get("value") or p.get("paidValue") or 0) * 100),
+                "valor": valor,
+                "valores": sorted(valores) or [valor],
                 "data": (pd[8:10] + pd[5:7]) if len(pd) == 10 else "",
                 "dataFull": pd,
                 "doc": str(l.get("documentNumber") or ""),

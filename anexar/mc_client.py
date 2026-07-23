@@ -272,12 +272,16 @@ class MCClient:
 
     # ------------------------------------------------------------------ anexo
     def anexar(self, launch_id: str, valor_str: str, pdf_path: Path,
-               doc: str | None = None, dry_run: bool = True) -> str:
+               doc: str | None = None, dry_run: bool = True,
+               valores: list | None = None) -> str:
         """
         Retorna: 'anexado' | 'anexado_sem_tag' | 'ja_tinha' | 'nao_encontrado'
                  | 'ambiguo' | 'dry_run' | 'erro:...'
+        valores: lista opcional de valores aceitos (nominal e valor pago com
+        juros/multa/desconto); sem ela, usa apenas valor_str.
         """
-        alvo = _centavos(valor_str)
+        alvos = {a for a in (_centavos(v) for v in (valores or [valor_str]))
+                 if a is not None}
         url = f"{config.MC_URL_BASE}/#/payable-installments/{launch_id}"
         try:
             self.page.goto(url, wait_until="domcontentloaded")
@@ -285,7 +289,7 @@ class MCClient:
             self.page.wait_for_timeout(1500)
 
             rows = self.page.evaluate(_JS_ROWS)
-            cands = [r for r in rows if _centavos(r["val"]) == alvo]
+            cands = [r for r in rows if _centavos(r["val"]) in alvos]
             if doc:
                 doc = str(doc).strip()
                 refinado = [r for r in cands if r["doc"] and doc in r["doc"]]
