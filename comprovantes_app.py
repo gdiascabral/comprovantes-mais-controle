@@ -24,13 +24,28 @@ from separar_renomear import SepararFrame
 from anexar_comprovantes import AnexarFrame
 
 
+def _nitidez():
+    """Deixa o texto nítido em telas de alta resolução (Windows)."""
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+
+
 def main():
+    _nitidez()
     root = tk.Tk()
     root.title("Comprovantes — Mais Controle")
     try:
         root.state("zoomed")            # janela ocupando a tela (Windows)
     except tk.TclError:
         root.geometry("1150x740")
+    try:
+        import sv_ttk                   # tema moderno (visual Windows 11)
+        sv_ttk.set_theme("light")
+    except Exception:
+        pass
 
     abas = ttk.Notebook(root)
     aba_sep = SepararFrame(abas)
