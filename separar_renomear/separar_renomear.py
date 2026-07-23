@@ -223,10 +223,17 @@ class SepararFrame(ttk.Frame):
 
         self.barra = ttk.Progressbar(self, mode="indeterminate")
         self.barra.pack(fill="x", padx=10)
-        self.txt = tk.Text(self, height=18, wrap="word")
+        self.txt = tk.Text(self, height=18, wrap="word", relief="flat",
+                           borderwidth=0, highlightthickness=1,
+                           highlightbackground="#d0d0d0", background="#ffffff",
+                           font=("Consolas", 10))
         self.txt.pack(fill="both", expand=True, padx=10, pady=8)
         self.btn = ttk.Button(self, text="▶ Separar e Renomear", command=self._executar)
-        self.btn.pack(pady=(0, 8))
+        self.btn.pack(pady=(0, 10), ipadx=14)
+        try:
+            self.btn.configure(style="Accent.TButton")   # botão azul (tema sv-ttk)
+        except tk.TclError:
+            pass
 
     def _sugerir_saida(self, *_):
         if self.ent.get() and not self.sai.get():
@@ -266,11 +273,21 @@ class SepararFrame(ttk.Frame):
 
 
 def main():
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)   # texto nítido em telas HiDPI
+    except Exception:
+        pass
     root = tk.Tk(); root.title("Separar e Renomear Comprovantes")
     try:
         root.state("zoomed")          # ocupa a tela inteira (Windows)
     except tk.TclError:
         root.geometry("900x620")
+    try:
+        import sv_ttk                 # tema moderno (visual Windows 11)
+        sv_ttk.set_theme("light")
+    except Exception:
+        pass
     SepararFrame(root).pack(fill="both", expand=True)
     root.mainloop()
 
