@@ -34,6 +34,7 @@ jobs:
           --name "Separar e Renomear"
           --collect-all pdfminer
           --collect-all pdfplumber
+          --collect-all sv_ttk
           "separar_renomear/separar_renomear.py"
 
       - name: Gerar "Anexar Comprovantes.exe"
@@ -41,6 +42,7 @@ jobs:
           pyinstaller --noconfirm --onefile --noconsole
           --name "Anexar Comprovantes"
           --collect-all playwright
+          --collect-all sv_ttk
           "anexar/anexar_comprovantes.py"
 
       - name: Gerar "Comprovantes Mais Controle.exe" (app unificado)
@@ -51,6 +53,7 @@ jobs:
           --collect-all playwright
           --collect-all pdfminer
           --collect-all pdfplumber
+          --collect-all sv_ttk
           "comprovantes_app.py"
 
       - name: Publicar Release com os executáveis
