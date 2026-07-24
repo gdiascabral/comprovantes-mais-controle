@@ -4,3 +4,4 @@ playwright>=1.44
 openpyxl>=3.1
 requests>=2.31
 sv-ttk>=2.6
+pytesseract>=0.3.10
