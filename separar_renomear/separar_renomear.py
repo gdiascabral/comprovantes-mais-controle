@@ -18,12 +18,18 @@ import os
 import re
 import queue
 import threading
+import unicodedata
 from pathlib import Path
 
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
 
 MODELO_PADRAO = "VALOR - DESCRIÇÃO - DATA"
+
+
+def _sem_acento(s):
+    s = unicodedata.normalize("NFD", s or "")
+    return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
 
 # ------------------------------------------------------------ extração
@@ -82,6 +88,11 @@ def _limpar_empresa(nome):
     return re.sub(r'\s+', ' ', nome).strip(' .-')
 
 def campos(t):
+    # o layout "impresso" (2026) tem prioridade: nele os rótulos vêm
+    # separados dos valores e o parser antigo extrai dados errados
+    novo = _campos_impresso(t)
+    if novo and novo['valor']:
+        return novo
     banco, tipo = detectar(t)
     v = _valor(t); d = _data(t); desc = _descricao(t, banco)
     if banco == 'INTER':
@@ -90,6 +101,178 @@ def campos(t):
         pag = _nome_apos(t, 'Pagador')
         dest = _nome_apos(t, 'Destinat') or _nome_apos(t, 'Beneficiário') or _nome_apos(t, 'Beneficiario')
     return dict(banco=banco, tipo=tipo, valor=v, data=d, desc=desc, pag=pag, dest=dest)
+
+
+# --------------------------------------------- layout "impresso" (2026)
+# Sicoob Internet Banking e Inter novos geram o comprovante como página
+# impressa: rótulos e valores vêm em blocos separados (e o PDF muitas
+# vezes nem tem camada de texto — aí entra o OCR).
+RE_DIN_L = re.compile(r"^\s*R[S$]?\$?\s*([\d\.]+,\d{2})\s*$")
+RE_DATA_HORA = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(?:[àa]s\s+)?\d{2}[:h]\d{2}")
+RE_DATA_SO = re.compile(r"^(\d{2}/\d{2}/\d{4})$")
+RE_CNPJ_L = re.compile(r"\d{2}[\.\s]?\d{3}[\.\s]?\d{3}\s?/\s?\d{4}\s?-\s?\d{2}")
+RE_DESC_SITE = re.compile(r"\b(QD|LT|OC|NF|UC|LOTE|APORTE|DISTRIBUI\w*|REF)\b")
+RE_ID_LONGO = re.compile(r"^[A-Za-z0-9\-]{20,}$")
+
+
+def _eh_mascara(l):
+    """CPF/CNPJ mascarado (ex.: **.168.971/0001-** com ruído de OCR)."""
+    return "*" in l and sum(c.isdigit() for c in l) >= 4 and len(l) < 30
+
+
+def _detectar_impresso(t):
+    u = _sem_acento(t).upper()
+    if "SICOOB" in u and ("INTERNET BANKING" in u or "SISBR" in u
+                          or "TIPO PAGAMENTO" in u):
+        if "PAGAMENTO DE BOLETO" in u:
+            return ("SICOOB", "BOLETO")
+        if "PAGAMENTO PIX" in u or "TIPO PAGAMENTO" in u:
+            return ("SICOOB", "PIX")
+        return ("SICOOB", "?")
+    if "SOBRE A TRANSA" in u or "FALE COM A GENTE" in u or "BANCO INTER" in u:
+        return ("INTER", "PGTO")
+    return (None, None)
+
+
+def _campos_impresso(t):
+    banco, tipo = _detectar_impresso(t)
+    if not banco:
+        return None
+    nl = [l.strip() for l in t.splitlines() if l.strip()]
+
+    # valor: último R$ não-zero em linha própria (boleto: é o "Pago";
+    # Inter: é o "Valor total"; PIX: é o único)
+    valores = [m.group(1) for l in nl for m in [RE_DIN_L.match(l)] if m]
+    naozero = [v for v in valores
+               if v.replace(".", "").replace(",", "").strip("0") != ""]
+    valor = naozero[-1] if naozero else (valores[-1] if valores else None)
+
+    # data: prioriza data com hora (o cabeçalho de impressão usa vírgula
+    # e fica de fora); senão, data sozinha fora das 3 primeiras linhas
+    datas = RE_DATA_HORA.findall(t)
+    if not datas:
+        for i, l in enumerate(nl):
+            if i >= 3:
+                m = RE_DATA_SO.match(l)
+                if m:
+                    datas.append(m.group(1))
+    data = max(datas, key=lambda d: (datas.count(d), -datas.index(d))) if datas else None
+
+    # descrição: linha com cara de centro de custo / OC / NF...
+    desc = None
+    for l in nl:
+        u = _sem_acento(l).upper()
+        if RE_DESC_SITE.search(u) and not RE_ID_LONGO.match(l) and len(l) < 90 \
+                and "OUVIDORIA" not in u and "COMPROVANTE" not in u:
+            desc = l
+            break
+    if desc is None and banco == "SICOOB" and tipo == "PIX" and valor:
+        # ...ou, no PIX, a linha logo depois do valor
+        for i, l in enumerate(nl):
+            if RE_DIN_L.match(l):
+                if i + 1 < len(nl):
+                    cand = nl[i + 1]
+                    u = _sem_acento(cand).upper()
+                    digitos = sum(c.isdigit() for c in cand) / max(len(cand), 1)
+                    if not RE_ID_LONGO.match(cand) and len(cand) > 2 \
+                            and not u.startswith("FINALIZADO") \
+                            and not u.startswith("OUVIDORIA") \
+                            and "{" not in cand and "}" not in cand \
+                            and digitos < 0.4:      # rejeita códigos/hashes
+                        desc = cand
+                break
+
+    pag = dest = None
+    if banco == "SICOOB":
+        if tipo == "BOLETO":
+            # nomes: linha imediatamente anterior a cada CNPJ completo
+            nomes = []
+            for i, l in enumerate(nl):
+                if RE_CNPJ_L.search(l):
+                    for j in range(i - 1, -1, -1):
+                        cand = nl[j]
+                        if not RE_CNPJ_L.search(cand) and len(cand) > 4 \
+                                and not RE_DIN_L.match(cand):
+                            if cand not in nomes:
+                                nomes.append(cand)
+                            break
+            dest = nomes[0] if nomes else None           # beneficiário
+            pag = nomes[1] if len(nomes) > 1 else None   # pagador
+        else:  # PIX: nome vem na linha anterior ao CPF/CNPJ (mascarado)
+            nomes = []
+            for i, l in enumerate(nl):
+                if (_eh_mascara(l) or RE_CNPJ_L.search(l)) and i > 0:
+                    nomes.append(nl[i - 1])
+            pag = nomes[0] if nomes else None
+            dest = nomes[1] if len(nomes) > 1 else None
+    else:  # INTER novo
+        for i, l in enumerate(nl):
+            u = _sem_acento(l).upper()
+            if "INTER S.A" in u or "BANCO INTER" in u:
+                if i > 0:
+                    pag = nl[i - 1]
+                break
+        for i, l in enumerate(nl):
+            u = _sem_acento(l).upper()
+            if u.startswith("FALE COM A GENTE") or u.startswith("CAPITAIS E REGI"):
+                for j in range(i - 1, -1, -1):
+                    cand = nl[j]
+                    if len(cand) > 4 and not RE_DIN_L.match(cand) \
+                            and not cand.isdigit():
+                        dest = cand
+                        break
+                break
+    return dict(banco=banco, tipo=tipo, valor=valor, data=data, desc=desc,
+                pag=pag, dest=dest)
+
+
+# --------------------------------------------------------------- OCR
+_OCR = {"pronto": None, "lang": "por", "avisado": False}
+
+
+def _configurar_ocr() -> bool:
+    try:
+        import pytesseract
+    except ImportError:
+        return False
+    import shutil
+    import sys
+    cands = []
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        cands.append(Path(base) / "tesseract" / "tesseract.exe")
+    cands.append(Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"))
+    achado = shutil.which("tesseract")
+    if achado:
+        cands.append(Path(achado))
+    for c in cands:
+        if c.exists():
+            pytesseract.pytesseract.tesseract_cmd = str(c)
+            tess = c.parent / "tessdata"
+            if tess.is_dir():
+                os.environ["TESSDATA_PREFIX"] = str(tess)
+            try:
+                langs = set(pytesseract.get_languages(config=""))
+            except Exception:
+                langs = set()
+            _OCR["lang"] = "por" if "por" in langs else "eng"
+            return True
+    return False
+
+
+def _ocr_pagina(pagina, log=print) -> str:
+    """OCR de uma página sem camada de texto (comprovantes 'impressos')."""
+    if _OCR["pronto"] is None:
+        _OCR["pronto"] = _configurar_ocr()
+    if not _OCR["pronto"]:
+        if not _OCR["avisado"]:
+            log("[aviso] Comprovante sem texto e OCR indisponível — use o "
+                "executável (já traz o OCR) ou instale o Tesseract OCR.")
+            _OCR["avisado"] = True
+        return ""
+    import pytesseract
+    img = pagina.to_image(resolution=300).original
+    return pytesseract.image_to_string(img, lang=_OCR["lang"])
 
 def _partes_nome(c):
     """Retorna (valor, 'miolo' inteligente do nome, data dd-mm)."""
@@ -157,7 +340,13 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None):
         for i in range(n):
             try:
                 with pdfplumber.open(str(pdf_path)) as pl:
-                    txt = pl.pages[i].extract_text() or ''
+                    pagina = pl.pages[i]
+                    txt = pagina.extract_text() or ''
+                    if len(txt.strip()) < 30:      # sem camada de texto -> OCR
+                        lido = _ocr_pagina(pagina, log)
+                        if lido.strip():
+                            txt = lido
+                            log(f"  [OCR] {pdf_path.name} pág {i+1}")
                 base = nome_arquivo(campos(txt), modelo)
                 w = PdfWriter(); w.add_page(reader.pages[i])
                 destino = _destino_unico(pasta_saida, base)
