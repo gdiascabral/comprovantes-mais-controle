@@ -175,16 +175,16 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
             pe["match"] = livres[0]
             pe["status"] = "CERTEZA"
             continue
+        # Casar só pela data é permitido apenas quando NÃO existe nenhum
+        # outro pagamento pendente com valor em comum (evita anexar errado
+        # quando há vários pagamentos de mesmo valor no período).
         com_data = [c for c in livres if c["date"]]
-        if len(com_data) == 1:
+        if len(com_data) == 1 and not concorrentes:
             pdx = com_data[0]["pdf"]
-            disputa = [q for q in concorrentes
-                       if any(c["pdf"] is pdx and c["date"] for c in q["cands"])]
-            if not disputa:
-                pdx["used_by"] = pe["paidId"]
-                pe["match"] = com_data[0]
-                pe["status"] = "CERTEZA"
-                continue
+            pdx["used_by"] = pe["paidId"]
+            pe["match"] = com_data[0]
+            pe["status"] = "CERTEZA"
+            continue
         pe["status"] = "DUVIDA"
 
     def motivo(pe):
