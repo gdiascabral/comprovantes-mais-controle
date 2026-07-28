@@ -12,4 +12,5 @@ tag_debug.png
 .venv/
 venv/
 versao.txt
+atualizacao.log
 debug/

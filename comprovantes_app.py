@@ -42,8 +42,13 @@ def main():
         raise
     except Exception:
         pass
+    try:
+        from atualizador import _versao_atual
+        _v = _versao_atual()
+    except Exception:
+        _v = None
     root = tk.Tk()
-    root.title("Comprovantes — Mais Controle")
+    root.title("Comprovantes — Mais Controle" + (f"  {_v}" if _v else ""))
     try:
         root.state("zoomed")            # janela ocupando a tela (Windows)
     except tk.TclError:
@@ -53,6 +58,10 @@ def main():
         sv_ttk.set_theme("light")
     except Exception:
         pass
+
+    if _v:   # rótulo discreto com a versão, no canto inferior direito
+        ttk.Label(root, text=f"versão {_v}", foreground="#8a8a8a"
+                  ).pack(side="bottom", anchor="e", padx=10, pady=(0, 3))
 
     abas = ttk.Notebook(root)
     aba_sep = SepararFrame(abas)
