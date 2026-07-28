@@ -369,7 +369,8 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None):
                     log(f"  ... {total_paginas} páginas processadas")
             except Exception as e:
                 log(f"[ERRO] {pdf_path.name} pág {i+1}: {e}"); erros += 1
-    log(f"\nConcluído: {total_paginas} comprovante(s) gerado(s) em {pasta_saida}"
+    log(f"\nConcluído: {total_paginas} comprovante(s) gerado(s) em "
+        f"{str(pasta_saida).replace(chr(92), '/')}"
         + (f" | {erros} erro(s)" if erros else ""))
     return total_paginas, erros
 
@@ -394,14 +395,17 @@ class SepararFrame(ttk.Frame):
     def _montar(self):
         frm = ttk.Frame(self); frm.pack(fill="x", padx=10, pady=8)
         ttk.Label(frm, text="Pasta de ENTRADA (PDFs originais):").grid(row=0, column=0, sticky="w")
-        ttk.Entry(frm, textvariable=self.ent, width=58).grid(row=0, column=1, sticky="we")
-        ttk.Button(frm, text="…", width=3,
-                   command=lambda: self.ent.set(filedialog.askdirectory() or self.ent.get())).grid(row=0, column=2)
+        ttk.Entry(frm, textvariable=self.ent, width=64).grid(row=0, column=1, sticky="w", padx=(6, 0))
+        ttk.Button(frm, text="Selecionar…",
+                   command=lambda: self.ent.set(
+                       (filedialog.askdirectory() or self.ent.get()).replace("\\", "/"))
+                   ).grid(row=0, column=2, padx=6, sticky="w")
         ttk.Label(frm, text="Pasta de SAÍDA (renomeados):").grid(row=1, column=0, sticky="w", pady=6)
-        ttk.Entry(frm, textvariable=self.sai, width=58).grid(row=1, column=1, sticky="we")
-        ttk.Button(frm, text="…", width=3,
-                   command=lambda: self.sai.set(filedialog.askdirectory() or self.sai.get())).grid(row=1, column=2)
-        frm.columnconfigure(1, weight=1)
+        ttk.Entry(frm, textvariable=self.sai, width=64).grid(row=1, column=1, sticky="w", padx=(6, 0))
+        ttk.Button(frm, text="Selecionar…",
+                   command=lambda: self.sai.set(
+                       (filedialog.askdirectory() or self.sai.get()).replace("\\", "/"))
+                   ).grid(row=1, column=2, padx=6, sticky="w")
         self.ent.trace_add("write", self._sugerir_saida)
 
         nome = ttk.LabelFrame(self, text=" Nome dos arquivos ")
@@ -452,7 +456,7 @@ class SepararFrame(ttk.Frame):
 
     def _sugerir_saida(self, *_):
         if self.ent.get() and not self.sai.get():
-            self.sai.set(str(Path(self.ent.get()) / "RENOMEADOS"))
+            self.sai.set(str(Path(self.ent.get()) / "RENOMEADOS").replace("\\", "/"))
 
     def _log(self, m):
         self.fila.put(("log", m))
@@ -473,7 +477,7 @@ class SepararFrame(ttk.Frame):
         if not self.ent.get() or not Path(self.ent.get()).exists():
             messagebox.showerror("Erro", "Selecione a pasta de entrada."); return
         if not self.sai.get():
-            self.sai.set(str(Path(self.ent.get()) / "RENOMEADOS"))
+            self.sai.set(str(Path(self.ent.get()) / "RENOMEADOS").replace("\\", "/"))
         modelo = None if self.v_tipo_nome.get() == "padrao" else self.v_modelo.get()
         self.btn.config(state="disabled"); self.barra.start(12)
         self.txt.delete("1.0", "end")
