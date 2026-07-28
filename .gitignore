@@ -13,6 +13,7 @@ tag_debug.png
 venv/
 versao.txt
 atualizacao.log
+preferencias.json
 codigo.zip
 codigo_embutido/
 codigo/

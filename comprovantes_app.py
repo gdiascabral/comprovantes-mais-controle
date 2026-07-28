@@ -2,11 +2,15 @@
 """
 Comprovantes — Mais Controle (app unificado)
 
-Junta os dois aplicativos numa única janela, separados por abas:
+Janela única com navegação lateral:
 
-  Aba 1: Separar e Renomear   (separa páginas de PDF e renomeia os comprovantes)
-  Aba 2: Anexar Comprovantes  (busca os pagos no Mais Controle e anexa os PDFs)
+  Separar e Renomear   (separa páginas de PDF e renomeia os comprovantes)
+  Anexar Comprovantes  (busca os pagos no Mais Controle e anexa os PDFs)
+
+Tema claro/escuro com opção "Automático" (segue o Windows), salvo em
+"preferencias.json" ao lado do executável.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -34,8 +38,7 @@ def _nitidez():
 
 
 def _versao_app():
-    """Versão do código em uso (versao.txt ao lado deste arquivo, gravado
-    pela build; no motor, dentro da pasta de código)."""
+    """Versão do código em uso (versao.txt gravado pela build)."""
     candidatos = [Path(__file__).resolve().parent]
     base = getattr(sys, "_MEIPASS", None)
     if base:
@@ -49,9 +52,47 @@ def _versao_app():
     return None
 
 
+def _pasta_dados() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent
+
+
+def _carregar_prefs() -> dict:
+    try:
+        return json.loads((_pasta_dados() / "preferencias.json")
+                          .read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _salvar_prefs(prefs: dict):
+    try:
+        (_pasta_dados() / "preferencias.json").write_text(
+            json.dumps(prefs, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _tema_do_sistema() -> str:
+    """Lê a preferência de tema do Windows (claro/escuro)."""
+    try:
+        import winreg
+        chave = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        claro, _ = winreg.QueryValueEx(chave, "AppsUseLightTheme")
+        return "light" if claro else "dark"
+    except Exception:
+        return "light"
+
+
 def main():
     _nitidez()
     _v = _versao_app()
+    prefs = _carregar_prefs()
+    escolha_tema = prefs.get("tema", "auto")
+
     root = tk.Tk()
     root.title("Comprovantes — Mais Controle" + (f"  {_v}" if _v else ""))
     try:                                 # ícone da janela (se disponível)
@@ -66,22 +107,90 @@ def main():
         root.state("zoomed")            # janela ocupando a tela (Windows)
     except tk.TclError:
         root.geometry("1150x740")
+
     try:
         import sv_ttk                   # tema moderno (visual Windows 11)
-        sv_ttk.set_theme("light")
     except Exception:
-        pass
+        sv_ttk = None
 
-    if _v:   # rótulo discreto com a versão, no canto inferior direito
-        ttk.Label(root, text=f"versão {_v}", foreground="#8a8a8a"
-                  ).pack(side="bottom", anchor="e", padx=10, pady=(0, 3))
+    def tema_efetivo(escolha: str) -> str:
+        if escolha == "claro":
+            return "light"
+        if escolha == "escuro":
+            return "dark"
+        return _tema_do_sistema()       # automático
 
-    abas = ttk.Notebook(root)
-    aba_sep = SepararFrame(abas)
-    aba_anx = AnexarFrame(abas)
-    abas.add(aba_sep, text="  1. Separar e Renomear  ")
-    abas.add(aba_anx, text="  2. Anexar Comprovantes  ")
-    abas.pack(fill="both", expand=True)
+    if sv_ttk:
+        sv_ttk.set_theme(tema_efetivo(escolha_tema))
+
+    # ---------------- navegação lateral + área de conteúdo
+    lateral = ttk.Frame(root)
+    lateral.pack(side="left", fill="y", padx=(12, 4), pady=12)
+    conteudo = ttk.Frame(root)
+    conteudo.pack(side="left", fill="both", expand=True)
+
+    aba_sep = SepararFrame(conteudo)
+    aba_anx = AnexarFrame(conteudo)
+    atual = {"nome": None}
+    botoes = {}
+
+    def mostrar(nome: str):
+        if atual["nome"] == nome:
+            return
+        for f in (aba_sep, aba_anx):
+            f.pack_forget()
+        (aba_sep if nome == "sep" else aba_anx).pack(fill="both", expand=True)
+        atual["nome"] = nome
+        for n, b in botoes.items():
+            try:
+                b.configure(style="Accent.TButton" if n == nome else "TButton")
+            except tk.TclError:
+                pass
+
+    ttk.Label(lateral, text="Comprovantes", font=("Segoe UI", 12, "bold")
+              ).pack(anchor="w", pady=(0, 10))
+    botoes["sep"] = ttk.Button(lateral, text="Separar e Renomear", width=22,
+                               command=lambda: mostrar("sep"))
+    botoes["sep"].pack(pady=(0, 6))
+    botoes["anx"] = ttk.Button(lateral, text="Anexar Comprovantes", width=22,
+                               command=lambda: mostrar("anx"))
+    botoes["anx"].pack()
+
+    # ---------------- rodapé da barra: tema + versão
+    rodape = ttk.Frame(lateral)
+    rodape.pack(side="bottom", fill="x", pady=(10, 0))
+    ttk.Label(rodape, text="Tema").pack(anchor="w")
+    combo_tema = ttk.Combobox(rodape, state="readonly", width=19,
+                              values=["Automático (sistema)", "Claro", "Escuro"])
+    _ordem = ["auto", "claro", "escuro"]
+    combo_tema.current(_ordem.index(escolha_tema)
+                       if escolha_tema in _ordem else 0)
+    combo_tema.pack(pady=(2, 8))
+    if _v:
+        ttk.Label(rodape, text=f"versão {_v}", foreground="#8a8a8a"
+                  ).pack(anchor="w")
+
+    def aplicar_tema(escolha: str):
+        efetivo = tema_efetivo(escolha)
+        if sv_ttk:
+            sv_ttk.set_theme(efetivo)
+        escuro = efetivo == "dark"
+        for f in (aba_sep, aba_anx):
+            try:
+                f.aplicar_cores(escuro)
+            except Exception:
+                pass
+
+    def trocar_tema(_=None):
+        nova = _ordem[combo_tema.current()]
+        prefs["tema"] = nova
+        _salvar_prefs(prefs)
+        aplicar_tema(nova)
+
+    combo_tema.bind("<<ComboboxSelected>>", trocar_tema)
+
+    aplicar_tema(escolha_tema)
+    mostrar("sep")
 
     def _sair():
         aba_anx.fechar()                # fecha o Chrome, se estiver aberto
