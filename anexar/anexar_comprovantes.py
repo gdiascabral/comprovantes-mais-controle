@@ -15,6 +15,7 @@ Fluxo da janela:
 Modo alternativo "Por lista": anexa a partir de um CSV (launchId,valor,arquivo_pdf)
 ou de um Excel com aba CERTEZA (coluna link + PDF(s)).
 """
+import os
 import queue
 import re
 import time
@@ -167,6 +168,7 @@ class AnexarFrame(ttk.Frame):
         self._parar = Event()   # ⏹ interrompe o processo em andamento
         self.mc = None                       # MCClient aberto entre as etapas
         self.api = None
+        self.ultimo_relatorio = None
         self.pagos = []                      # registros de montar_pagos()
         self.vars_contas: dict[str, tk.BooleanVar] = {}
 
@@ -250,6 +252,9 @@ class AnexarFrame(ttk.Frame):
         self.b_stop = ttk.Button(acoes, text="⏹ Parar", command=self._parar_click,
                                  state="disabled")
         self.b_stop.pack(side="left", padx=6)
+        self.b_rel = ttk.Button(acoes, text="📄 Abrir relatório",
+                                command=self._abrir_relatorio, state="disabled")
+        self.b_rel.pack(side="left", padx=(10, 0))
         self.lbl = ttk.Label(acoes, text="Pronto.")
         self.lbl.pack(side="left", padx=14)
         for _b in (self.b0, self.b1, self.b2):
@@ -330,6 +335,88 @@ class AnexarFrame(ttk.Frame):
         while self._pausa.is_set() and not self._parar.is_set():
             time.sleep(0.3)
         return self._parar.is_set()
+
+    # ------------------------------------------------------------ relatório
+    def _abrir_relatorio(self):
+        if self.ultimo_relatorio and Path(self.ultimo_relatorio).exists():
+            try:
+                os.startfile(self.ultimo_relatorio)
+            except OSError as e:
+                messagebox.showerror("Erro", f"Não consegui abrir o relatório:\n{e}")
+        else:
+            messagebox.showinfo("Relatório", "Nenhum relatório gerado ainda.")
+
+    # ------------------------------------------------------ resolver dúvidas
+    def _janela_duvidas(self, duvidas, ev):
+        """Janela para o usuário escolher o PDF certo dos casamentos em dúvida."""
+        top = tk.Toplevel(self)
+        top.title(f"Resolver dúvidas ({len(duvidas)})")
+        top.transient(self.winfo_toplevel())
+        ttk.Label(top, text="O app não teve certeza nestes pagamentos. Escolha o "
+                            "PDF certo em cada um — ou deixe em dúvida para "
+                            "decidir depois pelo relatório:"
+                  ).pack(anchor="w", padx=12, pady=(10, 6))
+
+        rodape = ttk.Frame(top)
+        rodape.pack(side="bottom", fill="x", padx=12, pady=10)
+
+        canvas = tk.Canvas(top, width=980,
+                           height=min(110 * len(duvidas) + 16, 430),
+                           highlightthickness=0)
+        barra = ttk.Scrollbar(top, orient="vertical", command=canvas.yview)
+        quadro = ttk.Frame(canvas)
+        quadro.bind("<Configure>",
+                    lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=quadro, anchor="nw", width=960)
+        canvas.configure(yscrollcommand=barra.set)
+        canvas.pack(side="left", fill="both", expand=True, padx=(12, 0), pady=4)
+        barra.pack(side="right", fill="y")
+
+        combos = []
+        for pe in duvidas:
+            livres = [c["pdf"] for c in pe["cands"] if c["pdf"]["used_by"] is None]
+            bloco = ttk.LabelFrame(
+                quadro, text=f" R$ {_fmt_val(pe['valor'])} — {pe['dataFull']} — "
+                             f"{pe['conta']} ")
+            bloco.pack(fill="x", padx=4, pady=4)
+            desc = pe["desc"] or "; ".join(pe["works"]) or "(sem descrição)"
+            ttk.Label(bloco, text=(f"Doc {pe['doc']} — " if pe["doc"] else "")
+                      + desc[:110]).pack(anchor="w", padx=8)
+            cb = ttk.Combobox(bloco, state="readonly", width=105,
+                              values=["(deixar em dúvida)"]
+                                     + [p["fn"] for p in livres])
+            cb.current(0)
+            cb.pack(fill="x", padx=8, pady=(2, 6))
+            combos.append((pe, cb, {p["fn"]: p for p in livres}))
+
+        def concluir(confirmar):
+            if confirmar:
+                usados = set()
+                for pe, cb, mapa in combos:
+                    pd = mapa.get(cb.get())
+                    if pd is None or id(pd) in usados or pd["used_by"] is not None:
+                        continue        # mesmo PDF escolhido 2x: vale a 1ª escolha
+                    usados.add(id(pd))
+                    pd["used_by"] = pe["paidId"]
+                    pe["match"] = {"pdf": pd, "ocnf": False, "cc": False,
+                                   "date": False, "score": 0}
+                    pe["pdf"] = pd["fn"]
+                    pe["motivo"] = "escolhido por você"
+                    pe["status"] = "CERTEZA"
+            top.destroy()
+            ev.set()
+
+        b_ok = ttk.Button(rodape, text="✔ Confirmar escolhas",
+                          command=lambda: concluir(True))
+        b_ok.pack(side="left")
+        try:
+            b_ok.configure(style="Accent.TButton")
+        except tk.TclError:
+            pass
+        ttk.Button(rodape, text="Deixar todas em dúvida",
+                   command=lambda: concluir(False)).pack(side="left", padx=10)
+        top.protocol("WM_DELETE_WINDOW", lambda: concluir(False))
+        top.grab_set()
 
     # ---------------------------------------------------------------- etapa 2
     def conectar(self):
@@ -463,6 +550,19 @@ class AnexarFrame(ttk.Frame):
             certezas, duvidas, sem_par = matcher.casar(pendentes, pdfs)
             self._log(f"Casamentos com certeza: {len(certezas)} | dúvida: {len(duvidas)} "
                       f"| sem par: {len(sem_par)}\n")
+
+            if duvidas and not self._parar.is_set():
+                self._log("Abrindo a janela para você resolver as dúvidas...")
+                ev = Event()
+                self.q.put(("duvidas", (duvidas, ev)))
+                while not ev.wait(timeout=0.5):
+                    if self._parar.is_set():
+                        break
+                resolvidas = [p for p in duvidas if p["status"] == "CERTEZA"]
+                if resolvidas:
+                    self._log(f"{len(resolvidas)} dúvida(s) resolvida(s) por você.\n")
+                    certezas += resolvidas
+                    duvidas = [p for p in duvidas if p["status"] == "DUVIDA"]
 
             resultados = []
             self.q.put(("max", len(certezas)))
@@ -614,11 +714,16 @@ class AnexarFrame(ttk.Frame):
                     self.b2.config(state="normal")
                     self.b_pause.config(text="⏸ Pausar", state="disabled")
                     self.b_stop.config(state="disabled")
+                elif kind == "duvidas":
+                    self._janela_duvidas(*val)
                 elif kind == "fim":
                     ok, tot, duv, sp, saida = val
                     self.b2.config(state="normal")
                     self.b_pause.config(text="⏸ Pausar", state="disabled")
                     self.b_stop.config(state="disabled")
+                    if saida:
+                        self.ultimo_relatorio = saida
+                        self.b_rel.config(state="normal")
                     self.lbl.config(text=f"Concluído: {ok}/{tot} ok"
                                     + (f" | {duv} dúvidas, {sp} sem par" if duv or sp else ""))
                     msg = f"Anexados/ok: {ok} de {tot}"
