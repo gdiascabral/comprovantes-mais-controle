@@ -19,7 +19,8 @@ RE_LAUNCH = re.compile(r"payable-installments/([0-9a-fA-F-]{36})")
 
 
 def _resolver_pdf(bruto: str, pastas: list[Path]) -> Path | None:
-    """Resolve o caminho do PDF: absoluto, ou procura o nome nas pastas dadas."""
+    """Resolve o caminho do PDF: absoluto, ou procura o nome nas pastas dadas.
+    Tolerante: completa o ".pdf" se faltar e ignora maiúsculas/minúsculas."""
     bruto = (bruto or "").strip().strip('"')
     if not bruto:
         return None
@@ -28,10 +29,21 @@ def _resolver_pdf(bruto: str, pastas: list[Path]) -> Path | None:
         return p
     # nome do arquivo, aceitando separadores de Windows e de Unix
     nome = re.split(r"[\\/]", bruto)[-1].strip()
+    candidatos = [nome] if nome.lower().endswith(".pdf") else [nome + ".pdf", nome]
     for pasta in pastas:
-        cand = pasta / nome
-        if cand.exists():
-            return cand
+        for n in candidatos:
+            cand = pasta / n
+            if cand.exists():
+                return cand
+    # último recurso: comparação ignorando maiúsculas/minúsculas
+    alvo = {n.lower() for n in candidatos}
+    for pasta in pastas:
+        try:
+            for f in pasta.iterdir():
+                if f.name.lower() in alvo:
+                    return f
+        except OSError:
+            pass
     return None
 
 

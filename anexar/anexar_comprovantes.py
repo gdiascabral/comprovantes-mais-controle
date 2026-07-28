@@ -472,7 +472,9 @@ class AnexarFrame(ttk.Frame):
 
     def _t_lista(self):
         try:
-            tarefas = planilha.carregar_tarefas(Path(self.v_lista.get()))
+            pasta_pdfs = self.v_pasta.get().strip() or None
+            tarefas = planilha.carregar_tarefas(Path(self.v_lista.get()),
+                                                pasta_pdfs=pasta_pdfs)
             self._log(f"{len(tarefas)} linha(s) na lista. Simular={self.v_dry.get()}")
             if self.mc is None:
                 self._log("Abrindo o Chrome... faça login se for pedido.")
@@ -484,8 +486,12 @@ class AnexarFrame(ttk.Frame):
                 if self._checar_pausa():
                     self._log("⏹ Interrompido pelo usuário.")
                     break
-                if not t["launchId"] or not t["valor"] or t["arquivo"] is None:
-                    r = "erro:linha_incompleta"
+                if not t["launchId"]:
+                    r = "erro:sem_link_do_lancamento"
+                elif not t["valor"]:
+                    r = "erro:sem_valor"
+                elif t["arquivo"] is None:
+                    r = "erro:pdf_nao_encontrado_na_pasta"
                 else:
                     r = self.mc.anexar(t["launchId"], t["valor"], t["arquivo"],
                                        doc=t.get("doc") or None, dry_run=self.v_dry.get())
