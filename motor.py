@@ -1,0 +1,56 @@
+# -*- coding: utf-8 -*-
+"""
+Motor do "Comprovantes — Mais Controle".
+
+O executável é dividido em duas partes:
+
+  MOTOR  = este arquivo + Python + bibliotecas pesadas (OCR, Playwright...).
+           Muda raramente; é o exe grande.
+  CÓDIGO = a lógica do app (comprovantes_app, separar_renomear, anexar/...),
+           publicada como "codigo.zip" (~100 KB) em cada release.
+
+Ao abrir, o motor confere se há código novo no GitHub e baixa só o zip
+(segundos). O exe traz uma cópia do código embutida de fábrica, então
+funciona offline e no primeiro uso. Se uma release exigir motor mais novo
+(motor_minimo.txt), o app oferece o download completo.
+"""
+import sys
+from pathlib import Path
+
+
+def _garantir_dependencias():        # nunca é chamada: só faz o PyInstaller
+    import tkinter                    # noqa  enxergar e embutir estes módulos
+    from tkinter import ttk, filedialog, messagebox   # noqa
+    import queue, csv, unicodedata, threading         # noqa
+    import tempfile, subprocess, zipfile, shutil      # noqa
+    from concurrent.futures import ThreadPoolExecutor  # noqa
+    import requests, pdfplumber, pypdf, openpyxl      # noqa
+    import pytesseract                                # noqa
+    import sv_ttk                                     # noqa
+    from playwright.sync_api import sync_playwright   # noqa
+
+
+def principal():
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)   # nitidez em telas HiDPI
+    except Exception:
+        pass
+
+    if getattr(sys, "frozen", False):
+        import atualizador
+        fonte = atualizador.preparar_codigo()
+    else:
+        fonte = Path(__file__).resolve().parent   # modo script: usa o repositório
+
+    for sub in ("separar_renomear", "anexar", ""):
+        p = str(fonte / sub) if sub else str(fonte)
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    import comprovantes_app
+    comprovantes_app.main()
+
+
+if __name__ == "__main__":
+    principal()

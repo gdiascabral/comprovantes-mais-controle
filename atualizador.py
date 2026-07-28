@@ -1,24 +1,29 @@
 # -*- coding: utf-8 -*-
 """
-Atualização automática do executável via GitHub Releases.
+Atualizador do motor (usado apenas dentro do executável).
 
-Ao abrir o app: consulta a última versão publicada (timeout curto); se for
-mais nova que a atual, pergunta ao usuário, baixa com janela de progresso,
-troca o arquivo por um .bat auxiliar (com retentativas, por causa de
-OneDrive/antivírus) e reabre. Falhas são mostradas ao usuário e gravadas
-em "atualizacao.log" ao lado do exe. Rodando como script Python, não faz nada.
+- preparar_codigo(): baixa o "codigo.zip" novo (leve, segundos) quando há
+  release mais nova, escolhe qual código usar (pasta "codigo" ao lado do
+  exe ou a cópia embutida de fábrica) e confere o motor mínimo exigido.
+- Se a release exigir motor mais novo, oferece o download completo do exe
+  com janela de progresso e troca o arquivo via .bat (com retentativas,
+  por causa de OneDrive/antivírus).
+Tudo é registrado em "atualizacao.log" ao lado do exe.
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 
 REPO = "gdiascabral/comprovantes-mais-controle"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 
 
+# ------------------------------------------------------------ utilidades
 def _logar(msg: str):
     try:
         arq = Path(sys.executable).parent / "atualizacao.log"
@@ -28,24 +33,89 @@ def _logar(msg: str):
         pass
 
 
-def _versao_atual():
-    base = getattr(sys, "_MEIPASS", None)
-    if not base:
-        return None                    # rodando como script: sem auto-update
+def _tupla(tag):
     try:
-        return (Path(base) / "versao.txt").read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-
-
-def _tupla(tag: str):
-    try:
-        return tuple(int(x) for x in tag.strip().lstrip("v").split("."))
+        return tuple(int(x) for x in str(tag).strip().lstrip("v").split("."))
     except ValueError:
         return ()
 
 
-def _baixar_com_progresso(url: str, destino: Path, ultima: str):
+def _ler(arquivo: Path):
+    try:
+        return arquivo.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def _versao_motor():
+    base = getattr(sys, "_MEIPASS", None)
+    return (_ler(Path(base) / "versao.txt") if base else None) or "v0.0.0"
+
+
+# ------------------------------------------------------ pacote de código
+def preparar_codigo() -> Path:
+    """Atualiza (se der) e devolve a pasta de código que o motor deve usar."""
+    exe_dir = Path(sys.executable).parent
+    pasta = exe_dir / "codigo"
+    emb = Path(sys._MEIPASS) / "codigo_embutido"
+    v_motor = _versao_motor()
+
+    try:
+        _atualizar_codigo(pasta, emb)
+    except Exception as e:
+        _logar(f"não deu para verificar/baixar código novo: {str(e)[:150]}")
+
+    v_local = _ler(pasta / "versao.txt")
+    v_emb = _ler(emb / "versao.txt") or "v0.0.0"
+    fonte = pasta if (v_local and _tupla(v_local) >= _tupla(v_emb)) else emb
+
+    minimo = _ler(fonte / "motor_minimo.txt")
+    if minimo and _tupla(minimo) > _tupla(v_motor):
+        _logar(f"código {_ler(fonte / 'versao.txt')} exige motor {minimo}; "
+               f"motor atual é {v_motor}")
+        if _oferecer_motor_novo(minimo):
+            sys.exit(0)                 # o .bat troca o exe e reabre
+        fonte = emb                     # recusou/falhou: usa o código de fábrica
+    return fonte
+
+
+def _atualizar_codigo(pasta: Path, emb: Path):
+    """Baixa e instala o codigo.zip se a release for mais nova (rápido)."""
+    import requests
+    r = requests.get(API_LATEST, timeout=5)
+    r.raise_for_status()
+    ultima = r.json().get("tag_name") or ""
+    v_ref = _ler(pasta / "versao.txt") or _ler(emb / "versao.txt") or "v0"
+    if not _tupla(ultima) or _tupla(ultima) <= _tupla(v_ref):
+        return
+    url = f"https://github.com/{REPO}/releases/latest/download/codigo.zip"
+    tmp = Path(tempfile.gettempdir()) / "codigo_novo.zip"
+    with requests.get(url, timeout=(15, 60)) as resp:
+        resp.raise_for_status()
+        tmp.write_bytes(resp.content)
+
+    nova = pasta.with_name("codigo_nova")
+    shutil.rmtree(nova, ignore_errors=True)
+    with zipfile.ZipFile(tmp) as z:
+        z.extractall(nova)
+    if not (nova / "comprovantes_app.py").exists():
+        raise RuntimeError("codigo.zip veio sem o app dentro")
+
+    velha = pasta.with_name("codigo_velha")
+    shutil.rmtree(velha, ignore_errors=True)
+    if pasta.exists():
+        pasta.rename(velha)
+    nova.rename(pasta)
+    shutil.rmtree(velha, ignore_errors=True)
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
+    _logar(f"código atualizado para {ultima}")
+
+
+# ------------------------------------------------- motor novo (download grande)
+def _baixar_com_progresso(url: str, destino: Path, titulo: str):
     """Baixa mostrando uma janelinha de progresso. Retorna (ok, erro)."""
     import threading
     import tkinter as tk
@@ -56,7 +126,7 @@ def _baixar_com_progresso(url: str, destino: Path, ultima: str):
     raiz.title("Atualizando o app")
     raiz.geometry("440x130")
     raiz.resizable(False, False)
-    tk.Label(raiz, text=f"Baixando a versão {ultima}...").pack(pady=(16, 6))
+    tk.Label(raiz, text=titulo).pack(pady=(16, 6))
     barra = ttk.Progressbar(raiz, length=400, mode="determinate", maximum=100)
     barra.pack()
     info = tk.Label(raiz, text="conectando...")
@@ -65,8 +135,8 @@ def _baixar_com_progresso(url: str, destino: Path, ultima: str):
 
     def trabalho():
         try:
-            # timeout: 15 s p/ conectar; 120 s sem receber NENHUM byte.
-            # Download lento (mas andando) não é interrompido.
+            # 15 s p/ conectar; 120 s sem receber NENHUM byte. Download
+            # lento (mas andando) não é interrompido.
             with requests.get(url, stream=True, timeout=(15, 120)) as r:
                 r.raise_for_status()
                 total = int(r.headers.get("content-length") or 0)
@@ -91,53 +161,41 @@ def _baixar_com_progresso(url: str, destino: Path, ultima: str):
     return (not erro), (erro[0] if erro else "")
 
 
-def verificar_e_atualizar():
-    """Confere se há versão nova; se houver e o usuário aceitar, baixa,
-    troca o executável e reinicia (o processo atual encerra)."""
-    atual = _versao_atual()
-    if not atual or not getattr(sys, "frozen", False):
-        return
-    try:
-        import requests
-        r = requests.get(API_LATEST, timeout=5)
-        r.raise_for_status()
-        ultima = r.json().get("tag_name") or ""
-    except Exception:
-        return                          # sem internet/API: abre normalmente
-    if not _tupla(ultima) or _tupla(ultima) <= _tupla(atual):
-        return
-
+def _oferecer_motor_novo(minimo: str) -> bool:
+    """Baixa o exe completo (raro: só quando entra biblioteca nova).
+    Retorna True se a troca foi disparada (o chamador deve encerrar)."""
     import tkinter as tk
     from tkinter import messagebox
-    raiz = tk.Tk()
-    raiz.withdraw()
+
+    raiz = tk.Tk(); raiz.withdraw()
     quer = messagebox.askyesno(
-        "Atualização disponível",
-        f"Há uma versão nova do app ({ultima} — você está na {atual}).\n\n"
-        "Baixar e atualizar agora? O app reabre sozinho ao terminar.")
+        "Atualização grande necessária",
+        "Esta atualização traz componentes novos e precisa baixar o app "
+        "completo (~150 MB) — coisa rara, na maioria das vezes a atualização "
+        "é de segundos.\n\nBaixar agora? O app reabre sozinho ao terminar.\n"
+        "(Se preferir, responda Não e o app abre na versão atual.)")
     raiz.destroy()
     if not quer:
-        _logar(f"atualização {ultima} recusada pelo usuário")
-        return
+        _logar("motor novo recusado pelo usuário")
+        return False
 
     exe = Path(sys.executable)
     url = (f"https://github.com/{REPO}/releases/latest/download/"
            + exe.name.replace(" ", "%20"))
     novo = Path(tempfile.gettempdir()) / (exe.stem + " novo.exe")
-    _logar(f"baixando {ultima} de {url}")
-    ok, motivo = _baixar_com_progresso(url, novo, ultima)
+    _logar(f"baixando motor novo de {url}")
+    ok, motivo = _baixar_com_progresso(url, novo, "Baixando o app completo...")
     if not ok:
-        _logar(f"FALHA no download: {motivo}")
+        _logar(f"FALHA no download do motor: {motivo}")
         raiz = tk.Tk(); raiz.withdraw()
         messagebox.showwarning(
             "Atualização não concluída",
-            f"Não consegui baixar a atualização.\nMotivo: {motivo}\n\n"
-            "O app vai abrir na versão atual. Você pode tentar de novo "
-            "fechando e abrindo o app, ou baixar manualmente em:\n"
-            f"github.com/{REPO}/releases")
+            f"Não consegui baixar o app completo.\nMotivo: {motivo}\n\n"
+            "O app vai abrir na versão atual. Tente de novo mais tarde ou "
+            f"baixe manualmente em:\ngithub.com/{REPO}/releases")
         raiz.destroy()
-        return
-    _logar(f"download ok ({novo.stat().st_size // (1024*1024)} MB); trocando o exe")
+        return False
+    _logar(f"download do motor ok ({novo.stat().st_size // (1024*1024)} MB); trocando")
 
     try:
         pid = os.getpid()
@@ -160,9 +218,7 @@ def verificar_e_atualizar():
         subprocess.Popen(
             ["cmd", "/c", str(bat)],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        sys.exit(0)                     # o .bat troca o exe e reabre
-    except SystemExit:
-        raise
+        return True
     except Exception as e:
         _logar(f"FALHA na troca do exe: {e}")
-        return
+        return False

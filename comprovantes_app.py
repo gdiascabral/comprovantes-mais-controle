@@ -33,20 +33,25 @@ def _nitidez():
         pass
 
 
+def _versao_app():
+    """Versão do código em uso (versao.txt ao lado deste arquivo, gravado
+    pela build; no motor, dentro da pasta de código)."""
+    candidatos = [Path(__file__).resolve().parent]
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        candidatos.append(Path(base))
+        candidatos.append(Path(base) / "codigo_embutido")
+    for c in candidatos:
+        try:
+            return (c / "versao.txt").read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    return None
+
+
 def main():
     _nitidez()
-    try:
-        from atualizador import verificar_e_atualizar
-        verificar_e_atualizar()          # se atualizar, encerra e reabre
-    except SystemExit:
-        raise
-    except Exception:
-        pass
-    try:
-        from atualizador import _versao_atual
-        _v = _versao_atual()
-    except Exception:
-        _v = None
+    _v = _versao_app()
     root = tk.Tk()
     root.title("Comprovantes — Mais Controle" + (f"  {_v}" if _v else ""))
     try:
