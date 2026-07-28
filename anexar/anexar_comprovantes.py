@@ -313,6 +313,17 @@ class AnexarFrame(ttk.Frame):
             self.mc = None
         self.q.put(("reabilitar0", None))
 
+    def aplicar_cores(self, escuro: bool):
+        """Ajusta as cores dos widgets clássicos ao tema claro/escuro."""
+        if escuro:
+            self.log.configure(background="#252525", foreground="#e6e6e6",
+                               insertbackground="#e6e6e6",
+                               highlightbackground="#3a3a3a")
+        else:
+            self.log.configure(background="#ffffff", foreground="#000000",
+                               insertbackground="#000000",
+                               highlightbackground="#d0d0d0")
+
     # -------------------------------------------------------- pausar / parar
     def _pausar_toggle(self):
         if self._pausa.is_set():
