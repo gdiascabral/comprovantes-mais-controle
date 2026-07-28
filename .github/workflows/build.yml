@@ -52,6 +52,9 @@ jobs:
           --collect-all sv_ttk
           "anexar/anexar_comprovantes.py"
 
+      - name: Gravar a versão desta build
+        run: echo v1.0.${{ github.run_number }} > versao.txt
+
       - name: Gerar "Comprovantes Mais Controle.exe" (app unificado)
         run: >
           pyinstaller --noconfirm --onefile --noconsole
@@ -62,6 +65,7 @@ jobs:
           --collect-all pdfplumber
           --collect-all sv_ttk
           --add-data "C:\Program Files\Tesseract-OCR;tesseract"
+          --add-data "versao.txt;."
           "comprovantes_app.py"
 
       - name: Publicar Release com os executáveis
