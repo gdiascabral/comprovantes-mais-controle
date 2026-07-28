@@ -40,6 +40,18 @@ except ImportError:
 LINK = config.MC_URL_BASE + "/#/payable-installments/"
 
 
+def _fmt_dur(seg: float) -> str:
+    """Formata uma duração em segundos: '45 s', '3 min 07 s', '1 h 02 min'."""
+    seg = int(round(seg))
+    m, s = divmod(seg, 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{h} h {m:02d} min"
+    if m:
+        return f"{m} min {s:02d} s"
+    return f"{s} s"
+
+
 def _norm(s):
     import unicodedata
     s = unicodedata.normalize("NFD", s or "")
@@ -279,6 +291,8 @@ class AnexarFrame(ttk.Frame):
         self.worker = self.exec.submit(self._t_abrir)
 
     def _t_abrir(self):
+        inicio = time.time()
+        self._log(f"⏱ Etapa 1 — início: {time.strftime('%H:%M:%S')}")
         try:
             if self.mc is None:
                 self._log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
@@ -287,6 +301,8 @@ class AnexarFrame(ttk.Frame):
             self.mc.garantir_login()
             self._log("Mais Controle aberto. Agora confira o período e a pasta dos "
                       "PDFs e clique em \"2. Carregar contas do período\".")
+            self._log(f"⏱ Etapa 1 — fim: {time.strftime('%H:%M:%S')} "
+                      f"({_fmt_dur(time.time() - inicio)})")
         except Exception as e:
             self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
             self.mc = None
@@ -330,6 +346,9 @@ class AnexarFrame(ttk.Frame):
         self.worker = self.exec.submit(self._t_conectar, ini, fim)
 
     def _t_conectar(self, ini, fim):
+        inicio = time.time()
+        self._log(f"⏱ Etapa 2 — início: {time.strftime('%H:%M:%S')}")
+
         def st(msg):                      # atualiza o texto de status da janela
             self.q.put(("status", msg))
         try:
@@ -354,6 +373,8 @@ class AnexarFrame(ttk.Frame):
             contas = sorted({p["conta"] for p in self.pagos if p["conta"]})
             self._log(f"{len(lanc)} lançamento(s), {len(self.pagos)} pagamento(s), "
                       f"{len(contas)} conta(s) encontradas.")
+            self._log(f"⏱ Etapa 2 — fim: {time.strftime('%H:%M:%S')} "
+                      f"({_fmt_dur(time.time() - inicio)})")
             self.q.put(("contas", contas))
         except Exception as e:
             self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
@@ -401,6 +422,8 @@ class AnexarFrame(ttk.Frame):
         self.worker = self.exec.submit(alvo)
 
     def _t_auto(self):
+        inicio = time.time()
+        self._log(f"⏱ Etapa 3 — início: {time.strftime('%H:%M:%S')}")
         try:
             contas_sel = {c for c, v in self.vars_contas.items() if v.get()}
             if not contas_sel:
@@ -432,6 +455,8 @@ class AnexarFrame(ttk.Frame):
             pendentes = [p for p in pagos if att.get(p["paidId"], 0) == 0]
             com = len(pagos) - len(pendentes)
             self._log(f"Com comprovante: {com} | SEM comprovante: {len(pendentes)}")
+            self._log(f"⏱ Verificação de anexos: {_fmt_dur(time.time() - inicio)}")
+            ini_anexar = time.time()
 
             pdfs = matcher.carregar_pdfs(Path(self.v_pasta.get()), self._log)
             self._log(f"{len(pdfs)} PDF(s) válidos na pasta.")
@@ -466,13 +491,18 @@ class AnexarFrame(ttk.Frame):
             saida = self._relatorio(resultados, duvidas, sem_par)
             ok = sum(1 for x in resultados
                      if x["resultado"] in ("anexado", "anexado_sem_tag", "ja_tinha", "dry_run"))
+            self._log(f"⏱ Anexos: {_fmt_dur(time.time() - ini_anexar)}")
             self._log(f"\nConcluído. Anexados/ok: {ok} de {len(certezas)}. Relatório: {saida}")
+            self._log(f"⏱ Etapa 3 — fim: {time.strftime('%H:%M:%S')} "
+                      f"(total: {_fmt_dur(time.time() - inicio)})")
             self.q.put(("fim", (ok, len(certezas), len(duvidas), len(sem_par), saida)))
         except Exception as e:
             self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
             self.q.put(("reabilitar2", None))
 
     def _t_lista(self):
+        inicio = time.time()
+        self._log(f"⏱ Início: {time.strftime('%H:%M:%S')}")
         try:
             pasta_pdfs = self.v_pasta.get().strip() or None
             tarefas = planilha.carregar_tarefas(Path(self.v_lista.get()),
@@ -508,6 +538,8 @@ class AnexarFrame(ttk.Frame):
                 self.q.put(("prog", (i, ok, i - ok)))
                 self._log(f"[{i}/{len(tarefas)}] {t['valor']}  {t['arquivo_bruto']}  -> {r}")
             self._log(f"\nConcluído: {ok}/{len(tarefas)} ok.")
+            self._log(f"⏱ Fim: {time.strftime('%H:%M:%S')} — tempo total: "
+                      f"{_fmt_dur(time.time() - inicio)}")
             self.q.put(("fim", (ok, len(tarefas), 0, 0, "")))
         except Exception as e:
             self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
