@@ -1,40 +1,45 @@
 # Comprovantes → Mais Controle
 
-Dois aplicativos em Python (com janelinha, sem precisar saber programar) para
-organizar comprovantes bancários e anexá-los nos pagamentos do
-[Mais Controle ERP](https://maiscontroleerp.com.br):
+Aplicativo para Windows que organiza comprovantes bancários e os anexa nos
+pagamentos do [Mais Controle ERP](https://maiscontroleerp.com.br) — sem
+precisar saber programar. Duas funções, em abas:
 
-| App | O que faz |
+| Aba | O que faz |
 |---|---|
-| **1. Separar e Renomear** | Pega PDFs com várias páginas (extratos de comprovantes), separa cada página em um arquivo próprio e renomeia no padrão `VALOR - DESCRIÇÃO - DATA` lendo o conteúdo do comprovante. |
-| **2. Anexar Comprovantes** | Busca os títulos **pagos** do período que você informar, nas contas bancárias que você marcar, descobre quais ainda não têm comprovante e anexa o PDF certo em cada um (com a tag "Comprovante"). |
+| **1. Separar e Renomear** | Pega PDFs com vários comprovantes (uma página cada), separa cada página em um arquivo próprio e renomeia lendo o conteúdo — inclusive comprovantes "impressos" sem texto, via **OCR** embutido. |
+| **2. Anexar Comprovantes** | Busca os títulos **pagos** do período nas contas que você marcar, descobre quais ainda não têm comprovante e anexa o PDF certo em cada um (com a tag "Comprovante"). |
 
-Bancos suportados na leitura dos comprovantes: **Sicoob** (PIX, boleto, convênio)
-e **Inter** (PIX, pagamento, boleto/guia). Outros bancos podem ser adicionados
-editando `separar_renomear/separar_renomear.py`.
+Bancos suportados na leitura: **Sicoob** (PIX, boleto, convênio — layouts
+antigo e novo do Internet Banking) e **Inter** (PIX, pagamento, boleto/guia,
+convênio). Outros bancos podem ser adicionados em
+`separar_renomear/separar_renomear.py`.
 
 ## Instalação (uma vez)
 
-Requisitos: [Python 3.10+](https://www.python.org/downloads/) instalado
-(marque "Add Python to PATH" na instalação) e Google Chrome.
+Baixe o **`Comprovantes Mais Controle.exe`** na página de
+[**Releases**](https://github.com/gdiascabral/comprovantes-mais-controle/releases/latest)
+e coloque numa pasta própria (ex.: `C:\Comprovantes`). Não precisa de Python —
+só do **Google Chrome** instalado (usado pela aba Anexar).
 
-Baixe/clon​e este repositório e dê duplo-clique em **`instalar.bat`**
-(ou rode no terminal):
+- Na primeira execução o Windows SmartScreen pode avisar: clique em
+  **"Mais informações" → "Executar assim mesmo"** (o exe não tem assinatura digital).
+- **Atualização automática:** ao abrir, o app baixa sozinho o código novo
+  quando há versão nova (~30 KB, segundos). Downloads grandes só quando entra
+  componente novo — e aí ele pergunta antes, com barra de progresso.
+- A versão em uso aparece no título da janela e no canto inferior direito.
 
-```
-pip install -r requirements.txt
-python -m playwright install chrome
-```
+## Aba 1 — Separar e Renomear
 
-## App 1 — Separar e Renomear
+1. Escolha a pasta de **entrada** (PDFs originais) e a de **saída** (sugerida
+   automaticamente: `ENTRADA/RENOMEADOS`).
+2. Escolha o modelo do nome: **PADRÃO: VALOR - DESCRIÇÃO - DATA** (recomendado)
+   ou personalizado, usando as palavras VALOR, DESCRIÇÃO, DATA, PAGADOR e
+   RECEBEDOR na ordem que quiser. Inclua sempre o VALOR: é ele que permite o
+   casamento automático na aba 2.
+3. Clique em **Separar e Renomear**. Comprovantes sem camada de texto passam
+   por OCR automaticamente (aparece `[OCR]` no registro).
 
-Duplo-clique em `separar_renomear/Separar e Renomear.bat`.
-
-1. Escolha a pasta de **entrada** (PDFs originais, com 1 ou várias páginas).
-2. Escolha a pasta de **saída** (sugerida automaticamente: `ENTRADA/RENOMEADOS`).
-3. Clique em **Separar e Renomear**.
-
-Cada página vira um arquivo com nome no padrão:
+Exemplos de nome gerado:
 
 ```
 70,00 - RPB 24 QD 26A LT 12 OC 5979 - 20-07.pdf
@@ -42,66 +47,73 @@ Cada página vira um arquivo com nome no padrão:
 1000,00 - Morais Empreendimentos - 20-07.pdf        (transferência: quem recebeu)
 ```
 
-- com Descrição/Observação no comprovante → `VALOR - DESCRIÇÃO - DATA`
-- aporte/distribuição/transferência → `VALOR - QUEM PAGOU PARA QUEM RECEBEU - DATA`
-- PIX sem descrição (fornecedor) → `VALOR - QUEM RECEBEU - DATA`
-
 Dica: coloque o **centro de custo e o nº da OC/NF na descrição do PIX/boleto**
-na hora de pagar — é isso que permite o casamento automático no App 2.
+na hora de pagar — é isso que permite o casamento automático na aba 2.
 
-## App 2 — Anexar Comprovantes
+## Aba 2 — Anexar Comprovantes
 
-Duplo-clique em `anexar/Anexar Comprovantes.bat`.
+1. **Abrir Mais Controle e acessar** — o Chrome abre e você faz login
+   (só na 1ª vez; o perfil fica salvo ao lado do exe).
+2. Informe o **período** (as datas completam as barras sozinhas; há um 📅
+   para escolher no calendário), selecione a **pasta dos PDFs renomeados** e
+   clique em **Carregar contas do período**. Marque as contas desejadas.
+   As opções de ignorar tarifas bancárias e aportes/distribuições são
+   caixas separadas, opcionais.
+3. **Casar e anexar** — com **Simular** marcado, nada é anexado de verdade
+   (bom para conferir antes).
 
-1. Informe o **período** dos pagamentos (datas de pagamento dos comprovantes).
-2. Selecione a **pasta dos PDFs renomeados** (a saída do App 1).
-3. Clique em **Conectar e carregar contas** — o Chrome abre (tela cheia), você
-   faz login no Mais Controle (só na 1ª vez; o perfil fica salvo) e o app busca
-   os títulos **pagos** do período.
-4. Marque as **contas bancárias** desejadas nas caixas de seleção.
-5. (Opcional) Marque **Simular** para só conferir, sem anexar de verdade.
-6. Clique em **Casar e anexar**.
+Como o app decide (com segurança):
 
-O app então:
+- pagamentos que **já têm** comprovante são pulados (não duplica);
+- o casamento aceita tanto o **valor nominal** quanto o **valor pago**
+  (com juros/multa/desconto);
+- critérios, do mais forte ao mais fraco: nº de **OC/NF** → **centro de
+  custo** → **data**; cada PDF é usado uma vez só;
+- casamento ambíguo **nunca é chutado**: abre uma janela para **você escolher
+  o PDF certo** (ou deixar em dúvida para depois);
+- botões **Pausar/Parar** durante o processo, cronômetros ⏱ por etapa e, no
+  fim, um **relatório Excel** (abas ANEXADOS, DUVIDA e SEM PAR) com botão
+  **Abrir relatório** direto na janela.
 
-- verifica, título por título, se o **sub-pagamento** (Histórico de Pagamentos)
-  já tem arquivo anexado — quem já tem é **pulado** (não duplica);
-- casa cada pagamento pendente com o PDF pelo **valor** + nº de **OC/NF/doc** +
-  **centro de custo** + **data** (cada PDF é usado uma vez só);
-- anexa os casamentos com certeza, aplicando a tag **Comprovante**;
-- gera um **relatório Excel** com 3 abas: `ANEXADOS`, `DUVIDA` (casamentos
-  ambíguos, com os candidatos e o link do lançamento) e `SEM PAR`.
-
-Também dá para anexar a partir de uma **lista pronta** (CSV `launchId,valor,arquivo_pdf`
-ou o próprio relatório Excel) usando o modo "Por lista" na janela.
+Também dá para anexar por uma **lista pronta** (CSV `launchId,valor,arquivo_pdf`
+ou o próprio relatório) no modo "Por lista" — a extensão `.pdf` é completada
+automaticamente se faltar.
 
 ## Perguntas comuns
 
 **A senha do Mais Controle passa pelo app?** Não. O login é feito por você na
 janela do Chrome; o app só usa a sessão já autenticada. O perfil fica salvo em
-`anexar/.chrome_profile` no seu computador.
+`.chrome_profile`, ao lado do executável.
 
 **E se rodar duas vezes?** Sem problema: pagamentos que já têm anexo são pulados.
 
-**Pagamentos com juros/multa?** O casamento é feito pelo valor **pago** no ERP.
-Se o PDF foi renomeado com o valor com juros, confira a aba `SEM PAR` do
-relatório e anexe manualmente (ou pelo modo "Por lista").
+**Funciona em qualquer conta do Mais Controle?** Sim — o app usa a mesma API
+que a tela de Pagamentos, com o seu login, chamada de dentro da própria página.
+Não há nada fixo da empresa no código.
 
-**Funciona em qualquer conta do Mais Controle?** Sim — o app usa a API que a
-própria tela de Pagamentos usa, com o seu login. Não há nada fixo da empresa
-no código.
+## Para desenvolvedores
 
-## Estrutura
+O executável é dividido em **motor** (Python + bibliotecas + OCR, muda raro) e
+**código** (`codigo.zip`, publicado em cada release — é o que o app baixa ao
+atualizar). Releases são geradas automaticamente pelo GitHub Actions a cada
+commit na `main`.
+
+Para rodar como script: Python 3.10+, `instalar.bat` (ou
+`pip install -r requirements.txt` + `python -m playwright install chrome`;
+para o OCR, instale o [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
+com o idioma português) e `python comprovantes_app.py`.
 
 ```
-separar_renomear/   App 1 (separar páginas + renomear)
-anexar/             App 2 (buscar pagos, casar e anexar)
-  ├─ anexar_comprovantes.py   janela principal
-  ├─ mc_api.py                leitura dos pagos e dos anexos (API)
-  ├─ mc_client.py             automação do Chrome para anexar (Playwright)
-  ├─ matcher.py               casamento PDF ↔ pagamento
-  ├─ planilha.py              leitura de lista CSV/XLSX
-  └─ config.py                ajustes (tag, perfil do Chrome, etc.)
+motor.py            carregador do exe (atualiza e injeta o código)
+atualizador.py      download do codigo.zip / troca do exe
+comprovantes_app.py janela unificada (abas)
+separar_renomear/   separar páginas + renomear (extração, OCR, modelos de nome)
+anexar/             buscar pagos, casar e anexar
+  ├─ mc_api.py      leitura dos pagos e anexos (API, via página logada)
+  ├─ mc_client.py   automação do Chrome para anexar (Playwright)
+  ├─ matcher.py     casamento PDF ↔ pagamento
+  ├─ planilha.py    leitura de lista CSV/XLSX
+  └─ config.py      ajustes (tag, perfil do Chrome, etc.)
 ```
 
 ## Licença

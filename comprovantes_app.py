@@ -54,6 +54,14 @@ def main():
     _v = _versao_app()
     root = tk.Tk()
     root.title("Comprovantes — Mais Controle" + (f"  {_v}" if _v else ""))
+    try:                                 # ícone da janela (se disponível)
+        for _c in (Path(__file__).resolve().parent / "icone.ico",
+                   Path(getattr(sys, "_MEIPASS", ".")) / "icone.ico"):
+            if _c.exists():
+                root.iconbitmap(str(_c))
+                break
+    except Exception:
+        pass
     try:
         root.state("zoomed")            # janela ocupando a tela (Windows)
     except tk.TclError:
