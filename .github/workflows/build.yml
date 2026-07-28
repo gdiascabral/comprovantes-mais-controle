@@ -37,6 +37,7 @@ jobs:
       - name: Gerar "Separar e Renomear.exe"
         run: >
           pyinstaller --noconfirm --onefile --noconsole
+          --icon "icone.ico"
           --name "Separar e Renomear"
           --collect-all pdfminer
           --collect-all pdfplumber
@@ -47,6 +48,7 @@ jobs:
       - name: Gerar "Anexar Comprovantes.exe"
         run: >
           pyinstaller --noconfirm --onefile --noconsole
+          --icon "icone.ico"
           --name "Anexar Comprovantes"
           --collect-all playwright
           --collect-all sv_ttk
@@ -59,7 +61,7 @@ jobs:
       - name: Montar o pacote de código (codigo.zip + cópia embutida)
         run: |
           New-Item -ItemType Directory codigo_embutido | Out-Null
-          Copy-Item comprovantes_app.py, versao.txt, motor_minimo.txt codigo_embutido/
+          Copy-Item comprovantes_app.py, versao.txt, motor_minimo.txt, icone.ico codigo_embutido/
           New-Item -ItemType Directory codigo_embutido/separar_renomear | Out-Null
           Copy-Item separar_renomear/*.py codigo_embutido/separar_renomear/
           New-Item -ItemType Directory codigo_embutido/anexar | Out-Null
@@ -70,6 +72,7 @@ jobs:
       - name: Gerar "Comprovantes Mais Controle.exe" (motor + código embutido)
         run: >
           pyinstaller --noconfirm --onefile --noconsole
+          --icon "icone.ico"
           --name "Comprovantes Mais Controle"
           --collect-all playwright
           --collect-all pdfminer
