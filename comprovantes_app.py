@@ -35,6 +35,13 @@ def _nitidez():
 
 def main():
     _nitidez()
+    try:
+        from atualizador import verificar_e_atualizar
+        verificar_e_atualizar()          # se atualizar, encerra e reabre
+    except SystemExit:
+        raise
+    except Exception:
+        pass
     root = tk.Tk()
     root.title("Comprovantes — Mais Controle")
     try:

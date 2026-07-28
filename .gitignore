@@ -11,3 +11,5 @@ erro_*.png
 tag_debug.png
 .venv/
 venv/
+versao.txt
+debug/
