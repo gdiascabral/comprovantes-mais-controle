@@ -53,20 +53,36 @@ jobs:
           "anexar/anexar_comprovantes.py"
 
       - name: Gravar a versão desta build
-        run: echo v1.0.${{ github.run_number }} > versao.txt
+        run: |
+          "v1.0.${{ github.run_number }}" | Out-File -Encoding ascii -NoNewline versao.txt
 
-      - name: Gerar "Comprovantes Mais Controle.exe" (app unificado)
+      - name: Montar o pacote de código (codigo.zip + cópia embutida)
+        run: |
+          New-Item -ItemType Directory codigo_embutido | Out-Null
+          Copy-Item comprovantes_app.py, versao.txt, motor_minimo.txt codigo_embutido/
+          New-Item -ItemType Directory codigo_embutido/separar_renomear | Out-Null
+          Copy-Item separar_renomear/*.py codigo_embutido/separar_renomear/
+          New-Item -ItemType Directory codigo_embutido/anexar | Out-Null
+          Copy-Item anexar/*.py codigo_embutido/anexar/
+          Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
+          "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
+
+      - name: Gerar "Comprovantes Mais Controle.exe" (motor + código embutido)
         run: >
           pyinstaller --noconfirm --onefile --noconsole
           --name "Comprovantes Mais Controle"
-          --paths separar_renomear --paths anexar
           --collect-all playwright
           --collect-all pdfminer
           --collect-all pdfplumber
+          --collect-all pypdf
+          --collect-all openpyxl
+          --collect-all requests
+          --collect-all pytesseract
           --collect-all sv_ttk
           --add-data "C:\Program Files\Tesseract-OCR;tesseract"
           --add-data "versao.txt;."
-          "comprovantes_app.py"
+          --add-data "codigo_embutido;codigo_embutido"
+          "motor.py"
 
       - name: Publicar Release com os executáveis
         uses: softprops/action-gh-release@v2
@@ -80,10 +96,13 @@ jobs:
             - **Comprovantes Mais Controle.exe** — app completo, com os dois em abas (recomendado)
             - **Separar e Renomear.exe** — só o App 1
             - **Anexar Comprovantes.exe** — só o App 2
+            - codigo.zip — pacote de atualização leve (o app baixa sozinho, ignore)
 
-            Dica: coloque o .exe numa pasta própria; o perfil do Chrome
-            (login salvo) e os logs são criados ao lado do executável.
+            O app completo se atualiza sozinho ao abrir: baixa só o código novo
+            (segundos). Dica: coloque o .exe numa pasta própria; o perfil do
+            Chrome (login salvo) e os logs são criados ao lado do executável.
           files: |
             dist/Comprovantes Mais Controle.exe
             dist/Separar e Renomear.exe
             dist/Anexar Comprovantes.exe
+            codigo.zip
