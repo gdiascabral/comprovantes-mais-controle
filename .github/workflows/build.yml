@@ -109,3 +109,15 @@ jobs:
             dist/Separar e Renomear.exe
             dist/Anexar Comprovantes.exe
             codigo.zip
+
+      - name: Limpar releases antigas (mantém as 4 mais novas p/ rollback)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $rels = gh api "repos/${{ github.repository }}/releases?per_page=100" | ConvertFrom-Json
+          $velhas = $rels | Sort-Object -Property @{Expression={[datetime]$_.created_at}} -Descending | Select-Object -Skip 4
+          foreach ($r in $velhas) {
+            Write-Host "Apagando release $($r.tag_name)"
+            gh api -X DELETE "repos/${{ github.repository }}/releases/$($r.id)"
+            try { gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$($r.tag_name)" } catch { Write-Host "  (tag já removida)" }
+          }
