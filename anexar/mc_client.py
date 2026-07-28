@@ -284,8 +284,9 @@ class MCClient:
                  if a is not None}
         url = f"{config.MC_URL_BASE}/#/payable-installments/{launch_id}"
         try:
-            self.page.goto(url, wait_until="domcontentloaded")
-            self.page.wait_for_selector("text=Histórico de Pagamentos", timeout=20000)
+            self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            # o ERP fica lento em lotes grandes; espera generosa
+            self.page.wait_for_selector("text=Histórico de Pagamentos", timeout=45000)
             self.page.wait_for_timeout(1500)
 
             rows = self.page.evaluate(_JS_ROWS)
@@ -334,6 +335,15 @@ class MCClient:
         except Exception as e:
             self._print_erro(str(e)[:100], launch_id)
             return f"erro:{str(e)[:100]}"
+
+    def resetar(self):
+        """Volta para a tela de Pagamentos (recupera o ERP após timeout)."""
+        try:
+            self.page.goto(config.MC_URL_PAGAMENTOS,
+                           wait_until="domcontentloaded", timeout=60000)
+            self.page.wait_for_timeout(2500)
+        except Exception:
+            pass
 
     # --------------------------------------------------------------- tag
     def _definir_tag(self, tag: str) -> bool:

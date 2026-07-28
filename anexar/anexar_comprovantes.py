@@ -453,6 +453,8 @@ class AnexarFrame(ttk.Frame):
                                    doc=pe["doc"] or None, dry_run=self.v_dry.get(),
                                    valores=vals)
                 if r.startswith("erro:"):
+                    self._log(f"   ({r}) — recarregando o sistema e tentando de novo...")
+                    self.mc.resetar()
                     r = self.mc.anexar(pe["launchId"], _fmt_val(pe["valor"]), arq,
                                        doc=pe["doc"] or None, dry_run=self.v_dry.get(),
                                        valores=vals)
@@ -495,6 +497,12 @@ class AnexarFrame(ttk.Frame):
                 else:
                     r = self.mc.anexar(t["launchId"], t["valor"], t["arquivo"],
                                        doc=t.get("doc") or None, dry_run=self.v_dry.get())
+                    if r.startswith("erro:"):
+                        self._log(f"   ({r}) — recarregando o sistema e tentando de novo...")
+                        self.mc.resetar()
+                        r = self.mc.anexar(t["launchId"], t["valor"], t["arquivo"],
+                                           doc=t.get("doc") or None,
+                                           dry_run=self.v_dry.get())
                 if r in ("anexado", "anexado_sem_tag", "ja_tinha", "dry_run"):
                     ok += 1
                 self.q.put(("prog", (i, ok, i - ok)))
