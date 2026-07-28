@@ -32,6 +32,18 @@ def _sem_acento(s):
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
 
+def _fmt_dur(seg: float) -> str:
+    """Formata uma duração em segundos: '45 s', '3 min 07 s', '1 h 02 min'."""
+    seg = int(round(seg))
+    m, s = divmod(seg, 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{h} h {m:02d} min"
+    if m:
+        return f"{m} min {s:02d} s"
+    return f"{s} s"
+
+
 # ------------------------------------------------------------ extração
 def _linhas(t): return [l.rstrip() for l in t.splitlines()]
 
@@ -453,10 +465,15 @@ class SepararFrame(ttk.Frame):
         self.txt.delete("1.0", "end")
 
         def work():
+            import time as _t
+            inicio = _t.time()
+            self._log(f"⏱ Início: {_t.strftime('%H:%M:%S')}")
             try:
                 processar(self.ent.get(), self.sai.get(), self._log, modelo)
             except Exception as ex:
                 self._log("ERRO FATAL: " + str(ex))
+            self._log(f"⏱ Fim: {_t.strftime('%H:%M:%S')} — tempo total: "
+                      f"{_fmt_dur(_t.time() - inicio)}")
             self.fila.put(("fim", None))
         threading.Thread(target=work, daemon=True).start()
 
