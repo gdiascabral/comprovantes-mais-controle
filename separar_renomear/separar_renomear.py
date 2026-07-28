@@ -414,12 +414,13 @@ class SepararFrame(ttk.Frame):
                         ).grid(row=1, column=0, sticky="w", padx=8)
         ttk.Entry(nome, textvariable=self.v_modelo, width=50
                   ).grid(row=1, column=1, sticky="we", padx=4)
-        ttk.Label(nome, text="Use as palavras VALOR, DESCRIÇÃO, DATA, PAGADOR e RECEBEDOR "
-                             "na ordem que quiser (ex.: DATA - VALOR - RECEBEDOR). "
-                             "Inclua sempre o VALOR: é ele que permite o casamento "
-                             "automático na hora de anexar.",
-                  foreground="#555"
-                  ).grid(row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        self.lbl_dica = ttk.Label(
+            nome, text="Use as palavras VALOR, DESCRIÇÃO, DATA, PAGADOR e RECEBEDOR "
+                       "na ordem que quiser (ex.: DATA - VALOR - RECEBEDOR). "
+                       "Inclua sempre o VALOR: é ele que permite o casamento "
+                       "automático na hora de anexar.",
+            foreground="#555")
+        self.lbl_dica.grid(row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
         nome.columnconfigure(1, weight=1)
 
         self.barra = ttk.Progressbar(self, mode="indeterminate")
@@ -435,6 +436,19 @@ class SepararFrame(ttk.Frame):
             self.btn.configure(style="Accent.TButton")   # botão azul (tema sv-ttk)
         except tk.TclError:
             pass
+
+    def aplicar_cores(self, escuro: bool):
+        """Ajusta as cores dos widgets clássicos ao tema claro/escuro."""
+        if escuro:
+            self.txt.configure(background="#252525", foreground="#e6e6e6",
+                               insertbackground="#e6e6e6",
+                               highlightbackground="#3a3a3a")
+            self.lbl_dica.configure(foreground="#9a9a9a")
+        else:
+            self.txt.configure(background="#ffffff", foreground="#000000",
+                               insertbackground="#000000",
+                               highlightbackground="#d0d0d0")
+            self.lbl_dica.configure(foreground="#555555")
 
     def _sugerir_saida(self, *_):
         if self.ent.get() and not self.sai.get():
