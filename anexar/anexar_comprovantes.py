@@ -187,35 +187,35 @@ class AnexarFrame(ttk.Frame):
     # ---------------------------------------------------------------- layout
     def _build(self):
         pad = {"padx": 10, "pady": 4}
-        topo = ttk.Frame(self); topo.pack(fill="x", **pad)
-
-        ttk.Radiobutton(topo, text="Automático (casar pelos nomes dos PDFs)",
-                        variable=self.v_modo, value="auto",
-                        command=self._alternar_modo).grid(row=0, column=0, sticky="w", columnspan=2)
-        ttk.Radiobutton(topo, text="Por lista pronta (.csv / .xlsx)",
-                        variable=self.v_modo, value="lista",
-                        command=self._alternar_modo).grid(row=0, column=2, sticky="w", columnspan=2)
 
         # ---- modo automático
         self.f_auto = ttk.LabelFrame(self, text=" 1. Período e pasta dos comprovantes ")
         self.f_auto.pack(fill="x", **pad)
         fa = self.f_auto
         ttk.Label(fa, text="Data de pagamento — de:").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        CampoData(fa, self.v_ini).grid(row=0, column=1, sticky="w")
+        CampoData(fa, self.v_ini).grid(row=0, column=1, sticky="w", padx=(0, 14))
         ttk.Label(fa, text="até:").grid(row=0, column=2, sticky="e")
-        CampoData(fa, self.v_fim).grid(row=0, column=3, sticky="w")
-        ttk.Label(fa, text="(dd/mm/aaaa — digite só os números ou use o 📅)"
-                  ).grid(row=0, column=4, sticky="w")
+        CampoData(fa, self.v_fim).grid(row=0, column=3, sticky="w", padx=(6, 14))
+        ttk.Label(fa, text="(dd/mm/aaaa)").grid(row=0, column=4, sticky="w")
         ttk.Label(fa, text="Pasta dos PDFs renomeados:").grid(row=1, column=0, sticky="w", padx=8)
-        ttk.Entry(fa, textvariable=self.v_pasta, width=70).grid(row=1, column=1, columnspan=3, sticky="we")
+        ttk.Entry(fa, textvariable=self.v_pasta, width=70).grid(row=1, column=1, columnspan=3, sticky="w")
         ttk.Button(fa, text="Selecionar…",
-                   command=lambda: self.v_pasta.set(filedialog.askdirectory() or self.v_pasta.get())
-                   ).grid(row=1, column=4, padx=6)
+                   command=lambda: self.v_pasta.set(
+                       (filedialog.askdirectory() or self.v_pasta.get()).replace("\\", "/"))
+                   ).grid(row=1, column=4, padx=6, sticky="w")
         ttk.Checkbutton(fa, text="Ignorar tarifas bancárias, IOF, cesta e pacote de serviços",
                         variable=self.v_ign).grid(row=2, column=0, columnspan=5, sticky="w", padx=8)
         ttk.Checkbutton(fa, text="Ignorar aportes de capital e distribuição de lucros",
                         variable=self.v_ign_ap).grid(row=3, column=0, columnspan=5, sticky="w", padx=8)
-        fa.columnconfigure(3, weight=1)
+        # ---- escolha do modo (entre os blocos 1 e 2)
+        self.topo = ttk.Frame(self)
+        self.topo.pack(fill="x", **pad)
+        ttk.Radiobutton(self.topo, text="Automático (casar pelos nomes dos PDFs)",
+                        variable=self.v_modo, value="auto",
+                        command=self._alternar_modo).pack(side="left", padx=(8, 18))
+        ttk.Radiobutton(self.topo, text="Por lista pronta (.csv / .xlsx)",
+                        variable=self.v_modo, value="lista",
+                        command=self._alternar_modo).pack(side="left")
 
         self.f_contas = ttk.LabelFrame(self, text=" 2. Contas bancárias (marque as desejadas) ")
         self.f_contas.pack(fill="x", **pad)
@@ -229,9 +229,9 @@ class AnexarFrame(ttk.Frame):
         self.f_lista = ttk.LabelFrame(self, text=" Lista pronta ")
         fl = self.f_lista
         ttk.Label(fl, text="Arquivo (.csv ou .xlsx):").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        ttk.Entry(fl, textvariable=self.v_lista, width=70).grid(row=0, column=1, sticky="we")
-        ttk.Button(fl, text="Selecionar…", command=self._sel_lista).grid(row=0, column=2, padx=6)
-        fl.columnconfigure(1, weight=1)
+        ttk.Entry(fl, textvariable=self.v_lista, width=70).grid(row=0, column=1, sticky="w")
+        ttk.Button(fl, text="Selecionar…", command=self._sel_lista
+                   ).grid(row=0, column=2, padx=6, sticky="w")
 
         # ---- ações
         acoes = ttk.Frame(self); acoes.pack(fill="x", **pad)
@@ -277,13 +277,13 @@ class AnexarFrame(ttk.Frame):
             self.f_lista.pack_forget()
             self.b1.config(state="normal")
         else:
-            self.f_lista.pack(fill="x", padx=10, pady=4, after=self.f_auto)
+            self.f_lista.pack(fill="x", padx=10, pady=4, after=self.topo)
             self.b2.config(state="normal")
 
     def _sel_lista(self):
         f = filedialog.askopenfilename(filetypes=[("Lista", "*.csv *.xlsx")])
         if f:
-            self.v_lista.set(f)
+            self.v_lista.set(f.replace("\\", "/"))
 
     def _log(self, msg):
         self.q.put(("log", msg))
@@ -689,7 +689,7 @@ class AnexarFrame(ttk.Frame):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         out = Path(self.v_pasta.get() or ".") / f"relatorio_anexos_{stamp}.xlsx"
         wb.save(out)
-        return str(out)
+        return str(out).replace("\\", "/")
 
     # ---------------------------------------------------------------- UI pump
     def _drain(self):
