@@ -11,7 +11,6 @@ Usa apenas a biblioteca padrão (ctypes), então não pesa no executável.
 """
 import ctypes
 import json
-from ctypes import wintypes
 
 try:
     from . import config
@@ -20,7 +19,9 @@ except ImportError:
 
 
 class _BLOB(ctypes.Structure):
-    _fields_ = [("cbData", wintypes.DWORD),
+    # DWORD é um inteiro de 32 bits sem sinal. Usamos c_uint32 direto para não
+    # depender de ctypes.wintypes (submódulo que não vem embutido no motor).
+    _fields_ = [("cbData", ctypes.c_uint32),
                 ("pbData", ctypes.POINTER(ctypes.c_char))]
 
 
