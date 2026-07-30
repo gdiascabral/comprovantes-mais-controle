@@ -20,6 +20,7 @@ import queue
 import re
 import time
 import traceback
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from datetime import date, datetime
@@ -295,6 +296,17 @@ class AnexarFrame(ttk.Frame):
         self.b0.config(state="disabled")
         self.worker = self.exec.submit(self._t_abrir)
 
+    def garantir_sessao(self, log=None):
+        """Abre o Chrome e prepara a API, se ainda não estiverem prontos.
+        Deve rodar na thread self.exec (a dona do navegador)."""
+        log = log or self._log
+        if self.mc is None:
+            log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
+            self.mc = MCClient().__enter__()
+            self.api = mc_api.MCApi(self.mc.page)
+            self.mc.garantir_login()
+        return self.api
+
     def _t_abrir(self):
         inicio = time.time()
         self._log(f"⏱ Etapa 1 — início: {time.strftime('%H:%M:%S')}")
@@ -386,18 +398,34 @@ class AnexarFrame(ttk.Frame):
         combos = []
         for pe in duvidas:
             livres = [c["pdf"] for c in pe["cands"] if c["pdf"]["used_by"] is None]
-            bloco = ttk.LabelFrame(
-                quadro, text=f" R$ {_fmt_val(pe['valor'])} — {pe['dataFull']} — "
-                             f"{pe['conta']} ")
+            vals = sorted(set(pe.get("valores") or [pe["valor"]]))
+            titulo = f" R$ {_fmt_val(pe['valor'])}"
+            outros = [v for v in vals if v != pe["valor"]]
+            if outros:
+                titulo += " (pago; nominal " + ", ".join(_fmt_val(v) for v in outros) + ")"
+            titulo += f" — {pe['dataFull']} — {pe['conta']} "
+            bloco = ttk.LabelFrame(quadro, text=titulo)
             bloco.pack(fill="x", padx=4, pady=4)
-            desc = pe["desc"] or "; ".join(pe["works"]) or "(sem descrição)"
-            ttk.Label(bloco, text=(f"Doc {pe['doc']} — " if pe["doc"] else "")
-                      + desc[:110]).pack(anchor="w", padx=8)
+            linha = " | ".join(x for x in [
+                f"Nº doc: {pe['doc']}" if pe["doc"] else "",
+                f"Categoria: {pe['categoria']}" if pe.get("categoria") else ""] if x)
+            if linha:
+                ttk.Label(bloco, text=linha[:120]).pack(anchor="w", padx=8)
+            if pe["works"]:
+                ttk.Label(bloco, text=("Centro de custo: "
+                                       + "; ".join(pe["works"]))[:120]
+                          ).pack(anchor="w", padx=8)
+            ttk.Label(bloco, text=("Descrição: "
+                                   + (pe["desc"] or "(sem descrição)"))[:120]
+                      ).pack(anchor="w", padx=8)
             cb = ttk.Combobox(bloco, state="readonly", width=105,
                               values=["(deixar em dúvida)"]
                                      + [p["fn"] for p in livres])
             cb.current(0)
-            cb.pack(fill="x", padx=8, pady=(2, 6))
+            cb.pack(fill="x", padx=8, pady=(2, 2))
+            ttk.Button(bloco, text="Abrir lançamento no navegador",
+                       command=lambda i=pe["launchId"]: webbrowser.open(LINK + str(i))
+                       ).pack(anchor="e", padx=8, pady=(0, 6))
             combos.append((pe, cb, {p["fn"]: p for p in livres}))
 
         def concluir(confirmar):

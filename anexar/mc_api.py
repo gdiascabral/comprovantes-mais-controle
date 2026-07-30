@@ -31,6 +31,17 @@ _JS_FETCH_JSON = """async ({ url, headers }) => {
   return await r.json();
 }"""
 
+_JS_FETCH_B64 = """async ({ url, headers }) => {
+  const r = await fetch(url, { headers });
+  if (!r.ok) return { __erro: r.status };
+  const b = await r.arrayBuffer();
+  let s = '';
+  const u = new Uint8Array(b);
+  for (let i = 0; i < u.length; i += 32768)
+    s += String.fromCharCode.apply(null, u.subarray(i, i + 32768));
+  return { b64: btoa(s) };
+}"""
+
 _JS_FETCH_ANEXOS = """async ({ base, ids, headers }) => {
   const out = {};
   await Promise.all(ids.map(async (pid) => {
@@ -175,6 +186,43 @@ class MCApi:
                 break
             rodar(falhas[i:i + LOTE])
         return resultado
+
+
+    # ------------------------------------------------- anexos (conteúdo)
+    def listar_anexos(self, paid_id: str) -> list:
+        """Lista os anexos (dados brutos da API) de um sub-pagamento."""
+        if not self._req_anexos:
+            raise RuntimeError("Credenciais de anexos ainda não capturadas.")
+        base, headers = self._req_anexos
+        j = self._fetch_json(f"{base}?entityIds={paid_id}&entityOrigin=PAID",
+                             headers)
+        return j if isinstance(j, list) else []
+
+    def baixar_anexo(self, url: str) -> bytes | None:
+        """Baixa um anexo de dentro da página logada. Retorna os bytes."""
+        import base64
+        _, headers = self._req_anexos
+        r = self.page.evaluate(_JS_FETCH_B64, {"url": url, "headers": headers})
+        if not isinstance(r, dict) or r.get("__erro") or "b64" not in r:
+            return None
+        return base64.b64decode(r["b64"])
+
+
+def achar_url_anexo(item) -> str | None:
+    """Procura a URL do arquivo dentro do registro de anexo da API."""
+    if isinstance(item, dict):
+        for v in item.values():
+            u = achar_url_anexo(v)
+            if u:
+                return u
+    elif isinstance(item, list):
+        for v in item:
+            u = achar_url_anexo(v)
+            if u:
+                return u
+    elif isinstance(item, str) and item.startswith("http"):
+        return item
+    return None
 
 
 # ---------------------------------------------------------------- utilidades
