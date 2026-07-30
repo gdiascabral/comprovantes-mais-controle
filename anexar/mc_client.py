@@ -174,6 +174,39 @@ _JS_PICK_TAG = r"""
 """
 
 
+# preenche e-mail + senha (setter nativo: dispara input/change p/ Angular/React)
+_JS_FILL_LOGIN = r"""
+({ email, senha }) => {
+  const vis = el => el && el.offsetParent !== null && !el.disabled;
+  const set = (el, val) => {
+    const proto = el.tagName === 'INPUT'
+        ? window.HTMLInputElement.prototype : window.HTMLTextAreaElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    setter.call(el, val);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const inputs = [...document.querySelectorAll('input')].filter(vis);
+  const pw = inputs.find(i => i.type === 'password');
+  let em = inputs.find(i => i.type === 'email');
+  if (!em) em = inputs.find(i => (i.type === 'text' || !i.type) && i !== pw);
+  if (em) set(em, email);
+  if (pw) set(pw, senha);
+  return { email: !!em, senha: !!pw };
+}
+"""
+
+# clica no botão ENTRAR (fallback, quando os seletores do Playwright não pegam)
+_JS_CLICK_ENTRAR = r"""
+() => {
+  const b = [...document.querySelectorAll('button, input[type=submit]')]
+      .find(e => /entrar/i.test((e.textContent || e.value || '')));
+  if (b) { b.click(); return true; }
+  return false;
+}
+"""
+
+
 class MCClient:
     def __init__(self, headless: bool = False):
         self.headless = headless
@@ -207,7 +240,8 @@ class MCClient:
             headless=self.headless,
             channel="chrome",
             args=args,
-            no_viewport=True,   # a página usa o tamanho real da janela
+            chromium_sandbox=True,   # mantém o sandbox (some o aviso "--no-sandbox")
+            no_viewport=True,        # a página usa o tamanho real da janela
             accept_downloads=True,
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
@@ -280,94 +314,70 @@ class MCClient:
         except Exception:
             return False
 
-    def garantir_login(self, obter_login=None):
-        """Garante a área logada. Se cair na tela de login, tenta o login
-        automático (credencial salva ou pedida via obter_login) e, se não der,
-        aguarda o login manual na janela do Chrome — o fluxo antigo.
-
-        obter_login: função opcional que devolve (email, senha, salvar) ou None
-        (mostrada só quando não há login salvo)."""
+    def garantir_login(self):
+        """Garante a área logada. Se cair na tela de login: usa a credencial
+        salva (opcional, botão 🔑) OU deixa o Chrome autopreencher a senha
+        guardada por ele, e clica em ENTRAR sozinho — aguardando a tela mudar.
+        Se nada disso resolver (1ª vez), o usuário loga na própria janela do
+        Chrome (que então oferece salvar a senha)."""
         self.page.goto(config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
         self.page.wait_for_timeout(1500)
         if self._esta_logado():
             print(">>> Login OK (sessão salva).\n")
             return True
-        self._auto_login(obter_login)
+        self._tentar_entrar()
         print(">>> Aguardando a área logada...")
         for _ in range(60):
             if self._esta_logado():
                 print(">>> Login OK.\n")
                 return True
             time.sleep(1)
-        print("[!] Não detectei a área logada; continuo mesmo assim.")
+        print("[!] Não detectei a área logada; faça login na janela do Chrome.")
         return False
 
-    def _auto_login(self, obter_login):
-        """Preenche e envia o login. Não levanta exceção: na dúvida, deixa o
-        usuário logar manualmente."""
+    def _tentar_entrar(self):
+        """Preenche (credencial salva) ou deixa o Chrome autopreencher, e clica
+        em ENTRAR. Nunca levanta exceção — na dúvida, login manual."""
         try:
             if "login" not in self.page.url:
                 return
+            try:
+                self.page.wait_for_selector("input[type=password]", timeout=8000)
+            except Exception:
+                pass
             creds = credenciais.carregar()
-            do_arquivo = creds is not None
-            do_salvar = False
-            if not creds and obter_login:
-                got = obter_login()                 # (email, senha, salvar) | None
-                if got:
-                    creds = (got[0], got[1]); do_salvar = bool(got[2])
-            if not creds:
-                print(">>> Faça login nesta janela do Chrome.")
-                return
-            print(">>> Entrando automaticamente...")
-            self._preencher_login(*creds)
-            for _ in range(20):
-                if self._esta_logado():
-                    if do_salvar:
-                        try:
-                            credenciais.salvar(*creds)
-                        except Exception:
-                            pass
-                    return
-                time.sleep(1)
-            if do_arquivo:      # login salvo não funcionou (senha mudou?)
-                credenciais.apagar()
-                print(">>> O login salvo não funcionou; removi-o. "
-                      "Faça login manualmente.")
+            if creds:
+                self._preencher(*creds)
             else:
-                print(">>> Login automático não concluído; faça login manualmente.")
+                self.page.wait_for_timeout(2500)   # deixa o Chrome autopreencher
+            self._clicar_entrar()
+            if creds:                              # confere se a credencial salva serviu
+                for _ in range(15):
+                    if self._esta_logado():
+                        return
+                    time.sleep(1)
+                if not self._esta_logado():
+                    credenciais.apagar()
+                    print(">>> O login salvo não funcionou (senha mudou?); "
+                          "removi-o. Faça login na janela do Chrome.")
         except Exception as e:
-            print(f">>> auto-login: {str(e)[:120]}")
+            print(f">>> login automático: {str(e)[:120]}")
 
-    def _preencher_login(self, email: str, senha: str):
-        p = self.page
+    def _preencher(self, email: str, senha: str):
         try:
-            p.wait_for_selector("input[type=password]", timeout=8000)
+            self.page.evaluate(_JS_FILL_LOGIN, {"email": email, "senha": senha})
         except Exception:
             pass
-        for sel in ("input[type=email]", "input[name=email]",
-                    "input[autocomplete=username]", "input[type=text]"):
-            try:
-                loc = p.locator(sel).first
-                if loc.count() and loc.is_visible():
-                    loc.fill(email)
-                    break
-            except Exception:
-                pass
-        for sel in ("input[type=password]", "input[name=password]"):
-            try:
-                loc = p.locator(sel).first
-                if loc.count() and loc.is_visible():
-                    loc.fill(senha)
-                    break
-            except Exception:
-                pass
+
+    def _clicar_entrar(self):
         for tentativa in (
-                lambda: p.get_by_role("button", name="ENTRAR").first.click(timeout=4000),
-                lambda: p.locator("button:has-text('ENTRAR')").first.click(timeout=4000),
-                lambda: p.locator("input[type=password]").first.press("Enter")):
+                lambda: self.page.get_by_role("button", name="ENTRAR").first.click(timeout=4000),
+                lambda: self.page.locator("button:has-text('ENTRAR')").first.click(timeout=4000),
+                lambda: self.page.evaluate(_JS_CLICK_ENTRAR),
+                lambda: self.page.locator("input[type=password]").first.press("Enter")):
             try:
-                tentativa()
-                return
+                if tentativa() is not False:
+                    return
             except Exception:
                 pass
 

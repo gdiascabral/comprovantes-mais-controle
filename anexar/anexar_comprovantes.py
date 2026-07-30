@@ -353,17 +353,8 @@ class AnexarFrame(ttk.Frame):
             log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
             self.mc = MCClient().__enter__()
             self.api = mc_api.MCApi(self.mc.page)
-            self.mc.garantir_login(self._pedir_login)
+            self.mc.garantir_login()
         return self.api
-
-    def _pedir_login(self):
-        """Chamado da thread do navegador quando o login é necessário e não há
-        login salvo. Mostra o diálogo na thread principal e devolve
-        (email, senha, salvar) ou None."""
-        holder, ev = {}, Event()
-        self.q.put(("login", (holder, ev)))
-        ev.wait()
-        return holder.get("creds")
 
     def _gerenciar_login(self):
         """Botão 🔑 Login: cadastrar/trocar/remover o login salvo."""
@@ -383,6 +374,9 @@ class AnexarFrame(ttk.Frame):
         top.title("Login do Mais Controle")
         top.transient(self.winfo_toplevel())
         top.resizable(False, False)
+        top.attributes("-topmost", True)     # fica à frente da janela do Chrome
+        top.lift()
+        top.after(50, top.focus_force)
         salvos = credenciais.carregar()
         ttk.Label(top, wraplength=380, justify="left",
                   text="Entre com seu login do Mais Controle. Ele é salvo cifrado "
@@ -879,10 +873,6 @@ class AnexarFrame(ttk.Frame):
                     self.b_stop.config(state="disabled")
                 elif kind == "duvidas":
                     self._janela_duvidas(*val)
-                elif kind == "login":
-                    holder, ev = val
-                    self._mostrar_dialogo_login(
-                        lambda r: (holder.__setitem__("creds", r), ev.set()))
                 elif kind == "fim":
                     ok, tot, duv, sp, saida = val
                     self.b2.config(state="normal")
