@@ -1,0 +1,2 @@
+# Dependências só de desenvolvimento (não entram no exe).
+pytest>=8,<9

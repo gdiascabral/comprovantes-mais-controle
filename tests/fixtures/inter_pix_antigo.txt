@@ -1,0 +1,11 @@
+PIX ENVIADO
+Comprovante de transação
+Valor: R$ 70,00
+Data do pagamento: 20/07/2026
+Descrição RPB 24 QD 26A LT 12 OC 5979
+Quem pagou
+Nome: EMPRESA EXEMPLO LTDA
+CPF/CNPJ: 00.000.000/0001-00
+Quem recebeu
+Nome: FORNECEDOR EXEMPLO ME
+CPF/CNPJ: 11.111.111/0001-11
