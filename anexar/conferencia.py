@@ -69,6 +69,41 @@ def _valor_no_texto(cents: int, txt: str) -> bool:
     return any(f in txt for f in formas)
 
 
+def _host_path(url) -> str:
+    if not url:
+        return "(nenhuma URL no registro do anexo)"
+    try:
+        from urllib.parse import urlsplit
+        s = urlsplit(url)
+        return f"{s.scheme}://{s.netloc}{s.path}"
+    except Exception:
+        return "(url ilegível)"
+
+
+def _estrutura_anexo(item, prof=0) -> str:
+    """Resumo SEGURO da estrutura de um registro de anexo: nomes dos campos e
+    tipos (e host/caminho de URLs), sem os valores sensíveis. Serve para
+    descobrir como baixar o arquivo."""
+    try:
+        if isinstance(item, dict):
+            return "{" + ", ".join(f"{k}: {_estrutura_anexo(v, prof + 1)}"
+                                   for k, v in list(item.items())[:25]) + "}"
+        if isinstance(item, list):
+            return "[" + (_estrutura_anexo(item[0], prof + 1) if item else "") + "]"
+        if isinstance(item, bool):
+            return "bool"
+        if isinstance(item, (int, float)):
+            return "num"
+        if item is None:
+            return "null"
+        if isinstance(item, str):
+            return "<url " + _host_path(item) + ">" if item.startswith("http") \
+                else f"str({len(item)})"
+        return type(item).__name__
+    except Exception:
+        return "?"
+
+
 class ConferenciaFrame(ttk.Frame):
     """Tela de conferência (usa a sessão da tela Anexar)."""
 
@@ -237,6 +272,11 @@ class ConferenciaFrame(ttk.Frame):
                          if not any(t in (_norm(p["desc"]) + " | " + _norm(p["categoria"]))
                                     for t in termos)]
             self._log(f"{len(pagos)} pagamento(s) no período (após filtros).")
+            from collections import Counter
+            contas = Counter(p["conta"] for p in pagos if p["conta"])
+            if contas:
+                self._log("Por conta: " + " | ".join(f"{c}: {n}"
+                                                      for c, n in contas.items()))
             if pagos and not api.capturar_credenciais_anexos(pagos[0]["launchId"]):
                 raise RuntimeError("Não capturei as credenciais de anexos.")
 
@@ -264,12 +304,19 @@ class ConferenciaFrame(ttk.Frame):
                         textos = []
                         for item in itens:
                             url = mc_api.achar_url_anexo(item)
-                            if not url:
-                                continue
-                            dados = api.baixar_anexo(url)
+                            dados = api.baixar_anexo(url) if url else None
+                            txt_i = _texto_pdf(dados) if dados else ""
+                            if not getattr(self, "_diag_feito", False):
+                                self._diag_feito = True
+                                self._log("[diag] estrutura do anexo: "
+                                          + _estrutura_anexo(item))
+                                self._log("[diag] URL: " + _host_path(url))
+                                self._log("[diag] download: "
+                                          + (f"OK ({len(dados)} bytes)" if dados else "FALHOU"))
+                                self._log(f"[diag] texto/OCR: {len(txt_i.strip())} chars")
                             if dados:
                                 baixados += 1
-                                textos.append(_texto_pdf(dados))
+                                textos.append(txt_i)
                         texto = "\n".join(t for t in textos if t)
                         if not itens:
                             p["confere"] = "não conferível (anexo não listado pela API)"
@@ -301,6 +348,10 @@ class ConferenciaFrame(ttk.Frame):
                         nao_conferiveis.append(p)
                 self._log(f"Conteúdo: {len(conferidos)} ok | {len(divergentes)} "
                           f"divergente(s) | {len(nao_conferiveis)} não conferível(is)")
+                if nao_conferiveis:
+                    for m, n in Counter(p.get("confere", "?")
+                                        for p in nao_conferiveis).items():
+                        self._log(f"   • {n}× {m}")
 
             saida = self._relatorio(sem, divergentes, conferidos, nao_conferiveis)
             self._log(f"\nRelatório: {saida}")
