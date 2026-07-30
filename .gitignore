@@ -5,6 +5,7 @@ build/
 dist/
 *.spec
 log_anexos.csv
+diagnostico.log
 relatorio_anexos_*.xlsx
 relatorio_conferencia_*.xlsx
 nao_anexadas_*.xlsx
