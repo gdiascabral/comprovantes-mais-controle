@@ -393,66 +393,117 @@ class SepararFrame(ttk.Frame):
         self.after(150, self._drain)
 
     def _montar(self):
-        frm = ttk.Frame(self); frm.pack(fill="x", padx=10, pady=8)
-        ttk.Label(frm, text="Pasta de ENTRADA (PDFs originais):").grid(row=0, column=0, sticky="w")
-        ttk.Entry(frm, textvariable=self.ent, width=64).grid(row=0, column=1, sticky="w", padx=(6, 0))
-        ttk.Button(frm, text="Selecionar…",
+        PADX = 14
+
+        # ---- cabeçalho
+        cab = ttk.Frame(self)
+        cab.pack(fill="x", padx=PADX, pady=(12, 4))
+        ttk.Label(cab, text="Separar e Renomear",
+                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        self.lbl_sub = ttk.Label(
+            cab, foreground="#6b6b6b",
+            text="Separa cada página em um comprovante e renomeia lendo o conteúdo.")
+        self.lbl_sub.pack(anchor="w")
+
+        # ---- card: pastas de trabalho
+        pastas = ttk.LabelFrame(self, text=" Pastas de trabalho ",
+                                padding=(12, 8, 12, 10))
+        pastas.pack(fill="x", padx=PADX, pady=6)
+        ttk.Label(pastas, text="Entrada — PDFs originais"
+                  ).grid(row=0, column=0, sticky="w")
+        ttk.Entry(pastas, textvariable=self.ent
+                  ).grid(row=1, column=0, sticky="we", padx=(0, 8), pady=(2, 8))
+        ttk.Button(pastas, text="Selecionar…",
                    command=lambda: self.ent.set(
                        (filedialog.askdirectory() or self.ent.get()).replace("\\", "/"))
-                   ).grid(row=0, column=2, padx=6, sticky="w")
-        ttk.Label(frm, text="Pasta de SAÍDA (renomeados):").grid(row=1, column=0, sticky="w", pady=6)
-        ttk.Entry(frm, textvariable=self.sai, width=64).grid(row=1, column=1, sticky="w", padx=(6, 0))
-        ttk.Button(frm, text="Selecionar…",
+                   ).grid(row=1, column=1, sticky="w", pady=(2, 8))
+        ttk.Label(pastas, text="Saída — renomeados (sugerida automaticamente)"
+                  ).grid(row=2, column=0, sticky="w")
+        ttk.Entry(pastas, textvariable=self.sai
+                  ).grid(row=3, column=0, sticky="we", padx=(0, 8), pady=(2, 0))
+        ttk.Button(pastas, text="Selecionar…",
                    command=lambda: self.sai.set(
                        (filedialog.askdirectory() or self.sai.get()).replace("\\", "/"))
-                   ).grid(row=1, column=2, padx=6, sticky="w")
+                   ).grid(row=3, column=1, sticky="w", pady=(2, 0))
+        pastas.columnconfigure(0, weight=1)
         self.ent.trace_add("write", self._sugerir_saida)
 
-        nome = ttk.LabelFrame(self, text=" Nome dos arquivos ")
-        nome.pack(fill="x", padx=10, pady=4)
-        ttk.Radiobutton(nome, text=f"PADRÃO: {MODELO_PADRAO}",
+        # ---- card: nome dos arquivos
+        nome = ttk.LabelFrame(self, text=" Nome dos arquivos ",
+                              padding=(12, 8, 12, 10))
+        nome.pack(fill="x", padx=PADX, pady=6)
+        ttk.Radiobutton(nome, text=f"Padrão:  {MODELO_PADRAO}",
                         variable=self.v_tipo_nome, value="padrao"
-                        ).grid(row=0, column=0, sticky="w", padx=8)
+                        ).grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Radiobutton(nome, text="Personalizado:",
                         variable=self.v_tipo_nome, value="custom"
-                        ).grid(row=1, column=0, sticky="w", padx=8)
-        ttk.Entry(nome, textvariable=self.v_modelo, width=50
-                  ).grid(row=1, column=1, sticky="we", padx=4)
+                        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(nome, textvariable=self.v_modelo, width=48
+                  ).grid(row=1, column=1, sticky="we", padx=(8, 0), pady=(6, 0))
         self.lbl_dica = ttk.Label(
-            nome, text="Use as palavras VALOR, DESCRIÇÃO, DATA, PAGADOR e RECEBEDOR "
-                       "na ordem que quiser (ex.: DATA - VALOR - RECEBEDOR). "
-                       "Inclua sempre o VALOR: é ele que permite o casamento "
-                       "automático na hora de anexar.",
-            foreground="#555")
-        self.lbl_dica.grid(row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+            nome, foreground="#6b6b6b", justify="left", wraplength=760,
+            text="Use VALOR, DESCRIÇÃO, DATA, PAGADOR e RECEBEDOR na ordem que "
+                 "quiser (ex.: DATA - VALOR - RECEBEDOR). Inclua sempre o VALOR: "
+                 "é ele que permite o casamento automático na hora de anexar.")
+        self.lbl_dica.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 2))
+        self.lbl_ex = ttk.Label(
+            nome, foreground="#6b6b6b", font=("Consolas", 9),
+            text="ex.:  70,00 - RPB 24 QD 26A LT 12 OC 5979 - 20-07.pdf")
+        self.lbl_ex.grid(row=3, column=0, columnspan=2, sticky="w")
         nome.columnconfigure(1, weight=1)
 
-        self.barra = ttk.Progressbar(self, mode="indeterminate")
-        self.barra.pack(fill="x", padx=10)
-        self.txt = tk.Text(self, height=18, wrap="word", relief="flat",
-                           borderwidth=0, highlightthickness=1,
-                           highlightbackground="#d0d0d0", background="#ffffff",
-                           font=("Consolas", 10))
-        self.txt.pack(fill="both", expand=True, padx=10, pady=8)
-        self.btn = ttk.Button(self, text="▶ Separar e Renomear", command=self._executar)
-        self.btn.pack(pady=(0, 10), ipadx=14)
+        # ---- barra de ação (fixa no rodapé)
+        acao = ttk.Frame(self)
+        acao.pack(side="bottom", fill="x", padx=PADX, pady=(6, 12))
+        self.btn = ttk.Button(acao, text="▶  Separar e Renomear",
+                              command=self._executar)
+        self.btn.pack(side="right", ipadx=10)
         try:
             self.btn.configure(style="Accent.TButton")   # botão azul (tema sv-ttk)
         except tk.TclError:
             pass
+        self.lbl_status = ttk.Label(acao, text="Pronto.")
+        self.lbl_status.pack(side="left")
+        self.barra = ttk.Progressbar(acao, mode="indeterminate")
+        self.barra.pack(side="left", fill="x", expand=True, padx=12)
+
+        # ---- card: registro (ocupa o espaço restante)
+        reg = ttk.LabelFrame(self, text=" Registro ", padding=(10, 6, 10, 10))
+        reg.pack(fill="both", expand=True, padx=PADX, pady=6)
+        self.txt = tk.Text(reg, height=8, wrap="word", relief="flat",
+                           borderwidth=0, highlightthickness=0,
+                           background="#ffffff", font=("Consolas", 10))
+        self.txt.pack(fill="both", expand=True)
+        self.txt.tag_configure("ph", justify="center", foreground="#8a8a8a",
+                               spacing1=6, font=("Segoe UI", 11))
+        self._mostrar_placeholder()
 
     def aplicar_cores(self, escuro: bool):
         """Ajusta as cores dos widgets clássicos ao tema claro/escuro."""
         if escuro:
             self.txt.configure(background="#252525", foreground="#e6e6e6",
-                               insertbackground="#e6e6e6",
-                               highlightbackground="#3a3a3a")
-            self.lbl_dica.configure(foreground="#9a9a9a")
+                               insertbackground="#e6e6e6")
+            muted = "#9a9a9a"
         else:
             self.txt.configure(background="#ffffff", foreground="#000000",
-                               insertbackground="#000000",
-                               highlightbackground="#d0d0d0")
-            self.lbl_dica.configure(foreground="#555555")
+                               insertbackground="#000000")
+            muted = "#5f5f5f"
+        self.txt.tag_configure("ph", foreground="#8a8a8a")
+        for w in (self.lbl_sub, self.lbl_dica, self.lbl_ex):
+            try:
+                w.configure(foreground=muted)
+            except Exception:
+                pass
+
+    def _mostrar_placeholder(self):
+        """Estado inicial do Registro — evita a área vazia parecer 'quebrada'."""
+        self.txt.delete("1.0", "end")
+        self.txt.insert("end", "\n\n", "ph")
+        self.txt.insert("end", "Os comprovantes renomeados aparecerão aqui.\n", "ph")
+        self.txt.insert("end", "\nEscolha as pastas acima e clique em "
+                               "“Separar e Renomear”.\n", "ph")
+        self.txt.insert("end", "Comprovantes sem texto passam por OCR "
+                               "automaticamente.\n", "ph")
 
     def _sugerir_saida(self, *_):
         if self.ent.get() and not self.sai.get():
@@ -469,6 +520,7 @@ class SepararFrame(ttk.Frame):
                     self.txt.insert("end", m + "\n"); self.txt.see("end")
                 else:
                     self.barra.stop(); self.btn.config(state="normal")
+                    self.lbl_status.config(text="Concluído.")
         except queue.Empty:
             pass
         self.after(150, self._drain)
@@ -480,6 +532,7 @@ class SepararFrame(ttk.Frame):
             self.sai.set(str(Path(self.ent.get()) / "RENOMEADOS").replace("\\", "/"))
         modelo = None if self.v_tipo_nome.get() == "padrao" else self.v_modelo.get()
         self.btn.config(state="disabled"); self.barra.start(12)
+        self.lbl_status.config(text="Processando…")
         self.txt.delete("1.0", "end")
 
         def work():
