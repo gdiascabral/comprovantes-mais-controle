@@ -14,12 +14,22 @@ normal. Com isso:
   - verifica, pago a pago, se há arquivo anexado no nível do sub-pagamento
     (endpoint de attachments com entityOrigin=PAID).
 """
+import time
 from urllib.parse import urlsplit, parse_qsl, urlencode
 
 try:
     from . import config
 except ImportError:
     import config
+
+
+def _diag(msg: str):
+    """Registra no diagnostico.log um erro que de outro modo seria silencioso."""
+    try:
+        with open(config.ARQUIVO_DIAG, "a", encoding="utf-8") as fh:
+            fh.write(time.strftime("%d/%m/%Y %H:%M:%S  ") + msg + "\n")
+    except OSError:
+        pass
 
 # cabeçalhos que interessam (o resto o navegador completa sozinho)
 _H_PAGOS = {"accept", "authorization", "organization-unit-id", "user-id", "company-id"}
@@ -63,6 +73,7 @@ class MCApi:
         self.page = page
         self._req_pagos = None    # (url, headers) da lista de pagamentos
         self._req_anexos = None   # (url_base, headers) do endpoint de anexos
+        self._diag_avisado = False
         page.on("request", self._on_request)
 
     # ------------------------------------------------------------ captura
@@ -77,8 +88,10 @@ class MCApi:
                 h = {k: v for k, v in req.headers.items() if k.lower() in _H_ANEXO}
                 if "authorization" in {k.lower() for k in h}:
                     self._req_anexos = (u.split("?")[0], h)
-        except Exception:
-            pass
+        except Exception as e:
+            if not self._diag_avisado:   # loga só a 1ª vez (evita spam)
+                self._diag_avisado = True
+                _diag(f"_on_request falhou ao ler cabeçalhos: {e!r}")
 
     def _esperar(self, attr, acao, timeout_s=30) -> bool:
         for _ in range(timeout_s * 2):

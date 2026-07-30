@@ -15,15 +15,17 @@ Regras de segurança:
 """
 import os
 import re
-import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
 
-def _norm(s: str) -> str:
-    s = unicodedata.normalize("NFD", s or "")
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    return re.sub(r"\s+", " ", s.upper()).strip()
+_norm = util.norm_espaco
 
 
 # ------------------------------------------------------------------ PDFs

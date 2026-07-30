@@ -39,26 +39,16 @@ except ImportError:
     import config, matcher, mc_api, planilha
     from mc_client import MCClient
 
-LINK = config.MC_URL_BASE + "/#/payable-installments/"
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
 
-
-def _fmt_dur(seg: float) -> str:
-    """Formata uma duração em segundos: '45 s', '3 min 07 s', '1 h 02 min'."""
-    seg = int(round(seg))
-    m, s = divmod(seg, 60)
-    h, m = divmod(m, 60)
-    if h:
-        return f"{h} h {m:02d} min"
-    if m:
-        return f"{m} min {s:02d} s"
-    return f"{s} s"
-
-
-def _norm(s):
-    import unicodedata
-    s = unicodedata.normalize("NFD", s or "")
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    return s.upper()
+LINK = config.MC_URL_LANCAMENTO
+_fmt_dur = util.fmt_dur
+_norm = util.norm
 
 
 def _data_api(txt: str) -> str | None:
@@ -183,6 +173,10 @@ class AnexarFrame(ttk.Frame):
         self.v_ign = tk.BooleanVar(value=True)
         self.v_ign_ap = tk.BooleanVar(value=True)
         self._build()
+        try:                             # já nasce na cor do tema (sem flash)
+            self.aplicar_cores(util.cor_escura(ttk.Style().lookup("TFrame", "background")))
+        except Exception:
+            pass
         self.after(150, self._drain)
 
     # ---------------------------------------------------------------- layout
@@ -311,11 +305,7 @@ class AnexarFrame(ttk.Frame):
         inicio = time.time()
         self._log(f"⏱ Etapa 1 — início: {time.strftime('%H:%M:%S')}")
         try:
-            if self.mc is None:
-                self._log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
-                self.mc = MCClient().__enter__()
-                self.api = mc_api.MCApi(self.mc.page)
-            self.mc.garantir_login()
+            self.garantir_sessao()
             self._log("Mais Controle aberto. Agora confira o período e a pasta dos "
                       "PDFs e clique em \"2. Carregar contas do período\".")
             self._log(f"⏱ Etapa 1 — fim: {time.strftime('%H:%M:%S')} "
@@ -480,10 +470,7 @@ class AnexarFrame(ttk.Frame):
         try:
             if self.mc is None:
                 st("Abrindo o Chrome — faça o login se for pedido...")
-                self._log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
-                self.mc = MCClient().__enter__()
-                self.api = mc_api.MCApi(self.mc.page)
-                self.mc.garantir_login()
+            self.garantir_sessao()
             st("Capturando credenciais da tela de Pagamentos...")
             if not self.api.capturar_credenciais(self._log):
                 raise RuntimeError("Não capturei a lista de pagamentos.")
@@ -572,7 +559,7 @@ class AnexarFrame(ttk.Frame):
                 raise RuntimeError("Não capturei as credenciais de anexos.")
             self.q.put(("max", len(pagos)))
             att = self.api.verificar_anexos([p["paidId"] for p in pagos], self._log,
-                                            progresso=lambda i, n: self.q.put(("prog", (i, 0, 0))),
+                                            progresso=lambda i, n: self.q.put(("prog_verif", (i, n))),
                                             cancelar=self._checar_pausa)
             if self._parar.is_set():
                 self._log("⏹ Interrompido pelo usuário durante a verificação.")
@@ -647,10 +634,7 @@ class AnexarFrame(ttk.Frame):
             tarefas = planilha.carregar_tarefas(Path(self.v_lista.get()),
                                                 pasta_pdfs=pasta_pdfs)
             self._log(f"{len(tarefas)} linha(s) na lista. Simular={self.v_dry.get()}")
-            if self.mc is None:
-                self._log("Abrindo o Chrome... faça login se for pedido.")
-                self.mc = MCClient().__enter__()
-                self.mc.garantir_login()
+            self.garantir_sessao()
             self.q.put(("max", len(tarefas)))
             ok = 0
             for i, t in enumerate(tarefas, 1):
@@ -735,6 +719,10 @@ class AnexarFrame(ttk.Frame):
                     i, ok, err = val
                     self.pb.config(value=i)
                     self.lbl.config(text=f"{i} processados — {ok} ok" + (f", {err} erros" if err else ""))
+                elif kind == "prog_verif":
+                    i, n = val
+                    self.pb.config(value=i)
+                    self.lbl.config(text=f"Verificando comprovantes já anexados: {i}/{n}")
                 elif kind == "contas":
                     self.pb.stop()
                     self.pb.config(mode="determinate", value=0)

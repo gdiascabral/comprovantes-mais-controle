@@ -26,9 +26,18 @@ try:
 except ImportError:
     import config, mc_api
 
-from anexar_comprovantes import CampoData, _fmt_dur, _fmt_val, _norm, _data_api
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
 
-LINK = config.MC_URL_BASE + "/#/payable-installments/"
+from anexar_comprovantes import CampoData, _fmt_val, _data_api
+
+LINK = config.MC_URL_LANCAMENTO
+_fmt_dur = util.fmt_dur
+_norm = util.norm
 
 
 def _texto_pdf(dados: bytes) -> str:
@@ -75,6 +84,10 @@ class ConferenciaFrame(ttk.Frame):
         self.v_ign_ap = tk.BooleanVar(value=True)
         self.v_conteudo = tk.BooleanVar(value=False)
         self._montar()
+        try:                             # já nasce na cor do tema (sem flash)
+            self.aplicar_cores(util.cor_escura(ttk.Style().lookup("TFrame", "background")))
+        except Exception:
+            pass
         self.after(150, self._drain)
 
     def _montar(self):

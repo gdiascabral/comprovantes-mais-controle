@@ -41,6 +41,25 @@ def _centavos(s) -> int | None:
         return None
 
 
+# ------------------------------------------------------- seletores do ERP
+# Textos/âncoras da tela de Pagamentos do Mais Controle. Se o ERP mudar
+# rótulos ou estrutura, é AQUI que se ajusta — é o ponto mais provável de
+# quebra do app.
+TXT_HISTORICO = "Histórico de Pagamentos"   # seção que ancora as linhas
+TXT_LOGADO = "Pagamentos"                   # confirma que a área logada abriu
+MENU_EDITAR = "Editar pagamento"            # item do menu ⋮
+TXT_DIALOGO_EDITAR = "Editar Pagamento"     # título do diálogo de edição
+TXT_ARQUIVOS = "Arquivos"                   # seção de anexos no diálogo
+BTN_CONFIRMAR = "Confirmar pagamento"       # botão que salva o anexo
+# Âncoras de DOM usadas DENTRO dos blocos JS abaixo (aqui só para referência;
+# se mudarem, editar nos respectivos _JS_*):
+#   svg[data-testid="MoreVertIcon"]                  menu ⋮ de cada sub-pagamento
+#   button[aria-label="Abrir Arquivos do Pagamento"] clipe (só existe se há anexo)
+#   [role="menuitem"] / .MuiMenuItem-root            itens de menu
+#   [role="dialog"] / .MuiDialog-container           diálogo
+#   .MuiStack-root + input[type=radio]               opções de etiqueta
+
+
 # lista os sub-pagamentos do histórico (valor, nº doc, se já têm anexo).
 # Escopo = seção "Histórico de Pagamentos"; linhas = botões ⋮ dentro dela.
 _JS_ROWS = r"""
@@ -261,7 +280,7 @@ class MCClient:
         for _ in range(30):
             try:
                 if "login" not in self.page.url and self.page.locator(
-                        "text=Pagamentos").first.is_visible():
+                        f"text={TXT_LOGADO}").first.is_visible():
                     print(">>> Login OK.\n")
                     return True
             except Exception:
@@ -286,7 +305,7 @@ class MCClient:
         try:
             self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
             # o ERP fica lento em lotes grandes; espera generosa
-            self.page.wait_for_selector("text=Histórico de Pagamentos", timeout=45000)
+            self.page.wait_for_selector(f"text={TXT_HISTORICO}", timeout=45000)
             self.page.wait_for_timeout(1500)
 
             rows = self.page.evaluate(_JS_ROWS)
@@ -312,11 +331,11 @@ class MCClient:
             if not self.page.evaluate(_JS_OPEN_MENU, alvo_row["i"]):
                 return "erro:menu"
             self.page.wait_for_timeout(500)
-            if not self.page.evaluate(_JS_CLICK_MENUITEM, "Editar pagamento"):
+            if not self.page.evaluate(_JS_CLICK_MENUITEM, MENU_EDITAR):
                 return "erro:sem_editar_pagamento"
 
-            self.page.wait_for_selector("text=Editar Pagamento", timeout=10000)
-            self.page.wait_for_selector("text=Arquivos", timeout=10000)
+            self.page.wait_for_selector(f"text={TXT_DIALOGO_EDITAR}", timeout=10000)
+            self.page.wait_for_selector(f"text={TXT_ARQUIVOS}", timeout=10000)
 
             inp = self.page.wait_for_selector(
                 "input[type=file]", timeout=8000, state="attached")
@@ -325,7 +344,7 @@ class MCClient:
 
             tag_ok = self._definir_tag(config.TAG_COMPROVANTE)
 
-            self.page.get_by_role("button", name="Confirmar pagamento").first.click()
+            self.page.get_by_role("button", name=BTN_CONFIRMAR).first.click()
             self.page.wait_for_timeout(2500)
             return "anexado" if tag_ok else "anexado_sem_tag"
 

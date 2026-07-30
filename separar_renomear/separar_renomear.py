@@ -18,30 +18,22 @@ import os
 import re
 import queue
 import threading
-import unicodedata
 from pathlib import Path
 
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
 MODELO_PADRAO = "VALOR - DESCRIÇÃO - DATA"
 
-
-def _sem_acento(s):
-    s = unicodedata.normalize("NFD", s or "")
-    return "".join(c for c in s if unicodedata.category(c) != "Mn")
-
-
-def _fmt_dur(seg: float) -> str:
-    """Formata uma duração em segundos: '45 s', '3 min 07 s', '1 h 02 min'."""
-    seg = int(round(seg))
-    m, s = divmod(seg, 60)
-    h, m = divmod(m, 60)
-    if h:
-        return f"{h} h {m:02d} min"
-    if m:
-        return f"{m} min {s:02d} s"
-    return f"{s} s"
+_sem_acento = util.sem_acento
+_fmt_dur = util.fmt_dur
 
 
 # ------------------------------------------------------------ extração
@@ -349,9 +341,13 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None):
             n = len(reader.pages)
         except Exception as e:
             log(f"[ERRO] abrir {pdf_path.name}: {e}"); erros += 1; continue
-        for i in range(n):
-            try:
-                with pdfplumber.open(str(pdf_path)) as pl:
+        try:
+            pl = pdfplumber.open(str(pdf_path))   # abre UMA vez por arquivo
+        except Exception as e:
+            log(f"[ERRO] abrir {pdf_path.name}: {e}"); erros += 1; continue
+        with pl:
+            for i in range(n):
+                try:
                     pagina = pl.pages[i]
                     txt = pagina.extract_text() or ''
                     if len(txt.strip()) < 30:      # sem camada de texto -> OCR
@@ -359,16 +355,16 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None):
                         if lido.strip():
                             txt = lido
                             log(f"  [OCR] {pdf_path.name} pág {i+1}")
-                base = nome_arquivo(campos(txt), modelo)
-                w = PdfWriter(); w.add_page(reader.pages[i])
-                destino = _destino_unico(pasta_saida, base)
-                with open(destino, 'wb') as fh:
-                    w.write(fh)
-                total_paginas += 1
-                if total_paginas % 25 == 0:
-                    log(f"  ... {total_paginas} páginas processadas")
-            except Exception as e:
-                log(f"[ERRO] {pdf_path.name} pág {i+1}: {e}"); erros += 1
+                    base = nome_arquivo(campos(txt), modelo)
+                    w = PdfWriter(); w.add_page(reader.pages[i])
+                    destino = _destino_unico(pasta_saida, base)
+                    with open(destino, 'wb') as fh:
+                        w.write(fh)
+                    total_paginas += 1
+                    if total_paginas % 25 == 0:
+                        log(f"  ... {total_paginas} páginas processadas")
+                except Exception as e:
+                    log(f"[ERRO] {pdf_path.name} pág {i+1}: {e}"); erros += 1
     log(f"\nConcluído: {total_paginas} comprovante(s) gerado(s) em "
         f"{str(pasta_saida).replace(chr(92), '/')}"
         + (f" | {erros} erro(s)" if erros else ""))
@@ -390,6 +386,10 @@ class SepararFrame(ttk.Frame):
         self.v_modelo = tk.StringVar(value=MODELO_PADRAO)
         self.fila = queue.Queue()
         self._montar()
+        try:                             # já nasce na cor do tema (sem flash)
+            self.aplicar_cores(util.cor_escura(ttk.Style().lookup("TFrame", "background")))
+        except Exception:
+            pass
         self.after(150, self._drain)
 
     def _montar(self):

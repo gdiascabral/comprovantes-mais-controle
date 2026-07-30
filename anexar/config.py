@@ -20,12 +20,18 @@ PASTA_PERFIL_CHROME = _AQUI / ".chrome_profile"
 # Log (CSV) com o resultado de cada anexo.
 ARQUIVO_LOG = _AQUI / "log_anexos.csv"
 
+# Log de diagnóstico para erros normalmente silenciosos (ex.: captura de
+# credenciais na tela de Pagamentos).
+ARQUIVO_DIAG = _AQUI / "diagnostico.log"
+
 # Tag aplicada ao arquivo anexado no Mais Controle.
 TAG_COMPROVANTE = "Comprovante"
 
 # URL do sistema.
 MC_URL_BASE = "https://acessar.maiscontroleerp.com.br"
 MC_URL_PAGAMENTOS = MC_URL_BASE + "/#/payable-installments"
+# Prefixo do link de um lançamento (basta concatenar o launchId).
+MC_URL_LANCAMENTO = MC_URL_BASE + "/#/payable-installments/"
 
 # Descrições/categorias ignoradas pelas opções da janela
 # (comparação sem acento, maiúsculas).
