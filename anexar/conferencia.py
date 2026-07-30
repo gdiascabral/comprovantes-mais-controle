@@ -91,55 +91,87 @@ class ConferenciaFrame(ttk.Frame):
         self.after(150, self._drain)
 
     def _montar(self):
-        pad = {"padx": 10, "pady": 4}
-        f1 = ttk.LabelFrame(self, text=" Período da conferência ")
-        f1.pack(fill="x", **pad)
-        ttk.Label(f1, text="Data de pagamento — de:").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        CampoData(f1, self.v_ini).grid(row=0, column=1, sticky="w", padx=(0, 14))
+        PADX = 14
+
+        # ---- cabeçalho
+        cab = ttk.Frame(self)
+        cab.pack(fill="x", padx=PADX, pady=(12, 4))
+        ttk.Label(cab, text="Conferência",
+                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        self.lbl_sub = ttk.Label(
+            cab, foreground="#6b6b6b",
+            text="Lista os pagos sem comprovante e, opcionalmente, confere o "
+                 "conteúdo dos anexos existentes.")
+        self.lbl_sub.pack(anchor="w")
+
+        # ---- card: período
+        f1 = ttk.LabelFrame(self, text=" Período da conferência ",
+                            padding=(12, 8, 12, 10))
+        f1.pack(fill="x", padx=PADX, pady=6)
+        ttk.Label(f1, text="Data de pagamento — de:").grid(row=0, column=0, sticky="w", pady=4)
+        CampoData(f1, self.v_ini).grid(row=0, column=1, sticky="w", padx=(6, 14))
         ttk.Label(f1, text="até:").grid(row=0, column=2, sticky="e")
         CampoData(f1, self.v_fim).grid(row=0, column=3, sticky="w", padx=(6, 14))
         ttk.Label(f1, text="(dd/mm/aaaa)").grid(row=0, column=4, sticky="w")
         ttk.Checkbutton(f1, text="Ignorar tarifas bancárias, IOF, cesta e pacote de serviços",
-                        variable=self.v_ign).grid(row=1, column=0, columnspan=5, sticky="w", padx=8)
+                        variable=self.v_ign).grid(row=1, column=0, columnspan=5, sticky="w", pady=(6, 0))
         ttk.Checkbutton(f1, text="Ignorar aportes de capital e distribuição de lucros",
-                        variable=self.v_ign_ap).grid(row=2, column=0, columnspan=5, sticky="w", padx=8)
+                        variable=self.v_ign_ap).grid(row=2, column=0, columnspan=5, sticky="w")
         ttk.Checkbutton(f1, text="Conferir também o CONTEÚDO dos anexos "
                                  "(abre cada PDF e checa valor e data — mais demorado)",
                         variable=self.v_conteudo
-                        ).grid(row=3, column=0, columnspan=5, sticky="w", padx=8, pady=(0, 4))
+                        ).grid(row=3, column=0, columnspan=5, sticky="w", pady=(0, 2))
 
-        acoes = ttk.Frame(self)
-        acoes.pack(fill="x", **pad)
-        self.btn = ttk.Button(acoes, text="▶ Conferir anexos do período",
+        # ---- barra de ação (fixa no rodapé)
+        acao = ttk.Frame(self)
+        acao.pack(side="bottom", fill="x", padx=PADX, pady=(6, 12))
+        self.btn = ttk.Button(acao, text="▶  Conferir anexos do período",
                               command=self._executar)
-        self.btn.pack(side="left")
+        self.btn.pack(side="right", ipadx=10)
         try:
             self.btn.configure(style="Accent.TButton")
         except tk.TclError:
             pass
-        self.b_rel = ttk.Button(acoes, text="📄 Abrir relatório",
+        self.b_rel = ttk.Button(acao, text="📄  Abrir relatório",
                                 command=self._abrir_relatorio, state="disabled")
-        self.b_rel.pack(side="left", padx=10)
-        self.lbl = ttk.Label(acoes, text="Pronto.")
-        self.lbl.pack(side="left", padx=8)
+        self.b_rel.pack(side="right", padx=(0, 8))
+        self.lbl = ttk.Label(acao, text="Pronto.")
+        self.lbl.pack(side="left")
+        self.pb = ttk.Progressbar(acao, mode="determinate")
+        self.pb.pack(side="left", fill="x", expand=True, padx=12)
 
-        self.pb = ttk.Progressbar(self, mode="determinate")
-        self.pb.pack(fill="x", **pad)
-        ttk.Label(self, text="Registro:").pack(anchor="w", padx=10)
-        self.log = tk.Text(self, wrap="word", relief="flat", borderwidth=0,
-                           highlightthickness=1, highlightbackground="#d0d0d0",
-                           background="#ffffff", font=("Consolas", 10))
-        self.log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        # ---- card: registro (ocupa o espaço restante)
+        reg = ttk.LabelFrame(self, text=" Registro ", padding=(10, 6, 10, 10))
+        reg.pack(fill="both", expand=True, padx=PADX, pady=6)
+        self.log = tk.Text(reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0, background="#ffffff",
+                           font=("Consolas", 10))
+        self.log.pack(fill="both", expand=True)
+        self.log.tag_configure("ph", justify="center", foreground="#8a8a8a",
+                               spacing1=6, font=("Segoe UI", 11))
+        self._mostrar_placeholder()
+
+    def _mostrar_placeholder(self):
+        self.log.delete("1.0", "end")
+        self.log.insert("end", "\n\n", "ph")
+        self.log.insert("end", "O resultado da conferência aparecerá aqui.\n", "ph")
+        self.log.insert("end", "\nInforme o período e clique em "
+                               "“Conferir anexos do período”.\n", "ph")
 
     def aplicar_cores(self, escuro: bool):
         if escuro:
             self.log.configure(background="#252525", foreground="#e6e6e6",
-                               insertbackground="#e6e6e6",
-                               highlightbackground="#3a3a3a")
+                               insertbackground="#e6e6e6")
+            muted = "#9a9a9a"
         else:
             self.log.configure(background="#ffffff", foreground="#000000",
-                               insertbackground="#000000",
-                               highlightbackground="#d0d0d0")
+                               insertbackground="#000000")
+            muted = "#5f5f5f"
+        self.log.tag_configure("ph", foreground="#8a8a8a")
+        try:
+            self.lbl_sub.configure(foreground=muted)
+        except Exception:
+            pass
 
     def _log(self, m):
         self.q.put(("log", m))

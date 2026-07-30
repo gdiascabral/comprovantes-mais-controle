@@ -150,17 +150,17 @@ def main():
             except tk.TclError:
                 pass
 
-    ttk.Label(lateral, text="Comprovantes", font=("Segoe UI", 12, "bold")
-              ).pack(anchor="w", pady=(0, 10))
-    botoes["sep"] = ttk.Button(lateral, text="Separar e Renomear", width=22,
+    ttk.Label(lateral, text="🧾  Comprovantes", font=("Segoe UI", 13, "bold")
+              ).pack(anchor="w", pady=(0, 14))
+    botoes["sep"] = ttk.Button(lateral, text="✂   Separar e Renomear", width=24,
                                command=lambda: mostrar("sep"))
-    botoes["sep"].pack(pady=(0, 6))
-    botoes["anx"] = ttk.Button(lateral, text="Anexar Comprovantes", width=22,
+    botoes["sep"].pack(fill="x", pady=(0, 6), ipady=3)
+    botoes["anx"] = ttk.Button(lateral, text="📎   Anexar Comprovantes", width=24,
                                command=lambda: mostrar("anx"))
-    botoes["anx"].pack(pady=(0, 6))
-    botoes["conf"] = ttk.Button(lateral, text="Conferência", width=22,
+    botoes["anx"].pack(fill="x", pady=(0, 6), ipady=3)
+    botoes["conf"] = ttk.Button(lateral, text="✅   Conferência", width=24,
                                 command=lambda: mostrar("conf"))
-    botoes["conf"].pack()
+    botoes["conf"].pack(fill="x", ipady=3)
 
     # ---------------- rodapé da barra: tema + versão
     rodape = ttk.Frame(lateral)

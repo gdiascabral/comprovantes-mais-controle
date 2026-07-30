@@ -199,98 +199,132 @@ class AnexarFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        pad = {"padx": 10, "pady": 4}
+        PADX = 14
 
-        # ---- modo automático
-        self.f_auto = ttk.LabelFrame(self, text=" 1. Período e pasta dos comprovantes ")
-        self.f_auto.pack(fill="x", **pad)
+        # ---- cabeçalho
+        cab = ttk.Frame(self)
+        cab.pack(fill="x", padx=PADX, pady=(12, 4))
+        ttk.Label(cab, text="Anexar Comprovantes",
+                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        self.lbl_sub = ttk.Label(
+            cab, foreground="#6b6b6b",
+            text="Busca os pagos do período, descobre quem está sem comprovante "
+                 "e anexa o PDF certo em cada um.")
+        self.lbl_sub.pack(anchor="w")
+
+        # ---- card 1: período e pasta
+        self.f_auto = ttk.LabelFrame(self, text=" 1. Período e pasta dos comprovantes ",
+                                     padding=(12, 8, 12, 10))
+        self.f_auto.pack(fill="x", padx=PADX, pady=6)
         fa = self.f_auto
-        ttk.Label(fa, text="Data de pagamento — de:").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        CampoData(fa, self.v_ini).grid(row=0, column=1, sticky="w", padx=(0, 14))
+        ttk.Label(fa, text="Data de pagamento — de:").grid(row=0, column=0, sticky="w", pady=4)
+        CampoData(fa, self.v_ini).grid(row=0, column=1, sticky="w", padx=(6, 14))
         ttk.Label(fa, text="até:").grid(row=0, column=2, sticky="e")
         CampoData(fa, self.v_fim).grid(row=0, column=3, sticky="w", padx=(6, 14))
         ttk.Label(fa, text="(dd/mm/aaaa)").grid(row=0, column=4, sticky="w")
-        ttk.Label(fa, text="Pasta dos PDFs renomeados:").grid(row=1, column=0, sticky="w", padx=8)
-        ttk.Entry(fa, textvariable=self.v_pasta, width=70).grid(row=1, column=1, columnspan=3, sticky="w")
+        ttk.Label(fa, text="Pasta dos PDFs renomeados:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(fa, textvariable=self.v_pasta).grid(row=1, column=1, columnspan=3, sticky="we", pady=(6, 0))
         ttk.Button(fa, text="Selecionar…",
                    command=lambda: self.v_pasta.set(
                        (filedialog.askdirectory() or self.v_pasta.get()).replace("\\", "/"))
-                   ).grid(row=1, column=4, padx=6, sticky="w")
+                   ).grid(row=1, column=4, padx=(6, 0), sticky="w", pady=(6, 0))
         ttk.Checkbutton(fa, text="Ignorar tarifas bancárias, IOF, cesta e pacote de serviços",
-                        variable=self.v_ign).grid(row=2, column=0, columnspan=5, sticky="w", padx=8)
+                        variable=self.v_ign).grid(row=2, column=0, columnspan=5, sticky="w", pady=(8, 0))
         ttk.Checkbutton(fa, text="Ignorar aportes de capital e distribuição de lucros",
-                        variable=self.v_ign_ap).grid(row=3, column=0, columnspan=5, sticky="w", padx=8)
+                        variable=self.v_ign_ap).grid(row=3, column=0, columnspan=5, sticky="w")
+        fa.columnconfigure(3, weight=1)
+
         # ---- escolha do modo (entre os blocos 1 e 2)
         self.topo = ttk.Frame(self)
-        self.topo.pack(fill="x", **pad)
+        self.topo.pack(fill="x", padx=PADX, pady=(2, 0))
+        ttk.Label(self.topo, text="Modo:").pack(side="left", padx=(0, 10))
         ttk.Radiobutton(self.topo, text="Automático (casar pelos nomes dos PDFs)",
                         variable=self.v_modo, value="auto",
-                        command=self._alternar_modo).pack(side="left", padx=(8, 18))
+                        command=self._alternar_modo).pack(side="left", padx=(0, 18))
         ttk.Radiobutton(self.topo, text="Por lista pronta (.csv / .xlsx)",
                         variable=self.v_modo, value="lista",
                         command=self._alternar_modo).pack(side="left")
 
-        self.f_contas = ttk.LabelFrame(self, text=" 2. Contas bancárias (marque as desejadas) ")
-        self.f_contas.pack(fill="x", **pad)
+        # ---- card 2: contas
+        self.f_contas = ttk.LabelFrame(self, text=" 2. Contas bancárias (marque as desejadas) ",
+                                       padding=(12, 8, 12, 10))
+        self.f_contas.pack(fill="x", padx=PADX, pady=6)
         self.contas_box = ttk.Frame(self.f_contas)
-        self.contas_box.pack(fill="x", padx=8, pady=4)
+        self.contas_box.pack(fill="x")
         ttk.Label(self.contas_box,
                   text="Clique em \"2. Carregar contas do período\" para listar as contas."
                   ).pack(anchor="w")
 
-        # ---- modo lista
-        self.f_lista = ttk.LabelFrame(self, text=" Lista pronta ")
+        # ---- card: modo lista (mostrado só no modo "Por lista")
+        self.f_lista = ttk.LabelFrame(self, text=" Lista pronta ", padding=(12, 8, 12, 10))
         fl = self.f_lista
-        ttk.Label(fl, text="Arquivo (.csv ou .xlsx):").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        ttk.Entry(fl, textvariable=self.v_lista, width=70).grid(row=0, column=1, sticky="w")
+        ttk.Label(fl, text="Arquivo (.csv ou .xlsx):").grid(row=0, column=0, sticky="w")
+        ttk.Entry(fl, textvariable=self.v_lista).grid(row=0, column=1, sticky="we", padx=6)
         ttk.Button(fl, text="Selecionar…", command=self._sel_lista
-                   ).grid(row=0, column=2, padx=6, sticky="w")
+                   ).grid(row=0, column=2, sticky="w")
+        fl.columnconfigure(1, weight=1)
 
-        # ---- ações
-        acoes = ttk.Frame(self); acoes.pack(fill="x", **pad)
-        ttk.Checkbutton(acoes, text="Simular (não anexa de verdade)",
+        # ---- barra de ação (fixa no rodapé): botões + status/progresso
+        acao = ttk.Frame(self)
+        acao.pack(side="bottom", fill="x", padx=PADX, pady=(6, 12))
+        prog = ttk.Frame(acao)
+        prog.pack(side="bottom", fill="x", pady=(8, 0))
+        self.lbl = ttk.Label(prog, text="Pronto.")
+        self.lbl.pack(side="left")
+        self.pb = ttk.Progressbar(prog, mode="determinate")
+        self.pb.pack(side="left", fill="x", expand=True, padx=12)
+
+        btns = ttk.Frame(acao)
+        btns.pack(fill="x")
+        ttk.Checkbutton(btns, text="Simular (não anexa de verdade)",
                         variable=self.v_dry).pack(side="left")
-        self.b0 = ttk.Button(acoes, text="▶ 1. Abrir Mais Controle e acessar",
-                             command=self.abrir_mc)
+        self.b0 = ttk.Button(btns, text="▶ 1. Abrir e acessar", command=self.abrir_mc)
         self.b0.pack(side="left", padx=10)
-        self.b1 = ttk.Button(acoes, text="▶ 2. Carregar contas do período",
-                             command=self.conectar)
+        self.b1 = ttk.Button(btns, text="▶ 2. Carregar contas", command=self.conectar)
         self.b1.pack(side="left")
-        self.b2 = ttk.Button(acoes, text="▶ 3. Casar e anexar", command=self.executar,
+        self.b2 = ttk.Button(btns, text="▶ 3. Casar e anexar", command=self.executar,
                              state="disabled")
         self.b2.pack(side="left", padx=10)
-        self.b_pause = ttk.Button(acoes, text="⏸ Pausar", command=self._pausar_toggle,
+        self.b_pause = ttk.Button(btns, text="⏸ Pausar", command=self._pausar_toggle,
                                   state="disabled")
         self.b_pause.pack(side="left")
-        self.b_stop = ttk.Button(acoes, text="⏹ Parar", command=self._parar_click,
+        self.b_stop = ttk.Button(btns, text="⏹ Parar", command=self._parar_click,
                                  state="disabled")
         self.b_stop.pack(side="left", padx=6)
-        self.b_rel = ttk.Button(acoes, text="📄 Abrir relatório",
+        self.b_rel = ttk.Button(btns, text="📄 Abrir relatório",
                                 command=self._abrir_relatorio, state="disabled")
         self.b_rel.pack(side="left", padx=(10, 0))
-        self.lbl = ttk.Label(acoes, text="Pronto.")
-        self.lbl.pack(side="left", padx=14)
         for _b in (self.b0, self.b1, self.b2):
             try:
                 _b.configure(style="Accent.TButton")   # botões azuis (tema sv-ttk)
             except tk.TclError:
                 pass
 
-        self.pb = ttk.Progressbar(self, mode="determinate")
-        self.pb.pack(fill="x", **pad)
-        ttk.Label(self, text="Registro:").pack(anchor="w", padx=10)
-        self.log = tk.Text(self, wrap="word", relief="flat", borderwidth=0,
-                           highlightthickness=1, highlightbackground="#d0d0d0",
-                           background="#ffffff", font=("Consolas", 10))
-        self.log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        # ---- card: registro (ocupa o espaço restante)
+        reg = ttk.LabelFrame(self, text=" Registro ", padding=(10, 6, 10, 10))
+        reg.pack(fill="both", expand=True, padx=PADX, pady=6)
+        self.log = tk.Text(reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0, background="#ffffff",
+                           font=("Consolas", 10))
+        self.log.pack(fill="both", expand=True)
+        self.log.tag_configure("ph", justify="center", foreground="#8a8a8a",
+                               spacing1=6, font=("Segoe UI", 11))
+        self._mostrar_placeholder()
         self._alternar_modo()
+
+    def _mostrar_placeholder(self):
+        self.log.delete("1.0", "end")
+        self.log.insert("end", "\n\n", "ph")
+        self.log.insert("end", "O andamento e os resultados aparecerão aqui.\n", "ph")
+        self.log.insert("end", "\nSiga os passos 1 → 2 → 3 na barra abaixo.\n", "ph")
+        self._ph = True
 
     def _alternar_modo(self):
         if self.v_modo.get() == "auto":
             self.f_lista.pack_forget()
             self.b1.config(state="normal")
         else:
-            self.f_lista.pack(fill="x", padx=10, pady=4, after=self.topo)
+            self.f_lista.pack(fill="x", padx=14, pady=6, after=self.topo)
             self.b2.config(state="normal")
 
     def _sel_lista(self):
@@ -337,12 +371,17 @@ class AnexarFrame(ttk.Frame):
         """Ajusta as cores dos widgets clássicos ao tema claro/escuro."""
         if escuro:
             self.log.configure(background="#252525", foreground="#e6e6e6",
-                               insertbackground="#e6e6e6",
-                               highlightbackground="#3a3a3a")
+                               insertbackground="#e6e6e6")
+            muted = "#9a9a9a"
         else:
             self.log.configure(background="#ffffff", foreground="#000000",
-                               insertbackground="#000000",
-                               highlightbackground="#d0d0d0")
+                               insertbackground="#000000")
+            muted = "#5f5f5f"
+        self.log.tag_configure("ph", foreground="#8a8a8a")
+        try:
+            self.lbl_sub.configure(foreground=muted)
+        except Exception:
+            pass
 
     # -------------------------------------------------------- pausar / parar
     def _pausar_toggle(self):
@@ -473,7 +512,7 @@ class AnexarFrame(ttk.Frame):
         if self.v_modo.get() == "auto" and not Path(self.v_pasta.get() or "").is_dir():
             messagebox.showerror("Erro", "Selecione a pasta dos PDFs renomeados."); return
         self.b1.config(state="disabled")
-        self.log.delete("1.0", "end")
+        self.log.delete("1.0", "end"); self._ph = False
         self.lbl.config(text="Conectando...")
         self.pb.config(mode="indeterminate")
         self.pb.start(12)
@@ -727,6 +766,8 @@ class AnexarFrame(ttk.Frame):
             while True:
                 kind, val = self.q.get_nowait()
                 if kind == "log":
+                    if getattr(self, "_ph", False):    # limpa o estado inicial
+                        self.log.delete("1.0", "end"); self._ph = False
                     self.log.insert("end", val + "\n"); self.log.see("end")
                 elif kind == "status":
                     self.lbl.config(text=val)
