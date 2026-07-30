@@ -20,7 +20,6 @@ import queue
 import re
 import time
 import traceback
-import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from datetime import date, datetime
@@ -61,6 +60,20 @@ def _fmt_val(cents: int) -> str:
     return f"{cents // 100},{cents % 100:02d}"
 
 
+def _abrir_url(url: str):
+    """Abre uma URL no navegador padrão. Usa os.startfile (sempre presente no
+    executável); só recorre ao módulo webbrowser se aquele falhar — assim o
+    app não depende do webbrowser estar embutido no motor."""
+    try:
+        os.startfile(url)                # Windows: abre no navegador padrão
+    except Exception:
+        try:
+            import webbrowser
+            webbrowser.open(url)
+        except Exception:
+            pass
+
+
 class CampoData(ttk.Frame):
     """Campo de data dd/mm/aaaa: completa as barras sozinho ao digitar e tem
     um botão que abre um calendário para escolher a data com o mouse."""
@@ -94,7 +107,12 @@ class CampoData(ttk.Frame):
             self.ent.icursor("end")
 
     def _abrir_cal(self):
-        import calendar
+        try:
+            import calendar
+        except ImportError:              # módulo pode não estar no motor antigo
+            messagebox.showinfo("Calendário indisponível",
+                                "Digite a data manualmente no formato dd/mm/aaaa.")
+            return
         top = tk.Toplevel(self)
         top.title("Escolher data")
         top.transient(self.winfo_toplevel())
@@ -414,7 +432,7 @@ class AnexarFrame(ttk.Frame):
             cb.current(0)
             cb.pack(fill="x", padx=8, pady=(2, 2))
             ttk.Button(bloco, text="Abrir lançamento no navegador",
-                       command=lambda i=pe["launchId"]: webbrowser.open(LINK + str(i))
+                       command=lambda i=pe["launchId"]: _abrir_url(LINK + str(i))
                        ).pack(anchor="e", padx=8, pady=(0, 6))
             combos.append((pe, cb, {p["fn"]: p for p in livres}))
 
