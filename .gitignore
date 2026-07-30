@@ -6,6 +6,7 @@ dist/
 *.spec
 log_anexos.csv
 relatorio_anexos_*.xlsx
+relatorio_conferencia_*.xlsx
 nao_anexadas_*.xlsx
 erro_*.png
 tag_debug.png

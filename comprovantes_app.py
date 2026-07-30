@@ -26,6 +26,7 @@ from tkinter import ttk
 
 from separar_renomear import SepararFrame
 from anexar_comprovantes import AnexarFrame
+from conferencia import ConferenciaFrame
 
 
 def _nitidez():
@@ -131,15 +132,17 @@ def main():
 
     aba_sep = SepararFrame(conteudo)
     aba_anx = AnexarFrame(conteudo)
+    aba_conf = ConferenciaFrame(conteudo, aba_anx)
+    quadros = {"sep": aba_sep, "anx": aba_anx, "conf": aba_conf}
     atual = {"nome": None}
     botoes = {}
 
     def mostrar(nome: str):
         if atual["nome"] == nome:
             return
-        for f in (aba_sep, aba_anx):
+        for f in quadros.values():
             f.pack_forget()
-        (aba_sep if nome == "sep" else aba_anx).pack(fill="both", expand=True)
+        quadros[nome].pack(fill="both", expand=True)
         atual["nome"] = nome
         for n, b in botoes.items():
             try:
@@ -154,7 +157,10 @@ def main():
     botoes["sep"].pack(pady=(0, 6))
     botoes["anx"] = ttk.Button(lateral, text="Anexar Comprovantes", width=22,
                                command=lambda: mostrar("anx"))
-    botoes["anx"].pack()
+    botoes["anx"].pack(pady=(0, 6))
+    botoes["conf"] = ttk.Button(lateral, text="Conferência", width=22,
+                                command=lambda: mostrar("conf"))
+    botoes["conf"].pack()
 
     # ---------------- rodapé da barra: tema + versão
     rodape = ttk.Frame(lateral)
@@ -174,8 +180,14 @@ def main():
         efetivo = tema_efetivo(escolha)
         if sv_ttk:
             sv_ttk.set_theme(efetivo)
+        try:                             # fundo da janela na cor exata do tema
+            cor = ttk.Style().lookup("TFrame", "background")
+            if cor:
+                root.configure(background=cor)
+        except tk.TclError:
+            pass
         escuro = efetivo == "dark"
-        for f in (aba_sep, aba_anx):
+        for f in quadros.values():
             try:
                 f.aplicar_cores(escuro)
             except Exception:
