@@ -260,6 +260,7 @@ class ConferenciaFrame(ttk.Frame):
                     self.q.put(("prog", i))
                     try:
                         itens = api.listar_anexos(p["paidId"])
+                        baixados = 0
                         textos = []
                         for item in itens:
                             url = mc_api.achar_url_anexo(item)
@@ -267,10 +268,19 @@ class ConferenciaFrame(ttk.Frame):
                                 continue
                             dados = api.baixar_anexo(url)
                             if dados:
+                                baixados += 1
                                 textos.append(_texto_pdf(dados))
                         texto = "\n".join(t for t in textos if t)
+                        if not itens:
+                            p["confere"] = "não conferível (anexo não listado pela API)"
+                            nao_conferiveis.append(p)
+                            continue
+                        if baixados == 0:
+                            p["confere"] = "não conferível (não consegui baixar o arquivo)"
+                            nao_conferiveis.append(p)
+                            continue
                         if not texto.strip():
-                            p["confere"] = "não conferível (sem texto)"
+                            p["confere"] = "não conferível (PDF sem texto e OCR não leu)"
                             nao_conferiveis.append(p)
                             continue
                         vals = p.get("valores") or [p["valor"]]

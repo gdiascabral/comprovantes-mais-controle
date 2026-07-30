@@ -24,6 +24,10 @@ ARQUIVO_LOG = _AQUI / "log_anexos.csv"
 # credenciais na tela de Pagamentos).
 ARQUIVO_DIAG = _AQUI / "diagnostico.log"
 
+# Login salvo (e-mail + senha) cifrado com a DPAPI do Windows, para o login
+# automático. Fica atrelado ao usuário do Windows; nunca em texto puro.
+ARQUIVO_LOGIN = _AQUI / "login.dat"
+
 # Tag aplicada ao arquivo anexado no Mais Controle.
 TAG_COMPROVANTE = "Comprovante"
 

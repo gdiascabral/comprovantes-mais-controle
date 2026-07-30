@@ -212,30 +212,58 @@ class MCApi:
         return j if isinstance(j, list) else []
 
     def baixar_anexo(self, url: str) -> bytes | None:
-        """Baixa um anexo de dentro da página logada. Retorna os bytes."""
+        """Baixa um anexo de dentro da página logada. Tenta primeiro SEM
+        cabeçalhos (URLs pré-assinadas de armazenamento externo — S3 etc. —
+        quebram se receberem o Authorization do ERP) e, se falhar, tenta COM
+        os cabeçalhos de autenticação (arquivos servidos pelo próprio ERP)."""
         import base64
         _, headers = self._req_anexos
-        r = self.page.evaluate(_JS_FETCH_B64, {"url": url, "headers": headers})
-        if not isinstance(r, dict) or r.get("__erro") or "b64" not in r:
-            return None
-        return base64.b64decode(r["b64"])
+        for h in ({}, headers):
+            try:
+                r = self.page.evaluate(_JS_FETCH_B64, {"url": url, "headers": h})
+            except Exception:
+                r = None
+            if isinstance(r, dict) and not r.get("__erro") and "b64" in r:
+                try:
+                    return base64.b64decode(r["b64"])
+                except Exception:
+                    return None
+        return None
+
+
+def _coletar_urls(item, out=None) -> list:
+    if out is None:
+        out = []
+    if isinstance(item, dict):
+        for v in item.values():
+            _coletar_urls(v, out)
+    elif isinstance(item, list):
+        for v in item:
+            _coletar_urls(v, out)
+    elif isinstance(item, str) and item.startswith("http"):
+        out.append(item)
+    return out
 
 
 def achar_url_anexo(item) -> str | None:
-    """Procura a URL do arquivo dentro do registro de anexo da API."""
-    if isinstance(item, dict):
-        for v in item.values():
-            u = achar_url_anexo(v)
-            if u:
-                return u
-    elif isinstance(item, list):
-        for v in item:
-            u = achar_url_anexo(v)
-            if u:
-                return u
-    elif isinstance(item, str) and item.startswith("http"):
-        return item
-    return None
+    """Procura a URL do arquivo dentro do registro de anexo da API, preferindo
+    a que tem cara de arquivo (extensão de doc/imagem ou palavra de download)."""
+    import re as _re
+    urls = _coletar_urls(item)
+    if not urls:
+        return None
+
+    def pontos(u: str) -> int:
+        ul = u.lower()
+        s = 0
+        if _re.search(r"\.(pdf|png|jpe?g|jpeg)(\?|$)", ul):
+            s += 3
+        if any(k in ul for k in ("download", "attachment", "anexo", "arquivo",
+                                  "file", "s3", "storage", "blob", "amazonaws")):
+            s += 2
+        return s
+
+    return max(urls, key=pontos)
 
 
 # ---------------------------------------------------------------- utilidades

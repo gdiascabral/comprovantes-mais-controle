@@ -32,10 +32,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
 try:
-    from . import config, matcher, mc_api, planilha
+    from . import config, matcher, mc_api, planilha, credenciais
     from .mc_client import MCClient
 except ImportError:
-    import config, matcher, mc_api, planilha
+    import config, matcher, mc_api, planilha, credenciais
     from mc_client import MCClient
 
 try:                                     # utilitários compartilhados (raiz)
@@ -294,6 +294,9 @@ class AnexarFrame(ttk.Frame):
         self.b_rel = ttk.Button(btns, text="📄 Abrir relatório",
                                 command=self._abrir_relatorio, state="disabled")
         self.b_rel.pack(side="left", padx=(10, 0))
+        self.b_login = ttk.Button(btns, text="🔑 Login",
+                                  command=self._gerenciar_login)
+        self.b_login.pack(side="right")
         for _b in (self.b0, self.b1, self.b2):
             try:
                 _b.configure(style="Accent.TButton")   # botões azuis (tema sv-ttk)
@@ -350,8 +353,82 @@ class AnexarFrame(ttk.Frame):
             log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
             self.mc = MCClient().__enter__()
             self.api = mc_api.MCApi(self.mc.page)
-            self.mc.garantir_login()
+            self.mc.garantir_login(self._pedir_login)
         return self.api
+
+    def _pedir_login(self):
+        """Chamado da thread do navegador quando o login é necessário e não há
+        login salvo. Mostra o diálogo na thread principal e devolve
+        (email, senha, salvar) ou None."""
+        holder, ev = {}, Event()
+        self.q.put(("login", (holder, ev)))
+        ev.wait()
+        return holder.get("creds")
+
+    def _gerenciar_login(self):
+        """Botão 🔑 Login: cadastrar/trocar/remover o login salvo."""
+        def done(creds):
+            if creds and creds[2]:
+                try:
+                    credenciais.salvar(creds[0], creds[1])
+                    self.lbl.config(text="Login salvo neste computador.")
+                except Exception as e:
+                    messagebox.showerror("Erro", f"Não consegui salvar o login:\n{e}")
+        self._mostrar_dialogo_login(done)
+
+    def _mostrar_dialogo_login(self, on_done):
+        """Diálogo de login (thread principal). Chama on_done((email, senha,
+        salvar)) ao confirmar, ou on_done(None) ao cancelar."""
+        top = tk.Toplevel(self)
+        top.title("Login do Mais Controle")
+        top.transient(self.winfo_toplevel())
+        top.resizable(False, False)
+        salvos = credenciais.carregar()
+        ttk.Label(top, wraplength=380, justify="left",
+                  text="Entre com seu login do Mais Controle. Ele é salvo cifrado "
+                       "neste computador (login automático nas próximas vezes)."
+                  ).grid(row=0, column=0, columnspan=2, padx=14, pady=(14, 10), sticky="w")
+        v_email = tk.StringVar(value=(salvos[0] if salvos else ""))
+        v_senha = tk.StringVar(value=(salvos[1] if salvos else ""))
+        v_salvar = tk.BooleanVar(value=True)
+        ttk.Label(top, text="E-mail").grid(row=1, column=0, sticky="w", padx=14)
+        ttk.Entry(top, textvariable=v_email, width=42
+                  ).grid(row=2, column=0, columnspan=2, padx=14, sticky="we")
+        ttk.Label(top, text="Senha").grid(row=3, column=0, sticky="w", padx=14, pady=(8, 0))
+        e_senha = ttk.Entry(top, textvariable=v_senha, width=42, show="•")
+        e_senha.grid(row=4, column=0, columnspan=2, padx=14, sticky="we")
+        ttk.Checkbutton(top, text="Salvar neste computador (entrar automaticamente)",
+                        variable=v_salvar).grid(row=5, column=0, columnspan=2,
+                                                sticky="w", padx=14, pady=10)
+        bar = ttk.Frame(top)
+        bar.grid(row=6, column=0, columnspan=2, sticky="we", padx=14, pady=(0, 14))
+
+        def concluir(creds):
+            top.destroy()
+            on_done(creds)
+
+        def confirmar():
+            email, senha = v_email.get().strip(), v_senha.get()
+            if not email or not senha:
+                messagebox.showwarning("Login", "Preencha e-mail e senha.")
+                return
+            concluir((email, senha, v_salvar.get()))
+
+        b_ok = ttk.Button(bar, text="Entrar", command=confirmar)
+        b_ok.pack(side="right")
+        try:
+            b_ok.configure(style="Accent.TButton")
+        except tk.TclError:
+            pass
+        ttk.Button(bar, text="Cancelar", command=lambda: concluir(None)
+                   ).pack(side="right", padx=(0, 8))
+        if salvos:
+            ttk.Button(bar, text="Remover login salvo",
+                       command=lambda: (credenciais.apagar(), concluir(None))
+                       ).pack(side="left")
+        top.protocol("WM_DELETE_WINDOW", lambda: concluir(None))
+        e_senha.focus_set()
+        top.grab_set()
 
     def _t_abrir(self):
         inicio = time.time()
@@ -802,6 +879,10 @@ class AnexarFrame(ttk.Frame):
                     self.b_stop.config(state="disabled")
                 elif kind == "duvidas":
                     self._janela_duvidas(*val)
+                elif kind == "login":
+                    holder, ev = val
+                    self._mostrar_dialogo_login(
+                        lambda r: (holder.__setitem__("creds", r), ev.set()))
                 elif kind == "fim":
                     ok, tot, duv, sp, saida = val
                     self.b2.config(state="normal")

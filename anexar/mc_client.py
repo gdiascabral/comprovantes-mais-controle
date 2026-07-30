@@ -18,9 +18,9 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 try:
-    from . import config
+    from . import config, credenciais
 except ImportError:
-    import config
+    import config, credenciais
 
 
 def _centavos(s) -> int | None:
@@ -273,21 +273,103 @@ class MCClient:
         return out
 
     # ------------------------------------------------------------------ login
-    def garantir_login(self):
+    def _esta_logado(self) -> bool:
+        try:
+            return ("login" not in self.page.url
+                    and self.page.locator(f"text={TXT_LOGADO}").first.is_visible())
+        except Exception:
+            return False
+
+    def garantir_login(self, obter_login=None):
+        """Garante a área logada. Se cair na tela de login, tenta o login
+        automático (credencial salva ou pedida via obter_login) e, se não der,
+        aguarda o login manual na janela do Chrome — o fluxo antigo.
+
+        obter_login: função opcional que devolve (email, senha, salvar) ou None
+        (mostrada só quando não há login salvo)."""
         self.page.goto(config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
-        print("\n>>> Se aparecer a tela de login, faça o login nesta janela do Chrome.")
-        print(">>> Aguardando a área logada (até 30 segundos)...")
-        for _ in range(30):
-            try:
-                if "login" not in self.page.url and self.page.locator(
-                        f"text={TXT_LOGADO}").first.is_visible():
-                    print(">>> Login OK.\n")
-                    return True
-            except Exception:
-                pass
+        self.page.wait_for_timeout(1500)
+        if self._esta_logado():
+            print(">>> Login OK (sessão salva).\n")
+            return True
+        self._auto_login(obter_login)
+        print(">>> Aguardando a área logada...")
+        for _ in range(60):
+            if self._esta_logado():
+                print(">>> Login OK.\n")
+                return True
             time.sleep(1)
         print("[!] Não detectei a área logada; continuo mesmo assim.")
         return False
+
+    def _auto_login(self, obter_login):
+        """Preenche e envia o login. Não levanta exceção: na dúvida, deixa o
+        usuário logar manualmente."""
+        try:
+            if "login" not in self.page.url:
+                return
+            creds = credenciais.carregar()
+            do_arquivo = creds is not None
+            do_salvar = False
+            if not creds and obter_login:
+                got = obter_login()                 # (email, senha, salvar) | None
+                if got:
+                    creds = (got[0], got[1]); do_salvar = bool(got[2])
+            if not creds:
+                print(">>> Faça login nesta janela do Chrome.")
+                return
+            print(">>> Entrando automaticamente...")
+            self._preencher_login(*creds)
+            for _ in range(20):
+                if self._esta_logado():
+                    if do_salvar:
+                        try:
+                            credenciais.salvar(*creds)
+                        except Exception:
+                            pass
+                    return
+                time.sleep(1)
+            if do_arquivo:      # login salvo não funcionou (senha mudou?)
+                credenciais.apagar()
+                print(">>> O login salvo não funcionou; removi-o. "
+                      "Faça login manualmente.")
+            else:
+                print(">>> Login automático não concluído; faça login manualmente.")
+        except Exception as e:
+            print(f">>> auto-login: {str(e)[:120]}")
+
+    def _preencher_login(self, email: str, senha: str):
+        p = self.page
+        try:
+            p.wait_for_selector("input[type=password]", timeout=8000)
+        except Exception:
+            pass
+        for sel in ("input[type=email]", "input[name=email]",
+                    "input[autocomplete=username]", "input[type=text]"):
+            try:
+                loc = p.locator(sel).first
+                if loc.count() and loc.is_visible():
+                    loc.fill(email)
+                    break
+            except Exception:
+                pass
+        for sel in ("input[type=password]", "input[name=password]"):
+            try:
+                loc = p.locator(sel).first
+                if loc.count() and loc.is_visible():
+                    loc.fill(senha)
+                    break
+            except Exception:
+                pass
+        for tentativa in (
+                lambda: p.get_by_role("button", name="ENTRAR").first.click(timeout=4000),
+                lambda: p.locator("button:has-text('ENTRAR')").first.click(timeout=4000),
+                lambda: p.locator("input[type=password]").first.press("Enter")):
+            try:
+                tentativa()
+                return
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ anexo
     def anexar(self, launch_id: str, valor_str: str, pdf_path: Path,
