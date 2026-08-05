@@ -59,6 +59,14 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   VALOR, DESCRIÇÃO, DATA, PAGADOR, RECEBEDOR). Boleto: usa o valor PAGO
   (último R$ não-zero). Regex de valor/data são case-insensitive por causa
   do comprovante de tributo ("VALOR TOTAL:", "DATA DE PAGAMENTO:").
+  OCR: 300 dpi e, **só quando não sai descrição**, 2ª tentativa a 400 dpi
+  (`_texto_da_pagina`) — medido nos comprovantes reais, nenhuma das duas
+  resoluções ganha sempre, e 400 dpi em tudo é ~2x mais lento. O OCR come os
+  espaços do centro de custo ("TB 21 QD 51..." vira "TB21QD51..."):
+  `RE_DESC_COLADO` reconhece a descrição mesmo colada e `_espacar_codigo`
+  devolve os espaços, senão o matcher não enxerga QD/LT. Nome repetido não
+  vira "(2)": `nome_arquivo(..., com_recebedor=True)` desempata por quem
+  recebeu. No fim, `processar` lista quem ficou sem descrição.
 - `anexar/mc_api.py` — leitura dos pagos e anexos pela MESMA API da tela de
   Pagamentos, com chamadas feitas DE DENTRO da página logada (page.evaluate
   + fetch) — chamadas via requests de fora recebem 403 do ERP. Captura

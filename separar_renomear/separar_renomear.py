@@ -177,6 +177,12 @@ RE_DESC_SITE = re.compile(r"\b(QD|LT|OC|NF|UC|LOTE|APORTE|DISTRIBUI\w*|REF)\b")
 # aparecem em razão social ("FORNECEDOR DISTRIBUIDORA DE MAT") e roubavam a
 # vez da observação verdadeira ("CENTRO DE CUSTO QD 18 LT 8 OC 1234")
 RE_DESC_FORTE = re.compile(r"\b(QD|LT|OC|NF|UC|LOTE)\b")
+# o comprovante "impresso" vira curvas vetoriais e o OCR come os espaços do
+# centro de custo: "TB 21 QD 51 LT 23 C 282 M 3" chega "TB21QD51LT23C282M3".
+# Sem \b nenhuma regra acima reconhece isso — daí esta versão "colada".
+RE_DESC_COLADO = re.compile(r"(?:QD|LT|OC|NF)\s*\d", re.I)
+# token único, sem espaço, misturando letra e número: candidato a código
+RE_COD_COLADO = re.compile(r"^(?=[^\d]*\d)(?=[^A-Za-z]*[A-Za-z])[A-Za-z0-9]{8,}$")
 RE_ID_LONGO = re.compile(r"^[A-Za-z0-9\-]{20,}$")
 # rótulo que às vezes vem grudado na descrição — sai do nome do arquivo
 RE_ROTULO_DESC = re.compile(
@@ -202,6 +208,19 @@ def _sem_rotulo(l) -> str:
     """Tira o rótulo grudado no começo da linha ('Nome X' -> 'X')."""
     l = RE_ROTULO_NOME.sub("", (l or "").strip())
     return RE_ROTULO_DESC.sub("", l).strip()
+
+
+def _espacar_codigo(s) -> str:
+    """'TB21QD51LT23C282M3' -> 'TB 21 QD 51 LT 23 C 282 M 3'.
+
+    Só mexe em token ÚNICO e colado que tenha cara de centro de custo; uma
+    descrição que já veio com espaços passa intacta. Isso importa para o
+    casamento: o matcher procura 'QD <n> LT <n>' e, sem os espaços que o OCR
+    comeu, ele não enxerga o centro de custo."""
+    s = (s or "").strip()
+    if not RE_COD_COLADO.match(s) or not RE_DESC_COLADO.search(s):
+        return s
+    return re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", s)
 
 
 def _lixo(l) -> bool:
@@ -293,7 +312,7 @@ def _campos_impresso(t):
                 desc = cand
                 break
     if desc is None:
-        for regra in (RE_DESC_FORTE, RE_DESC_SITE):
+        for regra in (RE_DESC_FORTE, RE_DESC_COLADO, RE_DESC_SITE):
             for l in nl:
                 u = _sem_acento(l).upper()
                 if regra.search(u) and not RE_ID_LONGO.match(l) and len(l) < 90 \
@@ -310,11 +329,15 @@ def _campos_impresso(t):
                     cand = nl[i + 1]
                     u = _sem_acento(cand).upper()
                     digitos = sum(c.isdigit() for c in cand) / max(len(cand), 1)
+                    # o corte por proporção de dígitos existe para barrar
+                    # código/hash, mas centro de custo também é cheio de
+                    # número ("TB21QD51LT23C282M3", 58% dígitos) — por isso
+                    # ele vale só quando não há cara de centro de custo
                     if not RE_ID_LONGO.match(cand) and len(cand) > 2 \
                             and not u.startswith("FINALIZADO") \
                             and not u.startswith("OUVIDORIA") \
                             and "{" not in cand and "}" not in cand \
-                            and digitos < 0.4:      # rejeita códigos/hashes
+                            and (digitos < 0.4 or RE_DESC_COLADO.search(u)):
                         desc = cand
                 break
 
@@ -397,7 +420,7 @@ def _configurar_ocr() -> bool:
     return False
 
 
-def _ocr_pagina(pagina, log=print) -> str:
+def _ocr_pagina(pagina, log=print, resolucao: int = 300) -> str:
     """OCR de uma página sem camada de texto (comprovantes 'impressos')."""
     if _OCR["pronto"] is None:
         _OCR["pronto"] = _configurar_ocr()
@@ -408,21 +431,49 @@ def _ocr_pagina(pagina, log=print) -> str:
             _OCR["avisado"] = True
         return ""
     import pytesseract
-    img = pagina.to_image(resolution=300).original
+    img = pagina.to_image(resolution=resolucao).original
     return pytesseract.image_to_string(img, lang=_OCR["lang"])
 
-def _partes_nome(c):
-    """Retorna (valor, 'miolo' inteligente do nome, data dd-mm)."""
+
+def _texto_da_pagina(pagina, log=print) -> tuple[str, str]:
+    """Texto da página e como foi obtido ('' | 'OCR' | 'OCR 400').
+
+    Sem camada de texto, vai para o OCR a 300 dpi. Se ainda assim não sair
+    descrição, tenta de novo a 400 dpi: em comprovante "impresso" (texto
+    virou curva vetorial) a resolução maior às vezes separa o centro de custo
+    que a 300 dpi some — e sem descrição o nome cai no nome de quem recebeu.
+    Não usamos 400 dpi sempre porque é ~2x mais lento e, medido nos
+    comprovantes reais, cada resolução acerta um conjunto diferente."""
+    txt = pagina.extract_text() or ""
+    if len(txt.strip()) >= 30:
+        return txt, ""
+    lido = _ocr_pagina(pagina, log)
+    if not lido.strip():
+        return txt, ""
+    if campos(lido).get("desc"):
+        return lido, "OCR"
+    melhor = _ocr_pagina(pagina, log, resolucao=400)
+    if melhor.strip() and campos(melhor).get("desc"):
+        return melhor, "OCR 400"
+    return lido, "OCR"
+
+def _partes_nome(c, com_recebedor: bool = False):
+    """Retorna (valor, 'miolo' inteligente do nome, data dd-mm).
+
+    com_recebedor acrescenta quem recebeu ao miolo — serve para separar dois
+    comprovantes de mesmo valor e mesma descrição (ex.: dois "ENGENHEIRO" de
+    R$ 6.000,00 no mesmo dia, para pessoas diferentes)."""
     v = (c['valor'] or 'SEM VALOR').replace('.', '')
     dd = ''
     if c['data']:
         p = c['data'].split('/'); dd = p[0] + '-' + p[1]
-    desc = _sem_rotulo(c['desc']) or None
+    desc = _espacar_codigo(_sem_rotulo(c['desc'])) or None
     aporte = re.search(r'\b(APORTE|DISTRIBUI|TRANSF)', (desc or '').upper())
+    dest = _limpar_empresa(c['dest'])
     if desc and not aporte:
         meio = desc
     else:
-        pag = _limpar_empresa(c['pag']); dest = _limpar_empresa(c['dest'])
+        pag = _limpar_empresa(c['pag'])
         if desc and aporte and pag and dest:
             meio = f"{pag} PARA {dest}"
         elif dest:
@@ -430,13 +481,18 @@ def _partes_nome(c):
         else:
             meio = desc or 'SEM DESCRICAO'
     meio = re.sub(r'\s+', ' ', (meio or '')).strip()
+    if com_recebedor and dest and _sem_acento(dest).upper() not in _sem_acento(meio).upper():
+        meio = f"{meio} - {dest}"
     return v, meio, dd
 
-def nome_arquivo(c, modelo: str | None = None) -> str:
+def nome_arquivo(c, modelo: str | None = None,
+                 com_recebedor: bool = False) -> str:
     """Monta o nome do arquivo. modelo=None (ou igual ao padrão) usa o
     comportamento clássico; senão substitui as palavras-chave do modelo."""
-    v, meio, dd = _partes_nome(c)
     usar_padrao = not modelo or modelo.strip().upper() in ("", MODELO_PADRAO.upper())
+    if com_recebedor and not usar_padrao and re.search(r'RECEBEDOR', modelo, re.I):
+        com_recebedor = False          # o modelo já pede o recebedor
+    v, meio, dd = _partes_nome(c, com_recebedor)
     if usar_padrao:
         partes = [v] + ([meio] if meio else []) + ([dd] if dd else [])
         nome = ' - '.join(partes)
@@ -460,15 +516,31 @@ def _destino_unico(pasta: Path, base: str) -> Path:
         alvo = pasta / f"{base} ({n}).pdf"; n += 1
     return alvo
 
-def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None):
+def _contar_paginas(pdfs, log) -> int:
+    """Total de páginas, para a barra de progresso saber onde é o fim.
+    Só lê o índice do PDF (rápido), não o conteúdo."""
+    total = 0
+    for p in pdfs:
+        try:
+            total += len(PdfReader(str(p)).pages)
+        except Exception:
+            pass                    # o erro real aparece ao processar
+    return total
+
+
+def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
+              progresso=None):
     pasta_entrada = Path(pasta_entrada); pasta_saida = Path(pasta_saida)
     pasta_saida.mkdir(parents=True, exist_ok=True)
-    pdfs = sorted(p for p in pasta_entrada.glob("*.pdf"))
-    total_paginas = 0; erros = 0
-    log(f"{len(pdfs)} arquivo(s) PDF na pasta de entrada.")
+    pdfs = [p for p in sorted(pasta_entrada.glob("*.pdf"))
+            if pasta_saida not in p.parents and p.parent != pasta_saida]
+    total_paginas = 0; erros = 0; sem_descricao = []
+    total_esperado = _contar_paginas(pdfs, log)
+    log(f"{len(pdfs)} arquivo(s) PDF na pasta de entrada, "
+        f"{total_esperado} página(s).")
+    if progresso:
+        progresso(0, total_esperado)
     for pdf_path in pdfs:
-        if pasta_saida in pdf_path.parents or pdf_path.parent == pasta_saida:
-            continue  # não reprocessa a própria saída
         try:
             reader = PdfReader(str(pdf_path))
             n = len(reader.pages)
@@ -482,25 +554,38 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None):
             for i in range(n):
                 try:
                     pagina = pl.pages[i]
-                    txt = pagina.extract_text() or ''
-                    if len(txt.strip()) < 30:      # sem camada de texto -> OCR
-                        lido = _ocr_pagina(pagina, log)
-                        if lido.strip():
-                            txt = lido
-                            log(f"  [OCR] {pdf_path.name} pág {i+1}")
-                    base = nome_arquivo(campos(txt), modelo)
+                    txt, via = _texto_da_pagina(pagina, log)
+                    if via:
+                        log(f"  [{via}] {pdf_path.name} pág {i+1}")
+                    c = campos(txt)
+                    base = nome_arquivo(c, modelo)
+                    if (pasta_saida / f"{base}.pdf").exists():
+                        # já existe comprovante com esse nome: em vez de virar
+                        # "(2)" — que não diz nada — diferencia por quem recebeu
+                        base = nome_arquivo(c, modelo, com_recebedor=True)
                     w = PdfWriter(); w.add_page(reader.pages[i])
                     destino = _destino_unico(pasta_saida, base)
                     with open(destino, 'wb') as fh:
                         w.write(fh)
                     total_paginas += 1
-                    if total_paginas % 25 == 0:
-                        log(f"  ... {total_paginas} páginas processadas")
+                    if not c.get('desc'):
+                        sem_descricao.append(destino.name)
+                    if progresso:
+                        progresso(total_paginas, total_esperado)
                 except Exception as e:
                     log(f"[ERRO] {pdf_path.name} pág {i+1}: {e}"); erros += 1
     log(f"\nConcluído: {total_paginas} comprovante(s) gerado(s) em "
         f"{str(pasta_saida).replace(chr(92), '/')}"
         + (f" | {erros} erro(s)" if erros else ""))
+    if sem_descricao:
+        # sem descrição o nome cai em quem recebeu, e o casamento automático
+        # perde OC/NF e centro de custo — vale a pena o usuário saber quais são
+        log(f"\n{len(sem_descricao)} comprovante(s) sem descrição no banco — "
+            f"o nome usou quem recebeu. Confira se precisa ajustar à mão:")
+        for n in sem_descricao[:20]:
+            log(f"   • {n}")
+        if len(sem_descricao) > 20:
+            log(f"   ... e mais {len(sem_descricao) - 20}")
     return total_paginas, erros
 
 
@@ -651,8 +736,18 @@ class SepararFrame(ttk.Frame):
                 kind, m = self.fila.get_nowait()
                 if kind == "log":
                     self.txt.insert("end", m + "\n"); self.txt.see("end")
+                elif kind == "prog":
+                    feitas, total = m
+                    if total:            # dá para mostrar quanto falta
+                        self.barra.stop()
+                        self.barra.config(mode="determinate", maximum=total,
+                                          value=feitas)
+                        self.lbl_status.config(
+                            text=f"Processando… {feitas} de {total} páginas")
                 else:
-                    self.barra.stop(); self.btn.config(state="normal")
+                    self.barra.stop()
+                    self.barra.config(mode="determinate", value=0)
+                    self.btn.config(state="normal")
                     self.lbl_status.config(text="Concluído.")
         except queue.Empty:
             pass
@@ -673,7 +768,8 @@ class SepararFrame(ttk.Frame):
             inicio = _t.time()
             self._log(f"⏱ Início: {_t.strftime('%H:%M:%S')}")
             try:
-                processar(self.ent.get(), self.sai.get(), self._log, modelo)
+                processar(self.ent.get(), self.sai.get(), self._log, modelo,
+                          progresso=lambda f, t: self.fila.put(("prog", (f, t))))
             except Exception as ex:
                 self._log("ERRO FATAL: " + str(ex))
             self._log(f"⏱ Fim: {_t.strftime('%H:%M:%S')} — tempo total: "

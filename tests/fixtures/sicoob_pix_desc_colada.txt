@@ -1,0 +1,52 @@
+03/08/2026, 10:01
+
+Sicoob | Internet Banking
+
+SICOOB - SISTEMA DE COOPERATIVAS DE CRÉDITO DO BRASIL
+
+SISBR - SISTEMA DE INFORMÁTICA DO SICOOB
+
+03/08/2026 COMPROVANTE DE EFETIVAÇÃO DE PAGAMENTO PIX 10:00:56
+
+Tipo Pagamento:
+Pagador:
+Instituição:
+Nome:
+CPF/CNPJ:
+Destinatário:
+Nome:
+CPF/CNPJ:
+Instituição/Banco:
+Dados do pagamento:
+Data do pagamento:
+Valor:
+Descrição:
+ID Transação:
+
+Situação do pagamento:
+
+https://ib.sicoob.com.br/sicoobnet/ib/H/pix/extrato-pix
+
+Pix via chave
+
+COOPERATIVA DE CRÉDITO EXEMPLO L
+TDA.
+
+EMPRESA EXEMPLO ENGENHARIA SPE LTDA
+**.111.222/0001-**
+
+Fulano de Tal Exemplo
+*** 333.444-**
+BANCO EXEMPLO S.A.
+
+31/07/2026 16:43:58
+
+R$ 7.130,00
+TB21QD51LT23C282M3
+E0000000020260731180053exemplo1V
+
+Finalizado com sucesso
+
+OUVIDORIA SICOOB : 08007250996
+
+18/28

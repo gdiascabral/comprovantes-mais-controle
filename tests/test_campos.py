@@ -76,6 +76,48 @@ def test_campos_sicoob_darf():
     assert sr.nome_arquivo(c) == "240,22 - PAGAMENTO DARF - 31-07"
 
 
+def test_descricao_colada_vence_o_nome_do_recebedor():
+    """PIX impresso: o OCR come os espaços do centro de custo e a descrição
+    vira um bloco só ('TB21QD51LT23C282M3'). Antes ela era descartada (parecia
+    código, por ser cheia de dígito) e o nome caía no DESTINATÁRIO — saía
+    '7130,00 - Fulano de Tal Exemplo'. Deve sair o centro de custo, espaçado
+    para o matcher enxergar QD/LT."""
+    c = sr.campos(_ler("sicoob_pix_desc_colada.txt"))
+    assert c["valor"] == "7.130,00"
+    assert c["data"] == "31/07/2026"
+    assert sr.nome_arquivo(c) == "7130,00 - TB 21 QD 51 LT 23 C 282 M 3 - 31-07"
+
+
+def test_espacar_codigo_so_mexe_no_que_deve():
+    assert sr._espacar_codigo("TB21QD51LT23C282M3") == "TB 21 QD 51 LT 23 C 282 M 3"
+    # já tem espaço, ou não tem cara de centro de custo: não mexe
+    for intocado in ("RPB 24 QD 26A LT 10 OC 6332", "COMBUSTIVEL",
+                     "E0438868820260731180053vasuoyr4V", "ENGENHEIRO"):
+        assert sr._espacar_codigo(intocado) == intocado
+
+
+def test_recebedor_desempata_nomes_repetidos():
+    """Dois comprovantes de mesmo valor e mesma descrição no mesmo dia viravam
+    'X' e 'X (2)'. Com com_recebedor entra quem recebeu, que é o que de fato
+    distingue os dois."""
+    c = sr.campos(_ler("inter_pix_sobre_transacao.txt"))
+    assert sr.nome_arquivo(c) == "4632,00 - ADM - GESTOR COMERCIAL - 06 2026 - 31-07"
+    assert sr.nome_arquivo(c, com_recebedor=True) == (
+        "4632,00 - ADM - GESTOR COMERCIAL - 06 2026 - FULANO DE TAL EXEMPLO - 31-07")
+    # modelo personalizado que já pede RECEBEDOR não pode duplicar o nome
+    modelo = "VALOR - DESCRIÇÃO - RECEBEDOR"
+    assert sr.nome_arquivo(c, modelo, com_recebedor=True) == \
+        sr.nome_arquivo(c, modelo)
+
+
+def test_recebedor_nao_repete_quando_ja_esta_no_nome():
+    """Em aporte/transferência o miolo já é 'PAGADOR PARA RECEBEDOR'."""
+    c = dict(banco="INTER", tipo="PIX", valor="1.000,00", data="31/07/2026",
+             desc="APORTE CAPITAL", pag="EMPRESA A LTDA", dest="EMPRESA B LTDA")
+    assert sr.nome_arquivo(c, com_recebedor=True) == \
+        "1000,00 - EMPRESA A PARA EMPRESA B - 31-07"
+
+
 def test_rotulo_nunca_vira_descricao():
     """Rótulos técnicos ('Instituição', 'CPF/CNPJ', 'Autenticação') não podem
     virar o miolo do nome do arquivo."""
