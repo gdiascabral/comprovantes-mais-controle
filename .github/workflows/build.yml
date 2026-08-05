@@ -1,4 +1,4 @@
-name: Gerar executáveis (Windows)
+name: Gerar o executável (Windows)
 
 on:
   workflow_dispatch:      # permite rodar manualmente na aba Actions
@@ -37,28 +37,6 @@ jobs:
           Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata_fast/raw/main/por.traineddata" -OutFile "C:\Program Files\Tesseract-OCR\tessdata\por.traineddata"
           & "C:\Program Files\Tesseract-OCR\tesseract.exe" --list-langs
 
-      - name: Gerar "Separar e Renomear.exe"
-        run: >
-          pyinstaller --noconfirm --onefile --noconsole
-          --icon "icone.ico"
-          --name "Separar e Renomear"
-          --paths .
-          --collect-all pdfminer
-          --collect-all pdfplumber
-          --collect-all sv_ttk
-          --add-data "C:\Program Files\Tesseract-OCR;tesseract"
-          "separar_renomear/separar_renomear.py"
-
-      - name: Gerar "Anexar Comprovantes.exe"
-        run: >
-          pyinstaller --noconfirm --onefile --noconsole
-          --icon "icone.ico"
-          --name "Anexar Comprovantes"
-          --paths .
-          --collect-all playwright
-          --collect-all sv_ttk
-          "anexar/anexar_comprovantes.py"
-
       - name: Gravar a versão desta build
         run: |
           "v1.0.${{ github.run_number }}" | Out-File -Encoding ascii -NoNewline versao.txt
@@ -92,27 +70,24 @@ jobs:
           --add-data "codigo_embutido;codigo_embutido"
           "motor.py"
 
-      - name: Publicar Release com os executáveis
+      - name: Publicar Release com o executável
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Executáveis v1.0.${{ github.run_number }}
+          name: Executável v1.0.${{ github.run_number }}
           body: |
-            Executáveis para Windows — não precisam de Python instalado.
-            Requisito: Google Chrome instalado (usado pelo Anexar Comprovantes).
+            Executável para Windows — não precisa de Python instalado.
+            Requisito: Google Chrome instalado (usado pela aba Anexar Comprovantes).
 
-            - **Comprovantes Mais Controle.exe** — app completo, com os dois em abas (recomendado)
-            - **Separar e Renomear.exe** — só o App 1
-            - **Anexar Comprovantes.exe** — só o App 2
+            - **Comprovantes Mais Controle.exe** — o app, com tudo em abas
+              (Separar e Renomear, Anexar Comprovantes e Conferência)
             - codigo.zip — pacote de atualização leve (o app baixa sozinho, ignore)
 
-            O app completo se atualiza sozinho ao abrir: baixa só o código novo
+            O app se atualiza sozinho ao abrir: baixa só o código novo
             (segundos). Dica: coloque o .exe numa pasta própria; o perfil do
             Chrome (login salvo) e os logs são criados ao lado do executável.
           files: |
             dist/Comprovantes Mais Controle.exe
-            dist/Separar e Renomear.exe
-            dist/Anexar Comprovantes.exe
             codigo.zip
 
       - name: Limpar releases antigas (mantém as 4 mais novas p/ rollback)

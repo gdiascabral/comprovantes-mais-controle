@@ -11,8 +11,10 @@ TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), qu
 1. gera `versao.txt` = `v1.0.<run_number>` (NÃO é commitado; criado na build);
 2. monta `codigo.zip` (comprovantes_app.py + separar_renomear/*.py + anexar/*.py
    + versao.txt + motor_minimo.txt + icone.ico) — ~50 KB;
-3. builda 3 exes (PyInstaller onefile, com Tesseract OCR embutido) e publica a
-   Release `v1.0.<run_number>` com os exes + codigo.zip;
+3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
+   com Tesseract OCR embutido) — e publica a Release `v1.0.<run_number>` com
+   o exe + codigo.zip. Os exes avulsos de Separar e de Anexar foram removidos:
+   tudo vive em abas no app principal;
 4. apaga releases antigas mantendo as **4 mais novas** (política de rollback).
 
 O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
