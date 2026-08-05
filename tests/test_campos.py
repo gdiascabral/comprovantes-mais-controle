@@ -114,6 +114,34 @@ def test_recebedor_desempata_nomes_repetidos():
         sr.nome_arquivo(c, modelo)
 
 
+def _pix(valor, desc, dest):
+    return dict(banco="INTER", tipo="PIX", valor=valor, data="31/07/2026",
+                desc=desc, pag="EMPRESA EXEMPLO LTDA", dest=dest)
+
+
+def test_valor_repetido_poe_o_recebedor_em_TODOS():
+    """Antes só o segundo do grupo levava o nome de quem recebeu, e sobrava um
+    '1621,00 - ESTAGIÁRIO - 31-07' sem dono. Para o casamento distinguir os
+    dois, os dois precisam do nome."""
+    nomes = sr._nomes_finais([
+        _pix("1.621,00", "ESTAGIÁRIO", "Fulano de Tal Exemplo"),
+        _pix("1.621,00", "ESTAGIÁRIO", "Beltrano Exemplo"),
+        _pix("500,00", "COMBUSTIVEL", "Sicrano Exemplo"),   # não repete
+    ])
+    assert nomes == [
+        "1621,00 - ESTAGIÁRIO - Fulano de Tal Exemplo - 31-07",
+        "1621,00 - ESTAGIÁRIO - Beltrano Exemplo - 31-07",
+        "500,00 - COMBUSTIVEL - 31-07",
+    ]
+
+
+def test_nome_que_ja_existe_na_pasta_tambem_ganha_recebedor():
+    nomes = sr._nomes_finais(
+        [_pix("500,00", "COMBUSTIVEL", "Fulano de Tal Exemplo")],
+        ja_existe=lambda b: b == "500,00 - COMBUSTIVEL - 31-07")
+    assert nomes == ["500,00 - COMBUSTIVEL - Fulano de Tal Exemplo - 31-07"]
+
+
 def test_recebedor_nao_repete_quando_ja_esta_no_nome():
     """Em aporte/transferência o miolo já é 'PAGADOR PARA RECEBEDOR'."""
     c = dict(banco="INTER", tipo="PIX", valor="1.000,00", data="31/07/2026",

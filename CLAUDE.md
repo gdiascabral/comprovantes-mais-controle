@@ -71,8 +71,11 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   espaços do centro de custo ("TB 21 QD 51..." vira "TB21QD51..."):
   `RE_DESC_COLADO` reconhece a descrição mesmo colada e `_espacar_codigo`
   devolve os espaços, senão o matcher não enxerga QD/LT. Nome repetido não
-  vira "(2)": `nome_arquivo(..., com_recebedor=True)` desempata por quem
-  recebeu. No fim, `processar` lista quem ficou sem descrição.
+  vira "(2)": `_nomes_finais` decide os nomes com o LOTE INTEIRO na mão e põe
+  quem recebeu em TODOS do grupo (não só no segundo) — por isso `processar`
+  tem 2 passadas: lê tudo (OCR, demorado) e só então grava. Sobra "(2)" só
+  quando o recebedor também é o mesmo, aí não há o que distinguir.
+  No fim, `processar` lista quem ficou sem descrição.
 - `anexar/mc_api.py` — leitura dos pagos e anexos pela MESMA API da tela de
   Pagamentos, com chamadas feitas DE DENTRO da página logada (page.evaluate
   + fetch) — chamadas via requests de fora recebem 403 do ERP. Captura

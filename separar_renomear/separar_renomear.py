@@ -607,6 +607,24 @@ def _contar_paginas(pdfs, log) -> int:
     return total
 
 
+def _nomes_finais(lista_campos, modelo=None, ja_existe=None) -> list[str]:
+    """Nome de cada comprovante, decidido olhando o lote INTEIRO.
+
+    Quando dois comprovantes caem no mesmo nome (mesmo valor, mesma descrição,
+    mesmo dia), TODOS eles ganham o nome de quem recebeu — não só o segundo.
+    Deixar um sem o nome não ajudaria nem quem lê a pasta nem o casamento
+    automático, que precisa distinguir os dois para não anexar trocado."""
+    from collections import Counter
+    bases = [nome_arquivo(c, modelo) for c in lista_campos]
+    quantos = Counter(bases)
+    finais = []
+    for c, base in zip(lista_campos, bases):
+        repete = quantos[base] > 1 or (ja_existe(base) if ja_existe else False)
+        finais.append(nome_arquivo(c, modelo, com_recebedor=True)
+                      if repete else base)
+    return finais
+
+
 def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
               progresso=None):
     pasta_entrada = Path(pasta_entrada); pasta_saida = Path(pasta_saida)
@@ -619,12 +637,11 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
         f"{total_esperado} página(s).")
     if progresso:
         progresso(0, total_esperado)
+
+    # ---- 1ª passada: lê tudo. É aqui que mora o OCR (em lote, paralelo) e
+    # é aqui que o tempo passa. Guarda só os campos — texto não fica retido.
+    itens = []                                    # (pdf_path, pág, campos)
     for pdf_path in pdfs:
-        try:
-            reader = PdfReader(str(pdf_path))
-            n = len(reader.pages)
-        except Exception as e:
-            log(f"[ERRO] abrir {pdf_path.name}: {e}"); erros += 1; continue
         try:
             pl = pdfplumber.open(str(pdf_path))   # abre UMA vez por arquivo
         except Exception as e:
@@ -636,29 +653,39 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
                 if progresso:
                     progresso(paginas_lidas, total_esperado)
 
-            # lê o arquivo inteiro primeiro: é aqui que mora o OCR, e em lote
-            # ele roda em paralelo (a gravação depois é instantânea)
-            textos = _textos_das_paginas(pl, n, log, _uma_lida)
-            for i in range(n):
-                try:
-                    txt, via = textos[i]
-                    if via:
-                        log(f"  [{via}] {pdf_path.name} pág {i+1}")
-                    c = campos(txt)
-                    base = nome_arquivo(c, modelo)
-                    if (pasta_saida / f"{base}.pdf").exists():
-                        # já existe comprovante com esse nome: em vez de virar
-                        # "(2)" — que não diz nada — diferencia por quem recebeu
-                        base = nome_arquivo(c, modelo, com_recebedor=True)
-                    w = PdfWriter(); w.add_page(reader.pages[i])
-                    destino = _destino_unico(pasta_saida, base)
-                    with open(destino, 'wb') as fh:
-                        w.write(fh)
-                    total_paginas += 1
-                    if not c.get('desc'):
-                        sem_descricao.append(destino.name)
-                except Exception as e:
-                    log(f"[ERRO] {pdf_path.name} pág {i+1}: {e}"); erros += 1
+            n = len(pl.pages)
+            for i, (txt, via) in enumerate(_textos_das_paginas(pl, n, log,
+                                                               _uma_lida)):
+                if via:
+                    log(f"  [{via}] {pdf_path.name} pág {i+1}")
+                itens.append((pdf_path, i, campos(txt)))
+
+    # ---- os nomes só podem ser decididos com o lote todo na mão: é o que
+    # permite dar o nome de quem recebeu aos DOIS de um valor repetido
+    finais = _nomes_finais([c for _, _, c in itens], modelo,
+                           lambda b: (pasta_saida / f"{b}.pdf").exists())
+
+    # ---- 2ª passada: grava (rápido). Reabre cada PDF uma vez só.
+    por_arquivo = {}
+    for (pdf_path, i, c), base in zip(itens, finais):
+        por_arquivo.setdefault(pdf_path, []).append((i, c, base))
+    for pdf_path, paginas in por_arquivo.items():
+        try:
+            reader = PdfReader(str(pdf_path))
+        except Exception as e:
+            log(f"[ERRO] abrir {pdf_path.name}: {e}")
+            erros += len(paginas); continue
+        for i, c, base in paginas:
+            try:
+                w = PdfWriter(); w.add_page(reader.pages[i])
+                destino = _destino_unico(pasta_saida, base)
+                with open(destino, 'wb') as fh:
+                    w.write(fh)
+                total_paginas += 1
+                if not c.get('desc'):
+                    sem_descricao.append(destino.name)
+            except Exception as e:
+                log(f"[ERRO] {pdf_path.name} pág {i+1}: {e}"); erros += 1
     log(f"\nConcluído: {total_paginas} comprovante(s) gerado(s) em "
         f"{str(pasta_saida).replace(chr(92), '/')}"
         + (f" | {erros} erro(s)" if erros else ""))
