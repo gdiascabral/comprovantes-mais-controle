@@ -210,17 +210,24 @@ def _sem_rotulo(l) -> str:
     return RE_ROTULO_DESC.sub("", l).strip()
 
 
+def _espacar_token(t) -> str:
+    if not RE_COD_COLADO.match(t) or not RE_DESC_COLADO.search(t):
+        return t
+    return re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", t)
+
+
 def _espacar_codigo(s) -> str:
     """'TB21QD51LT23C282M3' -> 'TB 21 QD 51 LT 23 C 282 M 3'.
 
-    Só mexe em token ÚNICO e colado que tenha cara de centro de custo; uma
-    descrição que já veio com espaços passa intacta. Isso importa para o
-    casamento: o matcher procura 'QD <n> LT <n>' e, sem os espaços que o OCR
-    comeu, ele não enxerga o centro de custo."""
+    Vale por palavra, então também conserta a descrição meio colada
+    ('DONA MORENA QD 18LT811B1C259M5'). Só mexe em palavra longa que misture
+    letra e número E tenha cara de centro de custo; texto normal passa
+    intacto. Isso importa para o casamento: o matcher procura 'QD <n> LT <n>'
+    e, sem os espaços que o OCR comeu, ele não enxerga o centro de custo."""
     s = (s or "").strip()
-    if not RE_COD_COLADO.match(s) or not RE_DESC_COLADO.search(s):
+    if not s or not RE_DESC_COLADO.search(s):
         return s
-    return re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", s)
+    return " ".join(_espacar_token(t) for t in s.split())
 
 
 def _lixo(l) -> bool:
@@ -411,6 +418,10 @@ def _configurar_ocr() -> bool:
             tess = c.parent / "tessdata"
             if tess.is_dir():
                 os.environ["TESSDATA_PREFIX"] = str(tess)
+            # uma thread por processo do Tesseract: quem paraleliza é o nosso
+            # pool (_ocr_em_lote). Sem isso, cada chamada tenta usar todos os
+            # núcleos e as chamadas simultâneas brigam entre si.
+            os.environ.setdefault("OMP_THREAD_LIMIT", "1")
             try:
                 langs = set(pytesseract.get_languages(config=""))
             except Exception:
@@ -421,41 +432,109 @@ def _configurar_ocr() -> bool:
 
 
 def _ocr_pagina(pagina, log=print, resolucao: int = 300) -> str:
-    """OCR de uma página sem camada de texto (comprovantes 'impressos')."""
-    if _OCR["pronto"] is None:
-        _OCR["pronto"] = _configurar_ocr()
-    if not _OCR["pronto"]:
-        if not _OCR["avisado"]:
-            log("[aviso] Comprovante sem texto e OCR indisponível — use o "
-                "executável (já traz o OCR) ou instale o Tesseract OCR.")
-            _OCR["avisado"] = True
+    """OCR de UMA página sem camada de texto (comprovantes 'impressos').
+    Para um PDF inteiro use _textos_das_paginas, que paraleliza."""
+    if not _ocr_disponivel(log):
         return ""
     import pytesseract
     img = pagina.to_image(resolution=resolucao).original
     return pytesseract.image_to_string(img, lang=_OCR["lang"])
 
 
-def _texto_da_pagina(pagina, log=print) -> tuple[str, str]:
-    """Texto da página e como foi obtido ('' | 'OCR' | 'OCR 400').
+def _ocr_disponivel(log) -> bool:
+    if _OCR["pronto"] is None:
+        _OCR["pronto"] = _configurar_ocr()
+    if not _OCR["pronto"] and not _OCR["avisado"]:
+        log("[aviso] Comprovante sem texto e OCR indisponível — use o "
+            "executável (já traz o OCR) ou instale o Tesseract OCR.")
+        _OCR["avisado"] = True
+    return bool(_OCR["pronto"])
 
-    Sem camada de texto, vai para o OCR a 300 dpi. Se ainda assim não sair
-    descrição, tenta de novo a 400 dpi: em comprovante "impresso" (texto
-    virou curva vetorial) a resolução maior às vezes separa o centro de custo
-    que a 300 dpi some — e sem descrição o nome cai no nome de quem recebeu.
-    Não usamos 400 dpi sempre porque é ~2x mais lento e, medido nos
-    comprovantes reais, cada resolução acerta um conjunto diferente."""
-    txt = pagina.extract_text() or ""
-    if len(txt.strip()) >= 30:
-        return txt, ""
-    lido = _ocr_pagina(pagina, log)
-    if not lido.strip():
-        return txt, ""
-    if campos(lido).get("desc"):
-        return lido, "OCR"
-    melhor = _ocr_pagina(pagina, log, resolucao=400)
-    if melhor.strip() and campos(melhor).get("desc"):
-        return melhor, "OCR 400"
-    return lido, "OCR"
+
+def _n_workers_ocr() -> int:
+    return min(8, max(2, os.cpu_count() or 4))
+
+
+def _ocr_em_lote(pl, indices, log, resolucao=300, ao_concluir=None) -> dict:
+    """OCR de várias páginas: renderiza em SÉRIE e reconhece em PARALELO.
+
+    A renderização usa pypdfium2, que não é thread-safe, então fica na thread
+    principal (é barata: ~0,1s por página). O Tesseract roda em subprocesso e
+    solta o GIL, então o pool ganha de verdade — medido nos comprovantes
+    reais: 0,96s por página em série contra 0,29s com 6 threads."""
+    if not indices or not _ocr_disponivel(log):
+        return {}
+    import pytesseract
+    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+    lang = _OCR["lang"]
+    n = _n_workers_ocr()
+    saida = {}
+
+    def reconhecer(img):
+        try:
+            return pytesseract.image_to_string(img, lang=lang)
+        except Exception as e:
+            log(f"[ERRO] OCR: {e}")
+            return ""
+
+    def colher(futuros):
+        for f in futuros:
+            saida[pendentes.pop(f)] = f.result()
+            if ao_concluir:
+                ao_concluir()
+
+    with ThreadPoolExecutor(max_workers=n) as ex:
+        pendentes = {}
+        for i in indices:
+            # segura a produção: uma página a 300 dpi ocupa ~11 MB, não dá
+            # para renderizar um PDF de 100 páginas todo de uma vez
+            while len(pendentes) >= n * 2:
+                prontos, _ = wait(pendentes, return_when=FIRST_COMPLETED)
+                colher(prontos)
+            try:
+                img = pl.pages[i].to_image(resolution=resolucao).original
+            except Exception as e:
+                log(f"[ERRO] renderizar pág {i+1}: {e}")
+                if ao_concluir:
+                    ao_concluir()
+                continue
+            pendentes[ex.submit(reconhecer, img)] = i
+        colher(list(pendentes))
+    return saida
+
+
+def _textos_das_paginas(pl, n, log=print, ao_concluir=None):
+    """(texto, origem) de cada página — origem é '' | 'OCR' | 'OCR 400'.
+
+    Páginas sem camada de texto vão para o OCR em lote a 300 dpi. As que
+    ainda assim não produzirem descrição repetem a 400 dpi: em comprovante
+    "impresso" (o texto virou curva vetorial) a resolução maior às vezes
+    separa o centro de custo que a 300 dpi funde — e sem descrição o nome cai
+    no de quem recebeu. Não usamos 400 dpi sempre porque é ~2x mais lento e,
+    medido nos comprovantes reais, cada resolução acerta um conjunto
+    diferente; como segunda tentativa, porém, só tem a ganhar."""
+    saida = []
+    faltam = []
+    for i in range(n):
+        try:
+            t = pl.pages[i].extract_text() or ""
+        except Exception as e:
+            log(f"[ERRO] ler texto da pág {i+1}: {e}")
+            t = ""
+        saida.append((t, ""))
+        if len(t.strip()) < 30:
+            faltam.append(i)
+        elif ao_concluir:
+            ao_concluir()
+    for i, t in _ocr_em_lote(pl, faltam, log, 300, ao_concluir).items():
+        if t.strip():
+            saida[i] = (t, "OCR")
+    retentar = [i for i in faltam
+                if saida[i][1] == "OCR" and not campos(saida[i][0]).get("desc")]
+    for i, t in _ocr_em_lote(pl, retentar, log, 400).items():
+        if t.strip() and campos(t).get("desc"):
+            saida[i] = (t, "OCR 400")
+    return saida
 
 def _partes_nome(c, com_recebedor: bool = False):
     """Retorna (valor, 'miolo' inteligente do nome, data dd-mm).
@@ -534,7 +613,7 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
     pasta_saida.mkdir(parents=True, exist_ok=True)
     pdfs = [p for p in sorted(pasta_entrada.glob("*.pdf"))
             if pasta_saida not in p.parents and p.parent != pasta_saida]
-    total_paginas = 0; erros = 0; sem_descricao = []
+    total_paginas = 0; erros = 0; sem_descricao = []; paginas_lidas = 0
     total_esperado = _contar_paginas(pdfs, log)
     log(f"{len(pdfs)} arquivo(s) PDF na pasta de entrada, "
         f"{total_esperado} página(s).")
@@ -551,10 +630,18 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
         except Exception as e:
             log(f"[ERRO] abrir {pdf_path.name}: {e}"); erros += 1; continue
         with pl:
+            def _uma_lida():
+                nonlocal paginas_lidas
+                paginas_lidas += 1
+                if progresso:
+                    progresso(paginas_lidas, total_esperado)
+
+            # lê o arquivo inteiro primeiro: é aqui que mora o OCR, e em lote
+            # ele roda em paralelo (a gravação depois é instantânea)
+            textos = _textos_das_paginas(pl, n, log, _uma_lida)
             for i in range(n):
                 try:
-                    pagina = pl.pages[i]
-                    txt, via = _texto_da_pagina(pagina, log)
+                    txt, via = textos[i]
                     if via:
                         log(f"  [{via}] {pdf_path.name} pág {i+1}")
                     c = campos(txt)
@@ -570,8 +657,6 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
                     total_paginas += 1
                     if not c.get('desc'):
                         sem_descricao.append(destino.name)
-                    if progresso:
-                        progresso(total_paginas, total_esperado)
                 except Exception as e:
                     log(f"[ERRO] {pdf_path.name} pág {i+1}: {e}"); erros += 1
     log(f"\nConcluído: {total_paginas} comprovante(s) gerado(s) em "

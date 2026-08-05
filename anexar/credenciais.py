@@ -65,12 +65,20 @@ def salvar(email: str, senha: str):
 
 
 def carregar() -> tuple[str, str] | None:
-    """Devolve (email, senha) do login salvo, ou None se não houver/der erro."""
+    """Devolve (email, senha) do login salvo, ou None se não houver/der erro.
+
+    Falhar aqui é normal (não há login salvo) mas também pode ser a DPAPI
+    recusando — troca de usuário do Windows, perfil restaurado noutra
+    máquina. Nesse caso o app cai no login manual sem explicar nada, então
+    o motivo fica no diagnostico.log."""
+    if not config.ARQUIVO_LOGIN.exists():
+        return None                      # sem login salvo: silêncio é correto
     try:
-        dados = config.ARQUIVO_LOGIN.read_bytes()
-        d = json.loads(_decifrar(dados).decode("utf-8"))
+        d = json.loads(_decifrar(config.ARQUIVO_LOGIN.read_bytes()).decode("utf-8"))
         return (d["email"], d["senha"])
-    except Exception:
+    except Exception as e:
+        config.diag(f"login salvo não pôde ser lido ({e!r}) — vai pedir login "
+                    f"manual. Se persistir, apague {config.ARQUIVO_LOGIN.name}.")
         return None
 
 

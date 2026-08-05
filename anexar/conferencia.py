@@ -45,6 +45,8 @@ def _texto_pdf(dados: bytes) -> str:
     try:
         import pdfplumber
     except ImportError:
+        config.diag("conferência: pdfplumber indisponível, não dá para "
+                    "conferir o conteúdo dos anexos")
         return ""
     try:
         with pdfplumber.open(io.BytesIO(dados)) as pl:
@@ -56,9 +58,11 @@ def _texto_pdf(dados: bytes) -> str:
             with pdfplumber.open(io.BytesIO(dados)) as pl:
                 return "\n".join(_ocr_pagina(pg, lambda m: None)
                                  for pg in pl.pages)
-        except Exception:
+        except Exception as e:
+            config.diag(f"conferência: OCR do anexo falhou ({e!r})")
             return txt
-    except Exception:
+    except Exception as e:
+        config.diag(f"conferência: não consegui ler o PDF do anexo ({e!r})")
         return ""
 
 

@@ -59,8 +59,14 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   VALOR, DESCRIÇÃO, DATA, PAGADOR, RECEBEDOR). Boleto: usa o valor PAGO
   (último R$ não-zero). Regex de valor/data são case-insensitive por causa
   do comprovante de tributo ("VALOR TOTAL:", "DATA DE PAGAMENTO:").
+  OCR em lote por arquivo (`_textos_das_paginas`): renderiza em SÉRIE
+  (pypdfium2 não é thread-safe) e reconhece em PARALELO — o Tesseract roda em
+  subprocesso e solta o GIL. Medido: 0,96s→0,29s por página no OCR puro, e
+  1,7x no processar inteiro de um PDF de 107 páginas. `OMP_THREAD_LIMIT=1`
+  para o pool não brigar com as threads internas do Tesseract. Ressalva: o
+  lote é por ARQUIVO, então entrada com muitos PDFs de 1 página só não ganha.
   OCR: 300 dpi e, **só quando não sai descrição**, 2ª tentativa a 400 dpi
-  (`_texto_da_pagina`) — medido nos comprovantes reais, nenhuma das duas
+  — medido nos comprovantes reais, nenhuma das duas
   resoluções ganha sempre, e 400 dpi em tudo é ~2x mais lento. O OCR come os
   espaços do centro de custo ("TB 21 QD 51..." vira "TB21QD51..."):
   `RE_DESC_COLADO` reconhece a descrição mesmo colada e `_espacar_codigo`
@@ -97,7 +103,10 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   (e data) aparecem no texto (OCR se preciso) → aba DIVERGENTES.
   Compartilha sessão/thread da tela Anexar (`anx.garantir_sessao()`).
 - `anexar/config.py` — URLs, tag, listas IGNORAR_TARIFAS/IGNORAR_APORTES;
-  usa a pasta do exe quando congelado (sys.frozen).
+  usa a pasta do exe quando congelado (sys.frozen). Tem também `diag()`, o
+  registro em `diagnostico.log` usado por quem precisa degradar sem quebrar
+  (captura de credenciais, login salvo, download de anexo, OCR da
+  conferência) — engole o erro, mas deixa o motivo gravado.
 
 ## Restrições importantes (aprendidas a caminhadas)
 
@@ -147,5 +156,6 @@ conteúdo. Releases antigas são podadas pelo CI (mantém 4).
 - Testes de unidade com fixtures de texto (campos, parse_pdf, casar).
 - Deduplicar utilitários (_fmt_dur, _norm/_sem_acento, LINK) num util.py.
 - Centralizar seletores do ERP (mc_client.py) em constantes/config.
-- Logar exceções hoje silenciadas (mc_api._on_request etc.).
 - Pinar versões-teto no requirements.txt.
+- OCR em lote cruzando ARQUIVOS (hoje o pool é por arquivo; entrada com
+  muitos PDFs de página única não aproveita o paralelismo).

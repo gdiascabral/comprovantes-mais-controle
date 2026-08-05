@@ -90,9 +90,13 @@ def test_descricao_colada_vence_o_nome_do_recebedor():
 
 def test_espacar_codigo_so_mexe_no_que_deve():
     assert sr._espacar_codigo("TB21QD51LT23C282M3") == "TB 21 QD 51 LT 23 C 282 M 3"
-    # já tem espaço, ou não tem cara de centro de custo: não mexe
+    # vale por palavra: conserta também a descrição meio colada
+    assert sr._espacar_codigo("DONA MORENA QD 18LT811B1C259M5") == \
+        "DONA MORENA QD 18 LT 811 B 1 C 259 M 5"
+    # já espaçado, curto demais, texto normal ou ID: não mexe
     for intocado in ("RPB 24 QD 26A LT 10 OC 6332", "COMBUSTIVEL",
-                     "E0438868820260731180053vasuoyr4V", "ENGENHEIRO"):
+                     "E0438868820260731180053vasuoyr4V", "ENGENHEIRO",
+                     "Pos obra OC6323", "ADM - GESTOR COMERCIAL - 06 2026"):
         assert sr._espacar_codigo(intocado) == intocado
 
 

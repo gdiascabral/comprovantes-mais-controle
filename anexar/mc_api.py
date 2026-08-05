@@ -14,7 +14,6 @@ normal. Com isso:
   - verifica, pago a pago, se há arquivo anexado no nível do sub-pagamento
     (endpoint de attachments com entityOrigin=PAID).
 """
-import time
 from urllib.parse import urlsplit, parse_qsl, urlencode
 
 try:
@@ -23,13 +22,17 @@ except ImportError:
     import config
 
 
-def _diag(msg: str):
-    """Registra no diagnostico.log um erro que de outro modo seria silencioso."""
+_diag = config.diag              # o registro de diagnóstico agora mora no config
+
+
+def _host_path_diag(url) -> str:
+    """host+caminho de uma URL, sem a query — URLs de anexo vêm assinadas e a
+    query carrega credencial temporária, que não pode ir para o log."""
     try:
-        with open(config.ARQUIVO_DIAG, "a", encoding="utf-8") as fh:
-            fh.write(time.strftime("%d/%m/%Y %H:%M:%S  ") + msg + "\n")
-    except OSError:
-        pass
+        s = urlsplit(url or "")
+        return f"{s.scheme}://{s.netloc}{s.path}" or "(sem url)"
+    except Exception:
+        return "(url ilegível)"
 
 # cabeçalhos que interessam (o resto o navegador completa sozinho)
 _H_PAGOS = {"accept", "authorization", "organization-unit-id", "user-id", "company-id"}
@@ -218,16 +221,24 @@ class MCApi:
         os cabeçalhos de autenticação (arquivos servidos pelo próprio ERP)."""
         import base64
         _, headers = self._req_anexos
+        motivos = []
         for h in ({}, headers):
+            rotulo = "sem cabeçalhos" if not h else "com cabeçalhos"
             try:
                 r = self.page.evaluate(_JS_FETCH_B64, {"url": url, "headers": h})
-            except Exception:
+            except Exception as e:
+                motivos.append(f"{rotulo}: {e!r}")
                 r = None
             if isinstance(r, dict) and not r.get("__erro") and "b64" in r:
                 try:
                     return base64.b64decode(r["b64"])
-                except Exception:
-                    return None
+                except Exception as e:
+                    motivos.append(f"{rotulo}: base64 inválido ({e!r})")
+                    continue
+            elif isinstance(r, dict) and r.get("__erro"):
+                motivos.append(f"{rotulo}: {str(r['__erro'])[:120]}")
+        _diag(f"baixar_anexo falhou em {_host_path_diag(url)} — "
+              + " | ".join(motivos or ["resposta inesperada"]))
         return None
 
 
