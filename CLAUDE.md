@@ -89,11 +89,22 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   do nome (modelos personalizados) e ignora sufixo " (2)".
 - `anexar/mc_client.py` — Playwright controla o Chrome instalado
   (channel="chrome", perfil persistente `.chrome_profile` ao lado do exe).
+  **Login**: a tela do ERP é AngularJS. Preencher o input (mesmo com setter
+  nativo + eventos) não garante propagação para o `ng-model`, e o ENTRAR fica
+  habilitado assim mesmo (o `ng-disabled` aceita `$ctrl.getAutoFill()`) — o
+  clique chamava `login()` com credencial VAZIA e falhava em silêncio. Por
+  isso `_login_pelo_controller` escreve no scope e chama `ctrl.login()`;
+  o preenchimento do DOM é só fallback. Erro de rede/DNS vira `SemRede`
+  (3 tentativas em `_ir_para`), que a UI mostra como recado, sem traceback.
+  `MCClient(log=...)`: no exe `--noconsole` não há stdout, então as mensagens
+  do login precisam do log da janela para existirem.
   Anexa via UI (⋮ → Editar pagamento → arquivo → tag "Comprovante").
   Seletores do ERP estão nos blocos JS deste arquivo. Timeouts generosos
   (45–60 s) + `resetar()` antes de retentar (ERP fica lento em lote).
-- `anexar/anexar_comprovantes.py` — tela Anexar: 3 passos (Abrir e acessar /
-  Carregar contas / Casar e anexar), Pausar/Parar, cronômetros ⏱, janela de
+- `anexar/anexar_comprovantes.py` — tela Anexar: 2 passos (Carregar contas /
+  Casar e anexar) — "Abrir o Mais Controle" saiu do fluxo e virou botão
+  auxiliar, porque com a senha guardada o app entra sozinho.
+  Pausar/Parar, cronômetros ⏱, janela de
   resolver DÚVIDAS (`_janela_duvidas`): por pagamento mostra descrição
   inteira, centro de custo, nº doc, categoria e conta; os candidatos vêm
   numa tabela ordenada pelo score, com o que bateu em cada um (OC/NF,

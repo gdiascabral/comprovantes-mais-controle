@@ -23,6 +23,21 @@ except ImportError:
     import config, credenciais
 
 
+class SemRede(RuntimeError):
+    """Rede/DNS fora do ar. A mensagem já vem pronta para o usuário — quem
+    captura deve mostrar só o texto, sem traceback (não é bug do app)."""
+
+
+# erros do Chrome que significam "problema de rede", não de automação
+_ERROS_DE_REDE = ("ERR_NAME_NOT_RESOLVED", "ERR_INTERNET_DISCONNECTED",
+                  "ERR_CONNECTION_", "ERR_TIMED_OUT", "ERR_NETWORK_CHANGED",
+                  "ERR_PROXY_CONNECTION_FAILED", "ERR_ADDRESS_UNREACHABLE")
+
+
+def _eh_erro_de_rede(e) -> bool:
+    return any(c in str(e) for c in _ERROS_DE_REDE)
+
+
 def _centavos(s) -> int | None:
     """Converte '796,28' / '2.000,00' / 'R$ 7.309,68' / 7309.68 -> centavos int."""
     if s is None:
@@ -196,6 +211,47 @@ _JS_FILL_LOGIN = r"""
 }
 """
 
+# Login pelo controller do AngularJS, não pela UI.
+#
+# POR QUE NÃO BASTA PREENCHER E CLICAR: a tela de login é AngularJS. Escrever
+# no input (mesmo com o setter nativo e disparando input/change, como faz o
+# _JS_FILL_LOGIN) altera o DOM mas não garante a propagação para o ng-model,
+# então `$ctrl.credentials` continua vazio. E o botão ENTRAR fica habilitado
+# assim mesmo, porque o ng-disabled aceita `$ctrl.getAutoFill()` como
+# alternativa — o clique chama login() com credencial vazia e falha em
+# SILÊNCIO: sem requisição de rede e sem mensagem na tela. Escrever direto no
+# scope e chamar login() fecha esse buraco.
+_JS_LOGIN_ANGULAR = r"""
+(dados) => {
+  if (typeof angular === 'undefined') return {ok: false, motivo: 'AngularJS ausente'};
+  const campo = document.querySelector('#username')
+             || document.querySelector('#userpassword')
+             || document.querySelector('input[type=password]');
+  if (!campo) return {ok: false, motivo: 'campos de login não encontrados'};
+  let escopo = null;
+  try { escopo = angular.element(campo).scope(); } catch (e) {
+    return {ok: false, motivo: 'scope inacessível: ' + e.message};
+  }
+  while (escopo && !escopo.$ctrl) escopo = escopo.$parent;
+  if (!escopo || !escopo.$ctrl || typeof escopo.$ctrl.login !== 'function') {
+    return {ok: false, motivo: 'controller de login não encontrado'};
+  }
+  const ctrl = escopo.$ctrl;
+  escopo.$apply(() => {
+    ctrl.credentials = ctrl.credentials || {};
+    ctrl.credentials.username = dados.email;
+    ctrl.credentials.password = dados.senha;
+  });
+  if (!ctrl.credentials.username || !ctrl.credentials.password) {
+    return {ok: false, motivo: 'não consegui gravar as credenciais no scope'};
+  }
+  try { ctrl.login(); } catch (e) {
+    return {ok: false, motivo: 'login() lançou: ' + e.message};
+  }
+  return {ok: true};
+}
+"""
+
 # clica no botão ENTRAR (fallback, quando os seletores do Playwright não pegam)
 _JS_CLICK_ENTRAR = r"""
 () => {
@@ -208,8 +264,12 @@ _JS_CLICK_ENTRAR = r"""
 
 
 class MCClient:
-    def __init__(self, headless: bool = False):
+    def __init__(self, headless: bool = False, log=print):
         self.headless = headless
+        # sem o log da janela estas mensagens iam para o stdout — que no exe
+        # (--noconsole) não existe, e o usuário nunca soube por que o login
+        # automático não pegou
+        self.log = log
         self._pw = None
         self.ctx = None
         self.page = None
@@ -270,7 +330,7 @@ class MCClient:
         """Coleta pagamentos a partir das respostas de rede da própria página."""
         import json as _json
         self._respostas.clear()
-        self.page.goto(config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
+        self._ir_para(config.MC_URL_PAGAMENTOS)
         self.page.wait_for_timeout(6000)
         if salvar_inspecao:
             salvar_inspecao.write_text(
@@ -314,25 +374,48 @@ class MCClient:
         except Exception:
             return False
 
+    def _ir_para(self, url: str, tentativas: int = 3):
+        """Navega tolerando queda momentânea de rede/DNS.
+
+        Uma oscilação de segundos derrubava a etapa inteira com um traceback
+        de Playwright na tela — que não diz nada a quem usa o app."""
+        for k in range(tentativas):
+            try:
+                self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                return
+            except Exception as e:
+                if not _eh_erro_de_rede(e):
+                    raise
+                if k + 1 >= tentativas:
+                    raise SemRede(
+                        "não consegui acessar o Mais Controle: o computador "
+                        "está sem internet ou o endereço não respondeu "
+                        f"({tentativas} tentativas). Verifique a conexão (e a "
+                        "VPN, se usar) e tente de novo.") from e
+                self.log(f"Rede não respondeu; tentando de novo "
+                         f"({k + 2}/{tentativas})...")
+                time.sleep(3)
+
     def garantir_login(self):
         """Garante a área logada. Se cair na tela de login: usa a credencial
         salva (opcional, botão 🔑) OU deixa o Chrome autopreencher a senha
         guardada por ele, e clica em ENTRAR sozinho — aguardando a tela mudar.
         Se nada disso resolver (1ª vez), o usuário loga na própria janela do
         Chrome (que então oferece salvar a senha)."""
-        self.page.goto(config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
+        self._ir_para(config.MC_URL_PAGAMENTOS)
         self.page.wait_for_timeout(1500)
         if self._esta_logado():
-            print(">>> Login OK (sessão salva).\n")
+            self.log("Login OK (sessão ainda aberta).")
             return True
         self._tentar_entrar()
-        print(">>> Aguardando a área logada...")
         for _ in range(60):
             if self._esta_logado():
-                print(">>> Login OK.\n")
+                self.log("Login OK.")
                 return True
             time.sleep(1)
-        print("[!] Não detectei a área logada; faça login na janela do Chrome.")
+        self.log("[!] Não detectei a área logada. Faça login na janela do "
+                 "Chrome — depois o app segue sozinho. (Dica: guarde a senha "
+                 "no botão 🔑 Login para não precisar disso.)")
         return False
 
     def _tentar_entrar(self):
@@ -347,27 +430,63 @@ class MCClient:
                 pass
             creds = credenciais.carregar()
             if creds:
-                self._preencher(*creds)
+                # 1º pelo controller do Angular (é o caminho que funciona);
+                # se o ERP mudar e o scope não estiver lá, cai no DOM + clique
+                if not self._login_pelo_controller(*creds):
+                    self._preencher(*creds)
+                    self._clicar_entrar()
             else:
                 self.page.wait_for_timeout(2500)   # deixa o Chrome autopreencher
-            self._clicar_entrar()
+                self._clicar_entrar()
             if creds:                              # confere se a credencial salva serviu
-                for _ in range(15):
+                for _ in range(25):
                     if self._esta_logado():
                         return
                     time.sleep(1)
-                if not self._esta_logado():
+                # só descarta a senha se o ERP de fato a recusou (continuamos
+                # na tela de login). ERP lento não pode custar o login salvo.
+                if "login" in self.page.url or self._tem_campo_senha():
                     credenciais.apagar()
-                    print(">>> O login salvo não funcionou (senha mudou?); "
-                          "removi-o. Faça login na janela do Chrome.")
+                    self.log(">>> O login salvo não funcionou (senha mudou?); "
+                             "removi-o. Faça login na janela do Chrome.")
+                else:
+                    self.log(">>> O Mais Controle está demorando a responder; "
+                             "aguarde ou faça login na janela do Chrome.")
         except Exception as e:
-            print(f">>> login automático: {str(e)[:120]}")
+            self.log(f">>> login automático: {str(e)[:120]}")
+
+    def _tem_campo_senha(self) -> bool:
+        try:
+            return self.page.locator("input[type=password]").first.is_visible(
+                timeout=1500)
+        except Exception:
+            return False
+
+    def _login_pelo_controller(self, email: str, senha: str) -> bool:
+        """Grava as credenciais no scope do AngularJS e chama login().
+        True se conseguiu disparar o login; False para tentar pela UI."""
+        try:
+            self.page.fill("#username", email, timeout=3000)
+            self.page.fill("#userpassword", senha, timeout=3000)
+        except Exception:
+            pass            # a tela é secundária: o que vale é o scope abaixo
+        try:
+            r = self.page.evaluate(_JS_LOGIN_ANGULAR,
+                                   {"email": email, "senha": senha})
+        except Exception as e:
+            config.diag(f"login pelo controller falhou: {e!r}")
+            return False
+        if isinstance(r, dict) and r.get("ok"):
+            return True
+        motivo = r.get("motivo") if isinstance(r, dict) else r
+        config.diag(f"login pelo controller não rodou: {motivo}")
+        return False
 
     def _preencher(self, email: str, senha: str):
         try:
             self.page.evaluate(_JS_FILL_LOGIN, {"email": email, "senha": senha})
-        except Exception:
-            pass
+        except Exception as e:
+            config.diag(f"preenchimento do login falhou: {e!r}")
 
     def _clicar_entrar(self):
         for tentativa in (
@@ -453,8 +572,10 @@ class MCClient:
             self.page.goto(config.MC_URL_PAGAMENTOS,
                            wait_until="domcontentloaded", timeout=60000)
             self.page.wait_for_timeout(2500)
-        except Exception:
-            pass
+        except Exception as e:
+            # é recuperação de melhor esforço: segue mesmo falhando, mas o
+            # motivo fica registrado — senão o erro seguinte parece sem causa
+            config.diag(f"resetar() não conseguiu voltar para Pagamentos: {e!r}")
 
     # --------------------------------------------------------------- tag
     def _definir_tag(self, tag: str) -> bool:
@@ -474,15 +595,15 @@ class MCClient:
         try:
             shot = config.ARQUIVO_LOG.parent / "tag_debug.png"
             self.page.screenshot(path=str(shot))
-            print(f"   [aviso] não marquei a tag (res={res}); print em {shot}")
-        except Exception:
-            pass
+            self.log(f"   [aviso] não marquei a tag (res={res}); print em {shot}")
+        except Exception as e:
+            config.diag(f"não consegui salvar o print da tag: {e!r}")
         return False
 
     def _print_erro(self, motivo: str, launch_id: str):
         try:
             shot = config.ARQUIVO_LOG.parent / f"erro_{launch_id[:8]}.png"
             self.page.screenshot(path=str(shot))
-            print(f"   [erro: {motivo}] print salvo em {shot}")
-        except Exception:
-            pass
+            self.log(f"   [erro: {motivo}] print salvo em {shot}")
+        except Exception as e:
+            config.diag(f"não consegui salvar o print do erro '{motivo}': {e!r}")

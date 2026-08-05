@@ -3,14 +3,16 @@
 Anexar Comprovantes — Mais Controle
 
 Fluxo da janela:
-  1) "Abrir Mais Controle e acessar": abre o Chrome em tela cheia e você faz
-     login (só na 1ª vez; o perfil fica salvo).
-  2) Informe o PERÍODO (data de pagamento dos comprovantes) e a PASTA dos
+  1) Informe o PERÍODO (data de pagamento dos comprovantes) e a PASTA dos
      PDFs renomeados (padrão "VALOR - DESCRIÇÃO - DATA") e clique em
-     "Carregar contas do período" — o app busca os títulos PAGOS do período.
-  3) Marque as CONTAS BANCÁRIAS desejadas (caixas de seleção).
-  4) "Casar e anexar": verifica quem já tem comprovante (pula), casa os
+     "Carregar contas" — o app abre o Chrome, ENTRA SOZINHO no Mais Controle
+     (com a senha guardada no 🔑 Login) e busca os títulos PAGOS do período.
+  2) Marque as CONTAS BANCÁRIAS desejadas (caixas de seleção).
+  3) "Casar e anexar": verifica quem já tem comprovante (pula), casa os
      pendentes com os PDFs e anexa. No fim, gera um relatório Excel.
+
+O botão "Abrir o Mais Controle" não é mais um passo: serve para o primeiro
+acesso (quando ainda não há senha guardada) e para destravar sessão caída.
 
 Modo alternativo "Por lista": anexa a partir de um CSV (launchId,valor,arquivo_pdf)
 ou de um Excel com aba CERTEZA (coluna link + PDF(s)).
@@ -33,10 +35,10 @@ from openpyxl.styles import Font, PatternFill
 
 try:
     from . import config, matcher, mc_api, planilha, credenciais
-    from .mc_client import MCClient
+    from .mc_client import MCClient, SemRede
 except ImportError:
     import config, matcher, mc_api, planilha, credenciais
-    from mc_client import MCClient
+    from mc_client import MCClient, SemRede
 
 try:                                     # utilitários compartilhados (raiz)
     import util
@@ -58,6 +60,14 @@ def _data_api(txt: str) -> str | None:
 
 def _fmt_val(cents: int) -> str:
     return f"{cents // 100},{cents % 100:02d}"
+
+
+def _texto_do_erro(e: Exception) -> str:
+    """O que vai para o Registro. Falta de internet é recado, não defeito do
+    app: mostra só a orientação, sem despejar traceback de Playwright."""
+    if isinstance(e, SemRede):
+        return "⚠ " + str(e)
+    return "ERRO: " + str(e) + "\n" + traceback.format_exc()
 
 
 def _resumo_cands(pe: dict) -> str:
@@ -265,7 +275,7 @@ class AnexarFrame(ttk.Frame):
         self.contas_box = ttk.Frame(self.f_contas)
         self.contas_box.pack(fill="x")
         ttk.Label(self.contas_box,
-                  text="Clique em \"2. Carregar contas do período\" para listar as contas."
+                  text="Clique em \"1. Carregar contas\" para listar as contas."
                   ).pack(anchor="w")
 
         # ---- card: modo lista (mostrado só no modo "Por lista")
@@ -291,13 +301,16 @@ class AnexarFrame(ttk.Frame):
         btns.pack(fill="x")
         ttk.Checkbutton(btns, text="Simular (não anexa de verdade)",
                         variable=self.v_dry).pack(side="left")
-        self.b0 = ttk.Button(btns, text="▶ 1. Abrir e acessar", command=self.abrir_mc)
-        self.b0.pack(side="left", padx=10)
-        self.b1 = ttk.Button(btns, text="▶ 2. Carregar contas", command=self.conectar)
-        self.b1.pack(side="left")
-        self.b2 = ttk.Button(btns, text="▶ 3. Casar e anexar", command=self.executar,
+        # "Abrir e acessar" deixou de ser passo: com o login salvo o app entra
+        # sozinho. O botão continua aqui, sem número, para o primeiro acesso
+        # (quando ainda não há senha guardada) e para destravar sessão caída.
+        self.b1 = ttk.Button(btns, text="▶ 1. Carregar contas", command=self.conectar)
+        self.b1.pack(side="left", padx=(10, 0))
+        self.b2 = ttk.Button(btns, text="▶ 2. Casar e anexar", command=self.executar,
                              state="disabled")
         self.b2.pack(side="left", padx=10)
+        self.b0 = ttk.Button(btns, text="Abrir o Mais Controle", command=self.abrir_mc)
+        self.b0.pack(side="left")
         self.b_pause = ttk.Button(btns, text="⏸ Pausar", command=self._pausar_toggle,
                                   state="disabled")
         self.b_pause.pack(side="left")
@@ -310,7 +323,7 @@ class AnexarFrame(ttk.Frame):
         self.b_login = ttk.Button(btns, text="🔑 Login",
                                   command=self._gerenciar_login)
         self.b_login.pack(side="right")
-        for _b in (self.b0, self.b1, self.b2):
+        for _b in (self.b1, self.b2):
             try:
                 _b.configure(style="Accent.TButton")   # botões azuis (tema sv-ttk)
             except tk.TclError:
@@ -332,7 +345,8 @@ class AnexarFrame(ttk.Frame):
         self.log.delete("1.0", "end")
         self.log.insert("end", "\n\n", "ph")
         self.log.insert("end", "O andamento e os resultados aparecerão aqui.\n", "ph")
-        self.log.insert("end", "\nSiga os passos 1 → 2 → 3 na barra abaixo.\n", "ph")
+        self.log.insert("end", "\nSiga os passos 1 → 2 na barra abaixo — o app "
+                               "abre o Mais Controle e entra sozinho.\n", "ph")
         self._ph = True
 
     def _alternar_modo(self):
@@ -363,8 +377,8 @@ class AnexarFrame(ttk.Frame):
         Deve rodar na thread self.exec (a dona do navegador)."""
         log = log or self._log
         if self.mc is None:
-            log("Abrindo o Chrome... faça login no Mais Controle se for pedido.")
-            self.mc = MCClient().__enter__()
+            log("Abrindo o Chrome e entrando no Mais Controle...")
+            self.mc = MCClient(log=log).__enter__()
             self.api = mc_api.MCApi(self.mc.page)
             self.mc.garantir_login()
         return self.api
@@ -443,11 +457,11 @@ class AnexarFrame(ttk.Frame):
         try:
             self.garantir_sessao()
             self._log("Mais Controle aberto. Agora confira o período e a pasta dos "
-                      "PDFs e clique em \"2. Carregar contas do período\".")
+                      "PDFs e clique em \"1. Carregar contas\".")
             self._log(f"⏱ Etapa 1 — fim: {time.strftime('%H:%M:%S')} "
                       f"({_fmt_dur(time.time() - inicio)})")
         except Exception as e:
-            self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
+            self._log(_texto_do_erro(e))
             self.mc = None
         self.q.put(("reabilitar0", None))
 
@@ -686,7 +700,7 @@ class AnexarFrame(ttk.Frame):
                       f"({_fmt_dur(time.time() - inicio)})")
             self.q.put(("contas", contas))
         except Exception as e:
-            self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
+            self._log(_texto_do_erro(e))
             self.q.put(("reabilitar", None))
 
     def _montar_contas(self, contas):
@@ -721,7 +735,7 @@ class AnexarFrame(ttk.Frame):
             alvo = self._t_lista
         else:
             if not self.pagos:
-                messagebox.showerror("Erro", "Primeiro clique em \"2. Carregar contas do período\"."); return
+                messagebox.showerror("Erro", "Primeiro clique em \"1. Carregar contas\"."); return
             alvo = self._t_auto
         self._parar.clear()
         self._pausa.clear()
@@ -819,7 +833,7 @@ class AnexarFrame(ttk.Frame):
                       f"(total: {_fmt_dur(time.time() - inicio)})")
             self.q.put(("fim", (ok, len(certezas), len(duvidas), len(sem_par), saida)))
         except Exception as e:
-            self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
+            self._log(_texto_do_erro(e))
             self.q.put(("reabilitar2", None))
 
     def _t_lista(self):
@@ -861,7 +875,7 @@ class AnexarFrame(ttk.Frame):
                       f"{_fmt_dur(time.time() - inicio)}")
             self.q.put(("fim", (ok, len(tarefas), 0, 0, "")))
         except Exception as e:
-            self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
+            self._log(_texto_do_erro(e))
             self.q.put(("reabilitar2", None))
 
     # ---------------------------------------------------------------- saída

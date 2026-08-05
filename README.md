@@ -52,15 +52,20 @@ na hora de pagar — é isso que permite o casamento automático na aba 2.
 
 ## Aba 2 — Anexar Comprovantes
 
-1. **Abrir Mais Controle e acessar** — o Chrome abre e você faz login
-   (só na 1ª vez; o perfil fica salvo ao lado do exe).
-2. Informe o **período** (as datas completam as barras sozinhas; há um 📅
+Antes da 1ª vez, clique em **🔑 Login** e guarde seu e-mail e senha do Mais
+Controle: ficam cifrados neste computador (DPAPI do Windows) e o app passa a
+**entrar sozinho** — não é mais preciso abrir o navegador à mão.
+
+1. Informe o **período** (as datas completam as barras sozinhas; há um 📅
    para escolher no calendário), selecione a **pasta dos PDFs renomeados** e
-   clique em **Carregar contas do período**. Marque as contas desejadas.
-   As opções de ignorar tarifas bancárias e aportes/distribuições são
-   caixas separadas, opcionais.
-3. **Casar e anexar** — com **Simular** marcado, nada é anexado de verdade
+   clique em **Carregar contas**. O Chrome abre, o app entra no Mais Controle
+   e lista as contas — marque as desejadas. As opções de ignorar tarifas
+   bancárias e aportes/distribuições são caixas separadas, opcionais.
+2. **Casar e anexar** — com **Simular** marcado, nada é anexado de verdade
    (bom para conferir antes).
+
+O botão **Abrir o Mais Controle** não faz parte do fluxo: use no primeiro
+acesso (se ainda não guardou a senha) ou para destravar uma sessão caída.
 
 Como o app decide (com segurança):
 

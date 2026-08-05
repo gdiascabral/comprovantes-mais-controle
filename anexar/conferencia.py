@@ -33,7 +33,7 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import util
 
-from anexar_comprovantes import CampoData, _fmt_val, _data_api
+from anexar_comprovantes import CampoData, _fmt_val, _data_api, _texto_do_erro
 
 LINK = config.MC_URL_LANCAMENTO
 _fmt_dur = util.fmt_dur
@@ -367,8 +367,7 @@ class ConferenciaFrame(ttk.Frame):
                            if self.v_conteudo.get() else "")))
             self.q.put(("fim", saida))
         except Exception as e:
-            import traceback
-            self._log("ERRO: " + str(e) + "\n" + traceback.format_exc())
+            self._log(_texto_do_erro(e))
             self.q.put(("status", "Erro — veja o Registro."))
             self.q.put(("fim", None))
 
