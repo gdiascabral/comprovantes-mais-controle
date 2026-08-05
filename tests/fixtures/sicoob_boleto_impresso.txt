@@ -1,0 +1,101 @@
+03/08/2026, 10:45
+
+03/08/2026
+
+Cooperativa:
+
+Conta:
+
+Cliente:
+
+Linha digitável:
+Número do documento:
+Nosso número:
+
+Número do agendamento:
+
+Instituição emissora:
+Tipo documento:
+Beneficiário:
+Nome/Razão Social:
+Nome Fantasia:
+CPF/CNPJ:
+Pagador:
+Nome/Razão social:
+Nome fantasia:
+CPF/CNPJ:
+Beneficiário final:
+Nome/Razão social:
+Nome fantasia:
+CPF/CNPJ:
+Datas:
+Realizado:
+Pagamento:
+Vencimento:
+Valores:
+Documento:
+Desconto/Abatimento:
+Juros/Multa:
+Pago:
+Situação:
+Observação:
+Autenticação:
+
+Sicoob | Internet Banking
+
+SICOOB - SISTEMA DE COOPERATIVAS DE CRÉDITO DO BRASIL
+
+SISBR - SISTEMA DE INFORMÁTICA DO SICOOB
+
+COMPROVANTE DE
+PAGAMENTO DE BOLETO
+
+0000-0 / COOPERATIVA DE CRÉDITO EXEMPLO LTDA
+00.000-0
+
+EMPRESA EXEMPLO ENGENHARIA LTDA
+
+11111.22222 33333.444444 55555.666666 7 88880000115000
+
+11122233
+44455566
+Título
+
+FORNECEDOR DISTRIBUIDORA DE MAT
+FORNECEDOR DISTRIBUIDORA DE MAT
+11.111.111/0001-11
+
+EMPRESA EXEMPLO ENGENHARIA LTDA
+EMPRESA EXEMPLO ENGENHARIA LTDA
+00.000.000/0001-00
+
+BANCO EXEMPLO S/A
+BANCO EXEMPLO S/A
+22.222.222/0001-22
+
+31/07/2026 às 16:55:25
+31/07/2026
+31/07/2026
+
+R$ 1.150,00
+
+R$ 0,00
+
+R$ 0,00
+
+R$ 1.150,00
+
+Efetivado
+
+DONA MORENA QD 18 LT 8 11 B1 OC 5624
+11111111-2222-3333-4444-555566667777
+
+OUVIDORIA SICOOB: 08007250996
+
+https://ib.sicoob.com.br/sicoobnet/ib/H/comprovantes
+
+10:42:13
+
+v1.0.4.8
+
+212

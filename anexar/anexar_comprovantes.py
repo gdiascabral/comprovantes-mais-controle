@@ -60,6 +60,19 @@ def _fmt_val(cents: int) -> str:
     return f"{cents // 100},{cents % 100:02d}"
 
 
+def _resumo_cands(pe: dict) -> str:
+    """Candidatos que sobraram para um pagamento em dúvida, do mais provável
+    para o menos, com o que bateu em cada um — mesmo detalhe que a janela."""
+    partes = []
+    for c in sorted((c for c in pe["cands"] if c["pdf"]["used_by"] is None),
+                    key=lambda c: -c["score"]):
+        sinais = " + ".join(s for s in ("OC/NF" if c["ocnf"] else "",
+                                        "centro de custo" if c["cc"] else "",
+                                        "data" if c["date"] else "") if s)
+        partes.append(f"{c['pdf']['fn']}  [{sinais or 'só o valor'}]")
+    return " || ".join(partes) or "(sem candidatos livres)"
+
+
 def _abrir_url(url: str):
     """Abre uma URL no navegador padrão. Usa os.startfile (sempre presente no
     executável); só recorre ao módulo webbrowser se aquele falhar — assim o
@@ -489,33 +502,63 @@ class AnexarFrame(ttk.Frame):
 
     # ------------------------------------------------------ resolver dúvidas
     def _janela_duvidas(self, duvidas, ev):
-        """Janela para o usuário escolher o PDF certo dos casamentos em dúvida."""
+        """Janela para o usuário escolher o PDF certo dos casamentos em dúvida.
+
+        Mostra o pagamento INTEIRO (descrição sem cortar, centro de custo, nº
+        doc, categoria, conta) e, para cada PDF candidato, o que bateu e o que
+        não bateu — é isso que permite decidir sem abrir o Mais Controle. Dá
+        também para abrir o PDF na hora, para conferir o comprovante."""
+        pasta = Path(self.v_pasta.get() or ".")
         top = tk.Toplevel(self)
         top.title(f"Resolver dúvidas ({len(duvidas)})")
         top.transient(self.winfo_toplevel())
-        ttk.Label(top, text="O app não teve certeza nestes pagamentos. Escolha o "
-                            "PDF certo em cada um — ou deixe em dúvida para "
-                            "decidir depois pelo relatório:"
+        try:
+            top.geometry(f"{min(1180, self.winfo_screenwidth() - 80)}"
+                         f"x{min(780, self.winfo_screenheight() - 120)}")
+        except tk.TclError:
+            pass
+        ttk.Label(top, wraplength=1120, justify="left",
+                  text=f"O app não teve certeza em {len(duvidas)} pagamento(s): "
+                       "havia mais de um PDF com o mesmo valor, ou nenhum sinal "
+                       "forte (OC/NF, centro de custo, data) para decidir. "
+                       "Escolha o PDF certo em cada um — ou deixe em dúvida "
+                       "para decidir depois pelo relatório.\n"
+                       "Dica: dê dois cliques na linha para abrir o PDF."
                   ).pack(anchor="w", padx=12, pady=(10, 6))
 
         rodape = ttk.Frame(top)
         rodape.pack(side="bottom", fill="x", padx=12, pady=10)
 
-        canvas = tk.Canvas(top, width=980,
-                           height=min(110 * len(duvidas) + 16, 430),
-                           highlightthickness=0)
+        canvas = tk.Canvas(top, highlightthickness=0)
         barra = ttk.Scrollbar(top, orient="vertical", command=canvas.yview)
         quadro = ttk.Frame(canvas)
+        janela = canvas.create_window((0, 0), window=quadro, anchor="nw")
         quadro.bind("<Configure>",
                     lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=quadro, anchor="nw", width=960)
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(janela, width=e.width))
         canvas.configure(yscrollcommand=barra.set)
         canvas.pack(side="left", fill="both", expand=True, padx=(12, 0), pady=4)
         barra.pack(side="right", fill="y")
+        canvas.bind_all("<MouseWheel>",
+                        lambda e: canvas.yview_scroll(-(e.delta // 120), "units"))
 
-        combos = []
+        def _abrir_pdf(tv, mapa):
+            pd = mapa.get((tv.selection() or [None])[0])
+            if pd is None:
+                messagebox.showinfo("Abrir PDF",
+                                    "Selecione um dos arquivos da lista.")
+                return
+            alvo = pasta / pd["fn"]
+            try:
+                os.startfile(str(alvo))
+            except OSError as e:
+                messagebox.showerror("Erro", f"Não consegui abrir:\n{alvo}\n\n{e}")
+
+        escolhas = []
         for pe in duvidas:
-            livres = [c["pdf"] for c in pe["cands"] if c["pdf"]["used_by"] is None]
+            cands = sorted((c for c in pe["cands"] if c["pdf"]["used_by"] is None),
+                           key=lambda c: -c["score"])
             vals = sorted(set(pe.get("valores") or [pe["valor"]]))
             titulo = f" R$ {_fmt_val(pe['valor'])}"
             outros = [v for v in vals if v != pe["valor"]]
@@ -523,34 +566,59 @@ class AnexarFrame(ttk.Frame):
                 titulo += " (pago; nominal " + ", ".join(_fmt_val(v) for v in outros) + ")"
             titulo += f" — {pe['dataFull']} — {pe['conta']} "
             bloco = ttk.LabelFrame(quadro, text=titulo)
-            bloco.pack(fill="x", padx=4, pady=4)
-            linha = " | ".join(x for x in [
-                f"Nº doc: {pe['doc']}" if pe["doc"] else "",
-                f"Categoria: {pe['categoria']}" if pe.get("categoria") else ""] if x)
-            if linha:
-                ttk.Label(bloco, text=linha[:120]).pack(anchor="w", padx=8)
-            if pe["works"]:
-                ttk.Label(bloco, text=("Centro de custo: "
-                                       + "; ".join(pe["works"]))[:120]
-                          ).pack(anchor="w", padx=8)
-            ttk.Label(bloco, text=("Descrição: "
-                                   + (pe["desc"] or "(sem descrição)"))[:120]
-                      ).pack(anchor="w", padx=8)
-            cb = ttk.Combobox(bloco, state="readonly", width=105,
-                              values=["(deixar em dúvida)"]
-                                     + [p["fn"] for p in livres])
-            cb.current(0)
-            cb.pack(fill="x", padx=8, pady=(2, 2))
-            ttk.Button(bloco, text="Abrir lançamento no navegador",
+            bloco.pack(fill="x", padx=4, pady=6)
+
+            for rotulo, texto in (("Descrição", pe["desc"] or "(sem descrição)"),
+                                  ("Centro de custo", "; ".join(pe["works"]) or "—"),
+                                  ("Nº doc", pe["doc"] or "—"),
+                                  ("Categoria", pe.get("categoria") or "—")):
+                ttk.Label(bloco, text=f"{rotulo}: {texto}", wraplength=1080,
+                          justify="left").pack(anchor="w", padx=8)
+
+            ttk.Label(bloco, text=f"{len(cands)} PDF(s) livre(s) com esse valor:"
+                      ).pack(anchor="w", padx=8, pady=(8, 2))
+            tv = ttk.Treeview(bloco, columns=("sinais", "arquivo", "data", "desc"),
+                              show="headings", selectmode="browse",
+                              height=min(max(len(cands) + 1, 2), 7))
+            for col, cab, larg, estica in (("sinais", "O que bateu", 190, False),
+                                           ("arquivo", "Arquivo", 470, False),
+                                           ("data", "Data do PDF", 85, False),
+                                           ("desc", "Descrição do PDF", 290, True)):
+                tv.heading(col, text=cab)
+                tv.column(col, width=larg, anchor="w", stretch=estica)
+            tv.insert("", "end", iid="_nada",
+                      values=("—", "(deixar em dúvida)", "", ""))
+            mapa = {}
+            for k, c in enumerate(cands):
+                pd = c["pdf"]
+                sinais = " ".join(s for s in ("✔ OC/NF" if c["ocnf"] else "",
+                                              "✔ centro de custo" if c["cc"] else "",
+                                              "✔ data" if c["date"] else "") if s)
+                dt = pd["data"]
+                tv.insert("", "end", iid=f"c{k}",
+                          values=(sinais or "só o valor bate", pd["fn"],
+                                  f"{dt[:2]}/{dt[2:]}" if dt else "—", pd["desc"]))
+                mapa[f"c{k}"] = pd
+            tv.selection_set("_nada")
+            tv.pack(fill="x", padx=8, pady=(0, 4))
+            tv.bind("<Double-1>", lambda e, t=tv, m=mapa: _abrir_pdf(t, m))
+
+            botoes = ttk.Frame(bloco)
+            botoes.pack(fill="x", padx=8, pady=(0, 6))
+            ttk.Button(botoes, text="Abrir lançamento no navegador",
                        command=lambda i=pe["launchId"]: _abrir_url(LINK + str(i))
-                       ).pack(anchor="e", padx=8, pady=(0, 6))
-            combos.append((pe, cb, {p["fn"]: p for p in livres}))
+                       ).pack(side="right")
+            ttk.Button(botoes, text="📄  Abrir PDF selecionado",
+                       command=lambda t=tv, m=mapa: _abrir_pdf(t, m)
+                       ).pack(side="right", padx=(0, 8))
+            escolhas.append((pe, tv, mapa))
 
         def concluir(confirmar):
+            canvas.unbind_all("<MouseWheel>")
             if confirmar:
                 usados = set()
-                for pe, cb, mapa in combos:
-                    pd = mapa.get(cb.get())
+                for pe, tv, mapa in escolhas:
+                    pd = mapa.get((tv.selection() or [None])[0])
                     if pd is None or id(pd) in usados or pd["used_by"] is not None:
                         continue        # mesmo PDF escolhido 2x: vale a 1ª escolha
                     usados.add(id(pd))
@@ -819,9 +887,7 @@ class AnexarFrame(ttk.Frame):
                           p["conta"], p["desc"], p["doc"], p["pdf"], p["motivo"],
                           p.get("resultado", ""), LINK + p["launchId"]] for p in anexados])
         aba("DUVIDA", [[_fmt_val(p["valor"]), p["dataFull"], "; ".join(p["works"]),
-                        p["conta"], p["desc"], p["doc"], "",
-                        " || ".join(c["pdf"]["fn"] for c in p["cands"]
-                                    if c["pdf"]["used_by"] is None) or "(sem candidatos livres)",
+                        p["conta"], p["desc"], p["doc"], "", _resumo_cands(p),
                         "", LINK + p["launchId"]] for p in duvidas])
         aba("SEM PAR", [[_fmt_val(p["valor"]), p["dataFull"], "; ".join(p["works"]),
                          p["conta"], p["desc"], p["doc"], "", "", "",

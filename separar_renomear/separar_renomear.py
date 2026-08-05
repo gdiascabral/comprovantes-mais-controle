@@ -49,17 +49,21 @@ def detectar(t):
     return ('?', '?')
 
 def _valor(t):
-    for pat in [r'Valor total:?\s*R\$\s*([\d\.]+,\d{2})',
-                r'Valor:\s*R\$\s*([\d\.]+,\d{2})',
-                r'Pago:\s*R\$\s*([\d\.]+,\d{2})',
+    # sem o (?i) o comprovante de tributo/DARF do Sicoob, que escreve
+    # "VALOR TOTAL: R$ 240,22" em caixa alta, saía sem valor nenhum
+    for pat in [r'(?i)Valor\s+total\s*:?\s*R\$\s*([\d\.]+,\d{2})',
+                r'(?i)Valor\s*:\s*R\$\s*([\d\.]+,\d{2})',
+                r'(?i)Pago\s*:\s*R\$\s*([\d\.]+,\d{2})',
                 r'(?m)^\s*R\$\s*([\d\.]+,\d{2})\s*$']:
         m = re.search(pat, t)
         if m: return m.group(1)
     return None
 
 def _data(t):
-    for pat in [r'Data do [Pp]agamento[^\d]{0,12}(\d{2}/\d{2}/\d{4})',
-                r'Realizado:\s*(\d{2}/\d{2}/\d{4})']:
+    # o Inter escreve o dia da semana antes da data ("Sexta, 31/07/2026" e
+    # também "Segunda-feira, ..."), por isso a folga generosa antes do dígito
+    for pat in [r'(?i)Data\s+d[eo]\s+pagamento[^\d]{0,24}(\d{2}/\d{2}/\d{4})',
+                r'(?i)Realizado\s*:\s*(\d{2}/\d{2}/\d{4})']:
         m = re.search(pat, t)
         if m: return m.group(1)
     return None
@@ -70,10 +74,16 @@ def _nome_apos(t, rotulo):
     m = re.search(r'Nome(?:/Raz[ãa]o\s*[Ss]ocial)?:?\s*(.+)', t[i:])
     return m.group(1).strip() if m else None
 
+RE_TRIBUTO = re.compile(
+    r"\bPAGAMENTO\s+(?:DARF|DAS|GPS|FGTS|GRU|GNRE|DAM|IPVA|ITBI|TRIBUTOS?)\b",
+    re.I)
+
+
 def _descricao(t, banco):
     if banco == 'INTER':
-        m = re.search(r'Descri[çc][ãa]o\s+(.+)', t)
-        return m.group(1).strip() if m else None
+        m = re.search(r'(?m)^\s*Descri[çc][ãa]o\s*:?[ \t]+(.+)', t)
+        if m:
+            return m.group(1).strip() or None
     L = _linhas(t)
     for i, l in enumerate(L):
         m = re.match(r'(?:Descri[çc][ãa]o|Observa[çc][ãa]o):\s*(.*)', l.strip())
@@ -81,22 +91,29 @@ def _descricao(t, banco):
             resto = m.group(1).strip()
             if resto:
                 return resto
-            ant = L[i - 1].strip() if i > 0 else ''
-            prox = L[i + 1].strip() if i + 1 < len(L) else ''
-            return (ant + ' ' + prox).strip()
-    return None
+            # rótulo sozinho na linha: o valor pode estar na linha vizinha —
+            # mas só se a vizinha for texto de verdade, e não outro rótulo
+            for viz in (L[i + 1].strip() if i + 1 < len(L) else '',
+                        L[i - 1].strip() if i > 0 else ''):
+                if viz and not viz.endswith(':') and not _lixo(viz):
+                    return viz
+            return None
+    # tributo/guia não tem campo de descrição: o tipo do pagamento é o que
+    # sobra para identificar o comprovante ("PAGAMENTO DARF")
+    m = RE_TRIBUTO.search(t)
+    return m.group(0).strip() if m else None
 
 def _limpar_empresa(nome):
     if not nome: return ''
+    nome = _sem_rotulo(nome)
+    if _lixo(nome):            # rótulo técnico (CPF/CNPJ, Instituição...) não é nome
+        return ''
     nome = re.sub(r'\b(LTDA|SPE|S/?A|S\.A|EIRELI|ME|EPP)\b\.?', '', nome, flags=re.I)
     return re.sub(r'\s+', ' ', nome).strip(' .-')
 
-def campos(t):
-    # o layout "impresso" (2026) tem prioridade: nele os rótulos vêm
-    # separados dos valores e o parser antigo extrai dados errados
-    novo = _campos_impresso(t)
-    if novo and novo['valor']:
-        return novo
+def _campos_rotulado(t):
+    """Layout clássico: cada rótulo traz o valor NA MESMA LINHA
+    (ex.: 'Descrição CENTRO DE CUSTO QD 26A LT 10 OC 1234')."""
     banco, tipo = detectar(t)
     v = _valor(t); d = _data(t); desc = _descricao(t, banco)
     if banco == 'INTER':
@@ -105,6 +122,46 @@ def campos(t):
         pag = _nome_apos(t, 'Pagador')
         dest = _nome_apos(t, 'Destinat') or _nome_apos(t, 'Beneficiário') or _nome_apos(t, 'Beneficiario')
     return dict(banco=banco, tipo=tipo, valor=v, data=d, desc=desc, pag=pag, dest=dest)
+
+
+# rótulo com o valor colado na mesma linha -> layout clássico ("rotulado").
+# No layout "impresso" o rótulo fica sozinho na linha e o valor vem só depois,
+# num bloco separado. Fora da lista: "Nome", porque o Sicoob impresso tem
+# "Nome Fantasia:" e "Nome/Razão Social:" — rótulos que parecem ter valor.
+RE_ROTULO_INLINE = re.compile(
+    r'(?mi)^[ \t]*(?:Descri[çc][ãa]o|Observa[çc][ãa]o|Data\s+do\s+pagamento|'
+    r'Valor\s+total)\s*:?[ \t]+(\S.*?)[ \t]*$')
+
+
+def _tem_rotulo_inline(t) -> bool:
+    """True se algum rótulo traz o valor na MESMA linha (layout clássico).
+    Um 'valor' que é só outro rótulo (termina em ':') não conta."""
+    return any(m.group(1) and not m.group(1).endswith(":")
+               for m in RE_ROTULO_INLINE.finditer(t))
+
+
+def campos(t):
+    """Extrai os campos escolhendo o parser pelo LAYOUT — não pelo banco.
+
+    O comprovante do Inter (PIX e Pagamento) traz 'Sobre a transação' e
+    'Banco Inter' mesmo quando é o layout clássico, então detectar o banco
+    não serve para escolher o parser: o que separa os dois layouts é o
+    rótulo trazer (ou não) o valor na mesma linha.
+    """
+    rot = _campos_rotulado(t)
+    imp = _campos_impresso(t)
+    tem_rotulo = _tem_rotulo_inline(t)
+    if tem_rotulo and rot['valor'] and (rot['desc'] or rot['dest']):
+        escolhido, reserva = rot, imp
+    elif imp and imp['valor']:
+        escolhido, reserva = imp, rot
+    else:
+        escolhido, reserva = rot, imp
+    if reserva:                # completa só o que é objetivo e sem ambiguidade
+        for campo in ('valor', 'data'):
+            if not escolhido.get(campo):
+                escolhido[campo] = reserva.get(campo)
+    return escolhido
 
 
 # --------------------------------------------- layout "impresso" (2026)
@@ -116,12 +173,76 @@ RE_DATA_HORA = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(?:[àa]s\s+)?\d{2}[:h]\d{2}")
 RE_DATA_SO = re.compile(r"^(\d{2}/\d{2}/\d{4})$")
 RE_CNPJ_L = re.compile(r"\d{2}[\.\s]?\d{3}[\.\s]?\d{3}\s?/\s?\d{4}\s?-\s?\d{2}")
 RE_DESC_SITE = re.compile(r"\b(QD|LT|OC|NF|UC|LOTE|APORTE|DISTRIBUI\w*|REF)\b")
+# centro de custo / OC / NF valem mais que APORTE|DISTRIBUI|REF, que também
+# aparecem em razão social ("FORNECEDOR DISTRIBUIDORA DE MAT") e roubavam a
+# vez da observação verdadeira ("CENTRO DE CUSTO QD 18 LT 8 OC 1234")
+RE_DESC_FORTE = re.compile(r"\b(QD|LT|OC|NF|UC|LOTE)\b")
 RE_ID_LONGO = re.compile(r"^[A-Za-z0-9\-]{20,}$")
+# rótulo que às vezes vem grudado na descrição — sai do nome do arquivo
+RE_ROTULO_DESC = re.compile(
+    r"^\s*(?:Descri[çc][ãa]o|Observa[çc][ãa]o|Hist[óo]rico)\s*:?\s*", re.I)
+# linhas que NUNCA servem como descrição/nome de quem pagou ou recebeu:
+# são rótulos técnicos do comprovante (foi daí que saíram nomes de arquivo
+# como "Instituição Banco Inter" e "Autenticação <código>")
+# o \b em todas as alternativas é o que impede engolir nome de verdade
+# ("Contabilidade XYZ" não é o rótulo "Conta")
+RE_LIXO_NOME = re.compile(
+    r"^\s*(?:Institui[çc][ãa]o\b|CPF\s*/?\s*CNPJ\b|CPF\b|CNPJ\b|Ag[êe]ncia\b|"
+    r"Conta\b|Autentica[çc][ãa]o\b|Identificador\b|ID\b|C[óo]digo\s+de\s+barras\b|"
+    r"Canal\b|Banco\s+cedente\b|Data\s+d[ao]\s+\w+|Hor[áa]rio\b|"
+    r"N[úu]mero\s+do\s+documento\b|Valor\b|Tipo\b|Comprovante\b|"
+    r"Sobre\s+a\s+transa|Quem\s+(?:pagou|recebeu)\b)",
+    re.I)
+
+
+RE_ROTULO_NOME = re.compile(r"^\s*Nome(?:/Raz[ãa]o\s*Social)?\s*:?\s*", re.I)
+
+
+def _sem_rotulo(l) -> str:
+    """Tira o rótulo grudado no começo da linha ('Nome X' -> 'X')."""
+    l = RE_ROTULO_NOME.sub("", (l or "").strip())
+    return RE_ROTULO_DESC.sub("", l).strip()
+
+
+def _lixo(l) -> bool:
+    """True se a linha é rótulo técnico/ID e não serve como nome ou descrição."""
+    if not l or len(l.strip()) < 3:
+        return True
+    l = l.strip()
+    return bool(RE_LIXO_NOME.match(l)) or bool(RE_ID_LONGO.match(l))
 
 
 def _eh_mascara(l):
     """CPF/CNPJ mascarado (ex.: **.168.971/0001-** com ruído de OCR)."""
     return "*" in l and sum(c.isdigit() for c in l) >= 4 and len(l) < 30
+
+
+# CPF/CNPJ que o OCR entregou torto (ex.: "00.394,460/0058-87" com vírgula no
+# lugar do ponto): linha só de dígitos e pontuação, com cara de documento
+RE_DOC_L = re.compile(r"^[\d\.\,\-/\s]{11,20}$")
+
+
+def _eh_documento(l):
+    l = l.strip()
+    return bool(RE_DOC_L.match(l)) and sum(c.isdigit() for c in l) >= 11
+
+
+def _nomes_antes_do_documento(nl):
+    """No layout impresso os nomes vêm logo ANTES do CPF/CNPJ. Devolve-os na
+    ordem em que aparecem, pulando rótulos técnicos."""
+    nomes = []
+    for i, l in enumerate(nl):
+        if i == 0 or not (RE_CNPJ_L.search(l) or _eh_mascara(l) or _eh_documento(l)):
+            continue
+        for j in range(i - 1, -1, -1):
+            cand = _sem_rotulo(nl[j])
+            if RE_CNPJ_L.search(cand) or _eh_mascara(cand) or _eh_documento(cand):
+                continue
+            if len(cand) > 4 and not RE_DIN_L.match(cand) and not _lixo(cand):
+                if cand not in nomes:
+                    nomes.append(cand)
+                break
+    return nomes
 
 
 def _detectar_impresso(t):
@@ -162,14 +283,25 @@ def _campos_impresso(t):
                     datas.append(m.group(1))
     data = max(datas, key=lambda d: (datas.count(d), -datas.index(d))) if datas else None
 
-    # descrição: linha com cara de centro de custo / OC / NF...
+    # descrição: primeiro a linha rotulada ("Descrição X"), que é a fonte
+    # certa; só depois o palpite pela cara de centro de custo / OC / NF...
     desc = None
     for l in nl:
-        u = _sem_acento(l).upper()
-        if RE_DESC_SITE.search(u) and not RE_ID_LONGO.match(l) and len(l) < 90 \
-                and "OUVIDORIA" not in u and "COMPROVANTE" not in u:
-            desc = l
-            break
+        if RE_ROTULO_DESC.match(l):
+            cand = RE_ROTULO_DESC.sub("", l).strip()
+            if cand and not _lixo(cand):
+                desc = cand
+                break
+    if desc is None:
+        for regra in (RE_DESC_FORTE, RE_DESC_SITE):
+            for l in nl:
+                u = _sem_acento(l).upper()
+                if regra.search(u) and not RE_ID_LONGO.match(l) and len(l) < 90 \
+                        and "OUVIDORIA" not in u and "COMPROVANTE" not in u:
+                    desc = RE_ROTULO_DESC.sub("", l).strip() or None
+                    break
+            if desc:
+                break
     if desc is None and banco == "SICOOB" and tipo == "PIX" and valor:
         # ...ou, no PIX, a linha logo depois do valor
         for i, l in enumerate(nl):
@@ -194,9 +326,9 @@ def _campos_impresso(t):
             for i, l in enumerate(nl):
                 if RE_CNPJ_L.search(l):
                     for j in range(i - 1, -1, -1):
-                        cand = nl[j]
+                        cand = _sem_rotulo(nl[j])
                         if not RE_CNPJ_L.search(cand) and len(cand) > 4 \
-                                and not RE_DIN_L.match(cand):
+                                and not RE_DIN_L.match(cand) and not _lixo(cand):
                             if cand not in nomes:
                                 nomes.append(cand)
                             break
@@ -206,26 +338,27 @@ def _campos_impresso(t):
             nomes = []
             for i, l in enumerate(nl):
                 if (_eh_mascara(l) or RE_CNPJ_L.search(l)) and i > 0:
-                    nomes.append(nl[i - 1])
+                    cand = _sem_rotulo(nl[i - 1])
+                    if not _lixo(cand):
+                        nomes.append(cand)
             pag = nomes[0] if nomes else None
             dest = nomes[1] if len(nomes) > 1 else None
-    else:  # INTER novo
-        for i, l in enumerate(nl):
-            u = _sem_acento(l).upper()
-            if "INTER S.A" in u or "BANCO INTER" in u:
-                if i > 0:
-                    pag = nl[i - 1]
-                break
-        for i, l in enumerate(nl):
-            u = _sem_acento(l).upper()
-            if u.startswith("FALE COM A GENTE") or u.startswith("CAPITAIS E REGI"):
-                for j in range(i - 1, -1, -1):
-                    cand = nl[j]
-                    if len(cand) > 4 and not RE_DIN_L.match(cand) \
-                            and not cand.isdigit():
-                        dest = cand
-                        break
-                break
+    else:  # INTER novo — "Quem pagou" vem antes de "Quem recebeu"
+        nomes = _nomes_antes_do_documento(nl)
+        pag = nomes[0] if nomes else None
+        dest = nomes[1] if len(nomes) > 1 else None
+        if dest is None:      # sem o 2º documento: último nome antes do rodapé
+            for i, l in enumerate(nl):
+                u = _sem_acento(l).upper()
+                if u.startswith("FALE COM A GENTE") or u.startswith("CAPITAIS E REGI"):
+                    for j in range(i - 1, -1, -1):
+                        cand = _sem_rotulo(nl[j])
+                        if len(cand) > 4 and not RE_DIN_L.match(cand) \
+                                and not cand.isdigit() and not _lixo(cand) \
+                                and cand != pag:
+                            dest = cand
+                            break
+                    break
     return dict(banco=banco, tipo=tipo, valor=valor, data=data, desc=desc,
                 pag=pag, dest=dest)
 
@@ -284,7 +417,7 @@ def _partes_nome(c):
     dd = ''
     if c['data']:
         p = c['data'].split('/'); dd = p[0] + '-' + p[1]
-    desc = c['desc']
+    desc = _sem_rotulo(c['desc']) or None
     aporte = re.search(r'\b(APORTE|DISTRIBUI|TRANSF)', (desc or '').upper())
     if desc and not aporte:
         meio = desc

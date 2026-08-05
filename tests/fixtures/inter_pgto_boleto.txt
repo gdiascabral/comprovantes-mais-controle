@@ -1,0 +1,21 @@
+Número do documento
+111222333
+Pagamento realizado!
+R$ 7.020,00
+Sobre a transação
+Valor total R$ 7.020,00
+Banco cedente 748 - BCO COOPERATIVO EXEMPLO S.A.
+Código de barras 11111.22222 33333.444444 55555.666666 7
+88880000702000
+Descrição RECRUTAMENTO E SELECAO
+Quem pagou
+Nome EMPRESA EXEMPLO ENGENHARIA LTDA
+Instituição Banco Inter
+Agência 0001-9
+Conta 0000000-0
+Data do Pagamento 31/07/2026
+Canal via Internet
+Autenticação 1111222233334444555566667777888899
+Fale com a gente
+Capitais e regiões metropolitanas: 3003 4070 Deficiência de fala e audição: 0800 979 7099
+Demais localidades: 0800 940 0007 Ouvidoria: 0800 940 7772

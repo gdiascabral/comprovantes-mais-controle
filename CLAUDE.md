@@ -43,12 +43,20 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   Windows)/Claro/Escuro salvo em `preferencias.json`, versão no título e
   no rodapé da barra. Tema sv-ttk; frames expõem `aplicar_cores(escuro)`.
 - `separar_renomear/separar_renomear.py` — separa páginas de PDF e renomeia.
-  Dois parsers: layout antigo (texto embutido) e layout "impresso 2026"
-  (Sicoob Internet Banking / Inter novos: rótulos e valores em blocos
-  separados; PDFs SEM camada de texto → **OCR** via Tesseract embutido,
-  `_ocr_pagina`/`_configurar_ocr`). Modelo de nome padrão
-  "VALOR - DESCRIÇÃO - DATA" ou personalizado (tokens VALOR, DESCRIÇÃO,
-  DATA, PAGADOR, RECEBEDOR). Boleto: usa o valor PAGO (último R$ não-zero).
+  Dois parsers, escolhidos pelo **layout** (`campos()`), NUNCA pelo banco:
+  `_campos_rotulado` quando o rótulo traz o valor na mesma linha
+  ("Descrição CENTRO DE CUSTO QD 26A LT 10 OC 1234"), `_campos_impresso` quando
+  rótulos e valores vêm em blocos separados (Sicoob Internet Banking; PDFs
+  SEM camada de texto → **OCR** via Tesseract embutido,
+  `_ocr_pagina`/`_configurar_ocr`). Detectar o banco não serve para escolher:
+  o Inter escreve "Sobre a transação"/"Banco Inter" nos DOIS layouts — foi
+  isso que fez metade dos comprovantes sair como "VALOR - Instituição Banco
+  Inter", sem descrição nem data. `_lixo`/`_sem_rotulo` impedem que rótulo
+  técnico (Instituição, CPF/CNPJ, Autenticação) vire nome ou descrição.
+  Modelo de nome padrão "VALOR - DESCRIÇÃO - DATA" ou personalizado (tokens
+  VALOR, DESCRIÇÃO, DATA, PAGADOR, RECEBEDOR). Boleto: usa o valor PAGO
+  (último R$ não-zero). Regex de valor/data são case-insensitive por causa
+  do comprovante de tributo ("VALOR TOTAL:", "DATA DE PAGAMENTO:").
 - `anexar/mc_api.py` — leitura dos pagos e anexos pela MESMA API da tela de
   Pagamentos, com chamadas feitas DE DENTRO da página logada (page.evaluate
   + fetch) — chamadas via requests de fora recebem 403 do ERP. Captura
@@ -67,8 +75,12 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   (45–60 s) + `resetar()` antes de retentar (ERP fica lento em lote).
 - `anexar/anexar_comprovantes.py` — tela Anexar: 3 passos (Abrir e acessar /
   Carregar contas / Casar e anexar), Pausar/Parar, cronômetros ⏱, janela de
-  resolver DÚVIDAS clicando (combobox de candidatos + abrir lançamento no
-  navegador), botão Abrir relatório, modo "Por lista" (.csv/.xlsx; completa
+  resolver DÚVIDAS (`_janela_duvidas`): por pagamento mostra descrição
+  inteira, centro de custo, nº doc, categoria e conta; os candidatos vêm
+  numa tabela ordenada pelo score, com o que bateu em cada um (OC/NF,
+  centro de custo, data) e botões de abrir o PDF e o lançamento. O mesmo
+  detalhe vai para a aba DUVIDA do relatório (`_resumo_cands`).
+  Botão Abrir relatório, modo "Por lista" (.csv/.xlsx; completa
   ".pdf" ausente). Relatório Excel: ANEXADOS/DUVIDA/SEM PAR.
 - `anexar/conferencia.py` — auditoria pós-anexo: lista pagos SEM anexo no
   período e, opcionalmente, baixa cada PDF anexado e confere se o VALOR
@@ -97,9 +109,11 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 - Rodar como script: `python comprovantes_app.py` (Python 3.10+, tkinter;
   `pip install -r requirements.txt` + `python -m playwright install chrome`;
   OCR local requer Tesseract instalado com idioma por).
-- Checagens usadas até aqui: `python -m py_compile <arquivos>` e `pyflakes`.
-  Não há testes automatizados ainda (fixtures de texto de comprovantes são o
-  caminho sugerido — sem PDFs reais no repo!).
+- Testes: `python -m pytest tests -q` (PYTHONPATH com a raiz +
+  `separar_renomear` + `anexar`). As fixtures em `tests/fixtures/*.txt` são o
+  texto que sai do pdfplumber/OCR, **anonimizado** — o repo é público, nunca
+  colocar comprovante real. Cobrir um layout novo = salvar o texto dele ali.
+  Checagens extras: `python -m py_compile <arquivos>` e `pyflakes`.
 - **Nunca commitar dados da empresa**: PDFs de comprovantes, relatórios
   xlsx, `.chrome_profile`, logs (tudo já no .gitignore; a pasta local
   `debug/` é só diagnóstico local e nunca foi para o repo).
