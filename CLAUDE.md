@@ -80,7 +80,11 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   Pagamentos, com chamadas feitas DE DENTRO da página logada (page.evaluate
   + fetch) — chamadas via requests de fora recebem 403 do ERP. Captura
   headers de auth observando as requisições da página (token só em memória).
-  `montar_pagos` guarda `valores` = {nominal, valor pago com juros/desconto}.
+  `montar_pagos` guarda `valores` = {nominal, valor pago com juros/desconto},
+  `favorecido` e `ocs`. O favorecido NÃO tem campo fixo conhecido na API:
+  `_CHAVES_FAVORECIDO` tenta os nomes prováveis (string, dict ou lista) e, se
+  nenhum servir, o diagnostico.log grava quais campos vieram — só os NOMES,
+  sem valores — para acertar a lista sem chutar de novo.
   Também baixa anexos (fetch → base64) para a Conferência.
 - `anexar/matcher.py` — casamento PDF↔pagamento. Filtro de entrada: valor
   (qualquer um de `valores`). Critérios: OC/NF > centro de custo > data.
@@ -105,8 +109,9 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   Casar e anexar) — "Abrir o Mais Controle" saiu do fluxo e virou botão
   auxiliar, porque com a senha guardada o app entra sozinho.
   Pausar/Parar, cronômetros ⏱, janela de
-  resolver DÚVIDAS (`_janela_duvidas`): por pagamento mostra descrição
-  inteira, centro de custo, nº doc, categoria e conta; os candidatos vêm
+  resolver DÚVIDAS (`_janela_duvidas`): por pagamento mostra favorecido,
+  descrição inteira, centro de custo, nº doc + OC/NF, categoria e conta;
+  os candidatos vêm
   numa tabela ordenada pelo score, com o que bateu em cada um (OC/NF,
   centro de custo, data) e botões de abrir o PDF e o lançamento. O mesmo
   detalhe vai para a aba DUVIDA do relatório (`_resumo_cands`).

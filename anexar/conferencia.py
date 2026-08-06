@@ -293,7 +293,8 @@ class ConferenciaFrame(ttk.Frame):
             self._log(f"\nCom anexo: {len(com)} | SEM anexo: {len(sem)}")
             for p in sem:
                 self._log(f"  SEM ANEXO: {_fmt_val(p['valor'])}  {p['dataFull']}  "
-                          f"{p['conta']}  {p['desc'][:60]}")
+                          f"{p['conta']}  {p.get('favorecido') or '—'}  "
+                          f"{p['desc'][:60]}")
 
             divergentes, conferidos, nao_conferiveis = [], [], []
             if self.v_conteudo.get() and com:
@@ -375,23 +376,23 @@ class ConferenciaFrame(ttk.Frame):
         wb = Workbook(); wb.remove(wb.active)
         verde = PatternFill("solid", fgColor="1B7837")
         branco = Font(bold=True, color="FFFFFF")
-        H = ["Valor", "Data", "Centro de custo", "Conta", "Descrição",
-             "Nº doc", "Situação", "Link"]
+        H = ["Valor", "Data", "Favorecido", "Centro de custo", "Conta",
+             "Descrição", "Nº doc", "OC/NF", "Situação", "Link"]
 
         def aba(nome, linhas):
             ws = wb.create_sheet(nome)
             for j, h in enumerate(H, 1):
                 c = ws.cell(1, j, h); c.font = branco; c.fill = verde
             for i, p in enumerate(linhas, 2):
-                ws.cell(i, 1, _fmt_val(p["valor"]))
-                ws.cell(i, 2, p["dataFull"])
-                ws.cell(i, 3, "; ".join(p["works"]))
-                ws.cell(i, 4, p["conta"])
-                ws.cell(i, 5, p["desc"])
-                ws.cell(i, 6, p["doc"])
-                ws.cell(i, 7, p.get("confere", ""))
-                ws.cell(i, 8, LINK + str(p["launchId"]))
-            for col, w in zip("ABCDEFGH", [11, 11, 30, 26, 40, 14, 30, 58]):
+                for j, v in enumerate(
+                        [_fmt_val(p["valor"]), p["dataFull"],
+                         p.get("favorecido", ""), "; ".join(p["works"]),
+                         p["conta"], p["desc"], p["doc"],
+                         ", ".join(p.get("ocs") or []), p.get("confere", ""),
+                         LINK + str(p["launchId"])], 1):
+                    ws.cell(i, j, v)
+            for col, w in zip("ABCDEFGHIJ",
+                              [11, 11, 30, 30, 26, 40, 14, 14, 30, 58]):
                 ws.column_dimensions[col].width = w
             ws.freeze_panes = "A2"
 

@@ -582,9 +582,13 @@ class AnexarFrame(ttk.Frame):
             bloco = ttk.LabelFrame(quadro, text=titulo)
             bloco.pack(fill="x", padx=4, pady=6)
 
-            for rotulo, texto in (("Descrição", pe["desc"] or "(sem descrição)"),
+            doc = pe["doc"] or "—"
+            if pe.get("ocs"):
+                doc += "     OC/NF: " + ", ".join(pe["ocs"])
+            for rotulo, texto in (("Favorecido", pe.get("favorecido") or "—"),
+                                  ("Descrição", pe["desc"] or "(sem descrição)"),
                                   ("Centro de custo", "; ".join(pe["works"]) or "—"),
-                                  ("Nº doc", pe["doc"] or "—"),
+                                  ("Nº doc", doc),
                                   ("Categoria", pe.get("categoria") or "—")):
                 ttk.Label(bloco, text=f"{rotulo}: {texto}", wraplength=1080,
                           justify="left").pack(anchor="w", padx=8)
@@ -883,8 +887,9 @@ class AnexarFrame(ttk.Frame):
         wb = Workbook(); wb.remove(wb.active)
         verde = PatternFill("solid", fgColor="1B7837")
         branco = Font(bold=True, color="FFFFFF")
-        H = ["Valor", "Data", "Centro de custo", "Conta", "Descrição", "Nº doc",
-             "PDF", "Motivo/Candidatos", "Resultado", "Link"]
+        H = ["Valor", "Data", "Favorecido", "Centro de custo", "Conta",
+             "Descrição", "Nº doc", "OC/NF", "PDF", "Motivo/Candidatos",
+             "Resultado", "Link"]
 
         def aba(nome, linhas):
             ws = wb.create_sheet(nome)
@@ -893,19 +898,23 @@ class AnexarFrame(ttk.Frame):
             for i, r in enumerate(linhas, 2):
                 for j, v in enumerate(r, 1):
                     ws.cell(i, j, v)
-            for col, w in zip("ABCDEFGHIJ", [11, 9, 32, 26, 38, 16, 45, 30, 16, 58]):
+            for col, w in zip("ABCDEFGHIJKL",
+                              [11, 9, 30, 32, 26, 38, 16, 14, 45, 30, 16, 58]):
                 ws.column_dimensions[col].width = w
             ws.freeze_panes = "A2"
 
-        aba("ANEXADOS", [[_fmt_val(p["valor"]), p["dataFull"], "; ".join(p["works"]),
-                          p["conta"], p["desc"], p["doc"], p["pdf"], p["motivo"],
-                          p.get("resultado", ""), LINK + p["launchId"]] for p in anexados])
-        aba("DUVIDA", [[_fmt_val(p["valor"]), p["dataFull"], "; ".join(p["works"]),
-                        p["conta"], p["desc"], p["doc"], "", _resumo_cands(p),
-                        "", LINK + p["launchId"]] for p in duvidas])
-        aba("SEM PAR", [[_fmt_val(p["valor"]), p["dataFull"], "; ".join(p["works"]),
-                         p["conta"], p["desc"], p["doc"], "", "", "",
-                         LINK + p["launchId"]] for p in sem_par])
+        def comuns(p):
+            return [_fmt_val(p["valor"]), p["dataFull"], p.get("favorecido", ""),
+                    "; ".join(p["works"]), p["conta"], p["desc"], p["doc"],
+                    ", ".join(p.get("ocs") or [])]
+
+        aba("ANEXADOS", [comuns(p) + [p["pdf"], p["motivo"],
+                                      p.get("resultado", ""), LINK + p["launchId"]]
+                         for p in anexados])
+        aba("DUVIDA", [comuns(p) + ["", _resumo_cands(p), "", LINK + p["launchId"]]
+                       for p in duvidas])
+        aba("SEM PAR", [comuns(p) + ["", "", "", LINK + p["launchId"]]
+                        for p in sem_par])
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         out = Path(self.v_pasta.get() or ".") / f"relatorio_anexos_{stamp}.xlsx"
         wb.save(out)

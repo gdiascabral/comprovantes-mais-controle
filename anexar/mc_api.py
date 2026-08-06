@@ -14,6 +14,7 @@ normal. Com isso:
   - verifica, pago a pago, se há arquivo anexado no nível do sub-pagamento
     (endpoint de attachments com entityOrigin=PAID).
 """
+import re
 from urllib.parse import urlsplit, parse_qsl, urlencode
 
 try:
@@ -288,6 +289,65 @@ def _cents(x):
     return c if c else None
 
 
+# O nome do favorecido não tem um campo fixo conhecido na API: cada instalação
+# do ERP pode expor um. Tentamos os nomes prováveis e, se nenhum servir, o
+# diagnostico.log registra quais campos vieram (só os NOMES, sem os valores),
+# para ajustar sem precisar adivinhar de novo.
+_CHAVES_FAVORECIDO = (
+    "providerName", "providersNames", "provider",
+    "supplierName", "supplier",
+    "personName", "person",
+    "favoredName", "favored",
+    "beneficiaryName", "beneficiary",
+    "creditorName", "creditor",
+    "payeeName", "payee",
+    "partnerName", "partner",
+    "entityName", "entity",
+    "clientName", "customerName",
+)
+_CHAVES_NOME = ("name", "socialName", "fantasyName", "corporateName",
+                "tradeName", "fullName", "description")
+
+
+def _nome_de(v) -> str:
+    """Nome legível de um campo que pode vir string, dict ou lista."""
+    if not v:
+        return ""
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, list):
+        return "; ".join(x for x in (_nome_de(i) for i in v) if x)
+    if isinstance(v, dict):
+        for k in _CHAVES_NOME:
+            n = v.get(k)
+            if isinstance(n, str) and n.strip():
+                return n.strip()
+    return ""
+
+
+def _favorecido(l: dict) -> str:
+    for k in _CHAVES_FAVORECIDO:
+        nome = _nome_de(l.get(k))
+        if nome:
+            return nome
+    return ""
+
+
+RE_OC_NF = re.compile(r"\b(OC|NFS|NF|OS)\s*[:\-]?\s*(\d{2,})", re.I)
+
+
+def _ocs_nfs(*textos) -> list[str]:
+    """OC/NF citados no lançamento — é o sinal mais forte do casamento, então
+    vale mostrar separado em vez de deixar escondido no meio da descrição."""
+    achados = []
+    for t in textos:
+        for m in RE_OC_NF.finditer(t or ""):
+            marca = f"{m.group(1).upper()} {m.group(2)}"
+            if marca not in achados:
+                achados.append(marca)
+    return achados
+
+
 def montar_pagos(lancamentos: list[dict]) -> list[dict]:
     """Achata lançamentos -> um registro por sub-pagamento (paid).
 
@@ -295,10 +355,15 @@ def montar_pagos(lancamentos: list[dict]) -> list[dict]:
     conhecidas — valor nominal e VALOR PAGO (nominal + juros/multa − desconto)
     — para o casamento aceitar boletos pagos com acréscimos ou descontos."""
     pagos = []
+    achou_favorecido = False
     for l in lancamentos:
         cat = l.get("category")
         cat = "" if not cat else (cat if isinstance(cat, str)
                                   else (cat.get("name") or cat.get("description") or ""))
+        favorecido = _favorecido(l)
+        achou_favorecido = achou_favorecido or bool(favorecido)
+        doc = str(l.get("documentNumber") or "")
+        desc = l.get("description") or ""
         for p in (l.get("paids") or []):
             pd = (p.get("payingDate") or "")[:10]  # aaaa-mm-dd
             valores = set()
@@ -324,10 +389,17 @@ def montar_pagos(lancamentos: list[dict]) -> list[dict]:
                 "valores": sorted(valores) or [valor],
                 "data": (pd[8:10] + pd[5:7]) if len(pd) == 10 else "",
                 "dataFull": pd,
-                "doc": str(l.get("documentNumber") or ""),
+                "doc": doc,
                 "works": l.get("worksNames") or [],
-                "desc": l.get("description") or "",
+                "desc": desc,
                 "conta": p.get("accountName") or "",
                 "categoria": cat,
+                "favorecido": favorecido,
+                "ocs": _ocs_nfs(desc, doc),
             })
+    if lancamentos and not achou_favorecido:
+        # não achamos o campo: registra quais existem (só os NOMES) para dar
+        # para acertar _CHAVES_FAVORECIDO sem chutar
+        _diag("favorecido não encontrado nos lançamentos. Campos disponíveis: "
+              + ", ".join(sorted(str(k) for k in lancamentos[0]))[:900])
     return pagos
