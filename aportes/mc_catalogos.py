@@ -240,23 +240,40 @@ class Catalogos:
         ordem alfabética, ~10 por página, e a página 1 termina em "Cartão de
         Crédito" — as contas em M e T pareciam não existir. O ERP indica o fim
         por hasNextPage; totalPages às vezes vem null, então não dá para
-        confiar nele."""
-        itens: list = []
-        pagina_n = 1
-        while pagina_n <= MAX_PAGINAS:
-            url = f"{base}?{urlencode({**params, 'pageIndex': pagina_n}, doseq=True)}"
-            resposta = self._buscar(url)
-            if isinstance(resposta, dict) and resposta.get("__erro"):
-                raise RuntimeError(
-                    f"o ERP respondeu {resposta['__erro']} em {base}. "
-                    "Recarregue a tela do Mais Controle e tente de novo.")
-            lote = self._lista(resposta)
-            itens.extend(lote)
-            tem_proxima = isinstance(resposta, dict) and resposta.get("hasNextPage")
-            if not tem_proxima or not lote:
-                break
-            pagina_n += 1
-        return itens
+        confiar nele.
+
+        Pede páginas grandes: com o padrão de 10 por página, os ~440
+        participantes viravam mais de 40 idas ao servidor, uma de cada vez, e
+        a espera aparecia na tela. Se o ERP recusar o parâmetro, refazemos sem
+        ele — vale tentar porque o ganho é grande e o custo de errar é uma
+        requisição."""
+        for tamanho in (100, None):
+            base_params = dict(params)
+            if tamanho:
+                base_params["pageSize"] = tamanho
+            itens: list = []
+            pagina_n = 1
+            recusou = False
+            while pagina_n <= MAX_PAGINAS:
+                url = (f"{base}?"
+                       f"{urlencode({**base_params, 'pageIndex': pagina_n}, doseq=True)}")
+                resposta = self._buscar(url)
+                if isinstance(resposta, dict) and resposta.get("__erro"):
+                    if tamanho:            # pode ter sido o pageSize
+                        recusou = True
+                        break
+                    raise RuntimeError(
+                        f"o ERP respondeu {resposta['__erro']} em {base}. "
+                        "Recarregue a tela do Mais Controle e tente de novo.")
+                lote = self._lista(resposta)
+                itens.extend(lote)
+                tem_proxima = isinstance(resposta, dict) and resposta.get("hasNextPage")
+                if not tem_proxima or not lote:
+                    break
+                pagina_n += 1
+            if not recusou:
+                return itens
+        return []
 
     @staticmethod
     def _indexar(itens: list) -> dict[str, dict]:

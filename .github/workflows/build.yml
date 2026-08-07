@@ -49,6 +49,10 @@ jobs:
           Copy-Item separar_renomear/*.py codigo_embutido/separar_renomear/
           New-Item -ItemType Directory codigo_embutido/anexar | Out-Null
           Copy-Item anexar/*.py codigo_embutido/anexar/
+          New-Item -ItemType Directory codigo_embutido/aportes | Out-Null
+          Copy-Item aportes/*.py codigo_embutido/aportes/
+          New-Item -ItemType Directory codigo_embutido/relatorios | Out-Null
+          Copy-Item relatorios/*.py codigo_embutido/relatorios/
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
           "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
 

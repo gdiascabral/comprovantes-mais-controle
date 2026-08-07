@@ -9,8 +9,10 @@ https://github.com/gdiascabral/comprovantes-mais-controle
 
 TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), que:
 1. gera `versao.txt` = `v1.0.<run_number>` (NÃO é commitado; criado na build);
-2. monta `codigo.zip` (comprovantes_app.py + separar_renomear/*.py + anexar/*.py
-   + versao.txt + motor_minimo.txt + icone.ico) — ~50 KB;
+2. monta `codigo.zip` (comprovantes_app.py + util.py + separar_renomear/*.py +
+   anexar/*.py + aportes/*.py + relatorios/*.py + versao.txt +
+   motor_minimo.txt + icone.ico) — ~50 KB. **Pasta nova de aba = linha nova
+   aqui**, senão o import falha no usuário e o app não abre;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
    com Tesseract OCR embutido) — e publica a Release `v1.0.<run_number>` com
    o exe + codigo.zip. Os exes avulsos de Separar e de Anexar foram removidos:
@@ -21,7 +23,8 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 `atualizador.py`) e **código** (o resto). Ao abrir, o app baixa só o
 `codigo.zip` novo (segundos, sem perguntar) e roda com ele. Portanto:
 
-- Mudanças em `comprovantes_app.py`, `separar_renomear/`, `anexar/` →
+- Mudanças em `comprovantes_app.py`, `separar_renomear/`, `anexar/`,
+  `aportes/`, `relatorios/` →
   chegam sozinhas ao usuário no próximo abrir. Só commitar e esperar a build.
 - Mudanças em `motor.py`, `atualizador.py`, dependências novas no
   `requirements.txt` ou `--collect-all` no workflow → exigem exe novo.
@@ -41,7 +44,8 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   download do exe completo com janela de progresso, troca via .bat com 30
   retentativas (OneDrive trava arquivos). Loga em `atualizacao.log`.
 - `comprovantes_app.py` — janela única: barra lateral (Separar e Renomear /
-  Anexar Comprovantes / Conferência), tema Automático (lê o registro do
+  Anexar Comprovantes / Conferência / Aportes / Relatório Mensal), tema
+  Automático (lê o registro do
   Windows)/Claro/Escuro salvo em `preferencias.json`, versão no título e
   no rodapé da barra. Tema sv-ttk; frames expõem `aplicar_cores(escuro)`.
 - `separar_renomear/separar_renomear.py` — separa páginas de PDF e renomeia.
@@ -121,6 +125,26 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   período e, opcionalmente, baixa cada PDF anexado e confere se o VALOR
   (e data) aparecem no texto (OCR se preciso) → aba DIVERGENTES.
   Compartilha sessão/thread da tela Anexar (`anx.garantir_sessao()`).
+- `relatorios/extrato_mc.py` — extrato do fluxo de caixa por conta, em PDF.
+  Roda sobre a página logada do Anexar (`anx.mc.page`), na thread do navegador.
+  Cinco armadilhas resolvidas ali: (1) a lista de contas é paginada e o
+  `pageSize` tem de ser escrito no scope **dono** da propriedade
+  (`hasOwnProperty`) — o scope de `angular.element(tr)` é o filho do ng-repeat
+  e a escrita vira sombra, trazendo só 10 de 34; (2) não é preciso clicar conta
+  por conta: o botão Extrato chama `stateGoNewTab('base.cashFlow')`, então vale
+  ir direto a `#/cash-flow?accountId=`; (3) o período mora em `fromDate`/
+  `toDate` (moment) do controller, não nos inputs; (4) o "carregar mais" tem
+  fim conhecido em `pageInfo.hasNextPage` — o botão some do DOM, o campo não;
+  (5) "Imprimir" só chama `window.print()`: neutralizamos e geramos o PDF por
+  `Page.printToPDF` do CDP (o `page.pdf()` do Playwright recusa navegador com
+  janela). O CSS de impressão do ERP não esconde o fluxo de caixa atrás do
+  modal — ele vazava para o PDF —, então o modal vira único filho do `body`
+  (`visibility:hidden` + `position:absolute` não serve: zera a paginação e sai
+  PDF em branco). Isso deixa o SPA quebrado: cada conta recarrega a página, e
+  `restaurar_pagina()` devolve o navegador às outras abas no fim.
+- `relatorios/relatorio_frame.py` — aba Relatório Mensal: mês/ano (ou intervalo
+  de datas), lista de contas com marcação, pasta de destino, ⏹ Parar e
+  progresso. Um PDF por conta em `<pasta>/AAAA-MM/NN - NOME.pdf`.
 - `anexar/config.py` — URLs, tag, listas IGNORAR_TARIFAS/IGNORAR_APORTES;
   usa a pasta do exe quando congelado (sys.frozen). Tem também `diag()`, o
   registro em `diagnostico.log` usado por quem precisa degradar sem quebrar
