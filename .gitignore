@@ -21,3 +21,7 @@ codigo.zip
 codigo_embutido/
 codigo/
 debug/
+# Saída da aba Relatório Mensal (extratos em PDF — dado da empresa).
+# Só a pasta da raiz, e COM acento: no Windows o git ignora maiúsculas, e
+# "Relatorios/" sem acento casaria com a pasta de código "relatorios/".
+/Relatórios/

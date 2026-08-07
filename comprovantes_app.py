@@ -17,7 +17,7 @@ from pathlib import Path
 # Rodando como script: garante que as subpastas entram no caminho de import.
 # (No executável gerado pelo PyInstaller isso não é necessário.)
 _RAIZ = Path(__file__).resolve().parent
-for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar"):
+for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "relatorios"):
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -27,6 +27,7 @@ from tkinter import ttk
 from separar_renomear import SepararFrame
 from anexar_comprovantes import AnexarFrame
 from conferencia import ConferenciaFrame
+from relatorio_frame import RelatorioFrame
 
 
 def _nitidez():
@@ -133,7 +134,12 @@ def main():
     aba_sep = SepararFrame(conteudo)
     aba_anx = AnexarFrame(conteudo)
     aba_conf = ConferenciaFrame(conteudo, aba_anx)
-    quadros = {"sep": aba_sep, "anx": aba_anx, "conf": aba_conf}
+    # Relatório Mensal divide o navegador e a thread do Anexar, como a
+    # Conferência: o Playwright síncrono só aceita uma thread, e um segundo
+    # Chrome significaria um segundo login.
+    aba_rel = RelatorioFrame(conteudo, aba_anx)
+    quadros = {"sep": aba_sep, "anx": aba_anx, "conf": aba_conf,
+               "rel": aba_rel}
     atual = {"nome": None}
     botoes = {}
 
@@ -160,7 +166,10 @@ def main():
     botoes["anx"].pack(fill="x", pady=(0, 6), ipady=3)
     botoes["conf"] = ttk.Button(lateral, text="✅   Conferência", width=24,
                                 command=lambda: mostrar("conf"))
-    botoes["conf"].pack(fill="x", ipady=3)
+    botoes["conf"].pack(fill="x", pady=(0, 6), ipady=3)
+    botoes["rel"] = ttk.Button(lateral, text="📊   Relatório Mensal", width=24,
+                               command=lambda: mostrar("rel"))
+    botoes["rel"].pack(fill="x", ipady=3)
 
     # ---------------- rodapé da barra: tema + versão
     rodape = ttk.Frame(lateral)
