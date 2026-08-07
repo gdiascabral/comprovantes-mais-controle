@@ -196,7 +196,17 @@ def criar_recebimento(
                          erro=f"o ERP recusou (HTTP {resposta['__erro']})",
                          detalhes=resposta.get("__corpo") or {})
 
-    id_parcela = _achar_id_parcela(resposta)
+    # A baixa pode já ter acontecido: o próprio POST /sales leva
+    # isReceived=true e receivingDate. Se ela já veio feita, chamar o endpoint
+    # de baixa DE NOVO lançaria a entrada duas vezes — R$ 2,00 no lugar de
+    # R$ 1,00. Por isso conferimos antes em vez de sempre chamar.
+    parcela = _achar_parcela(resposta)
+    if parcela and _ja_baixada(parcela):
+        return Resultado(True, descricao, "recebimento",
+                         id_criado=(resposta or {}).get("id"),
+                         detalhes={"baixa": "já veio feita no próprio lançamento"})
+
+    id_parcela = (parcela or {}).get("id")
     if not id_parcela:
         # A venda existe, mas ficou EM ABERTO. Avisar é obrigatório: silenciar
         # deixaria o usuário achando que o dinheiro entrou.
@@ -219,30 +229,47 @@ def criar_recebimento(
                      id_criado=(resposta or {}).get("id"))
 
 
-def _achar_id_parcela(resposta) -> str | None:
-    """Procura o id da parcela na resposta da venda.
+def _achar_parcela(resposta) -> dict | None:
+    """A primeira parcela dentro da resposta da venda.
 
-    O caminho exato não foi confirmado por captura (a resposta não chegou a ser
-    gravada), então varremos a estrutura à procura da primeira parcela com id,
-    em vez de fixar um caminho que pode não existir e quebrar em silêncio."""
+    O caminho exato não foi confirmado por captura (a resposta do POST /sales
+    não chegou a ser gravada), então procuramos em vez de fixar um caminho que
+    poderia não existir e falhar em silêncio."""
     if not isinstance(resposta, dict):
         return None
     for caminho in (("tradeReceivable", "installments"), ("installments",)):
         no = resposta
         for parte in caminho:
             no = (no or {}).get(parte) if isinstance(no, dict) else None
-        if isinstance(no, list) and no and isinstance(no[0], dict):
-            if no[0].get("id"):
-                return no[0]["id"]
+        if isinstance(no, list) and no and isinstance(no[0], dict) and no[0].get("id"):
+            return no[0]
 
-    # Varredura geral, para o caso de a resposta mudar de formato.
+    # Varredura geral, para o caso de a resposta mudar de formato. Uma parcela
+    # se reconhece por ter id e algum campo "planned...".
     pilha = [resposta]
     while pilha:
         atual = pilha.pop()
         if isinstance(atual, dict):
-            if atual.get("id") and "planned" in " ".join(atual.keys()).lower():
-                return atual["id"]
+            if atual.get("id") and any("planned" in k.lower() for k in atual):
+                return atual
             pilha.extend(atual.values())
         elif isinstance(atual, list):
             pilha.extend(atual)
     return None
+
+
+def _ja_baixada(parcela: dict) -> bool:
+    """A parcela já nasceu recebida?
+
+    Conservador de propósito: na dúvida devolve False e a baixa é tentada. Um
+    erro para o lado do "não baixou" deixa o lançamento em aberto, visível e
+    fácil de corrigir; para o outro lado, duplicaria a entrada de dinheiro."""
+    if not isinstance(parcela, dict):
+        return False
+    recebimentos = parcela.get("receipts")
+    if isinstance(recebimentos, list) and recebimentos:
+        return True
+    for campo in ("isReceived", "received", "settled"):
+        if parcela.get(campo) is True:
+            return True
+    return False

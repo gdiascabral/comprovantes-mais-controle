@@ -52,8 +52,14 @@ _JS_POST = """async ({url, headers, corpo}) => {
 
 # As obras não têm endpoint REST: vêm por GraphQL, e o host varia conforme o
 # ambiente. Em vez de fixar um, tentamos os que tiverem token capturado.
-_GQL_OBRAS = """query ($first: PaginationAmount, $afterCursor: String) {
-  works(first: $first, after: $afterCursor) {
+#
+# O argumento `specification` NÃO é opcional na prática: sem ele o servidor
+# responde "Object reference not set to an instance of an object" — ele
+# desreferencia o objeto sem checar nulo. A assinatura e o conteúdo abaixo
+# foram copiados da chamada que a própria tela faz.
+_GQL_OBRAS = """query ($first: PaginationAmount, $afterCursor: String,
+                       $specification: WorkSpecificationInput) {
+  works(first: $first, after: $afterCursor, specification: $specification) {
     edges { node { id name status } }
     pageInfo { hasNextPage endCursor }
   }
@@ -129,6 +135,21 @@ class Catalogos:
             _JS_POST,
             {"url": url, "headers": self._headers_para(url), "corpo": corpo})
 
+    def cabecalho(self, nome: str) -> str | None:
+        """Valor de um cabeçalho, procurado em todos os hosts capturados.
+
+        Nem todo serviço manda todos: o prod-erp-api não manda user-id, o
+        legacy-api manda. Procurar em todos evita depender de qual tela o
+        usuário abriu antes."""
+        nome = nome.lower()
+        conjuntos = ([self.headers] if not all(isinstance(v, dict)
+                     for v in self.headers.values()) else list(self.headers.values()))
+        for cabecalhos in conjuntos:
+            for chave_h, valor in cabecalhos.items():
+                if chave_h.lower() == nome and valor:
+                    return valor
+        return None
+
     def _hosts_graphql(self) -> list[str]:
         """Hosts com token capturado que parecem servir GraphQL."""
         if not all(isinstance(v, dict) for v in self.headers.values()):
@@ -139,16 +160,48 @@ class Catalogos:
         """Obras (works). Não há REST: só GraphQL, e o host varia — por isso
         tentamos os candidatos até um responder."""
         self.obras = {}
-        for host in self._hosts_graphql():
+        self.erros_obras: list[str] = []
+        candidatos = self._hosts_graphql()
+        if not candidatos:
+            self.erros_obras.append(
+                "nenhum host GraphQL entre os cabeçalhos capturados — o "
+                "filtro de captura precisa aceitar os hosts execute-api")
+
+        # Mesmo filtro que a tela usa ao abrir o campo Obra do lançamento.
+        especificacao = {
+            "organizationUnitId": self.cabecalho("organization-unit-id"),
+            "userAccountId": self.cabecalho("user-id"),
+            "statusExcluded": ["QUOTING"],
+            "enabledForPayment": True,
+        }
+        if not especificacao["organizationUnitId"] or not especificacao["userAccountId"]:
+            self.erros_obras.append(
+                "faltou organization-unit-id ou user-id nos cabeçalhos "
+                "capturados; sem eles a consulta de obras não é aceita")
+
+        for host in candidatos:
             url = f"https://{host}/prod/graphql"
             cursor, paginas = None, 0
             achou_algo = False
             while paginas < MAX_PAGINAS:
                 resposta = self.postar(url, {
                     "query": _GQL_OBRAS,
-                    "variables": {"first": 100, "afterCursor": cursor},
+                    "variables": {"first": 100, "afterCursor": cursor,
+                                  "specification": especificacao},
                 })
-                if not isinstance(resposta, dict) or resposta.get("__erro"):
+                # Guardar o motivo: sem isso, "obras: 0" não diz se foi host
+                # errado, token errado ou consulta malformada.
+                if not isinstance(resposta, dict):
+                    self.erros_obras.append(f"{host}: resposta inesperada")
+                    break
+                if resposta.get("__erro"):
+                    self.erros_obras.append(
+                        f"{host}: HTTP {resposta['__erro']} "
+                        f"{str(resposta.get('__corpo'))[:200]}")
+                    break
+                if resposta.get("errors"):
+                    self.erros_obras.append(
+                        f"{host}: GraphQL {str(resposta['errors'])[:300]}")
                     break
                 bloco = ((resposta.get("data") or {}).get("works") or {})
                 arestas = bloco.get("edges") or []

@@ -39,9 +39,19 @@ CABECALHOS = {"authorization", "company-id", "user-id", "organization-unit-id"}
 
 # Hosts do ERP que importam. api-data-event e faro são TELEMETRIA e carregam
 # token próprio — misturá-los com os demais faz o prod-erp-api devolver 401.
-HOSTS_UTEIS = ("prod-erp-api.maiscontroleerp.com.br",
-               "legacy-api.maiscontroleerp.com.br",
-               "acessar.maiscontroleerp.com.br")
+# Telemetria: carrega token PRÓPRIO. Misturar com os demais fez o
+# prod-erp-api devolver 401 numa rodada anterior.
+HOSTS_IGNORAR = ("api-data-event", "faro.", "satismeter", "datadog", "google")
+
+
+def host_util(host: str) -> bool:
+    """Hosts do ERP dos quais vale copiar a autenticação.
+
+    Inclui os execute-api (GraphQL): é neles que moram as obras, e sem o
+    token deles a lista de obras vem vazia sem explicação."""
+    if any(x in host for x in HOSTS_IGNORAR):
+        return False
+    return host.endswith("maiscontroleerp.com.br") or "execute-api" in host
 
 CANDIDATOS_CSV = [
     Path(__file__).resolve().parent / "contas.csv",
@@ -93,7 +103,7 @@ def main() -> int:
     def ao_requisitar(req):
         from urllib.parse import urlsplit
         host = urlsplit(req.url).netloc
-        if host not in HOSTS_UTEIS:
+        if not host_util(host):
             return
         cabecalhos = {k: v for k, v in req.headers.items() if k.lower() in CABECALHOS}
         if "authorization" in {k.lower() for k in cabecalhos}:
