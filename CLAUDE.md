@@ -10,9 +10,9 @@ https://github.com/gdiascabral/comprovantes-mais-controle
 TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), que:
 1. gera `versao.txt` = `v1.0.<run_number>` (NÃO é commitado; criado na build);
 2. monta `codigo.zip` (comprovantes_app.py + util.py + separar_renomear/*.py +
-   anexar/*.py + aportes/*.py + relatorios/*.py + versao.txt +
-   motor_minimo.txt + icone.ico) — ~50 KB. **Pasta nova de aba = linha nova
-   aqui**, senão o import falha no usuário e o app não abre;
+   anexar/*.py + aportes/*.py + relatorios/*.py + pagamentos_dia/*.py +
+   versao.txt + motor_minimo.txt + icone.ico) — ~50 KB. **Pasta nova de aba =
+   linha nova aqui**, senão o import falha no usuário e o app não abre;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
    com Tesseract OCR embutido) — e publica a Release `v1.0.<run_number>` com
    o exe + codigo.zip. Os exes avulsos de Separar e de Anexar foram removidos:
@@ -24,7 +24,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 `codigo.zip` novo (segundos, sem perguntar) e roda com ele. Portanto:
 
 - Mudanças em `comprovantes_app.py`, `separar_renomear/`, `anexar/`,
-  `aportes/`, `relatorios/` →
+  `aportes/`, `relatorios/`, `pagamentos_dia/` →
   chegam sozinhas ao usuário no próximo abrir. Só commitar e esperar a build.
 - Mudanças em `motor.py`, `atualizador.py`, dependências novas no
   `requirements.txt` ou `--collect-all` no workflow → exigem exe novo.
@@ -80,6 +80,19 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   tem 2 passadas: lê tudo (OCR, demorado) e só então grava. Sobra "(2)" só
   quando o recebedor também é o mesmo, aí não há o que distinguir.
   No fim, `processar` lista quem ficou sem descrição.
+- `anexar/mc_api.py` — o favorecido É `paidTo` (confirmado contra a API de
+  produção); `_CHAVES_FAVORECIDO` tentava 20 nomes e nenhum era esse, então o
+  campo saía vazio. Além de `listar_pagos`, expõe para a aba Pagamentos do
+  Dia: `listar_a_pagar` (dateField=PLANNED, type=ALL — o `paid` de cada item
+  é quem separa), `anexos_de_titulos` (entityOrigin=**TRADE_PAYABLE**, o
+  boleto/NF ficam no título, não no sub-pagamento) e `listar_overviews`.
+  **`/payable-installments/<id>/overview` é indispensável**: é o único lugar
+  com `purchaseOrder.number` (o NÚMERO da OC — a lista só tem o booleano
+  `hasPurchaseOrder`) e com `comment`, o campo de observação do lançamento,
+  que às vezes carrega a própria forma de pagar (já veio Pix copia-e-cola
+  inteiro). O endpoint `/comments` responde 200 mas devolve `items: []` —
+  não perca tempo lá. `page` começa em **0**: pedir page=1 traz a SEGUNDA
+  página, vazia e sem erro.
 - `anexar/mc_api.py` — leitura dos pagos e anexos pela MESMA API da tela de
   Pagamentos, com chamadas feitas DE DENTRO da página logada (page.evaluate
   + fetch) — chamadas via requests de fora recebem 403 do ERP. Captura
@@ -142,6 +155,28 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   (`visibility:hidden` + `position:absolute` não serve: zera a paginação e sai
   PDF em branco). Isso deixa o SPA quebrado: cada conta recarrega a página, e
   `restaurar_pagina()` devolve o navegador às outras abas no fim.
+- `pagamentos_dia/relatorio.py` — regra de negócio + Excel do relatório dos
+  pagamentos do dia (uma aba por conta). Sem navegador e sem tkinter, então
+  roda inteiro em teste. Cinco coisas aprendidas lendo a API de produção:
+  (1) **boleto ganha de Pix** sempre que houver boleto anexado — o
+  `tradePayablePaymentMethod` diz "Pix" só porque o fornecedor tem chave no
+  cadastro, e pagar por pix um título que veio com boleto duplica o pagamento;
+  (2) `remainingValue` vem **0.0** em título quitado (o valor está em
+  `sumOfPaidValues`) — usar só ele zerava o total; (3) `extension` vem COM
+  ponto (".pdf"); (4) contas de água/luz se identificam pela **UC e pelo
+  endereço**, não pelo "número da NF" (que ali é o número da fatura), e a UC
+  aparece no NOME do anexo — dá para conferir sem baixar; (5) o cruzamento
+  distingue **DIVERGE** (o documento contradiz o lançamento → ATENÇÃO) de
+  **?** (não deu para verificar → não alarma). Alarme falso ensina a ignorar
+  alarme. A chave de acesso de 44 dígitos no nome do anexo entrega número da
+  NF e CNPJ do emitente de graça.
+- `pagamentos_dia/pagamentos_frame.py` — aba Pagamentos do Dia, em 2 passos
+  (Buscar / Gerar). Compartilha navegador e thread do Anexar. O passo separado
+  existe porque quem confere quer VER a lista de contas antes de gerar, e cada
+  rodada custa uma sessão do ERP (que só aceita uma por usuário). Contas
+  "APENAS LANÇAMENTO/AJUSTE" aparecem desmarcadas, não escondidas. As chaves
+  Pix dos avisos "PAGAR PARA" ficam em `pix_reembolso.json` ao lado do exe —
+  é CPF de gente, não entra no repositório.
 - `relatorios/relatorio_frame.py` — aba Relatório Mensal: mês/ano (ou intervalo
   de datas), lista de contas com marcação, pasta de destino, ⏹ Parar e
   progresso. Um PDF por conta em `<pasta>/Julho 2026/NN - NOME.pdf` — a

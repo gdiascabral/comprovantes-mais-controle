@@ -31,3 +31,8 @@ aportes/subcontas.json
 # Só a pasta da raiz, e COM acento: no Windows o git ignora maiúsculas, e
 # "Relatorios/" sem acento casaria com a pasta de código "relatorios/".
 /Relatórios/
+# Saída da aba Pagamentos do Dia (planilha de conferência — dado da empresa).
+# Barra na frente pela mesma razão do Relatórios: só a pasta da raiz.
+/Pagamentos do dia/
+# Chaves Pix dos avisos "PAGAR PARA": é CPF de gente. Nunca no repo.
+pix_reembolso.json

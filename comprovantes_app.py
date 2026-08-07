@@ -18,7 +18,7 @@ from pathlib import Path
 # (No executável gerado pelo PyInstaller isso não é necessário.)
 _RAIZ = Path(__file__).resolve().parent
 for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
-           _RAIZ / "relatorios"):
+           _RAIZ / "relatorios", _RAIZ / "pagamentos_dia"):
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -30,6 +30,7 @@ from anexar_comprovantes import AnexarFrame
 from conferencia import ConferenciaFrame
 from aportes_frame import AportesFrame
 from relatorio_frame import RelatorioFrame
+from pagamentos_frame import PagamentosDiaFrame
 
 
 def _nitidez():
@@ -141,8 +142,9 @@ def main():
     # significaria um segundo login.
     aba_apt = AportesFrame(conteudo, aba_anx)
     aba_rel = RelatorioFrame(conteudo, aba_anx)
+    aba_pag = PagamentosDiaFrame(conteudo, aba_anx)
     quadros = {"sep": aba_sep, "anx": aba_anx, "conf": aba_conf,
-               "apt": aba_apt, "rel": aba_rel}
+               "apt": aba_apt, "rel": aba_rel, "pag": aba_pag}
     atual = {"nome": None}
     botoes = {}
 
@@ -175,7 +177,10 @@ def main():
     botoes["apt"].pack(fill="x", pady=(0, 6), ipady=3)
     botoes["rel"] = ttk.Button(lateral, text="📊   Relatório Mensal", width=24,
                                command=lambda: mostrar("rel"))
-    botoes["rel"].pack(fill="x", ipady=3)
+    botoes["rel"].pack(fill="x", pady=(0, 6), ipady=3)
+    botoes["pag"] = ttk.Button(lateral, text="🗓   Pagamentos do Dia", width=24,
+                               command=lambda: mostrar("pag"))
+    botoes["pag"].pack(fill="x", ipady=3)
 
     # ---------------- rodapé da barra: tema + versão
     rodape = ttk.Frame(lateral)
