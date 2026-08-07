@@ -203,12 +203,17 @@ class RelatorioFrame(ttk.Frame):
                 datetime.date(ano, mes, calendar.monthrange(ano, mes)[1]))
 
     def _nome_do_periodo(self, ini: datetime.date, fim: datetime.date) -> str:
+        """Nome da subpasta: o mês por extenso ("Julho 2026").
+
+        Com o ano junto para não misturar julhos de anos diferentes. Só quando
+        o período não é um mês fechado é que caem as duas datas no nome.
+        """
         mes_fechado = (ini.day == 1
                        and fim.day == calendar.monthrange(fim.year, fim.month)[1]
                        and (ini.year, ini.month) == (fim.year, fim.month))
         if mes_fechado:
-            return f"{ini:%Y-%m}"
-        return f"{ini:%Y-%m-%d}_a_{fim:%Y-%m-%d}"
+            return f"{MESES[ini.month - 1]} {ini.year}"
+        return f"{ini:%d-%m-%Y} a {fim:%d-%m-%Y}"
 
     def _sel_pasta(self):
         escolhida = filedialog.askdirectory(initialdir=self.v_pasta.get() or None)

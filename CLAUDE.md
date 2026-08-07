@@ -144,7 +144,9 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   `restaurar_pagina()` devolve o navegador às outras abas no fim.
 - `relatorios/relatorio_frame.py` — aba Relatório Mensal: mês/ano (ou intervalo
   de datas), lista de contas com marcação, pasta de destino, ⏹ Parar e
-  progresso. Um PDF por conta em `<pasta>/AAAA-MM/NN - NOME.pdf`.
+  progresso. Um PDF por conta em `<pasta>/Julho 2026/NN - NOME.pdf` — a
+  subpasta é o mês por extenso mais o ano; período que não é mês fechado vira
+  `10-03-2026 a 25-03-2026`.
 - `anexar/config.py` — URLs, tag, listas IGNORAR_TARIFAS/IGNORAR_APORTES;
   usa a pasta do exe quando congelado (sys.frozen). Tem também `diag()`, o
   registro em `diagnostico.log` usado por quem precisa degradar sem quebrar
