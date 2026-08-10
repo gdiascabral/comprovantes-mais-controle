@@ -1,0 +1,68 @@
+# -*- coding: utf-8 -*-
+"""
+Empacota cada empresa do mês num .zip, ao lado da própria pasta:
+
+    EXTRATOS/2026/JULHO/JULHO 2026 - BURITIS.zip
+
+É comando separado do download de propósito. O zip só faz sentido com o mês
+completo, e o mês só fica completo depois que os outros bancos (Caixa, Inter,
+Bradesco) entrarem — o que não é feito por esta automação. Zipar junto com o
+download empacotaria mês pela metade.
+
+Sem navegador e sem tkinter: roda inteiro em teste.
+"""
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path
+
+import sicoob_config as cfg
+from sicoob_contas import Mapa
+
+
+@dataclass
+class ResultadoZip:
+    empresa: str
+    caminho: Path | None
+    arquivos: int
+    pastas_vazias: list[str]
+
+
+def pastas_vazias_da_empresa(pasta: Path) -> list[str]:
+    """Subpastas sem nenhum arquivo — o sinal de que o mês ainda não fechou."""
+    return sorted(sub.name for sub in pasta.iterdir()
+                  if sub.is_dir() and not any(sub.rglob("*")))
+
+
+def zipar_mes(mapa: Mapa, ano: int, mes: int, log=print) -> list[ResultadoZip]:
+    """Gera um zip por empresa. Avisa quais pastas estão vazias antes de
+    empacotar, mas não impede: às vezes a empresa não tem mesmo o banco."""
+    base = mapa.raiz / str(ano) / cfg.nome_do_mes(mes)
+    if not base.is_dir():
+        raise FileNotFoundError(
+            f"O mês não existe: {str(base).replace(chr(92), '/')}")
+
+    resultados = []
+    for empresa in mapa.empresas:
+        pasta = base / cfg.nome_pasta_empresa(ano, mes, empresa.nome)
+        if not pasta.is_dir():
+            log(f"{empresa.nome}: pasta do mês não existe — pulando")
+            resultados.append(ResultadoZip(empresa.nome, None, 0, []))
+            continue
+
+        vazias = pastas_vazias_da_empresa(pasta)
+        alvo = pasta.with_suffix(".zip")
+        arquivos = [p for p in sorted(pasta.rglob("*")) if p.is_file()]
+        with zipfile.ZipFile(alvo, "w", zipfile.ZIP_DEFLATED) as z:
+            for arq in arquivos:
+                z.write(arq, arq.relative_to(pasta.parent))
+
+        resultados.append(ResultadoZip(empresa.nome, alvo, len(arquivos), vazias))
+        aviso = f"  (vazias: {', '.join(vazias)})" if vazias else ""
+        log(f"{empresa.nome}: {len(arquivos)} arquivos{aviso}")
+
+    total_vazias = sum(1 for r in resultados if r.pastas_vazias)
+    if total_vazias:
+        log("")
+        log(f"Atenção: {total_vazias} empresa(s) com pasta de banco vazia. "
+            "Se o mês ainda não fechou, vale zipar de novo depois.")
+    return resultados

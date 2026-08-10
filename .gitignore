@@ -21,7 +21,22 @@ codigo.zip
 codigo_embutido/
 codigo/
 debug/
+aportes/.chrome_profile*/
+aportes/conferencia.json
+aportes/contas.csv
+aportes/teste_lancamento.json
+aportes/teste_lancamento.local.json
+aportes/subcontas.json
 # Saída da aba Relatório Mensal (extratos em PDF — dado da empresa).
 # Só a pasta da raiz, e COM acento: no Windows o git ignora maiúsculas, e
 # "Relatorios/" sem acento casaria com a pasta de código "relatorios/".
 /Relatórios/
+# Saída da aba Pagamentos do Dia (planilha de conferência — dado da empresa).
+# Barra na frente pela mesma razão do Relatórios: só a pasta da raiz.
+/Pagamentos do dia/
+# Chaves Pix dos avisos "PAGAR PARA": é CPF de gente. Nunca no repo.
+pix_reembolso.json
+# Mapa conta -> pasta dos extratos do Sicoob: número de conta e razão social
+# das empresas. Mesma razão do pix_reembolso.json.
+contas_sicoob.json
+extratos_sicoob/.chrome_profile_sicoob/

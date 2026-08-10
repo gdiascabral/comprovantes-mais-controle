@@ -56,6 +56,17 @@ _JS_FETCH_B64 = """async ({ url, headers }) => {
   return { b64: btoa(s) };
 }"""
 
+_JS_FETCH_LOTE = """async ({ urls, headers }) => {
+  const out = {};
+  await Promise.all(urls.map(async ({ chave, url }) => {
+    try {
+      const r = await fetch(url, { headers });
+      out[chave] = r.ok ? await r.json() : { __erro: r.status };
+    } catch (e) { out[chave] = { __erro: String(e) }; }
+  }));
+  return out;
+}"""
+
 _JS_FETCH_ANEXOS = """async ({ base, ids, headers }) => {
   const out = {};
   await Promise.all(ids.map(async (pid) => {
@@ -205,6 +216,116 @@ class MCApi:
         return resultado
 
 
+    # ------------------------------------------- a pagar (aba Pagamentos do dia)
+    def listar_a_pagar(self, data_inicio: str, data_fim: str, log=print) -> list[dict]:
+        """Títulos do período pela DATA PREVISTA (dateField=PLANNED).
+
+        Espelho do `listar_pagos`, mas para o que ainda vai ser pago. Mantém
+        `type=ALL` de propósito: o ERP devolve pagos e a pagar juntos e quem
+        separa é o app (campo `paid`), assim o relatório consegue avisar
+        "isto aqui já foi quitado" em vez de simplesmente sumir com a linha.
+
+        `page` começa em 0 (Spring): pedir page=1 devolve a SEGUNDA página,
+        com content vazio e sem erro nenhum.
+        """
+        if not self._req_pagos:
+            raise RuntimeError("Credenciais ainda não capturadas.")
+        url_orig, headers = self._req_pagos
+        partes = urlsplit(url_orig)
+        base = f"{partes.scheme}://{partes.netloc}{partes.path}"
+        params = [(k, v) for k, v in parse_qsl(partes.query)
+                  if k not in ("page", "size", "startDate", "endDate",
+                               "accountIds", "type", "dateField")]
+        params += [("type", "ALL"), ("dateField", "PLANNED"),
+                   ("startDate", data_inicio), ("endDate", data_fim)]
+
+        todos, pagina = [], 0
+        while True:
+            q = params + [("page", str(pagina)), ("size", "500")]
+            j = self._fetch_json(base + "?" + urlencode(q), headers)
+            if isinstance(j, dict) and j.get("__erro"):
+                raise RuntimeError(
+                    f"A API respondeu {j['__erro']} ao listar os lançamentos. "
+                    "Recarregue a tela de Pagamentos no Chrome e tente de novo.")
+            j = j or {}
+            lote = j.get("content") or []
+            todos.extend(lote)
+            log(f"  ... página {pagina + 1}: {len(todos)} lançamento(s)")
+            if not j.get("hasNextPage") or not lote:
+                break
+            pagina += 1
+            if pagina > 50:
+                break
+        return todos
+
+    def listar_overviews(self, installment_ids: list[str], log=print,
+                         progresso=None, cancelar=None) -> dict[str, dict]:
+        """Detalhe de cada parcela: {installmentId: overview}.
+
+            GET .../payable-installments/<installmentId>/overview
+
+        É o único lugar onde vivem dois campos que a lista não traz:
+
+          purchaseOrder.number -> o NÚMERO da OC (na lista só existe o
+                                  booleano hasPurchaseOrder);
+          comment              -> o campo de observação do lançamento, que às
+                                  vezes carrega a própria forma de pagar (já
+                                  veio o Pix copia-e-cola inteiro de um pedido).
+
+        O endpoint /comments responde 200 mas devolve items:[] — não é ali.
+        """
+        if not self._req_pagos:
+            raise RuntimeError("Credenciais ainda não capturadas.")
+        url_orig, headers = self._req_pagos
+        partes = urlsplit(url_orig)
+        raiz = f"{partes.scheme}://{partes.netloc}{partes.path}".rsplit("/", 1)[0]
+
+        resultado: dict[str, dict] = {}
+        LOTE = 12
+        for i in range(0, len(installment_ids), LOTE):
+            if cancelar and cancelar():
+                break
+            fatia = installment_ids[i:i + LOTE]
+            parcial = self.page.evaluate(_JS_FETCH_LOTE, {
+                "urls": [{"chave": str(x), "url": f"{raiz}/{x}/overview"} for x in fatia],
+                "headers": headers,
+            })
+            for k, v in (parcial or {}).items():
+                if isinstance(v, dict) and not v.get("__erro"):
+                    resultado[k] = v
+            if progresso:
+                progresso(min(i + LOTE, len(installment_ids)), len(installment_ids))
+        return resultado
+
+    def anexos_de_titulos(self, trade_payable_ids: list[str], log=print,
+                          progresso=None, cancelar=None) -> dict[str, list]:
+        """{tradePayableId: [anexos]} — nível do TÍTULO, não do sub-pagamento.
+
+        A aba Anexar olha `entityOrigin=PAID` (o comprovante fica no pagamento).
+        Aqui é o contrário: queremos o boleto e a nota que vieram ANTES do
+        pagamento, e esses ficam no título.
+        """
+        if not self._req_anexos:
+            raise RuntimeError("Credenciais de anexos ainda não capturadas.")
+        base, headers = self._req_anexos
+        resultado: dict[str, list] = {}
+        LOTE = 12
+        for i in range(0, len(trade_payable_ids), LOTE):
+            if cancelar and cancelar():
+                break
+            fatia = trade_payable_ids[i:i + LOTE]
+            parcial = self.page.evaluate(_JS_FETCH_LOTE, {
+                "urls": [{"chave": str(x),
+                          "url": f"{base}?entityIds={x}&entityOrigin=TRADE_PAYABLE"}
+                         for x in fatia],
+                "headers": headers,
+            })
+            for k, v in (parcial or {}).items():
+                resultado[k] = v if isinstance(v, list) else []
+            if progresso:
+                progresso(min(i + LOTE, len(trade_payable_ids)), len(trade_payable_ids))
+        return resultado
+
     # ------------------------------------------------- anexos (conteúdo)
     def listar_anexos(self, paid_id: str) -> list:
         """Lista os anexos (dados brutos da API) de um sub-pagamento."""
@@ -289,11 +410,13 @@ def _cents(x):
     return c if c else None
 
 
-# O nome do favorecido não tem um campo fixo conhecido na API: cada instalação
-# do ERP pode expor um. Tentamos os nomes prováveis e, se nenhum servir, o
-# diagnostico.log registra quais campos vieram (só os NOMES, sem os valores),
-# para ajustar sem precisar adivinhar de novo.
+# O campo do favorecido é `paidTo` — confirmado lendo a API de produção
+# (lançamentos de 07/08/2026). `paidWithWithhold` traz o mesmo nome e serve de
+# reserva. Os demais são palpites de instalações diferentes do ERP, mantidos
+# porque não custam nada; se nenhum servir, o diagnostico.log registra quais
+# campos vieram (só os NOMES, sem os valores).
 _CHAVES_FAVORECIDO = (
+    "paidTo", "paidWithWithhold",
     "providerName", "providersNames", "provider",
     "supplierName", "supplier",
     "personName", "person",

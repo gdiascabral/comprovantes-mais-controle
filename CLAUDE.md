@@ -9,10 +9,11 @@ https://github.com/gdiascabral/comprovantes-mais-controle
 
 TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), que:
 1. gera `versao.txt` = `v1.0.<run_number>` (NÃO é commitado; criado na build);
-2. monta `codigo.zip` (comprovantes_app.py + separar_renomear/*.py + anexar/*.py
-   + relatorios/*.py — **pasta nova de aba = linha nova aqui**, senão o import
-   falha no usuário e o app não abre —
-   + versao.txt + motor_minimo.txt + icone.ico) — ~50 KB;
+2. monta `codigo.zip` (comprovantes_app.py + util.py + separar_renomear/*.py +
+   anexar/*.py + aportes/*.py + relatorios/*.py + pagamentos_dia/*.py +
+   extratos_sicoob/*.py + versao.txt + motor_minimo.txt + icone.ico) — ~50 KB.
+   **Pasta nova de aba = linha nova aqui**, senão o import falha no usuário e
+   o app não abre;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
    com Tesseract OCR embutido) — e publica a Release `v1.0.<run_number>` com
    o exe + codigo.zip. Os exes avulsos de Separar e de Anexar foram removidos:
@@ -24,7 +25,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 `codigo.zip` novo (segundos, sem perguntar) e roda com ele. Portanto:
 
 - Mudanças em `comprovantes_app.py`, `separar_renomear/`, `anexar/`,
-  `relatorios/` →
+  `aportes/`, `relatorios/`, `pagamentos_dia/`, `extratos_sicoob/` →
   chegam sozinhas ao usuário no próximo abrir. Só commitar e esperar a build.
 - Mudanças em `motor.py`, `atualizador.py`, dependências novas no
   `requirements.txt` ou `--collect-all` no workflow → exigem exe novo.
@@ -44,7 +45,9 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   download do exe completo com janela de progresso, troca via .bat com 30
   retentativas (OneDrive trava arquivos). Loga em `atualizacao.log`.
 - `comprovantes_app.py` — janela única: barra lateral (Separar e Renomear /
-  Anexar Comprovantes / Conferência / Relatório Mensal), tema Automático (lê o registro do
+  Anexar Comprovantes / Conferência / Aportes / Relatório Mensal /
+  Pagamentos do Dia / Extratos Sicoob), tema
+  Automático (lê o registro do
   Windows)/Claro/Escuro salvo em `preferencias.json`, versão no título e
   no rodapé da barra. Tema sv-ttk; frames expõem `aplicar_cores(escuro)`.
 - `separar_renomear/separar_renomear.py` — separa páginas de PDF e renomeia.
@@ -79,6 +82,19 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   tem 2 passadas: lê tudo (OCR, demorado) e só então grava. Sobra "(2)" só
   quando o recebedor também é o mesmo, aí não há o que distinguir.
   No fim, `processar` lista quem ficou sem descrição.
+- `anexar/mc_api.py` — o favorecido É `paidTo` (confirmado contra a API de
+  produção); `_CHAVES_FAVORECIDO` tentava 20 nomes e nenhum era esse, então o
+  campo saía vazio. Além de `listar_pagos`, expõe para a aba Pagamentos do
+  Dia: `listar_a_pagar` (dateField=PLANNED, type=ALL — o `paid` de cada item
+  é quem separa), `anexos_de_titulos` (entityOrigin=**TRADE_PAYABLE**, o
+  boleto/NF ficam no título, não no sub-pagamento) e `listar_overviews`.
+  **`/payable-installments/<id>/overview` é indispensável**: é o único lugar
+  com `purchaseOrder.number` (o NÚMERO da OC — a lista só tem o booleano
+  `hasPurchaseOrder`) e com `comment`, o campo de observação do lançamento,
+  que às vezes carrega a própria forma de pagar (já veio Pix copia-e-cola
+  inteiro). O endpoint `/comments` responde 200 mas devolve `items: []` —
+  não perca tempo lá. `page` começa em **0**: pedir page=1 traz a SEGUNDA
+  página, vazia e sem erro.
 - `anexar/mc_api.py` — leitura dos pagos e anexos pela MESMA API da tela de
   Pagamentos, com chamadas feitas DE DENTRO da página logada (page.evaluate
   + fetch) — chamadas via requests de fora recebem 403 do ERP. Captura
@@ -141,11 +157,61 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   (`visibility:hidden` + `position:absolute` não serve: zera a paginação e sai
   PDF em branco). Isso deixa o SPA quebrado: cada conta recarrega a página, e
   `restaurar_pagina()` devolve o navegador às outras abas no fim.
+- `pagamentos_dia/relatorio.py` — regra de negócio + Excel do relatório dos
+  pagamentos do dia (uma aba por conta). Sem navegador e sem tkinter, então
+  roda inteiro em teste. Cinco coisas aprendidas lendo a API de produção:
+  (1) **boleto ganha de Pix** sempre que houver boleto anexado — o
+  `tradePayablePaymentMethod` diz "Pix" só porque o fornecedor tem chave no
+  cadastro, e pagar por pix um título que veio com boleto duplica o pagamento;
+  (2) `remainingValue` vem **0.0** em título quitado (o valor está em
+  `sumOfPaidValues`) — usar só ele zerava o total; (3) `extension` vem COM
+  ponto (".pdf"); (4) contas de água/luz se identificam pela **UC e pelo
+  endereço**, não pelo "número da NF" (que ali é o número da fatura), e a UC
+  aparece no NOME do anexo — dá para conferir sem baixar; (5) o cruzamento
+  distingue **DIVERGE** (o documento contradiz o lançamento → ATENÇÃO) de
+  **?** (não deu para verificar → não alarma). Alarme falso ensina a ignorar
+  alarme. A chave de acesso de 44 dígitos no nome do anexo entrega número da
+  NF e CNPJ do emitente de graça.
+- `pagamentos_dia/pagamentos_frame.py` — aba Pagamentos do Dia, em 2 passos
+  (Buscar / Gerar). Compartilha navegador e thread do Anexar. O passo separado
+  existe porque quem confere quer VER a lista de contas antes de gerar, e cada
+  rodada custa uma sessão do ERP (que só aceita uma por usuário). Contas
+  "APENAS LANÇAMENTO/AJUSTE" aparecem desmarcadas, não escondidas. As chaves
+  Pix dos avisos "PAGAR PARA" ficam em `pix_reembolso.json` ao lado do exe —
+  é CPF de gente, não entra no repositório.
 - `relatorios/relatorio_frame.py` — aba Relatório Mensal: mês/ano (ou intervalo
   de datas), lista de contas com marcação, pasta de destino, ⏹ Parar e
   progresso. Um PDF por conta em `<pasta>/Julho 2026/NN - NOME.pdf` — a
   subpasta é o mês por extenso mais o ano; período que não é mês fechado vira
   `10-03-2026 a 25-03-2026`.
+- `extratos_sicoob/` — aba Extratos Sicoob: cria a árvore do fechamento
+  mensal e baixa OFX + PDF de cada conta do SicoobNet Empresarial.
+  **Único módulo com navegador PRÓPRIO** (executor de 1 worker e perfil
+  `.chrome_profile_sicoob`): é outro site e outro login, então pendurar na
+  thread do Anexar só acoplaria. Os módulos têm prefixo `sicoob_` porque nome
+  de módulo é global no sys.path — um `config.py` aqui sequestraria o
+  `import config` do Anexar. **O login é manual, por decisão de projeto**: a
+  tela do Sicoob tem reCAPTCHA, e nada aqui tenta contorná-lo; o robô espera
+  a lista de contas aparecer e assume dali. O mapa conta→pasta vive em
+  `contas_sicoob.json` FORA do repo (número de conta e razão social), como o
+  `pix_reembolso.json`. Armadilhas resolvidas: (1) **o botão "PDF" é
+  inutilizável** — chama `window.print()` e abre o preview do Chrome, que é
+  MODAL, trava o navegador e não fecha nem por `Target.closeTarget`;
+  diferente do ERP, trocar `window.print` NÃO adianta (o site guarda a
+  referência antes), e imprimir a SPA sai com a tela do IB e o painel
+  sobreposto. O PDF vem do formato **HTML**, que é download comum, aberto numa
+  aba e convertido por `Page.printToPDF`; (2) o formato de
+  exportação só marca clicando no `span.checkmark` do `ib-sicoob-input-radio`
+  — no texto ou no card não dá erro e não marca nada, e a falha só apareceria
+  no passo seguinte, por isso conferimos o botão antes de clicar; (3) o painel
+  é um drawer com `div.overlay.visivel` que intercepta TODO clique, inclusive
+  o "Trocar conta" — fechá-lo é obrigatório entre contas, e clicar no próprio
+  overlay resolve; (4) no datepicker os dias do mês são `<a>` e os vizinhos em
+  cinza são `<span>` em `td.ui-datepicker-other-month`, então mirar
+  `td:not(.ui-datepicker-other-month) > a` acerta elemento e mês de uma vez;
+  há `select` de mês e ano (mês 0-indexed), dispensando as setas. Antes de
+  arquivar, o OFX é conferido contra `ACCTID` e período — o pior erro possível
+  é o extrato de uma empresa cair na pasta de outra, e nada no disco denuncia.
 - `anexar/config.py` — URLs, tag, listas IGNORAR_TARIFAS/IGNORAR_APORTES;
   usa a pasta do exe quando congelado (sys.frozen). Tem também `diag()`, o
   registro em `diagnostico.log` usado por quem precisa degradar sem quebrar
@@ -154,9 +220,12 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 
 ## Restrições importantes (aprendidas a caminhadas)
 
-- **Playwright sync = uma única thread.** Todo trabalho com o navegador roda
-  em `AnexarFrame.exec` (ThreadPoolExecutor de 1 worker). Nunca tocar em
+- **Playwright sync = uma única thread.** Todo trabalho com o navegador do ERP
+  roda em `AnexarFrame.exec` (ThreadPoolExecutor de 1 worker). Nunca tocar em
   `page`/`mc` fora dela (erro greenlet "cannot switch to a different thread").
+  O `extratos_sicoob/` é a exceção deliberada: tem executor e navegador
+  próprios porque fala com outro site, sob outro login — a regra continua
+  valendo dentro de cada um.
 - **Sicoob/Inter 2026**: comprovantes "impressos" sem camada de texto (texto
   vira curvas vetoriais). Sem OCR, extração retorna vazio.
 - ERP bloqueia chamadas HTTP feitas fora do navegador (403) — sempre via
