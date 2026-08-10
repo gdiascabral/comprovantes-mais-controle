@@ -64,9 +64,16 @@ class SicoobClient:
             self.page = self.ctx.pages[-1]
         else:
             cfg.PASTA_PERFIL_CHROME.mkdir(parents=True, exist_ok=True)
+            # O Playwright põe `--disable-extensions` nos argumentos padrão, e
+            # o Sicoob pede a extensão "Sicoob Internet Banking" no login. Com
+            # a flag, a Chrome Web Store recusa com "a instalação não está
+            # ativada" — e, mesmo já instalada, a extensão ficaria desligada a
+            # cada execução. Tirá-la é o que torna o perfil persistente útil
+            # aqui: instala-se uma vez, à mão, e vale para as próximas.
             self.ctx = self._pw.chromium.launch_persistent_context(
                 str(cfg.PASTA_PERFIL_CHROME), channel="chrome",
                 headless=self._headless, accept_downloads=True,
+                ignore_default_args=["--disable-extensions"],
                 args=["--start-maximized"], no_viewport=True)
             self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
         self.ctx.set_default_timeout(TEMPO_PADRAO)
