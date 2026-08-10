@@ -11,8 +11,9 @@ TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), qu
 1. gera `versao.txt` = `v1.0.<run_number>` (NÃO é commitado; criado na build);
 2. monta `codigo.zip` (comprovantes_app.py + util.py + separar_renomear/*.py +
    anexar/*.py + aportes/*.py + relatorios/*.py + pagamentos_dia/*.py +
-   versao.txt + motor_minimo.txt + icone.ico) — ~50 KB. **Pasta nova de aba =
-   linha nova aqui**, senão o import falha no usuário e o app não abre;
+   extratos_sicoob/*.py + versao.txt + motor_minimo.txt + icone.ico) — ~50 KB.
+   **Pasta nova de aba = linha nova aqui**, senão o import falha no usuário e
+   o app não abre;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
    com Tesseract OCR embutido) — e publica a Release `v1.0.<run_number>` com
    o exe + codigo.zip. Os exes avulsos de Separar e de Anexar foram removidos:
@@ -24,7 +25,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 `codigo.zip` novo (segundos, sem perguntar) e roda com ele. Portanto:
 
 - Mudanças em `comprovantes_app.py`, `separar_renomear/`, `anexar/`,
-  `aportes/`, `relatorios/`, `pagamentos_dia/` →
+  `aportes/`, `relatorios/`, `pagamentos_dia/`, `extratos_sicoob/` →
   chegam sozinhas ao usuário no próximo abrir. Só commitar e esperar a build.
 - Mudanças em `motor.py`, `atualizador.py`, dependências novas no
   `requirements.txt` ou `--collect-all` no workflow → exigem exe novo.
@@ -44,7 +45,8 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   download do exe completo com janela de progresso, troca via .bat com 30
   retentativas (OneDrive trava arquivos). Loga em `atualizacao.log`.
 - `comprovantes_app.py` — janela única: barra lateral (Separar e Renomear /
-  Anexar Comprovantes / Conferência / Aportes / Relatório Mensal), tema
+  Anexar Comprovantes / Conferência / Aportes / Relatório Mensal /
+  Pagamentos do Dia / Extratos Sicoob), tema
   Automático (lê o registro do
   Windows)/Claro/Escuro salvo em `preferencias.json`, versão no título e
   no rodapé da barra. Tema sv-ttk; frames expõem `aplicar_cores(escuro)`.
@@ -182,6 +184,34 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   progresso. Um PDF por conta em `<pasta>/Julho 2026/NN - NOME.pdf` — a
   subpasta é o mês por extenso mais o ano; período que não é mês fechado vira
   `10-03-2026 a 25-03-2026`.
+- `extratos_sicoob/` — aba Extratos Sicoob: cria a árvore do fechamento
+  mensal e baixa OFX + PDF de cada conta do SicoobNet Empresarial.
+  **Único módulo com navegador PRÓPRIO** (executor de 1 worker e perfil
+  `.chrome_profile_sicoob`): é outro site e outro login, então pendurar na
+  thread do Anexar só acoplaria. Os módulos têm prefixo `sicoob_` porque nome
+  de módulo é global no sys.path — um `config.py` aqui sequestraria o
+  `import config` do Anexar. **O login é manual, por decisão de projeto**: a
+  tela do Sicoob tem reCAPTCHA, e nada aqui tenta contorná-lo; o robô espera
+  a lista de contas aparecer e assume dali. O mapa conta→pasta vive em
+  `contas_sicoob.json` FORA do repo (número de conta e razão social), como o
+  `pix_reembolso.json`. Armadilhas resolvidas: (1) **o botão "PDF" é
+  inutilizável** — chama `window.print()` e abre o preview do Chrome, que é
+  MODAL, trava o navegador e não fecha nem por `Target.closeTarget`;
+  diferente do ERP, trocar `window.print` NÃO adianta (o site guarda a
+  referência antes), e imprimir a SPA sai com a tela do IB e o painel
+  sobreposto. O PDF vem do formato **HTML**, que é download comum, aberto numa
+  aba e convertido por `Page.printToPDF`; (2) o formato de
+  exportação só marca clicando no `span.checkmark` do `ib-sicoob-input-radio`
+  — no texto ou no card não dá erro e não marca nada, e a falha só apareceria
+  no passo seguinte, por isso conferimos o botão antes de clicar; (3) o painel
+  é um drawer com `div.overlay.visivel` que intercepta TODO clique, inclusive
+  o "Trocar conta" — fechá-lo é obrigatório entre contas, e clicar no próprio
+  overlay resolve; (4) no datepicker os dias do mês são `<a>` e os vizinhos em
+  cinza são `<span>` em `td.ui-datepicker-other-month`, então mirar
+  `td:not(.ui-datepicker-other-month) > a` acerta elemento e mês de uma vez;
+  há `select` de mês e ano (mês 0-indexed), dispensando as setas. Antes de
+  arquivar, o OFX é conferido contra `ACCTID` e período — o pior erro possível
+  é o extrato de uma empresa cair na pasta de outra, e nada no disco denuncia.
 - `anexar/config.py` — URLs, tag, listas IGNORAR_TARIFAS/IGNORAR_APORTES;
   usa a pasta do exe quando congelado (sys.frozen). Tem também `diag()`, o
   registro em `diagnostico.log` usado por quem precisa degradar sem quebrar
@@ -190,9 +220,12 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 
 ## Restrições importantes (aprendidas a caminhadas)
 
-- **Playwright sync = uma única thread.** Todo trabalho com o navegador roda
-  em `AnexarFrame.exec` (ThreadPoolExecutor de 1 worker). Nunca tocar em
+- **Playwright sync = uma única thread.** Todo trabalho com o navegador do ERP
+  roda em `AnexarFrame.exec` (ThreadPoolExecutor de 1 worker). Nunca tocar em
   `page`/`mc` fora dela (erro greenlet "cannot switch to a different thread").
+  O `extratos_sicoob/` é a exceção deliberada: tem executor e navegador
+  próprios porque fala com outro site, sob outro login — a regra continua
+  valendo dentro de cada um.
 - **Sicoob/Inter 2026**: comprovantes "impressos" sem camada de texto (texto
   vira curvas vetoriais). Sem OCR, extração retorna vazio.
 - ERP bloqueia chamadas HTTP feitas fora do navegador (403) — sempre via

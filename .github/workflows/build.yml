@@ -55,6 +55,8 @@ jobs:
           Copy-Item relatorios/*.py codigo_embutido/relatorios/
           New-Item -ItemType Directory codigo_embutido/pagamentos_dia | Out-Null
           Copy-Item pagamentos_dia/*.py codigo_embutido/pagamentos_dia/
+          New-Item -ItemType Directory codigo_embutido/extratos_sicoob | Out-Null
+          Copy-Item extratos_sicoob/*.py codigo_embutido/extratos_sicoob/
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
           "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
 
