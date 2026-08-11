@@ -2,7 +2,7 @@
 
 Aplicativo para Windows que organiza comprovantes bancários e os anexa nos
 pagamentos do [Mais Controle ERP](https://maiscontroleerp.com.br) — sem
-precisar saber programar. São **oito abas**, numa janela só:
+precisar saber programar. São **nove abas**, numa janela só:
 
 | Aba | O que faz |
 |---|---|
@@ -14,6 +14,7 @@ precisar saber programar. São **oito abas**, numa janela só:
 | **⚖ Conciliação Diária** | *(diário)* Lê saldos e pagamentos a vencer e monta o painel do dia, com o aporte mínimo por conta. |
 | **📊 Relatório Mensal** | *(mensal)* Baixa em PDF o extrato de cada conta bancária do ERP, arquivando na pasta da empresa. |
 | **🏦 Extratos Sicoob** | *(mensal)* Cria a árvore de pastas do fechamento e baixa OFX + PDF de cada conta no SicoobNet. |
+| **📑 Contratos** | *(mensal)* Acha o contrato de financiamento das casas que financiaram no mês, confere o conteúdo (rua, quadra/lote, casa, comprador e valor) e arquiva na pasta da empresa. |
 
 As quatro primeiras ficam soltas na barra lateral; as outras vivem nos grupos
 **DIÁRIO** e **MENSAL**, que abrem e fecham (o estado fica salvo).
@@ -136,7 +137,7 @@ com o idioma português) e `python comprovantes_app.py`.
 ```
 motor.py            carregador do exe (atualiza e injeta o código)
 atualizador.py      download do codigo.zip / troca do exe
-comprovantes_app.py janela unificada (as oito abas)
+comprovantes_app.py janela unificada (as nove abas)
 ativacao.py         senha de primeira utilização (marcador por máquina)
 util.py             formatos, normalização de nomes, pasta-base — SEM tkinter
 widgets.py          widgets comuns (o campo de data com calendário)
@@ -152,7 +153,8 @@ aportes/            aportes e distribuições (regras em Decimal + API do ERP)
 relatorios/         extrato mensal por conta (PDF) + mapa conta → pasta
 pagamentos_dia/     Excel de conferência dos pagamentos do dia
 extratos_sicoob/    árvore do fechamento + OFX/PDF do SicoobNet
-conciliacao/        painel do dia (único pacote de verdade, com __init__.py)
+conciliacao/        painel do dia (pacote de verdade, com __init__.py)
+contratos/          contratos de financiamento (idem)
 ```
 
 ### Arquivos de configuração (ficam AO LADO do exe, fora do repositório)
@@ -168,7 +170,7 @@ Git. O app funciona sem eles; cada aba avisa qual está faltando.
 | `contas.csv` | contas dos Aportes (`nome_exibicao;nome_oficial;conta;nome_descricao`) | a aba Aportes fica vazia |
 | `subcontas.json` | grupos de investidores por subconta + `_obra_padrao` | sem rateio |
 | `contas_mc.json` | mapa conta do ERP → pasta do extrato | Relatório Mensal não roda |
-| `contas_sicoob.json` | mapa conta Sicoob → pasta + árvore de empresas | Extratos Sicoob não roda |
+| `contas_sicoob.json` | mapa conta Sicoob → pasta, árvore de empresas e `clientes_erp` | Extratos Sicoob e Contratos não rodam |
 | `pix_reembolso.json` | chaves Pix dos avisos "PAGAR PARA" | a linha sai como pendente |
 | `config.yaml`, `mapping.yaml`, `MODELO.xlsx` | painel da Conciliação Diária | a aba não gera a planilha |
 

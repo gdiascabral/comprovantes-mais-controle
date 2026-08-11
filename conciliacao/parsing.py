@@ -10,7 +10,6 @@ Trata as pegadinhas documentadas no brainstorm:
 from __future__ import annotations
 
 import re
-import unicodedata
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path

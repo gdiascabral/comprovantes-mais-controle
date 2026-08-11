@@ -7,8 +7,6 @@ real tem nome, CPF e endereço de gente.
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
-
 from contratos.conferencia import (CONFERE, DIVERGE, ILEGIVEL, conferir,
                                    divergencias, pode_gravar, ressalvas)
 from contratos.destino import (caminho_longo, empresa_de, limpar,

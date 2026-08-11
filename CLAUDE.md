@@ -12,8 +12,8 @@ TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), qu
 2. monta `codigo.zip` (comprovantes_app.py + util.py + widgets.py +
    ativacao.py + separar_renomear/*.py + anexar/*.py + aportes/*.py +
    relatorios/*.py + pagamentos_dia/*.py + extratos_sicoob/*.py +
-   conciliacao/*.py + conciliacao/erp/*.py + versao.txt + motor_minimo.txt +
-   icone.ico) — ~50 KB.
+   conciliacao/*.py + conciliacao/erp/*.py + contratos/*.py + versao.txt +
+   motor_minimo.txt + icone.ico) — ~50 KB.
    **Pasta nova de aba OU arquivo novo na raiz = linha nova aqui**, senão o
    import falha no usuário e o app não abre. Vale para os dois: `widgets.py` e
    `ativacao.py` são de raiz e precisaram entrar um a um;

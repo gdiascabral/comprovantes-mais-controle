@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """Utilitários compartilhados: formatos e a busca das listas."""
-from decimal import Decimal   # noqa: F401  (mantém o import padrão dos testes)
 
 import util
 

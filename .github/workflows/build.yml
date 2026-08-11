@@ -120,6 +120,8 @@ jobs:
           Copy-Item conciliacao/*.py codigo_embutido/conciliacao/
           New-Item -ItemType Directory codigo_embutido/conciliacao/erp | Out-Null
           Copy-Item conciliacao/erp/*.py codigo_embutido/conciliacao/erp/
+          New-Item -ItemType Directory codigo_embutido/contratos | Out-Null
+          Copy-Item contratos/*.py codigo_embutido/contratos/
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
           "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
 

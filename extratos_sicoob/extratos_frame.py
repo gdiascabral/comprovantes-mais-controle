@@ -230,8 +230,9 @@ class ExtratosSicoobFrame(ttk.Frame):
         try:
             import conferir_mapas
             import contas_mc
+            import sicoob_config
             n = conferir_mapas.avisar(contas_mc.ARQUIVO_MAPA,
-                                      cfg.ARQUIVO_CONTAS, self._log)
+                                      sicoob_config.ARQUIVO_CONTAS, self._log)
             if n:
                 self._log("  Alinhe os dois arquivos antes de baixar.")
         except Exception:

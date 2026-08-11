@@ -5,7 +5,6 @@ O cenário abaixo é o de julho/2026 em miniatura, com nomes trocados: quatro
 casas financiadas, duas delas numa obra de PESSOA FÍSICA, que não tem pasta de
 fechamento. O resultado certo é 2 arquiváveis e 2 em revisão.
 """
-from decimal import Decimal
 from pathlib import Path
 
 from contratos.pipeline import Achado, arquivar, levantar, preparar_destino

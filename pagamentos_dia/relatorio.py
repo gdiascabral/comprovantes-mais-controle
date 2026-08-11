@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import io
 import re
-import unicodedata
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path

@@ -37,6 +37,7 @@ from extratos_frame import ExtratosSicoobFrame
 # Pacote de verdade (tem __init__.py): importa pelo caminho completo, então não
 # disputa nome de módulo no sys.path com as outras pastas de aba.
 from conciliacao.frame import ConciliacaoFrame
+from contratos.frame import ContratosFrame
 
 
 def _nitidez():
@@ -171,9 +172,11 @@ def main():
     # Conciliação volta a dividir navegador e thread do Anexar: é o mesmo ERP,
     # e ele só aceita uma sessão por usuário.
     aba_con = ConciliacaoFrame(conteudo, aba_anx)
+    # Contratos usa o mesmo ERP: divide navegador e thread, como as outras.
+    aba_ctr = ContratosFrame(conteudo, aba_anx)
     quadros = {"sep": aba_sep, "anx": aba_anx, "conf": aba_conf,
                "apt": aba_apt, "rel": aba_rel, "pag": aba_pag, "ext": aba_ext,
-               "con": aba_con}
+               "con": aba_con, "ctr": aba_ctr}
     atual = {"nome": None}
     botoes = {}
 
@@ -245,7 +248,8 @@ def main():
     _grupo("diario", "DIÁRIO", (("pag", "🗓   Pagamentos do Dia"),
                                 ("con", "⚖   Conciliação Diária")))
     _grupo("mensal", "MENSAL", (("rel", "📊   Relatório Mensal"),
-                                ("ext", "🏦   Extratos Sicoob")))
+                                ("ext", "🏦   Extratos Sicoob"),
+                                ("ctr", "📑   Contratos")))
 
     # ---------------- rodapé da barra: tema + versão
     rodape = ttk.Frame(lateral)
