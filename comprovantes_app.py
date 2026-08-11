@@ -26,6 +26,7 @@ for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
 import tkinter as tk
 from tkinter import ttk
 
+import ativacao
 from separar_renomear import SepararFrame
 from anexar_comprovantes import AnexarFrame
 from conferencia import ConferenciaFrame
@@ -36,6 +37,7 @@ from extratos_frame import ExtratosSicoobFrame
 # Pacote de verdade (tem __init__.py): importa pelo caminho completo, então não
 # disputa nome de módulo no sys.path com as outras pastas de aba.
 from conciliacao.frame import ConciliacaoFrame
+from contratos.frame import ContratosFrame
 
 
 def _nitidez():
@@ -133,6 +135,22 @@ def main():
     if sv_ttk:
         sv_ttk.set_theme(tema_efetivo(escolha_tema))
 
+    # ---------------- senha de primeira utilização
+    # Antes de montar as abas: cada frame abre executor e estado próprios, e
+    # construir tudo para depois recusar deixaria a janela piscando atrás do
+    # diálogo. A principal fica escondida enquanto se pergunta; o tema já foi
+    # aplicado acima, então o diálogo nasce na cor certa.
+    if not ativacao.ja_ativado(_pasta_dados()):
+        root.withdraw()
+        if not ativacao.pedir_ativacao(root, _pasta_dados()):
+            root.destroy()
+            return                       # sem ativar, o app simplesmente não abre
+        root.deiconify()
+        try:
+            root.state("zoomed")         # o withdraw desfaz a maximização
+        except tk.TclError:
+            pass
+
     # ---------------- navegação lateral + área de conteúdo
     lateral = ttk.Frame(root)
     lateral.pack(side="left", fill="y", padx=(12, 4), pady=12)
@@ -154,9 +172,11 @@ def main():
     # Conciliação volta a dividir navegador e thread do Anexar: é o mesmo ERP,
     # e ele só aceita uma sessão por usuário.
     aba_con = ConciliacaoFrame(conteudo, aba_anx)
+    # Contratos usa o mesmo ERP: divide navegador e thread, como as outras.
+    aba_ctr = ContratosFrame(conteudo, aba_anx)
     quadros = {"sep": aba_sep, "anx": aba_anx, "conf": aba_conf,
                "apt": aba_apt, "rel": aba_rel, "pag": aba_pag, "ext": aba_ext,
-               "con": aba_con}
+               "con": aba_con, "ctr": aba_ctr}
     atual = {"nome": None}
     botoes = {}
 
@@ -228,7 +248,8 @@ def main():
     _grupo("diario", "DIÁRIO", (("pag", "🗓   Pagamentos do Dia"),
                                 ("con", "⚖   Conciliação Diária")))
     _grupo("mensal", "MENSAL", (("rel", "📊   Relatório Mensal"),
-                                ("ext", "🏦   Extratos Sicoob")))
+                                ("ext", "🏦   Extratos Sicoob"),
+                                ("ctr", "📑   Contratos")))
 
     # ---------------- rodapé da barra: tema + versão
     rodape = ttk.Frame(lateral)
@@ -273,8 +294,15 @@ def main():
     mostrar("sep")
 
     def _sair():
-        aba_anx.fechar()                # fecha o Chrome, se estiver aberto
-        aba_ext.fechar()                # o Chrome do Sicoob é outro processo
+        # Um `fechar()` que levanta não pode impedir o outro nem o destroy():
+        # a janela ficaria aberta e sem resposta, e o jeito de sair viraria o
+        # Gerenciador de Tarefas — que é justamente o que deixa Chrome órfão.
+        for fechar in (aba_anx.fechar,   # Chrome do Mais Controle
+                       aba_ext.fechar):  # o Chrome do Sicoob é outro processo
+            try:
+                fechar()
+            except Exception:
+                pass
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", _sair)
     root.mainloop()

@@ -31,6 +31,15 @@ from playwright.sync_api import sync_playwright
 
 import sicoob_config as cfg
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+_norm = util.norm_espaco
+
 # A sessão do Sicoob expira por inatividade (~20 min), mas cada interação
 # renova. Como o robô nunca fica parado, o timeout generoso só cobre lentidão.
 TEMPO_PADRAO = 45_000
@@ -165,19 +174,47 @@ class SicoobClient:
         self._conferir_sessao()
 
     def _dropdown(self, rotulo: str, opcao: str):
-        """Escolhe um valor num p-dropdown identificado pelo rótulo acima."""
-        campo = self.page.locator("p-dropdown").nth(self._indice_dropdown(rotulo))
+        """Escolhe um valor num p-dropdown, achando-o pelo RÓTULO.
+
+        A posição fixa (Ordenação = 0, Agrupar = 1...) valia enquanto o banco
+        não mexesse na tela. Um dropdown a mais e "Ordenação" vira "Agrupar
+        lançamentos": o extrato sairia agrupado, o app não reclamaria de nada e
+        o arquivo iria para a pasta certa com o conteúdo errado. Achar pelo
+        rótulo custa uma consulta e sobrevive a mudança de ordem.
+        """
+        campo = self._campo_do_rotulo(rotulo)
         campo.click()
         self.page.locator("p-dropdownitem, .ui-dropdown-item").filter(
             has_text=opcao).first.click()
         self.page.wait_for_timeout(400)
 
-    def _indice_dropdown(self, rotulo: str) -> int:
-        """Ordem dos dropdowns na tela: Ordenação, Agrupar lançamentos,
-        Agrupar por data, Tipo de transação."""
+        # Confere o que ficou escrito no campo. Escolher a opção errada aqui
+        # não dá erro nenhum — só um extrato diferente do pedido.
+        try:
+            escolhido = (campo.inner_text(timeout=2000) or "").strip()
+        except Exception:
+            return
+        if escolhido and _norm(opcao) not in _norm(escolhido):
+            raise RuntimeError(
+                f'não consegui marcar "{opcao}" em "{rotulo}": o campo ficou '
+                f'com "{escolhido}". A tela do Sicoob provavelmente mudou.')
+
+    def _campo_do_rotulo(self, rotulo: str):
+        """O p-dropdown que está sob o rótulo dado (ou, na falta, por posição).
+
+        A ordem histórica é Ordenação, Agrupar lançamentos, Agrupar por data,
+        Tipo de transação — mantida só como último recurso."""
+        alvo = self.page.locator(
+            f'xpath=//*[contains(normalize-space(.), "{rotulo}")]'
+            f'/following::p-dropdown[1]').first
+        try:
+            if alvo.count() and alvo.is_visible(timeout=2000):
+                return alvo
+        except Exception:
+            pass
         ordem = {"Ordenação": 0, "Agrupar lançamentos": 1,
                  "Agrupar por data": 2, "Tipo de transação": 3}
-        return ordem[rotulo]
+        return self.page.locator("p-dropdown").nth(ordem[rotulo])
 
     def definir_ordenacao(self, opcao: str = cfg.ORDENACAO):
         self._dropdown("Ordenação", opcao)

@@ -23,16 +23,21 @@ def test_match_por_numero_vence_rotulo_divergente(mapping):
 
 
 def test_match_por_uuid_vence_nome_trocado(mapping):
-    """Com UUID preenchido, renomear a conta no ERP nao quebra o match."""
+    """Com UUID preenchido, renomear a conta no ERP nao quebra o match.
+
+    A fixture `mapping` e de escopo SESSION: sem desfazer a mudanca no
+    teardown, um assert falhando aqui deixaria o uuid plantado e derrubaria os
+    testes seguintes com erro sem relacao nenhuma com a causa."""
     alvo = mapping.by_row(8)
+    anterior = alvo.uuid
     object.__setattr__(alvo, "uuid", "uuid-linha-8")
     mapping._build_indexes()
-
-    conta = ErpAccount(id="uuid-linha-8", name="NOME COMPLETAMENTE DIFERENTE")
-    assert mapping.resolve_account(conta).row == 8
-
-    object.__setattr__(alvo, "uuid", None)
-    mapping._build_indexes()
+    try:
+        conta = ErpAccount(id="uuid-linha-8", name="NOME COMPLETAMENTE DIFERENTE")
+        assert mapping.resolve_account(conta).row == 8
+    finally:
+        object.__setattr__(alvo, "uuid", anterior)
+        mapping._build_indexes()
 
 
 def test_conta_fora_do_painel_nao_casa_e_e_reconhecida_como_ignorada(mapping):

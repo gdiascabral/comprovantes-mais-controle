@@ -61,7 +61,6 @@ def _centavos(s) -> int | None:
 # rótulos ou estrutura, é AQUI que se ajusta — é o ponto mais provável de
 # quebra do app.
 TXT_HISTORICO = "Histórico de Pagamentos"   # seção que ancora as linhas
-TXT_LOGADO = "Pagamentos"                   # (histórico: ver SINAIS_DE_LOGIN)
 
 # Sinais de que a tela de LOGIN está à vista. A sessão é detectada pela
 # AUSÊNCIA deles, não pela presença de algo da área logada.
@@ -125,6 +124,23 @@ _JS_ROWS = r"""
         && /\d/.test(badge.textContent || '');
     return { i, val, doc, attached };
   });
+}
+"""
+
+# O diálogo lista o arquivo assim que o upload termina. Esperar por ELE em vez
+# de dormir um tempo fixo é a diferença entre "anexado" e "achei que anexei":
+# em lote, o ERP passa dos 3 s antigos com folga e o Confirmar ia sem arquivo.
+_JS_ARQUIVO_LISTADO = r"""
+(nome) => {
+  const limpo = s => (s || '').replace(/[\s ]+/g, ' ').trim().toLowerCase();
+  const alvo = limpo(nome);
+  if (!alvo) return false;
+  const dlg = document.querySelector('[role="dialog"]') || document.body;
+  const txt = limpo(dlg.innerText);
+  if (txt.includes(alvo)) return true;
+  // A UI trunca nome longo no meio ("70,00 - RPB 24 QD...pdf"): tenta o começo.
+  const inicio = alvo.slice(0, 20);
+  return inicio.length >= 8 && txt.includes(inicio);
 }
 """
 
@@ -289,17 +305,19 @@ class MCClient:
         self._pw = None
         self.ctx = None
         self.page = None
-        self._respostas = []
 
     @staticmethod
     def _tamanho_tela() -> tuple[int, int] | None:
-        """Resolução do monitor, para abrir o Chrome ocupando a tela inteira."""
+        """Resolução do monitor, para abrir o Chrome ocupando a tela inteira.
+
+        Pergunta ao Windows, não ao Tk. Isto roda na thread do NAVEGADOR, e
+        criar um segundo `tkinter.Tk()` fora da thread da interface é mexer no
+        Tcl de onde não se deve — no melhor caso pisca uma janela fantasma, no
+        pior trava a interface inteira."""
         try:
-            import tkinter
-            r = tkinter.Tk()
-            r.withdraw()
-            w, h = r.winfo_screenwidth(), r.winfo_screenheight()
-            r.destroy()
+            from ctypes import windll
+            w = windll.user32.GetSystemMetrics(0)
+            h = windll.user32.GetSystemMetrics(1)
             return (w, h) if w > 100 and h > 100 else None
         except Exception:
             return None
@@ -321,7 +339,10 @@ class MCClient:
             accept_downloads=True,
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
-        self.page.on("response", self._on_response)
+        # Sem `page.on("response", ...)`: a leitura dos pagamentos passou a ser
+        # feita pela API (mc_api), de dentro da página logada. O listener antigo
+        # guardava o JSON de TODA resposta do ERP numa lista que nunca era
+        # esvaziada — em lote longo isso é memória crescendo à toa.
         return self
 
     def __exit__(self, *exc):
@@ -332,57 +353,11 @@ class MCClient:
             if self._pw:
                 self._pw.stop()
 
-    def _on_response(self, resp):
-        u = resp.url
-        if "payable" in u or "paginated" in u or "installment" in u:
-            try:
-                if "application/json" in (resp.headers.get("content-type") or ""):
-                    self._respostas.append({"url": u, "json": resp.json()})
-            except Exception:
-                pass
-
-    # ------------------------------------------------------------- enumeração
-    def capturar_pagamentos(self, salvar_inspecao: Path | None = None) -> list[dict]:
-        """Coleta pagamentos a partir das respostas de rede da própria página."""
-        import json as _json
-        self._respostas.clear()
-        self._ir_para(config.MC_URL_PAGAMENTOS)
-        self.page.wait_for_timeout(6000)
-        if salvar_inspecao:
-            salvar_inspecao.write_text(
-                _json.dumps(self._respostas, ensure_ascii=False, indent=2),
-                encoding="utf-8")
-            print(f">>> Respostas de rede salvas em: {salvar_inspecao}")
-        return self._normalizar(self._respostas)
-
-    @staticmethod
-    def _normalizar(respostas: list[dict]) -> list[dict]:
-        out = []
-        for r in respostas:
-            data = r["json"]
-            cands = []
-            if isinstance(data, dict):
-                for k in ("content", "data", "items", "result", "results", "records"):
-                    if isinstance(data.get(k), list):
-                        cands = data[k]; break
-            elif isinstance(data, list):
-                cands = data
-            for it in cands:
-                if not isinstance(it, dict):
-                    continue
-                lid = it.get("id") or it.get("launchId") or it.get("payableId")
-                val = it.get("value") or it.get("amount") or it.get("paidValue")
-                if lid is None or val is None:
-                    continue
-                out.append({
-                    "launchId": str(lid), "valor": val,
-                    "descricao": it.get("description") or it.get("historic") or "",
-                    "doc": str(it.get("documentNumber") or it.get("document") or ""),
-                    "raw": it,
-                })
-        return out
-
     # ------------------------------------------------------------------ login
+    def esta_logado(self) -> bool:
+        """Nome público de `_esta_logado` — outras abas precisam perguntar."""
+        return self._esta_logado()
+
     def _esta_logado(self) -> bool:
         """Estamos dentro do ERP?
 
@@ -524,7 +499,12 @@ class MCClient:
         # sessão perfeitamente válida. Desistir na primeira olhada é o erro
         # clássico aqui, e o Chrome ainda pode completar o login sozinho com a
         # senha que ele guarda.
-        for _ in range(90):
+        # Deadline por relógio, não por número de voltas. `_esta_logado()`
+        # consulta TODAS as abas e cada consulta tem timeout próprio: com
+        # quatro ou cinco abas abertas, uma volta passava de 11 s, e as "90
+        # voltas" viravam 15 minutos de espera em vez de 90 segundos.
+        limite = time.monotonic() + 90
+        while time.monotonic() < limite:
             if self._esta_logado():
                 self.log("Login OK.")
                 return True
@@ -538,19 +518,35 @@ class MCClient:
         """Preenche (credencial salva) ou deixa o Chrome autopreencher, e clica
         em ENTRAR. Nunca levanta exceção — na dúvida, login manual."""
         try:
-            if "login" not in self.page.url:
-                return
+            # A URL não decide mais: o ERP é single-spa e já serviu a tela de
+            # login em rota SEM "login" no endereço. O que define é haver campo
+            # de senha à vista — mesmo critério do `_aba_logada`.
             try:
                 self.page.wait_for_selector("input[type=password]", timeout=8000)
             except Exception:
                 pass
+            if not self._tem_campo_senha():
+                return
             creds = credenciais.carregar()
             if creds:
                 # 1º pelo controller do Angular (é o caminho que funciona);
                 # se o ERP mudar e o scope não estiver lá, cai no DOM + clique
                 if not self._login_pelo_controller(*creds):
+                    self.log("[aviso] não achei os campos de login do jeito "
+                             "esperado — o ERP pode ter migrado esta tela para "
+                             "React. Tentando pelo formulário da página.")
+                    config.diag("login: _login_pelo_controller falhou; "
+                                "fallback pelo DOM")
                     self._preencher(*creds)
                     self._clicar_entrar()
+                    # Sem confirmar, o app segue como se tivesse entrado e o
+                    # erro só aparece páginas depois, como "grade vazia".
+                    if self._tem_campo_senha():
+                        self.log("[!] O campo de senha continua na tela depois "
+                                 "do clique em ENTRAR — o login automático não "
+                                 "passou. Entre na janela do Chrome.")
+                        config.diag("login: campo de senha ainda visível após "
+                                    "o fallback pelo DOM")
             else:
                 self.page.wait_for_timeout(2500)   # deixa o Chrome autopreencher
                 self._clicar_entrar()
@@ -630,6 +626,12 @@ class MCClient:
         """
         Retorna: 'anexado' | 'anexado_sem_tag' | 'ja_tinha' | 'nao_encontrado'
                  | 'ambiguo' | 'dry_run' | 'erro:...'
+
+        'anexado' só sai com PROVA: o arquivo apareceu na lista do diálogo e,
+        depois de confirmar, a grade mostra o pagamento com anexo. Quando a
+        prova falha vem 'erro:arquivo_nao_listado' ou 'erro:nao_confirmado' —
+        relatar anexo que não existe é pior do que relatar erro, porque manda
+        a conferência procurar no lugar errado.
         valores: lista opcional de valores aceitos (nominal e valor pago com
         juros/multa/desconto); sem ela, usa apenas valor_str.
         """
@@ -674,12 +676,26 @@ class MCClient:
             inp = self.page.wait_for_selector(
                 "input[type=file]", timeout=8000, state="attached")
             inp.set_input_files(str(pdf_path))
-            self.page.wait_for_timeout(3000)
+
+            # Espera o arquivo APARECER na lista do diálogo. Sem esta prova,
+            # confirmar salva o pagamento sem anexo e o app relata "anexado".
+            try:
+                self.page.wait_for_function(_JS_ARQUIVO_LISTADO,
+                                            arg=pdf_path.name, timeout=30000)
+            except PWTimeout:
+                config.diag(f"anexar: {pdf_path.name} não apareceu na lista de "
+                            f"arquivos do lançamento {launch_id}")
+                return "erro:arquivo_nao_listado"
 
             tag_ok = self._definir_tag(config.TAG_COMPROVANTE)
 
             self.page.get_by_role("button", name=BTN_CONFIRMAR).first.click()
-            self.page.wait_for_timeout(2500)
+
+            # Confirma relendo a grade: o pagamento tem de aparecer COM anexo.
+            if not self._confirmar_anexo(alvos, doc, antes=len(pendentes)):
+                config.diag(f"anexar: lançamento {launch_id} seguiu sem anexo "
+                            f"depois de confirmar ({pdf_path.name})")
+                return "erro:nao_confirmado"
             return "anexado" if tag_ok else "anexado_sem_tag"
 
         except PWTimeout:
@@ -688,6 +704,33 @@ class MCClient:
         except Exception as e:
             self._print_erro(str(e)[:100], launch_id)
             return f"erro:{str(e)[:100]}"
+
+    def _confirmar_anexo(self, alvos, doc, antes: int, limite_s: int = 30) -> bool:
+        """Relê a grade até o pagamento aparecer COM anexo.
+
+        `antes` é quantas linhas de mesmo valor estavam SEM anexo antes de
+        anexar (sempre 1, porque `anexar` recusa lote ambíguo). Contar de novo
+        e exigir que tenha diminuído é a prova mais barata de que o arquivo
+        entrou — o botão Confirmar volta sucesso mesmo quando o upload não
+        chegou, e daí saía "anexado" para um lançamento vazio."""
+        fim = time.monotonic() + limite_s
+        while time.monotonic() < fim:
+            self.page.wait_for_timeout(1000)
+            try:
+                linhas = self.page.evaluate(_JS_ROWS)
+            except Exception as e:
+                config.diag(f"_confirmar_anexo: não consegui reler a grade: {e!r}")
+                continue
+            iguais = [r for r in linhas if _centavos(r["val"]) in alvos]
+            if doc:
+                refinado = [r for r in iguais if r["doc"] and doc in r["doc"]]
+                if refinado:
+                    iguais = refinado
+            if not iguais:
+                continue            # a grade ainda está recarregando
+            if len([r for r in iguais if not r["attached"]]) < antes:
+                return True
+        return False
 
     def resetar(self):
         """Volta para a tela de Pagamentos (recupera o ERP após timeout)."""

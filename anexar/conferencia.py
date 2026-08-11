@@ -12,6 +12,7 @@ e mesma thread de trabalho).
 import io
 import queue
 import time
+from threading import Event
 from datetime import date, datetime
 from pathlib import Path
 
@@ -33,10 +34,22 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import util
 
-from anexar_comprovantes import CampoData, _fmt_val, _data_api, _texto_do_erro
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
+CampoData = widgets.CampoData
+# Só o _texto_do_erro segue vindo do Anexar: ele conhece o SemRede do
+# mc_client, que é daquela aba. O campo de data e os formatos são de todos.
+from anexar_comprovantes import _texto_do_erro
 
 LINK = config.MC_URL_LANCAMENTO
 _fmt_dur = util.fmt_dur
+_fmt_val = util.fmt_val
+_data_api = util.data_api
 _norm = util.norm
 
 
@@ -116,6 +129,11 @@ class ConferenciaFrame(ttk.Frame):
         self.anx = anexar_frame
         self.q = queue.Queue()
         self.ultimo_relatorio = None
+        self.worker = None
+        # A conferência com conteúdo baixa e lê um PDF por pagamento: em mês
+        # cheio passa de meia hora. Sem Parar, a única saída era matar o app —
+        # e matar o app no meio deixa o Chrome órfão segurando o perfil.
+        self._parar = Event()
         hoje = date.today()
         self.v_ini = tk.StringVar(value=hoje.replace(day=1).strftime("%d/%m/%Y"))
         self.v_fim = tk.StringVar(value=hoje.strftime("%d/%m/%Y"))
@@ -171,6 +189,9 @@ class ConferenciaFrame(ttk.Frame):
             self.btn.configure(style="Accent.TButton")
         except tk.TclError:
             pass
+        self.b_stop = ttk.Button(acao, text="⏹  Parar",
+                                 command=self._parar_click, state="disabled")
+        self.b_stop.pack(side="right", padx=(0, 8))
         self.b_rel = ttk.Button(acao, text="📄  Abrir relatório",
                                 command=self._abrir_relatorio, state="disabled")
         self.b_rel.pack(side="right", padx=(0, 8))
@@ -229,13 +250,25 @@ class ConferenciaFrame(ttk.Frame):
                     self.pb.config(value=val)
                 elif kind == "fim":
                     self.btn.config(state="normal")
+                    self.b_stop.config(state="disabled")
                     self.pb.config(value=0)
                     if val:
                         self.ultimo_relatorio = val
                         self.b_rel.config(state="normal")
         except queue.Empty:
             pass
-        self.after(150, self._drain)
+        except Exception as e:                              # noqa: BLE001
+            # Ver o comentário gêmeo em anexar_comprovantes._drain: a bomba de
+            # UI morrendo deixa a aba muda com a thread ainda trabalhando.
+            config.diag(f"_drain (Conferência) falhou: {e!r}")
+        finally:
+            self.after(150, self._drain)
+
+    def _parar_click(self):
+        self._parar.set()
+        self._log("\n⏹ Parando… termino o item atual e gero o relatório com o "
+                  "que já foi conferido.")
+        self.b_stop.config(state="disabled")
 
     def _abrir_relatorio(self):
         import os
@@ -251,10 +284,15 @@ class ConferenciaFrame(ttk.Frame):
         if not ini or not fim:
             messagebox.showerror("Erro", "Datas inválidas. Use dd/mm/aaaa.")
             return
+        if self.anx.avisar_se_ocupado("a Conferência"):
+            return
+        self._parar.clear()
         self.btn.config(state="disabled")
+        self.b_stop.config(state="normal")
         self.log.delete("1.0", "end")
         self.lbl.config(text="Conferindo...")
-        self.anx.exec.submit(self._t_conferir, ini, fim)
+        self.worker = self.anx.submeter("Conferência", self._t_conferir,
+                                        ini, fim)
 
     def _t_conferir(self, ini, fim):
         inicio = time.time()
@@ -287,14 +325,27 @@ class ConferenciaFrame(ttk.Frame):
             self.q.put(("status", "Verificando quem tem anexo..."))
             self.q.put(("max", len(pagos)))
             att = api.verificar_anexos([p["paidId"] for p in pagos], self._log,
-                                       progresso=lambda i, n: self.q.put(("prog", i)))
-            sem = [p for p in pagos if att.get(p["paidId"], 0) == 0]
-            com = [p for p in pagos if att.get(p["paidId"], 0) > 0]
-            self._log(f"\nCom anexo: {len(com)} | SEM anexo: {len(sem)}")
+                                       progresso=lambda i, n: self.q.put(("prog", i)),
+                                       cancelar=self._parar.is_set)
+            estados = {p["paidId"]: mc_api.estado_anexo(att, p["paidId"])
+                       for p in pagos}
+            sem = [p for p in pagos if estados[p["paidId"]] == mc_api.SEM_ANEXO]
+            com = [p for p in pagos if estados[p["paidId"]] == mc_api.COM_ANEXO]
+            # Nem "com" nem "sem": a consulta falhou. Antes caíam no balde do
+            # "com anexo" e sumiam do relatório — uma conferência que dizia
+            # "tudo certo" justamente sobre o que não foi conferido.
+            nao_verif = [p for p in pagos
+                         if estados[p["paidId"]] == mc_api.NAO_VERIFICADO]
+            self._log(f"\nCom anexo: {len(com)} | SEM anexo: {len(sem)}"
+                      + (f" | NÃO VERIFICADOS: {len(nao_verif)}" if nao_verif else ""))
             for p in sem:
                 self._log(f"  SEM ANEXO: {_fmt_val(p['valor'])}  {p['dataFull']}  "
                           f"{p['conta']}  {p.get('favorecido') or '—'}  "
                           f"{p['desc'][:60]}")
+            for p in nao_verif:
+                p["confere"] = "não verificado (a consulta de anexos falhou)"
+                self._log(f"  NÃO VERIFICADO: {_fmt_val(p['valor'])}  "
+                          f"{p['dataFull']}  {p['conta']}  {p['desc'][:60]}")
 
             divergentes, conferidos, nao_conferiveis = [], [], []
             if self.v_conteudo.get() and com:
@@ -302,6 +353,11 @@ class ConferenciaFrame(ttk.Frame):
                 self._log(f"\nConferindo o conteúdo de {len(com)} anexo(s)...")
                 self.q.put(("max", len(com)))
                 for i, p in enumerate(com, 1):
+                    if self._parar.is_set():
+                        self._log(f"⏹ Interrompido: {i - 1} de {len(com)} "
+                                  "anexo(s) conferido(s). O relatório sai com "
+                                  "o que já foi feito.")
+                        break
                     self.q.put(("prog", i))
                     try:
                         itens = api.listar_anexos(p["paidId"])
@@ -358,21 +414,25 @@ class ConferenciaFrame(ttk.Frame):
                                         for p in nao_conferiveis).items():
                         self._log(f"   • {n}× {m}")
 
-            saida = self._relatorio(sem, divergentes, conferidos, nao_conferiveis)
+            saida = self._relatorio(sem, divergentes, conferidos,
+                                    nao_conferiveis, nao_verif)
             self._log(f"\nRelatório: {saida}")
             self._log(f"⏱ Fim: {time.strftime('%H:%M:%S')} — tempo total: "
                       f"{_fmt_dur(time.time() - inicio)}")
             self.q.put(("status",
                         f"Concluído: {len(sem)} sem anexo"
                         + (f", {len(divergentes)} divergente(s)"
-                           if self.v_conteudo.get() else "")))
+                           if self.v_conteudo.get() else "")
+                        + (f", {len(nao_verif)} não verificado(s)"
+                           if nao_verif else "")))
             self.q.put(("fim", saida))
         except Exception as e:
             self._log(_texto_do_erro(e))
             self.q.put(("status", "Erro — veja o Registro."))
             self.q.put(("fim", None))
 
-    def _relatorio(self, sem, divergentes, conferidos, nao_conf) -> str:
+    def _relatorio(self, sem, divergentes, conferidos, nao_conf,
+                   nao_verif=()) -> str:
         wb = Workbook(); wb.remove(wb.active)
         verde = PatternFill("solid", fgColor="1B7837")
         branco = Font(bold=True, color="FFFFFF")
@@ -397,6 +457,11 @@ class ConferenciaFrame(ttk.Frame):
             ws.freeze_panes = "A2"
 
         aba("SEM ANEXO", sem)
+        # Aba própria, e nunca misturada com CONFERIDOS: estes pagamentos não
+        # foram olhados. Enterrá-los junto do que passou é como dizer que
+        # passaram.
+        if nao_verif:
+            aba("NAO VERIFICADOS", list(nao_verif))
         if divergentes or conferidos or nao_conf:
             aba("DIVERGENTES", divergentes)
             aba("CONFERIDOS", conferidos + nao_conf)

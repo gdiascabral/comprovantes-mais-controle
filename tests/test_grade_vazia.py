@@ -24,6 +24,16 @@ def test_rodape_zerado_e_mes_sem_lancamentos():
     assert "sessao" not in m
 
 
+def test_rodape_escrito_zero_tambem_e_mes_sem_lancamentos():
+    """"R$ 0,00" é string NÃO vazia — e toda string não vazia é verdadeira.
+
+    O mês legitimamente zerado caía no ramo do "sua sessão caiu" e mandava
+    procurar problema onde não havia."""
+    m = motivo_da_grade_vazia("R$ 0,00", tem_texto_vazio=True)
+    assert "nao tem lancamentos" in m
+    assert "sessao" not in m
+
+
 def test_sem_rodape_e_sem_aviso_admite_layout():
     # Nem totais nem "nenhum registro": a tela pode nem ter aberto direito.
     m = motivo_da_grade_vazia(None, tem_texto_vazio=False)

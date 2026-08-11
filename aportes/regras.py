@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP
 
 from dados import INVESTIDOR_PREFIXO
 
@@ -49,12 +50,30 @@ def numero_subconta(pagador: str, subcontas: dict) -> str | None:
     return None
 
 
-def dividir_em_centavos(total: float, n: int) -> list[float]:
+def como_dinheiro(valor) -> Decimal:
+    """Converte para Decimal com 2 casas, arredondando como banco.
+
+    Dinheiro em float erra: 0.1 + 0.2 != 0.3, e aqui o número vai DIRETO para
+    um lançamento no ERP. O padrão do projeto já é Decimal (ver
+    conciliacao/models.py); os aportes eram a última ilha de float — logo no
+    módulo que ESCREVE valores."""
+    if isinstance(valor, Decimal):
+        d = valor
+    elif isinstance(valor, float):
+        d = Decimal(str(valor))          # str() evita o lixo binário do float
+    else:
+        d = Decimal(valor or 0)
+    return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def dividir_em_centavos(total, n: int) -> list[Decimal]:
     """Divide em n partes iguais; a sobra de centavos vai para as primeiras.
     A soma sempre fecha com o total — é dinheiro, não pode faltar centavo."""
-    centavos = round(total * 100)
+    if n <= 0:
+        raise ValueError("não dá para dividir em zero partes")
+    centavos = int(como_dinheiro(total) * 100)
     base, sobra = divmod(centavos, n)
-    return [(base + (1 if i < sobra else 0)) / 100 for i in range(n)]
+    return [Decimal(base + (1 if i < sobra else 0)) / 100 for i in range(n)]
 
 
 @dataclass
@@ -62,7 +81,7 @@ class Operacao:
     data: datetime.date
     pagador: str
     recebedor: str
-    valor: float
+    valor: Decimal
     tipo: str        # "Aporte de Capital" | "Distribuição de Lucro"
     modo: str        # "Pagamento + Recebimento" | "Só pagamento" | "Só recebimento"
     forma: str = "Pix"
@@ -87,6 +106,16 @@ class Operacao:
             if self.modo != "Só recebimento":
                 erros.append(f"'{self.pagador}' gera só recebimentos — "
                              "use o modo 'Só recebimento'.")
+            # Sem obras ou sem investidores, o rateio produzia ZERO lançamentos
+            # e o valor simplesmente sumia: nenhum erro, nenhum aviso, e a
+            # planilha do mês fechando a menos sem ninguém saber por quê.
+            cfg = subcontas.get(grupo) or {}
+            if not (cfg.get("obras") or []):
+                erros.append(f"A subconta {grupo} não tem OBRAS no "
+                             "subcontas.json — o rateio ficaria vazio.")
+            if not (cfg.get("investidores") or []):
+                erros.append(f"A subconta {grupo} não tem INVESTIDORES no "
+                             "subcontas.json — o rateio ficaria vazio.")
             conta_rec = entidades[self.recebedor].get("conta") or ""
             if grupo not in self.recebedor and grupo not in conta_rec:
                 erros.append(f"O recebedor de '{self.pagador}' deve ser a "
@@ -148,8 +177,17 @@ def expandir(op: Operacao, entidades: dict, subcontas: dict,
             cfg = subcontas[grupo]
             obras = cfg.get("obras") or []
             investidores = cfg.get("investidores") or []
-            partes = dividir_em_centavos(op.valor,
-                                         max(1, len(obras) * len(investidores)))
+            # O `max(1, ...)` de antes escondia o problema: sem obras ou sem
+            # investidores o laço abaixo não roda, e a operação virava ZERO
+            # lançamentos com o valor sumindo em silêncio. `validar()` já
+            # barra isso na tela; aqui é a rede de segurança para quem chamar
+            # `expandir` direto.
+            if not obras or not investidores:
+                raise ValueError(
+                    f"a subconta {grupo} está sem obras e/ou investidores no "
+                    "subcontas.json — o rateio sairia vazio e o valor de "
+                    f"R$ {op.valor:,.2f} sumiria.")
+            partes = dividir_em_centavos(op.valor, len(obras) * len(investidores))
             i = 0
             for obra in obras:
                 for investidor in investidores:

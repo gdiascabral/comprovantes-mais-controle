@@ -16,9 +16,16 @@ from __future__ import annotations
 
 import json
 import sys
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
 
 MESES = ("JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
          "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO")
@@ -59,14 +66,11 @@ class Mapa:
         return next((d for d in self.destinos if _chave(d.erp) == alvo), None)
 
 
-def _chave(texto: str) -> str:
-    """Compara nomes de conta sem tropeçar em acento, caixa ou espaço duplo.
-
-    O nome vem do cadastro do ERP e é digitado por gente: "Morais Participações"
-    e "MORAIS PARTICIPACOES" são a mesma conta."""
-    t = unicodedata.normalize("NFKD", texto or "")
-    t = "".join(c for c in t if not unicodedata.combining(c))
-    return " ".join(t.upper().split())
+#: A MESMA função dos dois lados, de propósito. Aqui ela escolhe a PASTA do
+#: extrato; em `extrato_mc.py`, julga se o extrato baixado é o da conta certa.
+#: Enquanto eram duas cópias, bastava uma divergir para o arquivo ser aceito e
+#: arquivado no lugar errado — e nada no disco denunciaria.
+_chave = util.norm_espaco
 
 
 # ---------------------------------------------------------------- leitura

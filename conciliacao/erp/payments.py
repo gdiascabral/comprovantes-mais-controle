@@ -162,6 +162,39 @@ def _mapear_colunas(cabecalhos: list[dict]) -> tuple[dict[str, int], dict[str, s
     return indices, campos
 
 
+def _conferir_mapeamento(dados: list[dict], indices: dict[str, int],
+                         campos: dict[str, str]) -> None:
+    """Confere que as colunas mapeadas contem mesmo o que prometem.
+
+    `_mapear_colunas` cai para a POSICAO quando a grade nao expoe `data-field`,
+    e posicao e a coisa mais fragil aqui: basta o ERP inserir uma coluna para
+    "valor" passar a apontar para o favorecido. O sintoma seria um painel de
+    numeros errados — que ninguem percebe olhando. Um punhado de linhas basta
+    para desmentir isso: se quase nenhum "valor" parseia como dinheiro, o
+    mapeamento esta errado.
+    """
+    amostra = [d.get("celulas") or [] for d in dados[:10]]
+    if len(amostra) < 3:
+        return                       # pouca linha para concluir qualquer coisa
+
+    for alvo, converte in (("valor", parse_brl), ("vencimento", parse_date_br)):
+        if campos.get(alvo):
+            continue                 # veio por data-field: e confiavel
+        lidos = [_valor_da_celula(c, alvo, indices, campos) for c in amostra]
+        preenchidos = [x for x in lidos if (x or "").strip()]
+        if not preenchidos:
+            continue
+        bons = [x for x in preenchidos if converte(x) is not None]
+        if len(bons) * 2 < len(preenchidos):    # menos da metade converteu
+            raise ErpError(
+                f"a coluna '{alvo}' da grade nao parece ser '{alvo}': de "
+                f"{len(preenchidos)} celulas lidas, so {len(bons)} fazem "
+                f"sentido (ex.: {preenchidos[:3]}).\n"
+                "O layout da tela provavelmente mudou. Parei aqui em vez de "
+                "gerar um painel com numeros trocados."
+            )
+
+
 def _valor_da_celula(
     celulas: list[dict],
     alvo: str,
@@ -355,11 +388,31 @@ def navegar_para_mes(pagina: Page, ano: int, mes: int, log=print) -> bool:
     return True
 
 
+def _escolher_status(pagina: Page, rotulo: str) -> bool:
+    """Clica uma opcao do dropdown de status. O menu ja deve estar aberto."""
+    opcao = pagina.locator(
+        f'li[role="option"]:has-text("{rotulo}"), '
+        f'li:has-text("{rotulo}"), [role="option"]:has-text("{rotulo}")'
+    ).first
+    if opcao.count() == 0:
+        return False
+    opcao.click(timeout=4000)
+    pagina.wait_for_timeout(600)
+    return True
+
+
 def filtrar_em_aberto(pagina: Page, log=print) -> bool:
-    """Marca "Em aberto" no dropdown de status da tela.
+    """Marca "Em aberto" E "Vencido" no dropdown de status da tela.
 
     Otimizacao, nao correcao: se falhar, a coleta segue com o mes inteiro e o
     filtro de `rules.py` garante o mesmo resultado final.
+
+    "Vencido" NAO e opcional. O Mais Controle troca "Em aberto" por "Vencido"
+    assim que o vencimento passa (ver rules.STATUS_A_PAGAR), entao filtrar so
+    "Em aberto" ESCONDE justamente o titulo atrasado — o de sabado no painel de
+    segunda. Um filtro que remove linhas legitimas nao e otimizacao, e perda
+    silenciosa: por isso, se o dropdown for de escolha unica e nao aceitar os
+    dois, desfazemos o filtro e voltamos para "Todos pagamentos".
     """
     antes = pagina.locator(SEL_LINHA_DADOS).count()
     try:
@@ -373,26 +426,60 @@ def filtrar_em_aberto(pagina: Page, log=print) -> bool:
         gatilho.click()
         pagina.wait_for_timeout(700)
 
-        opcao = pagina.locator(
-            'li[role="option"]:has-text("Em aberto"), '
-            'li:has-text("Em aberto"), [role="option"]:has-text("Em aberto")'
-        ).first
-        if opcao.count() == 0:
+        if not _escolher_status(pagina, "Em aberto"):
             pagina.keyboard.press("Escape")
             return False
-        opcao.click(timeout=4000)
-        pagina.wait_for_timeout(2000)
+        venceu = _escolher_status(pagina, "Vencido")
+        pagina.keyboard.press("Escape")
+        pagina.wait_for_timeout(1400)
         _esperar_grade(pagina)
 
+        # Confere no proprio gatilho o que ficou selecionado. Se "Em aberto"
+        # sumiu, o dropdown e de escolha unica e o segundo clique trocou em vez
+        # de somar — nesse caso o filtro esta MENTINDO sobre a cobertura.
+        try:
+            selecionado = (gatilho.inner_text(timeout=2000) or "")
+        except Exception:
+            selecionado = ""
+        norm = normalize_name(selecionado)
+        tem_aberto = "EM ABERTO" in norm
+        tem_vencido = "VENCIDO" in norm
+
+        if not venceu or not (tem_aberto and tem_vencido):
+            log("  o filtro de status nao aceita 'Em aberto' + 'Vencido' juntos "
+                "— desfazendo para nao esconder titulo vencido")
+            _desfazer_filtro_status(pagina)
+            return False
+
         depois = pagina.locator(SEL_LINHA_DADOS).count()
-        log(f"  filtro 'Em aberto' aplicado na tela ({antes} -> {depois} linhas visiveis)")
+        log(f"  filtro 'Em aberto' + 'Vencido' aplicado na tela "
+            f"({antes} -> {depois} linhas visiveis)")
         return True
     except Exception:
         try:
             pagina.keyboard.press("Escape")
         except Exception:
             pass
+        _desfazer_filtro_status(pagina)
         return False
+
+
+def _desfazer_filtro_status(pagina: Page) -> None:
+    """Volta o dropdown para "Todos pagamentos" (melhor esforco)."""
+    try:
+        gatilho = pagina.locator(
+            'div[role="button"], button, [role="combobox"]'
+        ).filter(has_text="Em aberto").first
+        if gatilho.count() == 0 or not gatilho.is_visible(timeout=2000):
+            return
+        gatilho.click()
+        pagina.wait_for_timeout(600)
+        _escolher_status(pagina, "Todos pagamentos")
+        pagina.keyboard.press("Escape")
+        pagina.wait_for_timeout(1200)
+        _esperar_grade(pagina)
+    except Exception:
+        pass
 
 
 def _esperar_grade(pagina: Page, timeout_s: float = 60.0) -> int:
@@ -459,13 +546,15 @@ def _proxima_pagina(pagina: Page) -> bool:
         return False
 
 
-def _coletar_mes_exibido(pagina: Page, log=print) -> list[ErpPayment]:
+def _coletar_mes_exibido(pagina: Page, log=print,
+                         periodo: Periodo | None = None) -> list[ErpPayment]:
     """Varre todas as paginas da grade do mes que esta na tela."""
     pagamentos: list[ErpPayment] = []
     vistos: set[tuple] = set()
     indices: dict[str, int] = {}
     campos: dict[str, str] = {}
     paginas_lidas = 0
+    nao_parseadas: list[str] = []
 
     total_esperado = pagina.evaluate(_JS_TOTAL_GRADE)
 
@@ -478,6 +567,7 @@ def _coletar_mes_exibido(pagina: Page, log=print) -> list[ErpPayment]:
             if not cabecalhos:
                 raise ErpError("cabecalho da grade de pagamentos nao encontrado")
             indices, campos = _mapear_colunas(cabecalhos)
+            _conferir_mapeamento(dados, indices, campos)
 
         for linha in dados:
             celulas = linha.get("celulas") or []
@@ -496,9 +586,17 @@ def _coletar_mes_exibido(pagina: Page, log=print) -> list[ErpPayment]:
             def campo(alvo: str) -> str:
                 return _valor_da_celula(celulas, alvo, indices, campos)
 
+            # `reference` importa: a grade as vezes mostra "29/07" sem o ano, e
+            # sem referencia parse_date_br devolve None — a linha entrava com
+            # vencimento vazio e sumia do recorte por data, em silencio.
+            vencimento = parse_date_br(campo("vencimento"),
+                                       reference=periodo.fim if periodo else None)
+            if vencimento is None and (campo("vencimento") or "").strip():
+                nao_parseadas.append(campo("vencimento").strip())
+
             pagamentos.append(
                 ErpPayment(
-                    due_date=parse_date_br(campo("vencimento")),
+                    due_date=vencimento,
                     status=campo("status"),
                     amount=parse_brl(campo("valor")),
                     payee=campo("favorecido"),
@@ -510,6 +608,14 @@ def _coletar_mes_exibido(pagina: Page, log=print) -> list[ErpPayment]:
         if not _proxima_pagina(pagina):
             break
         _esperar_grade(pagina)
+
+    if nao_parseadas:
+        # Linha com vencimento ilegivel some do recorte por data sem deixar
+        # rastro. Nao e erro (o total do rodape ainda protege o volume), mas
+        # tem de aparecer.
+        amostra = ", ".join(sorted(set(nao_parseadas))[:5])
+        log(f"  [aviso] {len(nao_parseadas)} linha(s) com vencimento que nao "
+            f"consegui ler (ex.: {amostra})")
 
     # Cobertura: se o ERP diz que ha N parcelas e lemos menos, PARAMOS no meio —
     # e faltar exatamente os vencimentos do fim do mes e o erro mais caro
@@ -559,8 +665,15 @@ def motivo_da_grade_vazia(total_rodape, tem_texto_vazio: bool) -> str:
 
     Funcao pura para poder ser testada: o caso real so aparece com a sessao
     quebrada, que e dificil de reproduzir de proposito.
+
+    `total_rodape` chega como TEXTO da tela ("R$ 0,00"), e toda string nao
+    vazia e verdadeira em Python: um mes legitimamente zerado caia no primeiro
+    ramo e o app acusava "sua sessao caiu" — mandando procurar problema onde
+    nao havia. Por isso o valor e convertido antes de ser testado.
     """
-    if total_rodape:
+    valor = parse_brl(total_rodape) if isinstance(total_rodape, str) \
+        else total_rodape
+    if valor and valor > 0:
         return (
             "a grade de pagamentos veio vazia, mas o rodape da tela soma "
             f"{total_rodape} no mes.\n"
@@ -624,7 +737,7 @@ def coletar_pagamentos(
     todos: list[ErpPayment] = []
 
     if periodo_na_tela:
-        todos.extend(_coletar_mes_exibido(pagina, log=log))
+        todos.extend(_coletar_mes_exibido(pagina, log=log, periodo=periodo))
     else:
         # Reserva: sem o seletor de periodo, percorremos mes a mes.
         log("  vou percorrer mes a mes (reserva)")
@@ -637,7 +750,7 @@ def coletar_pagamentos(
                         f"O periodo pedido ({periodo.descrever()}) precisa desse mes."
                     )
                 _aumentar_linhas_por_pagina(pagina)
-            todos.extend(_coletar_mes_exibido(pagina, log=log))
+            todos.extend(_coletar_mes_exibido(pagina, log=log, periodo=periodo))
 
     # Dedup entre meses (a mesma parcela nao deveria aparecer duas vezes, mas o
     # ERP pode repetir na virada dependendo do filtro aplicado).

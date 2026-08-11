@@ -55,3 +55,16 @@ MODELO.xlsx
 /screenshots/
 /logs/
 browser-profile/
+
+# Marcador da senha de primeira utilização: é por MÁQUINA, nunca do repositório.
+ativacao.dat
+
+# Logs de qualquer módulo (diagnostico, atualizacao, log_anexos...). A regra
+# ampla existe porque log novo aparece com frequência e sempre carrega dado da
+# empresa — nome de fornecedor, valor, número de conta.
+*.log
+
+# Prints de diagnóstico (erro_*.png, tag_debug.png, falha-*.png). São a TELA do
+# ERP logado: mostram saldo, favorecido e a conta inteira.
+*.png
+!icone.png

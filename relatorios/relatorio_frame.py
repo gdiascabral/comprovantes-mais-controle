@@ -25,19 +25,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import contas_mc                                             # noqa: E402
 import extrato_mc                                            # noqa: E402
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+#: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
+#: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
+#: lugares; uma de FORMATO é como a mesma duração aparece de dois jeitos.
+_fmt_dur = util.fmt_dur
+_pasta_base = util.pasta_base
+
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
+CampoData = widgets.CampoData
+
 MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
          "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 
 
-def _pasta_base() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
 
 
-def _fmt_dur(seg: float) -> str:
-    seg = int(seg)
-    return f"{seg // 60}min {seg % 60}s" if seg >= 60 else f"{seg}s"
 
 
 class RelatorioFrame(ttk.Frame):
@@ -101,9 +116,9 @@ class RelatorioFrame(ttk.Frame):
                         command=self._alternar_periodo).pack(anchor="w")
         self.f_datas = ttk.Frame(f1)
         ttk.Label(self.f_datas, text="De:").pack(side="left")
-        ttk.Entry(self.f_datas, textvariable=self.v_ini, width=12).pack(side="left", padx=(6, 14))
+        CampoData(self.f_datas, self.v_ini).pack(side="left", padx=(6, 14))
         ttk.Label(self.f_datas, text="até:").pack(side="left")
-        ttk.Entry(self.f_datas, textvariable=self.v_fim, width=12).pack(side="left", padx=(6, 8))
+        CampoData(self.f_datas, self.v_fim).pack(side="left", padx=(6, 8))
         ttk.Label(self.f_datas, text="(dd/mm/aaaa)", foreground="#6b6b6b").pack(side="left")
 
         for var in (self.v_mes, self.v_ano):
@@ -230,7 +245,25 @@ class RelatorioFrame(ttk.Frame):
             self._log(f"[!] {e}")
             return False
         self.v_pasta.set(str(self.mapa.raiz).replace("\\", "/"))
+        self._conferir_mapas()
         return True
+
+    def _conferir_mapas(self):
+        """Avisa se o outro mapa manda alguma conta para pasta diferente.
+
+        O PDF do Mais Controle e o OFX do Sicoob são da MESMA conta e do MESMO
+        mês: têm de cair na mesma pasta. Quando os mapas divergem, cada aba
+        cria a sua e o mês fica partido — sem nada no disco denunciando."""
+        try:
+            import conferir_mapas
+            import sicoob_config
+            n = conferir_mapas.avisar(contas_mc.ARQUIVO_MAPA,
+                                      sicoob_config.ARQUIVO_CONTAS, self._log)
+            if n:
+                self._log("  Alinhe os dois arquivos antes de baixar, senão os "
+                          "extratos deste mês vão para pastas diferentes.")
+        except Exception:
+            pass          # a conferência é um extra; nunca pode barrar a aba
 
     def _abrir_pasta(self):
         if self.ultima_pasta and self.ultima_pasta.exists():
@@ -292,7 +325,10 @@ class RelatorioFrame(ttk.Frame):
         self.q.put(("botoes", "disabled"))
         self.b_stop.configure(state="disabled")
         self.q.put(("status", "Abrindo o Mais Controle e lendo as contas..."))
-        self.worker = self.anx.exec.submit(self._t_carregar)
+        if self.anx.avisar_se_ocupado("o Relatório Mensal"):
+            return
+        self.worker = self.anx.submeter("Relatório Mensal — carregar contas",
+                                        self._t_carregar)
 
     def _t_carregar(self):
         try:
@@ -368,7 +404,10 @@ class RelatorioFrame(ttk.Frame):
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("progresso", (0, len(escolhidas))))
-        self.worker = self.anx.exec.submit(self._t_gerar, escolhidas, ini, fim)
+        if self.anx.avisar_se_ocupado("o Relatório Mensal"):
+            return
+        self.worker = self.anx.submeter("Relatório Mensal — gerar extratos",
+                                        self._t_gerar, escolhidas, ini, fim)
 
     def _t_gerar(self, contas, ini, fim):
         comeco = time.time()

@@ -78,9 +78,28 @@ def carregar_pdfs(pasta: Path, log=print) -> list[dict]:
 
 
 # ------------------------------------------------------------------ features
-def _features(pe: dict, pd: dict) -> tuple[bool, bool, bool]:
-    docnums = set(re.findall(r"\d{3,}", pe["doc"])) | set(re.findall(r"\d{3,}", pe["desc"]))
-    ocnf = bool((pd["ocs"] | pd["nfs"]) & docnums)
+#: OC/NF citados no lançamento. Mesmo padrão de `mc_api.RE_OC_NF` — o rótulo é
+#: obrigatório de propósito: antes, QUALQUER número de 3+ dígitos da descrição
+#: virava candidato a OC/NF, então um ano ("2026"), um CEP ou um telefone
+#: casavam com um PDF chamado "OC 2026" e fechavam CERTEZA sozinhos.
+RE_OC_NF = re.compile(r"\b(?:OC|NFS|NF|OS)\s*[:\-]?\s*(\d{2,})", re.I)
+
+
+def _ocnf_rotulados(*textos) -> set[str]:
+    achados = set()
+    for t in textos:
+        achados.update(m.group(1) for m in RE_OC_NF.finditer(t or ""))
+    return achados
+
+
+def _features(pe: dict, pd: dict) -> tuple[bool, bool, bool, bool]:
+    """(ocnf, cc, date, docnum).
+
+    `docnum` é o nº do documento CRU do lançamento batendo com o OC/NF do PDF:
+    sinal fraco, mantido separado porque sozinho nunca deve fechar CERTEZA."""
+    do_pdf = pd["ocs"] | pd["nfs"]
+    ocnf = bool(do_pdf & _ocnf_rotulados(pe["doc"], pe["desc"]))
+    docnum = bool(do_pdf & set(re.findall(r"\d{3,}", pe["doc"])))
     cc = False
     for w in pe["works"]:
         nw = _norm(w)
@@ -93,7 +112,7 @@ def _features(pe: dict, pd: dict) -> tuple[bool, bool, bool]:
             pat = "QD " + mq.group(1) + " LT " + mq.group(2)
             cc = any(pat in _norm(w) for w in pe["works"])
     date = bool(pe["data"]) and pe["data"] == pd["data"]
-    return ocnf, cc, date
+    return ocnf, cc, date, docnum
 
 
 # ------------------------------------------------------------------ casamento
@@ -122,9 +141,11 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                 if id(pd) in vistos:
                     continue
                 vistos.add(id(pd))
-                ocnf, cc, date = _features(pe, pd)
+                ocnf, cc, date, docnum = _features(pe, pd)
                 pe["cands"].append({"pdf": pd, "ocnf": ocnf, "cc": cc, "date": date,
-                                    "score": (100 if ocnf else 0) + (10 if cc else 0) + (1 if date else 0)})
+                                    "docnum": docnum,
+                                    "score": (100 if ocnf else 0) + (10 if cc else 0)
+                                             + (5 if docnum else 0) + (1 if date else 0)})
 
     def atribuir(filtro):
         mudou = True
@@ -159,6 +180,9 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
 
     atribuir(lambda c: c["ocnf"] and c["cc"])
     atribuir(lambda c: c["ocnf"])
+    # O nº do documento cru só entra ACOMPANHADO do centro de custo: sozinho
+    # ele é fraco demais para fechar CERTEZA (ver _features).
+    atribuir(lambda c: c["docnum"] and c["cc"])
     atribuir(lambda c: c["cc"])
 
     for pe in pendentes:
@@ -194,6 +218,8 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
         t = []
         if m["ocnf"]:
             t.append("OC/NF")
+        if m.get("docnum"):
+            t.append("nº do documento")
         if m["cc"]:
             t.append("centro de custo")
         if m["date"]:

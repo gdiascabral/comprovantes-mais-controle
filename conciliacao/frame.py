@@ -33,6 +33,28 @@ from conciliacao.snapshot import save as salvar_snapshot
 from conciliacao.validate import ValidationError
 from conciliacao.workbook import WorkbookError
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+#: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
+#: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
+#: lugares; uma de FORMATO é como a mesma duração aparece de dois jeitos.
+_fmt_dur = util.fmt_dur
+_pasta_base = util.pasta_base
+
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
+CampoData = widgets.CampoData
+
 #: Erros que já explicam a si mesmos: a mensagem vai inteira para o log, sem
 #: "[!]" na frente, porque ela É a entrega quando a planilha não sai.
 ERROS_ESPERADOS = (ValidationError, WorkbookError, MappingError, ErpError)
@@ -44,15 +66,8 @@ MESES = ("JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
 RAIZ_SAIDA = Path("C:/Arquivos Morais/CONCILIACAO DIARIA")
 
 
-def _pasta_base() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
 
 
-def _fmt_dur(seg: float) -> str:
-    seg = int(seg)
-    return f"{seg // 60}min {seg % 60}s" if seg >= 60 else f"{seg}s"
 
 
 class ConciliacaoFrame(ttk.Frame):
@@ -89,9 +104,9 @@ class ConciliacaoFrame(ttk.Frame):
         f1.pack(fill="x", padx=PADX, pady=6)
         linha = ttk.Frame(f1); linha.pack(fill="x")
         ttk.Label(linha, text="De:").pack(side="left")
-        ttk.Entry(linha, textvariable=self.v_ini, width=12).pack(side="left", padx=(6, 12))
+        CampoData(linha, self.v_ini).pack(side="left", padx=(6, 12))
         ttk.Label(linha, text="até:").pack(side="left")
-        ttk.Entry(linha, textvariable=self.v_fim, width=12).pack(side="left", padx=(6, 12))
+        CampoData(linha, self.v_fim).pack(side="left", padx=(6, 12))
         ttk.Label(linha, foreground="#6b6b6b",
                   text="(dd/mm/aaaa — na segunda já vem sábado + domingo + segunda)"
                   ).pack(side="left")
@@ -257,7 +272,10 @@ class ConciliacaoFrame(ttk.Frame):
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("ocupado", True))
-        self.worker = self.anx.exec.submit(self._t_gerar, periodo)
+        if self.anx.avisar_se_ocupado("a Conciliação Diária"):
+            return
+        self.worker = self.anx.submeter("Conciliação Diária", self._t_gerar,
+                                        periodo)
 
     def _t_gerar(self, periodo: Periodo):
         from conciliacao.erp.collect import coletar_com_pagina

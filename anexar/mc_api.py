@@ -82,14 +82,50 @@ _JS_FETCH_ANEXOS = """async ({ base, ids, headers }) => {
 }"""
 
 
+#: Os três desfechos possíveis da consulta de anexos de UM pagamento.
+COM_ANEXO = "com anexo"
+SEM_ANEXO = "sem anexo"
+NAO_VERIFICADO = "não verificado"
+
+
+def estado_anexo(att: dict, paid_id: str) -> str:
+    """Lê o resultado de `verificar_anexos` para um pagamento.
+
+    O JS devolve -1 quando o fetch falha, e -1 NÃO é 0. Tratar os dois como
+    "tem anexo" era o pior desfecho silencioso do app: a aba Anexar PULAVA o
+    pagamento (nunca anexava) e a Conferência OMITIA a linha do relatório —
+    as duas afirmando "está tudo certo" sobre algo que ninguém chegou a olhar.
+    """
+    n = att.get(paid_id)
+    if n is None or n < 0:
+        return NAO_VERIFICADO
+    return COM_ANEXO if n > 0 else SEM_ANEXO
+
+
 class MCApi:
-    def __init__(self, page):
-        """page = página do Playwright já criada (MCClient.page)."""
-        self.page = page
+    def __init__(self, cliente):
+        """cliente = MCClient já aberto (não a página).
+
+        Recebe o CLIENTE de propósito. O MCClient troca de aba sozinho quando
+        o ERP abre a tela num alvo novo (`_adotar_aba`), e a MCApi guardava a
+        página do momento da criação: ficava presa numa aba obsoleta e os
+        fetch passavam a falhar sem explicação — a página existia, só não era
+        mais a que estava logada e visível."""
+        self._cliente = cliente
+        self._pagina_ouvida = None
         self._req_pagos = None    # (url, headers) da lista de pagamentos
         self._req_anexos = None   # (url_base, headers) do endpoint de anexos
         self._diag_avisado = False
-        page.on("request", self._on_request)
+        _ = self.page             # registra o listener na aba atual
+
+    @property
+    def page(self):
+        """A aba ATUAL do cliente, com o listener de captura registrado nela."""
+        pag = self._cliente.page
+        if pag is not None and pag is not self._pagina_ouvida:
+            pag.on("request", self._on_request)
+            self._pagina_ouvida = pag
+        return pag
 
     # ------------------------------------------------------------ captura
     def _on_request(self, req):
@@ -177,14 +213,23 @@ class MCApi:
                 break
             pagina += 1
             if pagina > 50:
-                break
+                # Truncar em silencio devolvia um resultado INCOMPLETO com cara
+                # de completo: a Conferencia diria "tudo anexado" sobre um
+                # periodo que nem foi lido inteiro.
+                raise RuntimeError(
+                    "o periodo tem mais de 50 paginas de lancamentos e eu "
+                    "parei aqui para nao devolver uma lista pela metade.\n"
+                    "Divida o periodo (por exemplo, quinzena a quinzena) e "
+                    "rode de novo.")
         return todos
 
     # ------------------------------------------------------------ anexos
     def verificar_anexos(self, paid_ids: list[str], log=print,
                          progresso=None, cancelar=None) -> dict[str, int]:
-        """Retorna {paidId: quantidade de arquivos anexados}. Lotes em paralelo
-        de dentro da própria página (Promise.all).
+        """Retorna {paidId: quantidade de arquivos anexados}, ou -1 se a
+        consulta falhou. Use `estado_anexo()` para ler: -1 NÃO é zero.
+
+        Lotes em paralelo de dentro da própria página (Promise.all).
         cancelar: função chamada entre lotes; retornando True, interrompe."""
         if not self._req_anexos:
             raise RuntimeError("Credenciais de anexos ainda não capturadas.")
@@ -193,8 +238,18 @@ class MCApi:
         LOTE = 15
 
         def rodar(ids):
-            parcial = self.page.evaluate(
-                _JS_FETCH_ANEXOS, {"base": base, "ids": ids, "headers": headers})
+            # Uma falha de página (navegação no meio, sessão caindo) derrubava
+            # o lote inteiro e a etapa toda. Aqui ela vira "não verificado"
+            # para ESTES ids, e o resto do lote segue.
+            try:
+                parcial = self.page.evaluate(
+                    _JS_FETCH_ANEXOS,
+                    {"base": base, "ids": ids, "headers": headers})
+            except Exception as e:
+                _diag(f"verificar_anexos: lote de {len(ids)} falhou ({e!r}) — "
+                      "marcados como NÃO VERIFICADO")
+                resultado.update({i: -1 for i in ids if i not in resultado})
+                return
             resultado.update(parcial or {})
 
         feitos = 0
@@ -213,6 +268,11 @@ class MCApi:
             if cancelar and cancelar():
                 break
             rodar(falhas[i:i + LOTE])
+        restantes = [p for p in paid_ids
+                     if estado_anexo(resultado, p) == NAO_VERIFICADO]
+        if restantes:
+            log(f"  [aviso] {len(restantes)} pagamento(s) NÃO VERIFICADOS "
+                "(a consulta de anexos falhou neles)")
         return resultado
 
 
@@ -255,7 +315,14 @@ class MCApi:
                 break
             pagina += 1
             if pagina > 50:
-                break
+                # Truncar em silencio devolvia um resultado INCOMPLETO com cara
+                # de completo: a Conferencia diria "tudo anexado" sobre um
+                # periodo que nem foi lido inteiro.
+                raise RuntimeError(
+                    "o periodo tem mais de 50 paginas de lancamentos e eu "
+                    "parei aqui para nao devolver uma lista pela metade.\n"
+                    "Divida o periodo (por exemplo, quinzena a quinzena) e "
+                    "rode de novo.")
         return todos
 
     def listar_overviews(self, installment_ids: list[str], log=print,
@@ -324,6 +391,139 @@ class MCApi:
                 resultado[k] = v if isinstance(v, list) else []
             if progresso:
                 progresso(min(i + LOTE, len(trade_payable_ids)), len(trade_payable_ids))
+        return resultado
+
+    # ------------------------------------ contratos de financiamento
+    # As três leituras da aba Contratos. Reaproveitam as credenciais já
+    # capturadas trocando o CAMINHO: recebimentos vivem no mesmo host legado
+    # dos pagamentos, obras e anexos no mesmo host dos anexos.
+    def _base_legacy(self, caminho: str) -> tuple[str, dict]:
+        if not self._req_pagos:
+            raise RuntimeError("Credenciais ainda não capturadas.")
+        url_orig, headers = self._req_pagos
+        p = urlsplit(url_orig)
+        raiz = p.path.split("/maiscontrole/services/")[0]
+        return f"{p.scheme}://{p.netloc}{raiz}/maiscontrole/services/{caminho}", headers
+
+    def _base_erp(self, caminho: str) -> tuple[str, dict]:
+        if not self._req_anexos:
+            raise RuntimeError("Credenciais de anexos ainda não capturadas.")
+        base, headers = self._req_anexos
+        p = urlsplit(base)
+        return f"{p.scheme}://{p.netloc}/{caminho.lstrip('/')}", headers
+
+    #: Naturezas que são venda. Vieram de GET /natures em 11/08/2026.
+    NATUREZAS_DE_VENDA = (
+        "85a40f0e-320c-4b0f-a0cc-54926c9d5aaf",   # Venda
+        "af7b5fdf-ec24-441c-9eee-e925a94c3bb8",   # Venda de Bens
+        "204c948d-ec08-49fb-9813-d06a7ed27746",   # Venda de Imóveis
+    )
+
+    def listar_recebimentos(self, data_inicio: str, data_fim: str,
+                            log=print) -> list[dict]:
+        """Recebimentos de VENDA já recebidos no período.
+
+        `dateField=DATE_OF_RECEIPT` é o "Tipo de data por: Recebimento" da tela
+        e `type=PAID` é o "Recebidos".
+
+        Aqui os nomes da paginação são `page` (base 0) e `size` — e este é o
+        ponto que mais engana: **`pageIndex`/`pageSize` são aceitos e IGNORADOS
+        em silêncio**, e a resposta volta com o padrão de 20 registros como se
+        estivesse completa. Foi assim que a sondagem quase concluiu que julho
+        tinha 20 recebimentos no total.
+        """
+        base, headers = self._base_legacy("receipt-installments")
+        todos: list[dict] = []
+        pagina = 0
+        while True:
+            params = [("startDate", data_inicio), ("endDate", data_fim),
+                      ("dateField", "DATE_OF_RECEIPT"), ("type", "PAID"),
+                      ("page", str(pagina)), ("size", "200")]
+            params += [("natureIds", n) for n in self.NATUREZAS_DE_VENDA]
+            j = self._fetch_json(f"{base}?{urlencode(params)}", headers)
+            if isinstance(j, dict) and j.get("__erro"):
+                raise RuntimeError(
+                    f"A API respondeu {j['__erro']} ao listar os recebimentos. "
+                    "Recarregue a tela do Mais Controle no Chrome e tente de novo.")
+            j = j or {}
+            lote = j.get("content") or []
+            todos.extend(lote)
+            log(f"  ... página {pagina + 1}: {len(todos)} recebimento(s)")
+            if j.get("last") or not lote:
+                break
+            pagina += 1
+            if pagina > 50:
+                raise RuntimeError(
+                    "o período tem mais de 50 páginas de recebimentos e eu "
+                    "parei aqui para não devolver uma lista pela metade.\n"
+                    "Divida o período e rode de novo.")
+        return todos
+
+    def listar_obras(self, log=print) -> list[dict]:
+        """Todas as obras (id, name, customer).
+
+        Paginação do OUTRO back-end: `pageIndex` começa em **1**, e o fim é
+        `hasNextPage`. Trocar por `page`/`size` aqui devolve sempre a primeira
+        página, sem erro."""
+        base, headers = self._base_erp("work-management/works/detailed")
+        todas: list[dict] = []
+        indice = 1
+        while True:
+            j = self._fetch_json(
+                f"{base}?{urlencode([('pageIndex', indice), ('pageSize', 200)])}",
+                headers)
+            if isinstance(j, dict) and j.get("__erro"):
+                raise RuntimeError(
+                    f"A API respondeu {j['__erro']} ao listar as obras.")
+            j = j or {}
+            itens = j.get("items") or []
+            todas.extend(itens)
+            log(f"  ... {len(todas)} obra(s)")
+            if not j.get("hasNextPage") or not itens:
+                break
+            indice += 1
+            if indice > 50:
+                break
+        return todas
+
+    def detalhe_da_obra(self, work_id: str) -> dict:
+        """O detalhe de UMA obra. O endereço só existe aqui.
+
+        A lista não traz `address`, e é dele que saem a rua e a quadra/lote
+        usadas para conferir o contrato — sem isto a conferência não existe."""
+        base, headers = self._base_erp(
+            f"work-management/works/{work_id}/detailed")
+        j = self._fetch_json(base, headers)
+        if isinstance(j, dict) and j.get("__erro"):
+            raise RuntimeError(
+                f"A API respondeu {j['__erro']} ao abrir a obra {work_id}.")
+        return j if isinstance(j, dict) else {}
+
+    def anexos_de_obras(self, work_ids: list[str], log=print,
+                        progresso=None, cancelar=None) -> dict[str, list]:
+        """{workId: [anexos]} — `entityOrigin=WORK`.
+
+        O `downloadUrl` é URL pré-assinada do S3 com `Expires` curto: listar e
+        baixar têm de acontecer na MESMA execução."""
+        if not self._req_anexos:
+            raise RuntimeError("Credenciais de anexos ainda não capturadas.")
+        base, headers = self._req_anexos
+        resultado: dict[str, list] = {}
+        LOTE = 12
+        for i in range(0, len(work_ids), LOTE):
+            if cancelar and cancelar():
+                break
+            fatia = work_ids[i:i + LOTE]
+            parcial = self.page.evaluate(_JS_FETCH_LOTE, {
+                "urls": [{"chave": str(x),
+                          "url": f"{base}?entityIds={x}&entityOrigin=WORK"}
+                         for x in fatia],
+                "headers": headers,
+            })
+            for k, v in (parcial or {}).items():
+                resultado[k] = v if isinstance(v, list) else []
+            if progresso:
+                progresso(min(i + LOTE, len(work_ids)), len(work_ids))
         return resultado
 
     # ------------------------------------------------- anexos (conteúdo)
@@ -490,11 +690,20 @@ def montar_pagos(lancamentos: list[dict]) -> list[dict]:
         for p in (l.get("paids") or []):
             pd = (p.get("payingDate") or "")[:10]  # aaaa-mm-dd
             valores = set()
-            for k in ("paidValue", "value", "paymentValue", "totalValue",
-                      "netValue", "amount"):
+            for k in ("paidValue", "value", "paymentValue", "netValue"):
                 c = _cents(p.get(k))
                 if c:
                     valores.add(c)
+            # "totalValue" e "amount" saíram da lista: em título parcelado elas
+            # trazem o valor CHEIO do título, e aceitá-las casava o PDF do
+            # total com UMA parcela — comprovante errado no lançamento certo.
+            # Ficam registradas quando divergem, para o dia em que o ERP mudar
+            # de novo e estes nomes voltarem a ser os únicos com o valor.
+            for k in ("totalValue", "amount"):
+                c = _cents(p.get(k))
+                if c and c not in valores:
+                    _diag(f"montar_pagos: {k}={c} difere dos valores aceitos "
+                          f"{sorted(valores)} (paid {p.get('id')}) — ignorado")
             base = _cents(p.get("value"))
             acrescimos = sum(c for c in (_cents(p.get(k)) for k in
                              ("interest", "interestValue", "fine", "fineValue",

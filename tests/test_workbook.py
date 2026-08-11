@@ -19,9 +19,9 @@ def fills(planilha, mapping):
         if modelo is not None and not modelo.exists_in_erp:
             resultado.append(RowFill(row, None, None, None, None))
         elif row == 8:
-            resultado.append(RowFill(row, Decimal("1536956.24"), Decimal("40608.17"), 35, None))
+            resultado.append(RowFill(row, Decimal("1234567.89"), Decimal("45678.90"), 35, None))
         elif row == 10:
-            resultado.append(RowFill(row, Decimal("-1179.29"), Decimal("0"), 0, 0))
+            resultado.append(RowFill(row, Decimal("-1500.75"), Decimal("0"), 0, 0))
         else:
             resultado.append(RowFill(row, Decimal("100"), Decimal("0"), 0, 0))
     return resultado
@@ -49,12 +49,12 @@ def test_build_escreve_valores_e_preserva_formulas(
     assert ws[planilha.celula_data].value.date() == HOJE
     assert ws[planilha.celula_data].number_format == planilha.formato_data
 
-    assert ws["D8"].value == pytest.approx(1536956.24)
-    assert ws["E8"].value == pytest.approx(40608.17)
+    assert ws["D8"].value == pytest.approx(1234567.89)
+    assert ws["E8"].value == pytest.approx(45678.90)
     assert ws["I8"].value == 35
     assert ws["J8"].value is None  # ha pagamento -> J fica para a conferencia manual
 
-    assert ws["D10"].value == pytest.approx(-1179.29)
+    assert ws["D10"].value == pytest.approx(-1500.75)
     assert (ws["E10"].value, ws["I10"].value, ws["J10"].value) == (0, 0, 0)
 
     # Formulas intactas, incluindo o encadeamento de aportes e o rateio.
@@ -113,12 +113,16 @@ def test_reexecucao_no_mesmo_dia_sobrescreve(modelo_path, tmp_path, fills, mappi
 def test_label_divergente_do_modelo_falha_alto(modelo_path, tmp_path, fills, mapping, planilha):
     """Label errado zeraria o SUMIF da coluna F sem erro nenhum no Excel."""
     alvo = mapping.by_row(8)
+    # Guarda o valor ORIGINAL em vez de restaurar um literal: a fixture e de
+    # escopo session e o label vem do mapping real, que muda com o tempo —
+    # restaurar o literal errado contaminaria os testes seguintes.
+    anterior = alvo.label
     object.__setattr__(alvo, "label", "Nome Trocado")
     try:
         with pytest.raises(WorkbookError, match="diverge da coluna B"):
             build(modelo_path, tmp_path / "x.xlsx", HOJE, fills, mapping, planilha)
     finally:
-        object.__setattr__(alvo, "label", "Morais Engenharia - Inter")
+        object.__setattr__(alvo, "label", anterior)
 
 
 def test_modelo_inexistente_falha_com_mensagem_clara(tmp_path, fills, mapping, planilha):

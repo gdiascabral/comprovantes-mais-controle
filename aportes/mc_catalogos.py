@@ -23,8 +23,15 @@ contas, sócios e investidores ficam em arquivos locais, fora do Git.
 """
 from __future__ import annotations
 
-import unicodedata
+from pathlib import Path
 from urllib.parse import urlencode
+
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
 
 ERP_API = "https://prod-erp-api.maiscontroleerp.com.br"
 LEGACY = "https://legacy-api.maiscontroleerp.com.br/maiscontrole/services"
@@ -65,20 +72,43 @@ _GQL_OBRAS = """query ($first: PaginationAmount, $afterCursor: String,
   }
 }"""
 
+# Consultas trazidas do ANEXAR BOLETOS junto dos metodos de
+# tarefa/planejamento (ver o cabecalho da classe).
 
-def _sem_acento(texto: str) -> str:
-    nfkd = unicodedata.normalize("NFKD", texto or "")
-    return "".join(c for c in nfkd if not unicodedata.combining(c))
+# O GraphQL do ERP muda os subcampos de `defaultAccount` conforme a versao, e
+# pedir um campo que nao existe derruba a consulta inteira. Em vez de fixar um
+# formato, tentamos do mais completo para o mais simples.
+SUBCAMPOS_DE_CONTA = (
+    "{ id name openingBalanceDate }",
+    "{ id name }",
+    "{ id }",
+)
+_GQL_TIPO = """query ($nome: String!) {
+  __type(name: $nome) { fields { name type { name kind ofType { name kind } } } }
+}"""
+
+_GQL_PLANEJAMENTO = """query ($workId: Uuid) {
+  planningByWork(workId: $workId) { id __typename }
+}"""
+
+_GQL_TAREFAS = """query ($planningId: Uuid!) {
+  allTasks(planningId: $planningId) {
+    id index name itemName fullname description discriminator __typename
+  }
+}"""
+
+_GQL_TAREFAS_SIMPLES = """query ($planningId: Uuid!) {
+  allTasks(planningId: $planningId) {
+    id index name itemName fullname discriminator __typename
+  }
+}"""
 
 
-def chave(nome: str) -> str:
-    """Forma comparável de um nome: sem acento, sem caixa, sem espaço dobrado.
-
-    O cadastro do ERP e o arquivo de contas divergem em acentuação e
-    espaçamento com frequência (por exemplo "SÃO" x "SAO", ou um espaço duplo
-    no meio do nome). Comparar pela forma crua transformaria diferença
-    cosmética em erro de cadastro."""
-    return " ".join(_sem_acento(nome or "").upper().split())
+#: Forma comparável de um nome de cadastro. O ERP e o contas.csv divergem em
+#: acentuação e espaçamento com frequência ("SÃO" x "SAO", espaço duplo no
+#: meio): comparar pela forma crua transformaria diferença cosmética em erro
+#: de cadastro. É a MESMA função usada pelos mapas de pasta (util.norm_espaco).
+chave = util.norm_espaco
 
 
 class Catalogos:
@@ -382,3 +412,136 @@ class Catalogos:
             else:
                 ok.append(exibicao)
         return {"ok": ok, "faltando": faltando}
+
+    # ------------------------------------------------------------
+    # Tarefas e planejamento da obra. Vieram do `ANEXAR BOLETOS`, que
+    # mantinha uma copia INTEIRA deste arquivo so para te-los: os
+    # boletos do INSS precisam da tarefa da obra, e nao so da obra.
+    # Uma copia de arquivo inteiro para ganhar 11 metodos e como as
+    # duas versoes divergem — a copia ja tinha perdido o aviso de
+    # seguranca do cabecalho.
+
+    def _gql(self, host: str, query: str, variaveis: dict):
+        return self.postar(f"https://{host}/prod/graphql",
+                           {"query": query, "variables": variaveis})
+
+    def _dados(resposta) -> dict | None:
+        """`data` de uma resposta GraphQL, ou None se veio erro."""
+        if not isinstance(resposta, dict):
+            return None
+        if resposta.get("__erro") or resposta.get("errors"):
+            return None
+        return resposta.get("data") or None
+
+    def campos_do_tipo(self, host: str, nome: str) -> set[str]:
+        """Nomes de campo de um tipo GraphQL, via introspecção.
+
+        Existe para não precisar adivinhar: pedir um campo inexistente não
+        devolve o resto sem ele — invalida a consulta inteira."""
+        dados = self._dados(self._gql(host, _GQL_TIPO, {"nome": nome}))
+        tipo = (dados or {}).get("__type") or {}
+        return {c.get("name") for c in (tipo.get("fields") or []) if c.get("name")}
+
+    def _selecoes_de_obra(self, host: str) -> list[str]:
+        """Seleções de campo a tentar, da mais rica para a mais pobre.
+
+        A última é sempre só o básico: obra sem conta ainda serve para lançar
+        (o CSV pode trazer a conta na mão), mas nenhuma obra não serve para
+        nada."""
+        basico = "id name status"
+        disponiveis = self.campos_do_tipo(host, "Work")
+        tentativas = []
+        if not disponiveis or "defaultAccount" in disponiveis:
+            tentativas += [f"{basico} defaultAccount {s}" for s in SUBCAMPOS_DE_CONTA]
+        tentativas.append(basico)
+        return tentativas
+
+    def tarefas_da_obra(self, id_obra: str) -> list[dict]:
+        """Itens do orçamento da obra. Duas consultas: a obra tem um
+        planejamento, e o planejamento tem as tarefas."""
+        if id_obra in self._cache_tarefas:
+            return self._cache_tarefas[id_obra]
+        tarefas: list[dict] = []
+        self.erros_tarefas.pop(id_obra, None)
+        host = self._host_graphql
+        if not host:
+            self.erros_tarefas[id_obra] = "sem host GraphQL"
+            self._cache_tarefas[id_obra] = tarefas
+            return tarefas
+
+        resposta = self._gql(host, _GQL_PLANEJAMENTO, {"workId": id_obra})
+        plano = (self._dados(resposta) or {}).get("planningByWork") or {}
+        if not plano.get("id"):
+            self.erros_tarefas[id_obra] = (
+                f"a obra não tem orçamento: {self._motivo(resposta)}")
+            self._cache_tarefas[id_obra] = tarefas
+            return tarefas
+
+        for query in (_GQL_TAREFAS, _GQL_TAREFAS_SIMPLES):
+            resposta = self._gql(host, query, {"planningId": plano["id"]})
+            tarefas = (self._dados(resposta) or {}).get("allTasks") or []
+            if tarefas:
+                break
+            self.erros_tarefas[id_obra] = self._motivo(resposta)
+        self._cache_tarefas[id_obra] = tarefas
+        return tarefas
+
+    def _motivo(resposta) -> str:
+        """O porquê de uma resposta GraphQL não ter servido, em uma linha."""
+        if not isinstance(resposta, dict):
+            return "resposta inesperada"
+        if resposta.get("__erro"):
+            return f"HTTP {resposta['__erro']}"
+        if resposta.get("errors"):
+            return str(resposta["errors"])[:160]
+        return "veio vazio"
+
+    def nome_da_tarefa(t: dict) -> str:
+        """O texto que a tela mostra para um item do orçamento.
+
+        `description` vem primeiro porque é ele que carrega "INSS (pessoa
+        física)" nos itens; `name` e `itemName` ficam como reserva, que é
+        onde as ETAPAS guardam o texto delas ("Documentação final")."""
+        return (t.get("description") or t.get("name")
+                or t.get("itemName") or "")
+
+    def task_da_obra(self, id_obra: str, termo: str) -> dict | None:
+        """Item do orçamento cujo nome contém `termo` (ex.: "INSS").
+
+        Devolve o item no formato que o lançamento espera. Havendo mais de um
+        candidato, prefere o de menor índice — os itens do orçamento são
+        numerados em ordem, e o primeiro é o principal."""
+        alvo = chave(termo)
+        achados = [t for t in self.tarefas_da_obra(id_obra)
+                   if (t.get("discriminator") or "ITEM") == "ITEM"
+                   and alvo in chave(self.nome_da_tarefa(t))]
+        if not achados:
+            return None
+        achados.sort(key=self._ordem_do_indice)
+        t = achados[0]
+        nome = self.nome_da_tarefa(t)
+        base = t.get("fullname") or f"Item {t.get('index')}"
+        return {"id": t["id"], "index": t.get("index"),
+                "fullname": f"{base} - {nome}" if nome else base,
+                "name": nome,
+                "discriminator": t.get("discriminator") or "ITEM"}
+
+    def _ordem_do_indice(t: dict) -> tuple:
+        """"20.1" antes de "20.10", e ambos antes de "3" — comparar como texto
+        põe "10" na frente de "3" e escolheria o item errado."""
+        partes = str(t.get("index") or "").split(".")
+        return tuple(int(p) if p.isdigit() else 0 for p in partes)
+
+    def tarefas_parecidas(self, id_obra: str, termo: str, quantos: int = 5) -> list[str]:
+        """Itens do orçamento parecidos, para quando o termo não achar nada."""
+        import difflib
+        universo = {self.nome_da_tarefa(t): t for t in self.tarefas_da_obra(id_obra)
+                    if self.nome_da_tarefa(t)}
+        achados = difflib.get_close_matches(termo, list(universo), quantos, 0.4)
+        return achados or sorted(universo)[:quantos]
+
+    def conta_por_id(self, id_conta: str) -> dict | None:
+        """A conta que a obra indicou vem como UUID; aqui vira o registro."""
+        if not id_conta:
+            return None
+        return next((c for c in self.contas.values() if c.get("id") == id_conta), None)

@@ -32,10 +32,17 @@ from __future__ import annotations
 
 import io
 import re
-import unicodedata
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
+
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -50,13 +57,17 @@ except ImportError:                                   # pragma: no cover
 # --------------------------------------------------------------------------
 # Texto
 # --------------------------------------------------------------------------
-def sem_acento(s: str | None) -> str:
-    return "".join(c for c in unicodedata.normalize("NFD", s or "")
-                   if unicodedata.category(c) != "Mn")
+sem_acento = util.sem_acento
 
 
 def chave(s: str | None) -> str:
-    return sem_acento(s).casefold().strip()
+    """Forma comparável usada AQUI dentro.
+
+    Difere do `util.norm_espaco` de propósito: aqui a comparação é entre
+    textos livres da API (método de pagamento, nome de conta como veio), e
+    colapsar espaços internos deixaria dois valores diferentes iguais. O que
+    importa é ser a mesma função dos dois lados da comparação."""
+    return util.sem_acento(s).casefold().strip()
 
 
 def brl(v) -> str:
@@ -646,7 +657,11 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if divergiu:
             status = "ATENÇÃO — documento não bate"
         if item.get("paid"):
-            status = "JÁ PAGO em " + (item.get("dateOfPayment") or "?")
+            # dateOfPayment as vezes vem em epoch (numero), e concatenar
+            # numero com string levanta TypeError no meio do relatorio.
+            _pago_em = para_data(item.get("dateOfPayment"))
+            status = "JÁ PAGO em " + (f"{_pago_em:%d/%m/%Y}" if _pago_em
+                                      else "?")
 
         registros[conta].append({
             "tipo": tipo, "dados": dados, "valor": valor_do_item(item),

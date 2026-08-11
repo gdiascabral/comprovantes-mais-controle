@@ -28,6 +28,14 @@ import re
 import unicodedata
 from pathlib import Path
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+
 URL_BASE = "https://acessar.maiscontroleerp.com.br"
 URL_CONTAS = URL_BASE + "/#/accounts"
 URL_FLUXO = URL_BASE + "/#/cash-flow"
@@ -290,11 +298,11 @@ def conferir_antes_de_salvar(estado: dict, conta_esperada: str) -> list[str]:
     return problemas
 
 
-def _chave(texto: str) -> str:
-    """Compara nomes de conta sem tropeçar em acento, caixa ou espaço duplo."""
-    t = unicodedata.normalize("NFKD", texto or "")
-    t = "".join(c for c in t if not unicodedata.combining(c))
-    return " ".join(t.upper().split())
+#: A MESMA função dos dois lados, de propósito. Aqui ela escolhe a PASTA do
+#: extrato; em `extrato_mc.py`, julga se o extrato baixado é o da conta certa.
+#: Enquanto eram duas cópias, bastava uma divergir para o arquivo ser aceito e
+#: arquivado no lugar errado — e nada no disco denunciaria.
+_chave = util.norm_espaco
 
 
 def estado(page) -> dict:

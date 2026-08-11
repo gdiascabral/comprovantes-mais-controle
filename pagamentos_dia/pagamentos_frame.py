@@ -35,16 +35,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import relatorio                                              # noqa: E402
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
 
-def _pasta_base() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
+#: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
+#: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
+#: lugares; uma de FORMATO é como a mesma duração aparece de dois jeitos.
+_fmt_dur = util.fmt_dur
+_pasta_base = util.pasta_base
+
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
+CampoData = widgets.CampoData
 
 
-def _fmt_dur(seg: float) -> str:
-    seg = int(seg)
-    return f"{seg // 60}min {seg % 60}s" if seg >= 60 else f"{seg}s"
+
+
 
 
 def _carregar_reembolsos() -> dict:
@@ -104,9 +119,9 @@ class PagamentosDiaFrame(ttk.Frame):
         f1.pack(fill="x", padx=PADX, pady=6)
         linha = ttk.Frame(f1); linha.pack(fill="x")
         ttk.Label(linha, text="De:").pack(side="left")
-        ttk.Entry(linha, textvariable=self.v_ini, width=12).pack(side="left", padx=(6, 12))
+        CampoData(linha, self.v_ini).pack(side="left", padx=(6, 12))
         ttk.Label(linha, text="até:").pack(side="left")
-        ttk.Entry(linha, textvariable=self.v_fim, width=12).pack(side="left", padx=(6, 8))
+        CampoData(linha, self.v_fim).pack(side="left", padx=(6, 8))
         ttk.Label(linha, text="(dd/mm/aaaa)", foreground="#6b6b6b").pack(side="left")
         ttk.Button(linha, text="Hoje", command=self._hoje).pack(side="left", padx=(12, 0))
 
@@ -258,7 +273,10 @@ class PagamentosDiaFrame(ttk.Frame):
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Abrindo o Mais Controle..."))
-        self.worker = self.anx.exec.submit(self._t_buscar, ini, fim)
+        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+            return
+        self.worker = self.anx.submeter("Pagamentos do Dia — buscar",
+                                        self._t_buscar, ini, fim)
 
     def _t_buscar(self, ini, fim):
         comeco = time.time()
@@ -355,7 +373,10 @@ class PagamentosDiaFrame(ttk.Frame):
             return
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
-        self.worker = self.anx.exec.submit(self._t_gerar, escolhidas)
+        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+            return
+        self.worker = self.anx.submeter("Pagamentos do Dia — gerar planilha",
+                                        self._t_gerar, escolhidas)
 
     def _t_gerar(self, escolhidas):
         comeco = time.time()

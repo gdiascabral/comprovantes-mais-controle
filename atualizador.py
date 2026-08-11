@@ -79,6 +79,23 @@ def preparar_codigo() -> Path:
     return fonte
 
 
+def _extrair_seguro(zip_path: Path, destino: Path):
+    """Extrai conferindo os nomes ANTES (zip-slip).
+
+    `extractall` obedece caminhos como "../../algo" e nomes absolutos: um zip
+    adulterado escreveria FORA da pasta de destino. O codigo.zip vem do nosso
+    próprio CI, mas chega pela rede e é o caminho mais direto que existe para
+    plantar código na máquina de quem usa — conferir custa uma passada."""
+    destino_abs = destino.resolve()
+    with zipfile.ZipFile(zip_path) as z:
+        for nome in z.namelist():
+            alvo = (destino_abs / nome).resolve()
+            if alvo != destino_abs and not str(alvo).startswith(
+                    str(destino_abs) + os.sep):
+                raise RuntimeError(f"caminho suspeito no codigo.zip: {nome!r}")
+        z.extractall(destino_abs)
+
+
 def _atualizar_codigo(pasta: Path, emb: Path):
     """Baixa e instala o codigo.zip se a release for mais nova (rápido)."""
     import requests
@@ -89,34 +106,37 @@ def _atualizar_codigo(pasta: Path, emb: Path):
     if not _tupla(ultima) or _tupla(ultima) <= _tupla(v_ref):
         return
     url = f"https://github.com/{REPO}/releases/latest/download/codigo.zip"
-    tmp = Path(tempfile.gettempdir()) / "codigo_novo.zip"
-    with requests.get(url, timeout=(15, 60)) as resp:
-        resp.raise_for_status()
-        tmp.write_bytes(resp.content)
-
-    nova = pasta.with_name("codigo_nova")
-    shutil.rmtree(nova, ignore_errors=True)
-    with zipfile.ZipFile(tmp) as z:
-        z.extractall(nova)
-    if not (nova / "comprovantes_app.py").exists():
-        raise RuntimeError("codigo.zip veio sem o app dentro")
-
-    velha = pasta.with_name("codigo_velha")
-    shutil.rmtree(velha, ignore_errors=True)
-    if pasta.exists():
-        pasta.rename(velha)
-    nova.rename(pasta)
-    shutil.rmtree(velha, ignore_errors=True)
+    # Pasta EXCLUSIVA desta execução. O nome fixo em %TEMP% era compartilhado
+    # entre duas instâncias abertas ao mesmo tempo (e entre usuários da mesma
+    # máquina): uma sobrescrevia o download da outra no meio da extração.
+    trabalho = Path(tempfile.mkdtemp(prefix="comprovantes_upd_"))
     try:
-        tmp.unlink()
-    except OSError:
-        pass
+        tmp = trabalho / "codigo.zip"
+        with requests.get(url, timeout=(15, 60)) as resp:
+            resp.raise_for_status()
+            tmp.write_bytes(resp.content)
+
+        nova = pasta.with_name("codigo_nova")
+        shutil.rmtree(nova, ignore_errors=True)
+        _extrair_seguro(tmp, nova)
+        if not (nova / "comprovantes_app.py").exists():
+            raise RuntimeError("codigo.zip veio sem o app dentro")
+
+        velha = pasta.with_name("codigo_velha")
+        shutil.rmtree(velha, ignore_errors=True)
+        if pasta.exists():
+            pasta.rename(velha)
+        nova.rename(pasta)
+        shutil.rmtree(velha, ignore_errors=True)
+    finally:
+        shutil.rmtree(trabalho, ignore_errors=True)
     _logar(f"código atualizado para {ultima}")
 
 
 # ------------------------------------------------- motor novo (download grande)
 def _baixar_com_progresso(url: str, destino: Path, titulo: str):
     """Baixa mostrando uma janelinha de progresso. Retorna (ok, erro)."""
+    import queue
     import threading
     import tkinter as tk
     from tkinter import ttk
@@ -133,6 +153,26 @@ def _baixar_com_progresso(url: str, destino: Path, titulo: str):
     info.pack(pady=4)
     erro = []
 
+    # A thread do download NÃO fala com o Tk. Ela só empilha aqui; quem mexe
+    # nos widgets é o `after` abaixo, na thread da interface. `raiz.after` de
+    # outra thread é a mesma armadilha que já mordeu o app nas abas.
+    avisos: "queue.Queue[tuple]" = queue.Queue()
+
+    def drenar():
+        try:
+            while True:
+                tipo, dado = avisos.get_nowait()
+                if tipo == "progresso":
+                    pct, txt = dado
+                    barra.config(value=pct)
+                    info.config(text=txt)
+                elif tipo == "fim":
+                    raiz.destroy()
+                    return
+        except queue.Empty:
+            pass
+        raiz.after(100, drenar)
+
     def trabalho():
         try:
             # 15 s p/ conectar; 120 s sem receber NENHUM byte. Download
@@ -146,19 +186,36 @@ def _baixar_com_progresso(url: str, destino: Path, titulo: str):
                         fh.write(parte)
                         feito += len(parte)
                         if total:
-                            pct = feito * 100.0 / total
-                            txt = f"{feito // (1024*1024)} de {total // (1024*1024)} MB"
-                            raiz.after(0, lambda p=pct, t=txt: (
-                                barra.config(value=p), info.config(text=t)))
+                            avisos.put(("progresso", (
+                                feito * 100.0 / total,
+                                f"{feito // (1024*1024)} de "
+                                f"{total // (1024*1024)} MB")))
             if total and destino.stat().st_size != total:
                 raise RuntimeError("download veio incompleto")
         except Exception as e:
             erro.append(str(e)[:200])
-        raiz.after(0, raiz.destroy)
+        avisos.put(("fim", None))
 
     threading.Thread(target=trabalho, daemon=True).start()
+    raiz.after(100, drenar)
     raiz.mainloop()
     return (not erro), (erro[0] if erro else "")
+
+
+def _url_do_exe() -> tuple[str, str]:
+    """(url, nome) do .exe da release mais nova, pela API.
+
+    Deduzir a URL do nome do arquivo local dava 404 silencioso assim que
+    alguém renomeava o executável — e renomear é comum, o app fica numa pasta
+    própria e o nome vira o que a pessoa quiser. A release sabe o nome certo."""
+    import requests
+    r = requests.get(API_LATEST, timeout=15)
+    r.raise_for_status()
+    for a in (r.json().get("assets") or []):
+        nome = a.get("name") or ""
+        if nome.lower().endswith(".exe") and a.get("browser_download_url"):
+            return a["browser_download_url"], nome
+    raise RuntimeError("a release mais nova não tem executável publicado")
 
 
 def script_de_troca(pid: int, novo: Path, exe: Path) -> str:
@@ -228,10 +285,21 @@ def _oferecer_motor_novo(minimo: str) -> bool:
         return False
 
     exe = Path(sys.executable)
-    url = (f"https://github.com/{REPO}/releases/latest/download/"
-           + exe.name.replace(" ", "%20"))
-    novo = Path(tempfile.gettempdir()) / (exe.stem + " novo.exe")
-    _logar(f"baixando motor novo de {url}")
+    try:
+        url, nome_release = _url_do_exe()
+    except Exception as e:
+        _logar(f"FALHA ao descobrir o exe da release: {e}")
+        raiz = tk.Tk(); raiz.withdraw()
+        messagebox.showwarning(
+            "Atualização não concluída",
+            f"Não consegui localizar o app novo na release.\nMotivo: {e}\n\n"
+            "O app vai abrir na versão atual. Tente de novo mais tarde ou "
+            f"baixe manualmente em:\ngithub.com/{REPO}/releases")
+        raiz.destroy()
+        return False
+    novo = Path(tempfile.mkdtemp(prefix="comprovantes_exe_")) / (
+        exe.stem + " novo.exe")
+    _logar(f"baixando motor novo ({nome_release}) de {url}")
     ok, motivo = _baixar_com_progresso(url, novo, "Baixando o app completo...")
     if not ok:
         _logar(f"FALHA no download do motor: {motivo}")

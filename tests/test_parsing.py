@@ -19,11 +19,11 @@ from conciliacao.parsing import (
 @pytest.mark.parametrize(
     "texto, esperado",
     [
-        ("R$ 1.536.956,24", Decimal("1536956.24")),
+        ("R$ 1.234.567,89", Decimal("1234567.89")),
         ("R$ 724,84", Decimal("724.84")),
         # Negativo do ERP: traco DEPOIS do R$, separado por espaco.
-        ("R$ - 1.179,29", Decimal("-1179.29")),
-        ("-R$ 1.179,29", Decimal("-1179.29")),
+        ("R$ - 1.500,75", Decimal("-1500.75")),
+        ("-R$ 1.500,75", Decimal("-1500.75")),
         # Pagamento parcial: vale o primeiro valor (o que esta em aberto).
         ("R$ 4.000,00 Pago: R$ 3.230,00", Decimal("4000.00")),
         ("R$ 4.000,00\nPago: R$ 3.230,00", Decimal("4000.00")),
@@ -32,7 +32,7 @@ from conciliacao.parsing import (
         # Milhar sem centavos.
         ("R$ 1.000", Decimal("1000")),
         # Sem simbolo de moeda, ainda parseavel.
-        ("40.608,17", Decimal("40608.17")),
+        ("45.678,90", Decimal("45678.90")),
     ],
 )
 def test_parse_brl(texto, esperado):
@@ -60,8 +60,8 @@ def test_parse_date_br():
 
 
 def test_normalize_name_remove_acento_e_pontuacao():
-    assert normalize_name("Morais Participações - MÃE - 55.694-7 - SICOOB") == (
-        "MORAIS PARTICIPACOES MAE 55 694 7 SICOOB"
+    assert normalize_name("Morais Participações - MÃE - 11.111-1 - SICOOB") == (
+        "MORAIS PARTICIPACOES MAE 11 111 1 SICOOB"
     )
     assert normalize_name("MORAIS EMPREENDIMENTOS BURITIS - CAIXA ECONÔMICA FEDERAL") == (
         "MORAIS EMPREENDIMENTOS BURITIS CAIXA ECONOMICA FEDERAL"
@@ -71,10 +71,10 @@ def test_normalize_name_remove_acento_e_pontuacao():
 @pytest.mark.parametrize(
     "texto, esperado",
     [
-        ("Morais Participações - MÃE - 55.694-7 - SICOOB", ["556947"]),
-        ("Morais Participações - SUBCONTA 55696-3 - TB 21 QD 51 LT 40 - SICOOB", ["556963"]),
-        ("MOURA DANTAS EMPREENDIMENTOS BRADESCO - 49310-4", ["493104"]),
-        ("JOAO V PARTICIPACOES - 56.139-8 - SICOOB", ["561398"]),
+        ("Morais Participações - MÃE - 11.111-1 - SICOOB", ["111111"]),
+        ("Morais Participações - SUBCONTA 22222-2 - TB 21 QD 51 LT 40 - SICOOB", ["222222"]),
+        ("MOURA DANTAS EMPREENDIMENTOS BRADESCO - 33333-3", ["333333"]),
+        ("JOAO V PARTICIPACOES - 44.444-4 - SICOOB", ["444444"]),
         ("MORAIS ENGENHARIA - INTER", []),
     ],
 )
@@ -83,8 +83,9 @@ def test_extract_account_numbers(texto, esperado):
 
 
 def test_normalize_account_number():
-    assert normalize_account_number("55.694-7") == "556947"
-    assert normalize_account_number("55694-7") == "556947"
+    # Com e sem pontuação têm de chegar na mesma forma comparável.
+    assert normalize_account_number("11.111-1") == "111111"
+    assert normalize_account_number("11111-1") == "111111"
     assert normalize_account_number(None) is None
 
 
