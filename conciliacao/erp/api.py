@@ -92,7 +92,8 @@ class SessaoApi:
         if not (email and senha):
             raise SessaoExpirada(
                 "nao ha credenciais guardadas para ler os saldos.\n"
-                "Rode o atalho '1 - Salvar senha' e informe e-mail e senha."
+                "No app: clique em 'Login' na aba Anexar Comprovantes.\n"
+                "Pelos .bat: rode o atalho '1 - Salvar senha'."
             )
 
         corpo = _requisitar(
@@ -118,7 +119,8 @@ class SessaoApi:
         if corpo.get("needsPasswordChange"):
             raise SessaoExpirada(
                 "o ERP esta exigindo troca de senha deste usuario.\n"
-                "Entre no site, troque a senha e rode '1 - Salvar senha' de novo."
+                "Entre no site, troque a senha e guarde a nova:\n"
+                "no app, em 'Login'; pelos .bat, em '1 - Salvar senha'."
             )
 
         empresas = corpo.get("companies") or []
@@ -282,7 +284,8 @@ def _requisitar(url: str, *, metodo: str = "GET", corpo=None, headers=None):
         if erro.code in (401, 403) and "login" in url:
             raise SessaoExpirada(
                 "o ERP recusou a senha guardada.\n"
-                "Rode o atalho '1 - Salvar senha' de novo para corrigi-la."
+                "Guarde a senha correta: no app, em 'Login';\n"
+                "pelos .bat, no atalho '1 - Salvar senha'."
             ) from erro
         if erro.code == 403:
             raise ErpError(
