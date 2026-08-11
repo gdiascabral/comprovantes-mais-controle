@@ -26,6 +26,7 @@ for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
 import tkinter as tk
 from tkinter import ttk
 
+import ativacao
 from separar_renomear import SepararFrame
 from anexar_comprovantes import AnexarFrame
 from conferencia import ConferenciaFrame
@@ -132,6 +133,22 @@ def main():
 
     if sv_ttk:
         sv_ttk.set_theme(tema_efetivo(escolha_tema))
+
+    # ---------------- senha de primeira utilização
+    # Antes de montar as abas: cada frame abre executor e estado próprios, e
+    # construir tudo para depois recusar deixaria a janela piscando atrás do
+    # diálogo. A principal fica escondida enquanto se pergunta; o tema já foi
+    # aplicado acima, então o diálogo nasce na cor certa.
+    if not ativacao.ja_ativado(_pasta_dados()):
+        root.withdraw()
+        if not ativacao.pedir_ativacao(root, _pasta_dados()):
+            root.destroy()
+            return                       # sem ativar, o app simplesmente não abre
+        root.deiconify()
+        try:
+            root.state("zoomed")         # o withdraw desfaz a maximização
+        except tk.TclError:
+            pass
 
     # ---------------- navegação lateral + área de conteúdo
     lateral = ttk.Frame(root)

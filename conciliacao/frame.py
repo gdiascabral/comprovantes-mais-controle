@@ -46,6 +46,15 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 _fmt_dur = util.fmt_dur
 _pasta_base = util.pasta_base
 
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
+CampoData = widgets.CampoData
+
 #: Erros que já explicam a si mesmos: a mensagem vai inteira para o log, sem
 #: "[!]" na frente, porque ela É a entrega quando a planilha não sai.
 ERROS_ESPERADOS = (ValidationError, WorkbookError, MappingError, ErpError)
@@ -95,9 +104,9 @@ class ConciliacaoFrame(ttk.Frame):
         f1.pack(fill="x", padx=PADX, pady=6)
         linha = ttk.Frame(f1); linha.pack(fill="x")
         ttk.Label(linha, text="De:").pack(side="left")
-        ttk.Entry(linha, textvariable=self.v_ini, width=12).pack(side="left", padx=(6, 12))
+        CampoData(linha, self.v_ini).pack(side="left", padx=(6, 12))
         ttk.Label(linha, text="até:").pack(side="left")
-        ttk.Entry(linha, textvariable=self.v_fim, width=12).pack(side="left", padx=(6, 12))
+        CampoData(linha, self.v_fim).pack(side="left", padx=(6, 12))
         ttk.Label(linha, foreground="#6b6b6b",
                   text="(dd/mm/aaaa — na segunda já vem sábado + domingo + segunda)"
                   ).pack(side="left")

@@ -84,6 +84,22 @@ def norm_espaco(s: str) -> str:
     return re.sub(r"\s+", " ", norm(s)).strip()
 
 
+def filtrar(itens, termo: str, chave=None) -> list:
+    """Itens cujo texto CONTÉM o termo, ignorando acento, caixa e espaço duplo.
+
+    Substring em qualquer posição, de propósito: quem procura digita o pedaço
+    que lembra, não o começo. "livia" acha "Livian"; "696" acha a subconta
+    55696-3; "buritis" acha "MORAIS EMPREENDIMENTOS BURITIS - SICOOB".
+
+    Termo vazio devolve tudo — filtro que esconde a lista inteira quando o
+    campo está vazio é pior do que não ter filtro."""
+    alvo = norm_espaco(termo)
+    if not alvo:
+        return list(itens)
+    return [i for i in itens
+            if alvo in norm_espaco(chave(i) if chave else str(i))]
+
+
 def cor_escura(cor_hex) -> bool:
     """True se a cor de fundo '#rrggbb' for escura. Usado para já criar os
     campos de log na cor certa do tema e evitar o 'flash' branco no escuro."""

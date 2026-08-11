@@ -19,7 +19,6 @@ ou de um Excel com aba CERTEZA (coluna link + PDF(s)).
 """
 import os
 import queue
-import re
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -94,93 +93,17 @@ def _abrir_url(url: str):
             pass
 
 
-class CampoData(ttk.Frame):
-    """Campo de data dd/mm/aaaa: completa as barras sozinho ao digitar e tem
-    um botão que abre um calendário para escolher a data com o mouse."""
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
 
-    MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-             "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-
-    def __init__(self, master, textvariable, width=11):
-        super().__init__(master)
-        self.var = textvariable
-        self.ent = ttk.Entry(self, textvariable=self.var, width=width)
-        self.ent.pack(side="left")
-        ttk.Button(self, text="📅", width=3, command=self._abrir_cal
-                   ).pack(side="left", padx=(2, 0))
-        self.ent.bind("<KeyRelease>", self._auto_barra)
-
-    def _auto_barra(self, ev):
-        if ev.keysym in ("BackSpace", "Delete", "Left", "Right",
-                         "Home", "End", "Tab", "Shift_L", "Shift_R"):
-            return
-        t = self.var.get()
-        d = "".join(c for c in t if c.isdigit())[:8]
-        if len(d) > 4:
-            novo = d[:2] + "/" + d[2:4] + "/" + d[4:]
-        elif len(d) > 2:
-            novo = d[:2] + "/" + d[2:]
-        else:
-            novo = d
-        if novo != t:
-            self.var.set(novo)
-            self.ent.icursor("end")
-
-    def _abrir_cal(self):
-        try:
-            import calendar
-        except ImportError:              # módulo pode não estar no motor antigo
-            messagebox.showinfo("Calendário indisponível",
-                                "Digite a data manualmente no formato dd/mm/aaaa.")
-            return
-        top = tk.Toplevel(self)
-        top.title("Escolher data")
-        top.transient(self.winfo_toplevel())
-        top.resizable(False, False)
-        top.geometry(f"+{self.winfo_rootx()}+{self.winfo_rooty() + self.winfo_height() + 2}")
-        hoje = date.today()
-        m = re.match(r"(\d{2})/(\d{2})/(\d{4})$", (self.var.get() or "").strip())
-        mes = [int(m.group(2))] if m and 1 <= int(m.group(2)) <= 12 else [hoje.month]
-        ano = [int(m.group(3))] if m else [hoje.year]
-
-        cab = ttk.Frame(top); cab.pack(fill="x", padx=6, pady=4)
-        lbl = ttk.Label(cab, text="", width=16, anchor="center")
-        grade = ttk.Frame(top); grade.pack(padx=6, pady=(0, 6))
-
-        def escolher(dia):
-            self.var.set(f"{dia:02d}/{mes[0]:02d}/{ano[0]}")
-            top.destroy()
-
-        def desenhar():
-            for w in grade.winfo_children():
-                w.destroy()
-            lbl.config(text=f"{self.MESES[mes[0] - 1]} {ano[0]}")
-            for i, dsem in enumerate(["S", "T", "Q", "Q", "S", "S", "D"]):
-                ttk.Label(grade, text=dsem, width=3, anchor="center"
-                          ).grid(row=0, column=i)
-            for r, semana in enumerate(
-                    calendar.Calendar().monthdayscalendar(ano[0], mes[0]), 1):
-                for c, dia in enumerate(semana):
-                    if dia:
-                        ttk.Button(grade, text=str(dia), width=3,
-                                   command=lambda d=dia: escolher(d)
-                                   ).grid(row=r, column=c, padx=1, pady=1)
-
-        def mudar(delta):
-            m2 = mes[0] + delta
-            if m2 < 1:
-                mes[0], ano[0] = 12, ano[0] - 1
-            elif m2 > 12:
-                mes[0], ano[0] = 1, ano[0] + 1
-            else:
-                mes[0] = m2
-            desenhar()
-
-        ttk.Button(cab, text="◀", width=3, command=lambda: mudar(-1)).pack(side="left")
-        lbl.pack(side="left", expand=True)
-        ttk.Button(cab, text="▶", width=3, command=lambda: mudar(1)).pack(side="right")
-        desenhar()
-        top.grab_set()
+#: O campo de data mora em widgets.py e é usado por TODAS as abas que pedem
+#: data. Ficava aqui dentro, e a Conferência tinha de importá-lo desta aba —
+#: uma aba dependendo de outra só para reaproveitar um Entry.
+CampoData = widgets.CampoData
 
 
 class AnexarFrame(ttk.Frame):

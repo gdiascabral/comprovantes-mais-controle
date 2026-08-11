@@ -2,12 +2,21 @@
 
 Aplicativo para Windows que organiza comprovantes bancários e os anexa nos
 pagamentos do [Mais Controle ERP](https://maiscontroleerp.com.br) — sem
-precisar saber programar. Duas funções, em abas:
+precisar saber programar. São **oito abas**, numa janela só:
 
 | Aba | O que faz |
 |---|---|
-| **1. Separar e Renomear** | Pega PDFs com vários comprovantes (uma página cada), separa cada página em um arquivo próprio e renomeia lendo o conteúdo — inclusive comprovantes "impressos" sem texto, via **OCR** embutido. |
-| **2. Anexar Comprovantes** | Busca os títulos **pagos** do período nas contas que você marcar, descobre quais ainda não têm comprovante e anexa o PDF certo em cada um (com a tag "Comprovante"). |
+| **✂ Separar e Renomear** | Pega PDFs com vários comprovantes (uma página cada), separa cada página em um arquivo próprio e renomeia lendo o conteúdo — inclusive comprovantes "impressos" sem texto, via **OCR** embutido. |
+| **📎 Anexar Comprovantes** | Busca os títulos **pagos** do período nas contas que você marcar, descobre quais ainda não têm comprovante e anexa o PDF certo em cada um (com a tag "Comprovante"). |
+| **✅ Conferência** | Auditoria depois do anexo: lista os pagos que ficaram **sem** comprovante e, se você pedir, abre cada anexo para conferir se o valor e a data batem com o lançamento. |
+| **💰 Aportes** | Lança aportes de capital e distribuições de lucro direto no ERP, sem planilha e sem importação. |
+| **🗓 Pagamentos do Dia** | *(diário)* Excel de conferência dos pagamentos do período, com uma aba por conta bancária. |
+| **⚖ Conciliação Diária** | *(diário)* Lê saldos e pagamentos a vencer e monta o painel do dia, com o aporte mínimo por conta. |
+| **📊 Relatório Mensal** | *(mensal)* Baixa em PDF o extrato de cada conta bancária do ERP, arquivando na pasta da empresa. |
+| **🏦 Extratos Sicoob** | *(mensal)* Cria a árvore de pastas do fechamento e baixa OFX + PDF de cada conta no SicoobNet. |
+
+As quatro primeiras ficam soltas na barra lateral; as outras vivem nos grupos
+**DIÁRIO** e **MENSAL**, que abrem e fecham (o estado fica salvo).
 
 Bancos suportados na leitura: **Sicoob** (PIX, boleto, convênio — layouts
 antigo e novo do Internet Banking) e **Inter** (PIX, pagamento, boleto/guia,
@@ -86,9 +95,25 @@ automaticamente se faltar.
 
 ## Perguntas comuns
 
-**A senha do Mais Controle passa pelo app?** Não. O login é feito por você na
-janela do Chrome; o app só usa a sessão já autenticada. O perfil fica salvo em
-`.chrome_profile`, ao lado do executável.
+**A senha do Mais Controle passa pelo app?** Passa, se você escolher guardá-la.
+São dois caminhos:
+
+- **Login na janela do Chrome** (o padrão da primeira vez): você digita no site,
+  o app não vê a senha e a sessão fica no perfil `.chrome_profile`, ao lado do
+  executável.
+- **Botão 🔑 Login** (opcional): você digita e-mail e senha num diálogo do
+  próprio app, que os grava em `login.dat` cifrado com a **DPAPI do Windows** —
+  só o SEU usuário, nessa máquina, consegue decifrar; nunca em texto puro. A
+  partir daí o app entra sozinho. O mesmo `login.dat` é usado pela API de
+  saldos da Conciliação Diária.
+
+Para apagar a senha guardada: 🔑 Login → **Remover**. Trocou a senha no ERP?
+Remova e cadastre de novo.
+
+**O app pede uma senha ao abrir.** Só na primeira vez em cada computador: é a
+senha de ativação, que libera o uso da máquina. Ela não é a senha do Mais
+Controle e não vai para lugar nenhum — o app guarda apenas um marcador local
+(`ativacao.dat`).
 
 **E se rodar duas vezes?** Sem problema: pagamentos que já têm anexo são pulados.
 
@@ -111,15 +136,45 @@ com o idioma português) e `python comprovantes_app.py`.
 ```
 motor.py            carregador do exe (atualiza e injeta o código)
 atualizador.py      download do codigo.zip / troca do exe
-comprovantes_app.py janela unificada (abas)
+comprovantes_app.py janela unificada (as oito abas)
+ativacao.py         senha de primeira utilização (marcador por máquina)
+util.py             formatos, normalização de nomes, pasta-base — SEM tkinter
+widgets.py          widgets comuns (o campo de data com calendário)
 separar_renomear/   separar páginas + renomear (extração, OCR, modelos de nome)
 anexar/             buscar pagos, casar e anexar
   ├─ mc_api.py      leitura dos pagos e anexos (API, via página logada)
   ├─ mc_client.py   automação do Chrome para anexar (Playwright)
   ├─ matcher.py     casamento PDF ↔ pagamento
+  ├─ conferencia.py auditoria pós-anexo
   ├─ planilha.py    leitura de lista CSV/XLSX
   └─ config.py      ajustes (tag, perfil do Chrome, etc.)
+aportes/            aportes e distribuições (regras em Decimal + API do ERP)
+relatorios/         extrato mensal por conta (PDF) + mapa conta → pasta
+pagamentos_dia/     Excel de conferência dos pagamentos do dia
+extratos_sicoob/    árvore do fechamento + OFX/PDF do SicoobNet
+conciliacao/        painel do dia (único pacote de verdade, com __init__.py)
 ```
+
+### Arquivos de configuração (ficam AO LADO do exe, fora do repositório)
+
+Todos carregam dado da empresa — nome, conta, CPF — e por isso nunca entram no
+Git. O app funciona sem eles; cada aba avisa qual está faltando.
+
+| Arquivo | Para quê | Sem ele |
+|---|---|---|
+| `login.dat` | e-mail/senha do ERP, cifrado pela DPAPI | login manual no Chrome |
+| `ativacao.dat` | marcador da senha de primeira utilização | o app pergunta de novo |
+| `preferencias.json` | tema e grupos abertos da barra lateral | volta ao padrão |
+| `contas.csv` | contas dos Aportes (`nome_exibicao;nome_oficial;conta;nome_descricao`) | a aba Aportes fica vazia |
+| `subcontas.json` | grupos de investidores por subconta + `_obra_padrao` | sem rateio |
+| `contas_mc.json` | mapa conta do ERP → pasta do extrato | Relatório Mensal não roda |
+| `contas_sicoob.json` | mapa conta Sicoob → pasta + árvore de empresas | Extratos Sicoob não roda |
+| `pix_reembolso.json` | chaves Pix dos avisos "PAGAR PARA" | a linha sai como pendente |
+| `config.yaml`, `mapping.yaml`, `MODELO.xlsx` | painel da Conciliação Diária | a aba não gera a planilha |
+
+`contas_mc.json` e `contas_sicoob.json` precisam usar o **mesmo nome de pasta**
+para a mesma conta — senão o mês fica partido, com o PDF do ERP numa pasta e o
+OFX do banco em outra. O app confere isso e avisa antes de baixar.
 
 ## Licença
 

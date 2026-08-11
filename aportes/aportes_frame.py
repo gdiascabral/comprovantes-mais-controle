@@ -24,6 +24,17 @@ from mc_lancamentos import (criar_pagamento, criar_recebimento,  # noqa: E402
 from erp_sessao import ouvinte                              # noqa: E402
 from regras import Operacao, como_dinheiro, expandir        # noqa: E402
 
+try:                                     # utilitários e widgets (raiz)
+    import util
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+    import widgets
+
+CampoData = widgets.CampoData
+
 URL_PAGAMENTOS = "https://acessar.maiscontroleerp.com.br/#/payable-installments"
 
 
@@ -64,7 +75,7 @@ class AportesFrame(ttk.Frame):
         linha1 = ttk.Frame(form); linha1.pack(fill="x", pady=3)
         ttk.Label(linha1, text="Data", width=8).pack(side="left")
         self.var_data = tk.StringVar(value=f"{datetime.date.today():%d/%m/%Y}")
-        ttk.Entry(linha1, textvariable=self.var_data, width=12).pack(side="left")
+        CampoData(linha1, self.var_data).pack(side="left")
         ttk.Label(linha1, text="  Valor R$", width=10).pack(side="left")
         self.var_valor = tk.StringVar()
         ttk.Entry(linha1, textvariable=self.var_valor, width=14).pack(side="left")
@@ -90,6 +101,21 @@ class AportesFrame(ttk.Frame):
         self.cb_forma = ttk.Combobox(linha3, state="readonly", width=20,
                                      values=cadastro.FORMAS)
         self.cb_forma.current(0); self.cb_forma.pack(side="left")
+
+        # Busca: são ~19 contas e ~440 participantes no ERP. Rolar combobox
+        # até achar "Morais Participações - SUBCONTA 55696-3" é o tipo de
+        # trabalho que a máquina faz melhor.
+        linha4 = ttk.Frame(form); linha4.pack(fill="x", pady=(6, 0))
+        ttk.Label(linha4, text="Buscar", width=8).pack(side="left")
+        self.var_busca = tk.StringVar()
+        ttk.Entry(linha4, textvariable=self.var_busca, width=30).pack(side="left")
+        ttk.Label(linha4, foreground="#6b6b6b",
+                  text="  filtra Pagou/Recebeu enquanto você digita "
+                       "(sem acento; acha no meio do nome: \"696\", \"livia\")"
+                  ).pack(side="left")
+        ttk.Button(linha4, text="limpar",
+                   command=lambda: self.var_busca.set("")).pack(side="left", padx=6)
+        self.var_busca.trace_add("write", lambda *_: self._filtrar_listas())
 
         ttk.Button(form, text="+  Adicionar à lista",
                    command=self._adicionar).pack(anchor="w", pady=(8, 0))
@@ -130,6 +156,11 @@ class AportesFrame(ttk.Frame):
         nomes = list(self.entidades)
         pagadores = nomes + [cadastro.INVESTIDOR_PREFIXO + n
                              for n in self.subcontas if not n.startswith("_")]
+        # As listas COMPLETAS ficam guardadas: a busca filtra a partir delas,
+        # senão cada filtro comeria o resultado do anterior e a lista só
+        # encolheria até sobrar nada.
+        self._pagadores = pagadores
+        self._recebedores = nomes
         self.cb_pagador["values"] = pagadores
         self.cb_recebedor["values"] = nomes
         if pagadores:
@@ -139,6 +170,26 @@ class AportesFrame(ttk.Frame):
         if not nomes:
             self._log("Nenhuma conta cadastrada. Crie o arquivo contas.csv "
                       f"em {cadastro.ARQUIVO_CONTAS}")
+
+    def _filtrar_listas(self):
+        """Aplica a busca aos dois combos, sem perder o que já estava escolhido.
+
+        Se a escolha atual continua batendo com o filtro, ela é mantida; se
+        sumiu da lista filtrada, o campo é esvaziado em vez de pular sozinho
+        para outro nome — trocar a conta por baixo de quem está lançando
+        dinheiro seria a pior coisa a fazer aqui."""
+        termo = self.var_busca.get()
+        for combo, todos in ((self.cb_pagador, getattr(self, "_pagadores", [])),
+                             (self.cb_recebedor, getattr(self, "_recebedores", []))):
+            escolhido = combo.get()
+            visiveis = util.filtrar(todos, termo)
+            combo["values"] = visiveis
+            if escolhido in visiveis:
+                combo.set(escolhido)
+            elif termo.strip():
+                combo.set("")
+            elif visiveis:
+                combo.set(visiveis[0])
 
     def _log(self, msg=""):
         """Pode ser chamado de QUALQUER thread: só enfileira."""

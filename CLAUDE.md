@@ -9,11 +9,14 @@ https://github.com/gdiascabral/comprovantes-mais-controle
 
 TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), que:
 1. gera `versao.txt` = `v1.0.<run_number>` (NÃO é commitado; criado na build);
-2. monta `codigo.zip` (comprovantes_app.py + util.py + separar_renomear/*.py +
-   anexar/*.py + aportes/*.py + relatorios/*.py + pagamentos_dia/*.py +
-   extratos_sicoob/*.py + versao.txt + motor_minimo.txt + icone.ico) — ~50 KB.
-   **Pasta nova de aba = linha nova aqui**, senão o import falha no usuário e
-   o app não abre;
+2. monta `codigo.zip` (comprovantes_app.py + util.py + widgets.py +
+   ativacao.py + separar_renomear/*.py + anexar/*.py + aportes/*.py +
+   relatorios/*.py + pagamentos_dia/*.py + extratos_sicoob/*.py +
+   conciliacao/*.py + conciliacao/erp/*.py + versao.txt + motor_minimo.txt +
+   icone.ico) — ~50 KB.
+   **Pasta nova de aba OU arquivo novo na raiz = linha nova aqui**, senão o
+   import falha no usuário e o app não abre. Vale para os dois: `widgets.py` e
+   `ativacao.py` são de raiz e precisaram entrar um a um;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
    com Tesseract OCR embutido) — e publica a Release `v1.0.<run_number>` com
    o exe + codigo.zip. Os exes avulsos de Separar e de Anexar foram removidos:
@@ -316,9 +319,56 @@ conteúdo. Releases antigas são podadas pelo CI (mantém 4).
 ## Ideias pendentes
 
 - Assinatura digital do exe no CI (elimina SmartScreen/Smart App Control).
-- Testes de unidade com fixtures de texto (campos, parse_pdf, casar).
-- Deduplicar utilitários (_fmt_dur, _norm/_sem_acento, LINK) num util.py.
 - Centralizar seletores do ERP (mc_client.py) em constantes/config.
-- Pinar versões-teto no requirements.txt.
 - OCR em lote cruzando ARQUIVOS (hoje o pool é por arquivo; entrada com
   muitos PDFs de página única não aproveita o paralelismo).
+- Endurecer a senha de ativação com PBKDF2 no lugar do SHA-256 puro (sal
+  público + senha adivinhável é fraco contra dicionário; hoje o custo de
+  atacar não compensa, porque o marcador só libera o app nesta máquina).
+
+## Auditoria de 11/08/2026 — o que mudou
+
+Um lote grande de correções, agrupado por bloco. O que vale guardar como
+DECISÃO (o resto está nos commits):
+
+- **Nada de "anexado" sem prova.** `mc_client.anexar` espera o arquivo aparecer
+  na lista do diálogo e relê a grade depois de confirmar; sem isso retorna
+  `erro:nao_confirmado`. O `wait_for_timeout(3000)` fixo era menor que o upload
+  em lote e o Confirmar ia sem arquivo.
+- **-1 não é 0.** `mc_api.verificar_anexos` devolve -1 quando o fetch falha, e
+  os dois consumidores tratavam isso como "tem anexo" — a aba Anexar pulava o
+  pagamento e a Conferência omitia a linha. Use `mc_api.estado_anexo()`: são
+  TRÊS estados, e "não verificado" nunca pode ser lido como "está certo".
+- **Aporte não se repete.** A aba Aportes guarda quais lançamentos de cada
+  operação já entraram no ERP; relançar depois de falha parcial pula o que deu
+  certo. Dinheiro duplicado se desfaz à mão, lançamento por lançamento.
+- **Dinheiro em Decimal**, inclusive nos Aportes (era a última ilha de float, e
+  logo no módulo que ESCREVE valores). A conversão para float mora só na
+  fronteira do JSON (`mc_lancamentos._num`).
+- **Um navegador, seis abas.** `AnexarFrame.submeter()` registra o dono e
+  `avisar_se_ocupado()` recusa começar enquanto outra aba trabalha. Antes o
+  clique só entrava na fila, mudo, e o trabalho começava minutos depois.
+- **Tkinter só na thread da interface.** Toda aba usa `queue` + `after`; quem
+  escrever no Text direto da thread do navegador trava a aba. A Conferência e
+  os Aportes ainda faziam isso.
+- **Os dois mapas de pasta têm de concordar.** `contas_mc.json` (Relatório
+  Mensal) e `contas_sicoob.json` (Extratos Sicoob) escolhem a pasta da MESMA
+  conta. Divergiram em três subcontas e julho/2026 ficou partido, com o PDF do
+  ERP numa pasta e o OFX na outra. `relatorios/conferir_mapas.py` compara e
+  avisa antes do primeiro download.
+- **`util.py` não importa tkinter.** Ele é usado por módulos de regra que
+  rodam sem interface (`pagamentos_dia/relatorio.py`,
+  `relatorios/contas_mc.py`, `conciliacao/parsing.py`). Widget compartilhado
+  vai em `widgets.py`, que é o par visual dele.
+- **`util.norm_espaco` é a ÚNICA comparação de nome de conta.** Era `_chave`
+  em duas cópias: uma escolhia a pasta do extrato, a outra julgava se o
+  extrato era da conta certa. Duas cópias de uma comparação é uma divergência
+  esperando acontecer.
+- **O CI agora barra release quebrada.** `build` depende dos jobs `test` e
+  `motor`; o segundo falha se o push mexer no motor sem subir
+  `motor_minimo.txt`. E `tests/**` saiu do `paths-ignore`, senão o job de
+  teste não rodaria no push que altera um teste.
+- **Senha de primeira utilização** (`ativacao.py`): só o SHA-256 de
+  (sal + senha) fica no código — o repositório é público. O marcador
+  `ativacao.dat` é por máquina; trocar a senha é trocar o hash, e todo mundo é
+  perguntado de novo.

@@ -38,6 +38,15 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 _fmt_dur = util.fmt_dur
 _pasta_base = util.pasta_base
 
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
+CampoData = widgets.CampoData
+
 MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
          "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 
@@ -107,9 +116,9 @@ class RelatorioFrame(ttk.Frame):
                         command=self._alternar_periodo).pack(anchor="w")
         self.f_datas = ttk.Frame(f1)
         ttk.Label(self.f_datas, text="De:").pack(side="left")
-        ttk.Entry(self.f_datas, textvariable=self.v_ini, width=12).pack(side="left", padx=(6, 14))
+        CampoData(self.f_datas, self.v_ini).pack(side="left", padx=(6, 14))
         ttk.Label(self.f_datas, text="até:").pack(side="left")
-        ttk.Entry(self.f_datas, textvariable=self.v_fim, width=12).pack(side="left", padx=(6, 8))
+        CampoData(self.f_datas, self.v_fim).pack(side="left", padx=(6, 8))
         ttk.Label(self.f_datas, text="(dd/mm/aaaa)", foreground="#6b6b6b").pack(side="left")
 
         for var in (self.v_mes, self.v_ano):

@@ -34,9 +34,17 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import util
 
-# CampoData e _texto_do_erro seguem vindo do Anexar: um é widget e o outro
-# conhece o SemRede do mc_client. Os formatos vêm do util, compartilhados.
-from anexar_comprovantes import CampoData, _texto_do_erro
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
+CampoData = widgets.CampoData
+# Só o _texto_do_erro segue vindo do Anexar: ele conhece o SemRede do
+# mc_client, que é daquela aba. O campo de data e os formatos são de todos.
+from anexar_comprovantes import _texto_do_erro
 
 LINK = config.MC_URL_LANCAMENTO
 _fmt_dur = util.fmt_dur

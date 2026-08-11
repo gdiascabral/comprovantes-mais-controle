@@ -101,7 +101,9 @@ jobs:
       - name: Montar o pacote de código (codigo.zip + cópia embutida)
         run: |
           New-Item -ItemType Directory codigo_embutido | Out-Null
-          Copy-Item comprovantes_app.py, util.py, versao.txt, motor_minimo.txt, icone.ico codigo_embutido/
+          # Arquivo NOVO na raiz = linha nova aqui. Sem isso o import falha na
+          # máquina do usuário e o app não abre (ver CLAUDE.md, regra de ouro).
+          Copy-Item comprovantes_app.py, util.py, widgets.py, ativacao.py, versao.txt, motor_minimo.txt, icone.ico codigo_embutido/
           New-Item -ItemType Directory codigo_embutido/separar_renomear | Out-Null
           Copy-Item separar_renomear/*.py codigo_embutido/separar_renomear/
           New-Item -ItemType Directory codigo_embutido/anexar | Out-Null
