@@ -15,6 +15,13 @@ from pathlib import Path
 
 import sicoob_config as cfg
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
 
 class MapaInvalido(RuntimeError):
     """O JSON não existe, não é JSON, ou não descreve um mapa utilizável."""
@@ -36,6 +43,11 @@ class Empresa:
     nome: str
     pastas_vazias: list[str] = field(default_factory=list)
     contas: list[Conta] = field(default_factory=list)
+    #: Nomes com que esta empresa aparece como CLIENTE das obras no ERP.
+    #: `TERRA BELA MORAIS ENGENHARIA SPE` (ERP) e a pasta `TERRA BELA` nao se
+    #: derivam um do outro, e a aba Contratos precisa da ponte. Vazio por
+    #: padrao, para o contas_sicoob.json de quem nao atualizou seguir valido.
+    clientes_erp: list[str] = field(default_factory=list)
 
     @property
     def subpastas(self) -> list[str]:
@@ -96,9 +108,12 @@ def carregar(caminho: Path | None = None) -> Mapa:
                 raise MapaInvalido(
                     f"Conta incompleta em '{nome}': precisa de 'numero' e 'pasta'.")
             contas.append(Conta(numero=numero, pasta=pasta, empresa=nome))
-        empresas.append(Empresa(nome=nome,
-                                pastas_vazias=[p.strip() for p in e.get("pastas_vazias", [])],
-                                contas=contas))
+        empresas.append(Empresa(
+            nome=nome,
+            pastas_vazias=[p.strip() for p in e.get("pastas_vazias", [])],
+            contas=contas,
+            clientes_erp=[c.strip() for c in (e.get("clientes_erp") or [])
+                          if (c or "").strip()]))
     return Mapa(raiz=raiz, empresas=empresas)
 
 
@@ -136,6 +151,18 @@ def validar(mapa: Mapa) -> list[str]:
                 avisos.append(
                     f"Subpasta fora do padrão em '{e.nome}': '{c.pasta}'\n"
                     "   esperado: SUBCONTA - 55696-3 - DESCRIÇÃO - SICOOB")
+
+    # Cliente do ERP em duas empresas manda o contrato para a pasta errada, e
+    # nada no disco denuncia depois — mesma classe de erro da conta repetida.
+    donos: dict[str, str] = {}
+    for e in mapa.empresas:
+        for cliente in e.clientes_erp:
+            chave = util.norm_espaco(cliente)
+            if chave in donos and donos[chave] != e.nome:
+                avisos.append(
+                    f"Cliente do ERP '{cliente}' aparece em duas empresas: "
+                    f"'{donos[chave]}' e '{e.nome}'.")
+            donos[chave] = e.nome
     return avisos
 
 
