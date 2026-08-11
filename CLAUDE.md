@@ -142,15 +142,27 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   Compartilha sessão/thread da tela Anexar (`anx.garantir_sessao()`).
 - `relatorios/extrato_mc.py` — extrato do fluxo de caixa por conta, em PDF.
   Roda sobre a página logada do Anexar (`anx.mc.page`), na thread do navegador.
-  Cinco armadilhas resolvidas ali: (1) a lista de contas é paginada e o
-  `pageSize` tem de ser escrito no scope **dono** da propriedade
-  (`hasOwnProperty`) — o scope de `angular.element(tr)` é o filho do ng-repeat
-  e a escrita vira sombra, trazendo só 10 de 36; (2) não é preciso clicar conta
-  por conta: o botão Extrato chama `stateGoNewTab('base.cashFlow')`, então vale
-  ir direto a `#/cash-flow?accountId=`; (3) o período mora em `fromDate`/
-  `toDate` (moment) do controller, não nos inputs; (4) o "carregar mais" tem
-  fim conhecido em `pageInfo.hasNextPage` — o botão some do DOM, o campo não;
-  (5) "Imprimir" só chama `window.print()`: neutralizamos e geramos o PDF por
+  **O ERP está migrando para React/MUI, uma tela por vez** — o cabeçalho e
+  `#/accounts` já são React; `#/cash-flow` ainda é Angular. Antes de mexer numa
+  tela, confira em qual mundo ela está: contar `[ng-model],[ng-click],.ng-scope`
+  contra `[class*="Mui"]` dentro do conteúdo resolve em um comando. Foi essa
+  migração que quebrou a leitura antiga da lista de contas, que raspava
+  `tr[ng-repeat]` de `#/accounts` e vencia a paginação escrevendo `pageSize` no
+  scope dono da propriedade. Hoje a lista sai de `allAccounts`, no escopo do
+  `ng-multiple-select[ng-model="selectedAccounts"]` do próprio fluxo de caixa:
+  vem inteira, sem paginação, com id/nome/proprietário/situação — e é a MESMA
+  lista que a pessoa vê ao escolher as contas, então não há divergência entre o
+  que se marca e o que se processa. Armadilhas que seguem valendo: (1) não é
+  preciso clicar conta por conta: o botão Extrato chama
+  `stateGoNewTab('base.cashFlow')`, então vale ir direto a
+  `#/cash-flow?accountId=`; (2) o período mora em `fromDate`/
+  `toDate` (moment) do controller, não nos inputs; (3) o "carregar mais" tem
+  fim conhecido em `pageInfo.hasNextPage` — o botão some do DOM, o campo não, e
+  ele fica DEPOIS do "Saldo final": o extrato exibe totais como se estivesse
+  completo enquanto faltam lançamentos, então PDF gerado com `hasNextPage`
+  ainda `true` é recusado por `conferir_antes_de_salvar`, que também confere se
+  `summary.accounts` é a conta esperada — extrato certo na pasta errada não se
+  denuncia sozinho; (4) "Imprimir" só chama `window.print()`: neutralizamos e geramos o PDF por
   `Page.printToPDF` do CDP (o `page.pdf()` do Playwright recusa navegador com
   janela). O CSS de impressão do ERP não esconde o fluxo de caixa atrás do
   modal — ele vazava para o PDF —, então o modal vira único filho do `body`
@@ -180,10 +192,25 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   Pix dos avisos "PAGAR PARA" ficam em `pix_reembolso.json` ao lado do exe —
   é CPF de gente, não entra no repositório.
 - `relatorios/relatorio_frame.py` — aba Relatório Mensal: mês/ano (ou intervalo
-  de datas), lista de contas com marcação, pasta de destino, ⏹ Parar e
-  progresso. Um PDF por conta em `<pasta>/Julho 2026/NN - NOME.pdf` — a
-  subpasta é o mês por extenso mais o ano; período que não é mês fechado vira
-  `10-03-2026 a 25-03-2026`.
+  de datas), lista de contas com marcação, ⏹ Parar e progresso. Um PDF por
+  conta, arquivado na árvore do fechamento junto do extrato do banco:
+  `<raiz>/2026/JULHO/JULHO 2026 - BURITIS/SICOOB/202607 SICOOB MAIS CONTROLE.pdf`.
+  O destino não é mais escolhido à mão — cada conta tem o seu, em
+  `relatorios/contas_mc.py`.
+- `relatorios/contas_mc.py` — mapa conta do ERP → pasta de destino, lido de
+  `contas_mc.json` ao lado do exe, **fora do repositório** (nome de empresa e
+  número de conta), como o `contas_sicoob.json`. A LISTA de contas não sai
+  dali: é lida do ERP a cada execução, para que conta nova apareça sozinha; o
+  mapa só responde "onde salvo esta?" e admite não saber — conta sem destino
+  nasce desmarcada e trava o lote **antes** do primeiro download, porque
+  decidir destino com o lote pela metade vira improviso. Quatro contas da mesma
+  empresa dividem uma pasta (Moura Dantas), daí o campo `sufixo` com o número
+  da conta no fim do nome. `pasta` aceita subnível (`CAIXA/APLICAÇÃO`). A
+  comparação de nomes ignora acento, caixa e espaço duplo: o nome vem do
+  cadastro do ERP, digitado por gente. `caminhos_longos()` existe porque os
+  caminhos aqui são longos (empresa + subconta com descrição + o `.zip` do
+  fechamento por cima) e estourar os 260 do Windows aparece como falha de
+  escrita no meio do lote, com causa nada óbvia.
 - `extratos_sicoob/` — aba Extratos Sicoob: cria a árvore do fechamento
   mensal e baixa OFX + PDF de cada conta do SicoobNet Empresarial.
   **Único módulo com navegador PRÓPRIO** (executor de 1 worker e perfil
