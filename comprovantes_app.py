@@ -33,6 +33,9 @@ from aportes_frame import AportesFrame
 from relatorio_frame import RelatorioFrame
 from pagamentos_frame import PagamentosDiaFrame
 from extratos_frame import ExtratosSicoobFrame
+# Pacote de verdade (tem __init__.py): importa pelo caminho completo, então não
+# disputa nome de módulo no sys.path com as outras pastas de aba.
+from conciliacao.frame import ConciliacaoFrame
 
 
 def _nitidez():
@@ -148,8 +151,12 @@ def main():
     # Extratos Sicoob NÃO recebe o aba_anx: é outro site e outro login, então
     # tem navegador e thread próprios (ver extratos_frame.py).
     aba_ext = ExtratosSicoobFrame(conteudo)
+    # Conciliação volta a dividir navegador e thread do Anexar: é o mesmo ERP,
+    # e ele só aceita uma sessão por usuário.
+    aba_con = ConciliacaoFrame(conteudo, aba_anx)
     quadros = {"sep": aba_sep, "anx": aba_anx, "conf": aba_conf,
-               "apt": aba_apt, "rel": aba_rel, "pag": aba_pag, "ext": aba_ext}
+               "apt": aba_apt, "rel": aba_rel, "pag": aba_pag, "ext": aba_ext,
+               "con": aba_con}
     atual = {"nome": None}
     botoes = {}
 
@@ -188,7 +195,10 @@ def main():
     botoes["pag"].pack(fill="x", pady=(0, 6), ipady=3)
     botoes["ext"] = ttk.Button(lateral, text="🏦   Extratos Sicoob", width=24,
                                command=lambda: mostrar("ext"))
-    botoes["ext"].pack(fill="x", ipady=3)
+    botoes["ext"].pack(fill="x", pady=(0, 6), ipady=3)
+    botoes["con"] = ttk.Button(lateral, text="⚖   Conciliação Diária", width=24,
+                               command=lambda: mostrar("con"))
+    botoes["con"].pack(fill="x", ipady=3)
 
     # ---------------- rodapé da barra: tema + versão
     rodape = ttk.Frame(lateral)

@@ -43,3 +43,15 @@ extratos_sicoob/.chrome_profile_sicoob/
 # Mapa conta do Mais Controle -> pasta de destino. Mesma razão: nome de
 # empresa e número de conta.
 contas_mc.json
+# Conciliação Diária: o mapa das contas do painel, os rateios de aporte e o
+# modelo da planilha. Nome de empresa e estrutura financeira — fica ao lado do
+# exe, nunca no repositório.
+config.yaml
+mapping.yaml
+MODELO.xlsx
+# Saída e diagnóstico da conciliação, quando rodada da pasta do código.
+/output/
+/snapshots/
+/screenshots/
+/logs/
+browser-profile/
