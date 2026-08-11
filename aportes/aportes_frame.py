@@ -9,6 +9,7 @@ aceita uma thread, e abrir um segundo Chrome significaria um segundo login.
 from __future__ import annotations
 
 import datetime
+import queue
 import sys
 import tkinter as tk
 from pathlib import Path
@@ -37,6 +38,10 @@ class AportesFrame(ttk.Frame):
     def __init__(self, master, anexar_frame):
         super().__init__(master, padding=12)
         self.anx = anexar_frame          # dono do navegador e da thread
+        # Mesma bomba de UI das outras cinco abas: a thread do navegador só
+        # empilha aqui e QUEM mexe no Tk é o _drain, na thread da interface.
+        # Escrever no Text direto da thread do navegador travava a aba.
+        self.q = queue.Queue()
         self.operacoes: list[Operacao] = []
         # Para cada operação, os ÍNDICES dos lançamentos que já entraram no ERP.
         # Sem isso, tentar de novo depois de uma falha parcial recria o que deu
@@ -51,6 +56,7 @@ class AportesFrame(ttk.Frame):
 
         self._montar()
         self._recarregar_listas()
+        self.after(150, self._drain)
 
     # ------------------------------------------------------------ interface
     def _montar(self):
@@ -142,9 +148,21 @@ class AportesFrame(ttk.Frame):
                       f"em {cadastro.ARQUIVO_CONTAS}")
 
     def _log(self, msg=""):
-        self.texto.insert("end", f"{msg}\n")
-        self.texto.see("end")
-        self.update_idletasks()
+        """Pode ser chamado de QUALQUER thread: só enfileira."""
+        self.q.put(str(msg))
+
+    def _drain(self):
+        try:
+            while True:
+                msg = self.q.get_nowait()
+                self.texto.insert("end", f"{msg}\n")
+                self.texto.see("end")
+        except queue.Empty:
+            pass
+        except Exception:
+            pass                     # a bomba de UI nunca pode morrer
+        finally:
+            self.after(150, self._drain)
 
     def aplicar_cores(self, escuro: bool):
         fundo = "#1c1c1c" if escuro else "#ffffff"
@@ -249,34 +267,54 @@ class AportesFrame(ttk.Frame):
         if self.catalogos is not None and not recarregar:
             return
         pagina = self.anx.mc.page
-
-        if not self._cabecalhos:
-            def ao_requisitar(req):
-                from urllib.parse import urlsplit
-                host = urlsplit(req.url).netloc
-                if not _host_util(host):
-                    return
-                cab = {k: v for k, v in req.headers.items()
-                       if k.lower() in CABECALHOS}
-                if any(k.lower() == "authorization" for k in cab):
-                    self._cabecalhos[host] = cab
-            pagina.on("request", ao_requisitar)
-
-        # Passar pela tela de Pagamentos faz o ERP autenticar nos serviços.
-        # Espera até os cabeçalhos aparecerem em vez de dormir um tempo fixo:
-        # normalmente chegam em 1 ou 2 segundos.
-        pagina.goto(URL_PAGAMENTOS, wait_until="domcontentloaded")
         alvo = "prod-erp-api.maiscontroleerp.com.br"
-        for _ in range(60):
-            if alvo in self._cabecalhos:
-                break
-            pagina.wait_for_timeout(250)
+
+        # A página é COMPARTILHADA com as outras abas: dizer que vamos navegar
+        # evita a surpresa de ver o Chrome sair da tela onde estava.
+        self._log("Passando pela tela de Pagamentos para o ERP autenticar os "
+                  "serviços de cadastro...")
+
+        def ao_requisitar(req):
+            from urllib.parse import urlsplit
+            host = urlsplit(req.url).netloc
+            if not _host_util(host):
+                return
+            cab = {k: v for k, v in req.headers.items()
+                   if k.lower() in CABECALHOS}
+            if any(k.lower() == "authorization" for k in cab):
+                self._cabecalhos[host] = cab
+
+        pagina.on("request", ao_requisitar)
+        try:
+            # `goto` para a MESMA URL não dispara requisição nenhuma: o ERP é
+            # single-spa e trocar só o "#" é navegação de cliente. Como as
+            # outras abas deixam o Chrome justamente nesta tela, o listener
+            # ficava 15 s esperando chamadas que nunca sairiam — e a aba
+            # morria com "não consegui a autenticação" logo depois de você ter
+            # usado o Anexar. Recarregar força o bootstrap e as chamadas saem.
+            if "payable-installments" in (pagina.url or ""):
+                pagina.reload(wait_until="domcontentloaded")
+            else:
+                pagina.goto(URL_PAGAMENTOS, wait_until="domcontentloaded")
+            # Espera os cabeçalhos aparecerem, em vez de dormir tempo fixo:
+            # normalmente chegam em 1 ou 2 segundos.
+            for _ in range(60):
+                if alvo in self._cabecalhos:
+                    break
+                pagina.wait_for_timeout(250)
+        finally:
+            # Sem remover, o listener segue pendurado na página compartilhada e
+            # roda em TODA requisição das outras abas, para sempre.
+            try:
+                pagina.remove_listener("request", ao_requisitar)
+            except Exception:
+                pass
 
         if alvo not in self._cabecalhos:
             raise RuntimeError(
-                "não consegui a autenticação do serviço de cadastros. "
-                "Abra uma vez, no Chrome, a tela de Novo Lançamento de "
-                "Pagamentos e tente de novo.")
+                "não consegui a autenticação do serviço de cadastros.\n"
+                "Abra a tela de Pagamentos na janela do Chrome (ou recarregue-a "
+                "com F5) e tente de novo.")
 
         self.catalogos = Catalogos(pagina, self._cabecalhos, self._log)
         self._log("Lendo os cadastros do Mais Controle:")
@@ -297,14 +335,22 @@ class AportesFrame(ttk.Frame):
                   "próximo comando.")
 
     def _conferir(self):
-        self.anx.exec.submit(self._t_conferir)
+        if self.anx.avisar_se_ocupado("os Aportes"):
+            return
+        self.anx.submeter("Aportes — conferir cadastro", self._t_conferir)
 
     def _t_conferir(self):
         try:
             self._preparar_sessao()
             resultado = self.catalogos.conferir(self.entidades)
-        except (RuntimeError, ErroLancamento) as e:
+        except Exception as e:                              # noqa: BLE001
+            # Roda numa thread: o que não for capturado aqui vira uma exceção
+            # guardada no Future e some — a aba fica parada, sem mensagem, e
+            # parece que o botão não fez nada.
             self._log(f"[!] {e}")
+            if not isinstance(e, (RuntimeError, ErroLancamento)):
+                import traceback
+                self._log(traceback.format_exc())
             return
         self._log(f"\n{len(resultado['ok'])} de {len(self.entidades)} contas "
                   "existem no Mais Controle.")
@@ -331,8 +377,10 @@ class AportesFrame(ttk.Frame):
                 f"Criar {n} lançamento(s) no Mais Controle, "
                 f"somando R$ {total:,.2f}?\n\nIsso escreve no sistema."):
             return
+        if self.anx.avisar_se_ocupado("os Aportes"):
+            return
         self.b_lancar.configure(state="disabled")
-        self.anx.exec.submit(self._t_lancar)
+        self.anx.submeter("Aportes — lançar", self._t_lancar)
 
     def _t_lancar(self):
         try:
@@ -390,7 +438,16 @@ class AportesFrame(ttk.Frame):
 
             self._log(f"\n{feitos} criado(s), {len(falhas)} com problema.")
             self.after(0, self._retirar_concluidas)
-        except RuntimeError as e:
+        except Exception as e:                              # noqa: BLE001
+            # Ver o comentário em _t_conferir: exceção não capturada numa
+            # thread some dentro do Future e a aba fica muda. Aqui é pior —
+            # o usuário não saberia se algum lançamento chegou a ser criado.
             self._log(f"[!] {e}")
+            if not isinstance(e, RuntimeError):
+                import traceback
+                self._log(traceback.format_exc())
+            self._log("Confira no Mais Controle o que entrou antes do erro; a "
+                      "lista guarda o que já foi criado e não repete.")
+            self.after(0, self._retirar_concluidas)
         finally:
             self.after(0, lambda: self.b_lancar.configure(state="normal"))

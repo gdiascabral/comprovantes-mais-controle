@@ -198,6 +198,13 @@ class AnexarFrame(ttk.Frame):
         self.exec = ThreadPoolExecutor(max_workers=1)
         self._pausa = Event()   # ⏸ pausado enquanto setado
         self._parar = Event()   # ⏹ interrompe o processo em andamento
+        # Events em que a thread do navegador está BLOQUEADA esperando gente
+        # (hoje só a janela de dúvidas). `fechar()` precisa soltá-los, senão a
+        # thread nunca termina e o processo não morre ao fechar a janela.
+        self._esperas: set = set()
+        # Quem está com o navegador agora (ver `submeter`/`ocupado`).
+        self._trabalho_atual = None
+        self._rotulo_atual = None
         self.mc = None                       # MCClient aberto entre as etapas
         self.api = None
         self.ultimo_relatorio = None
@@ -370,17 +377,73 @@ class AnexarFrame(ttk.Frame):
         if self.worker and not self.worker.done():
             return
         self.b0.config(state="disabled")
-        self.worker = self.exec.submit(self._t_abrir)
+        self.worker = self.submeter("Abrir o Mais Controle", self._t_abrir)
+
+    # ------------------------------------------- navegador compartilhado
+    def submeter(self, rotulo: str, fn, *a, **k):
+        """Manda trabalho para a thread do navegador, registrando o dono.
+
+        Seis abas dividem UM navegador e UMA thread (o Playwright síncrono não
+        aceita mais, e o ERP só admite uma sessão por usuário). Sem registrar
+        quem está usando, clicar numa segunda aba enquanto a primeira trabalha
+        apenas ENFILEIRAVA o pedido: a tela não dizia nada e a segunda tarefa
+        começava sozinha vários minutos depois, quando a pessoa já tinha
+        desistido e ido fazer outra coisa."""
+        fut = self.exec.submit(fn, *a, **k)
+        self._trabalho_atual = fut
+        self._rotulo_atual = rotulo
+        return fut
+
+    def ocupado(self) -> str | None:
+        """Rótulo da tarefa que está com o navegador agora, ou None."""
+        fut = self._trabalho_atual
+        if fut is not None and not fut.done():
+            return self._rotulo_atual or "outra tarefa"
+        return None
+
+    def avisar_se_ocupado(self, dona: str) -> bool:
+        """True (e mostra o aviso) se o navegador já estiver em uso."""
+        quem = self.ocupado()
+        if not quem:
+            return False
+        messagebox.showinfo(
+            "Navegador ocupado",
+            f"O navegador está ocupado com: {quem}.\n\n"
+            f"O Mais Controle aceita uma sessão por usuário, então "
+            f"{dona} precisa esperar terminar.")
+        return True
 
     def garantir_sessao(self, log=None):
         """Abre o Chrome e prepara a API, se ainda não estiverem prontos.
-        Deve rodar na thread self.exec (a dona do navegador)."""
+        Deve rodar na thread self.exec (a dona do navegador).
+
+        Duas coisas que faltavam e davam erro longe da causa:
+
+        1. o retorno de `garantir_login()` era ignorado. Sem sessão, o ERP
+           responde com a grade VAZIA em vez de erro, e o que chegava ao
+           usuário era "a grade não carregou nenhuma linha" — que parece
+           layout mudado e é sessão faltando;
+        2. com `self.mc` já aberto, ninguém revalidava nada. Mas o ERP aceita
+           UMA sessão por usuário: a API de saldos da Conciliação derruba a do
+           navegador, e a aba seguinte reaproveitava um Chrome deslogado.
+        """
         log = log or self._log
         if self.mc is None:
             log("Abrindo o Chrome e entrando no Mais Controle...")
             self.mc = MCClient(log=log).__enter__()
-            self.api = mc_api.MCApi(self.mc.page)
-            self.mc.garantir_login()
+            self.api = mc_api.MCApi(self.mc)
+            if not self.mc.garantir_login():
+                raise RuntimeError(
+                    "não consegui entrar no Mais Controle.\n"
+                    "Sem a sessão do navegador o ERP devolve as telas vazias, "
+                    "e o resultado sairia errado — por isso parei aqui.\n"
+                    "Entre na janela do Chrome que abriu e rode de novo.")
+        elif not self.mc.esta_logado():
+            log("A sessão do Mais Controle caiu — entrando de novo...")
+            if not self.mc.garantir_login():
+                raise RuntimeError(
+                    "a sessão do Mais Controle caiu e não consegui refazer.\n"
+                    "Entre na janela do Chrome que está aberta e rode de novo.")
         return self.api
 
     def _gerenciar_login(self):
@@ -462,7 +525,16 @@ class AnexarFrame(ttk.Frame):
                       f"({_fmt_dur(time.time() - inicio)})")
         except Exception as e:
             self._log(_texto_do_erro(e))
+            # Fecha o Chrome ANTES de soltar a referência. Sem isto o processo
+            # ficava órfão segurando o perfil, e a tentativa seguinte batia em
+            # "profile is already in use" — erro que não lembra em nada a causa.
+            try:
+                if self.mc:
+                    self.mc.__exit__(None, None, None)
+            except Exception as e2:
+                config.diag(f"_t_abrir: o Chrome não fechou depois do erro: {e2!r}")
             self.mc = None
+            self.api = None
         self.q.put(("reabilitar0", None))
 
     def aplicar_cores(self, escuro: bool):
@@ -554,8 +626,15 @@ class AnexarFrame(ttk.Frame):
         canvas.configure(yscrollcommand=barra.set)
         canvas.pack(side="left", fill="both", expand=True, padx=(12, 0), pady=4)
         barra.pack(side="right", fill="y")
-        canvas.bind_all("<MouseWheel>",
-                        lambda e: canvas.yview_scroll(-(e.delta // 120), "units"))
+        # Roda do mouse SÓ enquanto o ponteiro está sobre esta janela.
+        # `bind_all` sequestrava o evento do app inteiro: com a janela de
+        # dúvidas aberta (ou depois dela, se `concluir` não rodasse), rolar
+        # qualquer outra aba mexia nesta lista.
+        def _roda(e):
+            canvas.yview_scroll(-(e.delta // 120), "units")
+
+        canvas.bind("<Enter>", lambda e: top.bind("<MouseWheel>", _roda))
+        canvas.bind("<Leave>", lambda e: top.unbind("<MouseWheel>"))
 
         def _abrir_pdf(tv, mapa):
             pd = mapa.get((tv.selection() or [None])[0])
@@ -632,7 +711,10 @@ class AnexarFrame(ttk.Frame):
             escolhas.append((pe, tv, mapa))
 
         def concluir(confirmar):
-            canvas.unbind_all("<MouseWheel>")
+            try:
+                top.unbind("<MouseWheel>")
+            except tk.TclError:
+                pass
             if confirmar:
                 usados = set()
                 for pe, tv, mapa in escolhas:
@@ -673,7 +755,8 @@ class AnexarFrame(ttk.Frame):
         self.lbl.config(text="Conectando...")
         self.pb.config(mode="indeterminate")
         self.pb.start(12)
-        self.worker = self.exec.submit(self._t_conectar, ini, fim)
+        self.worker = self.submeter("Anexar — carregar contas",
+                                    self._t_conectar, ini, fim)
 
     def _t_conectar(self, ini, fim):
         inicio = time.time()
@@ -746,7 +829,7 @@ class AnexarFrame(ttk.Frame):
         self.b_pause.config(text="⏸ Pausar", state="normal")
         self.b_stop.config(state="normal")
         self.b2.config(state="disabled")
-        self.worker = self.exec.submit(alvo)
+        self.worker = self.submeter("Anexar — casar e anexar", alvo)
 
     def _t_auto(self):
         inicio = time.time()
@@ -808,10 +891,14 @@ class AnexarFrame(ttk.Frame):
             if duvidas and not self._parar.is_set():
                 self._log("Abrindo a janela para você resolver as dúvidas...")
                 ev = Event()
-                self.q.put(("duvidas", (duvidas, ev)))
-                while not ev.wait(timeout=0.5):
-                    if self._parar.is_set():
-                        break
+                self._esperas.add(ev)       # fechar() precisa soltar isto
+                try:
+                    self.q.put(("duvidas", (duvidas, ev)))
+                    while not ev.wait(timeout=0.5):
+                        if self._parar.is_set():
+                            break
+                finally:
+                    self._esperas.discard(ev)
                 resolvidas = [p for p in duvidas if p["status"] == "CERTEZA"]
                 if resolvidas:
                     self._log(f"{len(resolvidas)} dúvida(s) resolvida(s) por você.\n")
@@ -994,17 +1081,53 @@ class AnexarFrame(ttk.Frame):
                     messagebox.showinfo("Concluído", msg)
         except queue.Empty:
             pass
-        self.after(150, self._drain)
+        except Exception as e:                              # noqa: BLE001
+            # A bomba de UI NUNCA pode morrer: sem ela o log para de aparecer,
+            # os botões nunca voltam e a aba parece travada — enquanto a thread
+            # do navegador segue trabalhando. Registrar e continuar drenando é
+            # sempre melhor do que deixar a interface muda.
+            config.diag(f"_drain (Anexar) falhou: {e!r}")
+        finally:
+            self.after(150, self._drain)
 
     def fechar(self):
-        """Fecha o navegador e a thread de trabalho (chamar ao sair do app)."""
+        """Fecha o navegador e a thread de trabalho (chamar ao sair do app).
+
+        A ORDEM importa. A thread do navegador pode estar parada esperando
+        gente: pausada, ou dentro da janela de dúvidas (que bloqueia em
+        `ev.wait()` até alguém responder). Fechar o Chrome primeiro deixaria
+        essa thread presa para sempre e o processo não morreria — a janela
+        some e o app fica de fundo, segurando o perfil do Chrome."""
+        # 1) solta quem está esperando
         try:
-            if self.mc:
-                # fecha o navegador na thread dele (exigência do Playwright)
-                self.exec.submit(self.mc.__exit__, None, None, None).result(timeout=8)
+            self._parar.set()
+            self._pausa.clear()
         except Exception:
             pass
+        for ev in list(getattr(self, "_esperas", ())):
+            try:
+                ev.set()
+            except Exception:
+                pass
+        for filho in list(self.winfo_children()):
+            if isinstance(filho, tk.Toplevel):
+                try:
+                    filho.grab_release()
+                    filho.destroy()
+                except Exception:
+                    pass
+
+        # 2) fecha o navegador na thread dele (exigência do Playwright)
         try:
+            if self.mc:
+                self.exec.submit(self.mc.__exit__, None, None, None).result(timeout=8)
+                self.mc = None
+        except Exception as e:
+            config.diag(f"fechar(): o Chrome não fechou limpo: {e!r}")
+        # 3) último recurso: descarta o que ainda estiver na fila
+        try:
+            self.exec.shutdown(wait=False, cancel_futures=True)
+        except TypeError:                    # Python < 3.9
             self.exec.shutdown(wait=False)
         except Exception:
             pass

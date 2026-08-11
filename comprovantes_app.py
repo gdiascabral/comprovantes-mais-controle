@@ -273,8 +273,15 @@ def main():
     mostrar("sep")
 
     def _sair():
-        aba_anx.fechar()                # fecha o Chrome, se estiver aberto
-        aba_ext.fechar()                # o Chrome do Sicoob é outro processo
+        # Um `fechar()` que levanta não pode impedir o outro nem o destroy():
+        # a janela ficaria aberta e sem resposta, e o jeito de sair viraria o
+        # Gerenciador de Tarefas — que é justamente o que deixa Chrome órfão.
+        for fechar in (aba_anx.fechar,   # Chrome do Mais Controle
+                       aba_ext.fechar):  # o Chrome do Sicoob é outro processo
+            try:
+                fechar()
+            except Exception:
+                pass
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", _sair)
     root.mainloop()

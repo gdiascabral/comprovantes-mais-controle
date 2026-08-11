@@ -292,7 +292,10 @@ class RelatorioFrame(ttk.Frame):
         self.q.put(("botoes", "disabled"))
         self.b_stop.configure(state="disabled")
         self.q.put(("status", "Abrindo o Mais Controle e lendo as contas..."))
-        self.worker = self.anx.exec.submit(self._t_carregar)
+        if self.anx.avisar_se_ocupado("o Relatório Mensal"):
+            return
+        self.worker = self.anx.submeter("Relatório Mensal — carregar contas",
+                                        self._t_carregar)
 
     def _t_carregar(self):
         try:
@@ -368,7 +371,10 @@ class RelatorioFrame(ttk.Frame):
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("progresso", (0, len(escolhidas))))
-        self.worker = self.anx.exec.submit(self._t_gerar, escolhidas, ini, fim)
+        if self.anx.avisar_se_ocupado("o Relatório Mensal"):
+            return
+        self.worker = self.anx.submeter("Relatório Mensal — gerar extratos",
+                                        self._t_gerar, escolhidas, ini, fim)
 
     def _t_gerar(self, contas, ini, fim):
         comeco = time.time()

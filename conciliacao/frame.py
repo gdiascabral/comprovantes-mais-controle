@@ -257,7 +257,10 @@ class ConciliacaoFrame(ttk.Frame):
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("ocupado", True))
-        self.worker = self.anx.exec.submit(self._t_gerar, periodo)
+        if self.anx.avisar_se_ocupado("a Conciliação Diária"):
+            return
+        self.worker = self.anx.submeter("Conciliação Diária", self._t_gerar,
+                                        periodo)
 
     def _t_gerar(self, periodo: Periodo):
         from conciliacao.erp.collect import coletar_com_pagina

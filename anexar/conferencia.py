@@ -12,6 +12,7 @@ e mesma thread de trabalho).
 import io
 import queue
 import time
+from threading import Event
 from datetime import date, datetime
 from pathlib import Path
 
@@ -116,6 +117,11 @@ class ConferenciaFrame(ttk.Frame):
         self.anx = anexar_frame
         self.q = queue.Queue()
         self.ultimo_relatorio = None
+        self.worker = None
+        # A conferência com conteúdo baixa e lê um PDF por pagamento: em mês
+        # cheio passa de meia hora. Sem Parar, a única saída era matar o app —
+        # e matar o app no meio deixa o Chrome órfão segurando o perfil.
+        self._parar = Event()
         hoje = date.today()
         self.v_ini = tk.StringVar(value=hoje.replace(day=1).strftime("%d/%m/%Y"))
         self.v_fim = tk.StringVar(value=hoje.strftime("%d/%m/%Y"))
@@ -171,6 +177,9 @@ class ConferenciaFrame(ttk.Frame):
             self.btn.configure(style="Accent.TButton")
         except tk.TclError:
             pass
+        self.b_stop = ttk.Button(acao, text="⏹  Parar",
+                                 command=self._parar_click, state="disabled")
+        self.b_stop.pack(side="right", padx=(0, 8))
         self.b_rel = ttk.Button(acao, text="📄  Abrir relatório",
                                 command=self._abrir_relatorio, state="disabled")
         self.b_rel.pack(side="right", padx=(0, 8))
@@ -229,13 +238,25 @@ class ConferenciaFrame(ttk.Frame):
                     self.pb.config(value=val)
                 elif kind == "fim":
                     self.btn.config(state="normal")
+                    self.b_stop.config(state="disabled")
                     self.pb.config(value=0)
                     if val:
                         self.ultimo_relatorio = val
                         self.b_rel.config(state="normal")
         except queue.Empty:
             pass
-        self.after(150, self._drain)
+        except Exception as e:                              # noqa: BLE001
+            # Ver o comentário gêmeo em anexar_comprovantes._drain: a bomba de
+            # UI morrendo deixa a aba muda com a thread ainda trabalhando.
+            config.diag(f"_drain (Conferência) falhou: {e!r}")
+        finally:
+            self.after(150, self._drain)
+
+    def _parar_click(self):
+        self._parar.set()
+        self._log("\n⏹ Parando… termino o item atual e gero o relatório com o "
+                  "que já foi conferido.")
+        self.b_stop.config(state="disabled")
 
     def _abrir_relatorio(self):
         import os
@@ -251,10 +272,15 @@ class ConferenciaFrame(ttk.Frame):
         if not ini or not fim:
             messagebox.showerror("Erro", "Datas inválidas. Use dd/mm/aaaa.")
             return
+        if self.anx.avisar_se_ocupado("a Conferência"):
+            return
+        self._parar.clear()
         self.btn.config(state="disabled")
+        self.b_stop.config(state="normal")
         self.log.delete("1.0", "end")
         self.lbl.config(text="Conferindo...")
-        self.anx.exec.submit(self._t_conferir, ini, fim)
+        self.worker = self.anx.submeter("Conferência", self._t_conferir,
+                                        ini, fim)
 
     def _t_conferir(self, ini, fim):
         inicio = time.time()
@@ -287,7 +313,8 @@ class ConferenciaFrame(ttk.Frame):
             self.q.put(("status", "Verificando quem tem anexo..."))
             self.q.put(("max", len(pagos)))
             att = api.verificar_anexos([p["paidId"] for p in pagos], self._log,
-                                       progresso=lambda i, n: self.q.put(("prog", i)))
+                                       progresso=lambda i, n: self.q.put(("prog", i)),
+                                       cancelar=self._parar.is_set)
             estados = {p["paidId"]: mc_api.estado_anexo(att, p["paidId"])
                        for p in pagos}
             sem = [p for p in pagos if estados[p["paidId"]] == mc_api.SEM_ANEXO]
@@ -314,6 +341,11 @@ class ConferenciaFrame(ttk.Frame):
                 self._log(f"\nConferindo o conteúdo de {len(com)} anexo(s)...")
                 self.q.put(("max", len(com)))
                 for i, p in enumerate(com, 1):
+                    if self._parar.is_set():
+                        self._log(f"⏹ Interrompido: {i - 1} de {len(com)} "
+                                  "anexo(s) conferido(s). O relatório sai com "
+                                  "o que já foi feito.")
+                        break
                     self.q.put(("prog", i))
                     try:
                         itens = api.listar_anexos(p["paidId"])

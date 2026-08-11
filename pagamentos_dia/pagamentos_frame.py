@@ -258,7 +258,10 @@ class PagamentosDiaFrame(ttk.Frame):
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Abrindo o Mais Controle..."))
-        self.worker = self.anx.exec.submit(self._t_buscar, ini, fim)
+        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+            return
+        self.worker = self.anx.submeter("Pagamentos do Dia — buscar",
+                                        self._t_buscar, ini, fim)
 
     def _t_buscar(self, ini, fim):
         comeco = time.time()
@@ -355,7 +358,10 @@ class PagamentosDiaFrame(ttk.Frame):
             return
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
-        self.worker = self.anx.exec.submit(self._t_gerar, escolhidas)
+        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+            return
+        self.worker = self.anx.submeter("Pagamentos do Dia — gerar planilha",
+                                        self._t_gerar, escolhidas)
 
     def _t_gerar(self, escolhidas):
         comeco = time.time()

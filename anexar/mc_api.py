@@ -103,13 +103,29 @@ def estado_anexo(att: dict, paid_id: str) -> str:
 
 
 class MCApi:
-    def __init__(self, page):
-        """page = página do Playwright já criada (MCClient.page)."""
-        self.page = page
+    def __init__(self, cliente):
+        """cliente = MCClient já aberto (não a página).
+
+        Recebe o CLIENTE de propósito. O MCClient troca de aba sozinho quando
+        o ERP abre a tela num alvo novo (`_adotar_aba`), e a MCApi guardava a
+        página do momento da criação: ficava presa numa aba obsoleta e os
+        fetch passavam a falhar sem explicação — a página existia, só não era
+        mais a que estava logada e visível."""
+        self._cliente = cliente
+        self._pagina_ouvida = None
         self._req_pagos = None    # (url, headers) da lista de pagamentos
         self._req_anexos = None   # (url_base, headers) do endpoint de anexos
         self._diag_avisado = False
-        page.on("request", self._on_request)
+        _ = self.page             # registra o listener na aba atual
+
+    @property
+    def page(self):
+        """A aba ATUAL do cliente, com o listener de captura registrado nela."""
+        pag = self._cliente.page
+        if pag is not None and pag is not self._pagina_ouvida:
+            pag.on("request", self._on_request)
+            self._pagina_ouvida = pag
+        return pag
 
     # ------------------------------------------------------------ captura
     def _on_request(self, req):
