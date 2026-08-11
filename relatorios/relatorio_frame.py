@@ -18,10 +18,11 @@ import time
 import tkinter as tk
 from pathlib import Path
 from threading import Event
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import contas_mc                                             # noqa: E402
 import extrato_mc                                            # noqa: E402
 
 MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
@@ -49,6 +50,8 @@ class RelatorioFrame(ttk.Frame):
         self.contas: list[dict] = []
         self.vars_contas: dict[str, tk.BooleanVar] = {}
         self.ultima_pasta: Path | None = None
+        self.mapa: contas_mc.Mapa | None = None
+        self.sem_destino: set[str] = set()
 
         hoje = datetime.date.today()
         anterior = hoje.replace(day=1) - datetime.timedelta(days=1)
@@ -57,7 +60,7 @@ class RelatorioFrame(ttk.Frame):
         self.v_personalizado = tk.BooleanVar(value=False)
         self.v_ini = tk.StringVar(value=f"{anterior.replace(day=1):%d/%m/%Y}")
         self.v_fim = tk.StringVar(value=f"{anterior:%d/%m/%Y}")
-        self.v_pasta = tk.StringVar(value=str(_pasta_base() / "Relatórios").replace("\\", "/"))
+        self.v_pasta = tk.StringVar(value="(definido em contas_mc.json)")
 
         self._build()
         self.after(150, self._drain)
@@ -131,13 +134,15 @@ class RelatorioFrame(ttk.Frame):
             self.contas_box, text='Clique em "1. Carregar contas" para listar as contas.')
         self.lbl_vazio.pack(anchor="w")
 
-        # ---- card 3: pasta
-        f3 = ttk.LabelFrame(self, text=" 3. Onde salvar ", padding=(12, 8, 12, 10))
+        # ---- card 3: destino
+        # O destino não é mais escolhido à mão: cada conta tem o seu, definido
+        # em contas_mc.json. O campo virou informação, não decisão.
+        f3 = ttk.LabelFrame(self, text=" 3. Onde salva ", padding=(12, 8, 12, 10))
         f3.pack(fill="x", padx=PADX, pady=6)
-        ttk.Entry(f3, textvariable=self.v_pasta).pack(side="left", fill="x", expand=True)
-        ttk.Button(f3, text="Selecionar…", command=self._sel_pasta
-                   ).pack(side="left", padx=(6, 0))
-        ttk.Label(f3, text="  (cria uma subpasta por período)", foreground="#6b6b6b"
+        ttk.Entry(f3, textvariable=self.v_pasta, state="readonly"
+                  ).pack(side="left", fill="x", expand=True)
+        ttk.Label(f3, foreground="#6b6b6b",
+                  text="  cada conta vai para a pasta da sua empresa"
                   ).pack(side="left")
 
         # ---- barra de ação
@@ -215,10 +220,17 @@ class RelatorioFrame(ttk.Frame):
             return f"{MESES[ini.month - 1]} {ini.year}"
         return f"{ini:%d-%m-%Y} a {fim:%d-%m-%Y}"
 
-    def _sel_pasta(self):
-        escolhida = filedialog.askdirectory(initialdir=self.v_pasta.get() or None)
-        if escolhida:
-            self.v_pasta.set(escolhida.replace("\\", "/"))
+    def _garantir_mapa(self) -> bool:
+        """Carrega o mapa conta→pasta, avisando de forma legível quando falta."""
+        if self.mapa is not None:
+            return True
+        try:
+            self.mapa = contas_mc.carregar()
+        except contas_mc.MapaInvalido as e:
+            self._log(f"[!] {e}")
+            return False
+        self.v_pasta.set(str(self.mapa.raiz).replace("\\", "/"))
+        return True
 
     def _abrir_pasta(self):
         if self.ultima_pasta and self.ultima_pasta.exists():
@@ -284,6 +296,9 @@ class RelatorioFrame(ttk.Frame):
 
     def _t_carregar(self):
         try:
+            if not self._garantir_mapa():
+                self.q.put(("status", "Falta o mapa contas_mc.json."))
+                return
             self.anx.garantir_sessao(self._log)
             self._log("Lendo as contas bancárias...")
             contas = extrato_mc.listar_contas(self.anx.mc.page)
@@ -301,11 +316,19 @@ class RelatorioFrame(ttk.Frame):
         for w in self.contas_box.winfo_children():
             w.destroy()
         self.vars_contas = {}
+        self.sem_destino = set()
         for conta in contas:
-            v = tk.BooleanVar(value=True)
+            # A lista vem do ERP; o mapa só diz onde salvar. Conta que o mapa
+            # não conhece nasce DESMARCADA e avisando — melhor não baixar do
+            # que baixar sem saber o destino.
+            destino = self.mapa.de(conta["nome"]) if self.mapa else None
+            if destino is None:
+                self.sem_destino.add(conta["id"])
+            v = tk.BooleanVar(value=destino is not None)
             self.vars_contas[conta["id"]] = v
-            ttk.Checkbutton(self.contas_box, text=conta["nome"], variable=v
-                            ).pack(anchor="w")
+            rotulo = (f'{conta["nome"]}   →   {destino.empresa} / {destino.pasta}'
+                      if destino else f'{conta["nome"]}   (sem pasta no mapa)')
+            ttk.Checkbutton(self.contas_box, text=rotulo, variable=v).pack(anchor="w")
         rodape = ttk.Frame(self.contas_box)
         rodape.pack(anchor="w", pady=(6, 0))
         ttk.Button(rodape, text="Marcar todas",
@@ -330,8 +353,16 @@ class RelatorioFrame(ttk.Frame):
         if not escolhidas:
             messagebox.showinfo("Relatório Mensal", "Marque ao menos uma conta.")
             return
-        if not self.v_pasta.get().strip():
-            messagebox.showwarning("Pasta", "Escolha onde salvar os PDFs.")
+        # Conta sem destino trava ANTES do primeiro download: com o lote no
+        # meio do caminho, decidir onde salvar vira improviso.
+        orfas = [c["nome"] for c in escolhidas if c["id"] in self.sem_destino]
+        if orfas:
+            messagebox.showwarning(
+                "Contas sem pasta",
+                "Estas contas não estão no contas_mc.json e eu não sei onde "
+                "salvá-las:\n\n" + "\n".join(f"  {n}" for n in orfas[:10])
+                + ("\n  ..." if len(orfas) > 10 else "")
+                + "\n\nDesmarque-as ou acrescente-as ao mapa.")
             return
 
         self._parar.clear()
@@ -341,14 +372,15 @@ class RelatorioFrame(ttk.Frame):
 
     def _t_gerar(self, contas, ini, fim):
         comeco = time.time()
-        destino = Path(self.v_pasta.get().strip()) / self._nome_do_periodo(ini, fim)
         ini_txt, fim_txt = f"{ini:%d/%m/%Y}", f"{fim:%d/%m/%Y}"
+        ano, mes = ini.year, ini.month          # o nome do arquivo segue o início
+        pasta_mes = contas_mc.caminho_do_mes(self.mapa, ano, mes)
         pagina = None
         try:
             self.anx.garantir_sessao(self._log)
             pagina = self.anx.mc.page
             self._log(f"\nExtratos de {ini_txt} a {fim_txt} — {len(contas)} conta(s)")
-            self._log(f"Pasta: {str(destino).replace(chr(92), '/')}")
+            self._log(f"Pasta do mês: {str(pasta_mes).replace(chr(92), '/')}")
 
             feitos, vazios, falhas = [], [], []
             for i, conta in enumerate(contas, 1):
@@ -359,13 +391,30 @@ class RelatorioFrame(ttk.Frame):
                 self.q.put(("status", f"{i}/{len(contas)} — {nome[:45]}"))
                 marca = time.time()
                 try:
+                    destino = self.mapa.de(nome)
+                    if destino is None:         # a interface já barra, mas o
+                        raise RuntimeError("conta sem pasta no mapa")  # mapa manda
+                    arquivo = contas_mc.caminho_do_arquivo(self.mapa, destino, ano, mes)
+
                     extrato_mc.abrir_extrato(pagina, conta["id"], ini_txt, fim_txt)
                     n = extrato_mc.carregar_tudo(pagina, parar=self._parar.is_set)
-                    arquivo = destino / f"{i:02d} - {extrato_mc.nome_de_arquivo(nome)}.pdf"
+
+                    # Confere ANTES de gravar: conta certa e paginação encerrada.
+                    # Se o usuário interrompeu, o extrato está pela metade de
+                    # propósito — aí não se grava nada.
+                    if self._parar.is_set():
+                        self._log(f"  {i}/{len(contas)} {nome[:50]} — interrompido, não salvei")
+                        break
+                    problemas = extrato_mc.conferir_antes_de_salvar(
+                        extrato_mc.estado(pagina), nome)
+                    if problemas:
+                        raise RuntimeError("; ".join(problemas))
+
                     extrato_mc.salvar_pdf(pagina, arquivo)
                     kb = arquivo.stat().st_size // 1024
-                    self._log(f"  {i}/{len(contas)} {nome[:50]} — {n} lançamento(s), "
+                    self._log(f"  {i}/{len(contas)} {nome[:44]} — {n} lançamento(s), "
                               f"{kb} KB, {_fmt_dur(time.time() - marca)}")
+                    self._log(f"      → {destino.empresa} / {destino.pasta} / {arquivo.name}")
                     feitos.append(arquivo)
                     if not n:
                         vazios.append(nome)
@@ -382,9 +431,9 @@ class RelatorioFrame(ttk.Frame):
             if falhas:
                 self._log(f"{len(falhas)} com problema: " + ", ".join(falhas[:5]))
             if feitos:
-                self.q.put(("pasta_pronta", destino))
+                self.q.put(("pasta_pronta", pasta_mes))
             self.q.put(("status", f"{len(feitos)} PDF(s) em "
-                                  f"{str(destino).replace(chr(92), '/')}"))
+                                  f"{str(pasta_mes).replace(chr(92), '/')}"))
         except Exception as e:
             self._log(f"[!] {e}")
             self.q.put(("status", "Não consegui gerar os extratos."))

@@ -6,6 +6,6 @@ from pathlib import Path
 
 _RAIZ = Path(__file__).resolve().parent.parent
 for _p in (_RAIZ, _RAIZ / "separar_renomear", _RAIZ / "anexar",
-           _RAIZ / "extratos_sicoob"):
+           _RAIZ / "extratos_sicoob", _RAIZ / "relatorios"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))

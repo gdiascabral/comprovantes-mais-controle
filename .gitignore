@@ -40,3 +40,6 @@ pix_reembolso.json
 # das empresas. Mesma razão do pix_reembolso.json.
 contas_sicoob.json
 extratos_sicoob/.chrome_profile_sicoob/
+# Mapa conta do Mais Controle -> pasta de destino. Mesma razão: nome de
+# empresa e número de conta.
+contas_mc.json

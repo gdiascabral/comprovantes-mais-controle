@@ -30,8 +30,9 @@ from pathlib import Path
 
 URL_BASE = "https://acessar.maiscontroleerp.com.br"
 URL_CONTAS = URL_BASE + "/#/accounts"
-SEL_LINHAS = "tr[ng-repeat]"
+URL_FLUXO = URL_BASE + "/#/cash-flow"
 SEL_VISUALIZAR = 'button:has-text("Visualizar Extrato")'
+SEL_MULTISELECT = 'ng-multiple-select[ng-model="selectedAccounts"]'
 
 PRAZO_TELA = 60_000
 PRAZO_MODAL = 90_000
@@ -39,68 +40,51 @@ PRAZO_MODAL = 90_000
 
 # --------------------------------------------------------------- lista de contas
 
-# Percorre a paginação da tela de Contas bancárias. Ver a nota do módulo sobre
-# hasOwnProperty: sem isso só vêm as 10 primeiras.
+# A lista sai do PRÓPRIO fluxo de caixa, não da tela de Contas bancárias.
+#
+# `#/accounts` foi migrada para React/MUI e não tem mais `tr[ng-repeat]`: a
+# leitura antiga, que vencia a paginação escrevendo `pageSize` no scope, parou
+# de funcionar junto com o HTML que ela raspava. O dropdown "Contas Ativas" do
+# fluxo de caixa continua Angular e guarda `allAccounts` no escopo — a lista
+# inteira de uma vez, sem paginação, com id, nome, proprietário e situação.
+#
+# É também a lista que a pessoa vê na tela ao escolher as contas, o que evita a
+# divergência de uma origem mostrar uma coisa e o robô processar outra.
 _JS_CONTAS = """
-async () => {
-  const tr = document.querySelector('tr[ng-repeat]');
-  if (!tr) return 'sem-linhas';
-  let alvo = null;
-  for (let s = angular.element(tr).scope(); s; s = s.$parent) {
-    if (Object.prototype.hasOwnProperty.call(s, 'load') &&
-        Object.prototype.hasOwnProperty.call(s, 'pageSize') && s.page) { alvo = s; break; }
-  }
-  if (!alvo) return 'sem-scope';
-
-  const raiz = alvo.$root || alvo;
-  const aplicar = (f) => { if (raiz.$$phase) f(); else raiz.$apply(f); };
-  const extrair = () => alvo.page.items.map(c => ({
-    id: c.id, nome: c.name, proprietario: c.owner, ativa: c.isActive,
-  }));
-
-  const esperado = alvo.page.totalElements || 0;
-  const porId = new Map();
-  for (const item of extrair()) porId.set(item.id, item);
-
-  aplicar(() => { alvo.pageSize = Math.max(esperado, 50) + 10; alvo.currentPage = 1; alvo.load(); });
-  let limite = Date.now() + 20000;
-  while (Date.now() < limite && alvo.page.items.length < esperado) {
-    await new Promise(r => setTimeout(r, 250));
-  }
-  for (const item of extrair()) porId.set(item.id, item);
-
-  if (porId.size < esperado) {           // servidor limitou: vai de página em página
-    aplicar(() => { alvo.pageSize = 10; alvo.currentPage = 1; alvo.load(); });
-    await new Promise(r => setTimeout(r, 1500));
-    const paginas = alvo.page.totalPages || 1;
-    for (let p = 2; p <= paginas; p++) {
-      const antes = (alvo.page.items[0] || {}).id;
-      aplicar(() => { alvo.currentPage = p; alvo.load(); });
-      limite = Date.now() + 20000;
-      while (Date.now() < limite && (alvo.page.items[0] || {}).id === antes) {
-        await new Promise(r => setTimeout(r, 250));
-      }
-      for (const item of extrair()) porId.set(item.id, item);
+() => {
+  const el = document.querySelector('ng-multiple-select[ng-model="selectedAccounts"]');
+  if (!el) return 'sem-seletor';
+  const inicial = angular.element(el).isolateScope() || angular.element(el).scope();
+  for (let s = inicial, n = 0; s && n < 6; s = s.$parent, n++) {
+    if (Array.isArray(s.allAccounts) && s.allAccounts.length) {
+      return s.allAccounts.map(c => ({
+        id: c.id, nome: c.name, proprietario: c.owner, ativa: c.status !== false,
+      }));
     }
   }
-  return {total: esperado, itens: [...porId.values()]};
+  return 'sem-lista';
 }
 """
 
 
 def listar_contas(page, incluir_inativas: bool = False) -> list[dict]:
-    """Todas as contas bancárias (id + nome), vencendo a paginação da tela."""
-    page.goto(URL_CONTAS, wait_until="domcontentloaded")
+    """Todas as contas do fluxo de caixa (id + nome + proprietário + situação)."""
+    page.goto(URL_FLUXO, wait_until="domcontentloaded")
     page.reload(wait_until="domcontentloaded")
     page.wait_for_timeout(2500)
     page.wait_for_function("() => typeof angular !== 'undefined'", timeout=PRAZO_TELA)
-    page.wait_for_selector(SEL_LINHAS, state="attached", timeout=PRAZO_TELA)
-    page.wait_for_timeout(1200)
+    page.wait_for_selector(SEL_MULTISELECT, state="attached", timeout=PRAZO_TELA)
+
+    # allAccounts chega por requisição: esperar o seletor existir não basta.
+    tem_lista = ("() => { const r = (" + _JS_CONTAS + ")();"
+                 " return Array.isArray(r) && r.length > 0; }")
+    if not _esperar(page, tem_lista, PRAZO_TELA):
+        raise RuntimeError("a lista de contas não carregou a tempo.")
 
     resultado = page.evaluate(_JS_CONTAS)
     if isinstance(resultado, str):
         raise RuntimeError(f"não consegui ler a lista de contas ({resultado}).")
-    itens = resultado["itens"]
+    itens = resultado
     if not incluir_inativas:
         itens = [c for c in itens if c.get("ativa") is not False]
     return sorted(itens, key=lambda c: (c["nome"] or "").lower())
@@ -172,6 +156,8 @@ _JS_ESTADO = """
     transacoes: (s.statementTransactions || []).length,
     tem_mais: !!(c.pageInfo && c.pageInfo.hasNextPage),
     carregando: !!c.loading,
+    conta: s.accounts || null,
+    saldo_final: s.finalbalance,
   };
 }
 """
@@ -274,6 +260,46 @@ def carregar_tudo(page, limite: int = 300, parar=None) -> int:
         if page.evaluate(_JS_ESTADO)["transacoes"] == antes:
             break                        # parou de crescer: não insiste
     return page.evaluate(_JS_ESTADO)["transacoes"]
+
+
+def conferir_antes_de_salvar(estado: dict, conta_esperada: str) -> list[str]:
+    """Problemas que impedem salvar o PDF. Vazio significa aprovado.
+
+    Duas checagens, e as duas nasceram de erro real observado:
+
+    - a conta carregada tem de ser a esperada. Um extrato gravado com o nome
+      certo dentro da pasta de outra empresa não se denuncia sozinho;
+    - a paginação tem de ter terminado. O botão "Carregar mais" fica DEPOIS do
+      "Saldo final", então o extrato exibe totais como se estivesse completo
+      enquanto ainda faltam lançamentos — o PDF sairia com cara de íntegro.
+
+    Função pura de propósito: é o que permite testá-la sem navegador."""
+    problemas = []
+    if estado is None:
+        return ["não consegui ler o estado do extrato"]
+
+    carregada = estado.get("conta")
+    if not carregada:
+        problemas.append("o extrato não informa de que conta é")
+    elif _chave(carregada) != _chave(conta_esperada):
+        problemas.append(
+            f"o extrato aberto é de '{carregada}', esperava '{conta_esperada}'")
+
+    if estado.get("tem_mais"):
+        problemas.append("a paginação não terminou — faltam lançamentos")
+    return problemas
+
+
+def _chave(texto: str) -> str:
+    """Compara nomes de conta sem tropeçar em acento, caixa ou espaço duplo."""
+    t = unicodedata.normalize("NFKD", texto or "")
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return " ".join(t.upper().split())
+
+
+def estado(page) -> dict:
+    """Situação atual do modal: quantos lançamentos, se há mais, de que conta."""
+    return page.evaluate(_JS_ESTADO)
 
 
 def salvar_pdf(page, destino: Path, escala: float = 0.8) -> Path:
