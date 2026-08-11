@@ -209,6 +209,43 @@ class ConciliacaoFrame(ttk.Frame):
             "screenshots": str(RAIZ_SAIDA / "screenshots"),
         })
 
+    #: Quanto esperamos você entrar na janela do Chrome, antes de desistir.
+    ESPERA_LOGIN_S = 240
+
+    def _esperar_sessao(self):
+        """Não coleta sem sessão confirmada no navegador.
+
+        `garantir_login()` devolve False quando não confirma a sessão, mas
+        `garantir_sessao()` ignora esse retorno — e a coleta seguia às cegas.
+        Sem sessão, o ERP abre a tela de pagamentos e responde SEM DADOS: a
+        grade mostra "Nenhum registro encontrado" e o erro que chega ao
+        usuário é "a grade não carregou nenhuma linha", que aponta para o
+        lugar errado (parece layout mudado, é sessão faltando).
+
+        A leitura de saldos não denuncia o problema porque vai por uma API
+        com login próprio, sem navegador — ela funciona mesmo sem sessão.
+        """
+        cli = self.anx.mc
+        if cli._esta_logado():
+            return
+        self._log("")
+        self._log("Preciso que você entre na janela do Chrome que abriu.")
+        self._log("Assim que o Mais Controle carregar, eu sigo sozinho.")
+        self.q.put(("status", "Aguardando seu login na janela do Chrome..."))
+        for _ in range(self.ESPERA_LOGIN_S):
+            if self._parar.is_set():
+                raise RuntimeError("interrompido antes de entrar no Mais Controle.")
+            if cli._esta_logado():
+                self._log("Login confirmado — seguindo.")
+                return
+            time.sleep(1)
+        raise RuntimeError(
+            "não confirmei o login no Mais Controle.\n"
+            "Sem a sessão do navegador a tela de pagamentos vem vazia, e o "
+            "painel sairia errado — por isso parei aqui.\n"
+            "Entre na janela do Chrome e rode de novo."
+        )
+
     def gerar(self):
         if self.worker and not self.worker.done():
             return
@@ -232,6 +269,7 @@ class ConciliacaoFrame(ttk.Frame):
 
             self.q.put(("status", "Entrando no Mais Controle..."))
             self.anx.garantir_sessao(self._log)
+            self._esperar_sessao()
 
             self.q.put(("status", "Coletando saldos e pagamentos..."))
             snapshot = coletar_com_pagina(

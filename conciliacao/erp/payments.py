@@ -525,6 +525,52 @@ def _coletar_mes_exibido(pagina: Page, log=print) -> list[ErpPayment]:
     return pagamentos
 
 
+def motivo_da_grade_vazia(total_rodape, tem_texto_vazio: bool) -> str:
+    """Explica uma grade sem linhas, separando as tres causas possiveis.
+
+    O rodape e a chave: ele soma o mes inteiro, independente do que a grade
+    lista. Total zerado significa mes sem lancamentos; total com valor e
+    grade vazia significa que a listagem foi barrada — quase sempre a sessao
+    do navegador nao estava valida, e o ERP respondeu sem dados.
+
+    Funcao pura para poder ser testada: o caso real so aparece com a sessao
+    quebrada, que e dificil de reproduzir de proposito.
+    """
+    if total_rodape:
+        return (
+            "a grade de pagamentos veio vazia, mas o rodape da tela soma "
+            f"{total_rodape} no mes.\n"
+            "Ou seja: ha lancamentos, o ERP e que nao os listou.\n"
+            "A causa comum e a sessao do navegador nao estar valida — entre "
+            "na janela do Chrome e rode de novo.\n"
+            "Se voce estava logado, veja o screenshot: pode haver filtro "
+            "aplicado na tela."
+        )
+    if tem_texto_vazio:
+        return (
+            "a grade de pagamentos esta vazia e o rodape tambem esta zerado: "
+            "o mes nao tem lancamentos.\n"
+            "Se voce esperava lancamentos, confira o mes selecionado na tela."
+        )
+    return (
+        "a grade de pagamentos nao carregou nenhuma linha.\n"
+        "Nao achei nem os totais do rodape, entao a tela pode nao ter aberto "
+        "por completo ou o layout do ERP mudou (veja o screenshot)."
+    )
+
+
+def _diagnostico_grade_vazia(pagina: Page) -> str:
+    try:
+        total = pagina.evaluate(_JS_AGREGADO)
+    except Exception:
+        total = None
+    try:
+        vazio = pagina.locator("text=Nenhum registro encontrado").count() > 0
+    except Exception:
+        vazio = False
+    return motivo_da_grade_vazia(total, vazio)
+
+
 def coletar_pagamentos(
     pagina: Page,
     config,
@@ -537,11 +583,7 @@ def coletar_pagamentos(
     percorremos mes a mes e o recorte fino por data fica em `rules.py`.
     """
     if _esperar_grade(pagina) == 0:
-        raise ErpError(
-            "a grade de pagamentos nao carregou nenhuma linha.\n"
-            "Se o mes realmente nao tem lancamentos, isso e esperado; caso "
-            "contrario o layout do ERP pode ter mudado (veja screenshots)."
-        )
+        raise ErpError(_diagnostico_grade_vazia(pagina))
 
     # O agregado do rodape precisa ser lido ANTES do filtro, senao passa a
     # refletir so o subconjunto filtrado e a conferencia cruzada perde sentido.
