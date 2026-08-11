@@ -6,7 +6,23 @@ e para os exes. Módulos em subpastas o importam com um fallback de sys.path
 (ver o topo de cada arquivo) para funcionarem também rodados isoladamente.
 """
 import re
+import sys
 import unicodedata
+from pathlib import Path
+
+
+def pasta_base() -> Path:
+    """Onde ficam os arquivos que o usuário edita e os que o app gera.
+
+    Congelado, é a pasta do .exe; rodando como script, a raiz do projeto —
+    e este arquivo mora justamente na raiz, por isso um `parent` só.
+
+    Existia em três cópias byte a byte (Conciliação, Pagamentos do Dia e
+    Relatório Mensal). Três cópias de uma regra de CAMINHO é como um app passa
+    a procurar o mesmo arquivo em lugares diferentes."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
 
 
 def fmt_dur(seg: float) -> str:
@@ -21,10 +37,32 @@ def fmt_dur(seg: float) -> str:
     return f"{s} s"
 
 
+def data_api(txt: str) -> str | None:
+    """'dd/mm/aaaa' -> 'aaaa-mm-dd' (aceita também dd-mm-aaaa). None se não bate.
+
+    É o formato que a API do ERP espera nos filtros de período."""
+    m = re.match(r"^\s*(\d{2})[/-](\d{2})[/-](\d{4})\s*$", txt or "")
+    return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else None
+
+
+def fmt_val(cents: int) -> str:
+    """Centavos -> "1234,56" (sem "R$" e sem ponto de milhar).
+
+    É a forma que o ERP mostra na grade, e é assim que os valores são
+    comparados com o texto da tela."""
+    return f"{cents // 100},{cents % 100:02d}"
+
+
 def sem_acento(s: str) -> str:
-    """Remove acentos, preservando maiúsculas/minúsculas."""
-    s = unicodedata.normalize("NFD", s or "")
-    return "".join(c for c in s if unicodedata.category(c) != "Mn")
+    """Remove acentos, preservando maiúsculas/minúsculas.
+
+    NFKD e não NFD: além dos acentos, desfaz as formas de compatibilidade
+    (ligaduras, "º" sobrescrito, dígitos de largura dupla) que às vezes vêm
+    coladas de PDF e de campo do ERP. Era o que três das cinco cópias desta
+    função já faziam; unificar no mais abrangente evita que dois textos
+    "iguais na tela" comparem diferente."""
+    s = unicodedata.normalize("NFKD", s or "")
+    return "".join(c for c in s if not unicodedata.combining(c))
 
 
 def norm(s: str) -> str:
@@ -33,7 +71,16 @@ def norm(s: str) -> str:
 
 
 def norm_espaco(s: str) -> str:
-    """Como norm(), mas também colapsa espaços repetidos e apara as pontas."""
+    """Forma comparável de um NOME: sem acento, maiúsculo, sem espaço dobrado.
+
+    É a função que decide se dois nomes de conta são o mesmo — e por isso
+    precisa ser UMA só. Ela escolhia a PASTA do extrato em `contas_mc.py` e
+    julgava a VALIDADE do extrato em `extrato_mc.py`, em duas cópias
+    separadas: bastava uma divergir para o arquivo ser aceito e arquivado no
+    lugar errado.
+
+    O nome vem do cadastro do ERP e é digitado por gente: "Morais
+    Participações" e "MORAIS  PARTICIPACOES" são a mesma conta."""
     return re.sub(r"\s+", " ", norm(s)).strip()
 
 

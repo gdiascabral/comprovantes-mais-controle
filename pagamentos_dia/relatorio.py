@@ -37,6 +37,14 @@ from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -50,13 +58,17 @@ except ImportError:                                   # pragma: no cover
 # --------------------------------------------------------------------------
 # Texto
 # --------------------------------------------------------------------------
-def sem_acento(s: str | None) -> str:
-    return "".join(c for c in unicodedata.normalize("NFD", s or "")
-                   if unicodedata.category(c) != "Mn")
+sem_acento = util.sem_acento
 
 
 def chave(s: str | None) -> str:
-    return sem_acento(s).casefold().strip()
+    """Forma comparável usada AQUI dentro.
+
+    Difere do `util.norm_espaco` de propósito: aqui a comparação é entre
+    textos livres da API (método de pagamento, nome de conta como veio), e
+    colapsar espaços internos deixaria dois valores diferentes iguais. O que
+    importa é ser a mesma função dos dois lados da comparação."""
+    return util.sem_acento(s).casefold().strip()
 
 
 def brl(v) -> str:

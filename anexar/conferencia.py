@@ -34,10 +34,14 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import util
 
-from anexar_comprovantes import CampoData, _fmt_val, _data_api, _texto_do_erro
+# CampoData e _texto_do_erro seguem vindo do Anexar: um é widget e o outro
+# conhece o SemRede do mc_client. Os formatos vêm do util, compartilhados.
+from anexar_comprovantes import CampoData, _texto_do_erro
 
 LINK = config.MC_URL_LANCAMENTO
 _fmt_dur = util.fmt_dur
+_fmt_val = util.fmt_val
+_data_api = util.data_api
 _norm = util.norm
 
 

@@ -37,20 +37,7 @@ PERFIL = Path(__file__).resolve().parent / ".chrome_profile_teste"
 SAIDA = Path(__file__).resolve().parent / "teste_lancamento.json"
 TELA_PAGAMENTOS = f"{BASE_URL}/#/payable-installments"
 
-CABECALHOS = {"authorization", "company-id", "user-id", "organization-unit-id"}
-# Telemetria: carrega token PRÓPRIO. Misturar com os demais fez o
-# prod-erp-api devolver 401 numa rodada anterior.
-HOSTS_IGNORAR = ("api-data-event", "faro.", "satismeter", "datadog", "google")
-
-
-def host_util(host: str) -> bool:
-    """Hosts do ERP dos quais vale copiar a autenticação.
-
-    Inclui os execute-api (GraphQL): é neles que moram as obras, e sem o
-    token deles a lista de obras vem vazia sem explicação."""
-    if any(x in host for x in HOSTS_IGNORAR):
-        return False
-    return host.endswith("maiscontroleerp.com.br") or "execute-api" in host
+from erp_sessao import ouvinte                # noqa: E402
 
 # --------------------------------------------------------------- o que criar
 # Valor de R$ 1,00 e descrição em maiúsculas: se algo escapar da limpeza, fica
@@ -124,14 +111,7 @@ def main() -> int:
         except OSError:
             pass
 
-    def ao_requisitar(req):
-        from urllib.parse import urlsplit
-        host = urlsplit(req.url).netloc
-        if not host_util(host):
-            return
-        cab = {k: v for k, v in req.headers.items() if k.lower() in CABECALHOS}
-        if "authorization" in {k.lower() for k in cab}:
-            capturados[host] = cab
+    ao_requisitar = ouvinte(capturados)
 
     shutil.rmtree(PERFIL, ignore_errors=True)
     PERFIL.mkdir(parents=True, exist_ok=True)

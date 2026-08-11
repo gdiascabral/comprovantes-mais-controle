@@ -16,8 +16,6 @@ Sem argumento, procura o contas.csv ao lado deste arquivo.
 """
 from __future__ import annotations
 
-import csv
-import os
 import shutil
 import sys
 import time
@@ -26,6 +24,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dados as cadastro                    # noqa: E402
 from mc_catalogos import Catalogos          # noqa: E402
 
 BASE_URL = "https://acessar.maiscontroleerp.com.br"
@@ -35,23 +34,7 @@ PERFIL = Path(__file__).resolve().parent / ".chrome_profile_conferencia"
 # é delas que os cabeçalhos são copiados.
 TELA_PAGAMENTOS = f"{BASE_URL}/#/payable-installments"
 
-CABECALHOS = {"authorization", "company-id", "user-id", "organization-unit-id"}
-
-# Hosts do ERP que importam. api-data-event e faro são TELEMETRIA e carregam
-# token próprio — misturá-los com os demais faz o prod-erp-api devolver 401.
-# Telemetria: carrega token PRÓPRIO. Misturar com os demais fez o
-# prod-erp-api devolver 401 numa rodada anterior.
-HOSTS_IGNORAR = ("api-data-event", "faro.", "satismeter", "datadog", "google")
-
-
-def host_util(host: str) -> bool:
-    """Hosts do ERP dos quais vale copiar a autenticação.
-
-    Inclui os execute-api (GraphQL): é neles que moram as obras, e sem o
-    token deles a lista de obras vem vazia sem explicação."""
-    if any(x in host for x in HOSTS_IGNORAR):
-        return False
-    return host.endswith("maiscontroleerp.com.br") or "execute-api" in host
+from erp_sessao import ouvinte                # noqa: E402
 
 CANDIDATOS_CSV = [
     Path(__file__).resolve().parent / "contas.csv",
@@ -73,16 +56,20 @@ def achar_csv(argumento: str | None) -> Path:
 
 
 def ler_entidades(caminho: Path) -> dict:
-    entidades = {}
-    with open(caminho, encoding="utf-8-sig", newline="") as f:
-        for linha in csv.DictReader(f, delimiter=";"):
-            nome = (linha.get("nome_exibicao") or "").strip()
-            if nome:
-                entidades[nome] = {
-                    "nome_oficial": (linha.get("nome_oficial") or "").strip(),
-                    "conta": (linha.get("conta") or "").strip(),
-                }
-    return entidades
+    """Lê o contas.csv pelo MESMO caminho que o app usa (`dados`).
+
+    Havia aqui uma segunda leitura do CSV, com regras próprias: ela ignorava o
+    `nome_descricao` e devolvia string vazia onde `dados` devolve None para
+    conta ausente. Resultado: esta ferramenta conferia um cadastro levemente
+    diferente do que a aba Aportes lança de verdade — e conferência que olha
+    outra coisa não confere nada.
+    """
+    anterior = cadastro.ARQUIVO_CONTAS
+    try:
+        cadastro.ARQUIVO_CONTAS = Path(caminho)
+        return cadastro.carregar_contas()
+    finally:
+        cadastro.ARQUIVO_CONTAS = anterior
 
 
 def main() -> int:
@@ -100,14 +87,7 @@ def main() -> int:
 
     capturados: dict = {}
 
-    def ao_requisitar(req):
-        from urllib.parse import urlsplit
-        host = urlsplit(req.url).netloc
-        if not host_util(host):
-            return
-        cabecalhos = {k: v for k, v in req.headers.items() if k.lower() in CABECALHOS}
-        if "authorization" in {k.lower() for k in cabecalhos}:
-            capturados[host] = cabecalhos
+    ao_requisitar = ouvinte(capturados)
 
     # Perfil próprio e zerado: perfil reaproveitado depois de um encerramento
     # forçado faz o Chrome delegar a sessão e sair. Nunca apontar para o perfil

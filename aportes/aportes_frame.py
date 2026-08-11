@@ -21,17 +21,10 @@ import dados as cadastro                                    # noqa: E402
 from mc_catalogos import Catalogos                          # noqa: E402
 from mc_lancamentos import (criar_pagamento, criar_recebimento,  # noqa: E402
                             ErroLancamento)
+from erp_sessao import ouvinte                              # noqa: E402
 from regras import Operacao, como_dinheiro, expandir        # noqa: E402
 
-CABECALHOS = {"authorization", "company-id", "user-id", "organization-unit-id"}
-HOSTS_IGNORAR = ("api-data-event", "faro.", "satismeter", "datadog", "google")
 URL_PAGAMENTOS = "https://acessar.maiscontroleerp.com.br/#/payable-installments"
-
-
-def _host_util(host: str) -> bool:
-    if any(x in host for x in HOSTS_IGNORAR):
-        return False
-    return host.endswith("maiscontroleerp.com.br") or "execute-api" in host
 
 
 class AportesFrame(ttk.Frame):
@@ -276,16 +269,7 @@ class AportesFrame(ttk.Frame):
         self._log("Passando pela tela de Pagamentos para o ERP autenticar os "
                   "serviços de cadastro...")
 
-        def ao_requisitar(req):
-            from urllib.parse import urlsplit
-            host = urlsplit(req.url).netloc
-            if not _host_util(host):
-                return
-            cab = {k: v for k, v in req.headers.items()
-                   if k.lower() in CABECALHOS}
-            if any(k.lower() == "authorization" for k in cab):
-                self._cabecalhos[host] = cab
-
+        ao_requisitar = ouvinte(self._cabecalhos)
         pagina.on("request", ao_requisitar)
         try:
             # `goto` para a MESMA URL não dispara requisição nenhuma: o ERP é

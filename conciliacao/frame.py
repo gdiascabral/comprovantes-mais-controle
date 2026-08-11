@@ -33,6 +33,19 @@ from conciliacao.snapshot import save as salvar_snapshot
 from conciliacao.validate import ValidationError
 from conciliacao.workbook import WorkbookError
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+#: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
+#: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
+#: lugares; uma de FORMATO é como a mesma duração aparece de dois jeitos.
+_fmt_dur = util.fmt_dur
+_pasta_base = util.pasta_base
+
 #: Erros que já explicam a si mesmos: a mensagem vai inteira para o log, sem
 #: "[!]" na frente, porque ela É a entrega quando a planilha não sai.
 ERROS_ESPERADOS = (ValidationError, WorkbookError, MappingError, ErpError)
@@ -44,15 +57,8 @@ MESES = ("JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
 RAIZ_SAIDA = Path("C:/Arquivos Morais/CONCILIACAO DIARIA")
 
 
-def _pasta_base() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
 
 
-def _fmt_dur(seg: float) -> str:
-    seg = int(seg)
-    return f"{seg // 60}min {seg % 60}s" if seg >= 60 else f"{seg}s"
 
 
 class ConciliacaoFrame(ttk.Frame):

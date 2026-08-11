@@ -25,19 +25,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import contas_mc                                             # noqa: E402
 import extrato_mc                                            # noqa: E402
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+#: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
+#: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
+#: lugares; uma de FORMATO é como a mesma duração aparece de dois jeitos.
+_fmt_dur = util.fmt_dur
+_pasta_base = util.pasta_base
+
 MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
          "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 
 
-def _pasta_base() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
 
 
-def _fmt_dur(seg: float) -> str:
-    seg = int(seg)
-    return f"{seg // 60}min {seg % 60}s" if seg >= 60 else f"{seg}s"
 
 
 class RelatorioFrame(ttk.Frame):

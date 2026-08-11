@@ -13,6 +13,14 @@ import re
 import unicodedata
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+try:                                     # utilitarios compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando a Conciliacao isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
 
 # Valor precedido de "R$". `pre` captura sinal antes da moeda ("-R$ 10,00"),
 # `sign` captura o sinal depois dela ("R$ - 10,00"), que e o formato do ERP.
@@ -87,9 +95,8 @@ def parse_date_br(text: str | None, *, reference: date | None = None) -> date | 
         return None
 
 
-def strip_accents(text: str) -> str:
-    decomposed = unicodedata.normalize("NFKD", text)
-    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+#: Mesma remocao de acentos do resto do app (util.sem_acento). Aceita None.
+strip_accents = util.sem_acento
 
 
 def normalize_name(text: str | None) -> str:

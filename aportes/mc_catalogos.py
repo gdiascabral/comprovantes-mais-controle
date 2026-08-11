@@ -23,8 +23,15 @@ contas, sócios e investidores ficam em arquivos locais, fora do Git.
 """
 from __future__ import annotations
 
-import unicodedata
+from pathlib import Path
 from urllib.parse import urlencode
+
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
 
 ERP_API = "https://prod-erp-api.maiscontroleerp.com.br"
 LEGACY = "https://legacy-api.maiscontroleerp.com.br/maiscontrole/services"
@@ -66,19 +73,11 @@ _GQL_OBRAS = """query ($first: PaginationAmount, $afterCursor: String,
 }"""
 
 
-def _sem_acento(texto: str) -> str:
-    nfkd = unicodedata.normalize("NFKD", texto or "")
-    return "".join(c for c in nfkd if not unicodedata.combining(c))
-
-
-def chave(nome: str) -> str:
-    """Forma comparável de um nome: sem acento, sem caixa, sem espaço dobrado.
-
-    O cadastro do ERP e o arquivo de contas divergem em acentuação e
-    espaçamento com frequência (por exemplo "SÃO" x "SAO", ou um espaço duplo
-    no meio do nome). Comparar pela forma crua transformaria diferença
-    cosmética em erro de cadastro."""
-    return " ".join(_sem_acento(nome or "").upper().split())
+#: Forma comparável de um nome de cadastro. O ERP e o contas.csv divergem em
+#: acentuação e espaçamento com frequência ("SÃO" x "SAO", espaço duplo no
+#: meio): comparar pela forma crua transformaria diferença cosmética em erro
+#: de cadastro. É a MESMA função usada pelos mapas de pasta (util.norm_espaco).
+chave = util.norm_espaco
 
 
 class Catalogos:

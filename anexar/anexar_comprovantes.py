@@ -52,14 +52,11 @@ _fmt_dur = util.fmt_dur
 _norm = util.norm
 
 
-def _data_api(txt: str) -> str | None:
-    """'dd/mm/aaaa' -> 'aaaa-mm-dd' (aceita também dd-mm-aaaa)."""
-    m = re.match(r"^\s*(\d{2})[/-](\d{2})[/-](\d{4})\s*$", txt or "")
-    return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else None
-
-
-def _fmt_val(cents: int) -> str:
-    return f"{cents // 100},{cents % 100:02d}"
+#: Formatos partilhados com a Conferência. Moram no util.py para a
+#: Conferência não precisar importar nome PRIVADO daqui — import assim cria
+#: dependência de mão única entre duas abas e quebra quando uma é reordenada.
+_data_api = util.data_api
+_fmt_val = util.fmt_val
 
 
 def _texto_do_erro(e: Exception) -> str:
