@@ -172,33 +172,63 @@ def main():
                 b.configure(style="Accent.TButton" if n == nome else "TButton")
             except tk.TclError:
                 pass
+        # Uma aba dentro de um grupo fechado ficaria selecionada e invisível na
+        # barra: abre o grupo para o destaque ter onde aparecer.
+        for gnome, g in grupos.items():
+            if nome in g["itens"] and not g["aberto"]:
+                _alternar(gnome)
 
     ttk.Label(lateral, text="🧾  Comprovantes", font=("Segoe UI", 13, "bold")
               ).pack(anchor="w", pady=(0, 14))
-    botoes["sep"] = ttk.Button(lateral, text="✂   Separar e Renomear", width=24,
-                               command=lambda: mostrar("sep"))
-    botoes["sep"].pack(fill="x", pady=(0, 6), ipady=3)
-    botoes["anx"] = ttk.Button(lateral, text="📎   Anexar Comprovantes", width=24,
-                               command=lambda: mostrar("anx"))
-    botoes["anx"].pack(fill="x", pady=(0, 6), ipady=3)
-    botoes["conf"] = ttk.Button(lateral, text="✅   Conferência", width=24,
-                                command=lambda: mostrar("conf"))
-    botoes["conf"].pack(fill="x", pady=(0, 6), ipady=3)
-    botoes["apt"] = ttk.Button(lateral, text="💰   Aportes", width=24,
-                               command=lambda: mostrar("apt"))
-    botoes["apt"].pack(fill="x", pady=(0, 6), ipady=3)
-    botoes["rel"] = ttk.Button(lateral, text="📊   Relatório Mensal", width=24,
-                               command=lambda: mostrar("rel"))
-    botoes["rel"].pack(fill="x", pady=(0, 6), ipady=3)
-    botoes["pag"] = ttk.Button(lateral, text="🗓   Pagamentos do Dia", width=24,
-                               command=lambda: mostrar("pag"))
-    botoes["pag"].pack(fill="x", pady=(0, 6), ipady=3)
-    botoes["ext"] = ttk.Button(lateral, text="🏦   Extratos Sicoob", width=24,
-                               command=lambda: mostrar("ext"))
-    botoes["ext"].pack(fill="x", pady=(0, 6), ipady=3)
-    botoes["con"] = ttk.Button(lateral, text="⚖   Conciliação Diária", width=24,
-                               command=lambda: mostrar("con"))
-    botoes["con"].pack(fill="x", ipady=3)
+
+    def _item(pai, chave: str, texto: str):
+        b = ttk.Button(pai, text=texto, width=24, command=lambda: mostrar(chave))
+        b.pack(fill="x", pady=(0, 6), ipady=3)
+        botoes[chave] = b
+
+    for _chave, _texto in (("sep", "✂   Separar e Renomear"),
+                           ("anx", "📎   Anexar Comprovantes"),
+                           ("conf", "✅   Conferência"),
+                           ("apt", "💰   Aportes")):
+        _item(lateral, _chave, _texto)
+
+    # ---- grupos que abrem e fecham
+    # As rotinas de fechamento são muitas para uma lista plana, e cada uma se
+    # usa num ritmo diferente: as diárias todo dia, as mensais uma vez por mês.
+    # O grupo aberto/fechado fica em preferencias.json — quem só faz o diário
+    # não reabre o mensal toda vez.
+    grupos: dict[str, dict] = {}
+    prefs_grupos = prefs.get("grupos") or {}
+
+    def _alternar(nome: str, salvar: bool = True):
+        g = grupos[nome]
+        g["aberto"] = not g["aberto"]
+        if g["aberto"]:
+            g["corpo"].pack(fill="x", after=g["cabecalho"])
+        else:
+            g["corpo"].pack_forget()
+        g["cabecalho"].configure(text=g["titulo"](g["aberto"]))
+        if salvar:
+            prefs.setdefault("grupos", {})[nome] = g["aberto"]
+            _salvar_prefs(prefs)
+
+    def _grupo(nome: str, rotulo: str, itens):
+        titulo = lambda aberto: f"{'▾' if aberto else '▸'}   {rotulo}"  # noqa: E731
+        cab = ttk.Button(lateral, width=24, command=lambda: _alternar(nome))
+        cab.pack(fill="x", pady=(6, 4), ipady=3)
+        corpo = ttk.Frame(lateral)
+        grupos[nome] = {"cabecalho": cab, "corpo": corpo, "titulo": titulo,
+                        "aberto": False, "itens": [c for c, _ in itens]}
+        for chave, texto in itens:
+            _item(corpo, chave, texto)
+        cab.configure(text=titulo(False))
+        if prefs_grupos.get(nome, True):          # por padrão, abertos
+            _alternar(nome, salvar=False)
+
+    _grupo("diario", "DIÁRIO", (("pag", "🗓   Pagamentos do Dia"),
+                                ("con", "⚖   Conciliação Diária")))
+    _grupo("mensal", "MENSAL", (("rel", "📊   Relatório Mensal"),
+                                ("ext", "🏦   Extratos Sicoob")))
 
     # ---------------- rodapé da barra: tema + versão
     rodape = ttk.Frame(lateral)

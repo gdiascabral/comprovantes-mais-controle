@@ -44,9 +44,32 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 - `atualizador.py` — motor-side: baixa codigo.zip, troca de pasta atômica,
   download do exe completo com janela de progresso, troca via .bat com 30
   retentativas (OneDrive trava arquivos). Loga em `atualizacao.log`.
-- `comprovantes_app.py` — janela única: barra lateral (Separar e Renomear /
-  Anexar Comprovantes / Conferência / Aportes / Relatório Mensal /
-  Pagamentos do Dia / Extratos Sicoob), tema
+- `conciliacao/` — aba Conciliação Diária: lê saldos e pagamentos a vencer e
+  gera o painel do dia sobre o `MODELO.xlsx`, com o aporte mínimo por conta.
+  **Único pacote de verdade** (tem `__init__.py`, importa-se
+  `from conciliacao.frame import ...`): nome de módulo é global no sys.path do
+  app, e um pacote dispensa o prefixo que `extratos_sicoob/` precisou usar.
+  Veio de um projeto separado que rodava por `.bat`, e os `.bat` continuam lá
+  como plano B — **não rodar os dois ao mesmo tempo**, porque o ERP aceita uma
+  sessão por usuário. É essa regra que explica o desenho: `coletar_com_pagina()`
+  usa a página do Anexar em vez de abrir Chrome próprio, e a credencial da API
+  sai do `login.dat` (DPAPI) em vez do keyring — duas senhas em cofres
+  diferentes só criam a chance de uma envelhecer e o erro virar "login
+  inválido" sem motivo aparente. `pipeline.py` não toca em navegador: recebe um
+  `Snapshot` e devolve o resultado, e é por isso que os 9 arquivos de teste
+  vieram junto sem alteração. A coleta usa DOIS caminhos: saldos pela API REST
+  (a raspagem da tela de contas quebrou duas vezes) e pagamentos pela grade,
+  que ainda depende do layout. `config.yaml`, `mapping.yaml` e `MODELO.xlsx`
+  ficam FORA do repo (nome de empresa, estrutura do painel, rateios); as
+  fixtures dos testes pulam quando faltam, então o CI passa sem os dados reais
+  e a máquina de quem usa valida de verdade. Saída em
+  `C:/Arquivos Morais/CONCILIACAO DIARIA/<ANO>/<MÊS>/`.
+- `comprovantes_app.py` — janela única: barra lateral com quatro itens soltos
+  (Separar e Renomear / Anexar Comprovantes / Conferência / Aportes) e dois
+  grupos que abrem e fecham — DIÁRIO (Pagamentos do Dia, Conciliação Diária) e
+  MENSAL (Relatório Mensal, Extratos Sicoob). O estado de cada grupo fica em
+  `preferencias.json`, e selecionar uma aba de grupo fechado o abre — senão a
+  aba ficaria destacada e invisível. Tema
   Automático (lê o registro do
   Windows)/Claro/Escuro salvo em `preferencias.json`, versão no título e
   no rodapé da barra. Tema sv-ttk; frames expõem `aplicar_cores(escuro)`.
