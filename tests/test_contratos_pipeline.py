@@ -7,6 +7,8 @@ fechamento. O resultado certo é 2 arquiváveis e 2 em revisão.
 """
 from pathlib import Path
 
+import pytest
+
 from contratos.pipeline import Achado, arquivar, levantar, preparar_destino
 
 
@@ -59,15 +61,23 @@ def receb(obra, casa, comprador, condicao="1ª FINANCIAMENTO", valor=245000.0):
 class ApiDuble:
     """Só o que o pipeline usa. Registra o que foi pedido."""
 
-    def __init__(self, registros, texto=TEXTO):
+    def __init__(self, registros, texto=TEXTO, credenciais=True):
         self.registros = registros
         self.texto = texto
         self.baixados = []
+        self.credenciais = credenciais     # a captura do 2º back-end deu certo?
+        self.chamadas = []                 # em que ordem o pipeline pediu
+
+    def garantir_credenciais_anexos(self, log=print):
+        self.chamadas.append("credenciais")
+        return self.credenciais
 
     def listar_recebimentos(self, inicio, fim, log=print):
+        self.chamadas.append("recebimentos")
         return self.registros
 
     def listar_obras(self, log=print):
+        self.chamadas.append("obras")
         return OBRAS
 
     def anexos_de_obras(self, ids, log=print, cancelar=None):
@@ -125,6 +135,28 @@ def test_obra_que_nao_existe_no_cadastro_vai_para_revisao():
     assert len(achados) == 1 and "não achei a obra" in achados[0].revisao
 
 
+# --------------------------------------------- acesso ao segundo back-end
+# O erro de 11/08/2026: a aba anunciava "Preparando o acesso aos anexos..." e
+# não preparava nada. As obras e os anexos vivem no outro back-end do ERP, e a
+# busca morria em "Credenciais de anexos ainda não capturadas" logo depois de
+# "Lendo as obras..." — sempre, em qualquer mês.
+
+def test_a_busca_prepara_o_acesso_antes_de_ler_as_obras():
+    api = ApiDuble(REGISTROS)
+    levantar(api, 2026, 7, EMPRESAS, log=lambda m: None)
+    assert api.chamadas[0] == "credenciais"
+    assert "obras" in api.chamadas
+
+
+def test_sem_acesso_ao_segundo_back_end_a_busca_para_e_diz_o_que_fazer():
+    api = ApiDuble(REGISTROS, credenciais=False)
+    with pytest.raises(RuntimeError) as e:
+        levantar(api, 2026, 7, EMPRESAS, log=lambda m: None)
+    assert "obras e anexos" in str(e.value)
+    assert "rode de novo" in str(e.value)
+    assert "obras" not in api.chamadas      # nem tentou ler sem cabeçalho
+
+
 # ------------------------------------------------------------- arquivamento
 def _nome_mes(m):
     return "JULHO"
@@ -169,6 +201,20 @@ def test_download_vazio_nao_derruba_os_outros(tmp_path):
              texto_do_pdf=lambda b: TEXTO, log=lambda m: None)
     assert not any(a.arquivado for a in achados)
     assert all("download" in a.revisao for a in achados if a.anexo and a.empresa)
+
+
+def test_arquivar_tambem_confere_o_acesso_antes_de_baixar(tmp_path):
+    """Entre buscar e arquivar o ERP pode ter derrubado a sessão (aceita uma
+    por usuário). Baixar contrato com a sessão caída é download vazio gravado
+    como se fosse contrato."""
+    api = ApiDuble(REGISTROS)
+    achados = levantar(api, 2026, 7, EMPRESAS, log=lambda m: None)
+    api.credenciais = False
+    with pytest.raises(RuntimeError):
+        arquivar(api, achados, tmp_path, 2026, 7, _nome_mes, _pasta_empresa,
+                 texto_do_pdf=lambda b: TEXTO, log=lambda m: None)
+    assert not any(a.arquivado for a in achados)
+    assert api.baixados == []
 
 
 def test_caminho_longo_demais_e_recusado_antes_de_gravar(tmp_path):

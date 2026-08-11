@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Costura as peças: recebimentos -> imóveis -> obra -> contrato -> destino.
 
-Não sabe que existe interface. Recebe a `MCApi` já autenticada e devolve uma
-lista de `Achado` — um por casa financiada no mês, cada um dizendo o que foi
-resolvido e o que faltou.
+Não sabe que existe interface. Recebe a `MCApi` de uma sessão aberta e devolve
+uma lista de `Achado` — um por casa financiada no mês, cada um dizendo o que
+foi resolvido e o que faltou.
 
 `revisao` é campo de primeira classe, não exceção: uma casa sem contrato, sem
 obra ou sem empresa é um resultado normal do mês, e a aba mostra o motivo. Só
@@ -59,6 +59,26 @@ class Achado:
                 f"R$ {i.valor_financiamento:,.2f}")
 
 
+def _garantir_acesso(api, log=print) -> None:
+    """Deixa a API pronta para os DOIS back-ends antes da primeira leitura.
+
+    Os recebimentos saem de um; as obras, os anexos e o contrato saem do
+    outro — e o cabeçalho de autenticação de cada um só passa a existir depois
+    que o navegador faz uma requisição de verdade naquela tela.
+
+    A garantia mora aqui, e não na aba, porque quem sabe que precisa dos dois é
+    este módulo: a aba anunciava "Preparando o acesso aos anexos..." e não
+    preparava nada, e a busca morria em "Credenciais de anexos ainda não
+    capturadas" logo depois de "Lendo as obras..." — mensagem que não diz o que
+    fazer e some do caminho de quem só queria os contratos do mês."""
+    if not api.garantir_credenciais_anexos(log):
+        raise RuntimeError(
+            "não consegui preparar o acesso ao cadastro de obras e anexos do "
+            "Mais Controle.\n"
+            "Abra a tela de Pagamentos no Chrome, entre em um pagamento "
+            "qualquer e rode de novo.")
+
+
 def _primeiro_dia(ano: int, mes: int) -> str:
     return f"{ano:04d}-{mes:02d}-01"
 
@@ -74,6 +94,7 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
 
     Não baixa nem grava nada. É o que a aba mostra ANTES de o usuário mandar
     arquivar — e é onde um erro do mapa cliente→empresa aparece."""
+    _garantir_acesso(api, log)
     inicio, fim = _primeiro_dia(ano, mes), _ultimo_dia(ano, mes)
     log(f"Lendo os recebimentos de {inicio} a {fim}...")
     registros = api.listar_recebimentos(inicio, fim, log)
@@ -176,6 +197,10 @@ def arquivar(api, achados: list[Achado], raiz: Path, ano: int, mes: int,
     `texto_do_pdf(bytes) -> str` entra por parâmetro para este módulo não
     depender do OCR (que arrasta pdfplumber e Tesseract): quem sabe ler PDF é
     a aba, e aqui só se decide o que fazer com o texto."""
+    # Repetido de propósito: entre buscar e arquivar o ERP pode ter derrubado a
+    # sessão (ele aceita uma por usuário), e aí a API é outra, sem cabeçalho
+    # nenhum. Custa nada quando já está capturado.
+    _garantir_acesso(api, log)
     prontos = [a for a in achados if not a.revisao and a.anexo]
     total = len(prontos)
     for i, achado in enumerate(prontos, 1):

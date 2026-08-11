@@ -281,11 +281,12 @@ class ContratosFrame(ttk.Frame):
             ano, mes = self._periodo()
             self.q.put(("status", "Entrando no Mais Controle..."))
             api = self.anx.garantir_sessao(self._log)
-            if not self.anx.api.capturar_credenciais(self._log):
+            if not api.capturar_credenciais(self._log):
                 raise RuntimeError("Não capturei a lista de pagamentos — é dela "
                                    "que saem os cabeçalhos de autenticação.")
-            # Os anexos vivem no outro back-end: sem esta captura, obras e
-            # anexos respondem 401 sem dizer o motivo.
+            # As obras e os anexos vivem no OUTRO back-end, com cabeçalho
+            # próprio. Quem garante esse segundo acesso é o `pipeline`, que é
+            # quem sabe que precisa dos dois; aqui só se avisa da espera.
             self.q.put(("status", "Preparando o acesso aos anexos..."))
 
             mapa = contas.carregar()

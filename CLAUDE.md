@@ -131,6 +131,14 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   nenhum servir, o diagnostico.log grava quais campos vieram — só os NOMES,
   sem valores — para acertar a lista sem chutar de novo.
   Também baixa anexos (fetch → base64) para a Conferência.
+  **São DOIS back-ends e dois cabeçalhos**: `capturar_credenciais` ouve a tela
+  de Pagamentos (títulos, recebimentos) e `capturar_credenciais_anexos` ouve a
+  tela de UM lançamento (anexos, obras — `_base_erp`). Quem tem um lançamento
+  na mão passa o id; quem não tem (a aba Contratos parte de recebimento e
+  obra) chama `garantir_credenciais_anexos`, que procura a isca sozinho — um
+  pagamento qualquer do último ano — e garante os dois de uma vez. Sem isso,
+  a primeira chamada ao ERP morre em "Credenciais de anexos ainda não
+  capturadas", que parece erro de login e não é.
 - `anexar/matcher.py` — casamento PDF↔pagamento. Filtro de entrada: valor
   (qualquer um de `valores`). Critérios: OC/NF > centro de custo > data.
   NUNCA chuta: só casa por data se não há outro pagamento de valor igual;

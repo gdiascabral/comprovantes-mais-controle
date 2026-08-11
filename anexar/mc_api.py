@@ -14,6 +14,7 @@ normal. Com isso:
   - verifica, pago a pago, se há arquivo anexado no nível do sub-pagamento
     (endpoint de attachments com entityOrigin=PAID).
 """
+import datetime
 import re
 from urllib.parse import urlsplit, parse_qsl, urlencode
 
@@ -174,18 +175,69 @@ class MCApi:
         self.page.goto(config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
         return ok
 
+    def garantir_credenciais_anexos(self, log=print, dias=365) -> bool:
+        """Captura os cabeçalhos do outro back-end SEM receber um lançamento.
+
+        `capturar_credenciais_anexos` precisa do id de um lançamento para abrir
+        a tela dele e ouvir a chamada de anexos. Quem chega aqui por outro
+        caminho não tem esse id: a aba Contratos parte de recebimentos e obras,
+        e por isso ficava sem cabeçalho nenhum — a primeira leitura do ERP
+        (listar as obras) morria com "Credenciais de anexos ainda não
+        capturadas", que não diz ao usuário o que fazer.
+
+        A isca passa a ser procurada aqui: serve QUALQUER lançamento pago
+        recente, porque o que importa é a tela dele pedir os anexos. Também
+        garante as credenciais de pagamentos, que são de onde a isca sai —
+        assim uma chamada só deixa a API pronta para os dois back-ends."""
+        if self._req_anexos:
+            return True
+        if not self.capturar_credenciais(log):
+            return False
+        isca = self._um_pagamento_recente(dias)
+        if not isca:
+            log(f"[!] Não achei nenhum pagamento nos últimos {dias} dias para "
+                "abrir e capturar o acesso aos anexos. Abra um pagamento "
+                "qualquer no Chrome e rode de novo.")
+            return False
+        return self.capturar_credenciais_anexos(isca)
+
+    def _um_pagamento_recente(self, dias: int) -> str:
+        """O id de UM lançamento pago nos últimos `dias`, ou "".
+
+        Uma página de um item só: não interessa QUAL lançamento é, só que a
+        tela dele exista para o navegador pedir os anexos dela."""
+        hoje = datetime.date.today()
+        url, headers = self._consulta_pagos([
+            ("type", "PAID"), ("dateField", "DATE_OF_PAYMENT"),
+            ("startDate", f"{hoje - datetime.timedelta(days=dias):%Y-%m-%d}"),
+            ("endDate", f"{hoje:%Y-%m-%d}"),
+            ("page", "0"), ("size", "1")])
+        j = self._fetch_json(url, headers)
+        if isinstance(j, dict) and j.get("__erro"):
+            raise RuntimeError(
+                f"A API respondeu {j['__erro']} ao procurar um pagamento "
+                "recente. Recarregue a tela do Mais Controle no Chrome e "
+                "tente de novo.")
+        for item in ((j or {}).get("content") or []):
+            if item.get("id"):
+                return str(item["id"])
+        return ""
+
     # ------------------------------------------------------------ fetch
     def _fetch_json(self, url: str, headers: dict):
         """Faz a chamada de dentro da página logada (mesma origem/cookies/UA)."""
         return self.page.evaluate(_JS_FETCH_JSON, {"url": url, "headers": headers})
 
     # ------------------------------------------------------------ pagos
-    def listar_pagos(self, data_inicio: str, data_fim: str, log=print) -> list[dict]:
-        """
-        data_inicio / data_fim no formato 'aaaa-mm-dd'.
-        Retorna a lista bruta de lançamentos (cada um com paids[]).
-        SEMPRE filtra por títulos pagos (type=PAID) e data de pagamento.
-        """
+    def _consulta_pagos(self, filtros: list[tuple[str, str]]) -> tuple[str, dict]:
+        """A URL da lista de pagamentos capturada, com os filtros do app no
+        lugar dos que vieram na requisição da tela.
+
+        As três consultas desta lista (pagos, a pagar e a isca das credenciais
+        de anexos) só mudam de filtro — o resto (host, caminho e os parâmetros
+        da organização) tem de ser exatamente o que o navegador mandou. Isto
+        já morava copiado em dois lugares; a terceira cópia seria a primeira
+        chance de os três discordarem."""
         if not self._req_pagos:
             raise RuntimeError("Credenciais ainda não capturadas.")
         url_orig, headers = self._req_pagos
@@ -194,13 +246,22 @@ class MCApi:
         params = [(k, v) for k, v in parse_qsl(partes.query)
                   if k not in ("page", "size", "startDate", "endDate",
                                "accountIds", "type", "dateField")]
-        params += [("type", "PAID"), ("dateField", "DATE_OF_PAYMENT"),
+        return base + "?" + urlencode(params + filtros), headers
+
+    def listar_pagos(self, data_inicio: str, data_fim: str, log=print) -> list[dict]:
+        """
+        data_inicio / data_fim no formato 'aaaa-mm-dd'.
+        Retorna a lista bruta de lançamentos (cada um com paids[]).
+        SEMPRE filtra por títulos pagos (type=PAID) e data de pagamento.
+        """
+        filtros = [("type", "PAID"), ("dateField", "DATE_OF_PAYMENT"),
                    ("startDate", data_inicio), ("endDate", data_fim)]
 
         todos, pagina = [], 0
         while True:
-            q = params + [("page", str(pagina)), ("size", "500")]
-            j = self._fetch_json(base + "?" + urlencode(q), headers)
+            url, headers = self._consulta_pagos(
+                filtros + [("page", str(pagina)), ("size", "500")])
+            j = self._fetch_json(url, headers)
             if isinstance(j, dict) and j.get("__erro"):
                 raise RuntimeError(
                     f"A API respondeu {j['__erro']} ao listar os pagos. "
@@ -288,21 +349,14 @@ class MCApi:
         `page` começa em 0 (Spring): pedir page=1 devolve a SEGUNDA página,
         com content vazio e sem erro nenhum.
         """
-        if not self._req_pagos:
-            raise RuntimeError("Credenciais ainda não capturadas.")
-        url_orig, headers = self._req_pagos
-        partes = urlsplit(url_orig)
-        base = f"{partes.scheme}://{partes.netloc}{partes.path}"
-        params = [(k, v) for k, v in parse_qsl(partes.query)
-                  if k not in ("page", "size", "startDate", "endDate",
-                               "accountIds", "type", "dateField")]
-        params += [("type", "ALL"), ("dateField", "PLANNED"),
+        filtros = [("type", "ALL"), ("dateField", "PLANNED"),
                    ("startDate", data_inicio), ("endDate", data_fim)]
 
         todos, pagina = [], 0
         while True:
-            q = params + [("page", str(pagina)), ("size", "500")]
-            j = self._fetch_json(base + "?" + urlencode(q), headers)
+            url, headers = self._consulta_pagos(
+                filtros + [("page", str(pagina)), ("size", "500")])
+            j = self._fetch_json(url, headers)
             if isinstance(j, dict) and j.get("__erro"):
                 raise RuntimeError(
                     f"A API respondeu {j['__erro']} ao listar os lançamentos. "
