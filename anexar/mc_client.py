@@ -61,7 +61,23 @@ def _centavos(s) -> int | None:
 # rótulos ou estrutura, é AQUI que se ajusta — é o ponto mais provável de
 # quebra do app.
 TXT_HISTORICO = "Histórico de Pagamentos"   # seção que ancora as linhas
-TXT_LOGADO = "Pagamentos"                   # confirma que a área logada abriu
+TXT_LOGADO = "Pagamentos"                   # (histórico: ver SINAIS_DE_LOGIN)
+
+# Sinais de que a tela de LOGIN está à vista. A sessão é detectada pela
+# AUSÊNCIA deles, não pela presença de algo da área logada.
+#
+# Procurar um sinal positivo (o TXT_LOGADO acima) parece natural e não
+# funciona aqui: o ERP é single-spa, com AngularJS na tela de login e React no
+# resto, e migra tela por tela — o texto muda de lugar e a detecção cega.
+# Aconteceu em 10/08/2026, com o painel aberto na tela e o app insistindo que
+# não havia sessão. A tela de login, essa, é estável.
+#
+# Regra herdada do projeto da Conciliação Diária, onde roda há meses.
+SINAIS_DE_LOGIN = (
+    'input[type="password"]',
+    "text=Entre na sua conta",
+    "text=não tem permissão",            # aparece enquanto o token não volta
+)
 MENU_EDITAR = "Editar pagamento"            # item do menu ⋮
 TXT_DIALOGO_EDITAR = "Editar Pagamento"     # título do diálogo de edição
 TXT_ARQUIVOS = "Arquivos"                   # seção de anexos no diálogo
@@ -380,19 +396,74 @@ class MCClient:
         "estou numa URL do ERP que não é a de login" + "não há campo de senha
         na tela", que não depende de layout.
         """
+        return self._aba_logada() is not None
+
+    def _aba_logada(self):
+        """A aba onde o ERP está aberto e logado, ou None.
+
+        A regra é a do projeto da Conciliação, que roda há meses sem tropeçar
+        nisto: em vez de procurar um sinal de que ESTÁ logado, procura sinais
+        de que NÃO está (ver `_SINAIS_DE_LOGIN`). Não achando nenhum, está
+        logado.
+
+        A diferença importa porque o ERP é single-spa com dois front-ends
+        convivendo — AngularJS na tela de login, React no resto — e vem sendo
+        migrado tela por tela. Um sinal positivo (o texto "Pagamentos", que
+        este cliente usava) muda de lugar a cada redesenho e cega a detecção;
+        a tela de login é estável.
+
+        Olha TODAS as abas, não só `self.page`: o ERP abre aba nova em vários
+        fluxos (`stateGoNewTab`) e o cliente nasce preso em `ctx.pages[0]`.
+        Quando encontra, ADOTA a aba — é nela que o trabalho continua.
+        """
         try:
-            url = self.page.url or ""
-            if "maiscontroleerp" not in url or "login" in url:
-                return False
+            abas = list(self.ctx.pages) if self.ctx else []
+        except Exception:
+            abas = []
+        if self.page is not None and self.page not in abas:
+            abas.insert(0, self.page)
+
+        for aba in abas:
             try:
-                if self.page.locator(f"text={TXT_LOGADO}").first.is_visible(
-                        timeout=1500):
+                if "maiscontroleerp" not in (aba.url or ""):
+                    continue
+                if self._tem_sinal_de_login(aba):
+                    continue
+                self.page = aba
+                return aba
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _tem_sinal_de_login(aba) -> bool:
+        """A tela de login está à vista nesta aba?"""
+        for seletor in SINAIS_DE_LOGIN:
+            try:
+                if aba.locator(seletor).first.is_visible(timeout=1200):
                     return True
             except Exception:
-                pass                      # texto sumiu do lugar: usa o resto
-            return not self._tem_campo_senha()
-        except Exception:
-            return False
+                continue
+        return False
+
+    def _diagnostico_sessao(self) -> str:
+        """O estado real das abas, para o log quando a detecção falha.
+
+        Sem isto, "não detectei a área logada" com o painel aberto na tela é
+        um beco sem saída: não dá para saber se foi a URL, o campo de senha ou
+        a aba errada."""
+        partes = []
+        try:
+            for i, aba in enumerate(self.ctx.pages):
+                url = (aba.url or "")[:70]
+                try:
+                    senha = self._tem_campo_senha(aba)
+                except Exception:
+                    senha = "?"
+                partes.append(f"aba{i}: {url} (campo de senha: {senha})")
+        except Exception as e:
+            partes.append(f"não consegui listar as abas: {e}")
+        return "; ".join(partes) or "nenhuma aba aberta"
 
     def _ir_para(self, url: str, tentativas: int = 3):
         """Navega tolerando queda momentânea de rede/DNS.
@@ -428,14 +499,20 @@ class MCClient:
             self.log("Login OK (sessão ainda aberta).")
             return True
         self._tentar_entrar()
-        for _ in range(60):
+        # Espera única e tolerante. O ERP usa Firebase Auth, e o token volta do
+        # IndexedDB de forma ASSÍNCRONA: nos primeiros segundos ele mostra a
+        # tela de login — às vezes com "você não tem permissão" — mesmo com a
+        # sessão perfeitamente válida. Desistir na primeira olhada é o erro
+        # clássico aqui, e o Chrome ainda pode completar o login sozinho com a
+        # senha que ele guarda.
+        for _ in range(90):
             if self._esta_logado():
                 self.log("Login OK.")
                 return True
             time.sleep(1)
-        self.log("[!] Não detectei a área logada. Faça login na janela do "
-                 "Chrome — depois o app segue sozinho. (Dica: guarde a senha "
-                 "no botão 🔑 Login para não precisar disso.)")
+        self.log("[!] Não detectei a área logada. Entre na janela do Chrome "
+                 "— depois o app segue sozinho.")
+        self.log(f"    {self._diagnostico_sessao()}")
         return False
 
     def _tentar_entrar(self):
@@ -458,37 +535,33 @@ class MCClient:
             else:
                 self.page.wait_for_timeout(2500)   # deixa o Chrome autopreencher
                 self._clicar_entrar()
-            if creds:                              # confere se a credencial salva serviu
-                for _ in range(25):
-                    if self._esta_logado():
-                        return
-                    time.sleep(1)
-                # NÃO apagamos mais a senha por conta própria.
-                #
-                # Em 10/08/2026 o login funcionou, o painel abriu, e mesmo
-                # assim a credencial foi descartada: a espera acabou enquanto
-                # a tela ainda carregava, o campo de senha ainda estava lá, e
-                # o app concluiu "senha errada". O usuário perdeu o login
-                # salvo — e com ele a leitura de saldos da Conciliação, que
-                # depende da mesma credencial.
-                #
-                # Falso negativo aqui custa caro; senha de fato errada custa
-                # barato (dá erro claro na próxima tentativa). Então avisamos
-                # e deixamos a decisão de remover com quem sabe se trocou a
-                # senha — o botão Login tem "Remover".
-                if "login" in self.page.url or self._tem_campo_senha():
-                    self.log(">>> Não consegui entrar com o login salvo. Se você "
-                             "trocou a senha, atualize-a no botão Login; senão, "
-                             "entre na janela do Chrome que o app segue daqui.")
-                else:
-                    self.log(">>> O Mais Controle está demorando a responder; "
-                             "aguarde ou faça login na janela do Chrome.")
+            # Aqui NÃO se conclui nada nem se avisa nada.
+            #
+            # Este é só o empurrão inicial: preencher e clicar. Quem decide se
+            # entrou é o `garantir_login`, que espera bem mais — e é lá que o
+            # aviso sai, uma vez só.
+            #
+            # Antes, este trecho esperava 25s e já anunciava "não consegui
+            # entrar com o login salvo". Como o Chrome costuma completar o
+            # login sozinho depois disso (senha guardada no próprio
+            # navegador), o recado saía à toa em execução que dava certo — e
+            # ainda sugeria mexer numa senha que estava correta.
+            #
+            # Também não se apaga mais a credencial por conta própria: em
+            # 10/08/2026 o login funcionou, o painel abriu, e mesmo assim ela
+            # foi descartada porque a espera acabou no meio do carregamento.
+            # Isso derrubou junto a leitura de saldos da Conciliação, que usa
+            # a mesma senha. Falso negativo aqui custa caro; senha de fato
+            # errada custa barato (erro claro na tentativa seguinte). Remover
+            # é decisão de quem sabe se trocou a senha — o botão Login tem
+            # "Remover".
         except Exception as e:
             self.log(f">>> login automático: {str(e)[:120]}")
 
-    def _tem_campo_senha(self) -> bool:
+    def _tem_campo_senha(self, aba=None) -> bool:
+        alvo = aba if aba is not None else self.page
         try:
-            return self.page.locator("input[type=password]").first.is_visible(
+            return alvo.locator("input[type=password]").first.is_visible(
                 timeout=1500)
         except Exception:
             return False

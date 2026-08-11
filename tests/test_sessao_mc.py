@@ -2,25 +2,30 @@
 """
 Testes da detecção de sessão do Mais Controle.
 
-Nasceram de um caso real (10/08/2026): o login funcionou, o painel abriu, e
-mesmo assim o app disse "não detectei a área logada" e APAGOU a senha salva —
-levando junto a leitura de saldos da Conciliação, que usa a mesma credencial.
+Nasceram de dois casos reais em 10/08/2026:
 
-A detecção não pode depender de um texto da tela: o ERP está migrando de
-AngularJS para React uma tela por vez.
+1. o app apagou a senha salva porque não "detectou a área logada" — com o
+   painel aberto na tela;
+2. depois de corrigido isso, seguiu não detectando, e a Conciliação parou.
+
+A causa dos dois era a mesma: procurar um sinal POSITIVO ("Pagamentos") numa
+tela que o ERP está redesenhando aos poucos. A regra correta, herdada do
+projeto da Conciliação Diária, é procurar a TELA DE LOGIN e concluir sessão
+pela ausência dela.
 """
 import mc_client
 
 
-class PaginaFalsa:
-    """Só o que `_esta_logado` consulta."""
+class AbaFalsa:
+    """Só o que a detecção consulta."""
 
-    def __init__(self, url, texto_visivel=False, campo_senha=False):
+    def __init__(self, url, sinais=()):
         self.url = url
-        self._texto = texto_visivel
-        self.campo_senha = campo_senha
+        self._sinais = set(sinais)
+        self._pedido = None
 
-    def locator(self, _seletor):
+    def locator(self, seletor):
+        self._pedido = seletor
         return self
 
     @property
@@ -28,49 +33,66 @@ class PaginaFalsa:
         return self
 
     def is_visible(self, timeout=None):
-        return self._texto
+        return self._pedido in self._sinais
 
 
-def cliente(pagina):
+class CtxFalso:
+    def __init__(self, abas):
+        self.pages = abas
+
+
+def cliente(abas, atual=None):
     c = mc_client.MCClient.__new__(mc_client.MCClient)
-    c.page = pagina
-    c._tem_campo_senha = lambda: pagina.campo_senha
+    c.ctx = CtxFalso(abas)
+    c.page = atual if atual is not None else (abas[0] if abas else None)
     return c
 
 
 BASE = "https://acessar.maiscontroleerp.com.br"
+SENHA = 'input[type="password"]'
 
 
-def test_painel_novo_sem_o_texto_esperado_conta_como_logado():
-    """O caso que quebrou: React no painel, texto fora do alcance do .first."""
-    p = PaginaFalsa(f"{BASE}/#/app/dashboard", texto_visivel=False)
-    assert cliente(p)._esta_logado() is True
+def test_painel_sem_o_texto_esperado_conta_como_logado():
+    """O caso que quebrou: React no painel, nenhum sinal de login à vista."""
+    aba = AbaFalsa(f"{BASE}/#/app/dashboard")
+    assert cliente([aba])._esta_logado() is True
 
 
-def test_texto_da_area_logada_ainda_vale_quando_existe():
-    p = PaginaFalsa(f"{BASE}/#/payable-installments", texto_visivel=True)
-    assert cliente(p)._esta_logado() is True
+def test_campo_de_senha_significa_nao_logado():
+    aba = AbaFalsa(f"{BASE}/#/login", sinais=[SENHA])
+    assert cliente([aba])._esta_logado() is False
 
 
-def test_tela_de_login_nao_e_logado():
-    p = PaginaFalsa(f"{BASE}/#/login", texto_visivel=False, campo_senha=True)
-    assert cliente(p)._esta_logado() is False
+def test_sem_permissao_significa_nao_logado():
+    """O Firebase mostra isso enquanto o token não volta do IndexedDB."""
+    aba = AbaFalsa(f"{BASE}/#/app/dashboard", sinais=["text=não tem permissão"])
+    assert cliente([aba])._esta_logado() is False
 
 
-def test_campo_de_senha_na_tela_nao_e_logado():
-    # Sem "login" na URL, mas ainda pedindo senha: não entrou.
-    p = PaginaFalsa(f"{BASE}/#/", texto_visivel=False, campo_senha=True)
-    assert cliente(p)._esta_logado() is False
+def test_entre_na_sua_conta_significa_nao_logado():
+    aba = AbaFalsa(f"{BASE}/#/", sinais=["text=Entre na sua conta"])
+    assert cliente([aba])._esta_logado() is False
 
 
-def test_fora_do_erp_nao_e_logado():
+def test_acha_a_sessao_em_outra_aba_e_adota_ela():
+    """O ERP abre aba nova (stateGoNewTab); o cliente nascia preso na pages[0]."""
+    presa = AbaFalsa(f"{BASE}/#/login", sinais=[SENHA])
+    viva = AbaFalsa(f"{BASE}/#/cash-flow")
+    c = cliente([presa, viva], atual=presa)
+    assert c._esta_logado() is True
+    assert c.page is viva          # adotou a aba certa para seguir o trabalho
+
+
+def test_fora_do_erp_nao_conta():
     for url in ("about:blank", "https://www.google.com", ""):
-        assert cliente(PaginaFalsa(url))._esta_logado() is False
+        assert cliente([AbaFalsa(url)])._esta_logado() is False
+
+
+def test_sem_aba_nenhuma_nao_quebra():
+    assert cliente([])._esta_logado() is False
 
 
 def test_rotas_internas_variadas_contam_como_logado():
-    # #/cash-flow não tem "/app"; a regra não pode depender de um prefixo.
     for rota in ("#/app/dashboard", "#/cash-flow", "#/payable-installments",
                  "#/accounts"):
-        p = PaginaFalsa(f"{BASE}/{rota}")
-        assert cliente(p)._esta_logado() is True, rota
+        assert cliente([AbaFalsa(f"{BASE}/{rota}")])._esta_logado() is True, rota
