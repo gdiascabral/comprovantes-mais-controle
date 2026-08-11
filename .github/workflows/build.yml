@@ -8,14 +8,71 @@ on:
       - "README.md"
       - "LICENSE"
       - "CLAUDE.md"
-      - "tests/**"
       - "requirements-dev.txt"
+      # "tests/**" NÃO entra aqui: mudança em teste tem que disparar a build,
+      # senão o job `test` abaixo nunca roda justamente no push que o alterou.
 
 permissions:
   contents: write         # necessário para publicar a Release
 
 jobs:
+  # A build publica uma release que os usuários baixam sozinhos ao abrir o app.
+  # Testar DEPOIS disso não serve para nada, então o build depende deste job.
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Rodar os testes
+        run: python -m pytest tests -q
+
+  motor:
+    # Código novo rodando em motor velho quebra na máquina do usuário, e a
+    # falha aparece longe daqui. Ver CLAUDE.md, "Regra de ouro".
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Exigir motor_minimo.txt quando o motor muda
+        shell: bash
+        run: |
+          if [ "$(git rev-list --count HEAD)" -lt 2 ]; then
+            echo "primeiro commit — nada a comparar"; exit 0
+          fi
+          mudou="$(git diff --name-only HEAD~1 HEAD)"
+          echo "Arquivos deste push:"; echo "$mudou"
+          exige=0
+          for f in motor.py atualizador.py requirements.txt .github/workflows/build.yml; do
+            if echo "$mudou" | grep -qx "$f"; then
+              echo "::notice::'$f' mudou — exige motor_minimo.txt novo"
+              exige=1
+            fi
+          done
+          if [ "$exige" = "1" ] && ! echo "$mudou" | grep -qx "motor_minimo.txt"; then
+            echo "::error::Este push altera o MOTOR mas não sobe motor_minimo.txt."
+            echo "::error::Sem isso, o código novo roda em motor velho na máquina"
+            echo "::error::do usuário e quebra. Suba motor_minimo.txt para a versão"
+            echo "::error::desta release (v1.0.<run_number>) no MESMO push."
+            exit 1
+          fi
+          echo "trava do motor: ok"
+
   build:
+    needs: [test, motor]
     runs-on: windows-latest
     steps:
       - name: Baixar o código

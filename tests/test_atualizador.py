@@ -7,7 +7,10 @@ exercitado. Dois defeitos ficaram escondidos até a v1.0.60: restos de `_MEI`
 quebrando a extração seguinte (o erro que apareceu de verdade) e o `start`
 rodando mesmo com a troca falhada.
 """
+import zipfile
 from pathlib import Path
+
+import pytest
 
 import atualizador
 
@@ -73,3 +76,39 @@ def test_caminhos_vao_entre_aspas():
 
 def test_o_bat_se_apaga_no_fim():
     assert script().rstrip().endswith('del "%~f0"')
+
+
+# ------------------------------------------------------- extração do codigo.zip
+# O codigo.zip chega pela rede e vira código executado na máquina de quem usa:
+# é o caminho mais curto que existe para plantar arquivo fora da pasta do app.
+
+def _zip_com(tmp_path: Path, nomes: list[str]) -> Path:
+    z = tmp_path / "codigo.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        for n in nomes:
+            zf.writestr(n, "print('oi')\n")
+    return z
+
+
+def test_extrai_zip_normal(tmp_path):
+    z = _zip_com(tmp_path, ["comprovantes_app.py", "anexar/config.py"])
+    destino = tmp_path / "codigo_nova"
+    atualizador._extrair_seguro(z, destino)
+    assert (destino / "comprovantes_app.py").is_file()
+    assert (destino / "anexar" / "config.py").is_file()
+
+
+def test_recusa_caminho_que_sobe_de_pasta(tmp_path):
+    """zip-slip: `extractall` obedeceria "../" e escreveria fora do destino."""
+    z = _zip_com(tmp_path, ["../plantado.py"])
+    destino = tmp_path / "codigo_nova"
+    with pytest.raises(RuntimeError, match="caminho suspeito"):
+        atualizador._extrair_seguro(z, destino)
+    assert not (tmp_path / "plantado.py").exists()
+
+
+def test_recusa_caminho_absoluto(tmp_path):
+    z = _zip_com(tmp_path, ["C:/Windows/Temp/plantado.py"])
+    destino = tmp_path / "codigo_nova"
+    with pytest.raises(RuntimeError, match="caminho suspeito"):
+        atualizador._extrair_seguro(z, destino)

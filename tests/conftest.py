@@ -7,8 +7,12 @@ from pathlib import Path
 import pytest
 
 _RAIZ = Path(__file__).resolve().parent.parent
+# TODA pasta de aba entra aqui. Faltar uma não quebra a suíte: o teste dela
+# some com `importorskip` e passa a "passar" sem rodar — foi o que aconteceu
+# com `pagamentos_dia` e `aportes`, 30 testes que nunca executaram.
 for _p in (_RAIZ, _RAIZ / "separar_renomear", _RAIZ / "anexar",
-           _RAIZ / "extratos_sicoob", _RAIZ / "relatorios"):
+           _RAIZ / "extratos_sicoob", _RAIZ / "relatorios",
+           _RAIZ / "pagamentos_dia", _RAIZ / "aportes"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

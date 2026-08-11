@@ -8,7 +8,10 @@ import datetime
 
 import pytest
 
-relatorio = pytest.importorskip("relatorio")
+# Import DIRETO, de propósito: com `importorskip` estes testes sumiam em
+# silêncio quando `pagamentos_dia` ficava fora do sys.path — e a suíte
+# passava sem executá-los. Falhar no import é o comportamento certo.
+import relatorio
 
 
 def anexo(nome, tag=None, ext=".pdf", url=None):
