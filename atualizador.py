@@ -161,6 +161,54 @@ def _baixar_com_progresso(url: str, destino: Path, titulo: str):
     return (not erro), (erro[0] if erro else "")
 
 
+def script_de_troca(pid: int, novo: Path, exe: Path) -> str:
+    """O .bat que espera este processo morrer, troca o exe e reabre o app.
+
+    Função pura para poder ser testada: a troca em si só dá para ver
+    acontecendo, e é rara (só quando entra biblioteca nova), então erro aqui
+    fica escondido por meses.
+
+    O que mudou depois da troca da v1.0.60, em ordem de importância:
+
+    1. **Apaga as pastas `_MEI*` antes de abrir.** O exe é onefile e se extrai
+       ali; resto de execução anterior deixa a extração pela metade e o app
+       morre com "Failed to load Python DLL". Foi o erro real da v1.0.60.
+    2. **Só abre o app se a troca deu certo.** Antes o `start` rodava mesmo
+       depois das tentativas frustradas, abrindo um executável em estado
+       indefinido sem avisar ninguém. Falhando, agora explica o que fazer.
+    3. `enabledelayedexpansion` + `!tent!`. Antes o `%tent%` era lido no mesmo
+       bloco em que o `set /a` escrevia, e blocos `( ... )` são expandidos no
+       parse: o contador ficava uma volta atrasado e o retry fazia 31
+       tentativas em vez de 30. Inofensivo, mas o código mentia sobre o que
+       fazia.
+    """
+    return (
+        "@echo off\n"
+        "setlocal enabledelayedexpansion\n"
+        ":espera\n"
+        f'tasklist /FI "PID eq {pid}" | find "{pid}" >nul '
+        "&& (timeout /t 1 >nul & goto espera)\n"
+        "set tent=0\n"
+        ":tenta\n"
+        f'move /y "{novo}" "{exe}" >nul 2>&1\n'
+        "if not errorlevel 1 goto trocou\n"
+        "set /a tent+=1\n"
+        "if !tent! LSS 30 (timeout /t 1 >nul & goto tenta)\n"
+        "echo.\n"
+        "echo Nao consegui substituir o aplicativo.\n"
+        "echo Feche o programa, apague as pastas _MEI de %TEMP% e tente de novo.\n"
+        f'echo Se persistir, mova na mao:  "{novo}"  ->  "{exe}"\n'
+        "echo.\n"
+        "pause\n"
+        "exit /b 1\n"
+        ":trocou\n"
+        'for /d %%d in ("%TEMP%\\_MEI*") do rd /s /q "%%d" 2>nul\n'
+        "timeout /t 2 >nul\n"
+        f'start "" "{exe}"\n'
+        'del "%~f0"\n'
+    )
+
+
 def _oferecer_motor_novo(minimo: str) -> bool:
     """Baixa o exe completo (raro: só quando entra biblioteca nova).
     Retorna True se a troca foi disparada (o chamador deve encerrar)."""
@@ -200,21 +248,7 @@ def _oferecer_motor_novo(minimo: str) -> bool:
     try:
         pid = os.getpid()
         bat = Path(tempfile.gettempdir()) / "atualizar_comprovantes.bat"
-        bat.write_text(
-            "@echo off\n"
-            ":espera\n"
-            f"tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul "
-            "&& (timeout /t 1 >nul & goto espera)\n"
-            "set tent=0\n"
-            ":tenta\n"
-            f"move /y \"{novo}\" \"{exe}\" >nul 2>&1\n"
-            "if errorlevel 1 (\n"
-            "  set /a tent+=1\n"
-            "  timeout /t 1 >nul\n"
-            f"  if %tent% LSS 30 goto tenta\n"
-            ")\n"
-            f"start \"\" \"{exe}\"\n"
-            "del \"%~f0\"\n", encoding="utf-8")
+        bat.write_text(script_de_troca(pid, novo, exe), encoding="utf-8")
         subprocess.Popen(
             ["cmd", "/c", str(bat)],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
