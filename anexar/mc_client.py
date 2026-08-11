@@ -494,7 +494,26 @@ class MCClient:
         Se nada disso resolver (1ª vez), o usuário loga na própria janela do
         Chrome (que então oferece salvar a senha)."""
         self._ir_para(config.MC_URL_PAGAMENTOS)
-        self.page.wait_for_timeout(1500)
+        # RECARREGA de propósito, e isto não é desperdício.
+        #
+        # O ERP é single-spa: navegar para "#/payable-installments" só troca a
+        # rota no cliente, sem levantar a aplicação de novo. Com o token já
+        # vencido, ela repinta a casca da tela — menu, cabeçalho, rodapé com
+        # totais — e NÃO mostra a tela de login. O app então conclui "logado",
+        # e só descobre o problema lá na frente, com a grade voltando vazia
+        # porque as requisições são negadas.
+        #
+        # O reload força o bootstrap: o Firebase tenta restaurar o token do
+        # IndexedDB e, falhando, o ERP cai na tela de login — que é o sinal
+        # que sabemos ler. Foi assim que o problema apareceu em 11/08/2026,
+        # quando o usuário recarregou a página na mão e viu "credenciais
+        # vencidas". O `extrato_mc.py` já recarregava, e é por isso que a aba
+        # Relatório Mensal não sofria disso.
+        try:
+            self.page.reload(wait_until="domcontentloaded")
+        except Exception:
+            pass                          # rede oscilando: segue com o que há
+        self.page.wait_for_timeout(2500)
         if self._esta_logado():
             self.log("Login OK (sessão ainda aberta).")
             return True

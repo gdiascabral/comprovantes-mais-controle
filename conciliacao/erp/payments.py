@@ -525,6 +525,30 @@ def _coletar_mes_exibido(pagina: Page, log=print) -> list[ErpPayment]:
     return pagamentos
 
 
+def _recuperar_grade(pagina: Page, log=print) -> bool:
+    """Uma segunda chance para a grade, recarregando a tela.
+
+    O ERP e single-spa: trocar de rota nao levanta a aplicacao de novo, entao
+    ela pode estar de pe com token vencido ou com estado preso da grade
+    (pagina, filtro) — repintando a casca e a lista vazia. O reload obriga o
+    bootstrap: ou os dados vem, ou a tela de login aparece e o erro passa a
+    dizer a verdade.
+
+    Barato: so acontece quando a grade ja veio vazia.
+    """
+    log("  a grade veio vazia; recarregando a tela e tentando de novo...")
+    try:
+        pagina.reload(wait_until="domcontentloaded")
+    except Exception:
+        return False
+    pagina.wait_for_timeout(3000)
+    quantas = _esperar_grade(pagina, timeout_s=45.0)
+    if quantas:
+        log(f"  recuperado: {quantas} linha(s) apos recarregar")
+        return True
+    return False
+
+
 def motivo_da_grade_vazia(total_rodape, tem_texto_vazio: bool) -> str:
     """Explica uma grade sem linhas, separando as tres causas possiveis.
 
@@ -540,11 +564,12 @@ def motivo_da_grade_vazia(total_rodape, tem_texto_vazio: bool) -> str:
         return (
             "a grade de pagamentos veio vazia, mas o rodape da tela soma "
             f"{total_rodape} no mes.\n"
-            "Ou seja: ha lancamentos, o ERP e que nao os listou.\n"
-            "A causa comum e a sessao do navegador nao estar valida — entre "
-            "na janela do Chrome e rode de novo.\n"
-            "Se voce estava logado, veja o screenshot: pode haver filtro "
-            "aplicado na tela."
+            "Ou seja: ha lancamentos, o ERP e que nao os listou — e nem "
+            "recarregar a tela resolveu.\n"
+            "O caso tipico e a sessao ter vencido sem o ERP avisar: ele "
+            "repinta a tela e recusa os dados por baixo.\n"
+            "Entre na janela do Chrome (se pedir login, faca) e rode de novo. "
+            "Persistindo, veja o screenshot: pode haver filtro na tela."
         )
     if tem_texto_vazio:
         return (
@@ -582,7 +607,7 @@ def coletar_pagamentos(
     A tela nao tem filtro de intervalo de datas — so navegacao por mes. Por isso
     percorremos mes a mes e o recorte fino por data fica em `rules.py`.
     """
-    if _esperar_grade(pagina) == 0:
+    if _esperar_grade(pagina) == 0 and not _recuperar_grade(pagina, log=log):
         raise ErpError(_diagnostico_grade_vazia(pagina))
 
     # O agregado do rodape precisa ser lido ANTES do filtro, senao passa a

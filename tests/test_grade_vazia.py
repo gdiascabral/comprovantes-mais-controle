@@ -13,7 +13,7 @@ from conciliacao.erp.payments import motivo_da_grade_vazia
 
 def test_rodape_com_valor_aponta_sessao_e_nao_layout():
     m = motivo_da_grade_vazia("R$ 1.804.164,67", tem_texto_vazio=True)
-    assert "sessao do navegador" in m
+    assert "sessao" in m
     assert "1.804.164,67" in m
     assert "layout" not in m
 
