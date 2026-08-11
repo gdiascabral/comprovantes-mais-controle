@@ -27,6 +27,8 @@ def _garantir_dependencias():        # nunca é chamada: só faz o PyInstaller
     import requests, pdfplumber, pypdf, openpyxl      # noqa
     import pytesseract                                # noqa
     import sv_ttk                                     # noqa
+    import yaml                                       # noqa  (config da Conciliação)
+    import decimal, json, urllib.request              # noqa  (conciliação: API + regras)
     import webbrowser, calendar, base64              # noqa  stdlib usados só pelo app
     import ctypes.wintypes                            # noqa  (login cifrado DPAPI)
     from playwright.sync_api import sync_playwright   # noqa
