@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from contratos.pipeline import Achado, arquivar, levantar, preparar_destino
+from contratos.pipeline import (Achado, aplicar_resolucao, arquivar,
+                                chave_da_casa, levantar, pode_resolver,
+                                preparar_destino, reaplicar)
 
 
 class _Empresa:
@@ -201,6 +203,82 @@ def test_download_vazio_nao_derruba_os_outros(tmp_path):
              texto_do_pdf=lambda b: TEXTO, log=lambda m: None)
     assert not any(a.arquivado for a in achados)
     assert all("download" in a.revisao for a in achados if a.anexo and a.empresa)
+
+
+# -------------------------------------------- marcação e resolver à mão
+
+def test_nasce_marcado_so_o_que_da_para_arquivar():
+    achados = levantar(ApiDuble(REGISTROS), 2026, 7, EMPRESAS, log=lambda m: None)
+    assert [a.marcado for a in achados].count(True) == 2
+    assert all(a.marcado is False for a in achados if a.revisao)
+
+
+def test_a_lista_de_anexos_da_obra_fica_guardada():
+    """É o que a janela de resolver mostra. Antes era lida e jogada fora, e a
+    casa em dúvida não tinha saída pela tela."""
+    achados = levantar(ApiDuble(REGISTROS), 2026, 7, EMPRESAS, log=lambda m: None)
+    for a in achados:
+        assert len(a.anexos_da_obra) == len(ANEXOS[a.obra_id])
+
+
+def test_desmarcar_tira_a_casa_da_rodada(tmp_path):
+    api = ApiDuble(REGISTROS)
+    achados = levantar(api, 2026, 7, EMPRESAS, log=lambda m: None)
+    for a in achados:
+        a.marcado = False               # a pessoa desmarcou tudo
+    arquivar(api, achados, tmp_path, 2026, 7, _nome_mes, _pasta_empresa,
+             texto_do_pdf=lambda b: TEXTO, log=lambda m: None)
+    assert not any(a.arquivado for a in achados)
+    assert api.baixados == []           # nem baixou
+
+
+def test_resolver_a_empresa_libera_a_casa():
+    achados = levantar(ApiDuble(REGISTROS), 2026, 7, EMPRESAS, log=lambda m: None)
+    sem_empresa = next(a for a in achados if a.revisao)
+    falta = aplicar_resolucao(sem_empresa, empresa_nome="BURITIS")
+    assert falta == ""
+    assert sem_empresa.marcado and sem_empresa.empresa_manual
+    assert not sem_empresa.contrato_manual
+
+
+def test_resolver_so_o_contrato_nao_esconde_a_empresa_que_falta():
+    """Meia solução não pode virar linha verde: sem empresa não há pasta."""
+    achados = levantar(ApiDuble(REGISTROS), 2026, 7, EMPRESAS, log=lambda m: None)
+    a = next(x for x in achados if x.revisao)
+    falta = aplicar_resolucao(a, anexo=a.anexos_da_obra[0])
+    assert "não está mapeado" in falta
+    assert not a.marcado and a.contrato_manual
+
+
+def test_sem_obra_no_cadastro_nao_ha_o_que_resolver():
+    registros = [receb("OBRA QUE NAO EXISTE", 1, "X")]
+    achados = levantar(ApiDuble(registros), 2026, 7, EMPRESAS, log=lambda m: None)
+    assert not pode_resolver(achados[0])
+
+
+def test_a_escolha_da_sessao_volta_na_busca_seguinte():
+    """A busca refeita traz outro objeto de anexo (o downloadUrl do S3
+    expira), então o que se guarda é o nome do arquivo."""
+    achados = levantar(ApiDuble(REGISTROS), 2026, 7, EMPRESAS, log=lambda m: None)
+    casa = next(a for a in achados if a.empresa)
+    escolhido = "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 .pdf"
+
+    outros = levantar(ApiDuble(REGISTROS), 2026, 7, EMPRESAS, log=lambda m: None)
+    assert reaplicar(outros, {chave_da_casa(casa): escolhido}) == 1
+    de_novo = next(a for a in outros if chave_da_casa(a) == chave_da_casa(casa))
+    assert de_novo.contrato == escolhido      # a mão venceu a regra
+    assert de_novo.contrato_manual and de_novo.marcado
+
+
+def test_escolha_que_sumiu_da_obra_volta_a_perguntar():
+    achados = levantar(ApiDuble(REGISTROS), 2026, 7, EMPRESAS, log=lambda m: None)
+    casa = next(a for a in achados if a.empresa)
+    antes = casa.contrato
+    recados = []
+    assert reaplicar(achados, {chave_da_casa(casa): "SUMIU .pdf"},
+                     log=recados.append) == 0
+    assert casa.contrato == antes and not casa.contrato_manual
+    assert any("não está mais na obra" in m for m in recados)
 
 
 def test_arquivar_tambem_confere_o_acesso_antes_de_baixar(tmp_path):

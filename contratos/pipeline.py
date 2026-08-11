@@ -43,8 +43,17 @@ class Achado:
     empresa: str = ""
     endereco: dict = field(default_factory=dict)
     anexo: dict = field(default_factory=dict)
+    #: Todos os anexos da obra, como vieram do ERP. É o que a janela de
+    #: resolver mostra quando o app não soube escolher sozinho — antes esta
+    #: lista era lida e jogada fora, e a pessoa ficava sem saída pela tela.
+    anexos_da_obra: list = field(default_factory=list)
     destino: Path | None = None
     revisao: str = ""
+    #: Entra nesta rodada de arquivamento. Quem decide é a aba (a marcação da
+    #: tabela); o padrão é False para ninguém arquivar por esquecimento.
+    marcado: bool = False
+    contrato_manual: bool = False
+    empresa_manual: bool = False
     resultado_conferencia: dict = field(default_factory=dict)
     arquivado: bool = False
 
@@ -141,22 +150,98 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
     for a in achados:
         if a.revisao or not a.obra_id:
             continue
-        anexos = anexos_por_obra.get(a.obra_id) or []
-        anexo, motivo = contrato_de(anexos, a.imovel.unidade)
+        a.anexos_da_obra = anexos_por_obra.get(a.obra_id) or []
+        anexo, motivo = contrato_de(a.anexos_da_obra, a.imovel.unidade)
         if anexo is None:
             a.revisao = motivo
-            continue
-        a.anexo = anexo
+        else:
+            a.anexo = anexo
 
+        # A empresa é resolvida mesmo sem contrato: as duas pendências são
+        # independentes, e a janela de resolver só deve perguntar o que
+        # realmente falta.
         empresa = empresa_de(a.cliente_erp, empresas)
         if empresa is None:
-            a.revisao = (f"o cliente \"{a.cliente_erp or '(sem cliente)'}\" não "
-                         "está mapeado em nenhuma empresa (clientes_erp no "
-                         "contas_sicoob.json)")
-            continue
-        a.empresa = empresa.nome
+            a.revisao = a.revisao or _sem_empresa(a.cliente_erp)
+        else:
+            a.empresa = empresa.nome
 
+    for a in achados:
+        a.marcado = not a.revisao and bool(a.anexo)
     return achados
+
+
+# ------------------------------------------------- resolver à mão
+def _sem_empresa(cliente_erp: str) -> str:
+    return (f"o cliente \"{cliente_erp or '(sem cliente)'}\" não está mapeado "
+            "em nenhuma empresa (clientes_erp no contas_sicoob.json)")
+
+
+def pode_resolver(achado: Achado) -> bool:
+    """Dá para decidir alguma coisa à mão nesta casa?
+
+    Sem obra no cadastro do ERP não há anexo para escolher nem cliente para
+    mapear: a casa está fora do alcance da tela, e abrir a janela só ofereceria
+    uma lista vazia."""
+    return bool(achado.obra_id)
+
+
+def que_falta(achado: Achado) -> str:
+    """O motivo que AINDA impede o arquivamento; "" quando não há mais."""
+    if not achado.obra_id:
+        return achado.revisao
+    if not achado.anexo:
+        return achado.revisao or "falta escolher o contrato desta casa"
+    if not achado.empresa:
+        return _sem_empresa(achado.cliente_erp)
+    return ""
+
+
+def aplicar_resolucao(achado: Achado, anexo: dict | None = None,
+                      empresa_nome: str = "") -> str:
+    """Aplica o que a pessoa decidiu e devolve o que ainda falta.
+
+    Devolver o que falta, em vez de sim/não, é o que deixa a janela resolver
+    metade do problema sem mentir: escolher o contrato de uma casa cujo cliente
+    continua sem empresa não arquiva nada, e a linha tem de seguir dizendo por
+    quê. Só sai marcada a casa que não deve mais nada."""
+    if anexo is not None:
+        achado.anexo = anexo
+        achado.contrato_manual = True
+    if empresa_nome:
+        achado.empresa = empresa_nome
+        achado.empresa_manual = True
+    achado.revisao = que_falta(achado)
+    achado.marcado = not achado.revisao
+    return achado.revisao
+
+
+def chave_da_casa(achado: Achado) -> tuple[str, int]:
+    """Identidade da casa entre uma busca e outra: obra + unidade."""
+    return (util.norm_espaco(achado.imovel.obra), achado.imovel.unidade)
+
+
+def reaplicar(achados: list[Achado], escolhas: dict, log=print) -> int:
+    """Devolve as escolhas de contrato feitas à mão a uma lista recém-buscada.
+
+    Guardamos o NOME do arquivo, não o anexo: a busca refeita traz outro
+    objeto, com `downloadUrl` novo (o do S3 expira em minutos). Se o nome sumiu
+    da obra, a casa volta a perguntar em vez de arquivar um arquivo que ninguém
+    olhou."""
+    voltaram = 0
+    for a in achados:
+        nome = escolhas.get(chave_da_casa(a))
+        if not nome:
+            continue
+        alvo = next((x for x in a.anexos_da_obra
+                     if util.norm_espaco(x.get("filename") or "")
+                     == util.norm_espaco(nome)), None)
+        if alvo is None:
+            log(f"  a escolha anterior não está mais na obra: {nome}")
+            continue
+        aplicar_resolucao(a, anexo=alvo)
+        voltaram += 1
+    return voltaram
 
 
 def preparar_destino(achado: Achado, raiz: Path, ano: int, mes: int,
@@ -201,7 +286,9 @@ def arquivar(api, achados: list[Achado], raiz: Path, ano: int, mes: int,
     # sessão (ele aceita uma por usuário), e aí a API é outra, sem cabeçalho
     # nenhum. Custa nada quando já está capturado.
     _garantir_acesso(api, log)
-    prontos = [a for a in achados if not a.revisao and a.anexo]
+    # `marcado` é a decisão de quem confere, tomada na tabela. Sem ela aqui, o
+    # passo 2 arquivaria de novo o que a pessoa tirou da rodada de propósito.
+    prontos = [a for a in achados if a.marcado and not a.revisao and a.anexo]
     total = len(prontos)
     for i, achado in enumerate(prontos, 1):
         if cancelar and cancelar():

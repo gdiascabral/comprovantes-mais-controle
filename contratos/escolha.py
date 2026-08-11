@@ -106,5 +106,24 @@ def contrato_de(anexos: list[dict], unidade: int) -> tuple[dict | None, str]:
                   f"{nomes}")
 
 
+def ordenar_para_escolha(anexos: list[dict],
+                         unidade: int) -> list[tuple[dict, bool]]:
+    """[(anexo, é candidato)] para a janela de escolha à mão.
+
+    Candidatos primeiro, o resto depois, os dois em ordem de nome. A obra
+    examinada tem 52 anexos: mostrar a lista crua obrigaria a pessoa a
+    procurar o contrato no meio de memorial, RCPM e manual do proprietário
+    justamente na hora em que o app já admitiu não saber decidir.
+
+    A lista INTEIRA aparece de propósito. Quando nenhum anexo começa com
+    CONTRATO, os candidatos são zero — e é exatamente aí que a pessoa precisa
+    ver o resto para achar o arquivo que foi salvo com outro nome."""
+    marcados = {util.norm_espaco(_nome(a))
+                for a in candidatos(anexos or [], unidade)}
+    return sorted(((a, util.norm_espaco(_nome(a)) in marcados)
+                   for a in (anexos or [])),
+                  key=lambda par: (not par[1], util.norm_espaco(_nome(par[0]))))
+
+
 def _rotulo(unidade: int) -> str:
     return f"CS {unidade:02d}"

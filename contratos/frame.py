@@ -20,6 +20,7 @@ from __future__ import annotations
 import datetime
 import os
 import queue
+import tempfile
 import time
 import tkinter as tk
 from pathlib import Path
@@ -35,11 +36,17 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 
 from . import conferencia as conf
 from . import pipeline
+from . import resolver
+from .destino import limpar as _limpar_nome
 
 _fmt_dur = util.fmt_dur
 
 MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
          "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+
+#: O ☑/☐ da primeira coluna. Texto, e não imagem: o Treeview do ttk não tem
+#: caixa de marcação, e desenhar uma custaria mais do que vale.
+_MARCA = {True: "☑", False: "☐"}
 
 
 def _sicoob():
@@ -91,6 +98,10 @@ class ContratosFrame(ttk.Frame):
         self._parar = Event()
         self.achados: list = []
         self.ultima_pasta: Path | None = None
+        #: {(obra, unidade): nome do arquivo} — o que foi escolhido à mão nesta
+        #: sessão, para uma nova busca não fazer perguntar tudo de novo.
+        self.escolhas: dict = {}
+        self.janela = None               # a de resolver, quando está aberta
 
         cfg, _ = _sicoob()
         hoje = datetime.date.today()
@@ -132,21 +143,47 @@ class ContratosFrame(ttk.Frame):
         ttk.Label(linha, foreground="#6b6b6b",
                   text="data do RECEBIMENTO do financiamento").pack(side="left")
 
-        f2 = ttk.LabelFrame(self, text=" 2. Casas com financiamento no mês ",
-                            padding=(10, 6, 10, 10))
+        f2 = ttk.LabelFrame(
+            self, text=" 2. Casas com financiamento no mês "
+                       "(marque as que entram no arquivamento) ",
+            padding=(10, 6, 10, 10))
         f2.pack(fill="both", expand=True, padx=PADX, pady=6)
-        colunas = ("obra", "casa", "comprador", "valor", "empresa", "situacao")
-        self.tabela = ttk.Treeview(f2, columns=colunas, show="headings", height=9)
-        for col, titulo, larg in (("obra", "Obra", 190), ("casa", "Casa", 55),
-                                  ("comprador", "Comprador", 210),
-                                  ("valor", "Financiamento", 110),
-                                  ("empresa", "Empresa", 130),
-                                  ("situacao", "Contrato / motivo", 320)):
+        grade = ttk.Frame(f2); grade.pack(fill="both", expand=True)
+        colunas = ("marca", "obra", "casa", "comprador", "valor", "empresa",
+                   "situacao")
+        self.tabela = ttk.Treeview(grade, columns=colunas, show="headings",
+                                   height=9)
+        for col, titulo, larg in (("marca", "✔", 34), ("obra", "Obra", 180),
+                                  ("casa", "Casa", 55),
+                                  ("comprador", "Comprador", 200),
+                                  ("valor", "Financiamento", 105),
+                                  ("empresa", "Empresa", 125),
+                                  ("situacao", "Contrato / motivo", 300)):
             self.tabela.heading(col, text=titulo)
-            self.tabela.column(col, width=larg, anchor="w")
+            self.tabela.column(col, width=larg, anchor="w", stretch=col != "marca")
+        self.tabela.column("marca", anchor="center")
         self.tabela.pack(fill="both", expand=True, side="left")
-        ttk.Scrollbar(f2, orient="vertical", command=self.tabela.yview
+        ttk.Scrollbar(grade, orient="vertical", command=self.tabela.yview
                       ).pack(side="right", fill="y")
+        # Duas maneiras de alternar, porque nenhuma é óbvia sozinha: clicar no
+        # ☑ é o que a pessoa tenta primeiro, e o Espaço é o que sobra quando a
+        # linha já está selecionada.
+        self.tabela.bind("<Button-1>", self._clique_na_tabela)
+        self.tabela.bind("<space>", lambda _e: self._alternar_selecionada())
+        self.tabela.bind("<Double-1>", self._duplo_clique)
+
+        pe = ttk.Frame(f2); pe.pack(fill="x", pady=(6, 0))
+        self.lbl_marcadas = ttk.Label(pe, foreground="#6b6b6b", text="")
+        self.lbl_marcadas.pack(side="right")
+        ttk.Button(pe, text="Marcar todas",
+                   command=lambda: self._marcar_todas(True)).pack(side="left")
+        ttk.Button(pe, text="Desmarcar todas",
+                   command=lambda: self._marcar_todas(False)
+                   ).pack(side="left", padx=6)
+        self.b_resolver = ttk.Button(pe, text="Resolver esta casa…",
+                                     command=self._resolver, state="disabled")
+        self.b_resolver.pack(side="left", padx=(14, 0))
+        self.tabela.bind("<<TreeviewSelect>>", lambda _e: self._atualizar_resolver())
 
         acao = ttk.Frame(self)
         acao.pack(side="bottom", fill="x", padx=PADX, pady=(6, 12))
@@ -218,6 +255,20 @@ class ContratosFrame(ttk.Frame):
                 elif tipo == "pasta":
                     self.ultima_pasta = val
                     self.b_abrir.config(state="normal" if val else "disabled")
+                elif tipo == "resolver":
+                    # Recado do download que roda na thread do navegador. Vai
+                    # para a janela se ela ainda estiver aberta; senão, para o
+                    # registro, que é onde a pessoa vai procurar depois.
+                    aberta = False
+                    try:
+                        aberta = (self.janela is not None
+                                  and self.janela.winfo_exists())
+                    except tk.TclError:
+                        aberta = False
+                    if aberta:
+                        self.janela.dizer(val)
+                    else:
+                        self.log.insert("end", val + "\n"); self.log.see("end")
         except queue.Empty:
             pass
         except Exception:
@@ -227,16 +278,134 @@ class ContratosFrame(ttk.Frame):
 
     def _mostrar(self, achados):
         self.tabela.delete(*self.tabela.get_children())
-        for a in achados:
+        for n, a in enumerate(achados):
             i = a.imovel
             situacao = a.revisao or (a.contrato or "—")
             if a.arquivado:
                 situacao = "arquivado: " + Path(a.destino).name
             self.tabela.insert(
-                "", "end",
-                values=(i.obra, i.rotulo, i.comprador,
+                "", "end", iid=str(n),
+                values=(_MARCA[a.marcado], i.obra, i.rotulo, i.comprador,
                         f"{i.valor_financiamento:,.2f}",
                         a.empresa or "—", situacao))
+        self._contar()
+        self._atualizar_resolver()
+
+    # ------------------------------------------------------------- marcação
+    def _achado(self, iid: str):
+        """O achado daquela linha. O iid É a posição na lista."""
+        try:
+            return self.achados[int(iid)]
+        except (ValueError, IndexError):
+            return None
+
+    def _contar(self):
+        marcadas = sum(1 for a in self.achados if a.marcado)
+        self.lbl_marcadas.config(
+            text=f"{marcadas} de {len(self.achados)} marcada(s)"
+            if self.achados else "")
+
+    def _alternar(self, iid: str):
+        a = self._achado(iid)
+        if a is None:
+            return
+        if not a.marcado and (a.revisao or not a.anexo):
+            # Marcar não pode virar "grave assim mesmo": sem contrato não há o
+            # que baixar, e sem empresa não há pasta de destino.
+            self.lbl.config(text=f"Esta casa ainda não dá para arquivar — "
+                                 f"{a.revisao or 'sem contrato escolhido'}.")
+            return
+        a.marcado = not a.marcado
+        self.tabela.set(iid, "marca", _MARCA[a.marcado])
+        self._contar()
+
+    def _alternar_selecionada(self):
+        for iid in self.tabela.selection():
+            self._alternar(iid)
+
+    def _marcar_todas(self, valor: bool):
+        for n, a in enumerate(self.achados):
+            if valor and (a.revisao or not a.anexo):
+                continue                 # o que não dá para arquivar fica fora
+            a.marcado = valor
+            if self.tabela.exists(str(n)):
+                self.tabela.set(str(n), "marca", _MARCA[a.marcado])
+        self._contar()
+
+    def _clique_na_tabela(self, ev):
+        if (self.tabela.identify_region(ev.x, ev.y) == "cell"
+                and self.tabela.identify_column(ev.x) == "#1"):
+            self._alternar(self.tabela.identify_row(ev.y))
+
+    def _duplo_clique(self, ev):
+        if self.tabela.identify_column(ev.x) == "#1":
+            return "break"               # dois cliques no ☑ é só alternar
+        self._resolver()
+
+    # -------------------------------------------------------------- resolver
+    def _atualizar_resolver(self):
+        a = self._achado((self.tabela.selection() or [""])[0])
+        self.b_resolver.config(
+            state="normal" if (a is not None and pipeline.pode_resolver(a)
+                               and not a.arquivado) else "disabled")
+
+    def _resolver(self):
+        a = self._achado((self.tabela.selection() or [""])[0])
+        if a is None:
+            return
+        if a.arquivado:
+            messagebox.showinfo("Contratos", "Esta casa já foi arquivada.")
+            return
+        if not pipeline.pode_resolver(a):
+            messagebox.showinfo(
+                "Contratos",
+                f"{a.revisao}\n\nSem a obra no cadastro do Mais Controle não "
+                "há anexo para escolher — isso se resolve lá, não aqui.")
+            return
+        try:
+            _, contas = _sicoob()
+            empresas = [e.nome for e in contas.carregar().empresas]
+        except Exception as e:
+            messagebox.showerror("Cadastro", f"Não consegui ler as empresas:\n{e}")
+            return
+        self.janela = resolver.JanelaResolver(
+            self, a, empresas,
+            abrir_anexo=lambda anexo: self._abrir_anexo(a, anexo),
+            ao_confirmar=lambda anexo, empresa, gravar:
+                self._confirmado(a, anexo, empresa, gravar))
+
+    def _confirmado(self, achado, anexo, empresa, gravar):
+        """O que a janela decidiu, aplicado à lista (e ao cadastro)."""
+        if empresa and gravar and empresa != achado.empresa:
+            try:
+                _, contas = _sicoob()
+                contas.adicionar_cliente_erp(empresa, achado.cliente_erp)
+                self._log(f'Cadastro: "{achado.cliente_erp}" agora é cliente '
+                          f"de {empresa} no contas_sicoob.json.")
+            except Exception as e:
+                # A escolha continua valendo para esta rodada: perder o
+                # trabalho da pessoa porque o arquivo estava aberto no bloco
+                # de notas seria pior do que perguntar de novo no mês que vem.
+                messagebox.showwarning(
+                    "Não gravei no cadastro",
+                    f"{e}\n\nA escolha vale para esta rodada; no mês que vem a "
+                    "pergunta volta.")
+        falta = pipeline.aplicar_resolucao(achado, anexo=anexo,
+                                           empresa_nome=empresa)
+        if anexo is not None:
+            self.escolhas[pipeline.chave_da_casa(achado)] = \
+                (anexo.get("filename") or "").strip()
+        self._mostrar(self.achados)
+        self._log(f"  RESOLVIDO  {achado.resumo}\n             "
+                  + (f"ainda falta: {falta}" if falta
+                     else f"contrato: {achado.contrato} · {achado.empresa}"))
+
+    def _abrir_anexo(self, achado, anexo):
+        """Baixa e abre o anexo para a pessoa olhar antes de escolher."""
+        if self.anx.avisar_se_ocupado("abrir o anexo"):
+            return
+        self.worker = self.anx.submeter("Contratos — abrir anexo",
+                                        self._t_abrir, achado, dict(anexo))
 
     # ---------------------------------------------------------------- ações
     def _periodo(self) -> tuple[int, int]:
@@ -266,8 +435,12 @@ class ContratosFrame(ttk.Frame):
     def arquivar(self):
         if self.anx.avisar_se_ocupado("os Contratos"):
             return
-        if not [a for a in self.achados if not a.revisao and a.anexo]:
-            messagebox.showinfo("Contratos", "Nada para arquivar nesta lista.")
+        if not [a for a in self.achados if a.marcado and not a.revisao and a.anexo]:
+            prontas = [a for a in self.achados if not a.revisao and a.anexo]
+            messagebox.showinfo(
+                "Contratos",
+                "Nenhuma casa marcada para arquivar."
+                if prontas else "Nada para arquivar nesta lista.")
             return
         self._parar.clear()
         self.q.put(("botoes", (False, True)))
@@ -298,6 +471,10 @@ class ContratosFrame(ttk.Frame):
                 api, ano, mes, mapa.empresas, self._log,
                 cancelar=self._parar.is_set)
 
+            voltaram = pipeline.reaplicar(self.achados, self.escolhas, self._log)
+            if voltaram:
+                self._log(f"{voltaram} escolha(s) desta sessão reaplicadas.")
+
             self.q.put(("lista", self.achados))
             prontos = [a for a in self.achados if not a.revisao and a.anexo]
             revisao = [a for a in self.achados if a.revisao]
@@ -306,6 +483,9 @@ class ContratosFrame(ttk.Frame):
                       f"{len(revisao)} em revisão.")
             for a in revisao:
                 self._log(f"  REVISÃO  {a.resumo}\n           {a.revisao}")
+            if revisao:
+                self._log("Dá para resolver na tela: selecione a casa e clique "
+                          "em \"Resolver esta casa…\" (ou dê dois cliques nela).")
             self.q.put(("status", f"Busca concluída em "
                                   f"{_fmt_dur(time.time() - comeco)}."))
         except Exception as e:
@@ -351,6 +531,34 @@ class ContratosFrame(ttk.Frame):
         finally:
             self.q.put(("botoes", (True, bool(self.achados))))
 
+    def _t_abrir(self, achado, anexo):
+        """Baixa um anexo e abre no visualizador padrão. Thread do navegador.
+
+        Antes de baixar, relista os anexos DAQUELA obra: o `downloadUrl` é URL
+        pré-assinada do S3 com `Expires` curto, e a pessoa costuma abrir a
+        janela bem depois da busca. Sem isto, "abrir para olhar" viraria "rode
+        a busca de novo", que é justamente o que a janela existe para evitar."""
+        nome = (anexo.get("filename") or "anexo").strip()
+        try:
+            api = self.anx.garantir_sessao(self._log)
+            frescos = api.anexos_de_obras([achado.obra_id], log=lambda m: None)
+            atual = next(
+                (x for x in (frescos.get(achado.obra_id) or [])
+                 if util.norm_espaco(x.get("filename") or "")
+                 == util.norm_espaco(nome)), anexo)
+            dados = api.baixar_anexo(atual.get("downloadUrl"))
+            if not dados:
+                self.q.put(("resolver", f"não consegui baixar \"{nome}\"."))
+                return
+            alvo = (Path(tempfile.gettempdir()) / "contratos-mais-controle"
+                    / (_limpar_nome(nome) or "anexo.pdf"))
+            alvo.parent.mkdir(parents=True, exist_ok=True)
+            alvo.write_bytes(dados)
+            os.startfile(str(alvo))
+            self.q.put(("resolver", f"abri \"{nome}\" para conferir."))
+        except Exception as e:
+            self.q.put(("resolver", f"não deu para abrir \"{nome}\": {e}"))
+
     def _resumo(self, ano: int, mes: int, raiz) -> Path | None:
         """Grava o resumo do mês ao lado dos contratos.
 
@@ -380,12 +588,21 @@ class ContratosFrame(ttk.Frame):
                 extra = f"   (não deu para conferir: {', '.join(rs)})" if rs else ""
                 linhas.append(f"OK   {a.resumo}")
                 linhas.append(f"     -> {Path(a.destino).name}{extra}")
+                # Quem decidiu à mão fica registrado. Daqui a seis meses é a
+                # diferença entre auditar e adivinhar.
+                mao = [t for t, sim in (("contrato escolhido à mão",
+                                         a.contrato_manual),
+                                        ("empresa definida à mão",
+                                         a.empresa_manual)) if sim]
+                if mao:
+                    linhas.append(f"        ({'; '.join(mao)})")
             pendentes = [a for a in self.achados if not a.arquivado]
             if pendentes:
                 linhas += ["", "PRECISAM DE REVISÃO", "-" * 64]
                 for a in pendentes:
+                    motivo = a.revisao or "não foi marcada para arquivar nesta rodada"
                     linhas.append(f"     {a.resumo}")
-                    linhas.append(f"       {a.revisao}")
+                    linhas.append(f"       {motivo}")
             alvo.write_text("\n".join(linhas) + "\n", encoding="utf-8")
             return alvo
         except OSError:

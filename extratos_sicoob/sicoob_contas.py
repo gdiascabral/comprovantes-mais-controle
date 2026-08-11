@@ -9,6 +9,7 @@ automação) e as contas Sicoob, que além da pasta recebem os arquivos.
 Sem navegador e sem tkinter: roda inteiro em teste.
 """
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -115,6 +116,76 @@ def carregar(caminho: Path | None = None) -> Mapa:
             clientes_erp=[c.strip() for c in (e.get("clientes_erp") or [])
                           if (c or "").strip()]))
     return Mapa(raiz=raiz, empresas=empresas)
+
+
+# ------------------------------------------------------------- escrita
+
+def adicionar_cliente_erp(empresa: str, cliente: str,
+                          caminho: Path | None = None) -> None:
+    """Grava `cliente` em `clientes_erp` da empresa, no arquivo do cadastro.
+
+    A aba Contratos descobre o cliente de uma obra na hora de arquivar, e
+    obrigar a pessoa a editar JSON à mão para seguir era o caminho mais curto
+    para o contrato ir para a pasta errada. Por isso a decisão tomada na tela
+    vira cadastro — o MESMO que as outras abas leem, e não um mapa paralelo.
+
+    Duas travas, pelas quais este arquivo vale mais que o resto:
+
+    1. cliente que já é de OUTRA empresa não é movido em silêncio — levanta
+       `MapaInvalido` com as duas empresas no texto, que é o mesmo defeito que
+       o `validar()` denuncia;
+    2. a escrita passa por arquivo temporário e `os.replace`, atômico no
+       Windows: interromper no meio deixaria o cadastro do fechamento inteiro
+       pela metade, e o estrago apareceria na próxima aba a rodar, longe daqui.
+
+    Repetir a mesma chamada não duplica nada (é idempotente)."""
+    caminho = caminho or cfg.ARQUIVO_CONTAS
+    empresa_alvo, cliente = util.norm_espaco(empresa), (cliente or "").strip()
+    if not empresa_alvo or not cliente:
+        raise MapaInvalido("Preciso da empresa e do cliente para gravar.")
+
+    try:
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise MapaInvalido(f"Não consegui ler {caminho.name}: {e}") from e
+    if not isinstance(dados, dict) or not isinstance(dados.get("empresas"), list):
+        raise MapaInvalido(f"{caminho.name} não tem a lista 'empresas'.")
+
+    destino = None
+    for e in dados["empresas"]:
+        if not isinstance(e, dict):
+            continue
+        nome = util.norm_espaco(e.get("nome") or "")
+        atuais = [c for c in (e.get("clientes_erp") or []) if (c or "").strip()]
+        ja_tem = any(util.norm_espaco(c) == util.norm_espaco(cliente)
+                     for c in atuais)
+        if nome == empresa_alvo:
+            destino = e
+            if ja_tem:
+                return                       # nada a fazer, e sem reescrever
+        elif ja_tem:
+            raise MapaInvalido(
+                f"O cliente '{cliente}' já está na empresa '{e.get('nome')}'.\n"
+                f"Um cliente do ERP em duas empresas manda o contrato para a "
+                f"pasta errada. Tire de lá antes de pôr em '{empresa}'.")
+
+    if destino is None:
+        raise MapaInvalido(f"Não achei a empresa '{empresa}' em {caminho.name}.")
+
+    destino["clientes_erp"] = [c for c in (destino.get("clientes_erp") or [])
+                               if (c or "").strip()] + [cliente]
+
+    temporario = caminho.with_suffix(caminho.suffix + ".tmp")
+    try:
+        temporario.write_text(json.dumps(dados, ensure_ascii=False, indent=2),
+                              encoding="utf-8")
+        os.replace(temporario, caminho)
+    except OSError as e:
+        try:
+            temporario.unlink()
+        except OSError:
+            pass
+        raise MapaInvalido(f"Não consegui gravar {caminho.name}: {e}") from e
 
 
 # ------------------------------------------------------------- validação

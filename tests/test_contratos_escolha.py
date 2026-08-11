@@ -7,7 +7,7 @@ armadilhas que ninguém inventaria: a obra escrita errada dentro do arquivo
 (QD 26 numa obra QD 46), a versão sem espaço (QD46 LT18) e anexos repetidos.
 """
 from contratos.escolha import (comeca_com_contrato, contrato_de,
-                               tem_qualificador)
+                               ordenar_para_escolha, tem_qualificador)
 
 # Os 52 anexos da obra TB 21 QD 46 LT 18, como o ERP devolve.
 NOMES = [
@@ -110,6 +110,35 @@ def test_obra_sem_contrato_nenhum_vai_para_revisao():
     achado, motivo = contrato_de(anexos, 1)
     assert achado is None
     assert "nenhum anexo" in motivo
+
+
+# ------------------------------------------------- lista da escolha à mão
+
+def test_a_lista_da_janela_poe_os_candidatos_no_topo():
+    """Com 52 anexos, mostrar a ordem do ERP obrigaria a procurar o contrato
+    no meio de memorial, RCPM e manual do proprietário — justamente quando o
+    app já admitiu não saber decidir."""
+    lista = ordenar_para_escolha(ANEXOS, 1)
+    assert len(lista) == len(ANEXOS)              # a lista INTEIRA aparece
+
+    candidatos = [nome["filename"] for nome, sim in lista if sim]
+    assert candidatos == ["CONTRATO TB 21 QD 46 LT 18 CS 01 .pdf"]
+    assert lista[0][0]["filename"] == "CONTRATO TB 21 QD 46 LT 18 CS 01 .pdf"
+    assert not lista[1][1]                        # daí em diante, o resto
+
+
+def test_sem_candidato_a_lista_continua_inteira():
+    """É o caso em que a janela mais importa: nenhum anexo começa com
+    CONTRATO, e a pessoa precisa ver o resto para achar o que foi salvo com
+    outro nome."""
+    lista = ordenar_para_escolha(ANEXOS, 9)
+    assert len(lista) == len(ANEXOS)
+    assert not any(sim for _, sim in lista)
+
+
+def test_a_lista_de_obra_vazia_nao_quebra():
+    assert ordenar_para_escolha([], 1) == []
+    assert ordenar_para_escolha(None, 1) == []
 
 
 def test_copias_de_nome_identico_contam_como_uma():
