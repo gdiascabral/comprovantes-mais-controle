@@ -212,10 +212,27 @@ class ExtratosSicoobFrame(ttk.Frame):
         self.q.put(("status", "Conferindo as pastas..."))
         self.worker = self.exec.submit(self._t_pastas)
 
+    def _conferir_mapas(self):
+        """Avisa se o contas_mc.json manda alguma conta para outra pasta.
+
+        O OFX/PDF daqui e o PDF do Relatório Mensal são da MESMA conta e do
+        MESMO mês. Mapas divergentes partem o mês entre duas pastas, e nada no
+        disco denuncia — as duas existem e as duas têm arquivo dentro."""
+        try:
+            import conferir_mapas
+            import contas_mc
+            n = conferir_mapas.avisar(contas_mc.ARQUIVO_MAPA,
+                                      cfg.ARQUIVO_CONTAS, self._log)
+            if n:
+                self._log("  Alinhe os dois arquivos antes de baixar.")
+        except Exception:
+            pass          # a conferência é um extra; nunca pode barrar a aba
+
     def _t_pastas(self):
         try:
             if not self._garantir_mapa():
                 return
+            self._conferir_mapas()
             ano, mes = self._periodo()
             orfas = sp.comparar_com_mes_anterior(self.mapa, ano, mes)
             if orfas:

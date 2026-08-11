@@ -230,7 +230,25 @@ class RelatorioFrame(ttk.Frame):
             self._log(f"[!] {e}")
             return False
         self.v_pasta.set(str(self.mapa.raiz).replace("\\", "/"))
+        self._conferir_mapas()
         return True
+
+    def _conferir_mapas(self):
+        """Avisa se o outro mapa manda alguma conta para pasta diferente.
+
+        O PDF do Mais Controle e o OFX do Sicoob são da MESMA conta e do MESMO
+        mês: têm de cair na mesma pasta. Quando os mapas divergem, cada aba
+        cria a sua e o mês fica partido — sem nada no disco denunciando."""
+        try:
+            import conferir_mapas
+            import sicoob_config
+            n = conferir_mapas.avisar(contas_mc.ARQUIVO_MAPA,
+                                      sicoob_config.ARQUIVO_CONTAS, self._log)
+            if n:
+                self._log("  Alinhe os dois arquivos antes de baixar, senão os "
+                          "extratos deste mês vão para pastas diferentes.")
+        except Exception:
+            pass          # a conferência é um extra; nunca pode barrar a aba
 
     def _abrir_pasta(self):
         if self.ultima_pasta and self.ultima_pasta.exists():

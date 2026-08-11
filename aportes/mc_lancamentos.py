@@ -57,6 +57,15 @@ def _exigir(valor, o_que: str, procurado: str, catalogos=None, onde=None):
     raise ErroLancamento(recado)
 
 
+def _num(valor) -> float:
+    """Decimal -> float, SO na fronteira do JSON.
+
+    O ERP recebe JSON e json nao serializa Decimal. A conta e feita em Decimal
+    (ver regras.como_dinheiro) e so aqui, no ultimo passo, vira float — com o
+    valor ja arredondado em 2 casas, entao a conversao nao tem o que estragar."""
+    return float(valor)
+
+
 def _agora() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -69,7 +78,7 @@ def criar_pagamento(
     catalogos,
     *,
     data: datetime.date,
-    valor: float,
+    valor,                        # Decimal (ver regras.como_dinheiro)
     descricao: str,
     conta_pagadora: str,
     favorecido: str,
@@ -94,11 +103,11 @@ def criar_pagamento(
     corpo = {
         "paymentCondition": {"id": condicao["id"], "type": "IN_CASH",
                              "financing": False, "recurring": False},
-        "installments": [{"plannedDate": _iso(data), "plannedValue": valor,
+        "installments": [{"plannedDate": _iso(data), "plannedValue": _num(valor),
                           "markedAsPaid": False}],
         "numberOfInstallments": 1,
         "responsible": {"id": id_usuario},
-        "value": valor,
+        "value": _num(valor),
         "description": descricao,
         "participant": {"id": participante["id"]},
         "referenceDate": _iso(data),
@@ -109,7 +118,7 @@ def criar_pagamento(
         # percentage 100 numa obra só. É aqui que caberia um rateio real por
         # obra, se um dia substituir a expansão em várias linhas da planilha.
         "costCentreDetails": [{
-            "value": valor, "percentage": 100,
+            "value": _num(valor), "percentage": 100,
             "work": {"id": trabalho["id"], "name": trabalho.get("name"),
                      "status": trabalho.get("status", "IN_PROGRESS"),
                      "__typename": "Work"},
@@ -138,7 +147,7 @@ def criar_recebimento(
     catalogos,
     *,
     data: datetime.date,
-    valor: float,
+    valor,                        # Decimal (ver regras.como_dinheiro)
     descricao: str,
     conta_recebedora: str,
     cliente: str,
@@ -171,7 +180,7 @@ def criar_recebimento(
         "customer": {"id": participante["id"], "name": ""},
         "description": descricao,
         "tradeReceivable": {
-            "grossValue": valor, "taxWithhold": 0, "value": valor,
+            "grossValue": _num(valor), "taxWithhold": 0, "value": _num(valor),
             "referenceDate": _iso(data),
             "numberOfInstallments": 1,
             "receivingCondition": {"id": condicao["id"], "deferred": False},
@@ -181,7 +190,7 @@ def criar_recebimento(
             "defaultReceivingMethod": {"id": metodo["id"]},
             "responsible": {"id": id_usuario, "name": nome_usuario,
                             "person": {"name": nome_usuario}},
-            "installments": [{"plannedValue": valor, "plannedDate": _iso(data),
+            "installments": [{"plannedValue": _num(valor), "plannedDate": _iso(data),
                               "receipts": [], "billings": [],
                               "withholdType": None}],
             "isReceived": True,
@@ -218,7 +227,7 @@ def criar_recebimento(
 
     baixa = catalogos.postar(
         f"{LEGACY}/receipt-installments/{id_parcela}/receipts",
-        {"value": valor, "receivedValue": valor, "receivingDate": _iso(data),
+        {"value": _num(valor), "receivedValue": _num(valor), "receivingDate": _iso(data),
          "account": {"id": conta["id"]}, "responsible": {"id": id_usuario}})
     if isinstance(baixa, dict) and baixa.get("__erro"):
         return Resultado(

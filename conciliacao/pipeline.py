@@ -6,7 +6,7 @@ partir de dados suspeitos e pior que nenhum arquivo, porque parece confiavel.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Config
@@ -34,6 +34,10 @@ class DailyResult:
     computation: PanelComputation
     issues: list[Issue]
     resumo: str
+    #: Linhas ja calculadas do painel. Ficam aqui para o `run_offline` nao
+    #: refazer a conta: recalcular abre a porta para os dois caminhos
+    #: divergirem, e ai a planilha sairia diferente do resumo que a validou.
+    fills: list = field(default_factory=list)
     arquivo: Path | None = None
     log_fora_do_painel: Path | None = None
 
@@ -64,6 +68,7 @@ def analyze(snapshot: Snapshot, config: Config, mapping: AccountMapping) -> Dail
         computation=computation,
         issues=issues,
         resumo=resumo,
+        fills=fills,
     )
 
 
@@ -80,9 +85,9 @@ def run_offline(
     if not forcar:
         raise_if_errors(resultado.issues)
 
-    aggregates = aggregate_by_row(resultado.classification)
-    fills = build_row_fills(mapping, resultado.balances.balances, aggregates)
-
+    # Vem do analyze: era recalculado aqui, com o risco de divergir do que foi
+    # validado logo acima.
+    fills = resultado.fills
 
     destino = config.caminho("saida") / output_name(snapshot.reference_date)
     build_result = build(

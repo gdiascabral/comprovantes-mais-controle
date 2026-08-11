@@ -102,13 +102,31 @@ def validate(
     if agregado is not None:
         total_dia = classification.total_eligible + classification.total_out_of_panel
         if total_dia > agregado + config.tolerancia_agregado:
-            issues.append(
-                Issue(
-                    Nivel.ERRO,
-                    f"total de hoje ({format_brl(total_dia)}) passou do 'Em aberto' do mes "
-                    f"({format_brl(agregado)}) — a coleta provavelmente duplicou linhas",
+            # Quando o periodo cruza a virada do mes, o agregado lido e de UM
+            # mes so, enquanto o total do dia soma os dois — e a comparacao
+            # acusa duplicacao que nao existe. Justamente na segunda-feira dia
+            # 1o, que ja e o dia mais dificil. Vira aviso.
+            periodo = snapshot.intervalo
+            cruza_mes = (periodo.inicio.year, periodo.inicio.month) != (
+                periodo.fim.year, periodo.fim.month)
+            if cruza_mes:
+                issues.append(
+                    Issue(
+                        Nivel.AVISO,
+                        f"total do periodo ({format_brl(total_dia)}) passou do "
+                        f"'Em aberto' lido no rodape ({format_brl(agregado)}), mas o "
+                        f"periodo cruza a virada do mes ({periodo.descrever()}) e o "
+                        "rodape so cobre um mes — a comparacao nao vale aqui.",
+                    )
                 )
-            )
+            else:
+                issues.append(
+                    Issue(
+                        Nivel.ERRO,
+                        f"total de hoje ({format_brl(total_dia)}) passou do 'Em aberto' do mes "
+                        f"({format_brl(agregado)}) — a coleta provavelmente duplicou linhas",
+                    )
+                )
 
     # --- AVISOS --------------------------------------------------------------
 

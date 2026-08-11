@@ -130,7 +130,7 @@ def test_total_de_pagamentos_espelha_e33(planilha, mapping):
 
 
 def test_saldo_negativo_aparece_no_resumo(planilha, mapping):
-    fills = fills_de({8: (Decimal("-1179.29"), Decimal("0"))}, planilha, mapping)
+    fills = fills_de({8: (Decimal("-1500.75"), Decimal("0"))}, planilha, mapping)
     negativos = compute_panel(fills, mapping, planilha).saldos_negativos
     assert [r.row for r in negativos] == [8]
 

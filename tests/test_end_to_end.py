@@ -66,7 +66,7 @@ def test_dia_completo_gera_planilha_e_resumo(config_tmp, mapping):
         mapping,
         saldos={8: Decimal("50000"), 10: Decimal("300")},
         pagamentos=[
-            pagamento("MORAIS ENGENHARIA - INTER", "40608.17"),
+            pagamento("MORAIS ENGENHARIA - INTER", "45678.90"),
             pagamento("TERRA BELA - SICOOB", "1000.00"),
             pagamento("TERRA BELA - SICOOB", "1.00"),  # excluido pela regra do R$ 1
         ],
@@ -79,7 +79,7 @@ def test_dia_completo_gera_planilha_e_resumo(config_tmp, mapping):
 
     ws = openpyxl.load_workbook(resultado.arquivo).worksheets[0]
     assert ws["D8"].value == pytest.approx(50000)
-    assert ws["E8"].value == pytest.approx(40608.17)
+    assert ws["E8"].value == pytest.approx(45678.90)
     assert ws["I8"].value == 1
     assert ws["E10"].value == pytest.approx(1000.0)
     assert ws["I10"].value == 1

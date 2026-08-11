@@ -125,8 +125,8 @@ def test_saldo_nao_lido_fica_vazio_e_nao_zero(mapping):
 
 
 def test_saldo_negativo_e_preservado(mapping):
-    fills = {f.row: f for f in build_row_fills(mapping, {8: Decimal("-1179.29")}, {})}
-    assert fills[8].balance == Decimal("-1179.29")
+    fills = {f.row: f for f in build_row_fills(mapping, {8: Decimal("-1500.75")}, {})}
+    assert fills[8].balance == Decimal("-1500.75")
 
 
 # --------------------------------------------------- precedencia das ignoradas
@@ -149,25 +149,25 @@ BURITIS_CEF = "MORAIS EMPREENDIMENTOS BURITIS - CAIXA ECONÔMICA FEDERAL"
 
 def test_conta_ignorada_nao_rouba_linha_do_painel(mapping):
     resolucao = resolve_balances(
-        [conta(APLICACAO, "-11245.51"), conta(BURITIS_CEF, "418404.40")], mapping
+        [conta(APLICACAO, "-22222.22"), conta(BURITIS_CEF, "500000.00")], mapping
     )
-    assert resolucao.balances[27] == Decimal("418404.40")
+    assert resolucao.balances[27] == Decimal("500000.00")
 
 
 def test_ordem_das_contas_nao_muda_o_saldo(mapping):
     """A mesma leitura, invertida, tem de dar o mesmo painel."""
     direta = resolve_balances(
-        [conta(APLICACAO, "-11245.51"), conta(BURITIS_CEF, "418404.40")], mapping
+        [conta(APLICACAO, "-22222.22"), conta(BURITIS_CEF, "500000.00")], mapping
     )
     invertida = resolve_balances(
-        [conta(BURITIS_CEF, "418404.40"), conta(APLICACAO, "-11245.51")], mapping
+        [conta(BURITIS_CEF, "500000.00"), conta(APLICACAO, "-22222.22")], mapping
     )
-    assert direta.balances[27] == invertida.balances[27] == Decimal("418404.40")
+    assert direta.balances[27] == invertida.balances[27] == Decimal("500000.00")
 
 
 def test_conta_ignorada_nao_vira_conta_desconhecida(mapping):
     """Ignorada e ignorada: nao entra no painel nem no alerta de conta nova."""
-    resolucao = resolve_balances([conta(APLICACAO, "-11245.51")], mapping)
+    resolucao = resolve_balances([conta(APLICACAO, "-22222.22")], mapping)
     assert resolucao.contas_desconhecidas == []
 
 

@@ -21,7 +21,7 @@ import dados as cadastro                                    # noqa: E402
 from mc_catalogos import Catalogos                          # noqa: E402
 from mc_lancamentos import (criar_pagamento, criar_recebimento,  # noqa: E402
                             ErroLancamento)
-from regras import Operacao, expandir                       # noqa: E402
+from regras import Operacao, como_dinheiro, expandir        # noqa: E402
 
 CABECALHOS = {"authorization", "company-id", "user-id", "organization-unit-id"}
 HOSTS_IGNORAR = ("api-data-event", "faro.", "satismeter", "datadog", "google")
@@ -182,8 +182,10 @@ class AportesFrame(ttk.Frame):
             messagebox.showwarning("Data", "Use o formato dd/mm/aaaa.")
             return
         try:
-            valor = float(self.var_valor.get().replace(".", "").replace(",", "."))
-        except ValueError:
+            # Decimal, não float: este número vira lançamento no ERP.
+            valor = como_dinheiro(
+                self.var_valor.get().replace(".", "").replace(",", "."))
+        except (ArithmeticError, ValueError, TypeError):
             messagebox.showwarning("Valor", "Valor inválido.")
             return
 

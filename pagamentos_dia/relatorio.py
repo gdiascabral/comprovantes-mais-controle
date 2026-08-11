@@ -646,7 +646,11 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if divergiu:
             status = "ATENÇÃO — documento não bate"
         if item.get("paid"):
-            status = "JÁ PAGO em " + (item.get("dateOfPayment") or "?")
+            # dateOfPayment as vezes vem em epoch (numero), e concatenar
+            # numero com string levanta TypeError no meio do relatorio.
+            _pago_em = para_data(item.get("dateOfPayment"))
+            status = "JÁ PAGO em " + (f"{_pago_em:%d/%m/%Y}" if _pago_em
+                                      else "?")
 
         registros[conta].append({
             "tipo": tipo, "dados": dados, "valor": valor_do_item(item),

@@ -50,7 +50,10 @@ def zipar_mes(mapa: Mapa, ano: int, mes: int, log=print) -> list[ResultadoZip]:
             continue
 
         vazias = pastas_vazias_da_empresa(pasta)
-        alvo = pasta.with_suffix(".zip")
+        # with_suffix() troca o que vem depois do ULTIMO ponto: razao social
+        # com ponto ("MORAIS EMPREEND. BURITIS") viraria "MORAIS EMPREEND.zip"
+        # e o mes inteiro de uma empresa iria para o arquivo errado.
+        alvo = pasta.parent / (pasta.name + ".zip")
         arquivos = [p for p in sorted(pasta.rglob("*")) if p.is_file()]
         with zipfile.ZipFile(alvo, "w", zipfile.ZIP_DEFLATED) as z:
             for arq in arquivos:

@@ -213,7 +213,14 @@ class MCApi:
                 break
             pagina += 1
             if pagina > 50:
-                break
+                # Truncar em silencio devolvia um resultado INCOMPLETO com cara
+                # de completo: a Conferencia diria "tudo anexado" sobre um
+                # periodo que nem foi lido inteiro.
+                raise RuntimeError(
+                    "o periodo tem mais de 50 paginas de lancamentos e eu "
+                    "parei aqui para nao devolver uma lista pela metade.\n"
+                    "Divida o periodo (por exemplo, quinzena a quinzena) e "
+                    "rode de novo.")
         return todos
 
     # ------------------------------------------------------------ anexos
@@ -308,7 +315,14 @@ class MCApi:
                 break
             pagina += 1
             if pagina > 50:
-                break
+                # Truncar em silencio devolvia um resultado INCOMPLETO com cara
+                # de completo: a Conferencia diria "tudo anexado" sobre um
+                # periodo que nem foi lido inteiro.
+                raise RuntimeError(
+                    "o periodo tem mais de 50 paginas de lancamentos e eu "
+                    "parei aqui para nao devolver uma lista pela metade.\n"
+                    "Divida o periodo (por exemplo, quinzena a quinzena) e "
+                    "rode de novo.")
         return todos
 
     def listar_overviews(self, installment_ids: list[str], log=print,

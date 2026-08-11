@@ -15,10 +15,10 @@ def test_round_trip_preserva_centavos_e_negativos(tmp_path):
                 id="uuid-1",
                 name="MORAIS ENGENHARIA - INTER",
                 account_number="55.694-7",
-                raw_balance="R$ 1.536.956,24",
-                balance=Decimal("1536956.24"),
+                raw_balance="R$ 1.234.567,89",
+                balance=Decimal("1234567.89"),
             ),
-            ErpAccount(id="uuid-2", name="TERRA BELA - SICOOB", balance=Decimal("-1179.29")),
+            ErpAccount(id="uuid-2", name="TERRA BELA - SICOOB", balance=Decimal("-1500.75")),
             # Saldo mascarado: precisa voltar como None, nunca zero.
             ErpAccount(id="uuid-3", name="VXZ CONSTRUTORA - INTER", raw_balance="******"),
         ],
@@ -26,7 +26,7 @@ def test_round_trip_preserva_centavos_e_negativos(tmp_path):
             ErpPayment(
                 due_date=date(2026, 7, 30),
                 status="Em aberto",
-                amount=Decimal("40608.17"),
+                amount=Decimal("45678.90"),
                 payee="FORNECEDOR X",
                 account_label="MORAIS ENGENHARIA - INTER",
                 raw={"venc": "30/07/2026"},
