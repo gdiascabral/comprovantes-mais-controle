@@ -368,9 +368,29 @@ class MCClient:
 
     # ------------------------------------------------------------------ login
     def _esta_logado(self) -> bool:
+        """Estamos dentro do ERP?
+
+        Procurar um texto da área logada (`TXT_LOGADO`) era o único teste, e
+        ele falhou em 10/08/2026 com o usuário JÁ no painel: o `.first` pega a
+        primeira ocorrência do texto no DOM, que pode ser um elemento oculto,
+        e o ERP está migrando de AngularJS para React tela por tela — o texto
+        muda de lugar sem aviso.
+
+        Agora o texto é só um dos sinais. O que sustenta a resposta é o par
+        "estou numa URL do ERP que não é a de login" + "não há campo de senha
+        na tela", que não depende de layout.
+        """
         try:
-            return ("login" not in self.page.url
-                    and self.page.locator(f"text={TXT_LOGADO}").first.is_visible())
+            url = self.page.url or ""
+            if "maiscontroleerp" not in url or "login" in url:
+                return False
+            try:
+                if self.page.locator(f"text={TXT_LOGADO}").first.is_visible(
+                        timeout=1500):
+                    return True
+            except Exception:
+                pass                      # texto sumiu do lugar: usa o resto
+            return not self._tem_campo_senha()
         except Exception:
             return False
 
@@ -443,12 +463,23 @@ class MCClient:
                     if self._esta_logado():
                         return
                     time.sleep(1)
-                # só descarta a senha se o ERP de fato a recusou (continuamos
-                # na tela de login). ERP lento não pode custar o login salvo.
+                # NÃO apagamos mais a senha por conta própria.
+                #
+                # Em 10/08/2026 o login funcionou, o painel abriu, e mesmo
+                # assim a credencial foi descartada: a espera acabou enquanto
+                # a tela ainda carregava, o campo de senha ainda estava lá, e
+                # o app concluiu "senha errada". O usuário perdeu o login
+                # salvo — e com ele a leitura de saldos da Conciliação, que
+                # depende da mesma credencial.
+                #
+                # Falso negativo aqui custa caro; senha de fato errada custa
+                # barato (dá erro claro na próxima tentativa). Então avisamos
+                # e deixamos a decisão de remover com quem sabe se trocou a
+                # senha — o botão Login tem "Remover".
                 if "login" in self.page.url or self._tem_campo_senha():
-                    credenciais.apagar()
-                    self.log(">>> O login salvo não funcionou (senha mudou?); "
-                             "removi-o. Faça login na janela do Chrome.")
+                    self.log(">>> Não consegui entrar com o login salvo. Se você "
+                             "trocou a senha, atualize-a no botão Login; senão, "
+                             "entre na janela do Chrome que o app segue daqui.")
                 else:
                     self.log(">>> O Mais Controle está demorando a responder; "
                              "aguarde ou faça login na janela do Chrome.")
