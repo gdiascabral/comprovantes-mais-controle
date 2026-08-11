@@ -112,3 +112,53 @@ def test_recusa_caminho_absoluto(tmp_path):
     destino = tmp_path / "codigo_nova"
     with pytest.raises(RuntimeError, match="caminho suspeito"):
         atualizador._extrair_seguro(z, destino)
+
+
+# ------------------------------------------------------- codificação do .bat
+# 11/08/2026: a troca falhou na máquina real com
+#   "O Windows não pode encontrar 'C:\AUTOMA├ç├òES MAIS CONTROLE\...'"
+# O .bat era gravado em UTF-8 e o cmd.exe lê .bat na codepage OEM (850 aqui):
+# "Ç" e "Õ" viravam "├ç" e "├ò". O app entrava em laço — abria, baixava 152 MB,
+# falhava, fechava.
+
+def test_o_bat_nao_estraga_caminho_com_acento(tmp_path):
+    """Com acento no caminho, o conteúdo tem de sobreviver à codepage do cmd.
+
+    Ou o caminho sai em 8.3 (ASCII puro), ou ele precisa ao menos ser
+    gravável na codepage OEM sem virar outra coisa."""
+    pasta = tmp_path / "AUTOMAÇÕES MAIS CONTROLE"
+    pasta.mkdir()
+    exe = pasta / "App.exe"
+    exe.write_bytes(b"x")
+    novo = tmp_path / "App novo.exe"
+    novo.write_bytes(b"y")
+
+    s = atualizador.script_de_troca(1234, novo, exe)
+    cp = atualizador._codepage_do_cmd()
+    # O teste de verdade: gravar como o app grava e reler como o cmd lê.
+    de_volta = s.encode(cp, errors="strict").decode(cp)
+    assert de_volta == s, "o .bat não sobrevive à ida e volta pela codepage do cmd"
+    assert "├" not in de_volta
+
+
+def test_codepage_do_cmd_nunca_e_utf8():
+    """Se um dia isto devolver utf-8, o bug de 11/08/2026 volta inteiro."""
+    cp = atualizador._codepage_do_cmd()
+    assert cp.startswith("cp")
+    assert cp not in ("cp65001", "utf-8", "utf8")
+
+
+def test_caminho_curto_e_ascii_quando_existe(tmp_path):
+    pasta = tmp_path / "PASTA COM ACENTO ÇÕ"
+    pasta.mkdir()
+    alvo = pasta / "arquivo.exe"
+    alvo.write_bytes(b"x")
+    curto = atualizador._caminho_curto(alvo)
+    if curto:                       # 8.3 pode estar desligado no volume
+        assert all(ord(c) < 128 for c in curto), curto
+
+
+def test_caminho_curto_de_arquivo_inexistente_devolve_vazio(tmp_path):
+    """Sem o arquivo, o Windows não tem 8.3 para dar — e aí vale o caminho
+    longo, gravado na codepage do cmd."""
+    assert atualizador._caminho_curto(tmp_path / "nao-existe.exe") == ""

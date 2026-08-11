@@ -218,6 +218,35 @@ def _url_do_exe() -> tuple[str, str]:
     raise RuntimeError("a release mais nova não tem executável publicado")
 
 
+def _codepage_do_cmd() -> str:
+    """A codepage com que o cmd.exe vai LER o .bat (850 no Brasil).
+
+    Não é a do Python nem UTF-8: arquivo .bat é lido na codepage OEM do
+    sistema, e é por isso que gravá-lo em UTF-8 estraga caminho com acento."""
+    try:
+        from ctypes import windll
+        return f"cp{windll.kernel32.GetOEMCP()}"
+    except Exception:
+        return "cp850"
+
+
+def _caminho_curto(p: Path) -> str:
+    """O nome 8.3 do Windows, que é ASCII puro. "" quando não dá.
+
+    É a defesa mais forte contra o problema de codificação: sem acento no
+    caminho, nenhuma codepage tem como estragá-lo. Exige que o arquivo já
+    exista, o que é o caso dos dois (o exe atual e o baixado)."""
+    try:
+        from ctypes import create_unicode_buffer, windll
+        buf = create_unicode_buffer(1024)
+        n = windll.kernel32.GetShortPathNameW(str(p), buf, 1024)
+        curto = buf.value if 0 < n < 1024 else ""
+        # Volume com 8.3 desligado devolve o caminho longo de volta.
+        return curto if curto and curto != str(p) else ""
+    except Exception:
+        return ""
+
+
 def script_de_troca(pid: int, novo: Path, exe: Path) -> str:
     """O .bat que espera este processo morrer, troca o exe e reabre o app.
 
@@ -238,7 +267,19 @@ def script_de_troca(pid: int, novo: Path, exe: Path) -> str:
        parse: o contador ficava uma volta atrasado e o retry fazia 31
        tentativas em vez de 30. Inofensivo, mas o código mentia sobre o que
        fazia.
+    4. **Caminho 8.3 quando o Windows der.** Em 11/08/2026 a troca falhou na
+       máquina real com "O Windows não pode encontrar
+       'C:\\AUTOMA├ç├òES MAIS CONTROLE\\...'": o .bat era gravado em UTF-8 e o
+       cmd.exe lê .bat na codepage OEM (850 aqui), então `Ç` e `Õ` viravam
+       `├ç` e `├ò` e nem o `move` nem o `start` achavam o arquivo. O app
+       entrava em laço — abria, baixava 152 MB, falhava, fechava.
+       O nome curto não tem acento nenhum, então nenhuma codepage tem como
+       estragá-lo; e quem grava o arquivo ainda usa a codepage do cmd, para o
+       caso de 8.3 estar desligado no volume.
     """
+    novo_txt = _caminho_curto(novo) or str(novo)
+    exe_txt = _caminho_curto(exe) or str(exe)
+    novo, exe = Path(novo_txt), Path(exe_txt)
     return (
         "@echo off\n"
         "setlocal enabledelayedexpansion\n"
@@ -316,7 +357,17 @@ def _oferecer_motor_novo(minimo: str) -> bool:
     try:
         pid = os.getpid()
         bat = Path(tempfile.gettempdir()) / "atualizar_comprovantes.bat"
-        bat.write_text(script_de_troca(pid, novo, exe), encoding="utf-8")
+        conteudo = script_de_troca(pid, novo, exe)
+        # NUNCA utf-8 aqui: quem lê este arquivo é o cmd.exe, e ele usa a
+        # codepage OEM do sistema. Ver o item 4 do `script_de_troca`.
+        try:
+            bat.write_text(conteudo, encoding=_codepage_do_cmd())
+        except (UnicodeEncodeError, LookupError):
+            # Caractere que não existe na codepage do console: o ASCII puro do
+            # caminho 8.3 já deve ter evitado isto, mas se não evitou, gravar
+            # errado é pior do que não gravar.
+            _logar("não consegui gravar o .bat da troca na codepage do cmd")
+            raise
         subprocess.Popen(
             ["cmd", "/c", str(bat)],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
