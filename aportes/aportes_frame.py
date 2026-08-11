@@ -38,6 +38,10 @@ class AportesFrame(ttk.Frame):
         super().__init__(master, padding=12)
         self.anx = anexar_frame          # dono do navegador e da thread
         self.operacoes: list[Operacao] = []
+        # Para cada operação, os ÍNDICES dos lançamentos que já entraram no ERP.
+        # Sem isso, tentar de novo depois de uma falha parcial recria o que deu
+        # certo — e aporte duplicado é dinheiro duplicado, desfeito à mão.
+        self.criados: list[set[int]] = []
         self.catalogos: Catalogos | None = None
         self._cabecalhos: dict = {}
 
@@ -174,21 +178,54 @@ class AportesFrame(ttk.Frame):
             messagebox.showwarning("Não dá para lançar assim", "\n".join(erros))
             return
         self.operacoes.append(op)
+        self.criados.append(set())
         self.tabela.insert("", "end", values=(op.resumo(),))
         self.var_valor.set("")
         self._atualizar_total()
 
     def _remover(self):
-        for item in self.tabela.selection():
+        # De trás para frente: apagar pelo índice desloca os seguintes.
+        for item in sorted(self.tabela.selection(),
+                           key=self.tabela.index, reverse=True):
             indice = self.tabela.index(item)
             self.tabela.delete(item)
             del self.operacoes[indice]
+            del self.criados[indice]
         self._atualizar_total()
 
     def _limpar(self):
         self.tabela.delete(*self.tabela.get_children())
         self.operacoes.clear()
+        self.criados.clear()
         self._atualizar_total()
+
+    def _retirar_concluidas(self):
+        """Tira da fila as operações cujos lançamentos TODOS entraram no ERP.
+
+        Roda na thread da interface. O que falhou fica para nova tentativa; o
+        que já foi criado sai da lista, senão o próximo clique em Lançar
+        recriaria o mesmo aporte."""
+        sobrou_ops, sobrou_criados, concluidas = [], [], 0
+        for op, feitos in zip(self.operacoes, self.criados):
+            total = len(expandir(op, self.entidades, self.subcontas,
+                                 self.obra_padrao))
+            if total and len(feitos) >= total:
+                concluidas += 1
+                continue
+            sobrou_ops.append(op)
+            sobrou_criados.append(feitos)
+
+        if concluidas:
+            self.operacoes[:] = sobrou_ops
+            self.criados[:] = sobrou_criados
+            self.tabela.delete(*self.tabela.get_children())
+            for op in self.operacoes:
+                self.tabela.insert("", "end", values=(op.resumo(),))
+            self._atualizar_total()
+            self._log(f"{concluidas} operação(ões) concluída(s) saíram da lista.")
+        if self.operacoes:
+            self._log("O que sobrou ainda NÃO foi criado — corrija o cadastro e "
+                      "clique em Lançar de novo; o que já entrou será pulado.")
 
     def _atualizar_total(self):
         total = sum(o.valor for o in self.operacoes)
@@ -304,14 +341,30 @@ class AportesFrame(ttk.Frame):
             if not id_usuario:
                 raise RuntimeError("não achei o usuário responsável.")
 
-            itens = []
-            for op in self.operacoes:
-                itens.extend(expandir(op, self.entidades, self.subcontas,
-                                      self.obra_padrao))
+            # Só o que AINDA não entrou no ERP. Numa segunda tentativa depois
+            # de falha parcial, repetir o que deu certo duplicaria o aporte.
+            plano = []                      # (i_op, i_item, item)
+            pulados = 0
+            for i_op, op in enumerate(self.operacoes):
+                for i_item, item in enumerate(
+                        expandir(op, self.entidades, self.subcontas,
+                                 self.obra_padrao)):
+                    if i_item in self.criados[i_op]:
+                        pulados += 1
+                        continue
+                    plano.append((i_op, i_item, item))
 
-            self._log(f"\nCriando {len(itens)} lançamento(s):")
+            if pulados:
+                self._log(f"\n{pulados} lançamento(s) já criado(s) numa tentativa "
+                          "anterior — pulados para não duplicar.")
+            if not plano:
+                self._log("Nada a criar: tudo desta lista já foi lançado.")
+                self.after(0, self._retirar_concluidas)
+                return
+
+            self._log(f"\nCriando {len(plano)} lançamento(s):")
             feitos, falhas = 0, []
-            for i, item in enumerate(itens, 1):
+            for i, (i_op, i_item, item) in enumerate(plano, 1):
                 especie = item.pop("tipo_lancamento")
                 try:
                     if especie == "pagamento":
@@ -321,25 +374,22 @@ class AportesFrame(ttk.Frame):
                         r = criar_recebimento(self.catalogos,
                                               id_usuario=id_usuario, **item)
                 except ErroLancamento as e:
-                    self._log(f"  {i}/{len(itens)} FALHOU: {e}")
+                    self._log(f"  {i}/{len(plano)} FALHOU: {e}")
                     falhas.append(str(e))
                     continue
                 if r.ok:
                     feitos += 1
-                    self._log(f"  {i}/{len(itens)} ok — {especie} "
+                    # Marca ANTES de qualquer outra coisa: se o app morrer aqui,
+                    # o pior caso é a lista sobreviver sabendo o que já foi.
+                    self.criados[i_op].add(i_item)
+                    self._log(f"  {i}/{len(plano)} ok — {especie} "
                               f"R$ {item['valor']:,.2f}")
                 else:
-                    self._log(f"  {i}/{len(itens)} FALHOU: {r.erro}")
+                    self._log(f"  {i}/{len(plano)} FALHOU: {r.erro}")
                     falhas.append(r.erro or "erro desconhecido")
 
             self._log(f"\n{feitos} criado(s), {len(falhas)} com problema.")
-            if falhas:
-                # Sem limpar a lista: o que falhou continua ali para nova
-                # tentativa depois de corrigir o cadastro.
-                self._log("A lista foi mantida — corrija o cadastro e repita "
-                          "só o que faltou.")
-            else:
-                self.after(0, self._limpar)
+            self.after(0, self._retirar_concluidas)
         except RuntimeError as e:
             self._log(f"[!] {e}")
         finally:

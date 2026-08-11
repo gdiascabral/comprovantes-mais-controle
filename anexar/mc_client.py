@@ -128,6 +128,23 @@ _JS_ROWS = r"""
 }
 """
 
+# O diálogo lista o arquivo assim que o upload termina. Esperar por ELE em vez
+# de dormir um tempo fixo é a diferença entre "anexado" e "achei que anexei":
+# em lote, o ERP passa dos 3 s antigos com folga e o Confirmar ia sem arquivo.
+_JS_ARQUIVO_LISTADO = r"""
+(nome) => {
+  const limpo = s => (s || '').replace(/[\s ]+/g, ' ').trim().toLowerCase();
+  const alvo = limpo(nome);
+  if (!alvo) return false;
+  const dlg = document.querySelector('[role="dialog"]') || document.body;
+  const txt = limpo(dlg.innerText);
+  if (txt.includes(alvo)) return true;
+  // A UI trunca nome longo no meio ("70,00 - RPB 24 QD...pdf"): tenta o começo.
+  const inicio = alvo.slice(0, 20);
+  return inicio.length >= 8 && txt.includes(inicio);
+}
+"""
+
 # abre o menu ⋮ do i-ésimo sub-pagamento (mesmo escopo do histórico)
 _JS_OPEN_MENU = r"""
 (i) => {
@@ -630,6 +647,12 @@ class MCClient:
         """
         Retorna: 'anexado' | 'anexado_sem_tag' | 'ja_tinha' | 'nao_encontrado'
                  | 'ambiguo' | 'dry_run' | 'erro:...'
+
+        'anexado' só sai com PROVA: o arquivo apareceu na lista do diálogo e,
+        depois de confirmar, a grade mostra o pagamento com anexo. Quando a
+        prova falha vem 'erro:arquivo_nao_listado' ou 'erro:nao_confirmado' —
+        relatar anexo que não existe é pior do que relatar erro, porque manda
+        a conferência procurar no lugar errado.
         valores: lista opcional de valores aceitos (nominal e valor pago com
         juros/multa/desconto); sem ela, usa apenas valor_str.
         """
@@ -674,12 +697,26 @@ class MCClient:
             inp = self.page.wait_for_selector(
                 "input[type=file]", timeout=8000, state="attached")
             inp.set_input_files(str(pdf_path))
-            self.page.wait_for_timeout(3000)
+
+            # Espera o arquivo APARECER na lista do diálogo. Sem esta prova,
+            # confirmar salva o pagamento sem anexo e o app relata "anexado".
+            try:
+                self.page.wait_for_function(_JS_ARQUIVO_LISTADO,
+                                            arg=pdf_path.name, timeout=30000)
+            except PWTimeout:
+                config.diag(f"anexar: {pdf_path.name} não apareceu na lista de "
+                            f"arquivos do lançamento {launch_id}")
+                return "erro:arquivo_nao_listado"
 
             tag_ok = self._definir_tag(config.TAG_COMPROVANTE)
 
             self.page.get_by_role("button", name=BTN_CONFIRMAR).first.click()
-            self.page.wait_for_timeout(2500)
+
+            # Confirma relendo a grade: o pagamento tem de aparecer COM anexo.
+            if not self._confirmar_anexo(alvos, doc, antes=len(pendentes)):
+                config.diag(f"anexar: lançamento {launch_id} seguiu sem anexo "
+                            f"depois de confirmar ({pdf_path.name})")
+                return "erro:nao_confirmado"
             return "anexado" if tag_ok else "anexado_sem_tag"
 
         except PWTimeout:
@@ -688,6 +725,33 @@ class MCClient:
         except Exception as e:
             self._print_erro(str(e)[:100], launch_id)
             return f"erro:{str(e)[:100]}"
+
+    def _confirmar_anexo(self, alvos, doc, antes: int, limite_s: int = 30) -> bool:
+        """Relê a grade até o pagamento aparecer COM anexo.
+
+        `antes` é quantas linhas de mesmo valor estavam SEM anexo antes de
+        anexar (sempre 1, porque `anexar` recusa lote ambíguo). Contar de novo
+        e exigir que tenha diminuído é a prova mais barata de que o arquivo
+        entrou — o botão Confirmar volta sucesso mesmo quando o upload não
+        chegou, e daí saía "anexado" para um lançamento vazio."""
+        fim = time.monotonic() + limite_s
+        while time.monotonic() < fim:
+            self.page.wait_for_timeout(1000)
+            try:
+                linhas = self.page.evaluate(_JS_ROWS)
+            except Exception as e:
+                config.diag(f"_confirmar_anexo: não consegui reler a grade: {e!r}")
+                continue
+            iguais = [r for r in linhas if _centavos(r["val"]) in alvos]
+            if doc:
+                refinado = [r for r in iguais if r["doc"] and doc in r["doc"]]
+                if refinado:
+                    iguais = refinado
+            if not iguais:
+                continue            # a grade ainda está recarregando
+            if len([r for r in iguais if not r["attached"]]) < antes:
+                return True
+        return False
 
     def resetar(self):
         """Volta para a tela de Pagamentos (recupera o ERP após timeout)."""

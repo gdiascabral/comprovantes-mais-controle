@@ -642,7 +642,7 @@ class AnexarFrame(ttk.Frame):
                     usados.add(id(pd))
                     pd["used_by"] = pe["paidId"]
                     pe["match"] = {"pdf": pd, "ocnf": False, "cc": False,
-                                   "date": False, "score": 0}
+                                   "date": False, "docnum": False, "score": 0}
                     pe["pdf"] = pd["fn"]
                     pe["motivo"] = "escolhido por você"
                     pe["status"] = "CERTEZA"
@@ -779,9 +779,23 @@ class AnexarFrame(ttk.Frame):
                 self._log("⏹ Interrompido pelo usuário durante a verificação.")
                 self.q.put(("reabilitar2", None))
                 return
-            pendentes = [p for p in pagos if att.get(p["paidId"], 0) == 0]
-            com = len(pagos) - len(pendentes)
-            self._log(f"Com comprovante: {com} | SEM comprovante: {len(pendentes)}")
+            estados = {p["paidId"]: mc_api.estado_anexo(att, p["paidId"])
+                       for p in pagos}
+            com = [p for p in pagos
+                   if estados[p["paidId"]] == mc_api.COM_ANEXO]
+            sem = [p for p in pagos
+                   if estados[p["paidId"]] == mc_api.SEM_ANEXO]
+            nao_verif = [p for p in pagos
+                         if estados[p["paidId"]] == mc_api.NAO_VERIFICADO]
+            # Não verificado entra como PENDENTE: pular é assumir que já tem
+            # comprovante sem nunca ter olhado. Tentar de novo, no pior caso,
+            # devolve 'ja_tinha' — barato perto de deixar sem anexo.
+            pendentes = sem + nao_verif
+            self._log(f"Com comprovante: {len(com)} | SEM comprovante: {len(sem)}")
+            if nao_verif:
+                self._log(f"[aviso] {len(nao_verif)} pagamento(s) NÃO VERIFICADOS "
+                          "(a consulta de anexos falhou) — vão junto dos "
+                          "pendentes por precaução.")
             self._log(f"⏱ Verificação de anexos: {_fmt_dur(time.time() - inicio)}")
             ini_anexar = time.time()
 

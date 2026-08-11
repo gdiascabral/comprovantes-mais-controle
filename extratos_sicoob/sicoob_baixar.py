@@ -137,17 +137,22 @@ def baixar_mes(cliente, mapa: Mapa, ano: int, mes: int,
                 cliente.exportar_ofx(provisorio)
                 problemas = validar_ofx(ler_ofx(provisorio), conta.numero, ano, mes)
                 if problemas:
+                    # O PDF NÃO sai daqui. Ele nasce do mesmo extrato que o OFX
+                    # acabou de reprovar: arquivá-lo poria o extrato de uma
+                    # empresa na pasta de outra — o pior desfecho possível, e o
+                    # único que nada no disco denuncia depois.
                     res.problemas.extend(problemas)
                     log("   OFX RECUSADO: " + "; ".join(problemas))
+                    log("   PDF não gerado (mesmo extrato reprovado)")
                 else:
                     destino.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(provisorio), str(destino / f"{nome}.ofx"))
                     res.ofx = True
                     log("   OFX conferido e arquivado")
 
-                cliente.exportar_pdf(destino / f"{nome}.pdf")
-                res.pdf = True
-                log("   PDF gerado")
+                    cliente.exportar_pdf(destino / f"{nome}.pdf")
+                    res.pdf = True
+                    log("   PDF gerado")
 
             except Exception as e:                 # noqa: BLE001 — ver docstring
                 res.problemas.append(str(e))

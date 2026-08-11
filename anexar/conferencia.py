@@ -288,13 +288,25 @@ class ConferenciaFrame(ttk.Frame):
             self.q.put(("max", len(pagos)))
             att = api.verificar_anexos([p["paidId"] for p in pagos], self._log,
                                        progresso=lambda i, n: self.q.put(("prog", i)))
-            sem = [p for p in pagos if att.get(p["paidId"], 0) == 0]
-            com = [p for p in pagos if att.get(p["paidId"], 0) > 0]
-            self._log(f"\nCom anexo: {len(com)} | SEM anexo: {len(sem)}")
+            estados = {p["paidId"]: mc_api.estado_anexo(att, p["paidId"])
+                       for p in pagos}
+            sem = [p for p in pagos if estados[p["paidId"]] == mc_api.SEM_ANEXO]
+            com = [p for p in pagos if estados[p["paidId"]] == mc_api.COM_ANEXO]
+            # Nem "com" nem "sem": a consulta falhou. Antes caíam no balde do
+            # "com anexo" e sumiam do relatório — uma conferência que dizia
+            # "tudo certo" justamente sobre o que não foi conferido.
+            nao_verif = [p for p in pagos
+                         if estados[p["paidId"]] == mc_api.NAO_VERIFICADO]
+            self._log(f"\nCom anexo: {len(com)} | SEM anexo: {len(sem)}"
+                      + (f" | NÃO VERIFICADOS: {len(nao_verif)}" if nao_verif else ""))
             for p in sem:
                 self._log(f"  SEM ANEXO: {_fmt_val(p['valor'])}  {p['dataFull']}  "
                           f"{p['conta']}  {p.get('favorecido') or '—'}  "
                           f"{p['desc'][:60]}")
+            for p in nao_verif:
+                p["confere"] = "não verificado (a consulta de anexos falhou)"
+                self._log(f"  NÃO VERIFICADO: {_fmt_val(p['valor'])}  "
+                          f"{p['dataFull']}  {p['conta']}  {p['desc'][:60]}")
 
             divergentes, conferidos, nao_conferiveis = [], [], []
             if self.v_conteudo.get() and com:
@@ -358,21 +370,25 @@ class ConferenciaFrame(ttk.Frame):
                                         for p in nao_conferiveis).items():
                         self._log(f"   • {n}× {m}")
 
-            saida = self._relatorio(sem, divergentes, conferidos, nao_conferiveis)
+            saida = self._relatorio(sem, divergentes, conferidos,
+                                    nao_conferiveis, nao_verif)
             self._log(f"\nRelatório: {saida}")
             self._log(f"⏱ Fim: {time.strftime('%H:%M:%S')} — tempo total: "
                       f"{_fmt_dur(time.time() - inicio)}")
             self.q.put(("status",
                         f"Concluído: {len(sem)} sem anexo"
                         + (f", {len(divergentes)} divergente(s)"
-                           if self.v_conteudo.get() else "")))
+                           if self.v_conteudo.get() else "")
+                        + (f", {len(nao_verif)} não verificado(s)"
+                           if nao_verif else "")))
             self.q.put(("fim", saida))
         except Exception as e:
             self._log(_texto_do_erro(e))
             self.q.put(("status", "Erro — veja o Registro."))
             self.q.put(("fim", None))
 
-    def _relatorio(self, sem, divergentes, conferidos, nao_conf) -> str:
+    def _relatorio(self, sem, divergentes, conferidos, nao_conf,
+                   nao_verif=()) -> str:
         wb = Workbook(); wb.remove(wb.active)
         verde = PatternFill("solid", fgColor="1B7837")
         branco = Font(bold=True, color="FFFFFF")
@@ -397,6 +413,11 @@ class ConferenciaFrame(ttk.Frame):
             ws.freeze_panes = "A2"
 
         aba("SEM ANEXO", sem)
+        # Aba própria, e nunca misturada com CONFERIDOS: estes pagamentos não
+        # foram olhados. Enterrá-los junto do que passou é como dizer que
+        # passaram.
+        if nao_verif:
+            aba("NAO VERIFICADOS", list(nao_verif))
         if divergentes or conferidos or nao_conf:
             aba("DIVERGENTES", divergentes)
             aba("CONFERIDOS", conferidos + nao_conf)

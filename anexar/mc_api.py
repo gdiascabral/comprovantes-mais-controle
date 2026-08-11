@@ -82,6 +82,26 @@ _JS_FETCH_ANEXOS = """async ({ base, ids, headers }) => {
 }"""
 
 
+#: Os três desfechos possíveis da consulta de anexos de UM pagamento.
+COM_ANEXO = "com anexo"
+SEM_ANEXO = "sem anexo"
+NAO_VERIFICADO = "não verificado"
+
+
+def estado_anexo(att: dict, paid_id: str) -> str:
+    """Lê o resultado de `verificar_anexos` para um pagamento.
+
+    O JS devolve -1 quando o fetch falha, e -1 NÃO é 0. Tratar os dois como
+    "tem anexo" era o pior desfecho silencioso do app: a aba Anexar PULAVA o
+    pagamento (nunca anexava) e a Conferência OMITIA a linha do relatório —
+    as duas afirmando "está tudo certo" sobre algo que ninguém chegou a olhar.
+    """
+    n = att.get(paid_id)
+    if n is None or n < 0:
+        return NAO_VERIFICADO
+    return COM_ANEXO if n > 0 else SEM_ANEXO
+
+
 class MCApi:
     def __init__(self, page):
         """page = página do Playwright já criada (MCClient.page)."""
@@ -183,8 +203,10 @@ class MCApi:
     # ------------------------------------------------------------ anexos
     def verificar_anexos(self, paid_ids: list[str], log=print,
                          progresso=None, cancelar=None) -> dict[str, int]:
-        """Retorna {paidId: quantidade de arquivos anexados}. Lotes em paralelo
-        de dentro da própria página (Promise.all).
+        """Retorna {paidId: quantidade de arquivos anexados}, ou -1 se a
+        consulta falhou. Use `estado_anexo()` para ler: -1 NÃO é zero.
+
+        Lotes em paralelo de dentro da própria página (Promise.all).
         cancelar: função chamada entre lotes; retornando True, interrompe."""
         if not self._req_anexos:
             raise RuntimeError("Credenciais de anexos ainda não capturadas.")
@@ -193,8 +215,18 @@ class MCApi:
         LOTE = 15
 
         def rodar(ids):
-            parcial = self.page.evaluate(
-                _JS_FETCH_ANEXOS, {"base": base, "ids": ids, "headers": headers})
+            # Uma falha de página (navegação no meio, sessão caindo) derrubava
+            # o lote inteiro e a etapa toda. Aqui ela vira "não verificado"
+            # para ESTES ids, e o resto do lote segue.
+            try:
+                parcial = self.page.evaluate(
+                    _JS_FETCH_ANEXOS,
+                    {"base": base, "ids": ids, "headers": headers})
+            except Exception as e:
+                _diag(f"verificar_anexos: lote de {len(ids)} falhou ({e!r}) — "
+                      "marcados como NÃO VERIFICADO")
+                resultado.update({i: -1 for i in ids if i not in resultado})
+                return
             resultado.update(parcial or {})
 
         feitos = 0
@@ -213,6 +245,11 @@ class MCApi:
             if cancelar and cancelar():
                 break
             rodar(falhas[i:i + LOTE])
+        restantes = [p for p in paid_ids
+                     if estado_anexo(resultado, p) == NAO_VERIFICADO]
+        if restantes:
+            log(f"  [aviso] {len(restantes)} pagamento(s) NÃO VERIFICADOS "
+                "(a consulta de anexos falhou neles)")
         return resultado
 
 
@@ -490,11 +527,20 @@ def montar_pagos(lancamentos: list[dict]) -> list[dict]:
         for p in (l.get("paids") or []):
             pd = (p.get("payingDate") or "")[:10]  # aaaa-mm-dd
             valores = set()
-            for k in ("paidValue", "value", "paymentValue", "totalValue",
-                      "netValue", "amount"):
+            for k in ("paidValue", "value", "paymentValue", "netValue"):
                 c = _cents(p.get(k))
                 if c:
                     valores.add(c)
+            # "totalValue" e "amount" saíram da lista: em título parcelado elas
+            # trazem o valor CHEIO do título, e aceitá-las casava o PDF do
+            # total com UMA parcela — comprovante errado no lançamento certo.
+            # Ficam registradas quando divergem, para o dia em que o ERP mudar
+            # de novo e estes nomes voltarem a ser os únicos com o valor.
+            for k in ("totalValue", "amount"):
+                c = _cents(p.get(k))
+                if c and c not in valores:
+                    _diag(f"montar_pagos: {k}={c} difere dos valores aceitos "
+                          f"{sorted(valores)} (paid {p.get('id')}) — ignorado")
             base = _cents(p.get("value"))
             acrescimos = sum(c for c in (_cents(p.get(k)) for k in
                              ("interest", "interestValue", "fine", "fineValue",
