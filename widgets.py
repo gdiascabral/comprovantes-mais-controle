@@ -34,9 +34,14 @@ class CampoData(ttk.Frame):
 
     Duas formas de preencher, porque as duas aparecem no uso real:
 
-    - CLICAR no campo abre o calendário e a data sai do mouse;
-    - DIGITAR funciona direto, com as barras entrando sozinhas
-      ("0508" vira "05/08") e o ano completado ao sair do campo.
+    - DIGITAR, com as barras entrando sozinhas ("0508" vira "05/08") e o ano
+      completado ao sair do campo;
+    - o botão 📅 (ou um duplo clique no campo) abre o calendário.
+
+    O calendário NÃO abre no clique simples, e isso é decisão, não descuido:
+    o clique simples é como se põe o cursor para digitar. Abrindo o popup ali,
+    ele roubava o clique e o campo ficava impossível de editar — foi o que
+    aconteceu em 11/08/2026, em todas as abas de uma vez.
 
     O calendário é tkinter puro (Toplevel + grade de botões). Existe pacote
     pronto para isso (`tkcalendar`), mas dependência nova obriga a gerar um
@@ -54,7 +59,7 @@ class CampoData(ttk.Frame):
         self.bt.pack(side="left", padx=(2, 0))
 
         self.ent.bind("<KeyRelease>", self._ao_digitar)
-        self.ent.bind("<Button-1>", lambda _e: self.abrir_calendario())
+        self.ent.bind("<Double-Button-1>", lambda _e: self.abrir_calendario())
         self.ent.bind("<FocusOut>", lambda _e: self._completar_ano())
 
     # ----------------------------------------------------------- digitação
@@ -66,6 +71,18 @@ class CampoData(ttk.Frame):
                          "Control_L", "Control_R"):
             return
         self._fechar_popup()             # começou a digitar: o calendário sai
+
+        # A máscara SÓ age quando se digita no fim do campo. Ela remonta o
+        # texto a partir de todos os dígitos, e fazer isso no meio de uma data
+        # já preenchida destrói o valor: com "01/08/2026" e o cursor no
+        # começo, digitar "0" virava "00/10/8202". Editar o meio, colar e
+        # corrigir um dígito passam intactos.
+        try:
+            if self.ent.index("insert") != len(self.var.get()):
+                return
+        except tk.TclError:
+            return
+
         t = self.var.get()
         d = "".join(c for c in t if c.isdigit())[:8]
         if len(d) > 4:
@@ -107,7 +124,8 @@ class CampoData(ttk.Frame):
     def _fechar_popup(self):
         if self._popup is not None:
             try:
-                self._popup.destroy()
+                self._popup.grab_release()   # antes do destroy: grab preso
+                self._popup.destroy()        # deixaria a janela toda surda
             except tk.TclError:
                 pass
             self._popup = None
@@ -121,13 +139,11 @@ class CampoData(ttk.Frame):
         self._popup = top
         top.transient(self.winfo_toplevel())
         top.resizable(False, False)
-        # Sem barra de título: é um popup, não uma janela. E sem grab_set —
-        # com grab, digitar no campo ficaria bloqueado enquanto ele estivesse
-        # aberto, e digitar é o outro caminho que a pessoa pode querer.
-        try:
-            top.overrideredirect(True)
-        except tk.TclError:
-            top.title("Escolher data")
+        top.title("Escolher data")
+        # Janela COM barra de título e modal, como era antes. A versão sem
+        # borda (`overrideredirect`) parecia mais bonita e não funcionava: ela
+        # nunca ganhava o foco de verdade, então o `<FocusOut>` disparava na
+        # hora e o calendário fechava sozinho antes de aparecer.
         top.geometry(f"+{self.ent.winfo_rootx()}"
                      f"+{self.ent.winfo_rooty() + self.ent.winfo_height() + 2}")
 
@@ -182,11 +198,15 @@ class CampoData(ttk.Frame):
         ttk.Button(rodape, text="Fechar", command=self._fechar_popup).pack(side="right")
 
         desenhar()
-        # Clicar fora fecha. `<Escape>` também, porque popup sem saída pelo
-        # teclado é armadilha para quem navega por Tab.
+        # Escape e o X fecham. NÃO existe fechamento por `<FocusOut>`: era ele
+        # que matava o calendário no instante em que abria.
         top.bind("<Escape>", lambda _e: self._fechar_popup())
-        top.bind("<FocusOut>", lambda _e: self._fechar_popup())
-        top.focus_set()
+        top.protocol("WM_DELETE_WINDOW", self._fechar_popup)
+        try:
+            top.grab_set()               # modal, como o resto dos diálogos
+            top.focus_set()
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------- tema
     def aplicar_cores(self, escuro: bool):
