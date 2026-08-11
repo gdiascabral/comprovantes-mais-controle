@@ -84,14 +84,27 @@ def coletar_com_pagina(
     *,
     data_referencia: date | None = None,
     periodo: Periodo | None = None,
+    revalidar_sessao=None,
     log=print,
 ) -> Snapshot:
     """Mesma coleta, sobre uma pagina JA LOGADA — a do app.
 
     O ERP aceita uma sessao por usuario: se a aba abrisse o proprio navegador,
-    derrubaria a sessao do Anexar, e vice-versa. Aqui a sessao e emprestada, e
-    por isso nao ha `entrar()` nem `garantir_login()` — quem cuida do login e o
-    dono da pagina. Fora isso, e a mesma coleta de `coletar()`.
+    derrubaria a sessao do Anexar, e vice-versa. Aqui a sessao e emprestada.
+
+    ORDEM OBRIGATORIA: saldos primeiro, sessao do navegador revalidada no
+    meio, pagamentos por ultimo.
+
+    A leitura de saldos faz `POST /users/login` com o MESMO usuario. Como o
+    ERP admite uma sessao por usuario, esse login DERRUBA a sessao do
+    navegador, que ate ali estava boa. O sintoma engana: o app diz "Login OK",
+    le as 36 contas, e so entao a grade volta vazia — recarregando, aparece
+    "Insira suas credenciais para entrar novamente no sistema".
+
+    O projeto original nao sofria disso porque lia os saldos ANTES de abrir o
+    navegador: o login do navegador era sempre o ultimo. Aqui o navegador ja
+    chega logado de fora, entao `revalidar_sessao` refaz esse login depois da
+    API.
     """
     if periodo is None:
         periodo = (
@@ -105,6 +118,11 @@ def coletar_com_pagina(
     log("Lendo saldos das contas (API do Mais Controle)...")
     contas = coletar_contas(config, log=log)
     log(f"  {len(contas)} conta(s) lida(s)")
+
+    if revalidar_sessao is not None:
+        # A chamada acima acabou de derrubar a sessao do navegador.
+        log("Refazendo o login do navegador (a API derruba a sessao)...")
+        revalidar_sessao()
 
     try:
         log("Abrindo pagamentos...")

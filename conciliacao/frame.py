@@ -272,8 +272,20 @@ class ConciliacaoFrame(ttk.Frame):
             self._esperar_sessao()
 
             self.q.put(("status", "Coletando saldos e pagamentos..."))
+
+            def revalidar():
+                """Refaz o login do navegador depois da API de saldos.
+
+                A API loga com o mesmo usuário, e o ERP só admite uma sessão —
+                a do navegador cai. Sem isto, a grade de pagamentos vem vazia
+                e o log fica sem sentido: "Login OK", 36 contas lidas, e
+                nenhuma linha."""
+                self.anx.mc.garantir_login()
+                self._esperar_sessao()
+
             snapshot = coletar_com_pagina(
-                self.anx.mc.page, cfg, periodo=periodo, log=self._log)
+                self.anx.mc.page, cfg, periodo=periodo,
+                revalidar_sessao=revalidar, log=self._log)
 
             caminho_snap = salvar_snapshot(snapshot, cfg.caminho("snapshots"))
             self._log(f"Snapshot: {str(caminho_snap).replace(chr(92), '/')}")
