@@ -162,3 +162,41 @@ def test_caminho_curto_de_arquivo_inexistente_devolve_vazio(tmp_path):
     """Sem o arquivo, o Windows não tem 8.3 para dar — e aí vale o caminho
     longo, gravado na codepage do cmd."""
     assert atualizador._caminho_curto(tmp_path / "nao-existe.exe") == ""
+
+
+# ------------------------------------------------- o nome do exe sobrevive
+# A regressão real da v1.0.75: o destino do `move` era o caminho 8.3 INTEIRO,
+# e `move` apaga o destino antes de renomear a origem. O apelido deixava de
+# resolver no meio da operação e o exe renascia chamado `COMPRO~1.EXE` — o
+# app abria, mas o atalho da área de trabalho apontava para o nada.
+
+def test_o_move_preserva_o_nome_do_executavel(tmp_path):
+    pasta = tmp_path / "PASTA COM ACENTO ÇÕ"
+    pasta.mkdir()
+    exe = pasta / "Comprovantes.Mais.Controle.exe"
+    exe.write_bytes(b"x")
+    novo = tmp_path / "baixado.exe"
+    novo.write_bytes(b"y")
+
+    s = atualizador.script_de_troca(1234, novo, exe)
+
+    linha = next(ln for ln in s.splitlines() if ln.startswith("move /y"))
+    destino = linha.rsplit('"', 3)[-2]
+    assert destino.endswith("Comprovantes.Mais.Controle.exe"), destino
+    assert "~" not in Path(destino).name, destino
+    # e o `start` reabre exatamente o arquivo que acabou de ser gravado
+    assert f'start "" "{destino}"' in s
+
+
+def test_o_nome_do_exe_sobrevive_mesmo_com_8_3_ligado(tmp_path):
+    """A pasta pode encurtar — é dela que vinham os acentos. O nome, não."""
+    pasta = tmp_path / "PASTA COM ACENTO ÇÕ"
+    pasta.mkdir()
+    exe = pasta / "Comprovantes.Mais.Controle.exe"
+    exe.write_bytes(b"x")
+
+    ascii_ = atualizador._caminho_ascii(exe)
+
+    assert Path(ascii_).name == "Comprovantes.Mais.Controle.exe"
+    if atualizador._caminho_curto(pasta):     # 8.3 pode estar desligado
+        assert all(ord(c) < 128 for c in ascii_), ascii_

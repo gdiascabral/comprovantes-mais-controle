@@ -247,6 +247,25 @@ def _caminho_curto(p: Path) -> str:
         return ""
 
 
+def _caminho_ascii(p: Path) -> str:
+    """Caminho sem acento com o NOME DO ARQUIVO intacto: só a pasta encurta.
+
+    A diferença para `_caminho_curto` é o defeito que ela causou em
+    12/08/2026, na troca para a v1.0.75: encurtar o caminho INTEIRO põe o
+    apelido 8.3 no destino do `move`, e `move` apaga o destino antes de
+    renomear a origem. No instante em que o exe antigo some, `COMPRO~1.EXE`
+    deixa de ser apelido de alguém — então o arquivo novo nasce com esse nome
+    LITERAL. O app continua funcionando (o motor acha a si mesmo por
+    `sys.executable`), mas o atalho da área de trabalho aponta para um nome
+    que não existe mais, e o Windows oferece apagá-lo.
+
+    Encurtar só a pasta resolve os dois lados: o acento mora no diretório
+    (`AUTOMAÇÕES MAIS CONTROLE`), que é o que estragava na codepage do cmd, e
+    o nome do exe é ASCII e é o que precisa sobreviver à troca."""
+    pai = _caminho_curto(p.parent)
+    return str(Path(pai) / p.name) if pai else str(p)
+
+
 def script_de_troca(pid: int, novo: Path, exe: Path) -> str:
     """O .bat que espera este processo morrer, troca o exe e reabre o app.
 
@@ -276,10 +295,16 @@ def script_de_troca(pid: int, novo: Path, exe: Path) -> str:
        O nome curto não tem acento nenhum, então nenhuma codepage tem como
        estragá-lo; e quem grava o arquivo ainda usa a codepage do cmd, para o
        caso de 8.3 estar desligado no volume.
+    5. **Só a PASTA encurta; o nome do arquivo, nunca.** O item 4 encurtava o
+       caminho inteiro, e isso rebatizou o exe na troca para a v1.0.75: o
+       destino do `move` virava `COMPRO~1.EXE`, e como `move` apaga o destino
+       antes de renomear a origem, o apelido 8.3 deixava de resolver no meio
+       da operação e o arquivo novo ficava com esse nome literal. O app abria
+       normalmente (o motor se acha por `sys.executable`), mas o atalho da
+       área de trabalho apontava para um nome inexistente e o Windows oferecia
+       apagá-lo. Ver `_caminho_ascii`.
     """
-    novo_txt = _caminho_curto(novo) or str(novo)
-    exe_txt = _caminho_curto(exe) or str(exe)
-    novo, exe = Path(novo_txt), Path(exe_txt)
+    novo, exe = Path(_caminho_ascii(novo)), Path(_caminho_ascii(exe))
     return (
         "@echo off\n"
         "setlocal enabledelayedexpansion\n"
