@@ -15,6 +15,7 @@ precisar saber programar. São **nove abas**, numa janela só:
 | **📊 Relatório Mensal** | *(mensal)* Baixa em PDF o extrato de cada conta bancária do ERP, arquivando na pasta da empresa. |
 | **🏦 Extratos Sicoob** | *(mensal)* Cria a árvore de pastas do fechamento e baixa OFX + PDF de cada conta no SicoobNet. |
 | **📑 Contratos** | *(mensal)* Acha o contrato de financiamento das casas que financiaram no mês, confere o conteúdo (rua, quadra/lote, casa, comprador e valor) e arquiva na pasta da empresa. |
+| **📤 Acessórias** | *(mensal)* Envia o fechamento ao escritório contábil pelo portal: uma solicitação por empresa, com o .zip do mês anexado e a lista dos contratos lida de dentro do próprio zip. |
 
 As quatro primeiras ficam soltas na barra lateral; as outras vivem nos grupos
 **DIÁRIO** e **MENSAL**, que abrem e fecham (o estado fica salvo).
@@ -155,6 +156,7 @@ pagamentos_dia/     Excel de conferência dos pagamentos do dia
 extratos_sicoob/    árvore do fechamento + OFX/PDF do SicoobNet
 conciliacao/        painel do dia (pacote de verdade, com __init__.py)
 contratos/          contratos de financiamento (idem)
+acessorias/         envio do fechamento ao escritório, pelo portal (idem)
 ```
 
 ### Arquivos de configuração (ficam AO LADO do exe, fora do repositório)
@@ -170,7 +172,7 @@ Git. O app funciona sem eles; cada aba avisa qual está faltando.
 | `contas.csv` | contas dos Aportes (`nome_exibicao;nome_oficial;conta;nome_descricao`) | a aba Aportes fica vazia |
 | `subcontas.json` | grupos de investidores por subconta + `_obra_padrao` | sem rateio |
 | `contas_mc.json` | mapa conta do ERP → pasta do extrato | Relatório Mensal não roda |
-| `contas_sicoob.json` | mapa conta Sicoob → pasta, árvore de empresas e `clientes_erp` | Extratos Sicoob e Contratos não rodam |
+| `contas_sicoob.json` | mapa conta Sicoob → pasta, árvore de empresas, `clientes_erp` e, para a aba Acessórias, o `vip_url` do escritório com o `vip_id`/`vip_nome` de cada empresa | Extratos Sicoob, Contratos e Acessórias não rodam |
 | `pix_reembolso.json` | chaves Pix dos avisos "PAGAR PARA" | a linha sai como pendente |
 | `config.yaml`, `mapping.yaml`, `MODELO.xlsx` | painel da Conciliação Diária | a aba não gera a planilha |
 

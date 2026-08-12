@@ -12,8 +12,8 @@ TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), qu
 2. monta `codigo.zip` (comprovantes_app.py + util.py + widgets.py +
    ativacao.py + separar_renomear/*.py + anexar/*.py + aportes/*.py +
    relatorios/*.py + pagamentos_dia/*.py + extratos_sicoob/*.py +
-   conciliacao/*.py + conciliacao/erp/*.py + contratos/*.py + versao.txt +
-   motor_minimo.txt + icone.ico) — ~50 KB.
+   conciliacao/*.py + conciliacao/erp/*.py + contratos/*.py +
+   acessorias/*.py + versao.txt + motor_minimo.txt + icone.ico) — ~50 KB.
    **Pasta nova de aba OU arquivo novo na raiz = linha nova aqui**, senão o
    import falha no usuário e o app não abre. Vale para os dois: `widgets.py` e
    `ativacao.py` são de raiz e precisaram entrar um a um;
@@ -28,7 +28,8 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 `codigo.zip` novo (segundos, sem perguntar) e roda com ele. Portanto:
 
 - Mudanças em `comprovantes_app.py`, `separar_renomear/`, `anexar/`,
-  `aportes/`, `relatorios/`, `pagamentos_dia/`, `extratos_sicoob/` →
+  `aportes/`, `relatorios/`, `pagamentos_dia/`, `extratos_sicoob/`,
+  `contratos/`, `conciliacao/`, `acessorias/` →
   chegam sozinhas ao usuário no próximo abrir. Só commitar e esperar a build.
 - Mudanças em `motor.py`, `atualizador.py`, dependências novas no
   `requirements.txt` ou `--collect-all` no workflow → exigem exe novo.
@@ -86,7 +87,10 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 - `comprovantes_app.py` — janela única: barra lateral com quatro itens soltos
   (Separar e Renomear / Anexar Comprovantes / Conferência / Aportes) e dois
   grupos que abrem e fecham — DIÁRIO (Pagamentos do Dia, Conciliação Diária) e
-  MENSAL (Relatório Mensal, Extratos Sicoob). O estado de cada grupo fica em
+  MENSAL (Relatório Mensal, Extratos Sicoob, Contratos, Acessórias). O pulso da
+  barra pergunta a TRÊS navegadores, não a um: o do ERP (via
+  `aba_anx.dona_ocupada()`) e os de `extratos_sicoob/` e `acessorias/`, que são
+  processo e login à parte. O estado de cada grupo fica em
   `preferencias.json`, e selecionar uma aba de grupo fechado o abre — senão a
   aba ficaria destacada e invisível. DIÁRIO e MENSAL são `Grupo.Toolbutton`
   (chapado e miúdo) e os itens do grupo entram com recuo: como botões do mesmo
@@ -418,6 +422,40 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   há `select` de mês e ano (mês 0-indexed), dispensando as setas. Antes de
   arquivar, o OFX é conferido contra `ACCTID` e período — o pior erro possível
   é o extrato de uma empresa cair na pasta de outra, e nada no disco denuncia.
+- `acessorias/` — aba Acessórias: envia o fechamento ao escritório contábil
+  pelo portal (uma solicitação por empresa, com o .zip anexado). **Terceiro
+  navegador próprio** (perfil `.chrome_profile_acessorias`), pelo mesmo motivo
+  do Sicoob: outro site, outro login, e o Playwright síncrono não divide
+  thread. O login também é manual, mas aqui não há captcha — o perfil
+  persistente + "Manter conectado" fazem a sessão durar de um mês para o outro.
+  **A decisão que sustenta o resto: a mensagem é derivada do anexo.** A lista
+  de contratos do comentário sai de DENTRO do zip (as entradas
+  `.../CONTRATOS/`, gravadas pela aba Contratos), e não do ERP nem da aba
+  Contratos em memória: assim ela não custa sessão do ERP — que só aceita uma
+  por usuário — e não pode contradizer o que foi enviado. `pacote.py` é puro e
+  recebe `nome_do_mes`/`nome_pasta_empresa` por parâmetro, como
+  `contratos/destino.py`, e é ele quem casa o zip com a empresa usando a MESMA
+  função que gerou aquele nome no `sicoob_zipar`. O portal é HTML puro (sem
+  Angular e sem React): toda tela é endereçável por URL
+  (`/<escritorio>/<id>/SOL/0` é o formulário em branco), então navegar é
+  `goto`. Três armadilhas do formulário, medidas na tela e resolvidas em
+  `portal.py`: (1) **`#SolAss` (o assunto) fica FORA do `<form>`** e é
+  recolhido por JS no envio — um multipart montado à mão chegaria ao escritório
+  sem título e sem erro, o que enterra a ideia de postar direto em
+  `/sysvipsolAjax`; (2) **os `value` dos dois selects não seguem a ordem da
+  tela** (DPTO_FINANCEIRO é o último item e vale 4; a prioridade é invertida,
+  Baixa=3 e Muito Alta=0), então toda escolha é por RÓTULO — por índice, o
+  fechamento vai para o departamento errado sem nada denunciar; (3)
+  `SolDptoDcvID` é um segundo select, hoje mudo, e ganhando opções o módulo
+  PARA em vez de adivinhar sub-departamento. Duplicidade é conferida no
+  PORTAL, não em arquivo local (ao contrário dos Aportes): a lista de
+  solicitações responde "já enviei esta?", e perguntar não envelhece — mas
+  exige abrir também a aba Encerradas, que só carrega ao ser clicada. E nada
+  de "enviado" sem prova: depois do Salvar/Enviar, `conferir_envio` relê a
+  lista, abre a solicitação e confirma o anexo pelo nome. `vip_id`, `vip_nome`
+  (por empresa) e `vip_url` (o endereço do escritório) moram no
+  `contas_sicoob.json`, FORA do repo — o URL carrega o nome de um fornecedor
+  real, e um mapa a mais seria uma divergência a mais.
 - `anexar/config.py` — URLs, tag, listas IGNORAR_TARIFAS/IGNORAR_APORTES;
   usa a pasta do exe quando congelado (sys.frozen). Tem também `diag()`, o
   registro em `diagnostico.log` usado por quem precisa degradar sem quebrar

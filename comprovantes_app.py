@@ -39,6 +39,7 @@ from extratos_frame import ExtratosSicoobFrame
 # disputa nome de módulo no sys.path com as outras pastas de aba.
 from conciliacao.frame import ConciliacaoFrame
 from contratos.frame import ContratosFrame
+from acessorias.frame import AcessoriasFrame
 
 
 def _nitidez():
@@ -182,9 +183,12 @@ def main():
     aba_con = ConciliacaoFrame(conteudo, aba_anx)
     # Contratos usa o mesmo ERP: divide navegador e thread, como as outras.
     aba_ctr = ContratosFrame(conteudo, aba_anx)
+    # Acessórias também NÃO recebe o aba_anx: é o portal do escritório
+    # contábil, terceiro site e terceiro login (ver acessorias/portal.py).
+    aba_acs = AcessoriasFrame(conteudo)
     quadros = {"sep": aba_sep, "anx": aba_anx, "conf": aba_conf,
                "apt": aba_apt, "rel": aba_rel, "pag": aba_pag, "ext": aba_ext,
-               "con": aba_con, "ctr": aba_ctr}
+               "con": aba_con, "ctr": aba_ctr, "acs": aba_acs}
     atual = {"nome": None}
     botoes = {}
 
@@ -281,7 +285,8 @@ def main():
                                 ("con", "⚖", "Conciliação Diária")))
     _grupo("mensal", "MENSAL", (("rel", "📊", "Relatório Mensal"),
                                 ("ext", "🏦", "Extratos Sicoob"),
-                                ("ctr", "📑", "Contratos")))
+                                ("ctr", "📑", "Contratos"),
+                                ("acs", "📤", "Acessórias")))
 
     # ---------------- rodapé da barra: atividade + tema + versão
     rodape = ttk.Frame(lateral)
@@ -345,8 +350,10 @@ def main():
                 # o navegador do ERP, dividido por oito abas...
                 lambda: (por_frame.get(id(aba_anx.dona_ocupada())),
                          aba_anx.ocupado()),
-                # ...e o do Sicoob, que é processo e login à parte
-                lambda: ("ext", aba_ext.ocupado())):
+                # ...o do Sicoob, que é processo e login à parte...
+                lambda: ("ext", aba_ext.ocupado()),
+                # ...e o do portal do escritório, pelo mesmo motivo
+                lambda: ("acs", aba_acs.ocupado())):
             try:
                 chave, tarefa = pergunta()
             except Exception:

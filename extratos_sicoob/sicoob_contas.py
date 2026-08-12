@@ -49,6 +49,14 @@ class Empresa:
     #: derivam um do outro, e a aba Contratos precisa da ponte. Vazio por
     #: padrao, para o contas_sicoob.json de quem nao atualizou seguir valido.
     clientes_erp: list[str] = field(default_factory=list)
+    #: Id desta empresa na URL do portal Acessorias (`/<escritorio>/<id>/`).
+    #: Nao se deriva de nada daqui — nem do CNPJ, nem do nome —, entao e
+    #: cadastro. Vazio = a aba Acessorias nao envia esta empresa e diz por que.
+    vip_id: str = ""
+    #: Como o nome desta empresa entra no ASSUNTO da solicitacao. O assunto
+    #: usado ate hoje traz a razao social por extenso, que nao se deriva do
+    #: nome curto da pasta. Vazio = usa `nome`.
+    vip_nome: str = ""
 
     @property
     def subpastas(self) -> list[str]:
@@ -60,6 +68,10 @@ class Empresa:
 class Mapa:
     raiz: Path
     empresas: list[Empresa]
+    #: Endereco do escritorio no portal Acessorias
+    #: (`https://vip.acessorias.com/<escritorio>`). Mora aqui, e nao no codigo,
+    #: porque carrega o nome de um fornecedor real e o repositorio e publico.
+    vip_url: str = ""
 
     @property
     def contas(self) -> list[Conta]:
@@ -114,8 +126,11 @@ def carregar(caminho: Path | None = None) -> Mapa:
             pastas_vazias=[p.strip() for p in e.get("pastas_vazias", [])],
             contas=contas,
             clientes_erp=[c.strip() for c in (e.get("clientes_erp") or [])
-                          if (c or "").strip()]))
-    return Mapa(raiz=raiz, empresas=empresas)
+                          if (c or "").strip()],
+            vip_id=str(e.get("vip_id") or "").strip(),
+            vip_nome=(e.get("vip_nome") or "").strip()))
+    return Mapa(raiz=raiz, empresas=empresas,
+                vip_url=(dados.get("vip_url") or "").strip())
 
 
 # ------------------------------------------------------------- escrita
@@ -241,13 +256,21 @@ def validar(mapa: Mapa) -> list[str]:
 
 _MODELO = {
     "raiz": "C:/Arquivos Morais/EXTRATOS",
+    "vip_url": "https://vip.acessorias.com/SEU-ESCRITORIO",
     "_ajuda": [
         "pastas_vazias: pastas criadas mas NÃO preenchidas por esta automação",
         "contas: contas do Sicoob; 'pasta' é o destino dos arquivos da conta",
+        "vip_url: endereço do escritório no portal Acessórias (aba Acessórias)",
+        "vip_id: id da empresa na URL do portal (/<escritorio>/<id>/) — abra a "
+        "empresa lá e copie o número",
+        "vip_nome: como o nome da empresa entra no ASSUNTO da solicitação "
+        "(vazio = usa 'nome')",
     ],
     "empresas": [
         {"nome": "EMPRESA EXEMPLO",
          "pastas_vazias": ["CAIXA", "INTER"],
+         "vip_id": "000",
+         "vip_nome": "Empresa Exemplo Ltda",
          "contas": [{"numero": "12.345-6", "pasta": "SICOOB"}]},
         {"nome": "EMPRESA COM SUBCONTAS",
          "pastas_vazias": [],
