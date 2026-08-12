@@ -33,6 +33,8 @@ from tkinter import filedialog, messagebox, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import ocr_boleto                                             # noqa: E402
+import regras_pagamento as regras                             # noqa: E402
 import relatorio                                              # noqa: E402
 
 try:                                     # utilitários compartilhados (raiz)
@@ -361,6 +363,72 @@ class PagamentosDiaFrame(ttk.Frame):
         self.b2.configure(state="normal")
 
     # --------------------------------------------------------------- etapa 2
+    def _janela_confirmar(self, alvos) -> set | None:
+        """Pergunta, um a um, quais desses pagamentos entram.
+
+        Existe para os pagamentos que o dono do escritório quer ver antes —
+        distribuição de lucro para os sócios, por exemplo. Marcar a linha de
+        laranja na planilha não bastava: a planilha é lida DEPOIS de gerada,
+        e a pergunta precisa acontecer antes.
+
+        Roda na thread da interface (é chamada de `gerar`, antes de submeter
+        ao navegador), então pode abrir janela e esperar resposta à vontade.
+        Devolve os ids NÃO confirmados, ou None se a pessoa cancelou tudo.
+        """
+        top = tk.Toplevel(self)
+        top.title("Confirmar antes de gerar")
+        top.transient(self.winfo_toplevel())
+        top.resizable(False, False)
+
+        moldura = ttk.Frame(top, padding=14)
+        moldura.pack(fill="both", expand=True)
+        ttk.Label(moldura, font=("Segoe UI", 11, "bold"),
+                  text="Estes pagamentos pedem a sua confirmação").pack(anchor="w")
+        ttk.Label(moldura, foreground="#6b6b6b", wraplength=560, justify="left",
+                  text="Desmarque o que NÃO deve entrar na planilha de hoje. O que "
+                       "for desmarcado vai para a aba NÃO ENTRARAM, com o motivo."
+                  ).pack(anchor="w", pady=(0, 10))
+
+        marcas = []
+        for item in alvos:
+            v = tk.BooleanVar(value=True)
+            marcas.append((str(item.get("id")), v))
+            desc = (item.get("description") or "").strip()[:70]
+            ttk.Checkbutton(
+                moldura, variable=v,
+                text=(f"{(item.get('paidTo') or '?').strip()}  —  "
+                      f"{relatorio.brl(relatorio.valor_do_item(item))}"
+                      + (f"  ·  {desc}" if desc else ""))).pack(anchor="w", pady=1)
+
+        resposta = {"cancelou": True}
+
+        def confirmar():
+            resposta["cancelou"] = False
+            top.destroy()
+
+        rodape = ttk.Frame(moldura)
+        rodape.pack(fill="x", pady=(14, 0))
+        ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side="right")
+        b = ttk.Button(rodape, text="Confirmar e gerar", command=confirmar)
+        b.pack(side="right", padx=(0, 8))
+        try:
+            b.configure(style="Accent.TButton")
+        except tk.TclError:
+            pass
+
+        top.protocol("WM_DELETE_WINDOW", top.destroy)
+        top.bind("<Escape>", lambda _e: top.destroy())
+        try:
+            top.grab_set()
+            top.focus_set()
+        except tk.TclError:
+            pass
+        self.wait_window(top)
+
+        if resposta["cancelou"]:
+            return None
+        return {ident for ident, v in marcas if not v.get()}
+
     def gerar(self):
         if self.worker and not self.worker.done():
             return
@@ -371,14 +439,34 @@ class PagamentosDiaFrame(ttk.Frame):
         if not self.v_pasta.get().strip():
             messagebox.showwarning("Pasta", "Escolha onde salvar a planilha.")
             return
+
+        # A pergunta vem ANTES de ocupar o navegador: quem cancela aqui não
+        # deve ter consumido a sessão do ERP, que é uma só por usuário.
+        nao_confirmados = self._confirmacoes_pendentes(escolhidas)
+        if nao_confirmados is None:
+            self.q.put(("status", "Cancelado — nada foi gerado."))
+            return
+
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
             return
         self.worker = self.anx.submeter("Pagamentos do Dia — gerar planilha",
-                                        self._t_gerar, escolhidas)
+                                        self._t_gerar, escolhidas, nao_confirmados)
 
-    def _t_gerar(self, escolhidas):
+    def _confirmacoes_pendentes(self, escolhidas) -> set | None:
+        """set() quando não há nada a perguntar; None quando cancelaram."""
+        nomes = regras.carregar_confirmar()
+        if not nomes:
+            return set()
+        escolha = {relatorio.chave(n) for n in escolhidas}
+        alvos = [i for i in self.lancamentos
+                 if relatorio.chave(relatorio.nome_da_conta(i)) in escolha
+                 and not i.get("paid")
+                 and regras.exige_confirmacao(i.get("paidTo") or "", nomes)]
+        return self._janela_confirmar(alvos) if alvos else set()
+
+    def _t_gerar(self, escolhidas, nao_confirmados=()):
         comeco = time.time()
         try:
             ini, fim = self._periodo()
@@ -396,21 +484,24 @@ class PagamentosDiaFrame(ttk.Frame):
                 self.q.put(("status", "Nada a pagar nas contas marcadas."))
                 return
 
-            textos = {}
+            textos, urls_ocr = {}, set()
             if self.v_cruzar.get():
-                textos = self._baixar_textos(selecionados)
+                textos, urls_ocr = self._baixar_textos(selecionados)
 
-            registros = relatorio.montar_registros(
+            resultado = relatorio.montar_registros(
                 selecionados, self.anexos, self.overviews, textos,
-                pix_reembolso=_carregar_reembolsos())
-            if not registros:
+                pix_reembolso=_carregar_reembolsos(), urls_ocr=urls_ocr,
+                regras_fornecedor=regras.carregar_fornecedores(),
+                ids_nao_confirmados=nao_confirmados)
+            registros, omitidos = resultado.contas, resultado.omitidos
+            if not registros and not omitidos:
                 self.q.put(("status", "Nenhuma linha para as contas marcadas."))
                 return
 
             destino = (Path(self.v_pasta.get().strip())
                        / f"pagamentos_{ini:%Y-%m-%d}"
                        f"{'' if ini == fim else f'_a_{fim:%Y-%m-%d}'}.xlsx")
-            arquivo = relatorio.gerar_excel(registros, destino, log=self._log)
+            arquivo = relatorio.gerar_excel(resultado, destino, log=self._log)
 
             n = sum(len(r) for r in registros.values())
             total = sum(x["valor"] for r in registros.values() for x in r)
@@ -423,44 +514,82 @@ class PagamentosDiaFrame(ttk.Frame):
                           f"{relatorio.brl(sum(x['valor'] for x in regs)):>16}")
             if atencao:
                 self._log(f"\n{atencao} linha(s) em laranja para conferir na mão.")
+            if omitidos:
+                self._log(f"\n{len(omitidos)} lançamento(s) fora da planilha "
+                          f'(aba "{relatorio.ABA_OMITIDOS}"):')
+                for motivo in dict.fromkeys(o["motivo"] for o in omitidos):
+                    quantos = sum(1 for o in omitidos if o["motivo"] == motivo)
+                    self._log(f"  {quantos:>3}  {motivo}")
             self._log(f"\nPlanilha: {str(arquivo).replace(chr(92), '/')}  "
                       f"({_fmt_dur(time.time() - comeco)})")
             self.q.put(("arquivo", arquivo))
             self.q.put(("status", f"{n} pagamento(s) · {relatorio.brl(total)} · "
-                                  f"{atencao} para conferir"))
+                                  f"{atencao} para conferir"
+                                  + (f" · {len(omitidos)} fora" if omitidos else "")))
         except Exception as e:
             self._log(f"[!] {e}")
             self.q.put(("status", "Não consegui gerar a planilha."))
         finally:
             self.q.put(("botoes", "normal"))
 
-    def _baixar_textos(self, selecionados) -> dict:
-        """{downloadUrl: texto} dos PDFs. Um download serve para as duas
-        coisas: extrair a linha digitável do boleto E cruzar valor/fornecedor."""
-        urls = []
+    def _anexos_a_ler(self, selecionados) -> list[tuple[str, bool]]:
+        """[(downloadUrl, é_pdf)] sem repetição.
+
+        Os PDFs sempre entram. Anexo que é FOTO só entra quando é um aviso
+        "PAGAR PARA": ali mora o CPF/celular de quem recebe o reembolso, e
+        sem ler a imagem a linha volta a sair como "chave não cadastrada".
+        Baixar toda foto de todo título seria pagar OCR por nada.
+        """
+        vistos, urls = set(), []
         for item in selecionados:
             for f in self.anexos.get(str(item.get("tradePayableId"))) or []:
-                if f.get("downloadUrl") and relatorio.eh_pdf(f):
-                    urls.append(f["downloadUrl"])
-        urls = list(dict.fromkeys(urls))
-        if not urls:
-            return {}
+                url = f.get("downloadUrl")
+                if not url or url in vistos:
+                    continue
+                pdf = relatorio.eh_pdf(f)
+                if pdf or relatorio._PAGAR_PARA.search(relatorio._rotulo(f)):
+                    vistos.add(url)
+                    urls.append((url, pdf))
+        return urls
 
-        self._log(f"\nBaixando e lendo {len(urls)} PDF(s) para o cruzamento...")
-        textos, sem_texto = {}, 0
-        for i, url in enumerate(urls, 1):
+    def _baixar_textos(self, selecionados) -> tuple[dict, set]:
+        """({downloadUrl: texto}, {urls lidas por OCR}).
+
+        Um download serve para tudo: extrair a linha digitável do boleto,
+        cruzar valor/fornecedor e achar a chave do aviso de reembolso.
+
+        O OCR só roda no que veio sem texto — é ele que custa caro. Quem
+        leu por OCR fica marcado, porque leitura de OCR não vale o mesmo
+        que camada de texto: a linha digitável tirada dali só é aceita
+        depois de fechar o dígito verificador e o valor (ver `ocr_boleto`).
+        """
+        alvos = self._anexos_a_ler(selecionados)
+        if not alvos:
+            return {}, set()
+
+        self._log(f"\nBaixando e lendo {len(alvos)} anexo(s) para o cruzamento...")
+        textos, urls_ocr, sem_texto = {}, set(), 0
+        for i, (url, eh_pdf) in enumerate(alvos, 1):
             if self._parar.is_set():
                 self._log("Interrompido a pedido — o cruzamento fica incompleto.")
                 break
             dados = self.anx.api.baixar_anexo(url)
-            texto = relatorio.texto_de_pdf(dados) if dados else ""
+            texto = relatorio.texto_de_pdf(dados) if (dados and eh_pdf) else ""
+            if dados and not texto.strip():
+                self.q.put(("status", f"Lendo por OCR... {i}/{len(alvos)}"))
+                texto = (ocr_boleto.texto_ocr_pdf(dados, self._log) if eh_pdf
+                         else ocr_boleto.texto_ocr_imagem(dados))
+                if texto.strip():
+                    urls_ocr.add(url)
             textos[url] = texto
             if not texto.strip():
                 sem_texto += 1
-            self.q.put(("progresso", (i, len(urls))))
+            self.q.put(("progresso", (i, len(alvos))))
             if i % 25 == 0:
-                self.q.put(("status", f"Lendo PDFs... {i}/{len(urls)}"))
+                self.q.put(("status", f"Lendo anexos... {i}/{len(alvos)}"))
+        if urls_ocr:
+            self._log(f"  {len(urls_ocr)} anexo(s) sem texto lidos por OCR.")
         if sem_texto:
-            self._log(f"  {sem_texto} PDF(s) sem texto (foto/escaneado) — "
+            self._log(f"  {sem_texto} anexo(s) que nem o OCR conseguiu ler — "
                       "esses não dá para cruzar.")
-        return textos
+        return textos, urls_ocr

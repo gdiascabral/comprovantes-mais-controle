@@ -233,7 +233,7 @@ def test_linha_de_boleto_com_aviso_de_pix_no_cadastro():
     overviews = {"i1": {"purchaseOrder": {"number": 6510}, "comment": ""}}
     textos = {"u1": "34191.57007 00024.434375 24177.010000 1 99990000185000"}
 
-    reg = relatorio.montar_registros([item], anexos, overviews, textos)
+    reg = relatorio.montar_registros([item], anexos, overviews, textos).contas
     linha = reg["CONTA TESTE"][0]
     assert linha["tipo"] == "Boleto"
     assert linha["dados"].startswith("34191.57007")
@@ -247,7 +247,7 @@ def test_reembolso_sem_chave_cadastrada_vira_atencao():
             "tradePayableAccount": {"name": "CONTA TESTE"},
             "costCentreDetails": [{"workName": "OBRA"}]}
     anexos = {"t2": [anexo("PAGAR PARA FULANO", ext=".pdf", url="u2")]}
-    reg = relatorio.montar_registros([item], anexos, {}, {"u2": ""})
+    reg = relatorio.montar_registros([item], anexos, {}, {"u2": ""}).contas
     linha = reg["CONTA TESTE"][0]
     assert linha["dados"] == ""
     assert linha["status"].startswith("ATEN")
@@ -262,7 +262,7 @@ def test_reembolso_com_chave_cadastrada():
     anexos = {"t3": [anexo("PAGAR PARA FULANO", url="u3")]}
     reg = relatorio.montar_registros([item], anexos, {}, {"u3": ""},
                                      pix_reembolso={"FULANO": "Fulano 111.222.333-44"})
-    assert reg["CONTA TESTE"][0]["dados"] == "Fulano 111.222.333-44"
+    assert reg.contas["CONTA TESTE"][0]["dados"] == "Fulano 111.222.333-44"
 
 
 def test_excel_sai_com_as_colunas_na_ordem_pedida(tmp_path):

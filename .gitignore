@@ -36,6 +36,11 @@ aportes/subcontas.json
 /Pagamentos do dia/
 # Chaves Pix dos avisos "PAGAR PARA": é CPF de gente. Nunca no repo.
 pix_reembolso.json
+# Regras da aba Pagamentos do Dia: nome de fornecedor da empresa, e nome das
+# pessoas cujo pagamento é confirmado numa janela antes de gerar. Mesma razão
+# do pix_reembolso.json — o repositório é público.
+regras_fornecedor.json
+confirmar_antes.json
 # Mapa conta -> pasta dos extratos do Sicoob: número de conta e razão social
 # das empresas. Mesma razão do pix_reembolso.json.
 contas_sicoob.json

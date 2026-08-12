@@ -218,13 +218,65 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   **?** (não deu para verificar → não alarma). Alarme falso ensina a ignorar
   alarme. A chave de acesso de 44 dígitos no nome do anexo entrega número da
   NF e CNPJ do emitente de graça.
+  `montar_registros` devolve um `Resultado(contas, omitidos)`: **omitir não é
+  apagar**. Enquanto "não entrou" era um `continue` mudo, descobrir que uma
+  regra errou dependia de sentir falta de um pagamento — o que só acontece
+  depois do vencimento. Os omitidos viram a aba "NÃO ENTRARAM", com o motivo
+  de cada um, e não somam no TOTAL de conta nenhuma. Três consequências que
+  não são óbvias: (a) linha **JÁ PAGA escapa das regras de omissão** — ali
+  "sem forma de pagar" é o normal, não defeito; (b) "sem forma de pagar" só
+  vale quando NÃO HÁ documento anexado: boleto que virou foto e o OCR não
+  fechou continua na planilha, porque alguém abre o anexo e digita; (c) sem
+  boleto anexado a regra "boleto ganha de Pix" não tem premissa — não existe
+  boleto para ganhar —, então havendo NF ou OC a linha vira Pix com a chave
+  do cadastro, e o aviso "pagar o boleto" só é montado DEPOIS de resolver a
+  forma de pagar, senão mandaria pagar um documento que não existe.
+- `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
+  Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
+  pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e
+  `confirmar_antes.json`, ao lado do exe e fora do repo — como o
+  `pix_reembolso.json`. Cadastro ausente ou ilegível não vira erro: o app roda
+  igual, só sem as regras. O sufixo `_pagamento` no nome do módulo é
+  obrigatório: `aportes/regras.py` já existe, nome de módulo é global no
+  sys.path e `pagamentos_dia` entra ANTES de `aportes` — um `regras.py` aqui
+  sequestraria o import da aba Aportes (a mesma armadilha do `extratos_sicoob`).
+  **O boleto manda no valor.** "R$ 1,00 é marcador de recorrência" vale só
+  enquanto nada prova o contrário: havendo código de barras anexado (que é
+  conferido por DV e carrega o valor em centavos), quem erra é o LANÇAMENTO, e
+  a linha entra com "ATENÇÃO — valor do boleto diverge" em vez de sumir. Sem
+  essa ressalva a regra apagava, no arquivo de 08 a 10/08/2026, exatamente uma
+  linha — uma conta da Equatorial lançada como R$ 1,00 cujo boleto dizia
+  R$ 56,24 — e ninguém sentiria falta antes do vencimento.
+  **O tipo da chave Pix não se chuta** (`tipo_de_chave_pix`). O ERP não tem o
+  campo: a chave chega dentro de texto livre (`paidToBankAccount`, e o mesmo
+  texto no `bankAccount` do cadastro). Medido nos 116 lançamentos com o campo
+  preenchido no período, 75 DECLARAM o tipo por escrito ("PIX CNPJ" 65 vezes,
+  "PIX CELULAR" 7, "PIX CPF" 3) — é dali que ele sai, e só depois do formato
+  inequívoco (o "@", o UUID, a pontuação de CNPJ ou de CPF). **Onze dígitos
+  crus devolvem ""**: CPF e celular têm os dois onze, e a planilha prefere
+  perguntar a escolher para quem o dinheiro vai. É também o dado que falta
+  para montar o segmento B de uma remessa CNAB.
+- `pagamentos_dia/ocr_boleto.py` — linha digitável de boleto que veio como
+  IMAGEM, e a desconfiança que ela exige. **Texto de OCR nunca passa pelo
+  extrator solto**: um `8` lido como `B` paga a conta de outra pessoa sem erro
+  na tela e sem volta, então a linha só é aceita depois de (1) fechar os
+  dígitos verificadores e (2) codificar o MESMO valor do lançamento. Reprovou,
+  volta a ser "preencher manual" — recusar leitura duvidosa é a única falha
+  aceitável aqui. Módulo 11 da ficha de arrecadação: só resto 0 e 1 zeram o
+  DV; **resto 10 dá DV 1**, e não 0 (conferido contra guias reais de IPTU/ISS
+  de Goiânia, onde dois de oito blocos caem nesse resto — zerar os dois casos,
+  como o DV geral do boleto bancário faz, reprovava guia legítima).
 - `pagamentos_dia/pagamentos_frame.py` — aba Pagamentos do Dia, em 2 passos
   (Buscar / Gerar). Compartilha navegador e thread do Anexar. O passo separado
   existe porque quem confere quer VER a lista de contas antes de gerar, e cada
   rodada custa uma sessão do ERP (que só aceita uma por usuário). Contas
   "APENAS LANÇAMENTO/AJUSTE" aparecem desmarcadas, não escondidas. As chaves
   Pix dos avisos "PAGAR PARA" ficam em `pix_reembolso.json` ao lado do exe —
-  é CPF de gente, não entra no repositório.
+  é CPF de gente, não entra no repositório. A janela de confirmação dos
+  pagamentos aos sócios abre em `gerar()`, na thread da INTERFACE e **antes**
+  de `submeter()`: quem cancela ali não pode ter consumido a sessão do ERP.
+  Anexo que é foto só é baixado quando é aviso "PAGAR PARA" — baixar toda
+  imagem de todo título seria pagar OCR por nada.
 - `relatorios/relatorio_frame.py` — aba Relatório Mensal: mês/ano (ou intervalo
   de datas), lista de contas com marcação, ⏹ Parar e progresso. Um PDF por
   conta, arquivado na árvore do fechamento junto do extrato do banco:
