@@ -322,11 +322,14 @@ class RelatorioFrame(ttk.Frame):
     def carregar(self):
         if self.worker and not self.worker.done():
             return
+        # Recusar ANTES de desabilitar os botões: quem sai por aqui não passa
+        # mais pelo `_drain`, e a aba ficava travada — botões apagados, nada
+        # rodando — até reiniciar o app.
+        if self.anx.avisar_se_ocupado("o Relatório Mensal"):
+            return
         self.q.put(("botoes", "disabled"))
         self.b_stop.configure(state="disabled")
         self.q.put(("status", "Abrindo o Mais Controle e lendo as contas..."))
-        if self.anx.avisar_se_ocupado("o Relatório Mensal"):
-            return
         self.worker = self.anx.submeter("Relatório Mensal — carregar contas",
                                         self._t_carregar)
 
@@ -401,11 +404,11 @@ class RelatorioFrame(ttk.Frame):
                 + "\n\nDesmarque-as ou acrescente-as ao mapa.")
             return
 
+        if self.anx.avisar_se_ocupado("o Relatório Mensal"):
+            return
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("progresso", (0, len(escolhidas))))
-        if self.anx.avisar_se_ocupado("o Relatório Mensal"):
-            return
         self.worker = self.anx.submeter("Relatório Mensal — gerar extratos",
                                         self._t_gerar, escolhidas, ini, fim)
 

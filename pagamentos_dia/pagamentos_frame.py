@@ -272,11 +272,14 @@ class PagamentosDiaFrame(ttk.Frame):
         except ValueError:
             messagebox.showwarning("Período", "Use datas no formato dd/mm/aaaa.")
             return
+        # Recusar ANTES de desabilitar os botões: quem sai por aqui não passa
+        # mais pelo `_drain`, e a aba ficava travada — botões apagados, nada
+        # rodando — até reiniciar o app.
+        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+            return
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Abrindo o Mais Controle..."))
-        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
-            return
         self.worker = self.anx.submeter("Pagamentos do Dia — buscar",
                                         self._t_buscar, ini, fim)
 
@@ -440,6 +443,12 @@ class PagamentosDiaFrame(ttk.Frame):
             messagebox.showwarning("Pasta", "Escolha onde salvar a planilha.")
             return
 
+        # Antes até da janela de confirmação: com o navegador ocupado nada vai
+        # rodar, e não se pede a alguém que confira pagamento por pagamento
+        # para depois dizer que não dava.
+        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+            return
+
         # A pergunta vem ANTES de ocupar o navegador: quem cancela aqui não
         # deve ter consumido a sessão do ERP, que é uma só por usuário.
         nao_confirmados = self._confirmacoes_pendentes(escolhidas)
@@ -449,8 +458,6 @@ class PagamentosDiaFrame(ttk.Frame):
 
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
-        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
-            return
         self.worker = self.anx.submeter("Pagamentos do Dia — gerar planilha",
                                         self._t_gerar, escolhidas, nao_confirmados)
 

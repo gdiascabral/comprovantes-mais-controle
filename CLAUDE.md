@@ -408,6 +408,11 @@ DECISÃO (o resto está nos commits):
 - **Um navegador, seis abas.** `AnexarFrame.submeter()` registra o dono e
   `avisar_se_ocupado()` recusa começar enquanto outra aba trabalha. Antes o
   clique só entrava na fila, mudo, e o trabalho começava minutos depois.
+  A checagem vem **antes** de desabilitar botão, marcar `_parar` ou pôr
+  qualquer coisa na fila: quem sai pelo `return` não passa mais pelo `_drain`,
+  e cinco abas (Pagamentos do Dia ×2, Relatório Mensal ×2, Conciliação)
+  desabilitavam primeiro — recusar o começo deixava a aba morta, com os botões
+  apagados e nada rodando, até reiniciar o app.
 - **Tkinter só na thread da interface.** Toda aba usa `queue` + `after`; quem
   escrever no Text direto da thread do navegador trava a aba. A Conferência e
   os Aportes ainda faziam isso.

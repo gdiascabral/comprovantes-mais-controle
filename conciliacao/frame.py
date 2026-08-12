@@ -269,11 +269,14 @@ class ConciliacaoFrame(ttk.Frame):
         except ValueError:
             messagebox.showwarning("Período", "Use datas no formato dd/mm/aaaa.")
             return
+        # Recusar ANTES de desabilitar os botões: quem sai por aqui não passa
+        # mais pelo `_drain`, e a aba ficava travada — botões apagados, nada
+        # rodando — até reiniciar o app.
+        if self.anx.avisar_se_ocupado("a Conciliação Diária"):
+            return
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("ocupado", True))
-        if self.anx.avisar_se_ocupado("a Conciliação Diária"):
-            return
         self.worker = self.anx.submeter("Conciliação Diária", self._t_gerar,
                                         periodo)
 
