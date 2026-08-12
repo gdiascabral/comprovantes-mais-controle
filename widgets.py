@@ -19,7 +19,6 @@ import re
 from datetime import date
 
 import tkinter as tk
-from tkinter import font as tkfont
 from tkinter import ttk
 
 MESES = ("Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -96,13 +95,6 @@ FONTE_MONO = "AppMono"          # campos de registro
 #: que as seis abas já faziam à mão.
 FAMILIA_MONO = "Consolas"
 
-#: As fontes vivem aqui porque `tkinter.font.Font.__del__` executa um
-#: `font delete` no Tcl: criar a fonte numa variável local a apagava no
-#: primeiro coletor de lixo. O sintoma não é erro nenhum — o Tk passa a ler
-#: "AppTitulo" como NOME DE FAMÍLIA, não acha, e cai na fonte padrão. Ou seja,
-#: todo o escalonamento de tamanho sumia em silêncio.
-_fontes: dict[str, tkfont.Font] = {}
-
 _estado = {"escuro": False}
 
 
@@ -125,25 +117,37 @@ def _garantir_fontes():
 
     Sai do `TkDefaultFont` de propósito: ele já vem na família e no tamanho
     que a pessoa escolheu no Windows, então a escala de exibição é respeitada
-    sem o app precisar consultá-la."""
-    base = tkfont.nametofont("TkDefaultFont")
-    familia = base.cget("family")
-    tam = int(base.cget("size")) or 9
+    sem o app precisar consultá-la.
 
+    Fala com o Tcl direto (`font create` / `font configure`) em vez de usar o
+    `tkinter.font`. Não é preciosismo: o exe do usuário só contém os módulos
+    que o `_garantir_dependencias()` do motor.py importa, e `tkinter.font` não
+    está lá. Importá-lo aqui derrubava o app inteiro no `import widgets`, antes
+    de qualquer janela — e como só o CÓDIGO se atualiza sozinho, a única saída
+    seria um exe novo de 152 MB para todo mundo. Ver v1.0.71.
+
+    De quebra some uma armadilha: `tkinter.font.Font.__del__` executa um
+    `font delete` no Tcl, então guardar a fonte numa variável local a apagava
+    no primeiro coletor de lixo — e o sintoma não era erro nenhum, o Tk passava
+    a ler "AppTitulo" como NOME DE FAMÍLIA, não achava, e caía na fonte padrão.
+    Fonte nomeada criada por `font create` não pertence a objeto Python nenhum:
+    não há `__del__` para apagá-la."""
+    tcl = ttk.Style().tk                 # o interpretador da janela em uso
+    familia = str(tcl.call("font", "configure", "TkDefaultFont", "-family"))
+    try:
+        tam = int(tcl.call("font", "configure", "TkDefaultFont", "-size")) or 9
+    except (ValueError, tk.TclError):
+        tam = 9
+
+    existentes = set(tcl.splitlist(tcl.call("font", "names")))
     for nome, fator, peso, fam in (
             (FONTE_TITULO, 1.55, "bold", familia),
             (FONTE_SECAO, 1.15, "bold", familia),
             (FONTE_APOIO, 0.92, "normal", familia),
             (FONTE_MONO, 1.0, "normal", FAMILIA_MONO)):
-        alvo = dict(family=fam, size=_escalar(tam, fator), weight=peso)
-        f = _fontes.get(nome)
-        try:
-            if f is None:
-                raise tk.TclError
-            f.configure(**alvo)
-        except tk.TclError:              # ainda não existe, ou sobrou de um
-            f = tkfont.Font(name=nome, exists=False, **alvo)   # Tk já fechado
-            _fontes[nome] = f
+        acao = "configure" if nome in existentes else "create"
+        tcl.call("font", acao, nome,
+                 "-family", fam, "-size", _escalar(tam, fator), "-weight", peso)
 
 
 def aplicar_estilos(escuro: bool) -> None:

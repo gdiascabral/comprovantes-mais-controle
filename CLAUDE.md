@@ -35,6 +35,22 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   **Obrigatório**: subir `motor_minimo.txt` para a versão da release que sai
   (v1.0.<run_number+1>), senão o código novo roda em motor velho e quebra.
   O app então oferece o download completo (~150 MB) com progresso.
+- **Import novo de SUBMÓDULO da biblioteca padrão também exige exe novo** —
+  é a armadilha menos óbvia daqui, e ela derrubou a v1.0.71 nas duas máquinas.
+  O PyInstaller não embute a stdlib inteira: ele segue os imports a partir do
+  `motor.py`, e o que ninguém importa não entra no exe. `from tkinter import
+  font` no `widgets.py` passou nos testes (aqui a stdlib está completa), passou
+  no CI, saiu na release — e explodiu em `import widgets`, antes de existir
+  janela para mostrar o erro, com o app simplesmente não abrindo. **Passar nos
+  testes não prova que roda no exe.** O arrasto conta: `urllib.request` traz
+  `parse` e `error` junto, mas `tkinter.ttk`/`filedialog`/`messagebox` NÃO
+  trazem o `font`. Quem guarda isso é `tests/test_imports_do_motor.py`, que
+  mede o que o exe de fato contém em vez do que o motor escreve. Precisando de
+  um submódulo novo: acrescente ao `_garantir_dependencias()` do motor.py e
+  suba o `motor_minimo.txt` no MESMO push. Preferir o caminho sem import novo
+  quando existir — foi o que salvou este caso (o `_garantir_fontes` fala com o
+  Tcl direto, e a correção chegou pelo codigo.zip em segundos, em vez de 152 MB
+  para todo mundo baixar).
 - Build leva ~8–10 min. Commits só de README/LICENSE não disparam build
   (paths-ignore).
 
