@@ -21,6 +21,7 @@ import dados as cadastro                                    # noqa: E402
 from mc_catalogos import Catalogos                          # noqa: E402
 from mc_lancamentos import (criar_pagamento, criar_recebimento,  # noqa: E402
                             ErroLancamento)
+import erp_sessao                                           # noqa: E402
 from erp_sessao import ouvinte                              # noqa: E402
 from regras import Operacao, como_dinheiro, expandir        # noqa: E402
 
@@ -290,7 +291,7 @@ class AportesFrame(ttk.Frame):
         if self.catalogos is not None and not recarregar:
             return
         pagina = self.anx.mc.page
-        alvo = "prod-erp-api.maiscontroleerp.com.br"
+        alvos = erp_sessao.HOSTS_CADASTRO
 
         # A página é COMPARTILHADA com as outras abas: dizer que vamos navegar
         # evita a surpresa de ver o Chrome sair da tela onde estava.
@@ -306,14 +307,19 @@ class AportesFrame(ttk.Frame):
             # ficava 15 s esperando chamadas que nunca sairiam — e a aba
             # morria com "não consegui a autenticação" logo depois de você ter
             # usado o Anexar. Recarregar força o bootstrap e as chamadas saem.
-            if "payable-installments" in (pagina.url or ""):
+            # A tela de UM lançamento também tem "payable-installments" no
+            # endereço, e recarregar ELA não dispara as chamadas de cadastro.
+            # Como a busca das obras abre um lançamento para capturar o outro
+            # back-end, a página costuma ficar parada justamente ali.
+            if erp_sessao.na_lista_de_pagamentos(pagina.url):
                 pagina.reload(wait_until="domcontentloaded")
             else:
                 pagina.goto(URL_PAGAMENTOS, wait_until="domcontentloaded")
-            # Espera os cabeçalhos aparecerem, em vez de dormir tempo fixo:
-            # normalmente chegam em 1 ou 2 segundos.
+            # Espera TODOS os hosts de cadastro, e não só o primeiro:
+            # normalmente chegam em 1 ou 2 segundos. Sair na primeira captura
+            # era o que deixava o legacy-api de fora.
             for _ in range(60):
-                if alvo in self._cabecalhos:
+                if all(a in self._cabecalhos for a in alvos):
                     break
                 pagina.wait_for_timeout(250)
         finally:
@@ -324,10 +330,14 @@ class AportesFrame(ttk.Frame):
             except Exception:
                 pass
 
-        if alvo not in self._cabecalhos:
+        faltando = [a for a in alvos if a not in self._cabecalhos]
+        if faltando:
+            # Parar aqui, e não seguir com metade: sem o legacy-api o cadastro
+            # vem pela metade (401 nas categorias) E o lançamento morre depois
+            # em "não achei o usuário responsável", que não diz o que houve.
             raise RuntimeError(
-                "não consegui a autenticação do serviço de cadastros.\n"
-                "Abra a tela de Pagamentos na janela do Chrome (ou recarregue-a "
+                "não consegui a autenticação de " + ", ".join(faltando) + ".\n"
+                "Abra a LISTA de Pagamentos na janela do Chrome (ou recarregue-a "
                 "com F5) e tente de novo.")
 
         self.catalogos = Catalogos(pagina, self._cabecalhos, self._log)

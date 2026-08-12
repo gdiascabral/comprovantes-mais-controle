@@ -22,6 +22,29 @@ CABECALHOS = {"authorization", "company-id", "user-id", "organization-unit-id"}
 #: prod-erp-api devolver 401 numa rodada anterior.
 HOSTS_IGNORAR = ("api-data-event", "faro.", "satismeter", "datadog", "google")
 
+#: Os DOIS back-ends de cadastro, e a aba precisa dos dois. O prod-erp-api
+#: serve contas e participantes; o legacy-api serve categorias, formas e
+#: condições de pagamento — e é o único que manda o `user-id`, que é o
+#: responsável pelo lançamento. Esperar só pelo primeiro deixava o segundo
+#: para trás: dava 401 na primeira chamada ao legacy e, logo depois, "não
+#: achei o usuário responsável" — dois sintomas de uma causa só.
+HOSTS_CADASTRO = ("prod-erp-api.maiscontroleerp.com.br",
+                  "legacy-api.maiscontroleerp.com.br")
+
+
+def na_lista_de_pagamentos(url: str) -> bool:
+    """True só na LISTA de pagamentos, e não na tela de UM lançamento.
+
+    As duas trazem "payable-installments" no endereço. A diferença importa
+    porque recarregar a tela de um lançamento NÃO dispara as chamadas de
+    cadastro — e é para elas que o ouvinte está de plantão. Como a busca das
+    obras passa a abrir um lançamento para capturar o outro back-end, a página
+    compartilhada costuma ficar JUSTAMENTE ali; sem esta distinção, a rodada
+    seguinte recarregava o detalhe e o legacy-api nunca aparecia.
+    """
+    caminho = (url or "").split("?")[0].split("#")[-1].rstrip("/")
+    return caminho.endswith("payable-installments")
+
 
 def host_util(host: str) -> bool:
     """Hosts do ERP dos quais vale copiar a autenticação.
