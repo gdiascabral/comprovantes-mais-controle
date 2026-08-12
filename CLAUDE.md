@@ -109,6 +109,16 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   nenhuma); e o atributo é 20 do Windows 10 20H1 em diante, 19 antes — a
   função tenta os dois e engole qualquer falha, porque moldura na cor do
   sistema é o comportamento antigo, não um defeito novo.
+  **O calendário do `CampoData` NÃO é modal.** Ele já teve `grab_set`, herdado
+  do "modal como o resto dos diálogos", e grab entrega TODO clique e TODA
+  tecla do app àquela janela: o resto ficava surdo e nem o X da principal
+  fechava o programa — quem abrisse o calendário sem querer ficava preso.
+  Escolher data é oferta, não pergunta. Sem grab (e sem fechar por
+  `<FocusOut>`, que matava o popup ao abrir), sobra uma janela comum, com três
+  saídas: a data, `Esc` e o X. Como nada mais impede abrir dois, o módulo
+  guarda em `_calendario_aberto` qual campo está com o seu — abrir um fecha o
+  outro. Regra geral: modal é para o que EXIGE resposta (a senha de ativação,
+  o confirmar dos sócios); o resto não prende ninguém.
   **Quem numera é a AÇÃO, não o cartão.** Numerar os dois punha duas contagens
   na mesma tela: em Pagamentos do Dia, "2. Contas" era um campo para preencher
   e "2. Gerar a planilha" era uma ação, e nenhuma das duas ia até o fim

@@ -444,6 +444,14 @@ def estilo_canvas(canvas: tk.Canvas, escuro: bool | None = None) -> None:
     canvas.configure(background=cor or cores()["log_fundo"])
 
 
+#: Qual `CampoData` está com o calendário aberto — no máximo um em todo o app.
+#: Enquanto o popup era modal, o próprio Tk garantia isso: com o app inteiro
+#: surdo, não havia como clicar no 📅 de outro campo. Sem o modal, dois
+#: calendários abertos ficariam iguais na tela e ninguém saberia qual preenche
+#: qual — e o segundo taparia o primeiro.
+_calendario_aberto = None
+
+
 class CampoData(ttk.Frame):
     """Campo de data dd/mm/aaaa, com calendário e máscara.
 
@@ -537,18 +545,23 @@ class CampoData(ttk.Frame):
         return (mes if 1 <= mes <= 12 else hoje.month), int(m.group(3))
 
     def _fechar_popup(self):
+        global _calendario_aberto
         if self._popup is not None:
             try:
-                self._popup.grab_release()   # antes do destroy: grab preso
-                self._popup.destroy()        # deixaria a janela toda surda
-            except tk.TclError:
-                pass
+                self._popup.destroy()
+            except tk.TclError:              # a janela principal já levou o
+                pass                         # popup junto ao ser destruída
             self._popup = None
+        if _calendario_aberto is self:
+            _calendario_aberto = None
 
     def abrir_calendario(self):
+        global _calendario_aberto
         if self._popup is not None:       # já aberto: clicar de novo fecha
             self._fechar_popup()
             return
+        if _calendario_aberto is not None:   # um calendário de cada vez
+            _calendario_aberto._fechar_popup()
 
         top = tk.Toplevel(self)
         self._popup = top
@@ -556,10 +569,13 @@ class CampoData(ttk.Frame):
         top.resizable(False, False)
         top.title("Escolher data")
         barra_de_titulo(top)
-        # Janela COM barra de título e modal, como era antes. A versão sem
-        # borda (`overrideredirect`) parecia mais bonita e não funcionava: ela
-        # nunca ganhava o foco de verdade, então o `<FocusOut>` disparava na
-        # hora e o calendário fechava sozinho antes de aparecer.
+        # Janela COM barra de título — a versão sem borda (`overrideredirect`)
+        # parecia mais bonita e não funcionava: nunca ganhava o foco de
+        # verdade, então o `<FocusOut>` disparava na hora e o calendário
+        # fechava sozinho antes de aparecer.
+        #
+        # E NÃO modal. Escolher uma data é oferta, não pergunta: quem abriu o
+        # calendário pode muito bem desistir e ir fazer outra coisa.
         top.geometry(f"+{self.ent.winfo_rootx()}"
                      f"+{self.ent.winfo_rooty() + self.ent.winfo_height() + 2}")
 
@@ -614,15 +630,23 @@ class CampoData(ttk.Frame):
         ttk.Button(rodape, text="Fechar", command=self._fechar_popup).pack(side="right")
 
         desenhar()
-        # Escape e o X fecham. NÃO existe fechamento por `<FocusOut>`: era ele
-        # que matava o calendário no instante em que abria.
+        # Três saídas: escolher a data, Escape e o X. Nenhuma delas precisa de
+        # `grab_set` — e ele estava aqui, herdado do "modal como o resto dos
+        # diálogos". Um grab entrega TODO clique e TODA tecla do app a esta
+        # janela: o resto ficava surdo, e nem o X da janela principal fechava o
+        # programa. Quem abrisse o calendário sem querer ficava preso nele.
+        #
+        # `<FocusOut>` também não fecha: era ele que matava o calendário no
+        # instante em que abria. Sem grab e sem FocusOut, o popup é uma janela
+        # comum — e, sendo `transient` da principal, fica sempre acima dela e é
+        # destruído junto quando o app fecha.
         top.bind("<Escape>", lambda _e: self._fechar_popup())
         top.protocol("WM_DELETE_WINDOW", self._fechar_popup)
         try:
-            top.grab_set()               # modal, como o resto dos diálogos
             top.focus_set()
         except tk.TclError:
             pass
+        _calendario_aberto = self
 
     # ------------------------------------------------------------- tema
     def aplicar_cores(self, escuro: bool):

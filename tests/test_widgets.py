@@ -26,7 +26,8 @@ def campo(raiz):
     c.pack()
     raiz.update()
     yield c, var, raiz
-    # O calendário é modal (`grab_set`): um grab vazando contamina o próximo.
+    # Popup vazando de um teste contamina o próximo: o registro de qual
+    # calendário está aberto é do MÓDULO, não da instância.
     try:
         c._fechar_popup()
         c.destroy()
@@ -116,6 +117,56 @@ def test_o_calendario_nao_fecha_sozinho_ao_perder_foco(campo):
     c._popup.event_generate("<FocusOut>")
     root.update()
     assert c._popup is not None, "o calendário fechou sozinho ao perder o foco"
+
+
+def test_o_calendario_nao_prende_o_app(campo):
+    """O defeito de 12/08/2026: com `grab_set`, o Tk entregava todo clique e
+    toda tecla ao calendário. Só se saía dele escolhendo uma data ou fechando
+    a janelinha — nem o X do app respondia.
+
+    `grab_current()` é a prova mecânica: com alguém segurando o grab, ele
+    devolve essa janela; sem ninguém, devolve None."""
+    c, var, root = campo
+    c.bt.invoke()
+    root.update()
+    assert c._popup is not None, "o calendário nem abriu"
+    assert root.grab_current() is None, (
+        "o calendário está modal: o resto do app fica surdo e nem dá para "
+        "fechar o programa")
+
+
+def test_so_um_calendario_por_vez(campo, raiz):
+    """Sem o modal, nada impede clicar no 📅 de outro campo — e dois
+    calendários iguais na tela não dizem qual preenche qual."""
+    c, var, root = campo
+    outro_var = tk.StringVar(master=raiz, value="02/08/2026")
+    outro = widgets.CampoData(raiz, outro_var)
+    outro.pack()
+    root.update()
+    try:
+        c.bt.invoke()
+        root.update()
+        outro.bt.invoke()
+        root.update()
+        assert c._popup is None, "o calendário do primeiro campo ficou aberto"
+        assert outro._popup is not None
+        assert len(_popups(root)) == 1
+    finally:
+        outro._fechar_popup()
+        outro.destroy()
+        root.update()
+
+
+def test_fechar_o_calendario_libera_o_registro_do_modulo(campo):
+    """Registro de módulo que não é limpo trava o próximo: o campo seguinte
+    tentaria fechar um popup que já não existe."""
+    c, var, root = campo
+    c.bt.invoke()
+    root.update()
+    assert widgets._calendario_aberto is c
+    c._fechar_popup()
+    root.update()
+    assert widgets._calendario_aberto is None
 
 
 def test_clique_simples_no_campo_nao_abre_calendario(campo):
