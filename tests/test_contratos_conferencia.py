@@ -128,7 +128,7 @@ def test_cliente_com_acento_e_espaco_duplo_ainda_acha():
 def test_pessoa_fisica_nao_tem_empresa():
     """Não é lacuna de cadastro: obra de pessoa física não tem pasta de
     fechamento, e o contrato dela fica em revisão por definição."""
-    assert empresa_de("JULIO CESAR GOMES DE MORAIS FILHO", EMPRESAS) is None
+    assert empresa_de("FULANO DE TAL DA SILVA", EMPRESAS) is None
     assert empresa_de("", EMPRESAS) is None
 
 
