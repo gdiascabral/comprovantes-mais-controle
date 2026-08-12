@@ -42,9 +42,18 @@ pix_reembolso.json
 regras_fornecedor.json
 confirmar_antes.json
 # Mapa conta -> pasta dos extratos do Sicoob: número de conta e razão social
-# das empresas. Mesma razão do pix_reembolso.json.
-contas_sicoob.json
+# das empresas (e, para a aba Acessórias, o vip_url do escritório com o
+# vip_id de cada empresa). Mesma razão do pix_reembolso.json.
+#
+# O `*` não é zelo: o próprio app grava `contas_sicoob.json.tmp` ao registrar
+# um cliente do ERP (a escrita atômica do `adicionar_cliente_erp`), e quem faz
+# backup à mão cria `contas_sicoob.backup-....json`. Os dois carregam o MESMO
+# conteúdo do arquivo protegido, e o nome exato deixava os dois de fora da
+# regra — proteger o original e vazar a cópia é o pior dos dois mundos.
+contas_sicoob*
 extratos_sicoob/.chrome_profile_sicoob/
+# Perfil do Chrome do portal Acessórias: sessão logada do escritório.
+.chrome_profile_acessorias/
 # Mapa conta do Mais Controle -> pasta de destino. Mesma razão: nome de
 # empresa e número de conta.
 contas_mc.json
