@@ -52,8 +52,17 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   quando existir — foi o que salvou este caso (o `_garantir_fontes` fala com o
   Tcl direto, e a correção chegou pelo codigo.zip em segundos, em vez de 152 MB
   para todo mundo baixar).
-- Build leva ~8–10 min. Commits só de README/LICENSE não disparam build
-  (paths-ignore).
+- **Aba nova custa uma release com exe novo, mesmo sem precisar.** Pasta nova
+  obriga a mexer no `build.yml` (item 2 acima), e o job `motor` recusa todo
+  push que toque nesse arquivo sem subir o `motor_minimo.txt` junto. A trava é
+  MECÂNICA — olha o nome do arquivo alterado, não o que mudou dentro dele —,
+  então adicionar uma aba dispara o download de ~150 MB em quem estiver com exe
+  anterior, ainda que o código novo rode perfeitamente no motor velho. Foi o
+  caso da aba Acessórias (v1.0.75): nenhum import novo, e mesmo assim a baixa
+  completa. Consequência prática: **vale agrupar abas novas num push só**, e
+  não pagar o pedágio uma vez por aba.
+- Build leva ~8–10 min. Commits só de README/LICENSE/CLAUDE.md não disparam
+  build (paths-ignore).
 
 ## Arquitetura
 
