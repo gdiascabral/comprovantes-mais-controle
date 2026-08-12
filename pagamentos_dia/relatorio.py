@@ -198,6 +198,38 @@ def valor_do_item(item: dict) -> float:
     return 0.0
 
 
+def ja_pago_do_item(item: dict) -> float:
+    """Quanto deste título já foi pago ANTES — 0 quando ele não é parcial.
+
+    O ERP aceita quitar um título em vezes: `paids` é lista, e nos 1.118
+    lançamentos de 25/07 a 12/08/2026 dezessete tinham dois pagamentos (a
+    um deles, por exemplo: R$ 2.470 em 27/07 e R$ 4.000 em 03/08 do
+    mesmo título de R$ 6.470). Todos com o MESMO favorecido — o ERP não sabe
+    pagar um título a duas pessoas, e a entrada de `paids` nem campo de
+    favorecido tem.
+
+    Isto existe para uma coisa só: o boleto anexado traz o valor CHEIO, e o
+    lançamento traz o que FALTA. Sem somar os dois, a conferência de valor
+    acusa divergência numa segunda parcela perfeitamente normal.
+
+    Título quitado devolve 0 de propósito: ali o `valor_do_item` já devolve o
+    total pago, e somar de novo daria o dobro.
+    """
+    try:
+        if not float(item.get("remainingValue") or 0):
+            return 0.0
+    except (TypeError, ValueError):
+        return 0.0
+    for campo in ("sumOfPaidValues", "sumOfPaids"):
+        try:
+            v = float(item.get(campo) or 0)
+        except (TypeError, ValueError):
+            continue
+        if v:
+            return v
+    return 0.0
+
+
 _E_BOLETO = re.compile(r"boleto|blt|cobran|febraban|fatura", re.I)
 _NAO_E_BOLETO = re.compile(
     r"nota fiscal|nfe|danfe|recibo|comprovante|contrato|medi[çc][ãa]o|qr\s*code|pagar\s*para",
@@ -842,8 +874,18 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # a do OCR já nasceu conferida contra o valor (`linha_confiavel`).
         valor_documento = (ocr_boleto.valor_da_linha(dados)
                            if dados and ocr_boleto.valida(dados) else None)
-        valor_diverge = regras.documento_contradiz_valor(valor, valor_documento)
-        if valor_diverge:
+        # Título quitado em vezes: o boleto é do valor CHEIO e o lançamento
+        # traz só o que falta. Sem somar o que já foi pago, toda segunda
+        # parcela com boleto anexado viraria alarme de divergência.
+        ja_pago = ja_pago_do_item(item)
+        parcial = regras.pagamento_parcial(valor, ja_pago, valor_documento)
+        valor_diverge = not parcial and regras.documento_contradiz_valor(
+            valor, valor_documento)
+        if parcial:
+            avisos.append(f"Pagamento parcial: o boleto é de {brl(valor_documento)}, "
+                          f"já foram pagos {brl(ja_pago)} e faltam {brl(valor)} — "
+                          "boleto não se paga pela metade.")
+        elif valor_diverge:
             avisos.append(f"Boleto diz {brl(valor_documento)} e o lançamento "
                           f"diz {brl(valor)} — conferir ANTES de pagar.")
 
@@ -853,6 +895,15 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if tipo == "Pix" and regras.chave_pix_ambigua(pago_para or dados, dados):
             avisos.append("Chave Pix sem tipo declarado — confirmar se é CPF, "
                           "celular ou aleatória.")
+
+        # O favorecido do lançamento é o FORNECEDOR; a observação às vezes
+        # manda pagar parte a OUTRA pessoa, com a chave dela. Enquanto quem
+        # paga é gente, basta a observação aparecer na coluna Obs. Este aviso
+        # existe para a remessa, onde ninguém lê: linha marcada aqui não pode
+        # ser paga automaticamente.
+        olhar = regras.precisa_de_olhar_humano(coment, favorecido, regras_forn)
+        if olhar:
+            avisos.append(f"PAGAR À MÃO — {olhar}.")
 
         if coment:
             avisos.append(f"Observação do lançamento: {coment[:220]}")

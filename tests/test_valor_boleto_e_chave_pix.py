@@ -23,6 +23,7 @@ import pytest
 import ocr_boleto
 import regras_pagamento as regras
 import relatorio
+import util
 
 from test_pagamentos_melhorias import LINHA_BANCARIA, VALOR_BANCARIA, anexo, lancamento, linhas
 
@@ -85,11 +86,112 @@ def test_boleto_que_confere_nao_vira_alarme():
     assert "conferir ANTES de pagar" not in linha["obs"]
 
 
+# ----------------------------------------------------- pagamento parcial
+# O ERP quita um título em vezes: nos 1.118 lançamentos de 25/07 a 12/08/2026,
+# dezessete tinham dois pagamentos. Aí o boleto é do valor CHEIO e o lançamento
+# traz o que FALTA — e a conferência de valor acusava divergência num caso
+# perfeitamente normal.
+
+def test_segunda_parcela_nao_e_divergencia():
+    assert regras.pagamento_parcial(4000.0, 2490.0, 6490.0)
+
+
+def test_parcial_precisa_que_a_soma_feche():
+    """Não basta ter pagamento anterior: a conta tem de bater. Senão qualquer
+    divergência viraria "parcial" e o alarme morria."""
+    assert not regras.pagamento_parcial(4000.0, 2490.0, 9999.0)
+
+
+def test_sem_pagamento_anterior_nao_ha_parcial():
+    assert not regras.pagamento_parcial(4000.0, 0.0, 6490.0)
+
+
+def test_ja_pago_de_titulo_quitado_e_zero():
+    """Em título quitado o `valor_do_item` já devolve o total pago; somar de
+    novo daria o dobro e inventaria uma parcial que não existe."""
+    assert relatorio.ja_pago_do_item(
+        {"remainingValue": 0, "sumOfPaidValues": 6490.0}) == 0.0
+    assert relatorio.ja_pago_do_item(
+        {"remainingValue": 4000.0, "sumOfPaidValues": 2490.0}) == 2490.0
+
+
+def test_a_planilha_explica_a_parcial_em_vez_de_alarmar():
+    item = lancamento(paidTo="Fornecedor", remainingValue=150.00,
+                      sumOfPaidValues=1000.00, documentNumber="113")
+    anexos = {"x1": [anexo("boleto", "Boleto", url="ub")]}
+    res = relatorio.montar_registros([item], anexos, {}, {"ub": LINHA_BANCARIA})
+    linha = linhas(res)[0]
+    assert "diverge" not in linha["status"], linha["status"]
+    assert "Pagamento parcial" in linha["obs"]
+    assert "1.150,00" in linha["obs"]        # o boleto cheio
+    assert "150,00" in linha["obs"]          # o que falta
+
+
 def test_linha_digitavel_invalida_nao_vira_valor():
     """Número que não fecha o DV não tem opinião sobre valor nenhum."""
     assert ocr_boleto.valor_da_linha("12345") is None
     assert regras.motivo_omissao(1.00, "Fulano", "12345", True, {},
                                  valor_documento=None) == regras.MOTIVO_SIMBOLICO
+
+
+# ==========================================================================
+# 1b. Observação que redireciona o pagamento
+# ==========================================================================
+# Em 28/07/2026 um título tinha o FORNECEDOR como favorecido
+# e a observação mandando pagar parte a uma pessoa física, com a chave dela.
+# Enquanto quem paga é gente, alguém lê a coluna Obs. Numa remessa não há quem
+# leia. Os textos abaixo são os reais, com nomes e chaves trocados.
+
+@pytest.mark.parametrize("obs", [
+    "PAGAR 8.000,00 PARA FULANO DE TAL – PIX 123.456.789-09",
+    "PAGAR 8.000,00 PARA FULANO DE TAL\n\nAPENAS A DIFERENÇA AO BELTRANO",
+    "transferir R$ 2.500,00 para o sócio",
+    "chave pix do recebedor: fulano@exemplo.com",
+])
+def test_observacao_que_manda_pagar_outra_pessoa_e_pega(obs):
+    assert regras.observacao_redireciona_pagamento(obs)
+
+
+@pytest.mark.parametrize("obs", [
+    # As cinco observações reais do arquivo de 08 a 10/08/2026 — 9% das linhas.
+    "Pagamento deve ser efetuado, a nota será encaminhada após comprovação de pgto",
+    "solicitada carta de correção - nota sem endereço",
+    "SOLICITAR FATURA PARA FULANA",
+    "Valor lançado para reembolso foi o valor do pedido",
+    "Carta de correção solicitada - endereço errado",
+    "",
+])
+def test_observacao_comum_nao_trava_nada(obs):
+    """"SOLICITAR FATURA PARA FULANA" tem "PARA <nome>" e não é pagamento
+    nenhum: é nota. Travar nela transformaria a regra em ruído diário."""
+    assert not regras.observacao_redireciona_pagamento(obs)
+
+
+def _cadastro(nome, **flags):
+    """A chave do cadastro passa por `util.norm_espaco` no carregador — é ela
+    que faz "Mármores Aurora" achar "MARMORES AURORA E GRANITOS LTDA", com o
+    nome digitado de qualquer jeito no ERP. Montar o dicionário à mão sem
+    normalizar testaria um caminho que não existe.
+
+    O nome é INVENTADO, como todo dado de teste aqui: o repositório é público.
+    O que ele precisa ter é a forma do problema — acento, caixa diferente e
+    razão social mais longa que o apelido do cadastro."""
+    return {util.norm_espaco(nome): flags}
+
+
+def test_fornecedor_marcado_confirma_mesmo_sem_observacao():
+    """O dia perigoso é aquele em que ninguém escreveu a observação."""
+    forn = _cadastro("marmores aurora", confirmar_sempre=True)
+    assert regras.precisa_de_olhar_humano("", "Mármores Aurora e Granitos", forn)
+    assert not regras.precisa_de_olhar_humano("", "Outro Fornecedor", forn)
+
+
+def test_o_motivo_diz_qual_das_duas_portas_pegou():
+    forn = _cadastro("marmores aurora", confirmar_sempre=True)
+    assert "observação" in regras.precisa_de_olhar_humano(
+        "PAGAR 8.000,00 PARA FULANO", "Qualquer Um", {})
+    assert "confirmar sempre" in regras.precisa_de_olhar_humano(
+        "", "Mármores Aurora", forn)
 
 
 # ==========================================================================

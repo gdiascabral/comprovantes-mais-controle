@@ -67,6 +67,20 @@ def documento_contradiz_valor(valor: float, valor_documento: float | None,
     return abs(float(valor_documento) - float(valor)) > tolerancia
 
 
+def pagamento_parcial(valor: float, ja_pago: float, valor_documento: float | None,
+                      tolerancia: float = 0.01) -> bool:
+    """O boleto é do valor CHEIO e o lançamento traz só o que falta.
+
+    Não é divergência: é a segunda parcela de um título que o ERP aceita
+    quitar em vezes. Sem distinguir os dois casos, toda segunda parcela com
+    boleto anexado viraria "ATENÇÃO — valor do boleto diverge", e o alarme
+    que existe para pegar valor errado morreria afogado nos legítimos.
+    """
+    if not ja_pago or not valor_documento or not valor:
+        return False
+    return abs(float(valor_documento) - (float(valor) + float(ja_pago))) <= tolerancia
+
+
 # --------------------------------------------------------------------------
 # Cadastro (fora do repositório)
 # --------------------------------------------------------------------------
@@ -258,6 +272,66 @@ def chave_pix_ambigua(texto: str, chave: str) -> bool:
     problema, com outro recado.
     """
     return bool(str(chave or "").strip()) and not tipo_de_chave_pix(texto or chave)
+
+
+# --------------------------------------------------------------------------
+# Observação que redireciona o pagamento
+# --------------------------------------------------------------------------
+#: Verbo de PAGAR, não de providenciar. "SOLICITAR FATURA PARA FULANA" fala
+#: de nota, não de dinheiro — e é observação de verdade, das que aparecem em
+#: 9% das linhas. Confundir as duas transformaria a trava em ruído diário.
+_VERBO_DE_PAGAR = re.compile(
+    r"\b(pagar|pague|paga|transferir|transfira|transfere|depositar|deposite|"
+    r"enviar|envie|mandar)\b", re.I)
+
+#: Valor em reais escrito por gente: "8.000,00", "R$ 2.500,00".
+_VALOR_EM_REAIS = re.compile(r"(?:R\$\s*)?\b\d{1,3}(?:\.\d{3})*,\d{2}\b")
+
+
+def observacao_redireciona_pagamento(comentario: str) -> bool:
+    """A observação manda pagar OUTRA pessoa (ou parte para outra).
+
+    O caso real, em 28/07/2026: um título de R$ 14.492 de um fornecedor cuja
+    observação dizia "PAGAR 8.000,00 PARA <fulano> – PIX <chave> / APENAS A
+    DIFERENÇA AO <beltrano>". O favorecido do lançamento é o FORNECEDOR; o
+    dinheiro foi para duas pessoas físicas, e isso não existe em campo nenhum
+    do ERP — nem em `paidTo`, nem em `paids`, que sequer tem favorecido.
+
+    Enquanto quem paga é gente, a observação aparece na coluna Obs e alguém
+    lê. Numa remessa não há quem leia: a mesma linha mandaria o dinheiro para
+    a chave do cadastro do fornecedor — pessoa errada, valor certo, sem erro
+    na tela e sem volta.
+
+    Dois sinais, e é preciso um deles:
+      - uma CHAVE PIX escrita na observação (a chave de quem vai receber);
+      - um VERBO de pagar junto de um VALOR ("PAGAR 8.000,00").
+
+    Nenhum dos dois aparece nas observações comuns ("carta de correção
+    solicitada", "solicitar fatura para <fulana>", "a nota será encaminhada").
+    """
+    t = str(comentario or "")
+    if not t.strip():
+        return False
+    if tipo_de_chave_pix(t):
+        return True
+    return bool(_VERBO_DE_PAGAR.search(t) and _VALOR_EM_REAIS.search(t))
+
+
+def precisa_de_olhar_humano(comentario: str, favorecido: str,
+                            regras: dict) -> str:
+    """Por que esta linha não pode ser paga sozinha — "" quando pode.
+
+    Duas portas, porque falham de jeitos diferentes: o TEXTO pega o caso em
+    qualquer fornecedor, inclusive um novo; o CADASTRO
+    (`"confirmar_sempre": true` em `regras_fornecedor.json`) pega o
+    fornecedor conhecido mesmo no dia em que ninguém escreveu a observação —
+    que é justamente o dia em que o texto não salva ninguém.
+    """
+    if observacao_redireciona_pagamento(comentario):
+        return "a observação manda pagar outra pessoa"
+    if regra_do_fornecedor(favorecido, regras).get("confirmar_sempre"):
+        return "fornecedor marcado para confirmar sempre"
+    return ""
 
 
 # --------------------------------------------------------------------------
