@@ -105,26 +105,24 @@ class PagamentosDiaFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = 14
+        PADX = widgets.PADX
 
-        cab = ttk.Frame(self)
-        cab.pack(fill="x", padx=PADX, pady=(12, 4))
-        ttk.Label(cab, text="Pagamentos do Dia",
-                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(cab, foreground="#6b6b6b",
-                  text="Planilha de conferência dos pagamentos do período: como pagar "
-                       "cada um e se o documento anexado bate com o lançamento."
-                  ).pack(anchor="w")
+        self.cab = widgets.Cabecalho(
+            self, "Pagamentos do Dia",
+            "Planilha de conferência dos pagamentos do período: como pagar "
+            "cada um e se o documento anexado bate com o lançamento.")
+        self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
 
-        # ---- card 1: período
-        f1 = ttk.LabelFrame(self, text=" 1. Período ", padding=(12, 8, 12, 10))
+        # Cartões SEM número: quem numera é a trilha de ações, montada no fim
+        # do `_build` (os botões dela ainda não existem aqui).
+        f1 = widgets.Cartao(self, "Período")
         f1.pack(fill="x", padx=PADX, pady=6)
         linha = ttk.Frame(f1); linha.pack(fill="x")
         ttk.Label(linha, text="De:").pack(side="left")
         CampoData(linha, self.v_ini).pack(side="left", padx=(6, 12))
         ttk.Label(linha, text="até:").pack(side="left")
         CampoData(linha, self.v_fim).pack(side="left", padx=(6, 8))
-        ttk.Label(linha, text="(dd/mm/aaaa)", foreground="#6b6b6b").pack(side="left")
+        ttk.Label(linha, text="(dd/mm/aaaa)", style="Apoio.TLabel").pack(side="left")
         ttk.Button(linha, text="Hoje", command=self._hoje).pack(side="left", padx=(12, 0))
 
         opc = ttk.Frame(f1); opc.pack(fill="x", pady=(8, 0))
@@ -137,11 +135,15 @@ class PagamentosDiaFrame(ttk.Frame):
                         ).pack(anchor="w")
 
         # ---- card 2: contas
-        f2 = ttk.LabelFrame(self, text=" 2. Contas (marque as que entram no relatório) ",
-                            padding=(12, 8, 12, 10))
-        f2.pack(fill="both", expand=True, padx=PADX, pady=6)
-        self.canvas = tk.Canvas(f2, height=170, highlightthickness=0, borderwidth=0)
-        barra = ttk.Scrollbar(f2, orient="vertical", command=self.canvas.yview)
+        # A lista também é elástica: antes de buscar ela tem uma frase, e um
+        # quadro vazio de 170 px em volta de uma frase é o mesmo desperdício
+        # que o Registro tinha. Cresce em `_montar_contas`.
+        self.f_contas = f2 = widgets.Cartao(
+            self, "Contas (marque as que entram no relatório)")
+        f2.pack(fill="x", padx=PADX, pady=6)
+        self.canvas = tk.Canvas(f2, height=24, highlightthickness=0, borderwidth=0)
+        self.barra = barra = ttk.Scrollbar(f2, orient="vertical",
+                                           command=self.canvas.yview)
         self.contas_box = ttk.Frame(self.canvas)
         self.contas_box.bind("<Configure>", lambda _e: self.canvas.configure(
             scrollregion=self.canvas.bbox("all")))
@@ -151,13 +153,14 @@ class PagamentosDiaFrame(ttk.Frame):
             self.janela_lista, width=e.width))
         self.canvas.configure(yscrollcommand=barra.set)
         self.canvas.pack(side="left", fill="both", expand=True)
-        barra.pack(side="right", fill="y")
+        # A barra de rolagem só entra junto com a lista: numa faixa de 24 px
+        # ela vira duas setinhas espremidas ao lado de uma frase.
         ttk.Label(self.contas_box,
                   text='Clique em "1. Buscar os lançamentos" para listar as contas.'
                   ).pack(anchor="w")
 
         # ---- card 3: pasta
-        f3 = ttk.LabelFrame(self, text=" 3. Onde salvar ", padding=(12, 8, 12, 10))
+        f3 = widgets.Cartao(self, "Onde salvar")
         f3.pack(fill="x", padx=PADX, pady=6)
         ttk.Entry(f3, textvariable=self.v_pasta).pack(side="left", fill="x", expand=True)
         ttk.Button(f3, text="Selecionar…", command=self._sel_pasta
@@ -190,11 +193,17 @@ class PagamentosDiaFrame(ttk.Frame):
             except tk.TclError:
                 pass
 
-        reg = ttk.LabelFrame(self, text=" Registro ", padding=(10, 6, 10, 10))
-        reg.pack(fill="both", expand=True, padx=PADX, pady=6)
-        self.log = tk.Text(reg, wrap="word", relief="flat", borderwidth=0,
-                           highlightthickness=0, height=8, font=("Consolas", 10))
+        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0)
         self.log.pack(fill="both", expand=True)
+        widgets.estilo_log(self.log)
+        widgets.registro_elastico(self.reg, self.log)
+
+        widgets.Passos(self.cab, (("Buscar os lançamentos", self.b1),
+                                  ("Gerar a planilha", self.b2))
+                       ).pack(anchor="w", pady=(8, 0))
 
     def _hoje(self):
         hoje = datetime.date.today()
@@ -219,12 +228,9 @@ class PagamentosDiaFrame(ttk.Frame):
         self.b_stop.configure(state="disabled")
 
     def aplicar_cores(self, escuro: bool):
-        fundo = "#1c1c1c" if escuro else "#ffffff"
-        frente = "#e8e8e8" if escuro else "#000000"
         try:
-            self.log.configure(background=fundo, foreground=frente,
-                               insertbackground=frente)
-            self.canvas.configure(background=fundo)
+            widgets.estilo_log(self.log, escuro)
+            widgets.estilo_canvas(self.canvas)
         except tk.TclError:
             pass
 
@@ -281,7 +287,7 @@ class PagamentosDiaFrame(ttk.Frame):
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Abrindo o Mais Controle..."))
         self.worker = self.anx.submeter("Pagamentos do Dia — buscar",
-                                        self._t_buscar, ini, fim)
+                                        self._t_buscar, ini, fim, dona=self)
 
     def _t_buscar(self, ini, fim):
         comeco = time.time()
@@ -338,6 +344,9 @@ class PagamentosDiaFrame(ttk.Frame):
             self.q.put(("botoes", "normal"))
 
     def _montar_contas(self, contas):
+        self.canvas.configure(height=170)
+        self.barra.pack(side="right", fill="y")
+        widgets.cartao_elastico(self.f_contas, cheio=True)
         for w in self.contas_box.winfo_children():
             w.destroy()
         self.vars_contas = {}
@@ -382,12 +391,13 @@ class PagamentosDiaFrame(ttk.Frame):
         top.title("Confirmar antes de gerar")
         top.transient(self.winfo_toplevel())
         top.resizable(False, False)
+        widgets.barra_de_titulo(top)
 
         moldura = ttk.Frame(top, padding=14)
         moldura.pack(fill="both", expand=True)
-        ttk.Label(moldura, font=("Segoe UI", 11, "bold"),
+        ttk.Label(moldura, style="Secao.TLabel",
                   text="Estes pagamentos pedem a sua confirmação").pack(anchor="w")
-        ttk.Label(moldura, foreground="#6b6b6b", wraplength=560, justify="left",
+        ttk.Label(moldura, style="Apoio.TLabel", wraplength=560, justify="left",
                   text="Desmarque o que NÃO deve entrar na planilha de hoje. O que "
                        "for desmarcado vai para a aba NÃO ENTRARAM, com o motivo."
                   ).pack(anchor="w", pady=(0, 10))
@@ -459,7 +469,8 @@ class PagamentosDiaFrame(ttk.Frame):
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.worker = self.anx.submeter("Pagamentos do Dia — gerar planilha",
-                                        self._t_gerar, escolhidas, nao_confirmados)
+                                        self._t_gerar, escolhidas,
+                                        nao_confirmados, dona=self)
 
     def _confirmacoes_pendentes(self, escolhidas) -> set | None:
         """set() quando não há nada a perguntar; None quando cancelaram."""

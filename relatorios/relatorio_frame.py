@@ -82,19 +82,16 @@ class RelatorioFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = 14
+        PADX = widgets.PADX
 
-        cab = ttk.Frame(self)
-        cab.pack(fill="x", padx=PADX, pady=(12, 4))
-        ttk.Label(cab, text="Relatório Mensal",
-                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(cab, foreground="#6b6b6b",
-                  text="Baixa o extrato de cada conta bancária do período, "
-                       "com todos os lançamentos, num PDF por conta."
-                  ).pack(anchor="w")
+        self.cab = widgets.Cabecalho(
+            self, "Relatório Mensal",
+            "Baixa o extrato de cada conta bancária do período, com todos os "
+            "lançamentos, num PDF por conta.")
+        self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
 
-        # ---- card 1: período
-        f1 = ttk.LabelFrame(self, text=" 1. Período ", padding=(12, 8, 12, 10))
+        # Cartões sem número: quem numera é a trilha de ações, no fim do build.
+        f1 = widgets.Cartao(self, "Período")
         f1.pack(fill="x", padx=PADX, pady=6)
 
         linha = ttk.Frame(f1); linha.pack(fill="x")
@@ -107,7 +104,7 @@ class RelatorioFrame(ttk.Frame):
         self.cb_ano = ttk.Combobox(linha, textvariable=self.v_ano, values=anos,
                                    state="readonly", width=7)
         self.cb_ano.pack(side="left", padx=(6, 14))
-        self.lbl_periodo = ttk.Label(linha, foreground="#6b6b6b")
+        self.lbl_periodo = ttk.Label(linha, style="Apoio.TLabel")
         self.lbl_periodo.pack(side="left")
 
         pers = ttk.Frame(f1); pers.pack(fill="x", pady=(8, 0))
@@ -119,20 +116,22 @@ class RelatorioFrame(ttk.Frame):
         CampoData(self.f_datas, self.v_ini).pack(side="left", padx=(6, 14))
         ttk.Label(self.f_datas, text="até:").pack(side="left")
         CampoData(self.f_datas, self.v_fim).pack(side="left", padx=(6, 8))
-        ttk.Label(self.f_datas, text="(dd/mm/aaaa)", foreground="#6b6b6b").pack(side="left")
+        ttk.Label(self.f_datas, text="(dd/mm/aaaa)", style="Apoio.TLabel").pack(side="left")
 
         for var in (self.v_mes, self.v_ano):
             var.trace_add("write", lambda *_: self._atualizar_rotulo())
         self._atualizar_rotulo()
 
         # ---- card 2: contas
-        f2 = ttk.LabelFrame(self, text=" 2. Contas bancárias (marque as desejadas) ",
-                            padding=(12, 8, 12, 10))
-        f2.pack(fill="both", expand=True, padx=PADX, pady=6)
+        self.f_contas = f2 = widgets.Cartao(
+            self, "Contas bancárias (marque as desejadas)")
+        f2.pack(fill="x", padx=PADX, pady=6)
 
-        # Lista rolável: são ~34 contas, com nomes longos.
-        self.canvas = tk.Canvas(f2, height=150, highlightthickness=0, borderwidth=0)
-        barra = ttk.Scrollbar(f2, orient="vertical", command=self.canvas.yview)
+        # Lista rolável: são ~34 contas, com nomes longos. Antes de carregar
+        # ela é uma frase só, e cresce em `_montar_contas`.
+        self.canvas = tk.Canvas(f2, height=24, highlightthickness=0, borderwidth=0)
+        self.barra = barra = ttk.Scrollbar(f2, orient="vertical",
+                                           command=self.canvas.yview)
         self.contas_box = ttk.Frame(self.canvas)
         self.contas_box.bind(
             "<Configure>",
@@ -144,7 +143,8 @@ class RelatorioFrame(ttk.Frame):
             lambda e: self.canvas.itemconfigure(self.janela_lista, width=e.width))
         self.canvas.configure(yscrollcommand=barra.set)
         self.canvas.pack(side="left", fill="both", expand=True)
-        barra.pack(side="right", fill="y")
+        # A barra de rolagem só entra junto com a lista: numa faixa de 24 px
+        # ela vira duas setinhas espremidas ao lado de uma frase.
         self.lbl_vazio = ttk.Label(
             self.contas_box, text='Clique em "1. Carregar contas" para listar as contas.')
         self.lbl_vazio.pack(anchor="w")
@@ -152,11 +152,11 @@ class RelatorioFrame(ttk.Frame):
         # ---- card 3: destino
         # O destino não é mais escolhido à mão: cada conta tem o seu, definido
         # em contas_mc.json. O campo virou informação, não decisão.
-        f3 = ttk.LabelFrame(self, text=" 3. Onde salva ", padding=(12, 8, 12, 10))
+        f3 = widgets.Cartao(self, "Onde salva")
         f3.pack(fill="x", padx=PADX, pady=6)
         ttk.Entry(f3, textvariable=self.v_pasta, state="readonly"
                   ).pack(side="left", fill="x", expand=True)
-        ttk.Label(f3, foreground="#6b6b6b",
+        ttk.Label(f3, style="Apoio.TLabel",
                   text="  cada conta vai para a pasta da sua empresa"
                   ).pack(side="left")
 
@@ -188,11 +188,17 @@ class RelatorioFrame(ttk.Frame):
                 pass
 
         # ---- registro
-        reg = ttk.LabelFrame(self, text=" Registro ", padding=(10, 6, 10, 10))
-        reg.pack(fill="both", expand=True, padx=PADX, pady=6)
-        self.log = tk.Text(reg, wrap="word", relief="flat", borderwidth=0,
-                           highlightthickness=0, height=8, font=("Consolas", 10))
+        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0)
         self.log.pack(fill="both", expand=True)
+        widgets.estilo_log(self.log)
+        widgets.registro_elastico(self.reg, self.log)
+
+        widgets.Passos(self.cab, (("Carregar contas", self.b1),
+                                  ("Gerar os extratos", self.b2))
+                       ).pack(anchor="w", pady=(8, 0))
 
     def _alternar_periodo(self):
         if self.v_personalizado.get():
@@ -278,12 +284,9 @@ class RelatorioFrame(ttk.Frame):
         self.b_stop.configure(state="disabled")
 
     def aplicar_cores(self, escuro: bool):
-        fundo = "#1c1c1c" if escuro else "#ffffff"
-        frente = "#e8e8e8" if escuro else "#000000"
         try:
-            self.log.configure(background=fundo, foreground=frente,
-                               insertbackground=frente)
-            self.canvas.configure(background=fundo)
+            widgets.estilo_log(self.log, escuro)
+            widgets.estilo_canvas(self.canvas)
         except tk.TclError:
             pass
 
@@ -331,7 +334,7 @@ class RelatorioFrame(ttk.Frame):
         self.b_stop.configure(state="disabled")
         self.q.put(("status", "Abrindo o Mais Controle e lendo as contas..."))
         self.worker = self.anx.submeter("Relatório Mensal — carregar contas",
-                                        self._t_carregar)
+                                        self._t_carregar, dona=self)
 
     def _t_carregar(self):
         try:
@@ -352,6 +355,9 @@ class RelatorioFrame(ttk.Frame):
             self.q.put(("botoes", "normal"))
 
     def _montar_contas(self, contas):
+        self.canvas.configure(height=150)
+        self.barra.pack(side="right", fill="y")
+        widgets.cartao_elastico(self.f_contas, cheio=True)
         for w in self.contas_box.winfo_children():
             w.destroy()
         self.vars_contas = {}
@@ -410,7 +416,8 @@ class RelatorioFrame(ttk.Frame):
         self.q.put(("botoes", "disabled"))
         self.q.put(("progresso", (0, len(escolhidas))))
         self.worker = self.anx.submeter("Relatório Mensal — gerar extratos",
-                                        self._t_gerar, escolhidas, ini, fim)
+                                        self._t_gerar, escolhidas, ini, fim,
+                                        dona=self)
 
     def _t_gerar(self, contas, ini, fim):
         comeco = time.time()

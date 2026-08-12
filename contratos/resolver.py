@@ -26,6 +26,13 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import util
 
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
 from .escolha import ordenar_para_escolha
 
 
@@ -49,6 +56,7 @@ class JanelaResolver(tk.Toplevel):
 
         self.title(f"Resolver — {achado.imovel.obra} {achado.imovel.rotulo}")
         self.transient(master.winfo_toplevel())
+        widgets.barra_de_titulo(self)
         try:
             self.geometry(f"{min(940, self.winfo_screenwidth() - 80)}"
                           f"x{min(620, self.winfo_screenheight() - 120)}")
@@ -68,16 +76,16 @@ class JanelaResolver(tk.Toplevel):
         i = self.achado.imovel
         cab = ttk.Frame(self)
         cab.pack(fill="x", padx=12, pady=(12, 4))
-        ttk.Label(cab, font=("Segoe UI", 11, "bold"),
+        ttk.Label(cab, style="Secao.TLabel",
                   text=f"{i.obra}  {i.rotulo}  ·  {i.comprador}").pack(anchor="w")
-        ttk.Label(cab, foreground="#6b6b6b",
+        ttk.Label(cab, style="Apoio.TLabel",
                   text=f"financiamento R$ {i.valor_financiamento:,.2f}   ·   "
                        f"cliente da obra no ERP: "
                        f"{self.achado.cliente_erp or '(sem cliente)'}"
                   ).pack(anchor="w")
 
         # ---- contrato
-        f1 = ttk.LabelFrame(self, text=" Qual anexo é o contrato desta casa ",
+        f1 = widgets.Cartao(self, "Qual anexo é o contrato desta casa",
                             padding=(10, 6, 10, 10))
         f1.pack(fill="both", expand=True, padx=12, pady=6)
 
@@ -103,7 +111,7 @@ class JanelaResolver(tk.Toplevel):
 
         # ---- empresa (só quando falta)
         if not self.achado.empresa:
-            f2 = ttk.LabelFrame(self, text=" De qual empresa é esta obra ",
+            f2 = widgets.Cartao(self, "De qual empresa é esta obra",
                                 padding=(10, 6, 10, 10))
             f2.pack(fill="x", padx=12, pady=6)
             l2 = ttk.Frame(f2); l2.pack(fill="x")
@@ -118,7 +126,7 @@ class JanelaResolver(tk.Toplevel):
 
         # ---- rodapé
         rod = ttk.Frame(self); rod.pack(fill="x", padx=12, pady=(4, 12))
-        self.lbl = ttk.Label(rod, foreground="#6b6b6b", text="")
+        self.lbl = ttk.Label(rod, style="Apoio.TLabel", text="")
         self.lbl.pack(side="left")
         ttk.Button(rod, text="Cancelar", command=self.destroy).pack(side="right")
         b = ttk.Button(rod, text="Confirmar", command=self._confirmar)

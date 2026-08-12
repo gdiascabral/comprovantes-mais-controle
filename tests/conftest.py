@@ -17,6 +17,39 @@ for _p in (_RAIZ, _RAIZ / "separar_renomear", _RAIZ / "anexar",
         sys.path.insert(0, str(_p))
 
 
+# ------------------------------------------------------------------ janela Tk
+# UM Tk para a SESSÃO inteira, compartilhado por todo teste de interface.
+#
+# Não é economia: criar e destruir vários `Tk()` no mesmo processo é frágil, e
+# o modo de falhar engana. Quando `test_visual.py` abria e destruía o seu, o
+# `test_widgets.py` — que roda depois, por ordem alfabética — não conseguia
+# mais abrir o dele e PULAVA com "sem display", num ambiente que tem display.
+# Nove testes do campo de data sumiram assim, sem nada em vermelho.
+
+@pytest.fixture(scope="session")
+def raiz():
+    """Janela invisível, mas MAPEADA (`-alpha 0`, não `withdraw`).
+
+    Janela retirada não recebe foco, e sem foco o `event_generate` de tecla
+    não chega ao widget: o teste passaria sem exercitar nada."""
+    import tkinter as tk
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("sem display para abrir uma janela Tk")
+    try:
+        root.wm_attributes("-alpha", 0.0)
+    except tk.TclError:
+        pass
+    root.geometry("300x120+0+0")
+    root.update()
+    yield root
+    try:
+        root.destroy()
+    except tk.TclError:
+        pass
+
+
 # ---------------------------------------------------------------- conciliação
 # Os testes da Conciliação Diária validam o mapa e o painel REAIS, não um dublê
 # — é o que dá sentido a `test_modelo_consistencia`, que compara as fórmulas do

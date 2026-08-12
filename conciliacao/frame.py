@@ -88,30 +88,26 @@ class ConciliacaoFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = 14
+        PADX = widgets.PADX
 
-        cab = ttk.Frame(self)
-        cab.pack(fill="x", padx=PADX, pady=(12, 4))
-        ttk.Label(cab, text="Conciliação Diária",
-                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(cab, foreground="#6b6b6b",
-                  text="Lê os saldos e os pagamentos a vencer e gera o painel "
-                       "do dia, com o aporte mínimo de cada conta."
-                  ).pack(anchor="w")
+        widgets.Cabecalho(
+            self, "Conciliação Diária",
+            "Lê os saldos e os pagamentos a vencer e gera o painel do dia, "
+            "com o aporte mínimo de cada conta."
+        ).pack(fill="x", padx=PADX, pady=(12, 4))
 
-        f1 = ttk.LabelFrame(self, text=" 1. Vencimentos que entram ",
-                            padding=(12, 8, 12, 10))
+        f1 = widgets.Cartao(self, "Vencimentos que entram", 1)
         f1.pack(fill="x", padx=PADX, pady=6)
         linha = ttk.Frame(f1); linha.pack(fill="x")
         ttk.Label(linha, text="De:").pack(side="left")
         CampoData(linha, self.v_ini).pack(side="left", padx=(6, 12))
         ttk.Label(linha, text="até:").pack(side="left")
         CampoData(linha, self.v_fim).pack(side="left", padx=(6, 12))
-        ttk.Label(linha, foreground="#6b6b6b",
+        ttk.Label(linha, style="Apoio.TLabel",
                   text="(dd/mm/aaaa — na segunda já vem sábado + domingo + segunda)"
                   ).pack(side="left")
 
-        f2 = ttk.LabelFrame(self, text=" 2. Gerar ", padding=(12, 8, 12, 10))
+        f2 = widgets.Cartao(self, "Gerar", 2)
         f2.pack(fill="x", padx=PADX, pady=6)
         self.b1 = ttk.Button(f2, text="▶ Coletar e gerar o painel",
                              command=self.gerar)
@@ -133,14 +129,16 @@ class ConciliacaoFrame(ttk.Frame):
         prog = ttk.Frame(self); prog.pack(fill="x", padx=PADX)
         self.pb = ttk.Progressbar(prog, mode="indeterminate")
         self.pb.pack(fill="x")
-        self.lbl = ttk.Label(prog, text="Pronto.", foreground="#6b6b6b")
+        self.lbl = ttk.Label(prog, text="Pronto.", style="Apoio.TLabel")
         self.lbl.pack(anchor="w", pady=(4, 0))
 
-        reg = ttk.LabelFrame(self, text=" Registro ", padding=(10, 6, 10, 10))
-        reg.pack(fill="both", expand=True, padx=PADX, pady=6)
-        self.log = tk.Text(reg, wrap="word", relief="flat", borderwidth=0,
-                           highlightthickness=0, height=14, font=("Consolas", 10))
+        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0)
         self.log.pack(fill="both", expand=True)
+        widgets.estilo_log(self.log)
+        widgets.registro_elastico(self.reg, self.log)
 
     # ------------------------------------------------------------- mensagens
     def _log(self, msg=""):
@@ -170,11 +168,8 @@ class ConciliacaoFrame(ttk.Frame):
         self.after(150, self._drain)
 
     def aplicar_cores(self, escuro: bool):
-        fundo = "#1c1c1c" if escuro else "#ffffff"
-        frente = "#e8e8e8" if escuro else "#000000"
         try:
-            self.log.configure(background=fundo, foreground=frente,
-                               insertbackground=frente)
+            widgets.estilo_log(self.log, escuro)
         except tk.TclError:
             pass
 
@@ -278,7 +273,7 @@ class ConciliacaoFrame(ttk.Frame):
         self.q.put(("botoes", "disabled"))
         self.q.put(("ocupado", True))
         self.worker = self.anx.submeter("Conciliação Diária", self._t_gerar,
-                                        periodo)
+                                        periodo, dona=self)
 
     def _t_gerar(self, periodo: Periodo):
         from conciliacao.erp.collect import coletar_com_pagina

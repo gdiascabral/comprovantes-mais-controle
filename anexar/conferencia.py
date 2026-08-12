@@ -148,22 +148,17 @@ class ConferenciaFrame(ttk.Frame):
         self.after(150, self._drain)
 
     def _montar(self):
-        PADX = 14
+        PADX = widgets.PADX
 
         # ---- cabeçalho
-        cab = ttk.Frame(self)
-        cab.pack(fill="x", padx=PADX, pady=(12, 4))
-        ttk.Label(cab, text="Conferência",
-                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        self.lbl_sub = ttk.Label(
-            cab, foreground="#6b6b6b",
-            text="Lista os pagos sem comprovante e, opcionalmente, confere o "
-                 "conteúdo dos anexos existentes.")
-        self.lbl_sub.pack(anchor="w")
+        widgets.Cabecalho(
+            self, "Conferência",
+            "Lista os pagos sem comprovante e, opcionalmente, confere o "
+            "conteúdo dos anexos existentes."
+        ).pack(fill="x", padx=PADX, pady=(12, 4))
 
         # ---- card: período
-        f1 = ttk.LabelFrame(self, text=" Período da conferência ",
-                            padding=(12, 8, 12, 10))
+        f1 = widgets.Cartao(self, "Período da conferência")
         f1.pack(fill="x", padx=PADX, pady=6)
         ttk.Label(f1, text="Data de pagamento — de:").grid(row=0, column=0, sticky="w", pady=4)
         CampoData(f1, self.v_ini).grid(row=0, column=1, sticky="w", padx=(6, 14))
@@ -200,16 +195,15 @@ class ConferenciaFrame(ttk.Frame):
         self.pb = ttk.Progressbar(acao, mode="determinate")
         self.pb.pack(side="left", fill="x", expand=True, padx=12)
 
-        # ---- card: registro (ocupa o espaço restante)
-        reg = ttk.LabelFrame(self, text=" Registro ", padding=(10, 6, 10, 10))
-        reg.pack(fill="both", expand=True, padx=PADX, pady=6)
-        self.log = tk.Text(reg, wrap="word", relief="flat", borderwidth=0,
-                           highlightthickness=0, background="#ffffff",
-                           font=("Consolas", 10))
+        # ---- card: registro (cresce quando tem o que mostrar)
+        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0)
         self.log.pack(fill="both", expand=True)
-        self.log.tag_configure("ph", justify="center", foreground="#8a8a8a",
-                               spacing1=6, font=("Segoe UI", 11))
+        widgets.estilo_log(self.log)
         self._mostrar_placeholder()
+        widgets.registro_elastico(self.reg, self.log)
 
     def _mostrar_placeholder(self):
         self.log.delete("1.0", "end")
@@ -219,18 +213,9 @@ class ConferenciaFrame(ttk.Frame):
                                "“Conferir anexos do período”.\n", "ph")
 
     def aplicar_cores(self, escuro: bool):
-        if escuro:
-            self.log.configure(background="#252525", foreground="#e6e6e6",
-                               insertbackground="#e6e6e6")
-            muted = "#9a9a9a"
-        else:
-            self.log.configure(background="#ffffff", foreground="#000000",
-                               insertbackground="#000000")
-            muted = "#5f5f5f"
-        self.log.tag_configure("ph", foreground="#8a8a8a")
         try:
-            self.lbl_sub.configure(foreground=muted)
-        except Exception:
+            widgets.estilo_log(self.log, escuro)
+        except tk.TclError:
             pass
 
     def _log(self, m):
@@ -292,7 +277,7 @@ class ConferenciaFrame(ttk.Frame):
         self.log.delete("1.0", "end")
         self.lbl.config(text="Conferindo...")
         self.worker = self.anx.submeter("Conferência", self._t_conferir,
-                                        ini, fim)
+                                        ini, fim, dona=self)
 
     def _t_conferir(self, ini, fim):
         inicio = time.time()

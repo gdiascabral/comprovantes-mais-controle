@@ -38,6 +38,13 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import util
 
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
 #: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
 #: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
 #: lugares; uma de FORMATO é como a mesma duração aparece de dois jeitos.
@@ -56,6 +63,7 @@ class ExtratosSicoobFrame(ttk.Frame):
         self.exec = ThreadPoolExecutor(max_workers=1,
                                        thread_name_prefix="sicoob")
         self.worker = None
+        self._tarefa_atual = ""          # o que a barra lateral mostra
         self._parar = Event()
         self.mapa: sc.Mapa | None = None
         self.ultima_pasta: Path | None = None
@@ -70,19 +78,15 @@ class ExtratosSicoobFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = 14
+        PADX = widgets.PADX
 
-        cab = ttk.Frame(self)
-        cab.pack(fill="x", padx=PADX, pady=(12, 4))
-        ttk.Label(cab, text="Extratos Sicoob",
-                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(cab, foreground="#6b6b6b",
-                  text="Cria as pastas do mês e baixa o extrato de cada conta "
-                       "do Sicoob em OFX e PDF.").pack(anchor="w")
+        widgets.Cabecalho(
+            self, "Extratos Sicoob",
+            "Cria as pastas do mês e baixa o extrato de cada conta do Sicoob "
+            "em OFX e PDF.").pack(fill="x", padx=PADX, pady=(12, 4))
 
         # ---- card 1: mês
-        f1 = ttk.LabelFrame(self, text=" 1. Mês do fechamento ",
-                            padding=(12, 8, 12, 10))
+        f1 = widgets.Cartao(self, "Mês do fechamento", 1)
         f1.pack(fill="x", padx=PADX, pady=6)
         linha = ttk.Frame(f1); linha.pack(fill="x")
         ttk.Label(linha, text="Mês:").pack(side="left")
@@ -92,22 +96,21 @@ class ExtratosSicoobFrame(ttk.Frame):
         anos = [str(a) for a in range(datetime.date.today().year + 1, 2019, -1)]
         ttk.Combobox(linha, textvariable=self.v_ano, values=anos,
                      state="readonly", width=7).pack(side="left", padx=(6, 14))
-        ttk.Label(linha, foreground="#6b6b6b",
+        ttk.Label(linha, style="Apoio.TLabel",
                   text="(vem preenchido com o mês anterior)").pack(side="left")
 
         # ---- card 2: pastas
-        f2 = ttk.LabelFrame(self, text=" 2. Pastas ", padding=(12, 8, 12, 10))
+        f2 = widgets.Cartao(self, "Pastas", 2)
         f2.pack(fill="x", padx=PADX, pady=6)
         self.b1 = ttk.Button(f2, text="Conferir e criar pastas",
                              style="Accent.TButton", command=self.criar_pastas)
         self.b1.pack(side="left")
-        ttk.Label(f2, foreground="#6b6b6b",
+        ttk.Label(f2, style="Apoio.TLabel",
                   text="  Mostra o que será criado e pede confirmação."
                   ).pack(side="left")
 
         # ---- card 3: download
-        f3 = ttk.LabelFrame(self, text=" 3. Baixar extratos ",
-                            padding=(12, 8, 12, 10))
+        f3 = widgets.Cartao(self, "Baixar extratos", 3)
         f3.pack(fill="x", padx=PADX, pady=6)
         self.b2 = ttk.Button(f3, text="Baixar extratos do Sicoob",
                              style="Accent.TButton", command=self.baixar)
@@ -115,13 +118,12 @@ class ExtratosSicoobFrame(ttk.Frame):
         self.b_stop = ttk.Button(f3, text="⏹ Parar", state="disabled",
                                  command=self._parar_click)
         self.b_stop.pack(side="left", padx=(8, 0))
-        ttk.Label(f3, foreground="#6b6b6b",
+        ttk.Label(f3, style="Apoio.TLabel",
                   text="  O login é feito por você, na janela do Chrome."
                   ).pack(side="left")
 
         # ---- card 4: zip
-        f4 = ttk.LabelFrame(self, text=" 4. Compactar (quando o mês fechar) ",
-                            padding=(12, 8, 12, 10))
+        f4 = widgets.Cartao(self, "Compactar (quando o mês fechar)", 4)
         f4.pack(fill="x", padx=PADX, pady=6)
         self.b3 = ttk.Button(f4, text="Gerar os .zip por empresa",
                              command=self.zipar)
@@ -129,19 +131,20 @@ class ExtratosSicoobFrame(ttk.Frame):
         self.b_abrir = ttk.Button(f4, text="Abrir a pasta do mês",
                                   state="disabled", command=self._abrir_pasta)
         self.b_abrir.pack(side="left", padx=(8, 0))
-        ttk.Label(f4, foreground="#6b6b6b",
+        ttk.Label(f4, style="Apoio.TLabel",
                   text="  Rode só depois que os outros bancos entrarem."
                   ).pack(side="left")
 
         # ---- progresso e log
-        f5 = ttk.Frame(self); f5.pack(fill="both", expand=True, padx=PADX, pady=6)
+        f5 = ttk.Frame(self); f5.pack(fill="x", padx=PADX, pady=6)
         self.pb = ttk.Progressbar(f5, mode="determinate")
         self.pb.pack(fill="x")
-        self.lbl = ttk.Label(f5, text="Pronto.", foreground="#6b6b6b")
+        self.lbl = ttk.Label(f5, text="Pronto.", style="Apoio.TLabel")
         self.lbl.pack(anchor="w", pady=(4, 4))
-        self.log = tk.Text(f5, height=14, wrap="word", borderwidth=1,
-                           relief="solid")
+        self.log = tk.Text(f5, wrap="word", borderwidth=1, relief="solid")
         self.log.pack(fill="both", expand=True)
+        widgets.estilo_log(self.log)
+        widgets.registro_elastico(f5, self.log)
 
     # ------------------------------------------------------------- mensagens
     def _log(self, msg=""):
@@ -174,13 +177,21 @@ class ExtratosSicoobFrame(ttk.Frame):
         self.after(150, self._drain)
 
     def aplicar_cores(self, escuro: bool):
-        fundo = "#1c1c1c" if escuro else "#ffffff"
-        frente = "#e8e8e8" if escuro else "#000000"
         try:
-            self.log.configure(background=fundo, foreground=frente,
-                               insertbackground=frente)
+            widgets.estilo_log(self.log, escuro)
         except tk.TclError:
             pass
+
+    def ocupado(self) -> str | None:
+        """O que esta aba está fazendo agora, ou None.
+
+        O navegador daqui é OUTRO (Sicoob é outro site e outro login), então a
+        barra lateral pergunta a esta aba separadamente — o registro de dono do
+        AnexarFrame não sabe nada do que acontece aqui."""
+        fut = self.worker
+        if fut is not None and not fut.done():
+            return self._tarefa_atual or "Extratos Sicoob"
+        return None
 
     def _parar_click(self):
         self._parar.set()
@@ -219,6 +230,7 @@ class ExtratosSicoobFrame(ttk.Frame):
             return
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Conferindo as pastas..."))
+        self._tarefa_atual = "Extratos Sicoob — criar pastas"
         self.worker = self.exec.submit(self._t_pastas)
 
     def _conferir_mapas(self):
@@ -290,6 +302,7 @@ class ExtratosSicoobFrame(ttk.Frame):
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Abrindo o Chrome do Sicoob..."))
+        self._tarefa_atual = "Extratos Sicoob — baixar"
         self.worker = self.exec.submit(self._t_baixar)
 
     def _t_baixar(self):
@@ -341,6 +354,7 @@ class ExtratosSicoobFrame(ttk.Frame):
             return
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Compactando..."))
+        self._tarefa_atual = "Extratos Sicoob — compactar"
         self.worker = self.exec.submit(self._t_zipar)
 
     def _t_zipar(self):

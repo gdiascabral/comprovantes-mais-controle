@@ -149,22 +149,17 @@ class AnexarFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = 14
+        PADX = widgets.PADX
 
         # ---- cabeçalho
-        cab = ttk.Frame(self)
-        cab.pack(fill="x", padx=PADX, pady=(12, 4))
-        ttk.Label(cab, text="Anexar Comprovantes",
-                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        self.lbl_sub = ttk.Label(
-            cab, foreground="#6b6b6b",
-            text="Busca os pagos do período, descobre quem está sem comprovante "
-                 "e anexa o PDF certo em cada um.")
-        self.lbl_sub.pack(anchor="w")
+        self.cab = widgets.Cabecalho(
+            self, "Anexar Comprovantes",
+            "Busca os pagos do período, descobre quem está sem comprovante "
+            "e anexa o PDF certo em cada um.")
+        self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
 
-        # ---- card 1: período e pasta
-        self.f_auto = ttk.LabelFrame(self, text=" 1. Período e pasta dos comprovantes ",
-                                     padding=(12, 8, 12, 10))
+        # Cartões sem número: quem numera é a trilha de ações, no fim do build.
+        self.f_auto = widgets.Cartao(self, "Período e pasta dos comprovantes")
         self.f_auto.pack(fill="x", padx=PADX, pady=6)
         fa = self.f_auto
         ttk.Label(fa, text="Data de pagamento — de:").grid(row=0, column=0, sticky="w", pady=4)
@@ -196,8 +191,7 @@ class AnexarFrame(ttk.Frame):
                         command=self._alternar_modo).pack(side="left")
 
         # ---- card 2: contas
-        self.f_contas = ttk.LabelFrame(self, text=" 2. Contas bancárias (marque as desejadas) ",
-                                       padding=(12, 8, 12, 10))
+        self.f_contas = widgets.Cartao(self, "Contas bancárias (marque as desejadas)")
         self.f_contas.pack(fill="x", padx=PADX, pady=6)
         self.contas_box = ttk.Frame(self.f_contas)
         self.contas_box.pack(fill="x")
@@ -206,7 +200,7 @@ class AnexarFrame(ttk.Frame):
                   ).pack(anchor="w")
 
         # ---- card: modo lista (mostrado só no modo "Por lista")
-        self.f_lista = ttk.LabelFrame(self, text=" Lista pronta ", padding=(12, 8, 12, 10))
+        self.f_lista = widgets.Cartao(self, "Lista pronta")
         fl = self.f_lista
         ttk.Label(fl, text="Arquivo (.csv ou .xlsx):").grid(row=0, column=0, sticky="w")
         ttk.Entry(fl, textvariable=self.v_lista).grid(row=0, column=1, sticky="we", padx=6)
@@ -256,17 +250,20 @@ class AnexarFrame(ttk.Frame):
             except tk.TclError:
                 pass
 
-        # ---- card: registro (ocupa o espaço restante)
-        reg = ttk.LabelFrame(self, text=" Registro ", padding=(10, 6, 10, 10))
-        reg.pack(fill="both", expand=True, padx=PADX, pady=6)
-        self.log = tk.Text(reg, wrap="word", relief="flat", borderwidth=0,
-                           highlightthickness=0, background="#ffffff",
-                           font=("Consolas", 10))
+        # ---- card: registro (cresce quando tem o que mostrar)
+        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0)
         self.log.pack(fill="both", expand=True)
-        self.log.tag_configure("ph", justify="center", foreground="#8a8a8a",
-                               spacing1=6, font=("Segoe UI", 11))
+        widgets.estilo_log(self.log)
         self._mostrar_placeholder()
+        widgets.registro_elastico(self.reg, self.log)
         self._alternar_modo()
+
+        widgets.Passos(self.cab, (("Carregar contas", self.b1),
+                                  ("Casar e anexar", self.b2))
+                       ).pack(anchor="w", pady=(8, 0))
 
     def _mostrar_placeholder(self):
         self.log.delete("1.0", "end")
@@ -300,7 +297,7 @@ class AnexarFrame(ttk.Frame):
         self.worker = self.submeter("Abrir o Mais Controle", self._t_abrir)
 
     # ------------------------------------------- navegador compartilhado
-    def submeter(self, rotulo: str, fn, *a, **k):
+    def submeter(self, rotulo: str, fn, *a, dona=None, **k):
         """Manda trabalho para a thread do navegador, registrando o dono.
 
         Seis abas dividem UM navegador e UMA thread (o Playwright síncrono não
@@ -308,10 +305,16 @@ class AnexarFrame(ttk.Frame):
         quem está usando, clicar numa segunda aba enquanto a primeira trabalha
         apenas ENFILEIRAVA o pedido: a tela não dizia nada e a segunda tarefa
         começava sozinha vários minutos depois, quando a pessoa já tinha
-        desistido e ido fazer outra coisa."""
+        desistido e ido fazer outra coisa.
+
+        `dona` é a ABA que pediu — o `rotulo` só descreve a tarefa. A barra
+        lateral precisa das duas coisas: qual item marcar com ● e o que
+        escrever no rodapé. Sem `dona`, o único jeito de descobrir a aba seria
+        adivinhar pelo texto do rótulo."""
         fut = self.exec.submit(fn, *a, **k)
         self._trabalho_atual = fut
         self._rotulo_atual = rotulo
+        self._dona_atual = dona if dona is not None else self
         return fut
 
     def ocupado(self) -> str | None:
@@ -319,6 +322,13 @@ class AnexarFrame(ttk.Frame):
         fut = self._trabalho_atual
         if fut is not None and not fut.done():
             return self._rotulo_atual or "outra tarefa"
+        return None
+
+    def dona_ocupada(self):
+        """A ABA que está com o navegador agora, ou None."""
+        fut = self._trabalho_atual
+        if fut is not None and not fut.done():
+            return getattr(self, "_dona_atual", self)
         return None
 
     def avisar_se_ocupado(self, dona: str) -> bool:
@@ -384,6 +394,7 @@ class AnexarFrame(ttk.Frame):
         top.title("Login do Mais Controle")
         top.transient(self.winfo_toplevel())
         top.resizable(False, False)
+        widgets.barra_de_titulo(top)
         top.attributes("-topmost", True)     # fica à frente da janela do Chrome
         top.lift()
         top.after(50, top.focus_force)
@@ -458,19 +469,13 @@ class AnexarFrame(ttk.Frame):
         self.q.put(("reabilitar0", None))
 
     def aplicar_cores(self, escuro: bool):
-        """Ajusta as cores dos widgets clássicos ao tema claro/escuro."""
-        if escuro:
-            self.log.configure(background="#252525", foreground="#e6e6e6",
-                               insertbackground="#e6e6e6")
-            muted = "#9a9a9a"
-        else:
-            self.log.configure(background="#ffffff", foreground="#000000",
-                               insertbackground="#000000")
-            muted = "#5f5f5f"
-        self.log.tag_configure("ph", foreground="#8a8a8a")
+        """Cor do registro. As legendas seguem o tema sozinhas.
+
+        Só o `tk.Text` precisa disso: ele é widget clássico e não tem estilo
+        do ttk. Tudo que virou "Apoio.TLabel" se reconfigura em `widgets`."""
         try:
-            self.lbl_sub.configure(foreground=muted)
-        except Exception:
+            widgets.estilo_log(self.log, escuro)
+        except tk.TclError:
             pass
 
     # -------------------------------------------------------- pausar / parar
@@ -518,6 +523,7 @@ class AnexarFrame(ttk.Frame):
         top = tk.Toplevel(self)
         top.title(f"Resolver dúvidas ({len(duvidas)})")
         top.transient(self.winfo_toplevel())
+        widgets.barra_de_titulo(top)
         try:
             top.geometry(f"{min(1180, self.winfo_screenwidth() - 80)}"
                          f"x{min(780, self.winfo_screenheight() - 120)}")

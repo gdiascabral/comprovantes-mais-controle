@@ -72,10 +72,77 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   grupos que abrem e fecham — DIÁRIO (Pagamentos do Dia, Conciliação Diária) e
   MENSAL (Relatório Mensal, Extratos Sicoob). O estado de cada grupo fica em
   `preferencias.json`, e selecionar uma aba de grupo fechado o abre — senão a
-  aba ficaria destacada e invisível. Tema
+  aba ficaria destacada e invisível. DIÁRIO e MENSAL são `Grupo.Toolbutton`
+  (chapado e miúdo) e os itens do grupo entram com recuo: como botões do mesmo
+  tamanho dos itens, eles pareciam irmãos do que agrupavam, e fechar o grupo
+  era a única pista de que existia um grupo. Continuam sendo Button, e não
+  Label com bind de clique, para não sair do Tab e do Espaço. Tema
   Automático (lê o registro do
   Windows)/Claro/Escuro salvo em `preferencias.json`, versão no título e
-  no rodapé da barra. Tema sv-ttk; frames expõem `aplicar_cores(escuro)`.
+  no rodapé da barra. Tema sv-ttk; frames expõem `aplicar_cores(escuro)`, que
+  hoje só trata `tk.Text` e `tk.Canvas` — o resto segue os estilos nomeados de
+  `widgets.py`. Três coisas que a barra faz e não são óbvias no código:
+  (1) **ela diz onde o trabalho está**. Um pulso de 600 ms pergunta
+  `anx.dona_ocupada()` e `ext.ocupado()`; a aba que está com um navegador troca
+  o ícone por ● e o rodapé escreve a tarefa. Antes disso, nove abas dividindo
+  um navegador só se manifestavam DEPOIS do clique, no aviso "Navegador
+  ocupado"; (2) trocar de aba põe o foco no primeiro `Entry` — Combobox
+  `readonly` é pulada de propósito, porque aceita foco sem aceitar digitação;
+  (3) Enter num campo de texto aciona o passo principal da aba, procurado em
+  `acao_enter`, `b1`, `btn` (nessa ordem). O bind é global, então o handler
+  confere pelo caminho do widget se o foco está DENTRO da aba — senão o Enter
+  de um diálogo dispararia a aba atrás dele. Nunca a partir de um `Text`: ali
+  Enter é quebra de linha, não ordem para começar meia hora de ERP.
+- `widgets.py` — o par visual do `util.py` (mora na raiz e vai junto no
+  codigo.zip). Além do `CampoData`, é onde vivem a PALETA, as fontes e os
+  blocos que toda aba monta: `Cabecalho`, `Cartao`, `Passos`, `estilo_log`,
+  `estilo_canvas`, `registro_elastico`, `focar_primeiro_campo`,
+  `barra_de_titulo`.
+  **A barra de título é do Windows, não do sv-ttk.** O tema pinta o conteúdo
+  da janela; a moldura vem do DWM, com quem o Tk não fala — daí a faixa clara
+  em cima do app escuro, bem onde o olho bate primeiro.
+  `barra_de_titulo(janela, escuro)` resolve por `DwmSetWindowAttribute`, e
+  **toda janela nova precisa chamá-la** (a principal, a de ativação, o
+  calendário, o login, as dúvidas, o confirmar do Pagamentos, o resolver dos
+  Contratos). Dois detalhes: o HWND de verdade é o PAI do `winfo_id()` (aquele
+  é a janela filha que o Tk desenha por dentro, e pintá-la não muda moldura
+  nenhuma); e o atributo é 20 do Windows 10 20H1 em diante, 19 antes — a
+  função tenta os dois e engole qualquer falha, porque moldura na cor do
+  sistema é o comportamento antigo, não um defeito novo.
+  **Quem numera é a AÇÃO, não o cartão.** Numerar os dois punha duas contagens
+  na mesma tela: em Pagamentos do Dia, "2. Contas" era um campo para preencher
+  e "2. Gerar a planilha" era uma ação, e nenhuma das duas ia até o fim
+  sozinha. Hoje os cartões são títulos sem número e o `Passos` desenha a
+  trilha no cabeçalho (①→✓), nas quatro abas de dois passos. O estado dela sai
+  do `state` dos próprios botões — a aba já libera o passo seguinte quando o
+  anterior termina, e guardar isso de novo criaria duas verdades sobre onde a
+  pessoa está. Enquanto o trabalho roda TODOS os botões ficam desabilitados,
+  e aí a trilha segura o último estado em vez de zerar. Aportes NÃO tem
+  trilha, de propósito: seus dois botões nascem os dois habilitados, então não
+  há progressão para mostrar.
+  **O Registro cresce com o que tem dentro** (`registro_elastico`): parado ele
+  era metade da janela em branco com uma frase cinza no meio, enquanto o
+  formulário ficava espremido em cima. Quem dispara é o `<<Modified>>` do
+  próprio campo, e não a aba — as nove escrevem no registro de lugares
+  diferentes, e pedir que cada uma avisasse daria dezoito pontos de chamada
+  para esquecer um. A tela vazia não conta como trabalho porque entra toda com
+  a tag "ph". Duas armadilhas: `pack_configure` e nunca `pack` (reempacotar
+  joga o widget para o FIM da ordem, e em cinco abas o Registro nasceria
+  embaixo da barra de ação); e a altura do campo vazio é MEDIDA a cada
+  mudança, porque `height` conta linhas enquanto `spacing1` cobra pixels — com
+  altura fixa o Anexar cortava ao meio justamente a frase que diz o que fazer. Existia o oposto disso — 51 cores e 17 tuplas de fonte
+  espalhadas por 12 arquivos —, e as duas consequências eram visíveis: cor
+  escrita na criação do widget não segue o tema (`#6b6b6b` tem 3,2:1 no escuro,
+  `#8a8a8a` tem 3,4:1 no claro: cada cinza falhava em UM dos dois), e tamanho
+  de fonte em número fixo ignora a escala de exibição do Windows. Hoje a cor é
+  estilo nomeado (`Apoio.TLabel`) e o tamanho sai do `TkDefaultFont`.
+  **`aplicar_estilos(escuro)` tem de ser chamado DEPOIS de `sv_ttk.set_theme`**:
+  o sv-ttk recria o tema do ttk e apaga todo estilo nomeado, e a ordem errada
+  não dá erro — as legendas só voltam à cor padrão. Duas armadilhas do Tk que
+  o `tests/test_visual.py` cobre: `tkinter.font.Font.__del__` executa
+  `font delete`, então a fonte precisa de referência viva (sem isso o Tk lê
+  "AppTitulo" como nome de FAMÍLIA e cai no padrão, em silêncio); e tamanho
+  negativo é medida em pixels, então escalar tem de preservar o sinal.
 - `separar_renomear/separar_renomear.py` — separa páginas de PDF e renomeia.
   Dois parsers, escolhidos pelo **layout** (`campos()`), NUNCA pelo banco:
   `_campos_rotulado` quando o rótulo traz o valor na mesma linha
@@ -359,6 +426,12 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   texto que sai do pdfplumber/OCR, **anonimizado** — o repo é público, nunca
   colocar comprovante real. Cobrir um layout novo = salvar o texto dele ali.
   Checagens extras: `python -m py_compile <arquivos>` e `pyflakes`.
+- **Teste de interface usa a fixture `raiz` do conftest**, que é UM `Tk()` para
+  a sessão inteira. Módulo que abrir e destruir o próprio faz os módulos
+  SEGUINTES pularem com "sem display" numa máquina que tem display — e teste
+  que pula não aparece em vermelho. Foi assim que os 9 do `test_widgets.py`
+  sumiram por um momento. Já o contraste da paleta (`test_visual.py`) é
+  aritmética sobre constantes: roda no CI sem tela nenhuma.
 - **Nunca commitar dados da empresa**: PDFs de comprovantes, relatórios
   xlsx, `.chrome_profile`, logs (tudo já no .gitignore; a pasta local
   `debug/` é só diagnóstico local e nunca foi para o repo).

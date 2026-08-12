@@ -34,6 +34,13 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import util
 
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
 from . import conferencia as conf
 from . import pipeline
 from . import resolver
@@ -119,18 +126,15 @@ class ContratosFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _montar(self):
-        PADX = 14
-        cab = ttk.Frame(self)
-        cab.pack(fill="x", padx=PADX, pady=(12, 4))
-        ttk.Label(cab, text="Contratos de Financiamento",
-                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        self.lbl_sub = ttk.Label(
-            cab, foreground="#6b6b6b",
-            text="Acha o contrato das casas que financiaram no mês, confere o "
-                 "conteúdo e arquiva na pasta da empresa.")
-        self.lbl_sub.pack(anchor="w")
+        PADX = widgets.PADX
+        self.cab = widgets.Cabecalho(
+            self, "Contratos de Financiamento",
+            "Acha o contrato das casas que financiaram no mês, confere o "
+            "conteúdo e arquiva na pasta da empresa.")
+        self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
 
-        f1 = ttk.LabelFrame(self, text=" 1. Mês ", padding=(12, 8, 12, 10))
+        # Cartões sem número: quem numera é a trilha de ações, no fim do build.
+        f1 = widgets.Cartao(self, "Mês")
         f1.pack(fill="x", padx=PADX, pady=6)
         linha = ttk.Frame(f1); linha.pack(fill="x")
         ttk.Label(linha, text="Mês:").pack(side="left")
@@ -140,12 +144,12 @@ class ContratosFrame(ttk.Frame):
         anos = [str(a) for a in range(datetime.date.today().year + 1, 2019, -1)]
         ttk.Combobox(linha, textvariable=self.v_ano, values=anos,
                      state="readonly", width=7).pack(side="left", padx=(6, 14))
-        ttk.Label(linha, foreground="#6b6b6b",
+        ttk.Label(linha, style="Apoio.TLabel",
                   text="data do RECEBIMENTO do financiamento").pack(side="left")
 
-        f2 = ttk.LabelFrame(
-            self, text=" 2. Casas com financiamento no mês "
-                       "(marque as que entram no arquivamento) ",
+        f2 = widgets.Cartao(
+            self, "Casas com financiamento no mês "
+                  "(marque as que entram no arquivamento)",
             padding=(10, 6, 10, 10))
         f2.pack(fill="both", expand=True, padx=PADX, pady=6)
         grade = ttk.Frame(f2); grade.pack(fill="both", expand=True)
@@ -173,7 +177,7 @@ class ContratosFrame(ttk.Frame):
         self.tabela.bind("<Double-1>", self._duplo_clique)
 
         pe = ttk.Frame(f2); pe.pack(fill="x", pady=(6, 0))
-        self.lbl_marcadas = ttk.Label(pe, foreground="#6b6b6b", text="")
+        self.lbl_marcadas = ttk.Label(pe, style="Apoio.TLabel", text="")
         self.lbl_marcadas.pack(side="right")
         ttk.Button(pe, text="Marcar todas",
                    command=lambda: self._marcar_todas(True)).pack(side="left")
@@ -211,19 +215,21 @@ class ContratosFrame(ttk.Frame):
             except tk.TclError:
                 pass
 
-        reg = ttk.LabelFrame(self, text=" Registro ", padding=(10, 6, 10, 10))
-        reg.pack(fill="both", expand=True, padx=PADX, pady=6)
-        self.log = tk.Text(reg, wrap="word", relief="flat", borderwidth=0,
-                           highlightthickness=0, height=8)
+        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0)
         self.log.pack(fill="both", expand=True)
+        widgets.estilo_log(self.log)
+        widgets.registro_elastico(self.reg, self.log)
+
+        widgets.Passos(self.cab, (("Buscar", self.b1),
+                                  ("Conferir e arquivar", self.b2))
+                       ).pack(anchor="w", pady=(8, 0))
 
     def aplicar_cores(self, escuro: bool):
-        fundo = "#252525" if escuro else "#ffffff"
-        frente = "#e6e6e6" if escuro else "#000000"
         try:
-            self.log.configure(background=fundo, foreground=frente,
-                               insertbackground=frente)
-            self.lbl_sub.configure(foreground="#9a9a9a" if escuro else "#5f5f5f")
+            widgets.estilo_log(self.log, escuro)
         except tk.TclError:
             pass
 
@@ -405,7 +411,8 @@ class ContratosFrame(ttk.Frame):
         if self.anx.avisar_se_ocupado("abrir o anexo"):
             return
         self.worker = self.anx.submeter("Contratos — abrir anexo",
-                                        self._t_abrir, achado, dict(anexo))
+                                        self._t_abrir, achado, dict(anexo),
+                                        dona=self)
 
     # ---------------------------------------------------------------- ações
     def _periodo(self) -> tuple[int, int]:
@@ -430,7 +437,8 @@ class ContratosFrame(ttk.Frame):
         self._parar.clear()
         self.log.delete("1.0", "end")
         self.q.put(("botoes", (False, False)))
-        self.worker = self.anx.submeter("Contratos — buscar", self._t_buscar)
+        self.worker = self.anx.submeter("Contratos — buscar", self._t_buscar,
+                                        dona=self)
 
     def arquivar(self):
         if self.anx.avisar_se_ocupado("os Contratos"):
@@ -444,7 +452,8 @@ class ContratosFrame(ttk.Frame):
             return
         self._parar.clear()
         self.q.put(("botoes", (False, True)))
-        self.worker = self.anx.submeter("Contratos — arquivar", self._t_arquivar)
+        self.worker = self.anx.submeter("Contratos — arquivar",
+                                        self._t_arquivar, dona=self)
 
     # -------------------------------------------------------------- threads
     def _t_buscar(self):

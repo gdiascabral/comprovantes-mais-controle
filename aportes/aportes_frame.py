@@ -64,13 +64,15 @@ class AportesFrame(ttk.Frame):
 
     # ------------------------------------------------------------ interface
     def _montar(self):
-        ttk.Label(self, text="Aportes e Distribuições",
-                  font=("Segoe UI", 13, "bold")).pack(anchor="w")
-        ttk.Label(self, text="Lança direto no Mais Controle — sem planilha, "
-                             "sem importação.").pack(anchor="w", pady=(0, 10))
+        PADX = widgets.PADX
 
-        form = ttk.LabelFrame(self, text="Novo lançamento", padding=10)
-        form.pack(fill="x")
+        widgets.Cabecalho(
+            self, "Aportes e Distribuições",
+            "Lança direto no Mais Controle — sem planilha, sem importação."
+        ).pack(fill="x", padx=PADX, pady=(12, 4))
+
+        form = widgets.Cartao(self, "Novo lançamento", padding=10)
+        form.pack(fill="x", padx=PADX, pady=6)
 
         linha1 = ttk.Frame(form); linha1.pack(fill="x", pady=3)
         ttk.Label(linha1, text="Data", width=8).pack(side="left")
@@ -109,7 +111,7 @@ class AportesFrame(ttk.Frame):
         ttk.Label(linha4, text="Buscar", width=8).pack(side="left")
         self.var_busca = tk.StringVar()
         ttk.Entry(linha4, textvariable=self.var_busca, width=30).pack(side="left")
-        ttk.Label(linha4, foreground="#6b6b6b",
+        ttk.Label(linha4, style="Apoio.TLabel",
                   text="  filtra Pagou/Recebeu enquanto você digita "
                        "(sem acento; acha no meio do nome: \"696\", \"livia\")"
                   ).pack(side="left")
@@ -117,11 +119,15 @@ class AportesFrame(ttk.Frame):
                    command=lambda: self.var_busca.set("")).pack(side="left", padx=6)
         self.var_busca.trace_add("write", lambda *_: self._filtrar_listas())
 
-        ttk.Button(form, text="+  Adicionar à lista",
-                   command=self._adicionar).pack(anchor="w", pady=(8, 0))
+        # É esta que o Enter dispara, e não "Lançar no Mais Controle": num
+        # formulário que monta uma lista, Enter fecha a LINHA. Mandar dinheiro
+        # para o ERP continua exigindo o clique nos passos 1 e 2.
+        self.acao_enter = ttk.Button(form, text="+  Adicionar à lista",
+                                     command=self._adicionar)
+        self.acao_enter.pack(anchor="w", pady=(8, 0))
 
-        lista = ttk.LabelFrame(self, text="A lançar", padding=8)
-        lista.pack(fill="both", expand=True, pady=10)
+        lista = widgets.Cartao(self, "A lançar", padding=8)
+        lista.pack(fill="both", expand=True, padx=PADX, pady=10)
         self.tabela = ttk.Treeview(lista, columns=("op",), show="headings",
                                    height=7)
         self.tabela.heading("op", text="Operação")
@@ -130,7 +136,7 @@ class AportesFrame(ttk.Frame):
         ttk.Scrollbar(lista, orient="vertical", command=self.tabela.yview
                       ).pack(side="right", fill="y")
 
-        botoes = ttk.Frame(self); botoes.pack(fill="x")
+        botoes = ttk.Frame(self); botoes.pack(fill="x", padx=PADX)
         ttk.Button(botoes, text="Remover selecionado",
                    command=self._remover).pack(side="left")
         ttk.Button(botoes, text="Limpar tudo",
@@ -140,7 +146,7 @@ class AportesFrame(ttk.Frame):
         self.lbl_total = ttk.Label(botoes, text="")
         self.lbl_total.pack(side="right")
 
-        acoes = ttk.Frame(self); acoes.pack(fill="x", pady=(10, 0))
+        acoes = ttk.Frame(self); acoes.pack(fill="x", padx=PADX, pady=(10, 0))
         self.b_conferir = ttk.Button(
             acoes, text="1. Conferir cadastro no Mais Controle",
             command=self._conferir)
@@ -149,8 +155,11 @@ class AportesFrame(ttk.Frame):
                                    style="Accent.TButton", command=self._lancar)
         self.b_lancar.pack(side="left", padx=8)
 
-        self.texto = tk.Text(self, height=10, wrap="word")
-        self.texto.pack(fill="both", expand=True, pady=(10, 0))
+        # Sem cartão em volta: aqui o próprio campo é quem encolhe e cresce.
+        self.texto = tk.Text(self, wrap="word")
+        self.texto.pack(fill="x", padx=PADX, pady=(10, 12))
+        widgets.estilo_log(self.texto)
+        widgets.registro_elastico(self.texto, self.texto)
 
     def _recarregar_listas(self):
         nomes = list(self.entidades)
@@ -209,11 +218,8 @@ class AportesFrame(ttk.Frame):
             self.after(150, self._drain)
 
     def aplicar_cores(self, escuro: bool):
-        fundo = "#1c1c1c" if escuro else "#ffffff"
-        frente = "#e8e8e8" if escuro else "#000000"
         try:
-            self.texto.configure(background=fundo, foreground=frente,
-                                 insertbackground=frente)
+            widgets.estilo_log(self.texto, escuro)
         except tk.TclError:
             pass
 
@@ -374,7 +380,8 @@ class AportesFrame(ttk.Frame):
     def _conferir(self):
         if self.anx.avisar_se_ocupado("os Aportes"):
             return
-        self.anx.submeter("Aportes — conferir cadastro", self._t_conferir)
+        self.anx.submeter("Aportes — conferir cadastro", self._t_conferir,
+                          dona=self)
 
     def _t_conferir(self):
         try:
@@ -417,7 +424,7 @@ class AportesFrame(ttk.Frame):
         if self.anx.avisar_se_ocupado("os Aportes"):
             return
         self.b_lancar.configure(state="disabled")
-        self.anx.submeter("Aportes — lançar", self._t_lancar)
+        self.anx.submeter("Aportes — lançar", self._t_lancar, dona=self)
 
     def _t_lancar(self):
         try:

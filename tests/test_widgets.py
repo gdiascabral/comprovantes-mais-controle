@@ -14,30 +14,9 @@ import pytest
 import widgets
 
 
-@pytest.fixture(scope="module")
-def raiz():
-    """UM Tk para o módulo inteiro.
-
-    Criar e destruir vários `Tk()` no mesmo processo é frágil: o segundo às
-    vezes falha com "sem display" sem ter nada a ver com display. E a janela
-    fica invisível mas MAPEADA (`-alpha 0`, não `withdraw`): janela retirada
-    não recebe foco, e sem foco o `event_generate` de tecla não chega ao
-    widget — o teste passaria sem exercitar nada."""
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("sem display para abrir uma janela Tk")
-    try:
-        root.wm_attributes("-alpha", 0.0)
-    except tk.TclError:
-        pass
-    root.geometry("300x120+0+0")
-    root.update()
-    yield root
-    try:
-        root.destroy()
-    except tk.TclError:
-        pass
+# A janela `raiz` mora no conftest e é UMA para a sessão inteira — ver lá o
+# porquê: dois módulos abrindo e destruindo o próprio Tk fazem o segundo pular
+# com "sem display" num ambiente que tem display.
 
 
 @pytest.fixture

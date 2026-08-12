@@ -91,6 +91,10 @@ def pedir_ativacao(root, pasta) -> bool:
     import tkinter as tk
     from tkinter import ttk
 
+    import widgets                       # dentro da função, como o tkinter:
+                                         # ele importa tkinter no topo, e este
+                                         # módulo roda no CI sem tela
+
     if ja_ativado(pasta):
         return True
 
@@ -98,6 +102,7 @@ def pedir_ativacao(root, pasta) -> bool:
     dlg = tk.Toplevel(root)
     dlg.title("Ativação — Comprovantes Mais Controle")
     dlg.resizable(False, False)
+    widgets.barra_de_titulo(dlg)
     # Sem `transient()` de propósito: a janela principal está escondida enquanto
     # isto aparece, e uma janela transiente não ganha botão na barra de tarefas
     # — quem clicasse fora não teria como voltar para o diálogo.
@@ -112,16 +117,16 @@ def pedir_ativacao(root, pasta) -> bool:
     quadro.pack(fill="both", expand=True)
 
     ttk.Label(quadro, text="🔒  Primeira utilização",
-              font=("Segoe UI", 13, "bold")).pack(anchor="w")
-    ttk.Label(quadro, wraplength=380, justify="left",
+              style="Titulo.TLabel").pack(anchor="w")
+    ttk.Label(quadro, wraplength=380, justify="left", style="Apoio.TLabel",
               text="Digite a senha de ativação para liberar o app nesta "
                    "máquina.\nEla é pedida uma única vez.").pack(
         anchor="w", pady=(6, 12))
 
-    campo = ttk.Entry(quadro, show="•", width=34, font=("Segoe UI", 11))
+    campo = ttk.Entry(quadro, show="•", width=34, font=widgets.FONTE_SECAO)
     campo.pack(fill="x")
 
-    aviso = ttk.Label(quadro, text=" ", foreground="#d13438", wraplength=380,
+    aviso = ttk.Label(quadro, text=" ", style="Erro.TLabel", wraplength=380,
                       justify="left")
     aviso.pack(anchor="w", pady=(6, 12))
 
