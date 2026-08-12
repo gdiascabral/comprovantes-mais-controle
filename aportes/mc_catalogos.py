@@ -249,6 +249,26 @@ class Catalogos:
                 break
         self.log(f"  obras: {len(self.obras)}")
 
+    def definir_obras(self, itens) -> None:
+        """Obras vindas do REST (`mc_api.listar_obras`), e não do GraphQL.
+
+        É a MESMA fonte que a aba Contratos usa em produção. O caminho antigo
+        (`carregar_obras`, GraphQL) depende de um host `execute-api`, que só
+        aparece nos cabeçalhos quando o ERP carrega o FORMULÁRIO de lançamento
+        — e esta aba passa pela tela de Pagamentos, que nunca o chama. Dava
+        `obras: 0`, e aí todo lançamento morria com "Obra não encontrado", que
+        parece cadastro faltando no ERP e não é.
+
+        Guarda o item inteiro, indexado pelo nome normalizado: quem lança
+        precisa de `id`, `name` e `status`.
+        """
+        self.obras = {}
+        self.erros_obras = []
+        for o in itens or []:
+            if isinstance(o, dict) and o.get("id") and o.get("name"):
+                self.obras[chave(o["name"])] = o
+        self.log(f"  obras: {len(self.obras)}")
+
     def obra(self, nome: str) -> dict | None:
         return getattr(self, "obras", {}).get(chave(nome))
 

@@ -21,6 +21,8 @@ from datetime import date
 import tkinter as tk
 from tkinter import ttk
 
+import util                            # comparação de nome: sem acento, sem caixa
+
 MESES = ("Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
          "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro")
 
@@ -454,6 +456,77 @@ def estilo_canvas(canvas: tk.Canvas, escuro: bool | None = None) -> None:
 #: calendários abertos ficariam iguais na tela e ninguém saberia qual preenche
 #: qual — e o segundo taparia o primeiro.
 _calendario_aberto = None
+
+
+class ComboBusca(ttk.Combobox):
+    """Combo em que se DIGITA para procurar, além de escolher na lista.
+
+    Existia um campo "Buscar" separado, que filtrava dois combos de uma vez.
+    Ele resolvia o problema errado: para achar a conta do "Recebeu" era preciso
+    sair para outro campo, digitar, voltar e abrir a lista — e o mesmo filtro
+    mexia no "Pagou" junto, mesmo quando só o outro interessava. Aqui o campo é
+    o próprio buscador, e cada um filtra o seu.
+
+    Compara sem acento e sem caixa, por PEDAÇO em qualquer posição (`util.
+    filtrar`): "696" acha a subconta 55696-3, "livia" acha "Livian".
+
+    A lista NÃO se abre sozinha a cada tecla, de propósito. Com a lista posta,
+    o Tk manda as teclas para ELA — que tem busca própria, por prefixo — e a
+    pessoa acaba digitando num lugar diferente do que está olhando. Abrir fica
+    com quem abre: a seta, o clique ou ↓.
+
+    E nada é escolhido por adivinhação: texto que não é uma opção fica como foi
+    digitado, e quem lança dinheiro recebe o erro em vez de uma conta parecida
+    escolhida em silêncio. A única correção automática é de GRAFIA, quando o
+    que se digitou casa exatamente com uma opção fora acento e caixa.
+    """
+
+    def __init__(self, master, width=38, **kw):
+        kw.setdefault("state", "normal")          # readonly não deixa digitar
+        super().__init__(master, width=width, **kw)
+        self._todos: list[str] = []
+        self.bind("<KeyRelease>", self._ao_digitar)
+        self.bind("<<ComboboxSelected>>", self._ao_escolher)
+        self.bind("<FocusOut>", self._ao_sair)
+
+    # ------------------------------------------------------------ conteúdo
+    def definir_valores(self, valores) -> None:
+        """A lista COMPLETA. O filtro sempre parte dela.
+
+        Guardada à parte porque filtrar sobre `self["values"]` faria cada
+        tecla filtrar o resultado da anterior: a lista só encolheria, e apagar
+        o que se digitou não a traria de volta."""
+        self._todos = [str(v) for v in valores]
+        self["values"] = self._todos
+
+    def valores_completos(self) -> list[str]:
+        return list(self._todos)
+
+    # -------------------------------------------------------------- eventos
+    def _ao_digitar(self, ev):
+        # Navegação e escolha não são digitação: filtrar aqui embaralharia a
+        # lista justamente enquanto a pessoa anda por ela.
+        if ev.keysym in ("Up", "Down", "Return", "Escape", "Tab", "Left",
+                         "Right", "Home", "End", "Shift_L", "Shift_R",
+                         "Control_L", "Control_R"):
+            return
+        self["values"] = util.filtrar(self._todos, self.get())
+
+    def _ao_escolher(self, _ev=None):
+        """Escolheu: a lista volta inteira, senão a próxima abertura ainda
+        mostraria só o que sobrou do filtro anterior."""
+        self["values"] = self._todos
+
+    def _ao_sair(self, _ev=None):
+        texto = self.get().strip()
+        if not texto:
+            self["values"] = self._todos
+            return
+        alvo = util.norm_espaco(texto)
+        exatos = [v for v in self._todos if util.norm_espaco(v) == alvo]
+        if len(exatos) == 1 and exatos[0] != texto:
+            self.set(exatos[0])          # só arruma a grafia
+        self["values"] = self._todos
 
 
 class CampoData(ttk.Frame):

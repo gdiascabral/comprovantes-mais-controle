@@ -24,13 +24,11 @@ from mc_lancamentos import (criar_pagamento, criar_recebimento,  # noqa: E402
 from erp_sessao import ouvinte                              # noqa: E402
 from regras import Operacao, como_dinheiro, expandir        # noqa: E402
 
-try:                                     # utilitários e widgets (raiz)
-    import util
+try:                                     # widgets compartilhados (raiz)
     import widgets
 except ModuleNotFoundError:              # rodando este módulo isoladamente
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
     import widgets
 
 CampoData = widgets.CampoData
@@ -82,12 +80,15 @@ class AportesFrame(ttk.Frame):
         self.var_valor = tk.StringVar()
         ttk.Entry(linha1, textvariable=self.var_valor, width=14).pack(side="left")
 
+        # São ~19 contas e ~440 participantes: rolar a lista até achar
+        # "Morais Participações - SUBCONTA 55696-3" é trabalho que a máquina
+        # faz melhor. Digitar no PRÓPRIO campo filtra a lista dele.
         linha2 = ttk.Frame(form); linha2.pack(fill="x", pady=3)
         ttk.Label(linha2, text="Pagou", width=8).pack(side="left")
-        self.cb_pagador = ttk.Combobox(linha2, state="readonly", width=38)
+        self.cb_pagador = widgets.ComboBusca(linha2, width=38)
         self.cb_pagador.pack(side="left")
         ttk.Label(linha2, text="  Recebeu", width=10).pack(side="left")
-        self.cb_recebedor = ttk.Combobox(linha2, state="readonly", width=38)
+        self.cb_recebedor = widgets.ComboBusca(linha2, width=38)
         self.cb_recebedor.pack(side="left")
 
         linha3 = ttk.Frame(form); linha3.pack(fill="x", pady=3)
@@ -104,20 +105,13 @@ class AportesFrame(ttk.Frame):
                                      values=cadastro.FORMAS)
         self.cb_forma.current(0); self.cb_forma.pack(side="left")
 
-        # Busca: são ~19 contas e ~440 participantes no ERP. Rolar combobox
-        # até achar "Morais Participações - SUBCONTA 55696-3" é o tipo de
-        # trabalho que a máquina faz melhor.
         linha4 = ttk.Frame(form); linha4.pack(fill="x", pady=(6, 0))
-        ttk.Label(linha4, text="Buscar", width=8).pack(side="left")
-        self.var_busca = tk.StringVar()
-        ttk.Entry(linha4, textvariable=self.var_busca, width=30).pack(side="left")
+        ttk.Label(linha4, width=8).pack(side="left")
         ttk.Label(linha4, style="Apoio.TLabel",
-                  text="  filtra Pagou/Recebeu enquanto você digita "
-                       "(sem acento; acha no meio do nome: \"696\", \"livia\")"
+                  text="Em Pagou e Recebeu, digite para procurar — sem acento e "
+                       "por pedaço do nome (\"696\", \"livia\"). A seta abre a "
+                       "lista já filtrada."
                   ).pack(side="left")
-        ttk.Button(linha4, text="limpar",
-                   command=lambda: self.var_busca.set("")).pack(side="left", padx=6)
-        self.var_busca.trace_add("write", lambda *_: self._filtrar_listas())
 
         # É esta que o Enter dispara, e não "Lançar no Mais Controle": num
         # formulário que monta uma lista, Enter fecha a LINHA. Mandar dinheiro
@@ -165,13 +159,10 @@ class AportesFrame(ttk.Frame):
         nomes = list(self.entidades)
         pagadores = nomes + [cadastro.INVESTIDOR_PREFIXO + n
                              for n in self.subcontas if not n.startswith("_")]
-        # As listas COMPLETAS ficam guardadas: a busca filtra a partir delas,
-        # senão cada filtro comeria o resultado do anterior e a lista só
-        # encolheria até sobrar nada.
-        self._pagadores = pagadores
-        self._recebedores = nomes
-        self.cb_pagador["values"] = pagadores
-        self.cb_recebedor["values"] = nomes
+        # Quem guarda a lista completa é o próprio combo: é dela que ele parte
+        # a cada tecla, senão um filtro comeria o resultado do anterior.
+        self.cb_pagador.definir_valores(pagadores)
+        self.cb_recebedor.definir_valores(nomes)
         if pagadores:
             self.cb_pagador.current(0)
         if len(nomes) > 1:
@@ -179,26 +170,6 @@ class AportesFrame(ttk.Frame):
         if not nomes:
             self._log("Nenhuma conta cadastrada. Crie o arquivo contas.csv "
                       f"em {cadastro.ARQUIVO_CONTAS}")
-
-    def _filtrar_listas(self):
-        """Aplica a busca aos dois combos, sem perder o que já estava escolhido.
-
-        Se a escolha atual continua batendo com o filtro, ela é mantida; se
-        sumiu da lista filtrada, o campo é esvaziado em vez de pular sozinho
-        para outro nome — trocar a conta por baixo de quem está lançando
-        dinheiro seria a pior coisa a fazer aqui."""
-        termo = self.var_busca.get()
-        for combo, todos in ((self.cb_pagador, getattr(self, "_pagadores", [])),
-                             (self.cb_recebedor, getattr(self, "_recebedores", []))):
-            escolhido = combo.get()
-            visiveis = util.filtrar(todos, termo)
-            combo["values"] = visiveis
-            if escolhido in visiveis:
-                combo.set(escolhido)
-            elif termo.strip():
-                combo.set("")
-            elif visiveis:
-                combo.set(visiveis[0])
 
     def _log(self, msg=""):
         """Pode ser chamado de QUALQUER thread: só enfileira."""
@@ -315,7 +286,7 @@ class AportesFrame(ttk.Frame):
         Os cadastros são lidos UMA vez por sessão. Reler a cada botão custava
         centenas de idas ao servidor (são ~440 participantes) e era o que
         deixava a tela parada — os cadastros não mudam no meio do trabalho."""
-        self.anx.garantir_sessao(self._log)
+        api = self.anx.garantir_sessao(self._log)
         if self.catalogos is not None and not recarregar:
             return
         pagina = self.anx.mc.page
@@ -362,9 +333,30 @@ class AportesFrame(ttk.Frame):
         self.catalogos = Catalogos(pagina, self._cabecalhos, self._log)
         self._log("Lendo os cadastros do Mais Controle:")
         self.catalogos.carregar()
-        self.catalogos.carregar_obras()
-        for motivo in getattr(self.catalogos, "erros_obras", []):
-            self._log(f"  aviso (obras): {motivo}")
+        self._carregar_obras(api)
+
+    def _carregar_obras(self, api):
+        """As obras saem do REST, pela mesma porta da aba Contratos.
+
+        O caminho antigo era GraphQL, e o host dele (`execute-api`) só entra
+        nos cabeçalhos quando o ERP carrega o FORMULÁRIO de lançamento. Esta
+        aba passa pela tela de PAGAMENTOS, que nunca chama o GraphQL — então
+        `obras` vinha 0 e todo lançamento falhava com "Obra não encontrado.
+        Nada parecido no cadastro — talvez precise ser criado lá", mandando
+        procurar no ERP um cadastro que está lá, certo, o tempo todo.
+
+        `garantir_credenciais_anexos` é quem sabe achar a credencial do outro
+        back-end sem ter um lançamento na mão — ela procura a isca sozinha.
+        """
+        try:
+            api.garantir_credenciais_anexos(self._log)
+            self.catalogos.definir_obras(api.listar_obras(self._log))
+        except Exception as e:                              # noqa: BLE001
+            # Sem obras o lançamento não sai, mas o resto do cadastro serve
+            # para conferir — e o motivo tem de aparecer, senão vira de novo
+            # um "obras: 0" sem explicação.
+            self.catalogos.definir_obras([])
+            self._log(f"  aviso (obras): {e}")
 
     def _recarregar_cadastros(self):
         """Relê contas.csv e os cadastros do ERP. Para quando algo foi criado
