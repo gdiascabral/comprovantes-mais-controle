@@ -23,8 +23,20 @@ try:
 except ImportError:
     import config
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    import util
+
 
 _diag = config.diag              # o registro de diagnóstico agora mora no config
+
+
+def _so_digitos(valor) -> str:
+    return re.sub(r"\D", "", str(valor or ""))
 
 
 def _host_path_diag(url) -> str:
@@ -512,6 +524,61 @@ class MCApi:
                     "parei aqui para não devolver uma lista pela metade.\n"
                     "Divida o período e rode de novo.")
         return todos
+
+    #: Os três "papéis" do cadastro de Contatos. São as três telas do menu
+    #: (`#/supplier`, `#/customer`, `#/employee`) sobre a MESMA tabela — e o
+    #: endpoint recusa a chamada sem `role` ("O 'papel' do participante precisa
+    #: ser especificado"). Pagamento pode ir para qualquer um dos três.
+    PAPEIS_PARTICIPANTE = ("SUPPLIER", "CUSTOMER", "EMPLOYEE")
+
+    def listar_participantes(self, log=print) -> dict[str, str]:
+        """`{nome normalizado: CPF/CNPJ}` do cadastro de Contatos.
+
+        Existe por causa do segmento B da remessa: ele exige o CPF/CNPJ de
+        quem recebe, e o lançamento **não traz o id do participante** — só
+        `paidTo`, que é o nome. Medido em 13/08/2026 sobre 300 lançamentos e
+        455 participantes: 296 casaram pelo nome e todos os 296 tinham
+        documento; as 4 sobras eram `paidTo` igual a "-".
+
+        **Nome ambíguo é descartado.** Se dois participantes normalizam para o
+        mesmo nome com documentos diferentes, não há como saber qual é — e
+        escolher um seria pagar com o documento de outra pessoa. Some do mapa,
+        e o pagamento cai na conferência como se não houvesse cadastro.
+        """
+        base, headers = self._base_legacy("participants")
+        vistos: dict[str, set] = {}
+        for papel in self.PAPEIS_PARTICIPANTE:
+            pagina, quantos = 0, 0
+            while True:
+                params = [("page", str(pagina)), ("size", "200"),
+                          ("role", papel), ("sort", "name")]
+                j = self._fetch_json(f"{base}?{urlencode(params)}", headers)
+                if isinstance(j, dict) and j.get("__erro"):
+                    raise RuntimeError(
+                        f"A API respondeu {j['__erro']} ao listar o cadastro de "
+                        f"{papel.lower()}. Recarregue a tela do Mais Controle "
+                        "no Chrome e tente de novo.")
+                j = j or {}
+                lote = j.get("content") or []
+                for p in lote:
+                    nome = util.norm_espaco(p.get("name") or "")
+                    documento = _so_digitos(p.get("cnpj")) or _so_digitos(p.get("cpf"))
+                    if nome and documento:
+                        vistos.setdefault(nome, set()).add(documento)
+                quantos += len(lote)
+                if j.get("last") or not lote:
+                    break
+                pagina += 1
+                if pagina > 50:
+                    break
+            log(f"  {papel.lower()}: {quantos} no cadastro")
+
+        mapa = {n: docs.pop() for n, docs in vistos.items() if len(docs) == 1}
+        ambiguos = len(vistos) - len(mapa)
+        if ambiguos:
+            log(f"  {ambiguos} nome(s) com documentos diferentes — fora do mapa, "
+                "porque não dá para saber qual é o certo.")
+        return mapa
 
     def listar_obras(self, log=print) -> list[dict]:
         """Todas as obras (id, name, customer).

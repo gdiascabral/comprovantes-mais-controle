@@ -950,6 +950,13 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             "tipo": tipo, "dados": dados, "valor": valor,
             "descricao": descricao, "favorecido": favorecido,
             "status": status, "conferencia": conferencia, "obs": obs,
+            # Não vão para a planilha: são para a remessa (`remessa_dia.py`).
+            # O `id` é a única volta do arquivo de retorno até o lançamento,
+            # e `parcial` decide se o título ainda pode ir como boleto — o
+            # código de barras é do valor cheio, e boleto não se paga pela
+            # metade.
+            "id": str(item.get("id") or ""),
+            "parcial": bool(parcial),
         })
 
     for regs in registros.values():

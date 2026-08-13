@@ -1,0 +1,567 @@
+{
+  "_meta": {
+    "fonte": "Guia de Importação de Arquivos CNAB 240 - Sicoob - versão 3.1 (26/03/2025)",
+    "arquivo_origem": "Manual_de_importacao_de_arquivos_CNAB_240.pdf",
+    "banco": "756",
+    "tamanho_registro": 240,
+    "colunas": ["id", "nome", "de", "ate", "dec", "tipo", "default", "obrig", "ref"],
+    "legenda": {
+      "de/ate": "posição 1-based, inclusiva. tamanho = ate - de + 1",
+      "dec": "casas decimais implícitas (sem vírgula/ponto no arquivo)",
+      "tipo": "num = numérico, alinhado à direita com zeros à esquerda | alfa = alfanumérico, alinhado à esquerda com brancos à direita, MAIÚSCULAS sem acento",
+      "default": "valor fixo; \"\" significa brancos; null significa sem default",
+      "obrig": "O = obrigatório | C = opcional | R = preenchido apenas no arquivo de retorno",
+      "ref": "código da seção 13 (Descrição de Campos) do manual; ver dominios.json"
+    },
+    "observacoes": [
+      "Um lote só pode conter um único tipo de transação (item 4 do manual).",
+      "Números de lote: 0001 no primeiro lote, +1 nos seguintes; nunca repetir. Header de arquivo usa 0000 e trailer de arquivo usa 9999.",
+      "NSR (Nº Sequencial do Registro no Lote) reinicia em 1 a cada lote e conta apenas registros tipo 3.",
+      "O arquivo de retorno é o mesmo arquivo enviado acrescido dos códigos de ocorrência (G059) nas posições 231-240."
+    ]
+  },
+
+  "header_arquivo": {
+    "tipo_registro": "0",
+    "campos": [
+      ["01.0", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.0", "Lote de Serviço", 4, 7, 0, "num", "0000", "O", "G002"],
+      ["03.0", "Tipo de Registro", 8, 8, 0, "num", "0", "O", "G003"],
+      ["04.0", "Uso Exclusivo FEBRABAN/CNAB", 9, 17, 0, "alfa", "", "O", "G004"],
+      ["05.0", "Tipo de Inscrição da Empresa", 18, 18, 0, "num", null, "O", "G005"],
+      ["06.0", "Número de Inscrição da Empresa", 19, 32, 0, "num", null, "O", "G006"],
+      ["07.0", "Código do Convênio no Banco", 33, 52, 0, "alfa", null, "O", "G007"],
+      ["08.0", "Agência Mantenedora da Conta", 53, 57, 0, "num", null, "O", "G008"],
+      ["09.0", "Dígito Verificador da Agência", 58, 58, 0, "alfa", null, "O", "G009"],
+      ["10.0", "Número da Conta Corrente", 59, 70, 0, "num", null, "O", "G010"],
+      ["11.0", "Dígito Verificador da Conta", 71, 71, 0, "num", null, "O", "G011"],
+      ["12.0", "Dígito Verificador da Ag/Conta", 72, 72, 0, "alfa", null, "O", "G012"],
+      ["13.0", "Nome da Empresa", 73, 102, 0, "alfa", null, "O", "G013"],
+      ["14.0", "Nome do Banco", 103, 132, 0, "alfa", null, "O", "G014"],
+      ["15.0", "Uso Exclusivo FEBRABAN/CNAB", 133, 142, 0, "alfa", "", "O", "G004"],
+      ["16.0", "Código Remessa / Retorno", 143, 143, 0, "num", "1", "O", "G015"],
+      ["17.0", "Data de Geração do Arquivo (DDMMAAAA)", 144, 151, 0, "num", null, "O", "G016"],
+      ["18.0", "Hora de Geração do Arquivo (HHMMSS)", 152, 157, 0, "num", null, "O", "G017"],
+      ["19.0", "Número Sequencial do Arquivo (NSA)", 158, 163, 0, "num", null, "O", "G018"],
+      ["20.0", "Nº da Versão do Layout do Arquivo", 164, 166, 0, "num", "087", "O", "G019"],
+      ["21.0", "Densidade de Gravação do Arquivo", 167, 171, 0, "num", null, "O", "G020"],
+      ["22.0", "Para Uso Reservado do Banco", 172, 191, 0, "alfa", null, "O", "G021"],
+      ["23.0", "Para Uso Reservado da Empresa", 192, 211, 0, "alfa", null, "O", "G022"],
+      ["24.0", "Uso Exclusivo FEBRABAN/CNAB", 212, 240, 0, "alfa", "", "O", "G004"]
+    ]
+  },
+
+  "trailer_arquivo": {
+    "tipo_registro": "9",
+    "campos": [
+      ["01.9", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.9", "Lote de Serviço", 4, 7, 0, "num", "9999", "O", "G002"],
+      ["03.9", "Tipo de Registro", 8, 8, 0, "num", "9", "O", "G003"],
+      ["04.9", "Uso Exclusivo FEBRABAN/CNAB", 9, 17, 0, "alfa", "", "O", "G004"],
+      ["05.9", "Quantidade de Lotes do Arquivo", 18, 23, 0, "num", null, "O", "G049"],
+      ["06.9", "Quantidade de Registros do Arquivo", 24, 29, 0, "num", null, "O", "G056"],
+      ["07.9", "Qtde de Contas p/ Conciliação (Lotes)", 30, 35, 0, "num", null, "O", "G037"],
+      ["08.9", "Uso Exclusivo FEBRABAN/CNAB", 36, 240, 0, "alfa", "", "O", "G004"]
+    ]
+  },
+
+  "header_lote_transferencia": {
+    "_uso": "Transferência entre contas Sicoob, TED e Pix Transferência. Também usado (mesmas posições) pela Folha de Pagamento.",
+    "tipo_registro": "1",
+    "versao_layout_lote": "045",
+    "campos": [
+      ["01.1", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.1", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.1", "Tipo de Registro", 8, 8, 0, "num", "1", "O", "G003"],
+      ["04.1", "Tipo da Operação", 9, 9, 0, "alfa", "C", "O", "G028"],
+      ["05.1", "Tipo do Serviço", 10, 11, 0, "num", null, "O", "G025"],
+      ["06.1", "Forma de Lançamento", 12, 13, 0, "num", null, "O", "G029"],
+      ["07.1", "Nº da Versão do Layout do Lote", 14, 16, 0, "num", "045", "O", "G030"],
+      ["08.1", "Uso Exclusivo FEBRABAN/CNAB", 17, 17, 0, "alfa", "", "O", "G004"],
+      ["09.1", "Tipo de Inscrição da Empresa", 18, 18, 0, "num", null, "C", "G005"],
+      ["10.1", "Número de Inscrição da Empresa", 19, 32, 0, "num", null, "C", "G006"],
+      ["11.1", "Código do Convênio no Banco", 33, 52, 0, "alfa", null, "O", "G007"],
+      ["12.1", "Agência Mantenedora da Conta", 53, 57, 0, "num", null, "O", "G008"],
+      ["13.1", "Dígito Verificador da Agência", 58, 58, 0, "alfa", null, "C", "G009"],
+      ["14.1", "Número da Conta Corrente", 59, 70, 0, "num", null, "O", "G010"],
+      ["15.1", "Dígito Verificador da Conta", 71, 71, 0, "num", null, "O", "G011"],
+      ["16.1", "Dígito Verificador da Ag/Conta", 72, 72, 0, "alfa", null, "C", "G012"],
+      ["17.1", "Nome da Empresa", 73, 102, 0, "alfa", null, "C", "G013"],
+      ["18.1", "Mensagem (Informação 1)", 103, 142, 0, "alfa", null, "C", "G031"],
+      ["19.1", "Logradouro", 143, 172, 0, "alfa", null, "C", "G032"],
+      ["20.1", "Número do Local", 173, 177, 0, "num", null, "C", "G032"],
+      ["21.1", "Complemento", 178, 192, 0, "alfa", null, "C", "G032"],
+      ["22.1", "Nome da Cidade", 193, 212, 0, "alfa", null, "C", "G033"],
+      ["23.1", "CEP", 213, 217, 0, "num", null, "C", "G034"],
+      ["24.1", "Complemento do CEP", 218, 220, 0, "alfa", null, "C", "G035"],
+      ["25.1", "Sigla do Estado", 221, 222, 0, "alfa", null, "C", "G036"],
+      ["26.1", "Indicativo da Forma de Pagamento do Serviço", 223, 224, 0, "num", null, "C", "P014"],
+      ["27.1", "Uso Exclusivo FEBRABAN/CNAB", 225, 230, 0, "alfa", "", "O", "G004"],
+      ["28.1", "Códigos das Ocorrências p/ Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ]
+  },
+
+  "header_lote_folha": {
+    "_uso": "Importação de Folha de Pagamento. Mesmas posições do header_lote_transferencia; muda apenas default de G025/G029 e a obrigatoriedade de 18.1 (Mensagem = Nome da folha, OBRIGATÓRIO).",
+    "tipo_registro": "1",
+    "versao_layout_lote": "045",
+    "herda_de": "header_lote_transferencia",
+    "overrides": [
+      ["05.1", "Tipo do Serviço", 10, 11, 0, "num", "30", "O", "G025"],
+      ["06.1", "Forma de Lançamento", 12, 13, 0, "num", "01", "O", "G029"],
+      ["18.1", "Mensagem (nome da folha de pagamento)", 103, 142, 0, "alfa", null, "O", "G031"]
+    ]
+  },
+
+  "header_lote_titulos": {
+    "_uso": "Pagamento de Títulos de Cobrança (inclusive Pix QR Code).",
+    "tipo_registro": "1",
+    "versao_layout_lote": "040",
+    "campos": [
+      ["01.1", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.1", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.1", "Tipo de Registro", 8, 8, 0, "num", "1", "O", "G003"],
+      ["04.1", "Tipo da Operação", 9, 9, 0, "alfa", "C", "O", "G028"],
+      ["05.1", "Tipo do Serviço", 10, 11, 0, "num", null, "O", "G025"],
+      ["06.1", "Forma de Lançamento", 12, 13, 0, "num", null, "O", "G029"],
+      ["07.1", "Nº da Versão do Layout do Lote", 14, 16, 0, "num", "040", "O", "G030"],
+      ["08.1", "Uso Exclusivo FEBRABAN/CNAB", 17, 17, 0, "alfa", "", "O", "G004"],
+      ["09.1", "Tipo de Inscrição da Empresa", 18, 18, 0, "num", null, "C", "G005"],
+      ["10.1", "Número de Inscrição da Empresa", 19, 32, 0, "num", null, "C", "G006"],
+      ["11.1", "Código do Convênio no Banco", 33, 52, 0, "alfa", null, "O", "G007"],
+      ["12.1", "Agência Mantenedora da Conta", 53, 57, 0, "num", null, "O", "G008"],
+      ["13.1", "Dígito Verificador da Agência", 58, 58, 0, "alfa", null, "C", "G009"],
+      ["14.1", "Número da Conta Corrente", 59, 70, 0, "num", null, "O", "G010"],
+      ["15.1", "Dígito Verificador da Conta", 71, 71, 0, "num", null, "O", "G011"],
+      ["16.1", "Dígito Verificador da Ag/Conta", 72, 72, 0, "alfa", null, "C", "G012"],
+      ["17.1", "Nome da Empresa", 73, 102, 0, "alfa", null, "C", "G013"],
+      ["18.1", "Mensagem (Informação 1)", 103, 142, 0, "alfa", null, "C", "G031"],
+      ["19.1", "Logradouro", 143, 172, 0, "alfa", null, "C", "G032"],
+      ["20.1", "Número do Local", 173, 177, 0, "num", null, "C", "G032"],
+      ["21.1", "Complemento", 178, 192, 0, "alfa", null, "C", "G032"],
+      ["22.1", "Cidade", 193, 212, 0, "alfa", null, "C", "G033"],
+      ["23.1", "CEP", 213, 217, 0, "num", null, "C", "G034"],
+      ["24.1", "Complemento do CEP", 218, 220, 0, "alfa", null, "C", "G035"],
+      ["25.1", "Sigla do Estado", 221, 222, 0, "alfa", null, "C", "G036"],
+      ["26.1", "Uso Exclusivo FEBRABAN/CNAB", 223, 230, 0, "alfa", "", "O", "G004"],
+      ["27.1", "Códigos das Ocorrências p/ Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ]
+  },
+
+  "header_lote_tributos": {
+    "_uso": "Pagamento de Convênios, Tributos e Impostos (com e sem código de barras).",
+    "tipo_registro": "1",
+    "versao_layout_lote": "012",
+    "campos": [
+      ["01.1", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.1", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.1", "Tipo de Registro", 8, 8, 0, "num", "1", "O", "G003"],
+      ["04.1", "Tipo da Operação", 9, 9, 0, "alfa", "C", "O", "G028"],
+      ["05.1", "Tipo do Serviço", 10, 11, 0, "num", "22", "O", "G025"],
+      ["06.1", "Forma de Lançamento", 12, 13, 0, "num", null, "O", "G029"],
+      ["07.1", "Nº da Versão do Layout do Lote", 14, 16, 0, "num", "012", "O", "G030"],
+      ["08.1", "Uso Exclusivo FEBRABAN/CNAB", 17, 17, 0, "alfa", "", "O", "G004"],
+      ["09.1", "Tipo de Inscrição da Empresa", 18, 18, 0, "num", null, "C", "G005"],
+      ["10.1", "Número de Inscrição da Empresa", 19, 32, 0, "num", null, "C", "G006"],
+      ["11.1", "Código do Convênio no Banco", 33, 52, 0, "alfa", null, "O", "G007"],
+      ["12.1", "Agência Convênio", 53, 57, 0, "num", null, "O", "G008"],
+      ["13.1", "DV Agência Convênio", 58, 58, 0, "alfa", null, "C", "G009"],
+      ["14.1", "Número da Conta Corrente Convênio", 59, 70, 0, "num", null, "O", "G010"],
+      ["15.1", "DV Conta Convênio", 71, 71, 0, "num", null, "O", "G011"],
+      ["16.1", "DV Ag/Conta Convênio", 72, 72, 0, "alfa", null, "C", "G012"],
+      ["17.1", "Nome da Empresa", 73, 102, 0, "alfa", null, "C", "G013"],
+      ["18.1", "Mensagem (Informação 1)", 103, 142, 0, "alfa", null, "C", "G031"],
+      ["19.1", "Logradouro", 143, 172, 0, "alfa", null, "C", "G032"],
+      ["20.1", "Número do Local", 173, 177, 0, "num", null, "C", "G032"],
+      ["21.1", "Complemento", 178, 192, 0, "alfa", null, "C", "G032"],
+      ["22.1", "Cidade", 193, 212, 0, "alfa", null, "C", "G033"],
+      ["23.1", "CEP", 213, 217, 0, "num", null, "C", "G034"],
+      ["24.1", "Complemento do CEP", 218, 220, 0, "alfa", null, "C", "G035"],
+      ["25.1", "Sigla do Estado", 221, 222, 0, "alfa", null, "C", "G036"],
+      ["26.1", "Indicativo da Forma de Pagamento do Compromisso", 223, 224, 0, "num", null, "C", "P014"],
+      ["27.1", "Uso Exclusivo FEBRABAN/CNAB", 225, 230, 0, "alfa", "", "O", "G004"],
+      ["28.1", "Códigos das Ocorrências p/ Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ]
+  },
+
+  "segmento_a": {
+    "_uso": "Detalhe obrigatório de Transferência Sicoob / TED / Pix Transferência e de Folha de Pagamento. Posições idênticas nos dois produtos.",
+    "tipo_registro": "3",
+    "segmento": "A",
+    "campos": [
+      ["01.3A", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.3A", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.3A", "Tipo de Registro", 8, 8, 0, "num", "3", "O", "G003"],
+      ["04.3A", "Nº Sequencial do Registro no Lote", 9, 13, 0, "num", null, "O", "G038"],
+      ["05.3A", "Código de Segmento do Reg. Detalhe", 14, 14, 0, "alfa", "A", "O", "G039"],
+      ["06.3A", "Tipo de Movimento", 15, 15, 0, "num", "0", "O", "G060"],
+      ["07.3A", "Código da Instrução p/ Movimento", 16, 17, 0, "num", "00", "C", "G061"],
+      ["08.3A", "Código da Câmara Centralizadora", 18, 20, 0, "num", null, "C", "P001"],
+      ["09.3A", "Código do Banco do Favorecido", 21, 23, 0, "num", null, "O", "P002"],
+      ["10.3A", "Ag. Mantenedora da Cta do Favorecido", 24, 28, 0, "num", null, "O", "G008"],
+      ["11.3A", "Dígito Verificador da Agência", 29, 29, 0, "alfa", null, "C", "G009"],
+      ["12.3A", "Número da Conta Corrente", 30, 41, 0, "num", null, "O", "G010"],
+      ["13.3A", "Dígito Verificador da Conta", 42, 42, 0, "num", null, "O", "G011"],
+      ["14.3A", "Dígito Verificador da Ag/Conta", 43, 43, 0, "alfa", null, "C", "G012"],
+      ["15.3A", "Nome do Favorecido", 44, 73, 0, "alfa", null, "C", "G013"],
+      ["16.3A", "Seu Número (docto atribuído pela empresa)", 74, 93, 0, "alfa", null, "C", "G064"],
+      ["17.3A", "Data do Pagamento (DDMMAAAA)", 94, 101, 0, "num", null, "O", "P009"],
+      ["18.3A", "Tipo da Moeda", 102, 104, 0, "alfa", "BRL", "C", "G040"],
+      ["19.3A", "Quantidade da Moeda", 105, 119, 5, "num", null, "O", "G041"],
+      ["20.3A", "Valor do Pagamento", 120, 134, 2, "num", null, "O", "P010"],
+      ["21.3A", "Nosso Número (docto atribuído pelo banco)", 135, 154, 0, "alfa", null, "C", "G043"],
+      ["22.3A", "Data Real da Efetivação do Pagto", 155, 162, 0, "num", null, "R", "P003"],
+      ["23.3A", "Valor Real da Efetivação do Pagto", 163, 177, 2, "num", null, "R", "P004"],
+      ["24.3A", "Informação 2 (Outras Informações / SIAPE / Depósito Judicial / tipo de conta Pix)", 178, 217, 0, "alfa", null, "C", "G031"],
+      ["25.3A", "Uso Exclusivo FEBRABAN/CNAB", 218, 219, 0, "alfa", "", "C", "G004"],
+      ["26.3A", "Código de Finalidade da TED", 220, 224, 0, "num", null, "C", "P011"],
+      ["27.3A", "Código de Finalidade Complementar", 225, 226, 0, "alfa", null, "C", "P013"],
+      ["28.3A", "Uso Exclusivo FEBRABAN/CNAB", 227, 229, 0, "alfa", "", "C", "G004"],
+      ["29.3A", "Aviso ao Favorecido", 230, 230, 0, "num", "0", "C", "P006"],
+      ["30.3A", "Códigos das Ocorrências p/ Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ],
+    "_divergencias_manual": [
+      "26.3A: o manual tipa 'Num' no item 7.2 (Transferência) e 'Alfa' no item 10.2 (Folha). Adotado 'num' (os códigos P011 são numéricos).",
+      "O manual numera dois campos como '29.3A'; aqui o último foi renomeado para 30.3A."
+    ]
+  },
+
+  "segmento_b_transferencia": {
+    "_uso": "Detalhe obrigatório que acompanha cada Segmento A em Transferência Sicoob / TED / Pix. Layout 'novo' (v2.6+) com Informação 10/11/12.",
+    "tipo_registro": "3",
+    "segmento": "B",
+    "campos": [
+      ["01.3B", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.3B", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.3B", "Tipo do Registro", 8, 8, 0, "num", "3", "O", "G003"],
+      ["04.3B", "Nº Sequencial do Registro no Lote", 9, 13, 0, "num", null, "O", "G038"],
+      ["05.3B", "Código de Segmento do Reg. Detalhe", 14, 14, 0, "alfa", "B", "O", "G039"],
+      ["06.3B", "Forma de Iniciação (Pix)", 15, 17, 0, "alfa", null, "C", "G100"],
+      ["07.3B", "Tipo de Inscrição do Favorecido", 18, 18, 0, "num", null, "O", "G005"],
+      ["08.3B", "Nº de Inscrição do Favorecido", 19, 32, 0, "num", null, "O", "G006"],
+      ["09.3B", "Informação 10", 33, 67, 0, "alfa", null, "C", "G101"],
+      ["10.3B", "Informação 11", 68, 127, 0, "alfa", null, "C", "G101"],
+      ["11.3B", "Informação 12", 128, 226, 0, "alfa", null, "C", "G101"],
+      ["12.3B", "Código UG Centralizadora (SIAPE)", 227, 232, 0, "num", null, "C", "P012"],
+      ["13.3B", "Uso Exclusivo FEBRABAN/CNAB", 233, 240, 0, "alfa", "", "C", "G004"]
+    ],
+    "sub_layout_informacao_10_11_12_nao_pix": {
+      "_uso": "Quando a Forma de Lançamento NÃO é Pix, os campos Informação 10/11/12 se subdividem assim (posições absolutas no registro).",
+      "campos": [
+        ["b.01", "Logradouro do Favorecido", 33, 67, 0, "alfa", null, "C", "G032"],
+        ["b.02", "Nº do Local", 68, 72, 0, "num", null, "C", "G032"],
+        ["b.03", "Complemento (Casa, Apto, Etc)", 73, 87, 0, "alfa", null, "C", "G032"],
+        ["b.04", "Bairro", 88, 102, 0, "alfa", null, "C", "G032"],
+        ["b.05", "Nome da Cidade", 103, 117, 0, "alfa", null, "C", "G033"],
+        ["b.06", "CEP", 118, 122, 0, "num", null, "C", "G034"],
+        ["b.07", "Complemento do CEP", 123, 125, 0, "alfa", null, "C", "G035"],
+        ["b.08", "Sigla do Estado", 126, 127, 0, "alfa", null, "C", "G036"],
+        ["b.09", "Data do Vencimento (Nominal)", 128, 135, 0, "num", null, "C", "G044"],
+        ["b.10", "Valor do Documento (Nominal)", 136, 150, 2, "num", null, "C", "G042"],
+        ["b.11", "Valor do Abatimento", 151, 165, 2, "num", null, "C", "G045"],
+        ["b.12", "Valor do Desconto", 166, 180, 2, "num", null, "C", "G046"],
+        ["b.13", "Valor da Mora", 181, 195, 2, "num", null, "C", "G047"],
+        ["b.14", "Valor da Multa", 196, 210, 2, "num", null, "C", "G048"],
+        ["b.15", "Código/Documento do Favorecido", 211, 225, 0, "alfa", null, "C", "P008"],
+        ["b.16", "Aviso ao Favorecido", 226, 226, 0, "num", null, "C", "P006"]
+      ]
+    },
+    "sub_layout_informacao_10_11_12_pix": {
+      "_uso": "Quando a Forma de Lançamento é Pix (G029 = 45 ou 47).",
+      "campos": [
+        ["b.p1", "TXID (desconsiderado em Pix Transferência)", 33, 67, 0, "alfa", null, "C", "G101"],
+        ["b.p2", "Vazio (brancos)", 68, 127, 0, "alfa", "", "C", "G101"],
+        ["b.p3", "Chave Pix (se G100 = 01, 02 ou 04) OU tipo de conta do recebedor (se G100 = 05)", 128, 226, 0, "alfa", null, "O", "G101"]
+      ]
+    }
+  },
+
+  "segmento_b_folha": {
+    "_uso": "Detalhe obrigatório que acompanha cada Segmento A na Importação de Folha de Pagamento. Layout clássico (endereço explodido).",
+    "tipo_registro": "3",
+    "segmento": "B",
+    "campos": [
+      ["01.3B", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.3B", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.3B", "Tipo do Registro", 8, 8, 0, "num", "3", "O", "G003"],
+      ["04.3B", "Nº Sequencial do Registro no Lote", 9, 13, 0, "num", null, "O", "G038"],
+      ["05.3B", "Código de Segmento do Reg. Detalhe", 14, 14, 0, "alfa", "B", "O", "G039"],
+      ["06.3B", "Uso Exclusivo FEBRABAN/CNAB", 15, 17, 0, "alfa", "", "C", "G004"],
+      ["07.3B", "Tipo de Inscrição do Favorecido", 18, 18, 0, "num", null, "O", "G005"],
+      ["08.3B", "Nº de Inscrição do Favorecido", 19, 32, 0, "num", null, "O", "G006"],
+      ["09.3B", "Logradouro (Nome da Rua, Av, Pça, Etc)", 33, 62, 0, "alfa", null, "C", "G032"],
+      ["10.3B", "Nº do Local", 63, 67, 0, "num", null, "C", "G032"],
+      ["11.3B", "Complemento (Casa, Apto, Etc)", 68, 82, 0, "alfa", null, "C", "G032"],
+      ["12.3B", "Bairro", 83, 97, 0, "alfa", null, "C", "G032"],
+      ["13.3B", "Nome da Cidade", 98, 117, 0, "alfa", null, "C", "G033"],
+      ["14.3B", "CEP", 118, 122, 0, "num", null, "C", "G034"],
+      ["15.3B", "Complemento do CEP", 123, 125, 0, "alfa", null, "C", "G035"],
+      ["16.3B", "Sigla do Estado", 126, 127, 0, "alfa", null, "C", "G036"],
+      ["17.3B", "Data do Vencimento (Nominal)", 128, 135, 0, "num", null, "C", "G044"],
+      ["18.3B", "Valor do Documento (Nominal)", 136, 150, 2, "num", null, "C", "G042"],
+      ["19.3B", "Valor do Abatimento", 151, 165, 2, "num", null, "C", "G045"],
+      ["20.3B", "Valor do Desconto", 166, 180, 2, "num", null, "C", "G046"],
+      ["21.3B", "Valor da Mora", 181, 195, 2, "num", null, "C", "G047"],
+      ["22.3B", "Valor da Multa", 196, 210, 2, "num", null, "C", "G048"],
+      ["23.3B", "Código/Documento do Favorecido", 211, 225, 0, "alfa", null, "C", "P008"],
+      ["24.3B", "Aviso ao Favorecido", 226, 226, 0, "num", null, "C", "P006"],
+      ["25.3B", "Código UG Centralizadora (SIAPE)", 227, 232, 0, "alfa", null, "C", "P012"],
+      ["26.3B", "Uso Exclusivo FEBRABAN/CNAB", 233, 240, 0, "alfa", "", "C", "G004"]
+    ]
+  },
+
+  "trailer_lote_transferencia": {
+    "_uso": "Trailer de lote de Transferência/TED/Pix e de Folha de Pagamento.",
+    "tipo_registro": "5",
+    "campos": [
+      ["01.5", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.5", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.5", "Tipo de Registro", 8, 8, 0, "num", "5", "O", "G003"],
+      ["04.5", "Uso Exclusivo FEBRABAN/CNAB", 9, 17, 0, "alfa", "", "O", "G004"],
+      ["05.5", "Quantidade de Registros do Lote", 18, 23, 0, "num", null, "O", "G057"],
+      ["06.5", "Somatória dos Valores", 24, 41, 2, "num", null, "O", "P007"],
+      ["07.5", "Somatória de Quantidade de Moedas", 42, 59, 5, "num", null, "C", "G058"],
+      ["08.5", "Número Aviso de Débito", 60, 65, 0, "num", null, "C", "G066"],
+      ["09.5", "Uso Exclusivo FEBRABAN/CNAB", 66, 230, 0, "alfa", "", "O", "G004"],
+      ["10.5", "Códigos das Ocorrências para Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ]
+  },
+
+  "trailer_lote_titulos": {
+    "_uso": "Trailer de lote de Pagamento de Títulos de Cobrança. Idêntico ao de transferência; muda apenas a referência da somatória (L001 = soma dos valores de pagamento dos segmentos J).",
+    "tipo_registro": "5",
+    "herda_de": "trailer_lote_transferencia",
+    "overrides": [
+      ["06.5", "Somatória dos Valores (segmentos J)", 24, 41, 2, "num", null, "O", "L001"]
+    ]
+  },
+
+  "trailer_lote_tributos": {
+    "_uso": "Trailer de lote de Pagamento de Convênios, Tributos e Impostos. ATENÇÃO: layout diferente a partir da posição 42.",
+    "tipo_registro": "5",
+    "campos": [
+      ["01.5", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.5", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.5", "Tipo de Registro", 8, 8, 0, "num", "5", "O", "G003"],
+      ["04.5", "Uso Exclusivo FEBRABAN/CNAB", 9, 17, 0, "alfa", "", "O", "G004"],
+      ["05.5", "Quantidade de Registros do Lote", 18, 23, 0, "num", null, "O", "G057"],
+      ["06.5", "Somatória dos Valores dos Pagamentos", 24, 41, 2, "num", null, "O", "B002"],
+      ["07.5", "Complemento de registro", 42, 230, 0, "alfa", "", "O", "B003"],
+      ["08.5", "Códigos das Ocorrências para Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ]
+  },
+
+  "segmento_j": {
+    "_uso": "Detalhe obrigatório de Pagamento de Títulos de Cobrança (boleto e Pix QR Code).",
+    "tipo_registro": "3",
+    "segmento": "J",
+    "campos": [
+      ["01.3J", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.3J", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.3J", "Tipo de Registro", 8, 8, 0, "num", "3", "O", "G003"],
+      ["04.3J", "Nº Sequencial do Registro no Lote", 9, 13, 0, "num", null, "O", "G038"],
+      ["05.3J", "Código de Segmento no Reg. Detalhe", 14, 14, 0, "alfa", "J", "O", "G039"],
+      ["06.3J", "Tipo de Movimento", 15, 15, 0, "num", "0", "O", "G060"],
+      ["07.3J", "Código da Instrução p/ Movimento", 16, 17, 0, "num", "00", "C", "G061"],
+      ["08.3J", "Código de Barras", 18, 61, 0, "num", null, "O", "G063"],
+      ["09.3J", "Nome do Cedente", 62, 91, 0, "alfa", null, "C", "G013"],
+      ["10.3J", "Data do Vencimento (Nominal)", 92, 99, 0, "num", null, "C", "G044"],
+      ["11.3J", "Valor do Título (Nominal)", 100, 114, 2, "num", null, "C", "G042"],
+      ["12.3J", "Valor do Desconto + Abatimento", 115, 129, 2, "num", null, "C", "L002"],
+      ["13.3J", "Valor da Mora + Multa", 130, 144, 2, "num", null, "C", "L003"],
+      ["14.3J", "Data do Pagamento", 145, 152, 0, "num", null, "O", "P009"],
+      ["15.3J", "Valor do Pagamento", 153, 167, 2, "num", null, "O", "P010"],
+      ["16.3J", "Quantidade da Moeda", 168, 182, 5, "num", null, "C", "G041"],
+      ["17.3J", "Referência Sacado (docto atribuído pela empresa)", 183, 202, 0, "alfa", null, "C", "G064"],
+      ["18.3J", "Nosso Número (docto atribuído pelo banco)", 203, 222, 0, "alfa", null, "C", "G043"],
+      ["19.3J", "Código de Moeda", 223, 224, 0, "num", "09", "C", "G065"],
+      ["20.3J", "Uso Exclusivo FEBRABAN/CNAB", 225, 230, 0, "alfa", "", "C", "G004"],
+      ["21.3J", "Códigos das Ocorrências p/ Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ]
+  },
+
+  "segmento_j52": {
+    "_uso": "Obrigatório após cada Segmento J em pagamento de título de cobrança. NÃO enviar para pagamento tipo Pix.",
+    "tipo_registro": "3",
+    "segmento": "J",
+    "campos": [
+      ["01.4.J52", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.4.J52", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.4.J52", "Tipo de Registro", 8, 8, 0, "num", "3", "O", "G003"],
+      ["04.4.J52", "Nº Sequencial do Registro no Lote", 9, 13, 0, "num", null, "O", "G038"],
+      ["05.4.J52", "Cód. Segmento do Registro Detalhe", 14, 14, 0, "alfa", "J", "O", "G039"],
+      ["06.4.J52", "Uso Exclusivo FEBRABAN/CNAB", 15, 15, 0, "alfa", "", "C", "G004"],
+      ["07.4.J52", "Código de Movimento Remessa", 16, 17, 0, "num", "00", "C", "C004"],
+      ["08.4.J52", "Identificação Registro Opcional", 18, 19, 0, "num", "52", "C", "G067"],
+      ["09.4.J52", "Tipo de Inscrição do Sacado", 20, 20, 0, "num", null, "C", "G005"],
+      ["10.4.J52", "Número de Inscrição do Sacado", 21, 35, 0, "num", null, "C", "G006"],
+      ["11.4.J52", "Nome do Sacado", 36, 75, 0, "alfa", null, "C", "G013"],
+      ["12.4.J52", "Tipo de Inscrição do Cedente", 76, 76, 0, "num", null, "C", "G005"],
+      ["13.4.J52", "Número de Inscrição do Cedente", 77, 91, 0, "num", null, "C", "G006"],
+      ["14.4.J52", "Nome do Cedente", 92, 131, 0, "alfa", null, "C", "G013"],
+      ["15.4.J52", "Tipo de Inscrição do Sacador", 132, 132, 0, "num", null, "C", "G005"],
+      ["16.4.J52", "Número de Inscrição do Sacador", 133, 147, 0, "num", null, "C", "G006"],
+      ["17.4.J52", "Nome do Sacador", 148, 187, 0, "alfa", null, "C", "G013"],
+      ["18.4.J52", "Uso Exclusivo FEBRABAN/CNAB", 188, 240, 0, "alfa", "", "C", "G004"]
+    ]
+  },
+
+  "segmento_j52_pix": {
+    "_uso": "Obrigatório após cada Segmento J quando o pagamento é do tipo Pix (G029 = 47). Substitui o J-52 comum.",
+    "tipo_registro": "3",
+    "segmento": "J",
+    "campos": [
+      ["01.4.J52", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.4.J52", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.4.J52", "Tipo de Registro", 8, 8, 0, "num", "3", "O", "G003"],
+      ["04.4.J52", "Nº Sequencial do Registro no Lote", 9, 13, 0, "num", null, "O", "G038"],
+      ["05.4.J52", "Cód. Segmento do Registro Detalhe", 14, 14, 0, "alfa", "J", "O", "G039"],
+      ["06.4.J52", "Uso Exclusivo FEBRABAN/CNAB", 15, 15, 0, "alfa", "", "C", "G004"],
+      ["07.4.J52", "Código de Movimento Remessa", 16, 17, 0, "num", "00", "C", "C004"],
+      ["08.4.J52", "Identificação Registro Opcional", 18, 19, 0, "num", "52", "C", "G067"],
+      ["09.4.J52", "Tipo de Inscrição do Devedor", 20, 20, 0, "num", null, "C", "G005"],
+      ["10.4.J52", "Número de Inscrição do Devedor", 21, 35, 0, "num", null, "C", "G006"],
+      ["11.4.J52", "Nome do Devedor", 36, 75, 0, "alfa", null, "C", "G013"],
+      ["12.4.J52", "Tipo de Inscrição do Favorecido", 76, 76, 0, "num", null, "C", "G005"],
+      ["13.4.J52", "Número de Inscrição do Favorecido", 77, 91, 0, "num", null, "C", "G006"],
+      ["14.4.J52", "Nome do Favorecido", 92, 131, 0, "alfa", null, "C", "G013"],
+      ["15.4.J52", "URL / Chave de Endereçamento", 132, 210, 0, "alfa", null, "O", "G102"],
+      ["16.4.J52", "TXID (Código de Identificação do QR Code)", 211, 240, 0, "alfa", null, "O", "G102"]
+    ]
+  },
+
+  "segmento_o": {
+    "_uso": "Detalhe obrigatório de Pagamento de Convênios/Tributos COM código de barras (G029 = 11).",
+    "tipo_registro": "3",
+    "segmento": "O",
+    "campos": [
+      ["01.3O", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.3O", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.3O", "Registro Detalhe de Lote", 8, 8, 0, "num", "3", "O", "G003"],
+      ["04.3O", "Nº Sequencial do Registro no Lote", 9, 13, 0, "num", null, "O", "G038"],
+      ["05.3O", "Código de Segmento no Reg. Detalhe", 14, 14, 0, "alfa", "O", "O", "G039"],
+      ["06.3O", "Tipo de Movimento", 15, 15, 0, "num", "0", "O", "G060"],
+      ["07.3O", "Código da Instrução de Movimento", 16, 17, 0, "num", "00", "C", "G061"],
+      ["08.3O", "Código de Barras", 18, 61, 0, "alfa", null, "O", "N001"],
+      ["09.3O", "Nome da Concessionária / Órgão Público", 62, 91, 0, "alfa", null, "C", "G013"],
+      ["10.3O", "Data do Vencimento (Nominal)", 92, 99, 0, "num", null, "C", "G044"],
+      ["11.3O", "Data do Pagamento", 100, 107, 0, "num", null, "O", "P009"],
+      ["12.3O", "Valor do Pagamento", 108, 122, 2, "num", null, "O", "P004"],
+      ["13.3O", "Seu Número (docto atribuído pela empresa)", 123, 142, 0, "alfa", null, "C", "G064"],
+      ["14.3O", "Nosso Número (docto atribuído pelo banco)", 143, 162, 0, "alfa", null, "C", "G043"],
+      ["15.3O", "Uso Exclusivo FEBRABAN/CNAB", 163, 230, 0, "alfa", "", "C", "G004"],
+      ["16.3O", "Códigos das Ocorrências p/ Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ]
+  },
+
+  "segmento_n": {
+    "_uso": "Detalhe obrigatório de Pagamento de Tributos SEM código de barras (G029 = 16 DARF, 17 GPS, 18 DARF Simples). As posições 111-230 variam por tributo.",
+    "tipo_registro": "3",
+    "segmento": "N",
+    "campos": [
+      ["01.3N", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.3N", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.3N", "Registro Detalhe de Lote", 8, 8, 0, "num", "3", "O", "G003"],
+      ["04.3N", "Nº Sequencial do Registro no Lote", 9, 13, 0, "num", null, "O", "G038"],
+      ["05.3N", "Código de Segmento no Reg. Detalhe", 14, 14, 0, "alfa", "N", "O", "G039"],
+      ["06.3N", "Tipo de Movimento", 15, 15, 0, "num", "0", "O", "G060"],
+      ["07.3N", "Código da Instrução de Movimento", 16, 17, 0, "num", "00", "C", "G061"],
+      ["08.3N", "Seu Número (docto atribuído pela empresa)", 18, 37, 0, "alfa", null, "C", "G064"],
+      ["09.3N", "Nosso Número (docto atribuído pelo banco)", 38, 57, 0, "alfa", null, "C", "G043"],
+      ["10.3N", "Nome do Contribuinte", 58, 87, 0, "alfa", null, "C", "G013"],
+      ["11.3N", "Data do Pagamento", 88, 95, 0, "num", null, "O", "P009"],
+      ["12.3N", "Valor do Total do Pagamento", 96, 110, 2, "num", null, "O", "P010"],
+      ["13.3N", "Informações Complementares (varia por tributo)", 111, 230, 0, "alfa", null, "O", null],
+      ["14.3N", "Códigos das Ocorrências p/ Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ],
+    "complemento_gps": {
+      "_forma_lancamento": "17",
+      "campos": [
+        ["01.3.N1", "Código da Receita do Tributo", 111, 116, 0, "alfa", null, "O", "N002"],
+        ["02.3.N1", "Tipo de Identificação do Contribuinte", 117, 118, 0, "num", null, "O", "N003"],
+        ["03.3.N1", "Identificação do Contribuinte", 119, 132, 0, "num", null, "O", "N004"],
+        ["04.3.N1", "Código de Identificação do Tributo", 133, 134, 0, "alfa", "17", "O", "N005"],
+        ["05.3.N1", "Mês e ano de competência (MMAAAA)", 135, 140, 0, "num", null, "O", "N006"],
+        ["06.3.N1", "Valor previsto do pagamento do INSS", 141, 155, 2, "num", null, "O", "G055"],
+        ["07.3.N1", "Valor de Outras Entidades", 156, 170, 2, "num", null, "C", "G054"],
+        ["08.3.N1", "Atualização Monetária", 171, 185, 2, "num", null, "C", "N007"],
+        ["09.3.N1", "Uso Exclusivo FEBRABAN/CNAB", 186, 230, 0, "alfa", "", "C", "G004"]
+      ]
+    },
+    "complemento_darf": {
+      "_forma_lancamento": "16",
+      "campos": [
+        ["01.3.N2", "Código da Receita do Tributo", 111, 116, 0, "alfa", null, "O", "N002"],
+        ["02.3.N2", "Tipo de Identificação do Contribuinte", 117, 118, 0, "num", null, "O", "N003"],
+        ["03.3.N2", "Identificação do Contribuinte", 119, 132, 0, "num", null, "O", "N004"],
+        ["04.3.N2", "Código de Identificação do Tributo", 133, 134, 0, "alfa", "16", "O", "N005"],
+        ["05.3.N2", "Período de Apuração (DDMMAAAA)", 135, 142, 0, "num", null, "O", "N008"],
+        ["06.3.N2", "Número de Referência", 143, 159, 0, "num", null, "C", "N009"],
+        ["07.3.N2", "Valor Principal", 160, 174, 2, "num", null, "O", "G042"],
+        ["08.3.N2", "Valor da Multa", 175, 189, 2, "num", null, "C", "G048"],
+        ["09.3.N2", "Valor dos Juros / Encargos", 190, 204, 2, "num", null, "C", "G047"],
+        ["10.3.N2", "Data de Vencimento (DDMMAAAA)", 205, 212, 0, "num", null, "O", "G044"],
+        ["11.3.N2", "Uso Exclusivo FEBRABAN/CNAB", 213, 230, 0, "alfa", "", "C", "G004"]
+      ]
+    },
+    "complemento_darf_simples": {
+      "_forma_lancamento": "18",
+      "campos": [
+        ["01.3.N3", "Código da Receita do Tributo", 111, 116, 0, "alfa", "6106", "O", "N002"],
+        ["02.3.N3", "Tipo de Identificação do Contribuinte", 117, 118, 0, "num", null, "O", "N003"],
+        ["03.3.N3", "Identificação do Contribuinte", 119, 132, 0, "num", null, "O", "N004"],
+        ["04.3.N3", "Código de Identificação do Tributo", 133, 134, 0, "alfa", "18", "O", "N005"],
+        ["05.3.N3", "Período de Apuração (DDMMAAAA)", 135, 142, 0, "num", null, "O", "N006"],
+        ["06.3.N3", "Valor da Receita Bruta Acumulada", 143, 157, 2, "num", null, "O", "N010"],
+        ["07.3.N3", "Percentual sobre a Receita Bruta Acumulada", 158, 164, 2, "num", null, "O", "N011"],
+        ["08.3.N3", "Valor Principal", 165, 179, 2, "num", null, "O", "G042"],
+        ["09.3.N3", "Valor da Multa", 180, 194, 2, "num", null, "C", "G048"],
+        ["10.3.N3", "Valor dos Juros / Encargos", 195, 209, 2, "num", null, "C", "G047"],
+        ["11.3.N3", "Uso Exclusivo FEBRABAN/CNAB", 210, 230, 0, "alfa", "", "C", "G004"]
+      ]
+    }
+  },
+
+  "segmento_w": {
+    "_uso": "Opcional; informações complementares de tributo. Obrigatório para FGTS nos convênios 0181/0182 (ver G029).",
+    "tipo_registro": "3",
+    "segmento": "W",
+    "campos": [
+      ["01.3W", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.3W", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.3W", "Registro Detalhe de Lote", 8, 8, 0, "num", "3", "O", "G003"],
+      ["04.3W", "Nº Sequencial do Registro no Lote", 9, 13, 0, "num", null, "O", "G038"],
+      ["05.3W", "Código de Segmento no Reg. Detalhe", 14, 14, 0, "alfa", "W", "O", "G039"],
+      ["06.3W", "Número Seq. Registro Complementar", 15, 15, 0, "num", null, "O", "N023"],
+      ["07.3W", "Identifica o Uso das informações 1 e 2", 16, 16, 0, "alfa", null, "O", "N024"],
+      ["08.3W", "Informação Complementar 1", 17, 96, 0, "alfa", null, "C", "N025"],
+      ["09.3W", "Informação Complementar 2", 97, 176, 0, "alfa", null, "C", "N025"],
+      ["10.3W", "Identificador de Tributo", 177, 178, 0, "alfa", null, "C", "N027"],
+      ["11.3W", "Informação Complementar Tributo", 179, 228, 0, "alfa", null, "C", "N026"],
+      ["12.3W", "Uso CNAB/FEBRABAN", 229, 230, 0, "alfa", "", "C", "G004"],
+      ["13.3W", "Códigos das Ocorrências p/ Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ],
+    "_divergencias_manual": [
+      "11.3W: o manual informa 'Nº Dig = 48', mas as posições 179-228 dão 50 caracteres. As posições foram adotadas como autoritativas.",
+      "O manual numera o segmento W de 01.3W a 12.3W agrupando 'Identificador de Tributo' e 'Informação Complementar Tributo' sob o mesmo item 10.3W; aqui foram separados."
+    ]
+  },
+
+  "segmento_z": {
+    "_uso": "Somente no arquivo de RETORNO. Traz a autenticação dos pagamentos processados com sucesso (Transferências/TED A+B, Títulos O/N/W, Folha A+B).",
+    "tipo_registro": "3",
+    "segmento": "Z",
+    "somente_retorno": true,
+    "campos": [
+      ["01.3Z", "Código do Banco na Compensação", 1, 3, 0, "num", "756", "O", "G001"],
+      ["02.3Z", "Lote de Serviço", 4, 7, 0, "num", null, "O", "G002"],
+      ["03.3Z", "Registro Detalhe de Lote", 8, 8, 0, "num", "3", "O", "G003"],
+      ["04.3Z", "Nº Sequencial do Registro no Lote", 9, 13, 0, "num", null, "O", "G038"],
+      ["05.3Z", "Código de Segmento no Reg. Detalhe", 14, 14, 0, "alfa", "Z", "O", "G039"],
+      ["06.3Z", "Autenticação para atender Legislação", 15, 78, 0, "alfa", null, "R", "Z001"],
+      ["07.3Z", "Autenticação Bancária / Protocolo", 79, 103, 0, "alfa", null, "R", "Z002"],
+      ["08.3Z", "Uso CNAB/FEBRABAN", 104, 230, 0, "alfa", "", "R", "G004"],
+      ["09.3Z", "Códigos das Ocorrências p/ Retorno", 231, 240, 0, "alfa", null, "R", "G059"]
+    ]
+  }
+}

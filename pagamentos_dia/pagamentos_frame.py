@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ocr_boleto                                             # noqa: E402
 import regras_pagamento as regras                             # noqa: E402
 import relatorio                                              # noqa: E402
+import remessa_dia                                            # noqa: E402
 
 try:                                     # utilitários compartilhados (raiz)
     import util
@@ -59,9 +60,36 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 
 CampoData = widgets.CampoData
 
+# Cadastros de outras abas, reusados pela remessa: `contas_mc` diz de que
+# EMPRESA é cada conta do ERP, e `sicoob_contas` traz CNPJ, agência, conta e
+# convênio. Um mapa a mais seria uma divergência a mais esperando acontecer —
+# julho de 2026 já ficou partido uma vez por dois mapas discordando.
+#
+# Import PLANO, como o `relatorio_frame` e o `extratos_frame` fazem: o app põe
+# cada pasta de aba direto no sys.path. `from extratos_sicoob import ...` até
+# resolveria o nome, mas o próprio `sicoob_contas` faz `import sicoob_config`
+# — que só existe com a pasta dele no caminho.
+for _aba in ("relatorios", "extratos_sicoob"):
+    _p = Path(__file__).resolve().parent.parent / _aba
+    if _p.is_dir() and str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import contas_mc                                              # noqa: E402
+import sicoob_contas                                          # noqa: E402
 
 
 
+def _historico():
+    """A memória das remessas, ao lado do exe.
+
+    Tem valor, favorecido e o de-para com o ERP — dado da empresa, e por isso
+    fora do repositório, como o `contas_sicoob.json`. Longe do cadastro de
+    propósito: cadastro se restaura de backup, e um contador de NSA que volta
+    no tempo é a única falha que este arquivo não pode ter.
+    """
+    from cnab240 import Historico
+
+    return Historico(_pasta_base() / "remessas.json")
 
 
 def _carregar_reembolsos() -> dict:
@@ -88,9 +116,16 @@ class PagamentosDiaFrame(ttk.Frame):
         self.lancamentos: list[dict] = []
         self.anexos: dict = {}
         self.overviews: dict = {}
+        #: {nome normalizado: CPF/CNPJ} do cadastro de Contatos do ERP.
+        #: É o que libera o Pix por telefone, e-mail e chave aleatória.
+        self.participantes: dict = {}
         self.contas: list[tuple] = []
         self.vars_contas: dict[str, tk.BooleanVar] = {}
         self.ultimo_arquivo: Path | None = None
+        #: O que o passo 2 montou. A remessa sai daqui, não do .xlsx — ler a
+        #: planilha de volta seria reparsear texto formatado para reconstruir
+        #: número, e ela é relatório, não fonte.
+        self.resultado = None
 
         hoje = datetime.date.today()
         self.v_ini = tk.StringVar(value=f"{hoje:%d/%m/%Y}")
@@ -181,6 +216,9 @@ class PagamentosDiaFrame(ttk.Frame):
         self.b2 = ttk.Button(btns, text="▶ 2. Gerar a planilha", command=self.gerar,
                              state="disabled")
         self.b2.pack(side="left", padx=10)
+        self.b3 = ttk.Button(btns, text="▶ 3. Gerar remessa",
+                             command=self.gerar_remessa, state="disabled")
+        self.b3.pack(side="left", padx=(0, 10))
         self.b_stop = ttk.Button(btns, text="⏹ Parar", command=self._parar_click,
                                  state="disabled")
         self.b_stop.pack(side="left")
@@ -261,6 +299,10 @@ class PagamentosDiaFrame(ttk.Frame):
                     self.b1.configure(state=valor)
                     self.b2.configure(state="normal" if valor == "normal" and self.contas
                                       else "disabled")
+                    # A remessa sai do que o passo 2 já montou em memória, e
+                    # não do disco: sem planilha gerada não há o que mandar.
+                    self.b3.configure(state="normal" if valor == "normal"
+                                      and self.resultado else "disabled")
                     self.b_stop.configure(state="disabled" if valor == "normal" else "normal")
                 elif tipo == "arquivo":
                     self.ultimo_arquivo = valor
@@ -332,6 +374,26 @@ class PagamentosDiaFrame(ttk.Frame):
             com_obs = sum(1 for v in self.overviews.values() if (v.get("comment") or "").strip())
             self._log(f"{len(self.overviews)} detalhe(s) — {com_oc} com OC, "
                       f"{com_obs} com observação.")
+
+            # O cadastro de Contatos é o que permite o Pix por telefone,
+            # e-mail e chave aleatória: o segmento B exige o CPF/CNPJ de quem
+            # recebe, e o lançamento só traz o nome. Falhar aqui não derruba a
+            # busca — sem o cadastro a planilha sai igual, só a remessa é que
+            # fica mais pobre.
+            self.q.put(("status", "Lendo o cadastro de Contatos..."))
+            try:
+                self.participantes = api.listar_participantes(log=self._log)
+                casaram = sum(
+                    1 for i in self.lancamentos
+                    if util.norm_espaco(i.get("paidTo") or "") in self.participantes)
+                self._log(f"{len(self.participantes)} contato(s) com documento; "
+                          f"{casaram} de {len(self.lancamentos)} lançamento(s) "
+                          "casaram pelo nome.")
+            except Exception as e:
+                self.participantes = {}
+                self._log(f"[!] não consegui ler o cadastro de Contatos: {e}\n"
+                          "    O Pix por telefone/e-mail/aleatória vai ficar de "
+                          "fora da remessa.")
 
             self.contas = relatorio.resumo_por_conta(self.lancamentos)
             self.q.put(("contas", self.contas))
@@ -511,6 +573,7 @@ class PagamentosDiaFrame(ttk.Frame):
                 pix_reembolso=_carregar_reembolsos(), urls_ocr=urls_ocr,
                 regras_fornecedor=regras.carregar_fornecedores(),
                 ids_nao_confirmados=nao_confirmados)
+            self.resultado = resultado
             registros, omitidos = resultado.contas, resultado.omitidos
             if not registros and not omitidos:
                 self.q.put(("status", "Nenhuma linha para as contas marcadas."))
@@ -549,6 +612,239 @@ class PagamentosDiaFrame(ttk.Frame):
             self.q.put(("status", "Não consegui gerar a planilha."))
         finally:
             self.q.put(("botoes", "normal"))
+
+    def _diagnostico_documentos(self):
+        """Onde, no que o ERP já mandou, existe CPF/CNPJ — e se ele varia.
+
+        Pergunta em aberto do Pix: o segmento B exige o documento de quem
+        recebe, e hoje só o temos quando a própria chave é o CPF/CNPJ. Este
+        relatório diz se o dado já vem do ERP em algum campo que ninguém lia.
+
+        Varre as TRÊS fontes que o passo 1 deixou em memória — a lista, o
+        detalhe e os anexos —, porque são payloads diferentes: olhar só uma
+        responderia sobre ela, e não sobre o ERP.
+
+        **Não imprime documento nenhum** — só o caminho, a contagem e quantos
+        valores distintos. É o "distintos" que decide: um caminho com um valor
+        só em todos os lançamentos é a própria empresa; um que varia com o
+        lançamento é o fornecedor, e esse serve.
+        """
+        fontes = (
+            ("lista", {str(i.get("id") or n): i
+                       for n, i in enumerate(self.lancamentos)}),
+            ("detalhe", self.overviews),
+            ("anexos", self.anexos),
+        )
+        houve = False
+        for rotulo, payloads in fontes:
+            try:
+                achados = remessa_dia.diagnostico_documentos(payloads)
+            except Exception:
+                continue                 # diagnóstico nunca derruba a busca
+            if not achados:
+                continue
+            houve = True
+            self._log(f"\nCPF/CNPJ no {rotulo} do ERP "
+                      "(campo · em quantos · valores distintos):")
+            for caminho, quantos, distintos in achados[:8]:
+                pista = ("varia por lançamento" if distintos > 1
+                         else "sempre o mesmo")
+                self._log(f"  {caminho[:50]:50} {quantos:>4}  {distintos:>4}  {pista}")
+        if not houve:
+            self._log("Documento do favorecido: nenhum CPF/CNPJ válido na lista, "
+                      "no detalhe nem nos anexos — o Pix por telefone/e-mail/"
+                      "aleatória seguirá saindo à mão.")
+
+    # --------------------------------------------------------------- etapa 3
+    def gerar_remessa(self):
+        """Abre a conferência e grava os .REM — um por conta pagadora.
+
+        Roda inteiro na thread da INTERFACE, e não passa pelo `anx.submeter`:
+        ao contrário dos passos 1 e 2, aqui não há navegador nem ERP. Tudo o
+        que a remessa precisa já está em `self.resultado`, e escrever arquivo
+        de texto local não justifica ocupar a sessão que só aceita um por vez.
+        """
+        if not self.resultado:
+            messagebox.showinfo("Remessa", "Gere a planilha primeiro (passo 2).")
+            return
+        try:
+            mapa_mc = contas_mc.carregar()
+            cadastro = sicoob_contas.carregar()
+        except Exception as e:
+            messagebox.showerror("Remessa", f"Não consegui ler o cadastro:\n{e}")
+            return
+
+        preparado = remessa_dia.preparar(self.resultado.contas,
+                                         self.participantes)
+        pagadores, recusadas = {}, []
+        for conta in preparado:
+            pagador, motivo = remessa_dia.resolver_pagador(
+                conta, mapa_mc, cadastro.empresas)
+            if pagador:
+                pagadores[conta] = pagador
+            else:
+                recusadas.append((conta, motivo))
+
+        if not pagadores:
+            messagebox.showinfo(
+                "Remessa",
+                "Nenhuma conta marcada gera remessa.\n\n"
+                + "\n".join(f"• {c}: {m}" for c, m in recusadas[:8]))
+            return
+
+        historico = _historico()
+        if not self._janela_remessa(preparado, pagadores, recusadas, historico):
+            self.q.put(("status", "Remessa cancelada — nada foi gravado."))
+            return
+        self._gravar_remessas(preparado, pagadores, historico)
+
+    def _janela_remessa(self, preparado, pagadores, recusadas, historico) -> bool:
+        """A conferência. Devolve True se a pessoa confirmou.
+
+        Vem marcado o que a planilha julgou APTO e desmarcado o que ela marcou
+        com ATENÇÃO: o normal segue sozinho, o duvidoso exige um clique. O que
+        NÃO PODE sair aparece sem caixa, com o motivo — desmarcado é escolha
+        sua, impedido é outra coisa.
+        """
+        top = tk.Toplevel(self)
+        top.title("3. Gerar remessa — conferência")
+        top.transient(self.winfo_toplevel())
+        widgets.barra_de_titulo(top)
+
+        moldura = ttk.Frame(top, padding=14)
+        moldura.pack(fill="both", expand=True)
+        ttk.Label(moldura, style="Secao.TLabel",
+                  text="Confira o que vai no arquivo").pack(anchor="w")
+        ttk.Label(moldura, style="Apoio.TLabel", wraplength=680, justify="left",
+                  text="Já vem marcado o que está APTO. Desmarque o que não deve "
+                       "ir hoje. Depois de gravar, o envio ao SicoobNet é seu, "
+                       "à mão — o app nunca transmite."
+                  ).pack(anchor="w", pady=(0, 10))
+
+        painel = tk.Canvas(moldura, highlightthickness=0, height=380)
+        barra = ttk.Scrollbar(moldura, orient="vertical", command=painel.yview)
+        dentro = ttk.Frame(painel)
+        dentro.bind("<Configure>",
+                    lambda _e: painel.configure(scrollregion=painel.bbox("all")))
+        painel.create_window((0, 0), window=dentro, anchor="nw")
+        painel.configure(yscrollcommand=barra.set)
+        widgets.estilo_canvas(painel)
+        painel.pack(side="left", fill="both", expand=True)
+        barra.pack(side="left", fill="y")
+
+        for conta, pagador in pagadores.items():
+            linhas = preparado[conta]
+            nsa = historico.proximo_nsa(pagador.convenio)
+            cabecalho = ttk.Frame(dentro)
+            cabecalho.pack(fill="x", pady=(10, 2))
+            ttk.Label(cabecalho, style="Secao.TLabel",
+                      text=f"{pagador.empresa} — ag {pagador.agencia}-"
+                           f"{pagador.dv_agencia} / {pagador.conta}-{pagador.dv_conta}"
+                      ).pack(side="left")
+            ttk.Label(cabecalho, style="Apoio.TLabel",
+                      text=f"arquivo nº {nsa:06d}").pack(side="right")
+
+            for c in linhas:
+                if not c.pode:
+                    ttk.Label(dentro, style="Apoio.TLabel", wraplength=660,
+                              justify="left",
+                              text=(f"       —  {c.tipo}  {relatorio.brl(c.valor)}  "
+                                    f"{c.favorecido[:28]}  ·  não vai: {c.impedimento}")
+                              ).pack(anchor="w")
+                    continue
+                v = tk.BooleanVar(value=c.marcado)
+                c._var = v                      # lido de volta no confirmar()
+                ttk.Checkbutton(
+                    dentro, variable=v,
+                    text=(f"{c.tipo:<7} {relatorio.brl(c.valor):>14}  "
+                          f"{c.favorecido[:30]:<30}  {c.descricao[:40]}")
+                ).pack(anchor="w")
+
+        if recusadas:
+            ttk.Label(dentro, style="Secao.TLabel",
+                      text="Contas sem remessa").pack(anchor="w", pady=(12, 2))
+            for conta, motivo in recusadas:
+                ttk.Label(dentro, style="Apoio.TLabel", wraplength=660,
+                          justify="left", text=f"       {conta[:40]}: {motivo}"
+                          ).pack(anchor="w")
+
+        resposta = {"ok": False}
+
+        def confirmar():
+            for linhas in preparado.values():
+                for c in linhas:
+                    if getattr(c, "_var", None) is not None:
+                        c.marcado = bool(c._var.get())
+            resposta["ok"] = True
+            top.destroy()
+
+        rodape = ttk.Frame(moldura)
+        rodape.pack(side="bottom", fill="x", pady=(14, 0))
+        ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side="right")
+        b = ttk.Button(rodape, text="Gravar os arquivos", command=confirmar)
+        b.pack(side="right", padx=(0, 8))
+        try:
+            b.configure(style="Accent.TButton")
+        except tk.TclError:
+            pass
+
+        top.protocol("WM_DELETE_WINDOW", top.destroy)
+        top.bind("<Escape>", lambda _e: top.destroy())
+        try:
+            top.grab_set()
+        except tk.TclError:
+            pass
+        self.wait_window(top)
+        return resposta["ok"]
+
+    def _gravar_remessas(self, preparado, pagadores, historico):
+        """Valida, grava e registra — nessa ordem, uma conta por vez.
+
+        Arquivo que não passa no validador não é gravado E não consome o NSA:
+        número gasto por arquivo que não existe vira furo sem explicação, e o
+        histórico é justamente quem tem de explicar os furos.
+        """
+        from cnab240 import relatorio as _rel_cnab, validar
+
+        destino = Path(self.v_pasta.get().strip() or ".")
+        gerados, total_geral = [], 0.0
+        for conta, pagador in pagadores.items():
+            marcados = [c for c in preparado[conta] if c.marcado and c.pode]
+            if not marcados:
+                self._log(f"\n{pagador.empresa}: nada marcado — sem arquivo.")
+                continue
+            try:
+                nsa = historico.proximo_nsa(pagador.convenio)
+                arquivo = remessa_dia.montar_arquivo(pagador, marcados, nsa=nsa)
+                problemas = validar(arquivo.gerar())
+                if problemas:
+                    self._log(f"\n[!] {pagador.empresa}: o arquivo não passou na "
+                              f"validação, nada foi gravado.\n{_rel_cnab(problemas)}")
+                    continue
+                caminho = destino / remessa_dia.nome_do_arquivo(pagador, nsa)
+                arquivo.salvar(caminho)
+                historico.registrar(
+                    arquivo, caminho_arquivo=caminho,
+                    referencias=remessa_dia.referencias(marcados))
+            except Exception as e:
+                self._log(f"\n[!] {pagador.empresa}: {e}")
+                continue
+
+            soma = sum(c.valor for c in marcados)
+            total_geral += soma
+            gerados.append(caminho)
+            self._log(f"\n{pagador.empresa} · arquivo nº {nsa:06d} · "
+                      f"{len(marcados)} pagamento(s) · {relatorio.brl(soma)}"
+                      f"\n  {str(caminho).replace(chr(92), '/')}")
+
+        if not gerados:
+            self.q.put(("status", "Nenhum arquivo de remessa foi gravado."))
+            return
+        self._log("\nAgora suba os arquivos no SicoobNet: Empresarial → Gestão em "
+                  "Lote → IntegraLote → Gestão de arquivos CNAB. O app não "
+                  "transmite: gerar é reversível, enviar não é.")
+        self.q.put(("status", f"{len(gerados)} arquivo(s) de remessa · "
+                              f"{relatorio.brl(total_geral)}"))
 
     def _anexos_a_ler(self, selecionados) -> list[tuple[str, bool]]:
         """[(downloadUrl, é_pdf)] sem repetição.

@@ -29,6 +29,7 @@ def _garantir_dependencias():        # nunca é chamada: só faz o PyInstaller
     import sv_ttk                                     # noqa
     import yaml                                       # noqa  (config da Conciliação)
     import decimal, json, urllib.request              # noqa  (conciliação: API + regras)
+    import hashlib, time                              # noqa  (cnab240: histórico das remessas)
     import webbrowser, calendar, base64              # noqa  stdlib usados só pelo app
     import ctypes.wintypes                            # noqa  (login cifrado DPAPI)
     from playwright.sync_api import sync_playwright   # noqa

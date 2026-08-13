@@ -55,8 +55,20 @@ extratos_sicoob/.chrome_profile_sicoob/
 # Perfil do Chrome do portal Acessórias: sessão logada do escritório.
 .chrome_profile_acessorias/
 # Mapa conta do Mais Controle -> pasta de destino. Mesma razão: nome de
-# empresa e número de conta.
-contas_mc.json
+# empresa e número de conta. O `*` pela mesma lição do `contas_sicoob*` logo
+# acima: proteger o nome exato e vazar a cópia de backup é o pior dos dois
+# mundos, e a cópia carrega o MESMO conteúdo.
+contas_mc*
+# Memória das remessas CNAB: o contador do NSA por convênio, o valor e o
+# favorecido de cada pagamento enviado, e o de-para com o id do lançamento no
+# ERP. É o arquivo mais sensível que o app grava — e o `*` segue a mesma lição
+# do contas_sicoob: o próprio código escreve `remessas.json.tmp` na gravação
+# atômica e `remessas.json.lock` na trava entre processos.
+remessas.json*
+# Os arquivos de remessa em si. Um .REM é um pedido de pagamento: traz código
+# de barras, chave Pix, valor e favorecido em texto puro.
+*.REM
+*.rem
 # Conciliação Diária: o mapa das contas do painel, os rateios de aporte e o
 # modelo da planilha. Nome de empresa e estrutura financeira — fica ao lado do
 # exe, nunca no repositório.
