@@ -103,7 +103,7 @@ jobs:
           New-Item -ItemType Directory codigo_embutido | Out-Null
           # Arquivo NOVO na raiz = linha nova aqui. Sem isso o import falha na
           # máquina do usuário e o app não abre (ver CLAUDE.md, regra de ouro).
-          Copy-Item comprovantes_app.py, util.py, widgets.py, ativacao.py, versao.txt, motor_minimo.txt, icone.ico codigo_embutido/
+          Copy-Item comprovantes_app.py, util.py, widgets.py, versao.txt, motor_minimo.txt, icone.ico codigo_embutido/
           New-Item -ItemType Directory codigo_embutido/separar_renomear | Out-Null
           Copy-Item separar_renomear/*.py codigo_embutido/separar_renomear/
           New-Item -ItemType Directory codigo_embutido/anexar | Out-Null
@@ -131,6 +131,11 @@ jobs:
           Copy-Item cnab240/*.py codigo_embutido/cnab240/
           New-Item -ItemType Directory codigo_embutido/cnab240/spec | Out-Null
           Copy-Item cnab240/spec/*.json codigo_embutido/cnab240/spec/
+          # `nuvem/migrar.py` fica DE FORA de propósito: é ferramenta de uma
+          # vez só, rodada à mão na máquina que tem os arquivos bons, como o
+          # `aportes/conferir_contas.py`. Ele não é importado pelo app.
+          New-Item -ItemType Directory codigo_embutido/nuvem | Out-Null
+          Copy-Item nuvem/*.py -Exclude migrar.py codigo_embutido/nuvem/
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
           "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
 

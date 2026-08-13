@@ -84,6 +84,9 @@ browser-profile/
 
 # Marcador da senha de primeira utilização: é por MÁQUINA, nunca do repositório.
 ativacao.dat
+# A sessão da nuvem, cifrada pela DPAPI. Entra aqui pelo mesmo motivo do
+# login.dat: é credencial, ainda que só desta máquina.
+sessao.dat
 
 # Logs de qualquer módulo (diagnostico, atualizacao, log_anexos...). A regra
 # ampla existe porque log novo aparece com frequência e sempre carrega dado da

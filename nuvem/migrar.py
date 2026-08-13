@@ -381,6 +381,9 @@ def subir(banco: Banco, d: dict) -> None:
         "automatico": bool(r.get("automatico")),
         "confirmado_em": r.get("confirmado_em") or None,
         "nota": r.get("nota", "") or "",
+        # Por que a regra nao anexa sozinha. E o campo mais caro de
+        # reconstruir: sao paragrafos escritos depois de investigar casos.
+        "ambiguo": r.get("ambiguo", "") or "",
     } for r in (d["boletos"] or {}).get("regras", [])]
     banco.inserir("regra_boleto", boletos)
     print(f"{len(boletos)}")

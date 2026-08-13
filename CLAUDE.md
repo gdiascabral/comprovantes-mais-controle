@@ -10,17 +10,20 @@ https://github.com/gdiascabral/comprovantes-mais-controle
 TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), que:
 1. gera `versao.txt` = `v1.0.<run_number>` (NÃO é commitado; criado na build);
 2. monta `codigo.zip` (comprovantes_app.py + util.py + widgets.py +
-   ativacao.py + separar_renomear/*.py + anexar/*.py + aportes/*.py +
+   separar_renomear/*.py + anexar/*.py + aportes/*.py +
    relatorios/*.py + pagamentos_dia/*.py + extratos_sicoob/*.py +
    conciliacao/*.py + conciliacao/erp/*.py + contratos/*.py +
-   acessorias/*.py + cnab240/*.py + **cnab240/spec/*.json** + versao.txt +
-   motor_minimo.txt + icone.ico) — ~90 KB.
+   acessorias/*.py + cnab240/*.py + **cnab240/spec/*.json** +
+   **nuvem/*.py exceto migrar.py** + versao.txt +
+   motor_minimo.txt + icone.ico) — ~100 KB.
    **Pasta nova de aba OU arquivo novo na raiz = linha nova aqui**, senão o
-   import falha no usuário e o app não abre. Vale para os dois: `widgets.py` e
-   `ativacao.py` são de raiz e precisaram entrar um a um;
+   import falha no usuário e o app não abre. Vale para os dois: `widgets.py` é
+   de raiz e precisou entrar um a um;
    **`cnab240/spec/*.json` é a exceção que confirma a regra**: é o único pacote
    com DADOS, e copiar só os `.py` dele não quebra o import — quebra a primeira
    remessa, na máquina do usuário. Guardado por `tests/test_cnab240_pacote.py`;
+   **`nuvem/migrar.py` é a exceção oposta**: fica de fora porque é ferramenta
+   de uma vez só, rodada à mão no repositório, e o app nunca a importa;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
    com Tesseract OCR embutido) — e publica a Release `v1.0.<run_number>` com
    o exe + codigo.zip. Os exes avulsos de Separar e de Anexar foram removidos:
@@ -162,8 +165,8 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   `<FocusOut>`, que matava o popup ao abrir), sobra uma janela comum, com três
   saídas: a data, `Esc` e o X. Como nada mais impede abrir dois, o módulo
   guarda em `_calendario_aberto` qual campo está com o seu — abrir um fecha o
-  outro. Regra geral: modal é para o que EXIGE resposta (a senha de ativação,
-  o confirmar dos sócios); o resto não prende ninguém.
+  outro. Regra geral: modal é para o que EXIGE resposta (o login, o confirmar
+  dos sócios); o resto não prende ninguém.
   **Quem numera é a AÇÃO, não o cartão.** Numerar os dois punha duas contagens
   na mesma tela: em Pagamentos do Dia, "2. Contas" era um campo para preencher
   e "2. Gerar a planilha" era uma ação, e nenhuma das duas ia até o fim
@@ -599,9 +602,9 @@ conteúdo. Releases antigas são podadas pelo CI (mantém 4).
 - Centralizar seletores do ERP (mc_client.py) em constantes/config.
 - OCR em lote cruzando ARQUIVOS (hoje o pool é por arquivo; entrada com
   muitos PDFs de página única não aproveita o paralelismo).
-- Endurecer a senha de ativação com PBKDF2 no lugar do SHA-256 puro (sal
-  público + senha adivinhável é fraco contra dicionário; hoje o custo de
-  atacar não compensa, porque o marcador só libera o app nesta máquina).
+- Aba de cadastro dentro do app, se editar pelo painel do Supabase incomodar.
+- Fase 3 da nuvem: o registro central (aportes lançados, NSA, retorno CNAB,
+  envios da Acessórias). Ver `nuvem/registro.py`, que já existe vazio.
 
 ## Auditoria de 11/08/2026 — o que mudou
 
@@ -650,7 +653,96 @@ DECISÃO (o resto está nos commits):
   `motor`; o segundo falha se o push mexer no motor sem subir
   `motor_minimo.txt`. E `tests/**` saiu do `paths-ignore`, senão o job de
   teste não rodaria no push que altera um teste.
-- **Senha de primeira utilização** (`ativacao.py`): só o SHA-256 de
-  (sal + senha) fica no código — o repositório é público. O marcador
-  `ativacao.dat` é por máquina; trocar a senha é trocar o hash, e todo mundo é
-  perguntado de novo.
+- **Senha de primeira utilização** (`ativacao.py`): substituída em 13/08/2026
+  pelo login por pessoa — ver a seção "O cadastro mora na nuvem" abaixo.
+
+## O cadastro mora na nuvem (13/08/2026)
+
+**Onde procurar as coisas.** O projeto Supabase é o `mais-controle-app`
+(região sa-east-1). Tudo que o define está versionado em `supabase/`:
+`config.toml` é a configuração do serviço e `migrations/*.sql` é o schema,
+com o porquê de cada coluna no comentário. Nada aqui se configura por clique:
+o que não estiver nesses arquivos não existe.
+
+- **O que subiu**: contas, empresas, entidades (o `contas.csv`), subcontas com
+  obras e investidores, as regras de fornecedor e as de boleto. O ERP continua
+  sendo o banco dos PAGAMENTOS; isto aqui é só cadastro.
+- **O que NÃO subiu, de propósito**: `preferencias.json` (tema é de máquina),
+  `config.yaml`/`mapping.yaml`/`MODELO.xlsx` (são a estrutura da planilha da
+  Conciliação, versionados junto do modelo que descrevem) e o `login.dat` —
+  cada pessoa tem o SEU usuário no ERP, e nenhuma credencial de ERP vai para
+  a nuvem.
+
+**A decisão central está na tabela `conta`.** A MESMA conta era descrita em
+`contas_mc.json` e `contas_sicoob.json`, cada um com a sua pasta de destino;
+eles divergiram em três subcontas e partiram julho/2026 ao meio. Agora é uma
+linha com uma coluna `pasta`, e a divergência deixou de ser representável.
+`relatorios/conferir_mapas.py` continua existindo para quem rodar as abas com
+cache antigo, mas o problema que ele vigiava não tem mais como nascer.
+
+**Os JSON/CSV continuam existindo — como CACHE.** `nuvem/cadastro.sincronizar`
+roda uma vez, na abertura, e regrava os arquivos de sempre no formato de
+sempre. É por isso que `sicoob_contas`, `contas_mc` e `aportes/dados` não
+mudaram uma linha: para eles, nada aconteceu. Um formato próprio de cache
+teria criado duas verdades sobre a mesma conta — o problema que a nuvem veio
+resolver. Três consequências:
+
+- banco mudo não impede o app de abrir: usa a última cópia e escreve
+  "⚠ cadastro offline" no rodapé da barra. **Sem esse aviso, "estou com o
+  cadastro de ontem" seria indistinguível de "tudo certo"**;
+- banco que responde VAZIO não apaga nada (`sincronizar` recusa e mantém os
+  arquivos) — projeto novo ou migração não rodada zerariam o cadastro de todo
+  mundo, e o cache é justamente a última cópia que sobraria;
+- o cache preserva as chaves `_leia_me`/`_ajuda`, que explicam o arquivo para
+  quem o abre e não vêm do banco.
+
+**Editar cadastro é no painel do Supabase**, que é uma planilha no navegador.
+Não há tela no app, de propósito: esses cadastros mudam raras vezes, e a
+validação mora no BANCO (`unique`, `check`, FK), onde vale independentemente
+de por onde a edição entrou. Depois de editar, o app pega na próxima abertura.
+
+**Segurança, e o que já está provado por teste.** Só a `anon key` está no
+código (`nuvem/rest.py`) — ela é pública por desenho e não abre nada sozinha;
+a `service_role` ignora a RLS inteira e não pode aparecer no repositório, no
+exe nem no CI. Toda tabela tem RLS ligada e política só para `authenticated`.
+Medido contra o projeto de verdade: sem login, ler `conta` ou
+`regra_fornecedor` responde **401**; criar conta responde **422
+signup_disabled**; com login, 200. O cadastro público está desligado porque,
+com ele aberto, qualquer um que clonasse o repositório viraria gente da casa.
+
+**Duas armadilhas do Supabase CLI que já custaram tempo:**
+
+- **`supabase config push` aplica direto, sem mostrar diff para confirmar.**
+  Rodá-lo com o `config.toml` recém-criado pelo `init` empurra os DEFAULTS do
+  CLI por cima do projeto — aqui desligou o MFA e a confirmação de e-mail e
+  afrouxou o limite de envio. Edite o arquivo ANTES, e rode de novo até dizer
+  "up to date".
+- **`enable_signup = false` dentro de `[auth.email]` desliga o PROVEDOR de
+  e-mail**, e o login morre com `email_provider_disabled`. Quem tranca o
+  cadastro é só o `enable_signup` de `[auth]`; o de `[auth.email]` fica
+  `true`.
+
+**O login** (`nuvem/login_dialogo.py`) substituiu a senha de ativação, que era
+uma só para todo mundo e valia para sempre naquela máquina — quem saía da
+equipe continuava sabendo dela. A sessão fica em `sessao.dat`, cifrada pela
+DPAPI (`util.proteger_bytes`, a mesma do `login.dat`).
+**Sem servidor, o app confere a VALIDADE do token, não a assinatura**: o
+segredo que assina é do projeto e não pode viajar num exe público. Quem
+sustenta a garantia é a DPAPI — o arquivo só é decifrável pelo mesmo usuário
+do Windows na mesma máquina. Havendo rede, quem julga é o servidor. São três
+desfechos, e a diferença importa: vencido com rede pede a senha; **sem rede e
+dentro do prazo, ABRE** (travar aqui transformaria uma queda do Supabase em
+app parado com o ERP de pé); sem rede e vencido, não abre e diz isso.
+
+**`nuvem/registro.py` está vazio de propósito.** Arquivo novo custa uma
+release com exe novo, então o pacote inteiro nasceu de uma vez; o conteúdo da
+Fase 3 (aportes lançados, NSA, retorno CNAB, envios) chega depois pelo
+`codigo.zip`. **Lá não haverá cache**, e é a diferença dele para o
+`cadastro.py`: o valor de gravar "isto já foi feito" é a resposta ser a mesma
+nas duas máquinas no mesmo instante.
+
+**Migrar de novo** (máquina nova, ou recomeçar): `python nuvem/migrar.py
+--conferir` critica sem escrever; `--subir --email <você>` escreve e depois
+relê para comparar campo a campo. Ele entra com LOGIN DE PESSOA e não com a
+chave de serviço — um script que usasse a chave de serviço ignoraria a RLS e
+não provaria nada sobre o caminho que o app percorre.

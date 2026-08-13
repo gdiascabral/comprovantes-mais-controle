@@ -26,8 +26,8 @@ for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
 import tkinter as tk
 from tkinter import ttk
 
-import ativacao
 import widgets
+from nuvem import cadastro, login_dialogo, rest, sessao
 from separar_renomear import SepararFrame
 from anexar_comprovantes import AnexarFrame
 from conferencia import ConferenciaFrame
@@ -70,6 +70,18 @@ def _pasta_dados() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent
+
+
+def _token_ou_vazio(pasta) -> str:
+    """O token da sessão, ou "" se não der para consegui-lo agora.
+
+    Vazio faz a sincronização falhar com um recado, em vez de estourar: nesta
+    altura o login já aconteceu, e o único jeito de chegar aqui sem token é a
+    rede ter caído entre uma coisa e outra. Não é motivo para não abrir."""
+    try:
+        return sessao.token(pasta)
+    except rest.ErroDaNuvem:
+        return ""
 
 
 def _carregar_prefs() -> dict:
@@ -144,21 +156,35 @@ def main():
     # aparece clara por um instante e escurece na frente de quem olha.
     widgets.barra_de_titulo(root, tema_efetivo(escolha_tema) == "dark")
 
-    # ---------------- senha de primeira utilização
+    # ---------------- quem está entrando
     # Antes de montar as abas: cada frame abre executor e estado próprios, e
     # construir tudo para depois recusar deixaria a janela piscando atrás do
     # diálogo. A principal fica escondida enquanto se pergunta; o tema já foi
     # aplicado acima, então o diálogo nasce na cor certa.
-    if not ativacao.ja_ativado(_pasta_dados()):
+    #
+    # Substituiu a senha de ativação, que era uma só para todo mundo e valia
+    # para sempre naquela máquina.
+    entrou, _recado = login_dialogo.entrar_sozinho(_pasta_dados())
+    if not entrou:
         root.withdraw()
-        if not ativacao.pedir_ativacao(root, _pasta_dados()):
+        if not login_dialogo.pedir_login(root, _pasta_dados()):
             root.destroy()
-            return                       # sem ativar, o app simplesmente não abre
+            return                       # sem entrar, o app não abre
         root.deiconify()
         try:
             root.state("zoomed")         # o withdraw desfaz a maximização
         except tk.TclError:
             pass
+
+    # ---------------- cadastro compartilhado
+    # Aqui, e não dentro de cada aba: existe UM ponto onde a rede pode faltar,
+    # ele acontece antes de qualquer trabalho começar, e o pior caso é rodar
+    # com o cadastro de ontem. Espalhado pelas abas, viraria nove caminhos de
+    # erro novos, cada um no meio de um lote.
+    #
+    # Falhar aqui NUNCA impede o app de abrir: os arquivos locais são a última
+    # cópia, e é justamente quando o banco está fora do ar que eles importam.
+    _sinc = cadastro.sincronizar(_token_ou_vazio(_pasta_dados()), _pasta_dados())
 
     # ---------------- navegação lateral + área de conteúdo
     lateral = ttk.Frame(root)
@@ -304,6 +330,15 @@ def main():
     if _v:
         ttk.Label(rodape, text=f"versão {_v}", style="Tenue.TLabel"
                   ).pack(anchor="w")
+    # Cadastro velho não impede o app de rodar, mas quem está conferindo um
+    # fechamento precisa saber que a conta nova cadastrada hoje pode não estar
+    # aqui. Sem este aviso, "usando a cópia" é indistinguível de "tudo certo".
+    if _sinc.usando_copia:
+        ttk.Label(rodape, style="Erro.TLabel", justify="left", wraplength=172,
+                  text="⚠ cadastro offline\n(usando a última cópia)"
+                  ).pack(anchor="w", pady=(6, 0))
+    ttk.Label(rodape, text=sessao.quem(_pasta_dados()), style="Tenue.TLabel",
+              wraplength=172, justify="left").pack(anchor="w", pady=(6, 0))
 
     def aplicar_tema(escolha: str):
         efetivo = tema_efetivo(escolha)

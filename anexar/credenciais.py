@@ -7,61 +7,31 @@ pode ser decifrado pelo MESMO usuário do Windows, neste computador — não fic
 em texto puro em lugar nenhum. Se algo falhar (ou em sistema sem DPAPI), as
 funções degradam para "sem login salvo" e o app cai no login manual.
 
-Usa apenas a biblioteca padrão (ctypes), então não pesa no executável.
+Quem cifra é o `util.proteger_bytes` — a MESMA função que guarda a sessão da
+nuvem. Enquanto a DPAPI estava aqui dentro, ela era um detalhe do módulo de
+anexos, e o `nuvem/sessao.py` teria de importar `anexar` só para cifrar um
+token.
 """
-import ctypes
 import json
+import sys
+from pathlib import Path
 
 try:
     from . import config
 except ImportError:
     import config
 
-
-class _BLOB(ctypes.Structure):
-    # DWORD é um inteiro de 32 bits sem sinal. Usamos c_uint32 direto para não
-    # depender de ctypes.wintypes (submódulo que não vem embutido no motor).
-    _fields_ = [("cbData", ctypes.c_uint32),
-                ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-
-def _entrada(dados: bytes) -> _BLOB:
-    buf = ctypes.create_string_buffer(dados, len(dados))
-    return _BLOB(len(dados), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
-
-
-def _saida_bytes(blob: _BLOB) -> bytes:
-    return ctypes.string_at(blob.pbData, int(blob.cbData))
-
-
-def _cifrar(dados: bytes) -> bytes:
-    out = _BLOB()
-    inp = _entrada(dados)
-    if not ctypes.windll.crypt32.CryptProtectData(
-            ctypes.byref(inp), None, None, None, None, 0, ctypes.byref(out)):
-        raise OSError("CryptProtectData falhou")
-    try:
-        return _saida_bytes(out)
-    finally:
-        ctypes.windll.kernel32.LocalFree(out.pbData)
-
-
-def _decifrar(dados: bytes) -> bytes:
-    out = _BLOB()
-    inp = _entrada(dados)
-    if not ctypes.windll.crypt32.CryptUnprotectData(
-            ctypes.byref(inp), None, None, None, None, 0, ctypes.byref(out)):
-        raise OSError("CryptUnprotectData falhou")
-    try:
-        return _saida_bytes(out)
-    finally:
-        ctypes.windll.kernel32.LocalFree(out.pbData)
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
 
 
 def salvar(email: str, senha: str):
     """Cifra e grava o login ao lado do exe."""
     payload = json.dumps({"email": email, "senha": senha}).encode("utf-8")
-    config.ARQUIVO_LOGIN.write_bytes(_cifrar(payload))
+    config.ARQUIVO_LOGIN.write_bytes(util.proteger_bytes(payload))
 
 
 def carregar() -> tuple[str, str] | None:
@@ -74,7 +44,8 @@ def carregar() -> tuple[str, str] | None:
     if not config.ARQUIVO_LOGIN.exists():
         return None                      # sem login salvo: silêncio é correto
     try:
-        d = json.loads(_decifrar(config.ARQUIVO_LOGIN.read_bytes()).decode("utf-8"))
+        d = json.loads(
+            util.revelar_bytes(config.ARQUIVO_LOGIN.read_bytes()).decode("utf-8"))
         return (d["email"], d["senha"])
     except Exception as e:
         config.diag(f"login salvo não pôde ser lido ({e!r}) — vai pedir login "
