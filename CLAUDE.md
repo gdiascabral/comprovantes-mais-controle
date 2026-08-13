@@ -65,6 +65,18 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   caso da aba Acessórias (v1.0.75): nenhum import novo, e mesmo assim a baixa
   completa. Consequência prática: **vale agrupar abas novas num push só**, e
   não pagar o pedágio uma vez por aba.
+- **O exe roda Python 3.11, e a sua máquina provavelmente não.** O CI usa 3.11
+  e o PyInstaller embute essa versão; escrever contra um interpretador mais
+  novo passa aqui e falha lá. Aconteceu na run #76: `Path.read_text(newline=…)`
+  existe desde o 3.13 e o teste do CNAB 240 quebrou no CI, com o `build`
+  pulado. É a mesma família do `tkinter.font` da v1.0.71 — código que a sua
+  stdlib tem e a do usuário não. Antes de subir, `vermin --target=3.11
+  --violations` sobre o que mudou (está no `requirements-dev.txt`).
+- **Build que falha CONSOME o número da release.** A versão é
+  `v1.0.<run_number>`, e o contador anda mesmo quando o job quebra: depois da
+  #76 falhar, a próxima release passou a ser a v1.0.77. Quem for corrigir e
+  subir de novo tem de **subir o `motor_minimo.txt` junto**, senão ele aponta
+  para uma versão que nunca existiu.
 - Build leva ~8–10 min. Commits só de README/LICENSE/CLAUDE.md não disparam
   build (paths-ignore).
 

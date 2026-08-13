@@ -486,7 +486,11 @@ def test_salvar_grava_240_por_linha(tmp_path):
         TransferenciaConta(valor="10.00", data_pagamento=HOJE, favorecido=favorecido())
     )
     destino = arquivo.salvar(tmp_path / "REM.txt")
-    bruto = destino.read_text(encoding="latin-1", newline="")
+    # `open(newline="")` e não `Path.read_text(newline=...)`: o parâmetro só
+    # existe no read_text a partir do 3.13, e o exe do app roda 3.11. Ler sem
+    # ele traduziria o CRLF e o teste do tamanho da linha perderia o sentido.
+    with open(destino, encoding="latin-1", newline="") as arq:
+        bruto = arq.read()
     for linha in bruto.split("\r\n"):
         if linha:
             assert len(linha) == 240
