@@ -13,10 +13,14 @@ TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), qu
    ativacao.py + separar_renomear/*.py + anexar/*.py + aportes/*.py +
    relatorios/*.py + pagamentos_dia/*.py + extratos_sicoob/*.py +
    conciliacao/*.py + conciliacao/erp/*.py + contratos/*.py +
-   acessorias/*.py + versao.txt + motor_minimo.txt + icone.ico) — ~50 KB.
+   acessorias/*.py + cnab240/*.py + **cnab240/spec/*.json** + versao.txt +
+   motor_minimo.txt + icone.ico) — ~90 KB.
    **Pasta nova de aba OU arquivo novo na raiz = linha nova aqui**, senão o
    import falha no usuário e o app não abre. Vale para os dois: `widgets.py` e
    `ativacao.py` são de raiz e precisaram entrar um a um;
+   **`cnab240/spec/*.json` é a exceção que confirma a regra**: é o único pacote
+   com DADOS, e copiar só os `.py` dele não quebra o import — quebra a primeira
+   remessa, na máquina do usuário. Guardado por `tests/test_cnab240_pacote.py`;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
    com Tesseract OCR embutido) — e publica a Release `v1.0.<run_number>` com
    o exe + codigo.zip. Os exes avulsos de Separar e de Anexar foram removidos:
@@ -372,8 +376,42 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   DV; **resto 10 dá DV 1**, e não 0 (conferido contra guias reais de IPTU/ISS
   de Goiânia, onde dois de oito blocos caem nesse resto — zerar os dois casos,
   como o DV geral do boleto bancário faz, reprovava guia legítima).
-- `pagamentos_dia/pagamentos_frame.py` — aba Pagamentos do Dia, em 2 passos
-  (Buscar / Gerar). Compartilha navegador e thread do Anexar. O passo separado
+- `pagamentos_dia/remessa_dia.py` — a regra do passo 3, **sem tela**: quem pode
+  sair na remessa e como o arquivo é montado. **Impedimento ≠ desmarcado.**
+  Desmarcar é escolha de quem confere; impedido é o que não *pode* sair, e nem
+  aparece marcável: observação que manda pagar outra pessoa, pagamento parcial
+  como boleto, linha digitável que não fecha nos DVs, e Pix sem o CPF/CNPJ do
+  favorecido. **O Pix vale para qualquer tipo de chave**, e quem paga isso é o
+  **cadastro de Contatos** (`mc_api.listar_participantes`): os campos
+  07.3B/08.3B do segmento B exigem o documento de quem recebe, o lançamento só
+  traz o nome (`paidTo`) e nem o id do participante. A ligação é pelo NOME —
+  medido em 13/08/2026 sobre 300 lançamentos e 455 participantes: 296 casaram
+  e **todos tinham documento**; as 4 sobras eram `paidTo` = "-".
+  Duas travas nasceram daí: **nome ambíguo** (dois participantes, documentos
+  diferentes) sai do mapa, porque escolher um é pagar com o documento de
+  outro; e **onze dígitos crus** só viram chave CPF quando batem com o
+  documento DO CADASTRO — se o desempate aceitasse o documento já resolvido,
+  ele viria da própria chave e confirmaria a si mesmo.
+  O mapa conta-do-ERP → empresa vem do `contas_mc.json` que já existia; um mapa
+  a mais seria uma divergência a mais esperando acontecer.
+  **`ocr_boleto.codigo_de_barras`** converte a linha digitável (47/48) no código
+  de barras (44) que o segmento J exige — e devolve "" para linha cujos DVs não
+  fecham, porque a linha pode ter vindo de OCR.
+  **`diagnostico_documentos`** existe para fechar a lacuna do Pix: varre o
+  `overview` que o "1. Buscar" já trouxe e diz ONDE há CPF/CNPJ válido, sem
+  imprimir documento nenhum — só caminho, contagem e **valores distintos**. É o
+  "distintos" que separa o fornecedor (um por lançamento) da própria empresa (o
+  mesmo em todos). Os DVs são conferidos: sem eles todo celular de onze dígitos
+  viraria "CPF encontrado", a mesma armadilha do `tipo_de_chave_pix`. Um campo
+  que aparece em 1% dos lançamentos é acaso (dois DVs fechando por sorte), não
+  achado — daí a contagem estar no relatório.
+- `pagamentos_dia/pagamentos_frame.py` — aba Pagamentos do Dia, em 3 passos
+  (Buscar / Gerar planilha / Gerar remessa). **O passo 3 não passa pelo
+  `anx.submeter`**: não há navegador nem ERP nele — a remessa sai do
+  `self.resultado` que o passo 2 deixou em memória, e escrever texto local não
+  justifica ocupar a sessão que só aceita um por vez. Valida ANTES de gravar:
+  arquivo reprovado não é escrito **e não consome o NSA**, senão o histórico
+  fica com furo que ele mesmo não sabe explicar. Compartilha navegador e thread do Anexar. O passo separado
   existe porque quem confere quer VER a lista de contas antes de gerar, e cada
   rodada custa uma sessão do ERP (que só aceita uma por usuário). Contas
   "APENAS LANÇAMENTO/AJUSTE" aparecem desmarcadas, não escondidas. As chaves
@@ -383,6 +421,27 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   de `submeter()`: quem cancela ali não pode ter consumido a sessão do ERP.
   Anexo que é foto só é baixado quando é aviso "PAGAR PARA" — baixar toda
   imagem de todo título seria pagar OCR por nada.
+- `cnab240/` — gerador, validador e leitor de retorno do arquivo CNAB 240 do
+  Sicoob (Guia v3.3), **stdlib pura** e sem tela nenhuma: é biblioteca, não aba.
+  Quem a usa é o passo 3 da aba Pagamentos do Dia (`pagamentos_dia/remessa_dia.py`).
+  **O único pacote do app com arquivo de DADOS**: os layouts vivem em
+  `cnab240/spec/*.json`, campo a campo com o id do manual, para auditar contra
+  o PDF sem abrir código — daí a linha extra no `build.yml` e o
+  `tests/test_cnab240_pacote.py` que a vigia.
+  **`historico.py` é a parte que o layout não resolve**: o NSA (nº sequencial
+  do arquivo) tem de ser CRESCENTE por convênio e quem o controla é quem gera
+  — o banco não guarda isso. Ele mora em `remessas.json` ao lado do exe, longe
+  do cadastro de propósito: `contas_sicoob.json` é restaurado de backup, e um
+  contador que volta no tempo é a única falha inaceitável aqui. Repetir NSA
+  pode significar pagamento em dobro; pular número é inofensivo. O mesmo
+  arquivo guarda o de-para "seu número → id do lançamento", que é o que o
+  retorno usa para achar o caminho de volta.
+  **Validado contra o banco em 13/08/2026** (`Válido`): header,
+  boleto J+J-52, Pix por chave A+B e dois lotes no mesmo arquivo. Fora dali —
+  TED, Pix QR Code, tributos e folha — a biblioteca gera, mas ninguém provou.
+  Um achado dessa validação: o guia OMITE a forma de iniciação `03` (CPF/CNPJ)
+  na descrição da Informação 12 do segmento B, e o banco recusa o campo em
+  branco. Manual incompleto; a correção está comentada em `remessa.py`.
 - `relatorios/relatorio_frame.py` — aba Relatório Mensal: mês/ano (ou intervalo
   de datas), lista de contas com marcação, ⏹ Parar e progresso. Um PDF por
   conta, arquivado na árvore do fechamento junto do extrato do banco:

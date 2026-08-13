@@ -179,6 +179,33 @@ def linha_confiavel(linha: str, valor_esperado: float) -> bool:
     return valida(linha) and confere_valor(linha, valor_esperado)
 
 
+def codigo_de_barras(linha: str) -> str:
+    """Os 44 dígitos do código de barras, a partir da linha digitável.
+
+    A planilha mostra a LINHA DIGITÁVEL — 47 dígitos no boleto bancário, 48 na
+    ficha de arrecadação —, que é a versão feita para gente digitar: ela
+    reordena o código de barras e intercala dígitos verificadores de bloco. A
+    remessa CNAB quer o código de barras cru, de 44, e o segmento J recusa
+    qualquer outro tamanho.
+
+    A conversão é um rearranjo, sem conta nenhuma:
+
+        bancário (47)    banco+moeda, DV geral, fator+valor, e o campo livre
+                         remontado dos três blocos (tirando o DV de cada um)
+        arrecadação (48) quatro blocos de 11, jogando fora o DV de cada bloco
+
+    Devolve "" para linha que não fecha nos dígitos verificadores. Não é zelo
+    de sobra: a linha pode ter vindo de OCR, e um dígito trocado aqui vira um
+    pagamento para outra pessoa sem erro na tela e sem volta.
+    """
+    d = digitos(linha)
+    if not valida(d):
+        return ""
+    if len(d) == 47:
+        return d[0:4] + d[32] + d[33:47] + d[4:9] + d[10:20] + d[21:31]
+    return d[0:11] + d[12:23] + d[24:35] + d[36:47]
+
+
 # --------------------------------------------------------------------------
 # Achar a linha no texto do OCR
 # --------------------------------------------------------------------------

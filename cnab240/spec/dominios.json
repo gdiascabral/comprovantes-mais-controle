@@ -1,0 +1,344 @@
+{
+  "_meta": {
+    "fonte": "Guia de Importação de Arquivos CNAB 240 - Sicoob - versão 3.1 (26/03/2025), seção 13 - Descrição de Campos",
+    "nota": "Apenas os domínios efetivamente usados nos produtos de pagamento importados pelo Sicoobnet Empresarial."
+  },
+
+  "G005": {
+    "campo": "Tipo de Inscrição (Empresa / Favorecido / Sacado / Cedente / Sacador)",
+    "valores": {
+      "0": "Isento / Não Informado",
+      "1": "CPF",
+      "2": "CGC / CNPJ",
+      "3": "PIS / PASEP",
+      "9": "Outros"
+    },
+    "regras": [
+      "Obrigatório para TED (Forma de Lançamento = 41 ou 43).",
+      "No Segmento B usar 1 = Pessoa Física, 2 = Pessoa Jurídica.",
+      "Pagamento SIAPE com crédito em conta: o CPF deve ser o do 1º titular.",
+      "Quando Tipo de Inscrição = 0, preencher o Número de Inscrição com zeros."
+    ]
+  },
+
+  "G015": {
+    "campo": "Código Remessa / Retorno",
+    "valores": { "1": "Remessa (Cliente -> Banco)", "2": "Retorno (Banco -> Cliente)" }
+  },
+
+  "G025": {
+    "campo": "Tipo do Serviço",
+    "valores": {
+      "01": "Cobrança",
+      "03": "Bloqueto Eletrônico",
+      "04": "Conciliação Bancária",
+      "05": "Débitos",
+      "06": "Custódia de Cheques",
+      "07": "Gestão de Caixa",
+      "08": "Consulta/Informação Margem",
+      "09": "Averbação da Consignação/Retenção",
+      "10": "Pagamento Dividendos",
+      "11": "Manutenção da Consignação",
+      "12": "Consignação de Parcelas",
+      "13": "Glosa da Consignação (INSS)",
+      "14": "Consulta de Tributos a pagar",
+      "20": "Pagamento Fornecedor",
+      "22": "Pagamento de Contas, Tributos e Impostos",
+      "25": "Compror",
+      "26": "Compror Rotativo",
+      "29": "Alegação do Sacado",
+      "30": "Pagamento Salários",
+      "32": "Pagamento de honorários",
+      "33": "Pagamento de bolsa auxílio",
+      "34": "Pagamento de prebenda (remuneração a padres e sacerdotes)",
+      "40": "Vendor",
+      "41": "Vendor a Termo",
+      "50": "Pagamento Sinistros Segurados",
+      "60": "Pagamento Despesas Viajante em Trânsito",
+      "70": "Pagamento Autorizado",
+      "75": "Pagamento Credenciados",
+      "77": "Pagamento de Remuneração",
+      "80": "Pagamento Representantes / Vendedores Autorizados",
+      "90": "Pagamento Benefícios",
+      "98": "Pagamentos Diversos"
+    }
+  },
+
+  "G028": {
+    "campo": "Tipo da Operação",
+    "valores": {
+      "C": "Lançamento a Crédito",
+      "D": "Lançamento a Débito",
+      "E": "Extrato para Conciliação",
+      "G": "Extrato para Gestão de Caixa",
+      "I": "Informações de Títulos Capturados do Próprio Banco",
+      "R": "Arquivo Remessa",
+      "T": "Arquivo Retorno"
+    },
+    "regras": ["Nos lotes de pagamento importados pelo Sicoob usar sempre 'C'."]
+  },
+
+  "G029": {
+    "campo": "Forma de Lançamento",
+    "valores": {
+      "01": "Crédito em Conta Corrente",
+      "05": "Crédito em Conta Poupança",
+      "11": "Pagamento de Contas e Tributos com Código de Barras",
+      "16": "Tributo - DARF Normal",
+      "17": "Tributo - GPS (Guia da Previdência Social)",
+      "18": "Tributo - DARF Simples",
+      "30": "Liquidação de Títulos do Próprio Banco",
+      "31": "Pagamento de Títulos de Outros Bancos",
+      "41": "TED - Outra Titularidade",
+      "43": "TED - Mesma Titularidade",
+      "45": "Pix Transferência",
+      "47": "Pix QR Code"
+    },
+    "regras": [
+      "A titularidade também pode ser deduzida do G005 do Segmento B; nesse caso prevalece o código 41.",
+      "A câmara pode ser identificada pelo P001 no Segmento A.",
+      "Forma 11 (FGTS dos convênios 0181 - Recolhimento Recursal (418)/Filantrópico (604) e 0182 - Parcelamento sem Multa (327, 337, 345)): é obrigatório preencher as Informações Complementares de Tributo no Segmento W.",
+      "A transferência tipo DOC foi removida do manual na versão 2.5 (14/06/2024)."
+    ]
+  },
+
+  "G031_tipo_conta_destino_pix": {
+    "campo": "Informação 2 / Mensagem - formatação Pix (obrigatório para Pix)",
+    "regra": "Preencher os 38 primeiros caracteres com espaço e os 2 últimos com o tipo da conta de destino.",
+    "valores": { "01": "Conta corrente", "02": "Conta Pagamento", "03": "Conta Poupança" }
+  },
+
+  "G031_situacao_funcional_siape": {
+    "campo": "Informação 2 - posição 216 (identificação da Situação Funcional SIAPE)",
+    "valores": {
+      "1": "Ativo",
+      "2": "Pensão Alimentícia Ativo",
+      "3": "Aposentado",
+      "4": "Pensão Alimentícia Aposentado",
+      "5": "Pensionista",
+      "6": "Pensão Alimentícia Pensionista"
+    },
+    "regras": [
+      "Formatação SIAPE: posições 178-197 (Órgão = 178-182 / UPAG = 183-191 / UG = 192-197).",
+      "Depósito judicial (obrigatório para Formas de Lançamento 71 e 72): posições 198-215."
+    ]
+  },
+
+  "G040": {
+    "campo": "Tipo da Moeda",
+    "valores": {
+      "BRL": "Real",
+      "BTN": "Bônus do Tesouro Nacional + TR",
+      "USD": "Dólar Americano",
+      "PTE": "Escudo Português",
+      "FRF": "Franco Francês",
+      "CHF": "Franco Suíço",
+      "JPY": "Ien Japonês",
+      "IGP": "Índice Geral de Preços",
+      "IGM": "Índice Geral de Preços de Mercado",
+      "GBP": "Libra Esterlina",
+      "ITL": "Lira Italiana",
+      "DEM": "Marco Alemão",
+      "TRD": "Taxa Referencial Diária",
+      "UPC": "Unidade Padrão de Capital",
+      "UPF": "Unidade Padrão de Financiamento",
+      "UFR": "Unidade Fiscal de Referência",
+      "XEU": "Unidade Monetária Europeia"
+    },
+    "regras": ["No Segmento A o manual determina usar somente 'BRL'."]
+  },
+
+  "G059": {
+    "campo": "Códigos das Ocorrências para Retorno / Remessa (posições 231-240)",
+    "regra": "Até 5 ocorrências simultâneas, cada uma com 2 dígitos.",
+    "dominio_geral": {
+      "00": "Crédito ou débito efetivado (pagamento confirmado)",
+      "AJ": "Rejeição CNAB - registro e/ou lote com estrutura rejeitada (obrigatoriedade, domínio, tipo de dado)",
+      "BD": "Inclusão efetuada com sucesso (agendada)",
+      "PD": "Transação pendente de assinatura",
+      "BF": "Transação rejeitada por assinatura de pendência"
+    },
+    "dominio_pix": {
+      "AN": "Tipo de conta do favorecido inválido",
+      "AP": "Data lançamento inválida",
+      "PA": "Pix não efetivado (registro Pix negocialmente rejeitado)",
+      "PC": "Número da conta transacional inválida/inexistente/encerrada/bloqueada no PSP do Recebedor",
+      "PE": "Tipo de transação não é suportado/autorizado na conta transacional especificada",
+      "PG": "CPF/CNPJ do usuário recebedor incorreto",
+      "PH": "Ordem rejeitada pelo PSP do Recebedor",
+      "PI": "ISPB Pagador / Recebedor inválido",
+      "PJ": "Chave não cadastrada no DICT",
+      "PK": "QR Code inválido/vencido",
+      "ZJ": "Limite de pagamentos parciais excedido",
+      "01": "Conta Corrente da Empresa com Saldo Insuficiente",
+      "02": "Débito Cancelado pelo Pagador"
+    },
+    "dominio_folha_pagamento": {
+      "HF": "Conta Corrente da Empresa com Saldo Insuficiente, em tentativa de reprocessamento",
+      "01": "Conta Corrente da Empresa com Saldo Insuficiente",
+      "BF": "Transação Rejeitada por Assinatura de Pendência ou Agendamento Cancelado pelo Usuário",
+      "68": "Agendamento em andamento"
+    }
+  },
+
+  "G060": {
+    "campo": "Tipo de Movimento",
+    "valores": { "0": "Inclusão", "3": "Estorno (somente para retorno)" }
+  },
+
+  "G061": {
+    "campo": "Código da Instrução para Movimento",
+    "valores": {
+      "00": "Inclusão de Registro Detalhe Liberado",
+      "33": "Estorno por Devolução da Câmara Centralizadora (somente para Tipo de Movimento = 3)"
+    }
+  },
+
+  "G065": {
+    "campo": "Código da Moeda (Segmento J)",
+    "valores": { "09": "Real" }
+  },
+
+  "G067": {
+    "campo": "Identificação de Registro Opcional",
+    "valores": {
+      "01": "Informação de Dados do Sacador Avalista",
+      "02": "Alegação do Sacado",
+      "03": "Informação de Dados do Sacado",
+      "04": "Informação de Dados de Cheques Utilizados",
+      "11": "Informações sobre dados de parcelas de compror",
+      "50": "Informação de Dados para Rateio de Crédito",
+      "51": "Informações de Notas Fiscais",
+      "52": "Identificação dos entes envolvidos no processo de pagamento"
+    }
+  },
+
+  "G100": {
+    "campo": "Forma de Iniciação (Segmento B, posições 15-17)",
+    "regra": "Obrigatório quando Forma de Lançamento = 45 (Pix Transferência).",
+    "valores": {
+      "01": "Chave Pix - tipo Telefone",
+      "02": "Chave Pix - tipo Email",
+      "03": "Chave Pix - tipo CPF / CNPJ",
+      "04": "Chave Aleatória",
+      "05": "Dados Bancários"
+    }
+  },
+
+  "G101": {
+    "campo": "Informação 10 / 11 / 12 (Segmento B)",
+    "regras": [
+      "Pix - Informação 10 (33-67): TXID (desconsiderado em Pix Transferência).",
+      "Pix - Informação 11 (68-127): preencher com vazios.",
+      "Pix - Informação 12 (128-226): se G100 = 01, 02 ou 04 -> chave Pix (Email/Telefone/Aleatória). Se G100 = 05 -> tipo de conta do recebedor conforme domínio G031 (em caso de divergência prevalece o G031).",
+      "Demais formas de lançamento: os três campos se subdividem em endereço + dados de pagamento (ver sub_layout_informacao_10_11_12_nao_pix em layouts.json)."
+    ]
+  },
+
+  "G102": {
+    "campo": "Chave de Pagamento e TXID (Segmento J-52-Pix)",
+    "regras": [
+      "Chave de Pagamento (132-210): URL para QR Code Dinâmico ou Chave de Endereçamento para QR Code Estático.",
+      "Para chave de endereçamento do tipo telefone, informar '+55' antes do número.",
+      "TXID (211-240): código de identificação do pagamento por QR Code Dinâmico; limitado a 30 posições pelo layout CNAB240."
+    ]
+  },
+
+  "N003": {
+    "campo": "Tipo de Identificação do Contribuinte",
+    "valores": {
+      "1": "CNPJ",
+      "2": "CPF",
+      "3": "NIT / PIS / PASEP",
+      "4": "CEI",
+      "6": "NB",
+      "7": "Nº do Título",
+      "8": "DEBCAD",
+      "9": "REFERÊNCIA"
+    }
+  },
+
+  "N005": {
+    "campo": "Código de Identificação do Tributo",
+    "valores": {
+      "16": "Tributo - DARF Normal",
+      "17": "Tributo - GPS (Guia da Previdência Social)",
+      "18": "Tributo - DARF Simples"
+    }
+  },
+
+  "N024": {
+    "campo": "Tipo de Informação (Segmento W, posição 16)",
+    "valores": {
+      "1": "Para uso da empresa (o banco não valida nem trata estes dados)",
+      "2": "Para emissão na guia do tributo (impressos no documento, cada campo uma linha de detalhe)",
+      "9": "Para uso da Informação Complementar de Tributo"
+    }
+  },
+
+  "N027": {
+    "campo": "Identificador de Tributo (Segmento W, posições 177-178)",
+    "valores": { "01": "FGTS" }
+  },
+
+  "P001": {
+    "campo": "Código da Câmara Centralizadora",
+    "valores": { "018": "TED (STR, CIP)", "009": "Pix (SPI)" }
+  },
+
+  "P006": {
+    "campo": "Aviso ao Favorecido",
+    "valores": {
+      "0": "Não Emite Aviso",
+      "2": "Emite Aviso Somente para o Remetente",
+      "5": "Emite Aviso Somente para o Favorecido",
+      "6": "Emite Aviso para o Remetente e Favorecido",
+      "7": "Emite Aviso para o Favorecido e 2 Vias para o Remetente"
+    }
+  },
+
+  "P011": {
+    "campo": "Código de Finalidade da TED",
+    "fonte_oficial": "Dicionários de Domínios para o SPB - Banco Central (www.bcb.gov.br)",
+    "valores": {
+      "1": "Pagamento de Impostos, Tributos e Taxas",
+      "2": "Pagamento Concessionárias Serviço Público",
+      "3": "Pagamento de Dividendos",
+      "4": "Pagamento de Salários",
+      "5": "Pagamento de Fornecedores",
+      "6": "Pagamentos de Honorários",
+      "7": "Pagamento de Aluguel/Condomínios",
+      "8": "Pagamento de Duplicatas/Títulos",
+      "9": "Pagamento de Mensalidades Escolares",
+      "10": "Crédito em Conta",
+      "11": "Pagamento a Corretoras",
+      "24": "Crédito para aplicação em cliente da IF Destinatária - Conta de Investimento mantida na IF origem",
+      "25": "Crédito para aplicação em cliente da IF destinatária - Conta de Investimento mantida em cliente da IF de origem",
+      "26": "Crédito em CI mantida na IF destinatária proveniente de IF sem reservas bancárias",
+      "27": "Pagamento de acordo / Execução judicial",
+      "32": "Retirada de recursos da Conta de Investimento",
+      "100": "Depósito Judicial",
+      "101": "Pensão Alimentícia",
+      "200": "Transferência Internacional de reais",
+      "201": "Ajuste Posição mercado futuro",
+      "202": "Repasse de valores do BNDES",
+      "203": "Liquidação compromissos BNDES",
+      "204": "Operações de compra e venda de ações - Bolsas de valores e Mercado de balcão",
+      "300": "Restituição de Imposto de Renda"
+    }
+  },
+
+  "P013": {
+    "campo": "Código Finalidade Complementar",
+    "valores": { "PP": "TED para poupança" }
+  },
+
+  "P014": {
+    "campo": "Indicativo de Forma de Pagamento",
+    "valores": {
+      "01": "Débito em Conta Corrente",
+      "02": "Débito Empréstimo/Financiamento",
+      "03": "Débito Cartão de Crédito"
+    }
+  }
+}

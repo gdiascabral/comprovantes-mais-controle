@@ -33,6 +33,12 @@ class Conta:
     numero: str                 # como a pessoa escreve: "50.019-4"
     pasta: str                  # subpasta de destino dentro da empresa
     empresa: str = ""
+    #: Para a remessa CNAB 240: o header do arquivo identifica o pagador por
+    #: CNPJ + agencia + conta, e a agencia e da CONTA, nao da empresa (uma
+    #: empresa pode ter contas em cooperativas diferentes). Saiu do BRANCHID
+    #: dos OFX que o app ja arquivou. Vazio = esta conta nao gera remessa.
+    banco: str = ""             # "756"
+    agencia: str = ""           # "4321-0"
 
     @property
     def chave(self) -> str:
@@ -57,6 +63,14 @@ class Empresa:
     #: usado ate hoje traz a razao social por extenso, que nao se deriva do
     #: nome curto da pasta. Vazio = usa `nome`.
     vip_nome: str = ""
+    #: Identificacao do pagador no header da remessa CNAB 240.
+    cnpj: str = ""
+    razao_social: str = ""
+    #: Codigo do convenio de pagamentos, exibido no comprovante de adesao do
+    #: SicoobNet. Nao se deriva de nada: e contrato. **Vazio e a trava**:
+    #: empresa sem convenio nao gera remessa, e e assim que as empresas ainda
+    #: nao aderidas ficam de fora sem precisar de lista negra.
+    convenio: str = ""
 
     @property
     def subpastas(self) -> list[str]:
@@ -120,7 +134,9 @@ def carregar(caminho: Path | None = None) -> Mapa:
             if not numero or not pasta:
                 raise MapaInvalido(
                     f"Conta incompleta em '{nome}': precisa de 'numero' e 'pasta'.")
-            contas.append(Conta(numero=numero, pasta=pasta, empresa=nome))
+            contas.append(Conta(numero=numero, pasta=pasta, empresa=nome,
+                                banco=(c.get("banco") or "").strip(),
+                                agencia=(c.get("agencia") or "").strip()))
         empresas.append(Empresa(
             nome=nome,
             pastas_vazias=[p.strip() for p in e.get("pastas_vazias", [])],
@@ -128,7 +144,10 @@ def carregar(caminho: Path | None = None) -> Mapa:
             clientes_erp=[c.strip() for c in (e.get("clientes_erp") or [])
                           if (c or "").strip()],
             vip_id=str(e.get("vip_id") or "").strip(),
-            vip_nome=(e.get("vip_nome") or "").strip()))
+            vip_nome=(e.get("vip_nome") or "").strip(),
+            cnpj=(e.get("cnpj") or "").strip(),
+            razao_social=(e.get("razao_social") or "").strip(),
+            convenio=str(e.get("convenio") or "").strip()))
     return Mapa(raiz=raiz, empresas=empresas,
                 vip_url=(dados.get("vip_url") or "").strip())
 

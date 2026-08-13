@@ -1,0 +1,181 @@
+{
+  "_meta": {
+    "descricao": "Combinações válidas de lote por produto de pagamento: qual header, quais segmentos, e os valores de domínio que definem o produto.",
+    "fonte": "Guia de Importação de Arquivos CNAB 240 - Sicoob v3.1",
+    "regra_de_ouro": "Um lote só pode conter um único tipo de transação. Produtos diferentes = lotes diferentes no mesmo arquivo."
+  },
+
+  "produtos": [
+    {
+      "id": "TRANSFERENCIA_SICOOB",
+      "nome": "Transferência entre contas da Rede Sicoob",
+      "header_lote": "header_lote_transferencia",
+      "trailer_lote": "trailer_lote_transferencia",
+      "versao_layout_lote": "045",
+      "tipo_operacao_G028": "C",
+      "tipo_servico_G025": ["20", "98", "30", "22", "10", "50", "60", "70", "75", "77", "80", "90"],
+      "forma_lancamento_G029": ["01", "05"],
+      "segmentos_envio": ["A", "B"],
+      "segmentos_retorno": ["A", "B", "Z"],
+      "camara_P001": null,
+      "banco_favorecido_09.3A": "756",
+      "notas": [
+        "Forma 01 = crédito em conta corrente; 05 = crédito em conta poupança.",
+        "Segmento B usa o sub-layout NÃO-Pix das Informações 10/11/12 (endereço do favorecido)."
+      ]
+    },
+    {
+      "id": "TED",
+      "nome": "Transferência para outros bancos (TED)",
+      "header_lote": "header_lote_transferencia",
+      "trailer_lote": "trailer_lote_transferencia",
+      "versao_layout_lote": "045",
+      "tipo_operacao_G028": "C",
+      "tipo_servico_G025": ["20", "98", "30", "22"],
+      "forma_lancamento_G029": ["41", "43"],
+      "segmentos_envio": ["A", "B"],
+      "segmentos_retorno": ["A", "B", "Z"],
+      "camara_P001": "018",
+      "notas": [
+        "41 = outra titularidade; 43 = mesma titularidade.",
+        "Tipo de Inscrição (G005) é OBRIGATÓRIO para TED.",
+        "Código de Finalidade da TED (26.3A / P011) deve ser preenchido.",
+        "TED para poupança: preencher Código Finalidade Complementar (27.3A / P013) = 'PP'."
+      ]
+    },
+    {
+      "id": "PIX_TRANSFERENCIA",
+      "nome": "Pix Transferência (por chave ou dados bancários)",
+      "header_lote": "header_lote_transferencia",
+      "trailer_lote": "trailer_lote_transferencia",
+      "versao_layout_lote": "045",
+      "tipo_operacao_G028": "C",
+      "tipo_servico_G025": ["20", "98", "30", "22"],
+      "forma_lancamento_G029": ["45"],
+      "segmentos_envio": ["A", "B"],
+      "segmentos_retorno": ["A", "B", "Z"],
+      "camara_P001": "009",
+      "notas": [
+        "Segmento B: Forma de Iniciação (06.3B / G100) é OBRIGATÓRIA.",
+        "Segmento B usa o sub-layout Pix das Informações 10/11/12.",
+        "Segmento A: Informação 2 (24.3A / G031) obrigatória — 38 brancos + 2 dígitos do tipo de conta destino (01/02/03).",
+        "G100 = 05 (dados bancários) exige agência/conta/DV do favorecido no Segmento A; nos demais casos a chave vai na Informação 12."
+      ]
+    },
+    {
+      "id": "TITULOS_COBRANCA",
+      "nome": "Pagamento de Títulos de Cobrança (boleto)",
+      "header_lote": "header_lote_titulos",
+      "trailer_lote": "trailer_lote_titulos",
+      "versao_layout_lote": "040",
+      "tipo_operacao_G028": "C",
+      "tipo_servico_G025": ["20", "98", "22"],
+      "forma_lancamento_G029": ["30", "31"],
+      "segmentos_envio": ["J", "J52"],
+      "segmentos_retorno": ["J", "J52", "Z"],
+      "notas": [
+        "30 = título do próprio banco (Sicoob); 31 = título de outros bancos.",
+        "O Segmento J-52 é OBRIGATÓRIO desde 18/03/2019 (CCI 014/2019).",
+        "Código de Barras (08.3J) tem 44 posições — usar o código de barras, não a linha digitável.",
+        "Código de Moeda (19.3J) = '09' (Real)."
+      ]
+    },
+    {
+      "id": "PIX_QRCODE",
+      "nome": "Pagamento Pix via QR Code",
+      "header_lote": "header_lote_titulos",
+      "trailer_lote": "trailer_lote_titulos",
+      "versao_layout_lote": "040",
+      "tipo_operacao_G028": "C",
+      "tipo_servico_G025": ["20", "98", "22"],
+      "forma_lancamento_G029": ["47"],
+      "segmentos_envio": ["J", "J52_PIX"],
+      "segmentos_retorno": ["J", "J52_PIX", "Z"],
+      "notas": [
+        "Usa o Segmento J-52-Pix no lugar do J-52 comum. Nunca enviar os dois.",
+        "URL/Chave de Endereçamento (15.4.J52) e TXID (16.4.J52) são OBRIGATÓRIOS.",
+        "QR Code Dinâmico -> URL. QR Code Estático -> chave de endereçamento (telefone deve vir com '+55').",
+        "Pix Estático liquida o valor informado no campo de valor do documento (G042)."
+      ]
+    },
+    {
+      "id": "CONVENIOS_COM_CODIGO_BARRAS",
+      "nome": "Pagamento de Convênios/Tributos COM código de barras",
+      "header_lote": "header_lote_tributos",
+      "trailer_lote": "trailer_lote_tributos",
+      "versao_layout_lote": "012",
+      "tipo_operacao_G028": "C",
+      "tipo_servico_G025": ["22"],
+      "forma_lancamento_G029": ["11"],
+      "segmentos_envio": ["O", "W?"],
+      "segmentos_retorno": ["O", "W?", "Z"],
+      "notas": [
+        "Segmento W é opcional, EXCETO para FGTS dos convênios 0181 e 0182, onde é obrigatório.",
+        "Código de Barras (08.3O) tem 44 posições e é do tipo Alfa neste segmento."
+      ]
+    },
+    {
+      "id": "TRIBUTOS_SEM_CODIGO_BARRAS",
+      "nome": "Pagamento de Tributos SEM código de barras (DARF, DARF Simples, GPS)",
+      "header_lote": "header_lote_tributos",
+      "trailer_lote": "trailer_lote_tributos",
+      "versao_layout_lote": "012",
+      "tipo_operacao_G028": "C",
+      "tipo_servico_G025": ["22"],
+      "forma_lancamento_G029": ["16", "17", "18"],
+      "segmentos_envio": ["N", "W?"],
+      "segmentos_retorno": ["N", "W?", "Z"],
+      "complemento_por_forma": {
+        "16": "complemento_darf",
+        "17": "complemento_gps",
+        "18": "complemento_darf_simples"
+      },
+      "notas": [
+        "As posições 111-230 do Segmento N mudam conforme o tributo.",
+        "DARF Simples: Código da Receita fixo '6106'."
+      ]
+    },
+    {
+      "id": "FOLHA_PAGAMENTO",
+      "nome": "Importação de Folha de Pagamento",
+      "header_lote": "header_lote_folha",
+      "trailer_lote": "trailer_lote_transferencia",
+      "versao_layout_lote": "045",
+      "tipo_operacao_G028": "C",
+      "tipo_servico_G025": ["30"],
+      "forma_lancamento_G029": ["01"],
+      "segmentos_envio": ["A", "B_FOLHA"],
+      "segmentos_retorno": ["A", "B_FOLHA", "Z"],
+      "notas": [
+        "Mensagem do header do lote (18.1 / G031) é OBRIGATÓRIA e representa o NOME DA FOLHA DE PAGAMENTO.",
+        "O Segmento B da folha usa o layout clássico (endereço explodido), diferente do Segmento B de transferência.",
+        "Códigos de retorno específicos: HF, 01, BF, 68 (ver G059.dominio_folha_pagamento)."
+      ]
+    }
+  ],
+
+  "regras_de_totalizacao": {
+    "trailer_lote.qtd_registros_lote (G057)": "Contagem dos registros do lote: header de lote (1) + todos os detalhes (3) + trailer de lote (5). Registros tipo 2 e 4 entram se existirem.",
+    "trailer_lote.somatoria_valores": "Soma dos valores de pagamento dos detalhes do lote (P007 para segmento A, L001 para segmento J, B002 para tributos).",
+    "trailer_lote.somatoria_qtd_moedas (G058)": "Soma das quantidades de moeda dos detalhes (segmentos A e J).",
+    "trailer_arquivo.qtd_lotes (G049)": "Contagem dos registros tipo 1.",
+    "trailer_arquivo.qtd_registros (G056)": "Contagem de TODOS os registros do arquivo: tipos 0, 1, 3, 5 e 9.",
+    "trailer_arquivo.qtd_contas_concil (G037)": "Somatória dos registros tipo 1 com Tipo de Operação = 'E'. Em arquivo só de pagamentos: zeros."
+  },
+
+  "validacao_sicoob": {
+    "rejeitam_o_arquivo_inteiro": [
+      "Erro de formatação e/ou domínio no header do arquivo",
+      "Erro de formatação e/ou domínio no trailer do arquivo",
+      "Erro de formatação e/ou domínio no header do lote",
+      "Erro de formatação e/ou domínio no trailer do lote",
+      "Erro de formatação e/ou domínio nos campos de controle dos segmentos",
+      "Erro de formatação e/ou domínio nos campos de serviço dos segmentos"
+    ],
+    "rejeitam_apenas_o_registro": [
+      "Campo(s) obrigatório(s) não preenchido(s)",
+      "Campo(s) do tipo 'Numérico' informado(s) com letra e/ou caracteres especiais",
+      "Campo(s) preenchido com domínio diferente do especificado"
+    ]
+  }
+}

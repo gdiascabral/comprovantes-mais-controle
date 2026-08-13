@@ -124,6 +124,13 @@ jobs:
           Copy-Item contratos/*.py codigo_embutido/contratos/
           New-Item -ItemType Directory codigo_embutido/acessorias | Out-Null
           Copy-Item acessorias/*.py codigo_embutido/acessorias/
+          # cnab240 é o único pacote com DADOS: a parametrização do layout vive
+          # em spec/*.json e é lida em runtime. Copiar só os .py faz o pacote
+          # importar e estourar na primeira remessa — ver test_cnab240_pacote.py.
+          New-Item -ItemType Directory codigo_embutido/cnab240 | Out-Null
+          Copy-Item cnab240/*.py codigo_embutido/cnab240/
+          New-Item -ItemType Directory codigo_embutido/cnab240/spec | Out-Null
+          Copy-Item cnab240/spec/*.json codigo_embutido/cnab240/spec/
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
           "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
 
