@@ -51,8 +51,9 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 
 _fmt_dur = util.fmt_dur
 
-MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
-         "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+#: Rótulo de TELA. A tabela que vira nome de pasta é a `util.MESES_PASTA`,
+#: e quem guarda a forma de exibição é o `widgets`, par visual do `util`.
+MESES = list(widgets.MESES)
 
 
 def _sicoob():
@@ -77,6 +78,13 @@ class AcessoriasFrame(ttk.Frame):
         self.worker = None
         self._tarefa_atual = ""          # o que a barra lateral mostra
         self._parar = Event()
+        # O PortalClient aberto pelo envio. Fica em `self` para que `fechar()`
+        # consiga fechá-lo: dentro de um `with` local ele era invisível de
+        # fora, e sair do app no meio de um envio deixava um Chrome órfão.
+        self.portal = None
+        # Último motivo de falha do `_drain`, para não repetir a mesma linha a
+        # cada 150 ms (ver o `except` de lá).
+        self._erro_drain = None
         self.mapa = None
         self.envios: list[pacote.Envio] = []
         self._selecionado: str | None = None      # iid da linha em edição
@@ -236,7 +244,25 @@ class AcessoriasFrame(ttk.Frame):
                     self.b_abrir.configure(state="normal")
         except queue.Empty:
             pass
-        self.after(150, self._drain)
+        except Exception as e:                              # noqa: BLE001
+            # A bomba de UI NUNCA pode morrer, e por isso o reagendamento está
+            # no `finally`. Um `tk.TclError` aqui (mexer num widget recém
+            # destruído, por exemplo) parava o ciclo para sempre: o registro
+            # congelava, os botões nunca voltavam e a thread do portal seguia
+            # trabalhando — sem ninguém saber sequer se dava para fechar o app.
+            # É o modelo do `_drain` do Anexar.
+            #
+            # O motivo vai para o próprio Registro, e não para o
+            # `diagnostico.log`: esta aba não importa o `config` do Anexar, e
+            # criar essa dependência só para registrar uma linha custaria mais
+            # do que resolve. Só quando MUDA — repetido a cada 150 ms, ele
+            # afogaria o que a pessoa precisa ler.
+            motivo = repr(e)
+            if motivo != self._erro_drain:
+                self._erro_drain = motivo
+                self.q.put(("log", f"[!] falha ao atualizar a tela: {motivo}"))
+        finally:
+            self.after(150, self._drain)
 
     def aplicar_cores(self, escuro: bool):
         for campo in (self.log, self.t_modelo, self.t_previa):
@@ -330,6 +356,11 @@ class AcessoriasFrame(ttk.Frame):
 
     # ----------------------------------------------------------------- mapa
     def _periodo(self) -> tuple[int, int]:
+        """(ano, mês) escolhidos. SÓ pode ser chamado na thread da interface.
+
+        Ler `StringVar` é falar com o Tcl, e o Tcl é de quem criou a janela:
+        chamado de dentro do worker, isto trava ou devolve erro sem hora
+        marcada — a falha que nunca aparece em teste."""
         return int(self.v_ano.get()), MESES.index(self.v_mes.get()) + 1
 
     def _garantir_mapa(self) -> bool:
@@ -349,17 +380,21 @@ class AcessoriasFrame(ttk.Frame):
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Lendo a pasta do mês..."))
         self._tarefa_atual = "Acessórias — preparar"
+        # TUDO que vem do formulário é lido AQUI, na thread da interface, e vai
+        # por argumento: mês e ano inclusive. O assunto e o comentário já
+        # seguiam essa regra; o período escapava por estar dentro de um método.
+        ano, mes = self._periodo()
         modelo_assunto = self.v_assunto.get()
         modelo_comentario = self.t_modelo.get("1.0", "end-1c")
-        self.worker = self.exec.submit(self._t_preparar, modelo_assunto,
-                                       modelo_comentario)
+        self.worker = self.exec.submit(self._t_preparar, ano, mes,
+                                       modelo_assunto, modelo_comentario)
 
-    def _t_preparar(self, modelo_assunto: str, modelo_comentario: str):
+    def _t_preparar(self, ano: int, mes: int, modelo_assunto: str,
+                    modelo_comentario: str):
         try:
             if not self._garantir_mapa():
                 return
             scfg, _ = _sicoob()
-            ano, mes = self._periodo()
             envios = pacote.montar(self.mapa, ano, mes, scfg.nome_do_mes,
                                    scfg.nome_pasta_empresa,
                                    modelo_assunto, modelo_comentario)
@@ -451,7 +486,15 @@ class AcessoriasFrame(ttk.Frame):
         try:
             total = len(pendentes)
             self.q.put(("progresso", (0, total)))
-            with PortalClient(self.mapa.vip_url, log=self._log) as cli:
+            # O cliente fica em `self` ANTES de qualquer trabalho: era um `with`
+            # local, e um navegador que só a própria thread enxerga não pode ser
+            # fechado por quem está saindo do app — a janela sumia e o Chrome
+            # ficava aberto, segurando o perfil. O `try/finally` faz o mesmo que
+            # o `with` fazia; o que muda é que agora `fechar()` alcança o
+            # cliente. Ver `AnexarFrame.fechar`, que resolve isto do mesmo jeito.
+            cli = PortalClient(self.mapa.vip_url, log=self._log).__enter__()
+            self.portal = cli
+            try:
                 cli.aguardar_login()
                 for n, envio in enumerate(pendentes, start=1):
                     if self._parar.is_set():
@@ -493,6 +536,14 @@ class AcessoriasFrame(ttk.Frame):
                         self.q.put(("linha", (i, f"erro: {e}")))
                     finally:
                         self.q.put(("progresso", (n, total)))
+            finally:
+                # Fecha na thread que abriu (exigência do Playwright síncrono)
+                # e só então solta a referência — trocar a ordem deixaria
+                # `fechar()` sem nada para fechar e o Chrome de pé.
+                try:
+                    cli.__exit__(None, None, None)
+                finally:
+                    self.portal = None
 
             self.q.put(("status",
                         f"{enviadas} enviada(s), {repetidas} já estavam lá, "
@@ -510,5 +561,40 @@ class AcessoriasFrame(ttk.Frame):
 
     # ----------------------------------------------------------------- saída
     def fechar(self):
+        """Fecha o Chrome do portal e devolve a thread (chamar ao sair do app).
+
+        Seguro de chamar SEMPRE, inclusive quando nada foi aberto: sem cliente
+        e sem trabalho, isto só marca o Event e desliga o executor.
+
+        Duas coisas que o `shutdown(wait=False)` sozinho não resolvia:
+
+        1. **as threads do ThreadPoolExecutor não são daemon.** Enquanto uma
+           delas estiver viva o processo não morre — fechar a janela durante um
+           envio fazia o app sumir da tela e continuar existindo, invisível, no
+           Gerenciador de Tarefas, segurando o perfil do Chrome. Marcar o
+           `_parar` é o que faz a thread terminar (o lote para depois da
+           empresa atual) em vez de ficar até o fim do lote;
+        2. **o navegador ficava aberto.** O `PortalClient` só pode ser fechado
+           pela thread que o criou, então o `__exit__` é SUBMETIDO ao próprio
+           executor e esperado com prazo curto — é o que `AnexarFrame.fechar`
+           já faz. Se o worker ainda estiver no meio de um upload, o pedido
+           espera na fila e o prazo vence: aí o `cancel_futures` o descarta e
+           quem fecha o Chrome é o `finally` do próprio `_t_enviar`.
+        """
         self._parar.set()
-        self.exec.shutdown(wait=False)
+        cli = self.portal
+        if cli is not None:
+            try:
+                self.exec.submit(cli.__exit__, None, None, None).result(timeout=8)
+                self.portal = None
+            except Exception:
+                # Estamos saindo: navegador que não fecha limpo não muda nada
+                # do que fazer aqui, e levantar impediria as outras abas de
+                # fechar (o `_sair` do app percorre todas).
+                pass
+        try:
+            self.exec.shutdown(wait=False, cancel_futures=True)
+        except TypeError:                    # Python < 3.9
+            self.exec.shutdown(wait=False)
+        except Exception:
+            pass

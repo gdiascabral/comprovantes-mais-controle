@@ -626,7 +626,19 @@ def _nomes_finais(lista_campos, modelo=None, ja_existe=None) -> list[str]:
 
 
 def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
-              progresso=None):
+              progresso=None, parar=None):
+    """Separa e renomeia. `parar` é uma função que responde "pare agora?".
+
+    Sem ela, a única maneira de interromper era matar a thread — e matar no
+    meio da 2ª passada, a que GRAVA, deixa PDF pela metade na pasta de saída e
+    nenhum registro do que aconteceu. Com ela, a parada acontece entre um
+    arquivo e outro (1ª passada) ou entre uma página e outra (2ª), que são os
+    dois instantes em que nada está pela metade.
+
+    Parar durante a LEITURA não grava nada: os nomes só podem ser decididos
+    com o lote inteiro na mão (ver `_nomes_finais`), e gravar meio lote daria
+    nomes diferentes dos que sairiam ao rodar tudo de novo."""
+    parou = parar or (lambda: False)
     pasta_entrada = Path(pasta_entrada); pasta_saida = Path(pasta_saida)
     pasta_saida.mkdir(parents=True, exist_ok=True)
     pdfs = [p for p in sorted(pasta_entrada.glob("*.pdf"))
@@ -642,6 +654,12 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
     # é aqui que o tempo passa. Guarda só os campos — texto não fica retido.
     itens = []                                    # (pdf_path, pág, campos)
     for pdf_path in pdfs:
+        # Entre arquivos: é a granularidade que dá para ter sem interromper um
+        # lote de OCR já em voo (o pool interno de `_textos_das_paginas` lê o
+        # arquivo inteiro antes de devolver).
+        if parou():
+            log("\n⏹ Interrompido durante a leitura — nada foi gravado.")
+            return 0, erros
         try:
             pl = pdfplumber.open(str(pdf_path))   # abre UMA vez por arquivo
         except Exception as e:
@@ -660,6 +678,10 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
                     log(f"  [{via}] {pdf_path.name} pág {i+1}")
                 itens.append((pdf_path, i, campos(txt)))
 
+    if parou():
+        log("\n⏹ Interrompido antes de gravar — nada foi gravado.")
+        return 0, erros
+
     # ---- os nomes só podem ser decididos com o lote todo na mão: é o que
     # permite dar o nome de quem recebeu aos DOIS de um valor repetido
     finais = _nomes_finais([c for _, _, c in itens], modelo,
@@ -669,13 +691,23 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
     por_arquivo = {}
     for (pdf_path, i, c), base in zip(itens, finais):
         por_arquivo.setdefault(pdf_path, []).append((i, c, base))
+    interrompido = False
     for pdf_path, paginas in por_arquivo.items():
+        if parou():
+            interrompido = True
+            break
         try:
             reader = PdfReader(str(pdf_path))
         except Exception as e:
             log(f"[ERRO] abrir {pdf_path.name}: {e}")
             erros += len(paginas); continue
         for i, c, base in paginas:
+            # ENTRE páginas, nunca no meio de uma: gravar um PDF de uma página
+            # leva milissegundos, então quem pediu para parar espera pouco e a
+            # pasta de saída nunca fica com arquivo pela metade.
+            if parou():
+                interrompido = True
+                break
             try:
                 w = PdfWriter(); w.add_page(reader.pages[i])
                 destino = _destino_unico(pasta_saida, base)
@@ -686,9 +718,12 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
                     sem_descricao.append(destino.name)
             except Exception as e:
                 log(f"[ERRO] {pdf_path.name} pág {i+1}: {e}"); erros += 1
-    log(f"\nConcluído: {total_paginas} comprovante(s) gerado(s) em "
+    log(f"\n{'⏹ Interrompido' if interrompido else 'Concluído'}: "
+        f"{total_paginas} comprovante(s) gerado(s) em "
         f"{str(pasta_saida).replace(chr(92), '/')}"
-        + (f" | {erros} erro(s)" if erros else ""))
+        + (f" | {erros} erro(s)" if erros else "")
+        + (" — o resto não foi gravado; rode de novo para completar."
+           if interrompido else ""))
     if sem_descricao:
         # sem descrição o nome cai em quem recebeu, e o casamento automático
         # perde OC/NF e centro de custo — vale a pena o usuário saber quais são
@@ -722,6 +757,16 @@ class SepararFrame(ttk.Frame):
         self.v_tipo_nome = tk.StringVar(value="padrao")
         self.v_modelo = tk.StringVar(value=MODELO_PADRAO)
         self.fila = queue.Queue()
+        # A thread do processamento, o pedido de parada e o que a barra
+        # lateral mostra. Antes a thread era anônima: ninguém de fora sabia
+        # que ela existia, então a barra não acendia nada num OCR de 107
+        # páginas e sair do app a matava no meio da gravação.
+        self._thread = None
+        self._parar = threading.Event()
+        self._tarefa_atual = ""
+        # Último motivo de falha do `_drain`, para não repetir a mesma linha a
+        # cada 150 ms (ver o `except` de lá).
+        self._erro_drain = None
         self._montar()
         try:                             # já nasce na cor do tema (sem flash)
             self.aplicar_cores(util.cor_escura(ttk.Style().lookup("TFrame", "background")))
@@ -855,16 +900,45 @@ class SepararFrame(ttk.Frame):
                     self.lbl_status.config(text="Concluído.")
         except queue.Empty:
             pass
-        self.after(150, self._drain)
+        except Exception as e:                              # noqa: BLE001
+            # A bomba de UI NUNCA pode morrer, e por isso o reagendamento está
+            # no `finally`. Um `tk.TclError` aqui (mexer num widget recém
+            # destruído, por exemplo) parava o ciclo para sempre: o registro
+            # congelava, o botão nunca voltava e o OCR seguia rodando — sem
+            # ninguém saber sequer se dava para fechar o app. É o modelo do
+            # `_drain` do Anexar.
+            #
+            # O motivo vai para o próprio Registro, e não para o
+            # `diagnostico.log`: esta aba não importa o `config` do Anexar, e
+            # criar essa dependência só para registrar uma linha custaria mais
+            # do que resolve. Só quando MUDA — repetido a cada 150 ms, ele
+            # afogaria o que a pessoa precisa ler.
+            motivo = repr(e)
+            if motivo != self._erro_drain:
+                self._erro_drain = motivo
+                self.fila.put(("log", f"[!] falha ao atualizar a tela: {motivo}"))
+        finally:
+            self.after(150, self._drain)
 
     def _executar(self):
+        if self._thread is not None and self._thread.is_alive():
+            return                       # já está rodando: o clique não enfileira
         if not self.ent.get() or not Path(self.ent.get()).exists():
             messagebox.showerror("Erro", "Selecione a pasta de entrada."); return
         if not self.sai.get():
             self.sai.set(str(Path(self.ent.get()) / "RENOMEADOS").replace("\\", "/"))
+        # TUDO que vem do formulário é lido AQUI, na thread da interface, e vai
+        # por argumento. O `modelo` já era; as duas pastas eram lidas de dentro
+        # da thread, e ler `StringVar` fora da thread da janela é falar com o
+        # Tcl de outro lugar — trava ou erra sem hora marcada, que é a falha
+        # que nunca aparece em teste.
+        entrada = self.ent.get()
+        saida = self.sai.get()
         modelo = None if self.v_tipo_nome.get() == "padrao" else self.v_modelo.get()
+        self._parar.clear()
         self.btn.config(state="disabled"); self.barra.start(12)
         self.lbl_status.config(text="Processando…")
+        self._tarefa_atual = "Separar e Renomear"
         self.txt.delete("1.0", "end")
 
         def work():
@@ -872,14 +946,56 @@ class SepararFrame(ttk.Frame):
             inicio = _t.time()
             self._log(f"⏱ Início: {_t.strftime('%H:%M:%S')}")
             try:
-                processar(self.ent.get(), self.sai.get(), self._log, modelo,
-                          progresso=lambda f, t: self.fila.put(("prog", (f, t))))
+                processar(entrada, saida, self._log, modelo,
+                          progresso=lambda f, t: self.fila.put(("prog", (f, t))),
+                          parar=self._parar.is_set)
             except Exception as ex:
                 self._log("ERRO FATAL: " + str(ex))
             self._log(f"⏱ Fim: {_t.strftime('%H:%M:%S')} — tempo total: "
                       f"{_fmt_dur(_t.time() - inicio)}")
             self.fila.put(("fim", None))
-        threading.Thread(target=work, daemon=True).start()
+        self._thread = threading.Thread(target=work, daemon=True,
+                                        name="separar-renomear")
+        self._thread.start()
+
+    def ocupado(self) -> str | None:
+        """O que esta aba está fazendo agora, ou None.
+
+        A barra lateral pergunta isto no pulso dela para acender o ● na aba que
+        trabalha. Aqui não há navegador — o trabalho é OCR e disco —, mas um
+        arquivo de 107 páginas leva minutos, e sem responder nada a aba parecia
+        parada. Mesma forma de `ExtratosSicoobFrame.ocupado`: uma frase ou
+        None, nunca um booleano, porque o rodapé escreve a tarefa."""
+        t = self._thread
+        if t is not None and t.is_alive():
+            return self._tarefa_atual or "Separar e Renomear"
+        return None
+
+    def fechar(self):
+        """Pede parada e espera um pouco (chamar ao sair do app).
+
+        Seguro de chamar SEMPRE, inclusive sem nada rodando.
+
+        A thread continua `daemon=True` de propósito, e isso é uma ESCOLHA
+        entre dois modos de falhar. Sem daemon, um OCR longo seguraria o
+        processo depois de a janela sumir — exatamente o defeito que a aba
+        Acessórias corrige logo ali. Com daemon e sem mais nada, o
+        interpretador matava a thread no meio da 2ª passada, a que grava, e
+        sobrava PDF pela metade na pasta de saída. A saída é a terceira: pedir
+        parada (o `processar` conclui a página em curso — milissegundos) e
+        esperar um pouco por ela. Passado o prazo, o daemon garante que o app
+        fecha assim mesmo; o que se perde é trabalho ainda não gravado, e não
+        um arquivo corrompido.
+
+        Também não trocamos a thread por um `ThreadPoolExecutor`: aqui não há
+        navegador nem sessão única a proteger (a regra "Playwright sync = uma
+        única thread" não alcança esta aba), e as threads do executor NÃO são
+        daemon — adotá-lo traria de volta o processo invisível que o daemon
+        evita."""
+        self._parar.set()
+        t = self._thread
+        if t is not None and t.is_alive():
+            t.join(timeout=5)
 
 
 def main():

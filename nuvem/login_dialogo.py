@@ -29,16 +29,52 @@ except ModuleNotFoundError:
     import util
 
 
+def _frase(e: Exception) -> str:
+    """Traduz a falha em UMA frase: o que houve, de quem é, e o próximo passo.
+
+    Nunca o traceback, nunca o nome da classe. O que aparecia na PRIMEIRA tela
+    do app era `HTTPSConnectionPool(host=...): Max retries exceeded` — texto da
+    biblioteca de rede, que não diz nem que a internet caiu nem o que fazer a
+    respeito. As três famílias que o `nuvem/rest.py` nomeia pedem coisas
+    diferentes de quem está na frente da tela: conectar, esperar, ou digitar de
+    novo — e é essa diferença que a frase tem de carregar."""
+    if isinstance(e, rest.SemRede):
+        return ("Sem internet: não consegui falar com o servidor para conferir "
+                "o seu acesso. Conecte-se à rede e tente de novo.")
+    if isinstance(e, rest.RecusadoPeloBanco):
+        return ("O servidor respondeu com erro — não é a sua senha. Tente de "
+                "novo em alguns minutos; se continuar, avise quem cuida do "
+                "cadastro.")
+    if isinstance(e, rest.PrecisaEntrar):
+        # Quem monta a explicação exata é o `nuvem/sessao.py`: só ele sabe
+        # separar "sem internet e a sessão salva venceu" de "a sessão não vale
+        # mais". Aqui a frase é consumida como está — reescrevê-la criaria uma
+        # segunda versão da mesma verdade.
+        recado = str(e).strip()
+        if not recado:
+            return "A sua sessão venceu. Entre de novo."
+        return recado[:1].upper() + recado[1:]
+    return "Não deu para entrar agora. Tente de novo em alguns minutos."
+
+
 def entrar_sozinho(pasta=None) -> tuple[bool, str]:
     """Tenta entrar com a sessão salva, sem perguntar nada.
 
-    Devolve (entrou, recado). O recado só é preenchido quando vale dizer algo
-    — hoje, quando se entrou pelo prazo do token, sem falar com o servidor."""
+    Devolve (entrou, recado). O recado é a frase que explica por que NÃO deu —
+    ela era descartada aqui, e o diálogo abria mudo: quem estava sem internet
+    com a sessão vencida via só um campo de senha, sem uma palavra sobre o
+    motivo nem sobre o que fazer.
+
+    Sem sessão salva não há recado: é a primeira vez nesta máquina, e aí
+    explicar seria ruído em cima do óbvio."""
     try:
         sessao.token(pasta)
         return True, ""
-    except rest.PrecisaEntrar:
-        return False, ""
+    except rest.ErroDaNuvem as e:
+        # `ErroDaNuvem`, e não só `PrecisaEntrar`: uma recusa do servidor
+        # (`RecusadoPeloBanco`) subia daqui até o `main()` e o app não abria —
+        # com o traceback indo para um console que o exe não tem.
+        return False, (_frase(e) if sessao.tem_sessao(pasta) else "")
 
 
 def pedir_login(root, pasta=None) -> bool:
@@ -54,7 +90,7 @@ def pedir_login(root, pasta=None) -> bool:
     import widgets                       # dentro da função, como o tkinter:
                                          # este módulo roda no CI sem tela
 
-    entrou, _ = entrar_sozinho(pasta)
+    entrou, recado = entrar_sozinho(pasta)
     if entrou:
         return True
 
@@ -77,6 +113,13 @@ def pedir_login(root, pasta=None) -> bool:
     quadro.pack(fill="both", expand=True)
 
     ttk.Label(quadro, text="🔒  Entrar", style="Titulo.TLabel").pack(anchor="w")
+    # O recado vem ANTES da explicação de sempre: ele é a resposta para "por
+    # que estou vendo esta tela?", e é a única coisa nesta janela que muda de
+    # uma abertura para a outra. Sem ele, a queda da internet e a sessão
+    # revogada eram indistinguíveis — as duas mostravam só o campo de senha.
+    if recado:
+        ttk.Label(quadro, text="⚠  " + recado, style="Erro.TLabel",
+                  wraplength=380, justify="left").pack(anchor="w", pady=(8, 0))
     ttk.Label(quadro, wraplength=380, justify="left", style="Apoio.TLabel",
               text="Use o seu e-mail e senha. O app lembra deste computador — "
                    "só vai perguntar de novo se você sair ou trocar de "
@@ -110,8 +153,12 @@ def pedir_login(root, pasta=None) -> bool:
             sessao.entrar(email, senha, pasta)
         except rest.PrecisaEntrar:
             # Nunca dizer QUAL dos dois está errado: quem descobre que o
-            # e-mail existe já sabe metade.
-            aviso.configure(text="E-mail ou senha incorretos.")
+            # e-mail existe já sabe metade. Aqui a frase NÃO vem do `_frase`:
+            # neste ponto a senha acabou de ser digitada, e o recado do
+            # `rest.entrar` ("e-mail ou senha incorretos") já é o certo — o do
+            # `_frase` fala de sessão, que é o outro caminho.
+            aviso.configure(text="E-mail ou senha incorretos. Confira e tente "
+                                 "de novo.")
             campo_senha.delete(0, "end")
             campo_senha.focus_set()
             try:
@@ -120,7 +167,9 @@ def pedir_login(root, pasta=None) -> bool:
                 pass
             return
         except rest.ErroDaNuvem as e:
-            aviso.configure(text=f"Não deu para entrar agora: {e}")
+            # Sem rede, servidor fora do ar e recusa do banco chegavam aqui
+            # juntos e saíam com o texto CRU da biblioteca de rede na tela.
+            aviso.configure(text=_frase(e))
             return
         resultado["ok"] = True
         dlg.destroy()

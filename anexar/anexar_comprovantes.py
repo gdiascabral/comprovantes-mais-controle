@@ -59,11 +59,21 @@ _fmt_val = util.fmt_val
 
 
 def _texto_do_erro(e: Exception) -> str:
-    """O que vai para o Registro. Falta de internet é recado, não defeito do
-    app: mostra só a orientação, sem despejar traceback de Playwright."""
+    """UMA frase para o Registro; o traceback vai para o `diagnostico.log`.
+
+    Falta de internet é recado, não defeito do app: mostra só a orientação.
+
+    O resto despejava o `traceback.format_exc()` inteiro dentro do Registro —
+    vinte linhas de Python no campo que a pessoa deveria ler para saber o que
+    fazer, e a frase que importava ficava no meio delas. O traceback continua
+    existindo, no lugar que o `config.diag` foi feito para guardar: engolir o
+    erro na tela, mas deixar o motivo gravado. Só chame de dentro de um
+    `except` — é de lá que o `format_exc()` tira o que registrar."""
     if isinstance(e, SemRede):
         return "⚠ " + str(e)
-    return "ERRO: " + str(e) + "\n" + traceback.format_exc()
+    config.diag(f"{e!r}\n{traceback.format_exc()}")
+    return "ERRO: " + (str(e) or
+                       "falha sem mensagem — o motivo está no diagnostico.log")
 
 
 def _resumo_cands(pe: dict) -> str:
@@ -742,34 +752,43 @@ class AnexarFrame(ttk.Frame):
     def executar(self):
         if self.worker and not self.worker.done():
             return
+        # TUDO que vem do formulário é lido AQUI, na thread da interface, e vai
+        # por argumento para o worker. Ler `StringVar`/`BooleanVar` é falar com
+        # o Tcl, e o Tcl é de quem criou a janela: da thread do navegador isso
+        # trava ou erra sem hora marcada — falha intermitente, que é justamente
+        # a que não aparece em teste. Vale para as caixas de conta também.
+        pasta = self.v_pasta.get()
+        simular = self.v_dry.get()
         if self.v_modo.get() == "lista":
-            if not Path(self.v_lista.get() or "").exists():
+            lista = self.v_lista.get()
+            if not Path(lista or "").exists():
                 messagebox.showerror("Erro", "Selecione a lista (.csv/.xlsx)."); return
-            alvo = self._t_lista
+            alvo, args = self._t_lista, (pasta, lista, simular)
         else:
             if not self.pagos:
                 messagebox.showerror("Erro", "Primeiro clique em \"1. Carregar contas\"."); return
-            alvo = self._t_auto
-        self._parar.clear()
-        self._pausa.clear()
-        self.b_pause.config(text="⏸ Pausar", state="normal")
-        self.b_stop.config(state="normal")
-        self.b2.config(state="disabled")
-        self.worker = self.submeter("Anexar — casar e anexar", alvo)
-
-    def _t_auto(self):
-        inicio = time.time()
-        self._log(f"⏱ Etapa 3 — início: {time.strftime('%H:%M:%S')}")
-        try:
             contas_sel = {c for c, v in self.vars_contas.items() if v.get()}
-            if not contas_sel:
-                self._log("[!] Nenhuma conta marcada."); self.q.put(("reabilitar2", None)); return
-            pagos = [p for p in self.pagos if p["conta"] in contas_sel]
             termos = []
             if self.v_ign.get():
                 termos += config.IGNORAR_TARIFAS
             if self.v_ign_ap.get():
                 termos += config.IGNORAR_APORTES
+            alvo, args = self._t_auto, (contas_sel, termos, pasta, simular)
+        self._parar.clear()
+        self._pausa.clear()
+        self.b_pause.config(text="⏸ Pausar", state="normal")
+        self.b_stop.config(state="normal")
+        self.b2.config(state="disabled")
+        self.worker = self.submeter("Anexar — casar e anexar", alvo, *args)
+
+    def _t_auto(self, contas_sel: set, termos: list, pasta_pdfs: str,
+                simular: bool):
+        inicio = time.time()
+        self._log(f"⏱ Etapa 3 — início: {time.strftime('%H:%M:%S')}")
+        try:
+            if not contas_sel:
+                self._log("[!] Nenhuma conta marcada."); self.q.put(("reabilitar2", None)); return
+            pagos = [p for p in self.pagos if p["conta"] in contas_sel]
             if termos:
                 antes = len(pagos)
                 pagos = [p for p in pagos
@@ -808,7 +827,7 @@ class AnexarFrame(ttk.Frame):
             self._log(f"⏱ Verificação de anexos: {_fmt_dur(time.time() - inicio)}")
             ini_anexar = time.time()
 
-            pdfs = matcher.carregar_pdfs(Path(self.v_pasta.get()), self._log)
+            pdfs = matcher.carregar_pdfs(Path(pasta_pdfs), self._log)
             self._log(f"{len(pdfs)} PDF(s) válidos na pasta.")
             certezas, duvidas, sem_par = matcher.casar(pendentes, pdfs)
             self._log(f"Casamentos com certeza: {len(certezas)} | dúvida: {len(duvidas)} "
@@ -833,7 +852,7 @@ class AnexarFrame(ttk.Frame):
 
             resultados = []
             self.q.put(("max", len(certezas)))
-            pasta = Path(self.v_pasta.get())
+            pasta = Path(pasta_pdfs)
             for i, pe in enumerate(certezas, 1):
                 if self._checar_pausa():
                     self._log("⏹ Interrompido pelo usuário — gerando relatório "
@@ -842,20 +861,20 @@ class AnexarFrame(ttk.Frame):
                 arq = pasta / pe["pdf"]
                 vals = [_fmt_val(v) for v in pe.get("valores", [pe["valor"]])]
                 r = self.mc.anexar(pe["launchId"], _fmt_val(pe["valor"]), arq,
-                                   doc=pe["doc"] or None, dry_run=self.v_dry.get(),
+                                   doc=pe["doc"] or None, dry_run=simular,
                                    valores=vals)
                 if r.startswith("erro:"):
                     self._log(f"   ({r}) — recarregando o sistema e tentando de novo...")
                     self.mc.resetar()
                     r = self.mc.anexar(pe["launchId"], _fmt_val(pe["valor"]), arq,
-                                       doc=pe["doc"] or None, dry_run=self.v_dry.get(),
+                                       doc=pe["doc"] or None, dry_run=simular,
                                        valores=vals)
                 pe["resultado"] = r
                 resultados.append(pe)
                 self.q.put(("prog", (i, sum(1 for x in resultados if not x["resultado"].startswith("erro")), 0)))
                 self._log(f"[{i}/{len(certezas)}] {_fmt_val(pe['valor'])}  {pe['pdf']}  -> {r}")
 
-            saida = self._relatorio(resultados, duvidas, sem_par)
+            saida = self._relatorio(resultados, duvidas, sem_par, pasta_pdfs)
             ok = sum(1 for x in resultados
                      if x["resultado"] in ("anexado", "anexado_sem_tag", "ja_tinha", "dry_run"))
             self._log(f"⏱ Anexos: {_fmt_dur(time.time() - ini_anexar)}")
@@ -867,14 +886,14 @@ class AnexarFrame(ttk.Frame):
             self._log(_texto_do_erro(e))
             self.q.put(("reabilitar2", None))
 
-    def _t_lista(self):
+    def _t_lista(self, pasta_pdfs: str, lista: str, simular: bool):
         inicio = time.time()
         self._log(f"⏱ Início: {time.strftime('%H:%M:%S')}")
         try:
-            pasta_pdfs = self.v_pasta.get().strip() or None
-            tarefas = planilha.carregar_tarefas(Path(self.v_lista.get()),
+            pasta_pdfs = (pasta_pdfs or "").strip() or None
+            tarefas = planilha.carregar_tarefas(Path(lista),
                                                 pasta_pdfs=pasta_pdfs)
-            self._log(f"{len(tarefas)} linha(s) na lista. Simular={self.v_dry.get()}")
+            self._log(f"{len(tarefas)} linha(s) na lista. Simular={simular}")
             self.garantir_sessao()
             self.q.put(("max", len(tarefas)))
             ok = 0
@@ -890,13 +909,13 @@ class AnexarFrame(ttk.Frame):
                     r = "erro:pdf_nao_encontrado_na_pasta"
                 else:
                     r = self.mc.anexar(t["launchId"], t["valor"], t["arquivo"],
-                                       doc=t.get("doc") or None, dry_run=self.v_dry.get())
+                                       doc=t.get("doc") or None, dry_run=simular)
                     if r.startswith("erro:"):
                         self._log(f"   ({r}) — recarregando o sistema e tentando de novo...")
                         self.mc.resetar()
                         r = self.mc.anexar(t["launchId"], t["valor"], t["arquivo"],
                                            doc=t.get("doc") or None,
-                                           dry_run=self.v_dry.get())
+                                           dry_run=simular)
                 if r in ("anexado", "anexado_sem_tag", "ja_tinha", "dry_run"):
                     ok += 1
                 self.q.put(("prog", (i, ok, i - ok)))
@@ -910,7 +929,10 @@ class AnexarFrame(ttk.Frame):
             self.q.put(("reabilitar2", None))
 
     # ---------------------------------------------------------------- saída
-    def _relatorio(self, anexados, duvidas, sem_par) -> str:
+    def _relatorio(self, anexados, duvidas, sem_par, pasta_pdfs: str = "") -> str:
+        """Escreve o Excel ao lado dos PDFs. Roda na thread do navegador, então
+        a pasta chega por ARGUMENTO — lida do `v_pasta` daqui, seria tkinter
+        fora da thread da interface."""
         wb = Workbook(); wb.remove(wb.active)
         verde = PatternFill("solid", fgColor="1B7837")
         branco = Font(bold=True, color="FFFFFF")
@@ -943,7 +965,7 @@ class AnexarFrame(ttk.Frame):
         aba("SEM PAR", [comuns(p) + ["", "", "", LINK + p["launchId"]]
                         for p in sem_par])
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out = Path(self.v_pasta.get() or ".") / f"relatorio_anexos_{stamp}.xlsx"
+        out = Path(pasta_pdfs or ".") / f"relatorio_anexos_{stamp}.xlsx"
         wb.save(out)
         return str(out).replace("\\", "/")
 
