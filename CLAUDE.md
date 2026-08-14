@@ -471,7 +471,20 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   nasce desmarcada e trava o lote **antes** do primeiro download, porque
   decidir destino com o lote pela metade vira improviso. Quatro contas da mesma
   empresa dividem uma pasta (Moura Dantas), daí o campo `sufixo` com o número
-  da conta no fim do nome. `pasta` aceita subnível (`CAIXA/APLICAÇÃO`). A
+  da conta no fim do nome.
+  **O `sufixo` é o MESMO campo dos dois lados** — `contas_mc.Destino` e
+  `sicoob_contas.Conta` —, e por um bom tempo só desceu para um: o PDF do ERP
+  saía desempatado e o OFX do banco não. As duas contas gravavam
+  `202607 SICOOB.ofx` no mesmo lugar e a segunda passava por cima da primeira
+  **sem nada denunciar**: a pasta é escolhida pela conta, cada OFX é conferido
+  contra a SUA conta (a trava do ACCTID aprova os dois), o `shutil.move`
+  sobrescreve calado e o relatório fecha com "13 de 13 contas completas".
+  Por isso `sicoob_contas.impedimentos()` BARRA o lote, em vez de avisar
+  depois — aqui o estrago já aconteceu quando alguém percebe, e o arquivo
+  perdido não volta. No banco, quem sustenta a regra é
+  `unique (empresa_id, pasta, sufixo)`, e `nuvem/migrar.py` recusa migrar se
+  os dois arquivos trouxerem sufixos diferentes para a mesma conta.
+  `pasta` aceita subnível (`CAIXA/APLICAÇÃO`). A
   comparação de nomes ignora acento, caixa e espaço duplo: o nome vem do
   cadastro do ERP, digitado por gente. `caminhos_longos()` existe porque os
   caminhos aqui são longos (empresa + subconta com descrição + o `.zip` do
