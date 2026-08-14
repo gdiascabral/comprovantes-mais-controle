@@ -90,6 +90,84 @@ def test_reembolso_e_autorizado_tambem_nascem_marcados():
         assert c.marcado, status
 
 
+# ------------------------------------------- as travas contra pagar 2 vezes
+def test_reembolso_do_anexo_e_impedido():
+    """O aviso "PAGAR PARA" manda o dinheiro para quem NÃO é o favorecido.
+
+    O segmento B carrega UM par nome/documento, e os dois lados vinham de
+    origens diferentes: o documento do FORNECEDOR (casado pelo `paidTo` no
+    cadastro de Contatos) com a chave Pix DA PESSOA. Os campos passavam a
+    contradizer a Informação 12, e o validador não vê. A observação
+    equivalente ("PAGAR À MÃO") já era impedimento; o anexo não era, e ainda
+    nascia marcado, porque a planilha o classifica como APTO.
+    """
+    c, = preparar(registro(tipo="Pix", dados="529.982.247-25",
+                           status="APTO* (reembolso)", reembolso=True))
+    assert not c.pode
+    assert c.impedimento == remessa_dia.MOTIVO_REEMBOLSO
+
+
+def test_valor_que_o_boleto_contradiz_e_impedido():
+    """Na planilha é alarme — a linha existe para alguém abrir e olhar.
+
+    Aqui viraria dinheiro saindo pelo valor do LANÇAMENTO, que é justamente
+    o lado que o boleto contradiz.
+    """
+    c, = preparar(registro(status="ATENÇÃO — valor do boleto diverge",
+                           valor_diverge=True))
+    assert not c.pode
+    assert c.impedimento == remessa_dia.MOTIVO_VALOR_DIVERGE
+
+
+class _HistoricoFalso:
+    """Só o que o `preparar` pergunta: as duas buscas de "já saiu?"."""
+
+    def __init__(self, por_barras=None, por_referencia=None):
+        self._barras = por_barras or {}
+        self._ref = por_referencia or {}
+
+    def _achado(self, nsa):
+        remessa = type("R", (), {"nsa": nsa, "gerado_em": None})()
+        return (remessa, object())
+
+    def envio_de(self, codigo):
+        return self._achado(self._barras[codigo]) if codigo in self._barras else None
+
+    def envio_da_referencia(self, referencia):
+        return self._achado(self._ref[referencia]) if referencia in self._ref else None
+
+
+def test_boleto_que_ja_saiu_em_outra_remessa_e_impedido():
+    """A trava do "seu número" só pegava repetição no MESMO dia.
+
+    Ele começa com a data (`260813-0001-…`), então refazer o dia seguinte com
+    o título ainda aberto — porque o retorno do banco não foi lido — mandava o
+    mesmo boleto de novo, com NSA novo e validador limpo.
+    """
+    barras = ocr_boleto.codigo_de_barras(LINHA_BANCARIA)
+    hist = _HistoricoFalso(por_barras={barras: 31})
+    c, = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE,
+                              historico=hist)[CONTA]
+    assert not c.pode
+    assert "000031" in c.impedimento
+
+
+def test_pix_que_ja_saiu_e_impedido_pela_referencia():
+    """Pix não tem código de barras; quem responde é o id do lançamento."""
+    hist = _HistoricoFalso(por_referencia={"id-erp-1": 7})
+    c, = remessa_dia.preparar(
+        {CONTA: [registro(tipo="Pix", dados="11.222.333/0001-81")]},
+        quando=HOJE, historico=hist)[CONTA]
+    assert not c.pode
+    assert "000007" in c.impedimento
+
+
+def test_sem_historico_a_regra_continua_a_mesma():
+    """`historico` é opcional: os testes de regra chamam `preparar` sem ele."""
+    c, = preparar(registro())
+    assert c.pode and c.marcado
+
+
 def test_ja_pago_nao_e_candidato():
     c, = preparar(registro(status="JÁ PAGO em 12/08/2026"))
     assert not c.pode and c.impedimento == remessa_dia.MOTIVO_JA_PAGO

@@ -418,10 +418,17 @@ def test_texto_de_pdf_de_verdade_nao_passa_pela_trava_do_ocr():
 # ==========================================================================
 # 8. "tem um arquivo falando 'pagar para' e abaixo tem um numero"
 # ==========================================================================
+# O CPF do aviso PRECISA fechar nos dígitos verificadores: o aviso é uma foto,
+# e `chave_pix_do_aviso` passou a recusar o que não fecha (um dígito trocado
+# pelo OCR manda o dinheiro para outra pessoa). `529.982.247-25` é o exemplo
+# de manual que o `test_remessa_dia` já usa — fictício e válido.
+CPF_DO_AVISO = "529.982.247-25"
 AVISO = ("AUTORIZACAO DE REEMBOLSO\n"
          "PAGAR PARA: FULANO DE TAL\n"
-         "111.222.333-44\n"
+         f"{CPF_DO_AVISO}\n"
          "Valor 1.101,65\n")
+#: O mesmo aviso com UM dígito trocado — DV não fecha.
+AVISO_OCR_ERRADO = AVISO.replace(CPF_DO_AVISO, "529.982.247-26")
 
 
 def reembolso(**extra):
@@ -436,8 +443,22 @@ def test_chave_lida_do_proprio_aviso_dispensa_cadastro():
     anexos = {"x1": [anexo("PAGAR PARA FULANO", url="ur")]}
     res = relatorio.montar_registros([reembolso()], anexos, {}, {"ur": AVISO})
     linha = linhas(res)[0]
-    assert linha["dados"] == "111.222.333-44"
+    assert linha["dados"] == CPF_DO_AVISO
     assert "próprio aviso" in linha["obs"]
+
+
+def test_cpf_do_aviso_com_digito_trocado_nao_vira_chave():
+    """O aviso é uma FOTO, e um `2` lido como `6` paga outra pessoa.
+
+    A linha digitável do boleto se defende sozinha (tem DV e codifica o
+    valor); a chave Pix não — então o único CPF que entra é o que fecha.
+    Reprovando, a linha volta a depender do cadastro, que é o lado seguro.
+    """
+    anexos = {"x1": [anexo("PAGAR PARA FULANO", url="ur")]}
+    res = relatorio.montar_registros([reembolso()], anexos, {},
+                                     {"ur": AVISO_OCR_ERRADO})
+    linha = linhas(res)[0]
+    assert "529.982.247-26" not in linha["dados"]
 
 
 def test_chave_do_aviso_diferente_da_cadastrada_vira_atencao():
@@ -446,14 +467,15 @@ def test_chave_do_aviso_diferente_da_cadastrada_vira_atencao():
                                      pix_reembolso={"FULANO": "999.888.777-66"})
     linha = linhas(res)[0]
     assert linha["status"].startswith("ATEN")
-    assert linha["dados"] == "111.222.333-44"      # o aviso é o documento do dia
+    assert linha["dados"] == CPF_DO_AVISO           # o aviso é o documento do dia
     assert "difere da cadastrada" in linha["obs"]
 
 
 def test_mesma_chave_escrita_de_dois_jeitos_nao_e_divergencia():
     anexos = {"x1": [anexo("PAGAR PARA FULANO", url="ur")]}
+    # Os MESMOS dígitos do aviso, escritos sem pontuação e com o nome junto.
     res = relatorio.montar_registros([reembolso()], anexos, {}, {"ur": AVISO},
-                                     pix_reembolso={"FULANO": "Fulano 11122233344"})
+                                     pix_reembolso={"FULANO": "Fulano 52998224725"})
     assert not linhas(res)[0]["status"].startswith("ATEN")
 
 
