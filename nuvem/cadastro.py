@@ -202,18 +202,44 @@ def sincronizar(token: str, pasta=None) -> Resultado:
         return Resultado(False, "o banco respondeu sem empresas ou sem contas "
                                 "— os arquivos locais foram mantidos")
 
-    cache.gravar_json("contas_sicoob.json", _contas_sicoob(dados), pasta)
-    cache.gravar_json("contas_mc.json", _contas_mc(dados), pasta)
-    cache.gravar_json("subcontas.json", _subcontas(dados), pasta)
-    cache.gravar_json("regras_fornecedor.json", _regras_fornecedor(dados), pasta)
-    cache.gravar_json("confirmar_antes.json", _confirmar_antes(dados), pasta)
-    cache.gravar_json("regras_boletos.json", _regras_boletos(dados), pasta)
+    # Arquivo por arquivo, a mesma regra que protege o conjunto: conteúdo
+    # vazio vindo do banco NÃO apaga conteúdo que existe no disco.
+    #
+    # A checagem de `empresa`/`conta` acima cobre o caso grosso (banco vazio),
+    # e não cobre o caso fino, que é mais provável: alguém apaga as entidades
+    # pelo painel sem querer, e a próxima abertura do app zera o `contas.csv`
+    # de todas as máquinas. Vazio legítimo existe — `pix_reembolso` está
+    # assim hoje —, e por isso a regra não é "nunca escreva vazio", e sim
+    # "não troque cheio por vazio".
+    def _gravar(nome, conteudo, vazio_quando):
+        if vazio_quando and cache.existe(nome, pasta):
+            antigo = cache.ler_json(nome, pasta)
+            if any(not k.startswith("_") for k in antigo):
+                return                   # tinha coisa; não apaga em silêncio
+        cache.gravar_json(nome, conteudo, pasta)
+
+    sic = _contas_sicoob(dados)
+    _gravar("contas_sicoob.json", sic, not sic["empresas"])
+    mc = _contas_mc(dados)
+    _gravar("contas_mc.json", mc, not mc["contas"])
+    sub = _subcontas(dados)
+    _gravar("subcontas.json", sub, not dados["subconta"])
+    _gravar("regras_fornecedor.json", _regras_fornecedor(dados),
+            not dados["regra_fornecedor"])
+    _gravar("confirmar_antes.json", _confirmar_antes(dados),
+            not dados["regra_fornecedor"])
+    _gravar("regras_boletos.json", _regras_boletos(dados),
+            not dados["regra_boleto"])
     pix = _pix_reembolso(dados)
     if pix:
         cache.gravar_json("pix_reembolso.json", pix, pasta)
-    cache.gravar_csv("contas.csv",
-                     ["nome_exibicao", "nome_oficial", "conta", "nome_descricao"],
-                     _contas_csv(dados), pasta)
+
+    linhas = _contas_csv(dados)
+    if linhas or not cache.existe("contas.csv", pasta):
+        cache.gravar_csv(
+            "contas.csv",
+            ["nome_exibicao", "nome_oficial", "conta", "nome_descricao"],
+            linhas, pasta)
 
     return Resultado(True, "", contas=len(dados["conta"]),
                      empresas=len(dados["empresa"]))

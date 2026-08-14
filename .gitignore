@@ -23,10 +23,21 @@ codigo/
 debug/
 aportes/.chrome_profile*/
 aportes/conferencia.json
-aportes/contas.csv
 aportes/teste_lancamento.json
 aportes/teste_lancamento.local.json
-aportes/subcontas.json
+# Cadastro de quem aporta e dos grupos por subconta: nome de pessoa física e
+# número de conta. Sem prefixo de pasta de propósito — a regra tem de valer
+# na raiz E em `aportes/`.
+#
+# Estavam presos a `aportes/` e isso virou buraco quando o cadastro passou a
+# vir da nuvem: `nuvem/cache.py` regrava os arquivos em `util.pasta_base()`,
+# que rodando como SCRIPT é a raiz do repositório. Bastava alguém abrir o app
+# pelo código-fonte para os dois nascerem fora de qualquer regra.
+contas.csv
+subcontas.json
+# Regras de reconhecimento de boleto por e-mail: remetente, fornecedor do ERP
+# e os textos que descrevem casos reais. Mesma razão do pix_reembolso.json.
+regras_boletos.json
 # Saída da aba Relatório Mensal (extratos em PDF — dado da empresa).
 # Só a pasta da raiz, e COM acento: no Windows o git ignora maiúsculas, e
 # "Relatorios/" sem acento casaria com a pasta de código "relatorios/".

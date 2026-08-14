@@ -222,6 +222,52 @@ def test_banco_vazio_nao_apaga_o_cadastro(tmp_path, monkeypatch):
     assert json.loads((tmp_path / "contas_mc.json").read_text())["contas"] == [1]
 
 
+def test_tabela_vazia_nao_apaga_o_arquivo_que_tinha_coisa(tmp_path, monkeypatch):
+    """O caso fino, que a checagem de banco-vazio não pega.
+
+    Alguém apaga as entidades pelo painel sem querer. O banco continua com
+    empresas e contas, então a sincronização segue — e zeraria o `contas.csv`
+    de todas as máquinas na próxima abertura."""
+    cache.gravar_csv("contas.csv",
+                     ["nome_exibicao", "nome_oficial", "conta", "nome_descricao"],
+                     [{"nome_exibicao": "FULANO", "nome_oficial": "FULANO LTDA",
+                       "conta": "1", "nome_descricao": ""}], tmp_path)
+    cache.gravar_json("subcontas.json", {"00000-0": {"obras": ["OBRA"],
+                                                     "investidores": ["X"]}},
+                      tmp_path)
+    dados = _banco(
+        empresa=[{"id": 1, "nome_pasta": "E", "cnpj": "", "vip_id": "",
+                  "razao_social": "", "convenio": ""}],
+        conta=[{"id": 9, "empresa_id": 1, "numero": "1-1", "agencia": "",
+                "nome_erp": "E", "pasta": "P", "banco": "B",
+                "banco_codigo": "756", "sufixo": ""}],
+        configuracao=[{"chave": "raiz", "valor": "C:/x"}])
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    assert cadastro.sincronizar("tok", tmp_path).atualizou
+    csv_texto = (tmp_path / "contas.csv").read_text(encoding="utf-8-sig")
+    assert "FULANO" in csv_texto
+    sub = json.loads((tmp_path / "subcontas.json").read_text(encoding="utf-8"))
+    assert "00000-0" in sub
+
+
+def test_arquivo_ausente_pode_nascer_vazio(tmp_path, monkeypatch):
+    """A regra é "não troque cheio por vazio", não "nunca escreva vazio":
+    máquina nova precisa receber os arquivos, mesmo os sem conteúdo."""
+    dados = _banco(
+        empresa=[{"id": 1, "nome_pasta": "E", "cnpj": "", "vip_id": "",
+                  "razao_social": "", "convenio": ""}],
+        conta=[{"id": 9, "empresa_id": 1, "numero": "1-1", "agencia": "",
+                "nome_erp": "E", "pasta": "P", "banco": "B",
+                "banco_codigo": "756", "sufixo": ""}],
+        configuracao=[{"chave": "raiz", "valor": "C:/x"}])
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    cadastro.sincronizar("tok", tmp_path)
+    assert (tmp_path / "contas.csv").exists()
+    assert (tmp_path / "subcontas.json").exists()
+
+
 def test_os_dois_mapas_saem_da_mesma_conta(tmp_path, monkeypatch):
     """A razão de tudo isto existir: uma conta, uma pasta, dois arquivos.
 

@@ -690,11 +690,22 @@ resolver. Três consequências:
 - banco mudo não impede o app de abrir: usa a última cópia e escreve
   "⚠ cadastro offline" no rodapé da barra. **Sem esse aviso, "estou com o
   cadastro de ontem" seria indistinguível de "tudo certo"**;
-- banco que responde VAZIO não apaga nada (`sincronizar` recusa e mantém os
-  arquivos) — projeto novo ou migração não rodada zerariam o cadastro de todo
-  mundo, e o cache é justamente a última cópia que sobraria;
+- **vazio nunca substitui cheio**, em dois níveis. O grosso: banco sem
+  empresas ou sem contas faz `sincronizar` recusar tudo (projeto novo ou
+  migração não rodada zerariam o cadastro de todo mundo). O fino, mais
+  provável: cada arquivo é comparado sozinho, então alguém apagar as
+  entidades pelo painel não zera o `contas.csv` de todas as máquinas na
+  próxima abertura. A regra não é "nunca escreva vazio" — máquina nova
+  precisa receber os arquivos —, é "não troque cheio por vazio";
 - o cache preserva as chaves `_leia_me`/`_ajuda`, que explicam o arquivo para
-  quem o abre e não vêm do banco.
+  quem o abre e não vêm do banco. É o que mantém vivo o `_nao_sao_boleto`,
+  que nenhum código lê e ninguém saberia reescrever;
+- **quem lê o cache tem de usar `util.pasta_base()`.** `aportes/dados.py`,
+  `relatorios/contas_mc.py` e `extratos_sicoob/sicoob_config.py` calculavam a
+  pasta sozinhos e, rodando como SCRIPT, procuravam dentro da própria
+  subpasta enquanto o cache regravava na raiz — o cadastro baixado chegava e
+  ninguém o via. Congelado dava no mesmo, então o desencontro só aparecia em
+  desenvolvimento, que é justamente onde se testa.
 
 **Editar cadastro é no painel do Supabase**, que é uma planilha no navegador.
 Não há tela no app, de propósito: esses cadastros mudam raras vezes, e a
@@ -704,11 +715,22 @@ de por onde a edição entrou. Depois de editar, o app pega na próxima abertura
 **Segurança, e o que já está provado por teste.** Só a `anon key` está no
 código (`nuvem/rest.py`) — ela é pública por desenho e não abre nada sozinha;
 a `service_role` ignora a RLS inteira e não pode aparecer no repositório, no
-exe nem no CI. Toda tabela tem RLS ligada e política só para `authenticated`.
+exe nem no CI. Toda tabela tem RLS ligada.
+
+**O app só LÊ, então as políticas são `for select`** e o privilégio de
+escrita foi revogado de `authenticated`. As políticas nasceram `for all`, o
+que dava a qualquer pessoa logada o poder de esvaziar o cadastro por uma
+chamada de API — poder que nenhuma linha do app exerce. O que isso muda na
+prática: token vazado (ou pessoa que saiu e ainda tem sessão válida) passa a
+poder LER o cadastro, ruim, em vez de poder APAGÁ-LO, irreversível sem
+backup. Quem escreve é a administração — o painel e o `nuvem/migrar.py`, os
+dois com a chave de serviço.
+
 Medido contra o projeto de verdade: sem login, ler `conta` ou
 `regra_fornecedor` responde **401**; criar conta responde **422
-signup_disabled**; com login, 200. O cadastro público está desligado porque,
-com ele aberto, qualquer um que clonasse o repositório viraria gente da casa.
+signup_disabled**; com login, ler responde 200 e criar, apagar ou reescrever
+respondem **403**. O cadastro público está desligado porque, com ele aberto,
+qualquer um que clonasse o repositório viraria gente da casa.
 
 **Duas armadilhas do Supabase CLI que já custaram tempo:**
 
@@ -742,7 +764,14 @@ Fase 3 (aportes lançados, NSA, retorno CNAB, envios) chega depois pelo
 nas duas máquinas no mesmo instante.
 
 **Migrar de novo** (máquina nova, ou recomeçar): `python nuvem/migrar.py
---conferir` critica sem escrever; `--subir --email <você>` escreve e depois
-relê para comparar campo a campo. Ele entra com LOGIN DE PESSOA e não com a
-chave de serviço — um script que usasse a chave de serviço ignoraria a RLS e
-não provaria nada sobre o caminho que o app percorre.
+--conferir` critica sem escrever; `--subir` escreve e depois relê para
+comparar campo a campo. Precisa do Supabase CLI autenticado
+(`npx.cmd supabase login` — com `.cmd`, senão a trava de scripts do
+PowerShell barra). Migrar é administração e usa a chave de serviço, que sai
+do próprio CLI: não há segredo em arquivo nem em variável de ambiente para
+alguém esquecer.
+
+**`vip_nome` é gravado vazio de propósito.** A tentação é preenchê-lo com a
+razão social, e `pacote.py` usa `vip_nome or empresa.nome` para montar o
+ASSUNTO da solicitação ao escritório contábil — preenchê-lo mudaria, sem
+ninguém pedir, o texto que o contador recebe todo mês.

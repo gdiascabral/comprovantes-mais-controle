@@ -14,12 +14,17 @@ Um `config.py` aqui sequestraria o `import config` do Anexar.
 import sys
 from pathlib import Path
 
-if getattr(sys, "frozen", False):
-    # Empacotado: usa a pasta do .exe, para o JSON e o perfil do Chrome
-    # persistirem entre execuções.
-    _AQUI = Path(sys.executable).resolve().parent
-else:
-    _AQUI = Path(__file__).resolve().parent
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+# Empacotado, é a pasta do .exe, para o JSON e o perfil do Chrome persistirem
+# entre execuções. Sai de `util.pasta_base()` e não de um cálculo próprio:
+# rodando como SCRIPT, o cálculo próprio apontava para `extratos_sicoob/`
+# enquanto o `nuvem/cache.py` regrava o mapa na raiz.
+_AQUI = util.pasta_base()
 
 # Mapa das contas e da árvore de pastas (fora do repositório).
 ARQUIVO_CONTAS = _AQUI / "contas_sicoob.json"

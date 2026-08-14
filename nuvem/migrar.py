@@ -8,6 +8,8 @@ Nao entra no `codigo.zip`: e ferramenta de mudanca, como o
     python nuvem/migrar.py --subir         # escreve, e depois confere
     python nuvem/migrar.py --limpar        # apaga tudo do banco (recomeco)
 
+Exige o Supabase CLI autenticado nesta maquina (`npx.cmd supabase login`).
+
 A ordem importa: **conferir antes de subir**. Migrar divergencia e levar o
 problema para dentro do banco, onde ele fica mais dificil de ver.
 
@@ -58,31 +60,23 @@ def _chaves() -> dict:
 class Banco:
     """O minimo de PostgREST para migrar: inserir, ler e apagar.
 
-    Entra com **login de pessoa**, e nao com a chave de servico. Dois motivos:
-    a chave de servico ignora toda a RLS, entao um script que a usasse nao
-    provaria nada sobre o caminho que o app vai percorrer; e ela nao tem
-    privilegio nenhum nestas tabelas de proposito -- o projeto foi criado sem
-    expor tabela automaticamente, e conceder acesso a ela so para migrar seria
-    abrir uma porta permanente para um uso de uma vez so.
+    Entra com a **chave de servico**, e nao com login de pessoa. Isto mudou
+    depois de o app passar a so LER o cadastro: as politicas de `authenticated`
+    sao `for select`, e escrever com login de pessoa deixou de ser possivel --
+    de proposito, porque token vazado que apaga cadastro e irreversivel sem
+    backup.
+
+    Migrar e administracao, e administracao usa credencial de administracao.
+    A chave sai do Supabase CLI ja autenticado nesta maquina, entao nao ha
+    segredo em arquivo nem em variavel de ambiente para alguem esquecer.
     """
 
-    def __init__(self, email: str, senha: str) -> None:
+    def __init__(self) -> None:
         ks = _chaves()
-        anon = ks.get("anon") or ks.get("publishable")
-        if not anon:
-            raise SystemExit(f"faltou a chave publica; vi: {sorted(ks)}")
-        req = urllib.request.Request(
-            f"{BASE}/auth/v1/token?grant_type=password",
-            data=json.dumps({"email": email, "password": senha}).encode(),
-            method="POST")
-        req.add_header("apikey", anon)
-        req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                token = json.loads(r.read().decode())["access_token"]
-        except urllib.error.HTTPError as e:
-            raise SystemExit(f"login recusado: {e.read().decode()}")
-        self._cab = {"apikey": anon, "Authorization": f"Bearer {token}",
+        chave = ks.get("service_role") or ks.get("secret")
+        if not chave:
+            raise SystemExit(f"faltou a chave de servico; vi: {sorted(ks)}")
+        self._cab = {"apikey": chave, "Authorization": f"Bearer {chave}",
                      "Content-Type": "application/json"}
 
     def _pedir(self, caminho: str, dados=None, metodo="GET", prefer=""):
@@ -311,7 +305,12 @@ def subir(banco: Banco, d: dict) -> None:
     empresas = banco.inserir("empresa", [{
         "nome_pasta": e["nome"],
         "vip_id": e.get("vip_id", "") or "",
-        "vip_nome": e.get("razao_social", "") or "",
+        # `vip_nome` fica VAZIO, como está nos arquivos de hoje. Preenchê-lo
+        # com a razão social parecia melhoria óbvia e não é: `pacote.py` usa
+        # `vip_nome or empresa.nome` para montar o ASSUNTO da solicitação ao
+        # escritório contábil. Gravá-lo aqui mudaria, sem ninguém pedir, o
+        # texto que o contador recebe todo mês.
+        "vip_nome": e.get("vip_nome", "") or "",
         "cnpj": e.get("cnpj", "") or "",
         "razao_social": e.get("razao_social", "") or "",
         "convenio": e.get("convenio", "") or "",
@@ -431,8 +430,6 @@ def main() -> int:
     p.add_argument("--conferir", action="store_true", help="so le e critica")
     p.add_argument("--subir", action="store_true", help="escreve no banco")
     p.add_argument("--limpar", action="store_true", help="apaga tudo do banco")
-    p.add_argument("--email", help="quem entra no banco (login do app)")
-    p.add_argument("--senha-de", help="arquivo com a senha, em vez de digitar")
     args = p.parse_args()
     if not (args.conferir or args.subir or args.limpar):
         p.print_help()
@@ -462,19 +459,7 @@ def main() -> int:
         print(f"  {len((d['boletos'] or {}).get('regras', []))} regras de boleto")
         return 0
 
-    if not args.email:
-        print("escrever no banco exige --email (o mesmo login do app).")
-        return 2
-    if args.senha_de:
-        # Arquivo com "senha..: XXXX" numa das linhas, ou so a senha crua.
-        texto = Path(args.senha_de).read_text(encoding="utf-8")
-        senha = next((l.split(":", 1)[1].strip() for l in texto.splitlines()
-                      if l.lower().startswith("senha")), texto.strip())
-    else:
-        import getpass
-        senha = getpass.getpass(f"senha de {args.email}: ")
-
-    banco = Banco(args.email, senha)
+    banco = Banco()
 
     if args.limpar:
         print("apagando...", end=" ", flush=True)

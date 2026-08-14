@@ -35,10 +35,11 @@ MESES = ("JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
 LIMITE_CAMINHO = 260
 
 
-if getattr(sys, "frozen", False):
-    _AQUI = Path(sys.executable).resolve().parent
-else:
-    _AQUI = Path(__file__).resolve().parent
+# `util.pasta_base()` e não um cálculo próprio: rodando como SCRIPT este
+# módulo procurava em `relatorios/`, enquanto o `nuvem/cache.py` regrava o
+# mapa na raiz. Congelado dá no mesmo — o desencontro só aparecia em
+# desenvolvimento, que é justamente onde se testa.
+_AQUI = util.pasta_base()
 
 ARQUIVO_MAPA = _AQUI / "contas_mc.json"
 
