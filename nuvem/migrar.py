@@ -182,6 +182,12 @@ def criticar(d: dict) -> list[str]:
         num = _numero_no_texto(c.get("erp")) or _numero_no_texto(c.get("pasta"))
         if num:
             pastas_mc[num] = (c.get("pasta") or "").strip()
+    sufixos_mc = {}
+    for c in d["mc"]["contas"]:
+        num = _numero_no_texto(c.get("erp")) or _numero_no_texto(c.get("pasta"))
+        if num:
+            sufixos_mc[num] = (c.get("sufixo") or "").strip()
+
     for e in d["sicoob"]["empresas"]:
         for c in e.get("contas", []):
             num = _digitos(c.get("numero"))
@@ -190,6 +196,16 @@ def criticar(d: dict) -> list[str]:
                 problemas.append(
                     f"conta ...{num[-4:]}: contas_mc manda para {outra!r} e "
                     f"contas_sicoob para {c.get('pasta')!r}")
+            # O sufixo desempata duas contas que dividem uma pasta, e vale
+            # para o PDF do ERP e para o OFX do banco. Divergente, cada aba
+            # nomearia o arquivo de um jeito -- e o pior caso nao e o nome
+            # feio: e a segunda conta gravar por cima da primeira, calada.
+            aqui = (c.get("sufixo") or "").strip()
+            la = sufixos_mc.get(num, "")
+            if aqui and la and _norm(aqui) != _norm(la):
+                problemas.append(
+                    f"conta ...{num[-4:]}: sufixo {la!r} no contas_mc e "
+                    f"{aqui!r} no contas_sicoob")
 
     # Subconta sem obra OU sem investidor faz o rateio sair vazio, e o valor
     # some sem erro nenhum -- e a mesma checagem que `regras.validar()` faz na
@@ -250,7 +266,15 @@ def montar_contas(d: dict) -> list[dict]:
                 # O NOME vem do contas_mc; o CODIGO, do contas_sicoob.
                 "banco": (par or {}).get("banco", ""),
                 "banco_codigo": c.get("banco", ""),
-                "sufixo": (par or {}).get("sufixo", "") or "",
+                # O sufixo existe nos DOIS arquivos e e o MESMO campo: e ele
+                # que impede duas contas da mesma pasta de gravarem o mesmo
+                # nome de arquivo -- o PDF do ERP de um lado, o OFX do banco
+                # do outro. Ler so o do contas_mc descartaria em silencio um
+                # sufixo cadastrado no contas_sicoob, que e exatamente a
+                # familia de defeito que a unificacao veio matar. Divergencia
+                # entre os dois nao e resolvida aqui: `criticar` barra antes.
+                "sufixo": ((par or {}).get("sufixo", "")
+                           or c.get("sufixo", "") or ""),
             })
 
     for i, m in enumerate(mc):
