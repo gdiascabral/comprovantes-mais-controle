@@ -77,6 +77,22 @@ def pasta_base() -> Path:
     return Path(__file__).resolve().parent
 
 
+#: Os meses COMO VIRAM NOME DE PASTA no disco — `.../2026/JULHO/...`.
+#:
+#: Mora aqui, e não em cada módulo, pela mesma razão do `pasta_base()` logo
+#: acima: existia em TRÊS cópias (Conciliação, Extratos Sicoob e Relatório
+#: Mensal), e as três produzem caminho de arquivamento. Bastava uma divergir —
+#: um "MARCO" sem cedilha — para a Conciliação gravar numa pasta e o Relatório
+#: Mensal noutra, que é exatamente a família do defeito que partiu julho/2026
+#: ao meio e fez nascer o `conferir_mapas.py`.
+#:
+#: O par de TELA é o `widgets.MESES` ("Janeiro"), e ele fica lá porque
+#: `util.py` não importa tkinter. Que os dois digam a mesma coisa é garantido
+#: por teste, não por disciplina.
+MESES_PASTA = ("JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
+               "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO")
+
+
 def fmt_dur(seg: float) -> str:
     """Formata uma duração em segundos: '45 s', '3 min 07 s', '1 h 02 min'."""
     seg = int(round(seg))

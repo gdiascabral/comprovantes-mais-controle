@@ -22,8 +22,28 @@ from tkinter import messagebox, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import conferir_mapas                                        # noqa: E402
 import contas_mc                                             # noqa: E402
 import extrato_mc                                            # noqa: E402
+
+# Estes dois vivem em OUTRAS pastas de aba, e entram aqui em cima de
+# propósito. Enquanto o import morava dentro do `try` do `_conferir_mapas`, o
+# `except Exception: pass` engolia junto a falha de IMPORTAR: bastava a ordem
+# do sys.path mudar, ou um arquivo faltar no codigo.zip, para a conferência que
+# impede o mês partido sumir para sempre — sem uma linha em lugar nenhum. Aqui,
+# se algum dia faltar, o app não abre e alguém fica sabendo no mesmo dia.
+try:                                     # cadastro do Sicoob (aba vizinha)
+    import sicoob_config                                     # noqa: E402
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent
+                           / "extratos_sicoob"))
+    import sicoob_config                                     # noqa: E402
+
+try:                                     # o diagnostico.log é um só, no Anexar
+    import config                                            # noqa: E402
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "anexar"))
+    import config                                            # noqa: E402
 
 try:                                     # utilitários compartilhados (raiz)
     import util
@@ -47,8 +67,9 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 
 CampoData = widgets.CampoData
 
-MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
-         "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+#: Rótulo de TELA. A tabela que vira nome de pasta é a `util.MESES_PASTA`,
+#: e quem guarda a forma de exibição é o `widgets`, par visual do `util`.
+MESES = list(widgets.MESES)
 
 
 
@@ -228,18 +249,46 @@ class RelatorioFrame(ttk.Frame):
         return (datetime.date(ano, mes, 1),
                 datetime.date(ano, mes, calendar.monthrange(ano, mes)[1]))
 
-    def _nome_do_periodo(self, ini: datetime.date, fim: datetime.date) -> str:
-        """Nome da subpasta: o mês por extenso ("Julho 2026").
+    # Os três abaixo são `staticmethod` porque não dependem de nada da tela: é
+    # assim que a regra de NOME do arquivo — a que decide se este PDF
+    # substitui o do mês fechado — pode ser exercitada sem abrir uma janela.
+    @staticmethod
+    def _mes_fechado(ini: datetime.date, fim: datetime.date) -> bool:
+        """Do primeiro ao último dia do MESMO mês.
 
-        Com o ano junto para não misturar julhos de anos diferentes. Só quando
-        o período não é um mês fechado é que caem as duas datas no nome.
-        """
-        mes_fechado = (ini.day == 1
-                       and fim.day == calendar.monthrange(fim.year, fim.month)[1]
-                       and (ini.year, ini.month) == (fim.year, fim.month))
-        if mes_fechado:
-            return f"{MESES[ini.month - 1]} {ini.year}"
+        É a única forma de período que pode usar o nome de arquivo do
+        fechamento (`202607 ...`). Qualquer outra é recorte, e recorte que
+        usasse aquele nome apagaria o extrato do mês inteiro."""
+        return (ini.day == 1
+                and fim.day == calendar.monthrange(fim.year, fim.month)[1]
+                and (ini.year, ini.month) == (fim.year, fim.month))
+
+    @staticmethod
+    def _nome_do_periodo(ini: datetime.date, fim: datetime.date) -> str:
+        """As duas datas do recorte: "01-07-2026 a 15-07-2026".
+
+        É para ISSO que ela existe, e por isso vale mais que um detalhe de
+        formatação: pedir 01/07 a 15/07 para tirar uma dúvida gravava por
+        cima do extrato de julho já arquivado, porque o nome saía do mês do
+        INÍCIO. A trava de paginação não pega — o extrato parcial está
+        completo *para o período pedido*, então `conferir_antes_de_salvar`
+        aprova, e nada no disco denuncia depois.
+
+        Separador `-` e não `/`: isto vira nome de arquivo no Windows, onde a
+        barra é separador de pasta. O resto (dígitos, espaços e o "a") é
+        aceito em qualquer nome."""
         return f"{ini:%d-%m-%Y} a {fim:%d-%m-%Y}"
+
+    @staticmethod
+    def _periodo_no_nome(ini: datetime.date, fim: datetime.date) -> str:
+        """O que `contas_mc.nome_arquivo` põe no lugar do `AAAAMM`.
+
+        Vazio para mês fechado — aí o nome de sempre vale, e é ele que o
+        fechamento arquiva junto do OFX do banco, na mesma pasta e com o
+        mesmo começo."""
+        if RelatorioFrame._mes_fechado(ini, fim):
+            return ""
+        return RelatorioFrame._nome_do_periodo(ini, fim)
 
     def _garantir_mapa(self) -> bool:
         """Carrega o mapa conta→pasta, avisando de forma legível quando falta."""
@@ -259,17 +308,22 @@ class RelatorioFrame(ttk.Frame):
 
         O PDF do Mais Controle e o OFX do Sicoob são da MESMA conta e do MESMO
         mês: têm de cair na mesma pasta. Quando os mapas divergem, cada aba
-        cria a sua e o mês fica partido — sem nada no disco denunciando."""
+        cria a sua e o mês fica partido — sem nada no disco denunciando.
+
+        Continua sem poder barrar a aba, mas não sem poder ser vista falhar:
+        o `pass` de antes fazia "não achei divergência" e "não consegui
+        conferir" ficarem idênticos para quem olha a tela."""
         try:
-            import conferir_mapas
-            import sicoob_config
             n = conferir_mapas.avisar(contas_mc.ARQUIVO_MAPA,
                                       sicoob_config.ARQUIVO_CONTAS, self._log)
             if n:
                 self._log("  Alinhe os dois arquivos antes de baixar, senão os "
                           "extratos deste mês vão para pastas diferentes.")
-        except Exception:
-            pass          # a conferência é um extra; nunca pode barrar a aba
+        except Exception as e:            # noqa: BLE001 — degrada, mas registra
+            config.diag(f"Relatório Mensal: a conferência dos dois mapas não "
+                        f"rodou ({e!r})")
+            self._log("  [aviso] não consegui conferir os dois mapas de pasta "
+                      "(o motivo ficou no diagnostico.log).")
 
     def _abrir_pasta(self):
         if self.ultima_pasta and self.ultima_pasta.exists():
@@ -410,6 +464,28 @@ class RelatorioFrame(ttk.Frame):
                 + "\n\nDesmarque-as ou acrescente-as ao mapa.")
             return
 
+        # Caminho longo barra aqui pelo mesmo motivo da conta sem destino:
+        # é ANTES do primeiro download. Estourar os 260 do Windows aparece
+        # como falha de escrita na conta 7 de 34, com causa nada óbvia — e a
+        # conferência já existia, sem ninguém chamando. Mede o caminho que
+        # vai ser gravado de verdade: só as contas marcadas, e com o período
+        # deste lote (um intervalo escreve 17 caracteres a mais que o mês).
+        longos = contas_mc.caminhos_longos(
+            self.mapa, ini.year, ini.month,
+            contas=[c["nome"] for c in escolhidas],
+            periodo=self._periodo_no_nome(ini, fim))
+        if longos:
+            messagebox.showwarning(
+                "Caminho longo demais",
+                f"Estes destinos passam dos {contas_mc.LIMITE_CAMINHO} "
+                "caracteres do Windows e a gravação falharia no meio do "
+                "lote:\n\n"
+                + "\n".join(f"  {n} ({t} caracteres)" for n, t in longos[:10])
+                + ("\n  ..." if len(longos) > 10 else "")
+                + "\n\nEncurte a pasta em contas_mc.json ou a raiz dos "
+                  "extratos.")
+            return
+
         if self.anx.avisar_se_ocupado("o Relatório Mensal"):
             return
         self._parar.clear()
@@ -422,14 +498,28 @@ class RelatorioFrame(ttk.Frame):
     def _t_gerar(self, contas, ini, fim):
         comeco = time.time()
         ini_txt, fim_txt = f"{ini:%d/%m/%Y}", f"{fim:%d/%m/%Y}"
-        ano, mes = ini.year, ini.month          # o nome do arquivo segue o início
+        ano, mes = ini.year, ini.month          # a PASTA segue o mês do início
+        # O NOME, não: mês fechado usa o `202607` de sempre; recorte usa as
+        # duas datas. Enquanto os dois usavam o mesmo, pedir 01/07 a 15/07
+        # para tirar uma dúvida substituía o extrato de julho já arquivado,
+        # e nada barrava — o extrato parcial está completo *para o período
+        # pedido*, então `conferir_antes_de_salvar` aprova.
+        periodo = self._periodo_no_nome(ini, fim)
         pasta_mes = contas_mc.caminho_do_mes(self.mapa, ano, mes)
         pagina = None
         try:
+            # Também aqui, e não só no passo 1: este é o passo que GRAVA, e
+            # mapa divergente é o que parte o mês entre duas pastas. Quando
+            # estão alinhados não escreve nada, então não polui o registro.
+            self._conferir_mapas()
             self.anx.garantir_sessao(self._log)
             pagina = self.anx.mc.page
             self._log(f"\nExtratos de {ini_txt} a {fim_txt} — {len(contas)} conta(s)")
             self._log(f"Pasta do mês: {str(pasta_mes).replace(chr(92), '/')}")
+            if periodo:
+                self._log(f"Período parcial: os arquivos saem como "
+                          f"\"{periodo} ...\", para não substituir o extrato "
+                          f"do mês fechado.")
 
             feitos, vazios, falhas = [], [], []
             for i, conta in enumerate(contas, 1):
@@ -443,7 +533,8 @@ class RelatorioFrame(ttk.Frame):
                     destino = self.mapa.de(nome)
                     if destino is None:         # a interface já barra, mas o
                         raise RuntimeError("conta sem pasta no mapa")  # mapa manda
-                    arquivo = contas_mc.caminho_do_arquivo(self.mapa, destino, ano, mes)
+                    arquivo = contas_mc.caminho_do_arquivo(self.mapa, destino,
+                                                           ano, mes, periodo)
 
                     extrato_mc.abrir_extrato(pagina, conta["id"], ini_txt, fim_txt)
                     n = extrato_mc.carregar_tudo(pagina, parar=self._parar.is_set)

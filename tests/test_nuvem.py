@@ -294,6 +294,65 @@ def test_os_dois_mapas_saem_da_mesma_conta(tmp_path, monkeypatch):
     assert mc["contas"][0]["banco"] == "NOME DO BANCO"
 
 
+def test_o_sufixo_sobrevive_a_ida_e_volta_pelo_cache(tmp_path, monkeypatch):
+    """Duas contas dividindo a pasta só não gravam uma por cima da outra
+    porque o desempate chega aos DOIS arquivos.
+
+    Ele descia só para o `contas_mc.json`: o PDF do ERP saía desempatado e o
+    OFX do banco não, e a segunda conta apagava o extrato da primeira sem
+    erro na tela — cada OFX passa pela trava do ACCTID, porque cada um é
+    mesmo da sua conta. O nome da chave é o mesmo dos dois lados de
+    propósito: `sicoob_contas` e `contas_mc` leem "sufixo"."""
+    dados = _banco(
+        empresa=[{"id": 1, "nome_pasta": "EMPRESA A", "cnpj": "", "vip_id": "",
+                  "razao_social": "", "convenio": ""}],
+        conta=[{"id": 9, "empresa_id": 1, "numero": "11.111-1",
+                "agencia": "0000-0", "nome_erp": "EMPRESA A 11.111-1",
+                "pasta": "SICOOB", "banco": "SICOOB",
+                "banco_codigo": "756", "sufixo": "11111-1"},
+               {"id": 10, "empresa_id": 1, "numero": "22.222-2",
+                "agencia": "0000-0", "nome_erp": "EMPRESA A 22.222-2",
+                "pasta": "SICOOB", "banco": "SICOOB",
+                "banco_codigo": "756", "sufixo": "22222-2"}],
+        configuracao=[{"chave": "raiz", "valor": "C:/x"}])
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    assert cadastro.sincronizar("tok", tmp_path).atualizou
+    sic = json.loads((tmp_path / "contas_sicoob.json").read_text(encoding="utf-8"))
+    mc = json.loads((tmp_path / "contas_mc.json").read_text(encoding="utf-8"))
+    assert [c["sufixo"] for c in sic["empresas"][0]["contas"]] == ["11111-1",
+                                                                  "22222-2"]
+    assert [c["sufixo"] for c in mc["contas"]] == ["11111-1", "22222-2"]
+
+    # E, relido pelo módulo que de fato o usa, dá dois nomes de arquivo — que
+    # é a única coisa que importa no fim.
+    import sicoob_config
+    import sicoob_contas
+    mapa = sicoob_contas.carregar(tmp_path / "contas_sicoob.json")
+    nomes = {sicoob_config.nome_arquivo(2026, 7, c.sufixo) for c in mapa.contas}
+    assert nomes == {"202607 SICOOB 11111-1", "202607 SICOOB 22222-2"}
+    assert sicoob_contas.impedimentos(mapa) == []
+
+
+def test_conta_sem_sufixo_nao_ganha_a_chave(tmp_path, monkeypatch):
+    """Como em `_contas_mc`: o desempate só existe onde alguém o cadastrou.
+    Escrevê-lo vazio em toda conta sugeriria um campo a preencher sempre."""
+    dados = _banco(
+        empresa=[{"id": 1, "nome_pasta": "E", "cnpj": "", "vip_id": "",
+                  "razao_social": "", "convenio": ""}],
+        conta=[{"id": 9, "empresa_id": 1, "numero": "1-1", "agencia": "",
+                "nome_erp": "E", "pasta": "P", "banco": "B",
+                "banco_codigo": "756", "sufixo": ""}],
+        configuracao=[{"chave": "raiz", "valor": "C:/x"}])
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    cadastro.sincronizar("tok", tmp_path)
+    sic = json.loads((tmp_path / "contas_sicoob.json").read_text(encoding="utf-8"))
+    mc = json.loads((tmp_path / "contas_mc.json").read_text(encoding="utf-8"))
+    assert "sufixo" not in sic["empresas"][0]["contas"][0]
+    assert "sufixo" not in mc["contas"][0]
+
+
 def test_conta_sem_numero_fica_fora_do_mapa_do_sicoob(tmp_path, monkeypatch):
     """Conta de outro banco não é buscável no SicoobNet."""
     dados = _banco(

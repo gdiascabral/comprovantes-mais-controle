@@ -65,9 +65,23 @@ def _contas_sicoob(dados: dict) -> dict:
     clientes = _agrupar(dados["cliente_erp"], "empresa_id")
 
     for e in sorted(dados["empresa"], key=lambda x: x["nome_pasta"]):
-        contas = [{"numero": c["numero"], "pasta": c["pasta"],
-                   "banco": c["banco_codigo"], "agencia": c["agencia"]}
-                  for c in por_empresa.get(e["id"], []) if c["numero"]]
+        contas = []
+        for c in por_empresa.get(e["id"], []):
+            if not c["numero"]:
+                continue
+            linha = {"numero": c["numero"], "pasta": c["pasta"],
+                     "banco": c["banco_codigo"], "agencia": c["agencia"]}
+            # A MESMA chave `sufixo` do lado do Mais Controle, e pelo mesmo
+            # motivo: é ele que impede duas contas da mesma pasta de gravarem
+            # o mesmo arquivo. Enquanto ele só descia para o `contas_mc.json`,
+            # o PDF do ERP saía desempatado e o OFX do banco não — a segunda
+            # conta apagava o extrato da primeira, sem erro na tela.
+            # Condicional como em `_contas_mc`: o desempate só existe onde
+            # alguém o cadastrou, e escrevê-lo vazio sugeriria um campo a
+            # preencher em toda conta.
+            if c["sufixo"]:
+                linha["sufixo"] = c["sufixo"]
+            contas.append(linha)
         # Todos os campos, sempre, mesmo vazios. A tentação é omitir o que
         # está em branco para o arquivo ficar igualzinho ao que a pessoa
         # digitou — mas aí a regra de escrita passa a depender do CONTEÚDO, e

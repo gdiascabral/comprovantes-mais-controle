@@ -27,8 +27,11 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     import util
 
 
-MESES = ("JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
-         "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO")
+#: A tabela de pasta mora em `util.MESES_PASTA`: as três cópias que
+#: existiam aqui produzem NOME DE PASTA no disco, e uma divergir entre
+#: elas parte o mês ao meio. O nome local continua porque é por ele que
+#: o resto do módulo chama.
+MESES = util.MESES_PASTA
 
 # Limite prático do Windows. Os caminhos daqui são longos (empresa + subconta
 # com descrição), e o .zip do fechamento ainda entra por cima.
@@ -104,10 +107,17 @@ def carregar(caminho: Path | None = None) -> Mapa:
 
 # -------------------------------------------------------------- caminhos
 
-def nome_arquivo(destino: Destino, ano: int, mes: int) -> str:
+def nome_arquivo(destino: Destino, ano: int, mes: int, periodo: str = "") -> str:
     """`202607 SICOOB MAIS CONTROLE.pdf`, com o número da conta no fim quando
-    várias contas dividem a mesma pasta (caso da Moura Dantas)."""
-    base = f"{ano}{mes:02d} {destino.banco} MAIS CONTROLE"
+    várias contas dividem a mesma pasta (caso da Moura Dantas).
+
+    `periodo` troca o `AAAAMM` do começo, e existe por um motivo só: extrato
+    de INTERVALO não pode usar o nome do mês fechado. Pedir 01/07 a 15/07
+    para tirar uma dúvida gravava por cima do extrato de julho já arquivado,
+    e nada barrava — a trava de paginação aprova, porque o extrato parcial
+    está completo *para o período pedido*. O resto do nome fica igual de
+    propósito: é por ele que se reconhece de que conta o arquivo é."""
+    base = f"{periodo or f'{ano}{mes:02d}'} {destino.banco} MAIS CONTROLE"
     if destino.sufixo:
         base += f" {destino.sufixo}"
     return base + ".pdf"
@@ -117,11 +127,12 @@ def caminho_do_mes(mapa: Mapa, ano: int, mes: int) -> Path:
     return mapa.raiz / str(ano) / MESES[mes - 1]
 
 
-def caminho_do_arquivo(mapa: Mapa, destino: Destino, ano: int, mes: int) -> Path:
+def caminho_do_arquivo(mapa: Mapa, destino: Destino, ano: int, mes: int,
+                       periodo: str = "") -> Path:
     pasta = (caminho_do_mes(mapa, ano, mes)
              / f"{MESES[mes - 1]} {ano} - {destino.empresa}"
              / destino.pasta)
-    return pasta / nome_arquivo(destino, ano, mes)
+    return pasta / nome_arquivo(destino, ano, mes, periodo)
 
 
 def resolver(mapa: Mapa, contas: list[dict], ano: int, mes: int) -> tuple[list[tuple], list[str]]:
@@ -140,14 +151,30 @@ def resolver(mapa: Mapa, contas: list[dict], ano: int, mes: int) -> tuple[list[t
     return pares, desconhecidas
 
 
-def caminhos_longos(mapa: Mapa, ano: int, mes: int) -> list[tuple[str, int]]:
+def caminhos_longos(mapa: Mapa, ano: int, mes: int,
+                    contas: list[str] | None = None,
+                    periodo: str = "") -> list[tuple[str, int]]:
     """Destinos que passam do limite do Windows, com o tamanho de cada um.
 
     Vale conferir antes de rodar: o erro de caminho longo aparece como falha de
-    escrita no meio do lote, e a causa não é óbvia para quem está olhando."""
+    escrita no meio do lote, e a causa não é óbvia para quem está olhando.
+
+    `contas` limita a conferência aos nomes do ERP que vão rodar agora.
+    Barrar o lote por causa de uma conta que ninguém marcou seria recusar
+    trabalho que ia dar certo — é a mesma regra da trava de "conta sem
+    destino", que também só olha as escolhidas. Sem `contas`, confere o mapa
+    inteiro.
+
+    `periodo` acompanha o de `nome_arquivo`: um intervalo de datas escreve
+    "01-07-2026 a 15-07-2026" onde o mês fechado escreve "202607", 17
+    caracteres a mais. Medir o nome curto e gravar o longo seria a
+    conferência aprovando justamente o caminho que vai estourar."""
+    alvo = {_chave(n) for n in contas} if contas is not None else None
     fora = []
     for d in mapa.destinos:
-        n = len(str(caminho_do_arquivo(mapa, d, ano, mes)))
+        if alvo is not None and _chave(d.erp) not in alvo:
+            continue
+        n = len(str(caminho_do_arquivo(mapa, d, ano, mes, periodo)))
         if n > LIMITE_CAMINHO:
             fora.append((d.erp, n))
     return fora

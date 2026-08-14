@@ -11,6 +11,7 @@ download empacotaria mês pela metade.
 
 Sem navegador e sem tkinter: roda inteiro em teste.
 """
+import os
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,9 +56,28 @@ def zipar_mes(mapa: Mapa, ano: int, mes: int, log=print) -> list[ResultadoZip]:
         # e o mes inteiro de uma empresa iria para o arquivo errado.
         alvo = pasta.parent / (pasta.name + ".zip")
         arquivos = [p for p in sorted(pasta.rglob("*")) if p.is_file()]
-        with zipfile.ZipFile(alvo, "w", zipfile.ZIP_DEFLATED) as z:
-            for arq in arquivos:
-                z.write(arq, arq.relative_to(pasta.parent))
+        # Grava ao lado e só então troca. Abrir o alvo em "w" TRUNCA o zip
+        # anterior no próprio open: quem ziparia de novo para incluir o
+        # extrato que faltava ficava, a uma queda de distância, sem o zip
+        # velho e sem o novo — e o zip é o que a aba Acessórias envia ao
+        # escritório. `os.replace` é atômico no Windows, a mesma decisão de
+        # `sicoob_contas.adicionar_cliente_erp`.
+        temporario = alvo.with_name(alvo.name + ".tmp")
+        try:
+            with zipfile.ZipFile(temporario, "w", zipfile.ZIP_DEFLATED) as z:
+                for arq in arquivos:
+                    z.write(arq, arq.relative_to(pasta.parent))
+            os.replace(temporario, alvo)
+        except BaseException:
+            # BaseException, e não Exception, porque KeyboardInterrupt é
+            # justamente a interrupção que este arranjo veio proteger: sem a
+            # limpeza sobraria um ".zip.tmp" pela metade ao lado dos zips
+            # bons, na pasta que a pessoa abre para conferir o mês.
+            try:
+                temporario.unlink()
+            except OSError:
+                pass
+            raise
 
         resultados.append(ResultadoZip(empresa.nome, alvo, len(arquivos), vazias))
         aviso = f"  (vazias: {', '.join(vazias)})" if vazias else ""
