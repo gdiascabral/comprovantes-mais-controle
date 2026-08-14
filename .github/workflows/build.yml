@@ -464,6 +464,48 @@ jobs:
             dist/Comprovantes Mais Controle.exe
             codigo.zip
 
+      # O app busca as releases no repositório de ARTEFATOS, não aqui. Este
+      # continua publicando a sua (é o arquivo histórico, e é o que as máquinas
+      # com exe anterior ainda enxergam durante a transição); o de artefatos é
+      # o que os exes novos consultam, e é público justamente porque a chamada
+      # do atualizador é anônima.
+      #
+      # Precisa de um token com escrita NO OUTRO repositório: o `github.token`
+      # só vale para este. Enquanto o segredo não existir, o passo é pulado e a
+      # build continua verde — publicar aqui já entrega a release de hoje.
+      # O `if` testa uma variável de ambiente, e não `secrets` direto: o
+      # contexto `secrets` não existe em `if:` de passo, e a expressão falha na
+      # validação do workflow inteiro em vez de só pular o passo.
+      - name: Ver se o token do repositório de artefatos existe
+        id: tem_token
+        env:
+          TOKEN_ARTEFATOS: ${{ secrets.TOKEN_ARTEFATOS }}
+        run: |
+          if ($env:TOKEN_ARTEFATOS) { "tem=sim" } else { "tem=nao" } |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Publicar a mesma Release no repositório de artefatos
+        if: steps.tem_token.outputs.tem == 'sim'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
+        with:
+          repository: gdiascabral/comprovantes-releases
+          token: ${{ secrets.TOKEN_ARTEFATOS }}
+          tag_name: v1.0.${{ github.run_number }}
+          name: Executável v1.0.${{ github.run_number }}
+          body: |
+            Executável para Windows — não precisa de Python instalado.
+            Requisito: Google Chrome instalado (usado pela aba Anexar Comprovantes).
+
+            O app se atualiza sozinho ao abrir: baixa só o `codigo.zip`
+            (segundos). O executável completo só é oferecido quando entra
+            biblioteca nova.
+
+            Para voltar uma versão: crie `travar_versao.txt` ao lado do
+            executável com a tag desejada dentro (ex.: `v1.0.78`).
+          files: |
+            dist/Comprovantes Mais Controle.exe
+            codigo.zip
+
       # Reter por TEMPO, com um piso de contagem. "As 4 mais novas" foi pensado
       # para rollback, e num dia de muitos pushes virava 70 minutos de
       # histórico: a versão boa de ontem já não existia mais. O piso continua

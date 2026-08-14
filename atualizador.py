@@ -28,7 +28,20 @@ import time
 import zipfile
 from pathlib import Path
 
-REPO = "gdiascabral/comprovantes-mais-controle"
+#: Onde o app BUSCA as releases. É um repositório separado do código-fonte, e
+#: público de propósito — as três chamadas daqui (a API de `releases/latest`, o
+#: `codigo.zip` e o exe) são feitas **sem autenticação**, e repositório privado
+#: responde 404 nelas. Medido em 14/08/2026: público 200, privado 404.
+#:
+#: Não dá para resolver com um token embutido: o exe é distribuído, e segredo
+#: dentro de binário que se entrega não é segredo. Nem com a sessão do Supabase,
+#: porque o atualizador roda ANTES do login — quem o chama é o `motor.py`, na
+#: abertura, e nesse instante ainda não há token nenhum.
+#:
+#: Por isso o código-fonte (que carrega nome de gente e a estrutura da empresa)
+#: é privado e só os ARTEFATOS são públicos. Trocar esta constante exige exe
+#: novo: ela mora no motor, não no `codigo.zip`.
+REPO = "gdiascabral/comprovantes-releases"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 
 
