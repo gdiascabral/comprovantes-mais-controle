@@ -30,8 +30,114 @@ def dinheiro(valor: Any) -> Decimal:
     return Decimal(str(valor))
 
 
+def dinheiro_exato(valor: Any, rotulo: str) -> Decimal:
+    """Dinheiro com no máximo 2 casas — mais que isso é recusado, não arredondado.
+
+    O arquivo grava centavos: ``fmt_num`` arredonda CADA registro na gravação,
+    enquanto o trailer soma os valores como vieram. Três parcelas de
+    ``Decimal("33.3333")`` viram três registros de 33,33 (99,99) debaixo de um
+    trailer que declara 100,00 — e divergência de somatória faz o Sicoob
+    rejeitar o ARQUIVO inteiro, não a linha. Arredondar aqui esconderia o
+    problema e mudaria, calado, quanto sai da conta de outra pessoa: com
+    dinheiro alheio, recusar é a única saída honesta.
+
+    O critério é o EXPOENTE do Decimal, não o texto. Comparar strings
+    tropeçaria em "33.3", em "3.333E+1" e no float que virou
+    "33.330000000000005"; menos de duas casas é legítimo e passa.
+    """
+    d = dinheiro(valor)
+    if not d.is_finite():
+        raise ValueError(f"{rotulo}: {valor!r} não é um valor monetário (NaN ou infinito)")
+    if d.as_tuple().exponent < -2:
+        raise ValueError(
+            f"{rotulo}: {d} tem mais de 2 casas decimais. O CNAB 240 grava centavos, "
+            "e arredondar por conta própria faria a somatória do trailer divergir da "
+            "soma dos registros — o banco recusa o arquivo inteiro. Informe o valor "
+            "já arredondado (ex.: 33.33), decidindo você para onde vai o centavo."
+        )
+    return d
+
+
 def so_digitos(valor: Any) -> str:
     return "".join(c for c in str(valor or "") if c.isdigit())
+
+
+#: Tamanhos do layout (header de arquivo 08.0/10.0 e segmento A 10.3A/12.3A):
+#: agência 5 posições, conta 12, e cada dígito verificador 1.
+TAMANHO_AGENCIA = 5
+TAMANHO_CONTA = 12
+
+#: Pontuação que o cadastro escreve e o arquivo não tem: "45.678-1", "4321 / 0".
+_RUIDO_DE_MASCARA = frozenset(" ./-")
+
+
+def _texto(valor: Any) -> str:
+    """``str`` limpo, tratando None como vazio (e sem confundir 0 com vazio)."""
+    return "" if valor is None else str(valor).strip()
+
+
+def _dv(valor: Any, rotulo: str) -> str:
+    """Um dígito verificador, ou erro — nunca um branco silencioso."""
+    texto = _texto(valor)
+    if not texto:
+        return ""
+    if not texto.isdigit():
+        raise ValueError(
+            f"{rotulo}: {valor!r} não é um dígito. O campo do CNAB 240 tem 1 posição "
+            "e o Sicoob só usa dígitos ali; deixar isso virar branco trocaria a conta "
+            "de destino sem nada denunciar."
+        )
+    if len(texto) > 1:
+        raise ValueError(f"{rotulo}: {valor!r} tem {len(texto)} dígitos e o campo tem 1")
+    return texto
+
+
+def _numero_e_dv(numero: Any, dv: Any, *, rotulo: str, tamanho: int) -> tuple[str, str]:
+    """Separa "0910-5" em agência 0910 e DV 5 — sem colar um no outro.
+
+    Quem cadastra escreve como o extrato mostra: "0910-5", "45.678-1". Isso
+    chegava cru ao ``fmt_num``, que remove a pontuação e trata o resto como
+    número já pronto: a agência virava 09105 e a conta, 000000456781 com o DV
+    grudado no fim. São números plausíveis, o validador os aprova, e o dinheiro
+    vai para outra conta — que não volta.
+
+    Hífen seguido de UM dígito é a máscara "número-DV" do sistema bancário
+    brasileiro, e é a única pontuação com significado aqui; ponto, barra e
+    espaço são ruído e caem fora. Letra não passa: DV "X" existe em outros
+    bancos, mas o campo do CNAB é numérico, e transformá-lo em branco seria o
+    mesmo erro silencioso de novo. Máscara e campo ``dv_*`` discordando é
+    contradição, não preferência — escolher um dos dois seria adivinhar.
+    """
+    original = _texto(numero)
+    estranhos = sorted({c for c in original if not c.isdigit() and c not in _RUIDO_DE_MASCARA})
+    if estranhos:
+        raise ValueError(
+            f"{rotulo}: {numero!r} tem caractere que não é dígito ({' '.join(estranhos)}). "
+            "O campo do CNAB 240 é numérico; informe só os dígitos, com o DV no campo "
+            "próprio ou na máscara 'número-DV'."
+        )
+
+    texto, dv_da_mascara = original, ""
+    cabeca, separador, cauda = original.rpartition("-")
+    if separador and len(cauda) == 1 and cauda.isdigit():
+        texto, dv_da_mascara = cabeca, cauda
+
+    digitos = so_digitos(texto)
+    if original and not digitos:
+        raise ValueError(f"{rotulo}: {numero!r} não tem dígito nenhum")
+    if len(digitos) > tamanho:
+        raise ValueError(
+            f"{rotulo}: {numero!r} dá {len(digitos)} dígitos e o campo do CNAB 240 tem "
+            f"{tamanho}. Confira se o DV não entrou junto do número."
+        )
+
+    dv_informado = _dv(dv, f"DV da {rotulo}")
+    if dv_da_mascara and dv_informado and dv_da_mascara != dv_informado:
+        raise ValueError(
+            f"{rotulo}: a máscara {numero!r} termina no DV {dv_da_mascara} e o campo "
+            f"informa {dv_informado}. Um dos dois está errado."
+        )
+    return digitos, dv_informado or dv_da_mascara
 
 
 @dataclass
@@ -72,6 +178,15 @@ class Empresa:
         self.documento = so_digitos(self.documento)
         if self.tipo_inscricao is None:
             self.tipo_inscricao = TipoInscricao.por_documento(self.documento)
+        # Antes daqui só o documento era normalizado; agência e conta iam cruas
+        # e o DV da máscara acabava colado no número (ver ``_numero_e_dv``).
+        self.agencia, self.dv_agencia = _numero_e_dv(
+            self.agencia, self.dv_agencia, rotulo="agência da empresa", tamanho=TAMANHO_AGENCIA
+        )
+        self.conta, self.dv_conta = _numero_e_dv(
+            self.conta, self.dv_conta, rotulo="conta da empresa", tamanho=TAMANHO_CONTA
+        )
+        self.dv_ag_conta = _dv(self.dv_ag_conta, "DV agência/conta da empresa")
 
 
 @dataclass
@@ -91,6 +206,13 @@ class Favorecido:
         self.documento = so_digitos(self.documento)
         if self.tipo_inscricao is None:
             self.tipo_inscricao = TipoInscricao.por_documento(self.documento)
+        self.agencia, self.dv_agencia = _numero_e_dv(
+            self.agencia, self.dv_agencia, rotulo="agência do favorecido", tamanho=TAMANHO_AGENCIA
+        )
+        self.conta, self.dv_conta = _numero_e_dv(
+            self.conta, self.dv_conta, rotulo="conta do favorecido", tamanho=TAMANHO_CONTA
+        )
+        self.dv_ag_conta = _dv(self.dv_ag_conta, "DV agência/conta do favorecido")
 
 
 # --------------------------------------------------------------------------
@@ -106,7 +228,7 @@ class _PagamentoBase:
     nosso_numero: str = ""
 
     def __post_init__(self) -> None:
-        self.valor = dinheiro(self.valor)
+        self.valor = dinheiro_exato(self.valor, "valor do pagamento")
 
 
 @dataclass(kw_only=True)
@@ -126,6 +248,20 @@ class TransferenciaConta(_PagamentoBase):
     mora: Decimal | None = None
     multa: Decimal | None = None
     codigo_documento_favorecido: str = ""
+
+    #: Os cinco campos monetários do segmento B. ``None`` é "não informado" e
+    #: continua sendo — o layout grava zeros —, mas o que vier preenchido passa
+    #: pela mesma régua do valor do pagamento.
+    _MONETARIOS = ("valor_documento", "abatimento", "desconto", "mora", "multa")
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        # Estes cinco não passavam por ``dinheiro()`` nenhum: iam crus para o
+        # ``fmt_num``, que arredondava em silêncio na hora de gravar.
+        for campo in self._MONETARIOS:
+            bruto = getattr(self, campo)
+            if bruto is not None:
+                setattr(self, campo, dinheiro_exato(bruto, campo))
 
 
 @dataclass(kw_only=True)
