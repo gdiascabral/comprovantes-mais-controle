@@ -184,7 +184,23 @@ def main():
     #
     # Falhar aqui NUNCA impede o app de abrir: os arquivos locais são a última
     # cópia, e é justamente quando o banco está fora do ar que eles importam.
-    _sinc = cadastro.sincronizar(_token_ou_vazio(_pasta_dados()), _pasta_dados())
+    #
+    # O `try` é o que torna a frase acima verdadeira. `sincronizar` engole a
+    # falta de rede, mas deixa subir de propósito o que é assunto de quem cuida
+    # do login (`rest.PrecisaEntrar`, do 401/403) — e aqui não há quem cuide:
+    # esta linha roda ANTES de existir janela montada, e o exe é `--noconsole`,
+    # então a exceção fechava o app sem tela, sem log e sem recado. Sessão
+    # vencida entre o login e esta linha vira "cadastro offline", que é
+    # exatamente o que ela é.
+    #
+    # Amplo de propósito: escrever o cache também pode falhar (disco cheio,
+    # arquivo aberto no Excel, OneDrive segurando), e nenhuma dessas é razão
+    # para o app não abrir.
+    try:
+        _sinc = cadastro.sincronizar(_token_ou_vazio(_pasta_dados()),
+                                     _pasta_dados())
+    except Exception as _e:
+        _sinc = cadastro.Resultado(False, f"falha ao sincronizar: {_e}")
 
     # ---------------- navegação lateral + área de conteúdo
     lateral = ttk.Frame(root)
@@ -388,7 +404,14 @@ def main():
                 # ...o do Sicoob, que é processo e login à parte...
                 lambda: ("ext", aba_ext.ocupado()),
                 # ...e o do portal do escritório, pelo mesmo motivo
-                lambda: ("acs", aba_acs.ocupado())):
+                lambda: ("acs", aba_acs.ocupado()),
+                # A Separar não tem navegador nenhum — o trabalho dela é OCR e
+                # disco. Entra aqui mesmo assim porque um PDF de 107 páginas
+                # leva minutos, e a aba que não responde parece parada: o ●
+                # diz ONDE o trabalho está, e não só quem segurou o Chrome.
+                # Vem por último para nunca disputar o sinal com quem está com
+                # um navegador na mão, que é a informação mais cara.
+                lambda: ("sep", aba_sep.ocupado())):
             try:
                 chave, tarefa = pergunta()
             except Exception:
@@ -453,10 +476,20 @@ def main():
         # Um `fechar()` que levanta não pode impedir o outro nem o destroy():
         # a janela ficaria aberta e sem resposta, e o jeito de sair viraria o
         # Gerenciador de Tarefas — que é justamente o que deixa Chrome órfão.
-        for fechar in (aba_anx.fechar,   # Chrome do Mais Controle
-                       aba_ext.fechar):  # o Chrome do Sicoob é outro processo
+        #
+        # Percorre TODAS as abas em vez de uma tupla escrita à mão. São TRÊS
+        # navegadores (o do ERP, o do Sicoob e o do portal contábil), e a lista
+        # fixa citava dois: o Chrome da aba Acessórias sobrevivia ao fechar do
+        # app, com a sessão do escritório aberta, esperando o Gerenciador de
+        # Tarefas. A barra lateral já pergunta às três se estão ocupadas
+        # (`_quem_trabalha`) — quem sabe quem existe é o `quadros`, e não uma
+        # tupla que a próxima aba com navegador próprio vai esquecer de novo.
+        for _quadro in quadros.values():
+            _fechar = getattr(_quadro, "fechar", None)
+            if _fechar is None:
+                continue                 # aba sem navegador: nada a fechar
             try:
-                fechar()
+                _fechar()
             except Exception:
                 pass
         root.destroy()

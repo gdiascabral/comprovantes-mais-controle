@@ -7,6 +7,8 @@ exercitado. Dois defeitos ficaram escondidos até a v1.0.60: restos de `_MEI`
 quebrando a extração seguinte (o erro que apareceu de verdade) e o `start`
 rodando mesmo com a troca falhada.
 """
+import io
+import sys
 import zipfile
 from pathlib import Path
 
@@ -162,3 +164,260 @@ def test_caminho_curto_de_arquivo_inexistente_devolve_vazio(tmp_path):
     """Sem o arquivo, o Windows não tem 8.3 para dar — e aí vale o caminho
     longo, gravado na codepage do cmd."""
     assert atualizador._caminho_curto(tmp_path / "nao-existe.exe") == ""
+
+
+# ------------------------------------------------ o nome longo do exe (14/08/2026)
+# O 8.3 é ENDEREÇO, nunca NOME. Ele entrou (com razão) para o caminho não ter
+# acento; o defeito foi usá-lo também como ALVO do `move`. Medido: `move /y
+# origem "…\COMPRO~1.EXE"` deixa na pasta um arquivo chamado literalmente
+# COMPRO~1.EXE, porque o `/y` APAGA o destino antes de renomear a origem — e,
+# apagado o arquivo, o apelido 8.3 deixa de ser apelido de coisa nenhuma.
+# Aconteceu duas vezes na máquina real e quebrou o atalho da área de trabalho.
+
+def _linha(s: str, comeco: str) -> str:
+    return next(l for l in s.splitlines() if l.startswith(comeco))
+
+
+def test_a_troca_devolve_o_nome_longo_do_exe():
+    s = script()
+    ren = _linha(s, "ren ")
+    # O `ren` recebe NOME, não caminho — é por isso que ele serve aqui: o
+    # acento mora na PASTA, e a pasta não passa pelo segundo argumento.
+    de, para = ren.split('"')[1], ren.split('"')[3]
+    assert para == EXE.name
+    assert "\\" not in para and "/" not in para
+    assert de.endswith(".exe")
+    # e ele vem DEPOIS do move ter dado certo: com o move falhado não há o que
+    # renomear, e renomear o exe velho seria estragar o que ainda funciona.
+    assert s.index("move /y") < s.index("\nren ")
+    assert s.index(":trocou") < s.index("\nren ")
+
+
+def test_o_app_reabre_pelo_nome_longo():
+    """O atalho da área de trabalho aponta para o nome longo: reabrir pelo 8.3
+    esconderia que o nome se perdeu — o app subiria e o atalho, não."""
+    s = script()
+    start = _linha(s, 'start ""')
+    assert start.endswith(f'{EXE.name}"')
+    assert s.index("\nren ") < s.index('start ""')
+
+
+def test_com_8_3_o_move_mira_o_curto_e_o_ren_devolve_o_longo(tmp_path):
+    """Os dois ao mesmo tempo, que é o ponto: caminho curto para chegar à
+    pasta (imune à codepage) e nome longo de volta no fim."""
+    pasta = tmp_path / "AUTOMAÇÕES MAIS CONTROLE"
+    pasta.mkdir()
+    exe = pasta / "Comprovantes Mais Controle.exe"
+    exe.write_bytes(b"x")
+    novo = tmp_path / "Comprovantes Mais Controle novo.exe"
+    novo.write_bytes(b"y")
+
+    curto = atualizador._caminho_curto(exe)
+    if not curto:
+        pytest.skip("8.3 desligado neste volume")
+    s = atualizador.script_de_troca(1234, novo, exe)
+
+    move = _linha(s, "move /y")
+    assert exe.name not in move, "o nome longo não pode ser alvo do move"
+    assert f'ren "{curto}" "{exe.name}"' in s
+    assert f'start "" "{Path(curto).parent / exe.name}"' in s
+
+
+# ------------------------------------------------------------ travar_versao.txt
+# O freio de mão de quem NÃO é programador. Release ruim chega sozinha a todo
+# mundo no próximo abrir, e até aqui a única saída era esperar a correção.
+
+def test_sem_arquivo_nao_ha_trava(tmp_path):
+    assert atualizador._tag_travada(tmp_path) == ""
+
+
+def test_a_trava_e_a_tag_escrita(tmp_path):
+    (tmp_path / "travar_versao.txt").write_text("v1.0.75\n", encoding="utf-8")
+    assert atualizador._tag_travada(tmp_path) == "v1.0.75"
+
+
+def test_a_trava_ignora_branco_e_comentario(tmp_path):
+    """Quem edita no Bloco de Notas deixa linha em branco, e comentar a trava
+    é mais natural do que apagá-la."""
+    (tmp_path / "travar_versao.txt").write_text(
+        "# preso ate a v1.0.78 ser corrigida\n\nv1.0.75\n", encoding="utf-8")
+    assert atualizador._tag_travada(tmp_path) == "v1.0.75"
+
+
+def test_trava_ilegivel_e_o_mesmo_que_nao_travar(tmp_path, monkeypatch):
+    """Melhor seguir atualizando do que travar numa versão que não existe."""
+    monkeypatch.setattr(atualizador, "_logar", lambda *_: None)
+    (tmp_path / "travar_versao.txt").write_text("a ultima que prestava\n",
+                                                encoding="utf-8")
+    assert atualizador._tag_travada(tmp_path) == ""
+
+
+# --------------------------------------------- instalação do codigo.zip
+# O pacote que roda em TODA abertura era o único sem conferência de tamanho —
+# o download do exe, que é raro, já tinha a dele. E a pasta anterior era
+# apagada logo depois da troca, o que deixava a atualização sem volta.
+
+class _Resposta:
+    def __init__(self, corpo=None, conteudo=b"", cabecalhos=None):
+        self._corpo = corpo or {}
+        self.content = conteudo
+        self.headers = cabecalhos or {}
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._corpo
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+class _RequestsFalso:
+    """Só o que `_atualizar_codigo` usa: a API da release e o zip."""
+
+    def __init__(self, tag, corpo_zip, cabecalhos=None):
+        self.tag = tag
+        self.corpo_zip = corpo_zip
+        self.cabecalhos = cabecalhos
+        self.urls = []
+
+    def get(self, url, **_):
+        self.urls.append(url)
+        if url.startswith("https://api.github.com"):
+            return _Resposta({"tag_name": self.tag})
+        cab = self.cabecalhos
+        if cab is None:
+            cab = {"content-length": str(len(self.corpo_zip))}
+        return _Resposta(conteudo=self.corpo_zip, cabecalhos=cab)
+
+
+def _codigo_zip(tag: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("comprovantes_app.py", "def main():\n    pass\n")
+        zf.writestr("versao.txt", tag + "\n")
+    return buf.getvalue()
+
+
+def _instalado(tmp_path, versao="v1.0.77"):
+    """Uma pasta `codigo` já instalada + a cópia de fábrica, como no exe."""
+    pasta = tmp_path / "codigo"
+    pasta.mkdir()
+    (pasta / "comprovantes_app.py").write_text("velho\n", encoding="utf-8")
+    (pasta / "versao.txt").write_text(versao + "\n", encoding="utf-8")
+    emb = tmp_path / "codigo_embutido"
+    emb.mkdir()
+    (emb / "versao.txt").write_text("v1.0.70\n", encoding="utf-8")
+    return pasta, emb
+
+
+def _fingir_rede(monkeypatch, falso):
+    monkeypatch.setattr(atualizador, "_logar", lambda *_: None)
+    monkeypatch.setitem(sys.modules, "requests", falso)
+    return falso
+
+
+def test_a_pasta_anterior_fica_guardada(tmp_path, monkeypatch):
+    """São ~370 KB — menos que um comprovante em PDF — pelo direito de voltar
+    sem depender de rede: renomear `codigo_velha` para `codigo` desfaz."""
+    pasta, emb = _instalado(tmp_path)
+    _fingir_rede(monkeypatch, _RequestsFalso("v1.0.78", _codigo_zip("v1.0.78")))
+    atualizador._atualizar_codigo(pasta, emb)
+    assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.78"
+    velha = tmp_path / "codigo_velha"
+    assert (velha / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.77"
+
+
+def test_zip_truncado_e_recusado_e_nao_derruba_o_que_ja_havia(tmp_path,
+                                                              monkeypatch):
+    """Sem esta conferência, o `extractall` grava "até onde deu": o app abria
+    com metade dos arquivos de ontem e metade dos de hoje."""
+    pasta, emb = _instalado(tmp_path)
+    _fingir_rede(monkeypatch, _RequestsFalso(
+        "v1.0.78", _codigo_zip("v1.0.78"),
+        cabecalhos={"content-length": "999999"}))
+    with pytest.raises(RuntimeError, match="incompleto"):
+        atualizador._atualizar_codigo(pasta, emb)
+    assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.77"
+
+
+def test_resposta_que_nao_e_zip_diz_o_que_houve(tmp_path, monkeypatch):
+    """A causa provável não é adulteração: é portal de wi-fi respondendo 200
+    com HTML. "File is not a zip file" no log não diria isso a ninguém."""
+    pasta, emb = _instalado(tmp_path)
+    _fingir_rede(monkeypatch, _RequestsFalso(
+        "v1.0.78", b"<html>entre com seu e-mail para navegar</html>"))
+    with pytest.raises(RuntimeError, match="não é um zip válido"):
+        atualizador._atualizar_codigo(pasta, emb)
+    assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.77"
+
+
+def test_travado_busca_a_tag_e_aceita_ir_para_TRAS(tmp_path, monkeypatch):
+    """Voltar é o motivo de a trava existir: "só o que for mais novo" aqui
+    seria a mesma coisa que não ter trava."""
+    pasta, emb = _instalado(tmp_path, "v1.0.78")
+    (tmp_path / "travar_versao.txt").write_text("v1.0.75\n", encoding="utf-8")
+    falso = _fingir_rede(monkeypatch,
+                         _RequestsFalso("v1.0.75", _codigo_zip("v1.0.75")))
+    atualizador._atualizar_codigo(pasta, emb)
+    assert "releases/tags/v1.0.75" in falso.urls[0]
+    assert "/releases/download/v1.0.75/codigo.zip" in falso.urls[1]
+    assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.75"
+
+
+def test_travado_no_que_ja_esta_instalado_nao_rebaixa_nada(tmp_path, monkeypatch):
+    pasta, emb = _instalado(tmp_path, "v1.0.75")
+    (tmp_path / "travar_versao.txt").write_text("v1.0.75\n", encoding="utf-8")
+    falso = _fingir_rede(monkeypatch,
+                         _RequestsFalso("v1.0.75", _codigo_zip("v1.0.75")))
+    atualizador._atualizar_codigo(pasta, emb)
+    assert len(falso.urls) == 1, "baixou de novo o que já estava instalado"
+
+
+def test_sem_trava_o_app_nunca_volta_sozinho(tmp_path, monkeypatch):
+    """Release podada (o CI mantém 4) pode fazer a `latest` ficar mais VELHA
+    que a instalada. Sem trava, isso não desfaz atualização nenhuma."""
+    pasta, emb = _instalado(tmp_path, "v1.0.78")
+    falso = _fingir_rede(monkeypatch,
+                         _RequestsFalso("v1.0.75", _codigo_zip("v1.0.75")))
+    atualizador._atualizar_codigo(pasta, emb)
+    assert len(falso.urls) == 1
+    assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.78"
+
+
+def _fingir_exe(tmp_path, monkeypatch, v_codigo, v_embutida, travar=None):
+    exe_dir = tmp_path / "app"
+    (exe_dir / "codigo").mkdir(parents=True)
+    (exe_dir / "codigo" / "versao.txt").write_text(v_codigo + "\n",
+                                                   encoding="utf-8")
+    emb = tmp_path / "mei" / "codigo_embutido"
+    emb.mkdir(parents=True)
+    (emb / "versao.txt").write_text(v_embutida + "\n", encoding="utf-8")
+    if travar:
+        (exe_dir / "travar_versao.txt").write_text(travar + "\n",
+                                                   encoding="utf-8")
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "app.exe"))
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "mei"), raising=False)
+    monkeypatch.setattr(atualizador, "_atualizar_codigo", lambda *_: None)
+    monkeypatch.setattr(atualizador, "_logar", lambda *_: None)
+    return exe_dir / "codigo", emb
+
+
+def test_a_trava_vence_a_copia_de_fabrica(tmp_path, monkeypatch):
+    """O caso que interessa: quem trava está voltando de uma release ruim, e o
+    exe que a trouxe traz o código ruim EMBUTIDO. A regra ">= embutida"
+    desfaria a trava em silêncio — o pior desfecho para um freio de mão."""
+    pasta, _ = _fingir_exe(tmp_path, monkeypatch, "v1.0.75", "v1.0.78",
+                           travar="v1.0.75")
+    assert atualizador.preparar_codigo() == pasta
+
+
+def test_sem_trava_a_copia_de_fabrica_vence_o_codigo_mais_velho(tmp_path,
+                                                                monkeypatch):
+    """O contraexemplo que mostra que a regra normal continua de pé."""
+    _, emb = _fingir_exe(tmp_path, monkeypatch, "v1.0.75", "v1.0.78")
+    assert atualizador.preparar_codigo() == emb

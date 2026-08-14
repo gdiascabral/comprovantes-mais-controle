@@ -80,6 +80,13 @@ remessas.json*
 # de barras, chave Pix, valor e favorecido em texto puro.
 *.REM
 *.rem
+# O outro lado da mesma conversa: o RETORNO que o banco devolve. Estava de fora
+# porque só a remessa era gerada aqui — mas o retorno traz os MESMOS dados (o
+# favorecido, o valor, o código de barras) mais o que o banco respondeu sobre
+# cada um, e é o arquivo que se salva na pasta do app para conferir depois.
+# Proteger a ida e vazar a volta é o pior dos dois mundos.
+*.RET
+*.ret
 # Conciliação Diária: o mapa das contas do painel, os rateios de aporte e o
 # modelo da planilha. Nome de empresa e estrutura financeira — fica ao lado do
 # exe, nunca no repositório.
@@ -98,6 +105,13 @@ ativacao.dat
 # A sessão da nuvem, cifrada pela DPAPI. Entra aqui pelo mesmo motivo do
 # login.dat: é credencial, ainda que só desta máquina.
 sessao.dat
+# O lugar onde toda ferramenta do mundo manda guardar segredo. Nenhum código
+# daqui lê um `.env` hoje, e é justamente por isso que ele entra: quem for
+# experimentar a chave de serviço do Supabase (a que ignora a RLS inteira) vai
+# criar esse arquivo por hábito, e a regra tem de existir ANTES. Sem prefixo de
+# pasta de propósito — vale na raiz e em qualquer subpasta.
+.env
+.env.*
 
 # Logs de qualquer módulo (diagnostico, atualizacao, log_anexos...). A regra
 # ampla existe porque log novo aparece com frequência e sempre carrega dado da

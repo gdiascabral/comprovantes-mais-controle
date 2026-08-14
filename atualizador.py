@@ -9,6 +9,15 @@ Atualizador do motor (usado apenas dentro do executável).
   com janela de progresso e troca o arquivo via .bat (com retentativas,
   por causa de OneDrive/antivírus).
 Tudo é registrado em "atualizacao.log" ao lado do exe.
+
+**Como VOLTAR quando uma release sai ruim** — o app se atualiza sozinho, então
+a saída não pode exigir programador. Há duas, e as duas moram ao lado do exe:
+
+1. renomear a pasta "codigo_velha" (a anterior, guardada de propósito) para
+   "codigo". Funciona sem rede, e é o socorro imediato;
+2. criar um "travar_versao.txt" com uma linha — `v1.0.75` — para o app buscar
+   AQUELA release e parar de andar para a frente até o arquivo ser apagado.
+   É o que segura a máquina enquanto a correção não sai.
 """
 import os
 import shutil
@@ -52,6 +61,30 @@ def _versao_motor():
     return (_ler(Path(base) / "versao.txt") if base else None) or "v0.0.0"
 
 
+def _tag_travada(exe_dir: Path) -> str:
+    """A tag escrita em `travar_versao.txt`, ou "" quando não há trava.
+
+    É o freio de mão de quem NÃO é programador: uma release ruim chega sozinha
+    a todo mundo no próximo abrir, e até aqui a única saída era esperar a
+    correção. Basta criar, ao lado do exe, um `travar_versao.txt` com uma linha
+    — `v1.0.75` — para o app passar a buscar AQUELA release, e só ela: nem
+    atualiza para além dela, nem fica preso na quebrada. Apagar o arquivo
+    devolve o comportamento normal na abertura seguinte.
+
+    Lixo no arquivo é tratado como ausência de trava, de propósito: melhor
+    seguir atualizando do que travar numa versão que não existe por causa de
+    um espaço a mais. O que estava escrito vai para o log."""
+    bruto = _ler(exe_dir / "travar_versao.txt") or ""
+    # Só a primeira linha não-vazia: quem edita no Bloco de Notas deixa linha
+    # em branco no fim, e comentar a trava (em vez de apagá-la) é natural.
+    linhas = [l.strip() for l in bruto.splitlines() if l.strip()]
+    tag = next((l for l in linhas if not l.startswith("#")), "")
+    if tag and not _tupla(tag):
+        _logar(f"travar_versao.txt ilegível ({tag[:40]!r}); trava ignorada")
+        return ""
+    return tag
+
+
 # ------------------------------------------------------ pacote de código
 def preparar_codigo() -> Path:
     """Atualiza (se der) e devolve a pasta de código que o motor deve usar."""
@@ -67,7 +100,17 @@ def preparar_codigo() -> Path:
 
     v_local = _ler(pasta / "versao.txt")
     v_emb = _ler(emb / "versao.txt") or "v0.0.0"
-    fonte = pasta if (v_local and _tupla(v_local) >= _tupla(v_emb)) else emb
+    travada = _tag_travada(exe_dir)
+    if travada and v_local and _tupla(v_local) == _tupla(travada):
+        # A trava manda mesmo sendo mais VELHA que a cópia de fábrica — e é
+        # esse o caso que interessa: quem trava está voltando de uma release
+        # ruim, e o exe que a trouxe traz o código ruim embutido. Sem esta
+        # linha, a regra ">= embutida" logo abaixo desfaria a trava em
+        # silêncio, que é o pior desfecho possível para um freio de mão.
+        fonte = pasta
+        _logar(f"versão travada em {travada} por travar_versao.txt")
+    else:
+        fonte = pasta if (v_local and _tupla(v_local) >= _tupla(v_emb)) else emb
 
     minimo = _ler(fonte / "motor_minimo.txt")
     if minimo and _tupla(minimo) > _tupla(v_motor):
@@ -97,15 +140,39 @@ def _extrair_seguro(zip_path: Path, destino: Path):
 
 
 def _atualizar_codigo(pasta: Path, emb: Path):
-    """Baixa e instala o codigo.zip se a release for mais nova (rápido)."""
+    """Baixa e instala o codigo.zip da release que vale agora (rápido).
+
+    Qual release vale depende de existir `travar_versao.txt` ao lado do exe
+    (ver `_tag_travada`):
+
+    - **sem trava**: a `latest`, e só quando for MAIOR que a instalada — é o
+      caminho de todo dia;
+    - **com trava**: exatamente aquela tag, inclusive para TRÁS. Voltar é o
+      motivo de a trava existir, então "instale só o que for mais novo" não
+      pode valer aqui: seria a mesma coisa que não ter trava.
+
+    A pasta anterior fica guardada como `codigo_velha` — são ~370 KB, e é o
+    caminho de volta que não depende de rede: renomeá-la para `codigo` desfaz
+    a atualização mesmo com o GitHub fora do ar."""
     import requests
-    r = requests.get(API_LATEST, timeout=5)
+    travada = _tag_travada(pasta.parent)
+    api = (f"https://api.github.com/repos/{REPO}/releases/tags/{travada}"
+           if travada else API_LATEST)
+    r = requests.get(api, timeout=5)
     r.raise_for_status()
-    ultima = r.json().get("tag_name") or ""
-    v_ref = _ler(pasta / "versao.txt") or _ler(emb / "versao.txt") or "v0"
-    if not _tupla(ultima) or _tupla(ultima) <= _tupla(v_ref):
+    alvo = r.json().get("tag_name") or ""
+    if not _tupla(alvo):
         return
-    url = f"https://github.com/{REPO}/releases/latest/download/codigo.zip"
+    if travada:
+        if _tupla(alvo) == _tupla(_ler(pasta / "versao.txt") or "v0"):
+            return                      # já está na versão travada
+    else:
+        v_ref = _ler(pasta / "versao.txt") or _ler(emb / "versao.txt") or "v0"
+        if _tupla(alvo) <= _tupla(v_ref):
+            return
+    # Pela TAG, e não por `latest/download`: é o mesmo endereço quando não há
+    # trava, e é o único que sabe baixar uma release anterior quando há.
+    url = f"https://github.com/{REPO}/releases/download/{alvo}/codigo.zip"
     # Pasta EXCLUSIVA desta execução. O nome fixo em %TEMP% era compartilhado
     # entre duas instâncias abertas ao mesmo tempo (e entre usuários da mesma
     # máquina): uma sobrescrevia o download da outra no meio da extração.
@@ -114,11 +181,36 @@ def _atualizar_codigo(pasta: Path, emb: Path):
         tmp = trabalho / "codigo.zip"
         with requests.get(url, timeout=(15, 60)) as resp:
             resp.raise_for_status()
+            esperado = int(resp.headers.get("content-length") or 0)
             tmp.write_bytes(resp.content)
+        # A MESMA conferência que o download do exe já fazia, e que faltava
+        # justamente aqui — no pacote que roda em toda abertura, contra o
+        # exe grande, que é raro. Zip truncado por queda de rede extrai "até
+        # onde deu": o app abriria com metade dos arquivos do dia anterior e
+        # metade dos de hoje, e o erro apareceria numa aba qualquer, depois.
+        #
+        # PRÓXIMO PASSO: conferir o SHA-256 contra um asset `SHA256SUMS` da
+        # release. Tamanho prova que chegou inteiro, não que chegou o nosso —
+        # mas o asset ainda não é publicado, e criá-lo é mudança no
+        # `.github/workflows/build.yml`. Enquanto ele não existir, conferir
+        # hash aqui só teria como comparar o arquivo consigo mesmo.
+        if esperado and tmp.stat().st_size != esperado:
+            raise RuntimeError(
+                f"codigo.zip veio incompleto ({tmp.stat().st_size} de "
+                f"{esperado} bytes)")
 
         nova = pasta.with_name("codigo_nova")
         shutil.rmtree(nova, ignore_errors=True)
-        _extrair_seguro(tmp, nova)
+        try:
+            _extrair_seguro(tmp, nova)
+        except zipfile.BadZipFile as e:
+            # Mensagem própria porque a causa provável não é adulteração: é
+            # portal de wi-fi (ou página de erro do GitHub) respondendo 200 com
+            # HTML no lugar do zip. "File is not a zip file" no log não diria
+            # isso a ninguém.
+            raise RuntimeError(
+                f"o codigo.zip baixado não é um zip válido ({e}) — resposta "
+                "de portal de wi-fi ou download corrompido") from e
         if not (nova / "comprovantes_app.py").exists():
             raise RuntimeError("codigo.zip veio sem o app dentro")
 
@@ -127,10 +219,13 @@ def _atualizar_codigo(pasta: Path, emb: Path):
         if pasta.exists():
             pasta.rename(velha)
         nova.rename(pasta)
-        shutil.rmtree(velha, ignore_errors=True)
+        # `codigo_velha` FICA. Apagá-la aqui era o que tornava a atualização
+        # irreversível: o app só anda para a frente, e quem descobre a release
+        # quebrada é quem está com o trabalho do dia na mão. São ~370 KB —
+        # menos que um comprovante em PDF — pelo direito de voltar sem rede.
     finally:
         shutil.rmtree(trabalho, ignore_errors=True)
-    _logar(f"código atualizado para {ultima}")
+    _logar(f"código atualizado para {alvo}" + (" (travado)" if travada else ""))
 
 
 # ------------------------------------------------- motor novo (download grande)
@@ -276,9 +371,28 @@ def script_de_troca(pid: int, novo: Path, exe: Path) -> str:
        O nome curto não tem acento nenhum, então nenhuma codepage tem como
        estragá-lo; e quem grava o arquivo ainda usa a codepage do cmd, para o
        caso de 8.3 estar desligado no volume.
+    5. **O 8.3 é ENDEREÇO, nunca NOME** — o preço que o item 4 cobrou. Usar o
+       caminho curto como ALVO do `move` destrói o nome longo: medido em
+       14/08/2026, `move /y origem "…\\COMPRO~1.EXE"` deixa na pasta um arquivo
+       chamado literalmente `COMPRO~1.EXE`. A explicação é que o `/y` APAGA o
+       destino antes de renomear a origem — e, apagado o arquivo, `COMPRO~1.EXE`
+       deixa de ser apelido de coisa nenhuma e vira um nome comum. Aconteceu
+       duas vezes na máquina real e quebrou o atalho da área de trabalho, que
+       aponta para o nome longo. A correção é o `ren` logo depois do `move`:
+       ele recebe um NOME (não um caminho), então o acento da PASTA não passa
+       por ele — e o nome longo do exe é ASCII puro. O `ren` só roda depois do
+       `:trocou`, quando o `move` já deu certo; falhando ele (o caso em que
+       algum Windows preservasse o nome longo sozinho), o arquivo já está
+       correto e o `>nul 2>&1` engole o "já existe um arquivo com o mesmo
+       nome". Quem abre o app é `<pasta curta>\\<nome longo>`: pasta em 8.3
+       (ASCII, imune à codepage) e nome de verdade (o que o atalho espera).
     """
     novo_txt = _caminho_curto(novo) or str(novo)
     exe_txt = _caminho_curto(exe) or str(exe)
+    # O NOME sai do caminho ORIGINAL, antes de qualquer conversão para 8.3:
+    # é ele que o atalho da área de trabalho e a lista de programas conhecem.
+    nome = exe.name
+    alvo = str(Path(exe_txt).parent / nome)
     novo, exe = Path(novo_txt), Path(exe_txt)
     return (
         "@echo off\n"
@@ -295,14 +409,16 @@ def script_de_troca(pid: int, novo: Path, exe: Path) -> str:
         "echo.\n"
         "echo Nao consegui substituir o aplicativo.\n"
         "echo Feche o programa, apague as pastas _MEI de %TEMP% e tente de novo.\n"
-        f'echo Se persistir, mova na mao:  "{novo}"  ->  "{exe}"\n'
+        f'echo Se persistir, mova na mao:  "{novo}"  ->  "{alvo}"\n'
         "echo.\n"
         "pause\n"
         "exit /b 1\n"
         ":trocou\n"
+        "rem  Devolve o nome longo: o move gravou o 8.3 como nome de verdade.\n"
+        f'ren "{exe}" "{nome}" >nul 2>&1\n'
         'for /d %%d in ("%TEMP%\\_MEI*") do rd /s /q "%%d" 2>nul\n'
         "timeout /t 2 >nul\n"
-        f'start "" "{exe}"\n'
+        f'start "" "{alvo}"\n'
         'del "%~f0"\n'
     )
 
