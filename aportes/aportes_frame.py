@@ -471,13 +471,27 @@ class AportesFrame(ttk.Frame):
                     self._log(f"  {i}/{len(plano)} FALHOU: {e}")
                     falhas.append(str(e))
                     continue
+                # O que decide "não crie de novo" é EXISTIR NO ERP, não ter
+                # dado tudo certo. `criar_recebimento` tem saídas em que a
+                # venda JÁ FOI criada e o resultado é `ok=False` — baixa que
+                # falhou, parcela que não apareceu na resposta. Marcando só
+                # pelo `ok`, o clique seguinte em "Lançar" criava uma SEGUNDA
+                # venda do mesmo valor, e desfazer isso é à mão, lançamento
+                # por lançamento. Marca antes de qualquer outra coisa: se o
+                # app morrer aqui, o pior caso é a lista sobreviver sabendo o
+                # que já foi.
+                if r.ok or r.id_criado:
+                    self.criados[i_op].add(i_item)
                 if r.ok:
                     feitos += 1
-                    # Marca ANTES de qualquer outra coisa: se o app morrer aqui,
-                    # o pior caso é a lista sobreviver sabendo o que já foi.
-                    self.criados[i_op].add(i_item)
                     self._log(f"  {i}/{len(plano)} ok — {especie} "
                               f"R$ {item['valor']:,.2f}")
+                elif r.id_criado:
+                    # Existe no ERP e não está redondo. É diferente de falhar:
+                    # relançar duplica, e ignorar deixa dinheiro em aberto.
+                    self._log(f"  {i}/{len(plano)} ATENÇÃO — criado no ERP, mas "
+                              f"pendente: {r.erro}")
+                    falhas.append(r.erro or "criado, pendente de conferência")
                 else:
                     self._log(f"  {i}/{len(plano)} FALHOU: {r.erro}")
                     falhas.append(r.erro or "erro desconhecido")
