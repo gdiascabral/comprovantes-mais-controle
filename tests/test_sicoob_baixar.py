@@ -156,3 +156,108 @@ def test_zip_avisa_pasta_de_banco_vazia(mapa):
 def test_zipar_mes_inexistente_avisa(mapa):
     with pytest.raises(FileNotFoundError):
         sz.zipar_mes(mapa, 2026, 7, log=lambda *_: None)
+
+
+def test_zip_interrompido_nao_destroi_o_anterior(mapa, monkeypatch):
+    """Abrir o alvo em "w" TRUNCA o zip bom no próprio open.
+
+    Quem zipa de novo para incluir o extrato que faltava ficava, a uma queda
+    de distância, sem o zip novo e sem o velho — e o zip é o arquivo que a
+    aba Acessórias envia ao escritório contábil."""
+    import sicoob_pastas as sp
+    sp.criar(sp.planejar(mapa, 2026, 7))
+    base = sp.caminho_do_mes(mapa, 2026, 7)
+    (base / "JULHO 2026 - ALFA" / "SICOOB" / "202607 SICOOB.ofx").write_text("x")
+    sz.zipar_mes(mapa, 2026, 7, log=lambda *_: None)
+
+    alvo = base / "JULHO 2026 - ALFA.zip"
+    antes = alvo.read_bytes()
+
+    def explode(self, *_a, **_k):
+        raise OSError("o disco encheu no meio da escrita")
+    monkeypatch.setattr(zipfile.ZipFile, "write", explode)
+    with pytest.raises(OSError):
+        sz.zipar_mes(mapa, 2026, 7, log=lambda *_: None)
+
+    assert alvo.read_bytes() == antes           # o bom continua lá, inteiro
+    with zipfile.ZipFile(alvo) as z:
+        assert z.testzip() is None
+    # e nada de ".tmp" pela metade ao lado dos zips que a pessoa vai conferir
+    assert list(base.glob("*.tmp")) == []
+
+
+# ------------------------------------------------------------------ lote
+
+class _SicoobFalso:
+    """O SicoobNet sem navegador: entrega o que mandarem entregar.
+
+    O OFX sai com o ACCTID da conta pedida de propósito — a trava do ACCTID
+    tem de APROVAR para que o que vem depois dela possa ser testado."""
+
+    def __init__(self, pdf: bytes = b"%PDF-1.4 conteudo"):
+        self.pdf = pdf
+        self.conta = ""
+
+    def acessar_conta(self, numero):
+        self.conta = numero
+        return True
+
+    def abrir_extrato(self):
+        pass
+
+    def definir_ordenacao(self):
+        pass
+
+    def definir_periodo(self, ano, mes):
+        pass
+
+    def exportar_ofx(self, destino):
+        destino.write_text(ofx(conta=self.conta), encoding="cp1252")
+
+    def exportar_pdf(self, destino):
+        destino.write_bytes(self.pdf)
+
+    def ir_para_selecao(self):
+        pass
+
+
+def test_pdf_de_zero_byte_nao_e_marcado_como_pronto(mapa):
+    """A trava do ACCTID cobre o OFX; o PDF vem de um SEGUNDO download, cujo
+    conteúdo ninguém lê. Sem esta conferência, um arquivo vazio no disco era
+    relatado como "conta completa" e ninguém abriria aquele PDF até o
+    escritório contábil pedir."""
+    rel = sb.baixar_mes(_SicoobFalso(pdf=b""), mapa, 2026, 7,
+                        log=lambda *_: None)
+    assert rel.completos == []
+    for r in rel.resultados:
+        assert r.ofx is True                 # o OFX passou; o problema é o PDF
+        assert r.pdf is False
+        assert any("zero byte" in p for p in r.problemas)
+    assert "0 de 2 contas completas" in rel.texto()
+
+
+def test_pdf_com_conteudo_fecha_a_conta(mapa):
+    rel = sb.baixar_mes(_SicoobFalso(), mapa, 2026, 7, log=lambda *_: None)
+    assert len(rel.completos) == 2 and rel.falhos == []
+
+
+def test_duas_contas_na_mesma_pasta_nao_se_sobrescrevem(tmp_path):
+    """O lote inteiro, do mapa ao disco: sem o `sufixo` os dois extratos
+    viravam UM arquivo, e o relatório dizia "2 de 2 completas"."""
+    dados = {"raiz": str(tmp_path / "EXTRATOS"), "empresas": [
+        {"nome": "DELTA", "pastas_vazias": [], "contas": [
+            {"numero": "11.111-1", "pasta": "SICOOB", "sufixo": "11111-1"},
+            {"numero": "22.222-2", "pasta": "SICOOB", "sufixo": "22222-2"},
+        ]}]}
+    arq = tmp_path / "m.json"
+    arq.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    mapa = sc.carregar(arq)
+
+    rel = sb.baixar_mes(_SicoobFalso(), mapa, 2026, 7, log=lambda *_: None)
+    assert len(rel.completos) == 2
+
+    import sicoob_pastas as sp
+    pasta = sp.caminho_da_conta(mapa, 2026, 7, "11.111-1")
+    assert sp.caminho_da_conta(mapa, 2026, 7, "22.222-2") == pasta
+    assert sorted(p.name for p in pasta.glob("*.ofx")) == [
+        "202607 SICOOB 11111-1.ofx", "202607 SICOOB 22222-2.ofx"]

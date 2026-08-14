@@ -13,7 +13,39 @@ from tkinter import ttk
 
 import pytest
 
+import util
 import widgets
+
+
+# --------------------------------------------------------------------- meses
+def test_o_mes_da_tela_e_o_mes_da_pasta():
+    """As duas tabelas de meses têm de dizer a mesma coisa.
+
+    `widgets.MESES` é o rótulo da tela ("Julho") e `util.MESES_PASTA` é o que
+    vira NOME DE PASTA no disco ("JULHO"). Existiam sete cópias espalhadas —
+    três delas produzindo caminho de arquivamento —, e bastava uma divergir
+    (um "MARCO" sem cedilha) para a Conciliação gravar numa pasta e o
+    Relatório Mensal noutra: a família exata do defeito que partiu julho/2026
+    ao meio. Sobraram duas tabelas, e é este teste que as mantém iguais.
+    """
+    assert [m.upper() for m in widgets.MESES] == list(util.MESES_PASTA)
+    assert len(util.MESES_PASTA) == 12
+
+
+def test_toda_aba_usa_a_mesma_tabela_de_meses():
+    """Nenhum módulo pode ter a sua própria lista de meses de novo."""
+    import acessorias.frame
+    import contratos.frame
+    import extratos_frame
+    import relatorio_frame
+    import sicoob_config
+    import contas_mc
+
+    for modulo in (acessorias.frame, contratos.frame, extratos_frame,
+                   relatorio_frame):
+        assert list(modulo.MESES) == list(widgets.MESES), modulo.__name__
+    for modulo in (sicoob_config, contas_mc):
+        assert tuple(modulo.MESES) == util.MESES_PASTA, modulo.__name__
 
 
 # ------------------------------------------------------------------ contraste

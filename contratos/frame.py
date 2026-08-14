@@ -48,8 +48,9 @@ from .destino import limpar as _limpar_nome
 
 _fmt_dur = util.fmt_dur
 
-MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
-         "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+#: Rótulo de TELA. A tabela que vira nome de pasta é a `util.MESES_PASTA`,
+#: e quem guarda a forma de exibição é o `widgets`, par visual do `util`.
+MESES = list(widgets.MESES)
 
 #: O ☑/☐ da primeira coluna. Texto, e não imagem: o Treeview do ttk não tem
 #: caixa de marcação, e desenhar uma custaria mais do que vale.

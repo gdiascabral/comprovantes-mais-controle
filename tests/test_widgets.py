@@ -218,3 +218,93 @@ def test_botao_hoje(campo):
     achar(c._popup, "Hoje").invoke()
     root.update()
     assert var.get() == f"{date.today():%d/%m/%Y}"
+
+
+# ------------------------------------------------------ a bomba de UI não morre
+# Estes últimos não são do campo de data. Moram aqui porque este é o arquivo de
+# teste de INTERFACE do projeto, e o que eles cobrem é da mesma família: defeito
+# do Tk que não quebra nada em vermelho e só aparece na frente de quem usa.
+#
+# A aba usada é a Separar e Renomear por ser a única sem navegador: dá para
+# construí-la de verdade e mexer na fila dela sem abrir Chrome nenhum.
+
+@pytest.fixture(scope="module")
+def aba_separar(raiz):
+    import separar_renomear
+    aba = separar_renomear.SepararFrame(raiz)
+    # De propósito NÃO destruímos a aba no fim: o `_drain` dela está agendado no
+    # `after` da raiz compartilhada, e destruir o widget deixaria o próximo
+    # disparo tentando escrever num campo que já não existe — barulho no meio
+    # dos outros testes. Sem `pack`, ela não aparece nem atrapalha.
+    raiz.update()
+    return aba
+
+
+def test_o_drain_sobrevive_a_um_erro_e_continua(aba_separar):
+    """O modo de falha mais desesperador do app: a fila deixa de ser drenada,
+    o registro congela, o botão nunca volta — e a thread segue trabalhando, sem
+    ninguém saber sequer se dá para fechar o programa. Bastava UM erro que não
+    fosse `queue.Empty` (um `tk.TclError` de widget recém-destruído, por
+    exemplo) para o ciclo parar para sempre, porque o reagendamento ficava fora
+    do `finally`."""
+    aba = aba_separar
+    aba.fila.put(("prog", None))          # desempacotar None levanta TypeError
+    aba._drain()                          # não pode levantar...
+    aba.fila.put(("log", "vivo depois do erro"))
+    aba._drain()                          # ...e tem de continuar drenando
+    aba._drain()
+    texto = aba.txt.get("1.0", "end")
+    assert "vivo depois do erro" in texto
+    # E o motivo não some em silêncio: sem ele, o defeito volta a ser invisível.
+    assert "falha ao atualizar a tela" in texto
+
+
+def test_ocupado_e_fechar_da_aba_separar(aba_separar):
+    """`ocupado()` é o que a barra lateral pergunta para acender o ● na aba que
+    trabalha; `fechar()` é chamado ao sair do app, em TODAS as abas — inclusive
+    nas que nunca começaram nada."""
+    assert aba_separar.ocupado() is None
+    aba_separar.fechar()                  # sem trabalho nenhum: não pode estourar
+    assert aba_separar.ocupado() is None
+
+
+def test_parar_no_meio_nao_grava_pdf_pela_metade(tmp_path):
+    """Fechar o app durante o processamento matava a thread na 2ª passada — a
+    que grava —, deixando arquivo pela metade na pasta de saída e nenhum
+    registro do que houve. Agora a parada é pedida, e o que não foi gravado
+    simplesmente não existe."""
+    from pypdf import PdfWriter
+
+    import separar_renomear
+
+    entrada = tmp_path / "entrada"
+    entrada.mkdir()
+    w = PdfWriter()
+    w.add_blank_page(width=200, height=200)
+    with open(entrada / "um.pdf", "wb") as fh:
+        w.write(fh)
+    saida = tmp_path / "saida"
+
+    linhas = []
+    gerados, _erros = separar_renomear.processar(entrada, saida, linhas.append,
+                                                 parar=lambda: True)
+    assert gerados == 0
+    assert list(saida.glob("*.pdf")) == []
+    assert any("Interrompido" in linha for linha in linhas), linhas
+
+
+def test_fechar_da_acessorias_sem_nada_aberto(raiz):
+    """O `_sair()` do app percorre as abas chamando `fechar()`. O da Acessórias
+    fecha o Chrome do portal na thread dele e desliga o executor — e precisa ser
+    seguro quando não há navegador nenhum, que é o caso mais comum."""
+    pytest.importorskip("playwright")
+    from acessorias.frame import AcessoriasFrame
+
+    aba = AcessoriasFrame(raiz)
+    try:
+        assert aba.ocupado() is None
+        assert aba.portal is None
+        aba.fechar()
+        aba.fechar()                      # duas vezes também não pode estourar
+    finally:
+        aba.fechar()

@@ -40,6 +40,9 @@ from .modelos import (
     so_digitos,
 )
 from .registros import aplicar, montar
+# A dependência é de mão única — ``validador.py`` não importa nada daqui, e não
+# deve passar a importar: é ele que confere o que este módulo escreve.
+from .validador import NIVEL_ARQUIVO, relatorio, validar
 
 QUEBRA_LINHA = "\r\n"
 
@@ -110,8 +113,36 @@ class Lote:
                         f"{type(pagamento).__name__} exige forma {esperada} "
                         "(um lote só pode conter um tipo de transação)"
                     )
+            self._conferir_banco_do_favorecido(pagamento)
             self.pagamentos.append(pagamento)
         return self
+
+    def _conferir_banco_do_favorecido(self, pagamento: Any) -> None:
+        """O produto e o banco do favorecido têm de contar a mesma história.
+
+        ``Favorecido.banco`` vale 756 por omissão — o que é certo no caso comum
+        (transferência entre contas Sicoob) e é uma armadilha na TED: esquecer
+        o ``banco=`` não dá erro nenhum, gera um arquivo válido e manda o
+        pagamento para uma conta homônima dentro do Sicoob. Tornar o campo
+        obrigatório quebraria quem já chama a biblioteca; conferir aqui pega o
+        esquecimento no mesmo instante, com o pagamento na mão.
+        """
+        if self.produto not in ("TED", "TRANSFERENCIA_SICOOB"):
+            return
+        banco = so_digitos(getattr(pagamento.favorecido, "banco", ""))
+        if self.produto == "TED" and banco == BANCO_SICOOB:
+            raise RemessaInvalida(
+                f"lote {self.numero} é TED e o favorecido está no banco {BANCO_SICOOB}, "
+                "que é o Sicoob. Como esse é o valor padrão de Favorecido.banco, "
+                "isto quase sempre é um 'banco=' esquecido; se o favorecido é mesmo "
+                "do Sicoob, o produto é TRANSFERENCIA_SICOOB, não TED."
+            )
+        if self.produto == "TRANSFERENCIA_SICOOB" and banco != BANCO_SICOOB:
+            raise RemessaInvalida(
+                f"lote {self.numero} é transferência entre contas Sicoob e o favorecido "
+                f"está no banco {banco or 'em branco'}. Pagamento para fora do Sicoob "
+                "sai por TED."
+            )
 
     @property
     def total(self) -> Decimal:
@@ -211,9 +242,46 @@ class ArquivoRemessa:
     def texto(self, quebra: str = QUEBRA_LINHA) -> str:
         return quebra.join(self.gerar()) + quebra
 
-    def salvar(self, caminho: str | Path, *, quebra: str = QUEBRA_LINHA) -> Path:
+    def salvar(
+        self,
+        caminho: str | Path,
+        *,
+        quebra: str = QUEBRA_LINHA,
+        validar_antes: bool = True,
+    ) -> Path:
+        """Grava a remessa — validada antes, e criando a pasta que faltar.
+
+        O ``validador.py`` já existia e já pegava a agência colada com o DV e o
+        trailer divergente, mas ninguém o chamava no caminho da gravação: quem
+        esquecesse de validar gravava o arquivo torto e só descobria no
+        SicoobNet. Como este é o ÚNICO caminho por onde o arquivo chega ao
+        disco, a conferência mora aqui.
+
+        Só os problemas de nível ARQUIVO impedem a gravação: são os que fazem o
+        Sicoob recusar o arquivo INTEIRO. Os de nível REGISTRO derrubam uma
+        linha só, e nesse caso vale mais gravar e mostrar o relatório do que
+        segurar o lote todo — mas o relatório completo vai na mensagem do erro,
+        os dois níveis juntos, porque quem lê precisa ver o quadro inteiro.
+
+        ``validar_antes=False`` é para depurar um arquivo recusado (gerar para
+        olhar), nunca para produzir remessa de verdade.
+        """
+        linhas = self.gerar()
+        if validar_antes:
+            problemas = validar(linhas)
+            graves = [p for p in problemas if p.nivel == NIVEL_ARQUIVO]
+            if graves:
+                raise RemessaInvalida(
+                    f"remessa NÃO gravada em {caminho}: {len(graves)} problema(s) que "
+                    f"fazem o banco rejeitar o arquivo inteiro.\n{relatorio(problemas)}"
+                )
         destino = Path(caminho)
-        destino.write_text(self.texto(quebra), encoding="latin-1", newline="")
+        # A pasta do dia/mês pode ainda não existir (e o OneDrive às vezes a
+        # leva embora). Sem isto, o write_text morre de FileNotFoundError depois
+        # do NSA já consumido, e um número gasto sem arquivo vira furo no
+        # histórico que ninguém sabe explicar.
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text(quebra.join(linhas) + quebra, encoding="latin-1", newline="")
         return destino
 
     # -- registros de arquivo ----------------------------------------------

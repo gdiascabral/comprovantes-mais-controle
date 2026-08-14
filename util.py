@@ -5,10 +5,62 @@ Fica na RAIZ do pacote de código; é copiado para o codigo.zip do auto-update
 e para os exes. Módulos em subpastas o importam com um fallback de sys.path
 (ver o topo de cada arquivo) para funcionarem também rodados isoladamente.
 """
+import ctypes
 import re
 import sys
 import unicodedata
 from pathlib import Path
+
+
+# ------------------------------------------------------------- cofre local
+
+class _BLOB(ctypes.Structure):
+    # DWORD é um inteiro de 32 bits sem sinal. `c_uint32` direto para não
+    # depender de `ctypes.wintypes` (submódulo que não vem embutido no motor).
+    _fields_ = [("cbData", ctypes.c_uint32),
+                ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+
+def _blob(dados: bytes) -> _BLOB:
+    buf = ctypes.create_string_buffer(dados, len(dados))
+    return _BLOB(len(dados), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+
+
+def _dpapi(funcao: str, dados: bytes) -> bytes:
+    saida = _BLOB()
+    entrada = _blob(dados)
+    if not getattr(ctypes.windll.crypt32, funcao)(
+            ctypes.byref(entrada), None, None, None, None, 0,
+            ctypes.byref(saida)):
+        raise OSError(f"{funcao} falhou")
+    try:
+        return ctypes.string_at(saida.pbData, int(saida.cbData))
+    finally:
+        ctypes.windll.kernel32.LocalFree(saida.pbData)
+
+
+def proteger_bytes(dados: bytes) -> bytes:
+    """Cifra com a DPAPI do Windows. Levanta OSError se não der.
+
+    O resultado só é decifrável pelo MESMO usuário do Windows, nesta máquina.
+    É o cofre de tudo que o app guarda e não pode ficar em texto: a senha do
+    ERP (`login.dat`) e a sessão da nuvem (`sessao.dat`).
+
+    Mora aqui, e não junto de um dos dois, porque os dois precisam dela e
+    `nuvem` importar de `anexar` acoplaria o login ao módulo de anexos — a
+    mesma razão que trouxe `norm_espaco` para cá.
+    """
+    return _dpapi("CryptProtectData", dados)
+
+
+def revelar_bytes(dados: bytes) -> bytes:
+    """Decifra o que `proteger_bytes` cifrou. Levanta OSError se não der.
+
+    Falhar é esperado e não é defeito: troca de usuário do Windows ou perfil
+    restaurado noutra máquina fazem a DPAPI recusar, e o certo é voltar a
+    pedir a senha — nunca tentar adivinhar.
+    """
+    return _dpapi("CryptUnprotectData", dados)
 
 
 def pasta_base() -> Path:
@@ -23,6 +75,22 @@ def pasta_base() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+#: Os meses COMO VIRAM NOME DE PASTA no disco — `.../2026/JULHO/...`.
+#:
+#: Mora aqui, e não em cada módulo, pela mesma razão do `pasta_base()` logo
+#: acima: existia em TRÊS cópias (Conciliação, Extratos Sicoob e Relatório
+#: Mensal), e as três produzem caminho de arquivamento. Bastava uma divergir —
+#: um "MARCO" sem cedilha — para a Conciliação gravar numa pasta e o Relatório
+#: Mensal noutra, que é exatamente a família do defeito que partiu julho/2026
+#: ao meio e fez nascer o `conferir_mapas.py`.
+#:
+#: O par de TELA é o `widgets.MESES` ("Janeiro"), e ele fica lá porque
+#: `util.py` não importa tkinter. Que os dois digam a mesma coisa é garantido
+#: por teste, não por disciplina.
+MESES_PASTA = ("JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
+               "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO")
 
 
 def fmt_dur(seg: float) -> str:

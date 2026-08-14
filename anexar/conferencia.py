@@ -271,15 +271,26 @@ class ConferenciaFrame(ttk.Frame):
             return
         if self.anx.avisar_se_ocupado("a Conferência"):
             return
+        # TUDO que vem do formulário é lido AQUI, na thread da interface, e vai
+        # por argumento. Ler `BooleanVar` é falar com o Tcl, e o Tcl é de quem
+        # criou a janela: da thread do navegador isso trava ou erra sem hora
+        # marcada — falha intermitente, a que não aparece em teste. As datas já
+        # seguiam a regra; as três caixas de opção escapavam.
+        termos = []
+        if self.v_ign.get():
+            termos += config.IGNORAR_TARIFAS
+        if self.v_ign_ap.get():
+            termos += config.IGNORAR_APORTES
+        conteudo = self.v_conteudo.get()
         self._parar.clear()
         self.btn.config(state="disabled")
         self.b_stop.config(state="normal")
         self.log.delete("1.0", "end")
         self.lbl.config(text="Conferindo...")
         self.worker = self.anx.submeter("Conferência", self._t_conferir,
-                                        ini, fim, dona=self)
+                                        ini, fim, termos, conteudo, dona=self)
 
-    def _t_conferir(self, ini, fim):
+    def _t_conferir(self, ini, fim, termos: list, conteudo: bool):
         inicio = time.time()
         self._log(f"⏱ Início: {time.strftime('%H:%M:%S')}")
         try:
@@ -289,11 +300,6 @@ class ConferenciaFrame(ttk.Frame):
             self.q.put(("status", "Buscando títulos pagos do período..."))
             lanc = api.listar_pagos(ini, fim, self._log)
             pagos = mc_api.montar_pagos(lanc)
-            termos = []
-            if self.v_ign.get():
-                termos += config.IGNORAR_TARIFAS
-            if self.v_ign_ap.get():
-                termos += config.IGNORAR_APORTES
             if termos:
                 pagos = [p for p in pagos
                          if not any(t in (_norm(p["desc"]) + " | " + _norm(p["categoria"]))
@@ -333,7 +339,7 @@ class ConferenciaFrame(ttk.Frame):
                           f"{p['dataFull']}  {p['conta']}  {p['desc'][:60]}")
 
             divergentes, conferidos, nao_conferiveis = [], [], []
-            if self.v_conteudo.get() and com:
+            if conteudo and com:
                 self.q.put(("status", "Conferindo o conteúdo dos anexos..."))
                 self._log(f"\nConferindo o conteúdo de {len(com)} anexo(s)...")
                 self.q.put(("max", len(com)))
@@ -407,7 +413,7 @@ class ConferenciaFrame(ttk.Frame):
             self.q.put(("status",
                         f"Concluído: {len(sem)} sem anexo"
                         + (f", {len(divergentes)} divergente(s)"
-                           if self.v_conteudo.get() else "")
+                           if conteudo else "")
                         + (f", {len(nao_verif)} não verificado(s)"
                            if nao_verif else "")))
             self.q.put(("fim", saida))

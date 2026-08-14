@@ -109,7 +109,6 @@ def baixar_mes(cliente, mapa: Mapa, ano: int, mes: int,
     Uma conta que falha vira linha no relatório e o lote segue: interromper
     tudo por causa de uma significaria refazer as outras doze à toa."""
     rel = Relatorio()
-    nome = cfg.nome_arquivo(ano, mes)
     total = len(mapa.contas)
 
     with tempfile.TemporaryDirectory(prefix="sicoob_") as tmp:
@@ -122,6 +121,10 @@ def baixar_mes(cliente, mapa: Mapa, ano: int, mes: int,
             log(f"[{i}/{total}] {conta.numero} — {conta.empresa}")
 
             destino = caminho_da_conta(mapa, ano, mes, conta.numero)
+            # O nome sai DE DENTRO do laço porque leva o `sufixo` da conta:
+            # calculado uma vez para o lote, ele era o mesmo para todas, e
+            # duas contas da mesma pasta gravavam uma por cima da outra.
+            nome = cfg.nome_arquivo(ano, mes, conta.sufixo)
             try:
                 if not cliente.acessar_conta(conta.numero):
                     res.problemas.append("conta não encontrada na lista do Sicoob")
@@ -150,9 +153,22 @@ def baixar_mes(cliente, mapa: Mapa, ano: int, mes: int,
                     res.ofx = True
                     log("   OFX conferido e arquivado")
 
-                    cliente.exportar_pdf(destino / f"{nome}.pdf")
-                    res.pdf = True
-                    log("   PDF gerado")
+                    # O PDF vem de um SEGUNDO download, e ninguém lê o que
+                    # veio dentro dele: a trava do ACCTID cobre o OFX, e o PDF
+                    # só por vizinhança (OFX reprovado, PDF não nasce). Então
+                    # o mínimo é provar que o arquivo existe e não está vazio,
+                    # como `contratos/pipeline.py` já faz — sem isso, zero byte
+                    # no disco é relatado como "conta completa".
+                    alvo_pdf = destino / f"{nome}.pdf"
+                    cliente.exportar_pdf(alvo_pdf)
+                    if not alvo_pdf.is_file() or alvo_pdf.stat().st_size <= 0:
+                        res.problemas.append(
+                            "o PDF não ficou no disco (arquivo ausente ou "
+                            "de zero byte)")
+                        log("   PDF RECUSADO: arquivo vazio ou ausente")
+                    else:
+                        res.pdf = True
+                        log("   PDF gerado")
 
             except Exception as e:                 # noqa: BLE001 — ver docstring
                 res.problemas.append(str(e))

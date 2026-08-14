@@ -5,7 +5,10 @@ Testes do mapa conta do Mais Controle -> pasta.
 É onde um erro manda o extrato de uma empresa para a pasta de outra sem que
 nada no disco denuncie. Mapa fictício: o repositório é público.
 """
+import datetime
 import json
+import queue
+from threading import Event
 
 import pytest
 
@@ -132,9 +135,161 @@ def test_caminhos_longos_vazio_no_mapa_ficticio(mapa):
 
 
 def test_caminho_absurdo_e_apontado(tmp_path):
+    fora = cm.caminhos_longos(cm.carregar(_mapa_absurdo(tmp_path)), 2026, 7)
+    assert fora and fora[0][1] > cm.LIMITE_CAMINHO
+
+
+def _mapa_absurdo(tmp_path):
+    """Um mapa com um destino que não cabe nos 260 do Windows, e outro que
+    cabe — para separar "o lote tem problema" de "a conta marcada tem"."""
     dados = {"raiz": "R:/EXTRATOS", "contas": [
-        {"erp": "X", "empresa": "E" * 120, "pasta": "P" * 120, "banco": "SICOOB"}]}
+        {"erp": "CONTA ENORME", "empresa": "E" * 120, "pasta": "P" * 120,
+         "banco": "SICOOB"},
+        {"erp": "CONTA NORMAL", "empresa": "ALFA", "pasta": "SICOOB",
+         "banco": "SICOOB"}]}
+    arq = tmp_path / "absurdo.json"
+    arq.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    return arq
+
+
+def test_conta_nao_marcada_nao_barra_o_lote(tmp_path):
+    """Recusar o lote por causa de uma conta que ninguém marcou é recusar
+    trabalho que ia dar certo — a mesma regra da trava de conta sem destino,
+    que também só olha as escolhidas."""
+    m = cm.carregar(_mapa_absurdo(tmp_path))
+    assert cm.caminhos_longos(m, 2026, 7, contas=["CONTA NORMAL"]) == []
+    fora = cm.caminhos_longos(m, 2026, 7, contas=["CONTA ENORME"])
+    assert [n for n, _t in fora] == ["CONTA ENORME"]
+
+
+def test_periodo_parcial_e_medido_no_tamanho_que_vai_ser_gravado(tmp_path):
+    """"01-07-2026 a 15-07-2026" tem 17 caracteres a mais que "202607":
+    medir o nome curto e gravar o longo aprovaria o caminho que estoura."""
+    # 255 caracteres com "202607", 272 com as duas datas: cabe de um jeito e
+    # não cabe do outro, que é exatamente o caso que a conferência perdia.
+    dados = {"raiz": "R:/EXTRATOS", "contas": [
+        {"erp": "X", "empresa": "E" * 93, "pasta": "P" * 93,
+         "banco": "SICOOB"}]}
     arq = tmp_path / "m.json"
     arq.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
-    fora = cm.caminhos_longos(cm.carregar(arq), 2026, 7)
-    assert fora and fora[0][1] > cm.LIMITE_CAMINHO
+    m = cm.carregar(arq)
+    curto = cm.caminhos_longos(m, 2026, 7)
+    longo = cm.caminhos_longos(m, 2026, 7, periodo="01-07-2026 a 15-07-2026")
+    assert curto == [] and longo != []
+
+
+# ------------------------------------------------- período parcial no nome
+
+def test_periodo_parcial_nao_usa_o_nome_do_mes_fechado(mapa):
+    """Pedir 01/07 a 15/07 para tirar uma dúvida gravava por cima do extrato
+    de julho já arquivado, e nada barrava: a trava de paginação aprova,
+    porque o extrato parcial está completo *para o período pedido*."""
+    d = mapa.de("ALFA SPE - SICOOB")
+    fechado = cm.nome_arquivo(d, 2026, 7)
+    parcial = cm.nome_arquivo(d, 2026, 7, periodo="01-07-2026 a 15-07-2026")
+    assert fechado == "202607 SICOOB MAIS CONTROLE.pdf"
+    assert parcial == "01-07-2026 a 15-07-2026 SICOOB MAIS CONTROLE.pdf"
+    assert parcial != fechado
+
+
+def test_periodo_parcial_preserva_o_sufixo_da_conta(mapa):
+    # O desempate das contas que dividem a pasta vale para os dois nomes.
+    d = mapa.de("BETA LTDA SICOOB - 11111-1")
+    assert cm.nome_arquivo(d, 2026, 7, periodo="01-07-2026 a 15-07-2026") == (
+        "01-07-2026 a 15-07-2026 SICOOB MAIS CONTROLE 11111-1.pdf")
+
+
+def _rf():
+    from relatorio_frame import RelatorioFrame
+    return RelatorioFrame
+
+
+@pytest.mark.parametrize("ini,fim", [
+    (datetime.date(2026, 7, 1), datetime.date(2026, 7, 31)),   # julho inteiro
+    (datetime.date(2024, 2, 1), datetime.date(2024, 2, 29)),   # bissexto
+])
+def test_mes_fechado_continua_com_o_nome_de_sempre(ini, fim):
+    assert _rf()._mes_fechado(ini, fim)
+    assert _rf()._periodo_no_nome(ini, fim) == ""
+
+
+@pytest.mark.parametrize("ini,fim", [
+    (datetime.date(2026, 7, 1), datetime.date(2026, 7, 15)),   # meio do mês
+    (datetime.date(2026, 7, 2), datetime.date(2026, 7, 31)),   # falta o dia 1
+    (datetime.date(2026, 7, 1), datetime.date(2026, 8, 31)),   # dois meses
+])
+def test_periodo_que_nao_e_mes_fechado_leva_as_duas_datas(ini, fim):
+    assert not _rf()._mes_fechado(ini, fim)
+    nome = _rf()._periodo_no_nome(ini, fim)
+    assert nome == f"{ini:%d-%m-%Y} a {fim:%d-%m-%Y}"
+    # nome de arquivo válido no Windows: nada de \ / : * ? " < > |
+    assert not set(nome) & set('\\/:*?"<>|')
+
+
+# --------------------------------------------- a trava, na aba de verdade
+
+class _AnxFalso:
+    """O dono do navegador, de mentira. Guarda o que foi submetido: é o que
+    separa "barrou antes do primeiro download" de "barrou depois"."""
+
+    def __init__(self):
+        self.submetidos = []
+
+    def avisar_se_ocupado(self, _quem):
+        return False
+
+    def submeter(self, *a, **_k):
+        self.submetidos.append(a)
+        return None
+
+
+@pytest.fixture
+def dito(monkeypatch):
+    """O que a aba mostrou em caixa de diálogo."""
+    import relatorio_frame
+    ditos = []
+    for funcao in ("showwarning", "showinfo", "showerror"):
+        monkeypatch.setattr(relatorio_frame.messagebox, funcao,
+                            lambda t, m, _l=ditos: _l.append((t, m)))
+    return ditos
+
+
+def _aba(raiz, mapa, contas):
+    """A aba sem `_build`: `gerar()` só toca no mapa, nas marcações e no anx."""
+    import tkinter as tk
+    aba = _rf().__new__(_rf())
+    aba.worker = None
+    aba.q = queue.Queue()
+    aba._parar = Event()
+    aba.mapa = mapa
+    aba.anx = _AnxFalso()
+    aba.contas = contas
+    aba.vars_contas = {c["id"]: tk.BooleanVar(master=raiz, value=True)
+                       for c in contas}
+    aba.sem_destino = set()
+    aba.v_personalizado = tk.BooleanVar(master=raiz, value=False)
+    aba.v_mes = tk.StringVar(master=raiz, value="Julho")
+    aba.v_ano = tk.StringVar(master=raiz, value="2026")
+    aba.v_ini = tk.StringVar(master=raiz, value="01/07/2026")
+    aba.v_fim = tk.StringVar(master=raiz, value="15/07/2026")
+    return aba
+
+
+def test_caminho_longo_barra_antes_do_primeiro_download(raiz, tmp_path, dito):
+    """A conferência existia desde sempre e não tinha um único chamador.
+    Estourar os 260 aparecia como falha de escrita na conta 7 de 34, com
+    causa nada óbvia — e as 6 primeiras já tinham custado meia hora de ERP."""
+    mapa = cm.carregar(_mapa_absurdo(tmp_path))
+    aba = _aba(raiz, mapa, [{"id": "1", "nome": "CONTA ENORME"}])
+    aba.gerar()
+    assert aba.anx.submetidos == []           # nada foi baixado
+    assert dito and "CONTA ENORME" in dito[0][1]
+    assert str(cm.LIMITE_CAMINHO) in dito[0][1]
+
+
+def test_caminho_dentro_do_limite_deixa_o_lote_seguir(raiz, tmp_path, dito):
+    mapa = cm.carregar(_mapa_absurdo(tmp_path))
+    aba = _aba(raiz, mapa, [{"id": "1", "nome": "CONTA NORMAL"}])
+    aba.gerar()
+    assert dito == []
+    assert len(aba.anx.submetidos) == 1

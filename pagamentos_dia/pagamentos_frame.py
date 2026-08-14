@@ -126,6 +126,11 @@ class PagamentosDiaFrame(ttk.Frame):
         #: planilha de volta seria reparsear texto formatado para reconstruir
         #: número, e ela é relatório, não fonte.
         self.resultado = None
+        #: O período que gerou o `self.resultado`. Existe para o passo 3 poder
+        #: recusar quando a pessoa trocou as datas na tela depois de gerar a
+        #: planilha: o que está em memória seria de outro dia, e a janela da
+        #: remessa não tem como saber disso sozinha.
+        self._periodo_do_resultado = None
 
         hoje = datetime.date.today()
         self.v_ini = tk.StringVar(value=f"{hoje:%d/%m/%Y}")
@@ -325,6 +330,14 @@ class PagamentosDiaFrame(ttk.Frame):
         # rodando — até reiniciar o app.
         if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
             return
+        # A planilha do período ANTERIOR morre aqui. Sem isto, `self.resultado`
+        # sobrevivia à busca nova, o `_drain` reabilitava o passo 3 por causa
+        # dele, e um clique em "3" no lugar de "2" abria a janela com a lista
+        # de ONTEM — toda pré-marcada, e com o "seu número" recarimbado com a
+        # data de hoje, o que driblava a única trava contra repetir. O passo 3
+        # só volta a existir depois que o passo 2 rodar de novo.
+        self.resultado = None
+        self._periodo_do_resultado = None
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Abrindo o Mais Controle..."))
@@ -574,6 +587,7 @@ class PagamentosDiaFrame(ttk.Frame):
                 regras_fornecedor=regras.carregar_fornecedores(),
                 ids_nao_confirmados=nao_confirmados)
             self.resultado = resultado
+            self._periodo_do_resultado = (ini, fim)
             registros, omitidos = resultado.contas, resultado.omitidos
             if not registros and not omitidos:
                 self.q.put(("status", "Nenhuma linha para as contas marcadas."))
@@ -667,6 +681,25 @@ class PagamentosDiaFrame(ttk.Frame):
         if not self.resultado:
             messagebox.showinfo("Remessa", "Gere a planilha primeiro (passo 2).")
             return
+        # O período na tela pode ter mudado depois do passo 2 sem que ninguém
+        # tenha clicado em "1. Buscar" — trocar a data não invalida nada
+        # sozinha. Gerar a remessa a partir de uma planilha de outro dia é o
+        # caminho para reenviar o que já foi pago, então aqui se pergunta em
+        # vez de supor.
+        try:
+            periodo_agora = self._periodo()
+        except ValueError:
+            periodo_agora = None
+        if periodo_agora and self._periodo_do_resultado \
+                and periodo_agora != self._periodo_do_resultado:
+            ini, fim = self._periodo_do_resultado
+            if not messagebox.askyesno(
+                    "Remessa",
+                    f"A planilha em memória é de {ini:%d/%m/%Y} a {fim:%d/%m/%Y}, "
+                    f"e as datas na tela são outras.\n\n"
+                    "A remessa sai da planilha, não das datas. Gerar assim mesmo?",
+                    default="no"):
+                return
         try:
             mapa_mc = contas_mc.carregar()
             cadastro = sicoob_contas.carregar()
@@ -674,8 +707,14 @@ class PagamentosDiaFrame(ttk.Frame):
             messagebox.showerror("Remessa", f"Não consegui ler o cadastro:\n{e}")
             return
 
+        # O histórico entra ANTES do preparo, e não depois: é ele quem responde
+        # "este boleto já saiu numa remessa?", e essa resposta tem de virar
+        # IMPEDIMENTO — linha que não aparece marcável —, não um aviso depois
+        # de a pessoa já ter conferido a lista.
+        historico = _historico()
         preparado = remessa_dia.preparar(self.resultado.contas,
-                                         self.participantes)
+                                         self.participantes,
+                                         historico=historico)
         pagadores, recusadas = {}, []
         for conta in preparado:
             pagador, motivo = remessa_dia.resolver_pagador(
@@ -692,7 +731,6 @@ class PagamentosDiaFrame(ttk.Frame):
                 + "\n".join(f"• {c}: {m}" for c, m in recusadas[:8]))
             return
 
-        historico = _historico()
         if not self._janela_remessa(preparado, pagadores, recusadas, historico):
             self.q.put(("status", "Remessa cancelada — nada foi gravado."))
             return
@@ -732,17 +770,34 @@ class PagamentosDiaFrame(ttk.Frame):
         painel.pack(side="left", fill="both", expand=True)
         barra.pack(side="left", fill="y")
 
+        # Duas contas da MESMA empresa dividem o convênio, e `proximo_nsa` é
+        # CONSULTA, não reserva: as duas mostravam "arquivo nº 000031" enquanto
+        # a gravação daria 31 a uma e 32 à outra. Quem conferisse pelo número
+        # da tela procuraria um arquivo que não existe.
+        proximos: dict[str, int] = {}
         for conta, pagador in pagadores.items():
             linhas = preparado[conta]
-            nsa = historico.proximo_nsa(pagador.convenio)
+            if pagador.convenio not in proximos:
+                proximos[pagador.convenio] = historico.proximo_nsa(pagador.convenio)
+            nsa = proximos[pagador.convenio]
+            proximos[pagador.convenio] = nsa + 1
+
+            vao = [c for c in linhas if c.pode and c.marcado]
             cabecalho = ttk.Frame(dentro)
             cabecalho.pack(fill="x", pady=(10, 2))
             ttk.Label(cabecalho, style="Secao.TLabel",
                       text=f"{pagador.empresa} — ag {pagador.agencia}-"
                            f"{pagador.dv_agencia} / {pagador.conta}-{pagador.dv_conta}"
                       ).pack(side="left")
+            # Contagem e total ao lado do número do arquivo. Eles só existiam
+            # DEPOIS de gravar, no registro — então conferir "bate com o que eu
+            # esperava?" antes de mandar dinheiro dependia de somar na
+            # calculadora. As outras duas ações irreversíveis do app (Aportes e
+            # Acessórias) já dizem quantos e quanto antes de perguntar.
             ttk.Label(cabecalho, style="Apoio.TLabel",
-                      text=f"arquivo nº {nsa:06d}").pack(side="right")
+                      text=(f"{len(vao)} de {len([c for c in linhas if c.pode])} "
+                            f"· {relatorio.brl(sum(c.valor for c in vao))} "
+                            f"· arquivo nº {nsa:06d}")).pack(side="right")
 
             for c in linhas:
                 if not c.pode:
@@ -754,10 +809,18 @@ class PagamentosDiaFrame(ttk.Frame):
                     continue
                 v = tk.BooleanVar(value=c.marcado)
                 c._var = v                      # lido de volta no confirmar()
+                # O `status` e a `obs` existiam no Candidato e NÃO apareciam: a
+                # linha com "ATENÇÃO — valor do boleto diverge" era visualmente
+                # idêntica a uma linha limpa, e o único sinal era vir
+                # desmarcada — a um clique de ser marcada por quem está
+                # marcando todas. Agora o motivo vem escrito, e o alerta vem
+                # antes do resto para o olho bater nele primeiro.
+                alerta = "" if c.apto else f"⚠ {c.status}  "
+                detalhe = f"  ·  {c.obs[:70]}" if c.obs else ""
                 ttk.Checkbutton(
                     dentro, variable=v,
-                    text=(f"{c.tipo:<7} {relatorio.brl(c.valor):>14}  "
-                          f"{c.favorecido[:30]:<30}  {c.descricao[:40]}")
+                    text=(f"{alerta}{c.tipo:<7} {relatorio.brl(c.valor):>14}  "
+                          f"{c.favorecido[:30]:<30}  {c.descricao[:40]}{detalhe}")
                 ).pack(anchor="w")
 
         if recusadas:
@@ -822,10 +885,26 @@ class PagamentosDiaFrame(ttk.Frame):
                               f"validação, nada foi gravado.\n{_rel_cnab(problemas)}")
                     continue
                 caminho = destino / remessa_dia.nome_do_arquivo(pagador, nsa)
-                arquivo.salvar(caminho)
-                historico.registrar(
-                    arquivo, caminho_arquivo=caminho,
-                    referencias=remessa_dia.referencias(marcados))
+                # Grava num TEMPORÁRIO e só renomeia depois de o histórico
+                # aceitar. Na ordem antiga (`salvar` e então `registrar`), um
+                # registro recusado — NSA fora de ordem, "seu número" repetido,
+                # trava ocupada, JSON corrompido — deixava o `.REM` no disco
+                # com nome perfeitamente legítimo E sem consumir o NSA. Ficavam
+                # dois arquivos válidos com os MESMOS pagamentos, e subir os
+                # dois no SicoobNet é pagar duas vezes; pior, a remessa
+                # seguinte reusava o número e sobrescrevia o órfão, apagando o
+                # rastro. O `.tmp` não é zelo: é o que torna o par
+                # "arquivo existe" e "histórico sabe dele" indivisível.
+                provisorio = caminho.with_suffix(caminho.suffix + ".tmp")
+                arquivo.salvar(provisorio)
+                try:
+                    historico.registrar(
+                        arquivo, caminho_arquivo=caminho,
+                        referencias=remessa_dia.referencias(marcados))
+                except Exception:
+                    provisorio.unlink(missing_ok=True)
+                    raise
+                os.replace(provisorio, caminho)
             except Exception as e:
                 self._log(f"\n[!] {pagador.empresa}: {e}")
                 continue

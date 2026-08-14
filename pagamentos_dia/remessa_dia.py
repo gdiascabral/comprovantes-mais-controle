@@ -58,6 +58,24 @@ MOTIVO_SEM_DOCUMENTO = ("o favorecido não está no cadastro de Contatos do ERP,
 MOTIVO_CHAVE_AMBIGUA = ("chave Pix de onze dígitos sem tipo declarado — CPF e "
                         "celular têm os dois onze, e não bate com o cadastro")
 MOTIVO_JA_PAGO = "já pago"
+#: O aviso "PAGAR PARA <pessoa>" manda o dinheiro para quem NÃO é o favorecido
+#: do lançamento. O segmento B carrega UM par nome/documento, e os dois lados
+#: vinham de origens diferentes: o nome e o documento do FORNECEDOR (do cadastro
+#: de Contatos, casado pelo `paidTo`) com a chave Pix DA PESSOA. Os campos
+#: 07.3B/08.3B passavam a contradizer a Informação 12, e o validador não vê —
+#: ou o banco recusa o registro, ou paga sob documento de terceiro.
+#: A observação equivalente ("PAGAR À MÃO") já era impedimento; o anexo não era,
+#: e ainda por cima nascia MARCADO, porque a planilha o classifica como APTO.
+MOTIVO_REEMBOLSO = ("reembolso: o aviso manda pagar outra pessoa, e a remessa só "
+                    "sabe declarar um favorecido — pague à mão")
+#: A planilha trata divergência de valor como alarme, e está certa: lá a linha
+#: existe para alguém abrir o boleto e olhar. Aqui ela viraria dinheiro saindo
+#: pelo valor do LANÇAMENTO, que é justamente o lado que o boleto contradiz —
+#: e a janela vinha sem mostrar o motivo, a um clique de ser marcada.
+MOTIVO_VALOR_DIVERGE = ("o boleto diz um valor e o lançamento diz outro — "
+                        "confira o documento antes de pagar")
+#: Preenchido com o número da remessa anterior: "já saiu na remessa nº 000031".
+MOTIVO_JA_ENVIADO = "já saiu na remessa nº {nsa:06d} de {quando}"
 MOTIVO_SEM_CONVENIO = "empresa sem convênio de remessa cadastrado"
 MOTIVO_FORA_SICOOB = "a remessa CNAB 240 é do Sicoob; esta conta é de outro banco"
 MOTIVO_CONTA_DESCONHECIDA = "conta não está no mapa (contas_mc.json)"
@@ -275,6 +293,10 @@ def _impedimento(registro: dict, documento: str, forma: str) -> str:
         return MOTIVO_JA_PAGO
     if "PAGAR À MÃO" in (registro.get("obs") or ""):
         return MOTIVO_MAO
+    if registro.get("reembolso"):
+        return MOTIVO_REEMBOLSO
+    if registro.get("valor_diverge"):
+        return MOTIVO_VALOR_DIVERGE
 
     dados = (registro.get("dados") or "").strip()
     if not dados:
@@ -300,8 +322,43 @@ def _impedimento(registro: dict, documento: str, forma: str) -> str:
     return f"forma de pagamento sem remessa: {registro.get('tipo') or '?'}"
 
 
+def _ja_enviado(historico, codigo_barras: str, referencia) -> str:
+    """"Este boleto/lançamento já saiu numa remessa?" — "" quando não saiu.
+
+    O histórico sabia responder isto desde que existe (`envio_de` e
+    `envio_da_referencia`) e **ninguém perguntava**. A única trava contra
+    repetir era o "seu número", que começa com a data do dia — logo, ela só
+    pega repetição dentro do MESMO dia. Refazer o dia seguinte com o título
+    ainda aberto (porque o retorno do banco não foi lido) mandava o mesmo
+    boleto de novo, com NSA novo, validador limpo e nenhum alarme.
+
+    Pergunta pelas DUAS chaves porque elas falham em situações diferentes: o
+    código de barras identifica o título mesmo que o lançamento tenha sido
+    recriado no ERP, e a referência (o id do lançamento) pega o Pix, que não
+    tem código de barras.
+
+    Só remessa VIVA conta — `descartar()` existe justamente para devolver o
+    direito de reenviar, e o histórico já filtra isso sozinho.
+    """
+    if historico is None:
+        return ""
+    for chave, procurar in ((codigo_barras, historico.envio_de),
+                            (str(referencia or ""), historico.envio_da_referencia)):
+        if not chave:
+            continue
+        achado = procurar(chave)
+        if not achado:
+            continue
+        remessa = achado[0]
+        quando = getattr(remessa, "gerado_em", None)
+        return MOTIVO_JA_ENVIADO.format(
+            nsa=remessa.nsa,
+            quando=f"{quando:%d/%m/%Y}" if quando else "data desconhecida")
+    return ""
+
+
 def preparar(contas: dict, participantes: dict | None = None,
-             quando: _dt.date | None = None) -> dict:
+             quando: _dt.date | None = None, historico=None) -> dict:
     """`{conta do ERP: [Candidato, ...]}` a partir do resultado da planilha.
 
     Recebe o `Resultado.contas` do `relatorio.montar_registros`, para que a
@@ -311,6 +368,11 @@ def preparar(contas: dict, participantes: dict | None = None,
     `participantes` é o `{nome normalizado: CPF/CNPJ}` do cadastro de Contatos
     do ERP (`mc_api.listar_participantes`). Sem ele, só sai Pix cuja chave já
     seja o próprio documento.
+
+    `historico` é o `cnab240.Historico`. Passando-o, o que já saiu numa remessa
+    viva vira IMPEDIMENTO em vez de sair de novo — a trava que faltava contra
+    pagar duas vezes em dias diferentes. Sem ele a função continua funcionando
+    igual, e é assim que os testes de regra a chamam.
     """
     quando = quando or _dt.date.today()
     sequencia = 0
@@ -327,6 +389,14 @@ def preparar(contas: dict, participantes: dict | None = None,
                 forma = forma_de_iniciacao(dados, do_cadastro)
 
             impedimento = _impedimento(registro, documento, forma)
+            # O código de barras sai ANTES da consulta ao histórico: é ele a
+            # chave natural de "este boleto já saiu?". Custa o mesmo que sairia
+            # depois, e evita perguntar ao histórico com a mão vazia.
+            codigo = (ocr_boleto.codigo_de_barras(dados)
+                      if registro.get("tipo") == "Boleto" else "")
+            if not impedimento:
+                impedimento = _ja_enviado(historico, codigo, registro.get("id"))
+
             candidato = Candidato(
                 id=str(registro.get("id") or ""),
                 conta_erp=conta,
@@ -343,7 +413,7 @@ def preparar(contas: dict, participantes: dict | None = None,
                 candidato.seu_numero = _seu_numero(quando, sequencia,
                                                    candidato.descricao)
                 if candidato.tipo == "Boleto":
-                    candidato.codigo_barras = ocr_boleto.codigo_de_barras(dados)
+                    candidato.codigo_barras = codigo
                 else:
                     candidato.chave = dados
                     candidato.documento_favorecido = documento
@@ -456,46 +526,14 @@ def referencias(candidatos) -> dict:
 # por lançamento) do CNPJ da própria empresa (o mesmo em todos).
 
 
-def _dv_cpf(d: str) -> bool:
-    if len(d) != 11 or len(set(d)) == 1:
-        return False
-    for tamanho in (9, 10):
-        soma = sum(int(d[i]) * (tamanho + 1 - i) for i in range(tamanho))
-        resto = (soma * 10) % 11 % 10
-        if resto != int(d[tamanho]):
-            return False
-    return True
-
-
-#: Pesos do DV do CNPJ, do 2º dígito para trás. O 1º DV usa os 12 últimos;
-#: o 2º, os 13. Escritos por extenso de propósito: a versão calculada saía
-#: deslocada em uma posição e reprovava CNPJ legítimo em silêncio.
-_PESOS_CNPJ = (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
-
-
-def _dv_cnpj(d: str) -> bool:
-    if len(d) != 14 or len(set(d)) == 1:
-        return False
-    for tamanho in (12, 13):
-        pesos = _PESOS_CNPJ[-tamanho:]
-        soma = sum(int(d[i]) * pesos[i] for i in range(tamanho))
-        resto = soma % 11
-        if (0 if resto < 2 else 11 - resto) != int(d[tamanho]):
-            return False
-    return True
-
-
-def documento_valido(valor) -> str:
-    """Os dígitos, se forem um CPF ou CNPJ que fecha. Senão, "".
-
-    Os dígitos verificadores não são preciosismo: sem eles, todo telefone de
-    onze dígitos viraria "CPF encontrado" e o diagnóstico apontaria para o
-    campo errado — que é exatamente o erro que ele existe para evitar.
-    """
-    if isinstance(valor, bool) or not isinstance(valor, (str, int)):
-        return ""
-    digitos = re.sub(r"\D", "", str(valor))
-    return digitos if (_dv_cpf(digitos) or _dv_cnpj(digitos)) else ""
+#: Os dígitos verificadores mudaram de casa para `regras_pagamento`, que é o
+#: módulo que a remessa E o relatório já importam: a planilha precisa da mesma
+#: resposta para não exibir uma chave Pix que o OCR leu errado. Os nomes
+#: continuam aqui porque é por eles que o resto do módulo — e os testes —
+#: chamam; o que não existe mais é uma segunda implementação.
+_dv_cpf = regras._dv_cpf
+_dv_cnpj = regras._dv_cnpj
+documento_valido = regras.documento_valido
 
 
 def documentos_em(payload, prefixo: str = "") -> dict:

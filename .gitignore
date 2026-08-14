@@ -23,10 +23,21 @@ codigo/
 debug/
 aportes/.chrome_profile*/
 aportes/conferencia.json
-aportes/contas.csv
 aportes/teste_lancamento.json
 aportes/teste_lancamento.local.json
-aportes/subcontas.json
+# Cadastro de quem aporta e dos grupos por subconta: nome de pessoa física e
+# número de conta. Sem prefixo de pasta de propósito — a regra tem de valer
+# na raiz E em `aportes/`.
+#
+# Estavam presos a `aportes/` e isso virou buraco quando o cadastro passou a
+# vir da nuvem: `nuvem/cache.py` regrava os arquivos em `util.pasta_base()`,
+# que rodando como SCRIPT é a raiz do repositório. Bastava alguém abrir o app
+# pelo código-fonte para os dois nascerem fora de qualquer regra.
+contas.csv
+subcontas.json
+# Regras de reconhecimento de boleto por e-mail: remetente, fornecedor do ERP
+# e os textos que descrevem casos reais. Mesma razão do pix_reembolso.json.
+regras_boletos.json
 # Saída da aba Relatório Mensal (extratos em PDF — dado da empresa).
 # Só a pasta da raiz, e COM acento: no Windows o git ignora maiúsculas, e
 # "Relatorios/" sem acento casaria com a pasta de código "relatorios/".
@@ -69,6 +80,13 @@ remessas.json*
 # de barras, chave Pix, valor e favorecido em texto puro.
 *.REM
 *.rem
+# O outro lado da mesma conversa: o RETORNO que o banco devolve. Estava de fora
+# porque só a remessa era gerada aqui — mas o retorno traz os MESMOS dados (o
+# favorecido, o valor, o código de barras) mais o que o banco respondeu sobre
+# cada um, e é o arquivo que se salva na pasta do app para conferir depois.
+# Proteger a ida e vazar a volta é o pior dos dois mundos.
+*.RET
+*.ret
 # Conciliação Diária: o mapa das contas do painel, os rateios de aporte e o
 # modelo da planilha. Nome de empresa e estrutura financeira — fica ao lado do
 # exe, nunca no repositório.
@@ -84,6 +102,16 @@ browser-profile/
 
 # Marcador da senha de primeira utilização: é por MÁQUINA, nunca do repositório.
 ativacao.dat
+# A sessão da nuvem, cifrada pela DPAPI. Entra aqui pelo mesmo motivo do
+# login.dat: é credencial, ainda que só desta máquina.
+sessao.dat
+# O lugar onde toda ferramenta do mundo manda guardar segredo. Nenhum código
+# daqui lê um `.env` hoje, e é justamente por isso que ele entra: quem for
+# experimentar a chave de serviço do Supabase (a que ignora a RLS inteira) vai
+# criar esse arquivo por hábito, e a regra tem de existir ANTES. Sem prefixo de
+# pasta de propósito — vale na raiz e em qualquer subpasta.
+.env
+.env.*
 
 # Logs de qualquer módulo (diagnostico, atualizacao, log_anexos...). A regra
 # ampla existe porque log novo aparece com frequência e sempre carrega dado da

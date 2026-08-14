@@ -496,6 +496,194 @@ def test_salvar_grava_240_por_linha(tmp_path):
             assert len(linha) == 240
 
 
+def remessa_de_uma_linha() -> ArquivoRemessa:
+    arquivo = ArquivoRemessa(empresa(), nsa=1, data_geracao=HOJE)
+    arquivo.novo_lote("TRANSFERENCIA_SICOOB").adicionar(
+        TransferenciaConta(valor="10.00", data_pagamento=HOJE, favorecido=favorecido())
+    )
+    return arquivo
+
+
+def test_salvar_cria_a_pasta_que_ainda_nao_existe(tmp_path):
+    # A pasta do dia/mês pode não existir. Falhar aqui gastaria o NSA sem
+    # arquivo — furo no histórico que ninguém sabe explicar depois.
+    destino = tmp_path / "2026" / "AGOSTO" / "REMESSAS" / "REM.txt"
+    assert not destino.parent.exists()
+    assert remessa_de_uma_linha().salvar(destino).exists()
+
+
+def test_salvar_recusa_arquivo_que_o_banco_rejeitaria_inteiro(tmp_path):
+    """O validador existia e era bom — só não era chamado na gravação."""
+    arquivo = remessa_de_uma_linha()
+    linhas = arquivo.gerar()
+    linhas[2] = linhas[2][:239]  # registro com 239 posições: erro de ARQUIVO
+    arquivo.gerar = lambda: linhas  # type: ignore[method-assign]
+
+    destino = tmp_path / "REM.txt"
+    with pytest.raises(RemessaInvalida, match="239 posições"):
+        arquivo.salvar(destino)
+    assert not destino.exists()  # e nada foi escrito pela metade
+
+
+def test_salvar_sem_validar_e_a_saida_para_depurar(tmp_path):
+    arquivo = remessa_de_uma_linha()
+    linhas = arquivo.gerar()
+    linhas[2] = linhas[2][:239]
+    arquivo.gerar = lambda: linhas  # type: ignore[method-assign]
+    assert arquivo.salvar(tmp_path / "REM.txt", validar_antes=False).exists()
+
+
+# --------------------------------------------------------------------------
+# Dinheiro: 2 casas ou recusa
+# --------------------------------------------------------------------------
+
+
+def test_valor_com_tres_casas_decimais_e_recusado():
+    """Arredondar sozinho faria o trailer divergir e o banco recusaria tudo.
+
+    Três parcelas de 33,3333 gravam três registros de 33,33 (99,99) debaixo de
+    um trailer que declara 100,00 — e divergência de somatória derruba o
+    ARQUIVO inteiro, não a linha. Como é dinheiro de outra pessoa, quem decide
+    para onde vai o centavo é quem chama, não a biblioteca.
+    """
+    with pytest.raises(ValueError, match="mais de 2 casas decimais"):
+        TransferenciaConta(
+            valor=Decimal("33.3333"), data_pagamento=HOJE, favorecido=favorecido()
+        )
+
+
+def test_valor_com_duas_casas_ou_menos_passa():
+    # Menos que duas casas é legítimo: 33,3 e 33 são exatos em centavos.
+    for bruto, esperado in [
+        (Decimal("33.33"), Decimal("33.33")),
+        (Decimal("33.3"), Decimal("33.3")),
+        (Decimal("33"), Decimal("33")),
+        ("1500.00", Decimal("1500.00")),
+        (1500, Decimal("1500")),
+    ]:
+        pagamento = TransferenciaConta(
+            valor=bruto, data_pagamento=HOJE, favorecido=favorecido()
+        )
+        assert pagamento.valor == esperado
+
+
+def test_tres_parcelas_de_um_terco_nao_chegam_a_gerar_arquivo():
+    # O caso real: 100,00 dividido em três. O erro aparece no primeiro
+    # pagamento, e não num trailer divergente descoberto pelo banco.
+    arquivo = ArquivoRemessa(empresa(), nsa=1, data_geracao=HOJE)
+    lote = arquivo.novo_lote("TRANSFERENCIA_SICOOB")
+    with pytest.raises(ValueError, match="mais de 2 casas decimais"):
+        lote.adicionar(
+            *[
+                TransferenciaConta(
+                    valor=Decimal("33.3333"), data_pagamento=HOJE, favorecido=favorecido()
+                )
+                for _ in range(3)
+            ]
+        )
+
+
+def test_campos_monetarios_opcionais_do_segmento_b_seguem_a_mesma_regua():
+    # Estes cinco nem por dinheiro() passavam: iam crus para a gravação.
+    with pytest.raises(ValueError, match="mais de 2 casas decimais"):
+        TransferenciaConta(
+            valor="10.00", data_pagamento=HOJE, favorecido=favorecido(),
+            mora=Decimal("0.001"),
+        )
+    pagamento = TransferenciaConta(
+        valor="10.00", data_pagamento=HOJE, favorecido=favorecido(),
+        valor_documento="12.50", desconto=Decimal("1.5"),
+    )
+    assert pagamento.valor_documento == Decimal("12.50")
+    assert pagamento.desconto == Decimal("1.5")
+    assert pagamento.abatimento is None  # não informado continua não informado
+
+
+# --------------------------------------------------------------------------
+# Agência e conta com máscara
+# --------------------------------------------------------------------------
+
+
+def test_agencia_e_conta_com_mascara_nao_colam_o_dv_no_numero():
+    """"0910-5" é agência 0910 com DV 5 — nunca a agência 09105.
+
+    Cru, o fmt_num tirava a pontuação e tratava o resto como número pronto: a
+    agência virava 09105 e a conta, 000000456781. Números plausíveis, o
+    validador aprovava, e o dinheiro caía em outra conta.
+    """
+    f = Favorecido(nome="JOAO DA SILVA", documento="123.456.789-09", banco="341",
+                   agencia="0910-5", conta="45.678-1")
+    assert (f.agencia, f.dv_agencia) == ("0910", "5")
+    assert (f.conta, f.dv_conta) == ("45678", "1")
+
+    e = Empresa(nome="ACME LTDA", documento="12.345.678/0001-99", convenio="123456",
+                agencia="4321-0", conta="12.345-6", dv_conta="")
+    assert (e.agencia, e.dv_agencia, e.conta, e.dv_conta) == ("4321", "0", "12345", "6")
+
+
+def test_agencia_com_mascara_chega_certa_ao_segmento_a():
+    arquivo = ArquivoRemessa(empresa(), nsa=1, data_geracao=HOJE)
+    arquivo.novo_lote("TED", forma_lancamento=FormaLancamento.TED_OUTRA_TITULARIDADE).adicionar(
+        TransferenciaConta(
+            valor="10.00", data_pagamento=HOJE, finalidade_ted="5",
+            favorecido=Favorecido(nome="JOAO DA SILVA", documento="12345678909",
+                                  banco="341", agencia="0910-5", conta="45.678-1"),
+        )
+    )
+    a = [l for l in arquivo.gerar() if l[13] == "A"][0]
+    assert a[23:28] == "00910"          # agência, sem o DV grudado
+    assert a[28:29] == "5"              # DV da agência
+    assert a[29:41] == "000000045678"   # conta
+    assert a[41:42] == "1"              # DV da conta
+
+
+def test_agencia_e_conta_grandes_demais_sao_recusadas():
+    with pytest.raises(ValueError, match="agência do favorecido"):
+        Favorecido(nome="X", documento="12345678909", banco="341", agencia="123456")
+    with pytest.raises(ValueError, match="conta do favorecido"):
+        Favorecido(nome="X", documento="12345678909", banco="341", conta="1234567890123")
+
+
+def test_dv_que_nao_e_digito_e_recusado_em_vez_de_virar_branco():
+    # DV "X" existe em outros bancos; o campo do CNAB é numérico. Deixá-lo
+    # virar branco trocaria a conta de destino sem nada denunciar.
+    with pytest.raises(ValueError, match="não é um dígito"):
+        Favorecido(nome="X", documento="12345678909", banco="341",
+                   conta="12345", dv_conta="X")
+
+
+def test_dv_da_mascara_que_contradiz_o_campo_e_recusado():
+    with pytest.raises(ValueError, match="Um dos dois está errado"):
+        Favorecido(nome="X", documento="12345678909", banco="341",
+                   conta="45.678-1", dv_conta="2")
+
+
+# --------------------------------------------------------------------------
+# O produto e o banco do favorecido
+# --------------------------------------------------------------------------
+
+
+def test_ted_recusa_favorecido_do_proprio_sicoob():
+    """Favorecido.banco vale 756 por omissão — esquecer o banco= era mudo."""
+    arquivo = ArquivoRemessa(empresa(), nsa=1, data_geracao=HOJE)
+    lote = arquivo.novo_lote("TED", forma_lancamento=FormaLancamento.TED_OUTRA_TITULARIDADE)
+    with pytest.raises(RemessaInvalida, match="banco="):
+        lote.adicionar(
+            TransferenciaConta(
+                valor="10.00", data_pagamento=HOJE, favorecido=favorecido(), finalidade_ted="5"
+            )
+        )
+
+
+def test_transferencia_sicoob_recusa_favorecido_de_outro_banco():
+    arquivo = ArquivoRemessa(empresa(), nsa=1, data_geracao=HOJE)
+    lote = arquivo.novo_lote("TRANSFERENCIA_SICOOB")
+    with pytest.raises(RemessaInvalida, match="sai por TED"):
+        lote.adicionar(
+            TransferenciaConta(valor="10.00", data_pagamento=HOJE, favorecido=favorecido("341"))
+        )
+
+
 # --------------------------------------------------------------------------
 # Validador
 # --------------------------------------------------------------------------

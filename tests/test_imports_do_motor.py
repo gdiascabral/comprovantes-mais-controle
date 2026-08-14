@@ -27,11 +27,15 @@ _RAIZ = Path(__file__).resolve().parent.parent
 #: Pastas de código que viajam no codigo.zip (ver a lista no CLAUDE.md).
 _PASTAS = ("", "separar_renomear", "anexar", "aportes", "relatorios",
            "pagamentos_dia", "extratos_sicoob", "conciliacao",
-           "conciliacao/erp", "contratos", "acessorias", "cnab240")
+           "conciliacao/erp", "contratos", "acessorias", "cnab240", "nuvem")
 
 #: Não são código de aba: o motor e o atualizador rodam DENTRO do exe, onde
 #: a biblioteca padrão está completa — quem os empacota é o PyInstaller.
-_FORA = {"motor.py", "atualizador.py"}
+#:
+#: `nuvem/migrar.py` também fica fora, e por um motivo diferente: ele não
+#: entra no codigo.zip (é ferramenta rodada à mão, no repositório), então
+#: pode importar o que quiser sem passar pelo motor.
+_FORA = {"motor.py", "atualizador.py", "migrar.py"}
 
 
 def _arquivos_do_app():

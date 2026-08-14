@@ -32,6 +32,14 @@ class MapaInvalido(RuntimeError):
 class Conta:
     numero: str                 # como a pessoa escreve: "50.019-4"
     pasta: str                  # subpasta de destino dentro da empresa
+    #: Desempate quando VÁRIAS contas dividem a mesma pasta (o caso da Moura
+    #: Dantas, com quatro). Sem ele as duas gravavam "202607 SICOOB.ofx" no
+    #: mesmo lugar e a segunda passava por cima da primeira em silêncio: cada
+    #: OFX foi conferido contra a SUA conta, então a trava do ACCTID aprova os
+    #: dois, e o relatório fecha com "13 de 13 contas completas". É o MESMO
+    #: campo, com o MESMO nome, do `contas_mc.Destino` — uma conta, um
+    #: desempate, para o PDF do ERP e o OFX do banco terminarem igual.
+    sufixo: str = ""
     empresa: str = ""
     #: Para a remessa CNAB 240: o header do arquivo identifica o pagador por
     #: CNPJ + agencia + conta, e a agencia e da CONTA, nao da empresa (uma
@@ -135,6 +143,7 @@ def carregar(caminho: Path | None = None) -> Mapa:
                 raise MapaInvalido(
                     f"Conta incompleta em '{nome}': precisa de 'numero' e 'pasta'.")
             contas.append(Conta(numero=numero, pasta=pasta, empresa=nome,
+                                sufixo=(c.get("sufixo") or "").strip(),
                                 banco=(c.get("banco") or "").strip(),
                                 agencia=(c.get("agencia") or "").strip()))
         empresas.append(Empresa(
@@ -227,13 +236,48 @@ def adicionar_cliente_erp(empresa: str, cliente: str,
 _RE_SUBCONTA = re.compile(r"^SUBCONTA - \d{5}-\d( - .+)? - SICOOB$")
 
 
+def impedimentos(mapa: Mapa) -> list[str]:
+    """Os problemas que BARRAM o lote, em vez de só aparecerem no registro.
+
+    Hoje é um só: duas contas da mesma empresa que gravariam o MESMO arquivo.
+    Dividir a pasta é legítimo — e o banco autoriza, com `unique (empresa_id,
+    pasta, sufixo)` —; quem separa uma da outra no nome do arquivo é o
+    `sufixo`. Sem ele a segunda passa por cima da primeira e NADA denuncia:
+    a pasta é escolhida pela conta, cada OFX é conferido contra a SUA conta
+    (a trava do ACCTID aprova os dois), o `shutil.move` sobrescreve calado e
+    o relatório fecha com "13 de 13 contas completas".
+
+    Por isso é impedimento, e não aviso: é o mesmo espírito de "conta sem
+    destino trava o lote antes do primeiro download". Só que aqui o estrago
+    já aconteceu quando alguém percebe — o arquivo perdido não volta.
+
+    Separada de `validar` para que quem chama possa distinguir "cadastro
+    estranho, siga" de "não pode rodar assim". `validar` inclui esta lista,
+    então nada deixa de aparecer no registro."""
+    problemas: list[str] = []
+    for e in mapa.empresas:
+        vistos: dict[tuple[str, str], str] = {}
+        for c in e.contas:
+            # `norm_espaco` é a MESMA comparação de nome usada para escolher
+            # a pasta: "SICOOB " e "SICOOB" são o mesmo destino, e comparar
+            # texto cru deixaria a colisão passar por diferença de espaço.
+            chave = (util.norm_espaco(c.pasta), util.norm_espaco(c.sufixo))
+            if chave in vistos:
+                problemas.append(
+                    f"Em '{e.nome}', as contas {vistos[chave]} e {c.numero} "
+                    f"gravam o MESMO arquivo dentro de '{c.pasta}' — uma "
+                    f"apagaria a outra. Dê um 'sufixo' diferente a cada uma.")
+            vistos[chave] = c.numero
+    return problemas
+
+
 def validar(mapa: Mapa) -> list[str]:
     """Devolve os problemas encontrados, em português, sem levantar exceção.
 
     Erro de digitação no mapa é o defeito mais caro deste projeto: manda o
     extrato de uma empresa para a pasta de outra. Vale conferir antes de rodar
     o lote, não depois."""
-    avisos: list[str] = []
+    avisos: list[str] = list(impedimentos(mapa))
 
     vistas: dict[str, Conta] = {}
     for c in mapa.contas:
@@ -246,7 +290,12 @@ def validar(mapa: Mapa) -> list[str]:
             avisos.append(f"Conta com formato estranho em '{c.empresa}': {c.numero}")
 
     for e in mapa.empresas:
-        subs = e.subpastas
+        # Pasta declarada duas vezes na ÁRVORE (uma `pastas_vazias` repetida,
+        # ou igual à de uma conta). Contas que dividem a pasta contam UMA vez:
+        # dividir passou a ser legítimo com o `sufixo`, e quem julga o destino
+        # delas é `impedimentos()`. Sem o `set` aqui, a Moura Dantas levaria
+        # quatro avisos de "pasta repetida" justamente por estar certa.
+        subs = e.pastas_vazias + sorted({c.pasta for c in e.contas})
         for s in sorted(set(subs)):
             if subs.count(s) > 1:
                 avisos.append(f"Pasta '{s}' repetida em '{e.nome}'.")
@@ -279,6 +328,9 @@ _MODELO = {
     "_ajuda": [
         "pastas_vazias: pastas criadas mas NÃO preenchidas por esta automação",
         "contas: contas do Sicoob; 'pasta' é o destino dos arquivos da conta",
+        "sufixo: só quando DUAS contas dividem a mesma pasta — ele entra no "
+        "fim do nome do arquivo e é o que impede uma de gravar por cima da "
+        "outra (use o número da conta)",
         "vip_url: endereço do escritório no portal Acessórias (aba Acessórias)",
         "vip_id: id da empresa na URL do portal (/<escritorio>/<id>/) — abra a "
         "empresa lá e copie o número",

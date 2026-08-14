@@ -200,6 +200,22 @@ def test_conta_de_ajuste_fica_de_fora():
     assert relatorio.conta_entra("TERRA BELA - SICOOB")
 
 
+@pytest.mark.parametrize("nome", [
+    "PESSOA FISICA - APENAS LANÇAMENTO",
+    "PESSOA FISICA - APENAS LANCAMENTO",     # sem cedilha
+    "pessoa fisica - apenas  lancamento",    # caixa e espaço dobrado
+    "CONTA ERRADA",
+])
+def test_conta_de_ajuste_nao_depende_de_acento(nome):
+    """O nome vem do cadastro do ERP, digitado por gente.
+
+    Era a ÚNICA comparação de nome do módulo que ainda casava contra o texto
+    cru: escrito sem cedilha, a conta de ajuste escapava da regra e nascia
+    MARCADA na tela, com os lançamentos dela entrando como aptos.
+    """
+    assert not relatorio.conta_entra(nome)
+
+
 def test_excluir_vence_incluir_e_ignora_acento():
     assert not relatorio.conta_entra("JOÃO VITOR - CONTA PESSOAL",
                                      incluir=["joao"], excluir=["joao vitor"])

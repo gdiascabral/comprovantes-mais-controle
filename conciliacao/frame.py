@@ -59,8 +59,11 @@ CampoData = widgets.CampoData
 #: "[!]" na frente, porque ela É a entrega quando a planilha não sai.
 ERROS_ESPERADOS = (ValidationError, WorkbookError, MappingError, ErpError)
 
-MESES = ("JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
-         "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO")
+#: A tabela de pasta mora em `util.MESES_PASTA`: as três cópias que
+#: existiam aqui produzem NOME DE PASTA no disco, e uma divergir entre
+#: elas parte o mês ao meio. O nome local continua porque é por ele que
+#: o resto do módulo chama.
+MESES = util.MESES_PASTA
 
 #: Onde a planilha do dia é arquivada, junto do resto do fechamento.
 RAIZ_SAIDA = Path("C:/Arquivos Morais/CONCILIACAO DIARIA")
@@ -78,6 +81,9 @@ class ConciliacaoFrame(ttk.Frame):
         self.worker = None
         self._parar = Event()
         self.ultimo_arquivo: Path | None = None
+        # Último motivo de falha do `_drain`, para não repetir a mesma linha a
+        # cada 150 ms (ver o `except` de lá).
+        self._erro_drain = None
 
         sugerido = sugerir_periodo(datetime.date.today())
         self.v_ini = tk.StringVar(value=f"{sugerido.inicio:%d/%m/%Y}")
@@ -165,7 +171,25 @@ class ConciliacaoFrame(ttk.Frame):
                     self.b_pasta.configure(state="normal")
         except queue.Empty:
             pass
-        self.after(150, self._drain)
+        except Exception as e:                              # noqa: BLE001
+            # A bomba de UI NUNCA pode morrer, e por isso o reagendamento está
+            # no `finally`. Um `tk.TclError` aqui (mexer num widget recém
+            # destruído, por exemplo) parava o ciclo para sempre: o registro
+            # congelava, os botões nunca voltavam e a coleta seguia rodando na
+            # thread do Anexar — sem ninguém saber sequer se dava para fechar o
+            # app. É o modelo do `_drain` do Anexar.
+            #
+            # O motivo vai para o próprio Registro, e não para o
+            # `diagnostico.log`: esta aba não importa o `config` do Anexar, e
+            # criar essa dependência só para registrar uma linha custaria mais
+            # do que resolve. Só quando MUDA — repetido a cada 150 ms, ele
+            # afogaria o que a pessoa precisa ler.
+            motivo = repr(e)
+            if motivo != self._erro_drain:
+                self._erro_drain = motivo
+                self.q.put(("log", f"[!] falha ao atualizar a tela: {motivo}"))
+        finally:
+            self.after(150, self._drain)
 
     def aplicar_cores(self, escuro: bool):
         try:

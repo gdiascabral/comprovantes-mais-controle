@@ -107,7 +107,13 @@ def para_data(valor) -> date | None:
 # --------------------------------------------------------------------------
 # Contas e período
 # --------------------------------------------------------------------------
-CONTAS_IGNORAR = re.compile(r"APENAS\s+LANÇAMENTO|APENAS\s+AJUSTE|ERRADA", re.I)
+#: Casa contra a forma SEM ACENTO (a que `chave()` produz), e não contra o nome
+#: cru. O nome vem do cadastro do ERP, digitado por gente: "APENAS LANCAMENTO"
+#: sem cedilha escapava da regra, e a conta de ajuste nascia MARCADA na tela,
+#: com os lançamentos dela entrando na planilha como aptos. Era a única
+#: comparação de nome do módulo que ainda dependia de acento — todas as outras
+#: passam por `chave()`.
+CONTAS_IGNORAR = re.compile(r"APENAS\s+LANCAMENTO|APENAS\s+AJUSTE|ERRADA", re.I)
 
 #: `dateField` do ERP -> campo correspondente no item devolvido.
 _DATEFIELD_CAMPO = {"PLANNED": "plannedDate", "PAYMENT": "dateOfPayment",
@@ -161,7 +167,7 @@ def nome_da_conta(item: dict) -> str:
 def conta_entra(conta: str, incluir=(), excluir=()) -> bool:
     """Casa por PEDAÇO do nome, sem acento e sem caixa. Excluir vence incluir."""
     alvo = chave(conta)
-    if CONTAS_IGNORAR.search(conta):
+    if CONTAS_IGNORAR.search(alvo):
         return False
     if any(e in alvo for e in excluir):
         return False
@@ -435,9 +441,36 @@ def chave_pix_do_aviso(files, textos: dict) -> str:
         m = _PAGAR_PARA.search(texto)
         janela = texto[m.end():m.end() + 300] if m else ""
         achado = chave_pix_por_padrao(janela)
-        if achado:
+        if achado and _chave_confiavel(achado):
             return achado
     return ""
+
+
+def _chave_confiavel(chave: str) -> bool:
+    """A chave lida do aviso resiste a um erro de OCR?
+
+    O aviso é uma FOTO, e aqui vale a mesma desconfiança que o `ocr_boleto`
+    já aplica à linha digitável: um dígito trocado manda o dinheiro para
+    outra pessoa, sem erro na tela e sem volta. A diferença é que a linha
+    digitável se defende sozinha (tem DV e codifica o valor) e a chave Pix
+    não — então quem tem DV é conferido, e o que não tem passa como está.
+
+    - 14 dígitos: só entra CNPJ que fecha;
+    - 11 dígitos: CPF que fecha entra; não fechando, só entra se o texto
+      estiver ESCRITO como telefone (parênteses, espaço ou +55). Onze dígitos
+      crus que não fecham são a ambiguidade de sempre — CPF e celular têm os
+      dois onze —, e aqui ela também não se resolve por chute: sem certeza, a
+      linha volta a ser "chave não cadastrada; abrir o aviso";
+    - e-mail, chave aleatória e o resto passam: não há o que conferir.
+    """
+    digitos = re.sub(r"\D", "", chave or "")
+    if len(digitos) == 14:
+        return bool(regras.documento_valido(digitos))
+    if len(digitos) == 11:
+        if regras.documento_valido(digitos):
+            return True
+        return bool(re.search(r"[()]|\+\s*55|\d\s+\d", chave or ""))
+    return True
 
 
 def mesma_chave(a: str, b: str) -> bool:
@@ -768,9 +801,6 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
 
     for item in lancamentos:
         conta = nome_da_conta(item)
-        if not conta_entra(conta, incluir, excluir):
-            continue
-
         files = anexos.get(str(item.get("tradePayableId"))) or []
         overview = overviews.get(str(item.get("id"))) or {}
         coment = comentario_do(overview)
@@ -779,6 +809,25 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         pago_para = (item.get("paidToBankAccount") or "").strip()
         valor = valor_do_item(item)
         favorecido = (item.get("paidTo") or "").strip()
+
+        # Conta fora do recorte. Era o ÚLTIMO `continue` mudo do módulo, e o
+        # único que não alimentava `omitidos` — a linha sumia sem motivo,
+        # contrariando o "omitir não é apagar" que rege todo o resto daqui.
+        # Pior: a aba mostra a conta "APENAS LANÇAMENTO/AJUSTE" desmarcada e
+        # não escondida, então a pessoa PODE marcá-la; este filtro a apagava
+        # assim mesmo, e descobrir isso dependia de sentir falta do pagamento
+        # — o que só acontece depois do vencimento.
+        # O preço de sair daqui e não lá em cima é calcular seis campos para
+        # uma linha que não entra; todos são leitura de dicionário, sem rede.
+        if not conta_entra(conta, incluir, excluir):
+            omitidos.append({
+                "conta": conta, "tipo": tipo, "valor": valor,
+                "descricao": monta_descricao(item, files, coment, overview),
+                "favorecido": favorecido,
+                "motivo": "conta fora do recorte — regra de conta ignorada "
+                          "(APENAS LANÇAMENTO/AJUSTE, ERRADA) ou filtro de "
+                          "contas da tela"})
+            continue
 
         do_item = [textos.get(f.get("downloadUrl") or "") for f in files]
         do_item = [t for t in do_item if t] + ([coment] if coment else [])
@@ -957,6 +1006,16 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # metade.
             "id": str(item.get("id") or ""),
             "parcial": bool(parcial),
+            # Os dois de baixo existem porque a remessa PRECISA da classificação
+            # e não pode redescobri-la: reconstruí-la a partir do `status` seria
+            # uma segunda regra, e duas regras sobre a mesma linha divergem.
+            # `reembolso` é o aviso "PAGAR PARA <pessoa>": o dinheiro vai para
+            # alguém que NÃO é o favorecido do lançamento, e o segmento B só
+            # tem um par nome/documento — ver MOTIVO_REEMBOLSO.
+            # `valor_diverge` é o boleto que contradiz o lançamento; na planilha
+            # ele é só um alarme, mas na remessa é o valor que sairia errado.
+            "reembolso": cls == "PAGAR_PARA",
+            "valor_diverge": bool(valor_diverge),
         })
 
     for regs in registros.values():

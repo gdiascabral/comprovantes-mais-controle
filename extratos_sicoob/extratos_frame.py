@@ -26,10 +26,32 @@ from tkinter import messagebox, ttk
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import sicoob_baixar                                          # noqa: E402
+import sicoob_config                                          # noqa: E402
 import sicoob_contas as sc                                    # noqa: E402
 import sicoob_pastas as sp                                    # noqa: E402
 import sicoob_zipar                                           # noqa: E402
 from sicoob_client import SicoobClient                        # noqa: E402
+
+# Estes três vivem em OUTRAS pastas de aba, e entram aqui em cima de
+# propósito. Enquanto o import morava dentro do `try` do `_conferir_mapas`, o
+# `except Exception: pass` engolia junto a falha de IMPORTAR: bastava a ordem
+# do sys.path mudar, ou um arquivo faltar no codigo.zip, para a conferência que
+# impede o mês partido sumir para sempre — sem uma linha em lugar nenhum. Aqui,
+# se algum dia faltar, o app não abre e alguém fica sabendo no mesmo dia.
+try:                                     # os dois mapas de pasta (aba vizinha)
+    import conferir_mapas                                     # noqa: E402
+    import contas_mc                                          # noqa: E402
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent
+                           / "relatorios"))
+    import conferir_mapas                                     # noqa: E402
+    import contas_mc                                          # noqa: E402
+
+try:                                     # o diagnostico.log é um só, no Anexar
+    import config                                             # noqa: E402
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "anexar"))
+    import config                                             # noqa: E402
 
 try:                                     # utilitários compartilhados (raiz)
     import util
@@ -50,8 +72,9 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 #: lugares; uma de FORMATO é como a mesma duração aparece de dois jeitos.
 _fmt_dur = util.fmt_dur
 
-MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
-         "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+#: Rótulo de TELA. A tabela que vira nome de pasta é a `util.MESES_PASTA`,
+#: e quem guarda a forma de exibição é o `widgets`, par visual do `util`.
+MESES = list(widgets.MESES)
 
 
 
@@ -220,8 +243,23 @@ class ExtratosSicoobFrame(ttk.Frame):
             self.q.put(("status", "Falta preencher o arquivo de contas."))
             return False
         avisos = sc.validar(self.mapa)
+        # Aviso é aviso: cadastro estranho pode ser só cadastro estranho, e
+        # travar o lote por causa dele custaria o fechamento inteiro.
+        barram = sc.impedimentos(self.mapa)
         for a in avisos:
-            self._log(f"[aviso] {a}")
+            if a not in barram:
+                self._log(f"[aviso] {a}")
+        if barram:
+            # Este BARRA, no mesmo espírito de "conta sem destino trava o lote
+            # antes do primeiro download": duas contas gravando o mesmo
+            # arquivo perdem uma das duas, e o relatório diz que as duas
+            # ficaram prontas. Depois do lote não há o que desfazer — o
+            # arquivo que foi sobrescrito não volta.
+            self._log("[!] O lote não pode rodar com o cadastro assim:")
+            for b in barram:
+                self._log(f"    {b}")
+            self.q.put(("status", "Corrija o cadastro das contas antes de rodar."))
+            return False
         return True
 
     # -------------------------------------------------------------- pastas
@@ -238,17 +276,21 @@ class ExtratosSicoobFrame(ttk.Frame):
 
         O OFX/PDF daqui e o PDF do Relatório Mensal são da MESMA conta e do
         MESMO mês. Mapas divergentes partem o mês entre duas pastas, e nada no
-        disco denuncia — as duas existem e as duas têm arquivo dentro."""
+        disco denuncia — as duas existem e as duas têm arquivo dentro.
+
+        Continua sem poder barrar a aba, mas não sem poder ser vista falhar:
+        o `pass` de antes fazia "não achei divergência" e "não consegui
+        conferir" ficarem idênticos para quem olha a tela."""
         try:
-            import conferir_mapas
-            import contas_mc
-            import sicoob_config
             n = conferir_mapas.avisar(contas_mc.ARQUIVO_MAPA,
                                       sicoob_config.ARQUIVO_CONTAS, self._log)
             if n:
                 self._log("  Alinhe os dois arquivos antes de baixar.")
-        except Exception:
-            pass          # a conferência é um extra; nunca pode barrar a aba
+        except Exception as e:            # noqa: BLE001 — degrada, mas registra
+            config.diag(f"Extratos Sicoob: a conferência dos dois mapas não "
+                        f"rodou ({e!r})")
+            self._log("  [aviso] não consegui conferir os dois mapas de pasta "
+                      "(o motivo ficou no diagnostico.log).")
 
     def _t_pastas(self):
         try:
@@ -310,6 +352,10 @@ class ExtratosSicoobFrame(ttk.Frame):
         try:
             if not self._garantir_mapa():
                 return
+            # Também aqui, e não só no passo que cria pastas: este é o passo
+            # que BAIXA, e é o arquivo baixado que fica na pasta errada.
+            # Mapas alinhados não escrevem nada, então não polui o registro.
+            self._conferir_mapas()
             ano, mes = self._periodo()
             faltando = [c for c in self.mapa.contas
                         if not sp.caminho_da_conta(

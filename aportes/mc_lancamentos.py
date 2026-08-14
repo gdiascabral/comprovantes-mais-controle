@@ -210,10 +210,22 @@ def criar_recebimento(
     # de baixa DE NOVO lançaria a entrada duas vezes — R$ 2,00 no lugar de
     # R$ 1,00. Por isso conferimos antes em vez de sempre chamar.
     parcela = _achar_parcela(resposta)
-    if parcela and _ja_baixada(parcela):
+    estado = estado_da_baixa(parcela)
+    if estado == "feita":
         return Resultado(True, descricao, "recebimento",
                          id_criado=(resposta or {}).get("id"),
                          detalhes={"baixa": "já veio feita no próprio lançamento"})
+    if estado == "desconhecida":
+        # A venda EXISTE e a resposta não diz nada sobre a baixa. Chamar o
+        # endpoint aqui é apostar: se ela já saiu, a entrada é lançada duas
+        # vezes. Preferimos deixar visível e pedir conferência — o mesmo
+        # critério do `ocr_boleto`, que recusa leitura duvidosa em vez de
+        # escolher por conta própria.
+        return Resultado(
+            False, descricao, "recebimento",
+            id_criado=(resposta or {}).get("id"),
+            erro="recebimento criado, mas não deu para saber se a baixa saiu "
+                 "(o ERP não informou). Confira no ERP antes de lançar de novo.")
 
     id_parcela = (parcela or {}).get("id")
     if not id_parcela:
@@ -267,18 +279,37 @@ def _achar_parcela(resposta) -> dict | None:
     return None
 
 
-def _ja_baixada(parcela: dict) -> bool:
-    """A parcela já nasceu recebida?
+#: Os campos por onde a resposta do ERP declara que a parcela já foi recebida.
+#: Se NENHUM deles vier, não é "está em aberto" — é "não deu para saber".
+_CAMPOS_DE_BAIXA = ("receipts", "isReceived", "received", "settled")
 
-    Conservador de propósito: na dúvida devolve False e a baixa é tentada. Um
-    erro para o lado do "não baixou" deixa o lançamento em aberto, visível e
-    fácil de corrigir; para o outro lado, duplicaria a entrada de dinheiro."""
+
+def estado_da_baixa(parcela) -> str:
+    """`"feita"`, `"aberta"` ou `"desconhecida"`.
+
+    Três respostas, e não duas, porque a diferença entre as duas últimas é a
+    diferença entre lançar de novo e não lançar.
+
+    A versão anterior devolvia um booleano e dizia, no comentário, ser
+    "conservadora: na dúvida devolve False". O raciocínio estava invertido em
+    relação ao efeito: `False` faz o chamador **tentar a baixa**, então a
+    dúvida levava justamente ao segundo lançamento — R$ 2,00 no lugar de
+    R$ 1,00 — que o comentário dizia querer evitar.
+
+    O `POST /sales` já leva `isReceived=true`, então o normal é a baixa vir
+    feita. E `_achar_parcela` admite, no próprio docstring, que o caminho
+    dentro da resposta nunca foi confirmado por captura: se o formato mudar,
+    não se sabe nada sobre a baixa — e é aí que chamar o endereço de novo
+    duplicaria a entrada.
+    """
     if not isinstance(parcela, dict):
-        return False
+        return "desconhecida"
     recebimentos = parcela.get("receipts")
     if isinstance(recebimentos, list) and recebimentos:
-        return True
+        return "feita"
     for campo in ("isReceived", "received", "settled"):
         if parcela.get(campo) is True:
-            return True
-    return False
+            return "feita"
+    if any(campo in parcela for campo in _CAMPOS_DE_BAIXA):
+        return "aberta"          # o ERP declarou, e declarou que não recebeu
+    return "desconhecida"        # a resposta não fala do assunto

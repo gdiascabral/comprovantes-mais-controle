@@ -19,10 +19,19 @@ import json
 import sys
 from pathlib import Path
 
-if getattr(sys, "frozen", False):
-    _AQUI = Path(sys.executable).resolve().parent
-else:
-    _AQUI = Path(__file__).resolve().parent
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+# `util.pasta_base()` e não `Path(__file__).parent`: congelado dava no mesmo,
+# mas rodando como SCRIPT este módulo procurava em `aportes/` enquanto o
+# `nuvem/cache.py` regrava na raiz — o cadastro baixado do banco chegava e
+# ninguém aqui o via. É a mesma lição que criou `pasta_base`: uma regra de
+# caminho em duas cópias é o app procurando o mesmo arquivo em lugares
+# diferentes.
+_AQUI = util.pasta_base()
 
 ARQUIVO_CONTAS = _AQUI / "contas.csv"
 ARQUIVO_SUBCONTAS = _AQUI / "subcontas.json"

@@ -14,12 +14,17 @@ Um `config.py` aqui sequestraria o `import config` do Anexar.
 import sys
 from pathlib import Path
 
-if getattr(sys, "frozen", False):
-    # Empacotado: usa a pasta do .exe, para o JSON e o perfil do Chrome
-    # persistirem entre execuções.
-    _AQUI = Path(sys.executable).resolve().parent
-else:
-    _AQUI = Path(__file__).resolve().parent
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+# Empacotado, é a pasta do .exe, para o JSON e o perfil do Chrome persistirem
+# entre execuções. Sai de `util.pasta_base()` e não de um cálculo próprio:
+# rodando como SCRIPT, o cálculo próprio apontava para `extratos_sicoob/`
+# enquanto o `nuvem/cache.py` regrava o mapa na raiz.
+_AQUI = util.pasta_base()
 
 # Mapa das contas e da árvore de pastas (fora do repositório).
 ARQUIVO_CONTAS = _AQUI / "contas_sicoob.json"
@@ -31,8 +36,11 @@ PASTA_PERFIL_CHROME = _AQUI / ".chrome_profile_sicoob"
 # Usada quando o JSON não traz "raiz".
 RAIZ_PADRAO = Path("C:/Arquivos Morais/EXTRATOS")
 
-MESES = ("JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
-         "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO")
+#: A tabela de pasta mora em `util.MESES_PASTA`: as três cópias que
+#: existiam aqui produzem NOME DE PASTA no disco, e uma divergir entre
+#: elas parte o mês ao meio. O nome local continua porque é por ele que
+#: o resto do módulo chama.
+MESES = util.MESES_PASTA
 
 # Internet banking.
 URL_LOGIN = "https://ib.sicoob.com.br/sicoobnet/ib/#/login"
@@ -57,9 +65,22 @@ def nome_do_mes(mes: int) -> str:
     return MESES[mes - 1]
 
 
-def nome_arquivo(ano: int, mes: int) -> str:
-    """Nome dos arquivos, sem extensão: 2026, 7 -> '202607 SICOOB'."""
-    return f"{ano}{mes:02d} SICOOB"
+def nome_arquivo(ano: int, mes: int, sufixo: str = "") -> str:
+    """Nome dos arquivos, sem extensão: 2026, 7 -> '202607 SICOOB'.
+
+    O `sufixo` desempata as contas que dividem a mesma pasta: sem ele as duas
+    gravavam "202607 SICOOB.ofx" no mesmo lugar e a segunda passava por cima
+    da primeira sem uma palavra — a pasta é escolhida pela conta, cada OFX foi
+    conferido contra a SUA conta e o `shutil.move` sobrescreve calado.
+
+    O formato é o MESMO de `relatorios/contas_mc.nome_arquivo` (um espaço e o
+    sufixo no fim) de propósito: o PDF do ERP e o OFX do banco são da mesma
+    conta, caem na mesma pasta e têm de terminar igual para se reconhecerem.
+    """
+    base = f"{ano}{mes:02d} SICOOB"
+    if sufixo:
+        base += f" {sufixo}"
+    return base
 
 
 def nome_pasta_empresa(ano: int, mes: int, empresa: str) -> str:

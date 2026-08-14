@@ -8,12 +8,26 @@ on:
       - "README.md"
       - "LICENSE"
       - "CLAUDE.md"
-      - "requirements-dev.txt"
       # "tests/**" NÃO entra aqui: mudança em teste tem que disparar a build,
       # senão o job `test` abaixo nunca roda justamente no push que o alterou.
+      # "requirements-dev.txt" também NÃO entra, pelo mesmo motivo: é dele que
+      # saem o pytest e o vermin que o job `test` usa. Ignorá-lo enquanto a
+      # build o instalava era dizer que mexer na régua do CI não muda nada.
 
+# Leitura para todos; escrita SÓ no job que publica. Os jobs `test` e `motor`
+# apenas leem o repositório, e token de escrita à toa é permissão que uma ação
+# de terceiro (ou um passo com erro) pode gastar sem ninguém pedir.
 permissions:
-  contents: write         # necessário para publicar a Release
+  contents: read
+
+# Duas builds ao mesmo tempo publicam releases fora de ordem: se a segunda
+# terminar primeiro, ela cria a release mais nova antes — e a poda, que ordena
+# por data de CRIAÇÃO, apaga a errada. `cancel-in-progress: false` porque a
+# build cancelada já consumiu o número dela, e cancelar depois de publicar
+# deixaria a release meio publicada.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # A build publica uma release que os usuários baixam sozinhos ao abrir o app.
@@ -22,10 +36,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Instalar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.11"
 
@@ -33,6 +47,14 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
+
+      # O exe roda Python 3.11 e a máquina de quem desenvolve, não. Foi assim
+      # que a run #76 caiu (`Path.read_text(newline=…)`, que só existe do 3.13
+      # em diante) e queimou o número da release. Era passo humano, escrito no
+      # CLAUDE.md; agora é do CI. Vale o repositório INTEIRO, `tests/` incluído
+      # — a run #76 morreu num arquivo de teste.
+      - name: Conferir que o código roda em Python 3.11 (vermin)
+        run: vermin --target=3.11 --no-tips --violations .
 
       - name: Rodar os testes
         run: python -m pytest tests -q
@@ -43,18 +65,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
-          fetch-depth: 2
+          # Histórico inteiro: a trava compara o INTERVALO do push, e um push
+          # com cinco commits precisa dos cinco. Com `fetch-depth: 2` só existia
+          # o último, e bastava a ordem dos commits mudar para a trava aprovar
+          # um push que mexe no motor sem subir a versão mínima.
+          fetch-depth: 0
 
       - name: Exigir motor_minimo.txt quando o motor muda
         shell: bash
+        env:
+          ANTES: ${{ github.event.before }}
+          AGORA: ${{ github.sha }}
         run: |
-          if [ "$(git rev-list --count HEAD)" -lt 2 ]; then
-            echo "primeiro commit — nada a comparar"; exit 0
+          set -uo pipefail
+          zeros=0000000000000000000000000000000000000000
+          if [ -n "${ANTES:-}" ] && [ "$ANTES" != "$zeros" ] \
+             && git cat-file -e "${ANTES}^{commit}" 2>/dev/null; then
+            # O intervalo REAL do push, que o GitHub já entrega no evento.
+            intervalo="${ANTES}..${AGORA}"
+          elif git rev-parse -q --verify "${AGORA}^" >/dev/null; then
+            # Primeiro push da branch (o `before` vem zerado), force-push, ou
+            # execução manual pela aba Actions: não há intervalo confiável, e a
+            # janela examinada encolhe para um commit. Fica avisado no log,
+            # porque aqui a trava enxerga menos do que deveria.
+            echo "::warning::sem 'before' utilizável ('${ANTES}') — a trava vai"
+            echo "::warning::examinar apenas o commit ${AGORA}"
+            intervalo="${AGORA}^..${AGORA}"
+          else
+            echo "primeiro commit do repositório — nada a comparar"; exit 0
           fi
-          mudou="$(git diff --name-only HEAD~1 HEAD)"
-          echo "Arquivos deste push:"; echo "$mudou"
+          mudou="$(git diff --name-only "$intervalo")"
+          echo "Arquivos deste push ($intervalo):"; echo "$mudou"
           exige=0
           for f in motor.py atualizador.py requirements.txt .github/workflows/build.yml; do
             if echo "$mudou" | grep -qx "$f"; then
@@ -66,7 +109,7 @@ jobs:
             echo "::error::Este push altera o MOTOR mas não sobe motor_minimo.txt."
             echo "::error::Sem isso, o código novo roda em motor velho na máquina"
             echo "::error::do usuário e quebra. Suba motor_minimo.txt para a versão"
-            echo "::error::desta release (v1.0.<run_number>) no MESMO push."
+            echo "::error::desta release (v1.0.${{ github.run_number }}) no MESMO push."
             exit 1
           fi
           echo "trava do motor: ok"
@@ -74,19 +117,60 @@ jobs:
   build:
     needs: [test, motor]
     runs-on: windows-latest
+    # A escrita mora aqui e só aqui: é o único job que publica release e apaga
+    # as antigas.
+    permissions:
+      contents: write
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      # A trava do job `motor` confere que o arquivo foi TOCADO; ninguém confere
+      # o que está escrito dentro dele. E o número certo é impossível de saber
+      # na hora de escrever: a release é `v1.0.<run_number>`, e o run_number só
+      # existe depois do push. Chutar para cima é o erro caro — o app oferece
+      # 152 MB, baixa o exe mais novo que existe, continua abaixo do mínimo e
+      # pergunta de novo na abertura seguinte. Laço infinito, em todas as
+      # máquinas, e a única saída é publicar outra release. Por isso a build
+      # para ANTES de publicar.
+      - name: Conferir o motor_minimo.txt contra a versão desta release
+        run: |
+          $release = "v1.0.${{ github.run_number }}"
+          $texto = (Get-Content motor_minimo.txt -Raw).Trim()
+          try {
+            $minimo = [version]($texto.TrimStart('v'))
+            $atual  = [version]($release.TrimStart('v'))
+          } catch {
+            Write-Host "::error::motor_minimo.txt tem '$texto', que nao e uma versao."
+            Write-Host "::error::Escreva exatamente $release (ou uma versao anterior)."
+            exit 1
+          }
+          if ($minimo -gt $atual) {
+            Write-Host "::error::motor_minimo.txt exige o motor $texto, mas esta"
+            Write-Host "::error::release e a ${release}. O motor exigido NUNCA vai"
+            Write-Host "::error::existir. O app entraria em laco - oferece 152 MB,"
+            Write-Host "::error::baixa, continua abaixo do minimo e pergunta de novo."
+            Write-Host "::error::Corrija motor_minimo.txt para $release e suba de novo"
+            Write-Host "::error::(lembre que esta build ja consumiu o numero: a"
+            Write-Host "::error::proxima release sera a seguinte)."
+            exit 1
+          }
+          Write-Host "motor_minimo.txt = $texto; release = $release - ok"
 
       - name: Instalar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.11"
 
       - name: Instalar dependências
         run: |
           pip install -r requirements.txt
-          pip install pyinstaller
+          # Versão PRESA: é o PyInstaller quem decide o que entra no exe (e,
+          # principalmente, o que fica de fora da biblioteca padrão). Com
+          # `pip install pyinstaller` solto, o exe publicado mudava de
+          # empacotador sem ninguém pedir, entre duas builds do mesmo código.
+          # 6.22.0 é a versão que gerou a v1.0.77.
+          pip install pyinstaller==6.22.0 pyinstaller-hooks-contrib==2026.6
 
       - name: Instalar Tesseract OCR (com português)
         run: |
@@ -103,7 +187,8 @@ jobs:
           New-Item -ItemType Directory codigo_embutido | Out-Null
           # Arquivo NOVO na raiz = linha nova aqui. Sem isso o import falha na
           # máquina do usuário e o app não abre (ver CLAUDE.md, regra de ouro).
-          Copy-Item comprovantes_app.py, util.py, widgets.py, ativacao.py, versao.txt, motor_minimo.txt, icone.ico codigo_embutido/
+          # Quem vigia esta lista inteira é tests/test_empacotamento.py.
+          Copy-Item comprovantes_app.py, util.py, widgets.py, versao.txt, motor_minimo.txt, icone.ico codigo_embutido/
           New-Item -ItemType Directory codigo_embutido/separar_renomear | Out-Null
           Copy-Item separar_renomear/*.py codigo_embutido/separar_renomear/
           New-Item -ItemType Directory codigo_embutido/anexar | Out-Null
@@ -131,6 +216,11 @@ jobs:
           Copy-Item cnab240/*.py codigo_embutido/cnab240/
           New-Item -ItemType Directory codigo_embutido/cnab240/spec | Out-Null
           Copy-Item cnab240/spec/*.json codigo_embutido/cnab240/spec/
+          # `nuvem/migrar.py` fica DE FORA de propósito: é ferramenta de uma
+          # vez só, rodada à mão na máquina que tem os arquivos bons, como o
+          # `aportes/conferir_contas.py`. Ele não é importado pelo app.
+          New-Item -ItemType Directory codigo_embutido/nuvem | Out-Null
+          Copy-Item nuvem/*.py -Exclude migrar.py codigo_embutido/nuvem/
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
           "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
 
@@ -152,8 +242,210 @@ jobs:
           --add-data "codigo_embutido;codigo_embutido"
           "motor.py"
 
+      # A lacuna estrutural desta esteira: os testes rodam na biblioteca padrão
+      # COMPLETA da máquina, e o que chega ao usuário é um exe com a stdlib
+      # podada pelo PyInstaller, que só embute o que o `motor.py` faz enxergar.
+      # Foi assim que a v1.0.71 caiu (`from tkinter import font`) e é como um
+      # `import difflib` novo cairia hoje. Aqui o app é importado DENTRO de um
+      # exe com exatamente a mesma poda.
+      #
+      # Por que um segundo exe, e não o que acabou de ser publicado: o
+      # `motor.py` não tem argumento de linha de comando nenhum — rodá-lo abre a
+      # janela e fica lá. O truque é que este exe de fumaça tem `import motor` e
+      # NADA mais no topo, então o grafo que o PyInstaller monta é o MESMO do exe
+      # de verdade; o app é importado depois, em runtime, por nome (o
+      # PyInstaller não segue import dinâmico, então nada entra pela porta dos
+      # fundos). O dia em que o motor ganhar um `--autoteste`, este passo vira
+      # uma linha só, rodando o exe publicado.
+      #
+      # O que ele NÃO alcança, e vale saber: import escrito DENTRO de função.
+      # `aportes/mc_catalogos.py` faz `import difflib` no corpo do método, e
+      # importar o módulo não executa o método — esse caso só cai quando a
+      # pessoa usa a função. Quem pode guardá-lo é o AST do
+      # `tests/test_imports_do_motor.py`, que hoje só compara submódulo de
+      # `tkinter` e de `urllib`.
+      - name: Preparar o teste de fumaça (a entrada que importa o app)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/fumaca.py" <<'PYFIM'
+          # -*- coding: utf-8 -*-
+          """Entrada do exe de fumaca: importa o app DENTRO da stdlib podada.
+
+          So `motor` no topo, de proposito: e o que faz este exe conter
+          exatamente o mesmo que o exe publicado. Tudo que o app importa entra
+          por `importlib`, em runtime, e o PyInstaller nao enxerga nada disso.
+          Mensagens em ASCII puro: console de exe no Windows nao promete UTF-8.
+          """
+          import ast
+          import importlib
+          import sys
+          from pathlib import Path
+
+          import motor  # noqa: F401  (nao chamar principal(): abriria a janela)
+
+          # `ast` e usado so aqui e nao existe no exe de verdade. Ele arrasta
+          # _ast, enum e contextlib, que o requests ja poe no exe publicado —
+          # entao nao ha como ele mascarar a falta de um modulo do app.
+          CODIGO = Path(getattr(sys, "_MEIPASS", ".")) / "codigo_embutido"
+
+
+          def _caminho():
+              """A MESMA ordem do motor.principal()."""
+              for sub in ("separar_renomear", "anexar", ""):
+                  p = str(CODIGO / sub) if sub else str(CODIGO)
+                  if p not in sys.path:
+                      sys.path.insert(0, p)
+
+
+          def _modulos():
+              """(nome, pasta) de cada .py do pacote, como o app o importa.
+
+              Pasta com __init__.py e pacote (`conciliacao.erp.api`); pasta sem
+              __init__.py tem modulo solto, importado pelo nome cru (`config`,
+              do anexar) -- nome de modulo e global no sys.path, e e por isso
+              que o extratos_sicoob usa o prefixo `sicoob_`.
+              """
+              for arq in sorted(CODIGO.rglob("*.py")):
+                  if arq.name == "__main__.py":     # roda por linha de comando
+                      continue
+                  partes, pai = [arq.stem], arq.parent
+                  while pai != CODIGO and (pai / "__init__.py").is_file():
+                      partes.insert(0, pai.name)
+                      pai = pai.parent
+                  if partes[-1] == "__init__":
+                      partes.pop()
+                      if not partes:
+                          continue
+                  yield ".".join(partes), str(pai)
+
+
+          def _citados():
+              """Nomes que aparecem em algum `import` DENTRO do pacote.
+
+              Serve para separar o que o exe pode ALCANCAR do que ele carrega
+              sem nunca poder chamar. `conciliacao/cli.py` e o plano B por .bat,
+              `aportes/teste_lancamento.py` roda a mao, `nuvem/registro.py`
+              ainda esta vazio: ninguem os importa, entao o que falta neles nao
+              chega a lugar nenhum. Ja `cnab240` e `conciliacao/erp` tambem nao
+              sao importados no arranque, mas SAO importados por outro modulo do
+              pacote -- eles entram no primeiro pagamento, e ali a falha custa
+              caro. E por isso que a regra e "quem cita quem", e nao "o que o
+              comprovantes_app puxa ao abrir".
+              """
+              nomes = set()
+              for arq in sorted(CODIGO.rglob("*.py")):
+                  try:
+                      arvore = ast.parse(arq.read_text(encoding="utf-8"),
+                                         str(arq))
+                  except (OSError, SyntaxError):
+                      continue
+                  for no in ast.walk(arvore):
+                      if isinstance(no, ast.Import):
+                          for a in no.names:
+                              nomes.update(a.name.split("."))
+                      elif isinstance(no, ast.ImportFrom):
+                          if no.module:
+                              nomes.update(no.module.split("."))
+                          nomes.update(a.name for a in no.names)
+              return nomes
+
+
+          def principal():
+              _caminho()
+              citados = _citados()
+              # O comprovantes_app vem primeiro: e o import que o usuario paga
+              # se falhar, e ele mesmo poe as outras pastas no sys.path.
+              alvos = [("comprovantes_app", str(CODIGO))] + list(_modulos())
+              faltando, inalcancavel, outros = {}, {}, {}
+              for nome, pasta in alvos:
+                  if pasta not in sys.path:
+                      sys.path.append(pasta)
+                  try:
+                      importlib.import_module(nome)
+                  except ImportError as e:
+                      alcancavel = (nome == "comprovantes_app"
+                                    or nome.split(".")[-1] in citados)
+                      alvo = faltando if alcancavel else inalcancavel
+                      alvo[nome] = "%s: %s" % (type(e).__name__, e)
+                  except BaseException as e:       # noqa: BLE001
+                      outros[nome] = "%s: %s" % (type(e).__name__, e)
+
+              for nome in sorted(inalcancavel):
+                  # Ferramenta de linha de comando dentro do zip: nenhum caminho
+                  # do exe chega ali, entao falta de modulo nao derruba release.
+                  print("AVISO  %s (ninguem o importa) -- %s"
+                        % (nome, inalcancavel[nome]))
+              for nome in sorted(outros):
+                  # Nao e falta de modulo: e o modulo reclamando de ambiente
+                  # (arquivo de cadastro que so existe na maquina de quem usa,
+                  # por exemplo). Fica registrado, mas nao derruba a release.
+                  print("AVISO  %s -- %s" % (nome, outros[nome]))
+              if faltando:
+                  print("")
+                  print("O exe NAO tem modulos que estas partes do app importam:")
+                  for nome in sorted(faltando):
+                      print("  %s -- %s" % (nome, faltando[nome]))
+                  print("")
+                  print("E a falha da v1.0.71 (tkinter.font) de novo: o app nao")
+                  print("abre, e o erro aparece antes de existir janela. Declare")
+                  print("o import no _garantir_dependencias() do motor.py e suba")
+                  print("o motor_minimo.txt no MESMO push.")
+                  return 1
+              print("fumaca: %d modulos importados dentro do exe -- ok"
+                    % (len(alvos) - len(inalcancavel) - len(outros)))
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(principal())
+          PYFIM
+          echo "entrada do teste de fumaça gravada em $RUNNER_TEMP/fumaca.py"
+
+      # Os MESMOS --collect-all do exe de verdade: o grafo de módulos tem de
+      # bater. `--onedir` e sem o Tesseract porque nada disso muda QUAIS módulos
+      # entram — só o formato e o tamanho —, e comprimir 300 MB à toa custa
+      # minutos. `--distpath`/`--workpath` próprios para não encostar no
+      # `dist/` que já tem o executável a publicar.
+      # Este passo roda em PowerShell, e não no bash do passo anterior, porque
+      # o `--add-data "origem;destino"` tem ponto e vírgula: o bash do Windows
+      # trata argumento com ";" como lista de caminhos e o reescreve no meio do
+      # caminho.
+      - name: Gerar o exe de fumaça (mesma poda do exe publicado)
+        run: >
+          pyinstaller --noconfirm --onedir --console
+          --name fumaca
+          --distpath fumaca_dist --workpath fumaca_build
+          --paths .
+          --collect-all playwright
+          --collect-all pdfminer
+          --collect-all pdfplumber
+          --collect-all pypdf
+          --collect-all openpyxl
+          --collect-all requests
+          --collect-all pytesseract
+          --collect-all sv_ttk
+          --add-data "versao.txt;."
+          --add-data "codigo_embutido;codigo_embutido"
+          "$env:RUNNER_TEMP\fumaca.py"
+
+      # Teto de tempo porque isto abre um exe: import que fique esperando rede
+      # (ou uma janela que ninguém pode fechar) travaria a build até o limite de
+      # 6 horas do GitHub, gastando minuto de execução por nada.
+      - name: Rodar o exe de fumaça (importa o app e as abas)
+        timeout-minutes: 10
+        run: |
+          & ".\fumaca_dist\fumaca\fumaca.exe"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::O exe nao consegue importar o app. Publicar"
+            Write-Host "::error::isto entrega um app que nao abre e, pior, manda"
+            Write-Host "::error::o codigo.zip novo para quem ja tem o exe."
+            Write-Host "::error::Veja acima qual modulo faltou."
+            exit 1
+          }
+
       - name: Publicar Release com o executável
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Executável v1.0.${{ github.run_number }}
@@ -172,14 +464,28 @@ jobs:
             dist/Comprovantes Mais Controle.exe
             codigo.zip
 
-      - name: Limpar releases antigas (mantém as 4 mais novas p/ rollback)
+      # Reter por TEMPO, com um piso de contagem. "As 4 mais novas" foi pensado
+      # para rollback, e num dia de muitos pushes virava 70 minutos de
+      # histórico: a versão boa de ontem já não existia mais. O piso continua
+      # valendo para o caso contrário — um mês parado não pode deixar o
+      # repositório sem release nenhuma para voltar.
+      - name: Limpar releases antigas (30 dias, e nunca menos de 4)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $MANTER = 4
+          $DIAS = 30
           $rels = gh api "repos/${{ github.repository }}/releases?per_page=100" | ConvertFrom-Json
-          $velhas = $rels | Sort-Object -Property @{Expression={[datetime]$_.created_at}} -Descending | Select-Object -Skip 4
+          $limite = (Get-Date).ToUniversalTime().AddDays(-$DIAS)
+          $velhas = $rels |
+            Sort-Object -Property @{Expression={[datetime]$_.created_at}} -Descending |
+            Select-Object -Skip $MANTER |
+            Where-Object { ([datetime]$_.created_at).ToUniversalTime() -lt $limite }
+          if (-not $velhas) {
+            Write-Host "nada a apagar: nenhuma release fora dos $DIAS dias, alem das $MANTER mais novas"
+          }
           foreach ($r in $velhas) {
-            Write-Host "Apagando release $($r.tag_name)"
+            Write-Host "Apagando release $($r.tag_name) (de $($r.created_at))"
             gh api -X DELETE "repos/${{ github.repository }}/releases/$($r.id)"
             try { gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$($r.tag_name)" } catch { Write-Host "  (tag já removida)" }
           }

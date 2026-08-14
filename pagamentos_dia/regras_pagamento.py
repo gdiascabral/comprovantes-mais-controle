@@ -363,3 +363,55 @@ def documento_e_a_oc(document_number: str, oc: str) -> bool:
     if oc_no_documento(doc):
         return True
     return bool(oc) and doc.lstrip("0") == str(oc).strip().lstrip("0")
+
+
+# --------------------------------------------------------------------------
+# CPF/CNPJ: os dígitos verificadores
+# --------------------------------------------------------------------------
+# Moram AQUI, e não no `remessa_dia`, porque os dois lados precisam da mesma
+# resposta: a remessa, para saber de quem é o documento do segmento B; e o
+# relatório, para não exibir uma chave Pix que o OCR leu errado. Estavam só no
+# lado da remessa, e por isso a planilha aceitava qualquer coisa com cara de
+# número — a mesma família do "8 lido como B" que o `ocr_boleto` já recusa.
+
+
+def _dv_cpf(d: str) -> bool:
+    if len(d) != 11 or len(set(d)) == 1:
+        return False
+    for tamanho in (9, 10):
+        soma = sum(int(d[i]) * (tamanho + 1 - i) for i in range(tamanho))
+        resto = (soma * 10) % 11 % 10
+        if resto != int(d[tamanho]):
+            return False
+    return True
+
+
+#: Pesos do DV do CNPJ, do 2º dígito para trás. O 1º DV usa os 12 últimos;
+#: o 2º, os 13. Escritos por extenso de propósito: a versão calculada saía
+#: deslocada em uma posição e reprovava CNPJ legítimo em silêncio.
+_PESOS_CNPJ = (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
+
+
+def _dv_cnpj(d: str) -> bool:
+    if len(d) != 14 or len(set(d)) == 1:
+        return False
+    for tamanho in (12, 13):
+        pesos = _PESOS_CNPJ[-tamanho:]
+        soma = sum(int(d[i]) * pesos[i] for i in range(tamanho))
+        resto = soma % 11
+        if (0 if resto < 2 else 11 - resto) != int(d[tamanho]):
+            return False
+    return True
+
+
+def documento_valido(valor) -> str:
+    """Os dígitos, se forem um CPF ou CNPJ que fecha. Senão, "".
+
+    Os dígitos verificadores não são preciosismo: sem eles, todo telefone de
+    onze dígitos viraria "CPF encontrado" e o diagnóstico apontaria para o
+    campo errado — que é exatamente o erro que ele existe para evitar.
+    """
+    if isinstance(valor, bool) or not isinstance(valor, (str, int)):
+        return ""
+    digitos = re.sub(r"\D", "", str(valor))
+    return digitos if (_dv_cpf(digitos) or _dv_cnpj(digitos)) else ""
