@@ -175,8 +175,31 @@ jobs:
       - name: Instalar Tesseract OCR (com português)
         run: |
           choco install tesseract -y --no-progress
-          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata_fast/raw/main/por.traineddata" -OutFile "C:\Program Files\Tesseract-OCR\tessdata\por.traineddata"
+          $destino = "C:\Program Files\Tesseract-OCR\tessdata\por.traineddata"
+          # `raw.githubusercontent.com` e NAO `github.com/.../raw/...`: o
+          # segundo passa pela aplicacao web, que em 17/08/2026 respondeu a
+          # PAGINA DE ERRO em HTML com status 200. O `Invoke-WebRequest`
+          # gravou o HTML por cima do arquivo de idioma sem reclamar, e a
+          # build so morreu depois, no `--list-langs`, com um erro que nao
+          # dizia nada sobre download. O CDN serve o arquivo direto.
+          $url = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/por.traineddata"
+          Invoke-WebRequest -Uri $url -OutFile $destino -MaximumRetryCount 3 -RetryIntervalSec 10
+          # O idioma tem ~1,9 MB; qualquer pagina de erro tem alguns KB. Sem
+          # esta conferencia, "baixou HTML" e "baixou o idioma" sao a mesma
+          # coisa para o passo seguinte.
+          $tamanho = (Get-Item $destino).Length
+          if ($tamanho -lt 1MB) {
+            throw "por.traineddata veio com $tamanho bytes — e pagina de erro, nao o idioma."
+          }
+          "por.traineddata: {0:N0} bytes" -f $tamanho
           & "C:\Program Files\Tesseract-OCR\tesseract.exe" --list-langs
+          # `--list-langs` lista o que existe; isto EXIGE o portugues. Sem a
+          # exigencia, um exe sem `por` sai da build limpo e so falha no OCR
+          # do primeiro comprovante, na maquina de quem usa.
+          $langs = & "C:\Program Files\Tesseract-OCR\tesseract.exe" --list-langs 2>&1
+          if ($langs -notcontains "por") {
+            throw "o Tesseract instalou sem o portugues — o OCR sairia vazio."
+          }
 
       - name: Gravar a versão desta build
         run: |
@@ -481,8 +504,12 @@ jobs:
         env:
           TOKEN_ARTEFATOS: ${{ secrets.TOKEN_ARTEFATOS }}
         run: |
-          if ($env:TOKEN_ARTEFATOS) { "tem=sim" } else { "tem=nao" } |
-            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # A ATRIBUIÇÃO de um `if` é válida; ligar um pipe direto no bloco
+          # `else` não é, e o PowerShell responde com ParserError na hora de
+          # ANALISAR o script — antes de rodar linha nenhuma. Foi assim que a
+          # build de 14/08 morreu num passo que só define uma variável.
+          $tem = if ($env:TOKEN_ARTEFATOS) { "sim" } else { "nao" }
+          "tem=$tem" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Publicar a mesma Release no repositório de artefatos
         if: steps.tem_token.outputs.tem == 'sim'
