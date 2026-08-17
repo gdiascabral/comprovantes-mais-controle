@@ -161,8 +161,44 @@ class Registro:
                      f"convenio=eq.{convenio}&nsa=eq.{nsa}", mudancas)
 
     def remessas(self, *, convenio: str | None = None) -> list[dict]:
+        """As remessas COM os itens dentro.
+
+        Os itens vêm juntos porque quem pergunta por remessa quase sempre
+        quer o de-para "seu número → id do lançamento" — é ele que faz o
+        retorno do banco reencontrar o caminho de volta ao ERP. Buscar em
+        duas viagens seria uma consulta por remessa."""
         filtro = f"convenio=eq.{convenio}" if convenio else ""
-        return rest.ler("remessa", self._token, colunas="*", filtro=filtro)
+        return rest.ler("remessa", self._token,
+                        colunas="*,remessa_item(*)", filtro=filtro)
+
+    def aplicar_retorno(self, convenio: str, nsa: int, respostas: dict,
+                        *, estado: str = "") -> int:
+        """Grava o que o banco respondeu de cada pagamento.
+
+        `respostas` é {seu_numero: codigo}. Devolve quantos itens receberam
+        resposta. Item que o retorno não citou fica como estava — silêncio do
+        banco não é resposta, e sobrescrevê-lo com vazio apagaria o que um
+        retorno anterior já tinha dito.
+        """
+        remessa = next((r for r in self.remessas(convenio=convenio)
+                        if int(r.get("nsa") or 0) == int(nsa)), None)
+        if remessa is None:
+            raise rest.RecusadoPeloBanco(
+                f"a remessa {nsa} do convênio {convenio} não está registrada")
+
+        agora = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        quantos = 0
+        for item in remessa.get("remessa_item") or []:
+            codigo = respostas.get(str(item.get("seu_numero") or "").strip())
+            if not codigo:
+                continue
+            rest.alterar("remessa_item", self._token, f"id=eq.{item['id']}",
+                         {"retorno_codigo": codigo, "retorno_em": agora})
+            quantos += 1
+
+        if estado:
+            self.marcar(convenio, nsa, estado)
+        return quantos
 
     # ------------------------------------------- "isto já foi mandado?"
 
@@ -232,6 +268,19 @@ class Espelhado:
 
     def envio_da_referencia(self, referencia: str):
         return self._nuvem.envio_da_referencia(referencia)
+
+    def remessas(self, *, convenio: str | None = None):
+        return self._nuvem.remessas(convenio=convenio)
+
+    def aplicar_retorno(self, convenio: str, nsa: int, respostas: dict,
+                        *, estado: str = ""):
+        """Só na nuvem: o espelho local não guarda resposta do banco.
+
+        O `cnab240.Historico` sabe marcar a remessa inteira (`marcar`), mas
+        não tem onde pôr o código de ocorrência de CADA pagamento — e é isso
+        que responde "por que este não pagou?" meses depois."""
+        return self._nuvem.aplicar_retorno(convenio, nsa, respostas,
+                                           estado=estado)
 
     def registrar(self, remessa, *, caminho_arquivo=None, referencias=None):
         # A nuvem PRIMEIRO: é ela que pode recusar (NSA repetido, "seu

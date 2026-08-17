@@ -37,6 +37,7 @@ import ocr_boleto                                             # noqa: E402
 import regras_pagamento as regras                             # noqa: E402
 import relatorio                                              # noqa: E402
 import remessa_dia                                            # noqa: E402
+import retorno_dia                                            # noqa: E402
 
 try:                                     # utilitários compartilhados (raiz)
     import util
@@ -243,6 +244,13 @@ class PagamentosDiaFrame(ttk.Frame):
         self.b_abrir = ttk.Button(btns, text="📂 Abrir planilha", command=self._abrir,
                                   state="disabled")
         self.b_abrir.pack(side="left", padx=(10, 0))
+        # SEM número e sempre habilitado, de propósito: ler retorno não é o
+        # passo 4 de nada. O arquivo chega horas ou dias depois — às vezes
+        # noutra máquina —, e exigir "buscar" e "gerar" antes obrigaria a
+        # refazer o dia inteiro só para conferir o que o banco respondeu.
+        self.b_ret = ttk.Button(btns, text="📥 Ler retorno",
+                                command=self.ler_retorno)
+        self.b_ret.pack(side="left", padx=(10, 0))
         for b in (self.b1, self.b2):
             try:
                 b.configure(style="Accent.TButton")
@@ -681,6 +689,145 @@ class PagamentosDiaFrame(ttk.Frame):
             self._log("Documento do favorecido: nenhum CPF/CNPJ válido na lista, "
                       "no detalhe nem nos anexos — o Pix por telefone/e-mail/"
                       "aleatória seguirá saindo à mão.")
+
+    # ------------------------------------------------------------- o retorno
+    def ler_retorno(self):
+        """Lê o arquivo que o banco devolve e mostra o que houve com cada
+        pagamento.
+
+        Não é etapa do fluxo do dia: o retorno chega horas ou dias depois, e
+        muitas vezes é preciso ler o MESMO arquivo duas vezes — a primeira só
+        diz "recebi", e o desfecho real vem depois de o master assinar no
+        SicoobNet. Por isso o botão não tem número e não depende dos passos.
+        """
+        caminho = filedialog.askopenfilename(
+            title="Escolha o arquivo de retorno do banco",
+            filetypes=[("Retorno CNAB", "*.RET *.ret *.TXT *.txt"),
+                       ("Todos", "*.*")])
+        if not caminho:
+            return
+
+        try:
+            historico = _historico(self._log)
+        except Exception as e:
+            # Sem o registro central dá para LER o arquivo, mas não para dizer
+            # de quais lançamentos ele fala nem para guardar a resposta. Ler
+            # assim mesmo é melhor que não ler: o arquivo é a informação.
+            historico = None
+            self._log(f"\n[!] Sem o registro de remessas ({e}). Vou ler o "
+                      f"arquivo assim mesmo, mas sem casar com o ERP e sem "
+                      f"gravar o resultado.")
+
+        try:
+            resumo = retorno_dia.ler(caminho, historico)
+        except Exception as e:
+            messagebox.showerror("Retorno", f"Não consegui ler o arquivo:\n\n{e}")
+            return
+
+        self._janela_retorno(resumo, historico)
+
+    def _janela_retorno(self, resumo, historico):
+        top = tk.Toplevel(self)
+        top.title(f"Retorno do banco — arquivo nº {resumo.nsa:06d}")
+        top.geometry("980x600")
+        widgets.barra_de_titulo(top)
+        moldura = ttk.Frame(top, padding=14)
+        moldura.pack(fill="both", expand=True)
+
+        pagos = resumo.quantos("ok")
+        pendentes = resumo.quantos("pendente")
+        rejeitados = resumo.quantos("rejeitado")
+
+        ttk.Label(moldura, style="Titulo.TLabel",
+                  text=f"{resumo.empresa.strip()} · arquivo nº {resumo.nsa:06d}"
+                  ).pack(anchor="w")
+        ttk.Label(moldura, style="Apoio.TLabel",
+                  text=f"{len(resumo.linhas)} pagamento(s) · "
+                       f"R$ {resumo.total:,.2f}".replace(",", "X")
+                       .replace(".", ",").replace("X", ".")
+                  ).pack(anchor="w", pady=(2, 8))
+
+        # O recado que evita o susto: no fluxo desta empresa, o retorno do
+        # mesmo dia vem com tudo pendente porque quem assina é outra pessoa.
+        # Sem esta linha, "AGUARDA ASSINATURA" em 13 pagamentos parece falha.
+        if pendentes and not rejeitados:
+            ttk.Label(moldura, style="Erro.TLabel", wraplength=920,
+                      justify="left",
+                      text=f"⚠  {pendentes} pagamento(s) aguardando assinatura "
+                           f"no SicoobNet. Isso é o esperado logo depois de "
+                           f"enviar: o arquivo foi aceito, mas o dinheiro só "
+                           f"sai quando o master assinar. Baixe o retorno de "
+                           f"novo depois disso para ver o desfecho."
+                      ).pack(anchor="w", pady=(0, 8))
+        if resumo.remessa_desconhecida:
+            ttk.Label(moldura, style="Erro.TLabel", wraplength=920,
+                      justify="left",
+                      text="⚠  Esta remessa não está no registro central — "
+                           "pode ser de antes dele existir, ou de outra "
+                           "máquina. Dá para ler o arquivo, mas não para "
+                           "apontar os lançamentos do ERP nem guardar o "
+                           "resultado.").pack(anchor="w", pady=(0, 8))
+
+        colunas = ("estado", "favorecido", "valor", "seu_numero", "motivos")
+        tabela = ttk.Treeview(moldura, columns=colunas, show="headings",
+                              height=14)
+        for chave, titulo, larg in (("estado", "Situação", 150),
+                                    ("favorecido", "Favorecido", 250),
+                                    ("valor", "Valor", 110),
+                                    ("seu_numero", "Seu número", 120),
+                                    ("motivos", "O que o banco disse", 320)):
+            tabela.heading(chave, text=titulo)
+            tabela.column(chave, width=larg,
+                          anchor="e" if chave == "valor" else "w")
+        tabela.pack(fill="both", expand=True)
+
+        for linha in resumo.linhas:
+            valor = f"{linha.valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            tabela.insert("", "end", values=(
+                linha.rotulo, linha.favorecido[:40], valor,
+                linha.seu_numero, linha.motivos or "—"))
+
+        if resumo.faltando:
+            ttk.Label(moldura, style="Erro.TLabel", wraplength=920,
+                      justify="left",
+                      text=f"⚠  {len(resumo.faltando)} pagamento(s) da remessa "
+                           f"NÃO vieram neste retorno: "
+                           f"{', '.join(resumo.faltando[:6])}"
+                           f"{'…' if len(resumo.faltando) > 6 else ''}. "
+                           f"O banco devolve o que processou — o que sumiu no "
+                           f"caminho não aparece sozinho."
+                      ).pack(anchor="w", pady=(8, 0))
+
+        rodape = ttk.Frame(moldura); rodape.pack(fill="x", pady=(10, 0))
+        ttk.Label(rodape, style="Apoio.TLabel",
+                  text=f"{pagos} pago(s) · {pendentes} aguardando · "
+                       f"{rejeitados} rejeitado(s)").pack(side="left")
+
+        def _guardar():
+            respostas = {l.seu_numero: (l.motivos.split("=")[0] or "")
+                         for l in resumo.linhas if l.motivos}
+            try:
+                quantos = historico.aplicar_retorno(
+                    resumo.convenio, resumo.nsa, respostas,
+                    estado=resumo.estado_da_remessa)
+            except Exception as e:
+                messagebox.showerror("Retorno", f"Não deu para guardar:\n\n{e}")
+                return
+            self._log(f"\nRetorno do arquivo nº {resumo.nsa:06d} guardado: "
+                      f"{quantos} pagamento(s) com resposta, remessa marcada "
+                      f"como '{resumo.estado_da_remessa}'.")
+            messagebox.showinfo("Retorno", f"Guardado: {quantos} pagamento(s).")
+            top.destroy()
+
+        if historico is not None and not resumo.remessa_desconhecida:
+            ttk.Button(rodape, text="Guardar o resultado",
+                       style="Accent.TButton", command=_guardar
+                       ).pack(side="right")
+        ttk.Button(rodape, text="Fechar", command=top.destroy
+                   ).pack(side="right", padx=(0, 8))
+
+        top.transient(self.winfo_toplevel())
+        top.grab_set()
 
     # --------------------------------------------------------------- etapa 3
     def gerar_remessa(self):
