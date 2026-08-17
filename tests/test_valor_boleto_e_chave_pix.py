@@ -221,21 +221,71 @@ def test_o_formato_inequivoco_resolve_quem_nao_declarou(texto, esperado):
     assert regras.tipo_de_chave_pix(texto) == esperado
 
 
+@pytest.mark.parametrize("texto, esperado", [
+    # Duas provas independentes decidem a maioria dos onze dígitos crus:
+    # o DV do CPF e a forma de celular (DDD da lista fechada + o 9 obrigatório).
+    ("CHAVE PIX: 62984863610", regras.CHAVE_TELEFONE),   # DDD 62, 9, DV não fecha
+    ("PIX 12345678909", regras.CHAVE_CPF),               # DV fecha, 3º dígito ≠ 9
+    ("03123456749", regras.CHAVE_CPF),                   # DDD 03 não existe
+    ("PIX 11987654321", regras.CHAVE_TELEFONE),          # DDD 11, 9, DV não fecha
+])
+def test_onze_digitos_crus_sao_decididos_pelas_DUAS_provas(texto, esperado):
+    assert regras.tipo_de_chave_pix(texto) == esperado
+
+
 @pytest.mark.parametrize("texto", [
-    "CHAVE PIX: 62984863610",     # celular sem pontuação... ou CPF?
-    "PIX 12345678909",            # CPF sem pontuação... ou celular?
-    "PX 62984863610",
+    # CPF que TAMBÉM tem forma de celular: DDD válido, 9 na terceira casa e os
+    # dois DVs fechando. As duas provas apontam para o mesmo número, e aí
+    # escolher entre elas seria escolher para quem o dinheiro vai. ~6,6% dos
+    # CPFs caem aqui; medido sobre 20 mil, nenhum foi classificado errado.
+    "11900000083",
+    "62900000041",
+    # Onze dígitos que não são nem uma coisa nem outra.
+    "12345678901",
     "",
     "VER COMENTÁRIO DA SOLICITAÇÃO",
 ])
-def test_onze_digitos_crus_nao_sao_chutados(texto):
-    """CPF e celular têm os dois onze dígitos. Escolher entre eles é escolher
-    para quem o dinheiro vai — e isso não é decisão de regex."""
+def test_o_que_as_duas_provas_nao_separam_continua_sem_resposta(texto):
     assert regras.tipo_de_chave_pix(texto) == ""
 
 
+@pytest.mark.parametrize("texto, esperado", [
+    ("PIX CELULAR 03123456749", regras.CHAVE_TELEFONE),
+    ("PIX CPF 62984863610", regras.CHAVE_CPF),
+])
+def test_o_tipo_declarado_vence_as_provas(texto, esperado):
+    """Quem escreveu sabe de quem é a chave; o palpite é só para quem não disse."""
+    assert regras.tipo_de_chave_pix(texto) == esperado
+
+
+def test_copia_e_cola_nao_e_chave():
+    """O BR Code traz valor e beneficiário embutidos: é outro produto (QR Code).
+
+    Sem esta regra, o `00020126...` cairia na contagem de dígitos e sairia
+    classificado como se fosse uma chave qualquer.
+    """
+    brcode = ("00020126580014BR.GOV.BCB.PIX0136abc12345-6789-0abc-def0-"
+              "1234567890ab520400005303986540510.005802BR5910FULANO XYZ"
+              "6008BRASILIA62070503***63041D3D")
+    assert regras.tipo_de_chave_pix(brcode) == regras.CHAVE_COPIA_COLA
+
+
+@pytest.mark.parametrize("digitos, esperado", [
+    ("62999991234", True),      # DDD 62, 9 na terceira casa
+    ("11987654321", True),
+    ("03123456749", False),     # DDD 03 não existe
+    ("6299999123", False),      # dez dígitos: fixo, não celular
+    ("62899991234", False),     # sem o 9 obrigatório
+    ("30999991234", False),     # DDD 30 não é usado no Brasil
+])
+def test_forma_de_celular(digitos, esperado):
+    assert regras.parece_celular(digitos) is esperado
+
+
 def test_chave_ambigua_so_alarma_quando_ha_chave():
-    assert regras.chave_pix_ambigua("CHAVE PIX: 62984863610", "62984863610")
+    # CPF que também tem forma de celular: é o que sobra de ambíguo depois das
+    # duas provas. "62984863610" já não serve — ele resolve como telefone.
+    assert regras.chave_pix_ambigua("CHAVE PIX: 11900000083", "11900000083")
     assert not regras.chave_pix_ambigua("PIX CNPJ: 11.222.333/0001-44",
                                         "11.222.333/0001-44")
     # Sem chave nenhuma o problema é outro, e o recado também.
@@ -244,7 +294,7 @@ def test_chave_ambigua_so_alarma_quando_ha_chave():
 
 def test_a_planilha_pede_confirmacao_da_chave_sem_tipo():
     item = lancamento(tradePayablePaymentMethod="Pix", documentNumber="113",
-                      paidToBankAccount="CHAVE PIX: 62984863610")
+                      paidToBankAccount="CHAVE PIX: 11900000083")
     res = relatorio.montar_registros([item], {}, {}, {})
     assert "sem tipo declarado" in linhas(res)[0]["obs"]
 

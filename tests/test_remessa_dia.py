@@ -24,6 +24,9 @@ CONTA = "EMPRESA EXEMPLO - SICOOB"
 # CNPJ e CPF sintéticos, com DV calculado — o repositório é público.
 CNPJ_OK = "11222333000181"
 CPF_OK = "52998224725"
+#: CPF que TAMBÉM tem forma de celular (DDD 11, 9 na 3ª casa, DV fechando).
+#: É o único caso que continua sem resposta depois das duas provas.
+CHAVE_AMBIGUA = "11900000083"
 
 
 # ------------------------------------------------------- código de barras
@@ -212,9 +215,22 @@ def test_pix_por_celular_sem_cadastro_fica_de_fora():
     assert c.impedimento == remessa_dia.MOTIVO_SEM_DOCUMENTO
 
 
-def test_pix_com_onze_digitos_crus_e_sem_cadastro_fica_de_fora():
-    """CPF e celular têm os dois onze dígitos. Sem desempate, não sai."""
-    c, = preparar(registro(tipo="Pix", dados="52998224725"))
+def test_pix_por_cpf_cru_agora_e_reconhecido_sem_cadastro():
+    """As duas provas (DV do CPF + forma de celular) resolvem 93% dos CPFs.
+
+    `52998224725` fecha o DV e não tem forma de celular — o DDD 52 não existe.
+    """
+    c, = preparar(registro(tipo="Pix", dados=CPF_OK))
+    assert c.pode and c.forma_iniciacao == "03"
+
+
+def test_pix_com_onze_digitos_realmente_ambiguos_fica_de_fora():
+    """CPF que TAMBÉM tem forma de celular: DDD válido, 9 na 3ª casa, DV fecha.
+
+    É o que sobra depois das duas provas — ~6,6% dos CPFs. Aqui escolher seria
+    escolher para quem o dinheiro vai.
+    """
+    c, = preparar(registro(tipo="Pix", dados=CHAVE_AMBIGUA))
     assert c.impedimento == remessa_dia.MOTIVO_CHAVE_AMBIGUA
 
 
@@ -253,10 +269,23 @@ def test_cadastro_desempata_os_onze_digitos():
     assert c.pode and c.forma_iniciacao == "03"
 
 
-def test_onze_digitos_que_nao_batem_com_o_cadastro_continuam_ambiguos():
-    """O cadastro diz CNPJ; os onze dígitos são outra coisa — telefone."""
+def test_celular_e_reconhecido_pela_forma_e_o_documento_vem_do_cadastro():
+    """O cadastro diz CNPJ e a chave é um celular: as duas coisas convivem.
+
+    O documento do segmento B é do FAVORECIDO; a chave é só o endereço do Pix.
+    """
     preparado = remessa_dia.preparar(
         {CONTA: [registro(tipo="Pix", dados="62999991234")]},
+        participantes=CADASTRO, quando=HOJE)
+    c, = preparado[CONTA]
+    assert c.pode
+    assert c.forma_iniciacao == "01"              # telefone
+    assert c.documento_favorecido == CNPJ_OK      # do cadastro
+
+
+def test_ambigua_de_verdade_nao_e_salva_por_cadastro_de_outro_documento():
+    preparado = remessa_dia.preparar(
+        {CONTA: [registro(tipo="Pix", dados=CHAVE_AMBIGUA)]},
         participantes=CADASTRO, quando=HOJE)
     c, = preparado[CONTA]
     assert c.impedimento == remessa_dia.MOTIVO_CHAVE_AMBIGUA
@@ -269,8 +298,8 @@ def test_a_chave_nao_desempata_a_si_mesma():
     chave e confirmaria a si mesmo — e a trava dos onze dígitos, que existe
     desde o `tipo_de_chave_pix`, deixaria de existir aqui.
     """
-    assert remessa_dia.forma_de_iniciacao(CPF_OK, "") == ""
-    assert remessa_dia.forma_de_iniciacao(CPF_OK, CPF_OK) == "03"
+    assert remessa_dia.forma_de_iniciacao(CHAVE_AMBIGUA, "") == ""
+    assert remessa_dia.forma_de_iniciacao(CHAVE_AMBIGUA, CHAVE_AMBIGUA) == "03"
 
 
 def test_favorecido_fora_do_cadastro_nao_pega_documento_de_outro():

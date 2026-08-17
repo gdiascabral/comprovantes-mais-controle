@@ -339,8 +339,10 @@ def extrair_chave_pix(texto: str) -> str:
     return limpo.strip()
 
 
-#: Pix copia-e-cola (EMV): começa em 000201 e termina no CRC `6304XXXX`.
-_PIX_COPIA_COLA = re.compile(r"00020[01][0-9A-Za-z._@+\-/*:]{20,500}?6304[0-9A-F]{4}")
+#: O MESMO regex que classifica a chave (`regras.PIX_COPIA_COLA`). Duas
+#: cópias discordariam sobre o que é um copia-e-cola, e uma delas mandaria
+#: o BR Code inteiro para o campo de chave.
+_PIX_COPIA_COLA = regras.PIX_COPIA_COLA
 
 
 def chave_pix_do_comentario(comentario: str) -> str:

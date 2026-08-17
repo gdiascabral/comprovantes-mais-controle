@@ -55,6 +55,8 @@ MOTIVO_LINHA = "a linha digitável não fecha nos dígitos verificadores"
 MOTIVO_SEM_CHAVE = "sem dados de pagamento"
 MOTIVO_SEM_DOCUMENTO = ("o favorecido não está no cadastro de Contatos do ERP, "
                         "e o segmento B exige o CPF/CNPJ de quem recebe")
+MOTIVO_COPIA_COLA = ("Pix copia-e-cola (BR Code): é outro produto na remessa "
+                     "(QR Code), que o passo 3 ainda não monta — pague à mão")
 MOTIVO_CHAVE_AMBIGUA = ("chave Pix de onze dígitos sem tipo declarado — CPF e "
                         "celular têm os dois onze, e não bate com o cadastro")
 MOTIVO_JA_PAGO = "já pago"
@@ -310,6 +312,11 @@ def _impedimento(registro: dict, documento: str, forma: str) -> str:
         return ""
 
     if registro.get("tipo") == "Pix":
+        # Copia-e-cola não é chave: é o BR Code inteiro, com valor e
+        # beneficiário embutidos, e vira outro PRODUTO (Pix QR Code, segmento
+        # J-52-Pix). Cai antes do documento porque nem chega a precisar dele.
+        if regras.tipo_de_chave_pix(registro.get("dados") or "") == regras.CHAVE_COPIA_COLA:
+            return MOTIVO_COPIA_COLA
         # O tipo da chave deixou de decidir: o que o segmento B exige é o
         # documento do favorecido, e ele vem do cadastro para telefone, e-mail
         # e aleatória do mesmo jeito que para CPF/CNPJ.

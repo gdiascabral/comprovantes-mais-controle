@@ -205,6 +205,39 @@ CHAVE_CPF = "CPF"
 CHAVE_TELEFONE = "TELEFONE"
 CHAVE_EMAIL = "EMAIL"
 CHAVE_ALEATORIA = "ALEATORIA"
+#: Não é chave: é o BR Code inteiro, com valor e beneficiário embutidos. Vira
+#: outro PRODUTO na remessa (Pix QR Code, segmento J-52-Pix), não o segmento B.
+CHAVE_COPIA_COLA = "COPIA_COLA"
+
+#: Pix copia-e-cola (EMV): começa em 000201 e termina no CRC `6304XXXX`.
+#: Mora aqui, e não no `relatorio.py`, porque quem classifica a chave e quem a
+#: extrai do comentário precisam concordar sobre o que É um copia-e-cola.
+PIX_COPIA_COLA = re.compile(r"00020[01][0-9A-Za-z._@+\-/*:]{20,500}?6304[0-9A-F]{4}")
+
+#: Os DDDs que existem no Brasil. A lista é EXATA de propósito: é ela que
+#: separa CPF de celular quando vêm onze dígitos crus. "03123456749" começa em
+#: 03, que não é DDD de lugar nenhum — logo não é telefone.
+_DDDS = frozenset((
+    11, 12, 13, 14, 15, 16, 17, 18, 19,
+    21, 22, 24, 27, 28,
+    31, 32, 33, 34, 35, 37, 38,
+    41, 42, 43, 44, 45, 46, 47, 48, 49,
+    51, 53, 54, 55,
+    61, 62, 63, 64, 65, 66, 67, 68, 69,
+    71, 73, 74, 75, 77, 79,
+    81, 82, 83, 84, 85, 86, 87, 88, 89,
+    91, 92, 93, 94, 95, 96, 97, 98, 99,
+))
+
+
+def parece_celular(digitos: str) -> bool:
+    """Onze dígitos no formato de celular brasileiro: DDD válido + 9 + 8.
+
+    O `9` na terceira posição é obrigatório em celular desde 2016, e o DDD tem
+    lista fechada — as duas coisas juntas descartam a maior parte dos CPFs.
+    """
+    d = re.sub(r"\D", "", digitos or "")
+    return len(d) == 11 and int(d[:2]) in _DDDS and d[2] == "9"
 
 #: O tipo que a pessoa DECLAROU ao digitar. Medido nos 116 lançamentos com
 #: `paidToBankAccount` preenchido entre 08 e 12/08/2026: 75 declaram
@@ -239,14 +272,27 @@ def tipo_de_chave_pix(texto: str) -> str:
     escrito à mão. Duas fontes, nesta ordem: o que a pessoa declarou
     ("PIX CNPJ: ...") e, onde ninguém declarou, o formato INEQUÍVOCO.
 
-    Onze dígitos crus NÃO são decididos aqui. CPF e celular têm os dois onze
-    dígitos, e escolher entre eles é escolher para quem o dinheiro vai —
-    devolve "", e quem confere responde. Recusar é a única falha aceitável
-    numa função que alimenta pagamento.
+    Onze dígitos crus eram devolvidos como "" — CPF e celular têm os dois onze,
+    e escolher entre eles é escolher para quem o dinheiro vai. **Duas provas
+    independentes decidem a maioria deles**, e só o que sobra continua sendo "":
+
+    - **dígito verificador de CPF**: telefone que passe nos dois DVs por acaso
+      é ~1 em 100;
+    - **forma de celular**: DDD da lista fechada + o `9` obrigatório na terceira
+      posição desde 2016.
+
+    Fechando o CPF e não parecendo celular, é CPF. Parecendo celular e não
+    fechando o CPF, é celular. **Quando as duas provas apontam para o mesmo
+    número, continua "" e quem confere responde** — é o caso do CPF que por
+    coincidência começa com DDD válido e tem 9 na terceira casa (~7% deles).
     """
     t = str(texto or "")
     if not t.strip():
         return ""
+    # Antes de tudo: BR Code inteiro não é chave, é outro produto. Testar
+    # depois deixaria o `0002...` cair na regra dos dígitos.
+    if PIX_COPIA_COLA.search(re.sub(r"\s+", "", t)):
+        return CHAVE_COPIA_COLA
     for padrao, tipo in _TIPO_DECLARADO:
         if padrao.search(t):
             return tipo
@@ -260,7 +306,17 @@ def tipo_de_chave_pix(texto: str) -> str:
         return CHAVE_CPF
     if _TELEFONE_PONTUADO.search(t):
         return CHAVE_TELEFONE
-    return CHAVE_CNPJ if len(re.sub(r"\D", "", t)) == 14 else ""
+
+    digitos = re.sub(r"\D", "", t)
+    if len(digitos) == 14:
+        return CHAVE_CNPJ
+    if len(digitos) == 11:
+        cpf, celular = _dv_cpf(digitos), parece_celular(digitos)
+        if cpf and not celular:
+            return CHAVE_CPF
+        if celular and not cpf:
+            return CHAVE_TELEFONE
+    return ""
 
 
 def chave_pix_ambigua(texto: str, chave: str) -> bool:
