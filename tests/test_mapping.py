@@ -1,14 +1,22 @@
 from conciliacao.models import ErpAccount
 
 
-def test_mapa_tem_as_24_linhas_do_painel(mapping):
-    assert len(mapping.rows) == 24
-    assert [r.row for r in mapping.rows] == list(range(8, 32))
+def test_mapa_cobre_todas_as_linhas_do_painel(mapping, planilha):
+    # Uma linha de mapa por linha de conta do painel: sobrar significa
+    # mapa apontando para linha que nao existe, e faltar significa conta
+    # que nunca recebe saldo.
+    assert len(mapping.rows) == len(planilha.linhas)
+    assert ([r.row for r in mapping.rows]
+            == list(range(planilha.primeira_linha,
+                          planilha.ultima_linha + 1)))
 
 
-def test_tres_linhas_sem_conta_no_erp(mapping):
-    assert [r.row for r in mapping.dead_rows] == [28, 30, 31]
-    assert len(mapping.live_rows) == 21
+def test_as_linhas_sem_conta_no_erp_sao_as_duas_do_inter(mapping):
+    # Ipanema e Terra Bela do Inter: as contas foram encerradas, mas a
+    # linha fica no painel para o historico do mes nao mudar de forma.
+    mortas = [r.row for r in mapping.dead_rows]
+    assert mortas == [30, 31]
+    assert len(mapping.live_rows) == len(mapping.rows) - len(mortas)
 
 
 def test_match_por_nome(mapping):

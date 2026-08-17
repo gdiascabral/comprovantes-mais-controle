@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Aba "Acessórias" (grupo MENSAL): envia o fechamento ao escritório contábil.
+"""Aba "Acessorias" (grupo MENSAL): envia o fechamento ao escritório contábil.
 
 Dois passos, como Pagamentos do Dia, Extratos Sicoob e Contratos:
 
@@ -104,7 +104,7 @@ class AcessoriasFrame(ttk.Frame):
         PADX = widgets.PADX
 
         self.cab = widgets.Cabecalho(
-            self, "Acessórias",
+            self, "Acessorias",
             "Envia o fechamento do mês ao escritório contábil: uma solicitação "
             "por empresa, com o .zip anexado.")
         self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
@@ -279,7 +279,7 @@ class AcessoriasFrame(ttk.Frame):
         do AnexarFrame não sabe nada do que acontece aqui."""
         fut = self.worker
         if fut is not None and not fut.done():
-            return self._tarefa_atual or "Acessórias"
+            return self._tarefa_atual or "Acessorias"
         return None
 
     def _parar_click(self):
@@ -448,14 +448,14 @@ class AcessoriasFrame(ttk.Frame):
         travas = pacote.impedimentos(self.envios)
         if travas:
             messagebox.showerror(
-                "Acessórias",
+                "Acessorias",
                 "Não dá para enviar enquanto isto não for resolvido:\n\n"
                 + "\n".join(f"• {t}" for t in travas[:8]))
             return
 
         pendentes = [e for e in self.envios if e.pronta]
         if not pendentes:
-            messagebox.showinfo("Acessórias", "Não há empresa pronta para "
+            messagebox.showinfo("Acessorias", "Não há empresa pronta para "
                                               "enviar. Prepare o mês primeiro.")
             return
 

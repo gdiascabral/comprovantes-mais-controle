@@ -7,6 +7,19 @@ import pytest
 from conciliacao.models import RowFill
 from conciliacao.workbook import WorkbookError, build, output_name
 
+#: Onde o rateio secundário (Julio/Livian) mora hoje. Vem do config e
+#: não escrito à mão: a célula desce toda vez que uma conta entra no
+#: painel, e em 17/08/2026 ela desceu de F32 para F34.
+def _celula_rateio():
+    from conciliacao.config import load_config
+    from pathlib import Path as _P
+    cfg = load_config(_P(__file__).resolve().parent.parent / 'config.yaml')
+    return cfg.planilha.rateios[0].celula_secundario
+
+
+CELULA_RATEIO = _celula_rateio()
+
+
 HOJE = date(2026, 7, 30)
 
 
@@ -39,7 +52,7 @@ def test_build_escreve_valores_e_preserva_formulas(
     resultado = build(modelo_path, destino, HOJE, fills, mapping, planilha)
 
     assert resultado.path.is_file()
-    assert resultado.linhas_escritas == 24
+    assert resultado.linhas_escritas == len(planilha.linhas)
     # assert_untouched conferiu o resto da planilha celula por celula.
     assert resultado.celulas_conferidas > 200
 
@@ -58,13 +71,20 @@ def test_build_escreve_valores_e_preserva_formulas(
     assert (ws["E10"].value, ws["I10"].value, ws["J10"].value) == (0, 0, 0)
 
     # Formulas intactas, incluindo o encadeamento de aportes e o rateio.
-    assert ws["F8"].value == "=SUMIF($N$8:$N$31,B8,$M$8:$M$31)"
+    # O intervalo acompanha a ultima linha de conta do config: o painel
+    # cresce, e o que se cobra e que a formula tenha sido PRESERVADA
+    # pela escrita, nao que ela seja de uma versao especifica.
+    p, u = planilha.primeira_linha, planilha.ultima_linha
+    assert ws["F8"].value == f"=SUMIF($N${p}:$N${u},B8,$M${p}:$M${u})"
     assert ws["G8"].value == "=D8-E8-F8"
     assert ws["M9"].value.endswith("*0.667)))")
-    assert ws["H9"].value == "=IF(G9<0,G9+M9+F32,G9)"
-    assert ws["F32"].value == "=IF(M9>0,M9/2,0)"
+    assert ws["H9"].value == f"=IF(G9<0,G9+M9+{CELULA_RATEIO},G9)"
+    assert ws[CELULA_RATEIO].value == "=IF(M9>0,M9/2,0)"
     assert ws["N12"].value == '=IF(M12>0,"MORAIS ENGENHARIA - INTER","")'
-    assert ws["E33"].value == "=SUM(E8:E31)"
+    # O total tambem sai do config: ele desce quando o painel cresce, e
+    # em 17/08/2026 foi de E33 para E35.
+    assert (ws[planilha.celula_total_pagamentos].value
+            == f"=SUM(E{p}:E{u})")
     assert ws["F12"].value == 0
 
 
@@ -75,7 +95,7 @@ def test_linhas_sem_conta_no_erp_ficam_vazias_no_arquivo(
     build(modelo_path, destino, HOJE, fills, mapping, planilha)
     ws = openpyxl.load_workbook(destino).worksheets[0]
 
-    for row in (28, 30, 31):
+    for row in (30, 31):
         for col in planilha.colunas_escritas:
             assert ws[f"{col}{row}"].value is None, f"{col}{row}"
 

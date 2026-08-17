@@ -97,7 +97,7 @@ class ConciliacaoFrame(ttk.Frame):
         PADX = widgets.PADX
 
         widgets.Cabecalho(
-            self, "Conciliação Diária",
+            self, "Controle de saldo pgtos",
             "Lê os saldos e os pagamentos a vencer e gera o painel do dia, "
             "com o aporte mínimo de cada conta."
         ).pack(fill="x", padx=PADX, pady=(12, 4))
@@ -296,7 +296,7 @@ class ConciliacaoFrame(ttk.Frame):
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("ocupado", True))
-        self.worker = self.anx.submeter("Conciliação Diária", self._t_gerar,
+        self.worker = self.anx.submeter("Controle de saldo pgtos", self._t_gerar,
                                         periodo, dona=self)
 
     def _t_gerar(self, periodo: Periodo):

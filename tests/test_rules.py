@@ -108,7 +108,7 @@ def test_quando_ha_pagamento_a_coluna_j_fica_vazia(mapping):
 
 def test_linhas_sem_conta_no_erp_ficam_totalmente_vazias(mapping):
     fills = {f.row: f for f in build_row_fills(mapping, {}, {})}
-    for row in (28, 30, 31):
+    for row in (30, 31):
         linha = fills[row]
         assert (linha.balance, linha.total, linha.count, linha.bank_count) == (
             None,

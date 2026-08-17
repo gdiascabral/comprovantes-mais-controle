@@ -161,9 +161,9 @@ class PagamentosDiaFrame(ttk.Frame):
         PADX = widgets.PADX
 
         self.cab = widgets.Cabecalho(
-            self, "Pagamentos do Dia",
-            "Planilha de conferência dos pagamentos do período: como pagar "
-            "cada um e se o documento anexado bate com o lançamento.")
+            self, "Remessa/Retorno",
+            "Planilha de conferência dos pagamentos do período, o arquivo de "
+            "remessa para o banco e a leitura do retorno que ele devolve.")
         self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
 
         # Cartões SEM número: quem numera é a trilha de ações, montada no fim

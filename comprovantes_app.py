@@ -323,12 +323,16 @@ def main():
         if prefs_grupos.get(nome, True):          # por padrão, abertos
             _alternar(nome, salvar=False)
 
-    _grupo("diario", "DIÁRIO", (("pag", "🗓", "Pagamentos do Dia"),
-                                ("con", "⚖", "Conciliação Diária")))
+    # Os rótulos dizem o que a aba FAZ hoje, e não o que ela fazia quando
+    # nasceu: "Pagamentos do Dia" gera a planilha do dia e também a remessa e o
+    # retorno CNAB, e "Conciliação Diária" existe para dizer quanto falta em
+    # cada conta para os pagamentos do dia fecharem.
+    _grupo("diario", "DIÁRIO", (("pag", "🗓", "Remessa/Retorno"),
+                                ("con", "⚖", "Controle de saldo pgtos")))
     _grupo("mensal", "MENSAL", (("rel", "📊", "Relatório Mensal"),
                                 ("ext", "🏦", "Extratos Sicoob"),
                                 ("ctr", "📑", "Contratos"),
-                                ("acs", "📤", "Acessórias")))
+                                ("acs", "📤", "Acessorias")))
 
     # ---------------- rodapé da barra: atividade + tema + versão
     rodape = ttk.Frame(lateral)

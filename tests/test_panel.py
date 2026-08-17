@@ -3,6 +3,19 @@ from decimal import Decimal
 from conciliacao.models import RowFill
 from conciliacao.panel import compute_panel
 
+#: Onde o rateio secundário (Julio/Livian) mora hoje. Vem do config e
+#: não escrito à mão: a célula desce toda vez que uma conta entra no
+#: painel, e em 17/08/2026 ela desceu de F32 para F34.
+def _celula_rateio():
+    from conciliacao.config import load_config
+    from pathlib import Path as _P
+    cfg = load_config(_P(__file__).resolve().parent.parent / 'config.yaml')
+    return cfg.planilha.rateios[0].celula_secundario
+
+
+CELULA_RATEIO = _celula_rateio()
+
+
 
 def fills_de(valores: dict[int, tuple], planilha, mapping) -> list[RowFill]:
     """Monta os fills do painel; linhas nao citadas ficam com saldo 0 e E=0.
@@ -56,7 +69,7 @@ def test_rateio_do_buritis_inter_e_dois_para_um(planilha, mapping):
     linha = resultado.by_row(9)
 
     parte_morais = linha.aporte_minimo
-    parte_julio_livian = resultado.rateios_secundarios["F32"]
+    parte_julio_livian = resultado.rateios_secundarios[CELULA_RATEIO]
 
     assert parte_morais == Decimal("30000") * Decimal("0.667")
     assert parte_morais / parte_julio_livian == Decimal("2")
@@ -71,7 +84,7 @@ def test_fator_0667_sobre_aporta_meio_milesimo(planilha, mapping):
     fills = fills_de({9: (Decimal("0"), deficit)}, planilha, mapping)
     resultado = compute_panel(fills, mapping, planilha)
 
-    soma = resultado.by_row(9).aporte_minimo + resultado.rateios_secundarios["F32"]
+    soma = resultado.by_row(9).aporte_minimo + resultado.rateios_secundarios[CELULA_RATEIO]
     assert soma == deficit * Decimal("1.0005")
     assert soma - deficit == Decimal("15.000")  # sobra em 30 mil de deficit
 
@@ -81,7 +94,7 @@ def test_sem_deficit_no_buritis_nao_ha_rateio(planilha, mapping):
     resultado = compute_panel(fills, mapping, planilha)
 
     assert resultado.by_row(9).aporte_minimo is None
-    assert resultado.rateios_secundarios["F32"] == Decimal("0")
+    assert resultado.rateios_secundarios[CELULA_RATEIO] == Decimal("0")
 
 
 def test_aporte_da_linha_12_e_direcionado_para_a_linha_8(planilha, mapping):
@@ -113,7 +126,7 @@ def test_linha_12_nao_recebe_aporte_porque_f12_e_zero_fixo(planilha, mapping):
 
 def test_linhas_sem_conta_no_erp_nao_pedem_aporte(planilha, mapping):
     resultado = compute_panel(fills_de({}, planilha, mapping), mapping, planilha)
-    for row in (28, 30, 31):
+    for row in (30, 31):
         linha = resultado.by_row(row)
         assert linha.aporte_minimo == Decimal("0")
         assert not linha.precisa_aporte

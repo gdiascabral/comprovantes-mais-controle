@@ -15,9 +15,15 @@ def ws(modelo_path):
 
 
 def test_uma_aba_e_faixa_esperada(ws, planilha):
-    assert ws.max_row == 33
+    # Duas linhas depois da última conta: o rateio secundário e o total. Sai
+    # do config e não de um número fixo — acrescentar conta ao painel é rotina
+    # (em 17/08/2026 entraram duas), e um número aqui obrigaria a lembrar
+    # deste arquivo toda vez.
+    assert ws.max_row == planilha.ultima_linha + 2
     assert ws[f"B{planilha.primeira_linha}"].value == "Morais Engenharia - Inter"
-    assert ws[f"B{planilha.ultima_linha}"].value == "Terra Bela - Inter"
+    # A última linha existe e é uma conta — o nome dela muda quando o painel
+    # cresce, então o que se cobra é que ela esteja preenchida.
+    assert (ws[f"B{planilha.ultima_linha}"].value or "").strip()
 
 
 def test_labels_do_mapping_batem_com_a_coluna_b(ws, mapping):
@@ -51,7 +57,13 @@ def test_formula_de_aportes_recebidos_usa_sumif_sobre_b(ws, planilha):
     for row in planilha.linhas:
         if row in planilha.linhas_com_aporte_zero_fixo:
             continue
-        assert ws[f"F{row}"].value == f"=SUMIF($N$8:$N$31,B{row},$M$8:$M$31)"
+        # O intervalo vai até a ÚLTIMA linha de conta do config: conta que
+        # entra fora do intervalo aparece no painel e não soma aporte nenhum,
+        # sem erro na tela.
+        primeira, ultima = planilha.primeira_linha, planilha.ultima_linha
+        assert ws[f"F{row}"].value == (
+            f"=SUMIF($N${primeira}:$N${ultima},B{row},"
+            f"$M${primeira}:$M${ultima})")
 
 
 def test_formula_de_saldo_final(ws, planilha):
