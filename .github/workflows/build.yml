@@ -64,6 +64,30 @@ jobs:
     # falha aparece longe daqui. Ver CLAUDE.md, "Regra de ouro".
     runs-on: ubuntu-latest
     steps:
+      # Antes de qualquer coisa, e num job que leva segundos: sem este token a
+      # release sai só no repositório de CÓDIGO, e o `atualizador.py` procura
+      # no de ARTEFATOS. O app não vê, ninguém recebe, e nada acusa.
+      #
+      # Foi o que aconteceu entre 14 e 17/08/2026: o passo que copia a release
+      # era condicional (`if: tem_token == 'sim'`), o secret não existia, e o
+      # passo foi PULADO — status verde, release publicada, apps órfãos por
+      # três dias. Uma release que o app não enxerga não é uma release; então
+      # isto derruba a build em vez de deixar passar.
+      - name: Exigir o token do repositório de artefatos
+        env:
+          TOKEN_ARTEFATOS: ${{ secrets.TOKEN_ARTEFATOS }}
+        run: |
+          if [ -z "${TOKEN_ARTEFATOS:-}" ]; then
+            echo "::error::Falta o secret TOKEN_ARTEFATOS. Sem ele a release"
+            echo "::error::não chega em ${{ github.repository_owner }}/comprovantes-releases,"
+            echo "::error::que é onde o app procura — e ninguém recebe a atualização."
+            echo "::error::Crie um fine-grained PAT com Contents: Read and write"
+            echo "::error::nesse repositório e rode:"
+            echo "::error::  gh secret set TOKEN_ARTEFATOS --repo ${{ github.repository }}"
+            exit 1
+          fi
+          echo "token dos artefatos: presente"
+
       - name: Baixar o código
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
@@ -499,20 +523,11 @@ jobs:
       # O `if` testa uma variável de ambiente, e não `secrets` direto: o
       # contexto `secrets` não existe em `if:` de passo, e a expressão falha na
       # validação do workflow inteiro em vez de só pular o passo.
-      - name: Ver se o token do repositório de artefatos existe
-        id: tem_token
-        env:
-          TOKEN_ARTEFATOS: ${{ secrets.TOKEN_ARTEFATOS }}
-        run: |
-          # A ATRIBUIÇÃO de um `if` é válida; ligar um pipe direto no bloco
-          # `else` não é, e o PowerShell responde com ParserError na hora de
-          # ANALISAR o script — antes de rodar linha nenhuma. Foi assim que a
-          # build de 14/08 morreu num passo que só define uma variável.
-          $tem = if ($env:TOKEN_ARTEFATOS) { "sim" } else { "nao" }
-          "tem=$tem" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
+      # Sem `if:` de propósito. Ele existia para "pular quando não há token", e
+      # foi exatamente esse pulo silencioso que deixou os apps órfãos por três
+      # dias em agosto/2026. Quem garante o token agora é o job `motor`, que
+      # falha em segundos quando ele falta — aqui, se der errado, tem de doer.
       - name: Publicar a mesma Release no repositório de artefatos
-        if: steps.tem_token.outputs.tem == 'sim'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           repository: gdiascabral/comprovantes-releases
