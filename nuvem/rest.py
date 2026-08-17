@@ -133,6 +133,17 @@ def apagar(tabela: str, token: str, filtro: str) -> None:
     _chamar("DELETE", f"/rest/v1/{tabela}?{filtro}", token)
 
 
+def chamar(funcao: str, token: str, **argumentos):
+    """Executa uma função do banco e devolve o que ela retornou.
+
+    Existe para o que precisa acontecer numa instrução só, dentro do banco —
+    hoje, reservar o próximo NSA. Fazer isso em duas viagens (ler o contador,
+    somar um, gravar) é exatamente como duas máquinas acabam com o mesmo
+    número: as duas leem antes de qualquer uma gravar.
+    """
+    return _chamar("POST", f"/rest/v1/rpc/{funcao}", token, argumentos)
+
+
 # --------------------------------------------------------------------- auth
 
 def entrar(email: str, senha: str) -> dict:

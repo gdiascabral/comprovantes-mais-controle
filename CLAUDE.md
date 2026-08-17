@@ -769,12 +769,56 @@ desfechos, e a diferença importa: vencido com rede pede a senha; **sem rede e
 dentro do prazo, ABRE** (travar aqui transformaria uma queda do Supabase em
 app parado com o ERP de pé); sem rede e vencido, não abre e diz isso.
 
-**`nuvem/registro.py` está vazio de propósito.** Arquivo novo custa uma
-release com exe novo, então o pacote inteiro nasceu de uma vez; o conteúdo da
-Fase 3 (aportes lançados, NSA, retorno CNAB, envios) chega depois pelo
-`codigo.zip`. **Lá não haverá cache**, e é a diferença dele para o
-`cadastro.py`: o valor de gravar "isto já foi feito" é a resposta ser a mesma
-nas duas máquinas no mesmo instante.
+### O NSA das remessas é da nuvem (`nuvem/registro.py`)
+
+**O `remessas.json` continua existindo e continua sendo escrito** — é backup
+legível, e some junto com o computador se for a única cópia. O que ele deixou
+de ser é a autoridade do NSA.
+
+Por quê: a trava dele é um arquivo `.lock` na mesma pasta, e protege dois
+processos, não dois computadores. Cada máquina tem o seu arquivo, as duas leem
+"último = 5" antes de qualquer uma gravar 6. A prova apareceu sem precisar de
+duas pessoas — nesta máquina, a instalação (`_app`) dizia que o próximo NSA
+era 1 e a pasta de código dizia 2.
+
+**Reservar e espiar são coisas diferentes**, e a separação não é preciosismo:
+
+- `proximo_nsa()` só OLHA, e é o que a janela de conferência usa. Reservar ao
+  mostrar queimaria um número cada vez que alguém abrisse a tela e desistisse.
+  O número exibido é **previsão**: se a outra máquina gerar nesse meio-tempo,
+  o arquivo sai com um mais alto;
+- `alocar_nsa()` RESERVA, e é chamado **antes de montar o arquivo** — o NSA
+  entra no conteúdo, e reservá-lo depois deixaria a janela em que a outra
+  máquina pega o mesmo. Se a geração falhar em seguida, o número é queimado, e
+  esse é o lado certo de errar: **pular número é inofensivo, repetir não**.
+
+Quem garante a atomicidade é o Postgres, na função `alocar_nsa` (um
+`insert … on conflict do update … returning`, uma instrução só). Medido contra
+o projeto de verdade: 12 pedidos simultâneos, 12 números distintos.
+
+**Sem nuvem, a aba se recusa a gerar remessa** — e é a única operação do app
+que faz isso. Um contador local diria um número que a outra pessoa já pode ter
+usado, e o app não teria como saber. Todo o resto (cadastro, extratos,
+relatório) roda com a última cópia.
+
+O histórico é **append-only** no banco: não há DELETE em lugar nenhum, e o
+UPDATE alcança só `estado`/`observacao` da remessa e o retorno do item. O que
+está gravado descreve um arquivo que já saiu, e reescrevê-lo seria mentir
+sobre o passado. Corrigir o contador é `ajustar_nsa`, que **exige motivo por
+escrito** e deixa rastro em `remessa_ajuste`.
+
+`registro.Espelhado` grava nos dois lugares, e o local **não tem voto**: a
+nuvem registra primeiro (é ela que pode recusar por NSA repetido, e essa
+recusa tem de impedir o `.tmp` de virar `.REM`), o espelho vem depois e, se
+falhar, só avisa. Recusar a remessa porque o BACKUP falhou seria trocar o
+problema pequeno pelo grande.
+
+**O que ainda NÃO está na nuvem** (e continua como estava): os aportes já
+lançados, que seguem em `self.criados`, memória do processo em
+`aportes/aportes_frame.py` — falha parcial seguida de reabrir o app ainda
+apaga a proteção contra duplicar; e os envios da Acessórias, hoje conferidos
+relendo o portal, que funciona. As colunas `retorno_codigo`/`retorno_em`
+existem em `remessa_item` esperando quem processe o retorno do banco.
 
 **Migrar de novo** (máquina nova, ou recomeçar): `python nuvem/migrar.py
 --conferir` critica sem escrever; `--subir` escreve e depois relê para

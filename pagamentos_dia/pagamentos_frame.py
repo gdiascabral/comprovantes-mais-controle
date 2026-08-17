@@ -79,17 +79,30 @@ import sicoob_contas                                          # noqa: E402
 
 
 
-def _historico():
-    """A memória das remessas, ao lado do exe.
+def _historico(avisar=None):
+    """A memória das remessas: a NUVEM manda, o arquivo local acompanha.
 
-    Tem valor, favorecido e o de-para com o ERP — dado da empresa, e por isso
-    fora do repositório, como o `contas_sicoob.json`. Longe do cadastro de
-    propósito: cadastro se restaura de backup, e um contador de NSA que volta
-    no tempo é a única falha que este arquivo não pode ter.
+    O `remessas.json` continua ao lado do exe e continua sendo escrito — é
+    backup legível, e tem valor, favorecido e o de-para com o ERP, dado da
+    empresa que por isso fica fora do repositório.
+
+    O que ele NÃO pode mais ser é a autoridade do NSA. A trava dele é um
+    arquivo `.lock` na mesma pasta, e protege dois processos, não dois
+    computadores: cada máquina tem o seu arquivo, as duas leem "último = 5"
+    antes de qualquer uma gravar 6, e NSA repetido pode significar pagamento
+    em dobro. A prova apareceu sem precisar de duas pessoas — a instalação
+    dizia que o próximo era 1 e a pasta de código dizia 2.
+
+    Sem sessão na nuvem, isto levanta: gerar remessa com um contador que não
+    dá para conferir é o desfecho que não pode acontecer em silêncio.
     """
     from cnab240 import Historico
 
-    return Historico(_pasta_base() / "remessas.json")
+    from nuvem import registro, sessao
+
+    local = Historico(_pasta_base() / "remessas.json")
+    nuvem = registro.Registro(sessao.token(_pasta_base()))
+    return registro.Espelhado(nuvem, local, avisar)
 
 
 def _carregar_reembolsos() -> dict:
@@ -711,7 +724,24 @@ class PagamentosDiaFrame(ttk.Frame):
         # "este boleto já saiu numa remessa?", e essa resposta tem de virar
         # IMPEDIMENTO — linha que não aparece marcável —, não um aviso depois
         # de a pessoa já ter conferido a lista.
-        historico = _historico()
+        try:
+            historico = _historico(self._log)
+        except Exception as e:
+            # Sem o registro central não se gera remessa. É a única operação
+            # do app que se recusa por falta de nuvem, e de propósito: o valor
+            # inteiro de perguntar "que número é o próximo?" é a resposta valer
+            # para as duas máquinas. Um contador local diria um número que a
+            # outra pessoa já pode ter usado — e NSA repetido pode significar
+            # pagamento em dobro.
+            messagebox.showerror(
+                "Remessa",
+                "Não consegui falar com o registro de remessas.\n\n"
+                f"{e}\n\n"
+                "A remessa não foi gerada. O número sequencial (NSA) precisa "
+                "vir de um lugar só, senão as duas máquinas podem gerar o "
+                "mesmo — e repetir NSA pode virar pagamento em dobro.\n\n"
+                "Conecte-se e tente de novo.")
+            return
         preparado = remessa_dia.preparar(self.resultado.contas,
                                          self.participantes,
                                          historico=historico)
@@ -774,6 +804,13 @@ class PagamentosDiaFrame(ttk.Frame):
         # CONSULTA, não reserva: as duas mostravam "arquivo nº 000031" enquanto
         # a gravação daria 31 a uma e 32 à outra. Quem conferisse pelo número
         # da tela procuraria um arquivo que não existe.
+        #
+        # Com o contador na nuvem, o número aqui é PREVISÃO: se a outra máquina
+        # gerar entre esta tela e o Confirmar, o arquivo sai com um número mais
+        # alto. Continua sendo consulta de propósito — reservar ao MOSTRAR
+        # queimaria um NSA cada vez que alguém abrisse a janela e desistisse.
+        # A previsão errar para cima é inofensiva; o nome do arquivo gravado é
+        # o que vale, e ele aparece no registro ao fim.
         proximos: dict[str, int] = {}
         for conta, pagador in pagadores.items():
             linhas = preparado[conta]
@@ -877,7 +914,13 @@ class PagamentosDiaFrame(ttk.Frame):
                 self._log(f"\n{pagador.empresa}: nada marcado — sem arquivo.")
                 continue
             try:
-                nsa = historico.proximo_nsa(pagador.convenio)
+                # RESERVA o número, não espia. O NSA entra no CONTEÚDO do
+                # arquivo: espiar aqui e gravar depois deixaria uma janela em
+                # que a outra máquina pega o mesmo número, e as duas gerariam
+                # arquivos legítimos com o mesmo NSA. Se a geração falhar
+                # depois desta linha, o número é queimado — e isso é o lado
+                # certo de errar: pular número é inofensivo, repetir não.
+                nsa = historico.alocar_nsa(pagador.convenio)
                 arquivo = remessa_dia.montar_arquivo(pagador, marcados, nsa=nsa)
                 problemas = validar(arquivo.gerar())
                 if problemas:
