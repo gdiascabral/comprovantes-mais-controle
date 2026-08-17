@@ -52,6 +52,9 @@ import regras_pagamento as regras
 MOTIVO_MAO = "a observação manda pagar outra pessoa"
 MOTIVO_PARCIAL = "pagamento parcial — boleto não se paga pela metade"
 MOTIVO_LINHA = "a linha digitável não fecha nos dígitos verificadores"
+MOTIVO_ARRECADACAO = ("ficha de arrecadação (tributo/concessionária) — sai da "
+                      "remessa por decisão do dono, que a paga à parte pelo "
+                      "QR Code Pix")
 MOTIVO_SEM_CHAVE = "sem dados de pagamento"
 MOTIVO_SEM_DOCUMENTO = ("o favorecido não está no cadastro de Contatos do ERP, "
                         "e o segmento B exige o CPF/CNPJ de quem recebe")
@@ -197,6 +200,9 @@ class Candidato:
     status: str
     obs: str = ""
     codigo_barras: str = ""
+    #: Só o boleto bancário tem: sai do fator de vencimento do código de
+    #: barras. Ficha de arrecadação não carrega o campo, e fica None.
+    vencimento: "_dt.date | None" = None
     chave: str = ""
     documento_favorecido: str = ""
     forma_iniciacao: str = ""      # domínio G100 do segmento B
@@ -307,6 +313,12 @@ def _impedimento(registro: dict, documento: str, forma: str) -> str:
     if registro.get("tipo") == "Boleto":
         if registro.get("parcial"):
             return MOTIVO_PARCIAL
+        # Antes do código de barras: a ficha de arrecadação CONVERTE para 44
+        # dígitos como qualquer boleto, então a conversão não a denuncia. Foi
+        # assim que duas guias municipais viajaram como título de cobrança na
+        # remessa de 17/08/2026 — aceitas pelo banco, no produto errado.
+        if ocr_boleto.eh_arrecadacao(dados):
+            return MOTIVO_ARRECADACAO
         if not ocr_boleto.codigo_de_barras(dados):
             return MOTIVO_LINHA
         return ""
@@ -389,9 +401,15 @@ def preparar(contas: dict, participantes: dict | None = None,
         linhas: list[Candidato] = []
         for registro in registros:
             dados = (registro.get("dados") or "").strip()
+            # O documento do favorecido vale para os DOIS produtos. No Pix ele
+            # é obrigatório (segmento B, 07.3B/08.3B) e decide se a linha sai;
+            # no boleto ele identifica o CEDENTE no J-52, e a falta dele não
+            # impede o pagamento — só empobrece o arquivo. Resolver aqui, e não
+            # dentro do ramo do Pix, é o que faz o boleto parar de sair com a
+            # inscrição do cedente zerada.
+            do_cadastro = documento_do_cadastro(registro, participantes)
             documento = forma = ""
             if registro.get("tipo") == "Pix":
-                do_cadastro = documento_do_cadastro(registro, participantes)
                 documento = do_cadastro or documento_valido(dados)
                 forma = forma_de_iniciacao(dados, do_cadastro)
 
@@ -421,6 +439,12 @@ def preparar(contas: dict, participantes: dict | None = None,
                                                    candidato.descricao)
                 if candidato.tipo == "Boleto":
                     candidato.codigo_barras = codigo
+                    candidato.vencimento = ocr_boleto.vencimento_da_linha(dados)
+                    # Identifica o cedente no J-52. Vazio não impede o
+                    # pagamento — o boleto se paga pelo código de barras —,
+                    # mas quem abrir o arquivo depois não descobre quem
+                    # recebeu, e foi essa a queixa da primeira remessa real.
+                    candidato.documento_favorecido = do_cadastro
                 else:
                     candidato.chave = dados
                     candidato.documento_favorecido = documento
@@ -437,6 +461,23 @@ def preparar(contas: dict, participantes: dict | None = None,
 # --------------------------------------------------------------------------
 # O arquivo
 # --------------------------------------------------------------------------
+#: 40 posições, campo 18.1 (G031) do header de lote.
+TAMANHO_MENSAGEM_LOTE = 40
+
+
+def _mensagem_do_lote(quando: _dt.date) -> str:
+    """O único texto livre que o layout oferece para um lote de boletos.
+
+    O segmento J **não tem campo de descrição** — os 40 caracteres do header
+    de lote são tudo que existe, e saíam em branco. Não dá para descrever
+    pagamento por pagamento (o Internet Banking mostra, como "Observação", o
+    nome do cedente do próprio título), mas dá para dizer de onde o lote veio,
+    que é o que faltava para quem abre a tela do banco e não reconhece o
+    arquivo.
+    """
+    return f"PAGAMENTOS DO DIA {quando:%d/%m/%Y}"[:TAMANHO_MENSAGEM_LOTE]
+
+
 def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
                    quando: _dt.date | None = None):
     """Um `ArquivoRemessa` com até dois lotes: boletos e Pix.
@@ -465,6 +506,7 @@ def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
             "TITULOS_COBRANCA",
             tipo_servico=TipoServico.PAGAMENTO_FORNECEDOR,
             forma_lancamento=FormaLancamento.TITULO_OUTROS_BANCOS,
+            mensagem=_mensagem_do_lote(quando),
         )
         for c in boletos:
             lote.adicionar(PagamentoTitulo(
@@ -473,12 +515,21 @@ def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
                 seu_numero=c.seu_numero,
                 codigo_barras=c.codigo_barras,
                 nome_cedente=c.favorecido,
-                # O sacado somos nós, e é o único dos três que se sabe com
-                # certeza. Cedente e sacador são condicionais no layout, e o
-                # que o ERP tem do fornecedor é só o nome.
+                # O vencimento sai do PRÓPRIO código de barras (fator de
+                # vencimento), e não do ERP: é o dado que o banco emitiu, já
+                # conferido por dígito verificador. Saía zerado à toa. Ficha
+                # de arrecadação não tem o campo, e aí continua None.
+                vencimento=c.vencimento,
+                # Sacado somos nós; cedente é quem recebe. O documento do
+                # cedente vem do cadastro de Contatos do ERP — antes ficava
+                # zerado porque só o Pix consultava o cadastro, e o J-52 saía
+                # com "quem recebe" pela metade: nome sim, inscrição 0.
+                # Sacador não existe nestes pagamentos (é o avalista/terceiro),
+                # e inventar um seria pior que deixá-lo em branco.
                 j52=DadosJ52(sacado_nome=empresa.nome,
                              sacado_documento=empresa.documento,
-                             cedente_nome=c.favorecido),
+                             cedente_nome=c.favorecido,
+                             cedente_documento=c.documento_favorecido),
             ))
 
     if pix:
@@ -486,6 +537,7 @@ def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
             "PIX_TRANSFERENCIA",
             tipo_servico=TipoServico.PAGAMENTO_FORNECEDOR,
             forma_lancamento=FormaLancamento.PIX_TRANSFERENCIA,
+            mensagem=_mensagem_do_lote(quando),
         )
         for c in pix:
             lote.adicionar(PixTransferencia(

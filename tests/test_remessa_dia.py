@@ -579,3 +579,117 @@ def test_boleto_ja_enviado_e_reconhecido_na_remessa_seguinte(tmp_path):
 
     achado = historico.envio_de(ocr_boleto.codigo_de_barras(LINHA_BANCARIA))
     assert achado is not None and achado[0].nsa == 1
+
+
+# ==========================================================================
+# O que a PRIMEIRA REMESSA REAL (17/08/2026, NSA 000001) mostrou
+# ==========================================================================
+# Os 12 boletos chegaram ao banco com a inscrição do cedente ZERADA, e o
+# Internet Banking exibiu "CPF/CNPJ do beneficiário: 000.000.000-00" nas doze
+# telas. Passou por uma combinação exata: o teste da biblioteca preenchia
+# `cedente_documento` à mão, e o teste do app não olhava byte nenhum do J-52.
+# Estes testes olham os bytes.
+
+def _linhas_do_arquivo(candidatos, **kw):
+    arquivo = remessa_dia.montar_arquivo(pagador(), candidatos, nsa=1,
+                                         quando=HOJE, **kw)
+    return arquivo.gerar()
+
+
+def _segmentos(linhas, codigo):
+    """Os registros de detalhe (tipo 3) de um segmento. J-52 tem '52' em 18-19."""
+    if codigo == "J52":
+        return [l for l in linhas if l[7] == "3" and l[13] == "J" and l[17:19] == "52"]
+    if codigo == "J":
+        return [l for l in linhas if l[7] == "3" and l[13] == "J" and l[17:19] != "52"]
+    return [l for l in linhas if l[7] == "3" and l[13] == codigo]
+
+
+def test_o_documento_do_cedente_vai_no_J52():
+    """A queixa da remessa real: "não puxou os dados de quem está recebendo".
+
+    O NOME já ia; faltava a inscrição — 12.4.J52 (tipo) e 13.4.J52 (número).
+    O documento vem do cadastro de Contatos do ERP, o mesmo que o Pix usa.
+    """
+    preparado = remessa_dia.preparar({CONTA: [registro()]},
+                                     participantes=CADASTRO, quando=HOJE)
+    j52, = _segmentos(_linhas_do_arquivo(preparado[CONTA]), "J52")
+    assert j52[75] == "2"                          # 12.4.J52 tipo: 2 = CNPJ
+    assert j52[76:91] == CNPJ_OK.zfill(15)         # 13.4.J52 número
+    assert j52[91:131].strip() == "FORNECEDOR SA"  # 14.4.J52 nome
+
+
+def test_sem_cadastro_o_cedente_fica_zerado_mas_o_boleto_ainda_sai():
+    """Boleto se paga pelo código de barras: documento ausente empobrece o
+    arquivo, não impede o pagamento. Diferente do Pix, onde é obrigatório."""
+    j52, = _segmentos(_linhas_do_arquivo(preparar(registro())), "J52")
+    assert j52[75] == "0" and j52[76:91] == "0" * 15
+    assert j52[91:131].strip() == "FORNECEDOR SA"
+
+
+def test_o_vencimento_sai_do_codigo_de_barras():
+    """10.3J saía `00000000`. O dado estava no próprio boleto, conferido por
+    DV — não precisava do ERP."""
+    j, = _segmentos(_linhas_do_arquivo(preparar(registro())), "J")
+    assert j[91:99] == f"{ocr_boleto.vencimento_da_linha(LINHA_BANCARIA):%d%m%Y}"
+    assert j[91:99] != "00000000"
+
+
+def test_ficha_de_arrecadacao_nao_entra_na_remessa():
+    """Duas guias municipais viajaram como título de cobrança em 17/08/2026.
+
+    O banco aceitou — mas o produto certo é outro (segmento O, forma 11), e o
+    dono decidiu pagá-las à parte, pelo QR Code Pix. Elas saem da remessa com
+    o motivo escrito, em vez de irem no produto errado.
+
+    A conversão do código de barras NÃO as denuncia: ficha de arrecadação
+    converte para 44 dígitos como qualquer boleto. Quem separa é o formato da
+    linha — 48 dígitos começando em 8.
+    """
+    c, = preparar(registro(dados=LINHA_ARRECADACAO, valor=2670.86))
+    assert not c.pode
+    assert c.impedimento == remessa_dia.MOTIVO_ARRECADACAO
+    # e o motivo viaja para a lista do que ficou de fora
+    preparado = remessa_dia.preparar(
+        {CONTA: [registro(dados=LINHA_ARRECADACAO, valor=2670.86)]}, quando=HOJE)
+    assert remessa_dia.fora(preparado)[0]["motivo"] == remessa_dia.MOTIVO_ARRECADACAO
+
+
+@pytest.mark.parametrize("linha, esperado", [
+    (LINHA_ARRECADACAO, True),
+    (LINHA_BANCARIA, False),      # boleto bancário, 47 dígitos
+    ("12345", False),
+    ("", False),
+])
+def test_reconhece_ficha_de_arrecadacao(linha, esperado):
+    assert ocr_boleto.eh_arrecadacao(linha) is esperado
+
+
+def test_o_header_do_lote_leva_a_data_do_pagamento():
+    """O segmento J não tem campo de descrição — os 40 caracteres do header de
+    lote (18.1) são o único texto livre, e saíam em branco."""
+    linhas = _linhas_do_arquivo(preparar(registro()))
+    header, = [l for l in linhas if l[7] == "1"]
+    assert header[102:142].strip() == f"PAGAMENTOS DO DIA {HOJE:%d/%m/%Y}"
+
+
+def test_a_mensagem_do_lote_nao_estoura_as_40_posicoes():
+    assert len(remessa_dia._mensagem_do_lote(HOJE)) <= remessa_dia.TAMANHO_MENSAGEM_LOTE
+
+
+@pytest.mark.parametrize("linha, esperado", [
+    (LINHA_BANCARIA, _dt.date(2026, 8, 10)),   # fator 1534, 2ª volta
+    (LINHA_ARRECADACAO, None),                 # arrecadação não tem o campo
+    ("12345", None),
+    ("", None),
+])
+def test_vencimento_da_linha(linha, esperado):
+    assert ocr_boleto.vencimento_da_linha(linha, hoje=HOJE) == esperado
+
+
+def test_o_fator_de_vencimento_virou_em_2025():
+    """O campo tem 4 dígitos e estourou em 21/02/2025. Fator baixo depois
+    disso é a SEGUNDA volta — lê-lo com a base antiga daria 2001."""
+    antes = ocr_boleto.vencimento_da_linha(LINHA_BANCARIA, hoje=_dt.date(2024, 1, 1))
+    depois = ocr_boleto.vencimento_da_linha(LINHA_BANCARIA, hoje=_dt.date(2026, 8, 17))
+    assert antes.year == 2001 and depois.year == 2026

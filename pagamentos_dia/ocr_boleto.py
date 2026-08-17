@@ -27,6 +27,7 @@ aqui; aceitar leitura errada não é.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import io
 import re
 
@@ -177,6 +178,50 @@ def confere_valor(linha: str, valor_esperado: float, tolerancia: float = 0.01) -
 def linha_confiavel(linha: str, valor_esperado: float) -> bool:
     """As duas provas. Só o que passa aqui vai para a planilha."""
     return valida(linha) and confere_valor(linha, valor_esperado)
+
+
+#: Base do "fator de vencimento" da Febraban: fator 1000 = 03/07/2000. O campo
+#: tem 4 dígitos e estourou em 21/02/2025 (fator 9999); a partir de 22/02/2025
+#: ele voltou a 1000. Por isso um fator BAIXO hoje significa a segunda volta, e
+#: não um vencimento de 2000 — daí a segunda base.
+_FATOR_BASE = _dt.date(2000, 7, 3)
+_FATOR_BASE_2A_VOLTA = _dt.date(2025, 2, 22)
+#: A partir de quando um fator pequeno passa a ser lido como segunda volta. É
+#: a data em que a primeira volta acabou; antes dela, fator baixo era 2000.
+_VIRADA = _dt.date(2025, 2, 22)
+
+
+def eh_arrecadacao(linha: str) -> bool:
+    """Ficha de arrecadação (48 dígitos, começando em 8) e não boleto bancário.
+
+    São coisas diferentes com aparências parecidas: a ficha paga tributo,
+    concessionária ou órgão público, não tem cedente nem vencimento, e no CNAB
+    240 é outro PRODUTO (segmento O, forma 11) — não o segmento J dos títulos.
+    Distinguir aqui é o que impede as duas de irem pelo mesmo caminho.
+    """
+    d = digitos(linha)
+    return len(d) == 48 and d[:1] == "8" and _valida_arrecadacao(d)
+
+
+def vencimento_da_linha(linha: str, hoje: _dt.date | None = None) -> _dt.date | None:
+    """A data de vencimento embutida no código de barras, ou None.
+
+    Só o boleto BANCÁRIO carrega vencimento: a ficha de arrecadação (48
+    dígitos, começando em 8) não tem o campo, e devolve None em vez de uma
+    data inventada.
+
+    Fator `0000` significa "sem vencimento" (boleto a combinar) e também é
+    None — zero não é uma data.
+    """
+    d = digitos(linha)
+    if len(d) != 47 or not _valida_bancario(d):
+        return None
+    fator = int(d[33:37])
+    if fator == 0:
+        return None
+    hoje = hoje or _dt.date.today()
+    base = _FATOR_BASE_2A_VOLTA if hoje >= _VIRADA else _FATOR_BASE
+    return base + _dt.timedelta(days=fator - 1000)
 
 
 def codigo_de_barras(linha: str) -> str:

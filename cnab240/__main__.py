@@ -35,12 +35,25 @@ def _cmd_retorno(args) -> int:
     print(f"Convênio ......: {resumo['convenio']}")
     print(f"NSA ...........: {resumo['nsa']}   Geração: {resumo['data_geracao']}")
     print(f"Lotes .........: {resumo['lotes']}")
+    # Os QUATRO estados, sempre. Enquanto só saíam confirmados e rejeitados, um
+    # retorno com 13 pagamentos pendentes de assinatura era impresso como
+    # "0 confirmados / 0 rejeitados" — que se lê como "nada a fazer", e o que
+    # havia a fazer era liberar R$ 39 mil parados no SicoobNet.
     print(
         f"Pagamentos ....: {resumo['pagamentos']}  "
-        f"({resumo['confirmados']} confirmados / {resumo['rejeitados']} rejeitados)"
+        f"({resumo['confirmados']} confirmados / {resumo['rejeitados']} rejeitados"
+        f" / {resumo['pendentes']} pendentes / {resumo['sem_ocorrencia']} sem resposta)"
     )
     print(f"Valor confirmado: R$ {resumo['valor_confirmado']:,.2f}")
     print(f"Valor rejeitado : R$ {resumo['valor_rejeitado']:,.2f}")
+    if resumo["pendentes"]:
+        print(f"\n[!] {resumo['pendentes']} pagamento(s) PENDENTES de assinatura — "
+              "o banco recebeu, mas o dinheiro só sai depois de alguém liberar "
+              "no SicoobNet.")
+    if resumo["sem_ocorrencia"]:
+        print(f"\n[!] {resumo['sem_ocorrencia']} pagamento(s) sem código de "
+              "ocorrência: o banco não disse nem sim nem não. Confira no "
+              "SicoobNet antes de dar o dia por encerrado.")
 
     if resumo["motivos"]:
         print("\nMotivos de rejeição:")

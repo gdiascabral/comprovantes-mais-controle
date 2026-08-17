@@ -959,6 +959,8 @@ class PagamentosDiaFrame(ttk.Frame):
                       f"{len(marcados)} pagamento(s) · {relatorio.brl(soma)}"
                       f"\n  {str(caminho).replace(chr(92), '/')}")
 
+        self._registrar_o_que_ficou_de_fora(preparado)
+
         if not gerados:
             self.q.put(("status", "Nenhum arquivo de remessa foi gravado."))
             return
@@ -967,6 +969,36 @@ class PagamentosDiaFrame(ttk.Frame):
                   "transmite: gerar é reversível, enviar não é.")
         self.q.put(("status", f"{len(gerados)} arquivo(s) de remessa · "
                               f"{relatorio.brl(total_geral)}"))
+
+    def _registrar_o_que_ficou_de_fora(self, preparado):
+        """O que NÃO entrou na remessa, com o motivo — depois de gravar.
+
+        Omitir não é apagar: é a regra da casa desde a aba "NÃO ENTRARAM" da
+        planilha, e a remessa vinha sendo a exceção. A janela de conferência
+        mostrava o impedimento e o fechamento a levava junto — quem olhasse a
+        planilha depois via APTO, quem olhasse o arquivo não via o pagamento, e
+        nada em lugar nenhum dizia por quê.
+
+        Em 17/08/2026 foram R$ 13.532,56 em dois reembolsos que sumiram assim.
+        Eles estavam certos em não sair (o aviso "PAGAR PARA" manda o dinheiro
+        para quem não é o favorecido do lançamento); errado era o silêncio.
+
+        A `remessa_dia.fora()` já existia e já tinha teste — só nunca tinha
+        sido chamada.
+        """
+        de_fora = remessa_dia.fora(preparado)
+        if not de_fora:
+            return
+        total = sum(f["valor"] for f in de_fora)
+        self._log(f"\n{len(de_fora)} pagamento(s) NÃO entraram na remessa "
+                  f"({relatorio.brl(total)}) — pague à mão ou resolva o motivo:")
+        for motivo in dict.fromkeys(f["motivo"] for f in de_fora):
+            linhas = [f for f in de_fora if f["motivo"] == motivo]
+            soma = sum(f["valor"] for f in linhas)
+            self._log(f"  {len(linhas):>3} · {relatorio.brl(soma):>14}  {motivo}")
+            for f in linhas:
+                self._log(f"        {f['tipo']:<7} {relatorio.brl(f['valor']):>14}  "
+                          f"{f['favorecido'][:34]}")
 
     def _anexos_a_ler(self, selecionados) -> list[tuple[str, bool]]:
         """[(downloadUrl, é_pdf)] sem repetição.
