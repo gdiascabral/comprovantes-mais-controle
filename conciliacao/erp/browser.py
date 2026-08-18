@@ -149,9 +149,62 @@ def aguardar_sistema(pagina: Page, seletor_sucesso: str, *, timeout_s: float = 4
 
     if not esta_logado(pagina):
         raise SessaoExpirada(_MENSAGEM_SESSAO)
-    raise ErpError(
-        f"a tela do ERP nao carregou o esperado ({seletor_sucesso}) em {timeout_s:.0f}s.\n"
-        "Pode ser lentidao do ERP ou mudanca de layout — veja o print em screenshots."
+
+    # TELA VAZIA NAO E MUDANCA DE LAYOUT, e confundir as duas manda quem le
+    # procurar no lugar errado. `esta_logado` responde olhando SINAIS DA TELA
+    # DE LOGIN; numa pagina em branco nao ha sinal nenhum, entao ela devolve
+    # "logado" e a mensagem antiga acusava o layout — quando o que houve foi a
+    # tela nao renderizar coisa alguma.
+    #
+    # A diferenca importa porque as duas pedem coisas opostas: layout mudado e
+    # conserto no codigo (achar o seletor novo); tela em branco e tentar de
+    # novo, quase sempre com a sessao do ERP no meio — ele aceita UMA por
+    # usuario, e alguem entrando com o mesmo login derruba esta aqui sem que a
+    # SPA volte para a tela de login.
+    raise ErpError(_diagnostico(pagina, seletor_sucesso, timeout_s))
+
+
+def _diagnostico(pagina: Page, seletor: str, timeout_s: float) -> str:
+    """A mensagem que separa 'tela vazia' de 'layout mudou'."""
+    try:
+        endereco = pagina.url
+    except Exception:
+        endereco = "(nao deu para ler o endereco)"
+    try:
+        # Quanto conteudo existe DE FATO. Pagina em branco tem body quase
+        # vazio; tela renderizada tem centenas de elementos, mesmo que o
+        # seletor procurado nao esteja entre eles.
+        elementos = pagina.locator("body *").count()
+        texto = (pagina.locator("body").inner_text(timeout=2000) or "").strip()
+    except Exception:
+        elementos, texto = -1, ""
+
+    comeco = (
+        f"a tela do ERP nao carregou o esperado ({seletor}) em {timeout_s:.0f}s.\n"
+        f"Endereco: {endereco}\n"
+    )
+
+    if 0 <= elementos < 20 and len(texto) < 40:
+        return comeco + (
+            "A pagina ficou EM BRANCO — nao e mudanca de layout, e sim tela "
+            "que nao renderizou.\n"
+            "O mais comum: o ERP aceita UMA sessao por usuario, e alguem "
+            "entrou com o mesmo login (outra pessoa, ou outra aba do app) "
+            "logo depois de esta sessao ser refeita.\n"
+            "Confira se mais alguem esta usando o mesmo usuario do ERP e "
+            "tente de novo. Persistindo com a tela em branco e ninguem mais "
+            "logado, pode ser instabilidade do proprio ERP."
+        )
+    if elementos < 0:
+        return comeco + (
+            "Nao deu nem para inspecionar a pagina — o navegador pode ter "
+            "sido fechado ou travado no meio. Tente de novo."
+        )
+    return comeco + (
+        f"A tela CARREGOU ({elementos} elementos), mas sem o que o app "
+        f"procurava.\n"
+        f"Isso e mudanca de layout do ERP: o seletor precisa ser atualizado "
+        f"no codigo. Veja o print em screenshots."
     )
 
 
