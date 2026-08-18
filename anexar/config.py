@@ -50,6 +50,14 @@ TAG_COMPROVANTE = "Comprovante"
 # URL do sistema.
 MC_URL_BASE = "https://acessar.maiscontroleerp.com.br"
 MC_URL_PAGAMENTOS = MC_URL_BASE + "/#/payable-installments"
+#: A porta de entrada, usada quando a sessão NÃO está de pé.
+#:
+#: Existe porque cair numa rota interna com o token vencido é o que produz a
+#: tela de "sessão encerrada" e o vaivém de entra-sai-entra: o single-spa
+#: repinta a casca, descobre que não pode, e volta — às vezes duas vezes. Indo
+#: direto para o login, a tela que aparece é a de login, que é o que a pessoa
+#: precisa ver.
+MC_URL_LOGIN = MC_URL_BASE + "/#/login"
 # Prefixo do link de um lançamento (basta concatenar o launchId).
 MC_URL_LANCAMENTO = MC_URL_BASE + "/#/payable-installments/"
 

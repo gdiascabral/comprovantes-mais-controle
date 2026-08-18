@@ -368,6 +368,22 @@ class AnexarFrame(ttk.Frame):
            navegador, e a aba seguinte reaproveitava um Chrome deslogado.
         """
         log = log or self._log
+
+        # NAVEGADOR MORTO É OUTRA COISA DE SESSÃO CAÍDA, e tratá-los igual era
+        # o que obrigava a fechar o app para trocar de aba. Quem fecha a janela
+        # do Chrome no X — ou tem o Chrome morto por outro motivo — deixa este
+        # objeto apontando para nada: a aba seguinte chamava `esta_logado()`
+        # nele, tomava erro de Playwright, e não havia caminho de volta sem
+        # reiniciar. Aqui o app simplesmente abre outro.
+        if self.mc is not None and not self.mc.vivo():
+            log("A janela do Chrome não está mais aberta — abrindo outra...")
+            try:
+                self.mc.__exit__(None, None, None)
+            except Exception:
+                pass                      # já estava morto; o que importa é soltar
+            self.mc = None
+            self.api = None
+
         if self.mc is None:
             log("Abrindo o Chrome e entrando no Mais Controle...")
             self.mc = MCClient(log=log).__enter__()

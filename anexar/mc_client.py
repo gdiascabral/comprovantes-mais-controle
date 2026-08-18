@@ -354,6 +354,29 @@ class MCClient:
                 self._pw.stop()
 
     # ------------------------------------------------------------------ login
+    def vivo(self) -> bool:
+        """O navegador ainda existe e responde?
+
+        Diferente de `esta_logado`, e a diferença é a que separa "entrar de
+        novo" de "abrir tudo de novo": aqui a pergunta é se há navegador, não
+        se há sessão. Quando alguém fecha a janela do Chrome no X — ou ela
+        morre sozinha —, o objeto continua na memória do app apontando para
+        nada, e toda aba seguinte falha com erro de Playwright até o app ser
+        reiniciado. Era por isso que trocar de aba exigia fechar e abrir.
+        """
+        try:
+            if self.ctx is None:
+                return False
+            paginas = list(self.ctx.pages)
+            if not paginas:
+                return False
+            # `is_closed()` não fala com o navegador; `title()` fala. Sem uma
+            # ida de verdade até lá, um contexto morto passa por vivo.
+            paginas[0].title()
+            return True
+        except Exception:
+            return False
+
     def esta_logado(self) -> bool:
         """Nome público de `_esta_logado` — outras abas precisam perguntar."""
         return self._esta_logado()
@@ -492,6 +515,26 @@ class MCClient:
         if self._esta_logado():
             self.log("Login OK (sessão ainda aberta).")
             return True
+
+        # NÃO ESTÁ LOGADO: vai para a porta de entrada antes de tentar entrar.
+        #
+        # Até aqui o app tentava logar de dentro da rota de pagamentos, e era
+        # isso que produzia a tela de "sessão encerrada" e o vaivém que o dono
+        # relatou em 18/08/2026 — entra, sai, entra de novo. O ERP é
+        # single-spa: com o token vencido numa rota interna, ele repinta a
+        # casca, descobre que não pode, e devolve para o login; às vezes duas
+        # vezes, porque o Firebase ainda estava restaurando o token.
+        #
+        # Indo direto para `#/login`, a tela que aparece é a de login — que é
+        # justamente o que a pessoa precisa ver e onde o Chrome oferece a
+        # senha guardada. Só acontece quando já sabemos que a sessão caiu,
+        # então não há risco de derrubar sessão boa.
+        self.log("Sessão não está de pé — indo para a tela de login.")
+        try:
+            self._ir_para(config.MC_URL_LOGIN)
+            self.page.wait_for_timeout(1500)
+        except Exception as e:
+            config.diag(f"não consegui abrir a tela de login: {e!r}")
         self._tentar_entrar()
         # Espera única e tolerante. O ERP usa Firebase Auth, e o token volta do
         # IndexedDB de forma ASSÍNCRONA: nos primeiros segundos ele mostra a
