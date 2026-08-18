@@ -401,18 +401,39 @@ def _escolher_status(pagina: Page, rotulo: str) -> bool:
     return True
 
 
+def _contar_vencidos(pagina: Page) -> int:
+    """Quantas linhas visiveis estao com status vencido.
+
+    Existe para tornar VISIVEL a suposicao que o filtro passou a fazer: que
+    "Em aberto" traz os vencidos junto. Se um dia parar de trazer, o numero
+    zera e o log diz isso -- em vez de o titulo atrasado sumir do painel de
+    segunda sem deixar rastro.
+    """
+    try:
+        texto = normalize_name(pagina.locator("body").inner_text(timeout=2500))
+    except Exception:
+        return 0
+    return texto.count("VENCIDO")
+
+
 def filtrar_em_aberto(pagina: Page, log=print) -> bool:
-    """Marca "Em aberto" E "Vencido" no dropdown de status da tela.
+    """Marca "Em aberto" no dropdown de status da tela.
 
     Otimizacao, nao correcao: se falhar, a coleta segue com o mes inteiro e o
     filtro de `rules.py` garante o mesmo resultado final.
 
-    "Vencido" NAO e opcional. O Mais Controle troca "Em aberto" por "Vencido"
-    assim que o vencimento passa (ver rules.STATUS_A_PAGAR), entao filtrar so
-    "Em aberto" ESCONDE justamente o titulo atrasado — o de sabado no painel de
-    segunda. Um filtro que remove linhas legitimas nao e otimizacao, e perda
-    silenciosa: por isso, se o dropdown for de escolha unica e nao aceitar os
-    dois, desfazemos o filtro e voltamos para "Todos pagamentos".
+    SO "Em aberto", e nao mais "Em aberto" + "Vencido". O dropdown do Mais
+    Controle e de escolha UNICA: o segundo clique trocava em vez de somar, a
+    checagem via isso, desfazia tudo e caia para "Todos pagamentos" -- entao o
+    filtro nunca pegava e as 15 paginas do mes eram varridas a toa. Confirmado
+    com o dono do sistema em 18/08/2026: "Em aberto" na tela ja devolve os
+    vencidos junto.
+
+    Como isso contraria o que este arquivo assumia, o log passa a CONTAR
+    quantos vencidos vieram. Se um dia o ERP mudar e o filtro comecar a
+    esconde-los, aparece na hora, em vez de o painel de segunda perder o
+    titulo de sabado sem ninguem notar. E `rules.STATUS_A_PAGAR` continua
+    aceitando os dois: a rede de seguranca nao muda.
     """
     antes = pagina.locator(SEL_LINHA_DADOS).count()
     try:
@@ -429,31 +450,32 @@ def filtrar_em_aberto(pagina: Page, log=print) -> bool:
         if not _escolher_status(pagina, "Em aberto"):
             pagina.keyboard.press("Escape")
             return False
-        venceu = _escolher_status(pagina, "Vencido")
         pagina.keyboard.press("Escape")
         pagina.wait_for_timeout(1400)
         _esperar_grade(pagina)
 
-        # Confere no proprio gatilho o que ficou selecionado. Se "Em aberto"
-        # sumiu, o dropdown e de escolha unica e o segundo clique trocou em vez
-        # de somar — nesse caso o filtro esta MENTINDO sobre a cobertura.
+        # Confere no proprio gatilho o que ficou selecionado: filtro que nao
+        # pegou e pior que filtro nenhum, porque a contagem some sem aviso.
         try:
             selecionado = (gatilho.inner_text(timeout=2000) or "")
         except Exception:
             selecionado = ""
-        norm = normalize_name(selecionado)
-        tem_aberto = "EM ABERTO" in norm
-        tem_vencido = "VENCIDO" in norm
-
-        if not venceu or not (tem_aberto and tem_vencido):
-            log("  o filtro de status nao aceita 'Em aberto' + 'Vencido' juntos "
-                "— desfazendo para nao esconder titulo vencido")
+        if "EM ABERTO" not in normalize_name(selecionado):
+            log("  o filtro 'Em aberto' nao ficou selecionado — seguindo com "
+                "o mes inteiro")
             _desfazer_filtro_status(pagina)
             return False
 
         depois = pagina.locator(SEL_LINHA_DADOS).count()
-        log(f"  filtro 'Em aberto' + 'Vencido' aplicado na tela "
-            f"({antes} -> {depois} linhas visiveis)")
+        vencidos = _contar_vencidos(pagina)
+        log(f"  filtro 'Em aberto' aplicado na tela "
+            f"({antes} -> {depois} linhas visiveis, {vencidos} vencida(s))")
+        if depois and not vencidos:
+            # Nao e erro: pode nao haver vencido nenhum hoje. Mas e a unica
+            # pista de que o filtro talvez esteja escondendo-os, e o custo de
+            # descobrir isso tarde e um titulo atrasado fora do painel.
+            log("  (nenhuma linha vencida no filtro — se voce esperava alguma, "
+                "confira na tela do ERP)")
         return True
     except Exception:
         try:
