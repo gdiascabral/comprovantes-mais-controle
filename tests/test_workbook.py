@@ -7,17 +7,6 @@ import pytest
 from conciliacao.models import RowFill
 from conciliacao.workbook import WorkbookError, build, output_name
 
-#: Onde o rateio secundário (Julio/Livian) mora hoje. Vem do config e
-#: não escrito à mão: a célula desce toda vez que uma conta entra no
-#: painel, e em 17/08/2026 ela desceu de F32 para F34.
-def _celula_rateio():
-    from conciliacao.config import load_config
-    from pathlib import Path as _P
-    cfg = load_config(_P(__file__).resolve().parent.parent / 'config.yaml')
-    return cfg.planilha.rateios[0].celula_secundario
-
-
-CELULA_RATEIO = _celula_rateio()
 
 
 HOJE = date(2026, 7, 30)
@@ -78,8 +67,8 @@ def test_build_escreve_valores_e_preserva_formulas(
     assert ws["F8"].value == f"=SUMIF($N${p}:$N${u},B8,$M${p}:$M${u})"
     assert ws["G8"].value == "=D8-E8-F8"
     assert ws["M9"].value.endswith("*0.667)))")
-    assert ws["H9"].value == f"=IF(G9<0,G9+M9+{CELULA_RATEIO},G9)"
-    assert ws[CELULA_RATEIO].value == "=IF(M9>0,M9/2,0)"
+    assert ws["H9"].value == f"=IF(G9<0,G9+M9+{planilha.rateios[0].celula_secundario},G9)"
+    assert ws[planilha.rateios[0].celula_secundario].value == "=IF(M9>0,M9/2,0)"
     assert ws["N12"].value == '=IF(M12>0,"MORAIS ENGENHARIA - INTER","")'
     # O total tambem sai do config: ele desce quando o painel cresce, e
     # em 17/08/2026 foi de E33 para E35.
