@@ -294,3 +294,94 @@ def test_excel_sai_com_as_colunas_na_ordem_pedida(tmp_path):
     assert [c.value for c in ws[3]][:5] == \
         ["Tipo de Pgto", "Dados do Pgto", "Valor", "Descrição", "Favorecido"]
     assert ws.cell(row=4, column=3).value == 100.0
+
+
+# ==========================================================================
+# Reembolso: quem recebe atravessa até a remessa
+# ==========================================================================
+# A planilha é o único ponto que tem, ao mesmo tempo, os anexos, o texto lido
+# e o lançamento — é ali que se descobre quem recebe. A remessa lê o veredito
+# pronto; redescobri-lo seria uma segunda regra sobre a mesma linha.
+
+CPF_DA_PESSOA = "11144477735"          # sintético, DV fechando
+
+
+def item_com_aviso(url="u-reembolso"):
+    return {"id": "i9", "tradePayableId": "t9", "paidTo": "FORNECEDOR SA",
+            "remainingValue": 630.0, "tradePayablePaymentMethod": "Pix",
+            "tradePayableAccount": {"name": "CONTA TESTE"},
+            "costCentreDetails": [{"workName": "OBRA"}]}, \
+        {"t9": [anexo("PAGAR PARA FULANO DE TAL", url=url)]}
+
+
+def test_o_reembolso_resolvido_atravessa_com_nome_e_documento():
+    item, anexos = item_com_aviso()
+    reg = relatorio.montar_registros(
+        [item], anexos, {}, {"u-reembolso": ""},
+        participantes={"FULANO DE TAL": CPF_DA_PESSOA})
+    linha = reg.contas["CONTA TESTE"][0]
+    assert linha["reembolso"]
+    assert linha["reembolso_nome"] == "FULANO DE TAL"
+    assert linha["reembolso_documento"] == CPF_DA_PESSOA
+    assert not linha["reembolso_impedimento"]
+    # o favorecido do LANÇAMENTO não se perde: a remessa o usa para dizer de
+    # que compra o reembolso veio
+    assert linha["favorecido"] == "FORNECEDOR SA"
+
+
+def test_o_reembolso_sem_documento_atravessa_com_o_motivo():
+    item, anexos = item_com_aviso()
+    reg = relatorio.montar_registros([item], anexos, {}, {"u-reembolso": ""})
+    linha = reg.contas["CONTA TESTE"][0]
+    assert linha["reembolso"] and not linha["reembolso_documento"]
+    assert "FULANO DE TAL" in linha["reembolso_impedimento"]
+
+
+def test_linha_comum_nao_ganha_campos_de_reembolso():
+    item = {"id": "i8", "tradePayableId": "t8", "paidTo": "Fornecedor",
+            "remainingValue": 100.0, "tradePayablePaymentMethod": "Pix",
+            "paidToBankAccount": "PIX CPF: 111.222.333-44",
+            "tradePayableAccount": {"name": "CONTA TESTE"},
+            "costCentreDetails": [{"workName": "OBRA"}]}
+    linha = relatorio.montar_registros([item], {}, {}, {}).contas["CONTA TESTE"][0]
+    assert not linha["reembolso"]
+    assert linha["reembolso_nome"] == linha["reembolso_documento"] == ""
+    assert linha["reembolso_impedimento"] == ""
+
+
+# ==========================================================================
+# Etapa 2: a janela lista o dia inteiro
+# ==========================================================================
+def _pagamento(ident, conta="CONTA TESTE", pago=False):
+    return {"id": ident, "tradePayableId": ident, "paidTo": "FORNECEDOR SA",
+            "remainingValue": 10.0, "paid": pago,
+            "tradePayableAccount": {"name": conta}}
+
+
+def test_a_janela_lista_todo_lancamento_das_contas_marcadas():
+    """A inversão: o `confirmar_antes.json` deixou de decidir quem aparece.
+
+    Antes, fornecedor fora daquele arquivo não tinha onde ser tirado do dia —
+    a não ser desmarcando a conta inteira, junto com tudo o mais que ela tem.
+    """
+    import pagamentos_frame as frame
+
+    lancamentos = [_pagamento("a"), _pagamento("b"),
+                   _pagamento("c", conta="OUTRA CONTA")]
+    alvos = frame.alvos_para_confirmar(lancamentos, ["CONTA TESTE"])
+    assert [i["id"] for i in alvos] == ["a", "b"]
+
+
+def test_ja_pago_nao_entra_na_pergunta():
+    """Não há o que decidir sobre ele."""
+    import pagamentos_frame as frame
+
+    alvos = frame.alvos_para_confirmar(
+        [_pagamento("a"), _pagamento("b", pago=True)], ["CONTA TESTE"])
+    assert [i["id"] for i in alvos] == ["a"]
+
+
+def test_conta_nao_marcada_nao_entra_na_pergunta():
+    import pagamentos_frame as frame
+
+    assert frame.alvos_para_confirmar([_pagamento("a")], ["OUTRA"]) == []

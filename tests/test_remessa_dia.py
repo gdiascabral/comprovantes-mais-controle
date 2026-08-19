@@ -87,10 +87,24 @@ def test_atencao_nasce_desmarcado():
     assert c.pode and not c.marcado
 
 
-def test_reembolso_e_autorizado_tambem_nascem_marcados():
-    for status in ("APTO (autorizado)", "APTO* (reembolso)"):
-        c, = preparar(registro(status=status))
-        assert c.marcado, status
+def test_o_autorizado_tambem_nasce_marcado():
+    """"APTO (autorizado)" é APTO como qualquer outro."""
+    c, = preparar(registro(status="APTO (autorizado)"))
+    assert c.marcado
+
+
+def test_o_reembolso_e_o_apto_que_nasce_desmarcado():
+    """"APTO* (reembolso)" também é APTO, e mesmo assim pede um clique.
+
+    O asterisco não é enfeite: é a única linha em que o app TROCA o favorecido
+    por conta própria, e quem confere o total não tem como perceber a troca.
+    Ver `test_reembolso_resolvido_nasce_desmarcado` para a linha completa.
+    """
+    c, = preparar(registro(status="APTO* (reembolso)", reembolso=True,
+                           tipo="Pix", dados="PIX CPF 111.444.777-35",
+                           reembolso_nome="PESSOA DE EXEMPLO",
+                           reembolso_documento="11144477735"))
+    assert c.apto and c.pode and not c.marcado
 
 
 # ------------------------------------------- as travas contra pagar 2 vezes
@@ -693,3 +707,115 @@ def test_o_fator_de_vencimento_virou_em_2025():
     antes = ocr_boleto.vencimento_da_linha(LINHA_BANCARIA, hoje=_dt.date(2024, 1, 1))
     depois = ocr_boleto.vencimento_da_linha(LINHA_BANCARIA, hoje=_dt.date(2026, 8, 17))
     assert antes.year == 2001 and depois.year == 2026
+
+
+# ==========================================================================
+# Reembolso: o arquivo passa a declarar A PESSOA
+# ==========================================================================
+# Até 19/08/2026 todo reembolso era impedido, e com razão: o segmento B leva
+# UM par nome/documento, e os dois lados vinham de origens diferentes — nome e
+# documento do FORNECEDOR, chave Pix DA PESSOA. Agora a planilha resolve quem
+# recebe (`reembolso.identificar`) e manda os dois campos juntos; aqui se
+# prova que eles chegam ao arquivo, e que o do fornecedor NÃO chega.
+
+CPF_DA_PESSOA = "11144477735"
+
+
+def reembolso_resolvido(**troca):
+    """Um reembolso cuja pessoa a planilha já identificou."""
+    base = {"tipo": "Pix", "dados": "PIX CPF 111.444.777-35",
+            "status": "APTO* (reembolso)", "favorecido": "FORNECEDOR SA",
+            "reembolso": True, "reembolso_nome": "PESSOA DE EXEMPLO",
+            "reembolso_documento": CPF_DA_PESSOA,
+            "reembolso_origem": "Contatos do ERP"}
+    base.update(troca)
+    return registro(**base)
+
+
+def test_reembolso_resolvido_entra_declarando_a_pessoa():
+    """O favorecido do ARQUIVO é a pessoa; o do lançamento fica guardado.
+
+    O `participantes` traz o CNPJ do FORNECEDOR de propósito: é o documento
+    que a linha teria pegado antes, e o que ela não pode pegar agora.
+    """
+    c, = remessa_dia.preparar({CONTA: [reembolso_resolvido()]},
+                              participantes=CADASTRO, quando=HOJE)[CONTA]
+    assert c.pode
+    assert c.favorecido == "PESSOA DE EXEMPLO"
+    assert c.documento_favorecido == CPF_DA_PESSOA != CNPJ_OK
+    assert c.reembolso and c.reembolso_de == "FORNECEDOR SA"
+
+
+def test_reembolso_resolvido_nasce_desmarcado():
+    """É APTO, e mesmo assim pede um clique.
+
+    É a única linha em que o app troca o favorecido por conta própria — quem
+    confere o total não tem como perceber a troca sozinho.
+    """
+    c, = remessa_dia.preparar({CONTA: [reembolso_resolvido()]},
+                              participantes=CADASTRO, quando=HOJE)[CONTA]
+    assert c.apto and c.pode and not c.marcado
+
+
+def test_o_reembolso_declara_a_pessoa_nos_bytes_do_arquivo():
+    """Os bytes, dos DOIS lados do par — que é onde estava a contradição.
+
+    O nome do favorecido mora no segmento A e a inscrição no B (07.3B/08.3B).
+    Era essa separação que deixava o defeito passar: cada campo, olhado
+    sozinho, estava preenchido e plausível. O que não podia era o nome de um
+    e o documento de outro.
+    """
+    linhas = remessa_dia.preparar({CONTA: [reembolso_resolvido()]},
+                                  participantes=CADASTRO, quando=HOJE)[CONTA]
+    for c in linhas:
+        c.marcado = True                       # a pessoa confirmou na janela
+    registros = _linhas_do_arquivo(linhas)
+    a, = _segmentos(registros, "A")
+    b, = _segmentos(registros, "B")
+    assert "PESSOA DE EXEMPLO" in a            # nome: a pessoa
+    assert "FORNECEDOR SA" not in a            # e não o fornecedor
+    assert CPF_DA_PESSOA in b                  # documento: o dela
+    assert CNPJ_OK not in b                    # e não o do fornecedor
+
+
+def test_reembolso_sem_documento_continua_fora_com_o_motivo_de_la():
+    """Não sabendo quem recebe, o impedimento vem da planilha e diz o que falta."""
+    falta = "reembolso para 'PESSOA DE EXEMPLO': o CPF de quem recebe não foi encontrado"
+    c, = preparar(reembolso_resolvido(reembolso_documento="", reembolso_nome="",
+                                      reembolso_impedimento=falta))
+    assert not c.pode and c.impedimento == falta
+
+
+def test_reembolso_sem_veredito_nenhum_e_impedido():
+    """A rede de baixo: registro que não passou pelo `reembolso.identificar`."""
+    c, = preparar(registro(tipo="Pix", dados="PIX CPF 529.982.247-25",
+                           status="APTO* (reembolso)", reembolso=True))
+    assert not c.pode and c.impedimento == remessa_dia.MOTIVO_REEMBOLSO
+
+
+# ------------------------------------- o que VOCÊ tirou também é relatado
+def test_o_que_voce_desmarcou_tambem_sai_na_lista():
+    """Omitir não é apagar — e vale para a escolha, não só para a regra.
+
+    A linha desmarcada na conferência sumia do arquivo e não aparecia em lugar
+    nenhum: quem olhasse a planilha via APTO, quem olhasse o arquivo não via o
+    pagamento, e nada dizia por quê.
+    """
+    preparado = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE)
+    preparado[CONTA][0].marcado = False
+    de_fora = remessa_dia.fora(preparado)
+    assert len(de_fora) == 1
+    assert de_fora[0]["motivo"] == remessa_dia.MOTIVO_DESMARCADO
+    assert de_fora[0]["favorecido"] == "FORNECEDOR SA"
+
+
+def test_a_linha_marcada_e_sem_impedimento_nao_sai_na_lista():
+    preparado = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE)
+    assert preparado[CONTA][0].marcado
+    assert remessa_dia.fora(preparado) == []
+
+
+def test_impedido_nao_vira_escolha_sua():
+    """A linha impedida nunca teve caixa; o motivo dela é o da regra."""
+    preparado = remessa_dia.preparar({CONTA: [registro(parcial=True)]}, quando=HOJE)
+    assert remessa_dia.fora(preparado)[0]["motivo"] == remessa_dia.MOTIVO_PARCIAL

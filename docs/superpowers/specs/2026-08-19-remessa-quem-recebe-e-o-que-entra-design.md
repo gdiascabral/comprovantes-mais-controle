@@ -52,21 +52,25 @@ espalhado pelas 1.400 linhas do `relatorio.py`:
 | Função | Origem |
 |---|---|
 | `nome_do_aviso(files)` | move de `relatorio.nome_do_reembolso` |
-| `chave_do_aviso(files, textos)` | move de `relatorio.chave_pix_do_aviso` |
-| `_chave_confiavel(chave)` | move de `relatorio._chave_confiavel` |
-| `pix_do_cadastro(files, item, mapa)` | move de `relatorio.pix_do_reembolso` |
+| `janelas_do_aviso(files, textos)` | **novo** — o recorte que os dois leitores dividem |
 | `documento_do_aviso(files, textos)` | **novo** |
-| `carregar(pasta)` | **novo** — lê o `pix_reembolso.json` |
+| `carregar(pasta)` / `chaves(cadastro)` | **novo** — lê o `pix_reembolso.json` |
 | `identificar(...) -> Pessoa` | **novo** — a decisão |
 
-`relatorio.py` importa `reembolso` e mantém apelidos com os nomes antigos
-(`nome_do_reembolso = reembolso.nome_do_aviso`, etc.). Os testes existentes e o
-uso de `relatorio._PAGAR_PARA` no `pagamentos_frame.py` continuam valendo.
+`relatorio.py` importa `reembolso`; `nome_do_reembolso` e `_PAGAR_PARA` viram
+apelidos, e os testes existentes e o uso de `relatorio._PAGAR_PARA` no
+`pagamentos_frame.py` continuam valendo.
 
 A dependência é de mão única — `relatorio` → `reembolso`, nunca o contrário —,
-então `reembolso.py` não importa `relatorio`: o que ele precisa de lá
-(`chave`, `_rotulo`, `chave_pix_por_padrao`, `mesma_chave`) desce junto ou vira
-parâmetro.
+e é ela que decide o corte. `chave_pix_do_aviso`, `_chave_confiavel` e
+`pix_do_reembolso` **ficam** no `relatorio`: eles dependem dos padrões de chave
+Pix (`_PADROES_PIX`), que são do vocabulário de lá; arrastá-los para cá levaria
+junto o módulo inteiro, ou obrigaria a um import circular.
+
+O que os dois lados de fato compartilham é só o **recorte** — a janela de 300
+caracteres depois do "PAGAR PARA" —, e é ela que mora aqui, em
+`janelas_do_aviso`. Fossem dois recortes, bastaria um mudar de tamanho para a
+chave e o documento passarem a falar de pedaços diferentes do mesmo papel.
 
 `pagamentos_dia/*.py` já entra no `codigo.zip` por glob (`build.yml`,
 `Copy-Item pagamentos_dia/*.py`). Arquivo novo nessa pasta **não** exige mexer
@@ -96,14 +100,25 @@ Da fonte mais declarada para a menos:
    mapa de participantes. O papel `EMPLOYEE` já entra em
    `listar_participantes`, e reembolso costuma ser para funcionário: esta deve
    ser a fonte que resolve a maioria dos casos sem ninguém cadastrar nada.
-   Nome ambíguo já sai do mapa na origem — dois participantes com o mesmo nome
-   normalizado e documentos diferentes somem de lá —, então aqui a ambiguidade
-   chega como "não encontrado", que é o desfecho certo.
+
+   O casamento é por **igualdade, ou por começo ÚNICO** — e não pelo "casa por
+   pedaço" que o app usa para nome de empresa. Nome de gente não aceita aquilo:
+   "FULANO SOUZA" está dentro de "FULANO SOUZA LIMA" e de "FULANO SOUZA COSTA",
+   que são duas pessoas com dois CPFs. Havendo mais de um começo possível, a
+   fonte não responde. Nome ambíguo já sai do mapa na origem — dois
+   participantes com o mesmo nome normalizado e documentos diferentes somem de
+   lá —, então dos dois lados a ambiguidade chega como "não encontrado", que é
+   o desfecho certo.
 3. **Texto do aviso** — CPF/CNPJ que fecha o dígito verificador, procurado na
-   MESMA janela de 300 caracteres depois do `PAGAR PARA` que o
-   `chave_do_aviso` já usa. A janela existe porque o aviso costuma trazer
-   também o CNPJ da empresa e o valor; varrer o texto inteiro pegaria o
-   primeiro número parecido, não o certo.
+   MESMA janela de 300 caracteres depois do `PAGAR PARA` que a leitura da chave
+   já usa. A janela existe porque o aviso costuma trazer também o CNPJ da
+   empresa e o valor; varrer o texto inteiro pegaria o primeiro número
+   parecido, não o certo.
+
+   Achando **mais de um** documento válido na janela, o rótulo (`CPF:`,
+   `CNPJ:`) desempata **pelo tipo que ele nomeia** — 11 dígitos para CPF, 14
+   para CNPJ —, e não por proximidade: em `CPF: <cpf> <cnpj>` os dois estão a
+   poucos caracteres do rótulo. Sem rótulo que resolva, a fonte não responde.
 
 **O nome do segmento B sai da mesma fonte que o documento.** As fontes 1 e 2
 dão o nome oficial do cadastro; só na fonte 3 o nome vem do rótulo do arquivo.
@@ -249,6 +264,10 @@ apagar"), e que ficou de pé para a escolha manual.
 devolver **todos** os lançamentos a pagar das contas marcadas. Já pago continua
 fora da lista: não há o que decidir sobre ele.
 
+A escolha de quem entra na lista sai da classe e vira
+`alvos_para_confirmar(lancamentos, escolhidas)`, no nível do módulo: é decisão,
+não tela, e assim tem teste sem precisar de janela.
+
 `_janela_confirmar` muda de forma:
 
 - **agrupada por conta**, com contagem e total no cabeçalho de cada uma — o
@@ -300,16 +319,21 @@ Em `tests/test_remessa_dia.py`:
 - linha impedida continua saindo com o motivo do impedimento, e não com o de
   desmarcada — impedido não vira escolha sua.
 
-Em `tests/test_pagamentos_dia.py`:
+Em `tests/test_pagamentos_dia.py`, sobre `alvos_para_confirmar`:
 
-- os ids desmarcados chegam a `montar_registros` e saem em `omitidos` com
-  `MOTIVO_NAO_CONFIRMADO` (já coberto; confirmar que segue valendo com a lista
-  cheia);
-- `carregar_confirmar` vazio **não** esvazia mais a lista de alvos — é a
-  inversão que esta parte faz, e é o teste que a guarda.
+- lista todo lançamento das contas marcadas, sem consultar o
+  `confirmar_antes.json` — é a inversão que esta parte faz, e é o teste que a
+  guarda;
+- já pago não entra na pergunta;
+- lançamento de conta não marcada não entra.
+
+Os ids desmarcados chegando a `montar_registros` e saindo em `omitidos` com
+`MOTIVO_NAO_CONFIRMADO` já tinham teste, e ele segue valendo sem alteração — é
+justamente por o efeito já ser esse que esta parte é pequena.
 
 A janela em si não é testada (tkinter); o que se testa é a seleção dos alvos e
-o efeito dos ids no resultado.
+o efeito dos ids no resultado. É a limitação conhecida desta parte: a rolagem,
+o agrupamento e o contador do rodapé só se conferem abrindo o app.
 
 ---
 

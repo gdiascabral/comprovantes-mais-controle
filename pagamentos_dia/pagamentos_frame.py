@@ -20,7 +20,6 @@ sessão do ERP, que só aceita uma por usuário.
 from __future__ import annotations
 
 import datetime
-import json
 import os
 import queue
 import subprocess
@@ -34,6 +33,7 @@ from tkinter import filedialog, messagebox, ttk
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import ocr_boleto                                             # noqa: E402
+import reembolso                                              # noqa: E402
 import regras_pagamento as regras                             # noqa: E402
 import relatorio                                              # noqa: E402
 import remessa_dia                                            # noqa: E402
@@ -106,18 +106,50 @@ def _historico(avisar=None):
     return registro.Espelhado(nuvem, local, avisar)
 
 
+def alvos_para_confirmar(lancamentos, escolhidas) -> list:
+    """Que lançamentos a janela da etapa 2 lista.
+
+    Era "só os fornecedores do `confirmar_antes.json`", e por isso a janela
+    nem abria quando o arquivo estava vazio. Passou a ser TODO lançamento a
+    pagar das contas marcadas: sem isso, tirar um pagamento do dia obrigava a
+    desmarcar a conta inteira, junto com tudo o mais que ela tem. Aquele
+    arquivo continua valendo — só mudou de função, de porteiro para destaque
+    dentro da janela.
+
+    Já pago fica de fora: não há o que decidir sobre ele. Se ele entra ou não
+    na planilha é a caixa "incluir já pagos", que é outra pergunta.
+
+    Fora da classe porque é decisão, não tela — e assim tem teste.
+    """
+    escolha = {relatorio.chave(n) for n in escolhidas}
+    return [i for i in lancamentos
+            if relatorio.chave(relatorio.nome_da_conta(i)) in escolha
+            and not i.get("paid")]
+
+
+def _doc_legivel(documento: str) -> str:
+    """CPF/CNPJ pontuado. Conferir 11 dígitos crus a olho não é conferir."""
+    d = "".join(ch for ch in (documento or "") if ch.isdigit())
+    if len(d) == 11:
+        return f"{d[:3]}.{d[3:6]}.{d[6:9]}-{d[9:]}"
+    if len(d) == 14:
+        return f"{d[:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:]}"
+    return d or "?"
+
+
 def _carregar_reembolsos() -> dict:
     """Chaves Pix dos avisos "PAGAR PARA <nome>".
 
     Fica em arquivo, ao lado do exe, porque é CPF de gente — não entra no
     repositório. Ausente, o relatório só marca a linha como pendente.
+
+    A leitura do arquivo mudou de dono: quem entende dele é o `reembolso`, que
+    aceita o formato antigo (`{nome: chave}`) e o novo (com nome oficial e
+    documento). O `str(v)` que estava aqui viraria a REPRESENTAÇÃO de um
+    dicionário no formato novo — uma "chave Pix" com chaves e vírgulas, que
+    nada recusaria por não parecer chave.
     """
-    try:
-        dados = json.loads((_pasta_base() / "pix_reembolso.json")
-                           .read_text(encoding="utf-8"))
-        return {str(k): str(v) for k, v in dados.items()} if isinstance(dados, dict) else {}
-    except Exception:
-        return {}
+    return reembolso.chaves(reembolso.carregar(_pasta_base()))
 
 
 class PagamentosDiaFrame(ttk.Frame):
@@ -471,43 +503,92 @@ class PagamentosDiaFrame(ttk.Frame):
         self.b2.configure(state="normal")
 
     # --------------------------------------------------------------- etapa 2
-    def _janela_confirmar(self, alvos) -> set | None:
-        """Pergunta, um a um, quais desses pagamentos entram.
+    def _janela_confirmar(self, alvos, destacar=()) -> set | None:
+        """Quais lançamentos entram hoje — um a um, antes de tudo.
 
-        Existe para os pagamentos que o dono do escritório quer ver antes —
-        distribuição de lucro para os sócios, por exemplo. Marcar a linha de
-        laranja na planilha não bastava: a planilha é lida DEPOIS de gerada,
-        e a pergunta precisa acontecer antes.
+        Ela nasceu só para os pagamentos que o dono do escritório quer ver
+        antes (distribuição de lucro para os sócios, por exemplo), e por isso
+        só abria quando o `confirmar_antes.json` tinha nomes. Marcar a linha
+        de laranja na planilha não bastava: a planilha é lida DEPOIS de
+        gerada, e a pergunta precisa acontecer antes.
+
+        Mas o EFEITO dela sempre valeu para qualquer linha — o que se desmarca
+        aqui sai da planilha E da remessa, com motivo, porque as duas
+        descendem do mesmo `montar_registros`. Só o alcance é que era estreito:
+        um lançamento de fornecedor não cadastrado não tinha onde ser tirado
+        do dia, a não ser desmarcando a conta inteira.
+
+        Agora ela lista tudo, e o `confirmar_antes.json` mudou de função: em
+        vez de decidir se a janela abre, decide quem aparece com ⚠ e na frente
+        dentro da conta. A regra já cadastrada não se perde — deixa de ser
+        porteiro e vira destaque.
 
         Roda na thread da interface (é chamada de `gerar`, antes de submeter
         ao navegador), então pode abrir janela e esperar resposta à vontade.
         Devolve os ids NÃO confirmados, ou None se a pessoa cancelou tudo.
         """
         top = tk.Toplevel(self)
-        top.title("Confirmar antes de gerar")
+        top.title("2. Confirmar o que entra")
         top.transient(self.winfo_toplevel())
-        top.resizable(False, False)
         widgets.barra_de_titulo(top)
 
         moldura = ttk.Frame(top, padding=14)
         moldura.pack(fill="both", expand=True)
         ttk.Label(moldura, style="Secao.TLabel",
-                  text="Estes pagamentos pedem a sua confirmação").pack(anchor="w")
-        ttk.Label(moldura, style="Apoio.TLabel", wraplength=560, justify="left",
-                  text="Desmarque o que NÃO deve entrar na planilha de hoje. O que "
-                       "for desmarcado vai para a aba NÃO ENTRARAM, com o motivo."
+                  text="Confira o que entra hoje").pack(anchor="w")
+        ttk.Label(moldura, style="Apoio.TLabel", wraplength=680, justify="left",
+                  text="Já vem tudo marcado. Desmarque o que NÃO deve entrar — "
+                       "ele sai da planilha e da remessa, e aparece na aba NÃO "
+                       "ENTRARAM com o motivo. O ⚠ é quem você mandou conferir "
+                       "sempre."
                   ).pack(anchor="w", pady=(0, 10))
 
-        marcas = []
+        # Rolagem, como na conferência da remessa: a janela era
+        # `resizable(False, False)` e listava um punhado de nomes; listando o
+        # dia inteiro (~300 lançamentos) ela sairia pela borda da tela, com o
+        # botão de confirmar fora do alcance.
+        painel = tk.Canvas(moldura, highlightthickness=0, height=380)
+        barra = ttk.Scrollbar(moldura, orient="vertical", command=painel.yview)
+        dentro = ttk.Frame(painel)
+        dentro.bind("<Configure>",
+                    lambda _e: painel.configure(scrollregion=painel.bbox("all")))
+        painel.create_window((0, 0), window=dentro, anchor="nw")
+        painel.configure(yscrollcommand=barra.set)
+        widgets.estilo_canvas(painel)
+        painel.pack(side="left", fill="both", expand=True)
+        barra.pack(side="left", fill="y")
+
+        def pede_olhada(item) -> bool:
+            return regras.exige_confirmacao(item.get("paidTo") or "", destacar)
+
+        por_conta: dict[str, list] = {}
         for item in alvos:
-            v = tk.BooleanVar(value=True)
-            marcas.append((str(item.get("id")), v))
-            desc = (item.get("description") or "").strip()[:70]
-            ttk.Checkbutton(
-                moldura, variable=v,
-                text=(f"{(item.get('paidTo') or '?').strip()}  —  "
-                      f"{relatorio.brl(relatorio.valor_do_item(item))}"
-                      + (f"  ·  {desc}" if desc else ""))).pack(anchor="w", pady=1)
+            por_conta.setdefault(relatorio.nome_da_conta(item), []).append(item)
+
+        por_id = {str(i.get("id")): i for i in alvos}
+        marcas = []                       # [(id, var)]
+        for conta in sorted(por_conta):
+            itens = sorted(por_conta[conta],
+                           key=lambda i: (not pede_olhada(i),
+                                          relatorio.chave(i.get("paidTo") or "")))
+            cabecalho = ttk.Frame(dentro)
+            cabecalho.pack(fill="x", pady=(10, 2))
+            ttk.Label(cabecalho, style="Secao.TLabel",
+                      text=conta[:46]).pack(side="left")
+            ttk.Label(cabecalho, style="Apoio.TLabel",
+                      text=(f"{len(itens)} · " + relatorio.brl(
+                          sum(relatorio.valor_do_item(i) for i in itens)))
+                      ).pack(side="right")
+            for item in itens:
+                v = tk.BooleanVar(value=True)
+                marcas.append((str(item.get("id")), v))
+                desc = (item.get("description") or "").strip()[:44]
+                ttk.Checkbutton(
+                    dentro, variable=v, command=lambda: atualizar(),
+                    text=(("⚠ " if pede_olhada(item) else "   ")
+                          + f"{relatorio.brl(relatorio.valor_do_item(item)):>14}  "
+                          + f"{(item.get('paidTo') or '?').strip()[:32]:<32}"
+                          + (f"  ·  {desc}" if desc else ""))).pack(anchor="w")
 
         resposta = {"cancelou": True}
 
@@ -516,7 +597,32 @@ class PagamentosDiaFrame(ttk.Frame):
             top.destroy()
 
         rodape = ttk.Frame(moldura)
-        rodape.pack(fill="x", pady=(14, 0))
+        rodape.pack(side="bottom", fill="x", pady=(14, 0))
+
+        # Quantos e quanto, atualizando a cada clique. É o número que se
+        # confere antes de gerar; as outras ações irreversíveis do app
+        # (Aportes, Acessórias) já o mostram antes de perguntar.
+        contagem = ttk.Label(rodape, style="Apoio.TLabel")
+        contagem.pack(side="left")
+
+        def atualizar():
+            vao = [i for i, v in marcas if v.get()]
+            total = sum(relatorio.valor_do_item(por_id[i]) for i in vao
+                        if i in por_id)
+            contagem.configure(
+                text=f"{len(vao)} de {len(marcas)} · {relatorio.brl(total)}")
+
+        def todas(valor: bool):
+            for _, v in marcas:
+                v.set(valor)
+            atualizar()
+
+        ttk.Button(rodape, text="Marcar todas",
+                   command=lambda: todas(True)).pack(side="left", padx=(12, 0))
+        ttk.Button(rodape, text="Desmarcar todas",
+                   command=lambda: todas(False)).pack(side="left", padx=6)
+        atualizar()
+
         ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side="right")
         b = ttk.Button(rodape, text="Confirmar e gerar", command=confirmar)
         b.pack(side="right", padx=(0, 8))
@@ -570,15 +676,10 @@ class PagamentosDiaFrame(ttk.Frame):
 
     def _confirmacoes_pendentes(self, escolhidas) -> set | None:
         """set() quando não há nada a perguntar; None quando cancelaram."""
-        nomes = regras.carregar_confirmar()
-        if not nomes:
+        alvos = alvos_para_confirmar(self.lancamentos, escolhidas)
+        if not alvos:
             return set()
-        escolha = {relatorio.chave(n) for n in escolhidas}
-        alvos = [i for i in self.lancamentos
-                 if relatorio.chave(relatorio.nome_da_conta(i)) in escolha
-                 and not i.get("paid")
-                 and regras.exige_confirmacao(i.get("paidTo") or "", nomes)]
-        return self._janela_confirmar(alvos) if alvos else set()
+        return self._janela_confirmar(alvos, regras.carregar_confirmar())
 
     def _t_gerar(self, escolhidas, nao_confirmados=()):
         comeco = time.time()
@@ -602,11 +703,20 @@ class PagamentosDiaFrame(ttk.Frame):
             if self.v_cruzar.get():
                 textos, urls_ocr = self._baixar_textos(selecionados)
 
+            # O cadastro local é lido UMA vez e serve aos dois: a chave Pix
+            # (formato antigo) e a identidade de quem recebe (formato novo).
+            cadastro_reembolso = reembolso.carregar(_pasta_base())
             resultado = relatorio.montar_registros(
                 selecionados, self.anexos, self.overviews, textos,
-                pix_reembolso=_carregar_reembolsos(), urls_ocr=urls_ocr,
+                pix_reembolso=reembolso.chaves(cadastro_reembolso),
+                urls_ocr=urls_ocr,
                 regras_fornecedor=regras.carregar_fornecedores(),
-                ids_nao_confirmados=nao_confirmados)
+                ids_nao_confirmados=nao_confirmados,
+                # Os Contatos do ERP entram aqui porque é aqui que se descobre
+                # QUEM recebe um reembolso. Para o fornecedor comum eles
+                # continuam sendo consultados na remessa, onde sempre foram.
+                participantes=self.participantes,
+                cadastro_reembolso=cadastro_reembolso)
             self.resultado = resultado
             self._periodo_do_resultado = (ini, fim)
             registros, omitidos = resultado.contas, resultado.omitidos
@@ -1006,6 +1116,18 @@ class PagamentosDiaFrame(ttk.Frame):
                     text=(f"{alerta}{c.tipo:<7} {relatorio.brl(c.valor):>14}  "
                           f"{c.favorecido[:30]:<30}  {c.descricao[:40]}{detalhe}")
                 ).pack(anchor="w")
+                # O reembolso paga QUEM NÃO É o favorecido do lançamento, e o
+                # nome acima já é o da pessoa — quem só olha a lista não teria
+                # como perceber a troca. Esta linha diz de onde veio o nome, de
+                # que compra o reembolso é, e com que documento o dinheiro vai
+                # sair. É a conferência que justifica a linha nascer desmarcada.
+                if c.reembolso:
+                    ttk.Label(
+                        dentro, style="Apoio.TLabel", wraplength=640,
+                        justify="left",
+                        text=(f"            ↳ reembolso de {c.reembolso_de[:30]}  ·  "
+                              f"documento {_doc_legivel(c.documento_favorecido)} "
+                              f"({c.reembolso_origem})")).pack(anchor="w")
 
         if recusadas:
             ttk.Label(dentro, style="Secao.TLabel",

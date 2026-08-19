@@ -50,6 +50,7 @@ import util                              # noqa: E402  utilitário compartilhado
 # ANTES de `aportes` no caminho de import — um `regras.py` aqui seria
 # importado no lugar dele e quebraria a aba Aportes.
 import ocr_boleto                        # noqa: E402
+import reembolso                         # noqa: E402
 import regras_pagamento as regras        # noqa: E402
 
 
@@ -405,11 +406,13 @@ def classificar_anexos(files) -> str:
 
 
 def nome_do_reembolso(files) -> str:
-    for f in files:
-        m = re.search(r"pagar\s*_?\s*para\s*[-:_ ]*(.+)", chave(f.get("filename")))
-        if m:
-            return re.sub(r"\.(pdf|jpe?g|png|docx?)$", "", m.group(1)).strip()
-    return ""
+    """Quem o aviso manda pagar. Mora no `reembolso`, que é quem decide.
+
+    Fica aqui como apelido porque metade do módulo já o chamava por este
+    nome; duas implementações do mesmo nome é que não podem existir — o nome
+    lido aqui e o nome declarado no segmento B têm de ser o mesmo nome.
+    """
+    return reembolso.nome_do_aviso(files)
 
 
 def pix_do_reembolso(files, item: dict, mapa: dict) -> str:
@@ -421,7 +424,10 @@ def pix_do_reembolso(files, item: dict, mapa: dict) -> str:
     return ""
 
 
-_PAGAR_PARA = re.compile(r"pagar\s*_?\s*para", re.I)
+#: Uma definição só do que é um aviso de reembolso, no módulo que decide
+#: quem recebe. O `pagamentos_frame` a usa por este nome para escolher qual
+#: FOTO vale baixar e passar por OCR.
+_PAGAR_PARA = reembolso.PAGAR_PARA
 
 
 def chave_pix_do_aviso(files, textos: dict) -> str:
@@ -435,13 +441,13 @@ def chave_pix_do_aviso(files, textos: dict) -> str:
     A busca fica na JANELA logo após o "pagar para": documento de reembolso
     costuma trazer também o CNPJ da empresa e o valor, e varrer o texto
     inteiro pegaria o primeiro número parecido, não o certo.
+
+    A janela é recortada pelo `reembolso`, e não aqui, porque ela tem DOIS
+    leitores: a chave (esta função) e o documento de quem recebe. Fossem dois
+    recortes, bastaria um mudar de tamanho para os dois passarem a falar de
+    pedaços diferentes do mesmo papel.
     """
-    for f in files or ():
-        if not _PAGAR_PARA.search(_rotulo(f)):
-            continue
-        texto = textos.get(f.get("downloadUrl") or "") or ""
-        m = _PAGAR_PARA.search(texto)
-        janela = texto[m.end():m.end() + 300] if m else ""
+    for janela in reembolso.janelas_do_aviso(files, textos):
         achado = chave_pix_por_padrao(janela)
         if achado and _chave_confiavel(achado):
             return achado
@@ -784,7 +790,8 @@ class Resultado(NamedTuple):
 def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      incluir=(), excluir=(), pix_reembolso=None,
                      urls_ocr=(), regras_fornecedor=None,
-                     ids_nao_confirmados=()) -> Resultado:
+                     ids_nao_confirmados=(), participantes=None,
+                     cadastro_reembolso=None) -> Resultado:
     """Transforma lançamentos do ERP em linhas de planilha.
 
     `anexos`             {tradePayableId: [anexo]}
@@ -795,6 +802,11 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
     `regras_fornecedor`  cadastro de `regras_pagamento.carregar_fornecedores`
     `ids_nao_confirmados` lançamentos que a pessoa desmarcou na janela de
                          confirmação — saem com motivo, não em silêncio
+    `participantes`      `{nome normalizado: CPF/CNPJ}` do cadastro de
+                         Contatos do ERP. Serve para descobrir o documento de
+                         quem recebe um REEMBOLSO; o documento do fornecedor
+                         continua sendo resolvido na remessa
+    `cadastro_reembolso` o `reembolso.carregar()` do arquivo local
     """
     pix_reembolso = pix_reembolso or {}
     regras_forn = regras_fornecedor or {}
@@ -843,6 +855,10 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         tem_nf_ou_oc = bool(oc or (nf and not regras.documento_e_a_oc(nf, oc)))
 
         avisos, obs, chave_divergente = [], "", False
+        #: Quem recebe, quando o anexo é um aviso "PAGAR PARA". Fica None nas
+        #: outras linhas: ali quem recebe é o favorecido do lançamento, e não
+        #: há nada a descobrir.
+        pessoa = None
         #: Há um documento anexado do qual dá para tirar a forma de pagar à
         #: mão? Separa "o boleto veio como foto e o OCR não fechou" (fica na
         #: planilha, para alguém abrir e digitar) de "não veio boleto nenhum"
@@ -868,6 +884,17 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 dados = ""
                 obs = (f"Reembolso para '{nome_do_reembolso(files) or '?'}' — chave não "
                        "cadastrada; abrir o aviso")
+
+            # Quem recebe. Até aqui só se descobriu POR ONDE o dinheiro sai (a
+            # chave); isto descobre PARA QUEM, que é o que o segmento B tem de
+            # declarar. A chave entra como conferente, nunca como fonte.
+            pessoa = reembolso.identificar(files, textos, participantes,
+                                           cadastro_reembolso, dados)
+            if pessoa.resolvida:
+                avisos.append(f"Reembolso para {pessoa.nome} "
+                              f"(documento: {pessoa.origem})")
+            elif pessoa.impedimento:
+                avisos.append(pessoa.impedimento)
         elif tipo == "Pix":
             dados = extrair_chave_pix(pago_para) if pago_para else ""
             if not parece_chave_pix(dados):
@@ -1018,6 +1045,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # ele é só um alarme, mas na remessa é o valor que sairia errado.
             "reembolso": cls == "PAGAR_PARA",
             "valor_diverge": bool(valor_diverge),
+            # Quem recebe o reembolso, resolvido pelo `reembolso.identificar`.
+            # Vêm preenchidos JUNTOS e da mesma fonte: é essa amarra que
+            # impede o par nome/documento do segmento B de se contradizer —
+            # o defeito que barrava todo reembolso.
+            "reembolso_nome": pessoa.nome if pessoa else "",
+            "reembolso_documento": pessoa.documento if pessoa else "",
+            "reembolso_origem": pessoa.origem if pessoa else "",
+            "reembolso_impedimento": pessoa.impedimento if pessoa else "",
         })
 
     for regs in registros.values():

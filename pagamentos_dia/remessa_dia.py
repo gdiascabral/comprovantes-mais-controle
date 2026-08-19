@@ -71,7 +71,14 @@ MOTIVO_JA_PAGO = "já pago"
 #: ou o banco recusa o registro, ou paga sob documento de terceiro.
 #: A observação equivalente ("PAGAR À MÃO") já era impedimento; o anexo não era,
 #: e ainda por cima nascia MARCADO, porque a planilha o classifica como APTO.
-MOTIVO_REEMBOLSO = ("reembolso: o aviso manda pagar outra pessoa, e a remessa só "
+#:
+#: Desde 19/08/2026 isto deixou de ser o impedimento de TODO reembolso: quando
+#: o `reembolso.identificar` acha nome e documento DA PESSOA — na mesma fonte,
+#: para não se contradizerem —, o segmento B declara ela dos dois lados e o
+#: pagamento sai. O que sobra aqui é a rede de baixo, para o registro que
+#: chegou sem passar por aquela decisão; não achando quem recebe, o motivo
+#: vem de lá e diz o que falta.
+MOTIVO_REEMBOLSO = ("reembolso: não se descobriu quem recebe, e a remessa só "
                     "sabe declarar um favorecido — pague à mão")
 #: A planilha trata divergência de valor como alarme, e está certa: lá a linha
 #: existe para alguém abrir o boleto e olhar. Aqui ela viraria dinheiro saindo
@@ -209,6 +216,15 @@ class Candidato:
     seu_numero: str = ""
     marcado: bool = False
     impedimento: str = ""
+    #: Esta linha paga QUEM NÃO É o favorecido do lançamento — o `favorecido`
+    #: acima já é o da pessoa, não o do fornecedor. A tela precisa saber para
+    #: dizer isso em voz alta, e é por isso que a linha nasce desmarcada.
+    reembolso: bool = False
+    reembolso_origem: str = ""     # de onde saiu o documento da pessoa
+    #: O favorecido do LANÇAMENTO — o fornecedor que o reembolso devolve.
+    #: Guardado porque o `favorecido` acima deixou de ser ele, e sem este
+    #: campo a tela não teria como dizer de que compra o reembolso veio.
+    reembolso_de: str = ""
 
     @property
     def pode(self) -> bool:
@@ -302,7 +318,16 @@ def _impedimento(registro: dict, documento: str, forma: str) -> str:
     if "PAGAR À MÃO" in (registro.get("obs") or ""):
         return MOTIVO_MAO
     if registro.get("reembolso"):
-        return MOTIVO_REEMBOLSO
+        # Não é mais "reembolso não sai". É "reembolso sai declarando a
+        # PESSOA, quando se sabe quem ela é" — e quem sabe disso é o
+        # `reembolso.identificar`, que já rodou na planilha. Aqui só se lê o
+        # veredito dele: redescobri-lo seria uma segunda regra sobre a mesma
+        # linha, e duas regras sobre a mesma linha divergem.
+        if registro.get("reembolso_impedimento"):
+            return registro["reembolso_impedimento"]
+        if not (registro.get("reembolso_nome")
+                and registro.get("reembolso_documento")):
+            return MOTIVO_REEMBOLSO
     if registro.get("valor_diverge"):
         return MOTIVO_VALOR_DIVERGE
 
@@ -407,7 +432,19 @@ def preparar(contas: dict, participantes: dict | None = None,
             # impede o pagamento — só empobrece o arquivo. Resolver aqui, e não
             # dentro do ramo do Pix, é o que faz o boleto parar de sair com a
             # inscrição do cedente zerada.
-            do_cadastro = documento_do_cadastro(registro, participantes)
+            # Quem recebe. No reembolso NÃO é o favorecido do lançamento: o
+            # aviso "PAGAR PARA" manda o dinheiro para outra pessoa, e o
+            # segmento B tem de declarar ELA nos dois campos. Nome e documento
+            # trocam JUNTOS, e só quando vieram juntos da mesma fonte — meia
+            # troca reconstruiria exatamente a contradição que fechou o
+            # reembolso (nome de um, documento de outro).
+            e_reembolso = bool(registro.get("reembolso"))
+            if e_reembolso and registro.get("reembolso_documento"):
+                favorecido = registro.get("reembolso_nome") or ""
+                do_cadastro = registro.get("reembolso_documento") or ""
+            else:
+                favorecido = registro.get("favorecido") or ""
+                do_cadastro = documento_do_cadastro(registro, participantes)
             documento = forma = ""
             if registro.get("tipo") == "Pix":
                 documento = do_cadastro or documento_valido(dados)
@@ -427,11 +464,14 @@ def preparar(contas: dict, participantes: dict | None = None,
                 conta_erp=conta,
                 tipo=registro.get("tipo") or "",
                 valor=float(registro.get("valor") or 0),
-                favorecido=registro.get("favorecido") or "",
+                favorecido=favorecido,
                 descricao=registro.get("descricao") or "",
                 status=registro.get("status") or "",
                 obs=registro.get("obs") or "",
                 impedimento=impedimento,
+                reembolso=e_reembolso,
+                reembolso_origem=registro.get("reembolso_origem") or "",
+                reembolso_de=(registro.get("favorecido") or "") if e_reembolso else "",
             )
             if not impedimento:
                 sequencia += 1
@@ -451,7 +491,13 @@ def preparar(contas: dict, participantes: dict | None = None,
                     candidato.forma_iniciacao = forma
                 # Nasce marcado o que a planilha julgou APTO. O duvidoso pede
                 # um clique — o normal segue sozinho.
-                candidato.marcado = candidato.apto
+                #
+                # O reembolso é a exceção, e é APTO ("APTO* (reembolso)"): é a
+                # única linha em que o app TROCA o favorecido por conta
+                # própria, e quem confere o total não tem como perceber isso
+                # sozinho. Um clique explícito é o preço de o dinheiro ir para
+                # alguém que não é o favorecido do lançamento.
+                candidato.marcado = candidato.apto and not e_reembolso
             linhas.append(candidato)
         if linhas:
             saida[conta] = linhas
@@ -627,10 +673,23 @@ def diagnostico_documentos(overviews: dict) -> list[tuple[str, int, int]]:
                   key=lambda t: (-t[2], -t[1]))
 
 
+#: Não é impedimento: é escolha de quem conferiu. Sai na mesma lista porque a
+#: lista responde "o que NÃO foi pago hoje", e para quem lê depois tanto faz
+#: se a linha caiu por regra ou por decisão — some do arquivo do mesmo jeito.
+MOTIVO_DESMARCADO = "você desmarcou na conferência"
+
+
 def fora(contas_preparadas: dict) -> list[dict]:
-    """O que não entra, com o motivo. Omitir não é apagar."""
+    """O que não entra, com o motivo. Omitir não é apagar.
+
+    Duas famílias, e a distinção importa: a linha IMPEDIDA nunca teve caixa
+    para marcar, e a DESMARCADA foi tirada à mão. Até 19/08/2026 só a primeira
+    era relatada — a segunda sumia calada, que é exatamente o defeito que esta
+    função existe para não deixar acontecer. A janela mostrava, o fechamento
+    levava junto, e nada em lugar nenhum dizia que aquele pagamento não saiu.
+    """
     return [{"conta": c.conta_erp, "tipo": c.tipo, "valor": c.valor,
              "favorecido": c.favorecido, "descricao": c.descricao,
-             "motivo": c.impedimento}
+             "motivo": c.impedimento or MOTIVO_DESMARCADO}
             for linhas in contas_preparadas.values() for c in linhas
-            if c.impedimento]
+            if c.impedimento or not c.marcado]
