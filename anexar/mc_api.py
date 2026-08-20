@@ -167,15 +167,47 @@ class MCApi:
 
     def capturar_credenciais(self, log=print) -> bool:
         """Espera a página fazer a 1ª requisição de pagamentos. Se ela já
-        aconteceu (ex.: durante o login), retorna na hora, sem recarregar."""
+        aconteceu (ex.: durante o login), retorna na hora, sem recarregar.
+
+        `goto` para a rota em que a página JÁ ESTÁ é navegação de mesmo
+        documento: o hash não muda, a SPA não re-roteia, a lista não é buscada
+        de novo — e a captura esperava 30 segundos por uma requisição que nunca
+        ia acontecer. Aconteceu em 20/08/2026, quando o login devolveu a página
+        justamente na tela de Pagamentos: "a tela não carregou a lista", com a
+        tela carregada na frente do usuário. Trocar de rota à mão e voltar
+        resolvia — e é exatamente o que `reload` faz sozinho.
+        """
         if self._req_pagos:
             return True
-        self.page.goto(config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
+        self._abrir_pagamentos()
         ok = self._esperar("_req_pagos", lambda: None, timeout_s=30)
+        if not ok:
+            # Segunda chance com recarga completa: cobre o caso em que a página
+            # estava na rota certa mas com a lista em algum estado que não
+            # dispara a busca (filtro vazio, tela de boas-vindas).
+            log("[!] A lista não veio; recarregando a tela de Pagamentos...")
+            try:
+                self.page.reload(wait_until="domcontentloaded")
+            except Exception as e:
+                _diag(f"reload da tela de Pagamentos falhou: {e!r}")
+            ok = self._esperar("_req_pagos", lambda: None, timeout_s=30)
         if not ok:
             log("[!] A tela de Pagamentos não carregou a lista. "
                 "Confira o login e tente de novo.")
         return ok
+
+    def _abrir_pagamentos(self) -> None:
+        """Leva a página à tela de Pagamentos, mesmo que ela já esteja nela."""
+        pag = self.page
+        atual = ""
+        try:
+            atual = pag.url or ""
+        except Exception:
+            atual = ""
+        if "payable-installments" in atual:
+            pag.reload(wait_until="domcontentloaded")
+        else:
+            pag.goto(config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
 
     def capturar_credenciais_anexos(self, launch_id: str) -> bool:
         """Abre um lançamento (dispara a chamada de anexos) e captura os headers."""
