@@ -100,6 +100,22 @@ def _erro_de(resposta) -> str:
     return ""
 
 
+def _detalhe_de(resposta) -> str:
+    """O que o ERP escreveu junto do erro — truncado, mas presente.
+
+    A primeira baixa real morreu num "HTTP 404" sem mais nada, e diagnosticar
+    exigiu voltar ao bundle do ERP. O corpo da recusa costuma dizer se o
+    problema é a rota, o id ou o payload; jogá-lo fora é jogar fora a resposta.
+    """
+    if not isinstance(resposta, dict):
+        return ""
+    corpo = resposta.get("__corpo")
+    if not corpo:
+        return ""
+    texto = str(corpo)
+    return texto[:180] + ("..." if len(texto) > 180 else "")
+
+
 def _achar(corpo: dict, nomes) -> str:
     for nome in nomes:
         if nome in corpo:
@@ -185,6 +201,11 @@ def baixar_uma(transporte, linha, quando: _dt.date, *, hosts=HOSTS,
                          erro="não achei o endereço da baixa em nenhum dos "
                               "hosts conhecidos")
 
+    # Só os NOMES dos campos: se a próxima recusa for de payload e não de
+    # rota, é isto que diz o que o ERP esperava. Valor e conta não vão para o
+    # log — é dinheiro de gente, e o log fica na tela e no arquivo.
+    log(f"    o ERP devolveu: {', '.join(sorted(padrao)) or '(corpo vazio)'}")
+
     divergencia = conferir_valor(padrao, getattr(linha, "valor", None))
     if divergencia:
         return Resultado(linha.seu_numero, linha.favorecido, False,
@@ -193,14 +214,40 @@ def baixar_uma(transporte, linha, quando: _dt.date, *, hosts=HOSTS,
     # A data do BANCO manda. `quando` é só a rede: retorno velho sem o campo
     # 22.3A preenchido cairia em "sem data", e aí vale o dia da leitura.
     corpo, aviso = corpo_da_baixa(padrao, getattr(linha, "data_real", None) or quando)
-    resposta = transporte.postar(f"{host_ok}/payables/{parcela}/paids", corpo)
-    erro = _erro_de(resposta)
-    if erro:
-        return Resultado(linha.seu_numero, linha.favorecido, False,
-                         erro=f"o ERP recusou a baixa (HTTP {erro})",
-                         host=host_ok)
-    return Resultado(linha.seu_numero, linha.favorecido, True,
-                     erro=aviso, host=host_ok)
+
+    # O host do `default-paid` NÃO decide o host da baixa. Na primeira tentativa
+    # real (20/08/2026) o `GET` passou no legado e o `POST` voltou 404 ali
+    # mesmo: `/payable-installments` e `/payables` são clientes diferentes no
+    # front do ERP, e nada garante que compartilhem a raiz. 404 é "esta rota
+    # não existe aqui" — nada foi criado, então tentar o vizinho é seguro.
+    # Qualquer outro código PARA a tentativa: repetir um POST que o servidor
+    # entendeu é o caminho para baixar o mesmo pagamento duas vezes.
+    # E nem a rota é certa. O `default-paid` mora no cliente
+    # `/payable-installments` e o `createPaid` no cliente `/payables` — dois
+    # clientes distintos no front do ERP, e a primeira tentativa real mostrou
+    # que o segundo não responde onde o primeiro respondeu. Tentamos as duas
+    # rotas nos dois hosts, sempre parando no primeiro que NÃO for 404.
+    hospedes = [host_ok] + [h for h in hosts if h != host_ok]
+    tentativas = [f"{h}{c}/{parcela}/paids"
+                  for h in hospedes
+                  for c in ("/payables", "/payable-installments")]
+    ultimo_erro, ultimo_detalhe, url = "", "", ""
+    for url in tentativas:
+        log(f"    baixando em {url}")
+        resposta = transporte.postar(url, corpo)
+        erro = _erro_de(resposta)
+        if not erro:
+            return Resultado(linha.seu_numero, linha.favorecido, True,
+                             erro=aviso, host=url)
+        ultimo_erro, ultimo_detalhe = erro, _detalhe_de(resposta)
+        if not erro.startswith("404"):
+            break
+
+    recado = f"o ERP recusou a baixa (HTTP {ultimo_erro}) em {url}"
+    if ultimo_detalhe:
+        recado += f" — o ERP disse: {ultimo_detalhe}"
+    return Resultado(linha.seu_numero, linha.favorecido, False,
+                     erro=recado, host=host_ok)
 
 
 def baixar(transporte, linhas, quando: _dt.date, *, hosts=HOSTS,

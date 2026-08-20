@@ -142,6 +142,38 @@ def test_ERP_recusando_a_baixa_vira_resultado_e_nao_excecao():
     assert not r.ok and "422" in r.erro
 
 
+def test_404_na_rota_do_bundle_tenta_a_outra_rota():
+    """A primeira baixa real (20/08/2026) morreu assim: o `default-paid`
+    respondeu no legado e o `POST /payables/...` voltou 404 ali mesmo."""
+    class So_installments(TransporteFalso):
+        def postar(self, url, corpo):
+            self.posts.append((url, corpo))
+            if "/payables/" in url:
+                return {"__erro": "404"}
+            return {"id": "paid-1"}
+
+    t = So_installments()
+    r = baixa_erp.baixar_uma(t, LinhaFalsa(), HOJE, log=lambda _m: None)
+    assert r.ok
+    assert t.posts[0][0].endswith("/payables/parcela-1/paids")
+    assert t.posts[1][0].endswith("/payable-installments/parcela-1/paids")
+
+
+def test_erro_que_nao_e_404_para_na_hora():
+    """Repetir um POST que o servidor ENTENDEU baixaria o mesmo duas vezes."""
+    t = TransporteFalso(resposta_post={"__erro": "500"})
+    r = baixa_erp.baixar_uma(t, LinhaFalsa(), HOJE, log=lambda _m: None)
+    assert not r.ok and len(t.posts) == 1
+
+
+def test_o_recado_diz_a_url_e_o_que_o_ERP_respondeu():
+    """"HTTP 404" sozinho obrigou a voltar ao bundle do ERP para diagnosticar."""
+    t = TransporteFalso(resposta_post={"__erro": "400",
+                                       "__corpo": {"message": "faltou o campo X"}})
+    r = baixa_erp.baixar_uma(t, LinhaFalsa(), HOJE, log=lambda _m: None)
+    assert "/paids" in r.erro and "faltou o campo X" in r.erro
+
+
 def test_uma_que_falha_nao_impede_as_outras():
     """Parar no terceiro deixaria doze pagos sem baixa, sem ninguém saber."""
     class Alternado(TransporteFalso):
