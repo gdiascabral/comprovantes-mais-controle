@@ -123,6 +123,26 @@ def test_a_baixa_usa_o_corpo_do_ERP_e_o_endereco_medido():
     assert corpo["account"] == {"id": "c1"}
 
 
+def test_a_baixa_leva_o_valor_pago():
+    """A primeira baixa aceita saiu R$ 0,00, com a parcela seguindo em aberto.
+
+    O `default-paid` nao traz campo de valor: `account`, `documentNumber`,
+    `payingDate`, `paymentMethod` e `responsible`, e mais nada. Mandar o corpo
+    dele intacto e o pior desfecho possivel — o ERP responde 200 e nao paga.
+    """
+    t = TransporteFalso(padrao={"payingDate": "2026-08-31", "account": {"id": "c1"}})
+    baixa_erp.baixar_uma(t, LinhaFalsa(valor=120.00), HOJE, log=lambda _m: None)
+    _url, corpo = t.posts[0]
+    assert corpo["value"] == 120.00 and corpo["paidValue"] == 120.00
+
+
+def test_o_id_da_baixa_criada_volta_no_resultado():
+    """Sem ele nao ha como desfazer o que acabou de ser gravado."""
+    t = TransporteFalso(resposta_post={"id": "paid-99"})
+    r = baixa_erp.baixar_uma(t, LinhaFalsa(), HOJE, log=lambda _m: None)
+    assert r.ok and r.paid_id == "paid-99"
+
+
 def test_o_parametro_que_o_ERP_exigiu_vai_na_query():
     """Sem ele: 400 "Required request parameter 'isWorkFilterApplied'"."""
     t = TransporteFalso()

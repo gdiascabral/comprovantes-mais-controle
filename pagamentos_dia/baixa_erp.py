@@ -44,6 +44,18 @@ CAMPOS_DATA = ("payingDate", "paidDate", "markedPayingDate", "date")
 #: Idem para o valor — usado só para CONFERIR, nunca para escrever.
 CAMPOS_VALOR = ("value", "paidValue", "amount", "paymentValue")
 
+#: Onde o valor pago é ESCRITO. O `default-paid` devolve `account`,
+#: `documentNumber`, `payingDate`, `paymentMethod` e `responsible` — e nenhum
+#: campo de valor. Mandando o corpo dele intacto, o ERP aceitou (HTTP 200) e
+#: gravou uma baixa de R$ 0,00, com a parcela seguindo em aberto: o pior
+#: desfecho possível, porque parece sucesso.
+#:
+#: Os nomes vêm do análogo que já funciona neste projeto: o recebimento, em
+#: `aportes/mc_lancamentos.py`, manda `value` + `receivedValue` ao lado de
+#: `receivingDate`. Aqui a data se chama `payingDate`, então o par é
+#: `value` + `paidValue`. Os dois vão preenchidos com o MESMO número, como lá.
+ESCREVER_VALOR = ("value", "paidValue")
+
 #: A rota da baixa, medida contra o ERP em 20/08/2026:
 #:
 #:   POST {legado}/payables/{id}/paids              -> 404, nao existe
@@ -79,6 +91,10 @@ class Resultado:
     host: str = ""
     #: True quando o ERP já tinha essa parcela baixada.
     ja_estava: bool = False
+    #: O id da baixa criada, quando o ERP devolve. É por ele que se desfaz
+    #: (`DELETE /payable-installments/{parcela}/paids/{este id}`) — e foi
+    #: exatamente o que faltou quando a primeira baixa saiu zerada.
+    paid_id: str = ""
 
 
 @dataclass
@@ -147,15 +163,22 @@ def _dinheiro(valor) -> float:
         return 0.0
 
 
-def corpo_da_baixa(padrao: dict, quando: _dt.date) -> tuple[dict, str]:
-    """O corpo do `default-paid` com a data trocada pela data real.
+def corpo_da_baixa(padrao: dict, quando: _dt.date, valor=None) -> tuple[dict, str]:
+    """O corpo do `default-paid` com a data real e o valor pago.
 
     Devolve `(corpo, aviso)`. O aviso não é vazio quando não se achou onde
     escrever a data: aí vale a data que o ERP escolheu, e quem lê o relatório
     precisa saber disso — silenciar deixaria a baixa com a data de hoje sem
     ninguém perceber.
+
+    O valor é ESCRITO, não conferido: o `default-paid` não traz campo de valor
+    nenhum, e sem ele a baixa sai zerada com a parcela seguindo em aberto.
     """
     corpo = dict(padrao)
+    if valor is not None:
+        pago = _dinheiro(valor)
+        for campo_valor in ESCREVER_VALOR:
+            corpo[campo_valor] = pago
     campo = _achar(corpo, CAMPOS_DATA)
     if not campo:
         return corpo, ("não achei o campo da data no corpo que o ERP devolveu; "
@@ -230,7 +253,9 @@ def baixar_uma(transporte, linha, quando: _dt.date, *, hosts=HOSTS,
 
     # A data do BANCO manda. `quando` é só a rede: retorno velho sem o campo
     # 22.3A preenchido cairia em "sem data", e aí vale o dia da leitura.
-    corpo, aviso = corpo_da_baixa(padrao, getattr(linha, "data_real", None) or quando)
+    corpo, aviso = corpo_da_baixa(padrao,
+                                  getattr(linha, "data_real", None) or quando,
+                                  getattr(linha, "valor", None))
 
     # O host do `default-paid` NÃO decide o host da baixa. Na primeira tentativa
     # real (20/08/2026) o `GET` passou no legado e o `POST` voltou 404 ali
@@ -254,8 +279,9 @@ def baixar_uma(transporte, linha, quando: _dt.date, *, hosts=HOSTS,
         resposta = transporte.postar(url, corpo)
         erro = _erro_de(resposta)
         if not erro:
+            criado = (resposta or {}).get("id", "") if isinstance(resposta, dict) else ""
             return Resultado(linha.seu_numero, linha.favorecido, True,
-                             erro=aviso, host=url)
+                             erro=aviso, host=url, paid_id=str(criado))
         ultimo_erro, ultimo_detalhe = erro, _detalhe_de(resposta)
         if not erro.startswith("404"):
             break
