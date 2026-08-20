@@ -44,6 +44,23 @@ CAMPOS_DATA = ("payingDate", "paidDate", "markedPayingDate", "date")
 #: Idem para o valor — usado só para CONFERIR, nunca para escrever.
 CAMPOS_VALOR = ("value", "paidValue", "amount", "paymentValue")
 
+#: A rota da baixa, medida contra o ERP em 20/08/2026:
+#:
+#:   POST {legado}/payables/{id}/paids              -> 404, nao existe
+#:   POST {legado}/payable-installments/{id}/paids  -> 400, existe e faltava
+#:                                                     `isWorkFilterApplied`
+#:
+#: O bundle do front chama isso de `createPaid` no cliente `/payables`, mas o
+#: `/payables` dele resolve para outra raiz — quem manda e o que o servidor
+#: respondeu. A que existe vem primeiro; a outra fica como rede, para o dia em
+#: que o ERP mover a rota de volta.
+ROTAS = ("/payable-installments", "/payables")
+
+#: O ERP exige este parametro na query, e disse o nome dele na recusa. No front
+#: o sinalizador equivalente (`useWorkFilter`) e verdadeiro quando ha uma obra
+#: filtrando a tela; a baixa pelo retorno nao filtra por obra nenhuma.
+PARAMS_BAIXA = "isWorkFilterApplied=false"
+
 MOTIVO_SEM_REFERENCIA = ("o banco pagou, mas este pagamento não tem lançamento "
                          "ligado a ele no registro — baixe à mão")
 MOTIVO_VALOR_DIVERGE = ("o valor da baixa ({erp}) não bate com o que o banco "
@@ -228,9 +245,9 @@ def baixar_uma(transporte, linha, quando: _dt.date, *, hosts=HOSTS,
     # que o segundo não responde onde o primeiro respondeu. Tentamos as duas
     # rotas nos dois hosts, sempre parando no primeiro que NÃO for 404.
     hospedes = [host_ok] + [h for h in hosts if h != host_ok]
-    tentativas = [f"{h}{c}/{parcela}/paids"
+    tentativas = [f"{h}{c}/{parcela}/paids?{PARAMS_BAIXA}"
                   for h in hospedes
-                  for c in ("/payables", "/payable-installments")]
+                  for c in ROTAS]
     ultimo_erro, ultimo_detalhe, url = "", "", ""
     for url in tentativas:
         log(f"    baixando em {url}")

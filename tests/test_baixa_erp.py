@@ -111,14 +111,23 @@ def test_sem_campo_de_valor_nao_se_inventa_conferencia():
 
 
 # ----------------------------------------------------------------- baixar
-def test_a_baixa_usa_o_corpo_do_ERP_e_o_endereco_certo():
+def test_a_baixa_usa_o_corpo_do_ERP_e_o_endereco_medido():
+    """A rota saiu do ERP, não do bundle: `/payables` deu 404 e
+    `/payable-installments` deu 400 pedindo o parâmetro que falta."""
     t = TransporteFalso()
     r = baixa_erp.baixar_uma(t, LinhaFalsa(), HOJE, log=lambda _m: None)
     assert r.ok and not r.erro
     url, corpo = t.posts[0]
-    assert url.endswith("/payables/parcela-1/paids")
+    assert "/payable-installments/parcela-1/paids" in url
     assert corpo["payingDate"] == "2026-08-20"
     assert corpo["account"] == {"id": "c1"}
+
+
+def test_o_parametro_que_o_ERP_exigiu_vai_na_query():
+    """Sem ele: 400 "Required request parameter 'isWorkFilterApplied'"."""
+    t = TransporteFalso()
+    baixa_erp.baixar_uma(t, LinhaFalsa(), HOJE, log=lambda _m: None)
+    assert "isWorkFilterApplied=false" in t.posts[0][0]
 
 
 def test_404_no_primeiro_host_tenta_o_segundo():
@@ -142,21 +151,20 @@ def test_ERP_recusando_a_baixa_vira_resultado_e_nao_excecao():
     assert not r.ok and "422" in r.erro
 
 
-def test_404_na_rota_do_bundle_tenta_a_outra_rota():
-    """A primeira baixa real (20/08/2026) morreu assim: o `default-paid`
-    respondeu no legado e o `POST /payables/...` voltou 404 ali mesmo."""
-    class So_installments(TransporteFalso):
+def test_404_na_rota_de_hoje_ainda_tenta_a_outra():
+    """A rede para o dia em que o ERP mover a rota: 404 não encerra o assunto."""
+    class So_payables(TransporteFalso):
         def postar(self, url, corpo):
             self.posts.append((url, corpo))
-            if "/payables/" in url:
+            if "/payable-installments/" in url:
                 return {"__erro": "404"}
             return {"id": "paid-1"}
 
-    t = So_installments()
+    t = So_payables()
     r = baixa_erp.baixar_uma(t, LinhaFalsa(), HOJE, log=lambda _m: None)
     assert r.ok
-    assert t.posts[0][0].endswith("/payables/parcela-1/paids")
-    assert t.posts[1][0].endswith("/payable-installments/parcela-1/paids")
+    assert "/payable-installments/" in t.posts[0][0]
+    assert "/payables/" in t.posts[1][0]
 
 
 def test_erro_que_nao_e_404_para_na_hora():
