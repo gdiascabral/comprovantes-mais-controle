@@ -32,6 +32,7 @@ from tkinter import filedialog, messagebox, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import baixa_erp                                              # noqa: E402
 import ocr_boleto                                             # noqa: E402
 import reembolso                                              # noqa: E402
 import regras_pagamento as regras                             # noqa: E402
@@ -389,6 +390,22 @@ class PagamentosDiaFrame(ttk.Frame):
                 elif tipo == "arquivo":
                     self.ultimo_arquivo = valor
                     self.b_abrir.configure(state="normal")
+                elif tipo == "baixa":
+                    # A baixa mexe no ERP: o desfecho não pode ficar só no log,
+                    # que rola e some. Falha aparece com o motivo de cada uma.
+                    deram, falharam = valor
+                    if falharam:
+                        detalhe = "\n".join(
+                            f"• {r.favorecido[:30]} ({r.seu_numero}): {r.erro}"
+                            for r in falharam[:8])
+                        messagebox.showwarning(
+                            "Baixa no Mais Controle",
+                            f"{deram} baixado(s).\n\n"
+                            f"{len(falharam)} não deu(ram) certo:\n\n{detalhe}")
+                    else:
+                        messagebox.showinfo(
+                            "Baixa no Mais Controle",
+                            f"{deram} pagamento(s) baixado(s).")
         except queue.Empty:
             pass
         self.after(150, self._drain)
@@ -954,15 +971,137 @@ class PagamentosDiaFrame(ttk.Frame):
             messagebox.showinfo("Retorno", f"Guardado: {quantos} pagamento(s).")
             top.destroy()
 
+        def _baixar():
+            sep = baixa_erp.separar(resumo)
+            for linha, motivo in sep.de_fora:
+                self._log(f"  fora da baixa: {linha.seu_numero} "
+                          f"{linha.favorecido[:28]} — {motivo}")
+            if not sep.baixaveis:
+                messagebox.showinfo(
+                    "Baixa",
+                    "Nenhum pagamento deste retorno pode ser baixado agora.\n\n"
+                    "Só entra o que o banco marcou como PAGO. Aguardando "
+                    "assinatura não conta: o dinheiro ainda não saiu.")
+                return
+            escolhidos = self._janela_baixa(sep)
+            if not escolhidos:
+                return
+            top.destroy()
+            if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+                return
+            self.q.put(("botoes", "disabled"))
+            self.worker = self.anx.submeter(
+                "Pagamentos do Dia — baixar no Mais Controle",
+                self._t_baixar, escolhidos, dona=self)
+
         if historico is not None and not resumo.remessa_desconhecida:
             ttk.Button(rodape, text="Guardar o resultado",
                        style="Accent.TButton", command=_guardar
                        ).pack(side="right")
+        if resumo.quantos("ok"):
+            ttk.Button(rodape, text="Dar baixa no Mais Controle",
+                       command=_baixar).pack(side="right", padx=(0, 8))
         ttk.Button(rodape, text="Fechar", command=top.destroy
                    ).pack(side="right", padx=(0, 8))
 
         top.transient(self.winfo_toplevel())
         top.grab_set()
+
+    # ----------------------------------------------------- baixa no ERP
+    def _janela_baixa(self, sep):
+        """Quais pagos baixar. Devolve a lista escolhida, ou [] se desistir.
+
+        Nasce tudo marcado — são os que o BANCO disse que pagou, e a baixa é o
+        desfecho normal deles. O que se desmarca aqui simplesmente não é
+        baixado; nada some do retorno por causa disso.
+        """
+        top = tk.Toplevel(self)
+        top.title("Baixar no Mais Controle")
+        top.transient(self.winfo_toplevel())
+        widgets.barra_de_titulo(top)
+        moldura = ttk.Frame(top, padding=14)
+        moldura.pack(fill="both", expand=True)
+
+        ttk.Label(moldura, style="Secao.TLabel",
+                  text="Estes o banco pagou").pack(anchor="w")
+        ttk.Label(moldura, style="Apoio.TLabel", wraplength=620, justify="left",
+                  text="Vão ser dados como pagos no Mais Controle, na data em "
+                       "que o dinheiro saiu. Desmarque o que não deve ser "
+                       "baixado agora."
+                  ).pack(anchor="w", pady=(0, 10))
+
+        marcas = []
+        for linha in sep.baixaveis:
+            v = tk.BooleanVar(value=True)
+            marcas.append((linha, v))
+            quando = getattr(linha, "data_real", None)
+            ttk.Checkbutton(
+                moldura, variable=v,
+                text=(f"{relatorio.brl(float(linha.valor)):>14}  "
+                      f"{linha.favorecido[:34]:<34}  {linha.seu_numero}"
+                      + (f"  ·  pago em {quando:%d/%m/%Y}" if quando else ""))
+            ).pack(anchor="w")
+
+        # Os que o banco pagou e o app não sabe onde baixar. Ficam à vista de
+        # propósito: são dinheiro que saiu e vai continuar em aberto no ERP.
+        if sep.de_fora:
+            ttk.Label(moldura, style="Secao.TLabel", text="Ficam de fora"
+                      ).pack(anchor="w", pady=(12, 2))
+            for linha, motivo in sep.de_fora:
+                ttk.Label(moldura, style="Apoio.TLabel", wraplength=620,
+                          justify="left",
+                          text=(f"    {relatorio.brl(float(linha.valor))}  "
+                                f"{linha.favorecido[:30]} — {motivo}")
+                          ).pack(anchor="w")
+
+        escolha: list = []
+
+        def confirmar():
+            escolha.extend(l for l, v in marcas if v.get())
+            top.destroy()
+
+        rodape = ttk.Frame(moldura); rodape.pack(fill="x", pady=(14, 0))
+        ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side="right")
+        b = ttk.Button(rodape, text="Baixar", command=confirmar)
+        b.pack(side="right", padx=(0, 8))
+        try:
+            b.configure(style="Accent.TButton")
+        except tk.TclError:
+            pass
+        top.grab_set()
+        self.wait_window(top)
+        return escolha
+
+    def _t_baixar(self, linhas):
+        """Roda na thread do navegador: a baixa fala com o ERP pela página."""
+        try:
+            api = self.anx.garantir_sessao(self._log)
+            if not api.capturar_credenciais(self._log):
+                raise RuntimeError("A tela de Pagamentos não carregou a lista "
+                                   "no Chrome — sem ela não há credencial "
+                                   "para falar com o ERP.")
+            # Os cabeçalhos capturados da tela de Pagamentos servem ao legado:
+            # authorization, company-id, user-id e organization-unit-id.
+            _url, cabecalhos = api._req_pagos
+            from mc_catalogos import Catalogos
+            transporte = Catalogos(api.page, cabecalhos, self._log)
+
+            self._log(f"\nBaixando {len(linhas)} pagamento(s) no Mais Controle...")
+            resultados = baixa_erp.baixar(transporte, linhas,
+                                          datetime.date.today(), log=self._log)
+            deram = [r for r in resultados if r.ok]
+            falharam = [r for r in resultados if not r.ok]
+            hosts = {r.host for r in resultados if r.host}
+            if hosts:
+                self._log(f"  (endereço que respondeu: {', '.join(sorted(hosts))})")
+            self._log(f"{len(deram)} baixado(s), {len(falharam)} não.")
+            self.q.put(("status", f"Baixa: {len(deram)} ok, {len(falharam)} não."))
+            self.q.put(("baixa", (len(deram), falharam)))
+        except Exception as e:
+            self._log(f"\nA baixa parou: {e}")
+            self.q.put(("status", f"A baixa parou: {e}"))
+        finally:
+            self.q.put(("botoes", "normal"))
 
     # --------------------------------------------------------------- etapa 3
     def gerar_remessa(self):

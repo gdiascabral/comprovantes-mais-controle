@@ -271,6 +271,11 @@ class PixTransferencia(_PagamentoBase):
     favorecido: Favorecido
     forma_iniciacao: FormaIniciacaoPix = FormaIniciacaoPix.CHAVE_ALEATORIA
     chave: str = ""
+    #: Texto livre por pagamento — vai nas 38 primeiras posições do campo
+    #: `24.3A`, que no Pix eram brancos (as 2 últimas são o tipo da conta de
+    #: destino). É o único lugar onde a tela de pendências do banco mostra
+    #: algo NOSSO sobre um Pix; vazio, a coluna "Detalhes" fica em branco.
+    mensagem: str = ""
     tipo_conta_destino: TipoContaDestino = TipoContaDestino.CORRENTE
     aviso: AvisoFavorecido = AvisoFavorecido.NAO_EMITE
 

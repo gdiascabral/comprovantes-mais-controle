@@ -14,6 +14,7 @@ depois da assinatura.
 """
 from __future__ import annotations
 
+import datetime as _dt
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -30,6 +31,10 @@ class Linha:
     #: O id do lançamento no ERP, quando o "seu número" achou par na remessa.
     #: Vazio significa que o banco devolveu algo que não saiu por aqui.
     referencia: str = ""
+    #: Quando o dinheiro saiu de verdade (campo 22.3A do retorno). É a data
+    #: que a baixa no ERP tem de levar: usar "hoje" registraria o pagamento no
+    #: dia em que alguém leu o arquivo, e não no dia em que ele aconteceu.
+    data_real: "_dt.date | None" = None
 
     @property
     def rotulo(self) -> str:
@@ -122,6 +127,7 @@ def ler(caminho: str | Path, historico=None) -> Resumo:
             estado=_estado(pagamento),
             motivos="; ".join(f"{c}={d}" for c, d in pagamento.ocorrencias),
             referencia=enviados.get(seu, ""),
+            data_real=getattr(pagamento, "data_real", None),
         ))
 
     resumo.faltando = sorted(s for s in enviados if s not in vistos)

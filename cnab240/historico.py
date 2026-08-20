@@ -259,9 +259,21 @@ def _identificador(pagamento: Any) -> str:
 
 
 def _favorecido(pagamento: Any) -> str:
+    """Quem recebe, para o NOSSO registro — não para o arquivo.
+
+    O J-52 vem antes do `nome_cedente` de propósito. Em 20/08/2026 o campo
+    `09.3J` (que alimenta `nome_cedente`) passou a levar a DESCRIÇÃO do
+    lançamento, porque é ele que a tela de pendências do banco mostra. O J-52
+    continua com o nome e o documento de quem recebe de verdade — e é de lá
+    que o histórico tem de ler, senão as nossas telas passariam a chamar o
+    fornecedor pelo nome da obra.
+    """
     fav = getattr(pagamento, "favorecido", None)
     if fav is not None and getattr(fav, "nome", ""):
         return str(fav.nome)
+    j52 = getattr(pagamento, "j52", None)
+    if j52 is not None and getattr(j52, "cedente_nome", ""):
+        return str(j52.cedente_nome)
     for attr in ("nome_cedente", "nome_concessionaria", "nome_contribuinte"):
         nome = getattr(pagamento, attr, "")
         if nome:

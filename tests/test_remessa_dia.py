@@ -685,6 +685,73 @@ def _segmentos(linhas, codigo):
     return [l for l in linhas if l[7] == "3" and l[13] == codigo]
 
 
+# ==========================================================================
+# A DESCRIÇÃO no arquivo (20/08/2026)
+# ==========================================================================
+# Na tela de pendências do SicoobNet o boleto mostrava o nome do fornecedor e o
+# Pix não mostrava nada. Medido na remessa 000003: `09.3J` levava o nome (e o
+# banco o devolve idêntico no retorno, sem validar contra o título) e as 38
+# primeiras posições de `24.3A` iam em branco. Agora as duas levam a descrição.
+
+def _campo(linha: str, layout: str, campo: str) -> str:
+    from cnab240 import spec
+    from cnab240.campos import ler
+    return ler(spec.layout(layout).campo(campo), linha)
+
+
+def test_a_descricao_vai_no_campo_que_o_banco_mostra_no_boleto():
+    linhas = _linhas_do_arquivo(preparar(registro(descricao="PISO 3 CASAS")))
+    j, = _segmentos(linhas, "J")
+    assert _campo(j, "segmento_j", "09.3J").strip() == "PISO 3 CASAS"
+
+
+def test_o_boleto_sem_descricao_cai_para_o_nome_do_fornecedor():
+    """Em branco aquela coluna não identificaria nada — pior do que antes."""
+    linhas = _linhas_do_arquivo(preparar(registro(descricao="")))
+    j, = _segmentos(linhas, "J")
+    assert _campo(j, "segmento_j", "09.3J").strip() == "FORNECEDOR SA"
+
+
+def test_o_J52_continua_dizendo_quem_recebe_de_verdade():
+    """A troca em 09.3J não pode apagar a identidade: ela mora no J-52."""
+    linhas = _linhas_do_arquivo(preparar(registro(descricao="PISO 3 CASAS")))
+    j52, = _segmentos(linhas, "J52")
+    achou = any("FORNECEDOR SA" in _campo(j52, "segmento_j52", c)
+                for c in ("11.4.J52", "14.4.J52"))
+    assert achou, "o nome do cedente sumiu do J-52"
+
+
+def test_a_descricao_do_pix_vai_nas_38_primeiras_de_24_3A():
+    c, = preparar(registro(tipo="Pix", dados="11.222.333/0001-81",
+                           descricao="MESTRE DE OBRAS"))
+    linhas = _linhas_do_arquivo([c])
+    a, = _segmentos(linhas, "A")
+    info = _campo(a, "segmento_a", "24.3A")
+    assert len(info) == 40
+    assert info[:38].strip() == "MESTRE DE OBRAS"
+    # As duas últimas continuam sendo o tipo da conta de destino.
+    assert info[38:].strip() != ""
+
+
+def test_o_pix_sem_descricao_nao_quebra_o_layout():
+    c, = preparar(registro(tipo="Pix", dados="11.222.333/0001-81",
+                           descricao="", favorecido=""))
+    linhas = _linhas_do_arquivo([c])
+    a, = _segmentos(linhas, "A")
+    info = _campo(a, "segmento_a", "24.3A")
+    assert len(info) == 40 and info[:38].strip() == ""
+
+
+def test_o_historico_guarda_o_fornecedor_e_nao_a_descricao():
+    """A tela de retorno lê do nosso registro, não do arquivo do banco."""
+    from cnab240 import historico as h
+
+    linhas = preparar(registro(descricao="PISO 3 CASAS"))
+    arquivo = remessa_dia.montar_arquivo(pagador(), linhas, nsa=1, quando=HOJE)
+    item, = h.itens_de(arquivo)
+    assert item.favorecido == "FORNECEDOR SA"
+
+
 def test_o_documento_do_cedente_vai_no_J52():
     """A queixa da remessa real: "não puxou os dados de quem está recebendo".
 

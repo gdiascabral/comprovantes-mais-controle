@@ -541,6 +541,25 @@ def preparar(contas: dict, participantes: dict | None = None,
 TAMANHO_MENSAGEM_LOTE = 40
 
 
+def etiqueta_do_banco(c) -> str:
+    """O texto que a tela de pendências do banco vai mostrar nesta linha.
+
+    É a descrição da planilha — o jeito como o dono reconhece o pagamento.
+    Medido em 20/08/2026, na remessa 000003: o boleto ocupava esse espaço com
+    o nome do fornecedor (campo `09.3J`, 30 posições) e o Pix não ocupava
+    nada (as 38 primeiras de `24.3A` iam em branco), então metade das linhas
+    chegava ao banco sem dizer coisa alguma.
+
+    Descrição vazia cai para o nome do fornecedor: em branco, a coluna não
+    identificaria nada, e a linha ficaria pior do que era antes.
+
+    Quem recebe de verdade NÃO depende disto: o boleto é roteado pelo código
+    de barras e o Pix pela chave. A identidade continua no J-52 (nome e
+    documento do cedente) e, no Pix, no campo 15.3A.
+    """
+    return (c.descricao or "").strip() or c.favorecido
+
+
 def _mensagem_do_lote(quando: _dt.date) -> str:
     """O único texto livre que o layout oferece para um lote de boletos.
 
@@ -590,7 +609,9 @@ def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
                 data_pagamento=quando,
                 seu_numero=c.seu_numero,
                 codigo_barras=c.codigo_barras,
-                nome_cedente=c.favorecido,
+                # 30 posições que o Internet Banking mostra como "Observação"
+                # — o único texto nosso que aparece na linha do boleto.
+                nome_cedente=etiqueta_do_banco(c),
                 # O vencimento sai do PRÓPRIO código de barras (fator de
                 # vencimento), e não do ERP: é o dado que o banco emitiu, já
                 # conferido por dígito verificador. Saía zerado à toa. Ficha
@@ -621,6 +642,7 @@ def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
                 data_pagamento=quando,
                 seu_numero=c.seu_numero,
                 forma_iniciacao=FormaIniciacaoPix(c.forma_iniciacao),
+                mensagem=etiqueta_do_banco(c),
                 # A chave é a chave — telefone, e-mail ou aleatória vão como
                 # estão. O documento é campo à parte (07.3B/08.3B) e vem do
                 # cadastro de Contatos, não da chave.

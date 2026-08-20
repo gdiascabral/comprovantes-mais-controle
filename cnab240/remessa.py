@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import spec
-from .campos import fmt_competencia, fmt_data
+from .campos import fmt_alfa, fmt_competencia, fmt_data
 from .dominios import (
     BANCO_SICOOB,
     VERSAO_LAYOUT_ARQUIVO,
@@ -426,8 +426,12 @@ class ArquivoRemessa:
         f: Favorecido = pg.favorecido
         informacao_2 = getattr(pg, "mensagem", "")
         if lote.produto == "PIX_TRANSFERENCIA":
-            # G031: 38 brancos + tipo da conta de destino nas 2 últimas posições.
-            informacao_2 = " " * 38 + str(pg.tipo_conta_destino)
+            # G031: as 2 ÚLTIMAS posições são o tipo da conta de destino. As 38
+            # primeiras iam em branco, e é por isso que a coluna "Detalhes" da
+            # tela de pendências não dizia nada sobre um Pix — enquanto o
+            # boleto, que tem nome de cedente, dizia. Agora elas levam a
+            # descrição do lançamento.
+            informacao_2 = fmt_alfa(informacao_2, 38) + str(pg.tipo_conta_destino)
 
         return montar(
             spec.layout("segmento_a"),
