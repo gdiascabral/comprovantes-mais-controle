@@ -383,7 +383,9 @@ def test_pagar_a_mao_volta_com_o_nome_que_o_app_le(tmp_path, monkeypatch):
         regra_fornecedor=[
             {"id": 1, "tipo": "pagar_a_mao", "nome": "FORNECEDOR X", "valor": ""},
             {"id": 2, "tipo": "so_reembolso", "nome": "FORNECEDOR Y", "valor": ""},
-            {"id": 3, "tipo": "confirmar_antes", "nome": "PESSOA Z", "valor": ""}],
+            {"id": 3, "tipo": "confirmar_antes", "nome": "PESSOA Z", "valor": ""},
+            {"id": 4, "tipo": "so_marcador", "nome": "CONCESSIONARIA W",
+             "valor": ""}],
         configuracao=[{"chave": "raiz", "valor": "C:/x"}])
     monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
 
@@ -392,6 +394,9 @@ def test_pagar_a_mao_volta_com_o_nome_que_o_app_le(tmp_path, monkeypatch):
         encoding="utf-8"))
     assert regras["FORNECEDOR X"]["confirmar_sempre"] is True
     assert regras["FORNECEDOR Y"]["so_com_reembolso"] is True
+    # Precisa vir da nuvem: o arquivo é reescrito a cada abertura, e uma marca
+    # posta à mão no JSON sumiria na sincronização seguinte.
+    assert regras["CONCESSIONARIA W"]["so_marcador"] is True
     # `confirmar_antes` é OUTRA coisa, e mora em outro arquivo: ela abre a
     # janela de confirmação, enquanto `pagar_a_mao` tira da remessa.
     assert "PESSOA Z" not in regras

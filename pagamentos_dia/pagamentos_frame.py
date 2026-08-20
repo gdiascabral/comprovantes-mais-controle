@@ -106,7 +106,24 @@ def _historico(avisar=None):
     return registro.Espelhado(nuvem, local, avisar)
 
 
-def alvos_para_confirmar(lancamentos, escolhidas) -> list:
+def e_marcador_de_recorrencia(item: dict, fornecedores: dict) -> bool:
+    """R$ 1,00 de fornecedor marcado como `so_marcador` — não é pagamento.
+
+    A concessionária lança um valor simbólico por unidade consumidora para o
+    título nascer no mês. A etapa 3 já sabe descartá-lo (`MOTIVO_SIMBOLICO`),
+    mas ela roda DEPOIS desta janela: sem esta pergunta aqui, a linha aparece
+    para ser desmarcada à mão, todo dia, e a janela gasta a atenção que
+    deveria estar protegendo.
+
+    A marca é por NOME e mora no cadastro (`regras_fornecedor.json`), não aqui:
+    concessionária nova é uma linha lá, não uma versão nova do app.
+    """
+    return (regras.valor_simbolico(relatorio.valor_do_item(item))
+            and bool(regras.regra_do_fornecedor(
+                item.get("paidTo") or "", fornecedores).get("so_marcador")))
+
+
+def alvos_para_confirmar(lancamentos, escolhidas, fornecedores=None) -> list:
     """Que lançamentos a janela da etapa 2 lista.
 
     Era "só os fornecedores do `confirmar_antes.json`", e por isso a janela
@@ -119,12 +136,19 @@ def alvos_para_confirmar(lancamentos, escolhidas) -> list:
     Já pago fica de fora: não há o que decidir sobre ele. Se ele entra ou não
     na planilha é a caixa "incluir já pagos", que é outra pergunta.
 
+    O marcador de recorrência das concessionárias também fica de fora, pelo
+    mesmo motivo: `so_marcador` no cadastro já é a decisão tomada, e repeti-la
+    aqui todo dia é o que a janela deixou de fazer. `fornecedores` é o
+    `regras_pagamento.carregar_fornecedores()`; sem ele, nada é filtrado.
+
     Fora da classe porque é decisão, não tela — e assim tem teste.
     """
     escolha = {relatorio.chave(n) for n in escolhidas}
+    marcados = fornecedores or {}
     return [i for i in lancamentos
             if relatorio.chave(relatorio.nome_da_conta(i)) in escolha
-            and not i.get("paid")]
+            and not i.get("paid")
+            and not e_marcador_de_recorrencia(i, marcados)]
 
 
 def _doc_legivel(documento: str) -> str:
@@ -676,7 +700,8 @@ class PagamentosDiaFrame(ttk.Frame):
 
     def _confirmacoes_pendentes(self, escolhidas) -> set | None:
         """set() quando não há nada a perguntar; None quando cancelaram."""
-        alvos = alvos_para_confirmar(self.lancamentos, escolhidas)
+        alvos = alvos_para_confirmar(self.lancamentos, escolhidas,
+                                     regras.carregar_fornecedores())
         if not alvos:
             return set()
         return self._janela_confirmar(alvos, regras.carregar_confirmar())
@@ -1128,6 +1153,17 @@ class PagamentosDiaFrame(ttk.Frame):
                         text=(f"            ↳ reembolso de {c.reembolso_de[:30]}  ·  "
                               f"documento {_doc_legivel(c.documento_favorecido)} "
                               f"({c.reembolso_origem})")).pack(anchor="w")
+                # Este pagamento já saiu numa remessa viva. Era impedimento —
+                # a linha vinha sem caixa, e reenviar obrigava a descartar a
+                # remessa inteira, grosso demais quando o que falhou foi um
+                # pagamento. Agora é aviso: a caixa existe e nasce VAZIA,
+                # porque marcá-la é dinheiro saindo duas vezes.
+                if c.ja_enviado:
+                    ttk.Label(
+                        dentro, style="Apoio.TLabel", wraplength=640,
+                        justify="left",
+                        text=(f"            ↳ {c.ja_enviado} — marque para "
+                              "enviar de novo")).pack(anchor="w")
 
         if recusadas:
             ttk.Label(dentro, style="Secao.TLabel",

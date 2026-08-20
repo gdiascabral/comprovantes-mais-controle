@@ -17,7 +17,7 @@ from typing import Iterable, Sequence
 
 from . import spec
 from .campos import ler, ler_num
-from .dominios import BANCO_SICOOB
+from .dominios import BANCO_SICOOB, TipoInscricao, dv_cpf, dv_cnpj
 from .spec import TAMANHO_REGISTRO, Layout
 
 NIVEL_ARQUIVO = "ARQUIVO"
@@ -146,6 +146,28 @@ _CONTEUDO_OBRIGATORIO: dict[str, set[str]] = {
     "trailer_arquivo": {"05.9", "06.9"},
 }
 
+#: Pares (tipo de inscrição, número de inscrição) por layout.
+#:
+#: Guarda os DOIS campos juntos porque um não se confere sem o outro: é o tipo
+#: que diz se os dígitos são CPF ou CNPJ, e sem essa resposta não há dígito
+#: verificador a checar. Por isso não dá para reaproveitar
+#: `_CONTEUDO_OBRIGATORIO`, que enxerga o número sozinho — e é exatamente essa
+#: cegueira que deixou passar a remessa de 20/08/2026: `08.3B` estava lá,
+#: preenchido, não-zero, e o Sicoob devolveu o arquivo porque o número não
+#: fechava. "Preenchido" nunca foi o mesmo que "válido".
+_INSCRICAO: dict[str, tuple[tuple[str, str], ...]] = {
+    "header_arquivo": (("05.0", "06.0"),),
+    "header_lote_transferencia": (("09.1", "10.1"),),
+    "header_lote_folha": (("09.1", "10.1"),),
+    "header_lote_titulos": (("09.1", "10.1"),),
+    "header_lote_tributos": (("09.1", "10.1"),),
+    "segmento_b_transferencia": (("07.3B", "08.3B"),),
+    "segmento_b_folha": (("07.3B", "08.3B"),),
+    "segmento_j52": (("09.4.J52", "10.4.J52"), ("12.4.J52", "13.4.J52"),
+                     ("15.4.J52", "16.4.J52")),
+    "segmento_j52_pix": (("09.4.J52", "10.4.J52"), ("12.4.J52", "13.4.J52")),
+}
+
 #: Exceções por produto: campos que legitimamente ficam zerados.
 _SEM_CONTEUDO_NO_PRODUTO: dict[str, set[str]] = {
     # Pix por chave não trafega agência/conta do favorecido.
@@ -221,6 +243,44 @@ def _validar_campos(
             nivel = NIVEL_ARQUIVO if campo.ate <= _LIMITE_CONTROLE_SERVICO else NIVEL_REGISTRO
             problemas.append(
                 Problema(numero, nivel, f"valor {cru!r} fora do domínio {codigo}", campo.id)
+            )
+
+    # Inscrição que não fecha o dígito verificador. É a conferência que faltava
+    # entre "o campo está preenchido" (acima) e "o banco aceita o campo": o
+    # Sicoob confere o DV, e quem descobre a diferença depois dele descobre com
+    # o arquivo já recusado e o dia de pagamento perdido.
+    #
+    # O número é NUMÉRICO e alinhado à direita com zeros, então os dígitos que
+    # valem são os ÚLTIMOS onze (CPF) ou catorze (CNPJ) — não o campo sem os
+    # zeros à esquerda, que amputaria todo CPF começado em zero e reprovaria
+    # gente legítima.
+    for campo_tipo, campo_numero in _INSCRICAO.get(layout.chave, ()):
+        tipo = ler(layout.campo(campo_tipo), linha).strip()
+        if tipo == TipoInscricao.CPF:
+            confere, rotulo, tamanho = dv_cpf, "CPF", 11
+        elif tipo == TipoInscricao.CNPJ:
+            confere, rotulo, tamanho = dv_cnpj, "CNPJ", 14
+        else:
+            # Isento, PIS/PASEP e "outros" não têm DV nesse formato. Calar aqui
+            # não abre buraco: o tipo em si já passou pelo domínio G005 logo
+            # acima, e o preenchimento pelo _CONTEUDO_OBRIGATORIO.
+            continue
+
+        campo = layout.campo(campo_numero)
+        cru = ler(campo, linha)
+        if set(cru) <= {"0", " "} or not cru.strip().isdigit():
+            # Vazio é assunto do campo obrigatório; não-numérico, da checagem
+            # de tipo. Dois avisos sobre o mesmo defeito confundem quem lê.
+            continue
+        lido = cru.strip()[-tamanho:]
+        if not confere(lido):
+            problemas.append(
+                Problema(
+                    numero,
+                    nivel_de(campo),
+                    f"{rotulo} inválido: {lido} não fecha o dígito verificador",
+                    campo.id,
+                )
             )
 
 

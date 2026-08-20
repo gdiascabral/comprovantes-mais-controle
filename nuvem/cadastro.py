@@ -140,17 +140,24 @@ def _subcontas(dados: dict) -> dict:
 
 
 def _regras_fornecedor(dados: dict) -> dict:
-    """As duas listas que moram em `regras_fornecedor.json`.
+    """As listas que moram em `regras_fornecedor.json`.
 
     `pagar_a_mao` volta a se chamar `confirmar_sempre` no arquivo — é o nome
     que `regras_pagamento.py` lê hoje, e renomear ali seria mexer numa regra
-    de dinheiro para ganhar consistência de vocabulário."""
+    de dinheiro para ganhar consistência de vocabulário.
+
+    `so_marcador` é a concessionária cujo lançamento de R$ 1,00 é marcador de
+    recorrência, e não pagamento. Precisa vir da nuvem como as outras: o
+    arquivo é reescrito a cada abertura, e uma marca posta à mão aqui sumiria
+    na sincronização seguinte."""
     saida: dict = {}
     for r in dados["regra_fornecedor"]:
         if r["tipo"] == "so_reembolso":
             saida.setdefault(r["nome"], {})["so_com_reembolso"] = True
         elif r["tipo"] == "pagar_a_mao":
             saida.setdefault(r["nome"], {})["confirmar_sempre"] = True
+        elif r["tipo"] == "so_marcador":
+            saida.setdefault(r["nome"], {})["so_marcador"] = True
     return saida
 
 

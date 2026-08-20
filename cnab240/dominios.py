@@ -32,6 +32,56 @@ class TipoInscricao(StrEnum):
         )
 
 
+#: Pesos do DV do CNPJ, do 2º dígito para trás. O 1º DV usa os 12 últimos;
+#: o 2º, os 13. Escritos por extenso de propósito: a versão calculada saía
+#: deslocada em uma posição e reprovava CNPJ legítimo em silêncio.
+_PESOS_CNPJ = (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
+
+
+def dv_cpf(d: str) -> bool:
+    """Os onze dígitos fecham como CPF?"""
+    if len(d) != 11 or len(set(d)) == 1:
+        return False
+    for tamanho in (9, 10):
+        soma = sum(int(d[i]) * (tamanho + 1 - i) for i in range(tamanho))
+        resto = (soma * 10) % 11 % 10
+        if resto != int(d[tamanho]):
+            return False
+    return True
+
+
+def dv_cnpj(d: str) -> bool:
+    """Os catorze dígitos fecham como CNPJ?"""
+    if len(d) != 14 or len(set(d)) == 1:
+        return False
+    for tamanho in (12, 13):
+        pesos = _PESOS_CNPJ[-tamanho:]
+        soma = sum(int(d[i]) * pesos[i] for i in range(tamanho))
+        resto = soma % 11
+        if (0 if resto < 2 else 11 - resto) != int(d[tamanho]):
+            return False
+    return True
+
+
+def documento_valido(valor) -> str:
+    """Os dígitos, se forem um CPF ou CNPJ que fecha. Senão, "".
+
+    Mora aqui, e não na camada de pagamentos, porque é o `cnab240` que escreve
+    os campos de inscrição e é ele quem tem de saber recusá-los. O
+    `TipoInscricao.por_documento` logo acima mede o TAMANHO para escolher entre
+    CPF e CNPJ — nunca conferiu o dígito verificador, e não é trabalho dele. Foi
+    por essa fresta que um CPF de preenchimento (onze dígitos, DV que não fecha)
+    chegou ao campo 08.3B e fez o Sicoob devolver a remessa de 20/08/2026.
+
+    Os dígitos verificadores não são preciosismo: sem eles, todo telefone de
+    onze dígitos viraria "CPF encontrado".
+    """
+    if isinstance(valor, bool) or not isinstance(valor, (str, int)):
+        return ""
+    digitos = "".join(c for c in str(valor) if c.isdigit())
+    return digitos if (dv_cpf(digitos) or dv_cnpj(digitos)) else ""
+
+
 class TipoServico(StrEnum):
     """G025 — apenas os usados em pagamentos."""
 

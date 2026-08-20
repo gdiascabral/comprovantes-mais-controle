@@ -46,7 +46,7 @@ from decimal import Decimal
 from cnab240 import *
 
 empresa = Empresa(
-    nome="ACME COMERCIO LTDA", documento="12.345.678/0001-99",
+    nome="ACME COMERCIO LTDA", documento="12.345.678/0001-95",
     convenio="123456",                      # número exibido após a adesão
     agencia="4321", dv_agencia="0",
     conta="000000123456", dv_conta="7", dv_ag_conta="8",
@@ -61,7 +61,7 @@ arquivo.novo_lote("TED", forma_lancamento=FormaLancamento.TED_OUTRA_TITULARIDADE
         seu_numero="NF-2026-0002",
         finalidade_ted="5",                 # pagamento de fornecedores
         favorecido=Favorecido(
-            nome="FORNECEDOR SA", documento="98.765.432/0001-55",
+            nome="FORNECEDOR SA", documento="98.765.432/0001-98",
             banco="341", agencia="0910", conta="000000045678", dv_conta="1",
         ),
     )

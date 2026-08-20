@@ -24,6 +24,10 @@ CONTA = "EMPRESA EXEMPLO - SICOOB"
 # CNPJ e CPF sintéticos, com DV calculado — o repositório é público.
 CNPJ_OK = "11222333000181"
 CPF_OK = "52998224725"
+#: Onze dígitos que NÃO fecham o DV — a forma do CPF de preenchimento que fez o
+#: Sicoob devolver a remessa de 20/08/2026. É o CPF_OK com o último dígito
+#: trocado: tem o tamanho certo, e era só o tamanho que alguém conferia.
+CPF_NAO_FECHA = "52998224726"
 #: CPF que TAMBÉM tem forma de celular (DDD 11, 9 na 3ª casa, DV fechando).
 #: É o único caso que continua sem resposta depois das duas provas.
 CHAVE_AMBIGUA = "11900000083"
@@ -154,29 +158,56 @@ class _HistoricoFalso:
         return self._achado(self._ref[referencia]) if referencia in self._ref else None
 
 
-def test_boleto_que_ja_saiu_em_outra_remessa_e_impedido():
+def test_boleto_que_ja_saiu_em_outra_remessa_volta_avisado_e_desmarcado():
     """A trava do "seu número" só pegava repetição no MESMO dia.
 
     Ele começa com a data (`260813-0001-…`), então refazer o dia seguinte com
     o título ainda aberto — porque o retorno do banco não foi lido — mandava o
     mesmo boleto de novo, com NSA novo e validador limpo.
+
+    Descobrir isso virou IMPEDIMENTO, e em 20/08/2026 virou AVISO: o envio
+    anterior também falha de verdade, e aí este pagamento precisa ir de novo.
+    A linha volta a ter caixa; o que sobrou da trava é ela nascer vazia.
     """
     barras = ocr_boleto.codigo_de_barras(LINHA_BANCARIA)
     hist = _HistoricoFalso(por_barras={barras: 31})
     c, = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE,
                               historico=hist)[CONTA]
-    assert not c.pode
-    assert "000031" in c.impedimento
+    assert c.pode and not c.impedimento
+    assert "000031" in c.ja_enviado
+    assert not c.marcado
 
 
-def test_pix_que_ja_saiu_e_impedido_pela_referencia():
+def test_pix_que_ja_saiu_volta_avisado_pela_referencia():
     """Pix não tem código de barras; quem responde é o id do lançamento."""
     hist = _HistoricoFalso(por_referencia={"id-erp-1": 7})
     c, = remessa_dia.preparar(
         {CONTA: [registro(tipo="Pix", dados="11.222.333/0001-81")]},
         quando=HOJE, historico=hist)[CONTA]
-    assert not c.pode
-    assert "000007" in c.impedimento
+    assert c.pode and not c.impedimento
+    assert "000007" in c.ja_enviado
+    assert not c.marcado
+
+
+def test_o_reenvio_recebe_seu_numero_novo():
+    """É por ele que o retorno do banco casa com o REENVIO, e não com o velho.
+
+    Cai do código que já existia — o `seu_numero` só era atribuído a quem não
+    tinha impedimento —, mas é a consequência que faz o reenvio ser rastreável
+    em vez de ambíguo, e por isso está escrita aqui.
+    """
+    barras = ocr_boleto.codigo_de_barras(LINHA_BANCARIA)
+    hist = _HistoricoFalso(por_barras={barras: 31})
+    c, = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE,
+                              historico=hist)[CONTA]
+    assert c.seu_numero and c.seu_numero.startswith(HOJE.strftime("%y%m%d"))
+
+
+def test_linha_sem_envio_anterior_nao_ganha_aviso():
+    """O aviso é sobre o histórico, não sobre a linha: sem envio, vazio."""
+    c, = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE,
+                              historico=_HistoricoFalso())[CONTA]
+    assert c.ja_enviado == "" and c.marcado
 
 
 def test_sem_historico_a_regra_continua_a_mesma():
@@ -262,6 +293,41 @@ def test_cadastro_libera_pix_por_celular():
     assert c.documento_favorecido == CNPJ_OK      # do cadastro
     assert c.chave == "PIX CELULAR 62999991234"   # a chave segue sendo a chave
     assert c.forma_iniciacao == "01"
+
+
+def test_cadastro_com_documento_que_nao_fecha_nao_libera_o_pix():
+    """Estar no cadastro não é o mesmo que ter documento que o banco aceite.
+
+    Foi assim que a remessa de 20/08/2026 voltou inteira: o favorecido ESTAVA
+    no cadastro de Contatos, com um CPF de preenchimento. O documento vindo do
+    cadastro entrava sem conferência nenhuma — o `documento_valido`, que é quem
+    checa o DV, só era aplicado à chave Pix, o caminho de trás. E o
+    `_impedimento` sabe perguntar se o documento EXISTE, não se ele fecha.
+
+    O certo é cair na conferência como se não houvesse cadastro: sem documento
+    de verdade, não há segmento B que o banco aceite.
+    """
+    preparado = remessa_dia.preparar(
+        {CONTA: [registro(tipo="Pix", dados="PIX CELULAR 62999991234")]},
+        participantes={"FORNECEDOR SA": CPF_NAO_FECHA}, quando=HOJE)
+    c, = preparado[CONTA]
+    assert c.impedimento == remessa_dia.MOTIVO_SEM_DOCUMENTO
+    assert not c.documento_favorecido
+
+
+def test_boleto_nao_leva_cedente_com_documento_que_nao_fecha():
+    """No J-52 o documento inválido não impede o pagamento — mas não entra.
+
+    O boleto se paga pelo código de barras, e o comentário do `preparar` já
+    aceitava cedente em branco. Branco é honesto; um documento que não fecha
+    aponta para ninguém e ainda arrisca a recusa do registro.
+    """
+    preparado = remessa_dia.preparar(
+        {CONTA: [registro()]},
+        participantes={"FORNECEDOR SA": CPF_NAO_FECHA}, quando=HOJE)
+    c, = preparado[CONTA]
+    assert c.pode                       # o boleto continua saindo
+    assert not c.documento_favorecido   # sem cedente inventado
 
 
 def test_cadastro_libera_pix_por_email_e_aleatoria():
@@ -386,7 +452,7 @@ def empresas(convenio="123456"):
         nome="EXEMPLO",
         contas=[sicoob_contas.Conta(numero="12.345-6", pasta="SICOOB",
                                     banco="756", agencia="4321-0")],
-        cnpj="12.345.678/0001-99",
+        cnpj="12.345.678/0001-95",
         razao_social="EMPRESA EXEMPLO LTDA",
         convenio=convenio,
     )]

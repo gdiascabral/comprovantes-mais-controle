@@ -39,7 +39,7 @@ OUTRO_BARRAS = "34191234500000297001234567890123456789012345"
 def empresa(convenio: str = "123456") -> Empresa:
     return Empresa(
         nome="ACME COMERCIO E SERVICOS LTDA",
-        documento="12.345.678/0001-99",
+        documento="12.345.678/0001-95",
         convenio=convenio,
         agencia="4321",
         dv_agencia="9",
@@ -52,7 +52,7 @@ def empresa(convenio: str = "123456") -> Empresa:
 def favorecido() -> Favorecido:
     return Favorecido(
         nome="FORNECEDOR SA",
-        documento="98.765.432/0001-55",
+        documento="98.765.432/0001-98",
         banco="341",
         agencia="0910",
         conta="000000045678",

@@ -48,7 +48,7 @@ CODIGO_BARRAS = "75691234500000150001234567890123456789012345"
 def empresa() -> Empresa:
     return Empresa(
         nome="ACME COMERCIO E SERVICOS LTDA",
-        documento="12.345.678/0001-99",
+        documento="12.345.678/0001-95",
         convenio="123456",
         agencia="4321",
         dv_agencia="0",
@@ -259,13 +259,13 @@ def test_pix_por_cpf_cnpj_repete_a_chave_na_informacao_12():
             data_pagamento=HOJE,
             favorecido=favorecido(),
             forma_iniciacao=FormaIniciacaoPix.CHAVE_CPF_CNPJ,
-            chave="98.765.432/0001-55",
+            chave="98.765.432/0001-98",
         )
     )
     linhas = arquivo.gerar()
     b = [l for l in linhas if l[13] == "B"][0]
     assert b[14:17] == "03 "
-    assert b[127:226].strip() == "98765432000155"
+    assert b[127:226].strip() == "98765432000198"
     assert validar(linhas) == []
 
 
@@ -302,7 +302,7 @@ def test_titulo_gera_j_e_j52():
             codigo_barras=CODIGO_BARRAS,
             nome_cedente="FORNECEDOR SA",
             vencimento=HOJE,
-            j52=DadosJ52(cedente_nome="FORNECEDOR SA", cedente_documento="98765432000155"),
+            j52=DadosJ52(cedente_nome="FORNECEDOR SA", cedente_documento="98765432000198"),
         )
     )
     linhas = arquivo.gerar()
@@ -368,7 +368,7 @@ def test_tributos_darf_gps_e_darf_simples():
         (
             TributoDARF(
                 valor="500.00", data_pagamento=HOJE, nome_contribuinte="ACME LTDA",
-                codigo_receita="0561", identificacao="12345678000199",
+                codigo_receita="0561", identificacao="12345678000195",
                 periodo_apuracao=HOJE, valor_principal="500.00", vencimento=HOJE,
             ),
             FormaLancamento.DARF_NORMAL,
@@ -377,7 +377,7 @@ def test_tributos_darf_gps_e_darf_simples():
         (
             TributoGPS(
                 valor="300.00", data_pagamento=HOJE, nome_contribuinte="ACME LTDA",
-                codigo_receita="2100", identificacao="12345678000199",
+                codigo_receita="2100", identificacao="12345678000195",
                 competencia=HOJE, valor_inss="300.00",
             ),
             FormaLancamento.GPS,
@@ -386,7 +386,7 @@ def test_tributos_darf_gps_e_darf_simples():
         (
             TributoDARFSimples(
                 valor="120.00", data_pagamento=HOJE, nome_contribuinte="ACME LTDA",
-                identificacao="12345678000199", periodo_apuracao=HOJE,
+                identificacao="12345678000195", periodo_apuracao=HOJE,
                 receita_bruta="10000.00", percentual="5.00", valor_principal="120.00",
             ),
             FormaLancamento.DARF_SIMPLES,
@@ -410,7 +410,7 @@ def test_lote_de_tributo_nao_mistura_formas():
     with pytest.raises(RemessaInvalida, match="um lote só pode conter um tipo"):
         lote.adicionar(
             TributoGPS(
-                valor="1", data_pagamento=HOJE, identificacao="12345678000199",
+                valor="1", data_pagamento=HOJE, identificacao="12345678000195",
                 competencia=HOJE, valor_inss="1",
             )
         )
@@ -616,7 +616,7 @@ def test_agencia_e_conta_com_mascara_nao_colam_o_dv_no_numero():
     assert (f.agencia, f.dv_agencia) == ("0910", "5")
     assert (f.conta, f.dv_conta) == ("45678", "1")
 
-    e = Empresa(nome="ACME LTDA", documento="12.345.678/0001-99", convenio="123456",
+    e = Empresa(nome="ACME LTDA", documento="12.345.678/0001-95", convenio="123456",
                 agencia="4321-0", conta="12.345-6", dv_conta="")
     assert (e.agencia, e.dv_agencia, e.conta, e.dv_conta) == ("4321", "0", "12345", "6")
 
@@ -723,6 +723,38 @@ def test_validador_detecta_banco_errado():
     linhas = gerar_transferencia()
     linhas[2] = "001" + linhas[2][3:]
     assert any("esperado 756" in p.mensagem for p in validar(linhas))
+
+
+def test_validador_detecta_inscricao_que_nao_fecha_o_dv():
+    """"Preenchido" nunca foi o mesmo que "válido".
+
+    O Sicoob devolveu a remessa de 20/08/2026 apontando o 08.3B: um CPF de
+    preenchimento, onze dígitos, DV que não fecha. O validador daqui só sabia
+    perguntar se o campo estava VAZIO — e não estava —, então o arquivo saiu
+    limpo daqui e voltou recusado de lá. Conferir o DV é o que traz esse
+    veredito para antes do envio.
+    """
+    linhas = gerar_transferencia()
+    i = next(n for n, l in enumerate(linhas) if l[13:14] == "B")
+    # Tipo 1 (CPF) e um número de onze dígitos que não fecha: é o CPF sintético
+    # das fixtures com o último dígito trocado.
+    linhas[i] = linhas[i][:17] + "1" + "12345678900".rjust(14, "0") + linhas[i][32:]
+    problemas = validar(linhas)
+    assert any(p.campo == "08.3B" and "dígito verificador" in p.mensagem
+               for p in problemas)
+
+
+def test_validador_aceita_cpf_com_zero_a_esquerda():
+    """A leitura é pelos ÚLTIMOS onze dígitos, não pelo campo sem os zeros.
+
+    O campo tem catorze posições e é alinhado à direita com zeros. Quem lê
+    tirando TODO zero da frente ampute o CPF que começa em zero e reprova gente
+    legítima — o oposto exato do defeito que a conferência veio consertar.
+    """
+    linhas = gerar_transferencia()
+    i = next(n for n, l in enumerate(linhas) if l[13:14] == "B")
+    linhas[i] = linhas[i][:17] + "1" + "01234567890".rjust(14, "0") + linhas[i][32:]
+    assert not [p for p in validar(linhas) if p.campo == "08.3B"]
 
 
 # --------------------------------------------------------------------------

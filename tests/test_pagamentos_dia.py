@@ -385,3 +385,44 @@ def test_conta_nao_marcada_nao_entra_na_pergunta():
     import pagamentos_frame as frame
 
     assert frame.alvos_para_confirmar([_pagamento("a")], ["OUTRA"]) == []
+
+
+#: Cadastro de mentira, no formato de `carregar_fornecedores`.
+_MARCADA = {"CONCESSIONARIA LUZ": {"so_marcador": True}}
+
+
+def _marcador(ident, valor=1.00):
+    """O lançamento de R$ 1,00 que a concessionária usa para abrir o mês."""
+    item = _pagamento(ident)
+    item.update(paidTo="CONCESSIONARIA LUZ S/A", remainingValue=valor)
+    return item
+
+
+def test_o_marcador_de_recorrencia_nao_ocupa_a_janela():
+    """A queixa de 20/08/2026: três linhas de R$ 1,00, desmarcadas todo dia.
+
+    A etapa 3 já as descartava por valor simbólico — mas ela roda depois, e a
+    janela existe para recolher decisão, não para repetir uma já tomada.
+    """
+    import pagamentos_frame as frame
+
+    alvos = frame.alvos_para_confirmar(
+        [_pagamento("a"), _marcador("luz")], ["CONTA TESTE"], _MARCADA)
+    assert [i["id"] for i in alvos] == ["a"]
+
+
+def test_valor_de_verdade_da_mesma_concessionaria_continua_na_janela():
+    """A marca é sobre o R$ 1,00, não sobre o nome: a conta de luz aparece."""
+    import pagamentos_frame as frame
+
+    alvos = frame.alvos_para_confirmar(
+        [_marcador("conta", valor=56.24)], ["CONTA TESTE"], _MARCADA)
+    assert [i["id"] for i in alvos] == ["conta"]
+
+
+def test_sem_cadastro_a_janela_lista_tudo_como_antes():
+    """`fornecedores` é opcional — sem ele, nada é filtrado."""
+    import pagamentos_frame as frame
+
+    alvos = frame.alvos_para_confirmar([_marcador("luz")], ["CONTA TESTE"])
+    assert [i["id"] for i in alvos] == ["luz"]

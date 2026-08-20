@@ -5,7 +5,7 @@ Arquivos CNAB 240" v3.1 (26/03/2025).
 
     from cnab240 import *
 
-    empresa = Empresa(nome="ACME LTDA", documento="12345678000199",
+    empresa = Empresa(nome="ACME LTDA", documento="12345678000195",
                       convenio="123456", agencia="4321", conta="123456",
                       dv_conta="7")
 
@@ -13,7 +13,7 @@ Arquivos CNAB 240" v3.1 (26/03/2025).
     lote = arquivo.novo_lote("TED", forma_lancamento=FormaLancamento.TED_OUTRA_TITULARIDADE)
     lote.adicionar(TransferenciaConta(
         valor="1500.00", data_pagamento=date(2026, 8, 12),
-        favorecido=Favorecido(nome="FORNECEDOR SA", documento="98765432000155",
+        favorecido=Favorecido(nome="FORNECEDOR SA", documento="98765432000198",
                               banco="341", agencia="1234", conta="56789", dv_conta="0"),
         finalidade_ted="5",
     ))

@@ -40,6 +40,8 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import util
 
+from cnab240 import dominios as _dominios
+
 
 #: Valores que o ERP usa como marcador, nunca como pagamento. A lista é
 #: EXATA, e não um piso: "abaixo de R$ 5,00" descartaria calado o dia em que
@@ -144,6 +146,18 @@ def regra_do_fornecedor(favorecido: str, regras: dict) -> dict:
     return max(achadas, key=lambda kv: len(kv[0]))[1]
 
 
+def so_marcador(favorecido: str, regras: dict) -> bool:
+    """Valor simbólico DESTE fornecedor é marcador de recorrência, sempre.
+
+    A concessionária de energia ou água lança R$ 1,00 por unidade consumidora
+    para o título nascer no mês. A marca é por nome, e não por valor, porque a
+    frase que ela representa é "R$ 1,00 **deste** fornecedor não é pagamento"
+    — e não "R$ 1,00 nunca é pagamento", que descartaria calado a taxa de um
+    real que um dia exista de verdade.
+    """
+    return bool(regra_do_fornecedor(favorecido, regras).get("so_marcador"))
+
+
 def exige_confirmacao(favorecido: str, nomes) -> bool:
     alvo = util.norm_espaco(favorecido)
     return bool(alvo) and any(util.norm_espaco(n) in alvo for n in nomes if str(n).strip())
@@ -174,12 +188,20 @@ def motivo_omissao(valor: float, favorecido: str, dados: str,
     `valor_documento` é o valor lido do código de barras, quando há um.
     """
     # O boleto MANDA no valor simbólico. No arquivo de 08 a 10/08/2026 havia
-    # uma conta da Equatorial lançada como R$ 1,00 cujo código de barras
+    # uma conta de concessionária lançada como R$ 1,00 cujo código de barras
     # anexado dizia R$ 56,24 — conta de luz de verdade, com o valor errado no
     # ERP. Omitir por "marcador de recorrência" apagaria a conta em vez de
     # denunciar o lançamento, e ninguém sentiria falta antes do vencimento.
     # Contradisse, a linha FICA: quem confere vê os dois valores e corrige.
-    if valor_simbolico(valor) and not documento_contradiz_valor(valor, valor_documento):
+    #
+    # `so_marcador` desliga essa exceção para os nomes marcados no cadastro —
+    # decisão do dono em 20/08/2026, depois de desmarcar as mesmas três linhas
+    # à mão todo dia. O preço está escrito: para ESSES fornecedores, a conta
+    # real lançada como R$ 1,00 não volta a aparecer; ela existe só na aba NÃO
+    # ENTRARAM, com o motivo. Para todo o resto, a exceção continua de pé.
+    if valor_simbolico(valor) and (
+            so_marcador(favorecido, regras)
+            or not documento_contradiz_valor(valor, valor_documento)):
         return MOTIVO_SIMBOLICO
 
     regra = regra_do_fornecedor(favorecido, regras)
@@ -431,43 +453,13 @@ def documento_e_a_oc(document_number: str, oc: str) -> bool:
 # número — a mesma família do "8 lido como B" que o `ocr_boleto` já recusa.
 
 
-def _dv_cpf(d: str) -> bool:
-    if len(d) != 11 or len(set(d)) == 1:
-        return False
-    for tamanho in (9, 10):
-        soma = sum(int(d[i]) * (tamanho + 1 - i) for i in range(tamanho))
-        resto = (soma * 10) % 11 % 10
-        if resto != int(d[tamanho]):
-            return False
-    return True
-
-
-#: Pesos do DV do CNPJ, do 2º dígito para trás. O 1º DV usa os 12 últimos;
-#: o 2º, os 13. Escritos por extenso de propósito: a versão calculada saía
-#: deslocada em uma posição e reprovava CNPJ legítimo em silêncio.
-_PESOS_CNPJ = (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
-
-
-def _dv_cnpj(d: str) -> bool:
-    if len(d) != 14 or len(set(d)) == 1:
-        return False
-    for tamanho in (12, 13):
-        pesos = _PESOS_CNPJ[-tamanho:]
-        soma = sum(int(d[i]) * pesos[i] for i in range(tamanho))
-        resto = soma % 11
-        if (0 if resto < 2 else 11 - resto) != int(d[tamanho]):
-            return False
-    return True
-
-
-def documento_valido(valor) -> str:
-    """Os dígitos, se forem um CPF ou CNPJ que fecha. Senão, "".
-
-    Os dígitos verificadores não são preciosismo: sem eles, todo telefone de
-    onze dígitos viraria "CPF encontrado" e o diagnóstico apontaria para o
-    campo errado — que é exatamente o erro que ele existe para evitar.
-    """
-    if isinstance(valor, bool) or not isinstance(valor, (str, int)):
-        return ""
-    digitos = re.sub(r"\D", "", str(valor))
-    return digitos if (_dv_cpf(digitos) or _dv_cnpj(digitos)) else ""
+#: Os dígitos verificadores mudaram de casa para `cnab240.dominios`, que é o
+#: pacote que ESCREVE os campos de inscrição — e portanto o que precisa saber
+#: recusá-los. Ficar aqui deixava o `validador`, que confere o arquivo pronto,
+#: sem acesso à única regra capaz de reprovar um CPF de preenchimento; foi
+#: assim que a remessa de 20/08/2026 saiu com 08.3B inválido e voltou do banco.
+#: Os nomes continuam aqui porque é por eles que o resto do módulo — e os
+#: testes — chamam; o que não existe é uma segunda implementação.
+_dv_cpf = _dominios.dv_cpf
+_dv_cnpj = _dominios.dv_cnpj
+documento_valido = _dominios.documento_valido

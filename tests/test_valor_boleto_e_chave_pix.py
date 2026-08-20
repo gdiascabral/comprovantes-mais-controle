@@ -51,6 +51,38 @@ def test_um_real_com_boleto_de_outro_valor_NAO_e_omitido():
                                  valor_documento=VALOR_BANCARIA) == ""
 
 
+#: Cadastro de mentira, no formato de `carregar_fornecedores`: as chaves já
+#: vêm na forma comparável (maiúscula, sem acento).
+MARCADA = {"CONCESSIONARIA LUZ": {"so_marcador": True}}
+
+
+def test_um_real_de_fornecedor_marcado_e_omitido_ate_contra_o_boleto():
+    """`so_marcador` desliga a exceção acima — decisão do dono em 20/08/2026.
+
+    Para o nome marcado no cadastro, R$ 1,00 é marcador de recorrência e ponto:
+    nem o código de barras dizendo outro valor traz a linha de volta. O preço
+    está no design de 20/08 — a conta real lançada como R$ 1,00 desse
+    fornecedor passa a existir só na aba NÃO ENTRARAM.
+    """
+    assert regras.motivo_omissao(1.00, "CONCESSIONARIA LUZ DISTRIBUIDORA S/A",
+                                 LINHA_BANCARIA, True, MARCADA,
+                                 valor_documento=VALOR_BANCARIA) ==         regras.MOTIVO_SIMBOLICO
+
+
+def test_a_marca_nao_vale_para_quem_nao_esta_no_cadastro():
+    """O mesmo boleto, outro fornecedor: a exceção de 10/08 continua de pé."""
+    assert regras.motivo_omissao(1.00, "FORNECEDOR QUALQUER", LINHA_BANCARIA,
+                                 True, MARCADA,
+                                 valor_documento=VALOR_BANCARIA) == ""
+
+
+def test_a_marca_nao_derruba_valor_de_verdade_do_marcado():
+    """Ela é sobre o valor SIMBÓLICO. R$ 56,24 da mesma concessionária entra."""
+    assert regras.motivo_omissao(56.24, "CONCESSIONARIA LUZ DISTRIBUIDORA S/A",
+                                 LINHA_BANCARIA, True, MARCADA,
+                                 valor_documento=56.24) == ""
+
+
 def test_um_real_sem_boleto_continua_omitido():
     """A regra não foi desligada — só deixou de valer contra prova."""
     assert regras.motivo_omissao(1.00, "Fulano", "", False, {}) == \

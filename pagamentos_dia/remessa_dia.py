@@ -225,6 +225,12 @@ class Candidato:
     #: Guardado porque o `favorecido` acima deixou de ser ele, e sem este
     #: campo a tela não teria como dizer de que compra o reembolso veio.
     reembolso_de: str = ""
+    #: "já saiu na remessa nº 000001 de 17/08/2026" — vazio quando não saiu.
+    #: Era `impedimento`, e a linha vinha sem caixa: reenviar UM pagamento
+    #: obrigava a `descartar()` a remessa inteira. Virou aviso porque o envio
+    #: anterior falha de verdade (arquivo recusado, pagamento que não caiu), e
+    #: aí este pagamento precisa ir de novo. A linha nasce desmarcada.
+    ja_enviado: str = ""
 
     @property
     def pode(self) -> bool:
@@ -445,6 +451,22 @@ def preparar(contas: dict, participantes: dict | None = None,
             else:
                 favorecido = registro.get("favorecido") or ""
                 do_cadastro = documento_do_cadastro(registro, participantes)
+            # O cadastro não garante documento que FECHA. A remessa recusada em
+            # 20/08/2026 saiu com um favorecido cadastrado com CPF de
+            # preenchimento — onze dígitos, DV que não fecha — e o banco
+            # devolveu o arquivo inteiro ("campo Número de Inscrição do
+            # Favorecido, possui valor inválido"). Onze dígitos era a única
+            # conferência no caminho: `TipoInscricao.por_documento` mede o
+            # TAMANHO para escolher entre CPF e CNPJ, não o dígito verificador,
+            # e daí em diante ninguém mais perguntou.
+            #
+            # Conferir aqui, e não dentro do ramo do Pix, é o que faz o
+            # documento inválido virar IMPEDIMENTO em vez de virar arquivo: o
+            # `_impedimento` só sabe testar se o documento EXISTE, e um CPF de
+            # preenchimento existe. Vale também para o boleto, onde ele
+            # identifica o cedente no J-52 — lá branco já era aceito, e branco é
+            # melhor que um documento que aponta para ninguém.
+            do_cadastro = documento_valido(do_cadastro)
             documento = forma = ""
             if registro.get("tipo") == "Pix":
                 documento = do_cadastro or documento_valido(dados)
@@ -456,8 +478,11 @@ def preparar(contas: dict, participantes: dict | None = None,
             # depois, e evita perguntar ao histórico com a mão vazia.
             codigo = (ocr_boleto.codigo_de_barras(dados)
                       if registro.get("tipo") == "Boleto" else "")
-            if not impedimento:
-                impedimento = _ja_enviado(historico, codigo, registro.get("id"))
+            # Não vira impedimento: vira aviso. Só se pergunta ao histórico
+            # quando nada mais barra a linha — perguntar antes seria enfeitar
+            # com "já saiu" uma linha que não ia sair de qualquer jeito.
+            ja_enviado = ("" if impedimento else
+                          _ja_enviado(historico, codigo, registro.get("id")))
 
             candidato = Candidato(
                 id=str(registro.get("id") or ""),
@@ -469,6 +494,7 @@ def preparar(contas: dict, participantes: dict | None = None,
                 status=registro.get("status") or "",
                 obs=registro.get("obs") or "",
                 impedimento=impedimento,
+                ja_enviado=ja_enviado,
                 reembolso=e_reembolso,
                 reembolso_origem=registro.get("reembolso_origem") or "",
                 reembolso_de=(registro.get("favorecido") or "") if e_reembolso else "",
@@ -497,7 +523,11 @@ def preparar(contas: dict, participantes: dict | None = None,
                 # própria, e quem confere o total não tem como perceber isso
                 # sozinho. Um clique explícito é o preço de o dinheiro ir para
                 # alguém que não é o favorecido do lançamento.
-                candidato.marcado = candidato.apto and not e_reembolso
+                #
+                # O reenvio nasce desmarcado pela mesma razão, e mais forte:
+                # ali marcar é o MESMO pagamento saindo duas vezes.
+                candidato.marcado = (candidato.apto and not e_reembolso
+                                     and not ja_enviado)
             linhas.append(candidato)
         if linhas:
             saida[conta] = linhas
