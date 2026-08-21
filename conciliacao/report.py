@@ -1,8 +1,9 @@
 """Resumo do dia em portugues, direto ao ponto.
 
 Os numeros de aporte vem do `panel.py` (espelho das formulas), nao do arquivo:
-o openpyxl nao recalcula, e a coluna L do modelo depende de J, que so e
-preenchida na conferencia manual com o extrato.
+o openpyxl nao recalcula, e no arquivo recem-gerado as colunas de aporte ainda
+estao zeradas — elas so ganham valor quando o Gustavo preenche o APORTE
+DEFINIDO e a aba «Movimentações» rateia.
 """
 
 from __future__ import annotations
@@ -69,20 +70,27 @@ def build_report(
         add("-" * 64)
         for linha in precisam:
             add(_linha_conta(linha.label, format_brl(linha.aporte_minimo)))
-            if linha.aporte_direcionado_para:
-                add(f"      -> aporte direcionado para: {linha.aporte_direcionado_para}")
-
-        for celula, valor in computation.rateios_secundarios.items():
-            if valor > Decimal("0"):
-                add("")
-                add(
-                    f"  Rateio 2:1 do Buritis - Inter ({celula}): "
-                    f"Julio/Livian entra com {format_brl(valor)}"
-                )
-                add("      (a Morais Engenharia aporta o dobro disso)")
-
+            if linha.aportadores:
+                add(f"      quem entra: {linha.aportadores}")
+            else:
+                add("      (sem aportador na aba Regras)")
+        add("")
+        add(_linha_conta("TOTAL DE APORTE MINIMO", format_brl(computation.total_aporte_minimo)))
         add("")
         add("  Estes sao os valores MINIMOS — o valor final do aporte e sua decisao.")
+
+        # --- quanto sairia de cada aportador, se o aporte fosse o minimo -----
+        if computation.saidas_minimas or computation.a_dividir:
+            add("")
+            add("SE VOCE APORTAR O MINIMO EM TODAS")
+            add("-" * 64)
+            for quem, quanto in sorted(
+                computation.saidas_minimas.items(), key=lambda kv: -kv[1]
+            ):
+                add(_linha_conta(quem, format_brl(quanto)))
+            for destino, valor, participantes in computation.a_dividir:
+                add(_linha_conta(f"{destino} (a dividir)", format_brl(valor)))
+                add(f"      entre: {' · '.join(participantes)}")
     else:
         add("Nenhuma conta precisa de aporte hoje.")
 

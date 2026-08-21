@@ -1,8 +1,9 @@
 """Montagem da planilha final.
 
-Escreve apenas E4 (data) e D/E/I/J nas linhas 8 a 31. Todas as formulas do
-modelo (F, G, H, K, L, M, N, F32, E33) sao preservadas — o programa nunca poe
-valor onde havia formula, e confere isso celula por celula depois de salvar.
+Escreve apenas a celula da data e as quatro colunas de dados (saldo, pagamento,
+qtd sistema, qtd banco) nas linhas de conta. Todas as formulas do modelo — as
+tres abas — sao preservadas, e o programa confere isso celula por celula depois
+de salvar.
 """
 
 from __future__ import annotations
@@ -19,9 +20,6 @@ from .config import PlanilhaConfig
 from .mapping import AccountMapping
 from .models import RowFill
 from .parsing import to_float
-
-#: Area do modelo conferida contra o original apos salvar.
-_AREA_CONFERIDA = ((1, 33), (1, 16))  # linhas 1-33, colunas A-P
 
 
 class WorkbookError(Exception):
@@ -51,19 +49,26 @@ def _comparavel(value: object) -> object:
     return value
 
 
-def _sheet(wb) -> Worksheet:
-    if len(wb.worksheets) != 1:
+def _sheet(wb, planilha: PlanilhaConfig) -> Worksheet:
+    """A aba do painel, PELO NOME.
+
+    Era `worksheets[0]` com a exigencia de aba unica. O modelo passou a ter tres
+    abas (Painel, Movimentações, Regras) e a posicao de uma aba e coisa que se
+    muda arrastando com o mouse — o nome nao.
+    """
+    if planilha.aba not in wb.sheetnames:
         raise WorkbookError(
-            f"esperava 1 aba no modelo, encontrei {len(wb.worksheets)}: {wb.sheetnames}"
+            f"o modelo nao tem a aba {planilha.aba!r}; encontrei {wb.sheetnames}"
         )
-    return wb.worksheets[0]
+    return wb[planilha.aba]
 
 
 def check_labels(ws: Worksheet, mapping: AccountMapping) -> None:
     """Confere que o mapping.yaml casa com a coluna B do modelo.
 
-    Critico: a coluna F usa SUMIF(N, B, M). Se o label do mapping divergir de B,
-    o encadeamento de aportes devolve zero sem erro nenhum no Excel.
+    Critico: a ordem das linhas mudou uma vez (as quatro contas principais
+    subiram para o topo) e o mapping guarda o numero da linha. Label fora de
+    lugar poe o saldo de uma conta na linha de outra, sem erro nenhum no Excel.
     """
     divergencias = []
     for row in mapping.rows:
@@ -95,11 +100,11 @@ def build(
     shutil.copy2(modelo, destino)
 
     wb = openpyxl.load_workbook(destino)
-    ws = _sheet(wb)
+    ws = _sheet(wb, planilha)
     check_labels(ws, mapping)
 
-    # E4: data de referencia. O modelo vem com formato americano (m/d/yyyy);
-    # forcamos DD/MM/YYYY para ler certo em portugues.
+    # O modelo vem com formato americano (m/d/yyyy); forcamos DD/MM/YYYY para
+    # ler certo em portugues.
     celula_data = ws[planilha.celula_data]
     celula_data.value = reference_date
     celula_data.number_format = planilha.formato_data
@@ -132,17 +137,26 @@ def assert_untouched(
 
     Devolve a quantidade de celulas conferidas. Qualquer formula perdida no
     round-trip do openpyxl aparece aqui como divergencia.
+
+    Confere as TRES abas: o painel na area util, e as abas de apoio inteiras. A
+    aba «Movimentações» carrega o rateio do aporte e a «Regras» diz quem paga —
+    um VLOOKUP perdido ali sairia como zero na ordem de transferencia do dia.
     """
     esperado = _celulas_escritas(reference_date, fills, planilha)
 
     wb_orig = openpyxl.load_workbook(Path(modelo))
     wb_novo = openpyxl.load_workbook(Path(destino))
     try:
-        ws_orig, ws_novo = _sheet(wb_orig), _sheet(wb_novo)
-        (r1, r2), (c1, c2) = _AREA_CONFERIDA
+        if wb_orig.sheetnames != wb_novo.sheetnames:
+            raise WorkbookError(
+                f"abas mudaram: modelo={wb_orig.sheetnames} gerado={wb_novo.sheetnames}"
+            )
 
         problemas: list[str] = []
         conferidas = 0
+
+        ws_orig, ws_novo = _sheet(wb_orig, planilha), _sheet(wb_novo, planilha)
+        (r1, r2), (c1, c2) = planilha.area_conferida
         for row in range(r1, r2 + 1):
             for col in range(c1, c2 + 1):
                 original = ws_orig.cell(row=row, column=col)
@@ -152,15 +166,30 @@ def assert_untouched(
                 if coord in esperado:
                     if _comparavel(novo.value) != _comparavel(esperado[coord]):
                         problemas.append(
-                            f"  {coord}: gravado={novo.value!r} esperado={esperado[coord]!r}"
+                            f"  {planilha.aba}!{coord}: gravado={novo.value!r} "
+                            f"esperado={esperado[coord]!r}"
                         )
                     continue
 
                 conferidas += 1
                 if original.value != novo.value:
                     problemas.append(
-                        f"  {coord}: modelo={original.value!r} virou {novo.value!r}"
+                        f"  {planilha.aba}!{coord}: modelo={original.value!r} "
+                        f"virou {novo.value!r}"
                     )
+
+        for nome in wb_orig.sheetnames:
+            if nome == planilha.aba:
+                continue
+            oa, ob = wb_orig[nome], wb_novo[nome]
+            for linha_o, linha_n in zip(oa.iter_rows(), ob.iter_rows()):
+                for original, novo in zip(linha_o, linha_n):
+                    conferidas += 1
+                    if original.value != novo.value:
+                        problemas.append(
+                            f"  {nome}!{original.coordinate}: modelo={original.value!r} "
+                            f"virou {novo.value!r}"
+                        )
 
         if problemas:
             raise WorkbookError("planilha final divergiu do modelo:\n" + "\n".join(problemas))

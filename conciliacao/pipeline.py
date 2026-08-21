@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .aportadores import ler_regras
 from .config import Config
 from .mapping import AccountMapping
 from .models import Snapshot
@@ -55,7 +56,11 @@ def analyze(snapshot: Snapshot, config: Config, mapping: AccountMapping) -> Dail
     )
     aggregates = aggregate_by_row(classification)
     fills = build_row_fills(mapping, balances.balances, aggregates)
-    computation = compute_panel(fills, mapping, config.planilha)
+    # As regras de aporte moram na aba «Regras» do modelo, e nao no config: elas
+    # citam pessoa fisica e o repositorio e publico (ver `aportadores.py`). Sem
+    # o modelo a lista volta vazia e o resumo apenas nao diz quem entra.
+    regras = ler_regras(config.caminho("modelo"))
+    computation = compute_panel(fills, mapping, config.planilha, regras)
     issues = validate(snapshot, balances, classification, computation, config)
 
     resumo = build_report(
