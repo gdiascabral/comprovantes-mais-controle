@@ -10,29 +10,43 @@ import json
 from nuvem import contas_novas as conferencia
 
 
-class ContaErp:
-    """O bastante de um `ErpAccount` para a comparação."""
+def conta_erp(nome, ativa=True, id_erp="uuid-1", banco=None,
+              agencia=None, agencia_dv=None, numero="58123", numero_dv="4"):
+    """Uma conta CRUA, no formato exato que `listar_contas` devolve.
 
-    def __init__(self, nome, ativa=True, id_erp="uuid-1",
-                 banco="756", agencia="3299", numero="58123-4"):
-        self.id = id_erp
-        self.name = nome
-        self.is_active = ativa
-        self.bank_code = banco
-        self.agency = agencia
-        self.account_number = numero
+    Medido contra o ERP em 21/08/2026. Os testes anteriores usavam um objeto
+    com `name`/`is_active` — o formato do `ErpAccount`, que a produção NÃO
+    usa neste ponto — e por isso passavam enquanto o app abria sem perguntar
+    nada. Teste com o formato de quem fala do outro lado, ou ele não prova.
+    """
+    return {"id": id_erp, "name": nome, "isActive": ativa,
+            "bankCode": banco, "agency": agencia, "agencyDigit": agencia_dv,
+            "account": numero, "accountDigit": numero_dv}
 
 
 # ------------------------------------------------------------- comparação
 def test_conta_que_o_ERP_tem_e_o_cadastro_nao_e_novidade():
-    novas = conferencia.comparar([ContaErp("MORAIS ENG - SUBCONTA 58123-4")],
+    novas = conferencia.comparar([conta_erp("MORAIS ENG - SUBCONTA 58123-4")],
                                  {"OUTRA CONTA"})
     assert [c.nome for c in novas] == ["MORAIS ENG - SUBCONTA 58123-4"]
-    assert novas[0].banco == "756" and novas[0].agencia == "3299"
+    assert novas[0].numero == "58123-4"
+
+
+def test_o_numero_vem_partido_e_e_remontado():
+    """O ERP manda `account` e `accountDigit` separados."""
+    nova, = conferencia.comparar([conta_erp("X", numero="5969", numero_dv="3")],
+                                 set())
+    assert nova.numero == "5969-3"
+
+
+def test_campo_nulo_do_ERP_nao_vira_a_palavra_None():
+    """`bankCode` e `agency` vêm nulos na maioria das contas."""
+    nova, = conferencia.comparar([conta_erp("X")], set())
+    assert nova.banco == "" and nova.agencia == ""
 
 
 def test_conta_ja_cadastrada_nao_pergunta():
-    novas = conferencia.comparar([ContaErp("CONTA X")], {"CONTA X"})
+    novas = conferencia.comparar([conta_erp("CONTA X")], {"CONTA X"})
     assert novas == []
 
 
@@ -40,17 +54,17 @@ def test_acento_e_caixa_nao_criam_novidade_falsa():
     """Sem a régua normalizada, a janela perguntaria todo dia pela mesma."""
     ja = {conferencia.util.norm_espaco("Morais Participações - SUBCONTA 1")}
     novas = conferencia.comparar(
-        [ContaErp("MORAIS PARTICIPACOES - SUBCONTA 1")], ja)
+        [conta_erp("MORAIS PARTICIPACOES - SUBCONTA 1")], ja)
     assert novas == []
 
 
 def test_conta_inativa_no_ERP_fica_de_fora():
     """Perguntar sobre conta que ninguém usa mais é ruído."""
-    assert conferencia.comparar([ContaErp("VELHA", ativa=False)], set()) == []
+    assert conferencia.comparar([conta_erp("VELHA", ativa=False)], set()) == []
 
 
 def test_a_mesma_conta_duas_vezes_pergunta_uma_vez():
-    novas = conferencia.comparar([ContaErp("REPETIDA"), ContaErp("REPETIDA")],
+    novas = conferencia.comparar([conta_erp("REPETIDA"), conta_erp("REPETIDA")],
                                  set())
     assert len(novas) == 1
 
@@ -58,6 +72,21 @@ def test_a_mesma_conta_duas_vezes_pergunta_uma_vez():
 def test_listas_vazias_nao_estouram():
     assert conferencia.comparar([], set()) == []
     assert conferencia.comparar(None, set()) == []
+
+
+def test_o_caminho_INTEIRO_com_o_payload_do_ERP(monkeypatch, tmp_path):
+    """A costura que faltava: `contas_do_erp` -> `comparar` -> lista.
+
+    Era exatamente aqui que o defeito morava — cada metade certa, e o encontro
+    das duas devolvendo vazio.
+    """
+    (tmp_path / "contas_mc.json").write_text(
+        '{"contas": [{"erp": "CONTA VELHA"}]}', encoding="utf-8")
+    monkeypatch.setattr(conferencia, "contas_do_erp",
+                        lambda log=print: [conta_erp("CONTA VELHA"),
+                                           conta_erp("CONTA NOVA")])
+    novas = conferencia.novidades(tmp_path, log=lambda _m: None)
+    assert [c.nome for c in novas] == ["CONTA NOVA"]
 
 
 # ------------------------------------------------------------ nosso lado

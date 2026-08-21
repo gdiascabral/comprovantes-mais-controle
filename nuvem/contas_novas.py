@@ -97,34 +97,63 @@ def nomes_cadastrados(pasta=None) -> set[str]:
 # --------------------------------------------------------------------------
 # A comparação — sem rede, sem disco
 # --------------------------------------------------------------------------
+def _texto(valor) -> str:
+    return str(valor if valor is not None else "").strip()
+
+
+def _com_digito(numero, digito) -> str:
+    n, d = _texto(numero), _texto(digito)
+    return f"{n}-{d}" if n and d else n
+
+
+def como_conta_nova(cru: dict) -> ContaNova:
+    """Uma conta CRUA da API vira o nosso formato.
+
+    O ERP parte o número em `account` + `accountDigit` (e a agência em
+    `agency` + `agencyDigit`), e devolve `bankCode` nulo na maioria das
+    contas. Nada disso é obrigatório aqui: o que a janela precisa mesmo é do
+    nome; o resto entra como ajuda para quem for conferir.
+    """
+    return ContaNova(
+        id_erp=_texto(cru.get("id")),
+        nome=_texto(cru.get("name")),
+        banco=_texto(cru.get("bankCode")),
+        agencia=_com_digito(cru.get("agency"), cru.get("agencyDigit")),
+        numero=_com_digito(cru.get("account"), cru.get("accountDigit")),
+    )
+
+
 def comparar(contas_erp, ja_cadastrados: set[str]) -> list[ContaNova]:
     """O que existe no ERP e não no cadastro.
 
-    A comparação é por nome NORMALIZADO (maiúscula, sem acento, sem espaço
-    dobrado), a mesma régua que o resto do app usa para nome de conta. Sem
-    isso, "Morais Participações" e "MORAIS PARTICIPACOES" viravam duas contas
-    diferentes e a janela perguntaria todo dia sobre uma conta já cadastrada.
+    Recebe as contas CRUAS, como `SessaoApi.listar_contas` devolve — e não um
+    formato nosso. A primeira versão convertia antes de comparar, e a
+    comparação lia `name` num objeto que já tinha virado `nome`: casava zero,
+    devolvia lista vazia, e o app abria sem perguntar nada. Os testes não
+    pegaram porque testavam o formato convertido, que produção nenhuma usa.
+    Um formato só, e é o de quem fala do outro lado.
 
-    Conta inativa no ERP fica de fora: perguntar sobre conta que ninguém usa
-    mais é ruído, e a lista precisa ser curta para ser lida.
+    A comparação é por nome NORMALIZADO (maiúscula, sem acento, sem espaço
+    dobrado), a mesma régua que o resto do app usa para nome de conta.
+
+    Conta inativa fica de fora: perguntar sobre conta que ninguém usa mais é
+    ruído, e a lista precisa ser curta para ser lida.
     """
     novas: list[ContaNova] = []
     vistos = set(ja_cadastrados)
-    for conta in contas_erp or []:
-        nome = str(getattr(conta, "name", "") or "").strip()
-        if not nome or not getattr(conta, "is_active", True):
+    for cru in contas_erp or []:
+        if not isinstance(cru, dict):
             continue
-        chave = util.norm_espaco(nome)
+        if cru.get("isActive") is False:
+            continue
+        conta = como_conta_nova(cru)
+        if not conta.nome:
+            continue
+        chave = util.norm_espaco(conta.nome)
         if chave in vistos:
             continue
         vistos.add(chave)                # não repete a mesma duas vezes
-        novas.append(ContaNova(
-            id_erp=str(getattr(conta, "id", "") or ""),
-            nome=nome,
-            banco=str(getattr(conta, "bank_code", "") or ""),
-            agencia=str(getattr(conta, "agency", "") or ""),
-            numero=str(getattr(conta, "account_number", "") or ""),
-        ))
+        novas.append(conta)
     return sorted(novas, key=lambda c: c.nome)
 
 
@@ -147,28 +176,12 @@ def contas_do_erp(log=print) -> list:
         return []
 
 
-def _como_conta(cru: dict):
-    """Um item cru da API vira o formato que `comparar` entende."""
-    return ContaNova(
-        id_erp=str(cru.get("id") or ""),
-        nome=str(cru.get("name") or ""),
-        banco=str(cru.get("bankCode") or ""),
-        agencia=str(cru.get("agency") or ""),
-        numero=str(cru.get("accountNumber") or cru.get("number") or ""),
-    )
-
-
 def novidades(pasta=None, log=print) -> list[ContaNova]:
     """O que perguntar ao dono. Lista vazia = nada a fazer, nem abrir janela."""
     crus = contas_do_erp(log=log)
     if not crus:
         return []
-    contas = [_como_conta(c) if isinstance(c, dict) else c for c in crus]
-    # O item cru não tem `is_active`; a listagem já veio filtrada por ativas.
-    for c in contas:
-        if not hasattr(c, "is_active"):
-            setattr(c, "is_active", True)
-    return comparar(contas, nomes_cadastrados(pasta))
+    return comparar(crus, nomes_cadastrados(pasta))
 
 
 # --------------------------------------------------------------------------
