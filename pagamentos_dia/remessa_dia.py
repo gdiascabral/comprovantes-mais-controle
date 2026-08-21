@@ -242,6 +242,43 @@ class Candidato:
         return self.status.startswith("APTO")
 
 
+_SEQ = re.compile(r"^(\d{6})-(\d{4})")
+
+
+def sequencia_ja_usada(historico, quando: _dt.date) -> int:
+    """A maior ordem do DIA que já saiu em alguma remessa viva. 0 se nenhuma.
+
+    O "seu número" nasce `260820-0007`, e a ordem recomeçava do 1 a cada
+    geração. Isso bastava enquanto o dia tinha uma remessa só. Em 20/08/2026 o
+    reenvio passou a ser possível, e a segunda remessa do dia repetiu QUATRO
+    números da primeira (`260820-0007` a `260820-0010`).
+
+    Não é detalhe de numeração: o "seu número" é o que o banco devolve no
+    retorno para casar cada pagamento. Repetido, ele casa com o pagamento
+    errado — e foi por isso que o espelho local recusou a remessa nº 000003
+    daquele dia, enquanto a nuvem a aceitou.
+
+    Nunca levanta: registro fora do ar devolve 0, e a numeração volta a ser a
+    de antes. Perder a remessa por causa da conferência seria pior.
+    """
+    if historico is None:
+        return 0
+    prefixo = f"{quando:%y%m%d}-"
+    maior = 0
+    try:
+        for remessa in historico.remessas():
+            for item in getattr(remessa, "itens", None) or []:
+                seu = str(getattr(item, "seu_numero", "") or "")
+                if not seu.startswith(prefixo):
+                    continue
+                achado = _SEQ.match(seu)
+                if achado:
+                    maior = max(maior, int(achado.group(2)))
+    except Exception:
+        return 0
+    return maior
+
+
 def _seu_numero(quando: _dt.date, sequencia: int, descricao: str) -> str:
     """`260813-0007-OC5825` — data, ordem do dia e a OC, quando cabe.
 
@@ -425,7 +462,9 @@ def preparar(contas: dict, participantes: dict | None = None,
     igual, e é assim que os testes de regra a chamam.
     """
     quando = quando or _dt.date.today()
-    sequencia = 0
+    # Continua de onde o dia parou, em vez de recomeçar do 1: duas remessas
+    # no mesmo dia não podem repetir "seu número".
+    sequencia = sequencia_ja_usada(historico, quando)
     saida: dict[str, list[Candidato]] = {}
 
     for conta, registros in sorted(contas.items()):

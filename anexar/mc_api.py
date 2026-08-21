@@ -192,6 +192,15 @@ class MCApi:
                 _diag(f"reload da tela de Pagamentos falhou: {e!r}")
             ok = self._esperar("_req_pagos", lambda: None, timeout_s=30)
         if not ok:
+            # O que a tela ESTAVA mostrando. Sem isto, "não carregou a lista"
+            # cobre coisas diferentes demais — rota errada, sessão caída, ou a
+            # tela de boas-vindas do ERP quando o filtro salvo não devolve
+            # linha nenhuma. Em 20/08/2026 a causa foi a primeira, e descobrir
+            # isso exigiu comparar horários de log com o que o usuário via.
+            try:
+                _diag(f"captura falhou; a página estava em {self.page.url}")
+            except Exception:
+                pass
             log("[!] A tela de Pagamentos não carregou a lista. "
                 "Confira o login e tente de novo.")
         return ok

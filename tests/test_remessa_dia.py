@@ -210,6 +210,61 @@ def test_linha_sem_envio_anterior_nao_ganha_aviso():
     assert c.ja_enviado == "" and c.marcado
 
 
+class _RemessaFalsa:
+    def __init__(self, *seus):
+        self.itens = [type("I", (), {"seu_numero": s})() for s in seus]
+
+
+class _RegistroFalso:
+    """O bastante de um histórico para a numeração do dia."""
+
+    def __init__(self, *remessas, explode=False):
+        self._remessas = list(remessas)
+        self._explode = explode
+
+    def remessas(self, **_kw):
+        if self._explode:
+            raise RuntimeError("registro fora do ar")
+        return self._remessas
+
+    def envio_de(self, _c):
+        return None
+
+    def envio_da_referencia(self, _r):
+        return None
+
+
+def test_a_ordem_do_dia_continua_de_onde_parou():
+    """Duas remessas no mesmo dia não podem repetir "seu número".
+
+    Em 20/08/2026 a segunda remessa do dia repetiu QUATRO números da primeira
+    (260820-0007 a 260820-0010). O "seu número" é o que o banco devolve no
+    retorno para casar cada pagamento; repetido, casa com o errado — e foi por
+    isso que o espelho local recusou aquela remessa.
+    """
+    hist = _RegistroFalso(_RemessaFalsa(f"{HOJE:%y%m%d}-0001",
+                                        f"{HOJE:%y%m%d}-0010-OC55"))
+    assert remessa_dia.sequencia_ja_usada(hist, HOJE) == 10
+    c, = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE,
+                              historico=hist)[CONTA]
+    assert c.seu_numero.startswith(f"{HOJE:%y%m%d}-0011")
+
+
+def test_numero_de_outro_dia_nao_conta():
+    """A ordem é do DIA: ontem não empurra a numeração de hoje."""
+    hist = _RegistroFalso(_RemessaFalsa("260819-0042"))
+    assert remessa_dia.sequencia_ja_usada(hist, HOJE) == 0
+
+
+def test_registro_fora_do_ar_nao_derruba_a_remessa():
+    """Perder a remessa por causa da conferência seria pior que renumerar."""
+    assert remessa_dia.sequencia_ja_usada(_RegistroFalso(explode=True), HOJE) == 0
+
+
+def test_sem_historico_a_numeracao_e_a_de_antes():
+    assert remessa_dia.sequencia_ja_usada(None, HOJE) == 0
+
+
 def test_sem_historico_a_regra_continua_a_mesma():
     """`historico` é opcional: os testes de regra chamam `preparar` sem ele."""
     c, = preparar(registro())
