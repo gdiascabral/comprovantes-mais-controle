@@ -41,6 +41,7 @@ API_BASE = "https://prod-erp-api.maiscontroleerp.com.br"
 LEGACY_BASE = "https://legacy-api.maiscontroleerp.com.br/maiscontrole/services"
 
 ARQUIVO_CONTAS = "contas_mc.json"
+ARQUIVO_MAPA = "mapping.yaml"
 
 MOTIVO_SEM_PASTA = "marcada, mas sem pasta — a pasta é obrigatória no cadastro"
 MOTIVO_SEM_EMPRESA = "marcada, mas sem empresa — o cadastro exige a empresa"
@@ -94,6 +95,28 @@ def nomes_cadastrados(pasta=None) -> set[str]:
             if isinstance(c, dict) and c.get("erp")}
 
 
+def ignorados(pasta=None) -> list[str]:
+    """Os pedaços de nome que o painel já mandou ignorar para sempre.
+
+    Sai de `ignored_erp_accounts`, no `mapping.yaml` — a MESMA lista que a
+    Conciliação respeita ha meses. A primeira versão desta janela não a
+    conhecia, e perguntava sobre conta que o dono já tinha decidido ignorar:
+    das 15 que ela mostrou em 21/08/2026, sete eram isso. Cadastro de decisão
+    já tomada não se duplica; se lê de onde ele está.
+
+    Casa por PEDAÇO, como lá: "APENAS AJUSTE DE CAIXA" cobre a conta da Morais
+    Engenharia e a da Buritis de uma vez.
+    """
+    caminho = Path(pasta or util.pasta_base()) / ARQUIVO_MAPA
+    try:
+        import yaml
+        dados = yaml.safe_load(caminho.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return []
+    lista = dados.get("ignored_erp_accounts") or []
+    return [util.norm_espaco(str(x)) for x in lista if str(x).strip()]
+
+
 # --------------------------------------------------------------------------
 # A comparação — sem rede, sem disco
 # --------------------------------------------------------------------------
@@ -123,7 +146,8 @@ def como_conta_nova(cru: dict) -> ContaNova:
     )
 
 
-def comparar(contas_erp, ja_cadastrados: set[str]) -> list[ContaNova]:
+def comparar(contas_erp, ja_cadastrados: set[str],
+             ignorar=()) -> list[ContaNova]:
     """O que existe no ERP e não no cadastro.
 
     Recebe as contas CRUAS, como `SessaoApi.listar_contas` devolve — e não um
@@ -151,6 +175,8 @@ def comparar(contas_erp, ja_cadastrados: set[str]) -> list[ContaNova]:
             continue
         chave = util.norm_espaco(conta.nome)
         if chave in vistos:
+            continue
+        if any(pedaco in chave for pedaco in ignorar):
             continue
         vistos.add(chave)                # não repete a mesma duas vezes
         novas.append(conta)
@@ -181,7 +207,7 @@ def novidades(pasta=None, log=print) -> list[ContaNova]:
     crus = contas_do_erp(log=log)
     if not crus:
         return []
-    return comparar(crus, nomes_cadastrados(pasta))
+    return comparar(crus, nomes_cadastrados(pasta), ignorados(pasta))
 
 
 # --------------------------------------------------------------------------

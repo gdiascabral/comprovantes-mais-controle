@@ -89,6 +89,43 @@ def test_o_caminho_INTEIRO_com_o_payload_do_ERP(monkeypatch, tmp_path):
     assert [c.nome for c in novas] == ["CONTA NOVA"]
 
 
+def test_conta_na_lista_de_ignorados_nao_pergunta():
+    """A lista `ignored_erp_accounts` do painel ja existia, e a janela nao a
+    conhecia: das 15 contas que ela mostrou em 21/08/2026, sete eram decisao
+    ja tomada ha meses."""
+    ignorar = [conferencia.util.norm_espaco("RENATO - PAGBANK")]
+    assert conferencia.comparar([conta_erp("RENATO - PAGBANK")], set(),
+                                ignorar) == []
+
+
+def test_o_ignorado_casa_por_PEDACO():
+    """"APENAS AJUSTE DE CAIXA" cobre a conta da Morais e a da Buritis."""
+    ignorar = [conferencia.util.norm_espaco("APENAS AJUSTE DE CAIXA")]
+    contas = [conta_erp("MORAIS ENGENHARIA - (APENAS AJUSTE DE CAIXA)"),
+              conta_erp("MORAIS EMPREENDIMENTOS BURITIS - APENAS AJUSTE DE CAIXA")]
+    assert conferencia.comparar(contas, set(), ignorar) == []
+
+
+def test_sem_lista_de_ignorados_nada_muda():
+    nova, = conferencia.comparar([conta_erp("QUALQUER")], set(), [])
+    assert nova.nome == "QUALQUER"
+
+
+def test_le_os_ignorados_do_mapping(tmp_path):
+    (tmp_path / "mapping.yaml").write_text(
+        "model_rows: []\n"
+        "ignored_erp_accounts:\n"
+        "- RENATO - PAGBANK\n"
+        "- Cartao de Credito\n", encoding="utf-8")
+    lidos = conferencia.ignorados(tmp_path)
+    assert conferencia.util.norm_espaco("RENATO - PAGBANK") in lidos
+    assert conferencia.util.norm_espaco("CARTAO DE CREDITO") in lidos
+
+
+def test_sem_o_mapping_nao_ignora_nada_e_nao_estoura(tmp_path):
+    assert conferencia.ignorados(tmp_path) == []
+
+
 # ------------------------------------------------------------ nosso lado
 def test_le_os_nomes_do_cadastro_local(tmp_path):
     (tmp_path / "contas_mc.json").write_text(json.dumps(
