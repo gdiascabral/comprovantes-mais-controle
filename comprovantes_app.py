@@ -12,6 +12,7 @@ Tema claro/escuro com opção "Automático" (segue o Windows), salvo em
 """
 import json
 import sys
+import threading
 from pathlib import Path
 
 # Rodando como script: garante que as subpastas entram no caminho de import.
@@ -24,7 +25,7 @@ for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
         sys.path.insert(0, str(_p))
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 import widgets
 from nuvem import cadastro, login_dialogo, rest, sessao
@@ -498,6 +499,60 @@ def main():
                 pass
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", _sair)
+
+    # ---------------- conta nova no Mais Controle
+    #
+    # Roda DEPOIS de a janela existir e ANTES de qualquer aba abrir o Chrome.
+    # A ordem e a unica defesa contra a sessao unica do ERP: o login por API
+    # derruba a do navegador, e na abertura ainda nao ha navegador. Se a
+    # pessoa abrir uma aba enquanto isto roda, o pior que acontece e aquela
+    # aba refazer o login sozinha, que ela ja sabe fazer desde 18/08.
+    #
+    # Em thread, e engolindo tudo: conferencia opcional nao pode atrasar nem
+    # impedir a abertura. E a mesma regra que protege o `sincronizar`.
+    def _anotar(msg):
+        try:
+            with open(_pasta_dados() / "diagnostico.log", "a",
+                      encoding="utf-8") as arq:
+                arq.write(f"{msg}\n")
+        except Exception:
+            pass
+
+    def _perguntar_contas(novas, empresas, token):
+        from nuvem import contas_novas, contas_novas_dialogo
+        try:
+            escolhas = contas_novas_dialogo.perguntar(root, novas, empresas)
+            if not escolhas:
+                return
+            avisos = contas_novas.gravar(token, escolhas)
+            quantas = len(escolhas) - len(avisos)
+            recado = f"{quantas} conta(s) cadastrada(s)."
+            if avisos:
+                recado += "\n\nNao gravadas:\n" + "\n".join(avisos)
+            messagebox.showinfo("Contas novas", recado)
+        except Exception as e:                            # noqa: BLE001
+            _anotar(f"conferencia de contas (gravacao): {e}")
+            messagebox.showerror("Contas novas",
+                                 f"Nao deu para cadastrar:\n\n{e}")
+
+    def _conferir_contas():
+        from nuvem import contas_novas
+        try:
+            pasta = _pasta_dados()
+            token = _token_ou_vazio(pasta)
+            if not token:
+                _anotar("conferencia de contas: sem sessao da nuvem; pulei.")
+                return
+            novas = contas_novas.novidades(pasta, log=_anotar)
+            if not novas:
+                return
+            empresas = contas_novas.empresas(token)
+            root.after(0, lambda: _perguntar_contas(novas, empresas, token))
+        except Exception as e:                            # noqa: BLE001
+            _anotar(f"conferencia de contas: {e}")
+
+    threading.Thread(target=_conferir_contas, daemon=True).start()
+
     root.mainloop()
 
 
