@@ -141,6 +141,20 @@ def test_sem_o_arquivo_o_cadastro_e_vazio_e_nao_estoura(tmp_path):
     assert conferencia.nomes_cadastrados(tmp_path) == set()
 
 
+def test_a_pasta_nasce_sugerida_a_partir_do_nome():
+    """Campo vazio custou quatro recusas de uma vez: o dono marcou as quatro
+    contas, nao preencheu a pasta e o app recusou as quatro."""
+    nova, = conferencia.comparar(
+        [conta_erp("Morais Participações - SUBCONTA 59584-5 - LUIZ F - SICOOB")],
+        set())
+    assert nova.pasta_sugerida == "SUBCONTA 59584-5 - LUIZ F - SICOOB"
+
+
+def test_nome_sem_prefixo_sugere_ele_mesmo():
+    nova, = conferencia.comparar([conta_erp("CONTA PRINCIPAL")], set())
+    assert nova.pasta_sugerida == "CONTA PRINCIPAL"
+
+
 # ------------------------------------------------------------- validação
 def test_marcada_sem_pasta_nao_grava():
     """`pasta` é not null: mandar vazio trocaria a pergunta por erro de SQL."""

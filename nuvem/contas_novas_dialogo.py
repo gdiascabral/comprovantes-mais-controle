@@ -76,8 +76,10 @@ def perguntar(pai, novas, empresas) -> list[dict]:
                                state="readonly")
         empresa.pack(side="left", padx=(4, 12))
         ttk.Label(campos, text="pasta:").pack(side="left")
-        pasta = ttk.Entry(campos, width=24)
+        pasta = ttk.Entry(campos, width=34)
         pasta.pack(side="left", padx=(4, 0))
+        # Nasce preenchida com a sugestão, para ser corrigida e não digitada.
+        pasta.insert(0, getattr(conta, "pasta_sugerida", ""))
 
         linhas.append((conta, marcada, empresa, pasta))
 

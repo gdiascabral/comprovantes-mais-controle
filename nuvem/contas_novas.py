@@ -65,6 +65,23 @@ class ContaNova:
     numero: str = ""
 
     @property
+    def pasta_sugerida(self) -> str:
+        """Onde o extrato desta conta provavelmente vai ser arquivado.
+
+        É o nome do ERP sem o prefixo da empresa: as contas já cadastradas
+        seguem esse padrão ("Morais Participações - SUBCONTA 55696-3 - TB 21
+        QD 51 LT 40 - SICOOB" está arquivada em "SUBCONTA - 55696-3 - TB 21 QD
+        51 LT 40 - SICOOB").
+
+        É SUGESTÃO, não decisão: nasce no campo para ser corrigida. A primeira
+        versão deixava o campo vazio, e a pessoa marcou quatro contas, não
+        preencheu nada e levou quatro recusas de uma vez — trabalho que o app
+        tinha como poupar.
+        """
+        partes = self.nome.split(" - ", 1)
+        return (partes[1] if len(partes) == 2 else self.nome).strip()
+
+    @property
     def resumo(self) -> str:
         partes = [p for p in (f"banco {self.banco}" if self.banco else "",
                               f"ag {self.agencia}" if self.agencia else "",
