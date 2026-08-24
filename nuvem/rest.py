@@ -62,10 +62,38 @@ def _cabecalhos(token: str | None) -> dict:
             "Content-Type": "application/json"}
 
 
+def _motivo_do_servidor(r) -> str:
+    """O que o PostgREST escreveu junto da recusa. "" quando não escreveu.
+
+    Sem isto, 401 e 403 viravam a mesma frase e a causa se perdia: "sua sessão
+    venceu" e "esta tabela não aceita escrita" pedem coisas opostas de quem lê
+    — uma pede login, a outra pede permissão no banco. Em 24/08/2026 um
+    cadastro recusado deixou as duas hipóteses abertas, e nada no recado
+    ajudava a separar.
+    """
+    try:
+        corpo = r.json()
+    except Exception:
+        return ""
+    if not isinstance(corpo, dict):
+        return ""
+    for chave in ("message", "msg", "error_description", "error", "hint"):
+        valor = corpo.get(chave)
+        if valor:
+            return str(valor)[:160]
+    return ""
+
+
 def _resposta(r) -> object:
     if r.status_code in (401, 403):
-        raise PrecisaEntrar(
-            "sua sessão venceu ou não tem acesso — entre de novo")
+        motivo = _motivo_do_servidor(r)
+        # 401 é sessão; 403 é permissão. Dizer "entre de novo" para um 403
+        # manda a pessoa refazer login para um problema que o login não
+        # resolve.
+        base = ("sua sessão venceu — entre de novo" if r.status_code == 401
+                else "o banco recusou a operação (sem permissão)")
+        raise PrecisaEntrar(f"{base} [HTTP {r.status_code}]"
+                            + (f": {motivo}" if motivo else ""))
     if r.status_code >= 400:
         try:
             corpo = r.json()

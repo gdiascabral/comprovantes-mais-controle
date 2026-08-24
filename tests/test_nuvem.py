@@ -54,6 +54,47 @@ def _jwt(exp: int, email: str = "quem@exemplo.com") -> str:
 
 # ------------------------------------------------------------------- rest
 
+class _RespostaFalsa:
+    def __init__(self, status, corpo=None):
+        self.status_code = status
+        self._corpo = corpo
+
+    def json(self):
+        if self._corpo is None:
+            raise ValueError("sem json")
+        return self._corpo
+
+
+def test_401_e_403_deixam_de_falar_a_mesma_coisa():
+    """Uma pede login, a outra pede permissao no banco -- e o recado era igual.
+
+    Em 24/08/2026 um cadastro recusado deixou as duas hipoteses abertas: nada
+    na mensagem separava "sua sessao venceu" de "esta tabela nao aceita
+    escrita", e as duas pedem coisas opostas de quem le.
+    """
+    import pytest
+    from nuvem import rest
+
+    with pytest.raises(rest.PrecisaEntrar) as venceu:
+        rest._resposta(_RespostaFalsa(401, {"message": "JWT expired"}))
+    assert "sessão venceu" in str(venceu.value) and "401" in str(venceu.value)
+
+    with pytest.raises(rest.PrecisaEntrar) as recusou:
+        rest._resposta(_RespostaFalsa(403, {"message": "violates row-level security"}))
+    texto = str(recusou.value)
+    assert "permissão" in texto and "403" in texto
+    assert "row-level security" in texto, "o motivo do servidor se perdeu"
+
+
+def test_recusa_sem_corpo_ainda_diz_o_status():
+    import pytest
+    from nuvem import rest
+
+    with pytest.raises(rest.PrecisaEntrar) as e:
+        rest._resposta(_RespostaFalsa(403))
+    assert "403" in str(e.value)
+
+
 def test_sem_rede_vira_sem_rede(monkeypatch):
     _responder(monkeypatch, rest.requests.RequestException("DNS"))
     with pytest.raises(rest.SemRede):
