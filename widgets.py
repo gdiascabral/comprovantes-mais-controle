@@ -566,6 +566,101 @@ class Botao(tk.Button):
         self.aplicar_cores()
 
 
+class Dica:
+    """Balãozinho com o texto inteiro, ao parar o cursor em cima.
+
+    Existe para o número da versão: a tela mostra "v2.0", que é o que se diz em
+    voz alta, e o número de build (v2.0.108) só aparece quando alguém precisa
+    dele — para comparar com uma release, para abrir um chamado. Mostrar os dois
+    o tempo todo é ruído; esconder o segundo é perder o único jeito de saber
+    qual código está rodando.
+
+    NÃO é widget: é um comportamento que se pendura num widget existente
+    (`Dica(lbl, "texto")`). Guarda a si mesmo no widget para o coletor de lixo
+    não levá-lo enquanto a janela vive.
+
+    `overrideredirect` como o calendário, e pelo mesmo motivo: uma janela com
+    barra de título de dois pixels de altura é uma janela do sistema, aparece na
+    barra de tarefas e rouba foco. Aqui ela também não pega foco nenhum — quem
+    está lendo a dica está com a mão no mouse, não no teclado.
+    """
+
+    #: Tempo até aparecer. Curto o bastante para não parecer travado, longo o
+    #: bastante para o cursor poder ATRAVESSAR o widget sem disparar nada.
+    ATRASO_MS = 450
+
+    def __init__(self, alvo, texto: str):
+        self.alvo = alvo
+        self.texto = texto
+        self._popup = None
+        self._agendado = None
+        alvo.bind("<Enter>", self._entrou, add="+")
+        alvo.bind("<Leave>", self._saiu, add="+")
+        alvo.bind("<Button-1>", self._saiu, add="+")
+        alvo._dica = self                    # ver o docstring
+        _repintaveis.add(self)
+
+    def _entrou(self, _ev=None):
+        self._cancelar()
+        try:
+            self._agendado = self.alvo.after(self.ATRASO_MS, self._mostrar)
+        except tk.TclError:
+            self._agendado = None
+
+    def _saiu(self, _ev=None):
+        self._cancelar()
+        self._fechar()
+
+    def _cancelar(self):
+        if self._agendado is not None:
+            try:
+                self.alvo.after_cancel(self._agendado)
+            except tk.TclError:
+                pass
+            self._agendado = None
+
+    def _mostrar(self):
+        self._agendado = None
+        if self._popup is not None or not self.texto:
+            return
+        c = cores()
+        try:
+            top = tk.Toplevel(self.alvo)
+            top.overrideredirect(True)
+            top.attributes("-topmost", True)
+        except tk.TclError:
+            return
+        self._popup = top
+        moldura = tk.Frame(top, background=c["cartao"], highlightthickness=1,
+                           highlightbackground=c["borda"],
+                           highlightcolor=c["borda"], padx=8, pady=5)
+        moldura.pack()
+        ttk.Label(moldura, text=self.texto, style="Mini.TLabel").pack()
+        try:
+            top.update_idletasks()
+            x = self.alvo.winfo_rootx()
+            y = self.alvo.winfo_rooty() + self.alvo.winfo_height() + 4
+            # Puxada para dentro da tela: a versão mora no canto direito da
+            # barra, e o balão nasceria metade fora do monitor.
+            x = min(x, top.winfo_screenwidth() - top.winfo_reqwidth() - 8)
+            top.geometry(f"+{max(x, 8)}+{y}")
+        except tk.TclError:
+            self._fechar()
+
+    def _fechar(self):
+        if self._popup is not None:
+            try:
+                self._popup.destroy()
+            except tk.TclError:
+                pass
+            self._popup = None
+
+    def aplicar_cores(self, escuro: bool | None = None):
+        """Fechar é repintar: o balão lê a paleta ao nascer, e ele vive o tempo
+        de uma passada de cursor."""
+        self._fechar()
+
+
 class Pilula(ttk.Label):
     """Um estado, com fundo da cor do estado. As tags do Treeview fazem o
     mesmo dentro das tabelas; esta serve para o estado solto na tela."""

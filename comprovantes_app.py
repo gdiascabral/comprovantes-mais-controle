@@ -74,6 +74,26 @@ def _versao_app():
     return None
 
 
+def _versao_curta(versao: str | None) -> str:
+    """"v2.0.108" -> "v2.0". O que se diz em voz alta.
+
+    O número de build (o `<run_number>` da esteira) muda a cada push e não
+    significa nada para quem usa: entre a v2.0.108 e a v2.0.109 pode não haver
+    diferença nenhuma na tela. Ele continua existindo e continua acessível — na
+    dica do próprio rótulo —, porque é ele que diz qual código está rodando
+    quando alguém precisa comparar com uma release.
+
+    Lixo entra e sai inteiro: versão que não tem a forma esperada é melhor
+    aparecer estranha do que aparecer cortada no lugar errado.
+    """
+    if not versao:
+        return ""
+    partes = versao.strip().lstrip("vV").split(".")
+    if len(partes) < 2 or not all(p.isdigit() for p in partes[:2]):
+        return versao.strip()
+    return f"v{partes[0]}.{partes[1]}"
+
+
 def _pasta_dados() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
@@ -128,7 +148,9 @@ def main():
     escolha_tema = prefs.get("tema", "auto")
 
     root = tk.Tk()
-    root.title("Comprovantes — Mais Controle" + (f"  {_v}" if _v else ""))
+    _v_curta = _versao_curta(_v)
+    root.title("Comprovantes — Mais Controle"
+               + (f"  {_v_curta}" if _v_curta else ""))
     try:                                 # ícone da janela (se disponível)
         for _c in (Path(__file__).resolve().parent / "icone.ico",
                    Path(getattr(sys, "_MEIPASS", ".")) / "icone.ico"):
@@ -376,9 +398,13 @@ def main():
     # ---------------- canto direito da barra: navegador, versão, quem entrou
     chip = widgets.ChipStatus(barra.direita)
     chip.pack(side="left", padx=(0, 18), pady=14)
-    if _v:
-        ttk.Label(barra.direita, text=_v, style="BarraTenue.TLabel"
-                  ).pack(side="left", padx=(0, 16), pady=14)
+    if _v_curta:
+        # Curta na tela, inteira na dica: o número de build só interessa a quem
+        # está comparando com uma release, e para esse a dica basta.
+        _lbl_versao = ttk.Label(barra.direita, text=_v_curta,
+                                style="BarraTenue.TLabel")
+        _lbl_versao.pack(side="left", padx=(0, 16), pady=14)
+        widgets.Dica(_lbl_versao, f"versão {_v}")
     _quem = sessao.quem(_pasta_dados()) or ""
     widgets.Avatar(barra.direita, _quem).pack(side="left", pady=11)
     ttk.Label(barra.direita, text=_quem.split("@")[0][:22],
@@ -402,6 +428,14 @@ def main():
     else:
         widgets.Pilula(lateral.rodape, "✓  cadastro sincronizado", "ok"
                        ).pack(anchor="w")
+    if _v_curta:
+        # A versão também aqui, embaixo de tudo: é onde ela morava antes do
+        # redesenho, e é o primeiro lugar onde se procura por ela. Mesma dica
+        # da barra — o número inteiro está a um cursor de distância.
+        _rodape_versao = ttk.Label(lateral.rodape, text=_v_curta,
+                                   style="MenuSecao.TLabel")
+        _rodape_versao.pack(anchor="w", pady=(8, 0))
+        widgets.Dica(_rodape_versao, f"versão {_v}")
 
     def aplicar_tema(escolha: str):
         efetivo = tema_efetivo(escolha)

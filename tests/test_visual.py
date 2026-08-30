@@ -8,6 +8,7 @@ como o `test_widgets.py`.
 """
 import gc
 import tkinter as tk
+from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import ttk
 
@@ -15,6 +16,59 @@ import pytest
 
 import util
 import widgets
+
+_RAIZ_APP = Path(__file__).resolve().parent.parent
+
+
+# ------------------------------------------------------------------- versão
+def _versao_curta():
+    """A função do `comprovantes_app`, sem importar o módulo inteiro.
+
+    Importar o app puxa as dez abas, e com elas o Playwright e o cadastro da
+    nuvem — caro e frágil para testar uma função de string. O que se lê aqui é
+    a MESMA fonte que o app executa: se ela mudar de nome ou de lugar, o teste
+    quebra em vez de passar testando outra coisa.
+    """
+    import ast
+    fonte = (_RAIZ_APP / "comprovantes_app.py").read_text(encoding="utf-8")
+    arvore = ast.parse(fonte)
+    alvo = next((n for n in arvore.body
+                 if isinstance(n, ast.FunctionDef) and n.name == "_versao_curta"),
+                None)
+    assert alvo is not None, "`_versao_curta` sumiu do comprovantes_app.py"
+    ns: dict = {}
+    exec(compile(ast.Module(body=[alvo], type_ignores=[]),
+                 "comprovantes_app.py", "exec"), ns)
+    return ns["_versao_curta"]
+
+
+@pytest.mark.parametrize("completa, na_tela", [
+    ("v2.0.108", "v2.0"),
+    ("v2.0.9", "v2.0"),
+    ("v1.0.104", "v1.0"),
+    ("v10.3.2", "v10.3"),
+    ("2.0.108", "v2.0"),        # sem o "v" na frente
+    ("v2.0", "v2.0"),           # já curta
+])
+def test_a_tela_mostra_so_major_e_minor(completa, na_tela):
+    """O número de build muda a cada push e não significa nada para quem usa:
+    entre a v2.0.108 e a v2.0.109 pode não haver diferença na tela. Ele
+    continua acessível na dica do rótulo — ver `widgets.Dica`."""
+    assert _versao_curta()(completa) == na_tela
+
+
+@pytest.mark.parametrize("entrada", [None, "", "   "])
+def test_sem_versao_a_tela_nao_escreve_nada(entrada):
+    """Vazio é vazio: o app abre sem `versao.txt` quando roda do repositório,
+    e "v" sozinho na barra seria pior que nada."""
+    assert _versao_curta()(entrada) == ""
+
+
+@pytest.mark.parametrize("entrada", ["vabc", "v2", "qualquer coisa"])
+def test_versao_estranha_sai_inteira(entrada):
+    """Lixo entra e sai inteiro. Cortar no lugar errado esconderia justamente
+    a pista de que o `versao.txt` veio errado."""
+    assert _versao_curta()(entrada) == entrada.strip()
 
 
 # --------------------------------------------------------------------- meses
