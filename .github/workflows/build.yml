@@ -133,7 +133,7 @@ jobs:
             echo "::error::Este push altera o MOTOR mas não sobe motor_minimo.txt."
             echo "::error::Sem isso, o código novo roda em motor velho na máquina"
             echo "::error::do usuário e quebra. Suba motor_minimo.txt para a versão"
-            echo "::error::desta release (v1.0.${{ github.run_number }}) no MESMO push."
+            echo "::error::desta release (v2.0.${{ github.run_number }}) no MESMO push."
             exit 1
           fi
           echo "trava do motor: ok"
@@ -151,7 +151,7 @@ jobs:
 
       # A trava do job `motor` confere que o arquivo foi TOCADO; ninguém confere
       # o que está escrito dentro dele. E o número certo é impossível de saber
-      # na hora de escrever: a release é `v1.0.<run_number>`, e o run_number só
+      # na hora de escrever: a release é `v2.0.<run_number>`, e o run_number só
       # existe depois do push. Chutar para cima é o erro caro — o app oferece
       # 152 MB, baixa o exe mais novo que existe, continua abaixo do mínimo e
       # pergunta de novo na abertura seguinte. Laço infinito, em todas as
@@ -159,7 +159,7 @@ jobs:
       # para ANTES de publicar.
       - name: Conferir o motor_minimo.txt contra a versão desta release
         run: |
-          $release = "v1.0.${{ github.run_number }}"
+          $release = "v2.0.${{ github.run_number }}"
           $texto = (Get-Content motor_minimo.txt -Raw).Trim()
           try {
             $minimo = [version]($texto.TrimStart('v'))
@@ -227,7 +227,7 @@ jobs:
 
       - name: Gravar a versão desta build
         run: |
-          "v1.0.${{ github.run_number }}" | Out-File -Encoding ascii -NoNewline versao.txt
+          "v2.0.${{ github.run_number }}" | Out-File -Encoding ascii -NoNewline versao.txt
 
       - name: Montar o pacote de código (codigo.zip + cópia embutida)
         run: |
@@ -496,8 +496,8 @@ jobs:
       - name: Publicar Release com o executável
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Executável v1.0.${{ github.run_number }}
+          tag_name: v2.0.${{ github.run_number }}
+          name: Executável v2.0.${{ github.run_number }}
           body: |
             Executável para Windows — não precisa de Python instalado.
             Requisito: Google Chrome instalado (usado pela aba Anexar Comprovantes).
@@ -534,8 +534,8 @@ jobs:
         with:
           repository: gdiascabral/comprovantes-releases
           token: ${{ secrets.TOKEN_ARTEFATOS }}
-          tag_name: v1.0.${{ github.run_number }}
-          name: Executável v1.0.${{ github.run_number }}
+          tag_name: v2.0.${{ github.run_number }}
+          name: Executável v2.0.${{ github.run_number }}
           body: |
             Executável para Windows — não precisa de Python instalado.
             Requisito: Google Chrome instalado (usado pela aba Anexar Comprovantes).
@@ -545,7 +545,7 @@ jobs:
             biblioteca nova.
 
             Para voltar uma versão: crie `travar_versao.txt` ao lado do
-            executável com a tag desejada dentro (ex.: `v1.0.78`).
+            executável com a tag desejada dentro (ex.: `v2.0.110`).
           files: |
             dist/Comprovantes Mais Controle.exe
             codigo.zip
