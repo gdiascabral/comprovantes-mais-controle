@@ -913,7 +913,8 @@ class Cartao(tk.Frame):
             bolha.create_oval(0, 0, lado - 1, lado - 1, fill=c["marca"],
                               outline="", tags="bolha")
             bolha.create_text(lado / 2, lado / 2 + 1, text=str(numero),
-                              fill="#FFFFFF", font=FONTE_MINI_FORTE)
+                              fill="#FFFFFF", font=FONTE_MINI_FORTE,
+                              tags="numero")
             bolha.pack(side="left", padx=(0, 9))
             self._bolha = bolha
         self.lbl_titulo = ttk.Label(linha, text=titulo, style="Secao.TLabel")

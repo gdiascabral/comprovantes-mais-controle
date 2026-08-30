@@ -169,32 +169,62 @@ def test_fechar_o_calendario_libera_o_registro_do_modulo(campo):
     assert widgets._calendario_aberto is None
 
 
-def test_clique_simples_no_campo_nao_abre_calendario(campo):
-    """Clique simples é para pôr o cursor e digitar. Abrindo o popup ali, ele
-    roubava o clique e o campo ficava impossível de editar."""
+def test_clique_simples_abre_o_calendario(campo):
+    """O clique simples passou a ABRIR o calendário (redesenho de agosto/2026).
+
+    Em 11/08/2026 abrir no clique tornou o campo impossível de editar em todas
+    as abas de uma vez: o popup pegava o foco e a tecla digitada ia para ele.
+    O conserto de então foi exigir duplo clique; o de agora é o popup não
+    pegar foco nenhum. Por isso este teste anda em par com o de baixo — abrir
+    sem que o campo deixe de ser digitável é o contrato inteiro, e testar só
+    a metade que abre deixaria a regressão de 11/08 passar de novo."""
     c, var, root = campo
-    c.ent.event_generate("<Button-1>")
+    c._ao_clicar()
     root.update()
-    assert c._popup is None
+    assert c._popup is not None
+
+
+def test_com_o_calendario_aberto_o_campo_continua_editavel(campo):
+    """A outra metade do contrato: digitar fecha o popup e o texto entra."""
+    c, var, root = campo
+    c._ao_clicar()
+    root.update()
+    assert c._popup is not None
+
+    # Campo vazio de propósito: com "01/08/2026" dentro, a máscara remonta os
+    # mesmos oito dígitos e o valor não muda — o teste passaria sem provar que
+    # a tecla chegou ao campo.
+    var.set("")
+    _digitar(c, root, "0509")
+    assert c._popup is None, (
+        "o calendário sobreviveu à digitação: a próxima tecla vai para ele, "
+        "que é exatamente a regressão de 11/08/2026")
+    assert var.get() == "05/09"
+
+
+def _achar_no_popup(w, texto, tipo):
+    """Um widget do calendário pelo texto. Os dias são `tk.Label` com clique,
+    e não botões: `Button` aceita foco, e aceitar foco é o que tiraria o
+    cursor do campo — ver `test_clique_simples_abre_o_calendario`."""
+    for filho in w.winfo_children():
+        try:
+            if isinstance(filho, tipo) and filho.cget("text") == texto:
+                return filho
+        except tk.TclError:
+            pass
+        achado = _achar_no_popup(filho, texto, tipo)
+        if achado:
+            return achado
 
 
 def test_escolher_um_dia_preenche_e_fecha(campo):
-    from tkinter import ttk
     c, var, root = campo
     c.bt.invoke()
     root.update()
 
-    def achar(w, texto):
-        for filho in w.winfo_children():
-            if isinstance(filho, ttk.Button) and filho.cget("text") == texto:
-                return filho
-            achado = achar(filho, texto)
-            if achado:
-                return achado
-
-    dia = achar(c._popup, "15")
+    dia = _achar_no_popup(c._popup, "15", tk.Label)
     assert dia is not None, "o calendário não desenhou os dias"
-    dia.invoke()
+    dia.event_generate("<Button-1>")
     root.update()
     assert var.get() == "15/08/2026"
     assert c._popup is None
@@ -202,22 +232,27 @@ def test_escolher_um_dia_preenche_e_fecha(campo):
 
 def test_botao_hoje(campo):
     from datetime import date
-    from tkinter import ttk
     c, var, root = campo
     c.bt.invoke()
     root.update()
 
-    def achar(w, texto):
-        for filho in w.winfo_children():
-            if isinstance(filho, ttk.Button) and filho.cget("text") == texto:
-                return filho
-            achado = achar(filho, texto)
-            if achado:
-                return achado
-
-    achar(c._popup, "Hoje").invoke()
+    _achar_no_popup(c._popup, "Hoje", widgets.Botao).invoke()
     root.update()
     assert var.get() == f"{date.today():%d/%m/%Y}"
+    assert c._popup is None
+
+
+def test_botao_limpar(campo):
+    """"Limpar" nasceu com o redesenho: o campo de data podia ser preenchido
+    pelo calendário e não havia como esvaziá-lo a não ser apagando à mão."""
+    c, var, root = campo
+    c.bt.invoke()
+    root.update()
+
+    _achar_no_popup(c._popup, "Limpar", widgets.Botao).invoke()
+    root.update()
+    assert var.get() == ""
+    assert c._popup is None
 
 
 # ------------------------------------------------------ a bomba de UI não morre

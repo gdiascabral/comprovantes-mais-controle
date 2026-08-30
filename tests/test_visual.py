@@ -165,9 +165,20 @@ def test_a_troca_de_tema_reconfigura_os_estilos(raiz):
 
 
 def test_o_cartao_numera_so_quando_ha_ordem(raiz):
-    """Numerar informa quando existe sequência; no Registro seria inventar uma."""
-    assert widgets.Cartao(raiz, "Período", 1).cget("text") == " 1. Período "
-    assert widgets.Cartao(raiz, "Registro").cget("text") == " Registro "
+    """Numerar informa quando existe sequência; no Registro seria inventar uma.
+
+    O número deixou de ser prefixo do texto e virou um círculo azul desenhado
+    num Canvas — `Label` no Tk é sempre retângulo. O que se confere aqui
+    continua sendo o mesmo: o cartão com ordem mostra o número, o sem ordem
+    não mostra nada além do título."""
+    com_ordem = widgets.Cartao(raiz, "Período", 1)
+    assert com_ordem.lbl_titulo.cget("text") == "Período"
+    assert com_ordem._bolha is not None
+    assert com_ordem._bolha.itemcget("numero", "text") == "1"
+
+    sem_ordem = widgets.Cartao(raiz, "Registro")
+    assert sem_ordem.lbl_titulo.cget("text") == "Registro"
+    assert sem_ordem._bolha is None
 
 
 def test_o_cabecalho_sem_apoio_nao_cria_a_linha(raiz):
@@ -237,48 +248,11 @@ def test_aba_sem_campo_algum_nao_levanta(raiz):
 
 
 # ------------------------------------------------------- trilha de passos
-@pytest.fixture
-def trilha(raiz):
-    b1 = ttk.Button(raiz, text="1")
-    b2 = ttk.Button(raiz, text="2", state="disabled")
-    t = widgets.Passos(raiz, (("Buscar", b1), ("Gerar", b2)))
-    t.pack()
-    raiz.update()
-    yield t, b1, b2
-    t.destroy(); b1.destroy(); b2.destroy()
-    raiz.update()
-
-
-def _trilha(t):
-    return [(l.cget("text"), str(l.cget("style"))) for l in t._rotulos]
-
-
-def test_a_trilha_comeca_no_primeiro_passo(trilha):
-    t, _b1, _b2 = trilha
-    assert _trilha(t) == [("①  Buscar", "PassoAtivo.TLabel"),
-                          ("②  Gerar", "PassoFalta.TLabel")]
-
-
-def test_o_passo_cumprido_vira_visto(trilha):
-    t, b1, b2 = trilha
-    b1.configure(state="disabled")
-    b2.configure(state="normal")
-    t._pintar()
-    assert _trilha(t) == [("✓  Buscar", "PassoFeito.TLabel"),
-                          ("②  Gerar", "PassoAtivo.TLabel")]
-
-
-def test_com_tudo_desabilitado_a_trilha_segura_o_estado(trilha):
-    """Enquanto o trabalho roda, a aba desabilita TODOS os botões. Zerar aí
-    diria que nada começou, bem no momento em que mais coisa acontece."""
-    t, b1, b2 = trilha
-    b1.configure(state="disabled")
-    b2.configure(state="normal")
-    t._pintar()
-    b2.configure(state="disabled")       # começou a trabalhar
-    t._pintar()
-    assert _trilha(t) == [("✓  Buscar", "PassoFeito.TLabel"),
-                          ("②  Gerar", "PassoAtivo.TLabel")]
+# A trilha de passos (`widgets.Passos`) foi removida no redesenho de
+# agosto/2026, e com ela os três testes que a cobriam. Ela numerava as AÇÕES
+# enquanto os cartões ficavam sem número; agora o número está no cartão, e
+# manter as duas seria a contagem em dobro que o próprio docstring dela
+# existia para descrever.
 
 
 # -------------------------------------------------------- registro elástico
@@ -366,7 +340,11 @@ def test_o_cartao_elastico_nao_muda_a_ordem_dos_widgets(raiz):
 
     widgets.cartao_elastico(meio, cheio=True)
     raiz.update()
-    assert [str(w) for w in pai.pack_slaves()] == [str(primeiro), str(meio),
+    # Quem está empacotado no pai é a MOLDURA do cartão, não o conteúdo: são
+    # dois frames desde que o cartão passou a ter título e borda próprios
+    # (ver o docstring de `widgets.Cartao`). A ordem é que não pode mudar.
+    assert [str(w) for w in pai.pack_slaves()] == [str(primeiro),
+                                                   str(meio.moldura),
                                                    str(ultimo)]
     pai.destroy()
     raiz.update()
