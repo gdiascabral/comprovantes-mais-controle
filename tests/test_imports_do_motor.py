@@ -35,7 +35,15 @@ _PASTAS = ("", "inicio", "separar_renomear", "anexar", "aportes", "relatorios",
 #: `nuvem/migrar.py` também fica fora, e por um motivo diferente: ele não
 #: entra no codigo.zip (é ferramenta rodada à mão, no repositório), então
 #: pode importar o que quiser sem passar pelo motor.
-_FORA = {"motor.py", "atualizador.py", "migrar.py"}
+#:
+#: `cli.py` e `__main__.py` são o mesmo caso do `migrar.py` com um detalhe a
+#: mais: eles VIAJAM no codigo.zip (o build copia `conciliacao/*.py` e
+#: `cnab240/*.py` inteiros), mas ninguém os importa — são entradas de
+#: `python -m`, usadas no repositório para diagnóstico. Por isso podem usar
+#: `argparse` e `getpass`, que não estão no exe: o exe nunca chega a executá-los.
+#: Se um dia a interface passar a importar um deles, este teste volta a
+#: acusá-los assim que a linha de import existir.
+_FORA = {"motor.py", "atualizador.py", "migrar.py", "cli.py", "__main__.py"}
 
 
 def _arquivos_do_app():
@@ -124,6 +132,76 @@ def test_o_proprio_widgets_nao_depende_de_tkinter_font():
     o `__del__` que apagava a fonte no coletor de lixo.
     """
     assert "font" not in _submodulos_importados(_RAIZ / "widgets.py", "tkinter")
+
+
+#: O que a biblioteca padrão traz e que NÃO precisa estar no exe: são nomes
+#: que o CPython já carrega antes de rodar qualquer linha nossa.
+_SEMPRE_PRESENTES = frozenset(("sys", "builtins", "__future__"))
+
+
+def _topo_no_exe() -> set:
+    """Os módulos de TOPO que o exe contém.
+
+    Mesmo método do `_no_exe`: importa num interpretador limpo exatamente o
+    que o `_garantir_dependencias()` importa, e olha o que veio junto. O
+    PyInstaller monta o pacote seguindo esses mesmos imports, então o que
+    aparece aqui é o que vai estar lá."""
+    fonte = (_RAIZ / "motor.py").read_text(encoding="utf-8")
+    arvore = ast.parse(fonte, "motor.py")
+    linhas = []
+    for no in ast.walk(arvore):
+        if isinstance(no, ast.FunctionDef) and no.name == "_garantir_dependencias":
+            for filho in no.body:
+                if isinstance(filho, (ast.Import, ast.ImportFrom)):
+                    linhas.append(ast.unparse(filho))
+    assert linhas, "não achei os imports de _garantir_dependencias no motor.py"
+    codigo = ("\n".join(linhas) + "\n"
+              "import sys\n"
+              "print(' '.join(m for m in sys.modules if '.' not in m))\n")
+    saida = subprocess.run([sys.executable, "-c", codigo],
+                           capture_output=True, text=True, timeout=180)
+    assert saida.returncode == 0, saida.stderr
+    return set(saida.stdout.split())
+
+
+def _topo_importados(arquivo: Path) -> set:
+    """`import x` e `from x import y` — só o nome de topo, e só stdlib."""
+    achados = set()
+    arvore = ast.parse(arquivo.read_text(encoding="utf-8"), str(arquivo))
+    for no in ast.walk(arvore):
+        # Import DENTRO de função é adiado de propósito em várias abas (o
+        # `import requests` do atualizador, o `from cnab240 import ...` da
+        # remessa). Continua contando: adiado ou não, ele roda na máquina do
+        # usuário e precisa existir no exe.
+        if isinstance(no, ast.Import):
+            achados |= {a.name.split(".")[0] for a in no.names}
+        elif isinstance(no, ast.ImportFrom) and no.level == 0 and no.module:
+            achados.add(no.module.split(".")[0])
+    return {n for n in achados if n in sys.stdlib_module_names}
+
+
+def test_o_exe_tem_os_modulos_de_topo_que_o_app_usa():
+    """`import weakref` no widgets.py e o exe sem ele: o app não abre.
+
+    É a v1.0.71 outra vez, um nível acima — lá foi `tkinter.font`, submódulo;
+    aqui é o módulo inteiro. Quem estava sem cobertura era justamente este
+    caso, e o redesenho de agosto/2026 acrescentou três imports de topo novos
+    (`weakref`, `json`, `time`) sem nada para conferir se eles chegavam ao
+    exe. Chegavam — mas por acaso, arrastados por outros.
+
+    Para liberar um módulo que não chega: acrescente-o ao
+    `_garantir_dependencias()` do motor.py — e aí é exe novo, com
+    `motor_minimo.txt` subindo no MESMO push.
+    """
+    dentro = _topo_no_exe() | _SEMPRE_PRESENTES
+    faltando = {}
+    for arq in _arquivos_do_app():
+        usados = _topo_importados(arq)
+        if usados - dentro:
+            faltando[arq.relative_to(_RAIZ).as_posix()] = sorted(usados - dentro)
+    assert not faltando, (
+        "estes módulos da biblioteca padrão não existem no exe do usuário — o "
+        f"app não vai abrir: {faltando}")
 
 
 def test_o_exe_tem_os_submodulos_de_urllib_que_o_app_usa():
