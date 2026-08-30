@@ -471,11 +471,17 @@ class PagamentosDiaFrame(ttk.Frame):
                     self.b1.configure(state=valor)
                     self.b2.configure(state="normal" if valor == "normal" and self.contas
                                       else "disabled")
-                    # A remessa sai do que o passo 2 já montou em memória, e
-                    # não do disco: sem planilha gerada não há o que mandar.
+                    # Basta ter BUSCADO: a remessa apura sozinha o que
+                    # faltar. Era `and self.resultado`, e por isso o botão só
+                    # acendia depois de a planilha ser escrita.
                     self.b3.configure(state="normal" if valor == "normal"
-                                      and self.resultado else "disabled")
+                                      and self.lancamentos else "disabled")
                     self.b_stop.configure(state="disabled" if valor == "normal" else "normal")
+                elif tipo == "abrir_remessa":
+                    # A apuração terminou na thread do navegador; a janela é
+                    # aqui. `after_idle` para o `botoes normal` desta mesma
+                    # rodada do drain já ter sido aplicado quando ela abrir.
+                    self.after_idle(self.gerar_remessa)
                 elif tipo == "arquivo":
                     self.ultimo_arquivo = valor
                     self.b_abrir.configure(state="normal")
@@ -863,7 +869,24 @@ class PagamentosDiaFrame(ttk.Frame):
         # é — o vazio ali seria lido como "não tem nada a conferir".
         ttk.Label(quem, text=dado,
                   style="MonoMiniErro.TLabel" if estado == "erro"
-                  else "MonoMini.TLabel").pack(anchor="w", pady=(1, 6))
+                  else "MonoMini.TLabel").pack(anchor="w", pady=(1, 0))
+        # A terceira: vencimento, OC e centro de custo. Estavam só embutidos na
+        # descrição, misturados com o resto da frase — e são justamente o que
+        # se procura para decidir se o pagamento é DESTE dia e DESTA obra.
+        # Saem do próprio lançamento, sem rede: `centro_de_custo` lê o item, e
+        # o `achar_oc` cai na descrição quando o detalhe não carregou.
+        venc = relatorio.data_do_item(item)
+        partes = [f"vence {venc:%d/%m/%Y}" if venc else "sem vencimento"]
+        oc = relatorio.achar_oc(item, self.anexos.get(
+            str(item.get("tradePayableId"))) or [], "",
+            self.overviews.get(str(item.get("id"))) or {})
+        if oc:
+            partes.append(f"OC {oc}")
+        cc = relatorio.centro_de_custo(item)
+        if cc:
+            partes.append(cc[:44])
+        ttk.Label(quem, text="  ·  ".join(partes), style="Tenue.TLabel"
+                  ).pack(anchor="w", pady=(1, 6))
 
     def gerar(self):
         if self.worker and not self.worker.done():
@@ -903,48 +926,94 @@ class PagamentosDiaFrame(ttk.Frame):
             return set()
         return self._janela_confirmar(alvos, regras.carregar_confirmar())
 
+    def _montar_resultado(self, escolhidas, nao_confirmados=()):
+        """Apura os lançamentos das contas marcadas. NÃO escreve arquivo.
+
+        Existe separado do `_t_gerar` desde 30/08/2026 porque a planilha e a
+        remessa saem daqui — e antes só a planilha sabia chegar. `self.resultado`
+        era preenchido dentro do passo 2, então "gerar remessa" exigia gerar o
+        .xlsx primeiro, mesmo quando ninguém o queria. O laço não era regra: era
+        onde a atribuição estava.
+
+        Roda na thread do NAVEGADOR (é ela quem baixa os PDFs quando o cruzamento
+        está ligado). Devolve o `Resultado`, ou None quando não há o que apurar —
+        e nesse caso já deixou o recado no status.
+        """
+        ini, fim = self._periodo()
+        escolha = {relatorio.chave(n) for n in escolhidas}
+        selecionados = [i for i in self.lancamentos
+                        if relatorio.chave(relatorio.nome_da_conta(i)) in escolha]
+
+        a_pagar, pagos = relatorio.separar_pagos(selecionados)
+        if pagos:
+            self._log(f"\n{len(pagos)} já pago(s) no período"
+                      + ("; incluídos." if self.v_incluir_pagos.get() else "; fora."))
+        if not self.v_incluir_pagos.get():
+            selecionados = a_pagar
+        if not selecionados:
+            self.q.put(("status", "Nada a pagar nas contas marcadas."))
+            return None
+
+        textos, urls_ocr = {}, set()
+        if self.v_cruzar.get():
+            textos, urls_ocr = self._baixar_textos(selecionados)
+
+        # O cadastro local é lido UMA vez e serve aos dois: a chave Pix
+        # (formato antigo) e a identidade de quem recebe (formato novo).
+        cadastro_reembolso = reembolso.carregar(_pasta_base())
+        resultado = relatorio.montar_registros(
+            selecionados, self.anexos, self.overviews, textos,
+            pix_reembolso=reembolso.chaves(cadastro_reembolso),
+            urls_ocr=urls_ocr,
+            regras_fornecedor=regras.carregar_fornecedores(),
+            ids_nao_confirmados=nao_confirmados,
+            # Os Contatos do ERP entram aqui porque é aqui que se descobre
+            # QUEM recebe um reembolso. Para o fornecedor comum eles
+            # continuam sendo consultados na remessa, onde sempre foram.
+            participantes=self.participantes,
+            cadastro_reembolso=cadastro_reembolso)
+        self.resultado = resultado
+        self._periodo_do_resultado = (ini, fim)
+        if not resultado.contas and not resultado.omitidos:
+            self.q.put(("status", "Nenhuma linha para as contas marcadas."))
+            return None
+        return resultado
+
+    def _t_apurar_para_remessa(self, escolhidas, nao_confirmados=()):
+        """Apura e devolve o controle à interface, que abre a conferência.
+
+        É o caminho "Buscar -> Gerar remessa" sem passar pela planilha. O que
+        ele NÃO faz é escrever o .xlsx — quem quiser a planilha clica no passo
+        que a escreve.
+        """
+        try:
+            resultado = self._montar_resultado(escolhidas, nao_confirmados)
+            if resultado is None:
+                return
+            n = sum(len(r) for r in resultado.contas.values())
+            self._log(f"\n{n} pagamento(s) apurado(s) em "
+                      f"{len(resultado.contas)} conta(s). Abrindo a conferência "
+                      f"da remessa.")
+            self.q.put(("status", f"{n} pagamento(s) — confira a remessa."))
+            # De volta à thread da interface: a conferência é uma janela, e
+            # gravar .REM é disco local. Nada disso é assunto do navegador, e
+            # segurá-lo enquanto alguém confere linha a linha bloquearia as
+            # outras oito abas pelo tempo da leitura.
+            self.q.put(("abrir_remessa", None))
+        except Exception as e:
+            self._log(f"[!] {e}")
+            self.q.put(("status", "Não consegui apurar os lançamentos."))
+        finally:
+            self.q.put(("botoes", "normal"))
+
     def _t_gerar(self, escolhidas, nao_confirmados=()):
         comeco = time.time()
         try:
             ini, fim = self._periodo()
-            escolha = {relatorio.chave(n) for n in escolhidas}
-            selecionados = [i for i in self.lancamentos
-                            if relatorio.chave(relatorio.nome_da_conta(i)) in escolha]
-
-            a_pagar, pagos = relatorio.separar_pagos(selecionados)
-            if pagos:
-                self._log(f"\n{len(pagos)} já pago(s) no período"
-                          + ("; incluídos." if self.v_incluir_pagos.get() else "; fora."))
-            if not self.v_incluir_pagos.get():
-                selecionados = a_pagar
-            if not selecionados:
-                self.q.put(("status", "Nada a pagar nas contas marcadas."))
+            resultado = self._montar_resultado(escolhidas, nao_confirmados)
+            if resultado is None:
                 return
-
-            textos, urls_ocr = {}, set()
-            if self.v_cruzar.get():
-                textos, urls_ocr = self._baixar_textos(selecionados)
-
-            # O cadastro local é lido UMA vez e serve aos dois: a chave Pix
-            # (formato antigo) e a identidade de quem recebe (formato novo).
-            cadastro_reembolso = reembolso.carregar(_pasta_base())
-            resultado = relatorio.montar_registros(
-                selecionados, self.anexos, self.overviews, textos,
-                pix_reembolso=reembolso.chaves(cadastro_reembolso),
-                urls_ocr=urls_ocr,
-                regras_fornecedor=regras.carregar_fornecedores(),
-                ids_nao_confirmados=nao_confirmados,
-                # Os Contatos do ERP entram aqui porque é aqui que se descobre
-                # QUEM recebe um reembolso. Para o fornecedor comum eles
-                # continuam sendo consultados na remessa, onde sempre foram.
-                participantes=self.participantes,
-                cadastro_reembolso=cadastro_reembolso)
-            self.resultado = resultado
-            self._periodo_do_resultado = (ini, fim)
             registros, omitidos = resultado.contas, resultado.omitidos
-            if not registros and not omitidos:
-                self.q.put(("status", "Nenhuma linha para as contas marcadas."))
-                return
 
             destino = (Path(self.v_pasta.get().strip())
                        / f"pagamentos_{ini:%Y-%m-%d}"
@@ -1293,17 +1362,45 @@ class PagamentosDiaFrame(ttk.Frame):
     def gerar_remessa(self):
         """Abre a conferência e grava os .REM — um por conta pagadora.
 
-        Roda inteiro na thread da INTERFACE, e não passa pelo `anx.submeter`:
-        ao contrário dos passos 1 e 2, aqui não há navegador nem ERP. Tudo o
-        que a remessa precisa já está em `self.resultado`, e escrever arquivo
-        de texto local não justifica ocupar a sessão que só aceita um por vez.
+        NÃO exige mais a planilha. Até 30/08/2026 exigia, e o laço era acidente
+        de código: `self.resultado` só era preenchido pelo passo 2, que também
+        escrevia o .xlsx — então quem só queria a remessa gerava uma planilha
+        que ninguém ia abrir. A apuração virou `_montar_resultado`, e os dois
+        passos leem dela.
+
+        Quando o resultado já está em memória (o passo 2 rodou), roda inteiro na
+        thread da INTERFACE: não há navegador nem ERP, e escrever arquivo de
+        texto local não justifica ocupar a sessão que só aceita um por vez.
+        Quando NÃO está, a apuração precisa do navegador — aí ela vai para a
+        thread dele, e a conferência abre quando ela volta.
         """
         if not self.resultado:
-            messagebox.showinfo("Remessa", "Gere a planilha primeiro (passo 2).")
+            escolhidas = [n for n, v in self.vars_contas.items() if v.get()]
+            if not escolhidas:
+                messagebox.showinfo(
+                    "Remessa",
+                    "Busque os lançamentos e marque as contas primeiro.")
+                return
+            # A mesma pergunta do passo 2, e pelo mesmo motivo: o que se
+            # desmarca aqui sai do arquivo. Vem ANTES de ocupar o navegador —
+            # quem cancela não deve ter consumido a sessão do ERP.
+            nao_confirmados = self._confirmacoes_pendentes(escolhidas)
+            if nao_confirmados is None:
+                self.q.put(("status", "Cancelado — nada foi gerado."))
+                return
+            if self.anx.avisar_se_ocupado("a remessa"):
+                return
+            self._parar.clear()
+            self.q.put(("botoes", "disabled"))
+            self.worker = self.anx.submeter(
+                "Remessa — apurar os lançamentos",
+                self._t_apurar_para_remessa, escolhidas, nao_confirmados,
+                dona=self)
             return
+
         # O período na tela pode ter mudado depois do passo 2 sem que ninguém
         # tenha clicado em "1. Buscar" — trocar a data não invalida nada
-        # sozinha. Gerar a remessa a partir de uma planilha de outro dia é o
+        # sozinha. Gerar a remessa a partir de uma apuração de outro dia é o
         # caminho para reenviar o que já foi pago, então aqui se pergunta em
         # vez de supor.
         try:
@@ -1315,9 +1412,10 @@ class PagamentosDiaFrame(ttk.Frame):
             ini, fim = self._periodo_do_resultado
             if not messagebox.askyesno(
                     "Remessa",
-                    f"A planilha em memória é de {ini:%d/%m/%Y} a {fim:%d/%m/%Y}, "
+                    f"O que está em memória é de {ini:%d/%m/%Y} a {fim:%d/%m/%Y}, "
                     f"e as datas na tela são outras.\n\n"
-                    "A remessa sai da planilha, não das datas. Gerar assim mesmo?",
+                    "A remessa sai do que foi apurado, não das datas. Gerar "
+                    "assim mesmo?",
                     default="no"):
                 return
         try:
@@ -1373,39 +1471,200 @@ class PagamentosDiaFrame(ttk.Frame):
             return
         self._gravar_remessas(preparado, pagadores, historico)
 
+    #: As colunas da conferência, na ordem: (chave, título, largura em
+    #: caracteres, alinhamento). A largura é em caracteres e não em pixels
+    #: porque a fonte vem do Windows e muda com a escala de exibição.
+    COLUNAS_REMESSA = (
+        ("venc", "VENCIMENTO", 11, "w"),
+        ("fornecedor", "FORNECEDOR", 24, "w"),
+        ("recebe", "QUEM RECEBE", 0, "w"),      # 0 = a coluna que se estica
+        ("oc", "OC", 8, "w"),
+        ("cc", "CENTRO DE CUSTO", 22, "w"),
+        ("valor", "VALOR", 14, "e"),
+        ("situacao", "SITUAÇÃO", 26, "w"),
+    )
+
+    def _cabecalho_tabela(self, pai, com_marca: bool):
+        """A linha de títulos, e a configuração das colunas do `grid`.
+
+        `grid` e não `ttk.Treeview`: a tabela precisa de caixa de marcar por
+        linha, de duas fontes na MESMA célula (o nome em negrito e o código de
+        barras em largura fixa embaixo) e de selo colorido na situação. O
+        Treeview do Tk não faz nenhuma das três — não aceita widget dentro de
+        célula, tem uma fonte por LINHA e não quebra célula em duas alturas.
+        Foi por isso que a versão anterior era texto corrido: ela tentou caber
+        numa linha só e saiu truncada.
+        """
+        # A coluna da marca existe nas DUAS tabelas: com caixa na de cima, vazia
+        # na de baixo. Sem ela, "Fica de fora" começava 30 px à esquerda e as
+        # colunas das duas seções não batiam — o olho que desce a coluna Valor
+        # tropeçava no meio.
+        ttk.Label(pai, text="", style="Rotulo.TLabel").grid(
+            row=0, column=0, sticky="w", padx=(0, 6))
+        # `minsize` e não `width`: na seção de cima quem manda na largura é a
+        # caixa de marcar, e na de baixo não há caixa nenhuma. Sem um piso
+        # igual nas duas, a coluna Vencimento começava 25 px mais à esquerda
+        # em "Fica de fora" e as duas tabelas deixavam de se ler como uma.
+        pai.columnconfigure(0, weight=0, minsize=30)
+        col = 1
+        for chave, titulo, largura, ancora in self.COLUNAS_REMESSA:
+            ttk.Label(pai, text=titulo, style="Rotulo.TLabel",
+                      anchor=("e" if ancora == "e" else "w")).grid(
+                row=0, column=col, sticky="ew", padx=(0, 10), pady=(0, 4))
+            # A coluna de largura 0 é a que absorve a sobra: é onde mora o
+            # código de barras completo, que é o dado mais comprido da tela e
+            # o que não pode ser cortado de jeito nenhum.
+            pai.columnconfigure(col, weight=1 if largura == 0 else 0,
+                                minsize=0 if largura == 0 else largura * 7)
+            col += 1
+        # Um filete separando o cabeçalho do corpo, como nos cartões.
+        ttk.Separator(pai, orient="horizontal").grid(
+            row=1, column=0, columnspan=col, sticky="ew", pady=(0, 4))
+        return col
+
+    def _celula_quem_recebe(self, pai, c, linha: int, coluna: int):
+        """Nome em negrito e, embaixo, POR ONDE o dinheiro sai — inteiro.
+
+        Duas alturas porque as duas informações são de naturezas diferentes e
+        as duas precisam ser lidas: o nome se confere de relance, o código de
+        barras se confere dígito a dígito contra o documento na mão. Em fonte
+        de largura fixa e sem corte — foi o corte que motivou esta tela.
+        """
+        cel = ttk.Frame(pai)
+        cel.grid(row=linha, column=coluna, sticky="ew", padx=(0, 10))
+        ttk.Label(cel, text=c.favorecido[:44] or "—", style="Forte.TLabel"
+                  ).pack(anchor="w")
+        if c.tipo == "Pix":
+            rotulo, dado = "PIX", c.chave
+        elif c.arrecadacao:
+            # O produto aparece porque ele MUDA o que o banco faz com a linha
+            # (segmento O, e não J) — e porque foi mandar ficha como boleto
+            # que deu errado em 17/08/2026.
+            rotulo, dado = "ARRECADAÇÃO", c.codigo_barras
+        else:
+            rotulo, dado = "BOLETO", c.codigo_barras
+        ttk.Label(cel, text=f"{rotulo}  {dado or '—'}",
+                  style="MonoMini.TLabel" if dado else "MonoMiniErro.TLabel"
+                  ).pack(anchor="w")
+        # O reembolso paga QUEM NÃO É o favorecido do lançamento, e o nome
+        # acima já é o da pessoa — sem esta linha, a troca é invisível.
+        if c.reembolso:
+            ttk.Label(cel, style="Tenue.TLabel", justify="left",
+                      text=(f"↳ reembolso de {c.reembolso_de[:30]} · documento "
+                            f"{_doc_legivel(c.documento_favorecido)} "
+                            f"({c.reembolso_origem})")).pack(anchor="w")
+        if c.ja_enviado:
+            ttk.Label(cel, style="Atencao.TLabel", justify="left",
+                      text=f"↳ {c.ja_enviado} — marque para enviar de novo"
+                      ).pack(anchor="w")
+        if c.obs:
+            ttk.Label(cel, text=f"↳ {c.obs[:110]}", style="Tenue.TLabel",
+                      justify="left").pack(anchor="w")
+
+    def _linha_tabela(self, pai, c, linha: int, *, var=None, motivo: str = ""):
+        """Uma linha da tabela. `var` só existe na seção que vai no arquivo."""
+        col = 1
+        if var is not None:
+            ttk.Checkbutton(pai, variable=var).grid(row=linha, column=0,
+                                                    sticky="w", padx=(0, 6))
+        venc = f"{c.vencimento:%d/%m/%Y}" if c.vencimento else "—"
+        ttk.Label(pai, text=venc, style="Num.TLabel").grid(
+            row=linha, column=col, sticky="w", padx=(0, 10)); col += 1
+        # O favorecido do LANÇAMENTO. No reembolso ele não é quem recebe — a
+        # coluna ao lado diz para quem o dinheiro vai de verdade.
+        nome_lanc = (c.reembolso_de or c.favorecido) if c.reembolso else c.favorecido
+        ttk.Label(pai, text=nome_lanc[:24] or "—").grid(
+            row=linha, column=col, sticky="w", padx=(0, 10)); col += 1
+        self._celula_quem_recebe(pai, c, linha, col); col += 1
+        ttk.Label(pai, text=c.oc or "—", style="Num.TLabel").grid(
+            row=linha, column=col, sticky="w", padx=(0, 10)); col += 1
+        ttk.Label(pai, text=(c.centro_custo or "—")[:22]).grid(
+            row=linha, column=col, sticky="w", padx=(0, 10)); col += 1
+        ttk.Label(pai, text=relatorio.brl(c.valor), style="Num.TLabel",
+                  anchor="e").grid(row=linha, column=col, sticky="e",
+                                   padx=(0, 10)); col += 1
+        if motivo:
+            # Fica de fora: o selo é o MOTIVO, inteiro. Âmbar e não vermelho —
+            # a linha não falhou, ela não vai; e uma seção inteira em vermelho
+            # deixa de destacar o que quer que seja.
+            #
+            # QUEBRA em vez de cortar: os motivos são frases ("pagamento
+            # parcial — boleto não se paga pela metade"), e cortá-las no meio
+            # é o mesmo defeito que esta tela veio consertar, um selo menor.
+            widgets.Pilula(pai, motivo, "atencao", wraplength=230,
+                           justify="left").grid(row=linha, column=col,
+                                                sticky="w")
+        else:
+            estado = "ok" if c.apto else "atencao"
+            texto = "apto" if c.apto else c.status
+            widgets.Pilula(pai, f"{widgets.MARCAS_ESTADO[estado]}  {texto}",
+                           estado, wraplength=230, justify="left").grid(
+                row=linha, column=col, sticky="w")
+
     def _janela_remessa(self, preparado, pagadores, recusadas, historico) -> bool:
         """A conferência. Devolve True se a pessoa confirmou.
 
-        Vem marcado o que a planilha julgou APTO e desmarcado o que ela marcou
-        com ATENÇÃO: o normal segue sozinho, o duvidoso exige um clique. O que
-        NÃO PODE sair aparece sem caixa, com o motivo — desmarcado é escolha
-        sua, impedido é outra coisa.
+        Uma TABELA por conta pagadora, em duas seções: o que vai no arquivo
+        (com caixa de marcar) e o que fica de fora (com o motivo em selo, sem
+        caixa — desmarcado é escolha sua, impedido é outra coisa).
+
+        Vem marcado o que a apuração julgou APTO e desmarcado o que ela marcou
+        com ATENÇÃO: o normal segue sozinho, o duvidoso exige um clique.
+
+        Todas as colunas que se conferem antes de mandar dinheiro estão aqui —
+        vencimento, favorecido, para onde vai (código de barras ou chave, por
+        inteiro), OC, centro de custo, valor e situação. Antes era uma linha de
+        texto com `wraplength`, e o que não coubesse sumia: o código de barras,
+        que é justamente o que se confere contra o documento, nunca aparecia.
         """
         top = tk.Toplevel(self)
-        top.title("3. Gerar remessa — conferência")
+        top.title("Gerar remessa — conferência")
         top.transient(self.winfo_toplevel())
         widgets.barra_de_titulo(top)
+        top.configure(background=widgets.cores()["fundo"])
+        # Grande de propósito: são sete colunas, e uma delas guarda 44 dígitos.
+        # Numa janela pequena a tabela volta a truncar, que é o defeito que
+        # esta tela existe para consertar.
+        #
+        # Medida contra a TELA, e não fixa: 1360x820 cabia no monitor onde foi
+        # escrita e estourava embaixo num notebook — levando junto o rodapé,
+        # que é onde estão o total e o botão de gravar.
+        larg = min(1360, max(int(top.winfo_screenwidth() * 0.92), 1000))
+        alt = min(860, max(int(top.winfo_screenheight() * 0.86), 560))
+        top.geometry(f"{larg}x{alt}")
+        top.minsize(1000, 520)
 
-        moldura = ttk.Frame(top, padding=14)
+        moldura = ttk.Frame(top, padding=18, style="Fundo.TFrame")
         moldura.pack(fill="both", expand=True)
-        ttk.Label(moldura, style="Secao.TLabel",
-                  text="Confira o que vai no arquivo").pack(anchor="w")
-        ttk.Label(moldura, style="Apoio.TLabel", wraplength=680, justify="left",
-                  text="Já vem marcado o que está APTO. Desmarque o que não deve "
-                       "ir hoje. Depois de gravar, o envio ao SicoobNet é seu, "
-                       "à mão — o app nunca transmite."
-                  ).pack(anchor="w", pady=(0, 10))
+        cab = widgets.Cabecalho(
+            moldura, "Confira o que vai no arquivo",
+            "Já vem marcado o que está apto. Desmarque o que não deve ir hoje. "
+            "Depois de gravar, o envio ao SicoobNet é seu, à mão — o app nunca "
+            "transmite.",
+            trilha="Diário  ›  Remessa e Retorno  ›  Gerar remessa")
+        cab.pack(fill="x", pady=(0, 14))
 
-        painel = tk.Canvas(moldura, highlightthickness=0, height=380)
+        # ---- rodapé FIXO, empacotado ANTES do corpo: no `pack`, quem chega
+        # primeiro reserva o espaço. Com o corpo antes, a tabela crescia por
+        # cima e empurrava o total e os botões para fora da janela — que é
+        # exatamente o que não pode acontecer com o número que se confere
+        # antes de mandar dinheiro.
+        rodape = ttk.Frame(moldura, style="Fundo.TFrame")
+        rodape.pack(side="bottom", fill="x", pady=(14, 0))
+
+        # ---- corpo rolável
+        painel = tk.Canvas(moldura, highlightthickness=0)
         barra = ttk.Scrollbar(moldura, orient="vertical", command=painel.yview)
-        dentro = ttk.Frame(painel)
+        dentro = ttk.Frame(painel, style="Fundo.TFrame")
         dentro.bind("<Configure>",
                     lambda _e: painel.configure(scrollregion=painel.bbox("all")))
-        painel.create_window((0, 0), window=dentro, anchor="nw")
+        janela = painel.create_window((0, 0), window=dentro, anchor="nw")
+        painel.bind("<Configure>",
+                    lambda e: painel.itemconfigure(janela, width=e.width))
         painel.configure(yscrollcommand=barra.set)
         widgets.estilo_canvas(painel)
-        painel.pack(side="left", fill="both", expand=True)
-        barra.pack(side="left", fill="y")
+        barra.pack(side="right", fill="y")
+        painel.pack(side="top", fill="both", expand=True)
 
         # Duas contas da MESMA empresa dividem o convênio, e `proximo_nsa` é
         # CONSULTA, não reserva: as duas mostravam "arquivo nº 000031" enquanto
@@ -1416,9 +1675,8 @@ class PagamentosDiaFrame(ttk.Frame):
         # gerar entre esta tela e o Confirmar, o arquivo sai com um número mais
         # alto. Continua sendo consulta de propósito — reservar ao MOSTRAR
         # queimaria um NSA cada vez que alguém abrisse a janela e desistisse.
-        # A previsão errar para cima é inofensiva; o nome do arquivo gravado é
-        # o que vale, e ele aparece no registro ao fim.
         proximos: dict[str, int] = {}
+        marcas: list = []
         for conta, pagador in pagadores.items():
             linhas = preparado[conta]
             if pagador.convenio not in proximos:
@@ -1426,77 +1684,48 @@ class PagamentosDiaFrame(ttk.Frame):
             nsa = proximos[pagador.convenio]
             proximos[pagador.convenio] = nsa + 1
 
-            vao = [c for c in linhas if c.pode and c.marcado]
-            cabecalho = ttk.Frame(dentro)
-            cabecalho.pack(fill="x", pady=(10, 2))
-            ttk.Label(cabecalho, style="Secao.TLabel",
-                      text=f"{pagador.empresa} — ag {pagador.agencia}-"
-                           f"{pagador.dv_agencia} / {pagador.conta}-{pagador.dv_conta}"
-                      ).pack(side="left")
-            # Contagem e total ao lado do número do arquivo. Eles só existiam
-            # DEPOIS de gravar, no registro — então conferir "bate com o que eu
-            # esperava?" antes de mandar dinheiro dependia de somar na
-            # calculadora. As outras duas ações irreversíveis do app (Aportes e
-            # Acessórias) já dizem quantos e quanto antes de perguntar.
-            ttk.Label(cabecalho, style="Apoio.TLabel",
-                      text=(f"{len(vao)} de {len([c for c in linhas if c.pode])} "
-                            f"· {relatorio.brl(sum(c.valor for c in vao))} "
-                            f"· arquivo nº {nsa:06d}")).pack(side="right")
+            vao = [c for c in linhas if c.pode]
+            fora = [c for c in linhas if not c.pode]
+            cartao = widgets.Cartao(
+                dentro,
+                f"{pagador.empresa} — ag {pagador.agencia}-{pagador.dv_agencia}"
+                f" / {pagador.conta}-{pagador.dv_conta}")
+            cartao.pack(fill="x", pady=(0, 12))
+            ttk.Label(cartao.acoes, text=f"arquivo nº {nsa:06d}",
+                      style="Mini.TLabel").pack(side="right")
 
-            for c in linhas:
-                if not c.pode:
-                    ttk.Label(dentro, style="Apoio.TLabel", wraplength=660,
-                              justify="left",
-                              text=(f"       —  {c.tipo}  {relatorio.brl(c.valor)}  "
-                                    f"{c.favorecido[:28]}  ·  não vai: {c.impedimento}")
-                              ).pack(anchor="w")
-                    continue
-                v = tk.BooleanVar(value=c.marcado)
-                c._var = v                      # lido de volta no confirmar()
-                # O `status` e a `obs` existiam no Candidato e NÃO apareciam: a
-                # linha com "ATENÇÃO — valor do boleto diverge" era visualmente
-                # idêntica a uma linha limpa, e o único sinal era vir
-                # desmarcada — a um clique de ser marcada por quem está
-                # marcando todas. Agora o motivo vem escrito, e o alerta vem
-                # antes do resto para o olho bater nele primeiro.
-                alerta = "" if c.apto else f"⚠ {c.status}  "
-                detalhe = f"  ·  {c.obs[:70]}" if c.obs else ""
-                ttk.Checkbutton(
-                    dentro, variable=v,
-                    text=(f"{alerta}{c.tipo:<7} {relatorio.brl(c.valor):>14}  "
-                          f"{c.favorecido[:30]:<30}  {c.descricao[:40]}{detalhe}")
-                ).pack(anchor="w")
-                # O reembolso paga QUEM NÃO É o favorecido do lançamento, e o
-                # nome acima já é o da pessoa — quem só olha a lista não teria
-                # como perceber a troca. Esta linha diz de onde veio o nome, de
-                # que compra o reembolso é, e com que documento o dinheiro vai
-                # sair. É a conferência que justifica a linha nascer desmarcada.
-                if c.reembolso:
-                    ttk.Label(
-                        dentro, style="Apoio.TLabel", wraplength=640,
-                        justify="left",
-                        text=(f"            ↳ reembolso de {c.reembolso_de[:30]}  ·  "
-                              f"documento {_doc_legivel(c.documento_favorecido)} "
-                              f"({c.reembolso_origem})")).pack(anchor="w")
-                # Este pagamento já saiu numa remessa viva. Era impedimento —
-                # a linha vinha sem caixa, e reenviar obrigava a descartar a
-                # remessa inteira, grosso demais quando o que falhou foi um
-                # pagamento. Agora é aviso: a caixa existe e nasce VAZIA,
-                # porque marcá-la é dinheiro saindo duas vezes.
-                if c.ja_enviado:
-                    ttk.Label(
-                        dentro, style="Apoio.TLabel", wraplength=640,
-                        justify="left",
-                        text=(f"            ↳ {c.ja_enviado} — marque para "
-                              "enviar de novo")).pack(anchor="w")
+            if vao:
+                ttk.Label(cartao, text="VAI NO ARQUIVO", style="Rotulo.TLabel"
+                          ).pack(anchor="w", pady=(0, 4))
+                tab = ttk.Frame(cartao)
+                tab.pack(fill="x")
+                self._cabecalho_tabela(tab, com_marca=True)
+                for i, c in enumerate(vao, start=2):
+                    v = tk.BooleanVar(value=c.marcado)
+                    c._var = v                  # lido de volta no confirmar()
+                    v.trace_add("write", lambda *_a: atualizar())
+                    marcas.append((c, v))
+                    self._linha_tabela(tab, c, i, var=v)
+
+            if fora:
+                ttk.Label(cartao, text="FICA DE FORA", style="Rotulo.TLabel"
+                          ).pack(anchor="w", pady=(14, 4))
+                tab = ttk.Frame(cartao)
+                tab.pack(fill="x")
+                self._cabecalho_tabela(tab, com_marca=False)
+                for i, c in enumerate(fora, start=2):
+                    self._linha_tabela(tab, c, i, motivo=c.impedimento)
 
         if recusadas:
-            ttk.Label(dentro, style="Secao.TLabel",
-                      text="Contas sem remessa").pack(anchor="w", pady=(12, 2))
+            cartao = widgets.Cartao(dentro, "Contas sem remessa")
+            cartao.pack(fill="x", pady=(0, 12))
             for conta, motivo in recusadas:
-                ttk.Label(dentro, style="Apoio.TLabel", wraplength=660,
-                          justify="left", text=f"       {conta[:40]}: {motivo}"
-                          ).pack(anchor="w")
+                linha = ttk.Frame(cartao)
+                linha.pack(fill="x", pady=(0, 4))
+                ttk.Label(linha, text=conta[:48], style="Forte.TLabel"
+                          ).pack(side="left")
+                widgets.Pilula(linha, motivo[:60], "atencao").pack(side="left",
+                                                                   padx=(10, 0))
 
         resposta = {"ok": False}
 
@@ -1508,12 +1737,27 @@ class PagamentosDiaFrame(ttk.Frame):
             resposta["ok"] = True
             top.destroy()
 
-        rodape = ttk.Frame(moldura)
-        rodape.pack(side="bottom", fill="x", pady=(14, 0))
+        # O rodapé já foi empacotado lá em cima; aqui ele só se enche.
+        resumo = ttk.Label(rodape, style="FundoApoio.TLabel")
+        resumo.pack(side="left")
         widgets.Botao(rodape, "Gravar os arquivos", papel="acao",
                       command=confirmar).pack(side="right")
         widgets.Botao(rodape, "Cancelar", papel="neutro", command=top.destroy
                       ).pack(side="right", padx=(0, 8))
+
+        def atualizar():
+            try:
+                vao = [c for c, v in marcas if v.get()]
+            except tk.TclError:
+                return                       # janela fechando com o trace vivo
+            de_fora = sum(len([c for c in linhas if not c.pode])
+                          for linhas in preparado.values())
+            de_fora += len(marcas) - len(vao)
+            resumo.configure(
+                text=f"{len(vao)} pagamento(s)  ·  "
+                     f"{relatorio.brl(sum(c.valor for c in vao))}  ·  "
+                     f"{de_fora} de fora")
+        atualizar()
 
         top.protocol("WM_DELETE_WINDOW", top.destroy)
         top.bind("<Escape>", lambda _e: top.destroy())
