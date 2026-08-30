@@ -1,0 +1,35 @@
+# Fim de linha, decidido pelo REPOSITÓRIO e não pela máquina de quem clona.
+#
+# Por que existe: o `core.autocrlf` estava vindo da configuração do sistema
+# (padrão do Git para Windows), então cada máquina normalizava por conta
+# própria. Uma pasta editada com CRLF e outra com LF aparecem como "arquivo
+# inteiro alterado" num `diff` de disco, mesmo sem uma linha ter mudado — foi
+# o que aconteceu entre `fontes/` e a instalação em `_app/codigo`.
+#
+# `text=auto` deixa o git decidir o que é texto e guardar tudo com LF no
+# índice; o que é binário ele detecta e não toca.
+* text=auto
+
+# O que é texto, explicitamente, para não depender da heurística — e sempre
+# com LF, que é o que o índice já tem hoje.
+*.py    text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.sql   text eol=lf
+*.toml  text eol=lf
+
+# Os .bat são lidos pelo cmd.exe do Windows: continuam com CRLF.
+*.bat   text eol=crlf
+
+# O próprio arquivo de regras, para ele não ficar avisando sobre si mesmo.
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+LICENSE        text eol=lf
+
+# Binário: nada de conversão.
+*.ico   binary
+*.xlsx  binary
+*.png   binary
+*.dat   binary
