@@ -277,7 +277,15 @@ def test_o_foco_vai_para_o_campo_de_cima_e_nao_para_o_mais_raso(aba):
     assert widgets.focar_primeiro_campo(quadro) is data, (
         "o foco caiu no campo raso de baixo: a busca está seguindo a árvore "
         "de widgets em vez da posição na tela")
-    assert str(quadro.focus_get()) == str(data)
+    # `focus_lastfor` e não `focus_get`: o primeiro é o que a JANELA guarda, o
+    # segundo é quem está com o foco do WINDOWS agora. Qualquer outra janela
+    # que apareça no meio da suíte — a Tk do teste seguinte, o console
+    # voltando ao topo — faz `focus_get` responder outra coisa, e o teste
+    # falhava sozinho de vez em quando sem nada ter mudado no código. O que se
+    # quer provar aqui é que o cursor foi POSTO no campo certo, e é isso que
+    # `focus_lastfor` diz: é o widget que recebe a digitação quando a janela
+    # está em primeiro plano.
+    assert str(quadro.focus_lastfor()) == str(data)
 
 
 def test_o_foco_ignora_combobox_readonly(aba):
