@@ -44,11 +44,16 @@ def _responder(monkeypatch, resposta):
     monkeypatch.setattr(rest.requests, "post", falso)
 
 
-def _jwt(exp: int, email: str = "quem@exemplo.com") -> str:
-    """Um JWT de mentira: só o miolo importa, ninguém verifica assinatura."""
+def _jwt(exp: int, email: str = "quem@exemplo.com",
+         sub: str = "11111111-1111-1111-1111-111111111111") -> str:
+    """Um JWT de mentira: só o miolo importa, ninguém verifica assinatura.
+
+    O `sub` é o mesmo user_id que o `auth.uid()` do banco enxerga — é de lá
+    que o Postgres o tira."""
     import base64
     corpo = base64.urlsafe_b64encode(
-        json.dumps({"exp": exp, "email": email}).encode()).decode().rstrip("=")
+        json.dumps({"exp": exp, "email": email, "sub": sub})
+        .encode()).decode().rstrip("=")
     return f"cabecalho.{corpo}.assinatura"
 
 
@@ -152,10 +157,19 @@ def test_sem_arquivo_e_precisa_entrar(tmp_path):
 
 
 def test_token_no_prazo_nao_fala_com_o_servidor(tmp_path, monkeypatch):
+    """Toda chamada à nuvem passa por aqui: uma viagem de rede neste caminho
+    seria uma viagem por chamada.
+
+    A sessão do teste vem COMPLETA, com papel e situação, porque é assim que
+    ela fica desde o primeiro login. A única exceção — a sessão gravada por
+    versão anterior a esta, que não tem papel — busca o perfil uma vez por
+    execução, e quem prova o freio é
+    `test_a_busca_do_papel_perdido_nao_se_repete_a_cada_chamada`."""
     bom = _jwt(int(time.time()) + 3600)
     monkeypatch.setattr(sessao, "_ler", lambda _p=None: {
-        "acesso": bom, "renovacao": "r", "email": "quem@exemplo.com"})
-    _responder(monkeypatch, AssertionError("não devia ter chamado a rede"))
+        "acesso": bom, "renovacao": "r", "email": "quem@exemplo.com",
+        "papel": "operador", "situacao": "ativo"})
+    _responder(monkeypatch, AssertionError("nao devia ter chamado a rede"))
     assert sessao.token(tmp_path) == bom
 
 
@@ -208,6 +222,217 @@ def test_arquivo_de_sessao_corrompido_pede_a_senha(tmp_path):
 def test_jwt_ilegivel_nao_estoura():
     assert sessao._quando_vence("nem.parece.jwt") == 0
     assert sessao._quando_vence("") == 0
+    assert sessao._sub("nem.parece.jwt") == ""
+    assert sessao._email("") == ""
+
+
+# ------------------------------------------------------------------ perfil
+# O papel de cada um viaja junto da sessão desde 30/08/2026. O que estes
+# testes seguram é a diferença entre "o servidor disse que esta conta ainda
+# não foi liberada" e "não deu para perguntar": a primeira é uma resposta, a
+# segunda é a ausência dela, e tratá-las igual é como uma oscilação de rede
+# vira gente sem aba nenhuma.
+
+@pytest.fixture(autouse=True)
+def _perfil_do_zero():
+    """A busca de recuperação é uma por execução — e cada teste é uma."""
+    sessao._ja_procurei_o_perfil = False
+    yield
+    sessao._ja_procurei_o_perfil = False
+
+
+def _caminhos_pedidos(monkeypatch) -> list:
+    """Guarda os caminhos que o `rest` pediu, sem falar com rede nenhuma."""
+    pedidos = []
+
+    def falso(_metodo, url, **_kw):
+        pedidos.append(url)
+        return _Resposta(200, [])
+    monkeypatch.setattr(rest.requests, "request", falso)
+    return pedidos
+
+
+def test_o_perfil_pedido_e_o_do_proprio_usuario(monkeypatch):
+    """Para o ADMIN a RLS não filtra nada: ele lê a tabela inteira.
+
+    Sem o `user_id=eq.` no pedido, o app do admin receberia a fila de
+    aprovação toda e leria o papel da primeira linha que viesse."""
+    pedidos = _caminhos_pedidos(monkeypatch)
+    rest.perfil("tok", "22222222-2222-2222-2222-222222222222")
+    assert len(pedidos) == 1
+    assert "user_id=eq.22222222-2222-2222-2222-222222222222" in pedidos[0]
+    assert "limit=1" in pedidos[0]
+
+
+def test_perfil_sem_user_id_nao_chega_a_perguntar(monkeypatch):
+    """Token ilegível não pode virar uma leitura sem filtro."""
+    pedidos = _caminhos_pedidos(monkeypatch)
+    assert rest.perfil("tok", "") is None
+    assert pedidos == []
+
+
+def test_conta_sem_linha_de_perfil_responde_None(monkeypatch):
+    _responder(monkeypatch, _Resposta(200, []))
+    assert rest.perfil("tok", "abc") is None
+
+
+def _entrando(monkeypatch, perfil):
+    """Login que dá certo. `perfil` é o que o banco responde — ou o que ele
+    levanta, quando é uma exceção."""
+    gravado = {}
+    acesso = _jwt(int(time.time()) + 3600)
+    monkeypatch.setattr(sessao.rest, "entrar", lambda _e, _s: {
+        "access_token": acesso, "refresh_token": "r"})
+    monkeypatch.setattr(sessao, "_gravar",
+                        lambda s, _p=None: gravado.update(s))
+
+    def responder(_tok, _uid):
+        if isinstance(perfil, Exception):
+            raise perfil
+        return perfil
+    monkeypatch.setattr(sessao.rest, "perfil", responder)
+    return gravado, acesso
+
+
+def test_login_guarda_o_papel_junto_do_token(tmp_path, monkeypatch):
+    gravado, acesso = _entrando(monkeypatch, {
+        "user_id": "11111111-1111-1111-1111-111111111111",
+        "nome": "Quem Usa", "email": "quem@exemplo.com",
+        "papel": "aprovador", "situacao": "ativo"})
+    assert sessao.entrar("quem@exemplo.com", "senha", tmp_path) == acesso
+    assert gravado["papel"] == "aprovador"
+    assert gravado["situacao"] == "ativo"
+    assert gravado["nome"] == "Quem Usa"
+    assert gravado["user_id"] == "11111111-1111-1111-1111-111111111111"
+
+
+def test_conta_sem_perfil_no_banco_entra_como_pendente(tmp_path, monkeypatch):
+    """O critério de pronto da fase: conta nova cai em pendente, e entra."""
+    gravado, acesso = _entrando(monkeypatch, None)
+    assert sessao.entrar("nova@exemplo.com", "senha", tmp_path) == acesso
+    assert gravado["situacao"] == "pendente"
+    assert gravado["papel"] == "operador"
+
+
+def test_perfil_mudo_nao_impede_o_login(tmp_path, monkeypatch):
+    """A senha estava certa e o token está na mão: derrubar aqui seria trocar
+    uma oscilação de rede por "não consigo entrar"."""
+    gravado, acesso = _entrando(monkeypatch, rest.SemRede("caiu"))
+    assert sessao.entrar("quem@exemplo.com", "senha", tmp_path) == acesso
+    assert gravado["acesso"] == acesso
+
+
+def test_perfil_mudo_nao_apaga_o_papel_que_ja_se_sabia(tmp_path, monkeypatch):
+    """Senão a pessoa perderia as abas por causa do wi-fi."""
+    gravado, _acesso = _entrando(monkeypatch, rest.SemRede("caiu"))
+    monkeypatch.setattr(sessao, "_ler", lambda _p=None: {
+        "email": "chefe@exemplo.com", "nome": "Nome Do Chefe",
+        "papel": "admin", "situacao": "ativo"})
+    sessao.entrar("chefe@exemplo.com", "senha", tmp_path)
+    assert gravado["papel"] == "admin"
+    assert gravado["situacao"] == "ativo"
+    assert gravado["nome"] == "Nome Do Chefe"
+
+
+def test_renovar_o_token_atualiza_o_papel(tmp_path, monkeypatch):
+    """Liberado às 9h: às 10h, na renovação, as abas aparecem sozinhas."""
+    gravado = {}
+    velho = _jwt(int(time.time()) - 10)
+    novo = _jwt(int(time.time()) + 3600)
+    monkeypatch.setattr(sessao, "_ler", lambda _p=None: {
+        "acesso": velho, "renovacao": "r", "email": "quem@exemplo.com",
+        "papel": "operador", "situacao": "pendente"})
+    monkeypatch.setattr(sessao, "_gravar", lambda s, _p=None: gravado.update(s))
+    monkeypatch.setattr(sessao.rest, "renovar", lambda _r: {
+        "access_token": novo, "refresh_token": "r2"})
+    monkeypatch.setattr(sessao.rest, "perfil", lambda _t, _u: {
+        "nome": "Quem Usa", "papel": "operador", "situacao": "ativo"})
+    assert sessao.token(tmp_path) == novo
+    assert gravado["situacao"] == "ativo"
+
+
+def test_sessao_de_versao_anterior_ganha_o_papel_sem_pedir_senha(
+        tmp_path, monkeypatch):
+    """No dia da atualização o token guardado ainda vale por até uma hora.
+
+    Sem esta busca o app abriria sem renovar e, portanto, sem nunca perguntar
+    quem é a pessoa — numa manhã em que o menu se monta pelo papel, é a equipe
+    inteira sem abas."""
+    gravado = {}
+    bom = _jwt(int(time.time()) + 3600)
+    antiga = {"acesso": bom, "renovacao": "r", "email": "quem@exemplo.com"}
+    monkeypatch.setattr(sessao, "_ler", lambda _p=None: antiga)
+    monkeypatch.setattr(sessao, "_gravar", lambda s, _p=None: gravado.update(s))
+    monkeypatch.setattr(
+        sessao.rest, "renovar",
+        lambda _r: pytest.fail("não devia renovar: o token ainda vale"))
+    monkeypatch.setattr(sessao.rest, "perfil", lambda _t, _u: {
+        "nome": "Quem Usa", "papel": "admin", "situacao": "ativo"})
+    assert sessao.token(tmp_path) == bom
+    assert gravado["papel"] == "admin"
+
+
+def test_a_busca_do_papel_perdido_nao_se_repete_a_cada_chamada(
+        tmp_path, monkeypatch):
+    """Sem freio, um app aberto sem internet pagaria a espera do `rest` em
+    cada chamada — por uma informação que só serve para desenhar o menu."""
+    tentativas = []
+    bom = _jwt(int(time.time()) + 3600)
+    monkeypatch.setattr(sessao, "_ler", lambda _p=None: {
+        "acesso": bom, "renovacao": "r", "email": "quem@exemplo.com"})
+    monkeypatch.setattr(sessao, "_gravar", lambda _s, _p=None: None)
+
+    def caiu(_t, _u):
+        tentativas.append(1)
+        raise rest.SemRede("caiu")
+    monkeypatch.setattr(sessao.rest, "perfil", caiu)
+    for _ in range(5):
+        assert sessao.token(tmp_path) == bom
+    assert len(tentativas) == 1
+
+
+def test_quem_devolve_o_email_e_o_papel(tmp_path, monkeypatch):
+    """O critério de pronto da fase, do lado de quem lê."""
+    monkeypatch.setattr(sessao, "_ler", lambda _p=None: {
+        "acesso": _jwt(int(time.time()) + 60,
+                       sub="33333333-3333-3333-3333-333333333333"),
+        "email": "chefe@exemplo.com", "nome": "Nome Do Chefe",
+        "papel": "aprovador", "situacao": "ativo"})
+    eu = sessao.quem(tmp_path)
+    assert eu.email == "chefe@exemplo.com"
+    assert eu.papel == "aprovador"
+    assert eu.aprovador and eu.ativo and eu.conhecido
+    assert not eu.admin and not eu.pendente
+    assert eu.primeiro_nome == "Nome"
+    assert eu.user_id == "33333333-3333-3333-3333-333333333333"
+
+
+def test_quem_sem_ninguem_entrado_nao_estoura(tmp_path):
+    eu = sessao.quem(tmp_path)
+    assert not eu
+    assert eu.email == "" and eu.papel == ""
+    assert not eu.conhecido and not eu.admin
+
+
+def test_situacao_vazia_nao_e_pendente(tmp_path, monkeypatch):
+    """Ainda-nao-perguntei e espera-aprovacao sao coisas diferentes.
+
+    Esconder tudo de quem ficou sem internet e o app sumindo sozinho."""
+    monkeypatch.setattr(sessao, "_ler", lambda _p=None: {
+        "email": "quem@exemplo.com", "papel": "", "situacao": ""})
+    eu = sessao.quem(tmp_path)
+    assert not eu.conhecido
+    assert not eu.pendente and not eu.ativo
+
+
+def test_papel_de_admin_desativado_nao_vale(tmp_path, monkeypatch):
+    """Desligar alguém é `situacao`, não `papel` — a linha fica de pé para a
+    auditoria saber quem era. Quem conferisse só o papel deixaria o desligado
+    com os poderes dele."""
+    monkeypatch.setattr(sessao, "_ler", lambda _p=None: {
+        "email": "exchefe@exemplo.com", "papel": "admin",
+        "situacao": "desativado"})
+    assert not sessao.quem(tmp_path).admin
 
 
 # ------------------------------------------------------------------ cache

@@ -405,9 +405,9 @@ def main():
                                 style="BarraTenue.TLabel")
         _lbl_versao.pack(side="left", padx=(0, 16), pady=14)
         widgets.Dica(_lbl_versao, f"versão {_v}")
-    _quem = sessao.quem(_pasta_dados()) or ""
-    widgets.Avatar(barra.direita, _quem).pack(side="left", pady=11)
-    ttk.Label(barra.direita, text=_quem.split("@")[0][:22],
+    _eu = sessao.quem(_pasta_dados())
+    widgets.Avatar(barra.direita, _eu.email).pack(side="left", pady=11)
+    ttk.Label(barra.direita, text=_eu.email.split("@")[0][:22],
               style="Barra.TLabel").pack(side="left", padx=(8, 0), pady=14)
 
     # ---------------- rodapé do menu: tema e situação do cadastro

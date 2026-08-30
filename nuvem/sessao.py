@@ -23,6 +23,17 @@ aqui é a DPAPI: o `sessao.dat` só é decifrável pelo mesmo usuário do Window
 na mesma máquina que o gravou, e quem chegou nessa conta já tem o app, os
 arquivos e o `login.dat`. Havendo rede, quem julga é o servidor — a renovação
 é recusada se o usuário foi removido ou teve a senha trocada.
+
+**O papel viaja junto.** Desde 30/08/2026 a sessão guarda também quem a pessoa
+é no cadastro — nome, papel e situação, lidos da tabela `perfil`. Ele é
+perguntado ao servidor nas duas horas em que já se está falando com ele
+(entrar e renovar), e não a cada chamada: renovação é de hora em hora, então o
+papel na tela nunca está mais de uma hora atrasado.
+
+E é preciso ser exato sobre o que ele decide: o papel guardado aqui escolhe o
+que APARECE, e nada mais. Quem barra de verdade é a RLS do banco, que julga o
+token a cada chamada — um papel adulterado no arquivo local abriria abas cujos
+botões o servidor recusaria.
 """
 from __future__ import annotations
 
@@ -30,6 +41,7 @@ import base64
 import json
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 try:
@@ -48,31 +60,54 @@ ARQUIVO = "sessao.dat"
 #: Renova com folga: token que vence em 2 minutos vence no meio do trabalho.
 FOLGA = 120
 
+#: O que vale para a conta que o servidor conhece e que ainda não tem perfil.
+#: É o mesmo padrão da tabela: entra, mas não trabalha até alguém liberar.
+#: Só o servidor pode levar a isto — "não deu para perguntar" é outra coisa, e
+#: nunca rebaixa ninguém.
+SEM_PERFIL = {"nome": "", "papel": "operador", "situacao": "pendente"}
+
+#: Sessão gravada por versão anterior a esta não tem papel nenhum. A busca de
+#: recuperação é feita UMA vez por execução: sem este freio, um app aberto sem
+#: internet pagaria os 20s de espera do `rest` em cada chamada, e a espera é
+#: por uma informação que só serve para desenhar o menu.
+_ja_procurei_o_perfil = False
+
 
 def _caminho(pasta=None) -> Path:
     return Path(pasta or util.pasta_base()) / ARQUIVO
 
 
-def _quando_vence(token: str) -> int:
-    """Lê o `exp` de dentro do JWT. 0 quando não dá para ler.
+def _dentro(token: str) -> dict:
+    """O miolo do JWT, ou {} quando não dá para ler.
 
     Sem verificar assinatura — ver o cabeçalho do módulo. `+ "=="` cobre o
     padding que o base64url do JWT omite; sobra de padding é ignorada."""
     try:
         corpo = token.split(".")[1]
         dados = json.loads(base64.urlsafe_b64decode(corpo + "==").decode())
-        return int(dados.get("exp") or 0)
+        return dados if isinstance(dados, dict) else {}
     except Exception:
+        return {}
+
+
+def _quando_vence(token: str) -> int:
+    """Lê o `exp` de dentro do JWT. 0 quando não dá para ler."""
+    try:
+        return int(_dentro(token).get("exp") or 0)
+    except (TypeError, ValueError):
         return 0
 
 
 def _email(token: str) -> str:
-    try:
-        corpo = token.split(".")[1]
-        return json.loads(
-            base64.urlsafe_b64decode(corpo + "==").decode()).get("email", "")
-    except Exception:
-        return ""
+    return _dentro(token).get("email") or ""
+
+
+def _sub(token: str) -> str:
+    """O `user_id` de dentro do token — a chave do perfil e da auditoria.
+
+    É o mesmo valor que o `auth.uid()` do banco enxerga, porque é dele que o
+    Postgres o tira: a claim `sub` do JWT que chega na chamada."""
+    return _dentro(token).get("sub") or ""
 
 
 def _ler(pasta=None) -> dict | None:
@@ -97,6 +132,102 @@ def _gravar(sessao: dict, pasta=None) -> None:
         pass
 
 
+@dataclass(frozen=True)
+class Quem:
+    """Quem está usando o app: o e-mail de sempre, e agora o papel.
+
+    Era uma string com o e-mail. Virou isto porque a partir da Fase 4 o menu
+    se monta pelo papel, e passar papel adiante como um segundo valor solto
+    é como as duas metades da mesma pessoa acabam desencontradas.
+
+    `situacao` vazia quer dizer "ainda não perguntei", e é diferente de
+    `pendente`: pendente é resposta do servidor, vazio é ausência dela. Quem
+    for esconder aba precisa saber a diferença — esconder tudo de quem ficou
+    sem internet é o app sumindo sozinho."""
+
+    email: str = ""
+    nome: str = ""
+    papel: str = ""
+    situacao: str = ""
+    user_id: str = ""
+
+    def __bool__(self) -> bool:
+        return bool(self.email or self.user_id)
+
+    @property
+    def conhecido(self) -> bool:
+        """O servidor já disse quem é esta pessoa?"""
+        return bool(self.situacao)
+
+    @property
+    def ativo(self) -> bool:
+        return self.situacao == "ativo"
+
+    @property
+    def pendente(self) -> bool:
+        return self.situacao == "pendente"
+
+    @property
+    def admin(self) -> bool:
+        return self.ativo and self.papel == "admin"
+
+    @property
+    def aprovador(self) -> bool:
+        return self.ativo and self.papel == "aprovador"
+
+    @property
+    def primeiro_nome(self) -> str:
+        """Para a barra do topo: o primeiro nome, ou o que vem antes do @."""
+        return (self.nome.split()[0] if self.nome.strip()
+                else self.email.split("@")[0])
+
+
+def _perfil_do_servidor(acesso: str) -> dict | None:
+    """Pergunta o papel ao banco. `None` = não deu para perguntar.
+
+    Nunca levanta. Quem chama está no meio de um login que JÁ deu certo, e
+    derrubá-lo por causa de uma segunda viagem transformaria uma oscilação de
+    rede em "não consigo entrar" — com a senha certa e o token na mão."""
+    try:
+        return rest.perfil(acesso, _sub(acesso)) or dict(SEM_PERFIL)
+    except rest.ErroDaNuvem:
+        return None
+
+
+def _com_perfil(nova: dict, anterior: dict | None = None) -> dict:
+    """Acrescenta nome, papel e situação à sessão. Devolve a mesma sessão.
+
+    Não perguntou, não esquece: sem resposta do servidor fica valendo o que já
+    se sabia. O contrário — zerar o papel a cada tropeço de rede — faria a
+    pessoa perder as abas por causa do wi-fi."""
+    perfil = _perfil_do_servidor(nova.get("acesso", ""))
+    if perfil is None:
+        perfil = {c: (anterior or {}).get(c, "")
+                  for c in ("nome", "papel", "situacao")}
+    nova["user_id"] = _sub(nova.get("acesso", ""))
+    for campo in ("nome", "papel", "situacao"):
+        nova[campo] = perfil.get(campo) or ""
+    return nova
+
+
+def _recuperar_o_perfil(sessao: dict, pasta=None) -> None:
+    """Busca o papel da sessão que veio sem ele, uma vez por execução.
+
+    Existe por causa do dia da atualização: quem já estava entrado tem um
+    `sessao.dat` gravado por uma versão que não guardava papel, e o token
+    dentro dele ainda vale por até uma hora — ou seja, o app abriria sem
+    renovar e, portanto, sem nunca perguntar quem é a pessoa. Numa manhã em
+    que o menu se monta pelo papel, isso é a equipe inteira sem abas."""
+    global _ja_procurei_o_perfil
+    if sessao.get("situacao") or _ja_procurei_o_perfil:
+        return
+    _ja_procurei_o_perfil = True
+    completa = _com_perfil(dict(sessao), sessao)
+    if completa.get("situacao"):         # só grava o que o servidor disse
+        sessao.update(completa)
+        _gravar(completa, pasta)
+
+
 def entrar(email: str, senha: str, pasta=None) -> str:
     """Entra com e-mail e senha, guarda a sessão e devolve o token de acesso.
 
@@ -106,7 +237,7 @@ def entrar(email: str, senha: str, pasta=None) -> str:
     sessao = {"acesso": corpo["access_token"],
               "renovacao": corpo["refresh_token"],
               "email": email.strip()}
-    _gravar(sessao, pasta)
+    _gravar(_com_perfil(sessao, _ler(pasta)), pasta)
     return sessao["acesso"]
 
 
@@ -120,6 +251,7 @@ def token(pasta=None) -> str:
         raise rest.PrecisaEntrar("ninguém entrou neste computador ainda")
 
     if _quando_vence(sessao.get("acesso", "")) - FOLGA > time.time():
+        _recuperar_o_perfil(sessao, pasta)
         return sessao["acesso"]
 
     try:
@@ -137,7 +269,7 @@ def token(pasta=None) -> str:
     novo = {"acesso": corpo["access_token"],
             "renovacao": corpo["refresh_token"],
             "email": sessao.get("email") or _email(corpo["access_token"])}
-    _gravar(novo, pasta)
+    _gravar(_com_perfil(novo, sessao), pasta)
     return novo["acesso"]
 
 
@@ -146,9 +278,21 @@ def tem_sessao(pasta=None) -> bool:
     return _ler(pasta) is not None
 
 
-def quem(pasta=None) -> str:
-    """E-mail de quem está usando, ou "" se ninguém entrou."""
-    return (_ler(pasta) or {}).get("email", "")
+def quem(pasta=None) -> Quem:
+    """Quem está usando: e-mail, nome, papel e situação. Vazio se ninguém.
+
+    Lê só o arquivo local — nunca a rede. O papel foi guardado ali por
+    `entrar()` ou pela renovação; ver o cabeçalho do módulo."""
+    guardada = _ler(pasta) or {}
+    return Quem(email=guardada.get("email", "") or "",
+                nome=guardada.get("nome", "") or "",
+                papel=guardada.get("papel", "") or "",
+                situacao=guardada.get("situacao", "") or "",
+                # Sessão de versão anterior não tem `user_id` gravado, mas o
+                # token dela tem: é o mesmo valor, e lê-lo de lá evita pedir
+                # a senha de novo só para saber o número de alguém.
+                user_id=(guardada.get("user_id")
+                         or _sub(guardada.get("acesso", ""))))
 
 
 def esquecer(pasta=None) -> None:

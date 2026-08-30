@@ -7,6 +7,7 @@ regra nenhuma.
 
     rest.py           HTTP: URL, cabeçalho, timeout, erro com nome
     sessao.py         entrar, sair, renovar; guarda o token cifrado
+                      e quem é a pessoa no cadastro (nome e papel)
     login_dialogo.py  a janela de login
     cache.py          a cópia local (os mesmos JSON/CSV de sempre)
     cadastro.py       contas, empresas, entidades e regras — LÊ, com cache

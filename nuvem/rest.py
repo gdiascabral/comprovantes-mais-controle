@@ -161,6 +161,28 @@ def apagar(tabela: str, token: str, filtro: str) -> None:
     _chamar("DELETE", f"/rest/v1/{tabela}?{filtro}", token)
 
 
+def perfil(token: str, user_id: str) -> dict | None:
+    """O perfil de quem é dono deste token: nome, papel e situação.
+
+    `None` quer dizer "o servidor respondeu, e essa pessoa não tem perfil" —
+    não confundir com "não deu para perguntar", que sai como exceção. Os dois
+    pedem coisas diferentes de quem chama, e é o `nuvem/sessao.py` que decide
+    o quê.
+
+    Filtra por `user_id` mesmo com a RLS já limitando cada um ao próprio
+    perfil, porque para o ADMIN ela não limita: ele lê a tabela inteira, que é
+    o que a fila de aprovação exige. Sem o filtro, o app do admin receberia a
+    lista toda e leria o papel da primeira linha que viesse — o de outra
+    pessoa.
+    """
+    if not user_id:
+        return None
+    linhas = ler("perfil", token,
+                 colunas="user_id,nome,email,papel,situacao",
+                 filtro=f"user_id=eq.{user_id}&limit=1")
+    return linhas[0] if linhas else None
+
+
 def chamar(funcao: str, token: str, **argumentos):
     """Executa uma função do banco e devolve o que ela retornou.
 

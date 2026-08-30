@@ -128,7 +128,7 @@ def pedir_login(root, pasta=None) -> bool:
     ttk.Label(quadro, text="E-mail", style="Apoio.TLabel").pack(anchor="w")
     campo_email = ttk.Entry(quadro, width=34, font=widgets.FONTE_SECAO)
     campo_email.pack(fill="x", pady=(0, 8))
-    campo_email.insert(0, sessao.quem(pasta))
+    campo_email.insert(0, sessao.quem(pasta).email)
 
     ttk.Label(quadro, text="Senha", style="Apoio.TLabel").pack(anchor="w")
     campo_senha = ttk.Entry(quadro, show="•", width=34, font=widgets.FONTE_SECAO)
