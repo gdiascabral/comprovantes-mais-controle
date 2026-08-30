@@ -837,24 +837,140 @@ def test_o_vencimento_sai_do_codigo_de_barras():
     assert j[91:99] != "00000000"
 
 
-def test_ficha_de_arrecadacao_nao_entra_na_remessa():
-    """Duas guias municipais viajaram como título de cobrança em 17/08/2026.
+# ------------------------------------------------------------- arrecadação
+# Em 17/08/2026 duas guias viajaram como TÍTULO DE COBRANÇA e o banco aceitou —
+# no produto errado. A resposta de então foi excluí-las da remessa, e era o
+# certo enquanto o app não sabia montar o outro produto. Desde 30/08/2026 sabe:
+# serviço 22, forma 11, segmento O (guia CNAB 240 v3.3, seção 9).
+#
+# O que estes testes guardam é a distinção que custou caro: o código de barras
+# NÃO denuncia a ficha (ela converte para 44 dígitos como qualquer boleto), e
+# quem a separa é o formato da linha — 48 dígitos começando em 8.
 
-    O banco aceitou — mas o produto certo é outro (segmento O, forma 11), e o
-    dono decidiu pagá-las à parte, pelo QR Code Pix. Elas saem da remessa com
-    o motivo escrito, em vez de irem no produto errado.
 
-    A conversão do código de barras NÃO as denuncia: ficha de arrecadação
-    converte para 44 dígitos como qualquer boleto. Quem separa é o formato da
-    linha — 48 dígitos começando em 8.
-    """
+def test_ficha_de_arrecadacao_entra_na_remessa():
+    """Ela deixou de ser impedimento. O produto é que é outro."""
     c, = preparar(registro(dados=LINHA_ARRECADACAO, valor=2670.86))
+    assert c.pode and c.marcado
+    assert c.arrecadacao, "a ficha precisa se declarar, senão vai no lote errado"
+    assert c.codigo_barras == ocr_boleto.codigo_de_barras(LINHA_ARRECADACAO)
+
+
+def test_boleto_bancario_nao_e_confundido_com_ficha():
+    """A outra metade da distinção: o boleto comum continua sendo boleto."""
+    c, = preparar(registro())
+    assert c.pode and not c.arrecadacao
+
+
+def test_a_ficha_vai_num_lote_proprio_com_servico_22_e_forma_11():
+    """Lote separado por exigência do LAYOUT, não por organização.
+
+    Serviço e forma moram no header do lote (seção 9.1), e header é por lote:
+    mandar a ficha junto dos boletos é declarar o produto errado no cabeçalho.
+    Foi exatamente isso que aconteceu em 17/08/2026.
+    """
+    from cnab240 import validar
+
+    linhas = preparar(registro(),
+                      registro(id="id-erp-2", dados=LINHA_ARRECADACAO,
+                               valor=2670.86, favorecido="CONCESSIONARIA X"))
+    arquivo = remessa_dia.montar_arquivo(pagador(), linhas, nsa=31, quando=HOJE)
+    assert [l.produto for l in arquivo.lotes] == ["TITULOS_COBRANCA",
+                                                  "CONVENIOS_COM_CODIGO_BARRAS"]
+    registros = arquivo.gerar()
+    assert validar(registros) == []
+
+    cabecalhos = [r for r in registros if r[7:8] == "1"]
+    assert cabecalhos[0][9:13] == "2031", "boleto: serviço 20, forma 31"
+    assert cabecalhos[1][9:13] == "2211", "arrecadação: serviço 22, forma 11"
+
+
+def test_a_ficha_sai_no_segmento_O_com_o_codigo_de_barras_inteiro():
+    """O que o banco lê para pagar. Errar aqui é pagar a conta de outro."""
+    linhas = preparar(registro(id="so-a-ficha", dados=LINHA_ARRECADACAO,
+                               valor=2670.86, favorecido="CONCESSIONARIA X"))
+    registros = remessa_dia.montar_arquivo(pagador(), linhas, nsa=1,
+                                           quando=HOJE).gerar()
+    o, = [r for r in registros if r[7:8] == "3" and r[13:14] == "O"]
+    assert o[17:61] == ocr_boleto.codigo_de_barras(LINHA_ARRECADACAO)   # 08.3O
+    assert o[61:91].strip() == "CONCESSIONARIA X"                       # 09.3O
+    assert o[99:107] == f"{HOJE:%d%m%Y}"                                # 11.3O
+    assert o[107:122] == "000000000267086"                              # 12.3O
+    assert len(o) == 240
+
+
+def test_a_ficha_sai_sem_vencimento_porque_ela_nao_tem():
+    """10.3O é "Data do Vencimento (Nominal)", e a ficha não carrega uma.
+
+    Só o boleto bancário tem fator de vencimento no código de barras. Zerado é
+    a resposta honesta; a data de hoje seria afirmar um vencimento que ninguém
+    verificou.
+    """
+    linhas = preparar(registro(id="so-a-ficha", dados=LINHA_ARRECADACAO,
+                               valor=2670.86))
+    registros = remessa_dia.montar_arquivo(pagador(), linhas, nsa=1,
+                                           quando=HOJE).gerar()
+    o, = [r for r in registros if r[7:8] == "3" and r[13:14] == "O"]
+    assert o[91:99] == "00000000"
+    # e o boleto bancário continua levando o dele — a regra não se inverteu
+    b, = preparar(registro())
+    assert b.vencimento is not None
+
+
+def test_a_concessionaria_que_o_banco_nao_aceita_fica_de_fora():
+    """A exceção nomeada. Some inteira no dia em que o Sicoob aceitar."""
+    c, = preparar(registro(dados=LINHA_ARRECADACAO, valor=99.10,
+                           favorecido="SANESC SANEAMENTO SA"))
     assert not c.pode
-    assert c.impedimento == remessa_dia.MOTIVO_ARRECADACAO
-    # e o motivo viaja para a lista do que ficou de fora
+    assert c.impedimento == remessa_dia.MOTIVO_SANESC
+    # continua se declarando ficha: o motivo fala de arrecadação, e a
+    # conferência precisa mostrar o produto ao lado dele
+    assert c.arrecadacao
     preparado = remessa_dia.preparar(
-        {CONTA: [registro(dados=LINHA_ARRECADACAO, valor=2670.86)]}, quando=HOJE)
-    assert remessa_dia.fora(preparado)[0]["motivo"] == remessa_dia.MOTIVO_ARRECADACAO
+        {CONTA: [registro(dados=LINHA_ARRECADACAO, favorecido="SANESC")]},
+        quando=HOJE)
+    assert remessa_dia.fora(preparado)[0]["motivo"] == remessa_dia.MOTIVO_SANESC
+
+
+@pytest.mark.parametrize("nome, recusa", [
+    ("SANESC", True),
+    ("sanesc saneamento sa", True),        # sem caixa
+    ("Companhia SANESC de Saneamento", True),   # por pedaço, no meio do nome
+    ("SANEAGO", False),
+    ("CONCESSIONARIA QUALQUER", False),
+    ("", False),
+])
+def test_a_regra_da_recusa_casa_por_pedaco_sem_caixa(nome, recusa):
+    """A mesma comparação que o resto do app usa para favorecido.
+
+    O ERP escreve o nome da concessionária de mais de um jeito; exigir
+    igualdade exata deixaria a exceção passar batido — e aí a ficha sairia num
+    arquivo que o banco recusa inteiro."""
+    assert bool(remessa_dia.arrecadacao_recusada(nome)) is recusa
+
+
+def test_a_recusa_nao_alcanca_o_boleto_bancario():
+    """A regra é da ARRECADAÇÃO. Um boleto comum desse favorecido continua
+    saindo — o que o banco não aceita é a ficha, não a empresa."""
+    c, = preparar(registro(favorecido="SANESC SANEAMENTO SA"))
+    assert c.pode and not c.arrecadacao
+
+
+def test_oc_e_centro_de_custo_viajam_para_a_conferencia():
+    """As duas colunas da tela saem do registro, e não de reparsear a
+    descrição — que é texto que o próprio `relatorio` acabou de montar."""
+    c, = preparar(registro(oc="5825", centro_custo="TB 21 QD 51 LT 40"))
+    assert c.oc == "5825"
+    assert c.centro_custo == "TB 21 QD 51 LT 40"
+
+
+def test_oc_e_centro_de_custo_tambem_no_que_ficou_de_fora():
+    """A linha impedida é a que MAIS precisa ser identificada: é sobre ela que
+    alguém vai ter de decidir alguma coisa depois."""
+    c, = preparar(registro(dados=LINHA_ARRECADACAO, favorecido="SANESC",
+                           oc="6001", centro_custo="QD 26A LT 12"))
+    assert not c.pode
+    assert (c.oc, c.centro_custo) == ("6001", "QD 26A LT 12")
 
 
 @pytest.mark.parametrize("linha, esperado", [

@@ -52,9 +52,30 @@ import regras_pagamento as regras
 MOTIVO_MAO = "a observação manda pagar outra pessoa"
 MOTIVO_PARCIAL = "pagamento parcial — boleto não se paga pela metade"
 MOTIVO_LINHA = "a linha digitável não fecha nos dígitos verificadores"
-MOTIVO_ARRECADACAO = ("ficha de arrecadação (tributo/concessionária) — sai da "
-                      "remessa por decisão do dono, que a paga à parte pelo "
-                      "QR Code Pix")
+#: A ficha de arrecadação (48 dígitos começando em 8) SAI na remessa desde
+#: 30/08/2026, no produto dela: segmento O, serviço 22, forma 11.
+#:
+#: Ela já saiu uma vez no produto ERRADO — em 17/08/2026 duas guias viajaram
+#: como título de cobrança, e o banco aceitou. A resposta de então foi excluí-la
+#: (`MOTIVO_ARRECADACAO`), o que era o certo enquanto o app não sabia montar o
+#: outro produto. Agora sabe, e a exclusão deixou de ser resposta: o conserto
+#: de mandar no produto errado é mandar no produto certo, não deixar de mandar.
+#:
+#: O que SEPARA os dois continua sendo o formato da linha, e não o favorecido:
+#: a conversão para 44 dígitos não denuncia nada, porque a ficha converte como
+#: qualquer boleto.
+
+#: A exceção, e é uma só: o Sicoob ainda não aceita pagar esta concessionária
+#: por arrecadação. Fica aqui como REGRA NOMEADA, e não espalhada numa
+#: condição, porque o dia em que o banco aceitar isto é uma linha a remover —
+#: some a tupla, some o motivo, e nada mais no módulo precisa saber.
+#:
+#: Casa por PEDAÇO do nome, sem acento e sem caixa, como o resto do app compara
+#: favorecido (`_chave`): o ERP escreve o nome da concessionária de mais de um
+#: jeito, e exigir igualdade exata deixaria a exceção passar batido.
+ARRECADACAO_NAO_ACEITA = ("SANESC",)
+MOTIVO_SANESC = "SANESC — o Sicoob ainda não aceita; pague à parte"
+
 MOTIVO_SEM_CHAVE = "sem dados de pagamento"
 MOTIVO_SEM_DOCUMENTO = ("o favorecido não está no cadastro de Contatos do ERP, "
                         "e o segmento B exige o CPF/CNPJ de quem recebe")
@@ -207,9 +228,18 @@ class Candidato:
     status: str
     obs: str = ""
     codigo_barras: str = ""
+    #: Ficha de arrecadação (48 dígitos começando em 8): vai no segmento O,
+    #: não no J. O `tipo` continua "Boleto" porque é o que a planilha
+    #: classificou e é por ele que a tela agrupa — o que muda é o PRODUTO.
+    arrecadacao: bool = False
     #: Só o boleto bancário tem: sai do fator de vencimento do código de
     #: barras. Ficha de arrecadação não carrega o campo, e fica None.
     vencimento: "_dt.date | None" = None
+    #: As duas colunas que a conferência mostra e que só existiam dentro da
+    #: `descricao`, coladas com o resto. Quem confere procura por OC e por
+    #: centro de custo — em coluna, não no meio de uma frase.
+    oc: str = ""
+    centro_custo: str = ""
     chave: str = ""
     documento_favorecido: str = ""
     forma_iniciacao: str = ""      # domínio G100 do segmento B
@@ -355,6 +385,17 @@ def forma_de_iniciacao(chave: str, documento_do_cadastro: str = "") -> str:
     return ""
 
 
+def arrecadacao_recusada(favorecido: str) -> str:
+    """O motivo de esta ficha não poder sair, ou "" quando pode.
+
+    Uma função, e não um `if` dentro do `_impedimento`, porque é ela que os
+    testes apontam e é ela que some inteira quando o banco passar a aceitar."""
+    alvo = _chave(favorecido)
+    if any(_chave(nome) in alvo for nome in ARRECADACAO_NAO_ACEITA):
+        return MOTIVO_SANESC
+    return ""
+
+
 def _impedimento(registro: dict, documento: str, forma: str) -> str:
     if registro.get("status", "").startswith("JÁ PAGO"):
         return MOTIVO_JA_PAGO
@@ -381,12 +422,12 @@ def _impedimento(registro: dict, documento: str, forma: str) -> str:
     if registro.get("tipo") == "Boleto":
         if registro.get("parcial"):
             return MOTIVO_PARCIAL
-        # Antes do código de barras: a ficha de arrecadação CONVERTE para 44
-        # dígitos como qualquer boleto, então a conversão não a denuncia. Foi
-        # assim que duas guias municipais viajaram como título de cobrança na
-        # remessa de 17/08/2026 — aceitas pelo banco, no produto errado.
+        # A ficha de arrecadação CONVERTE para 44 dígitos como qualquer boleto,
+        # então a conversão não a denuncia — quem a separa é o formato da linha.
+        # A separação continua valendo; o que mudou foi o desfecho: em vez de
+        # sair da remessa, ela vai para o lote do produto dela.
         if ocr_boleto.eh_arrecadacao(dados):
-            return MOTIVO_ARRECADACAO
+            return arrecadacao_recusada(registro.get("favorecido") or "")
         if not ocr_boleto.codigo_de_barras(dados):
             return MOTIVO_LINHA
         return ""
@@ -524,6 +565,14 @@ def preparar(contas: dict, participantes: dict | None = None,
                           _ja_enviado(historico, codigo, registro.get("id")))
 
             candidato = Candidato(
+                # Fora do `if not impedimento` de propósito: é o PRODUTO da
+                # linha, e não o veredito sobre ela. A ficha recusada continua
+                # sendo ficha, e a conferência precisa dizer isso ao lado do
+                # motivo — senão "o Sicoob ainda não aceita" fica sem sujeito.
+                arrecadacao=(registro.get("tipo") == "Boleto"
+                             and ocr_boleto.eh_arrecadacao(dados)),
+                oc=str(registro.get("oc") or ""),
+                centro_custo=str(registro.get("centro_custo") or ""),
                 id=str(registro.get("id") or ""),
                 conta_erp=conta,
                 tipo=registro.get("tipo") or "",
@@ -544,6 +593,8 @@ def preparar(contas: dict, participantes: dict | None = None,
                                                    candidato.descricao)
                 if candidato.tipo == "Boleto":
                     candidato.codigo_barras = codigo
+                    # `vencimento_da_linha` já devolve None para a ficha: só o
+                    # boleto bancário carrega o fator de vencimento.
                     candidato.vencimento = ocr_boleto.vencimento_da_linha(dados)
                     # Identifica o cedente no J-52. Vazio não impede o
                     # pagamento — o boleto se paga pelo código de barras —,
@@ -614,15 +665,20 @@ def _mensagem_do_lote(quando: _dt.date) -> str:
 
 def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
                    quando: _dt.date | None = None):
-    """Um `ArquivoRemessa` com até dois lotes: boletos e Pix.
+    """Um `ArquivoRemessa` com até TRÊS lotes: boletos, arrecadação e Pix.
 
     Um lote só aceita um tipo de transação, mas o mesmo arquivo aceita vários
     lotes — daí um arquivo por CONTA, e não um por produto. Confirmado contra
     o SicoobNet em 13/08/2026.
+
+    A ficha de arrecadação é o terceiro, e é lote SEPARADO por exigência do
+    layout, não por organização: ela muda o header do lote inteiro (serviço 22
+    e forma 11, seção 9.1 do guia v3.3), e header é por lote. Mandá-la junto
+    dos boletos foi o erro de 17/08/2026.
     """
     from cnab240 import (ArquivoRemessa, DadosJ52, Favorecido,
-                         FormaIniciacaoPix, FormaLancamento, PagamentoTitulo,
-                         PixTransferencia, TipoServico)
+                         FormaIniciacaoPix, FormaLancamento, PagamentoConvenio,
+                         PagamentoTitulo, PixTransferencia, TipoServico)
 
     quando = quando or _dt.date.today()
     marcados = [c for c in candidatos if c.marcado and c.pode]
@@ -632,7 +688,8 @@ def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
     empresa = pagador.como_empresa_cnab()
     arquivo = ArquivoRemessa(empresa, nsa=nsa, data_geracao=quando)
 
-    boletos = [c for c in marcados if c.tipo == "Boleto"]
+    boletos = [c for c in marcados if c.tipo == "Boleto" and not c.arrecadacao]
+    fichas = [c for c in marcados if c.tipo == "Boleto" and c.arrecadacao]
     pix = [c for c in marcados if c.tipo == "Pix"]
 
     if boletos:
@@ -666,6 +723,34 @@ def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
                              sacado_documento=empresa.documento,
                              cedente_nome=c.favorecido,
                              cedente_documento=c.documento_favorecido),
+            ))
+
+    if fichas:
+        # Serviço 22 e forma 11: os dois vêm da seção 9 do guia, e os dois
+        # moram no HEADER — é por isso que a ficha não cabe no lote do boleto.
+        lote = arquivo.novo_lote(
+            "CONVENIOS_COM_CODIGO_BARRAS",
+            tipo_servico=TipoServico.CONTAS_TRIBUTOS_IMPOSTOS,
+            forma_lancamento=FormaLancamento.CONTAS_TRIBUTOS_COD_BARRAS,
+            mensagem=_mensagem_do_lote(quando),
+        )
+        for c in fichas:
+            lote.adicionar(PagamentoConvenio(
+                valor=Decimal(str(c.valor)),
+                data_pagamento=quando,
+                seu_numero=c.seu_numero,
+                codigo_barras=c.codigo_barras,
+                # 09.3O, 30 posições: é o nome que aparece no extrato e no
+                # Internet Banking. O favorecido do lançamento É a
+                # concessionária — não há segundo cadastro a consultar.
+                nome_concessionaria=c.favorecido,
+                # 10.3O é "Data do Vencimento (Nominal)". A ficha de
+                # arrecadação NÃO carrega vencimento no código de barras (só o
+                # boleto bancário tem fator de vencimento), então aqui vai
+                # None e o campo sai zerado — que é o que o layout espera de
+                # um campo nominal que não se conhece. Inventar a data de hoje
+                # seria afirmar um vencimento que ninguém verificou.
+                vencimento=c.vencimento,
             ))
 
     if pix:

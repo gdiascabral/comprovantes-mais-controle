@@ -1028,6 +1028,13 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             "tipo": tipo, "dados": dados, "valor": valor,
             "descricao": descricao, "favorecido": favorecido,
             "status": status, "conferencia": conferencia, "obs": obs,
+            # OC e centro de custo SEPARADOS, além de dentro da `descricao`.
+            # A planilha continua lendo a descrição montada; quem precisa deles
+            # em coluna é a conferência da remessa, e extraí-los de volta de
+            # uma frase já formatada seria reparsear o que este módulo acabou
+            # de escrever — a mesma armadilha que o cabeçalho do arquivo avisa.
+            "oc": oc,
+            "centro_custo": centro_de_custo(item),
             # Não vão para a planilha: são para a remessa (`remessa_dia.py`).
             # O `id` é a única volta do arquivo de retorno até o lançamento,
             # e `parcial` decide se o título ainda pode ir como boleto — o
