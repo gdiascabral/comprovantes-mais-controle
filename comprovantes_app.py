@@ -2,10 +2,16 @@
 """
 Comprovantes — Mais Controle (app unificado)
 
-Janela única com navegação lateral:
+Janela em três faixas, no feitio de painel de controle:
 
-  Separar e Renomear   (separa páginas de PDF e renomeia os comprovantes)
-  Anexar Comprovantes  (busca os pagos no Mais Controle e anexa os PDFs)
+  a barra azul do topo   logotipo, busca, estado do navegador, quem entrou;
+  o menu branco (232 px) as dez telas, em quatro seções;
+  o painel cinza         a tela aberta, feita de cartões brancos.
+
+A primeira tela é o Início: quatro números do dia, a situação de cada rotina
+e o que aconteceu por último. As outras nove continuam sendo as mesmas, com
+o mesmo fluxo — o que mudou foi só a camada visual (ver `widgets.py`, que é
+onde moram TODAS as cores e fontes do app).
 
 Tema claro/escuro com opção "Automático" (segue o Windows), salvo em
 "preferencias.json" ao lado do executável.
@@ -20,7 +26,7 @@ from pathlib import Path
 _RAIZ = Path(__file__).resolve().parent
 for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
            _RAIZ / "relatorios", _RAIZ / "pagamentos_dia",
-           _RAIZ / "extratos_sicoob"):
+           _RAIZ / "extratos_sicoob", _RAIZ / "inicio"):
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -29,6 +35,7 @@ from tkinter import messagebox, ttk
 
 import widgets
 from nuvem import cadastro, login_dialogo, rest, sessao
+from inicio_frame import InicioFrame
 from separar_renomear import SepararFrame
 from anexar_comprovantes import AnexarFrame
 from conferencia import ConferenciaFrame
@@ -203,12 +210,29 @@ def main():
     except Exception as _e:
         _sinc = cadastro.Resultado(False, f"falha ao sincronizar: {_e}")
 
-    # ---------------- navegação lateral + área de conteúdo
-    lateral = ttk.Frame(root)
-    lateral.pack(side="left", fill="y", padx=(12, 4), pady=12)
-    conteudo = ttk.Frame(root)
+    # ---------------- a moldura: barra em cima, menu à esquerda, painel
+    #
+    # Três faixas, e cada uma responde a uma pergunta diferente:
+    #
+    #   a barra azul   onde estou, o que procuro, o app está livre?
+    #   o menu branco  para onde vou;
+    #   o painel       o que estou fazendo agora.
+    #
+    # Antes eram duas, e a coluna da esquerda acumulava navegação, tema,
+    # versão, usuário e estado do navegador. O estado do navegador era o pior
+    # deles: é a informação que se procura ANTES de clicar noutra aba, e
+    # ficava no ponto mais baixo da tela, longe dos itens do menu.
+    barra = widgets.BarraTopo(root)
+    barra.pack(side="top", fill="x")
+    corpo = ttk.Frame(root)
+    corpo.pack(side="top", fill="both", expand=True)
+
+    lateral = widgets.painel_menu(corpo, largura=232)
+    lateral.pack(side="left", fill="y")
+    conteudo = ttk.Frame(corpo, style="Fundo.TFrame")
     conteudo.pack(side="left", fill="both", expand=True)
 
+    aba_ini = InicioFrame(conteudo)
     aba_sep = SepararFrame(conteudo)
     aba_anx = AnexarFrame(conteudo)
     aba_conf = ConferenciaFrame(conteudo, aba_anx)
@@ -229,11 +253,12 @@ def main():
     # Acessórias também NÃO recebe o aba_anx: é o portal do escritório
     # contábil, terceiro site e terceiro login (ver acessorias/portal.py).
     aba_acs = AcessoriasFrame(conteudo)
-    quadros = {"sep": aba_sep, "anx": aba_anx, "conf": aba_conf,
-               "apt": aba_apt, "rel": aba_rel, "pag": aba_pag, "ext": aba_ext,
-               "con": aba_con, "ctr": aba_ctr, "acs": aba_acs}
+    quadros = {"ini": aba_ini, "sep": aba_sep, "anx": aba_anx,
+               "conf": aba_conf, "apt": aba_apt, "rel": aba_rel,
+               "pag": aba_pag, "ext": aba_ext, "con": aba_con,
+               "ctr": aba_ctr, "acs": aba_acs}
     atual = {"nome": None}
-    botoes = {}
+    itens = {}
 
     def mostrar(nome: str):
         if atual["nome"] == nome:
@@ -242,9 +267,9 @@ def main():
             f.pack_forget()
         quadros[nome].pack(fill="both", expand=True)
         atual["nome"] = nome
-        for n, b in botoes.items():
+        for n, it in itens.items():
             try:
-                b.configure(style="Accent.TButton" if n == nome else "TButton")
+                it.ativar(n == nome)
             except tk.TclError:
                 pass
         # Uma aba dentro de um grupo fechado ficaria selecionada e invisível na
@@ -252,6 +277,16 @@ def main():
         for gnome, g in grupos.items():
             if nome in g["itens"] and not g["aberto"]:
                 _alternar(gnome)
+        # O Início conta o que as outras telas fizeram, e o que elas fizeram
+        # muda enquanto ele está escondido. Recontar na hora de mostrar é
+        # barato (lê um arquivo local) e evita um número velho na primeira
+        # tela do app — que é justamente onde ele mais parece verdade.
+        atualizar = getattr(quadros[nome], "ao_abrir", None)
+        if atualizar is not None:
+            try:
+                atualizar()
+            except Exception:                             # noqa: BLE001
+                pass                     # tela de resumo não derruba o app
         # `after_idle`: a aba acabou de ser empacotada e ainda não tem
         # geometria, e é a geometria que decide qual campo é o de cima.
         root.after_idle(lambda: _focar_primeiro(quadros[nome]))
@@ -262,27 +297,27 @@ def main():
         except tk.TclError:
             pass                         # aba fechando enquanto o idle rodava
 
-    ttk.Label(lateral, text="🧾  Comprovantes", style="Titulo.TLabel"
-              ).pack(anchor="w", pady=(0, 14))
-
     # Ícone e nome ficam guardados separados porque o lugar do ícone é também
     # onde entra a marca de "esta aba está trabalhando agora" (ver `_pulso`).
-    icones: dict[str, str] = {}
     nomes: dict[str, str] = {}
 
     def _item(pai, chave: str, icone: str, texto: str, recuo: int = 0):
-        b = ttk.Button(pai, text=f"{icone}   {texto}", width=24,
-                       command=lambda: mostrar(chave))
-        b.pack(fill="x", padx=(recuo, 0), pady=(0, 6), ipady=3)
-        botoes[chave] = b
-        icones[chave] = icone
+        it = widgets.ItemMenu(pai, texto, icone=icone, recuo=recuo,
+                              comando=lambda: mostrar(chave))
+        it.pack(fill="x")
+        itens[chave] = it
         nomes[chave] = texto
 
+    lateral.secao("Visão geral")
+    _item(lateral.corpo, "ini", "▦", "Início")
+    lateral.secao("Comprovantes")
+    # Os rótulos encurtaram junto com a coluna: "Anexar Comprovantes" dentro
+    # de um menu chamado COMPROVANTES repetia a palavra em duas alturas.
     for _chave, _icone, _texto in (("sep", "✂", "Separar e Renomear"),
-                                   ("anx", "📎", "Anexar Comprovantes"),
+                                   ("anx", "📎", "Anexar"),
                                    ("conf", "✅", "Conferência"),
                                    ("apt", "💰", "Aportes")):
-        _item(lateral, _chave, _icone, _texto)
+        _item(lateral.corpo, _chave, _icone, _texto)
 
     # ---- grupos que abrem e fecham
     # As rotinas de fechamento são muitas para uma lista plana, e cada uma se
@@ -304,62 +339,69 @@ def main():
             prefs.setdefault("grupos", {})[nome] = g["aberto"]
             _salvar_prefs(prefs)
 
-    def _grupo(nome: str, rotulo: str, itens):
+    def _grupo(nome: str, rotulo: str, itens_do_grupo):
         titulo = lambda aberto: f"{'▾' if aberto else '▸'}  {rotulo}"  # noqa: E731
         # Continua sendo um Button — ele abre e fecha o grupo, e trocar por um
         # Label com bind de clique tiraria o item do Tab e do Espaço. O que
-        # muda é o ESTILO: chapado e miúdo, para DIÁRIO e MENSAL pararem de
-        # parecer irmãos das abas que eles agrupam.
-        cab = ttk.Button(lateral, style="Grupo.Toolbutton",
+        # muda é o ESTILO: chapado e miúdo, para DIÁRIO e MENSAL parecerem os
+        # rótulos de seção que estão logo acima deles, e não itens clicáveis
+        # do mesmo nível das abas que eles agrupam.
+        cab = ttk.Button(lateral.corpo, style="Grupo.Toolbutton",
                          command=lambda: _alternar(nome))
-        cab.pack(fill="x", pady=(14, 2))
+        cab.pack(fill="x", pady=(12, 2), padx=(10, 8))
+        corpo_g = tk.Frame(lateral.corpo, background=widgets.cores()["cartao"],
+                           highlightthickness=0)
+        grupos[nome] = {"cabecalho": cab, "corpo": corpo_g, "titulo": titulo,
+                        "aberto": False,
+                        "itens": [c for c, _, _ in itens_do_grupo]}
         # O recuo é o que diz "estes pertencem àquele": sem ele, fechar o
         # grupo era a única pista de que existia um grupo.
-        corpo = ttk.Frame(lateral)
-        grupos[nome] = {"cabecalho": cab, "corpo": corpo, "titulo": titulo,
-                        "aberto": False, "itens": [c for c, _, _ in itens]}
-        for chave, icone, texto in itens:
-            _item(corpo, chave, icone, texto, recuo=10)
+        for chave, icone, texto in itens_do_grupo:
+            _item(corpo_g, chave, icone, texto, recuo=10)
         cab.configure(text=titulo(False))
         if prefs_grupos.get(nome, True):          # por padrão, abertos
             _alternar(nome, salvar=False)
 
     # Os rótulos dizem o que a aba FAZ hoje, e não o que ela fazia quando
-    # nasceu: "Pagamentos do Dia" gera a planilha do dia e também a remessa e o
-    # retorno CNAB, e "Conciliação Diária" existe para dizer quanto falta em
+    # nasceu: "Remessa/Retorno" gera a planilha do dia e também a remessa e o
+    # retorno CNAB, e "Saldo de pagamentos" existe para dizer quanto falta em
     # cada conta para os pagamentos do dia fecharem.
     _grupo("diario", "DIÁRIO", (("pag", "🗓", "Remessa/Retorno"),
-                                ("con", "⚖", "Controle de saldo pgtos")))
+                                ("con", "⚖", "Saldo de pagamentos")))
     _grupo("mensal", "MENSAL", (("rel", "📊", "Relatório Mensal"),
                                 ("ext", "🏦", "Extratos Sicoob"),
                                 ("ctr", "📑", "Contratos"),
                                 ("acs", "📤", "Acessorias")))
 
-    # ---------------- rodapé da barra: atividade + tema + versão
-    rodape = ttk.Frame(lateral)
-    rodape.pack(side="bottom", fill="x", pady=(10, 0))
-    lbl_atividade = ttk.Label(rodape, style="Tenue.TLabel", justify="left",
-                              wraplength=172, text="Navegador livre")
-    lbl_atividade.pack(anchor="w", pady=(0, 10))
-    ttk.Label(rodape, text="Tema").pack(anchor="w")
-    combo_tema = ttk.Combobox(rodape, state="readonly", width=19,
+    # ---------------- canto direito da barra: navegador, versão, quem entrou
+    chip = widgets.ChipStatus(barra.direita)
+    chip.pack(side="left", padx=(0, 18), pady=14)
+    if _v:
+        ttk.Label(barra.direita, text=_v, style="BarraTenue.TLabel"
+                  ).pack(side="left", padx=(0, 16), pady=14)
+    _quem = sessao.quem(_pasta_dados()) or ""
+    widgets.Avatar(barra.direita, _quem).pack(side="left", pady=11)
+    ttk.Label(barra.direita, text=_quem.split("@")[0][:22],
+              style="Barra.TLabel").pack(side="left", padx=(8, 0), pady=14)
+
+    # ---------------- rodapé do menu: tema e situação do cadastro
+    ttk.Label(lateral.rodape, text="TEMA", style="MenuSecao.TLabel"
+              ).pack(anchor="w", pady=(0, 3))
+    combo_tema = ttk.Combobox(lateral.rodape, state="readonly", width=19,
                               values=["Automático (sistema)", "Claro", "Escuro"])
     _ordem = ["auto", "claro", "escuro"]
     combo_tema.current(_ordem.index(escolha_tema)
                        if escolha_tema in _ordem else 0)
-    combo_tema.pack(pady=(2, 8))
-    if _v:
-        ttk.Label(rodape, text=f"versão {_v}", style="Tenue.TLabel"
-                  ).pack(anchor="w")
+    combo_tema.pack(anchor="w", pady=(0, 8))
     # Cadastro velho não impede o app de rodar, mas quem está conferindo um
     # fechamento precisa saber que a conta nova cadastrada hoje pode não estar
     # aqui. Sem este aviso, "usando a cópia" é indistinguível de "tudo certo".
     if _sinc.usando_copia:
-        ttk.Label(rodape, style="Erro.TLabel", justify="left", wraplength=172,
-                  text="⚠ cadastro offline\n(usando a última cópia)"
-                  ).pack(anchor="w", pady=(6, 0))
-    ttk.Label(rodape, text=sessao.quem(_pasta_dados()), style="Tenue.TLabel",
-              wraplength=172, justify="left").pack(anchor="w", pady=(6, 0))
+        widgets.Pilula(lateral.rodape, "⚠  cadastro offline", "atencao"
+                       ).pack(anchor="w")
+    else:
+        widgets.Pilula(lateral.rodape, "✓  cadastro sincronizado", "ok"
+                       ).pack(anchor="w")
 
     def aplicar_tema(escolha: str):
         efetivo = tema_efetivo(escolha)
@@ -370,9 +412,7 @@ def main():
         widgets.aplicar_estilos(efetivo == "dark")
         widgets.barra_de_titulo(root, efetivo == "dark")
         try:                             # fundo da janela na cor exata do tema
-            cor = ttk.Style().lookup("TFrame", "background")
-            if cor:
-                root.configure(background=cor)
+            root.configure(background=widgets.cores()["fundo"])
         except tk.TclError:
             pass
         escuro = efetivo == "dark"
@@ -391,11 +431,11 @@ def main():
     combo_tema.bind("<<ComboboxSelected>>", trocar_tema)
 
     # ---------------- onde o trabalho está acontecendo
-    # Nove abas dividem UM navegador (o ERP aceita uma sessão por usuário), e
+    # Dez abas dividem UM navegador (o ERP aceita uma sessão por usuário), e
     # até aqui isso só aparecia quando já era tarde: a pessoa clicava numa
-    # segunda aba e levava o aviso "Navegador ocupado". A barra agora responde
-    # a pergunta ANTES do clique — a aba que trabalha troca o ícone por ●, e o
-    # rodapé diz o que ela está fazendo.
+    # segunda aba e levava o aviso "Navegador ocupado". A barra de cima agora
+    # responde a pergunta ANTES do clique — a aba que trabalha troca o ícone
+    # por ●, e o chip diz o que ela está fazendo.
     por_frame = {id(f): n for n, f in quadros.items()}
     _reticencias = ("", ".", "..", "...")
     pulso = {"i": 0}
@@ -427,19 +467,17 @@ def main():
 
     def _pulso():
         chave, tarefa = _quem_trabalha()
-        for n, b in botoes.items():
-            alvo = f"{'●' if n == chave else icones[n]}   {nomes[n]}"
-            if b.cget("text") != alvo:   # só toca no que mudou: reconfigurar
-                b.configure(text=alvo)   # nove botões a cada 600 ms pisca
+        for n, it in itens.items():
+            try:
+                it.trabalhando(n == chave)
+            except tk.TclError:
+                pass
         if tarefa:
             pulso["i"] = (pulso["i"] + 1) % len(_reticencias)
-            lbl_atividade.configure(
-                style="Ativo.TLabel",
-                text=f"▶  {tarefa}{_reticencias[pulso['i']]}")
+            chip.definir(f"{tarefa}{_reticencias[pulso['i']]}", True)
         else:
             pulso["i"] = 0
-            lbl_atividade.configure(style="Tenue.TLabel",
-                                    text="Navegador livre")
+            chip.definir("Navegador livre", False)
         root.after(600, _pulso)
 
     def _enter_aciona(_ev=None):
@@ -472,9 +510,21 @@ def main():
                 return
 
     root.bind_all("<Return>", _enter_aciona)
+    # Ctrl+K é o atalho que a própria barra anuncia no texto do campo. Vai no
+    # `bind_all` para valer com o foco em qualquer lugar — inclusive dentro de
+    # um campo de texto, que é de onde ele mais se usa.
+    root.bind_all("<Control-k>", barra.focar_busca)
+    root.bind_all("<Control-K>", barra.focar_busca)
+    # A busca ainda não procura nada: leva o foco para o primeiro campo da
+    # tela aberta. Está na barra porque o LUGAR dela é decisão de layout, e
+    # deixá-la para depois obrigaria a mexer de novo em tudo o que está à
+    # direita e à esquerda dela. O que ela vai procurar é assunto de quem
+    # tiver um índice para procurar — hoje ninguém tem.
+    barra.ao_buscar = lambda _termo: _focar_primeiro(quadros[atual["nome"]])
+    aba_ini.definir_navegacao(mostrar)
 
     aplicar_tema(escolha_tema)
-    mostrar("sep")
+    mostrar("ini")
     _pulso()
 
     def _sair():
