@@ -128,13 +128,10 @@ class JanelaResolver(tk.Toplevel):
         rod = ttk.Frame(self); rod.pack(fill="x", padx=12, pady=(4, 12))
         self.lbl = ttk.Label(rod, style="Apoio.TLabel", text="")
         self.lbl.pack(side="left")
-        ttk.Button(rod, text="Cancelar", command=self.destroy).pack(side="right")
-        b = ttk.Button(rod, text="Confirmar", command=self._confirmar)
-        b.pack(side="right", padx=8)
-        try:
-            b.configure(style="Accent.TButton")
-        except tk.TclError:
-            pass
+        widgets.Botao(rod, "Confirmar", papel="acao", command=self._confirmar
+                      ).pack(side="right")
+        widgets.Botao(rod, "Cancelar", papel="neutro", command=self.destroy
+                      ).pack(side="right", padx=(0, 8))
 
     # ----------------------------------------------------------------- lista
     def _encher(self):

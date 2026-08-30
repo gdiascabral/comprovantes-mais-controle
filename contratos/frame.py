@@ -131,42 +131,53 @@ class ContratosFrame(ttk.Frame):
         self.cab = widgets.Cabecalho(
             self, "Contratos de Financiamento",
             "Acha o contrato das casas que financiaram no mês, confere o "
-            "conteúdo e arquiva na pasta da empresa.")
-        self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
+            "conteúdo e arquiva na pasta da empresa.",
+            trilha="Mensal  ›  Contratos")
+        self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        self.b1 = widgets.Botao(self.cab.acoes, "Buscar", papel="passo",
+                                command=self.buscar)
+        self.b1.pack(side="left", padx=(0, 8))
+        self.b2 = widgets.Botao(self.cab.acoes, "Conferir e arquivar",
+                                papel="acao", command=self.arquivar,
+                                state="disabled")
+        self.b2.pack(side="left")
 
-        # Cartões sem número: quem numera é a trilha de ações, no fim do build.
-        f1 = widgets.Cartao(self, "Mês")
-        f1.pack(fill="x", padx=PADX, pady=6)
-        linha = ttk.Frame(f1); linha.pack(fill="x")
-        ttk.Label(linha, text="Mês:").pack(side="left")
-        ttk.Combobox(linha, textvariable=self.v_mes, values=MESES,
-                     state="readonly", width=12).pack(side="left", padx=(6, 14))
-        ttk.Label(linha, text="Ano:").pack(side="left")
+        # Os cartões é que passam a ser numerados; os botões dizem o verbo.
+        f1 = widgets.Cartao(self, "Mês", 1)
+        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        linha = ttk.Frame(f1)
+        linha.pack(fill="x")
+        widgets.Campo(linha, "Mês", lambda p: ttk.Combobox(
+            p, textvariable=self.v_mes, values=MESES, state="readonly",
+            width=12)).pack(side="left", padx=(0, 16))
         anos = [str(a) for a in range(datetime.date.today().year + 1, 2019, -1)]
-        ttk.Combobox(linha, textvariable=self.v_ano, values=anos,
-                     state="readonly", width=7).pack(side="left", padx=(6, 14))
-        ttk.Label(linha, style="Apoio.TLabel",
-                  text="data do RECEBIMENTO do financiamento").pack(side="left")
+        widgets.Campo(linha, "Ano", lambda p: ttk.Combobox(
+            p, textvariable=self.v_ano, values=anos, state="readonly",
+            width=7)).pack(side="left", padx=(0, 16))
+        ttk.Label(linha, style="Tenue.TLabel",
+                  text="data do RECEBIMENTO do financiamento"
+                  ).pack(side="left", pady=(15, 0))
 
         f2 = widgets.Cartao(
-            self, "Casas com financiamento no mês "
-                  "(marque as que entram no arquivamento)",
-            padding=(10, 6, 10, 10))
-        f2.pack(fill="both", expand=True, padx=PADX, pady=6)
+            self, "Casas com financiamento no mês — marque as que entram", 2,
+            padding=(16, 14))
+        f2.pack(fill="both", expand=True, padx=PADX, pady=(0, 12))
         grade = ttk.Frame(f2); grade.pack(fill="both", expand=True)
         colunas = ("marca", "obra", "casa", "comprador", "valor", "empresa",
                    "situacao")
         self.tabela = ttk.Treeview(grade, columns=colunas, show="headings",
                                    height=9)
-        for col, titulo, larg in (("marca", "✔", 34), ("obra", "Obra", 180),
-                                  ("casa", "Casa", 55),
-                                  ("comprador", "Comprador", 200),
-                                  ("valor", "Financiamento", 105),
-                                  ("empresa", "Empresa", 125),
-                                  ("situacao", "Contrato / motivo", 300)):
+        for col, titulo, larg, ancora in (
+                ("marca", "✔", 34, "center"), ("obra", "OBRA", 180, "w"),
+                ("casa", "CASA", 55, "w"),
+                ("comprador", "COMPRADOR", 200, "w"),
+                ("valor", "FINANCIAMENTO", 115, "e"),
+                ("empresa", "EMPRESA", 125, "w"),
+                ("situacao", "CONTRATO / MOTIVO", 300, "w")):
             self.tabela.heading(col, text=titulo)
-            self.tabela.column(col, width=larg, anchor="w", stretch=col != "marca")
-        self.tabela.column("marca", anchor="center")
+            self.tabela.column(col, width=larg, anchor=ancora,
+                               stretch=col != "marca")
+        widgets.estilo_tabela(self.tabela)
         self.tabela.pack(fill="both", expand=True, side="left")
         ttk.Scrollbar(grade, orient="vertical", command=self.tabela.yview
                       ).pack(side="right", fill="y")
@@ -177,56 +188,39 @@ class ContratosFrame(ttk.Frame):
         self.tabela.bind("<space>", lambda _e: self._alternar_selecionada())
         self.tabela.bind("<Double-1>", self._duplo_clique)
 
-        pe = ttk.Frame(f2); pe.pack(fill="x", pady=(6, 0))
-        self.lbl_marcadas = ttk.Label(pe, style="Apoio.TLabel", text="")
-        self.lbl_marcadas.pack(side="right")
-        ttk.Button(pe, text="Marcar todas",
-                   command=lambda: self._marcar_todas(True)).pack(side="left")
-        ttk.Button(pe, text="Desmarcar todas",
-                   command=lambda: self._marcar_todas(False)
-                   ).pack(side="left", padx=6)
-        self.b_resolver = ttk.Button(pe, text="Resolver esta casa…",
-                                     command=self._resolver, state="disabled")
-        self.b_resolver.pack(side="left", padx=(14, 0))
+        pe = widgets.RodapeTabela(f2)
+        pe.pack(fill="x", pady=(10, 0))
+        self.lbl_marcadas = pe.resumo
+        pe.link("Marcar todas", lambda: self._marcar_todas(True))
+        pe.link("Desmarcar todas", lambda: self._marcar_todas(False))
+        self.b_resolver = pe.link("Resolver esta casa…", self._resolver)
+        self.b_resolver.configure(state="disabled")
         self.tabela.bind("<<TreeviewSelect>>", lambda _e: self._atualizar_resolver())
 
-        acao = ttk.Frame(self)
-        acao.pack(side="bottom", fill="x", padx=PADX, pady=(6, 12))
-        prog = ttk.Frame(acao); prog.pack(side="bottom", fill="x", pady=(8, 0))
-        self.lbl = ttk.Label(prog, text="Pronto.")
-        self.lbl.pack(side="left")
-        self.pb = ttk.Progressbar(prog, mode="determinate")
-        self.pb.pack(side="left", fill="x", expand=True, padx=12)
-
-        btns = ttk.Frame(acao); btns.pack(fill="x")
-        self.b1 = ttk.Button(btns, text="▶ 1. Buscar", command=self.buscar)
-        self.b1.pack(side="left")
-        self.b2 = ttk.Button(btns, text="▶ 2. Conferir e arquivar",
-                             command=self.arquivar, state="disabled")
-        self.b2.pack(side="left", padx=10)
-        self.b_stop = ttk.Button(btns, text="⏹ Parar", command=self._parar_click,
-                                 state="disabled")
+        # ---- barra de execução, acima do registro
+        acao = ttk.Frame(self, style="Fundo.TFrame")
+        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        btns = ttk.Frame(acao, style="Fundo.TFrame")
+        btns.pack(side="right", padx=(16, 0))
+        self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
+                                    command=self._parar_click, state="disabled")
         self.b_stop.pack(side="left")
-        self.b_abrir = ttk.Button(btns, text="📂 Abrir pasta",
-                                  command=self._abrir_pasta, state="disabled")
-        self.b_abrir.pack(side="left", padx=(10, 0))
-        for b in (self.b1, self.b2):
-            try:
-                b.configure(style="Accent.TButton")
-            except tk.TclError:
-                pass
+        self.b_abrir = widgets.Botao(btns, "📂  Abrir pasta", papel="neutro",
+                                     command=self._abrir_pasta,
+                                     state="disabled")
+        self.b_abrir.pack(side="left", padx=(8, 0))
+        self.barra_exec = widgets.BarraExecucao(acao)
+        self.barra_exec.pack(side="left", fill="x", expand=True)
+        self.lbl = self.barra_exec.lbl
+        self.pb = self.barra_exec.pb
 
-        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
-
-        widgets.Passos(self.cab, (("Buscar", self.b1),
-                                  ("Conferir e arquivar", self.b2))
-                       ).pack(anchor="w", pady=(8, 0))
 
     def aplicar_cores(self, escuro: bool):
         try:
@@ -248,9 +242,10 @@ class ContratosFrame(ttk.Frame):
                 elif tipo == "status":
                     self.lbl.config(text=val)
                 elif tipo == "max":
-                    self.pb.config(maximum=max(val, 1), value=0)
+                    self._total = max(val, 1)
+                    self.pb.config(maximum=self._total, value=0)
                 elif tipo == "prog":
-                    self.pb.config(value=val)
+                    self.barra_exec.progresso(val, getattr(self, "_total", 1))
                 elif tipo == "lista":
                     self._mostrar(val)
                 elif tipo == "botoes":
@@ -262,6 +257,10 @@ class ContratosFrame(ttk.Frame):
                 elif tipo == "pasta":
                     self.ultima_pasta = val
                     self.b_abrir.config(state="normal" if val else "disabled")
+                    if val:
+                        widgets.registrar_atividade(
+                            "ctr", "Arquivar contratos", "ok",
+                            str(self.lbl.cget("text"))[:120])
                 elif tipo == "resolver":
                     # Recado do download que roda na thread do navegador. Vai
                     # para a janela se ela ainda estiver aberta; senão, para o
@@ -290,11 +289,19 @@ class ContratosFrame(ttk.Frame):
             situacao = a.revisao or (a.contrato or "—")
             if a.arquivado:
                 situacao = "arquivado: " + Path(a.destino).name
+            # A cor da linha vem da SITUAÇÃO, pelo mesmo de-para que as
+            # outras tabelas usam: arquivado é verde, "precisa de revisão" é
+            # âmbar, sem contrato é vermelho.
+            estado = ("ok" if a.arquivado else
+                      "atencao" if a.revisao else
+                      "info" if a.contrato else "erro")
             self.tabela.insert(
                 "", "end", iid=str(n),
                 values=(_MARCA[a.marcado], i.obra, i.rotulo, i.comprador,
                         f"{i.valor_financiamento:,.2f}",
-                        a.empresa or "—", situacao))
+                        a.empresa or "—",
+                        f"{widgets.MARCAS_ESTADO[estado]}  {situacao}"),
+                tags=widgets.linha_zebrada(n, estado))
         self._contar()
         self._atualizar_resolver()
 
@@ -308,8 +315,10 @@ class ContratosFrame(ttk.Frame):
 
     def _contar(self):
         marcadas = sum(1 for a in self.achados if a.marcado)
+        fora = len(self.achados) - marcadas
         self.lbl_marcadas.config(
-            text=f"{marcadas} de {len(self.achados)} marcada(s)"
+            text=(f"{marcadas} de {len(self.achados)} marcada(s)"
+                  + (f"  ·  {fora} ficam de fora" if fora else ""))
             if self.achados else "")
 
     def _alternar(self, iid: str):

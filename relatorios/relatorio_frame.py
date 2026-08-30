@@ -108,36 +108,46 @@ class RelatorioFrame(ttk.Frame):
         self.cab = widgets.Cabecalho(
             self, "Relatório Mensal",
             "Baixa o extrato de cada conta bancária do período, com todos os "
-            "lançamentos, num PDF por conta.")
-        self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
+            "lançamentos, num PDF por conta.",
+            trilha="Mensal  ›  Relatório Mensal")
+        self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        self.b1 = widgets.Botao(self.cab.acoes, "Carregar contas",
+                                papel="passo", command=self.carregar)
+        self.b1.pack(side="left", padx=(0, 8))
+        self.b2 = widgets.Botao(self.cab.acoes, "Gerar os extratos",
+                                papel="acao", command=self.gerar,
+                                state="disabled")
+        self.b2.pack(side="left")
 
-        # Cartões sem número: quem numera é a trilha de ações, no fim do build.
-        f1 = widgets.Cartao(self, "Período")
-        f1.pack(fill="x", padx=PADX, pady=6)
+        # Os cartões é que passam a ser numerados; os botões dizem o verbo.
+        f1 = widgets.Cartao(self, "Período", 1)
+        f1.pack(fill="x", padx=PADX, pady=(0, 12))
 
-        linha = ttk.Frame(f1); linha.pack(fill="x")
-        ttk.Label(linha, text="Mês:").pack(side="left")
-        self.cb_mes = ttk.Combobox(linha, textvariable=self.v_mes, values=MESES,
-                                   state="readonly", width=12)
-        self.cb_mes.pack(side="left", padx=(6, 14))
-        ttk.Label(linha, text="Ano:").pack(side="left")
+        linha = ttk.Frame(f1)
+        linha.pack(fill="x")
+        campo_mes = widgets.Campo(linha, "Mês", lambda p: ttk.Combobox(
+            p, textvariable=self.v_mes, values=MESES, state="readonly",
+            width=12))
+        campo_mes.pack(side="left", padx=(0, 16))
+        self.cb_mes = campo_mes.widget
         anos = [str(a) for a in range(datetime.date.today().year + 1, 2019, -1)]
-        self.cb_ano = ttk.Combobox(linha, textvariable=self.v_ano, values=anos,
-                                   state="readonly", width=7)
-        self.cb_ano.pack(side="left", padx=(6, 14))
+        campo_ano = widgets.Campo(linha, "Ano", lambda p: ttk.Combobox(
+            p, textvariable=self.v_ano, values=anos, state="readonly", width=7))
+        campo_ano.pack(side="left", padx=(0, 16))
+        self.cb_ano = campo_ano.widget
         self.lbl_periodo = ttk.Label(linha, style="Apoio.TLabel")
-        self.lbl_periodo.pack(side="left")
+        self.lbl_periodo.pack(side="left", pady=(15, 0))
 
-        pers = ttk.Frame(f1); pers.pack(fill="x", pady=(8, 0))
+        pers = ttk.Frame(f1)
+        pers.pack(fill="x", pady=(12, 0))
         ttk.Checkbutton(pers, text="Usar um intervalo de datas em vez do mês inteiro",
                         variable=self.v_personalizado,
                         command=self._alternar_periodo).pack(anchor="w")
         self.f_datas = ttk.Frame(f1)
-        ttk.Label(self.f_datas, text="De:").pack(side="left")
-        CampoData(self.f_datas, self.v_ini).pack(side="left", padx=(6, 14))
-        ttk.Label(self.f_datas, text="até:").pack(side="left")
-        CampoData(self.f_datas, self.v_fim).pack(side="left", padx=(6, 8))
-        ttk.Label(self.f_datas, text="(dd/mm/aaaa)", style="Apoio.TLabel").pack(side="left")
+        widgets.Campo(self.f_datas, "De", lambda p: CampoData(p, self.v_ini)
+                      ).pack(side="left", padx=(0, 16))
+        widgets.Campo(self.f_datas, "Até", lambda p: CampoData(p, self.v_fim)
+                      ).pack(side="left")
 
         for var in (self.v_mes, self.v_ano):
             var.trace_add("write", lambda *_: self._atualizar_rotulo())
@@ -145,8 +155,10 @@ class RelatorioFrame(ttk.Frame):
 
         # ---- card 2: contas
         self.f_contas = f2 = widgets.Cartao(
-            self, "Contas bancárias (marque as desejadas)")
-        f2.pack(fill="x", padx=PADX, pady=6)
+            self, "Contas bancárias — marque as desejadas", 2)
+        f2.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.rodape_contas = widgets.RodapeTabela(f2.acoes)
+        self.rodape_contas.pack()
 
         # Lista rolável: são ~34 contas, com nomes longos. Antes de carregar
         # ela é uma frase só, e cresce em `_montar_contas`.
@@ -167,63 +179,49 @@ class RelatorioFrame(ttk.Frame):
         # A barra de rolagem só entra junto com a lista: numa faixa de 24 px
         # ela vira duas setinhas espremidas ao lado de uma frase.
         self.lbl_vazio = ttk.Label(
-            self.contas_box, text='Clique em "1. Carregar contas" para listar as contas.')
+            self.contas_box, style="Tenue.TLabel",
+            text='Clique em "Carregar contas" para listar as contas.')
         self.lbl_vazio.pack(anchor="w")
 
         # ---- card 3: destino
         # O destino não é mais escolhido à mão: cada conta tem o seu, definido
         # em contas_mc.json. O campo virou informação, não decisão.
-        f3 = widgets.Cartao(self, "Onde salva")
-        f3.pack(fill="x", padx=PADX, pady=6)
+        f3 = widgets.Cartao(self, "Onde salva", 3)
+        f3.pack(fill="x", padx=PADX, pady=(0, 12))
         ttk.Entry(f3, textvariable=self.v_pasta, state="readonly"
                   ).pack(side="left", fill="x", expand=True)
-        ttk.Label(f3, style="Apoio.TLabel",
+        ttk.Label(f3, style="Tenue.TLabel",
                   text="  cada conta vai para a pasta da sua empresa"
                   ).pack(side="left")
 
-        # ---- barra de ação
-        acao = ttk.Frame(self)
-        acao.pack(side="bottom", fill="x", padx=PADX, pady=(6, 12))
-        prog = ttk.Frame(acao); prog.pack(side="bottom", fill="x", pady=(8, 0))
-        self.lbl = ttk.Label(prog, text="Pronto.")
-        self.lbl.pack(side="left")
-        self.pb = ttk.Progressbar(prog, mode="determinate")
-        self.pb.pack(side="left", fill="x", expand=True, padx=12)
-
-        btns = ttk.Frame(acao); btns.pack(fill="x")
-        self.b1 = ttk.Button(btns, text="▶ 1. Carregar contas", command=self.carregar)
-        self.b1.pack(side="left")
-        self.b2 = ttk.Button(btns, text="▶ 2. Gerar os extratos", command=self.gerar,
-                             state="disabled")
-        self.b2.pack(side="left", padx=10)
-        self.b_stop = ttk.Button(btns, text="⏹ Parar", command=self._parar_click,
-                                 state="disabled")
+        # ---- barra de execução, acima do registro
+        acao = ttk.Frame(self, style="Fundo.TFrame")
+        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        btns = ttk.Frame(acao, style="Fundo.TFrame")
+        btns.pack(side="right", padx=(16, 0))
+        self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
+                                    command=self._parar_click, state="disabled")
         self.b_stop.pack(side="left")
-        self.b_abrir = ttk.Button(btns, text="📂 Abrir pasta", command=self._abrir_pasta,
-                                  state="disabled")
-        self.b_abrir.pack(side="left", padx=(10, 0))
-        for b in (self.b1, self.b2):
-            try:
-                b.configure(style="Accent.TButton")
-            except tk.TclError:
-                pass
+        self.b_abrir = widgets.Botao(btns, "📂  Abrir pasta", papel="neutro",
+                                     command=self._abrir_pasta, state="disabled")
+        self.b_abrir.pack(side="left", padx=(8, 0))
+        self.barra_exec = widgets.BarraExecucao(acao)
+        self.barra_exec.pack(side="left", fill="x", expand=True)
+        self.lbl = self.barra_exec.lbl
+        self.pb = self.barra_exec.pb
 
         # ---- registro
-        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
 
-        widgets.Passos(self.cab, (("Carregar contas", self.b1),
-                                  ("Gerar os extratos", self.b2))
-                       ).pack(anchor="w", pady=(8, 0))
-
     def _alternar_periodo(self):
         if self.v_personalizado.get():
-            self.f_datas.pack(fill="x", pady=(6, 0))
+            self.f_datas.pack(fill="x", pady=(10, 0))
         else:
             self.f_datas.pack_forget()
         self._atualizar_rotulo()
@@ -359,7 +357,7 @@ class RelatorioFrame(ttk.Frame):
                     self.lbl.configure(text=valor)
                 elif tipo == "progresso":
                     feitos, total = valor
-                    self.pb.configure(maximum=max(total, 1), value=feitos)
+                    self.barra_exec.progresso(feitos, total)
                 elif tipo == "contas":
                     self._montar_contas(valor)
                 elif tipo == "botoes":
@@ -428,15 +426,35 @@ class RelatorioFrame(ttk.Frame):
             rotulo = (f'{conta["nome"]}   →   {destino.empresa} / {destino.pasta}'
                       if destino else f'{conta["nome"]}   (sem pasta no mapa)')
             ttk.Checkbutton(self.contas_box, text=rotulo, variable=v).pack(anchor="w")
-        rodape = ttk.Frame(self.contas_box)
-        rodape.pack(anchor="w", pady=(6, 0))
-        ttk.Button(rodape, text="Marcar todas",
-                   command=lambda: [v.set(True) for v in self.vars_contas.values()]
-                   ).pack(side="left")
-        ttk.Button(rodape, text="Desmarcar todas",
-                   command=lambda: [v.set(False) for v in self.vars_contas.values()]
-                   ).pack(side="left", padx=6)
+        # "Marcar/Desmarcar todas" e a contagem sobem para o cabeçalho do
+        # cartão: dentro da lista rolável eles saíam da tela justamente quando
+        # havia contas demais para conferir uma a uma.
+        self.rodape_contas.limpar_links()
+        self.rodape_contas.link("Marcar todas", lambda: self._todas_contas(True))
+        self.rodape_contas.link("Desmarcar todas",
+                                lambda: self._todas_contas(False))
+        for v in self.vars_contas.values():
+            v.trace_add("write", lambda *_a: self._contar_contas())
+        self._contar_contas()
         self.b2.configure(state="normal")
+
+    def _todas_contas(self, marcar: bool):
+        for v in self.vars_contas.values():
+            v.set(marcar)
+
+    def _contar_contas(self):
+        try:
+            marcadas = [c for c, v in self.vars_contas.items() if v.get()]
+        except tk.TclError:
+            return                       # aba fechando com o trace pendente
+        fora = len(self.vars_contas) - len(marcadas)
+        sem_mapa = len(self.sem_destino)
+        partes = [f"{len(marcadas)} conta(s) marcada(s)"]
+        if fora:
+            partes.append(f"{fora} ficam de fora")
+        if sem_mapa:
+            partes.append(f"{sem_mapa} sem pasta no mapa")
+        self.rodape_contas.definir(texto="  ·  ".join(partes))
 
     # ------------------------------------------------------------- etapa 2
     def gerar(self):
@@ -574,6 +592,9 @@ class RelatorioFrame(ttk.Frame):
                 self.q.put(("pasta_pronta", pasta_mes))
             self.q.put(("status", f"{len(feitos)} PDF(s) em "
                                   f"{str(pasta_mes).replace(chr(92), '/')}"))
+            widgets.registrar_atividade(
+                "rel", "Gerar os extratos", "ok",
+                f"{len(feitos)} PDF(s) do mês", {"pdfs": len(feitos)})
         except Exception as e:
             self._log(f"[!] {e}")
             self.q.put(("status", "Não consegui gerar os extratos."))

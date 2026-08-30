@@ -65,94 +65,99 @@ class AportesFrame(ttk.Frame):
     def _montar(self):
         PADX = widgets.PADX
 
-        widgets.Cabecalho(
+        cab = widgets.Cabecalho(
             self, "Aportes e Distribuições",
-            "Lança direto no Mais Controle — sem planilha, sem importação."
-        ).pack(fill="x", padx=PADX, pady=(12, 4))
+            "Lança direto no Mais Controle — sem planilha, sem importação.",
+            trilha="Comprovantes  ›  Aportes")
+        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        self.b_conferir = widgets.Botao(cab.acoes, "Conferir cadastro",
+                                        papel="passo", command=self._conferir)
+        self.b_conferir.pack(side="left", padx=(0, 8))
+        self.b_lancar = widgets.Botao(cab.acoes, "Lançar no Mais Controle",
+                                      papel="acao", command=self._lancar)
+        self.b_lancar.pack(side="left")
 
-        form = widgets.Cartao(self, "Novo lançamento", padding=10)
-        form.pack(fill="x", padx=PADX, pady=6)
+        form = widgets.Cartao(self, "Novo lançamento", 1)
+        form.pack(fill="x", padx=PADX, pady=(0, 12))
 
-        linha1 = ttk.Frame(form); linha1.pack(fill="x", pady=3)
-        ttk.Label(linha1, text="Data", width=8).pack(side="left")
+        # Rótulo EM CIMA de cada campo, e não ao lado: com o rótulo à esquerda
+        # cada linha do formulário começava numa coluna diferente (a largura do
+        # rótulo mandava), e "Data", "Pagou" e "Tipo" nunca se alinhavam.
+        linha1 = ttk.Frame(form)
+        linha1.pack(fill="x")
         self.var_data = tk.StringVar(value=f"{datetime.date.today():%d/%m/%Y}")
-        CampoData(linha1, self.var_data).pack(side="left")
-        ttk.Label(linha1, text="  Valor R$", width=10).pack(side="left")
+        widgets.Campo(linha1, "Data", lambda p: CampoData(p, self.var_data)
+                      ).pack(side="left", padx=(0, 16))
         self.var_valor = tk.StringVar()
-        ttk.Entry(linha1, textvariable=self.var_valor, width=14).pack(side="left")
+        widgets.Campo(linha1, "Valor R$",
+                      lambda p: ttk.Entry(p, textvariable=self.var_valor,
+                                          width=14)).pack(side="left")
 
         # São ~19 contas e ~440 participantes: rolar a lista até achar
         # "Morais Participações - SUBCONTA 55696-3" é trabalho que a máquina
         # faz melhor. Digitar no PRÓPRIO campo filtra a lista dele.
-        linha2 = ttk.Frame(form); linha2.pack(fill="x", pady=3)
-        ttk.Label(linha2, text="Pagou", width=8).pack(side="left")
-        self.cb_pagador = widgets.ComboBusca(linha2, width=38)
-        self.cb_pagador.pack(side="left")
-        ttk.Label(linha2, text="  Recebeu", width=10).pack(side="left")
-        self.cb_recebedor = widgets.ComboBusca(linha2, width=38)
-        self.cb_recebedor.pack(side="left")
+        linha2 = ttk.Frame(form)
+        linha2.pack(fill="x", pady=(12, 0))
+        campo_pag = widgets.Campo(
+            linha2, "Pagou", lambda p: widgets.ComboBusca(p, width=38))
+        campo_pag.pack(side="left", padx=(0, 16))
+        self.cb_pagador = campo_pag.widget
+        campo_rec = widgets.Campo(
+            linha2, "Recebeu", lambda p: widgets.ComboBusca(p, width=38))
+        campo_rec.pack(side="left")
+        self.cb_recebedor = campo_rec.widget
 
-        linha3 = ttk.Frame(form); linha3.pack(fill="x", pady=3)
-        ttk.Label(linha3, text="Tipo", width=8).pack(side="left")
-        self.cb_tipo = ttk.Combobox(linha3, state="readonly", width=22,
-                                    values=cadastro.TIPOS)
-        self.cb_tipo.current(0); self.cb_tipo.pack(side="left")
-        ttk.Label(linha3, text="  Lançar", width=10).pack(side="left")
-        self.cb_modo = ttk.Combobox(linha3, state="readonly", width=24,
-                                    values=cadastro.MODOS)
-        self.cb_modo.current(0); self.cb_modo.pack(side="left")
-        ttk.Label(linha3, text="  Forma", width=8).pack(side="left")
-        self.cb_forma = ttk.Combobox(linha3, state="readonly", width=20,
-                                     values=cadastro.FORMAS)
-        self.cb_forma.current(0); self.cb_forma.pack(side="left")
+        linha3 = ttk.Frame(form)
+        linha3.pack(fill="x", pady=(12, 0))
+        for rotulo, atributo, largura, valores in (
+                ("Tipo", "cb_tipo", 22, cadastro.TIPOS),
+                ("Lançar", "cb_modo", 24, cadastro.MODOS),
+                ("Forma", "cb_forma", 20, cadastro.FORMAS)):
+            campo = widgets.Campo(linha3, rotulo, lambda p, l=largura, v=valores:
+                                  ttk.Combobox(p, state="readonly", width=l,
+                                               values=v))
+            campo.pack(side="left", padx=(0, 16))
+            campo.widget.current(0)
+            setattr(self, atributo, campo.widget)
 
-        linha4 = ttk.Frame(form); linha4.pack(fill="x", pady=(6, 0))
-        ttk.Label(linha4, width=8).pack(side="left")
-        ttk.Label(linha4, style="Apoio.TLabel",
+        ttk.Label(form, style="Tenue.TLabel", wraplength=760, justify="left",
                   text="Em Pagou e Recebeu, digite para procurar — sem acento e "
                        "por pedaço do nome (\"696\", \"livia\"). A seta abre a "
                        "lista já filtrada."
-                  ).pack(side="left")
+                  ).pack(anchor="w", pady=(10, 0))
 
         # É esta que o Enter dispara, e não "Lançar no Mais Controle": num
         # formulário que monta uma lista, Enter fecha a LINHA. Mandar dinheiro
-        # para o ERP continua exigindo o clique nos passos 1 e 2.
-        self.acao_enter = ttk.Button(form, text="+  Adicionar à lista",
-                                     command=self._adicionar)
-        self.acao_enter.pack(anchor="w", pady=(8, 0))
+        # para o ERP continua exigindo o clique nos botões do alto.
+        self.acao_enter = widgets.Botao(form, "+   Adicionar à lista",
+                                        papel="passo", command=self._adicionar)
+        self.acao_enter.pack(anchor="w", pady=(12, 0))
 
-        lista = widgets.Cartao(self, "A lançar", padding=8)
-        lista.pack(fill="both", expand=True, padx=PADX, pady=10)
-        self.tabela = ttk.Treeview(lista, columns=("op",), show="headings",
+        lista = widgets.Cartao(self, "A lançar", 2)
+        lista.pack(fill="both", expand=True, padx=PADX, pady=(0, 12))
+        self.rodape = widgets.RodapeTabela(lista.acoes)
+        self.rodape.pack()
+        self.rodape.link("Remover selecionado", self._remover)
+        self.rodape.link("Limpar tudo", self._limpar)
+        self.rodape.link("Recarregar cadastros", self._recarregar_cadastros)
+        corpo = ttk.Frame(lista)
+        corpo.pack(fill="both", expand=True)
+        self.tabela = ttk.Treeview(corpo, columns=("op",), show="headings",
                                    height=7)
-        self.tabela.heading("op", text="Operação")
+        self.tabela.heading("op", text="OPERAÇÃO")
         self.tabela.column("op", width=760, anchor="w")
+        widgets.estilo_tabela(self.tabela)
         self.tabela.pack(fill="both", expand=True, side="left")
-        ttk.Scrollbar(lista, orient="vertical", command=self.tabela.yview
+        ttk.Scrollbar(corpo, orient="vertical", command=self.tabela.yview
                       ).pack(side="right", fill="y")
-
-        botoes = ttk.Frame(self); botoes.pack(fill="x", padx=PADX)
-        ttk.Button(botoes, text="Remover selecionado",
-                   command=self._remover).pack(side="left")
-        ttk.Button(botoes, text="Limpar tudo",
-                   command=self._limpar).pack(side="left", padx=6)
-        ttk.Button(botoes, text="Recarregar cadastros",
-                   command=self._recarregar_cadastros).pack(side="left")
-        self.lbl_total = ttk.Label(botoes, text="")
-        self.lbl_total.pack(side="right")
-
-        acoes = ttk.Frame(self); acoes.pack(fill="x", padx=PADX, pady=(10, 0))
-        self.b_conferir = ttk.Button(
-            acoes, text="1. Conferir cadastro no Mais Controle",
-            command=self._conferir)
-        self.b_conferir.pack(side="left")
-        self.b_lancar = ttk.Button(acoes, text="2. Lançar no Mais Controle",
-                                   style="Accent.TButton", command=self._lancar)
-        self.b_lancar.pack(side="left", padx=8)
+        # O total continua existindo, agora no rodapé do cartão — que é onde
+        # ele fica em todas as outras telas desde o redesenho.
+        self.lbl_total = self.rodape.resumo
 
         # Sem cartão em volta: aqui o próprio campo é quem encolhe e cresce.
-        self.texto = tk.Text(self, wrap="word")
-        self.texto.pack(fill="x", padx=PADX, pady=(10, 12))
+        self.texto = tk.Text(self, wrap="word", relief="flat", borderwidth=0,
+                             highlightthickness=0)
+        self.texto.pack(fill="x", padx=PADX, pady=(0, 16))
         widgets.estilo_log(self.texto)
         widgets.registro_elastico(self.texto, self.texto)
 
@@ -497,6 +502,11 @@ class AportesFrame(ttk.Frame):
                     falhas.append(r.erro or "erro desconhecido")
 
             self._log(f"\n{feitos} criado(s), {len(falhas)} com problema.")
+            widgets.registrar_atividade(
+                "apt", "Lançar aportes", "atencao" if falhas else "ok",
+                f"{feitos} criado(s)"
+                + (f" · {len(falhas)} com problema" if falhas else ""),
+                {"criados": feitos, "falhas": len(falhas)})
             self.after(0, self._retirar_concluidas)
         except Exception as e:                              # noqa: BLE001
             # Ver o comentário em _t_conferir: exceção não capturada numa

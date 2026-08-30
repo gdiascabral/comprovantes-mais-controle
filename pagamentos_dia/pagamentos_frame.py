@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime
 import os
 import queue
+import re
 import subprocess
 import sys
 import time
@@ -124,6 +125,76 @@ def e_marcador_de_recorrencia(item: dict, fornecedores: dict) -> bool:
                 item.get("paidTo") or "", fornecedores).get("so_marcador")))
 
 
+#: Banco, agência e conta dentro do texto livre do cadastro do ERP. Só é
+#: usado quando a forma de pagar NÃO é Pix nem boleto — aí o campo
+#: `paidToBankAccount` costuma trazer a conta escrita à mão, em meia dúzia de
+#: feitios ("BANCO 756 AG 3007 CC 55696-3", "Sicoob ag. 3007 c/c 55696-3").
+_AGENCIA = re.compile(r"\bag(?:[êe]ncia|\.)?\s*:?\s*(\d{3,5})", re.I)
+_CONTA = re.compile(r"\b(?:c/c|cc|conta|c\.c\.)\s*:?\s*([\d.\-]{4,15})", re.I)
+# Preguiçoso e com parada explícita: `[\w .]+` guloso engolia "Sicoob ag 3007
+# c" inteiro, e o nome do banco saía com a agência dentro dele.
+_BANCO = re.compile(
+    r"\b(?:banco|bco)\.?\s*:?\s*(.{2,28}?)"
+    r"(?=\s+(?:ag|ag[êe]ncia|c/c|cc|conta|c\.c\.)\b|\s*$)", re.I)
+
+
+def quem_recebe(item: dict, ja_lido: dict | None = None) -> tuple[str, str, str]:
+    """Para quem vai o dinheiro e POR ONDE. Devolve (nome, dado, estado).
+
+    O `dado` é a segunda linha da célula, em fonte de largura fixa: a chave
+    Pix, a linha digitável ou o trio banco/agência/conta. É o que se confere
+    contra o documento na mão antes de mandar pagar — e era exatamente o que
+    a janela de confirmação não mostrava: ela listava valor, favorecido e
+    descrição, e a pessoa confirmava um pagamento sem ver para onde ele ia.
+
+    NÃO busca nada. Usa o que a busca de lançamentos já trouxe
+    (`paidToBankAccount`, o método de pagamento) e, para o boleto, o que uma
+    passagem anterior do passo 2 já leu — o `ja_lido`, que é `{id: dados}`
+    montado do `self.resultado`. Ler o boleto exige baixar o PDF e às vezes
+    passar OCR, e isso é trabalho do passo 2, com o navegador na mão; fazê-lo
+    aqui abriria uma segunda coleta em rede no meio de uma janela modal.
+
+    Boleto ainda não lido aparece com o recado em vermelho, e não em branco:
+    "não sei a linha digitável" é uma informação sobre o pagamento, e quem
+    confirma precisa dela para decidir se abre o boleto antes.
+    """
+    favorecido = (item.get("paidTo") or "?").strip()
+    pago_para = (item.get("paidToBankAccount") or "").strip()
+    tipo = relatorio.tipo_de_pagamento(item)
+    ident = str(item.get("id") or "")
+
+    if tipo == "Pix":
+        chave = relatorio.extrair_chave_pix(pago_para) if pago_para else ""
+        if relatorio.parece_chave_pix(chave):
+            return favorecido, f"PIX  {chave}", "ok"
+        return (favorecido, "sem chave Pix no cadastro — abrir o lançamento",
+                "erro")
+
+    if tipo == "Boleto":
+        linha = (ja_lido or {}).get(ident) or ""
+        if linha:
+            return favorecido, f"BOLETO  {ocr_boleto.formatar(linha)}", "ok"
+        return (favorecido, "linha digitável não lida — abrir o boleto",
+                "erro")
+
+    # TED e o que mais o ERP chamar de forma de pagamento. O texto do cadastro
+    # é livre: quando dá para separar banco/agência/conta, separa; quando não
+    # dá, mostra o que está lá — o que está lá é o que a pessoa vai usar.
+    rotulo = (tipo or "TED").upper()
+    if not pago_para:
+        return favorecido, f"{rotulo}  sem conta no cadastro", "erro"
+    banco = _BANCO.search(pago_para)
+    ag = _AGENCIA.search(pago_para)
+    cc = _CONTA.search(pago_para)
+    if ag and cc:
+        nome_banco = (banco.group(1).strip() if banco
+                      else pago_para.split()[0][:18])
+        return (favorecido,
+                f"{rotulo}  {nome_banco}  ag {ag.group(1)}  c/c {cc.group(1)}",
+                "ok")
+    return favorecido, f"{rotulo}  {pago_para[:64]}", "atencao"
+
+
 def alvos_para_confirmar(lancamentos, escolhidas, fornecedores=None) -> list:
     """Que lançamentos a janela da etapa 2 lista.
 
@@ -221,37 +292,65 @@ class PagamentosDiaFrame(ttk.Frame):
         self.cab = widgets.Cabecalho(
             self, "Remessa/Retorno",
             "Planilha de conferência dos pagamentos do período, o arquivo de "
-            "remessa para o banco e a leitura do retorno que ele devolve.")
-        self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
+            "remessa para o banco e a leitura do retorno que ele devolve.",
+            trilha="Diário  ›  Remessa e Retorno")
+        self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
 
-        # Cartões SEM número: quem numera é a trilha de ações, montada no fim
-        # do `_build` (os botões dela ainda não existem aqui).
-        f1 = widgets.Cartao(self, "Período")
-        f1.pack(fill="x", padx=PADX, pady=6)
-        linha = ttk.Frame(f1); linha.pack(fill="x")
-        ttk.Label(linha, text="De:").pack(side="left")
-        CampoData(linha, self.v_ini).pack(side="left", padx=(6, 12))
-        ttk.Label(linha, text="até:").pack(side="left")
-        CampoData(linha, self.v_fim).pack(side="left", padx=(6, 8))
-        ttk.Label(linha, text="(dd/mm/aaaa)", style="Apoio.TLabel").pack(side="left")
-        ttk.Button(linha, text="Hoje", command=self._hoje).pack(side="left", padx=(12, 0))
+        # Os botões do FLUXO ficam no cabeçalho, à direita do título; os que
+        # não são do fluxo (parar, abrir, ler retorno) ficam embaixo, junto da
+        # barra de execução. Antes os seis moravam no rodapé, e o "executar"
+        # da tela ficava no canto de baixo — longe do que se acabou de
+        # preencher, e do mesmo tamanho de "Abrir planilha".
+        #
+        # O verde é o TERCEIRO: a tela existe para o dinheiro sair, e é o
+        # arquivo de remessa que faz isso acontecer. Buscar e gerar a planilha
+        # são o caminho até ele.
+        self.b1 = widgets.Botao(self.cab.acoes, "Buscar os lançamentos",
+                                papel="passo", command=self.buscar)
+        self.b1.pack(side="left", padx=(0, 8))
+        self.b2 = widgets.Botao(self.cab.acoes, "Gerar a planilha",
+                                papel="passo", command=self.gerar,
+                                state="disabled")
+        self.b2.pack(side="left", padx=(0, 8))
+        self.b3 = widgets.Botao(self.cab.acoes, "Gerar remessa", papel="acao",
+                                command=self.gerar_remessa, state="disabled")
+        self.b3.pack(side="left")
 
-        opc = ttk.Frame(f1); opc.pack(fill="x", pady=(8, 0))
+        # Os cartões passam a ser NUMERADOS, e os botões deixam de ser: era o
+        # "▶ 1." no botão e o "1." no cartão contando a mesma coisa duas vezes,
+        # com contagens que não batiam ("2. Contas" era um campo, "2. Gerar" era
+        # uma ação). Agora o número está num lugar só — o cartão —, e o botão
+        # diz o VERBO.
+        f1 = widgets.Cartao(self, "Período", 1)
+        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        linha = ttk.Frame(f1)
+        linha.pack(fill="x")
+        widgets.Campo(linha, "De", lambda p: CampoData(p, self.v_ini)
+                      ).pack(side="left", padx=(0, 16))
+        widgets.Campo(linha, "Até", lambda p: CampoData(p, self.v_fim)
+                      ).pack(side="left", padx=(0, 16))
+        widgets.Botao(linha, "Hoje", papel="neutro", command=self._hoje
+                      ).pack(side="left", pady=(15, 0))
+
+        opc = ttk.Frame(f1)
+        opc.pack(fill="x", pady=(12, 0))
         ttk.Checkbutton(opc, variable=self.v_cruzar,
                         text="Conferir os documentos anexados (baixa os PDFs; "
                              "mais lento, mas é a conferência de verdade)"
                         ).pack(anchor="w")
         ttk.Checkbutton(opc, variable=self.v_incluir_pagos,
                         text="Incluir também o que já foi pago no período"
-                        ).pack(anchor="w")
+                        ).pack(anchor="w", pady=(4, 0))
 
         # ---- card 2: contas
         # A lista também é elástica: antes de buscar ela tem uma frase, e um
         # quadro vazio de 170 px em volta de uma frase é o mesmo desperdício
         # que o Registro tinha. Cresce em `_montar_contas`.
         self.f_contas = f2 = widgets.Cartao(
-            self, "Contas (marque as que entram no relatório)")
-        f2.pack(fill="x", padx=PADX, pady=6)
+            self, "Contas — marque as que entram no relatório", 2)
+        f2.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.rodape_contas = widgets.RodapeTabela(f2.acoes)
+        self.rodape_contas.pack()
         self.canvas = tk.Canvas(f2, height=24, highlightthickness=0, borderwidth=0)
         self.barra = barra = ttk.Scrollbar(f2, orient="vertical",
                                            command=self.canvas.yview)
@@ -266,65 +365,55 @@ class PagamentosDiaFrame(ttk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         # A barra de rolagem só entra junto com a lista: numa faixa de 24 px
         # ela vira duas setinhas espremidas ao lado de uma frase.
-        ttk.Label(self.contas_box,
-                  text='Clique em "1. Buscar os lançamentos" para listar as contas.'
+        ttk.Label(self.contas_box, style="Tenue.TLabel",
+                  text='Clique em "Buscar os lançamentos" para listar as contas.'
                   ).pack(anchor="w")
 
         # ---- card 3: pasta
-        f3 = widgets.Cartao(self, "Onde salvar")
-        f3.pack(fill="x", padx=PADX, pady=6)
-        ttk.Entry(f3, textvariable=self.v_pasta).pack(side="left", fill="x", expand=True)
-        ttk.Button(f3, text="Selecionar…", command=self._sel_pasta
-                   ).pack(side="left", padx=(6, 0))
+        f3 = widgets.Cartao(self, "Onde salvar", 3)
+        f3.pack(fill="x", padx=PADX, pady=(0, 12))
+        ttk.Entry(f3, textvariable=self.v_pasta).pack(side="left", fill="x",
+                                                      expand=True)
+        widgets.Botao(f3, "Selecionar…", papel="neutro", command=self._sel_pasta
+                      ).pack(side="left", padx=(8, 0))
 
-        # ---- barra de ação
-        acao = ttk.Frame(self)
-        acao.pack(side="bottom", fill="x", padx=PADX, pady=(6, 12))
-        prog = ttk.Frame(acao); prog.pack(side="bottom", fill="x", pady=(8, 0))
-        self.lbl = ttk.Label(prog, text="Pronto.")
-        self.lbl.pack(side="left")
-        self.pb = ttk.Progressbar(prog, mode="determinate")
-        self.pb.pack(side="left", fill="x", expand=True, padx=12)
-
-        btns = ttk.Frame(acao); btns.pack(fill="x")
-        self.b1 = ttk.Button(btns, text="▶ 1. Buscar os lançamentos", command=self.buscar)
-        self.b1.pack(side="left")
-        self.b2 = ttk.Button(btns, text="▶ 2. Gerar a planilha", command=self.gerar,
-                             state="disabled")
-        self.b2.pack(side="left", padx=10)
-        self.b3 = ttk.Button(btns, text="▶ 3. Gerar remessa",
-                             command=self.gerar_remessa, state="disabled")
-        self.b3.pack(side="left", padx=(0, 10))
-        self.b_stop = ttk.Button(btns, text="⏹ Parar", command=self._parar_click,
-                                 state="disabled")
+        # ---- barra de execução e o que não é passo
+        # ACIMA do registro, e não no rodapé: a barra conta o trabalho que
+        # está acontecendo, e o registro é a saída DELE. Embaixo, ela ficava
+        # depois do resultado — e, com o registro cheio, fora da tela.
+        acao = ttk.Frame(self, style="Fundo.TFrame")
+        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        btns = ttk.Frame(acao, style="Fundo.TFrame")
+        btns.pack(side="right", padx=(16, 0))
+        self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
+                                    command=self._parar_click, state="disabled")
         self.b_stop.pack(side="left")
-        self.b_abrir = ttk.Button(btns, text="📂 Abrir planilha", command=self._abrir,
-                                  state="disabled")
-        self.b_abrir.pack(side="left", padx=(10, 0))
+        self.b_abrir = widgets.Botao(btns, "📂  Abrir planilha", papel="neutro",
+                                     command=self._abrir, state="disabled")
+        self.b_abrir.pack(side="left", padx=(8, 0))
         # SEM número e sempre habilitado, de propósito: ler retorno não é o
         # passo 4 de nada. O arquivo chega horas ou dias depois — às vezes
         # noutra máquina —, e exigir "buscar" e "gerar" antes obrigaria a
         # refazer o dia inteiro só para conferir o que o banco respondeu.
-        self.b_ret = ttk.Button(btns, text="📥 Ler retorno",
-                                command=self.ler_retorno)
-        self.b_ret.pack(side="left", padx=(10, 0))
-        for b in (self.b1, self.b2):
-            try:
-                b.configure(style="Accent.TButton")
-            except tk.TclError:
-                pass
+        self.b_ret = widgets.Botao(btns, "📥  Ler retorno", papel="neutro",
+                                   command=self.ler_retorno)
+        self.b_ret.pack(side="left", padx=(8, 0))
 
-        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.barra_exec = widgets.BarraExecucao(acao)
+        self.barra_exec.pack(side="left", fill="x", expand=True)
+        # `lbl` e `pb` continuam existindo com os nomes de sempre: o `_drain`
+        # e as seis chamadas de progresso não sabem (nem precisam saber) que a
+        # barra virou outro widget.
+        self.lbl = self.barra_exec.lbl
+        self.pb = self.barra_exec.pb
+
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
-
-        widgets.Passos(self.cab, (("Buscar os lançamentos", self.b1),
-                                  ("Gerar a planilha", self.b2))
-                       ).pack(anchor="w", pady=(8, 0))
 
     def _hoje(self):
         hoje = datetime.date.today()
@@ -375,7 +464,7 @@ class PagamentosDiaFrame(ttk.Frame):
                     self.lbl.configure(text=valor)
                 elif tipo == "progresso":
                     feitos, total = valor
-                    self.pb.configure(maximum=max(total, 1), value=feitos)
+                    self.barra_exec.progresso(feitos, total)
                 elif tipo == "contas":
                     self._montar_contas(valor)
                 elif tipo == "botoes":
@@ -505,14 +594,30 @@ class PagamentosDiaFrame(ttk.Frame):
             self.contas = relatorio.resumo_por_conta(self.lancamentos)
             self.q.put(("contas", self.contas))
             self.q.put(("status", f"Pronto em {_fmt_dur(time.time() - comeco)}. "
-                                  "Marque as contas e clique em 2."))
+                                  "Marque as contas e clique em Gerar."))
+            # O que a tela de Início mostra sai daqui: quem contou os
+            # lançamentos foi esta rotina, e contar de novo custaria outra
+            # sessão do ERP.
+            _no_dia = sum(t for _n, _q, t, _p, _i in self.contas)
+            widgets.registrar_atividade(
+                "pag", "Buscar lançamentos", "ok",
+                f"{len(self.lancamentos)} lançamento(s) · "
+                f"{relatorio.brl(_no_dia)}",
+                {"lancamentos": len(self.lancamentos), "total": _no_dia})
         except Exception as e:
             self._log(f"[!] {e}")
             self.q.put(("status", "Não consegui buscar os lançamentos."))
+            widgets.registrar_atividade("pag", "Buscar lançamentos", "erro",
+                                        str(e)[:120])
         finally:
             self.q.put(("botoes", "normal"))
 
     def _montar_contas(self, contas):
+        # A lista que a tela mostra passa a ser a MESMA que o rodapé soma. O
+        # `_t_buscar` já grava `self.contas` antes de enfileirar, mas quem
+        # desenha recebe a lista por parâmetro: sem esta linha, o total do
+        # rodapé dependia de as duas nunca se separarem.
+        self.contas = list(contas)
         self.canvas.configure(height=170)
         self.barra.pack(side="right", fill="y")
         widgets.cartao_elastico(self.f_contas, cheio=True)
@@ -533,17 +638,48 @@ class PagamentosDiaFrame(ttk.Frame):
                       + (f"  ({'; '.join(extra)})" if extra else ""))
             ttk.Checkbutton(self.contas_box, text=rotulo, variable=v).pack(anchor="w")
 
-        rodape = ttk.Frame(self.contas_box)
-        rodape.pack(anchor="w", pady=(6, 0))
-        ttk.Button(rodape, text="Marcar todas",
-                   command=lambda: [v.set(True) for v in self.vars_contas.values()]
-                   ).pack(side="left")
-        ttk.Button(rodape, text="Desmarcar todas",
-                   command=lambda: [v.set(False) for v in self.vars_contas.values()]
-                   ).pack(side="left", padx=6)
+        # "Marcar/Desmarcar todas" e a contagem saem da lista e sobem para o
+        # cabeçalho do cartão: dentro da lista, eles rolavam junto com ela e
+        # sumiam da tela justamente quando havia contas demais para conferir.
+        self.rodape_contas.limpar_links()
+        self.rodape_contas.link("Marcar todas", lambda: self._todas_contas(True))
+        self.rodape_contas.link("Desmarcar todas",
+                                lambda: self._todas_contas(False))
+        for _, v in self.vars_contas.items():
+            v.trace_add("write", lambda *_a: self._contar_contas())
+        self._contar_contas()
         self.b2.configure(state="normal")
 
+    def _todas_contas(self, marcar: bool):
+        for v in self.vars_contas.values():
+            v.set(marcar)
+
+    def _contar_contas(self):
+        """A frase que se confere antes de gerar. O total é o das contas
+        MARCADAS, e não o do dia: é ele que vira planilha."""
+        try:
+            marcadas = {n for n, v in self.vars_contas.items() if v.get()}
+        except tk.TclError:
+            return                       # aba fechando com o trace pendente
+        total = sum(t for n, _q, t, _p, _i in (self.contas or ())
+                    if n in marcadas)
+        self.rodape_contas.definir(marcados=len(marcadas), total_reais=total,
+                                   de_fora=len(self.vars_contas) - len(marcadas))
+
     # --------------------------------------------------------------- etapa 2
+    def _linhas_ja_lidas(self) -> dict:
+        """`{id do lançamento: linha digitável}` do que o passo 2 já leu.
+
+        Existe porque o boleto só é lido com o navegador na mão, no passo 2, e
+        a janela de confirmação roda ANTES dele. Quem já rodou o passo 2 uma
+        vez no mesmo período volta a ver as linhas; quem não rodou vê o
+        recado em vermelho, que é a verdade daquele momento."""
+        if not self.resultado:
+            return {}
+        return {r.get("id"): r.get("dados")
+                for regs in self.resultado.contas.values() for r in regs
+                if r.get("id") and r.get("dados") and r.get("tipo") == "Boleto"}
+
     def _janela_confirmar(self, alvos, destacar=()) -> set | None:
         """Quais lançamentos entram hoje — um a um, antes de tudo.
 
@@ -564,40 +700,53 @@ class PagamentosDiaFrame(ttk.Frame):
         dentro da conta. A regra já cadastrada não se perde — deixa de ser
         porteiro e vira destaque.
 
+        Cada linha mostra QUEM RECEBE em duas alturas: o favorecido em negrito
+        e, embaixo, a forma de pagar em fonte de largura fixa (a chave Pix, a
+        linha digitável, o banco/agência/conta). Sem isso, confirmar era dizer
+        sim a um nome e a um valor sem ver para onde o dinheiro ia — e é
+        justamente o destino que a remessa não deixa mais ninguém conferir
+        depois.
+
         Roda na thread da interface (é chamada de `gerar`, antes de submeter
         ao navegador), então pode abrir janela e esperar resposta à vontade.
         Devolve os ids NÃO confirmados, ou None se a pessoa cancelou tudo.
         """
         top = tk.Toplevel(self)
-        top.title("2. Confirmar o que entra")
+        top.title("Confirmar o que entra")
+        top.geometry("980x680")
         top.transient(self.winfo_toplevel())
         widgets.barra_de_titulo(top)
+        top.configure(background=widgets.cores()["fundo"])
 
-        moldura = ttk.Frame(top, padding=14)
+        moldura = ttk.Frame(top, padding=18, style="Fundo.TFrame")
         moldura.pack(fill="both", expand=True)
-        ttk.Label(moldura, style="Secao.TLabel",
-                  text="Confira o que entra hoje").pack(anchor="w")
-        ttk.Label(moldura, style="Apoio.TLabel", wraplength=680, justify="left",
-                  text="Já vem tudo marcado. Desmarque o que NÃO deve entrar — "
-                       "ele sai da planilha e da remessa, e aparece na aba NÃO "
-                       "ENTRARAM com o motivo. O ⚠ é quem você mandou conferir "
-                       "sempre."
-                  ).pack(anchor="w", pady=(0, 10))
+        cab = widgets.Cabecalho(
+            moldura, "Confira o que entra hoje",
+            "Já vem tudo marcado. Desmarque o que NÃO deve entrar — ele sai "
+            "da planilha e da remessa, e aparece na aba NÃO ENTRARAM com o "
+            "motivo. O ⚠ é quem você mandou conferir sempre.",
+            trilha="Diário  ›  Remessa e Retorno  ›  Passo 2")
+        cab.pack(fill="x", pady=(0, 14))
+
+        cartao = widgets.Cartao(moldura, "Lançamentos do dia")
+        cartao.pack(fill="both", expand=True)
 
         # Rolagem, como na conferência da remessa: a janela era
         # `resizable(False, False)` e listava um punhado de nomes; listando o
         # dia inteiro (~300 lançamentos) ela sairia pela borda da tela, com o
         # botão de confirmar fora do alcance.
-        painel = tk.Canvas(moldura, highlightthickness=0, height=380)
-        barra = ttk.Scrollbar(moldura, orient="vertical", command=painel.yview)
+        painel = tk.Canvas(cartao, highlightthickness=0)
+        barra = ttk.Scrollbar(cartao, orient="vertical", command=painel.yview)
         dentro = ttk.Frame(painel)
         dentro.bind("<Configure>",
                     lambda _e: painel.configure(scrollregion=painel.bbox("all")))
-        painel.create_window((0, 0), window=dentro, anchor="nw")
+        janela = painel.create_window((0, 0), window=dentro, anchor="nw")
+        painel.bind("<Configure>",
+                    lambda e: painel.itemconfigure(janela, width=e.width))
         painel.configure(yscrollcommand=barra.set)
         widgets.estilo_canvas(painel)
+        barra.pack(side="right", fill="y")
         painel.pack(side="left", fill="both", expand=True)
-        barra.pack(side="left", fill="y")
 
         def pede_olhada(item) -> bool:
             return regras.exige_confirmacao(item.get("paidTo") or "", destacar)
@@ -606,6 +755,7 @@ class PagamentosDiaFrame(ttk.Frame):
         for item in alvos:
             por_conta.setdefault(relatorio.nome_da_conta(item), []).append(item)
 
+        ja_lido = self._linhas_ja_lidas()
         por_id = {str(i.get("id")): i for i in alvos}
         marcas = []                       # [(id, var)]
         for conta in sorted(por_conta):
@@ -613,23 +763,20 @@ class PagamentosDiaFrame(ttk.Frame):
                            key=lambda i: (not pede_olhada(i),
                                           relatorio.chave(i.get("paidTo") or "")))
             cabecalho = ttk.Frame(dentro)
-            cabecalho.pack(fill="x", pady=(10, 2))
+            cabecalho.pack(fill="x", pady=(14, 4))
             ttk.Label(cabecalho, style="Secao.TLabel",
                       text=conta[:46]).pack(side="left")
             ttk.Label(cabecalho, style="Apoio.TLabel",
                       text=(f"{len(itens)} · " + relatorio.brl(
                           sum(relatorio.valor_do_item(i) for i in itens)))
                       ).pack(side="right")
-            for item in itens:
+            ttk.Separator(dentro, orient="horizontal").pack(fill="x")
+            for pos, item in enumerate(itens):
                 v = tk.BooleanVar(value=True)
                 marcas.append((str(item.get("id")), v))
-                desc = (item.get("description") or "").strip()[:44]
-                ttk.Checkbutton(
-                    dentro, variable=v, command=lambda: atualizar(),
-                    text=(("⚠ " if pede_olhada(item) else "   ")
-                          + f"{relatorio.brl(relatorio.valor_do_item(item)):>14}  "
-                          + f"{(item.get('paidTo') or '?').strip()[:32]:<32}"
-                          + (f"  ·  {desc}" if desc else ""))).pack(anchor="w")
+                self._linha_confirmar(dentro, item, v, pos,
+                                      pede_olhada(item), ja_lido,
+                                      lambda: atualizar())
 
         resposta = {"cancelou": True}
 
@@ -637,40 +784,34 @@ class PagamentosDiaFrame(ttk.Frame):
             resposta["cancelou"] = False
             top.destroy()
 
-        rodape = ttk.Frame(moldura)
-        rodape.pack(side="bottom", fill="x", pady=(14, 0))
-
-        # Quantos e quanto, atualizando a cada clique. É o número que se
-        # confere antes de gerar; as outras ações irreversíveis do app
-        # (Aportes, Acessórias) já o mostram antes de perguntar.
-        contagem = ttk.Label(rodape, style="Apoio.TLabel")
-        contagem.pack(side="left")
+        rodape = widgets.RodapeTabela(cartao)
+        rodape.pack(side="bottom", fill="x", pady=(12, 0))
+        rodape.link("Marcar todas", lambda: todas(True))
+        rodape.link("Desmarcar todas", lambda: todas(False))
 
         def atualizar():
+            """Quantos e quanto, a cada clique. É o número que se confere
+            antes de gerar; as outras ações irreversíveis do app (Aportes,
+            Acessórias) já o mostram antes de perguntar."""
             vao = [i for i, v in marcas if v.get()]
             total = sum(relatorio.valor_do_item(por_id[i]) for i in vao
                         if i in por_id)
-            contagem.configure(
-                text=f"{len(vao)} de {len(marcas)} · {relatorio.brl(total)}")
+            rodape.definir(marcados=len(vao), total_reais=total,
+                           de_fora=len(marcas) - len(vao))
 
         def todas(valor: bool):
             for _, v in marcas:
                 v.set(valor)
             atualizar()
 
-        ttk.Button(rodape, text="Marcar todas",
-                   command=lambda: todas(True)).pack(side="left", padx=(12, 0))
-        ttk.Button(rodape, text="Desmarcar todas",
-                   command=lambda: todas(False)).pack(side="left", padx=6)
         atualizar()
 
-        ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side="right")
-        b = ttk.Button(rodape, text="Confirmar e gerar", command=confirmar)
-        b.pack(side="right", padx=(0, 8))
-        try:
-            b.configure(style="Accent.TButton")
-        except tk.TclError:
-            pass
+        acoes = ttk.Frame(moldura, style="Fundo.TFrame")
+        acoes.pack(fill="x", pady=(14, 0))
+        widgets.Botao(acoes, "Confirmar e gerar", papel="acao",
+                      command=confirmar).pack(side="right")
+        widgets.Botao(acoes, "Cancelar", papel="neutro", command=top.destroy
+                      ).pack(side="right", padx=(0, 8))
 
         top.protocol("WM_DELETE_WINDOW", top.destroy)
         top.bind("<Escape>", lambda _e: top.destroy())
@@ -684,6 +825,45 @@ class PagamentosDiaFrame(ttk.Frame):
         if resposta["cancelou"]:
             return None
         return {ident for ident, v in marcas if not v.get()}
+
+    def _linha_confirmar(self, pai, item, var, pos, olhar, ja_lido, ao_marcar):
+        """Uma linha da janela: marca, valor, quem recebe (em duas alturas).
+
+        NÃO é `ttk.Treeview`, e não por falta de tentativa: a tabela do Tk não
+        aceita widget dentro de célula (então não há caixa de marcar), não faz
+        duas fontes na mesma célula e não quebra a célula em duas linhas. As
+        três coisas são exatamente o que esta lista precisa. Um `Frame` por
+        linha custa mais widgets e entrega o que o mockup pede.
+        """
+        c = widgets.cores()
+        linha = ttk.Frame(pai)
+        linha.pack(fill="x")
+        ttk.Checkbutton(linha, variable=var, command=ao_marcar
+                        ).pack(side="left", padx=(0, 8), pady=6)
+        # O valor primeiro e alinhado à direita, em fonte de largura fixa: é a
+        # coluna que se lê de cima a baixo somando de cabeça.
+        ttk.Label(linha, text=relatorio.brl(relatorio.valor_do_item(item)),
+                  style="Num.TLabel", width=14, anchor="e"
+                  ).pack(side="left", padx=(0, 14))
+
+        quem = ttk.Frame(linha)
+        quem.pack(side="left", fill="x", expand=True)
+        nome, dado, estado = quem_recebe(item, ja_lido)
+        topo = ttk.Frame(quem)
+        topo.pack(fill="x")
+        if olhar:
+            ttk.Label(topo, text="⚠", style="Atencao.TLabel"
+                      ).pack(side="left", padx=(0, 5))
+        ttk.Label(topo, text=nome[:44], style="Forte.TLabel").pack(side="left")
+        desc = (item.get("description") or "").strip()
+        if desc:
+            ttk.Label(topo, text="·  " + desc[:52], style="Tenue.TLabel"
+                      ).pack(side="left", padx=(8, 0))
+        # A segunda altura: a forma de pagar. Vermelha quando não se sabe qual
+        # é — o vazio ali seria lido como "não tem nada a conferir".
+        ttk.Label(quem, text=dado,
+                  style="MonoMiniErro.TLabel" if estado == "erro"
+                  else "MonoMini.TLabel").pack(anchor="w", pady=(1, 6))
 
     def gerar(self):
         if self.worker and not self.worker.done():
@@ -794,9 +974,19 @@ class PagamentosDiaFrame(ttk.Frame):
             self.q.put(("status", f"{n} pagamento(s) · {relatorio.brl(total)} · "
                                   f"{atencao} para conferir"
                                   + (f" · {len(omitidos)} fora" if omitidos else "")))
+            _sem_anexo = sum(1 for r in registros.values() for x in r
+                             if "sem anexo" in x["status"].lower())
+            widgets.registrar_atividade(
+                "pag", "Gerar a planilha",
+                "atencao" if (atencao or omitidos) else "ok",
+                f"{n} pagamento(s) · {relatorio.brl(total)}"
+                + (f" · {atencao} para conferir" if atencao else ""),
+                {"lancamentos": n, "total": total, "sem_anexo": _sem_anexo})
         except Exception as e:
             self._log(f"[!] {e}")
             self.q.put(("status", "Não consegui gerar a planilha."))
+            widgets.registrar_atividade("pag", "Gerar a planilha", "erro",
+                                        str(e)[:120])
         finally:
             self.q.put(("botoes", "normal"))
 
@@ -995,13 +1185,12 @@ class PagamentosDiaFrame(ttk.Frame):
                 self._t_baixar, escolhidos, dona=self)
 
         if historico is not None and not resumo.remessa_desconhecida:
-            ttk.Button(rodape, text="Guardar o resultado",
-                       style="Accent.TButton", command=_guardar
-                       ).pack(side="right")
+            widgets.Botao(rodape, "Guardar o resultado", papel="acao",
+                          command=_guardar).pack(side="right")
         if resumo.quantos("ok"):
-            ttk.Button(rodape, text="Dar baixa no Mais Controle",
-                       command=_baixar).pack(side="right", padx=(0, 8))
-        ttk.Button(rodape, text="Fechar", command=top.destroy
+            widgets.Botao(rodape, "Dar baixa no Mais Controle", papel="passo",
+                          command=_baixar).pack(side="right", padx=(0, 8))
+        widgets.Botao(rodape, "Fechar", papel="neutro", command=top.destroy
                    ).pack(side="right", padx=(0, 8))
 
         top.transient(self.winfo_toplevel())
@@ -1061,13 +1250,10 @@ class PagamentosDiaFrame(ttk.Frame):
             top.destroy()
 
         rodape = ttk.Frame(moldura); rodape.pack(fill="x", pady=(14, 0))
-        ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side="right")
-        b = ttk.Button(rodape, text="Baixar", command=confirmar)
-        b.pack(side="right", padx=(0, 8))
-        try:
-            b.configure(style="Accent.TButton")
-        except tk.TclError:
-            pass
+        widgets.Botao(rodape, "Baixar", papel="acao", command=confirmar
+                      ).pack(side="right")
+        widgets.Botao(rodape, "Cancelar", papel="neutro", command=top.destroy
+                      ).pack(side="right", padx=(0, 8))
         top.grab_set()
         self.wait_window(top)
         return escolha
@@ -1324,13 +1510,10 @@ class PagamentosDiaFrame(ttk.Frame):
 
         rodape = ttk.Frame(moldura)
         rodape.pack(side="bottom", fill="x", pady=(14, 0))
-        ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side="right")
-        b = ttk.Button(rodape, text="Gravar os arquivos", command=confirmar)
-        b.pack(side="right", padx=(0, 8))
-        try:
-            b.configure(style="Accent.TButton")
-        except tk.TclError:
-            pass
+        widgets.Botao(rodape, "Gravar os arquivos", papel="acao",
+                      command=confirmar).pack(side="right")
+        widgets.Botao(rodape, "Cancelar", papel="neutro", command=top.destroy
+                      ).pack(side="right", padx=(0, 8))
 
         top.protocol("WM_DELETE_WINDOW", top.destroy)
         top.bind("<Escape>", lambda _e: top.destroy())
@@ -1413,6 +1596,23 @@ class PagamentosDiaFrame(ttk.Frame):
                   "transmite: gerar é reversível, enviar não é.")
         self.q.put(("status", f"{len(gerados)} arquivo(s) de remessa · "
                               f"{relatorio.brl(total_geral)}"))
+        # "Contas sem remessa" do Início sai daqui: são as contas que TÊM
+        # pagamento hoje e não viraram arquivo. É a única hora em que a
+        # diferença existe — antes da remessa não há com o que comparar.
+        _com_remessa = len(gerados)
+        _com_pagamento = len([c for c in (self.resultado.contas if
+                                          self.resultado else {})])
+        widgets.registrar_atividade(
+            "pag", "Gerar remessa", "ok",
+            f"{len(gerados)} arquivo(s) · {relatorio.brl(total_geral)}",
+            # `total_remessa` e não `total`: o Início junta os números das
+            # várias execuções da mesma aba, e "total" já é o do dia inteiro
+            # que o passo 1 apurou. Com o mesmo nome, o valor da remessa
+            # (que exclui o que ficou de fora) sobrescrevia o do dia, e o
+            # cartão "Pagamentos de hoje" passava a mostrar 87 lançamentos
+            # somando menos do que eles somam.
+            {"contas_sem_remessa": max(_com_pagamento - _com_remessa, 0),
+             "total_remessa": total_geral})
 
     def _registrar_o_que_ficou_de_fora(self, preparado):
         """O que NÃO entrou na remessa, com o motivo — depois de gravar.

@@ -165,104 +165,131 @@ class AnexarFrame(ttk.Frame):
         self.cab = widgets.Cabecalho(
             self, "Anexar Comprovantes",
             "Busca os pagos do período, descobre quem está sem comprovante "
-            "e anexa o PDF certo em cada um.")
-        self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
+            "e anexa o PDF certo em cada um.",
+            trilha="Comprovantes  ›  Anexar")
+        self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
 
-        # Cartões sem número: quem numera é a trilha de ações, no fim do build.
-        self.f_auto = widgets.Cartao(self, "Período e pasta dos comprovantes")
-        self.f_auto.pack(fill="x", padx=PADX, pady=6)
+        # Os dois passos do fluxo vão para o cabeçalho, e o segundo é o verde:
+        # anexar é o que esta tela existe para fazer. O resto (login, pausar,
+        # parar, abrir relatório) fica embaixo, junto da barra de execução —
+        # não são passos, e ficavam do mesmo tamanho dos que são.
+        self.b1 = widgets.Botao(self.cab.acoes, "Carregar contas",
+                                papel="passo", command=self.conectar)
+        self.b1.pack(side="left", padx=(0, 8))
+        self.b2 = widgets.Botao(self.cab.acoes, "Casar e anexar", papel="acao",
+                                command=self.executar, state="disabled")
+        self.b2.pack(side="left")
+
+        # Os cartões passam a ser numerados, e os botões deixam de ser: era o
+        # "▶ 1." no botão e a trilha de passos contando a mesma coisa duas
+        # vezes. Agora o número está num lugar só.
+        self.f_auto = widgets.Cartao(self, "Período e pasta dos comprovantes", 1)
+        self.f_auto.pack(fill="x", padx=PADX, pady=(0, 12))
         fa = self.f_auto
-        ttk.Label(fa, text="Data de pagamento — de:").grid(row=0, column=0, sticky="w", pady=4)
-        CampoData(fa, self.v_ini).grid(row=0, column=1, sticky="w", padx=(6, 14))
-        ttk.Label(fa, text="até:").grid(row=0, column=2, sticky="e")
-        CampoData(fa, self.v_fim).grid(row=0, column=3, sticky="w", padx=(6, 14))
-        ttk.Label(fa, text="(dd/mm/aaaa)").grid(row=0, column=4, sticky="w")
-        ttk.Label(fa, text="Pasta dos PDFs renomeados:").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        ttk.Entry(fa, textvariable=self.v_pasta).grid(row=1, column=1, columnspan=3, sticky="we", pady=(6, 0))
-        ttk.Button(fa, text="Selecionar…",
-                   command=lambda: self.v_pasta.set(
-                       (filedialog.askdirectory() or self.v_pasta.get()).replace("\\", "/"))
-                   ).grid(row=1, column=4, padx=(6, 0), sticky="w", pady=(6, 0))
-        ttk.Checkbutton(fa, text="Ignorar tarifas bancárias, IOF, cesta e pacote de serviços",
-                        variable=self.v_ign).grid(row=2, column=0, columnspan=5, sticky="w", pady=(8, 0))
-        ttk.Checkbutton(fa, text="Ignorar aportes de capital e distribuição de lucros",
-                        variable=self.v_ign_ap).grid(row=3, column=0, columnspan=5, sticky="w")
-        fa.columnconfigure(3, weight=1)
+        linha = ttk.Frame(fa)
+        linha.pack(fill="x")
+        widgets.Campo(linha, "Pagamento de",
+                      lambda p: CampoData(p, self.v_ini)
+                      ).pack(side="left", padx=(0, 16))
+        widgets.Campo(linha, "Até", lambda p: CampoData(p, self.v_fim)
+                      ).pack(side="left")
+
+        pasta = ttk.Frame(fa)
+        pasta.pack(fill="x", pady=(12, 0))
+        ttk.Label(pasta, text="PASTA DOS PDFs RENOMEADOS", style="Rotulo.TLabel"
+                  ).pack(anchor="w", pady=(0, 3))
+        campo = ttk.Frame(pasta)
+        campo.pack(fill="x")
+        ttk.Entry(campo, textvariable=self.v_pasta).pack(side="left", fill="x",
+                                                         expand=True)
+        widgets.Botao(campo, "Selecionar…", papel="neutro",
+                      command=lambda: self.v_pasta.set(
+                          (filedialog.askdirectory() or self.v_pasta.get())
+                          .replace("\\", "/"))).pack(side="left", padx=(8, 0))
+
+        # As caixas de marcar ficam agrupadas EMBAIXO do formulário, e não
+        # espalhadas entre os campos: elas são exceções à regra do lote, e
+        # lidas em bloco dá para conferir as duas de uma vez.
+        marcas = ttk.Frame(fa)
+        marcas.pack(fill="x", pady=(12, 0))
+        ttk.Checkbutton(marcas, variable=self.v_ign,
+                        text="Ignorar tarifas bancárias, IOF, cesta e pacote "
+                             "de serviços").pack(anchor="w")
+        ttk.Checkbutton(marcas, variable=self.v_ign_ap,
+                        text="Ignorar aportes de capital e distribuição de "
+                             "lucros").pack(anchor="w", pady=(4, 0))
 
         # ---- escolha do modo (entre os blocos 1 e 2)
-        self.topo = ttk.Frame(self)
-        self.topo.pack(fill="x", padx=PADX, pady=(2, 0))
-        ttk.Label(self.topo, text="Modo:").pack(side="left", padx=(0, 10))
-        ttk.Radiobutton(self.topo, text="Automático (casar pelos nomes dos PDFs)",
+        self.topo = widgets.Cartao(self, "Como casar comprovante e lançamento", 2)
+        self.topo.pack(fill="x", padx=PADX, pady=(0, 12))
+        ttk.Radiobutton(self.topo, text="Automático — casar pelos nomes dos PDFs",
                         variable=self.v_modo, value="auto",
-                        command=self._alternar_modo).pack(side="left", padx=(0, 18))
+                        command=self._alternar_modo).pack(anchor="w")
         ttk.Radiobutton(self.topo, text="Por lista pronta (.csv / .xlsx)",
                         variable=self.v_modo, value="lista",
-                        command=self._alternar_modo).pack(side="left")
+                        command=self._alternar_modo).pack(anchor="w", pady=(4, 0))
 
-        # ---- card 2: contas
-        self.f_contas = widgets.Cartao(self, "Contas bancárias (marque as desejadas)")
-        self.f_contas.pack(fill="x", padx=PADX, pady=6)
+        # ---- card: contas
+        self.f_contas = widgets.Cartao(self, "Contas bancárias — marque as desejadas", 3)
+        self.f_contas.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.rodape_contas = widgets.RodapeTabela(self.f_contas.acoes)
+        self.rodape_contas.pack()
         self.contas_box = ttk.Frame(self.f_contas)
         self.contas_box.pack(fill="x")
-        ttk.Label(self.contas_box,
-                  text="Clique em \"1. Carregar contas\" para listar as contas."
+        ttk.Label(self.contas_box, style="Tenue.TLabel",
+                  text='Clique em "Carregar contas" para listar as contas.'
                   ).pack(anchor="w")
 
         # ---- card: modo lista (mostrado só no modo "Por lista")
         self.f_lista = widgets.Cartao(self, "Lista pronta")
         fl = self.f_lista
-        ttk.Label(fl, text="Arquivo (.csv ou .xlsx):").grid(row=0, column=0, sticky="w")
-        ttk.Entry(fl, textvariable=self.v_lista).grid(row=0, column=1, sticky="we", padx=6)
-        ttk.Button(fl, text="Selecionar…", command=self._sel_lista
-                   ).grid(row=0, column=2, sticky="w")
-        fl.columnconfigure(1, weight=1)
+        ttk.Label(fl, text="ARQUIVO (.csv ou .xlsx)", style="Rotulo.TLabel"
+                  ).pack(anchor="w", pady=(0, 3))
+        escolha = ttk.Frame(fl)
+        escolha.pack(fill="x")
+        ttk.Entry(escolha, textvariable=self.v_lista).pack(side="left", fill="x",
+                                                           expand=True)
+        widgets.Botao(escolha, "Selecionar…", papel="neutro",
+                      command=self._sel_lista).pack(side="left", padx=(8, 0))
 
-        # ---- barra de ação (fixa no rodapé): botões + status/progresso
-        acao = ttk.Frame(self)
-        acao.pack(side="bottom", fill="x", padx=PADX, pady=(6, 12))
-        prog = ttk.Frame(acao)
-        prog.pack(side="bottom", fill="x", pady=(8, 0))
-        self.lbl = ttk.Label(prog, text="Pronto.")
-        self.lbl.pack(side="left")
-        self.pb = ttk.Progressbar(prog, mode="determinate")
-        self.pb.pack(side="left", fill="x", expand=True, padx=12)
-
-        btns = ttk.Frame(acao)
-        btns.pack(fill="x")
-        ttk.Checkbutton(btns, text="Simular (não anexa de verdade)",
-                        variable=self.v_dry).pack(side="left")
+        # ---- barra de execução e o que não é passo
+        acao = ttk.Frame(self, style="Fundo.TFrame")
+        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        btns = ttk.Frame(acao, style="Fundo.TFrame")
+        btns.pack(side="right", padx=(16, 0))
+        ttk.Checkbutton(btns, text="Simular", variable=self.v_dry,
+                        style="Fundo.TCheckbutton").pack(side="left", padx=(0, 10))
+        self.b_pause = widgets.Botao(btns, "⏸  Pausar", papel="neutro",
+                                     command=self._pausar_toggle,
+                                     state="disabled")
+        self.b_pause.pack(side="left")
+        self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
+                                    command=self._parar_click, state="disabled")
+        self.b_stop.pack(side="left", padx=(8, 0))
+        self.b_rel = widgets.Botao(btns, "📄  Abrir relatório", papel="neutro",
+                                   command=self._abrir_relatorio,
+                                   state="disabled")
+        self.b_rel.pack(side="left", padx=(8, 0))
         # "Abrir e acessar" deixou de ser passo: com o login salvo o app entra
         # sozinho. O botão continua aqui, sem número, para o primeiro acesso
         # (quando ainda não há senha guardada) e para destravar sessão caída.
-        self.b1 = ttk.Button(btns, text="▶ 1. Carregar contas", command=self.conectar)
-        self.b1.pack(side="left", padx=(10, 0))
-        self.b2 = ttk.Button(btns, text="▶ 2. Casar e anexar", command=self.executar,
-                             state="disabled")
-        self.b2.pack(side="left", padx=10)
-        self.b0 = ttk.Button(btns, text="Abrir o Mais Controle", command=self.abrir_mc)
-        self.b0.pack(side="left")
-        self.b_pause = ttk.Button(btns, text="⏸ Pausar", command=self._pausar_toggle,
-                                  state="disabled")
-        self.b_pause.pack(side="left")
-        self.b_stop = ttk.Button(btns, text="⏹ Parar", command=self._parar_click,
-                                 state="disabled")
-        self.b_stop.pack(side="left", padx=6)
-        self.b_rel = ttk.Button(btns, text="📄 Abrir relatório",
-                                command=self._abrir_relatorio, state="disabled")
-        self.b_rel.pack(side="left", padx=(10, 0))
-        self.b_login = ttk.Button(btns, text="🔑 Login",
-                                  command=self._gerenciar_login)
-        self.b_login.pack(side="right")
-        for _b in (self.b1, self.b2):
-            try:
-                _b.configure(style="Accent.TButton")   # botões azuis (tema sv-ttk)
-            except tk.TclError:
-                pass
+        self.b0 = widgets.Botao(btns, "Abrir o Mais Controle", papel="neutro",
+                                command=self.abrir_mc)
+        self.b0.pack(side="left", padx=(8, 0))
+        self.b_login = widgets.Botao(btns, "🔑  Login", papel="neutro",
+                                     command=self._gerenciar_login)
+        self.b_login.pack(side="left", padx=(8, 0))
+
+        self.barra_exec = widgets.BarraExecucao(acao)
+        self.barra_exec.pack(side="left", fill="x", expand=True)
+        # `lbl` e `pb` continuam existindo com os nomes de sempre: o `_drain` e
+        # as chamadas de progresso não sabem que a barra virou outro widget.
+        self.lbl = self.barra_exec.lbl
+        self.pb = self.barra_exec.pb
 
         # ---- card: registro (cresce quando tem o que mostrar)
-        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)
@@ -271,15 +298,11 @@ class AnexarFrame(ttk.Frame):
         widgets.registro_elastico(self.reg, self.log)
         self._alternar_modo()
 
-        widgets.Passos(self.cab, (("Carregar contas", self.b1),
-                                  ("Casar e anexar", self.b2))
-                       ).pack(anchor="w", pady=(8, 0))
-
     def _mostrar_placeholder(self):
         self.log.delete("1.0", "end")
         self.log.insert("end", "\n\n", "ph")
         self.log.insert("end", "O andamento e os resultados aparecerão aqui.\n", "ph")
-        self.log.insert("end", "\nSiga os passos 1 → 2 na barra abaixo — o app "
+        self.log.insert("end", "\nSiga os dois passos no alto da tela — o app "
                                "abre o Mais Controle e entra sozinho.\n", "ph")
         self._ph = True
 
@@ -288,7 +311,8 @@ class AnexarFrame(ttk.Frame):
             self.f_lista.pack_forget()
             self.b1.config(state="normal")
         else:
-            self.f_lista.pack(fill="x", padx=14, pady=6, after=self.topo)
+            self.f_lista.pack(fill="x", padx=widgets.PADX, pady=(0, 12),
+                              after=self.topo)
             self.b2.config(state="normal")
 
     def _sel_lista(self):
@@ -455,14 +479,11 @@ class AnexarFrame(ttk.Frame):
                 return
             concluir((email, senha, v_salvar.get()))
 
-        b_ok = ttk.Button(bar, text="Entrar", command=confirmar)
+        b_ok = widgets.Botao(bar, "Entrar", papel="acao", command=confirmar)
         b_ok.pack(side="right")
-        try:
-            b_ok.configure(style="Accent.TButton")
-        except tk.TclError:
-            pass
-        ttk.Button(bar, text="Cancelar", command=lambda: concluir(None)
-                   ).pack(side="right", padx=(0, 8))
+        widgets.Botao(bar, "Cancelar", papel="neutro",
+                      command=lambda: concluir(None)
+                      ).pack(side="right", padx=(0, 8))
         if salvos:
             ttk.Button(bar, text="Remover login salvo",
                        command=lambda: (credenciais.apagar(), concluir(None))
@@ -683,15 +704,11 @@ class AnexarFrame(ttk.Frame):
             top.destroy()
             ev.set()
 
-        b_ok = ttk.Button(rodape, text="✔ Confirmar escolhas",
-                          command=lambda: concluir(True))
+        b_ok = widgets.Botao(rodape, "✔  Confirmar escolhas", papel="acao",
+                             command=lambda: concluir(True))
         b_ok.pack(side="left")
-        try:
-            b_ok.configure(style="Accent.TButton")
-        except tk.TclError:
-            pass
-        ttk.Button(rodape, text="Deixar todas em dúvida",
-                   command=lambda: concluir(False)).pack(side="left", padx=10)
+        widgets.Botao(rodape, "Deixar todas em dúvida", papel="neutro",
+                      command=lambda: concluir(False)).pack(side="left", padx=10)
         top.protocol("WM_DELETE_WINDOW", lambda: concluir(False))
         top.grab_set()
 
@@ -756,13 +773,32 @@ class AnexarFrame(ttk.Frame):
             self.vars_contas[c] = v
             ttk.Checkbutton(self.contas_box, text=f"{c}  ({cont[c]})", variable=v
                             ).grid(row=i // colunas, column=i % colunas, sticky="w", padx=4)
-        linha = len(contas) // colunas + 1
-        ttk.Button(self.contas_box, text="Marcar todas",
-                   command=lambda: [v.set(True) for v in self.vars_contas.values()]
-                   ).grid(row=linha, column=0, sticky="w", pady=4)
-        ttk.Button(self.contas_box, text="Desmarcar todas",
-                   command=lambda: [v.set(False) for v in self.vars_contas.values()]
-                   ).grid(row=linha, column=1, sticky="w")
+        # "Marcar/Desmarcar todas" e a contagem sobem para o cabeçalho do
+        # cartão: dentro da grade de contas eles disputavam a última linha com
+        # as próprias contas, e mudavam de lugar conforme quantas havia.
+        self.rodape_contas.limpar_links()
+        self.rodape_contas.link("Marcar todas", lambda: self._todas_contas(True))
+        self.rodape_contas.link("Desmarcar todas",
+                                lambda: self._todas_contas(False))
+        self._cont_por_conta = cont
+        for v in self.vars_contas.values():
+            v.trace_add("write", lambda *_a: self._contar_contas())
+        self._contar_contas()
+
+    def _todas_contas(self, marcar: bool):
+        for v in self.vars_contas.values():
+            v.set(marcar)
+
+    def _contar_contas(self):
+        try:
+            marcadas = [c for c, v in self.vars_contas.items() if v.get()]
+        except tk.TclError:
+            return                       # aba fechando com o trace pendente
+        pagos = sum(self._cont_por_conta.get(c, 0) for c in marcadas)
+        self.rodape_contas.definir(
+            texto=f"{len(marcadas)} conta(s) · {pagos} pagamento(s)"
+                  + (f" · {len(self.vars_contas) - len(marcadas)} ficam de fora"
+                     if len(marcadas) < len(self.vars_contas) else ""))
 
     # ---------------------------------------------------------------- etapa 2
     def executar(self):
@@ -1001,11 +1037,11 @@ class AnexarFrame(ttk.Frame):
                     self.pb.config(mode="determinate", maximum=max(val, 1), value=0)
                 elif kind == "prog":
                     i, ok, err = val
-                    self.pb.config(value=i)
+                    self.barra_exec.progresso(i, int(self.pb.cget("maximum")))
                     self.lbl.config(text=f"{i} processados — {ok} ok" + (f", {err} erros" if err else ""))
                 elif kind == "prog_verif":
                     i, n = val
-                    self.pb.config(value=i)
+                    self.barra_exec.progresso(i, n)
                     self.lbl.config(text=f"Verificando comprovantes já anexados: {i}/{n}")
                 elif kind == "contas":
                     self.pb.stop()
@@ -1013,7 +1049,8 @@ class AnexarFrame(ttk.Frame):
                     self._montar_contas(val)
                     self.b1.config(state="normal")
                     self.b2.config(state="normal")
-                    self.lbl.config(text="Contas carregadas. Marque as desejadas e clique em 3.")
+                    self.lbl.config(text="Contas carregadas. Marque as "
+                                         "desejadas e clique em Casar e anexar.")
                 elif kind == "reabilitar0":
                     self.b0.config(state="normal")
                 elif kind == "reabilitar":
@@ -1035,8 +1072,19 @@ class AnexarFrame(ttk.Frame):
                     if saida:
                         self.ultimo_relatorio = saida
                         self.b_rel.config(state="normal")
-                    self.lbl.config(text=f"Concluído: {ok}/{tot} ok"
-                                    + (f" | {duv} dúvidas, {sp} sem par" if duv or sp else ""))
+                    self.barra_exec.terminou(
+                        f"Concluído: {ok}/{tot} ok"
+                        + (f" | {duv} dúvidas, {sp} sem par" if duv or sp else ""))
+                    # O "Anexados no mês" do Início sai daqui: quem contou foi
+                    # esta rotina, e recontar custaria outra sessão do ERP.
+                    widgets.registrar_atividade(
+                        "anx", "Casar e anexar",
+                        "atencao" if (duv or sp) else "ok",
+                        f"{ok} de {tot} anexado(s)"
+                        + (f" · {duv} em dúvida, {sp} sem par" if duv or sp
+                           else ""),
+                        {"anexados": ok, "pagos": tot, "duvidas": duv,
+                         "sem_par": sp})
                     msg = f"Anexados/ok: {ok} de {tot}"
                     if duv or sp:
                         msg += f"\nDúvidas: {duv}\nSem par: {sp}"

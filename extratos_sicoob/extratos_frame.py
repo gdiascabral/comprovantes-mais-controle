@@ -103,71 +103,82 @@ class ExtratosSicoobFrame(ttk.Frame):
     def _build(self):
         PADX = widgets.PADX
 
-        widgets.Cabecalho(
+        cab = widgets.Cabecalho(
             self, "Extratos Sicoob",
             "Cria as pastas do mês e baixa o extrato de cada conta do Sicoob "
-            "em OFX e PDF.").pack(fill="x", padx=PADX, pady=(12, 4))
+            "em OFX e PDF.",
+            trilha="Mensal  ›  Extratos Sicoob")
+        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        # O verde é BAIXAR: criar pasta e compactar são o antes e o depois.
+        self.b1 = widgets.Botao(cab.acoes, "Conferir e criar pastas",
+                                papel="passo", command=self.criar_pastas)
+        self.b1.pack(side="left", padx=(0, 8))
+        self.b2 = widgets.Botao(cab.acoes, "Baixar extratos", papel="acao",
+                                command=self.baixar)
+        self.b2.pack(side="left")
 
         # ---- card 1: mês
         f1 = widgets.Cartao(self, "Mês do fechamento", 1)
-        f1.pack(fill="x", padx=PADX, pady=6)
-        linha = ttk.Frame(f1); linha.pack(fill="x")
-        ttk.Label(linha, text="Mês:").pack(side="left")
-        ttk.Combobox(linha, textvariable=self.v_mes, values=MESES,
-                     state="readonly", width=12).pack(side="left", padx=(6, 14))
-        ttk.Label(linha, text="Ano:").pack(side="left")
+        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        linha = ttk.Frame(f1)
+        linha.pack(fill="x")
+        widgets.Campo(linha, "Mês", lambda p: ttk.Combobox(
+            p, textvariable=self.v_mes, values=MESES, state="readonly",
+            width=12)).pack(side="left", padx=(0, 16))
         anos = [str(a) for a in range(datetime.date.today().year + 1, 2019, -1)]
-        ttk.Combobox(linha, textvariable=self.v_ano, values=anos,
-                     state="readonly", width=7).pack(side="left", padx=(6, 14))
-        ttk.Label(linha, style="Apoio.TLabel",
-                  text="(vem preenchido com o mês anterior)").pack(side="left")
+        widgets.Campo(linha, "Ano", lambda p: ttk.Combobox(
+            p, textvariable=self.v_ano, values=anos, state="readonly",
+            width=7)).pack(side="left", padx=(0, 16))
+        ttk.Label(linha, style="Tenue.TLabel",
+                  text="vem preenchido com o mês anterior"
+                  ).pack(side="left", pady=(15, 0))
 
-        # ---- card 2: pastas
-        f2 = widgets.Cartao(self, "Pastas", 2)
-        f2.pack(fill="x", padx=PADX, pady=6)
-        self.b1 = ttk.Button(f2, text="Conferir e criar pastas",
-                             style="Accent.TButton", command=self.criar_pastas)
-        self.b1.pack(side="left")
-        ttk.Label(f2, style="Apoio.TLabel",
-                  text="  Mostra o que será criado e pede confirmação."
-                  ).pack(side="left")
+        # ---- card 2: o que cada passo faz
+        # Os três cartões que só seguravam um botão viraram um só: com o botão
+        # no cabeçalho, o que sobrava neles era a frase de explicação — e três
+        # cartões brancos com uma frase cada eram três cartões vazios.
+        f2 = widgets.Cartao(self, "Como o mês fecha", 2)
+        f2.pack(fill="x", padx=PADX, pady=(0, 12))
+        for titulo, frase in (
+                ("Conferir e criar pastas",
+                 "Mostra o que será criado e pede confirmação."),
+                ("Baixar extratos",
+                 "O login é feito por você, na janela do Chrome."),
+                ("Gerar os .zip por empresa",
+                 "Rode só depois que os outros bancos entrarem.")):
+            passo = ttk.Frame(f2)
+            passo.pack(fill="x", pady=(0, 6))
+            ttk.Label(passo, text=titulo, style="Forte.TLabel").pack(anchor="w")
+            ttk.Label(passo, text=frase, style="Tenue.TLabel").pack(anchor="w")
 
-        # ---- card 3: download
-        f3 = widgets.Cartao(self, "Baixar extratos", 3)
-        f3.pack(fill="x", padx=PADX, pady=6)
-        self.b2 = ttk.Button(f3, text="Baixar extratos do Sicoob",
-                             style="Accent.TButton", command=self.baixar)
-        self.b2.pack(side="left")
-        self.b_stop = ttk.Button(f3, text="⏹ Parar", state="disabled",
-                                 command=self._parar_click)
-        self.b_stop.pack(side="left", padx=(8, 0))
-        ttk.Label(f3, style="Apoio.TLabel",
-                  text="  O login é feito por você, na janela do Chrome."
-                  ).pack(side="left")
-
-        # ---- card 4: zip
-        f4 = widgets.Cartao(self, "Compactar (quando o mês fechar)", 4)
-        f4.pack(fill="x", padx=PADX, pady=6)
-        self.b3 = ttk.Button(f4, text="Gerar os .zip por empresa",
-                             command=self.zipar)
-        self.b3.pack(side="left")
-        self.b_abrir = ttk.Button(f4, text="Abrir a pasta do mês",
-                                  state="disabled", command=self._abrir_pasta)
+        # ---- barra de execução, acima do registro
+        acao = ttk.Frame(self, style="Fundo.TFrame")
+        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        btns = ttk.Frame(acao, style="Fundo.TFrame")
+        btns.pack(side="right", padx=(16, 0))
+        self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
+                                    state="disabled", command=self._parar_click)
+        self.b_stop.pack(side="left")
+        self.b3 = widgets.Botao(btns, "🗜  Gerar os .zip", papel="neutro",
+                                command=self.zipar)
+        self.b3.pack(side="left", padx=(8, 0))
+        self.b_abrir = widgets.Botao(btns, "📂  Abrir a pasta do mês",
+                                     papel="neutro", state="disabled",
+                                     command=self._abrir_pasta)
         self.b_abrir.pack(side="left", padx=(8, 0))
-        ttk.Label(f4, style="Apoio.TLabel",
-                  text="  Rode só depois que os outros bancos entrarem."
-                  ).pack(side="left")
+        self.barra_exec = widgets.BarraExecucao(acao)
+        self.barra_exec.pack(side="left", fill="x", expand=True)
+        self.lbl = self.barra_exec.lbl
+        self.pb = self.barra_exec.pb
 
-        # ---- progresso e log
-        f5 = ttk.Frame(self); f5.pack(fill="x", padx=PADX, pady=6)
-        self.pb = ttk.Progressbar(f5, mode="determinate")
-        self.pb.pack(fill="x")
-        self.lbl = ttk.Label(f5, text="Pronto.", style="Apoio.TLabel")
-        self.lbl.pack(anchor="w", pady=(4, 4))
-        self.log = tk.Text(f5, wrap="word", borderwidth=1, relief="solid")
+        # ---- registro
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0)
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
-        widgets.registro_elastico(f5, self.log)
+        widgets.registro_elastico(self.reg, self.log)
 
     # ------------------------------------------------------------- mensagens
     def _log(self, msg=""):
@@ -184,7 +195,7 @@ class ExtratosSicoobFrame(ttk.Frame):
                     self.lbl.configure(text=valor)
                 elif tipo == "progresso":
                     feitos, total = valor
-                    self.pb.configure(maximum=max(total, 1), value=feitos)
+                    self.barra_exec.progresso(feitos, total)
                 elif tipo == "botoes":
                     for b in (self.b1, self.b2, self.b3):
                         b.configure(state=valor)
@@ -193,6 +204,9 @@ class ExtratosSicoobFrame(ttk.Frame):
                 elif tipo == "pasta_pronta":
                     self.ultima_pasta = valor
                     self.b_abrir.configure(state="normal")
+                    widgets.registrar_atividade(
+                        "ext", "Extratos do mês", "ok",
+                        str(self.lbl.cget("text"))[:120])
                 elif tipo == "confirmar_pastas":
                     self._confirmar_pastas(valor)
         except queue.Empty:

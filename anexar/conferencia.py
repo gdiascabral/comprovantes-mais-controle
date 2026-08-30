@@ -129,6 +129,9 @@ class ConferenciaFrame(ttk.Frame):
         self.anx = anexar_frame
         self.q = queue.Queue()
         self.ultimo_relatorio = None
+        #: Quantos ficaram sem comprovante na última passada. É o que
+        #: a tela de Início soma como pendência — ver `_drain`.
+        self._pendencias = 0
         self.worker = None
         # A conferência com conteúdo baixa e lê um PDF por pagamento: em mês
         # cheio passa de meia hora. Sem Parar, a única saída era matar o app —
@@ -151,53 +154,62 @@ class ConferenciaFrame(ttk.Frame):
         PADX = widgets.PADX
 
         # ---- cabeçalho
-        widgets.Cabecalho(
+        cab = widgets.Cabecalho(
             self, "Conferência",
             "Lista os pagos sem comprovante e, opcionalmente, confere o "
-            "conteúdo dos anexos existentes."
-        ).pack(fill="x", padx=PADX, pady=(12, 4))
+            "conteúdo dos anexos existentes.",
+            trilha="Comprovantes  ›  Conferência")
+        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        # Ação única: o verde é o único botão do cabeçalho.
+        self.btn = widgets.Botao(cab.acoes, "Conferir anexos do período",
+                                 papel="acao", command=self._executar)
+        self.btn.pack(side="left")
 
         # ---- card: período
-        f1 = widgets.Cartao(self, "Período da conferência")
-        f1.pack(fill="x", padx=PADX, pady=6)
-        ttk.Label(f1, text="Data de pagamento — de:").grid(row=0, column=0, sticky="w", pady=4)
-        CampoData(f1, self.v_ini).grid(row=0, column=1, sticky="w", padx=(6, 14))
-        ttk.Label(f1, text="até:").grid(row=0, column=2, sticky="e")
-        CampoData(f1, self.v_fim).grid(row=0, column=3, sticky="w", padx=(6, 14))
-        ttk.Label(f1, text="(dd/mm/aaaa)").grid(row=0, column=4, sticky="w")
-        ttk.Checkbutton(f1, text="Ignorar tarifas bancárias, IOF, cesta e pacote de serviços",
-                        variable=self.v_ign).grid(row=1, column=0, columnspan=5, sticky="w", pady=(6, 0))
-        ttk.Checkbutton(f1, text="Ignorar aportes de capital e distribuição de lucros",
-                        variable=self.v_ign_ap).grid(row=2, column=0, columnspan=5, sticky="w")
-        ttk.Checkbutton(f1, text="Conferir também o CONTEÚDO dos anexos "
-                                 "(abre cada PDF e checa valor e data — mais demorado)",
-                        variable=self.v_conteudo
-                        ).grid(row=3, column=0, columnspan=5, sticky="w", pady=(0, 2))
+        f1 = widgets.Cartao(self, "Período da conferência", 1)
+        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        linha = ttk.Frame(f1)
+        linha.pack(fill="x")
+        widgets.Campo(linha, "Pagamento de", lambda p: CampoData(p, self.v_ini)
+                      ).pack(side="left", padx=(0, 16))
+        widgets.Campo(linha, "Até", lambda p: CampoData(p, self.v_fim)
+                      ).pack(side="left")
+        # As três exceções ficam agrupadas EMBAIXO do formulário, e não
+        # entremeadas com os campos: são da mesma natureza (o que não conta),
+        # e juntas dá para conferir as três de uma vez.
+        marcas = ttk.Frame(f1)
+        marcas.pack(fill="x", pady=(12, 0))
+        ttk.Checkbutton(marcas, variable=self.v_ign,
+                        text="Ignorar tarifas bancárias, IOF, cesta e pacote "
+                             "de serviços").pack(anchor="w")
+        ttk.Checkbutton(marcas, variable=self.v_ign_ap,
+                        text="Ignorar aportes de capital e distribuição de "
+                             "lucros").pack(anchor="w", pady=(4, 0))
+        ttk.Checkbutton(marcas, variable=self.v_conteudo,
+                        text="Conferir também o CONTEÚDO dos anexos (abre cada "
+                             "PDF e checa valor e data — mais demorado)"
+                        ).pack(anchor="w", pady=(4, 0))
 
-        # ---- barra de ação (fixa no rodapé)
-        acao = ttk.Frame(self)
-        acao.pack(side="bottom", fill="x", padx=PADX, pady=(6, 12))
-        self.btn = ttk.Button(acao, text="▶  Conferir anexos do período",
-                              command=self._executar)
-        self.btn.pack(side="right", ipadx=10)
-        try:
-            self.btn.configure(style="Accent.TButton")
-        except tk.TclError:
-            pass
-        self.b_stop = ttk.Button(acao, text="⏹  Parar",
-                                 command=self._parar_click, state="disabled")
-        self.b_stop.pack(side="right", padx=(0, 8))
-        self.b_rel = ttk.Button(acao, text="📄  Abrir relatório",
-                                command=self._abrir_relatorio, state="disabled")
-        self.b_rel.pack(side="right", padx=(0, 8))
-        self.lbl = ttk.Label(acao, text="Pronto.")
-        self.lbl.pack(side="left")
-        self.pb = ttk.Progressbar(acao, mode="determinate")
-        self.pb.pack(side="left", fill="x", expand=True, padx=12)
+        # ---- barra de execução, acima do registro
+        acao = ttk.Frame(self, style="Fundo.TFrame")
+        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        btns = ttk.Frame(acao, style="Fundo.TFrame")
+        btns.pack(side="right", padx=(16, 0))
+        self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
+                                    command=self._parar_click, state="disabled")
+        self.b_stop.pack(side="left")
+        self.b_rel = widgets.Botao(btns, "📄  Abrir relatório", papel="neutro",
+                                   command=self._abrir_relatorio,
+                                   state="disabled")
+        self.b_rel.pack(side="left", padx=(8, 0))
+        self.barra_exec = widgets.BarraExecucao(acao)
+        self.barra_exec.pack(side="left", fill="x", expand=True)
+        self.lbl = self.barra_exec.lbl
+        self.pb = self.barra_exec.pb
 
         # ---- card: registro (cresce quando tem o que mostrar)
-        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)
@@ -209,8 +221,8 @@ class ConferenciaFrame(ttk.Frame):
         self.log.delete("1.0", "end")
         self.log.insert("end", "\n\n", "ph")
         self.log.insert("end", "O resultado da conferência aparecerá aqui.\n", "ph")
-        self.log.insert("end", "\nInforme o período e clique em "
-                               "“Conferir anexos do período”.\n", "ph")
+        self.log.insert("end", "\nInforme o período e clique em “Conferir "
+                               "anexos do período”, no alto da tela.\n", "ph")
 
     def aplicar_cores(self, escuro: bool):
         try:
@@ -230,16 +242,24 @@ class ConferenciaFrame(ttk.Frame):
                 elif kind == "status":
                     self.lbl.config(text=val)
                 elif kind == "max":
-                    self.pb.config(maximum=max(val, 1), value=0)
+                    self._total = max(val, 1)
+                    self.pb.config(maximum=self._total, value=0)
                 elif kind == "prog":
-                    self.pb.config(value=val)
+                    self.barra_exec.progresso(val, getattr(self, "_total", 1))
                 elif kind == "fim":
                     self.btn.config(state="normal")
                     self.b_stop.config(state="disabled")
-                    self.pb.config(value=0)
+                    recado = str(self.lbl.cget("text"))
+                    self.barra_exec.terminou(recado)
                     if val:
                         self.ultimo_relatorio = val
                         self.b_rel.config(state="normal")
+                    # O Início conta as pendências a partir daqui: quem sabe
+                    # quantos ficaram sem comprovante é esta rotina.
+                    widgets.registrar_atividade(
+                        "conf", "Conferir anexos",
+                        "atencao" if self._pendencias else "ok",
+                        recado[:120], {"duvidas": self._pendencias})
         except queue.Empty:
             pass
         except Exception as e:                              # noqa: BLE001
@@ -416,10 +436,15 @@ class ConferenciaFrame(ttk.Frame):
                            if conteudo else "")
                         + (f", {len(nao_verif)} não verificado(s)"
                            if nao_verif else "")))
+            # O que a tela de Início chama de "pendência": pago sem
+            # comprovante mais o que o conteúdo do anexo contradiz. Guardado
+            # aqui, e não recontado lá, porque quem contou foi esta rotina.
+            self._pendencias = len(sem) + len(divergentes)
             self.q.put(("fim", saida))
         except Exception as e:
             self._log(_texto_do_erro(e))
             self.q.put(("status", "Erro — veja o Registro."))
+            self._pendencias = 0
             self.q.put(("fim", None))
 
     def _relatorio(self, sem, divergentes, conferidos, nao_conf,

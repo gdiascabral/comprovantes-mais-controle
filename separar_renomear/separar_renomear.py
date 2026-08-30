@@ -767,6 +767,8 @@ class SepararFrame(ttk.Frame):
         # Último motivo de falha do `_drain`, para não repetir a mesma linha a
         # cada 150 ms (ver o `except` de lá).
         self._erro_drain = None
+        #: A linha de fecho do último lote (ver `_drenar`).
+        self._resumo = ""
         self._montar()
         try:                             # já nasce na cor do tema (sem flash)
             self.aplicar_cores(util.cor_escura(ttk.Style().lookup("TFrame", "background")))
@@ -778,36 +780,43 @@ class SepararFrame(ttk.Frame):
         PADX = widgets.PADX
 
         # ---- cabeçalho
-        widgets.Cabecalho(
+        cab = widgets.Cabecalho(
             self, "Separar e Renomear",
-            "Separa cada página em um comprovante e renomeia lendo o conteúdo."
-        ).pack(fill="x", padx=PADX, pady=(12, 4))
+            "Separa cada página em um comprovante e renomeia lendo o conteúdo.",
+            trilha="Comprovantes  ›  Separar e Renomear")
+        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        # Ação única: o verde é o único botão do cabeçalho.
+        self.btn = widgets.Botao(cab.acoes, "Separar e Renomear", papel="acao",
+                                 command=self._executar)
+        self.btn.pack(side="left")
 
         # ---- card: pastas de trabalho
-        pastas = widgets.Cartao(self, "Pastas de trabalho")
-        pastas.pack(fill="x", padx=PADX, pady=6)
-        ttk.Label(pastas, text="Entrada — PDFs originais"
-                  ).grid(row=0, column=0, sticky="w")
+        pastas = widgets.Cartao(self, "Pastas de trabalho", 1)
+        pastas.pack(fill="x", padx=PADX, pady=(0, 12))
+        ttk.Label(pastas, text="ENTRADA — PDFs ORIGINAIS", style="Rotulo.TLabel"
+                  ).grid(row=0, column=0, sticky="w", pady=(0, 3))
         ttk.Entry(pastas, textvariable=self.ent
-                  ).grid(row=1, column=0, sticky="we", padx=(0, 8), pady=(2, 8))
-        ttk.Button(pastas, text="Selecionar…",
-                   command=lambda: self.ent.set(
-                       (filedialog.askdirectory() or self.ent.get()).replace("\\", "/"))
-                   ).grid(row=1, column=1, sticky="w", pady=(2, 8))
-        ttk.Label(pastas, text="Saída — renomeados (sugerida automaticamente)"
-                  ).grid(row=2, column=0, sticky="w")
+                  ).grid(row=1, column=0, sticky="we", padx=(0, 8), pady=(0, 12))
+        widgets.Botao(pastas, "Selecionar…", papel="neutro",
+                      command=lambda: self.ent.set(
+                          (filedialog.askdirectory() or self.ent.get())
+                          .replace("\\", "/"))
+                      ).grid(row=1, column=1, sticky="w", pady=(0, 12))
+        ttk.Label(pastas, text="SAÍDA — RENOMEADOS (SUGERIDA AUTOMATICAMENTE)",
+                  style="Rotulo.TLabel").grid(row=2, column=0, sticky="w",
+                                              pady=(0, 3))
         ttk.Entry(pastas, textvariable=self.sai
-                  ).grid(row=3, column=0, sticky="we", padx=(0, 8), pady=(2, 0))
-        ttk.Button(pastas, text="Selecionar…",
-                   command=lambda: self.sai.set(
-                       (filedialog.askdirectory() or self.sai.get()).replace("\\", "/"))
-                   ).grid(row=3, column=1, sticky="w", pady=(2, 0))
+                  ).grid(row=3, column=0, sticky="we", padx=(0, 8))
+        widgets.Botao(pastas, "Selecionar…", papel="neutro",
+                      command=lambda: self.sai.set(
+                          (filedialog.askdirectory() or self.sai.get())
+                          .replace("\\", "/"))).grid(row=3, column=1, sticky="w")
         pastas.columnconfigure(0, weight=1)
         self.ent.trace_add("write", self._sugerir_saida)
 
         # ---- card: nome dos arquivos
-        nome = widgets.Cartao(self, "Nome dos arquivos")
-        nome.pack(fill="x", padx=PADX, pady=6)
+        nome = widgets.Cartao(self, "Nome dos arquivos", 2)
+        nome.pack(fill="x", padx=PADX, pady=(0, 12))
         ttk.Radiobutton(nome, text=f"Padrão:  {MODELO_PADRAO}",
                         variable=self.v_tipo_nome, value="padrao"
                         ).grid(row=0, column=0, columnspan=2, sticky="w")
@@ -830,24 +839,17 @@ class SepararFrame(ttk.Frame):
         self.lbl_ex.grid(row=3, column=0, columnspan=2, sticky="w")
         nome.columnconfigure(1, weight=1)
 
-        # ---- barra de ação (fixa no rodapé)
-        acao = ttk.Frame(self)
-        acao.pack(side="bottom", fill="x", padx=PADX, pady=(6, 12))
-        self.btn = ttk.Button(acao, text="▶  Separar e Renomear",
-                              command=self._executar)
-        self.btn.pack(side="right", ipadx=10)
-        try:
-            self.btn.configure(style="Accent.TButton")   # botão azul (tema sv-ttk)
-        except tk.TclError:
-            pass
-        self.lbl_status = ttk.Label(acao, text="Pronto.")
-        self.lbl_status.pack(side="left")
-        self.barra = ttk.Progressbar(acao, mode="indeterminate")
-        self.barra.pack(side="left", fill="x", expand=True, padx=12)
+        # ---- barra de execução, acima do registro
+        acao = ttk.Frame(self, style="Fundo.TFrame")
+        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        self.barra_exec = widgets.BarraExecucao(acao)
+        self.barra_exec.pack(fill="x")
+        self.lbl_status = self.barra_exec.lbl
+        self.barra = self.barra_exec.pb
 
         # ---- card: registro (cresce quando tem o que mostrar)
-        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
         self.txt = tk.Text(self.reg, wrap="word", relief="flat",
                            borderwidth=0, highlightthickness=0)
         self.txt.pack(fill="both", expand=True)
@@ -885,19 +887,23 @@ class SepararFrame(ttk.Frame):
                 kind, m = self.fila.get_nowait()
                 if kind == "log":
                     self.txt.insert("end", m + "\n"); self.txt.see("end")
+                    # A linha de fecho do lote é a que o Início mostra como
+                    # "resultado". Guardada aqui porque o worker roda noutra
+                    # thread, e quem escreve no `atividade.jsonl` é sempre a
+                    # thread da interface.
+                    if m.lstrip().startswith(("Concluído:", "⏹ Interrompido")):
+                        self._resumo = " ".join(m.split())
                 elif kind == "prog":
                     feitas, total = m
                     if total:            # dá para mostrar quanto falta
-                        self.barra.stop()
-                        self.barra.config(mode="determinate", maximum=total,
-                                          value=feitas)
-                        self.lbl_status.config(
-                            text=f"Processando… {feitas} de {total} páginas")
+                        self.barra_exec.progresso(feitas, total)
+                        self.lbl_status.config(text="Processando as páginas…")
                 else:
-                    self.barra.stop()
-                    self.barra.config(mode="determinate", value=0)
+                    self.barra_exec.terminou("Concluído.")
                     self.btn.config(state="normal")
-                    self.lbl_status.config(text="Concluído.")
+                    widgets.registrar_atividade(
+                        "sep", "Separar e Renomear", "ok",
+                        str(self._resumo or "concluído")[:120])
         except queue.Empty:
             pass
         except Exception as e:                              # noqa: BLE001
@@ -936,8 +942,10 @@ class SepararFrame(ttk.Frame):
         saida = self.sai.get()
         modelo = None if self.v_tipo_nome.get() == "padrao" else self.v_modelo.get()
         self._parar.clear()
-        self.btn.config(state="disabled"); self.barra.start(12)
-        self.lbl_status.config(text="Processando…")
+        self.btn.config(state="disabled")
+        self._resumo = ""
+        self.barra_exec.comecou("Processando…")
+        self.barra.start(12)
         self._tarefa_atual = "Separar e Renomear"
         self.txt.delete("1.0", "end")
 

@@ -96,50 +96,51 @@ class ConciliacaoFrame(ttk.Frame):
     def _build(self):
         PADX = widgets.PADX
 
-        widgets.Cabecalho(
-            self, "Controle de saldo pgtos",
+        cab = widgets.Cabecalho(
+            self, "Saldo de pagamentos",
             "Lê os saldos e os pagamentos a vencer e gera o painel do dia, "
-            "com o aporte mínimo de cada conta."
-        ).pack(fill="x", padx=PADX, pady=(12, 4))
+            "com o aporte mínimo de cada conta.",
+            trilha="Diário  ›  Saldo de pagamentos")
+        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        # Ação única: o verde é o único botão do cabeçalho. O cartão "Gerar",
+        # que existia só para segurá-lo, deixa de existir.
+        self.b1 = widgets.Botao(cab.acoes, "Coletar e gerar o painel",
+                                papel="acao", command=self.gerar)
+        self.b1.pack(side="left")
 
         f1 = widgets.Cartao(self, "Vencimentos que entram", 1)
-        f1.pack(fill="x", padx=PADX, pady=6)
-        linha = ttk.Frame(f1); linha.pack(fill="x")
-        ttk.Label(linha, text="De:").pack(side="left")
-        CampoData(linha, self.v_ini).pack(side="left", padx=(6, 12))
-        ttk.Label(linha, text="até:").pack(side="left")
-        CampoData(linha, self.v_fim).pack(side="left", padx=(6, 12))
-        ttk.Label(linha, style="Apoio.TLabel",
-                  text="(dd/mm/aaaa — na segunda já vem sábado + domingo + segunda)"
-                  ).pack(side="left")
+        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        linha = ttk.Frame(f1)
+        linha.pack(fill="x")
+        widgets.Campo(linha, "De", lambda p: CampoData(p, self.v_ini)
+                      ).pack(side="left", padx=(0, 16))
+        widgets.Campo(linha, "Até", lambda p: CampoData(p, self.v_fim)
+                      ).pack(side="left", padx=(0, 16))
+        ttk.Label(linha, style="Tenue.TLabel",
+                  text="na segunda já vem sábado + domingo + segunda"
+                  ).pack(side="left", pady=(15, 0))
 
-        f2 = widgets.Cartao(self, "Gerar", 2)
-        f2.pack(fill="x", padx=PADX, pady=6)
-        self.b1 = ttk.Button(f2, text="▶ Coletar e gerar o painel",
-                             command=self.gerar)
-        self.b1.pack(side="left")
-        self.b_stop = ttk.Button(f2, text="⏹ Parar", state="disabled",
-                                 command=self._parar_click)
-        self.b_stop.pack(side="left", padx=(8, 0))
-        self.b_abrir = ttk.Button(f2, text="📄 Abrir a planilha", state="disabled",
-                                  command=self._abrir_arquivo)
+        acao = ttk.Frame(self, style="Fundo.TFrame")
+        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        btns = ttk.Frame(acao, style="Fundo.TFrame")
+        btns.pack(side="right", padx=(16, 0))
+        self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
+                                    state="disabled", command=self._parar_click)
+        self.b_stop.pack(side="left")
+        self.b_abrir = widgets.Botao(btns, "📄  Abrir a planilha", papel="neutro",
+                                     state="disabled",
+                                     command=self._abrir_arquivo)
         self.b_abrir.pack(side="left", padx=(8, 0))
-        self.b_pasta = ttk.Button(f2, text="📂 Abrir a pasta", state="disabled",
-                                  command=self._abrir_pasta)
+        self.b_pasta = widgets.Botao(btns, "📂  Abrir a pasta", papel="neutro",
+                                     state="disabled", command=self._abrir_pasta)
         self.b_pasta.pack(side="left", padx=(8, 0))
-        try:
-            self.b1.configure(style="Accent.TButton")
-        except tk.TclError:
-            pass
+        self.barra_exec = widgets.BarraExecucao(acao)
+        self.barra_exec.pack(side="left", fill="x", expand=True)
+        self.lbl = self.barra_exec.lbl
+        self.pb = self.barra_exec.pb
 
-        prog = ttk.Frame(self); prog.pack(fill="x", padx=PADX)
-        self.pb = ttk.Progressbar(prog, mode="indeterminate")
-        self.pb.pack(fill="x")
-        self.lbl = ttk.Label(prog, text="Pronto.", style="Apoio.TLabel")
-        self.lbl.pack(anchor="w", pady=(4, 0))
-
-        self.reg = widgets.Cartao(self, "Registro", padding=(10, 6, 10, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=6)
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)
@@ -169,6 +170,9 @@ class ConciliacaoFrame(ttk.Frame):
                     self.ultimo_arquivo = valor
                     self.b_abrir.configure(state="normal")
                     self.b_pasta.configure(state="normal")
+                    widgets.registrar_atividade(
+                        "con", "Painel de saldo", "ok",
+                        str(self.lbl.cget("text"))[:120])
         except queue.Empty:
             pass
         except Exception as e:                              # noqa: BLE001

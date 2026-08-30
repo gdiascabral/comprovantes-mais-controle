@@ -106,107 +106,121 @@ class AcessoriasFrame(ttk.Frame):
         self.cab = widgets.Cabecalho(
             self, "Acessorias",
             "Envia o fechamento do mês ao escritório contábil: uma solicitação "
-            "por empresa, com o .zip anexado.")
-        self.cab.pack(fill="x", padx=PADX, pady=(12, 4))
+            "por empresa, com o .zip anexado.",
+            trilha="Mensal  ›  Acessorias")
+        self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        # O verde é ENVIAR — é o irreversível desta tela. Preparar só lê a
+        # pasta do mês e não toca no portal.
+        self.b1 = widgets.Botao(self.cab.acoes, "Preparar o envio",
+                                papel="passo", command=self.preparar)
+        self.b1.pack(side="left", padx=(0, 8))
+        self.b2 = widgets.Botao(self.cab.acoes, "Enviar ao escritório",
+                                papel="acao", state="disabled",
+                                command=self.enviar)
+        self.b2.pack(side="left")
 
         # ---- card 1: mês e modelos
-        f1 = widgets.Cartao(self, "Mês e mensagem")
-        f1.pack(fill="x", padx=PADX, pady=6)
+        f1 = widgets.Cartao(self, "Mês e mensagem", 1)
+        f1.pack(fill="x", padx=PADX, pady=(0, 12))
 
-        linha = ttk.Frame(f1); linha.pack(fill="x")
-        ttk.Label(linha, text="Mês:").pack(side="left")
-        ttk.Combobox(linha, textvariable=self.v_mes, values=MESES,
-                     state="readonly", width=12).pack(side="left", padx=(6, 14))
-        ttk.Label(linha, text="Ano:").pack(side="left")
+        linha = ttk.Frame(f1)
+        linha.pack(fill="x")
+        widgets.Campo(linha, "Mês", lambda p: ttk.Combobox(
+            p, textvariable=self.v_mes, values=MESES, state="readonly",
+            width=12)).pack(side="left", padx=(0, 16))
         anos = [str(a) for a in range(datetime.date.today().year + 1, 2019, -1)]
-        ttk.Combobox(linha, textvariable=self.v_ano, values=anos,
-                     state="readonly", width=7).pack(side="left", padx=(6, 14))
-        ttk.Label(linha, style="Apoio.TLabel",
-                  text="(vem preenchido com o mês anterior)").pack(side="left")
+        widgets.Campo(linha, "Ano", lambda p: ttk.Combobox(
+            p, textvariable=self.v_ano, values=anos, state="readonly",
+            width=7)).pack(side="left", padx=(0, 16))
+        ttk.Label(linha, style="Tenue.TLabel",
+                  text="vem preenchido com o mês anterior"
+                  ).pack(side="left", pady=(15, 0))
 
-        ttk.Label(f1, text="Assunto:").pack(anchor="w", pady=(10, 0))
+        ttk.Label(f1, text="ASSUNTO", style="Rotulo.TLabel"
+                  ).pack(anchor="w", pady=(12, 3))
         ttk.Entry(f1, textvariable=self.v_assunto).pack(fill="x")
-        ttk.Label(f1, text="Comentário:").pack(anchor="w", pady=(8, 0))
+        ttk.Label(f1, text="COMENTÁRIO", style="Rotulo.TLabel"
+                  ).pack(anchor="w", pady=(10, 3))
         self.t_modelo = tk.Text(f1, wrap="word", height=5, borderwidth=1,
-                                relief="solid")
+                                relief="solid", highlightthickness=0)
         self.t_modelo.pack(fill="x")
         self.t_modelo.insert("1.0", pacote.MODELO_COMENTARIO)
-        ttk.Label(f1, style="Apoio.TLabel", wraplength=820, justify="left",
+        widgets.estilo_campo_texto(self.t_modelo)
+        ttk.Label(f1, style="Tenue.TLabel", wraplength=820, justify="left",
                   text="Tokens: " + "  ".join(pacote.TOKENS) +
                        "   ·   a lista de contratos é lida de dentro do zip."
-                  ).pack(anchor="w", pady=(4, 8))
-
-        self.b1 = ttk.Button(f1, text="Preparar o envio",
-                             style="Accent.TButton", command=self.preparar)
-        self.b1.pack(side="left")
-        ttk.Label(f1, style="Apoio.TLabel",
-                  text="  Só lê a pasta do mês — não toca no portal."
-                  ).pack(side="left")
+                  ).pack(anchor="w", pady=(6, 0))
+        ttk.Label(f1, style="Tenue.TLabel",
+                  text="Preparar só lê a pasta do mês — não toca no portal."
+                  ).pack(anchor="w", pady=(2, 0))
 
         # ---- card 2: o que vai ser enviado
-        f2 = widgets.Cartao(self, "O que vai ser enviado")
-        f2.pack(fill="both", expand=True, padx=PADX, pady=6)
+        f2 = widgets.Cartao(self, "O que vai ser enviado", 2)
+        f2.pack(fill="both", expand=True, padx=PADX, pady=(0, 12))
 
         colunas = ("empresa", "zip", "tamanho", "contratos", "situacao")
         self.tree = ttk.Treeview(f2, columns=colunas, show="headings",
                                  height=7, selectmode="browse")
-        for chave, titulo, largura in (("empresa", "Empresa", 170),
-                                       ("zip", "Arquivo", 260),
-                                       ("tamanho", "Tamanho", 80),
-                                       ("contratos", "Contratos", 80),
-                                       ("situacao", "Situação", 260)):
+        for chave, titulo, largura in (("empresa", "EMPRESA", 170),
+                                       ("zip", "ARQUIVO", 260),
+                                       ("tamanho", "TAMANHO", 90),
+                                       ("contratos", "CONTRATOS", 90),
+                                       ("situacao", "SITUAÇÃO", 260)):
             self.tree.heading(chave, text=titulo)
             self.tree.column(chave, width=largura,
-                             anchor="center" if chave in ("tamanho", "contratos")
+                             anchor="e" if chave in ("tamanho", "contratos")
                              else "w")
+        widgets.estilo_tabela(self.tree)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._trocar_selecao)
 
-        ttk.Label(f2, style="Apoio.TLabel", wraplength=820, justify="left",
-                  text="Clique numa empresa para ver e corrigir o texto que "
-                       "vai ser enviado por ela.").pack(anchor="w", pady=(6, 2))
+        rodape = widgets.RodapeTabela(f2)
+        rodape.pack(fill="x", pady=(8, 8))
+        rodape.definir(texto="Clique numa empresa para ver e corrigir o texto "
+                             "que vai ser enviado por ela.")
+        self.rodape_envio = rodape
         self.t_previa = tk.Text(f2, wrap="word", height=7, borderwidth=1,
-                                relief="solid")
+                                relief="solid", highlightthickness=0)
         self.t_previa.pack(fill="both", expand=True)
+        widgets.estilo_campo_texto(self.t_previa)
 
-        # ---- card 3: enviar
-        f3 = widgets.Cartao(self, "Enviar ao escritório")
-        f3.pack(fill="x", padx=PADX, pady=6)
-        self.b2 = ttk.Button(f3, text="Enviar ao escritório", state="disabled",
-                             style="Accent.TButton", command=self.enviar)
-        self.b2.pack(side="left")
-        self.b_stop = ttk.Button(f3, text="⏹ Parar", state="disabled",
-                                 command=self._parar_click)
-        self.b_stop.pack(side="left", padx=(8, 0))
-        self.b_abrir = ttk.Button(f3, text="Abrir a pasta do mês",
-                                  state="disabled", command=self._abrir_pasta)
-        self.b_abrir.pack(side="left", padx=(8, 0))
+        # ---- barra de execução, acima do registro
         # Para ONDE vai é o dado que o formulário do portal esconde: o
         # departamento é um select cujos valores não seguem a ordem da tela, e
         # errá-lo manda o fechamento para o lugar errado sem nenhum aviso.
         # Deixar isso à vista é mais barato que descobrir depois.
-        ttk.Label(f3, style="Apoio.TLabel",
-                  text=f"  Vai para {cfg.DEPARTAMENTO}, prioridade "
+        aviso = ttk.Frame(self, style="Fundo.TFrame")
+        aviso.pack(fill="x", padx=PADX, pady=(0, 8))
+        ttk.Label(aviso, style="FundoTenue.TLabel", wraplength=900,
+                  justify="left",
+                  text=f"Vai para {cfg.DEPARTAMENTO}, prioridade "
                        f"{cfg.PRIORIDADE}. O login é feito por você, na janela "
-                       f"do Chrome.").pack(side="left")
+                       f"do Chrome.").pack(anchor="w")
 
-        # A trilha das AÇÕES, dentro do cabeçalho, como nas outras abas de dois
-        # passos. Ela só pode nascer depois dos botões: é do `state` deles que
-        # sai o estado da trilha.
-        widgets.Passos(self.cab, (("Preparar", self.b1),
-                                  ("Enviar", self.b2))
-                       ).pack(anchor="w", pady=(8, 0))
+        acao = ttk.Frame(self, style="Fundo.TFrame")
+        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        btns = ttk.Frame(acao, style="Fundo.TFrame")
+        btns.pack(side="right", padx=(16, 0))
+        self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
+                                    state="disabled", command=self._parar_click)
+        self.b_stop.pack(side="left")
+        self.b_abrir = widgets.Botao(btns, "📂  Abrir a pasta do mês",
+                                     papel="neutro", state="disabled",
+                                     command=self._abrir_pasta)
+        self.b_abrir.pack(side="left", padx=(8, 0))
+        self.barra_exec = widgets.BarraExecucao(acao)
+        self.barra_exec.pack(side="left", fill="x", expand=True)
+        self.lbl = self.barra_exec.lbl
+        self.pb = self.barra_exec.pb
 
-        # ---- progresso e registro
-        f4 = ttk.Frame(self); f4.pack(fill="x", padx=PADX, pady=6)
-        self.pb = ttk.Progressbar(f4, mode="determinate")
-        self.pb.pack(fill="x")
-        self.lbl = ttk.Label(f4, text="Pronto.", style="Apoio.TLabel")
-        self.lbl.pack(anchor="w", pady=(4, 4))
-        self.log = tk.Text(f4, wrap="word", borderwidth=1, relief="solid")
+        # ---- registro
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0)
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
-        widgets.registro_elastico(f4, self.log)
+        widgets.registro_elastico(self.reg, self.log)
 
     # ------------------------------------------------------------- mensagens
     def _log(self, msg=""):
@@ -223,7 +237,7 @@ class AcessoriasFrame(ttk.Frame):
                     self.lbl.configure(text=valor)
                 elif tipo == "progresso":
                     feitos, total = valor
-                    self.pb.configure(maximum=max(total, 1), value=feitos)
+                    self.barra_exec.progresso(feitos, total)
                 elif tipo == "botoes":
                     self.b1.configure(state=valor)
                     # O Enviar volta pelo que a tabela diz, não pelo que o
@@ -265,11 +279,22 @@ class AcessoriasFrame(ttk.Frame):
             self.after(150, self._drain)
 
     def aplicar_cores(self, escuro: bool):
-        for campo in (self.log, self.t_modelo, self.t_previa):
+        # O registro é terminal (escuro nos dois temas); o modelo e a prévia
+        # são CAMPOS que se digitam, e seguem a cor do cartão. Eram os três no
+        # mesmo `estilo_log`, e no tema claro isso não aparecia.
+        try:
+            widgets.estilo_log(self.log, escuro)
+        except tk.TclError:
+            pass
+        for campo in (self.t_modelo, self.t_previa):
             try:
-                widgets.estilo_log(campo, escuro)
+                widgets.estilo_campo_texto(campo, escuro)
             except tk.TclError:
                 pass
+        try:
+            widgets.estilo_tabela(self.tree)
+        except tk.TclError:
+            pass
 
     def ocupado(self) -> str | None:
         """O que esta aba está fazendo agora, ou None.
