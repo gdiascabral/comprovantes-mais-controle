@@ -295,6 +295,21 @@ def quem(pasta=None) -> Quem:
                          or _sub(guardada.get("acesso", ""))))
 
 
+def reconferir(pasta=None) -> Quem:
+    """Pergunta o perfil ao servidor de novo e guarda o que vier.
+
+    Serve à tela de espera: o admin acabou de liberar a conta, e ter de fechar
+    e abrir o app para descobrir isso é o tipo de coisa que vira telefonema.
+
+    Sem sessão salva não há a quem perguntar — devolve vazio em vez de
+    levantar, porque quem chama está desenhando uma tela, não gravando nada."""
+    guardada = _ler(pasta)
+    if not guardada:
+        return Quem()
+    _gravar(_com_perfil(dict(guardada), guardada), pasta)
+    return quem(pasta)
+
+
 def esquecer(pasta=None) -> None:
     """Apaga a sessão local. Não fala com o servidor."""
     try:

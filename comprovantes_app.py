@@ -206,6 +206,30 @@ def main():
         except tk.TclError:
             pass
 
+    # ---------------- a conta já foi liberada?
+    # Entrar e PODER TRABALHAR são coisas diferentes desde a fase 3: qualquer
+    # pessoa cria conta pela tela de login, e quem decide se ela trabalha aqui
+    # é um administrador. Conta nova nasce `pendente`.
+    #
+    # A trava de verdade não é esta: é a RLS, que nega todo dado a quem não
+    # tem perfil ativo. Isto aqui existe para a pessoa entender por que o app
+    # está vazio, em vez de achar que ele quebrou.
+    #
+    # `conhecido` no teste, e não só `ativo`: situação vazia quer dizer "não
+    # deu para perguntar ao servidor" — quem está sem internet com uma sessão
+    # válida continua abrindo o app, como sempre abriu.
+    _conta = sessao.quem(_pasta_dados())
+    if _conta.conhecido and not _conta.ativo:
+        root.withdraw()
+        if not login_dialogo.avisar_que_espera(root, _pasta_dados()):
+            root.destroy()
+            return                       # ainda esperando: o app não abre
+        root.deiconify()
+        try:
+            root.state("zoomed")
+        except tk.TclError:
+            pass
+
     # ---------------- cadastro compartilhado
     # Aqui, e não dentro de cada aba: existe UM ponto onde a rede pode faltar,
     # ele acontece antes de qualquer trabalho começar, e o pior caso é rodar

@@ -15,8 +15,15 @@ import requests
 #: A chave `anon` é pública por desenho: ela identifica o projeto e não abre
 #: nada sozinha. Quem protege é a RLS — toda tabela nega tudo a quem não está
 #: logado, e isso está conferido por teste (ler `conta` sem sessão responde
-#: 401). O cadastro de novos usuários está DESLIGADO no projeto, então nem
-#: mesmo criar conta com ela é possível.
+#: 401).
+#:
+#: Até 30/08/2026 havia uma segunda tranca: o auto-cadastro estava desligado,
+#: então esta chave nem conta criava. A fase 3 o ligou — é o que permite
+#: alguém novo entrar sem o admin digitar a senha por ela — e por isso a
+#: tranca mudou de lugar: agora TODA política e as duas funções de NSA exigem
+#: `privado.e_ativo()`, ou seja, perfil liberado por um administrador. Conta
+#: recém-criada loga, lê o próprio perfil, e não alcança mais nada. Ver
+#: `supabase/migrations/20260830180000_so_conta_liberada_entra.sql`.
 #:
 #: A chave `service_role` ignora a RLS inteira e NUNCA pode aparecer aqui,
 #: no exe, nem no CI.
@@ -208,6 +215,72 @@ def entrar(email: str, senha: str) -> dict:
     if r.status_code in (400, 401):
         raise PrecisaEntrar("e-mail ou senha incorretos")
     return _resposta(r)
+
+
+#: O que o GoTrue responde quando recusa um cadastro, traduzido para quem
+#: está na frente da tela. A chave é um PEDAÇO da mensagem dele, em minúsculas:
+#: o texto vem em inglês e muda de versão para versão, mas o miolo fica.
+_RECUSAS_DO_CADASTRO = (
+    ("signups not allowed",
+     "O cadastro de contas novas está desligado no projeto. Quem cuida do "
+     "Supabase precisa ligá-lo em Authentication → Sign In / Providers → "
+     "Allow new users to sign up."),
+    ("already registered",
+     "Já existe uma conta com esse e-mail. Use a aba “Entrar”."),
+    ("password should be at least",
+     "A senha é curta demais para o servidor. Use uma mais longa."),
+    ("weak password",
+     "Essa senha é fácil demais. Misture letras, números e um símbolo."),
+    ("unable to validate email address",
+     "Esse e-mail não parece válido. Confira o que foi digitado."),
+    ("invalid format",
+     "Esse e-mail não parece válido. Confira o que foi digitado."),
+    ("rate limit",
+     "Foram muitas tentativas seguidas. Espere alguns minutos e tente de "
+     "novo — o limite é do servidor, não do app."),
+)
+
+
+def criar_conta(nome: str, email: str, senha: str) -> bool:
+    """Cria a conta e pede ao Supabase que mande a confirmação por e-mail.
+
+    Devolve True quando ainda falta confirmar o e-mail — que é o caso normal.
+
+    NÃO entra. A sessão só nasce depois que a pessoa clica no link que chegou
+    no endereço que ela digitou, e é justamente isso que prova que o endereço
+    é dela. O app não vê, não guarda e não escolhe a senha de ninguém: ela vai
+    daqui para o servidor e nunca mais volta.
+
+    O `nome` viaja em `data`, que o GoTrue grava em `raw_user_meta_data` — é
+    de lá que o gatilho `privado.criar_perfil()` o copia para o perfil. Sem
+    ele o admin veria uma fila de e-mails sem gente.
+    """
+    try:
+        r = requests.post(f"{URL}/auth/v1/signup",
+                          headers=_cabecalhos(None),
+                          json={"email": email.strip(), "password": senha,
+                                "data": {"nome": nome.strip()}},
+                          timeout=ESPERA)
+    except requests.RequestException as e:
+        raise SemRede(f"não deu para falar com o servidor: {e}") from e
+
+    if r.status_code >= 400:
+        dito = _motivo_do_servidor(r).lower()
+        for pedaco, frase in _RECUSAS_DO_CADASTRO:
+            if pedaco in dito:
+                raise RecusadoPeloBanco(frase)
+        # Recusa que ainda não sabemos traduzir: vale mais mostrar o que o
+        # servidor disse do que uma frase genérica que esconde a causa.
+        raise RecusadoPeloBanco(
+            "O servidor recusou o cadastro"
+            + (f": {_motivo_do_servidor(r)}" if dito else
+               f" [HTTP {r.status_code}]"))
+
+    corpo = _resposta(r) or {}
+    # Com a confirmação de e-mail ligada, o GoTrue devolve só o usuário. Se
+    # vier token, é porque ela está DESLIGADA no projeto — a conta já nasce
+    # confirmada, e quem está na tela precisa ouvir outra frase.
+    return not (isinstance(corpo, dict) and corpo.get("access_token"))
 
 
 def renovar(refresh_token: str) -> dict:

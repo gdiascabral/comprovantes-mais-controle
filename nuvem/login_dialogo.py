@@ -10,6 +10,18 @@ que a Fase 3 vai gravar junto de cada aporte lançado.
 Modal de propósito: isto EXIGE resposta, como o antigo diálogo de ativação e
 o confirmar dos sócios. (O calendário do `CampoData` não é, e a diferença está
 explicada no `widgets.py`.)
+
+Desde 30/08/2026 a janela tem duas abas. A segunda, "Criar conta", existe
+porque o chefe vai entrar aqui para aprovar a remessa do dia, e criar conta à
+mão no painel do Supabase não escala nem para três pessoas — além de obrigar
+quem cria a escolher a senha de outro. Aqui a senha é digitada pela própria
+pessoa e vai direto para o servidor: o app não a vê, não a guarda e não a
+escolhe.
+
+Quem se cadastra NÃO entra por isso. Confirma o e-mail (recurso do Supabase,
+não construído aqui), e depois espera um administrador liberar — é a terceira
+tela deste arquivo, `avisar_que_espera`. Enquanto isso a conta existe, loga, e
+não alcança dado nenhum: quem garante isso é a RLS, não a interface.
 """
 from __future__ import annotations
 
@@ -112,31 +124,73 @@ def pedir_login(root, pasta=None) -> bool:
     quadro = ttk.Frame(dlg, padding=20)
     quadro.pack(fill="both", expand=True)
 
-    ttk.Label(quadro, text="🔒  Entrar", style="Titulo.TLabel").pack(anchor="w")
-    # O recado vem ANTES da explicação de sempre: ele é a resposta para "por
-    # que estou vendo esta tela?", e é a única coisa nesta janela que muda de
-    # uma abertura para a outra. Sem ele, a queda da internet e a sessão
-    # revogada eram indistinguíveis — as duas mostravam só o campo de senha.
+    ttk.Label(quadro, text="🔒  Comprovantes Mais Controle",
+              style="Titulo.TLabel").pack(anchor="w")
+    # O recado vem ANTES de tudo: ele é a resposta para "por que estou vendo
+    # esta tela?", e é a única coisa nesta janela que muda de uma abertura para
+    # a outra. Sem ele, a queda da internet e a sessão revogada eram
+    # indistinguíveis — as duas mostravam só o campo de senha.
+    #
+    # Fica FORA das abas de propósito: ele fala da sessão, não de qual das
+    # duas coisas a pessoa veio fazer.
     if recado:
         ttk.Label(quadro, text="⚠  " + recado, style="Erro.TLabel",
                   wraplength=380, justify="left").pack(anchor="w", pady=(8, 0))
-    ttk.Label(quadro, wraplength=380, justify="left", style="Apoio.TLabel",
+
+    abas = ttk.Notebook(quadro)
+    abas.pack(fill="both", expand=True, pady=(10, 12))
+    entrada = ttk.Frame(abas, padding=(2, 14, 2, 4))
+    criacao = ttk.Frame(abas, padding=(2, 14, 2, 4))
+    abas.add(entrada, text="   Entrar   ")
+    abas.add(criacao, text="   Criar conta   ")
+
+    # ---------------------------------------------------------- aba Entrar
+    ttk.Label(entrada, wraplength=380, justify="left", style="Apoio.TLabel",
               text="Use o seu e-mail e senha. O app lembra deste computador — "
                    "só vai perguntar de novo se você sair ou trocar de "
-                   "máquina.").pack(anchor="w", pady=(6, 12))
+                   "máquina.").pack(anchor="w", pady=(0, 12))
 
-    ttk.Label(quadro, text="E-mail", style="Apoio.TLabel").pack(anchor="w")
-    campo_email = ttk.Entry(quadro, width=34, font=widgets.FONTE_SECAO)
+    ttk.Label(entrada, text="E-mail", style="Apoio.TLabel").pack(anchor="w")
+    campo_email = ttk.Entry(entrada, width=34, font=widgets.FONTE_SECAO)
     campo_email.pack(fill="x", pady=(0, 8))
     campo_email.insert(0, sessao.quem(pasta).email)
 
-    ttk.Label(quadro, text="Senha", style="Apoio.TLabel").pack(anchor="w")
-    campo_senha = ttk.Entry(quadro, show="•", width=34, font=widgets.FONTE_SECAO)
+    ttk.Label(entrada, text="Senha", style="Apoio.TLabel").pack(anchor="w")
+    campo_senha = ttk.Entry(entrada, show="•", width=34,
+                            font=widgets.FONTE_SECAO)
     campo_senha.pack(fill="x")
 
-    aviso = ttk.Label(quadro, text=" ", style="Erro.TLabel", wraplength=380,
+    aviso = ttk.Label(entrada, text=" ", style="Erro.TLabel", wraplength=380,
                       justify="left")
-    aviso.pack(anchor="w", pady=(6, 12))
+    aviso.pack(anchor="w", pady=(6, 10))
+
+    # ----------------------------------------------------- aba Criar conta
+    ttk.Label(criacao, wraplength=380, justify="left", style="Apoio.TLabel",
+              text="Crie a sua conta com a SUA senha — ninguém aqui a vê. "
+                   "Você recebe um e-mail para confirmar o endereço; depois "
+                   "disso, um administrador libera o acesso."
+              ).pack(anchor="w", pady=(0, 12))
+
+    campos_novos = {}
+    for chave, rotulo, oculto in (("nome", "Nome completo", False),
+                                  ("email", "E-mail", False),
+                                  ("senha", "Senha (mínimo 8 caracteres)", True),
+                                  ("repete", "Repita a senha", True)):
+        ttk.Label(criacao, text=rotulo, style="Apoio.TLabel").pack(anchor="w")
+        campo = ttk.Entry(criacao, width=34, font=widgets.FONTE_SECAO,
+                          show="•" if oculto else "")
+        campo.pack(fill="x", pady=(0, 8))
+        campos_novos[chave] = campo
+
+    # Dois avisos, e não um: o verde precisa continuar na tela enquanto a
+    # pessoa vai abrir o e-mail, e o vermelho de um erro seguinte não pode
+    # apagar a instrução que ela ainda não cumpriu.
+    aviso_novo = ttk.Label(criacao, text=" ", style="Erro.TLabel",
+                           wraplength=380, justify="left")
+    aviso_novo.pack(anchor="w", pady=(2, 0))
+    feito_novo = ttk.Label(criacao, text="", style="Ok.TLabel",
+                           wraplength=380, justify="left")
+    feito_novo.pack(anchor="w", pady=(2, 8))
 
     botoes = ttk.Frame(quadro)
     botoes.pack(fill="x")
@@ -174,21 +228,93 @@ def pedir_login(root, pasta=None) -> bool:
         resultado["ok"] = True
         dlg.destroy()
 
+    def _criar(_=None):
+        nome = campos_novos["nome"].get().strip()
+        email = campos_novos["email"].get().strip()
+        senha = campos_novos["senha"].get()
+        # A conferência daqui é a que evita uma viagem à toa e, no caso da
+        # senha repetida, algo que o servidor NÃO tem como pegar: senha
+        # digitada errada em campo escondido vira conta que ninguém abre.
+        if not nome or not email or not senha:
+            aviso_novo.configure(text="Preencha nome, e-mail e senha.")
+            return
+        if " " not in nome:
+            aviso_novo.configure(
+                text="Escreva o nome completo — é o que o administrador vê "
+                     "para saber quem está pedindo acesso.")
+            return
+        if "@" not in email or "." not in email.split("@")[-1]:
+            aviso_novo.configure(text="Esse e-mail não parece completo.")
+            return
+        if len(senha) < 8:
+            aviso_novo.configure(text="A senha precisa de ao menos 8 "
+                                      "caracteres.")
+            return
+        if senha != campos_novos["repete"].get():
+            aviso_novo.configure(text="As duas senhas não são iguais.")
+            campos_novos["repete"].delete(0, "end")
+            campos_novos["repete"].focus_set()
+            return
+
+        aviso_novo.configure(text="Criando a conta…")
+        dlg.update_idletasks()
+        try:
+            confirmar = rest.criar_conta(nome, email, senha)
+        except rest.RecusadoPeloBanco as e:
+            # A frase vem PRONTA do `rest`: é lá que se sabe o que o GoTrue
+            # respondeu, e traduzir de novo aqui criaria duas versões da mesma
+            # verdade. O `_frase` é para o outro caminho, o da sessão.
+            aviso_novo.configure(text=str(e))
+            return
+        except rest.ErroDaNuvem as e:
+            aviso_novo.configure(text=_frase(e))
+            return
+
+        aviso_novo.configure(text=" ")
+        for chave in ("senha", "repete"):
+            campos_novos[chave].delete(0, "end")
+        feito_novo.configure(
+            text=("✔  Conta criada. Abra o e-mail em " + email + " e clique "
+                  "no link para confirmar o endereço. Depois entre pela aba "
+                  "“Entrar” — o acesso ainda precisa ser liberado por um "
+                  "administrador.")
+            if confirmar else
+            ("✔  Conta criada e já confirmada. Entre pela aba “Entrar” — o "
+             "acesso ainda precisa ser liberado por um administrador."))
+        # O e-mail já vai para a outra aba: quando a confirmação chegar, falta
+        # só a senha.
+        if not campo_email.get().strip():
+            campo_email.insert(0, email)
+
     def _sair():
         resultado["ok"] = False
         dlg.destroy()
 
     ttk.Button(botoes, text="Sair do app", command=_sair, width=14
                ).pack(side="right")
-    try:
-        ok = ttk.Button(botoes, text="Entrar", style="Accent.TButton",
-                        command=_entrar, width=14)
-    except tk.TclError:      # sem o sv-ttk não existe Accent.TButton
-        ok = ttk.Button(botoes, text="Entrar", command=_entrar, width=14)
-    ok.pack(side="right", padx=(0, 8))
+
+    def _principal(pai, texto, comando):
+        try:
+            return ttk.Button(pai, text=texto, style="Accent.TButton",
+                              command=comando, width=14)
+        except tk.TclError:  # sem o sv-ttk não existe Accent.TButton
+            return ttk.Button(pai, text=texto, command=comando, width=14)
+
+    # Um botão por aba, e não um só que muda de nome: o botão de uma aba
+    # escondida não pode ser acionado sem querer, e "Entrar" e "Criar conta"
+    # fazem coisas irreversivelmente diferentes.
+    _principal(entrada, "Entrar", _entrar).pack(anchor="e")
+    _principal(criacao, "Criar conta", _criar).pack(anchor="e", pady=(4, 0))
 
     campo_email.bind("<Return>", lambda _e: campo_senha.focus_set())
     campo_senha.bind("<Return>", _entrar)
+    campos_novos["nome"].bind("<Return>",
+                              lambda _e: campos_novos["email"].focus_set())
+    campos_novos["email"].bind("<Return>",
+                               lambda _e: campos_novos["senha"].focus_set())
+    campos_novos["senha"].bind("<Return>",
+                               lambda _e: campos_novos["repete"].focus_set())
+    campos_novos["repete"].bind("<Return>", _criar)
     dlg.bind("<Escape>", lambda _e: _sair())
     dlg.protocol("WM_DELETE_WINDOW", _sair)
 
@@ -204,3 +330,116 @@ def pedir_login(root, pasta=None) -> bool:
         pass
     root.wait_window(dlg)
     return resultado["ok"]
+
+
+def avisar_que_espera(root, pasta=None) -> bool:
+    """A tela de quem entrou mas ainda não pode trabalhar. True = pode agora.
+
+    Quem chega aqui acertou a senha: a conta existe e a sessão é válida. O que
+    falta é um administrador dizer que essa pessoa trabalha aqui — e é o único
+    passo do cadastro que uma máquina não tem como decidir sozinha.
+
+    Esconder as abas não é o que protege nada; quem protege é a RLS, que nega
+    tudo a quem não tem perfil ativo. Esta tela existe para a pessoa entender
+    por que o app está vazio, em vez de achar que ele quebrou.
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    import widgets
+
+    eu = sessao.quem(pasta)
+    resultado = {"liberado": False}
+
+    dlg = tk.Toplevel(root)
+    dlg.title("Aguardando liberação — Comprovantes Mais Controle")
+    dlg.resizable(False, False)
+    widgets.barra_de_titulo(dlg)
+    try:
+        ico = root.wm_iconbitmap()
+        if ico:
+            dlg.iconbitmap(ico)
+    except tk.TclError:
+        pass
+
+    quadro = ttk.Frame(dlg, padding=20)
+    quadro.pack(fill="both", expand=True)
+
+    desativado = eu.situacao == "desativado"
+    ttk.Label(quadro, style="Titulo.TLabel",
+              text=("🚫  Acesso desativado" if desativado
+                    else "⏳  Aguardando liberação")).pack(anchor="w")
+    ttk.Label(quadro, wraplength=420, justify="left", style="Apoio.TLabel",
+              text=("A sua conta foi desativada por um administrador. Se isso "
+                    "não era esperado, fale com quem cuida do app."
+                    if desativado else
+                    "A sua conta está criada e o e-mail, confirmado. Falta um "
+                    "administrador liberar o acesso — assim que ele fizer "
+                    "isso, clique em “Conferir de novo” aqui embaixo, sem "
+                    "precisar fechar o app.")
+              ).pack(anchor="w", pady=(8, 12))
+
+    ttk.Label(quadro, text="ENTROU COMO", style="MenuSecao.TLabel"
+              ).pack(anchor="w")
+    ttk.Label(quadro, text=eu.email or "—", style="Forte.TLabel"
+              ).pack(anchor="w", pady=(0, 12))
+
+    aviso = ttk.Label(quadro, text=" ", style="Erro.TLabel", wraplength=420,
+                      justify="left")
+    aviso.pack(anchor="w", pady=(0, 10))
+
+    def _conferir():
+        aviso.configure(text="Perguntando ao servidor…")
+        dlg.update_idletasks()
+        agora = sessao.reconferir(pasta)
+        if agora.ativo:
+            resultado["liberado"] = True
+            dlg.destroy()
+            return
+        aviso.configure(
+            text=("A conta continua desativada." if agora.situacao == "desativado"
+                  else "Ainda não. A liberação não saiu até agora."))
+
+    def _trocar():
+        # Entrou com a conta errada, ou a conta certa foi desligada: apagar a
+        # sessão faz a próxima abertura perguntar de novo. Não fala com o
+        # servidor — o token vence sozinho.
+        sessao.esquecer(pasta)
+        resultado["liberado"] = False
+        dlg.destroy()
+
+    def _sair():
+        resultado["liberado"] = False
+        dlg.destroy()
+
+    botoes = ttk.Frame(quadro)
+    botoes.pack(fill="x")
+    ttk.Button(botoes, text="Sair do app", command=_sair, width=14
+               ).pack(side="right")
+    ttk.Button(botoes, text="Entrar com outra conta", command=_trocar, width=20
+               ).pack(side="right", padx=(0, 8))
+    if not desativado:
+        try:
+            conferir = ttk.Button(botoes, text="Conferir de novo",
+                                  style="Accent.TButton", command=_conferir,
+                                  width=16)
+        except tk.TclError:
+            conferir = ttk.Button(botoes, text="Conferir de novo",
+                                  command=_conferir, width=16)
+        conferir.pack(side="right", padx=(0, 8))
+
+    dlg.bind("<Escape>", lambda _e: _sair())
+    dlg.protocol("WM_DELETE_WINDOW", _sair)
+
+    dlg.update_idletasks()
+    larg, alt = dlg.winfo_width(), dlg.winfo_height()
+    dlg.geometry("+%d+%d" % ((dlg.winfo_screenwidth() - larg) // 2,
+                             (dlg.winfo_screenheight() - alt) // 3))
+    try:
+        dlg.grab_set()
+        dlg.lift()
+        dlg.focus_force()
+    except tk.TclError:
+        pass
+    root.wait_window(dlg)
+    return resultado["liberado"]

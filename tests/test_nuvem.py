@@ -425,6 +425,122 @@ def test_situacao_vazia_nao_e_pendente(tmp_path, monkeypatch):
     assert not eu.pendente and not eu.ativo
 
 
+# ------------------------------------------------------------- criar conta
+# A pessoa cria a própria conta desde 30/08/2026, e a senha nunca passa pelo
+# app: vai do campo para o servidor. O que estes testes seguram é a diferença
+# entre criar conta e ENTRAR — são coisas separadas de propósito, e a segunda
+# só acontece depois que um administrador libera.
+
+def _cadastrando(monkeypatch, resposta):
+    """Guarda o que foi enviado ao /signup e responde o que o teste mandar."""
+    enviado = {}
+
+    def falso(url, headers=None, json=None, timeout=None):
+        enviado["url"] = url
+        enviado["corpo"] = json
+        if isinstance(resposta, Exception):
+            raise resposta
+        return resposta
+    monkeypatch.setattr(rest.requests, "post", falso)
+    return enviado
+
+
+def test_criar_conta_manda_o_nome_no_metadata(monkeypatch):
+    """O gatilho do banco copia o nome de `raw_user_meta_data` para o perfil.
+
+    Sem ele, o admin veria uma fila de e-mails sem gente para aprovar."""
+    enviado = _cadastrando(monkeypatch, _Resposta(200, {"id": "abc"}))
+    assert rest.criar_conta("Fulano De Tal", " novo@exemplo.com ",
+                            "uma-senha-boa") is True
+    assert enviado["url"].endswith("/auth/v1/signup")
+    assert enviado["corpo"]["email"] == "novo@exemplo.com"
+    assert enviado["corpo"]["password"] == "uma-senha-boa"
+    assert enviado["corpo"]["data"]["nome"] == "Fulano De Tal"
+
+
+def test_criar_conta_nao_entra(tmp_path, monkeypatch):
+    """Criar e entrar são coisas diferentes: a sessão só nasce depois que a
+    pessoa clica no link que chegou no endereço que ela digitou — é isso que
+    prova que o endereço é dela."""
+    _cadastrando(monkeypatch, _Resposta(200, {"id": "abc"}))
+    rest.criar_conta("Fulano De Tal", "novo@exemplo.com", "uma-senha-boa")
+    assert not sessao.tem_sessao(tmp_path)
+
+
+def test_conta_que_ja_nasce_confirmada_avisa_que_nao_precisa_confirmar(
+        monkeypatch):
+    """Se vier token, a confirmação de e-mail está DESLIGADA no projeto — e
+    quem está na tela precisa ouvir outra frase."""
+    _cadastrando(monkeypatch, _Resposta(200, {"access_token": "t",
+                                              "user": {"id": "abc"}}))
+    assert rest.criar_conta("Fulano De Tal", "novo@exemplo.com",
+                            "uma-senha-boa") is False
+
+
+def test_cadastro_desligado_diz_onde_ligar(monkeypatch):
+    """A recusa mais provável na estreia — e a única que quem lê não resolve
+    sozinho. Sem dizer ONDE se liga, vira telefonema."""
+    _cadastrando(monkeypatch, _Resposta(
+        422, {"msg": "Signups not allowed for this instance"}))
+    with pytest.raises(rest.RecusadoPeloBanco) as e:
+        rest.criar_conta("Fulano De Tal", "novo@exemplo.com", "uma-senha-boa")
+    assert "Authentication" in str(e.value)
+
+
+def test_email_ja_cadastrado_manda_para_a_outra_aba(monkeypatch):
+    _cadastrando(monkeypatch, _Resposta(
+        422, {"msg": "User already registered"}))
+    with pytest.raises(rest.RecusadoPeloBanco) as e:
+        rest.criar_conta("Fulano De Tal", "velho@exemplo.com", "uma-senha-boa")
+    assert "Entrar" in str(e.value)
+
+
+def test_limite_de_tentativas_nao_e_culpa_de_quem_digitou(monkeypatch):
+    _cadastrando(monkeypatch, _Resposta(
+        429, {"msg": "email rate limit exceeded"}))
+    with pytest.raises(rest.RecusadoPeloBanco) as e:
+        rest.criar_conta("Fulano De Tal", "novo@exemplo.com", "uma-senha-boa")
+    assert "servidor" in str(e.value)
+
+
+def test_recusa_desconhecida_mostra_o_que_o_servidor_disse(monkeypatch):
+    """Frase genérica em cima de causa nova esconde justamente a causa nova."""
+    _cadastrando(monkeypatch, _Resposta(
+        400, {"msg": "something we have never seen"}))
+    with pytest.raises(rest.RecusadoPeloBanco) as e:
+        rest.criar_conta("Fulano De Tal", "novo@exemplo.com", "uma-senha-boa")
+    assert "something we have never seen" in str(e.value)
+
+
+def test_criar_conta_sem_rede_e_sem_rede(monkeypatch):
+    _cadastrando(monkeypatch, rest.requests.RequestException("DNS"))
+    with pytest.raises(rest.SemRede):
+        rest.criar_conta("Fulano De Tal", "novo@exemplo.com", "uma-senha-boa")
+
+
+# ------------------------------------------------------- liberado agora?
+
+def test_reconferir_traz_a_liberacao_sem_fechar_o_app(tmp_path, monkeypatch):
+    """O admin liberou agora. Ter de fechar e abrir o app para descobrir isso
+    é o tipo de coisa que vira telefonema."""
+    guardado = {"acesso": _jwt(int(time.time()) + 3600),
+                "renovacao": "r", "email": "novo@exemplo.com",
+                "papel": "operador", "situacao": "pendente"}
+    monkeypatch.setattr(sessao, "_ler", lambda _p=None: dict(guardado))
+    monkeypatch.setattr(sessao, "_gravar",
+                        lambda s, _p=None: guardado.update(s))
+    monkeypatch.setattr(sessao.rest, "perfil", lambda _t, _u: {
+        "nome": "Fulano De Tal", "papel": "operador", "situacao": "ativo"})
+    agora = sessao.reconferir(tmp_path)
+    assert agora.ativo
+    assert guardado["situacao"] == "ativo"
+
+
+def test_reconferir_sem_sessao_nao_estoura(tmp_path):
+    """Quem chama está desenhando uma tela, não gravando nada."""
+    assert not sessao.reconferir(tmp_path)
+
+
 def test_papel_de_admin_desativado_nao_vale(tmp_path, monkeypatch):
     """Desligar alguém é `situacao`, não `papel` — a linha fica de pé para a
     auditoria saber quem era. Quem conferisse só o papel deixaria o desligado
