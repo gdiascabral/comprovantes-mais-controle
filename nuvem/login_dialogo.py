@@ -41,6 +41,19 @@ except ModuleNotFoundError:
     import util
 
 
+#: O mínimo que o servidor aceita, para não fazer a pessoa viajar até ele
+#: para ouvir um não. Vale como CÓPIA, não como regra: quem manda é o painel
+#: (Authentication → Sign In / Providers → Minimum password length), e quando
+#: os dois discordarem é o servidor que decide — a recusa dele chega
+#: traduzida pelo `nuvem/rest.py`, com o número que ele exige.
+#:
+#: Ficou em 8 por um tempo, mais apertado que o servidor de propósito. Voltou
+#: para 6 em 30/08/2026: uma trava local mais dura que a do servidor recusa
+#: senha que o servidor aceitaria, e quem lê não tem como saber que foi o app,
+#: e não o banco, que disse não.
+MINIMO_DA_SENHA = 6
+
+
 def _frase(e: Exception) -> str:
     """Traduz a falha em UMA frase: o que houve, de quem é, e o próximo passo.
 
@@ -174,7 +187,7 @@ def pedir_login(root, pasta=None) -> bool:
     campos_novos = {}
     for chave, rotulo, oculto in (("nome", "Nome completo", False),
                                   ("email", "E-mail", False),
-                                  ("senha", "Senha (mínimo 8 caracteres)", True),
+                                  ("senha", "Senha (mínimo 6 caracteres)", True),
                                   ("repete", "Repita a senha", True)):
         ttk.Label(criacao, text=rotulo, style="Apoio.TLabel").pack(anchor="w")
         campo = ttk.Entry(criacao, width=34, font=widgets.FONTE_SECAO,
@@ -246,9 +259,10 @@ def pedir_login(root, pasta=None) -> bool:
         if "@" not in email or "." not in email.split("@")[-1]:
             aviso_novo.configure(text="Esse e-mail não parece completo.")
             return
-        if len(senha) < 8:
-            aviso_novo.configure(text="A senha precisa de ao menos 8 "
-                                      "caracteres.")
+        if len(senha) < MINIMO_DA_SENHA:
+            aviso_novo.configure(
+                text=f"A senha precisa de ao menos {MINIMO_DA_SENHA} "
+                     "caracteres.")
             return
         if senha != campos_novos["repete"].get():
             aviso_novo.configure(text="As duas senhas não são iguais.")
@@ -277,7 +291,10 @@ def pedir_login(root, pasta=None) -> bool:
             text=("✔  Conta criada. Abra o e-mail em " + email + " e clique "
                   "no link para confirmar o endereço. Depois entre pela aba "
                   "“Entrar” — o acesso ainda precisa ser liberado por um "
-                  "administrador.")
+                  "administrador.\n\n"
+                  "Se o link disser que expirou, tente entrar mesmo assim: "
+                  "alguns provedores abrem os links da mensagem antes de "
+                  "você, e nesse caso a confirmação já aconteceu.")
             if confirmar else
             ("✔  Conta criada e já confirmada. Entre pela aba “Entrar” — o "
              "acesso ainda precisa ser liberado por um administrador."))

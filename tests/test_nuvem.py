@@ -503,6 +503,45 @@ def test_limite_de_tentativas_nao_e_culpa_de_quem_digitou(monkeypatch):
     assert "servidor" in str(e.value)
 
 
+def test_as_tres_recusas_de_senha_dizem_coisas_diferentes(monkeypatch):
+    """Curta, sem os tipos exigidos, e conhecida por vazada são problemas
+    diferentes. Com a mesma frase para as três, a pessoa mexe no lugar errado
+    — alonga uma senha que já é longa, ou embaralha uma que o servidor nem
+    pede embaralhada."""
+    curta = "Password should be at least 12 characters."
+    tipos = ("Password should contain at least one character of each: "
+             "abcdefghijklmnopqrstuvwxyz, ABCDEFGHIJKLMNOPQRSTUVWXYZ, "
+             "0123456789.")
+    vazada = ("Password is known to be weak and easy to guess, please choose "
+              "a different one.")
+    frases = {}
+    for rotulo, msg in (("curta", curta), ("tipos", tipos),
+                        ("vazada", vazada)):
+        _cadastrando(monkeypatch, _Resposta(422, {"msg": msg}))
+        with pytest.raises(rest.RecusadoPeloBanco) as e:
+            rest.criar_conta("Fulano De Tal", "novo@exemplo.com", "abc")
+        frases[rotulo] = str(e.value)
+
+    assert len(set(frases.values())) == 3, "as três saíram com a mesma frase"
+    assert "curta demais" in frases["curta"]
+    # O número que o painel configurou vem junto: sem ele a frase manda tentar
+    # de novo sem dizer até onde.
+    assert "12" in frases["curta"]
+    assert "tipos de caractere" in frases["tipos"]
+    assert "vazadas" in frases["vazada"]
+
+
+def test_o_minimo_local_e_copia_do_servidor_e_nao_regra(monkeypatch):
+    """Trava local mais dura que a do servidor recusa senha que o servidor
+    aceitaria — e quem lê não tem como saber que foi o app quem disse não."""
+    from nuvem import login_dialogo
+    _cadastrando(monkeypatch, _Resposta(
+        422, {"msg": "Password should be at least 6 characters."}))
+    with pytest.raises(rest.RecusadoPeloBanco):
+        rest.criar_conta("Fulano De Tal", "novo@exemplo.com", "abc")
+    assert login_dialogo.MINIMO_DA_SENHA == 6
+
+
 def test_recusa_desconhecida_mostra_o_que_o_servidor_disse(monkeypatch):
     """Frase genérica em cima de causa nova esconde justamente a causa nova."""
     _cadastrando(monkeypatch, _Resposta(

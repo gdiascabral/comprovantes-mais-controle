@@ -227,10 +227,23 @@ _RECUSAS_DO_CADASTRO = (
      "Allow new users to sign up."),
     ("already registered",
      "Já existe uma conta com esse e-mail. Use a aba “Entrar”."),
+    # As três recusas de senha do GoTrue são coisas diferentes, e dizê-las
+    # com a mesma frase manda a pessoa mexer no lugar errado: alongar uma
+    # senha que já é longa, ou embaralhar uma que o servidor nem pede
+    # embaralhada. A ordem importa — "should be at least" é mais específico
+    # que "password", e vem antes.
     ("password should be at least",
-     "A senha é curta demais para o servidor. Use uma mais longa."),
+     "A senha é curta demais para o servidor: %s. O mínimo é configurado no "
+     "painel, em Authentication → Sign In / Providers → Minimum password "
+     "length."),
+    ("should contain at least one character of each",
+     "O servidor exige tipos de caractere que faltam nessa senha — em geral "
+     "letra minúscula, MAIÚSCULA e número. O que ele pediu: %s"),
+    ("known to be weak",
+     "Essa senha é conhecida por ser fácil de adivinhar (ela aparece em "
+     "listas de senhas vazadas). Escolha outra."),
     ("weak password",
-     "Essa senha é fácil demais. Misture letras, números e um símbolo."),
+     "O servidor recusou essa senha por ser fraca: %s"),
     ("unable to validate email address",
      "Esse e-mail não parece válido. Confira o que foi digitado."),
     ("invalid format",
@@ -265,10 +278,15 @@ def criar_conta(nome: str, email: str, senha: str) -> bool:
         raise SemRede(f"não deu para falar com o servidor: {e}") from e
 
     if r.status_code >= 400:
-        dito = _motivo_do_servidor(r).lower()
+        cru = _motivo_do_servidor(r)
+        dito = cru.lower()
         for pedaco, frase in _RECUSAS_DO_CADASTRO:
             if pedaco in dito:
-                raise RecusadoPeloBanco(frase)
+                # O `%s` das frases de senha carrega o texto do servidor. Ele
+                # vem em inglês, e ainda assim vale: é onde está o NÚMERO que
+                # o painel configurou, e sem ele a frase manda tentar de novo
+                # sem dizer até onde.
+                raise RecusadoPeloBanco(frase % cru if "%s" in frase else frase)
         # Recusa que ainda não sabemos traduzir: vale mais mostrar o que o
         # servidor disse do que uma frase genérica que esconde a causa.
         raise RecusadoPeloBanco(

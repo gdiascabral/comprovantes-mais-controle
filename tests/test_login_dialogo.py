@@ -101,7 +101,7 @@ def test_criar_conta_confere_antes_de_viajar(raiz, monkeypatch, tmp_path):
         tentar("", "", "", "")
         tentar("Fulano", "f@x.com", "uma-senha-boa", "uma-senha-boa")
         tentar("Fulano De Tal", "sem-arroba", "uma-senha-boa", "uma-senha-boa")
-        tentar("Fulano De Tal", "f@x.com", "curta", "curta")
+        tentar("Fulano De Tal", "f@x.com", "curta", "curta")   # 5 < 6
         tentar("Fulano De Tal", "f@x.com", "uma-senha-boa", "outra-senha")
         return recados
 
@@ -110,7 +110,7 @@ def test_criar_conta_confere_antes_de_viajar(raiz, monkeypatch, tmp_path):
     assert "Preencha" in vazio
     assert "nome completo" in so_nome
     assert "e-mail" in email
-    assert "8" in curta
+    assert str(login_dialogo.MINIMO_DA_SENHA) in curta
     assert "não são iguais" in diferentes
 
 
