@@ -404,3 +404,90 @@ def test_a_conta_de_descricoes_separa_por_origem():
     ])
     assert contas["CHAVE"] == {"total": 2, "com_descricao": 1}
     assert contas["QR_CODE"] == {"total": 1, "com_descricao": 0}
+
+
+# ------------------------------------------------- as contas do Inter
+# O Sicoob enumera as contas sozinho: basta entrar e perguntar. No Inter cada
+# conta e um login separado, entao alguem tem de declarar quais sao.
+
+def _arquivo(tmp_path, dados):
+    import json
+    (tmp_path / "contas_inter.json").write_text(
+        json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    return tmp_path
+
+
+def test_le_as_contas_declaradas(tmp_path):
+    from baixar_comprovantes import contas_inter
+
+    pasta = _arquivo(tmp_path, {"contas": [
+        {"apelido": "MORAIS ENG", "empresa": "MORAIS ENG", "pasta": "INTER"},
+        {"apelido": "VXZ", "empresa": "VXZ"}]})
+    contas = contas_inter.carregar(pasta)
+    assert [c.apelido for c in contas] == ["MORAIS ENG", "VXZ"]
+    assert contas[1].pasta == "INTER", "sem pasta declarada, o padrão é INTER"
+
+
+def test_sem_arquivo_nao_e_erro(tmp_path):
+    """Quem só usa Sicoob nunca precisa dele, e a aba tem de abrir assim
+    mesmo — mostrando as contas do Sicoob e dizendo que o Inter não foi
+    declarado."""
+    from baixar_comprovantes import contas_inter
+
+    assert contas_inter.carregar(tmp_path) == []
+
+
+def test_arquivo_torto_nao_derruba_a_aba(tmp_path):
+    """Um JSON quebrado não pode impedir o resto do trabalho."""
+    from baixar_comprovantes import contas_inter
+
+    (tmp_path / "contas_inter.json").write_text("{isso não é json",
+                                                encoding="utf-8")
+    assert contas_inter.carregar(tmp_path) == []
+
+
+def test_linha_sem_apelido_ou_sem_empresa_e_ignorada(tmp_path):
+    """O apelido dá nome à pasta de perfil do Chrome, e a empresa diz onde
+    arquivar. Sem um dos dois, a conta não tem como ser percorrida — entrar na
+    fila só para falhar na vez dela seria pior."""
+    from baixar_comprovantes import contas_inter
+
+    pasta = _arquivo(tmp_path, {"contas": [
+        {"apelido": "", "empresa": "X"},
+        {"apelido": "Y", "empresa": ""},
+        {"apelido": "BOM", "empresa": "BOM"}]})
+    assert [c.apelido for c in contas_inter.carregar(pasta)] == ["BOM"]
+
+
+# ------------------------------------------------------------ onde cai
+# Uma pasta `Comprovantes`, e dentro dela uma por data. TUDO junto: sem
+# separar por conta nem por empresa, porque e assim que o Anexar precisa --
+# ele varre uma pasta e casa cada comprovante pelo conteudo do nome.
+
+def test_uma_subpasta_por_dia_de_download():
+    import datetime
+
+    from baixar_comprovantes import comprovantes_frame as cf
+
+    alvo = cf.pasta_da_rodada("D:/x", datetime.date(2026, 8, 31))
+    assert alvo.name == "2026-08-31"
+    assert alvo.parent.name == "x"
+
+
+def test_a_data_e_a_do_download_e_nao_a_do_pagamento():
+    """Ela responde "o que eu baixei hoje?", que é a pergunta de quem está com
+    a pasta aberta. A data do pagamento já está no nome de cada arquivo."""
+    import datetime
+
+    from baixar_comprovantes import comprovantes_frame as cf
+
+    hoje = datetime.date.today()
+    assert cf.pasta_da_rodada("D:/x").name == hoje.strftime("%Y-%m-%d")
+
+
+def test_o_padrao_fica_ao_lado_do_app():
+    """Para ninguém ser obrigado a escolher pasta antes de baixar o primeiro
+    comprovante."""
+    from baixar_comprovantes import comprovantes_frame as cf
+
+    assert cf.pasta_padrao().name == "Comprovantes"

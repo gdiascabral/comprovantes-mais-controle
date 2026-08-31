@@ -17,7 +17,7 @@ janela congelar — o trabalho roda noutra thread, como nas outras abas.
 """
 from __future__ import annotations
 
-import datetime
+import datetime as _dt
 import queue
 import sys
 import threading
@@ -32,9 +32,37 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     import widgets
 
 try:
-    import util
-except ModuleNotFoundError:
     import util                          # noqa: F401
+except ModuleNotFoundError:              # pragma: no cover
+    pass
+
+try:
+    from . import contas_inter
+except ImportError:                      # rodando este módulo isoladamente
+    import contas_inter
+
+
+def pasta_padrao() -> Path:
+    """`<pasta do app>/Comprovantes` — criada na primeira vez que se usa.
+
+    Ao lado do app, como a "Pagamentos do dia" que já vive lá. Quem quiser
+    outro lugar troca no campo; o padrão existe para não obrigar ninguém a
+    escolher pasta antes de baixar o primeiro comprovante."""
+    return Path(util.pasta_base()) / "Comprovantes"
+
+
+def pasta_da_rodada(base, quando=None) -> Path:
+    """`<base>/2026-08-31` — uma subpasta por dia de download.
+
+    TUDO junto lá dentro: sem separar por conta nem por empresa. Não é
+    desleixo — é o que o Anexar precisa. Ele varre uma pasta e casa cada
+    comprovante com o lançamento pelo conteúdo do nome; separar em galhos só
+    obrigaria a percorrer galho por galho para juntar de novo no fim.
+
+    A data é a do DOWNLOAD, e não a do pagamento: ela responde "o que eu
+    baixei hoje?", que é a pergunta de quem está com a pasta aberta."""
+    dia = (quando or _dt.date.today()).strftime("%Y-%m-%d")
+    return Path(base) / dia
 
 
 #: Como cada situação aparece na tabela. O símbolo vem junto do texto: a tag
@@ -86,8 +114,8 @@ class ComprovantesFrame(ttk.Frame):
         linha = ttk.Frame(c_per)
         linha.pack(fill="x")
 
-        hoje = datetime.date.today()
-        inicio = hoje - datetime.timedelta(days=7)
+        hoje = _dt.date.today()
+        inicio = hoje - _dt.timedelta(days=7)
         self.v_ini = tk.StringVar(value=f"{inicio:%d/%m/%Y}")
         self.v_fim = tk.StringVar(value=f"{hoje:%d/%m/%Y}")
         for rotulo, var in (("De", self.v_ini), ("Até", self.v_fim)):
@@ -95,7 +123,7 @@ class ComprovantesFrame(ttk.Frame):
                                   lambda pai, v=var: widgets.CampoData(pai, v))
             campo.pack(side="left", padx=(0, 14))
 
-        self.v_pasta = tk.StringVar(value="")
+        self.v_pasta = tk.StringVar(value=str(pasta_padrao()))
         campo_pasta = widgets.Campo(
             linha, "Onde salvar",
             lambda pai: ttk.Entry(pai, textvariable=self.v_pasta, width=52))
@@ -183,6 +211,12 @@ class ComprovantesFrame(ttk.Frame):
             for conta in getattr(emp, "contas", []):
                 contas.append({"banco": "Sicoob", "conta": conta.numero,
                                "empresa": emp.nome, "pasta": conta.pasta})
+        # O Inter vem DEPOIS, e a lista dele é declarada: lá cada conta é um
+        # login, então ninguém tem como enumerá-las — diferente do Sicoob, onde
+        # basta entrar e perguntar.
+        for c in contas_inter.carregar():
+            contas.append({"banco": "Inter", "conta": c.apelido,
+                           "empresa": c.empresa, "pasta": c.pasta})
         return contas
 
     # ------------------------------------------------------------ execução
@@ -196,11 +230,18 @@ class ComprovantesFrame(ttk.Frame):
         if not self.linhas:
             self._log("[!] não há conta na fila.")
             return
+        pasta = pasta_da_rodada(destino)
+        try:
+            pasta.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self._log(f"[!] não consegui criar {pasta}: {e}")
+            return
         self.b_ir.configure(state="disabled")
         self.lbl.configure(text="Preparando…")
+        self._log(f"Os comprovantes vão para {pasta}")
         alvo = threading.Thread(target=self._trabalhar,
                                 args=(self.v_ini.get(), self.v_fim.get(),
-                                      Path(destino)), daemon=True)
+                                      pasta), daemon=True)
         alvo.start()
         self.worker = _Tarefa(alvo)
 
@@ -225,9 +266,8 @@ class ComprovantesFrame(ttk.Frame):
                         chave = f"Sicoob:{c['conta']}"
                         self.q.put(("situacao", (chave, "trabalhando", {})))
                         self.q.put(("progresso", (i, len(do_sicoob))))
-                        pasta = destino / c["empresa"] / (c["pasta"] or "SICOOB")
                         r = sicoob.baixar_conta(
-                            cli, c["conta"], inicio, fim, pasta,
+                            cli, c["conta"], inicio, fim, destino,
                             log=lambda m: self.q.put(("log", m)))
                         if not r.ok:
                             self.q.put(("situacao",
@@ -237,10 +277,39 @@ class ComprovantesFrame(ttk.Frame):
                         else:
                             self.q.put(("situacao", (chave, "ok",
                                                      {"n": len(r.baixados)})))
+            self._fazer_inter(inicio, fim, destino)
             self.q.put(("fim", None))
         except Exception as e:                               # noqa: BLE001
             self.q.put(("log", f"[!] {e}"))
             self.q.put(("fim", None))
+
+    def _fazer_inter(self, inicio: str, fim: str, destino: Path):
+        """Uma conta, um login, uma leitura de QR — nessa ordem, uma de cada vez.
+
+        Não dá para adiantar: o Inter pede o código a cada abertura, e duas
+        janelas no mesmo perfil se atrapalham. Então a linha da vez vira
+        "aguardando login" e só ela; as outras seguem esperando, para quem está
+        com o celular na mão saber de qual conta é o QR na tela."""
+        from baixar_comprovantes import inter_baixar as inter
+
+        do_inter = [c for c in self.linhas.values() if c["banco"] == "Inter"]
+        if not do_inter:
+            return
+        self.q.put(("log", f"Inter: {len(do_inter)} conta(s), um login cada."))
+        for i, c in enumerate(do_inter, start=1):
+            chave = f"Inter:{c['conta']}"
+            self.q.put(("situacao", (chave, "qr", {})))
+            self.q.put(("progresso", (i, len(do_inter))))
+            self.q.put(("log", f"\nInter — {c['conta']}: escaneie o QR."))
+            r = inter.baixar(c["conta"], inicio, fim, destino,
+                             log=lambda m: self.q.put(("log", m)))
+            if not r.ok:
+                self.q.put(("situacao", (chave, "erro", {"motivo": r.motivo})))
+            elif not r.baixados:
+                self.q.put(("situacao", (chave, "vazio", {})))
+            else:
+                self.q.put(("situacao",
+                            (chave, "ok", {"n": len(r.baixados)})))
 
     # ------------------------------------------------------- a tela reage
     def _drenar(self):

@@ -69,6 +69,11 @@ confirmar_antes.json
 # conteúdo do arquivo protegido, e o nome exato deixava os dois de fora da
 # regra — proteger o original e vazar a cópia é o pior dos dois mundos.
 contas_sicoob*
+# As contas do Inter, declaradas à mão porque lá cada uma é um login e ninguém
+# as enumera. Mesmo conteúdo sensível — nome de empresa real — e o `*` pela
+# mesma lição da linha acima: proteger o nome exato e vazar a cópia de backup
+# é o pior dos dois mundos.
+contas_inter*
 extratos_sicoob/.chrome_profile_sicoob/
 # Perfil do Chrome do portal Acessórias: sessão logada do escritório.
 .chrome_profile_acessorias/
