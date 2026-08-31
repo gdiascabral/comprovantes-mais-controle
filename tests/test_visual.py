@@ -218,6 +218,31 @@ def test_a_troca_de_tema_reconfigura_os_estilos(raiz):
         assert st.lookup("Titulo.TLabel", "font") == widgets.FONTE_TITULO
 
 
+def test_a_semana_comeca_no_domingo_e_as_colunas_batem():
+    """As iniciais e o primeiro dia da semana andam JUNTOS.
+
+    Mexer numa sem a outra alinha o dia 1 na coluna errada e o mês inteiro
+    escorrega — sem erro nenhum, só datas trocadas para quem clica. O
+    `calendar` do Python começa na segunda (ISO); aqui começa no domingo,
+    como o calendário de parede.
+    """
+    import calendar
+    from datetime import date
+
+    assert widgets.DIAS_DA_SEMANA[0] == "D", "a primeira coluna é domingo"
+    assert len(widgets.DIAS_DA_SEMANA) == 7
+
+    # A prova real: em que coluna o dia 1 de um mês conhecido cai.
+    semanas = calendar.Calendar(widgets.SEMANA_COMECA_EM).monthdayscalendar(
+        2026, 8)
+    coluna_do_primeiro = semanas[0].index(1)
+    # 1/8/2026 é sábado; com domingo na coluna 0, sábado é a 6.
+    assert date(2026, 8, 1).weekday() == 5, "sábado, na contagem do Python"
+    assert coluna_do_primeiro == 6, (
+        "o dia 1 caiu na coluna errada: as iniciais e SEMANA_COMECA_EM "
+        "deixaram de concordar")
+
+
 def test_a_ressalva_tem_cor_propria_nos_dois_temas(raiz):
     """Faltava o meio-termo: o dado de pagamento que existe mas não serve para
     a remessa só tinha a cor do impedimento, e vermelho que não impede nada é

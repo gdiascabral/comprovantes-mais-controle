@@ -32,7 +32,16 @@ MESES = ("Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
 
 #: Iniciais dos dias na ordem em que o `calendar` do Python monta a semana
 #: (segunda a domingo).
-DIAS_DA_SEMANA = ("S", "T", "Q", "Q", "S", "S", "D")
+#: A semana começa no DOMINGO, como nos calendários de parede daqui — foi
+#: assim que o dono pediu, e é a forma que a pessoa já lê sem pensar. O
+#: `calendar` do Python começa na segunda por padrão (ISO), então quem monta a
+#: grade precisa dizer o contrário: ver `SEMANA_COMECA_EM`.
+DIAS_DA_SEMANA = ("D", "S", "T", "Q", "Q", "S", "S")
+
+#: 6 = domingo, na contagem do módulo `calendar` (segunda = 0). As duas coisas
+#: — a ordem das iniciais acima e este número — têm de andar juntas: mudar uma
+#: sem a outra alinha o dia 1 na coluna errada, e o mês inteiro escorrega.
+SEMANA_COMECA_EM = 6
 
 
 # ===================================================================== visual
@@ -2314,7 +2323,7 @@ class CampoData(ttk.Frame):
                          background=c["cartao"], foreground=c["tenue"],
                          font=FONTE_MINI).grid(row=0, column=i, pady=(0, 3))
             escolhida = self._escolhida()
-            semanas = calendar.Calendar().monthdayscalendar(
+            semanas = calendar.Calendar(SEMANA_COMECA_EM).monthdayscalendar(
                 estado["ano"], estado["mes"])
             for r, semana in enumerate(semanas, 1):
                 for col, dia in enumerate(semana):
