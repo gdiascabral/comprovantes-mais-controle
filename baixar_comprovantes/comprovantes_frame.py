@@ -151,6 +151,10 @@ class ComprovantesFrame(ttk.Frame):
             self.tabela.heading(col, text=titulo)
             self.tabela.column(col, width=larg, anchor=onde,
                                stretch=col == "empresa")
+        # O cabeçalho da coluna da marca é o "todas": é onde a pessoa procura
+        # esse botão numa tabela de seleção, antes de procurar no rodapé.
+        self.tabela.heading("marca", text=MARCADA,
+                            command=self._alternar_todas)
         widgets.estilo_tabela(self.tabela)
         self.tabela.pack(fill="both", expand=True)
         # Clique na primeira coluna marca e desmarca. Não é `Checkbutton`
@@ -208,9 +212,16 @@ class ComprovantesFrame(ttk.Frame):
                       "confira o contas_sicoob.json.")
 
     def _clicou(self, evento):
-        """Só a coluna da marca alterna; clique no resto seleciona a linha."""
+        """Só a coluna da marca alterna; clique no resto seleciona a linha.
+
+        Devolver "break" no cabeçalho mataria o `command` da coluna, porque a
+        ligação do widget corre ANTES da ligação de classe que dispara o
+        comando do cabeçalho — a marca de todas simplesmente não responderia
+        ao clique."""
+        if self.tabela.identify_region(evento.x, evento.y) != "cell":
+            return None
         if self.tabela.identify_column(evento.x) != "#1":
-            return
+            return None
         chave = self.tabela.identify_row(evento.y)
         if chave in self.linhas:
             self._marcar_conta(chave, not self.linhas[chave]["marcada"])
@@ -228,6 +239,13 @@ class ComprovantesFrame(ttk.Frame):
         for chave in self.linhas:
             self._marcar_conta(chave, ligadas)
 
+    def _alternar_todas(self):
+        """Tudo marcado vira nada marcado; qualquer outra coisa vira tudo.
+
+        É como o cabeçalho de uma tabela de seleção se comporta em toda parte:
+        o clique responde ao que está na tela, sem terceiro estado."""
+        self._todas(not all(c["marcada"] for c in self.linhas.values()))
+
     def _contar(self):
         """O rodapé conta o que VAI ser feito, não o que existe.
 
@@ -240,6 +258,11 @@ class ComprovantesFrame(ttk.Frame):
         self.rodape.definir(
             texto=f"{len(marcadas)} de {len(self.linhas)} marcadas · "
                   f"{sicoob} Sicoob + {inter} Inter · {logins} login(s)")
+        # Duas marcas, e não três: o cabeçalho diz o que o clique VAI fazer, e
+        # o rodapé já diz quantas estão marcadas. Um símbolo de "algumas"
+        # ocuparia o lugar da informação sem acrescentar nenhuma.
+        todas = bool(self.linhas) and len(marcadas) == len(self.linhas)
+        self.tabela.heading("marca", text=MARCADA if todas else DESMARCADA)
 
     def _contas_do_cadastro(self) -> list[dict]:
         """As contas que a fila vai percorrer, na ordem em que serão feitas.

@@ -761,3 +761,121 @@ def test_o_desempate_segue_o_do_renomear(tmp_path):
         nf.renomear(origem, campos)
     nomes = sorted(p.name for p in tmp_path.glob("*.pdf"))
     assert any("(2)" in nome for nome in nomes), nomes
+
+
+# ------------------------------------- o cabecalho da coluna marca e desmarca
+# E onde a pessoa procura esse botao numa tabela de selecao, antes de procurar
+# no rodape.
+
+@pytest.fixture
+def abrir_aba(raiz):
+    """Abre a aba de verdade na janela compartilhada, e a FECHA no fim.
+
+    Os dois cuidados aqui nasceram de estragos medidos, nao de zelo:
+
+    Sem ESPACO, o Treeview nao chega a desenhar o cabecalho, e
+    `identify_region` responde "nothing" onde ele esta -- o teste do cabecalho
+    PULOU em vez de falhar, que e o jeito de sumir sem nada em vermelho.
+
+    Sem FECHAR, a aba fica empacotada (`fill both, expand`) na janela, que e
+    de sessao (a conftest explica por que): ela cobre tudo e espreme os
+    widgets dos testes seguintes. Cinco testes de foco e de calendario, em
+    outros tres arquivos, passaram a falhar por causa disto.
+    """
+    import tkinter as tk
+
+    import widgets
+    from baixar_comprovantes import comprovantes_frame as cf
+
+    criadas = []
+    geometria = raiz.geometry()
+
+    def criar(contas):
+        try:
+            widgets.aplicar_estilos(raiz)
+        except Exception:                                    # noqa: BLE001
+            pass
+        aba = cf.ComprovantesFrame(raiz)
+        raiz.geometry("900x600+0+0")
+        aba.pack(fill="both", expand=True)
+        raiz.update()
+        criadas.append(aba)
+
+        aba.tabela.delete(*aba.tabela.get_children())
+        aba.linhas.clear()
+        for c in contas:
+            chave = f"{c['banco']}:{c['conta']}"
+            aba.linhas[chave] = dict(c, situacao="espera", marcada=True)
+            aba.tabela.insert("", "end", iid=chave,
+                              values=(cf.MARCADA, c["banco"], c["conta"],
+                                      c["empresa"], "na fila"))
+        aba._contar()
+        return aba
+
+    yield criar
+
+    for aba in criadas:
+        try:
+            aba.destroy()
+        except tk.TclError:
+            pass
+    raiz.geometry(geometria)
+    raiz.update()
+
+
+DUAS = [{"banco": "Sicoob", "conta": "00.000-0", "empresa": "EMPRESA A",
+         "pasta": "SICOOB"},
+        {"banco": "Inter", "conta": "—", "empresa": "EMPRESA B",
+         "pasta": "INTER"}]
+
+
+def test_o_cabecalho_desmarca_todas_e_marca_de_novo(abrir_aba):
+    aba = abrir_aba(DUAS)
+    assert all(c["marcada"] for c in aba.linhas.values())
+
+    aba._alternar_todas()
+    assert not any(c["marcada"] for c in aba.linhas.values())
+
+    aba._alternar_todas()
+    assert all(c["marcada"] for c in aba.linhas.values())
+
+
+def test_com_algumas_marcadas_o_cabecalho_marca_todas(abrir_aba):
+    """Sem terceiro estado: o clique responde ao que esta na tela."""
+    aba = abrir_aba(DUAS)
+    aba._marcar_conta("Inter:—", False)
+
+    aba._alternar_todas()
+    assert all(c["marcada"] for c in aba.linhas.values())
+
+
+def test_o_simbolo_do_cabecalho_segue_as_linhas(abrir_aba):
+    from baixar_comprovantes import comprovantes_frame as cf
+
+    aba = abrir_aba(DUAS)
+    assert aba.tabela.heading("marca", "text") == cf.MARCADA
+
+    aba._marcar_conta("Inter:—", False)
+    assert aba.tabela.heading("marca", "text") == cf.DESMARCADA
+
+
+def test_o_clique_na_linha_nao_engole_o_comando_do_cabecalho(abrir_aba):
+    """`_clicou` devolvia "break" para toda a coluna #1, cabecalho incluido --
+    e a ligacao do widget corre ANTES da ligacao de classe que dispara o
+    comando do cabecalho. A marca de todas simplesmente nao responderia."""
+
+    aba = abrir_aba(DUAS)
+    tabela = aba.tabela
+    # A altura do cabecalho muda com o tema e com o DPI; procura-la e mais
+    # honesto que fixar um y que funciona nesta maquina.
+    alturas = [y for y in range(0, 60)
+               if tabela.identify_region(30, y) == "heading"]
+    if not alturas:
+        pytest.skip("o Tk desta maquina nao desenhou o cabecalho")
+
+    class Evento:
+        x, y = 30, alturas[len(alturas) // 2]
+
+    assert tabela.identify_column(Evento.x) == "#1"
+    assert aba._clicou(Evento()) is None, (
+        "devolver 'break' no cabecalho mata o comando da coluna")
