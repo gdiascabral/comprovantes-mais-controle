@@ -41,9 +41,10 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 try:
-    from . import ja_baixados
+    from . import ja_baixados, nome_final
 except ImportError:                      # rodando este módulo isoladamente
     import ja_baixados
+    import nome_final
 
 BASE = "https://ib.sicoob.com.br/sicoobnet"
 URL_COMPROVANTES = f"{BASE}/ib/#/comprovantes"
@@ -386,6 +387,12 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
             try:
                 alvo = nome_livre(destino, nome_do_comprovante(item, numero))
                 html_para_pdf(cli.ctx, html, alvo)
+                # O favorecido só existe DENTRO do comprovante — a lista do
+                # Sicoob não o traz. Por isso aqui o PDF é lido, e no Inter
+                # não: lá o JSON já tem tudo.
+                alvo = nome_final.renomear(
+                    alvo, nome_final.do_sicoob(item,
+                                               nome_final.texto_do_pdf(alvo)))
                 resultado.baixados.append(alvo)
                 if registro is not None:
                     registro.anotar(

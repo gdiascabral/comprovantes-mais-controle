@@ -645,3 +645,119 @@ def test_chave_vazia_nunca_conta_como_baixado(tmp_path):
     assert not r.tem("")
     r.anotar("", tmp_path / "a.pdf")
     assert len(r) == 0
+
+
+# ------------------------------------------- o nome no padrao do Renomear
+# `2.980,00 - RPB 24 QD 26A LT 08 OC 6974 - 24-08.pdf`. Renomear na BAIXA
+# economiza uma passada e evita o erro de esquecer a passada.
+
+def linhas(*partes):
+    """Um comprovante de mentira, montado linha a linha."""
+    return chr(10).join(partes)
+
+
+def test_o_nome_sai_da_funcao_do_renomear_e_nao_de_uma_copia():
+    """Reproduzir o padrao aqui criaria duas verdades que divergem no dia em
+    que alguem mudar a regra num lado so -- e divergem em SILENCIO, porque
+    nada quebra: os arquivos so passam a sair diferentes."""
+    import inspect
+
+    from baixar_comprovantes import nome_final as nf
+
+    assert "nome_arquivo" in inspect.getsource(nf.nomear)
+
+
+def test_o_pix_e_nomeado_sem_abrir_o_pdf():
+    """O Inter entrega valor, data, descricao e favorecido no JSON. Ler o PDF
+    para descobrir o que ja se tem seria trabalho e risco de graca."""
+    from baixar_comprovantes import nome_final as nf
+
+    campos = nf.do_pix({"data": "24/08/2026", "valor": 2980.0,
+                        "nome": "Ar Pre Moldados",
+                        "descricao": "RPB 24 QD 26A LT 08 OC 6974",
+                        "detalhePix": {}})
+    assert campos["valor"] == "2.980,00"
+    assert nf.nomear(campos) == "2980,00 - RPB 24 QD 26A LT 08 OC 6974 - 24-08"
+
+
+def test_o_valor_vira_o_formato_que_o_renomear_espera():
+    from baixar_comprovantes import nome_final as nf
+
+    assert nf.brl(2980.0) == "2.980,00"
+    assert nf.brl(108.39) == "108,39"
+    assert nf.brl(90000) == "90.000,00"
+    assert nf.brl(None) == ""
+
+
+def test_o_favorecido_do_boleto_sai_do_bloco_beneficiario():
+    """`Nome/Razao social` aparece DUAS vezes no comprovante de boleto, e a
+    primeira ocorrencia pode ser a do PAGADOR -- que e justamente quem nao
+    interessa. A ancora e o BLOCO, nao o rotulo."""
+    from baixar_comprovantes import nome_final as nf
+
+    texto = linhas("Tipo documento Titulo",
+                   "Beneficiario",
+                   "Nome/Razao Social ALLSEG SEGURADORA S A",
+                   "CPF/CNPJ 67.865.360/0001-27",
+                   "Pagador",
+                   "Nome/Razao social MORAIS EMPREENDIMENTOS BURITIS")
+    assert nf.favorecido_do_comprovante(texto) == "ALLSEG SEGURADORA S A"
+
+
+def test_o_favorecido_da_transferencia_sai_do_bloco_credito():
+    from baixar_comprovantes import nome_final as nf
+
+    texto = linhas("Debito",
+                   "Conta 50.019-4 / MORAIS EMPREENDIMENTOS BURITIS SPE LTDA",
+                   "Credito",
+                   "Conta 6.135-2 / ROCHA SANTIAGO ENGENHARIA LTDA")
+    assert nf.favorecido_do_comprovante(texto) == "ROCHA SANTIAGO ENGENHARIA LTDA"
+
+
+def test_a_data_e_a_do_pagamento_e_nao_a_da_impressao():
+    """O topo do comprovante traz o carimbo de quando o ARQUIVO foi gerado. O
+    parser do Renomear pegou esse, e os 23 sairam com a data de hoje."""
+    from baixar_comprovantes import nome_final as nf
+
+    texto = linhas("COMPROVANTE DE", "31/08/2026 12:04:52",
+                   "PAGAMENTO DE BOLETO",
+                   "Datas", "Realizado 03/08/2026 as 17:57:03",
+                   "Pagamento 03/08/2026")
+    assert nf.data_do_comprovante(texto) == "03/08/2026"
+
+
+def test_o_sicoob_junta_o_json_com_o_documento():
+    """Valor e data do JSON (certos); favorecido do PDF (so la existe)."""
+    from baixar_comprovantes import nome_final as nf
+
+    item = {"valorLancamento": 1244.91, "dataLancamento": "2026-08-03 00:00:00.0"}
+    texto = linhas("Beneficiario", "Nome/Razao Social ALLSEG SEGURADORA S A",
+                   "Pagamento 03/08/2026")
+    campos = nf.do_sicoob(item, texto)
+    assert nf.nomear(campos) == "1244,91 - ALLSEG SEGURADORA S A - 03-08"
+
+
+def test_sem_nome_montavel_o_arquivo_fica_onde_esta(tmp_path):
+    """Falhar no nome nunca pode perder comprovante: com o nome de origem ele
+    e achavel; sumido, nao."""
+    from baixar_comprovantes import nome_final as nf
+
+    arquivo = tmp_path / "SICOOB_original.pdf"
+    arquivo.write_bytes(b"%PDF-")
+    assert nf.renomear(arquivo, {}).exists()
+
+
+def test_o_desempate_segue_o_do_renomear(tmp_path):
+    """` (2)`, e nao o `_1` do downloader: dois arquivos com o mesmo nome
+    final vem do mesmo padrao, e quem os ve na pasta espera a numeracao de
+    la."""
+    from baixar_comprovantes import nome_final as nf
+
+    campos = {"valor": "100,00", "data": "24/08/2026", "desc": "TESTE",
+              "dest": None, "pag": None}
+    for n in range(2):
+        origem = tmp_path / ("origem%d.pdf" % n)
+        origem.write_bytes(b"%PDF-")
+        nf.renomear(origem, campos)
+    nomes = sorted(p.name for p in tmp_path.glob("*.pdf"))
+    assert any("(2)" in nome for nome in nomes), nomes

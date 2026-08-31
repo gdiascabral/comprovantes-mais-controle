@@ -52,9 +52,10 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     import util
 
 try:
-    from . import ja_baixados
+    from . import ja_baixados, nome_final
 except ImportError:                      # rodando este módulo isoladamente
     import ja_baixados
+    import nome_final
 
 URL_LOGIN = "https://contadigital.inter.co/home"
 URL_EXTRATO = "https://contadigital.inter.co/pix/extrato"
@@ -1035,6 +1036,9 @@ def baixar_2via_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
                     raise InterFalhou(f"HTTP {resposta.status} ao baixar")
                 destino = nome_livre(pasta, nome_do_comprovante(item))
                 destino.write_bytes(resposta.body())
+                # O nome final sai do JSON, sem abrir o PDF: o Inter já
+                # entrega valor, data e descrição.
+                destino = nome_final.renomear(destino, nome_final.do_2via(item))
                 resultado.baixados.append(destino)
                 resultado.total_2via += 1
                 if registro is not None:
@@ -1257,6 +1261,7 @@ def baixar_pix_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
                 raise InterFalhou(f"HTTP {baixado.status} ao baixar")
             destino = nome_livre(pasta, nome_do_pix(mov))
             destino.write_bytes(baixado.body())
+            destino = nome_final.renomear(destino, nome_final.do_pix(mov))
             resultado.baixados.append(destino)
             if registro is not None:
                 registro.anotar(marca, destino)
