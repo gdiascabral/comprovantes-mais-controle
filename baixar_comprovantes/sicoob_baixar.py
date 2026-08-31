@@ -141,6 +141,27 @@ def nome_do_comprovante(item: dict, conta: str = "") -> str:
     return f"SICOOB_{dia}_{valor}_{tipo}_{ident}.pdf".replace("__", "_")
 
 
+#: O que o Sicoob escreve quando a conta não tem comprovante no período. Ele
+#: responde 400, e não uma lista vazia — o que é escolha dele, não erro nosso.
+#: Estas são as marcas conhecidas; qualquer 400 com outro texto continua sendo
+#: falha, e a mensagem mostra o que veio.
+DIZERES_DE_VAZIO = ("nenhum registro", "nao foram encontrados",
+                    "não foram encontrados", "nenhum comprovante",
+                    "sem registros", "não encontrado", "nao encontrado")
+
+
+def e_conta_sem_movimento(resposta: dict) -> bool:
+    """Este 400 quer dizer "não há nada aqui"?
+
+    Distinguir importa: conta parada é normal e vira "sem lançamentos"; sessão
+    caída é falha e precisa aparecer em vermelho. Tratar as duas igual esconde
+    uma ou assusta com a outra."""
+    if int(resposta.get("status") or 0) != 400:
+        return False
+    dito = (resposta.get("corpo") or "").lower()
+    return any(marca in dito for marca in DIZERES_DE_VAZIO)
+
+
 def so_efetivados(itens) -> list:
     """Só o que saiu da conta.
 
@@ -160,7 +181,14 @@ async ([url, metodo, corpo]) => {
         opcoes.body = JSON.stringify(corpo);
     }
     const r = await fetch(url, opcoes);
-    if (!r.ok) return {erro: `HTTP ${r.status}`};
+    if (!r.ok) {
+        // O CORPO junto do status: "HTTP 400" sozinho nao diz se a conta nao
+        // tem movimento, se o periodo e invalido ou se a sessao caiu -- e as
+        // tres pedem coisas diferentes de quem le.
+        let dito = '';
+        try { dito = (await r.text()).slice(0, 300); } catch (e) { dito = ''; }
+        return {status: r.status, erro: `HTTP ${r.status}`, corpo: dito};
+    }
     try {
         return {dado: await r.json()};
     } catch (e) {
@@ -171,12 +199,25 @@ async ([url, metodo, corpo]) => {
 
 
 def listar(page, inicio: str, fim: str, tipo: str = TIPO_TODOS) -> list:
-    """Os comprovantes da conta ABERTA no período. Levanta se a API recusar."""
+    """Os comprovantes da conta ABERTA no período.
+
+    Devolve lista vazia quando a conta não tem nada — inclusive quando o
+    servidor diz isso por um HTTP 400, que foi o que ele fez em 6 das 13
+    contas na primeira rodada de verdade. Conta parada não é falha: virar
+    pill vermelha faria alguém procurar defeito onde não há.
+
+    Levanta quando o 400 traz OUTRA coisa, e aí a mensagem carrega o que o
+    servidor escreveu — "HTTP 400" sozinho não separa "conta sem movimento" de
+    "sessão caiu"."""
     url = (f"{BASE}/api/comprovantes/consultar?tipoPagamento={tipo}"
            f"&dataInicio={inicio}&dataFim={fim}")
     resposta = page.evaluate(_JS_API, [url, "GET", None])
     if resposta.get("erro"):
-        raise SicoobFalhou(f"a consulta falhou: {resposta['erro']}")
+        if e_conta_sem_movimento(resposta):
+            return []
+        dito = (resposta.get("corpo") or "").strip()
+        raise SicoobFalhou("a consulta falhou: " + resposta["erro"]
+                           + (f" — {dito[:160]}" if dito else ""))
     dado = resposta.get("dado")
     return dado if isinstance(dado, list) else []
 

@@ -65,6 +65,11 @@ def pasta_da_rodada(base, quando=None) -> Path:
     return Path(base) / dia
 
 
+#: A marca da primeira coluna. Símbolo, e não caixa de marcar: o Treeview do
+#: Tk não aceita widget dentro de célula.
+MARCADA = "☑"
+DESMARCADA = "☐"
+
 #: Como cada situação aparece na tabela. O símbolo vem junto do texto: a tag
 #: do Treeview só pinta duas das situações, e cor sozinha não diz nada a quem
 #: não a enxerga.
@@ -135,10 +140,11 @@ class ComprovantesFrame(ttk.Frame):
         # ---- a fila
         c_fila = widgets.Cartao(self, "Contas na fila", numero=2)
         c_fila.pack(fill="both", expand=True, padx=PADX, pady=(0, 12))
-        colunas = ("banco", "conta", "empresa", "situacao")
+        colunas = ("marca", "banco", "conta", "empresa", "situacao")
         self.tabela = ttk.Treeview(c_fila, columns=colunas, show="headings",
                                    selectmode="browse", height=9)
-        for col, titulo, larg, onde in (("banco", "BANCO", 90, "w"),
+        for col, titulo, larg, onde in (("marca", "", 34, "center"),
+                                        ("banco", "BANCO", 90, "w"),
                                         ("conta", "CONTA", 130, "w"),
                                         ("empresa", "EMPRESA", 300, "w"),
                                         ("situacao", "SITUAÇÃO", 220, "w")):
@@ -147,8 +153,14 @@ class ComprovantesFrame(ttk.Frame):
                                stretch=col == "empresa")
         widgets.estilo_tabela(self.tabela)
         self.tabela.pack(fill="both", expand=True)
+        # Clique na primeira coluna marca e desmarca. Não é `Checkbutton`
+        # porque o Treeview do Tk não aceita widget dentro de célula — o
+        # símbolo faz o mesmo trabalho, e a coluna inteira é a área de clique.
+        self.tabela.bind("<Button-1>", self._clicou)
         self.rodape = widgets.RodapeTabela(c_fila)
         self.rodape.pack(fill="x", pady=(8, 0))
+        self.rodape.link("Marcar todas", lambda: self._todas(True))
+        self.rodape.link("Desmarcar todas", lambda: self._todas(False))
 
         # ---- execução e registro
         acao = ttk.Frame(self, style="Fundo.TFrame")
@@ -184,20 +196,50 @@ class ComprovantesFrame(ttk.Frame):
 
         for i, c in enumerate(contas):
             chave = f"{c['banco']}:{c['conta']}"
-            self.linhas[chave] = dict(c, situacao="espera")
+            self.linhas[chave] = dict(c, situacao="espera", marcada=True)
             texto, estado = SITUACOES["espera"]
             self.tabela.insert("", "end", iid=chave,
-                               values=(c["banco"], c["conta"], c["empresa"],
-                                       texto),
+                               values=(MARCADA, c["banco"], c["conta"],
+                                       c["empresa"], texto),
                                tags=widgets.linha_zebrada(i, estado))
-        sicoob = sum(1 for c in contas if c["banco"] == "Sicoob")
-        inter = len(contas) - sicoob
-        self.rodape.definir(
-            texto=f"{sicoob} conta(s) Sicoob (um login) · {inter} Inter "
-                  f"(um login cada)")
+        self._contar()
         if not contas:
             self._log("Nenhuma conta no cadastro. Rode a sincronização ou "
                       "confira o contas_sicoob.json.")
+
+    def _clicou(self, evento):
+        """Só a coluna da marca alterna; clique no resto seleciona a linha."""
+        if self.tabela.identify_column(evento.x) != "#1":
+            return
+        chave = self.tabela.identify_row(evento.y)
+        if chave in self.linhas:
+            self._marcar_conta(chave, not self.linhas[chave]["marcada"])
+        return "break"
+
+    def _marcar_conta(self, chave: str, ligada: bool):
+        self.linhas[chave]["marcada"] = ligada
+        try:
+            self.tabela.set(chave, "marca", MARCADA if ligada else DESMARCADA)
+        except tk.TclError:
+            pass
+        self._contar()
+
+    def _todas(self, ligadas: bool):
+        for chave in self.linhas:
+            self._marcar_conta(chave, ligadas)
+
+    def _contar(self):
+        """O rodapé conta o que VAI ser feito, não o que existe.
+
+        Com 13 contas e 3 com movimento, o número que importa é o que a pessoa
+        acabou de escolher — é ele que diz quantos logins ela vai fazer."""
+        marcadas = [c for c in self.linhas.values() if c["marcada"]]
+        sicoob = sum(1 for c in marcadas if c["banco"] == "Sicoob")
+        inter = len(marcadas) - sicoob
+        logins = (1 if sicoob else 0) + inter
+        self.rodape.definir(
+            texto=f"{len(marcadas)} de {len(self.linhas)} marcadas · "
+                  f"{sicoob} Sicoob + {inter} Inter · {logins} login(s)")
 
     def _contas_do_cadastro(self) -> list[dict]:
         """As contas que a fila vai percorrer, na ordem em que serão feitas.
@@ -227,8 +269,8 @@ class ComprovantesFrame(ttk.Frame):
         if not destino:
             self._log("[!] escolha onde salvar antes de começar.")
             return
-        if not self.linhas:
-            self._log("[!] não há conta na fila.")
+        if not any(c["marcada"] for c in self.linhas.values()):
+            self._log("[!] marque ao menos uma conta.")
             return
         pasta = pasta_da_rodada(destino)
         try:
@@ -254,7 +296,7 @@ class ComprovantesFrame(ttk.Frame):
             from sicoob_client import SicoobClient
 
             do_sicoob = [c for c in self.linhas.values()
-                         if c["banco"] == "Sicoob"]
+                         if c["banco"] == "Sicoob" and c["marcada"]]
             if do_sicoob:
                 self.q.put(("log", "Sicoob: um login para "
                                    f"{len(do_sicoob)} conta(s)."))
@@ -292,7 +334,8 @@ class ComprovantesFrame(ttk.Frame):
         com o celular na mão saber de qual conta é o QR na tela."""
         from baixar_comprovantes import inter_baixar as inter
 
-        do_inter = [c for c in self.linhas.values() if c["banco"] == "Inter"]
+        do_inter = [c for c in self.linhas.values()
+                    if c["banco"] == "Inter" and c["marcada"]]
         if not do_inter:
             return
         self.q.put(("log", f"Inter: {len(do_inter)} conta(s), um login cada."))

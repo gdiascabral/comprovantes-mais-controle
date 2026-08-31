@@ -491,3 +491,55 @@ def test_o_padrao_fica_ao_lado_do_app():
     from baixar_comprovantes import comprovantes_frame as cf
 
     assert cf.pasta_padrao().name == "Comprovantes"
+
+
+# -------------------------------------------- o 400 do Sicoob, separado
+# Na primeira rodada de verdade, 6 das 13 contas responderam HTTP 400 -- e as
+# tres que funcionaram tinham exatamente UM comprovante cada. O Sicoob diz
+# "nao ha nada aqui" com 400, em vez de lista vazia.
+
+def test_400_de_conta_parada_nao_e_falha():
+    """Conta sem movimento virando pill vermelha faz alguem procurar defeito
+    onde nao ha -- e num dia normal a maioria das 13 contas esta parada."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert sb.e_conta_sem_movimento(
+        {"status": 400, "corpo": "Nenhum registro encontrado"})
+    assert sb.e_conta_sem_movimento(
+        {"status": 400, "corpo": "NAO FORAM ENCONTRADOS COMPROVANTES"})
+
+
+def test_400_de_outra_coisa_continua_sendo_falha():
+    """Sessao caida tambem responde 400, e essa precisa aparecer em vermelho.
+    Tratar as duas igual esconde uma ou assusta com a outra."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert not sb.e_conta_sem_movimento(
+        {"status": 400, "corpo": "periodo invalido"})
+    assert not sb.e_conta_sem_movimento({"status": 401, "corpo": "nenhum registro"})
+    assert not sb.e_conta_sem_movimento({"status": 400, "corpo": ""})
+
+
+def test_a_falha_carrega_o_que_o_servidor_disse(monkeypatch):
+    """"HTTP 400" sozinho nao separa conta parada de sessao caida."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    class PaginaFalsa:
+        def evaluate(self, *_a):
+            return {"status": 400, "erro": "HTTP 400",
+                    "corpo": "periodo fora do limite de 6 meses"}
+
+    with pytest.raises(sb.SicoobFalhou) as e:
+        sb.listar(PaginaFalsa(), "01/01/2020", "31/01/2020")
+    assert "6 meses" in str(e.value)
+
+
+def test_conta_parada_devolve_lista_vazia():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    class PaginaFalsa:
+        def evaluate(self, *_a):
+            return {"status": 400, "erro": "HTTP 400",
+                    "corpo": "Nenhum registro encontrado"}
+
+    assert sb.listar(PaginaFalsa(), "01/08/2026", "31/08/2026") == []
