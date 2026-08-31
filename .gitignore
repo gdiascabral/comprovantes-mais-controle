@@ -73,7 +73,13 @@ contas_sicoob*
 # as enumera. Mesmo conteúdo sensível — nome de empresa real — e o `*` pela
 # mesma lição da linha acima: proteger o nome exato e vazar a cópia de backup
 # é o pior dos dois mundos.
-contas_inter*
+#
+# O `.json` no fim NÃO é enfeite: sem ele, o padrão casava também com
+# `baixar_comprovantes/contas_inter.py`, que é CÓDIGO. O módulo ficou fora do
+# repositório sem ninguém notar — a suíte passava na máquina de quem escreveu,
+# porque lá o arquivo existe, e quebrou no CI, que só tem o que o git carrega.
+# Regra de dado tem de mirar o dado.
+contas_inter*.json
 extratos_sicoob/.chrome_profile_sicoob/
 # Perfil do Chrome do portal Acessórias: sessão logada do escritório.
 .chrome_profile_acessorias/

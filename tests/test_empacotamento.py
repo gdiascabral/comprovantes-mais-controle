@@ -142,6 +142,43 @@ def _linha_da_raiz() -> str:
 
 
 # ---------------------------------------------------------------------- testes
+def test_todo_py_de_codigo_esta_no_git():
+    """Arquivo de código IGNORADO é invisível para os testes daqui.
+
+    Eles perguntam ao git o que existe (`git ls-files`), então um `.py` que o
+    `.gitignore` engoliu não aparece — e não aparecer é exatamente o que
+    ninguém percebe. Aconteceu em 31/08/2026: a regra que protegia o DADO
+    `contas_inter.json` (nome de empresa real) foi escrita como
+    `contas_inter*`, sem âncora e sem extensão, e casou também com
+    `baixar_comprovantes/contas_inter.py`. A suíte passava na máquina de quem
+    escreveu, porque lá o arquivo existe; quebrou no CI, que só tem o que o
+    git carrega.
+
+    Este teste olha o DISCO e cobra o git — o único ângulo em que o buraco
+    aparece.
+    """
+    rastreados = _rastreados()
+    if rastreados is None:
+        pytest.skip("sem git para conferir")
+    conhecidos = set(rastreados)
+
+    esquecidos = []
+    for pasta in _pastas_de_codigo() + [""]:
+        raiz = _RAIZ / pasta if pasta else _RAIZ
+        for arquivo in sorted(raiz.glob("*.py")):
+            rel = arquivo.relative_to(_RAIZ).as_posix()
+            if "__pycache__" in rel or rel in _FORA_DE_PROPOSITO:
+                continue
+            if rel not in conhecidos:
+                esquecidos.append(rel)
+
+    assert not esquecidos, (
+        "estes arquivos de código existem no disco e o git NÃO os conhece — "
+        "provavelmente engolidos por uma regra do .gitignore larga demais. "
+        "Eles não chegam no codigo.zip, e o app quebra na máquina de quem usa: "
+        + ", ".join(esquecidos))
+
+
 def test_toda_pasta_de_codigo_entra_no_codigo_zip():
     """Aba nova sem linha no `build.yml` = app que não abre no usuário.
 
