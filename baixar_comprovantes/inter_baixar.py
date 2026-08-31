@@ -118,6 +118,14 @@ MARCAS_DE_EXTRATO = ("Extrato Pix", "Ordenação", "Bloqueados",
 MARCAS_DE_LOGIN = ("QR Code", "QR code", "Ler o QR", "Acesse sua conta",
                    "Entrar com", "Internet Banking")
 
+#: O QR do Inter VENCE, e a tela troca o código por um convite a gerar outro.
+#: Quem estiver esperando na frente da tela clica; um robô, não — e na fila da
+#: aba (fase 4) ele chega na vez de cada conta quando chega, que pode ser dez
+#: minutos depois de alguém ter saído para o café. Sem isto, o desfecho é
+#: "passaram 300s e a tela não apareceu" para um QR que só precisava de um
+#: clique.
+TEXTO_QR_VENCIDO = "gerar um novo QR"
+
 
 # ------------------------------------------------------- comprovante 2ª via
 # A segunda tela do Inter, e o segundo passe da MESMA sessão: terminado o Pix,
@@ -314,6 +322,15 @@ def esperar_login(page, tempo: int = TEMPO_LOGIN, log=print) -> None:
             return
         if texto and texto != ultima:
             ultima = texto
+        # QR vencido: renova sozinho, e conta que fez isso — quem está com o
+        # celular na mão precisa saber que o código na tela é outro.
+        if TEXTO_QR_VENCIDO in texto:
+            try:
+                page.get_by_text(TEXTO_QR_VENCIDO, exact=False).first.click()
+                log("O QR tinha vencido; gerei outro.")
+                time.sleep(2)
+            except Exception:                                # noqa: BLE001
+                pass                     # se não der, o laço segue esperando
         time.sleep(1.5)
         if not tela_diz(_texto_da_tela(page), MARCAS_DE_LOGIN):
             # Saiu do login: leva ao extrato e deixa o laço confirmar. Ir
@@ -813,4 +830,200 @@ def _baixar_um_tipo(page, pasta: Path, resultado: Resultado, inicio: str,
             # A pausa fica: é a mesma API do Inter do outro passe, e ela
             # bloqueia quem clica rápido demais.
             time.sleep(PAUSA_ENTRE_ITENS)
+    return resultado
+
+
+# ==========================================================================
+# A 2ª via pela API
+# ==========================================================================
+#
+# A tela é uma casca sobre estas duas chamadas, e falar com elas resolve de uma
+# vez tudo o que a casca cobrou caro numa manhã inteira:
+#
+#   o filtro de data existia o tempo todo, em `dataInicio`/`dataFim`. O
+#   datepicker é que era um seletor de intervalo que ignorava o que se
+#   digitava — e ignorava CALADO;
+#   a lista não pagina: 290 operações vieram numa resposta só, onde a tela
+#   mostrava 100 e escondia o resto;
+#   o pedido de PDF aceita VÁRIOS comprovantes e devolve uma URL assinada para
+#   cada um, então o download em lote deixa de ser aposta;
+#   e o histórico é de 24 meses, contra os 90 dias da tela do Pix.
+#
+# O que se perde é a garantia de contrato: endpoint interno muda sem aviso,
+# como muda seletor. A diferença é o barulho — endpoint que mudou responde 4xx,
+# e 4xx aparece no log. Seletor que mudou não casa com nada e fica quieto, que
+# foi exatamente como 71 comprovantes desceram no lugar de 13.
+#
+# **O token nunca é gravado, impresso ou devolvido.** Ele é lido de uma chamada
+# que a própria página fez, vive numa variável local durante a execução e some
+# com ela. Ler de um pedido real, e não de `localStorage`, evita depender de
+# adivinhar onde o app o guarda.
+
+API_INTER = "https://cdpj-api.bancointer.com.br"
+
+#: Os tipos, como a API os aceita. Conferido: `tipo=PAGAMENTO` responde 200 e
+#: traz só pagamentos. A metadata lista seis códigos em minúsculas
+#: (pagamento, transferencia, resgate, debito_automatico, pix, darf) e a API
+#: aceitou o nome em maiúsculas — vale o que foi PROVADO na chamada.
+TIPOS_DA_API = ("PAGAMENTO", "DARF")
+
+_JS_LISTAR = """
+async ([base, cabecalho, inicio, fim, tipo]) => {
+    const url = `${base}/comprovantes/v2/segunda-via`
+        + `?dataInicio=${encodeURIComponent(inicio)}`
+        + `&dataFim=${encodeURIComponent(fim)}&tipo=${tipo}`;
+    const r = await fetch(url, {headers: {Authorization: cabecalho}});
+    if (!r.ok) return {erro: `HTTP ${r.status}`};
+    const j = await r.json();
+    return {operacoes: (j.data && j.data.operacoes) || []};
+}
+"""
+
+_JS_PEDIR_PDF = """
+async ([base, cabecalho, comprovantes]) => {
+    const r = await fetch(`${base}/comprovantes/v2/pdf/segunda-via`, {
+        method: 'POST',
+        headers: {Authorization: cabecalho, 'Content-Type': 'application/json'},
+        body: JSON.stringify({comprovantes}),
+    });
+    if (!r.ok) return {erro: `HTTP ${r.status}`};
+    const j = await r.json();
+    return {urls: j.urlAssinada || []};
+}
+"""
+
+
+def escutar_autorizacao(page) -> dict:
+    """Guarda o cabeçalho de sessão da primeira chamada que a página fizer.
+
+    Devolve um dicionário que se preenche sozinho — quem chama espera a página
+    conversar com a API e então lê `["valor"]`.
+
+    De um pedido REAL, e não de `localStorage`: não depende de adivinhar onde o
+    app guarda, e continua valendo quando ele mudar de lugar.
+    """
+    guardado = {"valor": ""}
+
+    def ouvir(pedido):
+        if guardado["valor"] or "cdpj-api" not in pedido.url:
+            return
+        valor = pedido.headers.get("authorization", "")
+        if valor:
+            guardado["valor"] = valor
+
+    page.on("request", ouvir)
+    return guardado
+
+
+def pedido_de_pdf(item: dict) -> dict | None:
+    """O que a API pede para gerar o PDF de UMA operação.
+
+    O de-para foi lido da chamada que a própria tela faz:
+
+        tipo            <- classificacao.tipo
+        operacao        <- classificacao.operacao
+        codigo          <- pagamento.codigoLancamento
+        dataEfetivacao  <- dataEfetivacao
+
+    `None` quando falta peça: pedir com campo vazio devolveria erro do
+    servidor, e o motivo ficaria escondido num HTTP 400 genérico.
+    """
+    classificacao = item.get("classificacao") or {}
+    pagamento = item.get("pagamento") or {}
+    pedido = {
+        "tipo": classificacao.get("tipo") or "",
+        "operacao": classificacao.get("operacao") or "",
+        "codigo": str(pagamento.get("codigoLancamento") or ""),
+        "dataEfetivacao": item.get("dataEfetivacao") or "",
+    }
+    return pedido if all(pedido.values()) else None
+
+
+def nome_do_comprovante(item: dict) -> str:
+    """`PAGAMENTO_2026-08-28_108-39_554362970.pdf`.
+
+    O nome que a API sugere é um carimbo de hora — inútil para quem procura na
+    pasta e inútil para o Anexar. Aqui entram data, valor e o código do
+    lançamento, que é o que identifica o pagamento sem ambiguidade.
+    """
+    classificacao = item.get("classificacao") or {}
+    pagamento = item.get("pagamento") or {}
+    tipo = re.sub(r"[^A-Za-z]+", "", classificacao.get("tipo") or "COMPROVANTE")
+    dia, mes, ano = (item.get("dataEfetivacao") or "00/00/0000").split("/")
+    valor = re.sub(r"[^0-9,]+", "", item.get("valor") or "").replace(",", "-")
+    codigo = re.sub(r"[^0-9A-Za-z]+", "", str(pagamento.get("codigoLancamento") or ""))
+    return f"{tipo}_{ano}-{mes}-{dia}_{valor}_{codigo}.pdf"
+
+
+def baixar_2via_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
+                         fim: str, autorizacao: dict, log=print) -> Resultado:
+    """Os comprovantes de PAGAMENTO e DARF do período, sem tocar na tela."""
+    cabecalho = (autorizacao or {}).get("valor", "")
+    if not cabecalho:
+        resultado.motivo = ("não peguei o cabeçalho da sessão — a página não "
+                            "chegou a chamar a API")
+        return resultado
+
+    for tipo in TIPOS_DA_API:
+        try:
+            resposta = page.evaluate(_JS_LISTAR,
+                                     [API_INTER, cabecalho, inicio, fim, tipo])
+        except Exception as e:                               # noqa: BLE001
+            log(f"  {tipo}: não deu para listar ({e})")
+            continue
+        if resposta.get("erro"):
+            log(f"  {tipo}: a API recusou a lista ({resposta['erro']})")
+            continue
+
+        operacoes = resposta.get("operacoes") or []
+        pedidos, itens = [], []
+        for item in operacoes:
+            pedido = pedido_de_pdf(item)
+            if pedido is None:
+                log(f"  {tipo}: operação sem código, pulei "
+                    f"({item.get('dataEfetivacao')} {item.get('valor')})")
+                continue
+            pedidos.append(pedido)
+            itens.append(item)
+        log(f"  {tipo}: {len(operacoes)} no período · {len(pedidos)} com código")
+        if not pedidos:
+            continue
+
+        # UM comprovante por chamada. O endpoint aceita uma lista, mas o que
+        # ele devolve não é uma URL por item: pedindo DOIS, veio UMA — ele
+        # GRUDA os comprovantes num PDF só. Foi a trava de contagem que
+        # descobriu isso, e ela existia justamente porque o casamento seria
+        # por posição: dois arquivos com o mesmo conteúdo e nomes de
+        # pagamentos diferentes, e ninguém veria até procurar um comprovante e
+        # achar outro.
+        #
+        # (É também a resposta da dúvida sobre o botão "Download" em lote da
+        # tela: lote ali significa PDF grudado, inútil para o Anexar, que casa
+        # UM comprovante com UM lançamento.)
+        for item, pedido in zip(itens, pedidos):
+            try:
+                gerado = page.evaluate(_JS_PEDIR_PDF,
+                                       [API_INTER, cabecalho, [pedido]])
+                if gerado.get("erro"):
+                    raise InterFalhou(f"a API recusou o PDF ({gerado['erro']})")
+                urls = gerado.get("urls") or []
+                if len(urls) != 1:
+                    raise InterFalhou(f"esperava 1 URL e vieram {len(urls)}")
+
+                resposta = page.request.get(urls[0])
+                if not resposta.ok:
+                    raise InterFalhou(f"HTTP {resposta.status} ao baixar")
+                destino = nome_livre(pasta, nome_do_comprovante(item))
+                destino.write_bytes(resposta.body())
+                resultado.baixados.append(destino)
+                resultado.total_2via += 1
+                log(f"  {destino.name}")
+            except Exception as e:                           # noqa: BLE001
+                resultado.falhas.append(1000 + len(resultado.falhas))
+                log(f"  falhou ({e}) — seguindo")
+            finally:
+                # Bem menor que a pausa da tela (2 s), mas não zero: a API do
+                # Inter bloqueia quem bate rápido demais, e foi por isso que o
+                # script original andava devagar entre cliques.
+                time.sleep(0.4)
     return resultado

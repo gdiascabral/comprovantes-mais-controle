@@ -245,3 +245,90 @@ def test_o_tipo_procurado_sobrevive_ao_laco_que_le_as_datas():
         "o laço voltou a atribuir `texto`, que é o parâmetro com o tipo")
     assert "_linhas_do_tipo(page, texto)" in corpo, (
         "o download tem de filtrar pelo TIPO, não pelo texto de uma linha")
+
+
+# ----------------------------------------------------- a 2ª via pela API
+# A tela é uma casca sobre duas chamadas. Falar com elas resolve o que a casca
+# cobrou caro: o filtro de data existia o tempo todo em `dataInicio`/`dataFim`,
+# a lista não pagina, e o histórico é de 24 meses.
+
+def _operacao(codigo="554362970", tipo="PAGAMENTO"):
+    return {
+        "dataEfetivacao": "28/08/2026",
+        "valor": "R$ 108,39",
+        "classificacao": {"tipo": tipo, "operacao": "PAGAMENTO_BOLETO_COBRANCA"},
+        "pagamento": {"codigoLancamento": codigo},
+    }
+
+
+def test_o_pedido_do_pdf_sai_dos_campos_certos():
+    """O de-para foi lido da chamada que a própria tela faz."""
+    assert inter.pedido_de_pdf(_operacao()) == {
+        "tipo": "PAGAMENTO",
+        "operacao": "PAGAMENTO_BOLETO_COBRANCA",
+        "codigo": "554362970",
+        "dataEfetivacao": "28/08/2026",
+    }
+
+
+@pytest.mark.parametrize("faltando", ["codigo", "tipo", "data"])
+def test_operacao_incompleta_nao_vira_pedido(faltando):
+    """Pedir com campo vazio volta um HTTP 400 genérico, e o motivo — QUAL
+    item estava quebrado — se perde dentro dele."""
+    op = _operacao()
+    if faltando == "codigo":
+        op["pagamento"] = {}
+    elif faltando == "tipo":
+        op["classificacao"] = {"operacao": "X"}
+    else:
+        op["dataEfetivacao"] = ""
+    assert inter.pedido_de_pdf(op) is None
+
+
+def test_o_nome_do_arquivo_carrega_o_pagamento():
+    """O nome que a API sugere é um carimbo de hora: inútil na pasta e inútil
+    para o Anexar. Data, valor e código identificam sem ambiguidade."""
+    assert inter.nome_do_comprovante(_operacao()) ==         "PAGAMENTO_2026-08-28_108-39_554362970.pdf"
+
+
+def test_o_nome_sobrevive_a_operacao_capenga():
+    """Sem data e sem valor o nome fica feio, mas não estoura no meio do
+    lote — e um arquivo com nome feio é achável; um lote interrompido, não."""
+    nome = inter.nome_do_comprovante({})
+    assert nome.endswith(".pdf") and "/" not in nome
+
+
+def test_os_dois_tipos_da_api_sao_os_que_o_dono_pediu():
+    assert inter.TIPOS_DA_API == ("PAGAMENTO", "DARF")
+
+
+# ------------------------------------------------------------- o token
+# Prometido a quem usa: o cabeçalho de sessão não é gravado, não é impresso e
+# não sai da execução. Promessa que não vira teste é promessa que se esquece —
+# esta lê o código e cobra.
+
+def test_o_token_nunca_vai_para_o_log():
+    import inspect
+
+    fonte = inspect.getsource(inter)
+    suspeitas = []
+    for n, linha in enumerate(fonte.splitlines(), start=1):
+        chama_log = "log(" in linha or "print(" in linha
+        tem_token = "cabecalho" in linha or "autorizacao" in linha
+        # A linha que ATRIBUI não imprime; o que se proíbe é o par.
+        if chama_log and tem_token and "não vou mostrá-lo" not in linha:
+            suspeitas.append(f"{n}: {linha.strip()[:70]}")
+    assert not suspeitas, (
+        "o cabeçalho de sessão apareceu junto de um log: "
+        + " · ".join(suspeitas))
+
+
+def test_o_token_nao_e_gravado_em_arquivo():
+    """Nem em disco, nem devolvido para quem chamou guardar sem querer."""
+    import inspect
+
+    fonte = inspect.getsource(inter.escutar_autorizacao)
+    for proibido in ("write_text", "write_bytes", "open(", "json.dump"):
+        assert proibido not in fonte, (
+            f"`escutar_autorizacao` usa {proibido}: o cabeçalho tem de viver "
+            "só em memória")
