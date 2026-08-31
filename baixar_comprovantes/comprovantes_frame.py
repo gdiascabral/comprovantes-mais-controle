@@ -290,7 +290,12 @@ class ComprovantesFrame(ttk.Frame):
     def _trabalhar(self, inicio: str, fim: str, destino: Path):
         """Roda fora da thread da tela. Só fala com ela pela fila."""
         try:
+            from baixar_comprovantes import ja_baixados
             from baixar_comprovantes import sicoob_baixar as sicoob
+
+            # Um registro para o lote inteiro, na raiz da pasta de
+            # comprovantes: a pergunta atravessa as rodadas e os bancos.
+            registro = ja_baixados.Registro(destino.parent)
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent
                                    / "extratos_sicoob"))
             from sicoob_client import SicoobClient
@@ -310,7 +315,8 @@ class ComprovantesFrame(ttk.Frame):
                         self.q.put(("progresso", (i, len(do_sicoob))))
                         r = sicoob.baixar_conta(
                             cli, c["conta"], inicio, fim, destino,
-                            log=lambda m: self.q.put(("log", m)))
+                            log=lambda m: self.q.put(("log", m)),
+                            registro=registro)
                         if not r.ok:
                             self.q.put(("situacao",
                                         (chave, "erro", {"motivo": r.motivo})))
@@ -319,6 +325,7 @@ class ComprovantesFrame(ttk.Frame):
                         else:
                             self.q.put(("situacao", (chave, "ok",
                                                      {"n": len(r.baixados)})))
+                registro.gravar()
             self._fazer_inter(inicio, fim, destino)
             self.q.put(("fim", None))
         except Exception as e:                               # noqa: BLE001

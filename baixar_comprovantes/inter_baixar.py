@@ -51,6 +51,11 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import util
 
+try:
+    from . import ja_baixados
+except ImportError:                      # rodando este módulo isoladamente
+    import ja_baixados
+
 URL_LOGIN = "https://contadigital.inter.co/home"
 URL_EXTRATO = "https://contadigital.inter.co/pix/extrato"
 
@@ -569,14 +574,20 @@ def baixar(conta: str, inicio: str, fim: str, pasta, *,
             page.wait_for_timeout(6000)
             resultado.periodo_confirmado = f"{inicio} a {fim}"
 
+            # O registro mora na RAIZ, e não na subpasta do dia: a
+            # pergunta é "já baixei este comprovante alguma vez?", e ela
+            # atravessa as rodadas.
+            registro = ja_baixados.Registro(destino.parent)
+
             log("Comprovantes de Pix:")
             baixar_pix_pela_api(page, destino, resultado, inicio, fim,
-                                autorizacao, log=log)
+                                autorizacao, log=log, registro=registro)
 
             if tambem_2via and not resultado.motivo:
                 log("Comprovantes de pagamento (2ª via):")
                 baixar_2via_pela_api(page, destino, resultado, inicio, fim,
-                                     autorizacao, log=log)
+                                     autorizacao, log=log, registro=registro)
+            registro.gravar()
         except InterFalhou as e:
             resultado.motivo = str(e)
         except Exception as e:                               # noqa: BLE001
@@ -960,7 +971,8 @@ def nome_do_comprovante(item: dict) -> str:
 
 
 def baixar_2via_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
-                         fim: str, autorizacao: dict, log=print) -> Resultado:
+                         fim: str, autorizacao: dict, log=print,
+                         registro=None) -> Resultado:
     """Os comprovantes de PAGAMENTO e DARF do período, sem tocar na tela."""
     cabecalho = (autorizacao or {}).get("valor", "")
     if not cabecalho:
@@ -1005,6 +1017,10 @@ def baixar_2via_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
         # tela: lote ali significa PDF grudado, inútil para o Anexar, que casa
         # UM comprovante com UM lançamento.)
         for item, pedido in zip(itens, pedidos):
+            marca = ja_baixados.chave("inter2via", pedido.get("codigo", ""))
+            if registro is not None and registro.tem(marca):
+                log(f"  já baixado antes: {nome_do_comprovante(item)}")
+                continue
             try:
                 gerado = page.evaluate(_JS_PEDIR_PDF,
                                        [API_INTER, cabecalho, [pedido]])
@@ -1021,6 +1037,8 @@ def baixar_2via_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
                 destino.write_bytes(resposta.body())
                 resultado.baixados.append(destino)
                 resultado.total_2via += 1
+                if registro is not None:
+                    registro.anotar(marca, destino)
                 log(f"  {destino.name}")
             except Exception as e:                           # noqa: BLE001
                 resultado.falhas.append(1000 + len(resultado.falhas))
@@ -1181,7 +1199,8 @@ def contar_descricoes(movimentacoes) -> dict:
 
 
 def baixar_pix_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
-                        fim: str, autorizacao: dict, log=print) -> Resultado:
+                        fim: str, autorizacao: dict, log=print,
+                        registro=None) -> Resultado:
     """Os comprovantes de Pix ENVIADO do período, sem clicar em nada."""
     cabecalho = (autorizacao or {}).get("valor", "")
     if not cabecalho:
@@ -1216,6 +1235,11 @@ def baixar_pix_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
     resultado.total_na_tela = len(no_periodo)
 
     for mov in no_periodo:
+        detalhe = mov.get("detalhePix") or {}
+        marca = ja_baixados.chave("pix", detalhe.get("endToEnd") or "")
+        if registro is not None and registro.tem(marca):
+            log(f"  já baixado antes: {nome_do_pix(mov)}")
+            continue
         try:
             pedido = pedido_de_pdf_pix(mov, conta)
             if pedido is None:
@@ -1234,6 +1258,8 @@ def baixar_pix_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
             destino = nome_livre(pasta, nome_do_pix(mov))
             destino.write_bytes(baixado.body())
             resultado.baixados.append(destino)
+            if registro is not None:
+                registro.anotar(marca, destino)
             log(f"  {destino.name}")
         except Exception as e:                               # noqa: BLE001
             resultado.falhas.append(len(resultado.falhas))

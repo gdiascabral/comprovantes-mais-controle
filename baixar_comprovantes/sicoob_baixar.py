@@ -40,6 +40,11 @@ try:                                     # utilitários compartilhados (raiz)
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+try:
+    from . import ja_baixados
+except ImportError:                      # rodando este módulo isoladamente
+    import ja_baixados
+
 BASE = "https://ib.sicoob.com.br/sicoobnet"
 URL_COMPROVANTES = f"{BASE}/ib/#/comprovantes"
 
@@ -336,7 +341,7 @@ def nome_livre(pasta: Path, nome: str) -> Path:
 
 
 def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
-                 log=print) -> Resultado:
+                 log=print, registro=None) -> Resultado:
     """Os comprovantes de UMA conta, com ela já acessível pelo login aberto."""
     resultado = Resultado(conta=numero)
     destino = Path(pasta)
@@ -365,11 +370,27 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
         if not no_periodo:
             return resultado
 
-        for item, html in detalhar(cli.page, no_periodo):
+        pendentes = []
+        for item in no_periodo:
+            marca = ja_baixados.chave("sicoob", item.get("idAgendamento"),
+                                      numero)
+            if registro is not None and registro.tem(marca):
+                continue
+            pendentes.append(item)
+        if len(pendentes) < len(no_periodo):
+            log(f"    {len(no_periodo) - len(pendentes)} já baixado(s) antes")
+        if not pendentes:
+            return resultado
+
+        for item, html in detalhar(cli.page, pendentes):
             try:
                 alvo = nome_livre(destino, nome_do_comprovante(item, numero))
                 html_para_pdf(cli.ctx, html, alvo)
                 resultado.baixados.append(alvo)
+                if registro is not None:
+                    registro.anotar(
+                        ja_baixados.chave("sicoob", item.get("idAgendamento"),
+                                          numero), alvo)
                 log(f"    {alvo.name}")
             except Exception as e:                           # noqa: BLE001
                 ident = item.get("idAgendamento") or "?"

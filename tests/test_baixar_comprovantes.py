@@ -582,3 +582,66 @@ def test_a_navegacao_nao_recarrega_a_pagina():
     assert "location.hash" in sb.JS_IR_PARA
     assert ".goto(" not in fonte, (
         "voltou a usar goto: a SPA recarrega e a conta volta para a padrao")
+import pathlib  # noqa: E402
+
+
+# --------------------------------------------- nao baixar o mesmo duas vezes
+# Rodar o mesmo periodo duas vezes trazia tudo de novo: o desempate de nome
+# (`_1`, `_2`) impedia a sobrescrita, entao nada se perdia -- mas a pasta
+# enchia de copias e o Anexar via dois comprovantes onde houve um pagamento.
+
+def test_a_chave_separa_bancos_e_contas():
+    """O idAgendamento do Sicoob e o codigoLancamento do Inter sao numeradores
+    de bancos diferentes: um acerto por acaso silenciaria um comprovante de
+    verdade. E o Sicoob numera POR CONTA, entao a conta tambem entra."""
+    from baixar_comprovantes import ja_baixados as jb
+
+    assert jb.chave("sicoob", "15057364", "50.019-4") !=         jb.chave("sicoob", "15057364", "50.021-6")
+    assert jb.chave("inter2via", "15057364") != jb.chave("sicoob", "15057364")
+
+
+def test_o_registro_lembra_entre_rodadas(tmp_path):
+    from baixar_comprovantes import ja_baixados as jb
+
+    r = jb.Registro(tmp_path)
+    marca = jb.chave("pix", "E0041696820260828")
+    assert not r.tem(marca)
+    r.anotar(marca, tmp_path / "PIX_x.pdf")
+    r.gravar()
+
+    outro = jb.Registro(tmp_path)          # como na rodada seguinte
+    assert outro.tem(marca)
+    assert len(outro) == 1
+
+
+def test_registro_ilegivel_nao_para_o_lote(tmp_path):
+    """O pior caso de um registro corrompido e baixar de novo o que ja se
+    tinha -- chato e reversivel. O contrario, deixar de baixar, perderia
+    comprovante sem ninguem notar."""
+    from baixar_comprovantes import ja_baixados as jb
+
+    (tmp_path / jb.ARQUIVO).write_text("{isso nao e json", encoding="utf-8")
+    r = jb.Registro(tmp_path)
+    assert len(r) == 0
+    assert not r.tem(jb.chave("pix", "qualquer"))
+
+
+def test_pasta_somente_leitura_nao_derruba(tmp_path, monkeypatch):
+    from baixar_comprovantes import ja_baixados as jb
+
+    r = jb.Registro(tmp_path)
+    r.anotar(jb.chave("pix", "x"), tmp_path / "a.pdf")
+    monkeypatch.setattr(pathlib.Path, "write_text",
+                        lambda *_a, **_k: (_ for _ in ()).throw(OSError("ro")))
+    r.gravar()                             # não levanta
+
+
+def test_chave_vazia_nunca_conta_como_baixado(tmp_path):
+    """Comprovante sem identificador tem de ser baixado, e nao pulado: pular
+    o que nao se sabe identificar perderia comprovante em silencio."""
+    from baixar_comprovantes import ja_baixados as jb
+
+    r = jb.Registro(tmp_path)
+    assert not r.tem("")
+    r.anotar("", tmp_path / "a.pdf")
+    assert len(r) == 0
