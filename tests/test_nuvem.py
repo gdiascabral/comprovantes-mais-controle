@@ -824,3 +824,106 @@ def test_pagar_a_mao_volta_com_o_nome_que_o_app_le(tmp_path, monkeypatch):
     confirmar = json.loads((tmp_path / "confirmar_antes.json").read_text(
         encoding="utf-8"))
     assert confirmar["nomes"] == ["PESSOA Z"]
+
+
+# ----------------------------------- as contas do Inter descem com o cadastro
+# No Inter cada conta e um LOGIN separado: ninguem as enumera, alguem precisa
+# declarar quais sao. Enquanto essa declaracao era um arquivo escrito a mao,
+# ela existia numa maquina so -- a aba mostrava 3 contas do Inter aqui e
+# nenhuma no computador de outra pessoa, sem erro na tela.
+
+def _com_inter(**extra):
+    return _banco(
+        empresa=[{"id": 1, "nome_pasta": "EMPRESA A", "cnpj": "", "vip_id": "",
+                  "razao_social": "", "convenio": ""},
+                 {"id": 2, "nome_pasta": "EMPRESA B", "cnpj": "", "vip_id": "",
+                  "razao_social": "", "convenio": ""}],
+        conta=[{"id": 9, "empresa_id": 1, "numero": "00.000-0", "agencia": "1",
+                "nome_erp": "A", "pasta": "SICOOB", "banco": "SICOOB",
+                "banco_codigo": "756", "sufixo": "", "ativa": True},
+               # Conta do Inter: sem numero, porque o cadastro guarda numero
+               # de Sicoob. Por isso ela nao entra no contas_sicoob.json.
+               {"id": 10, "empresa_id": 2, "numero": None, "agencia": "",
+                "nome_erp": "B", "pasta": "INTER", "banco": "INTER",
+                "banco_codigo": "", "sufixo": "", "ativa": True}],
+        configuracao=[{"chave": "raiz", "valor": "C:/x"}], **extra)
+
+
+def _inter_gerado(tmp_path):
+    return json.loads(
+        (tmp_path / "contas_inter.json").read_text(encoding="utf-8"))["contas"]
+
+
+def test_a_conta_do_inter_desce_para_o_arquivo_da_aba(tmp_path, monkeypatch):
+    dados = _com_inter()
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    assert cadastro.sincronizar("tok", tmp_path).atualizou
+    assert _inter_gerado(tmp_path) == [
+        {"apelido": "EMPRESA B", "empresa": "EMPRESA B", "pasta": "INTER"}]
+
+
+def test_a_conta_do_sicoob_nao_vai_parar_na_fila_do_inter(tmp_path, monkeypatch):
+    """Uma conta do Sicoob na lista do Inter pediria um QR que nao existe."""
+    dados = _com_inter()
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    cadastro.sincronizar("tok", tmp_path)
+    assert [c["empresa"] for c in _inter_gerado(tmp_path)] == ["EMPRESA B"]
+
+
+def test_o_inter_e_reconhecido_pelo_codigo_tambem(tmp_path, monkeypatch):
+    """O cadastro tem os dois jeitos: umas linhas trazem `banco_codigo`,
+    outras so o nome. Casar por um so deixaria metade das contas de fora."""
+    dados = _com_inter()
+    dados["conta"][1]["banco"] = ""
+    dados["conta"][1]["banco_codigo"] = "077"
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    cadastro.sincronizar("tok", tmp_path)
+    assert len(_inter_gerado(tmp_path)) == 1
+
+
+def test_duas_contas_do_inter_na_mesma_empresa_nao_dividem_o_perfil(
+        tmp_path, monkeypatch):
+    """O apelido da nome a pasta de perfil do Chrome. Dois apelidos iguais =
+    um perfil so: a segunda conta entraria logada na primeira, e baixaria os
+    comprovantes dela."""
+    dados = _com_inter()
+    dados["conta"][1]["sufixo"] = "MATRIZ"
+    dados["conta"].append(dict(dados["conta"][1], id=11, sufixo="FILIAL"))
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    cadastro.sincronizar("tok", tmp_path)
+    apelidos = [c["apelido"] for c in _inter_gerado(tmp_path)]
+    assert apelidos == ["EMPRESA B FILIAL", "EMPRESA B MATRIZ"]
+
+
+def test_cadastro_sem_inter_nao_apaga_a_lista_que_existe(tmp_path, monkeypatch):
+    """Mesma regra dos outros arquivos: nao troque cheio por vazio. Apagar a
+    lista custaria tres leituras de QR para reconstrui-la."""
+    cache.gravar_json("contas_inter.json",
+                      {"contas": [{"apelido": "EMPRESA B",
+                                   "empresa": "EMPRESA B",
+                                   "pasta": "INTER"}]}, tmp_path)
+    dados = _com_inter()
+    dados["conta"] = dados["conta"][:1]          # so a do Sicoob
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    cadastro.sincronizar("tok", tmp_path)
+    assert _inter_gerado(tmp_path)[0]["apelido"] == "EMPRESA B"
+
+
+def test_o_leitor_da_aba_le_o_que_a_sincronizacao_escreve(tmp_path, monkeypatch):
+    """As duas pontas do mesmo arquivo, no mesmo teste: quem escreve e quem
+    le. Separadas, cada uma passa sozinha com um formato que a outra nao
+    entende."""
+    from baixar_comprovantes import contas_inter
+
+    dados = _com_inter()
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+    cadastro.sincronizar("tok", tmp_path)
+
+    lidas = contas_inter.carregar(tmp_path)
+    assert [(c.apelido, c.empresa, c.pasta) for c in lidas] == [
+        ("EMPRESA B", "EMPRESA B", "INTER")]

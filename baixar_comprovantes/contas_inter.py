@@ -1,29 +1,33 @@
 # -*- coding: utf-8 -*-
 """Quais contas do Inter a fila percorre, e onde os PDFs de cada uma caem.
 
-**Por que isto existe, sendo que o Sicoob não precisa de nada parecido.** Lá um
-login enumera as contas sozinho: basta entrar e perguntar. No Inter cada conta
-é um login separado, então ninguém tem como descobri-las — alguém precisa
-declarar quais são, e é este arquivo.
+**Por que isto existe, sendo que o Sicoob nao precisa de nada parecido.** La
+um login enumera as contas sozinho: basta entrar e perguntar. No Inter cada
+conta e um LOGIN separado, entao ninguem tem como descobri-las — alguem
+precisa declarar quais sao.
 
-Ele mora FORA do repositório, ao lado do `contas_sicoob.json` e pela mesma
-razão: carrega nome de empresa real, e o repositório é público.
+Quem declara e o cadastro na nuvem, junto das contas do Sicoob: la a conta do
+Inter ja existe (banco "INTER", sem numero), e `nuvem/cadastro.py` a escreve
+neste arquivo a cada abertura do app. Enquanto a declaracao era um arquivo
+escrito a mao, ela existia numa maquina so — a aba mostrava 3 contas do Inter
+aqui e nenhuma no computador de qualquer outra pessoa, sem erro na tela.
+
+O arquivo mora FORA do repositorio, ao lado do `contas_sicoob.json` e pela
+mesma razao: carrega nome de empresa real, e o repositorio e publico.
 
     {
       "contas": [
-        {"apelido": "MORAIS ENG", "empresa": "MORAIS ENG", "pasta": "INTER"},
-        {"apelido": "BURITIS",    "empresa": "BURITIS",    "pasta": "INTER"},
-        {"apelido": "VXZ",        "empresa": "VXZ",        "pasta": "INTER"}
+        {"apelido": "EMPRESA A", "empresa": "EMPRESA A", "pasta": "INTER"}
       ]
     }
 
-`apelido` é o que dá nome à pasta de perfil do Chrome daquela conta, e por isso
-não pode mudar sem motivo: mudou, o QR daquela conta é pedido do zero.
-`empresa` e `pasta` dizem onde arquivar, e devem casar com os nomes que o
-`contas_sicoob.json` já usa — senão a mesma empresa nasce com duas pastas de
+`apelido` e o que da nome a pasta de perfil do Chrome daquela conta, e por
+isso nao muda sem motivo: mudou, o QR daquela conta e pedido do zero.
+`empresa` e `pasta` dizem onde arquivar, e saem do mesmo cadastro que o
+`contas_sicoob.json` — e por isso a mesma empresa nao nasce com duas pastas de
 grafias diferentes.
 
-Sem o arquivo, a lista vem vazia e a aba diz isso. Não é erro: quem só usa
+Sem o arquivo, a lista vem vazia e a aba diz isso. Nao e erro: quem so usa
 Sicoob nunca precisa dele.
 """
 from __future__ import annotations

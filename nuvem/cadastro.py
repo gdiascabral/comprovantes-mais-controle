@@ -124,6 +124,54 @@ def _contas_mc(dados: dict) -> dict:
     return {"raiz": dados["config"].get("raiz", ""), "contas": contas}
 
 
+def _e_inter(conta: dict) -> bool:
+    """A conta e do Inter? Aceita o nome e o codigo, porque o cadastro tem os
+    dois jeitos: umas linhas trazem `banco_codigo` ("756"), outras so o nome
+    ("SICOOB", "INTER"). Casar por um so deixaria metade de fora."""
+    banco = (conta.get("banco") or "").strip().upper()
+    codigo = (conta.get("banco_codigo") or "").strip().lstrip("0")
+    return "INTER" in banco or codigo == "77"
+
+
+def _contas_inter(dados: dict) -> dict:
+    """Reconstroi o `contas_inter.json` — quais contas do Inter a fila percorre.
+
+    **Por que vem da nuvem, e nao de um arquivo escrito a mao.** No Inter cada
+    conta e um LOGIN separado, entao ninguem tem como descobri-las: alguem
+    precisa declarar quais sao. Enquanto essa declaracao morou num arquivo
+    local, ela existia numa maquina so — a aba mostrava 13 Sicoob + 3 Inter
+    aqui e 13 Sicoob + 0 Inter no computador de qualquer outra pessoa, sem
+    erro na tela: a lista simplesmente vinha vazia.
+
+    Conta do Inter nao tem numero (o cadastro guarda numero de Sicoob), entao
+    ela nao entra no `contas_sicoob.json` e precisava de arquivo proprio.
+
+    `apelido` da nome a pasta de perfil do Chrome daquela conta, e por isso e
+    o nome da empresa mais o `sufixo` quando ele existe: duas contas Inter da
+    mesma empresa dividiriam o perfil, e a segunda entraria logada na
+    primeira. Mudar o apelido custa uma leitura de QR, entao ele muda so
+    quando o cadastro muda.
+
+    `ativa` NAO filtra aqui — nenhuma das reconstrucoes a usa hoje, e honra-la
+    num arquivo so faria a mesma marca no painel ter efeito num banco e nao no
+    outro. Quem nao quer a conta na fila desmarca a linha na aba."""
+    empresas = _por_id(dados["empresa"])
+    contas = []
+    for c in dados["conta"]:
+        if not _e_inter(c):
+            continue
+        empresa = empresas[c["empresa_id"]]["nome_pasta"]
+        sufixo = (c.get("sufixo") or "").strip()
+        contas.append({"apelido": f"{empresa} {sufixo}".strip(),
+                       "empresa": empresa,
+                       "pasta": c["pasta"] or "INTER"})
+    contas.sort(key=lambda x: x["apelido"])
+    return {"_ajuda": ["Gerado pela sincronizacao a cada abertura do app.",
+                       "Para mudar, mude o cadastro no painel: o que for",
+                       "escrito aqui a mao some na proxima abertura."],
+            "contas": contas}
+
+
 def _subcontas(dados: dict) -> dict:
     saida: dict = {}
     padrao = dados["config"].get("obra_padrao", "")
@@ -243,6 +291,8 @@ def sincronizar(token: str, pasta=None) -> Resultado:
     _gravar("contas_sicoob.json", sic, not sic["empresas"])
     mc = _contas_mc(dados)
     _gravar("contas_mc.json", mc, not mc["contas"])
+    inter = _contas_inter(dados)
+    _gravar("contas_inter.json", inter, not inter["contas"])
     sub = _subcontas(dados)
     _gravar("subcontas.json", sub, not dados["subconta"])
     _gravar("regras_fornecedor.json", _regras_fornecedor(dados),
