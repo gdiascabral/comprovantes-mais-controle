@@ -1,0 +1,285 @@
+# -*- coding: utf-8 -*-
+"""Comprovantes de pagamento do Sicoob, por API, para várias contas num login.
+
+**A diferença que manda no desenho:** no Inter cada conta é um login — 18
+contas seriam 18 QR. Aqui um login enxerga as 18, e é por isso que o Sicoob vem
+primeiro na fila da aba: um acesso resolve o que no Inter custaria dezoito.
+
+O que a tela faz, e que aqui se faz direto:
+
+    GET  /api/comprovantes/consultar?tipoPagamento=&dataInicio=&dataFim=
+         devolve a lista, com data, valor, situação e o código de barras
+    POST /api/comprovantes/detalhar   [os itens]
+         devolve o comprovante em HTML — um por item
+
+**O PDF não existe do lado do banco.** O `detalhar` entrega HTML, e a tela o
+imprime. Isso cai na armadilha que o `extratos_sicoob/sicoob_client.py` já
+documenta e já resolveu: o botão de imprimir chama `window.print()`, que abre o
+diálogo modal do Windows e trava o lote inteiro. A saída, copiada de lá, é
+gerar o arquivo por `Page.printToPDF` do CDP — `page.pdf()` do Playwright
+recusa navegador com janela.
+
+**A sessão expira em 20 minutos**, e são 18 contas. Por isso cada conta é um
+`Resultado` próprio e a falha de uma não derruba as outras: quem chama percorre
+a fila e reentra se precisar, como o `sicoob_baixar.baixar_mes` dos extratos já
+faz.
+"""
+from __future__ import annotations
+
+import base64
+import re
+import sys
+import tempfile
+import unicodedata
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+try:                                     # utilitários compartilhados (raiz)
+    import util                          # noqa: F401
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+BASE = "https://ib.sicoob.com.br/sicoobnet"
+URL_COMPROVANTES = f"{BASE}/ib/#/comprovantes"
+
+#: Os tipos que a tela oferece, com o código que a API usa. `TODOS` é o que
+#: interessa por ora — separar por tipo seria uma consulta por tipo, e a lista
+#: já vem completa numa só.
+TIPO_TODOS = "TODOS"
+
+#: Quanto se espera o HTML de cada comprovante virar PDF. Generoso: é trabalho
+#: local, mas a fonte e o logo do SISBR carregam antes de imprimir.
+ESPERA_RENDER = 800
+
+
+class SicoobFalhou(RuntimeError):
+    """O que impediu esta conta de terminar. Não derruba a fila."""
+
+
+@dataclass
+class Resultado:
+    """O que aconteceu com UMA conta."""
+
+    conta: str = ""
+    baixados: list[Path] = field(default_factory=list)
+    falhas: list[str] = field(default_factory=list)
+    no_periodo: int = 0
+    motivo: str = ""                     # "" = deu certo
+
+    @property
+    def ok(self) -> bool:
+        return not self.motivo
+
+    def resumo(self) -> str:
+        if self.motivo:
+            return self.motivo
+        if not self.no_periodo:
+            return "sem comprovantes no período"
+        falhou = f" · {len(self.falhas)} falharam" if self.falhas else ""
+        return f"{len(self.baixados)} de {self.no_periodo} comprovantes{falhou}"
+
+
+# --------------------------------------------------------------- sem tela
+
+def data_do_lancamento(texto: str) -> "datetime | None":
+    """`"2026-08-24 00:00:00.0"` -> data. None quando não dá para ler.
+
+    O Sicoob devolve a data em formato de banco de dados, e não no `dd/mm/aaaa`
+    da tela — quem for comparar com o período precisa passar por aqui."""
+    achado = re.match(r"\s*(\d{4})-(\d{2})-(\d{2})", texto or "")
+    if not achado:
+        return None
+    try:
+        return datetime(*(int(p) for p in achado.groups()))
+    except ValueError:
+        return None
+
+
+def dentro_do_periodo(item: dict, inicio: str, fim: str) -> bool:
+    """O lançamento cai no período pedido? Sem data legível, fica de FORA.
+
+    A API aceita `dataInicio`/`dataFim`, então isto é cinto e suspensório —
+    existe porque no Inter um filtro de tela falhou CALADO e baixou três meses
+    no lugar de uma semana. Conferir o que voltou custa nada."""
+    quando = data_do_lancamento(item.get("dataLancamento") or "")
+    try:
+        d1 = datetime.strptime(inicio, "%d/%m/%Y")
+        d2 = datetime.strptime(fim, "%d/%m/%Y")
+    except (ValueError, TypeError):
+        return False
+    return bool(quando and d1 <= quando <= d2)
+
+
+def _sem_acento(texto: str) -> str:
+    """`TÍTULO` -> `TITULO`.
+
+    Tirar o acento, e não substituí-lo: trocar por traço produzia `T-TULO`, que
+    não se lê nem se procura. Nome de arquivo com acento também viaja mal entre
+    máquinas e entre o Windows e o que vier depois."""
+    cru = unicodedata.normalize("NFKD", texto or "")
+    return re.sub(r"[^A-Za-z0-9]+", "-",
+                  "".join(c for c in cru if not unicodedata.combining(c))
+                  ).strip("-")
+
+
+def nome_do_comprovante(item: dict, conta: str = "") -> str:
+    """`SICOOB_2026-08-24_7190-20_TITULO_15057364.pdf`.
+
+    Data, valor, o que é e o número do agendamento — que é o identificador do
+    Sicoob, como o endToEnd é o do Pix. Sem carimbo de hora: ele diz quando o
+    arquivo foi baixado, que não interessa a ninguém depois."""
+    quando = data_do_lancamento(item.get("dataLancamento") or "")
+    dia = quando.strftime("%Y-%m-%d") if quando else "0000-00-00"
+    try:
+        valor = f"{float(item.get('valorLancamento') or 0):.2f}".replace(".", "-")
+    except (TypeError, ValueError):
+        valor = "0-00"
+    tipo = _sem_acento(item.get("tipoAgendamento") or "COMPROVANTE")[:24]
+    limpar = lambda t: re.sub(r"[^A-Za-z0-9]+", "-", t or "").strip("-")  # noqa: E731
+    ident = limpar(str(item.get("idAgendamento") or ""))[:20]
+    return f"SICOOB_{dia}_{valor}_{tipo}_{ident}.pdf".replace("__", "_")
+
+
+def so_efetivados(itens) -> list:
+    """Só o que saiu da conta.
+
+    Agendado ainda não é pagamento, e comprovante de agendamento na pasta do
+    mês é o que faz alguém dar por pago o que ainda vai acontecer."""
+    return [i for i in itens
+            if (i.get("situacao") or "").strip().upper() == "EFETIVADO"]
+
+
+# --------------------------------------------------------------- com tela
+
+_JS_API = """
+async ([url, metodo, corpo]) => {
+    const opcoes = {method: metodo, credentials: 'include'};
+    if (corpo) {
+        opcoes.headers = {'Content-Type': 'application/json'};
+        opcoes.body = JSON.stringify(corpo);
+    }
+    const r = await fetch(url, opcoes);
+    if (!r.ok) return {erro: `HTTP ${r.status}`};
+    try {
+        return {dado: await r.json()};
+    } catch (e) {
+        return {erro: 'a resposta não é JSON'};
+    }
+}
+"""
+
+
+def listar(page, inicio: str, fim: str, tipo: str = TIPO_TODOS) -> list:
+    """Os comprovantes da conta ABERTA no período. Levanta se a API recusar."""
+    url = (f"{BASE}/api/comprovantes/consultar?tipoPagamento={tipo}"
+           f"&dataInicio={inicio}&dataFim={fim}")
+    resposta = page.evaluate(_JS_API, [url, "GET", None])
+    if resposta.get("erro"):
+        raise SicoobFalhou(f"a consulta falhou: {resposta['erro']}")
+    dado = resposta.get("dado")
+    return dado if isinstance(dado, list) else []
+
+
+def detalhar(page, itens: list) -> list:
+    """O HTML de cada comprovante. Uma chamada, um item — ver o porquê.
+
+    O endpoint aceita uma LISTA, e é tentador mandar tudo de uma vez. Não vale:
+    no Inter, o endpoint equivalente também aceitava, e pedindo dois devolveu
+    UM — grudou os comprovantes num arquivo só. Aqui o casamento entre item e
+    HTML seria por posição, e um a menos faria cada arquivo levar o nome do
+    pagamento errado. Ninguém veria até procurar um comprovante e achar outro.
+    """
+    saida = []
+    for item in itens:
+        resposta = page.evaluate(
+            _JS_API, [f"{BASE}/api/comprovantes/detalhar", "POST", [item]])
+        if resposta.get("erro"):
+            saida.append((item, ""))
+            continue
+        dado = resposta.get("dado") or []
+        html = ""
+        if isinstance(dado, list) and dado:
+            html = (dado[0] or {}).get("comprovante") or ""
+        saida.append((item, html))
+    return saida
+
+
+def html_para_pdf(ctx, html: str, destino: Path) -> Path:
+    """Vira PDF sem passar pelo diálogo de impressão.
+
+    O Sicoob não entrega PDF: entrega HTML, e a tela o manda para
+    `window.print()`, que abre o preview modal do Chrome — trava o navegador,
+    não fecha nem por CDP, e um clique distraído manda folha para a impressora.
+    A saída é a mesma do `extratos_sicoob/sicoob_client.py`: abrir o HTML numa
+    aba e imprimir por `Page.printToPDF`. (`page.pdf()` do Playwright recusa
+    navegador com janela, e este roda com janela por causa do login manual.)
+    """
+    if not html.strip():
+        raise SicoobFalhou("o comprovante veio vazio")
+    with tempfile.TemporaryDirectory(prefix="sicoob_comp_") as tmp:
+        arquivo = Path(tmp) / "comprovante.html"
+        arquivo.write_text(html, encoding="utf-8")
+        aba = ctx.new_page()
+        try:
+            aba.goto(arquivo.as_uri(), wait_until="load")
+            aba.wait_for_timeout(ESPERA_RENDER)
+            sessao = ctx.new_cdp_session(aba)
+            resposta = sessao.send("Page.printToPDF", {
+                "printBackground": True,
+                "marginTop": 0.4, "marginBottom": 0.4,
+                "marginLeft": 0.4, "marginRight": 0.4,
+            })
+        finally:
+            aba.close()
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    destino.write_bytes(base64.b64decode(resposta["data"]))
+    return destino
+
+
+def nome_livre(pasta: Path, nome: str) -> Path:
+    """Um caminho que ainda não existe, numerando o repetido a partir do
+    nome ORIGINAL — empilhar sufixo faz o terceiro sair `_1_2`."""
+    base = Path(nome)
+    destino = pasta / nome
+    n = 1
+    while destino.exists():
+        destino = pasta / f"{base.stem}_{n}{base.suffix}"
+        n += 1
+    return destino
+
+
+def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
+                 log=print) -> Resultado:
+    """Os comprovantes de UMA conta, com ela já acessível pelo login aberto."""
+    resultado = Resultado(conta=numero)
+    destino = Path(pasta)
+    try:
+        if not cli.acessar_conta(numero):
+            resultado.motivo = "a conta não está na lista deste login"
+            return resultado
+        cli.page.goto(URL_COMPROVANTES)
+        cli.page.wait_for_timeout(3000)
+
+        itens = so_efetivados(listar(cli.page, inicio, fim))
+        no_periodo = [i for i in itens if dentro_do_periodo(i, inicio, fim)]
+        resultado.no_periodo = len(no_periodo)
+        log(f"  {numero}: {len(itens)} efetivados · {len(no_periodo)} no período")
+        if not no_periodo:
+            return resultado
+
+        for item, html in detalhar(cli.page, no_periodo):
+            try:
+                alvo = nome_livre(destino, nome_do_comprovante(item, numero))
+                html_para_pdf(cli.ctx, html, alvo)
+                resultado.baixados.append(alvo)
+                log(f"    {alvo.name}")
+            except Exception as e:                           # noqa: BLE001
+                ident = item.get("idAgendamento") or "?"
+                resultado.falhas.append(str(ident))
+                log(f"    {ident} falhou ({e}) — seguindo")
+    except SicoobFalhou as e:
+        resultado.motivo = str(e)
+    except Exception as e:                                   # noqa: BLE001
+        resultado.motivo = f"erro inesperado: {e}"
+    return resultado
