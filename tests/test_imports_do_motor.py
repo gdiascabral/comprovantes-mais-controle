@@ -25,7 +25,7 @@ from pathlib import Path
 _RAIZ = Path(__file__).resolve().parent.parent
 
 #: Pastas de código que viajam no codigo.zip (ver a lista no CLAUDE.md).
-_PASTAS = ("", "inicio", "separar_renomear", "anexar", "aportes", "relatorios",
+_PASTAS = ("", "inicio", "baixar_comprovantes", "separar_renomear", "anexar", "aportes", "relatorios",
            "pagamentos_dia", "extratos_sicoob", "conciliacao",
            "conciliacao/erp", "contratos", "acessorias", "cnab240", "nuvem")
 

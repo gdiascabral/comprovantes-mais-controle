@@ -1,0 +1,299 @@
+# -*- coding: utf-8 -*-
+"""Aba "Baixar Comprovantes": um clique, a fila dos dois bancos.
+
+O trabalho que a pessoa deve fazer é o que o banco EXIGE dela — entrar. O
+resto é do robô: percorrer as contas, filtrar o período, baixar cada
+comprovante e arquivar na pasta do mês.
+
+**A ordem da fila não é arbitrária: Sicoob primeiro.** Lá um login enxerga as
+18 contas; no Inter cada conta é um login, e o QR é pedido a cada abertura —
+conferido, o perfil salvo não vence essa trava. Então a fila começa pelo que
+resolve muito com um acesso só, e deixa para o fim o que cobra um acesso por
+conta.
+
+Nada aqui fala com banco: o que sabe disso são `sicoob_baixar` e
+`inter_baixar`. Esta tela mostra a fila, conta o que aconteceu e não deixa a
+janela congelar — o trabalho roda noutra thread, como nas outras abas.
+"""
+from __future__ import annotations
+
+import datetime
+import queue
+import sys
+import threading
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, ttk
+
+try:                                     # widgets compartilhados (raiz)
+    import widgets
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import widgets
+
+try:
+    import util
+except ModuleNotFoundError:
+    import util                          # noqa: F401
+
+
+#: Como cada situação aparece na tabela. O símbolo vem junto do texto: a tag
+#: do Treeview só pinta duas das situações, e cor sozinha não diz nada a quem
+#: não a enxerga.
+SITUACOES = {
+    "espera": ("·  na fila", "info"),
+    "qr": ("⚠  aguardando login", "atencao"),
+    "trabalhando": ("·  baixando…", "info"),
+    "ok": ("✓  {n} comprovantes", "ok"),
+    "vazio": ("·  sem lançamentos", "info"),
+    "erro": ("✖  {motivo}", "erro"),
+}
+
+
+class ComprovantesFrame(ttk.Frame):
+    """A aba. `obter_mapa` é passado de fora para a tela não decidir de onde
+    vem o cadastro — quem sabe disso é quem monta a janela."""
+
+    def __init__(self, pai, obter_mapa=None):
+        super().__init__(pai, style="Fundo.TFrame")
+        self._obter_mapa = obter_mapa
+        self.q: queue.Queue = queue.Queue()
+        self.worker = None
+        self.linhas: dict[str, dict] = {}
+        self._build()
+        self.ao_abrir()
+        self.after(150, self._drenar)
+
+    # ---------------------------------------------------------------- layout
+    def _build(self):
+        PADX = widgets.PADX
+
+        cab = widgets.Cabecalho(
+            self, "Baixar Comprovantes",
+            "Os comprovantes de pagamento de cada banco, arquivados na pasta "
+            "do mês. Você só entra quando o banco pedir; o resto é automático.",
+            trilha="Comprovantes  ›  Baixar Comprovantes")
+        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        self.b_ir = widgets.Botao(cab.acoes, "▶  Baixar comprovantes",
+                                  papel="acao", command=self._comecar)
+        self.b_ir.pack(side="right")
+        widgets.Botao(cab.acoes, "Atualizar lista", papel="neutro",
+                      command=self.ao_abrir).pack(side="right", padx=(0, 8))
+
+        # ---- período e destino
+        c_per = widgets.Cartao(self, "Período", numero=1)
+        c_per.pack(fill="x", padx=PADX, pady=(0, 12))
+        linha = ttk.Frame(c_per)
+        linha.pack(fill="x")
+
+        hoje = datetime.date.today()
+        inicio = hoje - datetime.timedelta(days=7)
+        self.v_ini = tk.StringVar(value=f"{inicio:%d/%m/%Y}")
+        self.v_fim = tk.StringVar(value=f"{hoje:%d/%m/%Y}")
+        for rotulo, var in (("De", self.v_ini), ("Até", self.v_fim)):
+            campo = widgets.Campo(linha, rotulo,
+                                  lambda pai, v=var: widgets.CampoData(pai, v))
+            campo.pack(side="left", padx=(0, 14))
+
+        self.v_pasta = tk.StringVar(value="")
+        campo_pasta = widgets.Campo(
+            linha, "Onde salvar",
+            lambda pai: ttk.Entry(pai, textvariable=self.v_pasta, width=52))
+        campo_pasta.pack(side="left", fill="x", expand=True)
+        widgets.Botao(linha, "Escolher…", papel="neutro",
+                      command=self._escolher_pasta).pack(side="left",
+                                                         padx=(8, 0))
+
+        # ---- a fila
+        c_fila = widgets.Cartao(self, "Contas na fila", numero=2)
+        c_fila.pack(fill="both", expand=True, padx=PADX, pady=(0, 12))
+        colunas = ("banco", "conta", "empresa", "situacao")
+        self.tabela = ttk.Treeview(c_fila, columns=colunas, show="headings",
+                                   selectmode="browse", height=9)
+        for col, titulo, larg, onde in (("banco", "BANCO", 90, "w"),
+                                        ("conta", "CONTA", 130, "w"),
+                                        ("empresa", "EMPRESA", 300, "w"),
+                                        ("situacao", "SITUAÇÃO", 220, "w")):
+            self.tabela.heading(col, text=titulo)
+            self.tabela.column(col, width=larg, anchor=onde,
+                               stretch=col == "empresa")
+        widgets.estilo_tabela(self.tabela)
+        self.tabela.pack(fill="both", expand=True)
+        self.rodape = widgets.RodapeTabela(c_fila)
+        self.rodape.pack(fill="x", pady=(8, 0))
+
+        # ---- execução e registro
+        acao = ttk.Frame(self, style="Fundo.TFrame")
+        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        self.barra_exec = widgets.BarraExecucao(acao)
+        self.barra_exec.pack(side="left", fill="x", expand=True)
+        self.lbl = self.barra_exec.lbl
+        self.pb = self.barra_exec.pb
+
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
+                           highlightthickness=0)
+        self.log.pack(fill="both", expand=True)
+        widgets.estilo_log(self.log)
+        widgets.registro_elastico(self.reg, self.log)
+
+    def _escolher_pasta(self):
+        escolhida = filedialog.askdirectory(initialdir=self.v_pasta.get() or None)
+        if escolhida:
+            self.v_pasta.set(escolhida.replace("\\", "/"))
+
+    # ----------------------------------------------------------- a lista
+    def ao_abrir(self):
+        """Relê o cadastro e remonta a fila. Chamado pelo menu a cada visita."""
+        self.tabela.delete(*self.tabela.get_children())
+        self.linhas.clear()
+        try:
+            contas = self._contas_do_cadastro()
+        except Exception as e:                               # noqa: BLE001
+            self._log(f"[!] não consegui ler o cadastro: {e}")
+            contas = []
+
+        for i, c in enumerate(contas):
+            chave = f"{c['banco']}:{c['conta']}"
+            self.linhas[chave] = dict(c, situacao="espera")
+            texto, estado = SITUACOES["espera"]
+            self.tabela.insert("", "end", iid=chave,
+                               values=(c["banco"], c["conta"], c["empresa"],
+                                       texto),
+                               tags=widgets.linha_zebrada(i, estado))
+        sicoob = sum(1 for c in contas if c["banco"] == "Sicoob")
+        inter = len(contas) - sicoob
+        self.rodape.definir(
+            texto=f"{sicoob} conta(s) Sicoob (um login) · {inter} Inter "
+                  f"(um login cada)")
+        if not contas:
+            self._log("Nenhuma conta no cadastro. Rode a sincronização ou "
+                      "confira o contas_sicoob.json.")
+
+    def _contas_do_cadastro(self) -> list[dict]:
+        """As contas que a fila vai percorrer, na ordem em que serão feitas.
+
+        Sicoob primeiro, e não por gosto: um login resolve todas elas."""
+        mapa = self._obter_mapa() if self._obter_mapa else None
+        if mapa is None:
+            return []
+        contas = []
+        for emp in getattr(mapa, "empresas", []):
+            for conta in getattr(emp, "contas", []):
+                contas.append({"banco": "Sicoob", "conta": conta.numero,
+                               "empresa": emp.nome, "pasta": conta.pasta})
+        return contas
+
+    # ------------------------------------------------------------ execução
+    def _comecar(self):
+        if self.worker and not self.worker.done():
+            return
+        destino = self.v_pasta.get().strip()
+        if not destino:
+            self._log("[!] escolha onde salvar antes de começar.")
+            return
+        if not self.linhas:
+            self._log("[!] não há conta na fila.")
+            return
+        self.b_ir.configure(state="disabled")
+        self.lbl.configure(text="Preparando…")
+        alvo = threading.Thread(target=self._trabalhar,
+                                args=(self.v_ini.get(), self.v_fim.get(),
+                                      Path(destino)), daemon=True)
+        alvo.start()
+        self.worker = _Tarefa(alvo)
+
+    def _trabalhar(self, inicio: str, fim: str, destino: Path):
+        """Roda fora da thread da tela. Só fala com ela pela fila."""
+        try:
+            from baixar_comprovantes import sicoob_baixar as sicoob
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent
+                                   / "extratos_sicoob"))
+            from sicoob_client import SicoobClient
+
+            do_sicoob = [c for c in self.linhas.values()
+                         if c["banco"] == "Sicoob"]
+            if do_sicoob:
+                self.q.put(("log", "Sicoob: um login para "
+                                   f"{len(do_sicoob)} conta(s)."))
+                for c in do_sicoob:
+                    self.q.put(("situacao", (f"Sicoob:{c['conta']}", "qr", {})))
+                with SicoobClient(log=lambda m: self.q.put(("log", m))) as cli:
+                    cli.aguardar_login()
+                    for i, c in enumerate(do_sicoob, start=1):
+                        chave = f"Sicoob:{c['conta']}"
+                        self.q.put(("situacao", (chave, "trabalhando", {})))
+                        self.q.put(("progresso", (i, len(do_sicoob))))
+                        pasta = destino / c["empresa"] / (c["pasta"] or "SICOOB")
+                        r = sicoob.baixar_conta(
+                            cli, c["conta"], inicio, fim, pasta,
+                            log=lambda m: self.q.put(("log", m)))
+                        if not r.ok:
+                            self.q.put(("situacao",
+                                        (chave, "erro", {"motivo": r.motivo})))
+                        elif not r.baixados:
+                            self.q.put(("situacao", (chave, "vazio", {})))
+                        else:
+                            self.q.put(("situacao", (chave, "ok",
+                                                     {"n": len(r.baixados)})))
+            self.q.put(("fim", None))
+        except Exception as e:                               # noqa: BLE001
+            self.q.put(("log", f"[!] {e}"))
+            self.q.put(("fim", None))
+
+    # ------------------------------------------------------- a tela reage
+    def _drenar(self):
+        try:
+            while True:
+                tipo, valor = self.q.get_nowait()
+                if tipo == "log":
+                    self._log(str(valor))
+                elif tipo == "situacao":
+                    chave, estado, dados = valor
+                    self._marcar(chave, estado, dados)
+                elif tipo == "progresso":
+                    feitas, total = valor
+                    self.lbl.configure(text=f"{feitas} de {total}")
+                    self.pb.configure(maximum=total, value=feitas)
+                elif tipo == "fim":
+                    self.b_ir.configure(state="normal")
+                    self.lbl.configure(text="Pronto.")
+        except queue.Empty:
+            pass
+        self.after(150, self._drenar)
+
+    def _marcar(self, chave: str, estado: str, dados: dict):
+        if chave not in self.linhas:
+            return
+        modelo, cor = SITUACOES.get(estado, SITUACOES["espera"])
+        try:
+            self.tabela.set(chave, "situacao", modelo.format(**dados))
+            indice = self.tabela.index(chave)
+            self.tabela.item(chave, tags=widgets.linha_zebrada(indice, cor))
+        except tk.TclError:
+            pass
+
+    def _log(self, texto: str):
+        try:
+            self.log.insert("end", texto.rstrip() + "\n")
+            self.log.see("end")
+            widgets.colorir_registro(self.log)
+        except tk.TclError:
+            pass
+
+    def aplicar_cores(self, escuro: bool):
+        try:
+            widgets.estilo_log(self.log, escuro)
+        except tk.TclError:
+            pass
+
+
+class _Tarefa:
+    """Casca com a API mínima que o frame usa do executor das outras abas."""
+
+    def __init__(self, thread):
+        self._thread = thread
+
+    def done(self) -> bool:
+        return not self._thread.is_alive()

@@ -268,6 +268,8 @@ jobs:
           # `nuvem/migrar.py` fica DE FORA de propósito: é ferramenta de uma
           # vez só, rodada à mão na máquina que tem os arquivos bons, como o
           # `aportes/conferir_contas.py`. Ele não é importado pelo app.
+          New-Item -ItemType Directory codigo_embutido/baixar_comprovantes | Out-Null
+          Copy-Item baixar_comprovantes/*.py codigo_embutido/baixar_comprovantes/
           New-Item -ItemType Directory codigo_embutido/nuvem | Out-Null
           Copy-Item nuvem/*.py -Exclude migrar.py codigo_embutido/nuvem/
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip

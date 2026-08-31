@@ -26,7 +26,8 @@ from pathlib import Path
 _RAIZ = Path(__file__).resolve().parent
 for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
            _RAIZ / "relatorios", _RAIZ / "pagamentos_dia",
-           _RAIZ / "extratos_sicoob", _RAIZ / "inicio"):
+           _RAIZ / "extratos_sicoob", _RAIZ / "inicio",
+           _RAIZ / "baixar_comprovantes"):
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -50,6 +51,7 @@ from extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
+from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
 
 
 def _nitidez():
@@ -313,10 +315,20 @@ def main():
     # Acessórias também NÃO recebe o aba_anx: é o portal do escritório
     # contábil, terceiro site e terceiro login (ver acessorias/portal.py).
     aba_acs = AcessoriasFrame(conteudo)
+    # Baixar Comprovantes tem navegador PRÓPRIO, como os Extratos Sicoob: são
+    # os sites dos bancos, com login e sessão que não têm nada a ver com o ERP.
+    # O cadastro de contas é o mesmo `contas_sicoob.json` que os Extratos leem
+    # — a tela não descobre isso sozinha, recebe de quem a monta.
+    def _mapa_das_contas():
+        import sicoob_contas as _sc
+
+        return _sc.carregar()
+
+    aba_bxc = ComprovantesFrame(conteudo, _mapa_das_contas)
     quadros = {"ini": aba_ini, "sep": aba_sep, "anx": aba_anx,
                "conf": aba_conf, "apt": aba_apt, "rel": aba_rel,
                "pag": aba_pag, "ext": aba_ext, "con": aba_con,
-               "ctr": aba_ctr, "acs": aba_acs}
+               "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc}
     atual = {"nome": None}
     itens = {}
 
@@ -391,11 +403,14 @@ def main():
     # O rótulo de seção sem nenhum item embaixo fica pior do que a seção
     # inteira ausente: parece que as abas sumiram, e não que elas não são
     # desta pessoa.
-    if any(_pode(c) for c in ("sep", "anx", "conf", "apt")):
+    if any(_pode(c) for c in ("bxc", "sep", "anx", "conf", "apt")):
         lateral.secao("Comprovantes")
     # Os rótulos encurtaram junto com a coluna: "Anexar Comprovantes" dentro
     # de um menu chamado COMPROVANTES repetia a palavra em duas alturas.
-    for _chave, _icone, _texto in (("sep", "✂", "Separar e Renomear"),
+    # "Baixar" antes de "Separar" e "Anexar" porque é a ordem do dia: os
+    # comprovantes chegam do banco, depois são separados, depois anexados.
+    for _chave, _icone, _texto in (("bxc", "⬇", "Baixar Comprovantes"),
+                                   ("sep", "✂", "Separar e Renomear"),
                                    ("anx", "📎", "Anexar"),
                                    ("conf", "✅", "Conferência"),
                                    ("apt", "💰", "Aportes")):
