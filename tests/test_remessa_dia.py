@@ -1123,3 +1123,55 @@ def test_impedido_nao_vira_escolha_sua():
     """A linha impedida nunca teve caixa; o motivo dela é o da regra."""
     preparado = remessa_dia.preparar({CONTA: [registro(parcial=True)]}, quando=HOJE)
     assert remessa_dia.fora(preparado)[0]["motivo"] == remessa_dia.MOTIVO_PARCIAL
+
+
+# ------------------------------------------------- uma pasta por conta
+# Cada conta pagadora gera o SEU arquivo. Numa pasta só, os nomes são
+# parecidos demais — mesmo prefixo, NSA sequencial por convênio — e subir o
+# arquivo de uma conta no acesso de outra só apareceria no SicoobNet, depois
+# de enviado.
+
+def _pagador(empresa="MORAIS ENGENHARIA LTDA", agencia="3299", conta="50022"):
+    return remessa_dia.Pagador(
+        conta_erp="x", empresa=empresa, razao_social=empresa, cnpj="1",
+        convenio="1814", agencia=agencia, dv_agencia="", conta=conta,
+        dv_conta="5")
+
+
+def test_cada_conta_tem_a_sua_pasta():
+    a = remessa_dia.pasta_do_pagador("D:/saida", _pagador(conta="50022"))
+    b = remessa_dia.pasta_do_pagador("D:/saida", _pagador(conta="71234"))
+    assert a != b
+    assert a.parent == b.parent, "a mesma empresa, dois galhos irmãos"
+    assert a.name == "SICOOB 3299-50022"
+
+
+def test_empresas_diferentes_nao_dividem_galho():
+    a = remessa_dia.pasta_do_pagador("D:/saida", _pagador(empresa="UMA LTDA"))
+    b = remessa_dia.pasta_do_pagador("D:/saida", _pagador(empresa="OUTRA SA"))
+    assert a.parent != b.parent
+
+
+def test_nome_de_empresa_com_barra_nao_inventa_nivel():
+    r"""`/` e `\` no nome viram pasta dentro de pasta — e o arquivo nasce num
+    lugar que ninguém procurou."""
+    p = remessa_dia.pasta_do_pagador(
+        "D:/saida", _pagador(empresa="UMA / OUTRA: EMPRESA"))
+    assert p.parts[-2] == "UMA OUTRA EMPRESA"
+
+
+def test_nome_que_termina_em_ponto_e_aparado():
+    """O Windows cria a pasta e depois não consegue abri-la."""
+    p = remessa_dia.pasta_do_pagador("D:/saida", _pagador(empresa="EMPRESA S.A."))
+    assert not p.parts[-2].endswith(".")
+
+
+def test_empresa_sem_nome_ainda_tem_onde_cair():
+    p = remessa_dia.pasta_do_pagador("D:/saida", _pagador(empresa=""))
+    assert p.parts[-2] == "EMPRESA"
+
+
+def test_o_arquivo_continua_com_o_nome_de_sempre():
+    """A pasta mudou; o nome do arquivo, não — o histórico e o SicoobNet o
+    reconhecem por ele."""
+    assert remessa_dia.nome_do_arquivo(_pagador(), 7) ==         "REM_MORAIS-ENGENHARIA-LTDA_000007.REM"

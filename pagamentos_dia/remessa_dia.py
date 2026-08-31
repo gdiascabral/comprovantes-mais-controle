@@ -784,6 +784,39 @@ def nome_do_arquivo(pagador: Pagador, nsa: int) -> str:
     return f"REM_{empresa}_{nsa:06d}.REM"
 
 
+def _nome_de_pasta(texto: str, se_vazio: str) -> str:
+    r"""Um pedaço de nome que o Windows aceita como pasta.
+
+    Tira `\ / : * ? " < > |`, que o sistema recusa, e ponto ou espaço no fim,
+    que ele aceita criar e depois não consegue abrir."""
+    limpo = re.sub(r'[\/:*?"<>|]+', " ", (texto or "")).strip(" .")
+    limpo = re.sub(r"\s{2,}", " ", limpo)
+    return limpo[:60] or se_vazio
+
+
+def pasta_do_pagador(destino, pagador: Pagador) -> "Path":
+    """`<destino>/<EMPRESA>/SICOOB <ag>-<conta>` — uma pasta por conta pagadora.
+
+    Cada conta gera o SEU arquivo, e misturá-los numa pasta só era um convite
+    a subir o arquivo de uma conta no acesso de outra: os nomes são parecidos,
+    o NSA é sequencial por convênio e a conferência acontece no SicoobNet,
+    depois do envio. Separado, a pasta aberta já é a resposta.
+
+    Dois níveis, e não um nome comprido: uma empresa costuma ter mais de uma
+    conta, e é a empresa que se procura primeiro.
+
+    "SICOOB" no nome não é enfeite nem chute: a remessa CNAB 240 do app é do
+    Sicoob (ver `MOTIVO_FORA_SICOOB`), e escrever o banco deixa a pasta pronta
+    para o dia em que houver outro.
+    """
+    from pathlib import Path
+
+    empresa = _nome_de_pasta(pagador.empresa, "EMPRESA")
+    conta = _nome_de_pasta(f"SICOOB {pagador.agencia}-{pagador.conta}".strip(),
+                           "SICOOB")
+    return Path(destino) / empresa / conta
+
+
 def referencias(candidatos) -> dict:
     """`{seu número: id do lançamento}` — o de-para que o retorno percorre."""
     return {c.seu_numero: c.id for c in candidatos

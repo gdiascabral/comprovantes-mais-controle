@@ -478,6 +478,16 @@ class PagamentosDiaFrame(ttk.Frame):
         selecionar o primeiro já põe os outros à vista.
         """
         vivos = [c for c in self.ultimas_remessas if c.exists()]
+        if len(vivos) > 1 and len({c.parent for c in vivos}) > 1:
+            # Várias contas, várias pastas: selecionar um arquivo esconderia
+            # os outros. Abre o galho comum e deixa a pessoa escolher.
+            comum = Path(os.path.commonpath([str(c.parent) for c in vivos]))
+            try:
+                os.startfile(comum)                          # noqa: S606
+            except Exception as e:                           # noqa: BLE001
+                messagebox.showwarning("Remessa",
+                                       f"Não consegui abrir a pasta: {e}")
+            return
         if not vivos:
             messagebox.showinfo(
                 "Remessa",
@@ -1898,7 +1908,13 @@ class PagamentosDiaFrame(ttk.Frame):
                     self._log(f"\n[!] {pagador.empresa}: o arquivo não passou na "
                               f"validação, nada foi gravado.\n{_rel_cnab(problemas)}")
                     continue
-                caminho = destino / remessa_dia.nome_do_arquivo(pagador, nsa)
+                # Uma pasta por conta pagadora. Misturados, os arquivos são
+                # parecidos demais — mesmo prefixo, NSA sequencial — e o erro
+                # de subir o de uma conta no acesso de outra só apareceria no
+                # SicoobNet, depois de enviado.
+                pasta_da_conta = remessa_dia.pasta_do_pagador(destino, pagador)
+                pasta_da_conta.mkdir(parents=True, exist_ok=True)
+                caminho = pasta_da_conta / remessa_dia.nome_do_arquivo(pagador, nsa)
                 # Grava num TEMPORÁRIO e só renomeia depois de o histórico
                 # aceitar. Na ordem antiga (`salvar` e então `registrar`), um
                 # registro recusado — NSA fora de ordem, "seu número" repetido,
