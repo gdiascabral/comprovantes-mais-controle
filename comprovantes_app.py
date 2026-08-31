@@ -34,7 +34,8 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 import widgets
-from nuvem import cadastro, login_dialogo, rest, sessao
+from nuvem import cadastro, login_dialogo, rest, sessao, usuarios
+from nuvem.usuarios_frame import UsuariosFrame
 from inicio_frame import InicioFrame
 from separar_renomear import SepararFrame
 from anexar_comprovantes import AnexarFrame
@@ -230,6 +231,11 @@ def main():
         except tk.TclError:
             pass
 
+    # Relido DEPOIS da tela de espera: quem foi liberado ali mesmo, pelo botão
+    # "Conferir de novo", chega aqui com o papel novo — e é o papel que decide
+    # o menu daqui para baixo.
+    _eu = sessao.quem(_pasta_dados())
+
     # ---------------- cadastro compartilhado
     # Aqui, e não dentro de cada aba: existe UM ponto onde a rede pode faltar,
     # ele acontece antes de qualquer trabalho começar, e o pior caso é rodar
@@ -306,6 +312,21 @@ def main():
     atual = {"nome": None}
     itens = {}
 
+    # ---------------- o que este papel enxerga
+    # As abas continuam todas CONSTRUÍDAS, inclusive as que não vão aparecer:
+    # metade delas divide o navegador e a thread do Anexar (Conferência,
+    # Aportes, Relatório, Remessa, Conciliação, Contratos), e deixar de criar
+    # umas e não outras mexeria nessa fiação por um motivo que é só de menu.
+    #
+    # E esconder não é o que protege: quem nega o dado é a RLS, que julga o
+    # token a cada chamada. O menu enxuto existe para o aprovador — que entra
+    # para conferir e liberar a remessa do dia — não ter na frente nove
+    # rotinas que ele não vai rodar, numa tela que mexe com pagamento.
+    _permitidas = usuarios.abas_do_papel(_eu.papel, quadros.keys())
+
+    def _pode(chave: str) -> bool:
+        return chave in _permitidas
+
     def mostrar(nome: str):
         if atual["nome"] == nome:
             return
@@ -348,15 +369,22 @@ def main():
     nomes: dict[str, str] = {}
 
     def _item(pai, chave: str, icone: str, texto: str, recuo: int = 0):
+        if not _pode(chave):
+            return
         it = widgets.ItemMenu(pai, texto, icone=icone, recuo=recuo,
                               comando=lambda: mostrar(chave))
         it.pack(fill="x")
         itens[chave] = it
         nomes[chave] = texto
 
-    lateral.secao("Visão geral")
-    _item(lateral.corpo, "ini", "▦", "Início")
-    lateral.secao("Comprovantes")
+    if _pode("ini"):
+        lateral.secao("Visão geral")
+        _item(lateral.corpo, "ini", "▦", "Início")
+    # O rótulo de seção sem nenhum item embaixo fica pior do que a seção
+    # inteira ausente: parece que as abas sumiram, e não que elas não são
+    # desta pessoa.
+    if any(_pode(c) for c in ("sep", "anx", "conf", "apt")):
+        lateral.secao("Comprovantes")
     # Os rótulos encurtaram junto com a coluna: "Anexar Comprovantes" dentro
     # de um menu chamado COMPROVANTES repetia a palavra em duas alturas.
     for _chave, _icone, _texto in (("sep", "✂", "Separar e Renomear"),
@@ -386,6 +414,9 @@ def main():
             _salvar_prefs(prefs)
 
     def _grupo(nome: str, rotulo: str, itens_do_grupo):
+        itens_do_grupo = tuple(t for t in itens_do_grupo if _pode(t[0]))
+        if not itens_do_grupo:
+            return                       # grupo sem item nenhum não aparece
         titulo = lambda aberto: f"{'▾' if aberto else '▸'}  {rotulo}"  # noqa: E731
         # Continua sendo um Button — ele abre e fecha o grupo, e trocar por um
         # Label com bind de clique tiraria o item do Tab e do Espaço. O que
@@ -429,12 +460,27 @@ def main():
                                 style="BarraTenue.TLabel")
         _lbl_versao.pack(side="left", padx=(0, 16), pady=14)
         widgets.Dica(_lbl_versao, f"versão {_v}")
-    _eu = sessao.quem(_pasta_dados())
     widgets.Avatar(barra.direita, _eu.email).pack(side="left", pady=11)
-    ttk.Label(barra.direita, text=_eu.email.split("@")[0][:22],
-              style="Barra.TLabel").pack(side="left", padx=(8, 0), pady=14)
+    _lbl_quem = ttk.Label(barra.direita, text=_eu.primeiro_nome[:22],
+                          style="Barra.TLabel")
+    _lbl_quem.pack(side="left", padx=(8, 0), pady=14)
+    # O papel na dica, e não na barra: ele importa no dia em que alguém
+    # estranha uma aba que não está lá, e nos outros 364 seria ruído.
+    if _eu.papel:
+        widgets.Dica(_lbl_quem, f"{_eu.email} — {_eu.papel}")
 
-    # ---------------- rodapé do menu: tema e situação do cadastro
+    # ---------------- rodapé do menu: usuários (admin), tema e cadastro
+    # No rodapé, e não na lista de abas: administrar quem entra não é uma
+    # rotina do dia — fica junto do tema e da versão, que são as outras coisas
+    # que se mexe de vez em quando.
+    if _eu.admin:
+        aba_usr = UsuariosFrame(conteudo,
+                                lambda: _token_ou_vazio(_pasta_dados()), _eu)
+        quadros["usr"] = aba_usr
+        _permitidas = _permitidas + ("usr",)
+        _item(lateral.rodape, "usr", "👥", "Usuários")
+        ttk.Frame(lateral.rodape, height=10).pack()
+
     ttk.Label(lateral.rodape, text="TEMA", style="MenuSecao.TLabel"
               ).pack(anchor="w", pady=(0, 3))
     combo_tema = ttk.Combobox(lateral.rodape, state="readonly", width=19,
@@ -582,7 +628,10 @@ def main():
     aba_ini.definir_navegacao(mostrar)
 
     aplicar_tema(escolha_tema)
-    mostrar("ini")
+    # "ini" para quase todo mundo; para um papel que não a alcance, a
+    # primeira que ele alcança. Abrir numa aba que o menu não mostra deixaria
+    # o app com a tela de um item inexistente selecionado.
+    mostrar("ini" if _pode("ini") else next(iter(_permitidas), "ini"))
     _pulso()
 
     def _sair():
