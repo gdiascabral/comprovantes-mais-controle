@@ -511,17 +511,28 @@ def baixar_da_pagina(page, pasta: Path, resultado: Resultado,
     return resultado
 
 
-def baixar(conta: str, inicio: str, fim: str, pasta, *, pular: int = 0,
+def baixar(conta: str, inicio: str, fim: str, pasta, *,
            log=print, headless: bool = False,
            tambem_2via: bool = True) -> Resultado:
-    """Baixa os comprovantes de UMA conta do Inter. Um QR, dois passes.
+    """Os comprovantes de UMA conta do Inter. Um QR, dois passes, uma pasta.
 
-    Passe 1, o Extrato Pix: todo "Pix Enviado" do período, COM descrição.
-    Passe 2, a 2ª via: só as linhas de PAGAMENTO (boleto). Os dois na mesma
-    sessão e na mesma pasta — para o Anexar, um comprovante é um comprovante.
+    Passe 1, o extrato Pix: todo Pix ENVIADO do período, com a descrição que
+    o Anexar usa para casar.
+    Passe 2, a 2ª via: PAGAMENTO e DARF.
+
+    Os dois na MESMA sessão porque o Inter pede o QR a cada abertura — trava
+    dele, conferida: perfil salvo não a vence. Tudo o que precisa da sessão
+    tem de caber nela.
+
+    Fala com a API, e não com a tela. A tela é uma casca sobre estas mesmas
+    chamadas, e falar com elas resolveu de uma vez o que a casca cobrou caro:
+    o filtro de data que ignorava calado, o teto de 100 linhas por página, os
+    seletores de classe gerada, e os 2 s de pausa por clique. O caminho pela
+    tela está em `0b9303d`, se um dia a API mudar de forma.
 
     Não levanta por conta que falhou: o desfecho vem no `Resultado`, porque a
-    fila da aba (fase 4) precisa seguir para a próxima conta."""
+    fila da aba (fase 4) precisa seguir para a próxima conta.
+    """
     from playwright.sync_api import sync_playwright
 
     resultado = Resultado(conta=conta)
@@ -537,49 +548,42 @@ def baixar(conta: str, inicio: str, fim: str, pasta, *, pular: int = 0,
     perfil.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as pw:
-        # Persistente e com pasta por conta: é o que faz o QR ser pedido uma
-        # vez por dia, e não uma vez por execução.
+        # Uma pasta de perfil por conta: no Inter cada conta é um login, e um
+        # perfil só faria a segunda entrar como a primeira — baixando os
+        # comprovantes da errada, sem nada na tela dizendo isso.
         ctx = pw.chromium.launch_persistent_context(
             str(perfil), channel="chrome", headless=headless,
             accept_downloads=True, args=["--start-maximized"],
             no_viewport=True)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        autorizacao = escutar_autorizacao(page)
         try:
             page.goto(URL_LOGIN)
             esperar_login(page, log=log)
-            if URL_EXTRATO not in page.url:
-                page.goto(URL_EXTRATO)
-                time.sleep(2)
 
-            chip = aplicar_filtro_datas(page, inicio, fim, log=log)
-            if not chip:
-                resultado.motivo = (f"não consegui aplicar o período "
-                                    f"{inicio} a {fim} na tela do Inter")
-                return resultado
-            resultado.periodo_confirmado = chip
-            log(f"Período na tela: {chip}")
+            # O extrato precisa ser ABERTO mesmo usando a API: é a página que
+            # carrega a sessão no cabeçalho, e é do cabeçalho de uma chamada
+            # dela que sai a autorização. Sem passar por aqui, não há o que
+            # escutar.
+            page.goto(URL_EXTRATO)
+            page.wait_for_timeout(6000)
+            resultado.periodo_confirmado = f"{inicio} a {fim}"
 
-            if not ativar_saida(page):
-                # Sem o "Saída" viriam também os Pix RECEBIDOS, e comprovante
-                # de entrada na pasta de pagamento é o erro que a validação da
-                # fase 3 existe para pegar. Melhor não baixar nada.
-                resultado.motivo = "não consegui ligar o filtro 'Saída'"
-                return resultado
+            log("Comprovantes de Pix:")
+            baixar_pix_pela_api(page, destino, resultado, inicio, fim,
+                                autorizacao, log=log)
 
-            baixar_da_pagina(page, destino, resultado, pular=pular, log=log)
-
-            # O SEGUNDO passe, sem novo QR: o Inter pede o código a cada
-            # abertura, então tudo o que precisa da sessão tem de acontecer
-            # enquanto ela está de pé. Duas execuções separadas seriam duas
-            # leituras e uma janela para a sessão expirar no meio.
             if tambem_2via and not resultado.motivo:
-                log("Agora os comprovantes de pagamento (2ª via).")
-                baixar_2via(page, destino, resultado, inicio, fim, log=log)
+                log("Comprovantes de pagamento (2ª via):")
+                baixar_2via_pela_api(page, destino, resultado, inicio, fim,
+                                     autorizacao, log=log)
         except InterFalhou as e:
             resultado.motivo = str(e)
         except Exception as e:                               # noqa: BLE001
             resultado.motivo = f"erro inesperado: {e}"
         finally:
+            # O cabeçalho some antes de qualquer outra coisa acontecer.
+            autorizacao["valor"] = ""
             try:
                 ctx.close()
             except Exception:                                # noqa: BLE001
