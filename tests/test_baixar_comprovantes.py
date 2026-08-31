@@ -140,3 +140,108 @@ def test_a_marca_de_tela_e_por_conteudo_e_nao_exata():
     assert not inter.tela_diz("carregando...", inter.MARCAS_DE_EXTRATO)
     assert inter.tela_diz("Acesse sua conta com o QR Code",
                           inter.MARCAS_DE_LOGIN)
+
+
+# --------------------------------------------------- o segundo passe (2ª via)
+# Um QR, dois passes: o Extrato Pix e depois a tela "Comprovante 2ª via", na
+# MESMA sessão. O Inter pede o código a cada abertura, então tudo o que precisa
+# da sessão tem de caber nela.
+
+def test_o_resumo_separa_boleto_de_pix(tmp_path):
+    """Quem lê a pill precisa saber que os dois passes rodaram — 46 e 46+3 são
+    a mesma frase se o boleto não aparecer."""
+    r = inter.Resultado(conta="X", total_na_tela=46, total_2via=3,
+                        baixados=[tmp_path / f"{i}.pdf" for i in range(49)])
+    assert "49 de 49" in r.resumo()
+    assert "+3 de boleto" in r.resumo()
+
+
+def test_sem_boleto_o_resumo_nao_inventa_coluna():
+    r = inter.Resultado(conta="X", total_na_tela=46, total_2via=0,
+                        baixados=[])
+    assert "boleto" not in r.resumo()
+
+
+def test_a_2via_nunca_e_a_origem_dos_pix():
+    """O PDF da 2ª via vem SEM descrição, e descrição é o que faz o Anexar
+    casar. Se alguém um dia trocar o filtro para "Pix" achando que simplifica,
+    o casamento quebra sem quebrar teste nenhum — este teste é o aviso."""
+    tipos = [t for t, _rotulo in inter.TIPOS_DA_2VIA]
+    assert tipos == ["Pagamento", "DARF"]
+    assert "Pix" not in tipos, (
+        "Pix por esta tela vem sem descrição, e descrição é o que faz o "
+        "Anexar casar sozinho")
+    # O texto conferido na linha é o que a coluna Tipo mostra, em maiúsculas.
+    for tipo, rotulo in inter.TIPOS_DA_2VIA:
+        assert rotulo == rotulo.upper()
+        assert rotulo.startswith(tipo[:4].upper())
+
+
+def test_os_seletores_da_2via_nao_dependem_de_classe_gerada():
+    """As classes da tela são styled-components (`sc-fgSWkL jVOOTC`) e mudam a
+    cada build do banco. Ancorar nelas é escrever código com data de validade."""
+    for seletor in (inter.SEL_LINHA, inter.SEL_CELULAS):
+        assert "sc-" not in seletor
+        assert "role=" in seletor
+
+
+# ------------------------------------------ o período, lido da própria linha
+# Três tentativas de preencher o filtro de data da tela falharam, e a terceira
+# falhou CALADA: o site ignorou o que foi digitado e a busca saiu com os três
+# meses padrão — 71 comprovantes onde se pediu 13, sem um erro na tela. A data
+# passou a sair da linha, que é o que o banco afirma ter acontecido.
+
+def test_a_data_vem_da_linha():
+    assert inter.data_da_linha("PAGAMENTO 28/08/2026 R$ 108,39")
+    assert inter.data_da_linha("PAGAMENTO 28/08/2026 R$ 108,39").day == 28
+
+
+def test_linha_sem_data_nao_tem_data():
+    assert inter.data_da_linha("PAGAMENTO R$ 108,39") is None
+    assert inter.data_da_linha("") is None
+
+
+@pytest.mark.parametrize("linha,dentro", [
+    ("PAGAMENTO 24/08/2026 R$ 1,00", True),    # o primeiro dia entra
+    ("PAGAMENTO 31/08/2026 R$ 1,00", True),    # o último também
+    ("PAGAMENTO 28/08/2026 R$ 1,00", True),
+    ("PAGAMENTO 23/08/2026 R$ 1,00", False),   # um dia antes
+    ("PAGAMENTO 01/09/2026 R$ 1,00", False),   # um dia depois
+    ("PAGAMENTO 15/06/2026 R$ 1,00", False),   # o padrão de três meses da tela
+])
+def test_o_periodo_e_fechado_dos_dois_lados(linha, dentro):
+    assert inter.dentro_do_periodo(linha, "24/08/2026", "31/08/2026") is dentro
+
+
+def test_linha_sem_data_legivel_fica_de_fora():
+    """De fora, e não dentro. Pular um comprovante vira "sem anexo" na
+    conferência, que alguém vê; baixar o que não se sabe datar é três meses
+    virarem "a semana passada" sem ninguém notar."""
+    assert not inter.dentro_do_periodo("PAGAMENTO R$ 108,39",
+                                       "24/08/2026", "31/08/2026")
+
+
+def test_periodo_invalido_nao_deixa_tudo_passar():
+    """O contrário seria o pior desfecho: período quebrado virando "baixe
+    tudo"."""
+    assert not inter.dentro_do_periodo("PAGAMENTO 28/08/2026 R$ 1,00",
+                                       "", "31/08/2026")
+
+
+def test_o_tipo_procurado_sobrevive_ao_laco_que_le_as_datas():
+    """O laço que lê as datas chamava a sua variável de `texto` — o mesmo nome
+    do PARÂMETRO com o tipo procurado. Ele pisava no parâmetro, e o download
+    passava a procurar linhas contendo o conteúdo inteiro da última linha
+    lida: nenhuma casava, e cada uma vinha vazia, sem td e sem HTML.
+
+    Custou quatro leituras de QR procurando na tela um defeito que era uma
+    variável reaproveitada. O teste lê o código porque o defeito só aparece
+    com o banco na frente — e aí é tarde."""
+    import inspect
+
+    fonte = inspect.getsource(inter._baixar_um_tipo)
+    corpo = fonte.split("escolhidas, fora = [], []")[1]
+    assert "texto =" not in corpo, (
+        "o laço voltou a atribuir `texto`, que é o parâmetro com o tipo")
+    assert "_linhas_do_tipo(page, texto)" in corpo, (
+        "o download tem de filtrar pelo TIPO, não pelo texto de uma linha")

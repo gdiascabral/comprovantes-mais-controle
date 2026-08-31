@@ -24,11 +24,17 @@ período sem pagamento é justamente o mais comum numa segunda-feira. Aqui a
 prova de login é o EXTRATO ter carregado (`marcas_de_extrato`), e a contagem
 de linhas é uma pergunta separada, feita depois.
 
-**Perfil de Chrome por conta.** O script abria navegador limpo a cada
-execução, então o QR era pedido de novo toda vez. O padrão copiado é o do
-Sicoob (`launch_persistent_context`), com uma pasta POR conta — no Inter cada
-conta é um login, e um perfil só faria a segunda conta herdar a sessão da
-primeira.
+**Perfil de Chrome por conta.** Uma pasta POR conta, no padrão do Sicoob
+(`launch_persistent_context`). No Inter cada conta é um login, e um perfil só
+faria a segunda conta herdar a sessão da primeira — baixando os comprovantes
+da errada, sem nada na tela dizendo isso.
+
+O que o perfil **não** faz é poupar o QR. Conferido em 31/08/2026: o Inter
+pede o código de novo a cada abertura, mesmo com a sessão anterior gravada na
+pasta. É trava do banco, e não defeito daqui — a expectativa contrária estava
+escrita neste comentário e era falsa. A consequência para a fila da aba (fase
+4) é de desenho, não de detalhe: **uma leitura de QR por conta, toda vez**, e
+é por isso que o Sicoob vem primeiro na fila (um QR resolve N contas).
 """
 from __future__ import annotations
 
@@ -91,14 +97,71 @@ JS_TEM_ERRO = "() => document.body.innerText.includes('Ocorreu um erro')"
 #:
 #: Mais de uma porque nenhuma é garantida: o Inter muda rótulo sem avisar, e
 #: bastar UMA delas é o que impede a troca de uma palavra de derrubar o motor.
-#: A lista é confirmada na primeira rodada com QR de verdade — antes disso
-#: ela é hipótese, e o `sondar` existe para transformá-la em fato.
-MARCAS_DE_EXTRATO = ("Extrato", "Saída", "Entrada", "Filtrar", "Pix")
+#:
+#: CONFERIDAS na tela logada em 31/08/2026 (`sondar`): "Extrato Pix", "Saldo",
+#: "Bloqueados", "Ordenação", "Saída" e "Entrada" estavam todas lá. "Filtrar"
+#: NÃO estava — ele mora dentro do modal do filtro, e não no corpo da página.
+#:
+#: O "Pix" solto saiu de propósito: ele aparece no menu de QUALQUER tela do
+#: banco, inclusive antes de entrar, e uma marca que também vale deslogado não
+#: prova login nenhum.
+MARCAS_DE_EXTRATO = ("Extrato Pix", "Ordenação", "Bloqueados",
+                     "Saída", "Entrada")
 
 #: O que prova que a tela de LOGIN ainda está na frente. Enquanto qualquer uma
 #: aparecer, ninguém escaneou nada.
+#:
+#: A conferência de 31/08/2026 mostrou que NENHUMA delas sobra na tela logada
+#: — que é a metade que importa: uma marca de login que também aparecesse
+#: depois de entrar travaria o motor para sempre, esperando um login que já
+#: aconteceu.
 MARCAS_DE_LOGIN = ("QR Code", "QR code", "Ler o QR", "Acesse sua conta",
                    "Entrar com", "Internet Banking")
+
+
+# ------------------------------------------------------- comprovante 2ª via
+# A segunda tela do Inter, e o segundo passe da MESMA sessão: terminado o Pix,
+# o motor vai direto para cá sem novo QR.
+#
+# **Por que os Pix NÃO vêm daqui.** O mesmo pagamento aparece nas duas telas, e
+# o PDF desta vem SEM a descrição — que é exatamente o campo pelo qual o Anexar
+# casa o comprovante com o lançamento. Baixar tudo de um lugar só pareceria uma
+# simplificação e quebraria o casamento sem quebrar teste nenhum. Cada tipo tem
+# a sua origem, e ela é fixa: Pix pelo Extrato Pix, boleto por aqui.
+URL_2VIA = "https://contadigital.inter.co/segunda-via-comprovantes"
+
+#: Os tipos que a 2ª via traz, e o texto que cada um mostra na coluna "Tipo".
+#: Conferido na tela em 31/08/2026, que oferece seis: Resgate/Aplicação,
+#: Transferência, Pagamento, Pix, DARF e Débito Automático.
+#:
+#: Uma BUSCA POR TIPO, e não uma só com tudo: o dropdown escolhe um de cada
+#: vez, e filtrar no servidor mantém cada página curta — com todos os tipos
+#: juntos, os Pix (que são a maioria) empurrariam os pagamentos para a segunda
+#: página, que este passe não percorre.
+#:
+#: Pix fica de fora e não é esquecimento: o PDF desta tela vem SEM descrição, e
+#: é a descrição que faz o Anexar casar. Os Pix vêm do Extrato Pix, com ela.
+TIPOS_DA_2VIA = (("Pagamento", "PAGAMENTO"),
+                 ("DARF", "DARF"))
+
+#: As classes da tela são geradas (`sc-fgSWkL jVOOTC`, styled-components) e
+#: mudam a cada build do banco — ancorar nelas é escrever código com data de
+#: validade. O que se usa é o que descreve função: papéis ARIA, o tipo do
+#: input, e o texto visível.
+SEL_LINHA = "tr[role=row]"
+
+#: O botão de baixar é o ÍCONE de arquivo na última coluna, e clicar nele já
+#: baixa — sem marcar nada, sem confirmar. A caixa de seleção da primeira
+#: coluna faz aparecer um "Download" em lote, mas ele fica de fora: ninguém
+#: conferiu se ele devolve um arquivo POR comprovante ou um PDF só com todos
+#: juntos, e um arquivo só seria inútil para o Anexar, que casa UM comprovante
+#: com UM lançamento. O ícone não tem essa dúvida.
+#:
+#: Sem `:last-child`: o pseudo-seletor exige que a célula seja o último FILHO
+#: do `<tr>`, e ela não é — bastou um elemento depois dela para o motor dizer
+#: "a linha não tem a coluna do ícone" nas duas linhas que achou. Pega-se a
+#: última que EXISTE (`.last`), que é o que se quer dizer.
+SEL_CELULAS = "td[role=cell]"
 
 
 class InterFalhou(RuntimeError):
@@ -113,6 +176,7 @@ class Resultado:
     baixados: list[Path] = field(default_factory=list)
     falhas: list[int] = field(default_factory=list)
     total_na_tela: int = 0
+    total_2via: int = 0                  # comprovantes de PAGAMENTO (boleto)
     periodo_confirmado: str = ""
     motivo: str = ""                     # "" = deu certo
 
@@ -127,10 +191,12 @@ class Resultado:
     def resumo(self) -> str:
         if self.motivo:
             return self.motivo
-        if not self.total_na_tela:
+        se_houve = self.total_na_tela + self.total_2via
+        if not se_houve:
             return "sem lançamentos no período"
         falhou = f" · {len(self.falhas)} falharam" if self.falhas else ""
-        return f"{self.quantos} de {self.total_na_tela} comprovantes{falhou}"
+        boleto = f" (+{self.total_2via} de boleto)" if self.total_2via else ""
+        return (f"{self.quantos} de {se_houve} comprovantes{boleto}{falhou}")
 
 
 # --------------------------------------------------------------- sem tela
@@ -429,8 +495,13 @@ def baixar_da_pagina(page, pasta: Path, resultado: Resultado,
 
 
 def baixar(conta: str, inicio: str, fim: str, pasta, *, pular: int = 0,
-           log=print, headless: bool = False) -> Resultado:
-    """Baixa os comprovantes Pix de UMA conta do Inter. Um QR, um lote.
+           log=print, headless: bool = False,
+           tambem_2via: bool = True) -> Resultado:
+    """Baixa os comprovantes de UMA conta do Inter. Um QR, dois passes.
+
+    Passe 1, o Extrato Pix: todo "Pix Enviado" do período, COM descrição.
+    Passe 2, a 2ª via: só as linhas de PAGAMENTO (boleto). Os dois na mesma
+    sessão e na mesma pasta — para o Anexar, um comprovante é um comprovante.
 
     Não levanta por conta que falhou: o desfecho vem no `Resultado`, porque a
     fila da aba (fase 4) precisa seguir para a próxima conta."""
@@ -479,6 +550,14 @@ def baixar(conta: str, inicio: str, fim: str, pasta, *, pular: int = 0,
                 return resultado
 
             baixar_da_pagina(page, destino, resultado, pular=pular, log=log)
+
+            # O SEGUNDO passe, sem novo QR: o Inter pede o código a cada
+            # abertura, então tudo o que precisa da sessão tem de acontecer
+            # enquanto ela está de pé. Duas execuções separadas seriam duas
+            # leituras e uma janela para a sessão expirar no meio.
+            if tambem_2via and not resultado.motivo:
+                log("Agora os comprovantes de pagamento (2ª via).")
+                baixar_2via(page, destino, resultado, inicio, fim, log=log)
         except InterFalhou as e:
             resultado.motivo = str(e)
         except Exception as e:                               # noqa: BLE001
@@ -531,3 +610,207 @@ def sondar(conta: str = "sonda", log=print) -> dict:
             except Exception:                                # noqa: BLE001
                 pass
     return achados
+
+
+def _escolher_tipo(page, tipo: str, log=print) -> bool:
+    """Escolhe no dropdown "Tipos" (um react-select).
+
+    O clique tem de ser no CONTAINER (`-control`), e não no texto do
+    placeholder: clicar no texto dá timeout, porque quem escuta o clique é o
+    componente de fora. Foi assim que a sonda descobriu — 30 s perdidos.
+    """
+    try:
+        page.locator("[class*='-control']").first.click()
+        page.wait_for_timeout(1200)
+        opcao = page.locator("[id^=react-select]").filter(has_text=tipo).last
+        if not opcao.count():
+            log(f"  não achei a opção {tipo!r} no dropdown de tipos")
+            return False
+        opcao.click()
+        page.wait_for_timeout(800)
+        return True
+    except Exception as e:                                   # noqa: BLE001
+        log(f"  não consegui escolher o tipo: {e}")
+        return False
+
+
+def data_da_linha(texto):
+    """A data que a própria linha mostra: "PAGAMENTO 28/08/2026 R$ 108,39".
+
+    É por aqui que o período é respeitado, e NÃO pelo filtro de data da tela.
+    O campo de lá é um seletor de INTERVALO: os dois inputs de cada campo
+    andam em par, mexer no início APAGA o fim, e digitar neles não pegou em
+    três tentativas. Na terceira ele ignorou o que foi digitado e a busca saiu
+    com os três meses padrão, sem um erro sequer na tela — 71 comprovantes
+    baixados no lugar de 13. Filtro que falha calado é o pior que existe:
+    ninguém percebe o que não veio.
+
+    A data escrita na linha não tem esse problema. É o que o banco afirma que
+    aconteceu, e está à vista de quem confere.
+    """
+    achado = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", texto or "")
+    return data_valida(achado.group(1)) if achado else None
+
+
+def dentro_do_periodo(texto: str, inicio: str, fim: str) -> bool:
+    """A linha cai no período pedido? Linha sem data legível fica de FORA.
+
+    De fora, e não dentro: o custo de pular um comprovante é ele aparecer sem
+    anexo na conferência, que alguém vê. O de baixar o que não se sabe datar é
+    três meses virarem "a semana passada" sem ninguém notar.
+    """
+    quando = data_da_linha(texto)
+    d1, d2 = data_valida(inicio), data_valida(fim)
+    if not quando or not d1 or not d2:
+        return False
+    return d1 <= quando <= d2
+
+
+def _pedir_pagina_cheia(page, log=print) -> None:
+    """100 linhas por página, para não ter de paginar.
+
+    Best-effort: se não der, o motor ainda funciona — só percorre menos por
+    vez. O `<select>` tem `id`, e não `name`: a primeira tentativa mirou o
+    `name` e levou timeout."""
+    for seletor in ("select#rows-per-page-options",
+                    "select[name=rows-per-page-options]", "select"):
+        try:
+            page.select_option(seletor, "100", timeout=5000)
+            page.wait_for_timeout(2500)
+            return
+        except Exception:                                    # noqa: BLE001
+            continue
+    log("  segui com o tamanho de página padrão")
+
+
+def _linhas_do_tipo(page, texto: str):
+    """As linhas cuja coluna Tipo diz esta palavra.
+
+    Conferir de novo o que o servidor já filtrou é cinto e suspensório: se um
+    dia o filtro de lá falhar calado — como o de DATA falhou —, é isto que
+    impede o motor de baixar o que não devia."""
+    return page.locator(SEL_LINHA).filter(has_text=texto)
+
+
+def _onde_clicar_para_baixar(linha, log=print):
+    """O que se clica para baixar UMA linha. Levanta dizendo o que viu.
+
+    Três hipóteses em cascata, da mais específica para a mais frouxa, porque
+    duas tentativas já morreram em "a linha não tem a coluna do ícone" — uma
+    frase que diz o que faltou e não o que existe. Quando nenhuma serve, o
+    erro carrega o HTML da linha: é ele que resolve, e não mais um palpite.
+    """
+    for descricao, seletor in (("a última célula", "td[role=cell]"),
+                               ("a última célula sem papel", "td"),
+                               ("o que envolve um svg", "span:has(svg)"),
+                               ("qualquer svg", "svg")):
+        alvo = linha.locator(seletor)
+        if alvo.count():
+            escolhido = alvo.last
+            # O clique vai no PAI do svg quando houver um: svg não recebe
+            # clique de forma confiável no Playwright.
+            dentro = escolhido.locator("span:has(svg)")
+            if dentro.count():
+                return dentro.last
+            return escolhido
+        log(f"    (sem {descricao})")
+    trecho = ""
+    try:
+        trecho = linha.evaluate("el => el.outerHTML")[:400]
+    except Exception:                                        # noqa: BLE001
+        pass
+    raise InterFalhou(f"não achei onde clicar nesta linha. HTML: {trecho}")
+
+
+def baixar_2via(page, pasta: Path, resultado: Resultado, inicio: str, fim: str,
+                log=print) -> Resultado:
+    """O segundo passe: os comprovantes de PAGAMENTO (boleto), na mesma sessão.
+
+    Clica no ícone de arquivo da última coluna, que baixa direto — sem marcar,
+    sem confirmar. Ver `SEL_BOTAO_BAIXAR` para por que não é o lote.
+    """
+    page.goto(URL_2VIA)
+    page.wait_for_timeout(4000)
+    for tipo, texto in TIPOS_DA_2VIA:
+        log(f"\n2ª via — {tipo}:")
+        _baixar_um_tipo(page, pasta, resultado, inicio, fim, tipo, texto,
+                        log=log)
+    return resultado
+
+
+def _baixar_um_tipo(page, pasta: Path, resultado: Resultado, inicio: str,
+                    fim: str, tipo: str, texto: str, log=print) -> Resultado:
+    """Uma busca, um tipo. Falhar num tipo não derruba o outro."""
+    if not _escolher_tipo(page, tipo, log=log):
+        log(f"  não consegui filtrar por {tipo}; pulei")
+        return resultado
+
+    try:
+        page.locator("button", has_text="Pesquisar").first.click()
+    except Exception as e:                                   # noqa: BLE001
+        log(f"  não consegui pesquisar {tipo}: {e}")
+        return resultado
+    page.wait_for_timeout(4000)
+    _pedir_pagina_cheia(page, log=log)
+
+    linhas = _linhas_do_tipo(page, texto)
+    na_tela = linhas.count()
+    if not na_tela:
+        log(f"  nenhum {tipo} na tela.")
+        return resultado
+
+    # A tela traz o período padrão dela (três meses). O recorte é feito aqui,
+    # pela data de cada linha, e o que fica de fora sai no log com a data —
+    # para quem confere ver que foi decisão, e não esquecimento.
+    # `dizeres`, e não `texto`: `texto` é o PARÂMETRO com o tipo procurado
+    # ("PAGAMENTO"), e reusar o nome aqui o substituía pelo conteúdo da última
+    # linha lida. O filtro do laço de baixo passava então a procurar linhas
+    # contendo "PAGAMENTO 20/08/2026 R$ 750,00" — nenhuma casa, e cada linha
+    # vinha vazia, sem td e sem HTML. Quatro leituras de QR atrás de um defeito
+    # de tela que era uma variável pisada.
+    escolhidas, fora = [], []
+    for i in range(na_tela):
+        dizeres = " ".join(linhas.nth(i).inner_text().split())
+        (escolhidas if dentro_do_periodo(dizeres, inicio, fim)
+         else fora).append((i, dizeres[:60]))
+    log(f"{na_tela} na tela · {len(escolhidas)} dentro de {inicio}–{fim}")
+    for _i, t in fora[:5]:
+        log(f"  fora do período: {t}")
+    # A lista vem da mais NOVA para a mais velha (conferido: 28/08, 20/08,
+    # 19/08...). Então, com a página cheia, só há risco de faltar coisa se a
+    # linha mais VELHA da página ainda estiver dentro do período — aí o
+    # período continua na página seguinte. Avisar sempre que enchesse seria
+    # gritar todo dia por um problema que quase nunca existe, e aviso que
+    # sempre aparece é aviso que ninguém lê.
+    if na_tela >= 100 and fora:
+        mais_velha = data_da_linha(fora[-1][1]) if fora else None
+        if mais_velha and mais_velha >= (data_valida(inicio) or mais_velha):
+            log("  ATENÇÃO: a página encheu e o período continua além dela — "
+                "pode haver comprovante numa segunda página.")
+    elif na_tela >= 100 and not fora:
+        log("  ATENÇÃO: as 100 linhas da página estão TODAS no período — "
+            "quase certamente há mais numa segunda página.")
+    if not escolhidas:
+        return resultado
+
+    total = len(escolhidas)
+    for pos, (i, _t) in enumerate(escolhidas, start=1):
+        try:
+            linha = _linhas_do_tipo(page, texto).nth(i)
+            alvo = _onde_clicar_para_baixar(linha, log=log)
+            with page.expect_download(timeout=30000) as espera:
+                alvo.click()
+            arquivo = espera.value
+            destino = nome_livre(pasta, arquivo.suggested_filename)
+            arquivo.save_as(destino)
+            resultado.baixados.append(destino)
+            resultado.total_2via += 1
+            log(f"[2ª via {pos}/{total}] {destino.name}")
+        except Exception as e:                               # noqa: BLE001
+            resultado.falhas.append(1000 + i)   # 1000+ = veio da 2ª via
+            log(f"[2ª via {pos}/{total}] falhou ({e}) — seguindo")
+        finally:
+            # A pausa fica: é a mesma API do Inter do outro passe, e ela
+            # bloqueia quem clica rápido demais.
+            time.sleep(PAUSA_ENTRE_ITENS)
+    return resultado

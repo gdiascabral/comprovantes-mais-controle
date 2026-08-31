@@ -1,5 +1,12 @@
 __pycache__/
 *.pyc
+# Perfil de navegador, EM QUALQUER PASTA. Sem prefixo de caminho de propósito:
+# as regras abaixo nomeavam um lugar cada, e rodar um motor pela raiz do
+# repositório (em vez de pelo `_app`) criava o perfil AQUI, fora de todas elas.
+# Um perfil desses carrega a sessão aberta do banco; num repositório público,
+# é a pior coisa que se pode versionar por descuido.
+.chrome_profile*/
+
 .chrome_profile/
 build/
 dist/
