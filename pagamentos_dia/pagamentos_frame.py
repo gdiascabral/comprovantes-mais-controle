@@ -142,6 +142,15 @@ _BANCO = re.compile(
     r"(?=\s+(?:ag|ag[êe]ncia|c/c|cc|conta|c\.c\.)\b|\s*$)", re.I)
 
 
+#: A cor do dado de pagamento, pelo que vai acontecer com o lançamento.
+#: Mora fora da função porque o teste aponta para ela: é o mapa que garante
+#: que `atencao` tem um estilo próprio, e não cai no vermelho por omissão.
+ESTILO_DO_DADO = {
+    "ok": "MonoMini.TLabel",
+    "atencao": "MonoMiniAtencao.TLabel",
+    "erro": "MonoMiniErro.TLabel",
+}
+
 def quem_recebe(item: dict, ja_lido: dict | None = None) -> tuple[str, str, str]:
     """Para quem vai o dinheiro e POR ONDE. Devolve (nome, dado, estado).
 
@@ -158,9 +167,17 @@ def quem_recebe(item: dict, ja_lido: dict | None = None) -> tuple[str, str, str]
     passar OCR, e isso é trabalho do passo 2, com o navegador na mão; fazê-lo
     aqui abriria uma segunda coleta em rede no meio de uma janela modal.
 
-    Boleto ainda não lido aparece com o recado em vermelho, e não em branco:
-    "não sei a linha digitável" é uma informação sobre o pagamento, e quem
-    confirma precisa dela para decidir se abre o boleto antes.
+    Boleto ainda não lido aparece com o recado no lugar do dado, e não em
+    branco: "não sei a linha digitável" é uma informação sobre o pagamento, e
+    quem confirma precisa dela para decidir se abre o boleto antes.
+
+    **O estado diz o que vai acontecer, não o que está faltando.** Os três
+    casos sem dado de pagamento saíam como `erro` — vermelhos —, e vermelho
+    na frente de um item que continua marcado e gera assim mesmo é lido como
+    defeito do app. Eles são `atencao`: o lançamento ENTRA na planilha, e o
+    que ele não faz é entrar na remessa. Quem lê precisa da consequência
+    ("pagar à mão"), não do diagnóstico. `erro` fica reservado para o que não
+    sai de jeito nenhum.
     """
     favorecido = (item.get("paidTo") or "?").strip()
     pago_para = (item.get("paidToBankAccount") or "").strip()
@@ -171,22 +188,27 @@ def quem_recebe(item: dict, ja_lido: dict | None = None) -> tuple[str, str, str]
         chave = relatorio.extrair_chave_pix(pago_para) if pago_para else ""
         if relatorio.parece_chave_pix(chave):
             return favorecido, f"PIX  {chave}", "ok"
-        return (favorecido, "sem chave Pix no cadastro — abrir o lançamento",
-                "erro")
+        return (favorecido,
+                "PIX  sem chave no cadastro — não entra na remessa: pagar à mão",
+                "atencao")
 
     if tipo == "Boleto":
         linha = (ja_lido or {}).get(ident) or ""
         if linha:
             return favorecido, f"BOLETO  {ocr_boleto.formatar(linha)}", "ok"
-        return (favorecido, "linha digitável não lida — abrir o boleto",
-                "erro")
+        return (favorecido,
+                "BOLETO  sem código de barras — não entra na remessa, "
+                "só na planilha",
+                "atencao")
 
     # TED e o que mais o ERP chamar de forma de pagamento. O texto do cadastro
     # é livre: quando dá para separar banco/agência/conta, separa; quando não
     # dá, mostra o que está lá — o que está lá é o que a pessoa vai usar.
     rotulo = (tipo or "TED").upper()
     if not pago_para:
-        return favorecido, f"{rotulo}  sem conta no cadastro", "erro"
+        return (favorecido,
+                f"{rotulo}  sem conta no cadastro — não entra na remessa: "
+                "pagar à mão", "atencao")
     banco = _BANCO.search(pago_para)
     ag = _AGENCIA.search(pago_para)
     cc = _CONTA.search(pago_para)
@@ -268,6 +290,10 @@ class PagamentosDiaFrame(ttk.Frame):
         self.contas: list[tuple] = []
         self.vars_contas: dict[str, tk.BooleanVar] = {}
         self.ultimo_arquivo: Path | None = None
+        #: Os `.REM` da última geração. Guardados porque o passo seguinte é
+        #: subir no SicoobNet, e chegar até eles pelo caminho digitado no
+        #: campo "Onde salvar" é o tipo de coisa que se faz errado às 18h.
+        self.ultimas_remessas: list[Path] = []
         #: O que o passo 2 montou. A remessa sai daqui, não do .xlsx — ler a
         #: planilha de volta seria reparsear texto formatado para reconstruir
         #: número, e ela é relatório, não fonte.
@@ -395,6 +421,11 @@ class PagamentosDiaFrame(ttk.Frame):
         self.b_abrir = widgets.Botao(btns, "📂  Abrir planilha", papel="neutro",
                                      command=self._abrir, state="disabled")
         self.b_abrir.pack(side="left", padx=(8, 0))
+        self.b_abrir_rem = widgets.Botao(btns, "📂  Abrir local da remessa",
+                                         papel="neutro",
+                                         command=self._abrir_remessa,
+                                         state="disabled")
+        self.b_abrir_rem.pack(side="left", padx=(8, 0))
         # SEM número e sempre habilitado, de propósito: ler retorno não é o
         # passo 4 de nada. O arquivo chega horas ou dias depois — às vezes
         # noutra máquina —, e exigir "buscar" e "gerar" antes obrigaria a
@@ -435,6 +466,38 @@ class PagamentosDiaFrame(ttk.Frame):
                 os.startfile(self.ultimo_arquivo)          # noqa: S606 (Windows)
             except Exception:
                 subprocess.Popen(["explorer", str(self.ultimo_arquivo)])
+
+    def _abrir_remessa(self):
+        """Abre a pasta do `.REM` com o arquivo já selecionado.
+
+        Selecionar, e não abrir: `.REM` é texto, e abri-lo escancararia o
+        Bloco de Notas em cima de um arquivo que ninguém deve editar. O que se
+        quer aqui é chegar até ele para arrastar ao SicoobNet.
+
+        Vários arquivos (um por conta pagadora) caem na MESMA pasta, então
+        selecionar o primeiro já põe os outros à vista.
+        """
+        vivos = [c for c in self.ultimas_remessas if c.exists()]
+        if not vivos:
+            messagebox.showinfo(
+                "Remessa",
+                "Não há arquivo de remessa desta rodada para abrir. Gere a "
+                "remessa no passo 3 — ou procure na pasta de 'Onde salvar'.")
+            return
+        alvo = vivos[0]
+        try:
+            # String, e não lista: no Windows o `/select,` e o caminho são UM
+            # argumento só, e a lista faria o Python enfiar aspas no meio dele
+            # — o Explorer então abre "Documentos" e finge que obedeceu.
+            subprocess.Popen(f'explorer /select,"{alvo}"')   # noqa: S606
+        except Exception:
+            # Sem o Explorer (ou fora do Windows), abrir a pasta já resolve o
+            # que a pessoa veio fazer.
+            try:
+                os.startfile(alvo.parent)                    # noqa: S606
+            except Exception as e:                           # noqa: BLE001
+                messagebox.showwarning("Remessa",
+                                       f"Não consegui abrir a pasta: {e}")
 
     def _parar_click(self):
         self._parar.set()
@@ -489,6 +552,9 @@ class PagamentosDiaFrame(ttk.Frame):
                 elif tipo == "arquivo":
                     self.ultimo_arquivo = valor
                     self.b_abrir.configure(state="normal")
+                elif tipo == "remessa_gerada":
+                    self.ultimas_remessas = list(valor)
+                    self.b_abrir_rem.configure(state="normal")
                 elif tipo == "baixa":
                     # A baixa mexe no ERP: o desfecho não pode ficar só no log,
                     # que rola e some. Falha aparece com o motivo de cada uma.
@@ -738,6 +804,18 @@ class PagamentosDiaFrame(ttk.Frame):
             "da planilha e da remessa, e aparece na aba NÃO ENTRARAM com o "
             "motivo. O ⚠ é quem você mandou conferir sempre.",
             trilha="Diário  ›  Remessa e Retorno  ›  Passo 2")
+        # A legenda existe porque a cor sozinha não diz o que ela significa, e
+        # a pergunta que ela responde ("âmbar me impede de gerar?") é a que
+        # fazia a janela parecer quebrada.
+        legenda = cab.rodape
+        legenda.pack(anchor="w", pady=(8, 0))
+        for texto, estilo in (
+                ("●  entra", "FundoOk.TLabel"),
+                ("●  entra com ressalva — a remessa não leva, pague à mão",
+                 "FundoAtencao.TLabel"),
+                ("●  fica de fora — desmarcado", "FundoErro.TLabel")):
+            ttk.Label(legenda, text=texto, style=estilo
+                      ).pack(side="left", padx=(0, 18))
         cab.pack(fill="x", pady=(0, 14))
 
         cartao = widgets.Cartao(moldura, "Lançamentos do dia")
@@ -850,7 +928,9 @@ class PagamentosDiaFrame(ttk.Frame):
         c = widgets.cores()
         linha = ttk.Frame(pai)
         linha.pack(fill="x")
-        ttk.Checkbutton(linha, variable=var, command=ao_marcar
+        # O `_marcou` é definido mais abaixo, junto do rótulo que ele repinta;
+        # o Tk só o chama quando alguém clica, então a ordem não importa.
+        ttk.Checkbutton(linha, variable=var, command=lambda: _marcou()
                         ).pack(side="left", padx=(0, 8), pady=6)
         # O valor primeiro e alinhado à direita, em fonte de largura fixa: é a
         # coluna que se lê de cima a baixo somando de cabeça.
@@ -871,11 +951,19 @@ class PagamentosDiaFrame(ttk.Frame):
         if desc:
             ttk.Label(topo, text="·  " + desc[:52], style="Tenue.TLabel"
                       ).pack(side="left", padx=(8, 0))
-        # A segunda altura: a forma de pagar. Vermelha quando não se sabe qual
-        # é — o vazio ali seria lido como "não tem nada a conferir".
-        ttk.Label(quem, text=dado,
-                  style="MonoMiniErro.TLabel" if estado == "erro"
-                  else "MonoMini.TLabel").pack(anchor="w", pady=(1, 0))
+        # A segunda altura: a forma de pagar, na cor do que vai acontecer com
+        # ela. Âmbar é "entra na planilha, mas a remessa não leva"; vermelho é
+        # só para quem fica de fora — e quem fica de fora, nesta janela, é o
+        # que a pessoa desmarcou. Sem essa amarração a legenda do topo teria
+        # uma cor que nunca aparece.
+        lbl_dado = ttk.Label(quem, text=dado, style=ESTILO_DO_DADO[estado])
+        lbl_dado.pack(anchor="w", pady=(1, 0))
+
+        def _pintar():
+            lbl_dado.configure(
+                style="MonoMiniErro.TLabel" if not var.get()
+                else ESTILO_DO_DADO[estado])
+        _pintar()
         # A terceira: vencimento, OC e centro de custo. Estavam só embutidos na
         # descrição, misturados com o resto da frase — e são justamente o que
         # se procura para decidir se o pagamento é DESTE dia e DESTA obra.
@@ -893,6 +981,10 @@ class PagamentosDiaFrame(ttk.Frame):
             partes.append(cc[:44])
         ttk.Label(quem, text="  ·  ".join(partes), style="Tenue.TLabel"
                   ).pack(anchor="w", pady=(1, 6))
+
+        def _marcou():
+            _pintar()
+            ao_marcar()
 
     def gerar(self):
         if self.worker and not self.worker.done():
@@ -1843,6 +1935,7 @@ class PagamentosDiaFrame(ttk.Frame):
         if not gerados:
             self.q.put(("status", "Nenhum arquivo de remessa foi gravado."))
             return
+        self.q.put(("remessa_gerada", gerados))
         self._log("\nAgora suba os arquivos no SicoobNet: Empresarial → Gestão em "
                   "Lote → IntegraLote → Gestão de arquivos CNAB. O app não "
                   "transmite: gerar é reversível, enviar não é.")

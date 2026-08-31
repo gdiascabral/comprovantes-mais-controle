@@ -426,3 +426,74 @@ def test_sem_cadastro_a_janela_lista_tudo_como_antes():
 
     alvos = frame.alvos_para_confirmar([_marcador("luz")], ["CONTA TESTE"])
     assert [i["id"] for i in alvos] == ["luz"]
+
+
+# ------------------------------------------------ a cor do "Quem recebe"
+# Três casos apareciam em VERMELHO na janela "Confira o que entra hoje" e
+# geravam assim mesmo: o lançamento entrava na planilha, e vermelho na frente
+# de algo que não impede nada é lido como defeito do app. Eles são ressalva —
+# entram, e o que não entra é a REMESSA deles.
+
+def _para_receber(**mudancas):
+    item = _pagamento("x")
+    item.update(mudancas)
+    return item
+
+
+def test_pix_sem_chave_e_ressalva_e_nao_erro():
+    import pagamentos_frame as frame
+
+    _nome, dado, estado = frame.quem_recebe(
+        _para_receber(tradePayablePaymentMethod="Pix", paidToBankAccount=""))
+    assert estado == "atencao", "vermelho aqui parece impedimento, e não é"
+    assert "não entra na remessa" in dado
+    assert "à mão" in dado, "falta dizer o que a pessoa tem de fazer"
+
+
+def test_boleto_sem_linha_lida_e_ressalva():
+    import pagamentos_frame as frame
+
+    _nome, dado, estado = frame.quem_recebe(
+        _para_receber(tradePayablePaymentMethod="Boleto"), ja_lido={})
+    assert estado == "atencao"
+    assert "planilha" in dado, "a consequência é essa: vai na planilha, não no .REM"
+
+
+def test_ted_sem_conta_no_cadastro_e_ressalva():
+    import pagamentos_frame as frame
+
+    _nome, dado, estado = frame.quem_recebe(
+        _para_receber(tradePayablePaymentMethod="TED", paidToBankAccount=""))
+    assert estado == "atencao"
+    assert "à mão" in dado
+
+
+def test_dado_completo_continua_verde():
+    import pagamentos_frame as frame
+
+    _nome, dado, estado = frame.quem_recebe(_para_receber(
+        tradePayablePaymentMethod="Pix",
+        paidToBankAccount="Chave Pix: 12.345.678/0001-95"))
+    assert estado == "ok"
+    assert "PIX" in dado
+
+
+def test_cada_estado_tem_a_sua_cor():
+    """O mapa é o que impede o âmbar de cair no vermelho por omissão — que era
+    exatamente o defeito, escrito de outro jeito."""
+    import pagamentos_frame as frame
+
+    assert set(frame.ESTILO_DO_DADO) == {"ok", "atencao", "erro"}
+    assert len(set(frame.ESTILO_DO_DADO.values())) == 3
+
+
+def test_nenhum_caso_de_falta_de_dado_sai_como_erro():
+    """`erro` fica reservado para o que não sai de jeito nenhum. Nenhuma das
+    três faltas é isso: as três entram na planilha."""
+    import pagamentos_frame as frame
+
+    for metodo in ("Pix", "Boleto", "TED"):
+        _n, _d, estado = frame.quem_recebe(
+            _para_receber(tradePayablePaymentMethod=metodo,
+                          paidToBankAccount=""), ja_lido={})
+        assert estado != "erro", f"{metodo} sem dado voltou a ser vermelho"

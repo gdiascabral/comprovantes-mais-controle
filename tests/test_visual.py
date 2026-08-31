@@ -218,6 +218,26 @@ def test_a_troca_de_tema_reconfigura_os_estilos(raiz):
         assert st.lookup("Titulo.TLabel", "font") == widgets.FONTE_TITULO
 
 
+def test_a_ressalva_tem_cor_propria_nos_dois_temas(raiz):
+    """Faltava o meio-termo: o dado de pagamento que existe mas não serve para
+    a remessa só tinha a cor do impedimento, e vermelho que não impede nada é
+    lido como defeito do app.
+
+    Nos dois temas, porque a cor foi conferida contra o fundo de cada um."""
+    st = ttk.Style()
+    for escuro in (False, True):
+        widgets.aplicar_estilos(escuro)
+        esperado = widgets.PALETA["escuro" if escuro else "claro"]
+        assert st.lookup("MonoMiniAtencao.TLabel", "foreground") == esperado["atencao"]
+        assert (st.lookup("MonoMiniAtencao.TLabel", "foreground")
+                != st.lookup("MonoMiniErro.TLabel", "foreground"))
+        # A legenda do topo mora no cinza do painel, e sem a variante de fundo
+        # ela nasceria com um retângulo branco em volta.
+        assert st.lookup("FundoAtencao.TLabel", "foreground") == esperado["atencao"]
+        assert st.lookup("FundoAtencao.TLabel", "background") == esperado["fundo"]
+    widgets.aplicar_estilos(False)
+
+
 def test_o_cartao_numera_so_quando_ha_ordem(raiz):
     """Numerar informa quando existe sequência; no Registro seria inventar uma.
 

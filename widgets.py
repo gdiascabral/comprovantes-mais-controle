@@ -330,6 +330,11 @@ def aplicar_estilos(escuro: bool) -> None:
     st.configure("MonoMini.TLabel", font=FONTE_MONO_MINI, foreground=c["apoio"])
     st.configure("MonoMiniErro.TLabel", font=FONTE_MONO_MINI,
                  foreground=c["erro"])
+    # O meio-termo que faltava: o dado de pagamento que EXISTE mas não serve
+    # para a remessa. Sem ele, a única cor disponível era a do impedimento, e
+    # vermelho que não impede nada é lido como defeito do app.
+    st.configure("MonoMiniAtencao.TLabel", font=FONTE_MONO_MINI,
+                 foreground=c["atencao"])
     st.configure("KPI.TLabel", font=FONTE_KPI, foreground=c["texto"])
     st.configure("KPIMarca.TLabel", font=FONTE_KPI, foreground=c["marca"])
 
@@ -343,6 +348,7 @@ def aplicar_estilos(escuro: bool) -> None:
                              ("Ativo", FONTE_APOIO, c["ativo"]),
                              ("Mini", FONTE_MINI, c["tenue"]),
                              ("Ok", FONTE_APOIO, c["ok"]),
+                             ("Atencao", FONTE_APOIO, c["atencao"]),
                              ("Erro", FONTE_APOIO, c["erro"])):
         st.configure("Fundo" + nome + ".TLabel", font=fonte, foreground=cor,
                      background=c["fundo"])
