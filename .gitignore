@@ -100,6 +100,12 @@ MODELO.xlsx
 /logs/
 browser-profile/
 
+# O que ESTA máquina fez: é o que a tela de Início lê para montar o painel, e
+# desde 30/08/2026 ele carrega também quem entrou e quem foi liberado. Dado de
+# uso, e de uso de UMA pessoa — no repositório viraria o histórico de um
+# computador contado para todos os outros.
+atividade.jsonl
+
 # Marcador da senha de primeira utilização: é por MÁQUINA, nunca do repositório.
 ativacao.dat
 # A sessão da nuvem, cifrada pela DPAPI. Entra aqui pelo mesmo motivo do

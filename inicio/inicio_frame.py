@@ -50,6 +50,11 @@ ROTINAS = (
     ("acs", "Acessorias", "mensal"),
 )
 
+#: Eventos que NÃO são rotina, mas aparecem em "Atividade recente": quem
+#: entrou no app e o que o administrador fez com as contas. Sem esta tabela a
+#: linha sairia com a chave crua ("acesso") em vez de um nome.
+OUTRAS_ORIGENS = {"acesso": "Acesso", "usuarios": "Usuários"}
+
 #: Os três atalhos do canto. São as três telas que se abrem todo dia, na
 #: ordem em que o dia acontece — e não as três primeiras do menu.
 ATALHOS = (("pag", "🗓  Remessa do dia"),
@@ -345,6 +350,7 @@ class InicioFrame(ttk.Frame):
                       ).pack(anchor="w")
             return
         nomes = {c: n for c, n, _ in ROTINAS}
+        nomes.update(OUTRAS_ORIGENS)
         for ev in eventos:
             estado = widgets.estado_de(ev.get("resultado") or "ok")
             linha = ttk.Frame(self.lista_atividade)

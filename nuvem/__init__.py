@@ -14,6 +14,7 @@ regra nenhuma.
     cache.py          a cópia local (os mesmos JSON/CSV de sempre)
     cadastro.py       contas, empresas, entidades e regras — LÊ, com cache
     registro.py       o que já foi feito — ESCREVE, sem cache
+    auditoria.py      quem fez o quê: na nuvem e no atividade.jsonl
 
 **A assimetria entre `cadastro` e `registro` é deliberada.** Cadastro tolera o
 banco mudo: usa a última cópia e avisa. Registro não: o valor inteiro de

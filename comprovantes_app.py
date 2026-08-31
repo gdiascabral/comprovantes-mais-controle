@@ -34,7 +34,8 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 import widgets
-from nuvem import cadastro, login_dialogo, rest, sessao, usuarios
+from nuvem import (auditoria, cadastro, login_dialogo, rest, sessao,
+                   usuarios)
 from nuvem.usuarios_frame import UsuariosFrame
 from inicio_frame import InicioFrame
 from separar_renomear import SepararFrame
@@ -235,6 +236,13 @@ def main():
     # "Conferir de novo", chega aqui com o papel novo — e é o papel que decide
     # o menu daqui para baixo.
     _eu = sessao.quem(_pasta_dados())
+
+    # A primeira linha da auditoria do dia. Não é zelo: sem ela, "quem estava
+    # no app na hora em que isto foi gerado?" não tem resposta — e é a
+    # pergunta que vem antes de todas as outras quando algo sai errado numa
+    # remessa. Sobe numa thread solta e não pode atrasar a abertura.
+    auditoria.registrar("Entrou no app",
+                        _eu.papel or "papel ainda não conhecido")
 
     # ---------------- cadastro compartilhado
     # Aqui, e não dentro de cada aba: existe UM ponto onde a rede pode faltar,

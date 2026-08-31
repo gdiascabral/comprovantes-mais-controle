@@ -18,8 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 try:
-    from . import rest
+    from . import auditoria, rest
 except ImportError:
+    import auditoria
     import rest
 
 #: Os três papéis, com o que cada um faz — o texto vai para a tela.
@@ -123,17 +124,35 @@ def _mudar(token: str, user_id: str, mudancas: dict) -> Usuario:
     return _do_banco(linhas[0])
 
 
+def _anotar(u: Usuario, o_que: str) -> Usuario:
+    """Registra a decisão DEPOIS de ela ter valido, e devolve quem mudou.
+
+    Depois, e não antes, porque o que interessa é o que ficou gravado: uma
+    aprovação anotada e recusada pelo banco seria um registro de algo que não
+    aconteceu — pior do que não ter registro nenhum.
+
+    O identificado é quem MUDOU; quem mandou mudar sai no `quem` da linha, e
+    ele é carimbado pelo servidor a partir do token."""
+    auditoria.registrar(f"{o_que} {u.como_chamar}",
+                        f"{u.email} · {u.papel} · {u.situacao}",
+                        aba="usuarios")
+    return u
+
+
 def aprovar(token: str, user_id: str, papel: str) -> Usuario:
     """Libera a conta e diz o que ela faz. É a decisão que só gente toma."""
     if papel not in {p for p, _, _ in PAPEIS}:
         raise ValueError(f"papel desconhecido: {papel!r}")
-    return _mudar(token, user_id, {"situacao": "ativo", "papel": papel})
+    return _anotar(
+        _mudar(token, user_id, {"situacao": "ativo", "papel": papel}),
+        "Liberou o acesso de")
 
 
 def mudar_papel(token: str, user_id: str, papel: str) -> Usuario:
     if papel not in {p for p, _, _ in PAPEIS}:
         raise ValueError(f"papel desconhecido: {papel!r}")
-    return _mudar(token, user_id, {"papel": papel})
+    return _anotar(_mudar(token, user_id, {"papel": papel}),
+                   "Trocou o papel de")
 
 
 def desativar(token: str, user_id: str) -> Usuario:
@@ -142,11 +161,12 @@ def desativar(token: str, user_id: str) -> Usuario:
     A linha fica: é ela que responde "quem era este user_id?" quando alguém
     olhar a auditoria de três meses atrás. Por isso não existe política de
     DELETE em `perfil` — ver a migration da fase 1."""
-    return _mudar(token, user_id, {"situacao": "desativado"})
+    return _anotar(_mudar(token, user_id, {"situacao": "desativado"}),
+                   "Desativou")
 
 
 def reativar(token: str, user_id: str) -> Usuario:
-    return _mudar(token, user_id, {"situacao": "ativo"})
+    return _anotar(_mudar(token, user_id, {"situacao": "ativo"}), "Reativou")
 
 
 def sobraria_admin(usuarios, user_id: str, papel: str = "",

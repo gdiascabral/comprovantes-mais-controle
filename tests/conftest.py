@@ -50,6 +50,29 @@ def raiz():
         pass
 
 
+# ------------------------------------------------------------------ atividade
+
+@pytest.fixture(autouse=True)
+def atividade_gravada(monkeypatch):
+    """Nenhum teste escreve no `atividade.jsonl` de quem está rodando a suíte.
+
+    Não é zelo com o disco: esse arquivo é o que a tela de Início lê, e desde
+    que a auditoria passou a espelhar nele (30/08/2026), rodar a suíte
+    enfiava "Liberou o acesso de" e "Desativou" no painel de quem programou —
+    eventos de teste indistinguíveis dos de verdade.
+
+    Quem quiser conferir o que foi anotado pede esta fixture e lê a lista.
+    """
+    import widgets
+    anotado = []
+    monkeypatch.setattr(
+        widgets, "registrar_atividade",
+        lambda aba, evento, resultado="ok", detalhe="", numeros=None:
+        anotado.append({"aba": aba, "evento": evento, "resultado": resultado,
+                        "detalhe": detalhe, "numeros": numeros or {}}))
+    return anotado
+
+
 # ---------------------------------------------------------------- conciliação
 # Os testes da Conciliação Diária validam o mapa e o painel REAIS, não um dublê
 # — é o que dá sentido a `test_modelo_consistencia`, que compara as fórmulas do

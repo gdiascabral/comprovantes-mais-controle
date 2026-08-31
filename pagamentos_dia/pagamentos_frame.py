@@ -78,6 +78,10 @@ for _aba in ("relatorios", "extratos_sicoob"):
         sys.path.insert(0, str(_p))
 
 import contas_mc                                              # noqa: E402
+# Os passos da remessa sobem para a auditoria da nuvem, e não só para o
+# `atividade.jsonl`: o painel de Início é da máquina de quem rodou, e "quem
+# gerou esta remessa?" é pergunta que se faz de outra máquina, depois.
+from nuvem import auditoria                                   # noqa: E402
 import sicoob_contas                                          # noqa: E402
 
 
@@ -605,16 +609,18 @@ class PagamentosDiaFrame(ttk.Frame):
             # lançamentos foi esta rotina, e contar de novo custaria outra
             # sessão do ERP.
             _no_dia = sum(t for _n, _q, t, _p, _i in self.contas)
-            widgets.registrar_atividade(
-                "pag", "Buscar lançamentos", "ok",
+            auditoria.registrar(
+                "Buscar lançamentos",
                 f"{len(self.lancamentos)} lançamento(s) · "
                 f"{relatorio.brl(_no_dia)}",
-                {"lancamentos": len(self.lancamentos), "total": _no_dia})
+                aba="pag", resultado="ok",
+                numeros={"lancamentos": len(self.lancamentos),
+                         "total": _no_dia})
         except Exception as e:
             self._log(f"[!] {e}")
             self.q.put(("status", "Não consegui buscar os lançamentos."))
-            widgets.registrar_atividade("pag", "Buscar lançamentos", "erro",
-                                        str(e)[:120])
+            auditoria.registrar("Buscar lançamentos", str(e)[:120],
+                                aba="pag", resultado="erro")
         finally:
             self.q.put(("botoes", "normal"))
 
@@ -1045,17 +1051,19 @@ class PagamentosDiaFrame(ttk.Frame):
                                   + (f" · {len(omitidos)} fora" if omitidos else "")))
             _sem_anexo = sum(1 for r in registros.values() for x in r
                              if "sem anexo" in x["status"].lower())
-            widgets.registrar_atividade(
-                "pag", "Gerar a planilha",
-                "atencao" if (atencao or omitidos) else "ok",
+            auditoria.registrar(
+                "Gerar a planilha",
                 f"{n} pagamento(s) · {relatorio.brl(total)}"
                 + (f" · {atencao} para conferir" if atencao else ""),
-                {"lancamentos": n, "total": total, "sem_anexo": _sem_anexo})
+                aba="pag",
+                resultado="atencao" if (atencao or omitidos) else "ok",
+                numeros={"lancamentos": n, "total": total,
+                         "sem_anexo": _sem_anexo})
         except Exception as e:
             self._log(f"[!] {e}")
             self.q.put(("status", "Não consegui gerar a planilha."))
-            widgets.registrar_atividade("pag", "Gerar a planilha", "erro",
-                                        str(e)[:120])
+            auditoria.registrar("Gerar a planilha", str(e)[:120],
+                                aba="pag", resultado="erro")
         finally:
             self.q.put(("botoes", "normal"))
 
@@ -1846,17 +1854,18 @@ class PagamentosDiaFrame(ttk.Frame):
         _com_remessa = len(gerados)
         _com_pagamento = len([c for c in (self.resultado.contas if
                                           self.resultado else {})])
-        widgets.registrar_atividade(
-            "pag", "Gerar remessa", "ok",
+        auditoria.registrar(
+            "Gerar remessa",
             f"{len(gerados)} arquivo(s) · {relatorio.brl(total_geral)}",
+            aba="pag", resultado="ok",
             # `total_remessa` e não `total`: o Início junta os números das
             # várias execuções da mesma aba, e "total" já é o do dia inteiro
             # que o passo 1 apurou. Com o mesmo nome, o valor da remessa
             # (que exclui o que ficou de fora) sobrescrevia o do dia, e o
             # cartão "Pagamentos de hoje" passava a mostrar 87 lançamentos
             # somando menos do que eles somam.
-            {"contas_sem_remessa": max(_com_pagamento - _com_remessa, 0),
-             "total_remessa": total_geral})
+            numeros={"contas_sem_remessa": max(_com_pagamento - _com_remessa, 0),
+                     "total_remessa": total_geral})
 
     def _registrar_o_que_ficou_de_fora(self, preparado):
         """O que NÃO entrou na remessa, com o motivo — depois de gravar.
