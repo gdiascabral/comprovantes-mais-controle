@@ -332,3 +332,75 @@ def test_o_token_nao_e_gravado_em_arquivo():
         assert proibido not in fonte, (
             f"`escutar_autorizacao` usa {proibido}: o cabeçalho tem de viver "
             "só em memória")
+
+
+# --------------------------------------------------------- o Pix pela API
+
+def _movimentacao(valor=116.56, nome="Pex", descricao="", origem="CHAVE",
+                  tipo="D", data="28/08/2026", e2e="E0041696820260828"):
+    return {"data": data, "valor": valor, "nome": nome, "tipoExtrato": "PIX",
+            "tipo": tipo, "descricao": descricao,
+            "detalhePix": {"endToEnd": e2e, "origemMovimento": origem,
+                           "descricaoPagamento": "", "campoLivre": ""}}
+
+
+def test_so_pix_de_saida_entra():
+    """`tipo == D` é o que a tela chamava de filtro "Saída". Comprovante de
+    Pix RECEBIDO na pasta de pagamento é o erro que a validação da fase 3
+    existe para pegar."""
+    assert inter.e_pix_enviado(_movimentacao(tipo="D"))
+    assert not inter.e_pix_enviado(_movimentacao(tipo="C"))
+
+
+def test_o_codigo_do_pix_e_o_endToEnd():
+    """De graça no JSON, e é o mesmo identificador que a fase 3 do plano ia
+    extrair de dentro do PDF para não baixar em dobro."""
+    pedido = inter.pedido_de_pdf_pix(_movimentacao(), "362674043")
+    assert pedido["codigo"] == "E0041696820260828"
+    assert pedido["contaCorrente"] == "362674043"
+    assert pedido["tipo"] == "PIX" and pedido["operacao"] == "PAGAMENTO_PIX"
+
+
+def test_sem_endToEnd_ou_sem_conta_nao_vira_pedido():
+    assert inter.pedido_de_pdf_pix(_movimentacao(e2e=""), "362674043") is None
+    assert inter.pedido_de_pdf_pix(_movimentacao(), "") is None
+
+
+def test_o_valor_no_nome_nao_perde_os_centavos():
+    """Ele chega como número (116.56); tirar a pontuação dava `11656`, que se
+    lê como onze mil. Saiu assim em 46 arquivos antes de alguém reparar."""
+    assert "116-56" in inter.nome_do_pix(_movimentacao(valor=116.56))
+    assert "3523-72" in inter.nome_do_pix(_movimentacao(valor=3523.72))
+    assert "5-00" in inter.nome_do_pix(_movimentacao(valor=5))
+
+
+def test_a_descricao_entra_no_nome_quando_existe():
+    """44 de 46 Pix por chave trazem descrição (medido em 31/08/2026), e é por
+    ela que o Anexar casa. No nome, dispensa abrir o PDF."""
+    nome = inter.nome_do_pix(_movimentacao(descricao="NF 4521 obra RPB"))
+    assert "NF 4521 obra RPB" in nome
+
+
+def test_sem_descricao_o_nome_nao_fica_com_sobra():
+    """QR Code não traz descrição — 0 de 7 no mesmo extrato."""
+    nome = inter.nome_do_pix(_movimentacao(origem="QR_CODE"))
+    assert nome.endswith("_Pex.pdf")
+
+
+def test_a_descricao_e_procurada_nos_tres_lugares():
+    m = _movimentacao()
+    m["detalhePix"]["campoLivre"] = "veio do campo livre"
+    assert inter.descricao_do_pix(m) == "veio do campo livre"
+
+
+def test_a_conta_de_descricoes_separa_por_origem():
+    """A pergunta "Pix traz descrição?" foi respondida por AMOSTRA e a amostra
+    era um QR Code — o único caso onde ela nunca vem. Contar por origem é o
+    que troca opinião por medida."""
+    contas = inter.contar_descricoes([
+        _movimentacao(descricao="tem", origem="CHAVE"),
+        _movimentacao(descricao="", origem="CHAVE"),
+        _movimentacao(descricao="", origem="QR_CODE"),
+    ])
+    assert contas["CHAVE"] == {"total": 2, "com_descricao": 1}
+    assert contas["QR_CODE"] == {"total": 1, "com_descricao": 0}

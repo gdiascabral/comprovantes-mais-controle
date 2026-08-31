@@ -1027,3 +1027,213 @@ def baixar_2via_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
                 # script original andava devagar entre cliques.
                 time.sleep(0.4)
     return resultado
+
+
+# ==========================================================================
+# O Pix pela API
+# ==========================================================================
+#
+# O mesmo molde da 2ª via, e o mesmo ganho: some o laço de 46 cliques com 2 s
+# de pausa entre cada, que levava cinco minutos.
+#
+# **O PDF sai do MESMO endpoint da 2ª via** — `/comprovantes/v2/pdf/segunda-via`
+# —, só que com outro corpo. O que muda: o `codigo` é o endToEnd da transação,
+# entram `tipoConta` e `contaCorrente`, e não há `dataEfetivacao`.
+#
+# O endToEnd chegando de graça no JSON resolve, de lambuja, o que a fase 3 do
+# plano ia buscar dentro do PDF: é ele o identificador que impede baixar o
+# mesmo comprovante duas vezes.
+#
+# **Sobre a descrição, o que se sabe e o que não se sabe.** No item conferido
+# ela vinha vazia — mas aquele era um pagamento por QR CODE
+# (`origemMovimento: "QR_CODE"`), e QR quase nunca carrega descrição. Pix por
+# CHAVE (CPF, CNPJ, e-mail) é outra história e ainda não foi medido. A regra
+# "o Pix vem do extrato, e não da 2ª via" segue valendo por ora; o que a
+# derruba ou confirma é contar, na lista inteira, quantos trazem descrição —
+# e é o que `contar_descricoes` faz.
+
+_JS_EXTRATO_PIX = """
+async ([base, cabecalho]) => {
+    const r = await fetch(`${base}/cc/pix/v1/extrato`,
+                          {headers: {Authorization: cabecalho}});
+    if (!r.ok) return {erro: `HTTP ${r.status}`};
+    const j = await r.json();
+    // A resposta vem agrupada por mês; o que interessa é a lista achatada.
+    const secoes = j.sections || [];
+    const movs = [];
+    for (const s of secoes) for (const m of (s.movimentacoes || [])) movs.push(m);
+    return {movimentacoes: movs};
+}
+"""
+
+
+def conta_da_pagina(page) -> str:
+    """O número da conta, lido do cabeçalho da própria tela.
+
+    O pedido do PDF de Pix exige `contaCorrente`, e ele não vem no item da
+    lista. Está no alto da página, ao lado do nome da empresa — de onde a
+    própria tela o tira.
+    """
+    try:
+        texto = page.evaluate("() => document.body.innerText || ''")
+    except Exception:                                        # noqa: BLE001
+        return ""
+    # Sete a dez dígitos soltos numa linha: é a forma da conta do Inter
+    # (362674043). Data e valor não passam por aqui — têm barra e vírgula.
+    for linha in texto.splitlines()[:40]:
+        achado = re.fullmatch(r"\s*(\d{7,10})\s*", linha)
+        if achado:
+            return achado.group(1)
+    return ""
+
+
+def e_pix_enviado(mov: dict) -> bool:
+    """Saída, e não entrada.
+
+    `tipo == "D"` é o que a tela chamava de filtro "Saída". Conferir os dois
+    (o tipo do extrato e a natureza) porque comprovante de Pix RECEBIDO na
+    pasta de pagamento é o erro que a validação da fase 3 existe para pegar.
+    """
+    return ((mov.get("tipoExtrato") or "").upper() == "PIX"
+            and (mov.get("tipo") or "").upper() == "D")
+
+
+def pedido_de_pdf_pix(mov: dict, conta: str) -> dict | None:
+    """O corpo que gera o PDF de UM Pix. `None` quando falta peça.
+
+    O de-para saiu da chamada que a própria tela faz:
+
+        tipo           "PIX"            (fixo)
+        operacao       "PAGAMENTO_PIX"  (fixo)
+        tipoConta      "PJ"             (fixo — é conta empresa)
+        codigo         <- detalhePix.endToEnd
+        contaCorrente  <- o número da conta, do cabeçalho da tela
+    """
+    detalhe = mov.get("detalhePix") or {}
+    codigo = detalhe.get("endToEnd") or ""
+    if not codigo or not conta:
+        return None
+    return {"tipo": "PIX", "operacao": "PAGAMENTO_PIX", "tipoConta": "PJ",
+            "codigo": codigo, "contaCorrente": conta}
+
+
+def descricao_do_pix(mov: dict) -> str:
+    """A descrição do pagamento, de onde ela estiver.
+
+    Vale muito: MEDIDO no extrato de 31/08/2026, 44 de 46 Pix por CHAVE
+    trazem descrição (e 0 de 7 por QR Code, que é o caso onde ela não existe
+    mesmo). É o campo pelo qual o Anexar casa o comprovante com o lançamento —
+    e ele vem do JSON, não do PDF. Quem tirava do documento estava indo ao
+    lugar mais difícil buscar o que a API entrega pronto.
+    """
+    detalhe = mov.get("detalhePix") or {}
+    for onde in (mov.get("descricao"), detalhe.get("descricaoPagamento"),
+                 detalhe.get("campoLivre")):
+        if (onde or "").strip():
+            return onde.strip()
+    return ""
+
+
+def nome_do_pix(mov: dict) -> str:
+    """`PIX_2026-08-28_116-56_Pex_NF 1234.pdf`.
+
+    Data, valor, para quem foi e — quando existe — a descrição. Ela entra
+    porque é por ela que o Anexar casa, e tê-la no NOME dispensa abrir o PDF.
+
+    O valor vem formatado com duas casas: ele chega como número (116.56), e
+    apenas tirar a pontuação produzia `11656` — que se lê como onze mil.
+    """
+    dia, mes, ano = (mov.get("data") or "00/00/0000").split("/")
+    try:
+        valor = f"{float(mov.get('valor') or 0):.2f}".replace(".", "-")
+    except (TypeError, ValueError):
+        valor = "0-00"
+    limpar = lambda t: re.sub(r"[^A-Za-z0-9 ]+", " ", t or "").strip()  # noqa: E731
+    quem = limpar(mov.get("nome"))[:36] or "sem-nome"
+    detalhe = limpar(descricao_do_pix(mov))[:40]
+    miolo = f"{quem}_{detalhe}" if detalhe else quem
+    return f"PIX_{ano}-{mes}-{dia}_{valor}_{miolo}.pdf"
+
+
+def contar_descricoes(movimentacoes) -> dict:
+    """Quantos Pix trazem descrição, separados por ORIGEM.
+
+    Existe para uma pergunta de desenho não ser respondida por amostra: o
+    primeiro item que se olhou vinha sem descrição, mas era um QR Code, e QR
+    quase nunca traz. Se o Pix por CHAVE trouxer, a origem única volta à mesa
+    — e aí um caminho a menos para manter.
+    """
+    contas: dict = {}
+    for mov in movimentacoes:
+        detalhe = mov.get("detalhePix") or {}
+        origem = detalhe.get("origemMovimento") or "(sem origem)"
+        tem = bool((mov.get("descricao") or "").strip()
+                   or (detalhe.get("descricaoPagamento") or "").strip()
+                   or (detalhe.get("campoLivre") or "").strip())
+        registro = contas.setdefault(origem, {"total": 0, "com_descricao": 0})
+        registro["total"] += 1
+        registro["com_descricao"] += 1 if tem else 0
+    return contas
+
+
+def baixar_pix_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
+                        fim: str, autorizacao: dict, log=print) -> Resultado:
+    """Os comprovantes de Pix ENVIADO do período, sem clicar em nada."""
+    cabecalho = (autorizacao or {}).get("valor", "")
+    if not cabecalho:
+        resultado.motivo = ("não peguei o cabeçalho da sessão — a página não "
+                            "chegou a chamar a API")
+        return resultado
+
+    conta = conta_da_pagina(page)
+    if not conta:
+        resultado.motivo = ("não achei o número da conta na tela, e o pedido "
+                            "do PDF de Pix exige ele")
+        return resultado
+
+    try:
+        resposta = page.evaluate(_JS_EXTRATO_PIX, [API_INTER, cabecalho])
+    except Exception as e:                                   # noqa: BLE001
+        resultado.motivo = f"não deu para ler o extrato Pix: {e}"
+        return resultado
+    if resposta.get("erro"):
+        resultado.motivo = f"a API recusou o extrato Pix ({resposta['erro']})"
+        return resultado
+
+    movs = resposta.get("movimentacoes") or []
+    # O recorte é feito aqui, pela data que cada movimentação declara — o mesmo
+    # princípio da 2ª via, e pelo mesmo motivo: filtro de tela que falha calado
+    # já custou 71 arquivos no lugar de 13.
+    enviados = [m for m in movs if e_pix_enviado(m)]
+    no_periodo = [m for m in enviados
+                  if dentro_do_periodo(m.get("data") or "", inicio, fim)]
+    log(f"  Pix: {len(movs)} no extrato · {len(enviados)} enviados · "
+        f"{len(no_periodo)} entre {inicio} e {fim}")
+    resultado.total_na_tela = len(no_periodo)
+
+    for mov in no_periodo:
+        try:
+            pedido = pedido_de_pdf_pix(mov, conta)
+            if pedido is None:
+                raise InterFalhou("movimentação sem endToEnd")
+            gerado = page.evaluate(_JS_PEDIR_PDF,
+                                   [API_INTER, cabecalho, [pedido]])
+            if gerado.get("erro"):
+                raise InterFalhou(f"a API recusou o PDF ({gerado['erro']})")
+            urls = gerado.get("urls") or []
+            if len(urls) != 1:
+                raise InterFalhou(f"esperava 1 URL e vieram {len(urls)}")
+
+            baixado = page.request.get(urls[0])
+            if not baixado.ok:
+                raise InterFalhou(f"HTTP {baixado.status} ao baixar")
+            destino = nome_livre(pasta, nome_do_pix(mov))
+            destino.write_bytes(baixado.body())
+            resultado.baixados.append(destino)
+            log(f"  {destino.name}")
+        except Exception as e:                               # noqa: BLE001
+            resultado.falhas.append(len(resultado.falhas))
+            log(f"  falhou ({e}) — seguindo")
+        finally:
+            time.sleep(0.4)
+    return resultado
