@@ -543,3 +543,42 @@ def test_conta_parada_devolve_lista_vazia():
                     "corpo": "Nenhum registro encontrado"}
 
     assert sb.listar(PaginaFalsa(), "01/08/2026", "31/08/2026") == []
+
+
+# ------------------------------------ a conta pedida e a conta que valeu
+# Numa rodada com 13 contas, tres trouxeram o comprovante de OUTRA conta e
+# seis deram HTTP 400 -- e as contas que falharam TINHAM movimento (Terra
+# Bela, 17 pagamentos). A causa: `page.goto` numa URL com `#` recarrega a SPA
+# inteira, e ela reinicia na conta PADRAO. Eu trocava de conta e em seguida
+# desfazia a troca.
+
+def test_a_conta_e_comparada_so_pelos_digitos():
+    """`50.019-4` e `500194` sao a mesma conta; a tela escreve de um jeito e
+    o cadastro de outro."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert sb.mesma_conta("50.019-4", "50.019-4")
+    assert sb.mesma_conta("50.019-4", "500194")
+    assert not sb.mesma_conta("50.019-4", "50.021-6")
+
+
+def test_sem_conta_na_tela_nao_e_a_mesma():
+    """Nao conseguir LER a conta e diferente de ler e bater. Na duvida, nao
+    baixa -- comprovante de outra conta com o nome desta e pior que nenhum."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert not sb.mesma_conta("50.019-4", "")
+    assert not sb.mesma_conta("", "50.019-4")
+
+
+def test_a_navegacao_nao_recarrega_a_pagina():
+    """`goto` recarrega e joga fora a conta escolhida. O caminho e mexer no
+    `location.hash`, que dispara a rota sem recarregar."""
+    import inspect
+
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    fonte = inspect.getsource(sb.ir_para_comprovantes)
+    assert "location.hash" in sb.JS_IR_PARA
+    assert ".goto(" not in fonte, (
+        "voltou a usar goto: a SPA recarrega e a conta volta para a padrao")

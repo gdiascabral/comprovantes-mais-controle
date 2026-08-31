@@ -198,6 +198,51 @@ async ([url, metodo, corpo]) => {
 """
 
 
+
+JS_CONTA_ABERTA = """
+() => {
+    // O cabecalho diz "SICOOB ENGECRED 3299 CONTA 50.019-4 / PJ".
+    const achado = (document.body.innerText || '').match(/CONTA\\s+([\\d.]+-\\d)/);
+    return achado ? achado[1] : '';
+}
+"""
+
+JS_IR_PARA = """
+([rota]) => { location.hash = rota; return location.href; }
+"""
+
+
+def conta_aberta(page) -> str:
+    """Qual conta a TELA diz estar aberta. "" quando não dá para ler.
+
+    Existe porque a pergunta "troquei mesmo?" não tinha resposta: o
+    `acessar_conta` devolve True por ter clicado, não por ter chegado."""
+    try:
+        return page.evaluate(JS_CONTA_ABERTA) or ""
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
+def mesma_conta(pedida: str, na_tela: str) -> bool:
+    """`50.019-4` e `500194` são a mesma conta; só os dígitos importam."""
+    so = lambda t: re.sub(r"\D", "", t or "")                # noqa: E731
+    return bool(so(pedida)) and so(pedida) == so(na_tela)
+
+
+def ir_para_comprovantes(page) -> None:
+    """Vai à tela de comprovantes SEM recarregar a aplicação.
+
+    `page.goto` numa URL com `#` recarrega a SPA inteira, e ela reinicia na
+    conta PADRÃO — jogando fora a troca que acabou de ser feita. Foi assim que
+    uma rodada com 13 contas trouxe o comprovante de outra conta em três
+    delas e HTTP 400 em seis: eu trocava e em seguida desfazia a troca.
+
+    Mexer só no `location.hash` dispara a rota do Angular sem recarregar, e a
+    conta escolhida continua valendo.
+    """
+    page.evaluate(JS_IR_PARA, ["#/comprovantes"])
+    page.wait_for_timeout(3000)
+
 def listar(page, inicio: str, fim: str, tipo: str = TIPO_TODOS) -> list:
     """Os comprovantes da conta ABERTA no período.
 
@@ -299,8 +344,19 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
         if not cli.acessar_conta(numero):
             resultado.motivo = "a conta não está na lista deste login"
             return resultado
-        cli.page.goto(URL_COMPROVANTES)
-        cli.page.wait_for_timeout(3000)
+        ir_para_comprovantes(cli.page)
+
+        # CONFERIR antes de pedir o dado. O `consultar` não recebe a conta —
+        # ela é implícita na sessão —, então pedir com a conta errada aberta
+        # devolve o comprovante DE OUTRA e nada na resposta denuncia isso. Os
+        # arquivos sairiam com o nome certo e o conteúdo de outra empresa.
+        aberta = conta_aberta(cli.page)
+        if not mesma_conta(numero, aberta):
+            resultado.motivo = (
+                f"pedi a conta {numero} e a tela está em "
+                f"{aberta or '(não consegui ler)'} — não vou baixar o "
+                "comprovante de outra conta com o nome desta")
+            return resultado
 
         itens = so_efetivados(listar(cli.page, inicio, fim))
         no_periodo = [i for i in itens if dentro_do_periodo(i, inicio, fim)]
