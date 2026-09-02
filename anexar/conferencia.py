@@ -19,29 +19,15 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-try:
-    from . import config, mc_api
-except ImportError:
-    import config, mc_api
+from . import config, mc_api
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
-
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import util
+import widgets
 
 CampoData = widgets.CampoData
 # Só o _texto_do_erro segue vindo do Anexar: ele conhece o SemRede do
 # mc_client, que é daquela aba. O campo de data e os formatos são de todos.
-from anexar_comprovantes import _texto_do_erro
+from .anexar_comprovantes import _texto_do_erro
 
 LINK = config.MC_URL_LANCAMENTO
 _fmt_dur = util.fmt_dur
@@ -64,7 +50,7 @@ def _texto_pdf(dados: bytes) -> str:
         if len(txt.strip()) >= 30:
             return txt
         try:                                # sem camada de texto -> OCR
-            from separar_renomear import _ocr_pagina
+            from separar_renomear.separar_renomear import _ocr_pagina
             with pdfplumber.open(io.BytesIO(dados)) as pl:
                 return "\n".join(_ocr_pagina(pg, lambda m: None)
                                  for pg in pl.pages)

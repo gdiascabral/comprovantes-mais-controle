@@ -17,10 +17,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-try:
-    from . import config, credenciais
-except ImportError:
-    import config, credenciais
+from . import config, credenciais
 
 
 class SemRede(RuntimeError):
