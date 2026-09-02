@@ -18,14 +18,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
-from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: A condição que interessa. Comparada sem acento e sem caixa.
 MARCA_FINANCIAMENTO = "FINANCIAMENTO"

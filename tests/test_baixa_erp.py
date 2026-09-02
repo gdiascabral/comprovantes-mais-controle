@@ -7,7 +7,7 @@ parcela certa, e o que NÃO dá para baixar aparecendo com o motivo.
 """
 import datetime as _dt
 
-import baixa_erp
+from pagamentos_dia import baixa_erp
 from erp import hosts, pagina, sessao
 
 HOJE = _dt.date(2026, 8, 20)

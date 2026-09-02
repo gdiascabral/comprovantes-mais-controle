@@ -14,7 +14,6 @@ DUAS RESTRICOES DO ERP DESCOBERTAS NA PRATICA
 
 from __future__ import annotations
 
-import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,11 +22,7 @@ from playwright.sync_api import Page, sync_playwright
 
 from ..errors import ErpError, SessaoExpirada
 
-try:                                     # utilitarios compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando a Conciliacao isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-    import util
+import util
 
 log = util.log(__name__)
 

@@ -17,23 +17,18 @@ congelada por 20 segundos é indistinguível de um app travado.
 from __future__ import annotations
 
 import queue
-import sys
 import threading
 import tkinter as tk
-from pathlib import Path
 from tkinter import ttk
 
-try:
-    from . import rest, usuarios
-except ImportError:                      # rodando este módulo isoladamente
-    import rest
-    import usuarios
+from . import rest, usuarios
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
+
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
 
 
 #: Como cada situação aparece na tabela. O SÍMBOLO vem junto do texto porque a
@@ -77,7 +72,7 @@ class UsuariosFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = widgets.PADX
+        PADX = px(widgets.PADX)
 
         cab = widgets.Cabecalho(
             self, "Usuários",
@@ -85,12 +80,12 @@ class UsuariosFrame(ttk.Frame):
             "tela de login nasce esperando: enquanto ninguém a libera, ela "
             "entra e não vê nada.",
             trilha="Administração  ›  Usuários")
-        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         widgets.Botao(cab.acoes, "Atualizar", papel="neutro",
                       command=self.ao_abrir).pack(side="right")
 
         cartao = widgets.Cartao(self, "Contas e papéis")
-        cartao.pack(fill="both", expand=True, padx=PADX, pady=(0, 18))
+        cartao.pack(fill="both", expand=True, padx=PADX, pady=px((0, 18)))
 
         colunas = ("nome", "email", "papel", "situacao", "desde")
         self.tabela = ttk.Treeview(cartao, columns=colunas, show="headings",
@@ -109,35 +104,35 @@ class UsuariosFrame(ttk.Frame):
         self.tabela.bind("<<TreeviewSelect>>", lambda _e: self._escolheu())
 
         self.rodape = widgets.RodapeTabela(cartao)
-        self.rodape.pack(fill="x", pady=(8, 0))
+        self.rodape.pack(fill="x", pady=px((8, 0)))
 
         # ---- o que fazer com quem está selecionado
         acoes = ttk.Frame(cartao)
-        acoes.pack(fill="x", pady=(12, 0))
+        acoes.pack(fill="x", pady=px((12, 0)))
 
         ttk.Label(acoes, text="PAPEL", style="MenuSecao.TLabel"
-                  ).pack(side="left", padx=(0, 6))
+                  ).pack(side="left", padx=px((0, 6)))
         self.combo = ttk.Combobox(acoes, state="readonly", width=17,
                                   values=[r for _c, r, _e in usuarios.PAPEIS])
         self.combo.pack(side="left")
         self.combo.bind("<<ComboboxSelected>>", lambda _e: self._explicar())
 
         self.lbl_papel = ttk.Label(acoes, text="", style="Apoio.TLabel")
-        self.lbl_papel.pack(side="left", padx=(10, 0))
+        self.lbl_papel.pack(side="left", padx=px((10, 0)))
 
         self.b_desativar = widgets.Botao(acoes, "Desativar", papel="neutro",
                                          command=self._desativar)
         self.b_desativar.pack(side="right")
         self.b_papel = widgets.Botao(acoes, "Trocar papel", papel="passo",
                                      command=self._trocar_papel)
-        self.b_papel.pack(side="right", padx=(0, 8))
+        self.b_papel.pack(side="right", padx=px((0, 8)))
         self.b_aprovar = widgets.Botao(acoes, "Aprovar", papel="acao",
                                        command=self._aprovar)
-        self.b_aprovar.pack(side="right", padx=(0, 8))
+        self.b_aprovar.pack(side="right", padx=px((0, 8)))
 
         self.aviso = ttk.Label(cartao, text=" ", style="Apoio.TLabel",
-                               wraplength=820, justify="left")
-        self.aviso.pack(fill="x", pady=(10, 0))
+                               wraplength=px(820), justify="left")
+        self.aviso.pack(fill="x", pady=px((10, 0)))
         self._escolheu()
 
     # ------------------------------------------------------------- a lista

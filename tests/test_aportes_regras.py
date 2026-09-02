@@ -9,8 +9,8 @@ from decimal import Decimal
 
 import pytest
 
-import regras
-from regras import Operacao, como_dinheiro, dividir_em_centavos, expandir
+from aportes import regras
+from aportes.regras import Operacao, como_dinheiro, dividir_em_centavos, expandir
 
 HOJE = datetime.date(2026, 8, 11)
 
@@ -139,7 +139,7 @@ def test_o_modulo_nao_usa_float_para_dinheiro():
 
 
 # ------------------------------------------- a baixa do recebimento (dinheiro)
-import mc_lancamentos                                            # noqa: E402
+from aportes import mc_lancamentos
 
 
 @pytest.mark.parametrize("parcela, esperado", [

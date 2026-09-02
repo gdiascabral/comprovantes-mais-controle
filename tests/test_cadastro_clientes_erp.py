@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-import sicoob_contas as sc
+from extratos_sicoob import sicoob_contas as sc
 
 CADASTRO = {
     "raiz": "C:/Arquivos Morais/EXTRATOS",

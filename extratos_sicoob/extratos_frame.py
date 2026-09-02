@@ -15,7 +15,6 @@ import datetime
 import os
 import queue
 import subprocess
-import sys
 import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
@@ -23,14 +22,13 @@ from pathlib import Path
 from threading import Event
 from tkinter import messagebox, ttk
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import sicoob_baixar                                          # noqa: E402
-import sicoob_config                                          # noqa: E402
-import sicoob_contas as sc                                    # noqa: E402
-import sicoob_pastas as sp                                    # noqa: E402
-import sicoob_zipar                                           # noqa: E402
-from sicoob_client import SicoobClient                        # noqa: E402
+from . import sicoob_baixar
+from . import sicoob_config
+from . import sicoob_contas as sc
+from . import sicoob_pastas as sp
+from . import sicoob_zipar
+from .sicoob_client import SicoobClient
 
 # Estes três vivem em OUTRAS pastas de aba, e entram aqui em cima de
 # propósito. Enquanto o import morava dentro do `try` do `_conferir_mapas`, o
@@ -38,34 +36,18 @@ from sicoob_client import SicoobClient                        # noqa: E402
 # do sys.path mudar, ou um arquivo faltar no codigo.zip, para a conferência que
 # impede o mês partido sumir para sempre — sem uma linha em lugar nenhum. Aqui,
 # se algum dia faltar, o app não abre e alguém fica sabendo no mesmo dia.
-try:                                     # os dois mapas de pasta (aba vizinha)
-    import conferir_mapas                                     # noqa: E402
-    import contas_mc                                          # noqa: E402
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent
-                           / "relatorios"))
-    import conferir_mapas                                     # noqa: E402
-    import contas_mc                                          # noqa: E402
+from relatorios import conferir_mapas
+from relatorios import contas_mc
 
-try:                                     # o diagnostico.log é um só, no Anexar
-    import config                                             # noqa: E402
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "anexar"))
-    import config                                             # noqa: E402
+from anexar import config
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
+import widgets
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
 
 #: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
 #: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
@@ -101,44 +83,44 @@ class ExtratosSicoobFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = widgets.PADX
+        PADX = px(widgets.PADX)
 
         cab = widgets.Cabecalho(
             self, "Extratos Sicoob",
             "Cria as pastas do mês e baixa o extrato de cada conta do Sicoob "
             "em OFX e PDF.",
             trilha="Mensal  ›  Extratos Sicoob")
-        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         # O verde é BAIXAR: criar pasta e compactar são o antes e o depois.
         self.b1 = widgets.Botao(cab.acoes, "Conferir e criar pastas",
                                 papel="passo", command=self.criar_pastas)
-        self.b1.pack(side="left", padx=(0, 8))
+        self.b1.pack(side="left", padx=px((0, 8)))
         self.b2 = widgets.Botao(cab.acoes, "Baixar extratos", papel="acao",
                                 command=self.baixar)
         self.b2.pack(side="left")
 
         # ---- card 1: mês
         f1 = widgets.Cartao(self, "Mês do fechamento", 1)
-        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
         widgets.Campo(linha, "Mês", lambda p: ttk.Combobox(
             p, textvariable=self.v_mes, values=MESES, state="readonly",
-            width=12)).pack(side="left", padx=(0, 16))
+            width=12)).pack(side="left", padx=px((0, 16)))
         anos = [str(a) for a in range(datetime.date.today().year + 1, 2019, -1)]
         widgets.Campo(linha, "Ano", lambda p: ttk.Combobox(
             p, textvariable=self.v_ano, values=anos, state="readonly",
-            width=7)).pack(side="left", padx=(0, 16))
+            width=7)).pack(side="left", padx=px((0, 16)))
         ttk.Label(linha, style="Tenue.TLabel",
                   text="vem preenchido com o mês anterior"
-                  ).pack(side="left", pady=(15, 0))
+                  ).pack(side="left", pady=px((15, 0)))
 
         # ---- card 2: o que cada passo faz
         # Os três cartões que só seguravam um botão viraram um só: com o botão
         # no cabeçalho, o que sobrava neles era a frase de explicação — e três
         # cartões brancos com uma frase cada eram três cartões vazios.
         f2 = widgets.Cartao(self, "Como o mês fecha", 2)
-        f2.pack(fill="x", padx=PADX, pady=(0, 12))
+        f2.pack(fill="x", padx=PADX, pady=px((0, 12)))
         for titulo, frase in (
                 ("Conferir e criar pastas",
                  "Mostra o que será criado e pede confirmação."),
@@ -147,25 +129,25 @@ class ExtratosSicoobFrame(ttk.Frame):
                 ("Gerar os .zip por empresa",
                  "Rode só depois que os outros bancos entrarem.")):
             passo = ttk.Frame(f2)
-            passo.pack(fill="x", pady=(0, 6))
+            passo.pack(fill="x", pady=px((0, 6)))
             ttk.Label(passo, text=titulo, style="Forte.TLabel").pack(anchor="w")
             ttk.Label(passo, text=frase, style="Tenue.TLabel").pack(anchor="w")
 
         # ---- barra de execução, acima do registro
         acao = ttk.Frame(self, style="Fundo.TFrame")
-        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         btns = ttk.Frame(acao, style="Fundo.TFrame")
-        btns.pack(side="right", padx=(16, 0))
+        btns.pack(side="right", padx=px((16, 0)))
         self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
                                     state="disabled", command=self._parar_click)
         self.b_stop.pack(side="left")
         self.b3 = widgets.Botao(btns, "🗜  Gerar os .zip", papel="neutro",
                                 command=self.zipar)
-        self.b3.pack(side="left", padx=(8, 0))
+        self.b3.pack(side="left", padx=px((8, 0)))
         self.b_abrir = widgets.Botao(btns, "📂  Abrir a pasta do mês",
                                      papel="neutro", state="disabled",
                                      command=self._abrir_pasta)
-        self.b_abrir.pack(side="left", padx=(8, 0))
+        self.b_abrir.pack(side="left", padx=px((8, 0)))
         self.barra_exec = widgets.BarraExecucao(acao)
         self.barra_exec.pack(side="left", fill="x", expand=True)
         self.lbl = self.barra_exec.lbl
@@ -173,7 +155,7 @@ class ExtratosSicoobFrame(ttk.Frame):
 
         # ---- registro
         self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.reg.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)

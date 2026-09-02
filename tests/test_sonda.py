@@ -23,24 +23,18 @@ import io
 import json
 import logging
 import socket
-import sys
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 import requests
 
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-sys.path.insert(0, str(_RAIZ / "ferramentas"))
-
-import sonda                                                      # noqa: E402
-from conciliacao.erp import api                                   # noqa: E402
-from erp import sessao as erp_sessao                              # noqa: E402
-from nuvem import rest, sessao                                    # noqa: E402
+from ferramentas import sonda
+from conciliacao.erp import api
+from erp import sessao as erp_sessao
+from nuvem import rest, sessao
 
 
 # ------------------------------------------------------------------ dublês

@@ -6,17 +6,12 @@ Sem tela e sem rede. O que se testa aqui não é o parser do CNAB (isso é do
 "ainda falta assinar", e o que fazer com pagamento que o banco simplesmente
 não citou.
 """
-import sys
 from dataclasses import dataclass
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ / "pagamentos_dia"))
-
-import retorno_dia  # noqa: E402
+from pagamentos_dia import retorno_dia
 
 
 # ------------------------------------------------------------------ dublês

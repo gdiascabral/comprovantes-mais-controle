@@ -27,17 +27,11 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-_AQUI = Path(__file__).resolve().parent
-for _p in (_AQUI, _AQUI.parent):         # a pasta da aba e a raiz do projeto
-    if str(_p) not in sys.path:          # (rodando este módulo isoladamente)
-        sys.path.insert(0, str(_p))
-
-import util                              # noqa: E402
-import regras_pagamento as regras        # noqa: E402
+import util
+from . import regras_pagamento as regras
 
 #: Cadastro local de quem recebe reembolso. Fica ao lado do exe, FORA do
 #: repositório: é nome e CPF de gente.

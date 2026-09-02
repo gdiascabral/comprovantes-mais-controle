@@ -13,7 +13,7 @@ tela que o ERP está redesenhando aos poucos. A regra correta, herdada do
 projeto da Conciliação Diária, é procurar a TELA DE LOGIN e concluir sessão
 pela ausência dela.
 """
-import mc_client
+from anexar import mc_client
 
 
 class AbaFalsa:

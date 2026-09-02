@@ -21,34 +21,27 @@ import sys
 import threading
 from pathlib import Path
 
-# Rodando como script: garante que as subpastas entram no caminho de import.
-# (No executável gerado pelo PyInstaller isso não é necessário.)
-_RAIZ = Path(__file__).resolve().parent
-for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
-           _RAIZ / "relatorios", _RAIZ / "pagamentos_dia",
-           _RAIZ / "extratos_sicoob", _RAIZ / "inicio",
-           _RAIZ / "baixar_comprovantes"):
-    if _p.is_dir() and str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 import util
 import widgets
+
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
 from nuvem import (auditoria, cadastro, login_dialogo, rest, sessao,
                    usuarios)
 from nuvem.usuarios_frame import UsuariosFrame
-from inicio_frame import InicioFrame
-from separar_renomear import SepararFrame
-from anexar_comprovantes import AnexarFrame
-from conferencia import ConferenciaFrame
-from aportes_frame import AportesFrame
-from relatorio_frame import RelatorioFrame
-from pagamentos_frame import PagamentosDiaFrame
-from extratos_frame import ExtratosSicoobFrame
-# Pacote de verdade (tem __init__.py): importa pelo caminho completo, então não
-# disputa nome de módulo no sys.path com as outras pastas de aba.
+from inicio.inicio_frame import InicioFrame
+from separar_renomear.separar_renomear import SepararFrame
+from anexar.anexar_comprovantes import AnexarFrame
+from anexar.conferencia import ConferenciaFrame
+from aportes.aportes_frame import AportesFrame
+from relatorios.relatorio_frame import RelatorioFrame
+from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
+from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
@@ -173,7 +166,16 @@ def main():
     try:
         root.state("zoomed")            # janela ocupando a tela (Windows)
     except tk.TclError:
-        root.geometry("1150x740")
+        root.geometry(f"{widgets.px(1150)}x{widgets.px(740)}")
+    # A janela passa a ter um mínimo, e ele é PROPORCIONAL. Sem mínimo dava
+    # para arrastar a borda até a moldura sumir; com um mínimo FIXO, quem
+    # usa 150% teria o mesmo problema num número maior — ali o menu, a
+    # barra e os cartões pedem 1,5× a largura, e 900 px já escondem a
+    # coluna da direita do Início inteira.
+    try:
+        root.minsize(widgets.px(900), widgets.px(600))
+    except tk.TclError:
+        pass
 
     try:
         import sv_ttk                   # tema moderno (visual Windows 11)
@@ -327,7 +329,7 @@ def main():
     # O cadastro de contas é o mesmo `contas_sicoob.json` que os Extratos leem
     # — a tela não descobre isso sozinha, recebe de quem a monta.
     def _mapa_das_contas():
-        import sicoob_contas as _sc
+        from extratos_sicoob import sicoob_contas as _sc
 
         return _sc.carregar()
 
@@ -462,7 +464,7 @@ def main():
         # inteira na ordem em que ela é lida.
         cab = ttk.Button(lateral.corpo, style="Grupo.Toolbutton",
                          command=lambda: _alternar(nome))
-        cab.pack(fill="x", pady=(12, 2), padx=(10, 8))
+        cab.pack(fill="x", pady=px((12, 2)), padx=px((10, 8)))
         corpo_g = tk.Frame(lateral.corpo, background=widgets.cores()["cartao"],
                            highlightthickness=0)
         grupos[nome] = {"cabecalho": cab, "corpo": corpo_g, "titulo": titulo,
@@ -489,18 +491,18 @@ def main():
 
     # ---------------- canto direito da barra: navegador, versão, quem entrou
     chip = widgets.ChipStatus(barra.direita)
-    chip.pack(side="left", padx=(0, 18), pady=14)
+    chip.pack(side="left", padx=px((0, 18)), pady=px(14))
     if _v_curta:
         # Curta na tela, inteira na dica: o número de build só interessa a quem
         # está comparando com uma release, e para esse a dica basta.
         _lbl_versao = ttk.Label(barra.direita, text=_v_curta,
                                 style="BarraTenue.TLabel")
-        _lbl_versao.pack(side="left", padx=(0, 16), pady=14)
+        _lbl_versao.pack(side="left", padx=px((0, 16)), pady=px(14))
         widgets.Dica(_lbl_versao, f"versão {_v}")
-    widgets.Avatar(barra.direita, _eu.email).pack(side="left", pady=11)
+    widgets.Avatar(barra.direita, _eu.email).pack(side="left", pady=px(11))
     _lbl_quem = ttk.Label(barra.direita, text=_eu.primeiro_nome[:22],
                           style="Barra.TLabel")
-    _lbl_quem.pack(side="left", padx=(8, 0), pady=14)
+    _lbl_quem.pack(side="left", padx=px((8, 0)), pady=px(14))
     # O papel na dica, e não na barra: ele importa no dia em que alguém
     # estranha uma aba que não está lá, e nos outros 364 seria ruído.
     if _eu.papel:
@@ -516,16 +518,16 @@ def main():
         quadros["usr"] = aba_usr
         _permitidas = _permitidas + ("usr",)
         _item(lateral.rodape, "usr", "👥", "Usuários")
-        ttk.Frame(lateral.rodape, height=10).pack()
+        ttk.Frame(lateral.rodape, height=widgets.px(10)).pack()
 
     ttk.Label(lateral.rodape, text="TEMA", style="MenuSecao.TLabel"
-              ).pack(anchor="w", pady=(0, 3))
+              ).pack(anchor="w", pady=px((0, 3)))
     combo_tema = ttk.Combobox(lateral.rodape, state="readonly", width=19,
                               values=["Automático (sistema)", "Claro", "Escuro"])
     _ordem = ["auto", "claro", "escuro"]
     combo_tema.current(_ordem.index(escolha_tema)
                        if escolha_tema in _ordem else 0)
-    combo_tema.pack(anchor="w", pady=(0, 8))
+    combo_tema.pack(anchor="w", pady=px((0, 8)))
     # Cadastro velho não impede o app de rodar, mas quem está conferindo um
     # fechamento precisa saber que a conta nova cadastrada hoje pode não estar
     # aqui. Sem este aviso, "usando a cópia" é indistinguível de "tudo certo".
@@ -541,7 +543,7 @@ def main():
         # da barra — o número inteiro está a um cursor de distância.
         _rodape_versao = ttk.Label(lateral.rodape, text=_v_curta,
                                    style="MenuSecao.TLabel")
-        _rodape_versao.pack(anchor="w", pady=(8, 0))
+        _rodape_versao.pack(anchor="w", pady=px((8, 0)))
         widgets.Dica(_rodape_versao, f"versão {_v}")
 
     def aplicar_tema(escolha: str):
@@ -813,8 +815,9 @@ def main():
             messagebox.showinfo("Contas novas", recado)
         except Exception as e:                            # noqa: BLE001
             _anotar(f"conferencia de contas (gravacao): {e}")
-            messagebox.showerror("Contas novas",
-                                 f"Nao deu para cadastrar:\n\n{e}")
+            messagebox.showerror(
+                "Contas novas",
+                widgets.recado_de_erro(e, "Nao deu para cadastrar as contas."))
 
     def _conferir_contas():
         from nuvem import contas_novas

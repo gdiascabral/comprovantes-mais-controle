@@ -13,18 +13,16 @@ import datetime
 import os
 import queue
 import subprocess
-import sys
 import time
 import tkinter as tk
 from pathlib import Path
 from threading import Event
 from tkinter import messagebox, ttk
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import conferir_mapas                                        # noqa: E402
-import contas_mc                                             # noqa: E402
-import extrato_mc                                            # noqa: E402
+from . import conferir_mapas
+from . import contas_mc
+from . import extrato_mc
 
 # Estes dois vivem em OUTRAS pastas de aba, e entram aqui em cima de
 # propósito. Enquanto o import morava dentro do `try` do `_conferir_mapas`, o
@@ -32,25 +30,11 @@ import extrato_mc                                            # noqa: E402
 # do sys.path mudar, ou um arquivo faltar no codigo.zip, para a conferência que
 # impede o mês partido sumir para sempre — sem uma linha em lugar nenhum. Aqui,
 # se algum dia faltar, o app não abre e alguém fica sabendo no mesmo dia.
-try:                                     # cadastro do Sicoob (aba vizinha)
-    import sicoob_config                                     # noqa: E402
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent
-                           / "extratos_sicoob"))
-    import sicoob_config                                     # noqa: E402
+from extratos_sicoob import sicoob_config
 
-try:                                     # o diagnostico.log é um só, no Anexar
-    import config                                            # noqa: E402
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "anexar"))
-    import config                                            # noqa: E402
+from anexar import config
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
 #: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
@@ -58,12 +42,12 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 _fmt_dur = util.fmt_dur
 _pasta_base = util.pasta_base
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
+
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
 
 CampoData = widgets.CampoData
 
@@ -103,17 +87,17 @@ class RelatorioFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = widgets.PADX
+        PADX = px(widgets.PADX)
 
         self.cab = widgets.Cabecalho(
             self, "Relatório Mensal",
             "Baixa o extrato de cada conta bancária do período, com todos os "
             "lançamentos, num PDF por conta.",
             trilha="Mensal  ›  Relatório Mensal")
-        self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         self.b1 = widgets.Botao(self.cab.acoes, "Carregar contas",
                                 papel="passo", command=self.carregar)
-        self.b1.pack(side="left", padx=(0, 8))
+        self.b1.pack(side="left", padx=px((0, 8)))
         self.b2 = widgets.Botao(self.cab.acoes, "Gerar os extratos",
                                 papel="acao", command=self.gerar,
                                 state="disabled")
@@ -121,31 +105,31 @@ class RelatorioFrame(ttk.Frame):
 
         # Os cartões é que passam a ser numerados; os botões dizem o verbo.
         f1 = widgets.Cartao(self, "Período", 1)
-        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
 
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
         campo_mes = widgets.Campo(linha, "Mês", lambda p: ttk.Combobox(
             p, textvariable=self.v_mes, values=MESES, state="readonly",
             width=12))
-        campo_mes.pack(side="left", padx=(0, 16))
+        campo_mes.pack(side="left", padx=px((0, 16)))
         self.cb_mes = campo_mes.widget
         anos = [str(a) for a in range(datetime.date.today().year + 1, 2019, -1)]
         campo_ano = widgets.Campo(linha, "Ano", lambda p: ttk.Combobox(
             p, textvariable=self.v_ano, values=anos, state="readonly", width=7))
-        campo_ano.pack(side="left", padx=(0, 16))
+        campo_ano.pack(side="left", padx=px((0, 16)))
         self.cb_ano = campo_ano.widget
         self.lbl_periodo = ttk.Label(linha, style="Apoio.TLabel")
-        self.lbl_periodo.pack(side="left", pady=(15, 0))
+        self.lbl_periodo.pack(side="left", pady=px((15, 0)))
 
         pers = ttk.Frame(f1)
-        pers.pack(fill="x", pady=(12, 0))
+        pers.pack(fill="x", pady=px((12, 0)))
         ttk.Checkbutton(pers, text="Usar um intervalo de datas em vez do mês inteiro",
                         variable=self.v_personalizado,
                         command=self._alternar_periodo).pack(anchor="w")
         self.f_datas = ttk.Frame(f1)
         widgets.Campo(self.f_datas, "De", lambda p: CampoData(p, self.v_ini)
-                      ).pack(side="left", padx=(0, 16))
+                      ).pack(side="left", padx=px((0, 16)))
         widgets.Campo(self.f_datas, "Até", lambda p: CampoData(p, self.v_fim)
                       ).pack(side="left")
 
@@ -156,13 +140,14 @@ class RelatorioFrame(ttk.Frame):
         # ---- card 2: contas
         self.f_contas = f2 = widgets.Cartao(
             self, "Contas bancárias — marque as desejadas", 2)
-        f2.pack(fill="x", padx=PADX, pady=(0, 12))
+        f2.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.rodape_contas = widgets.RodapeTabela(f2.acoes)
         self.rodape_contas.pack()
 
         # Lista rolável: são ~34 contas, com nomes longos. Antes de carregar
         # ela é uma frase só, e cresce em `_montar_contas`.
-        self.canvas = tk.Canvas(f2, height=24, highlightthickness=0, borderwidth=0)
+        self.canvas = tk.Canvas(f2, height=px(24), highlightthickness=0,
+                                borderwidth=0)
         self.barra = barra = ttk.Scrollbar(f2, orient="vertical",
                                            command=self.canvas.yview)
         self.contas_box = ttk.Frame(self.canvas)
@@ -187,7 +172,7 @@ class RelatorioFrame(ttk.Frame):
         # O destino não é mais escolhido à mão: cada conta tem o seu, definido
         # em contas_mc.json. O campo virou informação, não decisão.
         f3 = widgets.Cartao(self, "Onde salva", 3)
-        f3.pack(fill="x", padx=PADX, pady=(0, 12))
+        f3.pack(fill="x", padx=PADX, pady=px((0, 12)))
         ttk.Entry(f3, textvariable=self.v_pasta, state="readonly"
                   ).pack(side="left", fill="x", expand=True)
         ttk.Label(f3, style="Tenue.TLabel",
@@ -196,15 +181,15 @@ class RelatorioFrame(ttk.Frame):
 
         # ---- barra de execução, acima do registro
         acao = ttk.Frame(self, style="Fundo.TFrame")
-        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         btns = ttk.Frame(acao, style="Fundo.TFrame")
-        btns.pack(side="right", padx=(16, 0))
+        btns.pack(side="right", padx=px((16, 0)))
         self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
                                     command=self._parar_click, state="disabled")
         self.b_stop.pack(side="left")
         self.b_abrir = widgets.Botao(btns, "📂  Abrir pasta", papel="neutro",
                                      command=self._abrir_pasta, state="disabled")
-        self.b_abrir.pack(side="left", padx=(8, 0))
+        self.b_abrir.pack(side="left", padx=px((8, 0)))
         self.barra_exec = widgets.BarraExecucao(acao)
         self.barra_exec.pack(side="left", fill="x", expand=True)
         self.lbl = self.barra_exec.lbl
@@ -212,7 +197,7 @@ class RelatorioFrame(ttk.Frame):
 
         # ---- registro
         self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.reg.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)
@@ -221,7 +206,7 @@ class RelatorioFrame(ttk.Frame):
 
     def _alternar_periodo(self):
         if self.v_personalizado.get():
-            self.f_datas.pack(fill="x", pady=(10, 0))
+            self.f_datas.pack(fill="x", pady=px((10, 0)))
         else:
             self.f_datas.pack_forget()
         self._atualizar_rotulo()
@@ -407,7 +392,7 @@ class RelatorioFrame(ttk.Frame):
             self.q.put(("botoes", "normal"))
 
     def _montar_contas(self, contas):
-        self.canvas.configure(height=150)
+        self.canvas.configure(height=px(150))
         self.barra.pack(side="right", fill="y")
         widgets.cartao_elastico(self.f_contas, cheio=True)
         for w in self.contas_box.winfo_children():

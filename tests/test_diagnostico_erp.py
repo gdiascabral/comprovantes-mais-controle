@@ -7,13 +7,8 @@ alguém mexer no código; "tela em branco" manda tentar de novo e conferir quem
 mais está logado. Em 18/08/2026 uma tela em branco foi anunciada como mudança
 de layout, e a investigação começou pelo lugar errado.
 """
-import sys
-from pathlib import Path
 
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-
-from conciliacao.erp.browser import _diagnostico  # noqa: E402
+from conciliacao.erp.browser import _diagnostico
 
 
 class _Pagina:

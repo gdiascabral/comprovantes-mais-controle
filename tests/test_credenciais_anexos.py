@@ -16,7 +16,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 
-import mc_api
+from anexar import mc_api
 
 BASE = "https://acessar.maiscontroleerp.com.br"
 URL_PAGOS = (BASE + "/maiscontrole/services/payable-installments/"

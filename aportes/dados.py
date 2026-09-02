@@ -16,14 +16,8 @@ from __future__ import annotations
 
 import csv
 import json
-import sys
-from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 # `util.pasta_base()` e não `Path(__file__).parent`: congelado dava no mesmo,
 # mas rodando como SCRIPT este módulo procurava em `aportes/` enquanto o

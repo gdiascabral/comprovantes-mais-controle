@@ -21,15 +21,10 @@ derrubar este token — e tudo bem, porque a conferência já acabou.
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 from . import rest
 

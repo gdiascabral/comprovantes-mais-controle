@@ -6,7 +6,7 @@ As duas regras nasceram de erro real: extrato da conta errada arquivado com o
 nome certo, e PDF gerado antes de a paginação terminar — este último exibindo
 "Saldo final" como se estivesse completo.
 """
-import extrato_mc
+from relatorios import extrato_mc
 
 
 def estado(conta="ALFA SPE - SICOOB", tem_mais=False, transacoes=10):

@@ -13,9 +13,9 @@ import zipfile
 
 import pytest
 
-import sicoob_baixar as sb
-import sicoob_contas as sc
-import sicoob_zipar as sz
+from extratos_sicoob import sicoob_baixar as sb
+from extratos_sicoob import sicoob_contas as sc
+from extratos_sicoob import sicoob_zipar as sz
 
 OFX = """OFXHEADER:100
 DATA:OFXSGML
@@ -129,7 +129,7 @@ def mapa(tmp_path):
 
 
 def test_zip_por_empresa_com_os_arquivos(mapa, tmp_path):
-    import sicoob_pastas as sp
+    from extratos_sicoob import sicoob_pastas as sp
     sp.criar(sp.planejar(mapa, 2026, 7))
     base = sp.caminho_do_mes(mapa, 2026, 7)
     (base / "JULHO 2026 - ALFA" / "SICOOB" / "202607 SICOOB.ofx").write_text("x")
@@ -144,7 +144,7 @@ def test_zip_por_empresa_com_os_arquivos(mapa, tmp_path):
 
 
 def test_zip_avisa_pasta_de_banco_vazia(mapa):
-    import sicoob_pastas as sp
+    from extratos_sicoob import sicoob_pastas as sp
     sp.criar(sp.planejar(mapa, 2026, 7))
     base = sp.caminho_do_mes(mapa, 2026, 7)
     (base / "JULHO 2026 - ALFA" / "SICOOB" / "202607 SICOOB.ofx").write_text("x")
@@ -164,7 +164,7 @@ def test_zip_interrompido_nao_destroi_o_anterior(mapa, monkeypatch):
     Quem zipa de novo para incluir o extrato que faltava ficava, a uma queda
     de distância, sem o zip novo e sem o velho — e o zip é o arquivo que a
     aba Acessórias envia ao escritório contábil."""
-    import sicoob_pastas as sp
+    from extratos_sicoob import sicoob_pastas as sp
     sp.criar(sp.planejar(mapa, 2026, 7))
     base = sp.caminho_do_mes(mapa, 2026, 7)
     (base / "JULHO 2026 - ALFA" / "SICOOB" / "202607 SICOOB.ofx").write_text("x")
@@ -256,7 +256,7 @@ def test_duas_contas_na_mesma_pasta_nao_se_sobrescrevem(tmp_path):
     rel = sb.baixar_mes(_SicoobFalso(), mapa, 2026, 7, log=lambda *_: None)
     assert len(rel.completos) == 2
 
-    import sicoob_pastas as sp
+    from extratos_sicoob import sicoob_pastas as sp
     pasta = sp.caminho_da_conta(mapa, 2026, 7, "11.111-1")
     assert sp.caminho_da_conta(mapa, 2026, 7, "22.222-2") == pasta
     assert sorted(p.name for p in pasta.glob("*.ofx")) == [

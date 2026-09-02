@@ -18,18 +18,9 @@ import datetime
 import re
 from urllib.parse import urlsplit, parse_qsl, urlencode
 
-try:
-    from . import config
-except ImportError:
-    import config
+from . import config
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    from pathlib import Path as _Path
-    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 
 _diag = config.diag              # o registro de diagnóstico agora mora no config

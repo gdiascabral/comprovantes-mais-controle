@@ -9,7 +9,7 @@ tinham sido capturados. Ele serve as categorias E é o único que manda o
 
 Duas coisas o deixavam de fora, e as duas estão cobertas aqui.
 """
-import erp_sessao
+from aportes import erp_sessao
 
 
 # ==========================================================================

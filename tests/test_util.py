@@ -18,8 +18,8 @@ def test_norm_espaco_ignora_acento_caixa_e_espaco_duplo():
 def test_norm_espaco_e_a_mesma_dos_dois_mapas():
     """A função que escolhe a PASTA do extrato e a que julga sua VALIDADE
     precisam ser a MESMA — eram duas cópias."""
-    import contas_mc
-    import extrato_mc
+    from relatorios import contas_mc
+    from relatorios import extrato_mc
     assert contas_mc._chave is extrato_mc._chave is util.norm_espaco
 
 

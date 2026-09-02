@@ -28,11 +28,7 @@ from .pipeline import analyze, run_offline
 from .validate import ValidationError, erros
 from .workbook import WorkbookError
 
-try:                                     # utilitarios compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando a Conciliacao isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: O diagnostico do modulo. Os `print()` daqui continuam sendo a saida da
 #: linha de comando, que e para quem esta olhando o terminal; este logger e

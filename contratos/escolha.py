@@ -26,14 +26,8 @@ de quem subiu o arquivo.
 """
 from __future__ import annotations
 
-from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 from .regras import numero_da_unidade
 

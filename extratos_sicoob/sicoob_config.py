@@ -7,18 +7,17 @@ dado da empresa (número de conta e razão social) e o repositório é público,
 então moram em `contas_sicoob.json`, fora do git — mesma decisão já tomada
 para `pix_reembolso.json`.
 
-Os nomes dos módulos deste pacote começam com `sicoob_` de propósito: o app
-põe todas as pastas de aba no mesmo sys.path, então nome de módulo é global.
-Um `config.py` aqui sequestraria o `import config` do Anexar.
+Os nomes dos módulos deste pacote começam com `sicoob_` por HISTÓRIA, não
+mais por necessidade: até 02/09/2026 o app punha todas as pastas de aba no
+mesmo `sys.path`, nome de módulo era global, e um `config.py` aqui sequestraria
+o `import config` do Anexar. Hoje toda pasta é pacote e o nome vive em
+`extratos_sicoob.sicoob_config`, que não disputa com ninguém. O prefixo fica
+onde está: renomear sete módulos para ganhar sete caracteres é mexer em quem
+usa sem melhorar nada para quem lê.
 """
-import sys
 from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 # Empacotado, é a pasta do .exe, para o JSON e o perfil do Chrome persistirem
 # entre execuções. Sai de `util.pasta_base()` e não de um cálculo próprio:

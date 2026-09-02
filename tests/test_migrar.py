@@ -9,13 +9,8 @@ dois arquivos: ali pelo menos existia um `conferir_mapas.py` para acusá-la.
 Nada aqui toca a rede: `criticar()` é função pura sobre os dicionários lidos
 do disco.
 """
-import sys
-from pathlib import Path
 
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ / "nuvem"))
-
-import migrar  # noqa: E402
+from nuvem import migrar
 
 
 def _dados(**troca):

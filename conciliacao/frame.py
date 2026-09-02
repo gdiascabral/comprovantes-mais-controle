@@ -32,12 +32,7 @@ from conciliacao.snapshot import save as salvar_snapshot
 from conciliacao.validate import ValidationError
 from conciliacao.workbook import WorkbookError
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
 #: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
@@ -45,12 +40,12 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 _fmt_dur = util.fmt_dur
 _pasta_base = util.pasta_base
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
+
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
 
 CampoData = widgets.CampoData
 
@@ -93,14 +88,14 @@ class ConciliacaoFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = widgets.PADX
+        PADX = px(widgets.PADX)
 
         cab = widgets.Cabecalho(
             self, "Saldo de pagamentos",
             "Lê os saldos e os pagamentos a vencer e gera o painel do dia, "
             "com o aporte mínimo de cada conta.",
             trilha="Diário  ›  Saldo de pagamentos")
-        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         # Ação única: o verde é o único botão do cabeçalho. O cartão "Gerar",
         # que existia só para segurá-lo, deixa de existir.
         self.b1 = widgets.Botao(cab.acoes, "Coletar e gerar o painel",
@@ -108,38 +103,38 @@ class ConciliacaoFrame(ttk.Frame):
         self.b1.pack(side="left")
 
         f1 = widgets.Cartao(self, "Vencimentos que entram", 1)
-        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
         widgets.Campo(linha, "De", lambda p: CampoData(p, self.v_ini)
-                      ).pack(side="left", padx=(0, 16))
+                      ).pack(side="left", padx=px((0, 16)))
         widgets.Campo(linha, "Até", lambda p: CampoData(p, self.v_fim)
-                      ).pack(side="left", padx=(0, 16))
+                      ).pack(side="left", padx=px((0, 16)))
         ttk.Label(linha, style="Tenue.TLabel",
                   text="na segunda já vem sábado + domingo + segunda"
-                  ).pack(side="left", pady=(15, 0))
+                  ).pack(side="left", pady=px((15, 0)))
 
         acao = ttk.Frame(self, style="Fundo.TFrame")
-        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         btns = ttk.Frame(acao, style="Fundo.TFrame")
-        btns.pack(side="right", padx=(16, 0))
+        btns.pack(side="right", padx=px((16, 0)))
         self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
                                     state="disabled", command=self._parar_click)
         self.b_stop.pack(side="left")
         self.b_abrir = widgets.Botao(btns, "📄  Abrir a planilha", papel="neutro",
                                      state="disabled",
                                      command=self._abrir_arquivo)
-        self.b_abrir.pack(side="left", padx=(8, 0))
+        self.b_abrir.pack(side="left", padx=px((8, 0)))
         self.b_pasta = widgets.Botao(btns, "📂  Abrir a pasta", papel="neutro",
                                      state="disabled", command=self._abrir_pasta)
-        self.b_pasta.pack(side="left", padx=(8, 0))
+        self.b_pasta.pack(side="left", padx=px((8, 0)))
         self.barra_exec = widgets.BarraExecucao(acao)
         self.barra_exec.pack(side="left", fill="x", expand=True)
         self.lbl = self.barra_exec.lbl
         self.pb = self.barra_exec.pb
 
         self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.reg.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)

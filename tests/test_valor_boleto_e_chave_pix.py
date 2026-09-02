@@ -20,9 +20,9 @@ quem pagou. O repo é público.
 """
 import pytest
 
-import ocr_boleto
-import regras_pagamento as regras
-import relatorio
+from pagamentos_dia import ocr_boleto
+from pagamentos_dia import regras_pagamento as regras
+from pagamentos_dia import relatorio
 import util
 
 from test_pagamentos_melhorias import LINHA_BANCARIA, VALOR_BANCARIA, anexo, lancamento, linhas
