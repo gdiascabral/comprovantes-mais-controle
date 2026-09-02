@@ -65,6 +65,13 @@ fixa de layout, não):
 Precisa do Pillow (`pip install pillow`) só para tirar o print — de
 propósito NÃO está no requirements.txt: é ferramenta de desenvolvimento
 local, o app nunca a importa.
+
+A rodada leva alguns segundos por tema e roda sem ninguém tocar na
+máquina. Como o print é da TELA, a ferramenta segura o monitor aceso
+enquanto isso (ver `_tela_acordada`) e recusa qualquer captura inútil —
+uma cor só de canto a canto, ou janela minimizada (ver `_capturar`): PNG
+preto na pasta "depois" parece captura de verdade até alguém abrir, e já
+enganou uma rodada inteira.
 """
 from __future__ import annotations
 
@@ -78,6 +85,7 @@ except ImportError:
     sys.exit(1)
 
 import argparse
+import contextlib
 import time
 from pathlib import Path
 
@@ -121,6 +129,69 @@ def _dpi_consciente():
         windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         pass
+
+
+#: Bits de `SetThreadExecutionState` (winbase.h). `ES_CONTINUOUS` sozinho
+#: devolve a thread ao comportamento normal; somado aos outros dois, o
+#: pedido vale até a thread terminar ou chamar de novo só com ele.
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+_ES_DISPLAY_REQUIRED = 0x00000002
+#: `mouse_event` com este bit e deslocamento zero é um "mexeu o mouse" que
+#: não move o cursor um pixel — só conta como interação para o Windows.
+_MOUSEEVENTF_MOVE = 0x0001
+
+
+@contextlib.contextmanager
+def _tela_acordada():
+    """Segura o monitor ligado pelo tempo da rodada.
+
+    O print é da TELA (ver `_capturar`), e o Windows apaga o monitor por
+    ociosidade sem perguntar a ninguém: a rodada inteira roda sem que a
+    pessoa toque em teclado ou mouse, e se o tempo de "desligar a tela" das
+    opções de energia vence no meio, cada captura dali em diante sai PRETA.
+    Foi assim que a pasta "depois" inteira do PR #15 (02/09/2026) saiu com
+    24 PNGs de 3 KB, tudo #000000, sem uma linha de erro no console. Duas
+    chamadas resolvem, e foram exatamente as duas que destravaram aquela
+    rodada:
+
+    1. `mouse_event(MOVE, 0, 0)` — um movimento de zero pixels que o
+       Windows conta como interação: zera o contador de ocioso e, se a tela
+       JÁ apagou, acende de volta. `SetThreadExecutionState` sozinho não faz
+       isso: ele impede que apague, mas não acende o que já está apagado.
+    2. `SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED |
+       ES_SYSTEM_REQUIRED)` — a mesma chamada que um player de vídeo faz
+       para o monitor não apagar durante o filme. Vale para ESTA thread,
+       que é a que roda a rodada inteira, e é desfeita no `finally` com
+       `ES_CONTINUOUS` sozinho: a ferramenta não pode deixar a máquina de
+       quem rodou sem economia de energia depois que terminou.
+
+    Fora do Windows não há `windll`, e a chamada não pode derrubar a
+    ferramenta — mesma regra de `_dpi_consciente()`. Quando falha, avisa
+    uma vez e segue: a captura preta continua sendo detectada em
+    `_capturar`, só não é evitada."""
+    kernel32 = None
+    try:
+        from ctypes import windll
+        windll.user32.mouse_event(_MOUSEEVENTF_MOVE, 0, 0, 0, 0)
+        # Devolve o estado anterior; NULL (0) é recusa.
+        if windll.kernel32.SetThreadExecutionState(
+                _ES_CONTINUOUS | _ES_DISPLAY_REQUIRED | _ES_SYSTEM_REQUIRED):
+            kernel32 = windll.kernel32
+    except Exception:                                      # noqa: BLE001
+        kernel32 = None
+    if kernel32 is None:
+        print("[galeria] não consegui segurar a tela acordada — se o "
+              "monitor apagar no meio da rodada, as capturas saem pretas "
+              "(e são recusadas, uma a uma).")
+    try:
+        yield
+    finally:
+        if kernel32 is not None:
+            try:
+                kernel32.SetThreadExecutionState(_ES_CONTINUOUS)
+            except Exception:                              # noqa: BLE001
+                pass
 
 
 #: A ordem do menu real (ver `comprovantes_app.main`): Início sozinho, a
@@ -312,11 +383,73 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
     return quadros, mostrar, aplicar_tema
 
 
+class CapturaInutil(RuntimeError):
+    """O print saiu, mas não mostra a janela: uma cor só de canto a canto."""
+
+
+def _de_uma_cor_so(imagem) -> bool:
+    """`getextrema()` devolve o (mínimo, máximo) de cada canal; se os dois
+    coincidem em todos os canais, todo pixel tem a mesma cor. Vale para RGB
+    (uma tupla por canal) e para imagem de um canal só (uma tupla)."""
+    extremos = imagem.getextrema()
+    if not isinstance(extremos[0], tuple):
+        extremos = (extremos,)
+    return all(minimo == maximo for minimo, maximo in extremos)
+
+
 def _capturar(root: tk.Tk, caminho: Path):
+    """Fotografa a região da tela onde a janela está e grava em `caminho`.
+
+    É print da TELA, não do widget: `ImageGrab.grab(bbox)` lê o que o
+    Windows está mostrando naquele retângulo. É isso que faz a foto ser fiel
+    (o mesmo pixel que a pessoa vê, com DPI, fonte e barra de título de
+    verdade) e também o que a deixa refém do que está NA TELA em vez da
+    janela. A armadilha da janela nascendo atrás está tratada em
+    `_montar_janela`; a irmã dela é o monitor APAGAR no meio da rodada. Com
+    a tela apagada o `grab()` não falha: devolve o retângulo inteiro preto,
+    `save()` grava um PNG de uns 3 KB, e nada avisa. Em 02/09/2026 a pasta
+    "depois" inteira do PR #15 saiu assim — 24 arquivos de 1280x800 todos
+    #000000, cada um anunciado no console como se tivesse dado certo — e só
+    foi descoberta ao abrir os arquivos.
+
+    Por isso a imagem é medida antes de ir para o disco: se é uma cor só de
+    canto a canto (`_de_uma_cor_so`), o print é recusado com `CapturaInutil`
+    e NADA é gravado. Nenhuma tela do app é de uma cor só — barra, menu
+    lateral e conteúdo têm cores diferentes por construção, nos dois temas
+    — e um PNG preto na pasta "depois" ao lado do "antes" é pior que um
+    arquivo a menos, porque parece captura de verdade até alguém abrir. O
+    mesmo filtro pega a janela que ainda não desenhou (retângulo inteiro na
+    cor de fundo): também inútil, e também sem erro nenhum por parte do Tk.
+    Quem chama conta as recusas para o resumo do fim da rodada.
+
+    Janela MINIMIZADA dá o mesmo preto por outro caminho: o Windows a
+    estaciona em (-32000, -32000), e o recorte fora da tela sai todo zero
+    (conferido: `grab()` nesse retângulo devolve 1280x800 de #000000). Ao
+    testar esta correção com a máquina em uso, uma rodada saiu com 3
+    capturas boas e 21 pretas, a tela segura por `_tela_acordada` e
+    capturável antes e depois — o preto não era o monitor. Por isso o
+    estado da janela é conferido ANTES do grab, e a recusa diz qual dos
+    casos foi: quem lê "a tela apagou" quando na verdade alguém minimizou
+    a janela vai procurar o defeito no lugar errado.
+
+    `_tela_acordada()` é o que EVITA a tela apagar; isto aqui é o que
+    garante que, se apagar mesmo assim, ninguém compara uma pasta preta
+    achando que está comparando telas."""
     caminho.parent.mkdir(parents=True, exist_ok=True)
+    if root.state() == "iconic":
+        raise CapturaInutil(
+            "a janela está minimizada — alguém a tirou da tela no meio da "
+            "rodada; nada foi gravado")
     x, y = root.winfo_rootx(), root.winfo_rooty()
     w, h = root.winfo_width(), root.winfo_height()
     imagem = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+    if _de_uma_cor_so(imagem):
+        cor = imagem.getpixel((0, 0))
+        if isinstance(cor, tuple):
+            cor = "#" + "".join(f"{c:02X}" for c in cor[:3])
+        raise CapturaInutil(
+            f"a captura saiu de uma cor só ({cor}) — a tela apagou, a "
+            "janela saiu da tela ou não desenhou; nada foi gravado")
     imagem.save(caminho)
 
 
@@ -325,7 +458,9 @@ def _assentar(root: tk.Tk):
     laço de eventos, e um `update()` só não garante que o desenho terminou
     antes do print da tela. `lift()` de novo a cada passo: outra janela pode
     ganhar `-topmost` no meio da rodada (um aviso do Windows, por exemplo), e
-    aí é ela que aparece no print em vez do app."""
+    aí é ela que aparece no print em vez do app. O que isto NÃO cobre é o
+    monitor apagado: aí o desenho terminou e a tela é que não mostra — ver
+    `_tela_acordada` (evita) e `_capturar` (recusa)."""
     root.lift()
     root.update_idletasks()
     root.update()
@@ -349,42 +484,72 @@ def main():
 
     _dpi_consciente()
 
-    root = tk.Tk()
-    root.withdraw()                      # some da tela até a janela ganhar
-                                          # o tamanho e o tema certos
-    # A escala tem de ser aplicada ANTES de qualquer widget nascer: ela
-    # muda o "pixels por ponto" do interpretador Tcl, e widget já criado não
-    # recalcula fonte nenhuma sozinho. É o MESMO `Tk()` daqui até o fim —
-    # `tk scaling` é por interpretador, e um segundo `Tk()` começaria do
-    # zero, sem a escala pedida.
-    if args.escala != 1.0:
-        base = float(root.tk.call("tk", "scaling"))
-        root.tk.call("tk", "scaling", base * args.escala)
+    tentadas = 0
+    recusadas: list[str] = []            # inúteis: uma cor só, minimizada
+    falhadas: list[str] = []             # qualquer outro erro no print
+    # A tela fica segura ANTES de a janela nascer e só é solta depois de a
+    # última captura sair (ou de a rodada morrer): é o tempo inteiro em que
+    # ninguém toca na máquina.
+    with _tela_acordada():
+        root = tk.Tk()
+        root.withdraw()                  # some da tela até a janela ganhar
+                                         # o tamanho e o tema certos
+        # A escala tem de ser aplicada ANTES de qualquer widget nascer: ela
+        # muda o "pixels por ponto" do interpretador Tcl, e widget já criado
+        # não recalcula fonte nenhuma sozinho. É o MESMO `Tk()` daqui até o
+        # fim — `tk scaling` é por interpretador, e um segundo `Tk()`
+        # começaria do zero, sem a escala pedida.
+        if args.escala != 1.0:
+            base = float(root.tk.call("tk", "scaling"))
+            root.tk.call("tk", "scaling", base * args.escala)
 
-    quadros, mostrar, aplicar_tema = _montar_janela(root, args.largura,
-                                                     args.altura)
-    pasta_saida = Path(args.saida)
-    print(f"Gravando em {pasta_saida.resolve()}")
+        quadros, mostrar, aplicar_tema = _montar_janela(root, args.largura,
+                                                         args.altura)
+        pasta_saida = Path(args.saida)
+        print(f"Gravando em {pasta_saida.resolve()}")
 
-    try:
-        for tema, escuro in (("claro", False), ("escuro", True)):
-            aplicar_tema(escuro)
-            _assentar(root)
-            for i, (chave, _icone, _texto, slug) in enumerate(_ORDEM, start=1):
-                if chave not in quadros:
-                    print(f"  [pulei] {tema}/{i:02d}-{slug} "
-                         "(a aba não foi montada)")
-                    continue
-                mostrar(chave)
+        try:
+            for tema, escuro in (("claro", False), ("escuro", True)):
+                aplicar_tema(escuro)
                 _assentar(root)
-                caminho = pasta_saida / tema / f"{i:02d}-{slug}.png"
-                try:
-                    _capturar(root, caminho)
-                    print(f"  {tema}/{i:02d}-{slug}.png")
-                except Exception as e:                     # noqa: BLE001
-                    print(f"  [erro] {tema}/{i:02d}-{slug}: {e}")
-    finally:
-        root.destroy()
+                for i, (chave, _icone, _texto, slug) in enumerate(_ORDEM,
+                                                                   start=1):
+                    if chave not in quadros:
+                        print(f"  [pulei] {tema}/{i:02d}-{slug} "
+                             "(a aba não foi montada)")
+                        continue
+                    mostrar(chave)
+                    _assentar(root)
+                    caminho = pasta_saida / tema / f"{i:02d}-{slug}.png"
+                    rotulo = f"{tema}/{i:02d}-{slug}"
+                    tentadas += 1
+                    try:
+                        _capturar(root, caminho)
+                        print(f"  [ok] {rotulo}.png")
+                    except CapturaInutil as e:
+                        recusadas.append(rotulo)
+                        print(f"  [erro] {rotulo}: {e}")
+                    except Exception as e:                 # noqa: BLE001
+                        falhadas.append(rotulo)
+                        print(f"  [erro] {rotulo}: {e}")
+        finally:
+            root.destroy()
+
+    # O resumo tem de dizer a verdade: "Pronto" com a pasta cheia de PNG
+    # preto foi exatamente o que enganou a rodada do PR #15.
+    if recusadas or falhadas:
+        print()
+        print(f"ATENÇÃO: {len(recusadas) + len(falhadas)} de {tentadas} "
+              f"capturas NÃO foram gravadas em {pasta_saida.resolve()}.")
+        if recusadas:
+            print(f"  {len(recusadas)} saíram inúteis — a tela apagou no "
+                  "meio da rodada, ou a janela foi minimizada, ou não "
+                  "desenhou (o motivo de cada uma está acima). Essa pasta "
+                  "não serve para comparar: rode de novo, e deixe a janela "
+                  "quieta até o fim.")
+        if falhadas:
+            print(f"  {len(falhadas)} deram erro no print (ver acima).")
+        sys.exit(1)
 
     print("Pronto. Compare as pastas de dentro de "
          f"{pasta_saida.resolve()} — o olho de quem mexeu é o teste.")
