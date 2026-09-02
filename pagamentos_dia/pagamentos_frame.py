@@ -1304,13 +1304,20 @@ class PagamentosDiaFrame(ttk.Frame):
             tabela.heading(chave, text=titulo)
             tabela.column(chave, width=larg,
                           anchor="e" if chave == "valor" else "w")
+        # Faltava: esta tabela era a única da tela sem o visual do painel, e
+        # por tabela nenhuma a mais ela ganha junto a zebra, a cor de estado e
+        # o clique no cabeçalho que ordena. Ordenar importa aqui mais que na
+        # média: o retorno chega na ordem do BANCO, e quem lê quer ver os
+        # rejeitados juntos, ou o maior valor primeiro.
+        widgets.estilo_tabela(tabela)
         tabela.pack(fill="both", expand=True)
 
-        for linha in resumo.linhas:
+        for i, linha in enumerate(resumo.linhas):
             valor = f"{linha.valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             tabela.insert("", "end", values=(
                 linha.rotulo, linha.favorecido[:40], valor,
-                linha.seu_numero, linha.motivos or "—"))
+                linha.seu_numero, linha.motivos or "—"),
+                tags=widgets.linha_zebrada(i, widgets.estado_de(linha.rotulo)))
 
         if resumo.faltando:
             ttk.Label(moldura, style="Erro.TLabel", wraplength=920,

@@ -653,6 +653,15 @@ class AnexarFrame(ttk.Frame):
                                            ("desc", "Descrição do PDF", 290, True)):
                 tv.heading(col, text=cab)
                 tv.column(col, width=larg, anchor="w", stretch=estica)
+            # A lista chega ordenada pelo SCORE, que é a ordem certa para
+            # decidir. Clicar no cabeçalho reordena por arquivo ou por data —
+            # é como se acha "aquele PDF de terça" quando os candidatos têm
+            # todos o mesmo valor e sinais parecidos.
+            #
+            # `fixos`: a linha "(deixar em dúvida)" é uma OPÇÃO, não um
+            # candidato. Ordenar a lista não pode enterrá-la entre os
+            # arquivos — ela é a saída de quem não vai decidir agora.
+            widgets.estilo_tabela(tv, fixos=("_nada",))
             tv.insert("", "end", iid="_nada",
                       values=("—", "(deixar em dúvida)", "", ""))
             mapa = {}
@@ -664,7 +673,9 @@ class AnexarFrame(ttk.Frame):
                 dt = pd["data"]
                 tv.insert("", "end", iid=f"c{k}",
                           values=(sinais or "só o valor bate", pd["fn"],
-                                  f"{dt[:2]}/{dt[2:]}" if dt else "—", pd["desc"]))
+                                  f"{dt[:2]}/{dt[2:]}" if dt else "—",
+                                  pd["desc"]),
+                          tags=widgets.linha_zebrada(k))
                 mapa[f"c{k}"] = pd
             tv.selection_set("_nada")
             tv.pack(fill="x", padx=8, pady=(0, 4))
