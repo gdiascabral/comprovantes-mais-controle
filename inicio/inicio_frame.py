@@ -22,16 +22,10 @@ não tem como fazê-la sem falar com o ERP.
 from __future__ import annotations
 
 import datetime as dt
-import sys
 import tkinter as tk
-from pathlib import Path
 from tkinter import ttk
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
 
 #: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
 #: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
