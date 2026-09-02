@@ -1599,6 +1599,29 @@ class ItemMenu(tk.Frame):
     alcançá-lo) e o fallback de quem não tem nenhuma das duas famílias. Quem
     monta o menu não precisou saber de nada disso — ver o bloco "ícones" no
     topo do arquivo.
+
+    **Ele entra no Tab, e essa é a diferença de 02/09/2026.** Era um `tk.Frame`
+    que só escutava `<Button-1>`, `<Enter>` e `<Leave>`: quem usa só o teclado
+    alcançava DIÁRIO e MENSAL (que são `ttk.Button`) e não alcançava nenhuma
+    das doze telas que eles agrupam. Agora `takefocus=1`, e `<Return>` e
+    `<space>` disparam o MESMO `_comando` do clique — um só caminho, para não
+    existir a chance de o teclado abrir uma aba e o mouse outra.
+
+    O foco tem sinal PRÓPRIO, e ele é derivado do estado aberto: o filete e o
+    anel de 1 px em volta ficam na cor `marca`, a mesma do item aberto, mas o
+    texto continua na cor de sempre — "o teclado está aqui" não pode passar por
+    "esta aba está aberta". Quem CARREGA o sinal é o anel, e isso foi medido:
+    o fundo do foco sozinho dá 1,16:1 no claro e 1,20:1 no escuro contra a
+    coluna, ou seja, não distingue nada; o anel dá 7,67:1 no claro
+    (#1746C7 sobre #FFFFFF) e 6,28:1 no escuro (#6F9BFF sobre #171D28), bem
+    acima dos 3:1 que a WCAG pede de indicador de foco. Sobre o item ABERTO,
+    onde o fundo já é `marca_fundo`, o anel ainda dá 6,60:1 e 5,23:1 — é o que
+    faz o foco aparecer mesmo na única linha que já estava destacada.
+
+    O anel é `highlightthickness=1` e nunca muda de espessura: o Tk troca
+    sozinho `highlightbackground` por `highlightcolor` quando o widget ganha o
+    foco, então não há 1 px entrando e saindo do layout a cada Tab — o que
+    empurraria a coluna inteira para baixo a cada tecla.
     """
 
     FILETE = 3
@@ -1607,13 +1630,17 @@ class ItemMenu(tk.Frame):
                  recuo: int = 0, **kw):
         c = cores()
         kw.setdefault("background", c["cartao"])
-        kw.setdefault("highlightthickness", 0)
+        # 1 px SEMPRE reservado — ver o docstring: o anel muda de cor, nunca de
+        # espessura.
+        kw.setdefault("highlightthickness", 1)
+        kw.setdefault("takefocus", 1)
         kw.setdefault("cursor", "hand2")
         super().__init__(pai, **kw)
         self._icone = icone
         self._texto = texto
         self._ativo = False
         self._trabalhando = False
+        self._foco = False
         self._comando = comando
 
         self.filete = tk.Frame(self, width=self.FILETE, highlightthickness=0)
@@ -1631,6 +1658,12 @@ class ItemMenu(tk.Frame):
             w.bind("<Button-1>", self._clique)
             w.bind("<Enter>", self._entrou)
             w.bind("<Leave>", self._saiu)
+        # O foco é do FRAME, e só dele: os filhos não aceitam foco, então não há
+        # segunda parada de Tab dentro do mesmo item.
+        self.bind("<Return>", self._teclou)
+        self.bind("<space>", self._teclou)
+        self.bind("<FocusIn>", self._ganhou_foco)
+        self.bind("<FocusOut>", self._perdeu_foco)
         _repintaveis.add(self)
         self.aplicar_cores(_estado["escuro"])
 
@@ -1638,6 +1671,24 @@ class ItemMenu(tk.Frame):
     def _clique(self, _ev=None):
         if self._comando:
             self._comando()
+
+    def _teclou(self, _ev=None):
+        """Enter e Espaço fazem o que o clique faz — o MESMO `_comando`.
+
+        Devolve "break" para o evento parar aqui. O `<Return>` do app é um
+        `bind_all` (ver `_enter_aciona` no `comprovantes_app.py`) que dispara o
+        passo principal da aba aberta: sem o "break", um Enter no menu abriria
+        a aba E mandaria a aba começar a trabalhar."""
+        self._clique()
+        return "break"
+
+    def _ganhou_foco(self, _ev=None):
+        self._foco = True
+        self._pintar()
+
+    def _perdeu_foco(self, _ev=None):
+        self._foco = False
+        self._pintar()
 
     def _entrou(self, _ev=None):
         if not self._ativo:
@@ -1694,12 +1745,19 @@ class ItemMenu(tk.Frame):
             fundo, frente, filete = c["fundo"], c["texto"], c["fundo"]
         else:
             fundo, frente, filete = c["cartao"], c["texto"], c["cartao"]
+        # O foco empresta o filete do item ABERTO — é o mesmo "você está aqui",
+        # dito para o teclado — e deixa o texto na cor de sempre, que é o que
+        # separa "o foco está neste item" de "esta aba está aberta". Quem
+        # carrega o sinal é o anel; ver o docstring da classe para as medidas.
+        if self._foco and not self._ativo:
+            filete = c["marca"]
         estilo = "ItemAtivo.TLabel" if self._ativo else "Item.TLabel"
         desenho, fonte_icone = self._desenho_do_icone()
         try:
             if hover and not self._ativo:
                 estilo = "ItemSobre.TLabel"
-            self.configure(background=fundo)
+            self.configure(background=fundo, highlightbackground=fundo,
+                           highlightcolor=c["marca"])
             self.corpo.configure(background=fundo)
             self.filete.configure(background=filete)
             self.lbl.configure(style=estilo)

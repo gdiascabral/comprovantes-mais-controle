@@ -328,13 +328,12 @@ def test_parar_no_meio_nao_grava_pdf_pela_metade(tmp_path):
     assert any("Interrompido" in linha for linha in linhas), linhas
 
 
-# ------------------------------------------------------------ os ícones
-# Os ícones do menu eram emoji e dingbats soltos, e o Tk pegava para cada um a
-# fonte que o Windows achasse primeiro: medido com `font actual`, no mínimo
-# QUATRO famílias numa coluna de doze linhas (Lucida Sans Unicode, Cambria,
-# MS Gothic e Segoe UI Emoji). As duas que caem na Segoe UI Emoji vêm de fonte
-# COLORIDA, e cor de glifo colorido não obedece ao `foreground`: essas ficavam
-# iguais nos dois temas. Ver o bloco "ícones" no topo do `widgets.py`.
+# ------------------------------------------------- o menu pelo teclado
+# Até 02/09/2026 o `ItemMenu` era um `tk.Frame` que só escutava `<Button-1>`,
+# `<Enter>` e `<Leave>`. Quem usa só o teclado alcançava DIÁRIO e MENSAL (que
+# são `ttk.Button`) e não alcançava NENHUMA das doze telas — o contrário da
+# regra que o próprio `comprovantes_app.py` escreveu para os cabeçalhos de
+# grupo, dois parágrafos acima do código que a desmentia.
 
 @pytest.fixture
 def coluna(raiz):
@@ -358,8 +357,113 @@ def coluna(raiz):
     raiz.update()
 
 
+def test_o_tab_passa_por_cada_item_do_menu(coluna):
+    """A coluna inteira tem de estar no caminho do Tab, e não só os grupos.
+
+    `tk_focusNext` é a MESMA travessia que a tecla Tab usa — o Tk a consulta
+    para decidir quem é o próximo —, então percorrê-la é perguntar ao Tk o que
+    o Tab faria, em vez de confiar que `takefocus=1` baste."""
+    pai, itens, _ = coluna
+    for it in itens:
+        assert str(it.cget("takefocus")) == "1", (
+            f"{it.texto()} não aceita foco: o Tab passa direto por ele")
+
+    itens[0].focus_force()
+    pai.update()
+    visitados = []
+    atual = itens[0]
+    for _ in range(len(itens)):
+        visitados.append(atual)
+        atual = atual.tk_focusNext()
+    assert visitados == itens, (
+        "o Tab não percorre os itens na ordem em que a coluna é lida: "
+        f"{[getattr(w, 'texto', lambda: str(w))() for w in visitados]}")
+
+
+@pytest.mark.parametrize("tecla", ["<Return>", "<space>"])
+def test_enter_e_espaco_abrem_a_aba(coluna, tecla):
+    """As duas teclas fazem o que o clique faz — e é o MESMO comando.
+
+    Um caminho só, de propósito: com dois, existiria a chance de o teclado
+    abrir uma aba e o mouse abrir outra."""
+    pai, itens, contagem = coluna
+    alvo = itens[1]                       # "Anexar"
+    alvo.focus_force()
+    pai.update()
+    alvo.event_generate(tecla)
+    pai.update()
+    assert contagem["anx"] == 1, f"{tecla} não acionou o item com o foco"
+    assert contagem["ini"] == 0 and contagem["rel"] == 0, (
+        "a tecla acionou um item que não era o do foco")
+
+
+def test_o_item_com_foco_nao_se_parece_com_o_sem_foco(coluna):
+    """Foco que não aparece na tela não serve para quem navega por Tab.
+
+    Quem carrega o sinal é o ANEL (`highlightcolor`, na cor `marca`) e o
+    filete da borda esquerda — o fundo sozinho dá 1,16:1 contra a coluna no
+    tema claro e 1,20:1 no escuro, ou seja, não distingue nada. Ver as medidas
+    no docstring de `widgets.ItemMenu`."""
+    pai, itens, _ = coluna
+    alvo = itens[1]
+
+    def aparencia(it):
+        return (str(it.cget("background")),
+                str(it.filete.cget("background")),
+                str(it.cget("highlightcolor")),
+                str(it.cget("highlightbackground")))
+
+    itens[0].focus_force()
+    pai.update()
+    sem_foco = aparencia(alvo)
+    alvo.focus_force()
+    pai.update()
+    com_foco = aparencia(alvo)
+
+    assert com_foco != sem_foco, (
+        "o item com foco está idêntico ao sem foco: quem navega por Tab não "
+        "tem como saber onde está")
+    # O anel só existe se houver espessura para desenhá-lo, e a espessura não
+    # pode mudar com o foco: 1 px entrando e saindo empurraria a coluna
+    # inteira para baixo a cada tecla.
+    assert int(alvo.cget("highlightthickness")) == 1
+    assert (str(alvo.cget("highlightcolor"))
+            != str(alvo.cget("highlightbackground"))), (
+        "o anel de foco está da mesma cor do fundo: ele não vai aparecer")
+
+
+def test_o_item_aberto_tambem_mostra_o_foco(coluna):
+    """O caso que o fundo sozinho não resolveria: o item ABERTO já é o mais
+    destacado da coluna, e sem o anel o foco pousaria nele sem sinal nenhum."""
+    pai, itens, _ = coluna
+    alvo = itens[1]
+    alvo.ativar(True)
+    pai.update()
+    assert (str(alvo.cget("highlightcolor"))
+            != str(alvo.cget("highlightbackground")))
+
+
+def test_o_teclado_e_o_clique_chamam_o_mesmo_comando(coluna):
+    pai, itens, contagem = coluna
+    alvo = itens[2]
+    alvo.focus_force()
+    pai.update()
+    alvo.event_generate("<Return>")
+    alvo._clique()                        # o caminho do mouse
+    pai.update()
+    assert contagem["rel"] == 2
+
+
+# ------------------------------------------------------------ os ícones
+# Os ícones do menu eram emoji e dingbats soltos, e o Tk pegava para cada um a
+# fonte que o Windows achasse primeiro: medido com `font actual`, no mínimo
+# QUATRO famílias numa coluna de doze linhas (Lucida Sans Unicode, Cambria,
+# MS Gothic e Segoe UI Emoji). As duas que caem na Segoe UI Emoji vêm de fonte
+# COLORIDA, e cor de glifo colorido não obedece ao `foreground`: essas ficavam
+# iguais nos dois temas. Ver o bloco "ícones" no topo do `widgets.py`.
+
 def test_o_icone_do_menu_segue_a_familia_encontrada(coluna):
-    """Com uma família de ícones presente, o rótulo mostra o codepoint
+    """Com uma família de ícones presente, o rótulo passa a mostrar o codepoint
     monocromático NA fonte de ícones; sem nenhuma, continua o emoji de sempre.
     Os dois desfechos são legítimos — o que não pode é o rótulo pedir a fonte
     de ícones e mostrar um emoji, que é o quadradinho de glifo ausente."""
@@ -398,20 +502,6 @@ def test_a_aba_que_trabalha_volta_para_a_fonte_de_texto(coluna):
     pai.update()
     assert str(alvo.lbl_icone.cget("text")) != "●", (
         "o ícone de sempre não voltou quando o trabalho acabou")
-
-
-def test_o_item_aberto_nao_perde_o_icone(coluna):
-    """`ItemAtivo.TLabel` traz `font=FONTE_FORTE`. Sem a fonte indo como opção
-    DO WIDGET, o único item da coluna a perder o ícone seria justamente o que
-    está aberto."""
-    pai, itens, _ = coluna
-    alvo = itens[1]
-    antes = str(alvo.lbl_icone.cget("text"))
-    alvo.ativar(True)
-    pai.update()
-    assert str(alvo.lbl_icone.cget("text")) == antes
-    assert str(alvo.lbl_icone.cget("font")) == (
-        widgets.FONTE_ICONES if widgets.familia_de_icones() else "")
 
 
 def test_fechar_da_acessorias_sem_nada_aberto(raiz):

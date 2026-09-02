@@ -222,11 +222,18 @@ PARES_DE_TEXTO = (
 #: vezes porque aparecem em dois lugares — dentro de um cartão (o círculo
 #: numerado) e no cabeçalho da página, que é o cinza do painel.
 #:
+#: O anel de foco do `widgets.ItemMenu` entrou aqui em 02/09/2026, e por um
+#: motivo que a tabela de texto não cobre: ele é `marca` desenhada sobre TRÊS
+#: fundos diferentes, conforme o item esteja parado, sob o cursor ou aberto.
+#: Dois desses três já são medidos acima, e mais duro — `marca` sobre `cartao`
+#: e `marca` sobre `marca_fundo` estão em `PARES_DE_TEXTO`, nos 4,5:1. O que
+#: faltava era o terceiro: o item sob o CURSOR, cujo fundo é o cinza do painel.
 PARES_DE_COMPONENTE = (
     (COR_DO_PASSO, "cartao", "o círculo numerado, dentro do cartão"),
     (COR_DO_PASSO, "fundo", "o botão de passo, no cabeçalho da página"),
     ("acao", "cartao", "o botão verde, dentro de um cartão"),
     ("acao", "fundo", "o botão verde, no cabeçalho da página"),
+    ("marca", "fundo", "o anel de foco do ItemMenu com o cursor no mesmo item"),
 )
 
 
