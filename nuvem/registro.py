@@ -26,11 +26,21 @@ remessa **para**, e parar é o desfecho certo.
 from __future__ import annotations
 
 import datetime as _dt
+import sys
+from pathlib import Path
 
 try:
     from . import rest
 except ImportError:
     import rest
+
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+log = util.log(__name__)
 
 
 class Envio:
@@ -121,6 +131,9 @@ class Registro:
         try:
             sha = hashlib.sha256(remessa.texto().encode("latin-1")).hexdigest()
         except Exception:
+            log.warning("calculando o sha256 da remessa nsa %s para registrar "
+                        "na nuvem", getattr(remessa, "nsa", "?"),
+                        exc_info=True)
             sha = ""
 
         linha = {
