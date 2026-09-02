@@ -457,6 +457,24 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   Um achado dessa validação: o guia OMITE a forma de iniciação `03` (CPF/CNPJ)
   na descrição da Informação 12 do segmento B, e o banco recusa o campo em
   branco. Manual incompleto; a correção está comentada em `remessa.py`.
+  **Existe UMA cópia deste pacote, e é esta.** Até 02/09/2026 havia uma
+  segunda, no repositório das automações avulsas (`fontes/cnab240`), com CLI e
+  testes próprios. Ela parou em 14/08 e nunca soube que `dv_cpf`, `dv_cnpj` e
+  `documento_valido` passaram a existir em `dominios.py` em 20/08 — depois de
+  o Sicoob devolver a remessa 000002 por um CPF de preenchimento vindo do
+  cadastro. Os 84 testes dela passavam verdes justamente por não saberem que a
+  validação existia, e o exemplo dela, rodado contra este código, produz 16
+  problemas de dígito verificador. Quem a importava eram os quatro scripts de
+  validação com o banco, por caminho absoluto escrito à mão; eles agora moram
+  em `cnab240/ferramentas/`, importam o pacote daqui e **conferem em tempo de
+  execução** que foi daqui que ele veio. A pasta fica fora do `codigo.zip` de
+  propósito (o app nunca a importa), pelo `_PASTAS_SO_DO_REPO` do
+  `test_empacotamento.py` — o mesmo tratamento do `nuvem/migrar.py`. Quatro
+  testes em `test_cnab240.py` impedem a volta: um `dominios.py` só no
+  repositório, as ferramentas importando `cnab240` e sem caminho externo no
+  `sys.path` (por AST), e as três funções de DV existindo **e recusando**. A
+  regra geral: uma biblioteca que move dinheiro não tem cópia de trabalho — a
+  cópia envelhece em silêncio, e o silêncio dela é uma aprovação falsa.
 - `relatorios/relatorio_frame.py` — aba Relatório Mensal: mês/ano (ou intervalo
   de datas), lista de contas com marcação, ⏹ Parar e progresso. Um PDF por
   conta, arquivado na árvore do fechamento junto do extrato do banco:
