@@ -6,7 +6,10 @@ aritmética sobre constantes, então roda no CI como qualquer regra de negócio.
 Os testes de fonte e de estilo abrem um Tk de verdade e pulam sem display,
 como o `test_widgets.py`.
 """
+import ast
 import gc
+import re
+import subprocess
 import tkinter as tk
 from pathlib import Path
 from tkinter import font as tkfont
@@ -29,7 +32,6 @@ def _versao_curta():
     a MESMA fonte que o app executa: se ela mudar de nome ou de lugar, o teste
     quebra em vez de passar testando outra coisa.
     """
-    import ast
     fonte = (_RAIZ_APP / "comprovantes_app.py").read_text(encoding="utf-8")
     arvore = ast.parse(fonte)
     alvo = next((n for n in arvore.body
@@ -744,3 +746,148 @@ def test_o_cartao_elastico_nao_muda_a_ordem_dos_widgets(raiz):
                                                    str(ultimo)]
     pai.destroy()
     raiz.update()
+
+
+# ------------------------------------------- nenhuma cor fixa fora do widgets
+# O CLAUDE.md afirma que "nenhuma aba escreve `#` seguido de seis dígitos", e o
+# relatório de UX de agosto conferiu isso à mão, arquivo por arquivo. Regra
+# conferida à mão vale até a próxima pessoa distraída — e o custo de furá-la
+# não aparece em vermelho: cor escrita na criação do widget NÃO segue o tema,
+# então o furo só se manifesta como uma legenda ilegível no tema que a pessoa
+# que escreveu não usa. Foi exatamente esse o defeito que originou o
+# `widgets.py`: `#6b6b6b` dá 3,2:1 no escuro e `#8a8a8a` dá 3,4:1 no claro,
+# cada um ilegível em UM dos dois temas.
+#
+# Aqui a regra vira teste. Ele não julga a cor: julga o LUGAR dela.
+
+#: Cor escrita como hexadecimal — `#rgb` ou `#rrggbb`. Fora do `widgets.py` ela
+#: é sempre um furo, esteja onde estiver: argumento nomeado, item de dicionário,
+#: constante de módulo ou elemento de lista.
+RE_COR_HEX = re.compile(r"^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$")
+
+#: Os argumentos que o Tk trata como cor.
+#:
+#: `fill` e `outline` estão aqui por causa do Canvas (`create_oval(fill=…)`) —
+#: e são também a armadilha desta varredura: o `fill` do `pack()` é DIREÇÃO
+#: ("x", "y", "both"), não cor. São 211 ocorrências de `fill="x"` no
+#: repositório, e uma checagem pelo NOME do argumento acusaria as 211. Por isso
+#: quem decide é o VALOR: só entra o que é mesmo uma cor.
+ARGUMENTOS_DE_COR = frozenset({"fg", "bg", "foreground", "background",
+                               "fill", "outline"})
+
+#: As cores com NOME que o Tk aceita e que alguém digitaria à mão. A lista é
+#: curta de propósito: ela não precisa cobrir as ~750 do X11, precisa cobrir o
+#: que uma pessoa escreve sem pensar. O hexadecimal, que é o caso comum, já é
+#: pego em qualquer posição pela `RE_COR_HEX`.
+CORES_COM_NOME = frozenset({
+    "white", "black", "red", "green", "blue", "cyan", "magenta", "yellow",
+    "gray", "grey", "orange", "purple", "brown", "pink", "navy", "teal",
+    "olive", "maroon", "silver", "lime", "gold", "beige", "ivory", "khaki",
+    "salmon", "tan", "violet", "wheat", "azure", "coral", "crimson",
+    "darkblue", "darkgreen", "darkred", "darkgray", "darkgrey", "lightblue",
+    "lightgreen", "lightgray", "lightgrey", "lightyellow", "systembuttonface",
+    "systemwindow", "systemwindowtext",
+})
+
+#: Quem PODE escrever cor. O `widgets.py` é o dono da paleta; `tests/` mede
+#: contraste e constrói widgets de mentira, e para isso precisa de cor literal.
+LIVRES_DA_REGRA = ("widgets.py",)
+
+
+def _e_cor_com_nome(valor) -> bool:
+    if not isinstance(valor, str):
+        return False
+    v = valor.strip().lower().replace(" ", "")
+    return v in CORES_COM_NOME or bool(re.fullmatch(r"(?:gray|grey)\d{1,3}", v))
+
+
+def _cores_fixas_em(caminho: Path, rotulo: str) -> list:
+    """As cores escritas à mão em UM arquivo, como "arquivo:linha: motivo".
+
+    `utf-8-sig` e não `utf-8`: arquivo salvo com BOM (o que o Bloco de Notas e
+    o `Set-Content` do PowerShell fazem sozinhos) é UTF-8 válido, mas o
+    `ast.parse` morre nele com "invalid non-printable character U+FEFF". O BOM
+    não é problema desta guarda, e derrubá-la por causa dele trocaria "achei
+    uma cor fixa" por um traceback que não diz nada sobre cor."""
+    fonte = caminho.read_text(encoding="utf-8-sig")
+    arvore = ast.parse(fonte, filename=rotulo)
+    achados = []
+    for no in ast.walk(arvore):
+        # 1. hexadecimal em QUALQUER posição — inclusive dentro de dicionário,
+        #    lista ou constante de módulo, que é por onde uma paleta paralela
+        #    nasceria sem passar por argumento nomeado nenhum.
+        if isinstance(no, ast.Constant) and isinstance(no.value, str) \
+                and RE_COR_HEX.match(no.value):
+            achados.append(f"{rotulo}:{no.lineno}: a cor {no.value} está "
+                           "escrita aqui — ela tem de sair da widgets.PALETA")
+        # 2. cor COM NOME, e só em posição de cor: "white" solto no meio de um
+        #    texto é uma palavra, não uma cor.
+        if isinstance(no, ast.Call):
+            for kw in no.keywords:
+                if kw.arg in ARGUMENTOS_DE_COR \
+                        and isinstance(kw.value, ast.Constant) \
+                        and _e_cor_com_nome(kw.value.value):
+                    achados.append(
+                        f"{rotulo}:{kw.value.lineno}: "
+                        f"{kw.arg}={kw.value.value!r} — cor com nome não segue "
+                        "o tema; use widgets.cores() ou um estilo nomeado")
+    return achados
+
+
+def _pys_rastreados() -> list:
+    """Os `.py` que o git conhece.
+
+    Rastreado pelo git, e não uma varredura do disco: `.venv`, `build/` e a
+    pasta de trabalho de quem estiver com um experimento aberto não são o
+    código do app, e uma delas com um `#FFFFFF` dentro faria o teste falhar
+    por algo que não é do repositório."""
+    try:
+        saida = subprocess.run(["git", "ls-files", "*.py"], cwd=_RAIZ_APP,
+                               capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:   # noqa: BLE001
+        pytest.skip(f"sem git para listar os arquivos rastreados: {e}")
+    if saida.returncode != 0:
+        pytest.skip("`git ls-files` falhou: " + saida.stderr.strip())
+    return [p.strip() for p in saida.stdout.splitlines() if p.strip()]
+
+
+def test_nenhuma_cor_fixa_fora_do_widgets():
+    """A regra do CLAUDE.md, medida em vez de conferida à mão.
+
+    Cor escrita na criação do widget não segue o tema. O furo não dá erro, não
+    aparece em teste nenhum e não incomoda quem o escreveu: ele incomoda quem
+    usa o OUTRO tema, meses depois."""
+    rastreados = _pys_rastreados()
+    assert len(rastreados) > 50, (
+        f"só {len(rastreados)} arquivos rastreados — a lista veio curta "
+        "demais, e uma guarda que não olha nada passa igual")
+
+    problemas = []
+    for rel in rastreados:
+        if rel in LIVRES_DA_REGRA or rel.startswith("tests/"):
+            continue
+        caminho = _RAIZ_APP / rel
+        if not caminho.is_file():
+            continue                     # rastreado mas ausente neste checkout
+        problemas += _cores_fixas_em(caminho, rel)
+
+    assert not problemas, (
+        f"{len(problemas)} cor(es) fixa(s) fora do widgets.py:\n  "
+        + "\n  ".join(problemas)
+        + "\n\nToda cor do app nasce em widgets.PALETA, com o contraste "
+          "medido nos dois temas. Quem precisa da cor crua (tk.Text, "
+          "tk.Canvas) pede a widgets.cores(); o resto usa estilo nomeado.")
+
+
+def test_a_varredura_de_cor_realmente_acha_cor():
+    """Guarda que não guarda nada passa igual — e esta é fácil de neutralizar
+    sem querer: basta um regex que nunca casa, ou uma lista de arquivos vazia,
+    e o teste de cima fica verde para sempre.
+
+    O `widgets.py` é o controle: ele é o único que PODE ter cor escrita, e tem
+    a paleta inteira. Se a varredura não achar cor lá, ela não acharia em lugar
+    nenhum."""
+    achados = _cores_fixas_em(_RAIZ_APP / "widgets.py", "widgets.py")
+    assert len(achados) > 50, (
+        f"a varredura achou só {len(achados)} cores no widgets.py, que tem a "
+        "paleta dos dois temas inteira: ela parou de enxergar cor")
