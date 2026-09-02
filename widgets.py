@@ -297,7 +297,7 @@ ICONES_POR_FAMILIA = {
     "Segoe MDL2 Assets": ICONES_MDL2,
 }
 
-_estado = {"escuro": False, "familia_icones": ""}
+_estado = {"escuro": False, "familia_icones": "", "fator": 0.0}
 
 
 def _familia_de_icones(familias, padrao: str) -> str:
@@ -350,6 +350,108 @@ def _escalar(tam: int, fator: float) -> int:
     Multiplicar sem cuidado transformava 1,55× num título menor que o corpo."""
     v = max(int(round(abs(tam) * fator)), 1)
     return -v if tam < 0 else v
+
+
+# --------------------------------------------- a medida de layout, em pixels
+# As fontes já acompanham a escala do Windows: elas saem do `TkDefaultFont`,
+# que vem no tamanho que a pessoa escolheu. As MEDIDAS de layout não
+# acompanhavam —
+# e é o desencontro entre as duas que quebra a tela.
+#
+# Como isso aparece, medido com `ferramentas/galeria.py --escala 1.5`:
+# "ÚLTIMA EXECUÇÃO" vira "ÚLTIMA EXECU" (a coluna tem 130 px fixos e a fonte
+# cresceu 50%), a coluna SITUAÇÃO some inteira da tabela do Início, e o
+# logotipo da barra encosta no campo de busca — a faixa continua com 52 px de
+# altura enquanto o texto dentro dela pede 1,5× disso.
+#
+# `px(n)` é o "n pixels" de quem desenhou a tela a 100%, dito na escala de
+# hoje. A 100% ele devolve o próprio n — nada muda para quem já estava bem.
+#
+# **A régua é a FONTE, e não o DPI**, e a diferença importa: quem aumenta só o
+# tamanho da fonte no Windows (sem mexer na escala de exibição) tem o mesmo
+# problema, e resolver por DPI deixaria essa pessoa de fora. É a mesma decisão
+# que fez as onze fontes nomeadas saírem do `TkDefaultFont` em vez de
+# consultarem a escala do sistema.
+
+#: A altura, em pixels, do `TkDefaultFont` numa máquina a 100%: 9 pontos a
+#: 96 dpi. É a régua contra a qual o `px` mede — o número que o desenho das
+#: telas assumiu sem dizer, já que TODAS as medidas fixas do app foram
+#: escolhidas nessa máquina e nessa escala.
+FONTE_BASE_PX = 12.0
+
+#: O teto. Escala de 400% não existe no Windows, e um fator absurdo (fonte
+#: quebrada, `tk scaling` esquisito de um servidor X) faria um cartão com
+#: 4.000 px de margem — pior do que o problema que isto resolve.
+FATOR_MAXIMO = 4.0
+
+#: O fator é arredondado para o degrau de 5% mais próximo, e isso não é
+#: preciosismo: MEDIDO nesta máquina a 100%, o `tk scaling` devolve 1,3346 e
+#: não os 1,3333 da teoria — o monitor responde 96,1 dpi. Sem o degrau, o
+#: fator sairia 1,001 e `px(820)` viraria 821: um pixel de diferença em toda
+#: tela de quem não mudou escala nenhuma, e a promessa "a 100% nada muda"
+#: deixaria de ser verdade. 5% também é fino o bastante para o 110% que o
+#: Windows deixa digitar à mão.
+DEGRAU_DA_ESCALA = 0.05
+
+
+def fator_de_escala() -> float:
+    """Quanto a fonte do sistema cresceu em relação aos 100% de referência.
+
+    1,0 em máquina a 100%; 1,5 a 150%. **Nunca menos que 1,0**, e isso é
+    deliberado: fonte menor que a de referência não corta nada — o texto cabe
+    de sobra —, e encolher as margens só apertaria uma tela que já estava boa.
+    O erro tem um lado barato, e é este.
+
+    Sai do TAMANHO do `TkDefaultFont` em pixels (pontos × `tk scaling`), e não
+    do `-linespace`: a entrelinha carrega o espaçamento da família e não
+    acompanha a escala em proporção limpa (medido nesta máquina: 15 px a 100%
+    e 25 a 150%, que dá 1,67 e não 1,5).
+
+    Sem janela Tk aberta devolve 1,0 — é o que faz `px` poder ser chamado de
+    qualquer lugar sem que quem chama precise saber se já há tela."""
+    if _estado["fator"]:
+        return _estado["fator"]
+    try:
+        tcl = ttk.Style().tk
+        tam = int(tcl.call("font", "configure", "TkDefaultFont", "-size"))
+        if tam < 0:
+            alto = float(-tam)           # negativo no Tk já é pixel
+        else:
+            alto = tam * float(tcl.call("tk", "scaling"))
+        bruto = alto / FONTE_BASE_PX
+        # No degrau de 5% mais próximo — ver `DEGRAU_DA_ESCALA`.
+        fator = round(bruto / DEGRAU_DA_ESCALA) * DEGRAU_DA_ESCALA
+        fator = min(max(fator, 1.0), FATOR_MAXIMO)
+    except (tk.TclError, ValueError, ZeroDivisionError, RuntimeError):
+        # Sem tela ainda: a medida é a de sempre, e NÃO fica guardada — quem
+        # perguntou cedo demais não pode congelar o app em 100% para o resto
+        # da execução.
+        return 1.0
+    _estado["fator"] = fator
+    return fator
+
+
+def px(n):
+    """`n` pixels de 100% ditos na escala de hoje. Aceita número ou tupla.
+
+    A tupla existe porque quase toda medida de layout do app é a folga de dois
+    lados do `pack` — `pady=px((16, 12))` —, e obrigar cada chamada a escalar
+    os dois lados à mão daria o dobro das chances de escalar só um.
+
+    **Zero continua zero.** Sem esta ressalva o `_escalar` devolveria 1, e um
+    `padx=(0, 8)` viraria `(1, 8)` em toda a tela — um pixel de folga onde o
+    desenho pedia encostado.
+
+    O fator é lido UMA vez e fica guardado: trocar a escala do Windows com o
+    app aberto muda as fontes (que são nomeadas) e não muda o layout já
+    montado. É a mesma limitação que o próprio Windows anuncia quando pede
+    para sair e entrar de novo."""
+    if isinstance(n, (tuple, list)):
+        return type(n)(px(v) for v in n)
+    n = int(n)
+    if n == 0:
+        return 0
+    return _escalar(n, fator_de_escala())
 
 
 def _garantir_fontes():
@@ -680,8 +782,8 @@ class Botao(tk.Button):
         kw.setdefault("borderwidth", 0)
         kw.setdefault("highlightthickness", 0)
         kw.setdefault("cursor", "hand2")
-        kw.setdefault("padx", 14)
-        kw.setdefault("pady", 7)
+        kw.setdefault("padx", px(14))
+        kw.setdefault("pady", px(7))
         kw.setdefault("font", FONTE_APOIO if papel == "link" else "TkDefaultFont")
         super().__init__(pai, text=texto, **kw)
         self._papel = papel
@@ -823,17 +925,18 @@ class Dica:
         self._popup = top
         moldura = tk.Frame(top, background=c["cartao"], highlightthickness=1,
                            highlightbackground=c["borda"],
-                           highlightcolor=c["borda"], padx=8, pady=5)
+                           highlightcolor=c["borda"], padx=px(8), pady=px(5))
         moldura.pack()
         ttk.Label(moldura, text=self.texto, style="Mini.TLabel").pack()
         try:
             top.update_idletasks()
             x = self.alvo.winfo_rootx()
-            y = self.alvo.winfo_rooty() + self.alvo.winfo_height() + 4
+            y = self.alvo.winfo_rooty() + self.alvo.winfo_height() + px(4)
             # Puxada para dentro da tela: a versão mora no canto direito da
             # barra, e o balão nasceria metade fora do monitor.
-            x = min(x, top.winfo_screenwidth() - top.winfo_reqwidth() - 8)
-            top.geometry(f"+{max(x, 8)}+{y}")
+            x = min(x,
+                    top.winfo_screenwidth() - top.winfo_reqwidth() - px(8))
+            top.geometry(f"+{max(x, px(8))}+{y}")
         except tk.TclError:
             self._fechar()
 
@@ -875,15 +978,19 @@ class BarraFina(tk.Frame):
     da barra do ttk — as seis abas que já as chamavam não mudaram uma linha.
     """
 
+    #: 5 px na escala de 100%. Passa pelo `px` nos dois usos abaixo: a 150%
+    #: uma barra de 5 px ao lado de texto 1,5× maior deixa de ser "fina" e
+    #: passa a ser "quase invisível".
     ALTURA = 5
 
     def __init__(self, pai, mode="determinate", maximum=100, value=0, **kw):
         kw.setdefault("highlightthickness", 0)
         kw.setdefault("borderwidth", 0)
-        super().__init__(pai, height=self.ALTURA, **kw)
+        super().__init__(pai, height=px(self.ALTURA), **kw)
         self.pack_propagate(False)
         self.grid_propagate(False)
-        self._canvas = tk.Canvas(self, height=self.ALTURA, highlightthickness=0,
+        self._canvas = tk.Canvas(self, height=px(self.ALTURA),
+                                 highlightthickness=0,
                                  borderwidth=0)
         self._canvas.pack(fill="both", expand=True)
         self._modo = mode
@@ -1005,7 +1112,7 @@ class BarraExecucao(ttk.Frame):
                                   else "Mini.TLabel")
         self.contagem.pack(side="right")
         self.pb = BarraFina(self)
-        self.pb.pack(fill="x", pady=(5, 0))
+        self.pb.pack(fill="x", pady=px((5, 0)))
         #: Quando o trabalho atual começou — a base do "faltam ~".
         self._inicio = None
         self._ultimo_total = 0
@@ -1080,7 +1187,7 @@ class Cartao(tk.Frame):
     def __init__(self, pai, titulo: str = "", numero: int | None = None,
                  padding=None, **kw):
         c = cores()
-        larg, alt = self._folga(padding)
+        larg, alt = px(self._folga(padding))
         moldura = tk.Frame(pai, background=c["cartao"], highlightthickness=1,
                            highlightbackground=c["borda"],
                            highlightcolor=c["borda"], borderwidth=0,
@@ -1186,7 +1293,7 @@ class Cartao(tk.Frame):
         c = cores()
         linha = tk.Frame(self.moldura, background=c["cartao"],
                          highlightthickness=0)
-        linha.pack(fill="x", pady=(0, 9))
+        linha.pack(fill="x", pady=px((0, 9)))
         self.cabecalho = linha
         if numero is not None:
             # O círculo azul do passo. Canvas porque um Label redondo não
@@ -1201,7 +1308,7 @@ class Cartao(tk.Frame):
             bolha.create_text(lado / 2, lado / 2 + 1, text=str(numero),
                               fill="#FFFFFF", font=FONTE_MINI_FORTE,
                               tags="numero")
-            bolha.pack(side="left", padx=(0, 9))
+            bolha.pack(side="left", padx=px((0, 9)))
             self._bolha = bolha
         self.lbl_titulo = ttk.Label(linha, text=titulo, style="Secao.TLabel")
         self.lbl_titulo.pack(side="left")
@@ -1213,7 +1320,7 @@ class Cartao(tk.Frame):
         # uma linha em branco — que era o que a moldura do LabelFrame fazia.
         self.filete = tk.Frame(self.moldura, height=1, background=c["borda"],
                                highlightthickness=0)
-        self.filete.pack(fill="x", pady=(0, 11))
+        self.filete.pack(fill="x", pady=px((0, 11)))
 
     def titulo(self, texto: str):
         if self.cabecalho is not None:
@@ -1262,19 +1369,19 @@ class Cabecalho(ttk.Frame):
         esquerda.pack(side="left", fill="x", expand=True)
         if trilha:
             ttk.Label(esquerda, text=trilha, style="Trilha.TLabel"
-                      ).pack(anchor="w", pady=(0, 2))
+                      ).pack(anchor="w", pady=px((0, 2)))
         ttk.Label(esquerda, text=titulo, style="FundoTitulo.TLabel"
                   ).pack(anchor="w")
         self.lbl_apoio = None
         if apoio:
             self.lbl_apoio = ttk.Label(esquerda, text=apoio,
                                        style="FundoApoio.TLabel",
-                                       wraplength=820, justify="left")
-            self.lbl_apoio.pack(anchor="w", pady=(3, 0))
+                                       wraplength=px(820), justify="left")
+            self.lbl_apoio.pack(anchor="w", pady=px((3, 0)))
         #: Os botões da tela. `anchor="e"` para eles ficarem alinhados pelo
         #: alto do título, e não centralizados contra a linha de apoio.
         self.acoes = ttk.Frame(self, style="Fundo.TFrame")
-        self.acoes.pack(side="right", anchor="ne", padx=(14, 0))
+        self.acoes.pack(side="right", anchor="ne", padx=px((14, 0)))
         #: Espaço abaixo da linha de apoio, para quem quiser pendurar algo no
         #: cabeçalho. Nasce vazio e não ocupa lugar até alguém empacotá-lo.
         self.rodape = ttk.Frame(esquerda, style="Fundo.TFrame")
@@ -1319,8 +1426,8 @@ class RodapeTabela(ttk.Frame):
 
     def link(self, texto: str, comando):
         b = Botao(self._links, texto, papel="link", command=comando,
-                  padx=8, pady=2)
-        b.pack(side="left", padx=(10, 0))
+                  padx=px(8), pady=px(2))
+        b.pack(side="left", padx=px((10, 0)))
         return b
 
 
@@ -1340,7 +1447,7 @@ class Campo(ttk.Frame):
     def __init__(self, pai, rotulo: str, fabrica, **kw):
         super().__init__(pai, **kw)
         ttk.Label(self, text=rotulo.upper(), style="Rotulo.TLabel"
-                  ).pack(anchor="w", pady=(0, 3))
+                  ).pack(anchor="w", pady=px((0, 3)))
         self.widget = fabrica(self)
         self.widget.pack(anchor="w", fill="x")
 
@@ -1389,6 +1496,9 @@ class BarraTopo(tk.Frame):
     ligados ao `Entry` e não à lista.
     """
 
+    #: 52 px na escala de 100%. É a medida que mais estragava a 150%: a faixa
+    #: ficava do mesmo tamanho enquanto o logotipo dentro dela crescia 50%, e
+    #: o texto saía cortado por baixo, encostado no campo de busca.
     ALTURA = 52
 
     #: O que o campo diz que faz. Vira constante para o teste poder afirmar
@@ -1400,7 +1510,7 @@ class BarraTopo(tk.Frame):
         c = cores()
         kw.setdefault("background", c["marca_barra"])
         kw.setdefault("highlightthickness", 0)
-        super().__init__(pai, height=self.ALTURA, **kw)
+        super().__init__(pai, height=px(self.ALTURA), **kw)
         self.pack_propagate(False)
         self._dica = dica or self.DICA
         #: (nome da tela, o que fazer para abri-la). Preenchido por
@@ -1418,23 +1528,23 @@ class BarraTopo(tk.Frame):
         self._voltar_para = None
 
         self.esquerda = tk.Frame(self, background=c["marca_barra"])
-        self.esquerda.pack(side="left", fill="y", padx=(18, 0))
+        self.esquerda.pack(side="left", fill="y", padx=px((18, 0)))
         self.lbl_marca = ttk.Label(self.esquerda, text=marca,
                                    style="Marca.TLabel")
-        self.lbl_marca.pack(side="left", pady=14)
+        self.lbl_marca.pack(side="left", pady=px(14))
 
         self.direita = tk.Frame(self, background=c["marca_barra"])
-        self.direita.pack(side="right", fill="y", padx=(0, 18))
+        self.direita.pack(side="right", fill="y", padx=px((0, 18)))
 
         # O centro entra POR ÚLTIMO, e é o único com `expand`: assim ele fica
         # com a sobra da largura, e o logotipo e o canto direito ficam com o
         # que precisam. Empacotado antes, ele empurrava o canto direito para
         # fora da janela em telas estreitas.
         self.centro = tk.Frame(self, background=c["marca_barra"])
-        self.centro.pack(side="left", fill="both", expand=True, padx=24)
+        self.centro.pack(side="left", fill="both", expand=True, padx=px(24))
         self.busca = tk.Entry(self.centro, relief="flat", borderwidth=0,
                               highlightthickness=1, font="TkDefaultFont")
-        self.busca.pack(fill="x", pady=13, ipady=4, ipadx=8)
+        self.busca.pack(fill="x", pady=px(13), ipady=px(4), ipadx=px(8))
         self._vazia = True
         self.busca.bind("<FocusIn>", self._entrou)
         self.busca.bind("<FocusOut>", self._saiu)
@@ -1601,11 +1711,11 @@ class BarraTopo(tk.Frame):
             # responde a nada parece travado, e a pessoa fica tentando de novo.
             tk.Label(self._moldura, text="Nenhuma tela com esse nome.",
                      background=c["cartao"], foreground=c["tenue"],
-                     font=FONTE_APOIO, anchor="w", padx=10, pady=6
+                     font=FONTE_APOIO, anchor="w", padx=px(10), pady=px(6)
                      ).pack(fill="x")
         for i, (texto, _cmd) in enumerate(self._achados):
-            lin = tk.Label(self._moldura, text=texto, anchor="w", padx=10,
-                           pady=4, cursor="hand2")
+            lin = tk.Label(self._moldura, text=texto, anchor="w", padx=px(10),
+                           pady=px(4), cursor="hand2")
             lin.pack(fill="x")
             lin.bind("<Button-1>", lambda _e, n=i: self._escolher(n))
             lin.bind("<Enter>", lambda _e, n=i: self._realcar(n))
@@ -1638,16 +1748,16 @@ class BarraTopo(tk.Frame):
             return
         try:
             top.update_idletasks()
-            larg = max(self.busca.winfo_width(), 240)
+            larg = max(self.busca.winfo_width(), px(240))
             alt = top.winfo_reqheight()
             x = self.busca.winfo_rootx()
-            y = self.busca.winfo_rooty() + self.busca.winfo_height() + 3
+            y = self.busca.winfo_rooty() + self.busca.winfo_height() + px(3)
             # Puxada para dentro da tela: com `overrideredirect` o Windows não
             # reposiciona nada sozinho, e numa janela baixa a lista das doze
             # telas nasceria com metade fora do monitor.
-            x = max(min(x, top.winfo_screenwidth() - larg - 8), 8)
-            if y + alt > top.winfo_screenheight() - 8:
-                y = max(self.busca.winfo_rooty() - alt - 3, 8)
+            x = max(min(x, top.winfo_screenwidth() - larg - px(8)), px(8))
+            if y + alt > top.winfo_screenheight() - px(8):
+                y = max(self.busca.winfo_rooty() - alt - px(3), px(8))
             top.geometry(f"{larg}x{alt}+{x}+{y}")
             top.deiconify()
         except tk.TclError:
@@ -1726,8 +1836,10 @@ class Avatar(tk.Canvas):
                  na_barra: bool = True, **kw):
         kw.setdefault("highlightthickness", 0)
         kw.setdefault("borderwidth", 0)
-        super().__init__(pai, width=lado, height=lado, **kw)
-        self._lado = lado
+        # O círculo leva uma LETRA dentro, e a letra cresce com a escala: um
+        # círculo de 30 px fixos a 150% é uma inicial estourando a bolha.
+        self._lado = px(lado)
+        super().__init__(pai, width=self._lado, height=self._lado, **kw)
         self._na_barra = na_barra
         self._inicial = (nome.strip()[:1] or "?").upper()
         _repintaveis.add(self)
@@ -1775,13 +1887,17 @@ class ChipStatus(tk.Frame):
         super().__init__(pai, **kw)
         self._na_barra = na_barra
         self._estado = "livre"
-        self.bolha = tk.Canvas(self, width=10, height=10,
+        # A bolinha acompanha a escala: parada em 10 px ao lado de um texto
+        # 1,5× maior, ela deixa de ser um sinal e vira sujeira na barra.
+        self._bolinha = px(10)
+        self.bolha = tk.Canvas(self, width=self._bolinha,
+                               height=self._bolinha,
                                highlightthickness=0, borderwidth=0)
-        self.bolha.pack(side="left", pady=2)
+        self.bolha.pack(side="left", pady=px(2))
         self.lbl = ttk.Label(self, text="Navegador livre",
                              style="Barra.TLabel" if na_barra else "Apoio.TLabel",
                              wraplength=0, anchor="w", width=largura)
-        self.lbl.pack(side="left", padx=(7, 0))
+        self.lbl.pack(side="left", padx=px((7, 0)))
         _repintaveis.add(self)
         self.aplicar_cores(_estado["escuro"])
 
@@ -1803,7 +1919,8 @@ class ChipStatus(tk.Frame):
             cor = "#FFC24D" if self._estado == "ocupado" else "#5FD08E"
         try:
             self.bolha.delete("all")
-            self.bolha.create_oval(1, 1, 9, 9, fill=cor, outline="")
+            self.bolha.create_oval(1, 1, self._bolinha - 1,
+                                   self._bolinha - 1, fill=cor, outline="")
         except tk.TclError:
             pass
 
@@ -1866,6 +1983,9 @@ class ItemMenu(tk.Frame):
     empurraria a coluna inteira para baixo a cada tecla.
     """
 
+    #: A largura do filete, a 100%. Escala junto: ele é o sinal de "esta aba
+    #: está aberta" (e o de "o foco está aqui"), e 3 px ao lado de um item
+    #: 1,5× mais alto some.
     FILETE = 3
 
     def __init__(self, pai, texto: str, icone: str = "", comando=None,
@@ -1885,16 +2005,18 @@ class ItemMenu(tk.Frame):
         self._foco = False
         self._comando = comando
 
-        self.filete = tk.Frame(self, width=self.FILETE, highlightthickness=0)
+        self.filete = tk.Frame(self, width=px(self.FILETE),
+                               highlightthickness=0)
         self.filete.pack(side="left", fill="y")
         self.corpo = tk.Frame(self, highlightthickness=0)
         self.corpo.pack(side="left", fill="both", expand=True)
         self.lbl_icone = ttk.Label(self.corpo, text=icone, style="Menu.TLabel",
                                    width=2, anchor="center")
-        self.lbl_icone.pack(side="left", padx=(9 + recuo, 0), pady=6)
+        self.lbl_icone.pack(side="left", padx=px((9 + recuo, 0)), pady=px(6))
         self.lbl = ttk.Label(self.corpo, text=texto, style="Menu.TLabel",
                              anchor="w")
-        self.lbl.pack(side="left", padx=(7, 8), pady=6, fill="x", expand=True)
+        self.lbl.pack(side="left", padx=px((7, 8)), pady=px(6), fill="x",
+                      expand=True)
 
         for w in (self, self.corpo, self.lbl, self.lbl_icone):
             w.bind("<Button-1>", self._clique)
@@ -2051,14 +2173,19 @@ class PainelMenu(tk.Frame):
         c = cores()
         kw.setdefault("background", c["cartao"])
         kw.setdefault("highlightthickness", 0)
-        super().__init__(pai, width=largura, **kw)
+        # A coluna inteira escala: 232 px guardam "Baixar Comprovantes" a
+        # 100% e cortam o mesmo rótulo a 150%. Escalar AQUI, e não em quem
+        # chama, faz valer tanto para o padrão quanto para o 232 que o
+        # `comprovantes_app` passa por extenso.
+        super().__init__(pai, width=px(largura), **kw)
         self.pack_propagate(False)
-        self.borda = tk.Frame(self, width=1, highlightthickness=0)
+        self.borda = tk.Frame(self, width=px(1), highlightthickness=0)
         self.borda.pack(side="right", fill="y")
         self.rodape = tk.Frame(self, highlightthickness=0)
-        self.rodape.pack(side="bottom", fill="x", padx=14, pady=(8, 12))
+        self.rodape.pack(side="bottom", fill="x", padx=px(14),
+                         pady=px((8, 12)))
         self.corpo = tk.Frame(self, highlightthickness=0)
-        self.corpo.pack(side="top", fill="both", expand=True, pady=(10, 0))
+        self.corpo.pack(side="top", fill="both", expand=True, pady=px((10, 0)))
         _repintaveis.add(self)
         self.aplicar_cores(_estado["escuro"])
 
@@ -2067,7 +2194,7 @@ class PainelMenu(tk.Frame):
         que diz que os quatro itens abaixo dele são a mesma família."""
         lbl = ttk.Label(pai if pai is not None else self.corpo,
                         text=texto.upper(), style="MenuSecao.TLabel")
-        lbl.pack(anchor="w", padx=(14, 0), pady=(12, 4))
+        lbl.pack(anchor="w", padx=px((14, 0)), pady=px((12, 4)))
         return lbl
 
     def aplicar_cores(self, escuro: bool | None = None):
@@ -2158,8 +2285,27 @@ def estilo_tabela(tabela: "ttk.Treeview", zebra: bool = True,
     # ttk é centralizar o cabeçalho e alinhar o conteúdo à esquerda, e a coluna
     # de dinheiro ficava com o título no meio e os valores à direita, sem que
     # nada na tela explicasse por quê.
+    # A LARGURA das colunas escala aqui, num lugar só, em vez de em cada uma
+    # das catorze telas. É a medida que quebrava mais visivelmente a 150%: a
+    # coluna "ÚLTIMA EXECUÇÃO" do Início tem 130 px fixos e o cabeçalho saía
+    # "ÚLTIMA EXECU"; a "SITUAÇÃO", que vem depois, não cabia mais na tabela e
+    # sumia inteira. Quem escreveu 130 estava dizendo "cabe o título", e é essa
+    # frase — e não o número — que tem de continuar verdadeira.
+    #
+    # As larguras de origem ficam guardadas no widget: `estilo_tabela` é
+    # chamado DE NOVO por duas telas (Início e Acessórias, ao remontar a
+    # lista), e sem a memória a segunda passada escalaria o que já estava
+    # escalado.
+    larguras = getattr(tabela, "_larguras_base", None)
     try:
+        if larguras is None:
+            larguras = tabela._larguras_base = {
+                c: (int(tabela.column(c, "width")),
+                    int(tabela.column(c, "minwidth")))
+                for c in tabela["columns"]}
         for col in tabela["columns"]:
+            larg, minimo = larguras[col]
+            tabela.column(col, width=px(larg), minwidth=px(minimo))
             tabela.heading(col, anchor=str(tabela.column(col, "anchor")))
             # Coluna que JÁ tem dono continua com o dono. A do "marcar todas"
             # do Baixar Comprovantes é um botão disfarçado de cabeçalho, e
@@ -2757,7 +2903,7 @@ def estilo_log(texto: tk.Text, escuro: bool | None = None) -> None:
                     # claro ela não faz falta nem atrapalha.
                     highlightthickness=1, highlightbackground=c["borda"],
                     highlightcolor=c["borda"],
-                    padx=12, pady=8)
+                    padx=px(12), pady=px(8))
     texto.tag_configure("ph", justify="center", foreground=c["tenue"],
                         spacing1=6, font=FONTE_APOIO)
     for tag, cor in LOG_CORES.items():
@@ -2835,7 +2981,7 @@ def estilo_campo_texto(texto: tk.Text, escuro: bool | None = None) -> None:
                         font="TkDefaultFont",
                         highlightthickness=1, highlightbackground=c["borda"],
                         highlightcolor=c["marca"], borderwidth=0,
-                        relief="flat", padx=8, pady=6)
+                        relief="flat", padx=px(8), pady=px(6))
     except tk.TclError:
         pass
 
@@ -3014,8 +3160,8 @@ class CampoData(ttk.Frame):
         self.ent = ttk.Entry(self, textvariable=self.var, width=width)
         self.ent.pack(side="left")
         self.bt = Botao(self, "📅", papel="neutro", command=self.abrir_calendario,
-                        padx=7, pady=2)
-        self.bt.pack(side="left", padx=(3, 0))
+                        padx=px(7), pady=px(2))
+        self.bt.pack(side="left", padx=px((3, 0)))
 
         self.ent.bind("<KeyRelease>", self._ao_digitar)
         self.ent.bind("<Button-1>", self._ao_clicar)
@@ -3142,7 +3288,7 @@ class CampoData(ttk.Frame):
         # A borda é do próprio frame, já que não há moldura de janela.
         moldura = tk.Frame(top, background=c["cartao"], highlightthickness=1,
                            highlightbackground=c["borda"],
-                           highlightcolor=c["borda"], padx=10, pady=9)
+                           highlightcolor=c["borda"], padx=px(10), pady=px(9))
         moldura.pack(fill="both", expand=True)
 
         mes, ano = self._data_atual()
@@ -3154,7 +3300,7 @@ class CampoData(ttk.Frame):
         lbl = ttk.Label(cab, text="", width=17, anchor="center",
                         style="Forte.TLabel")
         grade = tk.Frame(moldura, background=c["cartao"])
-        grade.pack(pady=(6, 0))
+        grade.pack(pady=px((6, 0)))
 
         def escolher(dia: int):
             self.var.set(f"{dia:02d}/{estado['mes']:02d}/{estado['ano']}")
@@ -3180,7 +3326,8 @@ class CampoData(ttk.Frame):
             for i, inicial in enumerate(DIAS_DA_SEMANA):
                 tk.Label(grade, text=inicial, width=3, anchor="center",
                          background=c["cartao"], foreground=c["tenue"],
-                         font=FONTE_MINI).grid(row=0, column=i, pady=(0, 3))
+                         font=FONTE_MINI).grid(row=0, column=i,
+                                               pady=px((0, 3)))
             escolhida = self._escolhida()
             semanas = calendar.Calendar(SEMANA_COMECA_EM).monthdayscalendar(
                 estado["ano"], estado["mes"])
@@ -3192,7 +3339,7 @@ class CampoData(ttk.Frame):
                     marcado = escolhida == este
                     cel = tk.Label(
                         grade, text=str(dia), width=3, anchor="center",
-                        padx=2, pady=3, cursor="hand2",
+                        padx=px(2), pady=px(3), cursor="hand2",
                         background=c["marca_solida"] if marcado
                         else c["cartao"],
                         foreground="#FFFFFF" if marcado else c["texto"],
@@ -3209,7 +3356,7 @@ class CampoData(ttk.Frame):
                         highlightthickness=1 if este == hoje else 0,
                         highlightbackground=c["marca"],
                         highlightcolor=c["marca"])
-                    cel.grid(row=r, column=col, padx=1, pady=1)
+                    cel.grid(row=r, column=col, padx=px(1), pady=px(1))
                     cel.bind("<Button-1>", lambda _e, d=dia: escolher(d))
                     if not marcado:
                         cel.bind("<Enter>", lambda e: e.widget.configure(
@@ -3228,16 +3375,16 @@ class CampoData(ttk.Frame):
             desenhar()
 
         Botao(cab, "‹", papel="link", command=lambda: mudar(-1),
-              padx=6, pady=0).pack(side="left")
+              padx=px(6), pady=px(0)).pack(side="left")
         lbl.pack(side="left", expand=True)
         Botao(cab, "›", papel="link", command=lambda: mudar(1),
-              padx=6, pady=0).pack(side="right")
+              padx=px(6), pady=px(0)).pack(side="right")
 
         rodape = tk.Frame(moldura, background=c["cartao"])
-        rodape.pack(fill="x", pady=(7, 0))
-        Botao(rodape, "Hoje", papel="link", padx=4, pady=1,
+        rodape.pack(fill="x", pady=px((7, 0)))
+        Botao(rodape, "Hoje", papel="link", padx=px(4), pady=px(1),
               command=ir_para_hoje).pack(side="left")
-        Botao(rodape, "Limpar", papel="link", padx=4, pady=1,
+        Botao(rodape, "Limpar", papel="link", padx=px(4), pady=px(1),
               command=limpar).pack(side="right")
 
         desenhar()
@@ -3247,11 +3394,11 @@ class CampoData(ttk.Frame):
         # e um campo perto da borda de baixo abria o calendário fora do monitor.
         top.update_idletasks()
         x = self.ent.winfo_rootx()
-        y = self.ent.winfo_rooty() + self.ent.winfo_height() + 3
+        y = self.ent.winfo_rooty() + self.ent.winfo_height() + px(3)
         larg, alt = top.winfo_reqwidth(), top.winfo_reqheight()
-        x = max(min(x, top.winfo_screenwidth() - larg - 8), 8)
-        if y + alt > top.winfo_screenheight() - 8:
-            y = self.ent.winfo_rooty() - alt - 3
+        x = max(min(x, top.winfo_screenwidth() - larg - px(8)), px(8))
+        if y + alt > top.winfo_screenheight() - px(8):
+            y = self.ent.winfo_rooty() - alt - px(3)
         top.geometry(f"+{x}+{y}")
         top.deiconify()
 

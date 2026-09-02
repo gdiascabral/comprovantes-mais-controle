@@ -41,6 +41,11 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import widgets
 
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
+
 from . import conferencia as conf
 from . import pipeline
 from . import resolver
@@ -127,16 +132,16 @@ class ContratosFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _montar(self):
-        PADX = widgets.PADX
+        PADX = px(widgets.PADX)
         self.cab = widgets.Cabecalho(
             self, "Contratos de Financiamento",
             "Acha o contrato das casas que financiaram no mês, confere o "
             "conteúdo e arquiva na pasta da empresa.",
             trilha="Mensal  ›  Contratos")
-        self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         self.b1 = widgets.Botao(self.cab.acoes, "Buscar", papel="passo",
                                 command=self.buscar)
-        self.b1.pack(side="left", padx=(0, 8))
+        self.b1.pack(side="left", padx=px((0, 8)))
         self.b2 = widgets.Botao(self.cab.acoes, "Conferir e arquivar",
                                 papel="acao", command=self.arquivar,
                                 state="disabled")
@@ -144,24 +149,24 @@ class ContratosFrame(ttk.Frame):
 
         # Os cartões é que passam a ser numerados; os botões dizem o verbo.
         f1 = widgets.Cartao(self, "Mês", 1)
-        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
         widgets.Campo(linha, "Mês", lambda p: ttk.Combobox(
             p, textvariable=self.v_mes, values=MESES, state="readonly",
-            width=12)).pack(side="left", padx=(0, 16))
+            width=12)).pack(side="left", padx=px((0, 16)))
         anos = [str(a) for a in range(datetime.date.today().year + 1, 2019, -1)]
         widgets.Campo(linha, "Ano", lambda p: ttk.Combobox(
             p, textvariable=self.v_ano, values=anos, state="readonly",
-            width=7)).pack(side="left", padx=(0, 16))
+            width=7)).pack(side="left", padx=px((0, 16)))
         ttk.Label(linha, style="Tenue.TLabel",
                   text="data do RECEBIMENTO do financiamento"
-                  ).pack(side="left", pady=(15, 0))
+                  ).pack(side="left", pady=px((15, 0)))
 
         f2 = widgets.Cartao(
             self, "Casas com financiamento no mês — marque as que entram", 2,
             padding=(16, 14))
-        f2.pack(fill="both", expand=True, padx=PADX, pady=(0, 12))
+        f2.pack(fill="both", expand=True, padx=PADX, pady=px((0, 12)))
         grade = ttk.Frame(f2); grade.pack(fill="both", expand=True)
         colunas = ("marca", "obra", "casa", "comprador", "valor", "empresa",
                    "situacao")
@@ -189,7 +194,7 @@ class ContratosFrame(ttk.Frame):
         self.tabela.bind("<Double-1>", self._duplo_clique)
 
         pe = widgets.RodapeTabela(f2)
-        pe.pack(fill="x", pady=(10, 0))
+        pe.pack(fill="x", pady=px((10, 0)))
         self.lbl_marcadas = pe.resumo
         pe.link("Marcar todas", lambda: self._marcar_todas(True))
         pe.link("Desmarcar todas", lambda: self._marcar_todas(False))
@@ -199,23 +204,23 @@ class ContratosFrame(ttk.Frame):
 
         # ---- barra de execução, acima do registro
         acao = ttk.Frame(self, style="Fundo.TFrame")
-        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         btns = ttk.Frame(acao, style="Fundo.TFrame")
-        btns.pack(side="right", padx=(16, 0))
+        btns.pack(side="right", padx=px((16, 0)))
         self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
                                     command=self._parar_click, state="disabled")
         self.b_stop.pack(side="left")
         self.b_abrir = widgets.Botao(btns, "📂  Abrir pasta", papel="neutro",
                                      command=self._abrir_pasta,
                                      state="disabled")
-        self.b_abrir.pack(side="left", padx=(8, 0))
+        self.b_abrir.pack(side="left", padx=px((8, 0)))
         self.barra_exec = widgets.BarraExecucao(acao)
         self.barra_exec.pack(side="left", fill="x", expand=True)
         self.lbl = self.barra_exec.lbl
         self.pb = self.barra_exec.pb
 
         self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.reg.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)

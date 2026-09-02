@@ -322,6 +322,116 @@ def test_tamanho_negativo_continua_negativo():
     assert widgets._escalar(9, 0.0) == 1, "tamanho zero não existe no Tk"
 
 
+# ------------------------------------------------------- o layout escala junto
+# As fontes já acompanhavam a escala do Windows; as MEDIDAS de layout, não. A
+# 150% (medido com `ferramentas/galeria.py --escala 1.5`) "ÚLTIMA EXECUÇÃO"
+# saía "ÚLTIMA EXECU" numa coluna de 130 px fixos, a coluna SITUAÇÃO sumia
+# inteira, e o logotipo da barra encostava no campo de busca — a faixa
+# continuava com 52 px enquanto o texto dentro dela crescia 50%.
+
+@pytest.fixture
+def em_escala(raiz):
+    """Roda o corpo do teste com o app "a 150%", e devolve tudo ao fim.
+
+    Mexe no `tk scaling` da janela COMPARTILHADA (é uma por sessão, ver o
+    conftest), então desfazer não é zelo: sem isso os testes seguintes
+    mediriam fontes de 150% achando que são as de 100%."""
+    def aplicar(escala: float):
+        raiz.tk.call("tk", "scaling", base * escala)
+        widgets._estado["fator"] = 0.0    # o fator é lido uma vez e guardado
+        return widgets.fator_de_escala()
+
+    base = float(raiz.tk.call("tk", "scaling"))
+    try:
+        yield aplicar
+    finally:
+        raiz.tk.call("tk", "scaling", base)
+        widgets._estado["fator"] = 0.0
+        widgets.aplicar_estilos(False)
+
+
+def test_a_cem_por_cento_a_medida_e_a_mesma(em_escala):
+    """A promessa que protege quem já estava bem: a 100% o `px` devolve o
+    número que a tela sempre teve, e nenhum pixel se mexe."""
+    assert em_escala(1.0) == pytest.approx(1.0, abs=0.05)
+    for n in (0, 1, 3, 5, 8, 10, 12, 14, 16, 18, 20, 24, 52, 130, 232, 330):
+        assert widgets.px(n) == n
+
+
+def test_a_cento_e_cinquenta_a_medida_cresce_junto(em_escala):
+    assert em_escala(1.5) == pytest.approx(1.5, abs=0.05)
+    assert widgets.px(52) == 78            # a altura da barra de cima
+    assert widgets.px(232) == 348          # a coluna do menu
+    assert widgets.px(130) == 195          # a coluna "ÚLTIMA EXECUÇÃO"
+    assert widgets.px((16, 12)) == (24, 18)
+
+
+def test_zero_continua_zero(em_escala):
+    """Sem esta ressalva o `_escalar` devolveria 1 (ele nunca devolve zero,
+    porque tamanho zero de fonte não existe no Tk), e todo `padx=(0, 8)` da
+    tela ganharia um pixel de folga onde o desenho pedia encostado."""
+    em_escala(1.5)
+    assert widgets.px(0) == 0
+    assert widgets.px((0, 8)) == (0, 12)
+
+
+def test_fonte_menor_que_a_de_referencia_nao_encolhe_o_layout(em_escala):
+    """O erro tem um lado barato. Fonte menor não corta nada — o texto cabe de
+    sobra —, então apertar as margens só estragaria uma tela que estava boa."""
+    assert em_escala(0.75) == 1.0
+    assert widgets.px(20) == 20
+
+
+def test_a_barra_de_cima_cresce_com_o_que_tem_dentro(em_escala, raiz):
+    """A medida que mais estragava: a faixa ficava com 52 px enquanto o
+    logotipo dentro dela crescia, e o texto saía cortado por baixo."""
+    em_escala(1.5)
+    widgets.aplicar_estilos(False)
+    barra = widgets.BarraTopo(raiz)
+    try:
+        barra.pack(fill="x")
+        raiz.update()
+        assert int(barra.cget("height")) == widgets.px(barra.ALTURA)
+        assert int(barra.cget("height")) > barra.ALTURA
+    finally:
+        barra._fechar_lista()
+        barra.destroy()
+        raiz.update()
+
+
+def test_a_coluna_do_menu_cresce_com_os_rotulos(em_escala, raiz):
+    em_escala(1.5)
+    widgets.aplicar_estilos(False)
+    menu = widgets.painel_menu(raiz, largura=232)
+    try:
+        assert int(menu.cget("width")) == 348
+    finally:
+        menu.destroy()
+        raiz.update()
+
+
+def test_a_coluna_da_tabela_cresce_com_o_titulo(em_escala, raiz):
+    """"ÚLTIMA EXECUÇÃO" em 130 px fixos saía "ÚLTIMA EXECU" a 150%. Quem
+    escreveu 130 estava dizendo "cabe o título", e é a frase que tem de
+    continuar valendo."""
+    em_escala(1.5)
+    widgets.aplicar_estilos(False)
+    tv = ttk.Treeview(raiz, columns=("rotina", "quando"), show="headings")
+    try:
+        tv.column("rotina", width=200)
+        tv.column("quando", width=130)
+        widgets.estilo_tabela(tv)
+        assert int(tv.column("quando", "width")) == 195
+        assert int(tv.column("rotina", "width")) == 300
+        # Chamada duas vezes (o Início e a Acessórias remontam a lista), a
+        # largura não pode escalar em cima do que já foi escalado.
+        widgets.estilo_tabela(tv)
+        assert int(tv.column("quando", "width")) == 195
+    finally:
+        tv.destroy()
+        raiz.update()
+
+
 def test_o_registro_segue_o_tema(raiz):
     txt = tk.Text(raiz)
     for escuro in (True, False, True):

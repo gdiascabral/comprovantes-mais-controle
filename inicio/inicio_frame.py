@@ -33,6 +33,11 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import widgets
 
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
+
 
 #: As rotinas, na ordem do menu. `ritmo` é o que decide quando a situação
 #: vira aviso: uma rotina DIÁRIA que não rodou hoje é uma pendência; uma
@@ -93,10 +98,10 @@ class CartaoKPI(widgets.Cartao):
         ttk.Label(self, text=rotulo.upper(), style="Rotulo.TLabel"
                   ).pack(anchor="w")
         self.lbl_valor = ttk.Label(self, text="—", style="KPI.TLabel")
-        self.lbl_valor.pack(anchor="w", pady=(4, 0))
+        self.lbl_valor.pack(anchor="w", pady=px((4, 0)))
         self.lbl_apoio = ttk.Label(self, text="", style="Tenue.TLabel",
-                                   wraplength=210, justify="left")
-        self.lbl_apoio.pack(anchor="w", pady=(3, 0))
+                                   wraplength=px(210), justify="left")
+        self.lbl_apoio.pack(anchor="w", pady=px((3, 0)))
 
     def definir(self, valor: str, apoio: str = "", marca: bool = False):
         self.lbl_valor.configure(
@@ -116,7 +121,7 @@ class InicioFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = widgets.PADX
+        PADX = px(widgets.PADX)
 
         cab = widgets.Cabecalho(
             self, "Início",
@@ -124,7 +129,7 @@ class InicioFrame(ttk.Frame):
             "aconteceu por último. Esta tela não fala com o ERP: ela lê o que "
             "as rotinas contaram quando rodaram.",
             trilha="Visão geral  ›  Início")
-        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         widgets.Botao(cab.acoes, "Atualizar", papel="neutro",
                       command=self.ao_abrir).pack(side="right")
 
@@ -145,7 +150,7 @@ class InicioFrame(ttk.Frame):
 
         # ---- rotinas à esquerda, atividade e atalhos à direita
         meio = ttk.Frame(self, style="Fundo.TFrame")
-        meio.pack(fill="both", expand=True, padx=PADX, pady=(14, 18))
+        meio.pack(fill="both", expand=True, padx=PADX, pady=px((14, 18)))
         meio.columnconfigure(0, weight=1)
         meio.rowconfigure(0, weight=1)
 
@@ -171,13 +176,13 @@ class InicioFrame(ttk.Frame):
         self.tabela.bind("<Double-Button-1>", self._abrir_selecionada)
         self.tabela.bind("<Return>", self._abrir_selecionada)
         rodape = widgets.RodapeTabela(c_rot)
-        rodape.pack(fill="x", pady=(10, 0))
+        rodape.pack(fill="x", pady=px((10, 0)))
         rodape.definir(texto="Dois cliques na linha abrem a rotina")
         self.btn_abrir = rodape.link("Abrir a selecionada",
                                      self._abrir_selecionada)
 
-        direita = ttk.Frame(meio, style="Fundo.TFrame", width=330)
-        direita.grid(row=0, column=1, sticky="nsew", padx=(14, 0))
+        direita = ttk.Frame(meio, style="Fundo.TFrame", width=px(330))
+        direita.grid(row=0, column=1, sticky="nsew", padx=px((14, 0)))
         direita.grid_propagate(False)
 
         c_atv = widgets.Cartao(direita, "Atividade recente")
@@ -186,11 +191,11 @@ class InicioFrame(ttk.Frame):
         self.lista_atividade.pack(fill="both", expand=True)
 
         c_ata = widgets.Cartao(direita, "Atalhos")
-        c_ata.pack(fill="x", pady=(14, 0))
+        c_ata.pack(fill="x", pady=px((14, 0)))
         for chave, texto in ATALHOS:
             widgets.Botao(c_ata, texto, papel="neutro",
                           command=lambda c=chave: self._ir(c),
-                          anchor="w").pack(fill="x", pady=(0, 6))
+                          anchor="w").pack(fill="x", pady=px((0, 6)))
 
     # ------------------------------------------------------------- navegação
     def definir_navegacao(self, ir_para):
@@ -344,7 +349,7 @@ class InicioFrame(ttk.Frame):
             w.destroy()
         if not eventos:
             ttk.Label(self.lista_atividade, style="Tenue.TLabel",
-                      wraplength=280, justify="left",
+                      wraplength=px(280), justify="left",
                       text="Ainda não há nada anotado. Cada rotina escreve "
                            "aqui quando termina."
                       ).pack(anchor="w")
@@ -354,13 +359,13 @@ class InicioFrame(ttk.Frame):
         for ev in eventos:
             estado = widgets.estado_de(ev.get("resultado") or "ok")
             linha = ttk.Frame(self.lista_atividade)
-            linha.pack(fill="x", pady=(0, 9))
+            linha.pack(fill="x", pady=px((0, 9)))
             topo = ttk.Frame(linha)
             topo.pack(fill="x")
             ttk.Label(topo, text=widgets.MARCAS_ESTADO[estado],
                       style={"ok": "Ok", "atencao": "Atencao",
                              "erro": "Erro"}.get(estado, "Tenue") + ".TLabel"
-                      ).pack(side="left", padx=(0, 6))
+                      ).pack(side="left", padx=px((0, 6)))
             ttk.Label(topo, text=nomes.get(ev.get("aba"), ev.get("aba") or "—"),
                       style="Forte.TLabel").pack(side="left")
             ttk.Label(topo, text=widgets.quando_humano(ev.get("quando") or ""),
@@ -368,8 +373,8 @@ class InicioFrame(ttk.Frame):
             texto = ev.get("detalhe") or ev.get("evento") or ""
             if texto:
                 ttk.Label(linha, text=texto, style="Apoio.TLabel",
-                          wraplength=280, justify="left"
-                          ).pack(anchor="w", padx=(20, 0))
+                          wraplength=px(280), justify="left"
+                          ).pack(anchor="w", padx=px((20, 0)))
 
     # ------------------------------------------------------------------ tema
     def aplicar_cores(self, escuro: bool):

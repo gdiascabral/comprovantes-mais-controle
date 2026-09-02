@@ -67,6 +67,11 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import widgets
 
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
+
 #: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
 #: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
 #: lugares; uma de FORMATO é como a mesma duração aparece de dois jeitos.
@@ -101,44 +106,44 @@ class ExtratosSicoobFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = widgets.PADX
+        PADX = px(widgets.PADX)
 
         cab = widgets.Cabecalho(
             self, "Extratos Sicoob",
             "Cria as pastas do mês e baixa o extrato de cada conta do Sicoob "
             "em OFX e PDF.",
             trilha="Mensal  ›  Extratos Sicoob")
-        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         # O verde é BAIXAR: criar pasta e compactar são o antes e o depois.
         self.b1 = widgets.Botao(cab.acoes, "Conferir e criar pastas",
                                 papel="passo", command=self.criar_pastas)
-        self.b1.pack(side="left", padx=(0, 8))
+        self.b1.pack(side="left", padx=px((0, 8)))
         self.b2 = widgets.Botao(cab.acoes, "Baixar extratos", papel="acao",
                                 command=self.baixar)
         self.b2.pack(side="left")
 
         # ---- card 1: mês
         f1 = widgets.Cartao(self, "Mês do fechamento", 1)
-        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
         widgets.Campo(linha, "Mês", lambda p: ttk.Combobox(
             p, textvariable=self.v_mes, values=MESES, state="readonly",
-            width=12)).pack(side="left", padx=(0, 16))
+            width=12)).pack(side="left", padx=px((0, 16)))
         anos = [str(a) for a in range(datetime.date.today().year + 1, 2019, -1)]
         widgets.Campo(linha, "Ano", lambda p: ttk.Combobox(
             p, textvariable=self.v_ano, values=anos, state="readonly",
-            width=7)).pack(side="left", padx=(0, 16))
+            width=7)).pack(side="left", padx=px((0, 16)))
         ttk.Label(linha, style="Tenue.TLabel",
                   text="vem preenchido com o mês anterior"
-                  ).pack(side="left", pady=(15, 0))
+                  ).pack(side="left", pady=px((15, 0)))
 
         # ---- card 2: o que cada passo faz
         # Os três cartões que só seguravam um botão viraram um só: com o botão
         # no cabeçalho, o que sobrava neles era a frase de explicação — e três
         # cartões brancos com uma frase cada eram três cartões vazios.
         f2 = widgets.Cartao(self, "Como o mês fecha", 2)
-        f2.pack(fill="x", padx=PADX, pady=(0, 12))
+        f2.pack(fill="x", padx=PADX, pady=px((0, 12)))
         for titulo, frase in (
                 ("Conferir e criar pastas",
                  "Mostra o que será criado e pede confirmação."),
@@ -147,25 +152,25 @@ class ExtratosSicoobFrame(ttk.Frame):
                 ("Gerar os .zip por empresa",
                  "Rode só depois que os outros bancos entrarem.")):
             passo = ttk.Frame(f2)
-            passo.pack(fill="x", pady=(0, 6))
+            passo.pack(fill="x", pady=px((0, 6)))
             ttk.Label(passo, text=titulo, style="Forte.TLabel").pack(anchor="w")
             ttk.Label(passo, text=frase, style="Tenue.TLabel").pack(anchor="w")
 
         # ---- barra de execução, acima do registro
         acao = ttk.Frame(self, style="Fundo.TFrame")
-        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         btns = ttk.Frame(acao, style="Fundo.TFrame")
-        btns.pack(side="right", padx=(16, 0))
+        btns.pack(side="right", padx=px((16, 0)))
         self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
                                     state="disabled", command=self._parar_click)
         self.b_stop.pack(side="left")
         self.b3 = widgets.Botao(btns, "🗜  Gerar os .zip", papel="neutro",
                                 command=self.zipar)
-        self.b3.pack(side="left", padx=(8, 0))
+        self.b3.pack(side="left", padx=px((8, 0)))
         self.b_abrir = widgets.Botao(btns, "📂  Abrir a pasta do mês",
                                      papel="neutro", state="disabled",
                                      command=self._abrir_pasta)
-        self.b_abrir.pack(side="left", padx=(8, 0))
+        self.b_abrir.pack(side="left", padx=px((8, 0)))
         self.barra_exec = widgets.BarraExecucao(acao)
         self.barra_exec.pack(side="left", fill="x", expand=True)
         self.lbl = self.barra_exec.lbl
@@ -173,7 +178,7 @@ class ExtratosSicoobFrame(ttk.Frame):
 
         # ---- registro
         self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.reg.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)

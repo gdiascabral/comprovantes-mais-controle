@@ -31,6 +31,11 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import widgets
 
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
+
 try:
     import util                          # noqa: F401
 except ModuleNotFoundError:              # pragma: no cover
@@ -99,23 +104,24 @@ class ComprovantesFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = widgets.PADX
+        PADX = px(widgets.PADX)
 
         cab = widgets.Cabecalho(
             self, "Baixar Comprovantes",
             "Os comprovantes de pagamento de cada banco, arquivados na pasta "
             "do mês. Você só entra quando o banco pedir; o resto é automático.",
             trilha="Comprovantes  ›  Baixar Comprovantes")
-        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         self.b_ir = widgets.Botao(cab.acoes, "▶  Baixar comprovantes",
                                   papel="acao", command=self._comecar)
         self.b_ir.pack(side="right")
         widgets.Botao(cab.acoes, "Atualizar lista", papel="neutro",
-                      command=self.ao_abrir).pack(side="right", padx=(0, 8))
+                      command=self.ao_abrir).pack(side="right",
+                                                  padx=px((0, 8)))
 
         # ---- período e destino
         c_per = widgets.Cartao(self, "Período", numero=1)
-        c_per.pack(fill="x", padx=PADX, pady=(0, 12))
+        c_per.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(c_per)
         linha.pack(fill="x")
 
@@ -126,7 +132,7 @@ class ComprovantesFrame(ttk.Frame):
         for rotulo, var in (("De", self.v_ini), ("Até", self.v_fim)):
             campo = widgets.Campo(linha, rotulo,
                                   lambda pai, v=var: widgets.CampoData(pai, v))
-            campo.pack(side="left", padx=(0, 14))
+            campo.pack(side="left", padx=px((0, 14)))
 
         self.v_pasta = tk.StringVar(value=str(pasta_padrao()))
         campo_pasta = widgets.Campo(
@@ -135,11 +141,11 @@ class ComprovantesFrame(ttk.Frame):
         campo_pasta.pack(side="left", fill="x", expand=True)
         widgets.Botao(linha, "Escolher…", papel="neutro",
                       command=self._escolher_pasta).pack(side="left",
-                                                         padx=(8, 0))
+                                                         padx=px((8, 0)))
 
         # ---- a fila
         c_fila = widgets.Cartao(self, "Contas na fila", numero=2)
-        c_fila.pack(fill="both", expand=True, padx=PADX, pady=(0, 12))
+        c_fila.pack(fill="both", expand=True, padx=PADX, pady=px((0, 12)))
         colunas = ("marca", "banco", "conta", "empresa", "situacao")
         self.tabela = ttk.Treeview(c_fila, columns=colunas, show="headings",
                                    selectmode="browse", height=9)
@@ -162,20 +168,20 @@ class ComprovantesFrame(ttk.Frame):
         # símbolo faz o mesmo trabalho, e a coluna inteira é a área de clique.
         self.tabela.bind("<Button-1>", self._clicou)
         self.rodape = widgets.RodapeTabela(c_fila)
-        self.rodape.pack(fill="x", pady=(8, 0))
+        self.rodape.pack(fill="x", pady=px((8, 0)))
         self.rodape.link("Marcar todas", lambda: self._todas(True))
         self.rodape.link("Desmarcar todas", lambda: self._todas(False))
 
         # ---- execução e registro
         acao = ttk.Frame(self, style="Fundo.TFrame")
-        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         self.barra_exec = widgets.BarraExecucao(acao)
         self.barra_exec.pack(side="left", fill="x", expand=True)
         self.lbl = self.barra_exec.lbl
         self.pb = self.barra_exec.pb
 
         self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.reg.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)

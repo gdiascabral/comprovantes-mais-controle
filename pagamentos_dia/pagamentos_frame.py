@@ -61,6 +61,11 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import widgets
 
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
+
 CampoData = widgets.CampoData
 
 # Cadastros de outras abas, reusados pela remessa: `contas_mc` diz de que
@@ -317,14 +322,14 @@ class PagamentosDiaFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- layout
     def _build(self):
-        PADX = widgets.PADX
+        PADX = px(widgets.PADX)
 
         self.cab = widgets.Cabecalho(
             self, "Remessa/Retorno",
             "Planilha de conferência dos pagamentos do período, o arquivo de "
             "remessa para o banco e a leitura do retorno que ele devolve.",
             trilha="Diário  ›  Remessa e Retorno")
-        self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
 
         # Os botões do FLUXO ficam no cabeçalho, à direita do título; os que
         # não são do fluxo (parar, abrir, ler retorno) ficam embaixo, junto da
@@ -337,11 +342,11 @@ class PagamentosDiaFrame(ttk.Frame):
         # são o caminho até ele.
         self.b1 = widgets.Botao(self.cab.acoes, "Buscar os lançamentos",
                                 papel="passo", command=self.buscar)
-        self.b1.pack(side="left", padx=(0, 8))
+        self.b1.pack(side="left", padx=px((0, 8)))
         self.b2 = widgets.Botao(self.cab.acoes, "Gerar a planilha",
                                 papel="passo", command=self.gerar,
                                 state="disabled")
-        self.b2.pack(side="left", padx=(0, 8))
+        self.b2.pack(side="left", padx=px((0, 8)))
         self.b3 = widgets.Botao(self.cab.acoes, "Gerar remessa", papel="acao",
                                 command=self.gerar_remessa, state="disabled")
         self.b3.pack(side="left")
@@ -352,25 +357,25 @@ class PagamentosDiaFrame(ttk.Frame):
         # uma ação). Agora o número está num lugar só — o cartão —, e o botão
         # diz o VERBO.
         f1 = widgets.Cartao(self, "Período", 1)
-        f1.pack(fill="x", padx=PADX, pady=(0, 12))
+        f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
         widgets.Campo(linha, "De", lambda p: CampoData(p, self.v_ini)
-                      ).pack(side="left", padx=(0, 16))
+                      ).pack(side="left", padx=px((0, 16)))
         widgets.Campo(linha, "Até", lambda p: CampoData(p, self.v_fim)
-                      ).pack(side="left", padx=(0, 16))
+                      ).pack(side="left", padx=px((0, 16)))
         widgets.Botao(linha, "Hoje", papel="neutro", command=self._hoje
-                      ).pack(side="left", pady=(15, 0))
+                      ).pack(side="left", pady=px((15, 0)))
 
         opc = ttk.Frame(f1)
-        opc.pack(fill="x", pady=(12, 0))
+        opc.pack(fill="x", pady=px((12, 0)))
         ttk.Checkbutton(opc, variable=self.v_cruzar,
                         text="Conferir os documentos anexados (baixa os PDFs; "
                              "mais lento, mas é a conferência de verdade)"
                         ).pack(anchor="w")
         ttk.Checkbutton(opc, variable=self.v_incluir_pagos,
                         text="Incluir também o que já foi pago no período"
-                        ).pack(anchor="w", pady=(4, 0))
+                        ).pack(anchor="w", pady=px((4, 0)))
 
         # ---- card 2: contas
         # A lista também é elástica: antes de buscar ela tem uma frase, e um
@@ -378,10 +383,11 @@ class PagamentosDiaFrame(ttk.Frame):
         # que o Registro tinha. Cresce em `_montar_contas`.
         self.f_contas = f2 = widgets.Cartao(
             self, "Contas — marque as que entram no relatório", 2)
-        f2.pack(fill="x", padx=PADX, pady=(0, 12))
+        f2.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.rodape_contas = widgets.RodapeTabela(f2.acoes)
         self.rodape_contas.pack()
-        self.canvas = tk.Canvas(f2, height=24, highlightthickness=0, borderwidth=0)
+        self.canvas = tk.Canvas(f2, height=px(24), highlightthickness=0,
+                                borderwidth=0)
         self.barra = barra = ttk.Scrollbar(f2, orient="vertical",
                                            command=self.canvas.yview)
         self.contas_box = ttk.Frame(self.canvas)
@@ -401,38 +407,38 @@ class PagamentosDiaFrame(ttk.Frame):
 
         # ---- card 3: pasta
         f3 = widgets.Cartao(self, "Onde salvar", 3)
-        f3.pack(fill="x", padx=PADX, pady=(0, 12))
+        f3.pack(fill="x", padx=PADX, pady=px((0, 12)))
         ttk.Entry(f3, textvariable=self.v_pasta).pack(side="left", fill="x",
                                                       expand=True)
         widgets.Botao(f3, "Selecionar…", papel="neutro", command=self._sel_pasta
-                      ).pack(side="left", padx=(8, 0))
+                      ).pack(side="left", padx=px((8, 0)))
 
         # ---- barra de execução e o que não é passo
         # ACIMA do registro, e não no rodapé: a barra conta o trabalho que
         # está acontecendo, e o registro é a saída DELE. Embaixo, ela ficava
         # depois do resultado — e, com o registro cheio, fora da tela.
         acao = ttk.Frame(self, style="Fundo.TFrame")
-        acao.pack(fill="x", padx=PADX, pady=(0, 10))
+        acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         btns = ttk.Frame(acao, style="Fundo.TFrame")
-        btns.pack(side="right", padx=(16, 0))
+        btns.pack(side="right", padx=px((16, 0)))
         self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
                                     command=self._parar_click, state="disabled")
         self.b_stop.pack(side="left")
         self.b_abrir = widgets.Botao(btns, "📂  Abrir planilha", papel="neutro",
                                      command=self._abrir, state="disabled")
-        self.b_abrir.pack(side="left", padx=(8, 0))
+        self.b_abrir.pack(side="left", padx=px((8, 0)))
         self.b_abrir_rem = widgets.Botao(btns, "📂  Abrir local da remessa",
                                          papel="neutro",
                                          command=self._abrir_remessa,
                                          state="disabled")
-        self.b_abrir_rem.pack(side="left", padx=(8, 0))
+        self.b_abrir_rem.pack(side="left", padx=px((8, 0)))
         # SEM número e sempre habilitado, de propósito: ler retorno não é o
         # passo 4 de nada. O arquivo chega horas ou dias depois — às vezes
         # noutra máquina —, e exigir "buscar" e "gerar" antes obrigaria a
         # refazer o dia inteiro só para conferir o que o banco respondeu.
         self.b_ret = widgets.Botao(btns, "📥  Ler retorno", papel="neutro",
                                    command=self.ler_retorno)
-        self.b_ret.pack(side="left", padx=(8, 0))
+        self.b_ret.pack(side="left", padx=px((8, 0)))
 
         self.barra_exec = widgets.BarraExecucao(acao)
         self.barra_exec.pack(side="left", fill="x", expand=True)
@@ -443,7 +449,7 @@ class PagamentosDiaFrame(ttk.Frame):
         self.pb = self.barra_exec.pb
 
         self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
-        self.reg.pack(fill="x", padx=PADX, pady=(0, 12))
+        self.reg.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.log = tk.Text(self.reg, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0)
         self.log.pack(fill="both", expand=True)
@@ -708,7 +714,7 @@ class PagamentosDiaFrame(ttk.Frame):
         # desenha recebe a lista por parâmetro: sem esta linha, o total do
         # rodapé dependia de as duas nunca se separarem.
         self.contas = list(contas)
-        self.canvas.configure(height=170)
+        self.canvas.configure(height=px(170))
         self.barra.pack(side="right", fill="y")
         widgets.cartao_elastico(self.f_contas, cheio=True)
         for w in self.contas_box.winfo_children():
@@ -803,7 +809,7 @@ class PagamentosDiaFrame(ttk.Frame):
         """
         top = tk.Toplevel(self)
         top.title("Confirmar o que entra")
-        top.geometry("980x680")
+        top.geometry(f"{px(980)}x{px(680)}")
         top.transient(self.winfo_toplevel())
         widgets.barra_de_titulo(top)
         top.configure(background=widgets.cores()["fundo"])
@@ -820,15 +826,15 @@ class PagamentosDiaFrame(ttk.Frame):
         # a pergunta que ela responde ("âmbar me impede de gerar?") é a que
         # fazia a janela parecer quebrada.
         legenda = cab.rodape
-        legenda.pack(anchor="w", pady=(8, 0))
+        legenda.pack(anchor="w", pady=px((8, 0)))
         for texto, estilo in (
                 ("●  entra", "FundoOk.TLabel"),
                 ("●  entra com ressalva — a remessa não leva, pague à mão",
                  "FundoAtencao.TLabel"),
                 ("●  fica de fora — desmarcado", "FundoErro.TLabel")):
             ttk.Label(legenda, text=texto, style=estilo
-                      ).pack(side="left", padx=(0, 18))
-        cab.pack(fill="x", pady=(0, 14))
+                      ).pack(side="left", padx=px((0, 18)))
+        cab.pack(fill="x", pady=px((0, 14)))
 
         cartao = widgets.Cartao(moldura, "Lançamentos do dia")
         cartao.pack(fill="both", expand=True)
@@ -865,7 +871,7 @@ class PagamentosDiaFrame(ttk.Frame):
                            key=lambda i: (not pede_olhada(i),
                                           relatorio.chave(i.get("paidTo") or "")))
             cabecalho = ttk.Frame(dentro)
-            cabecalho.pack(fill="x", pady=(14, 4))
+            cabecalho.pack(fill="x", pady=px((14, 4)))
             ttk.Label(cabecalho, style="Secao.TLabel",
                       text=conta[:46]).pack(side="left")
             ttk.Label(cabecalho, style="Apoio.TLabel",
@@ -887,7 +893,7 @@ class PagamentosDiaFrame(ttk.Frame):
             top.destroy()
 
         rodape = widgets.RodapeTabela(cartao)
-        rodape.pack(side="bottom", fill="x", pady=(12, 0))
+        rodape.pack(side="bottom", fill="x", pady=px((12, 0)))
         rodape.link("Marcar todas", lambda: todas(True))
         rodape.link("Desmarcar todas", lambda: todas(False))
 
@@ -909,11 +915,11 @@ class PagamentosDiaFrame(ttk.Frame):
         atualizar()
 
         acoes = ttk.Frame(moldura, style="Fundo.TFrame")
-        acoes.pack(fill="x", pady=(14, 0))
+        acoes.pack(fill="x", pady=px((14, 0)))
         widgets.Botao(acoes, "Confirmar e gerar", papel="acao",
                       command=confirmar).pack(side="right")
         widgets.Botao(acoes, "Cancelar", papel="neutro", command=top.destroy
-                      ).pack(side="right", padx=(0, 8))
+                      ).pack(side="right", padx=px((0, 8)))
 
         top.protocol("WM_DELETE_WINDOW", top.destroy)
         top.bind("<Escape>", lambda _e: top.destroy())
@@ -942,12 +948,12 @@ class PagamentosDiaFrame(ttk.Frame):
         # O `_marcou` é definido mais abaixo, junto do rótulo que ele repinta;
         # o Tk só o chama quando alguém clica, então a ordem não importa.
         ttk.Checkbutton(linha, variable=var, command=lambda: _marcou()
-                        ).pack(side="left", padx=(0, 8), pady=6)
+                        ).pack(side="left", padx=px((0, 8)), pady=px(6))
         # O valor primeiro e alinhado à direita, em fonte de largura fixa: é a
         # coluna que se lê de cima a baixo somando de cabeça.
         ttk.Label(linha, text=relatorio.brl(relatorio.valor_do_item(item)),
                   style="Num.TLabel", width=14, anchor="e"
-                  ).pack(side="left", padx=(0, 14))
+                  ).pack(side="left", padx=px((0, 14)))
 
         quem = ttk.Frame(linha)
         quem.pack(side="left", fill="x", expand=True)
@@ -956,19 +962,19 @@ class PagamentosDiaFrame(ttk.Frame):
         topo.pack(fill="x")
         if olhar:
             ttk.Label(topo, text="⚠", style="Atencao.TLabel"
-                      ).pack(side="left", padx=(0, 5))
+                      ).pack(side="left", padx=px((0, 5)))
         ttk.Label(topo, text=nome[:44], style="Forte.TLabel").pack(side="left")
         desc = (item.get("description") or "").strip()
         if desc:
             ttk.Label(topo, text="·  " + desc[:52], style="Tenue.TLabel"
-                      ).pack(side="left", padx=(8, 0))
+                      ).pack(side="left", padx=px((8, 0)))
         # A segunda altura: a forma de pagar, na cor do que vai acontecer com
         # ela. Âmbar é "entra na planilha, mas a remessa não leva"; vermelho é
         # só para quem fica de fora — e quem fica de fora, nesta janela, é o
         # que a pessoa desmarcou. Sem essa amarração a legenda do topo teria
         # uma cor que nunca aparece.
         lbl_dado = ttk.Label(quem, text=dado, style=ESTILO_DO_DADO[estado])
-        lbl_dado.pack(anchor="w", pady=(1, 0))
+        lbl_dado.pack(anchor="w", pady=px((1, 0)))
 
         def _pintar():
             lbl_dado.configure(
@@ -991,7 +997,7 @@ class PagamentosDiaFrame(ttk.Frame):
         if cc:
             partes.append(cc[:44])
         ttk.Label(quem, text="  ·  ".join(partes), style="Tenue.TLabel"
-                  ).pack(anchor="w", pady=(1, 6))
+                  ).pack(anchor="w", pady=px((1, 6)))
 
         def _marcou():
             _pintar()
@@ -1254,7 +1260,7 @@ class PagamentosDiaFrame(ttk.Frame):
     def _janela_retorno(self, resumo, historico):
         top = tk.Toplevel(self)
         top.title(f"Retorno do banco — arquivo nº {resumo.nsa:06d}")
-        top.geometry("980x600")
+        top.geometry(f"{px(980)}x{px(600)}")
         widgets.barra_de_titulo(top)
         moldura = ttk.Frame(top, padding=14)
         moldura.pack(fill="both", expand=True)
@@ -1270,28 +1276,28 @@ class PagamentosDiaFrame(ttk.Frame):
                   text=f"{len(resumo.linhas)} pagamento(s) · "
                        f"R$ {resumo.total:,.2f}".replace(",", "X")
                        .replace(".", ",").replace("X", ".")
-                  ).pack(anchor="w", pady=(2, 8))
+                  ).pack(anchor="w", pady=px((2, 8)))
 
         # O recado que evita o susto: no fluxo desta empresa, o retorno do
         # mesmo dia vem com tudo pendente porque quem assina é outra pessoa.
         # Sem esta linha, "AGUARDA ASSINATURA" em 13 pagamentos parece falha.
         if pendentes and not rejeitados:
-            ttk.Label(moldura, style="Erro.TLabel", wraplength=920,
+            ttk.Label(moldura, style="Erro.TLabel", wraplength=px(920),
                       justify="left",
                       text=f"⚠  {pendentes} pagamento(s) aguardando assinatura "
                            f"no SicoobNet. Isso é o esperado logo depois de "
                            f"enviar: o arquivo foi aceito, mas o dinheiro só "
                            f"sai quando o master assinar. Baixe o retorno de "
                            f"novo depois disso para ver o desfecho."
-                      ).pack(anchor="w", pady=(0, 8))
+                      ).pack(anchor="w", pady=px((0, 8)))
         if resumo.remessa_desconhecida:
-            ttk.Label(moldura, style="Erro.TLabel", wraplength=920,
+            ttk.Label(moldura, style="Erro.TLabel", wraplength=px(920),
                       justify="left",
                       text="⚠  Esta remessa não está no registro central — "
                            "pode ser de antes dele existir, ou de outra "
                            "máquina. Dá para ler o arquivo, mas não para "
                            "apontar os lançamentos do ERP nem guardar o "
-                           "resultado.").pack(anchor="w", pady=(0, 8))
+                           "resultado.").pack(anchor="w", pady=px((0, 8)))
 
         colunas = ("estado", "favorecido", "valor", "seu_numero", "motivos")
         tabela = ttk.Treeview(moldura, columns=colunas, show="headings",
@@ -1320,7 +1326,7 @@ class PagamentosDiaFrame(ttk.Frame):
                 tags=widgets.linha_zebrada(i, widgets.estado_de(linha.rotulo)))
 
         if resumo.faltando:
-            ttk.Label(moldura, style="Erro.TLabel", wraplength=920,
+            ttk.Label(moldura, style="Erro.TLabel", wraplength=px(920),
                       justify="left",
                       text=f"⚠  {len(resumo.faltando)} pagamento(s) da remessa "
                            f"NÃO vieram neste retorno: "
@@ -1328,9 +1334,9 @@ class PagamentosDiaFrame(ttk.Frame):
                            f"{'…' if len(resumo.faltando) > 6 else ''}. "
                            f"O banco devolve o que processou — o que sumiu no "
                            f"caminho não aparece sozinho."
-                      ).pack(anchor="w", pady=(8, 0))
+                      ).pack(anchor="w", pady=px((8, 0)))
 
-        rodape = ttk.Frame(moldura); rodape.pack(fill="x", pady=(10, 0))
+        rodape = ttk.Frame(moldura); rodape.pack(fill="x", pady=px((10, 0)))
         ttk.Label(rodape, style="Apoio.TLabel",
                   text=f"{pagos} pago(s) · {pendentes} aguardando · "
                        f"{rejeitados} rejeitado(s)").pack(side="left")
@@ -1382,9 +1388,9 @@ class PagamentosDiaFrame(ttk.Frame):
                           command=_guardar).pack(side="right")
         if resumo.quantos("ok"):
             widgets.Botao(rodape, "Dar baixa no Mais Controle", papel="passo",
-                          command=_baixar).pack(side="right", padx=(0, 8))
+                          command=_baixar).pack(side="right", padx=px((0, 8)))
         widgets.Botao(rodape, "Fechar", papel="neutro", command=top.destroy
-                   ).pack(side="right", padx=(0, 8))
+                   ).pack(side="right", padx=px((0, 8)))
 
         top.transient(self.winfo_toplevel())
         top.grab_set()
@@ -1406,11 +1412,12 @@ class PagamentosDiaFrame(ttk.Frame):
 
         ttk.Label(moldura, style="Secao.TLabel",
                   text="Estes o banco pagou").pack(anchor="w")
-        ttk.Label(moldura, style="Apoio.TLabel", wraplength=620, justify="left",
+        ttk.Label(moldura, style="Apoio.TLabel", wraplength=px(620),
+                  justify="left",
                   text="Vão ser dados como pagos no Mais Controle, na data em "
                        "que o dinheiro saiu. Desmarque o que não deve ser "
                        "baixado agora."
-                  ).pack(anchor="w", pady=(0, 10))
+                  ).pack(anchor="w", pady=px((0, 10)))
 
         marcas = []
         for linha in sep.baixaveis:
@@ -1428,9 +1435,9 @@ class PagamentosDiaFrame(ttk.Frame):
         # propósito: são dinheiro que saiu e vai continuar em aberto no ERP.
         if sep.de_fora:
             ttk.Label(moldura, style="Secao.TLabel", text="Ficam de fora"
-                      ).pack(anchor="w", pady=(12, 2))
+                      ).pack(anchor="w", pady=px((12, 2)))
             for linha, motivo in sep.de_fora:
-                ttk.Label(moldura, style="Apoio.TLabel", wraplength=620,
+                ttk.Label(moldura, style="Apoio.TLabel", wraplength=px(620),
                           justify="left",
                           text=(f"    {relatorio.brl(float(linha.valor))}  "
                                 f"{linha.favorecido[:30]} — {motivo}")
@@ -1442,11 +1449,11 @@ class PagamentosDiaFrame(ttk.Frame):
             escolha.extend(l for l, v in marcas if v.get())
             top.destroy()
 
-        rodape = ttk.Frame(moldura); rodape.pack(fill="x", pady=(14, 0))
+        rodape = ttk.Frame(moldura); rodape.pack(fill="x", pady=px((14, 0)))
         widgets.Botao(rodape, "Baixar", papel="acao", command=confirmar
                       ).pack(side="right")
         widgets.Botao(rodape, "Cancelar", papel="neutro", command=top.destroy
-                      ).pack(side="right", padx=(0, 8))
+                      ).pack(side="right", padx=px((0, 8)))
         top.grab_set()
         self.wait_window(top)
         return escolha
@@ -1626,26 +1633,28 @@ class PagamentosDiaFrame(ttk.Frame):
         # colunas das duas seções não batiam — o olho que desce a coluna Valor
         # tropeçava no meio.
         ttk.Label(pai, text="", style="Rotulo.TLabel").grid(
-            row=0, column=0, sticky="w", padx=(0, 6))
+            row=0, column=0, sticky="w", padx=px((0, 6)))
         # `minsize` e não `width`: na seção de cima quem manda na largura é a
         # caixa de marcar, e na de baixo não há caixa nenhuma. Sem um piso
         # igual nas duas, a coluna Vencimento começava 25 px mais à esquerda
         # em "Fica de fora" e as duas tabelas deixavam de se ler como uma.
-        pai.columnconfigure(0, weight=0, minsize=30)
+        pai.columnconfigure(0, weight=0, minsize=px(30))
         col = 1
         for chave, titulo, largura, ancora in self.COLUNAS_REMESSA:
             ttk.Label(pai, text=titulo, style="Rotulo.TLabel",
                       anchor=("e" if ancora == "e" else "w")).grid(
-                row=0, column=col, sticky="ew", padx=(0, 10), pady=(0, 4))
+                row=0, column=col, sticky="ew", padx=px((0, 10)),
+                pady=px((0, 4)))
             # A coluna de largura 0 é a que absorve a sobra: é onde mora o
             # código de barras completo, que é o dado mais comprido da tela e
             # o que não pode ser cortado de jeito nenhum.
             pai.columnconfigure(col, weight=1 if largura == 0 else 0,
-                                minsize=0 if largura == 0 else largura * 7)
+                                minsize=0 if largura == 0
+                                else largura * px(7))
             col += 1
         # Um filete separando o cabeçalho do corpo, como nos cartões.
         ttk.Separator(pai, orient="horizontal").grid(
-            row=1, column=0, columnspan=col, sticky="ew", pady=(0, 4))
+            row=1, column=0, columnspan=col, sticky="ew", pady=px((0, 4)))
         return col
 
     def _celula_quem_recebe(self, pai, c, linha: int, coluna: int):
@@ -1657,7 +1666,7 @@ class PagamentosDiaFrame(ttk.Frame):
         de largura fixa e sem corte — foi o corte que motivou esta tela.
         """
         cel = ttk.Frame(pai)
-        cel.grid(row=linha, column=coluna, sticky="ew", padx=(0, 10))
+        cel.grid(row=linha, column=coluna, sticky="ew", padx=px((0, 10)))
         ttk.Label(cel, text=c.favorecido[:44] or "—", style="Forte.TLabel"
                   ).pack(anchor="w")
         if c.tipo == "Pix":
@@ -1692,23 +1701,24 @@ class PagamentosDiaFrame(ttk.Frame):
         col = 1
         if var is not None:
             ttk.Checkbutton(pai, variable=var).grid(row=linha, column=0,
-                                                    sticky="w", padx=(0, 6))
+                                                    sticky="w",
+                                                    padx=px((0, 6)))
         venc = f"{c.vencimento:%d/%m/%Y}" if c.vencimento else "—"
         ttk.Label(pai, text=venc, style="Num.TLabel").grid(
-            row=linha, column=col, sticky="w", padx=(0, 10)); col += 1
+            row=linha, column=col, sticky="w", padx=px((0, 10))); col += 1
         # O favorecido do LANÇAMENTO. No reembolso ele não é quem recebe — a
         # coluna ao lado diz para quem o dinheiro vai de verdade.
         nome_lanc = (c.reembolso_de or c.favorecido) if c.reembolso else c.favorecido
         ttk.Label(pai, text=nome_lanc[:24] or "—").grid(
-            row=linha, column=col, sticky="w", padx=(0, 10)); col += 1
+            row=linha, column=col, sticky="w", padx=px((0, 10))); col += 1
         self._celula_quem_recebe(pai, c, linha, col); col += 1
         ttk.Label(pai, text=c.oc or "—", style="Num.TLabel").grid(
-            row=linha, column=col, sticky="w", padx=(0, 10)); col += 1
+            row=linha, column=col, sticky="w", padx=px((0, 10))); col += 1
         ttk.Label(pai, text=(c.centro_custo or "—")[:22]).grid(
-            row=linha, column=col, sticky="w", padx=(0, 10)); col += 1
+            row=linha, column=col, sticky="w", padx=px((0, 10))); col += 1
         ttk.Label(pai, text=relatorio.brl(c.valor), style="Num.TLabel",
                   anchor="e").grid(row=linha, column=col, sticky="e",
-                                   padx=(0, 10)); col += 1
+                                   padx=px((0, 10))); col += 1
         if motivo:
             # Fica de fora: o selo é o MOTIVO, inteiro. Âmbar e não vermelho —
             # a linha não falhou, ela não vai; e uma seção inteira em vermelho
@@ -1717,14 +1727,14 @@ class PagamentosDiaFrame(ttk.Frame):
             # QUEBRA em vez de cortar: os motivos são frases ("pagamento
             # parcial — boleto não se paga pela metade"), e cortá-las no meio
             # é o mesmo defeito que esta tela veio consertar, um selo menor.
-            widgets.Pilula(pai, motivo, "atencao", wraplength=230,
+            widgets.Pilula(pai, motivo, "atencao", wraplength=px(230),
                            justify="left").grid(row=linha, column=col,
                                                 sticky="w")
         else:
             estado = "ok" if c.apto else "atencao"
             texto = "apto" if c.apto else c.status
             widgets.Pilula(pai, f"{widgets.MARCAS_ESTADO[estado]}  {texto}",
-                           estado, wraplength=230, justify="left").grid(
+                           estado, wraplength=px(230), justify="left").grid(
                 row=linha, column=col, sticky="w")
 
     def _janela_remessa(self, preparado, pagadores, recusadas, historico) -> bool:
@@ -1755,10 +1765,12 @@ class PagamentosDiaFrame(ttk.Frame):
         # Medida contra a TELA, e não fixa: 1360x820 cabia no monitor onde foi
         # escrita e estourava embaixo num notebook — levando junto o rodapé,
         # que é onde estão o total e o botão de gravar.
-        larg = min(1360, max(int(top.winfo_screenwidth() * 0.92), 1000))
-        alt = min(860, max(int(top.winfo_screenheight() * 0.86), 560))
+        larg = min(px(1360),
+                   max(int(top.winfo_screenwidth() * 0.92), px(1000)))
+        alt = min(px(860),
+                  max(int(top.winfo_screenheight() * 0.86), px(560)))
         top.geometry(f"{larg}x{alt}")
-        top.minsize(1000, 520)
+        top.minsize(px(1000), px(520))
 
         moldura = ttk.Frame(top, padding=18, style="Fundo.TFrame")
         moldura.pack(fill="both", expand=True)
@@ -1768,7 +1780,7 @@ class PagamentosDiaFrame(ttk.Frame):
             "Depois de gravar, o envio ao SicoobNet é seu, à mão — o app nunca "
             "transmite.",
             trilha="Diário  ›  Remessa e Retorno  ›  Gerar remessa")
-        cab.pack(fill="x", pady=(0, 14))
+        cab.pack(fill="x", pady=px((0, 14)))
 
         # ---- rodapé FIXO, empacotado ANTES do corpo: no `pack`, quem chega
         # primeiro reserva o espaço. Com o corpo antes, a tabela crescia por
@@ -1776,7 +1788,7 @@ class PagamentosDiaFrame(ttk.Frame):
         # exatamente o que não pode acontecer com o número que se confere
         # antes de mandar dinheiro.
         rodape = ttk.Frame(moldura, style="Fundo.TFrame")
-        rodape.pack(side="bottom", fill="x", pady=(14, 0))
+        rodape.pack(side="bottom", fill="x", pady=px((14, 0)))
 
         # ---- corpo rolável
         painel = tk.Canvas(moldura, highlightthickness=0)
@@ -1816,13 +1828,13 @@ class PagamentosDiaFrame(ttk.Frame):
                 dentro,
                 f"{pagador.empresa} — ag {pagador.agencia}-{pagador.dv_agencia}"
                 f" / {pagador.conta}-{pagador.dv_conta}")
-            cartao.pack(fill="x", pady=(0, 12))
+            cartao.pack(fill="x", pady=px((0, 12)))
             ttk.Label(cartao.acoes, text=f"arquivo nº {nsa:06d}",
                       style="Mini.TLabel").pack(side="right")
 
             if vao:
                 ttk.Label(cartao, text="VAI NO ARQUIVO", style="Rotulo.TLabel"
-                          ).pack(anchor="w", pady=(0, 4))
+                          ).pack(anchor="w", pady=px((0, 4)))
                 tab = ttk.Frame(cartao)
                 tab.pack(fill="x")
                 self._cabecalho_tabela(tab, com_marca=True)
@@ -1835,7 +1847,7 @@ class PagamentosDiaFrame(ttk.Frame):
 
             if fora:
                 ttk.Label(cartao, text="FICA DE FORA", style="Rotulo.TLabel"
-                          ).pack(anchor="w", pady=(14, 4))
+                          ).pack(anchor="w", pady=px((14, 4)))
                 tab = ttk.Frame(cartao)
                 tab.pack(fill="x")
                 self._cabecalho_tabela(tab, com_marca=False)
@@ -1844,14 +1856,14 @@ class PagamentosDiaFrame(ttk.Frame):
 
         if recusadas:
             cartao = widgets.Cartao(dentro, "Contas sem remessa")
-            cartao.pack(fill="x", pady=(0, 12))
+            cartao.pack(fill="x", pady=px((0, 12)))
             for conta, motivo in recusadas:
                 linha = ttk.Frame(cartao)
-                linha.pack(fill="x", pady=(0, 4))
+                linha.pack(fill="x", pady=px((0, 4)))
                 ttk.Label(linha, text=conta[:48], style="Forte.TLabel"
                           ).pack(side="left")
-                widgets.Pilula(linha, motivo[:60], "atencao").pack(side="left",
-                                                                   padx=(10, 0))
+                widgets.Pilula(linha, motivo[:60], "atencao"
+                               ).pack(side="left", padx=px((10, 0)))
 
         resposta = {"ok": False}
 
@@ -1869,7 +1881,7 @@ class PagamentosDiaFrame(ttk.Frame):
         widgets.Botao(rodape, "Gravar os arquivos", papel="acao",
                       command=confirmar).pack(side="right")
         widgets.Botao(rodape, "Cancelar", papel="neutro", command=top.destroy
-                      ).pack(side="right", padx=(0, 8))
+                      ).pack(side="right", padx=px((0, 8)))
 
         def atualizar():
             try:

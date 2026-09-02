@@ -32,6 +32,11 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import widgets
 
+#: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
+#: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
+#: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
+px = widgets.px
+
 CampoData = widgets.CampoData
 
 URL_PAGAMENTOS = "https://acessar.maiscontroleerp.com.br/#/payable-installments"
@@ -63,22 +68,22 @@ class AportesFrame(ttk.Frame):
 
     # ------------------------------------------------------------ interface
     def _montar(self):
-        PADX = widgets.PADX
+        PADX = px(widgets.PADX)
 
         cab = widgets.Cabecalho(
             self, "Aportes e Distribuições",
             "Lança direto no Mais Controle — sem planilha, sem importação.",
             trilha="Comprovantes  ›  Aportes")
-        cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         self.b_conferir = widgets.Botao(cab.acoes, "Conferir cadastro",
                                         papel="passo", command=self._conferir)
-        self.b_conferir.pack(side="left", padx=(0, 8))
+        self.b_conferir.pack(side="left", padx=px((0, 8)))
         self.b_lancar = widgets.Botao(cab.acoes, "Lançar no Mais Controle",
                                       papel="acao", command=self._lancar)
         self.b_lancar.pack(side="left")
 
         form = widgets.Cartao(self, "Novo lançamento", 1)
-        form.pack(fill="x", padx=PADX, pady=(0, 12))
+        form.pack(fill="x", padx=PADX, pady=px((0, 12)))
 
         # Rótulo EM CIMA de cada campo, e não ao lado: com o rótulo à esquerda
         # cada linha do formulário começava numa coluna diferente (a largura do
@@ -87,7 +92,7 @@ class AportesFrame(ttk.Frame):
         linha1.pack(fill="x")
         self.var_data = tk.StringVar(value=f"{datetime.date.today():%d/%m/%Y}")
         widgets.Campo(linha1, "Data", lambda p: CampoData(p, self.var_data)
-                      ).pack(side="left", padx=(0, 16))
+                      ).pack(side="left", padx=px((0, 16)))
         self.var_valor = tk.StringVar()
         widgets.Campo(linha1, "Valor R$",
                       lambda p: ttk.Entry(p, textvariable=self.var_valor,
@@ -97,10 +102,10 @@ class AportesFrame(ttk.Frame):
         # "Morais Participações - SUBCONTA 55696-3" é trabalho que a máquina
         # faz melhor. Digitar no PRÓPRIO campo filtra a lista dele.
         linha2 = ttk.Frame(form)
-        linha2.pack(fill="x", pady=(12, 0))
+        linha2.pack(fill="x", pady=px((12, 0)))
         campo_pag = widgets.Campo(
             linha2, "Pagou", lambda p: widgets.ComboBusca(p, width=38))
-        campo_pag.pack(side="left", padx=(0, 16))
+        campo_pag.pack(side="left", padx=px((0, 16)))
         self.cb_pagador = campo_pag.widget
         campo_rec = widgets.Campo(
             linha2, "Recebeu", lambda p: widgets.ComboBusca(p, width=38))
@@ -108,7 +113,7 @@ class AportesFrame(ttk.Frame):
         self.cb_recebedor = campo_rec.widget
 
         linha3 = ttk.Frame(form)
-        linha3.pack(fill="x", pady=(12, 0))
+        linha3.pack(fill="x", pady=px((12, 0)))
         for rotulo, atributo, largura, valores in (
                 ("Tipo", "cb_tipo", 22, cadastro.TIPOS),
                 ("Lançar", "cb_modo", 24, cadastro.MODOS),
@@ -116,25 +121,26 @@ class AportesFrame(ttk.Frame):
             campo = widgets.Campo(linha3, rotulo, lambda p, l=largura, v=valores:
                                   ttk.Combobox(p, state="readonly", width=l,
                                                values=v))
-            campo.pack(side="left", padx=(0, 16))
+            campo.pack(side="left", padx=px((0, 16)))
             campo.widget.current(0)
             setattr(self, atributo, campo.widget)
 
-        ttk.Label(form, style="Tenue.TLabel", wraplength=760, justify="left",
+        ttk.Label(form, style="Tenue.TLabel", wraplength=px(760),
+                  justify="left",
                   text="Em Pagou e Recebeu, digite para procurar — sem acento e "
                        "por pedaço do nome (\"696\", \"livia\"). A seta abre a "
                        "lista já filtrada."
-                  ).pack(anchor="w", pady=(10, 0))
+                  ).pack(anchor="w", pady=px((10, 0)))
 
         # É esta que o Enter dispara, e não "Lançar no Mais Controle": num
         # formulário que monta uma lista, Enter fecha a LINHA. Mandar dinheiro
         # para o ERP continua exigindo o clique nos botões do alto.
         self.acao_enter = widgets.Botao(form, "+   Adicionar à lista",
                                         papel="passo", command=self._adicionar)
-        self.acao_enter.pack(anchor="w", pady=(12, 0))
+        self.acao_enter.pack(anchor="w", pady=px((12, 0)))
 
         lista = widgets.Cartao(self, "A lançar", 2)
-        lista.pack(fill="both", expand=True, padx=PADX, pady=(0, 12))
+        lista.pack(fill="both", expand=True, padx=PADX, pady=px((0, 12)))
         self.rodape = widgets.RodapeTabela(lista.acoes)
         self.rodape.pack()
         self.rodape.link("Remover selecionado", self._remover)
@@ -157,7 +163,7 @@ class AportesFrame(ttk.Frame):
         # Sem cartão em volta: aqui o próprio campo é quem encolhe e cresce.
         self.texto = tk.Text(self, wrap="word", relief="flat", borderwidth=0,
                              highlightthickness=0)
-        self.texto.pack(fill="x", padx=PADX, pady=(0, 16))
+        self.texto.pack(fill="x", padx=PADX, pady=px((0, 16)))
         widgets.estilo_log(self.texto)
         widgets.registro_elastico(self.texto, self.texto)
 
