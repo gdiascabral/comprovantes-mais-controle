@@ -356,6 +356,12 @@ jobs:
           Copy-Item baixar_comprovantes/*.py codigo_embutido/baixar_comprovantes/
           New-Item -ItemType Directory codigo_embutido/nuvem | Out-Null
           Copy-Item nuvem/*.py -Exclude migrar.py codigo_embutido/nuvem/
+          # `erp/` é biblioteca, como o cnab240: não tem tela e ninguém a
+          # importa ainda. Entra no zip desde já porque quem for migrar a
+          # primeira aba precisa achá-la lá — código que chega DEPOIS de quem
+          # o importa é o app não abrindo na máquina de quem usa.
+          New-Item -ItemType Directory codigo_embutido/erp | Out-Null
+          Copy-Item erp/*.py codigo_embutido/erp/
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
           "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
 

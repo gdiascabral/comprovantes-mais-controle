@@ -27,7 +27,8 @@ _RAIZ = Path(__file__).resolve().parent.parent
 #: Pastas de código que viajam no codigo.zip (ver a lista no CLAUDE.md).
 _PASTAS = ("", "inicio", "baixar_comprovantes", "separar_renomear", "anexar", "aportes", "relatorios",
            "pagamentos_dia", "extratos_sicoob", "conciliacao",
-           "conciliacao/erp", "contratos", "acessorias", "cnab240", "nuvem")
+           "conciliacao/erp", "contratos", "acessorias", "cnab240", "erp",
+           "nuvem")
 
 #: Não são código de aba: o motor e o atualizador rodam DENTRO do exe, onde
 #: a biblioteca padrão está completa — quem os empacota é o PyInstaller.
