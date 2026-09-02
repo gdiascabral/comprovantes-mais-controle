@@ -18,8 +18,43 @@ devolve numero em vez de "R$ 1.234,56", traz as 36 contas de uma vez (a tela
 pagina de 10 em 10), nao precisa revelar saldo mascarado e nao espera valor
 assincrono chegar celula a celula.
 
-DUAS COISAS QUE NAO SAO OPCIONAIS
----------------------------------
+O QUE ESTE ARQUIVO E HOJE: UMA CASCA
+------------------------------------
+Ele foi o primeiro a falar HTTP direto com o ERP, e por isso descobriu sozinho
+tudo que hoje mora no pacote `erp/`: o `user-agent` que passa pelo WAF, o
+`company-id`, qual dos dois tokens vale para qual host e as novas tentativas so
+em GET. O inventario que juntou essas descobertas — as daqui e as dos outros
+sete consumidores, que se contradiziam por escrito — esta em
+`docs/ERP-CLIENTES.md`, e a ordem de migracao dele poe este arquivo na linha 3.
+
+Entao **nada disto e reimplementado aqui**:
+
+    login e os dois tokens ......... erp.Sessao.logar / token_para
+    cabecalhos por host ............ erp.Sessao.cabecalhos_para
+    user-agent de navegador ........ erp.sessao.USER_AGENT
+    novas tentativas (so GET) ...... erp.sessao.politica, montada no transporte
+    enderecos ...................... erp.hosts
+
+O laco de 3 tentativas escrito a mao saiu: ele existia porque este modulo
+falava por `urllib.request` e nao tinha Session/HTTPAdapter para montar um
+`Retry` pronto. Falando pelo `erp/`, que usa `requests`, o `Retry` vem pronto —
+e a MESMA politica passa a valer para todo mundo que migrar, em vez de uma
+copia por consumidor.
+
+O QUE **NAO** MUDOU, E E DE PROPOSITO
+-------------------------------------
+A cara publica: `SessaoApi` com o mesmo nome, o mesmo construtor, os mesmos
+metodos (`logar`, `listar_contas`, `saldos`, `contas`), os mesmos retornos e as
+mesmas excecoes (`ErpError` / `SessaoExpirada`, de `conciliacao/errors.py`).
+Quem depende daqui — `conciliacao/erp/accounts.py`, `nuvem/contas_novas.py` e
+a sonda de `ferramentas/` — nao muda uma linha, e migra de graca.
+
+As excecoes do `erp/` sao TRADUZIDAS na fronteira (`_traduzido`): quem chama
+este pacote trata `ErpError`/`SessaoExpirada` desde sempre, e fazer vazar um
+nome novo seria mudar a cara publica por dentro.
+
+DUAS COISAS QUE NAO SAO OPCIONAIS (e agora moram no `erp/`)
+-----------------------------------------------------------
 1. `user-agent` de navegador. E a unica coisa que separa 200 de 403:
 
        COM user-agent de Chrome ......... 200
@@ -30,20 +65,23 @@ DUAS COISAS QUE NAO SAO OPCIONAIS
 
 2. Header `company-id`, tirado de `companies[0].id` na resposta do login.
 
-O TOKEN E O `jwtToken` (~348 chars), NAO o `accessToken` (27 chars, que nem e
-JWT). Vale 24 horas — tempo de sobra para uma execucao, entao nao guardamos
-token em disco: cada execucao loga de novo.
+O TOKEN destas consultas e o `jwtToken` (~348 chars), NAO o `accessToken` (27
+chars, que nem e JWT) — elas falam com o `prod-erp-api`. Vale 24 horas, tempo
+de sobra para uma execucao, entao nao guardamos token em disco: cada execucao
+loga de novo. Quem escolhe entre os dois e `erp.Sessao.token_para`, pelo HOST
+da URL, e nao ha como errar sem errar o endereco junto.
 """
 
 from __future__ import annotations
 
-import json
-import time
-import urllib.error
+import contextlib
 import urllib.parse
-import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+
+from erp import hosts as erp_hosts
+from erp import sessao as erp_sessao
+from erp.sessao import ErpErro, Sessao, SessaoRecusada
 
 from ..errors import ErpError, SessaoExpirada
 from ..models import ErpAccount
@@ -51,11 +89,11 @@ from .auth import obter_credenciais
 
 __all__ = ["SessaoApi", "coletar_contas_api"]
 
-#: Ver restricao 1 no topo. Se um dia o WAF apertar, e aqui que se mexe.
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
+#: O `user-agent` que passa pelo WAF. O VALOR mora no `erp/` — aqui e so o
+#: nome, que continua existindo porque `ferramentas/sonda.py:353` se apresenta
+#: com ele ao perguntar aos portais se estao de pe. Copiar a string seria criar
+#: a segunda verdade sobre o que separa 200 de 403.
+USER_AGENT = erp_sessao.USER_AGENT
 
 #: A URL de saldos leva um `bankAccountIds` por conta; pedimos em lotes para
 #: nao esbarrar no limite de tamanho de URL quando as contas se multiplicarem.
@@ -64,29 +102,68 @@ _LOTE_SALDOS = 50
 #: Trava contra laco infinito caso `hasNextPage` fique preso em true.
 _MAX_PAGINAS = 50
 
-_TIMEOUT_S = 45
+#: O RELOGIO destas consultas. Os dois numeros saem do `erp/` — nao ha um
+#: segundo valor escrito aqui —, mas continuam tendo nome proprio porque
+#: `ferramentas/sonda.py` os aperta (`_relogio_curto_do_erp`): ela mede se o
+#: ERP RESPONDEU, e tres tentativas com espera dobrada esticam uma pergunta de
+#: 10 s para mais de meio minuto, escondendo justamente a lentidao que ela
+#: existe para notar. **Eles sao lidos a cada chamada** (`_relogio`), entao
+#: troca-los muda o transporte de verdade; deixa-los aqui so de enfeite seria
+#: pior que nao te-los, porque a sonda estaria apertando um botao desligado.
+_TIMEOUT_S = erp_sessao.ESPERA
+_TENTATIVAS_GET = erp_sessao.TENTATIVAS
 
-#: Novas tentativas so em GET: um POST que criou algo (o login, hoje o unico
-#: POST daqui) e perdeu a resposta pediria de novo sem saber se a primeira
-#: pegou — no login especifico isso "so" refaria a autenticacao, mas o WAF
-#: que guarda o Mais Controle penaliza tentativa repetida, e nao ha ganho em
-#: reenviar algo que ja e rapido. GET e diferente: reler saldo/conta e
-#: seguro, e um 5xx passageiro do gateway (visto de verdade no
-#: diagnostico.log de producao, um 504 do prod-erp-api) nao pode custar a
-#: rodada inteira. Mesma politica do `nuvem/rest.py` (3 tentativas, 502 a
-#: 504), escrita a mao porque este modulo fala por `urllib.request`, nao por
-#: `requests` — nao ha Session/HTTPAdapter aqui para montar um Retry pronto.
-_TENTATIVAS_GET = 3
-_ESPERA_ENTRE_TENTATIVAS_S = 1  # dobra a cada nova espera: 1s, depois 2s
-_CODIGOS_TRANSITORIOS = frozenset((502, 503, 504))
+
+@contextlib.contextmanager
+def _traduzido():
+    """As excecoes do `erp/` na lingua que este pacote fala, e so aqui.
+
+    A hierarquia e a mesma dos dois lados (`SessaoRecusada` < `ErpErro`, como
+    `SessaoExpirada` < `ErpError`), entao a traducao e um par de linhas — e
+    espalha-la pelos metodos criaria varios lugares para esquecer um.
+    """
+    try:
+        yield
+    except SessaoRecusada as erro:
+        raise SessaoExpirada(str(erro)) from erro
+    except ErpErro as erro:
+        raise ErpError(str(erro)) from erro
+
+
+def _relogio() -> dict:
+    """O transporte e a espera desta chamada, lidos AGORA.
+
+    Lidos agora, e nao guardados na sessao, porque `ferramentas/sonda.py`
+    troca os dois numeros em volta da chamada e os devolve no fim — e um
+    valor congelado no login faria o `finally` dela restaurar algo que ja
+    nao estava mais em uso.
+    """
+    return {"transporte": erp_sessao.montar_transporte(_TENTATIVAS_GET),
+            "espera": _TIMEOUT_S}
 
 
 def _base_api(config) -> str:
-    return str(config.erp["api_base"]).rstrip("/")
+    """O `prod-erp-api`. O `config` manda; o `erp/hosts.py` e o padrao."""
+    return _base(config, "api_base", erp_hosts.ERP_API)
 
 
 def _base_legacy(config) -> str:
-    return str(config.erp["legacy_api_base"]).rstrip("/")
+    """O `legacy-api`, onde mora o login."""
+    return _base(config, "legacy_api_base", erp_hosts.LEGACY)
+
+
+def _base(config, chave: str, padrao: str) -> str:
+    """O endereco configurado, ou o do `erp/hosts.py`.
+
+    O `config` continua mandando porque `conciliacao/config.yaml` tem essas
+    duas chaves e mora FORA do repositorio: passar a ignora-las seria aceitar
+    configuracao e descarta-la em silencio. O padrao passou a sair do
+    `erp/hosts.py` — e e por isso que o `_ConfigMinimo` de
+    `nuvem/contas_novas.py`, que so existe para satisfazer esta assinatura,
+    pode desaparecer no PR dele sem que nada aqui mude.
+    """
+    valor = (getattr(config, "erp", None) or {}).get(chave)
+    return str(valor or padrao).rstrip("/")
 
 
 @dataclass
@@ -98,6 +175,9 @@ class SessaoApi:
     usuario: str
     empresa: str | None
     config: object
+    #: A `erp.Sessao` por baixo, quando esta veio de `logar()`. Fora do `repr`
+    #: porque ela carrega a credencial que permite relogar.
+    _sessao: Sessao | None = field(default=None, repr=False)
 
     # ------------------------------------------------------------------ login
 
@@ -111,50 +191,53 @@ class SessaoApi:
                 "Pelos .bat: rode o atalho '1 - Salvar senha'."
             )
 
-        corpo = _requisitar(
-            f"{_base_legacy(config)}/users/login",
-            metodo="POST",
-            corpo={"username": email, "password": senha},
-        )
+        # O `erp/` ja para com recado proprio no MFA, na troca de senha
+        # obrigatoria e no login sem empresa — as tres situacoes que quebrariam
+        # a coleta mais adiante, de forma confusa. Aqui so se traduz o nome da
+        # excecao; a frase continua sendo a mesma que a pessoa lia.
+        with _traduzido():
+            interna = Sessao.logar(email, senha,
+                                   url=f"{_base_legacy(config)}/users/login",
+                                   **_relogio())
 
-        token = corpo.get("jwtToken")
-        if not token:
+        if not interna.jwt_token:
             raise ErpError(
                 "o login da API respondeu sem 'jwtToken' — o contrato mudou.\n"
                 "Me avise: a leitura de saldos precisa ser reajustada."
             )
 
-        # Situacoes que quebrariam a coleta mais adiante, de forma confusa.
-        # Melhor parar aqui, com o motivo em portugues.
-        if corpo.get("mfaEnabled"):
-            raise SessaoExpirada(
-                "esta conta passou a exigir segundo fator (MFA).\n"
-                "O login automatico nao passa por MFA — me avise para ajustar."
-            )
-        if corpo.get("needsPasswordChange"):
-            raise SessaoExpirada(
-                "o ERP esta exigindo troca de senha deste usuario.\n"
-                "Entre no site, troque a senha e guarde a nova:\n"
-                "no app, em 'Login'; pelos .bat, em '1 - Salvar senha'."
-            )
-
-        empresas = corpo.get("companies") or []
-        if not empresas:
-            raise ErpError("o login nao devolveu nenhuma empresa (companies vazio).")
-
         sessao = cls(
-            token=str(token),
-            company_id=str(empresas[0].get("id")),
-            usuario=str(corpo.get("username") or email),
-            empresa=empresas[0].get("tradeName") or empresas[0].get("name"),
+            token=interna.jwt_token,
+            company_id=interna.company_id,
+            usuario=interna.usuario or email,
+            empresa=interna.empresa,
             config=config,
+            _sessao=interna,
         )
         log(f"  conectado como {sessao.usuario} ({sessao.empresa})")
         return sessao
 
     @property
-    def _auth(self) -> dict[str, str]:
-        return {"authorization": f"Bearer {self.token}", "company-id": self.company_id}
+    def _erp(self) -> Sessao:
+        """A sessao do pacote `erp/` que fala por esta.
+
+        Montado a mao (o construtor e publico, e ha quem o use), o objeto nao
+        tem sessao interna: ela e reconstruida aqui a partir dos campos que ela
+        mesma preencheria. Reconstruida a cada chamada, e nao guardada, para
+        que trocar `self.token` continue valendo — e ela nasce sem credencial,
+        logo sem relogin, que e o certo: ninguem entregou senha nenhuma.
+        """
+        if self._sessao is not None:
+            return self._sessao
+        return Sessao(jwt_token=self.token, company_id=self.company_id)
+
+    def _pedir(self, url: str):
+        """GET autenticado. Quem repete 5xx e o transporte, e so em GET."""
+        sessao = self._erp
+        relogio = _relogio()
+        sessao.transporte, sessao.espera = relogio["transporte"], relogio["espera"]
+        with _traduzido():
+            return sessao.pedir(url)
 
     # --------------------------------------------------------------- consultas
 
@@ -171,9 +254,8 @@ class SessaoApi:
             consulta = urllib.parse.urlencode(
                 {"pageIndex": pagina, "pageSize": 200, "isActive": str(ativas).lower()}
             )
-            corpo = _requisitar(
-                f"{_base_api(self.config)}/bank-integration/bank-accounts?{consulta}",
-                headers=self._auth,
+            corpo = self._pedir(
+                f"{_base_api(self.config)}/bank-integration/bank-accounts?{consulta}"
             )
             itens.extend(corpo.get("items") or [])
             if not corpo.get("hasNextPage"):
@@ -196,9 +278,8 @@ class SessaoApi:
             consulta = "&".join(
                 f"bankAccountIds={urllib.parse.quote(str(i))}" for i in lote
             )
-            corpo = _requisitar(
-                f"{_base_api(self.config)}/financial/bank-accounts/balances?{consulta}",
-                headers=self._auth,
+            corpo = self._pedir(
+                f"{_base_api(self.config)}/financial/bank-accounts/balances?{consulta}"
             )
             if not isinstance(corpo, dict):
                 continue
@@ -273,55 +354,3 @@ def _para_decimal(valor) -> Decimal | None:
         return Decimal(str(valor))
     except (InvalidOperation, ValueError):
         return None
-
-
-def _requisitar(url: str, *, metodo: str = "GET", corpo=None, headers=None):
-    dados = json.dumps(corpo).encode() if corpo is not None else None
-    origem = "https://acessar.maiscontroleerp.com.br"
-    cabecalhos = {
-        "accept": "application/json, text/plain, */*",
-        "accept-language": "pt-BR",
-        "content-type": "application/json",
-        "origin": origem,
-        "referer": origem + "/",
-        "user-agent": USER_AGENT,  # obrigatorio — ver restricao 1 no topo
-        **(headers or {}),
-    }
-
-    tentativas = _TENTATIVAS_GET if metodo == "GET" else 1
-    for tentativa in range(1, tentativas + 1):
-        req = urllib.request.Request(url, data=dados, method=metodo)
-        for chave, valor in cabecalhos.items():
-            req.add_header(chave, valor)
-
-        try:
-            with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resposta:
-                return json.loads(resposta.read().decode("utf-8"))
-        except urllib.error.HTTPError as erro:
-            # Esgotadas as tentativas (ou erro que nao e do gateway), a
-            # ULTIMA resposta cai no que ja sabia traduzir 5xx/401/403 em
-            # excecao NOMEADA — nao criamos uma segunda regra aqui.
-            if erro.code in _CODIGOS_TRANSITORIOS and tentativa < tentativas:
-                time.sleep(_ESPERA_ENTRE_TENTATIVAS_S * (2 ** (tentativa - 1)))
-                continue
-            detalhe = erro.read().decode("utf-8", "replace")[:200]
-            if erro.code in (401, 403) and "login" in url:
-                raise SessaoExpirada(
-                    "o ERP recusou a senha guardada.\n"
-                    "Guarde a senha correta: no app, em 'Login';\n"
-                    "pelos .bat, no atalho '1 - Salvar senha'."
-                ) from erro
-            if erro.code == 403:
-                raise ErpError(
-                    "403 do WAF do Mais Controle. Quase sempre e o cabecalho\n"
-                    "'user-agent' — confira a constante USER_AGENT em erp/api.py."
-                ) from erro
-            if erro.code == 401:
-                raise SessaoExpirada("a sessao da API foi recusada (401).") from erro
-            raise ErpError(
-                f"HTTP {erro.code} ao chamar {url.split('?')[0]}\n{detalhe}"
-            ) from erro
-        except urllib.error.URLError as erro:
-            raise ErpError(
-                f"falha de rede ao chamar {url.split('?')[0]}: {erro.reason}"
-            ) from erro

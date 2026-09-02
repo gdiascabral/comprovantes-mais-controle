@@ -24,11 +24,19 @@ O DESENHO, EM UMA FRASE POR MÓDULO
     pagina.py   COMO, quando é pelo navegador. O `page.evaluate(fetch)` que
                 estava duplicado em `anexar/` e `aportes/`.
 
-NENHUM CONSUMIDOR USA ISTO AINDA, e é de propósito: o pacote nasce sozinho,
-com teste próprio, e cada aba migra no seu PR — do mais simples
-(`nuvem/contas_novas.py`, que já é HTTP direto) ao mais delicado
-(`anexar/mc_api.py`, que tira o token do cabeçalho da página logada e é a porta
-de quatro abas). A ordem inteira está no fim do `docs/ERP-CLIENTES.md`.
+QUEM JÁ MIGROU
+--------------
+Cada consumidor entra no seu PR, do mais simples ao mais delicado; a ordem
+inteira está no fim do `docs/ERP-CLIENTES.md`.
+
+    conciliacao/erp/api.py   `SessaoApi` virou casca sobre `Sessao` — e com
+                             ele vieram de graça `nuvem/contas_novas.py` e
+                             `ferramentas/sonda.py`, que o emprestam.
+
+Falta o mais delicado, `anexar/mc_api.py`, que tira o token do cabeçalho da
+página logada e é a porta de quatro abas. Enquanto ele não migra, os dois
+convivem — o que é aceitável, porque este pacote nasce sabendo a regra dos
+tokens e ele nasceu adivinhando-a.
 """
 from __future__ import annotations
 

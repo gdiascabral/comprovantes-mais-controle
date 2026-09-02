@@ -61,8 +61,13 @@ class SessaoRecusada(ErpErro):
     """
 
 
-def _montar_sessao() -> requests.Session:
-    """Uma conexão viva por execução, com nova tentativa automática em 5xx.
+#: Quantas vezes um GET insiste. Três é o número da RODADA de produção — ver
+#: `montar_transporte` —, e é o padrão de tudo aqui.
+TENTATIVAS = 3
+
+
+def montar_transporte(tentativas: int = TENTATIVAS) -> requests.Session:
+    """Uma conexão viva, com nova tentativa automática em 5xx.
 
     **Só GET repete.** Reenviar um POST que criou algo e perdeu a resposta
     duplica o que foi criado — e aqui os POSTs criam lançamento, criam baixa e
@@ -76,16 +81,26 @@ def _montar_sessao() -> requests.Session:
 
     É a MESMA política de `nuvem/rest.py:_montar_sessao` (3 tentativas, 502 a
     504), e a repetição não é acaso: um 504 real do `prod-erp-api` já custou
-    uma rodada de conciliação, e `conciliacao/erp/api.py:69-81` teve de
-    escrevê-la à mão por falar via `urllib.request`. Aqui, falando por
-    `requests`, o `Retry` vem pronto.
+    uma rodada de conciliação, e `conciliacao/erp/api.py` teve de escrevê-la à
+    mão por falar via `urllib.request`. Aqui, falando por `requests`, o `Retry`
+    vem pronto.
+
+    `tentativas` é parâmetro porque nem todo mundo quer o relógio da rodada:
+    `ferramentas/sonda.py` mede se o ERP RESPONDEU, e três tentativas com
+    espera dobrada esticam uma pergunta de 10 s para mais de meio minuto —
+    escondendo justamente a lentidão que a sonda existe para notar. Com o
+    número da casa, devolve a sessão única do módulo; com outro, uma sessão
+    própria, para que apertar o relógio de uma ferramenta não mexa no
+    transporte que o app está usando.
     """
+    if tentativas == TENTATIVAS and _SESSAO is not None:
+        return _SESSAO
     sessao = requests.Session()
-    sessao.mount("https://", HTTPAdapter(max_retries=politica()))
+    sessao.mount("https://", HTTPAdapter(max_retries=politica(tentativas)))
     return sessao
 
 
-def politica() -> Retry:
+def politica(tentativas: int = TENTATIVAS) -> Retry:
     """A política de novas tentativas, exposta para poder ser conferida.
 
     Sem isto, "GET repete e POST não" seria uma frase de comentário. Com ela,
@@ -93,7 +108,7 @@ def politica() -> Retry:
     que o urllib3 chama para decidir.
     """
     return Retry(
-        total=3,
+        total=tentativas,
         backoff_factor=1,
         status_forcelist=[502, 503, 504],
         allowed_methods=frozenset(["GET"]),
@@ -102,8 +117,11 @@ def politica() -> Retry:
 
 
 #: O pacote inteiro fala com o mesmo ERP, então uma sessão só basta — e é o
-#: ponto único que os testes trocam para simular o transporte.
-_SESSAO = _montar_sessao()
+#: ponto único que os testes trocam para simular o transporte. Nasce `None`
+#: para que o `montar_transporte` da linha seguinte não procure por ele antes
+#: de ele existir.
+_SESSAO = None
+_SESSAO = montar_transporte()
 
 
 @dataclass
@@ -125,6 +143,11 @@ class Sessao:
     #: Qualquer coisa com `.request(metodo, url, headers=…, json=…, timeout=…)`.
     #: `None` usa a sessão do módulo; os testes injetam a sua.
     transporte: object | None = field(default=None, repr=False)
+    #: Quantos segundos esperar por cada resposta. `None` usa o `ESPERA` do
+    #: módulo. É por sessão, e não uma constante só, porque quem PERGUNTA se o
+    #: ERP respondeu (`ferramentas/sonda.py`) precisa desistir cedo, enquanto
+    #: quem faz a rodada precisa esperar — ver `montar_transporte`.
+    espera: float | None = field(default=None, repr=False)
     #: A credencial que fez este login, guardada só em memória e para uma
     #: coisa: refazer o login quando o `accessToken` do legado vencer no meio
     #: do trabalho (ver `relogar`). `repr=False` porque objeto de sessão vai
@@ -133,6 +156,9 @@ class Sessao:
     #: é o certo: ninguém pode relogar em nome de quem não entregou a senha.
     _email: str = field(default="", repr=False)
     _senha: str = field(default="", repr=False)
+    #: O endereço de login que ESTA sessão usou. Relogar noutro endereço
+    #: seria trocar de ERP no meio do trabalho.
+    _url_login: str = field(default="", repr=False)
 
     # ----------------------------------------------------------------- login
 
@@ -173,21 +199,34 @@ class Sessao:
         )
 
     @classmethod
-    def logar(cls, email: str, senha: str, *, transporte=None) -> "Sessao":
-        """`POST {legacy}/users/login`. É a única chamada sem token nenhum."""
+    def logar(cls, email: str, senha: str, *, transporte=None,
+              url: str = "", espera: float | None = None) -> "Sessao":
+        """`POST {legacy}/users/login`. É a única chamada sem token nenhum.
+
+        `url` existe para quem já tinha o endereço em arquivo de configuração —
+        é o caso do `conciliacao/erp/api.py`, cujo `config.yaml` traz
+        `legacy_api_base`. Ignorar essa chave ao migrar seria aceitá-la e
+        descartá-la em silêncio, que é a armadilha que o próprio inventário
+        registra do lado do ERP (`anexar/mc_api.py:537-540`). Vazio usa o
+        `hosts.URL_LOGIN`, que é o endereço de verdade.
+        """
         if not (email and senha):
             raise SessaoRecusada("sem credenciais para entrar no Mais Controle.")
+        url = url or hosts.URL_LOGIN
         corpo = _pedir(
-            hosts.URL_LOGIN,
+            url,
             metodo="POST",
             corpo={"username": email, "password": senha},
             cabecalhos=cabecalhos_base(),
             transporte=transporte,
+            espera=espera,
         )
         sessao = cls.de_login(corpo, transporte=transporte)
         if not sessao.usuario:
             sessao.usuario = email
+        sessao.espera = espera
         sessao._email, sessao._senha = email, senha
+        sessao._url_login = url
         return sessao
 
     def relogar(self) -> None:
@@ -205,7 +244,8 @@ class Sessao:
             raise SessaoRecusada(
                 "a sessao do ERP venceu e nao ha credencial guardada nesta\n"
                 "sessao para entrar de novo — refaca o login.")
-        nova = Sessao.logar(self._email, self._senha, transporte=self.transporte)
+        nova = Sessao.logar(self._email, self._senha, transporte=self.transporte,
+                            url=self._url_login, espera=self.espera)
         self.jwt_token = nova.jwt_token
         self.access_token = nova.access_token
         self.company_id = nova.company_id
@@ -332,7 +372,7 @@ class Sessao:
     def _uma_chamada(self, url: str, metodo: str, corpo, extras):
         return _pedir(url, metodo=metodo, corpo=corpo,
                       cabecalhos=self.cabecalhos_para(url, extras),
-                      transporte=self.transporte)
+                      transporte=self.transporte, espera=self.espera)
 
     def _da_para_relogar(self, url: str, metodo: str, recusa: SessaoRecusada,
                          idempotente: bool) -> bool:
@@ -362,7 +402,8 @@ def cabecalhos_base() -> dict:
     }
 
 
-def _pedir(url: str, *, metodo: str, corpo, cabecalhos: dict, transporte=None):
+def _pedir(url: str, *, metodo: str, corpo, cabecalhos: dict, transporte=None,
+           espera: float | None = None):
     """Uma chamada HTTP, com o status traduzido em exceção NOMEADA.
 
     A tradução mora aqui e só aqui: o transporte devolve a última resposta 5xx
@@ -372,7 +413,7 @@ def _pedir(url: str, *, metodo: str, corpo, cabecalhos: dict, transporte=None):
     alvo = transporte if transporte is not None else _SESSAO
     try:
         resposta = alvo.request(metodo, url, headers=cabecalhos,
-                                json=corpo, timeout=ESPERA)
+                                json=corpo, timeout=espera or ESPERA)
     except requests.RequestException as e:
         raise ErpErro(f"nao deu para falar com o ERP: {e}") from e
 
