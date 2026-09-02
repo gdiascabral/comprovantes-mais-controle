@@ -21,16 +21,6 @@ import sys
 import threading
 from pathlib import Path
 
-# Rodando como script: garante que as subpastas entram no caminho de import.
-# (No executável gerado pelo PyInstaller isso não é necessário.)
-_RAIZ = Path(__file__).resolve().parent
-for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
-           _RAIZ / "relatorios", _RAIZ / "pagamentos_dia",
-           _RAIZ / "extratos_sicoob", _RAIZ / "inicio",
-           _RAIZ / "baixar_comprovantes"):
-    if _p.is_dir() and str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -44,16 +34,14 @@ px = widgets.px
 from nuvem import (auditoria, cadastro, login_dialogo, rest, sessao,
                    usuarios)
 from nuvem.usuarios_frame import UsuariosFrame
-from inicio_frame import InicioFrame
-from separar_renomear import SepararFrame
-from anexar_comprovantes import AnexarFrame
-from conferencia import ConferenciaFrame
-from aportes_frame import AportesFrame
-from relatorio_frame import RelatorioFrame
-from pagamentos_frame import PagamentosDiaFrame
-from extratos_frame import ExtratosSicoobFrame
-# Pacote de verdade (tem __init__.py): importa pelo caminho completo, então não
-# disputa nome de módulo no sys.path com as outras pastas de aba.
+from inicio.inicio_frame import InicioFrame
+from separar_renomear.separar_renomear import SepararFrame
+from anexar.anexar_comprovantes import AnexarFrame
+from anexar.conferencia import ConferenciaFrame
+from aportes.aportes_frame import AportesFrame
+from relatorios.relatorio_frame import RelatorioFrame
+from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
+from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
@@ -341,7 +329,7 @@ def main():
     # O cadastro de contas é o mesmo `contas_sicoob.json` que os Extratos leem
     # — a tela não descobre isso sozinha, recebe de quem a monta.
     def _mapa_das_contas():
-        import sicoob_contas as _sc
+        from extratos_sicoob import sicoob_contas as _sc
 
         return _sc.carregar()
 
