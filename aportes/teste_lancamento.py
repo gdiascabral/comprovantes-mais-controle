@@ -32,8 +32,14 @@ from mc_catalogos import Catalogos                    # noqa: E402
 from mc_lancamentos import (criar_pagamento,          # noqa: E402
                             criar_recebimento, ErroLancamento)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import util                                            # noqa: E402
+
 BASE_URL = "https://acessar.maiscontroleerp.com.br"
-PERFIL = Path(__file__).resolve().parent / ".chrome_profile_teste"
+# Sai de `util.pasta_do_perfil()`, e não da pasta deste arquivo — mesma razão
+# do `conferir_contas.py`: script de uso manual, sem `sys.frozen`, e perfil ao
+# lado do módulo era um segundo lugar para a mesma coisa.
+PERFIL = util.pasta_do_perfil("teste")
 SAIDA = Path(__file__).resolve().parent / "teste_lancamento.json"
 TELA_PAGAMENTOS = f"{BASE_URL}/#/payable-installments"
 
