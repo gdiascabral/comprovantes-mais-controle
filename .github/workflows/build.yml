@@ -590,7 +590,23 @@ jobs:
       # histórico: a versão boa de ontem já não existia mais. O piso continua
       # valendo para o caso contrário — um mês parado não pode deixar o
       # repositório sem release nenhuma para voltar.
-      - name: Limpar releases antigas (30 dias, e nunca menos de 4)
+      #
+      # Com o portão, uma lista só deixou de servir. Antes toda release era
+      # liberada e ordenar por data bastava; agora convivem duas categorias, e
+      # um piso único conta as prévias como se fossem versões em uso. O caso
+      # que isso quebra é o pior possível: uma semana de pushes sem liberar
+      # nada põe 4 prévias no topo, a última LIBERADA (a que está rodando na
+      # máquina de todo mundo) cai para a 5ª posição e, passados os 30 dias,
+      # some — junto com o caminho de volta, que é o motivo de a poda ter um
+      # piso. Por isso cada categoria é podada com o piso e a janela DELA.
+      #
+      # E a prévia tem uma regra a mais: só entra na poda depois de ter sido
+      # ULTRAPASSADA por uma liberada mais nova. Aí ela é prévia morta —
+      # liberá-la não a tornaria sequer a `latest`, que o GitHub decide pela
+      # data de criação. Prévia que ainda pode virar a próxima versão fica,
+      # tenha a idade que tiver: apagar o que está esperando o dono decidir
+      # seria o portão comendo o que ele guarda.
+      - name: Limpar releases antigas (30 dias, e nunca menos de 4 de cada)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -598,15 +614,43 @@ jobs:
           $DIAS = 30
           $rels = gh api "repos/${{ github.repository }}/releases?per_page=100" | ConvertFrom-Json
           $limite = (Get-Date).ToUniversalTime().AddDays(-$DIAS)
-          $velhas = $rels |
+
+          function Podaveis($lista) {
+            # A regra de sempre, aplicada DENTRO de uma categoria.
+            $lista |
+              Sort-Object -Property @{Expression={[datetime]$_.created_at}} -Descending |
+              Select-Object -Skip $MANTER |
+              Where-Object { ([datetime]$_.created_at).ToUniversalTime() -lt $limite }
+          }
+
+          # `draft` anda junto com `prerelease` porque o atualizador as ignora
+          # pelo mesmo motivo: o `/releases/latest` nao enxerga nem uma nem outra.
+          $liberadas = @($rels | Where-Object { -not $_.prerelease -and -not $_.draft })
+          $previas   = @($rels | Where-Object { $_.prerelease -or $_.draft })
+          Write-Host "releases: $($liberadas.Count) liberadas, $($previas.Count) previas"
+
+          $velhas = @(Podaveis $liberadas)
+
+          $marco = $liberadas |
             Sort-Object -Property @{Expression={[datetime]$_.created_at}} -Descending |
-            Select-Object -Skip $MANTER |
-            Where-Object { ([datetime]$_.created_at).ToUniversalTime() -lt $limite }
+            Select-Object -First 1
+          if ($marco) {
+            $corte = ([datetime]$marco.created_at).ToUniversalTime()
+            $ultrapassadas = @($previas | Where-Object {
+              ([datetime]$_.created_at).ToUniversalTime() -lt $corte })
+            $velhas += @(Podaveis $ultrapassadas)
+          } else {
+            # Nada liberado ainda: nenhuma previa foi ultrapassada, entao nao ha
+            # previa morta. E o estado logo depois de ligar o portao.
+            Write-Host "nenhuma release liberada ainda - nenhuma previa e podada"
+          }
+
           if (-not $velhas) {
-            Write-Host "nada a apagar: nenhuma release fora dos $DIAS dias, alem das $MANTER mais novas"
+            Write-Host "nada a apagar: nenhuma release fora dos $DIAS dias, alem das $MANTER mais novas de cada categoria"
           }
           foreach ($r in $velhas) {
-            Write-Host "Apagando release $($r.tag_name) (de $($r.created_at))"
+            $tipo = if ($r.prerelease -or $r.draft) { "previa ultrapassada" } else { "liberada" }
+            Write-Host "Apagando release $($r.tag_name) ($tipo, de $($r.created_at))"
             gh api -X DELETE "repos/${{ github.repository }}/releases/$($r.id)"
             try { gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$($r.tag_name)" } catch { Write-Host "  (tag já removida)" }
           }
