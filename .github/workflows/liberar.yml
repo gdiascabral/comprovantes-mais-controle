@@ -1,0 +1,218 @@
+name: Liberar uma versão para os usuários
+
+# O segundo ato. O `build.yml` GERA — todo push na main vira uma prévia, que
+# ninguém baixa. Este LIBERA: vira a chave de uma prévia e, a partir daí, os
+# apps a instalam sozinhos na abertura seguinte.
+#
+# Como usar (é a única forma de uma versão chegar a alguém):
+#   Actions → "Liberar uma versão para os usuários" → Run workflow →
+#   escreva a tag da prévia (ex.: v2.0.121) → Run workflow.
+#
+# Nenhuma `uses:` aqui, de propósito. É o único workflow cujo único trabalho é
+# escrever, e a regra do build.yml ("action de terceiro é permissão que alguém
+# pode gastar sem ninguém pedir") pesa mais neste do que em qualquer outro:
+# não há passo que precise de ação nenhuma — `gh` já vem na máquina do runner
+# e fala com os dois repositórios por `--repo`, sem nem clonar o código. Ação
+# que entrar aqui um dia entra fixada por hash de commit, como no build.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag da prévia a liberar (ex.: v2.0.121)"
+        required: true
+        type: string
+
+# Escrita SÓ para virar a chave `prerelease` de uma release que já existe.
+# Este workflow não gera artefato nenhum: o exe e o codigo.zip que vão para o
+# usuário são exatamente os bytes que a build publicou na prévia, e ninguém
+# os toca aqui — liberar não pode ser uma segunda chance de mudar o que sai.
+permissions:
+  contents: write
+
+# Duas liberações ao mesmo tempo escreveriam em cima uma da outra, e quem
+# decide a `latest` é a data de CRIAÇÃO da release: a última a rodar não é
+# necessariamente a que fica valendo. Uma de cada vez, e sem cancelar a que
+# estiver no meio (ela pode já ter liberado um dos dois repositórios).
+concurrency:
+  group: liberar
+  cancel-in-progress: false
+
+jobs:
+  liberar:
+    runs-on: ubuntu-latest
+    env:
+      # Digitado por gente, na aba Actions — então passa por env e nunca
+      # direto para dentro do `run`, senão o texto do campo vira comando.
+      TAG: ${{ inputs.tag }}
+      REPO_CODIGO: ${{ github.repository }}
+      REPO_ARTEFATOS: ${{ github.repository_owner }}/comprovantes-releases
+    steps:
+      - name: Conferir o formato da tag
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$TAG' não tem cara de tag de release."
+            echo "::error::O formato é v<maior>.<menor>.<build>, como v2.0.121."
+            echo "::error::A tag está no título da prévia, na aba Releases."
+            exit 1
+          fi
+          echo "tag a liberar: $TAG"
+
+      # A mesma exigência do job `motor` do build.yml, e pelo mesmo motivo: o
+      # app procura no repositório de ARTEFATOS. Liberar só o de código
+      # deixaria a versão parada a um passo do fim, com o workflow verde.
+      - name: Exigir o token do repositório de artefatos
+        env:
+          TOKEN_ARTEFATOS: ${{ secrets.TOKEN_ARTEFATOS }}
+        run: |
+          set -uo pipefail
+          if [ -z "${TOKEN_ARTEFATOS:-}" ]; then
+            echo "::error::Falta o secret TOKEN_ARTEFATOS. Sem ele a liberação"
+            echo "::error::não chega em ${REPO_ARTEFATOS}, que é onde o app procura."
+            exit 1
+          fi
+          echo "token dos artefatos: presente"
+
+      # Liberar é o último momento em que dá para olhar. Depois disto a versão
+      # entra sozinha em toda máquina, e o que estiver errado já estará lá.
+      - name: Conferir que a prévia existe e está inteira
+        env:
+          GH_TOKEN: ${{ secrets.TOKEN_ARTEFATOS }}
+        run: |
+          set -euo pipefail
+          # `--jq` do próprio `gh`, e não o `jq` do sistema: um binário a menos
+          # de que depender na imagem do runner. A saída é a linha de estado e,
+          # depois dela, um nome de arquivo por linha.
+          if ! dados="$(gh release view "$TAG" --repo "$REPO_ARTEFATOS" \
+                        --json isDraft,isPrerelease,publishedAt,assets \
+                        --jq '"\(.isDraft) \(.isPrerelease) \(.publishedAt)",
+                              (.assets[].name)' 2>&1)"; then
+            echo "::error::Não achei a release $TAG em ${REPO_ARTEFATOS}."
+            echo "::error::$dados"
+            echo "::error::Confira a tag na aba Releases daquele repositório."
+            exit 1
+          fi
+          read -r rascunho previa publicada \
+            <<< "$(printf '%s\n' "$dados" | head -n 1)"
+          nomes="$(printf '%s\n' "$dados" | tail -n +2)"
+
+          # Draft é outra coisa: a build nunca cria uma, então rascunho aqui é
+          # release feita à mão. Tirar só o `prerelease` de um rascunho não o
+          # publica, e o workflow sairia verde sem ter liberado nada.
+          if [ "$rascunho" = "true" ]; then
+            echo "::error::$TAG é um RASCUNHO, não uma prévia da esteira."
+            echo "::error::Este workflow não publica rascunho. Publique-o à mão"
+            echo "::error::ou gere a versão pela build."
+            exit 1
+          fi
+          if [ "$previa" = "false" ]; then
+            echo "::notice::$TAG já estava liberada — nada a fazer, mas os"
+            echo "::notice::passos seguintes rodam mesmo assim (são idempotentes)."
+          fi
+
+          # Sem o exe, `_url_do_exe()` do atualizador morre em "a release mais
+          # nova não tem executável publicado" na hora em que alguém precisar
+          # do motor novo. Sem o codigo.zip, é toda abertura que falha.
+          #
+          # O exe é procurado por EXTENSÃO, exatamente como `_url_do_exe()` o
+          # procura, e não pelo nome que o build.yml sobe: o GitHub troca os
+          # espaços do nome do arquivo por pontos, e o asset publicado se chama
+          # "Comprovantes.Mais.Controle.exe". Conferir pelo nome com espaços
+          # daria "falta o exe" em toda release — e conferir pelo nome com
+          # pontos amarraria isto a uma regra de nomenclatura do GitHub que
+          # ninguém aqui controla. A regra do app é a única que importa.
+          faltou=0
+          if ! printf '%s\n' "$nomes" | grep -qiE '\.exe$'; then
+            echo "::error::a prévia $TAG não tem executável (.exe) nenhum"
+            faltou=1
+          fi
+          if ! printf '%s\n' "$nomes" | grep -Fxq "codigo.zip"; then
+            echo "::error::a prévia $TAG não tem o codigo.zip"
+            faltou=1
+          fi
+          if [ "$faltou" = "1" ]; then
+            echo "::error::Release incompleta não pode ser liberada: o app"
+            echo "::error::baixaria e falharia na máquina de quem usa. Os"
+            echo "::error::arquivos que ela tem são:"
+            printf '%s\n' "$nomes" | sed 's/^/::error::  /'
+            exit 1
+          fi
+
+          # Liberar uma tag mais VELHA que a versão em produção é o erro de
+          # digitação caro: com `--latest` ela passa a ser a versão de todo
+          # mundo. Não é assim que se volta uma versão — quem volta é o
+          # `travar_versao.txt` ao lado do exe, máquina por máquina, e sem
+          # depender de release nenhuma.
+          #
+          # A comparação é por `publishedAt`, e NÃO por `createdAt`: no
+          # repositório de artefatos o `created_at` é a data do commit que a
+          # tag aponta, e como aquele repositório não recebe commits, TODAS as
+          # releases de lá têm o mesmo `created_at` (14/08/2026, medido). Um
+          # comparador que sempre empata é um comparador que nunca protege.
+          # Sem tag, `gh release view` mostra a `latest` — a versão que está em
+          # produção agora. Não havendo nenhuma liberada (o estado logo depois
+          # de ligar o portão), ele falha e não há com o que comparar.
+          atual="$(gh release view --repo "$REPO_ARTEFATOS" \
+                   --json tagName,publishedAt \
+                   --jq '"\(.tagName) \(.publishedAt)"' 2>/dev/null || echo '')"
+          if [ -n "$atual" ]; then
+            read -r tag_atual pub_atual <<< "$atual"
+            if [ "$tag_atual" != "$TAG" ] && [[ "$publicada" < "$pub_atual" ]]; then
+              echo "::error::$TAG (de $publicada) é mais VELHA que a versão"
+              echo "::error::liberada hoje, ${tag_atual} (de $pub_atual)."
+              echo "::error::Liberá-la rebaixaria todo mundo. Para voltar uma"
+              echo "::error::versão numa máquina, crie 'travar_versao.txt' ao"
+              echo "::error::lado do exe com a tag boa dentro."
+              exit 1
+            fi
+          fi
+          echo "prévia $TAG conferida: exe + codigo.zip presentes, publicada em $publicada"
+
+      # Os artefatos PRIMEIRO: é o repositório que o app consulta. Falhando
+      # aqui, nada foi liberado em lugar nenhum — que é o estado seguro.
+      #
+      # `--latest` não é enfeite ao lado do `--prerelease=false`. A documentação
+      # do GitHub diz que a `latest` é a release mais recente não-prévia
+      # "ordenada por created_at" — e no repositório de artefatos o `created_at`
+      # de todas elas é o MESMO (é a data do commit que a tag aponta, e aquele
+      # repositório não recebe commits). Ordenar por um campo em que todo mundo
+      # empata deixa o desempate a critério do GitHub. `--latest` diz qual é,
+      # em vez de torcer.
+      - name: Liberar no repositório de artefatos (é onde o app procura)
+        env:
+          GH_TOKEN: ${{ secrets.TOKEN_ARTEFATOS }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --repo "$REPO_ARTEFATOS" \
+            --prerelease=false --latest
+          echo "liberada em ${REPO_ARTEFATOS}"
+
+      # E o de código depois: é o que os exes anteriores à separação ainda
+      # enxergam. Se este falhar sozinho, basta rodar o workflow de novo — os
+      # dois passos são idempotentes, liberar o que já está liberado não faz
+      # nada.
+      - name: Liberar no repositório de código (os exes anteriores olham aqui)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --repo "$REPO_CODIGO" \
+            --prerelease=false --latest
+          echo "liberada em ${REPO_CODIGO}"
+
+      - name: Escrever o resumo
+        run: |
+          set -euo pipefail
+          {
+            echo "## $TAG liberada"
+            echo ""
+            echo "Os apps passam a baixá-la sozinhos na próxima abertura."
+            echo ""
+            echo "- \`${REPO_ARTEFATOS}\` — onde o app procura"
+            echo "- \`${REPO_CODIGO}\` — onde os exes anteriores procuram"
+            echo ""
+            echo "Deu ruim? Crie \`travar_versao.txt\` ao lado do executável,"
+            echo "com a tag boa dentro, ou renomeie a pasta \`codigo_velha\`"
+            echo "para \`codigo\` — esta segunda funciona sem rede."
+          } >> "$GITHUB_STEP_SUMMARY"

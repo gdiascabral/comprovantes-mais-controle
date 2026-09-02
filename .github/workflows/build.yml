@@ -602,10 +602,16 @@ jobs:
       #
       # E a prévia tem uma regra a mais: só entra na poda depois de ter sido
       # ULTRAPASSADA por uma liberada mais nova. Aí ela é prévia morta —
-      # liberá-la não a tornaria sequer a `latest`, que o GitHub decide pela
-      # data de criação. Prévia que ainda pode virar a próxima versão fica,
-      # tenha a idade que tiver: apagar o que está esperando o dono decidir
-      # seria o portão comendo o que ele guarda.
+      # ninguém libera uma versão anterior à que já está em produção. Prévia
+      # que ainda pode virar a próxima versão fica, tenha a idade que tiver:
+      # apagar o que está esperando o dono decidir seria o portão comendo
+      # justamente o que ele guarda.
+      #
+      # A data continua sendo `created_at`, como sempre foi neste passo, e vale
+      # saber o que ela é: a data do COMMIT que a tag aponta, não a da
+      # publicação. Duas releases do mesmo commit empatam (v2.0.117 e v2.0.118
+      # empatam hoje), e no empate a prévia conta como não-ultrapassada e fica.
+      # O erro cai para o lado de guardar demais, que é o lado certo.
       - name: Limpar releases antigas (30 dias, e nunca menos de 4 de cada)
         env:
           GH_TOKEN: ${{ github.token }}
