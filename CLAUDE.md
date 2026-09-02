@@ -7,15 +7,28 @@ https://github.com/gdiascabral/comprovantes-mais-controle
 
 ## Regra de ouro: como uma mudança chega ao usuário
 
-TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), que:
-1. gera `versao.txt` = `v1.0.<run_number>` (NÃO é commitado; criado na build);
+**Gerar e liberar são dois atos, e desde 02/09/2026 há um portão entre eles.**
+Antes eram um só: o push publicava a release e o `atualizador.py` a instalava
+na abertura seguinte — do commit à máquina de quem paga contas davam 4 a 9
+minutos, sem ninguém decidir nada. Num app que movimenta dinheiro, é uma
+decisão que ninguém tomou (PR #1).
+
+A `main` é **protegida**: não se empurra nada nela direto, toda mudança entra
+por PR, e a trava vale **também para quem é admin** (`enforce_admins` ligado,
+sem force-push e sem apagar a branch). O merge dispara o GitHub Actions
+(`.github/workflows/build.yml`), que:
+
+1. gera `versao.txt` = `v2.0.<run_number>` (NÃO é commitado; criado na build).
+   Era `v1.0.<run_number>` até o commit `4be2c3d`, de 30/08/2026 — a numeração
+   velha ainda aparece nos incidentes contados aqui embaixo (a v1.0.71, a
+   run #76) e no `motor_minimo.txt`, e é a mesma esteira;
 2. monta `codigo.zip` (comprovantes_app.py + util.py + widgets.py +
-   separar_renomear/*.py + anexar/*.py + aportes/*.py +
-   relatorios/*.py + pagamentos_dia/*.py + extratos_sicoob/*.py +
-   conciliacao/*.py + conciliacao/erp/*.py + contratos/*.py +
-   acessorias/*.py + cnab240/*.py + **cnab240/spec/*.json** +
-   **nuvem/*.py exceto migrar.py** + versao.txt +
-   motor_minimo.txt + icone.ico) — ~100 KB.
+   inicio/*.py + separar_renomear/*.py + anexar/*.py +
+   baixar_comprovantes/*.py + aportes/*.py + relatorios/*.py +
+   pagamentos_dia/*.py + extratos_sicoob/*.py + conciliacao/*.py +
+   conciliacao/erp/*.py + contratos/*.py + acessorias/*.py + **erp/*.py** +
+   cnab240/*.py + **cnab240/spec/*.json** + **nuvem/*.py exceto migrar.py** +
+   versao.txt + motor_minimo.txt + icone.ico).
    **Pasta nova de aba OU arquivo novo na raiz = linha nova aqui**, senão o
    import falha no usuário e o app não abre. Vale para os dois: `widgets.py` é
    de raiz e precisou entrar um a um;
@@ -24,25 +37,100 @@ TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), qu
    remessa, na máquina do usuário. Guardado por `tests/test_cnab240_pacote.py`;
    **`nuvem/migrar.py` é a exceção oposta**: fica de fora porque é ferramenta
    de uma vez só, rodada à mão no repositório, e o app nunca a importa;
+   **`erp/` entrou sem consumidor nenhum** (PR #24) porque é biblioteca, como o
+   `cnab240/`: o zip tem de conhecê-la ANTES de a primeira aba importá-la —
+   código que chega depois de quem o importa é o app não abrindo na máquina de
+   quem usa. Quem vigia a lista inteira é `tests/test_empacotamento.py`;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
-   com Tesseract OCR embutido) — e publica a Release `v1.0.<run_number>` com
-   o exe + codigo.zip. Os exes avulsos de Separar e de Anexar foram removidos:
-   tudo vive em abas no app principal;
-4. apaga releases antigas mantendo as **4 mais novas** (política de rollback).
+   com Tesseract OCR embutido) — e publica a Release `v2.0.<run_number>`
+   **como PRÉVIA** (`prerelease: true`), com o exe + codigo.zip, nos **dois**
+   repositórios: o de código e o de artefatos
+   (`gdiascabral/comprovantes-releases`, a constante `REPO` do
+   `atualizador.py`). São dois passos porque é no de ARTEFATOS que o app
+   procura, e fechar o portão só no de código o deixaria aberto exatamente
+   onde os usuários olham. Os exes avulsos de Separar e de Anexar foram
+   removidos: tudo vive em abas no app principal;
+4. poda releases antigas — **por categoria**, mantendo as 4 mais novas e os 30
+   dias de CADA uma. Piso único deixou de servir quando as duas categorias
+   passaram a conviver, e o caso que ele quebra é o pior possível: uma semana
+   de pushes sem liberar põe 4 prévias no topo, a última LIBERADA (a que está
+   rodando na máquina de todo mundo) cai para a 5ª posição e some com o prazo,
+   levando junto o caminho de volta que é o motivo de a poda ter piso. Prévia
+   tem uma regra a mais: só entra na poda depois de **ultrapassada** por uma
+   liberada mais nova — aí é prévia morta, porque ninguém libera versão
+   anterior à que já está em produção; prévia que ainda pode virar a próxima
+   versão fica, tenha a idade que tiver.
+
+**O portão não é código nosso: é a semântica da API do GitHub.**
+`/releases/latest` devolve, por definição, a release mais nova que não é
+`prerelease` nem `draft` — e é o ÚNICO endereço por onde o `atualizador.py`
+escolhe versão (`API_LATEST`, nas duas pontas: o `codigo.zip` da abertura e o
+exe de ~152 MB). Por isso o PR #1 não mudou uma linha dele. A contrapartida é
+que a dependência ficou invisível no código, e dependência que não aparece é
+dependência que alguém apaga sem saber: quem a segura é
+`tests/test_atualizador.py`, cujo dublê guarda a lista de releases e responde a
+cada endereço como o GitHub responde (404 no `latest` quando não há liberada) —
+trocando `API_LATEST` pela lista `/releases`, seis dos sete testes quebram.
+
+**Quem entrega é gente, à mão.** Actions → **"Liberar uma versão para os
+usuários"** (`.github/workflows/liberar.yml`) → Run workflow → a tag da prévia
+(está no título dela, na aba Releases) → Run workflow. Leva segundos, e a
+partir daí os apps a baixam sozinhos na próxima abertura. O workflow não gera
+nada: o exe e o `codigo.zip` que vão ao usuário são os bytes que a build já
+publicou — **liberar não pode ser uma segunda chance de mudar o que sai**. Ele
+vira a chave nos dois repositórios, artefatos primeiro, e confere quatro coisas
+antes de escrever: o formato da tag, o `TOKEN_ARTEFATOS`, que a release existe
+e está inteira, e que a tag não é mais velha que a que já está em produção.
+Duas armadilhas medidas contra as releases reais: o GitHub troca os espaços do
+nome do asset por pontos, então a conferência procura o exe pela EXTENSÃO,
+exatamente como `_url_do_exe()` faz; e `created_at` não é a data da publicação,
+é a do commit que a tag aponta — no repositório de artefatos, que não recebe
+commits, TODAS empatam, então a comparação de idade usa `publishedAt`, porque
+um comparador que sempre empata nunca protege.
+
+**`travar_versao.txt` enxerga prévia, e isso é o desenho, não um furo.** Com a
+trava, o app busca `/releases/tags/<tag>`, que devolve prerelease igual. É
+assim que se experimenta uma prévia numa máquina ANTES de entregá-la às
+outras, e é a mesma porta por onde se volta de uma release ruim; exige um ato
+humano (criar o arquivo ao lado do exe) e está coberto por teste. Sem rede, o
+caminho de volta é renomear `codigo_velha` para `codigo`.
 
 O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 `atualizador.py`) e **código** (o resto). Ao abrir, o app baixa só o
-`codigo.zip` novo (segundos, sem perguntar) e roda com ele. Portanto:
+`codigo.zip` novo (segundos, sem perguntar) e roda com ele — o da release
+**liberada**. Portanto:
 
-- Mudanças em `comprovantes_app.py`, `separar_renomear/`, `anexar/`,
-  `aportes/`, `relatorios/`, `pagamentos_dia/`, `extratos_sicoob/`,
-  `contratos/`, `conciliacao/`, `acessorias/` →
-  chegam sozinhas ao usuário no próximo abrir. Só commitar e esperar a build.
+- Mudanças em `comprovantes_app.py`, `util.py`, `widgets.py`, `inicio/`,
+  `separar_renomear/`, `anexar/`, `baixar_comprovantes/`, `aportes/`,
+  `relatorios/`, `pagamentos_dia/`, `extratos_sicoob/`, `contratos/`,
+  `conciliacao/`, `acessorias/`, `cnab240/`, `nuvem/` e `erp/` → chegam
+  sozinhas ao usuário no próximo abrir, **depois de liberadas**. Commitar e
+  esperar a build deixou de bastar: falta virar a chave.
 - Mudanças em `motor.py`, `atualizador.py`, dependências novas no
-  `requirements.txt` ou `--collect-all` no workflow → exigem exe novo.
-  **Obrigatório**: subir `motor_minimo.txt` para a versão da release que sai
-  (v1.0.<run_number+1>), senão o código novo roda em motor velho e quebra.
-  O app então oferece o download completo (~150 MB) com progresso.
+  `requirements.txt`/`requirements.lock` ou `--collect-all` no workflow →
+  exigem exe novo. **Obrigatório**: subir `motor_minimo.txt` para a versão da
+  release que sai (`v2.0.<run_number>`), senão o código novo roda em motor
+  velho e quebra. O app então oferece o download completo (~152 MB) com
+  progresso. **Chutar para CIMA é o erro caro**, e a build o barra antes de
+  publicar: um mínimo acima da release que está saindo pede um motor que nunca
+  vai existir, e o app entra em laço — oferece os 152 MB, baixa o exe mais novo
+  que há, continua abaixo do mínimo e pergunta de novo na abertura seguinte, em
+  todas as máquinas.
+- **O `motor_minimo.txt` sobe UMA unidade quando só a esteira muda.** A trava
+  do job `motor` é MECÂNICA: vigia cinco NOMES de arquivo — `motor.py`,
+  `atualizador.py`, `requirements.txt`, **`requirements.lock`** e o próprio
+  `.github/workflows/build.yml` — e recusa todo push que toque num deles sem
+  subir o mínimo junto, sem olhar o que mudou dentro. Quando a mudança é de
+  esteira (ruff, cobertura, uma pasta nova no zip), escrever ali a versão da
+  release forçaria ~152 MB de download em toda máquina por nada; escrever uma
+  unidade a mais (`v1.0.108` → `v1.0.109`) paga a trava sem cobrar pedágio de
+  ninguém. Foi a decisão dos PRs #1, #7, #12 e #24 — este último começou em
+  `v2.0.135` e voltou atrás no commit `6fc70dc`. O `requirements.lock` entrou
+  nessa lista com o PR #12, e não é redundância com o `.txt`: quem manda no que
+  vai dentro do exe é o LOCK, e trocar a versão de uma biblioteca por um
+  recompile (uma correção de segurança dentro da mesma faixa) não toca no
+  `.txt` — sem essa linha, o exe sairia com biblioteca nova e o `motor_minimo`
+  apontando para o exe velho.
 - **Import novo de SUBMÓDULO da biblioteca padrão também exige exe novo** —
   é a armadilha menos óbvia daqui, e ela derrubou a v1.0.71 nas duas máquinas.
   O PyInstaller não embute a stdlib inteira: ele segue os imports a partir do
@@ -58,30 +146,36 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   suba o `motor_minimo.txt` no MESMO push. Preferir o caminho sem import novo
   quando existir — foi o que salvou este caso (o `_garantir_fontes` fala com o
   Tcl direto, e a correção chegou pelo codigo.zip em segundos, em vez de 152 MB
-  para todo mundo baixar).
-- **Aba nova custa uma release com exe novo, mesmo sem precisar.** Pasta nova
-  obriga a mexer no `build.yml` (item 2 acima), e o job `motor` recusa todo
-  push que toque nesse arquivo sem subir o `motor_minimo.txt` junto. A trava é
-  MECÂNICA — olha o nome do arquivo alterado, não o que mudou dentro dele —,
-  então adicionar uma aba dispara o download de ~150 MB em quem estiver com exe
-  anterior, ainda que o código novo rode perfeitamente no motor velho. Foi o
-  caso da aba Acessórias (v1.0.75): nenhum import novo, e mesmo assim a baixa
-  completa. Consequência prática: **vale agrupar abas novas num push só**, e
-  não pagar o pedágio uma vez por aba.
+  para todo mundo baixar). É a mesma razão pela qual a fonte de ícones do menu
+  (PR #28) é criada por `font create` e a lista de famílias sai do `font
+  families` do Tcl.
+- **Aba nova continua obrigando a mexer no `build.yml`** (item 2 acima), e por
+  isso cai na trava mecânica do parágrafo anterior mesmo quando o código novo
+  roda perfeitamente no motor velho. Foi o caso da aba Acessórias (v1.0.75):
+  nenhum import novo, e mesmo assim todo mundo baixou o exe completo, porque o
+  mínimo subiu para a versão da release. Hoje o pedágio é opcional — sobe-se
+  uma unidade —, mas a trava dispara igual, então **vale agrupar abas novas num
+  push só**.
 - **O exe roda Python 3.11, e a sua máquina provavelmente não.** O CI usa 3.11
   e o PyInstaller embute essa versão; escrever contra um interpretador mais
   novo passa aqui e falha lá. Aconteceu na run #76: `Path.read_text(newline=…)`
   existe desde o 3.13 e o teste do CNAB 240 quebrou no CI, com o `build`
   pulado. É a mesma família do `tkinter.font` da v1.0.71 — código que a sua
   stdlib tem e a do usuário não. Antes de subir, `vermin --target=3.11
-  --violations` sobre o que mudou (está no `requirements-dev.txt`).
+  --violations` sobre o que mudou (está no `requirements-dev.txt`), que hoje o
+  job `test` também roda. É pela mesma razão que o `requirements.lock` é
+  resolvido para 3.11/Windows e não para o interpretador desta máquina.
 - **Build que falha CONSOME o número da release.** A versão é
-  `v1.0.<run_number>`, e o contador anda mesmo quando o job quebra: depois da
+  `v2.0.<run_number>`, e o contador anda mesmo quando o job quebra: depois da
   #76 falhar, a próxima release passou a ser a v1.0.77. Quem for corrigir e
   subir de novo tem de **subir o `motor_minimo.txt` junto**, senão ele aponta
   para uma versão que nunca existiu.
 - Build leva ~8–10 min. Commits só de README/LICENSE/CLAUDE.md não disparam
-  build (paths-ignore).
+  build (paths-ignore). **`docs/`, `supabase/` e `tests/` NÃO estão lá**: os
+  dois primeiros porque documento novo é barato de construir e sai como prévia,
+  que ninguém baixa; `tests/**` e `requirements-dev.txt` de propósito, porque é
+  deles que sai a régua que o job `test` roda — ignorá-los seria dizer que
+  mexer na régua não muda nada.
 
 ## Arquitetura
 
@@ -741,8 +835,26 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   valendo dentro de cada um.
 - **Sicoob/Inter 2026**: comprovantes "impressos" sem camada de texto (texto
   vira curvas vetoriais). Sem OCR, extração retorna vazio.
-- ERP bloqueia chamadas HTTP feitas fora do navegador (403) — sempre via
-  página logada.
+- **O ERP não bloqueia HTTP de fora do navegador — ele recusa quem se
+  identifica como robô.** A regra antiga ("chamada HTTP feita fora do navegador
+  leva 403; sempre via página logada") estava escrita aqui, no
+  `anexar/mc_api.py` e no `aportes/mc_catalogos.py`, e virou lenda antes de a
+  causa ser conhecida. O que o WAF confere é o `user-agent`, medido em
+  `conciliacao/erp/api.py:23-29`: com o de Chrome, **200**; sem ele
+  (Python-urllib), **403** e a página HTML do WAF. É o mesmo guarda que recusa o
+  navegador em modo headless. **Três clientes já rodam por HTTP puro**, um deles
+  fazendo PUT de lançamento no `legacy-api`. Sobram três consumidores que
+  precisam mesmo do navegador, e o motivo de nenhum é o WAF: o upload do
+  comprovante é diálogo de tela, o PDF do extrato é gerado pela própria página,
+  e o host GraphQL das obras só aparece nos cabeçalhos quando o ERP carrega o
+  FORMULÁRIO de lançamento. O inventário, com uma linha por consumidor, está em
+  `docs/ERP-CLIENTES.md`; o `user-agent` mora em `erp.sessao.USER_AGENT`. Duas
+  ressalvas que valem para qualquer migração: **MFA encerra o assunto** (o login
+  automático não passa por segundo fator, e aí o navegador deixa de ser plano B
+  e vira o único caminho), e o `POST /users/login` do HTTP direto **derruba** a
+  sessão do navegador — o ERP aceita uma por usuário, e é isso que define a
+  ordem da coleta da Conciliação (navegador primeiro, API depois) e faz o
+  `nuvem/contas_novas.py` rodar na ABERTURA, antes de existir Chrome.
 - PyInstaller onefile: caminhos persistentes usam a pasta do EXE
   (sys.executable), nunca __file__ (que aponta para pasta temporária).
 - pdfminer precisa de `--collect-all pdfminer`/`pdfplumber` no PyInstaller
