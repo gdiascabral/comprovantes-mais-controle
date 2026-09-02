@@ -9,6 +9,8 @@ quem está na frente da tela, e um traceback não pede nada.
 from __future__ import annotations
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 #: Endereço do projeto e chave PÚBLICA. Ficam no código de propósito.
 #:
@@ -37,6 +39,35 @@ CHAVE_PUBLICA = (
 #: Generoso porque a alternativa é pior: o cadastro inteiro são poucos KB, e
 #: uma leitura que desiste cedo manda o app para o cache sem precisar.
 ESPERA = 20
+
+
+def _montar_sessao() -> requests.Session:
+    """Uma conexão viva por execução, em vez de refazer DNS/TCP/TLS a cada
+    chamada — e nova tentativa automática quando o gateway responde 5xx.
+
+    Só GET repete. Reenviar um POST que criou algo e perdeu a resposta
+    duplicaria o que foi criado (empresa/conta em dobro, cadastro repetido);
+    quem chama um POST vê a falha uma vez e decide se tenta de novo.
+    `raise_on_status=False`: esgotadas as tentativas, a ÚLTIMA resposta 5xx
+    volta como resposta comum — é `_resposta()` quem já sabe traduzir status
+    HTTP em exceção NOMEADA, e duplicar essa tradução aqui criaria duas
+    fontes para a mesma regra.
+    """
+    sessao = requests.Session()
+    novas_tentativas = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[502, 503, 504],
+        allowed_methods=frozenset(["GET"]),
+        raise_on_status=False,
+    )
+    sessao.mount("https://", HTTPAdapter(max_retries=novas_tentativas))
+    return sessao
+
+
+#: Módulo inteiro fala com o mesmo projeto (URL fixa acima), então uma sessão
+#: só basta — é o ponto único que os testes trocam para simular o transporte.
+_SESSAO = _montar_sessao()
 
 
 class ErroDaNuvem(RuntimeError):
@@ -123,8 +154,8 @@ def _chamar(metodo: str, caminho: str, token, dados=None, prefer="") -> object:
     if prefer:
         cab["Prefer"] = prefer
     try:
-        r = requests.request(metodo, f"{URL}{caminho}", headers=cab,
-                             json=dados, timeout=ESPERA)
+        r = _SESSAO.request(metodo, f"{URL}{caminho}", headers=cab,
+                            json=dados, timeout=ESPERA)
     except requests.RequestException as e:
         raise SemRede(f"não deu para falar com o servidor: {e}") from e
     return _resposta(r)
@@ -206,10 +237,10 @@ def chamar(funcao: str, token: str, **argumentos):
 def entrar(email: str, senha: str) -> dict:
     """Troca e-mail e senha por uma sessão. Devolve o corpo do GoTrue."""
     try:
-        r = requests.post(f"{URL}/auth/v1/token?grant_type=password",
-                          headers=_cabecalhos(None),
-                          json={"email": email, "password": senha},
-                          timeout=ESPERA)
+        r = _SESSAO.post(f"{URL}/auth/v1/token?grant_type=password",
+                         headers=_cabecalhos(None),
+                         json={"email": email, "password": senha},
+                         timeout=ESPERA)
     except requests.RequestException as e:
         raise SemRede(f"não deu para falar com o servidor: {e}") from e
     if r.status_code in (400, 401):
@@ -269,11 +300,11 @@ def criar_conta(nome: str, email: str, senha: str) -> bool:
     ele o admin veria uma fila de e-mails sem gente.
     """
     try:
-        r = requests.post(f"{URL}/auth/v1/signup",
-                          headers=_cabecalhos(None),
-                          json={"email": email.strip(), "password": senha,
-                                "data": {"nome": nome.strip()}},
-                          timeout=ESPERA)
+        r = _SESSAO.post(f"{URL}/auth/v1/signup",
+                         headers=_cabecalhos(None),
+                         json={"email": email.strip(), "password": senha,
+                               "data": {"nome": nome.strip()}},
+                         timeout=ESPERA)
     except requests.RequestException as e:
         raise SemRede(f"não deu para falar com o servidor: {e}") from e
 
@@ -304,10 +335,10 @@ def criar_conta(nome: str, email: str, senha: str) -> bool:
 def renovar(refresh_token: str) -> dict:
     """Troca o token de renovação por uma sessão nova."""
     try:
-        r = requests.post(f"{URL}/auth/v1/token?grant_type=refresh_token",
-                          headers=_cabecalhos(None),
-                          json={"refresh_token": refresh_token},
-                          timeout=ESPERA)
+        r = _SESSAO.post(f"{URL}/auth/v1/token?grant_type=refresh_token",
+                         headers=_cabecalhos(None),
+                         json={"refresh_token": refresh_token},
+                         timeout=ESPERA)
     except requests.RequestException as e:
         raise SemRede(f"não deu para falar com o servidor: {e}") from e
     if r.status_code in (400, 401):
@@ -319,7 +350,7 @@ def sair(token: str) -> None:
     """Encerra a sessão no servidor. Falhar aqui não é problema: o token
     local é apagado de qualquer forma, e ele vence sozinho."""
     try:
-        requests.post(f"{URL}/auth/v1/logout", headers=_cabecalhos(token),
-                      timeout=ESPERA)
+        _SESSAO.post(f"{URL}/auth/v1/logout", headers=_cabecalhos(token),
+                     timeout=ESPERA)
     except requests.RequestException:
         pass

@@ -7,12 +7,15 @@ não" —, porque cada um pede uma coisa diferente de quem está na frente da
 tela, e confundi-los é como o app passa a mentir: um cadastro que não baixou
 vira "tudo certo", e uma sessão vencida vira "erro inesperado".
 """
+import http.server
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
 import pytest
+import urllib3.util.retry
 
 _RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_RAIZ))
@@ -40,8 +43,11 @@ def _responder(monkeypatch, resposta):
         if isinstance(resposta, Exception):
             raise resposta
         return resposta
-    monkeypatch.setattr(rest.requests, "request", falso)
-    monkeypatch.setattr(rest.requests, "post", falso)
+    # `rest` fala com o transporte por UM ponto so, a sessao do modulo — nao
+    # mais `requests.request`/`requests.post` soltos. Trocar a funcao do
+    # modulo `requests` nao pega mais nada: e a sessao quem tem o metodo.
+    monkeypatch.setattr(rest._SESSAO, "request", falso)
+    monkeypatch.setattr(rest._SESSAO, "post", falso)
 
 
 def _jwt(exp: int, email: str = "quem@exemplo.com",
@@ -149,6 +155,88 @@ def test_a_chave_do_codigo_e_a_publica():
     assert dados["role"] == "anon"
 
 
+# --------------------------------------------------- sessao e novas tentativas
+# Estes dois não trocam a resposta por um dublê que finge a espera: sobem um
+# servidor HTTP local de verdade e deixam o `Retry` de requests/urllib3
+# decidir sozinho quando insistir. É a prova de que a POLÍTICA (3 tentativas,
+# só GET, 502 a 504) está de fato montada no adaptador — não só escrita.
+
+def _servidor_instavel(respostas: list, corpos: list | None = None):
+    """HTTP local que responde `respostas[i]` (e `corpos[i]`) na i-ésima
+    chamada, repetindo a última depois de esgotar a lista. `contador` guarda
+    quantas chamadas chegaram e por qual método — é o que o teste confere."""
+    contador = {"chamadas": 0, "metodos": []}
+    corpos = corpos or [b""] * len(respostas)
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def _responder(self):
+            i = min(contador["chamadas"], len(respostas) - 1)
+            contador["chamadas"] += 1
+            contador["metodos"].append(self.command)
+            corpo = corpos[i]
+            self.send_response(respostas[i])
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(corpo)))
+            self.end_headers()
+            self.wfile.write(corpo)
+
+        def do_GET(self):
+            self._responder()
+
+        def do_POST(self):
+            self._responder()
+
+        def log_message(self, *_a):
+            pass  # silêncio: não poluir a saída do pytest com acesso HTTP
+
+    servidor = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    return servidor, contador
+
+
+def _sessao_local(monkeypatch, servidor):
+    """Uma sessão com a MESMA política de retry da produção (`_montar_sessao`
+    de verdade, não uma cópia à mão), só que também válida para `http://` —
+    o módulo só usa `https://`, e o servidor de teste não tem TLS."""
+    sessao_teste = rest._montar_sessao()
+    sessao_teste.mount("http://", sessao_teste.get_adapter("https://x"))
+    monkeypatch.setattr(rest, "_SESSAO", sessao_teste)
+    monkeypatch.setattr(rest, "URL", f"http://127.0.0.1:{servidor.server_port}")
+    # Sem isto o teste esperaria de verdade o backoff (uns 2s) a cada rodada.
+    # O que importa aqui é QUANTAS vezes e COM QUE MÉTODO, não a espera real.
+    monkeypatch.setattr(urllib3.util.retry.time, "sleep", lambda *_a, **_k: None)
+
+
+def test_get_repete_5xx_ate_o_sucesso(monkeypatch):
+    """Um 504 passageiro do gateway (como o que ficou no diagnostico.log de
+    produção) não pode virar rodada perdida: GET insiste, até 3 vezes, e
+    devolve o que veio na terceira."""
+    servidor, contador = _servidor_instavel(
+        [504, 504, 200], [b"", b"", b'[{"id": 1}]'])
+    try:
+        _sessao_local(monkeypatch, servidor)
+        assert rest.ler("conta", "tok") == [{"id": 1}]
+        assert contador["chamadas"] == 3
+        assert contador["metodos"] == ["GET", "GET", "GET"]
+    finally:
+        servidor.shutdown()
+
+
+def test_post_nao_repete_5xx(monkeypatch):
+    """Reenviar um POST que criou algo e perdeu a resposta duplicaria o que
+    foi criado (cadastro em dobro) — por isso só GET tem novas tentativas, e
+    o 504 único vira a mesma exceção nomeada de sempre, sem insistir."""
+    servidor, contador = _servidor_instavel([504])
+    try:
+        _sessao_local(monkeypatch, servidor)
+        with pytest.raises(rest.RecusadoPeloBanco):
+            rest.inserir("empresa", "tok", [{"nome_pasta": "X"}])
+        assert contador["chamadas"] == 1
+        assert contador["metodos"] == ["POST"]
+    finally:
+        servidor.shutdown()
+
+
 # ----------------------------------------------------------------- sessao
 
 def test_sem_arquivo_e_precisa_entrar(tmp_path):
@@ -248,7 +336,7 @@ def _caminhos_pedidos(monkeypatch) -> list:
     def falso(_metodo, url, **_kw):
         pedidos.append(url)
         return _Resposta(200, [])
-    monkeypatch.setattr(rest.requests, "request", falso)
+    monkeypatch.setattr(rest._SESSAO, "request", falso)
     return pedidos
 
 
@@ -441,7 +529,7 @@ def _cadastrando(monkeypatch, resposta):
         if isinstance(resposta, Exception):
             raise resposta
         return resposta
-    monkeypatch.setattr(rest.requests, "post", falso)
+    monkeypatch.setattr(rest._SESSAO, "post", falso)
     return enviado
 
 

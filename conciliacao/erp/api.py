@@ -38,6 +38,7 @@ token em disco: cada execucao loga de novo.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -64,6 +65,20 @@ _LOTE_SALDOS = 50
 _MAX_PAGINAS = 50
 
 _TIMEOUT_S = 45
+
+#: Novas tentativas so em GET: um POST que criou algo (o login, hoje o unico
+#: POST daqui) e perdeu a resposta pediria de novo sem saber se a primeira
+#: pegou — no login especifico isso "so" refaria a autenticacao, mas o WAF
+#: que guarda o Mais Controle penaliza tentativa repetida, e nao ha ganho em
+#: reenviar algo que ja e rapido. GET e diferente: reler saldo/conta e
+#: seguro, e um 5xx passageiro do gateway (visto de verdade no
+#: diagnostico.log de producao, um 504 do prod-erp-api) nao pode custar a
+#: rodada inteira. Mesma politica do `nuvem/rest.py` (3 tentativas, 502 a
+#: 504), escrita a mao porque este modulo fala por `urllib.request`, nao por
+#: `requests` — nao ha Session/HTTPAdapter aqui para montar um Retry pronto.
+_TENTATIVAS_GET = 3
+_ESPERA_ENTRE_TENTATIVAS_S = 1  # dobra a cada nova espera: 1s, depois 2s
+_CODIGOS_TRANSITORIOS = frozenset((502, 503, 504))
 
 
 def _base_api(config) -> str:
@@ -262,7 +277,6 @@ def _para_decimal(valor) -> Decimal | None:
 
 def _requisitar(url: str, *, metodo: str = "GET", corpo=None, headers=None):
     dados = json.dumps(corpo).encode() if corpo is not None else None
-    req = urllib.request.Request(url, data=dados, method=metodo)
     origem = "https://acessar.maiscontroleerp.com.br"
     cabecalhos = {
         "accept": "application/json, text/plain, */*",
@@ -273,31 +287,41 @@ def _requisitar(url: str, *, metodo: str = "GET", corpo=None, headers=None):
         "user-agent": USER_AGENT,  # obrigatorio — ver restricao 1 no topo
         **(headers or {}),
     }
-    for chave, valor in cabecalhos.items():
-        req.add_header(chave, valor)
 
-    try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resposta:
-            return json.loads(resposta.read().decode("utf-8"))
-    except urllib.error.HTTPError as erro:
-        detalhe = erro.read().decode("utf-8", "replace")[:200]
-        if erro.code in (401, 403) and "login" in url:
-            raise SessaoExpirada(
-                "o ERP recusou a senha guardada.\n"
-                "Guarde a senha correta: no app, em 'Login';\n"
-                "pelos .bat, no atalho '1 - Salvar senha'."
-            ) from erro
-        if erro.code == 403:
+    tentativas = _TENTATIVAS_GET if metodo == "GET" else 1
+    for tentativa in range(1, tentativas + 1):
+        req = urllib.request.Request(url, data=dados, method=metodo)
+        for chave, valor in cabecalhos.items():
+            req.add_header(chave, valor)
+
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resposta:
+                return json.loads(resposta.read().decode("utf-8"))
+        except urllib.error.HTTPError as erro:
+            # Esgotadas as tentativas (ou erro que nao e do gateway), a
+            # ULTIMA resposta cai no que ja sabia traduzir 5xx/401/403 em
+            # excecao NOMEADA — nao criamos uma segunda regra aqui.
+            if erro.code in _CODIGOS_TRANSITORIOS and tentativa < tentativas:
+                time.sleep(_ESPERA_ENTRE_TENTATIVAS_S * (2 ** (tentativa - 1)))
+                continue
+            detalhe = erro.read().decode("utf-8", "replace")[:200]
+            if erro.code in (401, 403) and "login" in url:
+                raise SessaoExpirada(
+                    "o ERP recusou a senha guardada.\n"
+                    "Guarde a senha correta: no app, em 'Login';\n"
+                    "pelos .bat, no atalho '1 - Salvar senha'."
+                ) from erro
+            if erro.code == 403:
+                raise ErpError(
+                    "403 do WAF do Mais Controle. Quase sempre e o cabecalho\n"
+                    "'user-agent' — confira a constante USER_AGENT em erp/api.py."
+                ) from erro
+            if erro.code == 401:
+                raise SessaoExpirada("a sessao da API foi recusada (401).") from erro
             raise ErpError(
-                "403 do WAF do Mais Controle. Quase sempre e o cabecalho\n"
-                "'user-agent' — confira a constante USER_AGENT em erp/api.py."
+                f"HTTP {erro.code} ao chamar {url.split('?')[0]}\n{detalhe}"
             ) from erro
-        if erro.code == 401:
-            raise SessaoExpirada("a sessao da API foi recusada (401).") from erro
-        raise ErpError(
-            f"HTTP {erro.code} ao chamar {url.split('?')[0]}\n{detalhe}"
-        ) from erro
-    except urllib.error.URLError as erro:
-        raise ErpError(
-            f"falha de rede ao chamar {url.split('?')[0]}: {erro.reason}"
-        ) from erro
+        except urllib.error.URLError as erro:
+            raise ErpError(
+                f"falha de rede ao chamar {url.split('?')[0]}: {erro.reason}"
+            ) from erro
