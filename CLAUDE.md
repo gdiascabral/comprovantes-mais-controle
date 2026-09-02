@@ -765,6 +765,15 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   que pula não aparece em vermelho. Foi assim que os 9 do `test_widgets.py`
   sumiram por um momento. Já o contraste da paleta (`test_visual.py`) é
   aritmética sobre constantes: roda no CI sem tela nenhuma.
+  **O `Tk()` dessa fixture nasce dentro de `tcl_com_handles_proprios`.** No
+  Windows o Tcl embrulha os handles padrão do processo, a captura de saída do
+  pytest os fecha por fora a cada fase de teste, e o valor reaproveitado pelo
+  Windows faz o `open` do `tclIndex` do Tk falhar em silêncio — daí
+  `invalid command name "tk_focusNext"` numa rodada a cada cinco da suíte
+  (02/09/2026). Parecia disputa de foco com o `focus_force`, e não era: o
+  docstring da função e `tests/test_raiz.py` contam o resto. Teste de
+  interface que morre com `invalid command name` num proc do Tk, ou num
+  `source` de `.tcl`, é para desconfiar da captura antes do teste.
 - **Nunca commitar dados da empresa**: PDFs de comprovantes, relatórios
   xlsx, `.chrome_profile`, logs (tudo já no .gitignore; a pasta local
   `debug/` é só diagnóstico local e nunca foi para o repo).

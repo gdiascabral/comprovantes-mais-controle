@@ -362,14 +362,26 @@ def test_o_tab_passa_por_cada_item_do_menu(coluna):
 
     `tk_focusNext` é a MESMA travessia que a tecla Tab usa — o Tk a consulta
     para decidir quem é o próximo —, então percorrê-la é perguntar ao Tk o que
-    o Tab faria, em vez de confiar que `takefocus=1` baste."""
+    o Tab faria, em vez de confiar que `takefocus=1` baste.
+
+    **A travessia parte do widget que se passa, não do que tem o foco.** O
+    `tk_focusNext w` do `focus.tcl` só olha a árvore (`winfo children`,
+    `winfo parent`), o `takefocus` e o `winfo viewable` de cada um; o foco do
+    momento não entra na conta. A primeira versão deste teste dava
+    `focus_force()` ao primeiro item antes de percorrer, e `focus -force` era
+    a única chamada daqui que falava com o gerenciador de janelas — à toa,
+    porque o resultado não mudava com ela. Saiu.
+
+    O teste foi intermitente (2 falhas em 4 rodadas da suíte inteira em
+    02/09/2026, nenhuma rodando o arquivo sozinho), e a suspeita caiu sobre o
+    `focus_force`. Não era: o erro era `invalid command name "tk_focusNext"`,
+    e a causa mora na captura de saída do pytest — ver
+    `tcl_com_handles_proprios` no conftest, que é onde o conserto está."""
     pai, itens, _ = coluna
     for it in itens:
         assert str(it.cget("takefocus")) == "1", (
             f"{it.texto()} não aceita foco: o Tab passa direto por ele")
 
-    itens[0].focus_force()
-    pai.update()
     visitados = []
     atual = itens[0]
     for _ in range(len(itens)):
