@@ -26,7 +26,6 @@ remessa **para**, e parar é o desfecho certo.
 from __future__ import annotations
 
 import datetime as _dt
-from decimal import Decimal
 
 try:
     from . import rest

@@ -48,6 +48,16 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      # Só erro de verdade: E9 é sintaxe, e F é o pyflakes inteiro (nome
+      # indefinido, import não usado, f-string sem f...). Nenhuma opinião de
+      # estilo entra aqui — linha comprida, ordem de import, essas regras
+      # ficam de fora de propósito, senão todo PR vira negociação de gosto em
+      # vez de defeito. Antes do vermin porque um `except NomeErrado:` ou um
+      # import quebrado é mais barato de achar aqui do que num teste que falha
+      # por um motivo que não é o dele.
+      - name: Conferir erros de verdade (ruff)
+        run: ruff check --select E9,F .
+
       # O exe roda Python 3.11 e a máquina de quem desenvolve, não. Foi assim
       # que a run #76 caiu (`Path.read_text(newline=…)`, que só existe do 3.13
       # em diante) e queimou o número da release. Era passo humano, escrito no
@@ -56,8 +66,26 @@ jobs:
       - name: Conferir que o código roda em Python 3.11 (vermin)
         run: vermin --target=3.11 --no-tips --violations .
 
-      - name: Rodar os testes
-        run: python -m pytest tests -q
+      - name: Rodar os testes (com cobertura)
+        run: python -m pytest tests -q --cov=. --cov-report=term --cov-report=xml
+
+      # Publica o coverage.xml para acompanhar a evolução do número entre
+      # builds. SEM piso e sem quebrar a build por cobertura baixa — a régua
+      # vem depois; por ora o que importa é o percentual existir e ficar
+      # visível, não travar quem sobe código.
+      - name: Publicar coverage.xml
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+      # O percentual na aba Actions, sem precisar abrir o log do pytest para
+      # achar a linha TOTAL no meio da lista de arquivos.
+      - name: Escrever a cobertura no resumo do job
+        run: |
+          $linha_rate = (Select-Xml -Path coverage.xml -XPath "/coverage/@line-rate").Node.Value
+          $percentual = [math]::Round([double]$linha_rate * 100, 1)
+          "Cobertura total: **$percentual%**" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
   motor:
     # Código novo rodando em motor velho quebra na máquina do usuário, e a

@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
+# Saída local do pytest-cov. O CI publica coverage.xml como artifact do job;
+# aqui na máquina de quem desenvolve é só saída de teste, como o __pycache__.
+.coverage
+coverage.xml
 # Perfil de navegador, EM QUALQUER PASTA. Sem prefixo de caminho de propósito:
 # as regras abaixo nomeavam um lugar cada, e rodar um motor pela raiz do
 # repositório (em vez de pelo `_app`) criava o perfil AQUI, fora de todas elas.

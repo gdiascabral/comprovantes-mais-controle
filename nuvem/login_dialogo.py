@@ -25,21 +25,11 @@ não alcança dado nenhum: quem garante isso é a RLS, não a interface.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 try:
     from . import rest, sessao
 except ImportError:
     import rest
     import sessao
-
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
-
 
 #: O mínimo que o servidor aceita, para não fazer a pessoa viajar até ele
 #: para ouvir um não. Vale como CÓPIA, não como regra: quem manda é o painel

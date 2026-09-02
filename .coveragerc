@@ -1,0 +1,12 @@
+# Cobertura só do que o app de fato roda. tests/ mede a si mesmo (sempre
+# 100%, e infla a média); codigo_embutido/, build/ e dist/ só existem depois
+# de uma build local e não são o código-fonte; codigo/ é a pasta que o
+# atualizador cria ao lado do exe do usuário (ver CLAUDE.md), não faz parte
+# do repositório.
+[run]
+omit =
+    tests/*
+    codigo_embutido/*
+    codigo/*
+    build/*
+    dist/*

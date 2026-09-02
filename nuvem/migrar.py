@@ -370,7 +370,6 @@ def subir(banco: Banco, d: dict) -> None:
         "conta": (l.get("conta") or "").strip() or None,
         "nome_descricao": (l.get("nome_descricao") or "").strip() or None,
     } for l in d["entidades"]])
-    ids_ent = {_norm(e["nome_exibicao"]): e["id"] for e in entidades}
     print(f"{len(entidades)}")
 
     print("subcontas...", end=" ", flush=True)
@@ -474,7 +473,7 @@ def main() -> int:
     if args.conferir and not (args.subir or args.limpar):
         contas = montar_contas(d)
         unidas = sum(1 for c in contas if c["numero"] and c["nome_erp"])
-        print(f"o que subiria:")
+        print("o que subiria:")
         print(f"  {len(d['sicoob']['empresas'])} empresas")
         print(f"  {len(contas)} contas ({unidas} descritas hoje nos DOIS "
               f"arquivos, e que viram uma linha so)")

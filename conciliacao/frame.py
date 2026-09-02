@@ -16,7 +16,6 @@ import datetime
 import os
 import queue
 import subprocess
-import sys
 import time
 import tkinter as tk
 from dataclasses import replace
