@@ -50,7 +50,7 @@ COMO RODAR
 Da RAIZ do repositório, e como MÓDULO: `ferramentas/` é pacote desde
 02/09/2026, e é a raiz que precisa estar no caminho de import para o `util` e
 as abas serem encontrados. Quem tiver a tarefa agendada apontando para
-`python ferramentas/sonda.py` precisa trocar a linha de comando.
+`python -m ferramentas.sonda` precisa trocar a linha de comando.
 
 Saída no console (uma linha por sistema) e nos arquivos. Código de saída 1
 quando algo falhou, 0 quando não — é o que o Agendador de Tarefas do Windows
