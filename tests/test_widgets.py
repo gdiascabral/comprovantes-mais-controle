@@ -328,6 +328,92 @@ def test_parar_no_meio_nao_grava_pdf_pela_metade(tmp_path):
     assert any("Interrompido" in linha for linha in linhas), linhas
 
 
+# ------------------------------------------------------------ os ícones
+# Os ícones do menu eram emoji e dingbats soltos, e o Tk pegava para cada um a
+# fonte que o Windows achasse primeiro: medido com `font actual`, no mínimo
+# QUATRO famílias numa coluna de doze linhas (Lucida Sans Unicode, Cambria,
+# MS Gothic e Segoe UI Emoji). As duas que caem na Segoe UI Emoji vêm de fonte
+# COLORIDA, e cor de glifo colorido não obedece ao `foreground`: essas ficavam
+# iguais nos dois temas. Ver o bloco "ícones" no topo do `widgets.py`.
+
+@pytest.fixture
+def coluna(raiz):
+    """Três itens de menu numa coluna, como o menu de verdade os empilha."""
+    pai = tk.Frame(raiz)
+    pai.pack(fill="x")
+    contagem = {}
+    itens = []
+    for chave, icone, texto in (("ini", "▦", "Início"),
+                                ("anx", "📎", "Anexar"),
+                                ("rel", "📊", "Relatório Mensal")):
+        contagem[chave] = 0
+        it = widgets.ItemMenu(
+            pai, texto, icone=icone,
+            comando=lambda c=chave: contagem.__setitem__(c, contagem[c] + 1))
+        it.pack(fill="x")
+        itens.append(it)
+    raiz.update()
+    yield pai, itens, contagem
+    pai.destroy()
+    raiz.update()
+
+
+def test_o_icone_do_menu_segue_a_familia_encontrada(coluna):
+    """Com uma família de ícones presente, o rótulo mostra o codepoint
+    monocromático NA fonte de ícones; sem nenhuma, continua o emoji de sempre.
+    Os dois desfechos são legítimos — o que não pode é o rótulo pedir a fonte
+    de ícones e mostrar um emoji, que é o quadradinho de glifo ausente."""
+    pai, itens, _ = coluna
+    familia = widgets.familia_de_icones()
+    for it in itens:
+        desenho = str(it.lbl_icone.cget("text"))
+        fonte = str(it.lbl_icone.cget("font"))
+        if familia:
+            assert fonte == widgets.FONTE_ICONES, (
+                f"{it.texto()}: há {familia} instalada e o ícone não está "
+                "pedindo a fonte de ícones")
+            assert desenho in widgets.ICONES_POR_FAMILIA[familia].values(), (
+                f"{it.texto()}: o desenho {desenho!r} não é um codepoint da "
+                f"tabela de {familia}")
+        else:
+            assert fonte == "", (
+                f"{it.texto()}: sem família de ícones, o rótulo não pode "
+                "pedir a fonte de ícones — sairia quadradinho")
+            assert desenho == it._icone
+
+
+def test_a_aba_que_trabalha_volta_para_a_fonte_de_texto(coluna):
+    """O ● (U+25CF) não está na fonte de ícones: pedi-lo a ela daria o
+    quadradinho de glifo ausente justamente no sinal que existe para dizer
+    ONDE o trabalho está."""
+    pai, itens, _ = coluna
+    alvo = itens[1]
+    alvo.trabalhando(True)
+    pai.update()
+    assert str(alvo.lbl_icone.cget("text")) == "●"
+    assert str(alvo.lbl_icone.cget("font")) == "", (
+        "o ● está sendo pedido à fonte de ícones, que não o tem")
+
+    alvo.trabalhando(False)
+    pai.update()
+    assert str(alvo.lbl_icone.cget("text")) != "●", (
+        "o ícone de sempre não voltou quando o trabalho acabou")
+
+
+def test_o_item_aberto_nao_perde_o_icone(coluna):
+    """`ItemAtivo.TLabel` traz `font=FONTE_FORTE`. Sem a fonte indo como opção
+    DO WIDGET, o único item da coluna a perder o ícone seria justamente o que
+    está aberto."""
+    pai, itens, _ = coluna
+    alvo = itens[1]
+    antes = str(alvo.lbl_icone.cget("text"))
+    alvo.ativar(True)
+    pai.update()
+    assert str(alvo.lbl_icone.cget("text")) == antes
+    assert str(alvo.lbl_icone.cget("font")) == (
+        widgets.FONTE_ICONES if widgets.familia_de_icones() else "")
+
+
 def test_fechar_da_acessorias_sem_nada_aberto(raiz):
     """O `_sair()` do app percorre as abas chamando `fechar()`. O da Acessórias
     fecha o Chrome do portal na thread dele e desliga o executor — e precisa ser

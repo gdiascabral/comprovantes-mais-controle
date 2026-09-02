@@ -221,6 +221,7 @@ PARES_DE_TEXTO = (
 #: contra o que está atrás dela. O botão de passo e o verde aparecem duas
 #: vezes porque aparecem em dois lugares — dentro de um cartão (o círculo
 #: numerado) e no cabeçalho da página, que é o cinza do painel.
+#:
 PARES_DE_COMPONENTE = (
     (COR_DO_PASSO, "cartao", "o círculo numerado, dentro do cartão"),
     (COR_DO_PASSO, "fundo", "o botão de passo, no cabeçalho da página"),
@@ -439,6 +440,126 @@ def test_o_botao_de_passo_e_o_circulo_pintam_a_cor_medida(raiz):
             botao.destroy()
             cartao.destroy()
     widgets.aplicar_estilos(False)
+
+
+# ------------------------------------------------------- a fonte dos ícones
+# Os ícones do menu eram emoji e dingbats soltos, cada um desenhado pela fonte
+# que o Windows achasse primeiro: medido com `font actual`, no mínimo QUATRO
+# famílias numa coluna de doze linhas. Duas delas caem na Segoe UI Emoji, que é
+# COLORIDA, e cor de glifo colorido não obedece ao `foreground` — essas ficavam
+# idênticas nos dois temas, inclusive no item aberto, onde todo o resto vira
+# azul. Ver o bloco "ícones" no topo do `widgets.py`.
+#
+# A troca é pela fonte de ícones do próprio Windows, que é monocromática. E ela
+# traz a armadilha de sempre do Tk: pedir uma família que a máquina não tem NÃO
+# dá erro — o Tk cai na fonte padrão, e os codepoints saem como quadradinhos.
+# É a mesma família de defeito do `font delete` lá de cima: falha em silêncio,
+# e só aparece na frente de quem usa.
+
+@pytest.mark.parametrize("familias, esperada", [
+    # Windows 11: as duas existem, e ganha a Fluent.
+    (["Arial", "Segoe UI", "Segoe MDL2 Assets", "Segoe Fluent Icons"],
+     "Segoe Fluent Icons"),
+    # Windows 10: só a MDL2.
+    (["Arial", "Segoe UI", "Segoe MDL2 Assets"], "Segoe MDL2 Assets"),
+    # Nenhuma das duas: sobra a família do texto, e o menu fica com o emoji.
+    (["Arial", "Segoe UI"], "Segoe UI"),
+])
+def test_a_familia_de_icones_e_sempre_uma_que_existe(familias, esperada):
+    """Os três desfechos, com a lista de famílias entregue de fora.
+
+    `_familia_de_icones` recebe a lista em vez de perguntá-la justamente para
+    isto: as três situações são exercitadas na mesma máquina, sem depender de
+    ter (ou não ter) cada fonte instalada."""
+    achada = widgets._familia_de_icones(familias, "Segoe UI")
+    assert achada == esperada
+    assert achada in familias, (
+        "a família escolhida não está na lista da máquina: o Tk vai cair na "
+        "fonte padrão sem avisar, e os ícones saem como quadradinhos")
+
+
+def test_sem_familia_de_icones_o_menu_volta_ao_emoji(monkeypatch):
+    """O terceiro desfecho, do lado de quem desenha: a família do TEXTO é real,
+    mas não tem os codepoints. Quem não tem nenhuma das duas fontes precisa
+    ficar com o emoji de antes, que ao menos desenha alguma coisa."""
+    monkeypatch.setitem(widgets._estado, "familia_icones", "Segoe UI")
+    assert widgets.familia_de_icones() == ""
+    assert widgets.icone_do_menu("📎") == ("📎", False)
+
+
+def test_com_familia_de_icones_o_emoji_vira_codepoint(monkeypatch):
+    for familia, tabela in widgets.ICONES_POR_FAMILIA.items():
+        monkeypatch.setitem(widgets._estado, "familia_icones", familia)
+        assert widgets.icone_do_menu("📎") == (tabela["📎"], True), familia
+        # Glifo que não está na tabela sai inteiro, na fonte de texto: o ● do
+        # pulso passa por aqui, e ele não existe na fonte de ícones.
+        assert widgets.icone_do_menu("●") == ("●", False), familia
+
+
+def test_a_fonte_de_icones_nao_cai_no_padrao_em_silencio(raiz):
+    """A prova contra o Tk de verdade, e não contra a função pura.
+
+    `font configure -family` devolve o que foi PEDIDO, não o que será
+    desenhado; o que denuncia a queda para a fonte padrão é a família pedida
+    não estar na lista da máquina. Estas duas linhas são o teste inteiro."""
+    widgets.aplicar_estilos(False)
+    tcl = ttk.Style().tk
+    familias = set(tcl.splitlist(tcl.call("font", "families")))
+    pedida = str(tcl.call("font", "configure", widgets.FONTE_ICONES,
+                          "-family"))
+    assert pedida in familias, (
+        f"a fonte de ícones pede {pedida!r}, que não existe nesta máquina")
+    assert pedida == widgets._estado["familia_icones"]
+    # E ela é DERIVADA do TkDefaultFont, como as outras onze: a 150% de escala
+    # o ícone tem de crescer junto com o nome da aba ao lado dele.
+    base = abs(int(tkfont.nametofont("TkDefaultFont").cget("size")))
+    assert abs(int(tkfont.nametofont(widgets.FONTE_ICONES).cget("size"))) > base
+
+
+def test_as_duas_tabelas_de_icones_falam_dos_mesmos_itens():
+    """Uma tabela por família porque as fontes não têm o mesmo alfabeto (a
+    Fluent mapeia 201 codepoints que a MDL2 não tem). O que elas não podem é
+    cobrir conjuntos diferentes de ABAS: aí o Windows 10 fica sem ícone em
+    alguma tela, e ninguém que roda no 11 descobre isso."""
+    assert set(widgets.ICONES_FLUENT) == set(widgets.ICONES_MDL2)
+    for nome, tabela in (("Fluent", widgets.ICONES_FLUENT),
+                         ("MDL2", widgets.ICONES_MDL2)):
+        assert len(set(tabela.values())) == len(tabela), (
+            f"{nome}: dois itens do menu com o mesmo codepoint — duas telas "
+            "ganhariam o mesmo ícone, e nada em vermelho diria isso")
+        for glifo, cp in tabela.items():
+            assert len(cp) == 1 and 0xE000 <= ord(cp) <= 0xF8FF, (
+                f"{nome}/{glifo}: {cp!r} não é um codepoint da área de uso "
+                "privado — a fonte de ícones não desenha caractere comum")
+
+
+def test_nenhum_icone_do_menu_ficou_fora_da_tabela():
+    """Ícone que o menu use e a tabela não conheça volta ao sorteio de fontes.
+
+    Medido no arquivo que monta o menu: hoje, TODO caractere fora do BMP que o
+    `comprovantes_app.py` escreve numa constante é um ícone de aba — são os
+    oito de 02/09/2026 —, e todos têm de estar na tabela. Um ícone novo que
+    entre sem passar por lá volta a ser desenhado por qualquer família que o
+    Windows ache primeiro, e volta a não ter nada a ver com os outros onze.
+
+    A rede tem um furo conhecido: ícone DENTRO do BMP (como o ✂ e o ⚖ de
+    hoje, que estão na tabela) passa por aqui sem ser notado. Fechá-lo pediria
+    ler os argumentos de `_item` por AST, e a forma dessas chamadas muda mais
+    do que o conjunto de ícones — o teste envelheceria antes do problema
+    aparecer."""
+    import ast
+    fonte = (_RAIZ_APP / "comprovantes_app.py").read_text(encoding="utf-8")
+    fora_do_bmp = set()
+    for no in ast.walk(ast.parse(fonte)):
+        if isinstance(no, ast.Constant) and isinstance(no.value, str):
+            fora_do_bmp.update(c for c in no.value if ord(c) > 0xFFFF)
+    assert fora_do_bmp, (
+        "nenhum caractere fora do BMP no comprovantes_app.py: ou os ícones "
+        "mudaram de lugar, ou este teste deixou de medir o que dizia medir")
+    faltando = sorted(fora_do_bmp - set(widgets.ICONES_FLUENT))
+    assert not faltando, (
+        "ícone do menu fora da tabela de widgets.py: "
+        + ", ".join(f"{c} (U+{ord(c):05X})" for c in faltando))
 
 
 def test_o_cabecalho_sem_apoio_nao_cria_a_linha(raiz):
