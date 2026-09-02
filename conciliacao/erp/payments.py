@@ -38,7 +38,9 @@ texto subtraia dinheiro do painel sem aviso.
 
 from __future__ import annotations
 
+import sys
 import time
+from pathlib import Path
 
 from playwright.sync_api import Page
 
@@ -50,6 +52,20 @@ from ..parsing import (
     strip_condition_prefix,
 )
 from .browser import ErpError
+
+try:                                     # utilitarios compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando a Conciliacao isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    import util
+
+#: O diagnostico do modulo. Quase toda funcao daqui recebe um `log` PROPRIO (o
+#: recado que aparece no Registro da aba) e o parametro SOMBREIA este nome la
+#: dentro; nessas, o diagnostico sai por `_diag`, que e este mesmo logger com
+#: outro nome. Os dois convivem de proposito: o Registro diz o que a coleta
+#: esta fazendo, o arquivo guarda o traceback de por que um passo nao deu.
+log = util.log(__name__)
+_diag = log
 
 #: Linha de dados da grade (a de cabecalho nao tem gridcell).
 SEL_LINHA_DADOS = '[role="row"]:has([role="gridcell"])'
@@ -279,7 +295,8 @@ def definir_periodo_na_tela(pagina: Page, periodo: Periodo, log=print) -> bool:
         try:
             pagina.keyboard.press("Escape")
         except Exception:
-            pass
+            _diag.warning("apertando Esc para fechar o seletor de periodo; ele "
+                          "fica aberto por cima da grade", exc_info=True)
         return False
 
 
@@ -297,6 +314,9 @@ def _preencher_data(pagina: Page, rotulos: tuple[str, ...], valor) -> bool:
                 pagina.wait_for_timeout(400)
                 return True
         except Exception:
+            # Os rotulos sao variantes do MESMO campo ("Data de inicio" com e
+            # sem acento): o que nao existe e "ainda nao", nao falha. Quem
+            # avisa e a reserva por posicao, logo abaixo, se ela tambem cair.
             continue
 
     # Reserva: os inputs de data visiveis dentro do popover, na ordem.
@@ -314,7 +334,8 @@ def _preencher_data(pagina: Page, rotulos: tuple[str, ...], valor) -> bool:
             pagina.wait_for_timeout(400)
             return True
     except Exception:
-        pass
+        log.warning("preenchendo o campo de data pela posicao no popover "
+                    "(reserva do rotulo %r)", rotulos[0], exc_info=True)
     return False
 
 
@@ -412,6 +433,9 @@ def _contar_vencidos(pagina: Page) -> int:
     try:
         texto = normalize_name(pagina.locator("body").inner_text(timeout=2500))
     except Exception:
+        # Zero aqui e indistinguivel de "nenhuma linha vencida", que e
+        # justamente o numero que esta funcao existe para tornar visivel.
+        log.warning("lendo a tela para contar as linhas vencidas", exc_info=True)
         return 0
     return texto.count("VENCIDO")
 
@@ -459,6 +483,10 @@ def filtrar_em_aberto(pagina: Page, log=print) -> bool:
         try:
             selecionado = (gatilho.inner_text(timeout=2000) or "")
         except Exception:
+            # Vazio cai no ramo de baixo, que acusa "o filtro nao ficou
+            # selecionado" — mas o que houve foi nao conseguir LER o gatilho.
+            _diag.warning("lendo o gatilho do dropdown para conferir o filtro "
+                          "de status", exc_info=True)
             selecionado = ""
         if "EM ABERTO" not in normalize_name(selecionado):
             log("  o filtro 'Em aberto' nao ficou selecionado — seguindo com "
@@ -478,10 +506,13 @@ def filtrar_em_aberto(pagina: Page, log=print) -> bool:
                 "confira na tela do ERP)")
         return True
     except Exception:
+        _diag.warning("aplicando o filtro 'Em aberto' no dropdown de status; a "
+                      "coleta segue com o mes inteiro", exc_info=True)
         try:
             pagina.keyboard.press("Escape")
         except Exception:
-            pass
+            _diag.warning("apertando Esc para fechar o dropdown de status",
+                          exc_info=True)
         _desfazer_filtro_status(pagina)
         return False
 
@@ -501,7 +532,8 @@ def _desfazer_filtro_status(pagina: Page) -> None:
         pagina.wait_for_timeout(1200)
         _esperar_grade(pagina)
     except Exception:
-        pass
+        log.warning("devolvendo o dropdown de status para 'Todos pagamentos'; "
+                    "a tela fica com o filtro pela metade", exc_info=True)
 
 
 def _esperar_grade(pagina: Page, timeout_s: float = 60.0) -> int:
@@ -545,10 +577,19 @@ def _aumentar_linhas_por_pagina(pagina: Page) -> int:
             if depois > antes:
                 return depois
         except Exception:
+            # Tamanho que a grade nao aceita e "o proximo", nao falha: o laco
+            # tenta 100, 50 e 25, e so ter esgotado os tres e que importa.
             try:
                 pagina.keyboard.press("Escape")
             except Exception:
-                pass
+                pass                     # idem: a proxima volta reabre o menu
+
+    # Esgotados os tamanhos. O retorno 0 nao e olhado por ninguem, e a coleta
+    # segue com 10 por pagina — mais paginas para varrer, e o `_MAX_PAGINAS`
+    # mais perto. Sem `exc_info`: aqui nao ha excecao viva, so o desfecho.
+    log.warning("nao consegui aumentar as linhas por pagina (tentei %s); a "
+                "grade segue com o tamanho padrao",
+                ", ".join(str(q) for q in _TAMANHOS_DESEJADOS))
     return 0
 
 
@@ -565,6 +606,10 @@ def _proxima_pagina(pagina: Page) -> bool:
         pagina.wait_for_timeout(1500)
         return True
     except Exception:
+        # False aqui e lido como "acabaram as paginas" e encerra a varredura.
+        # Quem impede a coleta parcial de virar painel e a conferencia contra o
+        # total do rodape, mais adiante — mas o motivo se perdia aqui.
+        log.warning("avancando para a proxima pagina da grade", exc_info=True)
         return False
 
 
@@ -668,6 +713,8 @@ def _recuperar_grade(pagina: Page, log=print) -> bool:
     try:
         pagina.reload(wait_until="domcontentloaded")
     except Exception:
+        _diag.warning("recarregando a tela de pagamentos para dar uma segunda "
+                      "chance a grade", exc_info=True)
         return False
     pagina.wait_for_timeout(3000)
     quantas = _esperar_grade(pagina, timeout_s=45.0)
