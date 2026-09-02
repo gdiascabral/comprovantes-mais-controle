@@ -5,7 +5,6 @@ Ajustes do app de anexar. Os caminhos são relativos à pasta deste arquivo
 então funciona em qualquer computador sem editar nada.
 """
 import sys
-import time
 from pathlib import Path
 
 try:                                     # utilitários compartilhados (raiz)
@@ -35,7 +34,13 @@ ARQUIVO_LOG = _AQUI / "log_anexos.csv"
 
 # Log de diagnóstico para erros normalmente silenciosos (ex.: captura de
 # credenciais na tela de Pagamentos).
-ARQUIVO_DIAG = _AQUI / "diagnostico.log"
+#
+# Sai de `util.pasta_base()`, e não de `_AQUI` — mesma razão do
+# `PASTA_PERFIL_CHROME` logo acima: rodando como SCRIPT, `_AQUI` é a pasta
+# DESTE módulo (`anexar/`), e o arquivo nasceria ali dentro em vez de na
+# raiz que `util.log()` usa por baixo (`diag()`, logo adiante, já delega
+# para lá). Congelado o lugar não muda: os dois já eram a pasta do exe.
+ARQUIVO_DIAG = util.pasta_base() / "diagnostico.log"
 
 # Login salvo (e-mail + senha) cifrado com a DPAPI do Windows, para o login
 # automático. Fica atrelado ao usuário do Windows; nunca em texto puro.
@@ -48,12 +53,14 @@ def diag(msg: str):
     Vários pontos do app precisam degradar sem quebrar (o ERP muda um seletor,
     a DPAPI recusa o login salvo, um anexo não baixa). Engolir o erro esconde
     a causa e a falha reaparece como comportamento estranho — então engole,
-    mas deixa registrado aqui."""
-    try:
-        with open(ARQUIVO_DIAG, "a", encoding="utf-8") as fh:
-            fh.write(time.strftime("%d/%m/%Y %H:%M:%S  ") + msg + "\n")
-    except OSError:
-        pass                      # sem disco/permissão: não há o que fazer
+    mas deixa registrado aqui.
+
+    Delega para `util.log()`: a escrita à mão de antes (um `open(..., "a")`
+    só deste arquivo) virou o MESMO `RotatingFileHandler` que qualquer outro
+    módulo ganha ao adotar log. O prefixo de data/hora continua igual — só o
+    que vem depois dele ganhou o nome do logger e o nível —, e nem
+    `ARQUIVO_DIAG` nem quem chama `diag()` precisou mudar."""
+    util.log(__name__).info(msg)
 
 
 # Tag aplicada ao arquivo anexado no Mais Controle.
