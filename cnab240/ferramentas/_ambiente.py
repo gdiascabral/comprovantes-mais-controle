@@ -53,10 +53,13 @@ def _preparar_caminho() -> None:
 _preparar_caminho()
 
 import cnab240                                                  # noqa: E402
-import contas_mc                                                # noqa: E402
+# contas_mc, remessa_dia e sicoob_contas nao sao usados AQUI: este modulo so
+# os importa para os scripts da pasta fazerem `from ._ambiente import
+# contas_mc` etc, em vez de cada um repetir o `_preparar_caminho()` acima.
+import contas_mc                                                # noqa: E402,F401
 import ocr_boleto                                               # noqa: E402
-import remessa_dia                                              # noqa: E402
-import sicoob_contas                                            # noqa: E402
+import remessa_dia                                              # noqa: E402,F401
+import sicoob_contas                                            # noqa: E402,F401
 import util                                                     # noqa: E402
 
 
