@@ -66,8 +66,26 @@ jobs:
       - name: Conferir que o código roda em Python 3.11 (vermin)
         run: vermin --target=3.11 --no-tips --violations .
 
-      - name: Rodar os testes
-        run: python -m pytest tests -q
+      - name: Rodar os testes (com cobertura)
+        run: python -m pytest tests -q --cov=. --cov-report=term --cov-report=xml
+
+      # Publica o coverage.xml para acompanhar a evolução do número entre
+      # builds. SEM piso e sem quebrar a build por cobertura baixa — a régua
+      # vem depois; por ora o que importa é o percentual existir e ficar
+      # visível, não travar quem sobe código.
+      - name: Publicar coverage.xml
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+      # O percentual na aba Actions, sem precisar abrir o log do pytest para
+      # achar a linha TOTAL no meio da lista de arquivos.
+      - name: Escrever a cobertura no resumo do job
+        run: |
+          $linha_rate = (Select-Xml -Path coverage.xml -XPath "/coverage/@line-rate").Node.Value
+          $percentual = [math]::Round([double]$linha_rate * 100, 1)
+          "Cobertura total: **$percentual%**" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
   motor:
     # Código novo rodando em motor velho quebra na máquina do usuário, e a
