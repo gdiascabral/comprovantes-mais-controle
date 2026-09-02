@@ -156,11 +156,40 @@ max_indexes = 5
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
-site_url = "http://localhost:3000"
+#
+# ESTE VALOR AINDA NAO EXISTE -- A DECISAO E DO DONO.
+#
+# O que estava aqui ate 02/09/2026 era o `http://localhost:3000` que o
+# `supabase init` escreve sozinho. Nao ha servidor nenhum nesse endereco, e
+# nao ha como haver: este projeto e um app de desktop, nao um site. O efeito
+# e concreto -- a pessoa confirma o e-mail, o Supabase a manda para
+# `localhost:3000`, e o navegador dela responde que nao conseguiu se conectar.
+# Ela confirmou (a conta esta valida e pendente na fila do admin) mas a ultima
+# coisa que viu foi uma pagina de erro.
+#
+# NAO INVENTE UM ENDERECO AQUI, e nao rode `supabase config push` enquanto
+# este texto estiver no lugar do valor: o push aplica sem perguntar, e o
+# projeto passaria a mandar gente para um dominio que nao e nosso.
+#
+# A saida provavel, e a mais barata, e o GitHub Pages deste proprio
+# repositorio servindo a pasta `docs/`: `docs/confirmado.html` ja esta neste
+# PR, e o endereco seria
+#   https://gdiascabral.github.io/comprovantes-mais-controle/confirmado.html
+# Como ligar: Settings -> Pages -> Deploy from a branch -> main, pasta /docs.
+# Ver `docs/SUPABASE-PAINEL.md`.
+site_url = "https://SUBSTITUA-pela-pagina-de-confirmacao"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = []
+# MESMA DECISAO DO `site_url` ACIMA, e pelo mesmo motivo: e uma lista de
+# permissao de destinos, e escrever aqui um endereco que ninguem conferiu e
+# autorizar um desconhecido a receber o link de confirmacao. Fica com o
+# placeholder ate o dono dizer qual e a pagina.
+#
+# Se a resposta for so a pagina do GitHub Pages, o `site_url` sozinho ja
+# resolve e esta lista pode voltar a `[]`. Ela existe para o caso de haver
+# mais de um destino (uma pagina de teste, por exemplo).
+additional_redirect_urls = ["https://SUBSTITUA-pela-pagina-de-confirmacao"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -173,10 +202,27 @@ enable_refresh_token_rotation = true
 # Requires enable_refresh_token_rotation = true.
 refresh_token_reuse_interval = 10
 # Allow/disallow new user signups to your project.
-# DESLIGADO DE PROPOSITO: a anon key vai no codigo de um repositorio publico.
-# Com cadastro aberto, qualquer um que clone o repo cria conta e a RLS passa a
-# trata-lo como gente da casa. As contas sao criadas por convite, no painel.
-enable_signup = false
+# LIGADO desde 30/08/2026 -- e o arquivo so esta dizendo isso agora. O painel
+# foi ligado naquele dia e este campo continuou `false` ate 02/09/2026: por
+# tres dias o repositorio descreveu um projeto que nao existia.
+#
+# Ficou seguro ligar porque a porta deixou de ser o cadastro. A anon key
+# continua no codigo de um repositorio publico, e quem clonar continua
+# conseguindo um token de `authenticated` -- so que agora "autenticado" nao
+# significa mais nada. Quem barra e a `privado.e_ativo()`, que responde "esta
+# pessoa foi liberada por um administrador?" e esta em TODA politica de dado e
+# dentro das duas funcoes de NSA (migration
+# `20260830180000_so_conta_liberada_entra.sql`). Conta nova nasce PENDENTE: ela
+# loga, le o proprio perfil, descobre que espera liberacao, e nao alcanca mais
+# nada.
+#
+# Quem cobra isso e `tests/test_rls_supabase.py`, que le as migrations e falha
+# se aparecer politica sem a porteira -- inclusive uma escrita daqui a dois
+# meses que copie o `using (true)` da linha de cima.
+#
+# Trocar isto de volta para `false` sem desligar o auto-cadastro no painel nao
+# tranca nada: quem manda e o painel. O arquivo so descreve.
+enable_signup = true
 # Allow/disallow anonymous sign-ins to your project.
 enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts
@@ -221,17 +267,24 @@ web3 = 30
 
 [auth.email]
 # Allow/disallow new user signups via email to your project.
-# LIGADO, e nao e contradicao com o `enable_signup = false` la de cima: este
-# aqui liga o PROVEDOR de e-mail, que e por onde as pessoas fazem LOGIN.
-# Desligado, o proprio login com e-mail e senha morre com
-# "email_provider_disabled" -- descoberto tentando entrar com o primeiro
-# usuario. Quem impede criar conta e a chave global de `[auth]`, conferida
-# por teste: o endpoint de signup responde 422 signup_disabled.
+# LIGADO, e este campo NAO e o irmao do `enable_signup` de `[auth]`: este aqui
+# liga o PROVEDOR de e-mail, que e por onde as pessoas fazem LOGIN. Desligado,
+# o proprio login com e-mail e senha morre com "email_provider_disabled" --
+# descoberto tentando entrar com o primeiro usuario.
+#
+# Ele ficou `true` o tempo todo, inclusive nos meses em que o cadastro estava
+# trancado: quem trancava era o `[auth]`, e nunca este. E a armadilha que ja
+# custou tempo uma vez -- deixe-o em `true` e mexa no de cima.
 enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
+# CONFERIDO em 02/09/2026 e mantido `true`. Com o auto-cadastro ligado, e ele
+# que garante que a conta pendente que chega na fila do admin corresponde a
+# uma caixa de e-mail de verdade -- sem isso a fila enche de endereco
+# inventado. E e ele, tambem, que faz o `site_url` acima importar: sem
+# confirmacao nao ha link, e sem link ninguem cai em lugar nenhum.
 enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
