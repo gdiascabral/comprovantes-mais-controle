@@ -285,9 +285,16 @@ def pasta_do_perfil(conta: str) -> Path:
 
     Uma por conta porque no Inter cada conta é um login: um perfil só faria a
     segunda conta entrar como a primeira, e o robô baixaria os comprovantes
-    errados sem nada na tela dizendo isso."""
-    limpo = re.sub(r"[^A-Za-z0-9_-]+", "_", (conta or "conta").strip())[:40]
-    return util.pasta_base() / f".chrome_profile_inter_{limpo or 'conta'}"
+    errados sem nada na tela dizendo isso.
+
+    Delega para `util.pasta_do_perfil`, que era só a metade desta função
+    (a pasta base + a limpeza do nome) — o prefixo "inter_" e o "conta" de
+    reserva para conta em branco continuam aqui, porque só esta função sabe
+    dessa regra. `conta or 'conta'` entra ANTES do "inter_", não depois: se
+    fosse `f"inter_{conta}"` com `conta` vazio, o resultado seria
+    ".chrome_profile_inter_" (sem o "conta" de reserva) — uma pasta
+    diferente da que existe hoje em disco."""
+    return util.pasta_do_perfil(f"inter_{conta or 'conta'}")
 
 
 def tela_diz(texto: str, marcas) -> bool:

@@ -27,8 +27,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dados as cadastro                    # noqa: E402
 from mc_catalogos import Catalogos          # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import util                                 # noqa: E402
+
 BASE_URL = "https://acessar.maiscontroleerp.com.br"
-PERFIL = Path(__file__).resolve().parent / ".chrome_profile_conferencia"
+# Sai de `util.pasta_do_perfil()`, e não da pasta deste arquivo: é script de
+# uso manual, sem `sys.frozen`, e um perfil ao lado do módulo é a mesma
+# família de defeito documentada em `util.pasta_do_perfil` — um segundo lugar
+# para a mesma coisa.
+PERFIL = util.pasta_do_perfil("conferencia")
 
 # Uma tela interna qualquer serve para o app disparar chamadas autenticadas —
 # é delas que os cabeçalhos são copiados.

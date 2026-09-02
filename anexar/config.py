@@ -8,15 +8,27 @@ import sys
 import time
 from pathlib import Path
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
 if getattr(sys, "frozen", False):
     # Rodando como executável (PyInstaller): usa a pasta onde o .exe está,
-    # para o perfil do Chrome e o log persistirem entre execuções.
+    # para o log persistir entre execuções.
     _AQUI = Path(sys.executable).resolve().parent
 else:
     _AQUI = Path(__file__).resolve().parent
 
 # Perfil do Chrome (mantém o login do Mais Controle salvo entre execuções).
-PASTA_PERFIL_CHROME = _AQUI / ".chrome_profile"
+# Sai de `util.pasta_do_perfil()`, e não de `_AQUI`: rodando como SCRIPT,
+# `_AQUI` é a pasta DESTE módulo (`anexar/`), e um segundo conjunto de
+# perfis nascia ali dentro — a mesma família do defeito que o cache do
+# cadastro já teve (CLAUDE.md, "quem lê o cache tem de usar
+# util.pasta_base()"). Congelado o lugar não muda: `_AQUI` já era a pasta
+# do exe, igual a `util.pasta_base()`.
+PASTA_PERFIL_CHROME = util.pasta_do_perfil()
 
 # Log (CSV) com o resultado de cada anexo.
 ARQUIVO_LOG = _AQUI / "log_anexos.csv"

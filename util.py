@@ -77,6 +77,26 @@ def pasta_base() -> Path:
     return Path(__file__).resolve().parent
 
 
+def pasta_do_perfil(nome: str = "") -> Path:
+    """A pasta do perfil persistente do Chrome (a sessão logada de banco/ERP).
+
+    Existia em DOIS jeitos: ao lado do MÓDULO (`_AQUI = Path(__file__)...`,
+    que muda conforme quem executa é o script ou o exe) e na pasta BASE
+    (sempre o mesmo lugar, `util.pasta_base()`, script ou exe). Rodando como
+    script, o primeiro jeito faz nascer um SEGUNDO conjunto de perfis dentro
+    do repositório — medido em 219 MB de sessão de banco duplicada. É a
+    mesma família do defeito que o cadastro em cache já teve aqui (ver
+    CLAUDE.md, "O cadastro mora na nuvem"): mais de uma cópia de uma regra de
+    CAMINHO é como o app passa a guardar a mesma coisa em lugares diferentes.
+
+    `nome` diferencia perfis quando um módulo precisa de mais de um (o Inter
+    tem um login por conta). Limpo para caracteres seguros de pasta e cortado
+    em 40 — o nome pode vir de fora (conta digitada por gente), e cortar
+    evita montar um caminho longo demais só por causa dele."""
+    limpo = re.sub(r"[^A-Za-z0-9_-]+", "_", nome.strip())[:40]
+    return pasta_base() / f".chrome_profile{'_' + limpo if limpo else ''}"
+
+
 #: Os meses COMO VIRAM NOME DE PASTA no disco — `.../2026/JULHO/...`.
 #:
 #: Mora aqui, e não em cada módulo, pela mesma razão do `pasta_base()` logo

@@ -31,7 +31,10 @@ ARQUIVO_CONTAS = _AQUI / "contas_sicoob.json"
 
 # Perfil do Chrome do Sicoob, separado do perfil do Mais Controle: são sites e
 # logins diferentes, e o Playwright síncrono não divide thread entre eles.
-PASTA_PERFIL_CHROME = _AQUI / ".chrome_profile_sicoob"
+# Sai de `util.pasta_do_perfil()` e não de `_AQUI / "..."`: mesma pasta de
+# sempre, mas uma cópia a menos da regra de nome — a mesma razão que trouxe
+# `_AQUI` para cá em vez de um cálculo próprio.
+PASTA_PERFIL_CHROME = util.pasta_do_perfil("sicoob")
 
 # Usada quando o JSON não traz "raiz".
 RAIZ_PADRAO = Path("C:/Arquivos Morais/EXTRATOS")

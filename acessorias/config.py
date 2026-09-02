@@ -12,16 +12,18 @@ Sem tkinter e sem navegador: só constantes.
 import sys
 from pathlib import Path
 
-if getattr(sys, "frozen", False):
-    # Empacotado: a pasta do .exe, para o perfil do Chrome persistir entre
-    # execuções (é ele que guarda o "Manter conectado" do portal).
-    _AQUI = Path(sys.executable).resolve().parent
-else:
-    _AQUI = Path(__file__).resolve().parent.parent
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
 
 #: Perfil do Chrome do portal, separado do Mais Controle e do Sicoob: são três
 #: sites e três logins, e o Playwright síncrono não divide thread entre eles.
-PASTA_PERFIL_CHROME = _AQUI / ".chrome_profile_acessorias"
+#: Sai de `util.pasta_do_perfil()`, e não de um `_AQUI` próprio — era a mesma
+#: conta de sempre (pasta do exe quando congelado), mas uma segunda cópia da
+#: regra é uma divergência esperando acontecer.
+PASTA_PERFIL_CHROME = util.pasta_do_perfil("acessorias")
 
 #: O host do fornecedor do portal (não é o nome do escritório). Serve para
 #: reconhecer que ainda estamos dentro do portal, e não numa página de erro.
