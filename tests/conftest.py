@@ -1,20 +1,31 @@
 # -*- coding: utf-8 -*-
-"""Coloca a raiz do projeto e as subpastas de código no sys.path para que os
-testes possam importar os módulos do mesmo jeito que o app faz em runtime."""
+"""Coloca a RAIZ do projeto no sys.path — e só ela.
+
+Era uma lista de sete pastas, porque as pastas de aba não eram pacotes e cada
+módulo se importava pelo nome curto. Desde 02/09/2026 todas têm `__init__.py`
+e os testes importam pelo caminho inteiro (`from pagamentos_dia import
+relatorio`), então a raiz basta: com ela no caminho, `import pacote.modulo`
+acha qualquer módulo do repositório.
+
+A lista velha não era só verbosa, era perigosa. Faltar uma pasta nela não
+quebrava a suíte: o teste daquela pasta sumia com `importorskip` e passava a
+"passar" sem rodar — foi assim que 30 testes de `pagamentos_dia` e `aportes`
+ficaram um tempo sem executar. E ter as sete no caminho punha os nomes curtos
+todos no mesmo espaço global, onde `config.py`, `frame.py` e `conferencia.py`
+disputavam quem seria importado. Quem guarda a regra agora é
+`tests/test_nomes_de_modulo.py`.
+
+O pytest já põe a rootdir no caminho quando não há `__init__.py` em `tests/`,
+mas isso depende do modo de import dele; a linha abaixo torna a garantia
+explícita e independe de configuração."""
 import sys
 from pathlib import Path
 
 import pytest
 
 _RAIZ = Path(__file__).resolve().parent.parent
-# TODA pasta de aba entra aqui. Faltar uma não quebra a suíte: o teste dela
-# some com `importorskip` e passa a "passar" sem rodar — foi o que aconteceu
-# com `pagamentos_dia` e `aportes`, 30 testes que nunca executaram.
-for _p in (_RAIZ, _RAIZ / "separar_renomear", _RAIZ / "anexar",
-           _RAIZ / "extratos_sicoob", _RAIZ / "relatorios",
-           _RAIZ / "pagamentos_dia", _RAIZ / "aportes"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+if str(_RAIZ) not in sys.path:
+    sys.path.insert(0, str(_RAIZ))
 
 
 # ------------------------------------------------------------------ janela Tk

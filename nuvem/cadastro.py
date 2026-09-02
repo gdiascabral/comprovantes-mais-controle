@@ -21,11 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-try:
-    from . import cache, rest
-except ImportError:
-    import cache
-    import rest
+from . import cache, rest
 
 
 @dataclass

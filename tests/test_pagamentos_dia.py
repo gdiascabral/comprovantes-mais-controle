@@ -11,7 +11,7 @@ import pytest
 # Import DIRETO, de propósito: com `importorskip` estes testes sumiam em
 # silêncio quando `pagamentos_dia` ficava fora do sys.path — e a suíte
 # passava sem executá-los. Falhar no import é o comportamento certo.
-import relatorio
+from pagamentos_dia import relatorio
 
 
 def anexo(nome, tag=None, ext=".pdf", url=None):
@@ -364,7 +364,7 @@ def test_a_janela_lista_todo_lancamento_das_contas_marcadas():
     Antes, fornecedor fora daquele arquivo não tinha onde ser tirado do dia —
     a não ser desmarcando a conta inteira, junto com tudo o mais que ela tem.
     """
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     lancamentos = [_pagamento("a"), _pagamento("b"),
                    _pagamento("c", conta="OUTRA CONTA")]
@@ -374,7 +374,7 @@ def test_a_janela_lista_todo_lancamento_das_contas_marcadas():
 
 def test_ja_pago_nao_entra_na_pergunta():
     """Não há o que decidir sobre ele."""
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     alvos = frame.alvos_para_confirmar(
         [_pagamento("a"), _pagamento("b", pago=True)], ["CONTA TESTE"])
@@ -382,7 +382,7 @@ def test_ja_pago_nao_entra_na_pergunta():
 
 
 def test_conta_nao_marcada_nao_entra_na_pergunta():
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     assert frame.alvos_para_confirmar([_pagamento("a")], ["OUTRA"]) == []
 
@@ -404,7 +404,7 @@ def test_o_marcador_de_recorrencia_nao_ocupa_a_janela():
     A etapa 3 já as descartava por valor simbólico — mas ela roda depois, e a
     janela existe para recolher decisão, não para repetir uma já tomada.
     """
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     alvos = frame.alvos_para_confirmar(
         [_pagamento("a"), _marcador("luz")], ["CONTA TESTE"], _MARCADA)
@@ -413,7 +413,7 @@ def test_o_marcador_de_recorrencia_nao_ocupa_a_janela():
 
 def test_valor_de_verdade_da_mesma_concessionaria_continua_na_janela():
     """A marca é sobre o R$ 1,00, não sobre o nome: a conta de luz aparece."""
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     alvos = frame.alvos_para_confirmar(
         [_marcador("conta", valor=56.24)], ["CONTA TESTE"], _MARCADA)
@@ -422,7 +422,7 @@ def test_valor_de_verdade_da_mesma_concessionaria_continua_na_janela():
 
 def test_sem_cadastro_a_janela_lista_tudo_como_antes():
     """`fornecedores` é opcional — sem ele, nada é filtrado."""
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     alvos = frame.alvos_para_confirmar([_marcador("luz")], ["CONTA TESTE"])
     assert [i["id"] for i in alvos] == ["luz"]
@@ -441,7 +441,7 @@ def _para_receber(**mudancas):
 
 
 def test_pix_sem_chave_e_ressalva_e_nao_erro():
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     _nome, dado, estado = frame.quem_recebe(
         _para_receber(tradePayablePaymentMethod="Pix", paidToBankAccount=""))
@@ -451,7 +451,7 @@ def test_pix_sem_chave_e_ressalva_e_nao_erro():
 
 
 def test_boleto_sem_linha_lida_e_ressalva():
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     _nome, dado, estado = frame.quem_recebe(
         _para_receber(tradePayablePaymentMethod="Boleto"), ja_lido={})
@@ -460,7 +460,7 @@ def test_boleto_sem_linha_lida_e_ressalva():
 
 
 def test_ted_sem_conta_no_cadastro_e_ressalva():
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     _nome, dado, estado = frame.quem_recebe(
         _para_receber(tradePayablePaymentMethod="TED", paidToBankAccount=""))
@@ -469,7 +469,7 @@ def test_ted_sem_conta_no_cadastro_e_ressalva():
 
 
 def test_dado_completo_continua_verde():
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     _nome, dado, estado = frame.quem_recebe(_para_receber(
         tradePayablePaymentMethod="Pix",
@@ -481,7 +481,7 @@ def test_dado_completo_continua_verde():
 def test_cada_estado_tem_a_sua_cor():
     """O mapa é o que impede o âmbar de cair no vermelho por omissão — que era
     exatamente o defeito, escrito de outro jeito."""
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     assert set(frame.ESTILO_DO_DADO) == {"ok", "atencao", "erro"}
     assert len(set(frame.ESTILO_DO_DADO.values())) == 3
@@ -490,7 +490,7 @@ def test_cada_estado_tem_a_sua_cor():
 def test_nenhum_caso_de_falta_de_dado_sai_como_erro():
     """`erro` fica reservado para o que não sai de jeito nenhum. Nenhuma das
     três faltas é isso: as três entram na planilha."""
-    import pagamentos_frame as frame
+    from pagamentos_dia import pagamentos_frame as frame
 
     for metodo in ("Pix", "Boleto", "TED"):
         _n, _d, estado = frame.quem_recebe(

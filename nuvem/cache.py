@@ -28,12 +28,7 @@ import json
 import os
 from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 
 def caminho(nome: str, pasta=None) -> Path:

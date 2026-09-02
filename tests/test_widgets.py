@@ -265,7 +265,7 @@ def test_botao_limpar(campo):
 
 @pytest.fixture(scope="module")
 def aba_separar(raiz):
-    import separar_renomear
+    from separar_renomear import separar_renomear
     aba = separar_renomear.SepararFrame(raiz)
     # De propósito NÃO destruímos a aba no fim: o `_drain` dela está agendado no
     # `after` da raiz compartilhada, e destruir o widget deixaria o próximo
@@ -310,7 +310,7 @@ def test_parar_no_meio_nao_grava_pdf_pela_metade(tmp_path):
     simplesmente não existe."""
     from pypdf import PdfWriter
 
-    import separar_renomear
+    from separar_renomear import separar_renomear
 
     entrada = tmp_path / "entrada"
     entrada.mkdir()

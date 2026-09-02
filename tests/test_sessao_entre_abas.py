@@ -14,13 +14,6 @@ coisas que não são:
    (janela fechada no X) era tratado como sessão caída. `esta_logado()` num
    contexto que não existe mais estoura, e não havia caminho de volta.
 """
-import sys
-from pathlib import Path
-
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-sys.path.insert(0, str(_RAIZ / "anexar"))
-
 
 class _Pagina:
     def __init__(self, morta=False):
@@ -45,7 +38,7 @@ class _Ctx:
 
 def _cliente(ctx):
     """Um MCClient sem abrir navegador nenhum: só o `vivo()` interessa."""
-    from mc_client import MCClient
+    from anexar.mc_client import MCClient
     cli = MCClient.__new__(MCClient)
     cli.ctx = ctx
     return cli
@@ -91,6 +84,6 @@ def test_vivo_fala_de_verdade_com_o_navegador():
 def test_a_url_de_login_existe_e_aponta_para_o_login():
     """É ela que evita o vaivém: com a sessão caída, o app vai para a porta
     de entrada em vez de insistir numa rota interna."""
-    import config
+    from anexar import config
     assert config.MC_URL_LOGIN.endswith("/#/login")
     assert config.MC_URL_LOGIN.startswith(config.MC_URL_BASE)

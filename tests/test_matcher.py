@@ -4,7 +4,7 @@
 Módulo sem dependências pesadas — roda sempre. Os pagamentos pendentes são
 construídos à mão (sem tocar na API); os PDFs vêm de nomes de arquivo, como
 o app recebe da pasta de renomeados."""
-import matcher
+from anexar import matcher
 
 
 # ------------------------------------------------------------ parse_pdf

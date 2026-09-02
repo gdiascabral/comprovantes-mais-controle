@@ -10,8 +10,9 @@ resolução de nomes em UUID e criação. Em especial, prova a parte que só
 existe como dedução até aqui: onde vem o id da parcela na resposta da venda,
 e se a baixa já vem feita pelo próprio lançamento.
 
-Uso:
-    python aportes/teste_lancamento.py
+Uso, da RAIZ do repositório e como MÓDULO (`aportes/` é pacote desde
+02/09/2026, e os imports daqui são relativos):
+    python -m aportes.teste_lancamento
 
 Tudo que o ERP responder vai para `teste_lancamento.json`, gravado ANTES de
 qualquer impressão — perder a resposta custa uma rodada inteira de login.
@@ -27,13 +28,9 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mc_catalogos import Catalogos                    # noqa: E402
-from mc_lancamentos import (criar_pagamento,          # noqa: E402
-                            criar_recebimento, ErroLancamento)
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import util                                            # noqa: E402
+import util
+from .mc_catalogos import Catalogos
+from .mc_lancamentos import criar_pagamento, criar_recebimento, ErroLancamento
 
 BASE_URL = "https://acessar.maiscontroleerp.com.br"
 # Sai de `util.pasta_do_perfil()`, e não da pasta deste arquivo — mesma razão
@@ -43,7 +40,7 @@ PERFIL = util.pasta_do_perfil("teste")
 SAIDA = Path(__file__).resolve().parent / "teste_lancamento.json"
 TELA_PAGAMENTOS = f"{BASE_URL}/#/payable-installments"
 
-from erp_sessao import ouvinte                # noqa: E402
+from .erp_sessao import ouvinte
 
 # --------------------------------------------------------------- o que criar
 # Valor de R$ 1,00 e descrição em maiúsculas: se algo escapar da limpeza, fica

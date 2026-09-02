@@ -28,29 +28,20 @@ from __future__ import annotations
 
 import base64
 import re
-import sys
 import tempfile
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: O diagnóstico do módulo. As funções que baixam recebem um `log` PRÓPRIO —
 #: o recado que aparece no Registro da aba — e o parâmetro SOMBREIA este nome
 #: lá dentro; este aqui é para o que falha longe do Registro.
 log = util.log(__name__)
 
-try:
-    from . import ja_baixados, nome_final
-except ImportError:                      # rodando este módulo isoladamente
-    import ja_baixados
-    import nome_final
+from . import ja_baixados, nome_final
 
 BASE = "https://ib.sicoob.com.br/sicoobnet"
 URL_COMPROVANTES = f"{BASE}/ib/#/comprovantes"

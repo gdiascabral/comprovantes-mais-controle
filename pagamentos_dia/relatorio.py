@@ -32,27 +32,17 @@ from __future__ import annotations
 
 import io
 import re
-import sys
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 from typing import NamedTuple
 
-_AQUI = Path(__file__).resolve().parent
-for _p in (_AQUI, _AQUI.parent):         # a pasta da aba e a raiz do projeto
-    if str(_p) not in sys.path:          # (rodando este módulo isoladamente)
-        sys.path.insert(0, str(_p))
+import util                              # utilitário compartilhado (raiz)
 
-import util                              # noqa: E402  utilitário compartilhado
-
-# Irmãos, na mesma pasta. O sufixo `_pagamento` não é enfeite: nome de módulo
-# é global no sys.path, `aportes/regras.py` já existe e `pagamentos_dia` entra
-# ANTES de `aportes` no caminho de import — um `regras.py` aqui seria
-# importado no lugar dele e quebraria a aba Aportes.
-import ocr_boleto                        # noqa: E402
-import reembolso                         # noqa: E402
-import regras_pagamento as regras        # noqa: E402
-
+# Irmãos, na mesma pasta.
+from . import ocr_boleto
+from . import reembolso
+from . import regras_pagamento as regras
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side

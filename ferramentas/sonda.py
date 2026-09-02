@@ -45,7 +45,12 @@ Windows, e o app não sabe que ela existe.
 
 COMO RODAR
 ----------
-    python ferramentas/sonda.py
+    python -m ferramentas.sonda
+
+Da RAIZ do repositório, e como MÓDULO: `ferramentas/` é pacote desde
+02/09/2026, e é a raiz que precisa estar no caminho de import para o `util` e
+as abas serem encontrados. Quem tiver a tarefa agendada apontando para
+`python ferramentas/sonda.py` precisa trocar a linha de comando.
 
 Saída no console (uma linha por sistema) e nos arquivos. Código de saída 1
 quando algo falhou, 0 quando não — é o que o Agendador de Tarefas do Windows
@@ -66,25 +71,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-# Mesma ideia do bloco no topo do `ferramentas/galeria.py`: rodando como
-# script, as subpastas de aba não estão no sys.path até alguém colocá-las, e
-# este arquivo mora em `ferramentas/`, não na raiz. `anexar` entra por causa do
-# `credenciais.py` (que é importado pelo nome curto, como o app faz) e
-# `extratos_sicoob` por causa do `sicoob_config.py`.
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-for _p in (_RAIZ / "anexar", _RAIZ / "extratos_sicoob"):
-    if _p.is_dir() and str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+import util
 
-import util                                                       # noqa: E402
-
-import credenciais                                                # noqa: E402
-import sicoob_config                                              # noqa: E402
-from baixar_comprovantes import inter_baixar                      # noqa: E402
-from conciliacao.erp import api                                   # noqa: E402
-from nuvem import rest, sessao                                    # noqa: E402
-from nuvem.contas_novas import API_BASE, LEGACY_BASE              # noqa: E402
+from anexar import credenciais
+from baixar_comprovantes import inter_baixar
+from conciliacao.erp import api
+from extratos_sicoob import sicoob_config
+from nuvem import rest, sessao
+from nuvem.contas_novas import API_BASE, LEGACY_BASE
 
 log = util.log("sonda")
 

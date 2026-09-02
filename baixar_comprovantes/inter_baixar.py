@@ -39,23 +39,14 @@ escrita neste comentário e era falsa. A consequência para a fila da aba (fase
 from __future__ import annotations
 
 import re
-import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
-try:
-    from . import ja_baixados, nome_final
-except ImportError:                      # rodando este módulo isoladamente
-    import ja_baixados
-    import nome_final
+from . import ja_baixados, nome_final
 
 #: O diagnóstico do módulo. Quase toda função daqui recebe um `log` PRÓPRIO —
 #: o recado que aparece no Registro da aba — e o parâmetro SOMBREIA este nome

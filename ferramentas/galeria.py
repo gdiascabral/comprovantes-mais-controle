@@ -49,18 +49,18 @@ Como usar
 ---------
 Antes de mexer em `widgets.py` ou nalgum `*_frame.py`:
 
-    python ferramentas/galeria.py --saida antes
+    python -m ferramentas.galeria --saida antes
 
 Depois da mudança:
 
-    python ferramentas/galeria.py --saida depois
+    python -m ferramentas.galeria --saida depois
 
 E comparar as pastas `antes/` e `depois/` lado a lado, tema por tema — cada
 uma tem uma subpasta `claro/` e `escuro/` com um PNG por tela. Para conferir
 a escala de exibição do Windows a 150% (a fonte tem de acompanhar; medida
 fixa de layout, não):
 
-    python ferramentas/galeria.py --escala 1.5 --saida depois-150
+    python -m ferramentas.galeria --escala 1.5 --saida depois-150
 
 Precisa do Pillow (`pip install pillow`) só para tirar o print — de
 propósito NÃO está no requirements.txt: é ferramenta de desenvolvimento
@@ -89,31 +89,18 @@ import contextlib
 import time
 from pathlib import Path
 
-# Mesma ideia do bloco no topo do comprovantes_app.py: rodando como script,
-# as subpastas de aba não estão no sys.path até alguém colocá-las. A raiz
-# entra primeiro porque este arquivo mora em ferramentas/, não na raiz — o
-# comprovantes_app.py não precisa desta linha porque ELE é a raiz.
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
-           _RAIZ / "relatorios", _RAIZ / "pagamentos_dia",
-           _RAIZ / "extratos_sicoob", _RAIZ / "inicio",
-           _RAIZ / "baixar_comprovantes"):
-    if _p.is_dir() and str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
 import tkinter as tk
 from tkinter import ttk
 
 import widgets
-from inicio_frame import InicioFrame
-from separar_renomear import SepararFrame
-from anexar_comprovantes import AnexarFrame
-from conferencia import ConferenciaFrame
-from aportes_frame import AportesFrame
-from relatorio_frame import RelatorioFrame
-from pagamentos_frame import PagamentosDiaFrame
-from extratos_frame import ExtratosSicoobFrame
+from inicio.inicio_frame import InicioFrame
+from separar_renomear.separar_renomear import SepararFrame
+from anexar.anexar_comprovantes import AnexarFrame
+from anexar.conferencia import ConferenciaFrame
+from aportes.aportes_frame import AportesFrame
+from relatorios.relatorio_frame import RelatorioFrame
+from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
+from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame

@@ -20,12 +20,7 @@ import queue
 import threading
 from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 MODELO_PADRAO = "VALOR - DESCRIÇÃO - DATA"
 
@@ -742,12 +737,7 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
 
 
 class SepararFrame(ttk.Frame):

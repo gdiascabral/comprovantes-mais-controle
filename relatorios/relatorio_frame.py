@@ -13,18 +13,16 @@ import datetime
 import os
 import queue
 import subprocess
-import sys
 import time
 import tkinter as tk
 from pathlib import Path
 from threading import Event
 from tkinter import messagebox, ttk
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import conferir_mapas                                        # noqa: E402
-import contas_mc                                             # noqa: E402
-import extrato_mc                                            # noqa: E402
+from . import conferir_mapas
+from . import contas_mc
+from . import extrato_mc
 
 # Estes dois vivem em OUTRAS pastas de aba, e entram aqui em cima de
 # propósito. Enquanto o import morava dentro do `try` do `_conferir_mapas`, o
@@ -32,25 +30,11 @@ import extrato_mc                                            # noqa: E402
 # do sys.path mudar, ou um arquivo faltar no codigo.zip, para a conferência que
 # impede o mês partido sumir para sempre — sem uma linha em lugar nenhum. Aqui,
 # se algum dia faltar, o app não abre e alguém fica sabendo no mesmo dia.
-try:                                     # cadastro do Sicoob (aba vizinha)
-    import sicoob_config                                     # noqa: E402
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent
-                           / "extratos_sicoob"))
-    import sicoob_config                                     # noqa: E402
+from extratos_sicoob import sicoob_config
 
-try:                                     # o diagnostico.log é um só, no Anexar
-    import config                                            # noqa: E402
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "anexar"))
-    import config                                            # noqa: E402
+from anexar import config
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
 #: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
@@ -58,12 +42,7 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 _fmt_dur = util.fmt_dur
 _pasta_base = util.pasta_base
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
 
 #: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
 #: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e

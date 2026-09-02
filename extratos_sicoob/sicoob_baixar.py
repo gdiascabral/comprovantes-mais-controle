@@ -16,9 +16,9 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import sicoob_config as cfg
-from sicoob_contas import Mapa, so_digitos
-from sicoob_pastas import caminho_da_conta
+from . import sicoob_config as cfg
+from .sicoob_contas import Mapa, so_digitos
+from .sicoob_pastas import caminho_da_conta
 
 RE_ACCTID = re.compile(r"<ACCTID>([^<\r\n]*)")
 RE_DTSTART = re.compile(r"<DTSTART>(\d{8})")

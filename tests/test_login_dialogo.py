@@ -11,15 +11,10 @@ O truque para elas não travarem o teste: `pedir_login` termina em
 inspeciona e fecha, a janela é construída inteira — que é justamente a parte
 que pode quebrar.
 """
-import sys
-from pathlib import Path
 
 import pytest
 
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-
-from nuvem import login_dialogo, rest, sessao  # noqa: E402
+from nuvem import login_dialogo, rest, sessao
 
 
 def _todos(pai):

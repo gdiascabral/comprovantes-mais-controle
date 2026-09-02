@@ -35,12 +35,7 @@ from playwright.sync_api import sync_playwright
 
 from . import config as cfg
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: "Conciliações bancárias Junho/2026 - Fulano [2601]" -> o id entre colchetes.
 RE_ID = re.compile(r"\[(\d+)\]\s*$")

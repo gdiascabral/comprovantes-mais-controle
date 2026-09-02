@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 # separar_renomear importa tkinter/pdfplumber no topo; se faltarem, pula.
-sr = pytest.importorskip("separar_renomear")
+sr = pytest.importorskip("separar_renomear.separar_renomear")
 
 FIX = Path(__file__).resolve().parent / "fixtures"
 
@@ -163,7 +163,7 @@ def test_rotulo_nunca_vira_descricao():
 
 def test_nome_arquivo_round_trip_para_o_matcher():
     """O nome gerado pelo Separar precisa ser lido de volta pelo matcher."""
-    import matcher
+    from anexar import matcher
     c = sr.campos(_ler("inter_pix_antigo.txt"))
     nome = sr.nome_arquivo(c) + ".pdf"
     p = matcher.parse_pdf(nome)

@@ -12,21 +12,12 @@ responder "sim".
 """
 from __future__ import annotations
 
-import sys
 import tkinter as tk
-from pathlib import Path
 from tkinter import ttk
 
-try:
-    import widgets
-except ModuleNotFoundError:              # rodando isolado, sem a raiz no path
-    widgets = None
+import widgets
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 log = util.log(__name__)
 

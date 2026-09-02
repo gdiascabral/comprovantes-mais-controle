@@ -11,16 +11,11 @@ desativa fecha a porta desta tela por dentro. Ninguém mais aprova ninguém, e
 o conserto passa a exigir SQL no painel do Supabase — que é exatamente o que
 estas quatro fases existem para não precisar mais.
 """
-import sys
-from pathlib import Path
 
 import pytest
 
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-
-from nuvem import rest, usuarios  # noqa: E402
-from nuvem import usuarios_frame  # noqa: E402
+from nuvem import rest, usuarios
+from nuvem import usuarios_frame
 
 
 def _u(uid, nome="", email="", papel="operador", situacao="ativo"):

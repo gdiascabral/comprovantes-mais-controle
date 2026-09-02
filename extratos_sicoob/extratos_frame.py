@@ -15,7 +15,6 @@ import datetime
 import os
 import queue
 import subprocess
-import sys
 import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
@@ -23,14 +22,13 @@ from pathlib import Path
 from threading import Event
 from tkinter import messagebox, ttk
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import sicoob_baixar                                          # noqa: E402
-import sicoob_config                                          # noqa: E402
-import sicoob_contas as sc                                    # noqa: E402
-import sicoob_pastas as sp                                    # noqa: E402
-import sicoob_zipar                                           # noqa: E402
-from sicoob_client import SicoobClient                        # noqa: E402
+from . import sicoob_baixar
+from . import sicoob_config
+from . import sicoob_contas as sc
+from . import sicoob_pastas as sp
+from . import sicoob_zipar
+from .sicoob_client import SicoobClient
 
 # Estes três vivem em OUTRAS pastas de aba, e entram aqui em cima de
 # propósito. Enquanto o import morava dentro do `try` do `_conferir_mapas`, o
@@ -38,34 +36,13 @@ from sicoob_client import SicoobClient                        # noqa: E402
 # do sys.path mudar, ou um arquivo faltar no codigo.zip, para a conferência que
 # impede o mês partido sumir para sempre — sem uma linha em lugar nenhum. Aqui,
 # se algum dia faltar, o app não abre e alguém fica sabendo no mesmo dia.
-try:                                     # os dois mapas de pasta (aba vizinha)
-    import conferir_mapas                                     # noqa: E402
-    import contas_mc                                          # noqa: E402
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent
-                           / "relatorios"))
-    import conferir_mapas                                     # noqa: E402
-    import contas_mc                                          # noqa: E402
+from relatorios import conferir_mapas
+from relatorios import contas_mc
 
-try:                                     # o diagnostico.log é um só, no Anexar
-    import config                                             # noqa: E402
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "anexar"))
-    import config                                             # noqa: E402
+from anexar import config
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
-
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import util
+import widgets
 
 #: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
 #: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e

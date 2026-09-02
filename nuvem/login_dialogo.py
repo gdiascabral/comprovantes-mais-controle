@@ -25,11 +25,7 @@ não alcança dado nenhum: quem garante isso é a RLS, não a interface.
 """
 from __future__ import annotations
 
-try:
-    from . import rest, sessao
-except ImportError:
-    import rest
-    import sessao
+from . import rest, sessao
 
 #: O mínimo que o servidor aceita, para não fazer a pessoa viajar até ele
 #: para ouvir um não. Vale como CÓPIA, não como regra: quem manda é o painel

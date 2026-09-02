@@ -38,9 +38,7 @@ texto subtraia dinheiro do painel sem aviso.
 
 from __future__ import annotations
 
-import sys
 import time
-from pathlib import Path
 
 from playwright.sync_api import Page
 
@@ -53,11 +51,7 @@ from ..parsing import (
 )
 from .browser import ErpError
 
-try:                                     # utilitarios compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando a Conciliacao isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-    import util
+import util
 
 #: O diagnostico do modulo. Quase toda funcao daqui recebe um `log` PROPRIO (o
 #: recado que aparece no Registro da aba) e o parametro SOMBREIA este nome la

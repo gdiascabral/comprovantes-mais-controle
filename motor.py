@@ -56,10 +56,15 @@ def principal():
     else:
         fonte = Path(__file__).resolve().parent   # modo script: usa o repositório
 
-    for sub in ("separar_renomear", "anexar", ""):
-        p = str(fonte / sub) if sub else str(fonte)
-        if p not in sys.path:
-            sys.path.insert(0, p)
+    # Só a RAIZ do código entra no caminho de import. Desde 02/09/2026 toda
+    # pasta de aba é pacote (tem `__init__.py`) e se importa pelo nome inteiro
+    # — `from anexar.conferencia import ...` —, então injetar as subpastas
+    # devolveria a colisão que os pacotes vieram desfazer: no sys.path plano
+    # nome de módulo é global, e `config.py`, `frame.py` e `conferencia.py`
+    # existem em mais de uma pasta. Quem entrasse por último perdia.
+    p = str(fonte)
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
     import comprovantes_app
     comprovantes_app.main()

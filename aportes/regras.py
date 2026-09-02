@@ -15,7 +15,7 @@ import datetime
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
-from dados import INVESTIDOR_PREFIXO
+from .dados import INVESTIDOR_PREFIXO
 
 PREFIXO_DESCRICAO = {
     "Aporte de Capital": "APORTE CAPITAL",

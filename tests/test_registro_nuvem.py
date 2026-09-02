@@ -6,15 +6,10 @@ verdade (12 pedidos simultâneos, 12 números distintos). O que se testa aqui é
 o que o Python decide: quem consome número e quem só olha, o que conta como
 "já enviado", e a regra de que o espelho local não tem voto.
 """
-import sys
-from pathlib import Path
 
 import pytest
 
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-
-from nuvem import registro, rest  # noqa: E402
+from nuvem import registro, rest
 
 
 class _RestFalso:

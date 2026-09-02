@@ -12,8 +12,8 @@ import zipfile
 
 import pytest
 
-import sicoob_config as scfg
-import sicoob_contas as sc
+from extratos_sicoob import sicoob_config as scfg
+from extratos_sicoob import sicoob_contas as sc
 from acessorias import pacote
 
 MES, ANO = 7, 2026                       # JULHO 2026

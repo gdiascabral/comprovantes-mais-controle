@@ -16,22 +16,10 @@ arquivo, não ler o nome dele e torcer.
 from __future__ import annotations
 
 import tkinter as tk
-from pathlib import Path
 from tkinter import messagebox, ttk
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
-
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import util
+import widgets
 
 from .escolha import ordenar_para_escolha
 

@@ -2,8 +2,11 @@
 """Utilitários compartilhados pelos módulos do app (sem dependências pesadas).
 
 Fica na RAIZ do pacote de código; é copiado para o codigo.zip do auto-update
-e para os exes. Módulos em subpastas o importam com um fallback de sys.path
-(ver o topo de cada arquivo) para funcionarem também rodados isoladamente.
+e para os exes. Os módulos das subpastas o importam com um `import util` seco:
+toda pasta é pacote desde 02/09/2026, e a raiz do repositório é a única coisa
+que entra no `sys.path`. Quem quiser rodar um módulo isolado roda
+`python -m pacote.modulo` da raiz — não há mais fallback de caminho em cada
+arquivo, e não há mais duas cópias da regra de "onde fica a raiz".
 """
 import ctypes
 import logging

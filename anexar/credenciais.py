@@ -13,19 +13,10 @@ anexos, e o `nuvem/sessao.py` teria de importar `anexar` só para cifrar um
 token.
 """
 import json
-import sys
-from pathlib import Path
 
-try:
-    from . import config
-except ImportError:
-    import config
+from . import config
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 
 def salvar(email: str, senha: str):

@@ -7,11 +7,7 @@ então funciona em qualquer computador sem editar nada.
 import sys
 from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 if getattr(sys, "frozen", False):
     # Rodando como executável (PyInstaller): usa a pasta onde o .exe está,

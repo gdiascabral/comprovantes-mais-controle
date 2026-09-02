@@ -29,19 +29,10 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-try:
-    from . import config, matcher, mc_api, planilha, credenciais
-    from .mc_client import MCClient, SemRede
-except ImportError:
-    import config, matcher, mc_api, planilha, credenciais
-    from mc_client import MCClient, SemRede
+from . import config, matcher, mc_api, planilha, credenciais
+from .mc_client import MCClient, SemRede
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 LINK = config.MC_URL_LANCAMENTO
 _fmt_dur = util.fmt_dur
@@ -100,12 +91,7 @@ def _abrir_url(url: str):
             pass
 
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
 
 #: O campo de data mora em widgets.py e é usado por TODAS as abas que pedem
 #: data. Ficava aqui dentro, e a Conferência tinha de importá-lo desta aba —

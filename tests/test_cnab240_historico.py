@@ -7,15 +7,12 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
-import sys
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cnab240 import (  # noqa: E402
+from cnab240 import (
     ArquivoRemessa,
     Empresa,
     Favorecido,
@@ -23,7 +20,7 @@ from cnab240 import (  # noqa: E402
     PagamentoTitulo,
     TransferenciaConta,
 )
-from cnab240.historico import (  # noqa: E402
+from cnab240.historico import (
     NSA_MAXIMO,
     Historico,
     HistoricoInvalido,

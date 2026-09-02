@@ -13,15 +13,9 @@ lugar nenhum.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from urllib.parse import urlsplit
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 log = util.log(__name__)
 

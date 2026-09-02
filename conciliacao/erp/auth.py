@@ -26,19 +26,13 @@ ORDEM DAS ESTRATEGIAS DE LOGIN
 from __future__ import annotations
 
 import os
-import sys
 import time
-from pathlib import Path
 
 from playwright.sync_api import Page
 
 from ..errors import ErpError, SessaoExpirada
 
-try:                                     # utilitarios compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando a Conciliacao isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-    import util
+import util
 
 #: O diagnostico do modulo. `entrar()` e `garantir_login()` recebem um `log`
 #: PROPRIO — o recado que aparece na tela de quem esta olhando — e o parametro
@@ -120,7 +114,7 @@ def obter_credenciais() -> tuple[str | None, str | None]:
         return email, senha
 
     try:                              # login salvo do app (cifrado pela DPAPI)
-        import credenciais as _cred_app
+        from anexar import credenciais as _cred_app
 
         guardado = _cred_app.carregar()
         if guardado and guardado[0] and guardado[1]:

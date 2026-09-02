@@ -92,10 +92,10 @@ def test_toda_aba_usa_a_mesma_tabela_de_meses():
     """Nenhum módulo pode ter a sua própria lista de meses de novo."""
     import acessorias.frame
     import contratos.frame
-    import extratos_frame
-    import relatorio_frame
-    import sicoob_config
-    import contas_mc
+    from extratos_sicoob import extratos_frame
+    from relatorios import relatorio_frame
+    from extratos_sicoob import sicoob_config
+    from relatorios import contas_mc
 
     for modulo in (acessorias.frame, contratos.frame, extratos_frame,
                    relatorio_frame):

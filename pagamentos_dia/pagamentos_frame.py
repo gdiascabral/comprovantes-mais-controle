@@ -24,29 +24,22 @@ import os
 import queue
 import re
 import subprocess
-import sys
 import time
 import tkinter as tk
 from pathlib import Path
 from threading import Event
 from tkinter import filedialog, messagebox, ttk
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import baixa_erp                                              # noqa: E402
-import ocr_boleto                                             # noqa: E402
-import reembolso                                              # noqa: E402
-import regras_pagamento as regras                             # noqa: E402
-import relatorio                                              # noqa: E402
-import remessa_dia                                            # noqa: E402
-import retorno_dia                                            # noqa: E402
+from . import baixa_erp
+from . import ocr_boleto
+from . import reembolso
+from . import regras_pagamento as regras
+from . import relatorio
+from . import remessa_dia
+from . import retorno_dia
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
 #: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
@@ -54,12 +47,7 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 _fmt_dur = util.fmt_dur
 _pasta_base = util.pasta_base
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
 
 #: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
 #: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
@@ -72,22 +60,12 @@ CampoData = widgets.CampoData
 # EMPRESA é cada conta do ERP, e `sicoob_contas` traz CNPJ, agência, conta e
 # convênio. Um mapa a mais seria uma divergência a mais esperando acontecer —
 # julho de 2026 já ficou partido uma vez por dois mapas discordando.
-#
-# Import PLANO, como o `relatorio_frame` e o `extratos_frame` fazem: o app põe
-# cada pasta de aba direto no sys.path. `from extratos_sicoob import ...` até
-# resolveria o nome, mas o próprio `sicoob_contas` faz `import sicoob_config`
-# — que só existe com a pasta dele no caminho.
-for _aba in ("relatorios", "extratos_sicoob"):
-    _p = Path(__file__).resolve().parent.parent / _aba
-    if _p.is_dir() and str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
-import contas_mc                                              # noqa: E402
+from relatorios import contas_mc
+from extratos_sicoob import sicoob_contas
 # Os passos da remessa sobem para a auditoria da nuvem, e não só para o
 # `atividade.jsonl`: o painel de Início é da máquina de quem rodou, e "quem
 # gerou esta remessa?" é pergunta que se faz de outra máquina, depois.
-from nuvem import auditoria                                   # noqa: E402
-import sicoob_contas                                          # noqa: E402
+from nuvem import auditoria
 
 
 
@@ -1469,7 +1447,7 @@ class PagamentosDiaFrame(ttk.Frame):
             # Os cabeçalhos capturados da tela de Pagamentos servem ao legado:
             # authorization, company-id, user-id e organization-unit-id.
             _url, cabecalhos = api._req_pagos
-            from mc_catalogos import Catalogos
+            from aportes.mc_catalogos import Catalogos
             transporte = Catalogos(api.page, cabecalhos, self._log)
 
             self._log(f"\nBaixando {len(linhas)} pagamento(s) no Mais Controle...")

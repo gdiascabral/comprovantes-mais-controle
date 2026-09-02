@@ -35,19 +35,8 @@ from . import config as cfg
 from . import pacote
 from .portal import EnvioNaoConfirmado, PortalClient, SessaoPerdida
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
-
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import util
+import widgets
 
 #: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
 #: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
@@ -69,8 +58,8 @@ def _sicoob():
     julho de 2026 já ficou partido uma vez por causa de dois mapas discordando.
     O import é tardio para esta aba montar mesmo se o pacote do Sicoob não
     estiver no caminho, como faz a aba Contratos."""
-    import sicoob_config as scfg
-    import sicoob_contas as contas
+    from extratos_sicoob import sicoob_config as scfg
+    from extratos_sicoob import sicoob_contas as contas
     return scfg, contas
 
 

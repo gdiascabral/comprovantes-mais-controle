@@ -3,14 +3,17 @@
 
 Duas coisas, e as duas pelo mesmo motivo.
 
-**O caminho de import.** As pastas de aba do app (`pagamentos_dia`,
-`relatorios`, `extratos_sicoob`) não são pacotes: `remessa_dia` importa
-`ocr_boleto` pelo nome curto, e quem põe essas pastas no `sys.path` é o
-`comprovantes_app.py` quando roda como script. Ferramenta que quer percorrer o
-caminho REAL do app precisa montar o mesmo `sys.path` — e monta-o a partir do
-`__file__`, nunca de um caminho absoluto escrito à mão. Caminho escrito à mão
-foi o que amarrou estes scripts à máquina de uma pessoa, e à cópia velha da
-biblioteca que morava nela.
+**O caminho de import.** Desde 02/09/2026 toda pasta de aba é pacote, e os
+módulos se importam pelo nome inteiro (`from pagamentos_dia import
+remessa_dia`). Sobra UMA coisa a garantir: que a RAIZ do repositório esteja no
+`sys.path` — estes scripts rodam de `cnab240/ferramentas/`, e sem ela nem o
+`cnab240` daqui seria encontrado. Antes eram quatro pastas, porque `remessa_dia`
+importava `ocr_boleto` pelo nome curto e a ferramenta precisava reproduzir o
+`sys.path` plano que o `comprovantes_app.py` montava.
+
+A raiz sai do `__file__`, nunca de um caminho absoluto escrito à mão. Caminho
+escrito à mão foi o que amarrou estes scripts à máquina de uma pessoa, e à
+cópia velha da biblioteca que morava nela.
 
 **A conferência de fonte única.** Depois de arrumar o caminho, `_uma_fonte_so`
 pergunta de ONDE o `cnab240` foi importado e exige que seja o deste
@@ -37,30 +40,28 @@ from pathlib import Path
 #: são dois níveis acima — a mesma conta que o `util.pasta_base()` faz com um.
 RAIZ = Path(__file__).resolve().parents[2]
 
-#: A raiz mais as pastas de aba que o app põe no caminho quando roda como
-#: script. A lista é a MENOR que faz os quatro scripts importarem.
-_PASTAS = ("", "pagamentos_dia", "relatorios", "extratos_sicoob")
-
-
 def _preparar_caminho() -> None:
-    """Só pastas DESTE repositório, todas derivadas do `__file__`."""
-    for nome in _PASTAS:
-        pasta = RAIZ / nome if nome else RAIZ
-        if pasta.is_dir() and str(pasta) not in sys.path:
-            sys.path.insert(0, str(pasta))
+    """A RAIZ do repositório no `sys.path`, e só ela.
+
+    Uma pasta, e não quatro: os módulos do app se importam pelo caminho
+    completo desde que toda pasta virou pacote, e devolver as subpastas ao
+    caminho ressuscitaria a colisão de nome curto que os pacotes desfizeram.
+    """
+    if str(RAIZ) not in sys.path:
+        sys.path.insert(0, str(RAIZ))
 
 
 _preparar_caminho()
 
-import cnab240                                                  # noqa: E402
+import cnab240
 # contas_mc, remessa_dia e sicoob_contas nao sao usados AQUI: este modulo so
 # os importa para os scripts da pasta fazerem `from ._ambiente import
 # contas_mc` etc, em vez de cada um repetir o `_preparar_caminho()` acima.
-import contas_mc                                                # noqa: E402,F401
-import ocr_boleto                                               # noqa: E402
-import remessa_dia                                              # noqa: E402,F401
-import sicoob_contas                                            # noqa: E402,F401
-import util                                                     # noqa: E402
+import util
+from extratos_sicoob import sicoob_contas                       # noqa: F401
+from pagamentos_dia import ocr_boleto
+from pagamentos_dia import remessa_dia                          # noqa: F401
+from relatorios import contas_mc                                # noqa: F401
 
 
 def _uma_fonte_so() -> None:

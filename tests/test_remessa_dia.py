@@ -5,17 +5,15 @@ Sem tela. O que se testa aqui é dinheiro saindo para a pessoa certa, na conta
 certa, uma vez só.
 """
 import datetime as _dt
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import ocr_boleto                                    # noqa: E402
-import remessa_dia                                   # noqa: E402
-import contas_mc                                     # noqa: E402
-import sicoob_contas                                 # noqa: E402
+from pagamentos_dia import ocr_boleto
+from pagamentos_dia import remessa_dia
+from relatorios import contas_mc
+from extratos_sicoob import sicoob_contas
 
 HOJE = _dt.date(2026, 8, 13)
 LINHA_BANCARIA = "34191.57007 00024.924375 24177.010006 9 15340000115000"
@@ -688,16 +686,18 @@ def test_diagnostico_atravessa_as_tres_formas_de_payload():
 
 
 def test_a_aba_importa_no_arranjo_do_app():
-    """O passo 3 alcança cadastros de OUTRAS abas — e isso é frágil no exe.
+    """O passo 3 alcança cadastros de OUTRAS abas — e isso já foi frágil no exe.
 
-    O app põe cada pasta de aba PLANA no sys.path, e o `sicoob_contas` faz
-    `import sicoob_config`, que só resolve com a pasta dele no caminho. Um
-    `from extratos_sicoob import sicoob_contas` passaria aqui (o conftest põe
-    tudo no path) e quebraria na máquina do usuário, ao abrir a aba.
+    Enquanto o app punha cada pasta de aba PLANA no `sys.path`, `sicoob_contas`
+    fazia `import sicoob_config` e só resolvia com a pasta dele no caminho: um
+    `from extratos_sicoob import sicoob_contas` passava aqui (o conftest punha
+    tudo no path) e quebrava na máquina do usuário, ao abrir a aba. Desde
+    02/09/2026 os dois lados falam por pacote, e o arranjo do teste é o MESMO
+    do app — que é o que este teste continua existindo para conferir.
     """
     import importlib
 
-    frame = importlib.import_module("pagamentos_frame")
+    frame = importlib.import_module("pagamentos_dia.pagamentos_frame")
     assert frame.remessa_dia and frame.contas_mc and frame.sicoob_contas
     assert callable(frame._historico)
 
