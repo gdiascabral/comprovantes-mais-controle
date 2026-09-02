@@ -14,6 +14,7 @@ DUAS RESTRICOES DO ERP DESCOBERTAS NA PRATICA
 
 from __future__ import annotations
 
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,6 +22,14 @@ from pathlib import Path
 from playwright.sync_api import Page, sync_playwright
 
 from ..errors import ErpError, SessaoExpirada
+
+try:                                     # utilitarios compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando a Conciliacao isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    import util
+
+log = util.log(__name__)
 
 __all__ = [
     "ErpError",
@@ -110,6 +119,8 @@ def esta_logado(pagina: Page) -> bool:
             if pagina.locator(seletor).first.is_visible(timeout=1200):
                 return False
         except Exception:
+            log.warning("procurando o sinal de tela de login %s; sem ele esta "
+                        "sessao passa por valida", seletor, exc_info=True)
             continue
     return True
 
@@ -144,7 +155,8 @@ def aguardar_sistema(pagina: Page, seletor_sucesso: str, *, timeout_s: float = 4
             if pagina.locator(seletor_sucesso).count() > 0:
                 return
         except Exception:
-            pass
+            log.warning("contando %s enquanto espero o ERP montar a tela",
+                        seletor_sucesso, exc_info=True)
         pagina.wait_for_timeout(500)
 
     if not esta_logado(pagina):
@@ -216,5 +228,9 @@ def salvar_screenshot(pagina: Page, config, nome: str) -> Path:
     try:
         pagina.screenshot(path=str(caminho), full_page=True)
     except Exception:
+        # O caminho volta assim mesmo, e quem chamou vai anuncia-lo como se o
+        # print existisse — por isso a falha precisa aparecer em algum lugar.
+        log.warning("salvando o screenshot de diagnostico em %s", caminho,
+                    exc_info=True)
         return caminho
     return caminho

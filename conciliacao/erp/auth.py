@@ -26,11 +26,27 @@ ORDEM DAS ESTRATEGIAS DE LOGIN
 from __future__ import annotations
 
 import os
+import sys
 import time
+from pathlib import Path
 
 from playwright.sync_api import Page
 
 from ..errors import ErpError, SessaoExpirada
+
+try:                                     # utilitarios compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando a Conciliacao isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    import util
+
+#: O diagnostico do modulo. `entrar()` e `garantir_login()` recebem um `log`
+#: PROPRIO — o recado que aparece na tela de quem esta olhando — e o parametro
+#: SOMBREIA este nome la dentro; nesses dois o diagnostico sai por `_diag`, que
+#: e este mesmo logger com outro nome. Traceback vai para o arquivo, nunca para
+#: a tela de quem so quer saber se entrou.
+log = util.log(__name__)
+_diag = log
 
 #: Nome do servico no cofre de credenciais do Windows.
 SERVICO_KEYRING = "conciliacao-mais-controle"
@@ -122,6 +138,9 @@ def obter_credenciais() -> tuple[str | None, str | None]:
         if email:
             senha = keyring.get_password(SERVICO_KEYRING, email)
     except Exception:
+        # Nem o e-mail nem a senha entram na mensagem: sao a credencial do ERP,
+        # e o `diagnostico.log` e um arquivo comum na pasta do exe.
+        log.warning("lendo as credenciais no cofre do Windows", exc_info=True)
         return email, None
     return email, senha
 
@@ -144,6 +163,8 @@ def na_tela_de_login(pagina: Page) -> bool:
     try:
         return pagina.locator(_SEL_SENHA).first.is_visible(timeout=1500)
     except Exception:
+        log.warning("olhando se a tela de login do ERP esta na frente",
+                    exc_info=True)
         return False
 
 
@@ -153,7 +174,8 @@ def _dispensar_aviso(pagina: Page) -> None:
         pagina.keyboard.press("Escape")
         pagina.wait_for_timeout(300)
     except Exception:
-        pass
+        log.warning("fechando o aviso 'sem permissao' que o guard de rota "
+                    "deixa na tela de login", exc_info=True)
 
 
 def _saiu_do_login(pagina: Page, timeout_s: float) -> bool:
@@ -180,6 +202,8 @@ def _campos_ja_preenchidos(pagina: Page) -> bool:
             )
         )
     except Exception:
+        log.warning("perguntando a tela se o navegador ja preencheu o login",
+                    exc_info=True)
         return False
 
 
@@ -238,7 +262,8 @@ def entrar(
         try:
             _clicar_entrar(pagina)
         except Exception:
-            pass
+            _diag.warning("clicando em ENTRAR com o login que o navegador "
+                          "preencheu", exc_info=True)
         if _saiu_do_login(pagina, 45.0):
             log("  login efetuado.")
             return
@@ -283,7 +308,8 @@ def garantir_login(
             if pagina.locator(seletor_sucesso).first.is_visible(timeout=500):
                 return
         except Exception:
-            pass
+            _diag.warning("procurando %s para saber se a sessao do ERP "
+                          "continua de pe", seletor_sucesso, exc_info=True)
         if na_tela_de_login(pagina):
             entrar(pagina, config, visivel=visivel, log=log)
             return
