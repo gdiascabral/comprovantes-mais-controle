@@ -8,9 +8,20 @@ quem está na frente da tela, e um traceback não pede nada.
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+log = util.log(__name__)
 
 #: Endereço do projeto e chave PÚBLICA. Ficam no código de propósito.
 #:
@@ -112,6 +123,9 @@ def _motivo_do_servidor(r) -> str:
     try:
         corpo = r.json()
     except Exception:
+        log.warning("lendo o motivo da recusa do servidor (HTTP %s): a "
+                    "resposta não veio em JSON", getattr(r, "status_code", "?"),
+                    exc_info=True)
         return ""
     if not isinstance(corpo, dict):
         return ""
