@@ -32,12 +32,7 @@ from conciliacao.snapshot import save as salvar_snapshot
 from conciliacao.validate import ValidationError
 from conciliacao.workbook import WorkbookError
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
 #: regra de CAMINHO é como um app passa a procurar o mesmo arquivo em dois
@@ -45,12 +40,7 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 _fmt_dur = util.fmt_dur
 _pasta_base = util.pasta_base
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
 
 #: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
 #: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e

@@ -23,21 +23,11 @@ preenche não responde "quem fez" — responde "quem o cliente disse que fez".
 """
 from __future__ import annotations
 
-import sys
 import threading
-from pathlib import Path
 
-try:
-    from . import rest, sessao
-except ImportError:
-    import rest
-    import sessao
+from . import rest, sessao
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 log = util.log(__name__)
 

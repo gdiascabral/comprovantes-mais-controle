@@ -12,14 +12,8 @@ from __future__ import annotations
 import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 
-try:                                     # utilitarios compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando a Conciliacao isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 # Valor precedido de "R$". `pre` captura sinal antes da moeda ("-R$ 10,00"),
 # `sign` captura o sinal depois dela ("R$ - 10,00"), que e o formato do ERP.

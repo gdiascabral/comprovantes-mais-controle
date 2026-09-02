@@ -20,15 +20,9 @@ por isso (e só por isso) que o caminho do Sicoob passa pelo documento.
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
-_RAIZ = Path(__file__).resolve().parent.parent
-for _p in (_RAIZ, _RAIZ / "separar_renomear"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-
-import util                              # noqa: E402  (depende do sys.path acima)
+import util
 
 log = util.log(__name__)
 
@@ -38,7 +32,7 @@ def _renomeador():
 
     Tardio de propósito: ele carrega `pdfplumber` e `tkinter` no topo, e quem
     só quer baixar comprovante não deve pagar isso na abertura do app."""
-    import separar_renomear
+    from separar_renomear import separar_renomear
 
     return separar_renomear
 

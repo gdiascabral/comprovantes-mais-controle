@@ -17,11 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-try:
-    from . import auditoria, rest
-except ImportError:
-    import auditoria
-    import rest
+from . import auditoria, rest
 
 #: Os três papéis, com o que cada um faz — o texto vai para a tela.
 PAPEIS = (

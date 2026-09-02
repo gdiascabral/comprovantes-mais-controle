@@ -17,14 +17,8 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal
-from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 CONFERE = "CONFERE"
 DIVERGE = "DIVERGE"
@@ -72,7 +66,7 @@ def _com_espacos(texto: str) -> str:
     Import tardio e opcional: este módulo é puro e roda em teste sem o pacote
     de OCR carregado."""
     try:
-        from separar_renomear import _espacar_codigo
+        from separar_renomear.separar_renomear import _espacar_codigo
         return _espacar_codigo(texto)
     except Exception:
         return texto

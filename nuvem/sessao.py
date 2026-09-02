@@ -39,21 +39,13 @@ from __future__ import annotations
 
 import base64
 import json
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    from . import rest
-except ImportError:
-    import rest
+from . import rest
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 log = util.log(__name__)
 

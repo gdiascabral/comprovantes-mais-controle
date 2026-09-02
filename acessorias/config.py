@@ -9,14 +9,8 @@ junto do `vip_id` de cada empresa — mesma decisão já tomada para o
 
 Sem tkinter e sem navegador: só constantes.
 """
-import sys
-from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: Perfil do Chrome do portal, separado do Mais Controle e do Sicoob: são três
 #: sites e três logins, e o Playwright síncrono não divide thread entre eles.

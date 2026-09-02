@@ -20,12 +20,7 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 #: Subpasta dos contratos dentro da pasta da empresa. É a mesma constante do
 #: `contratos/destino.py`; aqui ela é LIDA, lá é escrita.

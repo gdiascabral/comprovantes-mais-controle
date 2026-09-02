@@ -19,32 +19,21 @@ from __future__ import annotations
 
 import datetime as _dt
 import queue
-import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
 
 #: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
 #: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e
 #: a 100% saem os mesmos 14. Ver o bloco do `px` no `widgets.py`.
 px = widgets.px
 
-try:
-    import util                          # noqa: F401
-except ModuleNotFoundError:              # pragma: no cover
-    pass
+import util                          # noqa: F401
 
-try:
-    from . import contas_inter
-except ImportError:                      # rodando este módulo isoladamente
-    import contas_inter
+from . import contas_inter
 
 
 def pasta_padrao() -> Path:
@@ -325,9 +314,7 @@ class ComprovantesFrame(ttk.Frame):
             # Um registro para o lote inteiro, na raiz da pasta de
             # comprovantes: a pergunta atravessa as rodadas e os bancos.
             registro = ja_baixados.Registro(destino.parent)
-            sys.path.insert(0, str(Path(__file__).resolve().parent.parent
-                                   / "extratos_sicoob"))
-            from sicoob_client import SicoobClient
+            from extratos_sicoob.sicoob_client import SicoobClient
 
             do_sicoob = [c for c in self.linhas.values()
                          if c["banco"] == "Sicoob" and c["marcada"]]
