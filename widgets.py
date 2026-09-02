@@ -85,6 +85,15 @@ SEMANA_COMECA_EM = 6
 #: O #8A94A8 e o #0B9E56 do mockup não sumiram: viraram `linha` e `acao_viva`,
 #: usados onde não há texto por cima (filetes, bolinhas, realce de KPI).
 #:
+#: A mesma separação de PAPEL explica a `marca_solida`, e ela veio depois. A
+#: `marca` do escuro (#6F9BFF) foi medida como TEXTO — 6,3:1 sobre o cartão —
+#: e nesse papel continua ótima (KPIMarca.TLabel, item aberto do menu, linha
+#: selecionada da tabela). Só que a mesma cor era usada como FUNDO SÓLIDO com
+#: branco por cima, no botão de passo e no círculo numerado do cartão: ali ela
+#: dava 2,69:1, abaixo até do piso de 3:1 de componente. Uma cor não é boa ou
+#: ruim sozinha — é boa ou ruim CONTRA alguma coisa —, e quando os dois usos
+#: pedem números opostos a saída é o papel novo, não escurecer a cor de texto.
+#:
 #: O tema escuro deriva pelo mesmo método — cada valor foi medido contra o
 #: fundo do SEU tema, e nenhum entrou por parecer bonito ao lado do claro.
 PALETA = {
@@ -102,6 +111,11 @@ PALETA = {
         "tenue":       "#656E84",   #  5,1:1            ·  4,5:1
         # ---- marca
         "marca":       "#1746C7",   #  7,7:1 no cartão · branco por cima 7,7:1
+        # O azul que é FUNDO com branco por cima (botão de passo, círculo
+        # numerado, dia escolhido). No claro é a MESMA cor da `marca` — aqui
+        # ela já servia nos dois papéis, e mudá-la mexeria na tela de quem não
+        # tem problema nenhum.
+        "marca_solida": "#1746C7",  # branco por cima 7,7:1 · 7,7:1 no cartão
         "marca_barra": "#1746C7",   # a barra superior
         "marca_fundo": "#E8EEFC",   # item ativo do menu, pílula de informação
         "marca_sub":   "#C6D4F5",   # texto secundário DENTRO da barra  5,2:1
@@ -129,7 +143,12 @@ PALETA = {
         "texto":       "#E8ECF4",   # 14,3:1 no cartão · 15,7:1 no fundo
         "apoio":       "#A6B2C6",   #  7,9:1            ·  8,7:1
         "tenue":       "#8792A8",   #  5,4:1            ·  5,9:1
-        "marca":       "#6F9BFF",   #  6,3:1 no cartão
+        "marca":       "#6F9BFF",   #  6,3:1 no cartão — só como TEXTO
+        # Aqui os dois papéis se separam: como fundo sólido, a `marca` deixa o
+        # branco em 2,69:1. Este tom é o ponto em que as duas medidas passam
+        # ao mesmo tempo — clarear mais afunda o branco, escurecer mais some a
+        # forma do botão dentro do cartão.
+        "marca_solida": "#3B6FE0",  # branco por cima 4,63:1 · 3,65:1 no cartão
         "marca_barra": "#12379C",   # a barra continua azul, um tom mais fundo
         "marca_fundo": "#1B2A50",
         "marca_sub":   "#BFD0F5",
@@ -551,7 +570,9 @@ class Botao(tk.Button):
             return
         frente, tras, aceso = {
             "acao":   ("#FFFFFF", c["acao"], c["acao_ativo"]),
-            "passo":  ("#FFFFFF", c["marca"], c["marca_barra"]),
+            # `marca_solida` e não `marca`: aqui o azul é FUNDO e o branco é a
+            # letra. No escuro a `marca` deixava o rótulo em 2,69:1.
+            "passo":  ("#FFFFFF", c["marca_solida"], c["marca_barra"]),
             # O neutro é CINZA e não branco: no cartão branco, um botão
             # branco com borda de 1 px não se lia como botão — o "Hoje" ao
             # lado do campo de data passava por rótulo.
@@ -1020,8 +1041,9 @@ class Cartao(tk.Frame):
             bolha = tk.Canvas(linha, width=lado, height=lado,
                               highlightthickness=0, borderwidth=0,
                               background=c["cartao"])
-            bolha.create_oval(0, 0, lado - 1, lado - 1, fill=c["marca"],
-                              outline="", tags="bolha")
+            bolha.create_oval(0, 0, lado - 1, lado - 1,
+                              fill=c["marca_solida"], outline="",
+                              tags="bolha")
             bolha.create_text(lado / 2, lado / 2 + 1, text=str(numero),
                               fill="#FFFFFF", font=FONTE_MINI_FORTE,
                               tags="numero")
@@ -1055,7 +1077,8 @@ class Cartao(tk.Frame):
                 self.filete.configure(background=c["borda"])
                 if self._bolha is not None:
                     self._bolha.configure(background=c["cartao"])
-                    self._bolha.itemconfigure("bolha", fill=c["marca"])
+                    self._bolha.itemconfigure("bolha",
+                                              fill=c["marca_solida"])
         except tk.TclError:
             pass
 
@@ -2334,12 +2357,19 @@ class CampoData(ttk.Frame):
                     cel = tk.Label(
                         grade, text=str(dia), width=3, anchor="center",
                         padx=2, pady=3, cursor="hand2",
-                        background=c["marca"] if marcado else c["cartao"],
+                        background=c["marca_solida"] if marcado
+                        else c["cartao"],
                         foreground="#FFFFFF" if marcado else c["texto"],
                         # O dia de HOJE é contorno, e o ESCOLHIDO é
                         # preenchimento: são duas informações diferentes, e o
                         # dia que é os dois ao mesmo tempo tem de mostrar as
                         # duas — com uma cor só, uma delas sumiria.
+                        #
+                        # São dois azuis, e de propósito: o preenchimento leva
+                        # branco por cima e precisa da `marca_solida`; o
+                        # contorno é um filete de 1 px, não tem texto nenhum e
+                        # some se escurecer — ali a `marca` entrega 6,3:1
+                        # contra o cartão, contra os 3,65:1 da outra.
                         highlightthickness=1 if este == hoje else 0,
                         highlightbackground=c["marca"],
                         highlightcolor=c["marca"])
