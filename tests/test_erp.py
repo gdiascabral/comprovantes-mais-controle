@@ -191,6 +191,156 @@ def test_o_403_aponta_para_o_user_agent(sessao_logada):
         sessao_logada.pedir(f"{hosts.ERP_API}/bank-integration/bank-accounts")
 
 
+# ------------------------------------------- o 401 do legado, que é rotina
+#: O segundo login devolve tokens DIFERENTES do primeiro: é o que permite ao
+#: teste provar que a chamada repetida saiu com o token novo, e não com o que
+#: acabara de ser recusado.
+CORPO_DO_RELOGIN = dict(CORPO_DO_LOGIN, jwtToken="J" * 348, accessToken="A" * 27)
+
+
+class _TransporteEmSequencia:
+    """Um `requests.Session` de mentira que responde uma coisa por chamada.
+
+    O `_TransporteFalso` responde sempre o mesmo, e aqui o que importa é
+    justamente a MUDANÇA entre uma chamada e a seguinte: 401, login, 200.
+    """
+
+    def __init__(self, *respostas):
+        self.respostas = list(respostas)          # [(status, corpo), …]
+        self.chamadas = []
+
+    def request(self, metodo, url, headers=None, json=None, timeout=None):
+        self.chamadas.append({"metodo": metodo, "url": url,
+                              "headers": headers, "json": json})
+        status, corpo = self.respostas[len(self.chamadas) - 1]
+        return _Resposta(status, corpo)
+
+
+class _Resposta:
+    text = ""
+
+    def __init__(self, status_code, corpo):
+        self.status_code = status_code
+        self._corpo = corpo
+
+    def json(self):
+        return self._corpo
+
+
+def _com_credencial(transporte):
+    """Uma sessão que ENTROU — só quem entregou a senha pode relogar."""
+    falso = _TransporteFalso(corpo=CORPO_DO_LOGIN)
+    logada = sessao.Sessao.logar("fulano@exemplo.test", "senha", transporte=falso)
+    logada.transporte = transporte
+    return logada
+
+
+def test_o_401_do_legado_relogia_uma_vez_e_repete_o_get():
+    """O `accessToken` vive SEGUNDOS: vencer no meio do trabalho é rotina.
+
+    Sem isto, qualquer rotina que demore entre duas chamadas ao legado quebra
+    no meio — e o desfecho não é um erro claro, é meia coleta
+    (`docs/ERP-CLIENTES.md`, seção 1, consequência 2).
+    """
+    logada = _com_credencial(_TransporteEmSequencia(
+        (401, {}),                      # o token venceu entre uma e outra
+        (200, CORPO_DO_RELOGIN),        # o relogin
+        (200, {"items": [{"id": "x"}]}),  # a mesma chamada, de novo
+    ))
+    alvo = f"{hosts.LEGACY}/payable-installments/paginated-result?page=0"
+
+    assert logada.pedir(alvo) == {"items": [{"id": "x"}]}
+
+    chamadas = logada.transporte.chamadas
+    assert [c["metodo"] for c in chamadas] == ["GET", "POST", "GET"]
+    assert chamadas[1]["url"] == hosts.URL_LOGIN
+    # A repetição sai com o token NOVO. Repetir com o que acabou de ser
+    # recusado seria pagar duas chamadas para levar o mesmo 401.
+    assert chamadas[2]["headers"]["authorization"] == (
+        f"Bearer {CORPO_DO_RELOGIN['accessToken']}")
+    # E o jwt do outro host veio junto: metade do login guardada deixaria duas
+    # idades na mesma sessão.
+    assert logada.jwt_token == CORPO_DO_RELOGIN["jwtToken"]
+
+
+def test_o_401_que_insiste_vira_excecao_e_nao_laco():
+    """Duas voltas e para. Um ERP que responde 401 a tudo — conta bloqueada,
+    sessão tomada por outro login — não pode virar login em loop contra o WAF,
+    que penaliza justamente tentativa repetida."""
+    logada = _com_credencial(_TransporteEmSequencia(
+        (401, {}), (200, CORPO_DO_RELOGIN), (401, {}),
+    ))
+    with pytest.raises(sessao.SessaoRecusada):
+        logada.pedir(f"{hosts.LEGACY}/categories/all")
+    assert len(logada.transporte.chamadas) == 3
+
+
+def test_o_401_do_prod_erp_api_nao_relogia():
+    """Lá o token vale 24 h: 401 é sessão recusada de verdade.
+
+    O ERP aceita UMA sessão por usuário, e relogar aqui tomaria de volta, em
+    silêncio, a sessão que outro login pegou
+    (`conciliacao/erp/collect.py:98-108`)."""
+    logada = _com_credencial(_TransporteEmSequencia((401, {})))
+    with pytest.raises(sessao.SessaoRecusada):
+        logada.pedir(f"{hosts.ERP_API}/financial/bank-accounts/balances")
+    assert len(logada.transporte.chamadas) == 1
+
+
+def test_o_post_no_legado_nao_relogia_sem_a_marca():
+    """Um POST que criou lançamento e perdeu a resposta duplica o que criou.
+
+    O padrão é não repetir, e o padrão é o seguro: esquecer a marca custa uma
+    exceção; pôr a marca onde não cabe custa uma segunda baixa."""
+    logada = _com_credencial(_TransporteEmSequencia((401, {})))
+    with pytest.raises(sessao.SessaoRecusada):
+        logada.pedir(f"{hosts.LEGACY}/payable-installments/p1/paids",
+                     metodo="POST", corpo={"value": 1})
+    assert len(logada.transporte.chamadas) == 1
+
+
+def test_o_post_marcado_como_idempotente_relogia():
+    """Quem conhece a rota é o chamador, e é ele que assume a marca."""
+    logada = _com_credencial(_TransporteEmSequencia(
+        (401, {}), (200, CORPO_DO_RELOGIN), (200, {"ok": True}),
+    ))
+    resposta = logada.pedir(f"{hosts.LEGACY}/payable-installments/p1",
+                            metodo="PUT", corpo={"value": 1}, idempotente=True)
+    assert resposta == {"ok": True}
+    assert [c["metodo"] for c in logada.transporte.chamadas] == [
+        "PUT", "POST", "PUT"]
+
+
+def test_sem_credencial_guardada_nao_ha_relogin(sessao_logada):
+    """`de_login` recebe o corpo pronto e não vê senha nenhuma.
+
+    Relogar ali seria relogar em nome de quem não entregou a credencial — e
+    não há credencial para entregar."""
+    sessao_logada.transporte = _TransporteEmSequencia((401, {}))
+    with pytest.raises(sessao.SessaoRecusada):
+        sessao_logada.pedir(f"{hosts.LEGACY}/categories/all")
+    assert len(sessao_logada.transporte.chamadas) == 1
+
+
+def test_a_senha_recusada_no_login_nao_vira_relogin():
+    """401 no PRÓPRIO login é senha errada: repetir leva a mesma senha."""
+    falso = _TransporteEmSequencia((401, {}))
+    with pytest.raises(sessao.SessaoRecusada, match="recusou a senha"):
+        sessao.Sessao.logar("fulano@exemplo.test", "errada", transporte=falso)
+    assert len(falso.chamadas) == 1
+
+
+def test_a_senha_nao_aparece_no_repr_da_sessao():
+    """Objeto de sessão vai parar em log e em traceback; senha, não.
+
+    O `usuario` continua aparecendo, e é de propósito: é ele que responde
+    "conectado como quem?" no log da coleta."""
+    falso = _TransporteFalso(corpo=CORPO_DO_LOGIN)
+    logada = sessao.Sessao.logar("fulano@exemplo.test", "senha-secreta",
+                                 transporte=falso)
+    assert "senha-secreta" not in repr(logada)
+
+
 # ------------------------------------------------------- transporte de página
 def _js_do_arquivo(caminho, nome):
     """O bloco JS atribuído a `nome` no arquivo, ou None se não existir mais."""
