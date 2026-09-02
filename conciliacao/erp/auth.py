@@ -163,8 +163,9 @@ def na_tela_de_login(pagina: Page) -> bool:
     try:
         return pagina.locator(_SEL_SENHA).first.is_visible(timeout=1500)
     except Exception:
-        log.warning("olhando se a tela de login do ERP esta na frente",
-                    exc_info=True)
+        # Este e o OLHO das esperas (`_saiu_do_login` chama de meio em meio
+        # segundo): aqui a excecao e "ainda nao", e a falha de verdade e o
+        # prazo estourar — quem acusa isso e `entrar()`, com SessaoExpirada.
         return False
 
 
@@ -308,9 +309,14 @@ def garantir_login(
             if pagina.locator(seletor_sucesso).first.is_visible(timeout=500):
                 return
         except Exception:
-            _diag.warning("procurando %s para saber se a sessao do ERP "
-                          "continua de pe", seletor_sucesso, exc_info=True)
+            pass                         # dentro da espera isto e "ainda nao"
         if na_tela_de_login(pagina):
             entrar(pagina, config, visivel=visivel, log=log)
             return
         pagina.wait_for_timeout(500)
+
+    # Estourou o prazo sem ver nem a tela pedida nem a de login. A salvaguarda
+    # desiste sem refazer nada e sem levantar — quem vem depois topa com uma
+    # tela que ninguem confirmou, e este e o unico lugar que sabe disso.
+    _diag.warning("passaram 12 s sem %s e sem a tela de login; sigo sem "
+                  "refazer o login", seletor_sucesso)

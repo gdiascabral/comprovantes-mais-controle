@@ -314,9 +314,9 @@ def _preencher_data(pagina: Page, rotulos: tuple[str, ...], valor) -> bool:
                 pagina.wait_for_timeout(400)
                 return True
         except Exception:
-            log.warning("preenchendo o campo de data pelo rotulo %r; vou "
-                        "tentar o proximo rotulo e depois a posicao", rotulo,
-                        exc_info=True)
+            # Os rotulos sao variantes do MESMO campo ("Data de inicio" com e
+            # sem acento): o que nao existe e "ainda nao", nao falha. Quem
+            # avisa e a reserva por posicao, logo abaixo, se ela tambem cair.
             continue
 
     # Reserva: os inputs de data visiveis dentro do popover, na ordem.
@@ -577,13 +577,19 @@ def _aumentar_linhas_por_pagina(pagina: Page) -> int:
             if depois > antes:
                 return depois
         except Exception:
-            log.warning("pondo %s linhas por pagina na grade; vou tentar o "
-                        "proximo tamanho", quantidade, exc_info=True)
+            # Tamanho que a grade nao aceita e "o proximo", nao falha: o laco
+            # tenta 100, 50 e 25, e so ter esgotado os tres e que importa.
             try:
                 pagina.keyboard.press("Escape")
             except Exception:
-                log.warning("apertando Esc para fechar o seletor de linhas por "
-                            "pagina", exc_info=True)
+                pass                     # idem: a proxima volta reabre o menu
+
+    # Esgotados os tamanhos. O retorno 0 nao e olhado por ninguem, e a coleta
+    # segue com 10 por pagina — mais paginas para varrer, e o `_MAX_PAGINAS`
+    # mais perto. Sem `exc_info`: aqui nao ha excecao viva, so o desfecho.
+    log.warning("nao consegui aumentar as linhas por pagina (tentei %s); a "
+                "grade segue com o tamanho padrao",
+                ", ".join(str(q) for q in _TAMANHOS_DESEJADOS))
     return 0
 
 

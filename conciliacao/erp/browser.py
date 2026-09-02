@@ -119,8 +119,9 @@ def esta_logado(pagina: Page) -> bool:
             if pagina.locator(seletor).first.is_visible(timeout=1200):
                 return False
         except Exception:
-            log.warning("procurando o sinal de tela de login %s; sem ele esta "
-                        "sessao passa por valida", seletor, exc_info=True)
+            # Sinal que nao da para olhar e "ainda nao", e nao falha: quem
+            # responde de verdade e o `aguardar_sistema`, que espera o prazo
+            # inteiro antes de acusar sessao expirada ou tela que nao montou.
             continue
     return True
 
@@ -155,8 +156,7 @@ def aguardar_sistema(pagina: Page, seletor_sucesso: str, *, timeout_s: float = 4
             if pagina.locator(seletor_sucesso).count() > 0:
                 return
         except Exception:
-            log.warning("contando %s enquanto espero o ERP montar a tela",
-                        seletor_sucesso, exc_info=True)
+            pass                         # dentro da espera isto e "ainda nao"
         pagina.wait_for_timeout(500)
 
     if not esta_logado(pagina):
