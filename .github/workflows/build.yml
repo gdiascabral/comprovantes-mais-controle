@@ -495,12 +495,32 @@ jobs:
             exit 1
           }
 
-      - name: Publicar Release com o executável
+      # `prerelease: true` não é detalhe de apresentação: é o PORTÃO.
+      # Até aqui, push na main virava release em 4–9 minutos e o
+      # `atualizador.py` a instalava sozinho na abertura seguinte — um app que
+      # movimenta dinheiro chegava à máquina de quem usa sem ato humano nenhum.
+      # A build continua saindo a cada push (GERAR), mas nasce PRÉVIA; quem a
+      # torna visível é `.github/workflows/liberar.yml`, à mão, na aba Actions
+      # (LIBERAR).
+      #
+      # Quem faz o filtro do lado do app é a PRÓPRIA API do GitHub: o
+      # `/releases/latest`, único endereço por onde o `atualizador.py` escolhe
+      # uma release, ignora prerelease e draft por definição. Por isso o
+      # atualizador não precisou de uma linha — e é `tests/test_atualizador.py`
+      # que prende essa dependência, para ninguém trocar o endpoint por
+      # `/releases` (a LISTA, que traz prévia junto) sem perceber que está
+      # abrindo o portão.
+      - name: Publicar Release com o executável (como prévia)
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           tag_name: v2.0.${{ github.run_number }}
           name: Executável v2.0.${{ github.run_number }}
+          prerelease: true
           body: |
+            **Prévia** — gerada pelo push, ainda NÃO liberada. Nenhum app baixa
+            uma prévia: só depois de rodar o workflow "Liberar uma versão para
+            os usuários" (aba Actions) com esta tag ela passa a ser a `latest`.
+
             Executável para Windows — não precisa de Python instalado.
             Requisito: Google Chrome instalado (usado pela aba Anexar Comprovantes).
 
@@ -508,9 +528,10 @@ jobs:
               (Separar e Renomear, Anexar Comprovantes e Conferência)
             - codigo.zip — pacote de atualização leve (o app baixa sozinho, ignore)
 
-            O app se atualiza sozinho ao abrir: baixa só o código novo
-            (segundos). Dica: coloque o .exe numa pasta própria; o perfil do
-            Chrome (login salvo) e os logs são criados ao lado do executável.
+            Depois de liberada, o app se atualiza sozinho ao abrir: baixa só o
+            código novo (segundos). Dica: coloque o .exe numa pasta própria; o
+            perfil do Chrome (login salvo) e os logs são criados ao lado do
+            executável.
           files: |
             dist/Comprovantes Mais Controle.exe
             codigo.zip
@@ -531,23 +552,35 @@ jobs:
       # foi exatamente esse pulo silencioso que deixou os apps órfãos por três
       # dias em agosto/2026. Quem garante o token agora é o job `motor`, que
       # falha em segundos quando ele falta — aqui, se der errado, tem de doer.
-      - name: Publicar a mesma Release no repositório de artefatos
+      - name: Publicar a mesma Release no repositório de artefatos (como prévia)
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           repository: gdiascabral/comprovantes-releases
           token: ${{ secrets.TOKEN_ARTEFATOS }}
           tag_name: v2.0.${{ github.run_number }}
           name: Executável v2.0.${{ github.run_number }}
+          # Prévia AQUI TAMBÉM, e este é o que importa: é neste repositório que
+          # o app procura (a constante `REPO` do atualizador.py). Fechar o
+          # portão só no repositório de código deixaria a release entrando
+          # sozinha justamente onde os usuários olham — e o `liberar.yml`, por
+          # isso mesmo, libera os DOIS.
+          prerelease: true
           body: |
+            **Prévia** — ainda NÃO liberada. Nenhum app baixa uma prévia:
+            só depois do workflow "Liberar uma versão para os usuários"
+            (aba Actions do repositório de código) ela vira a `latest`.
+
             Executável para Windows — não precisa de Python instalado.
             Requisito: Google Chrome instalado (usado pela aba Anexar Comprovantes).
 
-            O app se atualiza sozinho ao abrir: baixa só o `codigo.zip`
-            (segundos). O executável completo só é oferecido quando entra
-            biblioteca nova.
+            Depois de liberada, o app se atualiza sozinho ao abrir: baixa só o
+            `codigo.zip` (segundos). O executável completo só é oferecido
+            quando entra biblioteca nova.
 
-            Para voltar uma versão: crie `travar_versao.txt` ao lado do
-            executável com a tag desejada dentro (ex.: `v2.0.110`).
+            Para testar esta prévia numa máquina só, ANTES de liberar: crie
+            `travar_versao.txt` ao lado do executável com esta tag dentro. A
+            trava busca a release pela TAG (`/releases/tags/…`), então enxerga
+            prévia; é também assim que se volta de uma release ruim.
           files: |
             dist/Comprovantes Mais Controle.exe
             codigo.zip
