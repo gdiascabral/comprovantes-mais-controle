@@ -44,7 +44,13 @@ ARQUIVO_DIAG = util.pasta_base() / "diagnostico.log"
 
 # Login salvo (e-mail + senha) cifrado com a DPAPI do Windows, para o login
 # automático. Fica atrelado ao usuário do Windows; nunca em texto puro.
-ARQUIVO_LOGIN = _AQUI / "login.dat"
+# Sai de `util.pasta_base()`, e não de `_AQUI` — o último que faltava depois
+# do `pasta_do_perfil` e do `ARQUIVO_DIAG`: rodando como SCRIPT, `_AQUI` é a
+# pasta deste módulo, e o login.dat nascia em `anexar/` enquanto a sonda e
+# quem roda da raiz o procuravam na raiz. Congelado nada muda (os dois já
+# eram a pasta do exe). Quem roda do repositório e tinha `anexar/login.dat`
+# entra de novo uma vez, ou move o arquivo para a raiz.
+ARQUIVO_LOGIN = util.pasta_base() / "login.dat"
 
 
 def diag(msg: str):
