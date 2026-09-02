@@ -697,13 +697,21 @@ def main():
     #
     # Em thread, e engolindo tudo: conferencia opcional nao pode atrasar nem
     # impedir a abertura. E a mesma regra que protege o `sincronizar`.
-    def _anotar(msg):
-        try:
-            with open(_pasta_dados() / "diagnostico.log", "a",
-                      encoding="utf-8") as arq:
-                arq.write(f"{msg}\n")
-        except Exception:
-            pass
+    # O diagnostico desta conferencia. Era um `open(..., "a")` deste bloco so,
+    # escrevendo a mensagem crua no MESMO `diagnostico.log` que todo o resto ja
+    # usa - sem data, sem hora e sem dizer de onde a linha vinha, no meio de um
+    # arquivo em que as demais nascem com prefixo. `util.log()` pendura a linha
+    # no `RotatingFileHandler` de sempre, com o formato de sempre, e o texto das
+    # mensagens nao muda; o arquivo e o mesmo (`util.pasta_base()` e a pasta do
+    # exe congelado e a raiz rodando como script, igual ao `_pasta_dados()`).
+    #
+    # "contas_novas" e nao `__name__`: aqui `__name__` e "comprovantes_app"
+    # (ou "__main__", rodando como script), e quem le o log depois quer saber
+    # que a linha e da conferencia de contas, e nao da moldura da janela.
+    #
+    # `.info` e nao o logger inteiro porque `_anotar` continua sendo CHAMAVEL:
+    # ele e passado adiante como `log=` para `contas_novas.novidades`.
+    _anotar = util.log("contas_novas").info
 
     def _perguntar_contas(novas, empresas, token):
         from nuvem import contas_novas, contas_novas_dialogo
