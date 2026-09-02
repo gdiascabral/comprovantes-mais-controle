@@ -112,40 +112,182 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   fixtures dos testes pulam quando faltam, então o CI passa sem os dados reais
   e a máquina de quem usa valida de verdade. Saída em
   `C:/Arquivos Morais/CONCILIACAO DIARIA/<ANO>/<MÊS>/`.
-- `comprovantes_app.py` — janela única: barra lateral com quatro itens soltos
-  (Separar e Renomear / Anexar Comprovantes / Conferência / Aportes) e dois
-  grupos que abrem e fecham — DIÁRIO (Pagamentos do Dia, Conciliação Diária) e
-  MENSAL (Relatório Mensal, Extratos Sicoob, Contratos, Acessórias). O pulso da
-  barra pergunta a TRÊS navegadores, não a um: o do ERP (via
-  `aba_anx.dona_ocupada()`) e os de `extratos_sicoob/` e `acessorias/`, que são
-  processo e login à parte. O estado de cada grupo fica em
+- `comprovantes_app.py` — janela única, em TRÊS faixas desde o redesenho de
+  agosto/2026, e cada faixa responde a uma pergunta diferente: a barra azul do
+  topo (`widgets.BarraTopo`) diz onde estou, o que procuro e se o app está
+  livre; o menu branco de 232 px à esquerda (`widgets.painel_menu`, que devolve
+  um `widgets.PainelMenu`) diz para onde vou; e o painel cinza no meio
+  (`style="Fundo.TFrame"`) é o que estou fazendo agora. Antes eram duas faixas,
+  e a coluna da esquerda acumulava navegação, tema, versão, usuário e estado do
+  navegador. **O estado do navegador era o pior deles**: é a informação que se
+  procura ANTES de clicar noutra aba, e ficava no ponto mais baixo da tela,
+  longe dos itens do menu.
+  As doze telas em quatro seções: VISÃO GERAL (Início), COMPROVANTES (Baixar
+  Comprovantes, Separar e Renomear, Anexar, Conferência, Aportes) e os dois
+  grupos que abrem e fecham — DIÁRIO (Remessa/Retorno, Saldo de pagamentos) e
+  MENSAL (Relatório Mensal, Extratos Sicoob, Contratos, Acessorias). "Baixar"
+  vem antes de "Separar" e "Anexar" porque é a ordem do dia. Os rótulos
+  encurtaram junto com a coluna ("Anexar Comprovantes" dentro de um menu
+  chamado COMPROVANTES repetia a palavra em duas alturas) e dizem o que a aba
+  FAZ hoje, não o que ela fazia quando nasceu. No rodapé do menu, fora da lista
+  de rotinas: Usuários (só admin), o TEMA, a `Pilula` de cadastro
+  sincronizado/offline e a versão — administrar quem entra não é rotina do dia.
+  Quem decide o que aparece é `usuarios.abas_do_papel`, mas as abas são TODAS
+  construídas: metade delas divide o navegador e a thread do Anexar, e deixar
+  de criar umas e não outras mexeria nessa fiação por um motivo que é só de
+  menu. Esconder também não é o que protege — quem nega o dado é a RLS.
+  **O item ativo do menu não é `Accent.TButton`.** É `widgets.ItemMenu`: fundo
+  azul-claro (`marca_fundo`), texto azul (`marca`) e um filete de 3 px na borda
+  esquerda. O botão de destaque do sv-ttk é azul CHEIO, e com doze itens numa
+  coluna o aberto virava o objeto mais pesado da janela inteira — mais forte
+  que o botão verde de executar da tela que ele acabara de abrir. Os três
+  sinais juntos porque o filete sozinho some em tela pequena e o fundo sozinho
+  não distingue "aberto" de "o cursor está em cima".
+  DIÁRIO e MENSAL continuam `Grupo.Toolbutton` (chapado e miúdo, para
+  parecerem os rótulos de seção que estão logo acima deles, e não itens
+  clicáveis do mesmo nível das abas que agrupam), e os itens do grupo entram
+  com recuo — sem ele, fechar o grupo era a única pista de que existia um
+  grupo. O cabeçalho continua sendo `ttk.Button`, e não Label com bind de
+  clique, para não sair do Tab e do Espaço. O estado de cada grupo fica em
   `preferencias.json`, e selecionar uma aba de grupo fechado o abre — senão a
-  aba ficaria destacada e invisível. DIÁRIO e MENSAL são `Grupo.Toolbutton`
-  (chapado e miúdo) e os itens do grupo entram com recuo: como botões do mesmo
-  tamanho dos itens, eles pareciam irmãos do que agrupavam, e fechar o grupo
-  era a única pista de que existia um grupo. Continuam sendo Button, e não
-  Label com bind de clique, para não sair do Tab e do Espaço. Tema
-  Automático (lê o registro do
-  Windows)/Claro/Escuro salvo em `preferencias.json`, versão no título e
-  no rodapé da barra. Tema sv-ttk; frames expõem `aplicar_cores(escuro)`, que
-  hoje só trata `tk.Text` e `tk.Canvas` — o resto segue os estilos nomeados de
-  `widgets.py`. Três coisas que a barra faz e não são óbvias no código:
-  (1) **ela diz onde o trabalho está**. Um pulso de 600 ms pergunta
-  `anx.dona_ocupada()` e `ext.ocupado()`; a aba que está com um navegador troca
-  o ícone por ● e o rodapé escreve a tarefa. Antes disso, nove abas dividindo
-  um navegador só se manifestavam DEPOIS do clique, no aviso "Navegador
-  ocupado"; (2) trocar de aba põe o foco no primeiro `Entry` — Combobox
-  `readonly` é pulada de propósito, porque aceita foco sem aceitar digitação;
-  (3) Enter num campo de texto aciona o passo principal da aba, procurado em
-  `acao_enter`, `b1`, `btn` (nessa ordem). O bind é global, então o handler
-  confere pelo caminho do widget se o foco está DENTRO da aba — senão o Enter
-  de um diálogo dispararia a aba atrás dele. Nunca a partir de um `Text`: ali
-  Enter é quebra de linha, não ordem para começar meia hora de ERP.
+  aba ficaria destacada e invisível.
+  **O pulso de 600 ms (`_pulso`) pergunta a TRÊS navegadores, não a um**: o do
+  ERP (via `aba_anx.dona_ocupada()` e `aba_anx.ocupado()`) e os de
+  `extratos_sicoob/` e `acessorias/`, que são processo e login à parte. A
+  Separar entra na mesma varredura sem ter navegador nenhum — o trabalho dela é
+  OCR e disco, mas um PDF de 107 páginas leva minutos e a aba que não responde
+  parece parada; vem por último para nunca disputar o sinal com quem está com
+  um Chrome na mão, que é a informação mais cara. A aba que trabalha troca o
+  ícone por ● (`ItemMenu.trabalhando`) e a frase sobe para o chip da barra
+  (`widgets.ChipStatus.definir`), com bolinha verde parada quando está livre e
+  âmbar quando está ocupado, mais as reticências que andam. Antes disso, as
+  abas que dividem um navegador só se manifestavam DEPOIS do clique, no aviso
+  "Navegador ocupado".
+  Mais duas coisas que a moldura faz e não são óbvias no código: (1) trocar de
+  aba põe o foco no primeiro `Entry` (`widgets.focar_primeiro_campo`, num
+  `after_idle` porque a aba recém-empacotada ainda não tem geometria, e é a
+  geometria que decide qual campo é o de cima — Combobox `readonly` é pulada de
+  propósito, porque aceita foco sem aceitar digitação); (2) trocar de aba chama
+  o `ao_abrir()` dela, quando existe. É assim que o Início relê o
+  `atividade.jsonl` em vez de mostrar o número de quando o app abriu — recontar
+  é barato porque é arquivo local, e número velho na primeira tela é justamente
+  onde ele mais parece verdade.
+  **Enter num campo de texto aciona o passo principal da aba**, procurado em
+  `acao_enter`, `b1`, `btn` (nessa ordem). O bind é global (`bind_all`), então
+  o handler confere pelo caminho do widget se o foco está DENTRO da aba — senão
+  o Enter de um diálogo dispararia a aba atrás dele. Nunca a partir de um
+  `Text`: ali Enter é quebra de linha, não ordem para começar meia hora de ERP.
+  Tema Automático (lê o registro do Windows)/Claro/Escuro salvo em
+  `preferencias.json`. `aplicar_tema` chama, nesta ordem, `sv_ttk.set_theme`,
+  `widgets.aplicar_estilos`, `widgets.barra_de_titulo` e o
+  `aplicar_cores(escuro)` de cada aba — que hoje só trata `tk.Text` e
+  `tk.Canvas`, porque o resto segue os estilos nomeados de `widgets.py`. A
+  versão aparece CURTA ("v2.0", o que se fala em voz alta) em três lugares —
+  título da janela, canto direito da barra e rodapé do menu —, e o número de
+  build inteiro fica na `widgets.Dica` dos dois rótulos: ele muda a cada push e
+  entre a v2.0.108 e a v2.0.109 pode não haver diferença nenhuma na tela.
+  Fechar a janela (`_sair`) percorre TODAS as abas atrás de um `fechar()`, e
+  não uma tupla escrita à mão: a lista fixa citava dois navegadores e o Chrome
+  da Acessórias sobrevivia ao fechar do app, esperando o Gerenciador de
+  Tarefas — que é justamente o que deixa Chrome órfão.
+  **Estado em 02/09/2026.** O que está assim hoje, e não o que se decidiu que
+  fosse; quem consertar faz em PR próprio. A busca da barra NÃO busca:
+  `Ctrl+K` (`bind_all` → `barra.focar_busca`) leva o foco ao campo, e
+  `barra.ao_buscar` está ligado ao `_focar_primeiro`, então o Enter ali só
+  devolve o cursor ao primeiro campo da aba aberta. Ela está na tela porque o
+  LUGAR dela é decisão de layout, e deixá-la para depois obrigaria a mexer de
+  novo em tudo o que fica à direita e à esquerda dela; o que ela vai procurar é
+  assunto de quem tiver um índice. O `ItemMenu` é `tk.Frame` e só escuta
+  `<Button-1>`, `<Enter>` e `<Leave>`: ele não entra no Tab nem responde ao
+  Espaço, o contrário da regra escrita neste mesmo arquivo para os cabeçalhos
+  de grupo — quem só usa teclado alcança DIÁRIO e MENSAL e não alcança nenhuma
+  das doze telas. Sete dos doze ícones do menu estão fora do BMP (📎 💰 🗓 📊 🏦
+  📑 📤) e o Windows os desenha pela Segoe UI Emoji, colorida: o `foreground`
+  que o `_pintar` do `ItemMenu` passa não alcança glifo colorido, e esses sete
+  ficam idênticos nos dois temas. Os outros cinco (▦ ⬇ ✂ ✅ ⚖) são
+  monocromáticos e seguem a cor — é por isso que o ● do pulso (U+25CF)
+  consegue ser azul. E o `ComprovantesFrame` (Baixar Comprovantes) não expõe
+  `ocupado()`, então o trabalho dele não acende o ● nem o chip; `_quem_trabalha`
+  engole a falta do método de propósito ("aba sem o método: só não sinaliza"),
+  então isso não dá erro — só não aparece.
 - `widgets.py` — o par visual do `util.py` (mora na raiz e vai junto no
-  codigo.zip). Além do `CampoData`, é onde vivem a PALETA, as fontes e os
-  blocos que toda aba monta: `Cabecalho`, `Cartao`, `Passos`, `estilo_log`,
-  `estilo_canvas`, `registro_elastico`, `focar_primeiro_campo`,
-  `barra_de_titulo`.
+  codigo.zip, um a um). Depois do redesenho de agosto/2026 ele é a única forma
+  de o app ganhar uma cor: nenhuma aba escreve `#` seguido de seis dígitos. Ali
+  dentro moram a `PALETA` nos dois temas, as onze fontes nomeadas e os blocos
+  que toda tela monta — `Botao`, `Cartao`, `Cabecalho`, `Campo`, `Pilula`,
+  `BarraFina`, `BarraExecucao`, `RodapeTabela`, `Dica`, `ComboBusca`,
+  `CampoData` —, a moldura da janela (`BarraTopo`, `PainelMenu`/`painel_menu`,
+  `ItemMenu`, `ChipStatus`, `Avatar`), as tabelas (`estilo_tabela`,
+  `linha_zebrada`, `estado_de`, `ESTADOS`, `MARCAS_ESTADO`), o registro
+  (`estilo_log`, `registro_elastico`, `cartao_elastico`, `colorir_registro`,
+  `tem_conteudo_real`, `estilo_campo_texto`, `estilo_canvas`), o
+  `focar_primeiro_campo`, o `barra_de_titulo` e os helpers do
+  `atividade.jsonl` (`registrar_atividade`, `atividades`, `ultima_atividade`,
+  `quando_humano`).
+  **A cor é estilo nomeado e o tamanho sai do `TkDefaultFont`.** Existia o
+  oposto disso — 51 cores e 17 tuplas de fonte espalhadas por 12 arquivos —, e
+  as duas consequências eram visíveis: cor escrita na criação do widget não
+  segue o tema (`#6b6b6b` tem 3,2:1 no escuro, `#8a8a8a` tem 3,4:1 no claro:
+  cada cinza falhava em UM dos dois), e tamanho de fonte em número fixo ignora
+  a escala de exibição do Windows — quem usa 150% via os títulos miúdos, e é
+  justamente quem aumentou a escala que precisava deles maiores. Hoje a cor é
+  estilo nomeado (`Apoio.TLabel`) e as onze fontes (`FONTE_TITULO` a
+  `FONTE_MARCA`) são DERIVADAS do `TkDefaultFont` por um fator, em
+  `_garantir_fontes`: ele já vem na família e no tamanho que a pessoa escolheu
+  no Windows, então a escala é respeitada sem o app precisar consultá-la. A
+  mesma régua vale para o `rowheight` do Treeview, que sai da MÉTRICA da fonte
+  e não de um número fixo — a 150% uma linha de 26 px corta o texto pela
+  metade. Toda cor de TEXTO da paleta passa de 4,5:1 sobre o fundo em que
+  aparece, medida (não estimada) e anotada ao lado do valor; as quatro cores do
+  mockup que não passavam entraram um tom mais escuras, e as duas originais que
+  ainda serviam viraram `linha` e `acao_viva`, usadas só onde não há texto por
+  cima. O registro é escuro NOS DOIS TEMAS (`LOG_CORES`), de propósito: é um
+  terminal embutido, e um terminal claro no meio de um painel claro deixa de se
+  distinguir do formulário logo acima.
+  **`aplicar_estilos(escuro)` tem de ser chamado DEPOIS de `sv_ttk.set_theme`**:
+  o sv-ttk recria o tema do ttk e apaga todo estilo nomeado, e a ordem errada
+  não dá erro — as legendas só voltam à cor padrão. Duas armadilhas do Tk que
+  o `tests/test_visual.py` cobre: `tkinter.font.Font.__del__` executa
+  `font delete`, então a fonte precisa de referência viva (sem isso o Tk lê
+  "AppTitulo" como nome de FAMÍLIA e cai no padrão, em silêncio) — e é por isso
+  que `_garantir_fontes` fala com o Tcl direto (`font create`/`font configure`)
+  em vez de importar `tkinter.font`, que além do `__del__` não está no exe (ver
+  v1.0.71 na regra de ouro); e tamanho negativo é medida em pixels, então
+  `_escalar` tem de preservar o sinal.
+  **O botão e o cartão são widgets CLÁSSICOS do Tk, e isso não é regressão.**
+  O sv-ttk desenha botão e moldura a partir de IMAGENS, com a cor assada dentro
+  de cada canto arredondado: `style.configure(background=…)` não muda uma
+  imagem, e copiar o layout do `Accent.TButton` significaria gerar um jogo de
+  imagens novo por cor e por tema. O `Botao` é `tk.Button` e aceita a cor
+  direto (papéis: `acao` verde, `passo` azul, `neutro`, `link`, `perigo`); o que
+  ele não sabe é seguir o tema, e por isso todo widget clássico se inscreve na
+  `WeakSet` `_repintaveis`, que `aplicar_estilos` percorre. `WeakSet` e não
+  lista: aba fechada, diálogo destruído e calendário que sumiu não podem
+  continuar vivos só porque a paleta os conhece. Canto RETO e não arredondado
+  pelo mesmo motivo — o Tk não tem canto arredondado em widget de verdade, e
+  desenhar um num Canvas tiraria do `Cartao` a única coisa que as catorze
+  telas que o usam fazem com ele, que é empacotar `ttk.Label` e `ttk.Entry`
+  dentro.
+  **O `Cartao` tem DOIS frames**: `self` é o CONTEÚDO e `self.moldura` é a
+  borda com o título, e é a moldura que entra no `pack` do pai — todas as
+  chamadas de geometria são redirecionadas para ela, inclusive traduzindo
+  `after=outro_cartao` para a moldura dele. O motivo é uma regra do Tk, não
+  gosto: um mesmo pai não pode ter filhos no `pack` e filhos no `grid`. Com o
+  título empacotado dentro do próprio cartão, as quatro abas que montam
+  formulário em `grid` estouravam com "cannot use geometry manager grid inside
+  … which already has slaves managed by pack". O `destroy` tem uma trava contra
+  `RecursionError` pelo mesmo desenho: `moldura.destroy()` percorre os filhos
+  DELA, e um deles é o próprio cartão.
+  **Quem numera é o CARTÃO, e só ele.** Numerar os dois punha duas contagens na
+  mesma tela: em Remessa/Retorno "2. Contas" era um campo para preencher e
+  "2. Gerar a planilha" era uma ação, nenhuma das duas ia até o fim sozinha, e
+  as contagens nem batiam. Hoje o número é o círculo azul do
+  `Cartao(titulo, numero=…)` — desenhado num Canvas porque `Label` no Tk é
+  sempre retângulo — e os botões vão sem número. A `widgets.Passos`, a trilha
+  ①→✓ que numerava as AÇÕES no cabeçalho, foi REMOVIDA no redesenho junto com
+  os três testes que a cobriam: mantê-la seria exatamente a contagem em dobro
+  que o docstring dela existia para descrever. Ficou um comentário no lugar, em
+  `tests/test_visual.py`, para o próximo que procurar por ela.
   **A barra de título é do Windows, não do sv-ttk.** O tema pinta o conteúdo
   da janela; a moldura vem do DWM, com quem o Tk não fala — daí a faixa clara
   em cima do app escuro, bem onde o olho bate primeiro.
@@ -163,44 +305,57 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   fechava o programa — quem abrisse o calendário sem querer ficava preso.
   Escolher data é oferta, não pergunta. Sem grab (e sem fechar por
   `<FocusOut>`, que matava o popup ao abrir), sobra uma janela comum, com três
-  saídas: a data, `Esc` e o X. Como nada mais impede abrir dois, o módulo
-  guarda em `_calendario_aberto` qual campo está com o seu — abrir um fecha o
-  outro. Regra geral: modal é para o que EXIGE resposta (o login, o confirmar
-  dos sócios); o resto não prende ninguém.
-  **Quem numera é a AÇÃO, não o cartão.** Numerar os dois punha duas contagens
-  na mesma tela: em Pagamentos do Dia, "2. Contas" era um campo para preencher
-  e "2. Gerar a planilha" era uma ação, e nenhuma das duas ia até o fim
-  sozinha. Hoje os cartões são títulos sem número e o `Passos` desenha a
-  trilha no cabeçalho (①→✓), nas quatro abas de dois passos. O estado dela sai
-  do `state` dos próprios botões — a aba já libera o passo seguinte quando o
-  anterior termina, e guardar isso de novo criaria duas verdades sobre onde a
-  pessoa está. Enquanto o trabalho roda TODOS os botões ficam desabilitados,
-  e aí a trilha segura o último estado em vez de zerar. Aportes NÃO tem
-  trilha, de propósito: seus dois botões nascem os dois habilitados, então não
-  há progressão para mostrar.
+  saídas: a data, `Esc` e o clique fora. Como nada mais impede abrir dois, o
+  módulo guarda em `_calendario_aberto` qual campo está com o seu — abrir um
+  fecha o outro. Regra geral: modal é para o que EXIGE resposta (o login, o
+  confirmar dos sócios); o resto não prende ninguém.
+  **O clique SIMPLES abre o calendário, e esse contrato já inverteu uma vez.**
+  Em 11/08/2026 abrir no clique tornou o campo impossível de editar em todas as
+  abas de uma vez, porque o popup pegava o foco, e o conserto de então foi
+  exigir duplo clique. O redesenho pediu o clique simples de volta, e o
+  conserto agora é outro: o popup não pega foco NENHUM. Daí as duas regras que
+  não são estilo — os dias são `tk.Label` com bind de clique, e não botões
+  (botão aceita foco, e aceitar foco é o que tiraria o cursor do campo), e o
+  fechamento nunca é por `<FocusOut>` (o popup nasce sem foco por construção, e
+  o evento o matava antes de ele aparecer). Abrir sem deixar de ser digitável é
+  o contrato INTEIRO, e `tests/test_widgets.py` guarda as duas metades
+  (`test_clique_simples_abre_o_calendario` e
+  `test_com_o_calendario_aberto_o_campo_continua_editavel`): testar só a que
+  abre deixaria a regressão de 11/08 passar de novo.
   **O Registro cresce com o que tem dentro** (`registro_elastico`): parado ele
   era metade da janela em branco com uma frase cinza no meio, enquanto o
   formulário ficava espremido em cima. Quem dispara é o `<<Modified>>` do
-  próprio campo, e não a aba — as nove escrevem no registro de lugares
-  diferentes, e pedir que cada uma avisasse daria dezoito pontos de chamada
-  para esquecer um. A tela vazia não conta como trabalho porque entra toda com
-  a tag "ph". Duas armadilhas: `pack_configure` e nunca `pack` (reempacotar
-  joga o widget para o FIM da ordem, e em cinco abas o Registro nasceria
-  embaixo da barra de ação); e a altura do campo vazio é MEDIDA a cada
-  mudança, porque `height` conta linhas enquanto `spacing1` cobra pixels — com
-  altura fixa o Anexar cortava ao meio justamente a frase que diz o que fazer. Existia o oposto disso — 51 cores e 17 tuplas de fonte
-  espalhadas por 12 arquivos —, e as duas consequências eram visíveis: cor
-  escrita na criação do widget não segue o tema (`#6b6b6b` tem 3,2:1 no escuro,
-  `#8a8a8a` tem 3,4:1 no claro: cada cinza falhava em UM dos dois), e tamanho
-  de fonte em número fixo ignora a escala de exibição do Windows. Hoje a cor é
-  estilo nomeado (`Apoio.TLabel`) e o tamanho sai do `TkDefaultFont`.
-  **`aplicar_estilos(escuro)` tem de ser chamado DEPOIS de `sv_ttk.set_theme`**:
-  o sv-ttk recria o tema do ttk e apaga todo estilo nomeado, e a ordem errada
-  não dá erro — as legendas só voltam à cor padrão. Duas armadilhas do Tk que
-  o `tests/test_visual.py` cobre: `tkinter.font.Font.__del__` executa
-  `font delete`, então a fonte precisa de referência viva (sem isso o Tk lê
-  "AppTitulo" como nome de FAMÍLIA e cai no padrão, em silêncio); e tamanho
-  negativo é medida em pixels, então escalar tem de preservar o sinal.
+  próprio campo, e não a aba — as onze telas que têm registro escrevem nele de
+  lugares diferentes (`_drain`, `_log`, placeholder), e pedir que cada uma
+  avisasse daria dezenas de pontos de chamada para esquecer um. É pelo mesmo
+  `<<Modified>>` que passa a pintura das linhas (`colorir_registro`, que guarda
+  até onde já passou porque repintar milhares de linhas a cada mensagem trava a
+  janela). A tela vazia não conta como
+  trabalho porque entra toda com a tag "ph". Duas armadilhas: `pack_configure`
+  e nunca `pack` (reempacotar joga o widget para o FIM da ordem, e em cinco
+  abas o Registro nasceria embaixo da barra de ação — vale igual para o
+  `cartao_elastico`); e a altura do campo vazio é MEDIDA a cada mudança, porque
+  `height` conta linhas enquanto `spacing1` cobra pixels — com altura fixa o
+  Anexar cortava ao meio justamente a frase que diz o que fazer.
+  **Nas tabelas, só `atencao` e `erro` se pintam.** A tag do Treeview pinta a
+  LINHA inteira (o Tk não tem cor por célula), e pintando os quatro estados uma
+  tabela de dez rotinas virava faixas verdes, azuis e vermelhas alternadas — e
+  aí nada se destaca, que é o oposto do que a cor está ali para fazer. Os
+  quatro continuam distinguíveis pelo SÍMBOLO que vai junto do texto
+  (`MARCAS_ESTADO`: ✓ ⚠ ✖ ·), porque cor sozinha não distingue nada para quem
+  não a vê. A ORDEM importa e não é a da leitura: no Treeview ganha a tag
+  configurada PRIMEIRO, não a última da lista do item, então os estados são
+  configurados antes da zebra — uma linha rejeitada não pode ficar cinza só por
+  ser par.
+  **O `atividade.jsonl` é o que permite ao Início não abrir o navegador.** Cada
+  rotina, ao terminar, chama `registrar_atividade` com os números que ACABOU de
+  apurar; o Início lê o arquivo e mostra. Arquivo e não banco: é histórico de
+  UMA máquina, tem de continuar legível com a nuvem fora, e ninguém decide
+  dinheiro por ele. JSONL porque escrever é sempre `append` — uma linha
+  corrompida custa uma linha, não o arquivo — e `MAX_ATIVIDADE` = 400 põe teto,
+  já que o Início o lê inteiro na abertura. `registrar_atividade` NUNCA levanta:
+  o pior caso é o Início mostrar um evento a menos, e isso não pode parar
+  trabalho nenhum.
 - `separar_renomear/separar_renomear.py` — separa páginas de PDF e renomeia.
   Dois parsers, escolhidos pelo **layout** (`campos()`), NUNCA pelo banco:
   `_campos_rotulado` quando o rótulo traz o valor na mesma linha
