@@ -28,6 +28,10 @@ for _p in (_RAIZ, _RAIZ / "separar_renomear"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+import util                              # noqa: E402  (depende do sys.path acima)
+
+log = util.log(__name__)
+
 
 def _renomeador():
     """O módulo do Renomear, importado na hora de usar.
@@ -59,6 +63,12 @@ def nomear(campos: dict) -> str:
     try:
         return _renomeador().nome_arquivo(campos)
     except Exception:                                        # noqa: BLE001
+        # Sem os campos na mensagem: eles carregam favorecido, pagador e
+        # valor, e o diagnostico.log é um arquivo comum na pasta do exe. O
+        # comprovante fica com o nome de origem, e é assim que a falha
+        # aparece na pasta — só que sem dizer por quê.
+        log.warning("montando o nome final de um comprovante pelo padrão do "
+                    "Separar e Renomear", exc_info=True)
         return ""
 
 

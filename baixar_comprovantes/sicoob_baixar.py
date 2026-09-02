@@ -36,9 +36,15 @@ from datetime import datetime
 from pathlib import Path
 
 try:                                     # utilitários compartilhados (raiz)
-    import util                          # noqa: F401
+    import util
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+#: O diagnóstico do módulo. As funções que baixam recebem um `log` PRÓPRIO —
+#: o recado que aparece no Registro da aba — e o parâmetro SOMBREIA este nome
+#: lá dentro; este aqui é para o que falha longe do Registro.
+log = util.log(__name__)
 
 try:
     from . import ja_baixados, nome_final
@@ -226,6 +232,11 @@ def conta_aberta(page) -> str:
     try:
         return page.evaluate(JS_CONTA_ABERTA) or ""
     except Exception:                                        # noqa: BLE001
+        # "" faz `mesma_conta` dizer não, e a troca de conta é recusada como
+        # se a tela mostrasse outra — quando o que houve foi não conseguir
+        # perguntar. Sem o número da conta na mensagem.
+        log.warning("perguntando à tela do Sicoob qual conta está aberta",
+                    exc_info=True)
         return ""
 
 

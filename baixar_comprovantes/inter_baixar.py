@@ -57,6 +57,14 @@ except ImportError:                      # rodando este módulo isoladamente
     import ja_baixados
     import nome_final
 
+#: O diagnóstico do módulo. Quase toda função daqui recebe um `log` PRÓPRIO —
+#: o recado que aparece no Registro da aba — e o parâmetro SOMBREIA este nome
+#: lá dentro; nessas, o diagnóstico sai por `_diag`, que é este mesmo logger
+#: com outro nome. Os dois convivem de propósito: o Registro conta o que a
+#: baixa está fazendo, o arquivo guarda o traceback do que não deu.
+log = util.log(__name__)
+_diag = log
+
 URL_LOGIN = "https://contadigital.inter.co/home"
 URL_EXTRATO = "https://contadigital.inter.co/pix/extrato"
 
@@ -374,6 +382,10 @@ def texto_chip_periodo(page) -> str:
     try:
         return page.locator(".filter-item--title").first.inner_text().strip()
     except Exception:                                        # noqa: BLE001
+        # "" faz o período nunca conferir, e a tentativa seguinte redigita
+        # tudo de novo — sem dizer que o problema foi LER o chip.
+        log.warning("lendo o chip de período do extrato do Inter",
+                    exc_info=True)
         return ""
 
 
@@ -410,7 +422,7 @@ def aplicar_filtro_datas(page, inicio: str, fim: str, tentativas: int = 3,
             try:
                 page.keyboard.press("Escape")
             except Exception:                                # noqa: BLE001
-                pass
+                pass                     # a próxima tentativa reabre o popup
             time.sleep(1.5)
     return ""
 
@@ -439,8 +451,10 @@ def esperar_botao(page, texto: str, tempo: float = 10.0):
             if loc.count() > 0 and loc.is_visible() and loc.is_enabled():
                 return loc
         except Exception:                                    # noqa: BLE001
-            pass
+            pass                         # na espera, isto é "ainda não"
         time.sleep(0.5)
+    # Esgotado o prazo, devolve None — e quem chamou levanta `InterFalhou`
+    # dizendo qual botão não apareceu, que é a frase que vai para o Registro.
     return None
 
 
@@ -457,10 +471,14 @@ def fechar_modal(page) -> None:
             if (btns.length) btns[btns.length - 1].click();
         }""")
     except Exception:                                        # noqa: BLE001
+        log.warning("fechando o modal do comprovante pelo botão sem texto; "
+                    "vou tentar o Esc", exc_info=True)
         try:
             page.keyboard.press("Escape")
         except Exception:                                    # noqa: BLE001
-            pass
+            log.warning("apertando Esc para fechar o modal do comprovante; "
+                        "ele fica aberto por cima do próximo item",
+                        exc_info=True)
     time.sleep(1.2)
 
 
@@ -606,7 +624,8 @@ def baixar(conta: str, inicio: str, fim: str, pasta, *,
             try:
                 ctx.close()
             except Exception:                                # noqa: BLE001
-                pass
+                _diag.warning("fechando o navegador do Inter no fim da baixa; "
+                              "ele pode ficar aberto sem dono", exc_info=True)
     return resultado
 
 
@@ -648,7 +667,8 @@ def sondar(conta: str = "sonda", log=print) -> dict:
             try:
                 ctx.close()
             except Exception:                                # noqa: BLE001
-                pass
+                _diag.warning("fechando o navegador do Inter no fim da sonda; "
+                              "ele pode ficar aberto sem dono", exc_info=True)
     return achados
 
 
@@ -719,6 +739,9 @@ def _pedir_pagina_cheia(page, log=print) -> None:
             page.wait_for_timeout(2500)
             return
         except Exception:                                    # noqa: BLE001
+            # Seletor que não existe é "o próximo", não falha: são três
+            # variantes do MESMO select. Esgotá-las é que importa, e a linha
+            # do Registro logo abaixo já diz isso a quem está olhando.
             continue
     log("  segui com o tamanho de página padrão")
 
@@ -758,7 +781,9 @@ def _onde_clicar_para_baixar(linha, log=print):
     try:
         trecho = linha.evaluate("el => el.outerHTML")[:400]
     except Exception:                                        # noqa: BLE001
-        pass
+        # Sem o HTML o erro abaixo perde justamente o que ele existe para
+        # entregar a quem for consertar o seletor.
+        _diag.warning("lendo o HTML da linha para pôr no erro", exc_info=True)
     raise InterFalhou(f"não achei onde clicar nesta linha. HTML: {trecho}")
 
 
@@ -1110,6 +1135,10 @@ def conta_da_pagina(page) -> str:
     try:
         texto = page.evaluate("() => document.body.innerText || ''")
     except Exception:                                        # noqa: BLE001
+        # "" vira "não achei o número da conta na tela", que manda procurar
+        # no cabeçalho do Inter um problema que foi de ler a página.
+        log.warning("lendo a tela do Inter para achar o número da conta",
+                    exc_info=True)
         return ""
     # Sete a dez dígitos soltos numa linha: é a forma da conta do Inter
     # (362674043). Data e valor não passam por aqui — têm barra e vírgula.
