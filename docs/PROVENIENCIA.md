@@ -52,7 +52,11 @@ todos no runbook, idênticos depois de normalizados.
 
 ---
 
-## `2026-08-21_cadastrar-so-marcador.sql`
+## `cadastrar-so-marcador.sql` (21/08) — o arquivo NÃO está no repositório
+
+O cabeçalho dele diz que ficou fora de propósito, por trazer nome de
+fornecedor — e o repositório é público. A comparação abaixo foi feita
+contra o arquivo na máquina do dono; o texto fica, o arquivo não.
 
 Corresponde a `20260820103000_regra_so_marcador.sql`.
 
