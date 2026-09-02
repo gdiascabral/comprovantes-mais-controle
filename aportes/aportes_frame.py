@@ -10,27 +10,18 @@ from __future__ import annotations
 
 import datetime
 import queue
-import sys
 import tkinter as tk
-from pathlib import Path
 from tkinter import messagebox, ttk
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import dados as cadastro                                    # noqa: E402
-from mc_catalogos import Catalogos                          # noqa: E402
-from mc_lancamentos import (criar_pagamento, criar_recebimento,  # noqa: E402
-                            ErroLancamento)
-import erp_sessao                                           # noqa: E402
-from erp_sessao import ouvinte                              # noqa: E402
-from regras import Operacao, como_dinheiro, expandir        # noqa: E402
+from . import dados as cadastro
+from .mc_catalogos import Catalogos
+from .mc_lancamentos import criar_pagamento, criar_recebimento, ErroLancamento
+from . import erp_sessao
+from .erp_sessao import ouvinte
+from .regras import Operacao, como_dinheiro, expandir
 
-try:                                     # widgets compartilhados (raiz)
-    import widgets
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import widgets
+import widgets
 
 #: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
 #: desenhou esta tela a 100%", ditos na escala de hoje — a 150% saem 21, e

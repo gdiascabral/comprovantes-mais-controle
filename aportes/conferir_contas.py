@@ -9,8 +9,9 @@ existe no ERP, escrito exatamente assim?". Era essa pergunta sem resposta que
 fazia a importação de planilha travar em "Validando Arquivo" sem dizer qual
 linha estava errada.
 
-Uso:
-    python aportes/conferir_contas.py "C:/caminho/para/contas.csv"
+Uso, da RAIZ do repositório e como MÓDULO (`aportes/` é pacote desde
+02/09/2026, e os imports daqui são relativos):
+    python -m aportes.conferir_contas "C:/caminho/para/contas.csv"
 
 Sem argumento, procura o contas.csv ao lado deste arquivo.
 """
@@ -23,12 +24,9 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import dados as cadastro                    # noqa: E402
-from mc_catalogos import Catalogos          # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import util                                 # noqa: E402
+import util
+from . import dados as cadastro
+from .mc_catalogos import Catalogos
 
 BASE_URL = "https://acessar.maiscontroleerp.com.br"
 # Sai de `util.pasta_do_perfil()`, e não da pasta deste arquivo: é script de
@@ -41,7 +39,7 @@ PERFIL = util.pasta_do_perfil("conferencia")
 # é delas que os cabeçalhos são copiados.
 TELA_PAGAMENTOS = f"{BASE_URL}/#/payable-installments"
 
-from erp_sessao import ouvinte                # noqa: E402
+from .erp_sessao import ouvinte
 
 CANDIDATOS_CSV = [
     Path(__file__).resolve().parent / "contas.csv",
@@ -59,7 +57,7 @@ def achar_csv(argumento: str | None) -> Path:
             return candidato
     raise SystemExit(
         "não achei o contas.csv. Passe o caminho como argumento:\n"
-        '    python aportes/conferir_contas.py "C:/.../contas.csv"')
+        '    python -m aportes.conferir_contas "C:/.../contas.csv"')
 
 
 def ler_entidades(caminho: Path) -> dict:

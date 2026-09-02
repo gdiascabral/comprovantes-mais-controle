@@ -23,15 +23,9 @@ contas, sócios e investidores ficam em arquivos locais, fora do Git.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from urllib.parse import urlencode
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 ERP_API = "https://prod-erp-api.maiscontroleerp.com.br"
 LEGACY = "https://legacy-api.maiscontroleerp.com.br/maiscontrole/services"
