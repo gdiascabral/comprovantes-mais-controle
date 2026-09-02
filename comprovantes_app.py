@@ -453,6 +453,13 @@ def main():
         # muda é o ESTILO: chapado e miúdo, para DIÁRIO e MENSAL parecerem os
         # rótulos de seção que estão logo acima deles, e não itens clicáveis
         # do mesmo nível das abas que eles agrupam.
+        #
+        # Até 02/09/2026 estes dois cabeçalhos eram as ÚNICAS paradas de Tab da
+        # coluna: o `ItemMenu` não entrava no foco, então o teclado abria e
+        # fechava os grupos sem alcançar uma só das doze telas dentro deles. A
+        # regra escrita aqui valia para o cabeçalho e era desmentida logo
+        # abaixo; agora o item também entra no Tab, e o Tab percorre a coluna
+        # inteira na ordem em que ela é lida.
         cab = ttk.Button(lateral.corpo, style="Grupo.Toolbutton",
                          command=lambda: _alternar(nome))
         cab.pack(fill="x", pady=(12, 2), padx=(10, 8))
@@ -649,6 +656,82 @@ def main():
     # um campo de texto, que é de onde ele mais se usa.
     root.bind_all("<Control-k>", barra.focar_busca)
     root.bind_all("<Control-K>", barra.focar_busca)
+
+    # ---------------- o menu pelo teclado
+    # O `widgets.ItemMenu` passou a entrar no Tab (antes só escutava o clique,
+    # e quem usa só o teclado alcançava DIÁRIO e MENSAL sem alcançar nenhuma
+    # das doze telas que eles agrupam). Tab percorre a coluna; estes atalhos
+    # são o caminho DIRETO — doze telas atrás de doze Tabs é alcançável, não é
+    # usável.
+    #
+    # A ordem é a do menu, e sai do próprio `itens`: o `_item` insere na ordem
+    # em que monta a coluna, e dicionário do Python preserva a ordem de
+    # inserção. Uma segunda lista escrita à mão divergiria no primeiro dia em
+    # que alguém trocasse duas abas de lugar — e divergiria em silêncio, com o
+    # Ctrl+3 abrindo a quarta tela.
+    #
+    # Vai no `bind_all` como o Ctrl+K, e pelo mesmo motivo: o atalho tem de
+    # valer com o foco em qualquer lugar da janela.
+    def _telas() -> list:
+        return list(itens)
+
+    def _foco_num_text() -> bool:
+        """O foco está dentro de um `tk.Text`?
+
+        Ali o Tab é do EDITOR. O Tk já liga `<Control-Tab>` da classe Text à
+        navegação de foco, e essa ligação roda antes desta; sem a pergunta, um
+        Ctrl+Tab dentro do registro moveria o foco E trocaria de aba, o que
+        deixa a pessoa noutra tela sem ter pedido."""
+        try:
+            return isinstance(root.focus_get(), tk.Text)
+        except (KeyError, tk.TclError):
+            return False
+
+    def _ir_para(indice: int):
+        telas = _telas()
+        if 0 <= indice < len(telas):
+            mostrar(telas[indice])
+
+    def _vizinha(passo: int):
+        telas = _telas()
+        if not telas:
+            return
+        try:
+            onde = telas.index(atual["nome"])
+        except ValueError:
+            onde = 0                     # nenhuma aberta ainda: começa do topo
+        mostrar(telas[(onde + passo) % len(telas)])
+
+    def _atalho_numero(ev=None):
+        # Ctrl+1..9 alcançam as NOVE primeiras telas do menu. Não há Ctrl+0 nem
+        # Ctrl+10: dez teclas de dígito para doze telas escolheria duas para
+        # ficar de fora sem critério nenhum. Da décima em diante é o Ctrl+Tab.
+        try:
+            _ir_para(int(ev.keysym) - 1)
+        except (AttributeError, ValueError):
+            pass
+        return "break"
+
+    def _proxima(_ev=None):
+        if _foco_num_text():
+            return None                  # o Ctrl+Tab é do editor, não do menu
+        _vizinha(1)
+        return "break"
+
+    def _anterior(_ev=None):
+        if _foco_num_text():
+            return None
+        _vizinha(-1)
+        return "break"
+
+    for _n in range(1, 10):
+        root.bind_all(f"<Control-Key-{_n}>", _atalho_numero)
+    root.bind_all("<Control-Tab>", _proxima)
+    root.bind_all("<Control-Shift-Tab>", _anterior)
+    # No X11 o Shift+Tab chega com keysym próprio. Não custa nada aqui e é o
+    # que faz o atalho existir para quem rodar o app como script fora do
+    # Windows — que é como ele é desenvolvido.
+    root.bind_all("<Control-ISO_Left_Tab>", _anterior)
     # A busca ainda não procura nada: leva o foco para o primeiro campo da
     # tela aberta. Está na barra porque o LUGAR dela é decisão de layout, e
     # deixá-la para depois obrigaria a mexer de novo em tudo o que está à

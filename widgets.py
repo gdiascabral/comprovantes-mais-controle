@@ -191,6 +191,7 @@ FONTE_NUM = "AppNum"            # dinheiro em tabela: dígito de largura fixa
 FONTE_MONO_MINI = "AppMonoMini"  # chave Pix / linha digitável dentro da célula
 FONTE_KPI = "AppKPI"            # o número grande dos cartões do Início
 FONTE_MARCA = "AppMarca"        # o logotipo da barra superior
+FONTE_ICONES = "AppIcones"      # os ícones do menu lateral
 
 #: Família dos campos de registro. NÃO sai do `TkFixedFont`: no Windows ele é
 #: "Courier New", que é a fonte de máquina de escrever e fica larga e fraca ao
@@ -198,7 +199,143 @@ FONTE_MARCA = "AppMarca"        # o logotipo da barra superior
 #: que as seis abas já faziam à mão.
 FAMILIA_MONO = "Consolas"
 
-_estado = {"escuro": False}
+
+# ---------------------------------------------------------------- ícones
+# Os ícones do menu eram emoji e dingbats soltos, e o Tk desenhava cada um com
+# a fonte que o Windows achasse primeiro. MEDIDO nesta máquina com
+# `font actual TkDefaultFont -family <char>`, que devolve a família DEPOIS do
+# fallback:
+#
+#   ▦ Início        Lucida Sans Unicode
+#   ⬇ Baixar        Cambria
+#   ✂ Separar       MS Gothic
+#   ✅ Conferência   Segoe UI Emoji   ← colorida
+#   ⚖ Saldo         Segoe UI Emoji   ← colorida
+#
+# Os sete de fora do BMP (📎 💰 🗓 📊 🏦 📑 📤) e o 👥 do rodapé respondem
+# "Segoe UI", que é o que o `font actual` tem a dizer de um caractere fora do
+# BMP: ali ele não responde de verdade, e a família é a que o Uniscribe
+# escolher na hora de desenhar.
+#
+# São, no mínimo, QUATRO tipografias diferentes numa coluna de doze linhas —
+# os ícones não compartilham espessura de traço, tamanho nem linha de base, e
+# isso se vê sem medir nada. E os dois que caem na Segoe UI Emoji vêm de fonte
+# COLORIDA: o `foreground` que o `_pintar` do `ItemMenu` passa não alcança
+# glifo colorido, então esses ficam iguais nos dois temas, inclusive quando o
+# item está aberto e todo o resto dele vira azul.
+#
+# (O CLAUDE.md conta isto ao contrário — que os sete de fora do BMP são os
+# coloridos e que ▦ ⬇ ✂ ✅ ⚖ seguem a cor. O que está escrito aqui é o que a
+# máquina respondeu; quem consolida a doc que reconcilie.)
+#
+# A saída é a fonte de ícones do próprio Windows: UMA família para os treze,
+# monocromática por construção, que por isso herda o foreground do estilo. O
+# tema passa a alcançar todos, e o desenho passa a sair do mesmo alfabeto.
+#
+#: As duas famílias, na ordem de preferência. "Segoe Fluent Icons" é a do
+#: Windows 11; "Segoe MDL2 Assets" é a do Windows 10, e continua presente no 11
+#: (medido nesta máquina: as duas existem). Quem não tiver nenhuma das duas
+#: fica com o glifo de texto de sempre — ver `_familia_de_icones`.
+ICONES_FAMILIAS = ("Segoe Fluent Icons", "Segoe MDL2 Assets")
+
+#: De-para do glifo de texto (o que o `comprovantes_app` e a `ferramentas/
+#: galeria.py` passam em `ItemMenu(icone=…)`) para o codepoint da fonte de
+#: ícones. O emoji continua sendo a CHAVE, e não some do código: ele é o
+#: fallback final, o que aparece em quem não tem nenhuma das duas famílias.
+#:
+#: Uma tabela POR FAMÍLIA porque as duas fontes não têm o mesmo alfabeto: aqui,
+#: medido lendo o `cmap` dos dois arquivos (`SegoeIcons.ttf` e `segmdl2.ttf`),
+#: a Fluent mapeia 2.030 codepoints da área privada contra 1.830 da MDL2 — 201
+#: só existem na Fluent. Para ESTES doze, porém, os dois valores coincidem: a
+#: Fluent preservou os codepoints da MDL2 nos ícones herdados, e os doze foram
+#: conferidos glifo a glifo, desenhados a partir dos dois arquivos de fonte.
+#: As tabelas ficam separadas mesmo assim — é onde a divergência vai morar no
+#: dia em que um ícone novo só existir numa delas, e duas tabelas iguais que se
+#: sabe iguais custam menos que uma tabela que mente.
+#:
+#: Nome oficial de cada um, na tabela da Microsoft (confira por lá, não por
+#: aqui): Home, Download, Cut, Attach, CheckList, PaymentCard, Calendar,
+#: Calculator, ReportDocument, Bank, Document, Send e Contact.
+ICONES_FLUENT = {
+    "▦": "\uE80F",      # Home           — Início
+    "⬇": "\uE896",      # Download       — Baixar Comprovantes
+    "✂": "\uE8C6",      # Cut            — Separar e Renomear
+    "📎": "\uE723",      # Attach         — Anexar
+    "✅": "\uE9D5",      # CheckList      — Conferência
+    "💰": "\uE8C7",      # PaymentCard    — Aportes
+    "🗓": "\uE787",      # Calendar       — Remessa/Retorno
+    "⚖": "\uE8EF",      # Calculator     — Saldo de pagamentos
+    "📊": "\uE9F9",      # ReportDocument — Relatório Mensal
+    "🏦": "\uE825",      # Bank           — Extratos Sicoob
+    "📑": "\uE8A5",      # Document       — Contratos
+    "📤": "\uE724",      # Send           — Acessorias
+    "👥": "\uE77B",      # Contact        — Usuários (o item de admin, no rodapé)
+}
+
+#: A MESMA tabela para o Windows 10. Os valores coincidem hoje — ver acima —, e
+#: ela é escrita por extenso de propósito: copiar a de cima com um `dict(...)`
+#: esconderia que são duas decisões, e a primeira vez que uma delas mudar o
+#: `dict(...)` mudaria as duas juntas, em silêncio.
+ICONES_MDL2 = {
+    "▦": "\uE80F",      # Home
+    "⬇": "\uE896",      # Download
+    "✂": "\uE8C6",      # Cut
+    "📎": "\uE723",      # Attach
+    "✅": "\uE9D5",      # CheckList
+    "💰": "\uE8C7",      # PaymentCard
+    "🗓": "\uE787",      # Calendar
+    "⚖": "\uE8EF",      # Calculator
+    "📊": "\uE9F9",      # ReportDocument
+    "🏦": "\uE825",      # Bank
+    "📑": "\uE8A5",      # Document
+    "📤": "\uE724",      # Send
+    "👥": "\uE77B",      # Contact
+}
+
+ICONES_POR_FAMILIA = {
+    "Segoe Fluent Icons": ICONES_FLUENT,
+    "Segoe MDL2 Assets": ICONES_MDL2,
+}
+
+_estado = {"escuro": False, "familia_icones": ""}
+
+
+def _familia_de_icones(familias, padrao: str) -> str:
+    """A primeira família de ícones PRESENTE, ou o `padrao` quando não há.
+
+    Recebe a lista de famílias em vez de perguntá-la: assim a decisão é uma
+    função pura, e o teste exercita os três desfechos sem precisar de máquina
+    com (ou sem) cada fonte instalada.
+
+    O `padrao` é a família do `TkDefaultFont` — uma família REAL. É o detalhe
+    que impede a armadilha de sempre: criar a fonte nomeada apontando para
+    "Segoe Fluent Icons" numa máquina que não a tem NÃO dá erro, o Tk
+    simplesmente cai na fonte padrão e os codepoints saem como quadradinhos.
+    Quem não tem a fonte tem de ficar com o EMOJI de antes, que ao menos
+    desenha alguma coisa — e é `familia_de_icones()` quem diz qual dos dois
+    caminhos vale."""
+    disponiveis = {str(f) for f in familias}
+    for fam in ICONES_FAMILIAS:
+        if fam in disponiveis:
+            return fam
+    return padrao
+
+
+def familia_de_icones() -> str:
+    """A família de ícones em uso, ou "" quando nenhuma das duas foi achada."""
+    return _estado["familia_icones"] if (
+        _estado["familia_icones"] in ICONES_POR_FAMILIA) else ""
+
+
+def icone_do_menu(glifo: str) -> tuple[str, bool]:
+    """(o que desenhar, se usa a fonte de ícones) para o glifo de texto dado.
+
+    Sem família de ícones — ou glifo que não está na tabela — devolve o próprio
+    glifo e `False`: o emoji de sempre, na fonte de sempre."""
+    tabela = ICONES_POR_FAMILIA.get(familia_de_icones())
+    if tabela and glifo in tabela:
+        return tabela[glifo], True
+    return glifo, False
 
 
 def cores() -> dict:
@@ -234,13 +371,24 @@ def _garantir_fontes():
     no primeiro coletor de lixo — e o sintoma não era erro nenhum, o Tk passava
     a ler "AppTitulo" como NOME DE FAMÍLIA, não achava, e caía na fonte padrão.
     Fonte nomeada criada por `font create` não pertence a objeto Python nenhum:
-    não há `__del__` para apagá-la."""
+    não há `__del__` para apagá-la.
+
+    A `FONTE_ICONES` entra pela MESMA porta, e por isso a lista de famílias é
+    lida por `font families` do Tcl e não por `tkinter.font.families()`: o que
+    derrubou a v1.0.71 foi o import do submódulo, não a função. Fonte NOMEADA
+    viaja no codigo.zip; import de submódulo exige exe novo."""
     tcl = ttk.Style().tk                 # o interpretador da janela em uso
     familia = str(tcl.call("font", "configure", "TkDefaultFont", "-family"))
     try:
         tam = int(tcl.call("font", "configure", "TkDefaultFont", "-size")) or 9
     except (ValueError, tk.TclError):
         tam = 9
+
+    try:
+        familias = tcl.splitlist(tcl.call("font", "families"))
+    except tk.TclError:
+        familias = ()
+    _estado["familia_icones"] = _familia_de_icones(familias, familia)
 
     existentes = set(tcl.splitlist(tcl.call("font", "names")))
     for nome, fator, peso, fam in (
@@ -257,7 +405,13 @@ def _garantir_fontes():
             (FONTE_NUM, 0.95, "normal", FAMILIA_MONO),
             (FONTE_MONO_MINI, 0.82, "normal", FAMILIA_MONO),
             (FONTE_KPI, 2.2, "bold", familia),
-            (FONTE_MARCA, 1.15, "bold", familia)):
+            (FONTE_MARCA, 1.15, "bold", familia),
+            # Os ícones do menu. 1,15× porque o desenho de um ícone ocupa menos
+            # da caixa do que a letra ocupa da dela: no mesmo tamanho do corpo
+            # eles saem visivelmente menores que o emoji que substituíram.
+            # Sai do `TkDefaultFont` como todas as outras — a 150% de escala o
+            # ícone tem de crescer junto com o nome da aba ao lado dele.
+            (FONTE_ICONES, 1.15, "normal", _estado["familia_icones"])):
         acao = "configure" if nome in existentes else "create"
         tcl.call("font", acao, nome,
                  "-family", fam, "-size", _escalar(tam, fator), "-weight", peso)
@@ -1438,6 +1592,36 @@ class ItemMenu(tk.Frame):
     O ícone é trocado por ● quando a aba está trabalhando (ver `_pulso` no
     `comprovantes_app.py`). Guardado à parte para o ● poder voltar a ser o
     ícone de sempre quando o trabalho acaba.
+
+    O `icone` que chega aqui continua sendo o EMOJI de sempre, e ele agora é
+    duas coisas: a chave da tabela `ICONES_POR_FAMILIA` (que o troca pelo
+    codepoint monocromático da fonte de ícones do Windows, para o tema
+    alcançá-lo) e o fallback de quem não tem nenhuma das duas famílias. Quem
+    monta o menu não precisou saber de nada disso — ver o bloco "ícones" no
+    topo do arquivo.
+
+    **Ele entra no Tab, e essa é a diferença de 02/09/2026.** Era um `tk.Frame`
+    que só escutava `<Button-1>`, `<Enter>` e `<Leave>`: quem usa só o teclado
+    alcançava DIÁRIO e MENSAL (que são `ttk.Button`) e não alcançava nenhuma
+    das doze telas que eles agrupam. Agora `takefocus=1`, e `<Return>` e
+    `<space>` disparam o MESMO `_comando` do clique — um só caminho, para não
+    existir a chance de o teclado abrir uma aba e o mouse outra.
+
+    O foco tem sinal PRÓPRIO, e ele é derivado do estado aberto: o filete e o
+    anel de 1 px em volta ficam na cor `marca`, a mesma do item aberto, mas o
+    texto continua na cor de sempre — "o teclado está aqui" não pode passar por
+    "esta aba está aberta". Quem CARREGA o sinal é o anel, e isso foi medido:
+    o fundo do foco sozinho dá 1,16:1 no claro e 1,20:1 no escuro contra a
+    coluna, ou seja, não distingue nada; o anel dá 7,67:1 no claro
+    (#1746C7 sobre #FFFFFF) e 6,28:1 no escuro (#6F9BFF sobre #171D28), bem
+    acima dos 3:1 que a WCAG pede de indicador de foco. Sobre o item ABERTO,
+    onde o fundo já é `marca_fundo`, o anel ainda dá 6,60:1 e 5,23:1 — é o que
+    faz o foco aparecer mesmo na única linha que já estava destacada.
+
+    O anel é `highlightthickness=1` e nunca muda de espessura: o Tk troca
+    sozinho `highlightbackground` por `highlightcolor` quando o widget ganha o
+    foco, então não há 1 px entrando e saindo do layout a cada Tab — o que
+    empurraria a coluna inteira para baixo a cada tecla.
     """
 
     FILETE = 3
@@ -1446,13 +1630,17 @@ class ItemMenu(tk.Frame):
                  recuo: int = 0, **kw):
         c = cores()
         kw.setdefault("background", c["cartao"])
-        kw.setdefault("highlightthickness", 0)
+        # 1 px SEMPRE reservado — ver o docstring: o anel muda de cor, nunca de
+        # espessura.
+        kw.setdefault("highlightthickness", 1)
+        kw.setdefault("takefocus", 1)
         kw.setdefault("cursor", "hand2")
         super().__init__(pai, **kw)
         self._icone = icone
         self._texto = texto
         self._ativo = False
         self._trabalhando = False
+        self._foco = False
         self._comando = comando
 
         self.filete = tk.Frame(self, width=self.FILETE, highlightthickness=0)
@@ -1470,6 +1658,12 @@ class ItemMenu(tk.Frame):
             w.bind("<Button-1>", self._clique)
             w.bind("<Enter>", self._entrou)
             w.bind("<Leave>", self._saiu)
+        # O foco é do FRAME, e só dele: os filhos não aceitam foco, então não há
+        # segunda parada de Tab dentro do mesmo item.
+        self.bind("<Return>", self._teclou)
+        self.bind("<space>", self._teclou)
+        self.bind("<FocusIn>", self._ganhou_foco)
+        self.bind("<FocusOut>", self._perdeu_foco)
         _repintaveis.add(self)
         self.aplicar_cores(_estado["escuro"])
 
@@ -1477,6 +1671,24 @@ class ItemMenu(tk.Frame):
     def _clique(self, _ev=None):
         if self._comando:
             self._comando()
+
+    def _teclou(self, _ev=None):
+        """Enter e Espaço fazem o que o clique faz — o MESMO `_comando`.
+
+        Devolve "break" para o evento parar aqui. O `<Return>` do app é um
+        `bind_all` (ver `_enter_aciona` no `comprovantes_app.py`) que dispara o
+        passo principal da aba aberta: sem o "break", um Enter no menu abriria
+        a aba E mandaria a aba começar a trabalhar."""
+        self._clique()
+        return "break"
+
+    def _ganhou_foco(self, _ev=None):
+        self._foco = True
+        self._pintar()
+
+    def _perdeu_foco(self, _ev=None):
+        self._foco = False
+        self._pintar()
 
     def _entrou(self, _ev=None):
         if not self._ativo:
@@ -1499,14 +1711,27 @@ class ItemMenu(tk.Frame):
         if sim == self._trabalhando:
             return
         self._trabalhando = sim
-        try:
-            self.lbl_icone.configure(text="●" if sim else self._icone)
-        except tk.TclError:
-            pass
         self._pintar(hover=False)
 
     def texto(self) -> str:
         return self._texto
+
+    # -------------------------------------------------------------- ícone
+    def _desenho_do_icone(self) -> tuple[str, str]:
+        """(o texto do rótulo do ícone, a fonte que ele pede).
+
+        Resolvido a cada pintura, e não uma vez no `__init__`: a família de
+        ícones só é descoberta quando `_garantir_fontes` roda, e nada garante
+        que ele tenha rodado antes deste widget nascer.
+
+        O ● (U+25CF) NÃO está na fonte de ícones — ele é um caractere comum, e
+        pedi-lo à Segoe Fluent Icons daria o quadradinho de glifo ausente
+        justamente no sinal que existe para dizer onde o trabalho está. Por
+        isso a aba que trabalha volta para a fonte do estilo."""
+        if self._trabalhando:
+            return "●", ""
+        desenho, usa_fonte = icone_do_menu(self._icone)
+        return desenho, (FONTE_ICONES if usa_fonte else "")
 
     # --------------------------------------------------------------- tema
     def aplicar_cores(self, escuro: bool | None = None):
@@ -1520,23 +1745,38 @@ class ItemMenu(tk.Frame):
             fundo, frente, filete = c["fundo"], c["texto"], c["fundo"]
         else:
             fundo, frente, filete = c["cartao"], c["texto"], c["cartao"]
+        # O foco empresta o filete do item ABERTO — é o mesmo "você está aqui",
+        # dito para o teclado — e deixa o texto na cor de sempre, que é o que
+        # separa "o foco está neste item" de "esta aba está aberta". Quem
+        # carrega o sinal é o anel; ver o docstring da classe para as medidas.
+        if self._foco and not self._ativo:
+            filete = c["marca"]
         estilo = "ItemAtivo.TLabel" if self._ativo else "Item.TLabel"
+        desenho, fonte_icone = self._desenho_do_icone()
         try:
             if hover and not self._ativo:
                 estilo = "ItemSobre.TLabel"
-            self.configure(background=fundo)
+            self.configure(background=fundo, highlightbackground=fundo,
+                           highlightcolor=c["marca"])
             self.corpo.configure(background=fundo)
             self.filete.configure(background=filete)
             self.lbl.configure(style=estilo)
-            # O ● da aba que trabalha é azul mesmo quando o item não é o
-            # aberto: é a única marca na tela que diz ONDE o trabalho está,
-            # e na cor do item parado ela passava despercebida. Vai como
-            # opção DO WIDGET, e não como estilo: o fundo tem de continuar
-            # sendo o do item (branco, cinza de passagem ou azul-claro), e um
-            # estilo só para o ● precisaria de uma versão para cada um dos
-            # três.
+            # Três opções DO WIDGET por cima do estilo, e as três pelo mesmo
+            # motivo — opção de widget ganha do estilo, e aqui é preciso que
+            # ganhe:
+            #
+            # `font`, porque o estilo do item aberto (`ItemAtivo.TLabel`) traz
+            # `font=FONTE_FORTE`: sem isto o único item da coluna a perder o
+            # ícone seria justamente o que está aberto;
+            #
+            # `foreground`, porque o ● da aba que trabalha é azul mesmo quando
+            # o item não é o aberto — é a única marca na tela que diz ONDE o
+            # trabalho está, e na cor do item parado ela passava despercebida.
+            # O fundo tem de continuar sendo o do item (branco, cinza de
+            # passagem ou azul-claro), e um estilo só para o ● precisaria de
+            # uma versão para cada um dos três.
             self.lbl_icone.configure(
-                style=estilo,
+                text=desenho, font=fonte_icone, style=estilo,
                 foreground=c["ativo"] if self._trabalhando else frente)
         except tk.TclError:
             pass
