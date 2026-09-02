@@ -10,9 +10,9 @@ import queue
 
 import pytest
 
-import sicoob_config as cfg
-import sicoob_contas as sc
-import sicoob_pastas as sp
+from extratos_sicoob import sicoob_config as cfg
+from extratos_sicoob import sicoob_contas as sc
+from extratos_sicoob import sicoob_pastas as sp
 
 MAPA = {
     "raiz": "R:/EXTRATOS",
@@ -156,7 +156,7 @@ def test_pasta_vazia_declarada_duas_vezes_ainda_avisa(tmp_path):
 
 def _aba(monkeypatch, mapa_falso):
     """A aba sem janela: `_garantir_mapa` só fala com o mapa e com a fila."""
-    import extratos_frame
+    from extratos_sicoob import extratos_frame
     aba = extratos_frame.ExtratosSicoobFrame.__new__(
         extratos_frame.ExtratosSicoobFrame)
     aba.q = queue.Queue()
@@ -239,7 +239,7 @@ def test_o_sufixo_entra_igual_ao_do_mais_controle(tmp_path):
 
     O PDF do ERP e o OFX do banco são da mesma conta e caem na mesma pasta:
     terminando igual, dá para ver de olho que são um par."""
-    import contas_mc as cm
+    from relatorios import contas_mc as cm
     m = _mapa(tmp_path, _dividindo_a_pasta("55555-5", "66666-6"))
     destino = cm.Destino(erp="X", empresa="DELTA", pasta="SICOOB",
                          banco="SICOOB", sufixo="55555-5")

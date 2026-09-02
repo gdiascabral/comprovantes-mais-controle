@@ -5,7 +5,7 @@ Sem navegador: a página é falsa e só anota o que foi pedido dela. O que se
 prova aqui é que o app SEMPRE faz a tela buscar a lista de novo — inclusive
 quando já está nela, que era o caso em que ele travava.
 """
-import mc_api
+from anexar import mc_api
 
 
 class PaginaFalsa:

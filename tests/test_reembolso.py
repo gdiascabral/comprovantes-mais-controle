@@ -12,13 +12,9 @@ Sem rede, sem tkinter, sem Excel.
 Nenhum dado real: o repositório é público. Os documentos abaixo são sintéticos,
 escolhidos por fecharem o dígito verificador, e os nomes são inventados.
 """
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pagamentos_dia"))
 
-import reembolso                                     # noqa: E402
+from pagamentos_dia import reembolso
 
 CPF_A = "52998224725"
 CPF_B = "11144477735"

@@ -6,15 +6,12 @@ Rode com:  python -m pytest -q
 from __future__ import annotations
 
 import datetime as _dt
-import sys
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from cnab240 import (  # noqa: E402
+from cnab240 import (
     ArquivoRemessa,
     DadosJ52,
     Empresa,
@@ -37,9 +34,9 @@ from cnab240 import (  # noqa: E402
     ler_retorno,
     validar,
 )
-from cnab240 import spec  # noqa: E402
-from cnab240.campos import fmt_alfa, fmt_num, sanitizar  # noqa: E402
-from cnab240.validador import NIVEL_ARQUIVO  # noqa: E402
+from cnab240 import spec
+from cnab240.campos import fmt_alfa, fmt_num, sanitizar
+from cnab240.validador import NIVEL_ARQUIVO
 
 HOJE = _dt.date(2026, 8, 12)
 CODIGO_BARRAS = "75691234500000150001234567890123456789012345"
@@ -941,6 +938,13 @@ def test_as_ferramentas_nao_apontam_o_sys_path_para_fora():
     máquina de uma pessoa e, pior, a uma cópia do pacote que parou no tempo.
     O caminho tem de sair do `__file__` — assim ele só alcança este repositório,
     esteja ele em que pasta estiver, e nunca alcança um segundo `cnab240`.
+
+    Desde 02/09/2026 o teste cobra mais uma coisa: que o que entra no
+    `sys.path` seja a RAIZ, e nada abaixo dela. Toda pasta de aba é pacote e se
+    importa pelo nome inteiro; devolver `RAIZ / "pagamentos_dia"` ao caminho
+    ressuscitaria o espaço plano em que `config.py`, `frame.py` e
+    `conferencia.py` disputam o mesmo nome — e uma ferramenta que importa o
+    módulo errado responde com convicção sobre outro assunto.
     """
     import ast
     import re
@@ -957,19 +961,27 @@ def test_as_ferramentas_nao_apontam_o_sys_path_para_fora():
                     and absoluto.match(no.value)):
                 problemas.setdefault(arquivo.name, []).append(
                     f"linha {no.lineno}: caminho absoluto escrito à mão")
-            # (2) nada de constante indo para o sys.path
             alvo = getattr(no, "func", None)
             if (isinstance(no, ast.Call) and isinstance(alvo, ast.Attribute)
                     and alvo.attr in ("insert", "append")
                     and ast.unparse(alvo.value).replace(" ", "").endswith(
                         "sys.path")):
                 for arg in no.args:
+                    # (2) nada de constante indo para o sys.path
                     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                         problemas.setdefault(arquivo.name, []).append(
                             f"linha {no.lineno}: sys.path recebendo texto fixo")
+                    # (3) e o que entra é a RAIZ, não uma subpasta dela
+                    elif isinstance(arg, ast.Call) and arg.args:
+                        escrito = ast.unparse(arg.args[0]).replace(" ", "")
+                        if escrito not in ("RAIZ", "_RAIZ") and escrito != "0":
+                            problemas.setdefault(arquivo.name, []).append(
+                                f"linha {no.lineno}: sys.path recebendo "
+                                f"`{escrito}` — só a RAIZ pode entrar")
     assert not problemas, (
         "estas ferramentas apontam o caminho de import para fora do "
-        f"repositório: {problemas}. O caminho sai do `__file__` — ver "
+        f"repositório, ou para dentro de uma subpasta dele: {problemas}. O "
+        "caminho sai do `__file__` e para na raiz — ver "
         "`cnab240/ferramentas/_ambiente.py`.")
 
 

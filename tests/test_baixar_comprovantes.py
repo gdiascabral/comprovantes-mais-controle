@@ -7,15 +7,10 @@ caminho de navegador não tem dublê de propósito — um dublê do site do Inte
 provaria só que o dublê concorda com o código, e o que precisa concordar é o
 banco. A prova daquele lado é a rodada com QR de verdade.
 """
-import sys
-from pathlib import Path
 
 import pytest
 
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-
-from baixar_comprovantes import inter_baixar as inter  # noqa: E402
+from baixar_comprovantes import inter_baixar as inter
 
 
 # ------------------------------------------------------------- o período
@@ -582,7 +577,7 @@ def test_a_navegacao_nao_recarrega_a_pagina():
     assert "location.hash" in sb.JS_IR_PARA
     assert ".goto(" not in fonte, (
         "voltou a usar goto: a SPA recarrega e a conta volta para a padrao")
-import pathlib  # noqa: E402
+import pathlib
 
 
 # --------------------------------------------- nao baixar o mesmo duas vezes

@@ -12,9 +12,9 @@ import pytest
 # Import DIRETO, de propósito: com `importorskip` estes testes sumiriam em
 # silêncio se `pagamentos_dia` saísse do sys.path, e a suíte passaria sem
 # executá-los. Falhar no import é o comportamento certo.
-import ocr_boleto
-import regras_pagamento as regras
-import relatorio
+from pagamentos_dia import ocr_boleto
+from pagamentos_dia import regras_pagamento as regras
+from pagamentos_dia import relatorio
 
 #: Linhas digitáveis com dígitos verificadores que fecham DE VERDADE — é o que
 #: estes testes precisam provar. Uma linha digitável não diz quem pagou.

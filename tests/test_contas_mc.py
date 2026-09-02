@@ -12,7 +12,7 @@ from threading import Event
 
 import pytest
 
-import contas_mc as cm
+from relatorios import contas_mc as cm
 
 MAPA = {
     "raiz": "R:/EXTRATOS",
@@ -200,7 +200,7 @@ def test_periodo_parcial_preserva_o_sufixo_da_conta(mapa):
 
 
 def _rf():
-    from relatorio_frame import RelatorioFrame
+    from relatorios.relatorio_frame import RelatorioFrame
     return RelatorioFrame
 
 
@@ -246,7 +246,7 @@ class _AnxFalso:
 @pytest.fixture
 def dito(monkeypatch):
     """O que a aba mostrou em caixa de diálogo."""
-    import relatorio_frame
+    from relatorios import relatorio_frame
     ditos = []
     for funcao in ("showwarning", "showinfo", "showerror"):
         monkeypatch.setattr(relatorio_frame.messagebox, funcao,

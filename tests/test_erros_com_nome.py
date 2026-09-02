@@ -20,9 +20,9 @@ import widgets
 # As famílias reais, importadas dos módulos onde elas vivem. Não são dublês: se
 # alguém renomear `SemRede`, este arquivo para de importar — que é exatamente o
 # aviso que se quer, já que a `explicar_erro` casa pelo NOME da classe.
-from conciliacao import errors as erros_conc          # noqa: E402
-from erp import sessao as erp_sessao                  # noqa: E402
-from nuvem import rest                                # noqa: E402
+from conciliacao import errors as erros_conc
+from erp import sessao as erp_sessao
+from nuvem import rest
 
 
 class TimeoutError(Exception):                        # noqa: A001
@@ -84,7 +84,7 @@ def test_sem_rede_do_navegador_usa_a_mensagem_que_ja_vem_pronta():
     """O `anexar/mc_client.SemRede` promete no docstring que a mensagem dele já
     está escrita para o usuário. A da nuvem não promete, e por isso é
     substituída."""
-    mc_client = pytest.importorskip("mc_client")
+    mc_client = pytest.importorskip("anexar.mc_client")
     pronta = "Sem internet: não consegui abrir o Mais Controle."
     o_que, _, _ = _partes(mc_client.SemRede(pronta))
     assert o_que == pronta

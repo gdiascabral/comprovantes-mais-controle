@@ -9,18 +9,13 @@ vira "tudo certo", e uma sessão vencida vira "erro inesperado".
 """
 import http.server
 import json
-import sys
 import threading
 import time
-from pathlib import Path
 
 import pytest
 import urllib3.util.retry
 
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-
-from nuvem import cache, cadastro, rest, sessao  # noqa: E402
+from nuvem import cache, cadastro, rest, sessao
 
 
 # --------------------------------------------------------------- dublês
@@ -835,8 +830,8 @@ def test_o_sufixo_sobrevive_a_ida_e_volta_pelo_cache(tmp_path, monkeypatch):
 
     # E, relido pelo módulo que de fato o usa, dá dois nomes de arquivo — que
     # é a única coisa que importa no fim.
-    import sicoob_config
-    import sicoob_contas
+    from extratos_sicoob import sicoob_config
+    from extratos_sicoob import sicoob_contas
     mapa = sicoob_contas.carregar(tmp_path / "contas_sicoob.json")
     nomes = {sicoob_config.nome_arquivo(2026, 7, c.sufixo) for c in mapa.contas}
     assert nomes == {"202607 SICOOB 11111-1", "202607 SICOOB 22222-2"}

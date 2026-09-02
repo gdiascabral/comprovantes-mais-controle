@@ -11,16 +11,11 @@ os testes daqui seguram:
   e o `quem` NUNCA vem do cliente — um campo que o app preenche não responde
   "quem fez", responde "quem o app disse que fez".
 """
-import sys
-from pathlib import Path
 
 import pytest
 
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-
-import widgets  # noqa: E402
-from nuvem import auditoria, rest, sessao, usuarios  # noqa: E402
+import widgets
+from nuvem import auditoria, rest, sessao, usuarios
 
 
 @pytest.fixture

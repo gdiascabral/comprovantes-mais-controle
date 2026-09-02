@@ -8,15 +8,10 @@ Era o "entra, sai, entra" que aparecia no Registro do dono em 18/08/2026.
 Aqui se testa só a ORDEM: quem fala com o navegador vem antes de quem fala com
 a API. Nada de rede.
 """
-import sys
 from datetime import date
 from pathlib import Path
 
 import pytest
-
-_RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_RAIZ))
-
 
 class _Pagina:
     url = "https://erp/#/payable-installments"

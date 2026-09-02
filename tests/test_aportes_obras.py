@@ -12,7 +12,7 @@ FORMULÁRIO de lançamento. Esta aba passa pela tela de PAGAMENTOS, que nunca o
 chama. Agora elas saem do REST `work-management/works/detailed`, a MESMA porta
 que a aba Contratos usa em produção.
 """
-import mc_catalogos
+from aportes import mc_catalogos
 
 
 def catalogos():
