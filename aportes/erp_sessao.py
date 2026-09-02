@@ -13,7 +13,17 @@ lugar nenhum.
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from urllib.parse import urlsplit
+
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+log = util.log(__name__)
 
 #: Os únicos cabeçalhos que interessam. O resto o navegador completa sozinho.
 CABECALHOS = {"authorization", "company-id", "user-id", "organization-unit-id"}
@@ -65,6 +75,10 @@ def cabecalhos_da_requisicao(req) -> tuple[str, dict] | None:
     try:
         host = urlsplit(req.url).netloc
     except Exception:
+        # O endereço NÃO entra na mensagem: é a requisição de uma página
+        # logada e pode carregar id de lançamento e de empresa na query.
+        log.warning("lendo o host de uma requisição para capturar a "
+                    "autenticação do ERP", exc_info=True)
         return None
     if not host_util(host):
         return None
