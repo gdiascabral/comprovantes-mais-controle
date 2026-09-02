@@ -295,7 +295,7 @@ def texto_ocr_pdf(dados: bytes, log=print, limite_paginas: int = 3) -> str:
     except ImportError:                                   # pragma: no cover
         return ""
     try:
-        from separar_renomear import _ocr_pagina
+        from separar_renomear.separar_renomear import _ocr_pagina
     except Exception:                                     # pragma: no cover
         return ""
     try:
@@ -313,7 +313,7 @@ def texto_ocr_imagem(dados: bytes) -> str:
     try:
         import pytesseract
         from PIL import Image
-        from separar_renomear import _OCR, _ocr_disponivel
+        from separar_renomear.separar_renomear import _OCR, _ocr_disponivel
     except Exception:                                     # pragma: no cover
         return ""
     if not _ocr_disponivel(lambda *_: None):

@@ -46,8 +46,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
-import ocr_boleto
-import regras_pagamento as regras
+from . import ocr_boleto
+from . import regras_pagamento as regras
 
 #: Motivos de impedimento, em texto que vai para a tela e para o "ficou de fora".
 MOTIVO_MAO = "a observação manda pagar outra pessoa"
