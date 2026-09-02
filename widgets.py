@@ -1359,30 +1359,63 @@ class BarraTopo(tk.Frame):
     janela, ou em canto nenhum:
 
       onde estou      o logotipo, à esquerda;
-      o que procuro   a busca, no meio;
+      para onde vou   o "ir para uma tela", no meio;
       o app está      o estado do navegador, à direita — que era uma linha
       livre?          cinza no PÉ da barra lateral, o ponto mais distante do
                       olho de quem clica numa aba lá em cima.
 
-    A busca por ora só leva o foco para a aba atual. Está aqui porque o lugar
-    dela na tela é uma decisão de layout, e enfiá-la depois obrigaria a mexer
-    de novo em tudo o que estiver à direita e à esquerda dela.
+    **O campo promete o que entrega, e essa é a mudança de 02/09/2026.** Ele
+    dizia "Buscar lançamento, empresa ou conta…" e o Enter ali só devolvia o
+    cursor ao primeiro campo da aba aberta: procurar lançamento pede um índice
+    que ninguém tem, e um campo que promete três coisas e não faz nenhuma
+    ensina a não usar campo nenhum. A promessa encolheu até o tamanho do que
+    dá para cumprir hoje sem rede e sem ERP — pular para uma das telas do menu.
+
+    Digitar filtra os nomes das telas (sem acento, sem caixa, por pedaço em
+    qualquer posição: `util.filtrar`), ↑/↓ andam pela lista, Enter pula para a
+    que está realçada e Esc devolve o foco a quem o tinha. Quem sabe o nome e o
+    comando de cada tela é a janela, e ela só descobre isso depois de montar o
+    menu — daí `definir_telas`, chamada de lá.
+
+    O PRÓXIMO passo, se for pedido: uma paleta de comandos de verdade, sobre
+    `widgets.atividades()` — as rotinas já registram o que fizeram ali, com aba,
+    evento e números, e isso é um índice local, sem rede. "Remessa de ontem" e
+    "último relatório da Buritis" saem dele. Nada disso é assunto desta função:
+    ela leva a pessoa até a TELA, e essa é a promessa inteira.
+
+    A lista é um `Toplevel` sem barra de título e **sem foco nenhum**, pelo
+    mesmo motivo do calendário do `CampoData`: quem está digitando continua
+    digitando: o foco nunca sai do campo, e é por isso que ↑/↓/Enter/Esc são
+    ligados ao `Entry` e não à lista.
     """
 
     ALTURA = 52
 
+    #: O que o campo diz que faz. Vira constante para o teste poder afirmar
+    #: que a promessa e a entrega são a mesma coisa.
+    DICA = "Ir para uma tela…  (Ctrl+K)"
+
     def __init__(self, pai, marca: str = "mais controle · comprovantes",
-                 ao_buscar=None, dica: str = "", **kw):
+                 dica: str = "", **kw):
         c = cores()
         kw.setdefault("background", c["marca_barra"])
         kw.setdefault("highlightthickness", 0)
         super().__init__(pai, height=self.ALTURA, **kw)
         self.pack_propagate(False)
-        self._dica = dica or ("Buscar lançamento, empresa ou conta…  "
-                              "(Ctrl+K)")
-        #: Pública porque quem sabe o que fazer com o termo é a janela, e ela
-        #: só descobre isso depois de montar as abas — bem depois desta linha.
-        self.ao_buscar = ao_buscar
+        self._dica = dica or self.DICA
+        #: (nome da tela, o que fazer para abri-la). Preenchido por
+        #: `definir_telas`; até lá o campo não tem para onde ir e não abre lista.
+        self._telas: list[tuple[str, object]] = []
+        self._achados: list[tuple[str, object]] = []
+        self._realce = 0
+        self._popup = None
+        self._moldura = None
+        self._linhas: list = []
+        self._fora = None
+        #: Quem estava com o foco quando o Ctrl+K o roubou. É para lá que o Esc
+        #: o devolve — quem apertou Ctrl+K sem querer volta ao campo que estava
+        #: preenchendo, e não a um lugar qualquer da tela.
+        self._voltar_para = None
 
         self.esquerda = tk.Frame(self, background=c["marca_barra"])
         self.esquerda.pack(side="left", fill="y", padx=(18, 0))
@@ -1405,14 +1438,30 @@ class BarraTopo(tk.Frame):
         self._vazia = True
         self.busca.bind("<FocusIn>", self._entrou)
         self.busca.bind("<FocusOut>", self._saiu)
-        self.busca.bind("<Return>", self._buscar)
-        self.busca.bind("<Escape>", lambda _e: self.limpar())
+        self.busca.bind("<KeyRelease>", self._ao_digitar)
+        self.busca.bind("<Return>", self._ir)
+        self.busca.bind("<Escape>", self._desistir)
+        self.busca.bind("<Down>", lambda _e: self._mover(1))
+        self.busca.bind("<Up>", lambda _e: self._mover(-1))
 
         _repintaveis.add(self)
         self.aplicar_cores(_estado["escuro"])
         self._mostrar_dica()
 
-    # ------------------------------------------------------------ busca
+    # ------------------------------------------------------------ o campo
+    def definir_telas(self, pares) -> None:
+        """Os nomes das telas e o que fazer com cada uma: (texto, comando).
+
+        Quem chama é o `comprovantes_app`, DEPOIS de montar o menu, e o comando
+        que ele passa é o `acionar` do próprio `ItemMenu` — o mesmíssimo
+        caminho do clique. Um caminho só, pelo motivo de sempre: com dois,
+        existiria a chance de a busca abrir uma tela e o clique abrir outra.
+
+        Como a lista sai do menu já montado, ela também já vem filtrada pelo
+        PAPEL de quem entrou: a busca não leva ninguém a uma tela que o menu
+        dessa pessoa não mostra."""
+        self._telas = [(str(texto), comando) for texto, comando in pares]
+
     def _mostrar_dica(self):
         self._vazia = True
         self.busca.delete(0, "end")
@@ -1430,21 +1479,214 @@ class BarraTopo(tk.Frame):
             self._mostrar_dica()
 
     def limpar(self):
+        """Apaga o que se digitou e devolve o foco a quem o tinha.
+
+        É o que o Esc faz. Devolver o foco importa mais do que parece: o Ctrl+K
+        vale com o foco em qualquer lugar, inclusive no meio de um campo de
+        data pela metade — desistir tem de deixar a pessoa onde ela estava, e
+        não largá-la numa barra azul."""
+        self._fechar_lista()
         self._mostrar_dica()
+        voltar, self._voltar_para = self._voltar_para, None
+        try:
+            if voltar is not None and voltar.winfo_exists():
+                voltar.focus_set()
+                return
+        except tk.TclError:
+            pass
         self.focus_set()
 
-    def _buscar(self, _ev=None):
-        if self.ao_buscar and not self._vazia:
-            self.ao_buscar(self.busca.get().strip())
+    def _desistir(self, _ev=None):
+        self.limpar()
+        return "break"
 
     def focar_busca(self, _ev=None):
+        """Ctrl+K: o foco vem para cá, e a lista das telas abre inteira.
+
+        Inteira e não vazia: filtro que esconde tudo enquanto o campo está em
+        branco é pior do que não ter filtro (a mesma regra do
+        `util.filtrar`) — e aqui a lista completa é o próprio menu, dito de
+        outro jeito, para quem não quer tirar a mão do teclado."""
+        try:
+            anterior = self.busca.focus_get()
+        except (KeyError, tk.TclError):
+            anterior = None
+        if anterior is not None and str(anterior) != str(self.busca):
+            self._voltar_para = anterior
         self.busca.focus_set()
         self._entrou()
+        self._filtrar()
         return "break"
+
+    # ------------------------------------------------------------- a lista
+    #: Teclas que NÃO são digitação: filtrar nelas remontaria a lista
+    #: justamente enquanto a pessoa anda por ela. Mesma ressalva do
+    #: `ComboBusca._ao_digitar`.
+    _NAO_E_DIGITAR = ("Up", "Down", "Return", "Escape", "Tab", "Shift_L",
+                      "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R")
+
+    def _ao_digitar(self, ev=None):
+        if ev is not None and ev.keysym in self._NAO_E_DIGITAR:
+            return
+        self._filtrar()
+
+    def _filtrar(self):
+        """Refaz a lista a partir do que está escrito. Sempre da lista INTEIRA:
+        filtrar sobre o resultado anterior só a encolheria, e apagar o que se
+        digitou não a traria de volta."""
+        if not self._telas:
+            self._fechar_lista()
+            return
+        termo = "" if self._vazia else self.busca.get()
+        self._achados = util.filtrar(self._telas, termo, chave=lambda p: p[0])
+        self._realce = 0
+        self._desenhar_lista()
+
+    def _mover(self, passo: int):
+        if self._achados:
+            self._realce = (self._realce + passo) % len(self._achados)
+            self._pintar_realce()
+        return "break"
+
+    def _escolher(self, indice: int):
+        self._realce = indice
+        self._ir()
+
+    def _ir(self, _ev=None):
+        """Enter: pula para a tela realçada — e, sem nenhuma que bata, NADA.
+
+        Não mover o foco é a resposta certa para o texto que não acha ninguém:
+        levar o cursor para "algum lugar" seria indistinguível de ter
+        encontrado a tela errada."""
+        if not self._achados or not 0 <= self._realce < len(self._achados):
+            return "break"
+        comando = self._achados[self._realce][1]
+        self._fechar_lista()
+        self._mostrar_dica()
+        # Daqui em diante quem manda no foco é a tela que abriu (o
+        # `focar_primeiro_campo` que o `mostrar` agenda), e não o Esc.
+        self._voltar_para = None
+        if comando:
+            comando()
+        return "break"
+
+    def _desenhar_lista(self):
+        c = cores()
+        if self._popup is None:
+            top = tk.Toplevel(self)
+            top.withdraw()                   # posiciona antes de aparecer
+            top.overrideredirect(True)       # sem barra de título e sem foco
+            top.transient(self.winfo_toplevel())
+            try:
+                top.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            self._popup = top
+            self._moldura = tk.Frame(top, highlightthickness=1)
+            self._moldura.pack(fill="both", expand=True)
+            # Clique fora fecha, e o bind vai no toplevel do APP: o clique que
+            # interessa é o que acontece longe daqui, e esse nunca chega à
+            # lista. `add="+"` para não derrubar quem já usa o <Button-1> da
+            # janela — o calendário do `CampoData`, por exemplo.
+            self._fora = self.winfo_toplevel().bind("<Button-1>",
+                                                    self._clique_fora, add="+")
+        self._moldura.configure(background=c["cartao"],
+                                highlightbackground=c["borda"],
+                                highlightcolor=c["borda"])
+        for w in self._moldura.winfo_children():
+            w.destroy()
+        self._linhas = []
+        if not self._achados:
+            # Dizer que não achou, em vez de sumir com a lista: campo que não
+            # responde a nada parece travado, e a pessoa fica tentando de novo.
+            tk.Label(self._moldura, text="Nenhuma tela com esse nome.",
+                     background=c["cartao"], foreground=c["tenue"],
+                     font=FONTE_APOIO, anchor="w", padx=10, pady=6
+                     ).pack(fill="x")
+        for i, (texto, _cmd) in enumerate(self._achados):
+            lin = tk.Label(self._moldura, text=texto, anchor="w", padx=10,
+                           pady=4, cursor="hand2")
+            lin.pack(fill="x")
+            lin.bind("<Button-1>", lambda _e, n=i: self._escolher(n))
+            lin.bind("<Enter>", lambda _e, n=i: self._realcar(n))
+            self._linhas.append(lin)
+        self._pintar_realce()
+        self._posicionar()
+
+    def _realcar(self, indice: int):
+        """O cursor por cima realça a mesma linha que ↑/↓ realçam: o mouse e o
+        teclado apontam para o mesmo lugar, e o Enter sempre abre o que está
+        destacado."""
+        if self._realce != indice:
+            self._realce = indice
+            self._pintar_realce()
+
+    def _pintar_realce(self):
+        c = cores()
+        for i, lin in enumerate(self._linhas):
+            marcada = i == self._realce
+            try:
+                lin.configure(
+                    background=c["marca_fundo"] if marcada else c["cartao"],
+                    foreground=c["marca"] if marcada else c["texto"])
+            except tk.TclError:
+                return
+
+    def _posicionar(self):
+        top = self._popup
+        if top is None:
+            return
+        try:
+            top.update_idletasks()
+            larg = max(self.busca.winfo_width(), 240)
+            alt = top.winfo_reqheight()
+            x = self.busca.winfo_rootx()
+            y = self.busca.winfo_rooty() + self.busca.winfo_height() + 3
+            # Puxada para dentro da tela: com `overrideredirect` o Windows não
+            # reposiciona nada sozinho, e numa janela baixa a lista das doze
+            # telas nasceria com metade fora do monitor.
+            x = max(min(x, top.winfo_screenwidth() - larg - 8), 8)
+            if y + alt > top.winfo_screenheight() - 8:
+                y = max(self.busca.winfo_rooty() - alt - 3, 8)
+            top.geometry(f"{larg}x{alt}+{x}+{y}")
+            top.deiconify()
+        except tk.TclError:
+            self._fechar_lista()
+
+    def _clique_fora(self, ev):
+        """Fecha, a não ser que o clique tenha sido no campo ou na lista.
+
+        Compara o CAMINHO do widget no Tk, que é hierárquico — o mesmo teste
+        que o calendário e o Enter global do app usam."""
+        if self._popup is None:
+            return
+        alvo = str(ev.widget)
+        if alvo.startswith(str(self._popup)) or alvo.startswith(str(self.busca)):
+            return
+        self._fechar_lista()
+
+    def _fechar_lista(self):
+        if self._fora is not None:
+            try:
+                self.winfo_toplevel().unbind("<Button-1>", self._fora)
+            except tk.TclError:
+                pass
+            self._fora = None
+        if self._popup is not None:
+            try:
+                self._popup.destroy()
+            except tk.TclError:              # a janela principal já a levou
+                pass
+            self._popup = None
+        self._moldura = None
+        self._linhas = []
 
     # ------------------------------------------------------------- tema
     def aplicar_cores(self, escuro: bool | None = None):
         c = cores()
+        # A lista lê a paleta ao nascer e vive o tempo de uma digitação:
+        # fechá-la é repintá-la, como no calendário.
+        self._fechar_lista()
         try:
             self.configure(background=c["marca_barra"])
             for filho in (self.esquerda, self.centro, self.direita):
@@ -1668,9 +1910,19 @@ class ItemMenu(tk.Frame):
         self.aplicar_cores(_estado["escuro"])
 
     # ------------------------------------------------------------ eventos
-    def _clique(self, _ev=None):
+    def acionar(self):
+        """Abre a tela deste item. É o que o clique faz, com nome público.
+
+        Existe porque a busca da barra ("ir para uma tela") pula para a tela
+        POR AQUI: um caminho só para o mouse, o teclado e a busca. Com três
+        caminhos, existiria a chance de um deles abrir a tela errada — e o
+        `mostrar` do app faz mais coisas que trocar de quadro (abre o grupo
+        fechado, chama o `ao_abrir` da aba, põe o foco no primeiro campo)."""
         if self._comando:
             self._comando()
+
+    def _clique(self, _ev=None):
+        self.acionar()
 
     def _teclou(self, _ev=None):
         """Enter e Espaço fazem o que o clique faz — o MESMO `_comando`.
