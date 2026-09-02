@@ -43,10 +43,57 @@ jobs:
         with:
           python-version: "3.11"
 
+      # `requirements.lock` e NÃO `requirements.txt`: o .txt é a INTENÇÃO
+      # (faixas), o .lock é o FATO (versão exata + hash). Instalando da faixa,
+      # o mesmo commit construído em dias diferentes gerava exes diferentes —
+      # versão nova de terceiro quebrava a entrega sem uma linha de código
+      # mudar, e defeito de produção não se reproduzia aqui. `--require-hashes`
+      # é o que fecha a porta do meio: pacote que chegue com outro conteúdo
+      # (índice comprometido, artefato reescrito) não instala, ele PARA a
+      # build. Todas as 23 distribuições do lock são wheel para cp311/win_amd64
+      # ou pura — nenhuma precisa compilar sdist no runner.
+      #
+      # O requirements-dev.txt continua na FAIXA, de propósito: pytest, ruff,
+      # vermin e uv são régua de CI, não vão para dentro do exe, e travá-los só
+      # criaria mais um arquivo para envelhecer.
       - name: Instalar dependências
         run: |
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.lock
           pip install -r requirements-dev.txt
+
+      # O lock só protege enquanto descreve o requirements.txt de hoje. Quem
+      # alarga uma faixa e esquece de recompilar deixa os dois se contradizendo,
+      # e a build continua instalando o pin velho sem nada denunciar — o pior
+      # dos dois mundos, porque parece travado e não está.
+      #
+      # Recompilar não é o mesmo que ATUALIZAR: com o arquivo de saída já no
+      # lugar, o uv o lê como preferência e mantém cada versão que já estava
+      # lá. Medido: com `requests` rebaixado à mão para 2.32.3 e a 2.34.2 já
+      # publicada, o recompile devolveu 2.32.3. Então este passo só fica
+      # vermelho quando o requirements.txt mudou e o lock não.
+      #
+      # A conferência é `git diff --name-only` e não `git diff --exit-code`: no
+      # pwsh do runner, comando externo que sai com código != 0 vira exceção na
+      # hora (`$ErrorActionPreference` = stop), o passo morre ali e as linhas de
+      # `::error::` abaixo — que dizem o que fazer — nunca chegam a ser
+      # escritas. Perguntar "mudou alguma coisa?" dá o mesmo veredicto sem
+      # depender do código de saída.
+      - name: Conferir que o requirements.lock está em dia
+        run: |
+          uv pip compile requirements.txt --python-version 3.11 --python-platform windows --generate-hashes -o requirements.lock
+          $mudou = git diff --name-only -- requirements.lock
+          if ($mudou) {
+            git diff -- requirements.lock
+            Write-Host "::error::O requirements.lock nao corresponde ao"
+            Write-Host "::error::requirements.txt. Alguem mexeu na faixa e nao"
+            Write-Host "::error::recompilou o lock - a build instalaria as"
+            Write-Host "::error::versoes velhas e ninguem perceberia."
+            Write-Host "::error::Rode na sua maquina, e commite os DOIS juntos:"
+            Write-Host "::error::  uv pip compile requirements.txt --python-version 3.11 --python-platform windows --generate-hashes -o requirements.lock"
+            Write-Host "::error::(veja docs/DEPENDENCIAS.md)"
+            exit 1
+          }
+          Write-Host "requirements.lock em dia com o requirements.txt - ok"
 
       # Só erro de verdade: E9 é sintaxe, e F é o pyflakes inteiro (nome
       # indefinido, import não usado, f-string sem f...). Nenhuma opinião de
@@ -151,7 +198,13 @@ jobs:
           mudou="$(git diff --name-only "$intervalo")"
           echo "Arquivos deste push ($intervalo):"; echo "$mudou"
           exige=0
-          for f in motor.py atualizador.py requirements.txt .github/workflows/build.yml; do
+          # `requirements.lock` está aqui, e não é redundância com o
+          # requirements.txt: quem manda no que entra no exe é o LOCK. Trocar a
+          # versão de uma biblioteca por um recompile (correção de segurança
+          # dentro da mesma faixa, por exemplo) não toca no .txt — e sem esta
+          # linha o exe sairia com biblioteca nova e o motor_minimo apontando
+          # para o exe velho.
+          for f in motor.py atualizador.py requirements.txt requirements.lock .github/workflows/build.yml; do
             if echo "$mudou" | grep -qx "$f"; then
               echo "::notice::'$f' mudou — exige motor_minimo.txt novo"
               exige=1
@@ -216,7 +269,10 @@ jobs:
 
       - name: Instalar dependências
         run: |
-          pip install -r requirements.txt
+          # Do LOCK, com hash conferido — as mesmas versões que o job `test`
+          # acabou de usar. Instalar da faixa aqui deixava o exe publicado
+          # depender da data da build (ver o comentário no job `test`).
+          pip install --require-hashes -r requirements.lock
           # Versão PRESA: é o PyInstaller quem decide o que entra no exe (e,
           # principalmente, o que fica de fora da biblioteca padrão). Com
           # `pip install pyinstaller` solto, o exe publicado mudava de
