@@ -152,3 +152,8 @@ sessao.dat
 # ERP logado: mostram saldo, favorecido e a conta inteira.
 *.png
 !icone.png
+
+# Aviso da sonda diaria (ferramentas/sonda.py): nasce ao lado do exe quando um
+# dos sistemas de fora falhou e some quando tudo volta. E estado da maquina, nao
+# codigo; o sonda.log ja cai na regra *.log.
+sonda.ALERTA.txt
