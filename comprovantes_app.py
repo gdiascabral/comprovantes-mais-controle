@@ -732,12 +732,15 @@ def main():
     # que faz o atalho existir para quem rodar o app como script fora do
     # Windows — que é como ele é desenvolvido.
     root.bind_all("<Control-ISO_Left_Tab>", _anterior)
-    # A busca ainda não procura nada: leva o foco para o primeiro campo da
-    # tela aberta. Está na barra porque o LUGAR dela é decisão de layout, e
-    # deixá-la para depois obrigaria a mexer de novo em tudo o que está à
-    # direita e à esquerda dela. O que ela vai procurar é assunto de quem
-    # tiver um índice para procurar — hoje ninguém tem.
-    barra.ao_buscar = lambda _termo: _focar_primeiro(quadros[atual["nome"]])
+    # A busca da barra é um "ir para uma tela", e é AQUI que ela ganha para
+    # onde ir. Depois do menu montado, de propósito: a lista sai de `itens`, que
+    # já respeita o papel de quem entrou — a busca não leva ninguém a uma tela
+    # que o menu dessa pessoa não mostra. E o comando é o `acionar` do próprio
+    # `ItemMenu`, que é o mesmíssimo caminho do clique: `mostrar` faz mais coisa
+    # que trocar de quadro (abre o grupo fechado, chama o `ao_abrir` da aba, põe
+    # o foco no primeiro campo), e uma segunda porta para a mesma tela seria
+    # uma segunda chance de esquecer um desses passos.
+    barra.definir_telas((it.texto(), it.acionar) for it in itens.values())
     aba_ini.definir_navegacao(mostrar)
 
     aplicar_tema(escolha_tema)

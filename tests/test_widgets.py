@@ -504,6 +504,202 @@ def test_a_aba_que_trabalha_volta_para_a_fonte_de_texto(coluna):
         "o ícone de sempre não voltou quando o trabalho acabou")
 
 
+# ------------------------------------------------- a busca da barra de cima
+# Até 02/09/2026 o campo dizia "Buscar lançamento, empresa ou conta… (Ctrl+K)"
+# e o Enter ali só devolvia o cursor ao primeiro campo da aba aberta: ele
+# prometia três coisas e não fazia nenhuma. Agora ele promete UMA — pular para
+# uma das telas do menu — e é essa promessa que estes testes cobram.
+
+#: Os doze nomes na ordem em que o menu os empilha, copiados do
+#: `comprovantes_app.main()`. Escritos aqui porque os rótulos moram dentro da
+#: função que monta a janela, e ela não roda sem login e sem nuvem.
+TELAS_DO_MENU = ("Início", "Baixar Comprovantes", "Separar e Renomear",
+                 "Anexar", "Conferência", "Aportes", "Remessa/Retorno",
+                 "Saldo de pagamentos", "Relatório Mensal", "Extratos Sicoob",
+                 "Contratos", "Acessorias")
+
+
+@pytest.fixture
+def barra(raiz):
+    """A barra de cima com as doze telas, do jeito que o app a alimenta:
+    pares (nome, comando), e o comando é o que abre a tela."""
+    b = widgets.BarraTopo(raiz)
+    b.pack(fill="x")
+    abertas = []
+    b.definir_telas((nome, lambda n=nome: abertas.append(n))
+                    for nome in TELAS_DO_MENU)
+    raiz.update()
+    yield b, abertas, raiz
+    try:
+        b._fechar_lista()
+        b.destroy()
+    except tk.TclError:
+        pass
+    raiz.update()
+
+
+def _buscar(b, raiz, texto: str):
+    """Digita no campo como quem digita: Ctrl+K, o texto, e a tecla solta que
+    é o que dispara o filtro."""
+    b.focar_busca()
+    b.busca.delete(0, "end")
+    b.busca.insert(0, texto)
+    b.busca.event_generate("<KeyRelease>")
+    raiz.update()
+
+
+def test_a_dica_promete_so_o_que_o_campo_faz(barra):
+    """O texto do campo é a única documentação que o usuário lê. Ele não pode
+    citar lançamento, empresa nem conta: nada disso é procurável aqui — daria
+    um índice do ERP, e a busca não fala com o ERP nem com a rede."""
+    b, _, _ = barra
+    assert "tela" in widgets.BarraTopo.DICA.lower()
+    assert "Ctrl+K" in widgets.BarraTopo.DICA
+    for promessa in ("lançamento", "empresa", "conta"):
+        assert promessa not in widgets.BarraTopo.DICA.lower(), (
+            f"a dica ainda promete procurar {promessa}, e ela não procura")
+    assert b.busca.get() == widgets.BarraTopo.DICA
+
+
+@pytest.mark.parametrize("termo, esperada", [
+    ("rem", "Remessa/Retorno"),
+    ("saldo", "Saldo de pagamentos"),
+    # Sem acento e sem caixa, como toda comparação de nome do projeto
+    # (`util.norm_espaco`): quem procura digita o que lembra, não o que o
+    # rótulo tem de sinal gráfico.
+    ("CONFERENCIA", "Conferência"),
+    ("relatorio", "Relatório Mensal"),
+    # Pedaço em qualquer posição, e não só o começo do nome.
+    ("sicoob", "Extratos Sicoob"),
+])
+def test_o_enter_pula_para_a_primeira_tela_que_bate(barra, termo, esperada):
+    b, abertas, raiz = barra
+    _buscar(b, raiz, termo)
+    b.busca.event_generate("<Return>")
+    raiz.update()
+    assert abertas == [esperada], (
+        f"{termo!r} devia abrir {esperada!r} e abriu {abertas}")
+    # E o campo volta para a dica: ele é um "para onde vou", não um filtro que
+    # fica posto.
+    assert b.busca.get() == widgets.BarraTopo.DICA
+
+
+def test_texto_sem_par_nao_move_o_foco(barra):
+    """Não achar nada e "achar a tela errada" precisam ser distinguíveis. Sem
+    par, o Enter não abre nada e o foco fica onde está — e a lista diz isso em
+    letras, em vez de sumir (campo que não responde parece travado)."""
+    b, abertas, raiz = barra
+    _buscar(b, raiz, "xablau")
+    assert b._achados == []
+    assert b._popup is not None, "a lista sumiu em vez de dizer que não achou"
+    textos = [str(w.cget("text")) for w in b._moldura.winfo_children()]
+    assert any("Nenhuma tela" in t for t in textos), textos
+
+    b.busca.event_generate("<Return>")
+    raiz.update()
+    assert abertas == []
+    assert str(raiz.focus_get()) == str(b.busca), (
+        "sem tela que bata, o Enter mexeu no foco")
+
+
+def test_o_esc_limpa_e_devolve_o_foco_de_onde_ele_veio(barra):
+    """O Ctrl+K vale com o foco em qualquer lugar, inclusive no meio de um
+    campo pela metade. Desistir tem de deixar a pessoa onde ela estava."""
+    b, abertas, raiz = barra
+    campo = tk.Entry(raiz)
+    campo.pack()
+    campo.insert(0, "01/08/2026")
+    campo.focus_force()
+    raiz.update()
+
+    _buscar(b, raiz, "rem")
+    assert str(raiz.focus_get()) == str(b.busca)
+
+    b.busca.event_generate("<Escape>")
+    raiz.update()
+    assert abertas == [], "o Esc abriu uma tela"
+    assert b.busca.get() == widgets.BarraTopo.DICA
+    assert b._popup is None, "a lista continuou aberta depois do Esc"
+    assert str(raiz.focus_get()) == str(campo), (
+        "o Esc não devolveu o foco ao campo que estava sendo preenchido")
+    campo.destroy()
+
+
+def test_as_setas_andam_pela_lista_e_o_enter_abre_a_realcada(barra):
+    b, abertas, raiz = barra
+    _buscar(b, raiz, "s")                 # bate em várias
+    assert len(b._achados) > 1
+    primeira, segunda = b._achados[0][0], b._achados[1][0]
+    assert b._realce == 0
+    b.busca.event_generate("<Down>")
+    raiz.update()
+    b.busca.event_generate("<Return>")
+    raiz.update()
+    assert abertas == [segunda] and abertas != [primeira]
+
+
+def test_a_busca_abre_a_tela_pelo_mesmo_caminho_do_clique(raiz):
+    """Um caminho só: o comando que a barra guarda é o `acionar` do próprio
+    `ItemMenu`. Com dois, existiria a chance de a busca abrir uma tela e o
+    clique abrir outra."""
+    pai = tk.Frame(raiz)
+    pai.pack(fill="x")
+    contagem = {"n": 0}
+    item = widgets.ItemMenu(pai, "Remessa/Retorno", icone="🗓",
+                            comando=lambda: contagem.__setitem__(
+                                "n", contagem["n"] + 1))
+    item.pack(fill="x")
+    b = widgets.BarraTopo(raiz)
+    b.pack(fill="x")
+    b.definir_telas([(item.texto(), item.acionar)])
+    raiz.update()
+    try:
+        item._clique()                    # o caminho do mouse
+        _buscar(b, raiz, "remessa")
+        b.busca.event_generate("<Return>")
+        raiz.update()
+        assert contagem["n"] == 2, (
+            "a busca não passou pelo mesmo comando que o clique")
+    finally:
+        b._fechar_lista()
+        b.destroy()
+        pai.destroy()
+        raiz.update()
+
+
+def test_sem_telas_definidas_a_busca_nao_abre_lista(raiz):
+    """A barra nasce antes de o menu existir — ela é a primeira coisa que o
+    `main()` empacota. Até `definir_telas` ser chamada não há para onde ir, e
+    abrir uma lista vazia diria que o app não tem telas."""
+    b = widgets.BarraTopo(raiz)
+    b.pack(fill="x")
+    raiz.update()
+    try:
+        b.focar_busca()
+        b.busca.insert(0, "rem")
+        b.busca.event_generate("<KeyRelease>")
+        raiz.update()
+        assert b._popup is None
+        b.busca.event_generate("<Return>")
+        raiz.update()                     # e não estoura
+    finally:
+        b._fechar_lista()
+        b.destroy()
+        raiz.update()
+
+
+def test_trocar_de_tema_fecha_a_lista(barra):
+    """A lista lê a paleta ao nascer e vive o tempo de uma digitação: repintá-la
+    custaria mais do que redesenhá-la na próxima tecla — a mesma decisão do
+    calendário do `CampoData`."""
+    b, _, raiz = barra
+    _buscar(b, raiz, "a")
+    assert b._popup is not None
+    b.aplicar_cores(True)
+    raiz.update()
+    assert b._popup is None
+
+
 def test_fechar_da_acessorias_sem_nada_aberto(raiz):
     """O `_sair()` do app percorre as abas chamando `fechar()`. O da Acessórias
     fecha o Chrome do portal na thread dele e desliga o executor — e precisa ser
