@@ -60,6 +60,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -68,6 +69,19 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .modelos import dinheiro, so_digitos
+
+#: O diagnóstico da trava. É o `logging` da stdlib, e NÃO o `util.log()` que o
+#: resto do app adota — este pacote é stdlib pura (está no CLAUDE.md, e o
+#: `tests/test_cnab240_pacote.py` cobra), então ele faz o que biblioteca faz:
+#: emite no logger do próprio nome e deixa a APLICAÇÃO dizer para onde vai.
+#:
+#: Quem liga os dois é uma linha só, do lado do app: `util.log("cnab240")`
+#: pendura o `RotatingFileHandler` do `diagnostico.log` no logger pai, e tudo
+#: daqui sobe até ele por propagação. Sem essa linha, estas mensagens aparecem
+#: em quem roda no terminal (`python -m cnab240`, a suíte) e se perdem no exe,
+#: que é `--noconsole` — continua sendo mais do que o `pass` de antes, mas não
+#: é o arquivo que se consulta depois. Ver o final do corpo do PR.
+log = logging.getLogger(__name__)
 
 #: O campo G018 tem 6 posições — passar disso não cabe no header.
 NSA_MAXIMO = 999_999
@@ -352,6 +366,9 @@ class _Trava:
         try:
             self.caminho.unlink()
         except OSError:
+            log.warning("apagando a trava vencida do histórico (%s); a próxima "
+                        "remessa vai esperar e depois recusar", self.caminho,
+                        exc_info=True)
             return False
         return True
 
@@ -362,7 +379,9 @@ class _Trava:
         try:
             self.caminho.unlink()
         except OSError:
-            pass
+            log.warning("soltando a trava do histórico (%s); ela fica para trás "
+                        "e a próxima remessa espera até ela vencer",
+                        self.caminho, exc_info=True)
 
 
 class Historico:
