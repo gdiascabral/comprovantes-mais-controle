@@ -2132,15 +2132,28 @@ def estado_de(texto: str) -> str:
 
 
 def estilo_tabela(tabela: "ttk.Treeview", zebra: bool = True,
-                  dupla: bool = False) -> "ttk.Treeview":
-    """Põe a tabela no visual do painel e registra as tags de estado.
+                  dupla: bool = False, ordenavel: bool = True,
+                  fixos=()) -> "ttk.Treeview":
+    """Põe a tabela no visual do painel, registra as tags de estado e liga a
+    ordenação por clique no cabeçalho.
 
     Chamar DEPOIS de criar as colunas e ANTES de inserir as linhas. Quem
     insere passa `tags=("ok",)` — ou o que `estado_de` devolver — e a linha
     ganha a pílula sem a aba precisar saber a cor.
+
+    `ordenavel` vem LIGADO porque cabeçalho de tabela que não responde ao
+    clique é lido como tabela quebrada: quem usa planilha o dia inteiro
+    experimenta clicar antes de procurar o filtro. Desligar é para a tabela
+    cuja ordem JÁ é a informação (um extrato, uma trilha de passos).
+
+    `fixos` são iids que nunca se movem — ficam no topo, na ordem dada. Existe
+    por causa da linha "(deixar em dúvida)" do Anexar: ela é uma OPÇÃO, não um
+    dado, e ordenar a lista não pode enterrá-la no meio dos arquivos.
     """
     c = cores()
     tabela.configure(style="Dupla.Treeview" if dupla else "Tabela.Treeview")
+    tabela._ordenacao = {"coluna": "", "descendente": False, "zebra": zebra,
+                         "fixos": tuple(fixos)}
     # O TÍTULO da coluna acompanha o alinhamento do CONTEÚDO dela: o padrão do
     # ttk é centralizar o cabeçalho e alinhar o conteúdo à esquerda, e a coluna
     # de dinheiro ficava com o título no meio e os valores à direita, sem que
@@ -2148,6 +2161,13 @@ def estilo_tabela(tabela: "ttk.Treeview", zebra: bool = True,
     try:
         for col in tabela["columns"]:
             tabela.heading(col, anchor=str(tabela.column(col, "anchor")))
+            # Coluna que JÁ tem dono continua com o dono. A do "marcar todas"
+            # do Baixar Comprovantes é um botão disfarçado de cabeçalho, e
+            # trocá-la por uma ordenação tiraria da tela o único lugar onde se
+            # marca tudo de uma vez.
+            if ordenavel and not str(tabela.heading(col, "command")):
+                tabela.heading(
+                    col, command=lambda c=col: ordenar_tabela(tabela, c))
     except tk.TclError:
         pass
     # A ORDEM importa e não é a da leitura: no Treeview do Tk ganha a tag
@@ -2187,6 +2207,168 @@ def linha_zebrada(indice: int, estado: str = "") -> tuple:
     if estado:
         tags.append(estado)
     return tuple(tags)
+
+
+# --------------------------------------------------------- ordenar a tabela
+# Clicar no cabeçalho ordena, e clicar de novo inverte. ▲ é do menor para o
+# maior; ▼ é o contrário.
+#
+# Três decisões que não são óbvias:
+#
+# 1. **o TIPO sai do conteúdo, não de um cadastro de colunas.** "R$ 1.234,56"
+#    ordenado como texto põe R$ 987,00 depois de R$ 1.234,56, porque "9" > "1"
+#    — e é justamente a coluna de dinheiro que se ordena para achar o maior
+#    pagamento do dia. Perguntar à coluna o que ela tem custa uma passada e
+#    dispensa cada tela declarar o tipo de cada coluna dela (catorze tabelas,
+#    catorze chances de a declaração divergir do que a célula recebe);
+# 2. **a zebra é reaplicada depois de mover as linhas.** As tags "par"/"impar"
+#    são gravadas NO ITEM quando ele nasce, e mover o item leva a tag junto:
+#    sem reaplicar, as listras saem embaralhadas e a tabela parece um erro de
+#    desenho. Só o estado (`ok`/`atencao`/`erro`/`info`) sobrevive à mudança,
+#    porque ele é do DADO e não da posição;
+# 3. **célula sem valor não some nem se disfarça de zero.** "—", "?" e o vazio
+#    valem menos que qualquer número e que qualquer data: no ▲ elas abrem a
+#    lista, no ▼ elas fecham. É previsível, e é o único jeito de não misturar
+#    "não tem valor" com "vale zero" — que, numa tabela de pagamento, são
+#    coisas bem diferentes.
+
+#: O que ordena por último (ou por primeiro, no ▼): a célula que não tem valor.
+#: São os travessões e afins que as telas escrevem quando o dado não existe.
+_SEM_VALOR = {"", "-", "–", "—", "?", "n/d", "nao informado", "r$ —", "r$ -"}
+
+#: As setas do cabeçalho. Ficam à parte para o `_titulo_limpo` saber tirá-las.
+SETA_SOBE = " ▲"
+SETA_DESCE = " ▼"
+
+
+def valor_de_brl(texto) -> float | None:
+    """O inverso do `brl`: "R$ 1.234,56" vira 1234.56. `None` quando não é
+    número.
+
+    Ponto é milhar e vírgula é decimal, como escreve o `brl` e como escreve
+    todo o resto do app. Aceita o valor sem o "R$" (as telas gravam os dois
+    jeitos na mesma tabela) e o negativo entre parênteses, que é como planilha
+    costuma mostrar saída de caixa."""
+    t = str(texto or "").replace(" ", " ").strip()
+    t = t.replace("R$", "").replace("r$", "").strip()
+    if not t:
+        return None
+    negativo = t.startswith("-") or (t.startswith("(") and t.endswith(")"))
+    t = t.strip("()+- ")
+    if not t or any(ch not in "0123456789.," for ch in t):
+        return None
+    try:
+        v = float(t.replace(".", "").replace(",", "."))
+    except ValueError:
+        return None
+    return -v if negativo else v
+
+
+def _data_de_texto(texto) -> "date | None":
+    """dd/mm/aaaa (com ou sem hora depois) vira data. `None` quando não é."""
+    m = re.match(r"^(\d{2})/(\d{2})/(\d{4})(?:\s.*)?$", str(texto or "").strip())
+    if not m:
+        return None
+    try:
+        return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None                      # 31/02: digitação, não data
+
+
+def _sem_valor(texto: str) -> bool:
+    return util.norm_espaco(texto).lower() in _SEM_VALOR
+
+
+def _chave_da_coluna(valores):
+    """A função que transforma cada célula desta coluna em algo comparável.
+
+    Decidida pela coluna INTEIRA, e não célula a célula: chave de tipos
+    misturados estoura no `sorted`, e uma coluna que ordena como número em
+    metade das linhas e como texto na outra metade não ordena coisa nenhuma."""
+    cheios = [v for v in valores if not _sem_valor(v)]
+    if cheios and all(valor_de_brl(v) is not None for v in cheios):
+        return lambda v: (valor_de_brl(v) if not _sem_valor(v)
+                          else float("-inf"))
+    if cheios and all(_data_de_texto(v) is not None for v in cheios):
+        return lambda v: (_data_de_texto(v) if not _sem_valor(v)
+                          else date.min)
+    # O resto é texto, comparado como o app compara nome em todo lugar: sem
+    # acento, sem caixa e sem espaço dobrado (`util.norm_espaco`). Sem isso
+    # "Ática" cairia depois de "Zebra", porque "Á" vem depois de "Z" na tabela
+    # de caracteres.
+    return lambda v: util.norm_espaco(v)
+
+
+def _titulo_limpo(texto: str) -> str:
+    """O título do cabeçalho sem a seta.
+
+    Lido do próprio cabeçalho a cada ordenação, e não guardado na hora de
+    ligar: várias telas escrevem o `heading(text=…)` DEPOIS do
+    `estilo_tabela`, e um título memorizado cedo demais seria o vazio."""
+    t = str(texto or "")
+    for seta in (SETA_SOBE, SETA_DESCE):
+        if t.endswith(seta):
+            return t[:-len(seta)]
+    return t
+
+
+def ordenar_tabela(tabela: "ttk.Treeview", coluna: str,
+                   descendente: bool | None = None) -> None:
+    """Ordena as linhas por esta coluna. Sem `descendente`, alterna asc/desc.
+
+    Reordena o que já está na tela — não relê nada e não fala com ninguém.
+    """
+    estado = getattr(tabela, "_ordenacao", None)
+    if estado is None:
+        estado = tabela._ordenacao = {"coluna": "", "descendente": False,
+                                      "zebra": True, "fixos": ()}
+    if descendente is None:
+        descendente = coluna == estado["coluna"] and not estado["descendente"]
+    try:
+        fixos = [i for i in estado["fixos"] if tabela.exists(i)]
+        itens = [i for i in tabela.get_children("") if i not in fixos]
+        # Tabela em ÁRVORE não se ordena aqui: mover um pai leva os filhos, e
+        # ordenar os filhos entre pais diferentes muda o que a tabela diz.
+        # Nenhuma do app é assim hoje; recusar é mais barato que descobrir.
+        if any(tabela.get_children(i) for i in itens):
+            return
+        valores = [str(tabela.set(i, coluna)) for i in itens]
+    except tk.TclError:
+        return
+    chave = _chave_da_coluna(valores)
+    # `sorted` é estável: quem empata mantém a ordem em que estava, e é o que
+    # faz ordenar por "valor" e depois por "favorecido" acumular em vez de
+    # embaralhar.
+    ordenados = [i for _, i in sorted(zip(valores, itens),
+                                      key=lambda p: chave(p[0]),
+                                      reverse=bool(descendente))]
+    try:
+        for pos, iid in enumerate(fixos + ordenados):
+            tabela.move(iid, "", pos)
+        if estado["zebra"]:
+            _rezebrar(tabela, fixos + ordenados)
+        for col in tabela["columns"]:
+            titulo = _titulo_limpo(tabela.heading(col, "text"))
+            if col == coluna:
+                titulo += SETA_DESCE if descendente else SETA_SOBE
+            tabela.heading(col, text=titulo)
+    except tk.TclError:
+        return
+    estado["coluna"], estado["descendente"] = coluna, bool(descendente)
+
+
+def _rezebrar(tabela: "ttk.Treeview", itens) -> None:
+    """As listras seguem a POSIÇÃO; o estado segue o dado.
+
+    A tag "par"/"impar" é gravada no item quando ele nasce e viaja com ele:
+    depois de reordenar, sem isto, a zebra sai embaralhada."""
+    for pos, iid in enumerate(itens):
+        try:
+            antigas = [t for t in tabela.item(iid, "tags")
+                       if t not in ("par", "impar")]
+            tabela.item(iid, tags=linha_zebrada(pos) + tuple(antigas))
+        except tk.TclError:
+            return
 
 
 def brl(v) -> str:
