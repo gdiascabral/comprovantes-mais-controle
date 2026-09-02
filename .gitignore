@@ -119,6 +119,10 @@ MODELO.xlsx
 /screenshots/
 /logs/
 browser-profile/
+# Saída de ferramentas/galeria.py (a foto de cada tela, nos dois temas):
+# imagem gerada, não código. E a tela pode trazer nome de empresa ou conta se
+# o cadastro em cache estiver na máquina — não pode ir para um repo público.
+/galeria/
 
 # O que ESTA máquina fez: é o que a tela de Início lê para montar o painel, e
 # desde 30/08/2026 ele carrega também quem entrou e quem foi liberado. Dado de
