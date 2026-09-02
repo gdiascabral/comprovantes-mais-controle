@@ -11,10 +11,12 @@ alguém a ignorar alarme — e é a metade que ninguém percebe estar quebrada,
 porque um arquivo que sobra parece zelo.
 
 O ponto que se troca em cada sistema é o MESMO que os testes que já existem
-trocam: `urllib.request.urlopen` para o ERP e para os portais (é por ele que
-`conciliacao/erp/api._requisitar` fala — ver `test_conciliacao_erp_api.py`) e
-`rest._SESSAO` para a nuvem (o `nuvem/rest.py` diz, no próprio comentário, que
-é "o ponto único que os testes trocam para simular o transporte").
+trocam: `urllib.request.urlopen` para os PORTAIS (a sonda fala com eles por
+urllib, direto), `erp.sessao._SESSAO` para o ERP — desde que
+`conciliacao/erp/api.py` virou casca sobre o pacote `erp/`, é por ali que ele
+fala, e o próprio `erp/sessao.py` chama esse nome de "o ponto único que os
+testes trocam para simular o transporte" (ver `test_conciliacao_erp_api.py`) —
+e `rest._SESSAO` para a nuvem, que diz a mesma frase no comentário dele.
 """
 import base64
 import io
@@ -37,6 +39,7 @@ sys.path.insert(0, str(_RAIZ / "ferramentas"))
 
 import sonda                                                      # noqa: E402
 from conciliacao.erp import api                                   # noqa: E402
+from erp import sessao as erp_sessao                              # noqa: E402
 from nuvem import rest, sessao                                    # noqa: E402
 
 
@@ -124,18 +127,17 @@ def _tls_responde(monkeypatch, erro: Exception | None = None):
                         _ContextoTlsFalso)
 
 
-def _corpo(dados) -> bytes:
-    return json.dumps(dados).encode()
+#: O corpo do `POST /users/login`, no formato REAL e com valores inventados.
+#: Dicionário, e não `bytes`: o ERP passou a ser falado por `requests`, e o que
+#: o transporte devolve é o `.json()` já convertido.
+_LOGIN_OK = {"jwtToken": "j" * 348, "username": "quem@exemplo.com",
+             "companies": [{"id": "empresa-1", "tradeName": "Empresa"}]}
 
 
-_LOGIN_OK = _corpo({"jwtToken": "j" * 348, "username": "quem@exemplo.com",
-                    "companies": [{"id": "empresa-1", "tradeName": "Empresa"}]})
-
-
-def _contas(quantas: int) -> bytes:
-    return _corpo({"items": [{"id": f"c{i}", "name": f"CONTA {i}"}
-                             for i in range(quantas)],
-                   "hasNextPage": False})
+def _contas(quantas: int) -> dict:
+    return {"items": [{"id": f"c{i}", "name": f"CONTA {i}"}
+                      for i in range(quantas)],
+            "hasNextPage": False}
 
 
 class _RespostaRequests:
@@ -194,6 +196,41 @@ def com_senha_do_erp(monkeypatch):
     monkeypatch.delenv("MC_SENHA", raising=False)
 
 
+class _TransporteDoErp:
+    """Um `requests.Session` de mentira: responde a lista na ordem.
+
+    `(status, corpo)` vira resposta; uma exceção é levantada como está, que é
+    como uma queda de rede chega ao `erp/sessao.py` (ele traduz
+    `requests.RequestException` em `ErpErro`)."""
+
+    def __init__(self, respostas):
+        self.respostas = list(respostas)
+        self.chamadas = []
+
+    def request(self, metodo, url, headers=None, json=None, timeout=None):
+        self.chamadas.append((metodo, url))
+        item = self.respostas[min(len(self.chamadas), len(self.respostas)) - 1]
+        if isinstance(item, Exception):
+            raise item
+        return _RespostaRequests(*item)
+
+
+def _erp_responde(monkeypatch, *respostas):
+    """O transporte do ERP, dublado — e nos DOIS pontos que a sonda alcança.
+
+    `erp/sessao.py` chama `_SESSAO` de "o ponto único que os testes trocam
+    para simular o transporte", e é por ele que a rodada normal passa. Mas a
+    sonda aperta o relógio (`_relogio_curto_do_erp`), e relógio apertado pede
+    um transporte PRÓPRIO — `montar_transporte` —, justamente para que a
+    ferramenta não mexa na conexão que o app está usando. Dublar só um deixaria
+    a sonda falando com o ERP de verdade no meio da suíte.
+    """
+    falso = _TransporteDoErp(respostas)
+    monkeypatch.setattr(erp_sessao, "_SESSAO", falso)
+    monkeypatch.setattr(erp_sessao, "montar_transporte", lambda *_a, **_k: falso)
+    return falso
+
+
 # ---------------------------------------------------------------------- ERP
 
 def test_erp_que_responde_vira_uma_linha_ok(monkeypatch, com_senha_do_erp):
@@ -202,8 +239,7 @@ def test_erp_que_responde_vira_uma_linha_ok(monkeypatch, com_senha_do_erp):
     O GET vai junto de propósito — o login pode continuar respondendo depois
     de a listagem mudar de contrato, e foi a listagem que quebrou as duas
     vezes que o ERP surpreendeu a gente."""
-    falso, _ = _urlopen([_LOGIN_OK, _contas(3)])
-    monkeypatch.setattr(urllib.request, "urlopen", falso)
+    _erp_responde(monkeypatch, (200, _LOGIN_OK), (200, _contas(3)))
 
     r = sonda.sondar_erp()
 
@@ -214,11 +250,10 @@ def test_erp_que_responde_vira_uma_linha_ok(monkeypatch, com_senha_do_erp):
 def test_erp_que_recusa_a_senha_vira_falhou(monkeypatch, com_senha_do_erp):
     """403 no `/users/login` é o WAF ou a senha — nos dois casos, notícia.
 
-    E o motivo tem de caber numa linha: o `erp/api.py` responde a isso com
-    três linhas de instrução, certas na tela do app e impossíveis num log de
-    uma linha por sistema."""
-    falso, _ = _urlopen([403])
-    monkeypatch.setattr(urllib.request, "urlopen", falso)
+    E o motivo tem de caber numa linha: o `erp/` responde a isso com duas
+    linhas de instrução, certas na tela do app e impossíveis num log de uma
+    linha por sistema."""
+    _erp_responde(monkeypatch, (403, None))
 
     r = sonda.sondar_erp()
 
@@ -228,13 +263,19 @@ def test_erp_que_recusa_a_senha_vira_falhou(monkeypatch, com_senha_do_erp):
 
 
 def test_erp_sem_rede_vira_falhou(monkeypatch, com_senha_do_erp):
-    falso, _ = _urlopen([urllib.error.URLError("sem DNS")])
-    monkeypatch.setattr(urllib.request, "urlopen", falso)
+    """Sem DNS é falha, com o motivo dizendo que não se falou com o ERP.
+
+    A frase mudou de dono junto com o transporte: "falha de rede ao chamar…"
+    era do laço de `urllib` que existia no `erp/api.py`; hoje quem traduz
+    `requests.RequestException` é o `erp/sessao.py`, num lugar só. O que o
+    teste guarda é o mesmo: a queda vira `falhou` com um motivo legível, e não
+    um traceback."""
+    _erp_responde(monkeypatch, requests.RequestException("sem DNS"))
 
     r = sonda.sondar_erp()
 
     assert r.ok is False
-    assert "falha de rede" in r.motivo
+    assert "falar com o ERP" in r.motivo and "sem DNS" in r.motivo
 
 
 def test_erp_que_loga_e_devolve_lista_vazia_e_falha(monkeypatch,
@@ -244,8 +285,7 @@ def test_erp_que_loga_e_devolve_lista_vazia_e_falha(monkeypatch,
     Ou o filtro parou de filtrar, ou o contrato da resposta mudou — e é
     exatamente esta a forma de quebra que a raspagem antiga tinha: continuava
     "funcionando", só que sem trazer nada."""
-    falso, _ = _urlopen([_LOGIN_OK, _contas(0)])
-    monkeypatch.setattr(urllib.request, "urlopen", falso)
+    _erp_responde(monkeypatch, (200, _LOGIN_OK), (200, _contas(0)))
 
     r = sonda.sondar_erp()
 
@@ -262,9 +302,12 @@ def test_sem_senha_guardada_a_sonda_nem_tenta(monkeypatch):
     monkeypatch.setattr(sonda.credenciais, "carregar", lambda: None)
     monkeypatch.delenv("MC_EMAIL", raising=False)
     monkeypatch.delenv("MC_SENHA", raising=False)
-    monkeypatch.setattr(
-        urllib.request, "urlopen",
-        lambda *_a, **_k: pytest.fail("não devia ter chamado a rede"))
+
+    def _nao_devia(*_a, **_k):
+        pytest.fail("não devia ter chamado a rede")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _nao_devia)
+    monkeypatch.setattr(erp_sessao, "montar_transporte", _nao_devia)
 
     r = sonda.sondar_erp()
 
@@ -276,17 +319,22 @@ def test_a_sonda_devolve_o_relogio_do_erp_como_estava(monkeypatch,
                                                       com_senha_do_erp):
     """Apertar o relógio é da sonda; o app depende dos números originais.
 
-    Os 45 s e as 3 tentativas do `erp/api.py` são o certo para uma rodada de
-    verdade. Se a sonda os deixasse trocados, ela teria mudado o produto —
-    e num processo em que os dois rodam, a coleta perderia o 504 passageiro
-    que aquelas tentativas existem para absorver."""
+    Os 45 s e as 3 tentativas do `conciliacao/erp/api.py` são o certo para uma
+    rodada de verdade. Se a sonda os deixasse trocados, ela teria mudado o
+    produto — e num processo em que os dois rodam, a coleta perderia o 504
+    passageiro que aquelas tentativas existem para absorver.
+
+    Os dois números agora saem do `erp/` (o módulo não guarda um valor
+    próprio), mas continuam com nome ali, e continuam LIGADOS: apertá-los
+    monta um transporte com outra política, em vez de mexer na sessão que o
+    app está usando."""
     antes = (api._TIMEOUT_S, api._TENTATIVAS_GET)
-    falso, _ = _urlopen([403])
-    monkeypatch.setattr(urllib.request, "urlopen", falso)
+    _erp_responde(monkeypatch, (403, None))
 
     sonda.sondar_erp()
 
     assert (api._TIMEOUT_S, api._TENTATIVAS_GET) == antes
+    assert antes == (erp_sessao.ESPERA, erp_sessao.TENTATIVAS)
 
 
 # ------------------------------------------------------------------- nuvem
