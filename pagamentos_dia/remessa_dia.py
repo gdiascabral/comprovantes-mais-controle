@@ -44,6 +44,7 @@ import datetime as _dt
 import re
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 
 import ocr_boleto
 import regras_pagamento as regras
@@ -809,8 +810,6 @@ def pasta_do_pagador(destino, pagador: Pagador) -> "Path":
     Sicoob (ver `MOTIVO_FORA_SICOOB`), e escrever o banco deixa a pasta pronta
     para o dia em que houver outro.
     """
-    from pathlib import Path
-
     empresa = _nome_de_pasta(pagador.empresa, "EMPRESA")
     conta = _nome_de_pasta(f"SICOOB {pagador.agencia}-{pagador.conta}".strip(),
                            "SICOOB")
