@@ -422,9 +422,7 @@ def aplicar_filtro_datas(page, inicio: str, fim: str, tentativas: int = 3,
             try:
                 page.keyboard.press("Escape")
             except Exception:                                # noqa: BLE001
-                _diag.warning("apertando Esc para fechar o datepicker do "
-                              "Inter antes da tentativa seguinte",
-                              exc_info=True)
+                pass                     # a próxima tentativa reabre o popup
             time.sleep(1.5)
     return ""
 
@@ -453,9 +451,10 @@ def esperar_botao(page, texto: str, tempo: float = 10.0):
             if loc.count() > 0 and loc.is_visible() and loc.is_enabled():
                 return loc
         except Exception:                                    # noqa: BLE001
-            log.warning("olhando se o botão %r já apareceu e está habilitado",
-                        texto, exc_info=True)
+            pass                         # na espera, isto é "ainda não"
         time.sleep(0.5)
+    # Esgotado o prazo, devolve None — e quem chamou levanta `InterFalhou`
+    # dizendo qual botão não apareceu, que é a frase que vai para o Registro.
     return None
 
 
@@ -740,8 +739,9 @@ def _pedir_pagina_cheia(page, log=print) -> None:
             page.wait_for_timeout(2500)
             return
         except Exception:                                    # noqa: BLE001
-            _diag.warning("pedindo 100 linhas por página em %s; vou tentar o "
-                          "próximo seletor", seletor, exc_info=True)
+            # Seletor que não existe é "o próximo", não falha: são três
+            # variantes do MESMO select. Esgotá-las é que importa, e a linha
+            # do Registro logo abaixo já diz isso a quem está olhando.
             continue
     log("  segui com o tamanho de página padrão")
 
