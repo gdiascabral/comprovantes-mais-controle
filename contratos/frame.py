@@ -382,7 +382,9 @@ class ContratosFrame(ttk.Frame):
             _, contas = _sicoob()
             empresas = [e.nome for e in contas.carregar().empresas]
         except Exception as e:
-            messagebox.showerror("Cadastro", f"Não consegui ler as empresas:\n{e}")
+            messagebox.showerror(
+                "Cadastro",
+                widgets.recado_de_erro(e, "Não consegui ler as empresas."))
             return
         self.janela = resolver.JanelaResolver(
             self, a, empresas,
@@ -404,8 +406,9 @@ class ContratosFrame(ttk.Frame):
                 # de notas seria pior do que perguntar de novo no mês que vem.
                 messagebox.showwarning(
                     "Não gravei no cadastro",
-                    f"{e}\n\nA escolha vale para esta rodada; no mês que vem a "
-                    "pergunta volta.")
+                    widgets.recado_de_erro(e, "Não gravei no cadastro.")
+                    + "\n\nA escolha vale para esta rodada; no mês que vem a "
+                      "pergunta volta.")
         falta = pipeline.aplicar_resolucao(achado, anexo=anexo,
                                            empresa_nome=empresa)
         if anexo is not None:
@@ -439,7 +442,9 @@ class ContratosFrame(ttk.Frame):
         try:
             os.startfile(str(self.ultima_pasta))
         except OSError as e:
-            messagebox.showerror("Erro", f"Não consegui abrir a pasta:\n{e}")
+            messagebox.showerror(
+                "Erro", widgets.recado_de_erro(e, "Não consegui abrir a "
+                                                  "pasta."))
 
     def buscar(self):
         if self.anx.avisar_se_ocupado("os Contratos"):
