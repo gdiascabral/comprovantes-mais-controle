@@ -485,8 +485,9 @@ class PagamentosDiaFrame(ttk.Frame):
             try:
                 os.startfile(comum)                          # noqa: S606
             except Exception as e:                           # noqa: BLE001
-                messagebox.showwarning("Remessa",
-                                       f"Não consegui abrir a pasta: {e}")
+                messagebox.showwarning(
+                    "Remessa",
+                    widgets.recado_de_erro(e, "Não consegui abrir a pasta."))
             return
         if not vivos:
             messagebox.showinfo(
@@ -506,8 +507,9 @@ class PagamentosDiaFrame(ttk.Frame):
             try:
                 os.startfile(alvo.parent)                    # noqa: S606
             except Exception as e:                           # noqa: BLE001
-                messagebox.showwarning("Remessa",
-                                       f"Não consegui abrir a pasta: {e}")
+                messagebox.showwarning(
+                    "Remessa",
+                    widgets.recado_de_erro(e, "Não consegui abrir a pasta."))
 
     def _parar_click(self):
         self._parar.set()
@@ -1241,7 +1243,10 @@ class PagamentosDiaFrame(ttk.Frame):
         try:
             resumo = retorno_dia.ler(caminho, historico)
         except Exception as e:
-            messagebox.showerror("Retorno", f"Não consegui ler o arquivo:\n\n{e}")
+            messagebox.showerror(
+                "Retorno",
+                widgets.recado_de_erro(e, "Não consegui ler o arquivo de "
+                                          "retorno."))
             return
 
         self._janela_retorno(resumo, historico)
@@ -1331,7 +1336,10 @@ class PagamentosDiaFrame(ttk.Frame):
                     resumo.convenio, resumo.nsa, respostas,
                     estado=resumo.estado_da_remessa)
             except Exception as e:
-                messagebox.showerror("Retorno", f"Não deu para guardar:\n\n{e}")
+                messagebox.showerror(
+                    "Retorno",
+                    widgets.recado_de_erro(e, "Não deu para guardar o "
+                                              "retorno."))
                 return
             self._log(f"\nRetorno do arquivo nº {resumo.nsa:06d} guardado: "
                       f"{quantos} pagamento(s) com resposta, remessa marcada "
@@ -1531,7 +1539,9 @@ class PagamentosDiaFrame(ttk.Frame):
             mapa_mc = contas_mc.carregar()
             cadastro = sicoob_contas.carregar()
         except Exception as e:
-            messagebox.showerror("Remessa", f"Não consegui ler o cadastro:\n{e}")
+            messagebox.showerror(
+                "Remessa",
+                widgets.recado_de_erro(e, "Não consegui ler o cadastro."))
             return
 
         # O histórico entra ANTES do preparo, e não depois: é ele quem responde
@@ -1549,12 +1559,12 @@ class PagamentosDiaFrame(ttk.Frame):
             # pagamento em dobro.
             messagebox.showerror(
                 "Remessa",
-                "Não consegui falar com o registro de remessas.\n\n"
-                f"{e}\n\n"
-                "A remessa não foi gerada. O número sequencial (NSA) precisa "
-                "vir de um lugar só, senão as duas máquinas podem gerar o "
-                "mesmo — e repetir NSA pode virar pagamento em dobro.\n\n"
-                "Conecte-se e tente de novo.")
+                widgets.recado_de_erro(
+                    e, "Não consegui falar com o registro de remessas.")
+                + "\n\nA remessa NÃO foi gerada. O número sequencial (NSA) "
+                  "precisa vir de um lugar só, senão as duas máquinas podem "
+                  "gerar o mesmo — e repetir NSA pode virar pagamento em "
+                  "dobro.")
             return
         preparado = remessa_dia.preparar(self.resultado.contas,
                                          self.participantes,

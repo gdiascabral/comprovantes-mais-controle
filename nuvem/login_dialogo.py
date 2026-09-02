@@ -45,31 +45,29 @@ MINIMO_DA_SENHA = 6
 
 
 def _frase(e: Exception) -> str:
-    """Traduz a falha em UMA frase: o que houve, de quem é, e o próximo passo.
+    """Traduz a falha em o que houve, de quem é e o próximo passo.
 
     Nunca o traceback, nunca o nome da classe. O que aparecia na PRIMEIRA tela
     do app era `HTTPSConnectionPool(host=...): Max retries exceeded` — texto da
     biblioteca de rede, que não diz nem que a internet caiu nem o que fazer a
     respeito. As três famílias que o `nuvem/rest.py` nomeia pedem coisas
     diferentes de quem está na frente da tela: conectar, esperar, ou digitar de
-    novo — e é essa diferença que a frase tem de carregar."""
-    if isinstance(e, rest.SemRede):
-        return ("Sem internet: não consegui falar com o servidor para conferir "
-                "o seu acesso. Conecte-se à rede e tente de novo.")
-    if isinstance(e, rest.RecusadoPeloBanco):
-        return ("O servidor respondeu com erro — não é a sua senha. Tente de "
-                "novo em alguns minutos; se continuar, avise quem cuida do "
-                "cadastro.")
-    if isinstance(e, rest.PrecisaEntrar):
-        # Quem monta a explicação exata é o `nuvem/sessao.py`: só ele sabe
-        # separar "sem internet e a sessão salva venceu" de "a sessão não vale
-        # mais". Aqui a frase é consumida como está — reescrevê-la criaria uma
-        # segunda versão da mesma verdade.
-        recado = str(e).strip()
-        if not recado:
-            return "A sua sessão venceu. Entre de novo."
-        return recado[:1].upper() + recado[1:]
-    return "Não deu para entrar agora. Tente de novo em alguns minutos."
+    novo — e é essa diferença que a frase tem de carregar.
+
+    **A tradução mudou de casa em 02/09/2026**, e esta função ficou como a
+    porta dela. Ela era privada e valia só para esta janela, enquanto dez
+    diálogos das outras telas mostravam a exceção crua; hoje mora em
+    `widgets.explicar_erro`, cobre também as famílias do ERP, do Playwright e
+    do sistema de arquivos, e o texto das três famílias da nuvem continua sendo
+    o mesmo. Uma cópia aqui envelheceria em separado — que é exatamente o
+    problema que ela veio resolver.
+
+    O import é DENTRO da função, como o do tkinter logo abaixo: este módulo
+    roda no CI sem tela, e `entrar_sozinho` é chamado antes de existir janela.
+    """
+    import widgets
+
+    return widgets.recado_de_erro(e)
 
 
 def entrar_sozinho(pasta=None) -> tuple[bool, str]:

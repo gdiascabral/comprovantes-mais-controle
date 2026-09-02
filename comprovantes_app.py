@@ -813,8 +813,9 @@ def main():
             messagebox.showinfo("Contas novas", recado)
         except Exception as e:                            # noqa: BLE001
             _anotar(f"conferencia de contas (gravacao): {e}")
-            messagebox.showerror("Contas novas",
-                                 f"Nao deu para cadastrar:\n\n{e}")
+            messagebox.showerror(
+                "Contas novas",
+                widgets.recado_de_erro(e, "Nao deu para cadastrar as contas."))
 
     def _conferir_contas():
         from nuvem import contas_novas

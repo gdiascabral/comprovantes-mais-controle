@@ -2199,6 +2199,168 @@ def brl(v) -> str:
         return "R$ —"
 
 
+# ------------------------------------------------------------ erros com nome
+# O que a pessoa lê quando algo dá errado.
+#
+# Por que existe
+# --------------
+# Dez diálogos do app mostravam a exceção CRUA — `messagebox.showerror(
+# "Retorno", f"Não consegui ler o arquivo:\n\n{e}")` — e o que aparecia na tela
+# era `HTTPSConnectionPool(host='...', port=443): Max retries exceeded` ou
+# `[Errno 13] Permission denied: 'C:/.../remessa.xlsx'`. Texto de biblioteca:
+# não diz o que houve, não diz de quem é a falha e não diz o que fazer.
+#
+# A melhor tradução do projeto já existia, e estava presa numa função privada
+# de UMA tela: o `_frase` do `nuvem/login_dialogo.py`, que virava as três
+# famílias da nuvem em uma frase com as três partes. Aqui ela fica pública,
+# passa a cobrir as famílias que o resto do app encontra — e o login continua
+# usando ESTA, sem cópia: duas versões da mesma verdade envelhecem separadas.
+#
+# TRÊS partes, e não uma frase só, porque são três perguntas diferentes:
+#
+#   o que houve      a falha em português, sem nome de classe;
+#   de quem é        o app, o ERP, o banco na nuvem, a internet ou o Windows.
+#                    É o que decide para quem a pessoa reclama, e é justamente
+#                    a parte que o texto cru nunca dizia;
+#   próximo passo    o que fazer AGORA. "Tente de novo" e "avise quem cuida do
+#                    cadastro" são conselhos opostos, e dar o errado custa a
+#                    tarde de alguém.
+#
+# A família é reconhecida pelo NOME DA CLASSE, percorrendo a MRO — e não por
+# `isinstance`. Não é preguiça: o `widgets.py` é importado por todas as telas e
+# vai no codigo.zip, e importar aqui `nuvem.rest`, `erp.sessao`,
+# `conciliacao.errors` e o `playwright` arrastaria rede e navegador para dentro
+# do módulo visual (o `playwright` nem sempre está instalado, e um import novo
+# custa exe novo — ver a v1.0.71 no CLAUDE.md). Nome de classe é contrato: quem
+# renomeia `SemRede` já está mudando API. E a MRO faz a herança valer de graça
+# — `SessaoRecusada` é `ErpErro`, `PrecisaEntrar` é `ErroDaNuvem`.
+#
+# O que ela NÃO faz: mudar o que os diálogos fazem. Continua sendo o mesmo
+# `showerror` no mesmo ponto, com o mesmo `return` depois.
+
+
+def _familia_do_erro(exc) -> tuple[set, set]:
+    """Os nomes de classe e os módulos da exceção e de todos os pais dela."""
+    try:
+        mro = type(exc).__mro__
+    except (AttributeError, TypeError):
+        return set(), set()
+    return ({c.__name__ for c in mro},
+            {str(getattr(c, "__module__", "")) for c in mro})
+
+
+def explicar_erro(exc) -> tuple[str, str, str]:
+    """(o que houve, de quem é, o próximo passo) para a exceção dada.
+
+    Todas as três em português e prontas para a tela. Exceção que não cai em
+    nenhuma família conhecida sai num genérico HONESTO: ele diz que não soube
+    dizer, e ainda mostra o tipo e a mensagem — sumir com o texto original
+    deixaria quem for consertar sem nada nas mãos.
+    """
+    nomes, modulos = _familia_do_erro(exc)
+    recado = str(exc).strip()
+
+    # ---- o ERP recusou a identidade
+    # `SessaoExpirada` é o nome que a Conciliação usa (`conciliacao/errors.py`)
+    # para a mesma coisa que o `erp/sessao.py` chama de `SessaoRecusada`. As
+    # duas pedem a mesma coisa de quem lê, então respondem juntas.
+    if "SessaoRecusada" in nomes or "SessaoExpirada" in nomes:
+        return ("O Mais Controle ERP não aceitou a sessão.",
+                "É do ERP, não do app: a sessão caiu ou a senha foi recusada.",
+                "Entre no ERP de novo pela aba Anexar. Lembre que ele aceita "
+                "UMA sessão por usuário — se alguém entrou com o seu login, a "
+                "sua caiu.")
+
+    # ---- a sessão do APP (a nuvem do cadastro)
+    if "PrecisaEntrar" in nomes:
+        # Quem monta a explicação exata é o `nuvem/sessao.py`: só ele separa
+        # "sem internet e a sessão salva venceu" de "a sessão não vale mais".
+        # Consumida como está — reescrevê-la criaria uma segunda versão da
+        # mesma verdade.
+        return ((recado[:1].upper() + recado[1:]) if recado
+                else "A sua sessão venceu.",
+                "É do login do app (o cadastro na nuvem), não do ERP.",
+                "Feche e abra o app para entrar de novo.")
+
+    # ---- não deu para falar com o outro lado
+    if "SemRede" in nomes:
+        # O `anexar/mc_client.SemRede` promete no próprio docstring que a
+        # mensagem dele já vem pronta para o usuário ("quem captura deve
+        # mostrar só o texto"). O da nuvem não promete nada disso, e o texto
+        # dele é da biblioteca de rede.
+        pronta = any("mc_client" in m for m in modulos)
+        return ((recado if (pronta and recado)
+                 else "Não deu para falar com o servidor."),
+                "É da internet ou do serviço do outro lado — não é o app.",
+                "Confira a conexão e tente de novo em alguns minutos.")
+
+    # ---- o banco entendeu e disse não
+    if "RecusadoPeloBanco" in nomes:
+        return ("O servidor entendeu o pedido e recusou.",
+                "É do banco na nuvem — não é a sua senha nem falta de "
+                "internet.",
+                "Tente de novo em alguns minutos; se continuar, avise quem "
+                "cuida do cadastro.")
+
+    # ---- o ERP respondeu, mas não o que o app esperava
+    if "ErpErro" in nomes or "ErpError" in nomes:
+        return ("O Mais Controle ERP não respondeu como o app esperava.",
+                "É do ERP (ou de uma tela dele que mudou), não do que você "
+                "preencheu.",
+                "Tente de novo. Se parar sempre no mesmo ponto, avise quem "
+                "cuida do app.")
+
+    # ---- a espera acabou primeiro
+    # ANTES do `OSError`: o `TimeoutError` embutido do Python é subclasse dele,
+    # e "esperei demais" e "o disco não deixou" pedem coisas diferentes. Vale
+    # para o do `playwright` e para o embutido — os dois dizem o mesmo.
+    if "TimeoutError" in nomes:
+        return ("A espera acabou antes de a resposta chegar.",
+                "É do outro lado (a tela do ERP, o site do banco ou a rede), "
+                "não do app.",
+                "Tente de novo — o ERP fica lento quando o lote é grande.")
+
+    # ---- arquivo e disco
+    # `isinstance` aqui, e não nome: são classes EMBUTIDAS, já estão
+    # importadas, e não há import novo para pagar.
+    #
+    # O texto do sistema entra junto porque ele nomeia O ARQUIVO, que é a
+    # informação que resolve o caso — sem ele, "feche o arquivo no Excel" não
+    # diz qual arquivo.
+    if isinstance(exc, PermissionError):
+        return ("O Windows não deixou abrir o arquivo."
+                + (f"\n{recado}" if recado else ""),
+                "É do arquivo, não do app: quase sempre ele está aberto "
+                "noutro programa.",
+                "Feche o arquivo no Excel (ou onde estiver aberto) e tente de "
+                "novo.")
+    if isinstance(exc, OSError):
+        return ("Não deu para ler ou gravar o arquivo."
+                + (f"\n{recado}" if recado else ""),
+                "É do computador — a pasta, o disco, ou o OneDrive segurando "
+                "o arquivo.",
+                "Confira se a pasta existe e se o arquivo não está aberto, e "
+                "tente de novo.")
+
+    # ---- o resto: honesto sobre não saber
+    tipo = type(exc).__name__ if exc is not None else "erro sem tipo"
+    return (f"{tipo}: {recado}" if recado else tipo,
+            "Não deu para dizer de quem é a falha: este erro não tem nome "
+            "conhecido aqui.",
+            "Tente de novo. Se repetir, mande a linha de cima para quem cuida "
+            "do app.")
+
+
+def recado_de_erro(exc, tentando: str = "") -> str:
+    """As três partes numa caixa de diálogo, com o que a tela tentava fazer.
+
+    `tentando` é a frase que o diálogo já dizia ("Não consegui ler o arquivo
+    de retorno."): ela continua no lugar dela, em cima, porque é a única parte
+    que só a TELA sabe — o `explicar_erro` conhece a exceção, não o passo."""
+    corpo = "\n".join(p for p in explicar_erro(exc) if p)
+    return f"{tentando}\n\n{corpo}" if tentando else corpo
+
+
 # --------------------------------------------------------------- atividade
 #: O que as telas fizeram, em ordem, para o Início poder contar.
 #:
