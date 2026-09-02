@@ -8,8 +8,6 @@ from pathlib import Path
 
 import yaml
 
-from openpyxl.utils import column_index_from_string
-
 
 @dataclass(frozen=True)
 class PlanilhaConfig:
@@ -43,6 +41,8 @@ class PlanilhaConfig:
         deste numero era fixa (33) e ficou para tras quando o modelo cresceu, o
         que deixou as formulas de total fora do guarda-corpo sem ninguem notar.
         """
+        # import tardio: só quem confere a area paga o openpyxl
+        from openpyxl.utils import column_index_from_string
         return ((1, self.linha_totais), (1, column_index_from_string(self.ultima_coluna)))
 
 

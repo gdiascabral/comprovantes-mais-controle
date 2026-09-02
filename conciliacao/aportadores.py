@@ -20,8 +20,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
-import openpyxl
-
 ZERO = Decimal("0")
 
 #: Nome da aba e primeira linha de dados. Ficam aqui, e nao no config.yaml,
@@ -44,6 +42,8 @@ def ler_regras(modelo: str | Path) -> list[Regra]:
     caminho = Path(modelo)
     if not caminho.is_file():
         return []
+    # import tardio: só quem le o MODELO.xlsx paga o openpyxl
+    import openpyxl
     wb = openpyxl.load_workbook(caminho, read_only=True, data_only=True)
     try:
         if ABA not in wb.sheetnames:

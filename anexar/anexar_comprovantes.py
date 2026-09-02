@@ -29,9 +29,6 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
-
 try:
     from . import config, matcher, mc_api, planilha, credenciais
     from .mc_client import MCClient, SemRede
@@ -985,6 +982,9 @@ class AnexarFrame(ttk.Frame):
         """Escreve o Excel ao lado dos PDFs. Roda na thread do navegador, então
         a pasta chega por ARGUMENTO — lida do `v_pasta` daqui, seria tkinter
         fora da thread da interface."""
+        # import tardio: só quem gera a planilha paga o openpyxl
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
         wb = Workbook(); wb.remove(wb.active)
         verde = PatternFill("solid", fgColor="1B7837")
         branco = Font(bold=True, color="FFFFFF")

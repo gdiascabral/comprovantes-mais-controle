@@ -19,9 +19,6 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
-
 try:
     from . import config, mc_api
 except ImportError:
@@ -449,6 +446,9 @@ class ConferenciaFrame(ttk.Frame):
 
     def _relatorio(self, sem, divergentes, conferidos, nao_conf,
                    nao_verif=()) -> str:
+        # import tardio: só quem gera a planilha paga o openpyxl
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
         wb = Workbook(); wb.remove(wb.active)
         verde = PatternFill("solid", fgColor="1B7837")
         branco = Font(bold=True, color="FFFFFF")

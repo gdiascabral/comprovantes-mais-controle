@@ -20,9 +20,6 @@ import queue
 import threading
 from pathlib import Path
 
-import pdfplumber
-from pypdf import PdfReader, PdfWriter
-
 try:                                     # utilitários compartilhados (raiz)
     import util
 except ModuleNotFoundError:              # rodando este módulo isoladamente
@@ -598,6 +595,8 @@ def _destino_unico(pasta: Path, base: str) -> Path:
 def _contar_paginas(pdfs, log) -> int:
     """Total de páginas, para a barra de progresso saber onde é o fim.
     Só lê o índice do PDF (rápido), não o conteúdo."""
+    # import tardio: só quem separa paga o pypdf
+    from pypdf import PdfReader
     total = 0
     for p in pdfs:
         try:
@@ -638,6 +637,9 @@ def processar(pasta_entrada, pasta_saida, log=print, modelo: str | None = None,
     Parar durante a LEITURA não grava nada: os nomes só podem ser decididos
     com o lote inteiro na mão (ver `_nomes_finais`), e gravar meio lote daria
     nomes diferentes dos que sairiam ao rodar tudo de novo."""
+    # import tardio: só quem separa paga o pdfplumber e o pypdf
+    import pdfplumber
+    from pypdf import PdfReader, PdfWriter
     parou = parar or (lambda: False)
     pasta_entrada = Path(pasta_entrada); pasta_saida = Path(pasta_saida)
     pasta_saida.mkdir(parents=True, exist_ok=True)
