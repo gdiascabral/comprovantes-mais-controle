@@ -8,6 +8,7 @@ parcela certa, e o que NÃO dá para baixar aparecendo com o motivo.
 import datetime as _dt
 
 import baixa_erp
+from erp import hosts, pagina, sessao
 
 HOJE = _dt.date(2026, 8, 20)
 
@@ -200,6 +201,70 @@ def test_o_recado_diz_a_url_e_o_que_o_ERP_respondeu():
                                        "__corpo": {"message": "faltou o campo X"}})
     r = baixa_erp.baixar_uma(t, LinhaFalsa(), HOJE, log=lambda _m: None)
     assert "/paids" in r.erro and "faltou o campo X" in r.erro
+
+
+# ------------------------------------------------------- os endereços e o erp/
+def test_os_enderecos_vem_do_erp_hosts():
+    """As mesmas quatro URLs estavam escritas em sete arquivos, e quem corrige
+    uma cópia não sabe das outras.
+
+    A ORDEM continua sendo parte da regra: o legado vem primeiro porque o
+    `default-paid` é LEITURA, e descobrir errando ali não escreve nada."""
+    assert baixa_erp.LEGADO == hosts.LEGACY
+    assert baixa_erp.NOVA == hosts.ERP_API
+    assert baixa_erp.HOSTS == (hosts.LEGACY, hosts.ERP_API)
+
+
+class _PaginaFalsa:
+    """A `page` do Playwright, do tamanho que o `TransportePagina` usa."""
+
+    def __init__(self, padrao, resposta_post):
+        self.padrao, self.resposta_post = padrao, resposta_post
+        self.chamadas = []
+
+    def evaluate(self, js, argumento):
+        self.chamadas.append(argumento)
+        return self.resposta_post if "corpo" in argumento else self.padrao
+
+
+def test_o_transporte_do_erp_baixa_sem_adaptador_nenhum():
+    """A migração inteira deste módulo cabe nesta frase: os dois métodos que
+    ele exige são os que `erp/pagina.py` expõe.
+
+    Não é o dublê do arquivo que está sendo exercitado aqui, e sim o
+    `TransportePagina` de verdade — com o JS e o contrato de erro dele. Se um
+    dia os nomes divergirem, é este teste que acusa, e não a primeira baixa
+    real de um dia de pagamento."""
+    falsa = _PaginaFalsa(
+        padrao={"payingDate": "2026-08-31", "account": {"id": "c1"}},
+        resposta_post={"id": "paid-7"})
+    transporte = pagina.TransportePagina(
+        falsa, {hosts.HOST_LEGACY: {"authorization": "Bearer legado",
+                                    "user-id": "user-1"}})
+
+    r = baixa_erp.baixar_uma(transporte, LinhaFalsa(), HOJE, log=lambda _m: None)
+
+    assert r.ok and r.paid_id == "paid-7"
+    assert falsa.chamadas[0]["url"].startswith(hosts.LEGACY)
+    assert falsa.chamadas[-1]["corpo"]["value"] == 120.00
+    # O cabeçalho do LEGADO foi escolhido pelo host da URL: reaproveitar o de
+    # outro host devolveria 401.
+    assert falsa.chamadas[-1]["headers"]["user-id"] == "user-1"
+
+
+def test_a_baixa_nao_e_idempotente_e_por_isso_nao_relogia():
+    """`erp.Sessao.pedir` relogia no 401 do legado, mas só em GET — e em
+    PUT/POST que o CHAMADOR marcar como idempotentes.
+
+    A baixa não é marcável: o `POST .../paids` CRIA um pagamento, e repeti-lo
+    depois de perder a resposta baixa o mesmo título duas vezes. Este teste
+    guarda a decisão pelo lado do `erp/`, que é onde a marca existiria —
+    ninguém pode ligá-la sem passar por aqui."""
+    logada = sessao.Sessao(jwt_token="j", access_token="a",
+                           company_id="e1", user_id="u1")
+    url = f"{hosts.LEGACY}/payable-installments/parcela-1/paids"
+    assert logada._da_para_relogar(url, "POST", sessao.SessaoRecusada(
+        "401", codigo=401), False) is False
 
 
 def test_uma_que_falha_nao_impede_as_outras():

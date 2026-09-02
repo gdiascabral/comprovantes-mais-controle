@@ -23,14 +23,39 @@ cliente de API aparece com a URL montada:
 devolvemos o que ele deu, com a data trocada pela data real do pagamento.
 Montar o corpo à mão seria fixar o formato de hoje e quebrar calado quando ele
 mudar — e é dinheiro sendo baixado.
+
+O TRANSPORTE É PARÂMETRO, E O PACOTE `erp/` JÁ O ENTREGA
+--------------------------------------------------------
+Este módulo nunca soube se havia navegador: ele exige do `transporte` apenas
+`_buscar(url)` e `postar(url, corpo)`, e lê `{"__erro": status}` da resposta.
+`erp/pagina.py:TransportePagina` expõe exatamente esses dois nomes e esse mesmo
+contrato de erro — foi escrito assim de propósito —, então serve aqui **sem
+adaptador nenhum**. Os endereços saem de `erp/hosts.py`; era a única coisa que
+este arquivo ainda repetia por conta própria. É a linha 2 da ordem de migração
+do `docs/ERP-CLIENTES.md`.
+
+**O RELOGIN DO 401 NÃO SE APLICA À BAIXA, e isso é decisão, não esquecimento.**
+`erp.Sessao.pedir` sabe relogar quando o `accessToken` do legado vence no meio
+do trabalho, mas só repete GET — e PUT/POST que o chamador marcar como
+idempotentes. **A baixa não é marcável**: o `POST .../paids` CRIA um pagamento,
+e repeti-lo depois de perder a resposta baixa o mesmo título duas vezes. É a
+mesma regra que já governa o 404 aqui embaixo ("qualquer outro código PARA a
+tentativa") e a mesma do `CLAUDE.md`, "Aporte não se repete": dinheiro
+duplicado se desfaz à mão, lançamento por lançamento. O `GET` do `default-paid`
+é leitura e poderia repetir — mas quem decide isso é o transporte, não este
+módulo, e hoje ele fala pela página logada, onde o próprio ERP renova a sessão.
 """
 from __future__ import annotations
 
 import datetime as _dt
 from dataclasses import dataclass, field
 
-LEGADO = "https://legacy-api.maiscontroleerp.com.br/maiscontrole/services"
-NOVA = "https://prod-erp-api.maiscontroleerp.com.br"
+from erp import hosts as _hosts
+
+#: Os endereços vêm do `erp/hosts.py` — as mesmas quatro URLs estavam escritas
+#: em sete arquivos, e quem corrige uma cópia não sabe das outras.
+LEGADO = _hosts.LEGACY
+NOVA = _hosts.ERP_API
 
 #: Os dois hosts, na ordem em que são tentados. O legado vem primeiro porque é
 #: onde o `receipt-installments` mora — e o `default-paid` é LEITURA, então
@@ -210,7 +235,8 @@ def baixar_uma(transporte, linha, quando: _dt.date, *, hosts=HOSTS,
     """Baixa UM pagamento. Nunca levanta: devolve o desfecho.
 
     `transporte` precisa de dois métodos, `_buscar(url)` e `postar(url, corpo)`
-    — é a interface do `mc_catalogos.Catalogos`, que fala de dentro da página
+    — é a interface de `erp/pagina.py:TransportePagina` (e a do
+    `mc_catalogos.Catalogos`, que a antecedeu), que fala de dentro da página
     logada. Depender só dos dois deixa a regra testável sem navegador.
     """
     parcela = linha.referencia
