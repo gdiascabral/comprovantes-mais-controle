@@ -28,6 +28,17 @@ from .pipeline import analyze, run_offline
 from .validate import ValidationError, erros
 from .workbook import WorkbookError
 
+try:                                     # utilitarios compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando a Conciliacao isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+#: O diagnostico do modulo. Os `print()` daqui continuam sendo a saida da
+#: linha de comando, que e para quem esta olhando o terminal; este logger e
+#: para o que falha calado e some antes de alguem ver.
+log = util.log(__name__)
+
 RAIZ_PADRAO = Path(__file__).resolve().parents[2]
 
 _DIAS_SEMANA = (
@@ -142,7 +153,8 @@ def _abrir_arquivo(caminho: Path) -> None:
     try:
         os.startfile(str(caminho))  # type: ignore[attr-defined]
     except Exception:
-        pass
+        log.warning("abrindo %s no programa padrao do Windows", caminho,
+                    exc_info=True)
 
 
 # --------------------------------------------------------------------- comandos
