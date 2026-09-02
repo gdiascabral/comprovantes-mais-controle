@@ -180,7 +180,12 @@ MINIMO_COMPONENTE = 3.0
 #: cima. Numa constante porque é lido em dois lugares que têm de concordar: a
 #: tabela de pares (a MEDIDA) e o teste que constrói os widgets (a PROVA de
 #: que a medida é a da tela).
-COR_DO_PASSO = "marca"
+#:
+#: NÃO é a `marca`, e essa é a correção inteira: a `marca` é o papel de TEXTO
+#: (KPI, item aberto do menu, linha selecionada) e continua medida como tal na
+#: tabela abaixo. Trocar esta constante de volta para "marca" faz o teste
+#: falhar de novo com os mesmos 2,69:1.
+COR_DO_PASSO = "marca_solida"
 
 #: (frente, fundo, onde) — `frente`/`fundo` são papéis da paleta, ou a cor
 #: crua quando o app a escreve assim (o branco dos rótulos sobre cor sólida).
