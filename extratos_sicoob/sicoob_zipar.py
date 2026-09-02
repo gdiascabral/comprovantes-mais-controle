@@ -16,8 +16,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import sicoob_config as cfg
-from sicoob_contas import Mapa
+from . import sicoob_config as cfg
+from .sicoob_contas import Mapa
 
 
 @dataclass
