@@ -65,9 +65,11 @@ _PASTAS_SO_DO_REPO = {
         "ferramentas de validação com o banco, rodadas à mão na máquina que "
         "tem o cadastro; o app nunca as importa"),
     "ferramentas": (
-        "ferramenta de desenvolvimento local (fotografa as telas do app "
-        "para conferir o visual antes/depois de mexer nele); roda à mão no "
-        "repositório e o app nunca a importa"),
+        "ferramentas locais: a galeria fotografa as telas do app para "
+        "conferir o visual antes/depois de mexer nele, e a sonda pergunta "
+        "todo dia se os sistemas de terceiros ainda respondem. As duas rodam "
+        "fora do exe — uma à mão, a outra pelo Agendador de Tarefas — e o app "
+        "nunca as importa"),
 }
 
 #: Sempre entram, e não são código: a versão desta build, a trava do motor e o
