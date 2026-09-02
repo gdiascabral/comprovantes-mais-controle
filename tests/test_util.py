@@ -117,9 +117,9 @@ def test_pasta_do_perfil_mantem_os_nomes_ja_instalados():
 
 
 def test_pasta_do_perfil_limpa_caracteres_e_corta_em_40():
-    p = util.pasta_do_perfil("MORAIS ENG / 50022 \\ PIX")
+    p = util.pasta_do_perfil("EMPRESA X / 12345 \ PIX")
     assert "/" not in p.name and "\\" not in p.name
-    assert p.name == ".chrome_profile_MORAIS_ENG_50022_PIX"
+    assert p.name == ".chrome_profile_EMPRESA_X_12345_PIX"
 
     nome_longo = "A" * 60
     cortado = util.pasta_do_perfil(nome_longo).name
