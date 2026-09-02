@@ -37,7 +37,20 @@ ESPERA = 45
 
 
 class ErpErro(RuntimeError):
-    """Raiz de tudo que pode dar errado ao falar com o ERP."""
+    """Raiz de tudo que pode dar errado ao falar com o ERP.
+
+    `codigo` é o status HTTP que gerou a falha, ou `0` quando nem houve
+    resposta (rede caída, 200 que não era JSON). Ele existe porque a MESMA
+    exceção nomeada nasce de causas com desfechos diferentes: um 401 do legado
+    pede relogin (o token dele vive segundos), e um 401 do `prod-erp-api` — ou
+    a senha recusada no login — pede gente. Ler o motivo do texto da mensagem
+    seria decidir por `str`, que é o tipo de conferência que quebra na primeira
+    vez que alguém melhora a frase.
+    """
+
+    def __init__(self, mensagem: str = "", *, codigo: int = 0):
+        super().__init__(mensagem)
+        self.codigo = codigo
 
 
 class SessaoRecusada(ErpErro):
@@ -112,6 +125,14 @@ class Sessao:
     #: Qualquer coisa com `.request(metodo, url, headers=…, json=…, timeout=…)`.
     #: `None` usa a sessão do módulo; os testes injetam a sua.
     transporte: object | None = field(default=None, repr=False)
+    #: A credencial que fez este login, guardada só em memória e para uma
+    #: coisa: refazer o login quando o `accessToken` do legado vencer no meio
+    #: do trabalho (ver `relogar`). `repr=False` porque objeto de sessão vai
+    #: parar em log e em traceback, e senha não. Sessão nascida de `de_login`
+    #: (que recebe o corpo pronto) fica sem elas — e então não há relogin, que
+    #: é o certo: ninguém pode relogar em nome de quem não entregou a senha.
+    _email: str = field(default="", repr=False)
+    _senha: str = field(default="", repr=False)
 
     # ----------------------------------------------------------------- login
 
@@ -166,7 +187,30 @@ class Sessao:
         sessao = cls.de_login(corpo, transporte=transporte)
         if not sessao.usuario:
             sessao.usuario = email
+        sessao._email, sessao._senha = email, senha
         return sessao
+
+    def relogar(self) -> None:
+        """Refaz o login NESTE objeto, trocando os dois tokens de uma vez.
+
+        Os dois, e não só o do legado: o login é um só e devolve o par, então
+        guardar metade do que ele respondeu deixaria o `jwtToken` velho ao lado
+        do `accessToken` novo — duas idades na mesma sessão, que é exatamente o
+        tipo de estado que ninguém consegue depurar depois.
+
+        Veio de `fontes/vigia-boletos/mc_sessao.py:131-133`, que é quem convive
+        com o legado há mais tempo e resolveu isso do mesmo jeito.
+        """
+        if not (self._email and self._senha):
+            raise SessaoRecusada(
+                "a sessao do ERP venceu e nao ha credencial guardada nesta\n"
+                "sessao para entrar de novo — refaca o login.")
+        nova = Sessao.logar(self._email, self._senha, transporte=self.transporte)
+        self.jwt_token = nova.jwt_token
+        self.access_token = nova.access_token
+        self.company_id = nova.company_id
+        self.user_id = nova.user_id
+        self.organization_unit_id = nova.organization_unit_id
 
     # ------------------------------------------------------- a regra central
 
@@ -234,14 +278,72 @@ class Sessao:
     # ------------------------------------------------------------ transporte
 
     def pedir(self, url: str, *, metodo: str = "GET", corpo=None,
-              extras: dict | None = None):
+              extras: dict | None = None, idempotente: bool = False):
         """Chamada autenticada por HTTP direto, sem navegador.
 
-        Quem repete é o transporte, e só em GET — ver `_montar_sessao`.
+        Quem repete 5xx é o transporte, e só em GET — ver `_montar_sessao`.
+        Quem repete **401 do legado** é este método, e uma vez só.
+
+        POR QUE O 401 DO LEGADO É OUTRA COISA
+        -------------------------------------
+        Os dois tokens têm idades incomparáveis (`token_para`):
+
+            prod-erp-api  ->  jwtToken     vale 24 h
+            legacy-api    ->  accessToken  vive SEGUNDOS
+
+        Então o mesmo 401 quer dizer coisas opostas. No legado ele é rotina:
+        o token venceu entre uma chamada e a seguinte, e quem fala por HTTP
+        direto precisa relogar no meio do trabalho (`docs/ERP-CLIENTES.md`,
+        seção 1, consequência 2; `fontes/vigia-boletos/mc_sessao.py:135-146`,
+        que descobriu isso primeiro). No `prod-erp-api` ele é notícia: um
+        token de 24 h recusado é sessão derrubada de verdade — o ERP aceita
+        UMA sessão por usuário, e outro login pode ter tomado esta
+        (`conciliacao/erp/collect.py:98-108`). Relogar ali seria tomar a
+        sessão de volta de quem estiver com ela, em silêncio; a exceção
+        nomeada sobe e quem chamou decide.
+
+        E POR QUE SÓ GET (E O QUE O CHAMADOR PODE MARCAR)
+        -------------------------------------------------
+        É a mesma razão do `Retry` de 5xx, e vale ainda mais aqui: um POST
+        que criou lançamento e perdeu a resposta duplica o que foi criado —
+        e os POSTs deste app criam lançamento e dão baixa em pagamento
+        (`aportes/mc_lancamentos.py`, `pagamentos_dia/baixa_erp.py`). O 401
+        chega ANTES de o pedido ser processado quase sempre; "quase sempre"
+        não é garantia, e dinheiro duplicado se desfaz à mão, lançamento por
+        lançamento (`CLAUDE.md`, "Aporte não se repete").
+
+        Daí `idempotente`: um PUT/POST que possa ser reenviado sem criar nada
+        (escrita que sobrescreve o mesmo lançamento, por exemplo) é marcado
+        pelo CHAMADOR, que é quem conhece a rota. O padrão é `False`, e o
+        padrão é o seguro: esquecer a marca custa uma exceção; pôr a marca
+        onde não cabe custa uma segunda baixa.
         """
+        try:
+            return self._uma_chamada(url, metodo, corpo, extras)
+        except SessaoRecusada as recusa:
+            if not self._da_para_relogar(url, metodo, recusa, idempotente):
+                raise
+        # Fora do `except` de propósito: um 401 na SEGUNDA volta sobe como
+        # veio, sem virar "durante o tratamento de X ocorreu Y" — e sem
+        # chance de laço, porque daqui não se tenta de novo.
+        self.relogar()
+        return self._uma_chamada(url, metodo, corpo, extras)
+
+    def _uma_chamada(self, url: str, metodo: str, corpo, extras):
         return _pedir(url, metodo=metodo, corpo=corpo,
                       cabecalhos=self.cabecalhos_para(url, extras),
                       transporte=self.transporte)
+
+    def _da_para_relogar(self, url: str, metodo: str, recusa: SessaoRecusada,
+                         idempotente: bool) -> bool:
+        """As quatro condições do relogin, cada uma com o seu motivo acima."""
+        if recusa.codigo != 401:
+            return False
+        if not hosts.eh_legacy(url):
+            return False
+        if not (self._email and self._senha):
+            return False
+        return metodo.upper() == "GET" or idempotente
 
 
 def cabecalhos_base() -> dict:
@@ -276,6 +378,9 @@ def _pedir(url: str, *, metodo: str, corpo, cabecalhos: dict, transporte=None):
 
     codigo = getattr(resposta, "status_code", 0)
     if codigo in (401, 403) and "/users/login" in url:
+        # `codigo=0`: o login é a única chamada que não tem token para vencer,
+        # então repetir com credencial nova é repetir com a MESMA credencial.
+        # Zerar o código aqui é o que impede o relogin de tentar isso.
         raise SessaoRecusada(
             "o ERP recusou a senha guardada.\n"
             "Guarde a senha correta e tente de novo."
@@ -283,13 +388,15 @@ def _pedir(url: str, *, metodo: str, corpo, cabecalhos: dict, transporte=None):
     if codigo == 403:
         raise ErpErro(
             "403 do WAF do Mais Controle. Quase sempre e o cabecalho\n"
-            "'user-agent' — confira a constante USER_AGENT em erp/sessao.py."
+            "'user-agent' — confira a constante USER_AGENT em erp/sessao.py.",
+            codigo=403,
         )
     if codigo == 401:
-        raise SessaoRecusada("a sessao do ERP foi recusada (401).")
+        raise SessaoRecusada("a sessao do ERP foi recusada (401).", codigo=401)
     if codigo >= 400:
         detalhe = (getattr(resposta, "text", "") or "")[:200]
-        raise ErpErro(f"HTTP {codigo} ao chamar {url.split('?')[0]}\n{detalhe}")
+        raise ErpErro(f"HTTP {codigo} ao chamar {url.split('?')[0]}\n{detalhe}",
+                      codigo=codigo)
     try:
         return resposta.json()
     except ValueError as e:
