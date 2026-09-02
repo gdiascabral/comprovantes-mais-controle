@@ -48,6 +48,16 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      # Só erro de verdade: E9 é sintaxe, e F é o pyflakes inteiro (nome
+      # indefinido, import não usado, f-string sem f...). Nenhuma opinião de
+      # estilo entra aqui — linha comprida, ordem de import, essas regras
+      # ficam de fora de propósito, senão todo PR vira negociação de gosto em
+      # vez de defeito. Antes do vermin porque um `except NomeErrado:` ou um
+      # import quebrado é mais barato de achar aqui do que num teste que falha
+      # por um motivo que não é o dele.
+      - name: Conferir erros de verdade (ruff)
+        run: ruff check --select E9,F .
+
       # O exe roda Python 3.11 e a máquina de quem desenvolve, não. Foi assim
       # que a run #76 caiu (`Path.read_text(newline=…)`, que só existe do 3.13
       # em diante) e queimou o número da release. Era passo humano, escrito no
