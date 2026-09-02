@@ -1264,7 +1264,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   sumiram por um momento. Já o contraste da paleta (`test_visual.py`) é
   aritmética sobre constantes: roda no CI sem tela nenhuma.
 - **Mudança visual passa pela galeria, antes e depois**:
-  `python ferramentas/galeria.py`, as 12 telas nos dois temas, e a comparação é
+  `python -m ferramentas.galeria`, as 12 telas nos dois temas, e a comparação é
   o olho de quem mexeu. **Os PNG não vão para o PR** — a tela pode carregar nome
   de empresa vindo do cache, e o repositório é público; o que vai é a diferença
   MEDIDA (o PR #15 relatou 6.605 px trocados no Anexar e 0 px no Início, e o
