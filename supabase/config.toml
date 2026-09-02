@@ -177,7 +177,7 @@ enabled = true
 #   https://gdiascabral.github.io/comprovantes-mais-controle/confirmado.html
 # Como ligar: Settings -> Pages -> Deploy from a branch -> main, pasta /docs.
 # Ver `docs/SUPABASE-PAINEL.md`.
-site_url = "https://SUBSTITUA-pela-pagina-de-confirmacao"
+site_url = "https://gdiascabral.github.io/comprovantes-mais-controle/confirmado.html"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
@@ -189,7 +189,7 @@ site_url = "https://SUBSTITUA-pela-pagina-de-confirmacao"
 # Se a resposta for so a pagina do GitHub Pages, o `site_url` sozinho ja
 # resolve e esta lista pode voltar a `[]`. Ela existe para o caso de haver
 # mais de um destino (uma pagina de teste, por exemplo).
-additional_redirect_urls = ["https://SUBSTITUA-pela-pagina-de-confirmacao"]
+additional_redirect_urls = []
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
