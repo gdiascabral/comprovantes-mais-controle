@@ -935,7 +935,6 @@ class PagamentosDiaFrame(ttk.Frame):
         três coisas são exatamente o que esta lista precisa. Um `Frame` por
         linha custa mais widgets e entrega o que o mockup pede.
         """
-        c = widgets.cores()
         linha = ttk.Frame(pai)
         linha.pack(fill="x")
         # O `_marcou` é definido mais abaixo, junto do rótulo que ele repinta;
