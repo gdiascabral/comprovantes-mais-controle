@@ -143,7 +143,13 @@ def log(nome: str) -> logging.Logger:
     if _handler is None:
         _handler = RotatingFileHandler(
             pasta_base() / "diagnostico.log", maxBytes=1_000_000,
-            backupCount=3, encoding="utf-8")
+            # `delay=True`: o arquivo abre no PRIMEIRO emit, não aqui. Aberto
+            # aqui, uma pasta sem escrita faria `log()` levantar OSError — e o
+            # `diag()` de antes engolia isso de propósito ("sem disco/permissão:
+            # não há o que fazer"). Dentro do emit, o logging já engole erro de
+            # I/O sozinho (`handleError`), e a garantia de nunca derrubar o app
+            # por causa de diagnóstico continua valendo.
+            backupCount=3, encoding="utf-8", delay=True)
         _handler.setFormatter(logging.Formatter(
             "%(asctime)s  %(name)s  %(levelname)s  %(message)s",
             datefmt="%d/%m/%Y %H:%M:%S"))
