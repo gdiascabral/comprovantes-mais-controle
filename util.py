@@ -6,9 +6,11 @@ e para os exes. Módulos em subpastas o importam com um fallback de sys.path
 (ver o topo de cada arquivo) para funcionarem também rodados isoladamente.
 """
 import ctypes
+import logging
 import re
 import sys
 import unicodedata
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
@@ -95,6 +97,62 @@ def pasta_do_perfil(nome: str = "") -> Path:
     evita montar um caminho longo demais só por causa dele."""
     limpo = re.sub(r"[^A-Za-z0-9_-]+", "_", nome.strip())[:40]
     return pasta_base() / f".chrome_profile{'_' + limpo if limpo else ''}"
+
+
+# --------------------------------------------------------------- diagnóstico
+
+_handler = None  # o UM RotatingFileHandler que TODO nome de logger compartilha
+
+
+def log(nome: str) -> logging.Logger:
+    """O logger de diagnóstico do app — um arquivo só, para qualquer módulo.
+
+    Hoje o diagnóstico sai por `print()` (que não existe: o exe é
+    `--noconsole`, sem janela de terminal, e escrever num `stdout` inexistente
+    derruba o app) e por escrita à mão no `diagnostico.log`, cada módulo do
+    seu jeito — o `anexar/config.py` tinha o `diag()`; o resto não tinha
+    nada. Quando uma máquina de usuário diz só "não abriu", não sobra o que
+    consultar. Esta função é a BASE: quem for adotar loga com
+    `log(__name__).info(...)` e já ganha arquivo e formato certos — a troca
+    módulo a módulo vem em PRs seguintes, não aqui.
+
+    UM `RotatingFileHandler` só, reaproveitado por TODO `nome` que passar por
+    aqui — não um handler por módulo. Handler por módulo seria trocar o
+    diagnóstico espalhado de hoje por outro igualmente espalhado, só que com
+    nomes de arquivo em vez de formatos diferentes. `nome` (normalmente o
+    `__name__` de quem chama) entra só no FORMATO da linha, nunca no caminho
+    do arquivo — que é sempre `pasta_base() / "diagnostico.log"`, o mesmo
+    `pasta_base()` de sempre: ao lado do exe, congelado; na raiz, rodando
+    como script.
+
+    Formato "%(asctime)s  %(name)s  %(levelname)s  %(message)s", com o MESMO
+    prefixo de data e hora (`dd/mm/aaaa hh:mm:ss`) que o `diagnostico.log` de
+    hoje já grava à mão: quem abre o arquivo depois desta troca não estranha
+    a parte que costuma olhar primeiro.
+
+    Sem handler de console, de propósito: o exe é `--noconsole`, e um
+    `StreamHandler` apontado para um `stdout`/`stderr` que não existe é a
+    mesma armadilha do `print()` — derruba o app, não só engasga o log.
+    `propagate=False` pela razão contrária: sem isso, o logger raiz (se um
+    dia ganhar handler próprio) duplicaria cada linha.
+
+    Chamar com o MESMO `nome` duas vezes devolve o MESMO `Logger` — é o
+    `logging.getLogger` de sempre, que já faz esse cache — sem acrescentar um
+    segundo handler; quem garante isso é o `if not logger.handlers` abaixo."""
+    global _handler
+    if _handler is None:
+        _handler = RotatingFileHandler(
+            pasta_base() / "diagnostico.log", maxBytes=1_000_000,
+            backupCount=3, encoding="utf-8")
+        _handler.setFormatter(logging.Formatter(
+            "%(asctime)s  %(name)s  %(levelname)s  %(message)s",
+            datefmt="%d/%m/%Y %H:%M:%S"))
+    logger = logging.getLogger(nome)
+    if not logger.handlers:
+        logger.addHandler(_handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+    return logger
 
 
 #: Os meses COMO VIRAM NOME DE PASTA no disco — `.../2026/JULHO/...`.

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Utilitários compartilhados: formatos e a busca das listas."""
 
+import logging
+import re
 import sys
 from pathlib import Path
 
@@ -125,3 +127,75 @@ def test_pasta_do_perfil_limpa_caracteres_e_corta_em_40():
     cortado = util.pasta_do_perfil(nome_longo).name
     # ".chrome_profile_" (17) + 40 caracteres limpos.
     assert cortado == ".chrome_profile_" + "A" * 40
+
+
+# --------------------------------------------------------- diagnóstico (log)
+#
+# `util.log()` é a BASE: um `RotatingFileHandler` só, compartilhado por todo
+# `nome` que passar por `log()`. Estes testes isolam esse compartilhado num
+# `tmp_path` a cada chamada — sem isso, o handler da PRIMEIRA chamada (de
+# QUALQUER teste, na ordem em que o pytest os rodar) ficaria preso ao
+# `pasta_base()` de então, e as chamadas seguintes o herdariam calado, em vez
+# de abrir um novo no `tmp_path` do teste atual. E cada teste usa um nome de
+# logger PRÓPRIO — `logging.getLogger` guarda os loggers pelo nome para o
+# processo inteiro, então reaproveitar um nome herdaria o handler (já
+# fechado) de um teste anterior.
+
+def _log_isolado(monkeypatch, tmp_path):
+    """Aponta `pasta_base()` para o `tmp_path` do teste e esquece o handler
+    compartilhado, para a próxima chamada a `util.log()` abrir um novo ali —
+    e não continuar escrevendo em qualquer lugar que um teste anterior (ou a
+    própria raiz do projeto) tenha aberto primeiro."""
+    monkeypatch.setattr(util, "pasta_base", lambda: tmp_path)
+    monkeypatch.setattr(util, "_handler", None)
+
+
+def test_log_mesmo_nome_devolve_o_mesmo_logger_com_um_so_handler(
+        monkeypatch, tmp_path):
+    _log_isolado(monkeypatch, tmp_path)
+    a = util.log("teste_util_log_a")
+    b = util.log("teste_util_log_a")
+    assert a is b
+    assert len(a.handlers) == 1        # a 2a chamada não acrescentou outro
+    a.handlers[0].close()
+
+
+def test_log_nomes_diferentes_compartilham_o_mesmo_handler(
+        monkeypatch, tmp_path):
+    _log_isolado(monkeypatch, tmp_path)
+    a = util.log("teste_util_log_b1")
+    b = util.log("teste_util_log_b2")
+    assert a is not b                  # loggers diferentes, um por nome
+    assert a.handlers[0] is b.handlers[0]      # mas o MESMO handler
+    a.handlers[0].close()
+
+
+def test_log_grava_no_diagnostico_log_com_o_prefixo_de_data_e_hora(
+        monkeypatch, tmp_path):
+    _log_isolado(monkeypatch, tmp_path)
+    logger = util.log("teste_util_log_c")
+    logger.info("mensagem de teste")
+    for h in logger.handlers:
+        h.flush()
+        h.close()                      # senão o arquivo fica preso no Windows
+
+    conteudo = (tmp_path / "diagnostico.log").read_text(encoding="utf-8")
+    # O MESMO prefixo dd/mm/aaaa hh:mm:ss que o diagnostico.log de hoje já
+    # usa — quem lê o arquivo depois desta troca não estranha essa parte.
+    assert re.match(r"^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}  ", conteudo)
+    assert "teste_util_log_c" in conteudo
+    assert "INFO" in conteudo
+    assert "mensagem de teste" in conteudo
+
+
+def test_log_nao_tem_handler_de_console(monkeypatch, tmp_path):
+    """O exe é `--noconsole`: um `StreamHandler` escrevendo num
+    stdout/stderr que não existe derruba o app — a mesma armadilha do
+    `print()` que este PR está começando a substituir."""
+    _log_isolado(monkeypatch, tmp_path)
+    logger = util.log("teste_util_log_d")
+    assert logger.handlers                 # tem handler, e é de arquivo
+    for h in logger.handlers:
+        assert isinstance(h, logging.FileHandler)
+        assert getattr(h, "stream", None) not in (sys.stdout, sys.stderr)
+    logger.handlers[0].close()
