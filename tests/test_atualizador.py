@@ -421,3 +421,214 @@ def test_sem_trava_a_copia_de_fabrica_vence_o_codigo_mais_velho(tmp_path,
     """O contraexemplo que mostra que a regra normal continua de pé."""
     _, emb = _fingir_exe(tmp_path, monkeypatch, "v1.0.75", "v1.0.78")
     assert atualizador.preparar_codigo() == emb
+
+
+# ------------------------------------------------- o portão das releases
+# Desde 09/2026 a build publica PRÉVIA (`prerelease: true`) e só o workflow
+# `.github/workflows/liberar.yml` a torna a versão de todo mundo. Nada disso
+# está escrito aqui: quem separa prévia de liberada é a PRÓPRIA API do GitHub,
+# porque `/releases/latest` devolve, por definição, a release mais nova que
+# NÃO é prerelease nem draft.
+#
+# É uma dependência silenciosa — o atualizador não fala em `prerelease` em
+# lugar nenhum —, e trocar `/releases/latest` pela LISTA `/releases` (que é o
+# endereço óbvio para quem quiser "ver as releases") abriria o portão de volta
+# sem quebrar nada visível: a prévia da última build entraria em toda máquina
+# na abertura seguinte. Estes testes existem para isso doer aqui.
+
+class _Erro404(Exception):
+    """O que o `requests` levanta no `raise_for_status` de uma 404."""
+
+
+class _RespostaGitHub(_Resposta):
+    def __init__(self, corpo=None, conteudo=b"", cabecalhos=None, status=200):
+        super().__init__(corpo, conteudo, cabecalhos)
+        self._corpo = corpo if corpo is not None else {}
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise _Erro404(f"{self.status_code} Client Error")
+
+
+def _release(tag, previa=False, rascunho=False):
+    """Uma release como a API a devolve.
+
+    O exe se chama "Comprovantes.Mais.Controle.exe", com PONTOS: o build.yml
+    sobe "Comprovantes Mais Controle.exe" e o GitHub troca os espaços do nome
+    do asset. Quem o procurasse pelo nome não o acharia — `_url_do_exe`
+    procura pela EXTENSÃO, e é por isso que ele funciona."""
+    base = f"https://github.com/{atualizador.REPO}/releases/download/{tag}"
+    return {
+        "tag_name": tag,
+        "prerelease": previa,
+        "draft": rascunho,
+        "assets": [
+            {"name": "codigo.zip",
+             "browser_download_url": f"{base}/codigo.zip"},
+            {"name": "Comprovantes.Mais.Controle.exe",
+             "browser_download_url": f"{base}/Comprovantes.Mais.Controle.exe"},
+        ],
+    }
+
+
+class _GitHubFalso:
+    """A API de releases do GitHub, com a semântica que o portão usa.
+
+    Não é um dublê que devolve sempre a mesma coisa: ele guarda a lista de
+    releases e responde a cada endereço como o GitHub responde. É o que faz o
+    teste medir a ESCOLHA do atualizador, e não a resposta que o teste
+    preparou:
+
+    - `/releases/latest` → a mais nova que não é prévia nem rascunho, e 404
+      quando não há nenhuma liberada;
+    - `/releases` (a lista) → tudo, prévia inclusive, na ordem em que veio;
+    - `/releases/tags/<tag>` → aquela tag, seja ela prévia ou não. É por aqui
+      que o `travar_versao.txt` passa, e é de propósito.
+    """
+
+    def __init__(self, releases):
+        self.releases = list(releases)      # da mais nova para a mais velha
+        self.urls = []
+
+    def _liberadas(self):
+        return [r for r in self.releases
+                if not r["prerelease"] and not r["draft"]]
+
+    def get(self, url, **_):
+        self.urls.append(url)
+        if url.endswith("/releases/latest"):
+            liberadas = self._liberadas()
+            if not liberadas:
+                return _RespostaGitHub(status=404)
+            return _RespostaGitHub(liberadas[0])
+        if "/releases/tags/" in url:
+            tag = url.rsplit("/", 1)[-1]
+            for r in self.releases:
+                if r["tag_name"] == tag:
+                    return _RespostaGitHub(r)
+            return _RespostaGitHub(status=404)
+        if url.endswith("/releases"):
+            return _RespostaGitHub(self.releases)
+        # Download de asset: o corpo é coerente com a tag que está no endereço,
+        # senão o teste não saberia dizer QUAL release foi instalada.
+        tag = url.split("/releases/download/")[1].split("/")[0]
+        corpo = _codigo_zip(tag)
+        return _RespostaGitHub(
+            conteudo=corpo, cabecalhos={"content-length": str(len(corpo))})
+
+
+# A prévia é a mais nova e a liberada é a anterior: é o estado do repositório
+# entre um push e a decisão de liberar, que agora é o estado normal dele.
+_COM_PREVIA_NO_TOPO = [
+    _release("v1.0.79", previa=True),
+    _release("v1.0.78"),
+    _release("v1.0.77"),
+]
+
+
+def test_o_endereco_perguntado_e_o_que_ignora_previa(tmp_path, monkeypatch):
+    """A dependência inteira do portão cabe nesta linha do atualizador.
+
+    Trocando `/releases/latest` por `/releases`, o teste seguinte também cai —
+    mas este cai ANTES, e dizendo o que foi trocado."""
+    assert atualizador.API_LATEST.endswith("/releases/latest")
+
+    pasta, emb = _instalado(tmp_path)
+    falso = _fingir_rede(monkeypatch, _GitHubFalso(_COM_PREVIA_NO_TOPO))
+    atualizador._atualizar_codigo(pasta, emb)
+    assert falso.urls[0] == atualizador.API_LATEST
+
+
+def test_a_previa_nao_chega_ao_usuario(tmp_path, monkeypatch):
+    """O ponto do portão: a build de hoje existe, e o app não a instala.
+
+    Instalada a v1.0.77, prévia v1.0.79 no topo, liberada v1.0.78 logo abaixo
+    — quem entra é a v1.0.78."""
+    pasta, emb = _instalado(tmp_path)
+    falso = _fingir_rede(monkeypatch, _GitHubFalso(_COM_PREVIA_NO_TOPO))
+    atualizador._atualizar_codigo(pasta, emb)
+    assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.78"
+    assert not any("v1.0.79" in u for u in falso.urls), \
+        "baixou a prévia: o portão está aberto"
+
+
+def test_a_lista_de_releases_traria_a_previa_e_por_isso_nao_serve():
+    """O contraexemplo que dá sentido ao teste acima.
+
+    Não exercita o atualizador: documenta a diferença entre os dois endereços,
+    que é a razão de um não poder ser trocado pelo outro."""
+    falso = _GitHubFalso(_COM_PREVIA_NO_TOPO)
+    lista = falso.get(f"https://api.github.com/repos/{atualizador.REPO}/releases")
+    assert lista.json()[0]["tag_name"] == "v1.0.79"     # a prévia vem primeiro
+    assert falso.get(atualizador.API_LATEST).json()["tag_name"] == "v1.0.78"
+
+
+def test_rascunho_tambem_fica_de_fora(tmp_path, monkeypatch):
+    """Rascunho anda junto com prévia porque a API os ignora pelo mesmo motivo
+    — e a poda do build.yml trata os dois como uma categoria só."""
+    pasta, emb = _instalado(tmp_path)
+    _fingir_rede(monkeypatch, _GitHubFalso([
+        _release("v1.0.80", rascunho=True),
+        _release("v1.0.79", previa=True),
+        _release("v1.0.78"),
+    ]))
+    atualizador._atualizar_codigo(pasta, emb)
+    assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.78"
+
+
+def test_o_exe_completo_tambem_so_vem_de_release_liberada(monkeypatch):
+    """O outro ponto em que o atualizador escolhe uma release. Ele é raro (só
+    quando entra biblioteca nova), e é justamente por isso que passaria
+    despercebido: portão que segura o codigo.zip e deixa passar 150 MB de
+    prévia não é portão nenhum."""
+    _fingir_rede(monkeypatch, _GitHubFalso(_COM_PREVIA_NO_TOPO))
+    url, nome = atualizador._url_do_exe()
+    assert "/v1.0.78/" in url and "v1.0.79" not in url
+    assert nome.lower().endswith(".exe")
+
+
+def test_sem_nenhuma_liberada_o_app_abre_com_o_que_tem(tmp_path, monkeypatch):
+    """Nada liberado ainda — o estado logo depois de ligar o portão. Não há o
+    que atualizar, e "não há o que atualizar" não pode virar erro na cara de
+    quem só quer abrir o programa: a 404 do `/releases/latest` é engolida e
+    registrada pelo `preparar_codigo`, como toda falha de rede."""
+    exe_dir = tmp_path / "app"
+    pasta = exe_dir / "codigo"
+    pasta.mkdir(parents=True)
+    (pasta / "versao.txt").write_text("v1.0.77\n", encoding="utf-8")
+    (pasta / "comprovantes_app.py").write_text("velho\n", encoding="utf-8")
+    emb = tmp_path / "mei" / "codigo_embutido"
+    emb.mkdir(parents=True)
+    (emb / "versao.txt").write_text("v1.0.70\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "app.exe"))
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "mei"), raising=False)
+
+    registro = []
+    monkeypatch.setattr(atualizador, "_logar", registro.append)
+    falso = _GitHubFalso([_release("v1.0.79", previa=True),
+                          _release("v1.0.78", previa=True)])
+    monkeypatch.setitem(sys.modules, "requests", falso)
+
+    assert atualizador.preparar_codigo() == pasta
+    assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.77"
+    assert falso.urls == [atualizador.API_LATEST], \
+        "baixou alguma coisa sem haver release liberada"
+    assert any("404" in m for m in registro), registro
+
+
+def test_a_trava_enxerga_previa_e_e_assim_que_se_testa_antes_de_liberar(
+        tmp_path, monkeypatch):
+    """A porta de serviço do portão, e ela é deliberada.
+
+    `travar_versao.txt` busca a release pela TAG (`/releases/tags/…`), que
+    responde por prévia também. É o que permite pôr a prévia numa máquina só,
+    conferir, e só então liberá-la para as outras — sem isso, o único jeito de
+    experimentar uma versão seria entregá-la a todo mundo. Continua exigindo
+    criar um arquivo ao lado do exe: ninguém cai nisto sem querer."""
+    pasta, emb = _instalado(tmp_path, "v1.0.78")
+    (tmp_path / "travar_versao.txt").write_text("v1.0.79\n", encoding="utf-8")
+    falso = _fingir_rede(monkeypatch, _GitHubFalso(_COM_PREVIA_NO_TOPO))
+    atualizador._atualizar_codigo(pasta, emb)
+    assert "releases/tags/v1.0.79" in falso.urls[0]
+    assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.79"
