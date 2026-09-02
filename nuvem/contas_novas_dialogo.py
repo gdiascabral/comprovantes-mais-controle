@@ -12,7 +12,9 @@ responder "sim".
 """
 from __future__ import annotations
 
+import sys
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk
 
 try:
@@ -20,13 +22,22 @@ try:
 except ModuleNotFoundError:              # rodando isolado, sem a raiz no path
     widgets = None
 
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+log = util.log(__name__)
+
 
 def _barra(top) -> None:
     if widgets is not None and hasattr(widgets, "barra_de_titulo"):
         try:
             widgets.barra_de_titulo(top)
         except Exception:
-            pass
+            log.warning("aplicando a barra de título na janela de contas "
+                        "novas", exc_info=True)
 
 
 def perguntar(pai, novas, empresas) -> list[dict]:
