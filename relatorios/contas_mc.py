@@ -19,12 +19,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-try:                                     # utilitários compartilhados (raiz)
-    import util
-except ModuleNotFoundError:              # rodando este módulo isoladamente
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import util
+import util
 
 
 #: A tabela de pasta mora em `util.MESES_PASTA`: as três cópias que
