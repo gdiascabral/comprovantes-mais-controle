@@ -299,9 +299,24 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   nasce sabendo a regra dos tokens, e ele nasceu adivinhando-a.
 - `conciliacao/` — aba Conciliação Diária: lê saldos e pagamentos a vencer e
   gera o painel do dia sobre o `MODELO.xlsx`, com o aporte mínimo por conta.
-  **Único pacote de verdade** (tem `__init__.py`, importa-se
-  `from conciliacao.frame import ...`): nome de módulo é global no sys.path do
-  app, e um pacote dispensa o prefixo que `extratos_sicoob/` precisou usar.
+  **Foi o primeiro pacote de verdade do app, e desde 02/09/2026 todas as
+  pastas são** (PR #38): as sete que faltavam ganharam `__init__.py`, os 105
+  `sys.path.insert` viraram 3 — os três põem a RAIZ e nada mais (`motor.py`,
+  `tests/conftest.py`, `cnab240/ferramentas/_ambiente.py`) — e todo import diz
+  o caminho inteiro (`from conciliacao.frame import ...`, `from
+  anexar.conferencia import ...`). O que isso desfez: com as pastas entrando
+  planas no `sys.path`, nome de módulo era global, e havia `config.py` em três
+  pastas, `frame.py` em três, e `conferencia.py`, `regras.py`, `pipeline.py` e
+  `sicoob_baixar.py` em duas cada — `from conferencia import ConferenciaFrame`
+  acertava a aba certa só porque `contratos/` não estava na lista de
+  inserções. O prefixo `sicoob_` do `extratos_sicoob/` e o sufixo `_pagamento`
+  de `pagamentos_dia/regras_pagamento.py` são as cicatrizes dessa época:
+  continuam (renomear mexe em quem usa sem melhorar quem lê), mas deixaram de
+  ser exigência. Quem guarda a regra é `tests/test_nomes_de_modulo.py`, que
+  descobre as pastas em vez de listá-las e falha se alguma subpasta voltar ao
+  `sys.path`. Módulo isolado roda `python -m pacote.modulo` da raiz — o
+  `try/except ImportError` que cada arquivo carregava não existe mais; a sonda
+  agendada é `python -m ferramentas.sonda`.
   Veio de um projeto separado que rodava por `.bat`, e os `.bat` continuam lá
   como plano B — **não rodar os dois ao mesmo tempo**, porque o ERP aceita uma
   sessão por usuário. É essa regra que explica o desenho: `coletar_com_pagina()`
