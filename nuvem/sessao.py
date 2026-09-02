@@ -55,6 +55,8 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import util
 
+log = util.log(__name__)
+
 ARQUIVO = "sessao.dat"
 
 #: Renova com folga: token que vence em 2 minutos vence no meio do trabalho.
@@ -87,6 +89,9 @@ def _dentro(token: str) -> dict:
         dados = json.loads(base64.urlsafe_b64decode(corpo + "==").decode())
         return dados if isinstance(dados, dict) else {}
     except Exception:
+        # O token NÃO entra na mensagem: ele é a credencial, e o
+        # `diagnostico.log` é um arquivo comum na pasta do exe.
+        log.warning("lendo o miolo do token da sessão", exc_info=True)
         return {}
 
 

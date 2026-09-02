@@ -23,13 +23,23 @@ preenche não responde "quem fez" — responde "quem o cliente disse que fez".
 """
 from __future__ import annotations
 
+import sys
 import threading
+from pathlib import Path
 
 try:
     from . import rest, sessao
 except ImportError:
     import rest
     import sessao
+
+try:                                     # utilitários compartilhados (raiz)
+    import util
+except ModuleNotFoundError:              # rodando este módulo isoladamente
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import util
+
+log = util.log(__name__)
 
 #: A tabela é append-only: `authenticated` tem insert e select, e não tem
 #: update nem delete (migration da fase 1). Corrigir depois é o que faria o
@@ -85,7 +95,8 @@ def _espelhar_local(aba, acao, resultado, detalhe, numeros) -> None:
         import widgets
         widgets.registrar_atividade(aba, acao, resultado, detalhe, numeros)
     except Exception:                                        # noqa: BLE001
-        pass
+        log.warning("espelhando a atividade '%s' no atividade.jsonl", aba,
+                    exc_info=True)
 
 
 def recentes(quantos: int = 50) -> list[dict]:
@@ -98,4 +109,6 @@ def recentes(quantos: int = 50) -> list[dict]:
                         colunas="id,quem,quando,acao,detalhe",
                         filtro=f"order=quando.desc&limit={int(quantos)}")
     except Exception:                                        # noqa: BLE001
+        log.warning("lendo as ultimas linhas da auditoria na nuvem (%s)",
+                    quantos, exc_info=True)
         return []

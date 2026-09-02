@@ -33,6 +33,11 @@ except ModuleNotFoundError:              # rodando este módulo isoladamente
 
 from . import rest
 
+#: O diagnóstico do módulo. `contas_do_erp` e `novidades` recebem um `log`
+#: PRÓPRIO (o recado que a abertura do app mostra na tela); lá dentro vale o
+#: parâmetro, e é ele que continua sendo chamado. Este aqui é para o resto.
+log = util.log(__name__)
+
 #: As duas bases que o `SessaoApi` pede. Um objeto mínimo em vez de importar
 #: `conciliacao/config.py`: aquele arquivo é um dos que divergem entre o
 #: repositório e a máquina do dono, e a ABERTURA do app não pode depender
@@ -104,6 +109,8 @@ def nomes_cadastrados(pasta=None) -> set[str]:
     try:
         dados = json.loads(caminho.read_text(encoding="utf-8"))
     except Exception:
+        log.warning("lendo o cadastro local de contas (%s)", ARQUIVO_CONTAS,
+                    exc_info=True)
         return set()
     contas = dados.get("contas") if isinstance(dados, dict) else None
     if not isinstance(contas, list):
@@ -129,6 +136,8 @@ def ignorados(pasta=None) -> list[str]:
         import yaml
         dados = yaml.safe_load(caminho.read_text(encoding="utf-8")) or {}
     except Exception:
+        log.warning("lendo a lista de contas ignoradas (%s)", ARQUIVO_MAPA,
+                    exc_info=True)
         return []
     lista = dados.get("ignored_erp_accounts") or []
     return [util.norm_espaco(str(x)) for x in lista if str(x).strip()]
@@ -239,6 +248,8 @@ def empresas(token: str) -> list[tuple]:
     try:
         linhas = rest.ler("empresa", token, colunas="id,nome_pasta")
     except Exception:
+        log.warning("lendo as empresas para o menu da janela de contas novas",
+                    exc_info=True)
         return []
     return sorted(((l["id"], l.get("nome_pasta") or str(l["id"]))
                    for l in linhas if isinstance(l, dict) and l.get("id")),
