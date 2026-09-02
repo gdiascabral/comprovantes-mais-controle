@@ -7,15 +7,28 @@ https://github.com/gdiascabral/comprovantes-mais-controle
 
 ## Regra de ouro: como uma mudança chega ao usuário
 
-TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), que:
-1. gera `versao.txt` = `v1.0.<run_number>` (NÃO é commitado; criado na build);
+**Gerar e liberar são dois atos, e desde 02/09/2026 há um portão entre eles.**
+Antes eram um só: o push publicava a release e o `atualizador.py` a instalava
+na abertura seguinte — do commit à máquina de quem paga contas davam 4 a 9
+minutos, sem ninguém decidir nada. Num app que movimenta dinheiro, é uma
+decisão que ninguém tomou (PR #1).
+
+A `main` é **protegida**: não se empurra nada nela direto, toda mudança entra
+por PR, e a trava vale **também para quem é admin** (`enforce_admins` ligado,
+sem force-push e sem apagar a branch). O merge dispara o GitHub Actions
+(`.github/workflows/build.yml`), que:
+
+1. gera `versao.txt` = `v2.0.<run_number>` (NÃO é commitado; criado na build).
+   Era `v1.0.<run_number>` até o commit `4be2c3d`, de 30/08/2026 — a numeração
+   velha ainda aparece nos incidentes contados aqui embaixo (a v1.0.71, a
+   run #76) e no `motor_minimo.txt`, e é a mesma esteira;
 2. monta `codigo.zip` (comprovantes_app.py + util.py + widgets.py +
-   separar_renomear/*.py + anexar/*.py + aportes/*.py +
-   relatorios/*.py + pagamentos_dia/*.py + extratos_sicoob/*.py +
-   conciliacao/*.py + conciliacao/erp/*.py + contratos/*.py +
-   acessorias/*.py + cnab240/*.py + **cnab240/spec/*.json** +
-   **nuvem/*.py exceto migrar.py** + versao.txt +
-   motor_minimo.txt + icone.ico) — ~100 KB.
+   inicio/*.py + separar_renomear/*.py + anexar/*.py +
+   baixar_comprovantes/*.py + aportes/*.py + relatorios/*.py +
+   pagamentos_dia/*.py + extratos_sicoob/*.py + conciliacao/*.py +
+   conciliacao/erp/*.py + contratos/*.py + acessorias/*.py + **erp/*.py** +
+   cnab240/*.py + **cnab240/spec/*.json** + **nuvem/*.py exceto migrar.py** +
+   versao.txt + motor_minimo.txt + icone.ico).
    **Pasta nova de aba OU arquivo novo na raiz = linha nova aqui**, senão o
    import falha no usuário e o app não abre. Vale para os dois: `widgets.py` é
    de raiz e precisou entrar um a um;
@@ -24,25 +37,100 @@ TODO push na `main` dispara o GitHub Actions (`.github/workflows/build.yml`), qu
    remessa, na máquina do usuário. Guardado por `tests/test_cnab240_pacote.py`;
    **`nuvem/migrar.py` é a exceção oposta**: fica de fora porque é ferramenta
    de uma vez só, rodada à mão no repositório, e o app nunca a importa;
+   **`erp/` entrou sem consumidor nenhum** (PR #24) porque é biblioteca, como o
+   `cnab240/`: o zip tem de conhecê-la ANTES de a primeira aba importá-la —
+   código que chega depois de quem o importa é o app não abrindo na máquina de
+   quem usa. Quem vigia a lista inteira é `tests/test_empacotamento.py`;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
-   com Tesseract OCR embutido) — e publica a Release `v1.0.<run_number>` com
-   o exe + codigo.zip. Os exes avulsos de Separar e de Anexar foram removidos:
-   tudo vive em abas no app principal;
-4. apaga releases antigas mantendo as **4 mais novas** (política de rollback).
+   com Tesseract OCR embutido) — e publica a Release `v2.0.<run_number>`
+   **como PRÉVIA** (`prerelease: true`), com o exe + codigo.zip, nos **dois**
+   repositórios: o de código e o de artefatos
+   (`gdiascabral/comprovantes-releases`, a constante `REPO` do
+   `atualizador.py`). São dois passos porque é no de ARTEFATOS que o app
+   procura, e fechar o portão só no de código o deixaria aberto exatamente
+   onde os usuários olham. Os exes avulsos de Separar e de Anexar foram
+   removidos: tudo vive em abas no app principal;
+4. poda releases antigas — **por categoria**, mantendo as 4 mais novas e os 30
+   dias de CADA uma. Piso único deixou de servir quando as duas categorias
+   passaram a conviver, e o caso que ele quebra é o pior possível: uma semana
+   de pushes sem liberar põe 4 prévias no topo, a última LIBERADA (a que está
+   rodando na máquina de todo mundo) cai para a 5ª posição e some com o prazo,
+   levando junto o caminho de volta que é o motivo de a poda ter piso. Prévia
+   tem uma regra a mais: só entra na poda depois de **ultrapassada** por uma
+   liberada mais nova — aí é prévia morta, porque ninguém libera versão
+   anterior à que já está em produção; prévia que ainda pode virar a próxima
+   versão fica, tenha a idade que tiver.
+
+**O portão não é código nosso: é a semântica da API do GitHub.**
+`/releases/latest` devolve, por definição, a release mais nova que não é
+`prerelease` nem `draft` — e é o ÚNICO endereço por onde o `atualizador.py`
+escolhe versão (`API_LATEST`, nas duas pontas: o `codigo.zip` da abertura e o
+exe de ~152 MB). Por isso o PR #1 não mudou uma linha dele. A contrapartida é
+que a dependência ficou invisível no código, e dependência que não aparece é
+dependência que alguém apaga sem saber: quem a segura é
+`tests/test_atualizador.py`, cujo dublê guarda a lista de releases e responde a
+cada endereço como o GitHub responde (404 no `latest` quando não há liberada) —
+trocando `API_LATEST` pela lista `/releases`, seis dos sete testes quebram.
+
+**Quem entrega é gente, à mão.** Actions → **"Liberar uma versão para os
+usuários"** (`.github/workflows/liberar.yml`) → Run workflow → a tag da prévia
+(está no título dela, na aba Releases) → Run workflow. Leva segundos, e a
+partir daí os apps a baixam sozinhos na próxima abertura. O workflow não gera
+nada: o exe e o `codigo.zip` que vão ao usuário são os bytes que a build já
+publicou — **liberar não pode ser uma segunda chance de mudar o que sai**. Ele
+vira a chave nos dois repositórios, artefatos primeiro, e confere quatro coisas
+antes de escrever: o formato da tag, o `TOKEN_ARTEFATOS`, que a release existe
+e está inteira, e que a tag não é mais velha que a que já está em produção.
+Duas armadilhas medidas contra as releases reais: o GitHub troca os espaços do
+nome do asset por pontos, então a conferência procura o exe pela EXTENSÃO,
+exatamente como `_url_do_exe()` faz; e `created_at` não é a data da publicação,
+é a do commit que a tag aponta — no repositório de artefatos, que não recebe
+commits, TODAS empatam, então a comparação de idade usa `publishedAt`, porque
+um comparador que sempre empata nunca protege.
+
+**`travar_versao.txt` enxerga prévia, e isso é o desenho, não um furo.** Com a
+trava, o app busca `/releases/tags/<tag>`, que devolve prerelease igual. É
+assim que se experimenta uma prévia numa máquina ANTES de entregá-la às
+outras, e é a mesma porta por onde se volta de uma release ruim; exige um ato
+humano (criar o arquivo ao lado do exe) e está coberto por teste. Sem rede, o
+caminho de volta é renomear `codigo_velha` para `codigo`.
 
 O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 `atualizador.py`) e **código** (o resto). Ao abrir, o app baixa só o
-`codigo.zip` novo (segundos, sem perguntar) e roda com ele. Portanto:
+`codigo.zip` novo (segundos, sem perguntar) e roda com ele — o da release
+**liberada**. Portanto:
 
-- Mudanças em `comprovantes_app.py`, `separar_renomear/`, `anexar/`,
-  `aportes/`, `relatorios/`, `pagamentos_dia/`, `extratos_sicoob/`,
-  `contratos/`, `conciliacao/`, `acessorias/` →
-  chegam sozinhas ao usuário no próximo abrir. Só commitar e esperar a build.
+- Mudanças em `comprovantes_app.py`, `util.py`, `widgets.py`, `inicio/`,
+  `separar_renomear/`, `anexar/`, `baixar_comprovantes/`, `aportes/`,
+  `relatorios/`, `pagamentos_dia/`, `extratos_sicoob/`, `contratos/`,
+  `conciliacao/`, `acessorias/`, `cnab240/`, `nuvem/` e `erp/` → chegam
+  sozinhas ao usuário no próximo abrir, **depois de liberadas**. Commitar e
+  esperar a build deixou de bastar: falta virar a chave.
 - Mudanças em `motor.py`, `atualizador.py`, dependências novas no
-  `requirements.txt` ou `--collect-all` no workflow → exigem exe novo.
-  **Obrigatório**: subir `motor_minimo.txt` para a versão da release que sai
-  (v1.0.<run_number+1>), senão o código novo roda em motor velho e quebra.
-  O app então oferece o download completo (~150 MB) com progresso.
+  `requirements.txt`/`requirements.lock` ou `--collect-all` no workflow →
+  exigem exe novo. **Obrigatório**: subir `motor_minimo.txt` para a versão da
+  release que sai (`v2.0.<run_number>`), senão o código novo roda em motor
+  velho e quebra. O app então oferece o download completo (~152 MB) com
+  progresso. **Chutar para CIMA é o erro caro**, e a build o barra antes de
+  publicar: um mínimo acima da release que está saindo pede um motor que nunca
+  vai existir, e o app entra em laço — oferece os 152 MB, baixa o exe mais novo
+  que há, continua abaixo do mínimo e pergunta de novo na abertura seguinte, em
+  todas as máquinas.
+- **O `motor_minimo.txt` sobe UMA unidade quando só a esteira muda.** A trava
+  do job `motor` é MECÂNICA: vigia cinco NOMES de arquivo — `motor.py`,
+  `atualizador.py`, `requirements.txt`, **`requirements.lock`** e o próprio
+  `.github/workflows/build.yml` — e recusa todo push que toque num deles sem
+  subir o mínimo junto, sem olhar o que mudou dentro. Quando a mudança é de
+  esteira (ruff, cobertura, uma pasta nova no zip), escrever ali a versão da
+  release forçaria ~152 MB de download em toda máquina por nada; escrever uma
+  unidade a mais (`v1.0.108` → `v1.0.109`) paga a trava sem cobrar pedágio de
+  ninguém. Foi a decisão dos PRs #1, #7, #12 e #24 — este último começou em
+  `v2.0.135` e voltou atrás no commit `6fc70dc`. O `requirements.lock` entrou
+  nessa lista com o PR #12, e não é redundância com o `.txt`: quem manda no que
+  vai dentro do exe é o LOCK, e trocar a versão de uma biblioteca por um
+  recompile (uma correção de segurança dentro da mesma faixa) não toca no
+  `.txt` — sem essa linha, o exe sairia com biblioteca nova e o `motor_minimo`
+  apontando para o exe velho.
 - **Import novo de SUBMÓDULO da biblioteca padrão também exige exe novo** —
   é a armadilha menos óbvia daqui, e ela derrubou a v1.0.71 nas duas máquinas.
   O PyInstaller não embute a stdlib inteira: ele segue os imports a partir do
@@ -58,30 +146,36 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   suba o `motor_minimo.txt` no MESMO push. Preferir o caminho sem import novo
   quando existir — foi o que salvou este caso (o `_garantir_fontes` fala com o
   Tcl direto, e a correção chegou pelo codigo.zip em segundos, em vez de 152 MB
-  para todo mundo baixar).
-- **Aba nova custa uma release com exe novo, mesmo sem precisar.** Pasta nova
-  obriga a mexer no `build.yml` (item 2 acima), e o job `motor` recusa todo
-  push que toque nesse arquivo sem subir o `motor_minimo.txt` junto. A trava é
-  MECÂNICA — olha o nome do arquivo alterado, não o que mudou dentro dele —,
-  então adicionar uma aba dispara o download de ~150 MB em quem estiver com exe
-  anterior, ainda que o código novo rode perfeitamente no motor velho. Foi o
-  caso da aba Acessórias (v1.0.75): nenhum import novo, e mesmo assim a baixa
-  completa. Consequência prática: **vale agrupar abas novas num push só**, e
-  não pagar o pedágio uma vez por aba.
+  para todo mundo baixar). É a mesma razão pela qual a fonte de ícones do menu
+  (PR #28) é criada por `font create` e a lista de famílias sai do `font
+  families` do Tcl.
+- **Aba nova continua obrigando a mexer no `build.yml`** (item 2 acima), e por
+  isso cai na trava mecânica do parágrafo anterior mesmo quando o código novo
+  roda perfeitamente no motor velho. Foi o caso da aba Acessórias (v1.0.75):
+  nenhum import novo, e mesmo assim todo mundo baixou o exe completo, porque o
+  mínimo subiu para a versão da release. Hoje o pedágio é opcional — sobe-se
+  uma unidade —, mas a trava dispara igual, então **vale agrupar abas novas num
+  push só**.
 - **O exe roda Python 3.11, e a sua máquina provavelmente não.** O CI usa 3.11
   e o PyInstaller embute essa versão; escrever contra um interpretador mais
   novo passa aqui e falha lá. Aconteceu na run #76: `Path.read_text(newline=…)`
   existe desde o 3.13 e o teste do CNAB 240 quebrou no CI, com o `build`
   pulado. É a mesma família do `tkinter.font` da v1.0.71 — código que a sua
   stdlib tem e a do usuário não. Antes de subir, `vermin --target=3.11
-  --violations` sobre o que mudou (está no `requirements-dev.txt`).
+  --violations` sobre o que mudou (está no `requirements-dev.txt`), que hoje o
+  job `test` também roda. É pela mesma razão que o `requirements.lock` é
+  resolvido para 3.11/Windows e não para o interpretador desta máquina.
 - **Build que falha CONSOME o número da release.** A versão é
-  `v1.0.<run_number>`, e o contador anda mesmo quando o job quebra: depois da
+  `v2.0.<run_number>`, e o contador anda mesmo quando o job quebra: depois da
   #76 falhar, a próxima release passou a ser a v1.0.77. Quem for corrigir e
   subir de novo tem de **subir o `motor_minimo.txt` junto**, senão ele aponta
   para uma versão que nunca existiu.
 - Build leva ~8–10 min. Commits só de README/LICENSE/CLAUDE.md não disparam
-  build (paths-ignore).
+  build (paths-ignore). **`docs/`, `supabase/` e `tests/` NÃO estão lá**: os
+  dois primeiros porque documento novo é barato de construir e sai como prévia,
+  que ninguém baixa; `tests/**` e `requirements-dev.txt` de propósito, porque é
+  deles que sai a régua que o job `test` roda — ignorá-los seria dizer que
+  mexer na régua não muda nada.
 
 ## Arquitetura
 
@@ -92,6 +186,117 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 - `atualizador.py` — motor-side: baixa codigo.zip, troca de pasta atômica,
   download do exe completo com janela de progresso, troca via .bat com 30
   retentativas (OneDrive trava arquivos). Loga em `atualizacao.log`.
+- `util.py` — o que não é de aba nenhuma, e por isso é de todas: `pasta_base()`,
+  `pasta_do_perfil()`, `log()`, `norm_espaco`, `filtrar`, `proteger_bytes`
+  (DPAPI). **Não importa tkinter** (ver "Restrições"): o par visual dele é o
+  `widgets.py`.
+  **`util.log(nome)` é o diagnóstico do app, e é UM handler só.** Um
+  `RotatingFileHandler` (1 MB, 3 cópias, utf-8) em
+  `pasta_base()/diagnostico.log`, compartilhado por TODO nome que passar por
+  aqui — handler por módulo seria trocar o diagnóstico espalhado de hoje por
+  outro igualmente espalhado, só que com nomes de arquivo em vez de formatos
+  diferentes. `nome` entra no FORMATO da linha, nunca no caminho do arquivo, e
+  o prefixo `dd/mm/aaaa hh:mm:ss` é o mesmo que o `diagnostico.log` já gravava
+  à mão, para quem abre o arquivo não estranhar a parte que olha primeiro. Três
+  escolhas que não são detalhe: `delay=True`, então o arquivo abre no primeiro
+  `emit` e uma pasta sem permissão de escrita não derruba a ABERTURA do app;
+  **nenhum handler de console**, porque o exe é `--noconsole` e um
+  `StreamHandler` apontado para um `stdout` que não existe é a mesma armadilha
+  do `print()` — derruba o app, não só engasga o log; e `propagate=False`, para
+  que o logger raiz, ganhando handler um dia, não duplique cada linha.
+  **A regra de adoção**, aplicada módulo a módulo (PRs #8, #11, #13, #14, #17,
+  #19 e #20): `except Exception` que engole **sem comentário que justifique**
+  vira `log.warning("o que eu estava fazendo", exc_info=True)` e continua
+  engolindo — nenhum `except` foi estreitado nem removido, e nenhum
+  comportamento mudou. **A exceção é o laço de espera**: dentro de um
+  `while … < limite`, ou de uma escada de seletor/rótulo/tamanho, a exceção não
+  é falha, é o "ainda não" da próxima volta; um traceback a cada 0,5 s enche
+  1 MB numa rodada só e rotaciona para fora justamente o que interessa. Ali o
+  `pass`/`continue` fica, com uma linha dizendo por quê, e quem avisa é o
+  **desfecho** do laço — uma vez, e sem `exc_info`, porque ali não há exceção
+  viva. Nenhuma mensagem carrega favorecido, valor, número de conta ou token: o
+  `diagnostico.log` é arquivo comum na pasta do exe. E cuidado com o nome
+  `log`: em `conciliacao/erp/`, `baixar_comprovantes/` e `aportes/` quase toda
+  função já recebe um parâmetro `log`, que é o recado do Registro da aba e
+  SOMBREIA o logger do módulo — ali o diagnóstico sai por `_diag`, o mesmo
+  objeto com outro nome. O Registro conta o que a rotina está fazendo; o
+  arquivo guarda o traceback do que não deu.
+  **`cnab240/` é a exceção que confirma a regra.** Ele é stdlib pura — nem
+  `util` pode importar, e `tests/test_cnab240_pacote.py` cobra isso por AST —,
+  então emite em `logging.getLogger(__name__)`, como biblioteca faz, e deixa a
+  APLICAÇÃO dizer para onde vai. Quem liga os dois é UMA linha na abertura,
+  `util.log("cnab240")` em `main()`, que pendura o handler no logger pai e
+  recebe os filhos por propagação. **Nunca pendurar um `NullHandler` no logger
+  `cnab240`**: o `util.log()` só instala o handler `if not logger.handlers`, e
+  um NullHandler ali silenciaria a ligação para sempre, e em silêncio.
+  **`util.pasta_do_perfil(nome)` é o único lugar que sabe onde mora o perfil do
+  Chrome.** Ele era calculado de DOIS jeitos: ao lado do MÓDULO
+  (`_AQUI = Path(__file__)…`, que muda conforme quem executa é o script ou o
+  exe) e na pasta BASE. Rodando como script, o primeiro fazia nascer um SEGUNDO
+  conjunto de perfis dentro do repositório — medido em **219 MB** de sessão de
+  banco duplicada. Congelado o lugar nunca mudou, então o desencontro só
+  aparecia em desenvolvimento, que é justamente onde se testa: é a mesma
+  família do defeito do cache do cadastro ("quem lê o cache tem de usar
+  `util.pasta_base()`"). Nenhum nome de pasta mudou, e há teste conferindo byte
+  a byte os que já estavam instalados. Pelo mesmo caminho vieram depois o
+  `ARQUIVO_DIAG` (PR #8) e o `login.dat` (PR #26), que também nasciam dentro de
+  `anexar/` em modo script — e era por isso que a sonda, rodando da raiz, não
+  achava a senha do ERP. Falta um: o `ARQUIVO_LOG` (`log_anexos.csv`) do
+  `anexar/config.py` ainda sai do `_AQUI`.
+- `erp/` — um lugar só para falar com o Mais Controle, com **a regra dos dois
+  tokens escrita UMA vez**. Oito lugares do app tinham redescoberto por conta
+  própria qual token pedir, quais cabeçalhos copiar e qual `user-agent` passa
+  pelo WAF, e o conhecimento se contradizia POR ESCRITO — um arquivo dizia "o
+  token é o `jwtToken`, NÃO o `accessToken`" e outro dizia o contrário, os dois
+  certos para back-ends diferentes, e nenhum dizendo isso inteiro. O inventário
+  que levantou tudo, com `arquivo:linha` para cada afirmação, é
+  `docs/ERP-CLIENTES.md` (PR #22); o pacote é o PR #24. Três módulos, uma frase
+  cada: `hosts.py` é ONDE (só endereços, não fala com ninguém — as mesmas
+  quatro URLs estavam escritas em sete arquivos), `sessao.py` é QUEM (o login,
+  os dois tokens, os cabeçalhos por host, o `user-agent` e o transporte HTTP
+  direto) e `pagina.py` é COMO, quando é pelo navegador (o
+  `page.evaluate(fetch)` que estava duplicado em `anexar/mc_api.py` e
+  `aportes/mc_catalogos.py`, com espaçamento diferente).
+  **A regra, em `sessao.token_para`**: o login é UM só
+  (`POST {legacy}/users/login`) e devolve DOIS tokens — `jwtToken` (~348 chars,
+  JWT, vale 24 h) é o do `prod-erp-api`; `accessToken` (27 chars, nem é JWT,
+  vive SEGUNDOS) é o do `legacy-api`. Trocar um pelo outro devolve 401, e vale
+  igual para o token capturado do navegador: foi assim que o token da
+  telemetria acabou usado contra o `prod-erp-api`. Os cabeçalhos também são
+  conjuntos diferentes (`cabecalhos_para`), e **só o legado manda `user-id`** —
+  sem ele o ERP recusa o lançamento com "não achei o usuário responsável", que
+  não aponta para lugar nenhum.
+  **O 401 do legado é rotina; o do `prod-erp-api` é notícia.** No legado o
+  token venceu entre uma chamada e a seguinte, então `Sessao.pedir` relogia
+  **uma vez** e repete — e **só em GET**, ou em PUT/POST que o CHAMADOR marcar
+  com `idempotente=True`, porque um POST que criou lançamento e perdeu a
+  resposta duplica o que criou (ver "Aporte não se repete"). O padrão é o
+  seguro: esquecer a marca custa uma exceção, pôr a marca onde não cabe custa
+  uma segunda baixa. No `prod-erp-api` um token de 24 h recusado é sessão
+  derrubada de verdade — o ERP aceita UMA sessão por usuário, e relogar ali
+  seria tomá-la de volta, em silêncio, de quem estiver com ela; sobe
+  `SessaoRecusada` e quem chamou decide. Quem separa os dois casos é
+  `ErpErro.codigo`, o status HTTP, e **não o TEXTO da mensagem** — decidir por
+  `str` quebra na primeira vez que alguém melhora a frase. Sessão nascida de
+  `de_login` fica sem a credencial em memória e por isso não relogia: ninguém
+  relogia em nome de quem não entregou a senha.
+  **A migração é uma aba por PR, e três já entraram.**
+  `conciliacao/erp/api.py` virou casca sobre `erp.Sessao` (PR #31) — mesma
+  classe, mesmo construtor, mesmos retornos e as mesmas exceções, e por isso
+  `nuvem/contas_novas.py` e `ferramentas/sonda.py`, que emprestam o `SessaoApi`,
+  migraram de graça, sem serem tocados; o laço de 3 tentativas escrito à mão
+  saiu, porque falando por `requests` o `Retry` vem pronto.
+  `pagamentos_dia/baixa_erp.py` (PR #33) foi o mais barato porque **nunca soube
+  se havia navegador**: exige do transporte só `_buscar`/`postar` e lê
+  `{"__erro": status}`, que é exatamente o que `erp.TransportePagina` expõe — e
+  a baixa dele **não é marcável como idempotente**, porque o `POST .../paids`
+  CRIA um pagamento. Faltam os consumidores 4 a 8 da ordem escrita no fim do
+  `docs/ERP-CLIENTES.md`, e **`anexar/mc_api.py` é o último de propósito**: é
+  ele que tira o token do cabeçalho da página logada e monta a consulta
+  reaproveitando a URL que a TELA mandou, e dele dependem Anexar, Conferência,
+  Pagamentos do Dia e Contratos — migrar isso é trocar a fundação com a casa em
+  cima. Enquanto ele não migra os dois convivem, o que é aceitável: o `erp/`
+  nasce sabendo a regra dos tokens, e ele nasceu adivinhando-a.
 - `conciliacao/` — aba Conciliação Diária: lê saldos e pagamentos a vencer e
   gera o painel do dia sobre o `MODELO.xlsx`, com o aporte mínimo por conta.
   **Único pacote de verdade** (tem `__init__.py`, importa-se
@@ -191,25 +396,22 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   da Acessórias sobrevivia ao fechar do app, esperando o Gerenciador de
   Tarefas — que é justamente o que deixa Chrome órfão.
   **Estado em 02/09/2026.** O que está assim hoje, e não o que se decidiu que
-  fosse; quem consertar faz em PR próprio. A busca da barra NÃO busca:
-  `Ctrl+K` (`bind_all` → `barra.focar_busca`) leva o foco ao campo, e
-  `barra.ao_buscar` está ligado ao `_focar_primeiro`, então o Enter ali só
-  devolve o cursor ao primeiro campo da aba aberta. Ela está na tela porque o
-  LUGAR dela é decisão de layout, e deixá-la para depois obrigaria a mexer de
-  novo em tudo o que fica à direita e à esquerda dela; o que ela vai procurar é
-  assunto de quem tiver um índice. O `ItemMenu` é `tk.Frame` e só escuta
-  `<Button-1>`, `<Enter>` e `<Leave>`: ele não entra no Tab nem responde ao
-  Espaço, o contrário da regra escrita neste mesmo arquivo para os cabeçalhos
-  de grupo — quem só usa teclado alcança DIÁRIO e MENSAL e não alcança nenhuma
-  das doze telas. Sete dos doze ícones do menu estão fora do BMP (📎 💰 🗓 📊 🏦
-  📑 📤) e o Windows os desenha pela Segoe UI Emoji, colorida: o `foreground`
-  que o `_pintar` do `ItemMenu` passa não alcança glifo colorido, e esses sete
-  ficam idênticos nos dois temas. Os outros cinco (▦ ⬇ ✂ ✅ ⚖) são
-  monocromáticos e seguem a cor — é por isso que o ● do pulso (U+25CF)
-  consegue ser azul. E o `ComprovantesFrame` (Baixar Comprovantes) não expõe
-  `ocupado()`, então o trabalho dele não acende o ● nem o chip; `_quem_trabalha`
-  engole a falta do método de propósito ("aba sem o método: só não sinaliza"),
-  então isso não dá erro — só não aparece.
+  fosse; quem consertar faz em PR próprio. Três dos quatro itens que moravam
+  aqui foram resolvidos no mesmo dia e viraram parágrafo na entrada do
+  `widgets.py`: a busca da barra passou a levar a alguma tela (PR #32), o
+  `ItemMenu` passou a entrar no Tab e a responder ao Espaço (PR #28), e os
+  ícones do menu saíram do sorteio de fontes e passaram a seguir o tema
+  (PR #28) — este último estava aqui não só desatualizado, mas **contado ao
+  contrário**: o `font actual` mostrou que ✂, ✅ e ⚖ também caíam em fonte
+  colorida, e não apenas os sete de fora do BMP. Continua valendo o quarto: o
+  `ComprovantesFrame` (Baixar Comprovantes) não expõe `ocupado()`, então o
+  trabalho dele não acende o ● nem o chip; `_quem_trabalha` engole a falta do
+  método de propósito ("aba sem o método: só não sinaliza"), então isso não dá
+  erro — só não aparece. E o `_sair` engole com um `except Exception: pass`
+  mudo o que cada `fechar()` levantar: a razão está escrita ali (um `fechar()`
+  que estoura não pode impedir o outro nem o `destroy()`, senão o jeito de sair
+  vira o Gerenciador de Tarefas, que é o que deixa Chrome órfão), mas hoje
+  ninguém fica sabendo que estourou.
 - `widgets.py` — o par visual do `util.py` (mora na raiz e vai junto no
   codigo.zip, um a um). Depois do redesenho de agosto/2026 ele é a única forma
   de o app ganhar uma cor: nenhuma aba escreve `#` seguido de seis dígitos. Ali
@@ -244,6 +446,24 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   cima. O registro é escuro NOS DOIS TEMAS (`LOG_CORES`), de propósito: é um
   terminal embutido, e um terminal claro no meio de um painel claro deixa de se
   distinguir do formulário logo acima.
+  **`marca_solida` é o azul que leva branco por cima**, e nasceu de uma medida
+  que faltava. A `marca` do tema escuro (`#6F9BFF`) entrega 6,3:1 como TEXTO, e
+  o comentário ao lado dela estava certo — só que o app a usava também como
+  FUNDO SÓLIDO, nos botões de passo e nos círculos numerados dos cartões, e
+  branco sobre ela dá **2,69:1**: abaixo até dos 3:1 que a WCAG pede de
+  componente, em ~29 pontos presentes em quase toda tela, e só para quem usa o
+  escuro. Os testes não pegaram porque mediam cor de TEXTO contra o fundo do
+  painel, **numa direção só**. A correção não foi escurecer a `marca` — ela é
+  texto no KPI, no item aberto do menu e na linha selecionada da tabela, e
+  escurecê-la estragaria os três — e sim SEPARAR o papel, como o projeto já
+  fizera com `acao`/`acao_viva` e `tenue`/`linha`: `marca_solida` é a mesma cor
+  no tema claro (que não muda um pixel) e `#3B6FE0` no escuro, onde o branco
+  por cima passa a **4,63:1**. A ordem dos dois commits também é parte da
+  decisão: o teste veio ANTES da cor (`b040c19`, depois `c9a9085`) e falhou em
+  exatamente um par, que é como se prova que ele media o defeito. Junto veio um
+  teste que CONSTRÓI o botão e o cartão e confere que a cor que eles pintam é a
+  mesma que a tabela mede — tabela escrita à mão envelhece, e sem isso trocar a
+  cor do botão passaria verde medindo a cor antiga.
   **`aplicar_estilos(escuro)` tem de ser chamado DEPOIS de `sv_ttk.set_theme`**:
   o sv-ttk recria o tema do ttk e apaga todo estilo nomeado, e a ordem errada
   não dá erro — as legendas só voltam à cor padrão. Duas armadilhas do Tk que
@@ -346,7 +566,9 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   não a vê. A ORDEM importa e não é a da leitura: no Treeview ganha a tag
   configurada PRIMEIRO, não a última da lista do item, então os estados são
   configurados antes da zebra — uma linha rejeitada não pode ficar cinza só por
-  ser par.
+  ser par. **Ressalva de 02/09**: isto descreve o desenho, e não o que se vê
+  hoje — `estado_de` está devolvendo `"info"` para tudo, então nenhuma linha se
+  pinta. Ver a seção "02/09/2026 — a consolidação".
   **O `atividade.jsonl` é o que permite ao Início não abrir o navegador.** Cada
   rotina, ao terminar, chama `registrar_atividade` com os números que ACABOU de
   apurar; o Início lê o arquivo e mostra. Arquivo e não banco: é histórico de
@@ -356,6 +578,140 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   já que o Início o lê inteiro na abertura. `registrar_atividade` NUNCA levanta:
   o pior caso é o Início mostrar um evento a menos, e isso não pode parar
   trabalho nenhum.
+  **O `ItemMenu` entra no Tab** (PR #28). Ele era `tk.Frame` e só escutava
+  `<Button-1>`, `<Enter>` e `<Leave>`: quem usa só o teclado alcançava DIÁRIO e
+  MENSAL — que são `ttk.Button` — e não alcançava NENHUMA das doze telas que
+  eles agrupam, o contrário da regra escrita dois parágrafos acima do código
+  que a desmentia. Hoje tem `takefocus=1`, e `<Return>` e `<space>` disparam o
+  **mesmo** `_comando` do clique: um caminho só, senão existiria a chance de o
+  teclado abrir uma aba e o mouse abrir outra. Mais `Ctrl+1`..`Ctrl+9` e
+  `Ctrl+Tab`/`Ctrl+Shift+Tab` no `bind_all`, como o `Ctrl+K` já estava, com a
+  ordem saindo do próprio dicionário de itens — uma segunda lista escrita à mão
+  divergiria em silêncio, com o `Ctrl+3` abrindo a quarta tela. Duas
+  armadilhas: o handler do `Ctrl+Tab` **recusa quando o foco está num
+  `tk.Text`**, porque a classe `Text` do Tk já liga essa tecla à navegação de
+  foco e a ligação dela roda antes da nossa — sem a pergunta, um `Ctrl+Tab`
+  dentro do Registro moveria o foco *e* trocaria de aba; e a espessura do anel
+  de foco **nunca muda** (o Tk troca sozinho `highlightbackground` por
+  `highlightcolor`), porque 1 px entrando e saindo do layout empurraria a
+  coluna inteira a cada tecla. Quem carrega o sinal do foco é o ANEL na cor
+  `marca` (7,67:1 contra a coluna no claro, 6,28:1 no escuro, e 5,23:1 sobre o
+  item já aberto), e não o fundo, que sozinho não distingue nada (1,16:1).
+  **Os ícones do menu vêm de UMA família** (`FONTE_ICONES`, "AppIcones"), e
+  antes não vinham. Medido nesta máquina com `font actual`, os doze caíam em
+  pelo menos quatro tipografias diferentes numa coluna de doze linhas — sem
+  dividir espessura de traço, tamanho nem linha de base —, e os que caíam na
+  Segoe UI Emoji são glifos COLORIDOS, que o `foreground` do `_pintar` não
+  alcança: ficavam idênticos nos dois temas, inclusive quando todo o resto do
+  item virava azul. Hoje é **Segoe Fluent Icons** (Windows 11) com queda para
+  **Segoe MDL2 Assets** (Windows 10), monocromáticas por construção, e o emoji
+  continua no código como CHAVE da tabela — é ao mesmo tempo o nome lógico do
+  ícone e o último fallback, e por isso nem o `comprovantes_app.py` nem a
+  `ferramentas/galeria.py` mudaram uma linha. **Duas tabelas, uma por família**,
+  ainda que os treze codepoints coincidam hoje: lendo o `cmap` dos dois
+  arquivos, a Fluent mapeia 2.030 codepoints da área de uso privado contra
+  1.830 da MDL2, e 201 só existem nela — os treze coincidem porque a Fluent
+  preservou os herdados, e é aí que a divergência vai morar no dia em que um
+  ícone novo só existir numa delas. A armadilha é a de sempre nesta casa:
+  **pedir uma família que a máquina não tem NÃO dá erro** — o Tk cai na fonte
+  padrão e os codepoints saem como quadradinhos —, por isso `_familia_de_icones`
+  é função PURA e o teste exercita os três desfechos; e a lista de famílias sai
+  do `font families` do **Tcl**, não de `tkinter.font.families()`, porque o que
+  derrubou a v1.0.71 foi o import do submódulo, não a função. O ● do pulso
+  (U+25CF) volta à fonte de TEXTO de propósito: ele não existe na fonte de
+  ícones, e pedi-lo a ela daria o quadradinho justamente no sinal que diz onde
+  o trabalho está.
+  **A busca da barra promete uma coisa, e cumpre essa** (PR #32). O campo dizia
+  "Buscar lançamento, empresa ou conta…" e o Enter ali só devolvia o cursor ao
+  primeiro campo da aba aberta — procurar lançamento pede um índice do ERP que
+  ninguém tem, e um campo que promete três coisas e não faz nenhuma ensina a
+  pessoa a não usar campo nenhum. Hoje a `BarraTopo.DICA` é "Ir para uma
+  tela…  (Ctrl+K)", digitar filtra os nomes das doze telas por `util.filtrar`
+  (sem acento, sem caixa, pedaço em qualquer posição), ↑/↓ andam pela lista e
+  Enter pula para a realçada; texto sem par **não move o foco** e a lista diz
+  que não achou, porque campo que não responde a nada parece travado. Duas
+  decisões: a lista é um `Toplevel` **sem foco nenhum**, como o calendário do
+  `CampoData`, para quem está digitando continuar digitando; e cada linha chama
+  o `ItemMenu.acionar` — **um caminho só até a tela**, porque o `mostrar` do app
+  faz mais do que trocar de quadro (abre o grupo fechado, chama o `ao_abrir`,
+  põe o foco no primeiro campo) e uma segunda porta seria uma segunda chance de
+  esquecer um desses passos. De graça: a lista sai do menu JÁ MONTADO
+  (`definir_telas`), então vem filtrada pelo PAPEL de quem entrou, e a busca não
+  leva ninguém a uma tela que o menu daquela pessoa não mostra.
+  **Entrou em 02/09 (PR #30)**: "nenhuma aba escreve `#` seguido de seis
+  dígitos" deixa de ser conferência a olho e vira teste — varredura por AST dos
+  `.py` **rastreados pelo git**, fora do `widgets.py` e de `tests/`, atrás de
+  constante de cor em qualquer posição e de cor com NOME em
+  `fg`/`bg`/`fill`/`outline`. Quem decide o segundo caso é o VALOR e não o nome
+  do argumento: o `fill` do `pack()` é direção, e são 211 ocorrências de
+  `fill="x"` que uma checagem pelo nome acusaria à toa. Hoje ele não acha nada
+  — é guarda para a próxima pessoa distraída, e vem com um segundo teste que
+  roda a MESMA varredura sobre o `widgets.py` e exige que ela ache mais de 50
+  cores, porque guarda que deixou de morder fica verde para sempre.
+  **Entrou em 02/09 (PR #34)**: `widgets.explicar_erro(exc)` devolve o
+  que houve, **de quem é** e o próximo passo, no lugar da exceção crua que dez
+  diálogos mostravam — e é a segunda parte que decide tudo, porque "tente de
+  novo", "conecte-se" e "avise quem cuida do cadastro" são conselhos opostos. A
+  tradução já existia, presa numa função privada de uma tela só, e passa a ser
+  uma. A família sai do NOME da classe, percorrendo a MRO, e **não** de
+  `isinstance`: importar aqui `nuvem.rest`, `erp.sessao`, `conciliacao.errors` e
+  o `playwright` arrastaria rede e navegador para dentro do módulo visual, e
+  import novo custa exe novo (ver a v1.0.71 na regra de ouro).
+  **Entrou em 02/09 (PR #35)**: as catorze tabelas passam a ordenar pelo
+  cabeçalho. O caso que dá o motivo inteiro é a coluna de dinheiro, que
+  ordenada como TEXTO põe "R$ 987,00" depois de "R$ 1.234,56" — e é justamente
+  ela que se ordena, para achar o maior pagamento do dia. O tipo sai do
+  CONTEÚDO da coluna e não de uma declaração por tela (catorze tabelas seriam
+  catorze chances de a declaração divergir da célula), a zebra é **reaplicada**
+  depois de mover as linhas (as tags `par`/`impar` viajam com o item, e sem
+  reaplicar as listras saem embaralhadas), e célula sem valor não vira zero —
+  "não tem valor" e "vale R$ 0,00" são coisas diferentes numa tabela de
+  pagamento.
+  **Entrou em 02/09 (PR #37): `widgets.px(n)` — "os `n` pixels de quem desenhou
+  esta tela a 100%", ditos na escala de hoje.** As fontes já acompanhavam a
+  escala do Windows desde o redesenho; as MEDIDAS de layout não, e era o
+  desencontro entre as duas que quebrava a tela — a 150%, "ÚLTIMA EXECUÇÃO"
+  saía "ÚLTIMA EXECU" numa coluna de 130 px fixos, a coluna SITUAÇÃO era
+  empurrada para fora da tabela e o logotipo encostava no campo de busca dentro
+  de uma faixa de 52 px que o texto já não cabia. Foram **333 medidas em 12
+  arquivos**, 93 delas no próprio `widgets.py` — que são as que pagam pelo
+  resto, porque a altura da barra, a coluna do menu, o filete do `ItemMenu` e a
+  folga do `Cartao` valem para todas as telas. **A régua é a FONTE, não o
+  DPI**, e a diferença importa: quem aumenta só o tamanho da fonte no Windows,
+  sem mexer na escala de exibição, tem exatamente o mesmo problema — é a mesma
+  decisão que fez as fontes nomeadas saírem do `TkDefaultFont`. Três ressalvas
+  viraram teste: o **degrau de 5%** (nesta máquina o `tk scaling` a 100%
+  devolve 1,3346 e não os 1,3333 da teoria, e sem o degrau `px(820)` daria 821
+  — um pixel a mais em toda tela de quem não mudou escala nenhuma, e a promessa
+  "a 100% nada muda" deixaria de ser verdade); **nunca menos que 1,0**, porque
+  fonte menor não corta nada e apertar as margens só estragaria uma tela que
+  estava boa; e **`px(0)` é 0**, senão todo `padx=(0, 8)` ganharia um pixel de
+  folga onde o desenho pedia encostado. O que NÃO escala, de propósito:
+  `width=` de `Entry`/`Combobox`/`Label` (conta CARACTERE) e `height=` de
+  `Treeview`/`Text` (conta LINHA) — os dois já seguem a fonte sozinhos, e
+  multiplicá-los daria campo com o dobro das letras. Duas escolhas de lugar
+  encolheram muito o diff: a largura das colunas de Treeview escala dentro do
+  `estilo_tabela`, num lugar só, **guardando a largura de origem no widget** —
+  o Início e a Acessórias chamam a função DE NOVO ao remontar a lista, e sem a
+  memória a segunda passada escalaria o que já estava escalado; e cada frame
+  ganhou `px = widgets.px` logo abaixo do import. A promessa "a 100% nada muda"
+  é provada por teste determinístico, que não depende de tela nenhuma.
+- `inicio/inicio_frame.py` — aba Início, a primeira tela: os KPIs do dia
+  (`CartaoKPI`), a situação de cada rotina (`ROTINAS`, onde o `ritmo` decide
+  quando "não rodou hoje" vira pendência — para uma rotina diária é aviso; para
+  uma mensal, no dia 3, não é) e a atividade recente. **Ela não abre navegador
+  e não coleta nada.** O app abre em cima de UMA sessão do ERP, e uma tela de
+  resumo que buscasse os pagamentos do dia na abertura consumiria essa sessão
+  antes de a pessoa clicar em coisa alguma — a aba que ela abrisse em seguida
+  teria de refazer o login. Então o Início LÊ o que as rotinas já contaram no
+  `atividade.jsonl`, e relê a cada troca de aba pelo `ao_abrir()`. A
+  consequência aparece na tela e é de propósito: número que ninguém apurou hoje
+  sai como "—", com "rode a rotina para atualizar" embaixo — **zero seria pior
+  que um traço**, porque zero é uma afirmação sobre o dia que o app não tem como
+  fazer sem falar com o ERP. Uma coisa pendente: construí-la custa **~670 ms**,
+  mais da metade do ~1,2 s que as doze abas somam na abertura, contra menos de
+  100 ms de qualquer outra (medido no PR #29) — e o custo é trabalho feito na
+  CONSTRUÇÃO, não import, então adiar import não resolve.
 - `separar_renomear/separar_renomear.py` — separa páginas de PDF e renomeia.
   Dois parsers, escolhidos pelo **layout** (`campos()`), NUNCA pelo banco:
   `_campos_rotulado` quando o rótulo traz o valor na mesma linha
@@ -729,7 +1085,81 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   usa a pasta do exe quando congelado (sys.frozen). Tem também `diag()`, o
   registro em `diagnostico.log` usado por quem precisa degradar sem quebrar
   (captura de credenciais, login salvo, download de anexo, OCR da
-  conferência) — engole o erro, mas deixa o motivo gravado.
+  conferência) — engole o erro, mas deixa o motivo gravado. Desde o PR #8 ele
+  **delega para `util.log()`** em vez de abrir o arquivo à mão: mesma
+  assinatura, mesmos chamadores, e o `ARQUIVO_DIAG` passou a sair de
+  `util.pasta_base()`. O `ARQUIVO_LOG` (`log_anexos.csv`) ainda não — é o
+  último caminho aqui calculado pela pasta do módulo.
+- `ferramentas/` — as duas ferramentas locais, **fora do `codigo.zip`** por
+  `_PASTAS_SO_DO_REPO` (`tests/test_empacotamento.py`), o mesmo tratamento do
+  `cnab240/ferramentas/` e do `nuvem/migrar.py`: o app nunca as importa.
+  **`galeria.py`** monta as 12 telas num esqueleto FIEL — a mesma
+  `widgets.BarraTopo`, o mesmo `widgets.painel_menu` e as mesmas classes de
+  aba, construídas direto dentro de um `Tk()`, sem login, sem cadastro e sem
+  rede — e fotografa cada uma nos dois temas, com `--escala` para simular a
+  escala de exibição do Windows. Não é teste: não compara nada e não falha
+  sozinho; a comparação é o olho de quem mexeu. Baseline de pixel no CI foi
+  considerada e recusada — o runner é headless e não renderiza Tk de forma
+  confiável, e uma baseline envelhece a cada ajuste de 1 px em qualquer cartão.
+  Duas armadilhas já morderam: ela fotografa a **TELA**, então precisa de
+  `-topmost` antes de cada captura (é pedido de empilhamento, que o Windows
+  concede a processo sem interação — ao contrário de `SetForegroundWindow`,
+  que ele recusa, e a primeira rodada fotografou a janela errada); e **monitor
+  que apaga no meio da rodada não dá erro** — o grab devolve o retângulo preto,
+  o `save()` grava um PNG de 3 KB e o console anuncia sucesso, que foi como a
+  pasta "depois" inteira do PR #15 saiu preta e só se descobriu ao abrir os
+  arquivos. Hoje a imagem é medida antes de ir ao disco (`getextrema()`) e uma
+  cor só de canto a canto vira `CapturaInutil`: nada é gravado, a linha sai
+  como erro e a rodada termina em código 1. `_tela_acordada()` segura o monitor
+  pelo tempo da rodada, e janela minimizada é recusada antes do grab (o Windows
+  a estaciona fora da tela).
+  **`sonda.py`** pergunta às 07:00, por tarefa agendada do Windows, se os três
+  sistemas de fora ainda respondem — o ERP, o Inter e o Sicoob, nenhum com
+  contrato de interface conosco, e os três já tendo quebrado no meio de um
+  pagamento, que é o pior momento possível para descobrir. Ela **não corrige e
+  não decide nada**: uma linha por sistema no `sonda.log` e, falhando algo, um
+  `sonda.ALERTA.txt` com o resumo — que é **apagado** quando tudo volta a
+  passar, porque alarme que fica para trás depois de resolvido é a forma mais
+  rápida de ensinar alguém a ignorar alarme. **Nenhum navegador é aberto**, e
+  isso não é economia: o ERP aceita uma sessão de navegador por usuário, e um
+  Chrome às 07:00 derrubaria o de quem estivesse trabalhando — o login dela é
+  por API, HTTP puro, o mesmo que o app já faz a cada abertura. E ela prova
+  coisas diferentes sobre cada portal, porque eles respondem coisas diferentes:
+  o **Sicoob não responde a cliente HTTP que não seja navegador** (medido em
+  02/09/2026 — o TLS fecha em ~180 ms e a conexão trava na LEITURA, com os dois
+  métodos e o jogo completo de cabeçalhos), então ali a sonda cai no aperto de
+  mão TLS, que prova que o nome resolve, que a porta atende e que o certificado
+  vale, e a linha do log diz exatamente isso. Dizer menos e dizer verdade, em
+  vez de alarmar todo dia sobre um sistema que está de pé.
+- `docs/` — o que não cabe neste arquivo, um documento por assunto.
+  **`ERP-CLIENTES.md`**: o inventário de quem fala com o ERP, uma linha por
+  consumidor com transporte, host, token, cabeçalhos, paginação e o que já
+  quebrou ali, cada afirmação com `arquivo:linha` — mais a ordem de migração
+  para o `erp/`. **`DEPENDENCIAS.md`**: a intenção e o fato, e os três passos
+  para trocar de versão de biblioteca sem destravar nada. **`RECUPERACAO.md`**:
+  de um Windows recém-instalado até uma remessa gerada e uma conferência de
+  saldos feita, montado SÓ com o que os arquivos do repositório já dizem — onde
+  eles não dizem, está escrito "NÃO DOCUMENTADO — dono preenche", porque
+  palpite em runbook de recuperação é pior que lacuna: parece resposta. Ele
+  também lista o que se perde se esta máquina morrer. **`SUPABASE-PAINEL.md`**:
+  conferir campo do painel contra campo do `config.toml`, à mão — o
+  `config push` aplica sem mostrar diff, e a lista é a alternativa segura.
+  **`PROVENIENCIA.md`**: para cada runbook, qual migration corresponde e onde
+  os dois divergem, por diff normalizado. E `confirmado.html`, a página
+  estática que serve de destino ao `site_url` do Supabase.
+- `supabase/runbooks/` — **o que de fato rodou no banco**, byte a byte. As
+  migrations descrevem o schema, mas não foram elas que rodaram: o que rodou
+  foram arquivos colados no SQL Editor do painel, que viviam soltos fora do
+  repositório — e enquanto ficaram lá, "o que está em produção" e "o que o
+  repositório diz" eram duas perguntas com respostas diferentes e nenhuma forma
+  de comparar (num dos pares, 182 linhas de diferença). **Nem tudo entra**: um
+  dos runbooks foi copiado e depois RETIRADO (commit `25ae569`) porque o
+  cabeçalho dele mesmo dizia que ficara fora por trazer nome de fornecedor, e
+  este repositório é público; os dois de 30/08 nunca entraram, porque carregam
+  um endereço de e-mail real. A proveniência dos três continua no
+  `docs/PROVENIENCIA.md`, que não depende do conteúdo — e é lá que está o
+  achado da comparação: o `grant` da migration `20260824141500` não aparece em
+  runbook nenhum.
 
 ## Restrições importantes (aprendidas a caminhadas)
 
@@ -741,8 +1171,26 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   valendo dentro de cada um.
 - **Sicoob/Inter 2026**: comprovantes "impressos" sem camada de texto (texto
   vira curvas vetoriais). Sem OCR, extração retorna vazio.
-- ERP bloqueia chamadas HTTP feitas fora do navegador (403) — sempre via
-  página logada.
+- **O ERP não bloqueia HTTP de fora do navegador — ele recusa quem se
+  identifica como robô.** A regra antiga ("chamada HTTP feita fora do navegador
+  leva 403; sempre via página logada") estava escrita aqui, no
+  `anexar/mc_api.py` e no `aportes/mc_catalogos.py`, e virou lenda antes de a
+  causa ser conhecida. O que o WAF confere é o `user-agent`, medido em
+  `conciliacao/erp/api.py:23-29`: com o de Chrome, **200**; sem ele
+  (Python-urllib), **403** e a página HTML do WAF. É o mesmo guarda que recusa o
+  navegador em modo headless. **Três clientes já rodam por HTTP puro**, um deles
+  fazendo PUT de lançamento no `legacy-api`. Sobram três consumidores que
+  precisam mesmo do navegador, e o motivo de nenhum é o WAF: o upload do
+  comprovante é diálogo de tela, o PDF do extrato é gerado pela própria página,
+  e o host GraphQL das obras só aparece nos cabeçalhos quando o ERP carrega o
+  FORMULÁRIO de lançamento. O inventário, com uma linha por consumidor, está em
+  `docs/ERP-CLIENTES.md`; o `user-agent` mora em `erp.sessao.USER_AGENT`. Duas
+  ressalvas que valem para qualquer migração: **MFA encerra o assunto** (o login
+  automático não passa por segundo fator, e aí o navegador deixa de ser plano B
+  e vira o único caminho), e o `POST /users/login` do HTTP direto **derruba** a
+  sessão do navegador — o ERP aceita uma por usuário, e é isso que define a
+  ordem da coleta da Conciliação (navegador primeiro, API depois) e faz o
+  `nuvem/contas_novas.py` rodar na ABERTURA, antes de existir Chrome.
 - PyInstaller onefile: caminhos persistentes usam a pasta do EXE
   (sys.executable), nunca __file__ (que aponta para pasta temporária).
 - pdfminer precisa de `--collect-all pdfminer`/`pdfplumber` no PyInstaller
@@ -751,23 +1199,87 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 
 ## Desenvolvimento
 
-- Rodar como script: `python comprovantes_app.py` (Python 3.10+, tkinter;
+- **Branch + PR, sempre.** A `main` é protegida e a trava vale para o admin:
+  nada entra por push direto, e não há force-push. Para trabalhar em duas
+  frentes ao mesmo tempo, `git worktree` em `_worktrees/`, **fora** do
+  repositório — assim a segunda frente não disputa o checkout principal, que
+  costuma estar com alteração de outra pessoa por commitar.
+- Rodar como script: `python comprovantes_app.py` (tkinter;
   `pip install -r requirements.txt` + `python -m playwright install chrome`;
-  OCR local requer Tesseract instalado com idioma por).
+  OCR local requer Tesseract instalado com idioma por). O alvo é **Python
+  3.11** — é o que o CI usa, o que o PyInstaller embute e para o que o
+  `requirements.lock` é resolvido; escrever contra um interpretador mais novo
+  passa aqui e falha no usuário (ver a regra de ouro).
+- **`requirements.lock` é o FATO; `requirements.txt` é a INTENÇÃO.** O `.txt`
+  guarda as faixas (`pdfplumber>=0.11,<1`), o `.lock` guarda a versão exata e o
+  hash das 23 distribuições — as 8 diretas e as 15 que elas arrastam, e que
+  antes entravam no exe sem ninguém saber quais eram. É o `.lock` que o CI
+  instala (`pip install --require-hashes`). Enquanto só havia faixas, o mesmo
+  commit construído em dias diferentes gerava executáveis diferentes: versão
+  nova de terceiro quebrava a entrega sem uma linha de código mudar, e defeito
+  de produção não se reproduzia aqui. Quem recompila é o **`uv`**, e não o
+  `pip-compile`: o `pip-compile` resolve com o interpretador que o roda, e nesta
+  máquina não há um 3.11 real — o `uv` resolve para o alvo sem precisar dele
+  (`--python-version 3.11 --python-platform windows`) e a saída é um
+  requirements comum, que o CI lê sem uv nenhum. O comando está no cabeçalho do
+  próprio arquivo, e o passo a passo em `docs/DEPENDENCIAS.md`. O job `test`
+  recompila e compara: fica vermelho só quando alguém mexeu na faixa e esqueceu
+  de recompilar. **Recompilar não é atualizar** — com o arquivo de saída no
+  lugar, o uv o lê como preferência e mantém o que já estava lá.
+  `requirements-dev.txt` continua na faixa, de propósito: pytest, ruff, vermin,
+  pytest-cov e uv são régua de CI e não entram no exe.
 - Testes: `python -m pytest tests -q` (PYTHONPATH com a raiz +
   `separar_renomear` + `anexar`). As fixtures em `tests/fixtures/*.txt` são o
   texto que sai do pdfplumber/OCR, **anonimizado** — o repo é público, nunca
   colocar comprovante real. Cobrir um layout novo = salvar o texto dele ali.
-  Checagens extras: `python -m py_compile <arquivos>` e `pyflakes`.
+- **O job `test` roda quatro coisas, nesta ordem**: `ruff check --select E9,F .`
+  (só erro de verdade — sintaxe e o pyflakes inteiro: nome indefinido, import
+  não usado, f-string sem placeholder; zero opinião de estilo), a conferência
+  do `requirements.lock`, `vermin --target=3.11` e `pytest --cov`. A cobertura
+  vai para o resumo do job e o `coverage.xml` sobe como artefato, **sem piso e
+  sem quebrar a build**: em 02/09/2026 são **51%**, e o número está ali para ser
+  acompanhado, não para ser cumprido. O `.coveragerc` omite `tests/` (que
+  mediria a si mesmo, sempre 100%, e inflaria a média), `codigo_embutido/`,
+  `codigo/`, `build/` e `dist/`. Localmente valem os mesmos comandos, mais
+  `python -m py_compile <arquivos>` e `pyflakes`.
 - **Teste de interface usa a fixture `raiz` do conftest**, que é UM `Tk()` para
   a sessão inteira. Módulo que abrir e destruir o próprio faz os módulos
   SEGUINTES pularem com "sem display" numa máquina que tem display — e teste
   que pula não aparece em vermelho. Foi assim que os 9 do `test_widgets.py`
   sumiram por um momento. Já o contraste da paleta (`test_visual.py`) é
   aritmética sobre constantes: roda no CI sem tela nenhuma.
+- **Mudança visual passa pela galeria, antes e depois**:
+  `python ferramentas/galeria.py`, as 12 telas nos dois temas, e a comparação é
+  o olho de quem mexeu. **Os PNG não vão para o PR** — a tela pode carregar nome
+  de empresa vindo do cache, e o repositório é público; o que vai é a diferença
+  MEDIDA (o PR #15 relatou 6.605 px trocados no Anexar e 0 px no Início, e o
+  zero era o resultado certo, porque o Início não tem botão de passo nem cartão
+  numerado). **Duas coisas a saber antes de rodar**: ela fotografa o MONITOR, e
+  por isso só roda com a máquina livre — com alguém usando a tela, a rodada é
+  interrompida ou sai suja; e **`--escala` MULTIPLICA a escala atual do
+  Windows**, não a de 100%. Nesta máquina, que está a **125%**, `--escala 1.0`
+  já desenha a 125%: para ver o app a 100% é `--escala 0.8`, e para vê-lo a
+  150% é `--escala 1.2`.
+- **"Nenhuma cor fixa fora do `widgets.py`" deixou de ser conferência a olho**
+  e virou teste — entrou em 02/09 (PR #30), e hoje não acha nada.
 - **Nunca commitar dados da empresa**: PDFs de comprovantes, relatórios
-  xlsx, `.chrome_profile`, logs (tudo já no .gitignore; a pasta local
-  `debug/` é só diagnóstico local e nunca foi para o repo).
+  xlsx, `.chrome_profile`, logs, a pasta `galeria/` (print de janela pode
+  trazer nome de empresa vindo do cache) e o `sonda.ALERTA.txt`, que é estado da
+  máquina e não código — tudo já no `.gitignore`; a pasta local `debug/` é só
+  diagnóstico local e nunca foi para o repo. E **nome real de fornecedor ou de
+  pessoa, CPF e CNPJ não entram** — nem em teste, nem em comentário, nem em
+  runbook.
+  **Regra de dado tem de mirar o DADO, e o `.gitignore` já engoliu um módulo.**
+  Uma linha escrita para proteger um `.json` de cadastro ficou sem âncora e sem
+  extensão, e o padrão casou também com o `.py` de mesmo nome, que é CÓDIGO: o
+  módulo nunca foi commitado, a suíte passava aqui (o arquivo existe no disco de
+  quem escreveu) e quebrou no CI, que só tem o que o git carrega. Escapando, o
+  app não abriria na máquina de quem usa, com o import estourando antes de
+  existir janela — a mesma família do `tkinter.font` da v1.0.71. O buraco maior
+  estava aberto o tempo todo: os testes de empacotamento perguntam ao GIT o que
+  existe (`git ls-files`), então arquivo de código ignorado é invisível para
+  eles. Quem fecha isso é `test_todo_py_de_codigo_esta_no_git`, que olha o DISCO
+  e cobra o git — o único ângulo em que esse buraco aparece.
 - Ícone: `icone.ico` (gerado por script PIL; documento com check verde).
 - SmartScreen/Smart App Control: exe não assinado. Solução definitiva
   pendente: assinatura de código (Azure Trusted Signing) integrada ao CI.
@@ -1005,3 +1517,108 @@ alguém esquecer.
 razão social, e `pacote.py` usa `vip_nome or empresa.nome` para montar o
 ASSUNTO da solicitação ao escritório contábil — preenchê-lo mudaria, sem
 ninguém pedir, o texto que o contador recebe todo mês.
+
+
+## 02/09/2026 — a consolidação
+
+Cinco análises (a esteira, o ERP, o front-end, os dados e o código morto)
+viraram uma ordem de trabalho, e cerca de trinta PRs entraram no mesmo dia. O
+porquê de cada um está no corpo dele; aqui fica o mapa e, principalmente, o que
+NÃO foi feito.
+
+**O que entrou, por tema.** *Entrega*: o portão de release (#1), o
+`requirements.lock` (#12), o ruff e a cobertura no CI (#6), o `motor_minimo` de
+uma unidade (#7, #24). *Diagnóstico*: o `util.log()` e a adoção módulo a módulo
+(#8, #11, #13, #14, #17, #19, #20). *ERP*: o inventário (#22), o pacote `erp/`
+(#24), o relogin do legado (#27) e as duas primeiras migrações (#31, #33).
+*Interface*: o contraste do azul sólido (#15), o teclado e os ícones do menu
+(#28), a abertura mais rápida (#29), a busca que leva a uma tela (#32).
+*Ferramentas e documento*: a galeria (#10, #23), a sonda (#25), os runbooks e a
+proveniência (#18), a recuperação (#21), o painel do Supabase e o `config.toml`
+(#16), os caminhos num lugar só (#3, #26), uma cópia só do `cnab240` (#2).
+Uma quarta leva de interface fechou o dia, empilhada nesta ordem e toda em
+`widgets.py`: a cor fixa que virou teste (#30), os erros com nome (#34), as
+tabelas que ordenam pelo cabeçalho (#35) e o layout que escala junto com a
+fonte (#37, `widgets.px()`) — o que cada um decidiu está na entrada do
+`widgets.py`.
+
+**O que ficou pendente, e por quê.** Está escrito porque pendência que só mora
+na cabeça de alguém não é pendência, é esquecimento:
+
+- **`widgets.estado_de` sempre devolve `"info"`, e por isso nenhuma linha de
+  tabela se pinta hoje.** `util.norm` devolve MAIÚSCULAS e as chaves de
+  `ESTADOS` são minúsculas, então `"apto" in "APTO (AUTORIZADO)"` é falso e a
+  varredura inteira passa reto — inclusive o resgate do fim, que procura
+  `"atencao"`, `"conferir"` e `"divergen"`, também minúsculos. Conferido
+  rodando: `APTO (autorizado)`, `ATENÇÃO — sem anexo`, `JÁ PAGO em 12/08/2026`
+  e `SEM PAR` devolvem os quatro `"info"`. É a armadilha de sempre desta casa —
+  falha em silêncio, e o que se vê é uma tabela sem cor nenhuma, que parece
+  escolha de design. **Correção em andamento em sessão do dono.**
+- **a galeria de DEPOIS do PR #37 ainda não foi tirada**: a rodada foi
+  interrompida porque o dono estava usando a tela, e a galeria fotografa o
+  monitor. O ANTES a 1,5 confirmou os quatro defeitos, e uma primeira rodada do
+  DEPOIS já mostrava "ÚLTIMA EXECUÇÃO" por extenso e o logotipo inteiro — mas
+  essa captura pegou uma notificação do Windows por cima, e captura suja é
+  justamente o que a ferramenta existe para recusar. Falta a rodada limpa, nos
+  dois temas, mais a conferência de 0 px na escala de referência. Ao refazer,
+  lembrar que **`--escala` multiplica a escala ATUAL** e que esta máquina está a
+  125%: 100% é `--escala 0.8` e 150% é `--escala 1.2`;
+- **o teste do Tab do menu é intermitente**
+  (`tests/test_widgets.py::test_o_tab_passa_por_cada_item_do_menu`): ele chama
+  `focus_force()`, que disputa o foco do Windows com quem estiver usando a
+  máquina, e aí o Tk levanta `_tkinter.TclError`. Medido em 02/09: falhou em
+  duas de quatro rodadas da suíte inteira com a máquina em uso, e passa sempre
+  rodando o arquivo sozinho. O que ele prova é legítimo e tem de continuar —
+  `tk_focusNext` é a mesma travessia que a tecla Tab usa. **Correção em
+  andamento em sessão do dono.** Teste que falha por causa do ambiente ensina a
+  ignorar teste vermelho, que é o custo real;
+- **os consumidores 4 a 8 do ERP** — `aportes/mc_catalogos.py` +
+  `aportes/erp_sessao.py`; `conciliacao/erp/payments.py`, cuja grade raspada
+  tem endpoint REST equivalente (`payable-installments/paginated-result`, que
+  dois outros clientes já consomem) e é a linha que paga o documento inteiro,
+  porque com ela some a raspagem, some o login por navegador da Conciliação e
+  some a exigência de janela visível — e é também a mais cara de conferir,
+  porque o resultado é dinheiro no painel do dia; `relatorios/extrato_mc.py` e
+  `anexar/mc_client.py`, em que só as constantes de host mudam; e
+  `anexar/mc_api.py` por último. A ordem e o motivo de cada posição estão no fim
+  do `docs/ERP-CLIENTES.md`;
+- **as esperas fixas**: ~124 s somados em 83 pontos com o número escrito no
+  código (de 90 chamadas de `wait_for_timeout`/`sleep`), concentrados em
+  `baixar_comprovantes/inter_baixar.py` (20), `conciliacao/erp/payments.py`
+  (16) e `anexar/mc_client.py` (11). Trocá-las por espera por CONDIÇÃO é a
+  mudança de melhor relação ganho/risco que sobrou, e é a única que **só se
+  testa contra o portal real** — o que se mede ali é o tempo que o site de
+  terceiro leva, e nenhum dublê sabe isso;
+- **fixtures sintéticas para os 74 testes que pulam.** Eles pulam por falta dos
+  arquivos que não entram no repositório (`config.yaml`, `mapping.yaml`,
+  `MODELO.xlsx`, os cadastros), e teste que pula não aparece em vermelho — é a
+  mesma armadilha dos 9 do `test_widgets.py`, num tamanho maior;
+- **o `_sair` de `comprovantes_app.py`**, cujo `except Exception: pass` em
+  volta do `fechar()` de cada aba continua mudo. É o que o PR #20 deixou
+  explicitamente de fora;
+- **a aba Início custa ~670 ms** para construir, contra menos de 100 ms das
+  outras, e o custo é trabalho de construção, não import (PR #29);
+- **`conciliacao/workbook.py` e `pagamentos_dia/relatorio.py` importam
+  `openpyxl`/`pdfplumber` sem condição** no topo, e por isso o ganho do PR #29
+  ficou pela metade: ~0,27 s de openpyxl e ~0,08 s de pdfplumber continuam
+  entrando antes de existir janela. No segundo, o `try: import pdfplumber` não
+  evita o custo — só evita o erro se a biblioteca faltar;
+- **o `ARQUIVO_LOG` (`log_anexos.csv`) do `anexar/config.py` ainda sai do
+  `_AQUI`**, e é o último caminho calculado pela pasta do MÓDULO depois que o
+  perfil do Chrome, o `diagnostico.log` e o `login.dat` migraram para
+  `util.pasta_base()`;
+- **o `grant insert, update on table public.conta to authenticated`** da
+  migration `20260824141500` não aparece em runbook nenhum: o runbook de 21/08
+  criou as políticas `conta_cadastra` e `conta_corrige` e parou aí, e o
+  privilégio veio três dias depois, só na migration. Sem ele a política nem
+  chega a ser consultada, e não há registro de por onde ele chegou ao projeto de
+  verdade — é o primeiro item do `docs/PROVENIENCIA.md`, e a conferência é um
+  `db diff` que só lê;
+- **nomes de fornecedor que já estão na `main` pública** — em
+  `conciliacao/rules.py`, `pagamentos_dia/remessa_dia.py`,
+  `conciliacao/parsing.py` e `nuvem/contas_novas.py` —, contra a regra da casa
+  de que nome real de fornecedor ou de pessoa não entra no repositório. Foi por
+  causa deles que um runbook entrou e depois saiu (commit `25ae569`): o critério
+  aplicado ao arquivo novo não estava sendo aplicado ao que já estava
+  publicado. Tirá-los mexe em regra de negócio e em histórico já público, então
+  **é decisão do dono**, e não de quem estiver com o arquivo aberto.
