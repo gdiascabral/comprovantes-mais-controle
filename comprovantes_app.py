@@ -34,6 +34,7 @@ for _p in (_RAIZ / "separar_renomear", _RAIZ / "anexar", _RAIZ / "aportes",
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+import util
 import widgets
 from nuvem import (auditoria, cadastro, login_dialogo, rest, sessao,
                    usuarios)
@@ -147,6 +148,12 @@ def _tema_do_sistema() -> str:
 
 def main():
     _nitidez()
+    # Liga o diagnóstico do `cnab240` ao `diagnostico.log`. O pacote é stdlib
+    # pura (não importa `util`; `test_cnab240_pacote.py` cobra) e emite no
+    # logger do próprio nome; esta linha pendura o handler no logger pai, e
+    # tudo de lá sobe por propagação. NUNCA pendurar `NullHandler` no logger
+    # `cnab240`: o `if not logger.handlers` do `util.log()` ficaria mudo.
+    util.log("cnab240")
     _v = _versao_app()
     prefs = _carregar_prefs()
     escolha_tema = prefs.get("tema", "auto")
