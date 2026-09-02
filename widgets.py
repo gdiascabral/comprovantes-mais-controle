@@ -2242,14 +2242,28 @@ MARCAS_ESTADO = {"ok": "✓", "atencao": "⚠", "erro": "✖", "info": "·"}
 def estado_de(texto: str) -> str:
     """A tag ('ok'/'atencao'/'erro'/'info') do estado escrito em português.
 
-    Casa pelo PEDAÇO, e sem acento: as abas escrevem "ATENÇÃO — sem anexo",
-    "APTO (autorizado)" e "JÁ PAGO em 12/08/2026", e nenhuma delas vai passar
-    a escrever uma chave de dicionário só para a tabela ficar colorida.
+    Casa pelo PEDAÇO, sem acento e sem caixa: as abas escrevem "ATENÇÃO — sem
+    anexo", "APTO (autorizado)" e "JÁ PAGO em 12/08/2026", e nenhuma delas vai
+    passar a escrever uma chave de dicionário só para a tabela ficar colorida.
+
+    Sem caixa é o detalhe que faltou: `util.norm` devolve MAIÚSCULAS e as
+    chaves de `ESTADOS` são minúsculas, então "rejeitado" nunca estava em
+    "REJEITADO" e toda linha saía "info". Foi assim que a regra "só atenção e
+    erro se pintam" (ver `estilo_tabela`) passou sem pintar linha nenhuma.
+
+    O estado que a tela escreve PRIMEIRO manda. "ATENÇÃO — sem anexo" é
+    atenção com o motivo atrás, não "sem anexo" (que sozinho é erro) com um
+    prefixo; escolher só pelo pedaço mais longo devolvia erro e pintava de
+    vermelho o que a Remessa trata como "olhe antes de marcar".
     """
-    alvo = util.norm(texto or "")
+    alvo = util.norm(texto or "").lower()
     if not alvo:
         return "info"
-    for chave in sorted(ESTADOS, key=len, reverse=True):
+    chaves = sorted(ESTADOS, key=len, reverse=True)
+    for chave in chaves:
+        if alvo.startswith(chave):
+            return ESTADOS[chave]
+    for chave in chaves:
         if chave in alvo:
             return ESTADOS[chave]
     # As palavras que aparecem no meio da frase, e não como estado inteiro.
