@@ -566,7 +566,9 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   não a vê. A ORDEM importa e não é a da leitura: no Treeview ganha a tag
   configurada PRIMEIRO, não a última da lista do item, então os estados são
   configurados antes da zebra — uma linha rejeitada não pode ficar cinza só por
-  ser par.
+  ser par. **Ressalva de 02/09**: isto descreve o desenho, e não o que se vê
+  hoje — `estado_de` está devolvendo `"info"` para tudo, então nenhuma linha se
+  pinta. Ver a seção "02/09/2026 — a consolidação".
   **O `atividade.jsonl` é o que permite ao Início não abrir o navegador.** Cada
   rotina, ao terminar, chama `registrar_atividade` com os números que ACABOU de
   apurar; o Início lê o arquivo e mostra. Arquivo e não banco: é histórico de
@@ -636,7 +638,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   esquecer um desses passos. De graça: a lista sai do menu JÁ MONTADO
   (`definir_telas`), então vem filtrada pelo PAPEL de quem entrou, e a busca não
   leva ninguém a uma tela que o menu daquela pessoa não mostra.
-  **Em andamento em 02/09 (PR #30)**: "nenhuma aba escreve `#` seguido de seis
+  **Entrou em 02/09 (PR #30)**: "nenhuma aba escreve `#` seguido de seis
   dígitos" deixa de ser conferência a olho e vira teste — varredura por AST dos
   `.py` **rastreados pelo git**, fora do `widgets.py` e de `tests/`, atrás de
   constante de cor em qualquer posição e de cor com NOME em
@@ -646,7 +648,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   — é guarda para a próxima pessoa distraída, e vem com um segundo teste que
   roda a MESMA varredura sobre o `widgets.py` e exige que ela ache mais de 50
   cores, porque guarda que deixou de morder fica verde para sempre.
-  **Em andamento em 02/09 (PR #34)**: `widgets.explicar_erro(exc)` devolve o
+  **Entrou em 02/09 (PR #34)**: `widgets.explicar_erro(exc)` devolve o
   que houve, **de quem é** e o próximo passo, no lugar da exceção crua que dez
   diálogos mostravam — e é a segunda parte que decide tudo, porque "tente de
   novo", "conecte-se" e "avise quem cuida do cadastro" são conselhos opostos. A
@@ -655,7 +657,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   `isinstance`: importar aqui `nuvem.rest`, `erp.sessao`, `conciliacao.errors` e
   o `playwright` arrastaria rede e navegador para dentro do módulo visual, e
   import novo custa exe novo (ver a v1.0.71 na regra de ouro).
-  **Em andamento em 02/09 (PR #35)**: as catorze tabelas passam a ordenar pelo
+  **Entrou em 02/09 (PR #35)**: as catorze tabelas passam a ordenar pelo
   cabeçalho. O caso que dá o motivo inteiro é a coluna de dinheiro, que
   ordenada como TEXTO põe "R$ 987,00" depois de "R$ 1.234,56" — e é justamente
   ela que se ordena, para achar o maior pagamento do dia. O tipo sai do
@@ -665,6 +667,35 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   reaplicar as listras saem embaralhadas), e célula sem valor não vira zero —
   "não tem valor" e "vale R$ 0,00" são coisas diferentes numa tabela de
   pagamento.
+  **Entrou em 02/09 (PR #37): `widgets.px(n)` — "os `n` pixels de quem desenhou
+  esta tela a 100%", ditos na escala de hoje.** As fontes já acompanhavam a
+  escala do Windows desde o redesenho; as MEDIDAS de layout não, e era o
+  desencontro entre as duas que quebrava a tela — a 150%, "ÚLTIMA EXECUÇÃO"
+  saía "ÚLTIMA EXECU" numa coluna de 130 px fixos, a coluna SITUAÇÃO era
+  empurrada para fora da tabela e o logotipo encostava no campo de busca dentro
+  de uma faixa de 52 px que o texto já não cabia. Foram **333 medidas em 12
+  arquivos**, 93 delas no próprio `widgets.py` — que são as que pagam pelo
+  resto, porque a altura da barra, a coluna do menu, o filete do `ItemMenu` e a
+  folga do `Cartao` valem para todas as telas. **A régua é a FONTE, não o
+  DPI**, e a diferença importa: quem aumenta só o tamanho da fonte no Windows,
+  sem mexer na escala de exibição, tem exatamente o mesmo problema — é a mesma
+  decisão que fez as fontes nomeadas saírem do `TkDefaultFont`. Três ressalvas
+  viraram teste: o **degrau de 5%** (nesta máquina o `tk scaling` a 100%
+  devolve 1,3346 e não os 1,3333 da teoria, e sem o degrau `px(820)` daria 821
+  — um pixel a mais em toda tela de quem não mudou escala nenhuma, e a promessa
+  "a 100% nada muda" deixaria de ser verdade); **nunca menos que 1,0**, porque
+  fonte menor não corta nada e apertar as margens só estragaria uma tela que
+  estava boa; e **`px(0)` é 0**, senão todo `padx=(0, 8)` ganharia um pixel de
+  folga onde o desenho pedia encostado. O que NÃO escala, de propósito:
+  `width=` de `Entry`/`Combobox`/`Label` (conta CARACTERE) e `height=` de
+  `Treeview`/`Text` (conta LINHA) — os dois já seguem a fonte sozinhos, e
+  multiplicá-los daria campo com o dobro das letras. Duas escolhas de lugar
+  encolheram muito o diff: a largura das colunas de Treeview escala dentro do
+  `estilo_tabela`, num lugar só, **guardando a largura de origem no widget** —
+  o Início e a Acessórias chamam a função DE NOVO ao remontar a lista, e sem a
+  memória a segunda passada escalaria o que já estava escalado; e cada frame
+  ganhou `px = widgets.px` logo abaixo do import. A promessa "a 100% nada muda"
+  é provada por teste determinístico, que não depende de tela nenhuma.
 - `inicio/inicio_frame.py` — aba Início, a primeira tela: os KPIs do dia
   (`CartaoKPI`), a situação de cada rotina (`ROTINAS`, onde o `ritmo` decide
   quando "não rodou hoje" vira pendência — para uma rotina diária é aviso; para
@@ -1223,9 +1254,14 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   de empresa vindo do cache, e o repositório é público; o que vai é a diferença
   MEDIDA (o PR #15 relatou 6.605 px trocados no Anexar e 0 px no Início, e o
   zero era o resultado certo, porque o Início não tem botão de passo nem cartão
-  numerado).
-- **"Nenhuma cor fixa fora do `widgets.py`" está deixando de ser conferência a
-  olho** e virando teste — em andamento em 02/09 (PR #30).
+  numerado). **Duas coisas a saber antes de rodar**: ela fotografa o MONITOR, e
+  por isso só roda com a máquina livre — com alguém usando a tela, a rodada é
+  interrompida ou sai suja; e **`--escala` MULTIPLICA a escala atual do
+  Windows**, não a de 100%. Nesta máquina, que está a **125%**, `--escala 1.0`
+  já desenha a 125%: para ver o app a 100% é `--escala 0.8`, e para vê-lo a
+  150% é `--escala 1.2`.
+- **"Nenhuma cor fixa fora do `widgets.py`" deixou de ser conferência a olho**
+  e virou teste — entrou em 02/09 (PR #30), e hoje não acha nada.
 - **Nunca commitar dados da empresa**: PDFs de comprovantes, relatórios
   xlsx, `.chrome_profile`, logs, a pasta `galeria/` (print de janela pode
   trazer nome de empresa vindo do cache) e o `sonda.ALERTA.txt`, que é estado da
@@ -1500,14 +1536,42 @@ uma unidade (#7, #24). *Diagnóstico*: o `util.log()` e a adoção módulo a mó
 *Ferramentas e documento*: a galeria (#10, #23), a sonda (#25), os runbooks e a
 proveniência (#18), a recuperação (#21), o painel do Supabase e o `config.toml`
 (#16), os caminhos num lugar só (#3, #26), uma cópia só do `cnab240` (#2).
-Três ficaram **em andamento no fim do dia**, os três em `widgets.py` e
-empilhados nesta ordem: a cor fixa que vira teste (#30), os erros com nome
-(#34) e as tabelas que ordenam (#35) — o que cada um decide está na entrada do
-`widgets.py`, marcado como em andamento.
+Uma quarta leva de interface fechou o dia, empilhada nesta ordem e toda em
+`widgets.py`: a cor fixa que virou teste (#30), os erros com nome (#34), as
+tabelas que ordenam pelo cabeçalho (#35) e o layout que escala junto com a
+fonte (#37, `widgets.px()`) — o que cada um decidiu está na entrada do
+`widgets.py`.
 
 **O que ficou pendente, e por quê.** Está escrito porque pendência que só mora
 na cabeça de alguém não é pendência, é esquecimento:
 
+- **`widgets.estado_de` sempre devolve `"info"`, e por isso nenhuma linha de
+  tabela se pinta hoje.** `util.norm` devolve MAIÚSCULAS e as chaves de
+  `ESTADOS` são minúsculas, então `"apto" in "APTO (AUTORIZADO)"` é falso e a
+  varredura inteira passa reto — inclusive o resgate do fim, que procura
+  `"atencao"`, `"conferir"` e `"divergen"`, também minúsculos. Conferido
+  rodando: `APTO (autorizado)`, `ATENÇÃO — sem anexo`, `JÁ PAGO em 12/08/2026`
+  e `SEM PAR` devolvem os quatro `"info"`. É a armadilha de sempre desta casa —
+  falha em silêncio, e o que se vê é uma tabela sem cor nenhuma, que parece
+  escolha de design. **Correção em andamento em sessão do dono.**
+- **a galeria de DEPOIS do PR #37 ainda não foi tirada**: a rodada foi
+  interrompida porque o dono estava usando a tela, e a galeria fotografa o
+  monitor. O ANTES a 1,5 confirmou os quatro defeitos, e uma primeira rodada do
+  DEPOIS já mostrava "ÚLTIMA EXECUÇÃO" por extenso e o logotipo inteiro — mas
+  essa captura pegou uma notificação do Windows por cima, e captura suja é
+  justamente o que a ferramenta existe para recusar. Falta a rodada limpa, nos
+  dois temas, mais a conferência de 0 px na escala de referência. Ao refazer,
+  lembrar que **`--escala` multiplica a escala ATUAL** e que esta máquina está a
+  125%: 100% é `--escala 0.8` e 150% é `--escala 1.2`;
+- **o teste do Tab do menu é intermitente**
+  (`tests/test_widgets.py::test_o_tab_passa_por_cada_item_do_menu`): ele chama
+  `focus_force()`, que disputa o foco do Windows com quem estiver usando a
+  máquina, e aí o Tk levanta `_tkinter.TclError`. Medido em 02/09: falhou em
+  duas de quatro rodadas da suíte inteira com a máquina em uso, e passa sempre
+  rodando o arquivo sozinho. O que ele prova é legítimo e tem de continuar —
+  `tk_focusNext` é a mesma travessia que a tecla Tab usa. **Correção em
+  andamento em sessão do dono.** Teste que falha por causa do ambiente ensina a
+  ignorar teste vermelho, que é o custo real;
 - **os consumidores 4 a 8 do ERP** — `aportes/mc_catalogos.py` +
   `aportes/erp_sessao.py`; `conciliacao/erp/payments.py`, cuja grade raspada
   tem endpoint REST equivalente (`payable-installments/paginated-result`, que
