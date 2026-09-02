@@ -865,3 +865,136 @@ def test_retorno_de_titulo_e_lido():
     assert pagamentos[0].segmento == "J"
     assert pagamentos[0].seu_numero == "DUP-77"
     assert pagamentos[0].sucesso  # BD = agendado com sucesso
+
+
+# ---------------------------------------------------------------------------
+# Uma fonte só
+#
+# Até 02/09/2026 existiam DUAS cópias deste pacote: a do app e uma autônoma,
+# no repositório das automações avulsas, que os scripts de validação com o
+# banco importavam. A autônoma parou em 14/08 e nunca soube que `dv_cpf`,
+# `dv_cnpj` e `documento_valido` passaram a existir em 20/08 — depois de o
+# Sicoob devolver a remessa 000002 por um CPF de preenchimento vindo do
+# cadastro. Os 84 testes dela passavam verdes justamente por não saberem da
+# validação, e uma ferramenta que aprova o arquivo que o banco recusa é o pior
+# resultado que uma ferramenta de conferência pode dar.
+#
+# Estes três testes valem no CI, onde só o repositório do app existe: eles não
+# procuram a cópia de fora (não haveria como), procuram as condições que
+# deixaram a cópia de fora ser possível.
+# ---------------------------------------------------------------------------
+_RAIZ = Path(__file__).resolve().parent.parent
+_FERRAMENTAS = _RAIZ / "cnab240" / "ferramentas"
+
+
+def test_existe_um_dominios_py_so():
+    """Duas cópias do arquivo = duas respostas para "este CPF vale?"."""
+    achados = sorted(
+        p.relative_to(_RAIZ).as_posix()
+        for p in _RAIZ.rglob("dominios.py")
+        if "__pycache__" not in p.parts and ".git" not in p.parts
+        and "codigo_embutido" not in p.parts and "codigo" not in p.parts)
+    assert achados == ["cnab240/dominios.py"], (
+        f"achei mais de um `dominios.py` no repositório: {achados}. Uma cópia "
+        "a mais é uma segunda régua de dígito verificador esperando divergir "
+        "da primeira — foi assim que um CPF inválido chegou ao campo 08.3B.")
+
+
+def _arvore(arquivo: Path):
+    import ast
+    return ast.parse(arquivo.read_text(encoding="utf-8"), str(arquivo))
+
+
+def _py_das_ferramentas() -> list[Path]:
+    achados = sorted(p for p in _FERRAMENTAS.glob("*.py"))
+    assert achados, "cnab240/ferramentas/ ficou sem nenhum .py"
+    return achados
+
+
+def test_as_ferramentas_importam_o_cnab240_deste_repositorio():
+    """Ferramenta que não fala com ESTE pacote não prova nada sobre ele."""
+    import ast
+
+    mudos = []
+    for arquivo in _py_das_ferramentas():
+        fala = False
+        for no in ast.walk(_arvore(arquivo)):
+            if isinstance(no, ast.Import):
+                fala = fala or any(a.name.split(".")[0] == "cnab240"
+                                   for a in no.names)
+            elif isinstance(no, ast.ImportFrom):
+                # `from cnab240... import` ou `from .` — os dois são este
+                # pacote; o relativo, por definição, não alcança outra cópia.
+                fala = fala or no.level > 0 or (
+                    (no.module or "").split(".")[0] == "cnab240")
+        if not fala and arquivo.name != "__init__.py":
+            mudos.append(arquivo.name)
+    assert not mudos, (
+        f"{mudos} não importa nada de `cnab240`. Ou a ferramenta fala com o "
+        "pacote deste repositório, ou ela está medindo outra coisa.")
+
+
+def test_as_ferramentas_nao_apontam_o_sys_path_para_fora():
+    r"""Caminho absoluto escrito à mão foi o que criou a segunda cópia.
+
+    Era `sys.path.insert(0, r"C:\...\fontes\cnab240")`: amarrava o script à
+    máquina de uma pessoa e, pior, a uma cópia do pacote que parou no tempo.
+    O caminho tem de sair do `__file__` — assim ele só alcança este repositório,
+    esteja ele em que pasta estiver, e nunca alcança um segundo `cnab240`.
+    """
+    import ast
+    import re
+
+    #: `C:\...`, `C:/...`, `/...` ou `\servidor\...`
+    absoluto = re.compile(r"^([A-Za-z]:[\\/]|[\\/][\\/]|/)")
+
+    problemas = {}
+    for arquivo in _py_das_ferramentas():
+        arvore = _arvore(arquivo)
+        for no in ast.walk(arvore):
+            # (1) nenhum literal de caminho absoluto, em lugar nenhum
+            if (isinstance(no, ast.Constant) and isinstance(no.value, str)
+                    and absoluto.match(no.value)):
+                problemas.setdefault(arquivo.name, []).append(
+                    f"linha {no.lineno}: caminho absoluto escrito à mão")
+            # (2) nada de constante indo para o sys.path
+            alvo = getattr(no, "func", None)
+            if (isinstance(no, ast.Call) and isinstance(alvo, ast.Attribute)
+                    and alvo.attr in ("insert", "append")
+                    and ast.unparse(alvo.value).replace(" ", "").endswith(
+                        "sys.path")):
+                for arg in no.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        problemas.setdefault(arquivo.name, []).append(
+                            f"linha {no.lineno}: sys.path recebendo texto fixo")
+    assert not problemas, (
+        "estas ferramentas apontam o caminho de import para fora do "
+        f"repositório: {problemas}. O caminho sai do `__file__` — ver "
+        "`cnab240/ferramentas/_ambiente.py`.")
+
+
+def test_o_pacote_sabe_recusar_documento_que_nao_fecha():
+    """As três funções de 20/08/2026, e a recusa que elas existem para dar.
+
+    A cópia autônoma não tinha nenhuma das três, e por isso aprovava o CPF de
+    preenchimento que o Sicoob devolveu. Um teste que só conferisse "a função
+    existe" passaria numa função que devolve `True` sempre — daí a recusa
+    estar aqui junto.
+    """
+    from cnab240 import dominios
+
+    for nome in ("dv_cpf", "dv_cnpj", "documento_valido"):
+        assert callable(getattr(dominios, nome, None)), (
+            f"`cnab240.dominios.{nome}` sumiu. É a conferência de dígito "
+            "verificador que faltava quando a remessa 000002 foi recusada.")
+
+    # Um CPF fictício válido, e o MESMO com o último dígito trocado.
+    assert dominios.dv_cpf("11144477735")
+    assert not dominios.dv_cpf("11144477734")
+    assert dominios.documento_valido("111.444.777-35") == "11144477735"
+    assert dominios.documento_valido("111.444.777-34") == ""
+
+    # E o mesmo para CNPJ, que é a outra metade do campo de inscrição.
+    assert dominios.dv_cnpj("12345678000195")
+    assert not dominios.dv_cnpj("12345678000194")
+    assert dominios.documento_valido("12.345.678/0001-94") == ""

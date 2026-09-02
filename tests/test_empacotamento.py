@@ -51,6 +51,21 @@ _FORA_DE_PROPOSITO = {
     "nuvem/migrar.py": "ferramenta de administração, rodada à mão no repositório",
 }
 
+#: Pastas INTEIRAS que ficam fora do `codigo.zip`, e por quê. É o
+#: `_FORA_DE_PROPOSITO` um nível acima: lá a unidade é o arquivo, aqui é a
+#: pasta. Vale para ferramenta rodada à mão NO repositório — o app não a
+#: importa, então ela não tem por que viajar para a máquina de quem usa.
+#:
+#: O caminho é comparado inteiro, e não pelo primeiro pedaço como o
+#: `_PASTAS_FORA`: `cnab240/ferramentas` sai, `cnab240` continua cobrado.
+#: Confundir os dois deixaria o pacote que move dinheiro fora do zip — e essa
+#: é a falha que este arquivo inteiro existe para impedir.
+_PASTAS_SO_DO_REPO = {
+    "cnab240/ferramentas": (
+        "ferramentas de validação com o banco, rodadas à mão na máquina que "
+        "tem o cadastro; o app nunca as importa"),
+}
+
 #: Sempre entram, e não são código: a versão desta build, a trava do motor e o
 #: ícone. Ficam aqui para o teste da raiz não os cobrar como se fossem `.py`.
 _NAO_SAO_PY = ("versao.txt", "motor_minimo.txt", "icone.ico")
@@ -96,11 +111,19 @@ def _arquivos_py() -> list[str]:
 
 
 def _pastas_de_codigo() -> list[str]:
-    """As pastas de código do app, descobertas — nunca escritas à mão."""
+    """As pastas de código do app, descobertas — nunca escritas à mão.
+
+    "Do app" quer dizer: o que o app importa quando roda na máquina de quem
+    usa. Ferramenta que só existe no repositório (`_PASTAS_SO_DO_REPO`) não
+    entra, porque cobrá-la no `build.yml` seria mandar para o usuário código
+    que ele nunca vai executar.
+    """
     pastas = set()
     for arq in _arquivos_py():
         pasta = arq.rsplit("/", 1)[0] if "/" in arq else ""
         if not pasta or pasta.split("/")[0] in _PASTAS_FORA:
+            continue
+        if pasta in _PASTAS_SO_DO_REPO:
             continue
         pastas.add(pasta)
     return sorted(pastas)
@@ -162,8 +185,12 @@ def test_todo_py_de_codigo_esta_no_git():
         pytest.skip("sem git para conferir")
     conhecidos = set(rastreados)
 
+    # As pastas só do repositório entram AQUI de volta: elas não vão para o
+    # `codigo.zip`, mas continuam sendo código, e um `.gitignore` largo demais
+    # as engole do mesmo jeito — foi exatamente o que aconteceu com o
+    # `baixar_comprovantes/contas_inter.py`.
     esquecidos = []
-    for pasta in _pastas_de_codigo() + [""]:
+    for pasta in _pastas_de_codigo() + sorted(_PASTAS_SO_DO_REPO) + [""]:
         raiz = _RAIZ / pasta if pasta else _RAIZ
         for arquivo in sorted(raiz.glob("*.py")):
             rel = arquivo.relative_to(_RAIZ).as_posix()
@@ -291,6 +318,17 @@ def test_a_allowlist_nao_apodrece():
         assert (_RAIZ / arquivo).is_file(), (
             f"`{arquivo}` está em _FORA_DE_PROPOSITO ({motivo}) mas não existe "
             "mais: apague a entrada, para a lista não guardar fantasma.")
+
+    copiadas = _copiadas()
+    for pasta, motivo in _PASTAS_SO_DO_REPO.items():
+        assert (_RAIZ / pasta).is_dir(), (
+            f"`{pasta}` está em _PASTAS_SO_DO_REPO ({motivo}) mas não existe "
+            "mais: apague a entrada, para a lista não guardar fantasma.")
+        assert pasta not in copiadas, (
+            f"`{pasta}` está em _PASTAS_SO_DO_REPO ({motivo}) e passou a ser "
+            f"copiada no {_BUILD_REL}. Ou ela é código do app — e aí sai da "
+            "lista e ganha uma linha de verdade —, ou a linha do build.yml é "
+            "que está sobrando.")
 
     assert "-Exclude migrar.py" in texto, (
         "a pasta `nuvem` é copiada inteira: o `migrar.py` (ferramenta de "
