@@ -19,6 +19,7 @@
 *.yml   text eol=lf
 *.sql   text eol=lf
 *.toml  text eol=lf
+*.lock  text eol=lf
 
 # Os .bat são lidos pelo cmd.exe do Windows: continuam com CRLF.
 *.bat   text eol=crlf
