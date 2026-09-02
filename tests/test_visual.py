@@ -149,6 +149,129 @@ def test_os_dois_temas_tem_os_mesmos_papeis():
     assert set(widgets.PALETA["claro"]) == set(widgets.PALETA["escuro"])
 
 
+# ------------------------------------- o que a interface PINTA de verdade
+# Os três testes acima medem o que a PALETA permite; estes medem o que a TELA
+# usa, e a diferença não é acadêmica.
+#
+# Eles mediam 12 pares, todos na mesma direção: cor de TEXTO contra o fundo do
+# painel. Nenhum media "branco sobre uma cor sólida da paleta" — que é
+# exatamente o que o botão de passo e o círculo numerado do cartão fazem. A
+# `marca` do tema escuro (#6F9BFF) entrou validada como texto, 6,3:1 sobre o
+# cartão, e é ela que preenche esses dois: branco por cima dá 2,69:1, abaixo
+# até do piso de 3:1 que a WCAG dá a COMPONENTE, quanto mais dos 4,5:1 de
+# texto. São ~29 pontos da janela (11 botões de passo + 18 círculos), em quase
+# toda tela, e só para quem usa o tema escuro.
+#
+# A tabela abaixo é escrita à mão de propósito: ela é a lista do que a
+# interface pinta, e uma varredura automática do `widgets.py` mediria de novo
+# o que a paleta permite. Quem puser cor nova numa tela põe o par novo aqui —
+# e `test_o_botao_de_passo_e_o_circulo_pintam_a_cor_medida` existe para a
+# tabela não envelhecer sozinha nos dois pontos onde isso já doeu.
+BRANCO = "#FFFFFF"
+
+#: 3:1 é o piso da WCAG AA para COMPONENTE de interface e para texto grande —
+#: a silhueta do botão contra o que está atrás dela. Não substitui o 4,5:1 do
+#: texto que vai por cima: são duas medidas, e um botão precisa passar nas
+#: duas.
+MINIMO_COMPONENTE = 3.0
+
+#: O papel da paleta que PREENCHE o botão de passo, o círculo numerado do
+#: cartão e o dia escolhido do calendário — os três lugares com branco por
+#: cima. Numa constante porque é lido em dois lugares que têm de concordar: a
+#: tabela de pares (a MEDIDA) e o teste que constrói os widgets (a PROVA de
+#: que a medida é a da tela).
+COR_DO_PASSO = "marca"
+
+#: (frente, fundo, onde) — `frente`/`fundo` são papéis da paleta, ou a cor
+#: crua quando o app a escreve assim (o branco dos rótulos sobre cor sólida).
+PARES_DE_TEXTO = (
+    # ---- texto dentro do cartão, que é o fundo PADRÃO do ttk neste app
+    ("texto", "cartao", "o corpo de texto de qualquer cartão"),
+    ("apoio", "cartao", "Apoio.TLabel, a linha que explica a tela"),
+    ("tenue", "cartao", "Tenue.TLabel e Mini.TLabel: legenda e rótulo"),
+    ("ativo", "cartao", "Ativo.TLabel, o \"está rodando agora\""),
+    ("ok", "cartao", "Ok.TLabel"),
+    ("atencao", "cartao", "Atencao.TLabel e MonoMiniAtencao.TLabel"),
+    ("erro", "cartao", "Erro.TLabel e MonoMiniErro.TLabel"),
+    ("marca", "cartao", "KPIMarca.TLabel e o botão-link (\"Marcar todas\")"),
+    # ---- texto sobre a pílula/chip do estado, que tem fundo próprio
+    ("ok", "ok_fundo", "PillOk.TLabel e a tag \"ok\" do Treeview"),
+    ("atencao", "atencao_fundo", "PillAtencao.TLabel"),
+    ("erro", "erro_fundo", "PillErro.TLabel"),
+    ("info", "info_fundo", "PillInfo.TLabel"),
+    ("marca", "marca_fundo", "ItemAtivo.TLabel (o item aberto do menu) e a "
+                             "linha selecionada da tabela"),
+    # ---- branco sobre cor SÓLIDA: a direção que ninguém media
+    (BRANCO, "acao", "Botao papel=\"acao\", o executar verde"),
+    (BRANCO, "acao_ativo", "o mesmo botão verde sob o cursor"),
+    (BRANCO, COR_DO_PASSO, "Botao papel=\"passo\", o círculo numerado do "
+                           "Cartao e o dia escolhido do calendário"),
+    (BRANCO, "marca_barra", "Barra.TLabel e Marca.TLabel na barra de cima, e "
+                            "o botão de passo sob o cursor"),
+    ("marca_sub", "marca_barra", "BarraTenue.TLabel, o texto secundário "
+                                 "DENTRO da barra de cima"),
+)
+
+#: Os mesmos objetos, medidos como FORMA e não como texto: a silhueta do botão
+#: contra o que está atrás dela. O botão de passo e o verde aparecem duas
+#: vezes porque aparecem em dois lugares — dentro de um cartão (o círculo
+#: numerado) e no cabeçalho da página, que é o cinza do painel.
+PARES_DE_COMPONENTE = (
+    (COR_DO_PASSO, "cartao", "o círculo numerado, dentro do cartão"),
+    (COR_DO_PASSO, "fundo", "o botão de passo, no cabeçalho da página"),
+    ("acao", "cartao", "o botão verde, dentro de um cartão"),
+    ("acao", "fundo", "o botão verde, no cabeçalho da página"),
+)
+
+
+def _cor(paleta: dict, nome: str) -> str:
+    """O papel da paleta, ou a cor crua quando o app já a escreve assim."""
+    return nome if nome.startswith("#") else paleta[nome]
+
+
+def _br(razao: float) -> str:
+    """A razão como ela é escrita nos comentários da paleta: "4,63:1"."""
+    return f"{razao:.2f}".replace(".", ",") + ":1"
+
+
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+@pytest.mark.parametrize("frente, fundo, onde", PARES_DE_TEXTO,
+                         ids=[f"{f}-sobre-{b}" for f, b, _ in PARES_DE_TEXTO])
+def test_o_texto_que_a_tela_pinta_e_legivel(tema, frente, fundo, onde):
+    """TEXTO NORMAL: 4,5:1, o mínimo da WCAG AA.
+
+    Vale para os três blocos da tabela, e o terceiro é o que faltava — quando
+    a cor da paleta é o FUNDO e o branco é a letra, quem tem de passar é o par
+    inteiro, não a cor sozinha. Uma cor pode ser ótima como texto sobre o
+    cartão e péssima como fundo com branco por cima: é a mesma distância
+    medida entre pontos diferentes."""
+    paleta = widgets.PALETA[tema]
+    razao = _contraste(_cor(paleta, frente), _cor(paleta, fundo))
+    assert razao >= MINIMO, (
+        f"{onde}, no tema {tema}: {_cor(paleta, frente)} sobre "
+        f"{_cor(paleta, fundo)} ({frente} sobre {fundo}) dá {_br(razao)}, "
+        f"abaixo dos {_br(MINIMO)} que a WCAG AA pede para texto normal")
+
+
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+@pytest.mark.parametrize("frente, fundo, onde", PARES_DE_COMPONENTE,
+                         ids=[f"{f}-contra-{b}"
+                              for f, b, _ in PARES_DE_COMPONENTE])
+def test_a_forma_do_botao_se_separa_do_que_esta_atras(tema, frente, fundo,
+                                                      onde):
+    """COMPONENTE: 3:1, o piso da WCAG para o que não é texto.
+
+    Aqui não há letra nenhuma: o que se mede é se dá para ver ONDE o botão
+    começa e termina. Escurecer um botão até o branco de cima ficar legível
+    resolve uma ponta e estraga a outra — este teste é a outra ponta."""
+    paleta = widgets.PALETA[tema]
+    razao = _contraste(_cor(paleta, frente), _cor(paleta, fundo))
+    assert razao >= MINIMO_COMPONENTE, (
+        f"{onde}, no tema {tema}: {_cor(paleta, frente)} contra "
+        f"{_cor(paleta, fundo)} ({frente} contra {fundo}) dá {_br(razao)}, "
+        f"abaixo dos {_br(MINIMO_COMPONENTE)} de componente")
+
+
 # --------------------------------------------------------------------- fontes
 # A janela `raiz` vem do conftest, compartilhada com o `test_widgets.py`.
 
@@ -278,6 +401,39 @@ def test_o_cartao_numera_so_quando_ha_ordem(raiz):
     sem_ordem = widgets.Cartao(raiz, "Registro")
     assert sem_ordem.lbl_titulo.cget("text") == "Registro"
     assert sem_ordem._bolha is None
+
+
+def test_o_botao_de_passo_e_o_circulo_pintam_a_cor_medida(raiz):
+    """A tabela `PARES_DE_TEXTO` é escrita à mão, e tabela à mão envelhece.
+
+    O defeito que ela veio pegar não foi uma cor errada na paleta: foi uma cor
+    CERTA usada num papel para o qual ninguém a mediu. Nada impede que isso se
+    repita ao contrário — alguém trocar a cor do botão e a tabela continuar
+    medindo a antiga, verde, provando nada.
+
+    Por isso aqui os dois widgets são construídos de verdade, nos dois temas,
+    e o que eles pintam é comparado com o que o teste mede. O terceiro ponto
+    (o dia escolhido do calendário) usa a mesma `COR_DO_PASSO` e não entra: ele
+    só nasce dentro do popup, e abri-lo aqui traria a janela sem foco do
+    `CampoData` para o meio da suíte."""
+    for escuro in (False, True):
+        widgets.aplicar_estilos(escuro)
+        esperado = widgets.PALETA["escuro" if escuro else "claro"][COR_DO_PASSO]
+        botao = widgets.Botao(raiz, "Buscar os lançamentos", papel="passo")
+        cartao = widgets.Cartao(raiz, "Período", 1)
+        try:
+            assert str(botao.cget("background")) == esperado, (
+                "o botão de passo deixou de usar a cor que o teste de "
+                "contraste mede")
+            assert str(botao.cget("foreground")) == BRANCO
+            assert str(cartao._bolha.itemcget("bolha", "fill")) == esperado, (
+                "o círculo numerado deixou de usar a cor que o teste de "
+                "contraste mede")
+            assert str(cartao._bolha.itemcget("numero", "fill")) == BRANCO
+        finally:
+            botao.destroy()
+            cartao.destroy()
+    widgets.aplicar_estilos(False)
 
 
 def test_o_cabecalho_sem_apoio_nao_cria_a_linha(raiz):
