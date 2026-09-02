@@ -28,7 +28,6 @@ codigo.zip
 codigo_embutido/
 codigo/
 debug/
-aportes/.chrome_profile*/
 aportes/conferencia.json
 aportes/teste_lancamento.json
 aportes/teste_lancamento.local.json
@@ -80,7 +79,6 @@ contas_sicoob*
 # porque lá o arquivo existe, e quebrou no CI, que só tem o que o git carrega.
 # Regra de dado tem de mirar o dado.
 contas_inter*.json
-extratos_sicoob/.chrome_profile_sicoob/
 # Perfil do Chrome do portal Acessórias: sessão logada do escritório.
 .chrome_profile_acessorias/
 # Mapa conta do Mais Controle -> pasta de destino. Mesma razão: nome de
