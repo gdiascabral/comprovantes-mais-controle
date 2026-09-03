@@ -40,6 +40,7 @@ def _garantir_dependencias():        # nunca é chamada: só faz o PyInstaller
     import webbrowser, calendar, base64              # noqa  stdlib usados só pelo app
     import difflib                                    # noqa  (aportes/mc_catalogos: os "nomes parecidos" do erro)
     import ctypes.wintypes                            # noqa  (login cifrado DPAPI)
+    import logging.handlers                           # noqa  (util.log: o diagnostico.log — a v2.0.159 saiu sem ele e o app nao abriu)
     from playwright.sync_api import sync_playwright   # noqa
 
 

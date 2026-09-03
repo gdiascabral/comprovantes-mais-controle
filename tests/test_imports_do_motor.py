@@ -220,3 +220,81 @@ def test_o_exe_tem_os_submodulos_de_urllib_que_o_app_usa():
         if usados - dentro:
             faltando[arq.relative_to(_RAIZ).as_posix()] = sorted(usados - dentro)
     assert not faltando, f"submódulos de urllib fora do exe: {faltando}"
+
+
+def _tudo_no_exe() -> set:
+    """TODOS os módulos que o exe contém — com o ponto, e não só o topo.
+
+    Mesmo método do `_topo_no_exe`: importa num interpretador limpo o que o
+    `_garantir_dependencias()` importa e olha o que veio junto — só que sem
+    descartar os nomes com ponto. Era exatamente o que faltava: `logging`
+    chegava ao exe arrastado pelo `requests`, então o teste de TOPO o dava como
+    presente, e `logging.handlers` é OUTRO arquivo, que ninguém importava.
+    """
+    fonte = (_RAIZ / "motor.py").read_text(encoding="utf-8")
+    arvore = ast.parse(fonte, "motor.py")
+    linhas = [ast.unparse(filho)
+              for no in ast.walk(arvore)
+              if isinstance(no, ast.FunctionDef)
+              and no.name == "_garantir_dependencias"
+              for filho in no.body
+              if isinstance(filho, (ast.Import, ast.ImportFrom))]
+    assert linhas, "não achei os imports de _garantir_dependencias no motor.py"
+    codigo = "\n".join(linhas) + "\nimport sys\nprint(' '.join(sys.modules))\n"
+    saida = subprocess.run([sys.executable, "-c", codigo],
+                           capture_output=True, text=True, timeout=180)
+    assert saida.returncode == 0, saida.stderr
+    return set(saida.stdout.split())
+
+
+def _submodulos_stdlib_importados(arquivo: Path) -> set:
+    """`import a.b`, `from a.b import c` e `from a import b` (quando `b` é
+    módulo) — só os nomes COM ponto cujo topo é biblioteca padrão."""
+    achados = set()
+    arvore = ast.parse(arquivo.read_text(encoding="utf-8"), str(arquivo))
+    for no in ast.walk(arvore):
+        if isinstance(no, ast.Import):
+            for a in no.names:
+                if "." in a.name and a.name.split(".")[0] in sys.stdlib_module_names:
+                    achados.add(a.name)
+        elif isinstance(no, ast.ImportFrom) and no.level == 0 and no.module:
+            if no.module.split(".")[0] not in sys.stdlib_module_names:
+                continue
+            if "." in no.module:
+                achados.add(no.module)
+            for a in no.names:
+                candidato = f"{no.module}.{a.name}"
+                try:
+                    if importlib.util.find_spec(candidato) is not None:
+                        achados.add(candidato)
+                except (ImportError, ValueError):
+                    pass          # `from decimal import Decimal`: classe, não módulo
+    return achados
+
+
+def test_o_exe_tem_os_submodulos_da_stdlib_que_o_app_usa():
+    """`from logging.handlers import RotatingFileHandler` no util.py, e o exe
+    sem ele: o app não abre.
+
+    Aconteceu em 03/09/2026, na v2.0.159, na máquina do dono, com a trava
+    apontando para a prévia: `logging` chegava ao exe arrastado pelo
+    `requests`, então `test_o_exe_tem_os_modulos_de_topo_que_o_app_usa` o dava
+    como presente — e `logging.handlers` é outro arquivo, que ninguém importava.
+    Os testes de submódulo só olhavam `tkinter` e `urllib`, os dois que já
+    tinham mordido. Este olha TODOS: qualquer `a.b` da biblioteca padrão que o
+    app importe tem de aparecer no interpretador que importou só o que o motor
+    declara.
+
+    Para liberar um que falte: acrescente ao `_garantir_dependencias()` do
+    motor.py e suba o `motor_minimo.txt` para a versão da RELEASE no mesmo push
+    — aqui uma unidade não basta, porque o código passa a exigir o exe novo.
+    """
+    dentro = _tudo_no_exe()
+    faltando = {}
+    for arq in _arquivos_do_app():
+        usados = _submodulos_stdlib_importados(arq)
+        if usados - dentro:
+            faltando[arq.relative_to(_RAIZ).as_posix()] = sorted(usados - dentro)
+    assert not faltando, (
+        "estes submódulos da biblioteca padrão não existem no exe do usuário — "
+        f"o app não vai abrir (foi a v2.0.159): {faltando}")
