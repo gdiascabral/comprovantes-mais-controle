@@ -730,10 +730,10 @@ def main():
         root.bind_all(f"<Control-Key-{_n}>", _atalho_numero)
     root.bind_all("<Control-Tab>", _proxima)
     root.bind_all("<Control-Shift-Tab>", _anterior)
-    # No X11 o Shift+Tab chega com keysym próprio. Não custa nada aqui e é o
-    # que faz o atalho existir para quem rodar o app como script fora do
-    # Windows — que é como ele é desenvolvido.
-    root.bind_all("<Control-ISO_Left_Tab>", _anterior)
+    # Sem `<Control-ISO_Left_Tab>`: e keysym do X11, e o Tk 8.6 do Python 3.11
+    # (o do exe) recusa com `bad event type or keysym` NA ABERTURA — foi a
+    # v2.0.161. O app e so Windows, e la Shift+Tab chega como <Shift-Tab>.
+    # Quem cobre isto e tests/test_atalhos_do_app.py.
     # A busca da barra é um "ir para uma tela", e é AQUI que ela ganha para
     # onde ir. Depois do menu montado, de propósito: a lista sai de `itens`, que
     # já respeita o papel de quem entrou — a busca não leva ninguém a uma tela
