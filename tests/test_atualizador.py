@@ -295,11 +295,16 @@ class _RequestsFalso:
         return _Resposta(conteudo=self.corpo_zip, cabecalhos=cab)
 
 
-def _codigo_zip(tag: str) -> bytes:
+def _codigo_zip(tag: str, minimo: str = "") -> bytes:
+    """O codigo.zip daquela release. Com `minimo`, ele leva o
+    `motor_minimo.txt` junto — que é o arquivo por onde o código exige motor
+    novo, e sem o qual não há como encenar o incidente de 03/09/2026."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("comprovantes_app.py", "def main():\n    pass\n")
         zf.writestr("versao.txt", tag + "\n")
+        if minimo:
+            zf.writestr("motor_minimo.txt", minimo + "\n")
     return buf.getvalue()
 
 
@@ -451,24 +456,29 @@ class _RespostaGitHub(_Resposta):
             raise _Erro404(f"{self.status_code} Client Error")
 
 
-def _release(tag, previa=False, rascunho=False):
+def _release(tag, previa=False, rascunho=False, com_exe=True):
     """Uma release como a API a devolve.
 
     O exe se chama "Comprovantes.Mais.Controle.exe", com PONTOS: o build.yml
     sobe "Comprovantes Mais Controle.exe" e o GitHub troca os espaços do nome
     do asset. Quem o procurasse pelo nome não o acharia — `_url_do_exe`
-    procura pela EXTENSÃO, e é por isso que ele funciona."""
+    procura pela EXTENSÃO, e é por isso que ele funciona.
+
+    `com_exe=False` é a release incompleta: a build publicou o `codigo.zip` e
+    morreu antes do executável. Acontece, e o que o atualizador faz nela é
+    parte do desenho (não trocar nada)."""
     base = f"https://github.com/{atualizador.REPO}/releases/download/{tag}"
+    assets = [{"name": "codigo.zip",
+               "browser_download_url": f"{base}/codigo.zip"}]
+    if com_exe:
+        assets.append(
+            {"name": "Comprovantes.Mais.Controle.exe",
+             "browser_download_url": f"{base}/Comprovantes.Mais.Controle.exe"})
     return {
         "tag_name": tag,
         "prerelease": previa,
         "draft": rascunho,
-        "assets": [
-            {"name": "codigo.zip",
-             "browser_download_url": f"{base}/codigo.zip"},
-            {"name": "Comprovantes.Mais.Controle.exe",
-             "browser_download_url": f"{base}/Comprovantes.Mais.Controle.exe"},
-        ],
+        "assets": assets,
     }
 
 
@@ -487,8 +497,10 @@ class _GitHubFalso:
       que o `travar_versao.txt` passa, e é de propósito.
     """
 
-    def __init__(self, releases):
+    def __init__(self, releases, minimos=None):
         self.releases = list(releases)      # da mais nova para a mais velha
+        # tag → o `motor_minimo.txt` que o codigo.zip DAQUELA release carrega.
+        self.minimos = dict(minimos or {})
         self.urls = []
 
     def _liberadas(self):
@@ -513,7 +525,7 @@ class _GitHubFalso:
         # Download de asset: o corpo é coerente com a tag que está no endereço,
         # senão o teste não saberia dizer QUAL release foi instalada.
         tag = url.split("/releases/download/")[1].split("/")[0]
-        corpo = _codigo_zip(tag)
+        corpo = _codigo_zip(tag, self.minimos.get(tag, ""))
         return _RespostaGitHub(
             conteudo=corpo, cabecalhos={"content-length": str(len(corpo))})
 
@@ -632,3 +644,177 @@ def test_a_trava_enxerga_previa_e_e_assim_que_se_testa_antes_de_liberar(
     atualizador._atualizar_codigo(pasta, emb)
     assert "releases/tags/v1.0.79" in falso.urls[0]
     assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.79"
+
+
+# ------------------------------ o motor vem da MESMA release do código (03/09)
+# O portão criou um estado que antes não existia: o código pode vir de uma
+# release que NÃO é a `latest`. Enquanto latest era sempre a mais nova, buscar
+# o codigo.zip numa release e o exe noutra dava no mesmo. Deixou de dar.
+#
+# 03/09/2026, ~09:57, máquina do dono, com `travar_versao.txt` na prévia:
+#
+#   09:57:43  código atualizado para v2.0.161 (travado)
+#   09:57:43  código v2.0.161 exige motor v2.0.161; motor atual é v2.0.105
+#   09:57:46  baixando motor novo de .../download/v2.0.120/Comprovantes...exe
+#   09:57:56  download do motor ok (153 MB); trocando
+#   09:58:30  código v2.0.161 exige motor v2.0.161; motor atual é v2.0.120
+#   09:58:35  baixando motor novo de .../download/v2.0.120/Comprovantes...exe
+#
+# O código veio da tag travada (prévia v2.0.161) e o exe veio do
+# `/releases/latest`, que devolve a última LIBERADA — a v2.0.120. O motor
+# baixado não satisfazia o mínimo, o app reabria e baixava o MESMO de novo:
+# laço, 152 MB por volta. E a segunda troca pegou o onefile da primeira ainda
+# se extraindo, o que matou o app com "Failed to load Python DLL".
+
+_A_PREVIA_QUE_EXIGE_MOTOR = [
+    _release("v2.0.161", previa=True),   # a prévia em teste na máquina do dono
+    _release("v2.0.120"),                # a última LIBERADA: o que o latest dá
+    _release("v2.0.119"),
+]
+#: A v2.0.161 mexeu no motor, então o codigo.zip dela exige o exe dela.
+_MINIMO_DA_PREVIA = {"v2.0.161": "v2.0.161"}
+
+
+def test_travado_numa_previa_o_exe_vem_DELA_e_nao_da_latest(tmp_path,
+                                                            monkeypatch):
+    """O teste que reproduz o incidente de 03/09/2026.
+
+    Trava na prévia v2.0.161, latest liberada na v2.0.120: o código vem da
+    161 e o exe TAMBÉM tem de vir da 161. Vindo da 120, ele não satisfaz o
+    mínimo que a 161 exige e a abertura seguinte baixa o mesmo arquivo outra
+    vez — que é a definição do laço."""
+    pasta, emb = _instalado(tmp_path, "v2.0.105")
+    (tmp_path / "travar_versao.txt").write_text("v2.0.161\n", encoding="utf-8")
+    falso = _fingir_rede(monkeypatch, _GitHubFalso(_A_PREVIA_QUE_EXIGE_MOTOR,
+                                                   _MINIMO_DA_PREVIA))
+    atualizador._atualizar_codigo(pasta, emb)
+
+    v_codigo = (pasta / "versao.txt").read_text(encoding="utf-8").strip()
+    assert v_codigo == "v2.0.161"
+    assert (pasta / "motor_minimo.txt").read_text(
+        encoding="utf-8").strip() == "v2.0.161"
+
+    url, nome = atualizador._url_do_exe(v_codigo)
+    assert "/releases/download/v2.0.161/" in url, url
+    assert "v2.0.120" not in url, "o exe veio da release errada — é o laço"
+    assert nome.lower().endswith(".exe")
+    assert not any(u.endswith("/releases/latest") for u in falso.urls), \
+        "perguntou ao latest: ele devolve a liberada, não a release do código"
+
+
+def test_sem_trava_o_codigo_e_o_exe_vem_os_dois_da_liberada(tmp_path,
+                                                            monkeypatch):
+    """O caminho de todo dia, que não muda: sem trava é a `latest` que manda —
+    e o exe vem dela, não da prévia que estiver por cima."""
+    pasta, emb = _instalado(tmp_path, "v2.0.105")
+    falso = _fingir_rede(monkeypatch, _GitHubFalso(
+        [_release("v2.0.163", previa=True), _release("v2.0.162")],
+        {"v2.0.162": "v2.0.162"}))
+    atualizador._atualizar_codigo(pasta, emb)
+
+    v_codigo = (pasta / "versao.txt").read_text(encoding="utf-8").strip()
+    assert v_codigo == "v2.0.162"
+    url, _ = atualizador._url_do_exe(v_codigo)
+    assert "/releases/download/v2.0.162/" in url, url
+    assert not any("v2.0.163" in u for u in falso.urls), \
+        "a prévia entrou por algum lado"
+
+
+def test_preparar_codigo_diz_de_que_release_o_codigo_veio(tmp_path,
+                                                          monkeypatch):
+    """A outra metade: de nada adianta `_url_do_exe` saber receber a release
+    se quem o chama não disser qual é."""
+    pasta, _ = _fingir_exe(tmp_path, monkeypatch, "v2.0.161", "v1.0.70",
+                           travar="v2.0.161")
+    (pasta / "motor_minimo.txt").write_text("v2.0.161\n", encoding="utf-8")
+
+    recebido = []
+
+    def _falso(minimo, tag=""):
+        recebido.append((minimo, tag))
+        return False                    # recusou: o app abre com o que tem
+
+    monkeypatch.setattr(atualizador, "_oferecer_motor_novo", _falso)
+    atualizador.preparar_codigo()
+    assert recebido == [("v2.0.161", "v2.0.161")], recebido
+
+
+def test_nao_baixa_motor_que_nao_satisfaz_o_minimo(monkeypatch):
+    """A guarda contra o laço, e ela vale mesmo com a release certa.
+
+    Uma release cujo `motor_minimo.txt` aponta ACIMA dela mesma (o "chutar
+    para cima" da regra de ouro) pede um motor que não existe: baixar seria
+    trocar o exe por um que continua abaixo do mínimo, e perguntar de novo na
+    abertura seguinte. Aqui o app não baixa nada, não troca nada, e diz no log
+    o que precisa ser feito."""
+    registro = []
+    monkeypatch.setattr(atualizador, "_logar", registro.append)
+    falso = _GitHubFalso(_A_PREVIA_QUE_EXIGE_MOTOR)
+    monkeypatch.setitem(sys.modules, "requests", falso)
+
+    assert atualizador._oferecer_motor_novo("v2.0.161", "v2.0.120") is False
+    assert falso.urls == [], "pediu à rede: são 152 MB para não servir"
+    dito = "\n".join(registro)
+    assert "v2.0.161" in dito and "v2.0.120" in dito, dito
+    assert "não vou baixar" in dito and "laço" in dito, dito
+
+
+def test_release_do_codigo_sem_o_exe_diz_qual_release_e_nao_baixa(monkeypatch):
+    """Build que publicou o codigo.zip e morreu antes do executável. O erro
+    tem de dizer QUAL release está incompleta — "a release mais nova" não
+    aponta para nada quando a release do código não é a mais nova."""
+    falso = _GitHubFalso([_release("v2.0.161", previa=True, com_exe=False),
+                          _release("v2.0.120")])
+    monkeypatch.setitem(sys.modules, "requests", falso)
+    with pytest.raises(RuntimeError, match="v2.0.161"):
+        atualizador._url_do_exe("v2.0.161")
+    assert not any("/releases/download/" in u for u in falso.urls)
+
+
+class _MessageboxFalso:
+    def __init__(self):
+        self.perguntas = []
+        self.avisos = []
+
+    def askyesno(self, titulo, _texto):
+        self.perguntas.append(titulo)
+        return False                    # "não, obrigado": o app abre como está
+
+    def showwarning(self, titulo, _texto):
+        self.avisos.append(titulo)
+
+
+class _TkinterFalso:
+    """Só o que `_oferecer_motor_novo` usa ANTES de baixar: `Tk()` e o
+    `messagebox`. Existe para exercitar a decisão sem abrir janela nenhuma na
+    máquina de quem roda a suíte."""
+
+    class _Janela:
+        def withdraw(self):
+            pass
+
+        def destroy(self):
+            pass
+
+    def __init__(self):
+        self.messagebox = _MessageboxFalso()
+
+    def Tk(self):
+        return self._Janela()
+
+
+def test_com_a_release_certa_a_guarda_deixa_passar(monkeypatch):
+    """O contraexemplo que dá sentido à guarda: mínimo v2.0.161 e exe vindo da
+    v2.0.161. Ela não pode barrar a troca legítima — que é o caminho de toda
+    máquina quando entra biblioteca nova. Prova de que passou: a pergunta
+    chegou a ser feita."""
+    registro = []
+    monkeypatch.setattr(atualizador, "_logar", registro.append)
+    tk = _TkinterFalso()
+    monkeypatch.setitem(sys.modules, "tkinter", tk)
+    monkeypatch.setitem(sys.modules, "requests",
+                        _GitHubFalso(_A_PREVIA_QUE_EXIGE_MOTOR))
+
+    assert atualizador._oferecer_motor_novo("v2.0.161", "v2.0.161") is False
+    assert tk.messagebox.perguntas, "a guarda barrou a troca legítima"
+    assert any("recusado" in m for m in registro), registro
