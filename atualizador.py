@@ -10,6 +10,13 @@ Atualizador do motor (usado apenas dentro do executável).
   por causa de OneDrive/antivírus).
 Tudo é registrado em "atualizacao.log" ao lado do exe.
 
+**O exe vem da MESMA release do código** (desde 03/09/2026). Quem exige motor
+novo é o `motor_minimo.txt` do código, e quem o satisfaz é o executável
+publicado ao lado dele — na release de onde o código veio, seja ela a `latest`
+ou a que o `travar_versao.txt` mandou buscar. Perguntar de novo ao
+`/releases/latest` nessa hora era pegar o exe de OUTRA release; ver
+`_url_do_exe` e `_oferecer_motor_novo`.
+
 **Como VOLTAR quando uma release sai ruim** — o app se atualiza sozinho, então
 a saída não pode exigir programador. Há duas, e as duas moram ao lado do exe:
 
@@ -127,9 +134,13 @@ def preparar_codigo() -> Path:
 
     minimo = _ler(fonte / "motor_minimo.txt")
     if minimo and _tupla(minimo) > _tupla(v_motor):
-        _logar(f"código {_ler(fonte / 'versao.txt')} exige motor {minimo}; "
+        # A versão do código É a tag da release de onde ele veio — e é dela
+        # que o exe tem de vir. Sem passá-la adiante, o download voltaria a
+        # perguntar ao `/releases/latest`, que é o incidente de 03/09/2026.
+        v_codigo = _ler(fonte / "versao.txt")
+        _logar(f"código {v_codigo} exige motor {minimo}; "
                f"motor atual é {v_motor}")
-        if _oferecer_motor_novo(minimo):
+        if _oferecer_motor_novo(minimo, v_codigo or ""):
             sys.exit(0)                 # o .bat troca o exe e reabre
         fonte = emb                     # recusou/falhou: usa o código de fábrica
     return fonte
@@ -310,20 +321,45 @@ def _baixar_com_progresso(url: str, destino: Path, titulo: str):
     return (not erro), (erro[0] if erro else "")
 
 
-def _url_do_exe() -> tuple[str, str]:
-    """(url, nome) do .exe da release mais nova, pela API.
+def _url_do_exe(release="") -> tuple[str, str]:
+    """(url, nome) do .exe de UMA release, pela API.
+
+    `release` é a TAG da release de onde o código veio (str) — ou o objeto
+    dela já consultado (dict), para quem acabou de perguntar à API e não
+    precisa perguntar de novo. Vazio cai no `/releases/latest`.
+
+    **Qual release, e por que isso não é detalhe** (03/09/2026). Até aqui a
+    resposta era sempre `/releases/latest`, e era certa enquanto `latest` era
+    a release mais nova que existia. O portão mudou isso: a build publica
+    PRÉVIA, e `latest` passou a devolver a última LIBERADA. Com
+    `travar_versao.txt` apontando para uma prévia que exige motor novo, o
+    código vinha da prévia e o exe vinha da liberada — um motor que não
+    satisfaz o mínimo. O app trocava, reabria, continuava abaixo do mínimo e
+    baixava o MESMO arquivo de novo: laço, 152 MB por volta, e a segunda troca
+    caindo em cima do onefile da primeira ainda se extraindo ("Failed to load
+    Python DLL"). Quem exige o motor é o `motor_minimo.txt` do código; quem o
+    satisfaz é o exe publicado ao lado dele, na MESMA release.
 
     Deduzir a URL do nome do arquivo local dava 404 silencioso assim que
     alguém renomeava o executável — e renomear é comum, o app fica numa pasta
     própria e o nome vira o que a pessoa quiser. A release sabe o nome certo."""
     import requests
-    r = requests.get(API_LATEST, timeout=15)
-    r.raise_for_status()
-    for a in (r.json().get("assets") or []):
+    if not isinstance(release, dict):
+        tag = str(release or "").strip()
+        api = (f"https://api.github.com/repos/{REPO}/releases/tags/{tag}"
+               if tag else API_LATEST)
+        r = requests.get(api, timeout=15)
+        r.raise_for_status()
+        release = r.json() or {}
+    for a in (release.get("assets") or []):
         nome = a.get("name") or ""
         if nome.lower().endswith(".exe") and a.get("browser_download_url"):
             return a["browser_download_url"], nome
-    raise RuntimeError("a release mais nova não tem executável publicado")
+    # O NOME da release entra no erro: "a release mais nova" não aponta para
+    # nada quando a release do código não é a mais nova, que é justamente o
+    # estado normal do repositório depois do portão.
+    qual = release.get("tag_name") or "mais nova"
+    raise RuntimeError(f"a release {qual} não tem executável publicado")
 
 
 def _codepage_do_cmd() -> str:
@@ -436,11 +472,36 @@ def script_de_troca(pid: int, novo: Path, exe: Path) -> str:
     )
 
 
-def _oferecer_motor_novo(minimo: str) -> bool:
+def _oferecer_motor_novo(minimo: str, tag: str = "") -> bool:
     """Baixa o exe completo (raro: só quando entra biblioteca nova).
-    Retorna True se a troca foi disparada (o chamador deve encerrar)."""
+    Retorna True se a troca foi disparada (o chamador deve encerrar).
+
+    `tag` é a release de onde o CÓDIGO veio — e, desde 03/09/2026, é dela que
+    o exe vem também (ver `_url_do_exe`). Vazio só quando o código não trouxe
+    `versao.txt`, e aí vale o caminho antigo, a release liberada.
+
+    **Uma troca por abertura, e isso é a forma do chamador.** Quem devolve
+    True já deixou o .bat rodando, e o .bat ESPERA este processo morrer para
+    mover o arquivo; disparar uma segunda troca na mesma execução poria dois
+    `move` sobre o mesmo exe, com o onefile da primeira ainda se extraindo —
+    foi assim que o app morreu com "Failed to load Python DLL" em 03/09/2026.
+    Não há trava escrita aqui porque não há como haver duas: `preparar_codigo`
+    é o único chamador, chama isto UMA vez e sai por `sys.exit(0)`. Quem for
+    chamá-lo de um segundo lugar tem de saber que é essa saída que segura a
+    regra."""
     import tkinter as tk
     from tkinter import messagebox
+
+    # A guarda contra o laço, e ela vem ANTES de qualquer janela: perguntar
+    # "quer baixar 152 MB?" quando o arquivo do outro lado já se sabe pequeno
+    # demais é gastar a paciência de quem responde. O app segue e falha no
+    # import como falharia de qualquer jeito — mas sem consumir a rede e sem
+    # trocar o exe por um que não serve, que é o que fechava o laço.
+    if tag and _tupla(tag) and _tupla(tag) < _tupla(minimo):
+        _logar(f"o código {tag} exige motor {minimo}, e a release de onde o "
+               f"exe viria é a {tag}, menor que {minimo} — não vou baixar, "
+               "para não entrar em laço; peça a liberação/trava certa")
+        return False
 
     raiz = tk.Tk(); raiz.withdraw()
     quer = messagebox.askyesno(
@@ -456,9 +517,9 @@ def _oferecer_motor_novo(minimo: str) -> bool:
 
     exe = Path(sys.executable)
     try:
-        url, nome_release = _url_do_exe()
+        url, nome_release = _url_do_exe(tag)
     except Exception as e:
-        _logar(f"FALHA ao descobrir o exe da release: {e}")
+        _logar(f"FALHA ao descobrir o exe da release {tag or 'liberada'}: {e}")
         raiz = tk.Tk(); raiz.withdraw()
         messagebox.showwarning(
             "Atualização não concluída",

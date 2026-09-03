@@ -94,6 +94,14 @@ assim que se experimenta uma prévia numa máquina ANTES de entregá-la às
 outras, e é a mesma porta por onde se volta de uma release ruim; exige um ato
 humano (criar o arquivo ao lado do exe) e está coberto por teste. Sem rede, o
 caminho de volta é renomear `codigo_velha` para `codigo`.
+**O que essa porta cobrou em 03/09/2026**: travado na prévia v2.0.161, que
+exigia motor novo, o app pegava o código na prévia e o exe no
+`/releases/latest` — a última LIBERADA, a v2.0.120 —, trocava por um motor
+que continuava abaixo do mínimo e baixava os mesmos 152 MB na abertura
+seguinte, em laço, até a segunda troca cair sobre o onefile da primeira
+("Failed to load Python DLL"). Antes do portão isso não existia, porque
+`latest` era sempre a mais nova. Desde o PR do atualizador, o exe vem da MESMA
+release do código e um motor que não satisfaz o mínimo não chega a ser baixado.
 
 O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 `atualizador.py`) e **código** (o resto). Ao abrir, o app baixa só o
