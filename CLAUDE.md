@@ -141,7 +141,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   testes não prova que roda no exe.** O arrasto conta: `urllib.request` traz
   `parse` e `error` junto, mas `tkinter.ttk`/`filedialog`/`messagebox` NÃO
   trazem o `font`. Quem guarda isso é `tests/test_imports_do_motor.py`, que
-  mede o que o exe de fato contém em vez do que o motor escreve. Precisando de
+  mede o que o exe de fato contém em vez do que o motor escreve. Até 03/09/2026 ele só olhava `tkinter` e `urllib`, os dois que já tinham mordido — e a v2.0.159 saiu com `from logging.handlers import RotatingFileHandler` no `util.py` (PR #8): `logging` chegava ao exe arrastado pelo `requests`, o teste de topo o dava como presente, e `logging.handlers` é outro arquivo, que ninguém importava. O app não abriu na máquina do dono, com a trava apontando para a prévia — que é exatamente o momento em que isso tem de aparecer. Hoje o teste olha qualquer `a.b` da biblioteca padrão que o app importe (`test_o_exe_tem_os_submodulos_da_stdlib_que_o_app_usa`). Precisando de
   um submódulo novo: acrescente ao `_garantir_dependencias()` do motor.py e
   suba o `motor_minimo.txt` no MESMO push. Preferir o caminho sem import novo
   quando existir — foi o que salvou este caso (o `_garantir_fontes` fala com o
