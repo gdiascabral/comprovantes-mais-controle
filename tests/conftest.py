@@ -137,7 +137,13 @@ def raiz():
     """Janela invisível, mas MAPEADA (`-alpha 0`, não `withdraw`).
 
     Janela retirada não recebe foco, e sem foco o `event_generate` de tecla
-    não chega ao widget: o teste passaria sem exercitar nada.
+    não chega ao widget: o teste passaria sem exercitar nada. O foco, aliás,
+    vai e vem com o Windows — quem gera tecla usa `teclar`, logo abaixo.
+
+    Ela nasce na metade da tela em que o ponteiro NÃO está
+    (`longe_do_ponteiro`): a janela é invisível, mas a lista da busca e o
+    calendário que os widgets abrem são visíveis, nascem colados nela e
+    respondem ao mouse de verdade.
 
     O `Tk()` nasce dentro de `tcl_com_handles_proprios` — ver o docstring
     dele: sem isso a captura de saída do pytest deixa o Tcl com handles
@@ -154,11 +160,190 @@ def raiz():
         pass
     root.geometry("300x120+0+0")
     root.update()
+    longe_do_ponteiro(root)
     yield root
     try:
         root.destroy()
     except tk.TclError:
         pass
+
+
+# ---------------------------------------------------------- teclas e foco
+# O Tk entrega tecla GERADA a quem tem o foco, e "quem tem o foco" é o que o
+# comando `focus` responde — que fica VAZIO sempre que o Windows tira o foco
+# do app: outra janela em primeiro plano, a Tk da suíte vizinha dando
+# `focus_force`, um clique de quem está usando a máquina. Nesse estado o
+# `event_generate` de tecla é DESCARTADO em silêncio: `TkFocusKeyEvent`
+# devolve NULL, o evento não chega a binding nenhuma e nada avisa. É contrato
+# do Tk, não defeito (`event(n)`: "key events require that the window has
+# focus"), e era por isso que os testes de teclado falhavam de vez em quando
+# com três `pytest` rodando ao lado, ou com o dono trabalhando na máquina
+# (02/09/2026: `test_as_setas_andam_pela_lista…`, `test_digitar_do_zero…`).
+#
+# O que NÃO resolve, para o próximo que for procurar atalho:
+# - `focus_set()` só ANOTA o foco para quando o app o recuperar (é o que
+#   `focus -lastfor` devolve) e não escreve o foco do Tk enquanto o Windows o
+#   tem — a tecla gerada em seguida some. É o caminho de `focar_busca()`.
+# - `event_generate("<FocusIn>")` não engana o Tk: o evento gerado sai
+#   marcado como gerado, e `TkFocusFilterEvent` o repassa às bindings sem
+#   mexer no foco (medido no 8.6.15, que é o desta máquina e o do CI).
+# - `focus_force()` seguido de `update()` ANTES da tecla reabre a janela: o
+#   `update` é justamente onde o FocusOut do Windows é processado.
+# - `update()` DEPOIS da tecla, antes do assert, é a mesma armadilha do outro
+#   lado: a tecla de `teclar` chega (medido: 0 perdidas em 30 sob um ladrão
+#   de foco, em `tk.Entry`, `ttk.Entry` e `ttk.Combobox`), mas o `update`
+#   processa o FocusOut que o Windows enfileirou, e o `<FocusOut>` do PRÓPRIO
+#   widget desfaz o que a tecla fez — `ComboBusca._ao_sair` devolve a lista
+#   inteira, `CampoData._completar_ano` completa o ano. O handler da tecla
+#   roda DENTRO de `teclar` (o `event generate` sem `-when` é síncrono), então
+#   o `update` ali não serve ao que se mede; quem precisa dele (mapear a
+#   lista da busca, deixar a binding de foco pintar) chama e sabe por quê.
+#
+# O que resolve: `focus_force()` escreve o foco do Tk NA HORA (é o único
+# caminho que o faz com o app sem o foco do sistema). As bindings de
+# `<FocusIn>`/`<FocusOut>` que ele enfileira rodam ANTES da tecla, como na
+# vida real (o campo ganha o foco, depois recebe a tecla) — medido o
+# contrário: com o `<FocusIn>` da busca rodando DEPOIS do Enter, ele apagava
+# a dica que o Enter tinha acabado de pôr. Para isso serve-se o que JÁ ESTÁ
+# na fila do Tcl, e nada mais (`_servir_a_fila`): nem `update`, que redesenha,
+# roda o ocioso e lê mensagens novas do Windows — é por aí que o FocusOut
+# entra —, nem `dooneevent` solto, que também lê mensagens novas assim que a
+# fila esvazia. Este segundo foi medido: com três suítes ao mesmo tempo, cada
+# uma via o foco sumir de novo, tomava-o de volta (tirando-o das outras) e o
+# laço virava tempestade — 3 a 12 falhas por rodada, com vinte tentativas.
+# Daí a SENTINELA: um evento virtual posto no fim da fila e `dooneevent` até
+# ele chegar; tudo o que estava antes roda, a fila nunca esvazia e nenhuma
+# mensagem nova é lida. Servida a fila, o foco é conferido DE NOVO, e só
+# então a tecla é gerada. Um FocusOut que o Windows já tenha mandado só será
+# visto no próximo `update` do teste — e o Tk ainda o descarta como velho
+# quando é anterior ao serial que o `focus_force` gravou.
+# `tests/test_teclar.py` reencena o roubo com `SetFocus(NULL)` e prova as
+# duas metades: a tecla crua some, a de `teclar` chega.
+
+def _foco_do_tk(widget) -> str:
+    """O caminho de quem tem o foco, ou "" quando o app não o tem.
+
+    Pelo Tcl e não por `focus_get()`, que converte o nome em widget e estoura
+    com `KeyError` quando o foco está numa janela que o tkinter não conhece
+    (o popdown do Combobox, por exemplo)."""
+    return str(widget.tk.call("focus"))
+
+
+def _servir_a_fila(widget) -> None:
+    """Roda o que JÁ está na fila do Tcl — as bindings de foco que o
+    `focus_force` acabou de enfileirar — e nada mais: nenhuma mensagem nova do
+    Windows é lida (ver o bloco acima, e a tempestade que o `dooneevent` solto
+    fez). A sentinela é um evento virtual posto no FIM da fila; serve-se um
+    evento por vez até ela chegar."""
+    import _tkinter
+    chegou = []
+    fid = widget.bind("<<FimDaFila>>", lambda _e: chegou.append(1), add="+")
+    try:
+        widget.event_generate("<<FimDaFila>>", when="tail")
+        for _ in range(200):
+            if chegou:
+                return
+            widget.tk.dooneevent(_tkinter.DONT_WAIT | _tkinter.WINDOW_EVENTS)
+        raise AssertionError(
+            "a sentinela não chegou em 200 eventos: a fila do Tcl está "
+            "maior do que este helper supõe")
+    finally:
+        widget.unbind("<<FimDaFila>>", fid)
+
+
+def focar(widget) -> None:
+    """Põe o foco em `widget` do jeito que o Tk enxerga, deixa as bindings de
+    foco rodarem, e confere.
+
+    Não custa nada quando o foco já está lá; quando o Windows o levou, toma-o
+    de volta com `focus_force`. A conferência é o que separa "não exercitou
+    nada" de "provou": widget que o Tk não aceita como foco (sem `pack`, ou
+    empacotado sem `update`, que deixa o foco para quando ele aparecer) falha
+    aqui, com nome, e não num assert genérico dez linhas abaixo.
+
+    As bindings de `<FocusIn>` e `<FocusOut>` que o `focus_force` enfileira
+    rodam antes de voltar — só o que já está na fila, sem ler mensagem nova
+    do Windows (`_servir_a_fila`) —, e o foco é conferido DE NOVO depois. Ao
+    voltar, o widget tem o foco E já reagiu a isso, que é o estado em que uma
+    tecla o encontraria; o `cget` que um teste de aparência lê em seguida
+    devolve o que a binding configurou, sem precisar de redesenho."""
+    alvo = str(widget)
+    for _ in range(3):
+        if _foco_do_tk(widget) != alvo:
+            widget.focus_force()
+        assert _foco_do_tk(widget) == alvo, (
+            f"o Tk não pôs o foco em {alvo}: ele está em "
+            f"{_foco_do_tk(widget) or 'lugar nenhum'} — o widget está mapeado?")
+        _servir_a_fila(widget)
+        if _foco_do_tk(widget) == alvo:
+            return
+    raise AssertionError(
+        f"o foco saiu de {alvo} três vezes seguidas enquanto só a fila era "
+        "servida: havia FocusOut do Windows já na fila, com serial novo — o "
+        "que o bloco \"teclas e foco\" do conftest supõe impossível")
+
+
+def teclar(widget, sequencia: str, **campos) -> None:
+    """Gera uma tecla em `widget` e GARANTE que o Tk a entregue a ele.
+
+    É o `event_generate` de sempre — a tecla segue o caminho normal do Tk, com
+    os bindtags, as bindings de classe e o "break" de quem o devolve, então o
+    que o teste prova continua sendo que a binding existe e faz o que faz. O
+    que muda é que a entrega deixa de depender de quem está em primeiro plano
+    no Windows: `focar` confere (ou toma) o foco, deixa as bindings de foco
+    rodarem e confere de novo, e a tecla é gerada em seguida, sem volta ao
+    laço de eventos entre a conferência e o `event generate` — ver o bloco
+    acima."""
+    focar(widget)
+    widget.event_generate(sequencia, **campos)
+
+
+def longe_do_ponteiro(raiz) -> None:
+    """Leva a janela da suíte para a metade da tela em que o ponteiro NÃO está.
+
+    A janela é invisível (`-alpha 0`), mas as janelinhas que os widgets abrem
+    — a lista da busca, o calendário — são visíveis, nascem coladas nela e
+    respondem ao mouse de verdade: com o ponteiro parado em cima da lista, o
+    `<Enter>` da linha realça a linha (é o desenho: mouse e teclado apontam
+    para o mesmo lugar), e `test_as_setas_andam_pela_lista…` viu `_realce` 7
+    em vez de 0 com o dono usando a máquina. Quem gera o `<Enter>` é o Tk,
+    que consulta a posição do ponteiro ao mapear a janela e a cada 250 ms —
+    e ninguém move o ponteiro de ninguém. Move-se a janela.
+
+    Chamada ao nascer a janela e de novo por quem abre lista (a fixture
+    `barra`), porque quem usa a máquina move o mouse no meio da suíte."""
+    import tkinter as tk
+    try:
+        px_, py_ = raiz.winfo_pointerxy()
+        larg_tela, alt_tela = raiz.winfo_screenwidth(), raiz.winfo_screenheight()
+        larg, alt = raiz.winfo_width(), raiz.winfo_height()
+    except tk.TclError:
+        return
+    if px_ < 0 or py_ < 0:                # ponteiro noutro monitor: tanto faz
+        return
+    x = 0 if px_ > larg_tela // 2 else max(larg_tela - larg - 40, 0)
+    y = 0 if py_ > alt_tela // 2 else max(alt_tela - alt - 40, 0)
+    raiz.geometry(f"+{x}+{y}")
+    raiz.update()
+
+
+# As três como fixture, que é como um teste pede coisa ao conftest —
+# importá-lo funciona hoje só porque `tests/` não é pacote e o modo de import
+# do pytest o põe no caminho, e isso não é contrato.
+
+@pytest.fixture(name="teclar")
+def _teclar():
+    return teclar
+
+
+@pytest.fixture(name="focar")
+def _focar():
+    return focar
+
+
+@pytest.fixture(name="longe_do_ponteiro")
+def _longe_do_ponteiro():
+    return longe_do_ponteiro
 
 
 # ------------------------------------------------------------------ atividade

@@ -36,47 +36,44 @@ def campo(raiz):
     raiz.update()
 
 
-def _digitar(campo, root, texto, no_fim=True):
-    # `focus_force` é obrigatório: evento de tecla gerado por `event_generate`
-    # só chega ao widget que tem o foco, e sem ele o teste passaria por não
-    # exercitar nada.
-    campo.ent.focus_force()
+def _digitar(teclar, campo, _root, texto, no_fim=True):
+    # `teclar`, e não `event_generate` cru: tecla gerada só chega a quem tem o
+    # foco, e o foco do sistema vai e vem com o Windows — sem a garantia, o
+    # teste passaria (ou falharia) por não exercitar nada. E nenhum `update`
+    # entre uma tecla e outra: a máscara roda dentro de `teclar`, e o `update`
+    # é onde o FocusOut do Windows entra e o `<FocusOut>` do campo completa o
+    # ano no meio da digitação ("05/09" virava "05/09/2026"). Ver o conftest.
     if no_fim:
         campo.ent.icursor("end")
     for ch in texto:
         campo.ent.insert("insert", ch)
-        campo.ent.event_generate("<KeyRelease>", keysym=ch)
-        root.update()
+        teclar(campo.ent, "<KeyRelease>", keysym=ch)
 
 
 # ------------------------------------------------------------------ máscara
-def test_digitar_do_zero_ganha_as_barras(campo):
+def test_digitar_do_zero_ganha_as_barras(campo, teclar):
     c, var, root = campo
     var.set("")
-    _digitar(c, root, "05082026")
+    _digitar(teclar, c, root, "05082026")
     assert var.get() == "05/08/2026"
 
 
-def test_editar_no_meio_nao_destroi_a_data(campo):
+def test_editar_no_meio_nao_destroi_a_data(campo, teclar):
     """O defeito de 11/08/2026: com "01/08/2026" e o cursor no começo,
     digitar "0" virava "00/10/8202" — a máscara remontava o campo inteiro."""
     c, var, root = campo
-    c.ent.focus_force()
     c.ent.icursor(0)
     c.ent.insert(0, "0")
-    c.ent.event_generate("<KeyRelease>", keysym="0")
-    root.update()
+    teclar(c.ent, "<KeyRelease>", keysym="0")
     assert var.get() == "001/08/2026", (
         "a máscara mexeu no texto com o cursor no meio: " + var.get())
     assert "8202" not in var.get()
 
 
-def test_apagar_no_meio_nao_remonta(campo):
+def test_apagar_no_meio_nao_remonta(campo, teclar):
     c, var, root = campo
-    c.ent.focus_force()
     c.ent.icursor(3)
-    c.ent.event_generate("<KeyRelease>", keysym="BackSpace")
-    root.update()
+    teclar(c.ent, "<KeyRelease>", keysym="BackSpace")
     assert var.get() == "01/08/2026"
 
 
@@ -184,7 +181,7 @@ def test_clique_simples_abre_o_calendario(campo):
     assert c._popup is not None
 
 
-def test_com_o_calendario_aberto_o_campo_continua_editavel(campo):
+def test_com_o_calendario_aberto_o_campo_continua_editavel(campo, teclar):
     """A outra metade do contrato: digitar fecha o popup e o texto entra."""
     c, var, root = campo
     c._ao_clicar()
@@ -195,7 +192,7 @@ def test_com_o_calendario_aberto_o_campo_continua_editavel(campo):
     # mesmos oito dígitos e o valor não muda — o teste passaria sem provar que
     # a tecla chegou ao campo.
     var.set("")
-    _digitar(c, root, "0509")
+    _digitar(teclar, c, root, "0509")
     assert c._popup is None, (
         "o calendário sobreviveu à digitação: a próxima tecla vai para ele, "
         "que é exatamente a regressão de 11/08/2026")
@@ -393,23 +390,21 @@ def test_o_tab_passa_por_cada_item_do_menu(coluna):
 
 
 @pytest.mark.parametrize("tecla", ["<Return>", "<space>"])
-def test_enter_e_espaco_abrem_a_aba(coluna, tecla):
+def test_enter_e_espaco_abrem_a_aba(coluna, tecla, teclar):
     """As duas teclas fazem o que o clique faz — e é o MESMO comando.
 
     Um caminho só, de propósito: com dois, existiria a chance de o teclado
     abrir uma aba e o mouse abrir outra."""
     pai, itens, contagem = coluna
     alvo = itens[1]                       # "Anexar"
-    alvo.focus_force()
-    pai.update()
-    alvo.event_generate(tecla)
+    teclar(alvo, tecla)
     pai.update()
     assert contagem["anx"] == 1, f"{tecla} não acionou o item com o foco"
     assert contagem["ini"] == 0 and contagem["rel"] == 0, (
         "a tecla acionou um item que não era o do foco")
 
 
-def test_o_item_com_foco_nao_se_parece_com_o_sem_foco(coluna):
+def test_o_item_com_foco_nao_se_parece_com_o_sem_foco(coluna, focar):
     """Foco que não aparece na tela não serve para quem navega por Tab.
 
     Quem carrega o sinal é o ANEL (`highlightcolor`, na cor `marca`) e o
@@ -425,11 +420,12 @@ def test_o_item_com_foco_nao_se_parece_com_o_sem_foco(coluna):
                 str(it.cget("highlightcolor")),
                 str(it.cget("highlightbackground")))
 
-    itens[0].focus_force()
-    pai.update()
+    # `focar` devolve com as bindings de foco já rodadas e o foco conferido
+    # depois delas: é a aparência DE QUEM TEM O FOCO que se mede, e não a de
+    # quem o teve por um instante antes de o Windows o levar. Ver o conftest.
+    focar(itens[0])
     sem_foco = aparencia(alvo)
-    alvo.focus_force()
-    pai.update()
+    focar(alvo)
     com_foco = aparencia(alvo)
 
     assert com_foco != sem_foco, (
@@ -455,12 +451,10 @@ def test_o_item_aberto_tambem_mostra_o_foco(coluna):
             != str(alvo.cget("highlightbackground")))
 
 
-def test_o_teclado_e_o_clique_chamam_o_mesmo_comando(coluna):
+def test_o_teclado_e_o_clique_chamam_o_mesmo_comando(coluna, teclar):
     pai, itens, contagem = coluna
     alvo = itens[2]
-    alvo.focus_force()
-    pai.update()
-    alvo.event_generate("<Return>")
+    teclar(alvo, "<Return>")
     alvo._clique()                        # o caminho do mouse
     pai.update()
     assert contagem["rel"] == 2
@@ -532,9 +526,14 @@ TELAS_DO_MENU = ("Início", "Baixar Comprovantes", "Separar e Renomear",
 
 
 @pytest.fixture
-def barra(raiz):
+def barra(raiz, longe_do_ponteiro):
     """A barra de cima com as doze telas, do jeito que o app a alimenta:
-    pares (nome, comando), e o comando é o que abre a tela."""
+    pares (nome, comando), e o comando é o que abre a tela.
+
+    A janela sai de perto do ponteiro antes: a lista que a busca abre é
+    visível e responde ao mouse de verdade — parado em cima dela, o `<Enter>`
+    da linha muda o `_realce` (ver `longe_do_ponteiro` no conftest)."""
+    longe_do_ponteiro(raiz)
     b = widgets.BarraTopo(raiz)
     b.pack(fill="x")
     abertas = []
@@ -550,13 +549,18 @@ def barra(raiz):
     raiz.update()
 
 
-def _buscar(b, raiz, texto: str):
+def _buscar(teclar, b, raiz, texto: str):
     """Digita no campo como quem digita: Ctrl+K, o texto, e a tecla solta que
-    é o que dispara o filtro."""
+    é o que dispara o filtro.
+
+    `focar_busca` põe o foco com `focus_set`, que não escreve o foco do Tk
+    enquanto o Windows o tem noutra janela — e aí a tecla solta gerada some,
+    o filtro não roda e a lista fica com as doze telas. `teclar` toma o foco
+    de volta antes de gerar, quando é preciso; ver o conftest."""
     b.focar_busca()
     b.busca.delete(0, "end")
     b.busca.insert(0, texto)
-    b.busca.event_generate("<KeyRelease>")
+    teclar(b.busca, "<KeyRelease>")
     raiz.update()
 
 
@@ -584,10 +588,11 @@ def test_a_dica_promete_so_o_que_o_campo_faz(barra):
     # Pedaço em qualquer posição, e não só o começo do nome.
     ("sicoob", "Extratos Sicoob"),
 ])
-def test_o_enter_pula_para_a_primeira_tela_que_bate(barra, termo, esperada):
+def test_o_enter_pula_para_a_primeira_tela_que_bate(barra, teclar, termo,
+                                                     esperada):
     b, abertas, raiz = barra
-    _buscar(b, raiz, termo)
-    b.busca.event_generate("<Return>")
+    _buscar(teclar, b, raiz, termo)
+    teclar(b.busca, "<Return>")
     raiz.update()
     assert abertas == [esperada], (
         f"{termo!r} devia abrir {esperada!r} e abriu {abertas}")
@@ -596,61 +601,75 @@ def test_o_enter_pula_para_a_primeira_tela_que_bate(barra, termo, esperada):
     assert b.busca.get() == widgets.BarraTopo.DICA
 
 
-def test_texto_sem_par_nao_move_o_foco(barra):
+def test_texto_sem_par_nao_move_o_foco(barra, teclar):
     """Não achar nada e "achar a tela errada" precisam ser distinguíveis. Sem
     par, o Enter não abre nada e o foco fica onde está — e a lista diz isso em
     letras, em vez de sumir (campo que não responde parece travado)."""
     b, abertas, raiz = barra
-    _buscar(b, raiz, "xablau")
+    _buscar(teclar, b, raiz, "xablau")
     assert b._achados == []
     assert b._popup is not None, "a lista sumiu em vez de dizer que não achou"
     textos = [str(w.cget("text")) for w in b._moldura.winfo_children()]
     assert any("Nenhuma tela" in t for t in textos), textos
 
-    b.busca.event_generate("<Return>")
+    teclar(b.busca, "<Return>")
     raiz.update()
     assert abertas == []
-    assert str(raiz.focus_get()) == str(b.busca), (
+    # `focus_lastfor` e não `focus_get`: o primeiro é o que a JANELA guarda, o
+    # segundo é quem está com o foco do WINDOWS agora, e responde vazio sempre
+    # que outra janela passa para o primeiro plano no meio da suíte (mesma
+    # escolha do `test_visual.py`). A segunda linha fecha o que o `lastfor` da
+    # janela não vê: a lista é outra janela, e o foco não pode ter ido para lá.
+    assert str(raiz.focus_lastfor()) == str(b.busca), (
         "sem tela que bata, o Enter mexeu no foco")
+    assert str(b._popup.focus_lastfor()) == str(b._popup), (
+        "sem tela que bata, o Enter levou o foco para dentro da lista")
 
 
-def test_o_esc_limpa_e_devolve_o_foco_de_onde_ele_veio(barra):
+def test_o_esc_limpa_e_devolve_o_foco_de_onde_ele_veio(barra, teclar, focar):
     """O Ctrl+K vale com o foco em qualquer lugar, inclusive no meio de um
     campo pela metade. Desistir tem de deixar a pessoa onde ela estava."""
     b, abertas, raiz = barra
     campo = tk.Entry(raiz)
     campo.pack()
     campo.insert(0, "01/08/2026")
-    campo.focus_force()
     raiz.update()
 
-    _buscar(b, raiz, "rem")
-    assert str(raiz.focus_get()) == str(b.busca)
+    # `focar_busca` pergunta ao Tk quem tem o foco para saber a quem devolvê-lo,
+    # e a resposta é vazia sempre que o Windows o tem noutra janela. Por isso
+    # o foco vai para o campo IMEDIATAMENTE antes do Ctrl+K, sem `update` no
+    # meio — é no `update` que o Windows o leva.
+    focar(campo)
+    _buscar(teclar, b, raiz, "rem")
+    assert str(raiz.focus_lastfor()) == str(b.busca)
 
-    b.busca.event_generate("<Escape>")
+    teclar(b.busca, "<Escape>")
     raiz.update()
     assert abertas == [], "o Esc abriu uma tela"
     assert b.busca.get() == widgets.BarraTopo.DICA
     assert b._popup is None, "a lista continuou aberta depois do Esc"
-    assert str(raiz.focus_get()) == str(campo), (
+    # `focus_lastfor`: o que a janela guarda, e não o foco do Windows agora —
+    # ver `test_texto_sem_par_nao_move_o_foco`. Sem a lista (linha acima), a
+    # janela da suíte é a única, e o `lastfor` dela é a resposta inteira.
+    assert str(raiz.focus_lastfor()) == str(campo), (
         "o Esc não devolveu o foco ao campo que estava sendo preenchido")
     campo.destroy()
 
 
-def test_as_setas_andam_pela_lista_e_o_enter_abre_a_realcada(barra):
+def test_as_setas_andam_pela_lista_e_o_enter_abre_a_realcada(barra, teclar):
     b, abertas, raiz = barra
-    _buscar(b, raiz, "s")                 # bate em várias
+    _buscar(teclar, b, raiz, "s")         # bate em várias
     assert len(b._achados) > 1
     primeira, segunda = b._achados[0][0], b._achados[1][0]
     assert b._realce == 0
-    b.busca.event_generate("<Down>")
+    teclar(b.busca, "<Down>")
     raiz.update()
-    b.busca.event_generate("<Return>")
+    teclar(b.busca, "<Return>")
     raiz.update()
     assert abertas == [segunda] and abertas != [primeira]
 
 
-def test_a_busca_abre_a_tela_pelo_mesmo_caminho_do_clique(raiz):
+def test_a_busca_abre_a_tela_pelo_mesmo_caminho_do_clique(raiz, teclar):
     """Um caminho só: o comando que a barra guarda é o `acionar` do próprio
     `ItemMenu`. Com dois, existiria a chance de a busca abrir uma tela e o
     clique abrir outra."""
@@ -667,8 +686,8 @@ def test_a_busca_abre_a_tela_pelo_mesmo_caminho_do_clique(raiz):
     raiz.update()
     try:
         item._clique()                    # o caminho do mouse
-        _buscar(b, raiz, "remessa")
-        b.busca.event_generate("<Return>")
+        _buscar(teclar, b, raiz, "remessa")
+        teclar(b.busca, "<Return>")
         raiz.update()
         assert contagem["n"] == 2, (
             "a busca não passou pelo mesmo comando que o clique")
@@ -679,7 +698,7 @@ def test_a_busca_abre_a_tela_pelo_mesmo_caminho_do_clique(raiz):
         raiz.update()
 
 
-def test_sem_telas_definidas_a_busca_nao_abre_lista(raiz):
+def test_sem_telas_definidas_a_busca_nao_abre_lista(raiz, teclar):
     """A barra nasce antes de o menu existir — ela é a primeira coisa que o
     `main()` empacota. Até `definir_telas` ser chamada não há para onde ir, e
     abrir uma lista vazia diria que o app não tem telas."""
@@ -689,10 +708,10 @@ def test_sem_telas_definidas_a_busca_nao_abre_lista(raiz):
     try:
         b.focar_busca()
         b.busca.insert(0, "rem")
-        b.busca.event_generate("<KeyRelease>")
+        teclar(b.busca, "<KeyRelease>")
         raiz.update()
         assert b._popup is None
-        b.busca.event_generate("<Return>")
+        teclar(b.busca, "<Return>")
         raiz.update()                     # e não estoura
     finally:
         b._fechar_lista()
@@ -700,12 +719,12 @@ def test_sem_telas_definidas_a_busca_nao_abre_lista(raiz):
         raiz.update()
 
 
-def test_trocar_de_tema_fecha_a_lista(barra):
+def test_trocar_de_tema_fecha_a_lista(barra, teclar):
     """A lista lê a paleta ao nascer e vive o tempo de uma digitação: repintá-la
     custaria mais do que redesenhá-la na próxima tecla — a mesma decisão do
     calendário do `CampoData`."""
     b, _, raiz = barra
-    _buscar(b, raiz, "a")
+    _buscar(teclar, b, raiz, "a")
     assert b._popup is not None
     b.aplicar_cores(True)
     raiz.update()

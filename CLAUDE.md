@@ -1272,6 +1272,52 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   docstring da função e `tests/test_raiz.py` contam o resto. Teste de
   interface que morre com `invalid command name` num proc do Tk, ou num
   `source` de `.tcl`, é para desconfiar da captura antes do teste.
+  **Tecla gerada em teste passa por `teclar`, nunca por `event_generate`
+  cru.** O Tk entrega tecla gerada a quem tem o foco, e "quem tem o foco" é o
+  `focus`, que fica VAZIO sempre que o Windows leva o foco para outra janela
+  — a Tk da suíte vizinha, um clique de quem usa a máquina. Aí a tecla é
+  descartada em silêncio (é contrato do Tk, `event(n)`), e era a segunda
+  família de intermitência da suíte, a que o PR #41 deixou explicitamente de
+  fora: `test_as_setas_andam_pela_lista…`, `test_digitar_do_zero…`. Três
+  coisas medidas antes de escolher o conserto, e que o bloco "teclas e foco"
+  do conftest guarda: `focus_set` só ANOTA o foco para quando o app o
+  recuperar (é o `focus -lastfor`) e não o escreve enquanto o Windows o tem —
+  é o caminho de `focar_busca()`; `event_generate("<FocusIn>")` não engana o
+  Tk 8.6.15, que marca o evento como gerado e não mexe no foco; e
+  `focus_force` seguido de `update` ANTES da tecla reabre a janela, porque é
+  no `update` que o FocusOut do Windows é processado — e `update` DEPOIS da
+  tecla, antes do assert, é a mesma armadilha do outro lado: a tecla chega,
+  mas o `<FocusOut>` do próprio widget desfaz o que ela fez (`_ao_sair` do
+  `ComboBusca` devolve a lista inteira, `_completar_ano` do `CampoData`
+  completa o ano). `teclar` confere (ou
+  toma, com `focus_force`) o foco, deixa as bindings de foco rodarem ANTES
+  da tecla — só o que já está na fila do Tcl, até uma sentinela posta no fim
+  dela, porque o `<FocusIn>` da busca rodando DEPOIS do Enter apagava a dica
+  que o Enter tinha posto, e porque `update` ou `dooneevent` solto leem
+  mensagens novas do Windows (medido: com três suítes roubando o foco umas
+  das outras, o `dooneevent` solto virou tempestade, 3 a 12 falhas por
+  rodada) — e confere o foco de novo imediatamente antes do `event
+  generate`; a tecla continua seguindo o caminho normal do Tk (bindtags,
+  bindings de classe, `break`), então o que o teste prova não muda. `focar`
+  sozinho é o que os testes de APARÊNCIA do foco (o anel do `ItemMenu`)
+  usam: devolve com o widget focado e já reagindo a isso. Asserção sobre
+  "quem ficou com o foco" é por
+  `focus_lastfor` (o que a janela guarda) e não `focus_get` (o foco do
+  Windows agora), como o `test_visual.py` já fazia. Quem reencena o roubo,
+  sem outro processo, é `tests/test_teclar.py`, com `SetFocus(NULL)`: a tecla
+  crua some, a de `teclar` chega. **E o `_realce` 7 da evidência não era o
+  foco, era o mouse**: a lista da busca é uma janela visível que nasce colada
+  à janela invisível da suíte, e com o ponteiro parado em cima dela o
+  `<Enter>` da linha realça a linha — por isso a `raiz` nasce, e a fixture
+  `barra` a leva de novo, para a metade da tela em que o ponteiro não está
+  (`longe_do_ponteiro`). Ninguém move o ponteiro de ninguém; move-se a
+  janela. Para reproduzir a família de propósito: três `pytest` ao mesmo
+  tempo não bastam (12 rodadas, zero), porque o Windows recusa
+  `SetForegroundWindow` a processo que não recebeu a última entrada — é
+  preciso um processo à parte tomando o primeiro plano com uma entrada
+  sintética e devolvendo a permissão (`AllowSetForegroundWindow`), que é o
+  vaivém real entre quem usa a máquina e uma suíte lançada do terminal em
+  primeiro plano.
 - **Mudança visual passa pela galeria, antes e depois**:
   `python -m ferramentas.galeria`, as 12 telas nos dois temas, e a comparação é
   o olho de quem mexeu. **Os PNG não vão para o PR** — a tela pode carregar nome
@@ -1587,15 +1633,20 @@ na cabeça de alguém não é pendência, é esquecimento:
   dois temas, mais a conferência de 0 px na escala de referência. Ao refazer,
   lembrar que **`--escala` multiplica a escala ATUAL** e que esta máquina está a
   125%: 100% é `--escala 0.8` e 150% é `--escala 1.2`;
-- **o teste do Tab do menu é intermitente**
-  (`tests/test_widgets.py::test_o_tab_passa_por_cada_item_do_menu`): ele chama
-  `focus_force()`, que disputa o foco do Windows com quem estiver usando a
-  máquina, e aí o Tk levanta `_tkinter.TclError`. Medido em 02/09: falhou em
-  duas de quatro rodadas da suíte inteira com a máquina em uso, e passa sempre
-  rodando o arquivo sozinho. O que ele prova é legítimo e tem de continuar —
-  `tk_focusNext` é a mesma travessia que a tecla Tab usa. **Correção em
-  andamento em sessão do dono.** Teste que falha por causa do ambiente ensina a
-  ignorar teste vermelho, que é o custo real;
+- **a intermitência dos testes de interface teve DUAS causas, e as duas estão
+  fechadas.** O Tab do menu (`test_o_tab_passa_por_cada_item_do_menu`) morria
+  com `invalid command name "tk_focusNext"`, e era a captura de saída do
+  pytest fechando handles do Tcl — `tcl_com_handles_proprios` no conftest,
+  PR #41. Sobrava a família das TECLAS: `event_generate` de tecla descartado
+  quando o Windows leva o foco entre uma chamada e outra, mais o ponteiro do
+  mouse parado sobre a lista da busca — `teclar`/`focar`/`longe_do_ponteiro`
+  no conftest e `tests/test_teclar.py` (ver "Teste de interface usa a fixture
+  `raiz`", em Desenvolvimento). O que fica: o `focus_force` de `teclar` ainda
+  chama `SetForegroundWindow`, então a suíte continua disputando o primeiro
+  plano com quem usa a máquina (e quem digita nesse instante digita na janela
+  invisível da suíte) — é o único jeito que o Tk 8.6 dá de escrever o foco
+  sem o consentimento do Windows, e trocá-lo exigiria um Tk que aceitasse
+  `<FocusIn>` gerado;
 - **os consumidores 4 a 8 do ERP** — `aportes/mc_catalogos.py` +
   `aportes/erp_sessao.py`; `conciliacao/erp/payments.py`, cuja grade raspada
   tem endpoint REST equivalente (`payable-installments/paginated-result`, que
