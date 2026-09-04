@@ -407,7 +407,11 @@ def _fingir_exe(tmp_path, monkeypatch, v_codigo, v_embutida, travar=None):
                                                    encoding="utf-8")
     monkeypatch.setattr(sys, "executable", str(exe_dir / "app.exe"))
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "mei"), raising=False)
-    monkeypatch.setattr(atualizador, "_atualizar_codigo", lambda *_: None)
+    monkeypatch.setattr(atualizador, "_atualizar_codigo", lambda *_, **__: None)
+    # Sem trava, `preparar_codigo` dispara uma thread de download no fim; um
+    # teste que não fala de rede não pode deixar essa thread solta.
+    monkeypatch.setattr(atualizador, "_iniciar_download_em_segundo_plano",
+                        lambda *_: None)
     monkeypatch.setattr(atualizador, "_logar", lambda *_: None)
     return exe_dir / "codigo", emb
 
@@ -621,6 +625,11 @@ def test_sem_nenhuma_liberada_o_app_abre_com_o_que_tem(tmp_path, monkeypatch):
     falso = _GitHubFalso([_release("v1.0.79", previa=True),
                           _release("v1.0.78", previa=True)])
     monkeypatch.setitem(sys.modules, "requests", falso)
+    # Desde 04/09/2026 a rede é consultada em segundo plano, DEPOIS de a
+    # fonte estar escolhida. Aqui a thread vira chamada direta, para o teste
+    # continuar medindo o mesmo: a 404 do `latest` é engolida e registrada.
+    monkeypatch.setattr(atualizador, "_iniciar_download_em_segundo_plano",
+                        atualizador._baixar_em_segundo_plano)
 
     assert atualizador.preparar_codigo() == pasta
     assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.77"

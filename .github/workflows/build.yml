@@ -2,6 +2,11 @@ name: Gerar o executável (Windows)
 
 on:
   workflow_dispatch:      # permite rodar manualmente na aba Actions
+    inputs:
+      forcar_exe:
+        description: "Gerar o exe do zero, mesmo que o motor nao tenha mudado"
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths-ignore:
@@ -42,6 +47,13 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.11"
+          # Cache do pip por hash do lock e do dev: as 23 wheels do lock
+          # caíam de novo em toda build. A chave só muda quando um dos
+          # dois arquivos muda.
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            requirements-dev.txt
 
       # `requirements.lock` e NÃO `requirements.txt`: o .txt é a INTENÇÃO
       # (faixas), o .lock é o FATO (versão exata + hash). Instalando da faixa,
@@ -230,6 +242,74 @@ jobs:
       - name: Baixar o código
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
+      # ----------------------------------------------------- reaproveitar o exe?
+      # O exe só depende de QUATRO arquivos: `motor.py`, `atualizador.py`,
+      # `requirements.lock` (o que entra) e este workflow (como entra). Um push
+      # que não toca em nenhum deles produziria, byte a byte, o mesmo exe da
+      # build anterior — e pagava por ele os ~4 min do PyInstaller e o Tesseract
+      # do Chocolatey a cada correção de aba. Desde 04/09/2026 a build ASSINA
+      # cada release com a impressão digital desses quatro (o asset
+      # `motor-<sha256>.txt`, cujo CONTEÚDO é a versão do exe de verdade) e, ao
+      # encontrar uma release com a mesma assinatura, baixa o exe DELA em vez de
+      # gerar outro. A impressão sai dos blob-ids do git (`git ls-tree`), e não
+      # do conteúdo lido do disco: o checkout no Windows pode trocar fim de
+      # linha, e um hash que muda com o runner não reconhece nada.
+      #
+      # Quem NÃO cai aqui: mudou qualquer um dos quatro, `workflow_dispatch` com
+      # `forcar_exe`, ou nenhuma release ainda publicada tem a assinatura (a
+      # poda de 30 dias as leva). Aí é a build completa de sempre. A sequência é
+      # auto-corretiva: uma build que falhou DEPOIS de mexer no motor não deixa
+      # assinatura nenhuma, então o push seguinte não tem o que reaproveitar
+      # por engano.
+      #
+      # Rascunho fica de fora; prévia ENTRA de propósito — o exe dela é tão bom
+      # quanto o de uma liberada, e é o caso normal entre dois pushes.
+      - name: Decidir entre gerar o exe e reaproveitar o da release anterior
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCAR_EXE: ${{ github.event.inputs.forcar_exe }}
+        run: |
+          $arquivos = @("motor.py", "atualizador.py", "requirements.lock", ".github/workflows/build.yml")
+          $blobs = @(git ls-tree HEAD -- $arquivos)
+          if ($blobs.Count -ne $arquivos.Count) {
+            Write-Host "::error::git ls-tree devolveu $($blobs.Count) linhas para $($arquivos.Count) arquivos:"
+            $blobs | ForEach-Object { Write-Host "::error::  $_" }
+            exit 1
+          }
+          $texto = ($blobs | Sort-Object) -join "`n"
+          $sha = [System.Security.Cryptography.SHA256]::Create()
+          $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($texto))
+          $hash = ([System.BitConverter]::ToString($bytes) -replace "-", "").ToLower()
+          "MOTOR_HASH=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "impressao digital do motor: $hash"
+
+          $reusar = ""
+          $versao_motor = "v2.0.${{ github.run_number }}"
+          if ("$env:FORCAR_EXE" -eq "true") {
+            Write-Host "::notice::forcar_exe ligado - o exe sera gerado do zero"
+          } else {
+            $assinatura = "motor-$hash.txt"
+            $rels = gh api "repos/${{ github.repository }}/releases?per_page=100" | ConvertFrom-Json
+            $cands = @($rels | Where-Object {
+              $rel = $_
+              (-not $rel.draft) -and
+              ($rel.tag_name -match '^v\d+\.\d+\.\d+$') -and
+              (@($rel.assets | Where-Object { $_.name -eq $assinatura }).Count -gt 0) -and
+              (@($rel.assets | Where-Object { $_.name -like "*.exe" }).Count -gt 0)
+            } | Sort-Object -Property @{Expression={[version]($_.tag_name.TrimStart('v'))}} -Descending)
+            if ($cands.Count -gt 0) {
+              $reusar = $cands[0].tag_name
+              $onde = Join-Path $env:RUNNER_TEMP "assinatura"
+              gh release download $reusar --repo "${{ github.repository }}" --pattern $assinatura --dir $onde
+              $versao_motor = (Get-Content (Join-Path $onde $assinatura) -Raw).Trim()
+              Write-Host "::notice::o motor nao mudou desde a release $reusar - o exe dela ($versao_motor) sera reaproveitado"
+            } else {
+              Write-Host "::notice::nenhuma release publicada tem este motor - o exe sera gerado do zero"
+            }
+          }
+          "REUSAR_TAG=$reusar" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "MOTOR_VERSAO=$versao_motor" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       # A trava do job `motor` confere que o arquivo foi TOCADO; ninguém confere
       # o que está escrito dentro dele. E o número certo é impossível de saber
       # na hora de escrever: a release é `v2.0.<run_number>`, e o run_number só
@@ -238,36 +318,55 @@ jobs:
       # pergunta de novo na abertura seguinte. Laço infinito, em todas as
       # máquinas, e a única saída é publicar outra release. Por isso a build
       # para ANTES de publicar.
-      - name: Conferir o motor_minimo.txt contra a versão desta release
+      #
+      # A régua é a VERSÃO DO EXE que vai na release (`MOTOR_VERSAO`), e não o
+      # número desta build: com o exe reaproveitado os dois diferem, e um mínimo
+      # acima do exe reaproveitado seria o mesmo laço por outra porta — o app
+      # baixaria um motor que continua abaixo do mínimo.
+      - name: Conferir o motor_minimo.txt contra o motor que vai na release
         run: |
           $release = "v2.0.${{ github.run_number }}"
+          $motor = "$env:MOTOR_VERSAO"
           $texto = (Get-Content motor_minimo.txt -Raw).Trim()
           try {
             $minimo = [version]($texto.TrimStart('v'))
-            $atual  = [version]($release.TrimStart('v'))
+            $atual  = [version]($motor.TrimStart('v'))
           } catch {
             Write-Host "::error::motor_minimo.txt tem '$texto', que nao e uma versao."
             Write-Host "::error::Escreva exatamente $release (ou uma versao anterior)."
             exit 1
           }
           if ($minimo -gt $atual) {
-            Write-Host "::error::motor_minimo.txt exige o motor $texto, mas esta"
-            Write-Host "::error::release e a ${release}. O motor exigido NUNCA vai"
-            Write-Host "::error::existir. O app entraria em laco - oferece 152 MB,"
-            Write-Host "::error::baixa, continua abaixo do minimo e pergunta de novo."
-            Write-Host "::error::Corrija motor_minimo.txt para $release e suba de novo"
-            Write-Host "::error::(lembre que esta build ja consumiu o numero: a"
-            Write-Host "::error::proxima release sera a seguinte)."
+            Write-Host "::error::motor_minimo.txt exige o motor $texto, mas o exe"
+            Write-Host "::error::desta release e o $motor (a release e a $release)."
+            if ("$env:REUSAR_TAG" -ne "") {
+              Write-Host "::error::O exe foi REAPROVEITADO da release $env:REUSAR_TAG porque o"
+              Write-Host "::error::motor nao mudou. Ou o minimo desce para $motor, ou -"
+              Write-Host "::error::se o exe precisa mesmo sair de novo - rode o workflow"
+              Write-Host "::error::pela aba Actions com 'forcar_exe' ligado."
+            } else {
+              Write-Host "::error::O motor exigido NUNCA vai existir. O app entraria em"
+              Write-Host "::error::laco - oferece 152 MB, baixa, continua abaixo do minimo"
+              Write-Host "::error::e pergunta de novo. Corrija motor_minimo.txt para"
+              Write-Host "::error::$release e suba de novo (esta build ja consumiu o"
+              Write-Host "::error::numero: a proxima release sera a seguinte)."
+            }
             exit 1
           }
-          Write-Host "motor_minimo.txt = $texto; release = $release - ok"
+          Write-Host "motor_minimo.txt = $texto; motor da release = $motor; release = $release - ok"
 
+      # Daqui até o PyInstaller, só no trilho COMPLETO: o exe reaproveitado
+      # não precisa de Python, de pip nem de Tesseract no runner.
       - name: Instalar Python
+        if: env.REUSAR_TAG == ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.lock
 
       - name: Instalar dependências
+        if: env.REUSAR_TAG == ''
         run: |
           # Do LOCK, com hash conferido — as mesmas versões que o job `test`
           # acabou de usar. Instalar da faixa aqui deixava o exe publicado
@@ -281,6 +380,7 @@ jobs:
           pip install pyinstaller==6.22.0 pyinstaller-hooks-contrib==2026.6
 
       - name: Instalar Tesseract OCR (com português)
+        if: env.REUSAR_TAG == ''
         run: |
           choco install tesseract -y --no-progress
           $destino = "C:\Program Files\Tesseract-OCR\tessdata\por.traineddata"
@@ -365,7 +465,24 @@ jobs:
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
           "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
 
+      # O Tesseract entra como UM binário na raiz do exe, e não como a pasta
+      # inteira. Até 04/09/2026 era `--add-data "C:\Program Files\Tesseract-OCR;
+      # tesseract"`: o PyInstaller reclassifica todo arquivo de dado que é
+      # binário, analisa as dependências dele e COPIA as DLLs para a raiz — e a
+      # pasta `tesseract/` continuava entrando inteira por cima. Medido no exe
+      # v2.0.163: 118 MB extraídos em duplicidade (44 MB comprimidos), mais
+      # `combine_tessdata.exe`, os `.jar` do ScrollView e os idiomas `eng` e
+      # `osd`, que o OCR em português nunca abre. Com `--add-binary` só do
+      # `tesseract.exe`, a análise de dependências traz exatamente as DLLs que
+      # ele importa (procura na pasta dele), uma vez, para a raiz; o idioma vai
+      # em `tessdata/` ao lado. Quem sabe procurar o exe nos DOIS lugares é
+      # `separar_renomear._configurar_ocr`, porque o codigo.zip roda em exes
+      # das duas gerações.
+      #
+      # `PIL._avif` fora: é o plugin AVIF da Pillow, 4 MB comprimidos, e o app
+      # só converte página de PDF em PNG para o Tesseract ler.
       - name: Gerar "Comprovantes Mais Controle.exe" (motor + código embutido)
+        if: env.REUSAR_TAG == ''
         run: >
           pyinstaller --noconfirm --onefile --noconsole
           --icon "icone.ico"
@@ -378,212 +495,90 @@ jobs:
           --collect-all requests
           --collect-all pytesseract
           --collect-all sv_ttk
-          --add-data "C:\Program Files\Tesseract-OCR;tesseract"
+          --exclude-module PIL._avif
+          --exclude-module PIL.AvifImagePlugin
+          --add-binary "C:\Program Files\Tesseract-OCR\tesseract.exe;."
+          --add-data "C:\Program Files\Tesseract-OCR\tessdata\por.traineddata;tessdata"
           --add-data "versao.txt;."
           --add-data "codigo_embutido;codigo_embutido"
           "motor.py"
 
+      # O trilho do reaproveitamento: o exe da release que tem a mesma
+      # assinatura, baixado no lugar em que o PyInstaller o geraria. O GitHub
+      # troca os espaços do nome do asset por pontos, então o arquivo volta ao
+      # nome que o passo de publicação (e o `_url_do_exe` do atualizador, que
+      # procura pela EXTENSÃO) esperam.
+      - name: Reaproveitar o exe da release anterior
+        if: env.REUSAR_TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $onde = Join-Path $env:RUNNER_TEMP "exe"
+          gh release download "$env:REUSAR_TAG" --repo "${{ github.repository }}" --pattern "*.exe" --dir $onde
+          $baixado = Get-ChildItem $onde -Filter *.exe | Select-Object -First 1
+          if (-not $baixado) {
+            Write-Host "::error::a release $env:REUSAR_TAG nao tem executavel para reaproveitar"
+            exit 1
+          }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Move-Item $baixado.FullName "dist\Comprovantes Mais Controle.exe"
+          $mb = [math]::Round((Get-Item "dist\Comprovantes Mais Controle.exe").Length / 1MB)
+          Write-Host "exe reaproveitado da release $($env:REUSAR_TAG) (motor $($env:MOTOR_VERSAO)): $mb MB"
+
       # A lacuna estrutural desta esteira: os testes rodam na biblioteca padrão
       # COMPLETA da máquina, e o que chega ao usuário é um exe com a stdlib
       # podada pelo PyInstaller, que só embute o que o `motor.py` faz enxergar.
-      # Foi assim que a v1.0.71 caiu (`from tkinter import font`) e é como um
-      # `import difflib` novo cairia hoje. Aqui o app é importado DENTRO de um
-      # exe com exatamente a mesma poda.
+      # Foi assim que a v1.0.71 caiu (`from tkinter import font`) e a v2.0.159
+      # também (`logging.handlers`). Aqui o app é importado DENTRO do exe que
+      # vai ser publicado — o próprio, com `--autoteste`, e não um segundo exe
+      # "de fumaça" construído à parte, como foi até 04/09/2026: com o mesmo
+      # arquivo o grafo é o mesmo por construção, e a build deixa de pagar uma
+      # segunda passada do PyInstaller. O roteiro mora em `motor.autoteste`,
+      # com teste em `tests/test_motor_autoteste.py`.
       #
-      # Por que um segundo exe, e não o que acabou de ser publicado: o
-      # `motor.py` não tem argumento de linha de comando nenhum — rodá-lo abre a
-      # janela e fica lá. O truque é que este exe de fumaça tem `import motor` e
-      # NADA mais no topo, então o grafo que o PyInstaller monta é o MESMO do exe
-      # de verdade; o app é importado depois, em runtime, por nome (o
-      # PyInstaller não segue import dinâmico, então nada entra pela porta dos
-      # fundos). O dia em que o motor ganhar um `--autoteste`, este passo vira
-      # uma linha só, rodando o exe publicado.
+      # A pasta é passada por fora, e não a embutida no exe, de propósito: no
+      # trilho do reaproveitamento o exe é de uma release ANTERIOR e carrega o
+      # código embutido daquela — o que se quer provar é que o código DESTA
+      # release importa dentro do motor que vai com ela, que é exatamente o que
+      # acontece na máquina de quem usa quando o codigo.zip chega sozinho.
       #
-      # O que ele NÃO alcança, e vale saber: import escrito DENTRO de função.
-      # `aportes/mc_catalogos.py` faz `import difflib` no corpo do método, e
-      # importar o módulo não executa o método — esse caso só cai quando a
-      # pessoa usa a função. Quem pode guardá-lo é o AST do
-      # `tests/test_imports_do_motor.py`, que hoje só compara submódulo de
-      # `tkinter` e de `urllib`.
-      - name: Preparar o teste de fumaça (a entrada que importa o app)
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > "$RUNNER_TEMP/fumaca.py" <<'PYFIM'
-          # -*- coding: utf-8 -*-
-          """Entrada do exe de fumaca: importa o app DENTRO da stdlib podada.
-
-          So `motor` no topo, de proposito: e o que faz este exe conter
-          exatamente o mesmo que o exe publicado. Tudo que o app importa entra
-          por `importlib`, em runtime, e o PyInstaller nao enxerga nada disso.
-          Mensagens em ASCII puro: console de exe no Windows nao promete UTF-8.
-          """
-          import ast
-          import importlib
-          import sys
-          from pathlib import Path
-
-          import motor  # noqa: F401  (nao chamar principal(): abriria a janela)
-
-          # `ast` e usado so aqui e nao existe no exe de verdade. Ele arrasta
-          # _ast, enum e contextlib, que o requests ja poe no exe publicado —
-          # entao nao ha como ele mascarar a falta de um modulo do app.
-          CODIGO = Path(getattr(sys, "_MEIPASS", ".")) / "codigo_embutido"
-
-
-          def _caminho():
-              """A MESMA ordem do motor.principal()."""
-              for sub in ("separar_renomear", "anexar", ""):
-                  p = str(CODIGO / sub) if sub else str(CODIGO)
-                  if p not in sys.path:
-                      sys.path.insert(0, p)
-
-
-          def _modulos():
-              """(nome, pasta) de cada .py do pacote, como o app o importa.
-
-              Pasta com __init__.py e pacote (`conciliacao.erp.api`); pasta sem
-              __init__.py tem modulo solto, importado pelo nome cru (`config`,
-              do anexar) -- nome de modulo e global no sys.path, e e por isso
-              que o extratos_sicoob usa o prefixo `sicoob_`.
-              """
-              for arq in sorted(CODIGO.rglob("*.py")):
-                  if arq.name == "__main__.py":     # roda por linha de comando
-                      continue
-                  partes, pai = [arq.stem], arq.parent
-                  while pai != CODIGO and (pai / "__init__.py").is_file():
-                      partes.insert(0, pai.name)
-                      pai = pai.parent
-                  if partes[-1] == "__init__":
-                      partes.pop()
-                      if not partes:
-                          continue
-                  yield ".".join(partes), str(pai)
-
-
-          def _citados():
-              """Nomes que aparecem em algum `import` DENTRO do pacote.
-
-              Serve para separar o que o exe pode ALCANCAR do que ele carrega
-              sem nunca poder chamar. `conciliacao/cli.py` e o plano B por .bat,
-              `aportes/teste_lancamento.py` roda a mao, `nuvem/registro.py`
-              ainda esta vazio: ninguem os importa, entao o que falta neles nao
-              chega a lugar nenhum. Ja `cnab240` e `conciliacao/erp` tambem nao
-              sao importados no arranque, mas SAO importados por outro modulo do
-              pacote -- eles entram no primeiro pagamento, e ali a falha custa
-              caro. E por isso que a regra e "quem cita quem", e nao "o que o
-              comprovantes_app puxa ao abrir".
-              """
-              nomes = set()
-              for arq in sorted(CODIGO.rglob("*.py")):
-                  try:
-                      arvore = ast.parse(arq.read_text(encoding="utf-8"),
-                                         str(arq))
-                  except (OSError, SyntaxError):
-                      continue
-                  for no in ast.walk(arvore):
-                      if isinstance(no, ast.Import):
-                          for a in no.names:
-                              nomes.update(a.name.split("."))
-                      elif isinstance(no, ast.ImportFrom):
-                          if no.module:
-                              nomes.update(no.module.split("."))
-                          nomes.update(a.name for a in no.names)
-              return nomes
-
-
-          def principal():
-              _caminho()
-              citados = _citados()
-              # O comprovantes_app vem primeiro: e o import que o usuario paga
-              # se falhar, e ele mesmo poe as outras pastas no sys.path.
-              alvos = [("comprovantes_app", str(CODIGO))] + list(_modulos())
-              faltando, inalcancavel, outros = {}, {}, {}
-              for nome, pasta in alvos:
-                  if pasta not in sys.path:
-                      sys.path.append(pasta)
-                  try:
-                      importlib.import_module(nome)
-                  except ImportError as e:
-                      alcancavel = (nome == "comprovantes_app"
-                                    or nome.split(".")[-1] in citados)
-                      alvo = faltando if alcancavel else inalcancavel
-                      alvo[nome] = "%s: %s" % (type(e).__name__, e)
-                  except BaseException as e:       # noqa: BLE001
-                      outros[nome] = "%s: %s" % (type(e).__name__, e)
-
-              for nome in sorted(inalcancavel):
-                  # Ferramenta de linha de comando dentro do zip: nenhum caminho
-                  # do exe chega ali, entao falta de modulo nao derruba release.
-                  print("AVISO  %s (ninguem o importa) -- %s"
-                        % (nome, inalcancavel[nome]))
-              for nome in sorted(outros):
-                  # Nao e falta de modulo: e o modulo reclamando de ambiente
-                  # (arquivo de cadastro que so existe na maquina de quem usa,
-                  # por exemplo). Fica registrado, mas nao derruba a release.
-                  print("AVISO  %s -- %s" % (nome, outros[nome]))
-              if faltando:
-                  print("")
-                  print("O exe NAO tem modulos que estas partes do app importam:")
-                  for nome in sorted(faltando):
-                      print("  %s -- %s" % (nome, faltando[nome]))
-                  print("")
-                  print("E a falha da v1.0.71 (tkinter.font) de novo: o app nao")
-                  print("abre, e o erro aparece antes de existir janela. Declare")
-                  print("o import no _garantir_dependencias() do motor.py e suba")
-                  print("o motor_minimo.txt no MESMO push.")
-                  return 1
-              print("fumaca: %d modulos importados dentro do exe -- ok"
-                    % (len(alvos) - len(inalcancavel) - len(outros)))
-              return 0
-
-
-          if __name__ == "__main__":
-              sys.exit(principal())
-          PYFIM
-          echo "entrada do teste de fumaça gravada em $RUNNER_TEMP/fumaca.py"
-
-      # Os MESMOS --collect-all do exe de verdade: o grafo de módulos tem de
-      # bater. `--onedir` e sem o Tesseract porque nada disso muda QUAIS módulos
-      # entram — só o formato e o tamanho —, e comprimir 300 MB à toa custa
-      # minutos. `--distpath`/`--workpath` próprios para não encostar no
-      # `dist/` que já tem o executável a publicar.
-      # Este passo roda em PowerShell, e não no bash do passo anterior, porque
-      # o `--add-data "origem;destino"` tem ponto e vírgula: o bash do Windows
-      # trata argumento com ";" como lista de caminhos e o reescreve no meio do
-      # caminho.
-      - name: Gerar o exe de fumaça (mesma poda do exe publicado)
-        run: >
-          pyinstaller --noconfirm --onedir --console
-          --name fumaca
-          --distpath fumaca_dist --workpath fumaca_build
-          --paths .
-          --collect-all playwright
-          --collect-all pdfminer
-          --collect-all pdfplumber
-          --collect-all pypdf
-          --collect-all openpyxl
-          --collect-all requests
-          --collect-all pytesseract
-          --collect-all sv_ttk
-          --add-data "versao.txt;."
-          --add-data "codigo_embutido;codigo_embutido"
-          "$env:RUNNER_TEMP\fumaca.py"
-
-      # Teto de tempo porque isto abre um exe: import que fique esperando rede
-      # (ou uma janela que ninguém pode fechar) travaria a build até o limite de
+      # `Start-Process -Wait` porque o exe é `--noconsole`: o `&` do PowerShell
+      # não espera programa de janela. Pelo mesmo motivo o relatório vai para um
+      # arquivo, e é ele que aparece no log. Teto de tempo porque isto abre um
+      # exe: import que fique esperando rede travaria a build até o limite de
       # 6 horas do GitHub, gastando minuto de execução por nada.
-      - name: Rodar o exe de fumaça (importa o app e as abas)
+      - name: Autoteste do exe (importa o app e as abas dentro dele)
         timeout-minutes: 10
         run: |
-          & ".\fumaca_dist\fumaca\fumaca.exe"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::O exe nao consegue importar o app. Publicar"
-            Write-Host "::error::isto entrega um app que nao abre e, pior, manda"
+          $exe = (Resolve-Path "dist\Comprovantes Mais Controle.exe").Path
+          $pasta = (Resolve-Path "codigo_embutido").Path
+          $relatorio = Join-Path $env:RUNNER_TEMP "autoteste.txt"
+          $args = @("--autoteste", "`"$pasta`"", "`"$relatorio`"")
+          $p = Start-Process -FilePath $exe -ArgumentList $args -Wait -PassThru -NoNewWindow
+          if (Test-Path $relatorio) {
+            Get-Content $relatorio
+          } else {
+            Write-Host "::warning::o autoteste nao gravou relatorio nenhum"
+          }
+          if ($p.ExitCode -ne 0) {
+            Write-Host "::error::O exe nao consegue importar o app (saiu com $($p.ExitCode))."
+            Write-Host "::error::Publicar isto entrega um app que nao abre e, pior, manda"
             Write-Host "::error::o codigo.zip novo para quem ja tem o exe."
             Write-Host "::error::Veja acima qual modulo faltou."
             exit 1
           }
+
+      # A assinatura do motor que vai nesta release — o asset por onde a
+      # próxima build descobre que pode reaproveitar este exe (ver "Decidir
+      # entre gerar o exe e reaproveitar"). O CONTEÚDO é a versão do exe de
+      # verdade: a desta build quando ele foi gerado agora, ou a herdada quando
+      # veio de uma release anterior — é ela que o `motor_minimo.txt` tem de
+      # respeitar, e é ela que o exe responde em `_versao_motor()`.
+      - name: Gravar a assinatura do motor
+        run: |
+          $nome = "motor-$($env:MOTOR_HASH).txt"
+          "$env:MOTOR_VERSAO" | Out-File -Encoding ascii -NoNewline $nome
+          Write-Host "$nome = $env:MOTOR_VERSAO"
 
       # `prerelease: true` não é detalhe de apresentação: é o PORTÃO.
       # Até aqui, push na main virava release em 4–9 minutos e o
@@ -625,6 +620,7 @@ jobs:
           files: |
             dist/Comprovantes Mais Controle.exe
             codigo.zip
+            motor-*.txt
 
       # O app busca as releases no repositório de ARTEFATOS, não aqui. Este
       # continua publicando a sua (é o arquivo histórico, e é o que as máquinas

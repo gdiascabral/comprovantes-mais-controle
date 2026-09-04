@@ -399,6 +399,13 @@ def _configurar_ocr() -> bool:
     cands = []
     base = getattr(sys, "_MEIPASS", None)
     if base:
+        # Dois lugares, porque o codigo.zip roda em exes de duas gerações. A
+        # partir do motor de 04/09/2026 o `tesseract.exe` mora na RAIZ do exe
+        # (as DLLs dele já moravam lá: o PyInstaller as copiava para a raiz ao
+        # analisar a pasta inteira, e a pasta `tesseract/` era uma segunda
+        # cópia de 118 MB dos mesmos arquivos); nos exes anteriores continua
+        # em `tesseract/`. Os idiomas ficam em `tessdata/` ao lado do exe.
+        cands.append(Path(base) / "tesseract.exe")
         cands.append(Path(base) / "tesseract" / "tesseract.exe")
     cands.append(Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"))
     achado = shutil.which("tesseract")
