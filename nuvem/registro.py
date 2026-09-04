@@ -27,6 +27,30 @@ from __future__ import annotations
 
 import datetime as _dt
 
+#: Estados em que a remessa ainda "vale" — os pagamentos dela contam como
+#: enviados. É a MESMA tupla do `cnab240.historico`, IMPORTADA e não copiada:
+#: enquanto foram duas listas escritas à mão, elas divergiram em silêncio, e a
+#: divergência custava dinheiro. A de cá tinha "aceito" (que não existe no
+#: cnab240) e NÃO tinha "rejeitado" (que existe lá desde sempre) — então um
+#: retorno com uma rejeição tirava a remessa inteira da pergunta "isto já foi
+#: mandado?" e liberava para sair de novo, inclusive os pagamentos que o banco
+#: já tinha pago.
+#:
+#: **"aceito" SAIU em vez de entrar no cnab240**, e a escolha é a que não mexe
+#: em nada já gravado: ninguém nunca escreveu esse estado. Quem grava é
+#: `registrar` ("gerado"), `marcar` e o retorno — e o espelho local
+#: (`cnab240.Historico.marcar`) sempre RECUSOU "aceito", logo ele jamais
+#: poderia ter sido usado sem estourar. As remessas reais estão em "gerado",
+#: "enviado" e "descartado", todas contempladas dos dois lados. Inventá-lo do
+#: outro lado seria alargar o que o `marcar` local aceita para atender a uma
+#: lista que ninguém consultava.
+#:
+#: Importar no topo não cria ciclo: o `cnab240` é stdlib pura e não importa
+#: nada do app (`tests/test_cnab240_pacote.py` cobra isso por AST). Também não
+#: pesa: quem monta o `Espelhado` (`remessa_dia._historico`) importa o
+#: `cnab240` na linha de cima, sempre.
+from cnab240.historico import ESTADOS_VIVOS
+
 from . import rest
 
 import util
@@ -55,12 +79,6 @@ class Envio:
             self.gerado_em = _dt.datetime.fromisoformat(quando) if quando else None
         except ValueError:
             self.gerado_em = None
-
-
-#: Estados em que a remessa ainda "vale" — os pagamentos dela contam como
-#: enviados. Espelha `cnab240.historico.ESTADOS_VIVOS`; quem descarta uma
-#: remessa está justamente devolvendo o direito de reenviar.
-ESTADOS_VIVOS = ("gerado", "enviado", "aceito", "processado")
 
 
 class Registro:
@@ -111,9 +129,9 @@ class Registro:
         """
         import hashlib
 
-        from cnab240.historico import itens_de           # importado aqui para
-                                                         # o módulo não puxar
-        cabecalho = remessa.empresa                      # o cnab240 sem uso
+        from cnab240.historico import itens_de
+
+        cabecalho = remessa.empresa
         itens = itens_de(remessa, referencias)
 
         # O sha256 do conteúdo REAL do arquivo. É o que responde, meses
@@ -156,7 +174,12 @@ class Registro:
 
     def marcar(self, convenio: str, nsa: int, estado: str,
                *, observacao: str = "") -> None:
-        """Muda o estado de uma remessa (enviada, aceita, descartada)."""
+        """Muda o estado de uma remessa (enviada, rejeitada, descartada).
+
+        Os estados são os do `cnab240.historico.ESTADOS`, e só "descartado"
+        tira a remessa da pergunta "isto já foi mandado?" — inclusive
+        "rejeitado", que o retorno grava: rejeição de um item não devolve aos
+        outros o direito de sair de novo."""
         mudancas = {"estado": estado}
         if observacao:
             mudancas["observacao"] = observacao

@@ -69,11 +69,28 @@ class Resumo:
         `processado` só quando TODOS deram certo. Enquanto houver um pendente,
         a remessa continua `enviado` — marcar como processada esconderia que
         falta assinatura, e a remessa sairia da lista de coisas a acompanhar
-        com dinheiro ainda parado."""
+        com dinheiro ainda parado.
+
+        **O que sai daqui é SEMPRE um estado VIVO** — um dos
+        `cnab240.historico.ESTADOS_VIVOS`, que é a mesma tupla que o
+        `nuvem.registro` usa —, e isso é regra de dinheiro, não de arrumação.
+        Quem pergunta "este boleto já saiu?" (`remessa_dia._ja_enviado`) só
+        enxerga item de remessa VIVA: um estado fora da lista some com a
+        remessa inteira dessa pergunta, e os pagamentos que o banco PAGOU
+        voltam marcáveis na geração seguinte. Rejeição de UM item não devolve
+        aos outros o direito de sair de novo — foi o que o `"com_erro"` fazia,
+        e ele não existia em lista nenhuma (a coluna `estado` do banco não tem
+        `check`, então a marcação era aceita em silêncio).
+
+        O outro lado da moeda, e é o lado seguro: com a remessa viva, o item
+        REJEITADO também fica bloqueado, porque `_ja_enviado` casa por código
+        de barras/referência do ITEM. Bloqueia demais, nunca de menos.
+        Reenviar hoje exige `descartar` a remessa (sem tela ainda); o reenvio
+        por item, lendo o `retorno_codigo` de cada um, é outro PR."""
         if not self.linhas:
             return "enviado"
         if self.quantos("rejeitado"):
-            return "com_erro"
+            return "rejeitado"
         if self.quantos("pendente") or self.quantos("?"):
             return "enviado"
         return "processado"

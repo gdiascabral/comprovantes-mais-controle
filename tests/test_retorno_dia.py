@@ -11,6 +11,8 @@ from decimal import Decimal
 
 import pytest
 
+from cnab240 import historico
+from nuvem import registro
 from pagamentos_dia import retorno_dia
 
 
@@ -126,7 +128,33 @@ def test_um_rejeitado_contamina_a_remessa(ler):
         _Pagamento("001", ocorrencias=[("00", "x")], _sucesso=True),
         _Pagamento("002", ocorrencias=[("AG", "y")]),
     ])
-    assert resumo.estado_da_remessa == "com_erro"
+    assert resumo.estado_da_remessa == "rejeitado"
+
+
+def test_o_estado_gravado_mantem_a_remessa_viva(ler):
+    """A trava contra pagar duas vezes, em um assert.
+
+    `remessa_dia._ja_enviado` só enxerga item de remessa VIVA. Um estado fora
+    da lista tira a remessa inteira da pergunta "isto já foi mandado?" — e os
+    pagamentos que o banco PAGOU voltam marcáveis na geração seguinte. Foi o
+    que o `"com_erro"` fazia, sem erro nenhum: a coluna `estado` do banco não
+    tem `check`, então a marcação era aceita em silêncio."""
+    casos = {
+        "vazio": [],
+        "tudo pendente": [_Pagamento("001", ocorrencias=[("PD", "x")],
+                                     _pendente=True)],
+        "tudo pago": [_Pagamento("001", ocorrencias=[("00", "x")],
+                                 _sucesso=True)],
+        "um rejeitado": [_Pagamento("001", ocorrencias=[("AG", "y")])],
+        "mistura": [_Pagamento("001", ocorrencias=[("00", "x")], _sucesso=True),
+                    _Pagamento("002", ocorrencias=[("PD", "x")], _pendente=True),
+                    _Pagamento("003", ocorrencias=[("AG", "y")]),
+                    _Pagamento("004")],
+    }
+    for nome, pagamentos in casos.items():
+        estado = ler(pagamentos).estado_da_remessa
+        assert estado in historico.ESTADOS, nome
+        assert estado in registro.ESTADOS_VIVOS, nome
 
 
 def test_casa_com_o_lancamento_do_erp(ler):
