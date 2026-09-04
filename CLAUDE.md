@@ -1593,12 +1593,43 @@ de cada um, é outro PR. **`ESTADOS_VIVOS` é UMA tupla**, importada de
 escritas à mão elas divergiram em silêncio, com "aceito" só de um lado e
 "rejeitado" só do outro.
 
+**O retorno do banco são QUATRO colunas do item, e uma delas nunca se apaga**
+(migration `20260904121220_retorno_estado_e_historico.sql`). `retorno_codigo` e
+`retorno_em` existem desde 17/08; `retorno_estado` e `retorno_historico`
+entraram em 04/09 para fechar três defeitos medidos:
+
+- **o segundo retorno APAGAVA o primeiro.** Quem gera não é quem assina: o
+  retorno do mesmo dia vem `PD` (pendente de assinatura) e o de depois da
+  liberação vem `00`. O `00` é a resposta certa para "e agora?", e escrevê-lo
+  por cima do `PD` levava junto a única prova de que o arquivo tinha sido
+  ACEITO. A regra nova é essa divisão: **`retorno_codigo` é a resposta de
+  AGORA e é sobrescrito; `retorno_historico` só CRESCE** — uma entrada por
+  retorno lido, `AAAA-MM-DD HH:MM codigo=estado`, separadas por `;`, no mesmo
+  instante que o `retorno_em`;
+- **o banco manda mais de uma ocorrência por pagamento**, e só a primeira era
+  gravada, porque a janela arrancava o código de volta da frase do `motivos`
+  (`split("=")[0]`) em vez de tê-lo na mão. Hoje `retorno_dia.Linha.codigos`
+  traz todas, na ordem, e o `retorno_codigo` leva todas separadas por `;`;
+- **a classificação (`ok`/`pendente`/`rejeitado`/`?`) não era gravada**, então
+  contar pago/pendente/rejeitado por item exigiria traduzir código de
+  ocorrência de novo — uma segunda tabela dizendo o que "AG" quer dizer,
+  envelhecendo calada ao lado da primeira. Ela é feita UMA vez, ao ler o
+  arquivo, e `retorno_dia.respostas_para_registro(resumo)` é quem a entrega ao
+  `Registro.aplicar_retorno`.
+
+**A limitação aceita**, escrita para não ser redescoberta: o append é
+ler-concatenar-gravar no app, não um `||` do Postgres. Duas pessoas guardando o
+MESMO retorno no mesmo instante podem perder uma LINHA de histórico — nunca a
+resposta atual, e nada que mexe em dinheiro lê o histórico (`baixa_erp.separar`
+decide pelo `Resumo` lido do arquivo). O privilégio continua sendo de COLUNA,
+não de tabela, e **não nasceu política nova**: a `remessa_item_retorno` já
+existe e já exige `privado.e_ativo()`.
+
 **O que ainda NÃO está na nuvem** (e continua como estava): os aportes já
 lançados, que seguem em `self.criados`, memória do processo em
 `aportes/aportes_frame.py` — falha parcial seguida de reabrir o app ainda
 apaga a proteção contra duplicar; e os envios da Acessórias, hoje conferidos
-relendo o portal, que funciona. As colunas `retorno_codigo`/`retorno_em`
-existem em `remessa_item` esperando quem processe o retorno do banco.
+relendo o portal, que funciona.
 
 **Migrar de novo** (máquina nova, ou recomeçar): `python nuvem/migrar.py
 --conferir` critica sem escrever; `--subir` escreve e depois relê para
