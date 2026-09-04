@@ -306,6 +306,32 @@ class Candidato:
 _SEQ = re.compile(r"^(\d{6})-(\d{4})")
 
 
+def _itens_de(remessa) -> list:
+    """Os itens de uma remessa, venha ela da nuvem ou do espelho local.
+
+    São duas formas para a mesma coisa, e ler só uma delas é ler zero item na
+    outra — sem erro, sem aviso: a nuvem (`nuvem.registro.Registro.remessas`,
+    que o `Espelhado` repassa e é o que o app usa) devolve DICT com a chave
+    `remessa_item`; o `cnab240.Historico` devolve objeto `RemessaGerada` com
+    `.itens`. Enquanto isto lia só `.itens`, a conferência do "seu número"
+    devolvia 0 contra o registro de verdade.
+
+    O mesmo par de nomes já é aceito em `retorno_dia._itens_da_remessa`, pelo
+    mesmo motivo.
+    """
+    if isinstance(remessa, dict):
+        return list(remessa.get("remessa_item") or remessa.get("itens") or [])
+    return list(getattr(remessa, "remessa_item", None)
+                or getattr(remessa, "itens", None) or [])
+
+
+def _seu_numero_de(item) -> str:
+    """O "seu número" do item, dict (nuvem) ou objeto (espelho local)."""
+    if isinstance(item, dict):
+        return str(item.get("seu_numero") or "")
+    return str(getattr(item, "seu_numero", "") or "")
+
+
 def sequencia_ja_usada(historico, quando: _dt.date) -> int:
     """A maior ordem do DIA que já saiu em alguma remessa viva. 0 se nenhuma.
 
@@ -321,6 +347,11 @@ def sequencia_ja_usada(historico, quando: _dt.date) -> int:
 
     Nunca levanta: registro fora do ar devolve 0, e a numeração volta a ser a
     de antes. Perder a remessa por causa da conferência seria pior.
+
+    Lê as DUAS formas de remessa (`_itens_de`) porque a proteção só vale se
+    enxergar o registro de verdade: contra a nuvem, que devolve dicts, ela
+    devolvia 0 calada — e 0 aqui é a segunda remessa do dia recomeçando em
+    0001 e repetindo os "seus números" da primeira.
     """
     if historico is None:
         return 0
@@ -328,8 +359,8 @@ def sequencia_ja_usada(historico, quando: _dt.date) -> int:
     maior = 0
     try:
         for remessa in historico.remessas():
-            for item in getattr(remessa, "itens", None) or []:
-                seu = str(getattr(item, "seu_numero", "") or "")
+            for item in _itens_de(remessa):
+                seu = _seu_numero_de(item)
                 if not seu.startswith(prefixo):
                     continue
                 achado = _SEQ.match(seu)

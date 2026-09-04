@@ -248,6 +248,26 @@ def test_a_ordem_do_dia_continua_de_onde_parou():
     assert c.seu_numero.startswith(f"{HOJE:%y%m%d}-0011")
 
 
+def test_a_ordem_do_dia_continua_de_onde_parou_contra_a_nuvem():
+    """A MESMA garantia, na forma que o registro de verdade devolve.
+
+    `nuvem.registro.Registro.remessas()` (que o `Espelhado` repassa, e é ele
+    que o app usa desde que o NSA saiu do arquivo local) devolve DICTS com a
+    chave `remessa_item` — não objetos com `.itens`. Contra ela a conferência
+    devolvia 0 SEMPRE, calada, e a segunda remessa do dia recomeçava o "seu
+    número" em 0001, repetindo os da primeira: exatamente o defeito de
+    20/08/2026 que o teste de cima existe para impedir.
+    """
+    hist = _RegistroFalso({"nsa": 3, "remessa_item": [
+        {"seu_numero": f"{HOJE:%y%m%d}-0001"},
+        {"seu_numero": f"{HOJE:%y%m%d}-0015-OC55"},
+    ]})
+    assert remessa_dia.sequencia_ja_usada(hist, HOJE) == 15
+    c, = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE,
+                              historico=hist)[CONTA]
+    assert c.seu_numero.startswith(f"{HOJE:%y%m%d}-0016")
+
+
 def test_numero_de_outro_dia_nao_conta():
     """A ordem é do DIA: ontem não empurra a numeração de hoje."""
     hist = _RegistroFalso(_RemessaFalsa("260819-0042"))
