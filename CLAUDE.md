@@ -946,6 +946,12 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   **`ocr_boleto.codigo_de_barras`** converte a linha digitável (47/48) no código
   de barras (44) que o segmento J exige — e devolve "" para linha cujos DVs não
   fecham, porque a linha pode ter vindo de OCR.
+  **`resolver_pagador` lê o convênio da CONTA, e recusa sem herdar.** A
+  checagem vem DEPOIS de a conta estar escolhida — antes dela não há conta
+  para perguntar —, e não existe `or empresa.convenio`: herdar faria uma
+  subconta ainda não aderida sair com o número da principal, que é o campo
+  07.0 do header e o nome da sequência do NSA. Conta sem convênio para
+  sozinha, com `MOTIVO_SEM_CONVENIO`, e a irmã que já aderiu segue.
   **`diagnostico_documentos`** existe para fechar a lacuna do Pix: varre o
   `overview` que o "1. Buscar" já trouxe e diz ONDE há CPF/CNPJ válido, sem
   imprimir documento nenhum — só caminho, contagem e **valores distintos**. É o
@@ -988,8 +994,11 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   o PDF sem abrir código — daí a linha extra no `build.yml` e o
   `tests/test_cnab240_pacote.py` que a vigia.
   **`historico.py` é a parte que o layout não resolve**: o NSA (nº sequencial
-  do arquivo) tem de ser CRESCENTE por convênio e quem o controla é quem gera
-  — o banco não guarda isso. Ele mora em `remessas.json` ao lado do exe, longe
+  do arquivo) tem de ser CRESCENTE por convênio — **e o convênio é POR CONTA
+  (04/09/2026)**, não por empresa: o Sicoob dá um por conta corrente, e uma
+  holding do cadastro tem nove, a principal e oito subcontas. Uma sequência de
+  NSA por conta corrente, portanto — quem o controla é quem gera,
+  o banco não guarda isso. Ele mora em `remessas.json` ao lado do exe, longe
   do cadastro de propósito: `contas_sicoob.json` é restaurado de backup, e um
   contador que volta no tempo é a única falha inaceitável aqui. Repetir NSA
   pode significar pagamento em dobro; pular número é inofensivo. O mesmo
@@ -1477,6 +1486,23 @@ eles divergiram em três subcontas e partiram julho/2026 ao meio. Agora é uma
 linha com uma coluna `pasta`, e a divergência deixou de ser representável.
 `relatorios/conferir_mapas.py` continua existindo para quem rodar as abas com
 cache antigo, mas o problema que ele vigiava não tem mais como nascer.
+
+**O `convenio` mudou de tabela em 04/09/2026: era da `empresa`, é da `conta`**
+(migration `20260904113000_convenio_por_conta.sql`). A coluna de 13/08 nasceu
+supondo que o convênio fosse do CNPJ, e para empresa de uma conta só isso dava
+no mesmo — a holding com a conta principal e oito subcontas é que mostrou o
+desenho de verdade: o Sicoob dá **um convênio por conta corrente**, nove
+números diferentes debaixo de um CNPJ. Com o convênio na empresa, as nove
+contas sairiam com o mesmo campo 07.0 no header e dividindo UMA sequência de
+NSA. **Não há herança**, e isso é decisão: cair no convênio da empresa quando
+o da conta está vazio faria uma subconta ainda não aderida sair com o número
+da principal. A coluna `empresa.convenio` FICA por enquanto, e o cache
+continua escrevendo a chave da empresa — é o que máquina não atualizada lê;
+o código novo não a lê, e aposentá-la é uma migration futura. **A ordem de
+aplicar não pode inverter**: a migration roda ANTES do merge (coluna nova com
+default `''` não muda nada para o código velho; o contrário faz a
+sincronização pedir uma coluna que não existe), e só depois o painel recebe os
+números — que ficam fora deste repositório, como todo dado real.
 
 **Os JSON/CSV continuam existindo — como CACHE.** `nuvem/cadastro.sincronizar`
 roda uma vez, na abertura, e regrava os arquivos de sempre no formato de
