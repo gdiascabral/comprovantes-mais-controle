@@ -1198,19 +1198,30 @@ class PagamentosDiaFrame(ttk.Frame):
 
     # ------------------------------------------------------------- o retorno
     def ler_retorno(self):
-        """Lê o arquivo que o banco devolve e mostra o que houve com cada
-        pagamento.
+        """Lê os arquivos que o banco devolve e mostra o que houve em cada um.
 
         Não é etapa do fluxo do dia: o retorno chega horas ou dias depois, e
         muitas vezes é preciso ler o MESMO arquivo duas vezes — a primeira só
         diz "recebi", e o desfecho real vem depois de o master assinar no
         SicoobNet. Por isso o botão não tem número e não depende dos passos.
+
+        **São VÁRIOS arquivos, e é assim que eles chegam.** São até 18 contas
+        no mesmo dia, cada uma lida duas vezes, e o SicoobNet ("Gerenciamento
+        de Arquivos → Obter Retorno") baixa vários de uma vez — soltos ou num
+        `.zip`. Escolher um, ler, fechar a janela e recomeçar 35 vezes é o
+        caminho mais curto para alguém deixar de conferir uma conta.
+
+        Um arquivo só e sem falha continua abrindo a janela de sempre: é o
+        caso mais comum e o que já estava certo.
         """
-        caminho = filedialog.askopenfilename(
-            title="Escolha o arquivo de retorno do banco",
-            filetypes=[("Retorno CNAB", "*.RET *.ret *.TXT *.txt"),
+        caminhos = filedialog.askopenfilenames(
+            title="Escolha os arquivos de retorno do banco",
+            filetypes=[("Retorno CNAB", "*.RET *.ret *.TXT *.txt *.zip *.ZIP"),
                        ("Todos", "*.*")])
-        if not caminho:
+        # O Tk devolve tupla no Windows e uma lista do Tcl em outros lugares;
+        # `splitlist` entende as duas e devolve tupla nas duas.
+        caminhos = self.tk.splitlist(caminhos) if caminhos else ()
+        if not caminhos:
             return
 
         try:
@@ -1224,16 +1235,88 @@ class PagamentosDiaFrame(ttk.Frame):
                       f"arquivo assim mesmo, mas sem casar com o ERP e sem "
                       f"gravar o resultado.")
 
-        try:
-            resumo = retorno_dia.ler(caminho, historico)
-        except Exception as e:
+        resultados = retorno_dia.ler_varios(caminhos, historico)
+        if not resultados:
+            return
+        validos = [r for r in resultados if isinstance(r, retorno_dia.Resumo)]
+        falhas = [r for r in resultados if isinstance(r, retorno_dia.Falha)]
+
+        # Um arquivo, um desfecho: as duas pontas do comportamento de antes
+        # ficam exatamente como eram. Do segundo arquivo em diante — ou tendo
+        # falha ao lado de resumo — a lista é que responde "e as outras?".
+        if len(validos) == 1 and not falhas:
+            self._janela_retorno(validos[0], historico)
+            return
+        if not validos and len(falhas) == 1:
             messagebox.showerror(
                 "Retorno",
-                widgets.recado_de_erro(e, "Não consegui ler o arquivo de "
-                                          "retorno."))
+                f"Não consegui ler o arquivo de retorno.\n\n"
+                f"{falhas[0].origem}: {falhas[0].motivo}")
             return
+        self._janela_retornos(resultados, historico)
 
-        self._janela_retorno(resumo, historico)
+    def _copiar_retorno(self, resumo):
+        """Guarda o `.RET` lido ao lado da remessa que ele responde.
+
+        **Copiar, não mover.** O arquivo está onde o navegador o baixou, e é
+        de lá que a pessoa o reabre se quiser conferir; movê-lo faria sumir da
+        pasta de downloads o que ela acabou de baixar. E o `.RET` não estava
+        guardado em lugar nenhum: passada a janela, a única prova do que o
+        banco respondeu era o que tinha ido para o banco de dados.
+
+        Vai para a pasta do `.REM` — pergunta e resposta juntas. Sem ela (ou
+        com ela em outra máquina), cai no `_RETORNOS/` do destino da tela.
+
+        **É best-effort**: falhar aqui vira uma linha no Registro, nunca uma
+        exceção que impeça o `aplicar_retorno`. O que importa é o que foi
+        gravado no banco; a cópia é conveniência.
+        """
+        try:
+            pasta = (Path(resumo.pasta_da_remessa)
+                     if resumo.pasta_da_remessa else None)
+            if pasta is None or not pasta.is_dir():
+                pasta = Path(self.v_pasta.get().strip() or ".") / "_RETORNOS"
+            alvo = retorno_dia.guardar_copia(
+                resumo.conteudo, pasta,
+                retorno_dia.nome_da_copia(resumo, datetime.datetime.now()))
+            self._log(f"  cópia do retorno: "
+                      f"{str(alvo).replace(chr(92), '/')}")
+        except Exception as e:
+            self._log(f"  [!] não deu para guardar a cópia do retorno"
+                      f"{f' ({resumo.origem})' if resumo.origem else ''}: {e}")
+
+    def _seguir_para_a_baixa(self, linhas, fechar):
+        """Do retorno lido até a thread do navegador — um caminho só.
+
+        Recebe LINHAS e não um `Resumo` porque a janela de vários junta as de
+        várias remessas numa lista: a baixa não depende da conta pagadora, ela
+        casa pela `referencia` de cada item, que é o id do lançamento no ERP.
+        """
+        # `separar` só olha o `.linhas` do que recebe. O resumo montado aqui é
+        # o saco que carrega as linhas até lá, e não um retorno de verdade —
+        # daí o NSA zero, que nunca vai à tela nem ao banco.
+        sep = baixa_erp.separar(retorno_dia.Resumo(
+            convenio="", nsa=0, empresa="", linhas=list(linhas)))
+        for linha, motivo in sep.de_fora:
+            self._log(f"  fora da baixa: {linha.seu_numero} "
+                      f"{linha.favorecido[:28]} — {motivo}")
+        if not sep.baixaveis:
+            messagebox.showinfo(
+                "Baixa",
+                "Nenhum pagamento deste retorno pode ser baixado agora.\n\n"
+                "Só entra o que o banco marcou como PAGO. Aguardando "
+                "assinatura não conta: o dinheiro ainda não saiu.")
+            return
+        escolhidos = self._janela_baixa(sep)
+        if not escolhidos:
+            return
+        fechar()
+        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+            return
+        self.q.put(("botoes", "disabled"))
+        self.worker = self.anx.submeter(
+            "Pagamentos do Dia — baixar no Mais Controle",
+            self._t_baixar, escolhidos, dona=self)
 
     def _janela_retorno(self, resumo, historico):
         top = tk.Toplevel(self)
@@ -1339,31 +1422,15 @@ class PagamentosDiaFrame(ttk.Frame):
             self._log(f"\nRetorno do arquivo nº {resumo.nsa:06d} guardado: "
                       f"{quantos} pagamento(s) com resposta, remessa marcada "
                       f"como '{resumo.estado_da_remessa}'.")
+            # A cópia vem DEPOIS de gravar, e não antes: o que não pode faltar
+            # é o registro. Se ela falhar, sai uma linha no Registro e o
+            # retorno continua guardado.
+            self._copiar_retorno(resumo)
             messagebox.showinfo("Retorno", f"Guardado: {quantos} pagamento(s).")
             top.destroy()
 
         def _baixar():
-            sep = baixa_erp.separar(resumo)
-            for linha, motivo in sep.de_fora:
-                self._log(f"  fora da baixa: {linha.seu_numero} "
-                          f"{linha.favorecido[:28]} — {motivo}")
-            if not sep.baixaveis:
-                messagebox.showinfo(
-                    "Baixa",
-                    "Nenhum pagamento deste retorno pode ser baixado agora.\n\n"
-                    "Só entra o que o banco marcou como PAGO. Aguardando "
-                    "assinatura não conta: o dinheiro ainda não saiu.")
-                return
-            escolhidos = self._janela_baixa(sep)
-            if not escolhidos:
-                return
-            top.destroy()
-            if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
-                return
-            self.q.put(("botoes", "disabled"))
-            self.worker = self.anx.submeter(
-                "Pagamentos do Dia — baixar no Mais Controle",
-                self._t_baixar, escolhidos, dona=self)
+            self._seguir_para_a_baixa(resumo.linhas, top.destroy)
 
         if historico is not None and not resumo.remessa_desconhecida:
             widgets.Botao(rodape, "Guardar o resultado", papel="acao",
@@ -1382,6 +1449,190 @@ class PagamentosDiaFrame(ttk.Frame):
 
         top.transient(self.winfo_toplevel())
         top.grab_set()
+        # Devolvida para quem abriu esta janela COMO DETALHE de outra poder
+        # esperá-la fechar (`_janela_retornos`). Quem só abre e segue continua
+        # podendo ignorar o retorno.
+        return top
+
+    def _janela_retornos(self, resultados, historico):
+        """Uma linha por retorno lido, com os números de cada um.
+
+        A janela de UM retorno mostra pagamento a pagamento, e é a certa para
+        conferir uma conta. Com 18 contas na mesa, a pergunta muda: não é
+        "quem foi pago", é "qual conta ainda não fechou". Daí a tabela ser de
+        ARQUIVOS, com o detalhe a um duplo clique de distância — a janela de
+        sempre, reaproveitada, sem uma segunda tela dizendo a mesma coisa de
+        outro jeito.
+
+        As falhas entram na MESMA lista, em vermelho. Uma caixa de erro antes
+        da tabela esconderia o que deu certo atrás de um OK, e o que se quer
+        saber é justamente se sobrou alguma conta sem ler.
+        """
+        validos = [r for r in resultados if isinstance(r, retorno_dia.Resumo)]
+        conhecidos = [r for r in validos if not r.remessa_desconhecida]
+
+        top = tk.Toplevel(self)
+        top.title(f"Retornos do banco — {len(validos)} arquivo(s)")
+        # Larga porque são nove colunas: espremidas, o Treeview corta a
+        # SITUAÇÃO, que é justamente a coluna que se lê primeiro.
+        top.geometry(f"{px(1180)}x{px(560)}")
+        widgets.barra_de_titulo(top)
+        moldura = ttk.Frame(top, padding=14)
+        moldura.pack(fill="both", expand=True)
+
+        ttk.Label(moldura, style="Titulo.TLabel",
+                  text=f"{len(resultados)} arquivo(s) de retorno"
+                  ).pack(anchor="w")
+        ttk.Label(moldura, style="Apoio.TLabel",
+                  text="Duplo clique numa linha abre o detalhe daquele "
+                       "arquivo, pagamento a pagamento."
+                  ).pack(anchor="w", pady=px((2, 8)))
+
+        colunas = ("empresa", "conta", "nsa", "pagos", "aguardando",
+                   "rejeitados", "faltando", "total", "situacao")
+        tabela = ttk.Treeview(moldura, columns=colunas, show="headings",
+                              height=14)
+        for chave, titulo, larg, ancora in (
+                ("empresa", "Empresa", 210, "w"),
+                ("conta", "Ag-Conta", 110, "w"),
+                ("nsa", "Arquivo nº", 90, "w"),
+                ("pagos", "Pagos", 70, "e"),
+                ("aguardando", "Aguardando", 100, "e"),
+                ("rejeitados", "Rejeitados", 90, "e"),
+                ("faltando", "Faltando", 80, "e"),
+                ("total", "Total", 120, "e"),
+                ("situacao", "Situação", 250, "w")):
+            tabela.heading(chave, text=titulo)
+            tabela.column(chave, width=larg, anchor=ancora)
+        widgets.estilo_tabela(tabela)
+        tabela.pack(fill="both", expand=True)
+
+        #: id da linha da tabela -> o resumo que ela mostra. As falhas não
+        #: entram: não há detalhe para abrir.
+        por_linha = {}
+        for i, item in enumerate(resultados):
+            if isinstance(item, retorno_dia.Falha):
+                # Vermelho e com o motivo à vista: é a única linha da tabela
+                # que representa uma conta que NÃO foi lida.
+                tabela.insert("", "end", values=(
+                    item.origem, "—", "—", "—", "—", "—", "—", "—",
+                    item.motivo),
+                    tags=widgets.linha_zebrada(i, "erro"))
+                continue
+            situacao, marca = self._situacao_do_retorno(item)
+            iid = tabela.insert("", "end", values=(
+                item.empresa.strip()[:34],
+                f"{item.agencia}-{item.conta}".strip("-") or "—",
+                f"{item.nsa:06d}",
+                item.quantos("ok"), item.quantos("pendente"),
+                item.quantos("rejeitado"), len(item.faltando),
+                relatorio.brl(float(item.total)), situacao),
+                tags=widgets.linha_zebrada(i, marca))
+            por_linha[iid] = item
+
+        def _detalhe(_evento=None):
+            resumo = por_linha.get(tabela.focus())
+            if resumo is None:
+                return
+            detalhe = self._janela_retorno(resumo, historico)
+            # O Tk tem UM grab por vez: abrindo o detalhe, esta janela perde o
+            # dela, e fechando aquele o grab não volta sozinho. Esperar e
+            # retomar deixa a lista modal como as outras janelas do app.
+            if detalhe is not None:
+                self.wait_window(detalhe)
+                if top.winfo_exists():
+                    top.grab_set()
+
+        tabela.bind("<Double-1>", _detalhe)
+
+        pagos = sum(r.quantos("ok") for r in validos)
+        pendentes = sum(r.quantos("pendente") for r in validos)
+        rejeitados = sum(r.quantos("rejeitado") for r in validos)
+
+        rodape = ttk.Frame(moldura); rodape.pack(fill="x", pady=px((10, 0)))
+        ttk.Label(rodape, style="Apoio.TLabel",
+                  text=f"{pagos} pago(s) · {pendentes} aguardando · "
+                       f"{rejeitados} rejeitado(s)").pack(side="left")
+
+        def _guardar_tudo():
+            """Um `aplicar_retorno` por remessa conhecida.
+
+            Uma que falhe não fala pelas outras: com 18 contas, parar na
+            primeira recusa deixaria 17 retornos lidos e não guardados, e a
+            leitura teria de ser refeita inteira.
+            """
+            guardados = falhou = 0
+            for resumo in conhecidos:
+                respostas = retorno_dia.respostas_para_registro(resumo)
+                try:
+                    quantos = historico.aplicar_retorno(
+                        resumo.convenio, resumo.nsa, respostas,
+                        estado=resumo.estado_da_remessa)
+                except Exception as e:
+                    falhou += 1
+                    self._log(f"\n[!] arquivo nº {resumo.nsa:06d} "
+                              f"({resumo.origem}): não deu para guardar — {e}")
+                    continue
+                guardados += 1
+                self._log(f"\nRetorno do arquivo nº {resumo.nsa:06d} "
+                          f"({resumo.empresa.strip()}) guardado: {quantos} "
+                          f"pagamento(s) com resposta, remessa marcada como "
+                          f"'{resumo.estado_da_remessa}'.")
+                self._copiar_retorno(resumo)
+            messagebox.showinfo(
+                "Retorno",
+                f"Guardado: {guardados} remessa(s)."
+                + (f"\n{falhou} não deu — veja o Registro." if falhou else ""))
+            if not falhou and top.winfo_exists():
+                top.destroy()
+
+        def _baixar_tudo():
+            # As linhas de TODAS as remessas conhecidas num saco só. A baixa
+            # não depende da conta pagadora: ela casa pela `referencia` do
+            # item, que é o id do lançamento no ERP.
+            self._seguir_para_a_baixa(
+                [linha for r in conhecidos for linha in r.linhas], top.destroy)
+
+        if historico is not None and conhecidos:
+            widgets.Botao(rodape, "Guardar tudo", papel="acao",
+                          command=_guardar_tudo).pack(side="right")
+        # A baixa precisa da `referencia`, que só existe nas remessas que o
+        # registro central conhece — a mesma razão da janela de um retorno só.
+        if historico is not None and any(r.quantos("ok") for r in conhecidos):
+            widgets.Botao(rodape, "Dar baixa no Mais Controle", papel="passo",
+                          command=_baixar_tudo).pack(side="right",
+                                                     padx=px((0, 8)))
+        widgets.Botao(rodape, "Fechar", papel="neutro", command=top.destroy
+                      ).pack(side="right", padx=px((0, 8)))
+
+        top.transient(self.winfo_toplevel())
+        top.grab_set()
+        return top
+
+    @staticmethod
+    def _situacao_do_retorno(resumo):
+        """(frase, tag da cor) de UM retorno, para a linha da lista.
+
+        A tag vai explícita, e não por `widgets.estado_de` sobre a frase: a
+        linha da remessa que o registro não conhece precisa ficar âmbar, e
+        "remessa não registrada" não contém nenhum dos estados que aquela
+        função sabe ler. As tags são as mesmas (`ok`/`atencao`/`erro`/`info`)
+        e quem as pinta continua sendo o `estilo_tabela`.
+
+        A remessa desconhecida vem PRIMEIRO mesmo havendo rejeitado, porque é
+        ela que decide o que dá para fazer com a linha: sem o registro não há
+        o que guardar nem como baixar. As contagens ao lado continuam à vista.
+        """
+        if resumo.remessa_desconhecida:
+            return "remessa não registrada", "atencao"
+        rejeitados = resumo.quantos("rejeitado")
+        if rejeitados:
+            return f"{rejeitados} rejeitado(s) — veja o detalhe", "erro"
+        if resumo.quantos("pendente"):
+            return "aguardando assinatura no SicoobNet", "atencao"
+        if resumo.linhas and resumo.quantos("ok") == len(resumo.linhas):
+            return "tudo pago", "ok"
+        return "o banco não respondeu por todos", "info"
 
     # ----------------------------------------------------- baixa no ERP
     def _janela_baixa(self, sep):
