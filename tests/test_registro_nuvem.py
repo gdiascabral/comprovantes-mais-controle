@@ -244,6 +244,145 @@ def test_o_filtro_pede_so_estado_vivo(falso):
         assert estado in filtro
 
 
+# ------------------------- de que remessa este retorno fala ("seu número")
+
+def _achado(seu_numero, remessa_id, *, nsa=31, convenio="1814",
+            estado="gerado", arquivo="REM_000031.REM"):
+    """Uma linha do `remessa_item` com a `remessa` embutida, como o PostgREST
+    a devolve quando se pede `remessa(...)` no `select`."""
+    return {"seu_numero": seu_numero, "remessa_id": remessa_id,
+            "remessa": {"id": remessa_id, "convenio": convenio, "nsa": nsa,
+                        "estado": estado, "arquivo": arquivo}}
+
+
+def _linha_da_remessa(nsa=31, convenio="1814"):
+    """A remessa COM os itens, que é o que a segunda ida busca."""
+    return [{"nsa": nsa, "convenio": convenio, "arquivo": "REM_000031.REM",
+             "remessa_item": [{"seu_numero": "260904-0001",
+                               "referencia": "id-erp-1"},
+                              {"seu_numero": "260904-0002",
+                               "referencia": "id-erp-2"}]}]
+
+
+def test_a_pergunta_pelos_seus_numeros_usa_o_filtro_in(falso):
+    """UMA ida com a lista inteira, e não uma consulta por pagamento.
+
+    E a segunda ida traz a remessa COM TODOS os itens: os que o banco não
+    citou são justamente os que respondem o que ficou faltando."""
+    falso.respostas["remessa_item"] = [_achado("260904-0001", 5)]
+    falso.respostas["remessa"] = _linha_da_remessa()
+
+    achada = registro.Registro("tok").remessa_dos_seus_numeros(
+        ["260904-0001", "260904-0002"])
+
+    assert achada["nsa"] == 31 and achada["convenio"] == "1814"
+    assert len(achada["remessa_item"]) == 2
+    filtro, = _filtros_lidos(falso, "remessa_item")
+    assert filtro == "seu_numero=in.(260904-0001,260904-0002)"
+
+
+def test_a_pergunta_pelos_seus_numeros_nao_filtra_estado(falso):
+    """Ao contrário do `_procurar`: aqui não se procura onde o pagamento ainda
+    vale, e sim de que remessa o arquivo fala. Uma remessa descartada que
+    compartilhe o número não é para ser ignorada — é para ser a segunda
+    candidata que faz esta consulta recusar."""
+    falso.respostas["remessa_item"] = []
+    registro.Registro("tok").remessa_dos_seus_numeros(["260904-0001"])
+
+    filtro, = _filtros_lidos(falso, "remessa_item")
+    assert "estado" not in filtro
+
+
+def test_seus_numeros_em_duas_remessas_nao_casam(falso):
+    """A regra inteira deste método.
+
+    O índice `remessa_item_seu_numero_unico_no_dia` é PARCIAL pela data
+    (`criado_em >= 2026-09-05`), porque o histórico é append-only e a
+    repetição de 20/08/2026 continua lá dentro — naquele dia a segunda remessa
+    repetiu `260820-0004`…`0010`. Escolher uma das duas é aplicar o retorno na
+    remessa errada: dar por pago o pagamento de outra conta e baixar o
+    lançamento errado no ERP."""
+    falso.respostas["remessa_item"] = [_achado("260820-0004", 5, nsa=31),
+                                       _achado("260820-0004", 6, nsa=32)]
+    falso.respostas["remessa"] = _linha_da_remessa()
+
+    assert registro.Registro("tok").remessa_dos_seus_numeros(
+        ["260820-0004"]) is None
+    # E nem chega a perguntar pelos itens: não há remessa para pedir.
+    assert not _filtros_lidos(falso, "remessa")
+
+
+def test_nenhum_seu_numero_achado_nao_casa(falso):
+    falso.respostas["remessa_item"] = []
+    reg = registro.Registro("tok")
+
+    assert reg.remessa_dos_seus_numeros(["260904-0001"]) is None
+    assert not _filtros_lidos(falso, "remessa")
+
+
+def test_lista_vazia_nao_pergunta_nada(falso):
+    """Perguntar por nada traria a primeira linha qualquer da tabela — é a
+    mesma trava do `envio_de("")`."""
+    reg = registro.Registro("tok")
+
+    assert reg.remessa_dos_seus_numeros([]) is None
+    assert reg.remessa_dos_seus_numeros(["", "   "]) is None
+    assert not falso.chamadas
+
+
+def test_a_pergunta_e_quebrada_em_lotes(falso):
+    """O que aperta não é o banco, é o TAMANHO DA URL.
+
+    Um retorno de 18 contas traz centenas de pagamentos, cada "seu número" tem
+    20 posições, e uma URL de alguns milhares de caracteres é recusada por
+    proxy antes de chegar ao PostgREST — o que apareceria como erro de rede
+    numa consulta que estava certa."""
+    falso.respostas["remessa_item"] = [_achado("260904-0001", 5)]
+    falso.respostas["remessa"] = _linha_da_remessa()
+    seus = [f"260904-{n:04d}" for n in range(1, 151)]
+
+    assert registro.Registro("tok").remessa_dos_seus_numeros(seus) is not None
+
+    filtros = _filtros_lidos(falso, "remessa_item")
+    assert len(filtros) == 2
+    assert filtros[0].count(",") == registro.LOTE_DE_SEUS_NUMEROS - 1
+    assert filtros[1].count(",") == 49
+    # Os lotes são pedaços da MESMA lista, na ordem: nada se perde no meio.
+    assert filtros[0].startswith("seu_numero=in.(260904-0001,")
+    assert filtros[1].endswith(",260904-0150)")
+
+
+def test_o_que_nao_parece_seu_numero_nao_entra_no_filtro(falso):
+    """Estes valores vêm do ARQUIVO que o banco devolveu, não de nós.
+
+    Num `.RET` truncado ou de outro layout, uma vírgula ou um parêntese ali
+    dentro não seriam um número que não achamos — seriam um filtro diferente
+    do que se quis escrever."""
+    falso.respostas["remessa_item"] = []
+    registro.Registro("tok").remessa_dos_seus_numeros(
+        ["260904-0001", "260904-0002,estado=eq.gerado", "(x)", "  ",
+         "260904-0001"])
+
+    filtro, = _filtros_lidos(falso, "remessa_item")
+    assert filtro == "seu_numero=in.(260904-0001)"
+
+
+def test_o_espelhado_repassa_a_pergunta_para_a_nuvem():
+    """Pelo mesmo motivo do NSA e da ordem do dia: o arquivo local só conhece
+    as remessas que saíram DESTE computador — e o caso que este caminho existe
+    para resolver é justamente o retorno de uma gerada em outra máquina."""
+    class Nuvem:
+        def remessa_dos_seus_numeros(self, seus):
+            return {"nsa": 31, "seus": list(seus)}
+
+    class LocalCego:
+        def remessa_dos_seus_numeros(self, _seus):
+            raise AssertionError("o espelho local não responde por esta")
+
+    esp = registro.Espelhado(Nuvem(), LocalCego())
+    assert esp.remessa_dos_seus_numeros(["260904-0001"])["nsa"] == 31
+
+
 # --------------------------------------------------- o retorno do banco
 
 def _remessa_com_itens(*itens):

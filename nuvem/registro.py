@@ -57,6 +57,43 @@ import util
 
 log = util.log(__name__)
 
+#: Quantos "seus números" cabem num filtro `in.(…)` por vez. O limite que
+#: aperta não é o do banco, é o TAMANHO DA URL: um retorno de 18 contas traz
+#: centenas de pagamentos, cada "seu número" tem 20 posições, e uma URL de
+#: alguns milhares de caracteres é recusada por proxy antes de chegar ao
+#: PostgREST — o que apareceria como erro de rede numa consulta que estava
+#: certa. Cem por vez é folgado dos dois lados.
+LOTE_DE_SEUS_NUMEROS = 100
+
+#: O que pode entrar num filtro `in.(…)` sem aspas e sem susto. O "seu número"
+#: é `yymmdd-NNNN[-OC…]`, então este conjunto o cobre inteiro — e o que sobra
+#: dele não vem de nós: vem do ARQUIVO que o banco devolveu, que num dia ruim
+#: é um `.RET` truncado ou de outro layout. Vírgula, parêntese ou aspas ali
+#: dentro não seriam um "seu número" que não achamos, seriam um filtro
+#: diferente do que se quis escrever.
+_LETRAS_DO_SEU_NUMERO = frozenset(
+    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-")
+
+
+def _seus_numeros_limpos(seus) -> list[str]:
+    """Os "seus números" que dá para perguntar, sem repetição e na ordem.
+
+    Descartar o que não passa no crivo não muda a resposta: um número que não
+    dá para perguntar é um número que não vai ser achado, e a regra do
+    `remessa_dos_seus_numeros` já exige que os ACHADOS caiam todos na mesma
+    remessa.
+    """
+    limpos: list[str] = []
+    vistos: set[str] = set()
+    for cru in seus or ():
+        seu = str(cru or "").strip()
+        if not seu or seu in vistos or len(seu) > 40:
+            continue
+        if set(seu) <= _LETRAS_DO_SEU_NUMERO:
+            vistos.add(seu)
+            limpos.append(seu)
+    return limpos
+
 
 class Envio:
     """Onde um pagamento já saiu. O bastante para o app montar o recado.
@@ -256,6 +293,82 @@ class Registro:
         return rest.ler("remessa", self._token,
                         colunas="*,remessa_item(*)", filtro=filtro)
 
+    def remessa_dos_seus_numeros(self, seus: list[str]) -> dict | None:
+        """A remessa que gerou estes "seus números" — o segundo caminho do retorno.
+
+        O primeiro caminho é o header do arquivo (convênio + NSA), e ele falha
+        em casos reais: retorno de remessa gerada por outra máquina antes do
+        registro central, convênio reescrito no painel, NSA ajustado à mão.
+        O "seu número" é a chave melhor para esse segundo caminho porque ela é
+        NOSSA: `yymmdd-NNNN[-OC…]`, 20 posições que nós definimos, que o banco
+        devolve idênticas, e que o `remessa_item` guarda com a `remessa`
+        ligada. Desde 04/09/2026 ela é única no dia entre todas as contas e
+        todas as máquinas — o índice `remessa_item_seu_numero_unico_no_dia`.
+
+        **Exige que TODOS os achados caiam na MESMA remessa**, e essa é a
+        regra inteira. O índice é PARCIAL pela data (`criado_em >=
+        2026-09-05`), porque o histórico é append-only e a repetição de
+        20/08/2026 continua lá dentro — naquele dia a segunda remessa repetiu
+        `260820-0004`…`0010`. Um "seu número" daquela época aponta para duas
+        remessas, e escolher uma delas é aplicar o retorno na remessa errada:
+        dar por pago o pagamento de outra conta e baixar o lançamento errado
+        no ERP. Achando mais de uma remessa — ou nenhuma —, devolve `None` e
+        quem chamou trata o retorno como de remessa desconhecida, que é o
+        desfecho que já existia e que ninguém perde nada em ter.
+
+        **Sem filtro de estado**, ao contrário do `_procurar`: uma remessa
+        descartada que compartilhe o número não é para ser ignorada, é para
+        ser a SEGUNDA candidata que faz esta consulta recusar. Aqui não se
+        procura "onde este pagamento ainda vale"; procura-se "de que remessa
+        este arquivo está falando", e ambiguidade é resposta.
+
+        Devolve a linha da remessa COM os itens dentro — a mesma forma que
+        `remessas()` entrega —, porque quem lê o retorno precisa do de-para
+        inteiro: os itens que o banco NÃO citou é que dizem o que ficou
+        faltando.
+        """
+        alvos = _seus_numeros_limpos(seus)
+        if not alvos:
+            return None
+
+        achada: dict | None = None
+        remessa_id = None
+        for inicio in range(0, len(alvos), LOTE_DE_SEUS_NUMEROS):
+            lote = alvos[inicio:inicio + LOTE_DE_SEUS_NUMEROS]
+            linhas = rest.ler(
+                "remessa_item", self._token,
+                colunas="seu_numero,remessa_id,"
+                        "remessa(id,convenio,nsa,estado,arquivo)",
+                filtro=f"seu_numero=in.({','.join(lote)})")
+            for linha in linhas:
+                remessa = linha.get("remessa") or {}
+                atual = linha.get("remessa_id")
+                if atual is None:
+                    atual = remessa.get("id")
+                if atual is None:
+                    continue
+                if remessa_id is None:
+                    remessa_id, achada = atual, remessa
+                elif atual != remessa_id:
+                    return None
+        if achada is None:
+            return None
+
+        # Os itens vêm numa segunda ida, e não embutidos na primeira: o que se
+        # quer aqui são TODOS os itens da remessa, e a consulta de cima traz só
+        # os que o arquivo citou. `remessas(convenio=)` já pede
+        # `remessa_item(*)` e já é a forma que quem lê o retorno sabe ler —
+        # duas viagens no caminho raro valem menos que uma segunda montagem da
+        # mesma linha.
+        convenio = str(achada.get("convenio") or "")
+        nsa = int(achada.get("nsa") or 0)
+        if not convenio or not nsa:
+            return None
+        for r in self.remessas(convenio=convenio):
+            if int(r.get("nsa") or 0) == nsa:
+                return r
+        return None
+
     def aplicar_retorno(self, convenio: str, nsa: int, respostas: dict,
                         *, estado: str = "") -> int:
         """Grava o que o banco respondeu de cada pagamento.
@@ -402,6 +515,15 @@ class Espelhado:
 
     def remessas(self, *, convenio: str | None = None):
         return self._nuvem.remessas(convenio=convenio)
+
+    def remessa_dos_seus_numeros(self, seus: list[str]):
+        """Da NUVEM, como o NSA e a ordem do dia.
+
+        O espelho local tem o método (é a mesma pergunta sobre o
+        `remessas.json`), mas só conhece as remessas que saíram DESTE
+        computador — e o caso que este caminho existe para resolver é
+        justamente o retorno de uma remessa gerada em OUTRA máquina."""
+        return self._nuvem.remessa_dos_seus_numeros(seus)
 
     def aplicar_retorno(self, convenio: str, nsa: int, respostas: dict,
                         *, estado: str = ""):
