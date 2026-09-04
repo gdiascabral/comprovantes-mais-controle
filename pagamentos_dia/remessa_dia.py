@@ -112,6 +112,11 @@ MOTIVO_VALOR_DIVERGE = ("o boleto diz um valor e o lançamento diz outro — "
 MOTIVO_JA_ENVIADO = "já saiu na remessa nº {nsa:06d} de {quando}"
 MOTIVO_SEM_CONVENIO = "empresa sem convênio de remessa cadastrado"
 MOTIVO_FORA_SICOOB = "a remessa CNAB 240 é do Sicoob; esta conta é de outro banco"
+#: Conta COM banco em branco no `contas_mc.json` caía no motivo acima — e
+#: "esta conta é de outro banco" manda conferir o banco errado: não há outro
+#: banco, há um campo vazio. O motivo próprio diz onde consertar.
+MOTIVO_SEM_BANCO = ("conta sem banco no cadastro (contas_mc.json) — "
+                    "corrija no painel")
 MOTIVO_CONTA_DESCONHECIDA = "conta não está no mapa (contas_mc.json)"
 
 #: O "seu número" tem 20 posições no layout, e é o que o banco devolve
@@ -174,6 +179,8 @@ def resolver_pagador(conta_erp: str, mapa_mc, empresas) -> tuple[Pagador | None,
     destino = mapa_mc.de(conta_erp) if mapa_mc else None
     if destino is None:
         return None, MOTIVO_CONTA_DESCONHECIDA
+    if not destino.banco.strip():
+        return None, MOTIVO_SEM_BANCO
     if destino.banco.strip().upper() != "SICOOB":
         return None, MOTIVO_FORA_SICOOB
 

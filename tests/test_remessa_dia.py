@@ -524,6 +524,24 @@ def test_conta_de_outro_banco_nao_gera_remessa():
     assert motivo == remessa_dia.MOTIVO_FORA_SICOOB
 
 
+def test_conta_sem_banco_nao_gera_remessa_com_motivo_proprio():
+    """Sem banco não é "de outro banco": não há outro banco, há campo vazio.
+
+    O mapa carrega a conta assim de propósito — uma linha ruim não derruba as
+    outras —, e é aqui que ela para, com o recado dizendo onde consertar."""
+    mapa = mapa_mc()
+    mapa.destinos.append(contas_mc.Destino(
+        erp="EMPRESA EXEMPLO - SEM BANCO", empresa="EXEMPLO",
+        pasta="OUTRO", banco=""))
+    _, motivo = remessa_dia.resolver_pagador("EMPRESA EXEMPLO - SEM BANCO",
+                                             mapa, empresas())
+    assert motivo == remessa_dia.MOTIVO_SEM_BANCO
+    assert motivo != remessa_dia.MOTIVO_FORA_SICOOB
+    assert "contas_mc.json" in motivo
+    # e a conta boa da mesma empresa continua saindo
+    assert remessa_dia.resolver_pagador(CONTA, mapa, empresas())[1] == ""
+
+
 def test_conta_fora_do_mapa_nao_gera_remessa():
     _, motivo = remessa_dia.resolver_pagador("CONTA QUE NINGUEM CADASTROU",
                                              mapa_mc(), empresas())

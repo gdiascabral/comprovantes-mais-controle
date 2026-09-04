@@ -1047,6 +1047,18 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   caminhos aqui são longos (empresa + subconta com descrição + o `.zip` do
   fechamento por cima) e estourar os 260 do Windows aparece como falha de
   escrita no meio do lote, com causa nada óbvia.
+  **`carregar()` ACEITA `banco` vazio; quem usa o banco é quem barra a conta.**
+  Obrigatórios são só `erp`, `empresa` e `pasta` — sem eles a linha não
+  identifica nada. Em 04/09/2026 UMA conta sem `banco` levantava `MapaInvalido`
+  e, com ele, a aba Pagamentos do Dia parava para TODAS as empresas e o
+  Relatório Mensal inteiro: um dado ruim custava o dia de todo mundo. Agora
+  cada consumidor decide — `contas_mc.impedimentos()` faz a conta nascer
+  desmarcada e travar o lote do Relatório Mensal **antes** do primeiro download
+  (o PDF sairia `202607  MAIS CONTROLE.pdf`, sem dizer de que banco é), e a
+  remessa recusa só aquela conta, com `MOTIVO_SEM_BANCO` em vez do enganoso
+  "esta conta é de outro banco". Como em `caminhos_longos()`, `impedimentos()`
+  só olha as contas marcadas: barrar por causa de conta que ninguém marcou
+  seria repetir o erro em escala menor.
 - `extratos_sicoob/` — aba Extratos Sicoob: cria a árvore do fechamento
   mensal e baixa OFX + PDF de cada conta do SicoobNet Empresarial.
   **Único módulo com navegador PRÓPRIO** (executor de 1 worker e perfil
