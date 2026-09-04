@@ -1885,11 +1885,27 @@ class PagamentosDiaFrame(ttk.Frame):
         return resposta["ok"]
 
     def _gravar_remessas(self, preparado, pagadores, historico):
-        """Valida, grava e registra — nessa ordem, uma conta por vez.
+        """Reserva o NSA, valida, grava e registra — nessa ordem, uma por vez.
 
-        Arquivo que não passa no validador não é gravado E não consome o NSA:
-        número gasto por arquivo que não existe vira furo sem explicação, e o
-        histórico é justamente quem tem de explicar os furos.
+        A reserva vem ANTES da validação porque o NSA entra no CONTEÚDO do
+        arquivo: é o campo G018 do header, e é justamente ele que o validador
+        confere. Não há como validar primeiro sem validar um arquivo sem
+        número, nem como espiar o número aqui e reservá-lo depois — a janela
+        entre espiar e reservar é a janela em que a outra máquina pega o mesmo
+        NSA, e as duas geram arquivos legítimos que o banco vê como um só.
+
+        A consequência é que **arquivo reprovado não é gravado, mas o NSA já
+        está queimado**. É o lado certo de errar: pular número é inofensivo,
+        repetir pode ser pagamento em dobro.
+
+        E o número queimado não deixa rastro em lugar nenhum — o aviso na tela
+        some com a janela, `alocar_nsa` só empurra o `remessa_contador` da
+        nuvem, o `remessas.json` só aprende um NSA quando `registrar` é
+        chamado, e `remessa_ajuste`/`ajustes` guardam só a correção manual do
+        contador (`ajustar_nsa`, que exige motivo por escrito). O furo aparece
+        como número faltando na sequência, e quem for conferir com a
+        cooperativa depois não encontra a explicação escrita: é o preço de
+        nunca repetir, e está pago de propósito.
         """
         from cnab240 import relatorio as _rel_cnab, validar
 
