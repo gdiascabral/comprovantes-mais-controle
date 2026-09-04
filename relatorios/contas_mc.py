@@ -74,6 +74,23 @@ _chave = util.norm_espaco
 
 # ---------------------------------------------------------------- leitura
 
+def _identificar(conta: dict) -> str:
+    """Como a PESSOA reconhece esta linha do cadastro: empresa, pasta e conta
+    do ERP — os que estiverem preenchidos.
+
+    "A conta nº 7 está sem: pasta" manda alguém contar linhas num JSON que ela
+    não abre e que, desde 13/08/2026, é só um cache do painel: a linha nº 7
+    daqui não é a 7ª linha de lugar nenhum que se possa editar. O número fica
+    (ele ainda ordena o recado), mas quem carrega o sujeito é o que já está
+    preenchido — e sempre sobra alguma coisa, porque a linha só chega aqui
+    faltando UM ou DOIS dos três."""
+    partes = [f"{rotulo} '{str(conta.get(chave) or '').strip()}'"
+              for rotulo, chave in (("empresa", "empresa"), ("pasta", "pasta"),
+                                    ("conta do ERP", "erp"))
+              if str(conta.get(chave) or "").strip()]
+    return ", ".join(partes) or "sem nada preenchido"
+
+
 def carregar(caminho: Path | None = None) -> Mapa:
     """Lê o `contas_mc.json` inteiro, ou explica por que não dá para lê-lo.
 
@@ -106,7 +123,10 @@ def carregar(caminho: Path | None = None) -> Mapa:
         faltando = [k for k in ("erp", "empresa", "pasta") if not c.get(k)]
         if faltando:
             raise MapaInvalido(
-                f"A conta nº {i} está sem: {', '.join(faltando)}.")
+                f"A conta nº {i} ({_identificar(c)}) está sem: "
+                f"{', '.join(faltando)}.\n\n"
+                "O cadastro é editado no painel do Supabase; depois feche e "
+                "abra o app.")
         destinos.append(Destino(erp=c["erp"].strip(), empresa=c["empresa"].strip(),
                                 pasta=c["pasta"].strip(),
                                 banco=(c.get("banco") or "").strip(),

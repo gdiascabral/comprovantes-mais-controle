@@ -952,6 +952,51 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   subconta ainda não aderida sair com o número da principal, que é o campo
   07.0 do header e o nome da sequência do NSA. Conta sem convênio para
   sozinha, com `MOTIVO_SEM_CONVENIO`, e a irmã que já aderiu segue.
+  **`_e_sicoob(banco)` aceita `SICOOB`, `756` e `0756`** — o precedente é o
+  `nuvem/cadastro._e_inter`, que aceita nome ou código "porque o cadastro tem
+  os dois jeitos". Enquanto a comparação era `!= "SICOOB"`, a conta cadastrada
+  por código levava `MOTIVO_FORA_SICOOB`: "esta conta é de outro banco" para
+  uma conta que É do Sicoob, que é a pior espécie de recado — manda conferir a
+  coisa errada. Ela passa a gerar, e o dado torto continua sendo AVISO na
+  prontidão, porque é esse campo cru que nomeia o extrato do Relatório Mensal
+  (`202607 756 MAIS CONTROLE.pdf`).
+  **A prontidão do cadastro (`Conferencia`, `conferir_conta`, `prontidao`)
+  mora aqui, e não em `sicoob_contas.impedimentos()`.** Duas razões, e as duas
+  são de escopo: aquela função barra o LOTE da aba Extratos — parar 17 contas
+  em 12 empresas porque uma está sem convênio é exatamente o dia que este
+  código veio devolver —, e ela não conhece o `contas_mc.json`, que é onde
+  começa a pergunta ("de que empresa é esta conta do ERP?"). O que ela julga é
+  o cadastro do Sicoob sozinho; o que a remessa precisa é dos dois mapas de uma
+  vez.
+  **`conferir_conta` junta TODOS os problemas; `resolver_pagador` para no
+  primeiro** — e a diferença é o motivo de as duas existirem. Quem GERA precisa
+  de um veredito ("sai ou não sai"); quem CORRIGE precisa da lista, porque
+  descobrir a agência hoje, o convênio amanhã e o CNPJ depois de amanhã é o
+  mesmo dia parado três vezes. São dez conferências, na ordem em que o ARQUIVO
+  precisaria: banco vazio (falta) ou escrito por código (aviso), a empresa no
+  `contas_sicoob.json`, a conta na pasta (com o `sufixo` desempatando), agência
+  de 4–5 dígitos, conta COM dígito verificador, **o CNPJ do pagador conferido
+  por DV** (`regras_pagamento.documento_valido`, que reexporta o
+  `cnab240.dominios` — ninguém conferia o documento de quem PAGA antes do
+  validador, e foi um CPF de preenchimento do favorecido que devolveu a remessa
+  de 20/08/2026), razão social vazia (aviso: o header cai para o nome de pasta,
+  cortado nas 30 posições do campo 13.0), o convênio, e a duplicidade entre
+  contas — mesmo convênio, ou mesma agência+conta, é falta nas DUAS, porque não
+  há como saber qual delas está errada. Conta de OUTRO banco não entra na
+  lista: não é pendência, é conta que não faz remessa CNAB, e uma lista que
+  carrega dez contas do Inter para sempre é uma lista que ninguém lê.
+  **As duas concordam POR TESTE, e não por disciplina.** `resolver_pagador`
+  não tem régua própria: depois das duas perguntas que decidem se a conta
+  ENTRA na prontidão (banco vazio, banco de outro banco) ele devolve a PRIMEIRA
+  falta da `Conferencia` daquela conta. Duas listas de checagens se separam sem
+  ninguém perceber — a tabela diria "pronta" e o botão recusaria, ou, pior, a
+  tabela diria "falta" e o arquivo sairia assim mesmo —, e quem impede a volta
+  é `test_a_prontidao_e_o_resolver_pagador_concordam`, que roda um cadastro com
+  uma conta de cada defeito e exige `c.pronta ⟺ resolver_pagador(...)` devolver
+  pagador.
+  **`contas_sem_remessa(preparado, gerados)`** é a aritmética do cartão
+  "Contas sem remessa" do Início, tirada de dentro do frame para poder ser
+  testada — ver o achado K em `pagamentos_frame.py`.
   **`diagnostico_documentos`** existe para fechar a lacuna do Pix: varre o
   `overview` que o "1. Buscar" já trouxe e diz ONDE há CPF/CNPJ válido, sem
   imprimir documento nenhum — só caminho, contagem e **valores distintos**. É o
@@ -991,6 +1036,38 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   de `submeter()`: quem cancela ali não pode ter consumido a sessão do ERP.
   Anexo que é foto só é baixado quando é aviso "PAGAR PARA" — baixar toda
   imagem de todo título seria pagar OCR por nada.
+  **O cartão "Contas prontas para remessa" é montado quando a aba é MOSTRADA,
+  não na construção.** O esqueleto (o `Treeview` e o rodapé) nasce no `_build`,
+  porque custa microssegundos; quem custa é LER os dois JSON, e isso acontece
+  no `ao_abrir()` — o mesmo gancho que o Início usa, chamado por
+  `comprovantes_app.mostrar` a cada troca de aba. As doze abas somam ~1,2 s na
+  abertura do app (a Início sozinha ~670 ms), e pagar disco adiantado por uma
+  tabela que ninguém está olhando é o oposto do que se quer. De graça: quem
+  corrigiu o cadastro no painel não precisa reabrir a aba de propósito — sair
+  dela e voltar já relê —, e há um "Conferir de novo" no rodapé. **Custo real:
+  dois arquivos locais.** Sem rede, sem ERP e sem navegador, então roda na
+  thread da interface.
+  Cinco colunas — `CONTA (ERP) · EMPRESA · AG-CONTA · CONVÊNIO · SITUAÇÃO` —,
+  e a situação é `✓ pronta`, `⚠ falta: agência, convênio` ou `· aviso: …`: o
+  símbolo vem de `widgets.MARCAS_ESTADO` e a cor da tag do `widgets`, nenhuma
+  escrita aqui. **Falta é `atencao` e não `erro`** porque nada falhou — o
+  cadastro está incompleto e ninguém tentou gerar nada ainda. O rodapé diz
+  "corrija no painel do Supabase e reabra o app", e o "reabra" não é zelo: o
+  cache só é regravado na abertura (`nuvem.cadastro.sincronizar`).
+  A MESMA lista aparece no lugar dos dois recados genéricos do `gerar_remessa`:
+  quando os `carregar()` levantam (aí sem tabela, porque não há cadastro para
+  conferir — o que o recado ganhou foi o `contas_mc.carregar` dizendo QUAL
+  linha está torta) e quando `pagadores` sai vazio, onde "Nenhuma conta marcada
+  gera remessa" passa a listar `conta: faltas` — todas as faltas, e não só o
+  primeiro motivo, porque quem lê ali vai consertar.
+  **Achado K: o dia em que NENHUM arquivo sai também é um dia em que alguém
+  rodou.** `_gravar_remessas` só chamava `auditoria.registrar` no caminho em
+  que houve arquivo, e o cartão "Contas sem remessa" do Início mostrava "—" —
+  exatamente o que ele mostra quando ninguém rodou nada. O pior dia do mês
+  ficava indistinguível de um dia comum. Hoje registra nos dois desfechos, com
+  `resultado="atencao"` quando nada saiu, e a aritmética é a mesma função pura
+  nos dois (`remessa_dia.contas_sem_remessa`): escrita duas vezes, seria o
+  mesmo cartão dizendo duas coisas.
 - `cnab240/` — gerador, validador e leitor de retorno do arquivo CNAB 240 do
   Sicoob (Guia v3.3), **stdlib pura** e sem tela nenhuma: é biblioteca, não aba.
   Quem a usa é o passo 3 da aba Pagamentos do Dia (`pagamentos_dia/remessa_dia.py`).
@@ -1078,6 +1155,14 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   "esta conta é de outro banco". Como em `caminhos_longos()`, `impedimentos()`
   só olha as contas marcadas: barrar por causa de conta que ninguém marcou
   seria repetir o erro em escala menor.
+  **A linha ruim é identificada pelo que a PESSOA reconhece, não pelo número
+  de ordem.** "A conta nº 2 está sem: pasta" mandava contar linhas num JSON —
+  e contar não resolve, porque desde 13/08/2026 o arquivo é CACHE do painel: a
+  linha nº 2 daqui não é a 2ª linha de nada que se possa editar. Hoje o recado
+  cita `empresa`, `pasta` e `erp` (os que estiverem preenchidos — sempre sobra
+  algum, porque a linha só chega ali faltando um ou dois dos três) e diz onde
+  se conserta: "o cadastro é editado no painel do Supabase; depois feche e
+  abra o app".
 - `extratos_sicoob/` — aba Extratos Sicoob: cria a árvore do fechamento
   mensal e baixa OFX + PDF de cada conta do SicoobNet Empresarial.
   **Único módulo com navegador PRÓPRIO** (executor de 1 worker e perfil
