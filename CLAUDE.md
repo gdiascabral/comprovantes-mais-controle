@@ -963,9 +963,19 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   (Buscar / Gerar planilha / Gerar remessa). **O passo 3 não passa pelo
   `anx.submeter`**: não há navegador nem ERP nele — a remessa sai do
   `self.resultado` que o passo 2 deixou em memória, e escrever texto local não
-  justifica ocupar a sessão que só aceita um por vez. Valida ANTES de gravar:
-  arquivo reprovado não é escrito **e não consome o NSA**, senão o histórico
-  fica com furo que ele mesmo não sabe explicar. Compartilha navegador e thread do Anexar. O passo separado
+  justifica ocupar a sessão que só aceita um por vez. **Reserva o NSA, valida,
+  grava e registra — nessa ordem.** Arquivo reprovado não é escrito, mas o NSA
+  já foi reservado e fica **queimado**: o número entra no CONTEÚDO do arquivo
+  (o G018 do header, que é o que o validador confere), então não há como
+  validar antes sem validar um arquivo sem número, e espiar aqui para reservar
+  depois abriria a janela em que a outra máquina pega o mesmo. É o lado certo
+  de errar — pular número é inofensivo, repetir pode ser pagamento em dobro.
+  O número queimado **não deixa rastro**: `alocar_nsa` só empurra o
+  `remessa_contador` da nuvem, o `remessas.json` só aprende um NSA quando
+  `registrar` é chamado, e `remessa_ajuste`/`ajustes` guardam só a correção
+  manual do contador (`ajustar_nsa`, que exige motivo por escrito). O furo
+  aparece como número faltando na sequência, e ninguém o explica por escrito.
+  Compartilha navegador e thread do Anexar. O passo separado
   existe porque quem confere quer VER a lista de contas antes de gerar, e cada
   rodada custa uma sessão do ERP (que só aceita uma por usuário). Contas
   "APENAS LANÇAMENTO/AJUSTE" aparecem desmarcadas, não escondidas. As chaves

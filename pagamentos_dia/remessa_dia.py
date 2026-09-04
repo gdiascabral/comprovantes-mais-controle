@@ -118,6 +118,12 @@ MOTIVO_FORA_SICOOB = "a remessa CNAB 240 é do Sicoob; esta conta é de outro ba
 MOTIVO_SEM_BANCO = ("conta sem banco no cadastro (contas_mc.json) — "
                     "corrija no painel")
 MOTIVO_CONTA_DESCONHECIDA = "conta não está no mapa (contas_mc.json)"
+#: Duas contas da MESMA empresa na MESMA pasta e nenhum `sufixo` para separá-las:
+#: o app não tem como saber de qual delas o dinheiro sai, e escolher a primeira
+#: é pagar pela conta errada com header, pasta e nome de arquivo idênticos aos
+#: da certa — nada denunciaria. Recusar é a única falha aceitável aqui.
+MOTIVO_CONTA_AMBIGUA = ("há mais de uma conta nesta pasta e o sufixo não "
+                        "desempata — cadastre o sufixo no painel")
 
 #: O "seu número" tem 20 posições no layout, e é o que o banco devolve
 #: idêntico no retorno.
@@ -175,6 +181,17 @@ def resolver_pagador(conta_erp: str, mapa_mc, empresas) -> tuple[Pagador | None,
     Usa o mapa que já existe (`contas_mc.json`) em vez de um terceiro cadastro.
     Julho de 2026 já ficou partido uma vez porque dois mapas discordavam sobre
     a mesma conta; um mapa a mais é uma divergência a mais esperando acontecer.
+
+    **A conta pagadora é achada por pasta E `sufixo`.** Só pela pasta não
+    serve: há empresa no cadastro com QUATRO contas Sicoob na mesma pasta
+    "SICOOB", e o que as separa é o `sufixo` — o mesmo campo, com o mesmo
+    nome, dos dois lados (`contas_mc.Destino` e `sicoob_contas.Conta`), que já
+    desempata o nome do arquivo do extrato. Enquanto ele era ignorado, as
+    quatro viravam a MESMA conta pagadora: o dinheiro sairia de uma conta que
+    ninguém escolheu, e header, pasta e nome de arquivo ficavam idênticos aos
+    da conta certa — não havia o que conferir depois. O sufixo só é cobrado
+    quando há mais de uma candidata; a empresa de uma conta por pasta, que é a
+    maioria, continua resolvendo sem cadastrar nada.
     """
     destino = mapa_mc.de(conta_erp) if mapa_mc else None
     if destino is None:
@@ -191,10 +208,16 @@ def resolver_pagador(conta_erp: str, mapa_mc, empresas) -> tuple[Pagador | None,
     if not (getattr(empresa, "convenio", "") or "").strip():
         return None, MOTIVO_SEM_CONVENIO
 
-    conta = next((c for c in empresa.contas
-                  if _chave(c.pasta) == _chave(destino.pasta)), None)
-    if conta is None:
+    candidatas = [c for c in empresa.contas
+                  if _chave(c.pasta) == _chave(destino.pasta)]
+    if len(candidatas) > 1:
+        candidatas = [c for c in candidatas
+                      if _chave(c.sufixo or "") == _chave(destino.sufixo or "")]
+    if not candidatas:
         return None, f"a conta {destino.pasta} não está cadastrada em {empresa.nome}"
+    if len(candidatas) > 1:
+        return None, MOTIVO_CONTA_AMBIGUA
+    conta = candidatas[0]
 
     numero, dv_conta = _partes(conta.numero)
     agencia, dv_agencia = _partes(getattr(conta, "agencia", "") or "")
@@ -283,6 +306,32 @@ class Candidato:
 _SEQ = re.compile(r"^(\d{6})-(\d{4})")
 
 
+def _itens_de(remessa) -> list:
+    """Os itens de uma remessa, venha ela da nuvem ou do espelho local.
+
+    São duas formas para a mesma coisa, e ler só uma delas é ler zero item na
+    outra — sem erro, sem aviso: a nuvem (`nuvem.registro.Registro.remessas`,
+    que o `Espelhado` repassa e é o que o app usa) devolve DICT com a chave
+    `remessa_item`; o `cnab240.Historico` devolve objeto `RemessaGerada` com
+    `.itens`. Enquanto isto lia só `.itens`, a conferência do "seu número"
+    devolvia 0 contra o registro de verdade.
+
+    O mesmo par de nomes já é aceito em `retorno_dia._itens_da_remessa`, pelo
+    mesmo motivo.
+    """
+    if isinstance(remessa, dict):
+        return list(remessa.get("remessa_item") or remessa.get("itens") or [])
+    return list(getattr(remessa, "remessa_item", None)
+                or getattr(remessa, "itens", None) or [])
+
+
+def _seu_numero_de(item) -> str:
+    """O "seu número" do item, dict (nuvem) ou objeto (espelho local)."""
+    if isinstance(item, dict):
+        return str(item.get("seu_numero") or "")
+    return str(getattr(item, "seu_numero", "") or "")
+
+
 def sequencia_ja_usada(historico, quando: _dt.date) -> int:
     """A maior ordem do DIA que já saiu em alguma remessa viva. 0 se nenhuma.
 
@@ -298,6 +347,11 @@ def sequencia_ja_usada(historico, quando: _dt.date) -> int:
 
     Nunca levanta: registro fora do ar devolve 0, e a numeração volta a ser a
     de antes. Perder a remessa por causa da conferência seria pior.
+
+    Lê as DUAS formas de remessa (`_itens_de`) porque a proteção só vale se
+    enxergar o registro de verdade: contra a nuvem, que devolve dicts, ela
+    devolvia 0 calada — e 0 aqui é a segunda remessa do dia recomeçando em
+    0001 e repetindo os "seus números" da primeira.
     """
     if historico is None:
         return 0
@@ -305,8 +359,8 @@ def sequencia_ja_usada(historico, quando: _dt.date) -> int:
     maior = 0
     try:
         for remessa in historico.remessas():
-            for item in getattr(remessa, "itens", None) or []:
-                seu = str(getattr(item, "seu_numero", "") or "")
+            for item in _itens_de(remessa):
+                seu = _seu_numero_de(item)
                 if not seu.startswith(prefixo):
                     continue
                 achado = _SEQ.match(seu)
