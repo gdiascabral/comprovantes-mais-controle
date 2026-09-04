@@ -146,6 +146,37 @@ default `''` não muda nada para o código velho, que continua lendo
 
 ---
 
+## `2026-09-04_seu-numero-unico-no-dia.sql` ↔ `20260904160000_seu_numero_unico_no_dia.sql`
+
+O segundo par que nasce junto, no mesmo dia e pelo mesmo caminho do de cima: o
+runbook foi escrito a partir da migration, no PR. 3 comandos de schema nos dois
+lados, idênticos depois de normalizados — o índice `text_pattern_ops` que faz o
+`like` por prefixo do dia usar índice, o índice único parcial
+`remessa_item_seu_numero_unico_no_dia` e o `comment on index` dele.
+
+O runbook acrescenta **2** comandos, e os dois são `select`:
+
+- o de **repetições** (`select seu_numero, count(*), max(criado_em) … having
+  count(*) > 1`), que roda **antes** dos dois `create index`. Este não é
+  conferência de rotina: é ele que decide se a data do `where` do índice único
+  serve. O Postgres recusa criar índice único sobre dado que já o viola, e o
+  histórico de `remessa_item` é append-only com repetição conhecida — as
+  remessas 2, 3 e 4 de 20/08/2026 repetiram `260820-0004`…`0010`. Se aparecer
+  repetição com `criado_em` posterior à data escrita no índice, quem roda
+  **adia a data**, e não apaga linha: o que está gravado descreve arquivos que
+  já saíram para o banco;
+- o de conferência do fim, que lista os dois índices por nome em `pg_indexes`.
+  Nenhum dos dois imprime valor, favorecido ou convênio — só o "seu número", a
+  contagem e o nome do índice.
+
+A ordem também é parte da proveniência: **este arquivo roda ANTES do merge**, e
+aqui o motivo é o inverso do par acima. O código novo funciona sem os índices —
+ele consulta e numera como já fazia. Mergeado primeiro, nada quebra à vista: a
+consulta só vira varredura de tabela, e a corrida entre duas máquinas continua
+sem juiz. É por isso que a ordem importa mais, e não menos.
+
+---
+
 ## Conferir o schema de produção contra as migrations
 
 O acima compara arquivo com arquivo. Nada disso prova o que está **no banco**.

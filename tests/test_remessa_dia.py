@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 
+from cnab240.historico import ordem_do_dia
 from pagamentos_dia import ocr_boleto
 from pagamentos_dia import remessa_dia
 from relatorios import contas_mc
@@ -145,6 +146,11 @@ class _HistoricoFalso:
         self._barras = por_barras or {}
         self._ref = por_referencia or {}
 
+    def maior_ordem_do_dia(self, _quando):
+        """Responde, e responde 0: registro que NÃO responde derruba a remessa
+        desde 04/09/2026, e estes testes são sobre outra coisa."""
+        return 0
+
     def _achado(self, nsa):
         remessa = type("R", (), {"nsa": nsa, "gerado_em": None})()
         return (remessa, object())
@@ -208,22 +214,31 @@ def test_linha_sem_envio_anterior_nao_ganha_aviso():
     assert c.ja_enviado == "" and c.marcado
 
 
-class _RemessaFalsa:
-    def __init__(self, *seus):
-        self.itens = [type("I", (), {"seu_numero": s})() for s in seus]
-
-
 class _RegistroFalso:
-    """O bastante de um histórico para a numeração do dia."""
+    """O bastante de um histórico para a numeração do dia.
 
-    def __init__(self, *remessas, explode=False):
-        self._remessas = list(remessas)
+    Ele ANOTA a pergunta, e a anotação é metade do que os testes abaixo provam:
+    a ordem do dia tem de sair de UMA consulta filtrada (`maior_ordem_do_dia`),
+    e não da varredura de `remessas()` que existia até 04/09/2026 — sete
+    remessas com todos os itens dentro custavam 0,44 s, e o app vai para 18
+    contas vezes os dias.
+    """
+
+    def __init__(self, maior=0, *, explode=False):
+        self._maior = maior
         self._explode = explode
+        self.perguntas = []
 
-    def remessas(self, **_kw):
+    def maior_ordem_do_dia(self, quando):
+        self.perguntas.append(quando)
         if self._explode:
             raise RuntimeError("registro fora do ar")
-        return self._remessas
+        return self._maior
+
+    def remessas(self, **_kw):
+        raise AssertionError(
+            "a ordem do dia voltou a varrer TODAS as remessas; ela sai de "
+            "maior_ordem_do_dia, que é uma consulta filtrada de uma linha")
 
     def envio_de(self, _c):
         return None
@@ -240,46 +255,83 @@ def test_a_ordem_do_dia_continua_de_onde_parou():
     retorno para casar cada pagamento; repetido, casa com o errado — e foi por
     isso que o espelho local recusou aquela remessa.
     """
-    hist = _RegistroFalso(_RemessaFalsa(f"{HOJE:%y%m%d}-0001",
-                                        f"{HOJE:%y%m%d}-0010-OC55"))
+    hist = _RegistroFalso(10)
     assert remessa_dia.sequencia_ja_usada(hist, HOJE) == 10
     c, = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE,
                               historico=hist)[CONTA]
     assert c.seu_numero.startswith(f"{HOJE:%y%m%d}-0011")
 
 
-def test_a_ordem_do_dia_continua_de_onde_parou_contra_a_nuvem():
-    """A MESMA garantia, na forma que o registro de verdade devolve.
+def test_a_ordem_do_dia_sai_de_uma_consulta_filtrada():
+    """UMA pergunta, com a data dentro dela — não a tabela inteira.
 
-    `nuvem.registro.Registro.remessas()` (que o `Espelhado` repassa, e é ele
-    que o app usa desde que o NSA saiu do arquivo local) devolve DICTS com a
-    chave `remessa_item` — não objetos com `.itens`. Contra ela a conferência
-    devolvia 0 SEMPRE, calada, e a segunda remessa do dia recomeçava o "seu
-    número" em 0001, repetindo os da primeira: exatamente o defeito de
-    20/08/2026 que o teste de cima existe para impedir.
+    O `_RegistroFalso.remessas` levanta: se a numeração voltar a varrer, o
+    teste morre no lugar do defeito. E a pergunta feita é a do DIA que está
+    sendo preparado, não "tudo o que já saiu".
     """
-    hist = _RegistroFalso({"nsa": 3, "remessa_item": [
-        {"seu_numero": f"{HOJE:%y%m%d}-0001"},
-        {"seu_numero": f"{HOJE:%y%m%d}-0015-OC55"},
-    ]})
-    assert remessa_dia.sequencia_ja_usada(hist, HOJE) == 15
+    hist = _RegistroFalso(4)
+    remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE, historico=hist)
+    assert hist.perguntas == [HOJE]
+
+
+def test_o_maior_do_dia_atravessa_convenios():
+    """A consulta NÃO filtra por convênio, e é isso que a torna correta.
+
+    A ordem é do DIA, de todas as contas e de todas as máquinas: é ela que o
+    banco devolve no retorno para casar cada pagamento, e o índice único que a
+    protege (`remessa_item_seu_numero_unico_no_dia`) também não olha convênio.
+    Perguntar por conta daria dois pagamentos com o mesmo número — e o segundo
+    arquivo recusado no INSERT.
+    """
+    class _PorConvenio:
+        def maior_ordem_do_dia(self, _quando, *a, **kw):
+            assert not a and not kw, (
+                "a ordem do dia passou a ser perguntada por convênio; ela é do "
+                "DIA, de todas as contas")
+            return 7
+
+        def envio_de(self, _c):
+            return None
+
+        def envio_da_referencia(self, _r):
+            return None
+
     c, = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE,
-                              historico=hist)[CONTA]
-    assert c.seu_numero.startswith(f"{HOJE:%y%m%d}-0016")
+                              historico=_PorConvenio())[CONTA]
+    assert c.seu_numero.startswith(f"{HOJE:%y%m%d}-0008")
 
 
 def test_numero_de_outro_dia_nao_conta():
-    """A ordem é do DIA: ontem não empurra a numeração de hoje."""
-    hist = _RegistroFalso(_RemessaFalsa("260819-0042"))
-    assert remessa_dia.sequencia_ja_usada(hist, HOJE) == 0
+    """A ordem é do DIA: ontem não empurra a numeração de hoje.
+
+    Quem separa um dia do outro é `cnab240.historico.ordem_do_dia`, o único
+    lugar que sabe ler o formato — e é ele que a consulta da nuvem usa para
+    extrair o `NNNN` da única linha que volta.
+    """
+    assert ordem_do_dia("260819-0042", HOJE) == 0
+    assert ordem_do_dia(f"{HOJE:%y%m%d}-0042", HOJE) == 42
 
 
-def test_registro_fora_do_ar_nao_derruba_a_remessa():
-    """Perder a remessa por causa da conferência seria pior que renumerar."""
-    assert remessa_dia.sequencia_ja_usada(_RegistroFalso(explode=True), HOJE) == 0
+def test_registro_mudo_para_a_remessa_antes_da_conferencia():
+    """Substitui o `test_registro_fora_do_ar_nao_derruba_a_remessa`.
+
+    Numerar em cima de um "não sei" era inofensivo enquanto ninguém conferia: o
+    pior desfecho era repetir um "seu número", e o arquivo passava. Com o
+    índice único no Postgres, o mesmo silêncio vira arquivo RECUSADO no
+    registro — depois de a pessoa ter conferido a lista inteira e mandado
+    gerar. Recusar antes custa um clique; recusar depois custa a conferência
+    toda, e ainda queima o NSA.
+    """
+    mudo = _RegistroFalso(explode=True)
+    with pytest.raises(remessa_dia.RegistroMudo):
+        remessa_dia.sequencia_ja_usada(mudo, HOJE)
+    with pytest.raises(remessa_dia.RegistroMudo):
+        remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE, historico=mudo)
 
 
 def test_sem_historico_a_numeracao_e_a_de_antes():
+    """`None` não é registro mudo: é "não perguntei", e é assim que os testes
+    de regra chamam `preparar`."""
     assert remessa_dia.sequencia_ja_usada(None, HOJE) == 0
 
 

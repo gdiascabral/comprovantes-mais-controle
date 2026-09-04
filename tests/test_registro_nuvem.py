@@ -7,6 +7,10 @@ o que o Python decide: quem consome número e quem só olha, o que conta como
 "já enviado", e a regra de que o espelho local não tem voto.
 """
 
+import datetime as _dt
+import types
+from decimal import Decimal
+
 import pytest
 
 from cnab240 import historico
@@ -19,6 +23,10 @@ class _RestFalso:
     def __init__(self, **respostas):
         self.respostas = respostas
         self.chamadas = []
+        #: {tabela: exceção} — o que o banco RECUSA ao inserir. É como se
+        #: encena um índice único batendo no meio de uma gravação de duas
+        #: idas.
+        self.recusa_inserir = {}
 
     def ler(self, tabela, _token, *, colunas="*", filtro=""):
         self.chamadas.append(("ler", tabela, filtro))
@@ -26,6 +34,8 @@ class _RestFalso:
 
     def inserir(self, tabela, _token, linhas, *, devolver=True):
         self.chamadas.append(("inserir", tabela, len(linhas)))
+        if tabela in self.recusa_inserir:
+            raise self.recusa_inserir[tabela]
         self.respostas.setdefault("_inseridos", {}).setdefault(tabela, []).extend(linhas)
         return [{"id": 1}] if devolver else []
 
@@ -78,6 +88,79 @@ def test_ajuste_leva_o_motivo(falso):
     assert reg.ajustar_nsa("1814", 500, motivo="alinhar com o banco") == 12
     chamada = [c for c in falso.chamadas if c[0] == "chamar"][0]
     assert chamada[2]["p_motivo"] == "alinhar com o banco"
+
+
+# ------------------------------------------------------ a ordem do dia
+
+DIA = _dt.date(2026, 9, 4)
+
+
+def _filtros_lidos(falso, tabela):
+    return [c[2] for c in falso.chamadas if c[0] == "ler" and c[1] == tabela]
+
+
+def test_a_ordem_do_dia_e_uma_consulta_filtrada(falso):
+    """UMA ida, UMA linha — e o dia dentro do filtro.
+
+    Antes, quem numerava varria `remessas()`: todas as remessas com todos os
+    itens dentro, a cada geração (0,44 s com sete). O `like` por prefixo do dia
+    com `order` desc e `limit` 1 devolve o maior de uma vez porque a ordem tem
+    quatro dígitos com zero à esquerda — o formato ordena lexicograficamente
+    igual ao numérico.
+    """
+    falso.respostas["remessa_item"] = [{"seu_numero": "260904-0031"}]
+    assert registro.Registro("tok").maior_ordem_do_dia(DIA) == 31
+
+    filtro, = _filtros_lidos(falso, "remessa_item")
+    assert "seu_numero=like.260904-*" in filtro     # `*` é o curinga do PostgREST
+    assert "order=seu_numero.desc" in filtro
+    assert "limit=1" in filtro
+
+
+def test_a_consulta_do_dia_nao_filtra_por_convenio_nem_por_estado(falso):
+    """A ordem é do DIA, de todas as contas e de todas as máquinas.
+
+    É ela que o banco devolve no retorno para casar cada pagamento, e o índice
+    único que a protege (`remessa_item_seu_numero_unico_no_dia`) não olha
+    convênio nem estado. Filtrar aqui daria dois pagamentos com o mesmo número
+    — e o segundo arquivo recusado no INSERT, depois da conferência.
+    """
+    falso.respostas["remessa_item"] = []
+    registro.Registro("tok").maior_ordem_do_dia(DIA)
+
+    filtro, = _filtros_lidos(falso, "remessa_item")
+    assert "convenio" not in filtro
+    assert "estado" not in filtro
+
+
+@pytest.mark.parametrize("seu_numero, esperado", [
+    ("260904-0007", 7),
+    ("260904-0007-OC5825", 7),        # a OC vem depois da ordem, e não a muda
+    ("260903-0099", 0),               # outro dia: não empurra a numeração
+    ("", 0),
+    ("sem forma nenhuma", 0),
+])
+def test_o_numero_da_ordem_sai_da_linha_que_voltou(falso, seu_numero, esperado):
+    falso.respostas["remessa_item"] = [{"seu_numero": seu_numero}]
+    assert registro.Registro("tok").maior_ordem_do_dia(DIA) == esperado
+
+
+def test_dia_sem_remessa_nenhuma_comeca_do_zero(falso):
+    falso.respostas["remessa_item"] = []
+    assert registro.Registro("tok").maior_ordem_do_dia(DIA) == 0
+
+
+def test_a_consulta_do_dia_nao_engole_erro_de_rede(falso, monkeypatch):
+    """Devolver 0 aqui é a segunda remessa do dia recomeçando em 0001.
+
+    Era inofensivo enquanto ninguém conferia; com o índice único, vira arquivo
+    recusado DEPOIS de a pessoa ter conferido a lista inteira."""
+    def _cai(*_a, **_k):
+        raise rest.SemRede("sem internet")
+
+    monkeypatch.setattr(registro.rest, "ler", _cai)
+    with pytest.raises(rest.SemRede):
+        registro.Registro("tok").maior_ordem_do_dia(DIA)
 
 
 # ------------------------------------------------- "isto ja foi mandado?"
@@ -161,6 +244,76 @@ def test_o_filtro_pede_so_estado_vivo(falso):
         assert estado in filtro
 
 
+# -------------------------------------------- a corrida vira recusa limpa
+
+def _remessa_falsa(nsa=7, seu_numero="260904-0001"):
+    """O mínimo de um `ArquivoRemessa` para `registrar` — sem tocar no cnab240.
+
+    Convênio "123456" e conta "12.345-6" são os de mentira da casa: o
+    repositório é público.
+    """
+    pagamento = types.SimpleNamespace(
+        seu_numero=seu_numero, valor=Decimal("10.00"), codigo_barras="",
+        nome_cedente="FORNECEDOR EXEMPLO")
+    return types.SimpleNamespace(
+        nsa=nsa,
+        empresa=types.SimpleNamespace(
+            convenio="123456", nome="EMPRESA EXEMPLO LTDA",
+            documento="11.222.333/0001-81", agencia="4321", conta="12.345-6"),
+        lotes=[types.SimpleNamespace(produto="TITULOS_COBRANCA",
+                                     pagamentos=[pagamento])],
+        texto=lambda: "conteudo do arquivo",
+    )
+
+
+def test_itens_recusados_nao_deixam_remessa_vazia_na_nuvem(falso):
+    """São dois INSERTs, e o segundo pode ser recusado depois do primeiro.
+
+    É o desfecho da corrida que o índice único do "seu número" do dia passou a
+    julgar: duas máquinas leem a mesma "maior ordem", montam arquivos com os
+    mesmos números, e a segunda a gravar perde os itens — com a linha da
+    `remessa` já dentro e o NSA já queimado. Sem tratar isso, o que fica na
+    nuvem é uma remessa `gerado` SEM ITEM NENHUM: ela conta como envio vivo em
+    toda consulta e não tem de-para para o retorno do banco achar o caminho de
+    volta.
+    """
+    falso.recusa_inserir["remessa_item"] = rest.RecusadoPeloBanco(
+        'duplicate key value violates unique constraint '
+        '"remessa_item_seu_numero_unico_no_dia"')
+
+    with pytest.raises(rest.RecusadoPeloBanco):
+        registro.Registro("tok").registrar(_remessa_falsa(nsa=7),
+                                           caminho_arquivo="REM0007.REM")
+
+    marcacoes = [c for c in falso.chamadas if c[0] == "alterar"]
+    assert marcacoes, "a remessa ficou `gerado` e sem itens na nuvem"
+    _, tabela, filtro, mudancas = marcacoes[0]
+    assert tabela == "remessa"
+    assert "convenio=eq.123456" in filtro and "nsa=eq.7" in filtro
+    assert mudancas["estado"] == "descartado"
+    assert "itens recusados pelo banco" in mudancas["observacao"]
+
+
+def test_a_recusa_original_e_a_que_sobe(falso, monkeypatch):
+    """Marcar é best-effort; a exceção do banco é que impede o `.tmp` de virar
+    `.REM`, e quem apaga o `.tmp` é quem chamou."""
+    falso.recusa_inserir["remessa_item"] = rest.RecusadoPeloBanco("seu numero repetido")
+
+    def _alterar_tambem_cai(*_a, **_k):
+        raise rest.SemRede("a rede caiu no meio")
+
+    monkeypatch.setattr(registro.rest, "alterar", _alterar_tambem_cai)
+    with pytest.raises(rest.RecusadoPeloBanco, match="seu numero repetido"):
+        registro.Registro("tok").registrar(_remessa_falsa())
+
+
+def test_remessa_gravada_com_sucesso_nao_e_descartada(falso):
+    """A rede de segurança não pode disparar no caminho normal."""
+    registro.Registro("tok").registrar(_remessa_falsa(), caminho_arquivo="x.REM")
+    assert not [c for c in falso.chamadas if c[0] == "alterar"]
+    assert falso.respostas["_inseridos"]["remessa_item"][0]["seu_numero"] == "260904-0001"
+
+
 # ------------------------------------------------------------- espelho
 
 class _LocalFalso:
@@ -241,3 +394,18 @@ def test_o_numero_vem_sempre_da_nuvem():
     assert esp.alocar_nsa("1814") == 42
     assert esp.proximo_nsa("1814") == 42
     assert esp.ultimo_nsa("1814") == 41
+
+
+def test_a_ordem_do_dia_tambem_vem_sempre_da_nuvem():
+    """Pelo mesmo motivo do NSA: o arquivo local só conhece as remessas que
+    saíram DESTE computador, e a ordem do dia precisa valer entre máquinas."""
+    class Nuvem:
+        def maior_ordem_do_dia(self, _quando):
+            return 12
+
+    class LocalAtrasado:
+        def maior_ordem_do_dia(self, _quando):
+            raise AssertionError("o espelho local não responde a ordem do dia")
+
+    esp = registro.Espelhado(Nuvem(), LocalAtrasado())
+    assert esp.maior_ordem_do_dia(DIA) == 12

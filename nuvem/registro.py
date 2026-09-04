@@ -118,6 +118,39 @@ class Registro:
         return int(rest.chamar("ajustar_nsa", self._token, p_convenio=convenio,
                                p_novo=int(novo_ultimo), p_motivo=motivo))
 
+    def maior_ordem_do_dia(self, quando: _dt.date) -> int:
+        """A maior ordem do dia já gravada no "seu número". UMA linha, UMA ida.
+
+        Antes, quem numerava varria `remessas()` — TODAS as remessas com todos
+        os itens dentro, a cada geração (0,44 s com sete; 18 contas vezes os
+        dias não cabe nisso). E, mesmo varrendo, era só uma LEITURA: duas
+        máquinas gerando no mesmo instante liam o mesmo maior e repetiam. Quem
+        impede a repetição agora é o índice único
+        `remessa_item_seu_numero_unico_no_dia`; esta consulta existe para a
+        recusa dele ser rara, não para ser a trava.
+
+        **Sem filtro de convênio, de propósito**: a ordem é do DIA, de todas as
+        contas e de todas as máquinas. É ela que o banco devolve no retorno para
+        casar cada pagamento, e o índice único que a protege também não olha
+        convênio — numerar por conta daria dois pagamentos com o mesmo número e
+        o arquivo recusado no INSERT. Sem filtro de ESTADO pelo mesmo motivo: o
+        índice alcança a remessa descartada também.
+
+        Erro de rede LEVANTA, e é a diferença que este método traz: devolver 0
+        aqui é a segunda remessa do dia recomeçando em 0001.
+        """
+        from cnab240.historico import ordem_do_dia    # importado aqui para o
+                                                      # módulo não puxar o
+                                                      # cnab240 sem uso
+        # `*` é o curinga do `like` no PostgREST (ele o troca por `%`); `order`
+        # e `limit` viajam no filtro, como já fazem em `_procurar`.
+        linhas = rest.ler("remessa_item", self._token, colunas="seu_numero",
+                          filtro=(f"seu_numero=like.{quando:%y%m%d}-*"
+                                  f"&order=seu_numero.desc&limit=1"))
+        if not linhas:
+            return 0
+        return ordem_do_dia(linhas[0].get("seu_numero") or "", quando)
+
     # ------------------------------------------------------------- remessas
 
     def registrar(self, remessa, *, caminho_arquivo=None,
@@ -161,7 +194,10 @@ class Registro:
             raise rest.RecusadoPeloBanco("a remessa não foi gravada")
         remessa_id = gravada[0]["id"]
 
-        if itens:
+        if not itens:
+            return
+
+        try:
             rest.inserir("remessa_item", self._token, [{
                 "remessa_id": remessa_id,
                 "seu_numero": i.seu_numero,
@@ -171,6 +207,29 @@ class Registro:
                 "identificador": i.identificador,
                 "referencia": i.referencia,
             } for i in itens], devolver=False)
+        except Exception as e:
+            # A corrida vira recusa LIMPA. São dois INSERTs, e desde o índice
+            # único do "seu número" do dia o segundo pode ser recusado depois
+            # de o primeiro ter passado: duas máquinas que leram a mesma "maior
+            # ordem" montam arquivos com os mesmos números, e a segunda a
+            # gravar perde os itens — com a linha da `remessa` já dentro e o
+            # NSA já queimado.
+            #
+            # Sem isto, o que fica na nuvem é uma remessa `gerado` SEM ITEM
+            # NENHUM: ela conta como envio vivo em toda consulta, não tem
+            # de-para para o retorno do banco achar o caminho de volta, e nada
+            # no registro diz por que ela está vazia. Marcá-la é best-effort —
+            # se nem isso passar, a exceção original continua sendo a que
+            # sobe, porque é ela que impede o `.tmp` de virar `.REM`.
+            try:
+                self.marcar(str(cabecalho.convenio or ""), int(remessa.nsa),
+                            "descartado",
+                            observacao=f"itens recusados pelo banco: {e}"[:400])
+            except Exception:
+                log.warning("marcando como descartada a remessa nsa %s, cujos "
+                            "itens o banco recusou", getattr(remessa, "nsa", "?"),
+                            exc_info=True)
+            raise
 
     def marcar(self, convenio: str, nsa: int, estado: str,
                *, observacao: str = "") -> None:
@@ -288,6 +347,12 @@ class Espelhado:
 
     def alocar_nsa(self, convenio: str) -> int:
         return self._nuvem.alocar_nsa(convenio)
+
+    def maior_ordem_do_dia(self, quando: _dt.date) -> int:
+        """Da NUVEM, como o NSA. O espelho local não tem voto aqui também: a
+        ordem do dia precisa valer entre máquinas, e o arquivo local só conhece
+        as remessas que saíram DESTE computador."""
+        return self._nuvem.maior_ordem_do_dia(quando)
 
     def envio_de(self, identificador: str):
         return self._nuvem.envio_de(identificador)

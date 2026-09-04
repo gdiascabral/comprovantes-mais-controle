@@ -1697,6 +1697,49 @@ Quem garante a atomicidade é o Postgres, na função `alocar_nsa` (um
 `insert … on conflict do update … returning`, uma instrução só). Medido contra
 o projeto de verdade: 12 pedidos simultâneos, 12 números distintos.
 
+**A ordem do dia do "seu número" (04/09/2026).** O NSA não é o único número
+disputado: o "seu número" de cada pagamento é `yymmdd-NNNN[-OC…]`, 20 posições
+que **nós** definimos e o banco devolve idênticas no retorno — é por elas que
+cada resposta reencontra o lançamento. A ordem `NNNN` tem de ser única entre
+TODAS as remessas do dia, de todas as contas e de todas as máquinas: repetida,
+o retorno casa com o pagamento errado (foi o defeito de 20/08/2026, em que a
+segunda remessa do dia repetiu `260820-0004`…`0010`).
+
+Ela seguia o caminho oposto ao do NSA, e por isso mudou:
+
+- **a consulta virou UMA linha.** `sequencia_ja_usada` varria
+  `historico.remessas()` — todas as remessas com todos os itens dentro, a cada
+  geração (0,44 s com sete; 18 contas vezes os dias não cabe nisso). Hoje ela
+  pergunta `historico.maior_ordem_do_dia(quando)`, que a nuvem resolve com
+  `seu_numero=like.260904-*&order=seu_numero.desc&limit=1`. O formato ordena
+  lexicograficamente igual ao numérico porque a ordem tem quatro dígitos com
+  zero à esquerda e o sufixo `-OC…` vem depois dela. Quem sabe ler o formato é
+  `cnab240.historico.ordem_do_dia`, um dono só para três leitores;
+- **a consulta não é a trava — o índice é.** Ler não impede nada: duas máquinas
+  leem o mesmo maior e escrevem os mesmos números. Quem recusa agora é
+  `remessa_item_seu_numero_unico_no_dia`, índice único **parcial pela data**
+  (`criado_em >= 2026-09-05`). Parcial porque o histórico é append-only e já
+  tem a repetição de 20/08 dentro: reescrever o passado para caber numa regra
+  nova seria mentir sobre ele. A consulta existe para a recusa ser rara;
+- **a consulta não filtra convênio nem estado**, porque o índice também não. A
+  ordem é do DIA, e perguntá-la por conta daria dois pagamentos com o mesmo
+  número. O espelho local (`Historico.maior_ordem_do_dia`) filtra só o estado,
+  de propósito e coerente com `_conferir_seus_numeros`: lá descartar devolve os
+  números. Quem o app usa é sempre o da nuvem, pelo `Espelhado`;
+- **registro que não responde PARA a remessa** (`remessa_dia.RegistroMudo`, um
+  `messagebox` no passo 3). Antes devolvia 0 e a numeração recomeçava — era
+  inofensivo enquanto ninguém conferia. Com o índice, o mesmo silêncio vira
+  arquivo recusado DEPOIS de a lista inteira ter sido conferida, e com o NSA já
+  queimado. `historico=None` continua valendo 0: é "não perguntei", que é como
+  os testes de regra chamam `preparar`;
+- **a corrida perdida vira recusa limpa.** `Registro.registrar` são dois
+  INSERTs, e desde o índice o segundo pode ser recusado com a linha da
+  `remessa` já dentro. Sem tratar isso ficava na nuvem uma remessa `gerado` sem
+  item nenhum — contando como envio vivo e sem de-para para o retorno. Agora
+  ela é marcada `descartado` com `observacao="itens recusados pelo banco: …"`
+  (best-effort) e a exceção ORIGINAL sobe, porque é ela que impede o `.tmp` de
+  virar `.REM`.
+
 **Sem nuvem, a aba se recusa a gerar remessa** — e é a única operação do app
 que faz isso. Um contador local diria um número que a outra pessoa já pode ter
 usado, e o app não teria como saber. Todo o resto (cadastro, extratos,
