@@ -256,12 +256,58 @@ def test_referencia_ausente_fica_vazia_e_nao_casa(historico):
     assert historico.remessas()[0].itens[0].referencia == ""
 
 
-def test_seu_numero_leva_de_volta_ao_lancamento(historico):
-    """O caminho que o arquivo de retorno percorre."""
+def test_os_seus_numeros_levam_de_volta_a_remessa(historico):
+    """O caminho que o arquivo de retorno percorre quando o header não basta.
+
+    Substituiu o `item_por_seu_numero`, que respondia a mesma pergunta para UM
+    número e não tinha chamador: quem lê um retorno tem a lista inteira na mão,
+    e é a lista que decide."""
     historico.registrar(remessa_de_boleto(1), referencias={"260813-0001": "id-do-erp-987"})
-    achado = historico.item_por_seu_numero("260813-0001")
-    assert achado is not None
-    assert achado[1].referencia == "id-do-erp-987"
+    achada = historico.remessa_dos_seus_numeros(["260813-0001"])
+    assert achada is not None
+    assert achada.nsa == 1
+    assert achada.itens[0].referencia == "id-do-erp-987"
+
+
+def test_seus_numeros_de_duas_remessas_nao_casam(historico):
+    """Dois donos para a mesma lista é a prova de que não dá para saber de qual
+    delas o arquivo fala — e escolher seria aplicar o retorno na remessa
+    errada. A repetição existe de verdade no histórico: até o índice único do
+    dia entrar, a segunda remessa do dia podia repetir a numeração da
+    primeira, e foi o que aconteceu em 20/08/2026."""
+    historico.registrar(remessa_de_boleto(1))                 # 260813-0001
+    historico.registrar(remessa_de_ted(2))                    # 260813-0009
+
+    assert historico.remessa_dos_seus_numeros(
+        ["260813-0001", "260813-0009"]) is None
+    # Cada uma sozinha continua respondendo: o que recusa é a ambiguidade.
+    assert historico.remessa_dos_seus_numeros(["260813-0001"]).nsa == 1
+    assert historico.remessa_dos_seus_numeros(["260813-0009"]).nsa == 2
+
+
+def test_basta_um_achado_desde_que_a_remessa_seja_uma_so(historico):
+    """O banco devolve o que processou, e o arquivo pode citar número que este
+    registro não tem. Exigir que TODOS sejam achados perderia o retorno por um
+    pagamento a mais."""
+    historico.registrar(remessa_de_boleto(1))
+    achada = historico.remessa_dos_seus_numeros(["260813-0001", "260813-4444"])
+    assert achada is not None and achada.nsa == 1
+
+
+def test_nenhum_seu_numero_achado_nao_casa(historico):
+    historico.registrar(remessa_de_boleto(1))
+    assert historico.remessa_dos_seus_numeros(["260813-9999"]) is None
+    assert historico.remessa_dos_seus_numeros([]) is None
+    assert historico.remessa_dos_seus_numeros(["", "   "]) is None
+
+
+def test_remessa_descartada_nao_casa_com_o_retorno(historico):
+    """Só remessa VIVA, como as outras consultas daqui: descartar devolve os
+    "seus números" de propósito, para a segunda tentativa poder sair com o
+    mesmo número."""
+    historico.registrar(remessa_de_boleto(1))
+    historico.descartar("123456", 1, motivo="arquivo nao enviado")
+    assert historico.remessa_dos_seus_numeros(["260813-0001"]) is None
 
 
 def test_seu_numero_repetido_entre_remessas_e_recusado(historico):

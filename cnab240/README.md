@@ -104,8 +104,13 @@ origem, e é o que responde **"já mandei este boleto?"**:
 ```python
 historico.envio_de(codigo_barras)         # chave natural: só o código de barras
 historico.envio_da_referencia(id_erp)     # "este lançamento já foi mandado?"
-historico.item_por_seu_numero(seu_numero) # o caminho de volta do retorno
+historico.remessa_dos_seus_numeros(seus)  # de que remessa este retorno fala?
 ```
+
+A última recebe a lista inteira dos "seus números" que vieram no arquivo de
+retorno e só responde quando **todos** os que ela achou caem na mesma remessa:
+um número que aponta para duas não é empate a desempatar, é a prova de que não
+dá para saber de qual delas o arquivo fala.
 
 Chave Pix e dados de conta **não** viram identificador de propósito: o mesmo
 fornecedor recebe várias vezes no mesmo dia, e isso viraria alarme falso
