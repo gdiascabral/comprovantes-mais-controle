@@ -946,6 +946,57 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   **`ocr_boleto.codigo_de_barras`** converte a linha digitável (47/48) no código
   de barras (44) que o segmento J exige — e devolve "" para linha cujos DVs não
   fecham, porque a linha pode ter vindo de OCR.
+  **`resolver_pagador` lê o convênio da CONTA, e recusa sem herdar.** A
+  checagem vem DEPOIS de a conta estar escolhida — antes dela não há conta
+  para perguntar —, e não existe `or empresa.convenio`: herdar faria uma
+  subconta ainda não aderida sair com o número da principal, que é o campo
+  07.0 do header e o nome da sequência do NSA. Conta sem convênio para
+  sozinha, com `MOTIVO_SEM_CONVENIO`, e a irmã que já aderiu segue.
+  **`_e_sicoob(banco)` aceita `SICOOB`, `756` e `0756`** — o precedente é o
+  `nuvem/cadastro._e_inter`, que aceita nome ou código "porque o cadastro tem
+  os dois jeitos". Enquanto a comparação era `!= "SICOOB"`, a conta cadastrada
+  por código levava `MOTIVO_FORA_SICOOB`: "esta conta é de outro banco" para
+  uma conta que É do Sicoob, que é a pior espécie de recado — manda conferir a
+  coisa errada. Ela passa a gerar, e o dado torto continua sendo AVISO na
+  prontidão, porque é esse campo cru que nomeia o extrato do Relatório Mensal
+  (`202607 756 MAIS CONTROLE.pdf`).
+  **A prontidão do cadastro (`Conferencia`, `conferir_conta`, `prontidao`)
+  mora aqui, e não em `sicoob_contas.impedimentos()`.** Duas razões, e as duas
+  são de escopo: aquela função barra o LOTE da aba Extratos — parar 17 contas
+  em 12 empresas porque uma está sem convênio é exatamente o dia que este
+  código veio devolver —, e ela não conhece o `contas_mc.json`, que é onde
+  começa a pergunta ("de que empresa é esta conta do ERP?"). O que ela julga é
+  o cadastro do Sicoob sozinho; o que a remessa precisa é dos dois mapas de uma
+  vez.
+  **`conferir_conta` junta TODOS os problemas; `resolver_pagador` para no
+  primeiro** — e a diferença é o motivo de as duas existirem. Quem GERA precisa
+  de um veredito ("sai ou não sai"); quem CORRIGE precisa da lista, porque
+  descobrir a agência hoje, o convênio amanhã e o CNPJ depois de amanhã é o
+  mesmo dia parado três vezes. São dez conferências, na ordem em que o ARQUIVO
+  precisaria: banco vazio (falta) ou escrito por código (aviso), a empresa no
+  `contas_sicoob.json`, a conta na pasta (com o `sufixo` desempatando), agência
+  de 4–5 dígitos, conta COM dígito verificador, **o CNPJ do pagador conferido
+  por DV** (`regras_pagamento.documento_valido`, que reexporta o
+  `cnab240.dominios` — ninguém conferia o documento de quem PAGA antes do
+  validador, e foi um CPF de preenchimento do favorecido que devolveu a remessa
+  de 20/08/2026), razão social vazia (aviso: o header cai para o nome de pasta,
+  cortado nas 30 posições do campo 13.0), o convênio, e a duplicidade entre
+  contas — mesmo convênio, ou mesma agência+conta, é falta nas DUAS, porque não
+  há como saber qual delas está errada. Conta de OUTRO banco não entra na
+  lista: não é pendência, é conta que não faz remessa CNAB, e uma lista que
+  carrega dez contas do Inter para sempre é uma lista que ninguém lê.
+  **As duas concordam POR TESTE, e não por disciplina.** `resolver_pagador`
+  não tem régua própria: depois das duas perguntas que decidem se a conta
+  ENTRA na prontidão (banco vazio, banco de outro banco) ele devolve a PRIMEIRA
+  falta da `Conferencia` daquela conta. Duas listas de checagens se separam sem
+  ninguém perceber — a tabela diria "pronta" e o botão recusaria, ou, pior, a
+  tabela diria "falta" e o arquivo sairia assim mesmo —, e quem impede a volta
+  é `test_a_prontidao_e_o_resolver_pagador_concordam`, que roda um cadastro com
+  uma conta de cada defeito e exige `c.pronta ⟺ resolver_pagador(...)` devolver
+  pagador.
+  **`contas_sem_remessa(preparado, gerados)`** é a aritmética do cartão
+  "Contas sem remessa" do Início, tirada de dentro do frame para poder ser
+  testada — ver o achado K em `pagamentos_frame.py`.
   **`diagnostico_documentos`** existe para fechar a lacuna do Pix: varre o
   `overview` que o "1. Buscar" já trouxe e diz ONDE há CPF/CNPJ válido, sem
   imprimir documento nenhum — só caminho, contagem e **valores distintos**. É o
@@ -954,13 +1005,28 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   viraria "CPF encontrado", a mesma armadilha do `tipo_de_chave_pix`. Um campo
   que aparece em 1% dos lançamentos é acaso (dois DVs fechando por sorte), não
   achado — daí a contagem estar no relatório.
+  **`nome_do_arquivo` leva agência-conta desde 04/09/2026** (`REM_<EMPRESA>_
+  <AG>-<CONTA>_<NSA>.REM`): o convênio do Sicoob é POR CONTA CORRENTE, o NSA
+  recomeça em cada uma, e sem a agência-conta no nome uma holding com várias
+  subcontas gerava o mesmo nome em pastas diferentes — a pasta separa, mas o
+  arrasto para o SicoobNet mostra só o nome.
 - `pagamentos_dia/pagamentos_frame.py` — aba Pagamentos do Dia, em 3 passos
   (Buscar / Gerar planilha / Gerar remessa). **O passo 3 não passa pelo
   `anx.submeter`**: não há navegador nem ERP nele — a remessa sai do
   `self.resultado` que o passo 2 deixou em memória, e escrever texto local não
-  justifica ocupar a sessão que só aceita um por vez. Valida ANTES de gravar:
-  arquivo reprovado não é escrito **e não consome o NSA**, senão o histórico
-  fica com furo que ele mesmo não sabe explicar. Compartilha navegador e thread do Anexar. O passo separado
+  justifica ocupar a sessão que só aceita um por vez. **Reserva o NSA, valida,
+  grava e registra — nessa ordem.** Arquivo reprovado não é escrito, mas o NSA
+  já foi reservado e fica **queimado**: o número entra no CONTEÚDO do arquivo
+  (o G018 do header, que é o que o validador confere), então não há como
+  validar antes sem validar um arquivo sem número, e espiar aqui para reservar
+  depois abriria a janela em que a outra máquina pega o mesmo. É o lado certo
+  de errar — pular número é inofensivo, repetir pode ser pagamento em dobro.
+  O número queimado **não deixa rastro**: `alocar_nsa` só empurra o
+  `remessa_contador` da nuvem, o `remessas.json` só aprende um NSA quando
+  `registrar` é chamado, e `remessa_ajuste`/`ajustes` guardam só a correção
+  manual do contador (`ajustar_nsa`, que exige motivo por escrito). O furo
+  aparece como número faltando na sequência, e ninguém o explica por escrito.
+  Compartilha navegador e thread do Anexar. O passo separado
   existe porque quem confere quer VER a lista de contas antes de gerar, e cada
   rodada custa uma sessão do ERP (que só aceita uma por usuário). Contas
   "APENAS LANÇAMENTO/AJUSTE" aparecem desmarcadas, não escondidas. As chaves
@@ -1018,6 +1084,38 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   mora em `retorno_dia.ler_conteudo(texto, nome, historico)`, sobre TEXTO:
   membro de compactado não tem caminho no disco, e `ler(caminho)` virou a
   casca que abre o arquivo.
+  **O cartão "Contas prontas para remessa" é montado quando a aba é MOSTRADA,
+  não na construção.** O esqueleto (o `Treeview` e o rodapé) nasce no `_build`,
+  porque custa microssegundos; quem custa é LER os dois JSON, e isso acontece
+  no `ao_abrir()` — o mesmo gancho que o Início usa, chamado por
+  `comprovantes_app.mostrar` a cada troca de aba. As doze abas somam ~1,2 s na
+  abertura do app (a Início sozinha ~670 ms), e pagar disco adiantado por uma
+  tabela que ninguém está olhando é o oposto do que se quer. De graça: quem
+  corrigiu o cadastro no painel não precisa reabrir a aba de propósito — sair
+  dela e voltar já relê —, e há um "Conferir de novo" no rodapé. **Custo real:
+  dois arquivos locais.** Sem rede, sem ERP e sem navegador, então roda na
+  thread da interface.
+  Cinco colunas — `CONTA (ERP) · EMPRESA · AG-CONTA · CONVÊNIO · SITUAÇÃO` —,
+  e a situação é `✓ pronta`, `⚠ falta: agência, convênio` ou `· aviso: …`: o
+  símbolo vem de `widgets.MARCAS_ESTADO` e a cor da tag do `widgets`, nenhuma
+  escrita aqui. **Falta é `atencao` e não `erro`** porque nada falhou — o
+  cadastro está incompleto e ninguém tentou gerar nada ainda. O rodapé diz
+  "corrija no painel do Supabase e reabra o app", e o "reabra" não é zelo: o
+  cache só é regravado na abertura (`nuvem.cadastro.sincronizar`).
+  A MESMA lista aparece no lugar dos dois recados genéricos do `gerar_remessa`:
+  quando os `carregar()` levantam (aí sem tabela, porque não há cadastro para
+  conferir — o que o recado ganhou foi o `contas_mc.carregar` dizendo QUAL
+  linha está torta) e quando `pagadores` sai vazio, onde "Nenhuma conta marcada
+  gera remessa" passa a listar `conta: faltas` — todas as faltas, e não só o
+  primeiro motivo, porque quem lê ali vai consertar.
+  **Achado K: o dia em que NENHUM arquivo sai também é um dia em que alguém
+  rodou.** `_gravar_remessas` só chamava `auditoria.registrar` no caminho em
+  que houve arquivo, e o cartão "Contas sem remessa" do Início mostrava "—" —
+  exatamente o que ele mostra quando ninguém rodou nada. O pior dia do mês
+  ficava indistinguível de um dia comum. Hoje registra nos dois desfechos, com
+  `resultado="atencao"` quando nada saiu, e a aritmética é a mesma função pura
+  nos dois (`remessa_dia.contas_sem_remessa`): escrita duas vezes, seria o
+  mesmo cartão dizendo duas coisas.
 - `cnab240/` — gerador, validador e leitor de retorno do arquivo CNAB 240 do
   Sicoob (Guia v3.3), **stdlib pura** e sem tela nenhuma: é biblioteca, não aba.
   Quem a usa é o passo 3 da aba Pagamentos do Dia (`pagamentos_dia/remessa_dia.py`).
@@ -1026,8 +1124,11 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   o PDF sem abrir código — daí a linha extra no `build.yml` e o
   `tests/test_cnab240_pacote.py` que a vigia.
   **`historico.py` é a parte que o layout não resolve**: o NSA (nº sequencial
-  do arquivo) tem de ser CRESCENTE por convênio e quem o controla é quem gera
-  — o banco não guarda isso. Ele mora em `remessas.json` ao lado do exe, longe
+  do arquivo) tem de ser CRESCENTE por convênio — **e o convênio é POR CONTA
+  (04/09/2026)**, não por empresa: o Sicoob dá um por conta corrente, e uma
+  holding do cadastro tem nove, a principal e oito subcontas. Uma sequência de
+  NSA por conta corrente, portanto — quem o controla é quem gera,
+  o banco não guarda isso. Ele mora em `remessas.json` ao lado do exe, longe
   do cadastro de propósito: `contas_sicoob.json` é restaurado de backup, e um
   contador que volta no tempo é a única falha inaceitável aqui. Repetir NSA
   pode significar pagamento em dobro; pular número é inofensivo. O mesmo
@@ -1090,6 +1191,26 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   caminhos aqui são longos (empresa + subconta com descrição + o `.zip` do
   fechamento por cima) e estourar os 260 do Windows aparece como falha de
   escrita no meio do lote, com causa nada óbvia.
+  **`carregar()` ACEITA `banco` vazio; quem usa o banco é quem barra a conta.**
+  Obrigatórios são só `erp`, `empresa` e `pasta` — sem eles a linha não
+  identifica nada. Em 04/09/2026 UMA conta sem `banco` levantava `MapaInvalido`
+  e, com ele, a aba Pagamentos do Dia parava para TODAS as empresas e o
+  Relatório Mensal inteiro: um dado ruim custava o dia de todo mundo. Agora
+  cada consumidor decide — `contas_mc.impedimentos()` faz a conta nascer
+  desmarcada e travar o lote do Relatório Mensal **antes** do primeiro download
+  (o PDF sairia `202607  MAIS CONTROLE.pdf`, sem dizer de que banco é), e a
+  remessa recusa só aquela conta, com `MOTIVO_SEM_BANCO` em vez do enganoso
+  "esta conta é de outro banco". Como em `caminhos_longos()`, `impedimentos()`
+  só olha as contas marcadas: barrar por causa de conta que ninguém marcou
+  seria repetir o erro em escala menor.
+  **A linha ruim é identificada pelo que a PESSOA reconhece, não pelo número
+  de ordem.** "A conta nº 2 está sem: pasta" mandava contar linhas num JSON —
+  e contar não resolve, porque desde 13/08/2026 o arquivo é CACHE do painel: a
+  linha nº 2 daqui não é a 2ª linha de nada que se possa editar. Hoje o recado
+  cita `empresa`, `pasta` e `erp` (os que estiverem preenchidos — sempre sobra
+  algum, porque a linha só chega ali faltando um ou dois dos três) e diz onde
+  se conserta: "o cadastro é editado no painel do Supabase; depois feche e
+  abra o app".
 - `extratos_sicoob/` — aba Extratos Sicoob: cria a árvore do fechamento
   mensal e baixa OFX + PDF de cada conta do SicoobNet Empresarial.
   **Único módulo com navegador PRÓPRIO** (executor de 1 worker e perfil
@@ -1504,6 +1625,23 @@ linha com uma coluna `pasta`, e a divergência deixou de ser representável.
 `relatorios/conferir_mapas.py` continua existindo para quem rodar as abas com
 cache antigo, mas o problema que ele vigiava não tem mais como nascer.
 
+**O `convenio` mudou de tabela em 04/09/2026: era da `empresa`, é da `conta`**
+(migration `20260904113000_convenio_por_conta.sql`). A coluna de 13/08 nasceu
+supondo que o convênio fosse do CNPJ, e para empresa de uma conta só isso dava
+no mesmo — a holding com a conta principal e oito subcontas é que mostrou o
+desenho de verdade: o Sicoob dá **um convênio por conta corrente**, nove
+números diferentes debaixo de um CNPJ. Com o convênio na empresa, as nove
+contas sairiam com o mesmo campo 07.0 no header e dividindo UMA sequência de
+NSA. **Não há herança**, e isso é decisão: cair no convênio da empresa quando
+o da conta está vazio faria uma subconta ainda não aderida sair com o número
+da principal. A coluna `empresa.convenio` FICA por enquanto, e o cache
+continua escrevendo a chave da empresa — é o que máquina não atualizada lê;
+o código novo não a lê, e aposentá-la é uma migration futura. **A ordem de
+aplicar não pode inverter**: a migration roda ANTES do merge (coluna nova com
+default `''` não muda nada para o código velho; o contrário faz a
+sincronização pedir uma coluna que não existe), e só depois o painel recebe os
+números — que ficam fora deste repositório, como todo dado real.
+
 **Os JSON/CSV continuam existindo — como CACHE.** `nuvem/cadastro.sincronizar`
 roda uma vez, na abertura, e regrava os arquivos de sempre no formato de
 sempre. É por isso que `sicoob_contas`, `contas_mc` e `aportes/dados` não
@@ -1606,6 +1744,49 @@ era 1 e a pasta de código dizia 2.
 Quem garante a atomicidade é o Postgres, na função `alocar_nsa` (um
 `insert … on conflict do update … returning`, uma instrução só). Medido contra
 o projeto de verdade: 12 pedidos simultâneos, 12 números distintos.
+
+**A ordem do dia do "seu número" (04/09/2026).** O NSA não é o único número
+disputado: o "seu número" de cada pagamento é `yymmdd-NNNN[-OC…]`, 20 posições
+que **nós** definimos e o banco devolve idênticas no retorno — é por elas que
+cada resposta reencontra o lançamento. A ordem `NNNN` tem de ser única entre
+TODAS as remessas do dia, de todas as contas e de todas as máquinas: repetida,
+o retorno casa com o pagamento errado (foi o defeito de 20/08/2026, em que a
+segunda remessa do dia repetiu `260820-0004`…`0010`).
+
+Ela seguia o caminho oposto ao do NSA, e por isso mudou:
+
+- **a consulta virou UMA linha.** `sequencia_ja_usada` varria
+  `historico.remessas()` — todas as remessas com todos os itens dentro, a cada
+  geração (0,44 s com sete; 18 contas vezes os dias não cabe nisso). Hoje ela
+  pergunta `historico.maior_ordem_do_dia(quando)`, que a nuvem resolve com
+  `seu_numero=like.260904-*&order=seu_numero.desc&limit=1`. O formato ordena
+  lexicograficamente igual ao numérico porque a ordem tem quatro dígitos com
+  zero à esquerda e o sufixo `-OC…` vem depois dela. Quem sabe ler o formato é
+  `cnab240.historico.ordem_do_dia`, um dono só para três leitores;
+- **a consulta não é a trava — o índice é.** Ler não impede nada: duas máquinas
+  leem o mesmo maior e escrevem os mesmos números. Quem recusa agora é
+  `remessa_item_seu_numero_unico_no_dia`, índice único **parcial pela data**
+  (`criado_em >= 2026-09-05`). Parcial porque o histórico é append-only e já
+  tem a repetição de 20/08 dentro: reescrever o passado para caber numa regra
+  nova seria mentir sobre ele. A consulta existe para a recusa ser rara;
+- **a consulta não filtra convênio nem estado**, porque o índice também não. A
+  ordem é do DIA, e perguntá-la por conta daria dois pagamentos com o mesmo
+  número. O espelho local (`Historico.maior_ordem_do_dia`) filtra só o estado,
+  de propósito e coerente com `_conferir_seus_numeros`: lá descartar devolve os
+  números. Quem o app usa é sempre o da nuvem, pelo `Espelhado`;
+- **registro que não responde PARA a remessa** (`remessa_dia.RegistroMudo`, um
+  `messagebox` no passo 3). Antes devolvia 0 e a numeração recomeçava — era
+  inofensivo enquanto ninguém conferia. Com o índice, o mesmo silêncio vira
+  arquivo recusado DEPOIS de a lista inteira ter sido conferida, e com o NSA já
+  queimado. `historico=None` continua valendo 0: é "não perguntei", que é como
+  os testes de regra chamam `preparar`;
+- **a corrida perdida vira recusa limpa.** `Registro.registrar` são dois
+  INSERTs, e desde o índice o segundo pode ser recusado com a linha da
+  `remessa` já dentro. Sem tratar isso ficava na nuvem uma remessa `gerado` sem
+  item nenhum — contando como envio vivo e sem de-para para o retorno. Agora
+  ela é marcada `descartado` com `observacao="itens recusados pelo banco: …"`
+  (best-effort) e a exceção ORIGINAL sobe, porque é ela que impede o `.tmp` de
+  virar `.REM`.
 
 **Sem nuvem, a aba se recusa a gerar remessa** — e é a única operação do app
 que faz isso. Um contador local diria um número que a outra pessoa já pode ter

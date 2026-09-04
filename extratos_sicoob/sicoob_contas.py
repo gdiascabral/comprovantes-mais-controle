@@ -42,6 +42,14 @@ class Conta:
     #: dos OFX que o app ja arquivou. Vazio = esta conta nao gera remessa.
     banco: str = ""             # "756"
     agencia: str = ""           # "4321-0"
+    #: Codigo do convenio de pagamentos DESTA conta, como sai no comprovante
+    #: de adesao do SicoobNet. O Sicoob da um convenio por CONTA CORRENTE, e
+    #: nao por CNPJ: em 04/09/2026 mediu-se uma holding com a conta principal
+    #: e oito subcontas, cada uma com o seu numero. Nao se deriva de nada: e
+    #: contrato. **Vazio e a trava**: conta sem convenio nao gera remessa, e e
+    #: assim que as contas ainda nao aderidas ficam de fora sem lista negra.
+    #: Nao ha heranca da empresa (ver `Empresa.convenio`).
+    convenio: str = ""
 
     @property
     def chave(self) -> str:
@@ -69,10 +77,10 @@ class Empresa:
     #: Identificacao do pagador no header da remessa CNAB 240.
     cnpj: str = ""
     razao_social: str = ""
-    #: Codigo do convenio de pagamentos, exibido no comprovante de adesao do
-    #: SicoobNet. Nao se deriva de nada: e contrato. **Vazio e a trava**:
-    #: empresa sem convenio nao gera remessa, e e assim que as empresas ainda
-    #: nao aderidas ficam de fora sem precisar de lista negra.
+    #: LEGADO: o convenio e da CONTA desde 04/09/2026 (`Conta.convenio`), e
+    #: ninguem deve ler daqui. O campo continua sendo lido do JSON e escrito
+    #: pelo cache porque maquina que ainda nao baixou o codigo novo depende
+    #: dele; some quando todo mundo tiver atualizado.
     convenio: str = ""
 
     @property
@@ -140,7 +148,8 @@ def carregar(caminho: Path | None = None) -> Mapa:
             contas.append(Conta(numero=numero, pasta=pasta, empresa=nome,
                                 sufixo=(c.get("sufixo") or "").strip(),
                                 banco=(c.get("banco") or "").strip(),
-                                agencia=(c.get("agencia") or "").strip()))
+                                agencia=(c.get("agencia") or "").strip(),
+                                convenio=str(c.get("convenio") or "").strip()))
         empresas.append(Empresa(
             nome=nome,
             pastas_vazias=[p.strip() for p in e.get("pastas_vazias", [])],
@@ -326,6 +335,9 @@ _MODELO = {
         "sufixo: só quando DUAS contas dividem a mesma pasta — ele entra no "
         "fim do nome do arquivo e é o que impede uma de gravar por cima da "
         "outra (use o número da conta)",
+        "convenio: o convênio de pagamentos DESTA conta (o Sicoob dá um por "
+        "conta corrente, não por empresa). Vazio = a conta não aderiu e não "
+        "gera remessa",
         "vip_url: endereço do escritório no portal Acessórias (aba Acessórias)",
         "vip_id: id da empresa na URL do portal (/<escritorio>/<id>/) — abra a "
         "empresa lá e copie o número",
@@ -337,12 +349,16 @@ _MODELO = {
          "pastas_vazias": ["CAIXA", "INTER"],
          "vip_id": "000",
          "vip_nome": "Empresa Exemplo Ltda",
-         "contas": [{"numero": "12.345-6", "pasta": "SICOOB"}]},
+         "contas": [{"numero": "12.345-6", "pasta": "SICOOB",
+                     "convenio": ""}]},
         {"nome": "EMPRESA COM SUBCONTAS",
          "pastas_vazias": [],
          "contas": [
-             {"numero": "11.111-1", "pasta": "CONTA PRINCIPAL - 11111-1 - SICOOB"},
-             {"numero": "22.222-2", "pasta": "SUBCONTA - 22222-2 - LOTE 01 - SICOOB"},
+             # Cada conta tem o SEU convênio: o do Sicoob é por conta corrente.
+             {"numero": "11.111-1", "pasta": "CONTA PRINCIPAL - 11111-1 - SICOOB",
+              "convenio": ""},
+             {"numero": "22.222-2", "pasta": "SUBCONTA - 22222-2 - LOTE 01 - SICOOB",
+              "convenio": ""},
          ]},
     ],
 }

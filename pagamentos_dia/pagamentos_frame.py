@@ -298,6 +298,16 @@ class PagamentosDiaFrame(ttk.Frame):
         self._build()
         self.after(150, self._drain)
 
+    #: As colunas do cartão de prontidão: (chave, título, largura a 100%,
+    #: alinhamento). A largura é escalada pelo `estilo_tabela`, num lugar só.
+    COLUNAS_PRONTIDAO = (
+        ("conta_erp", "CONTA (ERP)", 230, "w"),
+        ("empresa", "EMPRESA", 150, "w"),
+        ("agconta", "AG-CONTA", 140, "w"),
+        ("convenio", "CONVÊNIO", 100, "w"),
+        ("situacao", "SITUAÇÃO", 260, "w"),
+    )
+
     # ---------------------------------------------------------------- layout
     def _build(self):
         PADX = px(widgets.PADX)
@@ -390,6 +400,34 @@ class PagamentosDiaFrame(ttk.Frame):
                                                       expand=True)
         widgets.Botao(f3, "Selecionar…", papel="neutro", command=self._sel_pasta
                       ).pack(side="left", padx=px((8, 0)))
+
+        # ---- prontidão do cadastro, SEM número
+        # Não é passo: ninguém preenche nada aqui, e numerá-la poria um "4"
+        # entre "Onde salvar" e o botão verde, inventando uma ordem que não
+        # existe (a mesma razão pela qual o Registro não é numerado).
+        #
+        # A tabela nasce VAZIA e só é preenchida em `ao_abrir` — ver o
+        # docstring de `_conferir_prontidao`. Montar o esqueleto aqui custa
+        # microssegundos; ler os dois JSON custa disco, e é isso que não pode
+        # entrar na abertura do app.
+        self.f_prontidao = f_pr = widgets.Cartao(
+            self, "Contas prontas para remessa")
+        f_pr.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        colunas = tuple(chave for chave, *_ in self.COLUNAS_PRONTIDAO)
+        self.tab_prontidao = ttk.Treeview(f_pr, columns=colunas,
+                                          show="headings", height=8,
+                                          selectmode="browse")
+        for chave, titulo, larg, ancora in self.COLUNAS_PRONTIDAO:
+            self.tab_prontidao.heading(chave, text=titulo)
+            self.tab_prontidao.column(chave, width=larg, anchor=ancora,
+                                      stretch=chave == "situacao")
+        widgets.estilo_tabela(self.tab_prontidao)
+        self.tab_prontidao.pack(fill="x")
+        self.rodape_prontidao = widgets.RodapeTabela(f_pr)
+        self.rodape_prontidao.pack(fill="x", pady=px((10, 0)))
+        self.rodape_prontidao.definir(
+            texto="Abra esta aba para conferir o cadastro.")
+        self.rodape_prontidao.link("Conferir de novo", self._conferir_prontidao)
 
         # ---- barra de execução e o que não é passo
         # ACIMA do registro, e não no rodapé: a barra conta o trabalho que
@@ -504,8 +542,72 @@ class PagamentosDiaFrame(ttk.Frame):
         try:
             widgets.estilo_log(self.log, escuro)
             widgets.estilo_canvas(self.canvas)
+            # A tabela precisa das tags de novo: `tag_configure` guarda a COR,
+            # e não o nome do estado.
+            widgets.estilo_tabela(self.tab_prontidao)
         except tk.TclError:
             pass
+
+    # ------------------------------------------------- prontidão do cadastro
+    def ao_abrir(self):
+        """Relê o cadastro e repinta a prontidão.
+
+        A janela chama isto toda vez que esta aba volta à frente
+        (`comprovantes_app.mostrar`), e é de propósito que não seja na
+        CONSTRUÇÃO: as doze abas somam ~1,2 s na abertura do app, e ler dois
+        JSON por uma tabela que ninguém está olhando é justamente o tipo de
+        custo que não se paga adiantado. Quem editou o cadastro no painel
+        também não precisa reabrir a aba de propósito — trocar de aba e voltar
+        já relê."""
+        self._conferir_prontidao()
+
+    def _conferir_prontidao(self):
+        """A tabela "Contas prontas para remessa", com TODOS os problemas.
+
+        Roda na thread da INTERFACE, e pode: não há navegador, não há ERP e
+        não há rede — são dois arquivos locais (`contas_mc.json` e
+        `contas_sicoob.json`), que a sincronização da abertura já regravou.
+
+        Existe porque a validação do cadastro acontecia tarde e sem sujeito: o
+        `gerar_remessa` lia os dois mapas na hora de gerar, um dado ruim virava
+        "Não consegui ler o cadastro" (sem dizer de qual conta) ou uma recusa
+        por conta na janela de conferência — e, com doze empresas, isso é o dia
+        parado. A regra é a mesma que o botão usa (`remessa_dia.prontidao`), e
+        um teste impede as duas de divergirem em silêncio."""
+        try:
+            self.tab_prontidao.delete(*self.tab_prontidao.get_children())
+        except tk.TclError:
+            return                       # aba destruída enquanto isto rodava
+        self.rodape_prontidao.limpar_links()
+        self.rodape_prontidao.link("Conferir de novo", self._conferir_prontidao)
+        try:
+            mapa_mc = contas_mc.carregar()
+            cadastro = sicoob_contas.carregar()
+        except Exception as e:                                # noqa: BLE001
+            # Sem os mapas não há lista para mostrar — e o recado do
+            # `contas_mc.carregar` já diz QUAL linha está torta e onde se
+            # conserta, que é a informação que faltava.
+            self.rodape_prontidao.definir(
+                texto=widgets.recado_de_erro(e, "Não consegui ler o cadastro."))
+            return
+
+        conferencias = remessa_dia.prontidao(mapa_mc, cadastro.empresas)
+        for i, c in enumerate(conferencias):
+            estado, texto = c.situacao
+            self.tab_prontidao.insert(
+                "", "end",
+                values=(c.conta_erp, c.empresa,
+                        f"{c.agencia or '—'} / {c.conta or '—'}",
+                        c.convenio or "—",
+                        f"{widgets.MARCAS_ESTADO[estado]}  {texto}"),
+                tags=widgets.linha_zebrada(i, estado))
+        prontas = sum(1 for c in conferencias if c.pronta)
+        # O cache só é regravado na ABERTURA (`nuvem.cadastro.sincronizar`),
+        # então "reabra o app" não é zelo: sem isso a correção feita no painel
+        # não chega a esta tela.
+        self.rodape_prontidao.definir(
+            texto=f"{prontas} de {len(conferencias)} conta(s) prontas  ·  "
+                  "corrija no painel do Supabase e reabra o app")
 
     def _periodo(self) -> tuple[datetime.date, datetime.date]:
         ini = datetime.datetime.strptime(self.v_ini.get().strip(), "%d/%m/%Y").date()
@@ -1792,9 +1894,17 @@ class PagamentosDiaFrame(ttk.Frame):
             mapa_mc = contas_mc.carregar()
             cadastro = sicoob_contas.carregar()
         except Exception as e:
+            # Sem os mapas não dá para montar a lista de prontidão — não há
+            # cadastro para conferir. O que dá, e é o que faltava, é dizer QUAL
+            # linha está torta (o recado do `carregar` cita empresa, pasta e
+            # conta do ERP) e onde se conserta.
             messagebox.showerror(
                 "Remessa",
-                widgets.recado_de_erro(e, "Não consegui ler o cadastro."))
+                widgets.recado_de_erro(e, "Não consegui ler o cadastro.")
+                + "\n\nO cadastro é editado no painel do Supabase; depois "
+                  "feche e abra o app. O cartão \"Contas prontas para "
+                  "remessa\", nesta aba, mostra a lista inteira.")
+            self._conferir_prontidao()
             return
 
         # O histórico entra ANTES do preparo, e não depois: é ele quem responde
@@ -1819,9 +1929,28 @@ class PagamentosDiaFrame(ttk.Frame):
                   "gerar o mesmo — e repetir NSA pode virar pagamento em "
                   "dobro.")
             return
-        preparado = remessa_dia.preparar(self.resultado.contas,
-                                         self.participantes,
-                                         historico=historico)
+        try:
+            preparado = remessa_dia.preparar(self.resultado.contas,
+                                             self.participantes,
+                                             historico=historico)
+        except remessa_dia.RegistroMudo as e:
+            # Mesmo motivo do bloco acima, um passo adiante: a ordem do dia do
+            # "seu número" também precisa vir de um lugar só. Ela não derrubava
+            # a remessa enquanto valia 0 e a numeração recomeçava; desde o
+            # índice único no banco, numerar sobre um "não sei" é o arquivo
+            # recusado no registro DEPOIS de a lista inteira ter sido
+            # conferida. Recusar aqui é o mesmo desfecho, mais cedo e barato.
+            messagebox.showerror(
+                "Remessa",
+                widgets.recado_de_erro(
+                    e, "Não consegui falar com o registro de remessas.")
+                + "\n\nA remessa NÃO foi gerada. O número sequencial (NSA) e a "
+                  "ordem do dia do “seu número” precisam vir de um lugar só, "
+                  "senão as duas máquinas podem gerar os mesmos — e repetir "
+                  "NSA pode virar pagamento em dobro, enquanto repetir “seu "
+                  "número” faz o retorno do banco casar com o pagamento "
+                  "errado.")
+            return
         pagadores, recusadas = {}, []
         for conta in preparado:
             pagador, motivo = remessa_dia.resolver_pagador(
@@ -1832,16 +1961,46 @@ class PagamentosDiaFrame(ttk.Frame):
                 recusadas.append((conta, motivo))
 
         if not pagadores:
+            # A lista de prontidão no lugar do recado de uma linha: quem chegou
+            # aqui vai CORRIGIR o cadastro, e corrigir um campo por vez é
+            # descobrir o próximo problema só na tentativa seguinte.
             messagebox.showinfo(
                 "Remessa",
                 "Nenhuma conta marcada gera remessa.\n\n"
-                + "\n".join(f"• {c}: {m}" for c, m in recusadas[:8]))
+                + self._faltas_por_conta(recusadas, mapa_mc, cadastro.empresas)
+                + "\n\nCorrija no painel do Supabase e reabra o app.")
+            self._conferir_prontidao()
             return
 
         if not self._janela_remessa(preparado, pagadores, recusadas, historico):
             self.q.put(("status", "Remessa cancelada — nada foi gravado."))
             return
         self._gravar_remessas(preparado, pagadores, historico)
+
+    def _faltas_por_conta(self, recusadas, mapa_mc, empresas) -> str:
+        """"conta: falta; falta" para cada conta que não gerou remessa.
+
+        As faltas saem da MESMA função que a tabela da aba
+        (`remessa_dia.prontidao`), e são TODAS — o `motivo` que
+        `resolver_pagador` devolve é só o primeiro, porque quem gera precisa de
+        um veredito. Aqui quem lê vai consertar, e uma lista pela metade é uma
+        segunda viagem ao painel.
+
+        Conta que nem entra na prontidão (fora do mapa, ou de outro banco)
+        continua com o motivo dela: ali não há cadastro a conferir."""
+        try:
+            por_conta = {util.norm_espaco(c.conta_erp): c
+                         for c in remessa_dia.prontidao(mapa_mc, empresas)}
+        except Exception:                                     # noqa: BLE001
+            por_conta = {}
+        linhas = []
+        for conta, motivo in recusadas[:8]:
+            c = por_conta.get(util.norm_espaco(conta))
+            linhas.append(f"• {conta}: "
+                          + ("; ".join(c.faltas) if c and c.faltas else motivo))
+        if len(recusadas) > 8:
+            linhas.append(f"… e mais {len(recusadas) - 8} conta(s).")
+        return "\n".join(linhas)
 
     #: As colunas da conferência, na ordem: (chave, título, largura em
     #: caracteres, alinhamento). A largura é em caracteres e não em pixels
@@ -2146,11 +2305,27 @@ class PagamentosDiaFrame(ttk.Frame):
         return resposta["ok"]
 
     def _gravar_remessas(self, preparado, pagadores, historico):
-        """Valida, grava e registra — nessa ordem, uma conta por vez.
+        """Reserva o NSA, valida, grava e registra — nessa ordem, uma por vez.
 
-        Arquivo que não passa no validador não é gravado E não consome o NSA:
-        número gasto por arquivo que não existe vira furo sem explicação, e o
-        histórico é justamente quem tem de explicar os furos.
+        A reserva vem ANTES da validação porque o NSA entra no CONTEÚDO do
+        arquivo: é o campo G018 do header, e é justamente ele que o validador
+        confere. Não há como validar primeiro sem validar um arquivo sem
+        número, nem como espiar o número aqui e reservá-lo depois — a janela
+        entre espiar e reservar é a janela em que a outra máquina pega o mesmo
+        NSA, e as duas geram arquivos legítimos que o banco vê como um só.
+
+        A consequência é que **arquivo reprovado não é gravado, mas o NSA já
+        está queimado**. É o lado certo de errar: pular número é inofensivo,
+        repetir pode ser pagamento em dobro.
+
+        E o número queimado não deixa rastro em lugar nenhum — o aviso na tela
+        some com a janela, `alocar_nsa` só empurra o `remessa_contador` da
+        nuvem, o `remessas.json` só aprende um NSA quando `registrar` é
+        chamado, e `remessa_ajuste`/`ajustes` guardam só a correção manual do
+        contador (`ajustar_nsa`, que exige motivo por escrito). O furo aparece
+        como número faltando na sequência, e quem for conferir com a
+        cooperativa depois não encontra a explicação escrita: é o preço de
+        nunca repetir, e está pago de propósito.
         """
         from cnab240 import relatorio as _rel_cnab, validar
 
@@ -2217,6 +2392,21 @@ class PagamentosDiaFrame(ttk.Frame):
 
         if not gerados:
             self.q.put(("status", "Nenhum arquivo de remessa foi gravado."))
+            # O dia em que NENHUM arquivo sai também é um dia em que alguém
+            # rodou — e até 04/09/2026 ele não deixava rastro: a auditoria só
+            # era chamada mais abaixo, no caminho em que houve arquivo. O
+            # cartão "Contas sem remessa" do Início mostrava "—", que é
+            # exatamente o que ele mostra quando ninguém rodou nada; o pior
+            # dia do mês ficava indistinguível de um dia comum.
+            #
+            # `resultado="atencao"` e não "ok": a rotina terminou e achou
+            # coisa para alguém olhar, que é como o Início lê essa palavra.
+            auditoria.registrar(
+                "Gerar remessa", "nenhum arquivo gravado", aba="pag",
+                resultado="atencao",
+                numeros={"contas_sem_remessa":
+                         remessa_dia.contas_sem_remessa(preparado, gerados),
+                         "total_remessa": 0.0})
             return
         self.q.put(("remessa_gerada", gerados))
         self._log("\nAgora suba os arquivos no SicoobNet: Empresarial → Gestão em "
@@ -2226,10 +2416,10 @@ class PagamentosDiaFrame(ttk.Frame):
                               f"{relatorio.brl(total_geral)}"))
         # "Contas sem remessa" do Início sai daqui: são as contas que TÊM
         # pagamento hoje e não viraram arquivo. É a única hora em que a
-        # diferença existe — antes da remessa não há com o que comparar.
-        _com_remessa = len(gerados)
-        _com_pagamento = len([c for c in (self.resultado.contas if
-                                          self.resultado else {})])
+        # diferença existe — antes da remessa não há com o que comparar. A
+        # aritmética mora em `remessa_dia.contas_sem_remessa`, que é pura e
+        # tem teste: ela é chamada nos DOIS desfechos, e uma conta a mais aqui
+        # e a menos ali seria o mesmo cartão dizendo duas coisas.
         auditoria.registrar(
             "Gerar remessa",
             f"{len(gerados)} arquivo(s) · {relatorio.brl(total_geral)}",
@@ -2240,7 +2430,8 @@ class PagamentosDiaFrame(ttk.Frame):
             # (que exclui o que ficou de fora) sobrescrevia o do dia, e o
             # cartão "Pagamentos de hoje" passava a mostrar 87 lançamentos
             # somando menos do que eles somam.
-            numeros={"contas_sem_remessa": max(_com_pagamento - _com_remessa, 0),
+            numeros={"contas_sem_remessa":
+                     remessa_dia.contas_sem_remessa(preparado, gerados),
                      "total_remessa": total_geral})
 
     def _registrar_o_que_ficou_de_fora(self, preparado):

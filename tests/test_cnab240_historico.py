@@ -291,6 +291,64 @@ def test_descarte_libera_o_seu_numero_para_a_segunda_tentativa(historico):
     assert historico.remessas(estado="gerado")[0].nsa == 1
 
 
+# -- a ordem do dia ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "seu_numero, dia, esperado",
+    [
+        ("260813-0007", HOJE, 7),
+        # A OC é a primeira coisa a ser cortada quando não cabe, e vem DEPOIS
+        # da ordem: por isso ela não muda a leitura nem a ordenação.
+        ("260813-0007-OC5825", HOJE, 7),
+        ("260812-0099", HOJE, 0),          # ontem não empurra a numeração
+        ("260813-0000", HOJE, 0),
+        ("", HOJE, 0),
+        ("260813", HOJE, 0),
+        ("nao e seu numero", HOJE, 0),
+    ],
+)
+def test_ordem_do_dia_le_o_formato_e_mais_nada(seu_numero, dia, esperado):
+    """O formato tem UM dono, e é este.
+
+    Quem o lê são três: este espelho, o registro da nuvem e quem monta o número
+    novo. Com três leituras, a que divergisse faria o retorno do banco casar
+    com o pagamento errado."""
+    from cnab240.historico import ordem_do_dia
+
+    assert ordem_do_dia(seu_numero, dia) == esperado
+
+
+def test_a_maior_ordem_do_dia_sai_do_espelho_local(historico):
+    """A mesma forma do `nuvem.registro.Registro.maior_ordem_do_dia`, como
+    `envio_de` já tem as duas: quem numera não precisa saber com qual está
+    falando."""
+    historico.registrar(remessa_de_boleto(1, seu_numero="260813-0003"))
+    historico.registrar(remessa_de_ted(2, seu_numero="260813-0011"))
+    assert historico.maior_ordem_do_dia(HOJE) == 11
+
+
+def test_a_maior_ordem_ignora_os_outros_dias(historico):
+    historico.registrar(remessa_de_boleto(1, seu_numero="260813-0003"))
+    assert historico.maior_ordem_do_dia(_dt.date(2026, 8, 14)) == 0
+
+
+def test_dia_sem_remessa_nenhuma_comeca_do_zero(historico):
+    assert historico.maior_ordem_do_dia(HOJE) == 0
+
+
+def test_a_remessa_descartada_devolve_a_ordem_dela(historico):
+    """Coerente com o `_conferir_seus_numeros`, que só olha remessa VIVA:
+    descartar existe para a segunda tentativa poder sair com o mesmo número.
+
+    A da NUVEM não filtra estado, e a diferença é deliberada — lá quem recusa a
+    repetição é um índice único que também não olha estado."""
+    historico.registrar(remessa_de_boleto(1, seu_numero="260813-0009"))
+    assert historico.maior_ordem_do_dia(HOJE) == 9
+    historico.descartar("123456", 1, motivo="arquivo nao enviado")
+    assert historico.maior_ordem_do_dia(HOJE) == 0
+
+
 # -- o registro em si -------------------------------------------------------
 
 

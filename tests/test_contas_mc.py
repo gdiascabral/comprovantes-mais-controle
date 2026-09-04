@@ -72,6 +72,73 @@ def test_conta_incompleta_aponta_o_que_falta(tmp_path):
         cm.carregar(arq)
 
 
+def test_conta_sem_banco_nao_derruba_o_mapa(tmp_path):
+    """Uma conta ruim não pode custar o dia de todas.
+
+    Em 04/09/2026 UMA linha sem `banco` levantava MapaInvalido e, com ela, a
+    aba Pagamentos do Dia parava para TODAS as empresas e o Relatório Mensal
+    inteiro. `banco` só entra no nome do arquivo e na escolha do produto da
+    remessa: quem USA o banco é que decide o que fazer sem ele."""
+    dados = {"raiz": "R:/EXTRATOS", "contas": [
+        {"erp": "ALFA SPE - SICOOB", "empresa": "ALFA", "pasta": "SICOOB",
+         "banco": "SICOOB"},
+        {"erp": "ALFA SPE - SEM BANCO", "empresa": "ALFA", "pasta": "OUTRO"},
+        {"erp": "ALFA SPE - INTER", "empresa": "ALFA", "pasta": "INTER",
+         "banco": "INTER"}]}
+    arq = tmp_path / "m.json"
+    arq.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    m = cm.carregar(arq)
+    assert len(m.destinos) == 3
+    assert m.de("ALFA SPE - SEM BANCO").banco == ""
+    # e as outras duas continuam inteiras
+    assert m.de("ALFA SPE - SICOOB").banco == "SICOOB"
+
+
+@pytest.mark.parametrize("falta", ["erp", "empresa", "pasta"])
+def test_conta_sem_erp_ou_empresa_ou_pasta_continua_invalida(tmp_path, falta):
+    """Sem estes três a linha não identifica conta nenhuma nem diz onde
+    salvar — adivinhar seria escolher pasta no chute."""
+    conta = {"erp": "X", "empresa": "Y", "pasta": "Z", "banco": "SICOOB"}
+    del conta[falta]
+    arq = tmp_path / "m.json"
+    arq.write_text(json.dumps({"contas": [conta]}), encoding="utf-8")
+    with pytest.raises(cm.MapaInvalido, match=falta):
+        cm.carregar(arq)
+
+
+def test_a_conta_incompleta_e_identificada_pelo_que_a_pessoa_reconhece(tmp_path):
+    """"A conta nº 2 está sem: pasta" manda contar linhas num JSON.
+
+    E contar não resolve: desde 13/08/2026 o arquivo é CACHE do painel, então
+    a linha nº 2 daqui não é a 2ª linha de nada que se possa editar. Quem
+    identifica a conta é o que ela tem preenchido — empresa, pasta e conta do
+    ERP —, e o recado tem de dizer onde se conserta."""
+    dados = {"contas": [
+        {"erp": "ALFA SPE - SICOOB", "empresa": "ALFA", "pasta": "SICOOB",
+         "banco": "SICOOB"},
+        {"erp": "BETA LTDA - SICOOB", "empresa": "BETA", "banco": "SICOOB"}]}
+    arq = tmp_path / "m.json"
+    arq.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(cm.MapaInvalido) as erro:
+        cm.carregar(arq)
+    recado = str(erro.value)
+    assert "BETA" in recado and "BETA LTDA - SICOOB" in recado
+    assert "pasta" in recado
+    assert "painel do Supabase" in recado and "feche e abra o app" in recado
+    # e não fala da conta que está inteira
+    assert "ALFA" not in recado
+
+
+def test_a_conta_sem_nada_preenchido_ainda_da_um_recado(tmp_path):
+    """O caso em que não sobra nada para identificar: o recado continua
+    inteiro em vez de terminar num parêntese vazio."""
+    arq = tmp_path / "m.json"
+    arq.write_text(json.dumps({"contas": [{"banco": "SICOOB"}]}),
+                   encoding="utf-8")
+    with pytest.raises(cm.MapaInvalido, match="sem nada preenchido"):
+        cm.carregar(arq)
+
+
 def test_arquivo_ausente_da_recado_util(tmp_path):
     with pytest.raises(cm.MapaInvalido, match="não existe"):
         cm.carregar(tmp_path / "nao_existe.json")
@@ -160,6 +227,26 @@ def test_conta_nao_marcada_nao_barra_o_lote(tmp_path):
     assert cm.caminhos_longos(m, 2026, 7, contas=["CONTA NORMAL"]) == []
     fora = cm.caminhos_longos(m, 2026, 7, contas=["CONTA ENORME"])
     assert [n for n, _t in fora] == ["CONTA ENORME"]
+
+
+def test_conta_sem_banco_e_impedimento_do_relatorio(tmp_path):
+    """Quem usa o banco é quem barra a conta: sem ele o PDF sairia
+    "202607  MAIS CONTROLE.pdf" — dois espaços, sem dizer de que banco é."""
+    dados = {"raiz": "R:/EXTRATOS", "contas": [
+        {"erp": "ALFA SPE - SEM BANCO", "empresa": "ALFA", "pasta": "OUTRO"},
+        {"erp": "ALFA SPE - SICOOB", "empresa": "ALFA", "pasta": "SICOOB",
+         "banco": "SICOOB"}]}
+    arq = tmp_path / "m.json"
+    arq.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    m = cm.carregar(arq)
+    travas = cm.impedimentos(m)
+    assert len(travas) == 1 and "ALFA SPE - SEM BANCO" in travas[0]
+    # e, como em `caminhos_longos`, conta que ninguém marcou não barra o lote
+    assert cm.impedimentos(m, contas=["ALFA SPE - SICOOB"]) == []
+    assert cm.impedimentos(m, contas=["ALFA SPE - SEM BANCO"]) == travas
+    # o nome que sairia é mesmo o do recado
+    assert cm.nome_arquivo(m.de("ALFA SPE - SEM BANCO"), 2026, 7) == (
+        "202607  MAIS CONTROLE.pdf")
 
 
 def test_periodo_parcial_e_medido_no_tamanho_que_vai_ser_gravado(tmp_path):
@@ -267,6 +354,7 @@ def _aba(raiz, mapa, contas):
     aba.vars_contas = {c["id"]: tk.BooleanVar(master=raiz, value=True)
                        for c in contas}
     aba.sem_destino = set()
+    aba.sem_banco = set()
     aba.v_personalizado = tk.BooleanVar(master=raiz, value=False)
     aba.v_mes = tk.StringVar(master=raiz, value="Julho")
     aba.v_ano = tk.StringVar(master=raiz, value="2026")

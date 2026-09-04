@@ -72,6 +72,7 @@ class RelatorioFrame(ttk.Frame):
         self.ultima_pasta: Path | None = None
         self.mapa: contas_mc.Mapa | None = None
         self.sem_destino: set[str] = set()
+        self.sem_banco: set[str] = set()
 
         hoje = datetime.date.today()
         anterior = hoje.replace(day=1) - datetime.timedelta(days=1)
@@ -399,17 +400,32 @@ class RelatorioFrame(ttk.Frame):
             w.destroy()
         self.vars_contas = {}
         self.sem_destino = set()
+        self.sem_banco = set()
         for conta in contas:
             # A lista vem do ERP; o mapa só diz onde salvar. Conta que o mapa
             # não conhece nasce DESMARCADA e avisando — melhor não baixar do
             # que baixar sem saber o destino.
+            #
+            # Conta que o mapa conhece mas está SEM BANCO nasce desmarcada
+            # pelo mesmo motivo: o banco é que nomeia o arquivo, e sem ele o
+            # PDF sai "202607  MAIS CONTROLE.pdf", sem dizer de que banco é.
+            # O mapa carrega assim de propósito (uma conta ruim não derruba as
+            # outras); quem USA o banco é que barra a conta, e esta aba usa.
             destino = self.mapa.de(conta["nome"]) if self.mapa else None
             if destino is None:
                 self.sem_destino.add(conta["id"])
-            v = tk.BooleanVar(value=destino is not None)
+            elif not destino.banco.strip():
+                self.sem_banco.add(conta["id"])
+            v = tk.BooleanVar(value=destino is not None
+                              and bool(destino.banco.strip()))
             self.vars_contas[conta["id"]] = v
-            rotulo = (f'{conta["nome"]}   →   {destino.empresa} / {destino.pasta}'
-                      if destino else f'{conta["nome"]}   (sem pasta no mapa)')
+            if destino is None:
+                rotulo = f'{conta["nome"]}   (sem pasta no mapa)'
+            else:
+                rotulo = (f'{conta["nome"]}   →   {destino.empresa} '
+                          f'/ {destino.pasta}')
+                if not destino.banco.strip():
+                    rotulo += "   (sem banco no mapa)"
             ttk.Checkbutton(self.contas_box, text=rotulo, variable=v).pack(anchor="w")
         # "Marcar/Desmarcar todas" e a contagem sobem para o cabeçalho do
         # cartão: dentro da lista rolável eles saíam da tela justamente quando
@@ -434,11 +450,14 @@ class RelatorioFrame(ttk.Frame):
             return                       # aba fechando com o trace pendente
         fora = len(self.vars_contas) - len(marcadas)
         sem_mapa = len(self.sem_destino)
+        sem_banco = len(self.sem_banco)
         partes = [f"{len(marcadas)} conta(s) marcada(s)"]
         if fora:
             partes.append(f"{fora} ficam de fora")
         if sem_mapa:
             partes.append(f"{sem_mapa} sem pasta no mapa")
+        if sem_banco:
+            partes.append(f"{sem_banco} sem banco no mapa")
         self.rodape_contas.definir(texto="  ·  ".join(partes))
 
     # ------------------------------------------------------------- etapa 2
@@ -465,6 +484,19 @@ class RelatorioFrame(ttk.Frame):
                 "salvá-las:\n\n" + "\n".join(f"  {n}" for n in orfas[:10])
                 + ("\n  ..." if len(orfas) > 10 else "")
                 + "\n\nDesmarque-as ou acrescente-as ao mapa.")
+            return
+
+        # Conta sem banco barra pelo mesmo motivo, e no mesmo lugar. O mapa
+        # a deixa CARREGAR (uma conta ruim não pode derrubar as outras); quem
+        # usa o banco é quem decide, e o Relatório Mensal usa: sem ele o PDF
+        # sai "202607  MAIS CONTROLE.pdf" e não se sabe de que banco é.
+        travas = contas_mc.impedimentos(
+            self.mapa, contas=[c["nome"] for c in escolhidas])
+        if travas:
+            messagebox.showwarning(
+                "Contas sem banco",
+                "\n\n".join(travas[:5])
+                + ("\n\n..." if len(travas) > 5 else ""))
             return
 
         # Caminho longo barra aqui pelo mesmo motivo da conta sem destino:

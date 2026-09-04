@@ -166,6 +166,59 @@ disto é a baixa no ERP, que decide pelo `Resumo` lido do arquivo
 
 ---
 
+## `2026-09-04_convenio-por-conta.sql` ↔ `20260904113000_convenio_por_conta.sql`
+
+O primeiro par que nasce junto: o runbook foi escrito **a partir da** migration,
+no mesmo PR, em vez de ser copiado do SQL Editor depois. 5 comandos de schema
+nos dois lados, idênticos depois de normalizados — a coluna `conta.convenio`, o
+`comment`, o índice único parcial, o `check` de formato e o `update` que desce o
+convênio da empresa para a única conta Sicoob dela.
+
+O runbook acrescenta **1** comando: o `select` de conferência do fim, que conta
+por empresa quantas contas Sicoob existem e quantas já têm convênio. É
+conferência, não schema — e não imprime número de convênio nenhum, só a
+contagem: os números moram no painel, e este repositório é público.
+
+A ordem também é parte da proveniência aqui, e está escrita no cabeçalho do
+runbook: **este arquivo roda ANTES do merge**. O código novo lê
+`conta.convenio`; mergeado primeiro, a sincronização da abertura pediria uma
+coluna que o banco não tem. O caminho contrário é seguro — coluna nova com
+default `''` não muda nada para o código velho, que continua lendo
+`empresa.convenio`.
+
+---
+
+## `2026-09-04_seu-numero-unico-no-dia.sql` ↔ `20260904160000_seu_numero_unico_no_dia.sql`
+
+O segundo par que nasce junto, no mesmo dia e pelo mesmo caminho do de cima: o
+runbook foi escrito a partir da migration, no PR. 3 comandos de schema nos dois
+lados, idênticos depois de normalizados — o índice `text_pattern_ops` que faz o
+`like` por prefixo do dia usar índice, o índice único parcial
+`remessa_item_seu_numero_unico_no_dia` e o `comment on index` dele.
+
+O runbook acrescenta **2** comandos, e os dois são `select`:
+
+- o de **repetições** (`select seu_numero, count(*), max(criado_em) … having
+  count(*) > 1`), que roda **antes** dos dois `create index`. Este não é
+  conferência de rotina: é ele que decide se a data do `where` do índice único
+  serve. O Postgres recusa criar índice único sobre dado que já o viola, e o
+  histórico de `remessa_item` é append-only com repetição conhecida — as
+  remessas 2, 3 e 4 de 20/08/2026 repetiram `260820-0004`…`0010`. Se aparecer
+  repetição com `criado_em` posterior à data escrita no índice, quem roda
+  **adia a data**, e não apaga linha: o que está gravado descreve arquivos que
+  já saíram para o banco;
+- o de conferência do fim, que lista os dois índices por nome em `pg_indexes`.
+  Nenhum dos dois imprime valor, favorecido ou convênio — só o "seu número", a
+  contagem e o nome do índice.
+
+A ordem também é parte da proveniência: **este arquivo roda ANTES do merge**, e
+aqui o motivo é o inverso do par acima. O código novo funciona sem os índices —
+ele consulta e numera como já fazia. Mergeado primeiro, nada quebra à vista: a
+consulta só vira varredura de tabela, e a corrida entre duas máquinas continua
+sem juiz. É por isso que a ordem importa mais, e não menos.
+
+---
+
 ## Conferir o schema de produção contra as migrations
 
 O acima compara arquivo com arquivo. Nada disso prova o que está **no banco**.
