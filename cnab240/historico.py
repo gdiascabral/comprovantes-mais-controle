@@ -62,6 +62,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -109,6 +110,31 @@ _AJUDA = [
 
 class HistoricoInvalido(ValueError):
     """Operação que deixaria o histórico incoerente."""
+
+
+#: A data e a ORDEM DO DIA dentro do "seu número": ``260820-0007``, com um
+#: sufixo opcional que o resto do app acrescenta (``-OC5825``).
+_SEQ = re.compile(r"^(\d{6})-(\d{4})")
+
+
+def ordem_do_dia(seu_numero: str, quando: _dt.date) -> int:
+    """A ordem ``NNNN`` do "seu número", se ele for do dia ``quando``. 0 se não.
+
+    O formato mora AQUI, e não em quem numera, porque quem o lê passaram a ser
+    três: este espelho local, o registro da nuvem
+    (``nuvem.registro.Registro.maior_ordem_do_dia``) e quem monta o número novo.
+    Formato com três donos é formato que diverge — e divergir aqui é o retorno
+    do banco casando com o pagamento errado.
+
+    A ordem tem **quatro dígitos com zero à esquerda** e o sufixo vem DEPOIS
+    dela: por isso este formato ordena lexicograficamente igual ao numérico, e
+    um ``order by seu_numero desc limit 1`` no banco responde "qual foi a maior
+    ordem deste dia" com uma linha só, em vez de uma varredura.
+    """
+    achado = _SEQ.match(str(seu_numero or ""))
+    if not achado or achado.group(1) != f"{quando:%y%m%d}":
+        return 0
+    return int(achado.group(2))
 
 
 # --------------------------------------------------------------------------
@@ -516,6 +542,25 @@ class Historico:
             if item.seu_numero == alvo:
                 return remessa, item
         return None
+
+    def maior_ordem_do_dia(self, quando: _dt.date) -> int:
+        """A maior ordem do dia ``quando`` já usada aqui. 0 quando não há.
+
+        Mesmo nome e mesma forma do ``nuvem.registro.Registro.maior_ordem_do_dia``
+        — como ``envio_de`` já tem as duas —, para quem numera não precisar
+        saber se está falando com o espelho ou com o registro central.
+
+        Só itens VIVOS, pelo mesmo motivo do ``_conferir_seus_numeros``: remessa
+        descartada devolve os "seus números" dela de propósito, para a segunda
+        tentativa do mesmo pagamento poder sair com o mesmo número. **A da nuvem
+        não filtra estado**, e a diferença é deliberada: lá quem recusa a
+        repetição é um índice único que também não olha estado, e numerar por
+        cima de uma linha descartada viraria arquivo recusado no INSERT.
+        """
+        maior = 0
+        for _remessa, item in self._itens_vivos():
+            maior = max(maior, ordem_do_dia(item.seu_numero, quando))
+        return maior
 
     # -- escrita ------------------------------------------------------------
 

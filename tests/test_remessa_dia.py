@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 
+from cnab240.historico import ordem_do_dia
 from pagamentos_dia import ocr_boleto
 from pagamentos_dia import remessa_dia
 from relatorios import contas_mc
@@ -145,6 +146,11 @@ class _HistoricoFalso:
         self._barras = por_barras or {}
         self._ref = por_referencia or {}
 
+    def maior_ordem_do_dia(self, _quando):
+        """Responde, e responde 0: registro que NÃO responde derruba a remessa
+        desde 04/09/2026, e estes testes são sobre outra coisa."""
+        return 0
+
     def _achado(self, nsa):
         remessa = type("R", (), {"nsa": nsa, "gerado_em": None})()
         return (remessa, object())
@@ -208,22 +214,31 @@ def test_linha_sem_envio_anterior_nao_ganha_aviso():
     assert c.ja_enviado == "" and c.marcado
 
 
-class _RemessaFalsa:
-    def __init__(self, *seus):
-        self.itens = [type("I", (), {"seu_numero": s})() for s in seus]
-
-
 class _RegistroFalso:
-    """O bastante de um histórico para a numeração do dia."""
+    """O bastante de um histórico para a numeração do dia.
 
-    def __init__(self, *remessas, explode=False):
-        self._remessas = list(remessas)
+    Ele ANOTA a pergunta, e a anotação é metade do que os testes abaixo provam:
+    a ordem do dia tem de sair de UMA consulta filtrada (`maior_ordem_do_dia`),
+    e não da varredura de `remessas()` que existia até 04/09/2026 — sete
+    remessas com todos os itens dentro custavam 0,44 s, e o app vai para 18
+    contas vezes os dias.
+    """
+
+    def __init__(self, maior=0, *, explode=False):
+        self._maior = maior
         self._explode = explode
+        self.perguntas = []
 
-    def remessas(self, **_kw):
+    def maior_ordem_do_dia(self, quando):
+        self.perguntas.append(quando)
         if self._explode:
             raise RuntimeError("registro fora do ar")
-        return self._remessas
+        return self._maior
+
+    def remessas(self, **_kw):
+        raise AssertionError(
+            "a ordem do dia voltou a varrer TODAS as remessas; ela sai de "
+            "maior_ordem_do_dia, que é uma consulta filtrada de uma linha")
 
     def envio_de(self, _c):
         return None
@@ -240,26 +255,83 @@ def test_a_ordem_do_dia_continua_de_onde_parou():
     retorno para casar cada pagamento; repetido, casa com o errado — e foi por
     isso que o espelho local recusou aquela remessa.
     """
-    hist = _RegistroFalso(_RemessaFalsa(f"{HOJE:%y%m%d}-0001",
-                                        f"{HOJE:%y%m%d}-0010-OC55"))
+    hist = _RegistroFalso(10)
     assert remessa_dia.sequencia_ja_usada(hist, HOJE) == 10
     c, = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE,
                               historico=hist)[CONTA]
     assert c.seu_numero.startswith(f"{HOJE:%y%m%d}-0011")
 
 
+def test_a_ordem_do_dia_sai_de_uma_consulta_filtrada():
+    """UMA pergunta, com a data dentro dela — não a tabela inteira.
+
+    O `_RegistroFalso.remessas` levanta: se a numeração voltar a varrer, o
+    teste morre no lugar do defeito. E a pergunta feita é a do DIA que está
+    sendo preparado, não "tudo o que já saiu".
+    """
+    hist = _RegistroFalso(4)
+    remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE, historico=hist)
+    assert hist.perguntas == [HOJE]
+
+
+def test_o_maior_do_dia_atravessa_convenios():
+    """A consulta NÃO filtra por convênio, e é isso que a torna correta.
+
+    A ordem é do DIA, de todas as contas e de todas as máquinas: é ela que o
+    banco devolve no retorno para casar cada pagamento, e o índice único que a
+    protege (`remessa_item_seu_numero_unico_no_dia`) também não olha convênio.
+    Perguntar por conta daria dois pagamentos com o mesmo número — e o segundo
+    arquivo recusado no INSERT.
+    """
+    class _PorConvenio:
+        def maior_ordem_do_dia(self, _quando, *a, **kw):
+            assert not a and not kw, (
+                "a ordem do dia passou a ser perguntada por convênio; ela é do "
+                "DIA, de todas as contas")
+            return 7
+
+        def envio_de(self, _c):
+            return None
+
+        def envio_da_referencia(self, _r):
+            return None
+
+    c, = remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE,
+                              historico=_PorConvenio())[CONTA]
+    assert c.seu_numero.startswith(f"{HOJE:%y%m%d}-0008")
+
+
 def test_numero_de_outro_dia_nao_conta():
-    """A ordem é do DIA: ontem não empurra a numeração de hoje."""
-    hist = _RegistroFalso(_RemessaFalsa("260819-0042"))
-    assert remessa_dia.sequencia_ja_usada(hist, HOJE) == 0
+    """A ordem é do DIA: ontem não empurra a numeração de hoje.
+
+    Quem separa um dia do outro é `cnab240.historico.ordem_do_dia`, o único
+    lugar que sabe ler o formato — e é ele que a consulta da nuvem usa para
+    extrair o `NNNN` da única linha que volta.
+    """
+    assert ordem_do_dia("260819-0042", HOJE) == 0
+    assert ordem_do_dia(f"{HOJE:%y%m%d}-0042", HOJE) == 42
 
 
-def test_registro_fora_do_ar_nao_derruba_a_remessa():
-    """Perder a remessa por causa da conferência seria pior que renumerar."""
-    assert remessa_dia.sequencia_ja_usada(_RegistroFalso(explode=True), HOJE) == 0
+def test_registro_mudo_para_a_remessa_antes_da_conferencia():
+    """Substitui o `test_registro_fora_do_ar_nao_derruba_a_remessa`.
+
+    Numerar em cima de um "não sei" era inofensivo enquanto ninguém conferia: o
+    pior desfecho era repetir um "seu número", e o arquivo passava. Com o
+    índice único no Postgres, o mesmo silêncio vira arquivo RECUSADO no
+    registro — depois de a pessoa ter conferido a lista inteira e mandado
+    gerar. Recusar antes custa um clique; recusar depois custa a conferência
+    toda, e ainda queima o NSA.
+    """
+    mudo = _RegistroFalso(explode=True)
+    with pytest.raises(remessa_dia.RegistroMudo):
+        remessa_dia.sequencia_ja_usada(mudo, HOJE)
+    with pytest.raises(remessa_dia.RegistroMudo):
+        remessa_dia.preparar({CONTA: [registro()]}, quando=HOJE, historico=mudo)
 
 
 def test_sem_historico_a_numeracao_e_a_de_antes():
+    """`None` não é registro mudo: é "não perguntei", e é assim que os testes
+    de regra chamam `preparar`."""
     assert remessa_dia.sequencia_ja_usada(None, HOJE) == 0
 
 
@@ -501,13 +573,18 @@ def mapa_mc():
 
 
 def empresas(convenio="123456"):
+    """O convênio vai na CONTA — a empresa fica sem, de propósito.
+
+    O Sicoob dá um convênio por conta corrente, e desde 04/09/2026 é de lá
+    que `resolver_pagador` o lê. A empresa nasce com o campo vazio aqui para
+    que qualquer teste que volte a depender dela falhe."""
     return [sicoob_contas.Empresa(
         nome="EXEMPLO",
         contas=[sicoob_contas.Conta(numero="12.345-6", pasta="SICOOB",
-                                    banco="756", agencia="4321-0")],
+                                    banco="756", agencia="4321-0",
+                                    convenio=convenio)],
         cnpj="12.345.678/0001-95",
         razao_social="EMPRESA EXEMPLO LTDA",
-        convenio=convenio,
     )]
 
 
@@ -524,16 +601,435 @@ def test_conta_de_outro_banco_nao_gera_remessa():
     assert motivo == remessa_dia.MOTIVO_FORA_SICOOB
 
 
+def test_conta_sem_banco_nao_gera_remessa_com_motivo_proprio():
+    """Sem banco não é "de outro banco": não há outro banco, há campo vazio.
+
+    O mapa carrega a conta assim de propósito — uma linha ruim não derruba as
+    outras —, e é aqui que ela para, com o recado dizendo onde consertar."""
+    mapa = mapa_mc()
+    mapa.destinos.append(contas_mc.Destino(
+        erp="EMPRESA EXEMPLO - SEM BANCO", empresa="EXEMPLO",
+        pasta="OUTRO", banco=""))
+    _, motivo = remessa_dia.resolver_pagador("EMPRESA EXEMPLO - SEM BANCO",
+                                             mapa, empresas())
+    assert motivo == remessa_dia.MOTIVO_SEM_BANCO
+    assert motivo != remessa_dia.MOTIVO_FORA_SICOOB
+    assert "contas_mc.json" in motivo
+    # e a conta boa da mesma empresa continua saindo
+    assert remessa_dia.resolver_pagador(CONTA, mapa, empresas())[1] == ""
+
+
 def test_conta_fora_do_mapa_nao_gera_remessa():
     _, motivo = remessa_dia.resolver_pagador("CONTA QUE NINGUEM CADASTROU",
                                              mapa_mc(), empresas())
     assert motivo == remessa_dia.MOTIVO_CONTA_DESCONHECIDA
 
 
-def test_empresa_sem_convenio_nao_gera_remessa():
-    """A trava natural: 11 das 12 empresas ainda estão sem convênio."""
+def test_conta_sem_convenio_nao_gera_remessa():
+    """A trava natural: quase toda conta ainda está sem convênio."""
     _, motivo = remessa_dia.resolver_pagador(CONTA, mapa_mc(), empresas(convenio=""))
     assert motivo == remessa_dia.MOTIVO_SEM_CONVENIO
+    assert "esta conta" in motivo
+
+
+def test_convenio_da_empresa_nao_e_herdado_pela_conta():
+    """O teste que impede alguém de reintroduzir `or empresa.convenio`.
+
+    O Sicoob dá um convênio por CONTA CORRENTE (04/09/2026): uma holding
+    daqui tem a principal e oito subcontas, cada uma com o seu. Herdar o da
+    empresa faria uma subconta AINDA NÃO ADERIDA sair com o número da
+    principal — e o convênio é o campo 07.0 do header e o nome da sequência
+    do NSA. O desfecho bom é o banco recusar o arquivo, e o NSA já foi
+    queimado; o ruim é ele aceitar em nome de uma conta que ninguém escolheu.
+    """
+    empresa, = empresas(convenio="")
+    empresa.convenio = "123456"                # o cadastro velho, ainda no JSON
+    pagador, motivo = remessa_dia.resolver_pagador(CONTA, mapa_mc(), [empresa])
+    assert pagador is None
+    assert motivo == remessa_dia.MOTIVO_SEM_CONVENIO
+
+
+# ------------------------------- duas contas na mesma pasta: quem paga?
+# Há empresa no cadastro com QUATRO contas Sicoob na pasta "SICOOB", e o que
+# as separa é o `sufixo`. Achar a pagadora só pela pasta fazia as quatro
+# virarem a MESMA conta: o dinheiro sairia de uma conta que ninguém escolheu,
+# com header, pasta e nome de arquivo idênticos aos da certa.
+def _duas_na_mesma_pasta(sufixo_a="A", sufixo_b="B",
+                         convenio_a="123456", convenio_b="654321"):
+    """Duas contas da mesma empresa — e, desde 04/09/2026, dois convênios.
+
+    É o caso da holding: o Sicoob dá um convênio por conta corrente, então
+    cada uma tem o seu. A empresa fica sem convênio nenhum."""
+    return [sicoob_contas.Empresa(
+        nome="EXEMPLO",
+        contas=[
+            sicoob_contas.Conta(numero="12.345-6", pasta="SICOOB",
+                                sufixo=sufixo_a, banco="756", agencia="4321-0",
+                                convenio=convenio_a),
+            sicoob_contas.Conta(numero="98.765-4", pasta="SICOOB",
+                                sufixo=sufixo_b, banco="756", agencia="4321-0",
+                                convenio=convenio_b),
+        ],
+        cnpj="12.345.678/0001-95",
+        razao_social="EMPRESA EXEMPLO LTDA",
+    )]
+
+
+def _mapa_com_sufixos():
+    mapa = mapa_mc()
+    mapa.destinos.append(contas_mc.Destino(
+        erp="EMPRESA EXEMPLO - SICOOB B", empresa="EXEMPLO", pasta="SICOOB",
+        banco="SICOOB", sufixo="B"))
+    # a conta que já existia passa a ser a "A" da mesma pasta
+    mapa.destinos[0].sufixo = "A"
+    return mapa
+
+
+def test_o_sufixo_escolhe_a_conta_quando_duas_dividem_a_pasta():
+    """Cada conta do ERP resolve para a SUA conta — não para a primeira."""
+    mapa = _mapa_com_sufixos()
+    a, motivo_a = remessa_dia.resolver_pagador(CONTA, mapa, _duas_na_mesma_pasta())
+    b, motivo_b = remessa_dia.resolver_pagador("EMPRESA EXEMPLO - SICOOB B",
+                                               mapa, _duas_na_mesma_pasta())
+    assert (motivo_a, motivo_b) == ("", "")
+    assert (a.conta, a.dv_conta) == ("12345", "6")
+    assert (b.conta, b.dv_conta) == ("98765", "4")
+    assert a.conta != b.conta
+
+
+def test_duas_contas_na_pasta_sem_sufixo_recusam_a_remessa():
+    """Sem desempate o app não sabe de qual conta o dinheiro sai — e recusa.
+
+    Escolher a primeira é pagar pela conta errada sem nada denunciar: o
+    header, a pasta e o nome do arquivo saem idênticos aos da conta certa.
+    """
+    pagador, motivo = remessa_dia.resolver_pagador(
+        CONTA, mapa_mc(), _duas_na_mesma_pasta(sufixo_a="", sufixo_b=""))
+    assert pagador is None
+    assert motivo == remessa_dia.MOTIVO_CONTA_AMBIGUA
+    assert "sufixo" in motivo
+
+
+def test_uma_conta_na_pasta_dispensa_sufixo():
+    """O caso comum não pode passar a exigir cadastro novo para funcionar."""
+    pagador, motivo = remessa_dia.resolver_pagador(CONTA, mapa_mc(), empresas())
+    assert motivo == ""
+    assert (pagador.conta, pagador.dv_conta) == ("12345", "6")
+
+
+def test_duas_contas_da_mesma_empresa_tem_convenios_diferentes():
+    """Cada conta paga pelo SEU convênio — é o caso da holding.
+
+    Enquanto o convênio era da empresa, as duas sairiam com o mesmo campo
+    07.0 no header e dividindo UMA sequência de NSA, que é o número que o
+    banco confere para não aceitar arquivo repetido."""
+    mapa = _mapa_com_sufixos()
+    contas = _duas_na_mesma_pasta()
+    a, motivo_a = remessa_dia.resolver_pagador(CONTA, mapa, contas)
+    b, motivo_b = remessa_dia.resolver_pagador("EMPRESA EXEMPLO - SICOOB B",
+                                               mapa, contas)
+    assert (motivo_a, motivo_b) == ("", "")
+    assert (a.convenio, b.convenio) == ("123456", "654321")
+    assert a.conta != b.conta
+
+
+def test_a_conta_sem_convenio_para_sozinha():
+    """Subconta não aderida não derruba a irmã que já aderiu — e, sobretudo,
+    não sai com o convênio dela."""
+    mapa = _mapa_com_sufixos()
+    contas = _duas_na_mesma_pasta(convenio_b="")
+    a, motivo_a = remessa_dia.resolver_pagador(CONTA, mapa, contas)
+    b, motivo_b = remessa_dia.resolver_pagador("EMPRESA EXEMPLO - SICOOB B",
+                                               mapa, contas)
+    assert motivo_a == "" and a.convenio == "123456"
+    assert b is None and motivo_b == remessa_dia.MOTIVO_SEM_CONVENIO
+
+
+# ------------------------------------------------- prontidão do cadastro
+# A validação acontecia TARDE (só ao clicar em "Gerar remessa") e SEM SUJEITO
+# ("Não consegui ler o cadastro", sem dizer de qual conta). Com doze empresas
+# e dezessete contas aderidas, isso é o dia parado. A prontidão junta TODOS os
+# problemas de TODAS as contas antes de alguém tentar gerar coisa alguma.
+def _destino(erp, pasta, banco="SICOOB", empresa="EXEMPLO", sufixo=""):
+    return contas_mc.Destino(erp=erp, empresa=empresa, pasta=pasta,
+                             banco=banco, sufixo=sufixo)
+
+
+def _conta(pasta, numero="12.345-6", agencia="4321-0", convenio="123456",
+           sufixo=""):
+    return sicoob_contas.Conta(numero=numero, pasta=pasta, sufixo=sufixo,
+                               banco="756", agencia=agencia, convenio=convenio)
+
+
+def _empresa(contas, nome="EXEMPLO", cnpj=CNPJ_OK, razao="EMPRESA EXEMPLO LTDA"):
+    return sicoob_contas.Empresa(nome=nome, contas=contas, cnpj=cnpj,
+                                 razao_social=razao)
+
+
+def _mapa(*destinos):
+    return contas_mc.Mapa(raiz=Path("."), destinos=list(destinos))
+
+
+def test_prontidao_aponta_a_conta_e_o_campo():
+    """Três contas, três vereditos — e cada um diz de QUEM é e o QUE falta.
+
+    É a diferença inteira para `resolver_pagador`: aquele para no primeiro
+    problema, porque quem gera precisa de um veredito; esta junta todos,
+    porque quem corrige precisa da lista. Descobrir a agência hoje e o
+    convênio amanhã é o mesmo dia parado duas vezes."""
+    mapa = _mapa(_destino("EXEMPLO - SEM AGENCIA", "SEM AGENCIA"),
+                 _destino("EXEMPLO - SEM CONVENIO", "SEM CONVENIO"),
+                 _destino("EXEMPLO - COMPLETA", "COMPLETA"))
+    cadastro = [_empresa([
+        _conta("SEM AGENCIA", numero="11.111-1", agencia="", convenio="111111"),
+        _conta("SEM CONVENIO", numero="22.222-2", convenio=""),
+        _conta("COMPLETA", numero="33.333-3", convenio="333333"),
+    ])]
+    por_conta = {c.conta_erp: c for c in remessa_dia.prontidao(mapa, cadastro)}
+    assert len(por_conta) == 3
+
+    sem_agencia = por_conta["EXEMPLO - SEM AGENCIA"]
+    assert not sem_agencia.pronta and sem_agencia.campos_falta == ["agência"]
+    assert "painel" in sem_agencia.faltas[0]
+
+    sem_convenio = por_conta["EXEMPLO - SEM CONVENIO"]
+    assert sem_convenio.campos_falta == ["convênio"]
+    assert sem_convenio.faltas == [remessa_dia.MOTIVO_SEM_CONVENIO]
+
+    completa = por_conta["EXEMPLO - COMPLETA"]
+    assert completa.pronta and completa.faltas == [] and completa.avisos == []
+    assert completa.situacao == ("ok", "pronta")
+    # o sujeito é o REGISTRO: a conta, a empresa e a conta do banco estão nele
+    assert (completa.empresa, completa.conta, completa.convenio) == (
+        "EXEMPLO", "33.333-3", "333333")
+
+
+def test_conta_sem_banco_e_falta_e_a_prontidao_diz_qual_conta():
+    """Conta sem `banco` no contas_mc.json entra na lista (pode ser Sicoob),
+    e o registro carrega o nome dela — que era o que faltava no recado."""
+    mapa = _mapa(_destino("EXEMPLO - SEM BANCO", "SICOOB", banco=""))
+    c, = remessa_dia.prontidao(mapa, empresas())
+    assert c.conta_erp == "EXEMPLO - SEM BANCO"
+    assert c.campos_falta[0] == "banco"
+    assert c.faltas[0] == remessa_dia.MOTIVO_SEM_BANCO
+
+
+def test_conta_de_outro_banco_nao_entra_na_prontidao():
+    """Conta do Inter não é pendência: é conta que não faz remessa CNAB, e
+    nunca vai fazer. Uma lista que a carrega para sempre é uma lista que
+    ninguém lê."""
+    conferencias = remessa_dia.prontidao(mapa_mc(), empresas())
+    assert [c.conta_erp for c in conferencias] == [CONTA]
+
+
+def test_e_sicoob_aceita_o_nome_e_o_codigo():
+    """O cadastro tem os dois jeitos — o mesmo motivo do
+    `nuvem/cadastro._e_inter`, que aceita "INTER" ou "77"."""
+    assert all(remessa_dia._e_sicoob(v)
+               for v in ("SICOOB", "sicoob", " Sicoob ", "756", "0756"))
+    assert not any(remessa_dia._e_sicoob(v)
+                   for v in ("", "INTER", "77", "CAIXA", "7560"))
+
+
+def test_conta_com_banco_756_gera_remessa_e_avisa():
+    """Recusar a conta escrita por código dizia "esta conta é de outro banco"
+    — manda conferir a coisa errada, para uma conta que É do Sicoob.
+
+    Ela gera, então; e continua sendo AVISO porque é esse campo que nomeia o
+    extrato do Relatório Mensal ("202607 756 MAIS CONTROLE.pdf")."""
+    mapa = _mapa(_destino(CONTA, "SICOOB", banco="756"))
+    c, = remessa_dia.prontidao(mapa, empresas())
+    assert c.pronta and c.campos_aviso == ["banco"]
+    assert "756 MAIS CONTROLE" in c.avisos[0]
+    assert c.situacao == ("info", "aviso: banco")
+
+    pagador, motivo = remessa_dia.resolver_pagador(CONTA, mapa, empresas())
+    assert motivo == "" and pagador is not None
+    assert motivo != remessa_dia.MOTIVO_FORA_SICOOB
+
+
+def test_razao_social_vazia_e_aviso_e_nao_falta():
+    """O header cai para o nome da pasta, cortado nas 30 posições do campo
+    13.0 — o arquivo sai, e sair é o que separa aviso de falta."""
+    mapa = _mapa(_destino(CONTA, "SICOOB"))
+    cadastro = [_empresa([_conta("SICOOB")], razao="")]
+    c, = remessa_dia.prontidao(mapa, cadastro)
+    assert c.pronta and c.campos_aviso == ["razão social"]
+    pagador, _ = remessa_dia.resolver_pagador(CONTA, mapa, cadastro)
+    assert pagador.razao_social == "EXEMPLO"
+
+
+def test_cnpj_de_preenchimento_do_pagador_e_falta():
+    """Ninguém conferia o documento do PAGADOR antes do validador.
+
+    Em 20/08/2026 um CPF de preenchimento do FAVORECIDO — onze dígitos, DV que
+    não fecha — fez o Sicoob devolver um arquivo inteiro. O do pagador entra no
+    campo 06.0 do header e erra do mesmo jeito, só que em todas as linhas de
+    uma vez: aqui a conta para ANTES de o NSA ser queimado."""
+    mapa = _mapa(_destino(CONTA, "SICOOB"))
+    # o CNPJ sintético de sempre, com o último dígito trocado
+    cadastro = [_empresa([_conta("SICOOB")], cnpj="12.345.678/0001-99")]
+    c, = remessa_dia.prontidao(mapa, cadastro)
+    assert not c.pronta and c.campos_falta == ["CNPJ"]
+    assert "dígito verificador" in c.faltas[0]
+    assert remessa_dia.resolver_pagador(CONTA, mapa, cadastro)[0] is None
+    # e o mesmo cadastro com o CNPJ certo passa
+    cadastro[0].cnpj = "12.345.678/0001-95"
+    assert remessa_dia.prontidao(mapa, cadastro)[0].pronta
+
+
+def test_conta_sem_dv_e_falta():
+    """"12345" não é conta: o DV é campo próprio no layout (06.0), e montar o
+    header sem ele manda o dinheiro sair de uma conta que não existe."""
+    mapa = _mapa(_destino(CONTA, "SICOOB"))
+    cadastro = [_empresa([_conta("SICOOB", numero="123456")])]
+    c, = remessa_dia.prontidao(mapa, cadastro)
+    assert not c.pronta and c.campos_falta == ["conta"]
+    assert remessa_dia.resolver_pagador(CONTA, mapa, cadastro)[0] is None
+
+
+def test_agencia_fora_de_quatro_ou_cinco_digitos_e_falta():
+    """Vazia já parava; fora do tamanho passava, e quem recusava era o banco —
+    depois de o NSA ter sido queimado."""
+    mapa = _mapa(_destino(CONTA, "SICOOB"))
+    for agencia in ("", "12-3", "1234567-8"):
+        cadastro = [_empresa([_conta("SICOOB", agencia=agencia)])]
+        c, = remessa_dia.prontidao(mapa, cadastro)
+        assert c.campos_falta == ["agência"], agencia
+    for agencia in ("4321-0", "43210-1"):
+        cadastro = [_empresa([_conta("SICOOB", agencia=agencia)])]
+        assert remessa_dia.prontidao(mapa, cadastro)[0].pronta, agencia
+
+
+def test_duas_contas_com_o_mesmo_convenio_sao_falta_nas_duas():
+    """Duas contas com o mesmo convênio dividem UMA sequência de NSA, que é o
+    número que o banco confere para não aceitar arquivo repetido.
+
+    Falta nas DUAS porque não há como saber qual está com o número errado, e
+    escolher uma é gerar em nome da conta que ninguém escolheu."""
+    mapa = _mapa_com_sufixos()
+    cadastro = _duas_na_mesma_pasta(convenio_b="123456")     # igual ao da irmã
+    conferencias = remessa_dia.prontidao(mapa, cadastro)
+    assert len(conferencias) == 2
+    assert all(not c.pronta and "convênio" in c.campos_falta
+               for c in conferencias)
+    for conta in (CONTA, "EMPRESA EXEMPLO - SICOOB B"):
+        assert remessa_dia.resolver_pagador(conta, mapa, cadastro)[0] is None
+    # com convênios diferentes, as duas voltam a estar prontas
+    assert all(c.pronta for c in remessa_dia.prontidao(
+        mapa, _duas_na_mesma_pasta()))
+
+
+def test_duas_contas_com_a_mesma_agencia_e_conta_sao_falta_nas_duas():
+    """Mesma agência e mesma conta em duas linhas do cadastro: as duas gerariam
+    header idêntico, e nada no arquivo diria de qual delas o dinheiro saiu."""
+    mapa = _mapa(_destino("EXEMPLO - A", "PASTA A"),
+                 _destino("EXEMPLO - B", "PASTA B"))
+    cadastro = [_empresa([
+        _conta("PASTA A", numero="12.345-6", convenio="111111"),
+        _conta("PASTA B", numero="12.345-6", convenio="222222"),
+    ])]
+    conferencias = remessa_dia.prontidao(mapa, cadastro)
+    assert all(not c.pronta and "conta" in c.campos_falta for c in conferencias)
+
+
+def _cadastro_com_todos_os_defeitos():
+    """Um mapa com uma conta de cada defeito, três sem defeito nenhum e uma de
+    outro banco — a matéria-prima do teste que impede a divergência."""
+    mapa = _mapa(
+        _destino("BOA", "BOA"),
+        _destino("BANCO POR CODIGO", "CODIGO", banco="756"),
+        _destino("SEM RAZAO", "SEM RAZAO", empresa="SEM RAZAO SOCIAL"),
+        _destino("SEM BANCO", "NAO CADASTRADA", banco=""),
+        _destino("DE OUTRO BANCO", "INTER", banco="INTER"),
+        _destino("EMPRESA QUE NAO EXISTE", "SICOOB", empresa="NINGUEM"),
+        _destino("PASTA QUE NAO EXISTE", "NAO CADASTRADA"),
+        _destino("AMBIGUA", "DIVIDIDA"),
+        _destino("AGENCIA CURTA", "AGENCIA CURTA"),
+        _destino("CONTA SEM DV", "CONTA SEM DV"),
+        _destino("SEM CONVENIO", "SEM CONVENIO"),
+        _destino("CNPJ RUIM", "CNPJ RUIM", empresa="CNPJ RUIM"),
+        _destino("CONVENIO REPETIDO A", "REPETIDO A"),
+        _destino("CONVENIO REPETIDO B", "REPETIDO B"),
+        _destino("MESMA CONTA A", "MESMA CONTA A"),
+        _destino("MESMA CONTA B", "MESMA CONTA B"),
+    )
+    cadastro = [
+        _empresa([
+            _conta("BOA", numero="10.001-1", convenio="100001"),
+            _conta("CODIGO", numero="10.002-2", convenio="100002"),
+            _conta("DIVIDIDA", numero="10.003-3", convenio="100003"),
+            _conta("DIVIDIDA", numero="10.004-4", convenio="100004"),
+            _conta("AGENCIA CURTA", numero="10.005-5", agencia="12-3",
+                   convenio="100005"),
+            _conta("CONTA SEM DV", numero="100066", convenio="100006"),
+            _conta("SEM CONVENIO", numero="10.007-7", convenio=""),
+            _conta("REPETIDO A", numero="10.008-8", convenio="999999"),
+            _conta("REPETIDO B", numero="10.009-9", convenio="999999"),
+            _conta("MESMA CONTA A", numero="10.010-0", convenio="100010"),
+            _conta("MESMA CONTA B", numero="10.010-0", convenio="100011"),
+        ]),
+        _empresa([_conta("SEM RAZAO", numero="10.020-0", convenio="100020")],
+                 nome="SEM RAZAO SOCIAL", razao=""),
+        _empresa([_conta("CNPJ RUIM", numero="10.021-1", convenio="100021")],
+                 nome="CNPJ RUIM", cnpj="12.345.678/0001-99"),
+    ]
+    return mapa, cadastro
+
+
+def test_a_prontidao_e_o_resolver_pagador_concordam():
+    """O teste que impede as duas de divergirem em silêncio.
+
+    São duas leituras do MESMO cadastro para duas perguntas diferentes ("o que
+    conserto?" e "esta conta gera?"), e enquanto forem duas listas de
+    checagens elas vão se separar sem ninguém perceber: a tabela diria
+    "pronta" e o botão recusaria, ou — pior — a tabela diria "falta" e o
+    arquivo sairia assim mesmo."""
+    mapa, cadastro = _cadastro_com_todos_os_defeitos()
+    conferencias = remessa_dia.prontidao(mapa, cadastro)
+    prontas = [c.conta_erp for c in conferencias if c.pronta]
+    assert prontas == ["BOA", "BANCO POR CODIGO", "SEM RAZAO"]
+    assert len(conferencias) - len(prontas) >= 8      # defeitos de todo tipo
+
+    for c in conferencias:
+        pagador, motivo = remessa_dia.resolver_pagador(c.conta_erp, mapa,
+                                                       cadastro)
+        assert c.pronta == (pagador is not None), (c.conta_erp, c.faltas, motivo)
+        # e o motivo que o botão mostra é uma das faltas que a tabela lista
+        assert c.pronta or motivo in c.faltas, (c.conta_erp, motivo)
+
+
+def test_toda_falta_e_todo_aviso_tem_o_nome_do_campo():
+    """As listas são paralelas de propósito (a frase inteira para quem
+    conserta, o nome do campo para a coluna SITUAÇÃO), e listas paralelas
+    divergem: aqui elas são contadas."""
+    _mapa_defeitos, cadastro = _cadastro_com_todos_os_defeitos()
+    for c in remessa_dia.prontidao(_mapa_defeitos, cadastro):
+        assert len(c.campos_falta) == len(c.faltas), c.conta_erp
+        assert len(c.campos_aviso) == len(c.avisos), c.conta_erp
+        estado, texto = c.situacao
+        # os três são chaves de `widgets.MARCAS_ESTADO`, e a tabela indexa por
+        # eles — o `widgets` não é importado aqui para este arquivo continuar
+        # sendo teste de REGRA, sem tkinter.
+        assert estado in ("ok", "atencao", "info")
+        assert texto
+
+
+# ------------------------------------------------- o que ficou sem remessa
+def test_contas_sem_remessa_conta_o_que_nao_virou_arquivo():
+    """A aritmética do cartão "Contas sem remessa" do Início.
+
+    Ela morava dentro de `_gravar_remessas`, no caminho em que ALGUM arquivo
+    saiu — então o dia em que nenhum saía não registrava nada, e o cartão
+    mostrava "—": o mesmo que ele mostra quando ninguém rodou. Pura aqui para
+    o caso de nenhum arquivo poder ser testado sem abrir janela."""
+    preparado = {"A - SICOOB": [1], "B - SICOOB": [1], "C - SICOOB": [1]}
+    assert remessa_dia.contas_sem_remessa(preparado, ["a.REM"]) == 2
+    # o caso do achado K: nenhum arquivo saiu, e são TRÊS contas sem remessa
+    assert remessa_dia.contas_sem_remessa(preparado, []) == 3
+    assert remessa_dia.contas_sem_remessa({}, []) == 0
+    # mais arquivos que contas não vira número negativo
+    assert remessa_dia.contas_sem_remessa(preparado, list("abcd")) == 0
 
 
 # --------------------------------------------------------------- arquivo
@@ -600,7 +1096,8 @@ def test_o_que_ficou_de_fora_viaja_com_o_motivo():
 
 
 def test_nome_do_arquivo_e_legivel_e_unico():
-    assert remessa_dia.nome_do_arquivo(pagador(), 31) == "REM_EXEMPLO_000031.REM"
+    assert (remessa_dia.nome_do_arquivo(pagador(), 31)
+            == "REM_EXEMPLO_4321-12345_000031.REM")
 
 
 # ----------------------------------------------------- ponta a ponta, com NSA
@@ -1171,7 +1668,20 @@ def test_empresa_sem_nome_ainda_tem_onde_cair():
     assert p.parts[-2] == "EMPRESA"
 
 
-def test_o_arquivo_continua_com_o_nome_de_sempre():
-    """A pasta mudou; o nome do arquivo, não — o histórico e o SicoobNet o
-    reconhecem por ele."""
-    assert remessa_dia.nome_do_arquivo(_pagador(), 7) ==         "REM_MORAIS-ENGENHARIA-LTDA_000007.REM"
+def test_o_nome_separa_as_contas_da_mesma_empresa():
+    """O convênio do Sicoob é POR CONTA: cada subconta recomeça o NSA dela.
+
+    A pasta já separa uma conta da outra, mas o arrasto para a caixa de
+    upload do SicoobNet mostra só o NOME — e duas contas da mesma empresa,
+    no mesmo dia, com o NSA velho batiam no mesmo nome em pastas diferentes.
+    Isso é a receita de subir o arquivo de uma conta no acesso de outra, um
+    erro que só aparece depois de enviado.
+    """
+    a = remessa_dia.nome_do_arquivo(_pagador(conta="50022"), 7)
+    b = remessa_dia.nome_do_arquivo(_pagador(conta="71234"), 7)
+    assert a != b
+    for nome in (a, b):
+        assert nome.startswith("REM_")
+        assert nome.endswith(".REM")
+        nsa = nome[:-4].rsplit("_", 1)[1]
+        assert len(nsa) == 6 and nsa.isdigit()

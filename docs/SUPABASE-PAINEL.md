@@ -74,6 +74,48 @@ são `DEPENDENCIAS.md`, `SUPABASE-PAINEL.md` (este arquivo), `confirmado.html` e
 
 ---
 
+## 3. Table Editor → `conta` → o `convenio` de cada conta (desde 04/09/2026)
+
+Esta seção não é sobre o `config.toml`: é a única parte do cadastro que **só
+uma pessoa consegue preencher**, porque os números moram no SicoobNet e não se
+derivam de nada que o app conheça.
+
+O Sicoob dá **um convênio por conta corrente**. Até 04/09/2026 o convênio era
+coluna da `empresa`, e para empresa de uma conta só isso dava no mesmo — a
+holding com a conta principal e oito subcontas é que mostrou o desenho: nove
+números diferentes debaixo de um CNPJ só.
+
+**A ordem, e ela não pode inverter:**
+
+1. **Rodar `supabase/runbooks/2026-09-04_convenio-por-conta.sql` no SQL Editor,
+   ANTES do merge do PR "convênio por conta".** O código novo lê
+   `conta.convenio`; mergeado primeiro, a sincronização da abertura pede uma
+   coluna que o banco não tem e o cadastro inteiro volta como recusa — o app
+   abre com a cópia de ontem sem dizer o que houve de verdade. O caminho
+   contrário é seguro: coluna nova com default `''` não muda nada para o
+   código velho, que continua lendo `empresa.convenio`.
+2. **Depois, preencher `conta.convenio` conta por conta**, no Table Editor. Os
+   números saem do comprovante de adesão de cada conta no SicoobNet. O passo 2
+   do runbook já desceu o convênio que existia na empresa para a **única**
+   conta Sicoob dela; empresa com mais de uma conta Sicoob ficou de fora de
+   propósito, porque escolher uma ali seria adivinhar de qual conta o dinheiro
+   sai.
+
+**Os números não entram no repositório** — nem aqui, nem em teste, nem em
+comentário. Ele é público.
+
+O que o banco cobra: só letras e dígitos, até 20 (`conta_convenio_formato`), e
+nenhum convênio repetido em duas contas (`conta_convenio_unico`) — dois iguais
+gerariam NSA em sequências que se atropelam. **Vazio é permitido e é a trava**:
+conta sem convênio não gera remessa, e o app diz isso na tela, conta por conta.
+Não há herança da empresa, e isso é decisão, não esquecimento: herdar faria uma
+subconta ainda não aderida sair com o convênio da principal.
+
+Conferir sem imprimir número nenhum: o `select` do fim do runbook devolve, por
+empresa, quantas contas Sicoob existem e quantas já têm convênio.
+
+---
+
 ## Ver o que mudaria ANTES de aplicar
 
 **Não dá — e é o ponto.** Conferido na 2.115.0, `supabase config push` tem um

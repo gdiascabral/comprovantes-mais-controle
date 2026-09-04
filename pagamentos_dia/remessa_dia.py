@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
@@ -110,13 +110,78 @@ MOTIVO_VALOR_DIVERGE = ("o boleto diz um valor e o lançamento diz outro — "
                         "confira o documento antes de pagar")
 #: Preenchido com o número da remessa anterior: "já saiu na remessa nº 000031".
 MOTIVO_JA_ENVIADO = "já saiu na remessa nº {nsa:06d} de {quando}"
-MOTIVO_SEM_CONVENIO = "empresa sem convênio de remessa cadastrado"
+#: O convênio é da CONTA, não da empresa (04/09/2026): o Sicoob dá um por
+#: conta corrente, e uma holding daqui tem nove — a principal e oito
+#: subcontas. Vazio é o estado normal de quem ainda não aderiu, e por isso o
+#: recado diz os DOIS passos: a adesão é no banco, o número é no painel.
+MOTIVO_SEM_CONVENIO = ("esta conta não tem convênio de remessa cadastrado — "
+                       "faça a adesão no SicoobNet e cadastre o número no "
+                       "painel")
 MOTIVO_FORA_SICOOB = "a remessa CNAB 240 é do Sicoob; esta conta é de outro banco"
+#: Conta COM banco em branco no `contas_mc.json` caía no motivo acima — e
+#: "esta conta é de outro banco" manda conferir o banco errado: não há outro
+#: banco, há um campo vazio. O motivo próprio diz onde consertar.
+MOTIVO_SEM_BANCO = ("conta sem banco no cadastro (contas_mc.json) — "
+                    "corrija no painel")
 MOTIVO_CONTA_DESCONHECIDA = "conta não está no mapa (contas_mc.json)"
+#: Duas contas da MESMA empresa na MESMA pasta e nenhum `sufixo` para separá-las:
+#: o app não tem como saber de qual delas o dinheiro sai, e escolher a primeira
+#: é pagar pela conta errada com header, pasta e nome de arquivo idênticos aos
+#: da certa — nada denunciaria. Recusar é a única falha aceitável aqui.
+MOTIVO_CONTA_AMBIGUA = ("há mais de uma conta nesta pasta e o sufixo não "
+                        "desempata — cadastre o sufixo no painel")
+#: A empresa do `contas_mc.json` não existe no `contas_sicoob.json`: o header
+#: sai do CNPJ e da razão social dela, e não há de quem tirá-los.
+MOTIVO_SEM_EMPRESA = ("a empresa '{empresa}' não está no cadastro do Sicoob — "
+                      "cadastre-a no painel")
+MOTIVO_CONTA_NAO_CADASTRADA = ("a conta da pasta '{pasta}' não está cadastrada "
+                               "em '{empresa}' — cadastre-a no painel")
+#: A agência do Sicoob tem quatro dígitos (cinco em algumas cooperativas), e é
+#: o campo 05.0 do header. Vazia, `resolver_pagador` já recusava; fora do
+#: tamanho, ela passava e o banco recusava o arquivo — depois do NSA queimado.
+MOTIVO_AGENCIA = ("agência fora do formato (4 ou 5 dígitos) — corrija no "
+                  "painel")
+#: "12.345-6" sem o "-6" não é conta: o DV é campo próprio no layout (06.0), e
+#: montar o header sem ele manda o dinheiro sair de uma conta que não existe.
+MOTIVO_CONTA_SEM_DV = ("número da conta sem o dígito verificador (00000-0) — "
+                       "corrija no painel")
+#: Ninguém conferia o documento do PAGADOR antes do validador. Em 20/08/2026
+#: um CPF de preenchimento — onze dígitos, DV que não fecha — do FAVORECIDO
+#: devolveu um arquivo inteiro; o do pagador entra no campo 06.0 do header e
+#: erra do mesmo jeito, só que em todas as linhas de uma vez.
+MOTIVO_CNPJ = ("o CNPJ da empresa não fecha no dígito verificador — corrija "
+               "no painel")
+#: Duas contas com o MESMO convênio dividem UMA sequência de NSA, que é o
+#: número que o banco confere para não aceitar arquivo repetido. Falta nas
+#: DUAS: não há como saber qual das duas está com o número errado.
+MOTIVO_CONVENIO_REPETIDO = ("outra conta está com este mesmo convênio — cada "
+                            "conta tem o seu; corrija no painel")
+MOTIVO_CONTA_REPETIDA = ("outra conta está com esta mesma agência e conta — "
+                         "corrija no painel")
+#: Avisos: a remessa SAI, mas o cadastro está torto e alguém precisa saber.
+#: O banco escrito como código nomeia o extrato do Relatório Mensal
+#: (`contas_mc.nome_arquivo` usa o campo cru), e "202607 756 MAIS CONTROLE.pdf"
+#: não diz de que banco é para quem abre a pasta.
+AVISO_BANCO_POR_CODIGO = ('o banco está como "{banco}" e não "SICOOB": a '
+                          'remessa sai, mas o extrato do Relatório Mensal vira '
+                          '"AAAAMM {banco} MAIS CONTROLE.pdf" — corrija no '
+                          'painel')
+#: Sem razão social o header cai para o nome de PASTA, cortado em 30 posições
+#: (campo 13.0). Aviso e não falta: o arquivo é aceito, e o `resolver_pagador`
+#: já fazia essa queda muito antes de alguém a escrever aqui.
+AVISO_SEM_RAZAO_SOCIAL = ("sem razão social: o header vai com o nome da pasta, "
+                          "cortado em 30 letras — cadastre no painel")
 
 #: O "seu número" tem 20 posições no layout, e é o que o banco devolve
 #: idêntico no retorno.
 TAMANHO_SEU_NUMERO = 20
+
+#: Como o cadastro escreve "Sicoob". O nome e o código convivem no mesmo campo
+#: — é o mesmo motivo do `nuvem/cadastro._e_inter`, que aceita "INTER" ou
+#: "77" "porque o cadastro tem os dois jeitos". Casar só por "SICOOB" deixava
+#: de fora a conta cadastrada por código, com o motivo mais enganoso possível
+#: ("esta conta é de outro banco" para uma conta que é do Sicoob).
+BANCOS_SICOOB = frozenset({"SICOOB", "756", "0756"})
 
 _OC = re.compile(r"\bOC\s*:?\s*(\d{2,7})", re.I)
 
@@ -164,42 +229,288 @@ def _partes(texto: str) -> tuple[str, str]:
     return numero, dv
 
 
+def _e_sicoob(banco: str) -> bool:
+    """Este `banco` do cadastro é o Sicoob? Aceita o nome e o código.
+
+    Precedente e motivo em `nuvem/cadastro._e_inter`: o campo `banco` carrega
+    ora o nome ("SICOOB", "INTER"), ora o código ("756", "0756"), porque o
+    cadastro tem os dois jeitos. Enquanto a comparação era `!= "SICOOB"`, a
+    conta escrita por código era recusada com `MOTIVO_FORA_SICOOB` — "esta
+    conta é de outro banco" para uma conta que é do Sicoob, que é a pior
+    espécie de recado: manda conferir a coisa errada.
+
+    O dado continua torto, e por isso o código também continua sendo AVISO na
+    prontidão (`AVISO_BANCO_POR_CODIGO`): é ele que nomeia o PDF do Relatório
+    Mensal. Aceitar para gerar e avisar para corrigir são as duas metades.
+    """
+    return (banco or "").strip().upper() in BANCOS_SICOOB
+
+
+# --------------------------------------------------------------------------
+# Prontidão do cadastro — o que impede a remessa ANTES de tentar gerá-la
+# --------------------------------------------------------------------------
+@dataclass
+class Conferencia:
+    """O veredito do cadastro de UMA conta pagadora, com TODOS os problemas.
+
+    A diferença para `resolver_pagador` é de propósito e é o motivo de as duas
+    existirem: aquele para no PRIMEIRO problema, porque quem gera precisa de um
+    veredito (sai ou não sai); esta junta todos, porque quem CORRIGE precisa da
+    lista — descobrir a agência hoje, o convênio amanhã e o CNPJ depois de
+    amanhã é o dia parado três vezes, com doze empresas esperando.
+
+    O sujeito mora no REGISTRO, e não nas frases: `conta_erp` é o primeiro
+    campo justamente porque o defeito que este módulo veio corrigir era a
+    validação chegar tarde **e sem dizer de quem** ("Não consegui ler o
+    cadastro"). As frases de `faltas` dizem o CAMPO a corrigir e onde se
+    corrige; quem diz de que conta se trata é a `Conferencia` que as carrega.
+    """
+
+    conta_erp: str
+    empresa: str
+    pasta: str
+    agencia: str = ""
+    conta: str = ""
+    convenio: str = ""
+    #: A frase inteira, para quem for consertar o cadastro. Impede gerar.
+    faltas: list[str] = field(default_factory=list)
+    #: Gera do mesmo jeito, mas alguém precisa olhar.
+    avisos: list[str] = field(default_factory=list)
+    #: O NOME do campo de cada falta/aviso, na MESMA ordem e no mesmo número —
+    #: é o que cabe na coluna SITUAÇÃO da tabela ("falta: agência, convênio").
+    #: Listas paralelas divergem, então há UM ponto de escrita para cada par
+    #: (`_falta` e `_aviso`), e um teste conta os dois lados.
+    campos_falta: list[str] = field(default_factory=list)
+    campos_aviso: list[str] = field(default_factory=list)
+
+    @property
+    def pronta(self) -> bool:
+        return not self.faltas
+
+    @property
+    def situacao(self) -> tuple[str, str]:
+        """`(estado, texto)` da linha: "pronta", "falta: …" ou "aviso: …".
+
+        O estado é o nome de tag do `widgets` (`ok`/`atencao`/`info`), e não a
+        cor: quem pinta é a tabela. Falta é `atencao` e não `erro` porque nada
+        falhou — o cadastro está incompleto e ninguém tentou gerar nada ainda.
+        """
+        if self.faltas:
+            return "atencao", "falta: " + ", ".join(dict.fromkeys(self.campos_falta))
+        if self.avisos:
+            return "info", "aviso: " + ", ".join(dict.fromkeys(self.campos_aviso))
+        return "ok", "pronta"
+
+
+def _falta(conf: Conferencia, campo: str, texto: str) -> None:
+    conf.campos_falta.append(campo)
+    conf.faltas.append(texto)
+
+
+def _aviso(conf: Conferencia, campo: str, texto: str) -> None:
+    conf.campos_aviso.append(campo)
+    conf.avisos.append(texto)
+
+
+def _escolher_conta(destino, empresas):
+    """`(empresa, conta, falta)` — a conta do Sicoob que paga por este destino.
+
+    Existe para que `conferir_conta` e `resolver_pagador` façam a MESMA
+    escolha: são duas leituras do mesmo cadastro e nada garantiria que duas
+    cópias continuassem concordando. A escolha é por pasta E `sufixo`, pelo
+    motivo escrito em `resolver_pagador`.
+    """
+    empresa = next((e for e in (empresas or [])
+                    if _chave(e.nome) == _chave(destino.empresa)), None)
+    if empresa is None:
+        return None, None, MOTIVO_SEM_EMPRESA.format(empresa=destino.empresa)
+
+    candidatas = [c for c in empresa.contas
+                  if _chave(c.pasta) == _chave(destino.pasta)]
+    if len(candidatas) > 1:
+        candidatas = [c for c in candidatas
+                      if _chave(c.sufixo or "") == _chave(destino.sufixo or "")]
+    if not candidatas:
+        return empresa, None, MOTIVO_CONTA_NAO_CADASTRADA.format(
+            pasta=destino.pasta, empresa=empresa.nome)
+    if len(candidatas) > 1:
+        return empresa, None, MOTIVO_CONTA_AMBIGUA
+    return empresa, candidatas[0], ""
+
+
+def conferir_conta(destino, empresas) -> Conferencia:
+    """Tudo que impede (ou preocupa) esta conta do `contas_mc.json`.
+
+    A ordem é a que o ARQUIVO precisaria: o banco escolhe o produto, a empresa
+    e a conta dão o header, agência e conta dizem de onde o dinheiro sai, o
+    CNPJ identifica quem paga e o convênio é o campo 07.0 e o nome da sequência
+    do NSA. `resolver_pagador` devolve `faltas[0]`, então a ordem também é a
+    ordem em que o motivo aparece para quem clicou em "Gerar remessa".
+
+    O que NÃO está aqui: conta de outro banco. Ela não é problema deste
+    cadastro — é conta que não gera remessa CNAB e nunca vai gerar —, e por
+    isso `prontidao` nem a inclui na lista. Uma lista de pendências que
+    carrega dez contas do Inter para sempre é uma lista que ninguém lê.
+
+    A duplicidade entre contas (mesmo convênio, mesma agência+conta) mora em
+    `prontidao`: daqui não se enxerga a conta vizinha.
+    """
+    conf = Conferencia(conta_erp=destino.erp, empresa=destino.empresa,
+                       pasta=destino.pasta)
+
+    banco = (destino.banco or "").strip()
+    if not banco:
+        _falta(conf, "banco", MOTIVO_SEM_BANCO)
+    elif banco.upper() != "SICOOB":
+        _aviso(conf, "banco", AVISO_BANCO_POR_CODIGO.format(banco=banco))
+
+    empresa, conta, falta = _escolher_conta(destino, empresas)
+    if falta:
+        _falta(conf, "empresa" if empresa is None else "conta", falta)
+
+    if conta is not None:
+        conf.agencia = (getattr(conta, "agencia", "") or "").strip()
+        conf.conta = (conta.numero or "").strip()
+        conf.convenio = (getattr(conta, "convenio", "") or "").strip()
+        agencia, _dv_agencia = _partes(conf.agencia)
+        if not 4 <= len(agencia) <= 5:
+            _falta(conf, "agência", MOTIVO_AGENCIA)
+        numero, dv_conta = _partes(conf.conta)
+        if not (numero and dv_conta):
+            _falta(conf, "conta", MOTIVO_CONTA_SEM_DV)
+
+    if empresa is not None:
+        if not regras.documento_valido(getattr(empresa, "cnpj", "")):
+            _falta(conf, "CNPJ", MOTIVO_CNPJ)
+        if not (getattr(empresa, "razao_social", "") or "").strip():
+            _aviso(conf, "razão social", AVISO_SEM_RAZAO_SOCIAL)
+
+    # Por último porque é o mais comum e o menos consertável aqui: a adesão é
+    # no SicoobNet, e o número só existe depois dela.
+    if conta is not None and not conf.convenio:
+        _falta(conf, "convênio", MOTIVO_SEM_CONVENIO)
+    return conf
+
+
+def _marcar_repetidas(conferencias: list[Conferencia]) -> None:
+    """Falta nas DUAS contas que dividem convênio, ou agência e conta.
+
+    Nas duas porque não há como saber qual delas está errada, e escolher uma
+    seria gerar em nome da conta que ninguém escolheu — o mesmo estrago que o
+    `sufixo` evita do lado do extrato.
+    """
+    def grupos(chave_de):
+        vistos: dict = {}
+        for c in conferencias:
+            chave = chave_de(c)
+            if chave:
+                vistos.setdefault(chave, []).append(c)
+        return [g for g in vistos.values() if len(g) > 1]
+
+    for grupo in grupos(lambda c: c.convenio):
+        for c in grupo:
+            _falta(c, "convênio", MOTIVO_CONVENIO_REPETIDO)
+    for grupo in grupos(lambda c: (_so_digitos(c.agencia), _so_digitos(c.conta))
+                        if _so_digitos(c.agencia) and _so_digitos(c.conta)
+                        else ()):
+        for c in grupo:
+            _falta(c, "conta", MOTIVO_CONTA_REPETIDA)
+
+
+def prontidao(mapa_mc, empresas) -> list[Conferencia]:
+    """Uma `Conferencia` por conta do mapa que PODERIA gerar remessa.
+
+    "Poderia" é banco do Sicoob **ou vazio**: o vazio pode ser uma conta do
+    Sicoob que alguém esqueceu de preencher, e escondê-la aqui seria esconder
+    justamente a linha que precisa de conserto. Banco de OUTRO banco fica de
+    fora — não é pendência, é conta que não faz remessa CNAB.
+
+    Custa dois JSON locais: sem rede, sem ERP e sem navegador.
+    """
+    destinos = [d for d in (getattr(mapa_mc, "destinos", None) or [])
+                if not (d.banco or "").strip() or _e_sicoob(d.banco)]
+    conferencias = [conferir_conta(d, empresas) for d in destinos]
+    _marcar_repetidas(conferencias)
+    return conferencias
+
+
+def contas_sem_remessa(preparado: dict, gerados) -> int:
+    """Quantas contas TÊM pagamento apurado hoje e não viraram arquivo.
+
+    É o número do cartão "Contas sem remessa" do Início, e a única hora em que
+    ele existe é depois de a remessa do dia ser montada — antes disso não há
+    com o que comparar. Pura para poder ser testada: a aritmética morava dentro
+    de `_gravar_remessas`, no caminho em que ALGUM arquivo saiu, e por isso o
+    dia em que nenhum saía não registrava nada — o cartão mostrava "—", que é o
+    mesmo que ele mostra quando ninguém rodou.
+    """
+    return max(len(preparado or {}) - len(gerados or []), 0)
+
+
 def resolver_pagador(conta_erp: str, mapa_mc, empresas) -> tuple[Pagador | None, str]:
     """A conta do ERP vira empresa + conta do Sicoob, ou o motivo de não virar.
 
     Usa o mapa que já existe (`contas_mc.json`) em vez de um terceiro cadastro.
     Julho de 2026 já ficou partido uma vez porque dois mapas discordavam sobre
     a mesma conta; um mapa a mais é uma divergência a mais esperando acontecer.
+
+    **A conta pagadora é achada por pasta E `sufixo`.** Só pela pasta não
+    serve: há empresa no cadastro com QUATRO contas Sicoob na mesma pasta
+    "SICOOB", e o que as separa é o `sufixo` — o mesmo campo, com o mesmo
+    nome, dos dois lados (`contas_mc.Destino` e `sicoob_contas.Conta`), que já
+    desempata o nome do arquivo do extrato. Enquanto ele era ignorado, as
+    quatro viravam a MESMA conta pagadora: o dinheiro sairia de uma conta que
+    ninguém escolheu, e header, pasta e nome de arquivo ficavam idênticos aos
+    da conta certa — não havia o que conferir depois. O sufixo só é cobrado
+    quando há mais de uma candidata; a empresa de uma conta por pasta, que é a
+    maioria, continua resolvendo sem cadastrar nada.
+
+    **O convênio vem da CONTA, e sem herança.** Ele morava na empresa, e para
+    empresa de uma conta só isso dava no mesmo — até 04/09/2026, quando os
+    números foram lidos no SicoobNet e o desenho apareceu: o Sicoob dá um
+    convênio por CONTA CORRENTE, e uma holding daqui tem nove, a principal e
+    oito subcontas. Por isso a checagem desceu para depois de a conta estar
+    escolhida, e por isso não existe `or empresa.convenio`: herdar faria uma
+    subconta ainda não aderida sair com o número da principal, e o convênio é
+    o campo 07.0 do header e o nome da sequência do NSA. O desfecho bom disso
+    é o banco recusar o arquivo — e o NSA já foi queimado, porque ele entra no
+    conteúdo antes de o arquivo existir.
+
+    **O veredito é o da `prontidao`, e por isso as duas não divergem.** Daqui
+    para baixo não há uma segunda lista de checagens: a conta é conferida por
+    `conferir_conta` e o motivo devolvido é a PRIMEIRA falta dela. Escrever a
+    régua duas vezes seria a tela dizer "pronta" e o botão recusar, ou o
+    contrário — e o teste `test_a_prontidao_e_o_resolver_pagador_concordam`
+    existe para o dia em que alguém tentar separá-las de novo.
     """
     destino = mapa_mc.de(conta_erp) if mapa_mc else None
     if destino is None:
         return None, MOTIVO_CONTA_DESCONHECIDA
-    if destino.banco.strip().upper() != "SICOOB":
+    # Estes dois vêm antes da prontidão porque decidem se a conta ENTRA nela:
+    # sem banco é conta que precisa de conserto; de outro banco não é
+    # pendência nenhuma, e o motivo já diz isso.
+    if not destino.banco.strip():
+        return None, MOTIVO_SEM_BANCO
+    if not _e_sicoob(destino.banco):
         return None, MOTIVO_FORA_SICOOB
 
-    empresa = next((e for e in (empresas or [])
-                    if _chave(e.nome) == _chave(destino.empresa)), None)
-    if empresa is None:
-        return None, f"empresa {destino.empresa} não está no contas_sicoob.json"
-    if not (getattr(empresa, "convenio", "") or "").strip():
-        return None, MOTIVO_SEM_CONVENIO
+    alvo = _chave(destino.erp)
+    conferencia = next((c for c in prontidao(mapa_mc, empresas)
+                        if _chave(c.conta_erp) == alvo), None)
+    if conferencia is None:                     # nunca acontece; não invente
+        return None, MOTIVO_CONTA_DESCONHECIDA
+    if not conferencia.pronta:
+        return None, conferencia.faltas[0]
 
-    conta = next((c for c in empresa.contas
-                  if _chave(c.pasta) == _chave(destino.pasta)), None)
-    if conta is None:
-        return None, f"a conta {destino.pasta} não está cadastrada em {empresa.nome}"
-
+    empresa, conta, _falta_ja_vista = _escolher_conta(destino, empresas)
     numero, dv_conta = _partes(conta.numero)
     agencia, dv_agencia = _partes(getattr(conta, "agencia", "") or "")
-    if not (numero and dv_conta and agencia):
-        return None, "falta agência ou conta no cadastro da empresa"
-
     return Pagador(
         conta_erp=conta_erp,
         empresa=empresa.nome,
         razao_social=getattr(empresa, "razao_social", "") or empresa.nome,
         cnpj=getattr(empresa, "cnpj", "") or "",
-        convenio=empresa.convenio.strip(),
+        convenio=conferencia.convenio,
         agencia=agencia,
         dv_agencia=dv_agencia,
         conta=numero,
@@ -211,6 +522,14 @@ def _chave(s: str) -> str:
     import util
 
     return util.norm_espaco(s or "")
+
+
+def _so_digitos(s: str) -> str:
+    """"12.345-6" -> "123456". Comparar texto cru daria falso negativo entre a
+    conta escrita com pontuação e a mesma conta escrita sem — é a mesma razão
+    do `sicoob_contas.so_digitos`, que não é importado aqui para este módulo
+    seguir sem depender da aba dos extratos."""
+    return re.sub(r"\D", "", s or "")
 
 
 # --------------------------------------------------------------------------
@@ -273,11 +592,23 @@ class Candidato:
         return self.status.startswith("APTO")
 
 
-_SEQ = re.compile(r"^(\d{6})-(\d{4})")
+class RegistroMudo(RuntimeError):
+    """O registro central não respondeu qual foi a ordem do dia.
+
+    Até 04/09/2026 isso devolvia 0 e a remessa saía renumerada do 1. Era
+    inofensivo enquanto ninguém conferia: o pior desfecho era repetir um "seu
+    número", e o arquivo passava. Com o índice único
+    `remessa_item_seu_numero_unico_no_dia` no Postgres, o mesmo silêncio vira
+    arquivo RECUSADO no registro — depois de a pessoa ter conferido a lista
+    inteira e mandado gerar. Recusar antes custa um clique; recusar depois
+    custa a conferência toda, e ainda queima o NSA.
+
+    É coerente com a regra que já vale: **sem nuvem não se gera remessa.**
+    """
 
 
 def sequencia_ja_usada(historico, quando: _dt.date) -> int:
-    """A maior ordem do DIA que já saiu em alguma remessa viva. 0 se nenhuma.
+    """A maior ordem do DIA que já saiu. 0 quando nenhuma, e nunca um palpite.
 
     O "seu número" nasce `260820-0007`, e a ordem recomeçava do 1 a cada
     geração. Isso bastava enquanto o dia tinha uma remessa só. Em 20/08/2026 o
@@ -289,25 +620,25 @@ def sequencia_ja_usada(historico, quando: _dt.date) -> int:
     errado — e foi por isso que o espelho local recusou a remessa nº 000003
     daquele dia, enquanto a nuvem a aceitou.
 
-    Nunca levanta: registro fora do ar devolve 0, e a numeração volta a ser a
-    de antes. Perder a remessa por causa da conferência seria pior.
+    Quem responde é `historico.maior_ordem_do_dia(quando)`, que a nuvem resolve
+    numa consulta filtrada e o espelho local resolve varrendo o próprio arquivo.
+    Antes, esta função é que varria: `historico.remessas()` trazia TODAS as
+    remessas com todos os itens dentro, a cada geração, e ainda assim era só uma
+    leitura — duas máquinas liam o mesmo maior e numeravam igual. Quem impede a
+    repetição hoje é o índice único do banco.
+
+    `historico=None` continua devolvendo 0 — é assim que os testes de regra
+    chamam `preparar`. Registro que não RESPONDE é outra coisa, e levanta
+    `RegistroMudo`.
     """
     if historico is None:
         return 0
-    prefixo = f"{quando:%y%m%d}-"
-    maior = 0
     try:
-        for remessa in historico.remessas():
-            for item in getattr(remessa, "itens", None) or []:
-                seu = str(getattr(item, "seu_numero", "") or "")
-                if not seu.startswith(prefixo):
-                    continue
-                achado = _SEQ.match(seu)
-                if achado:
-                    maior = max(maior, int(achado.group(2)))
-    except Exception:
-        return 0
-    return maior
+        return int(historico.maior_ordem_do_dia(quando) or 0)
+    except Exception as e:
+        raise RegistroMudo(
+            "não deu para perguntar ao registro de remessas qual foi a última "
+            f"ordem do dia {quando:%d/%m/%Y}: {e}") from e
 
 
 def _seu_numero(quando: _dt.date, sequencia: int, descricao: str) -> str:
@@ -780,9 +1111,20 @@ def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
 
 
 def nome_do_arquivo(pagador: Pagador, nsa: int) -> str:
-    """`REM_ACME_000031.REM` — legível na pasta e único por remessa."""
+    """`REM_ACME_4321-12345_000031.REM` — legível na pasta e único por remessa.
+
+    O convênio do Sicoob é POR CONTA CORRENTE, e por isso o NSA também é —
+    cada conta recomeça a contar do seu. A pasta já separa uma conta da
+    outra (`pasta_do_pagador`), mas o arrasto para a caixa de upload do
+    SicoobNet mostra só o NOME do arquivo: sem a agência-conta ali, uma
+    holding com conta principal + subcontas gera o MESMO nome em pastas
+    diferentes no mesmo dia, e nada no arrasto denuncia isso — o erro só
+    aparece depois de enviado, na conta errada.
+    """
     empresa = re.sub(r"[^A-Za-z0-9]+", "-", pagador.empresa).strip("-").upper()
-    return f"REM_{empresa}_{nsa:06d}.REM"
+    agencia = re.sub(r"\D", "", pagador.agencia or "")
+    conta = re.sub(r"\D", "", pagador.conta or "")
+    return f"REM_{empresa}_{agencia}-{conta}_{nsa:06d}.REM"
 
 
 def _nome_de_pasta(texto: str, se_vazio: str) -> str:
