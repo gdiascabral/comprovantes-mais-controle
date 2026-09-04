@@ -804,7 +804,11 @@ def test_a_primeira_linha_de_verdade_devolve_a_tela(registro):
     texto.insert("end", "Conta 1 — 12 pagamentos\n")
     texto.update()
     assert widgets.tem_conteudo_real(texto)
-    assert int(texto.cget("height")) == 1
+    # Seis, e não uma. Com trabalho dentro o campo pedia `height=1` ("fico com
+    # a sobra"), e numa janela apertada a sobra é menos que uma linha — ver
+    # `_reservar_o_pe` e `tests/test_registro_visivel.py`. O piso não muda nada
+    # onde há tela sobrando: quem manda ali continua sendo o `expand`.
+    assert int(texto.cget("height")) == 6
     assert cartao.pack_info()["expand"]
 
 
