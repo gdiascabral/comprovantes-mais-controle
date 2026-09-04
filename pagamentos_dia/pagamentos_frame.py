@@ -1320,8 +1320,12 @@ class PagamentosDiaFrame(ttk.Frame):
                        f"{rejeitados} rejeitado(s)").pack(side="left")
 
         def _guardar():
-            respostas = {l.seu_numero: (l.motivos.split("=")[0] or "")
-                         for l in resumo.linhas if l.motivos}
+            # A regra mora no `retorno_dia`, que é puro e testado: aqui ela
+            # era reparseada da frase do `motivos` (`split("=")[0]`), o que
+            # guardava só a PRIMEIRA ocorrência quando o banco mandava duas, e
+            # jogava fora a classificação (`Linha.estado`) que a tela acabara
+            # de usar para escrever "PAGO" na linha de cima.
+            respostas = retorno_dia.respostas_para_registro(resumo)
             try:
                 quantos = historico.aplicar_retorno(
                     resumo.convenio, resumo.nsa, respostas,
@@ -1364,7 +1368,13 @@ class PagamentosDiaFrame(ttk.Frame):
         if historico is not None and not resumo.remessa_desconhecida:
             widgets.Botao(rodape, "Guardar o resultado", papel="acao",
                           command=_guardar).pack(side="right")
-        if resumo.quantos("ok"):
+        # A baixa precisa da `referencia` de cada linha — o id do lançamento
+        # no ERP —, e ela só existe quando a remessa foi encontrada no
+        # registro central. Com a remessa desconhecida, o botão aparecia,
+        # `separar` mandava todo mundo para `de_fora` e o recado que sobrava
+        # era "nenhum pagamento pode ser baixado agora", que parece problema
+        # do banco. O aviso amarelo lá em cima já diz o que de fato houve.
+        if resumo.quantos("ok") and not resumo.remessa_desconhecida:
             widgets.Botao(rodape, "Dar baixa no Mais Controle", papel="passo",
                           command=_baixar).pack(side="right", padx=px((0, 8)))
         widgets.Botao(rodape, "Fechar", papel="neutro", command=top.destroy
