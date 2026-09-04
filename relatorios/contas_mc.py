@@ -75,6 +75,20 @@ _chave = util.norm_espaco
 # ---------------------------------------------------------------- leitura
 
 def carregar(caminho: Path | None = None) -> Mapa:
+    """Lê o `contas_mc.json` inteiro, ou explica por que não dá para lê-lo.
+
+    Obrigatórios são `erp`, `empresa` e `pasta`: sem eles a linha não
+    identifica conta nenhuma nem diz onde salvar, e adivinhar seria escolher
+    pasta no chute. `banco` NÃO é: linha sem banco carrega com
+    `Destino.banco = ""`.
+
+    A diferença é de escopo. `banco` só entra no NOME do arquivo e na escolha
+    do produto da remessa — quem o USA é que sabe o que fazer sem ele, e cada
+    um faz uma coisa: o Relatório Mensal barra a conta (`impedimentos`), a
+    remessa recusa só aquela conta (`MOTIVO_SEM_BANCO`). Recusar o mapa
+    inteiro aqui punia todo mundo pelo dado de um: em 04/09/2026, UMA conta
+    sem banco derrubou a aba Pagamentos do Dia e o Relatório Mensal por
+    completo — nenhuma empresa gerou remessa naquele dia."""
     caminho = caminho or ARQUIVO_MAPA
     if not caminho.exists():
         raise MapaInvalido(
@@ -89,12 +103,13 @@ def carregar(caminho: Path | None = None) -> Mapa:
 
     destinos = []
     for i, c in enumerate(dados["contas"], 1):
-        faltando = [k for k in ("erp", "empresa", "pasta", "banco") if not c.get(k)]
+        faltando = [k for k in ("erp", "empresa", "pasta") if not c.get(k)]
         if faltando:
             raise MapaInvalido(
                 f"A conta nº {i} está sem: {', '.join(faltando)}.")
         destinos.append(Destino(erp=c["erp"].strip(), empresa=c["empresa"].strip(),
-                                pasta=c["pasta"].strip(), banco=c["banco"].strip(),
+                                pasta=c["pasta"].strip(),
+                                banco=(c.get("banco") or "").strip(),
                                 sufixo=(c.get("sufixo") or "").strip()))
     return Mapa(raiz=Path(dados.get("raiz") or "C:/Arquivos Morais/EXTRATOS"),
                 destinos=destinos)
@@ -144,6 +159,36 @@ def resolver(mapa: Mapa, contas: list[dict], ano: int, mes: int) -> tuple[list[t
         else:
             pares.append((conta, d, caminho_do_arquivo(mapa, d, ano, mes)))
     return pares, desconhecidas
+
+
+def impedimentos(mapa: Mapa, contas: list[str] | None = None) -> list[str]:
+    """Os problemas do mapa que BARRAM o lote, em vez de só aparecerem no log.
+
+    Hoje é um só: conta sem `banco`. É o banco que nomeia o arquivo
+    (`nome_arquivo`), então sem ele o PDF sai como `AAAAMM  MAIS CONTROLE.pdf`
+    — dois espaços no meio, sem dizer de que banco é. E se a empresa tiver
+    outra conta na mesma pasta sem banco, a segunda grava POR CIMA da primeira
+    calada, que é o mesmo estrago que `sicoob_contas.impedimentos()` barra do
+    outro lado. Por isso trava antes do primeiro download, e não depois: aí o
+    arquivo perdido não volta.
+
+    `contas` limita a conferência aos nomes do ERP que vão rodar agora, como em
+    `caminhos_longos`: barrar o lote por causa de uma conta que ninguém marcou
+    é recusar trabalho que ia dar certo — foi justamente por punir todo mundo
+    pelo dado de um que `carregar` deixou de recusar o mapa inteiro. Sem
+    `contas`, confere o mapa inteiro."""
+    alvo = {_chave(n) for n in contas} if contas is not None else None
+    problemas: list[str] = []
+    for d in mapa.destinos:
+        if alvo is not None and _chave(d.erp) not in alvo:
+            continue
+        if not d.banco.strip():
+            problemas.append(
+                f"A conta '{d.erp}' está sem 'banco' no contas_mc.json, e é o "
+                f"banco que nomeia o arquivo: o PDF sairia como "
+                f"'AAAAMM  MAIS CONTROLE.pdf', sem dizer de que banco é. "
+                f"Preencha o banco no painel ou desmarque a conta.")
+    return problemas
 
 
 def caminhos_longos(mapa: Mapa, ano: int, mes: int,
