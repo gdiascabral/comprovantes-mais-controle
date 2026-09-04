@@ -11,13 +11,34 @@ e libera. Por isso o retorno do mesmo dia costuma vir com `PD` (pendente de
 assinatura) em tudo — isso é o estado normal, não defeito, e a tela precisa
 dizer isso com todas as letras. O desfecho real exige baixar o retorno DE NOVO
 depois da assinatura.
+
+**E quase nunca é UM arquivo.** São até 18 contas, lidas duas vezes cada, e o
+SicoobNet ("Gerenciamento de Arquivos → Obter Retorno") baixa vários de uma
+vez — soltos ou dentro de um `.zip`. Por isso a regra deste módulo é escrita
+sobre TEXTO (`ler_conteudo`) e não sobre caminho: o membro de um zip não tem
+caminho no disco, e a alternativa seria extraí-lo para um arquivo temporário.
+
+**O zip é lido em MEMÓRIA, e isso não é elegância.** `zipfile.read(nome)`
+devolve os bytes do membro sem tocar o disco. Extrair para `tempfile` traria
+um módulo a mais para a conta do PyInstaller — o exe só contém o que alguém
+importa a partir do `motor.py` (ver a v1.0.71 no CLAUDE.md) — e espalharia
+retorno de banco por pasta temporária. Um `.RET` de 18 contas cabe folgado na
+memória: são linhas de 240 caracteres.
 """
 from __future__ import annotations
 
 import datetime as _dt
+import re
+import zipfile
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+
+#: O CNAB 240 é texto de 240 posições em latin-1. `latin-1` também é a única
+#: codificação que vai e volta sem perder byte nenhum (todo valor de 0 a 255
+#: tem um caractere), e é isso que permite guardar a CÓPIA do arquivo a partir
+#: do texto já lido, byte a byte igual ao que o banco mandou.
+CODIFICACAO = "latin-1"
 
 
 @dataclass
@@ -51,6 +72,18 @@ class Linha:
 
 
 @dataclass
+class Falha:
+    """Um arquivo que não deu para ler, sem derrubar os outros.
+
+    Lendo 18 retornos de uma vez, um zip corrompido ou uma remessa escolhida
+    por engano não pode custar a leitura dos 17 que estavam bons — quem
+    escolheu os arquivos já fechou o diálogo e não vai repetir a escolha.
+    """
+    origem: str
+    motivo: str
+
+
+@dataclass
 class Resumo:
     convenio: str
     nsa: int
@@ -62,6 +95,24 @@ class Resumo:
     faltando: list[str] = field(default_factory=list)
     #: A remessa não foi encontrada no registro central.
     remessa_desconhecida: bool = False
+    #: De onde este resumo veio: o nome do arquivo, ou `zip.zip/membro.RET`
+    #: quando saiu de dentro de um compactado. Com 18 retornos numa lista só,
+    #: "arquivo nº 000031" não basta para alguém achar de novo o que leu.
+    origem: str = ""
+    #: A agência e a conta do HEADER do retorno. É o que separa uma linha da
+    #: outra na tela quando várias empresas vêm juntas — e o que nomeia a
+    #: cópia guardada.
+    agencia: str = ""
+    conta: str = ""
+    #: A pasta onde mora o `.REM` que esta remessa gerou, vinda do registro
+    #: central (`remessa.arquivo`). É para lá que a CÓPIA do retorno vai:
+    #: pergunta e resposta na mesma pasta. Vazio quando a remessa é
+    #: desconhecida ou quando o registro não guardou o caminho.
+    pasta_da_remessa: str = ""
+    #: Os bytes do arquivo lido, para poderem ser guardados depois. O membro
+    #: de um zip não existe no disco, então quem quiser copiá-lo tem de tê-lo
+    #: em mãos — reler pelo caminho não é opção.
+    conteudo: bytes = b""
 
     def quantos(self, estado: str) -> int:
         return sum(1 for l in self.linhas if l.estado == estado)
@@ -114,32 +165,44 @@ def _estado(pagamento) -> str:
     return "rejeitado"
 
 
-def ler(caminho: str | Path, historico=None) -> Resumo:
-    """Lê o arquivo e casa com a remessa que o gerou.
+def ler_conteudo(texto: str, nome: str = "", historico=None) -> Resumo:
+    """A regra inteira, sobre o TEXTO do arquivo já lido.
+
+    É aqui que mora tudo o que o `ler()` fazia; ele virou a casca que abre o
+    arquivo. A separação existe por causa do zip: o membro de um compactado
+    não tem caminho no disco, e a única alternativa a esta função seria
+    extraí-lo para um arquivo temporário só para poder relê-lo.
 
     `historico` é o registro das remessas (o `nuvem.registro.Espelhado`).
-    Passando-o, cada linha ganha o id do lançamento no ERP e a lista do que
-    ficou faltando. Sem ele, o resumo sai só com o que o arquivo diz.
+    Passando-o, cada linha ganha o id do lançamento no ERP, a lista do que
+    ficou faltando e a pasta onde o `.REM` foi gravado. Sem ele, o resumo sai
+    só com o que o arquivo diz.
     """
-    from cnab240 import ler_arquivo_retorno
+    from cnab240 import ler_retorno
 
-    arquivo = ler_arquivo_retorno(str(caminho))
+    arquivo = ler_retorno(texto)
     if not arquivo.e_retorno:
         raise ValueError(
             "este arquivo não é um retorno: o código do header diz que é "
             "remessa. Baixe o arquivo de RETORNO no SicoobNet.")
 
     resumo = Resumo(convenio=arquivo.convenio, nsa=arquivo.nsa,
-                    empresa=arquivo.empresa)
+                    empresa=arquivo.empresa, origem=nome,
+                    agencia=arquivo.agencia, conta=arquivo.conta,
+                    # `latin-1` vai e volta sem perder byte, então isto é o
+                    # arquivo original — é o que a cópia vai gravar.
+                    conteudo=texto.encode(CODIFICACAO, "replace"))
 
     # O de-para "seu número" -> id do lançamento vem da remessa registrada.
     enviados: dict[str, str] = {}
     if historico is not None:
-        itens = _itens_da_remessa(historico, arquivo.convenio, arquivo.nsa)
+        itens, pasta = _itens_da_remessa(historico, arquivo.convenio,
+                                         arquivo.nsa)
         if itens is None:
             resumo.remessa_desconhecida = True
         else:
             enviados = itens
+            resumo.pasta_da_remessa = pasta
 
     vistos = set()
     for pagamento in arquivo.pagamentos():
@@ -159,6 +222,141 @@ def ler(caminho: str | Path, historico=None) -> Resumo:
 
     resumo.faltando = sorted(s for s in enviados if s not in vistos)
     return resumo
+
+
+def ler(caminho: str | Path, historico=None) -> Resumo:
+    """Lê UM arquivo do disco e casa com a remessa que o gerou.
+
+    Casca sobre `ler_conteudo`: abre, decodifica e entrega o texto. Quem
+    precisa ler vários (ou de dentro de um zip) chama `ler_varios`.
+    """
+    caminho = Path(caminho)
+    texto = caminho.read_bytes().decode(CODIFICACAO)
+    return ler_conteudo(texto, caminho.name, historico)
+
+
+def ler_varios(caminhos, historico=None) -> "list[Resumo | Falha]":
+    """Lê `.RET`/`.TXT` e `.zip` numa passada, na ordem em que vieram.
+
+    Devolve `Resumo` para o que deu e `Falha` para o que não deu — **um
+    arquivo ruim não derruba os outros**. É o ponto inteiro desta função: o
+    dono baixa os retornos de até 18 contas de uma vez no SicoobNet, e um zip
+    corrompido no meio da lista não pode custar a leitura dos que estavam
+    bons, porque a essa altura o diálogo de escolha já foi fechado.
+
+    Os membros do zip saem em ordem de NOME, e não na ordem física de dentro
+    do arquivo: a do zip é a ordem em que o compactador gravou, que não quer
+    dizer nada para quem lê.
+    """
+    saida: list = []
+    for caminho in caminhos:
+        caminho = Path(caminho)
+        if caminho.suffix.lower() == ".zip":
+            saida.extend(_ler_zip(caminho, historico))
+            continue
+        try:
+            saida.append(ler(caminho, historico))
+        except Exception as e:
+            saida.append(Falha(caminho.name, _motivo(e)))
+    return saida
+
+
+def _motivo(erro: Exception) -> str:
+    """A frase que vai para a `Falha`, em português.
+
+    O resto já vem em português — é mensagem escrita aqui ou no `cnab240` —,
+    mas as duas do sistema de arquivos chegam em inglês e com um errno na
+    frente, e são o caso mais provável de todos: o retorno mora na pasta de
+    downloads, que é onde as coisas somem.
+    """
+    if isinstance(erro, FileNotFoundError):
+        return ("não achei o arquivo — ele foi movido ou apagado depois de "
+                "ser escolhido")
+    if isinstance(erro, PermissionError):
+        return ("o Windows não deixou abrir o arquivo — ele pode estar aberto "
+                "em outro programa")
+    return str(erro) or type(erro).__name__
+
+
+def _ler_zip(caminho: Path, historico) -> "list[Resumo | Falha]":
+    """Cada membro do zip, lido em MEMÓRIA.
+
+    Sem `tempfile` e sem extrair para disco, e isso é regra da casa, não
+    gosto: o exe do usuário só contém os módulos da biblioteca padrão que
+    alguém importa a partir do `motor.py`, e um import novo custa exe novo
+    (ver a v1.0.71 no CLAUDE.md). O `zipfile` já está lá — o `atualizador.py`
+    o usa para trocar o `codigo.zip`.
+    """
+    try:
+        with zipfile.ZipFile(caminho) as compactado:
+            nomes = sorted(nome for nome in compactado.namelist()
+                           if not nome.endswith("/"))
+            if not nomes:
+                return [Falha(caminho.name, "o arquivo compactado está vazio")]
+            saida: list = []
+            for nome in nomes:
+                origem = f"{caminho.name}/{nome}"
+                try:
+                    texto = compactado.read(nome).decode(CODIFICACAO)
+                    saida.append(ler_conteudo(texto, origem, historico))
+                except Exception as e:
+                    saida.append(Falha(origem, _motivo(e)))
+            return saida
+    except Exception as e:
+        # Zip corrompido, arquivo que não é zip, disco ilegível: uma falha só,
+        # pelo compactado inteiro. Não há membro para culpar.
+        return [Falha(caminho.name, _motivo(e))]
+
+
+# --------------------------------------------------------------------------
+# A cópia do `.RET` — o arquivo que ninguém guardava
+# --------------------------------------------------------------------------
+
+def nome_da_copia(resumo: Resumo, quando: _dt.datetime) -> str:
+    """`RET_ACME_4321-123456_000031_20260904-1512.RET`.
+
+    A mesma limpeza de nome do `remessa_dia.nome_do_arquivo` (só letras e
+    dígitos, o resto vira `-`), pelo mesmo motivo: o nome da empresa vem de
+    cadastro digitado por gente e o Windows recusa metade da pontuação.
+
+    O carimbo de data e hora está aí porque **o mesmo NSA é lido duas vezes**:
+    o retorno do dia, com tudo `PD`, e o de depois da assinatura. Os dois são
+    prova de coisas diferentes e nenhum substitui o outro.
+    """
+    empresa = _limpo(resumo.empresa) or "EMPRESA"
+    conta = _limpo(f"{resumo.agencia}-{resumo.conta}") or "CONTA"
+    return f"RET_{empresa}_{conta}_{resumo.nsa:06d}_{quando:%Y%m%d-%H%M}.RET"
+
+
+def _limpo(texto: str) -> str:
+    """Um pedaço de nome de arquivo que o Windows aceita, em maiúsculas."""
+    return re.sub(r"[^A-Za-z0-9]+", "-", texto or "").strip("-").upper()
+
+
+def guardar_copia(conteudo: bytes, pasta, nome: str) -> Path:
+    """Grava a cópia do retorno e devolve onde ela ficou. **Nunca sobrescreve.**
+
+    Havendo um arquivo com o mesmo nome, tenta `-2`, `-3`… A primeira cópia é
+    a prova de que o arquivo foi ACEITO pelo banco, e o segundo retorno do
+    mesmo NSA na mesma hora não pode apagá-la — é o mesmo defeito que o
+    `retorno_historico` fechou do lado do banco de dados.
+
+    A criação é exclusiva (`open(..., "xb")`), e não "olhar se existe e depois
+    gravar": entre o olhar e o gravar cabe a outra máquina.
+    """
+    pasta = Path(pasta)
+    pasta.mkdir(parents=True, exist_ok=True)
+    base, sufixo = Path(nome).stem, Path(nome).suffix
+    for tentativa in range(1, 100):
+        alvo = pasta / (nome if tentativa == 1 else
+                        f"{base}-{tentativa}{sufixo}")
+        try:
+            with open(alvo, "xb") as saida:
+                saida.write(conteudo)
+            return alvo
+        except FileExistsError:
+            continue
+    raise OSError(f"já existem 99 cópias de {nome} em {pasta}")
 
 
 def respostas_para_registro(resumo: Resumo) -> dict:
@@ -181,19 +379,30 @@ def respostas_para_registro(resumo: Resumo) -> dict:
             for l in resumo.linhas if l.codigos}
 
 
-def _itens_da_remessa(historico, convenio: str, nsa: int) -> dict | None:
-    """{seu_numero: referencia} da remessa. None se ela não está registrada.
+def _itens_da_remessa(historico, convenio: str,
+                      nsa: int) -> "tuple[dict | None, str]":
+    """(`{seu_numero: referencia}`, pasta do `.REM`) da remessa registrada.
 
-    None e {} querem dizer coisas diferentes: o primeiro é "não sei qual
-    remessa é esta" — retorno de outra máquina, ou de antes do registro
-    central — e o segundo é "conheço, e ela não tinha item nenhum"."""
+    `(None, "")` quando ela não está registrada. None e `{}` querem dizer
+    coisas diferentes: o primeiro é "não sei qual remessa é esta" — retorno de
+    outra máquina, ou de antes do registro central — e o segundo é "conheço, e
+    ela não tinha item nenhum".
+
+    A pasta vem junto porque sai da MESMA linha: o registro guarda o caminho
+    do `.REM` que saiu (`remessa.arquivo`), e é a pasta dele que recebe a
+    cópia do retorno. Buscá-la depois seria uma segunda consulta pela mesma
+    remessa. Ela sai vazia quando o registro não tem o caminho — remessa
+    gerada antes de o campo existir, ou gravada por uma versão que não o
+    preenchia."""
     try:
         remessas = historico.remessas(convenio=convenio)
     except Exception:
-        return None
+        return None, ""
     for r in remessas:
         if int(r.get("nsa") or 0) == int(nsa):
             itens = r.get("remessa_item") or r.get("itens") or []
-            return {str(i.get("seu_numero") or "").strip():
-                    str(i.get("referencia") or "") for i in itens}
-    return None
+            arquivo = str(r.get("arquivo") or "").strip()
+            pasta = str(Path(arquivo).parent) if arquivo else ""
+            return ({str(i.get("seu_numero") or "").strip():
+                     str(i.get("referencia") or "") for i in itens}, pasta)
+    return None, ""
