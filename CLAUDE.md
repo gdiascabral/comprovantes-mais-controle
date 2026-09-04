@@ -1070,6 +1070,65 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   precisa reabrir a aba de propósito — sair dela e voltar já relê —, e há um
   "Conferir de novo" no rodapé da janela. **Custo real: dois arquivos locais.**
   Sem rede, sem ERP e sem navegador, então roda na thread da interface.
+  **A leitura do retorno é de VÁRIOS arquivos, e o `.RET` passou a ser
+  guardado.** O retorno nunca foi um arquivo só: são até 18 contas no mesmo
+  dia, cada uma lida DUAS vezes (a primeira volta `PD`, pendente de
+  assinatura; a segunda, depois de o master liberar), e o SicoobNet
+  ("Gerenciamento de Arquivos → Obter Retorno") baixa vários de uma vez,
+  soltos ou num `.zip`. Um `askopenfilename` no singular, uma janela modal por
+  arquivo e 35 rodadas é o caminho mais curto para alguém deixar de conferir
+  uma conta. Hoje o diálogo é `askopenfilenames`, aceita `.zip` junto, e
+  `retorno_dia.ler_varios` devolve uma lista de `Resumo` **e `Falha`**: o
+  arquivo que não é retorno, o zip corrompido e o membro ilegível viram uma
+  linha vermelha na tabela em vez de derrubar a leitura dos outros — a essa
+  altura o diálogo de escolha já foi fechado, e parar no primeiro erro custa a
+  escolha inteira. **Um arquivo só e sem falha continua abrindo a janela de
+  sempre**, que é o caso comum e já estava certo; do segundo em diante abre a
+  `_janela_retornos`, uma linha por arquivo (empresa, ag-conta, NSA, os quatro
+  contadores, total e situação), com o detalhe de sempre a um duplo clique —
+  a mesma `_janela_retorno`, reaproveitada, e não uma segunda tela dizendo a
+  mesma coisa de outro jeito. A remessa que o registro central não conhece sai
+  em âmbar, porque é ela que decide o que dá para fazer com a linha: sem
+  registro não há o que guardar nem como baixar. "Guardar tudo" é um
+  `aplicar_retorno` por remessa, e uma que falhe não fala pelas outras; "Dar
+  baixa no Mais Controle" junta as linhas `ok` de TODAS as remessas conhecidas
+  num saco só, porque a baixa não depende da conta pagadora — ela casa pela
+  `referencia` do item, que é o id do lançamento no ERP.
+  **O `.RET` é COPIADO para a pasta da conta, e nunca sobrescrito.** Até aqui
+  ele ficava só onde o navegador o baixou: passada a janela, a única prova do
+  que o banco respondeu era o que tinha ido para o banco de dados. Agora, ao
+  guardar, `retorno_dia.guardar_copia` grava
+  `RET_<EMPRESA>_<AG>-<CONTA>_<NSA>_<AAAAMMDD-HHMM>.RET` na pasta do `.REM`
+  que aquela remessa gerou (o caminho vem do próprio registro,
+  `remessa.arquivo`) — pergunta e resposta na mesma pasta —, caindo em
+  `<destino do dia>/_RETORNOS/` quando a pasta não existe nesta máquina.
+  **Copiar e não mover**: o arquivo está na pasta de downloads, é de lá que a
+  pessoa o reabre, e movê-lo faria sumir o que ela acabou de baixar. **Nome
+  repetido vira `-2`, `-3`…, jamais sobrescrita**: o mesmo NSA é lido duas
+  vezes, e o primeiro `.RET` é a prova de que o arquivo foi ACEITO — é o mesmo
+  defeito que o `retorno_historico` fechou do lado do banco. A cópia é
+  best-effort e vem DEPOIS do `aplicar_retorno`: falhar ali vira uma linha no
+  Registro, nunca um retorno que deixou de ser guardado.
+  **O zip é lido em memória, sem `tempfile`.** `zipfile.read(nome)` devolve os
+  bytes do membro sem tocar o disco, e o `zipfile` já está no exe (o
+  `atualizador.py` troca o `codigo.zip` com ele). Extrair para `tempfile`
+  traria um módulo da biblioteca padrão que ninguém importa hoje, e módulo que
+  ninguém importa não entra no exe — é a v1.0.71 da regra de ouro, medida por
+  `tests/test_imports_do_motor.py`. É por causa do zip que a regra da leitura
+  mora em `retorno_dia.ler_conteudo(texto, nome, historico)`, sobre TEXTO:
+  membro de compactado não tem caminho no disco, e `ler(caminho)` virou a
+  casca que abre o arquivo.
+  **O cartão "Contas prontas para remessa" é montado quando a aba é MOSTRADA,
+  não na construção.** O esqueleto (o `Treeview` e o rodapé) nasce no `_build`,
+  porque custa microssegundos; quem custa é LER os dois JSON, e isso acontece
+  no `ao_abrir()` — o mesmo gancho que o Início usa, chamado por
+  `comprovantes_app.mostrar` a cada troca de aba. As doze abas somam ~1,2 s na
+  abertura do app (a Início sozinha ~670 ms), e pagar disco adiantado por uma
+  tabela que ninguém está olhando é o oposto do que se quer. De graça: quem
+  corrigiu o cadastro no painel não precisa reabrir a aba de propósito — sair
+  dela e voltar já relê —, e há um "Conferir de novo" no rodapé. **Custo real:
+  dois arquivos locais.** Sem rede, sem ERP e sem navegador, então roda na
+  thread da interface.
   Cinco colunas — `CONTA (ERP) · EMPRESA · AG-CONTA · CONVÊNIO · SITUAÇÃO` —,
   e a situação é `✓ pronta`, `⚠ falta: agência, convênio` ou `· aviso: …`: o
   símbolo vem de `widgets.MARCAS_ESTADO` e a cor da tag do `widgets`, nenhuma
@@ -1797,12 +1856,43 @@ de cada um, é outro PR. **`ESTADOS_VIVOS` é UMA tupla**, importada de
 escritas à mão elas divergiram em silêncio, com "aceito" só de um lado e
 "rejeitado" só do outro.
 
+**O retorno do banco são QUATRO colunas do item, e uma delas nunca se apaga**
+(migration `20260904121220_retorno_estado_e_historico.sql`). `retorno_codigo` e
+`retorno_em` existem desde 17/08; `retorno_estado` e `retorno_historico`
+entraram em 04/09 para fechar três defeitos medidos:
+
+- **o segundo retorno APAGAVA o primeiro.** Quem gera não é quem assina: o
+  retorno do mesmo dia vem `PD` (pendente de assinatura) e o de depois da
+  liberação vem `00`. O `00` é a resposta certa para "e agora?", e escrevê-lo
+  por cima do `PD` levava junto a única prova de que o arquivo tinha sido
+  ACEITO. A regra nova é essa divisão: **`retorno_codigo` é a resposta de
+  AGORA e é sobrescrito; `retorno_historico` só CRESCE** — uma entrada por
+  retorno lido, `AAAA-MM-DD HH:MM codigo=estado`, separadas por `;`, no mesmo
+  instante que o `retorno_em`;
+- **o banco manda mais de uma ocorrência por pagamento**, e só a primeira era
+  gravada, porque a janela arrancava o código de volta da frase do `motivos`
+  (`split("=")[0]`) em vez de tê-lo na mão. Hoje `retorno_dia.Linha.codigos`
+  traz todas, na ordem, e o `retorno_codigo` leva todas separadas por `;`;
+- **a classificação (`ok`/`pendente`/`rejeitado`/`?`) não era gravada**, então
+  contar pago/pendente/rejeitado por item exigiria traduzir código de
+  ocorrência de novo — uma segunda tabela dizendo o que "AG" quer dizer,
+  envelhecendo calada ao lado da primeira. Ela é feita UMA vez, ao ler o
+  arquivo, e `retorno_dia.respostas_para_registro(resumo)` é quem a entrega ao
+  `Registro.aplicar_retorno`.
+
+**A limitação aceita**, escrita para não ser redescoberta: o append é
+ler-concatenar-gravar no app, não um `||` do Postgres. Duas pessoas guardando o
+MESMO retorno no mesmo instante podem perder uma LINHA de histórico — nunca a
+resposta atual, e nada que mexe em dinheiro lê o histórico (`baixa_erp.separar`
+decide pelo `Resumo` lido do arquivo). O privilégio continua sendo de COLUNA,
+não de tabela, e **não nasceu política nova**: a `remessa_item_retorno` já
+existe e já exige `privado.e_ativo()`.
+
 **O que ainda NÃO está na nuvem** (e continua como estava): os aportes já
 lançados, que seguem em `self.criados`, memória do processo em
 `aportes/aportes_frame.py` — falha parcial seguida de reabrir o app ainda
 apaga a proteção contra duplicar; e os envios da Acessórias, hoje conferidos
-relendo o portal, que funciona. As colunas `retorno_codigo`/`retorno_em`
-existem em `remessa_item` esperando quem processe o retorno do banco.
+relendo o portal, que funciona.
 
 **Migrar de novo** (máquina nova, ou recomeçar): `python nuvem/migrar.py
 --conferir` critica sem escrever; `--subir` escreve e depois relê para

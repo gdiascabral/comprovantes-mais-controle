@@ -124,6 +124,48 @@ concordam.
 
 ---
 
+## `2026-09-04_retorno-estado-e-historico.sql` ↔ `20260904121220_retorno_estado_e_historico.sql`
+
+**Este é o primeiro par escrito ANTES de rodar**, e não depois. Os quatro
+acima nasceram de arquivos que já tinham sido colados no painel; este nasce
+junto da migration, no mesmo PR, porque o código que lê as colunas novas vem
+atrás dele. **O dono aplica o runbook antes do merge.**
+
+5 comandos no runbook; 4 na migration, **os 4 presentes no runbook, idênticos
+depois de normalizados**: o `alter table` com as duas colunas
+(`retorno_estado`, `retorno_historico`), os dois `comment on column` e o
+`grant update (...)` de coluna.
+
+**O runbook faz e a migration não faz** (1 comando):
+
+- o `select` final de conferência, que devolve as duas colunas novas (tipo,
+  nulidade e default) e a lista de colunas de `remessa_item` em que
+  `authenticated` pode dar `update` — tem de trazer **quatro**. É conferência,
+  e conferência não é schema.
+
+**O que não está em nenhum dos dois, de propósito: política nova.** A política
+de update do item (`remessa_item_retorno`) já existe desde 17/08 e já exige
+`privado.e_ativo()` desde 30/08. O que faltava era só o privilégio de coluna —
+no Postgres o privilégio vem ANTES da política, e é a mesma lacuna que o
+`20260824141500_conta_grant_que_faltou.sql` fechou para a tabela `conta`, com
+o mesmo sintoma se faltasse ("permission denied for table", e não a frase do
+RLS). Uma segunda política para a mesma operação seria um OU, e afrouxaria a
+porteira que o `tests/test_rls_supabase.py` guarda.
+
+**Por que o runbook vem primeiro, e não pode vir depois.** LER tolera a falta:
+as colunas nascem `not null default ''` e o `aplicar_retorno` lê o histórico
+anterior com `.get("retorno_historico", "")`, então item gravado antes de hoje
+entra no fluxo novo sem nada especial. **ESCREVER não tolera**: o `update` do
+código novo cita as quatro colunas, e num banco sem as duas novas o PostgREST
+recusa a chamada inteira — o retorno não seria guardado pela metade, seria
+recusado com o botão "Guardar o resultado" devolvendo erro. Daí a ordem, e daí
+o runbook ser seguro de rodar com o código VELHO em produção: coluna com
+default que ninguém escreve não muda comportamento nenhum. O que nunca depende
+disto é a baixa no ERP, que decide pelo `Resumo` lido do arquivo
+(`pagamentos_dia/baixa_erp.separar`) e não olha o banco.
+
+---
+
 ## `2026-09-04_convenio-por-conta.sql` ↔ `20260904113000_convenio_por_conta.sql`
 
 O primeiro par que nasce junto: o runbook foi escrito **a partir da** migration,

@@ -6,8 +6,11 @@ Sem tela e sem rede. O que se testa aqui não é o parser do CNAB (isso é do
 "ainda falta assinar", e o que fazer com pagamento que o banco simplesmente
 não citou.
 """
+import datetime
+import zipfile
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -45,12 +48,15 @@ class _Pagamento:
 
 
 class _Arquivo:
-    def __init__(self, pagamentos, *, e_retorno=True, nsa=1, convenio="1814"):
+    def __init__(self, pagamentos, *, e_retorno=True, nsa=1, convenio="1814",
+                 agencia="4321", conta="123456"):
         self._pg = pagamentos
         self.e_retorno = e_retorno
         self.nsa = nsa
         self.convenio = convenio
         self.empresa = "EMPRESA A"
+        self.agencia = agencia
+        self.conta = conta
 
     def pagamentos(self):
         return iter(self._pg)
@@ -66,17 +72,24 @@ class _Historico:
 
 @pytest.fixture
 def ler(monkeypatch):
+    """Lê um retorno inventado, sem tocar no parser do CNAB nem no disco.
+
+    O dublê entra no lugar de `cnab240.ler_retorno` — que é quem recebe o
+    TEXTO desde que a leitura passou a valer também para membro de zip, onde
+    não há caminho no disco para abrir.
+    """
     def _ler(pagamentos, historico=None, **kw):
         arq = _Arquivo(pagamentos, **kw)
         import cnab240
-        monkeypatch.setattr(cnab240, "ler_arquivo_retorno",
+        monkeypatch.setattr(cnab240, "ler_retorno",
                             lambda _c: arq, raising=False)
-        return retorno_dia.ler("qualquer.RET", historico)
+        return retorno_dia.ler_conteudo("qualquer texto", "qualquer.RET",
+                                        historico)
     return _ler
 
 
-def _remessa(itens, nsa=1, convenio="1814"):
-    return [{"nsa": nsa, "convenio": convenio,
+def _remessa(itens, nsa=1, convenio="1814", arquivo=""):
+    return [{"nsa": nsa, "convenio": convenio, "arquivo": arquivo,
              "remessa_item": [{"seu_numero": s, "referencia": r}
                               for s, r in itens]}]
 
@@ -190,3 +203,199 @@ def test_sem_historico_le_o_arquivo_do_mesmo_jeito(ler):
     assert len(resumo.linhas) == 1
     assert resumo.linhas[0].referencia == ""
     assert not resumo.remessa_desconhecida
+
+
+# ------------------------------------------- o que vai para o registro
+
+def test_as_duas_ocorrencias_entram_nos_codigos(ler):
+    """O banco manda mais de um código por pagamento, e a que explica a
+    recusa nem sempre é a de cima.
+
+    Enquanto os códigos eram arrancados de volta da frase do `motivos`
+    (`motivos.split("=")[0]`), o segundo sumia — e sumia calado, porque um
+    código sozinho é exatamente o que se espera ver ali."""
+    resumo = ler([_Pagamento("001", ocorrencias=[("AG", "conta invalida"),
+                                                 ("BD", "saldo insuficiente")])])
+    linha = resumo.linhas[0]
+    assert linha.codigos == ["AG", "BD"]
+    # E o `motivos` continua sendo a frase para gente ler, intacta: os dois
+    # campos existem porque são coisas diferentes.
+    assert linha.motivos == "AG=conta invalida; BD=saldo insuficiente"
+
+
+def test_respostas_para_registro_leva_codigo_e_estado(ler):
+    """A classificação é julgamento de RETORNO, e vai gravada.
+
+    Sem ela, o painel do dia teria de traduzir código de ocorrência de novo —
+    uma segunda tabela dizendo o que "AG" quer dizer, envelhecendo em silêncio
+    ao lado desta."""
+    resumo = ler([
+        _Pagamento("001", ocorrencias=[("00", "ok")], _sucesso=True),
+        _Pagamento("002", ocorrencias=[("PD", "pendente")], _pendente=True),
+        _Pagamento("003", ocorrencias=[("AG", "x"), ("BD", "y")]),
+    ])
+    assert retorno_dia.respostas_para_registro(resumo) == {
+        "001": {"codigo": "00", "estado": "ok"},
+        "002": {"codigo": "PD", "estado": "pendente"},
+        "003": {"codigo": "AG;BD", "estado": "rejeitado"},
+    }
+
+
+def test_respostas_para_registro_pula_quem_o_banco_nao_citou(ler):
+    """Silêncio do banco não é resposta. É a mesma regra do `aplicar_retorno`,
+    e o motivo é o retorno de DEPOIS da assinatura: gravar "" por cima
+    apagaria o `PD` que o primeiro retorno tinha dito."""
+    resumo = ler([_Pagamento("001", ocorrencias=[("00", "x")], _sucesso=True),
+                  _Pagamento("002")])
+    respostas = retorno_dia.respostas_para_registro(resumo)
+    assert list(respostas) == ["001"]
+    assert resumo.linhas[1].estado == "?"     # a linha existe; a resposta não
+
+
+# ------------------------------------------- a pasta da remessa que gerou
+
+def test_a_pasta_da_remessa_sai_do_registro(ler):
+    """A cópia do retorno vai para onde o `.REM` está — pergunta e resposta na
+    mesma pasta. O caminho sai do registro central, que já o guarda."""
+    resumo = ler([_Pagamento("001", ocorrencias=[("00", "x")], _sucesso=True)],
+                 _Historico(_remessa(
+                     [("001", "id-99")],
+                     arquivo=r"C:\PAGAMENTOS\EMPRESA A\SICOOB 4321-123456"
+                             r"\REM_EMPRESA-A_000001.REM")))
+    assert Path(resumo.pasta_da_remessa).name == "SICOOB 4321-123456"
+
+
+def test_sem_o_caminho_no_registro_a_pasta_sai_vazia(ler):
+    """Remessa gerada antes de o campo existir: a leitura continua valendo, e
+    quem chama é que decide para onde a cópia vai."""
+    resumo = ler([_Pagamento("001", ocorrencias=[("00", "x")], _sucesso=True)],
+                 _Historico(_remessa([("001", "id-99")])))
+    assert resumo.pasta_da_remessa == ""
+
+
+def test_remessa_desconhecida_nao_tem_pasta(ler):
+    resumo = ler([_Pagamento("001")], _Historico(_remessa([("x", "y")], nsa=99)))
+    assert resumo.remessa_desconhecida
+    assert resumo.pasta_da_remessa == ""
+
+
+# ------------------------------------------------- vários arquivos de uma vez
+
+#: Os textos que o parser falso reconhece. O conteúdo não importa — quem lê
+#: CNAB de verdade é o `cnab240`, e ele tem os testes dele.
+_RETORNO = "RETORNO SINTETICO\n"
+_REMESSA = "REMESSA SINTETICA\n"
+
+
+@pytest.fixture
+def parser(monkeypatch):
+    """Põe um `cnab240.ler_retorno` que julga pelo primeiro pedaço do texto.
+
+    É o que permite exercitar o `ler_varios` com arquivos DE VERDADE no disco
+    (é disso que trata o teste) sem montar um CNAB 240 válido por arquivo.
+    """
+    import cnab240
+
+    def _falso(texto):
+        if texto.startswith("REMESSA"):
+            return _Arquivo([], e_retorno=False)
+        if texto.startswith("RETORNO"):
+            return _Arquivo([_Pagamento("001", ocorrencias=[("00", "ok")],
+                                        _sucesso=True)])
+        raise ValueError("arquivo com menos de duas linhas")
+
+    monkeypatch.setattr(cnab240, "ler_retorno", _falso, raising=False)
+
+
+def test_ler_varios_devolve_o_bom_e_os_dois_ruins_na_ordem(parser, tmp_path):
+    """Um arquivo ruim não pode custar a leitura dos outros.
+
+    Lendo os retornos de 18 contas de uma vez, quem escolheu os arquivos já
+    fechou o diálogo: parar no primeiro erro obrigaria a repetir a escolha
+    inteira, e é assim que alguém deixa de ler o retorno de uma conta.
+    """
+    bom = tmp_path / "bom.RET"; bom.write_text(_RETORNO, encoding="latin-1")
+    ruim = tmp_path / "ruim.RET"; ruim.write_text(_REMESSA, encoding="latin-1")
+    sumido = tmp_path / "nao-existe.RET"
+
+    saida = retorno_dia.ler_varios([bom, ruim, sumido])
+
+    assert [type(r) for r in saida] == [retorno_dia.Resumo,
+                                        retorno_dia.Falha, retorno_dia.Falha]
+    assert saida[0].origem == "bom.RET"
+    assert saida[1].origem == "ruim.RET"
+    assert "não é um retorno" in saida[1].motivo
+    assert saida[2].origem == "nao-existe.RET"
+    # E o motivo sai em português: o `FileNotFoundError` chega em inglês e com
+    # um errno na frente, e sumir arquivo da pasta de downloads é o caso mais
+    # provável de todos.
+    assert "não achei o arquivo" in saida[2].motivo
+
+
+def test_o_zip_do_sicoobnet_vira_um_resumo_por_membro(parser, tmp_path):
+    """O SicoobNet entrega os retornos compactados, e ninguém vai descompactar
+    18 arquivos à mão. Os membros saem em ordem de NOME: a ordem de dentro do
+    zip é a do compactador, e não quer dizer nada para quem lê."""
+    caminho = tmp_path / "retornos.zip"
+    with zipfile.ZipFile(caminho, "w") as z:
+        z.writestr("b.RET", _RETORNO)
+        z.writestr("a.RET", _RETORNO)
+
+    saida = retorno_dia.ler_varios([caminho])
+
+    assert [r.origem for r in saida] == ["retornos.zip/a.RET",
+                                         "retornos.zip/b.RET"]
+    assert all(isinstance(r, retorno_dia.Resumo) for r in saida)
+
+
+def test_zip_corrompido_vira_uma_falha_so(parser, tmp_path):
+    """Não há membro para culpar: a falha é do compactado inteiro."""
+    caminho = tmp_path / "quebrado.zip"
+    caminho.write_bytes(b"PK\x03\x04 isto nao e um zip")
+
+    saida = retorno_dia.ler_varios([caminho])
+
+    assert len(saida) == 1
+    assert isinstance(saida[0], retorno_dia.Falha)
+    assert saida[0].origem == "quebrado.zip"
+    assert saida[0].motivo
+
+
+# ------------------------------------------------------- a cópia do arquivo
+
+def test_o_nome_da_copia_diz_conta_nsa_e_quando(ler):
+    """O mesmo NSA é lido DUAS vezes — o retorno do dia, com tudo pendente de
+    assinatura, e o de depois de o master liberar. Sem a hora no nome, o
+    segundo não teria como conviver com o primeiro."""
+    resumo = ler([_Pagamento("001", ocorrencias=[("00", "x")], _sucesso=True)],
+                 nsa=31)
+    nome = retorno_dia.nome_da_copia(
+        resumo, datetime.datetime(2026, 9, 4, 15, 12))
+
+    assert nome == "RET_EMPRESA-A_4321-123456_000031_20260904-1512.RET"
+    # E nada que o Windows recuse num nome de arquivo.
+    assert not set(nome) & set('\\/:*?"<>|')
+
+
+def test_guardar_copia_nunca_sobrescreve(tmp_path):
+    """A primeira cópia é a prova de que o arquivo foi ACEITO pelo banco.
+
+    É o mesmo defeito que o `retorno_historico` fechou do lado do banco de
+    dados: o segundo retorno do mesmo NSA apagando o primeiro.
+    """
+    primeiro = retorno_dia.guardar_copia(b"o retorno do dia", tmp_path,
+                                         "RET_X_000001_20260904-0900.RET")
+    segundo = retorno_dia.guardar_copia(b"o retorno de depois", tmp_path,
+                                        "RET_X_000001_20260904-0900.RET")
+
+    assert primeiro != segundo
+    assert segundo.name.endswith("-2.RET")
+    assert primeiro.read_bytes() == b"o retorno do dia"
+    assert segundo.read_bytes() == b"o retorno de depois"
+    assert len(list(tmp_path.glob("*.RET"))) == 2
+
+
+def test_guardar_copia_cria_a_pasta_que_falta(tmp_path):
+    """A `_RETORNOS/` do destino do dia não existe até o primeiro retorno."""
+    alvo = retorno_dia.guardar_copia(b"x", tmp_path / "_RETORNOS", "a.RET")
+    assert alvo.read_bytes() == b"x"

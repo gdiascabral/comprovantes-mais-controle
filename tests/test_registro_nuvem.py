@@ -244,6 +244,116 @@ def test_o_filtro_pede_so_estado_vivo(falso):
         assert estado in filtro
 
 
+# --------------------------------------------------- o retorno do banco
+
+def _remessa_com_itens(*itens):
+    """Uma remessa como o `remessas()` a devolve: com os itens dentro."""
+    return [{"nsa": 31, "convenio": "1814", "remessa_item": list(itens)}]
+
+
+def _gravado(falso, tabela="remessa_item"):
+    """As mudanças de cada `alterar` naquela tabela, na ordem."""
+    return [c[3] for c in falso.chamadas
+            if c[0] == "alterar" and c[1] == tabela]
+
+
+def test_o_retorno_grava_as_quatro_colunas(falso):
+    """Código, quando, classificação e histórico — e o histórico começa nesta
+    passagem, porque antes dela o banco nunca tinha falado deste item."""
+    falso.respostas["remessa"] = _remessa_com_itens(
+        {"id": 7, "seu_numero": "001", "retorno_historico": ""})
+    reg = registro.Registro("tok")
+
+    assert reg.aplicar_retorno("1814", 31,
+                               {"001": {"codigo": "AG;BD",
+                                        "estado": "rejeitado"}}) == 1
+    mudancas = _gravado(falso)[0]
+    assert mudancas["retorno_codigo"] == "AG;BD"
+    assert mudancas["retorno_estado"] == "rejeitado"
+    assert mudancas["retorno_em"]
+    assert mudancas["retorno_historico"].endswith(" AG;BD=rejeitado")
+    # O carimbo do histórico e o `retorno_em` são o MESMO instante: as duas
+    # colunas contradizerem-se seria a pior forma de descobrir o erro.
+    assert mudancas["retorno_historico"].startswith(mudancas["retorno_em"][:10])
+
+
+def test_o_segundo_retorno_nao_apaga_o_primeiro(falso):
+    """É o defeito que este PR existe para fechar.
+
+    Quem gera não é quem assina: o retorno do mesmo dia vem `PD` e o de
+    depois da liberação vem `00`. O `00` é a resposta certa para "e agora?" —
+    e escrevê-lo por cima do `PD` apagava a única prova de que o arquivo tinha
+    sido ACEITO pelo banco."""
+    item = {"id": 7, "seu_numero": "001", "retorno_historico": ""}
+    falso.respostas["remessa"] = _remessa_com_itens(item)
+    reg = registro.Registro("tok")
+
+    reg.aplicar_retorno("1814", 31, {"001": {"codigo": "PD",
+                                             "estado": "pendente"}})
+    primeira = _gravado(falso)[0]["retorno_historico"]
+
+    # A segunda leitura enxerga o que a primeira gravou — é o que o
+    # `remessas()` devolve, porque ele pede `remessa_item(*)`.
+    item["retorno_historico"] = primeira
+    reg.aplicar_retorno("1814", 31, {"001": {"codigo": "00", "estado": "ok"}})
+    segunda = _gravado(falso)[1]
+
+    assert segunda["retorno_codigo"] == "00"        # a resposta de agora
+    assert segunda["retorno_estado"] == "ok"
+    assert segunda["retorno_historico"].startswith(primeira + ";")
+    assert "PD=pendente" in segunda["retorno_historico"]
+    assert "00=ok" in segunda["retorno_historico"]
+
+
+def test_o_silencio_do_banco_nao_apaga_resposta_anterior(falso):
+    """Item que o retorno não citou fica exatamente como estava: nem `alterar`
+    é chamado para ele."""
+    falso.respostas["remessa"] = _remessa_com_itens(
+        {"id": 7, "seu_numero": "001", "retorno_historico": "x"},
+        {"id": 8, "seu_numero": "002", "retorno_historico": ""})
+    reg = registro.Registro("tok")
+
+    assert reg.aplicar_retorno("1814", 31,
+                               {"002": {"codigo": "00", "estado": "ok"}}) == 1
+    filtros = [c[2] for c in falso.chamadas
+               if c[0] == "alterar" and c[1] == "remessa_item"]
+    assert filtros == ["id=eq.8"]
+
+
+def test_o_formato_antigo_continua_valendo(falso):
+    """Uma string no lugar do dicionário vira `{"codigo": s, "estado": ""}`.
+
+    Não é gentileza com quem chama: é o que permite este PR não ter de mudar,
+    no mesmo commit, todo lugar que já sabia gravar retorno."""
+    falso.respostas["remessa"] = _remessa_com_itens(
+        {"id": 7, "seu_numero": "001", "retorno_historico": ""})
+
+    assert registro.Registro("tok").aplicar_retorno("1814", 31,
+                                                    {"001": "00"}) == 1
+    mudancas = _gravado(falso)[0]
+    assert mudancas["retorno_codigo"] == "00"
+    assert mudancas["retorno_estado"] == ""
+    assert mudancas["retorno_historico"].endswith(" 00=")
+
+
+def test_o_retorno_de_remessa_desconhecida_e_recusado(falso):
+    """Gravar num item qualquer seria pior que não gravar: a resposta do banco
+    entraria no pagamento errado."""
+    falso.respostas["remessa"] = _remessa_com_itens(
+        {"id": 7, "seu_numero": "001"})
+    with pytest.raises(rest.RecusadoPeloBanco):
+        registro.Registro("tok").aplicar_retorno("1814", 99, {"001": "00"})
+
+
+def test_o_estado_da_remessa_vai_junto_quando_pedido(falso):
+    falso.respostas["remessa"] = _remessa_com_itens(
+        {"id": 7, "seu_numero": "001", "retorno_historico": ""})
+    registro.Registro("tok").aplicar_retorno(
+        "1814", 31, {"001": {"codigo": "AG", "estado": "rejeitado"}},
+        estado="rejeitado")
+    assert {"estado": "rejeitado"} in _gravado(falso, "remessa")
+
+
 # -------------------------------------------- a corrida vira recusa limpa
 
 def _remessa_falsa(nsa=7, seu_numero="260904-0001"):
@@ -372,6 +482,30 @@ def test_recusa_da_nuvem_derruba_tudo():
     with pytest.raises(rest.RecusadoPeloBanco):
         esp.registrar(object())
     assert not local.registrou      # e o espelho nem chega a ser tocado
+
+
+def test_o_retorno_so_vai_para_a_nuvem():
+    """O espelho local é backup do que SAIU. O que o banco respondeu depois
+    nunca esteve nele, e o `cnab240.Historico` não tem onde pôr."""
+    pedidos = []
+
+    class Nuvem:
+        def aplicar_retorno(self, convenio, nsa, respostas, *, estado=""):
+            pedidos.append((convenio, nsa, respostas, estado))
+            return len(respostas)
+
+    class LocalSemRetorno:
+        def __getattr__(self, nome):
+            raise AssertionError(f"o espelho local não guarda retorno ({nome})")
+
+    esp = registro.Espelhado(Nuvem(), LocalSemRetorno())
+    quantos = esp.aplicar_retorno(
+        "1814", 31, {"001": {"codigo": "00", "estado": "ok"}},
+        estado="processado")
+
+    assert quantos == 1
+    assert pedidos == [("1814", 31, {"001": {"codigo": "00", "estado": "ok"}},
+                        "processado")]
 
 
 def test_o_numero_vem_sempre_da_nuvem():

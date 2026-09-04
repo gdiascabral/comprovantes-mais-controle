@@ -173,6 +173,22 @@ class ArquivoRetorno:
         return self.header.valor("07.0").strip()
 
     @property
+    def agencia(self) -> str:
+        """Agência mantenedora da conta (08.0), sem os zeros de enchimento.
+
+        O header do retorno diz de que CONTA ele fala, e quem lê 18 retornos
+        no mesmo dia precisa disso para saber qual é qual — o convênio é do
+        contrato, não da conta. Sem os zeros porque o layout enche à esquerda
+        e ninguém escreve "04321" ao falar da agência.
+        """
+        return self.header.valor("08.0").strip().lstrip("0")
+
+    @property
+    def conta(self) -> str:
+        """Número da conta corrente (10.0), sem os zeros de enchimento."""
+        return self.header.valor("10.0").strip().lstrip("0")
+
+    @property
     def nsa(self) -> int:
         return int(self.header.valor("19.0"))
 
