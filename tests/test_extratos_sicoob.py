@@ -215,6 +215,29 @@ def test_sufixo_e_lido_do_json(tmp_path):
     assert [c.sufixo for c in m.contas] == ["55555-5", "66666-6"]
 
 
+# ------------------------------------------------------------- convênio
+
+def test_convenio_e_lido_da_conta(tmp_path):
+    """O Sicoob dá um convênio por CONTA CORRENTE, não por CNPJ.
+
+    Medido em 04/09/2026: uma holding do cadastro tem a conta principal e
+    oito subcontas, cada uma com o seu número. Duas contas da mesma empresa
+    com o mesmo convênio sairiam com o mesmo campo 07.0 no header e
+    dividindo uma sequência de NSA."""
+    dados = _dividindo_a_pasta("55555-5", "66666-6")
+    dados["empresas"][0]["contas"][0]["convenio"] = "123456"
+    dados["empresas"][0]["contas"][1]["convenio"] = "654321"
+    m = _mapa(tmp_path, dados)
+    assert [c.convenio for c in m.contas] == ["123456", "654321"]
+
+
+def test_conta_sem_convenio_no_json_nasce_vazia(tmp_path):
+    """Cadastro antigo não tem a chave, e não pode virar erro de leitura:
+    vazio é o estado normal de quem ainda não aderiu."""
+    m = _mapa(tmp_path, _dividindo_a_pasta())
+    assert [c.convenio for c in m.contas] == ["", ""]
+
+
 def test_duas_contas_na_mesma_pasta_geram_nomes_diferentes(tmp_path):
     """O defeito que obrigou o campo a existir.
 

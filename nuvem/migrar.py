@@ -275,6 +275,10 @@ def montar_contas(d: dict) -> list[dict]:
                 # entre os dois nao e resolvida aqui: `criticar` barra antes.
                 "sufixo": ((par or {}).get("sufixo", "")
                            or c.get("sufixo", "") or ""),
+                # O convenio e da CONTA (04/09/2026) e so o contas_sicoob o
+                # tem. JSON antigo, escrito quando ele morava na empresa, nao
+                # traz a chave: sobe vazio, e o dono preenche no painel.
+                "convenio": c.get("convenio", "") or "",
             })
 
     for i, m in enumerate(mc):
@@ -289,6 +293,9 @@ def montar_contas(d: dict) -> list[dict]:
             "banco": m.get("banco", ""),
             "banco_codigo": "",
             "sufixo": m.get("sufixo", "") or "",
+            # Conta que so o contas_mc conhece e de outro banco: nao tem
+            # convenio do Sicoob e nao vai ter.
+            "convenio": "",
         })
     return contas
 

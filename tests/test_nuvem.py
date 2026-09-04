@@ -857,6 +857,62 @@ def test_conta_sem_sufixo_nao_ganha_a_chave(tmp_path, monkeypatch):
     assert "sufixo" not in mc["contas"][0]
 
 
+def test_a_conta_sai_sempre_com_a_chave_convenio(tmp_path, monkeypatch):
+    """O oposto do `sufixo`, e de propósito.
+
+    O Sicoob dá um convênio por CONTA CORRENTE (04/09/2026), então este é um
+    campo que toda conta tem de acabar tendo — e `convenio: ""` presente é o
+    lembrete de que falta aderir. Omiti-lo faria a regra de escrita depender
+    do CONTEÚDO, e o lembrete sumiria justamente onde ele serve.
+
+    A linha aqui vem SEM a chave, que é como um banco onde a migration
+    `20260904113000` ainda não rodou responde: o app tem de abrir assim."""
+    dados = _banco(
+        empresa=[{"id": 1, "nome_pasta": "E", "cnpj": "", "vip_id": "",
+                  "razao_social": "", "convenio": ""}],
+        conta=[{"id": 9, "empresa_id": 1, "numero": "1-1", "agencia": "",
+                "nome_erp": "E", "pasta": "P", "banco": "B",
+                "banco_codigo": "756", "sufixo": ""}],
+        configuracao=[{"chave": "raiz", "valor": "C:/x"}])
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    cadastro.sincronizar("tok", tmp_path)
+    sic = json.loads((tmp_path / "contas_sicoob.json").read_text(encoding="utf-8"))
+    assert sic["empresas"][0]["contas"][0]["convenio"] == ""
+
+
+def test_o_convenio_da_conta_desce_para_o_cache(tmp_path, monkeypatch):
+    """Duas contas da MESMA empresa, dois convênios — é o caso da holding.
+
+    Enquanto o convênio era da empresa, as nove contas dela sairiam com o
+    mesmo campo 07.0 no header e dividindo UMA sequência de NSA. A chave da
+    empresa continua saindo, para o código que ainda não atualizou."""
+    dados = _banco(
+        empresa=[{"id": 1, "nome_pasta": "EMPRESA A", "cnpj": "", "vip_id": "",
+                  "razao_social": "", "convenio": "123456"}],
+        conta=[{"id": 9, "empresa_id": 1, "numero": "11.111-1",
+                "agencia": "0000-0", "nome_erp": "EMPRESA A 11.111-1",
+                "pasta": "SICOOB", "banco": "SICOOB", "banco_codigo": "756",
+                "sufixo": "11111-1", "convenio": "123456"},
+               {"id": 10, "empresa_id": 1, "numero": "22.222-2",
+                "agencia": "0000-0", "nome_erp": "EMPRESA A 22.222-2",
+                "pasta": "SICOOB", "banco": "SICOOB", "banco_codigo": "756",
+                "sufixo": "22222-2", "convenio": "654321"}],
+        configuracao=[{"chave": "raiz", "valor": "C:/x"}])
+    monkeypatch.setattr(cadastro.rest, "ler", lambda t, *_a, **_k: dados[t])
+
+    assert cadastro.sincronizar("tok", tmp_path).atualizou
+    sic = json.loads((tmp_path / "contas_sicoob.json").read_text(encoding="utf-8"))
+    assert [c["convenio"] for c in sic["empresas"][0]["contas"]] == ["123456",
+                                                                    "654321"]
+    assert sic["empresas"][0]["convenio"] == "123456"
+
+    # E, relido pelo módulo que de fato o usa, cada conta traz o seu.
+    from extratos_sicoob import sicoob_contas
+    mapa = sicoob_contas.carregar(tmp_path / "contas_sicoob.json")
+    assert [c.convenio for c in mapa.contas] == ["123456", "654321"]
+
+
 def test_conta_sem_numero_fica_fora_do_mapa_do_sicoob(tmp_path, monkeypatch):
     """Conta de outro banco não é buscável no SicoobNet."""
     dados = _banco(
