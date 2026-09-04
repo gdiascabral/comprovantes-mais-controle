@@ -149,8 +149,15 @@ MOTIVO_CONTA_SEM_DV = ("número da conta sem o dígito verificador (00000-0) —
 #: um CPF de preenchimento — onze dígitos, DV que não fecha — do FAVORECIDO
 #: devolveu um arquivo inteiro; o do pagador entra no campo 06.0 do header e
 #: erra do mesmo jeito, só que em todas as linhas de uma vez.
-MOTIVO_CNPJ = ("o CNPJ da empresa não fecha no dígito verificador — corrija "
-               "no painel")
+#:
+#: A frase diz OS DOIS casos porque a checagem é uma só: `documento_valido`
+#: recusa o campo VAZIO pelo mesmo caminho que recusa o DV torto, e o cadastro
+#: sem CNPJ é o caso comum (conta nova, empresa recém-criada no painel). Dizer
+#: "não fecha no dígito verificador" para um campo em branco manda conferir um
+#: número que não existe — o tipo de recado que faz perder a tarde no lugar
+#: errado.
+MOTIVO_CNPJ = ("o CNPJ da empresa está vazio ou não fecha no dígito "
+               "verificador — corrija no painel")
 #: Duas contas com o MESMO convênio dividem UMA sequência de NSA, que é o
 #: número que o banco confere para não aceitar arquivo repetido. Falta nas
 #: DUAS: não há como saber qual das duas está com o número errado.
