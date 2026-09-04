@@ -190,3 +190,50 @@ def test_sem_historico_le_o_arquivo_do_mesmo_jeito(ler):
     assert len(resumo.linhas) == 1
     assert resumo.linhas[0].referencia == ""
     assert not resumo.remessa_desconhecida
+
+
+# ------------------------------------------- o que vai para o registro
+
+def test_as_duas_ocorrencias_entram_nos_codigos(ler):
+    """O banco manda mais de um código por pagamento, e a que explica a
+    recusa nem sempre é a de cima.
+
+    Enquanto os códigos eram arrancados de volta da frase do `motivos`
+    (`motivos.split("=")[0]`), o segundo sumia — e sumia calado, porque um
+    código sozinho é exatamente o que se espera ver ali."""
+    resumo = ler([_Pagamento("001", ocorrencias=[("AG", "conta invalida"),
+                                                 ("BD", "saldo insuficiente")])])
+    linha = resumo.linhas[0]
+    assert linha.codigos == ["AG", "BD"]
+    # E o `motivos` continua sendo a frase para gente ler, intacta: os dois
+    # campos existem porque são coisas diferentes.
+    assert linha.motivos == "AG=conta invalida; BD=saldo insuficiente"
+
+
+def test_respostas_para_registro_leva_codigo_e_estado(ler):
+    """A classificação é julgamento de RETORNO, e vai gravada.
+
+    Sem ela, o painel do dia teria de traduzir código de ocorrência de novo —
+    uma segunda tabela dizendo o que "AG" quer dizer, envelhecendo em silêncio
+    ao lado desta."""
+    resumo = ler([
+        _Pagamento("001", ocorrencias=[("00", "ok")], _sucesso=True),
+        _Pagamento("002", ocorrencias=[("PD", "pendente")], _pendente=True),
+        _Pagamento("003", ocorrencias=[("AG", "x"), ("BD", "y")]),
+    ])
+    assert retorno_dia.respostas_para_registro(resumo) == {
+        "001": {"codigo": "00", "estado": "ok"},
+        "002": {"codigo": "PD", "estado": "pendente"},
+        "003": {"codigo": "AG;BD", "estado": "rejeitado"},
+    }
+
+
+def test_respostas_para_registro_pula_quem_o_banco_nao_citou(ler):
+    """Silêncio do banco não é resposta. É a mesma regra do `aplicar_retorno`,
+    e o motivo é o retorno de DEPOIS da assinatura: gravar "" por cima
+    apagaria o `PD` que o primeiro retorno tinha dito."""
+    resumo = ler([_Pagamento("001", ocorrencias=[("00", "x")], _sucesso=True),
+                  _Pagamento("002")])
+    respostas = retorno_dia.respostas_para_registro(resumo)
+    assert list(respostas) == ["001"]
+    assert resumo.linhas[1].estado == "?"     # a linha existe; a resposta não
