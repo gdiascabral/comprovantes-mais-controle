@@ -65,8 +65,16 @@ def _contas_sicoob(dados: dict) -> dict:
         for c in por_empresa.get(e["id"], []):
             if not c["numero"]:
                 continue
+            # `convenio` SEMPRE, mesmo vazio — a mesma regra dos campos da
+            # empresa logo abaixo, e o oposto do `sufixo`. O Sicoob dá um
+            # convênio por CONTA CORRENTE (04/09/2026), então este é um campo
+            # que TODA conta tem de acabar tendo, e presente-e-vazio é o
+            # lembrete de que falta aderir. `.get` porque o app precisa abrir
+            # contra um banco onde a migration `20260904113000` ainda não
+            # rodou: coluna que não veio vira "", não KeyError.
             linha = {"numero": c["numero"], "pasta": c["pasta"],
-                     "banco": c["banco_codigo"], "agencia": c["agencia"]}
+                     "banco": c["banco_codigo"], "agencia": c["agencia"],
+                     "convenio": c.get("convenio", "")}
             # A MESMA chave `sufixo` do lado do Mais Controle, e pelo mesmo
             # motivo: é ele que impede duas contas da mesma pasta de gravarem
             # o mesmo arquivo. Enquanto ele só descia para o `contas_mc.json`,
@@ -91,6 +99,10 @@ def _contas_sicoob(dados: dict) -> dict:
             "clientes_erp": [c["nome"] for c in clientes.get(e["id"], [])],
             "cnpj": e["cnpj"],
             "razao_social": e["razao_social"],
+            # LEGADO, e por isso continua saindo: o convênio é da CONTA desde
+            # 04/09/2026, e nenhum código novo lê daqui. Máquina que ainda não
+            # baixou o código novo lê, e parar de escrever a chave a deixaria
+            # sem convênio nenhum — que é o app recusando toda remessa.
             "convenio": e["convenio"],
             "vip_id": e["vip_id"],
         })

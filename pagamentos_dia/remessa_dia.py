@@ -110,7 +110,13 @@ MOTIVO_VALOR_DIVERGE = ("o boleto diz um valor e o lançamento diz outro — "
                         "confira o documento antes de pagar")
 #: Preenchido com o número da remessa anterior: "já saiu na remessa nº 000031".
 MOTIVO_JA_ENVIADO = "já saiu na remessa nº {nsa:06d} de {quando}"
-MOTIVO_SEM_CONVENIO = "empresa sem convênio de remessa cadastrado"
+#: O convênio é da CONTA, não da empresa (04/09/2026): o Sicoob dá um por
+#: conta corrente, e uma holding daqui tem nove — a principal e oito
+#: subcontas. Vazio é o estado normal de quem ainda não aderiu, e por isso o
+#: recado diz os DOIS passos: a adesão é no banco, o número é no painel.
+MOTIVO_SEM_CONVENIO = ("esta conta não tem convênio de remessa cadastrado — "
+                       "faça a adesão no SicoobNet e cadastre o número no "
+                       "painel")
 MOTIVO_FORA_SICOOB = "a remessa CNAB 240 é do Sicoob; esta conta é de outro banco"
 #: Conta COM banco em branco no `contas_mc.json` caía no motivo acima — e
 #: "esta conta é de outro banco" manda conferir o banco errado: não há outro
@@ -192,6 +198,17 @@ def resolver_pagador(conta_erp: str, mapa_mc, empresas) -> tuple[Pagador | None,
     da conta certa — não havia o que conferir depois. O sufixo só é cobrado
     quando há mais de uma candidata; a empresa de uma conta por pasta, que é a
     maioria, continua resolvendo sem cadastrar nada.
+
+    **O convênio vem da CONTA, e sem herança.** Ele morava na empresa, e para
+    empresa de uma conta só isso dava no mesmo — até 04/09/2026, quando os
+    números foram lidos no SicoobNet e o desenho apareceu: o Sicoob dá um
+    convênio por CONTA CORRENTE, e uma holding daqui tem nove, a principal e
+    oito subcontas. Por isso a checagem desceu para depois de a conta estar
+    escolhida, e por isso não existe `or empresa.convenio`: herdar faria uma
+    subconta ainda não aderida sair com o número da principal, e o convênio é
+    o campo 07.0 do header e o nome da sequência do NSA. O desfecho bom disso
+    é o banco recusar o arquivo — e o NSA já foi queimado, porque ele entra no
+    conteúdo antes de o arquivo existir.
     """
     destino = mapa_mc.de(conta_erp) if mapa_mc else None
     if destino is None:
@@ -205,8 +222,6 @@ def resolver_pagador(conta_erp: str, mapa_mc, empresas) -> tuple[Pagador | None,
                     if _chave(e.nome) == _chave(destino.empresa)), None)
     if empresa is None:
         return None, f"empresa {destino.empresa} não está no contas_sicoob.json"
-    if not (getattr(empresa, "convenio", "") or "").strip():
-        return None, MOTIVO_SEM_CONVENIO
 
     candidatas = [c for c in empresa.contas
                   if _chave(c.pasta) == _chave(destino.pasta)]
@@ -219,6 +234,15 @@ def resolver_pagador(conta_erp: str, mapa_mc, empresas) -> tuple[Pagador | None,
         return None, MOTIVO_CONTA_AMBIGUA
     conta = candidatas[0]
 
+    # A checagem do convênio vem DEPOIS de achar a conta, e não podia vir
+    # antes: é a conta que tem convênio, e antes daqui não há conta para
+    # perguntar. Nunca `or empresa.convenio` — herdar é o caminho para uma
+    # subconta ainda não aderida sair com o número da principal, e o desfecho
+    # bom disso é o banco recusar o arquivo depois de o NSA ter sido queimado.
+    convenio = (getattr(conta, "convenio", "") or "").strip()
+    if not convenio:
+        return None, MOTIVO_SEM_CONVENIO
+
     numero, dv_conta = _partes(conta.numero)
     agencia, dv_agencia = _partes(getattr(conta, "agencia", "") or "")
     if not (numero and dv_conta and agencia):
@@ -229,7 +253,7 @@ def resolver_pagador(conta_erp: str, mapa_mc, empresas) -> tuple[Pagador | None,
         empresa=empresa.nome,
         razao_social=getattr(empresa, "razao_social", "") or empresa.nome,
         cnpj=getattr(empresa, "cnpj", "") or "",
-        convenio=empresa.convenio.strip(),
+        convenio=convenio,
         agencia=agencia,
         dv_agencia=dv_agencia,
         conta=numero,

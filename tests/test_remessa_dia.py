@@ -521,13 +521,18 @@ def mapa_mc():
 
 
 def empresas(convenio="123456"):
+    """O convênio vai na CONTA — a empresa fica sem, de propósito.
+
+    O Sicoob dá um convênio por conta corrente, e desde 04/09/2026 é de lá
+    que `resolver_pagador` o lê. A empresa nasce com o campo vazio aqui para
+    que qualquer teste que volte a depender dela falhe."""
     return [sicoob_contas.Empresa(
         nome="EXEMPLO",
         contas=[sicoob_contas.Conta(numero="12.345-6", pasta="SICOOB",
-                                    banco="756", agencia="4321-0")],
+                                    banco="756", agencia="4321-0",
+                                    convenio=convenio)],
         cnpj="12.345.678/0001-95",
         razao_social="EMPRESA EXEMPLO LTDA",
-        convenio=convenio,
     )]
 
 
@@ -568,9 +573,27 @@ def test_conta_fora_do_mapa_nao_gera_remessa():
     assert motivo == remessa_dia.MOTIVO_CONTA_DESCONHECIDA
 
 
-def test_empresa_sem_convenio_nao_gera_remessa():
-    """A trava natural: 11 das 12 empresas ainda estão sem convênio."""
+def test_conta_sem_convenio_nao_gera_remessa():
+    """A trava natural: quase toda conta ainda está sem convênio."""
     _, motivo = remessa_dia.resolver_pagador(CONTA, mapa_mc(), empresas(convenio=""))
+    assert motivo == remessa_dia.MOTIVO_SEM_CONVENIO
+    assert "esta conta" in motivo
+
+
+def test_convenio_da_empresa_nao_e_herdado_pela_conta():
+    """O teste que impede alguém de reintroduzir `or empresa.convenio`.
+
+    O Sicoob dá um convênio por CONTA CORRENTE (04/09/2026): uma holding
+    daqui tem a principal e oito subcontas, cada uma com o seu. Herdar o da
+    empresa faria uma subconta AINDA NÃO ADERIDA sair com o número da
+    principal — e o convênio é o campo 07.0 do header e o nome da sequência
+    do NSA. O desfecho bom é o banco recusar o arquivo, e o NSA já foi
+    queimado; o ruim é ele aceitar em nome de uma conta que ninguém escolheu.
+    """
+    empresa, = empresas(convenio="")
+    empresa.convenio = "123456"                # o cadastro velho, ainda no JSON
+    pagador, motivo = remessa_dia.resolver_pagador(CONTA, mapa_mc(), [empresa])
+    assert pagador is None
     assert motivo == remessa_dia.MOTIVO_SEM_CONVENIO
 
 
@@ -579,18 +602,24 @@ def test_empresa_sem_convenio_nao_gera_remessa():
 # as separa é o `sufixo`. Achar a pagadora só pela pasta fazia as quatro
 # virarem a MESMA conta: o dinheiro sairia de uma conta que ninguém escolheu,
 # com header, pasta e nome de arquivo idênticos aos da certa.
-def _duas_na_mesma_pasta(sufixo_a="A", sufixo_b="B", convenio="123456"):
+def _duas_na_mesma_pasta(sufixo_a="A", sufixo_b="B",
+                         convenio_a="123456", convenio_b="654321"):
+    """Duas contas da mesma empresa — e, desde 04/09/2026, dois convênios.
+
+    É o caso da holding: o Sicoob dá um convênio por conta corrente, então
+    cada uma tem o seu. A empresa fica sem convênio nenhum."""
     return [sicoob_contas.Empresa(
         nome="EXEMPLO",
         contas=[
             sicoob_contas.Conta(numero="12.345-6", pasta="SICOOB",
-                                sufixo=sufixo_a, banco="756", agencia="4321-0"),
+                                sufixo=sufixo_a, banco="756", agencia="4321-0",
+                                convenio=convenio_a),
             sicoob_contas.Conta(numero="98.765-4", pasta="SICOOB",
-                                sufixo=sufixo_b, banco="756", agencia="4321-0"),
+                                sufixo=sufixo_b, banco="756", agencia="4321-0",
+                                convenio=convenio_b),
         ],
         cnpj="12.345.678/0001-95",
         razao_social="EMPRESA EXEMPLO LTDA",
-        convenio=convenio,
     )]
 
 
@@ -634,6 +663,34 @@ def test_uma_conta_na_pasta_dispensa_sufixo():
     pagador, motivo = remessa_dia.resolver_pagador(CONTA, mapa_mc(), empresas())
     assert motivo == ""
     assert (pagador.conta, pagador.dv_conta) == ("12345", "6")
+
+
+def test_duas_contas_da_mesma_empresa_tem_convenios_diferentes():
+    """Cada conta paga pelo SEU convênio — é o caso da holding.
+
+    Enquanto o convênio era da empresa, as duas sairiam com o mesmo campo
+    07.0 no header e dividindo UMA sequência de NSA, que é o número que o
+    banco confere para não aceitar arquivo repetido."""
+    mapa = _mapa_com_sufixos()
+    contas = _duas_na_mesma_pasta()
+    a, motivo_a = remessa_dia.resolver_pagador(CONTA, mapa, contas)
+    b, motivo_b = remessa_dia.resolver_pagador("EMPRESA EXEMPLO - SICOOB B",
+                                               mapa, contas)
+    assert (motivo_a, motivo_b) == ("", "")
+    assert (a.convenio, b.convenio) == ("123456", "654321")
+    assert a.conta != b.conta
+
+
+def test_a_conta_sem_convenio_para_sozinha():
+    """Subconta não aderida não derruba a irmã que já aderiu — e, sobretudo,
+    não sai com o convênio dela."""
+    mapa = _mapa_com_sufixos()
+    contas = _duas_na_mesma_pasta(convenio_b="")
+    a, motivo_a = remessa_dia.resolver_pagador(CONTA, mapa, contas)
+    b, motivo_b = remessa_dia.resolver_pagador("EMPRESA EXEMPLO - SICOOB B",
+                                               mapa, contas)
+    assert motivo_a == "" and a.convenio == "123456"
+    assert b is None and motivo_b == remessa_dia.MOTIVO_SEM_CONVENIO
 
 
 # --------------------------------------------------------------- arquivo

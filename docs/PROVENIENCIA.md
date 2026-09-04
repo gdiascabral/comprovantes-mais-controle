@@ -124,6 +124,28 @@ concordam.
 
 ---
 
+## `2026-09-04_convenio-por-conta.sql` ↔ `20260904113000_convenio_por_conta.sql`
+
+O primeiro par que nasce junto: o runbook foi escrito **a partir da** migration,
+no mesmo PR, em vez de ser copiado do SQL Editor depois. 5 comandos de schema
+nos dois lados, idênticos depois de normalizados — a coluna `conta.convenio`, o
+`comment`, o índice único parcial, o `check` de formato e o `update` que desce o
+convênio da empresa para a única conta Sicoob dela.
+
+O runbook acrescenta **1** comando: o `select` de conferência do fim, que conta
+por empresa quantas contas Sicoob existem e quantas já têm convênio. É
+conferência, não schema — e não imprime número de convênio nenhum, só a
+contagem: os números moram no painel, e este repositório é público.
+
+A ordem também é parte da proveniência aqui, e está escrita no cabeçalho do
+runbook: **este arquivo roda ANTES do merge**. O código novo lê
+`conta.convenio`; mergeado primeiro, a sincronização da abertura pediria uma
+coluna que o banco não tem. O caminho contrário é seguro — coluna nova com
+default `''` não muda nada para o código velho, que continua lendo
+`empresa.convenio`.
+
+---
+
 ## Conferir o schema de produção contra as migrations
 
 O acima compara arquivo com arquivo. Nada disso prova o que está **no banco**.
