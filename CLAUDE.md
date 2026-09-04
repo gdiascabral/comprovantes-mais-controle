@@ -1060,6 +1060,40 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   baixa no Mais Controle" junta as linhas `ok` de TODAS as remessas conhecidas
   num saco só, porque a baixa não depende da conta pagadora — ela casa pela
   `referencia` do item, que é o id do lançamento no ERP.
+  **O retorno casa por DOIS caminhos, e o segundo é o "seu número"
+  (04/09/2026).** O primeiro é o header do arquivo — convênio + NSA —, e ele
+  falha em casos reais: retorno de remessa gerada por outra máquina antes do
+  registro central, convênio reescrito no painel, NSA ajustado à mão. Até aqui
+  isso virava `remessa_desconhecida`: a tela lia o arquivo e não guardava nem
+  dava baixa, porque a `referencia` de cada linha — o id do lançamento no ERP —
+  só existe com a remessa conhecida. **O "seu número" é a chave melhor para o
+  segundo caminho porque ela é NOSSA**: `yymmdd-NNNN[-OC…]`, 20 posições que
+  nós definimos e o banco devolve idênticas, únicas no dia entre todas as
+  contas e todas as máquinas desde o índice
+  `remessa_item_seu_numero_unico_no_dia`, e o `remessa_item` a guarda com a
+  `remessa` ligada. Falhando o header, `retorno_dia._itens_da_remessa` pergunta
+  `historico.remessa_dos_seus_numeros([seu de cada pagamento do arquivo])`;
+  achando, o `Resumo` passa a carregar o convênio e o NSA **DO REGISTRO** (é
+  para essa remessa que o `aplicar_retorno` grava e é esse número que nomeia a
+  cópia do `.RET`), guarda os do arquivo em `convenio_do_header`/`nsa_do_header`
+  e marca `casado_pelo_seu_numero` — que vira a linha de aviso na janela e o
+  prefixo "reencontrado ·" na lista consolidada, porque a partir daí os números
+  da tela não são os do arquivo que a pessoa tem aberto no SicoobNet.
+  **Ele exige que TODOS os "seus números" achados caiam na MESMA remessa.** O
+  índice é PARCIAL pela data (`criado_em >= 2026-09-05`), porque o histórico é
+  append-only e a repetição de 20/08/2026 continua lá dentro — naquele dia a
+  segunda remessa do dia repetiu `260820-0004`…`0010`. Um número daquela época
+  aponta para duas remessas, e escolher uma é aplicar o retorno na remessa
+  errada: dar por pago o pagamento de outra conta e baixar o lançamento errado
+  no ERP. Duas remessas, ou nenhuma, devolve `None`, e o desfecho volta a ser o
+  `remessa_desconhecida` de sempre — que é o que já existia e não custa nada.
+  A consulta da nuvem **não filtra estado**, ao contrário do `_procurar`: aqui
+  não se pergunta onde o pagamento ainda vale, e sim de que remessa o arquivo
+  fala, então a descartada que compartilhe o número é a segunda candidata que
+  faz recusar. O espelho local (`cnab240.Historico.remessa_dos_seus_numeros`,
+  que substituiu o `item_por_seu_numero`) filtra vivos, como o resto dele — e o
+  app pergunta sempre à nuvem, pelo `Espelhado`, porque o caso que este caminho
+  existe para resolver é o retorno de uma remessa gerada em OUTRA máquina.
   **O `.RET` é COPIADO para a pasta da conta, e nunca sobrescrito.** Até aqui
   ele ficava só onde o navegador o baixou: passada a janela, a única prova do
   que o banco respondeu era o que tinha ido para o banco de dados. Agora, ao
