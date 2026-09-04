@@ -85,6 +85,13 @@ class Falha:
 
 @dataclass
 class Resumo:
+    #: O convênio e o NSA **DA REMESSA REGISTRADA** — não necessariamente os
+    #: que o header do arquivo traz. São eles que vão para o
+    #: `aplicar_retorno(convenio, nsa, …)` e para o `nome_da_copia`, e é por
+    #: isso que eles têm de ser os do REGISTRO: o retorno tem de ir para a
+    #: remessa certa, e é a linha do registro que tem os lançamentos do ERP.
+    #: Sem casamento nenhum (`remessa_desconhecida`), continuam sendo o que o
+    #: arquivo diz — é tudo o que se sabe.
     convenio: str
     nsa: int
     empresa: str
@@ -93,8 +100,20 @@ class Resumo:
     #: que ninguém faz e que o arquivo não responde sozinho: o banco devolve o
     #: que processou, e o que sumiu no caminho não aparece em lugar nenhum.
     faltando: list[str] = field(default_factory=list)
-    #: A remessa não foi encontrada no registro central.
+    #: A remessa não foi encontrada no registro central — por convênio+NSA
+    #: NEM pelos "seus números". Só aí: enquanto um dos dois caminhos acha, a
+    #: tela guarda o resultado e dá baixa como sempre.
     remessa_desconhecida: bool = False
+    #: O convênio e o número de arquivo que o HEADER do retorno traz — o que o
+    #: arquivo DIZ, contra o que o registro SABE. Iguais no caso normal; quando
+    #: diferem, são eles que explicam à pessoa por que a tela está falando de
+    #: outro número que não o da tela do banco.
+    convenio_do_header: str = ""
+    nsa_do_header: int = 0
+    #: A remessa foi reencontrada pelo "seu número", e não pelo header. Vale
+    #: aviso na tela: os números que o arquivo mostra não são os que o registro
+    #: guarda, e quem confere precisa saber disso antes de estranhar.
+    casado_pelo_seu_numero: bool = False
     #: De onde este resumo veio: o nome do arquivo, ou `zip.zip/membro.RET`
     #: quando saiu de dentro de um compactado. Com 18 retornos numa lista só,
     #: "arquivo nº 000031" não basta para alguém achar de novo o que leu.
@@ -189,24 +208,37 @@ def ler_conteudo(texto: str, nome: str = "", historico=None) -> Resumo:
     resumo = Resumo(convenio=arquivo.convenio, nsa=arquivo.nsa,
                     empresa=arquivo.empresa, origem=nome,
                     agencia=arquivo.agencia, conta=arquivo.conta,
+                    convenio_do_header=arquivo.convenio,
+                    nsa_do_header=arquivo.nsa,
                     # `latin-1` vai e volta sem perder byte, então isto é o
                     # arquivo original — é o que a cópia vai gravar.
                     conteudo=texto.encode(CODIFICACAO, "replace"))
 
+    # A lista dos pagamentos é MATERIALIZADA antes de perguntar ao registro, e
+    # não é detalhe: `arquivo.pagamentos()` é um gerador que percorre os
+    # registros do lote uma vez só, e o segundo caminho do casamento precisa
+    # dos "seus números" ANTES de as linhas serem montadas.
+    pagamentos = list(arquivo.pagamentos())
+    seus = [(p.seu_numero or "").strip() for p in pagamentos]
+
     # O de-para "seu número" -> id do lançamento vem da remessa registrada.
     enviados: dict[str, str] = {}
     if historico is not None:
-        itens, pasta = _itens_da_remessa(historico, arquivo.convenio,
-                                         arquivo.nsa)
-        if itens is None:
+        achado = _itens_da_remessa(historico, arquivo.convenio, arquivo.nsa,
+                                   seus)
+        if achado is None:
             resumo.remessa_desconhecida = True
         else:
-            enviados = itens
-            resumo.pasta_da_remessa = pasta
+            enviados = achado.itens
+            resumo.pasta_da_remessa = achado.pasta
+            # Os do REGISTRO, e não os do header: é para esta remessa que o
+            # `aplicar_retorno` vai gravar e é o nome dela que a cópia leva.
+            resumo.convenio = achado.convenio
+            resumo.nsa = achado.nsa
+            resumo.casado_pelo_seu_numero = achado.pelo_seu_numero
 
     vistos = set()
-    for pagamento in arquivo.pagamentos():
-        seu = (pagamento.seu_numero or "").strip()
+    for pagamento, seu in zip(pagamentos, seus):
         vistos.add(seu)
         ocorrencias = list(pagamento.ocorrencias)
         resumo.linhas.append(Linha(
@@ -379,14 +411,50 @@ def respostas_para_registro(resumo: Resumo) -> dict:
             for l in resumo.linhas if l.codigos}
 
 
-def _itens_da_remessa(historico, convenio: str,
-                      nsa: int) -> "tuple[dict | None, str]":
-    """(`{seu_numero: referencia}`, pasta do `.REM`) da remessa registrada.
+@dataclass(frozen=True)
+class _Achado:
+    """A remessa registrada de que este retorno fala, e como se chegou nela."""
+    #: `{seu_numero: referencia}` — o de-para com os lançamentos do ERP. Vazio
+    #: quer dizer "conheço a remessa, e ela não tinha item nenhum", que é
+    #: diferente de não achar remessa (aí não há `_Achado`).
+    itens: dict
+    #: A pasta do `.REM` que saiu, para a cópia do retorno cair ao lado dele.
+    pasta: str
+    #: O convênio e o NSA DA REMESSA REGISTRADA. Iguais aos do header no
+    #: caminho de sempre; os do registro quando o casamento foi pelo "seu
+    #: número", que é justamente o caso em que os dois divergem.
+    convenio: str
+    nsa: int
+    pelo_seu_numero: bool
 
-    `(None, "")` quando ela não está registrada. None e `{}` querem dizer
-    coisas diferentes: o primeiro é "não sei qual remessa é esta" — retorno de
-    outra máquina, ou de antes do registro central — e o segundo é "conheço, e
-    ela não tinha item nenhum".
+
+def _itens_da_remessa(historico, convenio: str, nsa: int,
+                      seus: "list[str]") -> "_Achado | None":
+    """De que remessa registrada este retorno fala. `None` quando não dá saber.
+
+    São DOIS caminhos, e o segundo entrou em 04/09/2026:
+
+    1. **convênio + NSA do header**, que é o de sempre e resolve o dia normal;
+    2. **os "seus números" do arquivo**, quando o primeiro falha.
+
+    O caminho 1 falha em casos reais: retorno de remessa gerada por outra
+    máquina antes do registro central, convênio reescrito no painel, NSA
+    ajustado à mão. Até aqui isso virava `remessa_desconhecida` — a tela lia o
+    arquivo e não guardava nada, nem dava baixa, porque a `referencia` de cada
+    linha (o id do lançamento no ERP) só existe com a remessa conhecida.
+
+    O caminho 2 usa a chave melhor que existe para isso: o "seu número" é
+    NOSSO (`yymmdd-NNNN[-OC…]`, 20 posições que nós definimos e o banco
+    devolve idênticas), único no dia entre todas as contas e todas as máquinas
+    desde o índice `remessa_item_seu_numero_unico_no_dia`, e o `remessa_item`
+    o guarda com a `remessa` ligada. Quem decide se dá para responder é o
+    registro (`remessa_dos_seus_numeros`), que exige que TODOS os números
+    achados caiam na MESMA remessa — a repetição de antes do índice existe no
+    histórico, e adivinhar aqui é aplicar o retorno na remessa errada.
+
+    `None` e um `_Achado` de itens vazios querem dizer coisas diferentes: o
+    primeiro é "não sei qual remessa é esta" e o segundo é "conheço, e ela não
+    tinha item nenhum".
 
     A pasta vem junto porque sai da MESMA linha: o registro guarda o caminho
     do `.REM` que saiu (`remessa.arquivo`), e é a pasta dele que recebe a
@@ -397,12 +465,39 @@ def _itens_da_remessa(historico, convenio: str,
     try:
         remessas = historico.remessas(convenio=convenio)
     except Exception:
-        return None, ""
+        remessas = []
     for r in remessas:
         if int(r.get("nsa") or 0) == int(nsa):
-            itens = r.get("remessa_item") or r.get("itens") or []
-            arquivo = str(r.get("arquivo") or "").strip()
-            pasta = str(Path(arquivo).parent) if arquivo else ""
-            return ({str(i.get("seu_numero") or "").strip():
-                     str(i.get("referencia") or "") for i in itens}, pasta)
-    return None, ""
+            return _do_registro(r, convenio, int(nsa), pelo_seu_numero=False)
+
+    # O segundo caminho é OFERTA, não exigência: um registro que não saiba
+    # responder a esta pergunta (versão antiga, dublê de teste) volta a se
+    # comportar exatamente como antes deste PR.
+    perguntar = getattr(historico, "remessa_dos_seus_numeros", None)
+    if perguntar is None:
+        return None
+    try:
+        linha = perguntar([s for s in seus if s])
+    except Exception:
+        # Falhar aqui não pode custar a leitura do arquivo: o caminho 1 já
+        # falhou, e o desfecho sem este caminho era `remessa_desconhecida` —
+        # que continua sendo o desfecho.
+        return None
+    if not linha:
+        return None
+    return _do_registro(linha, str(linha.get("convenio") or ""),
+                        int(linha.get("nsa") or 0), pelo_seu_numero=True)
+
+
+def _do_registro(linha: dict, convenio: str, nsa: int, *,
+                 pelo_seu_numero: bool) -> _Achado:
+    """A linha da remessa como o registro a devolve, virada em `_Achado`."""
+    itens = linha.get("remessa_item") or linha.get("itens") or []
+    arquivo = str(linha.get("arquivo") or "").strip()
+    return _Achado(
+        itens={str(i.get("seu_numero") or "").strip():
+               str(i.get("referencia") or "") for i in itens},
+        pasta=str(Path(arquivo).parent) if arquivo else "",
+        convenio=convenio,
+        nsa=nsa,
+        pelo_seu_numero=pelo_seu_numero)
