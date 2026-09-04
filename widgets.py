@@ -2828,6 +2828,64 @@ def cartao_elastico(cartao, cheio: bool) -> None:
     cartao.pack_configure(fill="both" if cheio else "x", expand=bool(cheio))
 
 
+def _elastico(widget) -> bool:
+    """Este irmão foi empacotado com `expand`? O `pack_info` do Tk devolve o
+    valor como veio do Tcl ("1", 1 ou True conforme a versão)."""
+    try:
+        return str(widget.pack_info().get("expand", 0)).lower() in (
+            "1", "true", "yes")
+    except (tk.TclError, KeyError, AttributeError):
+        return False
+
+
+def _reservar_o_pe(cartao) -> None:
+    """O Registro deixa de ser a SOBRA da tela e passa a ser uma RESERVA.
+
+    O defeito de 03/09/2026: na Aportes a 125%, o Registro virou uma tira de
+    ~40 px com a primeira linha cortada ao meio. A causa não está nele — está
+    na ordem em que o `pack` atende os irmãos.
+
+    O `pack` do Tk serve os filhos NA ORDEM em que foram empacotados, e dá a
+    cada um a altura que ele pediu, cortada pelo que ainda sobrou de cavidade
+    (`cavityHeight`); quem vem depois de a cavidade acabar fica com zero. O
+    Registro é o último de todas as onze telas, então ele é sempre o primeiro a
+    pagar quando a soma não cabe — e a soma passou a não caber porque a fonte
+    do sistema cresce (a tabela pede `height` em LINHAS, e uma linha a 125% é
+    25% mais alta) enquanto a janela continua do mesmo tamanho.
+
+    A correção é uma linha de `pack`, e o que ela diz é uma decisão: **quem
+    cede espaço é a LISTA, nunca o Registro**. O cartão passa a ser empacotado
+    `side="bottom"` e ANTES do primeiro irmão elástico — o cartão da tabela, o
+    único da tela que já sabe encolher, porque tem barra de rolagem e mostra um
+    pedaço do que existe por natureza. Vindo de baixo, ele continua desenhado
+    exatamente onde estava (é o único `side="bottom"` da aba, e quem vem depois
+    preenche a cavidade de cima para baixo); o que muda é que ele reserva as
+    suas linhas ANTES de a tabela pedir as dela.
+
+    Onde não há irmão elástico, nada é mexido: ser o último já é ser o dono da
+    sobra, e trocar a ordem ali só criaria a chance de o Registro nascer acima
+    da barra de ação. É a mesma armadilha que o aviso de `registro_elastico`
+    descreve, e é por isso que esta função é chamada UMA vez, na montagem, e
+    não a cada `<<Modified>>`."""
+    gerenciado = getattr(cartao, "moldura", cartao)
+    try:
+        irmaos = gerenciado.master.pack_slaves()
+    except (tk.TclError, AttributeError):
+        return
+    if gerenciado not in irmaos:
+        return                  # ainda não empacotado, ou não é o pack que o põe
+    # Só os que vêm ANTES dele: irmão elástico posterior já é atendido depois,
+    # e passar o Registro para trás dele seria trocar a garantia pelo defeito.
+    antes = irmaos[:irmaos.index(gerenciado)]
+    disputa = next((w for w in antes if _elastico(w)), None)
+    if disputa is None:
+        return                  # ninguém para disputar: a ordem já basta
+    try:
+        cartao.pack_configure(side="bottom", before=disputa)
+    except tk.TclError:
+        pass                    # aba desmontada no meio da construção
+
+
 def registro_elastico(cartao, texto: tk.Text, altura_minima: int = 6) -> None:
     """O cartão de Registro ocupa a tela só quando tem o que mostrar.
 
@@ -2842,7 +2900,15 @@ def registro_elastico(cartao, texto: tk.Text, altura_minima: int = 6) -> None:
 
     `pack_configure` e NÃO `pack`: reempacotar move o widget para o FIM da
     ordem, e em cinco abas o Registro passaria a nascer embaixo da barra de
-    ação — que é justamente onde ficam os botões de começar."""
+    ação — que é justamente onde ficam os botões de começar.
+
+    **`altura_minima` vale nos DOIS estados** (03/09/2026). Com trabalho
+    dentro, o campo pedia `height=1` — "fico com a sobra" —, e enquanto sobrou
+    tela isso foi invisível: o `expand` devolvia o espaço todo. Numa janela
+    apertada (1920x1040 com a fonte a 125%) não sobra nada, e "a sobra" virou
+    literalmente uma linha cortada ao meio. Pedir o piso não custa pixel nenhum
+    onde já cabia — quem manda ali continua sendo o `expand` — e é o que
+    `_reservar_o_pe` transforma em garantia onde não cabe."""
     #: `pintado` é até onde `colorir_registro` já passou. Guardado aqui, e não
     #: recalculado, porque o registro de um lote grande chega a milhares de
     #: linhas e repintá-lo inteiro a cada mensagem trava a janela.
@@ -2869,7 +2935,7 @@ def registro_elastico(cartao, texto: tk.Text, altura_minima: int = 6) -> None:
             # apaga o campo ANTES de reescrever a tela vazia, e nesse instante
             # ele tem uma linha. Medir só ali fixaria a altura do campo vazio,
             # e o texto que entra logo depois nasceria cortado.
-            alvo = 1 if cheio else _altura_vazia()
+            alvo = altura_minima if cheio else _altura_vazia()
             if cheio != estado["cheio"] or int(texto.cget("height")) != alvo:
                 estado["cheio"] = cheio
                 texto.configure(height=alvo)
@@ -2888,6 +2954,7 @@ def registro_elastico(cartao, texto: tk.Text, altura_minima: int = 6) -> None:
         finally:
             estado["dentro"] = False
 
+    _reservar_o_pe(cartao)
     texto.bind("<<Modified>>", _ajustar, add="+")
     _ajustar()
 
