@@ -260,10 +260,33 @@ class Registro:
                         *, estado: str = "") -> int:
         """Grava o que o banco respondeu de cada pagamento.
 
-        `respostas` é {seu_numero: codigo}. Devolve quantos itens receberam
-        resposta. Item que o retorno não citou fica como estava — silêncio do
-        banco não é resposta, e sobrescrevê-lo com vazio apagaria o que um
-        retorno anterior já tinha dito.
+        `respostas` é `{seu_numero: {"codigo": ..., "estado": ...}}` — o que
+        `retorno_dia.respostas_para_registro` monta. Uma string simples no
+        lugar do dicionário continua valendo (vira `{"codigo": s, "estado":
+        ""}`), para nenhum chamador antigo quebrar. Devolve quantos itens
+        receberam resposta. Item que o retorno não citou fica como estava —
+        silêncio do banco não é resposta, e sobrescrevê-lo com vazio apagaria
+        o que um retorno anterior já tinha dito.
+
+        **`retorno_codigo` é a resposta de AGORA e é sobrescrito; o
+        `retorno_historico` nunca perde nada.** No fluxo desta empresa quem
+        gera não é quem assina: o primeiro retorno vem `PD` (pendente de
+        assinatura) e o segundo, depois de o master liberar, vem `00`. O `00`
+        é a resposta certa para "e agora?", e escrevê-lo por cima do `PD`
+        apagava a única prova de que o arquivo tinha sido ACEITO. Agora cada
+        passagem acrescenta `AAAA-MM-DD HH:MM codigo=estado` ao histórico,
+        separado por `;`, na frente do que já estava lá.
+
+        **A limitação aceita, escrita para não ser redescoberta:** o append é
+        ler-concatenar-gravar aqui no app, não um `||` do Postgres, então duas
+        pessoas guardando o MESMO retorno no MESMO instante podem perder uma
+        LINHA de histórico — a última gravação vence. Nunca se perde a
+        resposta atual (as duas escrevem o mesmo `retorno_codigo`), e nada que
+        mexe em dinheiro lê o histórico: quem decide o que baixar no ERP é
+        `baixa_erp.separar`, sobre o `Resumo` lido do arquivo. Trocar isto por
+        uma coluna que o banco concatena sozinho custaria uma função nova no
+        Postgres, e o preço da corrida é uma linha de texto que ninguém usa
+        para decidir.
         """
         remessa = next((r for r in self.remessas(convenio=convenio)
                         if int(r.get("nsa") or 0) == int(nsa)), None)
@@ -271,14 +294,31 @@ class Registro:
             raise rest.RecusadoPeloBanco(
                 f"a remessa {nsa} do convênio {convenio} não está registrada")
 
-        agora = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        instante = _dt.datetime.now(_dt.timezone.utc)
+        agora = instante.isoformat(timespec="seconds")
+        # O mesmo instante nas duas colunas, de propósito: `retorno_em` e a
+        # última linha do histórico contradizerem-se seria a pior forma de
+        # descobrir que uma das duas está errada.
+        carimbo = instante.strftime("%Y-%m-%d %H:%M")
         quantos = 0
         for item in remessa.get("remessa_item") or []:
-            codigo = respostas.get(str(item.get("seu_numero") or "").strip())
+            resposta = respostas.get(str(item.get("seu_numero") or "").strip())
+            if isinstance(resposta, str):
+                resposta = {"codigo": resposta, "estado": ""}
+            codigo = (resposta or {}).get("codigo") or ""
             if not codigo:
                 continue
+            marca = (resposta or {}).get("estado") or ""
+            # O item já vem com a coluna: `remessas()` pede `remessa_item(*)`.
+            # O `.get(..., "")` cobre o item gravado antes de a coluna existir.
+            antes = str(item.get("retorno_historico") or "")
+            entrada = f"{carimbo} {codigo}={marca}"
             rest.alterar("remessa_item", self._token, f"id=eq.{item['id']}",
-                         {"retorno_codigo": codigo, "retorno_em": agora})
+                         {"retorno_codigo": codigo,
+                          "retorno_em": agora,
+                          "retorno_estado": marca,
+                          "retorno_historico": f"{antes};{entrada}"
+                                               if antes else entrada})
             quantos += 1
 
         if estado:
@@ -369,7 +409,9 @@ class Espelhado:
 
         O `cnab240.Historico` sabe marcar a remessa inteira (`marcar`), mas
         não tem onde pôr o código de ocorrência de CADA pagamento — e é isso
-        que responde "por que este não pagou?" meses depois."""
+        que responde "por que este não pagou?" meses depois. Vale para as
+        quatro colunas do item, histórico incluído: o espelho é backup do que
+        SAIU, e o que o banco respondeu depois nunca esteve nele."""
         return self._nuvem.aplicar_retorno(convenio, nsa, respostas,
                                            estado=estado)
 

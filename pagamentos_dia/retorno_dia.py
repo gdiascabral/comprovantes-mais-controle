@@ -28,6 +28,14 @@ class Linha:
     valor: Decimal
     estado: str                      # "ok" | "pendente" | "rejeitado" | "?"
     motivos: str
+    #: Os códigos de ocorrência, na ordem em que o banco os mandou. O
+    #: `motivos` é para GENTE ler ("AG=conta invalida; BD=saldo insuficiente")
+    #: e o `codigos` é para gravar — e são coisas diferentes o bastante para
+    #: não se derivar uma da outra. Enquanto só existia o `motivos`, quem
+    #: precisava dos códigos os arrancava de volta da frase
+    #: (`motivos.split("=")[0]`), o que dava certo com UMA ocorrência e
+    #: guardava só a primeira quando o banco mandava duas.
+    codigos: list[str] = field(default_factory=list)
     #: O id do lançamento no ERP, quando o "seu número" achou par na remessa.
     #: Vazio significa que o banco devolveu algo que não saiu por aqui.
     referencia: str = ""
@@ -137,18 +145,40 @@ def ler(caminho: str | Path, historico=None) -> Resumo:
     for pagamento in arquivo.pagamentos():
         seu = (pagamento.seu_numero or "").strip()
         vistos.add(seu)
+        ocorrencias = list(pagamento.ocorrencias)
         resumo.linhas.append(Linha(
             seu_numero=seu,
             favorecido=(pagamento.favorecido or "").strip(),
             valor=pagamento.valor,
             estado=_estado(pagamento),
-            motivos="; ".join(f"{c}={d}" for c, d in pagamento.ocorrencias),
+            motivos="; ".join(f"{c}={d}" for c, d in ocorrencias),
+            codigos=[str(c) for c, _d in ocorrencias],
             referencia=enviados.get(seu, ""),
             data_real=getattr(pagamento, "data_real", None),
         ))
 
     resumo.faltando = sorted(s for s in enviados if s not in vistos)
     return resumo
+
+
+def respostas_para_registro(resumo: Resumo) -> dict:
+    """{seu_numero: {"codigo": ..., "estado": ...}} para o registro central.
+
+    O que a aba manda gravar, montado aqui e não na tela: a classificação é
+    julgamento de retorno (`Linha.estado`), e traduzi-la de novo lá na frente
+    seria uma segunda tabela de códigos de ocorrência, envelhecendo em
+    silêncio ao lado desta.
+
+    Todos os códigos, separados por `;`, e não só o primeiro: o banco manda
+    mais de uma ocorrência por pagamento, e a que explica a recusa nem sempre
+    é a de cima.
+
+    **Linha sem ocorrência fica de fora**, e essa é a regra que já existe no
+    `aplicar_retorno`: silêncio do banco não é resposta, e gravá-lo como vazio
+    apagaria o que um retorno anterior tinha dito.
+    """
+    return {l.seu_numero: {"codigo": ";".join(l.codigos), "estado": l.estado}
+            for l in resumo.linhas if l.codigos}
 
 
 def _itens_da_remessa(historico, convenio: str, nsa: int) -> dict | None:
