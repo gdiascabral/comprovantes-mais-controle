@@ -1461,6 +1461,20 @@ class PagamentosDiaFrame(ttk.Frame):
                            "máquina. Dá para ler o arquivo, mas não para "
                            "apontar os lançamentos do ERP nem guardar o "
                            "resultado.").pack(anchor="w", pady=px((0, 8)))
+        # O casamento pelo "seu número" salva o retorno cujo header não bate
+        # com o registro — mas os números da tela deixam de ser os do arquivo
+        # que a pessoa tem aberto no SicoobNet. Dizer os DOIS é o que impede
+        # que isso pareça a tela falando de outra conta.
+        if resumo.casado_pelo_seu_numero:
+            ttk.Label(moldura, style="Atencao.TLabel", wraplength=px(920),
+                      justify="left",
+                      text=f"⚠  Este retorno foi reencontrado pelo "
+                           f"“seu número”: o header diz convênio "
+                           f"{resumo.convenio_do_header or '—'} / arquivo nº "
+                           f"{resumo.nsa_do_header:06d}, e o registro tem esta "
+                           f"remessa como convênio {resumo.convenio or '—'} / "
+                           f"arquivo nº {resumo.nsa:06d}."
+                      ).pack(anchor="w", pady=px((0, 8)))
 
         colunas = ("estado", "favorecido", "valor", "seu_numero", "motivos")
         tabela = ttk.Treeview(moldura, columns=colunas, show="headings",
@@ -1589,6 +1603,21 @@ class PagamentosDiaFrame(ttk.Frame):
                   text="Duplo clique numa linha abre o detalhe daquele "
                        "arquivo, pagamento a pagamento."
                   ).pack(anchor="w", pady=px((2, 8)))
+
+        # O mesmo aviso da janela de um retorno só, uma vez pela lista: os
+        # números que a linha mostra são os do REGISTRO, e não os do header do
+        # arquivo. Qual header cada um trazia está no detalhe — repetir os dois
+        # pares por linha numa lista de 18 contas não caberia.
+        reencontrados = [r for r in validos if r.casado_pelo_seu_numero]
+        if reencontrados:
+            ttk.Label(moldura, style="Atencao.TLabel", wraplength=px(1120),
+                      justify="left",
+                      text=f"⚠  {len(reencontrados)} retorno(s) reencontrado(s) "
+                           f"pelo “seu número”: o convênio / arquivo nº do "
+                           f"header não bate com o do registro, e o que a lista "
+                           f"mostra é o do registro. Abra o detalhe para ver os "
+                           f"dois."
+                      ).pack(anchor="w", pady=px((0, 8)))
 
         colunas = ("empresa", "conta", "nsa", "pagos", "aguardando",
                    "rejeitados", "faltando", "total", "situacao")
@@ -1724,17 +1753,27 @@ class PagamentosDiaFrame(ttk.Frame):
         A remessa desconhecida vem PRIMEIRO mesmo havendo rejeitado, porque é
         ela que decide o que dá para fazer com a linha: sem o registro não há
         o que guardar nem como baixar. As contagens ao lado continuam à vista.
+
+        O "reencontrado ·" é PREFIXO e não substitui a frase, porque as duas
+        coisas são independentes: reencontrar diz como se chegou à remessa (e
+        avisa que os números da linha não são os do header do arquivo), e a
+        frase continua dizendo o que o banco respondeu. Trocar uma pela outra
+        esconderia os rejeitados atrás de um detalhe de casamento.
         """
         if resumo.remessa_desconhecida:
             return "remessa não registrada", "atencao"
         rejeitados = resumo.quantos("rejeitado")
         if rejeitados:
-            return f"{rejeitados} rejeitado(s) — veja o detalhe", "erro"
-        if resumo.quantos("pendente"):
-            return "aguardando assinatura no SicoobNet", "atencao"
-        if resumo.linhas and resumo.quantos("ok") == len(resumo.linhas):
-            return "tudo pago", "ok"
-        return "o banco não respondeu por todos", "info"
+            frase, marca = f"{rejeitados} rejeitado(s) — veja o detalhe", "erro"
+        elif resumo.quantos("pendente"):
+            frase, marca = "aguardando assinatura no SicoobNet", "atencao"
+        elif resumo.linhas and resumo.quantos("ok") == len(resumo.linhas):
+            frase, marca = "tudo pago", "ok"
+        else:
+            frase, marca = "o banco não respondeu por todos", "info"
+        if resumo.casado_pelo_seu_numero:
+            frase = f"reencontrado · {frase}"
+        return frase, marca
 
     # ----------------------------------------------------- baixa no ERP
     def _janela_baixa(self, sep):
