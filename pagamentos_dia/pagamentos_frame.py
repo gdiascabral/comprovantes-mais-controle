@@ -33,6 +33,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import baixa_erp
 from . import ocr_boleto
+from . import painel_dia
 from . import reembolso
 from . import regras_pagamento as regras
 from . import relatorio
@@ -348,6 +349,24 @@ class PagamentosDiaFrame(ttk.Frame):
         ("situacao", "SITUAÇÃO", 260, "w"),
     )
 
+    #: As colunas do painel do dia. A SITUAÇÃO vem antes dos contadores de
+    #: propósito: ela é a resposta ("esta conta fechou?") e os quatro números
+    #: são a conferência de quem quer o detalhe. Os contadores são estreitos e
+    #: alinhados à direita, como no `_janela_retornos`, para a coluna de
+    #: números formar uma pilha legível em dezoito linhas.
+    COLUNAS_PAINEL_DIA = (
+        ("empresa", "EMPRESA", 200, "w"),
+        ("conta", "AG-CONTA", 110, "w"),
+        ("nsa", "ARQUIVO Nº", 95, "w"),
+        ("gerada", "GERADA ÀS", 90, "w"),
+        ("situacao", "SITUAÇÃO", 260, "w"),
+        ("pagos", "PAGOS", 70, "e"),
+        ("aguarda", "AGUARDA", 85, "e"),
+        ("rejeitados", "REJEIT.", 75, "e"),
+        ("sem_resposta", "SEM RESP.", 90, "e"),
+        ("total", "TOTAL", 120, "e"),
+    )
+
     # ---------------------------------------------------------------- layout
     def _build(self):
         PADX = px(widgets.PADX)
@@ -511,6 +530,14 @@ class PagamentosDiaFrame(ttk.Frame):
         self.b_ret = widgets.Botao(btns, "📥  Ler retorno", papel="neutro",
                                    command=self.ler_retorno)
         self.b_ret.pack(side="left", padx=px((8, 0)))
+        # MESMA LINHA dos outros três, e não uma linha nova: o painel do dia
+        # tem o papel deles — não é passo do fluxo, é uma janela que se abre
+        # para olhar o que já aconteceu. Uma faixa a mais aqui sairia do
+        # Registro, que é o último a ser empacotado e fica com a sobra
+        # (`tests/test_registro_visivel.py` cobra quatro linhas legíveis).
+        self.b_painel = widgets.Botao(btns, "📅  Painel do dia", papel="neutro",
+                                      command=self._janela_painel_do_dia)
+        self.b_painel.pack(side="left", padx=px((8, 0)))
 
         self.barra_exec = widgets.BarraExecucao(acao)
         self.barra_exec.pack(side="left", fill="x", expand=True)
@@ -1894,6 +1921,320 @@ class PagamentosDiaFrame(ttk.Frame):
         if resumo.casado_pelo_seu_numero:
             frase = f"reencontrado · {frase}"
         return frase, marca
+
+    # ------------------------------------------------------ painel do dia
+    def _janela_painel_do_dia(self):
+        """O dia inteiro numa lista, e as duas ações que faltavam ao app.
+
+        **Janela e não cartão**, e a régua é a mesma do "Contas prontas para
+        remessa": o Registro é o último a ser empacotado nesta aba e fica com
+        a SOBRA, que `tests/test_registro_visivel.py` cobra em quatro linhas
+        legíveis. Uma tabela de dezoito linhas aqui dentro não caberia — e
+        nem deveria: quem abre isto está acompanhando o dia, o que se faz
+        algumas vezes por tarde, enquanto o Registro é lido a cada rodada.
+
+        **As duas ações existem porque o modelo já as tinha e o app não as
+        expunha.** `Registro.marcar` está no código desde 17/08/2026 e nenhuma
+        tela o chamava: toda remessa ficava `gerado` até alguém ler o retorno,
+        e a que NUNCA subiu ao SicoobNet era indistinguível da que subiu.
+        Pior, o pagamento de uma remessa que jamais foi ao banco ficava
+        bloqueado para sempre — `remessa_dia._ja_enviado` só enxerga item de
+        remessa VIVA, e só `descartado` sai dessa lista.
+
+        As regras de quem pode o quê moram em `pagamentos_dia.painel_dia`, e
+        o registro central as confere DE NOVO ao gravar (`marcar_enviada` e
+        `descartar` releem a remessa antes de decidir). Não é redundância
+        boba: o botão decide pelo que está na tela, que pode ter sido
+        carregado antes de outra máquina guardar um retorno.
+
+        **Sem nuvem, a janela ABRE.** Ela é a tela de acompanhamento do dia, e
+        recusar-se a abrir esconderia até o recado que explica por quê — o
+        contrário do que a aba faz ao GERAR remessa, que é a única operação
+        que para sem registro central.
+        """
+        try:
+            historico = _historico(self._log)
+        except Exception as e:                                # noqa: BLE001
+            # Sem o registro central não há o que listar nem o que marcar: a
+            # visão do dia é inteira de lá. A janela abre com o recado, e é
+            # ele que diz se falta login ou falta rede.
+            historico = None
+            recado_sem_nuvem = widgets.recado_de_erro(
+                e, "Não consegui abrir o registro das remessas.")
+        else:
+            recado_sem_nuvem = ""
+
+        top = tk.Toplevel(self)
+        top.title("Painel do dia")
+        # Larga porque são dez colunas: espremida, o Treeview corta a
+        # SITUAÇÃO, que é a coluna que se lê primeiro.
+        top.geometry(f"{px(1240)}x{px(620)}")
+        widgets.barra_de_titulo(top)
+        moldura = ttk.Frame(top, padding=14)
+        moldura.pack(fill="both", expand=True)
+
+        ttk.Label(moldura, style="Titulo.TLabel",
+                  text="Painel do dia — remessas de todas as contas"
+                  ).pack(anchor="w")
+        ttk.Label(moldura, style="Apoio.TLabel", wraplength=px(1180),
+                  justify="left",
+                  text="Uma linha por remessa gerada no dia. A SITUAÇÃO diz em "
+                       "que ponto cada conta está: gerada, subida no "
+                       "SicoobNet, aguardando assinatura, paga ou rejeitada."
+                  ).pack(anchor="w", pady=px((2, 8)))
+
+        filtros = ttk.Frame(moldura)
+        filtros.pack(fill="x", pady=px((0, 8)))
+        v_dia = tk.StringVar(value=f"{datetime.date.today():%d/%m/%Y}")
+        widgets.Campo(filtros, "Dia", lambda p: CampoData(p, v_dia)
+                      ).pack(side="left", padx=px((0, 16)))
+        widgets.Botao(filtros, "Recarregar", papel="passo",
+                      command=lambda: _recarregar()).pack(side="left",
+                                                          pady=px((15, 0)))
+
+        # Uma linha só, e ela troca de papel: o recado de quem não tem nuvem,
+        # a data que não deu para ler, o erro da consulta ou o "nenhuma
+        # remessa neste dia". Todos respondem à mesma pergunta — por que a
+        # tabela está vazia? —, e três labels separadas dariam três lugares
+        # para procurar a resposta.
+        aviso = ttk.Label(moldura, style="Apoio.TLabel", wraplength=px(1180),
+                          justify="left")
+        aviso.pack(anchor="w", pady=px((0, 6)))
+
+        colunas = tuple(chave for chave, *_ in self.COLUNAS_PAINEL_DIA)
+        tabela = ttk.Treeview(moldura, columns=colunas, show="headings",
+                              height=14, selectmode="browse")
+        for chave, titulo, larg, ancora in self.COLUNAS_PAINEL_DIA:
+            tabela.heading(chave, text=titulo)
+            tabela.column(chave, width=larg, anchor=ancora,
+                          stretch=chave == "situacao")
+        widgets.estilo_tabela(tabela)
+        tabela.pack(fill="both", expand=True)
+
+        #: iid da linha -> a `LinhaDoDia` que ela mostra. É dele que saem o
+        #: convênio e o NSA das ações — ler de volta o texto da célula seria
+        #: reconstruir o dado a partir da sua apresentação.
+        por_linha: dict = {}
+
+        rodape = ttk.Frame(moldura)
+        rodape.pack(fill="x", pady=px((10, 0)))
+        resumo = ttk.Label(rodape, style="Apoio.TLabel")
+        resumo.pack(side="left")
+
+        def _selecionada():
+            return por_linha.get(tabela.focus())
+
+        def _recarregar():
+            tabela.delete(*tabela.get_children())
+            por_linha.clear()
+            if historico is None:
+                aviso.configure(text=recado_sem_nuvem, style="Atencao.TLabel")
+                resumo.configure(text="")
+                _ao_selecionar()
+                return
+            try:
+                quando = datetime.datetime.strptime(
+                    v_dia.get().strip(), "%d/%m/%Y").date()
+            except ValueError:
+                aviso.configure(
+                    text="Data inválida — escreva dd/mm/aaaa, ou escolha no "
+                         "calendário.", style="Atencao.TLabel")
+                resumo.configure(text="")
+                _ao_selecionar()
+                return
+            try:
+                linhas = painel_dia.linhas_do_dia(
+                    historico.remessas_do_dia(quando))
+            except Exception as e:                            # noqa: BLE001
+                aviso.configure(text=widgets.recado_de_erro(
+                    e, "Não consegui ler as remessas deste dia."),
+                    style="Atencao.TLabel")
+                resumo.configure(text="")
+                _ao_selecionar()
+                return
+            for i, linha in enumerate(linhas):
+                tag, frase = painel_dia.situacao(linha)
+                iid = tabela.insert("", "end", values=(
+                    linha.empresa.strip()[:34],
+                    f"{linha.agencia}-{linha.conta}".strip("-") or "—",
+                    f"{linha.nsa:06d}",
+                    f"{linha.gerado_em:%H:%M}" if linha.gerado_em else "—",
+                    f"{widgets.MARCAS_ESTADO[tag]}  {frase}",
+                    linha.pagos, linha.aguardando, linha.rejeitados,
+                    linha.sem_resposta,
+                    relatorio.brl(float(linha.total))),
+                    tags=widgets.linha_zebrada(i, tag))
+                por_linha[iid] = linha
+            aviso.configure(
+                text="" if linhas else
+                "Nenhuma remessa foi gerada neste dia — confira a data.",
+                style="Apoio.TLabel")
+            pagas = sum(1 for l in linhas
+                        if painel_dia.situacao(l)[0] == "ok")
+            fora = sum(1 for l in linhas if l.estado == "descartado")
+            resumo.configure(
+                text=f"{len(linhas)} remessa(s)  ·  {pagas} paga(s)  ·  "
+                     f"{len(linhas) - pagas - fora} sem fechar"
+                     + (f"  ·  {fora} descartada(s)" if fora else ""))
+            _ao_selecionar()
+
+        # ------------------------------------------------------- as ações
+        def _marcar_enviada():
+            linha = _selecionada()
+            if linha is None or historico is None:
+                return
+            try:
+                historico.marcar_enviada(linha.convenio, linha.nsa)
+            except Exception as e:                            # noqa: BLE001
+                messagebox.showwarning("Painel do dia", widgets.recado_de_erro(
+                    e, "Não consegui marcar a remessa como enviada."))
+                return
+            self._log(f"\nArquivo nº {linha.nsa:06d} "
+                      f"({linha.empresa.strip()}) marcado como ENVIADO ao "
+                      f"SicoobNet.")
+            _recarregar()
+
+        def _descartar():
+            linha = _selecionada()
+            if linha is None or historico is None:
+                return
+            # A trava de estado é conferida ANTES de pedir o motivo: escrever
+            # a justificativa e só então ouvir "não dá" é o pior desfecho
+            # possível desta janela.
+            pode, recusa = painel_dia.pode_descartar(linha)
+            if not pode:
+                messagebox.showwarning("Descartar remessa", recusa)
+                return
+            motivo = self._pedir_motivo_do_descarte(top, linha)
+            if top.winfo_exists():
+                top.grab_set()          # o diálogo levou o grab; ele não volta
+            if not motivo:                                    # desistiu
+                return
+            try:
+                historico.descartar(linha.convenio, linha.nsa, motivo)
+            except Exception as e:                            # noqa: BLE001
+                messagebox.showwarning("Painel do dia", widgets.recado_de_erro(
+                    e, "Não consegui descartar a remessa."))
+                return
+            self._log(f"\nArquivo nº {linha.nsa:06d} "
+                      f"({linha.empresa.strip()}) DESCARTADO: {motivo}\n"
+                      f"  os pagamentos dele voltam a poder sair numa remessa "
+                      f"nova.")
+            _recarregar()
+
+        def _abrir_a_pasta():
+            linha = _selecionada()
+            if linha is None or not linha.arquivo:
+                return
+            # A pasta, e não o arquivo: o `.REM` já pode ter sido arrastado
+            # para o SicoobNet e apagado, e abrir a pasta continua levando
+            # aonde a pessoa quer chegar (o retorno guardado mora lá também).
+            alvo = Path(linha.arquivo).parent
+            try:
+                os.startfile(alvo)                            # noqa: S606
+            except Exception as e:                            # noqa: BLE001
+                messagebox.showwarning(
+                    "Painel do dia",
+                    widgets.recado_de_erro(e, "Não consegui abrir a pasta."))
+
+        b_enviada = widgets.Botao(rodape, "Marcar como enviada", papel="passo",
+                                  command=_marcar_enviada, state="disabled")
+        b_descartar = widgets.Botao(rodape, "Descartar…", papel="perigo",
+                                    command=_descartar, state="disabled")
+        b_pasta = widgets.Botao(rodape, "Abrir a pasta", papel="neutro",
+                                command=_abrir_a_pasta, state="disabled")
+        widgets.Botao(rodape, "Fechar", papel="neutro", command=top.destroy
+                      ).pack(side="right", padx=px((8, 0)))
+        b_pasta.pack(side="right", padx=px((8, 0)))
+        b_descartar.pack(side="right", padx=px((8, 0)))
+        b_enviada.pack(side="right")
+
+        def _ao_selecionar(_evento=None):
+            """Só habilita o que a linha escolhida aceita.
+
+            "Marcar como enviada" some fora de `gerado` porque ali ela não
+            acrescenta nada e pode TIRAR (sobre uma remessa `processado`,
+            apagaria o desfecho do retorno). "Descartar…" continua clicável
+            mesmo quando a resposta é não: a recusa de `pode_descartar` diz
+            POR QUE, e um botão apagado não ensina nada a quem precisa
+            justamente entender por que aquela remessa não sai da frente."""
+            linha = _selecionada()
+            tem_registro = historico is not None
+            b_enviada.configure(
+                state="normal" if (linha is not None and tem_registro
+                                   and painel_dia.pode_marcar_enviada(linha))
+                else "disabled")
+            b_descartar.configure(
+                state="normal" if (linha is not None and tem_registro)
+                else "disabled")
+            b_pasta.configure(
+                state="normal" if (linha is not None and linha.arquivo)
+                else "disabled")
+
+        tabela.bind("<<TreeviewSelect>>", _ao_selecionar)
+        _recarregar()
+
+        top.transient(self.winfo_toplevel())
+        top.grab_set()
+        return top
+
+    def _pedir_motivo_do_descarte(self, pai, linha):
+        """Pergunta por que a remessa está sendo descartada. "" se desistir.
+
+        O motivo é exigido pela mesma razão do `ajustar_nsa`: o histórico é
+        append-only e descreve arquivos que existiram, e uma remessa
+        `descartado` sem explicação é um furo na sequência de NSA que ninguém
+        justifica meses depois. Quem julga o texto é
+        `painel_dia.pode_descartar`, com a linha na mão — a mesma função que o
+        registro central chama ao gravar, e não uma segunda régua aqui.
+        """
+        dlg = tk.Toplevel(pai)
+        dlg.title("Descartar remessa")
+        dlg.geometry(f"{px(600)}x{px(330)}")
+        widgets.barra_de_titulo(dlg)
+        moldura = ttk.Frame(dlg, padding=14)
+        moldura.pack(fill="both", expand=True)
+
+        ag_conta = f"{linha.agencia}-{linha.conta}".strip("-") or "—"
+        ttk.Label(moldura, style="Titulo.TLabel",
+                  text=f"Descartar o arquivo nº {linha.nsa:06d}").pack(anchor="w")
+        ttk.Label(moldura, style="Apoio.TLabel", wraplength=px(540),
+                  justify="left",
+                  text=f"{linha.empresa.strip()} · {ag_conta} · "
+                       f"{relatorio.brl(float(linha.total))}\n\n"
+                       f"Descartar tira esta remessa da pergunta “isto já foi "
+                       f"mandado?”: os {linha.itens} pagamento(s) dela voltam "
+                       f"a poder sair numa remessa nova. Faça isto quando o "
+                       f"arquivo NÃO foi (nem vai ser) subido ao SicoobNet."
+                  ).pack(anchor="w", pady=px((4, 10)))
+
+        v_motivo = tk.StringVar()
+        widgets.Campo(moldura, "Motivo (fica no registro)",
+                      lambda p: ttk.Entry(p, textvariable=v_motivo)
+                      ).pack(fill="x")
+
+        escolhido = []
+
+        def confirmar():
+            texto = v_motivo.get().strip()
+            pode, recusa = painel_dia.pode_descartar(linha, texto)
+            if not pode:
+                messagebox.showwarning("Descartar remessa", recusa)
+                return
+            escolhido.append(texto)
+            dlg.destroy()
+
+        rodape = ttk.Frame(moldura)
+        rodape.pack(fill="x", pady=px((14, 0)))
+        widgets.Botao(rodape, "Cancelar", papel="neutro", command=dlg.destroy
+                      ).pack(side="right", padx=px((8, 0)))
+        widgets.Botao(rodape, "Descartar", papel="perigo", command=confirmar
+                      ).pack(side="right")
+
+        dlg.transient(pai)
+        dlg.grab_set()
+        pai.wait_window(dlg)
+        return escolhido[0] if escolhido else ""
 
     # ----------------------------------------------------- baixa no ERP
     def _janela_baixa(self, sep):

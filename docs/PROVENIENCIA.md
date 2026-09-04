@@ -219,6 +219,35 @@ sem juiz. É por isso que a ordem importa mais, e não menos.
 
 ---
 
+## `2026-09-04_remessa-gerado-em-idx.sql` ↔ `20260904181500_remessa_gerado_em_idx.sql`
+
+O terceiro par que nasce junto, no mesmo dia e pelo mesmo caminho: o runbook
+foi escrito a partir da migration, no PR do painel do dia. **2** comandos de
+schema nos dois lados, idênticos depois de normalizados — o índice
+`remessa_gerado_em_idx (gerado_em desc)` e o `comment on index` dele.
+
+O runbook acrescenta **1** comando: o `select` de conferência do fim, que lista
+o índice por nome em `pg_indexes`. Ele não imprime remessa, valor nem convênio
+— só o nome e a definição do índice.
+
+**A ordem, aqui, é a exceção deste dia: ela não importa.** Os três pares acima
+tinham de rodar antes do merge, cada um pelo seu motivo (coluna que o código
+novo cita, trava que sem o índice não existe). Este não trava nada e não cria
+coluna nenhuma: é um índice comum, e o painel do dia funciona sem ele — só faz
+o Postgres varrer a tabela `remessa` inteira em vez de saltar para a faixa do
+dia. Mergeado primeiro, a tela abre e responde certo, mais devagar. Está
+escrito assim no cabeçalho do runbook para ninguém adiar o merge esperando o
+banco, nem adiar o banco achando que já não é preciso.
+
+**O que ele acrescenta e por quê**: toda consulta de remessa que existia antes
+começa pelo CONVÊNIO, e `remessa_convenio_idx (convenio, nsa desc)` (de
+17/08/2026) atende as duas — `remessas(convenio=)` e a busca do `_ja_enviado`.
+O painel do dia pergunta pelo outro eixo, `gerado_em` dentro do dia LOCAL e sem
+convênio nenhum, e um índice cuja primeira coluna é o convênio não alcança essa
+pergunta.
+
+---
+
 ## Conferir o schema de produção contra as migrations
 
 O acima compara arquivo com arquivo. Nada disso prova o que está **no banco**.

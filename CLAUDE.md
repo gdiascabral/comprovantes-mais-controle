@@ -1010,6 +1010,53 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   recomeça em cada uma, e sem a agência-conta no nome uma holding com várias
   subcontas gerava o mesmo nome em pastas diferentes — a pasta separa, mas o
   arrasto para o SicoobNet mostra só o nome.
+  **`MOTIVO_CNPJ` diz os DOIS casos desde 04/09/2026** ("o CNPJ da empresa está
+  vazio ou não fecha no dígito verificador"), porque a checagem é uma só:
+  `documento_valido` recusa o campo em branco pelo mesmo caminho que recusa o
+  DV torto, e o cadastro sem CNPJ é o caso comum (conta nova, empresa
+  recém-criada no painel). Mandar conferir o dígito verificador de um campo
+  vazio é perder a tarde no lugar errado.
+- `pagamentos_dia/painel_dia.py` — **a visão do DIA e as duas transições que o
+  app não expunha**, puro e sem tela (04/09/2026). Com uma conta, a pergunta do
+  dia é "quem foi pago", e quem responde é a janela do retorno, pagamento a
+  pagamento. Com dezoito, ela vira **"qual conta ainda não fechou"** — e a
+  resposta não está em coluna nenhuma: sai do cruzamento de `remessa.estado`
+  com o `remessa_item.retorno_estado` que o retorno grava. `linhas_do_dia`
+  recebe a forma que `Registro.remessas_do_dia` devolve e conta
+  pago/aguardando/rejeitado/sem resposta por item, somando o `valor` em
+  Decimal; `situacao` devolve `(tag, frase)` para as seis situações — gerada,
+  enviada sem retorno, aguardando assinatura, rejeitada, paga e descartada.
+  Duas ordens que não são a da leitura: **descartada vem antes de tudo** (a
+  remessa saiu de conta, e o que os itens dela dizem já não pesa) e
+  **rejeitado ganha de pendente**, como em `_situacao_do_retorno` — um item
+  recusado é o que faz alguém abrir o detalhe hoje.
+  **Por que ele precisou existir**: `Registro.marcar` está no código desde
+  17/08/2026 e nenhuma tela o chamava. Toda remessa ficava `gerado` até alguém
+  ler o retorno, então a que NUNCA subiu ao SicoobNet era indistinguível da que
+  subiu — e, pior, o pagamento de uma remessa que jamais foi ao banco ficava
+  bloqueado **para sempre**: `remessa_dia._ja_enviado` só enxerga item de
+  remessa VIVA, e só `descartado` sai de `ESTADOS_VIVOS`. Arquivo gerado por
+  engano, recusado na subida ou substituído por outro continuava segurando os
+  seus pagamentos, e a única saída era mexer no banco pelo painel do Supabase.
+  **As duas regras de transição, que são de dinheiro e por isso moram aqui e
+  não no frame** (o que só se testa abrindo janela não se testa):
+  `pode_marcar_enviada` só de `gerado` — de qualquer outro estado a marca não
+  acrescenta nada e pode TIRAR, porque sobre uma remessa `processado` ela
+  apagaria o desfecho que o retorno gravou e a conta voltaria à lista do que
+  falta acompanhar com o dinheiro já pago; e `pode_descartar`, que recusa em
+  dois casos. **Nunca com item PAGO**: descartar devolve TODOS os pagamentos da
+  remessa à fila da geração seguinte, com NSA novo e nenhum alarme, e numa
+  remessa em que o banco já pagou alguém isso é autorizar o mesmo dinheiro a
+  sair duas vezes — um item pago no meio de vinte rejeitados basta para a
+  resposta ser não, e o certo ali é reenviar o que faltou numa remessa nova.
+  **Nunca sem motivo por escrito** (≥ 5 caracteres), pela regra do
+  `ajustar_nsa`: o histórico é append-only, e uma remessa `descartado` sem uma
+  linha dizendo por quê é um furo na sequência de NSA que ninguém explica meses
+  depois. `motivo=None` pergunta só pelas travas de estado — é o que o BOTÃO
+  usa para saber se habilita; com o texto, o motivo entra na conferência.
+  `observacao_do_descarte` monta a frase que vai para a coluna `observacao`,
+  uma só para a nuvem e para o espelho local: escrita duas vezes, comparar os
+  dois registros passaria a exigir traduzir um texto no outro.
 - `pagamentos_dia/pagamentos_frame.py` — aba Pagamentos do Dia, em 3 passos
   (Buscar / Gerar planilha / Gerar remessa). **O passo 3 não passa pelo
   `anx.submeter`**: não há navegador nem ERP nele — a remessa sai do
@@ -1184,6 +1231,40 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   `resultado="atencao"` quando nada saiu, e a aritmética é a mesma função pura
   nos dois (`remessa_dia.contas_sem_remessa`): escrita duas vezes, seria o
   mesmo cartão dizendo duas coisas.
+  **O "Painel do dia" é JANELA e é um botão da BARRA DE AÇÕES, e as duas
+  coisas são a mesma régua** (`_janela_painel_do_dia`, 04/09/2026). Ele entra
+  na linha de "Abrir planilha" / "Abrir local da remessa" / "Ler retorno",
+  porque tem o papel deles — não é passo do fluxo, é uma janela que se abre
+  para olhar o que já aconteceu, e o arquivo chega ao SicoobNet horas depois.
+  Uma FAIXA nova ali sairia do Registro, que é o último a ser empacotado e
+  fica com a sobra que `tests/test_registro_visivel.py` cobra em quatro linhas
+  legíveis (foi o que o PR #55 pagou com a tabela de prontidão); um botão a
+  mais na mesma linha custa largura, e largura sobra. Dez colunas —
+  `EMPRESA · AG-CONTA · ARQUIVO Nº · GERADA ÀS · SITUAÇÃO · PAGOS · AGUARDA ·
+  REJEIT. · SEM RESP. · TOTAL` —, com a SITUAÇÃO antes dos contadores porque
+  ela é a resposta e os quatro números são a conferência. Um `CampoData` com
+  hoje e "Recarregar" no alto; toda ação escreve no Registro da aba e recarrega
+  a lista, porque decidir a próxima pelo que já estava na tela é decidir pelo
+  que era verdade quando a janela abriu.
+  **O rodapé habilita o que a linha aceita, com uma exceção deliberada**:
+  "Marcar como enviada" só acende em `gerado` (`painel_dia.pode_marcar_enviada`)
+  e "Abrir a pasta" só com `arquivo` gravado, mas **"Descartar…" continua
+  clicável mesmo quando a resposta é não** — a recusa de `pode_descartar` diz
+  POR QUE (o item que o banco já pagou), e botão apagado não ensina isso a quem
+  precisa justamente entender por que aquela remessa não sai da frente. A trava
+  de estado é conferida ANTES de pedir o motivo: escrever a justificativa e só
+  então ouvir "não dá" é o pior desfecho possível desta tela. E o registro
+  central confere as duas regras DE NOVO ao gravar — `marcar_enviada` e
+  `descartar` releem a remessa —, o que não é redundância boba: a regra do item
+  pago precisa dos ITENS, e outra máquina pode ter guardado um retorno desde
+  que a janela abriu.
+  **Sem nuvem a janela ABRE**, ao contrário do `gerar_remessa`, que é a única
+  operação do app que para: aqui a tela é de acompanhamento, e recusar-se a
+  abrir esconderia até o recado que explica por quê. Ela abre com a linha de
+  aviso preenchida e sem linhas — a mesma linha que carrega a data inválida, o
+  erro da consulta e o "nenhuma remessa neste dia", porque as quatro respondem
+  à mesma pergunta (por que a tabela está vazia?) e três labels dariam três
+  lugares para procurar a resposta.
 - `cnab240/` — gerador, validador e leitor de retorno do arquivo CNAB 240 do
   Sicoob (Guia v3.3), **stdlib pura** e sem tela nenhuma: é biblioteca, não aba.
   Quem a usa é o passo 3 da aba Pagamentos do Dia (`pagamentos_dia/remessa_dia.py`).
@@ -1883,12 +1964,42 @@ banco não tem `check`, de propósito, então a marcação era aceita em silênc
 Hoje um item rejeitado marca a remessa como **"rejeitado"**, que continua viva —
 rejeição de UM não devolve aos outros o direito de sair de novo. A contrapartida
 é o lado seguro: o item rejeitado também fica bloqueado (a pergunta casa por
-código de barras/referência do item), e reenviá-lo hoje exige `descartar` a
-remessa, o que ainda não tem tela; o reenvio por item, lendo o `retorno_codigo`
-de cada um, é outro PR. **`ESTADOS_VIVOS` é UMA tupla**, importada de
+código de barras/referência do item), e reenviá-lo exige `descartar` a remessa;
+o reenvio por item, lendo o `retorno_codigo` de cada um, é outro PR.
+**`ESTADOS_VIVOS` é UMA tupla**, importada de
 `cnab240.historico` no topo do `registro.py` — enquanto foram duas listas
 escritas à mão elas divergiram em silêncio, com "aceito" só de um lado e
 "rejeitado" só do outro.
+
+**Marcar e descartar ganharam tela em 04/09/2026, e até então NINGUÉM as
+chamava.** `marcar` existia desde 17/08 sem um único chamador no app: toda
+remessa ficava `gerado` até alguém ler o retorno, o que fazia a remessa que
+NUNCA subiu ao SicoobNet ser indistinguível da que subiu — e deixava o
+pagamento de uma remessa jamais enviada bloqueado para sempre, porque só
+`descartado` sai de `ESTADOS_VIVOS`. Quem as expõe é o "Painel do dia"
+(`pagamentos_dia/pagamentos_frame._janela_painel_do_dia`), e as regras são
+puras, em `pagamentos_dia/painel_dia`. O `Registro` ganhou três métodos:
+
+- **`remessas_do_dia(quando)`** — UMA consulta por FAIXA DE INSTANTE, sem
+  convênio e sem estado, com os itens dentro. O dia é o LOCAL: os limites saem
+  de `datetime.combine(dia, 00:00).astimezone()` e viajam em ISO com offset,
+  com o `+` virando `%2B` (um `+` cru numa query string é decodificado como
+  espaço do outro lado). Filtrar por texto sobre o UTC que o banco guarda
+  perderia toda remessa gerada depois das 21h e traria as da noite anterior. É
+  a pergunta que o índice `remessa_convenio_idx` **não** responde — daí a
+  migration `20260904181500_remessa_gerado_em_idx.sql`, que é só índice: o
+  código funciona sem ela, só mais lento, e é o único par runbook/migration
+  deste projeto em que a ordem não trava;
+- **`marcar_enviada` e `descartar`** — cascas sobre `marcar` que **releem a
+  remessa antes de decidir**, porque a regra do "tem item pago" precisa dos
+  ITENS e a tela pode estar aberta desde antes de outra máquina guardar um
+  retorno. `marcar_enviada` só de `gerado`; `descartar` recusa com item `ok`
+  (devolveria à fila um pagamento que já saiu) e recusa sem motivo escrito,
+  que vai para a `observacao` pela mesma frase nos dois lados
+  (`painel_dia.observacao_do_descarte`).
+
+O `Espelhado` repassa as três, e o espelho local continua sem voto: recebe o
+`marcar` de sempre e, falhando, só avisa.
 
 **O retorno do banco são QUATRO colunas do item, e uma delas nunca se apaga**
 (migration `20260904121220_retorno_estado_e_historico.sql`). `retorno_codigo` e

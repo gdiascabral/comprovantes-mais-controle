@@ -57,6 +57,15 @@ import util
 
 log = util.log(__name__)
 
+#: As colunas que a visão do dia (`pagamentos_dia.painel_dia`) precisa, e só
+#: elas. `remessas()` pede `*,remessa_item(*)`, que traz `sha256`,
+#: `documento`, `identificador` e `referencia` de cada pagamento — dado da
+#: empresa que esta tela não mostra e que, com 18 contas, é a diferença entre
+#: uma resposta pequena e uma resposta grande a cada "Recarregar".
+COLUNAS_DO_PAINEL = ("convenio,nsa,empresa,agencia,conta,estado,observacao,"
+                     "gerado_em,arquivo,"
+                     "remessa_item(valor,retorno_estado,retorno_em)")
+
 #: Quantos "seus números" cabem num filtro `in.(…)` por vez. O limite que
 #: aperta não é o do banco, é o TAMANHO DA URL: um retorno de 18 contas traz
 #: centenas de pagamentos, cada "seu número" tem 20 posições, e uma URL de
@@ -73,6 +82,31 @@ LOTE_DE_SEUS_NUMEROS = 100
 #: diferente do que se quis escrever.
 _LETRAS_DO_SEU_NUMERO = frozenset(
     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-")
+
+
+def _limites_do_dia(quando: _dt.date) -> tuple[str, str]:
+    """O começo e o fim do dia LOCAL, em ISO com offset, prontos para a URL.
+
+    `gerado_em` é `timestamptz`: o banco guarda o instante e o devolve em UTC.
+    Filtrar por `gerado_em=like.2026-09-04*` compararia texto de UTC com uma
+    data que a pessoa leu no relógio dela — e no fuso do Brasil isso perde
+    toda remessa gerada depois das 21h (que em UTC já é o dia seguinte) e
+    inclui as da noite anterior. Por isso os limites saem de
+    `datetime.combine(dia, 00:00).astimezone()`, que carimba o offset local
+    de verdade, inclusive o do horário de verão se ele voltar.
+
+    O `+` do offset vira `%2B`. Não é zelo com a biblioteca de HTTP: um `+`
+    cru numa query string é decodificado como ESPAÇO do outro lado, e o filtro
+    chegaria com a hora do offset separada por um espaço — recusa do
+    PostgREST, ou pior, comparação com outro instante. Aqui o offset é
+    negativo e o caso não aparece; ele aparece no dia em que alguém rodar isto
+    de outro lugar do mundo.
+    """
+    inicio = _dt.datetime.combine(quando, _dt.time()).astimezone()
+    fim = _dt.datetime.combine(quando + _dt.timedelta(days=1),
+                               _dt.time()).astimezone()
+    return (inicio.isoformat().replace("+", "%2B"),
+            fim.isoformat().replace("+", "%2B"))
 
 
 def _seus_numeros_limpos(seus) -> list[str]:
@@ -292,6 +326,95 @@ class Registro:
         filtro = f"convenio=eq.{convenio}" if convenio else ""
         return rest.ler("remessa", self._token,
                         colunas="*,remessa_item(*)", filtro=filtro)
+
+    def remessas_do_dia(self, quando: _dt.date) -> list[dict]:
+        """O que saiu HOJE, de TODAS as contas — numa consulta só.
+
+        É a pergunta que `remessas(convenio=)` não responde: ela é por conta,
+        e a visão do dia é o contrário disso — dezoito contas de uma vez, para
+        se saber qual delas ainda não fechou. Fazê-la em dezoito idas seria
+        dezoito viagens para montar uma tela que se recarrega a cada ação.
+
+        Os itens vêm juntos (`remessa_item(…)`) porque é deles que saem as
+        contagens de pago/aguardando/rejeitado — o `retorno_estado` que o
+        retorno grava. Sem eles a tabela teria estado e mais nada, e "enviada"
+        não distingue a conta que já foi paga da que está esperando
+        assinatura.
+
+        **Sem filtro de estado**, e a descartada aparece: uma remessa que
+        alguém tirou da frente hoje é parte do que aconteceu hoje, e esconder
+        as descartadas faria o painel dizer que um NSA sumiu.
+
+        O `order` viaja no filtro, como já fazem `_procurar` e
+        `maior_ordem_do_dia`. Ordenado pelo banco e não aqui: a ordem é a de
+        quem gerou primeiro, e é ela que faz a lista corresponder à sequência
+        do dia mesmo quando duas máquinas geraram ao mesmo tempo.
+        """
+        inicio, fim = _limites_do_dia(quando)
+        return rest.ler("remessa", self._token, colunas=COLUNAS_DO_PAINEL,
+                        filtro=(f"gerado_em=gte.{inicio}"
+                                f"&gerado_em=lt.{fim}"
+                                f"&order=gerado_em.asc"))
+
+    def _linha_do_painel(self, convenio: str, nsa: int):
+        """A remessa (uma só), já contada, para as regras de transição.
+
+        **Relida do banco, e não recebida da tela.** As duas regras de
+        `painel_dia` dependem dos ITENS — "tem algum pago?" —, e a tela pode
+        estar aberta desde antes de alguém guardar o retorno noutra máquina.
+        Decidir pelo que está na tabela é decidir pelo que era verdade quando
+        a janela abriu.
+        """
+        from pagamentos_dia import painel_dia   # importado aqui: o `nuvem` é a
+                                                # camada de baixo e não carrega
+                                                # aba nenhuma para quem só
+                                                # grava remessa
+        linhas = rest.ler("remessa", self._token, colunas=COLUNAS_DO_PAINEL,
+                          filtro=f"convenio=eq.{convenio}&nsa=eq.{int(nsa)}")
+        if not linhas:
+            raise rest.RecusadoPeloBanco(
+                f"a remessa {nsa} do convênio {convenio} não está registrada")
+        return painel_dia.linhas_do_dia(linhas)[0]
+
+    def marcar_enviada(self, convenio: str, nsa: int) -> None:
+        """"Subi este arquivo no SicoobNet" — o passo que o app não vê.
+
+        Casca sobre `marcar`, e a casca é a regra: `painel_dia`
+        `pode_marcar_enviada` só deixa de `gerado`. De qualquer outro estado a
+        marca não acrescenta nada e pode TIRAR — sobre uma remessa já
+        `processado`, ela apagaria o desfecho que o retorno gravou.
+        """
+        from pagamentos_dia import painel_dia
+
+        linha = self._linha_do_painel(convenio, nsa)
+        if not painel_dia.pode_marcar_enviada(linha):
+            raise rest.RecusadoPeloBanco(
+                f"a remessa {nsa} está como '{linha.estado}', e só uma remessa "
+                f"'gerado' pode ser marcada como enviada")
+        self.marcar(convenio, nsa, "enviado")
+
+    def descartar(self, convenio: str, nsa: int, motivo: str) -> None:
+        """Tira a remessa da pergunta "isto já foi mandado?" — com motivo.
+
+        É a única transição que DEVOLVE dinheiro à fila: `descartado` é o
+        único estado fora de `ESTADOS_VIVOS`, e `remessa_dia._ja_enviado` só
+        enxerga item de remessa viva. Por isso as duas travas de
+        `painel_dia.pode_descartar` são conferidas aqui, e não só no botão:
+        um item PAGO recusa (seria autorizar o mesmo dinheiro a sair duas
+        vezes) e motivo em branco recusa (o furo na sequência de NSA tem de
+        ter explicação escrita, como no `ajustar_nsa`).
+
+        A remessa é RELIDA antes de decidir — a regra do item pago precisa dos
+        itens, e eles podem ter mudado desde que a tela abriu.
+        """
+        from pagamentos_dia import painel_dia
+
+        linha = self._linha_do_painel(convenio, nsa)
+        pode, recusa = painel_dia.pode_descartar(linha, motivo)
+        if not pode:
+            raise rest.RecusadoPeloBanco(recusa)
+        self.marcar(convenio, nsa, "descartado",
+                    observacao=painel_dia.observacao_do_descarte(motivo))
 
     def remessa_dos_seus_numeros(self, seus: list[str]) -> dict | None:
         """A remessa que gerou estes "seus números" — o segundo caminho do retorno.
@@ -515,6 +638,39 @@ class Espelhado:
 
     def remessas(self, *, convenio: str | None = None):
         return self._nuvem.remessas(convenio=convenio)
+
+    def remessas_do_dia(self, quando: _dt.date):
+        """Da NUVEM, e aqui não há nem espelho a consultar: o painel do dia é
+        sobre TODAS as máquinas, e o `remessas.json` só conhece as remessas
+        que saíram desta."""
+        return self._nuvem.remessas_do_dia(quando)
+
+    def marcar_enviada(self, convenio: str, nsa: int):
+        """A nuvem decide, o espelho acompanha — como em `marcar`.
+
+        A regra é conferida lá (`Registro.marcar_enviada` relê a remessa), e
+        aqui o local recebe o mesmo `marcar` que já recebe hoje: ele não tem
+        voto e a falha dele não desfaz o que a nuvem gravou."""
+        self._nuvem.marcar_enviada(convenio, nsa)
+        try:
+            self._local.marcar(convenio, nsa, "enviado")
+        except Exception as e:
+            self._avisar(f"marcado na nuvem, mas não no espelho local: {e}")
+
+    def descartar(self, convenio: str, nsa: int, motivo: str):
+        """Idem — e a MESMA observação nos dois lados.
+
+        A frase sai de `painel_dia.observacao_do_descarte`, e não de duas
+        redações: comparar o espelho com a nuvem (que é para isso que ele
+        existe) não pode exigir traduzir um texto no outro."""
+        from pagamentos_dia import painel_dia
+
+        self._nuvem.descartar(convenio, nsa, motivo)
+        try:
+            self._local.marcar(convenio, nsa, "descartado",
+                               observacao=painel_dia.observacao_do_descarte(motivo))
+        except Exception as e:
+            self._avisar(f"descartada na nuvem, mas não no espelho local: {e}")
 
     def remessa_dos_seus_numeros(self, seus: list[str]):
         """Da NUVEM, como o NSA e a ordem do dia.

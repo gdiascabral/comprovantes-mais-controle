@@ -163,8 +163,9 @@ class Resumo:
         O outro lado da moeda, e é o lado seguro: com a remessa viva, o item
         REJEITADO também fica bloqueado, porque `_ja_enviado` casa por código
         de barras/referência do ITEM. Bloqueia demais, nunca de menos.
-        Reenviar hoje exige `descartar` a remessa (sem tela ainda); o reenvio
-        por item, lendo o `retorno_codigo` de cada um, é outro PR."""
+        Reenviar exige `descartar` a remessa, que desde 04/09/2026 tem tela (o
+        "Painel do dia"); o reenvio por item, lendo o `retorno_codigo` de cada
+        um, é outro PR."""
         if not self.linhas:
             return "enviado"
         if self.quantos("rejeitado"):

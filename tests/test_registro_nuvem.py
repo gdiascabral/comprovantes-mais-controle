@@ -682,3 +682,189 @@ def test_a_ordem_do_dia_tambem_vem_sempre_da_nuvem():
 
     esp = registro.Espelhado(Nuvem(), LocalAtrasado())
     assert esp.maior_ordem_do_dia(DIA) == 12
+
+
+# ------------------------------------------------------ o painel do dia
+
+def _linha_remessa(estado="gerado", itens=(), nsa=7):
+    return {"convenio": "1814", "nsa": nsa, "empresa": "EXEMPLO LTDA",
+            "agencia": "3067", "conta": "12345-6", "estado": estado,
+            "observacao": "", "gerado_em": "2026-09-04T13:05:00-03:00",
+            "arquivo": "C:/saida/REM.REM",
+            "remessa_item": [{"valor": "10.00", "retorno_estado": e,
+                              "retorno_em": None} for e in itens]}
+
+
+def test_o_dia_e_uma_consulta_por_faixa_de_instante(falso):
+    """UMA ida, TODAS as contas — e o dia é o LOCAL, não o de Greenwich.
+
+    Filtrar por texto (`gerado_em=like.2026-09-04*`) compararia o UTC que o
+    banco guarda com a data que a pessoa leu no relógio dela: no fuso do
+    Brasil isso perde toda remessa gerada depois das 21h e traz as da noite
+    anterior."""
+    registro.Registro("tok").remessas_do_dia(DIA)
+
+    filtro, = _filtros_lidos(falso, "remessa")
+    inicio = _dt.datetime.combine(DIA, _dt.time()).astimezone()
+    fim = _dt.datetime.combine(DIA + _dt.timedelta(days=1),
+                               _dt.time()).astimezone()
+    assert f"gerado_em=gte.{inicio.isoformat()}".replace("+", "%2B") in filtro
+    assert f"gerado_em=lt.{fim.isoformat()}".replace("+", "%2B") in filtro
+    assert "order=gerado_em.asc" in filtro
+    # Sem convênio e sem estado: a pergunta é do DIA, de todas as contas, e a
+    # descartada de hoje faz parte do que aconteceu hoje.
+    assert "convenio" not in filtro and "estado" not in filtro
+
+
+def test_o_offset_do_dia_nunca_viaja_com_mais_cru():
+    """Um `+` cru numa query string é decodificado como ESPAÇO do outro lado.
+
+    Aqui o fuso é negativo e o caso não aparece; ele aparece no dia em que
+    alguém rodar isto de outro lugar do mundo — e falharia como recusa do
+    PostgREST, ou, pior, como comparação com outro instante."""
+    inicio, fim = registro._limites_do_dia(DIA)
+    assert "+" not in inicio and "+" not in fim
+
+
+def test_o_dia_pede_so_as_colunas_do_painel(falso):
+    """`remessas()` pede `*,remessa_item(*)`, que traz sha256, documento,
+    identificador e referência de cada pagamento — dado que esta tela não
+    mostra e que, com 18 contas, é a diferença entre uma resposta pequena e
+    uma grande a cada "Recarregar"."""
+    registro.Registro("tok").remessas_do_dia(DIA)
+    colunas = registro.COLUNAS_DO_PAINEL
+    assert "remessa_item(valor,retorno_estado,retorno_em)" in colunas
+    for fora in ("sha256", "documento", "identificador", "referencia", "*"):
+        assert fora not in colunas
+
+
+def test_marcar_enviada_so_de_gerado(falso):
+    falso.respostas["remessa"] = [_linha_remessa("gerado", ["", ""])]
+    registro.Registro("tok").marcar_enviada("1814", 7)
+
+    alterada, = [c for c in falso.chamadas if c[0] == "alterar"]
+    assert alterada[2] == "convenio=eq.1814&nsa=eq.7"
+    assert alterada[3] == {"estado": "enviado"}
+
+
+@pytest.mark.parametrize("estado", ["enviado", "processado", "rejeitado",
+                                    "descartado"])
+def test_marcar_enviada_recusa_fora_de_gerado(falso, estado):
+    """Sobre uma remessa `processado`, a marca apagaria o desfecho que o
+    retorno gravou — e a conta voltaria para a lista do que falta acompanhar
+    com o dinheiro já pago."""
+    falso.respostas["remessa"] = [_linha_remessa(estado, ["ok"])]
+    with pytest.raises(rest.RecusadoPeloBanco):
+        registro.Registro("tok").marcar_enviada("1814", 7)
+    assert not [c for c in falso.chamadas if c[0] == "alterar"]
+
+
+def test_a_remessa_e_relida_antes_de_decidir(falso):
+    """A regra do item pago precisa dos ITENS, e a tela pode estar aberta
+    desde antes de alguém guardar o retorno noutra máquina."""
+    falso.respostas["remessa"] = [_linha_remessa("gerado", [""])]
+    registro.Registro("tok").descartar("1814", 7, "gerei sem querer")
+
+    lido, = _filtros_lidos(falso, "remessa")
+    assert lido == "convenio=eq.1814&nsa=eq.7"
+
+
+def test_descartar_recusa_com_item_pago(falso):
+    """Descartar tira a remessa de ESTADOS_VIVOS e devolve os pagamentos dela
+    à fila. Com um item PAGO, isso é o mesmo dinheiro saindo duas vezes."""
+    falso.respostas["remessa"] = [_linha_remessa("rejeitado",
+                                                 ["ok", "rejeitado"])]
+    with pytest.raises(rest.RecusadoPeloBanco) as e:
+        registro.Registro("tok").descartar("1814", 7, "reenviar o que faltou")
+    assert "PAGOU" in str(e.value)
+    assert not [c for c in falso.chamadas if c[0] == "alterar"]
+
+
+def test_descartar_recusa_sem_motivo(falso):
+    """A regra do `ajustar_nsa`: é o motivo que explica o furo na sequência
+    de arquivos para quem olhar depois."""
+    falso.respostas["remessa"] = [_linha_remessa("gerado", [""])]
+    for motivo in ("", "   ", "ops"):
+        with pytest.raises(rest.RecusadoPeloBanco):
+            registro.Registro("tok").descartar("1814", 7, motivo)
+    assert not [c for c in falso.chamadas if c[0] == "alterar"]
+
+
+def test_descartar_grava_o_estado_e_a_observacao(falso):
+    falso.respostas["remessa"] = [_linha_remessa("gerado", ["", "pendente"])]
+    registro.Registro("tok").descartar("1814", 7, "subi o arquivo errado")
+
+    alterada, = [c for c in falso.chamadas if c[0] == "alterar"]
+    assert alterada[3] == {"estado": "descartado",
+                           "observacao": "descartada: subi o arquivo errado"}
+
+
+def test_transicao_de_remessa_que_nao_existe_e_recusada(falso):
+    falso.respostas["remessa"] = []
+    for chamar in (lambda r: r.marcar_enviada("1814", 99),
+                   lambda r: r.descartar("1814", 99, "não existe mesmo")):
+        with pytest.raises(rest.RecusadoPeloBanco):
+            chamar(registro.Registro("tok"))
+
+
+def test_o_painel_do_dia_vem_sempre_da_nuvem():
+    """O `remessas.json` só conhece as remessas que saíram DESTE computador,
+    e a visão do dia é sobre todas as máquinas."""
+    class Nuvem:
+        def remessas_do_dia(self, _quando):
+            return [{"nsa": 7}]
+
+    class LocalSemPainel:
+        def __getattr__(self, nome):
+            raise AssertionError(
+                f"o espelho local não responde ao painel ({nome})")
+
+    esp = registro.Espelhado(Nuvem(), LocalSemPainel())
+    assert esp.remessas_do_dia(DIA) == [{"nsa": 7}]
+
+
+def test_o_espelhado_repassa_as_duas_transicoes():
+    """A nuvem decide (é ela que relê e confere a regra); o local recebe o
+    mesmo `marcar` que já recebe hoje — e a MESMA observação, para comparar
+    os dois registros não exigir traduzir um texto no outro."""
+    feito = []
+
+    class Nuvem:
+        def marcar_enviada(self, convenio, nsa):
+            feito.append(("nuvem-enviada", convenio, nsa))
+
+        def descartar(self, convenio, nsa, motivo):
+            feito.append(("nuvem-descarte", convenio, nsa, motivo))
+
+    class Local:
+        def marcar(self, convenio, nsa, estado, *, observacao=""):
+            feito.append(("local", convenio, nsa, estado, observacao))
+
+    esp = registro.Espelhado(Nuvem(), Local())
+    esp.marcar_enviada("1814", 7)
+    esp.descartar("1814", 8, "arquivo trocado")
+
+    assert feito == [
+        ("nuvem-enviada", "1814", 7),
+        ("local", "1814", 7, "enviado", ""),
+        ("nuvem-descarte", "1814", 8, "arquivo trocado"),
+        ("local", "1814", 8, "descartado", "descartada: arquivo trocado")]
+
+
+def test_espelho_que_falha_nas_transicoes_nao_desfaz_a_nuvem():
+    """O mesmo princípio do `registrar`: o local não tem voto, e uma falha
+    dele não pode desfazer o que a nuvem já gravou."""
+    recados = []
+
+    class Nuvem:
+        def marcar_enviada(self, *_a):
+            pass
+
+        def descartar(self, *_a):
+            pass
+
+    esp = registro.Espelhado(Nuvem(), _LocalFalso(OSError("disco cheio")),
+                             recados.append)
+    esp.marcar_enviada("1814", 7)
+    esp.descartar("1814", 8, "arquivo trocado")
+    assert len(recados) == 2 and "espelho local" in recados[0]
