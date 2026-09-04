@@ -780,9 +780,20 @@ def montar_arquivo(pagador: Pagador, candidatos, nsa: int,
 
 
 def nome_do_arquivo(pagador: Pagador, nsa: int) -> str:
-    """`REM_ACME_000031.REM` — legível na pasta e único por remessa."""
+    """`REM_ACME_4321-12345_000031.REM` — legível na pasta e único por remessa.
+
+    O convênio do Sicoob é POR CONTA CORRENTE, e por isso o NSA também é —
+    cada conta recomeça a contar do seu. A pasta já separa uma conta da
+    outra (`pasta_do_pagador`), mas o arrasto para a caixa de upload do
+    SicoobNet mostra só o NOME do arquivo: sem a agência-conta ali, uma
+    holding com conta principal + subcontas gera o MESMO nome em pastas
+    diferentes no mesmo dia, e nada no arrasto denuncia isso — o erro só
+    aparece depois de enviado, na conta errada.
+    """
     empresa = re.sub(r"[^A-Za-z0-9]+", "-", pagador.empresa).strip("-").upper()
-    return f"REM_{empresa}_{nsa:06d}.REM"
+    agencia = re.sub(r"\D", "", pagador.agencia or "")
+    conta = re.sub(r"\D", "", pagador.conta or "")
+    return f"REM_{empresa}_{agencia}-{conta}_{nsa:06d}.REM"
 
 
 def _nome_de_pasta(texto: str, se_vazio: str) -> str:
