@@ -1558,9 +1558,28 @@ class PagamentosDiaFrame(ttk.Frame):
                   "gerar o mesmo — e repetir NSA pode virar pagamento em "
                   "dobro.")
             return
-        preparado = remessa_dia.preparar(self.resultado.contas,
-                                         self.participantes,
-                                         historico=historico)
+        try:
+            preparado = remessa_dia.preparar(self.resultado.contas,
+                                             self.participantes,
+                                             historico=historico)
+        except remessa_dia.RegistroMudo as e:
+            # Mesmo motivo do bloco acima, um passo adiante: a ordem do dia do
+            # "seu número" também precisa vir de um lugar só. Ela não derrubava
+            # a remessa enquanto valia 0 e a numeração recomeçava; desde o
+            # índice único no banco, numerar sobre um "não sei" é o arquivo
+            # recusado no registro DEPOIS de a lista inteira ter sido
+            # conferida. Recusar aqui é o mesmo desfecho, mais cedo e barato.
+            messagebox.showerror(
+                "Remessa",
+                widgets.recado_de_erro(
+                    e, "Não consegui falar com o registro de remessas.")
+                + "\n\nA remessa NÃO foi gerada. O número sequencial (NSA) e a "
+                  "ordem do dia do “seu número” precisam vir de um lugar só, "
+                  "senão as duas máquinas podem gerar os mesmos — e repetir "
+                  "NSA pode virar pagamento em dobro, enquanto repetir “seu "
+                  "número” faz o retorno do banco casar com o pagamento "
+                  "errado.")
+            return
         pagadores, recusadas = {}, []
         for conta in preparado:
             pagador, motivo = remessa_dia.resolver_pagador(

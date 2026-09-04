@@ -327,37 +327,23 @@ class Candidato:
         return self.status.startswith("APTO")
 
 
-_SEQ = re.compile(r"^(\d{6})-(\d{4})")
+class RegistroMudo(RuntimeError):
+    """O registro central não respondeu qual foi a ordem do dia.
 
+    Até 04/09/2026 isso devolvia 0 e a remessa saía renumerada do 1. Era
+    inofensivo enquanto ninguém conferia: o pior desfecho era repetir um "seu
+    número", e o arquivo passava. Com o índice único
+    `remessa_item_seu_numero_unico_no_dia` no Postgres, o mesmo silêncio vira
+    arquivo RECUSADO no registro — depois de a pessoa ter conferido a lista
+    inteira e mandado gerar. Recusar antes custa um clique; recusar depois
+    custa a conferência toda, e ainda queima o NSA.
 
-def _itens_de(remessa) -> list:
-    """Os itens de uma remessa, venha ela da nuvem ou do espelho local.
-
-    São duas formas para a mesma coisa, e ler só uma delas é ler zero item na
-    outra — sem erro, sem aviso: a nuvem (`nuvem.registro.Registro.remessas`,
-    que o `Espelhado` repassa e é o que o app usa) devolve DICT com a chave
-    `remessa_item`; o `cnab240.Historico` devolve objeto `RemessaGerada` com
-    `.itens`. Enquanto isto lia só `.itens`, a conferência do "seu número"
-    devolvia 0 contra o registro de verdade.
-
-    O mesmo par de nomes já é aceito em `retorno_dia._itens_da_remessa`, pelo
-    mesmo motivo.
+    É coerente com a regra que já vale: **sem nuvem não se gera remessa.**
     """
-    if isinstance(remessa, dict):
-        return list(remessa.get("remessa_item") or remessa.get("itens") or [])
-    return list(getattr(remessa, "remessa_item", None)
-                or getattr(remessa, "itens", None) or [])
-
-
-def _seu_numero_de(item) -> str:
-    """O "seu número" do item, dict (nuvem) ou objeto (espelho local)."""
-    if isinstance(item, dict):
-        return str(item.get("seu_numero") or "")
-    return str(getattr(item, "seu_numero", "") or "")
 
 
 def sequencia_ja_usada(historico, quando: _dt.date) -> int:
-    """A maior ordem do DIA que já saiu em alguma remessa viva. 0 se nenhuma.
+    """A maior ordem do DIA que já saiu. 0 quando nenhuma, e nunca um palpite.
 
     O "seu número" nasce `260820-0007`, e a ordem recomeçava do 1 a cada
     geração. Isso bastava enquanto o dia tinha uma remessa só. Em 20/08/2026 o
@@ -369,30 +355,25 @@ def sequencia_ja_usada(historico, quando: _dt.date) -> int:
     errado — e foi por isso que o espelho local recusou a remessa nº 000003
     daquele dia, enquanto a nuvem a aceitou.
 
-    Nunca levanta: registro fora do ar devolve 0, e a numeração volta a ser a
-    de antes. Perder a remessa por causa da conferência seria pior.
+    Quem responde é `historico.maior_ordem_do_dia(quando)`, que a nuvem resolve
+    numa consulta filtrada e o espelho local resolve varrendo o próprio arquivo.
+    Antes, esta função é que varria: `historico.remessas()` trazia TODAS as
+    remessas com todos os itens dentro, a cada geração, e ainda assim era só uma
+    leitura — duas máquinas liam o mesmo maior e numeravam igual. Quem impede a
+    repetição hoje é o índice único do banco.
 
-    Lê as DUAS formas de remessa (`_itens_de`) porque a proteção só vale se
-    enxergar o registro de verdade: contra a nuvem, que devolve dicts, ela
-    devolvia 0 calada — e 0 aqui é a segunda remessa do dia recomeçando em
-    0001 e repetindo os "seus números" da primeira.
+    `historico=None` continua devolvendo 0 — é assim que os testes de regra
+    chamam `preparar`. Registro que não RESPONDE é outra coisa, e levanta
+    `RegistroMudo`.
     """
     if historico is None:
         return 0
-    prefixo = f"{quando:%y%m%d}-"
-    maior = 0
     try:
-        for remessa in historico.remessas():
-            for item in _itens_de(remessa):
-                seu = _seu_numero_de(item)
-                if not seu.startswith(prefixo):
-                    continue
-                achado = _SEQ.match(seu)
-                if achado:
-                    maior = max(maior, int(achado.group(2)))
-    except Exception:
-        return 0
-    return maior
+        return int(historico.maior_ordem_do_dia(quando) or 0)
+    except Exception as e:
+        raise RegistroMudo(
+            "não deu para perguntar ao registro de remessas qual foi a última "
+            f"ordem do dia {quando:%d/%m/%Y}: {e}") from e
 
 
 def _seu_numero(quando: _dt.date, sequencia: int, descricao: str) -> str:
