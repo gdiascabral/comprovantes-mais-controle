@@ -9,6 +9,7 @@ o que o Python decide: quem consome número e quem só olha, o que conta como
 
 import pytest
 
+from cnab240 import historico
 from nuvem import registro, rest
 
 
@@ -117,6 +118,38 @@ def test_remessa_descartada_nao_conta_como_enviada(falso):
     remessa descartada passaria por envio vivo e travaria o reenvio."""
     falso.respostas["remessa_item"] = [{"seu_numero": "x", "remessa": None}]
     assert registro.Registro("tok").envio_de("qualquer") is None
+
+
+def test_remessa_rejeitada_continua_contando_como_enviada(falso):
+    """Uma rejeição não devolve à remessa o direito de sair de novo.
+
+    O retorno do banco marca a remessa como "rejeitado" quando UM item foi
+    recusado. Se esse estado não fosse vivo, os outros pagamentos — inclusive
+    os que o banco PAGOU — voltariam marcáveis na geração seguinte, com NSA
+    novo e nenhum alarme: pagamento em dobro."""
+    falso.respostas["remessa_item"] = _item(estado="rejeitado")
+    achado = registro.Registro("tok").envio_de("34191790010104351004791020150008")
+    assert achado and achado[0].estado == "rejeitado"
+
+    # E a pergunta chega ao banco pedindo o estado: o dublê ignora o filtro,
+    # então sem isto o teste passaria com "rejeitado" fora da lista.
+    filtro = [c for c in falso.chamadas if c[0] == "ler"][0][2]
+    assert "rejeitado" in filtro
+
+
+def test_as_duas_listas_de_estado_sao_a_mesma(falso):
+    """Não "espelham": são o MESMO objeto, importado de um lugar só.
+
+    Enquanto foram duas listas escritas à mão elas divergiram em silêncio, e
+    a divergência era dinheiro: faltava "rejeitado" aqui, e sobrava "aceito",
+    que o `cnab240` nunca conheceu — logo o `Historico.marcar` local sempre o
+    recusaria, e nenhuma remessa jamais foi gravada com ele."""
+    assert registro.ESTADOS_VIVOS is historico.ESTADOS_VIVOS
+    assert set(registro.ESTADOS_VIVOS) <= set(historico.ESTADOS)
+    assert "aceito" not in registro.ESTADOS_VIVOS
+    assert "rejeitado" in registro.ESTADOS_VIVOS
+    # Descartar é o único jeito de devolver o direito de reenviar.
+    assert set(historico.ESTADOS) - set(registro.ESTADOS_VIVOS) == {"descartado"}
 
 
 def test_o_filtro_pede_so_estado_vivo(falso):

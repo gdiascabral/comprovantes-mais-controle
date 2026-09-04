@@ -1714,6 +1714,23 @@ recusa tem de impedir o `.tmp` de virar `.REM`), o espelho vem depois e, se
 falhar, só avisa. Recusar a remessa porque o BACKUP falhou seria trocar o
 problema pequeno pelo grande.
 
+**O estado que o RETORNO grava é sempre um estado VIVO**, e isso é regra de
+dinheiro. `remessa_dia._ja_enviado` só enxerga item de remessa viva, então um
+estado fora de `ESTADOS_VIVOS` tira a remessa INTEIRA da pergunta "isto já foi
+mandado?" — e os pagamentos que o banco pagou voltam marcáveis na geração
+seguinte, com NSA novo e nenhum alarme. Era o que fazia o `"com_erro"` que o
+`retorno_dia` gravava, e que não existia em lista nenhuma: a coluna `estado` do
+banco não tem `check`, de propósito, então a marcação era aceita em silêncio.
+Hoje um item rejeitado marca a remessa como **"rejeitado"**, que continua viva —
+rejeição de UM não devolve aos outros o direito de sair de novo. A contrapartida
+é o lado seguro: o item rejeitado também fica bloqueado (a pergunta casa por
+código de barras/referência do item), e reenviá-lo hoje exige `descartar` a
+remessa, o que ainda não tem tela; o reenvio por item, lendo o `retorno_codigo`
+de cada um, é outro PR. **`ESTADOS_VIVOS` é UMA tupla**, importada de
+`cnab240.historico` no topo do `registro.py` — enquanto foram duas listas
+escritas à mão elas divergiram em silêncio, com "aceito" só de um lado e
+"rejeitado" só do outro.
+
 **O que ainda NÃO está na nuvem** (e continua como estava): os aportes já
 lançados, que seguem em `self.criados`, memória do processo em
 `aportes/aportes_frame.py` — falha parcial seguida de reabrir o app ainda
