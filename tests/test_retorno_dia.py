@@ -63,11 +63,39 @@ class _Arquivo:
 
 
 class _Historico:
+    """O registro central, como o `nuvem.registro.Espelhado` responde.
+
+    Guarda as remessas na forma que o PostgREST devolve (dicionário com
+    `remessa_item` dentro) e sabe as DUAS perguntas que a leitura do retorno
+    faz: por convênio (o header) e pelos "seus números" (o segundo caminho).
+    A regra do segundo é a mesma do registro de verdade — só responde quando
+    todos os achados caem na MESMA remessa —, porque é ela que está sendo
+    comprada aqui.
+    """
+
     def __init__(self, remessas):
         self._r = remessas
+        #: O que foi perguntado pelo segundo caminho, na ordem. Vazio prova
+        #: que o caminho de sempre resolveu sozinho.
+        self.perguntas = []
 
     def remessas(self, *, convenio=None):
         return self._r
+
+    def remessa_dos_seus_numeros(self, seus):
+        self.perguntas.append(list(seus))
+        alvos = set(seus)
+        achadas = [r for r in self._r
+                   if any(str(i.get("seu_numero") or "") in alvos
+                          for i in r.get("remessa_item") or [])]
+        return achadas[0] if len(achadas) == 1 else None
+
+
+class _HistoricoAntigo:
+    """Um registro que só sabe a pergunta de sempre — sem o segundo caminho."""
+
+    def remessas(self, *, convenio=None):
+        return []
 
 
 @pytest.fixture
@@ -194,6 +222,118 @@ def test_remessa_de_outra_maquina_e_reconhecida_como_desconhecida(ler):
     resumo = ler([_Pagamento("001")], _Historico(_remessa([("x", "y")], nsa=99)))
     assert resumo.remessa_desconhecida
     assert resumo.faltando == []
+
+
+# ------------------------------- o segundo caminho: o "seu número"
+
+#: Um retorno cujo header não bate com nada: convênio reescrito no painel, NSA
+#: ajustado à mão, ou remessa gerada em outra máquina antes do registro.
+_HEADER_ERRADO = {"convenio": "9999", "nsa": 99}
+
+
+def _pago(seu):
+    return _Pagamento(seu, ocorrencias=[("00", "ok")], _sucesso=True)
+
+
+def test_o_header_errado_nao_perde_mais_o_retorno(ler):
+    """O caso que este caminho existe para resolver.
+
+    Sem ele, convênio+NSA não casando era `remessa_desconhecida`: a tela lia o
+    arquivo e não guardava nada nem dava baixa, porque a `referencia` de cada
+    linha só existe com a remessa conhecida. O "seu número" é NOSSO, único no
+    dia desde o índice, e o `remessa_item` o guarda com a remessa ligada.
+    """
+    hist = _Historico(_remessa(
+        [("260904-0001", "id-erp-1"), ("260904-0002", "id-erp-2")],
+        nsa=31, convenio="1814",
+        arquivo=r"C:\PAGAMENTOS\EMPRESA A\SICOOB 4321-123456\REM_000031.REM"))
+
+    resumo = ler([_pago("260904-0001"), _pago("260904-0002")], hist,
+                 **_HEADER_ERRADO)
+
+    assert not resumo.remessa_desconhecida
+    assert resumo.casado_pelo_seu_numero
+    # O que vale daqui em diante é o do REGISTRO: é para esta remessa que o
+    # `aplicar_retorno` grava e é este número que nomeia a cópia do `.RET`.
+    assert (resumo.convenio, resumo.nsa) == ("1814", 31)
+    # E o que o arquivo dizia continua à mão, para a tela poder mostrar os dois.
+    assert (resumo.convenio_do_header, resumo.nsa_do_header) == ("9999", 99)
+    # A `referencia` é o que permite dar baixa no ERP — é ela que estava
+    # faltando quando o retorno caía como desconhecido.
+    assert [l.referencia for l in resumo.linhas] == ["id-erp-1", "id-erp-2"]
+    assert Path(resumo.pasta_da_remessa).name == "SICOOB 4321-123456"
+
+
+def test_seus_numeros_espalhados_em_duas_remessas_nao_casam(ler):
+    """Adivinhar aqui é aplicar o retorno na remessa errada.
+
+    A repetição de "seu número" existe no histórico de verdade: até o índice
+    único do dia entrar (04/09/2026), a segunda remessa do dia podia repetir a
+    numeração da primeira, e foi o que aconteceu em 20/08/2026. Dois donos para
+    a mesma lista é a prova de que não dá para saber de qual delas o arquivo
+    fala — e o desfecho seguro é o de sempre.
+    """
+    hist = _Historico(_remessa([("260904-0001", "a")], nsa=31)
+                      + _remessa([("260904-0002", "b")], nsa=32))
+
+    resumo = ler([_pago("260904-0001"), _pago("260904-0002")], hist,
+                 **_HEADER_ERRADO)
+
+    assert resumo.remessa_desconhecida
+    assert not resumo.casado_pelo_seu_numero
+    assert resumo.linhas[0].referencia == ""
+    # E os números continuam sendo os do arquivo: é tudo o que se sabe.
+    assert (resumo.convenio, resumo.nsa) == ("9999", 99)
+
+
+def test_nenhum_seu_numero_conhecido_continua_desconhecida(ler):
+    """Retorno de verdade de uma remessa que este registro nunca viu."""
+    hist = _Historico(_remessa([("260904-0001", "a")], nsa=31))
+
+    resumo = ler([_pago("260904-7777")], hist, **_HEADER_ERRADO)
+
+    assert resumo.remessa_desconhecida
+    assert not resumo.casado_pelo_seu_numero
+    assert resumo.pasta_da_remessa == ""
+
+
+def test_o_header_certo_nao_pergunta_pelo_seu_numero(ler):
+    """O caminho de sempre resolve o dia normal, e continua sendo o primeiro.
+
+    O segundo é consulta a mais no banco, e o caso comum não pode pagar por
+    ele: são até 18 contas lidas duas vezes por dia.
+    """
+    hist = _Historico(_remessa([("260904-0001", "id-erp-1")], nsa=31,
+                               convenio="1814"))
+
+    resumo = ler([_pago("260904-0001")], hist, nsa=31, convenio="1814")
+
+    assert not resumo.casado_pelo_seu_numero
+    assert (resumo.convenio, resumo.nsa) == ("1814", 31)
+    # O que o header diz é gravado sempre, mesmo batendo: é o par que a tela
+    # compara, e um campo que só existe no caso raro é um campo que ninguém
+    # confere.
+    assert (resumo.convenio_do_header, resumo.nsa_do_header) == ("1814", 31)
+    assert resumo.linhas[0].referencia == "id-erp-1"
+    assert hist.perguntas == []
+
+
+def test_registro_sem_o_segundo_caminho_volta_a_ser_o_de_antes(ler):
+    """O segundo caminho é oferta, não exigência: quem não souber respondê-lo
+    se comporta exatamente como antes deste PR."""
+    resumo = ler([_pago("260904-0001")], _HistoricoAntigo(), **_HEADER_ERRADO)
+
+    assert resumo.remessa_desconhecida
+    assert not resumo.casado_pelo_seu_numero
+
+
+def test_o_segundo_caminho_recebe_os_seus_numeros_do_arquivo(ler):
+    """A lista vai inteira, e é a lista que decide — não o primeiro que casar."""
+    hist = _Historico([])
+
+    ler([_pago("260904-0001"), _pago("260904-0002")], hist, **_HEADER_ERRADO)
+
+    assert hist.perguntas == [["260904-0001", "260904-0002"]]
 
 
 def test_sem_historico_le_o_arquivo_do_mesmo_jeito(ler):

@@ -533,15 +533,45 @@ class Historico:
                 return remessa, item
         return None
 
-    def item_por_seu_numero(self, seu_numero: str) -> tuple[RemessaGerada, Item] | None:
-        """O caminho de volta do arquivo de retorno até o lançamento de origem."""
-        alvo = str(seu_numero or "").strip()
-        if not alvo:
+    def remessa_dos_seus_numeros(self, seus: Iterable[str]) -> RemessaGerada | None:
+        """A remessa que gerou estes "seus números" — o caminho de volta do retorno.
+
+        Substitui o ``item_por_seu_numero``, que respondia a mesma pergunta
+        para UM número e não tinha chamador: quem lê um arquivo de retorno tem
+        a lista inteira na mão, e é a lista que decide.
+
+        **Exige que TODOS os achados caiam na MESMA remessa.** Um "seu número"
+        que aponta para duas remessas não é um empate a desempatar, é a prova
+        de que não dá para saber de qual delas o arquivo fala — e escolher
+        seria aplicar o retorno na remessa errada. A repetição existe de
+        verdade no histórico: até o índice único do dia entrar (04/09/2026), a
+        segunda remessa do dia podia repetir a numeração da primeira, e foi o
+        que aconteceu em 20/08/2026. Nenhum achado também devolve ``None``:
+        quem chama trata como remessa desconhecida, que é o desfecho de sempre.
+
+        Só remessa VIVA, como as outras consultas daqui: descartar devolve os
+        "seus números" de propósito, para a segunda tentativa poder sair com o
+        mesmo número. **A da nuvem não filtra estado**, e a diferença é a mesma
+        do ``maior_ordem_do_dia`` — lá a remessa descartada que compartilhe o
+        número vira a segunda candidata que faz a consulta recusar.
+
+        Devolve a ``RemessaGerada``, que é o vocabulário deste módulo, e não o
+        dicionário que a nuvem devolve: quem lê retorno no app fala sempre com
+        o ``nuvem.registro.Espelhado``, e ele repassa a pergunta para a nuvem.
+        """
+        alvos = {str(s or "").strip() for s in (seus or ())}
+        alvos.discard("")
+        if not alvos:
             return None
+        achadas: dict[tuple[str, int], RemessaGerada] = {}
         for remessa, item in self._itens_vivos():
-            if item.seu_numero == alvo:
-                return remessa, item
-        return None
+            if item.seu_numero in alvos:
+                achadas[(remessa.convenio, remessa.nsa)] = remessa
+                if len(achadas) > 1:
+                    return None
+        if len(achadas) != 1:
+            return None
+        return next(iter(achadas.values()))
 
     def maior_ordem_do_dia(self, quando: _dt.date) -> int:
         """A maior ordem do dia ``quando`` já usada aqui. 0 quando não há.
