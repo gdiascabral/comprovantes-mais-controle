@@ -554,6 +554,68 @@ def test_empresa_sem_convenio_nao_gera_remessa():
     assert motivo == remessa_dia.MOTIVO_SEM_CONVENIO
 
 
+# ------------------------------- duas contas na mesma pasta: quem paga?
+# Há empresa no cadastro com QUATRO contas Sicoob na pasta "SICOOB", e o que
+# as separa é o `sufixo`. Achar a pagadora só pela pasta fazia as quatro
+# virarem a MESMA conta: o dinheiro sairia de uma conta que ninguém escolheu,
+# com header, pasta e nome de arquivo idênticos aos da certa.
+def _duas_na_mesma_pasta(sufixo_a="A", sufixo_b="B", convenio="123456"):
+    return [sicoob_contas.Empresa(
+        nome="EXEMPLO",
+        contas=[
+            sicoob_contas.Conta(numero="12.345-6", pasta="SICOOB",
+                                sufixo=sufixo_a, banco="756", agencia="4321-0"),
+            sicoob_contas.Conta(numero="98.765-4", pasta="SICOOB",
+                                sufixo=sufixo_b, banco="756", agencia="4321-0"),
+        ],
+        cnpj="12.345.678/0001-95",
+        razao_social="EMPRESA EXEMPLO LTDA",
+        convenio=convenio,
+    )]
+
+
+def _mapa_com_sufixos():
+    mapa = mapa_mc()
+    mapa.destinos.append(contas_mc.Destino(
+        erp="EMPRESA EXEMPLO - SICOOB B", empresa="EXEMPLO", pasta="SICOOB",
+        banco="SICOOB", sufixo="B"))
+    # a conta que já existia passa a ser a "A" da mesma pasta
+    mapa.destinos[0].sufixo = "A"
+    return mapa
+
+
+def test_o_sufixo_escolhe_a_conta_quando_duas_dividem_a_pasta():
+    """Cada conta do ERP resolve para a SUA conta — não para a primeira."""
+    mapa = _mapa_com_sufixos()
+    a, motivo_a = remessa_dia.resolver_pagador(CONTA, mapa, _duas_na_mesma_pasta())
+    b, motivo_b = remessa_dia.resolver_pagador("EMPRESA EXEMPLO - SICOOB B",
+                                               mapa, _duas_na_mesma_pasta())
+    assert (motivo_a, motivo_b) == ("", "")
+    assert (a.conta, a.dv_conta) == ("12345", "6")
+    assert (b.conta, b.dv_conta) == ("98765", "4")
+    assert a.conta != b.conta
+
+
+def test_duas_contas_na_pasta_sem_sufixo_recusam_a_remessa():
+    """Sem desempate o app não sabe de qual conta o dinheiro sai — e recusa.
+
+    Escolher a primeira é pagar pela conta errada sem nada denunciar: o
+    header, a pasta e o nome do arquivo saem idênticos aos da conta certa.
+    """
+    pagador, motivo = remessa_dia.resolver_pagador(
+        CONTA, mapa_mc(), _duas_na_mesma_pasta(sufixo_a="", sufixo_b=""))
+    assert pagador is None
+    assert motivo == remessa_dia.MOTIVO_CONTA_AMBIGUA
+    assert "sufixo" in motivo
+
+
+def test_uma_conta_na_pasta_dispensa_sufixo():
+    """O caso comum não pode passar a exigir cadastro novo para funcionar."""
+    pagador, motivo = remessa_dia.resolver_pagador(CONTA, mapa_mc(), empresas())
+    assert motivo == ""
+    assert (pagador.conta, pagador.dv_conta) == ("12345", "6")
+
+
 # --------------------------------------------------------------- arquivo
 def pagador():
     p, _ = remessa_dia.resolver_pagador(CONTA, mapa_mc(), empresas())

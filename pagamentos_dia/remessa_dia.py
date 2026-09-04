@@ -118,6 +118,12 @@ MOTIVO_FORA_SICOOB = "a remessa CNAB 240 é do Sicoob; esta conta é de outro ba
 MOTIVO_SEM_BANCO = ("conta sem banco no cadastro (contas_mc.json) — "
                     "corrija no painel")
 MOTIVO_CONTA_DESCONHECIDA = "conta não está no mapa (contas_mc.json)"
+#: Duas contas da MESMA empresa na MESMA pasta e nenhum `sufixo` para separá-las:
+#: o app não tem como saber de qual delas o dinheiro sai, e escolher a primeira
+#: é pagar pela conta errada com header, pasta e nome de arquivo idênticos aos
+#: da certa — nada denunciaria. Recusar é a única falha aceitável aqui.
+MOTIVO_CONTA_AMBIGUA = ("há mais de uma conta nesta pasta e o sufixo não "
+                        "desempata — cadastre o sufixo no painel")
 
 #: O "seu número" tem 20 posições no layout, e é o que o banco devolve
 #: idêntico no retorno.
@@ -175,6 +181,17 @@ def resolver_pagador(conta_erp: str, mapa_mc, empresas) -> tuple[Pagador | None,
     Usa o mapa que já existe (`contas_mc.json`) em vez de um terceiro cadastro.
     Julho de 2026 já ficou partido uma vez porque dois mapas discordavam sobre
     a mesma conta; um mapa a mais é uma divergência a mais esperando acontecer.
+
+    **A conta pagadora é achada por pasta E `sufixo`.** Só pela pasta não
+    serve: há empresa no cadastro com QUATRO contas Sicoob na mesma pasta
+    "SICOOB", e o que as separa é o `sufixo` — o mesmo campo, com o mesmo
+    nome, dos dois lados (`contas_mc.Destino` e `sicoob_contas.Conta`), que já
+    desempata o nome do arquivo do extrato. Enquanto ele era ignorado, as
+    quatro viravam a MESMA conta pagadora: o dinheiro sairia de uma conta que
+    ninguém escolheu, e header, pasta e nome de arquivo ficavam idênticos aos
+    da conta certa — não havia o que conferir depois. O sufixo só é cobrado
+    quando há mais de uma candidata; a empresa de uma conta por pasta, que é a
+    maioria, continua resolvendo sem cadastrar nada.
     """
     destino = mapa_mc.de(conta_erp) if mapa_mc else None
     if destino is None:
@@ -191,10 +208,16 @@ def resolver_pagador(conta_erp: str, mapa_mc, empresas) -> tuple[Pagador | None,
     if not (getattr(empresa, "convenio", "") or "").strip():
         return None, MOTIVO_SEM_CONVENIO
 
-    conta = next((c for c in empresa.contas
-                  if _chave(c.pasta) == _chave(destino.pasta)), None)
-    if conta is None:
+    candidatas = [c for c in empresa.contas
+                  if _chave(c.pasta) == _chave(destino.pasta)]
+    if len(candidatas) > 1:
+        candidatas = [c for c in candidatas
+                      if _chave(c.sufixo or "") == _chave(destino.sufixo or "")]
+    if not candidatas:
         return None, f"a conta {destino.pasta} não está cadastrada em {empresa.nome}"
+    if len(candidatas) > 1:
+        return None, MOTIVO_CONTA_AMBIGUA
+    conta = candidatas[0]
 
     numero, dv_conta = _partes(conta.numero)
     agencia, dv_agencia = _partes(getattr(conta, "agencia", "") or "")
