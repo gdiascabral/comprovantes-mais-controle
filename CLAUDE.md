@@ -954,6 +954,11 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   viraria "CPF encontrado", a mesma armadilha do `tipo_de_chave_pix`. Um campo
   que aparece em 1% dos lançamentos é acaso (dois DVs fechando por sorte), não
   achado — daí a contagem estar no relatório.
+  **`nome_do_arquivo` leva agência-conta desde 04/09/2026** (`REM_<EMPRESA>_
+  <AG>-<CONTA>_<NSA>.REM`): o convênio do Sicoob é POR CONTA CORRENTE, o NSA
+  recomeça em cada uma, e sem a agência-conta no nome uma holding com várias
+  subcontas gerava o mesmo nome em pastas diferentes — a pasta separa, mas o
+  arrasto para o SicoobNet mostra só o nome.
 - `pagamentos_dia/pagamentos_frame.py` — aba Pagamentos do Dia, em 3 passos
   (Buscar / Gerar planilha / Gerar remessa). **O passo 3 não passa pelo
   `anx.submeter`**: não há navegador nem ERP nele — a remessa sai do

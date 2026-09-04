@@ -600,7 +600,8 @@ def test_o_que_ficou_de_fora_viaja_com_o_motivo():
 
 
 def test_nome_do_arquivo_e_legivel_e_unico():
-    assert remessa_dia.nome_do_arquivo(pagador(), 31) == "REM_EXEMPLO_000031.REM"
+    assert (remessa_dia.nome_do_arquivo(pagador(), 31)
+            == "REM_EXEMPLO_4321-12345_000031.REM")
 
 
 # ----------------------------------------------------- ponta a ponta, com NSA
@@ -1171,7 +1172,20 @@ def test_empresa_sem_nome_ainda_tem_onde_cair():
     assert p.parts[-2] == "EMPRESA"
 
 
-def test_o_arquivo_continua_com_o_nome_de_sempre():
-    """A pasta mudou; o nome do arquivo, não — o histórico e o SicoobNet o
-    reconhecem por ele."""
-    assert remessa_dia.nome_do_arquivo(_pagador(), 7) ==         "REM_MORAIS-ENGENHARIA-LTDA_000007.REM"
+def test_o_nome_separa_as_contas_da_mesma_empresa():
+    """O convênio do Sicoob é POR CONTA: cada subconta recomeça o NSA dela.
+
+    A pasta já separa uma conta da outra, mas o arrasto para a caixa de
+    upload do SicoobNet mostra só o NOME — e duas contas da mesma empresa,
+    no mesmo dia, com o NSA velho batiam no mesmo nome em pastas diferentes.
+    Isso é a receita de subir o arquivo de uma conta no acesso de outra, um
+    erro que só aparece depois de enviado.
+    """
+    a = remessa_dia.nome_do_arquivo(_pagador(conta="50022"), 7)
+    b = remessa_dia.nome_do_arquivo(_pagador(conta="71234"), 7)
+    assert a != b
+    for nome in (a, b):
+        assert nome.startswith("REM_")
+        assert nome.endswith(".REM")
+        nsa = nome[:-4].rsplit("_", 1)[1]
+        assert len(nsa) == 6 and nsa.isdigit()
