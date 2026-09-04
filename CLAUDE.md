@@ -1036,24 +1036,47 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   de `submeter()`: quem cancela ali não pode ter consumido a sessão do ERP.
   Anexo que é foto só é baixado quando é aviso "PAGAR PARA" — baixar toda
   imagem de todo título seria pagar OCR por nada.
-  **O cartão "Contas prontas para remessa" é montado quando a aba é MOSTRADA,
-  não na construção.** O esqueleto (o `Treeview` e o rodapé) nasce no `_build`,
-  porque custa microssegundos; quem custa é LER os dois JSON, e isso acontece
-  no `ao_abrir()` — o mesmo gancho que o Início usa, chamado por
-  `comprovantes_app.mostrar` a cada troca de aba. As doze abas somam ~1,2 s na
-  abertura do app (a Início sozinha ~670 ms), e pagar disco adiantado por uma
-  tabela que ninguém está olhando é o oposto do que se quer. De graça: quem
-  corrigiu o cadastro no painel não precisa reabrir a aba de propósito — sair
-  dela e voltar já relê —, e há um "Conferir de novo" no rodapé. **Custo real:
-  dois arquivos locais.** Sem rede, sem ERP e sem navegador, então roda na
-  thread da interface.
+  **"Contas prontas para remessa" é UMA LINHA no cartão e a TABELA numa
+  janela — e quem decidiu isso foi a régua do Registro.** O PR #55 pôs aqui um
+  cartão com `Treeview` de oito linhas, e ele empurrou o Registro para fora da
+  janela: `tests/test_registro_visivel.py` ficou vermelho na `main` em três
+  casos, com o campo em 1,4 linha (48 px) a 1,25x e o cabeçalho da aba parando
+  ABAIXO dele. A causa não é o cartão ser feio, é aritmética de altura: o
+  Registro é o último a ser empacotado nas onze telas, então fica com a SOBRA,
+  e o teste cobra que a sobra dê ao menos quatro linhas legíveis a 1,0x e a
+  1,25x. MEDIDO na moldura do teste (1920x1040), acima desse piso sobram
+  **103 px** para este cartão, e a tabela custava 149. Daí a forma de hoje, e
+  as duas consequências que não são estilo: a lista inteira mudou-se para a
+  janela do "Ver detalhes" (`tk.Toplevel` modal, como as outras da aba), que é
+  onde ela pertence — quem a lê está indo ao painel do Supabase corrigir
+  cadastro, o que acontece raramente, enquanto o Registro é lido em toda
+  rodada; e **o cartão ficou SEM cabeçalho**, porque um `Cartao` titulado custa
+  120 px só de moldura, título e filete, contra os 103 disponíveis — caberia a
+  moldura e não o que ela emoldura. Sem ele são 88 px, e quem nomeia o assunto
+  passa a ser a própria frase, que diz "prontas para remessa" nos quatro
+  estados (`resumo_da_prontidao`, função de módulo pelo mesmo motivo de
+  `remessa_dia.contas_sem_remessa`: dentro do frame só se testaria abrindo
+  janela). A pílula é `widgets.Pilula`: `ok` quando não sobra pendência,
+  `atencao` quando sobra, `info` enquanto ninguém conferiu ou o cadastro não
+  abriu — e o DETALHE do erro fica para a janela, porque na pílula ele viraria
+  três linhas, que é a altura que este cartão não tem.
+  **O resumo é apurado quando a aba é MOSTRADA, não na construção.** O
+  esqueleto (a pílula e o link) nasce no `_build`, porque custa microssegundos;
+  quem custa é LER os dois JSON, e isso acontece no `ao_abrir()` — o mesmo
+  gancho que o Início usa, chamado por `comprovantes_app.mostrar` a cada troca
+  de aba. As doze abas somam ~1,2 s na abertura do app (a Início sozinha
+  ~670 ms), e pagar disco adiantado por uma linha que ninguém está olhando é o
+  oposto do que se quer. De graça: quem corrigiu o cadastro no painel não
+  precisa reabrir a aba de propósito — sair dela e voltar já relê —, e há um
+  "Conferir de novo" no rodapé da janela. **Custo real: dois arquivos locais.**
+  Sem rede, sem ERP e sem navegador, então roda na thread da interface.
   Cinco colunas — `CONTA (ERP) · EMPRESA · AG-CONTA · CONVÊNIO · SITUAÇÃO` —,
   e a situação é `✓ pronta`, `⚠ falta: agência, convênio` ou `· aviso: …`: o
   símbolo vem de `widgets.MARCAS_ESTADO` e a cor da tag do `widgets`, nenhuma
   escrita aqui. **Falta é `atencao` e não `erro`** porque nada falhou — o
-  cadastro está incompleto e ninguém tentou gerar nada ainda. O rodapé diz
-  "corrija no painel do Supabase e reabra o app", e o "reabra" não é zelo: o
-  cache só é regravado na abertura (`nuvem.cadastro.sincronizar`).
+  cadastro está incompleto e ninguém tentou gerar nada ainda. O rodapé da
+  janela diz "corrija no painel do Supabase e reabra o app", e o "reabra" não é
+  zelo: o cache só é regravado na abertura (`nuvem.cadastro.sincronizar`).
   A MESMA lista aparece no lugar dos dois recados genéricos do `gerar_remessa`:
   quando os `carregar()` levantam (aí sem tabela, porque não há cadastro para
   conferir — o que o recado ganhou foi o `contas_mc.carregar` dizendo QUAL

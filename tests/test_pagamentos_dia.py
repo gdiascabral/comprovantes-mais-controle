@@ -497,3 +497,79 @@ def test_nenhum_caso_de_falta_de_dado_sai_como_erro():
             _para_receber(tradePayablePaymentMethod=metodo,
                           paidToBankAccount=""), ja_lido={})
         assert estado != "erro", f"{metodo} sem dado voltou a ser vermelho"
+
+
+# ------------------------------------------------- a linha de prontidão da aba
+# O PR #55 pôs a lista de prontidão no CARTÃO, numa tabela de oito linhas, e
+# ela empurrou o Registro para fora da janela (`tests/test_registro_visivel.py`,
+# três casos vermelhos na main). Hoje o cartão mostra uma linha e a tabela mora
+# na janela do "Ver detalhes"; o que se testa aqui é essa linha — a aritmética
+# e a frase, sem abrir janela nenhuma, que é o motivo de ela ser função de
+# módulo. Quem impede a tabela de VOLTAR ao cartão continua sendo o
+# `test_registro_visivel`: ele mede a aba montada, e foi ele que pegou o #55.
+def _conferencia(conta, faltas=()):
+    from pagamentos_dia import remessa_dia
+
+    return remessa_dia.Conferencia(conta_erp=conta, empresa="EMPRESA X",
+                                   pasta="EMPRESA X", faltas=list(faltas))
+
+
+def test_tudo_pronto_e_verde_e_nao_fala_em_pendencia():
+    from pagamentos_dia import pagamentos_frame as frame
+
+    estado, frase = frame.resumo_da_prontidao(
+        [_conferencia("CONTA 1"), _conferencia("CONTA 2")])
+    assert estado == "ok"
+    assert "2 conta(s) prontas para remessa" in frase
+    assert "pendência" not in frase
+
+
+def test_conta_incompleta_e_atencao_e_nao_erro():
+    """Nada FALHOU: o cadastro é que está pela metade. É a mesma distinção que
+    a tabela faz linha a linha, e chamar isso de erro ensina a ignorar erro."""
+    from pagamentos_dia import pagamentos_frame as frame
+
+    estado, frase = frame.resumo_da_prontidao(
+        [_conferencia("CONTA 1"),
+         _conferencia("CONTA 2", ["falta a agência"]),
+         _conferencia("CONTA 3", ["falta o convênio"])])
+    assert estado == "atencao"
+    assert "1 conta(s) prontas para remessa" in frase
+    assert "2 com pendência" in frase
+
+
+def test_sem_conferir_ainda_nao_afirma_nada():
+    """Lista vazia é "ninguém conferiu", e não "nenhuma conta está pronta" —
+    zero seria uma afirmação sobre o cadastro que ninguém apurou."""
+    from pagamentos_dia import pagamentos_frame as frame
+
+    estado, frase = frame.resumo_da_prontidao([])
+    assert estado == "info"
+    assert "0 conta" not in frase
+
+
+def test_cadastro_ilegivel_nao_vira_zero_conta_pronta():
+    """Com o cadastro fora do ar a lista chega vazia, e dizer "ok" ali seria o
+    pior desfecho possível: verde por falta de dado."""
+    from pagamentos_dia import pagamentos_frame as frame
+
+    estado, frase = frame.resumo_da_prontidao(
+        [], erro="Não consegui ler o cadastro. A conta X está sem pasta.")
+    assert estado == "info"
+    assert "não consegui ler o cadastro" in frase.lower()
+    # O detalhe fica para a janela: na pílula ele viraria três linhas, que é
+    # a altura que este cartão não tem.
+    assert "conta X" not in frase
+
+
+def test_a_frase_diz_de_que_ela_fala_em_todos_os_estados():
+    """O cartão perdeu o cabeçalho para caber (ver o `_build`), então quem
+    nomeia o assunto é a própria frase — nos quatro estados."""
+    from pagamentos_dia import pagamentos_frame as frame
+
+    casos = ([], [_conferencia("C1")], [_conferencia("C1", ["falta"])])
+    for conferencias in casos:
+        _estado, frase = frame.resumo_da_prontidao(conferencias)
+        assert "remessa" in frase.lower(), frase
+    _estado, frase = frame.resumo_da_prontidao([], erro="qualquer coisa")
+    assert "remessa" in frase.lower()

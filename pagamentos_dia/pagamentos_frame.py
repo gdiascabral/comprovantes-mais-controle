@@ -257,6 +257,40 @@ def _carregar_reembolsos() -> dict:
     return reembolso.chaves(reembolso.carregar(_pasta_base()))
 
 
+def resumo_da_prontidao(conferencias, erro: str = "") -> tuple[str, str]:
+    """(estado, frase) da linha "contas prontas para remessa".
+
+    Função de módulo, e não método, pelo mesmo motivo de
+    `remessa_dia.contas_sem_remessa`: é a aritmética de um cartão, e dentro do
+    frame ela só se testaria abrindo janela. Aqui basta uma lista de
+    `Conferencia`.
+
+    O estado é `ok` só quando NÃO SOBRA pendência — é a única leitura que
+    autoriza seguir sem abrir a janela dos detalhes. Havendo qualquer conta
+    incompleta é `atencao`, e não `erro`: nada falhou, o cadastro é que está
+    pela metade — a mesma distinção que a tabela faz linha a linha. `info` é o
+    "ainda não sei": ninguém conferiu ainda, ou o cadastro não abriu.
+
+    A frase NOMEIA O ASSUNTO nos quatro casos ("prontas para remessa"), porque
+    o cartão não tem cabeçalho para nomeá-lo — ela é a única linha que a aba
+    mostra, e uma linha dizendo só "13 · 10 com pendência" não diz de quê.
+    O DETALHE do erro fica de fora de propósito: o recado do `carregar` tem
+    várias frases e ali viraria um bloco colorido de três linhas, que é
+    exatamente a altura que este cartão não tem. Ele aparece inteiro na
+    janela do "Ver detalhes"."""
+    if erro:
+        return "info", "Contas prontas para remessa: não consegui ler o cadastro"
+    if not conferencias:
+        return "info", ("Contas prontas para remessa: abra esta aba para "
+                        "conferir o cadastro")
+    prontas = sum(1 for c in conferencias if c.pronta)
+    pendentes = len(conferencias) - prontas
+    if not pendentes:
+        return "ok", f"{prontas} conta(s) prontas para remessa"
+    return "atencao", (f"{prontas} conta(s) prontas para remessa  ·  "
+                       f"{pendentes} com pendência")
+
+
 class PagamentosDiaFrame(ttk.Frame):
     def __init__(self, master, anexar_frame):
         super().__init__(master)
@@ -286,6 +320,12 @@ class PagamentosDiaFrame(ttk.Frame):
         #: planilha: o que está em memória seria de outro dia, e a janela da
         #: remessa não tem como saber disso sozinha.
         self._periodo_do_resultado = None
+        #: O que o último `_conferir_prontidao` viu — a lista de `Conferencia`
+        #: e, quando o cadastro não abriu, o recado do erro. Ficam aqui, e não
+        #: dentro da janela do "Ver detalhes", porque quem os mostra são DOIS:
+        #: a pílula do cartão (sempre) e a tabela da janela (quando abrem).
+        self._prontidao = []
+        self._prontidao_erro = ""
 
         hoje = datetime.date.today()
         self.v_ini = tk.StringVar(value=f"{hoje:%d/%m/%Y}")
@@ -298,7 +338,7 @@ class PagamentosDiaFrame(ttk.Frame):
         self._build()
         self.after(150, self._drain)
 
-    #: As colunas do cartão de prontidão: (chave, título, largura a 100%,
+    #: As colunas da janela de prontidão: (chave, título, largura a 100%,
     #: alinhamento). A largura é escalada pelo `estilo_tabela`, num lugar só.
     COLUNAS_PRONTIDAO = (
         ("conta_erp", "CONTA (ERP)", 230, "w"),
@@ -401,33 +441,49 @@ class PagamentosDiaFrame(ttk.Frame):
         widgets.Botao(f3, "Selecionar…", papel="neutro", command=self._sel_pasta
                       ).pack(side="left", padx=px((8, 0)))
 
-        # ---- prontidão do cadastro, SEM número
+        # ---- prontidão do cadastro: UMA LINHA, e SEM número nem título
         # Não é passo: ninguém preenche nada aqui, e numerá-la poria um "4"
         # entre "Onde salvar" e o botão verde, inventando uma ordem que não
         # existe (a mesma razão pela qual o Registro não é numerado).
         #
-        # A tabela nasce VAZIA e só é preenchida em `ao_abrir` — ver o
+        # **Uma linha porque a aba não tem altura para mais que isso.** O
+        # Registro é o último a ser empacotado nas onze telas, então é ele quem
+        # fica com a SOBRA — e `tests/test_registro_visivel.py` cobra que a
+        # sobra dê ao menos quatro linhas legíveis a 1.0x e a 1.25x, com o pé
+        # dentro da janela. MEDIDO na moldura do teste (1920x1040, a 1.25x):
+        # acima desse piso de quatro linhas sobram **103 px** para este cartão,
+        # e a tabela de oito linhas que o PR #55 pôs aqui custava 149 — o
+        # Registro caiu para 1,4 linha (48 px) e o cabeçalho da aba foi parar
+        # abaixo dele. Daí as duas escolhas desta forma:
+        #
+        # - a lista inteira mudou-se para a janela do "Ver detalhes". É onde
+        #   ela pertence: quem a lê está indo ao painel do Supabase corrigir
+        #   cadastro, o que acontece raramente — enquanto o Registro, que
+        #   pagava a conta, é lido em toda rodada;
+        # - o cartão fica SEM cabeçalho. Um `Cartao` titulado custa 120 px só
+        #   de moldura, título e filete, contra os 103 disponíveis: caberia a
+        #   moldura e não o que ela emoldura. Sem o cabeçalho são 88 px, e o
+        #   assunto passa a ser dito pela própria frase da pílula, que o nomeia
+        #   nos quatro estados — a janela leva o título por escrito.
+        #
+        # O resumo é preenchido em `ao_abrir`, não na construção — ver o
         # docstring de `_conferir_prontidao`. Montar o esqueleto aqui custa
         # microssegundos; ler os dois JSON custa disco, e é isso que não pode
         # entrar na abertura do app.
-        self.f_prontidao = f_pr = widgets.Cartao(
-            self, "Contas prontas para remessa")
+        self.f_prontidao = f_pr = widgets.Cartao(self, padding=(16, 10))
         f_pr.pack(fill="x", padx=PADX, pady=px((0, 12)))
-        colunas = tuple(chave for chave, *_ in self.COLUNAS_PRONTIDAO)
-        self.tab_prontidao = ttk.Treeview(f_pr, columns=colunas,
-                                          show="headings", height=8,
-                                          selectmode="browse")
-        for chave, titulo, larg, ancora in self.COLUNAS_PRONTIDAO:
-            self.tab_prontidao.heading(chave, text=titulo)
-            self.tab_prontidao.column(chave, width=larg, anchor=ancora,
-                                      stretch=chave == "situacao")
-        widgets.estilo_tabela(self.tab_prontidao)
-        self.tab_prontidao.pack(fill="x")
-        self.rodape_prontidao = widgets.RodapeTabela(f_pr)
-        self.rodape_prontidao.pack(fill="x", pady=px((10, 0)))
-        self.rodape_prontidao.definir(
-            texto="Abra esta aba para conferir o cadastro.")
-        self.rodape_prontidao.link("Conferir de novo", self._conferir_prontidao)
+        linha_pr = ttk.Frame(f_pr)
+        linha_pr.pack(fill="x")
+        self.pilula_prontidao = widgets.Pilula(linha_pr, "", "info")
+        self.pilula_prontidao.pack(side="left")
+        # Link, e não botão sólido: a aba já tem três botões de passo no
+        # cabeçalho, e um quarto botão cheio aqui embaixo disputaria o olho com
+        # o verde que gera a remessa. É o mesmo papel que o `RodapeTabela` dá
+        # ao "Conferir de novo" — e ele economiza 7 px, que aqui são meia linha
+        # de Registro.
+        widgets.Botao(linha_pr, "Ver detalhes", papel="link",
+                      command=self._janela_prontidao).pack(side="right")
+        self._mostrar_resumo_prontidao()
 
         # ---- barra de execução e o que não é passo
         # ACIMA do registro, e não no rodapé: a barra conta o trabalho que
@@ -539,30 +595,31 @@ class PagamentosDiaFrame(ttk.Frame):
         self.b_stop.configure(state="disabled")
 
     def aplicar_cores(self, escuro: bool):
+        # A tabela da prontidão não entra aqui: ela vive na janela do "Ver
+        # detalhes", que é modal (`grab_set`) e nasce já no tema da vez —
+        # ninguém troca de tema com ela aberta. A `Pilula` do cartão segue
+        # estilo nomeado, que `aplicar_estilos` repinta sozinho.
         try:
             widgets.estilo_log(self.log, escuro)
             widgets.estilo_canvas(self.canvas)
-            # A tabela precisa das tags de novo: `tag_configure` guarda a COR,
-            # e não o nome do estado.
-            widgets.estilo_tabela(self.tab_prontidao)
         except tk.TclError:
             pass
 
     # ------------------------------------------------- prontidão do cadastro
     def ao_abrir(self):
-        """Relê o cadastro e repinta a prontidão.
+        """Relê o cadastro e refaz o resumo da prontidão.
 
         A janela chama isto toda vez que esta aba volta à frente
         (`comprovantes_app.mostrar`), e é de propósito que não seja na
         CONSTRUÇÃO: as doze abas somam ~1,2 s na abertura do app, e ler dois
-        JSON por uma tabela que ninguém está olhando é justamente o tipo de
+        JSON por uma linha que ninguém está olhando é justamente o tipo de
         custo que não se paga adiantado. Quem editou o cadastro no painel
         também não precisa reabrir a aba de propósito — trocar de aba e voltar
         já relê."""
         self._conferir_prontidao()
 
     def _conferir_prontidao(self):
-        """A tabela "Contas prontas para remessa", com TODOS os problemas.
+        """Relê o cadastro e devolve a prontidão de cada conta.
 
         Roda na thread da INTERFACE, e pode: não há navegador, não há ERP e
         não há rede — são dois arquivos locais (`contas_mc.json` e
@@ -573,13 +630,12 @@ class PagamentosDiaFrame(ttk.Frame):
         "Não consegui ler o cadastro" (sem dizer de qual conta) ou uma recusa
         por conta na janela de conferência — e, com doze empresas, isso é o dia
         parado. A regra é a mesma que o botão usa (`remessa_dia.prontidao`), e
-        um teste impede as duas de divergirem em silêncio."""
-        try:
-            self.tab_prontidao.delete(*self.tab_prontidao.get_children())
-        except tk.TclError:
-            return                       # aba destruída enquanto isto rodava
-        self.rodape_prontidao.limpar_links()
-        self.rodape_prontidao.link("Conferir de novo", self._conferir_prontidao)
+        um teste impede as duas de divergirem em silêncio.
+
+        O que aparece na ABA é o resumo de uma linha; a lista inteira é a
+        janela do "Ver detalhes". Conferir custa o mesmo nos dois casos — os
+        dois JSON —, então o resumo é sempre recalculado aqui e a janela, que
+        abre por cima, apenas mostra o que já está apurado."""
         try:
             mapa_mc = contas_mc.carregar()
             cadastro = sicoob_contas.carregar()
@@ -587,27 +643,91 @@ class PagamentosDiaFrame(ttk.Frame):
             # Sem os mapas não há lista para mostrar — e o recado do
             # `contas_mc.carregar` já diz QUAL linha está torta e onde se
             # conserta, que é a informação que faltava.
-            self.rodape_prontidao.definir(
-                texto=widgets.recado_de_erro(e, "Não consegui ler o cadastro."))
-            return
+            self._prontidao = []
+            self._prontidao_erro = widgets.recado_de_erro(
+                e, "Não consegui ler o cadastro.")
+        else:
+            self._prontidao = list(
+                remessa_dia.prontidao(mapa_mc, cadastro.empresas))
+            self._prontidao_erro = ""
+        self._mostrar_resumo_prontidao()
+        return self._prontidao
 
-        conferencias = remessa_dia.prontidao(mapa_mc, cadastro.empresas)
-        for i, c in enumerate(conferencias):
-            estado, texto = c.situacao
-            self.tab_prontidao.insert(
-                "", "end",
-                values=(c.conta_erp, c.empresa,
-                        f"{c.agencia or '—'} / {c.conta or '—'}",
-                        c.convenio or "—",
-                        f"{widgets.MARCAS_ESTADO[estado]}  {texto}"),
-                tags=widgets.linha_zebrada(i, estado))
-        prontas = sum(1 for c in conferencias if c.pronta)
+    def _mostrar_resumo_prontidao(self):
+        estado, frase = resumo_da_prontidao(self._prontidao,
+                                            self._prontidao_erro)
+        try:
+            self.pilula_prontidao.definir(
+                f"{widgets.MARCAS_ESTADO[estado]}  {frase}", estado)
+        except tk.TclError:
+            pass                         # aba destruída enquanto isto rodava
+
+    def _janela_prontidao(self):
+        """A lista inteira, com TODOS os problemas de cada conta.
+
+        Janela e não cartão: quem lê isto está indo ao painel do Supabase
+        corrigir cadastro, e isso acontece raramente — enquanto o Registro,
+        que perde a tela para cada linha desta tabela, é lido em toda rodada.
+        """
+        conferencias = self._conferir_prontidao()
+
+        top = tk.Toplevel(self)
+        top.title("Contas prontas para remessa")
+        top.geometry(f"{px(940)}x{px(560)}")
+        top.transient(self.winfo_toplevel())
+        widgets.barra_de_titulo(top)
+        moldura = ttk.Frame(top, padding=14)
+        moldura.pack(fill="both", expand=True)
+
+        ttk.Label(moldura, style="Titulo.TLabel",
+                  text="Contas prontas para remessa").pack(anchor="w")
+        resumo = ttk.Label(moldura, style="Apoio.TLabel", wraplength=px(880),
+                           justify="left")
+        resumo.pack(anchor="w", pady=px((2, 8)))
+
+        colunas = tuple(chave for chave, *_ in self.COLUNAS_PRONTIDAO)
+        tabela = ttk.Treeview(moldura, columns=colunas, show="headings",
+                              height=14, selectmode="browse")
+        for chave, titulo, larg, ancora in self.COLUNAS_PRONTIDAO:
+            tabela.heading(chave, text=titulo)
+            tabela.column(chave, width=larg, anchor=ancora,
+                          stretch=chave == "situacao")
+        widgets.estilo_tabela(tabela)
+        tabela.pack(fill="both", expand=True)
+
+        def _encher(conferencias):
+            tabela.delete(*tabela.get_children())
+            for i, c in enumerate(conferencias):
+                estado, texto = c.situacao
+                tabela.insert(
+                    "", "end",
+                    values=(c.conta_erp, c.empresa,
+                            f"{c.agencia or '—'} / {c.conta or '—'}",
+                            c.convenio or "—",
+                            f"{widgets.MARCAS_ESTADO[estado]}  {texto}"),
+                    tags=widgets.linha_zebrada(i, estado))
+            # Aqui, sim, o recado do erro INTEIRO: é ele que diz qual linha do
+            # cadastro está torta, e a linha do cartão não tem altura para ele.
+            marca, frase = resumo_da_prontidao(conferencias,
+                                               self._prontidao_erro)
+            resumo.configure(
+                text=self._prontidao_erro
+                or f"{widgets.MARCAS_ESTADO[marca]}  {frase}")
+
+        _encher(conferencias)
+
+        rodape = widgets.RodapeTabela(moldura)
+        rodape.pack(fill="x", pady=px((10, 0)))
         # O cache só é regravado na ABERTURA (`nuvem.cadastro.sincronizar`),
         # então "reabra o app" não é zelo: sem isso a correção feita no painel
         # não chega a esta tela.
-        self.rodape_prontidao.definir(
-            texto=f"{prontas} de {len(conferencias)} conta(s) prontas  ·  "
-                  "corrija no painel do Supabase e reabra o app")
+        rodape.definir(texto="corrija no painel do Supabase e reabra o app")
+        rodape.link("Conferir de novo",
+                    lambda: _encher(self._conferir_prontidao()))
+        widgets.Botao(rodape, "Fechar", papel="neutro", command=top.destroy
+                      ).pack(side="right", padx=px((10, 0)))
+
+        top.grab_set()
 
     def _periodo(self) -> tuple[datetime.date, datetime.date]:
         ini = datetime.datetime.strptime(self.v_ini.get().strip(), "%d/%m/%Y").date()
@@ -1641,8 +1761,9 @@ class PagamentosDiaFrame(ttk.Frame):
                 "Remessa",
                 widgets.recado_de_erro(e, "Não consegui ler o cadastro.")
                 + "\n\nO cadastro é editado no painel do Supabase; depois "
-                  "feche e abra o app. O cartão \"Contas prontas para "
-                  "remessa\", nesta aba, mostra a lista inteira.")
+                  "feche e abra o app. Em \"Contas prontas para remessa\", "
+                  "nesta aba, o botão \"Ver detalhes\" mostra a lista "
+                  "inteira.")
             self._conferir_prontidao()
             return
 
