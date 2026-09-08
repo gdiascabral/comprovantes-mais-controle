@@ -492,6 +492,16 @@ def main():
     # ---------------- canto direito da barra: navegador, versão, quem entrou
     chip = widgets.ChipStatus(barra.direita)
     chip.pack(side="left", padx=px((0, 18)), pady=px(14))
+    # Ao lado do chip, porque é a resposta à pergunta que o chip levanta:
+    # "ocupado — e eu, faço o quê?". Abre uma aba SUA no mesmo Chrome; o
+    # robô segue na dele (ver `AnexarFrame.abrir_minha_aba`).
+    b_minha_aba = widgets.Botao(barra.direita, "↗  Minha aba no ERP",
+                                papel="barra",
+                                command=aba_anx.abrir_minha_aba,
+                                padx=px(10), pady=px(4))
+    b_minha_aba.pack(side="left", padx=px((0, 18)), pady=px(12))
+    widgets.Dica(b_minha_aba, "Abre uma aba sua no Chrome do app, para "
+                              "usar o Mais Controle enquanto ele trabalha")
     if _v_curta:
         # Curta na tela, inteira na dica: o número de build só interessa a quem
         # está comparando com uma release, e para esse a dica basta.

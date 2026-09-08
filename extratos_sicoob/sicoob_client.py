@@ -74,6 +74,9 @@ class SicoobClient:
             # ativada" — e, mesmo já instalada, a extensão ficaria desligada a
             # cada execução. Tirá-la é o que torna o perfil persistente útil
             # aqui: instala-se uma vez, à mão, e vale para as próximas.
+            # O Chrome 152 cai no 1º download de um perfil já usado — e o
+            # extrato é um download. Ver `util.limpar_historico_de_downloads`.
+            util.limpar_historico_de_downloads(cfg.PASTA_PERFIL_CHROME)
             self.ctx = self._pw.chromium.launch_persistent_context(
                 str(cfg.PASTA_PERFIL_CHROME), channel="chrome",
                 headless=self._headless, accept_downloads=True,

@@ -12,12 +12,15 @@ Observação-chave: o botão do clipe ("Abrir Arquivos do Pagamento") só existe
 quando JÁ há anexo. Por isso ancoramos na seção "Histórico de Pagamentos" e no
 menu ⋮ (MoreVertIcon), que existem tanto nos pendentes quanto nos já anexados.
 """
+import subprocess
 import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 from . import config, credenciais
+
+import util
 
 
 class SemRede(RuntimeError):
@@ -302,6 +305,17 @@ class MCClient:
         self._pw = None
         self.ctx = None
         self.page = None
+        # As abas que são DO ROBÔ. Tudo o que não está aqui é da pessoa — que
+        # pode abrir abas neste mesmo Chrome (Ctrl+T, ou o botão "Minha aba
+        # no ERP") e usar o Mais Controle enquanto o robô trabalha na dele.
+        # O ERP aceita uma sessão por usuário, mas abas do mesmo Chrome
+        # dividem a sessão (o token vive no IndexedDB do perfil, não na aba):
+        # é isso que torna o uso simultâneo possível. Ver `_nova_aba`.
+        self._minhas: set = set()
+        #: O Chrome foi fechado (a pessoa clicou no X, ou ele morreu). Chega
+        #: pelo evento "close" do contexto na primeira chamada seguinte ao
+        #: Playwright — sem ir até o navegador, que é o que `vivo()` faz.
+        self.fechado = False
 
     @staticmethod
     def _tamanho_tela() -> tuple[int, int] | None:
@@ -322,6 +336,10 @@ class MCClient:
     def __enter__(self):
         self._pw = sync_playwright().start()
         config.PASTA_PERFIL_CHROME.mkdir(parents=True, exist_ok=True)
+        # Antes de abrir, e não depois: o Chrome 152 cai no primeiro download
+        # de um perfil que já baixou algo — e agora a pessoa baixa boletos na
+        # aba dela. Ver `util.limpar_historico_de_downloads`.
+        util.limpar_historico_de_downloads(config.PASTA_PERFIL_CHROME)
         args = ["--start-maximized", "--window-position=0,0"]
         tela = self._tamanho_tela()
         if tela:
@@ -336,6 +354,12 @@ class MCClient:
             accept_downloads=True,
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        self._minhas.add(self.page)
+        # Daqui em diante toda aba nova passa por `_nova_aba`, que decide se é
+        # do robô ou da pessoa. A primeira nasceu antes do listener, por isso
+        # entrou à mão acima.
+        self.ctx.on("page", self._nova_aba)
+        self.ctx.on("close", self._ao_fechar)
         # Sem `page.on("response", ...)`: a leitura dos pagamentos passou a ser
         # feita pela API (mc_api), de dentro da página logada. O listener antigo
         # guardava o JSON de TODA resposta do ERP numa lista que nunca era
@@ -349,6 +373,136 @@ class MCClient:
         finally:
             if self._pw:
                 self._pw.stop()
+
+    # ------------------------------------------------- de quem é cada aba
+    def _nova_aba(self, pagina):
+        """Toda aba nova do Chrome passa por aqui — do robô ou da pessoa.
+
+        A regra não depende de URL: aba aberta A PARTIR de uma aba do robô (o
+        ERP faz isso em vários fluxos, `stateGoNewTab`) é do robô; qualquer
+        outra é da pessoa — Ctrl+T, o botão "Minha aba no ERP", o chrome.exe
+        chamado por fora. Na aba da pessoa o único trabalho do app é salvar o
+        que ela baixar (`_baixar_para_a_pessoa`); no resto, ela é invisível
+        para o robô.
+
+        Roda como handler de evento do Playwright, na thread do navegador,
+        durante alguma chamada dele — pode usar a API à vontade."""
+        try:
+            dona = pagina.opener()
+        except Exception:
+            dona = None
+        if dona is not None and dona in self._minhas:
+            self._minhas.add(pagina)
+            return
+        try:
+            pagina.on("download", self._baixar_para_a_pessoa)
+        except Exception as e:
+            config.diag(f"não consegui ouvir os downloads da aba da pessoa: {e!r}")
+
+    def _ao_fechar(self, _ctx=None):
+        self.fechado = True
+
+    def _nova_aba_do_robo(self):
+        """Uma aba nova PARA O ROBÔ.
+
+        O Chrome traz para a frente toda aba que cria — inclusive esta, por
+        cima da que a pessoa estiver usando. Por isso só se abre quando não há
+        outra saída (a do robô foi fechada)."""
+        pagina = self.ctx.new_page()
+        self._minhas.add(pagina)
+        return pagina
+
+    def _garantir_aba_do_robo(self):
+        """`self.page` viva — criando outra se a pessoa fechou a do robô.
+
+        Fechar a aba errada é um clique, e com a pessoa no mesmo Chrome ele
+        acontece. Sem isto, toda chamada seguinte estourava com erro de
+        Playwright até reiniciar o app. A aba nova já nasce logada: a sessão
+        é do perfil, não da aba."""
+        try:
+            fechada = self.page is None or self.page.is_closed()
+        except Exception:
+            fechada = True
+        if fechada:
+            self.log("A aba do robô foi fechada — abrindo outra.")
+            self.page = self._nova_aba_do_robo()
+        return self.page
+
+    def _abas_do_robo(self) -> list:
+        """As abas em que o robô pode trabalhar, `self.page` primeiro."""
+        try:
+            abas = list(self.ctx.pages) if self.ctx else []
+        except Exception:
+            abas = []
+        minhas = [a for a in abas if a in self._minhas]
+        if self.page is not None and self.page not in minhas:
+            minhas.insert(0, self.page)
+        return minhas
+
+    def _abas_da_pessoa(self) -> list:
+        try:
+            abas = list(self.ctx.pages) if self.ctx else []
+        except Exception:
+            abas = []
+        return [a for a in abas if a not in self._minhas]
+
+    def pulsar(self):
+        """Uma ida curta ao navegador, para os eventos pendentes chegarem.
+
+        No Playwright síncrono os eventos (aba nova, download, fechou) só são
+        entregues DURANTE uma chamada à API. Com o robô parado, um download
+        feito na aba da pessoa ficaria na fila até a próxima tarefa — minutos
+        ou horas. A aba do app chama isto a cada ~1 s quando o navegador está
+        livre; com tarefa rodando, as chamadas dela já bastam."""
+        try:
+            abas = list(self.ctx.pages) if self.ctx else []
+            if abas:
+                abas[0].wait_for_timeout(30)
+        except Exception:
+            pass                  # navegador fechado: o evento "close" já contou
+
+    def abrir_aba_da_pessoa(self, url: str = config.MC_URL_PAGAMENTOS):
+        """Abre (ou traz para a frente) uma aba DA PESSOA no Chrome do app.
+
+        Deve rodar na thread do navegador. A aba nasce pelo `new_page` e cai
+        em `_nova_aba` sem opener — ou seja, como aba da pessoa: o robô nunca
+        vai adotá-la. Já chega logada, porque o token do ERP é do perfil."""
+        for aba in self._abas_da_pessoa():
+            try:
+                if "maiscontroleerp" in (aba.url or ""):
+                    aba.bring_to_front()
+                    return aba
+            except Exception:
+                continue
+        aba = self.ctx.new_page()
+        try:
+            aba.goto(url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            config.diag(f"aba da pessoa: não consegui abrir {url}: {e!r}")
+        try:
+            aba.bring_to_front()
+        except Exception:
+            pass
+        return aba
+
+    def _baixar_para_a_pessoa(self, download):
+        """Salva na Downloads da pessoa o que ela baixou na aba dela.
+
+        Com `accept_downloads=True` o Playwright toma conta de TODO download
+        do contexto, das abas da pessoa inclusive: o arquivo vai para uma
+        pasta temporária com nome aleatório e some quando o Chrome fecha.
+        Para quem clicou em "baixar boleto", o download simplesmente não
+        aconteceu. Aqui ele vai para a Downloads, com o nome que o site deu."""
+        try:
+            if download.page in self._minhas:
+                return                 # do robô: segue o caminho de sempre
+            pasta = util.pasta_downloads()
+            pasta.mkdir(parents=True, exist_ok=True)
+            alvo = util.nome_livre(pasta, download.suggested_filename or "download")
+            download.save_as(str(alvo))
+            self.log(f"Baixado na sua pasta Downloads: {alvo.name}")
+        except Exception as e:
+            config.diag(f"download da aba da pessoa não foi salvo: {e!r}")
 
     # ------------------------------------------------------------------ login
     def vivo(self) -> bool:
@@ -407,18 +561,13 @@ class MCClient:
         este cliente usava) muda de lugar a cada redesenho e cega a detecção;
         a tela de login é estável.
 
-        Olha TODAS as abas, não só `self.page`: o ERP abre aba nova em vários
-        fluxos (`stateGoNewTab`) e o cliente nasce preso em `ctx.pages[0]`.
-        Quando encontra, ADOTA a aba — é nela que o trabalho continua.
+        Olha todas as abas DO ROBÔ, não só `self.page`: o ERP abre aba nova
+        em vários fluxos (`stateGoNewTab`) e o cliente nasce preso em
+        `ctx.pages[0]`. Quando encontra, ADOTA a aba — é nela que o trabalho
+        continua. Nunca uma aba da pessoa: adotá-la faria o passo seguinte
+        navegar a aba em que ela está trabalhando (ver `_abas_do_robo`).
         """
-        try:
-            abas = list(self.ctx.pages) if self.ctx else []
-        except Exception:
-            abas = []
-        if self.page is not None and self.page not in abas:
-            abas.insert(0, self.page)
-
-        for aba in abas:
+        for aba in self._abas_do_robo():
             try:
                 if "maiscontroleerp" not in (aba.url or ""):
                     continue
@@ -455,7 +604,8 @@ class MCClient:
                     senha = self._tem_campo_senha(aba)
                 except Exception:
                     senha = "?"
-                partes.append(f"aba{i}: {url} (campo de senha: {senha})")
+                dona = "robô" if aba in self._minhas else "pessoa"
+                partes.append(f"aba{i} ({dona}): {url} (campo de senha: {senha})")
         except Exception as e:
             partes.append(f"não consegui listar as abas: {e}")
         return "; ".join(partes) or "nenhuma aba aberta"
@@ -488,6 +638,7 @@ class MCClient:
         guardada por ele, e clica em ENTRAR sozinho — aguardando a tela mudar.
         Se nada disso resolver (1ª vez), o usuário loga na própria janela do
         Chrome (que então oferece salvar a senha)."""
+        self._garantir_aba_do_robo()
         self._ir_para(config.MC_URL_PAGAMENTOS)
         # RECARREGA de propósito, e isto não é desperdício.
         #
@@ -679,6 +830,7 @@ class MCClient:
                  if a is not None}
         url = f"{config.MC_URL_BASE}/#/payable-installments/{launch_id}"
         try:
+            self._garantir_aba_do_robo()
             self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
             # o ERP fica lento em lotes grandes; espera generosa
             self.page.wait_for_selector(f"text={TXT_HISTORICO}", timeout=45000)
@@ -775,6 +927,7 @@ class MCClient:
     def resetar(self):
         """Volta para a tela de Pagamentos (recupera o ERP após timeout)."""
         try:
+            self._garantir_aba_do_robo()
             self.page.goto(config.MC_URL_PAGAMENTOS,
                            wait_until="domcontentloaded", timeout=60000)
             self.page.wait_for_timeout(2500)
@@ -800,7 +953,7 @@ class MCClient:
         # 3) não conseguiu -> salva print para diagnóstico
         try:
             shot = config.ARQUIVO_LOG.parent / "tag_debug.png"
-            self.page.screenshot(path=str(shot))
+            self.page.screenshot(path=str(shot), timeout=5000)
             self.log(f"   [aviso] não marquei a tag (res={res}); print em {shot}")
         except Exception as e:
             config.diag(f"não consegui salvar o print da tag: {e!r}")
@@ -809,7 +962,31 @@ class MCClient:
     def _print_erro(self, motivo: str, launch_id: str):
         try:
             shot = config.ARQUIVO_LOG.parent / f"erro_{launch_id[:8]}.png"
-            self.page.screenshot(path=str(shot))
+            self.page.screenshot(path=str(shot), timeout=5000)
             self.log(f"   [erro: {motivo}] print salvo em {shot}")
         except Exception as e:
             config.diag(f"não consegui salvar o print do erro '{motivo}': {e!r}")
+
+
+def abrir_aba_por_fora(url: str = config.MC_URL_PAGAMENTOS) -> bool:
+    """Abre uma aba no Chrome do app SEM passar pelo Playwright.
+
+    Enquanto o robô trabalha, a thread do navegador está tomada e não dá para
+    pedir um `new_page` a ela. O próprio chrome.exe resolve: chamado com o
+    mesmo `--user-data-dir`, ele entrega a URL ao Chrome já aberto — que abre
+    a aba e vem para a frente — e sai em seguida. A aba chega ao Playwright
+    como evento "page" sem opener: aba da pessoa, downloads cuidados.
+
+    SÓ com o Chrome do app aberto. Sem ele, este comando abriria um Chrome
+    comum no perfil do app, e a abertura seguinte pelo Playwright falharia
+    com "perfil em uso". Quem chama garante isso (`AnexarFrame.abrir_minha_aba`)."""
+    exe = util.chrome_exe()
+    if exe is None:
+        config.diag("abrir_aba_por_fora: não achei o chrome.exe")
+        return False
+    try:
+        subprocess.Popen([str(exe), f"--user-data-dir={config.PASTA_PERFIL_CHROME}", url])
+        return True
+    except OSError as e:
+        config.diag(f"abrir_aba_por_fora: {e!r}")
+        return False

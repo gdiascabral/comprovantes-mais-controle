@@ -10,7 +10,9 @@ arquivo, e não há mais duas cópias da regra de "onde fica a raiz".
 """
 import ctypes
 import logging
+import os
 import re
+import shutil
 import sys
 import unicodedata
 from logging.handlers import RotatingFileHandler
@@ -266,3 +268,99 @@ def cor_escura(cor_hex) -> bool:
     except ValueError:
         return False
     return (r + g + b) / 3 < 128
+
+
+# ------------------------------------------------------------- Chrome do app
+# O que os navegadores abertos pelo Playwright (ERP, Inter, Sicoob) dividem.
+
+def pasta_downloads() -> Path:
+    """A pasta Downloads da pessoa, perguntada ao Windows.
+
+    `~/Downloads` é chute: com o OneDrive, ou com a pasta movida nas
+    propriedades, a Downloads de verdade está em outro lugar — e o arquivo
+    salvo no chute "sumia". `SHGetKnownFolderPath` responde onde ela está de
+    fato; só quando falha se cai no chute."""
+    try:
+        from ctypes import byref, windll, wintypes
+
+        class _GUID(ctypes.Structure):
+            _fields_ = [("d1", wintypes.DWORD), ("d2", wintypes.WORD),
+                        ("d3", wintypes.WORD), ("d4", ctypes.c_ubyte * 8)]
+
+        # FOLDERID_Downloads = {374DE290-123F-4565-9164-39C4925E467B}
+        guid = _GUID(0x374DE290, 0x123F, 0x4565,
+                     (ctypes.c_ubyte * 8)(0x91, 0x64, 0x39, 0xC4,
+                                          0x92, 0x5E, 0x46, 0x7B))
+        ptr = ctypes.c_wchar_p()
+        if windll.shell32.SHGetKnownFolderPath(byref(guid), 0, None,
+                                               byref(ptr)) == 0:
+            try:
+                caminho = Path(ptr.value)
+            finally:
+                windll.ole32.CoTaskMemFree(ptr)
+            if caminho.is_dir():
+                return caminho
+    except Exception:
+        pass
+    return Path.home() / "Downloads"
+
+
+def nome_livre(pasta: Path, nome: str) -> Path:
+    """Um caminho que ainda não existe em `pasta`, numerando o repetido.
+
+    Numera como o Chrome ("boleto (1).pdf"), e o nome base é relido do
+    ORIGINAL a cada volta — senão o sufixo empilha e o terceiro repetido sai
+    "boleto (1) (2).pdf"."""
+    base = Path(nome)
+    destino = pasta / nome
+    n = 1
+    while destino.exists():
+        destino = pasta / f"{base.stem} ({n}){base.suffix}"
+        n += 1
+    return destino
+
+
+def limpar_historico_de_downloads(perfil: Path) -> bool:
+    """Apaga o histórico de downloads de um perfil do Chrome ANTES de abri-lo.
+
+    O Chrome 152 (e o Edge 152) morrem com violação de acesso no PRIMEIRO
+    download de um perfil que já baixou algo numa abertura anterior pelo
+    Playwright. Medido em 08/09/2026: perfil novo baixa; o mesmo perfil
+    reaberto cai (exit 0xC0000005) em qualquer forma de download — clique,
+    `expect_download`, Content-Disposition —, e apagar o `History` (onde o
+    Chrome guarda a tabela de downloads) faz voltar. Nem `downloads_path`
+    fixo nem desligar a bolha de downloads resolvem. O Chromium embutido do
+    Playwright não tem o defeito, mas trocar de navegador custaria ~150 MB por
+    máquina; o Edge tem o mesmo defeito.
+
+    Vai o arquivo inteiro, e não só as linhas de download: ler o SQLite
+    pediria `sqlite3`, que o exe não embute (ver `motor.py`). Num perfil que
+    só o app usa, o histórico de navegação não faz falta.
+
+    Só funciona com o Chrome FECHADO — aberto, ele segura o arquivo, e aí não
+    é a hora mesmo. Devolve se apagou alguma coisa."""
+    apagou = False
+    for nome in ("History", "History-journal"):
+        arq = perfil / "Default" / nome
+        try:
+            if arq.exists():
+                arq.unlink()
+                apagou = True
+        except OSError:
+            pass
+    return apagou
+
+
+def chrome_exe() -> Path | None:
+    """Onde está o chrome.exe — o mesmo que o Playwright abre com
+    `channel="chrome"`. Sem `winreg` (o exe não o embute): os três lugares
+    em que o instalador do Chrome põe o programa, e por último o PATH."""
+    for raiz in (os.environ.get("ProgramFiles"),
+                 os.environ.get("ProgramFiles(x86)"),
+                 os.environ.get("LOCALAPPDATA")):
+        if raiz:
+            exe = Path(raiz) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            if exe.is_file():
+                return exe
+    achado = shutil.which("chrome")
+    return Path(achado) if achado else None

@@ -569,6 +569,9 @@ def baixar(conta: str, inicio: str, fim: str, pasta, *,
     perfil = pasta_do_perfil(conta)
     perfil.mkdir(parents=True, exist_ok=True)
 
+    # O Chrome 152 cai no 1º download de um perfil já usado — e este perfil
+    # existe para baixar. Ver `util.limpar_historico_de_downloads`.
+    util.limpar_historico_de_downloads(perfil)
     with sync_playwright() as pw:
         # Uma pasta de perfil por conta: no Inter cada conta é um login, e um
         # perfil só faria a segunda entrar como a primeira — baixando os
@@ -632,6 +635,7 @@ def sondar(conta: str = "sonda", log=print) -> dict:
     achados: dict = {}
     perfil = pasta_do_perfil(conta)
     perfil.mkdir(parents=True, exist_ok=True)
+    util.limpar_historico_de_downloads(perfil)   # ver o mesmo em `baixar`
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(
             str(perfil), channel="chrome", headless=False,
