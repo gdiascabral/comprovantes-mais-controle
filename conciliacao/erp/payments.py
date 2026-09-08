@@ -38,12 +38,15 @@ texto subtraia dinheiro do painel sem aviso.
 
 from __future__ import annotations
 
+import re
 import time
+from decimal import Decimal
 
 from playwright.sync_api import Page
 
 from ..models import ErpPayment, Periodo
 from ..parsing import (
+    format_brl,
     normalize_name,
     parse_brl,
     parse_date_br,
@@ -87,11 +90,34 @@ _JS_LER_GRADE = """() => {
   return {cabecalhos, dados};
 }"""
 
-_JS_AGREGADO = """() => {
-  const texto = document.body.innerText || '';
-  const achado = texto.match(/Em aberto:?\\s*(R\\$\\s*-?\\s*[\\d.]+,\\d{2})/i);
-  return achado ? achado[1] : null;
+#: Texto da tela SEM A GRADE, e isso e o conserto inteiro.
+#:
+#: Cada linha da grade imprime o status "Em aberto" colado no proprio valor
+#: ("01/09/2026 | Em aberto | R$ 45,50"), entao procurar o total do mes no
+#: corpo inteiro casava com a PRIMEIRA LINHA em vez do cartao de totais. Deu
+#: certo por acaso ate 31/08/2026, so porque o cartao costuma renderizar antes
+#: da grade e a busca parava nele.
+#:
+#: Em 01/09/2026 o cartao ainda nao tinha chegado: a busca caiu na grade,
+#: trouxe R$ 45,50 como se fosse o "Em aberto" do mes, e o `validate.py`
+#: barrou o dia inteiro acusando "coleta duplicada" — com a coleta perfeita
+#: (75 linhas, 75 ids distintos, R$ 97.774,68).
+_JS_TEXTO_FORA_DA_GRADE = r"""() => {
+  const ehGrade = (el) => el.matches && el.matches(
+    '[role=grid], [role=treegrid], [role=row], [role=gridcell], [role=columnheader]');
+  const partes = [];
+  const anda = (no) => {
+    if (no.nodeType === 3) { partes.push(no.nodeValue); return; }
+    if (no.nodeType !== 1) return;
+    if (ehGrade(no)) return;              // a grade inteira fica de fora
+    for (const filho of no.childNodes) anda(filho);
+  };
+  anda(document.body);
+  return partes.join(' ').replace(/\s+/g, ' ').trim();
 }"""
+
+#: O total do mes como a tela escreve: "Em aberto: R$ 316.509,77".
+_RE_AGREGADO = re.compile(r"Em aberto:?\s*(R\$\s*-?\s*[\d.]+,\d{2})", re.IGNORECASE)
 
 #: Sinonimos aceitos para cada campo, em nome normalizado.
 _ALVOS = {
@@ -760,9 +786,57 @@ def motivo_da_grade_vazia(total_rodape, tem_texto_vazio: bool) -> str:
     )
 
 
+def extrair_agregado_em_aberto(texto: str | None) -> Decimal | None:
+    """Tira o total "Em aberto" do mes do texto da tela.
+
+    Funcao pura para poder ser testada. O texto precisa chegar aqui JA sem a
+    grade (veja `_JS_TEXTO_FORA_DA_GRADE`): com a grade junto, qualquer linha
+    em aberto casa antes do cartao de totais e o numero vem errado.
+    """
+    if not texto:
+        return None
+    achado = _RE_AGREGADO.search(texto)
+    return parse_brl(achado.group(1)) if achado else None
+
+
+def ler_agregado_em_aberto(
+    pagina: Page, *, timeout_s: float = 15.0, log=print
+) -> Decimal | None:
+    """Le o total "Em aberto" do mes, esperando o cartao de totais chegar.
+
+    DEVOLVE None QUANDO NAO CONSEGUE LER, E ISSO E DE PROPOSITO. O
+    `validate.py` compara o total do dia contra este numero e so dispensa a
+    comparacao quando ela vem None. Um numero em que nao da para confiar tem
+    de virar "nao li" — nunca virar OUTRO numero, porque ai a conferencia
+    deixa de proteger o painel e passa a acusa-lo.
+
+    A espera existe porque `_esperar_grade` so espera as LINHAS. O cartao de
+    totais carrega por conta propria e pode chegar depois — foi o que
+    aconteceu em 01/09/2026, no mesmo instante em que o dropdown de status
+    tambem nao respondeu.
+    """
+    limite = time.monotonic() + timeout_s
+    while True:
+        try:
+            valor = extrair_agregado_em_aberto(
+                pagina.evaluate(_JS_TEXTO_FORA_DA_GRADE)
+            )
+        except Exception:                                         # noqa: BLE001
+            valor = None
+        if valor is not None:
+            log(f"  'Em aberto' do mes na tela: {format_brl(valor)}")
+            return valor
+        if time.monotonic() >= limite:
+            log("  nao achei o total 'Em aberto' do mes na tela — a conferencia "
+                "cruzada do total do dia fica de fora desta rodada")
+            return None
+        pagina.wait_for_timeout(500)
+
+
 def _diagnostico_grade_vazia(pagina: Page) -> str:
     try:
-        total = pagina.evaluate(_JS_AGREGADO)
+        valor = extrair_agregado_em_aberto(pagina.evaluate(_JS_TEXTO_FORA_DA_GRADE))
+        total = format_brl(valor) if valor is not None else None
     except Exception:
         total = None
     try:
@@ -788,7 +862,7 @@ def coletar_pagamentos(
 
     # O agregado do rodape precisa ser lido ANTES do filtro, senao passa a
     # refletir so o subconjunto filtrado e a conferencia cruzada perde sentido.
-    agregado = parse_brl(pagina.evaluate(_JS_AGREGADO))
+    agregado = ler_agregado_em_aberto(pagina, log=log)
 
     if not filtrar_em_aberto(pagina, log=log):
         log("  nao consegui usar o filtro de status da tela")
