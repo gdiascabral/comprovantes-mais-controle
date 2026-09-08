@@ -14,6 +14,10 @@ Fluxo da janela:
 O botão "Abrir o Mais Controle" não é mais um passo: serve para o primeiro
 acesso (quando ainda não há senha guardada) e para destravar sessão caída.
 
+Enquanto o robô trabalha, a pessoa pode usar o Mais Controle numa aba SUA do
+mesmo Chrome (botão "Minha aba no ERP", na barra de cima): as abas dividem a
+sessão, e o robô só toca nas abas dele (ver `mc_client._nova_aba`).
+
 Modo alternativo "Por lista": anexa a partir de um CSV (launchId,valor,arquivo_pdf)
 ou de um Excel com aba CERTEZA (coluna link + PDF(s)).
 """
@@ -29,7 +33,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from . import config, matcher, mc_api, planilha, credenciais
+from . import config, matcher, mc_api, planilha, credenciais, mc_client
 from .mc_client import MCClient, SemRede
 
 import util
@@ -120,6 +124,10 @@ class AnexarFrame(ttk.Frame):
         self._rotulo_atual = None
         self.mc = None                       # MCClient aberto entre as etapas
         self.api = None
+        # O pulso do navegador (ver `_pulsar_navegador`) e a trava que o
+        # desliga ao sair — depois do `fechar()` o executor não aceita nada.
+        self._pulso_nav = None
+        self._encerrando = False
         self.ultimo_relatorio = None
         self.pagos = []                      # registros de montar_pagos()
         self.vars_contas: dict[str, tk.BooleanVar] = {}
@@ -139,6 +147,7 @@ class AnexarFrame(ttk.Frame):
         except Exception:
             pass
         self.after(150, self._drain)
+        self.after(1200, self._pulsar_navegador)
 
     # ---------------------------------------------------------------- layout
     def _build(self):
@@ -353,12 +362,83 @@ class AnexarFrame(ttk.Frame):
         quem = self.ocupado()
         if not quem:
             return False
-        messagebox.showinfo(
-            "Navegador ocupado",
-            f"O navegador está ocupado com: {quem}.\n\n"
-            f"O Mais Controle aceita uma sessão por usuário, então "
-            f"{dona} precisa esperar terminar.")
+        # O aviso vira oferta: é na hora em que a pessoa bate na parede que
+        # ela quer a porta. A aba dela não disputa o robô — só a thread do
+        # navegador é uma, e o ERP divide a sessão entre as abas.
+        if messagebox.askyesno(
+                "Navegador ocupado",
+                f"O navegador está ocupado com: {quem}.\n\n"
+                f"O app usa um navegador só, então {dona} precisa esperar "
+                f"terminar.\n\nEnquanto isso, quer abrir uma aba SUA no "
+                f"Chrome do app para usar o Mais Controle?"):
+            self.abrir_minha_aba()
         return True
+
+    # ------------------------------------------------- a aba da pessoa
+    def abrir_minha_aba(self):
+        """Botão ↗ Minha aba no ERP (e o "sim" do aviso de navegador ocupado).
+
+        Três situações, e o que muda é POR ONDE a aba entra:
+
+        - Chrome aberto e o robô trabalhando: a thread do navegador está
+          tomada, então a aba entra por fora, pelo chrome.exe
+          (`mc_client.abrir_aba_por_fora`). É o caso que motivou tudo isto.
+        - Chrome aberto e livre: pela thread, com o Playwright — que também
+          traz para a frente uma aba sua que já exista.
+        - Chrome fechado: abre o Chrome, entra no ERP e aí abre a aba. Se a
+          thread estiver ocupada justamente abrindo o Chrome, espera.
+
+        `mc.fechado` e não `mc.vivo()`: este método roda na thread da
+        interface, e `vivo()` fala com o navegador — coisa da thread dele."""
+        mc = self.mc
+        ocupado = self.ocupado()
+        if mc is not None and not mc.fechado and ocupado:
+            if mc_client.abrir_aba_por_fora():
+                self._log("Abri uma aba sua no Chrome do app. Use o Mais "
+                          "Controle nela à vontade — só não feche a janela, "
+                          f"que o robô ainda está em: {ocupado}.")
+            else:
+                messagebox.showinfo(
+                    "Minha aba no ERP",
+                    "Não achei o chrome.exe para abrir a aba por aqui.\n\n"
+                    "Na janela do Chrome do app, aperte Ctrl+T e entre no "
+                    "Mais Controle: a sessão já está lá.")
+            return
+        if ocupado:
+            messagebox.showinfo(
+                "Minha aba no ERP",
+                f"O app está em: {ocupado}. Assim que o Chrome estiver "
+                "aberto, clique de novo.")
+            return
+        self.submeter("Minha aba no ERP", self._t_minha_aba)
+
+    def _t_minha_aba(self):
+        try:
+            self.garantir_sessao()
+            self.mc.abrir_aba_da_pessoa()
+            self._log("Sua aba está aberta no Chrome do app. O robô trabalha "
+                      "na dele e não mexe na sua — só não feche a janela.")
+        except Exception as e:
+            self._log(_texto_do_erro(e))
+
+    def _pulsar_navegador(self):
+        """A cada ~1 s com o navegador livre, uma ida curta até ele.
+
+        É o que faz um download da aba da pessoa aparecer na Downloads na
+        hora, e o fechamento do Chrome ser notado antes do próximo clique:
+        no Playwright síncrono os eventos só chegam durante uma chamada, e
+        com o robô parado não há chamada nenhuma (ver `MCClient.pulsar`).
+        Não conta como trabalho — `ocupado()` continua None."""
+        if self._encerrando:
+            return
+        try:
+            mc = self.mc
+            if (mc is not None and not mc.fechado and self.ocupado() is None
+                    and (self._pulso_nav is None or self._pulso_nav.done())):
+                self._pulso_nav = self.exec.submit(mc.pulsar)
+        except Exception as e:
+            config.diag(f"pulso do navegador: {e!r}")
+        self.after(1200, self._pulsar_navegador)
 
     def garantir_sessao(self, log=None):
         """Abre o Chrome e prepara a API, se ainda não estiverem prontos.
@@ -401,6 +481,9 @@ class AnexarFrame(ttk.Frame):
                     "Sem a sessão do navegador o ERP devolve as telas vazias, "
                     "e o resultado sairia errado — por isso parei aqui.\n"
                     "Entre na janela do Chrome que abriu e rode de novo.")
+            log("Enquanto o app trabalha, você pode usar o Mais Controle "
+                "numa aba sua: botão ↗ Minha aba no ERP, na barra de cima "
+                "(ou Ctrl+T na janela do Chrome). Só não feche a janela.")
         elif not self.mc.esta_logado():
             log("A sessão do Mais Controle caiu — entrando de novo...")
             if not self.mc.garantir_login():
@@ -1107,6 +1190,7 @@ class AnexarFrame(ttk.Frame):
         `ev.wait()` até alguém responder). Fechar o Chrome primeiro deixaria
         essa thread presa para sempre e o processo não morreria — a janela
         some e o app fica de fundo, segurando o perfil do Chrome."""
+        self._encerrando = True       # o pulso não pode mais usar o executor
         # 1) solta quem está esperando
         try:
             self._parar.set()

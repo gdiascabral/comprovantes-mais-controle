@@ -78,6 +78,13 @@ Controle: ficam cifrados neste computador (DPAPI do Windows) e o app passa a
 O botão **Abrir o Mais Controle** não faz parte do fluxo: use no primeiro
 acesso (se ainda não guardou a senha) ou para destravar uma sessão caída.
 
+**Enquanto o app trabalha, você pode usar o Mais Controle.** Clique em
+**↗ Minha aba no ERP** (na barra de cima) — ou aperte Ctrl+T na janela do
+Chrome que o app abriu — e use o sistema nessa aba à vontade: a sessão é a
+mesma, o robô trabalha na aba dele e não mexe na sua, e o que você baixar vai
+para a sua pasta Downloads. Só não feche a janela do Chrome (fechar a sua aba
+pode).
+
 Como o app decide (com segurança):
 
 - pagamentos que **já têm** comprovante são pulados (não duplica);

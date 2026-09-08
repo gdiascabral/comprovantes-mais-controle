@@ -814,6 +814,49 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   (3 tentativas em `_ir_para`), que a UI mostra como recado, sem traceback.
   `MCClient(log=...)`: no exe `--noconsole` não há stdout, então as mensagens
   do login precisam do log da janela para existirem.
+  **A aba da pessoa (08/09/2026).** O ERP aceita uma sessão por usuário, mas
+  abas do MESMO Chrome dividem a sessão (o token do Firebase mora no
+  IndexedDB do perfil, não na aba). Então a pessoa pode usar o Mais Controle
+  numa aba dela, no Chrome do app, enquanto o robô trabalha na dele — e o
+  que o app precisa garantir é uma coisa só: **o robô nunca adota uma aba que
+  não seja dele**. `_minhas` guarda as abas do robô; `_nova_aba` (evento
+  "page" do contexto) classifica cada aba nova pelo `opener()`: aberta a
+  partir de uma aba do robô (`stateGoNewTab`) é do robô, qualquer outra
+  (Ctrl+T, o botão, o chrome.exe por fora) é da pessoa. `_aba_logada` só
+  olha `_abas_do_robo()`. Medido com Playwright 1.61 + Chrome 152: com a
+  aba da pessoa na frente, o robô navega, clica, digita e tira print sem
+  roubar a frente — mas **`new_page()` traz a aba nova para a frente**, por
+  isso o robô só cria aba quando a dele foi fechada (`_garantir_aba_do_robo`).
+  Três consequências que não são óbvias: (1) **downloads da aba da pessoa**:
+  com `accept_downloads=True` o Playwright toma conta de TODO download do
+  contexto — o boleto que ela baixou ia para uma pasta temporária com nome
+  aleatório e sumia. `_baixar_para_a_pessoa` salva na Downloads dela
+  (`util.pasta_downloads`, que pergunta ao Windows). (2) **No Playwright
+  síncrono os eventos só chegam DURANTE uma chamada à API**: com o robô
+  parado, o download (e o "fechou a janela") ficariam na fila por horas.
+  `AnexarFrame._pulsar_navegador` chama `MCClient.pulsar()` a cada ~1 s com
+  o navegador livre — sem contar como trabalho. É também o que mantém
+  `mc.fechado` fresco, e `fechado` (evento "close") é o que a thread da
+  interface pode consultar, já que `vivo()` fala com o navegador. (3) **O
+  botão ↗ Minha aba no ERP** (`AnexarFrame.abrir_minha_aba`, na barra de
+  cima, e o "sim" do aviso "Navegador ocupado") entra por caminhos diferentes:
+  com o robô trabalhando a thread está tomada, então a aba entra POR FORA —
+  `mc_client.abrir_aba_por_fora` chama o chrome.exe com o mesmo
+  `--user-data-dir`, e o Chrome já aberto abre a aba e vem para a frente. Só
+  com o Chrome do app vivo: sem ele, isso abriria um Chrome comum no perfil do
+  app e a abertura seguinte falharia com "perfil em uso".
+  **O crash do Chrome 152** (medido no mesmo dia, `tests/test_aba_da_pessoa.py`):
+  o Chrome — e o Edge 152 — morrem com violação de acesso no PRIMEIRO download
+  de um perfil que já baixou algo numa abertura anterior pelo Playwright.
+  Perfil novo baixa; o mesmo perfil reaberto cai (exit 0xC0000005) em qualquer
+  forma de download; apagar o `History` (onde vive a tabela de downloads) faz
+  voltar; `downloads_path` fixo e desligar a bolha de downloads NÃO resolvem;
+  o Chromium embutido do Playwright não tem o defeito, mas custaria ~150 MB
+  por máquina. `util.limpar_historico_de_downloads(perfil)` roda ANTES de
+  todo `launch_persistent_context` que baixa alguma coisa — ERP, Inter e
+  Sicoob. Apaga o arquivo inteiro (ler o SQLite pediria `sqlite3`, que o exe
+  não embute), e num perfil que só o app usa o histórico de navegação não faz
+  falta.
   Anexa via UI (⋮ → Editar pagamento → arquivo → tag "Comprovante").
   Seletores do ERP estão nos blocos JS deste arquivo. Timeouts generosos
   (45–60 s) + `resetar()` antes de retentar (ERP fica lento em lote).
@@ -1507,6 +1550,16 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 - **Playwright sync = uma única thread.** Todo trabalho com o navegador do ERP
   roda em `AnexarFrame.exec` (ThreadPoolExecutor de 1 worker). Nunca tocar em
   `page`/`mc` fora dela (erro greenlet "cannot switch to a different thread").
+  Da thread da interface só se lê `mc.fechado` — e a aba da pessoa, com o
+  robô trabalhando, entra pelo chrome.exe e não pelo Playwright.
+- **O robô só trabalha nas abas dele** (`MCClient._minhas`). A pessoa pode ter
+  abas suas no Chrome do app; código novo que procurar "a aba do ERP" tem de
+  passar por `_abas_do_robo()`, nunca por `ctx.pages` — senão volta a navegar
+  a aba em que ela está. E nunca `ctx.new_page()` no meio de uma tarefa: o
+  Chrome traz a aba nova para a frente, por cima da dela.
+- **Todo perfil do Chrome que baixa arquivo passa por
+  `util.limpar_historico_de_downloads` antes de abrir** (Chrome 152 cai no
+  primeiro download de perfil já usado — ver `anexar/mc_client.py` acima).
   O `extratos_sicoob/` é a exceção deliberada: tem executor e navegador
   próprios porque fala com outro site, sob outro login — a regra continua
   valendo dentro de cada um.

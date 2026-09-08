@@ -834,6 +834,13 @@ class Botao(tk.Button):
             # lado do campo de data passava por rótulo.
             "neutro": (c["texto"], c["fundo"], c["marca_fundo"]),
             "link":   (c["marca"], c["cartao"], c["cartao"]),
+            # Na barra de cima, ao lado do chip do navegador: branco sobre
+            # um azul um pouco mais claro que o da barra (é o que o faz se
+            # ler como botão, e não como mais um rótulo), e mais claro ainda
+            # ao passar o cursor. Misturado, e não da paleta, porque no tema
+            # claro marca e barra são a mesma cor e o botão não reagiria.
+            "barra":  ("#FFFFFF", _mistura(c["marca_barra"], "#FFFFFF", 0.14),
+                       _mistura(c["marca_barra"], "#FFFFFF", 0.28)),
             "perigo": (c["erro"], c["fundo"], c["erro_fundo"]),
         }.get(self._papel, (c["texto"], c["cartao"], c["fundo"]))
         try:
