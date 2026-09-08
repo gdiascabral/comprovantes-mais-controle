@@ -1,7 +1,9 @@
 """CNAB 240 — Sicoob (Sicoobnet Empresarial).
 
 Gera, valida e lê arquivos de pagamento no padrão do "Guia de Importação de
-Arquivos CNAB 240" v3.1 (26/03/2025).
+Arquivos CNAB 240 — Pagamentos e Transferências" v4.0 (01/07/2026): código
+`BS` no retorno, CNPJ alfanumérico no G006 e chave Pix CPF/CNPJ na
+Informação 12. Escrito contra a v3.1 e conferido a cada versão desde então.
 
     from cnab240 import *
 

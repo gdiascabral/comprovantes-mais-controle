@@ -69,6 +69,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
 
+from .dominios import so_inscricao
 from .modelos import dinheiro, so_digitos
 
 #: O diagnóstico da trava. É o `logging` da stdlib, e NÃO o `util.log()` que o
@@ -651,7 +652,7 @@ class Historico:
                 convenio=chave,
                 nsa=nsa,
                 empresa=empresa.nome,
-                documento=so_digitos(empresa.documento),
+                documento=so_inscricao(empresa.documento),
                 agencia=str(empresa.agencia),
                 conta=str(empresa.conta),
                 gerado_em=agora.replace(microsecond=0),

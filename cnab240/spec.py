@@ -121,7 +121,9 @@ class Layout:
 
 def _campo(linha: list[Any]) -> Campo:
     id_, nome, de, ate, dec, tipo, default, obrig, ref = linha
-    if tipo not in ("num", "alfa"):
+    # "inscricao" é o G006 desde a v4.0 do guia: Alfa no PDF, mas gravado à
+    # direita com zeros como sempre foi (ver `campos.fmt_inscricao`).
+    if tipo not in ("num", "alfa", "inscricao"):
         raise SpecInvalida(f"{id_}: tipo {tipo!r} desconhecido")
     if obrig not in ("O", "C", "R"):
         raise SpecInvalida(f"{id_}: obrigatoriedade {obrig!r} desconhecida")

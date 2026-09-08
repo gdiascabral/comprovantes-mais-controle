@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 
 from .spec import dominios as _dominios
@@ -21,15 +22,35 @@ class TipoInscricao(StrEnum):
 
     @classmethod
     def por_documento(cls, documento: str) -> "TipoInscricao":
-        digitos = "".join(c for c in str(documento) if c.isdigit())
-        if len(digitos) == 11:
+        # Conta CARACTERES, não dígitos: desde a v4.0 do guia (01/07/2026) o
+        # CNPJ pode ter letras, e contar só dígitos devolveria "não sei" para
+        # um CNPJ legítimo. O CPF continua sendo só dígitos.
+        caracteres = so_inscricao(documento)
+        if len(caracteres) == 11 and caracteres.isdigit():
             return cls.CPF
-        if len(digitos) == 14:
+        if len(caracteres) == 14:
             return cls.CNPJ
         raise ValueError(
             f"não dá para inferir o tipo de inscrição de {documento!r} "
             "(esperado 11 dígitos para CPF ou 14 para CNPJ)"
         )
+
+
+#: O alfabeto do número de inscrição (G006) desde a v4.0 do guia: dígitos e
+#: letras MAIÚSCULAS. É o alfabeto do CNPJ alfanumérico da Receita (IN RFB
+#: 2.229/2024): raiz e ordem podem ter letras, os dois DVs continuam dígitos.
+CARACTERES_INSCRICAO = frozenset("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+
+def so_inscricao(valor) -> str:
+    """Só o que um CPF/CNPJ pode conter: dígitos e letras A-Z, em maiúsculas.
+
+    É o `so_digitos` de quem já sabe que o CNPJ pode ter letra. Serve para
+    VALOR que se espera que seja um documento ("12.ABC.345/01DE-35"); para
+    achar um documento dentro de TEXTO livre é `documento_valido`, que confere
+    o dígito verificador — aqui, "PIX CNPJ 12..." viraria "PIXCNPJ12...".
+    """
+    return "".join(c for c in str(valor or "").upper() if c in CARACTERES_INSCRICAO)
 
 
 #: Pesos do DV do CNPJ, do 2º dígito para trás. O 1º DV usa os 12 últimos;
@@ -40,7 +61,7 @@ _PESOS_CNPJ = (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
 
 def dv_cpf(d: str) -> bool:
     """Os onze dígitos fecham como CPF?"""
-    if len(d) != 11 or len(set(d)) == 1:
+    if len(d) != 11 or len(set(d)) == 1 or not d.isdigit():
         return False
     for tamanho in (9, 10):
         soma = sum(int(d[i]) * (tamanho + 1 - i) for i in range(tamanho))
@@ -51,16 +72,55 @@ def dv_cpf(d: str) -> bool:
 
 
 def dv_cnpj(d: str) -> bool:
-    """Os catorze dígitos fecham como CNPJ?"""
+    """Os catorze caracteres fecham como CNPJ?
+
+    Desde 01/07/2026 (guia v4.0, campo G006) o CNPJ pode ter letras nas doze
+    primeiras posições — raiz e ordem —, e os dois dígitos verificadores
+    continuam numéricos. A conta é a MESMA da Receita para o CNPJ de sempre,
+    com cada caractere valendo o seu código ASCII menos 48: os dígitos
+    continuam valendo 0 a 9 (nada muda para quem só tem dígito) e A..Z valem
+    17 a 42. O exemplo oficial da Receita, ``12.ABC.345/01DE-35``, fecha.
+
+    Minúscula não passa de propósito: quem normaliza é `so_inscricao`, e um
+    "a" chegando aqui é sinal de que alguém pulou a normalização.
+    """
     if len(d) != 14 or len(set(d)) == 1:
+        return False
+    if not all(c in CARACTERES_INSCRICAO for c in d[:12]) or not d[12:].isdigit():
         return False
     for tamanho in (12, 13):
         pesos = _PESOS_CNPJ[-tamanho:]
-        soma = sum(int(d[i]) * pesos[i] for i in range(tamanho))
+        soma = sum((ord(d[i]) - 48) * pesos[i] for i in range(tamanho))
         resto = soma % 11
         if (0 if resto < 2 else 11 - resto) != int(d[tamanho]):
             return False
     return True
+
+
+#: Um CNPJ alfanumérico dentro de um texto, com ou sem a máscara
+#: "12.ABC.345/01DE-35" — catorze caracteres delimitados por algo que não é
+#: dígito nem letra. `[0-9]` no lugar de `\d` e lookarounds no lugar de
+#: `\b` de propósito: `\b` trata "_" como letra, e aqui "_" é delimitador.
+_CNPJ_ALFANUMERICO = re.compile(
+    r"(?<![0-9A-Z])([0-9A-Z]{2})[.]?([0-9A-Z]{3})[.]?([0-9A-Z]{3})/?([0-9A-Z]{4})-?([0-9]{2})(?![0-9A-Z])"
+)
+
+
+def cnpj_alfanumerico_em(texto) -> str:
+    """O primeiro CNPJ COM LETRAS que fecha o DV dentro de ``texto``, ou "".
+
+    Exige pelo menos uma letra: sem letra, o caminho dos dígitos de
+    `documento_valido` já respondeu, e este não pode mudar a resposta dele —
+    é o que mantém intacto tudo o que já funcionava com CNPJ numérico. O DV
+    é o filtro contra palavra de catorze caracteres terminada em dois dígitos
+    (fecha por acaso ~1 vez em 100, a mesma exposição que o CPF numérico
+    sempre teve).
+    """
+    for m in _CNPJ_ALFANUMERICO.finditer(str(texto or "").upper()):
+        candidato = "".join(m.groups())
+        if not candidato.isdigit() and dv_cnpj(candidato):
+            return candidato
+    return ""
 
 
 def documento_valido(valor) -> str:
@@ -75,11 +135,18 @@ def documento_valido(valor) -> str:
 
     Os dígitos verificadores não são preciosismo: sem eles, todo telefone de
     onze dígitos viraria "CPF encontrado".
+
+    Dois caminhos, nesta ordem: os DÍGITOS do texto inteiro (o de sempre, que
+    resolve CPF e CNPJ numérico) e, só quando eles não fecham, um CNPJ com
+    letras achado no texto (`cnpj_alfanumerico_em`, desde a v4.0 do guia).
+    Devolve o documento como o arquivo o grava: maiúsculas, sem pontuação.
     """
     if isinstance(valor, bool) or not isinstance(valor, (str, int)):
         return ""
     digitos = "".join(c for c in str(valor) if c.isdigit())
-    return digitos if (dv_cpf(digitos) or dv_cnpj(digitos)) else ""
+    if dv_cpf(digitos) or dv_cnpj(digitos):
+        return digitos
+    return cnpj_alfanumerico_em(valor) if isinstance(valor, str) else ""
 
 
 class TipoServico(StrEnum):
@@ -183,6 +250,14 @@ OCORRENCIAS_SUCESSO = frozenset({"00", "BD", "68"})
 
 #: Ocorrências que indicam pendência de ação do usuário.
 OCORRENCIAS_PENDENTES = frozenset({"PD"})
+
+#: Ocorrências em que o banco SEGUROU a transação para análise de segurança.
+#: `BS` existe desde 29/04/2026 (guia v3.5) e tem uma propriedade que nenhum
+#: outro código tem: o retorno NÃO é atualizado quando a análise termina —
+#: o Sicoob avisou isso aos cooperados por escrito. Quem diz se o dinheiro saiu
+#: é o extrato da conta, e por isso `BS` não pode ser lido nem como pago, nem
+#: como pendente de assinatura, nem como rejeitado. Não vale para Pix.
+OCORRENCIAS_EM_ANALISE = frozenset({"BS"})
 
 
 def _tabela_ocorrencias() -> dict[str, str]:

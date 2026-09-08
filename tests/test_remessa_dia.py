@@ -1125,6 +1125,13 @@ def test_reconhece_cpf_e_cnpj_validos():
     assert remessa_dia.documento_valido("529.982.247-25") == CPF_OK
 
 
+def test_reconhece_o_cnpj_alfanumerico():
+    """Receita Federal, desde 07/2026: raiz e ordem com letras, DVs numéricos.
+    O exemplo é o oficial da própria Receita; guia CNAB v4.0, campo G006."""
+    assert remessa_dia.documento_valido("12.ABC.345/01DE-35") == "12ABC34501DE35"
+    assert remessa_dia.documento_valido("12.ABC.345/01DE-36") == ""
+
+
 def test_telefone_de_onze_digitos_nao_e_cpf():
     """Sem conferir o DV, todo celular viraria 'CPF encontrado'.
 

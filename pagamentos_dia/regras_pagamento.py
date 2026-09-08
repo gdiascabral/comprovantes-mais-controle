@@ -302,6 +302,11 @@ def tipo_de_chave_pix(texto: str) -> str:
     fechando o CPF, é celular. **Quando as duas provas apontam para o mesmo
     número, continua "" e quem confere responde** — é o caso do CPF que por
     coincidência começa com DDD válido e tem 9 na terceira casa (~7% deles).
+
+    Por último, e só por último, o **CNPJ com letras** (Receita, desde julho
+    de 2026; guia CNAB v4.0): "12.ABC.345/01DE-35" tem nove dígitos e cairia
+    em "não sei" pelas regras acima, e o DV é o único filtro dele — daí ser a
+    última porta, quando nada mais respondeu.
     """
     t = str(texto or "")
     if not t.strip():
@@ -333,6 +338,8 @@ def tipo_de_chave_pix(texto: str) -> str:
             return CHAVE_CPF
         if celular and not cpf:
             return CHAVE_TELEFONE
+    if _dominios.cnpj_alfanumerico_em(t):
+        return CHAVE_CNPJ
     return ""
 
 

@@ -3,6 +3,12 @@
 O retorno é o mesmo arquivo enviado com os códigos de ocorrência gravados nas
 posições 231-240 de cada registro, mais o segmento Z de autenticação nos
 pagamentos processados com sucesso.
+
+Cada pagamento cai em UM de cinco estados, nesta ordem de precedência:
+``sucesso`` (00, BD, 68), ``em_analise`` (BS), ``pendente`` (PD),
+``rejeitado`` (qualquer outro código) e ``sem_ocorrencia`` (nada nas posições
+231-240). O `BS` entrou em 29/04/2026 e é o único em que reler o retorno não
+ajuda: o Sicoob não o atualiza quando a análise de segurança termina.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from typing import Iterator, Sequence
 from . import spec
 from .campos import ler, ler_data, ler_num
 from .dominios import (
+    OCORRENCIAS_EM_ANALISE,
     OCORRENCIAS_PENDENTES,
     OCORRENCIAS_SUCESSO,
     decodificar_ocorrencias,
@@ -110,13 +117,32 @@ class ResultadoPagamento:
         return bool(self.codigos) and all(c in OCORRENCIAS_SUCESSO for c in self.codigos)
 
     @property
+    def em_analise(self) -> bool:
+        """BS — o banco segurou a transação para análise de segurança.
+
+        Não é pendência de assinatura nem rejeição: é "ainda não sei". E este
+        retorno NÃO vai dizer o desfecho — o Sicoob avisou (guia v3.5, em
+        vigor desde 29/04/2026) que o CNAB de retorno não é atualizado quando
+        a análise termina. Quem responde se o dinheiro saiu é o extrato da
+        conta, e é isso que a tela tem de mandar a pessoa olhar.
+        """
+        return any(c in OCORRENCIAS_EM_ANALISE for c in self.codigos)
+
+    @property
     def pendente(self) -> bool:
-        """Aguardando ação do usuário — PD, transação pendente de assinatura."""
-        return any(c in OCORRENCIAS_PENDENTES for c in self.codigos)
+        """Aguardando ação do usuário — PD, transação pendente de assinatura.
+
+        Vindo junto de `BS`, a análise manda: assinar não resolve o que o
+        banco segurou, e os estados precisam ser exclusivos para as contagens
+        do `resumo` fecharem.
+        """
+        return (any(c in OCORRENCIAS_PENDENTES for c in self.codigos)
+                and not self.em_analise)
 
     @property
     def rejeitado(self) -> bool:
-        return bool(self.codigos) and not self.sucesso and not self.pendente
+        return (bool(self.codigos) and not self.sucesso and not self.pendente
+                and not self.em_analise)
 
     @property
     def sem_ocorrencia(self) -> bool:
@@ -129,6 +155,8 @@ class ResultadoPagamento:
             estado, motivos = "  ? ", "sem ocorrência informada"
         elif self.sucesso:
             estado = " OK "
+        elif self.em_analise:
+            estado = "ANLS"
         elif self.pendente:
             estado = "PEND"
         else:
@@ -264,6 +292,7 @@ class ArquivoRetorno:
         ok = [p for p in pagamentos if p.sucesso]
         erro = [p for p in pagamentos if p.rejeitado]
         pendentes = [p for p in pagamentos if p.pendente]
+        em_analise = [p for p in pagamentos if p.em_analise]
         motivos: dict[str, int] = {}
         for p in erro:
             for codigo, descricao in p.ocorrencias:
@@ -278,9 +307,12 @@ class ArquivoRetorno:
             "confirmados": len(ok),
             "rejeitados": len(erro),
             "pendentes": len(pendentes),
-            "sem_ocorrencia": len(pagamentos) - len(ok) - len(erro) - len(pendentes),
+            "em_analise": len(em_analise),
+            "sem_ocorrencia": (len(pagamentos) - len(ok) - len(erro)
+                               - len(pendentes) - len(em_analise)),
             "valor_confirmado": sum((p.valor for p in ok), Decimal("0")),
             "valor_rejeitado": sum((p.valor for p in erro), Decimal("0")),
+            "valor_em_analise": sum((p.valor for p in em_analise), Decimal("0")),
             "motivos": dict(sorted(motivos.items(), key=lambda kv: -kv[1])),
         }
 

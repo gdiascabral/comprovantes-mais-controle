@@ -1,14 +1,14 @@
 {
   "_meta": {
-    "fonte": "Guia de Importação de Arquivos CNAB 240 - Sicoob - versão 3.1 (26/03/2025)",
-    "arquivo_origem": "Manual_de_importacao_de_arquivos_CNAB_240.pdf",
+    "fonte": "Guia de Importação de Arquivos CNAB 240 - Pagamentos e Transferências - Sicoob - versão 4.0 (01/07/2026); escrito contra a 3.1 e conferido a cada versão",
+    "arquivo_origem": "Guia CNAB 240 - Pagamentos e Transferencias - v4.0 (2026-07-01) VIGENTE.pdf (banco/sicoob/, fora do repositório)",
     "banco": "756",
     "tamanho_registro": 240,
     "colunas": ["id", "nome", "de", "ate", "dec", "tipo", "default", "obrig", "ref"],
     "legenda": {
       "de/ate": "posição 1-based, inclusiva. tamanho = ate - de + 1",
       "dec": "casas decimais implícitas (sem vírgula/ponto no arquivo)",
-      "tipo": "num = numérico, alinhado à direita com zeros à esquerda | alfa = alfanumérico, alinhado à esquerda com brancos à direita, MAIÚSCULAS sem acento",
+      "tipo": "num = numérico, alinhado à direita com zeros à esquerda | alfa = alfanumérico, alinhado à esquerda com brancos à direita, MAIÚSCULAS sem acento | inscricao = o G006 desde a v4.0 (CNPJ alfanumérico): dígitos e letras A-Z, alinhado à DIREITA com zeros como sempre foi gravado - ver campos.fmt_inscricao",
       "default": "valor fixo; \"\" significa brancos; null significa sem default",
       "obrig": "O = obrigatório | C = opcional | R = preenchido apenas no arquivo de retorno",
       "ref": "código da seção 13 (Descrição de Campos) do manual; ver dominios.json"
@@ -29,7 +29,7 @@
       ["03.0", "Tipo de Registro", 8, 8, 0, "num", "0", "O", "G003"],
       ["04.0", "Uso Exclusivo FEBRABAN/CNAB", 9, 17, 0, "alfa", "", "O", "G004"],
       ["05.0", "Tipo de Inscrição da Empresa", 18, 18, 0, "num", null, "O", "G005"],
-      ["06.0", "Número de Inscrição da Empresa", 19, 32, 0, "num", null, "O", "G006"],
+      ["06.0", "Número de Inscrição da Empresa", 19, 32, 0, "inscricao", null, "O", "G006"],
       ["07.0", "Código do Convênio no Banco", 33, 52, 0, "alfa", null, "O", "G007"],
       ["08.0", "Agência Mantenedora da Conta", 53, 57, 0, "num", null, "O", "G008"],
       ["09.0", "Dígito Verificador da Agência", 58, 58, 0, "alfa", null, "O", "G009"],
@@ -79,7 +79,7 @@
       ["07.1", "Nº da Versão do Layout do Lote", 14, 16, 0, "num", "045", "O", "G030"],
       ["08.1", "Uso Exclusivo FEBRABAN/CNAB", 17, 17, 0, "alfa", "", "O", "G004"],
       ["09.1", "Tipo de Inscrição da Empresa", 18, 18, 0, "num", null, "C", "G005"],
-      ["10.1", "Número de Inscrição da Empresa", 19, 32, 0, "num", null, "C", "G006"],
+      ["10.1", "Número de Inscrição da Empresa", 19, 32, 0, "inscricao", null, "C", "G006"],
       ["11.1", "Código do Convênio no Banco", 33, 52, 0, "alfa", null, "O", "G007"],
       ["12.1", "Agência Mantenedora da Conta", 53, 57, 0, "num", null, "O", "G008"],
       ["13.1", "Dígito Verificador da Agência", 58, 58, 0, "alfa", null, "C", "G009"],
@@ -127,7 +127,7 @@
       ["07.1", "Nº da Versão do Layout do Lote", 14, 16, 0, "num", "040", "O", "G030"],
       ["08.1", "Uso Exclusivo FEBRABAN/CNAB", 17, 17, 0, "alfa", "", "O", "G004"],
       ["09.1", "Tipo de Inscrição da Empresa", 18, 18, 0, "num", null, "C", "G005"],
-      ["10.1", "Número de Inscrição da Empresa", 19, 32, 0, "num", null, "C", "G006"],
+      ["10.1", "Número de Inscrição da Empresa", 19, 32, 0, "inscricao", null, "C", "G006"],
       ["11.1", "Código do Convênio no Banco", 33, 52, 0, "alfa", null, "O", "G007"],
       ["12.1", "Agência Mantenedora da Conta", 53, 57, 0, "num", null, "O", "G008"],
       ["13.1", "Dígito Verificador da Agência", 58, 58, 0, "alfa", null, "C", "G009"],
@@ -162,7 +162,7 @@
       ["07.1", "Nº da Versão do Layout do Lote", 14, 16, 0, "num", "012", "O", "G030"],
       ["08.1", "Uso Exclusivo FEBRABAN/CNAB", 17, 17, 0, "alfa", "", "O", "G004"],
       ["09.1", "Tipo de Inscrição da Empresa", 18, 18, 0, "num", null, "C", "G005"],
-      ["10.1", "Número de Inscrição da Empresa", 19, 32, 0, "num", null, "C", "G006"],
+      ["10.1", "Número de Inscrição da Empresa", 19, 32, 0, "inscricao", null, "C", "G006"],
       ["11.1", "Código do Convênio no Banco", 33, 52, 0, "alfa", null, "O", "G007"],
       ["12.1", "Agência Convênio", 53, 57, 0, "num", null, "O", "G008"],
       ["13.1", "DV Agência Convênio", 58, 58, 0, "alfa", null, "C", "G009"],
@@ -238,7 +238,7 @@
       ["05.3B", "Código de Segmento do Reg. Detalhe", 14, 14, 0, "alfa", "B", "O", "G039"],
       ["06.3B", "Forma de Iniciação (Pix)", 15, 17, 0, "alfa", null, "C", "G100"],
       ["07.3B", "Tipo de Inscrição do Favorecido", 18, 18, 0, "num", null, "O", "G005"],
-      ["08.3B", "Nº de Inscrição do Favorecido", 19, 32, 0, "num", null, "O", "G006"],
+      ["08.3B", "Nº de Inscrição do Favorecido", 19, 32, 0, "inscricao", null, "O", "G006"],
       ["09.3B", "Informação 10", 33, 67, 0, "alfa", null, "C", "G101"],
       ["10.3B", "Informação 11", 68, 127, 0, "alfa", null, "C", "G101"],
       ["11.3B", "Informação 12", 128, 226, 0, "alfa", null, "C", "G101"],
@@ -271,7 +271,7 @@
       "campos": [
         ["b.p1", "TXID (desconsiderado em Pix Transferência)", 33, 67, 0, "alfa", null, "C", "G101"],
         ["b.p2", "Vazio (brancos)", 68, 127, 0, "alfa", "", "C", "G101"],
-        ["b.p3", "Chave Pix (se G100 = 01, 02 ou 04) OU tipo de conta do recebedor (se G100 = 05)", 128, 226, 0, "alfa", null, "O", "G101"]
+        ["b.p3", "Chave Pix (se G100 = 01, 02, 03 ou 04) OU tipo de conta do recebedor (se G100 = 05)", 128, 226, 0, "alfa", null, "O", "G101"]
       ]
     }
   },
@@ -288,7 +288,7 @@
       ["05.3B", "Código de Segmento do Reg. Detalhe", 14, 14, 0, "alfa", "B", "O", "G039"],
       ["06.3B", "Uso Exclusivo FEBRABAN/CNAB", 15, 17, 0, "alfa", "", "C", "G004"],
       ["07.3B", "Tipo de Inscrição do Favorecido", 18, 18, 0, "num", null, "O", "G005"],
-      ["08.3B", "Nº de Inscrição do Favorecido", 19, 32, 0, "num", null, "O", "G006"],
+      ["08.3B", "Nº de Inscrição do Favorecido", 19, 32, 0, "inscricao", null, "O", "G006"],
       ["09.3B", "Logradouro (Nome da Rua, Av, Pça, Etc)", 33, 62, 0, "alfa", null, "C", "G032"],
       ["10.3B", "Nº do Local", 63, 67, 0, "num", null, "C", "G032"],
       ["11.3B", "Complemento (Casa, Apto, Etc)", 68, 82, 0, "alfa", null, "C", "G032"],
@@ -394,13 +394,13 @@
       ["07.4.J52", "Código de Movimento Remessa", 16, 17, 0, "num", "00", "C", "C004"],
       ["08.4.J52", "Identificação Registro Opcional", 18, 19, 0, "num", "52", "C", "G067"],
       ["09.4.J52", "Tipo de Inscrição do Sacado", 20, 20, 0, "num", null, "C", "G005"],
-      ["10.4.J52", "Número de Inscrição do Sacado", 21, 35, 0, "num", null, "C", "G006"],
+      ["10.4.J52", "Número de Inscrição do Sacado", 21, 35, 0, "inscricao", null, "C", "G006"],
       ["11.4.J52", "Nome do Sacado", 36, 75, 0, "alfa", null, "C", "G013"],
       ["12.4.J52", "Tipo de Inscrição do Cedente", 76, 76, 0, "num", null, "C", "G005"],
-      ["13.4.J52", "Número de Inscrição do Cedente", 77, 91, 0, "num", null, "C", "G006"],
+      ["13.4.J52", "Número de Inscrição do Cedente", 77, 91, 0, "inscricao", null, "C", "G006"],
       ["14.4.J52", "Nome do Cedente", 92, 131, 0, "alfa", null, "C", "G013"],
       ["15.4.J52", "Tipo de Inscrição do Sacador", 132, 132, 0, "num", null, "C", "G005"],
-      ["16.4.J52", "Número de Inscrição do Sacador", 133, 147, 0, "num", null, "C", "G006"],
+      ["16.4.J52", "Número de Inscrição do Sacador", 133, 147, 0, "inscricao", null, "C", "G006"],
       ["17.4.J52", "Nome do Sacador", 148, 187, 0, "alfa", null, "C", "G013"],
       ["18.4.J52", "Uso Exclusivo FEBRABAN/CNAB", 188, 240, 0, "alfa", "", "C", "G004"]
     ]
@@ -420,10 +420,10 @@
       ["07.4.J52", "Código de Movimento Remessa", 16, 17, 0, "num", "00", "C", "C004"],
       ["08.4.J52", "Identificação Registro Opcional", 18, 19, 0, "num", "52", "C", "G067"],
       ["09.4.J52", "Tipo de Inscrição do Devedor", 20, 20, 0, "num", null, "C", "G005"],
-      ["10.4.J52", "Número de Inscrição do Devedor", 21, 35, 0, "num", null, "C", "G006"],
+      ["10.4.J52", "Número de Inscrição do Devedor", 21, 35, 0, "inscricao", null, "C", "G006"],
       ["11.4.J52", "Nome do Devedor", 36, 75, 0, "alfa", null, "C", "G013"],
       ["12.4.J52", "Tipo de Inscrição do Favorecido", 76, 76, 0, "num", null, "C", "G005"],
-      ["13.4.J52", "Número de Inscrição do Favorecido", 77, 91, 0, "num", null, "C", "G006"],
+      ["13.4.J52", "Número de Inscrição do Favorecido", 77, 91, 0, "inscricao", null, "C", "G006"],
       ["14.4.J52", "Nome do Favorecido", 92, 131, 0, "alfa", null, "C", "G013"],
       ["15.4.J52", "URL / Chave de Endereçamento", 132, 210, 0, "alfa", null, "O", "G102"],
       ["16.4.J52", "TXID (Código de Identificação do QR Code)", 211, 240, 0, "alfa", null, "O", "G102"]

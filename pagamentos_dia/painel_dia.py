@@ -54,7 +54,11 @@ MOTIVO_MINIMO = 5
 #: aqui. `"?"` é "o banco não citou este pagamento" e `""` é "nenhum retorno
 #: foi lido ainda": os dois contam como SEM RESPOSTA, porque a pergunta que
 #: esta tela responde é a mesma nos dois casos — falta saber.
-_CONTADORES = {"ok": "pagos", "pendente": "aguardando", "rejeitado": "rejeitados"}
+#: `"em_analise"` (BS, desde 29/04/2026) conta como aguardando: o banco citou
+#: o pagamento e ainda não disse sim nem não — o painel resume; o detalhe do
+#: retorno é quem manda olhar o extrato.
+_CONTADORES = {"ok": "pagos", "pendente": "aguardando", "em_analise": "aguardando",
+               "rejeitado": "rejeitados"}
 
 
 @dataclass

@@ -3,6 +3,9 @@
 - ``Num``  : alinhado à direita, zeros à esquerda, sem separador decimal.
 - ``Alfa`` : alinhado à esquerda, brancos à direita, maiúsculas, sem acentuação
              e sem caracteres especiais.
+- ``inscricao`` : o G006 (CPF/CNPJ) desde a v4.0 do guia — dígitos e letras
+             A-Z, alinhado à direita com zeros como sempre foi. Ver
+             `fmt_inscricao` para o porquê de não ser um Alfa comum.
 """
 
 from __future__ import annotations
@@ -22,6 +25,9 @@ _PERMITIDOS = frozenset(chr(c) for c in range(32, 127))
 #: Campos cujo conteúdo é sensível a maiúsculas/minúsculas e não pode ser
 #: normalizado: URL de QR Code dinâmico, chave de endereçamento e TXID.
 CAMPOS_PRESERVAM_CASO = frozenset({"15.4.J52", "16.4.J52", "b.p1", "b.p3"})
+
+#: O que um campo de inscrição (G006) pode conter desde a v4.0 do guia.
+CARACTERES_INSCRICAO = frozenset("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
 class CampoInvalido(ValueError):
@@ -86,6 +92,44 @@ def fmt_num(valor: Any, tamanho: int, decimais: int = 0, *, campo: Campo | None 
     return texto.rjust(tamanho, "0")
 
 
+def fmt_inscricao(valor: Any, tamanho: int, *, campo: Campo | None = None) -> str:
+    """CPF/CNPJ (G006): à direita com zeros, aceitando letras no CNPJ.
+
+    A v4.0 do guia (01/07/2026) mudou o G006 de Num para Alfa por causa do
+    CNPJ alfanumérico da Receita. O que NÃO mudou aqui, de propósito, foi o
+    alinhamento: o guia manda campo Alfa à esquerda com brancos, mas todo
+    arquivo que o Sicoob aceitou até hoje levou o CPF à direita com zeros
+    ("00012345678909" nas catorze posições) e o CNPJ do J-52 com um zero na
+    frente — e trocar isso mudaria os bytes de CADA remessa por um motivo que
+    não é do dono do dinheiro. Documento só de dígitos sai byte a byte igual
+    ao de antes; a única novidade é a letra. Se o Validar do SicoobNet um dia
+    reclamar, é aqui que se muda (README, decisão 5).
+
+    A pontuação da máscara cai fora como no `fmt_num`; qualquer outra coisa
+    que não seja dígito ou A-Z é erro, e não branco: um documento que virou
+    zeros em silêncio é um pagamento para ninguém.
+    """
+    if valor is None or valor == "":
+        return "0" * tamanho
+    if isinstance(valor, bool) or not isinstance(valor, (str, int)):
+        raise _erro(campo, f"tipo {type(valor).__name__} não suportado em campo de inscrição", valor)
+    if isinstance(valor, str):
+        limpo = valor.strip().upper()
+        for lixo in (".", ",", "-", "/", " "):
+            limpo = limpo.replace(lixo, "")
+        if not limpo:
+            return "0" * tamanho
+        if not all(c in CARACTERES_INSCRICAO for c in limpo):
+            raise _erro(campo, "campo de inscrição com caractere que não é dígito nem letra A-Z", valor)
+    else:
+        if valor < 0:
+            raise _erro(campo, "valor negativo não é representável", valor)
+        limpo = str(valor)
+    if len(limpo) > tamanho:
+        raise _erro(campo, f"não cabe em {tamanho} posições", valor)
+    return limpo.rjust(tamanho, "0")
+
+
 def fmt_data(valor: Any) -> str:
     """Data no formato DDMMAAAA. Aceita ``date``/``datetime``/``str``/``None``."""
     if valor is None or valor == "":
@@ -135,6 +179,8 @@ def formatar(campo: Campo, valor: Any) -> str:
 
     if campo.tipo == "num":
         return fmt_num(valor, campo.tamanho, campo.dec, campo=campo)
+    if campo.tipo == "inscricao":
+        return fmt_inscricao(valor, campo.tamanho, campo=campo)
     return fmt_alfa(valor, campo.tamanho, maiusculas=campo.id not in CAMPOS_PRESERVAM_CASO)
 
 

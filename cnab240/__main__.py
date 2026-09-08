@@ -42,7 +42,8 @@ def _cmd_retorno(args) -> int:
     print(
         f"Pagamentos ....: {resumo['pagamentos']}  "
         f"({resumo['confirmados']} confirmados / {resumo['rejeitados']} rejeitados"
-        f" / {resumo['pendentes']} pendentes / {resumo['sem_ocorrencia']} sem resposta)"
+        f" / {resumo['pendentes']} pendentes / {resumo['em_analise']} em análise"
+        f" / {resumo['sem_ocorrencia']} sem resposta)"
     )
     print(f"Valor confirmado: R$ {resumo['valor_confirmado']:,.2f}")
     print(f"Valor rejeitado : R$ {resumo['valor_rejeitado']:,.2f}")
@@ -50,6 +51,12 @@ def _cmd_retorno(args) -> int:
         print(f"\n[!] {resumo['pendentes']} pagamento(s) PENDENTES de assinatura — "
               "o banco recebeu, mas o dinheiro só sai depois de alguém liberar "
               "no SicoobNet.")
+    if resumo["em_analise"]:
+        print(f"\n[!] {resumo['em_analise']} pagamento(s) EM ANÁLISE DE SEGURANÇA "
+              "(BS): o banco segurou a transação, e este retorno NÃO vai ser "
+              "atualizado quando a análise terminar — nem baixando de novo. "
+              "Confira no extrato da conta se o dinheiro saiu antes de pagar "
+              "outra vez.")
     if resumo["sem_ocorrencia"]:
         print(f"\n[!] {resumo['sem_ocorrencia']} pagamento(s) sem código de "
               "ocorrência: o banco não disse nem sim nem não. Confira no "

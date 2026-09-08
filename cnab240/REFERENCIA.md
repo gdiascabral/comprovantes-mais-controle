@@ -2,7 +2,7 @@
 
 Estudo consolidado dos manuais, guardados em `banco/sicoob/`. Fonte normativa:
 **"Guia de Importação de Arquivos CNAB 240 — Pagamentos e Transferências",
-versão 3.3, de 19/05/2025**, baixado do site do Sicoob em 13/08/2026.
+versão 4.0, de 01/07/2026**, baixado do site do Sicoob em 08/09/2026.
 
 ### Sobre as versões
 
@@ -16,8 +16,28 @@ segundo o próprio histórico do guia:
   Transferências* e *Folha de pagamento*.
 
 Consequência prática: a parametrização em `spec/` continua válida. Só o produto
-`FOLHA_PAGAMENTO` passou a ser regido por **outro documento**, que não temos —
-se algum dia a folha entrar em uso, é ele que manda, não este.
+`FOLHA_PAGAMENTO` passou a ser regido por **outro documento** (hoje também em
+`banco/sicoob/`, v1.1) — se algum dia a folha entrar em uso, é ele que manda,
+não este.
+
+Em 08/09/2026 a **v4.0** (01/07/2026) foi baixada e o texto foi comparado com
+o da v3.3, linha a linha. Três mudanças técnicas, todas aplicadas no pacote:
+
+- **v3.4** (17/10/2025) — a Informação 12 do segmento B passa a citar a chave
+  Pix CPF/CNPJ (forma de iniciação 03). O código já a gravava desde a validação
+  de 13/08/2026, quando o SicoobNet recusou o campo em branco; agora é o guia
+  que manda, não um achado empírico (`remessa._segmento_b_pix`).
+- **v3.5** (14/04/2026) — código **`BS`** no G059, em vigor desde 29/04/2026:
+  "transação em análise de segurança", não aplicável a Pix. O aviso do Sicoob
+  aos cooperados completa o que o guia não diz: o retorno **não é atualizado**
+  quando a análise termina, e só o extrato da conta confirma o pagamento
+  (`retorno.ResultadoPagamento.em_analise`, `dominios.OCORRENCIAS_EM_ANALISE`).
+- **v4.0** (01/07/2026) — o campo **G006** (número de inscrição, em todos os
+  registros) muda de `Num` para `Alfa` por causa do CNPJ alfanumérico da
+  Receita. Posições e tamanhos não mudam. No `spec/` o tipo é `inscricao`:
+  dígitos e A-Z, gravado à direita com zeros como sempre foi (README, decisão
+  5). O DV do CNPJ com letra é o da Receita, com cada caractere valendo o
+  código ASCII menos 48 (`dominios.dv_cnpj`).
 
 A **v2.11** (30/12/2024) está guardada só como histórico; ela não tem, no
 domínio G059 da folha, os códigos `BF` e `68` que a v3.1 acrescentou.

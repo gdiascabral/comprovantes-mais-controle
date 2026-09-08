@@ -2,9 +2,15 @@
 
 Gerador, validador e leitor de retorno para os arquivos de pagamento CNAB 240 do
 Sicoobnet Empresarial, conforme o **Guia de Importação de Arquivos CNAB 240 —
-Pagamentos e Transferências, v3.3 (19/05/2025)**. Escrito contra a v3.1 e
-conferido contra a v3.3, que não trouxe mudança técnica — ver `REFERENCIA.md`.
-Os PDFs ficam em `banco/sicoob/`.
+Pagamentos e Transferências, v4.0 (01/07/2026)**. Escrito contra a v3.1 e
+conferido a cada versão desde então — ver `REFERENCIA.md`. Os PDFs ficam em
+`banco/sicoob/`, fora do repositório.
+
+O que a v4.0 trouxe, e onde está: o código **`BS`** no retorno (transação em
+análise de segurança, desde 29/04/2026 — `retorno.ResultadoPagamento.em_analise`),
+o **CNPJ alfanumérico** no campo de inscrição G006 (`campos.fmt_inscricao`,
+`dominios.dv_cnpj`) e a **chave Pix CPF/CNPJ** explícita na Informação 12
+(`remessa._segmento_b_pix`).
 
 Sem dependências de runtime — só a biblioteca padrão do Python (3.11+).
 `pytest` só é necessário para rodar os testes.
@@ -161,8 +167,10 @@ print(retorno.resumo())
 $ python -m cnab240 retorno RET0001.RET --detalhes
 ```
 
-Cada pagamento é classificado em quatro estados: **confirmado** (`00`, `BD`,
-`68`), **pendente** (`PD` — aguardando assinatura), **rejeitado** (demais
+Cada pagamento é classificado em cinco estados: **confirmado** (`00`, `BD`,
+`68`), **em análise** (`BS` — o banco segurou para análise de segurança, e
+este retorno **não** é atualizado quando ela termina: só o extrato diz se
+pagou), **pendente** (`PD` — aguardando assinatura), **rejeitado** (demais
 códigos) e **sem ocorrência**.
 
 ### Outros comandos
@@ -217,6 +225,13 @@ O manual não é explícito nestes pontos; a escolha adotada está no código e
    quebraria uma URL de QR Code dinâmico. Chave de endereçamento, URL e TXID
    preservam a caixa original (`campos.CAMPOS_PRESERVAM_CASO`); todo o resto vai
    em maiúsculas sem acento.
+5. **Campo G006 (CPF/CNPJ) desde a v4.0** — o guia o tipa `Alfa` por causa do
+   CNPJ alfanumérico, e Alfa no item 2.2 é "à esquerda com brancos". Adotado
+   **à direita com zeros**, como sempre foi gravado e aceito (`00012345678909`
+   para CPF; `0` + CNPJ nas 15 posições do J-52): documento só de dígitos sai
+   byte a byte igual ao de antes, e a única novidade é a letra. Se o
+   `Validar` recusar um CNPJ com letra, o lugar de mudar é
+   `campos.fmt_inscricao`.
 
 > Antes do primeiro envio real, use o botão **Validar** do Sicoobnet Empresarial
 > (`Empresarial` → `Arquivos CNAB 240` → `Envio de Arquivos`): é o ciclo de

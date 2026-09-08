@@ -2232,7 +2232,7 @@ ESTADOS = {
     # âmbar: entrou, mas precisa de olho
     "duvida": "atencao", "em duvida": "atencao", "sem pdf": "atencao",
     "baixando": "atencao", "parcial": "atencao", "atencao": "atencao",
-    "aguardando": "atencao",
+    "aguardando": "atencao", "em analise": "atencao",
     # vermelho: não entrou
     "falta": "erro", "rejeitado": "erro", "sem anexo": "erro", "erro": "erro",
     "falhou": "erro",

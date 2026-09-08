@@ -1578,6 +1578,7 @@ class PagamentosDiaFrame(ttk.Frame):
         pagos = resumo.quantos("ok")
         pendentes = resumo.quantos("pendente")
         rejeitados = resumo.quantos("rejeitado")
+        em_analise = resumo.quantos("em_analise")
 
         ttk.Label(moldura, style="Titulo.TLabel",
                   text=f"{resumo.empresa.strip()} · arquivo nº {resumo.nsa:06d}"
@@ -1599,6 +1600,19 @@ class PagamentosDiaFrame(ttk.Frame):
                            f"enviar: o arquivo foi aceito, mas o dinheiro só "
                            f"sai quando o master assinar. Baixe o retorno de "
                            f"novo depois disso para ver o desfecho."
+                      ).pack(anchor="w", pady=px((0, 8)))
+        # O BS (desde 29/04/2026) é o único estado em que baixar o retorno DE
+        # NOVO não resolve: o Sicoob avisou que o arquivo não é atualizado
+        # quando a análise de segurança termina. A resposta está no extrato,
+        # e o risco de não olhar lá é pagar duas vezes.
+        if em_analise:
+            ttk.Label(moldura, style="Erro.TLabel", wraplength=px(920),
+                      justify="left",
+                      text=f"⚠  {em_analise} pagamento(s) em análise de "
+                           f"segurança no Sicoob. Este retorno NÃO vai dizer "
+                           f"o desfecho, nem baixando de novo: confira no "
+                           f"extrato da conta se o dinheiro saiu antes de "
+                           f"pagar outra vez."
                       ).pack(anchor="w", pady=px((0, 8)))
         if resumo.remessa_desconhecida:
             ttk.Label(moldura, style="Erro.TLabel", wraplength=px(920),
@@ -1802,7 +1816,9 @@ class PagamentosDiaFrame(ttk.Frame):
                 item.empresa.strip()[:34],
                 f"{item.agencia}-{item.conta}".strip("-") or "—",
                 f"{item.nsa:06d}",
-                item.quantos("ok"), item.quantos("pendente"),
+                # "Aguardando" soma o pendente de assinatura e o em análise
+                # de segurança: nos dois o banco ainda não disse sim nem não.
+                item.quantos("ok"), item.quantos("pendente") + item.quantos("em_analise"),
                 item.quantos("rejeitado"), len(item.faltando),
                 relatorio.brl(float(item.total)), situacao),
                 tags=widgets.linha_zebrada(i, marca))
@@ -1826,11 +1842,14 @@ class PagamentosDiaFrame(ttk.Frame):
         pagos = sum(r.quantos("ok") for r in validos)
         pendentes = sum(r.quantos("pendente") for r in validos)
         rejeitados = sum(r.quantos("rejeitado") for r in validos)
+        em_analise = sum(r.quantos("em_analise") for r in validos)
 
         rodape = ttk.Frame(moldura); rodape.pack(fill="x", pady=px((10, 0)))
         ttk.Label(rodape, style="Apoio.TLabel",
                   text=f"{pagos} pago(s) · {pendentes} aguardando · "
-                       f"{rejeitados} rejeitado(s)").pack(side="left")
+                       f"{rejeitados} rejeitado(s)"
+                       + (f" · {em_analise} em análise de segurança (confira o extrato)"
+                          if em_analise else "")).pack(side="left")
 
         def _guardar_tudo():
             """Um `aplicar_retorno` por remessa conhecida.
@@ -1912,6 +1931,10 @@ class PagamentosDiaFrame(ttk.Frame):
         rejeitados = resumo.quantos("rejeitado")
         if rejeitados:
             frase, marca = f"{rejeitados} rejeitado(s) — veja o detalhe", "erro"
+        elif resumo.quantos("em_analise"):
+            # Antes do pendente: é o caso raro, e o único em que "baixe o
+            # retorno de novo" seria um conselho errado.
+            frase, marca = "em análise de segurança — confira o extrato", "atencao"
         elif resumo.quantos("pendente"):
             frase, marca = "aguardando assinatura no SicoobNet", "atencao"
         elif resumo.linhas and resumo.quantos("ok") == len(resumo.linhas):

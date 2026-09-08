@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "fonte": "Guia de Importação de Arquivos CNAB 240 - Sicoob - versão 3.1 (26/03/2025), seção 13 - Descrição de Campos",
+    "fonte": "Guia de Importação de Arquivos CNAB 240 - Pagamentos e Transferências - Sicoob - versão 4.0 (01/07/2026), seção 11 - Descrição de Campos (era a seção 13 até a v3.2)",
     "nota": "Apenas os domínios efetivamente usados nos produtos de pagamento importados pelo Sicoobnet Empresarial."
   },
 
@@ -156,7 +156,8 @@
       "AJ": "Rejeição CNAB - registro e/ou lote com estrutura rejeitada (obrigatoriedade, domínio, tipo de dado)",
       "BD": "Inclusão efetuada com sucesso (agendada)",
       "PD": "Transação pendente de assinatura",
-      "BF": "Transação rejeitada por assinatura de pendência"
+      "BF": "Transação rejeitada por assinatura de pendência",
+      "BS": "Transação em análise de segurança (desde 29/04/2026; não se aplica a Pix). O retorno NÃO é atualizado quando a análise termina: confira no extrato da conta se o pagamento saiu antes de pagar de novo"
     },
     "dominio_pix": {
       "AN": "Tipo de conta do favorecido inválido",
@@ -230,7 +231,7 @@
     "regras": [
       "Pix - Informação 10 (33-67): TXID (desconsiderado em Pix Transferência).",
       "Pix - Informação 11 (68-127): preencher com vazios.",
-      "Pix - Informação 12 (128-226): se G100 = 01, 02 ou 04 -> chave Pix (Email/Telefone/Aleatória). Se G100 = 05 -> tipo de conta do recebedor conforme domínio G031 (em caso de divergência prevalece o G031).",
+      "Pix - Informação 12 (128-226): se G100 = 01, 02, 03 ou 04 -> chave Pix (Telefone/Email/CPF-CNPJ/Aleatória; a forma 03 entrou no texto na v3.4, de 17/10/2025). Se G100 = 05 -> tipo de conta do recebedor conforme domínio G031 (em caso de divergência prevalece o G031).",
       "Demais formas de lançamento: os três campos se subdividem em endereço + dados de pagamento (ver sub_layout_informacao_10_11_12_nao_pix em layouts.json)."
     ]
   },

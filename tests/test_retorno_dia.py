@@ -29,6 +29,7 @@ class _Pagamento:
     ocorrencias: list = None
     _sucesso: bool = False
     _pendente: bool = False
+    _em_analise: bool = False
 
     def __post_init__(self):
         if self.ocorrencias is None:
@@ -45,6 +46,10 @@ class _Pagamento:
     @property
     def pendente(self):
         return self._pendente
+
+    @property
+    def em_analise(self):
+        return self._em_analise
 
 
 class _Arquivo:
@@ -142,6 +147,21 @@ def test_pago_pendente_e_rejeitado_sao_estados_distintos(ler):
     assert [l.estado for l in resumo.linhas] == ["ok", "pendente", "rejeitado"]
     assert resumo.quantos("ok") == 1
     assert resumo.linhas[1].rotulo == "AGUARDA ASSINATURA"
+
+
+def test_em_analise_de_seguranca_nao_e_pago_nem_rejeitado(ler):
+    """`BS` (desde 29/04/2026): o banco segurou e o retorno NÃO vai contar o
+    desfecho. A remessa continua viva, e a linha manda olhar o extrato."""
+    resumo = ler([
+        _Pagamento("001", ocorrencias=[("BS", "em analise de seguranca")],
+                   _em_analise=True),
+        _Pagamento("002", ocorrencias=[("00", "ok")], _sucesso=True),
+    ])
+    assert resumo.linhas[0].estado == "em_analise"
+    assert resumo.linhas[0].rotulo == "EM ANÁLISE DE SEGURANÇA"
+    assert resumo.quantos("em_analise") == 1
+    assert resumo.quantos("rejeitado") == 0
+    assert resumo.estado_da_remessa == "enviado"
 
 
 def test_sem_ocorrencia_nao_e_sucesso(ler):
