@@ -12,18 +12,24 @@ normal. Com isso:
   - lista os títulos PAGOS do período (type=PAID, dateField=DATE_OF_PAYMENT),
     sem filtro de conta — a seleção de contas é feita no app, por checkbox;
   - verifica, pago a pago, se há arquivo anexado no nível do sub-pagamento
-    (endpoint de attachments com entityOrigin=PAID).
+    (endpoint de attachments com entityOrigin=PAID);
+  - SOBE o comprovante para o sub-pagamento (`anexar_por_api`): POST batch →
+    PUT no S3 pré-assinado → GET de prova, sem o diálogo da tela.
 """
+import base64
 import datetime
 import re
+from pathlib import Path
 from urllib.parse import urlsplit, parse_qsl, urlencode
 
 from . import config
+from erp.pagina import JS_POST_JSON
 
 import util
 
 
 _diag = config.diag              # o registro de diagnóstico agora mora no config
+_log = util.log(__name__)        # o traceback do que não deu, no diagnostico.log
 
 
 def _so_digitos(valor) -> str:
@@ -86,10 +92,125 @@ _JS_FETCH_ANEXOS = """async ({ base, ids, headers }) => {
 }"""
 
 
+#: PUT cru do binário na URL pré-assinada do S3. SÓ `Content-Type`: qualquer
+#: cabeçalho do ERP (authorization, company-id) quebra a assinatura da URL. O
+#: binário chega em base64 porque `page.evaluate` só transporta JSON. Mesmo
+#: padrão que subiu 29 anexos em produção em 28/08/2026
+#: (`agua_energia/coletor/lancar_mc.py`, `_JS_PUT_S3`).
+_JS_PUT_S3 = """async ({ url, b64, contentType }) => {
+  const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const r = await fetch(url, { method: 'PUT',
+    headers: { 'Content-Type': contentType }, body: bin });
+  return { status: r.status, body: (await r.text()).slice(0, 500) };
+}"""
+
+
 #: Os três desfechos possíveis da consulta de anexos de UM pagamento.
 COM_ANEXO = "com anexo"
 SEM_ANEXO = "sem anexo"
 NAO_VERIFICADO = "não verificado"
+
+#: Os desfechos de `MCApi.anexar_por_api`. Os dois primeiros são sucesso; os
+#: `erro:` se dividem pelo que JÁ FOI MANDADO ao ERP quando a falha aconteceu —
+#: é isso que decide se a tela pode tentar (`tela_pode_tentar`).
+ANEXADO = "anexado"
+JA_ANEXADO = "ja_anexado"
+ERRO_SEM_CREDENCIAL = "erro:sem_credencial"
+ERRO_NAO_CONFIRMADO = "erro:nao_confirmado"
+_PREFIXO_BATCH = "erro:batch:"
+_PREFIXO_UPLOAD = "erro:upload:"
+
+#: `contentType` do item do batch, pela extensão. O matcher só entrega PDF; o
+#: resto está aqui para o modo "Por lista" não mandar um PNG como PDF.
+_TIPOS_DE_ARQUIVO = {"pdf": "application/pdf", "png": "image/png",
+                     "jpg": "image/jpeg", "jpeg": "image/jpeg"}
+
+
+def tela_pode_tentar(estado: str) -> bool:
+    """A tela (⋮ → Editar pagamento) pode tentar depois deste desfecho da API?
+
+    Só quando NADA subiu para o ERP: sem credencial capturada, ou o ERP
+    respondeu antes de o arquivo sair (a listagem prévia, a lista de etiquetas
+    ou o próprio POST do batch recusados com 4xx/5xx). Nos outros erros o
+    arquivo pode já estar lá — o PUT saiu e o GET de prova não o listou, ou o
+    batch criou o registro e o PUT falhou — e a tela anexaria uma segunda vez.
+    Comprovante em dobro se desfaz à mão, no ERP, um a um; comprovante
+    relatado como erro se confere abrindo o lançamento. O segundo é barato.
+    """
+    return estado == ERRO_SEM_CREDENCIAL or estado.startswith(_PREFIXO_BATCH)
+
+
+def _primeira_url_s3(objeto) -> str | None:
+    """A URL pré-assinada na resposta do batch — o nome do campo varia, então
+    procura a primeira string http com cara de S3, em ordem de leitura."""
+    for u in _coletar_urls(objeto):
+        ul = u.lower()
+        if "s3" in ul or "amazonaws" in ul:
+            return u
+    return None
+
+
+def _nomes_do_item(item: dict) -> set[str]:
+    """As formas do nome de um anexo listado, em minúsculas.
+
+    O campo pode ser `name` ou `filename`, e `extension` vem COM ponto na
+    listagem — quando o nome vem sem ela, a versão com a extensão colada entra
+    também, para casar com o `pdf_path.name` que o app mandou."""
+    ext = str(item.get("extension") or "").strip().lower()
+    if ext and not ext.startswith("."):
+        ext = "." + ext
+    nomes: set[str] = set()
+    for k in ("name", "filename", "fileName", "originalName", "originalFileName"):
+        v = item.get(k)
+        if isinstance(v, str) and v.strip():
+            n = v.strip().lower()
+            nomes.add(n)
+            if ext and not n.endswith(ext):
+                nomes.add(n + ext)
+    return nomes
+
+
+def _tamanho_do_item(item: dict) -> int | None:
+    for k in ("sizeInBytes", "size", "fileSize", "length"):
+        try:
+            n = int(item.get(k))
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            return n
+    return None
+
+
+def _mesmo_arquivo(item, nome: str, tamanho: int) -> bool:
+    """Este anexo listado é o arquivo que o app tem na mão?
+
+    Pelo NOME (sem caixa) ou, quando a listagem traz tamanho, pelos BYTES —
+    o mesmo comprovante renomeado (" (2)", acento trocado) tem o mesmo
+    tamanho, e subi-lo de novo é comprovante em dobro."""
+    if not isinstance(item, dict):
+        return False
+    if nome.lower() in _nomes_do_item(item):
+        return True
+    t = _tamanho_do_item(item)
+    return t is not None and t == tamanho
+
+
+def _achar_tag(tags, nome: str) -> str | None:
+    """O `id` da etiqueta chamada `nome`, sem acento nem caixa. None se não há.
+
+    Aceita a lista crua ou o envelope paginado (`content`/`items`), porque os
+    dois back-ends do ERP embrulham de jeitos diferentes."""
+    if isinstance(tags, dict):
+        tags = tags.get("content") or tags.get("items") or []
+    alvo = util.norm(nome).strip()
+    for t in (tags if isinstance(tags, list) else []):
+        if not isinstance(t, dict):
+            continue
+        for k in ("name", "description", "label"):
+            v = t.get(k)
+            if isinstance(v, str) and util.norm(v).strip() == alvo and t.get("id"):
+                return str(t["id"])
+    return None
 
 
 def estado_anexo(att: dict, paid_id: str) -> str:
@@ -120,6 +241,7 @@ class MCApi:
         self._req_pagos = None    # (url, headers) da lista de pagamentos
         self._req_anexos = None   # (url_base, headers) do endpoint de anexos
         self._diag_avisado = False
+        self._tag_ids: dict[str, str] = {}   # etiqueta normalizada -> id (por execução)
         _ = self.page             # registra o listener na aba atual
 
     @property
@@ -680,21 +802,188 @@ class MCApi:
         return resultado
 
     # ------------------------------------------------- anexos (conteúdo)
-    def listar_anexos(self, paid_id: str) -> list:
-        """Lista os anexos (dados brutos da API) de um sub-pagamento."""
+    def _anexos_brutos(self, paid_id: str):
+        """O JSON cru da listagem de anexos de um sub-pagamento — a lista, ou
+        `{"__erro": status}` quando o ERP recusa. Quem precisa distinguir
+        "vazio" de "falhou" lê daqui; `listar_anexos` achata os dois."""
         if not self._req_anexos:
             raise RuntimeError("Credenciais de anexos ainda não capturadas.")
         base, headers = self._req_anexos
-        j = self._fetch_json(f"{base}?entityIds={paid_id}&entityOrigin=PAID",
-                             headers)
+        return self._fetch_json(f"{base}?entityIds={paid_id}&entityOrigin=PAID",
+                                headers)
+
+    def listar_anexos(self, paid_id: str) -> list:
+        """Lista os anexos (dados brutos da API) de um sub-pagamento."""
+        j = self._anexos_brutos(paid_id)
         return j if isinstance(j, list) else []
+
+    def _postar_json(self, url: str, headers: dict, corpo: dict):
+        """POST de dentro da página. `{"__erro": status, "__corpo": …}` na recusa."""
+        return self.page.evaluate(
+            JS_POST_JSON, {"url": url, "headers": headers, "corpo": corpo})
+
+    def _put_s3(self, url: str, dados: bytes, content_type: str) -> dict:
+        """PUT cru do binário na URL pré-assinada. Devolve `{status, body}`."""
+        return self.page.evaluate(_JS_PUT_S3, {
+            "url": url, "contentType": content_type,
+            "b64": base64.b64encode(dados).decode("ascii")})
+
+    def _tag_id(self, nome: str) -> tuple[str | None, str]:
+        """(id da etiqueta, motivo quando não há). Cacheado por execução: a
+        lista de etiquetas não muda no meio de uma rodada, e pedi-la a cada
+        comprovante é uma chamada a mais por arquivo, à toa."""
+        chave = util.norm(nome).strip()
+        if chave in self._tag_ids:
+            return self._tag_ids[chave], ""
+        url, headers = self._base_erp("attachments/tags")
+        j = self._fetch_json(url, headers)
+        if isinstance(j, dict) and j.get("__erro"):
+            return None, f"tags:{j['__erro']}"
+        tag_id = _achar_tag(j, nome)
+        if not tag_id:
+            return None, "sem_tag"
+        self._tag_ids[chave] = tag_id
+        return tag_id, ""
+
+    def anexar_por_api(self, paid_id: str, pdf_path, *,
+                       tag: str = config.TAG_COMPROVANTE, log=None,
+                       dry_run: bool = False) -> str:
+        """Sobe UM comprovante para o sub-pagamento `paid_id`, pela API.
+
+        O contrato, verificado em produção para título (28/08/2026, 29 anexos)
+        e igual para sub-pagamento, trocando só a origem:
+
+            GET  {nova}/attachments/v2?entityIds=<paidId>&entityOrigin=PAID
+            GET  {nova}/attachments/tags               -> id de "Comprovante"
+            POST {nova}/attachments/v2/batch           -> URL S3 pré-assinada
+            PUT  <URL S3>  (binário cru, só content-type)
+            GET  {nova}/attachments/v2?entityIds=…     -> tem de listar o arquivo
+
+        A identidade é o SUB-PAGAMENTO (`paids[].id`, o `paidId` que
+        `montar_pagos` expõe), não a parcela (`launchId`): o comprovante mora
+        no pagamento, e é ali que `verificar_anexos` e a Conferência o procuram.
+
+        Devolve um destes, e o prefixo diz o que já tinha saído daqui:
+
+            "anexado"                subiu, e a listagem de prova mostra o arquivo
+            "ja_anexado"             a listagem prévia já tinha o arquivo (mesmo
+                                     nome, ou mesmo tamanho); nada subiu
+            "dry_run"                modo Simular: parou antes do POST, depois
+                                     de provar credencial, listagem e etiqueta
+            "erro:sem_credencial"    cabeçalhos de anexos não capturados; nada saiu
+            "erro:batch:<motivo>"    o ERP RECUSOU antes de o arquivo sair (listagem
+                                     prévia, etiquetas ou o POST com 4xx/5xx):
+                                     nada subiu, e a tela pode tentar
+            "erro:upload:<motivo>"   o POST saiu (ou pode ter saído) e o PUT não
+                                     completou: o registro pode existir sem arquivo
+            "erro:nao_confirmado"    o PUT respondeu 2xx e a listagem de prova não
+                                     mostra o arquivo
+
+        "anexado" só sai com PROVA, como na tela: subir sem conferir era
+        relatar anexo que talvez não exista. E o POST NUNCA se repete daqui —
+        um batch reenviado é um segundo registro de anexo no mesmo pagamento.
+        """
+        log = log or (lambda _m: None)
+        if not self._req_anexos:
+            return ERRO_SEM_CREDENCIAL
+        pdf_path = Path(pdf_path)
+        try:
+            dados = pdf_path.read_bytes()
+        except OSError as e:
+            _log.warning("anexar_por_api: não li o arquivo (paid %s)", paid_id,
+                         exc_info=True)
+            return f"{_PREFIXO_BATCH}arquivo:{e.__class__.__name__}"
+        nome, tamanho = pdf_path.name, len(dados)
+
+        # (a) já está lá? Comparado pelo nome ou pelos bytes — sem upload.
+        try:
+            lista = self._anexos_brutos(paid_id)
+        except Exception as e:
+            _log.warning("anexar_por_api: a listagem prévia falhou (paid %s)",
+                         paid_id, exc_info=True)
+            return f"{_PREFIXO_BATCH}listagem:{e.__class__.__name__}"
+        if isinstance(lista, dict) and lista.get("__erro"):
+            return f"{_PREFIXO_BATCH}listagem:{lista['__erro']}"
+        if any(_mesmo_arquivo(item, nome, tamanho)
+               for item in (lista if isinstance(lista, list) else [])):
+            return JA_ANEXADO
+
+        try:
+            tag_id, motivo = self._tag_id(tag)
+        except Exception as e:
+            _log.warning("anexar_por_api: a lista de etiquetas falhou",
+                         exc_info=True)
+            return f"{_PREFIXO_BATCH}tags:{e.__class__.__name__}"
+        if not tag_id:
+            return _PREFIXO_BATCH + motivo
+
+        if dry_run:
+            return "dry_run"
+
+        # (b) o batch: o ERP cria o registro e devolve onde pôr o binário.
+        ext = pdf_path.suffix.lstrip(".").lower() or "pdf"
+        content_type = _TIPOS_DE_ARQUIVO.get(ext, "application/octet-stream")
+        corpo = {"entityOrigin": "PAID", "entityId": str(paid_id),
+                 "attachmentsItem": [{"name": nome, "contentType": content_type,
+                                      "extension": ext, "sizeInBytes": tamanho,
+                                      "tagId": tag_id}]}
+        url_batch, headers = self._base_erp("attachments/v2/batch")
+        try:
+            resp = self._postar_json(url_batch, headers, corpo)
+        except Exception:
+            # Sem resposta não se sabe se o registro nasceu: fica do lado
+            # "pode ter saído", que é o que impede a tela de duplicar.
+            _log.warning("anexar_por_api: o POST do batch não respondeu "
+                         "(paid %s)", paid_id, exc_info=True)
+            return f"{_PREFIXO_UPLOAD}batch_sem_resposta"
+        if isinstance(resp, dict) and resp.get("__erro"):
+            _log.warning("anexar_por_api: o batch respondeu %s (paid %s)",
+                         resp["__erro"], paid_id)
+            return f"{_PREFIXO_BATCH}{resp['__erro']}"
+        url_s3 = _primeira_url_s3(resp)
+        if not url_s3:
+            campos = sorted(resp) if isinstance(resp, dict) else type(resp).__name__
+            _log.warning("anexar_por_api: o batch respondeu sem URL de S3 "
+                         "(paid %s); campos: %s", paid_id, campos)
+            return f"{_PREFIXO_UPLOAD}sem_url_s3"
+
+        # (c) o binário, direto no S3.
+        try:
+            r = self._put_s3(url_s3, dados, content_type)
+        except Exception:
+            _log.warning("anexar_por_api: o PUT no S3 não respondeu (paid %s)",
+                         paid_id, exc_info=True)
+            return f"{_PREFIXO_UPLOAD}sem_resposta"
+        status = r.get("status") if isinstance(r, dict) else None
+        if not isinstance(status, int) or not 200 <= status < 300:
+            _log.warning("anexar_por_api: o S3 respondeu %s (paid %s) — o registro "
+                         "pode ter ficado sem arquivo; confira no ERP", status, paid_id)
+            return f"{_PREFIXO_UPLOAD}{status}"
+
+        # (d) a prova: a listagem tem de mostrar o arquivo. Sem ela não é
+        # "anexado" — e a tela NÃO pode tentar, porque ele pode estar lá.
+        try:
+            depois = self._anexos_brutos(paid_id)
+        except Exception:
+            _log.warning("anexar_por_api: a listagem de prova falhou (paid %s)",
+                         paid_id, exc_info=True)
+            depois = None
+        if isinstance(depois, list) and any(_mesmo_arquivo(i, nome, tamanho)
+                                            for i in depois):
+            log("   comprovante subiu pela API e aparece na listagem do pagamento")
+            return ANEXADO
+        campos = sorted({k for i in (depois if isinstance(depois, list) else [])
+                         if isinstance(i, dict) for k in i})
+        _log.warning("anexar_por_api: subiu, mas a listagem não mostra o arquivo "
+                     "(paid %s); %d item(ns), campos: %s", paid_id,
+                     len(depois) if isinstance(depois, list) else -1, campos)
+        return ERRO_NAO_CONFIRMADO
 
     def baixar_anexo(self, url: str) -> bytes | None:
         """Baixa um anexo de dentro da página logada. Tenta primeiro SEM
         cabeçalhos (URLs pré-assinadas de armazenamento externo — S3 etc. —
         quebram se receberem o Authorization do ERP) e, se falhar, tenta COM
         os cabeçalhos de autenticação (arquivos servidos pelo próprio ERP)."""
-        import base64
         _, headers = self._req_anexos
         motivos = []
         for h in ({}, headers):

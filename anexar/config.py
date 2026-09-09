@@ -68,6 +68,13 @@ def diag(msg: str):
 # Tag aplicada ao arquivo anexado no Mais Controle.
 TAG_COMPROVANTE = "Comprovante"
 
+#: O comprovante sobe pela API (`mc_api.MCApi.anexar_por_api`: POST batch →
+#: PUT no S3 → GET de prova), e o diálogo da tela (⋮ → Editar pagamento →
+#: arquivo → etiqueta → Confirmar) vira plano B. Desligar aqui força a tela de
+#: volta para TODO comprovante — é a chave de retorno se a API mudar de forma
+#: antes de o app mudar junto.
+ANEXAR_POR_API = True
+
 # URL do sistema.
 MC_URL_BASE = "https://acessar.maiscontroleerp.com.br"
 MC_URL_PAGAMENTOS = MC_URL_BASE + "/#/payable-installments"
