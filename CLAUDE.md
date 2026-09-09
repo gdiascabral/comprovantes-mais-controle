@@ -298,7 +298,10 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   se havia navegador**: exige do transporte só `_buscar`/`postar` e lê
   `{"__erro": status}`, que é exatamente o que `erp.TransportePagina` expõe — e
   a baixa dele **não é marcável como idempotente**, porque o `POST .../paids`
-  CRIA um pagamento. Faltam os consumidores 4 a 8 da ordem escrita no fim do
+  CRIA um pagamento. `conciliacao/erp/payments.py` (08/09/2026) ganhou o par
+  `payments_api.py`, que lê a lista pela mesma `SessaoApi` dos saldos — o
+  token sai do host da URL, então um login serve aos dois back-ends. Faltam os
+  consumidores 4, 6, 7 e 8 da ordem escrita no fim do
   `docs/ERP-CLIENTES.md`, e **`anexar/mc_api.py` é o último de propósito**: é
   ele que tira o token do cabeçalho da página logada e monta a consulta
   reaproveitando a URL que a TELA mandou, e dele dependem Anexar, Conferência,
@@ -333,9 +336,19 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   diferentes só criam a chance de uma envelhecer e o erro virar "login
   inválido" sem motivo aparente. `pipeline.py` não toca em navegador: recebe um
   `Snapshot` e devolve o resultado, e é por isso que os 9 arquivos de teste
-  vieram junto sem alteração. A coleta usa DOIS caminhos: saldos pela API REST
-  (a raspagem da tela de contas quebrou duas vezes) e pagamentos pela grade,
-  que ainda depende do layout. `config.yaml`, `mapping.yaml` e `MODELO.xlsx`
+  vieram junto sem alteração. **A coleta tem DOIS caminhos e UMA chave**
+  (`pagamentos_via_api` na seção `erp` do `config.yaml`, padrão True desde
+  08/09/2026): pela API, saldos E pagamentos vêm por HTTP num login só
+  (`collect.coletar_pela_api` + `erp/payments_api.py`, que lê a mesma
+  `payable-installments/paginated-result` que a tela consome, em janelas de
+  15 dias, deduplicando pelo `id` da parcela — `value` vem NULL, o dinheiro é
+  `remainingValue`, e o "agregado em aberto" vira a soma da lista do período)
+  e a aba não abre Chrome; com a chave desligada vale o plano B de antes, a
+  grade raspada (`coletar_pela_tela`/`coletar_com_pagina`, `erp/payments.py`,
+  que ainda depende do layout). `conciliacao comparar-coleta --de --ate` roda
+  os dois para o mesmo período e imprime, por conta, total e quantidade de
+  cada um — abre o Chrome para a raspagem, e **ainda não foi rodado ao
+  vivo**. `config.yaml`, `mapping.yaml` e `MODELO.xlsx`
   ficam FORA do repo (nome de empresa, estrutura do painel, rateios); as
   fixtures dos testes pulam quando faltam, então o CI passa sem os dados reais
   e a máquina de quem usa valida de verdade. Saída em
@@ -1583,8 +1596,9 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   automático não passa por segundo fator, e aí o navegador deixa de ser plano B
   e vira o único caminho), e o `POST /users/login` do HTTP direto **derruba** a
   sessão do navegador — o ERP aceita uma por usuário, e é isso que define a
-  ordem da coleta da Conciliação (navegador primeiro, API depois) e faz o
-  `nuvem/contas_novas.py` rodar na ABERTURA, antes de existir Chrome.
+  ordem da coleta da Conciliação pela tela, o plano B (navegador primeiro,
+  API depois) e faz o `nuvem/contas_novas.py` rodar na ABERTURA, antes de
+  existir Chrome.
 - PyInstaller onefile: caminhos persistentes usam a pasta do EXE
   (sys.executable), nunca __file__ (que aponta para pasta temporária).
 - pdfminer precisa de `--collect-all pdfminer`/`pdfplumber` no PyInstaller
@@ -2165,12 +2179,11 @@ na cabeça de alguém não é pendência, é esquecimento:
   sem o consentimento do Windows, e trocá-lo exigiria um Tk que aceitasse
   `<FocusIn>` gerado;
 - **os consumidores 4 a 8 do ERP** — `aportes/mc_catalogos.py` +
-  `aportes/erp_sessao.py`; `conciliacao/erp/payments.py`, cuja grade raspada
-  tem endpoint REST equivalente (`payable-installments/paginated-result`, que
-  dois outros clientes já consomem) e é a linha que paga o documento inteiro,
-  porque com ela some a raspagem, some o login por navegador da Conciliação e
-  some a exigência de janela visível — e é também a mais cara de conferir,
-  porque o resultado é dinheiro no painel do dia; `relatorios/extrato_mc.py` e
+  `aportes/erp_sessao.py`; `conciliacao/erp/payments.py` **migrou em
+  08/09/2026** (`payments_api.py`, chave `pagamentos_via_api`), mas era a mais
+  cara de conferir, porque o resultado é dinheiro no painel do dia, e a
+  conferência — `conciliacao comparar-coleta` num período com coleta antiga
+  conhecida — **ainda não foi rodada**; `relatorios/extrato_mc.py` e
   `anexar/mc_client.py`, em que só as constantes de host mudam; e
   `anexar/mc_api.py` por último. A ordem e o motivo de cada posição estão no fim
   do `docs/ERP-CLIENTES.md`;

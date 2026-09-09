@@ -29,7 +29,8 @@ da aba logada) ou **raspagem** (ler o DOM / falar com o scope do Angular).
 | Arquivo | O que faz | Transporte | Host | Token, e de onde sai | Cabeçalhos obrigatórios | Paginação | O que já quebrou ali |
 |---|---|---|---|---|---|---|---|
 | `conciliacao/erp/api.py` | lista contas bancárias e lê saldos (`SessaoApi`) | HTTP direto (`urllib.request`, `:287`) | login em `legacy-api` (`:115`); consultas em `prod-erp-api` (`:175`, `:200`) | `jwtToken` da resposta de `POST /users/login` (`:120`) | `company-id` (`:157`), `user-agent` de Chrome (`:55`, `:287`), `origin`/`referer` de `acessar.` (`:280`) | `pageIndex` (base **1**) + `pageSize=200`, fim por `hasNextPage` (`:172`, `:179`); trava em 50 páginas (`:65`) | a raspagem de `#/accounts` morreu no redesenho de 10/08/2026 (`:5-8`); sem `user-agent` de navegador o WAF devolve 403 (`:23-29`); um 504 real do `prod-erp-api` custou a rodada, daí as 3 tentativas só em GET (`:69-81`) |
-| `conciliacao/erp/payments.py` | lê a grade de pagamentos a vencer | raspagem (MUI DataGrid, `:55`) | `acessar.` (tela) | cookie/sessão da aba, via `conciliacao/erp/auth.py` | — (o navegador manda tudo) | paginação da própria grade, até 400 páginas (`:98`); o total do rodapé confere a cobertura (`:25`) | ler cedo devolvia ZERO pagamentos sem erro (`:10-12`); com 10 linhas por página a coleta parava no meio do mês **sem erro** (`:96-97`); deduplicar por texto apagava tarifas legítimas iguais (`:34-36`) |
+| `conciliacao/erp/payments_api.py` | lê a lista de pagamentos a vencer — **o caminho padrão desde 08/09/2026** (`pagamentos_via_api: true`) | HTTP direto — reusa o `SessaoApi`/`erp.Sessao` | `legacy-api` (`payable-installments/paginated-result`) | `accessToken`, escolhido pelo host em `erp.Sessao.token_para` | os quatro do legado, via `cabecalhos_para` | `page` (base **0**) + `size=3000`, fim por `hasNextPage`; janelas de 15 dias; trava em 50 páginas | `value` vem NULL na lista: o dinheiro é `remainingValue`; o status não vem por escrito, é derivado de `paid` + data; dedupe pelo `id` da parcela, nunca por texto |
+| `conciliacao/erp/payments.py` | lê a grade de pagamentos a vencer — **plano B** desde 08/09/2026 (`pagamentos_via_api: false`) | raspagem (MUI DataGrid, `:55`) | `acessar.` (tela) | cookie/sessão da aba, via `conciliacao/erp/auth.py` | — (o navegador manda tudo) | paginação da própria grade, até 400 páginas (`:98`); o total do rodapé confere a cobertura (`:25`) | ler cedo devolvia ZERO pagamentos sem erro (`:10-12`); com 10 linhas por página a coleta parava no meio do mês **sem erro** (`:96-97`); deduplicar por texto apagava tarifas legítimas iguais (`:34-36`) |
 | `conciliacao/erp/auth.py` + `browser.py` | login no navegador para a grade | raspagem + `page.evaluate` no scope do AngularJS (`auth.py:58`) | `acessar.` | nenhum token nosso: a sessão vive só na memória da aba (`auth.py:5-9`) | — | — | preencher o input não propaga para o `ng-model` e o ENTRAR chamava `login()` com credencial vazia, em silêncio (`auth.py:47-57`); **headless é recusado pelo WAF** (`browser.py:5-8`) |
 | `anexar/mc_api.py` | pagos, a pagar, anexos, `overview`, recebimentos, participantes, obras | fetch na página (`:55`, `:282`) | `legacy-api` (lista de pagamentos, `_base_legacy` `:507`) e `prod-erp-api` (anexos e obras, `_base_erp` `:515`) | **cabeçalhos capturados do tráfego da própria página** — dois conjuntos, um por tela (`:144-158`) | pagos: `accept`, `authorization`, `organization-unit-id`, `user-id`, `company-id` (`:52`); anexos: `accept`, `authorization`, `company-id` (`:53`) | pagos/recebimentos: `page` (base **0**) + `size`, fim por `hasNextPage`/`last` (`:316`, `:326`, `:559`); obras: `pageIndex` (base **1**) + `pageSize`, fim por `hasNextPage` (`:627-635`) | `pageIndex`/`pageSize` são **aceitos e ignorados em silêncio** na lista de recebimentos, e a resposta volta com 20 registros parecendo completa (`:537-540`); `page=1` traz a SEGUNDA página, vazia e sem erro (`:402-403`); `goto` para a rota em que a página já está não dispara requisição, e a captura esperava 30 s por uma chamada que nunca sairia (`:172-178`) |
 | `anexar/mc_client.py` | login e **anexar o arquivo** pela tela (⋮ → Editar pagamento) | raspagem + `page.evaluate` (`:95`, `:690`) | `acessar.` (`config.py:70`) | sessão da aba; sem token nosso | — | — | o mesmo buraco do `ng-disabled`/`getAutoFill` (`:246-255`); "anexado" sem prova: o `wait_for_timeout(3000)` era menor que o upload em lote e o Confirmar ia sem arquivo (`:130-132`, `:723-731`) |
@@ -137,7 +138,7 @@ Com isso, o motivo de cada consumidor precisar (ou não) do navegador:
 | `pagamentos_dia/baixa_erp.py` | o transporte é parâmetro (`:208-214`); ele nunca soube se havia navegador |
 | `aportes/mc_catalogos.py` (a parte REST) | os quatro cabeçalhos que ele captura saem inteiros da resposta do login — é o que `mc_sessao.py:114-117` monta sem navegador nenhum |
 | `aportes/mc_lancamentos.py` | só usa `Catalogos.postar`; segue o de cima |
-| `conciliacao/erp/payments.py` | a MESMA lista tem endpoint REST: `legacy .../payable-installments/paginated-result`, que `anexar/mc_api.py:147` e `mc_sessao.py:167` já consomem. O próprio `collect.py:10-11` registra a intenção: "A grade de pagamentos nao foi investigada ainda — quando for, o navegador sai de cena por completo" |
+| `conciliacao/erp/payments.py` | **já virou** (08/09/2026): `conciliacao/erp/payments_api.py` lê `legacy .../payable-installments/paginated-result`, que `anexar/mc_api.py:147` e `mc_sessao.py:167` já consumiam. A raspagem ficou como plano B atrás de `pagamentos_via_api: false`, e `conciliacao comparar-coleta` roda os dois caminhos para o mesmo período e compara conta a conta |
 
 **Precisam do navegador (3), e o motivo de cada um NÃO é o WAF:**
 
@@ -240,6 +241,15 @@ Do que não tem como quebrar ao que quebra tudo. Um PR por linha.
    exigência de janela visível (`browser.py:5-8`). Também é a mais cara de
    conferir, porque o resultado é dinheiro no painel do dia — vale comparar
    total a total contra uma coleta antiga antes de trocar.
+   **Feita em 08/09/2026**: `conciliacao/erp/payments_api.py` (a tabela
+   coluna → campo está no cabeçalho dele), `collect.coletar_pela_api` é o
+   padrão e a raspagem ficou intacta como plano B, atrás de
+   `pagamentos_via_api: false` no `config.yaml`. A conferência é
+   `conciliacao comparar-coleta --de 27/07/2026 --ate 30/07/2026` (abre o
+   Chrome para a raspagem; a referência conhecida é R$ 177.046,30 em 73
+   lançamentos) — **ainda não rodada ao vivo**. Duas diferenças do caminho
+   novo: o "agregado em aberto" passou a ser a soma da lista do período (o
+   rodapé somava o mês), e `value` vem NULL — o dinheiro é `remainingValue`.
 6. **`relatorios/extrato_mc.py`** — só as constantes de host mudam (`:39-41`).
    O PDF continua saindo do navegador.
 7. **`anexar/mc_client.py`** — só as constantes de host (via
