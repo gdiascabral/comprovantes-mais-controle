@@ -179,6 +179,21 @@ def test_dinheiro_e_decimal_e_nao_float():
     assert imoveis[0].recebido == Decimal("0.30")
 
 
+def test_o_cliente_do_recebimento_fica_guardado_a_parte():
+    """Quem decide se o Cliente é o comprador é o pipeline, que conhece o
+    cadastro das empresas; aqui os dois nomes ficam separados."""
+    r = receb("CASA 03", "1ª Sinal")
+    r["customerName"] = "PESSOA QUE COMPROU"
+    i = imoveis_do_mes([r], log=_sem_log)[0]
+    assert i.cliente == "PESSOA QUE COMPROU"
+    assert i.comprador == "" and i.comprador_descricao == ""
+
+    r2 = receb("VENDA CASA 01 - FULANO", "1ª FINANCIAMENTO")
+    i2 = imoveis_do_mes([r2], log=_sem_log)[0]
+    assert i2.cliente == "EMPRESA EXEMPLO"
+    assert i2.comprador == "FULANO" and i2.comprador_descricao == "FULANO"
+
+
 def test_chave_do_imovel_ignora_acento_e_espaco_duplo():
     a = Imovel(obra="TB 21  QD 46 LT 18", unidade=1, comprador="X")
     b = Imovel(obra="tb 21 qd 46 lt 18", unidade=1, comprador="Y")

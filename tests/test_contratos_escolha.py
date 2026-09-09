@@ -161,12 +161,27 @@ def test_assinado_desempata_duas_grafias():
               _a("CONTRATO DE COMPRA E VENDA X CS 01 ASSINADO .pdf", "b")]
     achado, motivo = contrato_de(anexos, 1)
     assert achado is not None and achado["id"] == "b"
-    assert "ASSINADO" in motivo
+    assert "mais completa" in motivo
 
 
-def test_dois_assinados_continuam_em_revisao():
-    anexos = [_a("CONTRATO DE COMPRA E VENDA X CS 01 ASSINADO .pdf", "a"),
-              _a("CONTRATO DE COMPRA E VENDA X CS 01 ASSINADO v2 .pdf", "b")]
+def test_a_versao_mais_completa_vence():
+    """Regra do dono: "sempre a mais completa". Os sufixos são os de
+    agosto/2026: `VENDEDOR` e `ASSINATURA CORRETORA`."""
+    anexos = [_a("CONTRATO DE COMPRA E VENDA X QD 01 LT 21 CS 02 .pdf", "a"),
+              _a("CONTRATO DE COMPRA E VENDA X QD 01 LT 21 CS 02 VENDEDOR .pdf", "b")]
+    assert contrato_de(anexos, 2)[0]["id"] == "b"
+
+    anexos = [_a("CONTRATO DE COMPRA E VENDA  X LYKEIOS QD 01 LT 34 CS 01 .pdf", "a"),
+              _a("CONTRATO DE COMPRA E VENDA X QD 01 LT 34 CASA 01 .pdf", "b"),
+              _a("CONTRATO DE COMPRA E VENDA X QD 01 LT 34 CASA 01 ASSINATURA CORRETORA .pdf", "c")]
+    achado, motivo = contrato_de(anexos, 1)
+    assert achado["id"] == "c" and "3 candidatos" in motivo
+
+
+def test_dois_que_se_dizem_completos_continuam_em_revisao():
+    """O nome não diz qual tem mais assinaturas; quem abre decide."""
+    anexos = [_a("CONTRATO DE COMPRA E VENDA X CS 01 VENDEDOR .pdf", "a"),
+              _a("CONTRATO DE COMPRA E VENDA X CS 01 ASSINATURA CORRETORA .pdf", "b")]
     achado, motivo = contrato_de(anexos, 1)
     assert achado is None and "disputam" in motivo
 

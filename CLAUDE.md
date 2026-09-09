@@ -1485,7 +1485,15 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   destino no PDF) é o que pega contrato anexado na obra errada, o pior defeito
   daqui. (5) VALOR nunca retém: o contábil apura pelo que entrou no banco.
   (6) Recebimento sem casa na descrição fica em revisão sem botão de resolver
-  — a correção é no ERP. A leitura é progressiva: três páginas primeiro, o
+  — a correção é no ERP. (7) Entre versões do contrato na obra vale **a mais
+  completa** (`… VENDEDOR`, `… ASSINATURA CORRETORA`, `… ASSINADO`; regra do
+  dono, 09/09/2026); dois que se dizem completos continuam em revisão, e
+  duas grafias sem sufixo são baixadas e comparadas byte a byte — metade das
+  disputas de agosto/2026 era o mesmo PDF subido duas vezes. (8) O comprador
+  é o **Cliente do recebimento** quando ele é pessoa; quando é a própria SPE
+  (era assim em 20 das 25 linhas de agosto/2026 — financiamento, FGTS e
+  juros nascem com a empresa como cliente) vale o nome da descrição, e o
+  ponto COMPRADOR da conferência segura o resto. A leitura é progressiva: três páginas primeiro, o
   resto só se sobrou `?`; página sem texto vai para o `_ocr_em_lote` paralelo
   do Separar/Renomear. `mc_api.listar_recebimentos` traz `saleValue` (valor da
   VENDA) em cada linha; as Condições vistas em 2026 são Sinal, Entrada,

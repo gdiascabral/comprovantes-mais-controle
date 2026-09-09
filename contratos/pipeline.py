@@ -108,6 +108,35 @@ def _definir_empresa(achado: Achado, empresa) -> None:
     achado.razao_social = getattr(empresa, "razao_social", "") or ""
 
 
+def _nomes_de_empresa(empresas, cliente_erp: str = "") -> set[str]:
+    """Tudo que, como Cliente de um recebimento, significa "a própria SPE"."""
+    nomes = {util.norm_espaco(cliente_erp)} if cliente_erp else set()
+    for e in empresas or []:
+        for n in (getattr(e, "clientes_erp", None) or []):
+            nomes.add(util.norm_espaco(n))
+        for n in (getattr(e, "razao_social", ""), getattr(e, "nome", "")):
+            if n:
+                nomes.add(util.norm_espaco(n))
+    nomes.discard("")
+    return nomes
+
+
+def _definir_comprador(achado: Achado, empresas) -> None:
+    """Regra do dono (09/09/2026): o comprador é o Cliente do recebimento.
+
+    Com uma ressalva que os dados impuseram: em agosto/2026 o Cliente era a
+    própria SPE em 20 das 25 linhas (financiamento, FGTS e juros nascem com a
+    empresa como cliente). Cliente que é empresa do cadastro não é comprador
+    de ninguém — aí vale o nome que está na descrição. Errar aqui não arquiva
+    errado: o ponto COMPRADOR da conferência ainda exige o nome no PDF."""
+    i = achado.imovel
+    if i.cliente and util.norm_espaco(i.cliente) not in _nomes_de_empresa(
+            empresas, achado.cliente_erp):
+        i.comprador = i.cliente
+    else:
+        i.comprador = i.comprador_descricao
+
+
 def levantar(api, ano: int, mes: int, empresas, log=print,
              cancelar=None) -> list[Achado]:
     """Passo 1: quem recebeu, qual o contrato e para qual empresa vai.
@@ -158,6 +187,8 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
     anexos_por_obra = api.anexos_de_obras(ids, log, cancelar=cancelar)
 
     for a in achados:
+        if a.obra_id:
+            _definir_comprador(a, empresas)
         if a.revisao or not a.obra_id:
             continue
         a.anexos_da_obra = anexos_por_obra.get(a.obra_id) or []

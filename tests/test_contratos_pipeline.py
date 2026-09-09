@@ -65,12 +65,13 @@ As partes assinam em duas vias de igual teor e forma.
 
 
 def receb(obra, casa, comprador, condicao="1ª Sinal", valor=10000.0,
-          descricao=None):
+          descricao=None, cliente="EMPRESA BURITIS LTDA"):
     return {"workName": obra,
             "description": descricao or f"VENDA CASA {casa:02d} - {comprador}",
             "readjustmentType": condicao, "nature": "Venda",
             "dateOfReceipt": "2026-08-15", "sumOfReceivedValues": valor,
-            "saleValue": 245000.0, "id": f"{obra}-{casa}-{condicao}"}
+            "saleValue": 245000.0, "customerName": cliente,
+            "id": f"{obra}-{casa}-{condicao}"}
 
 
 class Leitor:
@@ -198,6 +199,37 @@ def test_linha_sem_casa_ainda_diz_a_obra_e_o_cliente():
     a = next(x for x in _levantar() if "não diz a casa" in x.revisao)
     assert a.obra_id == "obra-1" and a.cliente_erp == "EMPRESA BURITIS LTDA"
     assert not pode_resolver(a)               # a correção é no ERP
+
+
+# ------------------------------------------------------ quem é o comprador
+def test_o_cliente_do_recebimento_e_o_comprador_quando_e_pessoa():
+    """Regra do dono: "sempre o cliente do contrato". As linhas novas de
+    agosto/2026 vêm assim: descrição `CASA 3` e o comprador no Cliente."""
+    registros = [receb("TB 21 QD 46 LT 18", 1, "", descricao="CASA 1",
+                       cliente="PESSOA QUE COMPROU A CASA")]
+    a = _levantar(registros)[0]
+    assert a.imovel.comprador == "PESSOA QUE COMPROU A CASA"
+    assert esperado_da_conferencia(a)["comprador"] == "PESSOA QUE COMPROU A CASA"
+
+
+def test_cliente_que_e_a_propria_spe_nao_vira_comprador():
+    """Em agosto/2026 o Cliente era a SPE em 20 das 25 linhas (financiamento,
+    FGTS, juros). Aí vale o nome da descrição."""
+    registros = [receb("TB 21 QD 46 LT 18", 1, "PRIMEIRO COMPRADOR EXEMPLO",
+                       "1ª FINANCIAMENTO", cliente="EMPRESA BURITIS LTDA"),
+                 receb("TB 21 QD 46 LT 18", 2, "SEGUNDO COMPRADOR EXEMPLO",
+                       "1ª FGTS", cliente="EMPRESA BURITIS EMPREENDIMENTOS LTDA")]
+    achados = _levantar(registros)
+    assert achados[0].imovel.comprador == "PRIMEIRO COMPRADOR EXEMPLO"
+    assert achados[1].imovel.comprador == "SEGUNDO COMPRADOR EXEMPLO"
+
+
+def test_cliente_pessoa_vence_o_nome_da_descricao():
+    registros = [receb("TB 21 QD 46 LT 18", 1, "NOME ABREVIADO",
+                       cliente="NOME COMPLETO DO COMPRADOR")]
+    a = _levantar(registros)[0]
+    assert a.imovel.comprador == "NOME COMPLETO DO COMPRADOR"
+    assert a.imovel.comprador_descricao == "NOME ABREVIADO"
 
 
 # ------------------------------------------------- desempate pelo conteúdo

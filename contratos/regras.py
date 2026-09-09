@@ -112,8 +112,16 @@ class Imovel:
 
     obra: str                       # workName, igual ao name da obra
     unidade: int | None             # 1, 2... None quando a descrição não diz
-    comprador: str
+    comprador: str                  # quem comprou: o Cliente do ERP quando é
+                                    # pessoa, senão o nome da descrição
     descricao: str = ""             # a descrição crua, para a linha em revisão
+    #: O campo Cliente do recebimento (`customerName`). Regra do dono
+    #: (09/09/2026): "sempre o cliente do contrato" — mas em agosto/2026 ele
+    #: era a própria SPE em 20 das 25 linhas (as de financiamento nascem com
+    #: a empresa como cliente), então quem decide se ele vale como comprador
+    #: é o pipeline, que conhece o cadastro das empresas.
+    cliente: str = ""
+    comprador_descricao: str = ""   # o nome depois do " - " da descrição
     recebido: Decimal = Decimal("0.00")     # soma do mês, todas as condições
     valor_venda: Decimal | None = None      # saleValue, quando o ERP manda
     recebimentos: list[Recebimento] = field(default_factory=list)
@@ -184,13 +192,18 @@ def imoveis_do_mes(registros: list[dict], log=print) -> list[Imovel]:
         else:
             revisao = ""
 
+        cliente = (r.get("customerName") or "").strip()
         candidato = Imovel(obra=obra, unidade=unidade, comprador=comprador,
-                           descricao=descricao, revisao=revisao)
+                           descricao=descricao, cliente=cliente,
+                           comprador_descricao=comprador, revisao=revisao)
         imovel = por_chave.setdefault(candidato.chave, candidato)
         # O comprador vem da linha da venda; uma condição pode vir sem ele,
         # e vazio não pode apagar o que já se sabe.
         if comprador and not imovel.comprador:
             imovel.comprador = comprador
+            imovel.comprador_descricao = comprador
+        if cliente and not imovel.cliente:
+            imovel.cliente = cliente
 
         valor = _dinheiro(r.get("sumOfReceivedValues"))
         imovel.recebido += valor

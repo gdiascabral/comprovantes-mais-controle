@@ -55,7 +55,18 @@ EXCLUSOES = (
     "CAIXA", "CEF", "FINANCIAMENTO", "MUTUO",
 )
 
+#: Palavras que, no nome, dizem que aquele arquivo é a versão MAIS COMPLETA
+#: do contrato (com mais assinaturas). Vistas em agosto/2026: `… CS 02
+#: VENDEDOR`, `… CASA 01 ASSINATURA CORRETORA`, `… ASSINADO`. Regra do dono
+#: (09/09/2026): entre versões, vale sempre a mais completa.
+MARCAS_DE_COMPLETO = ("ASSINAD", "VENDEDOR", "CORRETOR", "COMPLET", "FINAL")
+
 MARCA_ASSINADO = "ASSINADO"
+
+
+def eh_mais_completo(nome: str) -> bool:
+    n = _norm(nome)
+    return any(m in n for m in MARCAS_DE_COMPLETO)
 
 
 def _nome(anexo: dict) -> str:
@@ -119,8 +130,11 @@ def contrato_de(anexos: list[dict], unidade: int | None) -> tuple[dict | None, s
     Cópias de nome idêntico contam como uma: a obra examinada tem anexos
     repetidos de fato (o mesmo `HIDROSSANITARIO … CS 01` aparece duas vezes).
     Nomes DIFERENTES sobrando é ambiguidade de verdade, e vira revisão — a
-    não ser que exatamente um se diga ASSINADO. Quem ainda pode desempatar é
-    o pipeline, baixando os candidatos e comparando o conteúdo: em agosto/2026
+    não ser que exatamente um se diga a versão mais completa (ASSINADO,
+    VENDEDOR, ASSINATURA CORRETORA...): regra do dono, vale sempre a mais
+    completa. Dois que se dizem completos continuam em revisão, porque o nome
+    não diz qual tem mais assinaturas. Quem ainda pode desempatar é o
+    pipeline, baixando os candidatos e comparando o conteúdo: em agosto/2026
     metade das disputas era o mesmo arquivo subido duas vezes com outro nome."""
     if not unidade:
         return None, "sem o número da casa não dá para escolher o contrato"
@@ -133,9 +147,10 @@ def contrato_de(anexos: list[dict], unidade: int | None) -> tuple[dict | None, s
     if len(distintos) == 1:
         return achados[0], "único contrato de compra e venda da casa"
 
-    assinados = [a for a in distintos if MARCA_ASSINADO in _norm(_nome(a))]
-    if len(assinados) == 1:
-        return assinados[0], "o único que se diz ASSINADO entre os candidatos"
+    completos = [a for a in distintos if eh_mais_completo(_nome(a))]
+    if len(completos) == 1:
+        return completos[0], ("a versão mais completa entre "
+                              f"{len(distintos)} candidatos")
 
     return None, motivo_da_disputa(distintos, unidade)
 
