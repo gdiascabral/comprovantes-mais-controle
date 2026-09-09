@@ -26,13 +26,19 @@ import util
 #: `contratos/destino.py`; aqui ela é LIDA, lá é escrita.
 SUBPASTA_CONTRATOS = "CONTRATOS"
 
-#: `CONTRATO RPB 99 QD 1A LT 2 CS 01 - FULANO DE TAL` -> partes.
-#: O nome é montado por `contratos/destino.nome_arquivo`. Não casando, a linha
-#: entra como está: informação a mais no comentário é melhor que informação
-#: perdida em silêncio.
+#: `CONTRATO DE COMPRA E VENDA RPB 99 QD 1A LT 2 CS 01 - FULANO DE TAL` ->
+#: partes. O nome é montado por `contratos/destino.nome_arquivo`. O prefixo
+#: sem "DE COMPRA E VENDA" é o contrato de FINANCIAMENTO (o da Caixa), que a
+#: pasta guarda desde 2024, posto à mão — entra na lista dizendo o que é, para
+#: o escritório não contar a casa duas vezes. Não casando, a linha entra como
+#: está: informação a mais no comentário é melhor que informação perdida em
+#: silêncio.
 RE_CONTRATO = re.compile(
-    r"^CONTRATO\s+(?P<obra>.+?)\s+CS\s+(?P<unidade>\d+)"
+    r"^CONTRATO\s+(?P<tipo>DE\s+COMPRA\s+E\s+VENDA\s+)?"
+    r"(?P<obra>.+?)\s+CS\s+(?P<unidade>\d+)"
     r"(?:\s*-\s*(?P<comprador>.+))?$")
+
+ROTULO_FINANCIAMENTO = " (contrato de financiamento)"
 
 #: Partículas que ficam em minúscula na caixa de título de um nome.
 PARTICULAS = {"de", "da", "do", "das", "dos", "e"}
@@ -101,8 +107,11 @@ def caixa_de_titulo(nome: str) -> str:
 
 
 def linha_do_contrato(nome_do_arquivo: str) -> str:
-    """'CONTRATO RPB 99 QD 1A LT 2 CS 01 - FULANO DE TAL.pdf'
-    -> 'RPB 99 QD 1A LT 2 Casa 01 - Fulano de Tal'."""
+    """'CONTRATO DE COMPRA E VENDA RPB 99 QD 1A LT 2 CS 01 - FULANO DE TAL.pdf'
+    -> 'RPB 99 QD 1A LT 2 Casa 01 - Fulano de Tal'.
+
+    'CONTRATO RPB 99 … CS 01 - FULANO.pdf' (o da Caixa)
+    -> 'RPB 99 QD 1A LT 2 Casa 01 - Fulano de Tal (contrato de financiamento)'."""
     base = PurePosixPath(nome_do_arquivo).stem.strip()
     m = RE_CONTRATO.match(base)
     if not m:
@@ -111,6 +120,8 @@ def linha_do_contrato(nome_do_arquivo: str) -> str:
     comprador = (m.group("comprador") or "").strip()
     if comprador:
         linha += f" - {caixa_de_titulo(comprador)}"
+    if not m.group("tipo"):
+        linha += ROTULO_FINANCIAMENTO
     return linha
 
 

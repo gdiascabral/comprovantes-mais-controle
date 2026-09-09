@@ -14,7 +14,7 @@ precisar saber programar. São **nove abas**, numa janela só:
 | **⚖ Conciliação Diária** | *(diário)* Lê saldos e pagamentos a vencer e monta o painel do dia, com o aporte mínimo por conta. |
 | **📊 Relatório Mensal** | *(mensal)* Baixa em PDF o extrato de cada conta bancária do ERP, arquivando na pasta da empresa. |
 | **🏦 Extratos Sicoob** | *(mensal)* Cria a árvore de pastas do fechamento e baixa OFX + PDF de cada conta no SicoobNet. |
-| **📑 Contratos** | *(mensal)* Acha o contrato de financiamento das casas que financiaram no mês, confere o conteúdo (rua, quadra/lote, casa, comprador e valor) e arquiva na pasta da empresa. |
+| **📑 Contratos** | *(mensal)* Acha o contrato de compra e venda das casas que receberam qualquer coisa no mês (sinal, entrada, financiamento, intermediação), confere o conteúdo (tipo, rua, quadra/lote, casa, comprador, vendedora e valor da venda) e arquiva na pasta da empresa, sem gravar por cima do que já está lá. |
 | **📤 Acessórias** | *(mensal)* Envia o fechamento ao escritório contábil pelo portal: uma solicitação por empresa, com o .zip do mês anexado e a lista dos contratos lida de dentro do próprio zip. |
 
 As quatro primeiras ficam soltas na barra lateral; as outras vivem nos grupos
@@ -162,7 +162,7 @@ relatorios/         extrato mensal por conta (PDF) + mapa conta → pasta
 pagamentos_dia/     Excel de conferência dos pagamentos do dia
 extratos_sicoob/    árvore do fechamento + OFX/PDF do SicoobNet
 conciliacao/        painel do dia (pacote de verdade, com __init__.py)
-contratos/          contratos de financiamento (idem)
+contratos/          contratos de compra e venda das casas que receberam no mês (idem)
 acessorias/         envio do fechamento ao escritório, pelo portal (idem)
 ```
 

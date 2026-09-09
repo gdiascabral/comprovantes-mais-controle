@@ -2,7 +2,7 @@
 """De qual empresa é a obra, e onde o contrato é arquivado.
 
 Puro: sem navegador, sem tkinter e sem escrever em disco — só monta caminho e
-nome. Quem grava é o pipeline.
+nome, e olha o que já existe. Quem grava é o pipeline.
 
 O ERP diz o cliente da obra (`customer.name`), mas esse nome **não é** o nome
 da pasta: `TERRA BELA MORAIS ENGENHARIA SPE` é a pasta `TERRA BELA`, e
@@ -15,6 +15,12 @@ Por isso o mapa é EXPLÍCITO, e mora no `contas_sicoob.json` que já existe
 2026 já ficou partido uma vez porque `contas_mc.json` e `contas_sicoob.json`
 discordavam sobre a mesma conta; um mapa a mais é uma divergência a mais
 esperando acontecer.
+
+**O nome do arquivo diz que é o contrato de compra e venda.** A pasta
+CONTRATOS já guarda, arquivado à mão desde 2024, o contrato da Caixa com o
+nome `CONTRATO <obra> CS 01 - COMPRADOR.pdf`. Se o app gravasse o de compra e
+venda com o mesmo nome, apagaria o da Caixa — e ninguém perceberia até o
+fechamento. O prefixo é a diferença.
 """
 from __future__ import annotations
 
@@ -22,8 +28,13 @@ from pathlib import Path
 
 import util
 
+from .regras import numero_da_unidade
+
 #: Subpasta do contrato dentro da pasta da empresa no mês.
 SUBPASTA = "CONTRATOS"
+
+#: Começo do nome do arquivo gravado pelo app.
+PREFIXO = "CONTRATO DE COMPRA E VENDA"
 
 #: Proibidos em nome de arquivo no Windows. O comprador vem de texto digitado
 #: por gente e já apareceu com barra ("MARIA / JOSE").
@@ -62,14 +73,14 @@ def limpar(texto: str) -> str:
 
 def nome_arquivo(obra: str, unidade: int, comprador: str,
                  extensao: str = ".pdf") -> str:
-    """`CONTRATO TB 21 QD 46 LT 18 CS 02 - FULANO DE TAL.pdf`.
+    """`CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 02 - FULANO DE TAL.pdf`.
 
     A extensão vem do anexo e chega COM ponto (`extension` da API), então não
     se acrescenta outro."""
     ext = (extensao or ".pdf").strip()
     if ext and not ext.startswith("."):
         ext = "." + ext
-    base = f"CONTRATO {limpar(obra)} CS {unidade:02d}"
+    base = f"{PREFIXO} {limpar(obra)} CS {unidade:02d}"
     comprador = limpar(comprador)
     if comprador:
         base += f" - {comprador}"
@@ -93,3 +104,36 @@ def caminho_longo(caminho: Path) -> int | None:
     estouro no meio do lote é caro e o erro não aponta para a causa."""
     n = len(str(caminho))
     return n if n > LIMITE_CAMINHO else None
+
+
+def _compacto(texto: str) -> str:
+    return util.norm_espaco(texto).replace(" ", "")
+
+
+def mesmo_contrato_na_pasta(pasta: Path, obra: str, unidade: int,
+                            exceto: Path | None = None) -> Path | None:
+    """Um contrato de compra e venda desta casa que JÁ está na pasta com outro
+    nome, ou None.
+
+    Serve para a rodada refeita e para o mês arquivado à mão: gravar um
+    segundo arquivo da mesma casa faria a Acessórias listar a casa duas vezes
+    ao escritório. Compara sem espaços porque o nome é digitado por gente
+    (`QD46 LT18` e `QD 46 LT 18` são a mesma obra)."""
+    try:
+        if not Path(pasta).is_dir():
+            return None
+        arquivos = [p for p in Path(pasta).iterdir() if p.is_file()]
+    except OSError:
+        return None
+    alvo_obra = _compacto(obra)
+    for p in sorted(arquivos):
+        if exceto is not None and p.name == exceto.name:
+            continue
+        nome = _compacto(p.stem)
+        if "COMPRAEVENDA" not in nome and "CCV" not in nome:
+            continue
+        if alvo_obra and alvo_obra not in nome:
+            continue
+        if numero_da_unidade(p.stem) == unidade:
+            return p
+    return None
