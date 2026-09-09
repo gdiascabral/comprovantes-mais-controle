@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Qual anexo é o contrato de financiamento.
+"""Qual anexo é o contrato de compra e venda.
 
 Os 52 nomes abaixo são os de uma obra REAL, com o nome de pessoa trocado — é o
 formato que importa, e o repositório é público. Eles trazem de graça três
 armadilhas que ninguém inventaria: a obra escrita errada dentro do arquivo
 (QD 26 numa obra QD 46), a versão sem espaço (QD46 LT18) e anexos repetidos.
 """
-from contratos.escolha import (comeca_com_contrato, contrato_de,
-                               ordenar_para_escolha, tem_qualificador)
+from contratos.escolha import (candidatos, contrato_de, eh_compra_e_venda,
+                               excluido_por, ordenar_para_escolha)
 
 # Os 52 anexos da obra TB 21 QD 46 LT 18, como o ERP devolve.
 NOMES = [
@@ -69,51 +69,159 @@ ANEXOS = [{"id": f"a{i}", "filename": n, "extension": ".pdf",
            "downloadUrl": f"https://exemplo.invalid/{i}"}
           for i, n in enumerate(NOMES)]
 
-
-def test_a_obra_real_resolve_as_duas_casas():
-    a1, motivo1 = contrato_de(ANEXOS, 1)
-    a2, motivo2 = contrato_de(ANEXOS, 2)
-    assert a1 is not None, motivo1
-    assert a2 is not None, motivo2
-    assert a1["filename"].startswith("CONTRATO TB 21 QD 46 LT 18 CS 01")
-    assert a2["filename"].startswith("CONTRATO TB 21 QD 46 LT 18 CS 02")
+CCV_CS01_A = "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 .pdf"
+CCV_CS01_B = "CONTRATO DE COMPRA E VENDA TB 21 QD46 LT18 CS 01 .pdf"
+CCV_CS02 = "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 02 .pdf"
 
 
-def test_os_quatro_parecidos_ficam_de_fora():
-    escolhidos = {contrato_de(ANEXOS, u)[0]["filename"] for u in (1, 2)}
-    for fora in ("CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 .pdf",
-                 "CONTRATO DE COMPRA E VENDA TB 21 QD46 LT18 CS 01 .pdf",
-                 "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 02 .pdf",
-                 "CONTRATO EMPREITA - NOME DO EMPREITEIRO - TB 21 QD 46 LT 18 .pdf"):
-        assert fora not in escolhidos
+def _a(nome, ident="x"):
+    return {"filename": nome, "extension": ".pdf", "id": ident}
 
 
-def test_os_quase_parecidos_nao_comecam_com_contrato():
-    """DISTRATO, TERMO DE ENTREGA, RCPM, CERTIDÃO, MEMORIAL, MANUAL."""
+# ------------------------------------------------------------- a obra real
+def test_a_casa_02_da_obra_real_resolve_sozinha():
+    anexo, motivo = contrato_de(ANEXOS, 2)
+    assert anexo is not None, motivo
+    assert anexo["filename"] == CCV_CS02
+
+
+def test_a_casa_01_tem_duas_grafias_e_vira_revisao():
+    """`QD 46 LT 18` e `QD46 LT18` podem ser o mesmo arquivo subido duas
+    vezes ou uma minuta e a assinada. Só quem abre sabe."""
+    anexo, motivo = contrato_de(ANEXOS, 1)
+    assert anexo is None
+    assert "2 anexos disputam" in motivo
+    assert CCV_CS01_A in motivo and CCV_CS01_B in motivo
+
+
+def test_o_contrato_da_caixa_fica_de_fora():
+    """`CONTRATO TB 21 … CS 02` (sem "compra e venda") é o da Caixa."""
+    nomes = {a["filename"] for a in candidatos(ANEXOS, 2)}
+    assert nomes == {CCV_CS02}
+    assert not eh_compra_e_venda("CONTRATO TB 21 QD 46 LT 18 CS 02 .pdf")
+
+
+def test_os_quase_parecidos_ficam_de_fora():
     for nome in ("DISTRATO TB 21 QD 46 LT 18 C1 .pdf",
                  "TERMO DE ENTREGA TB 21 QD 46 LT 18 CS 02 .pdf",
-                 "RCPM CS2 - TB 21 QD 46 LT 18 .pdf",
-                 "CERTIDÃO CS 01 - TB 21 QD 46 LT 18 .pdf",
-                 "MEMORIAL CS1 - TB 21 QD 46 LT 18 .pdf",
-                 "MANUAL DO PROPRIETARIO CS2 - TB 21 QD 46 LT 18 .pdf"):
-        assert not comeca_com_contrato(nome), nome
+                 "CONTRATO EMPREITA - NOME DO EMPREITEIRO - TB 21 QD 46 LT 18 .pdf",
+                 "CERTIDÃO CS 01 - TB 21 QD 46 LT 18 .pdf"):
+        assert not candidatos([_a(nome)], 1) and not candidatos([_a(nome)], 2)
 
 
-def test_qualificador_e_reconhecido():
-    assert tem_qualificador("CONTRATO DE COMPRA E VENDA X CS 01")
-    assert tem_qualificador("CONTRATO EMPREITA - Y - X")
-    assert not tem_qualificador("CONTRATO TB 21 QD 46 LT 18 CS 01")
+# ---------------------------------------------------------------- grafias
+def test_grafias_de_compra_e_venda():
+    """`COMRPA` e `COMPRA EVENDA` são de anexos reais de agosto/2026."""
+    for nome in ("CONTRATO DE COMPRA E VENDA X CS 01", "Contrato de compra e venda x cs 1",
+                 "CONTRATO COMPRA & VENDA X CS 01", "CONTRATO COMPRA-E-VENDA X CS 01",
+                 "CCV X CS 01", "PROMESSA DE COMPRA E VENDA X CS 01",
+                 "CONTRATO DE COMRPA E VENDA X CS 02", "CONTRATO DE COMPRA EVENDA X C2"):
+        assert eh_compra_e_venda(nome), nome
+    for nome in ("CONTRATO X CS 01", "CONTRATO EMPREITA - Y", "VENDA X CS 01",
+                 "TERMO DE ENTREGA X CS 01"):
+        assert not eh_compra_e_venda(nome), nome
+
+
+def test_nomes_reais_de_agosto_resolvem_a_casa_certa():
+    """Grafias vistas na rodada real de 09/09/2026 (obras e nomes trocados)."""
+    assert candidatos([_a("CONTRATO DE COMPRA E VENDA OBRA X QD 18 LT 8.11  C3 .pdf")], 3)
+    assert candidatos([_a("CONTRATO DE COMPRA EVENDA OBRA X QD 18 L 8.11 C2 .pdf")], 2)
+    assert candidatos([_a("CONTRATO DE COMPRA E VENDA OBRA X QD 18 LT 8.11 B2 C1 .pdf")], 1)
+    assert candidatos([_a("CONTRATO DE COMPRA E VENDA RPB 24 QD 26 A, LT, 14 CS 01 .pdf")], 1)
+    assert candidatos([_a("CONTRATO DE COMPRA E VENDA RPB 24 QD 26-A LT 15 CS 2 .pdf")], 2)
+    assert candidatos([_a("CONTRATO DE COMPRA E VENDA RUA APOLO QD 01 LT 33 CS 01 .pdf")], 1)
+    assert not candidatos([_a("CONTRATO DE COMPRA E VENDA OBRA X QD 18 LT 8.11 B2 C1 .pdf")], 2)
+
+
+def test_exclusoes_dizem_a_palavra():
+    assert excluido_por("DISTRATO DE COMPRA E VENDA X CS 01") == "DISTRATO"
+    assert excluido_por("ADITIVO AO CONTRATO DE COMPRA E VENDA X CS 01") == "ADITIVO"
+    assert excluido_por("MINUTA CONTRATO DE COMPRA E VENDA X CS 01") == "MINUTA"
+    assert excluido_por("CONTRATO DE COMPRA E VENDA CAIXA X CS 01") == "CAIXA"
+    assert excluido_por("CONTRATO DE COMPRA E VENDA E FINANCIAMENTO X CS 01") == "FINANCIAMENTO"
+    assert excluido_por("TERMO DE RESCISÃO DO CONTRATO DE COMPRA E VENDA X CS 01") == "RESCIS"
+    assert excluido_por("CONTRATO DE COMPRA E VENDA X CS 01") == ""
+
+
+def test_excluido_nao_e_candidato_mesmo_dizendo_compra_e_venda():
+    anexos = [_a("ADITIVO AO CONTRATO DE COMPRA E VENDA X CS 01 .pdf")]
+    achado, motivo = contrato_de(anexos, 1)
+    assert achado is None and "nenhum anexo" in motivo
+
+
+def test_c_solto_do_centro_de_custo_nao_engana_a_casa():
+    nome = "CONTRATO DE COMPRA E VENDA DONA MORENA QD 18 LT 8 C 259 M 5 CS 01 .pdf"
+    assert candidatos([_a(nome)], 1)
+    assert not candidatos([_a(nome)], 259)
+
+
+# ---------------------------------------------------------------- desempate
+def test_assinado_desempata_duas_grafias():
+    anexos = [_a("CONTRATO DE COMPRA E VENDA X CS 01 .pdf", "a"),
+              _a("CONTRATO DE COMPRA E VENDA X CS 01 ASSINADO .pdf", "b")]
+    achado, motivo = contrato_de(anexos, 1)
+    assert achado is not None and achado["id"] == "b"
+    assert "mais completa" in motivo
+
+
+def test_a_versao_mais_completa_vence():
+    """Regra do dono: "sempre a mais completa". Os sufixos são os de
+    agosto/2026: `VENDEDOR` e `ASSINATURA CORRETORA`."""
+    anexos = [_a("CONTRATO DE COMPRA E VENDA X QD 01 LT 21 CS 02 .pdf", "a"),
+              _a("CONTRATO DE COMPRA E VENDA X QD 01 LT 21 CS 02 VENDEDOR .pdf", "b")]
+    assert contrato_de(anexos, 2)[0]["id"] == "b"
+
+    anexos = [_a("CONTRATO DE COMPRA E VENDA  X LYKEIOS QD 01 LT 34 CS 01 .pdf", "a"),
+              _a("CONTRATO DE COMPRA E VENDA X QD 01 LT 34 CASA 01 .pdf", "b"),
+              _a("CONTRATO DE COMPRA E VENDA X QD 01 LT 34 CASA 01 ASSINATURA CORRETORA .pdf", "c")]
+    achado, motivo = contrato_de(anexos, 1)
+    assert achado["id"] == "c" and "3 candidatos" in motivo
+
+
+def test_dois_que_se_dizem_completos_continuam_em_revisao():
+    """O nome não diz qual tem mais assinaturas; quem abre decide."""
+    anexos = [_a("CONTRATO DE COMPRA E VENDA X CS 01 VENDEDOR .pdf", "a"),
+              _a("CONTRATO DE COMPRA E VENDA X CS 01 ASSINATURA CORRETORA .pdf", "b")]
+    achado, motivo = contrato_de(anexos, 1)
+    assert achado is None and "disputam" in motivo
+
+
+def test_copias_de_nome_identico_contam_como_uma():
+    anexos = [_a("CONTRATO DE COMPRA E VENDA X CS 01 .pdf", "a"),
+              _a("CONTRATO DE COMPRA E VENDA X CS 01 .pdf", "b")]
+    achado, motivo = contrato_de(anexos, 1)
+    assert achado is not None and achado["id"] == "a"
+
+
+def test_tipo_novo_concorre_e_vira_revisao():
+    """Um qualificador que ninguém previu sobrevive ao filtro, mas aí
+    concorre com o verdadeiro — e o desfecho certo é revisão, não chute."""
+    anexos = [_a("CONTRATO DE COMPRA E VENDA X CS 01 .pdf"),
+              _a("CONTRATO DE COMPRA E VENDA DE GAVETA X CS 01 .pdf")]
+    achado, motivo = contrato_de(anexos, 1)
+    assert achado is None and "disputam" in motivo
+
+
+# ------------------------------------------------------------------ faltas
+def test_sem_casa_nao_ha_candidato():
+    assert candidatos(ANEXOS, None) == []
+    achado, motivo = contrato_de(ANEXOS, None)
+    assert achado is None and "número da casa" in motivo
+
+
+def test_casa_sem_contrato_na_obra_que_tem_outras():
+    achado, motivo = contrato_de(ANEXOS, 7)
+    assert achado is None
+    assert "CS 07" in motivo and "COMPRA E VENDA" in motivo
 
 
 def test_obra_sem_contrato_nenhum_vai_para_revisao():
-    anexos = [{"filename": "ART - X .pdf", "extension": ".pdf"}]
-    achado, motivo = contrato_de(anexos, 1)
+    achado, motivo = contrato_de([_a("ART - X .pdf")], 1)
     assert achado is None
     assert "nenhum anexo" in motivo
 
 
 # ------------------------------------------------- lista da escolha à mão
-
 def test_a_lista_da_janela_poe_os_candidatos_no_topo():
     """Com 52 anexos, mostrar a ordem do ERP obrigaria a procurar o contrato
     no meio de memorial, RCPM e manual do proprietário — justamente quando o
@@ -121,16 +229,16 @@ def test_a_lista_da_janela_poe_os_candidatos_no_topo():
     lista = ordenar_para_escolha(ANEXOS, 1)
     assert len(lista) == len(ANEXOS)              # a lista INTEIRA aparece
 
-    candidatos = [nome["filename"] for nome, sim in lista if sim]
-    assert candidatos == ["CONTRATO TB 21 QD 46 LT 18 CS 01 .pdf"]
-    assert lista[0][0]["filename"] == "CONTRATO TB 21 QD 46 LT 18 CS 01 .pdf"
-    assert not lista[1][1]                        # daí em diante, o resto
+    candidatos_ = [a["filename"] for a, sim in lista if sim]
+    assert sorted(candidatos_) == sorted([CCV_CS01_A, CCV_CS01_B])
+    assert lista[0][1] and lista[1][1]
+    assert not lista[2][1]                        # daí em diante, o resto
 
 
 def test_sem_candidato_a_lista_continua_inteira():
-    """É o caso em que a janela mais importa: nenhum anexo começa com
-    CONTRATO, e a pessoa precisa ver o resto para achar o que foi salvo com
-    outro nome."""
+    """É o caso em que a janela mais importa: nenhum anexo diz COMPRA E
+    VENDA daquela casa, e a pessoa precisa ver o resto para achar o que foi
+    salvo com outro nome."""
     lista = ordenar_para_escolha(ANEXOS, 9)
     assert len(lista) == len(ANEXOS)
     assert not any(sim for _, sim in lista)
@@ -139,32 +247,4 @@ def test_sem_candidato_a_lista_continua_inteira():
 def test_a_lista_de_obra_vazia_nao_quebra():
     assert ordenar_para_escolha([], 1) == []
     assert ordenar_para_escolha(None, 1) == []
-
-
-def test_copias_de_nome_identico_contam_como_uma():
-    anexos = [{"filename": "CONTRATO X CS 01 .pdf", "extension": ".pdf", "id": "a"},
-              {"filename": "CONTRATO X CS 01 .pdf", "extension": ".pdf", "id": "b"}]
-    achado, motivo = contrato_de(anexos, 1)
-    assert achado is not None and achado["id"] == "a"
-
-
-def test_dois_nomes_diferentes_viram_revisao_com_os_candidatos():
-    """Um qualificador novo que ninguém previu sobrevive ao filtro, mas aí
-    concorre com o verdadeiro — e o desfecho certo é revisão, não chute."""
-    anexos = [{"filename": "CONTRATO X CS 01 .pdf", "extension": ".pdf"},
-              {"filename": "CONTRATO DE GAVETA X CS 01 .pdf", "extension": ".pdf"}]
-    achado, motivo = contrato_de(anexos, 1)
-    # "DE GAVETA" está na lista de qualificadores, então este caso resolve:
-    assert achado is not None and achado["filename"].startswith("CONTRATO X")
-
-    anexos2 = [{"filename": "CONTRATO X CS 01 .pdf", "extension": ".pdf"},
-               {"filename": "CONTRATO NOVO TIPO X CS 01 .pdf", "extension": ".pdf"}]
-    achado2, motivo2 = contrato_de(anexos2, 1)
-    assert achado2 is None
-    assert "disputam" in motivo2
-
-
-def test_casa_sem_contrato_na_obra_que_tem_outras():
-    achado, motivo = contrato_de(ANEXOS, 7)
-    assert achado is None
-    assert "CS 07" in motivo
+    assert ordenar_para_escolha(ANEXOS, None)[0][1] is False

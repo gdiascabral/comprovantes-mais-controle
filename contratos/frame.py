@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Aba "Contratos de Financiamento" (grupo MENSAL).
+"""Aba "Contratos de Venda" (grupo MENSAL).
 
 Dois passos, como Pagamentos do Dia e Extratos Sicoob:
 
-  1. Buscar   — lê o ERP e mostra a lista: obra, casa, comprador, valor,
-                empresa de destino e o contrato encontrado (ou o motivo).
+  1. Buscar   — lê o ERP e mostra a lista: obra, casa, comprador, o que
+                recebeu no mês, empresa de destino e o contrato encontrado
+                (ou o motivo).
   2. Arquivar — baixa, confere o conteúdo e grava só o que passou.
 
 O passo separado existe porque quem confere quer VER antes de gravar — e é no
@@ -36,6 +37,7 @@ import widgets
 px = widgets.px
 
 from . import conferencia as conf
+from . import leitura
 from . import pipeline
 from . import resolver
 from .destino import limpar as _limpar_nome
@@ -64,31 +66,15 @@ def _sicoob():
     return cfg, contas
 
 
-def _texto_do_pdf(dados: bytes) -> str:
-    """Texto do contrato: camada de texto e, faltando ela, OCR.
-
-    Mesmo caminho do `separar_renomear` — render em SÉRIE (pypdfium2 não é
-    thread-safe) e reconhecimento em PARALELO. Falha aqui não é erro: devolve
-    vazio, e texto vazio vira `?` na conferência, que não retém o arquivo."""
-    import io
-    try:
-        import pdfplumber
-    except ImportError:
-        return ""
-    try:
-        with pdfplumber.open(io.BytesIO(dados)) as pl:
-            txt = "\n".join((pg.extract_text() or "") for pg in pl.pages)
-        if len(txt.strip()) >= 40:
-            return txt
-        try:
-            from separar_renomear.separar_renomear import _ocr_pagina
-            with pdfplumber.open(io.BytesIO(dados)) as pl:
-                return "\n".join(_ocr_pagina(pg, lambda m: None)
-                                 for pg in pl.pages)
-        except Exception:
-            return txt
-    except Exception:
-        return ""
+def _condicoes_curtas(imovel) -> str:
+    """"Sinal, Entrada, 1ª FINANCIAMENTO" -> "Sinal, Entrada, Financiamento"."""
+    curtas = []
+    for c in imovel.condicoes:
+        c = c.strip()
+        c = c[2:].strip() if c[:2] in ("1ª", "1º") else c
+        # FINANCIAMENTO -> Financiamento; FGTS fica FGTS (sigla).
+        curtas.append(c.title() if c.isupper() and len(c) > 4 else c)
+    return ", ".join(curtas)
 
 
 class ContratosFrame(ttk.Frame):
@@ -123,9 +109,9 @@ class ContratosFrame(ttk.Frame):
     def _montar(self):
         PADX = px(widgets.PADX)
         self.cab = widgets.Cabecalho(
-            self, "Contratos de Financiamento",
-            "Acha o contrato das casas que financiaram no mês, confere o "
-            "conteúdo e arquiva na pasta da empresa.",
+            self, "Contratos de Venda",
+            "Acha o contrato de compra e venda das casas que receberam no "
+            "mês, confere o conteúdo e arquiva na pasta da empresa.",
             trilha="Mensal  ›  Contratos")
         self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         self.b1 = widgets.Botao(self.cab.acoes, "Buscar", papel="passo",
@@ -149,25 +135,27 @@ class ContratosFrame(ttk.Frame):
             p, textvariable=self.v_ano, values=anos, state="readonly",
             width=7)).pack(side="left", padx=px((0, 16)))
         ttk.Label(linha, style="Tenue.TLabel",
-                  text="data do RECEBIMENTO do financiamento"
+                  text="data do RECEBIMENTO (sinal, entrada, financiamento, "
+                       "intermediação...)"
                   ).pack(side="left", pady=px((15, 0)))
 
         f2 = widgets.Cartao(
-            self, "Casas com financiamento no mês — marque as que entram", 2,
+            self, "Casas que receberam no mês — marque as que entram", 2,
             padding=(16, 14))
         f2.pack(fill="both", expand=True, padx=PADX, pady=px((0, 12)))
         grade = ttk.Frame(f2); grade.pack(fill="both", expand=True)
-        colunas = ("marca", "obra", "casa", "comprador", "valor", "empresa",
-                   "situacao")
+        colunas = ("marca", "obra", "casa", "comprador", "recebido",
+                   "condicoes", "empresa", "situacao")
         self.tabela = ttk.Treeview(grade, columns=colunas, show="headings",
                                    height=9)
         for col, titulo, larg, ancora in (
-                ("marca", "✔", 34, "center"), ("obra", "OBRA", 180, "w"),
+                ("marca", "✔", 34, "center"), ("obra", "OBRA", 170, "w"),
                 ("casa", "CASA", 55, "w"),
-                ("comprador", "COMPRADOR", 200, "w"),
-                ("valor", "FINANCIAMENTO", 115, "e"),
-                ("empresa", "EMPRESA", 125, "w"),
-                ("situacao", "CONTRATO / MOTIVO", 300, "w")):
+                ("comprador", "COMPRADOR", 190, "w"),
+                ("recebido", "RECEBIDO NO MÊS", 110, "e"),
+                ("condicoes", "CONDIÇÕES", 130, "w"),
+                ("empresa", "EMPRESA", 115, "w"),
+                ("situacao", "CONTRATO / MOTIVO", 280, "w")):
             self.tabela.heading(col, text=titulo)
             self.tabela.column(col, width=larg, anchor=ancora,
                                stretch=col != "marca")
@@ -282,7 +270,8 @@ class ContratosFrame(ttk.Frame):
             i = a.imovel
             situacao = a.revisao or (a.contrato or "—")
             if a.arquivado:
-                situacao = "arquivado: " + Path(a.destino).name
+                situacao = ("já estava: " if a.ja_existia else "arquivado: ") \
+                    + Path(a.destino).name
             # A cor da linha vem da SITUAÇÃO, pelo mesmo de-para que as
             # outras tabelas usam: arquivado é verde, "precisa de revisão" é
             # âmbar, sem contrato é vermelho.
@@ -291,8 +280,9 @@ class ContratosFrame(ttk.Frame):
                       "info" if a.contrato else "erro")
             self.tabela.insert(
                 "", "end", iid=str(n),
-                values=(_MARCA[a.marcado], i.obra, i.rotulo, i.comprador,
-                        f"{i.valor_financiamento:,.2f}",
+                values=(_MARCA[a.marcado], i.obra or "—", i.rotulo,
+                        i.comprador or i.descricao,
+                        f"{i.recebido:,.2f}", _condicoes_curtas(i),
                         a.empresa or "—",
                         f"{widgets.MARCAS_ESTADO[estado]}  {situacao}"),
                 tags=widgets.linha_zebrada(n, estado))
@@ -369,12 +359,13 @@ class ContratosFrame(ttk.Frame):
         if not pipeline.pode_resolver(a):
             messagebox.showinfo(
                 "Contratos",
-                f"{a.revisao}\n\nSem a obra no cadastro do Mais Controle não "
-                "há anexo para escolher — isso se resolve lá, não aqui.")
+                f"{a.revisao}\n\nIsso se resolve no Mais Controle (a obra no "
+                "cadastro, ou a casa na descrição do recebimento), não aqui.")
             return
         try:
             _, contas = _sicoob()
-            empresas = [e.nome for e in contas.carregar().empresas]
+            self._empresas = contas.carregar().empresas
+            empresas = [e.nome for e in self._empresas]
         except Exception as e:
             messagebox.showerror(
                 "Cadastro",
@@ -403,8 +394,9 @@ class ContratosFrame(ttk.Frame):
                     widgets.recado_de_erro(e, "Não gravei no cadastro.")
                     + "\n\nA escolha vale para esta rodada; no mês que vem a "
                       "pergunta volta.")
-        falta = pipeline.aplicar_resolucao(achado, anexo=anexo,
-                                           empresa_nome=empresa)
+        falta = pipeline.aplicar_resolucao(
+            achado, anexo=anexo, empresa_nome=empresa,
+            empresas=getattr(self, "_empresas", None))
         if anexo is not None:
             self.escolhas[pipeline.chave_da_casa(achado)] = \
                 (anexo.get("filename") or "").strip()
@@ -523,11 +515,12 @@ class ContratosFrame(ttk.Frame):
             api = self.anx.garantir_sessao(self._log)
             self._log("")
             self._log("Baixando e conferindo cada contrato "
-                      "(o OCR deixa isto lento)...")
+                      "(contrato escaneado passa por OCR e demora mais)...")
             pipeline.arquivar(
                 api, self.achados, Path(raiz), ano, mes,
                 cfg.nome_do_mes, cfg.nome_pasta_empresa,
-                texto_do_pdf=_texto_do_pdf, log=self._log,
+                abrir_pdf=lambda dados: leitura.abrir_pdf(dados, self._log),
+                log=self._log,
                 cancelar=self._parar.is_set,
                 progresso=lambda i, n: (self.q.put(("max", n)),
                                         self.q.put(("prog", i))))
@@ -582,7 +575,8 @@ class ContratosFrame(ttk.Frame):
 
         Texto, e não PDF: o que se precisa daqui é conferir o que entrou e o
         que ficou de fora, e um .txt abre em qualquer lugar, sobrevive a
-        navegador fechado e não depende do CDP."""
+        navegador fechado e não depende do CDP. Cada casa sai com os seus
+        recebimentos, um a um — é sobre eles que o contábil apura."""
         cfg, _ = _sicoob()
         arquivados = [a for a in self.achados if a.arquivado]
         if not arquivados and not self.achados:
@@ -591,12 +585,13 @@ class ContratosFrame(ttk.Frame):
             pasta = (Path(raiz) / str(ano) / cfg.nome_do_mes(mes))
             pasta.mkdir(parents=True, exist_ok=True)
             alvo = pasta / f"CONTRATOS {ano}{mes:02d} - conferencia.txt"
-            linhas = [f"Contratos de financiamento — {cfg.nome_do_mes(mes)} {ano}",
+            linhas = [f"Contratos de compra e venda — {cfg.nome_do_mes(mes)} {ano}",
                       "=" * 64, ""]
-            total = sum((a.imovel.valor_financiamento for a in self.achados),
-                        start=type(self.achados[0].imovel.valor_financiamento)(0))
-            linhas.append(f"{len(self.achados)} casa(s) com financiamento no mês, "
-                          f"somando R$ {total:,.2f}")
+            total = sum((a.imovel.recebido for a in self.achados),
+                        start=type(self.achados[0].imovel.recebido)(0))
+            n_receb = sum(len(a.imovel.recebimentos) for a in self.achados)
+            linhas.append(f"{len(self.achados)} casa(s) com {n_receb} "
+                          f"recebimento(s) no mês, somando R$ {total:,.2f}")
             linhas.append(f"{len(arquivados)} arquivado(s)")
             linhas.append("")
             for a in self.achados:
@@ -606,12 +601,18 @@ class ContratosFrame(ttk.Frame):
                 extra = f"   (não deu para conferir: {', '.join(rs)})" if rs else ""
                 linhas.append(f"OK   {a.resumo}")
                 linhas.append(f"     -> {Path(a.destino).name}{extra}")
+                for r in a.imovel.recebimentos:
+                    linhas.append(f"        {r.data}  {r.condicao:<28} "
+                                  f"R$ {r.valor:>14,.2f}")
                 # Quem decidiu à mão fica registrado. Daqui a seis meses é a
                 # diferença entre auditar e adivinhar.
                 mao = [t for t, sim in (("contrato escolhido à mão",
                                          a.contrato_manual),
                                         ("empresa definida à mão",
-                                         a.empresa_manual)) if sim]
+                                         a.empresa_manual),
+                                        ("já estava na pasta", a.ja_existia),
+                                        ("lido por OCR", a.leitura == "OCR"))
+                       if sim]
                 if mao:
                     linhas.append(f"        ({'; '.join(mao)})")
             pendentes = [a for a in self.achados if not a.arquivado]
@@ -621,6 +622,9 @@ class ContratosFrame(ttk.Frame):
                     motivo = a.revisao or "não foi marcada para arquivar nesta rodada"
                     linhas.append(f"     {a.resumo}")
                     linhas.append(f"       {motivo}")
+                    for r in a.imovel.recebimentos:
+                        linhas.append(f"        {r.data}  {r.condicao:<28} "
+                                      f"R$ {r.valor:>14,.2f}")
             alvo.write_text("\n".join(linhas) + "\n", encoding="utf-8")
             return alvo
         except OSError:

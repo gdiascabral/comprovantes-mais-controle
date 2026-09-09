@@ -70,20 +70,30 @@ def test_caixa_de_titulo(cru, esperado):
 
 # ---------------------------------------------------------- linha do contrato
 
-def test_linha_do_contrato_troca_cs_por_casa_e_ajusta_o_nome():
-    nome = "CONTRATO RPB 99 QD 1A LT 2 CS 01 - FULANO DE TAL.pdf"
+def test_linha_do_contrato_de_compra_e_venda_troca_cs_por_casa_e_ajusta_o_nome():
+    """O nome que a aba Contratos grava desde 09/09/2026."""
+    nome = "CONTRATO DE COMPRA E VENDA RPB 99 QD 1A LT 2 CS 01 - FULANO DE TAL.pdf"
     assert (pacote.linha_do_contrato(nome)
             == "RPB 99 QD 1A LT 2 Casa 01 - Fulano de Tal")
 
 
+def test_linha_do_contrato_da_caixa_diz_o_que_e():
+    """O nome sem prefixo é o contrato de financiamento, posto à mão na
+    mesma pasta desde 2024: entra rotulado para o escritório não contar a
+    casa duas vezes."""
+    nome = "CONTRATO RPB 99 QD 1A LT 2 CS 01 - FULANO DE TAL.pdf"
+    assert (pacote.linha_do_contrato(nome)
+            == "RPB 99 QD 1A LT 2 Casa 01 - Fulano de Tal (contrato de financiamento)")
+
+
 def test_linha_do_contrato_com_unidade_de_dois_digitos():
-    nome = "CONTRATO TB 21 QD 46 LT 18 CS 12 - BELTRANO DA COSTA.pdf"
+    nome = "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 12 - BELTRANO DA COSTA.pdf"
     assert (pacote.linha_do_contrato(nome)
             == "TB 21 QD 46 LT 18 Casa 12 - Beltrano da Costa")
 
 
 def test_linha_do_contrato_sem_comprador():
-    assert (pacote.linha_do_contrato("CONTRATO XY 1 QD 2 LT 3 CS 04.pdf")
+    assert (pacote.linha_do_contrato("CONTRATO DE COMPRA E VENDA XY 1 QD 2 LT 3 CS 04.pdf")
             == "XY 1 QD 2 LT 3 Casa 04")
 
 
@@ -97,14 +107,16 @@ def test_linha_de_formato_desconhecido_vai_como_esta():
 def test_contratos_saem_de_dentro_do_zip_ordenados(mes):
     pasta = scfg.nome_pasta_empresa(ANO, MES, "ALFA")
     alvo = _zipar(mes, pasta, {
-        "CONTRATOS/CONTRATO XY 2 QD 1 LT 9 CS 02 - BRUNO LIMA.pdf": b"b",
-        "CONTRATOS/CONTRATO XY 1 QD 1 LT 1 CS 01 - ANA SOUZA.pdf": b"a",
+        "CONTRATOS/CONTRATO DE COMPRA E VENDA XY 2 QD 1 LT 9 CS 02 - BRUNO LIMA.pdf": b"b",
+        "CONTRATOS/CONTRATO DE COMPRA E VENDA XY 1 QD 1 LT 1 CS 01 - ANA SOUZA.pdf": b"a",
+        "CONTRATOS/CONTRATO XY 1 QD 1 LT 1 CS 01 - ANA SOUZA.pdf": b"caixa",
         "SICOOB/202607 SICOOB.ofx": b"ofx",
         "CAIXA/extrato.pdf": b"pdf",
     })
     assert pacote.contratos_do_zip(alvo) == [
         "XY 1 QD 1 LT 1 Casa 01 - Ana Souza",
         "XY 2 QD 1 LT 9 Casa 02 - Bruno Lima",
+        "XY 1 QD 1 LT 1 Casa 01 - Ana Souza (contrato de financiamento)",
     ]
 
 
@@ -145,7 +157,7 @@ def test_token_desconhecido_fica_visivel_em_vez_de_estourar():
 def test_montar_casa_o_zip_com_a_empresa_e_escreve_a_mensagem(mes, tmp_path):
     pasta = scfg.nome_pasta_empresa(ANO, MES, "ALFA")
     _zipar(mes, pasta, {
-        "CONTRATOS/CONTRATO XY 1 QD 1 LT 1 CS 01 - ANA SOUZA.pdf": b"a"})
+        "CONTRATOS/CONTRATO DE COMPRA E VENDA XY 1 QD 1 LT 1 CS 01 - ANA SOUZA.pdf": b"a"})
     mapa = _mapa(tmp_path, [_empresa("ALFA", vip_id="340")])
 
     envios = _montar(mapa)

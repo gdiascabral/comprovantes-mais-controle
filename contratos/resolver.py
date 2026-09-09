@@ -67,13 +67,14 @@ class JanelaResolver(tk.Toplevel):
         ttk.Label(cab, style="Secao.TLabel",
                   text=f"{i.obra}  {i.rotulo}  ·  {i.comprador}").pack(anchor="w")
         ttk.Label(cab, style="Apoio.TLabel",
-                  text=f"financiamento R$ {i.valor_financiamento:,.2f}   ·   "
+                  text=f"recebido no mês R$ {i.recebido:,.2f}   ·   "
                        f"cliente da obra no ERP: "
                        f"{self.achado.cliente_erp or '(sem cliente)'}"
                   ).pack(anchor="w")
 
         # ---- contrato
-        f1 = widgets.Cartao(self, "Qual anexo é o contrato desta casa",
+        f1 = widgets.Cartao(self, "Qual anexo é o contrato de compra e venda "
+                                  "desta casa",
                             padding=(10, 6, 10, 10))
         f1.pack(fill="both", expand=True, padx=12, pady=6)
 
