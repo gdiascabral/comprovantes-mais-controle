@@ -860,6 +860,26 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   Anexa via UI (⋮ → Editar pagamento → arquivo → tag "Comprovante").
   Seletores do ERP estão nos blocos JS deste arquivo. Timeouts generosos
   (45–60 s) + `resetar()` antes de retentar (ERP fica lento em lote).
+  **Desde 08/09/2026 o comprovante sobe pela API, e a tela é o plano B.**
+  `mc_api.MCApi.anexar_por_api(paidId, pdf)` faz, de dentro da página logada
+  e com os cabeçalhos de anexos já capturados: `GET /attachments/v2` do
+  sub-pagamento (já tem arquivo de mesmo nome ou mesmo tamanho → `ja_anexado`,
+  sem subir), `GET /attachments/tags` (o id de "Comprovante", sem acento nem
+  caixa, uma vez por rodada), `POST /attachments/v2/batch` com
+  `entityOrigin=PAID` e o `paidId` — o comprovante mora no SUB-pagamento, não
+  na parcela —, `PUT` cru do binário na URL S3 pré-assinada (só
+  `content-type`; cabeçalho do ERP quebra a assinatura) e o `GET` de prova, que
+  tem de listar o arquivo para sair `anexado`. Quem decide o caminho é
+  `anexar_comprovantes.anexar_um`, com a chave `config.ANEXAR_POR_API`: a tela
+  só entra em `erro:sem_credencial` e `erro:batch:*` — os desfechos em que
+  NADA subiu, porque o ERP recusou antes de o arquivo sair. Em
+  `erro:upload:*` (o batch criou o registro e o PUT falhou) e em
+  `erro:nao_confirmado` (o PUT deu 2xx e a listagem não mostra) a tela NÃO
+  entra: o arquivo pode estar lá, e o diálogo anexaria de novo — comprovante
+  em dobro se desfaz à mão no ERP, comprovante relatado como erro se confere
+  abrindo o lançamento. O POST nunca se repete daqui; a retentativa com
+  `resetar()` é só da tela. O modo "Por lista" só traz o link da parcela (sem
+  `paidId`) e continua pela tela. Coberto por `tests/test_anexar_por_api.py`.
 - `anexar/anexar_comprovantes.py` — tela Anexar: 2 passos (Carregar contas /
   Casar e anexar) — "Abrir o Mais Controle" saiu do fluxo e virou botão
   auxiliar, porque com a senha guardada o app entra sozinho.
@@ -1575,7 +1595,9 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   navegador em modo headless. **Três clientes já rodam por HTTP puro**, um deles
   fazendo PUT de lançamento no `legacy-api`. Sobram três consumidores que
   precisam mesmo do navegador, e o motivo de nenhum é o WAF: o upload do
-  comprovante é diálogo de tela, o PDF do extrato é gerado pela própria página,
+  comprovante era diálogo de tela (desde 08/09/2026 sobe pela API, de dentro
+  da página — `mc_api.anexar_por_api` —, e o diálogo é o plano B), o PDF do
+  extrato é gerado pela própria página,
   e o host GraphQL das obras só aparece nos cabeçalhos quando o ERP carrega o
   FORMULÁRIO de lançamento. O inventário, com uma linha por consumidor, está em
   `docs/ERP-CLIENTES.md`; o `user-agent` mora em `erp.sessao.USER_AGENT`. Duas
