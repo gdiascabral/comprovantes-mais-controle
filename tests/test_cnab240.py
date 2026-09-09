@@ -1010,3 +1010,160 @@ def test_o_pacote_sabe_recusar_documento_que_nao_fecha():
     assert dominios.dv_cnpj("12345678000195")
     assert not dominios.dv_cnpj("12345678000194")
     assert dominios.documento_valido("12.345.678/0001-94") == ""
+
+
+# --------------------------------------------------------------------------
+# Guia v4.0 (01/07/2026): BS no retorno, CNPJ alfanumérico, chave CPF/CNPJ
+# --------------------------------------------------------------------------
+
+#: O exemplo oficial da Receita Federal para o CNPJ alfanumérico.
+CNPJ_ALFA = "12ABC34501DE35"
+
+
+def test_bs_e_analise_de_seguranca_nao_rejeicao_nem_pendencia():
+    """`BS` (desde 29/04/2026) é o único código em que reler o retorno não
+    resolve: o Sicoob não o atualiza quando a análise termina. Por isso ele
+    não pode virar "pago" (o dinheiro pode não ter saído), nem "pendente de
+    assinatura" (assinar não destrava), nem "rejeitado" (pode sair ainda).
+    """
+    remessa = gerar_transferencia()
+    retorno = simular_retorno(remessa, {2: "00", 4: "BS"})
+    pagamentos = list(ler_retorno(retorno).pagamentos())
+
+    assert pagamentos[1].em_analise
+    assert not pagamentos[1].sucesso
+    assert not pagamentos[1].pendente
+    assert not pagamentos[1].rejeitado
+    assert pagamentos[1].ocorrencias[0][0] == "BS"
+    assert "extrato" in pagamentos[1].ocorrencias[0][1]
+
+    resumo = ler_retorno(retorno).resumo()
+    assert (resumo["confirmados"], resumo["rejeitados"], resumo["pendentes"],
+            resumo["em_analise"], resumo["sem_ocorrencia"]) == (1, 0, 0, 1, 0)
+    assert resumo["valor_em_analise"] == Decimal("250.75")
+
+
+def test_bs_junto_de_pd_continua_em_analise():
+    """Os estados são exclusivos, senão as contagens do resumo não fecham."""
+    retorno = simular_retorno(gerar_transferencia(), {2: "PDBS", 4: "00"})
+    pagamento = list(ler_retorno(retorno).pagamentos())[0]
+    assert pagamento.em_analise
+    assert not pagamento.pendente and not pagamento.rejeitado
+
+
+def test_dv_do_cnpj_alfanumerico():
+    from cnab240 import dominios
+
+    assert dominios.dv_cnpj(CNPJ_ALFA)
+    assert not dominios.dv_cnpj("12ABC34501DE36")     # DV trocado
+    assert not dominios.dv_cnpj("12abc34501de35")     # minúscula não passa
+    assert not dominios.dv_cnpj("12ABC34501DEA5")     # DV tem de ser dígito
+    assert dominios.dv_cnpj("12345678000195")         # o numérico não mudou
+    assert dominios.documento_valido("12.abc.345/01de-35") == CNPJ_ALFA
+    assert dominios.documento_valido("PIX CNPJ: 12.ABC.345/01DE-35") == CNPJ_ALFA
+    assert dominios.documento_valido("12.ABC.345/01DE-36") == ""
+    # Sem letra, o caminho dos dígitos manda — e um CNPJ numérico dentro de
+    # um texto com outros dígitos continua "" como sempre foi.
+    assert dominios.documento_valido("12.345.678/0001-95 ramal 12") == ""
+    assert (dominios.TipoInscricao.por_documento("12.ABC.345/01DE-35")
+            is dominios.TipoInscricao.CNPJ)
+
+
+def test_so_inscricao_guarda_a_letra_e_tira_o_resto():
+    from cnab240.dominios import so_inscricao
+
+    assert so_inscricao("12.abc.345/01de-35") == CNPJ_ALFA
+    assert so_inscricao("123.456.789-09") == "12345678909"
+    assert so_inscricao(None) == ""
+
+
+def test_cnpj_com_letra_sai_no_arquivo_e_passa_no_validador():
+    arquivo = ArquivoRemessa(empresa(), nsa=5, data_geracao=HOJE)
+    arquivo.novo_lote(
+        "TED", forma_lancamento=FormaLancamento.TED_OUTRA_TITULARIDADE
+    ).adicionar(
+        TransferenciaConta(
+            valor="10.00", data_pagamento=HOJE, finalidade_ted="5",
+            favorecido=Favorecido(nome="FORNECEDOR NOVO", documento="12.abc.345/01de-35",
+                                  banco="341", agencia="1234", conta="56789", dv_conta="0"),
+        )
+    )
+    linhas = arquivo.gerar()
+    b = [l for l in linhas if l[13] == "B"][0]
+    assert b[17] == "2"                 # tipo de inscrição = CNPJ
+    assert b[18:32] == CNPJ_ALFA        # maiúsculas, sem pontuação
+    assert validar(linhas) == []
+
+
+def test_documento_so_de_digitos_sai_byte_a_byte_como_antes():
+    """O G006 virou Alfa no guia, mas o arquivo NÃO mudou para quem só tem
+    dígito: CPF à direita com zeros nas catorze posições, CNPJ do J-52 com
+    um zero na frente. É a régua que impede a v4.0 de mudar os bytes de uma
+    remessa que o banco já aceitava."""
+    linhas = gerar_transferencia()
+    assert linhas[0][18:32] == "12345678000195"          # header, 06.0
+    b = [l for l in linhas if l[13] == "B"][0]
+    assert b[18:32] == "00012345678909"                  # 08.3B, CPF
+
+    arquivo = ArquivoRemessa(empresa(), nsa=3, data_geracao=HOJE)
+    arquivo.novo_lote(
+        "TITULOS_COBRANCA", forma_lancamento=FormaLancamento.TITULO_OUTROS_BANCOS
+    ).adicionar(
+        PagamentoTitulo(valor="320.00", data_pagamento=HOJE, codigo_barras=CODIGO_BARRAS,
+                        nome_cedente="FORNECEDOR SA",
+                        j52=DadosJ52(cedente_documento="11.222.333/0001-81"))
+    )
+    j52 = [l for l in arquivo.gerar() if l[13] == "J"][1]
+    assert j52[20:35] == "012345678000195"               # sacado = a empresa
+    assert j52[76:91] == "011222333000181"               # cedente
+
+
+def test_validador_flagra_dv_errado_e_caractere_estranho_no_cnpj_alfanumerico():
+    linhas = gerar_transferencia()
+    i = next(n for n, l in enumerate(linhas) if l[13:14] == "B")
+
+    linhas[i] = linhas[i][:17] + "2" + "12ABC34501DE36" + linhas[i][32:]
+    problemas = validar(linhas)
+    assert any(p.campo == "08.3B" and "dígito verificador" in p.mensagem
+               for p in problemas)
+
+    linhas[i] = linhas[i][:17] + "2" + "12abc34501de35" + linhas[i][32:]
+    problemas = validar(linhas)
+    assert any(p.campo == "08.3B" and "caractere inválido" in p.mensagem
+               for p in problemas)
+
+
+def test_pix_por_chave_cnpj_alfanumerica_vai_na_informacao_12():
+    """Guia v3.4 (17/10/2025): a Informação 12 leva a chave também na forma
+    03 — e a chave chega como o ERP a guarda, texto livre."""
+    arquivo = ArquivoRemessa(empresa(), nsa=6, data_geracao=HOJE)
+    arquivo.novo_lote("PIX_TRANSFERENCIA").adicionar(
+        PixTransferencia(
+            valor="10.00", data_pagamento=HOJE,
+            favorecido=Favorecido(nome="FORNECEDOR NOVO", documento=CNPJ_ALFA),
+            forma_iniciacao=FormaIniciacaoPix.CHAVE_CPF_CNPJ,
+            chave="PIX CNPJ: 12.ABC.345/01DE-35",
+        )
+    )
+    linhas = arquivo.gerar()
+    b = [l for l in linhas if l[13] == "B"][0]
+    assert b[14:17] == "03 "
+    assert b[18:32] == CNPJ_ALFA
+    assert b[127:226].strip() == CNPJ_ALFA
+    assert validar(linhas) == []
+
+
+def test_chave_cpf_cnpj_em_texto_livre_nao_vira_numero_torto():
+    """Antes, `so_digitos` tirava TODOS os dígitos de "PIX CPF 123.456.789-09
+    ramal 12" e gravava treze dígitos como chave. Sem documento que feche no
+    texto, vale o do favorecido."""
+    arquivo = ArquivoRemessa(empresa(), nsa=7, data_geracao=HOJE)
+    arquivo.novo_lote("PIX_TRANSFERENCIA").adicionar(
+        PixTransferencia(
+            valor="10.00", data_pagamento=HOJE, favorecido=favorecido(),
+            forma_iniciacao=FormaIniciacaoPix.CHAVE_CPF_CNPJ,
+            chave="PIX CPF 123.456.789-09 ramal 12",
+        )
+    )
+    b = [l for l in arquivo.gerar() if l[13] == "B"][0]
+    assert b[127:226].strip() == "12345678909"

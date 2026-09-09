@@ -245,6 +245,8 @@ def test_o_tipo_declarado_no_texto_vence(texto, esperado):
     ("11.222.333/0001-44 - Chave pix", regras.CHAVE_CNPJ),   # pontuação de CNPJ
     ("PIX 123.456.789-09", regras.CHAVE_CPF),                # pontuação de CPF
     ("11222333000144", regras.CHAVE_CNPJ),                   # 14 dígitos crus
+    ("12.ABC.345/01DE-35 chave pix", regras.CHAVE_CNPJ),     # CNPJ com letras (Receita, 07/2026)
+    ("12ABC34501DE35", regras.CHAVE_CNPJ),                   # o mesmo, cru
     ("anacnbento@exemplo.com", regras.CHAVE_EMAIL),
     ("PIX (62) 91234-5678", regras.CHAVE_TELEFONE),
     ("f47ac10b-58cc-4372-a567-0e02b2c3d479", regras.CHAVE_ALEATORIA),

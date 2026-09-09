@@ -18,6 +18,7 @@ from .dominios import (
     TipoContaDestino,
     TipoIdentificacaoContribuinte,
     TipoInscricao,
+    so_inscricao,
 )
 
 
@@ -175,7 +176,10 @@ class Empresa:
     endereco: Endereco = field(default_factory=Endereco)
 
     def __post_init__(self) -> None:
-        self.documento = so_digitos(self.documento)
+        # `so_inscricao`, e não `so_digitos`: desde a v4.0 do guia o CNPJ pode
+        # ter letra, e tirar as letras de "12.ABC.345/01DE-35" fabricaria um
+        # número de nove dígitos que não é documento de ninguém.
+        self.documento = so_inscricao(self.documento)
         if self.tipo_inscricao is None:
             self.tipo_inscricao = TipoInscricao.por_documento(self.documento)
         # Antes daqui só o documento era normalizado; agência e conta iam cruas
@@ -203,7 +207,7 @@ class Favorecido:
     endereco: Endereco = field(default_factory=Endereco)
 
     def __post_init__(self) -> None:
-        self.documento = so_digitos(self.documento)
+        self.documento = so_inscricao(self.documento)
         if self.tipo_inscricao is None:
             self.tipo_inscricao = TipoInscricao.por_documento(self.documento)
         self.agencia, self.dv_agencia = _numero_e_dv(

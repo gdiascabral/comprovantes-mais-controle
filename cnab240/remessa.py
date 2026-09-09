@@ -22,6 +22,8 @@ from .dominios import (
     FormaIniciacaoPix,
     FormaLancamento,
     TipoInscricao,
+    documento_valido,
+    so_inscricao,
 )
 from .modelos import (
     Empresa,
@@ -508,12 +510,16 @@ class ArquivoRemessa:
         if pg.forma_iniciacao is FormaIniciacaoPix.DADOS_BANCARIOS:
             informacao_12 = str(pg.tipo_conta_destino)
         elif pg.forma_iniciacao is FormaIniciacaoPix.CHAVE_CPF_CNPJ:
-            # O manual descreve a Informação 12 para as formas 01, 02, 04 e 05,
-            # e OMITE a 03 — o que se lia como "a chave já está em 07.3B/08.3B,
-            # não repita". Não é isso: o SicoobNet recusou o campo em branco na
-            # validação de 13/08/2026 ("A linha 8 posição 128 até 226, campo
-            # Informação 12, possui valor inválido"). A chave vai aqui também.
-            informacao_12 = so_digitos(pg.chave) or f.documento
+            # Até a v3.3 o guia descrevia a Informação 12 para as formas 01,
+            # 02, 04 e 05 e OMITIA a 03 — o que se lia como "a chave já está
+            # em 07.3B/08.3B, não repita". O SicoobNet recusou o campo em
+            # branco na validação de 13/08/2026 ("campo Informação 12, possui
+            # valor inválido"), e a v3.4 (17/10/2025) corrigiu o texto: a
+            # chave CPF/CNPJ vai aqui também. Ela chega como TEXTO ("PIX CNPJ:
+            # 12.345.678/0001-95"); `documento_valido` tira dela o documento
+            # que fecha, com ou sem letras, e sem documento nenhum vale o do
+            # favorecido — que, para a forma 03, é a própria chave.
+            informacao_12 = documento_valido(pg.chave) or f.documento
         else:
             informacao_12 = pg.chave
 
@@ -574,7 +580,7 @@ class ArquivoRemessa:
         e = self.empresa
 
         def inscricao(documento: str) -> tuple[str, str]:
-            documento = so_digitos(documento)
+            documento = so_inscricao(documento)
             if not documento:
                 return "0", "0"
             return str(TipoInscricao.por_documento(documento)), documento
@@ -604,7 +610,7 @@ class ArquivoRemessa:
     def _segmento_j52_pix(self, lote: Lote, pg: PixQRCode, nsr: int) -> str:
         e = self.empresa
         f = pg.favorecido
-        devedor_doc = so_digitos(pg.devedor_documento) or e.documento
+        devedor_doc = so_inscricao(pg.devedor_documento) or e.documento
         devedor_tipo = str(TipoInscricao.por_documento(devedor_doc))
 
         return montar(

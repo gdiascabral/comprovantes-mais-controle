@@ -12,6 +12,12 @@ assinatura) em tudo — isso é o estado normal, não defeito, e a tela precisa
 dizer isso com todas as letras. O desfecho real exige baixar o retorno DE NOVO
 depois da assinatura.
 
+**E desde 29/04/2026 há um estado em que reler NÃO resolve.** O código `BS`
+(transação em análise de segurança) é o único em que o Sicoob avisa, por
+escrito, que o retorno não será atualizado quando a análise terminar. Quem diz
+se o dinheiro saiu é o extrato da conta — e a tela tem de mandar a pessoa olhar
+lá, em vez de prometer que o próximo retorno responde.
+
 **E quase nunca é UM arquivo.** São até 18 contas, lidas duas vezes cada, e o
 SicoobNet ("Gerenciamento de Arquivos → Obter Retorno") baixa vários de uma
 vez — soltos ou dentro de um `.zip`. Por isso a regra deste módulo é escrita
@@ -47,7 +53,7 @@ class Linha:
     seu_numero: str
     favorecido: str
     valor: Decimal
-    estado: str                      # "ok" | "pendente" | "rejeitado" | "?"
+    estado: str                      # "ok" | "em_analise" | "pendente" | "rejeitado" | "?"
     motivos: str
     #: Os códigos de ocorrência, na ordem em que o banco os mandou. O
     #: `motivos` é para GENTE ler ("AG=conta invalida; BD=saldo insuficiente")
@@ -68,6 +74,7 @@ class Linha:
     @property
     def rotulo(self) -> str:
         return {"ok": "PAGO", "pendente": "AGUARDA ASSINATURA",
+                "em_analise": "EM ANÁLISE DE SEGURANÇA",
                 "rejeitado": "REJEITADO"}.get(self.estado, "SEM RESPOSTA")
 
 
@@ -170,7 +177,9 @@ class Resumo:
             return "enviado"
         if self.quantos("rejeitado"):
             return "rejeitado"
-        if self.quantos("pendente") or self.quantos("?"):
+        # Em análise conta como "ainda não acabou", igual ao pendente: o banco
+        # não disse sim nem não, e só o extrato vai dizer.
+        if self.quantos("pendente") or self.quantos("em_analise") or self.quantos("?"):
             return "enviado"
         return "processado"
 
@@ -180,6 +189,8 @@ def _estado(pagamento) -> str:
         return "?"
     if pagamento.sucesso:
         return "ok"
+    if pagamento.em_analise:
+        return "em_analise"
     if pagamento.pendente:
         return "pendente"
     return "rejeitado"

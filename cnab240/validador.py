@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from . import spec
-from .campos import ler, ler_num
+from .campos import CARACTERES_INSCRICAO, ler, ler_num
 from .dominios import BANCO_SICOOB, TipoInscricao, dv_cpf, dv_cnpj
 from .spec import TAMANHO_REGISTRO, Layout
 
@@ -210,6 +210,15 @@ def _validar_campos(
             )
             continue
 
+        # G006 desde a v4.0: dígito ou letra A-Z. Minúscula, acento e sinal
+        # continuam sendo erro — o banco não aceita, e o DV nem se calcula.
+        if campo.tipo == "inscricao" and cru.strip() and not all(
+                c in CARACTERES_INSCRICAO for c in cru.strip()):
+            problemas.append(
+                Problema(numero, nivel_de(campo), f"campo de inscrição com caractere inválido: {cru!r}", campo.id)
+            )
+            continue
+
         if campo.id in exigidos:
             vazio = not cru.strip() if campo.tipo == "alfa" else set(cru) <= {"0", " "}
             if vazio:
@@ -250,10 +259,11 @@ def _validar_campos(
     # Sicoob confere o DV, e quem descobre a diferença depois dele descobre com
     # o arquivo já recusado e o dia de pagamento perdido.
     #
-    # O número é NUMÉRICO e alinhado à direita com zeros, então os dígitos que
-    # valem são os ÚLTIMOS onze (CPF) ou catorze (CNPJ) — não o campo sem os
-    # zeros à esquerda, que amputaria todo CPF começado em zero e reprovaria
-    # gente legítima.
+    # O número é alinhado à direita com zeros, então os caracteres que valem
+    # são os ÚLTIMOS onze (CPF) ou catorze (CNPJ) — não o campo sem os zeros à
+    # esquerda, que amputaria todo CPF começado em zero e reprovaria gente
+    # legítima. Desde a v4.0 o CNPJ pode ter letra; o CPF, não, e `dv_cpf`
+    # reprova a letra por conta própria.
     for campo_tipo, campo_numero in _INSCRICAO.get(layout.chave, ()):
         tipo = ler(layout.campo(campo_tipo), linha).strip()
         if tipo == TipoInscricao.CPF:
@@ -268,9 +278,9 @@ def _validar_campos(
 
         campo = layout.campo(campo_numero)
         cru = ler(campo, linha)
-        if set(cru) <= {"0", " "} or not cru.strip().isdigit():
-            # Vazio é assunto do campo obrigatório; não-numérico, da checagem
-            # de tipo. Dois avisos sobre o mesmo defeito confundem quem lê.
+        if set(cru) <= {"0", " "} or not all(c in CARACTERES_INSCRICAO for c in cru.strip()):
+            # Vazio é assunto do campo obrigatório; caractere estranho, da
+            # checagem de tipo. Dois avisos sobre o mesmo defeito confundem.
             continue
         lido = cru.strip()[-tamanho:]
         if not confere(lido):
