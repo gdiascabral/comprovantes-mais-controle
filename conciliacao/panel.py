@@ -8,8 +8,16 @@ openpyxl nao recalcula formulas, e sem recalcular o resumo nao teria como dizer
 Formulas espelhadas (linha n do modelo de tres abas):
     E = SUMIF(Movimentações!origem,  Bn, Movimentações!valor)   -> o que SAI
     F = SUMIF(Movimentações!destino, Bn, Movimentações!valor)   -> o que ENTRA
-    G = IF(Cn>=Dn+En, "—", Dn+En-Cn)                            -> aporte minimo
+    Mn = SUMIF(Movimentações!destino[54:73], Bn, valor[54:73])  -> ENTRA «à mão»
+    G = IF(Cn+Mn>=Dn+En, "—", Dn+En-Cn-Mn)                      -> aporte minimo
     I = Cn - Dn - En + Fn                                       -> saldo final
+
+G desconta so a secao 3 «À MÃO» da aba «Movimentações» (transferencia entre
+contas, distribuicao que entra...), e nao o F inteiro: as secoes 1 e 2 (linhas
+9-50) sao o rateio do proprio APORTE DEFINIDO, e se G as descontasse o minimo
+sumiria assim que voce preenchesse H. Corrigido em 08/09/2026 — antes G
+ignorava qualquer entrada, e uma transferencia de 35 mil entre contas deixava
+o minimo de 21,6 mil no ar com o saldo final positivo.
 
 NO ARQUIVO RECEM-GERADO, E E F VALEM ZERO. As duas somam a aba «Movimentações»,
 que por sua vez rateia o APORTE DEFINIDO (coluna H) — e H so e preenchido
@@ -97,9 +105,10 @@ class PanelComputation:
 def _aporte_minimo(saldo: Decimal | None, pagamento: Decimal | None) -> Decimal | None:
     """Espelha G. Devolve None onde o Excel mostra "—" (nao precisa de aporte).
 
-    `E` (o que sai) nao entra na conta porque vale zero no arquivo recem-gerado
-    — ver o cabecalho do modulo. No Excel a formula continua somando E, e e por
-    isso que o numero se corrige sozinho assim que voce preenche um aporte.
+    `E` (o que sai) e `M` (o que entra a mao) nao entram na conta porque valem
+    zero no arquivo recem-gerado — ver o cabecalho do modulo. No Excel a formula
+    continua somando E e descontando M, e e por isso que o numero se corrige
+    sozinho assim que voce preenche um aporte ou anota uma transferencia.
     """
     if pagamento is None:  # linha sem conta no ERP: celula vazia
         return None
