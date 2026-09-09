@@ -49,7 +49,14 @@ desde agosto/2026, e de `anexar/mc_api.py`.
     Condicao e Conta        tradePayableAccount.name — a grade prefixa a
                             condicao ("A Vista - CONTA") e o raspador a
                             descartava com `strip_condition_prefix`; a API
-                            entrega a conta ja separada
+                            entrega a conta ja separada. Espaco duplo do
+                            cadastro cai aqui como cai na grade. Em titulo
+                            pago em PARTE a grade mostra a conta do
+                            pagamento ja feito, e a API a CADASTRADA no
+                            titulo — e a cadastrada que vale (dono,
+                            09/09/2026: em conta pessoa fisica cada parte
+                            pode sair de uma conta diferente);
+                            `collect.comparar_coletas` sabe disso
     Centro de Custo         costCentreDetails[].workName (worksNames de reserva)
     Pago                    paid, sumOfPaidValues, paids[] (so a contagem)
     Anexo                   hasAnyFile
@@ -328,8 +335,13 @@ def _texto(valor) -> str:
 
 def conta_da_parcela(item: dict) -> str:
     """`tradePayableAccount.name` — a conta que a grade mostra em "Condicao
-    e Conta", ja sem o prefixo da condicao."""
-    return _texto(item.get("tradePayableAccount"))
+    e Conta", ja sem o prefixo da condicao.
+
+    Espaco repetido do cadastro ("LTDA  - Conta corrente") cai, como cai na
+    grade (`strip_condition_prefix`): os dois caminhos tem de entregar o
+    MESMO rotulo, senao a comparacao ve duas contas onde ha uma (09/09/2026).
+    """
+    return " ".join(_texto(item.get("tradePayableAccount")).split())
 
 
 def centro_de_custo(item: dict) -> str:

@@ -31,9 +31,9 @@ quantidade de cada um (`comparar_coletas`).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from ..config import Config
 from ..errors import ErpError
@@ -315,6 +315,16 @@ class LinhaComparacao:
         return self.qtd_tela == self.qtd_api and self.total_tela == self.total_api
 
 
+@dataclass(frozen=True)
+class ParcialEmOutraConta:
+    """Titulo pago em parte cuja grade mostra outra conta que a API."""
+
+    id: str
+    conta_tela: str
+    conta_api: str
+    valor: Decimal | None
+
+
 @dataclass
 class Comparacao:
     """O resultado de `comparar_coletas`, e o texto que o dono vai ler."""
@@ -330,6 +340,11 @@ class Comparacao:
     #: decide se a coluna "Vencimento" da grade e a data prevista ou a de
     #: vencimento, e so a comparacao ao vivo responde.
     datas_divergentes: int = 0
+    #: Titulos pagos em PARTE em que a grade mostra a conta do pagamento ja
+    #: feito e a API a conta cadastrada no titulo. Vale a cadastrada, entao
+    #: a linha da tela e somada na conta da API e o caso fica listado aqui,
+    #: em vez de acusar diferenca (ver `_conta_cadastrada_nos_parciais`).
+    parciais_em_outra_conta: list[ParcialEmOutraConta] = field(default_factory=list)
 
     @property
     def qtd_tela(self) -> int:
@@ -383,6 +398,14 @@ class Comparacao:
             saida.append(f"{self.datas_divergentes} linha(s) da API com plannedDate "
                          "diferente de dueDate — se a tela e a API divergirem, "
                          "comece por elas")
+        if self.parciais_em_outra_conta:
+            saida.append(
+                f"{len(self.parciais_em_outra_conta)} titulo(s) pago(s) em parte "
+                "somado(s) na conta CADASTRADA (a da API): a grade mostra a "
+                "conta do pagamento ja feito, e e a cadastrada que vale")
+            for parcial in self.parciais_em_outra_conta[:8]:
+                saida.append(f"  {format_brl(parcial.valor)}  tela: {parcial.conta_tela}"
+                             f"  ->  API: {parcial.conta_api}  (id {parcial.id})")
         saida.append("")
         saida.append("RESULTADO: os dois caminhos BATEM." if self.bate
                      else "RESULTADO: os dois caminhos DIFEREM — nao ligue a "
@@ -395,6 +418,42 @@ def _a_pagar_no_periodo(snapshot: Snapshot) -> list[ErpPayment]:
     intervalo = snapshot.intervalo
     return [p for p in snapshot.payments
             if intervalo.contem(p.due_date) and conta_como_a_pagar(p.status)]
+
+
+def _pago_em_parte(p: ErpPayment) -> bool:
+    """`sumOfPaidValues` > 0 na parcela da API: uma parte ja saiu."""
+    try:
+        return Decimal(str(p.raw.get("sumOfPaidValues") or 0)) > 0
+    except (InvalidOperation, ValueError):
+        return False
+
+
+def _conta_cadastrada_nos_parciais(
+    da_tela: list[ErpPayment], da_api: list[ErpPayment],
+) -> tuple[list[ErpPayment], list[ParcialEmOutraConta]]:
+    """Titulo pago em parte: a grade mostra a conta do pagamento ja feito, a
+    API a conta cadastrada no titulo, e e a cadastrada que vale (dono,
+    09/09/2026: em conta pessoa fisica cada parte pode sair de uma conta
+    diferente, e o que falta pagar ainda nao saiu de nenhuma). A linha da
+    tela passa a somar na conta da API, e o caso fica listado no relatorio.
+
+    So o titulo presente nos DOIS lados, com o mesmo id, pago em parte e com
+    conta diferente: conta diferente SEM pagamento parcial continua sendo
+    diferenca de verdade.
+    """
+    da_api_por_id = {str(p.raw.get("id")): p for p in da_api if p.raw.get("id")}
+    ajustadas: list[ErpPayment] = []
+    parciais: list[ParcialEmOutraConta] = []
+    for p in da_tela:
+        par = da_api_por_id.get(str(p.raw.get("id"))) if p.raw.get("id") else None
+        if (par is not None and par.account_label
+                and p.account_label != par.account_label and _pago_em_parte(par)):
+            parciais.append(ParcialEmOutraConta(
+                id=str(p.raw["id"]), conta_tela=p.account_label,
+                conta_api=par.account_label, valor=p.amount))
+            p = replace(p, account_label=par.account_label)
+        ajustadas.append(p)
+    return ajustadas, parciais
 
 
 def comparar_coletas(tela: Snapshot, api: Snapshot) -> Comparacao:
@@ -419,6 +478,7 @@ def comparar_coletas(tela: Snapshot, api: Snapshot) -> Comparacao:
 
     da_tela = _a_pagar_no_periodo(tela)
     da_api = _a_pagar_no_periodo(api)
+    da_tela, parciais = _conta_cadastrada_nos_parciais(da_tela, da_api)
     somar(da_tela, 0)
     somar(da_api, 2)
 
@@ -440,4 +500,5 @@ def comparar_coletas(tela: Snapshot, api: Snapshot) -> Comparacao:
         agregado_tela=tela.page_aggregate_open,
         agregado_api=api.page_aggregate_open,
         datas_divergentes=divergentes,
+        parciais_em_outra_conta=parciais,
     )

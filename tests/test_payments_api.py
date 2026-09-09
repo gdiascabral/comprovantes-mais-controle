@@ -122,6 +122,18 @@ def test_a_conta_vem_ja_sem_o_prefixo_da_condicao():
     assert p.account_label == "CONTA 2 - BANCO Y"
 
 
+def test_espaco_duplo_do_cadastro_cai_como_na_grade():
+    """O cadastro do ERP tem conta com dois espacos ("LTDA  - Conta
+    corrente"); a grade os colapsa ao ler a celula, e a API tem de entregar
+    o mesmo rotulo, senao a comparacao ve duas contas onde ha uma (09/09/2026)."""
+    from conciliacao.parsing import strip_condition_prefix
+
+    p = payments_api.converter(
+        _parcela(tradePayableAccount={"name": "CONTA 2  - BANCO Y"}), hoje=HOJE)
+    assert p.account_label == "CONTA 2 - BANCO Y"
+    assert p.account_label == strip_condition_prefix("À Vista CONTA 2  - BANCO Y")
+
+
 def test_categoria_em_string_e_centro_de_custo_de_reserva():
     p = payments_api.converter(
         _parcela(category="Servicos", costCentreDetails=[],
@@ -596,6 +608,38 @@ def test_comparar_coletas_com_valor_ilegivel_conta_e_nao_soma():
     apis = _snapshot([_pag("CONTA 1", None, "1")])
     c = collect.comparar_coletas(tela, apis)
     assert c.linhas[0].qtd_tela == 1 and c.linhas[0].total_tela == Decimal("0")
+
+
+def test_comparar_coletas_titulo_pago_em_parte_soma_na_conta_cadastrada():
+    """Em titulo pago em parte a grade mostra a conta do pagamento ja feito;
+    a API mostra a cadastrada no titulo, e e a cadastrada que vale (dono,
+    09/09/2026: em conta pessoa fisica cada parte pode sair de uma conta
+    diferente). A linha da tela soma na conta da API, e o caso fica listado."""
+    tela = _snapshot([_pag("CONTA PESSOAL", "4000.00", "1"),
+                      _pag("CONTA 1", "10", "2")])
+    apis = _snapshot([_pag("APENAS LANCAMENTO", "4000.00", "1", sumOfPaidValues=2422.0),
+                      _pag("CONTA 1", "10", "2")])
+
+    c = collect.comparar_coletas(tela, apis)
+
+    assert c.bate
+    assert {linha.conta for linha in c.linhas} == {"APENAS LANCAMENTO", "CONTA 1"}
+    [parcial] = c.parciais_em_outra_conta
+    assert (parcial.id, parcial.conta_tela, parcial.conta_api, parcial.valor) == (
+        "1", "CONTA PESSOAL", "APENAS LANCAMENTO", Decimal("4000.00"))
+    texto = c.relatorio()
+    assert "pago(s) em parte" in texto and "CONTA PESSOAL" in texto and "BATEM" in texto
+
+
+def test_comparar_coletas_conta_diferente_sem_parcial_continua_diferenca():
+    """Sem pagamento parcial, conta diferente e diferenca de verdade."""
+    tela = _snapshot([_pag("CONTA PESSOAL", "4000.00", "1")])
+    apis = _snapshot([_pag("APENAS LANCAMENTO", "4000.00", "1", sumOfPaidValues=0.0)])
+
+    c = collect.comparar_coletas(tela, apis)
+
+    assert not c.bate and c.parciais_em_outra_conta == []
+    assert "<-- difere" in c.relatorio()
 
 
 def test_cmd_comparar_coleta_roda_os_dois_coletores_e_imprime(monkeypatch, capsys):
