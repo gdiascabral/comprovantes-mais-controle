@@ -24,9 +24,13 @@ import util
 from . import conferencia as conf
 from .destino import (caminho_longo, empresa_de, mesmo_contrato_na_pasta,
                       nome_arquivo, pasta_do_contrato)
-from .escolha import contrato_de
+from .escolha import candidatos_distintos, contrato_de
 from .leitura import PAGINAS_INICIAIS
 from .regras import Imovel, imoveis_do_mes
+
+#: Até quantos candidatos em disputa o pipeline baixa para comparar. Acima
+#: disso a obra está bagunçada demais para decidir sem gente.
+MAXIMO_PARA_DESEMPATAR = 4
 
 
 @dataclass
@@ -158,6 +162,8 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
             continue
         a.anexos_da_obra = anexos_por_obra.get(a.obra_id) or []
         anexo, motivo = contrato_de(a.anexos_da_obra, a.imovel.unidade)
+        if anexo is None and "disputam" in motivo:
+            anexo, motivo = _desempatar_por_conteudo(api, a, motivo, log)
         if anexo is None:
             a.revisao = motivo
         else:
@@ -175,6 +181,43 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
     for a in achados:
         a.marcado = not a.revisao and bool(a.anexo)
     return achados
+
+
+def _desempatar_por_conteudo(api, achado: Achado, motivo: str,
+                             log=print) -> tuple[dict | None, str]:
+    """Dois nomes, um arquivo? Baixa os candidatos e compara os bytes.
+
+    Em agosto/2026, das cinco casas em disputa, várias eram o MESMO contrato
+    subido duas vezes com o nome escrito de outro jeito (`QD 26 A, LT, 14` e
+    `QD 26A LT 14`). Bytes iguais são o mesmo documento, e aí qualquer um
+    serve. Bytes diferentes são versões diferentes (uma com a assinatura da
+    corretora, outra sem), e isso só gente decide — o motivo passa a dizer o
+    tamanho de cada um, que já ajuda a escolher.
+
+    Baixa AQUI, na busca, porque a URL do S3 expira: guardar para depois é
+    guardar um link morto."""
+    distintos = candidatos_distintos(achado.anexos_da_obra, achado.imovel.unidade)
+    if len(distintos) > MAXIMO_PARA_DESEMPATAR:
+        return None, motivo
+    conteudos = []
+    for a in distintos:
+        try:
+            dados = api.baixar_anexo(a.get("downloadUrl"))
+        except Exception:
+            dados = None
+        if not dados:
+            return None, motivo            # sem o arquivo não há o que comparar
+        conteudos.append(dados)
+    if all(c == conteudos[0] for c in conteudos[1:]):
+        nomes = ", ".join(f'"{(a.get("filename") or "").strip()}"' for a in distintos)
+        log(f"  {achado.imovel.obra} {achado.imovel.rotulo}: {len(distintos)} "
+            f"nomes, um só arquivo — {nomes}")
+        return distintos[0], f"{len(distintos)} nomes para o mesmo arquivo"
+    tamanhos = "; ".join(
+        f'"{(a.get("filename") or "").strip()}" ({len(c) // 1024} KB)'
+        for a, c in zip(distintos, conteudos))
+    return None, (f"{len(distintos)} anexos DIFERENTES disputam a "
+                  f"{achado.imovel.rotulo}: {tamanhos}")
 
 
 # ------------------------------------------------- resolver à mão

@@ -111,12 +111,26 @@ def test_os_quase_parecidos_ficam_de_fora():
 
 # ---------------------------------------------------------------- grafias
 def test_grafias_de_compra_e_venda():
+    """`COMRPA` e `COMPRA EVENDA` são de anexos reais de agosto/2026."""
     for nome in ("CONTRATO DE COMPRA E VENDA X CS 01", "Contrato de compra e venda x cs 1",
                  "CONTRATO COMPRA & VENDA X CS 01", "CONTRATO COMPRA-E-VENDA X CS 01",
-                 "CCV X CS 01", "PROMESSA DE COMPRA E VENDA X CS 01"):
+                 "CCV X CS 01", "PROMESSA DE COMPRA E VENDA X CS 01",
+                 "CONTRATO DE COMRPA E VENDA X CS 02", "CONTRATO DE COMPRA EVENDA X C2"):
         assert eh_compra_e_venda(nome), nome
-    for nome in ("CONTRATO X CS 01", "CONTRATO EMPREITA - Y", "VENDA X CS 01"):
+    for nome in ("CONTRATO X CS 01", "CONTRATO EMPREITA - Y", "VENDA X CS 01",
+                 "TERMO DE ENTREGA X CS 01"):
         assert not eh_compra_e_venda(nome), nome
+
+
+def test_nomes_reais_de_agosto_resolvem_a_casa_certa():
+    """Grafias vistas na rodada real de 09/09/2026 (obras e nomes trocados)."""
+    assert candidatos([_a("CONTRATO DE COMPRA E VENDA OBRA X QD 18 LT 8.11  C3 .pdf")], 3)
+    assert candidatos([_a("CONTRATO DE COMPRA EVENDA OBRA X QD 18 L 8.11 C2 .pdf")], 2)
+    assert candidatos([_a("CONTRATO DE COMPRA E VENDA OBRA X QD 18 LT 8.11 B2 C1 .pdf")], 1)
+    assert candidatos([_a("CONTRATO DE COMPRA E VENDA RPB 24 QD 26 A, LT, 14 CS 01 .pdf")], 1)
+    assert candidatos([_a("CONTRATO DE COMPRA E VENDA RPB 24 QD 26-A LT 15 CS 2 .pdf")], 2)
+    assert candidatos([_a("CONTRATO DE COMPRA E VENDA RUA APOLO QD 01 LT 33 CS 01 .pdf")], 1)
+    assert not candidatos([_a("CONTRATO DE COMPRA E VENDA OBRA X QD 18 LT 8.11 B2 C1 .pdf")], 2)
 
 
 def test_exclusoes_dizem_a_palavra():

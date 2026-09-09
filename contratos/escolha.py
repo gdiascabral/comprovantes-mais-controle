@@ -38,8 +38,10 @@ import util
 
 from .regras import numero_da_unidade, rotulo_da_unidade
 
-#: "COMPRA E VENDA", "COMPRA & VENDA", "COMPRAEVENDA", "COMPRA-E-VENDA", "CCV".
-RE_COMPRA_E_VENDA = re.compile(r"\bCOMPRA\s*(?:E|&)\s*VENDA\b|\bCCV\b")
+#: "COMPRA E VENDA", "COMPRA & VENDA", "COMPRAEVENDA", "COMPRA-E-VENDA", "CCV"
+#: — e "COMRPA E VENDA", que em agosto/2026 estava em três obras de verdade.
+#: `COM[A-Z]{2,3}` aceita COMPRA, COMRPA e COMPA sem aceitar qualquer palavra.
+RE_COMPRA_E_VENDA = re.compile(r"\bCOM[A-Z]{2,3}\s*(?:E|&)\s*VENDA\b|\bCCV\b")
 
 #: Palavras que, no nome, dizem que o arquivo NÃO é o contrato de compra e
 #: venda vigente — mesmo dizendo "compra e venda". É uma PROTEÇÃO, não a
@@ -96,13 +98,30 @@ def candidatos(anexos: list[dict], unidade: int | None) -> list[dict]:
     return achados
 
 
+def candidatos_distintos(anexos: list[dict], unidade: int | None) -> list[dict]:
+    """Os candidatos com nomes diferentes entre si (cópias de nome idêntico
+    contam como uma), na ordem em que o ERP os devolveu."""
+    vistos: dict[str, dict] = {}
+    for a in candidatos(anexos or [], unidade):
+        vistos.setdefault(_norm(_nome(a)), a)
+    return list(vistos.values())
+
+
+def motivo_da_disputa(distintos: list[dict], unidade: int | None) -> str:
+    nomes = ", ".join(sorted(f'"{_nome(a)}"' for a in distintos))
+    return (f"{len(distintos)} anexos disputam a "
+            f"{rotulo_da_unidade(unidade)}: {nomes}")
+
+
 def contrato_de(anexos: list[dict], unidade: int | None) -> tuple[dict | None, str]:
     """(anexo, motivo). Anexo None significa revisão, e o motivo explica.
 
     Cópias de nome idêntico contam como uma: a obra examinada tem anexos
     repetidos de fato (o mesmo `HIDROSSANITARIO … CS 01` aparece duas vezes).
     Nomes DIFERENTES sobrando é ambiguidade de verdade, e vira revisão — a
-    não ser que exatamente um se diga ASSINADO."""
+    não ser que exatamente um se diga ASSINADO. Quem ainda pode desempatar é
+    o pipeline, baixando os candidatos e comparando o conteúdo: em agosto/2026
+    metade das disputas era o mesmo arquivo subido duas vezes com outro nome."""
     if not unidade:
         return None, "sem o número da casa não dá para escolher o contrato"
     achados = candidatos(anexos or [], unidade)
@@ -110,17 +129,15 @@ def contrato_de(anexos: list[dict], unidade: int | None) -> tuple[dict | None, s
         return None, (f"nenhum anexo de COMPRA E VENDA para a "
                       f"{rotulo_da_unidade(unidade)}")
 
-    distintos = {_norm(_nome(a)): a for a in achados}
+    distintos = candidatos_distintos(anexos, unidade)
     if len(distintos) == 1:
         return achados[0], "único contrato de compra e venda da casa"
 
-    assinados = [a for n, a in distintos.items() if MARCA_ASSINADO in n]
+    assinados = [a for a in distintos if MARCA_ASSINADO in _norm(_nome(a))]
     if len(assinados) == 1:
         return assinados[0], "o único que se diz ASSINADO entre os candidatos"
 
-    nomes = ", ".join(sorted(f'"{_nome(a)}"' for a in distintos.values()))
-    return None, (f"{len(distintos)} anexos disputam a "
-                  f"{rotulo_da_unidade(unidade)}: {nomes}")
+    return None, motivo_da_disputa(distintos, unidade)
 
 
 def ordenar_para_escolha(anexos: list[dict],

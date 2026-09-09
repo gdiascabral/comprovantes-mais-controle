@@ -200,6 +200,56 @@ def test_linha_sem_casa_ainda_diz_a_obra_e_o_cliente():
     assert not pode_resolver(a)               # a correção é no ERP
 
 
+# ------------------------------------------------- desempate pelo conteúdo
+DISPUTA = {
+    "obra-1": [
+        {"id": "d1", "filename": "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 .pdf",
+         "extension": ".pdf", "downloadUrl": "https://exemplo.invalid/d1"},
+        {"id": "d2", "filename": "CONTRATO DE COMPRA E VENDA TB 21 QD46 LT18 CS 01 .pdf",
+         "extension": ".pdf", "downloadUrl": "https://exemplo.invalid/d2"},
+    ],
+}
+
+
+class ApiDisputa(ApiDuble):
+    def __init__(self, registros, por_url):
+        super().__init__(registros)
+        self.por_url = por_url
+
+    def anexos_de_obras(self, ids, log=print, cancelar=None):
+        return {i: DISPUTA.get(i, []) for i in ids}
+
+    def baixar_anexo(self, url):
+        self.baixados.append(url)
+        return self.por_url.get(url)
+
+
+def test_dois_nomes_para_o_mesmo_arquivo_resolvem_sozinhos():
+    """Metade das disputas de agosto/2026 era isto: o mesmo PDF subido duas
+    vezes com o nome escrito de outro jeito."""
+    api = ApiDisputa([REGISTROS[0]], {"https://exemplo.invalid/d1": b"%PDF-igual",
+                                      "https://exemplo.invalid/d2": b"%PDF-igual"})
+    recados = []
+    a = levantar(api, 2026, 8, EMPRESAS, log=recados.append)[0]
+    assert a.anexo and a.anexo["id"] == "d1" and not a.revisao and a.marcado
+    assert sorted(api.baixados) == ["https://exemplo.invalid/d1", "https://exemplo.invalid/d2"]
+    assert any("um só arquivo" in m for m in recados)
+
+
+def test_dois_arquivos_diferentes_continuam_em_revisao_com_os_tamanhos():
+    api = ApiDisputa([REGISTROS[0]], {"https://exemplo.invalid/d1": b"%PDF-" + b"a" * 2048,
+                                      "https://exemplo.invalid/d2": b"%PDF-" + b"b" * 4096})
+    a = levantar(api, 2026, 8, EMPRESAS, log=_sem_log)[0]
+    assert not a.anexo and "DIFERENTES" in a.revisao
+    assert "(2 KB)" in a.revisao and "(4 KB)" in a.revisao
+
+
+def test_download_que_falha_no_desempate_deixa_a_disputa_como_estava():
+    api = ApiDisputa([REGISTROS[0]], {"https://exemplo.invalid/d1": b"%PDF-igual"})
+    a = levantar(api, 2026, 8, EMPRESAS, log=_sem_log)[0]
+    assert not a.anexo and "disputam" in a.revisao and "DIFERENTES" not in a.revisao
+
+
 # --------------------------------------------- acesso ao segundo back-end
 def test_a_busca_prepara_o_acesso_antes_de_ler_as_obras():
     api = ApiDuble(REGISTROS)
