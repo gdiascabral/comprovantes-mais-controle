@@ -6,6 +6,13 @@ Compartilha o navegador e a thread do AnexarFrame, como a Conferência e os
 Aportes. Aqui isso não é só conveniência: **o ERP aceita uma sessão por
 usuário**, então uma janela própria derrubaria a sessão do Anexar e vice-versa.
 
+Desde 08/09/2026 a coleta padrão vai pela API (`pagamentos_via_api`, ver
+`conciliacao/erp/collect.py`) e a aba **não exige o navegador**: não abre o
+Chrome nem espera login na janela. Ainda roda na thread do Anexar, porque o
+login por HTTP derruba a sessão do Chrome se houver um aberto — melhor com o
+navegador parado do que no meio do trabalho de outra aba. Com a chave
+desligada, o caminho é o de antes: a grade raspada na página emprestada.
+
 A regra de negócio inteira vive em `conciliacao/` e não sabe que existe
 interface — esta aba só escolhe o período, empresta a página e mostra o que
 voltou.
@@ -297,33 +304,61 @@ class ConciliacaoFrame(ttk.Frame):
         self.worker = self.anx.submeter("Controle de saldo pgtos", self._t_gerar,
                                         periodo, dona=self)
 
+    def _revalidar_navegador_aberto(self):
+        """Cortesia para a próxima aba, no caminho pela API.
+
+        O login por HTTP derruba a sessão do Chrome do app, SE houver um
+        aberto — a coleta pela API não abre nenhum. Com o Chrome vivo, refaz
+        o login dele aqui, como o `revalidar` do caminho da tela fazia; sem
+        Chrome, não há o que refazer. Falhar aqui não derruba uma coleta que
+        já terminou: quem usar outra aba passa pelo `garantir_sessao`."""
+        cli = self.anx.mc
+        if cli is None:
+            return
+        try:
+            if not cli.vivo():
+                return
+            cli.garantir_login()
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"  (o login do navegador não foi refeito: {e})")
+
     def _t_gerar(self, periodo: Periodo):
-        from conciliacao.erp.collect import coletar_com_pagina
+        from conciliacao.erp.collect import coletar, coletar_com_pagina
 
         comeco = time.time()
         try:
             cfg = self._config_do_dia(periodo)
             mapping = AccountMapping.load(_pasta_base() / "mapping.yaml")
 
-            self.q.put(("status", "Entrando no Mais Controle..."))
-            self.anx.garantir_sessao(self._log)
-            self._esperar_sessao()
-
-            self.q.put(("status", "Coletando saldos e pagamentos..."))
-
-            def revalidar():
-                """Refaz o login do navegador depois da API de saldos.
-
-                A API loga com o mesmo usuário, e o ERP só admite uma sessão —
-                a do navegador cai. Sem isto, a grade de pagamentos vem vazia
-                e o log fica sem sentido: "Login OK", 36 contas lidas, e
-                nenhuma linha."""
-                self.anx.mc.garantir_login()
+            if cfg.pagamentos_via_api:
+                # Sem navegador: saldos e pagamentos vêm da API, num login só.
+                # Continua na thread do Anexar de propósito — esse login
+                # derruba a sessão do Chrome, e é melhor que isso aconteça com
+                # o navegador parado do que no meio do trabalho de outra aba.
+                self.q.put(("status",
+                            "Lendo saldos e pagamentos (API do Mais Controle)..."))
+                snapshot = coletar(cfg, periodo=periodo, log=self._log)
+                self._revalidar_navegador_aberto()
+            else:
+                self.q.put(("status", "Entrando no Mais Controle..."))
+                self.anx.garantir_sessao(self._log)
                 self._esperar_sessao()
 
-            snapshot = coletar_com_pagina(
-                self.anx.mc.page, cfg, periodo=periodo,
-                revalidar_sessao=revalidar, log=self._log)
+                self.q.put(("status", "Coletando saldos e pagamentos..."))
+
+                def revalidar():
+                    """Refaz o login do navegador depois da API de saldos.
+
+                    A API loga com o mesmo usuário, e o ERP só admite uma
+                    sessão — a do navegador cai. Sem isto, a grade de
+                    pagamentos vem vazia e o log fica sem sentido: "Login
+                    OK", 36 contas lidas, e nenhuma linha."""
+                    self.anx.mc.garantir_login()
+                    self._esperar_sessao()
+
+                snapshot = coletar_com_pagina(
+                    self.anx.mc.page, cfg, periodo=periodo,
+                    revalidar_sessao=revalidar, log=self._log)
 
             caminho_snap = salvar_snapshot(snapshot, cfg.caminho("snapshots"))
             self._log(f"Snapshot: {str(caminho_snap).replace(chr(92), '/')}")

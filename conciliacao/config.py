@@ -57,6 +57,11 @@ class Config:
     exigir_todos_os_saldos: bool
     tolerancia_agregado: Decimal
     raiz: Path
+    #: Os pagamentos a vencer vem da API REST (True, o padrao desde
+    #: 08/09/2026) ou da raspagem da grade pelo navegador (False, o plano B).
+    #: Chave `pagamentos_via_api` da secao `erp` do config.yaml. Ver
+    #: `conciliacao/erp/collect.py`.
+    pagamentos_via_api: bool = True
 
     def caminho(self, chave: str) -> Path:
         """Resolve um caminho do config relativo a raiz do projeto."""
@@ -88,9 +93,10 @@ def load_config(path: str | Path) -> Config:
 
     regras = raw.get("regras", {})
     validacao = raw.get("validacao", {})
+    erp = raw.get("erp") or {}
 
     return Config(
-        erp=raw.get("erp", {}),
+        erp=erp,
         caminhos=raw.get("caminhos", {}),
         planilha=planilha,
         excluir_valor_exato=Decimal(str(regras.get("excluir_valor_exato", "1.00"))),
@@ -101,4 +107,6 @@ def load_config(path: str | Path) -> Config:
         exigir_todos_os_saldos=bool(validacao.get("exigir_todos_os_saldos", True)),
         tolerancia_agregado=Decimal(str(validacao.get("tolerancia_agregado", "0.01"))),
         raiz=path.resolve().parent,
+        # Ausente no config.yaml vale True: o plano B e escolha, nao padrao.
+        pagamentos_via_api=bool(erp.get("pagamentos_via_api", True)),
     )

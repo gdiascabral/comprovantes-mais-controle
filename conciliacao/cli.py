@@ -9,6 +9,8 @@ Uteis para diagnostico:
     conciliacao analisar --snapshot snapshots/2026-07-30.json
     conciliacao montar   --snapshot snapshots/2026-07-30.json
     conciliacao descobrir-contas --aplicar
+    conciliacao comparar-coleta --de 27/07 --ate 30/07
+                                    # a grade contra a API, conta a conta
 """
 
 from __future__ import annotations
@@ -260,6 +262,46 @@ def cmd_montar(args) -> int:
     return 0
 
 
+def cmd_comparar_coleta(args, *, coletar_tela=None, coletar_api=None) -> int:
+    """Roda os DOIS caminhos da coleta para o mesmo periodo e compara.
+
+    E a conferencia que precede confiar no caminho pela API com dinheiro:
+    por conta, o total e a quantidade que a grade leu contra o que a API
+    leu, e a diferenca. A doc cita R$ 177.046,30 em 73 lancamentos de 27 a
+    30/07/2026 como referencia conhecida da grade.
+
+    A raspagem vem PRIMEIRO e abre um Chrome com janela — o WAF recusa
+    headless — usando a sessao unica do ERP; a API entra depois, quando o
+    navegador ja fechou. Rode com o app fechado e a tela livre.
+
+    `coletar_tela`/`coletar_api` sao injetaveis para o teste, que nao abre
+    navegador nem rede.
+    """
+    from .erp import collect
+
+    config, _ = _base(args)
+    periodo = resolver_periodo(args)
+    tela = coletar_tela or collect.coletar_pela_tela
+    api = coletar_api or collect.coletar_pela_api
+
+    print("1/2 — pela TELA (abre o Chrome; nao mexa na janela)...")
+    snap_tela = tela(config, periodo=periodo, visivel=True, log=print)
+    print("\n2/2 — pela API (sem navegador)...")
+    snap_api = api(config, periodo=periodo, log=print)
+
+    if getattr(args, "guardar", False):
+        pasta = config.caminho("snapshots")
+        for nome, snap in (("tela", snap_tela), ("api", snap_api)):
+            caminho = snapshot_io.save(
+                snap, pasta / f"comparar-{periodo.fim:%Y-%m-%d}-{nome}")
+            print(f"  snapshot ({nome}): {caminho}")
+
+    comparacao = collect.comparar_coletas(snap_tela, snap_api)
+    print()
+    print(comparacao.relatorio())
+    return 0 if comparacao.bate else 1
+
+
 def cmd_descobrir_contas(args) -> int:
     """Casa contas do ERP com linhas do painel e grava os uuids.
 
@@ -343,6 +385,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--aplicar", action="store_true", help="grava os uuids")
     p.add_argument("--oculto", action="store_true")
     p.set_defaults(func=cmd_descobrir_contas)
+
+    p = sub.add_parser(
+        "comparar-coleta",
+        help="le o mesmo periodo pela grade (navegador) E pela API e compara, "
+             "conta a conta",
+        description=(
+            "Roda os dois caminhos da coleta para o mesmo periodo e imprime, "
+            "por conta, o total e a quantidade de cada um e a diferenca. "
+            "ATENCAO: a raspagem ABRE o Chrome com janela (o WAF recusa "
+            "navegador oculto) e usa a unica sessao do ERP — rode com o app "
+            "fechado e a tela livre. Referencia conhecida: R$ 177.046,30 em "
+            "73 lancamentos de 27 a 30/07/2026 (--de 27/07/2026 --ate "
+            "30/07/2026). Sai com codigo 1 quando os dois diferem."
+        ),
+    )
+    argumentos_de_periodo(p)
+    p.add_argument("--guardar", action="store_true",
+                   help="grava os dois snapshots em snapshots/comparar-<data>-tela|api")
+    p.set_defaults(func=cmd_comparar_coleta)
 
     return parser
 
