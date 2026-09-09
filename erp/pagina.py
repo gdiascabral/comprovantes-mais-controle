@@ -12,7 +12,10 @@ clientes já leem — e um deles ESCREVE — por HTTP puro. Ver
 
 O que sobra e continua precisando do navegador de verdade:
 
-  - o upload do comprovante, que é diálogo de tela (`anexar/mc_client.py`);
+  - o upload do comprovante: desde 08/09/2026 sobe pela API, mas de DENTRO da
+    página (`anexar/mc_api.py`, `anexar_por_api` — batch, PUT no S3 e o GET de
+    prova, todos por `page.evaluate`); o diálogo de tela de
+    `anexar/mc_client.py` é o plano B;
   - o PDF do extrato, gerado pela própria página (`relatorios/extrato_mc.py`);
   - o GraphQL das obras, cujo host `execute-api` só aparece nos cabeçalhos
     quando o ERP carrega o FORMULÁRIO de lançamento

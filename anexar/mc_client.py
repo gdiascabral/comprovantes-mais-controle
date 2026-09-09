@@ -825,6 +825,11 @@ class MCClient:
         a conferência procurar no lugar errado.
         valores: lista opcional de valores aceitos (nominal e valor pago com
         juros/multa/desconto); sem ela, usa apenas valor_str.
+
+        Desde 08/09/2026 este é o PLANO B: o comprovante sobe pela API
+        (`mc_api.MCApi.anexar_por_api`), e `anexar_comprovantes.anexar_um` só
+        chega aqui quando a API diz que nada subiu (sem credencial, ou o ERP
+        recusou antes do arquivo sair) — ou quando não há `paidId`.
         """
         alvos = {a for a in (_centavos(v) for v in (valores or [valor_str]))
                  if a is not None}

@@ -143,7 +143,7 @@ Com isso, o motivo de cada consumidor precisar (ou não) do navegador:
 
 | Consumidor | Motivo real |
 |---|---|
-| `anexar/mc_client.py` (anexar arquivo) | é upload por diálogo da tela — `input[type=file]` + etiqueta + Confirmar (`:719-735`), com prova relendo a grade (`:751`). Existe caminho de API (`POST /attachments/v2/batch` → PUT no S3 pré-assinado → GET, documentado em `agua_energia/coletor/lancar_mc.py:15-18`), mas é escrita e mexe em comprovante: não é conversão de transporte, é projeto próprio |
+| `anexar/mc_client.py` (anexar arquivo) | é upload por diálogo da tela — `input[type=file]` + etiqueta + Confirmar (`:719-735`), com prova relendo a grade (`:751`). Existe caminho de API (`POST /attachments/v2/batch` → PUT no S3 pré-assinado → GET, documentado em `agua_energia/coletor/lancar_mc.py:15-18`), mas é escrita e mexe em comprovante: não é conversão de transporte, é projeto próprio. **Feito em 08/09/2026**: `anexar/mc_api.py:anexar_por_api` percorre esse caminho de dentro da página, com prova pelo GET, e o diálogo virou plano B (só quando nada subiu: `erro:sem_credencial` e `erro:batch:*`) |
 | `relatorios/extrato_mc.py` | o produto é um **PDF gerado pela página** (`Page.printToPDF` via CDP, `:324-332`), depois de mexer no CSS e no DOM (`:205-215`). Não há endpoint que devolva isso |
 | `aportes/mc_catalogos.carregar_obras` (GraphQL) | o host `execute-api` só entra nos cabeçalhos quando o ERP carrega o FORMULÁRIO de lançamento (`:255-259`) — o token dele não sai do login. **Já está fora do caminho crítico**: `definir_obras` (`:252`) usa o REST da aba Contratos, e é esse que roda em produção |
 

@@ -49,6 +49,49 @@ _norm = util.norm
 _data_api = util.data_api
 _fmt_val = util.fmt_val
 
+#: O que conta como "deu certo" nos contadores e no relatório: os quatro da
+#: tela mais o `ja_anexado` da API — o mesmo fato do `ja_tinha`, só que dito
+#: por quem leu a listagem de anexos em vez da grade.
+RESULTADOS_OK = ("anexado", "anexado_sem_tag", "ja_tinha", "ja_anexado", "dry_run")
+
+
+def anexar_um(mc, api, launch_id: str, valor: str, arquivo, *, paid_id=None,
+              doc=None, dry_run: bool = True, valores=None, log=None,
+              por_api=None) -> str:
+    """UM comprovante: pela API primeiro, pela tela como plano B.
+
+    A API (`mc_api.MCApi.anexar_por_api`) precisa do `paidId` — o comprovante
+    mora no SUB-pagamento, e é ele que a listagem e a Conferência olham. Linha
+    sem `paidId` (o modo "Por lista" só traz o link da parcela) vai direto pela
+    tela, que acha o sub-pagamento pelo valor.
+
+    A tela só entra quando a API diz que NADA subiu (`mc_api.tela_pode_tentar`:
+    sem credencial, ou o ERP recusou antes do arquivo sair). Nos outros erros
+    — o PUT saiu e a prova não veio, ou o batch nasceu e o PUT falhou — o
+    arquivo pode estar lá, e tentar pela tela é comprovante em dobro; o
+    resultado vai para o relatório como erro e a pessoa confere no lançamento.
+    A retentativa com `resetar()` é só da tela: o POST da API não se repete.
+    """
+    log = log or (lambda _m: None)
+    if por_api is None:
+        por_api = config.ANEXAR_POR_API
+    if por_api and api is not None and paid_id:
+        r = api.anexar_por_api(paid_id, arquivo, log=log, dry_run=dry_run)
+        if not mc_api.tela_pode_tentar(r):
+            log(f"   pela API -> {r}")
+            return r
+        log(f"   pela API: {r} — nada subiu; indo pela tela")
+    elif por_api:
+        log("   sem paidId nesta linha — pela tela")
+    r = mc.anexar(launch_id, valor, arquivo, doc=doc, dry_run=dry_run,
+                  valores=valores)
+    if r.startswith("erro:"):
+        log(f"   ({r}) — recarregando o sistema e tentando de novo...")
+        mc.resetar()
+        r = mc.anexar(launch_id, valor, arquivo, doc=doc, dry_run=dry_run,
+                      valores=valores)
+    return r
+
 
 def _texto_do_erro(e: Exception) -> str:
     """UMA frase para o Registro; o traceback vai para o `diagnostico.log`.
@@ -989,23 +1032,17 @@ class AnexarFrame(ttk.Frame):
                     break
                 arq = pasta / pe["pdf"]
                 vals = [_fmt_val(v) for v in pe.get("valores", [pe["valor"]])]
-                r = self.mc.anexar(pe["launchId"], _fmt_val(pe["valor"]), arq,
-                                   doc=pe["doc"] or None, dry_run=simular,
-                                   valores=vals)
-                if r.startswith("erro:"):
-                    self._log(f"   ({r}) — recarregando o sistema e tentando de novo...")
-                    self.mc.resetar()
-                    r = self.mc.anexar(pe["launchId"], _fmt_val(pe["valor"]), arq,
-                                       doc=pe["doc"] or None, dry_run=simular,
-                                       valores=vals)
+                r = anexar_um(self.mc, self.api, pe["launchId"],
+                              _fmt_val(pe["valor"]), arq,
+                              paid_id=pe.get("paidId"), doc=pe["doc"] or None,
+                              dry_run=simular, valores=vals, log=self._log)
                 pe["resultado"] = r
                 resultados.append(pe)
                 self.q.put(("prog", (i, sum(1 for x in resultados if not x["resultado"].startswith("erro")), 0)))
                 self._log(f"[{i}/{len(certezas)}] {_fmt_val(pe['valor'])}  {pe['pdf']}  -> {r}")
 
             saida = self._relatorio(resultados, duvidas, sem_par, pasta_pdfs)
-            ok = sum(1 for x in resultados
-                     if x["resultado"] in ("anexado", "anexado_sem_tag", "ja_tinha", "dry_run"))
+            ok = sum(1 for x in resultados if x["resultado"] in RESULTADOS_OK)
             self._log(f"⏱ Anexos: {_fmt_dur(time.time() - ini_anexar)}")
             self._log(f"\nConcluído. Anexados/ok: {ok} de {len(certezas)}. Relatório: {saida}")
             self._log(f"⏱ Etapa 3 — fim: {time.strftime('%H:%M:%S')} "
@@ -1037,15 +1074,11 @@ class AnexarFrame(ttk.Frame):
                 elif t["arquivo"] is None:
                     r = "erro:pdf_nao_encontrado_na_pasta"
                 else:
-                    r = self.mc.anexar(t["launchId"], t["valor"], t["arquivo"],
-                                       doc=t.get("doc") or None, dry_run=simular)
-                    if r.startswith("erro:"):
-                        self._log(f"   ({r}) — recarregando o sistema e tentando de novo...")
-                        self.mc.resetar()
-                        r = self.mc.anexar(t["launchId"], t["valor"], t["arquivo"],
-                                           doc=t.get("doc") or None,
-                                           dry_run=simular)
-                if r in ("anexado", "anexado_sem_tag", "ja_tinha", "dry_run"):
+                    r = anexar_um(self.mc, self.api, t["launchId"], t["valor"],
+                                  t["arquivo"], paid_id=t.get("paidId"),
+                                  doc=t.get("doc") or None, dry_run=simular,
+                                  log=self._log)
+                if r in RESULTADOS_OK:
                     ok += 1
                 self.q.put(("prog", (i, ok, i - ok)))
                 self._log(f"[{i}/{len(tarefas)}] {t['valor']}  {t['arquivo_bruto']}  -> {r}")
