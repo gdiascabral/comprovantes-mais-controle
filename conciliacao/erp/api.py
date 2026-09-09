@@ -239,6 +239,28 @@ class SessaoApi:
         with _traduzido():
             return sessao.pedir(url)
 
+    def pedir(self, url: str):
+        """GET autenticado em QUALQUER dos dois hosts do ERP.
+
+        O token sai do HOST da URL (`erp.Sessao.token_para`): `jwtToken` para
+        o `prod-erp-api` dos saldos, `accessToken` para o `legacy-api` da
+        lista de parcelas (`payments_api.py`). E o que deixa a mesma sessao —
+        um login so — ler saldos e pagamentos, em vez de logar duas vezes e
+        derrubar duas vezes a sessao do navegador.
+
+        O 401 do legado e rotina (o `accessToken` vive segundos) e a
+        `erp.Sessao` o reloga uma vez — mas so quando esta sessao nasceu de
+        `logar()`. Montada a mao, ela nao tem credencial nem `accessToken`, e
+        uma URL do legado volta como `SessaoExpirada`, que e o certo: ninguem
+        reloga em nome de quem nao entregou a senha.
+        """
+        return self._pedir(url)
+
+    @property
+    def base_legado(self) -> str:
+        """O `legacy-api` que ESTA sessao usa — o do `config.yaml`, se houver."""
+        return _base_legacy(self.config)
+
     # --------------------------------------------------------------- consultas
 
     def listar_contas(self, *, ativas: bool = True) -> list[dict]:
