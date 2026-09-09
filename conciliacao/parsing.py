@@ -33,6 +33,12 @@ _ACCOUNT_NUMBER = re.compile(r"(?<![\d-])(?P<base>\d[\d.]{2,})-(?P<check>\d)(?!\
 # Prefixos da celula "Condicao e Conta" da grade de pagamentos.
 _CONDITION_PREFIXES = ("a vista", "recorrente", "parcelado", "entrada")
 
+# Condicao de parcelamento na mesma celula: "2/2 parcelas CONTA - BANCO",
+# "9/12 Parcelas - CONTA - BANCO". Sem cortar, o pagamento ia para uma conta
+# fantasma (comparacao tela x API de 09/09/2026). Casa no texto ja sem acento
+# e em minusculas, como os prefixos fixos.
+_INSTALLMENT_PREFIX = re.compile(r"^\d+/\d+\s*parcelas?(?!\w)")
+
 
 def is_masked(text: str | None) -> bool:
     """True quando o ERP devolveu o valor escondido atras do olho ("******")."""
@@ -128,11 +134,18 @@ def extract_account_numbers(text: str | None) -> list[str]:
 
 
 def strip_condition_prefix(text: str | None) -> str:
-    """Remove "A Vista"/"Recorrente"/... do inicio da celula "Condicao e Conta"."""
+    """Remove a condicao do inicio da celula "Condicao e Conta".
+
+    "A Vista"/"Recorrente"/... e o parcelamento "N/M parcelas", com o hifen
+    ou dois-pontos que os segue.
+    """
     if not text:
         return ""
     cleaned = " ".join(text.replace("\n", " ").split())
     lowered = strip_accents(cleaned).lower()
+    parcelas = _INSTALLMENT_PREFIX.match(lowered)
+    if parcelas:
+        return cleaned[parcelas.end() :].strip(" -–:").strip()
     for prefix in _CONDITION_PREFIXES:
         if lowered.startswith(prefix):
             return cleaned[len(prefix) :].strip(" -–:").strip()
