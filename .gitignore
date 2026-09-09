@@ -157,3 +157,9 @@ sessao.dat
 # dos sistemas de fora falhou e some quando tudo volta. E estado da maquina, nao
 # codigo; o sonda.log ja cai na regra *.log.
 sonda.ALERTA.txt
+
+# A irma dela (ferramentas/sentinela_erp.py): o ALERTA e as fotografias
+# diarias do front do ERP (sentinela/ultimo.json e uma copia por dia) sao
+# estado da maquina, nao codigo; o sentinela.log ja cai na regra *.log.
+sentinela.ALERTA.txt
+/sentinela/
