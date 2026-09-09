@@ -130,6 +130,11 @@ class Catalogos:
         self.formas_recebimento: dict[str, dict] = {}
         self.condicoes_pagamento: dict[str, dict] = {}
         self.condicoes_recebimento: dict[str, dict] = {}
+        # Tarefas por obra (bloco "Tarefas e planejamento", no fim). Os
+        # métodos vieram do ANEXAR BOLETOS e estes dois atributos ficaram
+        # lá: `tarefas_da_obra` morria com AttributeError na primeira linha.
+        self._cache_tarefas: dict[str, list[dict]] = {}
+        self.erros_tarefas: dict[str, str] = {}
 
     # ------------------------------------------------------------ transporte
     def _headers_para(self, url: str) -> dict:
@@ -179,6 +184,27 @@ class Catalogos:
         if not all(isinstance(v, dict) for v in self.headers.values()):
             return []
         return [h for h in self.headers if "execute-api" in h]
+
+    @property
+    def _host_graphql(self) -> str | None:
+        """O primeiro host GraphQL com token capturado, ou None.
+
+        É o que `tarefas_da_obra` usa (`carregar_obras` tenta a lista
+        inteira). Só existe host quando o mapa de cabeçalhos é por host — no
+        mapa plano não há como saber de que serviço o token é.
+
+        Aceita ser fixado de fora (`cat._host_graphql = ...`): era o que o
+        coletor de concessionárias fazia enquanto a propriedade não existia,
+        e sem o setter esse contorno passaria a estourar com AttributeError
+        na primeira abertura depois da atualização."""
+        fixado = self.__dict__.get("_host_graphql_fixado")
+        if fixado is not None:
+            return fixado
+        return next(iter(self._hosts_graphql()), None)
+
+    @_host_graphql.setter
+    def _host_graphql(self, host: str | None) -> None:
+        self._host_graphql_fixado = host
 
     def carregar_obras(self) -> None:
         """Obras (works). Não há REST: só GraphQL, e o host varia — por isso
@@ -439,6 +465,7 @@ class Catalogos:
         return self.postar(f"https://{host}/prod/graphql",
                            {"query": query, "variables": variaveis})
 
+    @staticmethod
     def _dados(resposta) -> dict | None:
         """`data` de uma resposta GraphQL, ou None se veio erro."""
         if not isinstance(resposta, dict):
@@ -500,6 +527,7 @@ class Catalogos:
         self._cache_tarefas[id_obra] = tarefas
         return tarefas
 
+    @staticmethod
     def _motivo(resposta) -> str:
         """O porquê de uma resposta GraphQL não ter servido, em uma linha."""
         if not isinstance(resposta, dict):
@@ -510,6 +538,7 @@ class Catalogos:
             return str(resposta["errors"])[:160]
         return "veio vazio"
 
+    @staticmethod
     def nome_da_tarefa(t: dict) -> str:
         """O texto que a tela mostra para um item do orçamento.
 
@@ -540,9 +569,11 @@ class Catalogos:
                 "name": nome,
                 "discriminator": t.get("discriminator") or "ITEM"}
 
+    @staticmethod
     def _ordem_do_indice(t: dict) -> tuple:
-        """"20.1" antes de "20.10", e ambos antes de "3" — comparar como texto
-        põe "10" na frente de "3" e escolheria o item errado."""
+        """"3" antes de "20.1", e "20.9" antes de "20.10" — comparar como
+        texto põe "10" na frente de "3" (e "20.10" na frente de "20.9") e
+        escolheria o item errado."""
         partes = str(t.get("index") or "").split(".")
         return tuple(int(p) if p.isdigit() else 0 for p in partes)
 
