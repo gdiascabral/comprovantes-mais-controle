@@ -96,6 +96,17 @@ def test_normalize_account_number():
         ("Recorrente TERRA BELA - SICOOB", "TERRA BELA - SICOOB"),
         ("À Vista\nMORAIS ENGENHARIA - INTER", "MORAIS ENGENHARIA - INTER"),
         ("MORAIS ENGENHARIA - INTER", "MORAIS ENGENHARIA - INTER"),
+        # Parcelamento (comparação tela × API de 09/09/2026): a grade traz
+        # "N/M parcelas" na frente da conta, e sem cortar a conta virava fantasma.
+        ("2/2 parcelas CONTA X - BANCO Y", "CONTA X - BANCO Y"),
+        ("9/12 parcelas CONTA X - BANCO Y", "CONTA X - BANCO Y"),
+        ("9/12 Parcelas - CONTA X - BANCO Y", "CONTA X - BANCO Y"),
+        ("1/1 PARCELA: CONTA X - BANCO Y", "CONTA X - BANCO Y"),
+        ("2/2 parcelas\nCONTA X - BANCO Y", "CONTA X - BANCO Y"),
+        # Só "parcelas" corta: número com barra na frente da conta fica.
+        ("10/10 CONTA X - BANCO Y", "10/10 CONTA X - BANCO Y"),
+        # Os prefixos fixos seguem iguais; "Parcelado" não é "parcelas".
+        ("Parcelado CONTA X - BANCO Y", "CONTA X - BANCO Y"),
     ],
 )
 def test_strip_condition_prefix(texto, esperado):
