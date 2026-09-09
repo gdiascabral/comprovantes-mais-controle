@@ -66,10 +66,12 @@ _PASTAS_SO_DO_REPO = {
         "tem o cadastro; o app nunca as importa"),
     "ferramentas": (
         "ferramentas locais: a galeria fotografa as telas do app para "
-        "conferir o visual antes/depois de mexer nele, e a sonda pergunta "
-        "todo dia se os sistemas de terceiros ainda respondem. As duas rodam "
-        "fora do exe — uma à mão, a outra pelo Agendador de Tarefas — e o app "
-        "nunca as importa"),
+        "conferir o visual antes/depois de mexer nele, a sonda pergunta "
+        "todo dia se os sistemas de terceiros ainda respondem, e a sentinela "
+        "fotografa todo dia o inventário de rotas do front do ERP para avisar "
+        "quando o contrato mudou. As três rodam fora do exe — a galeria à "
+        "mão, as outras duas pelo Agendador de Tarefas — e o app nunca as "
+        "importa"),
 }
 
 #: Sempre entram, e não são código: a versão desta build, a trava do motor e o

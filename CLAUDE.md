@@ -1474,7 +1474,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   assinatura, mesmos chamadores, e o `ARQUIVO_DIAG` passou a sair de
   `util.pasta_base()`. O `ARQUIVO_LOG` (`log_anexos.csv`) ainda não — é o
   último caminho aqui calculado pela pasta do módulo.
-- `ferramentas/` — as duas ferramentas locais, **fora do `codigo.zip`** por
+- `ferramentas/` — as três ferramentas locais, **fora do `codigo.zip`** por
   `_PASTAS_SO_DO_REPO` (`tests/test_empacotamento.py`), o mesmo tratamento do
   `cnab240/ferramentas/` e do `nuvem/migrar.py`: o app nunca as importa.
   **`galeria.py`** monta as 12 telas num esqueleto FIEL — a mesma
@@ -1515,6 +1515,33 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   mão TLS, que prova que o nome resolve, que a porta atende e que o certificado
   vale, e a linha do log diz exatamente isso. Dizer menos e dizer verdade, em
   vez de alarmar todo dia sobre um sistema que está de pé.
+  **`sentinela_erp.py`** é a irmã da sonda e faz a pergunta que a sonda não
+  faz: a sonda prova que o ERP **responde**; a sentinela prova que o
+  **contrato não mudou**. Em 10/08/2026 o ERP respondeu 200 o dia inteiro
+  enquanto a tela `#/accounts` virava React — a sonda teria passado, e a
+  leitura de saldos quebrou num pagamento. O front do Mais Controle publica
+  esse contrato sem querer, em dois bundles JavaScript PÚBLICOS (o legado
+  AngularJS, com hash no nome que muda a cada build, e o React, de nome fixo):
+  dentro deles estão as rotas de API (`"baseUrl","/payable-installments"`), os
+  métodos que as chamam com verbo e caminho, as telas (`path:"/accounts"`), os
+  hosts de cada back-end, os comandos de pré-lançamento e o `buildNumber`.
+  Todo dia às 07:05 ela baixa os dois — GET público com o `user-agent` de
+  Chrome, **sem login, sem sessão e sem navegador**, e é por isso que pode
+  rodar com o dono trabalhando —, extrai esse inventário por expressão
+  regular, grava `sentinela/ultimo.json` mais uma cópia datada e compara com o
+  de ontem. O que SUMIU vem primeiro no `sentinela.ALERTA.txt`, porque rota
+  que sumiu é o que quebra o app; o que apareceu vem depois; hash ou
+  `buildNumber` que mudou sem o inventário mudar é build novo sem mudança de
+  contrato, e o alerta diz isso com essas palavras. Mesmas regras da sonda:
+  uma linha por rodada no `sentinela.log`, ALERTA apagado quando a rodada é
+  igual, código de saída 1 quando mudou ou não baixou, e a primeira rodada só
+  grava ("primeira fotografia"). Quando alarma, ela SUGERE rodar a sonda e
+  nunca a roda: logar no ERP é decisão de quem sabe se há alguém com sessão
+  aberta. A armadilha do desenho: extrator que deixa de casar não dá erro,
+  devolve lista vazia — e quem grita é a comparação, porque tudo o que havia
+  ontem terá "sumido". Por isso `tests/test_sentinela_erp.py` testa cada
+  expressão contra um trecho fictício no FORMATO do bundle: o formato é a
+  coisa medida.
 - `docs/` — o que não cabe neste arquivo, um documento por assunto.
   **`ERP-CLIENTES.md`**: o inventário de quem fala com o ERP, uma linha por
   consumidor com transporte, host, token, cabeçalhos, paginação e o que já
