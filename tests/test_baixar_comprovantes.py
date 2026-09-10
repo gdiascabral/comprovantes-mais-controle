@@ -488,6 +488,66 @@ def test_o_padrao_fica_ao_lado_do_app():
     assert cf.pasta_padrao().name == "Comprovantes"
 
 
+# -------------------------------------------- o layout do comprovante
+# Um comprovante ja baixado (Transferencia entre Contas, 06/08/2026) saiu com
+# a data, o titulo e a hora um em cima do outro, e o resto da folha vazio: o
+# CSS do HTML do Sicoob e referenciado por caminho RELATIVO, e abrir o arquivo
+# de fora do site (um arquivo solto em disco) nao resolve esse caminho -- o
+# texto chega, o layout que o organiza nao.
+
+def test_base_href_entra_dentro_do_head():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    html = "<html><head><title>x</title></head><body>y</body></html>"
+    saida = sb._com_base_href(html, base="https://exemplo.teste/")
+    assert '<base href="https://exemplo.teste/">' in saida
+    assert saida.index("<base") < saida.index("<title>")
+
+
+def test_base_href_cria_head_quando_falta():
+    """O `detalhar` do Sicoob pode devolver so `<html><body>...`, sem head
+    nenhum -- o `<base>` tem de nascer um, e ANTES do corpo."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    html = "<html><body>y</body></html>"
+    saida = sb._com_base_href(html, base="https://exemplo.teste/")
+    assert '<base href="https://exemplo.teste/">' in saida
+    assert saida.index("<base") < saida.index("<body>")
+
+
+def test_base_href_na_frente_quando_nao_ha_moldura():
+    """Sem `<html>` nem `<head>` -- so um fragmento --, o `<base>` entra na
+    frente: e o unico jeito de garantir que ele vale antes de qualquer CSS
+    referenciado no meio do fragmento."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    html = "<div>fragmento sem moldura nenhuma</div>"
+    saida = sb._com_base_href(html, base="https://exemplo.teste/")
+    assert saida.startswith('<base href="https://exemplo.teste/">')
+    assert "<div>fragmento" in saida
+
+
+def test_o_padrao_aponta_para_o_site_do_sicoob():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert sb.BASE_SICOOB == "https://ib.sicoob.com.br/sicoobnet/"
+
+
+def test_html_para_pdf_ancora_o_html_antes_de_gravar():
+    """`html_para_pdf` e "com tela" (abre aba, fala com CDP) e nao tem dublê
+    de navegador de proposito -- ver o cabecalho deste arquivo. O que da para
+    provar sem navegador e que ela PASSA pelo `_com_base_href` antes de
+    escrever o arquivo temporario, e nao que ela imprime certo."""
+    import inspect
+
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    fonte = inspect.getsource(sb.html_para_pdf)
+    assert "_com_base_href(html)" in fonte, (
+        "html_para_pdf parou de ancorar o HTML -- o comprovante volta a sair "
+        "com o layout quebrado (data/titulo/hora um em cima do outro)")
+
+
 # -------------------------------------------- o 400 do Sicoob, separado
 # Na primeira rodada de verdade, 6 das 13 contas responderam HTTP 400 -- e as
 # tres que funcionaram tinham exatamente UM comprovante cada. O Sicoob diz
