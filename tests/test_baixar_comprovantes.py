@@ -637,6 +637,217 @@ def test_a_navegacao_nao_recarrega_a_pagina():
     assert "location.hash" in sb.JS_IR_PARA
     assert ".goto(" not in fonte, (
         "voltou a usar goto: a SPA recarrega e a conta volta para a padrao")
+
+
+# --------------------------------------------------------------- o Pix do Sicoob
+# A tela de Comprovantes nao tem Pix -- e outra tela, com API propria. O
+# exemplo abaixo e o mesmo lido da Rede do navegador em 10/09/2026 (anonimizado:
+# nomes, CPF e CNPJ trocados -- o repositorio e publico).
+
+def _pix_sicoob(id_="E0000000000000000000000000000000",
+               nome_pagador="EMPRESA TESTE LTDA", cnpj_pagador="11222333000181",
+               nome_dest="Fulano de Tal", cpf_dest="12345678909",
+               valor="1208,36", estado="FINALIZADO_SUCESSO",
+               meio="CHAVE"):
+    return {
+        "id": id_,
+        "origem": {"nome": nome_pagador, "cpfCnpj": cnpj_pagador,
+                  "banco": {"NomeBanco": "COOPERATIVA DE CREDITO TESTE"}},
+        "destino": {"nome": nome_dest, "cpfCnpj": cpf_dest,
+                   "banco": {"NomeBanco": "BANCO DESTINO S.A."}},
+        "valor": valor,
+        "estado": estado,
+        "tipo": "DEBITO",
+        "atualizadoEm": "2026-09-08 17:57:30.37",
+        "criadoEm": "2026-09-08 17:57:29.63",
+        "meioIniciacaoPix": meio,
+    }
+
+
+def test_o_cnpj_do_pagador_sai_mascarado():
+    """`**.222.333/0001-**` -- os dois primeiros e os dois últimos dígitos
+    saem cobertos, como o próprio Sicoob mostra no comprovante."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert sb._mascarar_documento("11222333000181") == "**.222.333/0001-**"
+
+
+def test_o_cpf_do_destinatario_sai_mascarado():
+    """`***.456.789-**` -- os três primeiros e os dois últimos dígitos saem
+    cobertos."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert sb._mascarar_documento("12345678909") == "***.456.789-**"
+
+
+def test_documento_de_tamanho_estranho_nao_estoura():
+    """Nem 11 nem 14 dígitos: devolve como veio, em vez de recortar índice
+    que não existe."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert sb._mascarar_documento("123") == "123"
+    assert sb._mascarar_documento("") == ""
+
+
+def test_a_hora_sai_do_carimbo_do_banco():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert sb._hora_pix("2026-09-08 17:57:29.63") == "17:57:29"
+    assert sb._hora_pix("") == ""
+    assert sb._hora_pix("sem hora nenhuma") == ""
+
+
+def test_campos_do_pix_sicoob_saem_do_json_sem_abrir_pdf():
+    """Ao contrário do Sicoob comum (`do_sicoob`), aqui não há PDF para
+    abrir: pagador, destinatário, valor e data já vêm estruturados."""
+    from baixar_comprovantes import nome_final as nf
+
+    campos = nf.do_sicoob_pix(_pix_sicoob())
+    assert campos["valor"] == "1.208,36"
+    assert campos["data"] == "08/09/2026"
+    assert campos["dest"] == "Fulano de Tal"
+    assert campos["desc"] is None, (
+        "o JSON do Pix do Sicoob não traz descrição -- inventar uma aqui "
+        "esconderia que o Anexar vai casar só por valor/data/destinatário")
+    assert campos["pag"] is None
+
+
+def test_valor_com_milhar_tambem_converte():
+    """`"90.000,00"` (formato BR completo) -- não é só o caso sem ponto que
+    o exemplo medido trouxe."""
+    from baixar_comprovantes import nome_final as nf
+
+    assert nf._numero_brl("90.000,00") == 90000.0
+    assert nf._numero_brl("1208,36") == 1208.36
+    assert nf._numero_brl("") is None
+    assert nf._numero_brl(None) is None
+
+
+def test_destinatario_ausente_nao_quebra_o_nome():
+    """`destino` vazio (o Sicoob não garante o campo) não pode estourar --
+    é melhor um nome incompleto do que um lote interrompido."""
+    from baixar_comprovantes import nome_final as nf
+
+    campos = nf.do_sicoob_pix({"valor": "10,00"})
+    assert campos["dest"] is None
+
+
+def test_nome_provisorio_do_pix_sicoob():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    nome = sb.nome_do_pix_sicoob(_pix_sicoob(id_="E04388688202609082057lGq"))
+    assert nome == "SICOOB-PIX_2026-09-08_1208-36_E04388688202609082057lGq.pdf"
+
+
+def test_o_comprovante_de_pix_nao_depende_de_css_externo():
+    """Ao contrário do comprovante dos Comprovantes comuns (ver
+    `test_html_para_pdf_ancora_o_html_antes_de_gravar`), este é montado
+    inteiro aqui dentro -- não carrega nada do site do Sicoob, então não
+    precisa de `<base href>` para ficar legível."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    saida = sb.html_do_comprovante_pix(_pix_sicoob())
+    assert "<base" not in saida
+    assert "<link" not in saida and "<script src" not in saida
+
+
+def test_o_comprovante_de_pix_mostra_os_campos_certos():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    saida = sb.html_do_comprovante_pix(_pix_sicoob())
+    assert "R$ 1.208,36" in saida
+    assert "Fulano de Tal" in saida
+    assert "**.222.333/0001-**" in saida       # o CNPJ do pagador, mascarado
+    assert "***.456.789-**" in saida           # o CPF do destinatário, mascarado
+    assert "11222333000181" not in saida, "o CNPJ cru vazou sem máscara"
+    assert "12345678909" not in saida, "o CPF cru vazou sem máscara"
+    assert "Pix via chave" in saida
+    assert "Finalizado com sucesso" in saida
+
+
+def test_o_comprovante_de_pix_escapa_nome_com_caractere_especial():
+    """Nome de empresa/pessoa pode trazer `&`/`<`/`>` (razão social com
+    "E" comercial, por exemplo) -- sem escapar, isso quebraria o HTML em
+    vez de aparecer como texto."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    saida = sb.html_do_comprovante_pix(
+        _pix_sicoob(nome_dest="A & B <Comercio> Ltda"))
+    assert "A &amp; B &lt;Comercio&gt; Ltda" in saida
+    assert "<Comercio>" not in saida
+
+
+def test_meio_de_iniciacao_desconhecido_nao_quebra():
+    """Um valor de `meioIniciacaoPix` que a tabela não conhece cai num
+    rótulo genérico, em vez de estourar ou mostrar `None`."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    saida = sb.html_do_comprovante_pix(_pix_sicoob(meio="NOVO_TIPO"))
+    assert "Pix enviado" in saida
+
+
+def test_a_chave_do_pix_sicoob_nao_colide_com_a_dos_comprovantes_comuns():
+    """Mesmo id, mesma conta: `sicoob` e `sicoob_pix` são POPULAÇÕES
+    diferentes (comprovante comum vs. Pix), e não podem compartilhar marca
+    de "já baixado" -- um dos dois nunca seria baixado."""
+    from baixar_comprovantes import ja_baixados as jb
+
+    assert (jb.chave("sicoob_pix", "X", "50.019-4")
+           != jb.chave("sicoob", "X", "50.019-4"))
+
+
+def test_o_resumo_mostra_o_pix_junto():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    r = sb.Resultado(conta="X", no_periodo=2, pix_no_periodo=3,
+                     baixados=[pathlib.Path(f"{i}.pdf") for i in range(5)])
+    assert "5 de 5 comprovantes" in r.resumo()
+    assert "(+3 de Pix)" in r.resumo()
+
+
+def test_sem_pix_o_resumo_nao_inventa_a_coluna():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    r = sb.Resultado(conta="X", no_periodo=2,
+                     baixados=[pathlib.Path("a.pdf"), pathlib.Path("b.pdf")])
+    assert "Pix" not in r.resumo()
+
+
+def test_pix_e_tentado_mesmo_sem_comprovantes_comuns():
+    """Antes desta rodada, `if not no_periodo: return resultado` e
+    `if not pendentes: return resultado` paravam a função inteira -- e
+    junto com ela, o Pix, que é tela e API separadas e não deixa de existir
+    só porque a de Comprovantes não teve nada no período."""
+    import inspect
+
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    fonte = inspect.getsource(sb.baixar_conta)
+    assert "if not no_periodo" not in fonte, (
+        "voltou o return antecipado -- isso pula o Pix quando não há "
+        "Comprovantes comuns no período")
+    assert "if not pendentes" not in fonte, (
+        "voltou o return antecipado -- isso pula o Pix quando os "
+        "Comprovantes comuns já tinham sido baixados antes")
+    assert "_baixar_pix_da_conta(" in fonte
+
+
+def test_a_falha_do_pix_nunca_vira_motivo_da_conta():
+    """`_baixar_pix_da_conta` não pode levantar: uma falha nela — seletor
+    que mudou, filtro que não abriu — não pode apagar um resultado de
+    Comprovantes que já deu certo."""
+    import inspect
+
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    fonte = inspect.getsource(sb._baixar_pix_da_conta)
+    assert "except Exception" in fonte
+    assert "resultado.motivo =" not in fonte, (
+        "_baixar_pix_da_conta não pode escrever em resultado.motivo -- "
+        "quem decide isso é só a conta (SicoobFalhou/Exception de "
+        "baixar_conta), nunca o passe de Pix")
+
+
 import pathlib
 
 
