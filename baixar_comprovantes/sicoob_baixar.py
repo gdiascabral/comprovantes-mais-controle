@@ -299,6 +299,42 @@ def detalhar(page, itens: list) -> list:
     return saida
 
 
+#: De onde o HTML do comprovante foi tirado. `_com_base_href` ancora nele
+#: qualquer caminho relativo (CSS, fonte, logo) que o HTML carregue — sem
+#: isso o layout não resolve quando o arquivo é aberto de fora do site (ver
+#: `_com_base_href`).
+BASE_SICOOB = "https://ib.sicoob.com.br/sicoobnet/"
+
+
+def _com_base_href(html: str, base: str = BASE_SICOOB) -> str:
+    """Insere `<base href="...">` no HTML antes de imprimir.
+
+    **Por que isto existe.** Um comprovante já baixado (Transferência entre
+    Contas, 06/08/2026) sai com a data, o título e a hora um em cima do
+    outro, e o resto da folha vazio — o layout que separaria essas três
+    coisas em colunas não chega a carregar. O `detalhar` devolve um
+    fragmento de página do Sicoob, cujo CSS é referenciado por caminho
+    RELATIVO (`/sicoobnet/...`); `html_para_pdf` grava esse HTML num arquivo
+    solto e abre por `file://`, onde um caminho relativo não aponta para
+    lugar nenhum — o texto chega, o estilo que o organiza não. Um `<base
+    href>` resolve isso sem tocar no HTML do banco: todo caminho relativo
+    passa a resolver contra o site de origem, mesmo a página sendo aberta de
+    um arquivo local.
+
+    Pura de propósito — sem navegador — para o efeito valer prova por teste,
+    e não só pela leitura de um PDF."""
+    tag = f'<base href="{base}">'
+    com_head = re.sub(r"(<head[^>]*>)", r"\1" + tag, html, count=1,
+                      flags=re.IGNORECASE)
+    if com_head != html:
+        return com_head
+    com_html = re.sub(r"(<html[^>]*>)", r"\1<head>" + tag + "</head>", html,
+                      count=1, flags=re.IGNORECASE)
+    if com_html != html:
+        return com_html
+    return tag + html
+
+
 def html_para_pdf(ctx, html: str, destino: Path) -> Path:
     """Vira PDF sem passar pelo diálogo de impressão.
 
@@ -308,12 +344,14 @@ def html_para_pdf(ctx, html: str, destino: Path) -> Path:
     A saída é a mesma do `extratos_sicoob/sicoob_client.py`: abrir o HTML numa
     aba e imprimir por `Page.printToPDF`. (`page.pdf()` do Playwright recusa
     navegador com janela, e este roda com janela por causa do login manual.)
-    """
+
+    Antes de gravar, `_com_base_href` ancora o HTML no site do Sicoob — sem
+    isso o CSS do comprovante não carrega (ver o docstring dela)."""
     if not html.strip():
         raise SicoobFalhou("o comprovante veio vazio")
     with tempfile.TemporaryDirectory(prefix="sicoob_comp_") as tmp:
         arquivo = Path(tmp) / "comprovante.html"
-        arquivo.write_text(html, encoding="utf-8")
+        arquivo.write_text(_com_base_href(html), encoding="utf-8")
         aba = ctx.new_page()
         try:
             aba.goto(arquivo.as_uri(), wait_until="load")
