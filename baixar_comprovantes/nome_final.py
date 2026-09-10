@@ -172,6 +172,40 @@ def do_sicoob(item: dict, texto: str) -> dict:
             "pag": None}
 
 
+def _numero_brl(texto) -> float | None:
+    """`"1208,36"` ou `"90.000,00"` -> `float`. Formato brasileiro (ponto
+    separa milhar, vírgula separa decimal) -- é como o campo `valor` do Pix
+    do Sicoob chega, ao contrário do Inter, que manda número puro."""
+    bruto = str(texto or "").strip()
+    if not bruto:
+        return None
+    try:
+        return float(bruto.replace(".", "").replace(",", ".")
+                     if "," in bruto else bruto)
+    except ValueError:
+        return None
+
+
+def do_sicoob_pix(item: dict) -> dict:
+    """Os campos de um Pix enviado do Sicoob, direto do JSON do
+    `/api/pix/lancamentos/<id>/comprovante` -- ao contrário do Sicoob comum
+    (`do_sicoob`), aqui não é preciso abrir PDF nenhum: o banco entrega
+    pagador, destinatário, valor e data já estruturados, e é a PRÓPRIA
+    ausência de um comprovante pronto (HTML ou PDF) que torna isso possível
+    -- ver `sicoob_baixar.html_do_comprovante_pix`.
+
+    Sem descrição: o JSON do Pix do Sicoob não traz nenhum campo de texto
+    livre equivalente ao `descricaoPagamento`/`campoLivre` do Inter."""
+    destino = item.get("destino") or {}
+    valor = _numero_brl(item.get("valor"))
+    return {"valor": brl(valor) if valor is not None else "",
+            "data": _data_do_item(item.get("criadoEm")
+                                  or item.get("atualizadoEm")),
+            "desc": None,
+            "dest": (destino.get("nome") or "").strip() or None,
+            "pag": None}
+
+
 def _data_do_item(texto: str) -> str:
     """`2026-08-24 00:00:00.0` -> `24/08/2026`."""
     achado = re.match(r"\s*(\d{4})-(\d{2})-(\d{2})", str(texto or ""))

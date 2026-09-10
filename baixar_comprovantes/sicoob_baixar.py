@@ -23,10 +23,38 @@ recusa navegador com janela.
 `Resultado` próprio e a falha de uma não derruba as outras: quem chama percorre
 a fila e reentra se precisar, como o `sicoob_baixar.baixar_mes` dos extratos já
 faz.
-"""
+
+**A tela de Comprovantes não tem Pix.** É outra tela do Sicoob
+(`#/pix/extrato-pix`), com API própria (`/api/pix/lancamentos`) — confirmado
+lendo a Rede do navegador em 10/09/2026 (não achado antes por dedução: o
+Sicoob não documenta nada disso). Ela devolve, para o Pix, o que o Comprovantes
+devolve para o resto: uma lista e um detalhe por item — só que o detalhe vem
+em **JSON estruturado**, não em HTML pronto (`detalhar_pix`), porque nem a
+PRÓPRIA tela do Sicoob tem um comprovante de Pix pré-montado: ela monta a
+modal "Comprovante Pix" no navegador a partir desses mesmos campos, e o botão
+de imprimir dela é o mesmo `window.print()` de sempre — confirmado clicando
+"Exportar" (baixa Excel, não PDF) e "Emitir comprovantes" (abre a mesma tela
+de impressão). `html_do_comprovante_pix` reconstrói esse layout à mão, o que
+é mais simples que o caminho do Comprovantes comum: não precisa abrir a modal
+na tela nem lidar com o CSS do banco.
+
+**A lista de Pix é pedida pela PRÓPRIA tela, não por URL montada à mão.**
+`numCooperativa`, `numCpfCnpj`, `ispbCooperativa` e o fuso exato de
+`dataInicial`/`dataFinal` só existem dentro da sessão da conta aberta —
+chutar um deles arrisca pedir o Pix de OUTRA conta sem nada denunciar, a
+mesma razão pela qual `ir_para_comprovantes` não usa `goto`. `listar_pix`
+preenche o filtro de período de verdade e lê a resposta que a tela recebeu.
+
+**Ainda não provado contra o Sicoob de verdade.** O que está confirmado por
+leitura de rede: a URL da lista, o formato do detalhe e a ausência de PDF
+nativo. O que NÃO foi confirmado ao vivo: os seletores do formulário de
+período (`_selecionar_periodo`, `_preencher_data_pix`) — precisam de uma
+primeira rodada real antes de se confiar neles, como o resto do que depende
+do navegador neste arquivo."""
 from __future__ import annotations
 
 import base64
+import html
 import re
 import tempfile
 import unicodedata
@@ -68,6 +96,7 @@ class Resultado:
     baixados: list[Path] = field(default_factory=list)
     falhas: list[str] = field(default_factory=list)
     no_periodo: int = 0
+    pix_no_periodo: int = 0               # Pix é tela e API separadas
     motivo: str = ""                     # "" = deu certo
 
     @property
@@ -77,10 +106,12 @@ class Resultado:
     def resumo(self) -> str:
         if self.motivo:
             return self.motivo
-        if not self.no_periodo:
+        total = self.no_periodo + self.pix_no_periodo
+        if not total:
             return "sem comprovantes no período"
         falhou = f" · {len(self.falhas)} falharam" if self.falhas else ""
-        return f"{len(self.baixados)} de {self.no_periodo} comprovantes{falhou}"
+        pix = f" (+{self.pix_no_periodo} de Pix)" if self.pix_no_periodo else ""
+        return f"{len(self.baixados)} de {total} comprovantes{pix}{falhou}"
 
 
 # --------------------------------------------------------------- sem tela
@@ -343,6 +374,239 @@ def nome_livre(pasta: Path, nome: str) -> Path:
     return destino
 
 
+# --------------------------------------------------------------------- Pix
+# A tela de Comprovantes não tem Pix -- é outra tela (#/pix/extrato-pix), com
+# API própria. Ver o docstring do módulo para o que já foi confirmado lendo a
+# Rede do navegador, e o que ainda depende de uma primeira rodada real.
+
+_MEIO_INICIACAO_PIX = {"CHAVE": "Pix via chave", "QR_CODE": "Pix via QR Code",
+                       "MANUAL": "Pix manual"}
+
+
+def ir_para_pix(page) -> None:
+    """Vai à tela de Pix sem recarregar a SPA — mesmo cuidado do
+    `ir_para_comprovantes`: `page.goto` com `#` reinicia a aplicação na
+    conta PADRÃO, jogando fora a troca de conta que acabou de ser feita."""
+    page.evaluate(JS_IR_PARA, ["#/pix/extrato-pix"])
+    page.wait_for_timeout(2500)
+
+
+def _selecionar_periodo_pix(page) -> None:
+    """Liga o rádio "Período" — a tela nasce em "Selecione o mês"."""
+    page.get_by_text("Período", exact=False).first.click()
+    page.wait_for_timeout(300)
+
+
+def _preencher_data_pix(page, rotulo: str, valor: str) -> None:
+    """Preenche um campo de data pelo rótulo visível, tecla a tecla — o
+    mesmo cuidado do `aplicar_filtro_datas` do Inter: campo de data reage
+    mal a um valor posto de uma vez só (`fill`)."""
+    campo = page.get_by_label(rotulo, exact=False)
+    if campo.count() == 0:
+        # Nem todo campo de data do Sicoob tem <label> associado por
+        # for/id -- cai para o input mais próximo do texto do rótulo.
+        campo = page.locator(f"text={rotulo}").locator(
+            "xpath=following::input[1]")
+    campo = campo.first
+    campo.click()
+    campo.press("Control+a")
+    campo.press("Delete")
+    campo.type(valor, delay=40)
+
+
+def listar_pix(page, inicio: str, fim: str, tempo: float = 15.0) -> list:
+    """Os Pix enviados no período, pedidos pela PRÓPRIA tela de Pix.
+
+    Não monta a URL da API à mão: `numCooperativa`, `numCpfCnpj` e o formato
+    exato de `dataInicial`/`dataFinal` só a tela sabe montar — dependem da
+    sessão e do fuso do navegador, e chutar um deles arrisca pedir o Pix de
+    OUTRA conta sem nada denunciar. Em vez disso, preenche o filtro de
+    verdade (Período, Inicial, Final) e lê a resposta que a própria tela
+    recebeu ao clicar Consultar."""
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+    ir_para_pix(page)
+    _selecionar_periodo_pix(page)
+    _preencher_data_pix(page, "Inicial", inicio)
+    _preencher_data_pix(page, "Final", fim)
+    botao = page.locator("button", has_text="Consultar").first
+    if botao.count() == 0:
+        raise SicoobFalhou("não achei o botão Consultar na tela de Pix")
+    try:
+        with page.expect_response(
+                lambda r: "/api/pix/lancamentos" in r.url
+                         and "/comprovante" not in r.url,
+                timeout=tempo * 1000) as resposta:
+            botao.click()
+        corpo = resposta.value.json()
+    except PlaywrightTimeout:
+        raise SicoobFalhou(
+            f"a tela de Pix não respondeu ao filtro em {tempo:.0f}s")
+    return (corpo or {}).get("lancamentos") or []
+
+
+def detalhar_pix(page, item: dict) -> dict:
+    """O detalhe de UM Pix — pagador, destinatário, valor, data, id.
+
+    Diferente do `detalhar` dos Comprovantes comuns: aqui o Sicoob devolve
+    JSON estruturado, não HTML pronto — é a própria tela quem MONTA o
+    comprovante a partir dele, e é o que permite montar o PDF sem abrir a
+    modal na tela (ver `html_do_comprovante_pix`)."""
+    id_ = item.get("id") or ""
+    url = f"{BASE}/api/pix/lancamentos/{id_}/comprovante?isDevolucaoPix=false"
+    resposta = page.evaluate(_JS_API, [url, "GET", None])
+    if resposta.get("erro"):
+        dito = (resposta.get("corpo") or "").strip()
+        raise SicoobFalhou("o comprovante de Pix falhou: " + resposta["erro"]
+                           + (f" — {dito[:160]}" if dito else ""))
+    return resposta.get("dado") or {}
+
+
+def _mascarar_documento(doc: str) -> str:
+    """Mascara CPF/CNPJ como o próprio Sicoob mostra no comprovante —
+    `***.865.821-**` (CPF) ou `**.750.602/0001-**` (CNPJ): os dígitos das
+    pontas saem cobertos, e o miolo — que sozinho não identifica ninguém —
+    continua visível. Medido no comprovante de 10/09/2026."""
+    digitos = re.sub(r"\D", "", doc or "")
+    if len(digitos) == 14:                                   # CNPJ
+        return f"**.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-**"
+    if len(digitos) == 11:                                   # CPF
+        return f"***.{digitos[3:6]}.{digitos[6:9]}-**"
+    return doc or ""
+
+
+def _hora_pix(texto: str) -> str:
+    """`"2026-09-08 17:57:29.63"` -> `"17:57:29"`. "" quando não há hora."""
+    achado = re.search(r"\d{2}:\d{2}:\d{2}", str(texto or ""))
+    return achado.group(0) if achado else ""
+
+
+def nome_do_pix_sicoob(item: dict) -> str:
+    """`SICOOB-PIX_2026-09-08_1208-36_E04388688...gfJ0.pdf` — provisório,
+    até `nome_final.renomear` trocar pelo padrão do Renomear."""
+    campos = nome_final.do_sicoob_pix(item)
+    dia = "-".join(reversed(campos["data"].split("/"))) if campos["data"] \
+        else "0000-00-00"
+    valor = (campos["valor"] or "0,00").replace(".", "").replace(",", "-")
+    ident = re.sub(r"[^A-Za-z0-9]+", "-",
+                   str(item.get("id") or "")).strip("-")[:24]
+    return f"SICOOB-PIX_{dia}_{valor}_{ident}.pdf".replace("__", "_")
+
+
+def html_do_comprovante_pix(detalhe: dict) -> str:
+    """Monta o comprovante de Pix no formato que a tela mostra — o Sicoob
+    não entrega HTML pronto para esta tela (ao contrário dos Comprovantes
+    comuns): só os dados. `detalhar_pix` traz o JSON; esta função desenha.
+
+    HTML e CSS embutidos, sem NENHUM recurso externo — ao contrário do
+    comprovante dos Comprovantes comuns, este nunca depende do `<base
+    href>` (`_com_base_href`) para ficar legível, porque não referencia CSS
+    nenhum de fora."""
+    origem = detalhe.get("origem") or {}
+    destino = detalhe.get("destino") or {}
+    banco_origem = (origem.get("banco") or {}).get("NomeBanco", "")
+    banco_destino = (destino.get("banco") or {}).get("NomeBanco", "")
+    campos = nome_final.do_sicoob_pix(detalhe)
+    quando = detalhe.get("atualizadoEm") or detalhe.get("criadoEm") or ""
+    data_pagamento = f"{campos['data']} {_hora_pix(quando)}".strip()
+    situacao = ("Finalizado com sucesso"
+               if detalhe.get("estado") == "FINALIZADO_SUCESSO"
+               else detalhe.get("estado") or "")
+    tipo_pagamento = _MEIO_INICIACAO_PIX.get(detalhe.get("meioIniciacaoPix"),
+                                             "Pix enviado")
+
+    def linha(rotulo, valor):
+        return (f'<tr><td class="rotulo">{html.escape(rotulo)}</td>'
+               f'<td>{html.escape(str(valor))}</td></tr>')
+
+    def secao(titulo):
+        return f'<tr><td class="secao" colspan="2">{html.escape(titulo)}</td></tr>'
+
+    linhas = "".join((
+        linha("Tipo Pagamento", tipo_pagamento),
+        secao("Pagador"),
+        linha("Instituição", banco_origem),
+        linha("Nome", origem.get("nome") or ""),
+        linha("CPF/CNPJ", _mascarar_documento(origem.get("cpfCnpj") or "")),
+        secao("Destinatário"),
+        linha("Nome", destino.get("nome") or ""),
+        linha("CPF/CNPJ", _mascarar_documento(destino.get("cpfCnpj") or "")),
+        linha("Instituição/Banco", banco_destino),
+        secao("Dados do pagamento"),
+        linha("Data do pagamento", data_pagamento),
+        linha("Valor", f"R$ {campos['valor']}" if campos["valor"] else ""),
+        linha("ID Transação", detalhe.get("id") or ""),
+        linha("Situação do pagamento", situacao),
+    ))
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><style>
+body {{ font-family: Arial, Helvetica, sans-serif; font-size: 12px;
+       color: #222; margin: 24px; }}
+h1 {{ font-size: 13px; margin: 0 0 2px; }}
+h2 {{ font-size: 13px; margin: 12px 0 10px; }}
+table {{ border-collapse: collapse; width: 100%; }}
+td {{ padding: 3px 6px 3px 0; vertical-align: top; }}
+td.rotulo {{ font-weight: bold; width: 220px; }}
+td.secao {{ font-weight: bold; padding-top: 12px; }}
+.rodape {{ margin-top: 24px; font-size: 11px; color: #555; }}
+</style></head><body>
+<h1>SICOOB - SISTEMA DE COOPERATIVAS DE CRÉDITO DO BRASIL</h1>
+<h1>SISBR - SISTEMA DE INFORMÁTICA DO SICOOB</h1>
+<h2>COMPROVANTE DE EFETIVAÇÃO DE PAGAMENTO PIX</h2>
+<table>{linhas}</table>
+<div class="rodape">OUVIDORIA SICOOB : 08007250996</div>
+</body></html>"""
+
+
+def _baixar_pix_da_conta(cli, numero: str, inicio: str, fim: str,
+                         destino: Path, resultado: Resultado, *,
+                         log=print, registro=None) -> None:
+    """A parte de Pix de `baixar_conta`, separada para poder falhar SOZINHA.
+
+    A tela de Pix é nova e não tem, ainda, a mesma prova ao vivo que os
+    Comprovantes comuns já têm (ver o docstring do módulo): se ela falhar —
+    seletor que mudou, filtro que não abriu —, os Comprovantes já baixados
+    continuam valendo. Por isso esta função NUNCA levanta: falhar aqui vira
+    aviso no Registro, nunca `resultado.motivo`."""
+    try:
+        itens = listar_pix(cli.page, inicio, fim)
+    except Exception as e:                                   # noqa: BLE001
+        log(f"    Pix: {e}")
+        return
+    resultado.pix_no_periodo = len(itens)
+    if not itens:
+        return
+
+    pendentes = []
+    for item in itens:
+        marca = ja_baixados.chave("sicoob_pix", item.get("id"), numero)
+        if registro is not None and registro.tem(marca):
+            continue
+        pendentes.append(item)
+    if len(pendentes) < len(itens):
+        log(f"    Pix: {len(itens) - len(pendentes)} já baixado(s) antes")
+    if not pendentes:
+        return
+
+    log(f"  Pix — {numero}: {len(pendentes)} para baixar")
+    for item in pendentes:
+        ident = item.get("id") or "?"
+        try:
+            detalhe = detalhar_pix(cli.page, item)
+            corpo_html = html_do_comprovante_pix(detalhe)
+            alvo = nome_livre(destino, nome_do_pix_sicoob(detalhe))
+            html_para_pdf(cli.ctx, corpo_html, alvo)
+            alvo = nome_final.renomear(alvo, nome_final.do_sicoob_pix(detalhe))
+            resultado.baixados.append(alvo)
+            if registro is not None:
+                registro.anotar(
+                    ja_baixados.chave("sicoob_pix", ident, numero), alvo)
+            log(f"    {alvo.name}")
+        except Exception as e:                               # noqa: BLE001
+            resultado.falhas.append(str(ident))
+            log(f"    Pix {ident} falhou ({e}) — seguindo")
+
+
 def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
                  log=print, registro=None) -> Resultado:
     """Os comprovantes de UMA conta, com ela já acessível pelo login aberto."""
@@ -370,41 +634,51 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
         no_periodo = [i for i in itens if dentro_do_periodo(i, inicio, fim)]
         resultado.no_periodo = len(no_periodo)
         log(f"  {numero}: {len(itens)} efetivados · {len(no_periodo)} no período")
-        if not no_periodo:
-            return resultado
 
-        pendentes = []
-        for item in no_periodo:
-            marca = ja_baixados.chave("sicoob", item.get("idAgendamento"),
-                                      numero)
-            if registro is not None and registro.tem(marca):
-                continue
-            pendentes.append(item)
-        if len(pendentes) < len(no_periodo):
-            log(f"    {len(no_periodo) - len(pendentes)} já baixado(s) antes")
-        if not pendentes:
-            return resultado
+        # `if no_periodo:` -- e não um `return` antecipado como este bloco
+        # tinha antes: sem comprovante NENHUM aqui não quer dizer que não há
+        # Pix, e o Pix precisa continuar sendo tentado logo abaixo.
+        if no_periodo:
+            pendentes = []
+            for item in no_periodo:
+                marca = ja_baixados.chave("sicoob", item.get("idAgendamento"),
+                                          numero)
+                if registro is not None and registro.tem(marca):
+                    continue
+                pendentes.append(item)
+            if len(pendentes) < len(no_periodo):
+                log(f"    {len(no_periodo) - len(pendentes)} já baixado(s) antes")
 
-        for item, html in detalhar(cli.page, pendentes):
-            try:
-                alvo = nome_livre(destino, nome_do_comprovante(item, numero))
-                html_para_pdf(cli.ctx, html, alvo)
-                # O favorecido só existe DENTRO do comprovante — a lista do
-                # Sicoob não o traz. Por isso aqui o PDF é lido, e no Inter
-                # não: lá o JSON já tem tudo.
-                alvo = nome_final.renomear(
-                    alvo, nome_final.do_sicoob(item,
-                                               nome_final.texto_do_pdf(alvo)))
-                resultado.baixados.append(alvo)
-                if registro is not None:
-                    registro.anotar(
-                        ja_baixados.chave("sicoob", item.get("idAgendamento"),
-                                          numero), alvo)
-                log(f"    {alvo.name}")
-            except Exception as e:                           # noqa: BLE001
-                ident = item.get("idAgendamento") or "?"
-                resultado.falhas.append(str(ident))
-                log(f"    {ident} falhou ({e}) — seguindo")
+            for item, html in detalhar(cli.page, pendentes):
+                try:
+                    alvo = nome_livre(destino, nome_do_comprovante(item, numero))
+                    html_para_pdf(cli.ctx, html, alvo)
+                    # O favorecido só existe DENTRO do comprovante — a lista
+                    # do Sicoob não o traz. Por isso aqui o PDF é lido, e no
+                    # Inter não: lá o JSON já tem tudo.
+                    alvo = nome_final.renomear(
+                        alvo, nome_final.do_sicoob(item,
+                                                   nome_final.texto_do_pdf(alvo)))
+                    resultado.baixados.append(alvo)
+                    if registro is not None:
+                        registro.anotar(
+                            ja_baixados.chave("sicoob",
+                                              item.get("idAgendamento"),
+                                              numero), alvo)
+                    log(f"    {alvo.name}")
+                except Exception as e:                       # noqa: BLE001
+                    ident = item.get("idAgendamento") or "?"
+                    resultado.falhas.append(str(ident))
+                    log(f"    {ident} falhou ({e}) — seguindo")
+
+        # A conta certa já foi confirmada aberta (as duas checagens de cima
+        # passaram) -- é a partir daqui que também vale pedir o Pix dela.
+        # `_baixar_pix_da_conta` nunca levanta: uma falha nela não pode
+        # apagar um resultado de Comprovantes que já deu certo, então ela
+        # fica DENTRO deste `try` só para herdar o `cli`/`destino` já em
+        # mãos, não para ser pega pelos `except` abaixo.
+        _baixar_pix_da_conta(cli, numero, inicio, fim, destino, resultado,
+                             log=log, registro=registro)
     except SicoobFalhou as e:
         resultado.motivo = str(e)
     except Exception as e:                                   # noqa: BLE001
