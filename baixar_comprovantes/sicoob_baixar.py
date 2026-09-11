@@ -861,9 +861,9 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
                 try:
                     alvo = nome_livre(destino, nome_do_comprovante(item, numero))
                     html_para_pdf(cli.ctx, html, alvo)
-                    # O favorecido só existe DENTRO do comprovante — a lista
-                    # do Sicoob não o traz. Por isso aqui o PDF é lido, e no
-                    # Inter não: lá o JSON já tem tudo.
+                    # O favorecido e a Observação só existem DENTRO do
+                    # comprovante — a lista do Sicoob não os traz. Por isso
+                    # aqui o PDF é lido, e no Inter não: lá o JSON já tem tudo.
                     alvo = nome_final.renomear(
                         alvo, nome_final.do_sicoob(item,
                                                    nome_final.texto_do_pdf(alvo)))
