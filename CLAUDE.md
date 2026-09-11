@@ -1171,6 +1171,32 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   de `submeter()`: quem cancela ali não pode ter consumido a sessão do ERP.
   Anexo que é foto só é baixado quando é aviso "PAGAR PARA" — baixar toda
   imagem de todo título seria pagar OCR por nada.
+  **As duas listas de conferência são UMA tabela cada (11/09/2026).** A
+  confirmação "Lançamentos do dia" (`_janela_confirmar`) e a conferência da
+  remessa (`_janela_remessa`) eram um bloco de widgets por lançamento dentro
+  de um Canvas rolável, o mesmo desenho que travava a janela de dúvidas do
+  Anexar: medido com a janela fora da tela e dados fictícios, 300 lançamentos
+  davam 2.802 e 3.589 widgets, 5,4 s e 6,5 s antes de a janela aparecer — e
+  a rolagem ainda arrastava essas janelas nativas todas. Hoje cada uma é um
+  `Treeview`, os mesmos widgets com 3 ou 300 linhas. O que o Treeview não
+  faz foi resolvido assim: a marca é o símbolo ☑/☐ da primeira coluna
+  (clique nela ou Espaço — na confirmação várias linhas de uma vez, na
+  remessa uma por vez, de propósito, para um "já saiu na remessa nº…" nunca
+  ir junto sem ser lido); a conta é uma linha em negrito em cima das suas
+  (por isso a tabela não ordena pelo cabeçalho); a coluna POR ONDE tem a
+  largura mínima MEDIDA no texto mais comprido, pelo `font measure` do Tcl,
+  porque o Treeview corta sem aviso e ali mora a linha digitável; e a linha
+  selecionada se repete embaixo, inteira, com o destino em fonte de largura
+  fixa. O reembolso e o reenvio, que moravam na 2ª e na 3ª altura da célula,
+  sobem para a SITUAÇÃO. A regra saiu da tela e tem teste
+  (`tests/test_listas_de_conferencia.py`): `grupos_para_confirmar`,
+  `resumo_da_confirmacao`, `nao_confirmados` e `estado_na_confirmacao` aqui;
+  `nsa_previstos`, `resumo_da_conferencia` e `aplicar_marcas` no
+  `remessa_dia`. A janela de contas novas da abertura
+  (`nuvem/contas_novas_dialogo.py`) virou lista + editor pelo mesmo motivo:
+  21 contas custavam 2,2 s. **Lista que cresce com o dado é UMA Treeview,
+  nunca N widgets num Canvas** — as listas de contas desta aba e do
+  Relatório Mensal ficaram no Canvas porque medem 0,1 s com 40 contas.
   **"Contas prontas para remessa" é UMA LINHA no cartão e a TABELA numa
   janela — e quem decidiu isso foi a régua do Registro.** O PR #55 pôs aqui um
   cartão com `Treeview` de oito linhas, e ele empurrou o Registro para fora da
