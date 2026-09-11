@@ -16,6 +16,13 @@ desligada, o caminho é o de antes: a grade raspada na página emprestada.
 A regra de negócio inteira vive em `conciliacao/` e não sabe que existe
 interface — esta aba só escolhe o período, empresta a página e mostra o que
 voltou.
+
+**"Verificar contas novas"** (11/09/2026) lê as contas do ERP, mostra as que
+não têm linha no painel — a mesma lista do aviso "conta nova no ERP fora do
+painel" do resumo — e inclui as marcadas no `MODELO.xlsx`, no `mapping.yaml`
+e no `config.yaml` de uma vez (`conciliacao/painel_novas.py`). Custa um login
+no ERP, como a coleta, e por isso entra na mesma fila do navegador; a escrita
+dos três arquivos é local e roda na thread da interface, depois da janela.
 """
 from __future__ import annotations
 
@@ -127,6 +134,13 @@ class ConciliacaoFrame(ttk.Frame):
         acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         btns = ttk.Frame(acao, style="Fundo.TFrame")
         btns.pack(side="right", padx=px((16, 0)))
+        # Não é passo do fluxo do dia: é uma janela que se abre quando o
+        # resumo acusa conta nova — por isso mora na barra de ações, como o
+        # "Painel do dia" da Remessa/Retorno, e não no cabeçalho.
+        self.b_contas = widgets.Botao(btns, "🔎  Verificar contas novas",
+                                      papel="neutro",
+                                      command=self.verificar_contas)
+        self.b_contas.pack(side="left", padx=px((0, 8)))
         self.b_stop = widgets.Botao(btns, "⏹  Parar", papel="perigo",
                                     state="disabled", command=self._parar_click)
         self.b_stop.pack(side="left")
@@ -166,8 +180,13 @@ class ConciliacaoFrame(ttk.Frame):
                     self.lbl.configure(text=valor)
                 elif tipo == "ocupado":
                     (self.pb.start(12) if valor else self.pb.stop())
+                elif tipo == "contas_novas":
+                    # A janela é modal e espera resposta: fora do `_drain`,
+                    # para a bomba de mensagens seguir andando embaixo dela.
+                    self.after_idle(lambda v=valor: self._janela_contas_novas(*v))
                 elif tipo == "botoes":
                     self.b1.configure(state=valor)
+                    self.b_contas.configure(state=valor)
                     self.b_stop.configure(
                         state="disabled" if valor == "normal" else "normal")
                 elif tipo == "pronto":
@@ -306,6 +325,104 @@ class ConciliacaoFrame(ttk.Frame):
         self.q.put(("ocupado", True))
         self.worker = self.anx.submeter("Controle de saldo pgtos", self._t_gerar,
                                         periodo, dona=self)
+
+    # ------------------------------------------------- contas fora do painel
+    def verificar_contas(self):
+        """Lista as contas do ERP sem linha no painel e deixa incluí-las.
+
+        Custa um login no ERP, como a coleta — por isso entra na mesma fila
+        do navegador e recusa com outra aba trabalhando, ANTES de desabilitar
+        qualquer botão (ver `gerar`)."""
+        if self.worker and not self.worker.done():
+            return
+        if self.anx.avisar_se_ocupado("a verificação de contas novas"):
+            return
+        self._parar.clear()
+        self.q.put(("botoes", "disabled"))
+        self.q.put(("ocupado", True))
+        self.worker = self.anx.submeter("Verificar contas novas",
+                                        self._t_verificar, dona=self)
+
+    def _t_verificar(self):
+        from conciliacao.erp.api import SessaoApi
+        from conciliacao.painel_novas import contas_fora_do_painel
+
+        try:
+            base = _pasta_base()
+            cfg = load_config(base / "config.yaml")
+            mapping = AccountMapping.load(base / "mapping.yaml")
+            self._log("")
+            self._log("Procurando contas do Mais Controle fora do painel...")
+            self.q.put(("status", "Lendo as contas do Mais Controle..."))
+            sessao = SessaoApi.logar(cfg, log=self._log)
+            contas = sessao.contas(ativas=True)
+            self._revalidar_navegador_aberto()
+            if not contas:
+                raise ErpError("a API não devolveu nenhuma conta bancária.")
+            fora = contas_fora_do_painel(contas, mapping)
+            self._log(f"  {len(contas)} conta(s) ativa(s) no ERP, "
+                      f"{len(fora)} fora do painel")
+            self.q.put(("status", f"{len(fora)} conta(s) fora do painel."))
+            self.q.put(("contas_novas",
+                        (fora, contas, cfg.planilha.ultima_linha + 1)))
+        except ERROS_ESPERADOS as e:
+            self._log(f"Não consegui ler as contas: {e}")
+            self.q.put(("status", "Não li as contas — veja o motivo acima."))
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"[!] {e}")
+            self.q.put(("status", "A verificação parou por um erro."))
+        finally:
+            self.q.put(("ocupado", False))
+            self.q.put(("botoes", "normal"))
+
+    def _janela_contas_novas(self, fora, contas, primeira_linha):
+        """Na thread da interface: pergunta quais entram e grava.
+
+        Gravar é disco local (os três arquivos da pasta do app), sem ERP e
+        sem rede — por isso não volta para a fila do navegador."""
+        from conciliacao import contas_novas_janela, painel_novas
+
+        if not fora:
+            messagebox.showinfo(
+                "Contas novas",
+                "Todas as contas ativas do Mais Controle já estão no painel "
+                "(ou na lista de ignoradas do mapping.yaml).", parent=self)
+            return
+        base = _pasta_base()
+        try:
+            mapping = AccountMapping.load(base / "mapping.yaml")
+        except MappingError as e:
+            self._log(f"Não consegui ler o mapping.yaml: {e}")
+            return
+        escolhas = contas_novas_janela.perguntar(
+            self.winfo_toplevel(), fora,
+            lambda marcadas: painel_novas.problemas_da_inclusao(marcadas, mapping),
+            primeira_linha=primeira_linha)
+        if not escolhas:
+            self._log("  nenhuma conta incluída.")
+            return
+        try:
+            res = painel_novas.incluir_no_painel(base, escolhas, contas)
+        except painel_novas.InclusaoRecusada as e:
+            self._log("")
+            self._log("NENHUMA CONTA FOI INCLUÍDA")
+            self._log(str(e))
+            self.lbl.configure(text="As contas não entraram no painel — veja o "
+                                    "motivo no Registro.")
+            messagebox.showwarning("Contas não incluídas", str(e), parent=self)
+            return
+        self._log("")
+        self._log(f"Incluí {len(res.linhas)} conta(s) no painel:")
+        for linha, rotulo in res.linhas:
+            self._log(f"  linha {linha}: {rotulo}")
+        self._log("Cópia do MODELO.xlsx, mapping.yaml e config.yaml de antes: "
+                  f"{str(res.copia).replace(chr(92), '/')}")
+        self._log("Quem aporta em cada uma é a aba Regras do MODELO.xlsx — sem "
+                  "regra, o resumo diz '(sem aportador na aba Regras)'.")
+        self._log("Rode 'Coletar e gerar o painel' de novo para o painel de "
+                  "hoje sair com elas.")
+        self.lbl.configure(text=f"{len(res.linhas)} conta(s) incluída(s) no "
+                                "painel.")
 
     def _revalidar_navegador_aberto(self):
         """Cortesia para a próxima aba, no caminho pela API.
