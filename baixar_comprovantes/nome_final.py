@@ -14,8 +14,15 @@ esquecer a passada.
 **De onde vem cada campo, e por que não é do PDF.** O Inter entrega valor,
 data, descrição, favorecido e pagador no JSON da API — ler o PDF para
 descobrir o que já se tem seria trabalho e risco de graça. O Sicoob entrega
-valor e data, mas NÃO o favorecido: ele só existe dentro do comprovante, e é
-por isso (e só por isso) que o caminho do Sicoob passa pelo documento.
+valor e data, mas NÃO o favorecido nem a descrição: os dois só existem dentro
+do comprovante (a descrição é a linha "Observação"), e é por isso (e só por
+isso) que o caminho do Sicoob passa pelo documento.
+
+A descrição vale mais que o favorecido porque é ela que diz A QUE o pagamento
+se refere (obra, lote, NF, OC), e é por ela que o nome fica no padrão
+VALOR - DESCRIÇÃO - DATA. Até 11/09/2026 o Sicoob só lia o favorecido, e 121
+dos 144 comprovantes comuns baixados em 10 e 11/09 saíram com o nome de quem
+recebeu, com a descrição escrita no PDF.
 """
 from __future__ import annotations
 
@@ -127,6 +134,86 @@ def favorecido_do_comprovante(texto: str) -> str:
     return ""
 
 
+# "Observação" é como o Sicoob chama o texto livre que quem pagou escreveu;
+# "Descrição" entra junto porque é o mesmo campo com outro nome, e custa nada
+# aceitar os dois, com ou sem ":". O rótulo pode vir sem valor nenhum na mesma
+# linha — ver `descricao_do_comprovante`.
+_ROTULO_DA_DESCRICAO = re.compile(
+    r"(?:Observa[çc][ãa]o|Descri[çc][ãa]o)(?:\s*:|\s|$)\s*(.*)", re.I)
+
+# Os outros campos do comprovante do Sicoob, lidos nos 146 comprovantes
+# comuns de 10 e 11/09/2026. Servem para uma pergunta só: a linha vizinha de
+# uma "Observação" sem valor é CONTINUAÇÃO do texto ou já é o campo seguinte?
+# Sem a lista, "Autenticação 9f3e..." virava descrição. Sem `re.I` de
+# propósito: o rótulo vem em caixa mista e a descrição quase sempre em
+# maiúsculas, e é isso que separa "Conta 1.234-5 / ..." de "CONTA DE LUZ".
+_ROTULOS_DO_SICOOB = re.compile(
+    r"(?:Autentica[çc][ãa]o|Situa[çc][ãa]o|OUVIDORIA|Observa[çc][ãa]o|"
+    r"Descri[çc][ãa]o|Valor(?:es)?|Pago|Datas?|Pagamento|Realizado|"
+    r"Vencimento|Documento|Juros|Desconto|Outr[oa]s|C[óo]digo|Conv[êe]nio|"
+    r"Nome|CPF|N[úu]mero|Cooperativa|Conta|Cliente|Linha|Nosso|"
+    r"Institui[çc][ãa]o|Tipo|Pagador|Benefici[áa]rio|Natureza|D[ée]bito|"
+    r"Cr[ée]dito)\b")
+
+# Largura da coluna da Observação no comprovante de CONVÊNIO, em caracteres.
+# O Sicoob corta o texto nessa largura sem respeitar palavra — medido nos 7
+# comprovantes de 10 e 11/09 em que o texto passou de uma linha: a de cima
+# tinha sempre 48, e o corte caía no meio de "ITBI" e de "AGO2025".
+_LARGURA_DA_OBSERVACAO = 48
+
+
+def _e_rotulo(linha: str) -> bool:
+    return bool(_ROTULOS_DO_SICOOB.match(linha))
+
+
+def descricao_do_comprovante(texto: str) -> str:
+    """O que quem pagou escreveu na "Observação" do comprovante do Sicoob.
+
+    Quase sempre vem na mesma linha do rótulo
+    (`Observação TB 19 QD 51 LT 17 NF 8529 OC 6608`). Quando o texto passa da
+    largura da coluna, o pdfplumber põe o rótulo SOZINHO no meio das duas
+    metades — a primeira na linha de cima, o resto na de baixo:
+
+        MARQUES DE ABREU QD 12 LT 3 45 B1 UC 1234567-8 R
+        Observação
+        F ago 2026
+
+    Foram os 7 casos que pareciam "Observação vazia" em 10 e 11/09. Ler só a
+    linha de baixo daria "F ago 2026" como descrição, pior que o favorecido.
+    Por isso, com o rótulo sozinho: a linha de baixo é o valor se não for
+    outro campo; e a de cima só entra quando a de baixo também entrou, porque
+    uma metade de cima sem a de baixo não é um desenho que o comprovante faça.
+
+    As metades se emendam SEM espaço quando a de cima enche a coluna (o corte
+    é por caractere) e com espaço quando não enche.
+
+    "" quando não há Observação, ou quando ela está vazia — aí o nome cai no
+    favorecido, como antes. Os espaços são normalizados e nada mais: tirar
+    rótulo que sobrou e separar código colado é trabalho do Separar e
+    Renomear, que recebe este texto em `nome_arquivo`.
+    """
+    linhas = [l.strip() for l in (texto or "").splitlines()]
+
+    for i, linha in enumerate(linhas):
+        achado = _ROTULO_DA_DESCRICAO.match(linha)
+        if not achado:
+            continue
+        valor = achado.group(1).strip()
+        if not valor:
+            acima = linhas[i - 1] if i > 0 else ""
+            abaixo = linhas[i + 1] if i + 1 < len(linhas) else ""
+            if abaixo and not _e_rotulo(abaixo):
+                valor = abaixo
+                if acima and not _e_rotulo(acima):
+                    cola = ("" if len(acima) >= _LARGURA_DA_OBSERVACAO
+                            else " ")
+                    valor = acima + cola + abaixo
+        valor = " ".join(valor.split())
+        if valor:
+            return valor
+    return ""
+
+
 def data_do_comprovante(texto: str) -> str:
     """A data do PAGAMENTO, e não a da impressão.
 
@@ -158,16 +245,21 @@ def texto_do_pdf(caminho) -> str:
 
 
 def do_sicoob(item: dict, texto: str) -> dict:
-    """Valor e data do JSON (certos); favorecido do documento (só lá existe).
+    """Valor e data do JSON (certos); descrição e favorecido do documento (só
+    lá existem).
 
     A data também é conferida no documento: o JSON traz `dataLancamento`, e o
     comprovante traz a do pagamento — quando as duas existem, vale a do
-    documento, que é o que o banco afirma no papel."""
+    documento, que é o que o banco afirma no papel.
+
+    Com a descrição preenchida, é ela que vai para o meio do nome; sem ela,
+    o `nome_arquivo` cai no favorecido. A precedência é do Separar e
+    Renomear, e não daqui."""
     valor = item.get("valorLancamento")
     return {"valor": brl(valor) or _valor_de_texto(valor),
             "data": data_do_comprovante(texto)
             or _data_do_item(item.get("dataLancamento")),
-            "desc": None,
+            "desc": descricao_do_comprovante(texto) or None,
             "dest": favorecido_do_comprovante(texto) or None,
             "pag": None}
 

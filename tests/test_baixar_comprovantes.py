@@ -1320,6 +1320,114 @@ def test_o_sicoob_junta_o_json_com_o_documento():
     assert nf.nomear(campos) == "1244,91 - ALLSEG SEGURADORA S A - 03-08"
 
 
+# ------------------------------------ a Observação do Sicoob vira a descrição
+# Em 10 e 11/09/2026, 121 dos 144 comprovantes comuns do Sicoob saíram com o
+# nome de quem recebeu, com a descrição escrita no PDF: `do_sicoob` punha
+# `desc` = None fixo. O dono exige VALOR - DESCRIÇÃO - DATA.
+
+def test_a_observacao_na_mesma_linha_e_a_descricao():
+    from baixar_comprovantes import nome_final as nf
+
+    texto = linhas("Situação Efetivado",
+                   "Observação OBRA TESTE QD 99 LT 01 NF 123 OC 456",
+                   "Autenticação 0a1b2c3d-0000-0000-0000-000000000000",
+                   "OUVIDORIA SICOOB: 0000000000")
+    assert nf.descricao_do_comprovante(texto) == \
+        "OBRA TESTE QD 99 LT 01 NF 123 OC 456"
+
+
+def test_descricao_com_ou_sem_dois_pontos_e_espacos_normalizados():
+    from baixar_comprovantes import nome_final as nf
+
+    assert nf.descricao_do_comprovante(
+        linhas("Descrição: OBRA TESTE   QD 99  LT 01")) == "OBRA TESTE QD 99 LT 01"
+    assert nf.descricao_do_comprovante(
+        linhas("Observacao: NF 123 OC 456")) == "NF 123 OC 456"
+    assert nf.descricao_do_comprovante(
+        linhas("Descricao OBRA TESTE")) == "OBRA TESTE"
+
+
+def test_rotulo_sozinho_com_o_valor_na_linha_de_baixo():
+    from baixar_comprovantes import nome_final as nf
+
+    texto = linhas("Situação Efetivado",
+                   "Observação",
+                   "OBRA TESTE QD 99 LT 01",
+                   "Autenticação 0a1b2c3d-0000-0000-0000-000000000000")
+    assert nf.descricao_do_comprovante(texto) == "OBRA TESTE QD 99 LT 01"
+
+
+def test_observacao_quebrada_em_volta_do_rotulo_se_emenda():
+    """No comprovante de convênio o Sicoob corta o texto em 48 caracteres,
+    no meio da palavra, e o pdfplumber poe o rotulo SOZINHO entre as duas
+    metades. Ler so a de baixo daria "IS ITBI CASA 1" -- foram os 7 casos que
+    pareciam "Observacao vazia" em 10 e 11/09."""
+    from baixar_comprovantes import nome_final as nf
+
+    completo = "OBRA TESTE QD 99 LT 01 DEVOLUCAO DE VALORES A MAIS ITBI CASA 1"
+    acima, abaixo = completo[:48], completo[48:]
+    assert not acima.endswith(" ") and not abaixo.startswith(" ")
+    texto = linhas("Autenticação 0A1B2C3D-0000-0000-0000-000000000000",
+                   acima,
+                   "Observação",
+                   abaixo,
+                   "OUVIDORIA SICOOB: 0000000000")
+    assert nf.descricao_do_comprovante(texto) == completo
+
+    # metade de cima que NAO enche a coluna: o corte foi em espaco
+    texto = linhas("Autenticação 0A1B2C3D", "OBRA TESTE QD 99", "Observação",
+                   "LT 01 NF 123", "OUVIDORIA SICOOB: 0000000000")
+    assert nf.descricao_do_comprovante(texto) == "OBRA TESTE QD 99 LT 01 NF 123"
+
+
+def test_observacao_vazia_nao_vira_descricao():
+    """Nem a linha de baixo nem a de cima podem ser outro campo: sem essa
+    conferencia, "Autenticacao 0a1b..." viraria o nome do arquivo."""
+    from baixar_comprovantes import nome_final as nf
+
+    assert nf.descricao_do_comprovante(linhas(
+        "Situação Efetivado", "Observação",
+        "Autenticação 0a1b2c3d-0000-0000-0000-000000000000")) == ""
+    assert nf.descricao_do_comprovante(linhas(
+        "Autenticação 0A1B2C3D", "Observação:",
+        "OUVIDORIA SICOOB: 0000000000")) == ""
+    assert nf.descricao_do_comprovante(linhas("Observação")) == ""
+
+
+def test_transferencia_sem_observacao_fica_no_favorecido():
+    from baixar_comprovantes import nome_final as nf
+
+    item = {"valorLancamento": 500.0, "dataLancamento": "2026-08-03 00:00:00.0"}
+    texto = linhas("Natureza TRANSF.INTERC",
+                   "Débito",
+                   "Conta 00.000-0 / EMPRESA PAGADORA EXEMPLO",
+                   "Crédito",
+                   "Conta 0.000-0 / FORNECEDOR EXEMPLO",
+                   "Data do lançamento 03/08/2026")
+    assert nf.descricao_do_comprovante(texto) == ""
+    campos = nf.do_sicoob(item, texto)
+    assert campos["desc"] is None
+    assert nf.nomear(campos) == "500,00 - FORNECEDOR EXEMPLO - 03-08"
+
+
+def test_o_nome_do_sicoob_sai_valor_descricao_data():
+    """O caso dos 121: favorecido E Observacao no mesmo comprovante. Vale a
+    descricao, e o favorecido so entra quando ela falta."""
+    from baixar_comprovantes import nome_final as nf
+
+    item = {"valorLancamento": 1244.91, "dataLancamento": "2026-08-03 00:00:00.0"}
+    texto = linhas("Beneficiário",
+                   "Nome/Razão Social FORNECEDOR EXEMPLO",
+                   "Pagamento 03/08/2026",
+                   "Situação Efetivado",
+                   "Observação OBRA TESTE QD 99 LT 01 NF 123 OC 456",
+                   "Autenticação 0a1b2c3d-0000-0000-0000-000000000000")
+    campos = nf.do_sicoob(item, texto)
+    assert campos["dest"] == "FORNECEDOR EXEMPLO"
+    assert nf.nomear(campos) == \
+        "1244,91 - OBRA TESTE QD 99 LT 01 NF 123 OC 456 - 03-08"
+
+
 def test_sem_nome_montavel_o_arquivo_fica_onde_esta(tmp_path):
     """Falhar no nome nunca pode perder comprovante: com o nome de origem ele
     e achavel; sumido, nao."""
