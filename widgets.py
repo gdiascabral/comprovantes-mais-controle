@@ -1417,10 +1417,17 @@ def _tem_o_que_rolar(widget) -> bool:
 
 
 def _area_de(widget) -> "AreaRolavel | None":
-    """A área rolável mais interna que contém `widget`, se houver."""
+    """A área rolável mais interna que contém `widget`, se houver.
+
+    Para no `Toplevel`. No tkinter o `master` de uma janela é quem a CRIOU, e
+    o calendário do `CampoData` tem como pai lógico um campo que mora num
+    cartão da área: sem esta parada, a roda sobre o calendário rolaria a aba
+    de trás, e o foco dentro de um diálogo mexeria na rolagem dela."""
     while widget is not None:
         if isinstance(widget, AreaRolavel):
             return widget
+        if isinstance(widget, tk.Toplevel):
+            return None
         widget = getattr(widget, "master", None)
     return None
 
@@ -1451,6 +1458,8 @@ def _roda_na_area(ev):
         w = sob
     interno = None
     while w is not None:
+        if isinstance(w, tk.Toplevel):
+            return None             # diálogo cuida da própria roda (`_area_de`)
         if isinstance(w, AreaRolavel):
             if interno is not None:
                 interno.yview_scroll(passos_da_roda(ev.delta), "units")

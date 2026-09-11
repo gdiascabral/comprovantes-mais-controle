@@ -234,6 +234,30 @@ def test_foco_que_vem_de_clique_nao_rola_a_pagina(tela):
     assert a["corpo"].canvas.canvasy(0) == antes
 
 
+def test_janela_aberta_de_dentro_da_area_nao_mexe_na_aba(tela):
+    """No tkinter o `master` de uma janela é quem a criou: o calendário do
+    `CampoData` tem um cartão da área como pai lógico. A roda e o foco dentro
+    dessa janela não podem rolar a aba que ficou atrás dela."""
+    a = _aba(tela, cartoes=4, campos=8)
+    corpo = a["corpo"]
+    top = tk.Toplevel(a["cartoes"][0])
+    top.withdraw()
+    try:
+        rotulo = ttk.Label(top, text="calendário")
+        rotulo.pack()
+        assert widgets._area_de(rotulo) is None
+        antes = corpo.canvas.canvasy(0)
+        evento = type("Ev", (), {"widget": rotulo, "delta": -120,
+                                 "x_root": -1, "y_root": -1})()
+        widgets._roda_na_area(evento)
+        widgets._foco_anterior["clique"] = 0.0
+        widgets._foco_na_area(type("Ev", (), {"widget": rotulo})())
+        _assentar(tela)
+        assert corpo.canvas.canvasy(0) == antes
+    finally:
+        top.destroy()
+
+
 # -------------------------------------------------------- os controles do Registro
 def test_ampliar_e_recolher_o_registro(tela):
     a = _aba(tela, cartoes=1, campos=1)
