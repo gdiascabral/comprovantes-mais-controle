@@ -947,29 +947,27 @@ class _Localizador:
     """Grava o que foi pedido e o que foi feito, sem navegador.
 
     As datas "destravam" depois de `pagina.destrava_no_clique` cliques no
-    rádio (pela bolinha ou pelo JS) -- é o sinal que a tela real dá."""
+    rádio (de mouse ou pelo DOM) -- é o sinal que a tela real dá."""
 
     def __init__(self, pagina, seletor):
         self.pagina, self.seletor = pagina, seletor
         self.registro = pagina.registro
         self.first = self
 
-    def locator(self, sub):
-        return _Localizador(self.pagina, f"{self.seletor} >> {sub}")
-
     def count(self):
-        return self.pagina.contagens.get(self.seletor, 1)
+        return 1
 
-    def click(self):
+    def click(self, timeout=None):
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+        if self.pagina.mouse_nao_alcanca:
+            raise PlaywrightTimeout("element is not visible")
         self.registro.append(("click", self.seletor))
         self.pagina.cliques += 1
 
-    def evaluate(self, _js):
+    def evaluate(self, _js, timeout=None):
         self.registro.append(("evaluate", self.seletor))
         self.pagina.cliques += 1
-
-    def scroll_into_view_if_needed(self):
-        pass
 
     def wait_for(self, timeout=None):
         from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -985,61 +983,77 @@ class _Localizador:
 
 
 class _PaginaDePix:
-    def __init__(self, destrava_no_clique=1):
+    def __init__(self, destrava_no_clique=1, mouse_nao_alcanca=False):
         self.registro = []
-        self.contagens = {}
         self.cliques = 0
         self.destrava_no_clique = destrava_no_clique
+        self.mouse_nao_alcanca = mouse_nao_alcanca
 
     def locator(self, seletor):
         self.registro.append(("locator", seletor))
         return _Localizador(self, seletor)
 
+    def evaluate(self, _js):
+        self.registro.append(("retrato",))
+        return {"rota": "#/pix/extrato-pix", "dataInicial": "desabilitado"}
+
     def wait_for_timeout(self, _ms):
         pass
 
 
-def test_o_periodo_e_ligado_pela_bolinha_e_nao_pelo_input_escondido():
+def test_o_periodo_e_ligado_pela_caixa_do_primeng():
     """O rádio `value="2"` é "Período"; o `value="1"` é "Selecione o mês", e
-    com ele os campos de data nascem desabilitados. O `input` fica escondido
-    atrás do `span.checkmark`: clicar nele esperou 45s em todas as contas da
-    rodada de 11/09/2026 ("element is not visible")."""
+    com ele os campos de data nascem desabilitados. É um `p-radiobutton`: o
+    `input` fica em `ui-helper-hidden-accessible` e quem escuta o clique é a
+    `div.ui-radiobutton-box` (HTML real copiado do console em 11/09/2026)."""
     from baixar_comprovantes import sicoob_baixar as sb
 
     pagina = _PaginaDePix()
     sb._selecionar_periodo_pix(pagina)
-    bolinha = f"{sb.SEL_PERIODO_PIX} >> {sb._CHECKMARK_DO_RADIO}"
-    assert ("click", bolinha) in pagina.registro
+    assert pagina.registro[1:2] == [("click", sb.SEL_CAIXA_PERIODO_PIX)] or (
+        ("click", sb.SEL_CAIXA_PERIODO_PIX) in pagina.registro)
     assert ("click", sb.SEL_PERIODO_PIX) not in pagina.registro
-    assert "checkmark" in sb._CHECKMARK_DO_RADIO
-    assert "ib-sicoob-input-radio" in sb._CHECKMARK_DO_RADIO
+    assert "ui-radiobutton-box" in sb.SEL_CAIXA_PERIODO_PIX
+    assert "radioConsultaIntervalo" in sb.SEL_CAIXA_PERIODO_PIX
 
 
-def test_sem_bolinha_o_periodo_vai_pelo_clique_nativo():
+def test_a_caixa_nunca_mira_o_selecione_o_mes():
+    """A v2.0.192 podia acertar a bolinha do rádio vizinho, que já vem
+    marcado: clicar nele não muda nada e as datas continuam travadas."""
     from baixar_comprovantes import sicoob_baixar as sb
 
-    pagina = _PaginaDePix()
-    pagina.contagens[f"{sb.SEL_PERIODO_PIX} >> {sb._CHECKMARK_DO_RADIO}"] = 0
+    assert 'value="1"' not in sb.SEL_CAIXA_PERIODO_PIX
+    assert "radioConsultaPeriodo" not in sb.SEL_CAIXA_PERIODO_PIX
+
+
+def test_caixa_fora_do_alcance_do_mouse_vai_pelo_clique_do_dom():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pagina = _PaginaDePix(mouse_nao_alcanca=True)
     sb._selecionar_periodo_pix(pagina)
-    assert ("evaluate", sb.SEL_PERIODO_PIX) in pagina.registro
+    assert ("evaluate", sb.SEL_CAIXA_PERIODO_PIX) in pagina.registro
 
 
-def test_bolinha_que_nao_destrava_as_datas_tenta_o_clique_nativo():
+def test_clique_que_nao_destrava_as_datas_tenta_o_proximo_jeito():
     """Clicar no lugar errado deste componente não dá erro e não marca nada:
     quem prova que marcou é a data destravar."""
     from baixar_comprovantes import sicoob_baixar as sb
 
-    pagina = _PaginaDePix(destrava_no_clique=2)
+    pagina = _PaginaDePix(destrava_no_clique=3)
     sb._selecionar_periodo_pix(pagina)
+    assert ("evaluate", sb.SEL_CAIXA_PERIODO_PIX) in pagina.registro
     assert ("evaluate", sb.SEL_PERIODO_PIX) in pagina.registro
 
 
-def test_periodo_que_nao_marca_desiste_com_motivo_e_sem_esperar_45s():
+def test_periodo_que_nao_marca_desiste_com_motivo_e_deixa_o_retrato():
     from baixar_comprovantes import sicoob_baixar as sb
 
     pagina = _PaginaDePix(destrava_no_clique=99)
     with pytest.raises(sb.SicoobFalhou, match="Período"):
         sb._selecionar_periodo_pix(pagina)
+    assert ("retrato",) in pagina.registro, (
+        "sem o retrato no diagnostico.log, a próxima correção volta a "
+        "depender de print")
 
 
 @pytest.mark.parametrize("campo", ["dataInicial", "dataFinal"])
