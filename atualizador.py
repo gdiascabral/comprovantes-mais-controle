@@ -17,6 +17,18 @@ ou a que o `travar_versao.txt` mandou buscar. Perguntar de novo ao
 `/releases/latest` nessa hora era pegar o exe de OUTRA release; ver
 `_url_do_exe` e `_oferecer_motor_novo`.
 
+**A verificação de release saiu da frente da janela (04/09/2026).** Até aqui
+a abertura esperava, em SÉRIE e antes de qualquer tela: a API do GitHub (até
+5 s), o download do `codigo.zip` e a troca da pasta. Hoje `preparar_codigo`
+só faz trabalho LOCAL — põe no lugar o que a abertura anterior deixou pronto
+em `codigo_nova` (`aplicar_pendente`) — e o download acontece numa thread
+solta, enquanto a pessoa trabalha; quem chama de novo o `aplicar_pendente` é o
+`motor.py`, na SAÍDA do app. O código novo passa a valer na abertura seguinte
+à liberação, como sempre valeu — só que sem cobrar a rede de quem está
+abrindo. **Com `travar_versao.txt` continua tudo na hora**: a trava é ato
+deliberado (testar uma prévia numa máquina, voltar de uma release ruim), e
+quem trava quer AQUELA versão agora, não na próxima abertura.
+
 **Como VOLTAR quando uma release sai ruim** — o app se atualiza sozinho, então
 a saída não pode exigir programador. Há duas, e as duas moram ao lado do exe:
 
@@ -31,6 +43,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -107,20 +120,33 @@ def _tag_travada(exe_dir: Path) -> str:
 
 # ------------------------------------------------------ pacote de código
 def preparar_codigo() -> Path:
-    """Atualiza (se der) e devolve a pasta de código que o motor deve usar."""
+    """Escolhe (e, com trava, atualiza) a pasta de código que o motor deve usar.
+
+    Sem trava, NADA aqui toca a rede: o que roda é `aplicar_pendente`, que é
+    renomear pasta, e o download da release vai para uma thread solta no fim
+    (`_iniciar_download_em_segundo_plano`). Ver o cabeçalho do módulo."""
     exe_dir = Path(sys.executable).parent
     pasta = exe_dir / "codigo"
     emb = Path(sys._MEIPASS) / "codigo_embutido"
     v_motor = _versao_motor()
+    travada = _tag_travada(exe_dir)
 
+    # O que a abertura anterior deixou pronto. Antes de tudo, e local: é
+    # renomear uma pasta, custa milissegundos e não depende de rede.
     try:
-        _atualizar_codigo(pasta, emb)
+        aplicar_pendente(pasta)
     except Exception as e:
-        _logar(f"não deu para verificar/baixar código novo: {str(e)[:150]}")
+        _logar(f"não deu para instalar o código pendente: {str(e)[:150]}")
+
+    if travada:
+        # Trava é ato deliberado: quem a escreveu quer AQUELA versão agora.
+        try:
+            _atualizar_codigo(pasta, emb)
+        except Exception as e:
+            _logar(f"não deu para verificar/baixar código novo: {str(e)[:150]}")
 
     v_local = _ler(pasta / "versao.txt")
     v_emb = _ler(emb / "versao.txt") or "v0.0.0"
-    travada = _tag_travada(exe_dir)
     if travada and v_local and _tupla(v_local) == _tupla(travada):
         # A trava manda mesmo sendo mais VELHA que a cópia de fábrica — e é
         # esse o caso que interessa: quem trava está voltando de uma release
@@ -143,7 +169,108 @@ def preparar_codigo() -> Path:
         if _oferecer_motor_novo(minimo, v_codigo or ""):
             sys.exit(0)                 # o .bat troca o exe e reabre
         fonte = emb                     # recusou/falhou: usa o código de fábrica
+
+    # Só agora, com a fonte decidida e sem `sys.exit` pela frente: a thread
+    # que baixa a release nova para a PRÓXIMA abertura. Depois do mínimo, de
+    # propósito — um processo que vai sair para trocar o exe não deve começar
+    # um download que a troca interrompe pela metade.
+    if not travada:
+        _iniciar_download_em_segundo_plano(pasta, emb)
     return fonte
+
+
+def _baixar_em_segundo_plano(pasta: Path, emb: Path) -> None:
+    """O corpo da thread: confere a release liberada e deixa o `codigo.zip`
+    novo em `codigo_nova`, sem instalar. Nunca levanta — falha de rede aqui é
+    uma linha no log, como sempre foi. Função de módulo (e não um `def` dentro
+    da que abre a thread) para o teste poder rodá-la NA HORA, sem thread."""
+    try:
+        _atualizar_codigo(pasta, emb, instalar=False)
+    except Exception as e:                                # noqa: BLE001
+        _logar(f"não deu para verificar/baixar código novo: {str(e)[:150]}")
+
+
+def _iniciar_download_em_segundo_plano(pasta: Path, emb: Path) -> None:
+    """Dispara `_baixar_em_segundo_plano` numa thread `daemon`.
+
+    Fechar o app não espera o download, e o que ficar pela metade é a pasta
+    `codigo_nova.parcial`, que a abertura seguinte apaga."""
+    threading.Thread(target=_baixar_em_segundo_plano, args=(pasta, emb),
+                     name="codigo-novo", daemon=True).start()
+
+
+#: Serializa a troca de pastas entre a thread do download (que renomeia
+#: `codigo_nova.parcial` → `codigo_nova`) e o `aplicar_pendente` da saída do
+#: app (que renomeia `codigo_nova` → `codigo`). Os dois são renomes curtos;
+#: sem a trava, um `rmtree` de um lado poderia apagar a pasta que o outro
+#: acabou de conferir e está prestes a instalar.
+_TROCA = threading.Lock()
+
+
+def _instalar(pasta: Path, nova: Path) -> None:
+    """`codigo` vira `codigo_velha`, `codigo_nova` vira `codigo`.
+
+    Falhando o segundo renome, o primeiro é DESFEITO: a alternativa é uma
+    máquina sem pasta `codigo` nenhuma, que abre no código de fábrica sem
+    ninguém saber por quê."""
+    velha = pasta.with_name("codigo_velha")
+    shutil.rmtree(velha, ignore_errors=True)
+    tinha = pasta.exists()
+    if tinha:
+        pasta.rename(velha)
+    try:
+        nova.rename(pasta)
+    except OSError:
+        if tinha:
+            velha.rename(pasta)
+        raise
+    # `codigo_velha` FICA. Apagá-la aqui era o que tornava a atualização
+    # irreversível: o app só anda para a frente, e quem descobre a release
+    # quebrada é quem está com o trabalho do dia na mão. São ~370 KB —
+    # menos que um comprovante em PDF — pelo direito de voltar sem rede.
+
+
+def aplicar_pendente(pasta: Path | None = None, *,
+                     limpar_parcial: bool = True) -> bool:
+    """Instala o `codigo_nova` que o segundo plano deixou. True se instalou.
+
+    Chamado DUAS vezes por execução: na abertura (antes de escolher a fonte)
+    e na saída (pelo `motor.py`, depois do `mainloop`). A mesma regra do
+    download decide se a pasta pendente vale: com trava, só a tag travada,
+    mesmo sendo mais velha; sem trava, só o que for MAIOR que o instalado.
+    Pendente que não vale é apagado — é resto de uma decisão que mudou (uma
+    trava escrita depois do download, por exemplo).
+
+    `limpar_parcial` apaga o resto de um download interrompido
+    (`codigo_nova.parcial`). Só na ABERTURA: na saída a thread do download
+    pode estar escrevendo ali, e apagar embaixo dela é o jeito de instalar,
+    na abertura seguinte, uma pasta pela metade."""
+    if pasta is None:
+        pasta = Path(sys.executable).parent / "codigo"
+    nova = pasta.with_name("codigo_nova")
+    if limpar_parcial:
+        shutil.rmtree(nova.with_name(nova.name + ".parcial"), ignore_errors=True)
+    with _TROCA:
+        if not nova.is_dir():
+            return False
+        v_nova = _ler(nova / "versao.txt") or ""
+        travada = _tag_travada(pasta.parent)
+        v_local = _ler(pasta / "versao.txt") or "v0"
+        inteira = (nova / "comprovantes_app.py").exists() and bool(_tupla(v_nova))
+        if travada:
+            vale = _tupla(v_nova) == _tupla(travada)
+        else:
+            vale = _tupla(v_nova) > _tupla(v_local)
+        if not (inteira and vale):
+            shutil.rmtree(nova, ignore_errors=True)
+            _logar(f"código pendente {v_nova or '(sem versão)'} descartado: "
+                   + ("incompleto" if not inteira else
+                      f"trava em {travada}" if travada else
+                      f"não é mais novo que {v_local}"))
+            return False
+        _instalar(pasta, nova)
+    _logar(f"código atualizado para {v_nova}" + (" (travado)" if travada else ""))
+    return True
 
 
 def _extrair_seguro(zip_path: Path, destino: Path):
@@ -163,8 +290,12 @@ def _extrair_seguro(zip_path: Path, destino: Path):
         z.extractall(destino_abs)
 
 
-def _atualizar_codigo(pasta: Path, emb: Path):
-    """Baixa e instala o codigo.zip da release que vale agora (rápido).
+def _atualizar_codigo(pasta: Path, emb: Path, instalar: bool = True):
+    """Baixa (e, por padrão, instala) o codigo.zip da release que vale agora.
+
+    `instalar=False` é o modo de SEGUNDO PLANO: baixa, extrai em `codigo_nova`
+    e para — quem a põe no lugar é `aplicar_pendente`, na saída do app ou na
+    abertura seguinte. É o que roda enquanto a pessoa trabalha, sem trava.
 
     Qual release vale depende de existir `travar_versao.txt` ao lado do exe
     (ver `_tag_travada`):
@@ -194,6 +325,9 @@ def _atualizar_codigo(pasta: Path, emb: Path):
         v_ref = _ler(pasta / "versao.txt") or _ler(emb / "versao.txt") or "v0"
         if _tupla(alvo) <= _tupla(v_ref):
             return
+    nova = pasta.with_name("codigo_nova")
+    if not instalar and _tupla(alvo) == _tupla(_ler(nova / "versao.txt") or "v0"):
+        return                          # já baixado; espera a próxima abertura
     # Pela TAG, e não por `latest/download`: é o mesmo endereço quando não há
     # trava, e é o único que sabe baixar uma release anterior quando há.
     url = f"https://github.com/{REPO}/releases/download/{alvo}/codigo.zip"
@@ -223,10 +357,13 @@ def _atualizar_codigo(pasta: Path, emb: Path):
                 f"codigo.zip veio incompleto ({tmp.stat().st_size} de "
                 f"{esperado} bytes)")
 
-        nova = pasta.with_name("codigo_nova")
-        shutil.rmtree(nova, ignore_errors=True)
+        # Extrai numa pasta `.parcial` e só então a renomeia: `codigo_nova` ou
+        # existe inteira ou não existe, e quem a instala (o `aplicar_pendente`
+        # da saída do app, ou o da abertura seguinte) nunca encontra metade.
+        parcial = nova.with_name(nova.name + ".parcial")
+        shutil.rmtree(parcial, ignore_errors=True)
         try:
-            _extrair_seguro(tmp, nova)
+            _extrair_seguro(tmp, parcial)
         except zipfile.BadZipFile as e:
             # Mensagem própria porque a causa provável não é adulteração: é
             # portal de wi-fi (ou página de erro do GitHub) respondendo 200 com
@@ -235,21 +372,21 @@ def _atualizar_codigo(pasta: Path, emb: Path):
             raise RuntimeError(
                 f"o codigo.zip baixado não é um zip válido ({e}) — resposta "
                 "de portal de wi-fi ou download corrompido") from e
-        if not (nova / "comprovantes_app.py").exists():
+        if not (parcial / "comprovantes_app.py").exists():
             raise RuntimeError("codigo.zip veio sem o app dentro")
 
-        velha = pasta.with_name("codigo_velha")
-        shutil.rmtree(velha, ignore_errors=True)
-        if pasta.exists():
-            pasta.rename(velha)
-        nova.rename(pasta)
-        # `codigo_velha` FICA. Apagá-la aqui era o que tornava a atualização
-        # irreversível: o app só anda para a frente, e quem descobre a release
-        # quebrada é quem está com o trabalho do dia na mão. São ~370 KB —
-        # menos que um comprovante em PDF — pelo direito de voltar sem rede.
+        with _TROCA:
+            shutil.rmtree(nova, ignore_errors=True)
+            parcial.rename(nova)
+            if instalar:
+                _instalar(pasta, nova)
     finally:
         shutil.rmtree(trabalho, ignore_errors=True)
-    _logar(f"código atualizado para {alvo}" + (" (travado)" if travada else ""))
+    if instalar:
+        _logar(f"código atualizado para {alvo}"
+               + (" (travado)" if travada else ""))
+    else:
+        _logar(f"código {alvo} baixado; entra na próxima abertura")
 
 
 # ------------------------------------------------- motor novo (download grande)

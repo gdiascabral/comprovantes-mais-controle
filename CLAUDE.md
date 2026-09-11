@@ -42,7 +42,11 @@ sem force-push e sem apagar a branch). O merge dispara o GitHub Actions
    código que chega depois de quem o importa é o app não abrindo na máquina de
    quem usa. Quem vigia a lista inteira é `tests/test_empacotamento.py`;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
-   com Tesseract OCR embutido) — e publica a Release `v2.0.<run_number>`
+   com Tesseract OCR embutido) — **ou reaproveita o da release anterior**
+   quando nenhum dos quatro arquivos do motor mudou (ver "o exe é
+   reaproveitado", abaixo), roda o **`--autoteste`** do exe que vai sair (o
+   app importado dentro da stdlib podada, no lugar do exe de fumaça de antes)
+   e publica a Release `v2.0.<run_number>`
    **como PRÉVIA** (`prerelease: true`), com o exe + codigo.zip, nos **dois**
    repositórios: o de código e o de artefatos
    (`gdiascabral/comprovantes-releases`, a constante `REPO` do
@@ -104,9 +108,18 @@ seguinte, em laço, até a segunda troca cair sobre o onefile da primeira
 release do código e um motor que não satisfaz o mínimo não chega a ser baixado.
 
 O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
-`atualizador.py`) e **código** (o resto). Ao abrir, o app baixa só o
-`codigo.zip` novo (segundos, sem perguntar) e roda com ele — o da release
-**liberada**. Portanto:
+`atualizador.py`) e **código** (o resto). **Ao abrir, o app não espera a
+rede** (04/09/2026): ele põe no lugar o `codigo.zip` que a abertura anterior
+deixou baixado em `codigo_nova` (`atualizador.aplicar_pendente`, renomear
+pasta, milissegundos) e abre; a conferência da release **liberada** e o
+download do zip rodam numa thread solta enquanto a pessoa trabalha, e o que
+chegar é instalado na SAÍDA do app (`motor.principal`, depois do `mainloop`)
+— ou na abertura seguinte, se o app for morto. Até então a abertura pagava, em
+série e antes de qualquer tela, a API do GitHub (até 5 s), o download e a
+troca. O código liberado hoje continua valendo na abertura seguinte à
+liberação; o que mudou é quem paga a rede. **Com `travar_versao.txt` fica
+tudo na hora**, como sempre: a trava é ato deliberado e quem trava quer
+AQUELA versão agora. Portanto:
 
 - Mudanças em `comprovantes_app.py`, `util.py`, `widgets.py`, `inicio/`,
   `separar_renomear/`, `anexar/`, `baixar_comprovantes/`, `aportes/`,
@@ -124,6 +137,23 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   vai existir, e o app entra em laço — oferece os 152 MB, baixa o exe mais novo
   que há, continua abaixo do mínimo e pergunta de novo na abertura seguinte, em
   todas as máquinas.
+- **O exe é reaproveitado quando o motor não mudou** (04/09/2026). O exe só
+  depende de QUATRO arquivos — `motor.py`, `atualizador.py`,
+  `requirements.lock` e o próprio `build.yml` —, e a build assina cada release
+  com a impressão digital deles (o asset `motor-<sha256>.txt`, calculado sobre
+  os blob-ids do git, cujo CONTEÚDO é a versão do exe de verdade). Push que
+  não toca em nenhum dos quatro acha a assinatura numa release anterior, baixa
+  o exe DELA em vez de gerar outro, e a build cai de ~8–10 min para ~3: sem
+  Python, sem pip, sem Chocolatey e sem PyInstaller no runner. Duas
+  consequências: (1) o `motor_minimo.txt` é conferido contra a **versão do exe
+  que vai na release** (`MOTOR_VERSAO`), e não contra o número da build — um
+  mínimo acima do exe reaproveitado seria o mesmo laço de sempre por outra
+  porta, e a build para antes de publicar; (2) o `--autoteste` recebe a pasta
+  do código DESTA release por fora, porque o exe reaproveitado carrega o código
+  embutido da release em que nasceu — e é justamente "o código novo importa
+  dentro do motor que está na máquina de todo mundo?" que se quer provar.
+  Para forçar um exe do zero sem mexer no motor: Actions → Run workflow →
+  `forcar_exe`.
 - **O `motor_minimo.txt` sobe UMA unidade quando só a esteira muda.** A trava
   do job `motor` é MECÂNICA: vigia cinco NOMES de arquivo — `motor.py`,
   `atualizador.py`, `requirements.txt`, **`requirements.lock`** e o próprio
@@ -178,8 +208,8 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   #76 falhar, a próxima release passou a ser a v1.0.77. Quem for corrigir e
   subir de novo tem de **subir o `motor_minimo.txt` junto**, senão ele aponta
   para uma versão que nunca existiu.
-- Build leva ~8–10 min. Commits só de README/LICENSE/CLAUDE.md não disparam
-  build (paths-ignore). **`docs/`, `supabase/` e `tests/` NÃO estão lá**: os
+- Build completa leva ~8–10 min; com o exe reaproveitado, ~3. Commits só de
+  README/LICENSE/CLAUDE.md não disparam build (paths-ignore). **`docs/`, `supabase/` e `tests/` NÃO estão lá**: os
   dois primeiros porque documento novo é barato de construir e sai como prévia,
   que ninguém baixa; `tests/**` e `requirements-dev.txt` de propósito, porque é
   deles que sai a régua que o job `test` roda — ignorá-los seria dizer que
@@ -189,11 +219,29 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 
 - `motor.py` — entrada do exe: escolhe a fonte de código (pasta `codigo/` ao
   lado do exe, ou `codigo_embutido` de fábrica), injeta em sys.path e chama
-  `comprovantes_app.main()`. Contém `_garantir_dependencias()` (imports nunca
-  chamados, só para o PyInstaller enxergar as libs).
-- `atualizador.py` — motor-side: baixa codigo.zip, troca de pasta atômica,
-  download do exe completo com janela de progresso, troca via .bat com 30
-  retentativas (OneDrive trava arquivos). Loga em `atualizacao.log`.
+  `comprovantes_app.main()`; na SAÍDA, instala o `codigo_nova` que a thread
+  do download deixou (`atualizador.aplicar_pendente`). Contém
+  `_garantir_dependencias()` (imports nunca chamados, só para o PyInstaller
+  enxergar as libs) e o **`--autoteste [pasta] [relatório]`**
+  (`motor.autoteste`): importa cada módulo do pacote dentro da stdlib podada
+  do exe e sai com 1 quando falta módulo — é o que a build roda no exe que
+  vai ser publicado, no lugar do exe de fumaça que ela construía à parte.
+- `atualizador.py` — motor-side: `preparar_codigo` (só trabalho local, mais o
+  caminho síncrono de sempre quando há `travar_versao.txt`),
+  `_baixar_em_segundo_plano` (a thread: baixa o codigo.zip da release
+  liberada para `codigo_nova`, extraindo em `.parcial` e renomeando no fim,
+  para a pasta ou existir inteira ou não existir), `aplicar_pendente`
+  (renomeia `codigo` → `codigo_velha` e `codigo_nova` → `codigo`, na abertura
+  e na saída, desfazendo o primeiro renome se o segundo falhar), download do
+  exe completo com janela de progresso, troca via .bat com 30 retentativas
+  (OneDrive trava arquivos). Loga em `atualizacao.log`.
+  **O Tesseract mora na RAIZ do exe** desde o motor de 04/09/2026
+  (`--add-binary` só do `tesseract.exe`, mais `tessdata/por.traineddata`): a
+  pasta inteira via `--add-data` entrava DUAS vezes — o PyInstaller
+  reclassifica binário em dado e copia as DLLs dele para a raiz —, 118 MB
+  extraídos em duplicidade, mais idiomas e ferramentas que ninguém abre.
+  `separar_renomear._configurar_ocr` procura o exe nos dois lugares, porque o
+  codigo.zip roda em exes das duas gerações.
 - `util.py` — o que não é de aba nenhuma, e por isso é de todas: `pasta_base()`,
   `pasta_do_perfil()`, `log()`, `norm_espaco`, `filtrar`, `proteger_bytes`
   (DPAPI). **Não importa tkinter** (ver "Restrições"): o par visual dele é o
