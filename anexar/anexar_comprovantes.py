@@ -243,6 +243,8 @@ class AnexarFrame(ttk.Frame):
             "e anexa o PDF certo em cada um.",
             trilha="Comprovantes  ›  Anexar")
         self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
 
         # Os dois passos do fluxo vão para o cabeçalho, e o segundo é o verde:
         # anexar é o que esta tela existe para fazer. O resto (login, pausar,
@@ -258,7 +260,7 @@ class AnexarFrame(ttk.Frame):
         # Os cartões passam a ser numerados, e os botões deixam de ser: era o
         # "▶ 1." no botão e a trilha de passos contando a mesma coisa duas
         # vezes. Agora o número está num lugar só.
-        self.f_auto = widgets.Cartao(self, "Período e pasta dos comprovantes", 1)
+        self.f_auto = widgets.Cartao(corpo, "Período e pasta dos comprovantes", 1)
         self.f_auto.pack(fill="x", padx=PADX, pady=(0, 12))
         fa = self.f_auto
         linha = ttk.Frame(fa)
@@ -295,7 +297,7 @@ class AnexarFrame(ttk.Frame):
                              "lucros").pack(anchor="w", pady=(4, 0))
 
         # ---- escolha do modo (entre os blocos 1 e 2)
-        self.topo = widgets.Cartao(self, "Como casar comprovante e lançamento", 2)
+        self.topo = widgets.Cartao(corpo, "Como casar comprovante e lançamento", 2)
         self.topo.pack(fill="x", padx=PADX, pady=(0, 12))
         ttk.Radiobutton(self.topo, text="Automático — casar pelos nomes dos PDFs",
                         variable=self.v_modo, value="auto",
@@ -305,7 +307,7 @@ class AnexarFrame(ttk.Frame):
                         command=self._alternar_modo).pack(anchor="w", pady=(4, 0))
 
         # ---- card: contas
-        self.f_contas = widgets.Cartao(self, "Contas bancárias — marque as desejadas", 3)
+        self.f_contas = widgets.Cartao(corpo, "Contas bancárias — marque as desejadas", 3)
         self.f_contas.pack(fill="x", padx=PADX, pady=(0, 12))
         self.rodape_contas = widgets.RodapeTabela(self.f_contas.acoes)
         self.rodape_contas.pack()
@@ -316,7 +318,7 @@ class AnexarFrame(ttk.Frame):
                   ).pack(anchor="w")
 
         # ---- card: modo lista (mostrado só no modo "Por lista")
-        self.f_lista = widgets.Cartao(self, "Lista pronta")
+        self.f_lista = widgets.Cartao(corpo, "Lista pronta")
         fl = self.f_lista
         ttk.Label(fl, text="ARQUIVO (.csv ou .xlsx)", style="Rotulo.TLabel"
                   ).pack(anchor="w", pady=(0, 3))
@@ -371,6 +373,7 @@ class AnexarFrame(ttk.Frame):
         widgets.estilo_log(self.log)
         self._mostrar_placeholder()
         widgets.registro_elastico(self.reg, self.log)
+        corpo.encaixar(acao, self.reg)
         self._alternar_modo()
 
     def _mostrar_placeholder(self):

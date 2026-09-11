@@ -377,6 +377,8 @@ class PagamentosDiaFrame(ttk.Frame):
             "remessa para o banco e a leitura do retorno que ele devolve.",
             trilha="Diário  ›  Remessa e Retorno")
         self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
 
         # Os botões do FLUXO ficam no cabeçalho, à direita do título; os que
         # não são do fluxo (parar, abrir, ler retorno) ficam embaixo, junto da
@@ -403,7 +405,7 @@ class PagamentosDiaFrame(ttk.Frame):
         # com contagens que não batiam ("2. Contas" era um campo, "2. Gerar" era
         # uma ação). Agora o número está num lugar só — o cartão —, e o botão
         # diz o VERBO.
-        f1 = widgets.Cartao(self, "Período", 1)
+        f1 = widgets.Cartao(corpo, "Período", 1)
         f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
@@ -429,7 +431,7 @@ class PagamentosDiaFrame(ttk.Frame):
         # quadro vazio de 170 px em volta de uma frase é o mesmo desperdício
         # que o Registro tinha. Cresce em `_montar_contas`.
         self.f_contas = f2 = widgets.Cartao(
-            self, "Contas — marque as que entram no relatório", 2)
+            corpo, "Contas — marque as que entram no relatório", 2)
         f2.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.rodape_contas = widgets.RodapeTabela(f2.acoes)
         self.rodape_contas.pack()
@@ -453,7 +455,7 @@ class PagamentosDiaFrame(ttk.Frame):
                   ).pack(anchor="w")
 
         # ---- card 3: pasta
-        f3 = widgets.Cartao(self, "Onde salvar", 3)
+        f3 = widgets.Cartao(corpo, "Onde salvar", 3)
         f3.pack(fill="x", padx=PADX, pady=px((0, 12)))
         ttk.Entry(f3, textvariable=self.v_pasta).pack(side="left", fill="x",
                                                       expand=True)
@@ -485,11 +487,17 @@ class PagamentosDiaFrame(ttk.Frame):
         #   assunto passa a ser dito pela própria frase da pílula, que o nomeia
         #   nos quatro estados — a janela leva o título por escrito.
         #
+        # **Medido antes de 11/09/2026.** Desde então o meio da aba ROLA
+        # (`widgets.AreaRolavel`) e o Registro fica preso no pé: um cartão
+        # mais alto aqui não tira mais linha nenhuma do Registro, só faz a
+        # área rolar. A forma de uma linha ficou porque continua sendo a
+        # certa — quem abre a aba vê os três cartões sem precisar rolar.
+        #
         # O resumo é preenchido em `ao_abrir`, não na construção — ver o
         # docstring de `_conferir_prontidao`. Montar o esqueleto aqui custa
         # microssegundos; ler os dois JSON custa disco, e é isso que não pode
         # entrar na abertura do app.
-        self.f_prontidao = f_pr = widgets.Cartao(self, padding=(16, 10))
+        self.f_prontidao = f_pr = widgets.Cartao(corpo, padding=(16, 10))
         f_pr.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha_pr = ttk.Frame(f_pr)
         linha_pr.pack(fill="x")
@@ -532,9 +540,9 @@ class PagamentosDiaFrame(ttk.Frame):
         self.b_ret.pack(side="left", padx=px((8, 0)))
         # MESMA LINHA dos outros três, e não uma linha nova: o painel do dia
         # tem o papel deles — não é passo do fluxo, é uma janela que se abre
-        # para olhar o que já aconteceu. Uma faixa a mais aqui sairia do
-        # Registro, que é o último a ser empacotado e fica com a sobra
-        # (`tests/test_registro_visivel.py` cobra quatro linhas legíveis).
+        # para olhar o que já aconteceu. Esta barra mora na DOCA, presa no pé
+        # junto do Registro (`widgets.AreaRolavel.encaixar`): uma faixa a mais
+        # aqui sairia da parte da tela que rola, em toda rodada e sem volta.
         self.b_painel = widgets.Botao(btns, "📅  Painel do dia", papel="neutro",
                                       command=self._janela_painel_do_dia)
         self.b_painel.pack(side="left", padx=px((8, 0)))
@@ -554,6 +562,7 @@ class PagamentosDiaFrame(ttk.Frame):
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
+        corpo.encaixar(acao, self.reg)
 
     def _hoje(self):
         hoje = datetime.date.today()

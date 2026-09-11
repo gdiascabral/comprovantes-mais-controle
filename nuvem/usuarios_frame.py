@@ -81,10 +81,12 @@ class UsuariosFrame(ttk.Frame):
             "entra e não vê nada.",
             trilha="Administração  ›  Usuários")
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         widgets.Botao(cab.acoes, "Atualizar", papel="neutro",
                       command=self.ao_abrir).pack(side="right")
 
-        cartao = widgets.Cartao(self, "Contas e papéis")
+        cartao = widgets.Cartao(corpo, "Contas e papéis")
         cartao.pack(fill="both", expand=True, padx=PADX, pady=px((0, 18)))
 
         colunas = ("nome", "email", "papel", "situacao", "desde")
@@ -134,6 +136,7 @@ class UsuariosFrame(ttk.Frame):
                                wraplength=px(820), justify="left")
         self.aviso.pack(fill="x", pady=px((10, 0)))
         self._escolheu()
+        corpo.encaixar()
 
     # ------------------------------------------------------------- a lista
     def ao_abrir(self, dizendo: bool = True):

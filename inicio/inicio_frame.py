@@ -124,11 +124,13 @@ class InicioFrame(ttk.Frame):
             "as rotinas contaram quando rodaram.",
             trilha="Visão geral  ›  Início")
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         widgets.Botao(cab.acoes, "Atualizar", papel="neutro",
                       command=self.ao_abrir).pack(side="right")
 
         # ---- os quatro números
-        kpis = ttk.Frame(self, style="Fundo.TFrame")
+        kpis = ttk.Frame(corpo, style="Fundo.TFrame")
         kpis.pack(fill="x", padx=PADX)
         self.kpis = {}
         for col, (chave, rotulo) in enumerate((
@@ -143,7 +145,7 @@ class InicioFrame(ttk.Frame):
             self.kpis[chave] = cartao
 
         # ---- rotinas à esquerda, atividade e atalhos à direita
-        meio = ttk.Frame(self, style="Fundo.TFrame")
+        meio = ttk.Frame(corpo, style="Fundo.TFrame")
         meio.pack(fill="both", expand=True, padx=PADX, pady=px((14, 18)))
         meio.columnconfigure(0, weight=1)
         meio.rowconfigure(0, weight=1)
@@ -190,6 +192,7 @@ class InicioFrame(ttk.Frame):
             widgets.Botao(c_ata, texto, papel="neutro",
                           command=lambda c=chave: self._ir(c),
                           anchor="w").pack(fill="x", pady=px((0, 6)))
+        corpo.encaixar()
 
     # ------------------------------------------------------------- navegação
     def definir_navegacao(self, ir_para):
