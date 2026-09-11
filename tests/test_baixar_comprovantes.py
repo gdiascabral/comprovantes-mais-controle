@@ -848,6 +848,91 @@ def test_a_falha_do_pix_nunca_vira_motivo_da_conta():
         "baixar_conta), nunca o passe de Pix")
 
 
+# -------------------------------------- os seletores do formulario de Pix
+# A v2.0.188 travou 45s em todas as contas procurando "Inicial" por
+# `get_by_label`/`text=`: e placeholder, sem <label>, e `text=` do Playwright
+# so enxerga texto renderizado. O HTML real (outerHTML copiado do console em
+# 11/09/2026) tem atributos fixos -- e e deles que os seletores saem agora.
+
+class _Localizador:
+    """Grava o que foi pedido e o que foi feito, sem navegador."""
+
+    def __init__(self, registro, seletor):
+        self.registro, self.seletor = registro, seletor
+        self.first = self
+
+    def count(self):
+        return 1
+
+    def click(self):
+        self.registro.append(("click", self.seletor))
+
+    def press(self, tecla):
+        self.registro.append(("press", self.seletor, tecla))
+
+    def type(self, texto, delay=0):
+        self.registro.append(("type", self.seletor, texto))
+
+
+class _PaginaDePix:
+    def __init__(self):
+        self.registro = []
+
+    def locator(self, seletor):
+        self.registro.append(("locator", seletor))
+        return _Localizador(self.registro, seletor)
+
+    def wait_for_timeout(self, _ms):
+        pass
+
+
+def test_o_periodo_e_ligado_pelo_radio_e_nao_pelo_texto():
+    """O rádio `value="2"` é "Período"; o `value="1"` é "Selecione o mês", e
+    com ele os campos de data nascem desabilitados."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pagina = _PaginaDePix()
+    sb._selecionar_periodo_pix(pagina)
+    assert ("click", 'input[name="selecao"][value="2"]') in pagina.registro
+
+
+@pytest.mark.parametrize("campo", ["dataInicial", "dataFinal"])
+def test_as_datas_vao_pelo_name_do_campo(campo):
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pagina = _PaginaDePix()
+    sb._preencher_data_pix(pagina, campo, "08/09/2026")
+    seletor = f'input[name="{campo}"]'
+    assert ("type", seletor, "08/09/2026") in pagina.registro
+    assert ("press", seletor, "Control+a") in pagina.registro, (
+        "sem limpar antes, a data digitada soma à que já estava no campo")
+
+
+def test_nenhum_seletor_do_formulario_de_pix_depende_de_rotulo():
+    """`text=`, `get_by_label` e `get_by_text` foram exatamente o que travou
+    a primeira rodada real — não voltam para estas três funções."""
+    import inspect
+
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    for funcao in (sb._selecionar_periodo_pix, sb._preencher_data_pix,
+                   sb.listar_pix):
+        codigo = inspect.getsource(funcao).split('"""')[-1]
+        for proibido in ("text=", "get_by_label", "get_by_text"):
+            assert proibido not in codigo, (
+                f"{funcao.__name__} voltou a usar {proibido}")
+
+
+def test_listar_pix_usa_os_names_reais_e_o_botao_pelo_atributo():
+    import inspect
+
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    fonte = inspect.getsource(sb.listar_pix)
+    assert '"dataInicial"' in fonte and '"dataFinal"' in fonte
+    assert 'data-content-label="Consultar"' in fonte
+
+
 import pathlib
 
 
