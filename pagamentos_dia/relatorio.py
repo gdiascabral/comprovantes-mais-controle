@@ -283,6 +283,77 @@ def escolher_pdf_do_boleto(files) -> dict | None:
     return explicitos[0] if explicitos else None
 
 
+#: Rótulos em que não mora boleto A PAGAR: o comprovante prova pagamento feito
+#: (a linha que ele traz é de boleto JÁ PAGO, e pagá-la de novo é pagar em
+#: dobro), o aviso "pagar para" manda pagar outra pessoa, e contrato, medição
+#: e QR code são outra conversa. "Recibo" NÃO está aqui: em 10/09/2026 um
+#: boleto veio junto da nota num PDF etiquetado "Recibo" — e todo boleto tem
+#: um "Recibo do Pagador". Quem separa recibo de prova é o conteúdo.
+_NAO_VARRER = re.compile(
+    r"comprovante|contrato|medi[çc][ãa]o|qr\s*code|pagar\s*para", re.I)
+
+#: O texto de quem JÁ PAGOU: comprovante de banco, de Pix, de caixa. O boleto
+#: em si diz "local de pagamento", "comprovante de entrega" e "autenticação
+#: mecânica" — e nenhuma destas.
+_PROVA_DE_PAGAMENTO = re.compile(
+    r"comprovante\s+de\s+(?:pagamento|transa)|pagamento\s+(?:efetuado|realizado)|"
+    r"valor\s+pago|data\s+d[oe]\s+pagamento|pix\s+enviado", re.I)
+
+
+def linha_em_outro_anexo(files, textos: dict, valor: float, urls_ocr=(),
+                         ignorar: str = "", vencimento: date | None = None
+                         ) -> tuple[str, dict | None]:
+    """A linha digitável de um boleto que não se anuncia como boleto.
+
+    Há fornecedor que junta a NF (página 1) e o boleto (página 2) num PDF só,
+    e o ERP o etiqueta "Nota Fiscal". `escolher_pdf_do_boleto` recusa o
+    arquivo pelo RÓTULO — e tem de recusar, senão chutaria nota como boleto —,
+    então a página 2 nunca era lida: a linha ia para NÃO ENTRARAM como "sem
+    forma de pagar" e o título vencia sem ninguém ver (09 e 10/09/2026).
+
+    Aqui quem decide é o CONTEÚDO, com a régua do OCR: só vale linha cujos
+    dígitos verificadores fecham. Uma linha só é a resposta, mesmo com outro
+    valor (a divergência é avisada adiante). Várias: fica a que tem o valor do
+    lançamento e, se ainda sobrar mais de uma — parcelas iguais do mesmo
+    título dividem os anexos —, a do vencimento dele. Devolve `(linha,
+    anexo)`; linha vazia com anexo quer dizer "há boleto aí dentro, mas não dá
+    para saber qual" — e quem chama não escolhe.
+    """
+    achadas = []
+    for f in files or ():
+        url = f.get("downloadUrl") or ""
+        if (not url or url == ignorar or not eh_pdf(f)
+                or _NAO_VARRER.search(_rotulo(f))):
+            continue
+        texto = textos.get(url) or ""
+        if not texto or _PROVA_DE_PAGAMENTO.search(texto):
+            continue
+        if url in urls_ocr:
+            linha = ocr_boleto.achar_linha_digitavel(texto, valor)
+            if linha:
+                achadas.append((linha, f))
+            continue
+        for padrao in _LINHAS_DIGITAVEIS:
+            for m in padrao.finditer(texto):
+                linha = re.sub(r"\s+", " ", m.group(0)).strip()
+                if ocr_boleto.valida(linha):
+                    achadas.append((linha, f))
+    if not achadas:
+        return "", None
+    distintas = {}
+    for linha, f in achadas:
+        distintas.setdefault(ocr_boleto.digitos(linha), (linha, f))
+    candidatas = list(distintas.values())
+    if len(candidatas) > 1:
+        candidatas = [c for c in candidatas if ocr_boleto.confere_valor(c[0], valor)]
+        if len(candidatas) > 1 and vencimento:
+            candidatas = [c for c in candidatas
+                          if ocr_boleto.vencimento_da_linha(c[0]) == vencimento]
+    if len(candidatas) == 1:
+        return candidatas[0]
+    return "", achadas[0][1]
+
+
 # --------------------------------------------------------------------------
 # Chave Pix e linha digitável
 # --------------------------------------------------------------------------
@@ -855,6 +926,18 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         #: (não fica: não há o que digitar, e a linha só custa conferência).
         tem_documento = False
 
+        # Boleto que veio dentro de um PDF etiquetado como nota: a etiqueta não
+        # o anuncia, mas ele existe, e "boleto ganha de Pix" vale igual —
+        # pagar pela chave do cadastro deixaria o boleto registrado em aberto.
+        # Vale até sem saber QUAL boleto: aí a linha vai para conferência.
+        # Título já pago fica como está: ali não há o que decidir.
+        venc_item = data_do_item(item)
+        if tipo == "Pix" and cls != "PAGAR_PARA" and not item.get("paid"):
+            escondida, onde = linha_em_outro_anexo(files, textos, valor, urls_ocr,
+                                                   vencimento=venc_item)
+            if escondida or onde:
+                tipo = "Boleto"
+
         if cls == "PAGAR_PARA":
             tipo = "Pix"
             tem_documento = True
@@ -913,9 +996,27 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                                   "e valor conferem com o lançamento.")
             else:
                 dados = extrair_linha_digitavel(texto_pdf)
+            onde = None
+            if not dados:
+                escondida, onde = linha_em_outro_anexo(files, textos, valor, urls_ocr,
+                                                       ignorar=url_pdf,
+                                                       vencimento=venc_item)
+                if escondida:
+                    dados, tem_documento = escondida, True
+                    avisos.append(f"Boleto achado dentro do anexo "
+                                  f"'{(onde.get('filename') or '').strip()}' (etiqueta: "
+                                  f"{onde.get('tagName') or 'nenhuma'}), e não num anexo "
+                                  "de boleto — conferir a linha.")
             if not dados:
                 do_cadastro = extrair_chave_pix(pago_para) if pago_para else ""
-                if pdf:
+                if onde:
+                    # Há boleto, só não se sabe qual: o Pix do cadastro não
+                    # entra, porque boleto existente continua ganhando.
+                    tem_documento = True
+                    obs = (f"Há boleto dentro do anexo '{(onde.get('filename') or '').strip()}', "
+                           "mas não dá para saber qual é o deste lançamento — "
+                           "conferir antes de pagar")
+                elif pdf:
                     obs = ("Boleto em imagem e o OCR não fechou — preencher manual"
                            if url_pdf in urls_ocr else
                            "Boleto em imagem — preencher manual")

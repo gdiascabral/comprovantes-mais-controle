@@ -966,6 +966,18 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   boleto para ganhar —, então havendo NF ou OC a linha vira Pix com a chave
   do cadastro, e o aviso "pagar o boleto" só é montado DEPOIS de resolver a
   forma de pagar, senão mandaria pagar um documento que não existe.
+  (d) **O boleto pode vir DENTRO da nota** (`linha_em_outro_anexo`, 10/09/2026):
+  há fornecedor que junta NF e boleto num PDF só, etiquetado "Nota Fiscal" —
+  ou até "Recibo", como o de 10/09 —, e há título com dois PDFs sem etiqueta;
+  `escolher_pdf_do_boleto` recusa os dois casos pelo rótulo, como deve, e o
+  boleto nunca era lido; a linha caía em "sem forma de pagar" e o título
+  vencia (nove títulos de 01 a 10/09/2026). Quando o rótulo não acha boleto,
+  o texto dos PDFs do título é varrido com a régua do OCR (DV fechando; entre
+  várias, a do valor e, empatando, a do vencimento), e o boleto achado ali
+  ganha do Pix como qualquer outro. Vários e nenhum que se decida: não se
+  escolhe, e a linha fica na planilha para conferir. Fica de fora o que prova
+  pagamento — rótulo "Comprovante" ou texto de comprovante —, porque a linha
+  dali é de boleto JÁ PAGO, e pagá-la de novo é pagar em dobro.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e
