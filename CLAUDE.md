@@ -353,6 +353,27 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   fixtures dos testes pulam quando faltam, então o CI passa sem os dados reais
   e a máquina de quem usa valida de verdade. Saída em
   `C:/Arquivos Morais/CONCILIACAO DIARIA/<ANO>/<MÊS>/`.
+  **Conta nova entra no painel pelo app** (botão "Verificar contas novas",
+  11/09/2026, `conciliacao/painel_novas.py`). Até então ela só virava o aviso
+  "conta nova no ERP fora do painel" no resumo, e incluí-la era mexer à mão
+  em TRÊS arquivos combinados — a linha do `MODELO.xlsx` com as fórmulas, a
+  entrada do `mapping.yaml` e a faixa do `config.yaml` —, em que errar um não
+  dá erro no Excel, dá saldo na linha de outra conta. A lista do botão é a
+  MESMA régua do aviso (`rules.resolve_balances`). A linha nova entra no FIM
+  (o mapa guarda o número de cada linha, e inserir no meio desceria todas),
+  como cópia da última conta pelo `Translator` do openpyxl; as faixas que
+  terminam na última conta esticam em todas as abas (totais, VLOOKUP da
+  «Movimentações», formatação condicional, área de impressão) e o que está
+  abaixo desce. Os dois YAML são editados como TEXTO, porque o comentário é
+  metade do valor deles. Nada é trocado sem `_provar`: recarregar os três,
+  `check_labels`, toda linha antiga casando com as MESMAS contas do ERP, cada
+  nova com a sua e só com ela (nome parecido demais puxaria os pagamentos de
+  outra conta) e uma planilha de prova pelo `workbook.build`. Os três de
+  antes vão para `copias do painel/<data hora>/`, e troca que falha no meio
+  (o Excel com o modelo aberto) devolve o que já tinha trocado. O nome da
+  linha recusa `* ? ~` e `= < >` no começo: a coluna B é CRITÉRIO de SUMIF.
+  O que continua fora: quem aporta na conta nova (aba «Regras», no Excel) e
+  pagamento lançado em conta INATIVA no ERP, que não aparece na lista.
 - `comprovantes_app.py` — janela única, em TRÊS faixas desde o redesenho de
   agosto/2026, e cada faixa responde a uma pergunta diferente: a barra azul do
   topo (`widgets.BarraTopo`) diz onde estou, o que procuro e se o app está
