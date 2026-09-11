@@ -639,6 +639,95 @@ def test_a_navegacao_nao_recarrega_a_pagina():
         "voltou a usar goto: a SPA recarrega e a conta volta para a padrao")
 
 
+# ------------------------------------------------ as duas telas do Sicoob
+# Com o interruptor "Novo" ligado, o cabecalho escreve a conta como
+# `3299 | 50.019-4 | PJ | HB2744` (no `.info-cliente-chave`); a tela antiga
+# escreve `SICOOB ENGECRED 3299 CONTA 50.019-4 / PJ`. Lendo so a antiga, a
+# rodada de 11/09/2026 recusou a primeira conta com "nao consegui ler".
+
+def test_a_conta_sai_do_cabecalho_da_tela_nova():
+    from extratos_sicoob import sicoob_client as sc
+
+    assert sc.conta_do_cabecalho(" 3299 | 50.019-4 | PJ  | HB2744 ",
+                                 "") == "50.019-4"
+
+
+def test_a_conta_da_tela_nova_aceita_travessao():
+    """A fonte do cabecalho desenha o hifen parecido com travessao; basta um
+    campo vir com o caractere de verdade para a leitura voltar a dizer "nao
+    consegui ler"."""
+    from extratos_sicoob import sicoob_client as sc
+
+    assert sc.conta_do_cabecalho("3299 | 50.019–4 | PJ",
+                                 "") == "50.019–4"
+
+
+def test_a_conta_da_tela_antiga_continua_sendo_lida():
+    from extratos_sicoob import sicoob_client as sc
+
+    corpo = "SICOOB ENGECRED 3299 CONTA 50.019-4 / PJ"
+    assert sc.conta_do_cabecalho(None, corpo) == "50.019-4"
+
+
+def test_o_cabecalho_novo_manda_no_corpo():
+    """Na tela nova o corpo pode citar outra conta; a ABERTA e a do
+    cabecalho."""
+    from extratos_sicoob import sicoob_client as sc
+
+    assert sc.conta_do_cabecalho("3299 | 50.019-4 | PJ",
+                                 "CONTA 51.107-2") == "50.019-4"
+
+
+def test_sem_nada_legivel_a_conta_e_vazia():
+    from extratos_sicoob import sicoob_client as sc
+
+    assert sc.conta_do_cabecalho(None, "Bem-vindo") == ""
+    assert sc.conta_do_cabecalho("", "") == ""
+
+
+def test_conta_aberta_le_pela_funcao_do_cliente():
+    """Um parser so, para quem troca de conta e para quem confere antes de
+    baixar: duas copias divergem em silencio."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    class PaginaNova:
+        def evaluate(self, *_a):
+            return {"novo": " 3299 | 50.019-4 | PJ  | HB2744 ",
+                    "corpo": "Conta corrente Saldo da conta"}
+
+    assert sb.conta_aberta(PaginaNova()) == "50.019-4"
+    assert sb.mesma_conta("50.019-4", sb.conta_aberta(PaginaNova()))
+
+
+def test_na_tela_nova_a_troca_de_conta_clica_no_icone_do_cabecalho():
+    """O endereco `#/selecao-contas` sozinho deixou a segunda conta esperando
+    45s pela lista; o icone e o que a pessoa clicou para a rodada andar."""
+    import inspect
+
+    from extratos_sicoob import sicoob_client as sc
+
+    assert 'icone="arrow-lr"' in sc.SEL_TROCAR_CONTA_NOVO
+    fonte = inspect.getsource(sc.SicoobClient.ir_para_selecao)
+    assert "SEL_TROCAR_CONTA_NOVO" in fonte
+    assert fonte.index("SEL_TROCAR_CONTA_NOVO") < fonte.index(
+        "URL_SELECAO_CONTAS"), "o endereco e o ultimo recurso, nao o primeiro"
+
+
+def test_o_login_aceita_a_home_da_tela_nova():
+    """Esperar so pela lista deixava o robo parado na Home ate a pessoa
+    clicar no icone de trocar conta."""
+    import inspect
+
+    from extratos_sicoob import sicoob_client as sc
+
+    assert "div.seletor-conta" in sc.SINAIS_DE_LOGIN
+    assert ".info-cliente-chave" in sc.SINAIS_DE_LOGIN
+    fonte = inspect.getsource(sc.SicoobClient.aguardar_login)
+    assert "SINAIS_DE_LOGIN" in fonte
+    assert "ir_para_selecao" in fonte, (
+        "depois de entrar pela Home, o login tem de deixar a lista na tela")
+
+
 # --------------------------------------------------------------- o Pix do Sicoob
 # A tela de Comprovantes nao tem Pix -- e outra tela, com API propria. O
 # exemplo abaixo e o mesmo lido da Rede do navegador em 10/09/2026 (anonimizado:
@@ -1178,6 +1267,77 @@ DUAS = [{"banco": "Sicoob", "conta": "00.000-0", "empresa": "EMPRESA A",
          "pasta": "SICOOB"},
         {"banco": "Inter", "conta": "—", "empresa": "EMPRESA B",
          "pasta": "INTER"}]
+
+
+def _mensagens(aba):
+    import queue
+
+    saida = []
+    while True:
+        try:
+            saida.append(aba.q.get_nowait())
+        except queue.Empty:
+            return saida
+
+
+def test_parar_termina_a_conta_da_vez_e_nao_comeca_as_outras(abrir_aba,
+                                                             monkeypatch,
+                                                             tmp_path):
+    """O botao Parar nasceu da rodada de 11/09/2026: cada conta com erro
+    esperava 45s e nao havia como sair sem fechar o app."""
+    from baixar_comprovantes import inter_baixar
+    from baixar_comprovantes import sicoob_baixar as sb
+    from extratos_sicoob import sicoob_client
+
+    contas = [{"banco": "Sicoob", "conta": "11.111-1", "empresa": "EMPRESA A",
+               "pasta": "SICOOB"},
+              {"banco": "Sicoob", "conta": "22.222-2", "empresa": "EMPRESA B",
+               "pasta": "SICOOB"},
+              {"banco": "Inter", "conta": "—", "empresa": "EMPRESA C",
+               "pasta": "INTER"}]
+    aba = abrir_aba(contas)
+
+    class ClienteFalso:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def aguardar_login(self):
+            pass
+
+    feitas = []
+
+    def baixar_conta(cli, conta, *a, **k):
+        feitas.append(conta)
+        aba._parar.set()          # a pessoa aperta Parar no meio da 1a conta
+        return sb.Resultado(conta=conta)
+
+    inter_chamado = []
+    monkeypatch.setattr(sicoob_client, "SicoobClient", ClienteFalso)
+    monkeypatch.setattr(sb, "baixar_conta", baixar_conta)
+    monkeypatch.setattr(inter_baixar, "baixar",
+                        lambda *a, **k: inter_chamado.append(a))
+
+    aba._trabalhar("01/09/2026", "02/09/2026", tmp_path / "2026-09-02")
+
+    assert feitas == ["11.111-1"]
+    assert inter_chamado == []
+    msgs = _mensagens(aba)
+    assert ("situacao", ("Sicoob:22.222-2", "parado", {})) in msgs
+    assert ("situacao", ("Inter:—", "parado", {})) in msgs
+    assert msgs[-1] == ("fim", None)
+
+
+def test_o_botao_parar_so_vale_durante_a_rodada(abrir_aba):
+    aba = abrir_aba(DUAS)
+    assert str(aba.b_parar.cget("state")) == "disabled"
+    aba._pedir_parada()           # sem rodada: nao arma nada
+    assert not aba._parar.is_set()
 
 
 def test_o_cabecalho_desmarca_todas_e_marca_de_novo(abrir_aba):

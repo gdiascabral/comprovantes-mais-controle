@@ -74,6 +74,7 @@ SITUACOES = {
     "ok": ("✓  {n} comprovantes", "ok"),
     "vazio": ("·  sem lançamentos", "info"),
     "erro": ("✖  {motivo}", "erro"),
+    "parado": ("·  não rodou (parado)", "info"),
 }
 
 
@@ -86,6 +87,11 @@ class ComprovantesFrame(ttk.Frame):
         self._obter_mapa = obter_mapa
         self.q: queue.Queue = queue.Queue()
         self.worker = None
+        #: Pedido de parada. É conferido ENTRE uma conta e outra, e não no
+        #: meio: o navegador roda noutra thread (Playwright síncrono), e
+        #: interrompê-lo por fora é o erro "cannot switch to a different
+        #: thread" do CLAUDE.md. A conta em andamento termina, e a fila para.
+        self._parar = threading.Event()
         self.linhas: dict[str, dict] = {}
         self._build()
         self.ao_abrir()
@@ -104,6 +110,10 @@ class ComprovantesFrame(ttk.Frame):
         self.b_ir = widgets.Botao(cab.acoes, "▶  Baixar comprovantes",
                                   papel="acao", command=self._comecar)
         self.b_ir.pack(side="right")
+        self.b_parar = widgets.Botao(cab.acoes, "⏹  Parar", papel="perigo",
+                                     command=self._pedir_parada,
+                                     state="disabled")
+        self.b_parar.pack(side="right", padx=px((0, 8)))
         widgets.Botao(cab.acoes, "Atualizar lista", papel="neutro",
                       command=self.ao_abrir).pack(side="right",
                                                   padx=px((0, 8)))
@@ -297,6 +307,8 @@ class ComprovantesFrame(ttk.Frame):
             self._log(f"[!] não consegui criar {pasta}: {e}")
             return
         self.b_ir.configure(state="disabled")
+        self._parar.clear()
+        self.b_parar.configure(state="normal")
         self.lbl.configure(text="Preparando…")
         self._log(f"Os comprovantes vão para {pasta}")
         alvo = threading.Thread(target=self._trabalhar,
@@ -304,6 +316,26 @@ class ComprovantesFrame(ttk.Frame):
                                       pasta), daemon=True)
         alvo.start()
         self.worker = _Tarefa(alvo)
+
+    def _pedir_parada(self):
+        """Pede para a fila parar depois da conta em andamento.
+
+        A conta do meio termina (ver o `_parar` no `__init__`). Quem está
+        esperando o login do Sicoob ou o QR do Inter continua esperando até
+        essa espera acabar — fechar a janela do Chrome encurta."""
+        if not self.worker or self.worker.done():
+            return
+        self._parar.set()
+        self.b_parar.configure(state="disabled")
+        self.lbl.configure(text="Parando depois desta conta…")
+        self._log("Parar pedido: termino a conta em andamento e paro a fila.")
+
+    def _marcar_parados(self, contas):
+        """As que sobraram viram "não rodou", e não "aguardando login": a
+        linha âmbar diria que alguém ainda tem de fazer alguma coisa."""
+        for c in contas:
+            self.q.put(("situacao",
+                        (f"{c['banco']}:{c['conta']}", "parado", {})))
 
     def _trabalhar(self, inicio: str, fim: str, destino: Path):
         """Roda fora da thread da tela. Só fala com ela pela fila."""
@@ -326,6 +358,9 @@ class ComprovantesFrame(ttk.Frame):
                 with SicoobClient(log=lambda m: self.q.put(("log", m))) as cli:
                     cli.aguardar_login()
                     for i, c in enumerate(do_sicoob, start=1):
+                        if self._parar.is_set():
+                            self._marcar_parados(do_sicoob[i - 1:])
+                            break
                         chave = f"Sicoob:{c['conta']}"
                         self.q.put(("situacao", (chave, "trabalhando", {})))
                         self.q.put(("progresso", (i, len(do_sicoob))))
@@ -361,8 +396,14 @@ class ComprovantesFrame(ttk.Frame):
                     if c["banco"] == "Inter" and c["marcada"]]
         if not do_inter:
             return
+        if self._parar.is_set():
+            self._marcar_parados(do_inter)
+            return
         self.q.put(("log", f"Inter: {len(do_inter)} conta(s), um login cada."))
         for i, c in enumerate(do_inter, start=1):
+            if self._parar.is_set():
+                self._marcar_parados(do_inter[i - 1:])
+                break
             chave = f"Inter:{c['conta']}"
             self.q.put(("situacao", (chave, "qr", {})))
             self.q.put(("progresso", (i, len(do_inter))))
@@ -393,7 +434,9 @@ class ComprovantesFrame(ttk.Frame):
                     self.pb.configure(maximum=total, value=feitas)
                 elif tipo == "fim":
                     self.b_ir.configure(state="normal")
-                    self.lbl.configure(text="Pronto.")
+                    self.b_parar.configure(state="disabled")
+                    self.lbl.configure(text="Parado." if self._parar.is_set()
+                                       else "Pronto.")
         except queue.Empty:
             pass
         self.after(150, self._drenar)
