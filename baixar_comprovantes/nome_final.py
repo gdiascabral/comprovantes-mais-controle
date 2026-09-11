@@ -174,12 +174,12 @@ def descricao_do_comprovante(texto: str) -> str:
     largura da coluna, o pdfplumber põe o rótulo SOZINHO no meio das duas
     metades — a primeira na linha de cima, o resto na de baixo:
 
-        MARQUES DE ABREU QD 12 LT 3 45 B1 UC 1234567-8 R
+        OBRA EXEMPLO QD 12 LT 3 45 B1 UC 1234567-8 CONTA
         Observação
-        F ago 2026
+        S AGO 2026
 
     Foram os 7 casos que pareciam "Observação vazia" em 10 e 11/09. Ler só a
-    linha de baixo daria "F ago 2026" como descrição, pior que o favorecido.
+    linha de baixo daria "S AGO 2026" como descrição, pior que o favorecido.
     Por isso, com o rótulo sozinho: a linha de baixo é o valor se não for
     outro campo; e a de cima só entra quando a de baixo também entrou, porque
     uma metade de cima sem a de baixo não é um desenho que o comprovante faça.
@@ -219,8 +219,13 @@ def data_do_comprovante(texto: str) -> str:
 
     O topo do comprovante traz "31/08/2026 12:04:52", que é quando o arquivo
     foi gerado. Foi essa que o parser do Renomear pegou ao ler estes PDFs, e
-    por isso os 23 saíram carimbados com a data de hoje."""
+    por isso os 23 saíram carimbados com a data de hoje.
+
+    O comprovante de CONVÊNIO escreve "Data do pagamento", com "p" minúsculo,
+    e o primeiro padrão não o via: os 23 convênios de 10 e 11/09/2026 caíam
+    na data do JSON em vez da do documento."""
     for padrao in (r"Pagamento\s+(\d{2}/\d{2}/\d{4})",
+                   r"Data do pagamento\s+(\d{2}/\d{2}/\d{4})",
                    r"Data do lan[çc]amento\s+(\d{2}/\d{2}/\d{4})",
                    r"Realizado\s+(\d{2}/\d{2}/\d{4})"):
         achado = re.search(padrao, texto or "")

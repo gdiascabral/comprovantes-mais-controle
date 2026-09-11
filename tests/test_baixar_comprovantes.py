@@ -1428,6 +1428,22 @@ def test_o_nome_do_sicoob_sai_valor_descricao_data():
         "1244,91 - OBRA TESTE QD 99 LT 01 NF 123 OC 456 - 03-08"
 
 
+def test_convenio_data_do_pagamento_minuscula_vale_a_do_documento():
+    """O convênio escreve "Data do pagamento" com "p" minúsculo; sem esse
+    padrão a data do documento se perdia e valia a do JSON."""
+    from baixar_comprovantes import nome_final as nf
+
+    item = {"valorLancamento": 90.0, "dataLancamento": "2026-08-04 00:00:00.0"}
+    texto = linhas("04/08/2026 12:04:52",
+                   "Convênio CONCESSIONARIA EXEMPLO",
+                   "Data do pagamento 03/08/2026",
+                   "Observação OBRA TESTE QD 99 LT 01 UC 000",
+                   "Autenticação 0a1b2c3d-0000-0000-0000-000000000000")
+    assert nf.data_do_comprovante(texto) == "03/08/2026"
+    assert nf.nomear(nf.do_sicoob(item, texto)) == \
+        "90,00 - OBRA TESTE QD 99 LT 01 UC 000 - 03-08"
+
+
 def test_sem_nome_montavel_o_arquivo_fica_onde_esta(tmp_path):
     """Falhar no nome nunca pode perder comprovante: com o nome de origem ele
     e achavel; sumido, nao."""
