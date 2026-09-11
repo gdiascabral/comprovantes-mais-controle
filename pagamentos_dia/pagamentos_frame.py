@@ -32,6 +32,7 @@ from tkinter import filedialog, messagebox, ttk
 
 
 from . import baixa_erp
+from . import html_pagamentos          # HTML provisório (ver o módulo)
 from . import ocr_boleto
 from . import painel_dia
 from . import reembolso
@@ -526,6 +527,14 @@ class PagamentosDiaFrame(ttk.Frame):
         self.b_abrir = widgets.Botao(btns, "📂  Abrir planilha", papel="neutro",
                                      command=self._abrir, state="disabled")
         self.b_abrir.pack(side="left", padx=px((8, 0)))
+        # HTML provisório: os dois HTMLs de pagar (geral + pessoa física),
+        # do que o passo 2 apurou, até a remessa CNAB assumir o dia. Na barra
+        # e não num cartão pelo mesmo motivo do "Painel do dia" logo abaixo.
+        self.b_html = widgets.Botao(btns, "🌐  Gerar HTML dos pagamentos",
+                                    papel="neutro",
+                                    command=self._gerar_html_pagamentos,
+                                    state="disabled")
+        self.b_html.pack(side="left", padx=px((8, 0)))
         self.b_abrir_rem = widgets.Botao(btns, "📂  Abrir local da remessa",
                                          papel="neutro",
                                          command=self._abrir_remessa,
@@ -580,6 +589,53 @@ class PagamentosDiaFrame(ttk.Frame):
                 os.startfile(self.ultimo_arquivo)          # noqa: S606 (Windows)
             except Exception:
                 subprocess.Popen(["explorer", str(self.ultimo_arquivo)])
+
+    def _gerar_html_pagamentos(self):
+        """PROVISÓRIO: grava os dois HTMLs de pagar e abre o geral.
+
+        Existe até a remessa CNAB virar o caminho do dia (pedido do dono em
+        11/09/2026); antes disso os HTMLs saíam de um script rodado fora do
+        app. O geral sai do `self.resultado` do passo 2 — as mesmas linhas das
+        abas por conta da planilha — e o de pessoa física da lista do passo 1
+        (`self.lancamentos`), que é quem traz vencimento, categoria, nº doc e
+        centro de custo. Os dois vão para a pasta da planilha.
+
+        Roda na thread da INTERFACE, e pode: não há navegador, ERP nem rede —
+        é o que já está em memória virando dois arquivos locais, em
+        milissegundos. Como remover: ver `pagamentos_dia/html_pagamentos.py`.
+        """
+        if self.worker and not self.worker.done():
+            messagebox.showinfo("HTML dos pagamentos",
+                                "Espere a rotina em andamento terminar.")
+            return
+        if self.resultado is None or not self._periodo_do_resultado:
+            messagebox.showinfo(
+                "HTML dos pagamentos",
+                "Gere a planilha (passo 2) antes: o HTML sai do que ela apurou.")
+            return
+        ini, fim = self._periodo_do_resultado
+        pasta = (self.ultimo_arquivo.parent if self.ultimo_arquivo
+                 else Path(self.v_pasta.get().strip()))
+        try:
+            gerados = html_pagamentos.gravar(
+                self.resultado, self.lancamentos, self.anexos, pasta, ini, fim,
+                pastas_extras=(pasta, _pasta_base()))
+        except Exception as e:                               # noqa: BLE001
+            self._log(f"[!] HTML dos pagamentos: {e}")
+            messagebox.showwarning(
+                "HTML dos pagamentos",
+                widgets.recado_de_erro(
+                    e, "Não consegui gravar o HTML dos pagamentos."))
+            return
+        for linha in gerados.registro():
+            self._log(linha)
+        try:
+            os.startfile(gerados.geral)                      # noqa: S606
+        except Exception:                                    # noqa: BLE001
+            try:
+                subprocess.Popen(["explorer", str(gerados.geral)])
+            except Exception as e:                           # noqa: BLE001
+                self._log(f"[!] não consegui abrir o HTML: {e}")
 
     def _abrir_remessa(self):
         """Abre a pasta do `.REM` com o arquivo já selecionado.
@@ -806,6 +862,7 @@ class PagamentosDiaFrame(ttk.Frame):
                 elif tipo == "arquivo":
                     self.ultimo_arquivo = valor
                     self.b_abrir.configure(state="normal")
+                    self.b_html.configure(state="normal")   # HTML provisório
                 elif tipo == "remessa_gerada":
                     self.ultimas_remessas = list(valor)
                     self.b_abrir_rem.configure(state="normal")
@@ -851,6 +908,7 @@ class PagamentosDiaFrame(ttk.Frame):
         # só volta a existir depois que o passo 2 rodar de novo.
         self.resultado = None
         self._periodo_do_resultado = None
+        self.b_html.configure(state="disabled")   # HTML provisório
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Abrindo o Mais Controle..."))

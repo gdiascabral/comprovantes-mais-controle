@@ -1398,6 +1398,24 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   erro da consulta e o "nenhuma remessa neste dia", porque as quatro respondem
   à mesma pergunta (por que a tabela está vazia?) e três labels dariam três
   lugares para procurar a resposta.
+  **"Gerar HTML dos pagamentos" é PROVISÓRIO** (11/09/2026, até a remessa
+  CNAB virar o caminho do dia). Botão da barra de ações, aceso depois do
+  passo 2: grava na pasta da planilha `pagamentos_<período>.html` (todas as
+  contas do `self.resultado`, com "Copiar" e a caixa "já paguei", guardada
+  pelo id do lançamento) e `pagamentos_pessoa_fisica_lancamento_<período>.html`
+  (a conta PESSOA FISICA - APENAS LANÇAMENTO, tirada da lista do passo 1 —
+  que traz vencimento, categoria, nº doc e centro de custo —, com o PDF no
+  layout do Mais Controle), e abre o geral. Sem ERP e sem rede, na thread da
+  interface. Substitui o script que rodava fora do app. Os modelos são
+  TEXTO em `pagamentos_dia/modelos_html.py` (o `codigo.zip` não leva
+  `.html`), a regra é `pagamentos_dia/html_pagamentos.py` (pura, com
+  `tests/test_html_pagamentos.py`), e nada da empresa mora no repositório: o
+  logotipo e o rodapé do PDF vêm de `logo_relatorio_pf.png` e
+  `rodape_relatorio_pf.txt` ao lado da planilha (ou do app), e faltando saem
+  em branco. **Para remover**: apagar os dois módulos e o teste, o método
+  `_gerar_html_pagamentos` e as linhas marcadas "HTML provisório" deste
+  arquivo (import, botão `b_html` e as duas que o acendem e apagam), e este
+  parágrafo.
 - `cnab240/` — gerador, validador e leitor de retorno do arquivo CNAB 240 do
   Sicoob (Guia v3.3), **stdlib pura** e sem tela nenhuma: é biblioteca, não aba.
   Quem a usa é o passo 3 da aba Pagamentos do Dia (`pagamentos_dia/remessa_dia.py`).
