@@ -12,6 +12,7 @@ agora é a API em vez de duas linhas de .xlsx.
 from __future__ import annotations
 
 import datetime
+import re
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -64,6 +65,69 @@ def como_dinheiro(valor) -> Decimal:
     else:
         d = Decimal(valor or 0)
     return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+#: Valor como se escreve no Brasil: ponto no milhar (em grupos de três) e
+#: vírgula nos centavos. "1.500,50", "1500,50", "1.234.567,89", "1500".
+_VALOR_BR = re.compile(r"(?P<inteiro>\d{1,3}(?:\.\d{3})+|\d+)"
+                       r"(?:,(?P<centavos>\d+))?")
+
+_EXEMPLO = "Use vírgula para os centavos, ex.: 1.500,50"
+
+
+def ler_valor_brl(texto) -> Decimal:
+    """O valor digitado na tela, em Decimal com 2 casas. Recusa com
+    `ValueError` — a mensagem é para mostrar a quem digitou.
+
+    Ponto SEM vírgula é recusado, e não adivinhado: "1500.50" pode ser mil e
+    quinhentos com centavos ou cento e cinquenta mil, e a leitura antiga
+    (apagar todo ponto) escolhia a segunda — lançava R$ 150.050,00 no ERP.
+    Recusar custa redigitar; chutar errado custa desfazer lançamento no ERP.
+    Pelo mesmo motivo, mais de 2 casas depois da vírgula é recusado em vez de
+    arredondado, e zero ou negativo nunca é valor de aporte.
+
+    Não reaproveita os leitores que já existem, e cada um tem o seu motivo:
+    `widgets.valor_de_brl` arrasta tkinter para o módulo de regra, devolve
+    float e apaga todo ponto (o mesmo defeito); `conciliacao.parsing.parse_brl`
+    procura o PRIMEIRO valor dentro de um texto (aceitaria "10,00 abc"); e o
+    `_centavos` do `anexar/mc_client.py` lê "1500.50" como decimal americano,
+    que é justamente o chute que aqui não se faz."""
+    t = str(texto or "").replace("\xa0", " ").strip()
+    t = re.sub(r"^r\$", "", t, flags=re.IGNORECASE).strip()
+    negativo = t.startswith("-") or (t.startswith("(") and t.endswith(")"))
+    if negativo:
+        t = t.strip("()-").strip()
+    if not t:
+        raise ValueError(f"Digite o valor. {_EXEMPLO}")
+    if "." in t and "," not in t:
+        raise ValueError(f"\"{t}\" é ambíguo: o ponto pode ser milhar ou "
+                         f"centavos. {_EXEMPLO}")
+    m = _VALOR_BR.fullmatch(t)
+    if not m:
+        raise ValueError(f"Valor inválido: \"{t}\". {_EXEMPLO}")
+    centavos = m.group("centavos") or "0"
+    if len(centavos) > 2:
+        raise ValueError("Use no máximo 2 casas depois da vírgula, "
+                         "ex.: 1.500,50")
+    try:
+        valor = como_dinheiro(
+            Decimal(f"{m.group('inteiro').replace('.', '')}.{centavos}"))
+    except ArithmeticError:
+        # Dígitos demais para o Decimal (`quantize` passa da precisão). A
+        # tela só mostra `ValueError`; o resto viraria clique sem resposta.
+        raise ValueError(f"Valor grande demais: \"{t}\".") from None
+    if negativo or valor <= 0:
+        raise ValueError("O valor precisa ser maior que zero.")
+    return valor
+
+
+def formatar_brl(valor) -> str:
+    """R$ 1.234,56 — o que `widgets.brl` escreve na tela, sem tkinter e sem
+    float (este módulo roda sem interface; ver "util.py não importa tkinter"
+    no CLAUDE.md). O formato `,.2f` cru, com "R$" na frente, escrevia
+    "R$ 150,050.00", que para quem lê em português não parece 150 mil."""
+    texto = f"{como_dinheiro(valor):,.2f}"
+    return "R$ " + texto.replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def dividir_em_centavos(total, n: int) -> list[Decimal]:
@@ -146,7 +210,7 @@ class Operacao:
 
     def resumo(self) -> str:
         return (f"{self.data:%d/%m} · {self.pagador} → {self.recebedor} · "
-                f"R$ {self.valor:,.2f} · {self.tipo} · {self.modo}")
+                f"{formatar_brl(self.valor)} · {self.tipo} · {self.modo}")
 
 
 def expandir(op: Operacao, entidades: dict, subcontas: dict,
@@ -186,7 +250,7 @@ def expandir(op: Operacao, entidades: dict, subcontas: dict,
                 raise ValueError(
                     f"a subconta {grupo} está sem obras e/ou investidores no "
                     "subcontas.json — o rateio sairia vazio e o valor de "
-                    f"R$ {op.valor:,.2f} sumiria.")
+                    f"{formatar_brl(op.valor)} sumiria.")
             partes = dividir_em_centavos(op.valor, len(obras) * len(investidores))
             i = 0
             for obra in obras:

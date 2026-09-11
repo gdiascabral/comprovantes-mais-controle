@@ -19,7 +19,7 @@ from .mc_catalogos import Catalogos
 from .mc_lancamentos import criar_pagamento, criar_recebimento, ErroLancamento
 from . import erp_sessao
 from .erp_sessao import ouvinte
-from .regras import Operacao, como_dinheiro, expandir
+from .regras import Operacao, expandir, ler_valor_brl
 
 import widgets
 
@@ -206,11 +206,12 @@ class AportesFrame(ttk.Frame):
             messagebox.showwarning("Data", "Use o formato dd/mm/aaaa.")
             return
         try:
-            # Decimal, não float: este número vira lançamento no ERP.
-            valor = como_dinheiro(
-                self.var_valor.get().replace(".", "").replace(",", "."))
-        except (ArithmeticError, ValueError, TypeError):
-            messagebox.showwarning("Valor", "Valor inválido.")
+            # Decimal, não float: este número vira lançamento no ERP. Ponto
+            # sem vírgula é RECUSADO (ver `regras.ler_valor_brl`): apagar todo
+            # ponto fazia "1500.50" virar R$ 150.050,00.
+            valor = ler_valor_brl(self.var_valor.get())
+        except ValueError as e:
+            messagebox.showwarning("Valor", str(e))
             return
 
         op = Operacao(data=data, pagador=self.cb_pagador.get(),
@@ -280,7 +281,7 @@ class AportesFrame(ttk.Frame):
                              self.obra_padrao)) for o in self.operacoes)
         self.lbl_total.configure(
             text=f"{len(self.operacoes)} operação(ões) · {n} lançamento(s) · "
-                 f"R$ {total:,.2f}")
+                 f"{widgets.brl(total)}")
 
     # --------------------------------------------------------- Mais Controle
     def _preparar_sessao(self, recarregar: bool = False):
@@ -423,7 +424,7 @@ class AportesFrame(ttk.Frame):
         if not messagebox.askyesno(
                 "Confirmar",
                 f"Criar {n} lançamento(s) no Mais Controle, "
-                f"somando R$ {total:,.2f}?\n\nIsso escreve no sistema."):
+                f"somando {widgets.brl(total)}?\n\nIsso escreve no sistema."):
             return
         if self.anx.avisar_se_ocupado("os Aportes"):
             return
@@ -487,7 +488,7 @@ class AportesFrame(ttk.Frame):
                 if r.ok:
                     feitos += 1
                     self._log(f"  {i}/{len(plano)} ok — {especie} "
-                              f"R$ {item['valor']:,.2f}")
+                              f"{widgets.brl(item['valor'])}")
                 elif r.id_criado:
                     # Existe no ERP e não está redondo. É diferente de falhar:
                     # relançar duplica, e ignorar deixa dinheiro em aberto.
