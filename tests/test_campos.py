@@ -478,3 +478,66 @@ def test_aporte_sem_pagador_fica_com_a_descricao():
     # com os dois lados continua "PAGADOR PARA RECEBEDOR"
     assert sr.nome_arquivo(dict(c, pag="EMPRESA A LTDA")) == \
         "1000,00 - EMPRESA A PARA EMPRESA B - 31-07"
+
+
+def test_ltda_na_segunda_linha_nao_vira_o_recebedor():
+    """No Pix impresso o nome longo quebra em duas linhas, e a de baixo é só
+    "LTDA" ou "SPE". Com três letras bastando, ela virava o recebedor, o
+    `_limpar_empresa` a apagava e o arquivo saía "SEM DESCRICAO". Texto
+    SINTÉTICO, como o OCR o devolve."""
+    t = """\
+Pix enviado
+R$ 500,00
+Sobre a transação
+Data do pagamento
+Horário
+Quem recebeu
+Nome
+CPF/CNPJ
+Quem pagou
+Nome
+CPF/CNPJ
+Segunda, 07/09/2026
+10h15
+a0000b000€c000000000d0000e000000f
+FORNECEDOR EXEMPLO
+LTDA
+00.000.000/0001-00
+EMPRESA PAGADORA EXEMPLO
+SPE
+11.111.111/0001-11
+"""
+    c = sr.campos(t)
+    assert c["dest"] == "FORNECEDOR EXEMPLO"
+    assert sr.nome_arquivo(c) == "500,00 - FORNECEDOR EXEMPLO - 07-09"
+    for sufixo in ("LTDA", "SPE", "S/A", "EIRELI"):
+        assert not sr._serve_de_nome(sufixo)
+    assert sr._serve_de_nome("Zeq")
+
+
+def test_frase_com_o_rotulo_nao_vira_descricao():
+    """Sem ":" o rótulo só vale na grafia do banco e sem "de/do/da" depois:
+    "Histórico de pagamentos da conta" é uma frase do comprovante, e antes
+    passava na frente da Observação verdadeira."""
+    t = """\
+COMPROVANTE DE PAGAMENTO
+Histórico de pagamentos da conta
+Valor: R$ 120,00
+Data do pagamento: 05/09/2026
+Observação: OBRA TESTE QD 99 LT 01 OC 456
+"""
+    c = sr.campos(t)
+    assert c["desc"] == "OBRA TESTE QD 99 LT 01 OC 456"
+    assert sr.nome_arquivo(c) == "120,00 - OBRA TESTE QD 99 LT 01 OC 456 - 05-09"
+    assert sr._descricao("Descrição do pagamento\nObservação: OBRA QD 1 LT 2",
+                         "OUTRO") == "OBRA QD 1 LT 2"
+    # o caso que motivou o "sem dois-pontos" continua valendo
+    assert sr._descricao("Situação Efetivado\nObservação OBRA QD 1 LT 2\n",
+                         "SICOOB") == "OBRA QD 1 LT 2"
+
+
+def test_lt_colado_so_se_separa_depois_de_numero():
+    """ "VOLT 220" é palavra: o conserto do "26ALT" a partia em "VO LT 220"."""
+    assert sr._corrigir_codigo_ocr("VOLT 220 QD 01 LT 02") == "VOLT 220 QD 01 LT 02"
+    assert sr._corrigir_codigo_ocr("OBRA QD 26ALT 09") == "OBRA QD 26A LT 09"
+    assert sr._corrigir_codigo_ocr("OBRA QD 18LT8") == "OBRA QD 18 LT 8"

@@ -132,6 +132,13 @@ def _observacao_quebrada(L, i):
     return None
 
 
+RE_DESC_COM_DOIS_PONTOS = re.compile(
+    r'(?:Descri[çc][ãa]o|Observa[çc][ãa]o|Hist[óo]rico)\s*:\s*(.*)', re.I)
+RE_DESC_SEM_DOIS_PONTOS = re.compile(
+    r'(?:Descri[çc][ãa]o|Observa[çc][ãa]o)(?=\s|$)\s*(.*)')
+RE_CONECTIVO = re.compile(r'(?i)d[aeo]s?\b')
+
+
 def _descricao(t, banco):
     if banco == 'INTER':
         m = re.search(r'(?m)^\s*Descri[çc][ãa]o\s*:?[ \t]+(.+)', t)
@@ -144,13 +151,22 @@ def _descricao(t, banco):
         # ":" jogava fora justamente a descrição com centro de custo e OC —
         # 144 dos 368 comprovantes reais de 10 e 11/09/2026 tinham esse
         # formato. "Histórico" é o nome que outros bancos dão ao mesmo campo.
-        m = re.match(r'(?:Descri[çc][ãa]o|Observa[çc][ãa]o|Hist[óo]rico)\b\s*(:?)\s*(.*)',
-                     l.strip(), re.I)
+        # SEM ":" o rótulo só vale na grafia em que o banco o escreve
+        # ("Observação", "Descrição") e sem "de/do/da" logo depois: senão
+        # "Histórico de pagamentos da conta" ou "Descrição do pagamento", que
+        # são frases do comprovante, viravam a descrição do arquivo.
+        linha = l.strip()
+        m = RE_DESC_COM_DOIS_PONTOS.match(linha)
+        dois_pontos = bool(m)
+        if not m:
+            m = RE_DESC_SEM_DOIS_PONTOS.match(linha)
+            if m and RE_CONECTIVO.match(m.group(1)):
+                m = None
         if m:
-            resto = m.group(2).strip()
-            if resto and (m.group(1) or not RE_LIXO_NOME.match(resto)):
+            resto = m.group(1).strip()
+            if resto and (dois_pontos or not RE_LIXO_NOME.match(resto)):
                 return resto
-            if not m.group(1):
+            if not dois_pontos:
                 # Rótulo sozinho e SEM ":". No Sicoob é a observação de DUAS
                 # linhas: o rótulo fica centrado entre elas, uma acima e outra
                 # abaixo ("TB 21 QD 50 LT 39 DEVOLUÇÃO…" / "Observação" /
@@ -353,7 +369,9 @@ def _espacar_codigo(s) -> str:
 # cola a sigla da obra no número ("TB21"). Sem o "OC 7371" o matcher não acha
 # a OC (`OC\s*(\d+)`), que é o sinal mais forte do casamento.
 RE_OC_TORTO = re.compile(r"(?<![A-Za-z0-9])[0O]€?[C€](?=\s*\d{3,})")
-RE_ROTULO_GRUDADO = re.compile(r"(?<=[0-9A-Z])(QD|LT)(?=\s*\d)")
+# só depois de número, ou do número com a letra do lote ("26ALT 09"): "VOLT
+# 220" é palavra, e virava "VO LT 220"
+RE_ROTULO_GRUDADO = re.compile(r"(?:(?<=\d)|(?<=\d[A-Z]))(QD|LT)(?=\s*\d)")
 RE_SIGLA_NUMERO = re.compile(r"\b([A-Z]{2,4})(\d+)\b")
 # e o psm 6 lê o Q do QD como G ou O ("GD 26A", "OD 26A")
 RE_QD_TORTO = re.compile(r"(?<![A-Za-z0-9])[GO0]D(?=\s*\d)")
@@ -412,6 +430,12 @@ def _serve_de_nome(cand) -> bool:
     ("TB21QD51LT23C282M3") tem a mesma cara de hash."""
     cand = (cand or "").strip()
     if sum(ch.isalpha() for ch in cand) < 3 or RE_DIN_L.match(cand) or _lixo(cand):
+        return False
+    # "LTDA", "SPE", "S/A" sozinhos na linha são o FIM de um nome que quebrou
+    # em duas (o recebedor longo do Pix impresso): o nome é a linha de cima.
+    # Com três letras bastando, "LTDA" virava o recebedor, o `_limpar_empresa`
+    # o apagava, e o arquivo saía "SEM DESCRICAO".
+    if not _limpar_empresa(cand):
         return False
     # horário e data não são nome: quando o OCR perde o nome, a linha de cima
     # no Pix do Inter é a data ("Quarta, 09/09/2026")
