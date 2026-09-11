@@ -593,6 +593,39 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   `cartao_elastico`); e a altura do campo vazio é MEDIDA a cada mudança, porque
   `height` conta linhas enquanto `spacing1` cobra pixels — com altura fixa o
   Anexar cortava ao meio justamente a frase que diz o que fazer.
+  **O meio da aba ROLA, e as pontas não** (`AreaRolavel`, 11/09/2026). No
+  Anexar a 1920x1080 com a escala a 125%, os três cartões numerados já
+  passavam da janela: a barra de ação saía cortada e o Registro sumia — o
+  `_reservar_o_pe` de 03/09 não alcançava o caso, porque ali não há lista
+  para ceder espaço. Hoje toda aba é: cabeçalho fixo; `corpo =
+  widgets.AreaRolavel(self)` com os cartões numerados dentro (`Cartao(corpo,
+  …)`); e a DOCA presa no pé por `corpo.encaixar(acao, self.reg)`, chamado
+  UMA vez, no fim do `_build`, depois do `registro_elastico`. Início e
+  Usuários rolam inteiros (`corpo.encaixar()`), e o menu lateral também rola.
+  Quatro regras: (1) cartão novo de passo nasce em `corpo`, nunca em `self` —
+  em `self` ele entraria no `pack` depois da doca e seria o primeiro a sumir;
+  (2) como o `Cartao`, a área tem DOIS objetos (`self` é o interior, filho do
+  Canvas; `moldura` é o que vai ao `pack` da aba), porque widget só é
+  recortado pela janela-PAI; (3) a área só pede a sobra da tela quando tem um
+  filho com `expand` (a lista que cresce) — sem ele, a sobra é do Registro;
+  (4) a barra aparece por cima da margem direita dos cartões, sem tomar
+  largura: tomando, o texto requebraria ao aparecer e ela podia piscar em
+  laço. O Tk não avisa quando o tamanho PEDIDO do interior muda (ele tem
+  altura fixa dentro do Canvas), então a área escuta o `<Configure>` dos
+  filhos e confere a cada `VIGIA_MS` enquanto está na tela. Roda e Tab chegam
+  por `bind_all` (`_roda_na_area`, `_foco_na_area`): Text e Treeview com o
+  que rolar ficam com a roda; campo que recebe foco é trazido à vista — menos
+  o foco que volta ao mesmo widget, que é o Alt+Tab e não pode puxar a lista
+  de volta ao topo. **A roda não troca mais valor de `ttk.Combobox` em lugar
+  nenhum do app**: `_instalar_roda` desfaz a ligação da classe, porque com a
+  página rolando, passar o ponteiro por "Tipo" ou "Forma" trocava o valor em
+  silêncio (a janela de contas novas já tinha o conserto local, pelo mesmo
+  motivo). O Registro ganhou, no cabeçalho do cartão, "Copiar" e
+  "Ampliar/Recolher" (60% da aba), e uma alça no alto que se arrasta; os três
+  mexem só no piso em linhas. A Aportes passou a ter cartão de Registro, como
+  as outras. Testes: `tests/test_rolagem.py`, e em
+  `tests/test_registro_visivel.py` a barra de ação inteira nas onze abas e o
+  Anexar com 36 contas carregadas — a tela do defeito.
   **Nas tabelas, só `atencao` e `erro` se pintam.** A tag do Treeview pinta a
   LINHA inteira (o Tk não tem cor por célula), e pintando os quatro estados uma
   tabela de dez rotinas virava faixas verdes, azuis e vermelhas alternadas — e
@@ -897,12 +930,24 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   Casar e anexar) — "Abrir o Mais Controle" saiu do fluxo e virou botão
   auxiliar, porque com a senha guardada o app entra sozinho.
   Pausar/Parar, cronômetros ⏱, janela de
-  resolver DÚVIDAS (`_janela_duvidas`): por pagamento mostra favorecido,
-  descrição inteira, centro de custo, nº doc + OC/NF, categoria e conta;
-  os candidatos vêm
+  resolver DÚVIDAS (`_janela_duvidas`), em LISTA + DETALHE: em cima, uma
+  linha por pagamento em dúvida (situação, valor, data, conta, favorecido,
+  nº de PDFs); embaixo, o detalhe de UM — favorecido, descrição inteira,
+  centro de custo, nº doc + OC/NF, categoria e conta — e os candidatos
   numa tabela ordenada pelo score, com o que bateu em cada um (OC/NF,
-  centro de custo, data) e botões de abrir o PDF e o lançamento. O mesmo
-  detalhe vai para a aba DUVIDA do relatório (`_resumo_cands`).
+  centro de custo, data) e botões de abrir o PDF e o lançamento. Enter (ou
+  "Próxima em dúvida") pula para o próximo sem escolha; escolher um PDF que
+  já estava em outro pagamento o MUDA de lugar, com aviso; sair com
+  escolhas feitas pergunta antes de descartá-las. Quem grava é
+  `_aplicar_escolhas`, função pura (um PDF, um pagamento). **Até 11/09/2026
+  era um bloco de widgets por dúvida num Canvas rolável, e isso não
+  escala**: cada bloco que entra faz o Canvas recalcular a geometria dos
+  anteriores — 184 dúvidas davam 2.032 widgets e 86 s só de geometria
+  (medido com a janela fora da tela), o "Não está respondendo" do Windows.
+  Lista que cresce com o dado é UMA Treeview, nunca N widgets num Canvas;
+  `tests/test_duvidas_anexar.py` confere que a janela tem os mesmos
+  widgets com 3 ou 300 dúvidas. O mesmo detalhe vai para a aba DUVIDA do
+  relatório (`_resumo_cands`).
   Botão Abrir relatório, modo "Por lista" (.csv/.xlsx; completa
   ".pdf" ausente). Relatório Excel: ANEXADOS/DUVIDA/SEM PAR.
 - `anexar/conferencia.py` — auditoria pós-anexo: lista pagos SEM anexo no
@@ -1171,15 +1216,41 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   de `submeter()`: quem cancela ali não pode ter consumido a sessão do ERP.
   Anexo que é foto só é baixado quando é aviso "PAGAR PARA" — baixar toda
   imagem de todo título seria pagar OCR por nada.
+  **As duas listas de conferência são UMA tabela cada (11/09/2026).** A
+  confirmação "Lançamentos do dia" (`_janela_confirmar`) e a conferência da
+  remessa (`_janela_remessa`) eram um bloco de widgets por lançamento dentro
+  de um Canvas rolável, o mesmo desenho que travava a janela de dúvidas do
+  Anexar: medido com a janela fora da tela e dados fictícios, 300 lançamentos
+  davam 2.802 e 3.589 widgets, 5,4 s e 6,5 s antes de a janela aparecer — e
+  a rolagem ainda arrastava essas janelas nativas todas. Hoje cada uma é um
+  `Treeview`, os mesmos widgets com 3 ou 300 linhas. O que o Treeview não
+  faz foi resolvido assim: a marca é o símbolo ☑/☐ da primeira coluna
+  (clique nela ou Espaço — na confirmação várias linhas de uma vez, na
+  remessa uma por vez, de propósito, para um "já saiu na remessa nº…" nunca
+  ir junto sem ser lido); a conta é uma linha em negrito em cima das suas
+  (por isso a tabela não ordena pelo cabeçalho); a coluna POR ONDE tem a
+  largura mínima MEDIDA no texto mais comprido, pelo `font measure` do Tcl,
+  porque o Treeview corta sem aviso e ali mora a linha digitável; e a linha
+  selecionada se repete embaixo, inteira, com o destino em fonte de largura
+  fixa. O reembolso e o reenvio, que moravam na 2ª e na 3ª altura da célula,
+  sobem para a SITUAÇÃO. A regra saiu da tela e tem teste
+  (`tests/test_listas_de_conferencia.py`): `grupos_para_confirmar`,
+  `resumo_da_confirmacao`, `nao_confirmados` e `estado_na_confirmacao` aqui;
+  `nsa_previstos`, `resumo_da_conferencia` e `aplicar_marcas` no
+  `remessa_dia`. A janela de contas novas da abertura
+  (`nuvem/contas_novas_dialogo.py`) virou lista + editor pelo mesmo motivo:
+  21 contas custavam 2,2 s. **Lista que cresce com o dado é UMA Treeview,
+  nunca N widgets num Canvas** — as listas de contas desta aba e do
+  Relatório Mensal ficaram no Canvas porque medem 0,1 s com 40 contas.
   **"Contas prontas para remessa" é UMA LINHA no cartão e a TABELA numa
   janela — e quem decidiu isso foi a régua do Registro.** O PR #55 pôs aqui um
   cartão com `Treeview` de oito linhas, e ele empurrou o Registro para fora da
   janela: `tests/test_registro_visivel.py` ficou vermelho na `main` em três
   casos, com o campo em 1,4 linha (48 px) a 1,25x e o cabeçalho da aba parando
   ABAIXO dele. A causa não é o cartão ser feio, é aritmética de altura: o
-  Registro é o último a ser empacotado nas onze telas, então fica com a SOBRA,
-  e o teste cobra que a sobra dê ao menos quatro linhas legíveis a 1,0x e a
-  1,25x. MEDIDO na moldura do teste (1920x1040), acima desse piso sobram
+  Registro era o último a ser empacotado nas onze telas, então ficava com a
+  SOBRA (desde 11/09 ele fica preso no pé e quem cede é a `AreaRolavel`), e o
+  teste cobra que ele mostre ao menos quatro linhas legíveis a 1,0x e a 1,25x. MEDIDO na moldura do teste (1920x1040), acima desse piso sobram
   **103 px** para este cartão, e a tabela custava 149. Daí a forma de hoje, e
   as duas consequências que não são estilo: a lista inteira mudou-se para a
   janela do "Ver detalhes" (`tk.Toplevel` modal, como as outras da aba), que é
@@ -1324,10 +1395,10 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   na linha de "Abrir planilha" / "Abrir local da remessa" / "Ler retorno",
   porque tem o papel deles — não é passo do fluxo, é uma janela que se abre
   para olhar o que já aconteceu, e o arquivo chega ao SicoobNet horas depois.
-  Uma FAIXA nova ali sairia do Registro, que é o último a ser empacotado e
-  fica com a sobra que `tests/test_registro_visivel.py` cobra em quatro linhas
-  legíveis (foi o que o PR #55 pagou com a tabela de prontidão); um botão a
-  mais na mesma linha custa largura, e largura sobra. Dez colunas —
+  Uma FAIXA nova ali entraria na doca, presa no pé junto do Registro, e
+  sairia da parte da aba que rola em toda rodada (antes de 11/09 saía do
+  próprio Registro — foi o que o PR #55 pagou com a tabela de prontidão); um
+  botão a mais na mesma linha custa largura, e largura sobra. Dez colunas —
   `EMPRESA · AG-CONTA · ARQUIVO Nº · GERADA ÀS · SITUAÇÃO · PAGOS · AGUARDA ·
   REJEIT. · SEM RESP. · TOTAL` —, com a SITUAÇÃO antes dos contadores porque
   ela é a resposta e os quatro números são a conferência. Um `CampoData` com
@@ -1353,6 +1424,24 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   erro da consulta e o "nenhuma remessa neste dia", porque as quatro respondem
   à mesma pergunta (por que a tabela está vazia?) e três labels dariam três
   lugares para procurar a resposta.
+  **"Gerar HTML dos pagamentos" é PROVISÓRIO** (11/09/2026, até a remessa
+  CNAB virar o caminho do dia). Botão da barra de ações, aceso depois do
+  passo 2: grava na pasta da planilha `pagamentos_<período>.html` (todas as
+  contas do `self.resultado`, com "Copiar" e a caixa "já paguei", guardada
+  pelo id do lançamento) e `pagamentos_pessoa_fisica_lancamento_<período>.html`
+  (a conta PESSOA FISICA - APENAS LANÇAMENTO, tirada da lista do passo 1 —
+  que traz vencimento, categoria, nº doc e centro de custo —, com o PDF no
+  layout do Mais Controle), e abre o geral. Sem ERP e sem rede, na thread da
+  interface. Substitui o script que rodava fora do app. Os modelos são
+  TEXTO em `pagamentos_dia/modelos_html.py` (o `codigo.zip` não leva
+  `.html`), a regra é `pagamentos_dia/html_pagamentos.py` (pura, com
+  `tests/test_html_pagamentos.py`), e nada da empresa mora no repositório: o
+  logotipo e o rodapé do PDF vêm de `logo_relatorio_pf.png` e
+  `rodape_relatorio_pf.txt` ao lado da planilha (ou do app), e faltando saem
+  em branco. **Para remover**: apagar os dois módulos e o teste, o método
+  `_gerar_html_pagamentos` e as linhas marcadas "HTML provisório" deste
+  arquivo (import, botão `b_html` e as duas que o acendem e apagam), e este
+  parágrafo.
 - `cnab240/` — gerador, validador e leitor de retorno do arquivo CNAB 240 do
   Sicoob (Guia v3.3), **stdlib pura** e sem tela nenhuma: é biblioteca, não aba.
   Quem a usa é o passo 3 da aba Pagamentos do Dia (`pagamentos_dia/remessa_dia.py`).

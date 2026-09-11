@@ -91,6 +91,8 @@ class ExtratosSicoobFrame(ttk.Frame):
             "em OFX e PDF.",
             trilha="Mensal  ›  Extratos Sicoob")
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         # O verde é BAIXAR: criar pasta e compactar são o antes e o depois.
         self.b1 = widgets.Botao(cab.acoes, "Conferir e criar pastas",
                                 papel="passo", command=self.criar_pastas)
@@ -100,7 +102,7 @@ class ExtratosSicoobFrame(ttk.Frame):
         self.b2.pack(side="left")
 
         # ---- card 1: mês
-        f1 = widgets.Cartao(self, "Mês do fechamento", 1)
+        f1 = widgets.Cartao(corpo, "Mês do fechamento", 1)
         f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
@@ -119,7 +121,7 @@ class ExtratosSicoobFrame(ttk.Frame):
         # Os três cartões que só seguravam um botão viraram um só: com o botão
         # no cabeçalho, o que sobrava neles era a frase de explicação — e três
         # cartões brancos com uma frase cada eram três cartões vazios.
-        f2 = widgets.Cartao(self, "Como o mês fecha", 2)
+        f2 = widgets.Cartao(corpo, "Como o mês fecha", 2)
         f2.pack(fill="x", padx=PADX, pady=px((0, 12)))
         for titulo, frase in (
                 ("Conferir e criar pastas",
@@ -161,6 +163,7 @@ class ExtratosSicoobFrame(ttk.Frame):
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
+        corpo.encaixar(acao, self.reg)
 
     # ------------------------------------------------------------- mensagens
     def _log(self, msg=""):

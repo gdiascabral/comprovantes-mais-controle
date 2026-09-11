@@ -19,7 +19,7 @@ from .mc_catalogos import Catalogos
 from .mc_lancamentos import criar_pagamento, criar_recebimento, ErroLancamento
 from . import erp_sessao
 from .erp_sessao import ouvinte
-from .regras import Operacao, como_dinheiro, expandir
+from .regras import Operacao, expandir, ler_valor_brl
 
 import widgets
 
@@ -66,6 +66,8 @@ class AportesFrame(ttk.Frame):
             "Lança direto no Mais Controle — sem planilha, sem importação.",
             trilha="Comprovantes  ›  Aportes")
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         self.b_conferir = widgets.Botao(cab.acoes, "Conferir cadastro",
                                         papel="passo", command=self._conferir)
         self.b_conferir.pack(side="left", padx=px((0, 8)))
@@ -73,7 +75,7 @@ class AportesFrame(ttk.Frame):
                                       papel="acao", command=self._lancar)
         self.b_lancar.pack(side="left")
 
-        form = widgets.Cartao(self, "Novo lançamento", 1)
+        form = widgets.Cartao(corpo, "Novo lançamento", 1)
         form.pack(fill="x", padx=PADX, pady=px((0, 12)))
 
         # Rótulo EM CIMA de cada campo, e não ao lado: com o rótulo à esquerda
@@ -130,33 +132,37 @@ class AportesFrame(ttk.Frame):
                                         papel="passo", command=self._adicionar)
         self.acao_enter.pack(anchor="w", pady=px((12, 0)))
 
-        lista = widgets.Cartao(self, "A lançar", 2)
+        lista = widgets.Cartao(corpo, "A lançar", 2)
         lista.pack(fill="both", expand=True, padx=PADX, pady=px((0, 12)))
         self.rodape = widgets.RodapeTabela(lista.acoes)
         self.rodape.pack()
         self.rodape.link("Remover selecionado", self._remover)
         self.rodape.link("Limpar tudo", self._limpar)
         self.rodape.link("Recarregar cadastros", self._recarregar_cadastros)
-        corpo = ttk.Frame(lista)
-        corpo.pack(fill="both", expand=True)
-        self.tabela = ttk.Treeview(corpo, columns=("op",), show="headings",
+        grade = ttk.Frame(lista)
+        grade.pack(fill="both", expand=True)
+        self.tabela = ttk.Treeview(grade, columns=("op",), show="headings",
                                    height=7)
         self.tabela.heading("op", text="OPERAÇÃO")
         self.tabela.column("op", width=760, anchor="w")
         widgets.estilo_tabela(self.tabela)
         self.tabela.pack(fill="both", expand=True, side="left")
-        ttk.Scrollbar(corpo, orient="vertical", command=self.tabela.yview
+        ttk.Scrollbar(grade, orient="vertical", command=self.tabela.yview
                       ).pack(side="right", fill="y")
         # O total continua existindo, agora no rodapé do cartão — que é onde
         # ele fica em todas as outras telas desde o redesenho.
         self.lbl_total = self.rodape.resumo
 
-        # Sem cartão em volta: aqui o próprio campo é quem encolhe e cresce.
-        self.texto = tk.Text(self, wrap="word", relief="flat", borderwidth=0,
-                             highlightthickness=0)
-        self.texto.pack(fill="x", padx=PADX, pady=px((0, 16)))
+        # O Registro ganhou cartão, como nas outras abas: é o cartão que
+        # leva a alça, o "Ampliar" e o "Copiar" (ver `registro_elastico`).
+        self.reg = widgets.Cartao(self, "Registro", padding=(12, 10))
+        self.reg.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        self.texto = tk.Text(self.reg, wrap="word", relief="flat",
+                             borderwidth=0, highlightthickness=0)
+        self.texto.pack(fill="both", expand=True)
         widgets.estilo_log(self.texto)
-        widgets.registro_elastico(self.texto, self.texto)
+        widgets.registro_elastico(self.reg, self.texto)
+        corpo.encaixar(self.reg)
 
     def _recarregar_listas(self):
         nomes = list(self.entidades)
@@ -206,11 +212,12 @@ class AportesFrame(ttk.Frame):
             messagebox.showwarning("Data", "Use o formato dd/mm/aaaa.")
             return
         try:
-            # Decimal, não float: este número vira lançamento no ERP.
-            valor = como_dinheiro(
-                self.var_valor.get().replace(".", "").replace(",", "."))
-        except (ArithmeticError, ValueError, TypeError):
-            messagebox.showwarning("Valor", "Valor inválido.")
+            # Decimal, não float: este número vira lançamento no ERP. Ponto
+            # sem vírgula é RECUSADO (ver `regras.ler_valor_brl`): apagar todo
+            # ponto fazia "1500.50" virar R$ 150.050,00.
+            valor = ler_valor_brl(self.var_valor.get())
+        except ValueError as e:
+            messagebox.showwarning("Valor", str(e))
             return
 
         op = Operacao(data=data, pagador=self.cb_pagador.get(),
@@ -280,7 +287,7 @@ class AportesFrame(ttk.Frame):
                              self.obra_padrao)) for o in self.operacoes)
         self.lbl_total.configure(
             text=f"{len(self.operacoes)} operação(ões) · {n} lançamento(s) · "
-                 f"R$ {total:,.2f}")
+                 f"{widgets.brl(total)}")
 
     # --------------------------------------------------------- Mais Controle
     def _preparar_sessao(self, recarregar: bool = False):
@@ -423,7 +430,7 @@ class AportesFrame(ttk.Frame):
         if not messagebox.askyesno(
                 "Confirmar",
                 f"Criar {n} lançamento(s) no Mais Controle, "
-                f"somando R$ {total:,.2f}?\n\nIsso escreve no sistema."):
+                f"somando {widgets.brl(total)}?\n\nIsso escreve no sistema."):
             return
         if self.anx.avisar_se_ocupado("os Aportes"):
             return
@@ -487,7 +494,7 @@ class AportesFrame(ttk.Frame):
                 if r.ok:
                     feitos += 1
                     self._log(f"  {i}/{len(plano)} ok — {especie} "
-                              f"R$ {item['valor']:,.2f}")
+                              f"{widgets.brl(item['valor'])}")
                 elif r.id_criado:
                     # Existe no ERP e não está redondo. É diferente de falhar:
                     # relançar duplica, e ignorar deixa dinheiro em aberto.

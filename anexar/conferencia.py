@@ -143,13 +143,15 @@ class ConferenciaFrame(ttk.Frame):
             "conteúdo dos anexos existentes.",
             trilha="Comprovantes  ›  Conferência")
         cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         # Ação única: o verde é o único botão do cabeçalho.
         self.btn = widgets.Botao(cab.acoes, "Conferir anexos do período",
                                  papel="acao", command=self._executar)
         self.btn.pack(side="left")
 
         # ---- card: período
-        f1 = widgets.Cartao(self, "Período da conferência", 1)
+        f1 = widgets.Cartao(corpo, "Período da conferência", 1)
         f1.pack(fill="x", padx=PADX, pady=(0, 12))
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
@@ -199,6 +201,7 @@ class ConferenciaFrame(ttk.Frame):
         widgets.estilo_log(self.log)
         self._mostrar_placeholder()
         widgets.registro_elastico(self.reg, self.log)
+        corpo.encaixar(acao, self.reg)
 
     def _mostrar_placeholder(self):
         self.log.delete("1.0", "end")

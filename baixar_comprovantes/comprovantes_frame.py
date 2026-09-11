@@ -107,6 +107,8 @@ class ComprovantesFrame(ttk.Frame):
             "do mês. Você só entra quando o banco pedir; o resto é automático.",
             trilha="Comprovantes  ›  Baixar Comprovantes")
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         self.b_ir = widgets.Botao(cab.acoes, "▶  Baixar comprovantes",
                                   papel="acao", command=self._comecar)
         self.b_ir.pack(side="right")
@@ -119,7 +121,7 @@ class ComprovantesFrame(ttk.Frame):
                                                   padx=px((0, 8)))
 
         # ---- período e destino
-        c_per = widgets.Cartao(self, "Período", numero=1)
+        c_per = widgets.Cartao(corpo, "Período", numero=1)
         c_per.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(c_per)
         linha.pack(fill="x")
@@ -143,7 +145,7 @@ class ComprovantesFrame(ttk.Frame):
                                                          padx=px((8, 0)))
 
         # ---- a fila
-        c_fila = widgets.Cartao(self, "Contas na fila", numero=2)
+        c_fila = widgets.Cartao(corpo, "Contas na fila", numero=2)
         c_fila.pack(fill="both", expand=True, padx=PADX, pady=px((0, 12)))
         colunas = ("marca", "banco", "conta", "empresa", "situacao")
         self.tabela = ttk.Treeview(c_fila, columns=colunas, show="headings",
@@ -186,6 +188,7 @@ class ComprovantesFrame(ttk.Frame):
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
+        corpo.encaixar(acao, self.reg)
 
     def _escolher_pasta(self):
         escolhida = filedialog.askdirectory(initialdir=self.v_pasta.get() or None)
