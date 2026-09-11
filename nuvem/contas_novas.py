@@ -21,6 +21,7 @@ derrubar este token — e tudo bem, porque a conferência já acabou.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +46,36 @@ ARQUIVO_MAPA = "mapping.yaml"
 
 MOTIVO_SEM_PASTA = "marcada, mas sem pasta — a pasta é obrigatória no cadastro"
 MOTIVO_SEM_EMPRESA = "marcada, mas sem empresa — o cadastro exige a empresa"
+
+#: Os bancos em que, aqui, só PESSOA FÍSICA tem conta (regra do dono,
+#: 11/09/2026): conta do ERP com um destes no nome é de uma pessoa, e vai para
+#: a empresa das pessoas físicas, numa pasta só. Casa por PALAVRA inteira —
+#: "NEXT" não pode acender numa conta que se chame "NEXTEL".
+BANCOS_DE_PESSOA = ("NEXT", "PAGBANK", "NEON")
+EMPRESA_DE_PESSOA = "PESSOAS FÍSICAS"
+PASTA_DE_PESSOA = "PESSOA FÍSICA"
+
+#: Código do banco (o `bankCode` do ERP) → o NOME que a coluna `banco` guarda.
+#: São duas colunas no cadastro porque são duas coisas: o código vai para
+#: `banco_codigo`, e o nome entra no nome do arquivo arquivado. Gravar "756"
+#: em `banco` fazia o extrato sair `202607 756 MAIS CONTROLE.pdf`.
+NOME_DO_BANCO = {"1": "BANCO DO BRASIL", "33": "SANTANDER", "77": "INTER",
+                 "104": "CAIXA", "237": "BRADESCO", "260": "NUBANK",
+                 "290": "PAGBANK", "341": "ITAU", "536": "NEON",
+                 "756": "SICOOB"}
+
+#: Número de conta escrito no NOME ("... SICOOB 60.290-6"). Com ou sem o
+#: ponto do milhar, sempre com o dígito depois do hífen.
+_RE_NUMERO_NO_NOME = re.compile(r"(?<![\d.])(?:\d{1,3}(?:\.\d{3})+|\d{4,6})-\d(?!\d)")
+
+
+def banco_de_pessoa(nome: str) -> str:
+    """O banco de pessoa física citado no nome da conta, ou ""."""
+    chave = util.norm_espaco(nome or "")
+    for banco in BANCOS_DE_PESSOA:
+        if re.search(rf"\b{banco}\b", chave):
+            return banco
+    return ""
 
 
 class _ConfigMinimo:
@@ -77,9 +108,37 @@ class ContaNova:
         versão deixava o campo vazio, e a pessoa marcou quatro contas, não
         preencheu nada e levou quatro recusas de uma vez — trabalho que o app
         tinha como poupar.
+
+        Conta de pessoa física (NEXT, PAGBANK, NEON no nome) vai toda para a
+        MESMA pasta — quem separa uma da outra no nome do arquivo é o
+        `sufixo`, que `gravar` põe sozinho (ver `desempatar`).
         """
+        if banco_de_pessoa(self.nome):
+            return PASTA_DE_PESSOA
         partes = self.nome.split(" - ", 1)
         return (partes[1] if len(partes) == 2 else self.nome).strip()
+
+    def empresa_sugerida(self, nomes) -> str:
+        """A empresa do NOSSO cadastro que esta conta provavelmente é. "" se
+        não dá para dizer.
+
+        Duas regras, e só elas: conta de pessoa física vai para a empresa das
+        pessoas físicas (se ela existir no cadastro); qualquer outra, para a
+        empresa cujo nome abre o nome da conta ("EMPRESA X SPE - SICOOB" →
+        "EMPRESA X"), ficando com a mais comprida quando mais de uma abre.
+        É SUGESTÃO, como a pasta: nasce no menu para ser conferida.
+        """
+        nomes = [n for n in (nomes or []) if n]
+        if banco_de_pessoa(self.nome):
+            alvo = util.norm_espaco(EMPRESA_DE_PESSOA)
+            return next((n for n in nomes if util.norm_espaco(n) == alvo), "")
+        if " - " not in self.nome:
+            return ""
+        prefixo = util.norm_espaco(self.nome.split(" - ", 1)[0])
+        abrem = [n for n in nomes
+                 if prefixo == util.norm_espaco(n)
+                 or prefixo.startswith(util.norm_espaco(n) + " ")]
+        return max(abrem, key=lambda n: len(util.norm_espaco(n)), default="")
 
     @property
     def resumo(self) -> str:
@@ -150,6 +209,20 @@ def _com_digito(numero, digito) -> str:
     return f"{n}-{d}" if n and d else n
 
 
+def numero_no_nome(nome: str) -> str:
+    """O número de conta escrito no nome, quando há UM só. "" se nenhum ou
+    mais de um.
+
+    O ERP deixa `account` vazio em conta cadastrada às pressas, e o número
+    acaba só no nome ("EMPRESA X SPE - SICOOB 60.290-6"). Sem ele a conta
+    nasce sem `numero`, fica fora do `contas_sicoob.json` e o extrato do
+    Sicoob dela nunca é baixado — sem erro nenhum na tela. Dois números no
+    nome não se escolhem: a pergunta fica para o painel.
+    """
+    achados = _RE_NUMERO_NO_NOME.findall(nome or "")
+    return achados[0] if len(achados) == 1 else ""
+
+
 def como_conta_nova(cru: dict) -> ContaNova:
     """Uma conta CRUA da API vira o nosso formato.
 
@@ -163,7 +236,8 @@ def como_conta_nova(cru: dict) -> ContaNova:
         nome=_texto(cru.get("name")),
         banco=_texto(cru.get("bankCode")),
         agencia=_com_digito(cru.get("agency"), cru.get("agencyDigit")),
-        numero=_com_digito(cru.get("account"), cru.get("accountDigit")),
+        numero=(_com_digito(cru.get("account"), cru.get("accountDigit"))
+                or numero_no_nome(_texto(cru.get("name")))),
     )
 
 
@@ -265,10 +339,77 @@ def validar(escolha: dict) -> str:
     return ""
 
 
+def _banco(escolha: dict) -> tuple[str, str]:
+    """`(banco, banco_codigo)` da escolha.
+
+    O ERP manda o CÓDIGO ("756"), e ele ia parar na coluna do NOME — foi
+    assim que nasceram subcontas com `banco='756'` no cadastro. Código
+    conhecido vira nome e o código vai para a coluna dele; desconhecido fica
+    como veio, que é o que já acontecia. Sem banco nenhum, conta de pessoa
+    física leva o banco que o próprio nome diz (NEXT, PAGBANK, NEON).
+    """
+    cru = str(escolha.get("banco") or "").strip()
+    if cru.isdigit():
+        return NOME_DO_BANCO.get(cru.lstrip("0"), cru), cru
+    if cru:
+        return cru, ""
+    return banco_de_pessoa(escolha.get("nome_erp") or ""), ""
+
+
+def sufixo_do_nome(nome_erp: str) -> str:
+    """O desempate que entra no NOME DO ARQUIVO: o nome da conta no ERP, sem
+    os caracteres que o Windows recusa em nome de arquivo."""
+    limpo = re.sub(r'[\\/:*?"<>|]+', " ", nome_erp or "")
+    return re.sub(r"\s+", " ", limpo).strip()
+
+
+def _destinos_ocupados(token: str):
+    """`{(empresa_id, pasta, sufixo)}` das contas que já existem, comparáveis.
+    `None` quando não deu para ler — aí o desempate olha só o lote."""
+    try:
+        linhas = rest.ler("conta", token, colunas="empresa_id,pasta,sufixo")
+    except Exception:
+        log.warning("lendo as contas já cadastradas para desempatar a pasta",
+                    exc_info=True)
+        return None
+    return {(l.get("empresa_id"), util.norm_espaco(l.get("pasta") or ""),
+             util.norm_espaco(l.get("sufixo") or ""))
+            for l in linhas if isinstance(l, dict)}
+
+
+def desempatar(linhas: list[dict], ocupados=()) -> None:
+    """Dá `sufixo` às contas que cairiam no MESMO destino. Muda `linhas`.
+
+    O banco recusa duas contas com a mesma `(empresa, pasta, sufixo)` — é o
+    `conta_destino_unico`, e ele existe porque duas contas na mesma pasta sem
+    desempate gravam o MESMO arquivo, e a segunda apaga a primeira calada.
+    Enquanto a janela não sabia disso, marcar as contas de pessoa física
+    (todas em "PESSOA FÍSICA") fazia o lote INTEIRO ser recusado, com um erro
+    de SQL no lugar da resposta.
+
+    Recebe o sufixo toda conta de um grupo com mais de uma, e a conta que cai
+    numa pasta que já tem conta sem sufixo no cadastro. O sufixo é o nome da
+    conta no ERP, que é único por construção (`conta_nome_erp_unico`).
+    """
+    ocupados = set(ocupados or ())
+    grupos: dict = {}
+    for linha in linhas:
+        chave = (linha["empresa_id"], util.norm_espaco(linha["pasta"]))
+        grupos.setdefault(chave, []).append(linha)
+    for (empresa_id, pasta), grupo in grupos.items():
+        if len(grupo) > 1 or (empresa_id, pasta, "") in ocupados:
+            for linha in grupo:
+                linha["sufixo"] = sufixo_do_nome(linha["nome_erp"])
+
+
 def gravar(token: str, escolhas: list[dict]) -> list[str]:
     """Insere as contas escolhidas. Devolve os avisos do que ficou de fora.
 
     Só INSERT: apagar cadastro continua sendo assunto do painel do Supabase.
+
+    Toda linha leva as MESMAS chaves (`sufixo` e `banco_codigo` inclusive,
+    vazios): o PostgREST recusa o lote inteiro quando os objetos de um
+    INSERT em massa não têm as mesmas colunas.
     """
     linhas, avisos = [], []
     for escolha in escolhas:
@@ -276,14 +417,18 @@ def gravar(token: str, escolhas: list[dict]) -> list[str]:
         if problema:
             avisos.append(f"{escolha.get('nome_erp', '?')}: {problema}")
             continue
+        banco, banco_codigo = _banco(escolha)
         linhas.append({
             "empresa_id": escolha["empresa_id"],
             "nome_erp": escolha["nome_erp"],
             "pasta": str(escolha["pasta"]).strip(),
-            "banco": str(escolha.get("banco") or "").strip(),
+            "banco": banco,
+            "banco_codigo": banco_codigo,
             "agencia": str(escolha.get("agencia") or "").strip(),
             "numero": str(escolha.get("numero") or "").strip() or None,
+            "sufixo": "",
         })
     if linhas:
+        desempatar(linhas, _destinos_ocupados(token))
         rest.inserir("conta", token, linhas)
     return avisos
