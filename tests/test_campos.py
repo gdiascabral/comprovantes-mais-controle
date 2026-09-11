@@ -170,3 +170,311 @@ def test_nome_arquivo_round_trip_para_o_matcher():
     assert p is not None
     assert p["valor"] == 7000
     assert "5979" in p["ocs"]
+
+
+# ------------------------------------------- o comprovante comum do Sicoob
+# Rótulo e valor na mesma linha, SEM dois-pontos. É o texto que sai do PDF do
+# Sicoob e também o que o OCR devolve de uma foto dele. Medido em 368
+# comprovantes reais de 10 e 11/09/2026: o parser antigo acertava o valor em
+# 113 e punha a descrição no nome em 73 de 223; o novo, 368 e 210 (as 13 que
+# faltam são aportes, que viram "PAGADOR PARA RECEBEDOR" de propósito).
+# Tudo SINTÉTICO: empresas, obra, documentos e códigos são inventados.
+
+SICOOB_BOLETO = """\
+SICOOB - SISTEMA DE COOPERATIVAS DE CRÉDITO DO BRASIL
+SISBR - SISTEMA DE INFORMÁTICA DO SICOOB
+COMPROVANTE DE
+10/09/2026 15:06:02
+PAGAMENTO DE BOLETO
+Cooperativa 0000-0 / COOPERATIVA DE CRÉDITO EXEMPLO LTDA
+Conta 00.000-0
+Cliente EMPRESA EXEMPLO ENGENHARIA LTDA
+Linha digitável 11111.22222 33333.444444 55555.666666 7 88880000115000
+Número do documento --
+Beneficiário
+Nome/Razão Social FORNECEDOR FICTICIO DE MATERIAIS LTDA
+Nome Fantasia FORNECEDOR FICTICIO
+CPF/CNPJ 11.111.111/0001-11
+Pagador
+Nome/Razão social EMPRESA EXEMPLO ENGENHARIA LTDA
+Nome fantasia EMPRESA EXEMPLO ENGENHARIA LTDA
+CPF/CNPJ 00.000.000/0001-00
+Datas
+Realizado 07/09/2026 às 17:57:26
+Pagamento 08/09/2026
+Vencimento 07/09/2026
+Valores
+Documento R$ 1.100,00
+Desconto/Abatimento R$ 0,00
+Juros/Multa R$ 50,00
+Pago R$ 1.150,00
+Situação Efetivado
+Observação{sep}RESIDENCIAL EXEMPLO QD 99 LT 1 NF 1234 OC 5678
+Autenticação 11111111-2222-3333-4444-555566667777
+OUVIDORIA SICOOB: 08007250996
+"""
+
+
+@pytest.mark.parametrize("sep", [" ", ": "], ids=["sem-dois-pontos", "com-dois-pontos"])
+def test_sicoob_comum_valor_pago_data_do_pagamento_e_observacao(sep):
+    """Sem os ":" o boleto do Sicoob saía sem valor (o "Pago R$" não era
+    lido), com a data da IMPRESSÃO (10/09, o carimbo do topo) e sem a
+    observação — o nome caía no fornecedor. O valor é o PAGO (com juros),
+    não o do documento; a data é a do pagamento, não a do agendamento."""
+    c = sr.campos(SICOOB_BOLETO.format(sep=sep))
+    assert c["banco"] == "SICOOB"
+    assert c["valor"] == "1.150,00"
+    assert c["data"] == "08/09/2026"
+    assert c["desc"] == "RESIDENCIAL EXEMPLO QD 99 LT 1 NF 1234 OC 5678"
+    assert sr.nome_arquivo(c) == \
+        "1150,00 - RESIDENCIAL EXEMPLO QD 99 LT 1 NF 1234 OC 5678 - 08-09"
+
+
+def test_sicoob_comum_round_trip_para_o_matcher():
+    from anexar import matcher
+    c = sr.campos(SICOOB_BOLETO.format(sep=" "))
+    p = matcher.parse_pdf(sr.nome_arquivo(c) + ".pdf")
+    assert p["valor"] == 115000
+    assert p["data"] == "0809"
+    assert p["ocs"] == {"5678"} and p["nfs"] == {"1234"}
+
+
+SICOOB_PIX_ENVIADO = """\
+SICOOB - SISTEMA DE COOPERATIVAS DE CRÉDITO DO BRASIL
+SISBR - SISTEMA DE INFORMÁTICA DO SICOOB
+COMPROVANTE DE EFETIVAÇÃO DE PAGAMENTO PIX
+Tipo Pagamento Pix enviado
+Pagador
+Instituição COOPERATIVA DE CRÉDITO EXEMPLO LTDA.
+Nome EMPRESA EXEMPLO ENGENHARIA LTDA
+CPF/CNPJ **.000.000/0001-**
+Destinatário
+Nome FORNECEDOR FICTICIO
+CPF/CNPJ **.111.111/0001-**
+Instituição/Banco BANCO EXEMPLO S.A.
+Dados do pagamento
+Data do pagamento 03/09/2026 16:21:19
+Valor R$ 132,70
+ID Transação E00000000202609031919AAAAAAAAAAA
+Situação do pagamento Finalizado com sucesso
+OUVIDORIA SICOOB : 08007250996
+"""
+
+
+def test_pix_do_sicoob_com_pix_enviado_nao_vira_inter():
+    """O Sicoob também escreve "Pix enviado", e o `detectar` antigo olhava
+    isso primeiro: o Pix virava Inter e saía sem valor, pagador e recebedor.
+    Sem descrição no banco, o nome é o de quem recebeu."""
+    c = sr.campos(SICOOB_PIX_ENVIADO)
+    assert (c["banco"], c["tipo"]) == ("SICOOB", "PIX")
+    assert c["valor"] == "132,70"
+    assert c["pag"] == "EMPRESA EXEMPLO ENGENHARIA LTDA"
+    assert sr.nome_arquivo(c) == "132,70 - FORNECEDOR FICTICIO - 03-09"
+
+
+def test_transferencia_do_sicoob_le_os_blocos_debito_e_credito():
+    t = """\
+SICOOB - SISTEMA DE COOPERATIVAS DE CRÉDITO DO BRASIL
+SISBR - SISTEMA DE INFORMÁTICA DO SICOOB
+COMPROVANTE DE TRANSFERÊNCIA
+10/09/2026 16:41:54
+ENTRE CONTAS CORRENTES
+Número do agendamento 11111111
+Data do agendamento 31/08/2026
+Data do lançamento 01/09/2026
+Valor R$ 11.000,00
+Natureza TRANSF.INTERC.PIX-DIF. TIT
+Débito
+Cooperativa 0000-0 / SICOOB EXEMPLO
+Conta 00.000-0 / EMPRESA EXEMPLO SPE LTDA
+Crédito
+Cooperativa 1111-1 / SICOOB OUTRO EXEMPLO
+Conta 11.111-1 / FORNECEDOR FICTICIO LTDA
+Autenticação AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+OUVIDORIA SICOOB: 08007250996
+"""
+    c = sr.campos(t)
+    assert (c["banco"], c["tipo"]) == ("SICOOB", "TRANSF")
+    assert c["pag"] == "EMPRESA EXEMPLO SPE LTDA"
+    assert sr.nome_arquivo(c) == "11000,00 - FORNECEDOR FICTICIO - 01-09"
+
+
+def test_convenio_do_sicoob_usa_a_observacao_e_o_convenio():
+    t = """\
+SICOOB - SISTEMA DE COOPERATIVAS DE CRÉDITO DO BRASIL
+SISBR - SISTEMA DE INFORMÁTICA DO SICOOB
+COMPROVANTE
+10/09/2026 15:06:02
+DE PAGAMENTO DE CONVÊNIO
+Cooperativa 0000 / SICOOB EXEMPLO
+Conta 00.000-0 / EMPRESA EXEMPLO ENGENHARIA LTDA
+Convênio AGUA EXEMPLO GO
+Data do pagamento 08/09/2026
+Valor do documento R$ 0,00
+Valor total R$ 268,26
+Observação AGUA EXEMPLO
+"""
+    c = sr.campos(t)
+    assert c["dest"] == "AGUA EXEMPLO GO"
+    assert sr.nome_arquivo(c) == "268,26 - AGUA EXEMPLO - 08-09"
+
+
+def test_rotulo_sozinho_sem_dois_pontos_nao_puxa_o_vizinho():
+    """No layout impresso (e no OCR que lê a coluna de rótulos inteira antes
+    da de valores) "Observação" sozinho é só mais um rótulo do bloco: a linha
+    de baixo é outro rótulo e não pode virar a descrição."""
+    assert sr._descricao("Observação\nNome\nFULANO EXEMPLO\n", "SICOOB") is None
+    # com ":" continua valendo o vizinho, como sempre foi
+    assert sr._descricao("Observação:\nOBRA EXEMPLO QD 1\n", "SICOOB") == \
+        "OBRA EXEMPLO QD 1"
+
+
+def test_icone_do_pix_lido_como_aspas_nao_apaga_o_valor():
+    """O OCR lê o ícone do Pix do Inter como aspas: "“ R$ 10.000,00". Nas
+    fotos e escaneados de 37 comprovantes reais era a causa de TODOS os Pix
+    do Inter que saíam "SEM VALOR"."""
+    assert sr._valor("Pix enviado\n“ R$ 10.000,00\nSobre a transação\n") == "10.000,00"
+    assert sr._valor("Pix enviado\n”. R$ 70,00\n") == "70,00"
+
+
+def test_inter_lido_em_colunas_segue_a_ordem_dos_rotulos():
+    """O OCR (psm 3) lê a coluna de rótulos inteira antes da de valores, e o
+    texto cai no parser "impresso". Ele assumia "Quem pagou" antes de "Quem
+    recebeu", mas o Pix enviado de hoje vem ao contrário: o aporte saía
+    invertido. Texto SINTÉTICO, no formato que o OCR devolve."""
+    t = """\
+Pix enviado
+“ R$ 2.500,00
+Sobre a transação
+Data do pagamento
+Horário
+ID da transação
+Descrição
+Quem recebeu
+Nome
+CPF/CNPJ
+Instituição
+Quem pagou
+Nome
+CPF/CNPJ
+Instituição
+Fale com a gente
+Terça, 08/09/2026
+17h50
+E00000000202609081925AAAAAAAAAAA
+APORTE CAPITAL
+EMPRESA B EXEMPLO
+00.000.000/0001-00
+Banco Inter
+EMPRESA A EXEMPLO LTDA
+11.111.111/0001-11
+Banco Inter S.A.
+"""
+    c = sr.campos(t)
+    assert (c["pag"], c["dest"]) == ("EMPRESA A EXEMPLO LTDA", "EMPRESA B EXEMPLO")
+    assert sr.nome_arquivo(c) == "2500,00 - EMPRESA A EXEMPLO PARA EMPRESA B EXEMPLO - 08-09"
+
+
+def test_observacao_do_sicoob_em_duas_linhas():
+    """A observação longa do Sicoob quebra em duas linhas com o rótulo
+    CENTRADO entre elas — uma acima, outra abaixo. Assim o pdfplumber e o
+    OCR a devolvem, e o convênio saía "SEM DESCRICAO" (7 dos 368 reais)."""
+    t = """\
+SICOOB - SISTEMA DE COOPERATIVAS DE CRÉDITO DO BRASIL
+DE PAGAMENTO DE CONVÊNIO
+Convênio AGUA EXEMPLO GO
+Data do pagamento 01/09/2026
+Valor total R$ 45,69
+Autenticação AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+RESIDENCIAL EXEMPLO QD 9 LT 1 UC 1234567-8 REF
+Observação
+AGO 2026
+OUVIDORIA SICOOB: 08007250996
+"""
+    assert sr.campos(t)["desc"] == "RESIDENCIAL EXEMPLO QD 9 LT 1 UC 1234567-8 REF AGO 2026"
+    # vizinha que é outro campo não é continuação: aí não inventa nada
+    assert sr._descricao("Situação Efetivado\nObservação\nAutenticação X\n",
+                         "SICOOB") is None
+
+
+def test_transferencia_lida_por_ocr_com_linhas_em_branco():
+    """O OCR põe uma linha em branco entre os campos, e a "Conta" do bloco
+    Crédito caía fora das 3 linhas olhadas."""
+    t = ("SICOOB\nCOMPROVANTE DE TRANSFERÊNCIA\n\nData do lançamento 09/09/2026\n\n"
+         "Valor R$ 2.700,10\n\nDébito\n\nCooperativa 0000-0 / SICOOB EXEMPLO\n\n"
+         "Conta 00.000-0 / EMPRESA EXEMPLO LTDA\nCrédito\n\n"
+         "Cooperativa 1111-1 / SICOOB OUTRO\n\nConta 11.111-1 / FORNECEDOR FICTICIO\n")
+    assert sr.nome_arquivo(sr.campos(t)) == "2700,10 - FORNECEDOR FICTICIO - 09-09"
+    # o psm 6 do Tesseract às vezes nem lê o cabeçalho "COMPROVANTE DE
+    # TRANSFERÊNCIA": os blocos Débito/Crédito bastam
+    sem_cabecalho = t.replace("COMPROVANTE DE TRANSFERÊNCIA\n", "")
+    assert sr.nome_arquivo(sr.campos(sem_cabecalho)) == \
+        "2700,10 - FORNECEDOR FICTICIO - 09-09"
+
+
+def test_centro_de_custo_estragado_pelo_ocr():
+    """O OCR come o espaço do lote ("26ALT"), lê o O do OC como zero e o C
+    como € ("0€ 7371") e cola a sigla no número ("TB21"). Sem o "OC 7371" o
+    matcher perde a OC, que é o sinal mais forte do casamento."""
+    from anexar import matcher
+    c = dict(banco="INTER", tipo="PIX", valor="1.840,00", data="04/09/2026",
+             desc="TB21 QD 26ALT 09 0€ 7371", pag=None, dest="FULANO EXEMPLO")
+    nome = sr.nome_arquivo(c)
+    assert nome == "1840,00 - TB 21 QD 26A LT 09 OC 7371 - 04-09"
+    assert matcher.parse_pdf(nome + ".pdf")["ocs"] == {"7371"}
+    assert sr._corrigir_codigo_ocr("RESIDENCIAL QD 1 LT 2 0C 6749") == \
+        "RESIDENCIAL QD 1 LT 2 OC 6749"
+    # o Q do QD lido como G ou O (o psm 6 do Tesseract faz isso)
+    assert sr._corrigir_codigo_ocr("RESIDENCIAL 9 GD 26A LT 05") == "RESIDENCIAL 9 QD 26A LT 05"
+    assert sr._corrigir_codigo_ocr("RESIDENCIAL 9 OD 26A LT 10") == "RESIDENCIAL 9 QD 26A LT 10"
+    # sem cara de centro de custo, não mexe
+    for intocado in ("ADM - SALARIO", "CONSULTORIA 0C 1234", "APORTE CAPITAL"):
+        assert sr._corrigir_codigo_ocr(intocado) == intocado
+
+
+def test_recebedor_de_tres_letras_nao_perde_para_o_horario():
+    """Há recebedor com nome de três letras ("Zeq"): a regra antiga (mais de 4
+    caracteres) pulava o nome e pegava a linha de cima — o horário ou o
+    identificador da transação. Texto SINTÉTICO, como o OCR o devolve."""
+    t = """\
+Pix enviado
+“ R$ 1.002,07
+Sobre a transação
+Data do pagamento
+Horário
+Quem recebeu
+Nome
+CPF/CNPJ
+Quem pagou
+Nome
+CPF/CNPJ
+Quarta, 09/09/2026
+11h05
+a0000b000€c000000000d0000e000000f
+Zeq
+00.000.000/0001-00
+EMPRESA EXEMPLO LTDA
+11.111.111/0001-11
+"""
+    c = sr.campos(t)
+    assert c["dest"] == "Zeq"
+    assert sr.nome_arquivo(c) == "1002,07 - Zeq - 09-09"
+    # e quando o OCR perde o nome, a linha de cima é a data — que não é nome
+    assert not sr._serve_de_nome("Quarta, 09/09/2026")
+    assert not sr._serve_de_nome("11h05")
+
+
+def test_aporte_sem_pagador_fica_com_a_descricao():
+    """Faltando quem pagou, o miolo caía no recebedor e a descrição sumia:
+    13 Pix do Inter com "APORTE CAPITAL" saíram só com o nome de quem
+    recebeu. A descrição manda; o recebedor só entra para desempatar."""
+    c = dict(banco="INTER", tipo="PIX", valor="1.000,00", data="31/07/2026",
+             desc="APORTE CAPITAL", pag=None, dest="EMPRESA B LTDA")
+    assert sr.nome_arquivo(c) == "1000,00 - APORTE CAPITAL - 31-07"
+    assert sr.nome_arquivo(c, com_recebedor=True) == \
+        "1000,00 - APORTE CAPITAL - EMPRESA B - 31-07"
+    # sem recebedor também
+    assert sr.nome_arquivo(dict(c, dest=None)) == "1000,00 - APORTE CAPITAL - 31-07"
+    # com os dois lados continua "PAGADOR PARA RECEBEDOR"
+    assert sr.nome_arquivo(dict(c, pag="EMPRESA A LTDA")) == \
+        "1000,00 - EMPRESA A PARA EMPRESA B - 31-07"
