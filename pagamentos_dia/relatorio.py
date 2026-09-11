@@ -300,6 +300,59 @@ _PROVA_DE_PAGAMENTO = re.compile(
     r"valor\s+pago|data\s+d[oe]\s+pagamento|pix\s+enviado", re.I)
 
 
+#: Anexo que é IMAGEM: é assim que o QR Code do Pix costuma chegar — a guia do
+#: cartório, o print da compra de marketplace.
+_EXT_IMAGEM = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic")
+_QR_OU_PIX = re.compile(r"qr\s*_?\s*code|\bqr\b|\bpix\b", re.I)
+
+
+def _e_imagem(f: dict) -> bool:
+    ext = (f.get("extension") or "").strip().lower()
+    if ext and not ext.startswith("."):
+        ext = "." + ext
+    return (ext in _EXT_IMAGEM
+            or (f.get("filename") or "").lower().endswith(_EXT_IMAGEM))
+
+
+def anexo_para_pagar_a_mao(files, textos: dict | None = None) -> dict | None:
+    """O anexo por onde se paga À MÃO um Pix que não tem chave.
+
+    Há título que chega sem chave no cadastro, sem copia-e-cola na observação
+    e com UMA coisa anexada: a imagem do QR Code do Pix (a guia do cartório, o
+    print da compra de marketplace). Sem isto a linha caía em "sem forma de
+    pagar" e ia para NÃO ENTRARAM — o boleto em imagem sempre ficou na
+    planilha para alguém abrir e digitar, e o QR Code em imagem é o mesmo
+    caso. O app não lê o QR (decodificar pediria biblioteca que o exe não
+    tem); ele só não esconde a linha, e diz em qual anexo está.
+
+    Nunca o COMPROVANTE — pelo rótulo ou pelo texto de quem já pagou —,
+    porque ele prova pagamento feito, e pagar por ele é pagar em dobro.
+    Havendo mais de um, vai o que se anuncia QR/Pix, depois a imagem, depois
+    qualquer outro. `None` quando não sobra nenhum."""
+    textos = textos or {}
+    candidatos = []
+    for f in files or ():
+        if re.search(r"comprovante", _rotulo(f), re.I):
+            continue
+        texto = textos.get(f.get("downloadUrl") or "") or ""
+        if texto and _PROVA_DE_PAGAMENTO.search(texto):
+            continue
+        candidatos.append(f)
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda f: 0 if _QR_OU_PIX.search(_rotulo(f))
+                    else 1 if _e_imagem(f) else 2)
+    return candidatos[0]
+
+
+def _obs_pagar_pelo_anexo(f: dict) -> str:
+    nome = (f.get("filename") or "").strip() or "sem nome"
+    if _QR_OU_PIX.search(_rotulo(f)) or _e_imagem(f):
+        return f"Pix sem chave — pagar pelo QR Code do anexo '{nome}'"
+    return (f"Pix sem chave — abrir o anexo '{nome}' e pagar pelo QR Code ou "
+            "pelos dados que ele trouxer")
+
+
 def linha_em_outro_anexo(files, textos: dict, valor: float, urls_ocr=(),
                          ignorar: str = "", vencimento: date | None = None
                          ) -> tuple[str, dict | None]:
@@ -981,6 +1034,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     avisos.append("Chave/copia-e-cola veio da observação do lançamento.")
                 else:
                     dados, obs = "", "Pix sem chave no cadastro — buscar no ERP"
+                    # O QR Code anexado (em imagem, quase sempre) é por onde
+                    # se paga: a linha fica, como o boleto em imagem fica. A
+                    # remessa continua recusando — sem chave não há Pix no
+                    # arquivo do banco (`remessa_dia.MOTIVO_SEM_CHAVE`).
+                    pagar_por = anexo_para_pagar_a_mao(files, textos)
+                    if pagar_por is not None:
+                        tem_documento = True
+                        obs = _obs_pagar_pelo_anexo(pagar_por)
         else:
             pdf = escolher_pdf_do_boleto(files)
             url_pdf = (pdf or {}).get("downloadUrl") or ""
