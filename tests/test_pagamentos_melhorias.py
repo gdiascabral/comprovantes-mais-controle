@@ -156,6 +156,189 @@ def test_sem_chave_e_sem_aviso_nao_entra():
     assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR
 
 
+# ==========================================================================
+# Boleto junto da nota: um PDF só, etiquetado "Nota Fiscal" (09 e 10/09/2026)
+# ==========================================================================
+#: O que o pdfplumber tira de um PDF com a DANFE na página 1 e o boleto na 2.
+NF_COM_BOLETO = ("DANF-E Documento Auxiliar da Nota Fiscal Eletronica\n"
+                 "NF-e 64000 SERIE 1 VALOR TOTAL DA NOTA 1.150,00\n"
+                 f"Banco Exemplo S.A. 341-7 {LINHA_BANCARIA}\n"
+                 "Recibo do Pagador\n")
+
+
+def boleto_na_nota(**extra):
+    base = {"paidTo": "Atacado Modelo", "remainingValue": VALOR_BANCARIA,
+            "tradePayablePaymentMethod": "Boleto", "documentNumber": "64000"}
+    base.update(extra)
+    return lancamento(**base)
+
+
+def nota_com(texto):
+    return {"x1": [anexo("merge-64000-1", "Nota Fiscal", url="un")]}, {"un": texto}
+
+
+def test_boleto_dentro_da_nota_entra_com_a_linha():
+    """O fornecedor junta NF e boleto num PDF só e o ERP o etiqueta "Nota
+    Fiscal". A etiqueta mandava ignorar o arquivo, a linha ia para NÃO
+    ENTRARAM como "sem forma de pagar" — e o título vencia sem ninguém ver."""
+    anexos, textos = nota_com(NF_COM_BOLETO)
+    res = relatorio.montar_registros([boleto_na_nota()], anexos, {}, textos)
+    assert res.omitidos == []
+    linha = linhas(res)[0]
+    assert linha["tipo"] == "Boleto"
+    assert ocr_boleto.digitos(linha["dados"]) == ocr_boleto.digitos(LINHA_BANCARIA)
+    assert "dentro do anexo" in linha["obs"]
+
+
+def test_a_nota_continua_nao_sendo_escolhida_pelo_rotulo():
+    """A correção é pelo CONTEÚDO: pelo rótulo, nota continua não sendo boleto."""
+    anexos, _ = nota_com(NF_COM_BOLETO)
+    assert relatorio.escolher_pdf_do_boleto(anexos["x1"]) is None
+
+
+def test_numero_que_nao_fecha_o_dv_dentro_da_nota_nao_vira_boleto():
+    """A régua é a do OCR: número comprido que não fecha o dígito verificador
+    não é boleto. Chutar ali é pagar a conta de outra pessoa."""
+    ultimo = LINHA_BANCARIA[-1]
+    torta = LINHA_BANCARIA[:-1] + ("1" if ultimo != "1" else "2")
+    assert not ocr_boleto.valida(torta)
+    anexos, textos = nota_com(NF_COM_BOLETO.replace(LINHA_BANCARIA, torta))
+    res = relatorio.montar_registros([boleto_na_nota()], anexos, {}, textos)
+    assert res.contas == {}
+    assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR
+
+
+def test_boleto_dentro_da_nota_ganha_do_pix_do_cadastro():
+    """"Boleto ganha de Pix" vale para o boleto escondido também: pagar pela
+    chave deixaria o boleto registrado em aberto, correndo para o protesto."""
+    item = boleto_na_nota(tradePayablePaymentMethod="Pix",
+                          paidToBankAccount="PIX CNPJ: 22.333.444/0001-55")
+    anexos, textos = nota_com(NF_COM_BOLETO)
+    linha = linhas(relatorio.montar_registros([item], anexos, {}, textos))[0]
+    assert linha["tipo"] == "Boleto"
+    assert "pagar o boleto" in linha["obs"]
+
+
+def test_entre_dois_boletos_na_nota_vale_o_do_valor_do_lancamento():
+    anexos, textos = nota_com(f"{LINHA_ARRECADACAO}\n{LINHA_BANCARIA}\n")
+    linha = linhas(relatorio.montar_registros([boleto_na_nota()], anexos, {}, textos))[0]
+    assert ocr_boleto.digitos(linha["dados"]) == ocr_boleto.digitos(LINHA_BANCARIA)
+
+
+def test_boletos_na_nota_sem_o_valor_do_lancamento_ficam_para_conferir():
+    """Dois boletos e nenhum com o valor: não se escolhe, mas a linha também
+    não some — há documento anexado, e alguém abre e confere."""
+    anexos, textos = nota_com(f"{LINHA_ARRECADACAO}\n{LINHA_BANCARIA}\n")
+    res = relatorio.montar_registros([boleto_na_nota(remainingValue=999.0)],
+                                     anexos, {}, textos)
+    assert res.omitidos == []
+    linha = linhas(res)[0]
+    assert linha["dados"] == ""
+    assert "não dá para saber qual" in linha["obs"]
+
+
+def test_comprovante_com_linha_de_boleto_nao_vira_boleto():
+    """Comprovante traz a linha de um boleto JÁ PAGO: lê-la como forma de
+    pagar é pagar em dobro. Só nota e anexo sem rótulo são varridos."""
+    item = boleto_na_nota(tradePayablePaymentMethod="Pix",
+                          paidToBankAccount="PIX CNPJ: 22.333.444/0001-55")
+    anexos = {"x1": [anexo("pagamento feito", "Comprovante", url="uc")]}
+    linha = linhas(relatorio.montar_registros([item], anexos, {},
+                                              {"uc": NF_COM_BOLETO}))[0]
+    assert linha["tipo"] == "Pix"
+    assert linha["dados"] == "22.333.444/0001-55"
+
+
+def test_pix_com_boletos_na_nota_sem_o_valor_vira_boleto_para_conferir():
+    """Havendo boleto, a chave do cadastro não serve — mesmo sem saber qual."""
+    item = boleto_na_nota(tradePayablePaymentMethod="Pix", remainingValue=999.0,
+                          paidToBankAccount="PIX CNPJ: 22.333.444/0001-55")
+    anexos, textos = nota_com(f"{LINHA_ARRECADACAO}\n{LINHA_BANCARIA}\n")
+    res = relatorio.montar_registros([item], anexos, {}, textos)
+    assert res.omitidos == []
+    linha = linhas(res)[0]
+    assert linha["tipo"] == "Boleto"
+    assert linha["dados"] == ""
+    assert "não dá para saber qual" in linha["obs"]
+
+
+def test_ja_pago_de_pix_nao_vira_boleto():
+    item = boleto_na_nota(tradePayablePaymentMethod="Pix", paid=True,
+                          dateOfPayment="2026-09-09",
+                          paidToBankAccount="PIX CNPJ: 22.333.444/0001-55")
+    anexos, textos = nota_com(NF_COM_BOLETO)
+    linha = linhas(relatorio.montar_registros([item], anexos, {}, textos))[0]
+    assert "pagar o boleto" not in linha["obs"]
+
+
+def outra_linha(linha, fator):
+    """A mesma linha com outro fator de vencimento, e os três DVs refeitos."""
+    barras = ocr_boleto.codigo_de_barras(linha)
+    b43 = barras[:4] + f"{fator:04d}" + barras[9:]
+    b = b43[:4] + str(ocr_boleto._mod11_geral(b43)) + b43[4:]
+    campos = [b[0:4] + b[19:24], b[24:34], b[34:44]]
+    c = [x + str(ocr_boleto._mod10(x)) for x in campos]
+    nova = (f"{c[0][:5]}.{c[0][5:]} {c[1][:5]}.{c[1][5:]} "
+            f"{c[2][:5]}.{c[2][5:]} {b[4]} {b[5:19]}")
+    assert ocr_boleto.valida(nova)
+    return nova
+
+
+def test_duas_linhas_com_o_valor_desempatam_pelo_vencimento():
+    """Parcelas iguais do mesmo título dividem os anexos: as duas linhas têm o
+    valor, e só o vencimento diz qual é a desta parcela."""
+    fator = int(ocr_boleto.digitos(LINHA_BANCARIA)[33:37])
+    outra = outra_linha(LINHA_BANCARIA, fator + 1)
+    anexos, textos = nota_com(f"{LINHA_BANCARIA}\n{outra}\n")
+    item = boleto_na_nota(
+        plannedDate=ocr_boleto.vencimento_da_linha(outra).isoformat())
+    linha = linhas(relatorio.montar_registros([item], anexos, {}, textos))[0]
+    assert ocr_boleto.digitos(linha["dados"]) == ocr_boleto.digitos(outra)
+
+
+def test_boleto_na_nota_etiquetada_como_recibo_e_lido():
+    """O caso de 10/09/2026: NF + boleto num PDF só, etiquetado "Recibo".
+    Todo boleto tem um "Recibo do Pagador" — recibo não é prova de pagamento."""
+    anexos = {"x1": [anexo("merge-64000-1", "Recibo", url="ur")]}
+    texto = NF_COM_BOLETO + "Autenticacao Mecanica - Ficha de Compensacao\n"
+    res = relatorio.montar_registros([boleto_na_nota()], anexos, {}, {"ur": texto})
+    assert res.omitidos == []
+    assert ocr_boleto.digitos(linhas(res)[0]["dados"]) == ocr_boleto.digitos(LINHA_BANCARIA)
+
+
+def test_recibo_que_prova_pagamento_nao_vira_boleto():
+    """Comprovante de banco etiquetado "Recibo": a linha é de boleto já pago."""
+    anexos = {"x1": [anexo("pagamento boleto", "Recibo", url="ur")]}
+    texto = (f"Comprovante de pagamento\nData do pagamento 04/09/2026\n"
+             f"{LINHA_BANCARIA}\nValor pago 1.150,00\n")
+    res = relatorio.montar_registros([boleto_na_nota()], anexos, {}, {"ur": texto})
+    assert res.contas == {}
+    assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR
+
+
+def test_dois_pdfs_sem_rotulo_o_boleto_e_achado_pelo_conteudo():
+    """A DANFE e o pedido-com-boleto vieram os dois sem etiqueta. Com dois
+    "neutros", o rótulo não escolhe nenhum — e o boleto do segundo sumia."""
+    anexos = {"x1": [anexo("52260800000000000000550010000000000000000000", url="ud"),
+                     anexo("125000-PED-22000", url="up")]}
+    textos = {"ud": "DANF-E Documento Auxiliar da Nota Fiscal Eletronica\n",
+              "up": f"Pedido 125000\n{LINHA_BANCARIA}\n"}
+    res = relatorio.montar_registros([boleto_na_nota()], anexos, {}, textos)
+    assert res.omitidos == []
+    linha = linhas(res)[0]
+    assert ocr_boleto.digitos(linha["dados"]) == ocr_boleto.digitos(LINHA_BANCARIA)
+
+
+def test_duas_linhas_com_o_valor_sem_vencimento_que_desempate_ficam_para_conferir():
+    fator = int(ocr_boleto.digitos(LINHA_BANCARIA)[33:37])
+    outra = outra_linha(LINHA_BANCARIA, fator + 1)
+    anexos, textos = nota_com(f"{LINHA_BANCARIA}\n{outra}\n")
+    res = relatorio.montar_registros([boleto_na_nota()], anexos, {}, textos)
+    linha = linhas(res)[0]
+    assert linha["dados"] == ""
+    assert "não dá para saber qual" in linha["obs"]
+
+
 def test_reembolso_sem_chave_mas_com_aviso_continua_entrando():
     """"não tem chave para pagar, não tem aviso para pagar" são as DUAS
     coisas. Com aviso anexado, alguém escreveu aquilo hoje para pagar."""
