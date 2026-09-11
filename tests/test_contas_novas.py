@@ -7,7 +7,17 @@ exige, e que nada disso pode impedir o app de abrir.
 """
 import json
 
+import pytest
+
 from nuvem import contas_novas as conferencia
+
+
+@pytest.fixture(autouse=True)
+def _cadastro_sem_rede(monkeypatch):
+    """`gravar` lê as contas já cadastradas para desempatar a pasta. Nenhum
+    teste daqui fala com o banco de verdade: sem outra ordem, o cadastro
+    existente é vazio."""
+    monkeypatch.setattr(conferencia.rest, "ler", lambda *_a, **_k: [])
 
 
 def conta_erp(nome, ativa=True, id_erp="uuid-1", banco=None,
@@ -239,3 +249,176 @@ def test_erro_ao_falar_com_o_ERP_devolve_vazio_e_nao_levanta(monkeypatch):
 def test_sem_contas_do_ERP_nao_ha_o_que_perguntar(monkeypatch):
     monkeypatch.setattr(conferencia, "contas_do_erp", lambda log=print: [])
     assert conferencia.novidades(log=lambda _m: None) == []
+
+
+# ----------------------------------------- pessoa física e empresa sugerida
+def test_conta_de_pessoa_fisica_vai_para_a_pasta_unica():
+    """Regra do dono (11/09/2026): NEXT, PAGBANK e NEON são de pessoa física."""
+    for nome in ("FULANO DE TAL - NEXT", "BELTRANA - PAGBANK", "SICRANO - NEON"):
+        nova, = conferencia.comparar([conta_erp(nome)], set())
+        assert nova.pasta_sugerida == conferencia.PASTA_DE_PESSOA
+
+
+def test_pessoa_fisica_sugere_a_empresa_das_pessoas_fisicas():
+    """Casa sem acento e sem caixa, como todo nome aqui."""
+    nova, = conferencia.comparar([conta_erp("FULANO DE TAL - PAGBANK")], set())
+    assert nova.empresa_sugerida(["EMPRESA X", "Pessoas Fisicas"]) == "Pessoas Fisicas"
+
+
+def test_sem_a_empresa_das_pessoas_fisicas_no_cadastro_nao_sugere():
+    nova, = conferencia.comparar([conta_erp("FULANO - NEON")], set())
+    assert nova.empresa_sugerida(["EMPRESA X"]) == ""
+
+
+def test_banco_de_pessoa_casa_por_palavra_inteira():
+    """"NEXT" dentro de outra palavra não faz a conta ser de pessoa."""
+    nova, = conferencia.comparar([conta_erp("EMPRESA X - NEXTEL")], set())
+    assert conferencia.banco_de_pessoa(nova.nome) == ""
+    assert nova.pasta_sugerida == "NEXTEL"
+
+
+def test_a_empresa_sugerida_e_a_que_abre_o_nome_da_conta():
+    nova, = conferencia.comparar([conta_erp("EMPRESA CAÇULA SPE - SICOOB")], set())
+    assert nova.empresa_sugerida(["EMPRESA X", "Empresa Cacula"]) == "Empresa Cacula"
+
+
+def test_entre_duas_que_abrem_o_nome_fica_a_mais_comprida():
+    nova, = conferencia.comparar([conta_erp("EMPRESA X SPE - SICOOB")], set())
+    assert nova.empresa_sugerida(["EMPRESA", "EMPRESA X"]) == "EMPRESA X"
+
+
+def test_pedaco_de_palavra_nao_abre_o_nome():
+    """"EMPRESA X" não abre "EMPRESA XINGU": a comparação é por palavra."""
+    nova, = conferencia.comparar([conta_erp("EMPRESA XINGU - SICOOB")], set())
+    assert nova.empresa_sugerida(["EMPRESA X"]) == ""
+
+
+def test_nome_sem_prefixo_nao_sugere_empresa():
+    nova, = conferencia.comparar([conta_erp("CONTA PRINCIPAL")], set())
+    assert nova.empresa_sugerida(["CONTA PRINCIPAL"]) == ""
+
+
+# ----------------------------------------------------------- número no nome
+def test_sem_numero_no_ERP_o_numero_sai_do_nome():
+    """Sem número a conta fica fora do `contas_sicoob.json`, e o extrato do
+    Sicoob dela nunca é baixado — sem erro nenhum."""
+    nova, = conferencia.comparar(
+        [conta_erp("EMPRESA X SPE - SICOOB 12.345-6", numero=None,
+                   numero_dv=None)], set())
+    assert nova.numero == "12.345-6"
+
+
+def test_numero_sem_ponto_no_nome_tambem_serve():
+    nova, = conferencia.comparar(
+        [conta_erp("EMPRESA X - SUBCONTA 12345-6 - SICOOB", numero=None,
+                   numero_dv=None)], set())
+    assert nova.numero == "12345-6"
+
+
+def test_o_numero_do_ERP_ganha_do_nome():
+    nova, = conferencia.comparar(
+        [conta_erp("EMPRESA X - SICOOB 12.345-6", numero="99999",
+                   numero_dv="1")], set())
+    assert nova.numero == "99999-1"
+
+
+def test_dois_numeros_no_nome_nao_se_escolhem():
+    assert conferencia.numero_no_nome("EMPRESA X - 12345-6 E 65432-1") == ""
+
+
+def test_quadra_e_lote_nao_viram_numero():
+    assert conferencia.numero_no_nome("SUBCONTA - TB 21 QD 51 LT 40 - SICOOB") == ""
+
+
+# ------------------------------------------------ banco e sufixo na gravação
+def _capturar(monkeypatch, existentes=()):
+    gravadas = {}
+    monkeypatch.setattr(conferencia.rest, "inserir",
+                        lambda t, tok, ls, **k: gravadas.setdefault("linhas", ls))
+    monkeypatch.setattr(conferencia.rest, "ler",
+                        lambda *_a, **_k: list(existentes))
+    return gravadas
+
+
+def test_codigo_do_banco_vira_nome_e_o_codigo_vai_para_a_coluna_dele(monkeypatch):
+    """"756" em `banco` fazia o extrato sair `202607 756 MAIS CONTROLE.pdf`."""
+    gravadas = _capturar(monkeypatch)
+    conferencia.gravar("tok", [{"nome_erp": "X", "empresa_id": 1,
+                                "pasta": "SICOOB", "banco": "756"}])
+    linha, = gravadas["linhas"]
+    assert (linha["banco"], linha["banco_codigo"]) == ("SICOOB", "756")
+
+
+def test_codigo_desconhecido_fica_como_veio(monkeypatch):
+    gravadas = _capturar(monkeypatch)
+    conferencia.gravar("tok", [{"nome_erp": "X", "empresa_id": 1,
+                                "pasta": "P", "banco": "999"}])
+    linha, = gravadas["linhas"]
+    assert (linha["banco"], linha["banco_codigo"]) == ("999", "999")
+
+
+def test_conta_de_pessoa_sem_banco_leva_o_banco_do_nome(monkeypatch):
+    gravadas = _capturar(monkeypatch)
+    conferencia.gravar("tok", [{"nome_erp": "FULANO - PAGBANK", "empresa_id": 1,
+                                "pasta": "PESSOA FÍSICA", "banco": ""}])
+    linha, = gravadas["linhas"]
+    assert (linha["banco"], linha["banco_codigo"]) == ("PAGBANK", "")
+
+
+LOTE_MISTO = [
+    {"nome_erp": "FULANO - NEXT", "empresa_id": 9, "pasta": "PESSOA FÍSICA"},
+    {"nome_erp": "BELTRANA - PAGBANK", "empresa_id": 9, "pasta": "pessoa fisica "},
+    {"nome_erp": "EMPRESA X - SICOOB", "empresa_id": 1, "pasta": "SICOOB"},
+]
+
+
+def test_varias_na_mesma_pasta_ganham_sufixo(monkeypatch):
+    """Sem o sufixo o banco recusava o lote INTEIRO (`conta_destino_unico`),
+    e com ele os arquivos das contas não passam um por cima do outro."""
+    gravadas = _capturar(monkeypatch)
+    assert conferencia.gravar("tok", [dict(e) for e in LOTE_MISTO]) == []
+    sufixos = {l["nome_erp"]: l["sufixo"] for l in gravadas["linhas"]}
+    assert sufixos == {"FULANO - NEXT": "FULANO - NEXT",
+                       "BELTRANA - PAGBANK": "BELTRANA - PAGBANK",
+                       "EMPRESA X - SICOOB": ""}
+
+
+def test_toda_linha_do_lote_leva_as_mesmas_chaves(monkeypatch):
+    """O PostgREST recusa INSERT em massa com objetos de chaves diferentes."""
+    gravadas = _capturar(monkeypatch)
+    conferencia.gravar("tok", [dict(e) for e in LOTE_MISTO])
+    assert len({tuple(sorted(l)) for l in gravadas["linhas"]}) == 1
+
+
+def test_pasta_que_ja_tem_conta_sem_sufixo_desempata(monkeypatch):
+    gravadas = _capturar(monkeypatch, existentes=[
+        {"empresa_id": 1, "pasta": "SICOOB", "sufixo": ""}])
+    conferencia.gravar("tok", [{"nome_erp": "EMPRESA X - SICOOB 2",
+                                "empresa_id": 1, "pasta": "Sicoob"}])
+    assert gravadas["linhas"][0]["sufixo"] == "EMPRESA X - SICOOB 2"
+
+
+def test_a_mesma_pasta_em_outra_empresa_nao_desempata(monkeypatch):
+    gravadas = _capturar(monkeypatch, existentes=[
+        {"empresa_id": 2, "pasta": "SICOOB", "sufixo": ""}])
+    conferencia.gravar("tok", [{"nome_erp": "EMPRESA X - SICOOB",
+                                "empresa_id": 1, "pasta": "SICOOB"}])
+    assert gravadas["linhas"][0]["sufixo"] == ""
+
+
+def test_sem_ler_o_cadastro_o_lote_ainda_se_desempata(monkeypatch):
+    """Falhar a leitura não pode derrubar a gravação: o desempate do lote
+    continua valendo, e o banco segue sendo quem recusa o resto."""
+    gravadas = _capturar(monkeypatch)
+
+    def explode(*_a, **_k):
+        raise OSError("sem rede")
+
+    monkeypatch.setattr(conferencia.rest, "ler", explode)
+    conferencia.gravar("tok", [dict(e) for e in LOTE_MISTO])
+    assert all(l["sufixo"] for l in gravadas["linhas"] if l["empresa_id"] == 9)
+
+
+def test_sufixo_nao_leva_caractere_que_o_windows_recusa():
+    assert (conferencia.sufixo_do_nome('EMPRESA X - Conta corrente: 12.345-6 / "A"')
+            == "EMPRESA X - Conta corrente 12.345-6 A")
