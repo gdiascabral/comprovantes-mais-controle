@@ -777,13 +777,15 @@ class SepararFrame(ttk.Frame):
             "Separa cada página em um comprovante e renomeia lendo o conteúdo.",
             trilha="Comprovantes  ›  Separar e Renomear")
         cab.pack(fill="x", padx=PADX, pady=(16, 12))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         # Ação única: o verde é o único botão do cabeçalho.
         self.btn = widgets.Botao(cab.acoes, "Separar e Renomear", papel="acao",
                                  command=self._executar)
         self.btn.pack(side="left")
 
         # ---- card: pastas de trabalho
-        pastas = widgets.Cartao(self, "Pastas de trabalho", 1)
+        pastas = widgets.Cartao(corpo, "Pastas de trabalho", 1)
         pastas.pack(fill="x", padx=PADX, pady=(0, 12))
         ttk.Label(pastas, text="ENTRADA — PDFs ORIGINAIS", style="Rotulo.TLabel"
                   ).grid(row=0, column=0, sticky="w", pady=(0, 3))
@@ -807,7 +809,7 @@ class SepararFrame(ttk.Frame):
         self.ent.trace_add("write", self._sugerir_saida)
 
         # ---- card: nome dos arquivos
-        nome = widgets.Cartao(self, "Nome dos arquivos", 2)
+        nome = widgets.Cartao(corpo, "Nome dos arquivos", 2)
         nome.pack(fill="x", padx=PADX, pady=(0, 12))
         ttk.Radiobutton(nome, text=f"Padrão:  {MODELO_PADRAO}",
                         variable=self.v_tipo_nome, value="padrao"
@@ -848,6 +850,7 @@ class SepararFrame(ttk.Frame):
         widgets.estilo_log(self.txt)
         self._mostrar_placeholder()
         widgets.registro_elastico(self.reg, self.txt)
+        corpo.encaixar(acao, self.reg)
 
     def aplicar_cores(self, escuro: bool):
         """Cor do registro. As legendas seguem o tema pelo estilo nomeado."""

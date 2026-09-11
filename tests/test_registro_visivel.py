@@ -334,6 +334,62 @@ def test_o_registro_continua_sendo_o_ultimo_da_tela(moldura, aba):
 
 
 @pytest.mark.parametrize("aba", sorted(ABAS))
+def test_a_barra_de_acao_fica_inteira_na_tela(moldura, aba):
+    """O defeito de 11/09/2026: no Anexar a 125% a barra de ação saía cortada
+    no pé — Pausar, Parar e Login pela metade — e o Registro sumia. Desde a
+    doca (`AreaRolavel.encaixar`) ela fica presa acima do Registro."""
+    _texto, _vazio = _mostrar(moldura, aba)
+    quadro = moldura["registros"][aba][0]
+    barra = getattr(quadro, "barra_exec", None)
+    if barra is None:
+        pytest.skip("esta aba não tem barra de execução")
+    acao, tela = barra.master, moldura["tela"]
+    onde = f"{ABAS[aba]} a {moldura['escala']:.2f}x"
+    assert acao.winfo_height() >= acao.winfo_reqheight(), (
+        f"{onde}: a barra de ação saiu cortada "
+        f"({acao.winfo_height()} de {acao.winfo_reqheight()} px)")
+    assert (acao.winfo_rooty() + acao.winfo_height()
+            <= tela.winfo_rooty() + tela.winfo_height()), (
+        f"{onde}: a barra de ação passou do pé da janela")
+
+
+def test_o_anexar_com_as_contas_carregadas_rola_e_guarda_o_registro(moldura):
+    """A tela do defeito, reencenada: 36 contas marcáveis no cartão 3 e o
+    Registro com o que uma rodada escreve. Antes da `AreaRolavel`, aqui a
+    barra de ação saía cortada e o Registro ficava com zero pixels."""
+    texto, vazio = _mostrar(moldura, "anx")
+    quadro = moldura["registros"]["anx"][0]
+    tela = moldura["tela"]
+    caixas = [ttk.Checkbutton(quadro.contas_box,
+                              text=f"CONTA {n:02d} - BANCO ({n})")
+              for n in range(36)]
+    try:
+        for c in caixas:
+            c.pack(anchor="w")
+        _repor(texto, "\n".join(TRABALHO) + "\n")
+        for _ in range(3):
+            tela.update_idletasks()
+            tela.update()
+        area = widgets._area_de(quadro.contas_box)
+        assert area is not None, (
+            "os cartões do Anexar não estão dentro de uma área que rola")
+        assert area.rola(), (
+            "36 contas numa janela de 1040 px e a área não rola: o fim do "
+            "conteúdo foi cortado em vez de ficar ao alcance da roda")
+        relato = _relato("anx", moldura["escala"], texto, tela)
+        assert _linhas_visiveis(texto) >= LINHAS_MINIMAS, (
+            "o Registro virou uma tira: " + relato)
+        acao = quadro.barra_exec.master
+        assert acao.winfo_height() >= acao.winfo_reqheight(), (
+            "a barra de ação saiu cortada: " + relato)
+    finally:
+        for c in caixas:
+            c.destroy()
+        _repor(texto, vazio, "ph")
+        tela.update()
+
+
+@pytest.mark.parametrize("aba", sorted(ABAS))
 def test_o_registro_vazio_cabe_na_tela(moldura, aba):
     """A tela vazia é o que a aba mostra antes do primeiro clique — e é ela
     que diz o que fazer. Cortada, a aba nasce sem instrução."""

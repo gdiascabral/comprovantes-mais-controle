@@ -103,6 +103,8 @@ class AcessoriasFrame(ttk.Frame):
             "por empresa, com o .zip anexado.",
             trilha="Mensal  ›  Acessorias")
         self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         # O verde é ENVIAR — é o irreversível desta tela. Preparar só lê a
         # pasta do mês e não toca no portal.
         self.b1 = widgets.Botao(self.cab.acoes, "Preparar o envio",
@@ -114,7 +116,7 @@ class AcessoriasFrame(ttk.Frame):
         self.b2.pack(side="left")
 
         # ---- card 1: mês e modelos
-        f1 = widgets.Cartao(self, "Mês e mensagem", 1)
+        f1 = widgets.Cartao(corpo, "Mês e mensagem", 1)
         f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
 
         linha = ttk.Frame(f1)
@@ -149,7 +151,7 @@ class AcessoriasFrame(ttk.Frame):
                   ).pack(anchor="w", pady=px((2, 0)))
 
         # ---- card 2: o que vai ser enviado
-        f2 = widgets.Cartao(self, "O que vai ser enviado", 2)
+        f2 = widgets.Cartao(corpo, "O que vai ser enviado", 2)
         f2.pack(fill="both", expand=True, padx=PADX, pady=px((0, 12)))
 
         colunas = ("empresa", "zip", "tamanho", "contratos", "situacao")
@@ -215,6 +217,7 @@ class AcessoriasFrame(ttk.Frame):
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
+        corpo.encaixar(aviso, acao, self.reg)
 
     # ------------------------------------------------------------- mensagens
     def _log(self, msg=""):

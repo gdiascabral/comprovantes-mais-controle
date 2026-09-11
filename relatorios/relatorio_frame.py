@@ -96,6 +96,8 @@ class RelatorioFrame(ttk.Frame):
             "lançamentos, num PDF por conta.",
             trilha="Mensal  ›  Relatório Mensal")
         self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         self.b1 = widgets.Botao(self.cab.acoes, "Carregar contas",
                                 papel="passo", command=self.carregar)
         self.b1.pack(side="left", padx=px((0, 8)))
@@ -105,7 +107,7 @@ class RelatorioFrame(ttk.Frame):
         self.b2.pack(side="left")
 
         # Os cartões é que passam a ser numerados; os botões dizem o verbo.
-        f1 = widgets.Cartao(self, "Período", 1)
+        f1 = widgets.Cartao(corpo, "Período", 1)
         f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
 
         linha = ttk.Frame(f1)
@@ -140,7 +142,7 @@ class RelatorioFrame(ttk.Frame):
 
         # ---- card 2: contas
         self.f_contas = f2 = widgets.Cartao(
-            self, "Contas bancárias — marque as desejadas", 2)
+            corpo, "Contas bancárias — marque as desejadas", 2)
         f2.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self.rodape_contas = widgets.RodapeTabela(f2.acoes)
         self.rodape_contas.pack()
@@ -172,7 +174,7 @@ class RelatorioFrame(ttk.Frame):
         # ---- card 3: destino
         # O destino não é mais escolhido à mão: cada conta tem o seu, definido
         # em contas_mc.json. O campo virou informação, não decisão.
-        f3 = widgets.Cartao(self, "Onde salva", 3)
+        f3 = widgets.Cartao(corpo, "Onde salva", 3)
         f3.pack(fill="x", padx=PADX, pady=px((0, 12)))
         ttk.Entry(f3, textvariable=self.v_pasta, state="readonly"
                   ).pack(side="left", fill="x", expand=True)
@@ -204,6 +206,7 @@ class RelatorioFrame(ttk.Frame):
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
+        corpo.encaixar(acao, self.reg)
 
     def _alternar_periodo(self):
         if self.v_personalizado.get():

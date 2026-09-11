@@ -103,13 +103,15 @@ class ConciliacaoFrame(ttk.Frame):
             "com o aporte mínimo de cada conta.",
             trilha="Diário  ›  Saldo de pagamentos")
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         # Ação única: o verde é o único botão do cabeçalho. O cartão "Gerar",
         # que existia só para segurá-lo, deixa de existir.
         self.b1 = widgets.Botao(cab.acoes, "Coletar e gerar o painel",
                                 papel="acao", command=self.gerar)
         self.b1.pack(side="left")
 
-        f1 = widgets.Cartao(self, "Vencimentos que entram", 1)
+        f1 = widgets.Cartao(corpo, "Vencimentos que entram", 1)
         f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
@@ -147,6 +149,7 @@ class ConciliacaoFrame(ttk.Frame):
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
+        corpo.encaixar(acao, self.reg)
 
     # ------------------------------------------------------------- mensagens
     def _log(self, msg=""):

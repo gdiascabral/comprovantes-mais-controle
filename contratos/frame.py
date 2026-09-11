@@ -114,6 +114,8 @@ class ContratosFrame(ttk.Frame):
             "mês, confere o conteúdo e arquiva na pasta da empresa.",
             trilha="Mensal  ›  Contratos")
         self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
+        corpo = widgets.AreaRolavel(self)
         self.b1 = widgets.Botao(self.cab.acoes, "Buscar", papel="passo",
                                 command=self.buscar)
         self.b1.pack(side="left", padx=px((0, 8)))
@@ -123,7 +125,7 @@ class ContratosFrame(ttk.Frame):
         self.b2.pack(side="left")
 
         # Os cartões é que passam a ser numerados; os botões dizem o verbo.
-        f1 = widgets.Cartao(self, "Mês", 1)
+        f1 = widgets.Cartao(corpo, "Mês", 1)
         f1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         linha = ttk.Frame(f1)
         linha.pack(fill="x")
@@ -140,7 +142,7 @@ class ContratosFrame(ttk.Frame):
                   ).pack(side="left", pady=px((15, 0)))
 
         f2 = widgets.Cartao(
-            self, "Casas que receberam no mês — marque as que entram", 2,
+            corpo, "Casas que receberam no mês — marque as que entram", 2,
             padding=(16, 14))
         f2.pack(fill="both", expand=True, padx=PADX, pady=px((0, 12)))
         grade = ttk.Frame(f2); grade.pack(fill="both", expand=True)
@@ -203,6 +205,7 @@ class ContratosFrame(ttk.Frame):
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
+        corpo.encaixar(acao, self.reg)
 
     def aplicar_cores(self, escuro: bool):
         try:

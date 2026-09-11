@@ -1227,7 +1227,7 @@ class Cartao(tk.Frame):
         precise saber que o cartão tem dois frames."""
         for chave in ("after", "before", "in_"):
             alvo = kw.get(chave)
-            if isinstance(alvo, Cartao):
+            if isinstance(alvo, (Cartao, AreaRolavel)):
                 kw[chave] = alvo.moldura
         return kw
 
@@ -1392,6 +1392,400 @@ class Cabecalho(ttk.Frame):
         #: Espaço abaixo da linha de apoio, para quem quiser pendurar algo no
         #: cabeçalho. Nasce vazio e não ocupa lugar até alguém empacotá-lo.
         self.rodape = ttk.Frame(esquerda, style="Fundo.TFrame")
+
+
+# ------------------------------------------------------------ área que rola
+def passos_da_roda(delta: int) -> int:
+    """Quantos passos rolar num `<MouseWheel>`.
+
+    O Windows manda múltiplos de 120 por dente da roda; o touchpad manda
+    menos, e `delta // 120` daria 0 para cima e -1 para baixo — a tela
+    andaria num sentido só."""
+    passos = -int(delta / 120)
+    if passos == 0 and delta:
+        passos = -1 if delta > 0 else 1
+    return passos
+
+
+def _tem_o_que_rolar(widget) -> bool:
+    """O conteúdo deste widget passa do que ele mostra?"""
+    try:
+        lo, hi = widget.yview()
+    except (tk.TclError, TypeError, ValueError):
+        return False
+    return float(lo) > 0.0 or float(hi) < 1.0
+
+
+def _area_de(widget) -> "AreaRolavel | None":
+    """A área rolável mais interna que contém `widget`, se houver."""
+    while widget is not None:
+        if isinstance(widget, AreaRolavel):
+            return widget
+        widget = getattr(widget, "master", None)
+    return None
+
+
+def _roda_na_area(ev):
+    """A roda do mouse, para o app inteiro.
+
+    Chega por `bind_all`, então roda DEPOIS da ligação da classe do widget sob
+    o ponteiro. Quem já rola sozinho (Text, Listbox, Treeview, a própria
+    barra) e tem o que rolar fica com o evento; o resto sobe até a área. Uma
+    lista em Canvas dentro da área (as contas da Remessa e do Relatório) não
+    tem ligação de classe nenhuma, e rola aqui — antes ela não rolava.
+    Fora de uma área não se faz nada: diálogos cuidam da própria roda.
+
+    Quem decide é o widget sob o PONTEIRO, e não o que recebeu o evento. No
+    Windows os dois coincidem (o Tk entrega a roda à janela sob o cursor),
+    mas o evento é do mesmo tipo que a tecla, e há caminho em que ele vai a
+    quem tem o foco — aí o campo de data do alto rolaria a página inteira
+    enquanto o ponteiro está sobre o Registro."""
+    w = ev.widget
+    if not isinstance(w, tk.Misc):
+        return None                 # popdown do combobox: nome sem objeto
+    try:
+        sob = w.winfo_containing(ev.x_root, ev.y_root)
+    except (tk.TclError, KeyError):
+        sob = None                  # janela que o tkinter não conhece
+    if sob is not None:
+        w = sob
+    interno = None
+    while w is not None:
+        if isinstance(w, AreaRolavel):
+            if interno is not None:
+                interno.yview_scroll(passos_da_roda(ev.delta), "units")
+            else:
+                w.rolar(passos_da_roda(ev.delta))
+            return None
+        if isinstance(w, ttk.Scrollbar):
+            return None             # a TScrollbar tem roda própria
+        if isinstance(w, (tk.Text, tk.Listbox, ttk.Treeview)):
+            if _tem_o_que_rolar(w):
+                return None         # a ligação da classe já rolou
+        elif (interno is None and isinstance(w, tk.Canvas)
+              and str(w.cget("yscrollcommand")) and _tem_o_que_rolar(w)):
+            interno = w
+        w = getattr(w, "master", None)
+    return None
+
+
+#: O último widget que recebeu foco dentro de uma área, e a hora do último
+#: clique do mouse. Ver `_foco_na_area`.
+_foco_anterior = {"nome": "", "clique": 0.0}
+
+#: Foco que chega até este tempo depois de um clique veio do MOUSE.
+CLIQUE_S = 0.4
+
+
+def _clique_global(_ev):
+    _foco_anterior["clique"] = time.monotonic()
+
+
+def _foco_na_area(ev):
+    """Quem recebe o foco pelo TECLADO tem de aparecer na tela.
+
+    Sem isto, o Tab andava pelos campos da parte rolada e o cursor sumia
+    embaixo do Registro. Dois focos não contam. O que VOLTA ao mesmo widget é
+    o Windows devolvendo o foco depois do Alt+Tab, e rolar ali puxaria de
+    volta ao topo a lista que a pessoa tinha acabado de descer para ler. E o
+    que vem de um CLIQUE: o que se clica já está sob o ponteiro, e a página
+    saltar debaixo do mouse no meio do clique numa tabela é pior do que meia
+    tabela à vista."""
+    w = ev.widget
+    if not isinstance(w, tk.Misc):
+        return None
+    nome = str(w)
+    if nome == _foco_anterior["nome"]:
+        return None
+    _foco_anterior["nome"] = nome
+    if time.monotonic() - _foco_anterior["clique"] < CLIQUE_S:
+        return None
+    area = _area_de(w)
+    if area is not None and w is not area:
+        area.mostrar(w)
+    return None
+
+
+def _instalar_roda(widget) -> None:
+    """Liga a roda e o foco das áreas, UMA vez por intérprete do Tcl.
+
+    E desliga a roda do `TCombobox`. O Tk liga a roda ao combobox
+    (`ttk::bindMouseWheel TCombobox`), e com a tela rolando isso vira armadilha:
+    quem desce a página com o ponteiro passando por "Tipo" ou "Forma" troca o
+    valor em silêncio. Foi assim que uma conta de pessoa física apareceu
+    escolhida para uma SPE na janela de contas novas (11/09/2026) — lá o
+    conserto foi local; aqui vale para todo menu do app. A lista aberta do
+    combobox continua rolando: ela é outro widget."""
+    try:
+        if "_roda_na_area" in str(widget.bind_all("<MouseWheel>")):
+            return
+        widget.bind_all("<MouseWheel>", _roda_na_area, add="+")
+        widget.bind_all("<FocusIn>", _foco_na_area, add="+")
+        widget.bind_all("<ButtonPress>", _clique_global, add="+")
+        widget.unbind_class("TCombobox", "<MouseWheel>")
+    except tk.TclError:
+        pass
+
+
+class AreaRolavel(tk.Frame):
+    """Um pedaço da tela que ROLA quando o que tem dentro não cabe.
+
+    O defeito de 11/09/2026: no Anexar, a 1920x1080 com a escala do Windows a
+    125%, os três cartões numerados já ocupavam a janela inteira; a barra de
+    ação saía cortada no pé e o Registro não aparecia — sumido, não
+    espremido. O `_reservar_o_pe` de 03/09 não alcançava o caso, porque ali
+    não havia lista para ceder espaço: TODO o conteúdo era de altura fixa.
+
+    A saída é a de qualquer tela que tem mais do que cabe: o meio rola, as
+    pontas não. Cada aba passa a ser três faixas:
+
+      cabeçalho   fixo no alto — os botões principais estão nele;
+      esta área   os cartões numerados; rola quando não cabem;
+      doca        a barra de ação e o Registro, presos no pé (`encaixar`).
+
+    Como o `Cartao`, são DOIS objetos: `self` é o INTERIOR, onde a aba
+    empacota os cartões como sempre empacotou (`Cartao(corpo, ...)`), e
+    `self.moldura` é o que entra no `pack` da aba. A regra do Tk que obriga é
+    a do recorte: um widget só é recortado pela janela-PAI, então os cartões
+    precisam ser filhos do interior, e o interior filho do Canvas que rola.
+
+    O interior tem sempre a largura do Canvas e, quando sobra tela, também a
+    altura dele — é o que deixa uma lista com `expand` dentro da área crescer
+    com a janela. A barra aparece só quando há o que rolar, SOBRE a margem
+    direita dos cartões: se ela tomasse largura, o texto quebraria de outro
+    jeito ao aparecer, a altura mudaria, e ela podia sumir e voltar em laço.
+    """
+
+    #: Pixels de um passo de rolagem; um dente da roda anda três passos.
+    PASSO = 20
+    #: A cada quanto a área confere se o conteúdo mudou de tamanho. O Tk não
+    #: avisa quando o tamanho PEDIDO do interior muda (ele está com altura
+    #: fixa dentro do Canvas); os `<Configure>` dos filhos pegam quase tudo
+    #: na hora, e esta conferência pega o resto — só enquanto a área está na
+    #: tela, então as abas escondidas não custam nada.
+    VIGIA_MS = 250
+
+    def __init__(self, pai, fundo: str = "fundo", **kw):
+        c = cores()
+        self._fundo = fundo
+        self._morrendo = False
+        self._medida = None
+        self._vigiados: set[str] = set()
+        self._barra_visivel = False
+        self._vigia = None
+        self.moldura = tk.Frame(pai, background=c[fundo],
+                                highlightthickness=0, borderwidth=0)
+        self.canvas = tk.Canvas(self.moldura, background=c[fundo],
+                                highlightthickness=0, borderwidth=0,
+                                width=1, height=1,
+                                yscrollincrement=px(self.PASSO))
+        self.canvas.pack(fill="both", expand=True)
+        self.barra = ttk.Scrollbar(self.moldura, orient="vertical",
+                                   command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self._barra_mudou)
+        kw.setdefault("background", c[fundo])
+        kw.setdefault("highlightthickness", 0)
+        kw.setdefault("borderwidth", 0)
+        super().__init__(self.canvas, **kw)
+        self._janela = self.canvas.create_window(0, 0, window=self,
+                                                 anchor="nw")
+        self.canvas.bind("<Configure>", self.reajustar, add="+")
+        self.bind("<Configure>", self.reajustar, add="+")
+        _repintaveis.add(self)
+        _instalar_roda(self)
+        self._vigia = self.after(self.VIGIA_MS, self._vigiar)
+
+    # ---------------------------------------------- geometria vai à moldura
+    def pack(self, **kw):
+        self.moldura.pack(**Cartao._vizinhos(kw))
+        return self
+
+    def pack_configure(self, **kw):
+        self.moldura.pack_configure(**Cartao._vizinhos(kw))
+
+    def pack_forget(self):
+        self.moldura.pack_forget()
+
+    def pack_info(self):
+        return self.moldura.pack_info()
+
+    def grid(self, **kw):
+        self.moldura.grid(**kw)
+        return self
+
+    def grid_forget(self):
+        self.moldura.grid_forget()
+
+    def place(self, **kw):
+        self.moldura.place(**kw)
+        return self
+
+    def place_forget(self):
+        self.moldura.place_forget()
+
+    def destroy(self):
+        # A mesma trava do `Cartao.destroy`: a moldura destrói o Canvas, que
+        # destrói este interior, que chamaria a moldura de novo.
+        if self._morrendo:
+            tk.Frame.destroy(self)
+            return
+        self._morrendo = True
+        if self._vigia is not None:
+            try:
+                self.after_cancel(self._vigia)
+            except tk.TclError:
+                pass
+        self.moldura.destroy()
+
+    # ------------------------------------------------------------- montagem
+    def encaixar(self, *doca, padx=0, pady=0):
+        """Monta a aba: esta área no meio, e `doca` presa no pé.
+
+        `doca` vem na ordem em que aparece, de cima para baixo — em quase toda
+        aba `(acao, self.reg)`. Chamar UMA vez, no fim do `_build`, depois do
+        `registro_elastico`.
+
+        A ordem do `pack` é a decisão inteira. O `pack` atende os filhos NA
+        ORDEM em que foram empacotados, e quem vem por último fica com o que
+        sobrou — por isso a doca é reempacotada `side="bottom"` ANTES da área,
+        e a área entra por último: ela é a única que sabe encolher sem perder
+        nada, porque rola. O cabeçalho, empacotado antes de tudo, fica onde
+        estava."""
+        for w in reversed(doca):
+            info = w.pack_info()
+            info.pop("in", None)
+            info["side"] = "bottom"
+            w.pack_forget()
+            w.pack(**info)
+        self.pack(side="top", fill="both", expand=True, padx=padx, pady=pady)
+        return self
+
+    # --------------------------------------------------------------- medida
+    def reajustar(self, _ev=None):
+        """Recalcula o tamanho do interior e a região que rola."""
+        if self._morrendo:
+            return
+        try:
+            larg = self.canvas.winfo_width()
+            alt = self.canvas.winfo_height()
+            req_l = self.winfo_reqwidth()
+            req_a = self.winfo_reqheight()
+        except tk.TclError:
+            return
+        self._vigiar_filhos()
+        altura = max(alt, req_a, 1)
+        medida = (larg, altura, req_l, req_a)
+        if medida != self._medida:
+            self._medida = medida
+            # Altura FIXA só quando há sobra para esticar; no resto, 0 — que
+            # no Canvas quer dizer "a que o interior pedir". A diferença é o
+            # que faz a área perceber um cartão crescendo: com altura fixa
+            # igual à pedida, o último cartão cresce só no PEDIDO (o `pack`
+            # do interior não tem mais cavidade para lhe dar), ninguém muda
+            # de tamanho e nenhum `<Configure>` dispara — foi o Anexar com as
+            # contas recém-carregadas, cortado até a próxima conferência.
+            try:
+                self.canvas.itemconfigure(self._janela, width=max(larg, 1),
+                                          height=alt if alt > req_a else 0)
+                # `width`/`height` do Canvas são o que a área PEDE à aba: o
+                # tamanho natural do conteúdo. Com isso a aba continua pedindo
+                # à janela o mesmo que pedia antes de existir rolagem.
+                self.canvas.configure(scrollregion=(0, 0, max(larg, 1), altura),
+                                      width=req_l, height=req_a)
+            except tk.TclError:
+                return
+        self._pedir_sobra()
+
+    def _pedir_sobra(self):
+        """A área só pede a SOBRA da tela quando tem dentro quem sabe usá-la.
+
+        Com uma lista elástica dentro (a de "A lançar" nos Aportes, a das
+        rotinas no Início), a sobra faz a lista crescer. Sem nenhuma, a sobra
+        seria só fundo vazio dentro da área — e ela é tirada do Registro, que
+        é o outro elástico da aba e o único que tem o que mostrar nela."""
+        try:
+            self.moldura.pack_info()
+        except tk.TclError:
+            return                   # não é o `pack` que a põe na tela
+        quer = any(_elastico(w) for w in self.pack_slaves())
+        if _elastico(self.moldura) != quer:
+            try:
+                self.moldura.pack_configure(expand=quer)
+            except tk.TclError:
+                pass
+
+    def _vigiar_filhos(self):
+        for w in self.pack_slaves() + self.grid_slaves():
+            nome = str(w)
+            if nome not in self._vigiados:
+                self._vigiados.add(nome)
+                w.bind("<Configure>", self.reajustar, add="+")
+
+    def _vigiar(self):
+        self._vigia = None
+        if self._morrendo:
+            return
+        try:
+            if self.winfo_ismapped() and (
+                    self._medida is None
+                    or (self.winfo_reqwidth(), self.winfo_reqheight())
+                    != self._medida[2:]):
+                self.reajustar()
+            self._vigia = self.after(self.VIGIA_MS, self._vigiar)
+        except tk.TclError:
+            pass                     # área destruída entre duas conferências
+
+    # -------------------------------------------------------------- rolagem
+    def _barra_mudou(self, lo, hi):
+        lo, hi = float(lo), float(hi)
+        precisa = lo > 0.0 or hi < 1.0
+        try:
+            if precisa and not self._barra_visivel:
+                self.barra.place(relx=1.0, rely=0.0, relheight=1.0,
+                                 anchor="ne")
+                self.barra.lift()
+            elif not precisa and self._barra_visivel:
+                self.barra.place_forget()
+            self._barra_visivel = precisa
+            self.barra.set(lo, hi)
+        except tk.TclError:
+            pass
+
+    def rola(self) -> bool:
+        """Tem conteúdo fora da vista agora?"""
+        return _tem_o_que_rolar(self.canvas)
+
+    def rolar(self, passos: int):
+        if self.rola():
+            self.canvas.yview_scroll(int(passos) * 3, "units")
+
+    def mostrar(self, widget):
+        """Rola o mínimo para `widget` ficar inteiro à vista."""
+        if not self.rola():
+            return
+        try:
+            topo = widget.winfo_rooty() - self.winfo_rooty()
+            fim = topo + widget.winfo_height()
+            vista = self.canvas.canvasy(0)
+            alt = self.canvas.winfo_height()
+            total = max(self.winfo_height(), 1)
+        except tk.TclError:
+            return
+        folga = px(16)
+        if topo - folga < vista:
+            self.canvas.yview_moveto(max(topo - folga, 0) / total)
+        elif fim + folga > vista + alt:
+            self.canvas.yview_moveto(min(fim + folga - alt, total - alt)
+                                     / total)
+
+    def aplicar_cores(self, escuro: bool | None = None):
+        cor = cores()[self._fundo]
+        try:
+            self.configure(background=cor)
+            self.moldura.configure(background=cor)
+            self.canvas.configure(background=cor)
+        except tk.TclError:
+            pass
 
 
 class RodapeTabela(ttk.Frame):
@@ -2191,7 +2585,11 @@ class PainelMenu(tk.Frame):
         self.rodape = tk.Frame(self, highlightthickness=0)
         self.rodape.pack(side="bottom", fill="x", padx=px(14),
                          pady=px((8, 12)))
-        self.corpo = tk.Frame(self, highlightthickness=0)
+        # O corpo ROLA. Com os dois grupos abertos são doze telas e quatro
+        # rótulos de seção, e numa tela baixa (1366x768) ou a 150% isso pode
+        # passar da altura da coluna — o rodapé, empacotado antes, continua
+        # no lugar, e são os itens de baixo que ficariam fora de alcance.
+        self.corpo = AreaRolavel(self, fundo="cartao")
         self.corpo.pack(side="top", fill="both", expand=True, pady=px((10, 0)))
         _repintaveis.add(self)
         self.aplicar_cores(_estado["escuro"])
@@ -2919,7 +3317,10 @@ def registro_elastico(cartao, texto: tk.Text, altura_minima: int = 6) -> None:
     #: `pintado` é até onde `colorir_registro` já passou. Guardado aqui, e não
     #: recalculado, porque o registro de um lote grande chega a milhares de
     #: linhas e repintá-lo inteiro a cada mensagem trava a janela.
-    estado = {"cheio": None, "dentro": False, "pintado": 1}
+    #: `piso` é a altura mínima em linhas, e é ela que a alça e o "Ampliar"
+    #: mexem (ver `_controles_do_registro`); nasce em `altura_minima`.
+    estado = {"cheio": None, "dentro": False, "pintado": 1,
+              "piso": altura_minima, "arrasto": None}
 
     def _altura_vazia() -> int:
         """Quantas linhas o texto de tela vazia precisa para caber inteiro.
@@ -2942,7 +3343,8 @@ def registro_elastico(cartao, texto: tk.Text, altura_minima: int = 6) -> None:
             # apaga o campo ANTES de reescrever a tela vazia, e nesse instante
             # ele tem uma linha. Medir só ali fixaria a altura do campo vazio,
             # e o texto que entra logo depois nasceria cortado.
-            alvo = altura_minima if cheio else _altura_vazia()
+            alvo = (estado["piso"] if cheio
+                    else max(_altura_vazia(), estado["piso"]))
             if cheio != estado["cheio"] or int(texto.cget("height")) != alvo:
                 estado["cheio"] = cheio
                 texto.configure(height=alvo)
@@ -2963,7 +3365,156 @@ def registro_elastico(cartao, texto: tk.Text, altura_minima: int = 6) -> None:
 
     _reservar_o_pe(cartao)
     texto.bind("<<Modified>>", _ajustar, add="+")
+    _controles_do_registro(cartao, texto, estado, _ajustar, altura_minima)
     _ajustar()
+
+
+#: Quanto da aba o Registro toma no "Ampliar", e o teto do arrasto da alça.
+#: O que sobra é da parte que rola — sem ela, o formulário viraria uma fresta.
+FRACAO_AMPLIADO = 0.6
+FRACAO_TETO = 0.8
+
+
+def _altura_da_linha(texto: tk.Text) -> int:
+    """Pixels de uma linha do registro.
+
+    Pelo Tcl (`font metrics`), e não por `tkinter.font`: o motivo é o do
+    `_garantir_fontes` — aquele módulo não está no exe."""
+    try:
+        linha = int(texto.tk.call("font", "metrics", texto.cget("font"),
+                                  "-linespace"))
+        linha += int(texto.cget("spacing1")) + int(texto.cget("spacing3"))
+    except (tk.TclError, ValueError):
+        return 16
+    return max(linha, 1)
+
+
+class _AlcaDoRegistro(tk.Frame):
+    """A faixa no alto do cartão de Registro que se arrasta para mudar a
+    altura dele. O traço no meio é o sinal de "isto se puxa" — o mesmo das
+    gavetas que sobem do pé da tela —, e o cursor de seta dupla confirma.
+
+    O traço é `tenue` e não `linha`: `linha` é cor de filete, e contra o
+    cartão ela não chega aos 3:1 que um controle precisa para ser achado."""
+
+    def __init__(self, pai):
+        c = cores()
+        super().__init__(pai, height=px(8), background=c["cartao"],
+                         highlightthickness=0, borderwidth=0,
+                         cursor="sb_v_double_arrow")
+        self._sobre = False
+        self.traco = tk.Frame(self, width=px(36), height=px(3),
+                              background=c["tenue"], highlightthickness=0,
+                              borderwidth=0, cursor="sb_v_double_arrow")
+        self.traco.place(relx=0.5, rely=0.5, anchor="center")
+        for w in (self, self.traco):
+            w.bind("<Enter>", lambda _e: self._realcar(True), add="+")
+            w.bind("<Leave>", lambda _e: self._realcar(False), add="+")
+        _repintaveis.add(self)
+
+    def _realcar(self, sobre: bool):
+        self._sobre = sobre
+        self.aplicar_cores()
+
+    def aplicar_cores(self, escuro: bool | None = None):
+        c = cores()
+        try:
+            self.configure(background=c["cartao"])
+            self.traco.configure(
+                background=c["marca"] if self._sobre else c["tenue"])
+        except tk.TclError:
+            pass
+
+
+def _controles_do_registro(cartao, texto: tk.Text, estado: dict, ajustar,
+                           altura_minima: int) -> None:
+    """A alça, o "Ampliar/Recolher" e o "Copiar" do cartão de Registro.
+
+    Pedido de 11/09/2026: o Registro é o que se lê durante a rodada inteira,
+    e com a altura decidida só pela sobra da tela, quem queria ler mais não
+    tinha o que fazer. Os três mexem só no `piso` (a altura mínima, em
+    linhas): onde sobra tela, o `expand` continua dando a sobra ao Registro;
+    onde não sobra, quem cede é a parte da aba que rola — nunca a doca.
+
+    "Copiar" existe porque o Registro é o que se manda a quem vai ajudar
+    quando algo dá errado, e selecionar trezentas linhas com o mouse num
+    campo que rola sozinho é trabalho de três tentativas.
+
+    Só entra em `Cartao` com título: os dois links moram no cabeçalho dele."""
+    if not isinstance(cartao, Cartao) or cartao.cabecalho is None:
+        return
+    moldura = cartao.moldura
+
+    def _linhas_ate(fracao: float) -> int:
+        """Quantas linhas cabem se o cartão tomar `fracao` da aba."""
+        try:
+            cromo = moldura.winfo_height() - texto.winfo_height()
+            livre = moldura.master.winfo_height() * fracao - cromo
+        except tk.TclError:
+            return altura_minima
+        return max(altura_minima, int(livre // _altura_da_linha(texto)))
+
+    def _definir(linhas: int):
+        estado["piso"] = max(3, int(linhas))
+        ajustar()
+        try:
+            b_ampliar.configure(text="Recolher" if estado["piso"] > altura_minima
+                                else "Ampliar")
+        except tk.TclError:
+            pass
+
+    def _alternar(_ev=None):
+        _definir(altura_minima if estado["piso"] > altura_minima
+                 else _linhas_ate(FRACAO_AMPLIADO))
+
+    def _copiar():
+        if tem_conteudo_real(texto):
+            texto.clipboard_clear()
+            texto.clipboard_append(texto.get("1.0", "end-1c"))
+            recado = "Copiado ✓"
+        else:
+            recado = "Nada a copiar"
+        b_copiar.configure(text=recado)
+
+        def _voltar():
+            try:
+                b_copiar.configure(text="Copiar")
+            except tk.TclError:
+                pass                     # aba fechada antes do recado sumir
+        b_copiar.after(1600, _voltar)
+
+    def _pegar(ev):
+        estado["arrasto"] = (ev.y_root, texto.winfo_height())
+
+    def _arrastar(ev):
+        if not estado["arrasto"]:
+            return
+        y0, h0 = estado["arrasto"]
+        # `pady` e o filete cobram PIXELS; `height` conta LINHAS.
+        folga = 2 * (int(texto.cget("pady")) + int(texto.cget("borderwidth"))
+                     + int(texto.cget("highlightthickness")))
+        linhas = round((h0 - folga + y0 - ev.y_root) / _altura_da_linha(texto))
+        _definir(min(max(linhas, 3), _linhas_ate(FRACAO_TETO)))
+
+    def _soltar(_ev):
+        estado["arrasto"] = None
+
+    # `side="right"`: o primeiro empacotado é o da ponta.
+    b_ampliar = Botao(cartao.acoes, "Ampliar", papel="link", command=_alternar,
+                      padx=px(8), pady=px(2))
+    b_ampliar.pack(side="right", padx=px((10, 0)))
+    b_copiar = Botao(cartao.acoes, "Copiar", papel="link", command=_copiar,
+                     padx=px(8), pady=px(2))
+    b_copiar.pack(side="right", padx=px((10, 0)))
+
+    alca = _AlcaDoRegistro(moldura)
+    alca.pack(fill="x", before=cartao.cabecalho)
+    for w in (alca, alca.traco):
+        w.bind("<ButtonPress-1>", _pegar, add="+")
+        w.bind("<B1-Motion>", _arrastar, add="+")
+        w.bind("<ButtonRelease-1>", _soltar, add="+")
+        w.bind("<Double-Button-1>", _alternar, add="+")
+    cartao.alca, cartao.b_ampliar, cartao.b_copiar = alca, b_ampliar, b_copiar
 
 
 def estilo_log(texto: tk.Text, escuro: bool | None = None) -> None:
