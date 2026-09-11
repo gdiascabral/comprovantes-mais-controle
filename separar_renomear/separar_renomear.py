@@ -33,12 +33,29 @@ def _linhas(t): return [l.rstrip() for l in t.splitlines()]
 
 def detectar(t):
     u = t.upper()
+    # O Pix do Sicoob vem ANTES do "PIX ENVIADO": o Sicoob também escreve
+    # "Tipo Pagamento Pix enviado", e com a ordem antiga todo Pix do Sicoob
+    # desse tipo virava Inter e saía sem valor, sem pagador e sem recebedor
+    # (8 dos 368 comprovantes reais de 10 e 11/09/2026).
+    if 'EFETIVAÇÃO DE PAGAMENTO PIX' in u or 'EFETIVACAO DE PAGAMENTO PIX' in u: return ('SICOOB', 'PIX')
     if 'PIX ENVIADO' in u: return ('INTER', 'PIX')
     if 'PAGAMENTO REALIZADO' in u: return ('INTER', 'PGTO')
-    if 'EFETIVAÇÃO DE PAGAMENTO PIX' in u or 'EFETIVACAO DE PAGAMENTO PIX' in u: return ('SICOOB', 'PIX')
     if 'PAGAMENTO DE BOLETO' in u: return ('SICOOB', 'BOLETO')
     if 'PAGAMENTO DE CONVÊNIO' in u or 'PAGAMENTO DE CONVENIO' in u: return ('SICOOB', 'CONVENIO')
+    if 'SICOOB' in u and re.search(r'COMPROVANTE\s+DE\s+TRANSFER', u):
+        return ('SICOOB', 'TRANSF')
     return ('?', '?')
+
+# O comprovante comum do Sicoob (boleto, Pix, convênio, transferência) põe o
+# rótulo e o valor na mesma linha SEM dois-pontos: "Pago R$ 10.586,07",
+# "Valor R$ 1.000,00", "Pagamento 08/09/2026", "Observação TB 19 QD 51 ...".
+# Os padrões antigos exigiam ":" e, medido nos 368 comprovantes reais de 10 e
+# 11/09/2026, 236 do Sicoob saíam sem valor ou sem descrição — o nome caía no
+# recebedor ou virava "SEM VALOR". Os padrões com ":" continuam na frente,
+# então quem já era lido certo continua lido do mesmo jeito.
+# "R[S$]" porque o OCR lê o cifrão como S com frequência.
+_DIN = r'R\s?[S$]\$?\s*([\d\.]+,\d{2})'
+
 
 def _valor(t):
     # sem o (?i) o comprovante de tributo/DARF do Sicoob, que escreve
@@ -46,7 +63,15 @@ def _valor(t):
     for pat in [r'(?i)Valor\s+total\s*:?\s*R\$\s*([\d\.]+,\d{2})',
                 r'(?i)Valor\s*:\s*R\$\s*([\d\.]+,\d{2})',
                 r'(?i)Pago\s*:\s*R\$\s*([\d\.]+,\d{2})',
-                r'(?m)^\s*R\$\s*([\d\.]+,\d{2})\s*$']:
+                # sem dois-pontos (Sicoob comum): o PAGO vem antes do Valor
+                # porque no boleto é ele que carrega juros e desconto
+                r'(?im)^\s*Pago\s*:?\s*' + _DIN,
+                r'(?im)^\s*Valor(?:\s+total)?\s*:?\s*' + _DIN,
+                # o valor sozinho na linha. Até 2 sinais antes do R$ porque o
+                # OCR lê o ícone do Pix do Inter como aspas ("“ R$ 10.000,00"):
+                # medido nas fotos e escaneados de 37 comprovantes reais, era
+                # a causa de TODOS os Pix do Inter que saíam "SEM VALOR"
+                r'(?m)^\s*[^\w\s]{0,2}\s*' + _DIN + r'\s*$']:
         m = re.search(pat, t)
         if m: return m.group(1)
     return None
@@ -55,7 +80,15 @@ def _data(t):
     # o Inter escreve o dia da semana antes da data ("Sexta, 31/07/2026" e
     # também "Segunda-feira, ..."), por isso a folga generosa antes do dígito
     for pat in [r'(?i)Data\s+d[eo]\s+pagamento[^\d]{0,24}(\d{2}/\d{2}/\d{4})',
-                r'(?i)Realizado\s*:\s*(\d{2}/\d{2}/\d{4})']:
+                r'(?i)Realizado\s*:\s*(\d{2}/\d{2}/\d{4})',
+                # Sicoob comum, sem dois-pontos. "Pagamento" antes de
+                # "Realizado": num boleto agendado o Realizado é o dia do
+                # agendamento, e a data que vale é a do pagamento. Sem estes,
+                # o que sobrava era o carimbo da IMPRESSÃO no topo da página
+                # ("10/09/2026 15:06:02"), e o nome saía com o dia errado.
+                r'(?im)^\s*Pagamento\s*:?\s*(\d{2}/\d{2}/\d{4})',
+                r'(?im)^\s*Realizado\s*:?\s*(\d{2}/\d{2}/\d{4})',
+                r'(?i)Data\s+d[oe]\s+lan[çc]amento\s*:?\s*(\d{2}/\d{2}/\d{4})']:
         m = re.search(pat, t)
         if m: return m.group(1)
     return None
@@ -71,6 +104,34 @@ RE_TRIBUTO = re.compile(
     re.I)
 
 
+# Os rótulos do comprovante comum do Sicoob, para saber quando a linha vizinha
+# da Observação é OUTRO campo e não a continuação do texto dela.
+RE_ROTULO_SICOOB = re.compile(
+    r"(?i)^\s*(?:Situa[çc][ãa]o|OUVIDORIA|SICOOB|SISBR|COMPROVANTE|Valor|Pago|"
+    r"Datas?\b|Valores|Vencimento|Pagamento|Realizado|Documento|Desconto|Juros|"
+    r"Outr[oa]s|C[óo]digo|N[úu]mero|Conv[êe]nio|Cooperativa|Conta|Cliente|"
+    r"Linha|Nosso|Tipo|Natureza|D[ée]bito|Cr[ée]dito|Benefici|Pagador|"
+    r"Destinat|Nome|v\d)")
+
+
+def _texto_livre(l) -> bool:
+    l = (l or "").strip()
+    return (sum(ch.isalpha() for ch in l) >= 2 and not l.endswith(":")
+            and not _lixo(l) and not RE_ROTULO_SICOOB.match(l))
+
+
+def _observacao_quebrada(L, i):
+    """A observação de duas linhas do Sicoob, com o rótulo sozinho na linha
+    `i`: junta a linha de cima e a de baixo quando AS DUAS são texto livre.
+    Uma só não basta — no bloco de rótulos do layout impresso a vizinha é
+    outro rótulo, e juntar metade seria inventar descrição."""
+    antes = L[i - 1].strip() if i > 0 else ""
+    depois = L[i + 1].strip() if i + 1 < len(L) else ""
+    if _texto_livre(antes) and _texto_livre(depois):
+        return f"{antes} {depois}"
+    return None
+
+
 def _descricao(t, banco):
     if banco == 'INTER':
         m = re.search(r'(?m)^\s*Descri[çc][ãa]o\s*:?[ \t]+(.+)', t)
@@ -78,11 +139,31 @@ def _descricao(t, banco):
             return m.group(1).strip() or None
     L = _linhas(t)
     for i, l in enumerate(L):
-        m = re.match(r'(?:Descri[çc][ãa]o|Observa[çc][ãa]o):\s*(.*)', l.strip())
+        # Com ou sem ":". O comprovante comum do Sicoob escreve "Observação TB
+        # 19 QD 51 LT 17 NF 8529 OC 6608", sem dois-pontos, e a exigência do
+        # ":" jogava fora justamente a descrição com centro de custo e OC —
+        # 144 dos 368 comprovantes reais de 10 e 11/09/2026 tinham esse
+        # formato. "Histórico" é o nome que outros bancos dão ao mesmo campo.
+        m = re.match(r'(?:Descri[çc][ãa]o|Observa[çc][ãa]o|Hist[óo]rico)\b\s*(:?)\s*(.*)',
+                     l.strip(), re.I)
         if m:
-            resto = m.group(1).strip()
-            if resto:
+            resto = m.group(2).strip()
+            if resto and (m.group(1) or not RE_LIXO_NOME.match(resto)):
                 return resto
+            if not m.group(1):
+                # Rótulo sozinho e SEM ":". No Sicoob é a observação de DUAS
+                # linhas: o rótulo fica centrado entre elas, uma acima e outra
+                # abaixo ("TB 21 QD 50 LT 39 DEVOLUÇÃO…" / "Observação" /
+                # "BI CS 02"), e é assim que o pdfplumber e o OCR a devolvem.
+                if banco == 'SICOOB':
+                    junto = _observacao_quebrada(L, i)
+                    if junto:
+                        return junto
+                # Fora isso, no layout impresso (e no OCR que lê a coluna de
+                # rótulos inteira antes da de valores) ele é só mais um
+                # rótulo do bloco, e a linha vizinha é outro rótulo — "Quem
+                # pagou", "Nome" — que viraria a descrição.
+                continue
             # rótulo sozinho na linha: o valor pode estar na linha vizinha —
             # mas só se a vizinha for texto de verdade, e não outro rótulo
             for viz in (L[i + 1].strip() if i + 1 < len(L) else '',
@@ -103,6 +184,30 @@ def _limpar_empresa(nome):
     nome = re.sub(r'\b(LTDA|SPE|S/?A|S\.A|EIRELI|ME|EPP)\b\.?', '', nome, flags=re.I)
     return re.sub(r'\s+', ' ', nome).strip(' .-')
 
+def _conta_do_bloco(t, bloco):
+    """Quem está na conta de um bloco ("Débito"/"Crédito") da transferência
+    do Sicoob: `Conta 39.824-1 / EMPRESA EXEMPLO LTDA`, até 3 linhas abaixo
+    do título do bloco. A âncora é o BLOCO porque a linha "Conta" aparece
+    duas vezes, uma para quem pagou e outra para quem recebeu.
+
+    É a mesma leitura de `baixar_comprovantes.nome_final.favorecido_do_
+    comprovante`, repetida aqui de propósito: aquele módulo vive de outro
+    ciclo (a aba Baixar) e importá-lo para dentro do parser do Renomear
+    amarraria as duas abas por um detalhe de layout.
+
+    Linhas em branco não contam: o OCR põe uma entre cada campo, e com elas
+    a "Conta" do bloco caía fora das 3 linhas olhadas — as 4 transferências
+    lidas por OCR no benchmark saíam "SEM DESCRICAO"."""
+    L = [l.strip() for l in t.splitlines() if l.strip()]
+    for i, l in enumerate(L):
+        if re.fullmatch(bloco, l, re.I):
+            for seguinte in L[i + 1:i + 4]:
+                m = re.match(r'Conta\s+[\d.\-]+\s*/\s*(.+)', seguinte)
+                if m:
+                    return m.group(1).strip()
+    return None
+
+
 def _campos_rotulado(t):
     """Layout clássico: cada rótulo traz o valor NA MESMA LINHA
     (ex.: 'Descrição CENTRO DE CUSTO QD 26A LT 10 OC 1234')."""
@@ -113,6 +218,20 @@ def _campos_rotulado(t):
     else:
         pag = _nome_apos(t, 'Pagador')
         dest = _nome_apos(t, 'Destinat') or _nome_apos(t, 'Beneficiário') or _nome_apos(t, 'Beneficiario')
+        if tipo == 'TRANSF' or not dest:
+            # transferência entre contas: não há "Pagador" nem "Destinatário",
+            # só os blocos Débito e Crédito — sem isto os 11 comprovantes
+            # desse tipo saíam "SEM VALOR - SEM DESCRICAO". Também sem o
+            # tipo: o psm 6 do Tesseract às vezes nem lê o cabeçalho
+            # "COMPROVANTE DE TRANSFERÊNCIA", e a linha "Crédito" sozinha só
+            # existe nesse layout.
+            pag = pag or _conta_do_bloco(t, r'D[ée]bito')
+            dest = dest or _conta_do_bloco(t, r'Cr[ée]dito')
+        if tipo == 'CONVENIO' and not dest:
+            # o convênio não tem recebedor com nome; quem recebe é o próprio
+            # convênio ("Convênio SANEAGO GO"), que é o que identifica a conta
+            m = re.search(r'(?im)^\s*Conv[êe]nio\s*:?[ \t]+(\S.*?)\s*$', t)
+            dest = m.group(1) if m else None
     return dict(banco=banco, tipo=tipo, valor=v, data=d, desc=desc, pag=pag, dest=dest)
 
 
@@ -123,13 +242,18 @@ def _campos_rotulado(t):
 RE_ROTULO_INLINE = re.compile(
     r'(?mi)^[ \t]*(?:Descri[çc][ãa]o|Observa[çc][ãa]o|Data\s+do\s+pagamento|'
     r'Valor\s+total)\s*:?[ \t]+(\S.*?)[ \t]*$')
+# "Pago R$ 1.150,00" / "Valor R$ 11.000,00": o dinheiro com o rótulo na mesma
+# linha também é layout clássico. É o que decide a transferência do Sicoob,
+# que não tem Descrição nem Data do pagamento.
+RE_DINHEIRO_INLINE = re.compile(r'(?mi)^[ \t]*(?:Pago|Valor)\s*:?[ \t]+R\s?[S$]')
 
 
 def _tem_rotulo_inline(t) -> bool:
     """True se algum rótulo traz o valor na MESMA linha (layout clássico).
     Um 'valor' que é só outro rótulo (termina em ':') não conta."""
     return any(m.group(1) and not m.group(1).endswith(":")
-               for m in RE_ROTULO_INLINE.finditer(t))
+               for m in RE_ROTULO_INLINE.finditer(t)) \
+        or bool(RE_DINHEIRO_INLINE.search(t))
 
 
 def campos(t):
@@ -160,7 +284,8 @@ def campos(t):
 # Sicoob Internet Banking e Inter novos geram o comprovante como página
 # impressa: rótulos e valores vêm em blocos separados (e o PDF muitas
 # vezes nem tem camada de texto — aí entra o OCR).
-RE_DIN_L = re.compile(r"^\s*R[S$]?\$?\s*([\d\.]+,\d{2})\s*$")
+# até 2 sinais antes do R$: o OCR lê o ícone do Pix do Inter como aspas (ver `_valor`)
+RE_DIN_L = re.compile(r"^\s*[^\w\s]{0,2}\s*R[S$]?\$?\s*([\d\.]+,\d{2})\s*$")
 RE_DATA_HORA = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(?:[àa]s\s+)?\d{2}[:h]\d{2}")
 RE_DATA_SO = re.compile(r"^(\d{2}/\d{2}/\d{4})$")
 RE_CNPJ_L = re.compile(r"\d{2}[\.\s]?\d{3}[\.\s]?\d{3}\s?/\s?\d{4}\s?-\s?\d{2}")
@@ -222,6 +347,33 @@ def _espacar_codigo(s) -> str:
     return " ".join(_espacar_token(t) for t in s.split())
 
 
+# O OCR estraga o centro de custo de três jeitos, medidos nas fotos e
+# escaneados de 37 comprovantes reais: come o espaço entre o lote e o rótulo
+# ("26ALT 09"), lê o O do OC como zero e o C como € ("0€ 7371", "0C 6749") e
+# cola a sigla da obra no número ("TB21"). Sem o "OC 7371" o matcher não acha
+# a OC (`OC\s*(\d+)`), que é o sinal mais forte do casamento.
+RE_OC_TORTO = re.compile(r"(?<![A-Za-z0-9])[0O]€?[C€](?=\s*\d{3,})")
+RE_ROTULO_GRUDADO = re.compile(r"(?<=[0-9A-Z])(QD|LT)(?=\s*\d)")
+RE_SIGLA_NUMERO = re.compile(r"\b([A-Z]{2,4})(\d+)\b")
+# e o psm 6 lê o Q do QD como G ou O ("GD 26A", "OD 26A")
+RE_QD_TORTO = re.compile(r"(?<![A-Za-z0-9])[GO0]D(?=\s*\d)")
+
+
+def _corrigir_codigo_ocr(s) -> str:
+    """Desfaz os estragos acima — só em descrição que JÁ tem cara de centro
+    de custo (QD/LT), para não inventar nada num texto comum; o QD torto só
+    com um LT ao lado. Fica fora do `_espacar_codigo` de propósito: aquele a
+    aba Contratos importa."""
+    if not s or not re.search(r"(?:QD|LT)\s*\d", s):
+        return s
+    if re.search(r"LT\s*\d", s):
+        s = RE_QD_TORTO.sub("QD", s)
+    s = RE_OC_TORTO.sub("OC ", s)
+    s = RE_ROTULO_GRUDADO.sub(r" \1", s)
+    s = RE_SIGLA_NUMERO.sub(r"\1 \2", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _lixo(l) -> bool:
     """True se a linha é rótulo técnico/ID e não serve como nome ou descrição."""
     if not l or len(l.strip()) < 3:
@@ -245,6 +397,30 @@ def _eh_documento(l):
     return bool(RE_DOC_L.match(l)) and sum(c.isdigit() for c in l) >= 11
 
 
+RE_HORA_L = re.compile(r"^\d{1,2}\s?[h:]\s?\d{2}(?::\d{2})?$")
+
+
+def _serve_de_nome(cand) -> bool:
+    """A linha pode ser o nome de quem pagou ou recebeu?
+
+    Três letras bastam: há recebedor que se chama "Onr" ou "Pex", e a regra
+    antiga de mais de 4 caracteres pulava o nome e pegava a linha de cima —
+    no Pix do Inter lido por OCR, o horário ("11h05") ou o identificador da
+    transação (um hash com um "€" do OCR no meio, que o RE_ID_LONGO não
+    reconhece). Hash e horário continuam barrados aqui, e não no `_lixo`:
+    ele também filtra descrição, e o centro de custo colado
+    ("TB21QD51LT23C282M3") tem a mesma cara de hash."""
+    cand = (cand or "").strip()
+    if sum(ch.isalpha() for ch in cand) < 3 or RE_DIN_L.match(cand) or _lixo(cand):
+        return False
+    # horário e data não são nome: quando o OCR perde o nome, a linha de cima
+    # no Pix do Inter é a data ("Quarta, 09/09/2026")
+    if RE_HORA_L.match(cand) or re.search(r"\d{2}/\d{2}/\d{4}", cand):
+        return False
+    return not (" " not in cand and len(cand) >= 16
+                and sum(ch.isdigit() for ch in cand) >= len(cand) / 4)
+
+
 def _nomes_antes_do_documento(nl):
     """No layout impresso os nomes vêm logo ANTES do CPF/CNPJ. Devolve-os na
     ordem em que aparecem, pulando rótulos técnicos."""
@@ -256,7 +432,7 @@ def _nomes_antes_do_documento(nl):
             cand = _sem_rotulo(nl[j])
             if RE_CNPJ_L.search(cand) or _eh_mascara(cand) or _eh_documento(cand):
                 continue
-            if len(cand) > 4 and not RE_DIN_L.match(cand) and not _lixo(cand):
+            if _serve_de_nome(cand):
                 if cand not in nomes:
                     nomes.append(cand)
                 break
@@ -365,8 +541,18 @@ def _campos_impresso(t):
                         nomes.append(cand)
             pag = nomes[0] if nomes else None
             dest = nomes[1] if len(nomes) > 1 else None
-    else:  # INTER novo — "Quem pagou" vem antes de "Quem recebeu"
+    else:  # INTER novo
         nomes = _nomes_antes_do_documento(nl)
+        # Quem manda na ordem dos nomes é a ordem dos RÓTULOS. O impresso de
+        # 2026 traz "Quem pagou" antes de "Quem recebeu", e o Pix enviado de
+        # hoje traz o contrário — e o OCR (psm 3) lê a coluna de rótulos
+        # inteira antes da de valores, então o texto cai aqui e o aporte saía
+        # invertido ("RECEBEDOR PARA PAGADOR"). Os rótulos o OCR preserva.
+        def _rotulo(pat):
+            return next((i for i, l in enumerate(nl) if re.match(pat, l, re.I)), None)
+        i_pagou, i_recebeu = _rotulo(r"Quem\s+pagou\b"), _rotulo(r"Quem\s+recebeu\b")
+        if i_pagou is not None and i_recebeu is not None and i_recebeu < i_pagou:
+            nomes = nomes[1::-1] if len(nomes) > 1 else [None] + nomes
         pag = nomes[0] if nomes else None
         dest = nomes[1] if len(nomes) > 1 else None
         if dest is None:      # sem o 2º documento: último nome antes do rodapé
@@ -538,19 +724,24 @@ def _partes_nome(c, com_recebedor: bool = False):
     dd = ''
     if c['data']:
         p = c['data'].split('/'); dd = p[0] + '-' + p[1]
-    desc = _espacar_codigo(_sem_rotulo(c['desc'])) or None
+    desc = _espacar_codigo(_corrigir_codigo_ocr(_sem_rotulo(c['desc']))) or None
     aporte = re.search(r'\b(APORTE|DISTRIBUI|TRANSF)', (desc or '').upper())
     dest = _limpar_empresa(c['dest'])
-    if desc and not aporte:
+    pag = _limpar_empresa(c['pag'])
+    # A DESCRIÇÃO manda, sempre que existe: é a regra do dono ("VALOR -
+    # DESCRIÇÃO - DATA") e é dela que o casamento tira OC, NF e centro de
+    # custo. A única troca é o aporte/transferência com os DOIS lados
+    # conhecidos, que vira "PAGADOR PARA RECEBEDOR". Faltando um dos lados,
+    # antes o miolo caía no recebedor e jogava a descrição fora: medido em
+    # 13 Pix do Inter com "APORTE CAPITAL"/"TRANSF ENTRE CONTAS", que saíram
+    # só com o nome de quem recebeu. O recebedor continua entrando quando é
+    # ele que desempata dois nomes iguais (`com_recebedor`).
+    if desc and aporte and pag and dest:
+        meio = f"{pag} PARA {dest}"
+    elif desc:
         meio = desc
     else:
-        pag = _limpar_empresa(c['pag'])
-        if desc and aporte and pag and dest:
-            meio = f"{pag} PARA {dest}"
-        elif dest:
-            meio = dest
-        else:
-            meio = desc or 'SEM DESCRICAO'
+        meio = dest or 'SEM DESCRICAO'
     meio = re.sub(r'\s+', ' ', (meio or '')).strip()
     if com_recebedor and dest and _sem_acento(dest).upper() not in _sem_acento(meio).upper():
         meio = f"{meio} - {dest}"
