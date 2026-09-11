@@ -1172,6 +1172,59 @@ def referencias(candidatos) -> dict:
 
 
 # --------------------------------------------------------------------------
+# A conferência (a janela que vem antes de gravar)
+# --------------------------------------------------------------------------
+def nsa_previstos(pagadores, historico) -> dict:
+    """`{conta: NSA}` que a conferência MOSTRA — previsão, não reserva.
+
+    Duas contas do MESMO convênio dividem a sequência, e `proximo_nsa` é
+    CONSULTA: perguntar uma vez por conta mostrava "arquivo nº 000031" nas
+    duas, enquanto a gravação daria 31 a uma e 32 à outra — e quem conferisse
+    pelo número da tela procuraria um arquivo que não existe. Aqui cada
+    convênio é perguntado UMA vez e as contas dele recebem números seguidos,
+    na ordem de `pagadores`, que é a ordem em que `_gravar_remessas` reserva.
+
+    Continua sendo consulta de propósito: reservar ao MOSTRAR queimaria um NSA
+    cada vez que alguém abrisse a janela e desistisse. Se a outra máquina
+    gerar entre a tela e o Confirmar — ou se uma conta do convênio sair sem
+    nada marcado —, o arquivo sai com outro número, e é por isso que ele é
+    previsão."""
+    proximos, saida = {}, {}
+    for conta, pagador in pagadores.items():
+        if pagador.convenio not in proximos:
+            proximos[pagador.convenio] = historico.proximo_nsa(pagador.convenio)
+        saida[conta] = proximos[pagador.convenio]
+        proximos[pagador.convenio] += 1
+    return saida
+
+
+def resumo_da_conferencia(preparado, marcas) -> tuple[int, float, int]:
+    """(quantos vão, quanto somam, quantos ficam de fora) — o rodapé.
+
+    `marcas` é `[(candidato, marcado)]` das linhas MARCÁVEIS das contas que
+    geram arquivo. "De fora" soma as duas espécies: o impedido (`not
+    c.pode`), de TODAS as contas do `preparado` — inclusive as que não geram
+    arquivo —, e o que a pessoa desmarcou."""
+    marcas = list(marcas)
+    vao = [c for c, marcado in marcas if marcado]
+    de_fora = sum(1 for linhas in preparado.values() for c in linhas
+                  if not c.pode)
+    de_fora += len(marcas) - len(vao)
+    return len(vao), sum(c.valor for c in vao), de_fora
+
+
+def aplicar_marcas(marcas) -> None:
+    """Grava no candidato o que a conferência deixou marcado.
+
+    Só as linhas que tinham marca na tela: o impedido fica com o `marcado` de
+    antes, que o `_gravar_remessas` ignora de qualquer jeito — ele exige
+    `pode` também. Quem cancela a janela não chega aqui, e o `preparado`
+    continua como o `preparar` o deixou."""
+    for c, marcado in marcas:
+        c.marcado = bool(marcado)
+
+
+# --------------------------------------------------------------------------
 # Onde mora o CPF/CNPJ do favorecido — a pergunta em aberto do Pix
 # --------------------------------------------------------------------------
 #
