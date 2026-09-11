@@ -111,12 +111,52 @@ def _texto_do_erro(e: Exception) -> str:
                        "falha sem mensagem — o motivo está no diagnostico.log")
 
 
+def _candidatos_livres(pe: dict) -> list:
+    """Os PDFs que ainda podem ser deste pagamento em dúvida: sem dono, do
+    mais provável para o menos. É a ordem da janela e a do relatório."""
+    return sorted((c for c in pe["cands"] if c["pdf"]["used_by"] is None),
+                  key=lambda c: -c["score"])
+
+
+def _aplicar_escolhas(duvidas: list, escolhas: dict) -> int:
+    """Grava nos pagamentos o PDF que a pessoa escolheu na janela de dúvidas.
+
+    `escolhas` é {índice em `duvidas`: pdf}; quem ficou em dúvida não está
+    lá. Um PDF vai para UM pagamento só: chegando repetido, vale o primeiro
+    na ordem das dúvidas — a janela já não deixa (escolher de novo muda o
+    PDF de lugar), e a trava fica para quem chamar sem ela. PDF que já tem
+    dono também não é regravado. Devolve quantas dúvidas viraram CERTEZA."""
+    usados = set()
+    feitas = 0
+    for i, pe in enumerate(duvidas):
+        pd = escolhas.get(i)
+        if pd is None or id(pd) in usados or pd["used_by"] is not None:
+            continue
+        usados.add(id(pd))
+        pd["used_by"] = pe["paidId"]
+        pe["match"] = {"pdf": pd, "ocnf": False, "cc": False,
+                       "date": False, "docnum": False, "score": 0}
+        pe["pdf"] = pd["fn"]
+        pe["motivo"] = "escolhido por você"
+        pe["status"] = "CERTEZA"
+        feitas += 1
+    return feitas
+
+
+def _data_curta(iso: str) -> str:
+    """"2026-09-01" vira "01/09/2026" — o formato que a tabela sabe ordenar
+    como data. Outro formato passa como veio."""
+    t = str(iso or "")
+    if len(t) == 10 and t[4] == "-" and t[7] == "-":
+        return f"{t[8:10]}/{t[5:7]}/{t[:4]}"
+    return t or "—"
+
+
 def _resumo_cands(pe: dict) -> str:
     """Candidatos que sobraram para um pagamento em dúvida, do mais provável
     para o menos, com o que bateu em cada um — mesmo detalhe que a janela."""
     partes = []
-    for c in sorted((c for c in pe["cands"] if c["pdf"]["used_by"] is None),
-                    key=lambda c: -c["score"]):
+    for c in _candidatos_livres(pe):
         sinais = " + ".join(s for s in ("OC/NF" if c["ocnf"] else "",
                                         "centro de custo" if c["cc"] else "",
                                         "data" if c["date"] else "") if s)
@@ -674,7 +714,21 @@ class AnexarFrame(ttk.Frame):
         Mostra o pagamento INTEIRO (descrição sem cortar, centro de custo, nº
         doc, categoria, conta) e, para cada PDF candidato, o que bateu e o que
         não bateu — é isso que permite decidir sem abrir o Mais Controle. Dá
-        também para abrir o PDF na hora, para conferir o comprovante."""
+        também para abrir o PDF na hora, para conferir o comprovante.
+
+        É LISTA + DETALHE: em cima, uma linha por pagamento; embaixo, o
+        detalhe de UM deles, remontado a cada troca. São os mesmos widgets
+        com 3 dúvidas ou com 300. Até 11/09/2026 era um bloco inteiro por
+        dúvida (moldura, seis rótulos, tabela, botões) empilhado num Canvas
+        rolável, e cada bloco que entrava fazia o Canvas recalcular a
+        geometria dos anteriores: medido com a janela fora da tela, 184
+        dúvidas davam 2.032 widgets e 86 s só de geometria, antes de desenhar
+        um pixel — o "Não está respondendo" do Windows, e depois a rolagem
+        arrastando duas mil janelas nativas. A mesma tabela num frame comum
+        custa milésimos. Lista que cresce com o dado é UMA Treeview."""
+        if not duvidas:
+            ev.set()
+            return
         pasta = Path(self.v_pasta.get() or ".")
         top = tk.Toplevel(self)
         top.title(f"Resolver dúvidas ({len(duvidas)})")
@@ -691,58 +745,117 @@ class AnexarFrame(ttk.Frame):
                        "forte (OC/NF, centro de custo, data) para decidir. "
                        "Escolha o PDF certo em cada um — ou deixe em dúvida "
                        "para decidir depois pelo relatório.\n"
-                       "Dica: dê dois cliques na linha para abrir o PDF."
+                       "Clique no pagamento, escolha o PDF na tabela de baixo "
+                       "e tecle Enter para ir ao próximo em dúvida. Dois "
+                       "cliques no PDF abrem o arquivo."
                   ).pack(anchor="w", padx=12, pady=(10, 6))
+
+        em_duvida, escolhido = "· em dúvida", "✓ escolhido"
+        #: índice em `duvidas` -> PDF escolhido. Quem fica em dúvida não entra.
+        escolha = {}
+        #: Os candidatos de cada dúvida, calculados UMA vez: nada é anexado
+        #: enquanto a janela está aberta, então os PDFs livres não mudam.
+        cands_de = [_candidatos_livres(pe) for pe in duvidas]
+        #: A dúvida que está no detalhe e, da tabela de baixo, iid -> candidato.
+        atual = {"i": None, "mapa": {}}
 
         rodape = ttk.Frame(top)
         rodape.pack(side="bottom", fill="x", padx=12, pady=10)
 
-        canvas = tk.Canvas(top, highlightthickness=0)
-        barra = ttk.Scrollbar(top, orient="vertical", command=canvas.yview)
-        quadro = ttk.Frame(canvas)
-        janela = canvas.create_window((0, 0), window=quadro, anchor="nw")
-        quadro.bind("<Configure>",
-                    lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>",
-                    lambda e: canvas.itemconfigure(janela, width=e.width))
-        canvas.configure(yscrollcommand=barra.set)
-        canvas.pack(side="left", fill="both", expand=True, padx=(12, 0), pady=4)
-        barra.pack(side="right", fill="y")
-        # Roda do mouse SÓ enquanto o ponteiro está sobre esta janela.
-        # `bind_all` sequestrava o evento do app inteiro: com a janela de
-        # dúvidas aberta (ou depois dela, se `concluir` não rodasse), rolar
-        # qualquer outra aba mexia nesta lista.
-        def _roda(e):
-            canvas.yview_scroll(-(e.delta // 120), "units")
+        # ---- em cima: um pagamento por linha
+        caixa = ttk.Frame(top)
+        caixa.pack(fill="x", padx=12, pady=(4, 0))
+        lista = ttk.Treeview(caixa, columns=("situacao", "valor", "data", "conta",
+                                             "favorecido", "pdfs"),
+                             show="headings", selectmode="browse", height=9)
+        for col, cab, larg, estica, lado in (
+                ("situacao", "Situação", 120, False, "w"),
+                ("valor", "Valor", 95, False, "e"),
+                ("data", "Data", 90, False, "w"),
+                ("conta", "Conta", 290, False, "w"),
+                ("favorecido", "Favorecido", 330, True, "w"),
+                ("pdfs", "PDFs", 55, False, "e")):
+            lista.heading(col, text=cab)
+            lista.column(col, width=larg, anchor=lado, stretch=estica)
+        widgets.estilo_tabela(lista)
+        rola = ttk.Scrollbar(caixa, orient="vertical", command=lista.yview)
+        lista.configure(yscrollcommand=rola.set)
+        rola.pack(side="right", fill="y")
+        lista.pack(side="left", fill="x", expand=True)
+        for i, pe in enumerate(duvidas):
+            lista.insert("", "end", iid=str(i),
+                         values=(em_duvida, _fmt_val(pe["valor"]),
+                                 _data_curta(pe["dataFull"]), pe["conta"],
+                                 pe.get("favorecido") or "—", len(cands_de[i])),
+                         tags=widgets.linha_zebrada(i))
 
-        canvas.bind("<Enter>", lambda e: top.bind("<MouseWheel>", _roda))
-        canvas.bind("<Leave>", lambda e: top.unbind("<MouseWheel>"))
+        # ---- embaixo: o detalhe do pagamento selecionado
+        bloco = ttk.LabelFrame(top)
+        bloco.pack(fill="both", expand=True, padx=12, pady=(8, 0))
+        campos = {}
+        for rotulo in ("Favorecido", "Descrição", "Centro de custo", "Nº doc",
+                       "Categoria"):
+            campos[rotulo] = ttk.Label(bloco, wraplength=1080, justify="left")
+            campos[rotulo].pack(anchor="w", padx=8)
+        qtd = ttk.Label(bloco)
+        qtd.pack(anchor="w", padx=8, pady=(8, 2))
+        # Os botões entram ANTES da tabela, pelo pé: com a janela baixa quem
+        # encolhe é a tabela, e não a fileira de botões que some por baixo.
+        botoes = ttk.Frame(bloco)
+        botoes.pack(side="bottom", fill="x", padx=8, pady=(0, 6))
+        caixa_tv = ttk.Frame(bloco)
+        caixa_tv.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        tv = ttk.Treeview(caixa_tv, columns=("sinais", "arquivo", "data", "desc"),
+                          show="headings", selectmode="browse", height=6)
+        for col, cab, larg, estica in (("sinais", "O que bateu", 190, False),
+                                       ("arquivo", "Arquivo", 470, False),
+                                       ("data", "Data do PDF", 85, False),
+                                       ("desc", "Descrição do PDF", 290, True)):
+            tv.heading(col, text=cab)
+            tv.column(col, width=larg, anchor="w", stretch=estica)
+        # A lista chega ordenada pelo SCORE, que é a ordem certa para
+        # decidir. Clicar no cabeçalho reordena por arquivo ou por data —
+        # é como se acha "aquele PDF de terça" quando os candidatos têm
+        # todos o mesmo valor e sinais parecidos.
+        #
+        # `fixos`: a linha "(deixar em dúvida)" é uma OPÇÃO, não um
+        # candidato. Ordenar a lista não pode enterrá-la entre os
+        # arquivos — ela é a saída de quem não vai decidir agora.
+        widgets.estilo_tabela(tv, fixos=("_nada",))
+        rola_tv = ttk.Scrollbar(caixa_tv, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=rola_tv.set)
+        rola_tv.pack(side="right", fill="y")
+        tv.pack(side="left", fill="both", expand=True)
 
-        def _abrir_pdf(tv, mapa):
-            pd = mapa.get((tv.selection() or [None])[0])
-            if pd is None:
-                messagebox.showinfo("Abrir PDF",
-                                    "Selecione um dos arquivos da lista.")
-                return
-            alvo = pasta / pd["fn"]
-            try:
-                os.startfile(str(alvo))
-            except OSError as e:
-                messagebox.showerror("Erro", f"Não consegui abrir:\n{alvo}\n\n{e}")
-
-        escolhas = []
-        for pe in duvidas:
-            cands = sorted((c for c in pe["cands"] if c["pdf"]["used_by"] is None),
-                           key=lambda c: -c["score"])
+        def _titulo(pe):
             vals = sorted(set(pe.get("valores") or [pe["valor"]]))
             titulo = f" R$ {_fmt_val(pe['valor'])}"
             outros = [v for v in vals if v != pe["valor"]]
             if outros:
-                titulo += " (pago; nominal " + ", ".join(_fmt_val(v) for v in outros) + ")"
-            titulo += f" — {pe['dataFull']} — {pe['conta']} "
-            bloco = ttk.LabelFrame(quadro, text=titulo)
-            bloco.pack(fill="x", padx=4, pady=6)
+                titulo += (" (pago; nominal "
+                           + ", ".join(_fmt_val(v) for v in outros) + ")")
+            return titulo + f" — {pe['dataFull']} — {pe['conta']} "
 
+        def _pintar_candidatos():
+            """O "O que bateu" de cada PDF, com ⚠ no que já foi escolhido
+            para OUTRO pagamento — escolher esse o muda de lugar."""
+            i = atual["i"]
+            for iid, c in atual["mapa"].items():
+                outro = any(pd is c["pdf"] for j, pd in escolha.items() if j != i)
+                sinais = " ".join(s for s in ("✔ OC/NF" if c["ocnf"] else "",
+                                              "✔ centro de custo" if c["cc"] else "",
+                                              "✔ data" if c["date"] else "") if s)
+                tv.set(iid, "sinais",
+                       ("⚠ já escolhido em outro · " if outro else "")
+                       + (sinais or "só o valor bate"))
+                # A listra pela POSIÇÃO, como o `_rezebrar` da ordenação faz.
+                tv.item(iid, tags=widgets.linha_zebrada(
+                    tv.index(iid), "atencao" if outro else ""))
+
+        def _mostrar(i):
+            atual["i"] = i
+            pe = duvidas[i]
+            bloco.configure(text=_titulo(pe))
             doc = pe["doc"] or "—"
             if pe.get("ocs"):
                 doc += "     OC/NF: " + ", ".join(pe["ocs"])
@@ -751,76 +864,126 @@ class AnexarFrame(ttk.Frame):
                                   ("Centro de custo", "; ".join(pe["works"]) or "—"),
                                   ("Nº doc", doc),
                                   ("Categoria", pe.get("categoria") or "—")):
-                ttk.Label(bloco, text=f"{rotulo}: {texto}", wraplength=1080,
-                          justify="left").pack(anchor="w", padx=8)
-
-            ttk.Label(bloco, text=f"{len(cands)} PDF(s) livre(s) com esse valor:"
-                      ).pack(anchor="w", padx=8, pady=(8, 2))
-            tv = ttk.Treeview(bloco, columns=("sinais", "arquivo", "data", "desc"),
-                              show="headings", selectmode="browse",
-                              height=min(max(len(cands) + 1, 2), 7))
-            for col, cab, larg, estica in (("sinais", "O que bateu", 190, False),
-                                           ("arquivo", "Arquivo", 470, False),
-                                           ("data", "Data do PDF", 85, False),
-                                           ("desc", "Descrição do PDF", 290, True)):
-                tv.heading(col, text=cab)
-                tv.column(col, width=larg, anchor="w", stretch=estica)
-            # A lista chega ordenada pelo SCORE, que é a ordem certa para
-            # decidir. Clicar no cabeçalho reordena por arquivo ou por data —
-            # é como se acha "aquele PDF de terça" quando os candidatos têm
-            # todos o mesmo valor e sinais parecidos.
-            #
-            # `fixos`: a linha "(deixar em dúvida)" é uma OPÇÃO, não um
-            # candidato. Ordenar a lista não pode enterrá-la entre os
-            # arquivos — ela é a saída de quem não vai decidir agora.
-            widgets.estilo_tabela(tv, fixos=("_nada",))
+                campos[rotulo].configure(text=f"{rotulo}: {texto}")
+            aviso.configure(text="")
+            qtd.configure(text=f"{len(cands_de[i])} PDF(s) livre(s) com esse valor:")
+            tv.delete(*tv.get_children())
             tv.insert("", "end", iid="_nada",
                       values=("—", "(deixar em dúvida)", "", ""))
-            mapa = {}
-            for k, c in enumerate(cands):
+            atual["mapa"] = {}
+            for k, c in enumerate(cands_de[i]):
                 pd = c["pdf"]
-                sinais = " ".join(s for s in ("✔ OC/NF" if c["ocnf"] else "",
-                                              "✔ centro de custo" if c["cc"] else "",
-                                              "✔ data" if c["date"] else "") if s)
                 dt = pd["data"]
                 tv.insert("", "end", iid=f"c{k}",
-                          values=(sinais or "só o valor bate", pd["fn"],
-                                  f"{dt[:2]}/{dt[2:]}" if dt else "—",
-                                  pd["desc"]),
-                          tags=widgets.linha_zebrada(k))
-                mapa[f"c{k}"] = pd
-            tv.selection_set("_nada")
-            tv.pack(fill="x", padx=8, pady=(0, 4))
-            tv.bind("<Double-1>", lambda e, t=tv, m=mapa: _abrir_pdf(t, m))
+                          values=("", pd["fn"], f"{dt[:2]}/{dt[2:]}" if dt else "—",
+                                  pd["desc"]))
+                atual["mapa"][f"c{k}"] = c
+            # A ordem que a pessoa pediu no cabeçalho continua valendo na
+            # dúvida seguinte: reordenar a cada troca seria desfazê-la.
+            ordem = getattr(tv, "_ordenacao", {})
+            if ordem.get("coluna"):
+                widgets.ordenar_tabela(tv, ordem["coluna"], ordem["descendente"])
+            _pintar_candidatos()
+            alvo = next((iid for iid, c in atual["mapa"].items()
+                         if c["pdf"] is escolha.get(i)), "_nada")
+            tv.selection_set(alvo)
+            tv.focus(alvo)
+            tv.see(alvo)
 
-            botoes = ttk.Frame(bloco)
-            botoes.pack(fill="x", padx=8, pady=(0, 6))
-            ttk.Button(botoes, text="Abrir lançamento no navegador",
-                       command=lambda i=pe["launchId"]: _abrir_url(LINK + str(i))
-                       ).pack(side="right")
-            ttk.Button(botoes, text="📄  Abrir PDF selecionado",
-                       command=lambda t=tv, m=mapa: _abrir_pdf(t, m)
-                       ).pack(side="right", padx=(0, 8))
-            escolhas.append((pe, tv, mapa))
+        def _ao_trocar(_e=None):
+            sel = lista.selection()
+            if sel and int(sel[0]) != atual["i"]:
+                _mostrar(int(sel[0]))
+
+        def _ao_escolher(_e=None):
+            # O <<TreeviewSelect>> entra na FILA do Tk: quando chega, a tabela
+            # já pode ser a da dúvida seguinte. Por isso lê o estado de agora
+            # e não o do clique — e a seleção que o `_mostrar` repôs volta
+            # aqui como "nada mudou".
+            i = atual["i"]
+            if i is None:
+                return
+            c = atual["mapa"].get((tv.selection() or [None])[0])
+            pd = c["pdf"] if c else None
+            if pd is escolha.get(i):
+                return
+            if pd is None:
+                escolha.pop(i, None)
+            else:
+                for j in [j for j, x in escolha.items() if x is pd and j != i]:
+                    del escolha[j]
+                    lista.set(str(j), "situacao", em_duvida)
+                    aviso.configure(
+                        text=f"Este PDF estava em R$ {_fmt_val(duvidas[j]['valor'])}"
+                             f" — {duvidas[j]['conta']}, que voltou para em dúvida.")
+                escolha[i] = pd
+            lista.set(str(i), "situacao", escolhido if i in escolha else em_duvida)
+            _pintar_candidatos()
+            _placar()
+
+        def _proxima(_e=None):
+            """Vai ao próximo pagamento AINDA em dúvida, na ordem da lista."""
+            ordem = list(lista.get_children())
+            k = ordem.index(str(atual["i"])) if str(atual["i"]) in ordem else -1
+            depois = ordem[k + 1:] + ordem[:k + 1]
+            if depois:
+                alvo = next((x for x in depois if int(x) not in escolha), depois[0])
+                lista.selection_set(alvo)
+                lista.focus(alvo)
+                lista.see(alvo)
+            return "break"
+
+        def _abrir_pdf():
+            c = atual["mapa"].get((tv.selection() or [None])[0])
+            if c is None:
+                messagebox.showinfo("Abrir PDF",
+                                    "Selecione um dos arquivos da lista.",
+                                    parent=top)
+                return
+            alvo = pasta / c["pdf"]["fn"]
+            try:
+                os.startfile(str(alvo))
+            except OSError as e:
+                messagebox.showerror("Erro", f"Não consegui abrir:\n{alvo}\n\n{e}",
+                                     parent=top)
+
+        def _duplo(e):
+            # Só na LINHA: dois cliques no cabeçalho são duas ordenações, e
+            # abriam o PDF que estivesse selecionado.
+            if tv.identify_region(e.x, e.y) in ("cell", "tree"):
+                _abrir_pdf()
+
+        def _ir_para_os_pdfs(_e=None):
+            tv.focus_set()
+            return "break"
+
+        aviso = ttk.Label(botoes, style="Atencao.TLabel")
+        aviso.pack(side="left")
+        ttk.Button(botoes, text="Abrir lançamento no navegador",
+                   command=lambda: _abrir_url(
+                       LINK + str(duvidas[atual["i"]]["launchId"]))
+                   ).pack(side="right")
+        ttk.Button(botoes, text="📄  Abrir PDF selecionado", command=_abrir_pdf
+                   ).pack(side="right", padx=(0, 8))
+        ttk.Button(botoes, text="Próxima em dúvida  ▸", command=_proxima
+                   ).pack(side="right", padx=(0, 8))
+
+        def _placar():
+            n = len(escolha)
+            placar.configure(text=f"{n} de {len(duvidas)} decidida(s)")
+            b_ok.configure(text="✔  Confirmar escolhas" + (f" ({n})" if n else ""))
 
         def concluir(confirmar):
-            try:
-                top.unbind("<MouseWheel>")
-            except tk.TclError:
-                pass
+            # Com a lista inteira numa tela só, escolher trinta PDFs vira
+            # coisa de minutos — e perdê-los num X sem querer, também.
+            if not confirmar and escolha and not messagebox.askyesno(
+                    "Resolver dúvidas",
+                    f"Você já escolheu {len(escolha)} PDF(s). Sair assim deixa "
+                    "TODOS em dúvida.\n\nDescartar as escolhas?",
+                    icon="warning", default="no", parent=top):
+                return
             if confirmar:
-                usados = set()
-                for pe, tv, mapa in escolhas:
-                    pd = mapa.get((tv.selection() or [None])[0])
-                    if pd is None or id(pd) in usados or pd["used_by"] is not None:
-                        continue        # mesmo PDF escolhido 2x: vale a 1ª escolha
-                    usados.add(id(pd))
-                    pd["used_by"] = pe["paidId"]
-                    pe["match"] = {"pdf": pd, "ocnf": False, "cc": False,
-                                   "date": False, "docnum": False, "score": 0}
-                    pe["pdf"] = pd["fn"]
-                    pe["motivo"] = "escolhido por você"
-                    pe["status"] = "CERTEZA"
+                _aplicar_escolhas(duvidas, escolha)
             top.destroy()
             ev.set()
 
@@ -829,7 +992,20 @@ class AnexarFrame(ttk.Frame):
         b_ok.pack(side="left")
         widgets.Botao(rodape, "Deixar todas em dúvida", papel="neutro",
                       command=lambda: concluir(False)).pack(side="left", padx=10)
+        placar = ttk.Label(rodape, style="Apoio.TLabel")
+        placar.pack(side="right")
+
+        lista.bind("<<TreeviewSelect>>", _ao_trocar)
+        lista.bind("<Return>", _ir_para_os_pdfs)
+        tv.bind("<<TreeviewSelect>>", _ao_escolher)
+        tv.bind("<Double-1>", _duplo)
+        tv.bind("<Return>", _proxima)
         top.protocol("WM_DELETE_WINDOW", lambda: concluir(False))
+        _placar()
+        _mostrar(0)
+        lista.selection_set("0")
+        lista.focus("0")
+        lista.focus_set()
         top.grab_set()
 
     # ---------------------------------------------------------------- etapa 2

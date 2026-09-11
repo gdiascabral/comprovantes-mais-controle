@@ -897,12 +897,24 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   Casar e anexar) — "Abrir o Mais Controle" saiu do fluxo e virou botão
   auxiliar, porque com a senha guardada o app entra sozinho.
   Pausar/Parar, cronômetros ⏱, janela de
-  resolver DÚVIDAS (`_janela_duvidas`): por pagamento mostra favorecido,
-  descrição inteira, centro de custo, nº doc + OC/NF, categoria e conta;
-  os candidatos vêm
+  resolver DÚVIDAS (`_janela_duvidas`), em LISTA + DETALHE: em cima, uma
+  linha por pagamento em dúvida (situação, valor, data, conta, favorecido,
+  nº de PDFs); embaixo, o detalhe de UM — favorecido, descrição inteira,
+  centro de custo, nº doc + OC/NF, categoria e conta — e os candidatos
   numa tabela ordenada pelo score, com o que bateu em cada um (OC/NF,
-  centro de custo, data) e botões de abrir o PDF e o lançamento. O mesmo
-  detalhe vai para a aba DUVIDA do relatório (`_resumo_cands`).
+  centro de custo, data) e botões de abrir o PDF e o lançamento. Enter (ou
+  "Próxima em dúvida") pula para o próximo sem escolha; escolher um PDF que
+  já estava em outro pagamento o MUDA de lugar, com aviso; sair com
+  escolhas feitas pergunta antes de descartá-las. Quem grava é
+  `_aplicar_escolhas`, função pura (um PDF, um pagamento). **Até 11/09/2026
+  era um bloco de widgets por dúvida num Canvas rolável, e isso não
+  escala**: cada bloco que entra faz o Canvas recalcular a geometria dos
+  anteriores — 184 dúvidas davam 2.032 widgets e 86 s só de geometria
+  (medido com a janela fora da tela), o "Não está respondendo" do Windows.
+  Lista que cresce com o dado é UMA Treeview, nunca N widgets num Canvas;
+  `tests/test_duvidas_anexar.py` confere que a janela tem os mesmos
+  widgets com 3 ou 300 dúvidas. O mesmo detalhe vai para a aba DUVIDA do
+  relatório (`_resumo_cands`).
   Botão Abrir relatório, modo "Por lista" (.csv/.xlsx; completa
   ".pdf" ausente). Relatório Excel: ANEXADOS/DUVIDA/SEM PAR.
 - `anexar/conferencia.py` — auditoria pós-anexo: lista pagos SEM anexo no
