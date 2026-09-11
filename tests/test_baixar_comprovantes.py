@@ -944,17 +944,38 @@ def test_a_falha_do_pix_nunca_vira_motivo_da_conta():
 # 11/09/2026) tem atributos fixos -- e e deles que os seletores saem agora.
 
 class _Localizador:
-    """Grava o que foi pedido e o que foi feito, sem navegador."""
+    """Grava o que foi pedido e o que foi feito, sem navegador.
 
-    def __init__(self, registro, seletor):
-        self.registro, self.seletor = registro, seletor
+    As datas "destravam" depois de `pagina.destrava_no_clique` cliques no
+    rádio (pela bolinha ou pelo JS) -- é o sinal que a tela real dá."""
+
+    def __init__(self, pagina, seletor):
+        self.pagina, self.seletor = pagina, seletor
+        self.registro = pagina.registro
         self.first = self
 
+    def locator(self, sub):
+        return _Localizador(self.pagina, f"{self.seletor} >> {sub}")
+
     def count(self):
-        return 1
+        return self.pagina.contagens.get(self.seletor, 1)
 
     def click(self):
         self.registro.append(("click", self.seletor))
+        self.pagina.cliques += 1
+
+    def evaluate(self, _js):
+        self.registro.append(("evaluate", self.seletor))
+        self.pagina.cliques += 1
+
+    def scroll_into_view_if_needed(self):
+        pass
+
+    def wait_for(self, timeout=None):
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+        if self.pagina.cliques < self.pagina.destrava_no_clique:
+            raise PlaywrightTimeout("as datas continuam desabilitadas")
 
     def press(self, tecla):
         self.registro.append(("press", self.seletor, tecla))
@@ -964,25 +985,61 @@ class _Localizador:
 
 
 class _PaginaDePix:
-    def __init__(self):
+    def __init__(self, destrava_no_clique=1):
         self.registro = []
+        self.contagens = {}
+        self.cliques = 0
+        self.destrava_no_clique = destrava_no_clique
 
     def locator(self, seletor):
         self.registro.append(("locator", seletor))
-        return _Localizador(self.registro, seletor)
+        return _Localizador(self, seletor)
 
     def wait_for_timeout(self, _ms):
         pass
 
 
-def test_o_periodo_e_ligado_pelo_radio_e_nao_pelo_texto():
+def test_o_periodo_e_ligado_pela_bolinha_e_nao_pelo_input_escondido():
     """O rádio `value="2"` é "Período"; o `value="1"` é "Selecione o mês", e
-    com ele os campos de data nascem desabilitados."""
+    com ele os campos de data nascem desabilitados. O `input` fica escondido
+    atrás do `span.checkmark`: clicar nele esperou 45s em todas as contas da
+    rodada de 11/09/2026 ("element is not visible")."""
     from baixar_comprovantes import sicoob_baixar as sb
 
     pagina = _PaginaDePix()
     sb._selecionar_periodo_pix(pagina)
-    assert ("click", 'input[name="selecao"][value="2"]') in pagina.registro
+    bolinha = f"{sb.SEL_PERIODO_PIX} >> {sb._CHECKMARK_DO_RADIO}"
+    assert ("click", bolinha) in pagina.registro
+    assert ("click", sb.SEL_PERIODO_PIX) not in pagina.registro
+    assert "checkmark" in sb._CHECKMARK_DO_RADIO
+    assert "ib-sicoob-input-radio" in sb._CHECKMARK_DO_RADIO
+
+
+def test_sem_bolinha_o_periodo_vai_pelo_clique_nativo():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pagina = _PaginaDePix()
+    pagina.contagens[f"{sb.SEL_PERIODO_PIX} >> {sb._CHECKMARK_DO_RADIO}"] = 0
+    sb._selecionar_periodo_pix(pagina)
+    assert ("evaluate", sb.SEL_PERIODO_PIX) in pagina.registro
+
+
+def test_bolinha_que_nao_destrava_as_datas_tenta_o_clique_nativo():
+    """Clicar no lugar errado deste componente não dá erro e não marca nada:
+    quem prova que marcou é a data destravar."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pagina = _PaginaDePix(destrava_no_clique=2)
+    sb._selecionar_periodo_pix(pagina)
+    assert ("evaluate", sb.SEL_PERIODO_PIX) in pagina.registro
+
+
+def test_periodo_que_nao_marca_desiste_com_motivo_e_sem_esperar_45s():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pagina = _PaginaDePix(destrava_no_clique=99)
+    with pytest.raises(sb.SicoobFalhou, match="Período"):
+        sb._selecionar_periodo_pix(pagina)
 
 
 @pytest.mark.parametrize("campo", ["dataInicial", "dataFinal"])
@@ -995,6 +1052,8 @@ def test_as_datas_vao_pelo_name_do_campo(campo):
     assert ("type", seletor, "08/09/2026") in pagina.registro
     assert ("press", seletor, "Control+a") in pagina.registro, (
         "sem limpar antes, a data digitada soma à que já estava no campo")
+    assert pagina.registro[-1] == ("press", seletor, "Tab"), (
+        "sem fechar o calendário, ele cobre o campo seguinte e o Consultar")
 
 
 def test_nenhum_seletor_do_formulario_de_pix_depende_de_rotulo():
