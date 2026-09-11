@@ -433,17 +433,59 @@ def ir_para_pix(page) -> None:
     page.wait_for_timeout(2500)
 
 
+SEL_PERIODO_PIX = 'input[name="selecao"][value="2"]'
+# A bolinha que se vê e que se clica. O `input` do rádio fica escondido atrás
+# dela — é o `ib-sicoob-input-radio`, o mesmo componente do formato do extrato
+# (ver `SicoobClient._marcar_formato`).
+_CHECKMARK_DO_RADIO = (
+    "xpath=ancestor::*[self::ib-sicoob-input-radio or self::label][1]"
+    "//span[contains(concat(' ', normalize-space(@class), ' '), ' checkmark ')]")
+SEL_DATA_INICIAL_LIBERADA = 'input[name="dataInicial"]:not([disabled])'
+# Sem a bolinha, o clique nativo do DOM: dispara `click`/`change` no próprio
+# rádio mesmo escondido, que é o que o Angular escuta num rádio comum.
+JS_CLICAR_RADIO = "el => (el.closest('label') || el).click()"
+
+
 def _selecionar_periodo_pix(page) -> None:
     """Liga o rádio "Período" (`input[name=selecao][value="2"]`) — a tela
     nasce no rádio "Selecione o mês" (`value="1"`), que deixa Inicial/Final
     desabilitados.
 
+    **Não clica no `input`.** Ele existe no DOM e está escondido atrás do
+    `span.checkmark`: a v2.0.190 mirou nele e o Playwright esperou 45s por
+    um elemento que nunca fica visível ("element is not visible", 11/09/2026,
+    em todas as contas). Clica na bolinha e, sem ela, no clique nativo.
+
+    **A prova é a data destravar**, não o clique: clicar no lugar errado
+    deste componente não dá erro e não marca nada (é a mesma armadilha do
+    formato do extrato). Sem destravar, desiste em segundos com um motivo que
+    diz o que houve, em vez de deixar o próximo campo esperar 45s.
+
     Não clica no TEXTO "Período": não há `<label>` ligando o texto ao rádio,
     e `page.locator("text=Período")` foi exatamente o que ficou preso 45s
     tentando achar "Inicial"/"Final" (ver o docstring de
     `_preencher_data_pix`) — o mesmo defeito, num campo vizinho."""
-    page.locator('input[name="selecao"][value="2"]').click()
-    page.wait_for_timeout(300)
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+    radio = page.locator(SEL_PERIODO_PIX).first
+    marca = radio.locator(_CHECKMARK_DO_RADIO).first
+    liberada = page.locator(SEL_DATA_INICIAL_LIBERADA).first
+
+    def pela_bolinha():
+        marca.scroll_into_view_if_needed()
+        marca.click()
+
+    tentativas = [pela_bolinha] if marca.count() else []
+    tentativas.append(lambda: radio.evaluate(JS_CLICAR_RADIO))
+    for tentar in tentativas:
+        tentar()
+        try:
+            liberada.wait_for(timeout=4000)
+            return
+        except PlaywrightTimeout:
+            continue       # o próximo jeito de marcar; o fim do laço avisa
+    raise SicoobFalhou('não consegui marcar "Período" na tela de Pix '
+                       "(as datas continuaram travadas)")
 
 
 def _preencher_data_pix(page, campo_nome: str, valor: str) -> None:
@@ -459,12 +501,17 @@ def _preencher_data_pix(page, campo_nome: str, valor: str) -> None:
     atributo. Medido lendo o HTML de verdade em 11/09/2026 (o `outerHTML` de
     cada campo, copiado do console do navegador): os inputs têm
     `name="dataInicial"`/`name="dataFinal"` fixos, e é isso que se usa
-    agora."""
+    agora.
+
+    O `Tab` no fim fecha o calendário que o campo abre ao receber o clique:
+    aberto, ele fica por cima do campo seguinte e do Consultar, e o clique
+    neles esperaria 45s pelo "outro elemento intercepta o ponteiro"."""
     campo = page.locator(f'input[name="{campo_nome}"]')
     campo.click()
     campo.press("Control+a")
     campo.press("Delete")
     campo.type(valor, delay=40)
+    campo.press("Tab")
 
 
 def listar_pix(page, inicio: str, fim: str, tempo: float = 15.0) -> list:
