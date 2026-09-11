@@ -42,6 +42,47 @@ TEMPO_LOGIN = 10 * 60 * 1000        # a pessoa precisa digitar e passar o captch
 
 RE_CONTA = re.compile(r"\b(\d{2}\.\d{3}-\d)\b")
 
+#: O que prova que a pessoa entrou. Na tela antiga o login cai na lista de
+#: contas (`div.seletor-conta`); na tela "Novo" (o interruptor no topo do IB)
+#: cai direto na Home, e a lista só aparece quando se clica no ⇄ — ali o sinal
+#: é o cabeçalho com a conta aberta. Esperar só pela lista deixava o robô
+#: parado na Home até a pessoa clicar no ⇄ (11/09/2026).
+SINAIS_DE_LOGIN = "div.seletor-conta, .info-cliente-chave"
+
+#: O ⇄ do cabeçalho da tela "Novo". `icone` é atributo fixo do componente, e
+#: não classe gerada por build — lido do HTML real em 11/09/2026.
+SEL_TROCAR_CONTA_NOVO = 'sicoob-new-header ib-sicoob-icon[icone="arrow-lr"]'
+
+#: Os dois lugares onde a tela escreve a conta aberta. `novo` volta `null`
+#: quando o cabeçalho da tela "Novo" não existe: é assim que se sabe que a
+#: tela é a antiga.
+JS_TEXTOS_DA_CONTA = """
+() => {
+    const novo = document.querySelector('.info-cliente-chave');
+    return {novo: novo ? (novo.innerText || '') : null,
+            corpo: document.body.innerText || ''};
+}
+"""
+
+_RE_CONTA_NOVO = re.compile(r"\|\s*(\d[\d.]*[-–—]\d)\s*\|")
+_RE_CONTA_ANTIGA = re.compile(r"CONTA\s+(\d[\d.]*-\d)")
+
+
+def conta_do_cabecalho(novo: str | None, corpo: str) -> str:
+    """Qual conta a tela diz estar aberta, lida do texto. "" se não achar.
+
+    Tela "Novo": `3299 | 50.019-4 | PJ  | HB2744`, no `.info-cliente-chave`.
+    Tela antiga: `SICOOB ENGECRED 3299 CONTA 50.019-4 / PJ`, no corpo.
+
+    Pura de propósito, e UMA: quem confere a conta antes de baixar
+    (`baixar_comprovantes.sicoob_baixar.conta_aberta`) lê por aqui. A leitura
+    que só conhecia a tela antiga recusou a primeira conta da rodada de
+    11/09/2026 com "a tela está em (não consegui ler)" — o número estava no
+    cabeçalho, escrito do outro jeito."""
+    achado = (_RE_CONTA_NOVO.search(novo or "")
+              or _RE_CONTA_ANTIGA.search(corpo or ""))
+    return achado.group(1) if achado else ""
+
 
 class SessaoPerdida(RuntimeError):
     """Caímos para a tela de login no meio do trabalho."""
@@ -102,23 +143,33 @@ class SicoobClient:
     # ------------------------------------------------------------- login
 
     def aguardar_login(self, tempo: int = TEMPO_LOGIN):
-        """Abre a tela de login e espera a pessoa entrar.
+        """Abre a tela de login, espera a pessoa entrar e deixa a lista de
+        contas na tela.
 
-        O sinal de que entrou é a lista de contas na tela. Não mexemos em
-        campo de senha nem no captcha."""
+        O sinal de que entrou é a lista de contas (tela antiga) OU o cabeçalho
+        com a conta aberta (tela "Novo", que cai na Home) — ver
+        `SINAIS_DE_LOGIN`. Nos dois casos termina na lista, que é de onde o
+        resto do cliente parte. Não mexemos em campo de senha nem no captcha."""
         if not self.page.url.startswith("https://ib.sicoob.com.br"):
             self.page.goto(cfg.URL_LOGIN)
-        if self._na_selecao_de_contas():
+        if self._logado():
             self.log("Sessão já estava aberta.")
-            return
-        self.log("Faça o login no Chrome que abriu (cooperativa, chave e senha).")
-        self.log("Assim que a lista de contas aparecer, eu assumo daqui.")
-        self.page.wait_for_selector("div.seletor-conta", timeout=tempo)
-        self.log("Login concluído.")
+        else:
+            self.log("Faça o login no Chrome que abriu (cooperativa, chave e senha).")
+            self.log("Assim que você entrar, eu assumo daqui.")
+            self.page.wait_for_selector(SINAIS_DE_LOGIN, timeout=tempo)
+            self.log("Login concluído.")
+        self.ir_para_selecao()
 
     def _na_selecao_de_contas(self) -> bool:
         try:
             return self.page.locator("div.seletor-conta").count() > 0
+        except Exception:
+            return False
+
+    def _logado(self) -> bool:
+        try:
+            return self.page.locator(SINAIS_DE_LOGIN).count() > 0
         except Exception:
             return False
 
@@ -129,13 +180,22 @@ class SicoobClient:
     # ------------------------------------------------------------ contas
 
     def ir_para_selecao(self):
-        """Volta para a lista de contas, de onde estiver."""
+        """Volta para a lista de contas, de onde estiver.
+
+        Três caminhos, do mais provado ao mais frouxo: o "Trocar conta" da
+        tela antiga, o ⇄ do cabeçalho da tela "Novo" e, sem nenhum dos dois,
+        o endereço da seleção. Na tela "Novo" o endereço sozinho deixou a
+        segunda conta da rodada de 11/09/2026 esperando 45s pela lista, e o
+        ⇄ foi o que a pessoa clicou para a rodada andar."""
         if self._na_selecao_de_contas():
             return
         self._fechar_painel()      # um drawer aberto bloquearia o clique
         trocar = self.page.locator("a.cursor.texto-trocar-conta")
+        trocar_novo = self.page.locator(SEL_TROCAR_CONTA_NOVO)
         if trocar.count():
             trocar.first.click()
+        elif trocar_novo.count():
+            trocar_novo.first.click()
         else:
             self.page.goto(cfg.URL_SELECAO_CONTAS)
         self.page.wait_for_selector("div.seletor-conta", timeout=TEMPO_PADRAO)

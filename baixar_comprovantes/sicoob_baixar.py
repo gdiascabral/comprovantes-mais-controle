@@ -237,14 +237,6 @@ async ([url, metodo, corpo]) => {
 
 
 
-JS_CONTA_ABERTA = """
-() => {
-    // O cabecalho diz "SICOOB ENGECRED 3299 CONTA 50.019-4 / PJ".
-    const achado = (document.body.innerText || '').match(/CONTA\\s+([\\d.]+-\\d)/);
-    return achado ? achado[1] : '';
-}
-"""
-
 JS_IR_PARA = """
 ([rota]) => { location.hash = rota; return location.href; }
 """
@@ -254,9 +246,17 @@ def conta_aberta(page) -> str:
     """Qual conta a TELA diz estar aberta. "" quando não dá para ler.
 
     Existe porque a pergunta "troquei mesmo?" não tinha resposta: o
-    `acessar_conta` devolve True por ter clicado, não por ter chegado."""
+    `acessar_conta` devolve True por ter clicado, não por ter chegado.
+
+    Quem LÊ o texto é `sicoob_client.conta_do_cabecalho`, que conhece as duas
+    telas do Sicoob. A leitura que morava aqui só achava `CONTA 50.019-4`, e
+    na tela "Novo" o cabeçalho é `3299 | 50.019-4 | PJ`."""
+    from extratos_sicoob.sicoob_client import (JS_TEXTOS_DA_CONTA,
+                                               conta_do_cabecalho)
+
     try:
-        return page.evaluate(JS_CONTA_ABERTA) or ""
+        textos = page.evaluate(JS_TEXTOS_DA_CONTA) or {}
+        return conta_do_cabecalho(textos.get("novo"), textos.get("corpo", ""))
     except Exception:                                        # noqa: BLE001
         # "" faz `mesma_conta` dizer não, e a troca de conta é recusada como
         # se a tela mostrasse outra — quando o que houve foi não conseguir
