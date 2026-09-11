@@ -1023,6 +1023,15 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   escolhe, e a linha fica na planilha para conferir. Fica de fora o que prova
   pagamento — rótulo "Comprovante" ou texto de comprovante —, porque a linha
   dali é de boleto JÁ PAGO, e pagá-la de novo é pagar em dobro.
+  (e) **Pix sem chave com QR Code anexado ENTRA** (`anexo_para_pagar_a_mao`,
+  11/09/2026). A guia do cartório e o print da compra de marketplace chegam
+  sem chave no cadastro e só com a IMAGEM do QR Code; o ramo do Pix nunca
+  olhava anexo, então a linha ia para NÃO ENTRARAM como "sem forma de pagar"
+  — o boleto em imagem sempre ficou, e este é o mesmo caso. A linha fica com
+  "ATENÇÃO — sem dados de pgto" e a Obs diz em QUAL anexo está o QR; o app
+  não lê o QR (o exe não tem biblioteca para isso). Comprovante não conta —
+  pelo rótulo ou pelo texto de quem já pagou —, e a remessa continua
+  recusando a linha (`MOTIVO_SEM_CHAVE`): é pagamento à mão.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e
