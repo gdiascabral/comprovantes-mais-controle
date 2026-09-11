@@ -577,6 +577,37 @@ def _preencher_data_pix(page, campo_nome: str, valor: str) -> None:
     campo.press("Tab")
 
 
+_RE_BOTAO_OK = re.compile(r"^\s*ok\s*$", re.IGNORECASE)
+
+
+def _fechar_aviso_pix(page, tempo_ms: int = 3000) -> bool:
+    """Fecha o aviso de "nenhum Pix no período" pelo "Ok" dele.
+
+    Visto na rodada de 11/09/2026 (v2.0.194): sem Pix no período, a tela
+    abre um aviso modal e só segue depois do "Ok". Aberto, ele fica por cima
+    do ⇄ e do filtro da conta seguinte — foi a pessoa quem teve de clicar.
+
+    Acha o botão pelo PAPEL e pelo nome ("Ok", sem caixa), e só entre os
+    VISÍVEIS: modal fechado é `display:none` e não entra na conta. O HTML
+    desse aviso ainda não foi lido, por isso o Esc é o plano B. Nunca
+    levanta: um aviso que não fecha vira, no pior caso, o clique à mão de
+    antes."""
+    from playwright.sync_api import Error as PlaywrightError
+
+    botao = page.get_by_role("button", name=_RE_BOTAO_OK).first
+    try:
+        botao.wait_for(state="visible", timeout=tempo_ms)
+        botao.click(timeout=3000)
+        return True
+    except PlaywrightError:
+        pass       # sem aviso na tela, ou sem "Ok": o Esc logo abaixo
+    try:
+        page.keyboard.press("Escape")
+    except PlaywrightError:
+        log.warning("Pix: o aviso de período vazio não fechou", exc_info=True)
+    return False
+
+
 def listar_pix(page, inicio: str, fim: str, tempo: float = 15.0) -> list:
     """Os Pix enviados no período, pedidos pela PRÓPRIA tela de Pix.
 
@@ -601,11 +632,24 @@ def listar_pix(page, inicio: str, fim: str, tempo: float = 15.0) -> list:
                          and "/comprovante" not in r.url,
                 timeout=tempo * 1000) as resposta:
             botao.click()
-        corpo = resposta.value.json()
     except PlaywrightTimeout:
+        _fechar_aviso_pix(page, tempo_ms=1500)
         raise SicoobFalhou(
             f"a tela de Pix não respondeu ao filtro em {tempo:.0f}s")
-    return (corpo or {}).get("lancamentos") or []
+    if resposta.value.status >= 400:
+        _fechar_aviso_pix(page, tempo_ms=1500)
+        raise SicoobFalhou(
+            f"a tela de Pix respondeu {resposta.value.status} ao filtro")
+    try:
+        corpo = resposta.value.json()
+    except Exception:                                    # noqa: BLE001
+        corpo = None       # corpo vazio: é como o período sem Pix pode vir
+    itens = (corpo or {}).get("lancamentos") or []
+    if not itens:
+        # O período vazio abre um aviso modal por cima de tudo; sem fechá-lo,
+        # a troca de conta seguinte fica esperando atrás dele.
+        _fechar_aviso_pix(page)
+    return itens
 
 
 def detalhar_pix(page, item: dict) -> dict:
@@ -738,6 +782,7 @@ def _baixar_pix_da_conta(cli, numero: str, inicio: str, fim: str,
         return
     resultado.pix_no_periodo = len(itens)
     if not itens:
+        log("    Pix: nenhum no período")
         return
 
     pendentes = []

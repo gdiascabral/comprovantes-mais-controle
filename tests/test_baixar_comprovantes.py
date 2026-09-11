@@ -1085,6 +1085,76 @@ def test_nenhum_seletor_do_formulario_de_pix_depende_de_rotulo():
                 f"{funcao.__name__} voltou a usar {proibido}")
 
 
+# ---------------------------------------------- o aviso de periodo sem Pix
+# Rodada de 11/09/2026 (v2.0.194): sem Pix no periodo a tela abre um aviso
+# modal com "Ok", e a rodada so seguia depois que a pessoa clicava.
+
+class _BotaoOk:
+    def __init__(self, pagina):
+        self.pagina = pagina
+        self.first = self
+
+    def wait_for(self, state=None, timeout=None):
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+        if not self.pagina.tem_ok:
+            raise PlaywrightTimeout("nenhum Ok visivel")
+
+    def click(self, timeout=None):
+        self.pagina.registro.append(("click", "Ok"))
+
+
+class _PaginaComAviso:
+    def __init__(self, tem_ok=True):
+        self.registro = []
+        self.tem_ok = tem_ok
+        self.keyboard = self
+
+    def get_by_role(self, papel, name=None):
+        self.registro.append(("papel", papel))
+        return _BotaoOk(self)
+
+    def press(self, tecla):
+        self.registro.append(("tecla", tecla))
+
+
+def test_o_aviso_de_periodo_sem_pix_fecha_pelo_ok():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pagina = _PaginaComAviso()
+    assert sb._fechar_aviso_pix(pagina) is True
+    assert ("papel", "button") in pagina.registro
+    assert ("click", "Ok") in pagina.registro
+    assert ("tecla", "Escape") not in pagina.registro
+
+
+def test_o_ok_e_so_o_ok():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    for nome in ("Ok", "OK", " ok "):
+        assert sb._RE_BOTAO_OK.match(nome), nome
+    for nome in ("Okay", "Bloquear", "Consultar", "Ok, exportar"):
+        assert not sb._RE_BOTAO_OK.match(nome), nome
+
+
+def test_sem_ok_na_tela_tenta_o_esc_e_nao_levanta():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pagina = _PaginaComAviso(tem_ok=False)
+    assert sb._fechar_aviso_pix(pagina) is False
+    assert ("tecla", "Escape") in pagina.registro
+
+
+def test_listar_pix_fecha_o_aviso_quando_o_periodo_vem_vazio():
+    import inspect
+
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    fonte = inspect.getsource(sb.listar_pix)
+    assert "_fechar_aviso_pix(page)" in fonte
+    assert fonte.index("if not itens") < fonte.index("_fechar_aviso_pix(page)")
+
+
 def test_listar_pix_usa_os_names_reais_e_o_botao_pelo_atributo():
     import inspect
 
