@@ -434,16 +434,73 @@ def ir_para_pix(page) -> None:
 
 
 SEL_PERIODO_PIX = 'input[name="selecao"][value="2"]'
-# A bolinha que se vê e que se clica. O `input` do rádio fica escondido atrás
-# dela — é o `ib-sicoob-input-radio`, o mesmo componente do formato do extrato
-# (ver `SicoobClient._marcar_formato`).
-_CHECKMARK_DO_RADIO = (
-    "xpath=ancestor::*[self::ib-sicoob-input-radio or self::label][1]"
-    "//span[contains(concat(' ', normalize-space(@class), ' '), ' checkmark ')]")
 SEL_DATA_INICIAL_LIBERADA = 'input[name="dataInicial"]:not([disabled])'
-# Sem a bolinha, o clique nativo do DOM: dispara `click`/`change` no próprio
-# rádio mesmo escondido, que é o que o Angular escuta num rádio comum.
+
+# O rádio "Período" é um `p-radiobutton` do PrimeNG — HTML real, copiado do
+# console em 11/09/2026:
+#   <label><p-radiobutton id="radioConsultaIntervalo" name="selecao">
+#     <div class="ui-radiobutton ui-widget">
+#       <div class="ui-helper-hidden-accessible">
+#         <input type="radio" name="selecao" value="2"></div>
+#       <div role="radio" class="ui-radiobutton-box ...">...</div>
+#   ...</p-radiobutton>&nbsp;Período:</label>
+# O `input` fica escondido DE PROPÓSITO (`ui-helper-hidden-accessible`), e
+# quem escuta o clique é a caixa ao lado. O `id` é o nome que o próprio Sicoob
+# deu à opção; o `:has()` é a rede para o dia em que ele mudar. Nenhum dos dois
+# alcança o "Selecione o mês" (`radioConsultaPeriodo`, `value="1"`).
+SEL_CAIXA_PERIODO_PIX = (
+    "p-radiobutton#radioConsultaIntervalo div.ui-radiobutton-box, "
+    'p-radiobutton:has(input[name="selecao"][value="2"]) '
+    "div.ui-radiobutton-box")
+# O último recurso, sem caixa: o clique nativo no rótulo (ou no próprio input),
+# que o navegador repassa ao rádio.
 JS_CLICAR_RADIO = "el => (el.closest('label') || el).click()"
+
+# O retrato do filtro que vai para o diagnostico.log quando "Período" não
+# marca: é o HTML que faltava para acertar sem pedir print a ninguém. Sobe só
+# até o menor pedaço que tem os dois rádios; 5+ dígitos seguidos (conta,
+# cooperativa) saem mascarados.
+JS_RETRATO_DO_FILTRO_PIX = r"""
+() => {
+    const radios = [...document.querySelectorAll('input[name="selecao"]')];
+    const r2 = radios.find(o => o.value === '2');
+    const r1 = radios.find(o => o.value === '1');
+    const ini = document.querySelector('input[name="dataInicial"]');
+    const estilo = (e) => {
+        if (!e) return 'ausente';
+        const s = getComputedStyle(e), b = e.getBoundingClientRect();
+        return s.display + '/' + s.visibility + '/' + s.opacity + ' ' +
+               Math.round(b.width) + 'x' + Math.round(b.height);
+    };
+    let grupo = r2, passos = 0;
+    while (grupo && grupo.parentElement && passos < 8 &&
+           !(r1 && grupo.contains(r1))) {
+        grupo = grupo.parentElement;
+        passos++;
+    }
+    return {
+        rota: location.hash,
+        radio2: estilo(r2),
+        marcado: r2 ? r2.checked : null,
+        dataInicial: ini ? (ini.disabled ? 'desabilitado' : 'habilitado')
+                         : 'ausente',
+        grupo: (grupo ? grupo.outerHTML : '')
+            .replace(/\d{5,}/g, '#####').slice(0, 4000),
+    };
+}
+"""
+
+
+def _retratar_filtro_pix(page) -> None:
+    """Grava no diagnostico.log como estava o filtro quando "Período" não
+    marcou. Nunca levanta: é só a pista para a próxima correção."""
+    try:
+        retrato = page.evaluate(JS_RETRATO_DO_FILTRO_PIX)
+        log.warning("Pix: 'Período' não marcou. Retrato do filtro: %s",
+                    retrato)
+    except Exception:                                    # noqa: BLE001
+        log.warning("Pix: 'Período' não marcou, e o retrato do filtro "
+                    "também falhou", exc_info=True)
 
 
 def _selecionar_periodo_pix(page) -> None:
@@ -451,41 +508,47 @@ def _selecionar_periodo_pix(page) -> None:
     nasce no rádio "Selecione o mês" (`value="1"`), que deixa Inicial/Final
     desabilitados.
 
-    **Não clica no `input`.** Ele existe no DOM e está escondido atrás do
-    `span.checkmark`: a v2.0.190 mirou nele e o Playwright esperou 45s por
-    um elemento que nunca fica visível ("element is not visible", 11/09/2026,
-    em todas as contas). Clica na bolinha e, sem ela, no clique nativo.
+    **Clica na caixa do PrimeNG, não no `input`** (ver
+    `SEL_CAIXA_PERIODO_PIX`). Duas rodadas de 11/09/2026 erraram o alvo: a
+    v2.0.190 mirou o `input` escondido e esperou 45s por "element is not
+    visible"; a v2.0.192 procurou a bolinha do componente do Sicoob
+    (`span.checkmark`), que esta tela não tem, e o clique nativo no rótulo
+    também não destravou as datas.
 
-    **A prova é a data destravar**, não o clique: clicar no lugar errado
-    deste componente não dá erro e não marca nada (é a mesma armadilha do
-    formato do extrato). Sem destravar, desiste em segundos com um motivo que
-    diz o que houve, em vez de deixar o próximo campo esperar 45s.
+    Três jeitos, do mais humano ao mais cru — o clique de mouse na caixa, o
+    `click()` do DOM na caixa (vale mesmo fora da área visível) e o clique
+    nativo no rótulo — e **a prova é a data destravar**, não o clique: o lugar
+    errado não dá erro e não marca nada. Sem destravar, desiste em segundos
+    com um motivo, e o retrato do filtro vai para o diagnostico.log.
 
     Não clica no TEXTO "Período": não há `<label>` ligando o texto ao rádio,
     e `page.locator("text=Período")` foi exatamente o que ficou preso 45s
     tentando achar "Inicial"/"Final" (ver o docstring de
     `_preencher_data_pix`) — o mesmo defeito, num campo vizinho."""
-    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    from playwright.sync_api import Error as PlaywrightError
 
+    caixa = page.locator(SEL_CAIXA_PERIODO_PIX).first
     radio = page.locator(SEL_PERIODO_PIX).first
-    marca = radio.locator(_CHECKMARK_DO_RADIO).first
     liberada = page.locator(SEL_DATA_INICIAL_LIBERADA).first
 
-    def pela_bolinha():
-        marca.scroll_into_view_if_needed()
-        marca.click()
-
-    tentativas = [pela_bolinha] if marca.count() else []
-    tentativas.append(lambda: radio.evaluate(JS_CLICAR_RADIO))
+    # `timeout` em todos: sem ele, um alvo que não existe espera os 45s do
+    # contexto — foi assim que as duas primeiras versões gastaram a rodada.
+    tentativas = (
+        lambda: caixa.click(timeout=5000),
+        lambda: caixa.evaluate("el => el.click()", timeout=3000),
+        lambda: radio.evaluate(JS_CLICAR_RADIO, timeout=3000),
+    )
     for tentar in tentativas:
-        tentar()
         try:
+            tentar()
             liberada.wait_for(timeout=4000)
             return
-        except PlaywrightTimeout:
+        except PlaywrightError:
             continue       # o próximo jeito de marcar; o fim do laço avisa
+    _retratar_filtro_pix(page)
     raise SicoobFalhou('não consegui marcar "Período" na tela de Pix '
-                       "(as datas continuaram travadas)")
+                       "(as datas continuaram travadas; detalhes no "
+                       "diagnostico.log)")
 
 
 def _preencher_data_pix(page, campo_nome: str, valor: str) -> None:
