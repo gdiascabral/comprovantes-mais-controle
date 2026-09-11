@@ -45,12 +45,16 @@ chutar um deles arrisca pedir o Pix de OUTRA conta sem nada denunciar, a
 mesma razão pela qual `ir_para_comprovantes` não usa `goto`. `listar_pix`
 preenche o filtro de período de verdade e lê a resposta que a tela recebeu.
 
-**Ainda não provado contra o Sicoob de verdade.** O que está confirmado por
-leitura de rede: a URL da lista, o formato do detalhe e a ausência de PDF
-nativo. O que NÃO foi confirmado ao vivo: os seletores do formulário de
-período (`_selecionar_periodo`, `_preencher_data_pix`) — precisam de uma
-primeira rodada real antes de se confiar neles, como o resto do que depende
-do navegador neste arquivo."""
+**Os seletores do formulário saem do HTML de verdade, não de rótulo.** A
+primeira versão (v2.0.188) procurava "Inicial"/"Final" por `get_by_label` e
+`text=`, e travou 45s em todas as contas na primeira rodada real: aqueles
+textos são `placeholder`, sem `<label>` nenhum, e `text=` só enxerga texto
+renderizado. Em 11/09/2026 o `outerHTML` dos campos foi copiado do console do
+navegador, e hoje o formulário é tocado pelos atributos fixos que ele tem:
+`input[name=selecao][value="2"]` (rádio "Período"), `input[name=dataInicial]`,
+`input[name=dataFinal]` e `button[data-content-label=Consultar]`. O que ainda
+falta é uma rodada ao vivo inteira — lista, detalhe e PDF — com esses
+seletores."""
 from __future__ import annotations
 
 import base64
@@ -430,22 +434,33 @@ def ir_para_pix(page) -> None:
 
 
 def _selecionar_periodo_pix(page) -> None:
-    """Liga o rádio "Período" — a tela nasce em "Selecione o mês"."""
-    page.get_by_text("Período", exact=False).first.click()
+    """Liga o rádio "Período" (`input[name=selecao][value="2"]`) — a tela
+    nasce no rádio "Selecione o mês" (`value="1"`), que deixa Inicial/Final
+    desabilitados.
+
+    Não clica no TEXTO "Período": não há `<label>` ligando o texto ao rádio,
+    e `page.locator("text=Período")` foi exatamente o que ficou preso 45s
+    tentando achar "Inicial"/"Final" (ver o docstring de
+    `_preencher_data_pix`) — o mesmo defeito, num campo vizinho."""
+    page.locator('input[name="selecao"][value="2"]').click()
     page.wait_for_timeout(300)
 
 
-def _preencher_data_pix(page, rotulo: str, valor: str) -> None:
-    """Preenche um campo de data pelo rótulo visível, tecla a tecla — o
-    mesmo cuidado do `aplicar_filtro_datas` do Inter: campo de data reage
-    mal a um valor posto de uma vez só (`fill`)."""
-    campo = page.get_by_label(rotulo, exact=False)
-    if campo.count() == 0:
-        # Nem todo campo de data do Sicoob tem <label> associado por
-        # for/id -- cai para o input mais próximo do texto do rótulo.
-        campo = page.locator(f"text={rotulo}").locator(
-            "xpath=following::input[1]")
-    campo = campo.first
+def _preencher_data_pix(page, campo_nome: str, valor: str) -> None:
+    """Preenche `dataInicial`/`dataFinal` pelo NAME real do campo, tecla a
+    tecla — o mesmo cuidado do `aplicar_filtro_datas` do Inter: campo de
+    data reage mal a um valor posto de uma vez só (`fill`).
+
+    **Por que não por rótulo.** A primeira versão usava
+    `get_by_label`/`text=Inicial`, e as duas travaram 45s tentando achar o
+    campo: "Inicial" e "Final" são só o `placeholder` do `<input>` — não há
+    `<label>` associado (nem por `for`/`id`, nem por texto visível), e
+    `text=` do Playwright só enxerga texto que RENDERIZA na página, nunca
+    atributo. Medido lendo o HTML de verdade em 11/09/2026 (o `outerHTML` de
+    cada campo, copiado do console do navegador): os inputs têm
+    `name="dataInicial"`/`name="dataFinal"` fixos, e é isso que se usa
+    agora."""
+    campo = page.locator(f'input[name="{campo_nome}"]')
     campo.click()
     campo.press("Control+a")
     campo.press("Delete")
@@ -465,9 +480,9 @@ def listar_pix(page, inicio: str, fim: str, tempo: float = 15.0) -> list:
 
     ir_para_pix(page)
     _selecionar_periodo_pix(page)
-    _preencher_data_pix(page, "Inicial", inicio)
-    _preencher_data_pix(page, "Final", fim)
-    botao = page.locator("button", has_text="Consultar").first
+    _preencher_data_pix(page, "dataInicial", inicio)
+    _preencher_data_pix(page, "dataFinal", fim)
+    botao = page.locator('button[data-content-label="Consultar"]').first
     if botao.count() == 0:
         raise SicoobFalhou("não achei o botão Consultar na tela de Pix")
     try:
