@@ -868,11 +868,10 @@ class Botao(tk.Button):
 class Dica:
     """Balãozinho com o texto inteiro, ao parar o cursor em cima.
 
-    Existe para o número da versão: a tela mostra "v2.0", que é o que se diz em
-    voz alta, e o número de build (v2.0.108) só aparece quando alguém precisa
-    dele — para comparar com uma release, para abrir um chamado. Mostrar os dois
-    o tempo todo é ruído; esconder o segundo é perder o único jeito de saber
-    qual código está rodando.
+    Nasceu para o número da versão, quando a tela mostrava só "v2.0" e o
+    número de build ficava no balão. Desde 14/09/2026 a tela mostra o número
+    inteiro (`comprovantes_app._versao_na_tela`), e o balão serve às abas que
+    o usam para explicar um botão.
 
     NÃO é widget: é um comportamento que se pendura num widget existente
     (`Dica(lbl, "texto")`). Guarda a si mesmo no widget para o coletor de lixo

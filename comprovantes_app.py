@@ -72,24 +72,24 @@ def _versao_app():
     return None
 
 
-def _versao_curta(versao: str | None) -> str:
-    """"v2.0.108" -> "v2.0". O que se diz em voz alta.
+def _versao_na_tela(versao: str | None) -> str:
+    """"2.0.201" -> "v2.0.201": o número INTEIRO, com o "v" na frente.
 
-    O número de build (o `<run_number>` da esteira) muda a cada push e não
-    significa nada para quem usa: entre a v2.0.108 e a v2.0.109 pode não haver
-    diferença nenhuma na tela. Ele continua existindo e continua acessível — na
-    dica do próprio rótulo —, porque é ele que diz qual código está rodando
-    quando alguém precisa comparar com uma release.
+    Até 14/09/2026 a tela mostrava só "v2.0" e o número de build ficava na
+    dica do rótulo. O dono pediu o número inteiro de volta: é ele que diz, de
+    relance, se a máquina já pegou a versão que acabou de ser liberada — e
+    ninguém passa o cursor por cima de um rótulo para descobrir isso.
 
     Lixo entra e sai inteiro: versão que não tem a forma esperada é melhor
-    aparecer estranha do que aparecer cortada no lugar errado.
+    aparecer estranha, que é a pista de que o `versao.txt` veio errado.
     """
-    if not versao:
+    if not versao or not versao.strip():
         return ""
-    partes = versao.strip().lstrip("vV").split(".")
-    if len(partes) < 2 or not all(p.isdigit() for p in partes[:2]):
-        return versao.strip()
-    return f"v{partes[0]}.{partes[1]}"
+    limpa = versao.strip()
+    partes = limpa.lstrip("vV").split(".")
+    if len(partes) < 2 or not all(p.isdigit() for p in partes):
+        return limpa
+    return "v" + ".".join(partes)
 
 
 def _pasta_dados() -> Path:
@@ -152,9 +152,9 @@ def main():
     escolha_tema = prefs.get("tema", "auto")
 
     root = tk.Tk()
-    _v_curta = _versao_curta(_v)
+    _v_tela = _versao_na_tela(_v)
     root.title("Comprovantes — Mais Controle"
-               + (f"  {_v_curta}" if _v_curta else ""))
+               + (f"  {_v_tela}" if _v_tela else ""))
     try:                                 # ícone da janela (se disponível)
         for _c in (Path(__file__).resolve().parent / "icone.ico",
                    Path(getattr(sys, "_MEIPASS", ".")) / "icone.ico"):
@@ -502,13 +502,12 @@ def main():
     b_minha_aba.pack(side="left", padx=px((0, 18)), pady=px(12))
     widgets.Dica(b_minha_aba, "Abre uma aba sua no Chrome do app, para "
                               "usar o Mais Controle enquanto ele trabalha")
-    if _v_curta:
-        # Curta na tela, inteira na dica: o número de build só interessa a quem
-        # está comparando com uma release, e para esse a dica basta.
-        _lbl_versao = ttk.Label(barra.direita, text=_v_curta,
+    if _v_tela:
+        # O número inteiro, que é o que diz se esta máquina já pegou a versão
+        # liberada (ver `_versao_na_tela`).
+        _lbl_versao = ttk.Label(barra.direita, text=_v_tela,
                                 style="BarraTenue.TLabel")
         _lbl_versao.pack(side="left", padx=px((0, 16)), pady=px(14))
-        widgets.Dica(_lbl_versao, f"versão {_v}")
     widgets.Avatar(barra.direita, _eu.email).pack(side="left", pady=px(11))
     _lbl_quem = ttk.Label(barra.direita, text=_eu.primeiro_nome[:22],
                           style="Barra.TLabel")
@@ -547,14 +546,12 @@ def main():
     else:
         widgets.Pilula(lateral.rodape, "✓  cadastro sincronizado", "ok"
                        ).pack(anchor="w")
-    if _v_curta:
+    if _v_tela:
         # A versão também aqui, embaixo de tudo: é onde ela morava antes do
-        # redesenho, e é o primeiro lugar onde se procura por ela. Mesma dica
-        # da barra — o número inteiro está a um cursor de distância.
-        _rodape_versao = ttk.Label(lateral.rodape, text=_v_curta,
+        # redesenho, e é o primeiro lugar onde se procura por ela.
+        _rodape_versao = ttk.Label(lateral.rodape, text=_v_tela,
                                    style="MenuSecao.TLabel")
         _rodape_versao.pack(anchor="w", pady=px((8, 0)))
-        widgets.Dica(_rodape_versao, f"versão {_v}")
 
     def aplicar_tema(escolha: str):
         efetivo = tema_efetivo(escolha)
