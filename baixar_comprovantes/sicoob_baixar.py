@@ -714,7 +714,7 @@ def html_do_comprovante_pix(detalhe: dict) -> str:
     banco_origem = (origem.get("banco") or {}).get("NomeBanco", "")
     banco_destino = (destino.get("banco") or {}).get("NomeBanco", "")
     campos = nome_final.do_sicoob_pix(detalhe)
-    quando = detalhe.get("atualizadoEm") or detalhe.get("criadoEm") or ""
+    quando = nome_final.momento_do_pix_sicoob(detalhe)
     data_pagamento = f"{campos['data']} {_hora_pix(quando)}".strip()
     situacao = ("Finalizado com sucesso"
                if detalhe.get("estado") == "FINALIZADO_SUCESSO"
@@ -742,6 +742,7 @@ def html_do_comprovante_pix(detalhe: dict) -> str:
         secao("Dados do pagamento"),
         linha("Data do pagamento", data_pagamento),
         linha("Valor", f"R$ {campos['valor']}" if campos["valor"] else ""),
+        linha("Descrição", campos["desc"]) if campos["desc"] else "",
         linha("ID Transação", detalhe.get("id") or ""),
         linha("Situação do pagamento", situacao),
     ))
