@@ -23,7 +23,9 @@ URL_PAGOS = (BASE + "/maiscontrole/services/payable-installments/"
              "paginated-result?organizationUnitId=ou-1&page=3&size=20"
              "&type=ALL&dateField=PLANNED")
 HEADERS = {"authorization": "Bearer xyz", "company-id": "emp-1"}
-URL_ANEXOS = BASE + "/maiscontrole/attachments"
+# A listagem de verdade é `GET <api>/attachments/v2?entityIds=…` (o
+# `findAttachments` do bundle do ERP é `baseUrl + "/v2"`).
+URL_ANEXOS = "https://prod-erp-api.maiscontroleerp.com.br/attachments/v2"
 
 
 class PaginaFalsa:
@@ -137,3 +139,18 @@ def test_a_escuta_guarda_a_url_de_anexos_sem_a_query():
     base, headers = api._req_anexos
     assert base == URL_ANEXOS
     assert "cookie" not in headers
+
+
+def test_so_a_listagem_ensina_o_endereco_dos_anexos():
+    """O defeito de 14/09/2026: as outras chamadas de anexos -- etiquetas, o
+    POST do batch que o próprio app faz -- sobrescreviam o endereço, e a
+    prova do anexo seguinte consultava `/v2/batch?entityIds=…`."""
+    p = PaginaFalsa()
+    api = api_falsa(p)
+    api._on_request(RequisicaoFalsa(
+        URL_ANEXOS + "?entityIds=abc&entityOrigin=PAID", HEADERS))
+    for outra in ("/tags", "/batch", "/abc-123"):
+        api._on_request(RequisicaoFalsa(URL_ANEXOS.rsplit("/v2", 1)[0]
+                                        + ("/v2" if outra != "/tags" else "")
+                                        + outra, HEADERS))
+    assert api._req_anexos[0] == URL_ANEXOS

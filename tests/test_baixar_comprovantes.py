@@ -737,8 +737,11 @@ def _pix_sicoob(id_="E0000000000000000000000000000000",
                nome_pagador="EMPRESA TESTE LTDA", cnpj_pagador="11222333000181",
                nome_dest="Fulano de Tal", cpf_dest="12345678909",
                valor="1208,36", estado="FINALIZADO_SUCESSO",
-               meio="CHAVE"):
-    return {
+               meio="CHAVE", descricao=None,
+               criado="2026-09-08 17:57:29.63",
+               atualizado="2026-09-08 17:57:30.37",
+               envio="2026-09-08 17:57:30.12"):
+    item = {
         "id": id_,
         "origem": {"nome": nome_pagador, "cpfCnpj": cnpj_pagador,
                   "banco": {"NomeBanco": "COOPERATIVA DE CREDITO TESTE"}},
@@ -747,10 +750,14 @@ def _pix_sicoob(id_="E0000000000000000000000000000000",
         "valor": valor,
         "estado": estado,
         "tipo": "DEBITO",
-        "atualizadoEm": "2026-09-08 17:57:30.37",
-        "criadoEm": "2026-09-08 17:57:29.63",
+        "atualizadoEm": atualizado,
+        "criadoEm": criado,
+        "dataHoraEnvioLancamento": envio,
         "meioIniciacaoPix": meio,
     }
+    if descricao is not None:
+        item["descricao"] = descricao
+    return item
 
 
 def test_o_cnpj_do_pagador_sai_mascarado():
@@ -796,9 +803,62 @@ def test_campos_do_pix_sicoob_saem_do_json_sem_abrir_pdf():
     assert campos["data"] == "08/09/2026"
     assert campos["dest"] == "Fulano de Tal"
     assert campos["desc"] is None, (
-        "o JSON do Pix do Sicoob não traz descrição -- inventar uma aqui "
+        "sem `descricao` no JSON não há descrição -- inventar uma aqui "
         "esconderia que o Anexar vai casar só por valor/data/destinatário")
     assert campos["pag"] is None
+
+
+def test_a_descricao_do_pix_sicoob_vem_do_campo_descricao():
+    """O defeito de 11 a 14/09/2026: 71 de 71 Pix do Sicoob baixados sem
+    descrição. O JSON do comprovante TRAZ `descricao` (lido ao vivo em
+    14/09) -- é o texto que a própria tela imprime em "Descrição" --, e o app
+    o jogava fora. Sem ele o nome sai com o destinatário, e o Anexar perde a
+    OC/NF/QD/LT que desempata pagamentos de mesmo valor e data."""
+    from baixar_comprovantes import nome_final as nf
+
+    campos = nf.do_sicoob_pix(_pix_sicoob(descricao="OBRA TESTE QD 01 LT 02 OC 1234"))
+    assert campos["desc"] == "OBRA TESTE QD 01 LT 02 OC 1234"
+    assert nf.do_sicoob_pix(_pix_sicoob(descricao="   "))["desc"] is None
+
+
+def test_o_pix_sicoob_com_descricao_e_nomeado_pela_descricao():
+    """VALOR - DESCRIÇÃO - DATA, como os outros bancos -- não o destinatário."""
+    from baixar_comprovantes import nome_final as nf
+
+    campos = nf.do_sicoob_pix(_pix_sicoob(descricao="OBRA TESTE QD 01 LT 02 OC 1234"))
+    assert nf.nomear(campos) == "1208,36 - OBRA TESTE QD 01 LT 02 OC 1234 - 08-09"
+
+
+def test_a_data_do_pix_sicoob_e_a_do_pagamento_e_nao_a_da_criacao():
+    """`criadoEm` é quando o Pix foi montado; o comprovante do banco mostra
+    em "Data do pagamento" o `atualizadoEm` (medido em 14/09/2026: 17:52:18 na
+    tela, `atualizadoEm` 17:52:18.578, `criadoEm` 17:33). Montado num dia e
+    aprovado no outro, a data da criação erra o dia -- e o Anexar exige a
+    data exata."""
+    from baixar_comprovantes import nome_final as nf
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pix = _pix_sicoob(criado="2026-09-10 23:50:01.10",
+                      envio="2026-09-11 08:05:40.20",
+                      atualizado="2026-09-11 08:05:41.30")
+    assert nf.do_sicoob_pix(pix)["data"] == "11/09/2026"
+    assert "11/09/2026 08:05:41" in sb.html_do_comprovante_pix(pix)
+
+
+def test_pix_sicoob_mexido_dias_depois_fica_com_a_data_do_envio():
+    """Achado da revisão: `atualizadoEm` é a ÚLTIMA alteração do registro. Se
+    uma devolução, dias depois, o empurrar, o nome sairia com o dia da
+    devolução -- e o Anexar casaria pela data com outro pagamento de mesmo
+    valor daquele dia. `dataHoraEnvioLancamento` não muda: quando os dois
+    discordam no DIA, vale o envio."""
+    from baixar_comprovantes import nome_final as nf
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pix = _pix_sicoob(criado="2026-09-02 17:33:38.10",
+                      envio="2026-09-02 17:52:17.42",
+                      atualizado="2026-09-05 10:00:00.00")
+    assert nf.do_sicoob_pix(pix)["data"] == "02/09/2026"
+    assert "02/09/2026 17:52:17" in sb.html_do_comprovante_pix(pix)
 
 
 def test_valor_com_milhar_tambem_converte():
@@ -852,6 +912,25 @@ def test_o_comprovante_de_pix_mostra_os_campos_certos():
     assert "12345678909" not in saida, "o CPF cru vazou sem máscara"
     assert "Pix via chave" in saida
     assert "Finalizado com sucesso" in saida
+
+
+def test_o_comprovante_de_pix_mostra_a_descricao_como_o_banco():
+    """A tela do Sicoob imprime "Descrição" logo depois do Valor; o PDF
+    montado aqui tem de trazer a mesma linha -- é dela que o Renomear e quem
+    confere o anexo leem a obra e a OC."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    saida = sb.html_do_comprovante_pix(
+        _pix_sicoob(descricao="OBRA TESTE QD 01 LT 02 OC 1234"))
+    assert "Descrição" in saida
+    assert "OBRA TESTE QD 01 LT 02 OC 1234" in saida
+    assert saida.index("R$ 1.208,36") < saida.index("OBRA TESTE")
+
+
+def test_sem_descricao_o_comprovante_nao_inventa_a_linha():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert "Descrição" not in sb.html_do_comprovante_pix(_pix_sicoob())
 
 
 def test_o_comprovante_de_pix_escapa_nome_com_caractere_especial():

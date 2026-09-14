@@ -172,6 +172,21 @@ def test_nome_arquivo_round_trip_para_o_matcher():
     assert "5979" in p["ocs"]
 
 
+def test_descricao_longa_e_cortada_e_a_data_do_fim_do_nome_fica():
+    """Achado da revisão de 14/09/2026: o nome é cortado em 150 caracteres, e
+    a descrição do Pix aceita 140. Cortando o FIM, o " - dd-mm" sumia e o
+    matcher perdia a data. O corte tem de ser na descrição."""
+    from anexar import matcher
+    c = {"valor": "1.234,56", "data": "02/09/2026", "dest": None, "pag": None,
+         "desc": "OBRA TESTE QD 01 LT 02 OC 1234 " + "COMPLEMENTO " * 15}
+    nome = sr.nome_arquivo(c)
+    assert len(nome) <= 150
+    assert nome.startswith("1234,56 - OBRA TESTE QD 01 LT 02 OC 1234")
+    assert nome.endswith(" - 02-09")
+    p = matcher.parse_pdf(nome + ".pdf")
+    assert p["data"] == "0209" and "1234" in p["ocs"]
+
+
 # ------------------------------------------- o comprovante comum do Sicoob
 # Rótulo e valor na mesma linha, SEM dois-pontos. É o texto que sai do PDF do
 # Sicoob e também o que o OCR devolve de uma foto dele. Medido em 368

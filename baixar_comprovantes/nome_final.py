@@ -291,16 +291,36 @@ def do_sicoob_pix(item: dict) -> dict:
     ausência de um comprovante pronto (HTML ou PDF) que torna isso possível
     -- ver `sicoob_baixar.html_do_comprovante_pix`.
 
-    Sem descrição: o JSON do Pix do Sicoob não traz nenhum campo de texto
-    livre equivalente ao `descricaoPagamento`/`campoLivre` do Inter."""
+    A descrição é o campo `descricao` -- o texto que a própria tela do Sicoob
+    imprime em "Descrição". Até 14/09/2026 este código dizia que o JSON não
+    tinha texto livre (a amostra lida em 10/09 era um Pix sem descrição) e a
+    descartava: 71 de 71 Pix baixados saíram com o destinatário no nome.
+
+    A data é a do PAGAMENTO (`momento_do_pix_sicoob`), não a da criação."""
     destino = item.get("destino") or {}
     valor = _numero_brl(item.get("valor"))
     return {"valor": brl(valor) if valor is not None else "",
-            "data": _data_do_item(item.get("criadoEm")
-                                  or item.get("atualizadoEm")),
-            "desc": None,
+            "data": _data_do_item(momento_do_pix_sicoob(item)),
+            "desc": (item.get("descricao") or "").strip() or None,
             "dest": (destino.get("nome") or "").strip() or None,
             "pag": None}
+
+
+def momento_do_pix_sicoob(item: dict) -> str:
+    """Quando o Pix foi PAGO, no texto do JSON (`"2026-09-02 17:52:18.578"`).
+
+    `criadoEm` é quando ele foi montado -- num Pix montado num dia e aprovado
+    no outro, o dia erra. A tela do Sicoob mostra em "Data do pagamento" o
+    `atualizadoEm` (conferido em 14/09/2026 contra o comprovante impresso,
+    um segundo depois do `dataHoraEnvioLancamento`). Mas `atualizadoEm` é a
+    ÚLTIMA alteração do registro: se algo o mexer dias depois (uma
+    devolução), o dia pularia. Por isso ele só vale no MESMO dia do envio;
+    discordando, vale o envio, que não muda."""
+    envio = item.get("dataHoraEnvioLancamento") or ""
+    atualizado = item.get("atualizadoEm") or ""
+    if envio and atualizado[:10] != envio[:10]:
+        return envio
+    return atualizado or envio or item.get("criadoEm") or ""
 
 
 def _data_do_item(texto: str) -> str:
