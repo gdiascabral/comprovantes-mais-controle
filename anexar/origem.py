@@ -44,7 +44,7 @@ def _banco(texto) -> str:
 
 
 # ------------------------------------------------------------ o lado do PDF
-def _origem_da_linha(chave: str, linha: dict, apelidos: dict) -> tuple | None:
+def _origem_da_linha(chave: str, linha: dict) -> tuple | None:
     bruta = str(linha.get("origem") or "")
     if ":" in bruta:
         banco, conta = bruta.split(":", 1)
@@ -60,12 +60,12 @@ def _origem_da_linha(chave: str, linha: dict, apelidos: dict) -> tuple | None:
     banco = _banco(banco)
     if banco == "SICOOB":
         return (banco, _digitos(conta))
-    if banco == "INTER":
-        return (banco, apelidos.get(util.norm_espaco(conta), ""))
+    # No Inter a conta é o LOGIN (apelido), e não a empresa: duas contas da
+    # mesma empresa são contas diferentes (revisão do PR #94).
     return (banco, util.norm_espaco(conta))
 
 
-def origens_dos_pdfs(pasta, contas_inter=None) -> dict[str, dict]:
+def origens_dos_pdfs(pasta) -> dict[str, dict]:
     """{nome do arquivo: {"origem": (banco, conta), "recebedor": str|None}}.
 
     O registro mora na raiz dos comprovantes, e a pasta escolhida no Anexar
@@ -83,8 +83,6 @@ def origens_dos_pdfs(pasta, contas_inter=None) -> dict[str, dict]:
             continue
     if not isinstance(dados, dict):
         return {}
-    apelidos = {util.norm_espaco(c.apelido): util.norm_espaco(c.empresa)
-                for c in (contas_inter or [])}
     dia = pasta.name if _DIA.fullmatch(pasta.name) else ""
 
     achado: dict[str, dict] = {}
@@ -94,7 +92,7 @@ def origens_dos_pdfs(pasta, contas_inter=None) -> dict[str, dict]:
             continue
         if dia and not str(linha.get("quando") or "").startswith(dia):
             continue
-        org = _origem_da_linha(str(chave), linha, apelidos)
+        org = _origem_da_linha(str(chave), linha)
         if org is None:
             continue
         nome = linha["arquivo"]
@@ -108,8 +106,12 @@ def origens_dos_pdfs(pasta, contas_inter=None) -> dict[str, dict]:
 
 
 # ------------------------------------------------------ o lado do lançamento
-def origem_da_conta_erp(nome_erp: str, mapa_mc, empresas) -> tuple | None:
-    """(banco, conta) da conta do ERP, ou None quando o cadastro não diz."""
+def origem_da_conta_erp(nome_erp: str, mapa_mc, empresas,
+                        contas_inter=None) -> tuple | None:
+    """(banco, conta) da conta do ERP, ou None quando o cadastro não diz.
+
+    Sicoob: o número da conta. Inter: o apelido do login -- só quando a
+    empresa tem UM login; com dois, não se sabe qual, e fica só o banco."""
     # Import tardio: o Anexar só paga por isto quando casa.
     from pagamentos_dia.remessa_dia import _escolher_conta
 
@@ -120,6 +122,11 @@ def origem_da_conta_erp(nome_erp: str, mapa_mc, empresas) -> tuple | None:
     if banco == "SICOOB":
         _empresa, conta, _falta = _escolher_conta(destino, empresas or [])
         return (banco, _digitos(conta.numero) if conta else "")
+    if banco == "INTER":
+        empresa = util.norm_espaco(destino.empresa)
+        logins = [c.apelido for c in (contas_inter or [])
+                  if util.norm_espaco(c.empresa) == empresa]
+        return (banco, util.norm_espaco(logins[0]) if len(logins) == 1 else "")
     return (banco, util.norm_espaco(destino.empresa))
 
 
@@ -150,7 +157,7 @@ def preencher(pendentes, pdfs, pasta, *, mapa_mc=None, empresas=None,
         except Exception:                                    # noqa: BLE001
             empresas = []
 
-    origens = origens_dos_pdfs(pasta, contas_inter)
+    origens = origens_dos_pdfs(pasta)
     for pd in pdfs:
         info = origens.get(pd["fn"]) or {}
         pd["origem"] = info.get("origem")
@@ -158,7 +165,7 @@ def preencher(pendentes, pdfs, pasta, *, mapa_mc=None, empresas=None,
     for pe in pendentes:
         try:
             pe["origem"] = origem_da_conta_erp(pe.get("conta") or "", mapa_mc,
-                                               empresas)
+                                               empresas, contas_inter)
         except Exception:                                    # noqa: BLE001
             pe["origem"] = None
     return {"pdfs": len(pdfs),

@@ -216,13 +216,13 @@ def test_nr_do_documento_com_a_mesma_conta_fecha_certeza():
 
 def test_favorecido_conta_e_data_juntos_fecham_certeza():
     pdfs = [_pdf("900,00 - SERVICO - 11-09.pdf", origem=SICOOB_1,
-                 recebedor="JOSE CARLOS PEREIRA"),
+                 recebedor="FULANO EXEMPLO TESTE"),
             _pdf("900,00 - SERVICO - 11-09 (2).pdf", origem=SICOOB_1,
-                 recebedor="MARIA APARECIDA SOUZA")]
+                 recebedor="BELTRANA MODELO FICTICIA")]
     pend = [_pend_conta("A", 90000, origem=SICOOB_1, data="1109",
-                        favorecido="Maria Aparecida de Souza"),
+                        favorecido="Beltrana de Modelo Fictícia"),
             _pend_conta("B", 90000, origem=SICOOB_1, data="1109",
-                        favorecido="José Carlos Pereira")]
+                        favorecido="Fulano Exemplo Teste")]
     certezas, duvidas, _ = matcher.casar(pend, pdfs)
     assert not duvidas
     por_id = {c["paidId"]: c["pdf"] for c in certezas}
@@ -232,18 +232,69 @@ def test_favorecido_conta_e_data_juntos_fecham_certeza():
 
 def test_favorecido_sem_conta_conhecida_nao_fecha():
     """Nome parecido é sinal fraco: sem saber de onde saiu, fica em dúvida."""
-    pdfs = [_pdf("900,00 - SERVICO - 11-09.pdf", recebedor="JOSE CARLOS PEREIRA"),
-            _pdf("900,00 - SERVICO - 11-09 (2).pdf", recebedor="MARIA APARECIDA SOUZA")]
-    pend = [_pend_conta("A", 90000, data="1109", favorecido="Maria Aparecida de Souza"),
-            _pend_conta("B", 90000, data="1109", favorecido="José Carlos Pereira")]
+    pdfs = [_pdf("900,00 - SERVICO - 11-09.pdf", recebedor="FULANO EXEMPLO TESTE"),
+            _pdf("900,00 - SERVICO - 11-09 (2).pdf", recebedor="BELTRANA MODELO FICTICIA")]
+    pend = [_pend_conta("A", 90000, data="1109", favorecido="Beltrana de Modelo Fictícia"),
+            _pend_conta("B", 90000, data="1109", favorecido="Fulano Exemplo Teste")]
     certezas, duvidas, _ = matcher.casar(pend, pdfs)
     assert not certezas and len(duvidas) == 2
 
 
 def test_um_nome_em_comum_nao_basta_para_o_favorecido():
-    """"JOSE" em comum não é a mesma pessoa."""
-    assert not matcher.mesmo_favorecido("Jose Carlos Pereira", "JOSE ANTONIO LIMA")
-    assert matcher.mesmo_favorecido("Maria Aparecida de Souza", "MARIA APARECIDA SOUZA")
+    """"FULANO" em comum não é a mesma pessoa."""
+    assert not matcher.mesmo_favorecido("Fulano Exemplo Teste", "FULANO OUTRO NOME")
+    assert matcher.mesmo_favorecido("Beltrana de Modelo Fictícia", "BELTRANA MODELO FICTICIA")
     assert matcher.mesmo_favorecido("Ferragens Exemplo Ltda", "FERRAGENS EXEMPLO LTDA ME")
+    assert matcher.mesmo_favorecido("Beltrana M Ficticia", "BELTRANA MODELO FICTICIA")
     assert not matcher.mesmo_favorecido("", "QUALQUER")
+
+
+def test_sobrenome_ou_grupo_em_comum_nao_e_o_mesmo_favorecido():
+    """Achado da revisão do PR #94: duas palavras em comum aceitavam irmãos e
+    empresas do mesmo grupo. Agora o nome menor tem de estar INTEIRO no maior,
+    com pelo menos duas palavras -- e numeral romano conta como palavra."""
+    assert not matcher.mesmo_favorecido("JOAO PEREIRA DOS SANTOS", "MARIA PEREIRA DOS SANTOS")
+    assert not matcher.mesmo_favorecido("ANA PAULA SILVA", "ANA PAULA SOUZA")
+    assert not matcher.mesmo_favorecido("EXEMPLO ENGENHARIA ALFA SPE", "EXEMPLO ENGENHARIA BETA SPE")
+    assert not matcher.mesmo_favorecido("EXEMPLO EMPREENDIMENTOS I", "EXEMPLO EMPREENDIMENTOS II")
+    assert not matcher.mesmo_favorecido("CARTORIO", "CARTORIO DE REGISTRO")
+
+
+def test_nr_do_documento_com_oc_no_pdf_nao_fecha_nem_com_a_mesma_conta():
+    """Achado da revisão do PR #94 (bloqueava o merge): numa empresa de uma
+    conta só, "nº do documento + mesma conta" era o nº do documento sozinho de
+    novo -- e trocava dois anexos. O nº do documento do ERP é o da NOTA: só
+    vale contra NF escrita no nome do PDF, nunca contra OC."""
+    pdfs = [_pdf("1.500,00 - MATERIAL OC 5979 - 11-09.pdf", origem=SICOOB_1),
+            _pdf("1.500,00 - SERVICO - 11-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 150000, origem=SICOOB_1, doc="5979", data="1109"),
+            _pend_conta("B", 150000, origem=SICOOB_1, desc="compra", data="1109")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 2
+
+
+def test_centro_de_custo_ganha_do_nr_do_documento_com_conta():
+    """A ordem de antes: centro de custo vem ANTES do nº do documento."""
+    pdfs = [_pdf("1.500,00 - RPB 24 QD 26A LT 12 NF 5979 - 11-09.pdf", origem=SICOOB_1),
+            _pdf("1.500,00 - SERVICO - 11-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 150000, origem=SICOOB_1, doc="5979", data="1109"),
+            _pend_conta("B", 150000, origem=SICOOB_1, desc="compra", data="1109",
+                        works=["RPB 24 QD 26A LT 12"])]
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    por_id = {c["paidId"]: c["pdf"] for c in certezas}
+    assert por_id.get("B") == "1.500,00 - RPB 24 QD 26A LT 12 NF 5979 - 11-09.pdf"
+    assert "A" not in por_id or por_id["A"] != por_id["B"]
+
+
+def test_com_pdf_de_outra_conta_fora_sobra_desconhecido_nao_fecha_sozinho():
+    """Achado da revisão do PR #94: tirar da disputa o PDF de outra conta não
+    pode transformar em CERTEZA, por "valor único", um PDF de origem
+    DESCONHECIDA que sobrou -- o certo pode ser o excluído (baixa lançada na
+    conta errada do ERP). Fica em dúvida, dizendo que houve exclusão."""
+    pdfs = [_pdf("60,00 - REEMBOLSO - 11-09.pdf", origem=SICOOB_2),
+            _pdf("60,00 - REEMBOLSO - 11-09 (2).pdf", origem=None)]
+    pend = [_pend_conta("A", 6000, origem=SICOOB_1, data="1109")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 1
+    assert duvidas[0]["fora_da_conta"] == 1
 

@@ -53,7 +53,7 @@ def test_pdf_ganha_origem_pelo_registro_da_pasta_mae(tmp_path):
         "sicoob:11.111-1:888": {"arquivo": "50,00 - OUTRO - 02-09.pdf",
                                 "quando": "2026-09-11T10:00:00"},
     })
-    achado = origem.origens_dos_pdfs(dia, contas_inter=[])
+    achado = origem.origens_dos_pdfs(dia)
     assert achado["10,00 - OBRA - 02-09.pdf"] == {
         "origem": ("SICOOB", "123456"), "recebedor": "FORNECEDOR EXEMPLO"}
     assert achado["30,00 - BOLETO - 02-09.pdf"]["origem"] == ("SICOOB", "987654")
@@ -61,17 +61,18 @@ def test_pdf_ganha_origem_pelo_registro_da_pasta_mae(tmp_path):
     assert "50,00 - OUTRO - 02-09.pdf" not in achado
 
 
-def test_inter_novo_vira_a_empresa_pelo_apelido(tmp_path):
+def test_inter_novo_fica_com_o_apelido_da_conta(tmp_path):
+    """No Inter a conta é o LOGIN (apelido): duas contas da mesma empresa são
+    contas diferentes, e comparar pela empresa as juntaria (revisão do #94)."""
     _registro(tmp_path, {
         "pix:E2": {"arquivo": "40,00 - REEMBOLSO - 02-09.pdf",
-                   "quando": "2026-09-14T10:02:00", "origem": "INTER:EXEMPLO ENG"}})
-    achado = origem.origens_dos_pdfs(
-        tmp_path, contas_inter=[ContaInter(apelido="EXEMPLO ENG", empresa="EXEMPLO")])
-    assert achado["40,00 - REEMBOLSO - 02-09.pdf"]["origem"] == ("INTER", "EXEMPLO")
+                   "quando": "2026-09-14T10:02:00", "origem": "INTER:Exemplo Eng"}})
+    achado = origem.origens_dos_pdfs(tmp_path)
+    assert achado["40,00 - REEMBOLSO - 02-09.pdf"]["origem"] == ("INTER", "EXEMPLO ENG")
 
 
 def test_sem_registro_ninguem_ganha_origem(tmp_path):
-    assert origem.origens_dos_pdfs(tmp_path, contas_inter=[]) == {}
+    assert origem.origens_dos_pdfs(tmp_path) == {}
 
 
 # ------------------------------------------------------ o lado do lançamento
@@ -96,11 +97,20 @@ def _empresas():
 
 def test_conta_do_erp_vira_banco_e_conta():
     m, e = _mapa(), _empresas()
+    um_login = [ContaInter(apelido="Exemplo Eng", empresa="EXEMPLO")]
     assert origem.origem_da_conta_erp("EXEMPLO - SICOOB", m, e) == ("SICOOB", "123456")
-    assert origem.origem_da_conta_erp("exemplo - inter", m, e) == ("INTER", "EXEMPLO")
+    assert origem.origem_da_conta_erp("exemplo - inter", m, e, um_login) == ("INTER", "EXEMPLO ENG")
     assert origem.origem_da_conta_erp("FULANO - PAGBANK", m, e) == ("PAGBANK", "PESSOAS FISICAS")
     assert origem.origem_da_conta_erp("SEM BANCO", m, e) is None
     assert origem.origem_da_conta_erp("CONTA QUE NAO EXISTE", m, e) is None
+
+
+def test_empresa_com_dois_logins_do_inter_nao_diz_qual_conta():
+    """Dois apelidos para a mesma empresa: não dá para saber de qual login é o
+    lançamento, então só o banco é conhecido (neutro contra PDF do Inter)."""
+    dois = [ContaInter(apelido="Exemplo A", empresa="EXEMPLO"),
+            ContaInter(apelido="Exemplo B", empresa="EXEMPLO")]
+    assert origem.origem_da_conta_erp("EXEMPLO - INTER", _mapa(), _empresas(), dois) == ("INTER", "")
 
 
 def test_ponta_a_ponta_titulo_de_pessoa_fisica_nao_leva_pix_da_empresa(tmp_path):

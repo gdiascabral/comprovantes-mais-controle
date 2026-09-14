@@ -5,8 +5,9 @@ sub-pagamentos pendentes de comprovante no Mais Controle.
 
 Critérios, do mais forte para o mais fraco (todos exigem o MESMO valor):
   1. nº de OC/NF do nome do PDF = nº do documento (ou aparece na descrição);
-  2. nº do documento cru com centro de custo, ou com a MESMA CONTA;
+  2. nº do documento cru com centro de custo;
   3. centro de custo do PDF aparece nas obras/descrição do lançamento;
+  3b. nº do documento = NF escrita no nome do PDF, na MESMA CONTA;
   4. favorecido do lançamento = recebedor do comprovante, na mesma conta e data;
   5. data igual (dd-mm) como desempate.
 
@@ -142,20 +143,24 @@ _SEM_PESO = {"LTDA", "EIRELI", "EPP", "SPE", "CIA", "DAS", "DOS"}
 
 
 def _palavras(nome) -> set[str]:
+    """As palavras que identificam: 3+ letras, número ou numeral romano ("I" e
+    "II" são SPEs diferentes do mesmo grupo)."""
     return {w for w in re.findall(r"[A-Z0-9]+", util.norm(nome or ""))
-            if len(w) >= 3 and w not in _SEM_PESO}
+            if w not in _SEM_PESO
+            and (len(w) >= 3 or w.isdigit() or re.fullmatch(r"[IVX]+", w))}
 
 
 def mesmo_favorecido(favorecido, recebedor) -> bool:
     """O favorecido do ERP e quem recebeu no comprovante são a mesma pessoa?
 
-    Duas palavras em comum (uma, quando um dos nomes só tem uma): "JOSE" em
-    comum não é a mesma pessoa. Sinal fraco -- por isso só fecha CERTEZA junto
-    com a conta de onde saiu e a data."""
+    O nome MENOR tem de estar inteiro no maior, com pelo menos duas palavras.
+    Palavras em comum não bastam: irmãos dividem sobrenome e as empresas de um
+    grupo dividem o começo do nome (revisão do PR #94). Sinal fraco mesmo
+    assim -- por isso só fecha CERTEZA junto com a conta e a data."""
     a, b = _palavras(favorecido), _palavras(recebedor)
-    if not a or not b:
+    if len(a) < 2 or len(b) < 2:
         return False
-    return len(a & b) >= min(2, len(a), len(b))
+    return a <= b or b <= a
 
 
 # ------------------------------------------------------------------ casamento
@@ -192,11 +197,16 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                 ocnf, cc, date, docnum = _features(pe, pd)
                 fav = conta is True and mesmo_favorecido(pe.get("favorecido"),
                                                          pd.get("recebedor"))
+                # O nº do documento do ERP é o da NOTA: com a conta, só vale
+                # contra NF escrita no nome do PDF. Contra OC, numa empresa de
+                # uma conta só, era o nº do documento sozinho de novo -- e
+                # trocava anexos (revisão do PR #94).
+                docnf = bool(pd["nfs"] & set(re.findall(r"\d{3,}", pe["doc"])))
                 # `conta` e `fav` ficam FORA do score: ele decide o "valor
                 # único" das sobras, e somar ali afrouxaria essa regra.
                 pe["cands"].append({"pdf": pd, "ocnf": ocnf, "cc": cc, "date": date,
-                                    "docnum": docnum, "conta": conta is True,
-                                    "fav": fav,
+                                    "docnum": docnum, "docnf": docnf,
+                                    "conta": conta is True, "fav": fav,
                                     "score": (100 if ocnf else 0) + (10 if cc else 0)
                                              + (5 if docnum else 0) + (1 if date else 0)})
 
@@ -236,9 +246,10 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     # O nº do documento cru só entra ACOMPANHADO do centro de custo: sozinho
     # ele é fraco demais para fechar CERTEZA (ver _features).
     atribuir(lambda c: c["docnum"] and c["cc"])
-    # ...ou acompanhado da conta de onde o pagamento saiu (regra do dono).
-    atribuir(lambda c: c["docnum"] and c["conta"])
     atribuir(lambda c: c["cc"])
+    # ...ou a NF do nome do PDF, na conta de onde o pagamento saiu (regra do
+    # dono). DEPOIS do centro de custo, que já tinha a precedência.
+    atribuir(lambda c: c["docnf"] and c["conta"])
     # Favorecido = recebedor é fraco sozinho; `fav` só existe com a conta
     # batendo, e aqui ainda exige a data.
     atribuir(lambda c: c["fav"] and c["date"])
@@ -261,8 +272,16 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
             continue
         concorrentes = [q for q in pendentes if q is not pe and not q["status"]
                         and (_vals(q) & _vals(pe))]
+
+        def confiavel(c):
+            # Com PDF de mesmo valor tirado da disputa por ser de OUTRA conta,
+            # o que sobrou só fecha sozinho se a conta dele estiver CONFIRMADA:
+            # de origem desconhecida, o certo pode ser justamente o excluído
+            # (baixa lançada na conta errada do ERP). Revisão do PR #94.
+            return not pe["fora_da_conta"] or c.get("conta")
+
         if len(todos_val) == 1 and len(livres) == 1 and livres[0]["score"] > 0 \
-                and not concorrentes:
+                and not concorrentes and confiavel(livres[0]):
             livres[0]["pdf"]["used_by"] = pe["paidId"]
             pe["match"] = livres[0]
             pe["status"] = "CERTEZA"
@@ -271,7 +290,7 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
         # outro pagamento pendente com valor em comum (evita anexar errado
         # quando há vários pagamentos de mesmo valor no período).
         com_data = [c for c in livres if c["date"]]
-        if len(com_data) == 1 and not concorrentes:
+        if len(com_data) == 1 and not concorrentes and confiavel(com_data[0]):
             pdx = com_data[0]["pdf"]
             pdx["used_by"] = pe["paidId"]
             pe["match"] = com_data[0]
@@ -284,7 +303,7 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
         t = []
         if m["ocnf"]:
             t.append("OC/NF")
-        if m.get("docnum"):
+        if m.get("docnum") or m.get("docnf"):
             t.append("nº do documento")
         if m.get("conta"):
             t.append("conta")

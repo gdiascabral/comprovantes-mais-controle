@@ -171,6 +171,9 @@ def _resumo_cands(pe: dict) -> str:
     for c in _candidatos_livres(pe):
         sinais = " + ".join(_sinais(c))
         partes.append(f"{c['pdf']['fn']}  [{sinais or 'só o valor'}]")
+    if pe.get("fora_da_conta"):
+        partes.append(f"(+{pe['fora_da_conta']} PDF(s) de mesmo valor saídos de "
+                      "outra conta, fora da disputa)")
     return " || ".join(partes) or "(sem candidatos livres)"
 
 
