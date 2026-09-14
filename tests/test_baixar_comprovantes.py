@@ -845,6 +845,22 @@ def test_a_data_do_pix_sicoob_e_a_do_pagamento_e_nao_a_da_criacao():
     assert "11/09/2026 08:05:41" in sb.html_do_comprovante_pix(pix)
 
 
+def test_pix_sicoob_mexido_dias_depois_fica_com_a_data_do_envio():
+    """Achado da revisão: `atualizadoEm` é a ÚLTIMA alteração do registro. Se
+    uma devolução, dias depois, o empurrar, o nome sairia com o dia da
+    devolução -- e o Anexar casaria pela data com outro pagamento de mesmo
+    valor daquele dia. `dataHoraEnvioLancamento` não muda: quando os dois
+    discordam no DIA, vale o envio."""
+    from baixar_comprovantes import nome_final as nf
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pix = _pix_sicoob(criado="2026-09-02 17:33:38.10",
+                      envio="2026-09-02 17:52:17.42",
+                      atualizado="2026-09-05 10:00:00.00")
+    assert nf.do_sicoob_pix(pix)["data"] == "02/09/2026"
+    assert "02/09/2026 17:52:17" in sb.html_do_comprovante_pix(pix)
+
+
 def test_valor_com_milhar_tambem_converte():
     """`"90.000,00"` (formato BR completo) -- não é só o caso sem ponto que
     o exemplo medido trouxe."""

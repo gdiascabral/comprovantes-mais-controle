@@ -311,10 +311,16 @@ def momento_do_pix_sicoob(item: dict) -> str:
 
     `criadoEm` é quando ele foi montado -- num Pix montado num dia e aprovado
     no outro, o dia erra. A tela do Sicoob mostra em "Data do pagamento" o
-    `atualizadoEm` (conferido em 14/09/2026 contra o comprovante impresso);
-    `dataHoraEnvioLancamento` e `criadoEm` só entram na falta dele."""
-    return (item.get("atualizadoEm") or item.get("dataHoraEnvioLancamento")
-            or item.get("criadoEm") or "")
+    `atualizadoEm` (conferido em 14/09/2026 contra o comprovante impresso,
+    um segundo depois do `dataHoraEnvioLancamento`). Mas `atualizadoEm` é a
+    ÚLTIMA alteração do registro: se algo o mexer dias depois (uma
+    devolução), o dia pularia. Por isso ele só vale no MESMO dia do envio;
+    discordando, vale o envio, que não muda."""
+    envio = item.get("dataHoraEnvioLancamento") or ""
+    atualizado = item.get("atualizadoEm") or ""
+    if envio and atualizado[:10] != envio[:10]:
+        return envio
+    return atualizado or envio or item.get("criadoEm") or ""
 
 
 def _data_do_item(texto: str) -> str:

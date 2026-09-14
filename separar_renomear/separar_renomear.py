@@ -780,6 +780,12 @@ def nome_arquivo(c, modelo: str | None = None,
         com_recebedor = False          # o modelo já pede o recebedor
     v, meio, dd = _partes_nome(c, com_recebedor)
     if usar_padrao:
+        # O corte dos 150 caracteres é na DESCRIÇÃO, nunca no fim: cortando o
+        # fim, uma descrição longa (a do Pix aceita 140) levava junto o
+        # " - dd-mm", e o casamento do Anexar perdia a data.
+        folga = 150 - len(v) - 3 - ((len(dd) + 3) if dd else 0)
+        if meio and len(meio) > folga:
+            meio = meio[:max(folga, 0)].rstrip(" -")
         partes = [v] + ([meio] if meio else []) + ([dd] if dd else [])
         nome = ' - '.join(partes)
     else:
