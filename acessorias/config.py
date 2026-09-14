@@ -46,8 +46,22 @@ SEL_ANEXO = "#txt_anexo"
 SEL_PRIORIDADE = "#SolPrioridade"
 SEL_SALVAR = "#btn_salvar"
 
+#: Para onde o Salvar/Enviar manda o formulário, por XHR. É por esta RESPOSTA
+#: que o envio espera — a página não troca, e esperar a página não espera o
+#: upload (ver `portal.criar_solicitacao`).
+CAMINHO_ENVIO = "/sysvipsolAjax"
+
 #: A sessão do portal não expira rápido, mas o upload de um zip de fechamento
 #: pode ser grande: o tempo do envio é folgado de propósito.
 TEMPO_PADRAO = 45_000
 TEMPO_ENVIO = 10 * 60 * 1000
 TEMPO_LOGIN = 10 * 60 * 1000        # a pessoa precisa digitar e-mail e senha
+
+#: Depois da resposta do envio: o alert do portal e a troca de página que ele
+#: pode fazer sozinho têm a vez antes do `goto` da conferência.
+ESPERA_APOS_ENVIO = 1500
+
+#: A conferência relê a lista até achar a solicitação: a resposta do envio já
+#: voltou, mas a lista pode levar um instante para mostrá-la.
+RELEITURAS_DA_LISTA = 3
+ESPERA_RELEITURA = 3000

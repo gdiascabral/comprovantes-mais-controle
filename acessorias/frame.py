@@ -8,6 +8,11 @@ Dois passos, como Pagamentos do Dia, Extratos Sicoob e Contratos:
   2. Enviar   — abre o Chrome, cria uma solicitação por empresa com o zip
                 anexado e confere que ela chegou.
 
+Antes deles, "Gerar os .zip" empacota a pasta de cada empresa pelo MESMO
+`sicoob_zipar.zipar_mes` da aba Extratos Sicoob — um zipador só, senão o nome
+do zip e o casamento com a empresa (`pacote.montar`) viram duas regras — e já
+emenda o Preparar, porque zip novo sem tabela nova é tela mentindo.
+
 O passo separado existe porque `Salvar / Enviar` cria solicitação de verdade no
 escritório: é ação externa que não se desfaz do lado de cá. Quem confere quer
 VER a mensagem e o anexo antes — e é no passo 1 que um zip da empresa errada,
@@ -105,8 +110,11 @@ class AcessoriasFrame(ttk.Frame):
         self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
         corpo = widgets.AreaRolavel(self)
-        # O verde é ENVIAR — é o irreversível desta tela. Preparar só lê a
-        # pasta do mês e não toca no portal.
+        # O verde é ENVIAR — é o irreversível desta tela. Gerar os .zip e
+        # Preparar só mexem na pasta do mês e não tocam no portal.
+        self.b0 = widgets.Botao(self.cab.acoes, "Gerar os .zip",
+                                papel="passo", command=self.zipar)
+        self.b0.pack(side="left", padx=px((0, 8)))
         self.b1 = widgets.Botao(self.cab.acoes, "Preparar o envio",
                                 papel="passo", command=self.preparar)
         self.b1.pack(side="left", padx=px((0, 8)))
@@ -147,7 +155,9 @@ class AcessoriasFrame(ttk.Frame):
                        "   ·   a lista de contratos é lida de dentro do zip."
                   ).pack(anchor="w", pady=px((6, 0)))
         ttk.Label(f1, style="Tenue.TLabel",
-                  text="Preparar só lê a pasta do mês — não toca no portal."
+                  text="Gerar os .zip empacota a pasta de cada empresa e "
+                       "Preparar só lê os .zip — nenhum dos dois toca no "
+                       "portal."
                   ).pack(anchor="w", pady=px((2, 0)))
 
         # ---- card 2: o que vai ser enviado
@@ -236,6 +246,7 @@ class AcessoriasFrame(ttk.Frame):
                     feitos, total = valor
                     self.barra_exec.progresso(feitos, total)
                 elif tipo == "botoes":
+                    self.b0.configure(state=valor)
                     self.b1.configure(state=valor)
                     # O Enviar volta pelo que a tabela diz, não pelo que o
                     # lote fez: sobrando empresa pronta (uma falhou, o lote foi
@@ -395,6 +406,50 @@ class AcessoriasFrame(ttk.Frame):
             return False
         return True
 
+    # ---------------------------------------------------------------- zipar
+    def zipar(self):
+        if self.worker and not self.worker.done():
+            return
+        self.q.put(("botoes", "disabled"))
+        self.q.put(("status", "Gerando os .zip do mês..."))
+        self._tarefa_atual = "Acessórias — gerar os .zip"
+        # Formulário lido aqui, na thread da interface (ver `preparar`).
+        ano, mes = self._periodo()
+        modelo_assunto = self.v_assunto.get()
+        modelo_comentario = self.t_modelo.get("1.0", "end-1c")
+        self.worker = self.exec.submit(self._t_zipar, ano, mes,
+                                       modelo_assunto, modelo_comentario)
+
+    def _t_zipar(self, ano: int, mes: int, modelo_assunto: str,
+                 modelo_comentario: str):
+        """Zipa o mês e emenda o Preparar na mesma thread.
+
+        Quem devolve os botões no caminho feliz é o `finally` do
+        `_t_preparar`; por isso este só os devolve nas saídas que não chegam
+        até lá."""
+        try:
+            if not self._garantir_mapa():
+                self.q.put(("botoes", "normal"))
+                return
+            from extratos_sicoob import sicoob_zipar
+            self._log(f"\nGerando os .zip de {MESES[mes - 1]}/{ano}...")
+            resultados = sicoob_zipar.zipar_mes(self.mapa, ano, mes,
+                                                log=self._log)
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"[!] {e}")
+            self.q.put(("status", "Não consegui gerar os .zip."))
+            self.q.put(("botoes", "normal"))
+            return
+        feitos = sum(1 for r in resultados if r.caminho)
+        if not feitos:
+            self._log("Nenhuma pasta de empresa neste mês para zipar — as "
+                      "pastas nascem na aba Extratos Sicoob.")
+            self.q.put(("status", "Nenhum .zip gerado."))
+            self.q.put(("botoes", "normal"))
+            return
+        self._log(f"{feitos} .zip gerado(s). Preparando o envio...\n")
+        self._t_preparar(ano, mes, modelo_assunto, modelo_comentario)
+
     # ------------------------------------------------------------- preparar
     def preparar(self):
         if self.worker and not self.worker.done():
@@ -426,8 +481,8 @@ class AcessoriasFrame(ttk.Frame):
 
             if not envios:
                 self._log(f"Nenhum .zip em {str(pasta).replace(chr(92), '/')}")
-                self._log("Gere os .zip na aba Extratos Sicoob (passo 4) antes "
-                          "de enviar.")
+                self._log("Clique em \"Gerar os .zip\" para empacotar a pasta "
+                          "de cada empresa.")
                 self.q.put(("envios", []))
                 self.q.put(("status", "Nada para enviar: falta zipar o mês."))
                 return
@@ -505,6 +560,7 @@ class AcessoriasFrame(ttk.Frame):
         inicio = time.time()
         indices = {id(e): i for i, e in enumerate(self.envios)}
         enviadas = repetidas = falhas = 0
+        interrompido = False
         try:
             total = len(pendentes)
             self.q.put(("progresso", (0, total)))
@@ -552,12 +608,25 @@ class AcessoriasFrame(ttk.Frame):
                         self._log("        Confira esta empresa pela tela do "
                                   "portal antes de repetir.")
                         self.q.put(("linha", (i, "NÃO CONFIRMADO")))
+                        # O lote PARA aqui. "Não confirmado" é um estado que
+                        # ninguém conhece — pode ter chegado ou não —, e o que
+                        # derruba a conferência de uma empresa costuma derrubar
+                        # a de todas: em 14/09/2026 seguir adiante transformou
+                        # uma dúvida em onze. As que ficam para trás continuam
+                        # prontas na tabela.
+                        interrompido = True
+                        break
                     except Exception as e:                  # noqa: BLE001
                         falhas += 1
                         self._log(f"    [!] {e}")
                         self.q.put(("linha", (i, f"erro: {e}")))
                     finally:
                         self.q.put(("progresso", (n, total)))
+                if interrompido:
+                    self._log("\nParei o lote nesta empresa. Abra o portal e "
+                              "veja se a solicitação dela chegou; depois rode "
+                              "o envio de novo — a que já estiver lá é "
+                              "pulada.")
             finally:
                 # Fecha na thread que abriu (exigência do Playwright síncrono)
                 # e só então solta a referência — trocar a ordem deixaria

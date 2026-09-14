@@ -24,6 +24,9 @@ O que este arquivo sabe do portal, e que não é óbvio:
 - **`SolDptoDcvID` é um segundo `select`**, hoje sempre em "0". Se um dia ele
   passar a exigir escolha, este módulo PARA e diz — adivinhar sub-departamento
   é a mesma classe de erro que arquivar na empresa errada.
+- **O Salvar/Enviar é XHR, não troca de página.** Esperar a página não espera
+  o upload; e navegar antes de a resposta voltar CANCELA o envio. Quem espera
+  é `expect_response` em volta do clique (ver `criar_solicitacao`).
 """
 from __future__ import annotations
 
@@ -63,6 +66,36 @@ class Solicitacao:
 
     def __repr__(self):                                       # pragma: no cover
         return f"<Solicitacao {self.id} {self.situacao}>"
+
+
+def achar(itens, assunto: str) -> Solicitacao | None:
+    """A solicitação com este assunto, ou None. Compara por
+    `util.norm_espaco`: os dois lados são texto digitado por gente."""
+    alvo = util.norm_espaco(assunto)
+    for s in itens:
+        if util.norm_espaco(s.assunto) == alvo:
+            return s
+    return None
+
+
+def _e_o_envio(resposta) -> bool:
+    """A resposta do Salvar/Enviar: um POST para o endereço do envio, ou —
+    se o portal trocar o endereço — qualquer POST multipart, que é como um
+    formulário com anexo sai do navegador."""
+    pedido = resposta.request
+    if pedido.method != "POST":
+        return False
+    if cfg.CAMINHO_ENVIO.lower() in resposta.url.lower():
+        return True
+    tipo = (pedido.headers or {}).get("content-type", "")
+    return "multipart/form-data" in tipo.lower()
+
+
+def _mb(caminho: Path) -> str:
+    try:
+        return f"{caminho.stat().st_size / (1024 * 1024):.1f} MB".replace(".", ",")
+    except OSError:
+        return "? MB"
 
 
 class PortalClient:
@@ -207,13 +240,8 @@ class PortalClient:
         return list(achados.values())
 
     def procurar(self, vip_id: str, assunto: str) -> Solicitacao | None:
-        """A solicitação com este assunto, ou None. Compara por
-        `util.norm_espaco`: os dois lados são texto digitado por gente."""
-        alvo = util.norm_espaco(assunto)
-        for s in self.solicitacoes(vip_id):
-            if util.norm_espaco(s.assunto) == alvo:
-                return s
-        return None
+        """A solicitação com este assunto, ou None."""
+        return achar(self.solicitacoes(vip_id), assunto)
 
     # ------------------------------------------------------------- envio
 
@@ -257,26 +285,66 @@ class PortalClient:
         self.page.select_option(cfg.SEL_PRIORIDADE, label=prioridade)
         self.page.set_input_files(cfg.SEL_ANEXO, str(anexo))
 
-        self.log(f"    enviando {anexo.name}...")
-        self.page.click(cfg.SEL_SALVAR)
-        # O upload de um zip de fechamento é o passo demorado daqui; a página
-        # só troca quando o POST volta.
+        self.log(f"    enviando {anexo.name} ({_mb(anexo)})...")
+        # Espera a RESPOSTA do envio, e não a página. O Salvar/Enviar manda o
+        # formulário por XHR (`/sysvipsolAjax`) e a página não troca; o
+        # `wait_for_load_state("networkidle")` que estava aqui voltava na
+        # hora, porque esse estado já tinha sido alcançado quando o formulário
+        # abriu. A conferência vinha em seguida com um `goto` para a lista — e
+        # sair da página CANCELA o upload que ainda estava subindo. Em
+        # 14/09/2026 foram 11 empresas, 11 "não confirmado" e nenhum alert do
+        # portal no Registro, que é o que ele mostra quando o envio volta.
+        clicou = False
         try:
-            self.page.wait_for_load_state("networkidle",
-                                          timeout=cfg.TEMPO_ENVIO)
+            with self.page.expect_response(_e_o_envio,
+                                           timeout=cfg.TEMPO_ENVIO) as resposta:
+                self.page.click(cfg.SEL_SALVAR)
+                clicou = True
         except PWTimeout:
-            pass                    # seguimos para a conferência, que decide
+            if not clicou:
+                raise               # não achou o botão: nada saiu daqui
+            raise EnvioNaoConfirmado(
+                f"o portal não respondeu ao envio em "
+                f"{cfg.TEMPO_ENVIO // 60_000} min — pode ter chegado ou não")
+        r = resposta.value
+        if not r.ok:
+            raise EnvioNaoConfirmado(
+                f"o portal respondeu {r.status} ao envio")
+        # Depois da resposta o portal mostra o alert (aceito em `_dialogo`) e
+        # pode trocar de página sozinho. Um `goto` nosso no meio disso é
+        # interrompido por essa navegação, então ela tem a vez.
+        self.page.wait_for_timeout(cfg.ESPERA_APOS_ENVIO)
+        try:
+            self.page.wait_for_load_state("load", timeout=cfg.TEMPO_PADRAO)
+        except PWTimeout:
+            pass                    # a conferência a seguir é quem decide
 
     def conferir_envio(self, vip_id: str, assunto: str,
                        nome_do_anexo: str) -> Solicitacao:
         """Relê a lista, abre a solicitação e confirma que o anexo está lá.
 
         Nada de "enviado" sem prova: o `mc_client.anexar` já deu "anexado" sem
-        arquivo porque um `wait_for_timeout` fixo era menor que o upload."""
-        s = self.procurar(vip_id, assunto)
+        arquivo porque um `wait_for_timeout` fixo era menor que o upload.
+
+        A lista é relida mais de uma vez: a resposta do envio já voltou, mas
+        nada garante que a lista do portal a mostre no mesmo segundo."""
+        s, lidas = None, 0
+        for tentativa in range(cfg.RELEITURAS_DA_LISTA):
+            if tentativa:
+                self.page.wait_for_timeout(cfg.ESPERA_RELEITURA)
+            itens = self.solicitacoes(vip_id)
+            lidas = len(itens)
+            s = achar(itens, assunto)
+            if s is not None:
+                break
         if s is None:
+            # Quantas o robô leu é o que separa "não chegou" de "a tela mudou
+            # e o robô não enxerga a lista": zero numa empresa que já tem
+            # meses de fechamento enviados é o segundo caso.
             raise EnvioNaoConfirmado(
-                "a solicitação não apareceu na lista depois do envio")
+                f"a solicitação não apareceu na lista depois do envio "
+                f"(li {lidas} solicitação(ões) desta empresa, nenhuma com "
+                f"este assunto)")
         self._ir(cfg.CAMINHO_SOLICITACOES + s.id, vip_id=vip_id)
         texto = util.norm_espaco(self.page.inner_text("body"))
         if util.norm_espaco(nome_do_anexo) not in texto:
