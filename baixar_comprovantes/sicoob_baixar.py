@@ -805,11 +805,15 @@ def _baixar_pix_da_conta(cli, numero: str, inicio: str, fim: str,
             corpo_html = html_do_comprovante_pix(detalhe)
             alvo = nome_livre(destino, nome_do_pix_sicoob(detalhe))
             html_para_pdf(cli.ctx, corpo_html, alvo)
-            alvo = nome_final.renomear(alvo, nome_final.do_sicoob_pix(detalhe))
+            campos = nome_final.do_sicoob_pix(detalhe)
+            alvo = nome_final.renomear(alvo, campos)
             resultado.baixados.append(alvo)
             if registro is not None:
+                # De onde saiu e quem recebeu: é o que o Anexar usa para não
+                # casar este Pix com lançamento de outra conta.
                 registro.anotar(
-                    ja_baixados.chave("sicoob_pix", ident, numero), alvo)
+                    ja_baixados.chave("sicoob_pix", ident, numero), alvo,
+                    origem=f"SICOOB:{numero}", recebedor=campos["dest"])
             log(f"    {alvo.name}")
         except Exception as e:                               # noqa: BLE001
             resultado.falhas.append(str(ident))
@@ -865,15 +869,16 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
                     # O favorecido e a Observação só existem DENTRO do
                     # comprovante — a lista do Sicoob não os traz. Por isso
                     # aqui o PDF é lido, e no Inter não: lá o JSON já tem tudo.
-                    alvo = nome_final.renomear(
-                        alvo, nome_final.do_sicoob(item,
-                                                   nome_final.texto_do_pdf(alvo)))
+                    campos = nome_final.do_sicoob(item,
+                                                  nome_final.texto_do_pdf(alvo))
+                    alvo = nome_final.renomear(alvo, campos)
                     resultado.baixados.append(alvo)
                     if registro is not None:
                         registro.anotar(
                             ja_baixados.chave("sicoob",
                                               item.get("idAgendamento"),
-                                              numero), alvo)
+                                              numero), alvo,
+                            origem=f"SICOOB:{numero}", recebedor=campos["dest"])
                     log(f"    {alvo.name}")
                 except Exception as e:                       # noqa: BLE001
                     ident = item.get("idAgendamento") or "?"

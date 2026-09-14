@@ -5,8 +5,16 @@ sub-pagamentos pendentes de comprovante no Mais Controle.
 
 Critérios, do mais forte para o mais fraco (todos exigem o MESMO valor):
   1. nº de OC/NF do nome do PDF = nº do documento (ou aparece na descrição);
-  2. centro de custo do PDF aparece nas obras/descrição do lançamento;
-  3. data igual (dd-mm) como desempate.
+  2. nº do documento cru com centro de custo, ou com a MESMA CONTA;
+  3. centro de custo do PDF aparece nas obras/descrição do lançamento;
+  4. favorecido do lançamento = recebedor do comprovante, na mesma conta e data;
+  5. data igual (dd-mm) como desempate.
+
+De onde saiu o pagamento (regra do dono, 14/09/2026): PDF que saiu de OUTRA
+conta que não a cadastrada no lançamento nem entra na disputa. A `origem` é
+(banco, conta) e quem a preenche é o Anexar -- do registro da baixa, para o
+PDF, e do cadastro de contas, para o lançamento. Faltando um dos lados, a conta
+não tira ninguém: arquivo posto à mão na pasta continua valendo como antes.
 
 Regras de segurança:
   - cada PDF é usado uma vez só;
@@ -58,6 +66,8 @@ def parse_pdf(fn: str) -> dict | None:
         "ocs": set(re.findall(r"\bOC\s*(\d+)", desc, re.I)),
         "nfs": set(re.findall(r"\bNF\s*(\d+)", desc, re.I)),
         "used_by": None,
+        "origem": None,          # (banco, conta) -- o Anexar preenche
+        "recebedor": None,       # quem recebeu -- o Anexar preenche
     }
 
 
@@ -110,6 +120,44 @@ def _features(pe: dict, pd: dict) -> tuple[bool, bool, bool, bool]:
     return ocnf, cc, date, docnum
 
 
+# ------------------------------------------------------------------ origem
+def mesma_conta(a, b) -> bool | None:
+    """O PDF saiu da conta do lançamento? None quando não dá para dizer.
+
+    `a` e `b` são (banco, conta). Bancos diferentes já respondem "não", mesmo
+    sem o número -- o registro antigo do Inter só sabe o banco. Mesmo banco e
+    os dois números conhecidos respondem pelo número; faltando um, não se sabe.
+    """
+    if not a or not b or not a[0] or not b[0]:
+        return None
+    if _norm(a[0]) != _norm(b[0]):
+        return False
+    if a[1] and b[1]:
+        return _norm(a[1]) == _norm(b[1])
+    return None
+
+
+#: Palavras que não distinguem ninguém num nome de empresa ou de pessoa.
+_SEM_PESO = {"LTDA", "EIRELI", "EPP", "SPE", "CIA", "DAS", "DOS"}
+
+
+def _palavras(nome) -> set[str]:
+    return {w for w in re.findall(r"[A-Z0-9]+", util.norm(nome or ""))
+            if len(w) >= 3 and w not in _SEM_PESO}
+
+
+def mesmo_favorecido(favorecido, recebedor) -> bool:
+    """O favorecido do ERP e quem recebeu no comprovante são a mesma pessoa?
+
+    Duas palavras em comum (uma, quando um dos nomes só tem uma): "JOSE" em
+    comum não é a mesma pessoa. Sinal fraco -- por isso só fecha CERTEZA junto
+    com a conta de onde saiu e a data."""
+    a, b = _palavras(favorecido), _palavras(recebedor)
+    if not a or not b:
+        return False
+    return len(a & b) >= min(2, len(a), len(b))
+
+
 # ------------------------------------------------------------------ casamento
 def _vals(pe) -> set:
     """Valores aceitos do pagamento (nominal e valor pago com juros/desconto)."""
@@ -130,15 +178,25 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     for pe in pendentes:
         pe["status"] = None
         pe["cands"] = []
+        pe["fora_da_conta"] = 0
         vistos = set()
         for v in sorted(_vals(pe)):
             for pd in byval.get(v, []):
                 if id(pd) in vistos:
                     continue
                 vistos.add(id(pd))
+                conta = mesma_conta(pe.get("origem"), pd.get("origem"))
+                if conta is False:
+                    pe["fora_da_conta"] += 1
+                    continue
                 ocnf, cc, date, docnum = _features(pe, pd)
+                fav = conta is True and mesmo_favorecido(pe.get("favorecido"),
+                                                         pd.get("recebedor"))
+                # `conta` e `fav` ficam FORA do score: ele decide o "valor
+                # único" das sobras, e somar ali afrouxaria essa regra.
                 pe["cands"].append({"pdf": pd, "ocnf": ocnf, "cc": cc, "date": date,
-                                    "docnum": docnum,
+                                    "docnum": docnum, "conta": conta is True,
+                                    "fav": fav,
                                     "score": (100 if ocnf else 0) + (10 if cc else 0)
                                              + (5 if docnum else 0) + (1 if date else 0)})
 
@@ -178,7 +236,12 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     # O nº do documento cru só entra ACOMPANHADO do centro de custo: sozinho
     # ele é fraco demais para fechar CERTEZA (ver _features).
     atribuir(lambda c: c["docnum"] and c["cc"])
+    # ...ou acompanhado da conta de onde o pagamento saiu (regra do dono).
+    atribuir(lambda c: c["docnum"] and c["conta"])
     atribuir(lambda c: c["cc"])
+    # Favorecido = recebedor é fraco sozinho; `fav` só existe com a conta
+    # batendo, e aqui ainda exige a data.
+    atribuir(lambda c: c["fav"] and c["date"])
 
     for pe in pendentes:
         if pe["status"]:
@@ -187,6 +250,14 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
         livres = [c for c in pe["cands"] if c["pdf"]["used_by"] is None]
         if not todos_val or not livres:
             pe["status"] = "SEM PAR"
+            if todos_val:
+                pe["motivo_sem_par"] = ("os PDFs de mesmo valor já foram usados "
+                                        "por outros pagamentos")
+            elif pe["fora_da_conta"]:
+                pe["motivo_sem_par"] = (f"{pe['fora_da_conta']} PDF(s) de mesmo "
+                                        "valor saíram de outra conta")
+            else:
+                pe["motivo_sem_par"] = "nenhum PDF com esse valor na pasta"
             continue
         concorrentes = [q for q in pendentes if q is not pe and not q["status"]
                         and (_vals(q) & _vals(pe))]
@@ -215,6 +286,10 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
             t.append("OC/NF")
         if m.get("docnum"):
             t.append("nº do documento")
+        if m.get("conta"):
+            t.append("conta")
+        if m.get("fav"):
+            t.append("favorecido")
         if m["cc"]:
             t.append("centro de custo")
         if m["date"]:

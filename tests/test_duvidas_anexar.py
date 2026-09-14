@@ -63,6 +63,30 @@ def test_resumo_do_relatorio_segue_a_mesma_ordem():
     assert ac._resumo_cands(pe) == "b.pdf  [centro de custo] || a.pdf  [data]"
 
 
+def test_resumo_mostra_conta_e_favorecido_quando_batem():
+    """Os sinais novos (regra do dono, 14/09/2026) aparecem no relatório e na
+    janela com o mesmo nome -- quem resolve a dúvida precisa ver POR QUE um
+    candidato está na frente."""
+    c = _cand(_pdf("a.pdf"), date=True)
+    c["conta"] = True
+    c["fav"] = True
+    assert ac._resumo_cands(_duvida(1, [c])) == "a.pdf  [conta + favorecido + data]"
+
+
+def test_a_aba_sem_par_do_relatorio_diz_o_motivo(tmp_path):
+    """Até 14/09/2026 a aba SEM PAR não dizia nada, e "não havia PDF desse
+    valor" e "havia, mas saiu de outra conta" pediam coisas diferentes."""
+    from openpyxl import load_workbook
+
+    pe = _duvida(1, [])
+    pe["motivo_sem_par"] = "2 PDF(s) de mesmo valor saíram de outra conta"
+    saida = ac.AnexarFrame._relatorio(None, [], [], [pe], str(tmp_path))
+    ws = load_workbook(saida)["SEM PAR"]
+    cabecalho = [c.value for c in ws[1]]
+    linha = [c.value for c in ws[2]]
+    assert linha[cabecalho.index("Motivo/Candidatos")] == pe["motivo_sem_par"]
+
+
 def test_so_o_escolhido_vira_certeza():
     duvidas, (a, b) = _duvidas_com_os_mesmos_pdfs(2)
     assert ac._aplicar_escolhas(duvidas, {1: b}) == 1

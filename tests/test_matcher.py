@@ -136,3 +136,114 @@ def test_casar_aceita_valor_pago_com_juros():
     certezas, duvidas, sem_par = matcher.casar(pend, pdfs)
     assert len(certezas) == 1
     assert certezas[0]["pdf"] == "105,00 - BOLETO OC 5428 - 20-07.pdf"
+
+
+# ------------------------------------------- de onde saiu x conta cadastrada
+# Regra do dono (14/09/2026): quando a OC não casa, olhar o nº do documento,
+# DE ONDE SAIU o pagamento e QUAL A CONTA cadastrada no ERP. Medido nas 33
+# dúvidas de 14/09: a conta sozinha resolveu 6 e cortou o candidato errado em
+# outras 6 (título de conta de pessoa física casado com Pix de empresa).
+# `origem` é (banco, identificador da conta) — quem monta é o Anexar, a partir
+# do registro da baixa (PDF) e do cadastro de contas (título). None = não sei.
+
+def _pdf(nome, origem=None, recebedor=None):
+    p = matcher.parse_pdf(nome)
+    p["origem"] = origem
+    p["recebedor"] = recebedor
+    return p
+
+
+def _pend_conta(paid_id, valor, origem=None, favorecido="", **kw):
+    pe = _pend(paid_id, valor, **kw)
+    pe["origem"] = origem
+    pe["favorecido"] = favorecido
+    return pe
+
+
+SICOOB_1 = ("SICOOB", "111111")
+SICOOB_2 = ("SICOOB", "222222")
+
+
+def test_pdf_que_saiu_de_outra_conta_nao_e_candidato():
+    pdfs = [_pdf("60,00 - REEMBOLSO - 11-09.pdf", origem=SICOOB_2),
+            _pdf("60,00 - REEMBOLSO - 11-09 (2).pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 6000, origem=SICOOB_1, data="1109")]
+    certezas, duvidas, sem_par = matcher.casar(pend, pdfs)
+    assert len(certezas) == 1 and not duvidas
+    assert certezas[0]["pdf"] == "60,00 - REEMBOLSO - 11-09 (2).pdf"
+
+
+def test_banco_diferente_exclui_mesmo_sem_o_numero_da_conta():
+    """O registro antigo do Inter não guarda a conta, só o banco -- e isso já
+    basta para dizer que um título de conta de outro banco não é dele."""
+    pdfs = [_pdf("60,00 - REEMBOLSO - 11-09.pdf", origem=("INTER", ""))]
+    pend = [_pend_conta("A", 6000, origem=("PAGBANK", "PESSOAS FISICAS"),
+                        data="1109")]
+    certezas, duvidas, sem_par = matcher.casar(pend, pdfs)
+    assert not certezas and not duvidas
+    assert len(sem_par) == 1
+    assert "outra conta" in sem_par[0]["motivo_sem_par"]
+
+
+def test_sem_par_sem_pdf_de_mesmo_valor_diz_isso():
+    pdfs = [_pdf("50,00 - OUTRO - 20-07.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 7000, origem=SICOOB_1)]
+    _, _, sem_par = matcher.casar(pend, pdfs)
+    assert "nenhum PDF" in sem_par[0]["motivo_sem_par"]
+
+
+def test_origem_desconhecida_nao_exclui_ninguem():
+    """PDF posto à mão na pasta (sem registro) ou conta fora do cadastro: não
+    se sabe de onde saiu, então a conta não pode tirar ninguém da disputa."""
+    pdfs = [_pdf("60,00 - REEMBOLSO - 11-09.pdf", origem=None)]
+    pend = [_pend_conta("A", 6000, origem=SICOOB_1, data="1109")]
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    assert len(certezas) == 1
+
+
+def test_nr_do_documento_com_a_mesma_conta_fecha_certeza():
+    """Sozinho o nº do documento é fraco (`test_documento_cru_sozinho...`);
+    com a conta de onde saiu batendo, ele fecha."""
+    pdfs = [_pdf("70,00 - FORNECEDOR NF 5979 - 20-07.pdf", origem=SICOOB_1),
+            _pdf("70,00 - OUTRO FORNECEDOR - 20-07.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 7000, origem=SICOOB_1, doc="5979", desc="sem rotulo"),
+            _pend_conta("B", 7000, origem=SICOOB_1, desc="outro")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    por_id = {c["paidId"]: c for c in certezas}
+    assert por_id["A"]["pdf"] == "70,00 - FORNECEDOR NF 5979 - 20-07.pdf"
+    assert "conta" in por_id["A"]["motivo"]
+
+
+def test_favorecido_conta_e_data_juntos_fecham_certeza():
+    pdfs = [_pdf("900,00 - SERVICO - 11-09.pdf", origem=SICOOB_1,
+                 recebedor="JOSE CARLOS PEREIRA"),
+            _pdf("900,00 - SERVICO - 11-09 (2).pdf", origem=SICOOB_1,
+                 recebedor="MARIA APARECIDA SOUZA")]
+    pend = [_pend_conta("A", 90000, origem=SICOOB_1, data="1109",
+                        favorecido="Maria Aparecida de Souza"),
+            _pend_conta("B", 90000, origem=SICOOB_1, data="1109",
+                        favorecido="José Carlos Pereira")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not duvidas
+    por_id = {c["paidId"]: c["pdf"] for c in certezas}
+    assert por_id == {"A": "900,00 - SERVICO - 11-09 (2).pdf",
+                      "B": "900,00 - SERVICO - 11-09.pdf"}
+
+
+def test_favorecido_sem_conta_conhecida_nao_fecha():
+    """Nome parecido é sinal fraco: sem saber de onde saiu, fica em dúvida."""
+    pdfs = [_pdf("900,00 - SERVICO - 11-09.pdf", recebedor="JOSE CARLOS PEREIRA"),
+            _pdf("900,00 - SERVICO - 11-09 (2).pdf", recebedor="MARIA APARECIDA SOUZA")]
+    pend = [_pend_conta("A", 90000, data="1109", favorecido="Maria Aparecida de Souza"),
+            _pend_conta("B", 90000, data="1109", favorecido="José Carlos Pereira")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 2
+
+
+def test_um_nome_em_comum_nao_basta_para_o_favorecido():
+    """"JOSE" em comum não é a mesma pessoa."""
+    assert not matcher.mesmo_favorecido("Jose Carlos Pereira", "JOSE ANTONIO LIMA")
+    assert matcher.mesmo_favorecido("Maria Aparecida de Souza", "MARIA APARECIDA SOUZA")
+    assert matcher.mesmo_favorecido("Ferragens Exemplo Ltda", "FERRAGENS EXEMPLO LTDA ME")
+    assert not matcher.mesmo_favorecido("", "QUALQUER")
+

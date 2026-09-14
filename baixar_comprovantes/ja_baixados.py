@@ -69,13 +69,23 @@ class Registro:
     def tem(self, chave_do_item: str) -> bool:
         return bool(chave_do_item) and chave_do_item in self._dados
 
-    def anotar(self, chave_do_item: str, arquivo) -> None:
+    def anotar(self, chave_do_item: str, arquivo, *, origem: str = "",
+               recebedor: str | None = "") -> None:
+        """`origem` é "BANCO:conta" (`SICOOB:12.345-6`, `INTER:<apelido>`) e
+        `recebedor` é quem recebeu. Os dois existem para o casamento do Anexar
+        (regra do dono, 14/09/2026): PDF que saiu de outra conta não disputa o
+        lançamento, e o favorecido desempata. Vazios não se gravam."""
         if not chave_do_item:
             return
-        self._dados[chave_do_item] = {
+        linha = {
             "arquivo": Path(arquivo).name,
             "quando": datetime.now().replace(microsecond=0).isoformat(),
         }
+        if origem:
+            linha["origem"] = origem
+        if recebedor:
+            linha["recebedor"] = recebedor
+        self._dados[chave_do_item] = linha
 
     def gravar(self) -> None:
         """Grava no fim do lote, e não a cada item: são dezenas de

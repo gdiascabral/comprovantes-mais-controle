@@ -33,7 +33,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from . import config, matcher, mc_api, planilha, credenciais, mc_client
+from . import config, matcher, mc_api, planilha, credenciais, mc_client, origem
 from .mc_client import MCClient, SemRede
 
 import util
@@ -152,14 +152,24 @@ def _data_curta(iso: str) -> str:
     return t or "—"
 
 
+def _sinais(c: dict) -> list[str]:
+    """O que bateu num candidato, com o MESMO nome no relatório e na janela.
+
+    `conta` é o PDF ter saído da conta cadastrada no lançamento e `favorecido`
+    é quem recebeu bater com o do ERP (regra do dono, 14/09/2026)."""
+    return [nome for nome, bateu in (("OC/NF", c.get("ocnf")),
+                                     ("conta", c.get("conta")),
+                                     ("favorecido", c.get("fav")),
+                                     ("centro de custo", c.get("cc")),
+                                     ("data", c.get("date"))) if bateu]
+
+
 def _resumo_cands(pe: dict) -> str:
     """Candidatos que sobraram para um pagamento em dúvida, do mais provável
     para o menos, com o que bateu em cada um — mesmo detalhe que a janela."""
     partes = []
     for c in _candidatos_livres(pe):
-        sinais = " + ".join(s for s in ("OC/NF" if c["ocnf"] else "",
-                                        "centro de custo" if c["cc"] else "",
-                                        "data" if c["date"] else "") if s)
+        sinais = " + ".join(_sinais(c))
         partes.append(f"{c['pdf']['fn']}  [{sinais or 'só o valor'}]")
     return " || ".join(partes) or "(sem candidatos livres)"
 
@@ -845,9 +855,7 @@ class AnexarFrame(ttk.Frame):
             i = atual["i"]
             for iid, c in atual["mapa"].items():
                 outro = any(pd is c["pdf"] for j, pd in escolha.items() if j != i)
-                sinais = " ".join(s for s in ("✔ OC/NF" if c["ocnf"] else "",
-                                              "✔ centro de custo" if c["cc"] else "",
-                                              "✔ data" if c["date"] else "") if s)
+                sinais = " ".join("✔ " + s for s in _sinais(c))
                 tv.set(iid, "sinais",
                        ("⚠ já escolhido em outro · " if outro else "")
                        + (sinais or "só o valor bate"))
@@ -1180,6 +1188,18 @@ class AnexarFrame(ttk.Frame):
 
             pdfs = matcher.carregar_pdfs(Path(pasta_pdfs), self._log)
             self._log(f"{len(pdfs)} PDF(s) válidos na pasta.")
+            # De onde saiu cada PDF e de que conta é cada lançamento: PDF de
+            # outra conta não disputa (regra do dono, 14/09/2026). Não saber é
+            # neutro, então uma falha aqui só desliga a regra nesta rodada.
+            try:
+                n = origem.preencher(pendentes, pdfs, Path(pasta_pdfs))
+                self._log(f"Conta de origem conhecida: {n['pdfs_com_origem']} de "
+                          f"{n['pdfs']} PDF(s) · {n['lancamentos_com_conta']} de "
+                          f"{n['lancamentos']} lançamento(s).")
+            except Exception:                                # noqa: BLE001
+                config.diag("origem.preencher falhou:\n" + traceback.format_exc())
+                self._log("[aviso] não deu para saber a conta de origem — "
+                          "o casamento segue sem essa regra nesta rodada.")
             certezas, duvidas, sem_par = matcher.casar(pendentes, pdfs)
             self._log(f"Casamentos com certeza: {len(certezas)} | dúvida: {len(duvidas)} "
                       f"| sem par: {len(sem_par)}\n")
@@ -1306,7 +1326,8 @@ class AnexarFrame(ttk.Frame):
                          for p in anexados])
         aba("DUVIDA", [comuns(p) + ["", _resumo_cands(p), "", LINK + p["launchId"]]
                        for p in duvidas])
-        aba("SEM PAR", [comuns(p) + ["", "", "", LINK + p["launchId"]]
+        aba("SEM PAR", [comuns(p) + ["", p.get("motivo_sem_par", ""), "",
+                                     LINK + p["launchId"]]
                         for p in sem_par])
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         out = Path(pasta_pdfs or ".") / f"relatorio_anexos_{stamp}.xlsx"
