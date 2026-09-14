@@ -1659,7 +1659,19 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   solicitações responde "já enviei esta?", e perguntar não envelhece — mas
   exige abrir também a aba Encerradas, que só carrega ao ser clicada. E nada
   de "enviado" sem prova: depois do Salvar/Enviar, `conferir_envio` relê a
-  lista, abre a solicitação e confirma o anexo pelo nome. `vip_id`, `vip_nome`
+  lista, abre a solicitação e confirma o anexo pelo nome.
+  **O Salvar/Enviar é XHR, e a espera é pela RESPOSTA** (14/09/2026). Na
+  primeira rodada real as onze empresas saíram "não confirmado": a espera era
+  `wait_for_load_state("networkidle")`, que volta na hora porque a página não
+  troca, e o `goto` da conferência cancelava o upload ainda subindo. Hoje o
+  clique roda dentro de `page.expect_response` (POST para `/sysvipsolAjax`, ou
+  qualquer POST multipart), resposta não-2xx ou prazo vencido é
+  `EnvioNaoConfirmado`, a lista é relida até três vezes e a mensagem diz
+  quantas solicitações o robô leu — zero numa empresa com meses enviados é
+  "a tela mudou", não "não chegou". **O lote PARA na primeira não
+  confirmada**: é estado desconhecido, e o que derruba uma derruba todas. A
+  aba ganhou "Gerar os .zip", que chama o MESMO `sicoob_zipar.zipar_mes` da
+  aba Extratos Sicoob e emenda o Preparar. `vip_id`, `vip_nome`
   (por empresa) e `vip_url` (o endereço do escritório) moram no
   `contas_sicoob.json`, FORA do repo — o URL carrega o nome de um fornecedor
   real, e um mapa a mais seria uma divergência a mais.

@@ -2,8 +2,9 @@
 """O núcleo do envio ao portal Acessórias: os zips do mês e a mensagem deles.
 
 Só `acessorias/pacote.py`, que é puro. O `portal.py` fala com um site de
-terceiro por navegador de verdade e não entra em teste automatizado, como o
-cliente do Sicoob.
+terceiro por navegador de verdade e não entra em teste contra o site, como o
+cliente do Sicoob; a ORDEM das chamadas dele (esperar a resposta do envio antes
+de sair da página) é provada com página falsa em `test_acessorias_envio.py`.
 
 Os zips são montados aqui na hora, com nomes INVENTADOS: o repositório é
 público, e nome de comprador é dado de pessoa.
