@@ -1736,3 +1736,47 @@ def test_o_clique_na_linha_nao_engole_o_comando_do_cabecalho(abrir_aba):
     assert tabela.identify_column(Evento.x) == "#1"
     assert aba._clicou(Evento()) is None, (
         "devolver 'break' no cabecalho mata o comando da coluna")
+
+
+# ------------------------------------ de onde saiu, para o casamento do Anexar
+def test_o_pix_do_sicoob_anota_a_conta_e_quem_recebeu(tmp_path, monkeypatch):
+    """Regra do dono (14/09/2026): o Anexar precisa saber DE ONDE saiu cada
+    comprovante. Quem sabe é a baixa, e ela passa a deixar isso no registro."""
+    from baixar_comprovantes import ja_baixados
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    detalhe = _pix_sicoob(id_="E0000000000000000000000000000009",
+                          descricao="OBRA TESTE QD 01 LT 02 OC 1234")
+    monkeypatch.setattr(sb, "listar_pix", lambda *_a, **_k: [{"id": detalhe["id"]}])
+    monkeypatch.setattr(sb, "detalhar_pix", lambda *_a, **_k: detalhe)
+    monkeypatch.setattr(sb, "html_para_pdf",
+                        lambda _ctx, _html, alvo: alvo.write_bytes(b"%PDF-1.4"))
+
+    class Cli:
+        page = ctx = None
+
+    registro = ja_baixados.Registro(tmp_path)
+    resultado = sb.Resultado(conta="12.345-6")
+    sb._baixar_pix_da_conta(Cli(), "12.345-6", "01/09/2026", "02/09/2026",
+                            tmp_path, resultado, log=lambda _m: None,
+                            registro=registro)
+    linha = registro._dados[ja_baixados.chave("sicoob_pix", detalhe["id"], "12.345-6")]
+    assert linha["origem"] == "SICOOB:12.345-6"
+    assert linha["recebedor"] == "Fulano de Tal"
+
+
+def test_toda_anotacao_da_baixa_diz_de_onde_saiu():
+    """Os quatro lugares que anotam o registro -- Pix e comum do Sicoob, Pix e
+    2ª via do Inter -- levam `origem`. Um que esquecesse deixaria os PDFs
+    dele sem conta, e a regra de conta não valeria para eles, em silêncio."""
+    import re
+
+    from baixar_comprovantes import inter_baixar, sicoob_baixar
+
+    for modulo in (sicoob_baixar, inter_baixar):
+        fonte = pathlib.Path(modulo.__file__).read_text(encoding="utf-8")
+        chamadas = re.findall(r"registro\.anotar\((.*?)\)\n", fonte, re.S)
+        assert len(chamadas) == 2, modulo.__name__
+        for c in chamadas:
+            assert "origem=" in c, f"{modulo.__name__}: anotar sem origem"
+

@@ -1069,7 +1069,10 @@ def baixar_2via_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
                 resultado.baixados.append(destino)
                 resultado.total_2via += 1
                 if registro is not None:
-                    registro.anotar(marca, destino)
+                    # A conta do Inter é o apelido do login (`resultado.conta`);
+                    # o Anexar a traduz para a empresa pelo contas_inter.json.
+                    registro.anotar(marca, destino,
+                                    origem=f"INTER:{resultado.conta}")
                 log(f"  {destino.name}")
             except Exception as e:                           # noqa: BLE001
                 resultado.falhas.append(1000 + len(resultado.falhas))
@@ -1292,10 +1295,13 @@ def baixar_pix_pela_api(page, pasta: Path, resultado: Resultado, inicio: str,
                 raise InterFalhou(f"HTTP {baixado.status} ao baixar")
             destino = nome_livre(pasta, nome_do_pix(mov))
             destino.write_bytes(baixado.body())
-            destino = nome_final.renomear(destino, nome_final.do_pix(mov))
+            campos = nome_final.do_pix(mov)
+            destino = nome_final.renomear(destino, campos)
             resultado.baixados.append(destino)
             if registro is not None:
-                registro.anotar(marca, destino)
+                registro.anotar(marca, destino,
+                                origem=f"INTER:{resultado.conta}",
+                                recebedor=campos["dest"])
             log(f"  {destino.name}")
         except Exception as e:                               # noqa: BLE001
             resultado.falhas.append(len(resultado.falhas))
