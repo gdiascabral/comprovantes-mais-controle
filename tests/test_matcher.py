@@ -207,7 +207,7 @@ def test_nr_do_documento_com_a_mesma_conta_fecha_certeza():
     pdfs = [_pdf("70,00 - FORNECEDOR NF 5979 - 20-07.pdf", origem=SICOOB_1),
             _pdf("70,00 - OUTRO FORNECEDOR - 20-07.pdf", origem=SICOOB_1)]
     pend = [_pend_conta("A", 7000, origem=SICOOB_1, doc="5979", desc="sem rotulo"),
-            _pend_conta("B", 7000, origem=SICOOB_1, desc="outro")]
+            _pend_conta("B", 7000, origem=SICOOB_1, doc="8888", desc="outro")]
     certezas, duvidas, _ = matcher.casar(pend, pdfs)
     por_id = {c["paidId"]: c for c in certezas}
     assert por_id["A"]["pdf"] == "70,00 - FORNECEDOR NF 5979 - 20-07.pdf"
@@ -245,7 +245,7 @@ def test_um_nome_em_comum_nao_basta_para_o_favorecido():
     assert not matcher.mesmo_favorecido("Fulano Exemplo Teste", "FULANO OUTRO NOME")
     assert matcher.mesmo_favorecido("Beltrana de Modelo Fictícia", "BELTRANA MODELO FICTICIA")
     assert matcher.mesmo_favorecido("Ferragens Exemplo Ltda", "FERRAGENS EXEMPLO LTDA ME")
-    assert matcher.mesmo_favorecido("Beltrana M Ficticia", "BELTRANA MODELO FICTICIA")
+    assert matcher.mesmo_favorecido("Beltrana Modelo", "BELTRANA MODELO")
     assert not matcher.mesmo_favorecido("", "QUALQUER")
 
 
@@ -258,6 +258,21 @@ def test_sobrenome_ou_grupo_em_comum_nao_e_o_mesmo_favorecido():
     assert not matcher.mesmo_favorecido("EXEMPLO ENGENHARIA ALFA SPE", "EXEMPLO ENGENHARIA BETA SPE")
     assert not matcher.mesmo_favorecido("EXEMPLO EMPREENDIMENTOS I", "EXEMPLO EMPREENDIMENTOS II")
     assert not matcher.mesmo_favorecido("CARTORIO", "CARTORIO DE REGISTRO")
+    # nome de duas palavras só vale IGUAL (segunda revisão do #94)
+    assert not matcher.mesmo_favorecido("FULANO EXEMPLO", "FULANO BELTRANO EXEMPLO")
+    assert not matcher.mesmo_favorecido("CONSTRUTORA EXEMPLO", "CONSTRUTORA EXEMPLO 2")
+
+
+def test_nf_com_a_mesma_conta_nao_fecha_se_ha_rival_sem_nr_do_documento():
+    """Segunda revisão do #94: com outro pendente de mesmo valor SEM nº do
+    documento no ERP, a NF do PDF pode ser dele (número de outro fornecedor que
+    coincide) -- não se sabe, então não fecha."""
+    pdfs = [_pdf("900,00 - CIMENTO NF 1234 - 11-09.pdf", origem=SICOOB_1),
+            _pdf("900,00 - SERVICO - 11-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 90000, origem=SICOOB_1, doc="1234", data="1109"),
+            _pend_conta("B", 90000, origem=SICOOB_1, doc="", desc="compra", data="1109")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 2
 
 
 def test_nr_do_documento_com_oc_no_pdf_nao_fecha_nem_com_a_mesma_conta():

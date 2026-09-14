@@ -160,6 +160,10 @@ def mesmo_favorecido(favorecido, recebedor) -> bool:
     a, b = _palavras(favorecido), _palavras(recebedor)
     if len(a) < 2 or len(b) < 2:
         return False
+    if min(len(a), len(b)) == 2:
+        # Duas palavras cabem em muito nome maior ("FULANO EXEMPLO" dentro de
+        # "FULANO BELTRANO EXEMPLO"): aí só vale igual (2ª revisão do #94).
+        return a == b
     return a <= b or b <= a
 
 
@@ -179,6 +183,11 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     byval = defaultdict(list)
     for p in pdfs:
         byval[p["valor"]].append(p)
+
+    # Valores que têm pendente SEM nº do documento: a NF de um PDF desse valor
+    # pode ser dele, e aí a NF não aponta ninguém (2ª revisão do PR #94).
+    sem_documento = {v for q in pendentes if not str(q.get("doc") or "").strip()
+                     for v in _vals(q)}
 
     for pe in pendentes:
         pe["status"] = None
@@ -201,7 +210,8 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                 # contra NF escrita no nome do PDF. Contra OC, numa empresa de
                 # uma conta só, era o nº do documento sozinho de novo -- e
                 # trocava anexos (revisão do PR #94).
-                docnf = bool(pd["nfs"] & set(re.findall(r"\d{3,}", pe["doc"])))
+                docnf = (bool(pd["nfs"] & set(re.findall(r"\d{3,}", pe["doc"])))
+                         and not (_vals(pe) & sem_documento))
                 # `conta` e `fav` ficam FORA do score: ele decide o "valor
                 # único" das sobras, e somar ali afrouxaria essa regra.
                 pe["cands"].append({"pdf": pd, "ocnf": ocnf, "cc": cc, "date": date,
