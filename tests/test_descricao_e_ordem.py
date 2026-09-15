@@ -372,14 +372,17 @@ def test_agua_e_luz_mantem_a_descricao_e_nao_usam_o_numero_da_fatura():
 _ITENS = " ".join(f"ITEM{n:02d}" for n in range(1, 40))
 
 
-def test_sicoob_corta_em_100_e_as_outras_em_140_na_fronteira_de_palavra():
+def test_inter_corta_em_140_e_qualquer_outra_em_100_na_fronteira_de_palavra():
+    """O lado seguro é o curto: conta Sicoob cujo nome não diga SICOOB levava
+    140, e o banco podia cortar justamente a NF e a OC do fim."""
     r = _partes(descricao=_ITENS)
-    sicoob = hp.descricao_para_colar(r, SICOOB)
-    inter = hp.descricao_para_colar(r, INTER)
-    assert sicoob == "QD 99 LT 99 " + " ".join(f"ITEM{n:02d}" for n in range(1, 13))
-    assert inter == "QD 99 LT 99 " + " ".join(f"ITEM{n:02d}" for n in range(1, 19))
-    assert len(sicoob) == 95 and len(inter) == 137
-    assert hp.descricao_para_colar(r, "conta modelo sicoob") == sicoob
+    curta = "QD 99 LT 99 " + " ".join(f"ITEM{n:02d}" for n in range(1, 13))
+    longa = "QD 99 LT 99 " + " ".join(f"ITEM{n:02d}" for n in range(1, 19))
+    assert len(curta) == 95 and len(longa) == 137
+    assert hp.descricao_para_colar(r, INTER) == longa
+    assert hp.descricao_para_colar(r, "conta modelo inter") == longa
+    for conta in (SICOOB, "CONTA MODELO", "CONTA INTERNA MODELO", ""):
+        assert hp.descricao_para_colar(r, conta) == curta, conta
 
 
 _RATEIO = " | ".join(f"QD {n:02d} LT {n:02d}" for n in range(1, 12))

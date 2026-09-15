@@ -64,13 +64,15 @@ _RODAPE_MAX_LINHAS = 4
 SUBTITULO_GERAL = "vencimentos em aberto no Mais Controle - todas as contas"
 
 #: Até quantos caracteres a descrição do HTML geral vai para o campo de
-#: descrição do banco. No Sicoob o campo deixou digitar 140, mas "vira e mexe
-#: ele limita" (dono, 14/09/2026): um limite que muda sem aviso é descoberto
-#: na hora de colar, com a fila de pagamentos parada. Por isso as contas
-#: Sicoob saem com folga, em 100; o Inter aceita bem mais, e as demais contas
-#: ficam em 140. Quem aplica é `descricao_para_colar`, sem cortar NF nem OC.
-LIMITE_DESCRICAO_SICOOB = 100
-LIMITE_DESCRICAO = 140
+#: descrição do banco. O Inter aceita bem mais (dono, 14/09/2026), e só a
+#: conta que diz INTER no nome leva 140. Todas as outras levam 100: no Sicoob
+#: o campo deixou digitar 140, mas "vira e mexe ele limita", e um limite que
+#: muda sem aviso é descoberto na hora de colar. O lado seguro é o curto —
+#: com a regra ao contrário ("SICOOB no nome → 100"), a conta Sicoob cujo
+#: nome não dissesse SICOOB levava 140, e o banco podia cortar justamente a
+#: NF e a OC do fim. Quem aplica é `descricao_para_colar`, sem cortar NF nem OC.
+LIMITE_DESCRICAO_INTER = 140
+LIMITE_DESCRICAO = 100
 
 _CENTAVO = Decimal("0.01")
 _PLACEHOLDER = re.compile(r"__([A-Z][A-Z_]*[A-Z])__")
@@ -189,8 +191,10 @@ def _sem_reembolso(s: str) -> str:
 
 
 def limite_da_descricao(conta) -> int:
-    """Quantos caracteres cabem na descrição do banco desta conta."""
-    return (LIMITE_DESCRICAO_SICOOB if "sicoob" in relatorio.chave(conta or "")
+    """Quantos caracteres cabem na descrição do banco desta conta. INTER como
+    palavra inteira: "CONTA INTERNA" não é do Inter e fica no lado seguro."""
+    return (LIMITE_DESCRICAO_INTER
+            if re.search(r"\binter\b", relatorio.chave(conta or ""))
             else LIMITE_DESCRICAO)
 
 
