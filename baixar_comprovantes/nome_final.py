@@ -148,6 +148,11 @@ def documento_de_quem_recebeu(texto: str) -> str:
         if not re.fullmatch(r"Benefici[áa]rio|Quem recebeu", linha, re.I):
             continue
         for seguinte in linhas[i + 1:i + 6]:
+            # O bloco seguinte (o do pagador) encerra a busca: sem isso, um
+            # bloco de quem recebe SEM documento devolvia o CNPJ de quem pagou.
+            if re.match(r"Pagador|Quem pagou|Benefici[áa]rio final|Sacador",
+                        seguinte, re.I):
+                break
             achado = re.match(r"CPF\s*/\s*CNPJ\s+(\S+)", seguinte, re.I)
             if achado:
                 if "*" in achado.group(1):

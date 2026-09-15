@@ -157,7 +157,7 @@ def _sinais(c: dict) -> list[str]:
 
     `conta` é o PDF ter saído da conta cadastrada no lançamento e `favorecido`
     é quem recebeu bater com o do ERP (regra do dono, 14/09/2026)."""
-    return [nome for nome, bateu in (("OC/NF", c.get("ocnf")),
+    return [nome for nome, bateu in (("OC/NF", c.get("ocnf") or c.get("ocerp")),
                                      ("nº longo", c.get("idnum")),
                                      ("documento", c.get("docrec")),
                                      ("conta", c.get("conta")),

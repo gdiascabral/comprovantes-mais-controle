@@ -1849,3 +1849,25 @@ def test_toda_anotacao_da_baixa_leva_o_documento_de_quem_recebeu():
         for c in re.findall(r"registro\.anotar\((.*?)\)\n", fonte, re.S):
             assert "doc_recebedor=" in c, f"{modulo.__name__}: anotar sem documento"
 
+
+def test_documento_de_quem_recebeu_nao_escorrega_para_o_pagador():
+    """Revisão do #95: bloco de quem recebeu SEM linha de CPF/CNPJ, seguido do
+    bloco do pagador -- a leitura para no bloco seguinte, não pega o dele."""
+    from baixar_comprovantes import nome_final as nf
+
+    assert nf.documento_de_quem_recebeu(linhas(
+        "Beneficiario", "Nome/Razao Social FORNECEDOR EXEMPLO LTDA",
+        "Pagador", "CPF/CNPJ 44.555.666/0001-00")) == ""
+    assert nf.documento_de_quem_recebeu(linhas(
+        "Quem recebeu", "Nome Fulano", "Quem pagou",
+        "CPF/CNPJ 44.555.666/0001-00")) == ""
+
+
+def test_o_registro_so_guarda_documento_inteiro():
+    """Documento que chegar mascarado pela API (só o miolo) não se grava."""
+    from baixar_comprovantes import ja_baixados
+
+    reg = ja_baixados.Registro(pathlib.Path("."))
+    reg.anotar("pix:E9", "10,00 - X - 01-09.pdf", doc_recebedor="***.456.789-**")
+    assert "doc_recebedor" not in reg._dados["pix:E9"]
+

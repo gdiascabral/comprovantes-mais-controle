@@ -11,12 +11,15 @@ Critérios, do mais forte para o mais fraco (todos exigem o MESMO valor):
   4. favorecido do lançamento = recebedor do comprovante, na mesma conta e data;
   5. data igual (dd-mm) como desempate.
 
-Identificadores EXATOS (14/09/2026, as dúvidas que o dono apontou):
-  - a OC do lançamento lida no ERP (`ocs_erp`, do overview) conta como OC;
-  - número longo (6+ dígitos: UC, matrícula) igual na descrição do lançamento
-    e na do PDF, com a conta ou o centro de custo junto;
-  - CPF/CNPJ de quem recebeu (`doc_recebedor`, do registro da baixa) igual ao
-    do favorecido (`doc_favorecido`, do cadastro de Contatos), com a data.
+Identificadores EXATOS (14/09/2026, as dúvidas que o dono apontou), os três
+com a MESMA DATA -- a OC, a UC e o CNPJ identificam a compra, o imóvel e o
+fornecedor, não o PAGAMENTO: a parcela ou o mês anterior, com o PDF ainda na
+pasta, têm o mesmo número (revisão do PR #95):
+  - a OC do lançamento lida no ERP (`ocs_erp`, do overview) = OC do PDF;
+  - número longo (6+ dígitos: UC, matrícula) igual nas DESCRIÇÕES, com a
+    conta ou o centro de custo junto;
+  - CPF/CNPJ de quem recebeu (`doc_recebedor`, do registro da baixa) = o do
+    favorecido (`doc_favorecido`, do cadastro de Contatos), na mesma conta.
 
 De onde saiu o pagamento (regra do dono, 14/09/2026): PDF que saiu de OUTRA
 conta que não a cadastrada no lançamento nem entra na disputa. A `origem` é
@@ -117,9 +120,7 @@ def _features(pe: dict, pd: dict) -> tuple[bool, bool, bool, bool]:
     `docnum` é o nº do documento CRU do lançamento batendo com o OC/NF do PDF:
     sinal fraco, mantido separado porque sozinho nunca deve fechar CERTEZA."""
     do_pdf = pd["ocs"] | pd["nfs"]
-    # A OC lida no overview do ERP só vale contra OC do PDF, nunca contra NF.
-    ocnf = bool(do_pdf & _ocnf_rotulados(pe["doc"], pe["desc"])
-                or pd["ocs"] & set(pe.get("ocs_erp") or ()))
+    ocnf = bool(do_pdf & _ocnf_rotulados(pe["doc"], pe["desc"]))
     docnum = bool(do_pdf & set(re.findall(r"\d{3,}", pe["doc"])))
     cc = False
     for w in pe["works"]:
@@ -239,8 +240,11 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                 # trocava anexos (revisão do PR #94).
                 docnf = (bool(pd["nfs"] & set(re.findall(r"\d{3,}", pe["doc"])))
                          and not (_vals(pe) & sem_documento))
-                idnum = bool(_numeros_longos(pe["desc"], pe["doc"])
-                             & _numeros_longos(pd["desc"]))
+                # Só as DESCRIÇÕES: o nº do documento aqui furaria a trava do
+                # rival sem nº do documento, logo acima.
+                idnum = bool(_numeros_longos(pe["desc"]) & _numeros_longos(pd["desc"]))
+                # A OC lida no overview do ERP só vale contra OC do PDF.
+                ocerp = bool(pd["ocs"] & set(pe.get("ocs_erp") or ()))
                 doc_fav = re.sub(r"\D", "", str(pe.get("doc_favorecido") or ""))
                 docrec = bool(doc_fav) and doc_fav == re.sub(
                     r"\D", "", str(pd.get("doc_recebedor") or ""))
@@ -249,6 +253,7 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                 pe["cands"].append({"pdf": pd, "ocnf": ocnf, "cc": cc, "date": date,
                                     "docnum": docnum, "docnf": docnf,
                                     "idnum": idnum, "docrec": docrec,
+                                    "ocerp": ocerp,
                                     "conta": conta is True, "fav": fav,
                                     "score": (100 if ocnf else 0) + (10 if cc else 0)
                                              + (5 if docnum else 0) + (1 if date else 0)})
@@ -286,8 +291,9 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
 
     atribuir(lambda c: c["ocnf"] and c["cc"])
     atribuir(lambda c: c["ocnf"])
-    # Número longo igual (a UC da conta de luz), com a conta ou o lote junto.
-    atribuir(lambda c: c["idnum"] and (c["conta"] or c["cc"]))
+    # OC do ERP e número longo igual (a UC), sempre com a data.
+    atribuir(lambda c: c["ocerp"] and c["date"])
+    atribuir(lambda c: c["idnum"] and c["date"] and (c["conta"] or c["cc"]))
     # O nº do documento cru só entra ACOMPANHADO do centro de custo: sozinho
     # ele é fraco demais para fechar CERTEZA (ver _features).
     atribuir(lambda c: c["docnum"] and c["cc"])
@@ -295,8 +301,9 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     # ...ou a NF do nome do PDF, na conta de onde o pagamento saiu (regra do
     # dono). DEPOIS do centro de custo, que já tinha a precedência.
     atribuir(lambda c: c["docnf"] and c["conta"])
-    # CPF/CNPJ de quem recebeu = o do favorecido, no mesmo dia.
-    atribuir(lambda c: c["docrec"] and c["date"])
+    # CPF/CNPJ de quem recebeu = o do favorecido, no mesmo dia e na mesma
+    # conta: o mesmo fornecedor recebe de várias empresas.
+    atribuir(lambda c: c["docrec"] and c["date"] and c["conta"])
     # Favorecido = recebedor é fraco sozinho; `fav` só existe com a conta
     # batendo, e aqui ainda exige a data.
     atribuir(lambda c: c["fav"] and c["date"])
@@ -348,7 +355,7 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     def motivo(pe):
         m = pe["match"]
         t = []
-        if m["ocnf"]:
+        if m["ocnf"] or m.get("ocerp"):
             t.append("OC/NF")
         if m.get("docnum") or m.get("docnf"):
             t.append("nº do documento")

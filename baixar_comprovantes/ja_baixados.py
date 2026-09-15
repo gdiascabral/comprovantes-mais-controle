@@ -88,8 +88,10 @@ class Registro:
         # O CPF/CNPJ de quem recebeu, só dígitos: desempata no Anexar o que o
         # nome não desempata. Fica neste arquivo local, ao lado dos PDFs que
         # já o trazem impresso.
-        documento = re.sub(r"\D", "", str(doc_recebedor or ""))
-        if documento:
+        bruto = str(doc_recebedor or "")
+        documento = re.sub(r"\D", "", bruto)
+        # Só documento INTEIRO: mascarado sobraria o miolo, que nunca casa.
+        if "*" not in bruto and len(documento) in (11, 14):
             linha["doc_recebedor"] = documento
         self._dados[chave_do_item] = linha
 
