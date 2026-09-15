@@ -126,10 +126,100 @@ def test_a_planilha_sai_do_periodo_da_busca_e_avisa_se_a_tela_mudou():
 
 
 def test_o_aviso_de_anexos_nao_lidos_diz_quantos():
-    assert confirmacao.aviso_de_anexos_nao_lidos(0) == ""
-    assert confirmacao.aviso_de_anexos_nao_lidos(2) == (
+    assert confirmacao.aviso_de_anexos_nao_lidos(set()) == ""
+    assert confirmacao.aviso_de_anexos_nao_lidos({"u1", "u2"}) == (
         "2 anexo(s) não foram lidos: a forma de pagar dessas linhas pode "
         "estar errada")
+
+
+# ==========================================================================
+# Anexo que não foi lido pesa na LINHA, e não só no aviso do topo
+# ==========================================================================
+URL_NF = "https://exemplo.invalid/nota-1234.pdf"
+NOTA = {"filename": "nota 1234", "tagName": "Nota Fiscal", "extension": ".pdf",
+        "downloadUrl": URL_NF}
+
+
+def _com_nota(**extra):
+    """Pix de CNPJ na chave (a remessa leva sem cadastro de Contatos) e uma
+    nota anexada — que pode ter o boleto dentro."""
+    return _lanc("L1", paidToBankAccount="PIX CNPJ: 11.222.333/0001-81", **extra)
+
+
+def test_linha_com_anexo_nao_lido_sai_atencao_e_a_remessa_nao_marca():
+    """NF e boleto no mesmo PDF que não baixou: sem o texto, a linha vira o
+    Pix do cadastro e saía APTO, verde e marcada — o boleto pago de novo."""
+    res = relatorio.montar_registros([_com_nota()], {"T-L1": [NOTA]}, {}, {},
+                                     anexos_nao_lidos={URL_NF})
+    reg, = res.contas["CONTA A"]
+    assert reg["status"] == "ATENÇÃO — anexo não lido"
+    assert "nota 1234" in reg["obs"]
+    c, = remessa_dia.preparar(res.contas, {}, quando=HOJE)["CONTA A"]
+    assert c.pode and not c.marcado, "a remessa só marca APTO"
+
+    # O controle: a mesma linha, com o anexo lido, sai APTA e marcada.
+    lida = relatorio.montar_registros([_com_nota()], {"T-L1": [NOTA]}, {}, {})
+    reg, = lida.contas["CONTA A"]
+    assert reg["status"] == "APTO"
+    c, = remessa_dia.preparar(lida.contas, {}, quando=HOJE)["CONTA A"]
+    assert c.marcado
+
+
+def test_a_remontagem_leva_o_conjunto_de_anexos_nao_lidos():
+    e = _entradas([_com_nota()], anexos={"T-L1": [NOTA]})
+    e.anexos_nao_lidos = {URL_NF}
+    reg, = confirmacao.remontar(e).contas["CONTA A"]
+    assert reg["status"] == "ATENÇÃO — anexo não lido"
+    reg, = confirmacao.remontar(e, set()).contas["CONTA A"]
+    assert reg["status"] == "ATENÇÃO — anexo não lido"
+
+
+# ==========================================================================
+# "Documento declara reembolso": o favorecido pode ser a própria pessoa
+# ==========================================================================
+CPF_SINTETICO = "52998224725"
+CUPOM = {"T-L1": [{"filename": "cupom", "tagName": None, "extension": ".jpg",
+                   "downloadUrl": "https://exemplo.invalid/cupom"}]}
+
+
+def _reembolso_declarado(**extra):
+    return _lanc("L1", favorecido="FULANA MODELO DE SOUZA",
+                 paidToBankAccount="PIX EMAIL fulana@exemplo.com",
+                 documentNumber="REEMBOLSO FULANA MODELO", **extra)
+
+
+def test_reembolso_declarado_para_o_proprio_favorecido_nao_alarma():
+    """O lançamento já está no nome da pessoa que o documento manda
+    reembolsar: não há de quem duvidar. A régua é a do `reembolso` — nome igual
+    ou começo em fronteira de palavra, e CPF que fecha nos Contatos."""
+    participantes = {"FULANA MODELO DE SOUZA": CPF_SINTETICO}
+    reg, = relatorio.montar_registros(
+        [_reembolso_declarado()], CUPOM, {}, {},
+        participantes=participantes).contas["CONTA A"]
+    assert "documento declara reembolso" not in reg["status"]
+    assert "o documento declara REEMBOLSO" not in reg["obs"]
+
+    # Sem Contatos que provem que é pessoa, a régua falha fechada: alarma.
+    reg, = relatorio.montar_registros(
+        [_reembolso_declarado()], CUPOM, {}, {}).contas["CONTA A"]
+    assert reg["status"] == "ATENÇÃO — documento declara reembolso"
+
+
+def test_documento_que_nao_bate_ganha_do_reembolso_declarado():
+    """A contradição concreta (CNPJ da nota × chave Pix) é o alarme mais
+    forte; o aviso do reembolso continua na Obs."""
+    chave_nfe = "52260711222333000144550010000059090001234567"
+    anexos = {"T-L1": [{"filename": chave_nfe, "tagName": None,
+                        "extension": ".pdf",
+                        "downloadUrl": "https://exemplo.invalid/nfe"}]}
+    item = _lanc("L1", favorecido="LOJA MODELO SA",
+                 paidToBankAccount="PIX CNPJ: 99.888.777/0001-66",
+                 documentNumber="REEMBOLSO FULANA MODELO")
+    reg, = relatorio.montar_registros(
+        [item], anexos, {}, {"https://exemplo.invalid/nfe": "texto"}
+    ).contas["CONTA A"]
+    assert reg["status"] == "ATENÇÃO — documento não bate"
+    assert "o documento declara REEMBOLSO FULANA MODELO" in reg["obs"]
 
 
 def test_a_remontagem_usa_os_anexos_ja_lidos():
@@ -171,8 +261,10 @@ class _RegistroFalso:
     duas escritas que a análise NUNCA pode fazer — anotadas, para o teste
     cobrar que ficaram vazias."""
 
-    def __init__(self, enviados=None, mudo=False):
+    def __init__(self, enviados=None, mudo=False, estados=None):
         self.enviados, self.mudo, self.escritas = enviados or {}, mudo, []
+        #: {referencia: (estado da remessa, retorno_estado do item)}
+        self.estados = estados or {}
 
     def maior_ordem_do_dia(self, _quando):
         if self.mudo:
@@ -186,7 +278,9 @@ class _RegistroFalso:
         nsa = self.enviados.get(referencia)
         if not nsa:
             return None
-        remessa = type("R", (), {"nsa": nsa,
+        estado, retorno = self.estados.get(referencia, ("gerado", ""))
+        remessa = type("R", (), {"nsa": nsa, "estado": estado,
+                                 "retorno_estado": retorno,
                                  "gerado_em": _dt.date(2026, 9, 10)})()
         return remessa, None
 
@@ -437,6 +531,61 @@ def test_pergunta_fora_do_lote_que_cai_vira_nao_sei_so_dela():
     assert analise.envio_conferido("L1") is True
     assert analise.envio_conferido("L2") is False
     assert analise.candidato(CONTA, "L2").ja_enviado == ""
+
+
+def _linha_analisada(registro):
+    contas = {CONTA: [_registro("L2")]}
+    analise = confirmacao.analisar_remessa(
+        contas, {}, carregar_mapas=_mapas, abrir_historico=lambda: registro,
+        quando=HOJE)
+    grupo, = confirmacao.grupos_da_confirmacao(
+        relatorio.Resultado(contas, []), analise, [])
+    return grupo.entram[0]
+
+
+def test_ja_saiu_em_remessa_rejeitada_nasce_marcado_e_diz_o_estado():
+    """O boleto que o banco rejeitou nascia desmarcado e vencia sem pagar."""
+    linha = _linha_analisada(_RegistroFalso(
+        enviados={"L2": 7}, estados={"L2": ("rejeitado", "rejeitado")}))
+    assert (f"{JA_SAIU} — rejeitado" in linha.situacao)
+    assert linha.estado == "atencao", "âmbar continua: é o mesmo título"
+    assert confirmacao.marcada_de_inicio(linha) is True
+
+
+def test_ja_saiu_em_remessa_viva_nao_rejeitada_continua_desmarcado():
+    linha = _linha_analisada(_RegistroFalso(
+        enviados={"L2": 7}, estados={"L2": ("enviado", "")}))
+    assert f"{JA_SAIU} — enviado" in linha.situacao
+    assert confirmacao.marcada_de_inicio(linha) is False
+
+
+def test_remessa_rejeitada_com_este_pagamento_pago_nao_marca():
+    """"Rejeitado" na remessa quer dizer que UM item foi recusado. Este aqui o
+    banco pagou: marcar seria pagar duas vezes. O estado do ITEM decide."""
+    linha = _linha_analisada(_RegistroFalso(
+        enviados={"L2": 7}, estados={"L2": ("rejeitado", "ok")}))
+    assert "rejeitado" in linha.situacao and "ok" in linha.situacao
+    assert confirmacao.marcada_de_inicio(linha) is False
+
+
+def test_analise_que_quebra_por_outro_motivo_nao_culpa_o_registro(monkeypatch):
+    """Um defeito no `preparar` não é queda do registro: o aviso diz o que
+    foi, e nenhuma linha fica verde sem ter sido conferida."""
+    def quebra(*_a, **_k):
+        raise ValueError("defeito no preparar")
+
+    monkeypatch.setattr(confirmacao.remessa_dia, "preparar", quebra)
+    contas = {CONTA: [_registro("L1"), _registro("L2")]}
+    analise = confirmacao.analisar_remessa(
+        contas, {}, carregar_mapas=_mapas, abrir_historico=_RegistroFalso,
+        quando=HOJE)
+    assert analise.avisos == ["a análise da remessa falhou: ValueError"]
+    assert analise.envios_nao_conferidos == {"L1", "L2"}
+    grupo, = confirmacao.grupos_da_confirmacao(
+        relatorio.Resultado(contas, []), analise, [])
+    for linha in grupo.entram:
+        assert confirmacao.NAO_CONFERI_ENVIO in linha.situacao
+        assert linha.estado == "atencao"
 
 
 def test_sem_registro_a_linha_diz_que_nao_conferiu_e_fica_ambar():

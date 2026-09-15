@@ -978,7 +978,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      incluir=(), excluir=(), pix_reembolso=None,
                      urls_ocr=(), regras_fornecedor=None,
                      ids_nao_confirmados=(), participantes=None,
-                     cadastro_reembolso=None) -> Resultado:
+                     cadastro_reembolso=None, anexos_nao_lidos=()) -> Resultado:
     """Transforma lançamentos do ERP em linhas de planilha.
 
     `anexos`             {tradePayableId: [anexo]}
@@ -994,10 +994,15 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                          quem recebe um REEMBOLSO; o documento do fornecedor
                          continua sendo resolvido na remessa
     `cadastro_reembolso` o `reembolso.carregar()` do arquivo local
+    `anexos_nao_lidos`   `downloadUrl` dos anexos que deviam ter sido lidos e
+                         não foram (download que falhou). A linha cujo título
+                         tem um deles sai "ATENÇÃO — anexo não lido": a forma
+                         de pagar dela foi decidida sem o documento
     """
     pix_reembolso = pix_reembolso or {}
     regras_forn = regras_fornecedor or {}
     ids_nao_confirmados = {str(i) for i in ids_nao_confirmados}
+    anexos_nao_lidos = set(anexos_nao_lidos or ())
     registros, omitidos = defaultdict(list), []
 
     for ordem, item in enumerate(lancamentos):
@@ -1299,21 +1304,44 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                   "PAGAR_PARA": "APTO* (reembolso)"}.get(cls, "APTO")
         if not dados:
             status = "ATENÇÃO — sem dados de pgto"
-        if divergiu:
-            status = "ATENÇÃO — documento não bate"
         # O documento diz REEMBOLSO e não há aviso "PAGAR PARA": o favorecido
         # é quem vendeu (a loja do cupom), e a chave é a do cadastro DELE — mas
         # o dinheiro pode ser de quem pagou do bolso. Até 14/09/2026 o único
         # sinal disso era o "NF REEMBOLSO FULANA" na descrição, que era
         # defeito e saiu; sem este alarme a linha ia APTA e MARCADA para a
         # remessa (`remessa_dia.preparar` só marca status "APTO…").
+        # Não alarma quando o nome depois de REEMBOLSO é o PRÓPRIO favorecido,
+        # pela régua do `reembolso.pessoa_e_o_favorecido` (nome igual ou começo
+        # em fronteira de palavra, e CPF que fecha nos Contatos — sem Contatos,
+        # falha fechada e alarma). A régua lê o nome de um aviso "PAGAR PARA",
+        # então o nome do documento entra como um: usar a régua, e não uma
+        # cópia dela. Vem ANTES do `divergiu`, para "documento não bate" — a
+        # contradição concreta — ganhar do alarme; a Obs guarda os dois.
         if (cls != "PAGAR_PARA" and not item.get("paid")
                 and documento_declara_reembolso(item, overview)):
-            status = "ATENÇÃO — documento declara reembolso"
             quem = quem_o_documento_diz_reembolsar(item, overview)
+            e_o_favorecido = bool(quem) and reembolso.pessoa_e_o_favorecido(
+                [{"filename": f"PAGAR PARA {quem}"}], favorecido, participantes)
+            if not e_o_favorecido:
+                status = "ATENÇÃO — documento declara reembolso"
+                obs = " · ".join(filter(None, [
+                    f"o documento declara REEMBOLSO{' ' + quem if quem else ''}: "
+                    "conferir se o favorecido é mesmo quem recebe", obs]))
+        # Anexo que devia ser lido e não baixou: a forma de pagar desta linha
+        # saiu SEM ele. NF e boleto no mesmo PDF, sem o texto, viram o Pix do
+        # cadastro — APTO, verde e marcado para a remessa, e o boleto pago de
+        # novo. ATENÇÃO faz a remessa nascer desmarcada, e a Obs diz qual.
+        nao_lidos = [f for f in files
+                     if (f.get("downloadUrl") or "") in anexos_nao_lidos]
+        if nao_lidos and not item.get("paid"):
+            status = "ATENÇÃO — anexo não lido"
+            nomes = ", ".join(f"'{(f.get('filename') or '?').strip()}'"
+                              for f in nao_lidos)
             obs = " · ".join(filter(None, [
-                f"o documento declara REEMBOLSO{' ' + quem if quem else ''}: "
-                "conferir se o favorecido é mesmo quem recebe", obs]))
+                f"anexo não lido: {nomes} — a forma de pagar desta linha foi "
+                "decidida sem ele; abrir o anexo no ERP antes de pagar", obs]))
+        if divergiu:
+            status = "ATENÇÃO — documento não bate"
         if chave_divergente:
             status = "ATENÇÃO — chave do reembolso divergente"
         # Por último entre os alarmes: pagar o valor errado é o pior deles.

@@ -1020,6 +1020,12 @@ class PagamentosDiaFrame(ttk.Frame):
 
     def _t_buscar(self, ini, fim):
         comeco = time.time()
+        # O período da busca ANTERIOR morre aqui. Ele só volta a existir no fim
+        # desta, se ela for completa e não interrompida: uma busca que caiu ou
+        # foi parada no meio deixa detalhes e anexos pela metade — sem a
+        # observação, o "PAGAR À MÃO" nem é detectado —, e o passo 2 recusa
+        # sem período ("Busque os lançamentos primeiro").
+        self._periodo_da_busca = None
         try:
             api = self.anx.garantir_sessao(self._log)
             # garantir_sessao só abre o navegador: quem observa a tela de
@@ -1033,10 +1039,6 @@ class PagamentosDiaFrame(ttk.Frame):
             # Rede de segurança: se a API ignorar o filtro, não deixamos o
             # relatório sair errado em silêncio.
             self.lancamentos = relatorio.filtrar_periodo(brutos, ini, fim, log=self._log)
-            # Junto com os lançamentos, e não no clique: se a busca cair antes
-            # daqui, os lançamentos e o período em memória continuam os da
-            # busca anterior, um de acordo com o outro.
-            self._periodo_da_busca = (ini, fim)
             self._log(f"{len(self.lancamentos)} lançamento(s) no período.")
             if not self.lancamentos:
                 self.q.put(("status", "Nenhum lançamento no período."))
@@ -1086,10 +1088,20 @@ class PagamentosDiaFrame(ttk.Frame):
                           "    O Pix por telefone/e-mail/aleatória vai ficar de "
                           "fora da remessa.")
 
+            if self._parar.is_set():
+                # Mostra as contas do que chegou a ler, mas sem período: o
+                # passo 2 não gera planilha de uma leitura pela metade.
+                self._log("\n[!] Busca interrompida — anexos e detalhes ficaram "
+                          "pela metade. Busque de novo antes de gerar.")
+                self.q.put(("status", "Busca interrompida — busque de novo."))
+            else:
+                self._periodo_da_busca = (ini, fim)
             self.contas = relatorio.resumo_por_conta(self.lancamentos)
             self.q.put(("contas", self.contas))
-            self.q.put(("status", f"Pronto em {_fmt_dur(time.time() - comeco)}. "
-                                  "Marque as contas e clique em Gerar."))
+            if self._periodo_da_busca is not None:
+                self.q.put(("status",
+                            f"Pronto em {_fmt_dur(time.time() - comeco)}. "
+                            "Marque as contas e clique em Gerar."))
             # O que a tela de Início mostra sai daqui: quem contou os
             # lançamentos foi esta rotina, e contar de novo custaria outra
             # sessão do ERP.
@@ -1533,7 +1545,7 @@ class PagamentosDiaFrame(ttk.Frame):
             self.q.put(("status", "Nada a pagar nas contas marcadas."))
             return None
 
-        textos, urls_ocr, nao_lidos = {}, set(), 0
+        textos, urls_ocr, nao_lidos = {}, set(), set()
         if opcoes["cruzar"]:
             textos, urls_ocr, nao_lidos = self._baixar_textos(selecionados)
 
@@ -3242,8 +3254,8 @@ class PagamentosDiaFrame(ttk.Frame):
                     urls.append((url, pdf))
         return urls
 
-    def _baixar_textos(self, selecionados) -> tuple[dict, set, int]:
-        """({downloadUrl: texto}, {urls lidas por OCR}, anexos não lidos).
+    def _baixar_textos(self, selecionados) -> tuple[dict, set, set]:
+        """({downloadUrl: texto}, {urls lidas por OCR}, {urls não lidas}).
 
         Um download serve para tudo: extrair a linha digitável do boleto,
         cruzar valor/fornecedor e achar a chave do aviso de reembolso.
@@ -3253,17 +3265,20 @@ class PagamentosDiaFrame(ttk.Frame):
         que camada de texto: a linha digitável tirada dali só é aceita
         depois de fechar o dígito verificador e o valor (ver `ocr_boleto`).
 
-        Download que devolve nada ou levanta NÃO derruba a leitura: conta como
-        anexo não lido, e o número vira aviso na janela de confirmação
-        (`confirmacao.aviso_de_anexos_nao_lidos`) — a forma de pagar daquela
-        linha foi decidida sem o documento, e isso tem de aparecer.
+        Download que devolve nada ou levanta NÃO derruba a leitura: a URL entra
+        no conjunto de anexos não lidos, que faz duas coisas — a linha daquele
+        título sai "ATENÇÃO — anexo não lido" com o nome do arquivo na Obs
+        (`montar_registros(anexos_nao_lidos=…)`, e aí a remessa não a marca),
+        e a contagem vira aviso no topo da janela
+        (`confirmacao.aviso_de_anexos_nao_lidos`). A forma de pagar daquela
+        linha foi decidida sem o documento, e isso tem de aparecer NELA.
         """
         alvos = self._anexos_a_ler(selecionados)
         if not alvos:
-            return {}, set(), 0
+            return {}, set(), set()
 
         self._log(f"\nBaixando e lendo {len(alvos)} anexo(s) para o cruzamento...")
-        textos, urls_ocr, sem_texto, nao_lidos = {}, set(), 0, 0
+        textos, urls_ocr, sem_texto, nao_lidos = {}, set(), 0, set()
         for i, (url, eh_pdf) in enumerate(alvos, 1):
             if self._parar.is_set():
                 self._log("Interrompido a pedido — o cruzamento fica incompleto.")
@@ -3276,7 +3291,7 @@ class PagamentosDiaFrame(ttk.Frame):
             if not dados:
                 # Não é "sem texto": o documento nem chegou. Fica fora dos
                 # textos e da contagem do OCR, e vira o aviso da janela.
-                nao_lidos += 1
+                nao_lidos.add(url)
                 self.q.put(("progresso", (i, len(alvos))))
                 continue
             texto = relatorio.texto_de_pdf(dados) if (dados and eh_pdf) else ""
