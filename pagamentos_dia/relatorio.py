@@ -609,6 +609,7 @@ def mesma_chave(a: str, b: str) -> bool:
 _OC_NO_NOME = re.compile(
     r"\b(?:oc|ordem\s+de\s+compra)\s*[:\-–]?\s*n?[ºo°]?\s*(\d{2,7})\b", re.I)
 _DOC_NO_NOME = re.compile(r"\bN[ºo°F]\s*[:\-]?\s*(\d{2,10})\b", re.I)
+_REEMBOLSO = re.compile(r"REEMBOLSO", re.I)
 
 _UTILIDADES = re.compile(
     r"sanesc|saneago|equatorial|enel|celg|cemig|copasa|caesb|energisa|"
@@ -645,14 +646,27 @@ def achar_oc(item: dict, files, comentario: str = "", overview=None) -> str:
 
 
 def achar_doc(item: dict, files, overview=None) -> str:
+    """O número da nota: o campo do lançamento, o nome do anexo, o detalhe.
+
+    "REEMBOLSO FULANO" no campo do documento não é número de nota — é quem
+    preencheu avisando que não há nota. O filtro vale para as TRÊS fontes:
+    enquanto só a primeira o tinha, o detalhe (que traz o mesmo texto)
+    devolvia a frase inteira, a descrição saía "NF REEMBOLSO FULANO" e a
+    conferência procurava uma nota que não existe. No nome do anexo o número
+    ao lado de "Nº" num arquivo de reembolso não é o da nota, pelo mesmo
+    motivo."""
     doc = (item.get("documentNumber") or "").strip()
-    if doc and not re.search(r"REEMBOLSO", doc, re.I):
+    if doc and not _REEMBOLSO.search(doc):
         return doc
     for f in files:
-        m = _DOC_NO_NOME.search(f.get("filename") or "")
+        nome = f.get("filename") or ""
+        if _REEMBOLSO.search(nome):
+            continue
+        m = _DOC_NO_NOME.search(nome)
         if m:
             return m.group(1)
-    return str((overview or {}).get("documentNumber") or "").strip()
+    doc = str((overview or {}).get("documentNumber") or "").strip()
+    return "" if _REEMBOLSO.search(doc) else doc
 
 
 def centro_de_custo(item: dict) -> str:
