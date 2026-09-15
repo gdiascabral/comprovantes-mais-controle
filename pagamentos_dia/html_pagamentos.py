@@ -64,13 +64,15 @@ _RODAPE_MAX_LINHAS = 4
 SUBTITULO_GERAL = "vencimentos em aberto no Mais Controle - todas as contas"
 
 #: Até quantos caracteres a descrição do HTML geral vai para o campo de
-#: descrição do banco. No Sicoob o campo deixou digitar 140, mas "vira e mexe
-#: ele limita" (dono, 14/09/2026): um limite que muda sem aviso é descoberto
-#: na hora de colar, com a fila de pagamentos parada. Por isso as contas
-#: Sicoob saem com folga, em 100; o Inter aceita bem mais, e as demais contas
-#: ficam em 140. Quem aplica é `descricao_para_colar`, sem cortar NF nem OC.
-LIMITE_DESCRICAO_SICOOB = 100
-LIMITE_DESCRICAO = 140
+#: descrição do banco. O Inter aceita bem mais (dono, 14/09/2026), e só a
+#: conta que diz INTER no nome leva 140. Todas as outras levam 100: no Sicoob
+#: o campo deixou digitar 140, mas "vira e mexe ele limita", e um limite que
+#: muda sem aviso é descoberto na hora de colar. O lado seguro é o curto —
+#: com a regra ao contrário ("SICOOB no nome → 100"), a conta Sicoob cujo
+#: nome não dissesse SICOOB levava 140, e o banco podia cortar justamente a
+#: NF e a OC do fim. Quem aplica é `descricao_para_colar`, sem cortar NF nem OC.
+LIMITE_DESCRICAO_INTER = 140
+LIMITE_DESCRICAO = 100
 
 _CENTAVO = Decimal("0.01")
 _PLACEHOLDER = re.compile(r"__([A-Z][A-Z_]*[A-Z])__")
@@ -138,39 +140,98 @@ def para_colar(texto) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-#: "(Reembolso Fulano)" inteiro, e "REEMBOLSO FULANO" até o próximo separador
-#: do texto cru (antes de a limpeza apagar os separadores). Quem recebe o
-#: reembolso não é informação para o extrato do banco (dono, 14/09/2026).
+#: Quem recebe o reembolso não é informação para o extrato do banco (dono,
+#: 14/09/2026). "(Reembolso Fulano)" sai inteiro; fora de parênteses sai a
+#: palavra "reembolso" e até `_MAX_PALAVRAS_DE_QUEM` palavras só de letras
+#: depois dela — o nome. Tirar "até o próximo separador" apagava o que vinha
+#: depois: "Reembolso material QD 98 LT 97 casa 2" perdia o lote.
 _REEMBOLSO_ENTRE_PARENTESES = re.compile(r"\([^()]*reembols[^()]*\)", re.I)
-_REEMBOLSO_E_QUEM = re.compile(r"\breembols\w*\s*[:\-–—]?\s*[^\-–—|/,;()\n]*",
-                               re.I)
+_MAX_PALAVRAS_DE_QUEM = 3
+#: Palavras que abrem centro de custo ou imóvel. O filtro do reembolso para
+#: nelas: o que vem depois é o lote, e não o nome de quem recebe.
+PALAVRAS_DE_IMOVEL = frozenset({"QD", "LT", "TB", "RR", "RPB", "CASA", "CS",
+                                "LOTE", "QUADRA"})
+_PEDACOS = re.compile(r"[A-Za-z0-9]+|\s+|[^A-Za-z0-9\s]")
+_SO_LETRAS = re.compile(r"[A-Za-z]+")
+
+
+def _sem_reembolso(s: str) -> str:
+    """O texto (já sem acento) sem a menção de reembolso.
+
+    Depois de "reembolso" saem, no máximo, três palavras só de letras; para
+    antes disso em palavra com dígito, em palavra de imóvel
+    (`PALAVRAS_DE_IMOVEL`) e em pontuação — "REEMBOLSO FULANO - CIMENTO"
+    guarda o "CIMENTO". O separador colado na palavra ("Reembolso: Fulano")
+    vai junto."""
+    pedacos = _PEDACOS.findall(_REEMBOLSO_ENTRE_PARENTESES.sub(" ", s))
+
+    def proximo(i):
+        while i < len(pedacos) and pedacos[i].isspace():
+            i += 1
+        return i
+
+    saida, i = [], 0
+    while i < len(pedacos):
+        if not pedacos[i].casefold().startswith("reembols"):
+            saida.append(pedacos[i])
+            i += 1
+            continue
+        i += 1
+        j = proximo(i)
+        if j < len(pedacos) and pedacos[j] in (":", "-", "–", "—"):
+            i = j + 1
+        for _ in range(_MAX_PALAVRAS_DE_QUEM):
+            j = proximo(i)
+            if (j >= len(pedacos) or not _SO_LETRAS.fullmatch(pedacos[j])
+                    or pedacos[j].upper() in PALAVRAS_DE_IMOVEL):
+                break
+            i = j + 1
+        saida.append(" ")
+    return "".join(saida)
 
 
 def limite_da_descricao(conta) -> int:
-    """Quantos caracteres cabem na descrição do banco desta conta."""
-    return (LIMITE_DESCRICAO_SICOOB if "sicoob" in relatorio.chave(conta or "")
+    """Quantos caracteres cabem na descrição do banco desta conta. INTER como
+    palavra inteira: "CONTA INTERNA" não é do Inter e fica no lado seguro."""
+    return (LIMITE_DESCRICAO_INTER
+            if re.search(r"\binter\b", relatorio.chave(conta or ""))
             else LIMITE_DESCRICAO)
 
 
-def _palavras(texto) -> list[str]:
+#: Uma palavra do banco: letras e dígitos, mais o hífen COLADO entre dois
+#: dígitos. "LT 10-11" partido em "LT 10 11" faz o casamento do Anexar ler
+#: "LT 10" e anexar o comprovante no lote errado; o hífen que separa palavras
+#: ("ESCRITORIO - X", "ESCRITORIO-X") continua saindo.
+_PALAVRA = re.compile(r"(?:[A-Za-z0-9]|(?<=\d)-(?=\d))+")
+
+
+def _palavras(texto, tirar_reembolso: bool = True) -> list[str]:
     """As palavras que vão ao banco: sem acento, sem menção de reembolso e só
-    letra e número — todo o resto, INCLUSIVE o hífen, é separador."""
+    letra, número e o hífen entre dígitos — todo o resto é separador.
+
+    O centro de custo passa com `tirar_reembolso=False`: ele é o nome do
+    imóvel ou da obra no cadastro, não recado de quem lançou, e é por ele que
+    o Anexar casa o comprovante."""
     s = relatorio.sem_acento(str(texto or ""))
-    s = _REEMBOLSO_ENTRE_PARENTESES.sub(" ", s)
-    s = _REEMBOLSO_E_QUEM.sub(" ", s)
-    return re.findall(r"[A-Za-z0-9]+", s)
+    if tirar_reembolso:
+        s = _sem_reembolso(s)
+    return _PALAVRA.findall(s)
 
 
-#: Pontuação ENTRE dois dígitos, dentro do número da NF ou da OC.
-_PONTUACAO_ENTRE_DIGITOS = re.compile(r"(?<=\d)[^\sA-Za-z0-9]+(?=\d)")
+#: O ponto de milhar dentro do número da NF ou da OC ("1.234").
+_PONTO_ENTRE_DIGITOS = re.compile(r"(?<=\d)\.(?=\d)")
 
 
 def _palavras_do_numero(texto) -> list[str]:
-    """As palavras do nº da NF ou da OC. A pontuação entre dígitos SOME, sem
-    virar espaço: "1.234" partido em "1 234" deixa de bater com a nota e com
-    o casamento do Anexar. O resto segue a regra de `_palavras`."""
-    s = relatorio.sem_acento(str(texto or ""))
-    return _palavras(_PONTUACAO_ENTRE_DIGITOS.sub("", s))
+    """As palavras do nº da NF ou da OC.
+
+    Só o PONTO entre dígitos some sem virar espaço: "1.234" partido em
+    "1 234" deixa de bater com a nota e com o casamento do Anexar. Barra e
+    hífen entre dígitos separam números — "5678/5679" são duas notas, e
+    juntá-las dava "56785679", um número que não existe —, então aqui o hífen
+    colado também vira espaço, ao contrário do centro de custo."""
+    s = _PONTO_ENTRE_DIGITOS.sub("", relatorio.sem_acento(str(texto or "")))
+    return [p for palavra in _palavras(s) for p in palavra.split("-") if p]
 
 
 def _que_cabem(palavras, espaco: int) -> list[str]:
@@ -202,10 +263,13 @@ def descricao_para_colar(registro, conta) -> str:
       é de medição de mão de obra (a forma curta que a planilha já mostra);
     - água e luz continuam como na planilha (CC + descrição + OC): ali o
       "número da NF" é o da fatura e não identifica nada;
-    - sem menção de reembolso, sem acento e sem caractere especial (hífen
-      incluído), e sem repetir o centro de custo que a descrição já traz; no
-      nº da NF e da OC a pontuação entre dígitos some sem virar espaço
-      ("1.234" é "1234", não "1 234");
+    - sem menção de reembolso, sem acento e sem caractere especial (o hífen
+      que separa palavras incluído; o COLADO entre dígitos, como em
+      "LT 10-11", fica), e sem repetir o centro de custo que a descrição já
+      traz; no
+      nº da NF e da OC só o ponto entre dígitos some sem virar espaço
+      ("1.234" é "1234", não "1 234"), e barra ou hífen separam números
+      ("5678/5679" é "5678 5679");
     - no tamanho do banco (`limite_da_descricao`), cortando em fronteira de
       palavra. A NF e a OC NUNCA são cortadas — são o que liga o pagamento ao
       documento; quem cede é a descrição do lançamento e, se ainda não
@@ -213,7 +277,7 @@ def descricao_para_colar(registro, conta) -> str:
     """
     r = registro or {}
     utilidade = bool(r.get("utilidade"))
-    cc = _palavras(r.get("centro_custo"))
+    cc = _palavras(r.get("centro_custo"), tirar_reembolso=False)
     nf = [] if utilidade else _palavras_do_numero(r.get("nf"))
     oc = _palavras_do_numero(r.get("oc_da_descricao"))
     fixos = (["NF", *nf] if nf else []) + (["OC", *oc] if oc else [])

@@ -8,6 +8,7 @@ import re
 
 from pagamentos_dia import html_pagamentos as hp
 from pagamentos_dia import relatorio
+from pagamentos_dia import remessa_dia
 
 
 def anexo(nome, tag=None, ext=".pdf", url=None):
@@ -50,16 +51,16 @@ def _boleto_sem_anexo(**mudancas):
 def test_documento_de_reembolso_continua_valendo_como_compra_documentada():
     """Em 73c52ce o detalhe devolvia "REEMBOLSO FULANO" como NF, e isso fazia a
     linha ser paga pela chave do cadastro. Tirar a falsa NF da descrição não
-    pode tirar a linha da planilha: o desfecho tem de ser o mesmo de antes
-    (tipo, dados, obs e status conferidos contra a base, não inventados)."""
+    pode tirar a linha da planilha: tipo, dados e a Obs da forma de pagar são
+    os que a base produz para o mesmo lançamento. O status deixou de ser o da
+    base de propósito — ver `test_reembolso_declarado_sem_aviso_vira_atencao…`."""
     detalhe = {"1": {"documentNumber": "REEMBOLSO FULANO MODELO"}}
     res = relatorio.montar_registros([_boleto_sem_anexo()], {}, detalhe, {})
     assert not res.omitidos
     linha = res.contas[CONTA][0]
-    assert (linha["tipo"], linha["dados"], linha["obs"], linha["status"]) == (
-        "Pix", "fornecedor@exemplo.com",
-        "Sem boleto anexado — pagar pela chave Pix do cadastro",
-        "ATENÇÃO — sem anexo")
+    assert (linha["tipo"], linha["dados"]) == ("Pix", "fornecedor@exemplo.com")
+    assert "Sem boleto anexado — pagar pela chave Pix do cadastro" in linha["obs"]
+    assert linha["status"].startswith("ATENÇÃO")
     assert linha["descricao"] == "QD 99 LT 99" and linha["nf"] == ""
 
 
@@ -75,6 +76,69 @@ def test_sem_nf_sem_oc_e_sem_reembolso_continua_fora():
     res = relatorio.montar_registros([_boleto_sem_anexo(documentNumber="")],
                                      {}, {}, {})
     assert not res.contas and len(res.omitidos) == 1
+
+
+# ------------------------ reembolso declarado sem aviso: quem recebe está em dúvida
+#: O mesmo CNPJ sintético de tests/test_remessa_dia.py (o exemplo de manual).
+CNPJ_SINTETICO = "11222333000181"
+CUPOM = {"t1": [anexo("cupom", ext=".jpg")]}
+DETALHE_REEMBOLSO = {"1": {"documentNumber": "REEMBOLSO FULANA MODELO"}}
+AVISO = ("o documento declara REEMBOLSO FULANA MODELO: conferir se o "
+         "favorecido é mesmo quem recebe")
+
+
+def _loja(**mudancas):
+    """A loja é o favorecido, a forma é Boleto, o anexo é a foto do cupom e o
+    cadastro tem o Pix DA LOJA — mas o documento diz que o dinheiro é da Fulana."""
+    return _boleto_sem_anexo(**dict({"paidTo": "LOJA MODELO SA",
+                                     "paidToBankAccount": "PIX EMAIL loja@exemplo.com",
+                                     "documentNumber": "REEMBOLSO FULANA MODELO"},
+                                    **mudancas))
+
+
+def _candidato(res):
+    c, = remessa_dia.preparar(res.contas,
+                              participantes={"LOJA MODELO SA": CNPJ_SINTETICO})[CONTA]
+    return c
+
+
+def test_reembolso_declarado_sem_aviso_vira_atencao_e_nasce_desmarcado():
+    """Sem o "NF REEMBOLSO FULANA" na descrição, nada dizia que o dinheiro era
+    da Fulana: a linha pagava o Pix da loja como APTO e ia MARCADA para a
+    remessa. Agora é ATENÇÃO, com o nome na Obs, e a remessa pede um clique."""
+    res = relatorio.montar_registros([_loja()], CUPOM, DETALHE_REEMBOLSO, {})
+    linha = res.contas[CONTA][0]
+    assert linha["status"] == "ATENÇÃO — documento declara reembolso"
+    assert AVISO in linha["obs"]
+    c = _candidato(res)
+    assert c.impedimento == "" and not c.marcado
+
+
+def test_reembolso_declarado_so_no_lancamento_tambem_vira_atencao():
+    res = relatorio.montar_registros([_loja()], CUPOM, {}, {})
+    linha = res.contas[CONTA][0]
+    assert linha["status"] == "ATENÇÃO — documento declara reembolso"
+    assert AVISO in linha["obs"]
+    assert not _candidato(res).marcado
+
+
+def test_a_mesma_linha_com_nf_de_verdade_continua_apta_e_marcada():
+    """O controle: sem isto, o desmarcado acima poderia vir de outra trava."""
+    res = relatorio.montar_registros([_loja(documentNumber="5678")], CUPOM, {}, {})
+    assert res.contas[CONTA][0]["status"] == "APTO"
+    c = _candidato(res)
+    assert c.impedimento == "" and c.marcado
+
+
+def test_aviso_pagar_para_nao_ganha_este_alarme():
+    """Com o aviso "PAGAR PARA", quem recebe já é decidido pelo aviso."""
+    aviso = {"t1": [anexo("PAGAR PARA FULANA MODELO")]}
+    res = relatorio.montar_registros([_loja()], aviso, DETALHE_REEMBOLSO, {})
+    linhas = res.contas.get(CONTA, []) + res.omitidos
+    assert linhas
+    for linha in res.contas.get(CONTA, []):
+        assert "documento declara reembolso" not in linha["status"]
+        assert "o documento declara REEMBOLSO" not in linha["obs"]
 
 
 def test_nf_de_verdade_no_nome_do_anexo_continua_valendo():
@@ -181,11 +245,19 @@ def test_nf_e_oc_vao_as_duas():
     assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678 OC 1234"
 
 
-def test_nf_e_oc_nao_se_partem_na_pontuacao_entre_digitos():
+def test_nf_e_oc_nao_se_partem_no_ponto_de_milhar():
     """"NF 1 234" não bate com a nota nem com o casamento do Anexar: dentro do
-    número, a pontuação entre dígitos some sem virar espaço."""
-    r = _partes(nf="1.234", oc="000.123-4")
-    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 1234 OC 0001234"
+    número, o ponto entre dígitos some sem virar espaço."""
+    r = _partes(nf="1.234", oc="000.123")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 1234 OC 000123"
+
+
+def test_barra_e_hifen_entre_numeros_da_nf_separam_dois_numeros():
+    """"5678/5679" são duas notas; juntas viravam "56785679", que não existe."""
+    r = _partes(nf="5678/5679", oc="000.123-4")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678 5679 OC 000123 4"
+    r = _partes(nf="5678-5679")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678 5679"
 
 
 def test_separador_que_nao_esta_entre_digitos_continua_virando_espaco():
@@ -210,12 +282,12 @@ def test_sem_nf_nem_oc_vai_a_descricao_do_lancamento():
 
 def test_mao_de_obra_sem_nf_nem_oc_sai_contrato_e_medicao():
     """A forma curta que a planilha já mostra: o dono pediu sempre enxugar."""
-    r = _partes(descricao="Servico de pintura - 4412 - Medição: 7")
-    assert hp.descricao_para_colar(r, SICOOB) == "QD 99 LT 99 C 4412 M 7"
+    r = _partes(descricao="Servico de pintura - 1234 - Medição: 7")
+    assert hp.descricao_para_colar(r, SICOOB) == "QD 99 LT 99 C 1234 M 7"
 
 
 def test_mao_de_obra_com_nf_continua_saindo_pela_nf():
-    r = _partes(nf="5678", descricao="Servico de pintura - 4412 - Medição: 7")
+    r = _partes(nf="5678", descricao="Servico de pintura - 1234 - Medição: 7")
     assert hp.descricao_para_colar(r, SICOOB) == "QD 99 LT 99 NF 5678"
 
 
@@ -231,6 +303,16 @@ def test_hifen_acento_e_pontuacao_saem():
         "QD 99 LT 01 QD 99 LT 02 Instalacao eletrica CASA 2 fase 1 etapa no3")
 
 
+def test_hifen_entre_digitos_fica_e_o_que_separa_palavras_sai():
+    """"LT 10-11" partido em "LT 10 11" faz o Anexar ler "LT 10" e anexar no
+    lote errado. O hífen colado entre dígitos fica; o que separa palavras sai."""
+    r = _partes(cc="QD 99 LT 10-11", descricao="Muro de divisa 3-4 - ESCRITORIO-X")
+    assert hp.descricao_para_colar(r, INTER) == (
+        "QD 99 LT 10-11 Muro de divisa 3-4 ESCRITORIO X")
+    r = _partes(cc="QD 99 LT 10 - 11")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 10 11"
+
+
 def test_o_reembolso_nao_vai_para_o_banco():
     casos = {
         "Cimento e areia (Reembolso Fulano Modelo)": "QD 99 LT 99 Cimento e areia",
@@ -241,6 +323,27 @@ def test_o_reembolso_nao_vai_para_o_banco():
     for descricao, esperado in casos.items():
         obtido = hp.descricao_para_colar(_partes(descricao=descricao), INTER)
         assert obtido == esperado, descricao
+
+
+def test_o_filtro_do_reembolso_nao_apaga_o_lote_nem_o_que_tem_numero():
+    """Tira "reembolso" e até três palavras só de letras depois dela (o nome
+    de quem recebe); para em palavra com dígito ou de imóvel."""
+    casos = {
+        "Reembolso material QD 98 LT 97 casa 2": "QD 99 LT 99 QD 98 LT 97 casa 2",
+        "Reembolso Fulana 3 parcelas": "QD 99 LT 99 3 parcelas",
+        "Reembolso de despesas com cimento e areia": "QD 99 LT 99 cimento e areia",
+        "reembolso lote 5 muro": "QD 99 LT 99 lote 5 muro",
+        "Reembolso Fulana CASA 2": "QD 99 LT 99 CASA 2",
+        "Reembolso Fulana cs 2": "QD 99 LT 99 cs 2",
+    }
+    for descricao, esperado in casos.items():
+        obtido = hp.descricao_para_colar(_partes(descricao=descricao), INTER)
+        assert obtido == esperado, descricao
+
+
+def test_o_centro_de_custo_nao_passa_pelo_filtro_do_reembolso():
+    r = _partes(cc="REEMBOLSOS DIVERSOS", descricao="Material")
+    assert hp.descricao_para_colar(r, INTER) == "REEMBOLSOS DIVERSOS Material"
 
 
 def test_nf_de_reembolso_nao_vira_nf():
@@ -269,14 +372,17 @@ def test_agua_e_luz_mantem_a_descricao_e_nao_usam_o_numero_da_fatura():
 _ITENS = " ".join(f"ITEM{n:02d}" for n in range(1, 40))
 
 
-def test_sicoob_corta_em_100_e_as_outras_em_140_na_fronteira_de_palavra():
+def test_inter_corta_em_140_e_qualquer_outra_em_100_na_fronteira_de_palavra():
+    """O lado seguro é o curto: conta Sicoob cujo nome não diga SICOOB levava
+    140, e o banco podia cortar justamente a NF e a OC do fim."""
     r = _partes(descricao=_ITENS)
-    sicoob = hp.descricao_para_colar(r, SICOOB)
-    inter = hp.descricao_para_colar(r, INTER)
-    assert sicoob == "QD 99 LT 99 " + " ".join(f"ITEM{n:02d}" for n in range(1, 13))
-    assert inter == "QD 99 LT 99 " + " ".join(f"ITEM{n:02d}" for n in range(1, 19))
-    assert len(sicoob) == 95 and len(inter) == 137
-    assert hp.descricao_para_colar(r, "conta modelo sicoob") == sicoob
+    curta = "QD 99 LT 99 " + " ".join(f"ITEM{n:02d}" for n in range(1, 13))
+    longa = "QD 99 LT 99 " + " ".join(f"ITEM{n:02d}" for n in range(1, 19))
+    assert len(curta) == 95 and len(longa) == 137
+    assert hp.descricao_para_colar(r, INTER) == longa
+    assert hp.descricao_para_colar(r, "conta modelo inter") == longa
+    for conta in (SICOOB, "CONTA MODELO", "CONTA INTERNA MODELO", ""):
+        assert hp.descricao_para_colar(r, conta) == curta, conta
 
 
 _RATEIO = " | ".join(f"QD {n:02d} LT {n:02d}" for n in range(1, 12))
