@@ -1780,3 +1780,94 @@ def test_toda_anotacao_da_baixa_diz_de_onde_saiu():
         for c in chamadas:
             assert "origem=" in c, f"{modulo.__name__}: anotar sem origem"
 
+
+# ------------------------------- CPF/CNPJ de quem recebeu (14/09/2026)
+def test_documento_de_quem_recebeu_no_boleto_sai_do_bloco_beneficiario():
+    """O CPF/CNPJ do PAGADOR também aparece no comprovante; a âncora é o
+    bloco de quem recebeu, como em `favorecido_do_comprovante`."""
+    from baixar_comprovantes import nome_final as nf
+
+    texto = linhas("Beneficiario",
+                   "Nome/Razao Social FORNECEDOR EXEMPLO LTDA",
+                   "Nome Fantasia FORNECEDOR EXEMPLO",
+                   "CPF/CNPJ 11.222.333/0001-81",
+                   "Pagador",
+                   "Nome/Razao social EMPRESA PAGADORA LTDA",
+                   "CPF/CNPJ 44.555.666/0001-00")
+    assert nf.documento_de_quem_recebeu(texto) == "11222333000181"
+
+
+def test_documento_de_quem_recebeu_no_pix_do_inter():
+    from baixar_comprovantes import nome_final as nf
+
+    texto = linhas("Quem recebeu", "Nome Empresa Exemplo",
+                   "CPF/CNPJ 11.222.333/0001-81", "Instituicao Banco Exemplo",
+                   "Quem pagou", "Nome EMPRESA PAGADORA LTDA",
+                   "CPF/CNPJ 44.555.666/0001-00")
+    assert nf.documento_de_quem_recebeu(texto) == "11222333000181"
+
+
+def test_documento_mascarado_ou_ausente_nao_vira_documento():
+    from baixar_comprovantes import nome_final as nf
+
+    assert nf.documento_de_quem_recebeu(linhas(
+        "Quem recebeu", "Nome Fulano", "CPF/CNPJ ***.456.789-**")) == ""
+    assert nf.documento_de_quem_recebeu(linhas(
+        "Credito", "Conta 1.234-5 / FORNECEDOR EXEMPLO")) == ""
+    assert nf.documento_de_quem_recebeu("") == ""
+
+
+def test_o_pix_do_sicoob_anota_o_documento_de_quem_recebeu(tmp_path, monkeypatch):
+    from baixar_comprovantes import ja_baixados
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    detalhe = _pix_sicoob(id_="E0000000000000000000000000000010",
+                          cpf_dest="12345678909")
+    monkeypatch.setattr(sb, "listar_pix", lambda *_a, **_k: [{"id": detalhe["id"]}])
+    monkeypatch.setattr(sb, "detalhar_pix", lambda *_a, **_k: detalhe)
+    monkeypatch.setattr(sb, "html_para_pdf",
+                        lambda _ctx, _html, alvo: alvo.write_bytes(b"%PDF-1.4"))
+
+    class Cli:
+        page = ctx = None
+
+    registro = ja_baixados.Registro(tmp_path)
+    sb._baixar_pix_da_conta(Cli(), "12.345-6", "01/09/2026", "02/09/2026",
+                            tmp_path, sb.Resultado(conta="12.345-6"),
+                            log=lambda _m: None, registro=registro)
+    linha = registro._dados[ja_baixados.chave("sicoob_pix", detalhe["id"], "12.345-6")]
+    assert linha["doc_recebedor"] == "12345678909"
+
+
+def test_toda_anotacao_da_baixa_leva_o_documento_de_quem_recebeu():
+    import re
+
+    from baixar_comprovantes import inter_baixar, sicoob_baixar
+
+    for modulo in (sicoob_baixar, inter_baixar):
+        fonte = pathlib.Path(modulo.__file__).read_text(encoding="utf-8")
+        for c in re.findall(r"registro\.anotar\((.*?)\)\n", fonte, re.S):
+            assert "doc_recebedor=" in c, f"{modulo.__name__}: anotar sem documento"
+
+
+def test_documento_de_quem_recebeu_nao_escorrega_para_o_pagador():
+    """Revisão do #95: bloco de quem recebeu SEM linha de CPF/CNPJ, seguido do
+    bloco do pagador -- a leitura para no bloco seguinte, não pega o dele."""
+    from baixar_comprovantes import nome_final as nf
+
+    assert nf.documento_de_quem_recebeu(linhas(
+        "Beneficiario", "Nome/Razao Social FORNECEDOR EXEMPLO LTDA",
+        "Pagador", "CPF/CNPJ 44.555.666/0001-00")) == ""
+    assert nf.documento_de_quem_recebeu(linhas(
+        "Quem recebeu", "Nome Fulano", "Quem pagou",
+        "CPF/CNPJ 44.555.666/0001-00")) == ""
+
+
+def test_o_registro_so_guarda_documento_inteiro():
+    """Documento que chegar mascarado pela API (só o miolo) não se grava."""
+    from baixar_comprovantes import ja_baixados
+
+    reg = ja_baixados.Registro(pathlib.Path("."))
+    reg.anotar("pix:E9", "10,00 - X - 01-09.pdf", doc_recebedor="***.456.789-**")
+    assert "doc_recebedor" not in reg._dados["pix:E9"]
+

@@ -70,7 +70,7 @@ class Registro:
         return bool(chave_do_item) and chave_do_item in self._dados
 
     def anotar(self, chave_do_item: str, arquivo, *, origem: str = "",
-               recebedor: str | None = "") -> None:
+               recebedor: str | None = "", doc_recebedor: str | None = "") -> None:
         """`origem` é "BANCO:conta" (`SICOOB:12.345-6`, `INTER:<apelido>`) e
         `recebedor` é quem recebeu. Os dois existem para o casamento do Anexar
         (regra do dono, 14/09/2026): PDF que saiu de outra conta não disputa o
@@ -85,6 +85,14 @@ class Registro:
             linha["origem"] = origem
         if recebedor:
             linha["recebedor"] = recebedor
+        # O CPF/CNPJ de quem recebeu, só dígitos: desempata no Anexar o que o
+        # nome não desempata. Fica neste arquivo local, ao lado dos PDFs que
+        # já o trazem impresso.
+        bruto = str(doc_recebedor or "")
+        documento = re.sub(r"\D", "", bruto)
+        # Só documento INTEIRO: mascarado sobraria o miolo, que nunca casa.
+        if "*" not in bruto and len(documento) in (11, 14):
+            linha["doc_recebedor"] = documento
         self._dados[chave_do_item] = linha
 
     def gravar(self) -> None:

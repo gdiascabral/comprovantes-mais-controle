@@ -55,7 +55,8 @@ def test_pdf_ganha_origem_pelo_registro_da_pasta_mae(tmp_path):
     })
     achado = origem.origens_dos_pdfs(dia)
     assert achado["10,00 - OBRA - 02-09.pdf"] == {
-        "origem": ("SICOOB", "123456"), "recebedor": "FORNECEDOR EXEMPLO"}
+        "origem": ("SICOOB", "123456"), "recebedor": "FORNECEDOR EXEMPLO",
+        "doc_recebedor": None}
     assert achado["30,00 - BOLETO - 02-09.pdf"]["origem"] == ("SICOOB", "987654")
     assert achado["40,00 - REEMBOLSO - 02-09.pdf"]["origem"] == ("INTER", "")
     assert "50,00 - OUTRO - 02-09.pdf" not in achado
@@ -91,7 +92,7 @@ def _mapa():
 
 def _empresas():
     return [sicoob_contas.Empresa(
-        nome="EXEMPLO",
+        nome="EXEMPLO", cnpj="12.345.678/0001-95", clientes_erp=["EXEMPLO SPE ALFA"],
         contas=[sicoob_contas.Conta(numero="12.345-6", pasta="SICOOB")])]
 
 
@@ -131,3 +132,45 @@ def test_ponta_a_ponta_titulo_de_pessoa_fisica_nao_leva_pix_da_empresa(tmp_path)
     assert "outra conta" in sem_par[0]["motivo_sem_par"]
     assert resumo == {"pdfs": 1, "pdfs_com_origem": 1,
                       "lancamentos": 1, "lancamentos_com_conta": 1}
+
+
+# ------------------------------------------------ CPF/CNPJ (14/09/2026)
+def test_o_registro_guarda_o_documento_de_quem_recebeu(tmp_path):
+    reg = ja_baixados.Registro(tmp_path)
+    reg.anotar("pix:E3", tmp_path / "10,00 - X - 02-09.pdf", origem="INTER:A",
+               doc_recebedor="11.222.333/0001-81")
+    assert reg._dados["pix:E3"]["doc_recebedor"] == "11222333000181"
+
+
+def test_pdf_e_lancamento_ganham_o_documento(tmp_path):
+    _registro(tmp_path, {
+        "pix:E3": {"arquivo": "10000,00 - EMPRESA PARA Empresa - 08-09.pdf",
+                   "quando": "2026-09-14T10:00:00", "origem": "INTER:A",
+                   "doc_recebedor": "11222333000181"}})
+    pdfs = [matcher.parse_pdf("10000,00 - EMPRESA PARA Empresa - 08-09.pdf")]
+    pend = [{"paidId": "A", "launchId": "L-A", "valor": 1000000, "valores": [1000000],
+             "doc": "", "desc": "", "works": [], "data": "0809",
+             "conta": "EXEMPLO - SICOOB", "favorecido": "Fornecedor  Exemplo"},
+            {"paidId": "B", "launchId": "L-B", "valor": 1000000, "valores": [1000000],
+             "doc": "", "desc": "", "works": [], "data": "0809",
+             "conta": "EXEMPLO - SICOOB", "favorecido": "EXEMPLO SPE ALFA"}]
+    origem.preencher(pend, pdfs, tmp_path, mapa_mc=_mapa(), empresas=_empresas(),
+                     contas_inter=[], documentos={"FORNECEDOR EXEMPLO": "99888777000166"})
+    assert pdfs[0]["doc_recebedor"] == "11222333000181"
+    assert pend[0]["doc_favorecido"] == "99888777000166"
+    # empresa do grupo: o CNPJ vem do contas_sicoob (nome e clientes do ERP)
+    assert pend[1]["doc_favorecido"] == "12345678000195"
+
+
+def test_documentos_do_grupo_saem_do_cadastro_das_empresas():
+    docs = origem.documentos_do_grupo(_empresas())
+    assert docs["EXEMPLO SPE ALFA"] == "12345678000195"
+    assert docs["EXEMPLO"] == "12345678000195"
+
+
+def test_a_oc_do_overview_do_erp():
+    assert origem.ocs_do_overview({"purchaseOrder": {"number": 1111}}) == {"1111"}
+    assert origem.ocs_do_overview({"purchaseOrder": None}) == set()
+    assert origem.ocs_do_overview({}) == set()
+    assert origem.ocs_do_overview(None) == set()
+

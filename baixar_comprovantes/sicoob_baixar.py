@@ -813,7 +813,8 @@ def _baixar_pix_da_conta(cli, numero: str, inicio: str, fim: str,
                 # casar este Pix com lançamento de outra conta.
                 registro.anotar(
                     ja_baixados.chave("sicoob_pix", ident, numero), alvo,
-                    origem=f"SICOOB:{numero}", recebedor=campos["dest"])
+                    origem=f"SICOOB:{numero}", recebedor=campos["dest"],
+                    doc_recebedor=(detalhe.get("destino") or {}).get("cpfCnpj"))
             log(f"    {alvo.name}")
         except Exception as e:                               # noqa: BLE001
             resultado.falhas.append(str(ident))
@@ -869,8 +870,8 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
                     # O favorecido e a Observação só existem DENTRO do
                     # comprovante — a lista do Sicoob não os traz. Por isso
                     # aqui o PDF é lido, e no Inter não: lá o JSON já tem tudo.
-                    campos = nome_final.do_sicoob(item,
-                                                  nome_final.texto_do_pdf(alvo))
+                    texto = nome_final.texto_do_pdf(alvo)
+                    campos = nome_final.do_sicoob(item, texto)
                     alvo = nome_final.renomear(alvo, campos)
                     resultado.baixados.append(alvo)
                     if registro is not None:
@@ -878,7 +879,8 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
                             ja_baixados.chave("sicoob",
                                               item.get("idAgendamento"),
                                               numero), alvo,
-                            origem=f"SICOOB:{numero}", recebedor=campos["dest"])
+                            origem=f"SICOOB:{numero}", recebedor=campos["dest"],
+                            doc_recebedor=nome_final.documento_de_quem_recebeu(texto))
                     log(f"    {alvo.name}")
                 except Exception as e:                       # noqa: BLE001
                     ident = item.get("idAgendamento") or "?"

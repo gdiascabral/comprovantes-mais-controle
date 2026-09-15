@@ -313,3 +313,186 @@ def test_com_pdf_de_outra_conta_fora_sobra_desconhecido_nao_fecha_sozinho():
     assert not certezas and len(duvidas) == 1
     assert duvidas[0]["fora_da_conta"] == 1
 
+
+# ------------------------------------------- identificadores exatos (14/09/2026)
+# Na primeira rodada com a conta de origem (v2.0.202), 21 dúvidas; o dono
+# apontou três que o app podia decidir sozinho, cada uma com um dado EXATO que
+# o casamento não olhava: o nº da UC na descrição, a OC que só existe no
+# overview do ERP e o CPF/CNPJ de quem recebeu. Tudo fictício abaixo.
+
+def test_numero_longo_igual_na_descricao_desempata():
+    """Seis contas de luz de mesmo valor, mesma conta e mesmo lote: só a UC
+    (número longo) diz qual é qual."""
+    pdfs = [_pdf("44,87 - OBRA QD 01 LT 21 UC 111111111111 REF AGO CASA 2 - 08-09.pdf", origem=SICOOB_1),
+            _pdf("44,87 - OBRA QD 01 LT 21 UC 222222222222 REF AGO CASA 1 - 08-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 4487, origem=SICOOB_1, data="0809", works=["OBRA QD 01 LT 21"],
+                        desc="UC 222222222222 REF AGO CASA 1"),
+            _pend_conta("B", 4487, origem=SICOOB_1, data="0809", works=["OBRA QD 01 LT 21"],
+                        desc="UC 111111111111 REF AGO CASA 2")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not duvidas
+    por_id = {c["paidId"]: c["pdf"] for c in certezas}
+    assert por_id["A"].startswith("44,87 - OBRA QD 01 LT 21 UC 222222222222")
+    assert por_id["B"].startswith("44,87 - OBRA QD 01 LT 21 UC 111111111111")
+    assert "nº longo" in {c["paidId"]: c["motivo"] for c in certezas}["A"]
+
+
+def test_numero_longo_sozinho_sem_conta_nem_centro_de_custo_nao_fecha():
+    """Um número de 6+ dígitos pode coincidir (telefone, CEP colado); sem a
+    conta ou o centro de custo junto, não fecha."""
+    pdfs = [_pdf("44,87 - UC 111111111111 - 08-09.pdf"),
+            _pdf("44,87 - OUTRA - 08-09.pdf")]
+    pend = [_pend_conta("A", 4487, data="0809", desc="UC 111111111111"),
+            _pend_conta("B", 4487, data="0809", desc="outra")]
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    assert not certezas
+
+
+def test_oc_que_so_existe_no_erp_casa_com_a_oc_do_pdf():
+    """A OC estava no lançamento (overview), não na descrição."""
+    pdfs = [_pdf("1950,00 - OBRA QD 99 LT 99 OC 2222 - 09-09.pdf", origem=SICOOB_1),
+            _pdf("1950,00 - OBRA QD 99 LT 99 OC 1111 - 09-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 195000, origem=SICOOB_1, data="0909", desc="areia",
+                        works=["OBRA QD 99 LT 99"]),
+            _pend_conta("B", 195000, origem=SICOOB_1, data="0909", desc="areia",
+                        works=["OBRA QD 99 LT 99"])]
+    pend[0]["ocs_erp"] = {"1111"}
+    pend[1]["ocs_erp"] = {"2222"}
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not duvidas
+    por_id = {c["paidId"]: c["pdf"] for c in certezas}
+    assert por_id == {"A": "1950,00 - OBRA QD 99 LT 99 OC 1111 - 09-09.pdf",
+                      "B": "1950,00 - OBRA QD 99 LT 99 OC 2222 - 09-09.pdf"}
+
+
+def test_oc_do_erp_nao_casa_com_nf_de_mesmo_numero():
+    pdfs = [_pdf("1950,00 - MATERIAL NF 1111 - 09-09.pdf", origem=SICOOB_1),
+            _pdf("1950,00 - OUTRO - 09-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 195000, origem=SICOOB_1, data="0909", desc="x"),
+            _pend_conta("B", 195000, origem=SICOOB_1, data="0909", desc="y", doc="1")]
+    pend[0]["ocs_erp"] = {"1111"}
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    assert not certezas
+
+
+def _pdf_doc(nome, doc, origem=SICOOB_1):
+    p = _pdf(nome, origem=origem)
+    p["doc_recebedor"] = doc
+    return p
+
+
+def test_documento_de_quem_recebeu_com_a_data_desempata():
+    """O aporte: dois Pix de mesmo valor e dia saindo da mesma conta, um para
+    a SPE do título e outro para a própria empresa -- o CNPJ diz qual."""
+    pdfs = [_pdf_doc("10000,00 - EMPRESA A PARA Empresa - 08-09.pdf", "11111111000111"),
+            _pdf_doc("10000,00 - EMPRESA A PARA Empresa A - 08-09.pdf", "22222222000122"),
+            _pdf_doc("10000,00 - EMPRESA A PARA Empresa - 10-09.pdf", "11111111000111")]
+    pend = [_pend_conta("A", 1000000, origem=SICOOB_1, data="0809", desc="APORTE",
+                        favorecido="EMPRESA SPE ALFA")]
+    pend[0]["doc_favorecido"] = "11111111000111"
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not duvidas and len(certezas) == 1
+    assert certezas[0]["pdf"] == "10000,00 - EMPRESA A PARA Empresa - 08-09.pdf"
+    assert "documento" in certezas[0]["motivo"]
+
+
+def test_mesmo_documento_e_mesma_data_em_dois_pdfs_nao_escolhe():
+    """Dois boletos do mesmo fornecedor, mesmo valor e dia: o documento não
+    separa, e continua dúvida (é o caso da OC, que resolve de outro jeito)."""
+    pdfs = [_pdf_doc("1950,00 - AREIA - 09-09.pdf", "33333333000133"),
+            _pdf_doc("1950,00 - AREIA - 09-09 (2).pdf", "33333333000133")]
+    pend = [_pend_conta("A", 195000, origem=SICOOB_1, data="0909", desc="areia"),
+            _pend_conta("B", 195000, origem=SICOOB_1, data="0909", desc="areia")]
+    for pe in pend:
+        pe["doc_favorecido"] = "33333333000133"
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 2
+
+
+def test_disputados_sao_os_que_tem_dois_pdfs_ou_mais_de_mesmo_valor():
+    """É para esses que vale ler o overview do ERP: um pedido por lançamento, e
+    ler os 250 de uma rodada seria pagar por quem já casa sozinho."""
+    pdfs = [_pdf("10,00 - A - 01-09.pdf"), _pdf("10,00 - B - 01-09.pdf"),
+            _pdf("20,00 - C - 01-09.pdf")]
+    pend = [_pend("X", 1000), _pend("Y", 2000), _pend("Z", 3000),
+            _pend("W", 1500, valores=[1500, 2000])]
+    assert [pe["paidId"] for pe in matcher.disputados(pend, pdfs)] == ["X"]
+
+
+# ------------------------------------------------ revisão do PR #95
+# Um identificador do IMÓVEL, do FORNECEDOR ou da OC não identifica o
+# PAGAMENTO: a parcela anterior ou o mês anterior, com PDF ainda na pasta,
+# carregam o mesmo número. Por isso as três regras exigem a MESMA data.
+
+def test_oc_do_erp_nao_leva_o_pdf_da_parcela_anterior():
+    pdfs = [_pdf("1950,00 - AREIA OC 1111 - 10-08.pdf", origem=SICOOB_1),
+            _pdf("1950,00 - FORNECEDOR EXEMPLO - 10-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 195000, origem=SICOOB_1, data="1009", desc="areia")]
+    pend[0]["ocs_erp"] = {"1111"}
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    assert len(certezas) == 1
+    assert certezas[0]["pdf"] == "1950,00 - FORNECEDOR EXEMPLO - 10-09.pdf"
+
+
+def test_numero_longo_nao_leva_o_pdf_do_mes_anterior():
+    pdfs = [_pdf("44,87 - LUZ UC 111111111111 REF JUL - 08-08.pdf", origem=SICOOB_1),
+            _pdf("44,87 - DISTRIBUIDORA EXEMPLO - 08-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 4487, origem=SICOOB_1, data="0809",
+                        desc="UC 111111111111 REF AGO")]
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    assert len(certezas) == 1
+    assert certezas[0]["pdf"] == "44,87 - DISTRIBUIDORA EXEMPLO - 08-09.pdf"
+
+
+def test_numero_longo_nao_fura_a_trava_do_rival_sem_nr_do_documento():
+    """O nº do documento não entra no número longo: a NF pode ser do rival
+    que não tem nº do documento (2ª revisão do #94)."""
+    pdfs = [_pdf("900,00 - MATERIAL NF 123456 - 11-09.pdf", origem=SICOOB_1),
+            _pdf("900,00 - OUTRO - 11-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 90000, origem=SICOOB_1, doc="123456", data="1109"),
+            _pend_conta("B", 90000, origem=SICOOB_1, doc="", desc="compra", data="1109")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 2
+
+
+def test_documento_de_quem_recebeu_exige_a_conta_conhecida():
+    """Sem saber a conta do lançamento, o CNPJ sozinho não fecha: o mesmo
+    fornecedor recebe de várias empresas o mesmo valor no mesmo dia."""
+    pdfs = [_pdf_doc("641,31 - HONORARIO - 10-09.pdf", "33333333000133", origem=SICOOB_2),
+            _pdf_doc("641,31 - OUTRO - 10-09.pdf", "55555555000155", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 64131, origem=None, data="1009", desc="honorario")]
+    pend[0]["doc_favorecido"] = "33333333000133"
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 1
+
+
+# 2ª revisão do #95: na MESMA data, com o rival já anexado (fora dos
+# pendentes), só o PDF DELE traz o identificador -- e a pendente o levava.
+# As três regras só fecham se todo PDF daquela data trouxer o identificador.
+
+def test_numero_longo_nao_fecha_se_outro_pdf_da_data_nao_tem_numero():
+    pdfs = [_pdf("44,87 - LUZ UC 111111111111 REF JUL - 08-09.pdf", origem=SICOOB_1),
+            _pdf("44,87 - DISTRIBUIDORA EXEMPLO - 08-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 4487, origem=SICOOB_1, data="0809",
+                        desc="UC 111111111111 REF AGO")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 1
+
+
+def test_oc_do_erp_nao_fecha_se_outro_pdf_da_data_nao_tem_oc():
+    pdfs = [_pdf("1950,00 - AREIA OC 1111 - 10-09.pdf", origem=SICOOB_1),
+            _pdf("1950,00 - FORNECEDOR EXEMPLO - 10-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 195000, origem=SICOOB_1, data="1009", desc="areia")]
+    pend[0]["ocs_erp"] = {"1111"}
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 1
+
+
+def test_documento_nao_fecha_se_outro_pdf_da_data_nao_tem_documento():
+    pdfs = [_pdf_doc("641,31 - HONORARIO - 10-09.pdf", "33333333000133"),
+            _pdf_doc("641,31 - HONORARIO - 10-09 (2).pdf", None)]
+    pend = [_pend_conta("A", 64131, origem=SICOOB_1, data="1009", desc="honorario")]
+    pend[0]["doc_favorecido"] = "33333333000133"
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 1
+
