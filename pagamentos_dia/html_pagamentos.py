@@ -63,6 +63,15 @@ _RODAPE_MAX_LINHAS = 4
 
 SUBTITULO_GERAL = "vencimentos em aberto no Mais Controle - todas as contas"
 
+#: Até quantos caracteres a descrição do HTML geral vai para o campo de
+#: descrição do banco. No Sicoob o campo deixou digitar 140, mas "vira e mexe
+#: ele limita" (dono, 14/09/2026): um limite que muda sem aviso é descoberto
+#: na hora de colar, com a fila de pagamentos parada. Por isso as contas
+#: Sicoob saem com folga, em 100; o Inter aceita bem mais, e as demais contas
+#: ficam em 140. Quem aplica é `descricao_para_colar`, sem cortar NF nem OC.
+LIMITE_DESCRICAO_SICOOB = 100
+LIMITE_DESCRICAO = 140
+
 _CENTAVO = Decimal("0.01")
 _PLACEHOLDER = re.compile(r"__([A-Z][A-Z_]*[A-Z])__")
 
@@ -127,6 +136,108 @@ def para_colar(texto) -> str:
     s = relatorio.sem_acento(texto or "").replace("\n", " ")
     s = re.sub(r"[^A-Za-z0-9 .,/\-]", " ", s)
     return re.sub(r"\s+", " ", s).strip()
+
+
+#: "(Reembolso Fulano)" inteiro, e "REEMBOLSO FULANO" até o próximo separador
+#: do texto cru (antes de a limpeza apagar os separadores). Quem recebe o
+#: reembolso não é informação para o extrato do banco (dono, 14/09/2026).
+_REEMBOLSO_ENTRE_PARENTESES = re.compile(r"\([^()]*reembols[^()]*\)", re.I)
+_REEMBOLSO_E_QUEM = re.compile(r"\breembols\w*\s*[:\-–—]?\s*[^\-–—|/,;()\n]*",
+                               re.I)
+
+
+def limite_da_descricao(conta) -> int:
+    """Quantos caracteres cabem na descrição do banco desta conta."""
+    return (LIMITE_DESCRICAO_SICOOB if "sicoob" in relatorio.chave(conta or "")
+            else LIMITE_DESCRICAO)
+
+
+def _palavras(texto) -> list[str]:
+    """As palavras que vão ao banco: sem acento, sem menção de reembolso e só
+    letra e número — todo o resto, INCLUSIVE o hífen, é separador."""
+    s = relatorio.sem_acento(str(texto or ""))
+    s = _REEMBOLSO_ENTRE_PARENTESES.sub(" ", s)
+    s = _REEMBOLSO_E_QUEM.sub(" ", s)
+    return re.findall(r"[A-Za-z0-9]+", s)
+
+
+#: Pontuação ENTRE dois dígitos, dentro do número da NF ou da OC.
+_PONTUACAO_ENTRE_DIGITOS = re.compile(r"(?<=\d)[^\sA-Za-z0-9]+(?=\d)")
+
+
+def _palavras_do_numero(texto) -> list[str]:
+    """As palavras do nº da NF ou da OC. A pontuação entre dígitos SOME, sem
+    virar espaço: "1.234" partido em "1 234" deixa de bater com a nota e com
+    o casamento do Anexar. O resto segue a regra de `_palavras`."""
+    s = relatorio.sem_acento(str(texto or ""))
+    return _palavras(_PONTUACAO_ENTRE_DIGITOS.sub("", s))
+
+
+def _que_cabem(palavras, espaco: int) -> list[str]:
+    """As primeiras `palavras` que, juntas por espaço, cabem em `espaco`.
+    Nunca corta palavra ao meio: um "LT 12" que vira "LT 1" aponta para outro
+    lote, e a palavra ausente não engana ninguém."""
+    saida, usado = [], 0
+    for p in palavras:
+        custo = len(p) + (1 if saida else 0)
+        if usado + custo > espaco:
+            break
+        saida.append(p)
+        usado += custo
+    return saida
+
+
+def descricao_para_colar(registro, conta) -> str:
+    """A descrição que o botão "Copiar" do HTML geral põe no campo do banco.
+
+    Não é a `descricao` da planilha: aquela é para conferir, esta é para o
+    extrato. Sai das peças soltas que `relatorio.partes_no_registro` pôs na
+    linha — nunca da frase pronta, que teria de ser reparseada. As regras são
+    do dono (14/09/2026):
+
+    - o centro de custo sempre NA FRENTE: é por ele que o Anexar casa o
+      comprovante com o lançamento;
+    - NF e OC → "CC NF x OC y"; só OC → "CC OC y"; só NF → "CC NF x"; nenhuma
+      das duas → "CC " + a descrição do lançamento, ou "CC C x M y" quando ela
+      é de medição de mão de obra (a forma curta que a planilha já mostra);
+    - água e luz continuam como na planilha (CC + descrição + OC): ali o
+      "número da NF" é o da fatura e não identifica nada;
+    - sem menção de reembolso, sem acento e sem caractere especial (hífen
+      incluído), e sem repetir o centro de custo que a descrição já traz; no
+      nº da NF e da OC a pontuação entre dígitos some sem virar espaço
+      ("1.234" é "1234", não "1 234");
+    - no tamanho do banco (`limite_da_descricao`), cortando em fronteira de
+      palavra. A NF e a OC NUNCA são cortadas — são o que liga o pagamento ao
+      documento; quem cede é a descrição do lançamento e, se ainda não
+      couber, o centro de custo.
+    """
+    r = registro or {}
+    utilidade = bool(r.get("utilidade"))
+    cc = _palavras(r.get("centro_custo"))
+    nf = [] if utilidade else _palavras_do_numero(r.get("nf"))
+    oc = _palavras_do_numero(r.get("oc_da_descricao"))
+    fixos = (["NF", *nf] if nf else []) + (["OC", *oc] if oc else [])
+    medicao = (None if utilidade or fixos
+               else relatorio.contrato_e_medicao(r.get("descricao_lancamento")))
+    if medicao:
+        # Mão de obra: a forma curta da planilha, que também não se corta.
+        fixos = ["C", *_palavras_do_numero(medicao[0]),
+                 "M", *_palavras_do_numero(medicao[1])]
+
+    texto = []
+    if utilidade or not fixos:
+        texto = _palavras(r.get("descricao_lancamento"))
+        n = len(cc)
+        if n and [p.casefold() for p in texto[:n]] == [p.casefold() for p in cc]:
+            texto = texto[n:]
+
+    limite = limite_da_descricao(conta)
+    if len(" ".join(cc + texto + fixos)) > limite:
+        resto = cc + fixos
+        texto = _que_cabem(texto, limite - len(" ".join(resto)) - (1 if resto else 0))
+    if len(" ".join(cc + texto + fixos)) > limite:
+        cc = _que_cabem(cc, limite - len(" ".join(fixos)) - (1 if fixos else 0))
+    return " ".join(cc + texto + fixos)
 
 
 def dado_para_colar(tipo, dados) -> str:
@@ -209,7 +320,7 @@ def contas_do_html_geral(resultado) -> list[dict]:
                 "dados_limpo": dado_para_colar(tipo, r.get("dados")),
                 "valor": valor_para_colar(r.get("valor")),
                 "centavos": centavos(r.get("valor")),
-                "descricao": para_colar(r.get("descricao")),
+                "descricao": descricao_para_colar(r, nome),
                 "favorecido": para_colar(r.get("favorecido")),
                 "status": str(r.get("status") or ""),
                 "conferencia": str(r.get("conferencia") or ""),

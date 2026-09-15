@@ -609,6 +609,7 @@ def mesma_chave(a: str, b: str) -> bool:
 _OC_NO_NOME = re.compile(
     r"\b(?:oc|ordem\s+de\s+compra)\s*[:\-–]?\s*n?[ºo°]?\s*(\d{2,7})\b", re.I)
 _DOC_NO_NOME = re.compile(r"\bN[ºo°F]\s*[:\-]?\s*(\d{2,10})\b", re.I)
+_REEMBOLSO = re.compile(r"REEMBOLSO", re.I)
 
 _UTILIDADES = re.compile(
     r"sanesc|saneago|equatorial|enel|celg|cemig|copasa|caesb|energisa|"
@@ -645,14 +646,37 @@ def achar_oc(item: dict, files, comentario: str = "", overview=None) -> str:
 
 
 def achar_doc(item: dict, files, overview=None) -> str:
+    """O número da nota: o campo do lançamento, o nome do anexo, o detalhe.
+
+    "REEMBOLSO FULANO" no campo do documento não é número de nota — é quem
+    preencheu avisando que não há nota. O filtro vale para os DOIS campos de
+    texto livre: enquanto só o do lançamento o tinha, o do detalhe (que traz
+    o mesmo texto) devolvia a frase inteira, a descrição saía "NF REEMBOLSO
+    FULANO" e a conferência procurava uma nota que não existe. O nome do
+    anexo não precisa do filtro: dali só se tiram DÍGITOS, e o número ao lado
+    de "NF" num arquivo de reembolso é a nota da compra reembolsada.
+    Quem precisa saber que o documento DECLARA reembolso pergunta a
+    `documento_declara_reembolso`."""
     doc = (item.get("documentNumber") or "").strip()
-    if doc and not re.search(r"REEMBOLSO", doc, re.I):
+    if doc and not _REEMBOLSO.search(doc):
         return doc
     for f in files:
         m = _DOC_NO_NOME.search(f.get("filename") or "")
         if m:
             return m.group(1)
-    return str((overview or {}).get("documentNumber") or "").strip()
+    doc = str((overview or {}).get("documentNumber") or "").strip()
+    return "" if _REEMBOLSO.search(doc) else doc
+
+
+def documento_declara_reembolso(item: dict, overview=None) -> bool:
+    """O campo do documento (no lançamento ou no detalhe) diz "REEMBOLSO"?
+
+    Não é número de nota, mas é compra documentada: quem lançou avisou que
+    a despesa foi paga por alguém e será reembolsada. Até 14/09/2026 isso
+    entrava pela porta errada — o `achar_doc` devolvia a frase como NF — e
+    era o que deixava o título sem boleto ser pago pela chave do cadastro."""
+    return any(_REEMBOLSO.search(str(d or "")) for d in
+               (item.get("documentNumber"), (overview or {}).get("documentNumber")))
 
 
 def centro_de_custo(item: dict) -> str:
@@ -667,7 +691,15 @@ def centro_de_custo(item: dict) -> str:
     return " | ".join(dict.fromkeys(n for n in nomes if n))
 
 
-def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> str:
+def partes_da_descricao(item: dict, files, comentario: str = "",
+                        overview=None) -> tuple[str, str, str]:
+    """(centro de custo, nº da nota, nº da OC) — as peças da descrição.
+
+    Existe separada da `monta_descricao` porque a descrição tem DOIS leitores
+    que a querem de formas diferentes: a planilha e a remessa leem a frase
+    montada, e o HTML dos pagamentos monta outra, limpa e curta, para colar no
+    campo de descrição do banco. As duas saem destas mesmas peças; ajustar
+    "documento é a OC" em dois lugares seria o começo de duas respostas."""
     cc = centro_de_custo(item)
     doc = achar_doc(item, files, overview)
     oc = achar_oc(item, files, comentario, overview)
@@ -678,6 +710,37 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> s
     if doc and regras.documento_e_a_oc(doc, oc):
         oc = oc or regras.oc_no_documento(doc) or re.sub(r"\D", "", doc)
         doc = ""
+    return cc, doc, oc
+
+
+def partes_no_registro(item: dict, files, comentario: str = "",
+                       overview=None) -> dict:
+    """As chaves que a linha leva para o HTML montar a descrição do banco.
+
+    `oc_da_descricao` não é o `oc` da linha: aquele é o `achar_oc` cru, que a
+    remessa já usa, e este é o que a descrição mostra (inclui a OC escrita no
+    campo do documento). `descricao_lancamento` vai crua — limpar e enxugar é
+    do HTML, que é quem sabe o limite de cada banco."""
+    _, doc, oc = partes_da_descricao(item, files, comentario, overview)
+    return {"nf": doc, "oc_da_descricao": oc,
+            "descricao_lancamento": (item.get("description") or "").strip(),
+            "utilidade": eh_utilidade(item)}
+
+
+_MEDICAO = re.compile(r"-\s*(\d+)\s*-\s*Medi[çc][ãa]o:\s*(\d+)")
+
+
+def contrato_e_medicao(descricao) -> tuple[str, str] | None:
+    """(contrato, medição) da descrição de mão de obra, ou None.
+
+    Um lugar só para o padrão: a planilha (`monta_descricao`) e o HTML dos
+    pagamentos escrevem a mesma forma curta, "C <contrato> M <medição>"."""
+    m = _MEDICAO.search(descricao or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
+def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> str:
+    cc, doc, oc = partes_da_descricao(item, files, comentario, overview)
 
     # Água/energia: o que identifica é a descrição (UC, mês, casa). O "número
     # da NF" ali é o número da fatura e não ajuda ninguém a conferir.
@@ -693,10 +756,9 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> s
     if oc:
         partes.append(f"OC {oc}")
     if not doc and not oc:
-        m = re.search(r"-\s*(\d+)\s*-\s*Medi[çc][ãa]o:\s*(\d+)",
-                      item.get("description") or "")
-        if m:
-            partes += [f"C {m.group(1)}", f"M {m.group(2)}"]
+        medicao = contrato_e_medicao(item.get("description"))
+        if medicao:
+            partes += [f"C {medicao[0]}", f"M {medicao[1]}"]
         elif item.get("description"):
             # 40 caracteres cortavam exatamente onde mora o que distingue as
             # linhas ("... - CASA 1/2/3"), deixando-as idênticas na planilha.
@@ -927,7 +989,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
     ids_nao_confirmados = {str(i) for i in ids_nao_confirmados}
     registros, omitidos = defaultdict(list), []
 
-    for item in lancamentos:
+    for ordem, item in enumerate(lancamentos):
         conta = nome_da_conta(item)
         files = anexos.get(str(item.get("tradePayableId"))) or []
         overview = overviews.get(str(item.get("id"))) or {}
@@ -964,9 +1026,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
 
         # A compra está documentada? É o que decide se um título sem boleto
         # anexado pode ser pago pela chave do cadastro (abaixo) ou se é ruído.
+        # O documento que DECLARA reembolso conta: ele deixou de ser NF na
+        # descrição (não é número de nota), mas continua sendo compra
+        # documentada — sem esta linha, o título que antes era pago pela chave
+        # do cadastro passaria a cair em NÃO ENTRARAM.
         nf = achar_doc(item, files, overview)
         oc = achar_oc(item, files, coment, overview)
-        tem_nf_ou_oc = bool(oc or (nf and not regras.documento_e_a_oc(nf, oc)))
+        tem_nf_ou_oc = bool(oc or (nf and not regras.documento_e_a_oc(nf, oc))
+                            or documento_declara_reembolso(item, overview))
 
         avisos, obs, chave_divergente = [], "", False
         #: Quem recebe, quando o anexo é um aviso "PAGAR PARA". Fica None nas
@@ -1187,6 +1254,18 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # de escrever — a mesma armadilha que o cabeçalho do arquivo avisa.
             "oc": oc,
             "centro_custo": centro_de_custo(item),
+            # As peças da descrição, soltas, para o HTML dos pagamentos montar a
+            # descrição de colar no banco (limpa e no tamanho do banco) sem
+            # reparsear a frase acima: `nf`, `oc_da_descricao`,
+            # `descricao_lancamento` e `utilidade`.
+            **partes_no_registro(item, files, coment, overview),
+            # A posição do lançamento na lista que chegou aqui. Os filtros do
+            # passo 1 e a seleção de contas não reordenam nada, então é a
+            # ordem em que a API devolveu — e `mc_api.listar_a_pagar` pergunta
+            # pela URL que a TELA de pagamentos manda, trocando só filtros e
+            # paginação. É a segunda chave da ordem das linhas: o dono confere
+            # o HTML e a planilha com o sistema aberto ao lado.
+            "ordem": ordem,
             # Não vão para a planilha: são para a remessa (`remessa_dia.py`).
             # O `id` é a única volta do arquivo de retorno até o lançamento,
             # e `parcial` decide se o título ainda pode ir como boleto — o
@@ -1215,7 +1294,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         })
 
     for regs in registros.values():
-        regs.sort(key=lambda r: (r["tipo"], r["favorecido"]))
+        # Boleto antes de Pix (a mesma comparação por `tipo` de sempre) e,
+        # dentro do tipo, o que aparece por ÚLTIMO no sistema vem primeiro —
+        # pedido do dono em 14/09/2026. Até ali a segunda chave era o
+        # favorecido em ordem alfabética, e a lista não conversava com a
+        # tela que ele tem aberta ao lado para conferir.
+        regs.sort(key=lambda r: (r["tipo"], -r["ordem"]))
     omitidos.sort(key=lambda o: (o["conta"], o["motivo"], o["favorecido"]))
     return Resultado(dict(sorted(registros.items())), omitidos)
 
