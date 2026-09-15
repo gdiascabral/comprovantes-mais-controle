@@ -465,3 +465,34 @@ def test_documento_de_quem_recebeu_exige_a_conta_conhecida():
     certezas, duvidas, _ = matcher.casar(pend, pdfs)
     assert not certezas and len(duvidas) == 1
 
+
+# 2ª revisão do #95: na MESMA data, com o rival já anexado (fora dos
+# pendentes), só o PDF DELE traz o identificador -- e a pendente o levava.
+# As três regras só fecham se todo PDF daquela data trouxer o identificador.
+
+def test_numero_longo_nao_fecha_se_outro_pdf_da_data_nao_tem_numero():
+    pdfs = [_pdf("44,87 - LUZ UC 111111111111 REF JUL - 08-09.pdf", origem=SICOOB_1),
+            _pdf("44,87 - DISTRIBUIDORA EXEMPLO - 08-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 4487, origem=SICOOB_1, data="0809",
+                        desc="UC 111111111111 REF AGO")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 1
+
+
+def test_oc_do_erp_nao_fecha_se_outro_pdf_da_data_nao_tem_oc():
+    pdfs = [_pdf("1950,00 - AREIA OC 1111 - 10-09.pdf", origem=SICOOB_1),
+            _pdf("1950,00 - FORNECEDOR EXEMPLO - 10-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 195000, origem=SICOOB_1, data="1009", desc="areia")]
+    pend[0]["ocs_erp"] = {"1111"}
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 1
+
+
+def test_documento_nao_fecha_se_outro_pdf_da_data_nao_tem_documento():
+    pdfs = [_pdf_doc("641,31 - HONORARIO - 10-09.pdf", "33333333000133"),
+            _pdf_doc("641,31 - HONORARIO - 10-09 (2).pdf", None)]
+    pend = [_pend_conta("A", 64131, origem=SICOOB_1, data="1009", desc="honorario")]
+    pend[0]["doc_favorecido"] = "33333333000133"
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 1
+

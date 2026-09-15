@@ -258,6 +258,19 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                                     "score": (100 if ocnf else 0) + (10 if cc else 0)
                                              + (5 if docnum else 0) + (1 if date else 0)})
 
+    # Um identificador só decide se TODO PDF da mesma data do lançamento também
+    # trouxer um do mesmo tipo: senão, o PDF sem identificador pode ser o
+    # certo, e o que tem pode ser de um rival já anexado (2ª revisão do #95).
+    tem_id = {"idnum": lambda pd: bool(_numeros_longos(pd["desc"])),
+              "ocerp": lambda pd: bool(pd["ocs"]),
+              "docrec": lambda pd: bool(pd.get("doc_recebedor"))}
+    for pe in pendentes:
+        mesma_data = [c["pdf"] for c in pe["cands"] if c["date"]]
+        for tipo, tem in tem_id.items():
+            seguro = all(tem(pd) for pd in mesma_data)
+            for c in pe["cands"]:
+                c[tipo + "_seguro"] = seguro
+
     def atribuir(filtro):
         mudou = True
         while mudou:
@@ -292,8 +305,9 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     atribuir(lambda c: c["ocnf"] and c["cc"])
     atribuir(lambda c: c["ocnf"])
     # OC do ERP e número longo igual (a UC), sempre com a data.
-    atribuir(lambda c: c["ocerp"] and c["date"])
-    atribuir(lambda c: c["idnum"] and c["date"] and (c["conta"] or c["cc"]))
+    atribuir(lambda c: c["ocerp"] and c["date"] and c["ocerp_seguro"])
+    atribuir(lambda c: c["idnum"] and c["date"] and (c["conta"] or c["cc"])
+             and c["idnum_seguro"])
     # O nº do documento cru só entra ACOMPANHADO do centro de custo: sozinho
     # ele é fraco demais para fechar CERTEZA (ver _features).
     atribuir(lambda c: c["docnum"] and c["cc"])
@@ -303,7 +317,8 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     atribuir(lambda c: c["docnf"] and c["conta"])
     # CPF/CNPJ de quem recebeu = o do favorecido, no mesmo dia e na mesma
     # conta: o mesmo fornecedor recebe de várias empresas.
-    atribuir(lambda c: c["docrec"] and c["date"] and c["conta"])
+    atribuir(lambda c: c["docrec"] and c["date"] and c["conta"]
+             and c["docrec_seguro"])
     # Favorecido = recebedor é fraco sozinho; `fav` só existe com a conta
     # batendo, e aqui ainda exige a data.
     atribuir(lambda c: c["fav"] and c["date"])
