@@ -161,6 +161,18 @@ def _palavras(texto) -> list[str]:
     return re.findall(r"[A-Za-z0-9]+", s)
 
 
+#: Pontuação ENTRE dois dígitos, dentro do número da NF ou da OC.
+_PONTUACAO_ENTRE_DIGITOS = re.compile(r"(?<=\d)[^\sA-Za-z0-9]+(?=\d)")
+
+
+def _palavras_do_numero(texto) -> list[str]:
+    """As palavras do nº da NF ou da OC. A pontuação entre dígitos SOME, sem
+    virar espaço: "1.234" partido em "1 234" deixa de bater com a nota e com
+    o casamento do Anexar. O resto segue a regra de `_palavras`."""
+    s = relatorio.sem_acento(str(texto or ""))
+    return _palavras(_PONTUACAO_ENTRE_DIGITOS.sub("", s))
+
+
 def _que_cabem(palavras, espaco: int) -> list[str]:
     """As primeiras `palavras` que, juntas por espaço, cabem em `espaco`.
     Nunca corta palavra ao meio: um "LT 12" que vira "LT 1" aponta para outro
@@ -190,7 +202,9 @@ def descricao_para_colar(registro, conta) -> str:
     - água e luz continuam como na planilha (CC + descrição + OC): ali o
       "número da NF" é o da fatura e não identifica nada;
     - sem menção de reembolso, sem acento e sem caractere especial (hífen
-      incluído), e sem repetir o centro de custo que a descrição já traz;
+      incluído), e sem repetir o centro de custo que a descrição já traz; no
+      nº da NF e da OC a pontuação entre dígitos some sem virar espaço
+      ("1.234" é "1234", não "1 234");
     - no tamanho do banco (`limite_da_descricao`), cortando em fronteira de
       palavra. A NF e a OC NUNCA são cortadas — são o que liga o pagamento ao
       documento; quem cede é a descrição do lançamento e, se ainda não
@@ -199,8 +213,8 @@ def descricao_para_colar(registro, conta) -> str:
     r = registro or {}
     utilidade = bool(r.get("utilidade"))
     cc = _palavras(r.get("centro_custo"))
-    nf = [] if utilidade else _palavras(r.get("nf"))
-    oc = _palavras(r.get("oc_da_descricao"))
+    nf = [] if utilidade else _palavras_do_numero(r.get("nf"))
+    oc = _palavras_do_numero(r.get("oc_da_descricao"))
     fixos = (["NF", *nf] if nf else []) + (["OC", *oc] if oc else [])
 
     texto = []

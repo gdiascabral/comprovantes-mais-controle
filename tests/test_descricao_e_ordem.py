@@ -181,6 +181,18 @@ def test_nf_e_oc_vao_as_duas():
     assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678 OC 1234"
 
 
+def test_nf_e_oc_nao_se_partem_na_pontuacao_entre_digitos():
+    """"NF 1 234" não bate com a nota nem com o casamento do Anexar: dentro do
+    número, a pontuação entre dígitos some sem virar espaço."""
+    r = _partes(nf="1.234", oc="000.123-4")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 1234 OC 0001234"
+
+
+def test_separador_que_nao_esta_entre_digitos_continua_virando_espaco():
+    r = _partes(nf="12.345/B - 2", oc="1234")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 12345 B 2 OC 1234"
+
+
 def test_so_oc_vai_so_a_oc():
     r = _partes(oc="1234", descricao="Material de obra")
     assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 OC 1234"
