@@ -821,6 +821,57 @@ def _baixar_pix_da_conta(cli, numero: str, inicio: str, fim: str,
             log(f"    Pix {ident} falhou ({e}) — seguindo")
 
 
+#: O motivo de `baixar_conta` quando a conta não está no login aberto. É ele que
+#: `baixar_em_varios_logins` reconhece para pedir o QR de OUTRO login.
+FORA_DESTE_LOGIN = "a conta não está na lista deste login"
+
+
+def baixar_em_varios_logins(numeros, abrir_login, baixar, *, parar=lambda: False,
+                            avisar=lambda _m: None) -> dict:
+    """{número: Resultado} das contas, abrindo quantos logins forem precisos.
+
+    Um login do Sicoob enxerga as contas de UM grupo: as de outra empresa
+    (14/09/2026) ficam noutro login, com outro QR Code. Cada
+    abertura do Chrome pede o QR de novo, então trocar de login é só fechar
+    este Chrome e abrir outro -- sem botão de sair e sem cadastrar "qual
+    login" em conta nenhuma (a agência não serve: há conta sem agência
+    cadastrada que está no login principal).
+
+    `abrir_login()` devolve um gerenciador de contexto que entrega o cliente já
+    logado; `baixar(cli, numero)` devolve o `Resultado`. As contas que saem
+    `FORA_DESTE_LOGIN` ficam para o próximo login. Um login que não abre
+    NENHUMA das que faltam encerra, para não pedir QR sem fim. Conta que não
+    chegou a rodar (Parar) fica fora do dicionário: quem chamou a marca."""
+    pendentes = list(numeros)
+    resultados: dict = {}
+    rodada = 0
+    while pendentes and not parar():
+        rodada += 1
+        if rodada > 1:
+            avisar(f"Sicoob: {len(pendentes)} conta(s) não estão no login lido — "
+                   "abrindo outro Chrome; leia o QR Code do outro login.")
+        faltam, abertas = [], 0
+        with abrir_login() as cli:
+            for numero in pendentes:
+                if parar():
+                    break
+                r = baixar(cli, numero)
+                if r.motivo == FORA_DESTE_LOGIN:
+                    faltam.append(numero)
+                    continue
+                abertas += 1
+                resultados[numero] = r
+        if parar():
+            break
+        if not abertas:
+            for numero in faltam:
+                resultados[numero] = Resultado(
+                    conta=numero, motivo="a conta não está em nenhum dos logins lidos")
+            break
+        pendentes = faltam
+    return resultados
+
+
 def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
                  log=print, registro=None) -> Resultado:
     """Os comprovantes de UMA conta, com ela já acessível pelo login aberto."""
@@ -828,7 +879,7 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
     destino = Path(pasta)
     try:
         if not cli.acessar_conta(numero):
-            resultado.motivo = "a conta não está na lista deste login"
+            resultado.motivo = FORA_DESTE_LOGIN
             return resultado
         ir_para_comprovantes(cli.page)
 
