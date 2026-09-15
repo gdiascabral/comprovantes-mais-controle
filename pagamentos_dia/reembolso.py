@@ -201,7 +201,7 @@ def _item_da_chave(texto: str) -> str:
     return ""
 
 
-def janelas_do_aviso(files, textos: dict):
+def janelas_do_aviso(files, textos: dict, urls_ocr=()):
     """O trecho de cada aviso logo depois do "PAGAR PARA".
 
     Existe como função própria porque DOIS leitores dependem da mesma janela —
@@ -223,16 +223,24 @@ def janelas_do_aviso(files, textos: dict):
     quem recebeu ou dígitos da chave de acesso — e os dois leitores os
     declaravam como chave e como documento da pessoa.
 
+    **E só com camada de texto.** O caminho sem a frase separa o aviso do
+    comprovante renomeado por PALAVRA ("comprovante", "valor pago"...), e o
+    OCR de uma foto escreve "Comprovamte" e "Valor pagu" — não há lista de
+    erros de OCR que feche isso. `urls_ocr` são os anexos cujo texto veio de
+    OCR (o mesmo conjunto que o `montar_registros` já recebe); para eles, só
+    vale a janela depois da frase escrita no papel, como sempre valeu.
+
     Com a frase no texto, nada muda — vale o que vem depois dela.
     """
     for f in files or ():
         if not eh_aviso(f):
             continue
-        texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
+        url = f.get("downloadUrl") or ""
+        texto = (textos or {}).get(url) or ""
         m = PAGAR_PARA.search(texto)
         if m:
             yield texto[m.end():m.end() + TAMANHO_DA_JANELA]
-        elif PAGAR_PARA.search(f.get("filename") or ""):
+        elif url not in (urls_ocr or ()) and PAGAR_PARA.search(f.get("filename") or ""):
             item = _item_da_chave(texto)
             if item:
                 yield item
@@ -273,7 +281,7 @@ def _documentos_em(texto: str) -> list[str]:
     return ordenados
 
 
-def documento_do_aviso(files, textos: dict) -> str:
+def documento_do_aviso(files, textos: dict, urls_ocr=()) -> str:
     """O CPF/CNPJ de quem recebe, escrito DENTRO do aviso.
 
     Quem monta o aviso já escreve ali o documento; o que faltava era lê-lo.
@@ -287,7 +295,7 @@ def documento_do_aviso(files, textos: dict) -> str:
       pagamento cai no impedimento. Escolher um dos dois é escolher para quem
       o dinheiro vai.
     """
-    for janela in janelas_do_aviso(files, textos):
+    for janela in janelas_do_aviso(files, textos, urls_ocr):
         achados = _documentos_em(janela)
         if len(achados) == 1:
             return achados[0]
@@ -398,7 +406,7 @@ def _do_erp(nome: str, participantes: dict) -> tuple[str, str]:
 # --------------------------------------------------------------------------
 def identificar(files, textos: dict, participantes: dict | None = None,
                 cadastro: dict | None = None, chave: str = "",
-                favorecido: str = "") -> Pessoa:
+                favorecido: str = "", urls_ocr=()) -> Pessoa:
     """Quem recebe este reembolso — ou por que não dá para dizer.
 
     A ordem das fontes vai da mais DECLARADA para a menos: cadastro local
@@ -419,6 +427,9 @@ def identificar(files, textos: dict, participantes: dict | None = None,
     num título da HOMÔNIMA a declararia com o CPF dela, e o começo do nome não
     decide para quem vai. Não confirmando, vale a busca de sempre, pelo
     primeiro nome.
+
+    `urls_ocr` vai para a leitura do documento no aviso: texto de OCR só
+    conta pela janela depois da frase (ver `janelas_do_aviso`).
     """
     nome = nome_do_aviso(files)
     if not nome:
@@ -426,7 +437,7 @@ def identificar(files, textos: dict, participantes: dict | None = None,
 
     local = _do_cadastro_local(nome, cadastro or {})
     erp = _do_erp(nome, participantes or {})
-    do_aviso = documento_do_aviso(files, textos)
+    do_aviso = documento_do_aviso(files, textos, urls_ocr)
     if pessoa_e_o_favorecido(files, favorecido, participantes):
         completo = util.norm_espaco(favorecido)
         do_favorecido = regras.documento_valido(participantes[completo])

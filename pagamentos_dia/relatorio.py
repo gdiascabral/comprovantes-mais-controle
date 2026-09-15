@@ -504,10 +504,15 @@ def classificar_anexos(files) -> str:
     if not files:
         return "SEM_ANEXO"
     s = " | ".join(chave(_rotulo(f)) for f in files)
+    # "Pagar para" ANTES de "autorizado": o aviso diz QUEM recebe, e a
+    # autorização só autoriza. Na ordem inversa, o título com os dois anexos
+    # saía "APTO (autorizado)" com a chave do FORNECEDOR — marcado na remessa
+    # — e o reembolso da pessoa nunca era lido. E antes de NF, pelo mesmo
+    # motivo: reembolso manda.
+    if re.search(r"pagar\s*_?\s*para", s):
+        return "PAGAR_PARA"
     if "autorizado" in s:
         return "AUTORIZADO"
-    if re.search(r"pagar\s*_?\s*para", s):      # antes de NF: reembolso manda
-        return "PAGAR_PARA"
     if re.search(r"nfe|danfe|nota fiscal", s):
         return "NF"
     if re.search(r"boleto|blt", s):
@@ -542,7 +547,7 @@ def pix_do_reembolso(files, item: dict, mapa: dict) -> str:
 _PAGAR_PARA = reembolso.PAGAR_PARA
 
 
-def chave_pix_do_aviso(files, textos: dict) -> str:
+def chave_pix_do_aviso(files, textos: dict, urls_ocr=()) -> str:
     """O número escrito DENTRO do aviso "PAGAR PARA", logo abaixo do nome.
 
     Quem monta o aviso já escreve ali o CPF ou o celular de quem recebe. O
@@ -558,8 +563,11 @@ def chave_pix_do_aviso(files, textos: dict) -> str:
     leitores: a chave (esta função) e o documento de quem recebe. Fossem dois
     recortes, bastaria um mudar de tamanho para os dois passarem a falar de
     pedaços diferentes do mesmo papel.
+
+    `urls_ocr` (os anexos lidos por OCR) segue para a janela: sem a frase no
+    texto, papel de OCR não entrega chave (`reembolso.janelas_do_aviso`).
     """
-    for janela in reembolso.janelas_do_aviso(files, textos):
+    for janela in reembolso.janelas_do_aviso(files, textos, urls_ocr):
         achado = chave_pix_por_padrao(janela)
         if achado and _chave_confiavel(achado):
             return achado
@@ -1079,7 +1087,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if cls == "PAGAR_PARA":
             tipo = "Pix"
             tem_documento = True
-            do_aviso = chave_pix_do_aviso(files, textos)
+            do_aviso = chave_pix_do_aviso(files, textos, urls_ocr)
             do_mapa = pix_do_reembolso(files, item, pix_reembolso)
             # A chave do LANÇAMENTO só é olhada quando o favorecido pode ser a
             # própria pessoa do aviso (nos Contatos com CPF — falha fechada).
@@ -1142,7 +1150,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # declarar. A chave entra como conferente, nunca como fonte.
             pessoa = reembolso.identificar(files, textos, participantes,
                                            cadastro_reembolso, dados,
-                                           favorecido=favorecido)
+                                           favorecido=favorecido,
+                                           urls_ocr=urls_ocr)
             if pessoa.resolvida:
                 avisos.append(f"Reembolso para {pessoa.nome} "
                               f"(documento: {pessoa.origem})")
