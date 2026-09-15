@@ -1016,7 +1016,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 "favorecido": favorecido,
                 "motivo": "conta fora do recorte — regra de conta ignorada "
                           "(APENAS LANÇAMENTO/AJUSTE, ERRADA) ou filtro de "
-                          "contas da tela"})
+                          "contas da tela",
+                # Para a janela "Confirmar o que entra" (`confirmacao.py`),
+                # que NÃO lista esta linha: conta ignorada não é pendência a
+                # corrigir no ERP. Uma chave, e não o começo do `motivo`,
+                # porque texto de recado se reescreve sem ninguém lembrar de
+                # quem casava por ele. O Excel lê só as chaves de sempre.
+                "id": str(item.get("id") or ""),
+                "fora_do_recorte": True})
             continue
 
         do_item = [textos.get(f.get("downloadUrl") or "") for f in files]
@@ -1249,7 +1256,17 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if motivo:
             omitidos.append({"conta": conta, "tipo": tipo, "valor": valor,
                              "descricao": descricao, "favorecido": favorecido,
-                             "motivo": motivo})
+                             "motivo": motivo,
+                             # O que a janela "Confirmar o que entra" mostra
+                             # do NÃO APTO, para o dono achar o título no ERP
+                             # e corrigir antes de gerar: o id (de que
+                             # lançamento é a linha), OC, centro de custo, o
+                             # que se conseguiu apurar como forma de pagar e
+                             # os avisos. A aba NÃO ENTRARAM não os lê.
+                             "id": str(item.get("id") or ""),
+                             "oc": oc, "centro_custo": centro_de_custo(item),
+                             "dados": dados, "obs": obs,
+                             "conferencia": conferencia})
             continue
 
         status = {"SEM_ANEXO": "ATENÇÃO — sem anexo",

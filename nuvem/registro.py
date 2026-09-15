@@ -595,6 +595,118 @@ class Registro:
         achado = self._procurar("referencia", referencia)
         return (achado, None) if achado else None
 
+    def envios_em_lote(self, identificadores, referencias) -> tuple[dict, dict]:
+        """`envio_de` e `envio_da_referencia` de MUITAS chaves, em poucas idas.
+
+        Existe para a janela "Confirmar o que entra" do passo 2
+        (`pagamentos_dia.confirmacao`), que pergunta "já saiu?" de cada linha
+        ANTES de a pessoa conferir. Uma por uma são uma ou duas idas ao banco
+        por linha — com 100–300 lançamentos, centenas de ida-e-volta a cada
+        "Gerar planilha". Aqui são consultas `coluna=in.(…)` em blocos.
+
+        Devolve `(por_identificador, por_referencia)`: `{chave: resposta}`,
+        com a resposta na MESMA forma do um-a-um — `(Envio, None)` ou `None`.
+        **Toda chave perguntada volta no dicionário, achada ou não**, e só
+        elas: a chave vazia, ou com caractere que mudaria o filtro, fica de
+        fora, e quem chama pergunta essa pelo caminho de sempre. É essa a
+        diferença entre "perguntei e não saiu" e "não perguntei".
+
+        **A resposta é a do `_procurar`, caso a caso**, e não uma parecida:
+        o mesmo estado vivo no relacionamento, a mesma recusa de `remessa:
+        null` e o mesmo item — o MAIS RECENTE da chave (`id` maior). O
+        `_procurar` pede `order=id.desc&limit=1` e só DEPOIS descarta o
+        `remessa: null`; então, se o item mais recente é de remessa
+        descartada, a resposta é "não saiu" mesmo havendo um item mais antigo
+        em remessa viva. O lote repete isso escolhendo o maior `id` antes de
+        olhar o relacionamento — escolher "o mais recente VIVO" daria outra
+        resposta para a mesma pergunta, e a janela e a conferência da remessa
+        passariam a discordar sobre o mesmo boleto.
+        """
+        return (self._envios_por("identificador", identificadores),
+                self._envios_por("referencia", referencias))
+
+    def _envios_por(self, coluna: str, valores) -> dict:
+        alvos = _chaves_do_lote(valores)
+        respostas: dict = {chave: None for chave in alvos}
+        if not alvos:
+            return respostas
+        vivos = ",".join(ESTADOS_VIVOS)
+        mais_recente: dict = {}
+        for lote in _blocos_do_filtro(alvos):
+            linhas = rest.ler(
+                "remessa_item", self._token,
+                colunas=(f"id,{coluna},seu_numero,"
+                         "remessa(nsa,convenio,estado,gerado_em)"),
+                filtro=(f"{coluna}=in.({','.join(lote)})"
+                        f"&remessa.estado=in.({vivos})"
+                        f"&order=id.desc"))
+            for linha in linhas:
+                chave = str(linha.get(coluna) or "")
+                if chave not in respostas:
+                    continue
+                atual = mais_recente.get(chave)
+                if atual is None or _id_da_linha(linha) > _id_da_linha(atual):
+                    mais_recente[chave] = linha
+        for chave, linha in mais_recente.items():
+            # A mesma checagem do `_procurar`: `remessa: null` é o item de uma
+            # remessa que não está viva, e não um envio.
+            if linha.get("remessa"):
+                respostas[chave] = (Envio(linha), None)
+        return respostas
+
+
+#: O tamanho, em caracteres, da lista de um `in.(…)` na pergunta em lote. O
+#: limite que aperta é o da URL, como no `LOTE_DE_SEUS_NUMEROS`: um código de
+#: barras tem 44 posições, e cem deles dariam uma URL de 4,5 mil caracteres,
+#: que proxy recusa antes de chegar ao PostgREST — um erro de rede numa
+#: consulta que estava certa. Fecha-se o bloco pelo tamanho, e também pela
+#: quantidade (`LOTE_DE_ENVIOS`).
+TAMANHO_DO_FILTRO_EM_LOTE = 1800
+LOTE_DE_ENVIOS = 100
+
+#: O que entra num `in.(…)` sem aspas, sem escape e sem mudar a URL. Código de
+#: barras são dígitos; a referência é o id do lançamento no ERP. Vírgula,
+#: parêntese, espaço, `&`, `+` ou `%` ali não seriam uma chave não achada:
+#: seriam outro filtro.
+_LETRAS_DA_CHAVE = frozenset(
+    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_.")
+
+
+def _chaves_do_lote(valores) -> list[str]:
+    """As chaves que dá para perguntar em lote, sem repetição e na ordem."""
+    limpas: list[str] = []
+    vistas: set[str] = set()
+    for cru in valores or ():
+        chave = str(cru or "")
+        if (not chave or chave in vistas or len(chave) > 80
+                or not set(chave) <= _LETRAS_DA_CHAVE):
+            continue
+        vistas.add(chave)
+        limpas.append(chave)
+    return limpas
+
+
+def _blocos_do_filtro(chaves: list[str]):
+    """Fatia as chaves em blocos que cabem numa URL (ver o limite acima)."""
+    bloco: list[str] = []
+    tamanho = 0
+    for chave in chaves:
+        if bloco and (len(bloco) >= LOTE_DE_ENVIOS
+                      or tamanho + len(chave) + 1 > TAMANHO_DO_FILTRO_EM_LOTE):
+            yield bloco
+            bloco, tamanho = [], 0
+        bloco.append(chave)
+        tamanho += len(chave) + 1
+    if bloco:
+        yield bloco
+
+
+def _id_da_linha(linha: dict) -> int:
+    try:
+        return int(linha.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
 
 class Espelhado:
     """Grava nos DOIS: a nuvem manda, o arquivo local acompanha.
@@ -635,6 +747,12 @@ class Espelhado:
 
     def envio_da_referencia(self, referencia: str):
         return self._nuvem.envio_da_referencia(referencia)
+
+    def envios_em_lote(self, identificadores, referencias):
+        """Da NUVEM, como as duas perguntas um-a-um logo acima: "já saiu?"
+        precisa valer entre máquinas, e o espelho local só conhece o que saiu
+        deste computador."""
+        return self._nuvem.envios_em_lote(identificadores, referencias)
 
     def remessas(self, *, convenio: str | None = None):
         return self._nuvem.remessas(convenio=convenio)

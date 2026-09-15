@@ -350,133 +350,13 @@ def test_linha_comum_nao_ganha_campos_de_reembolso():
 
 
 # ==========================================================================
-# Etapa 2: a janela lista o dia inteiro
+# Etapa 2: a janela "Confirmar o que entra"
 # ==========================================================================
-def _pagamento(ident, conta="CONTA TESTE", pago=False):
-    return {"id": ident, "tradePayableId": ident, "paidTo": "FORNECEDOR SA",
-            "remainingValue": 10.0, "paid": pago,
-            "tradePayableAccount": {"name": conta}}
-
-
-def test_a_janela_lista_todo_lancamento_das_contas_marcadas():
-    """A inversão: o `confirmar_antes.json` deixou de decidir quem aparece.
-
-    Antes, fornecedor fora daquele arquivo não tinha onde ser tirado do dia —
-    a não ser desmarcando a conta inteira, junto com tudo o mais que ela tem.
-    """
-    from pagamentos_dia import pagamentos_frame as frame
-
-    lancamentos = [_pagamento("a"), _pagamento("b"),
-                   _pagamento("c", conta="OUTRA CONTA")]
-    alvos = frame.alvos_para_confirmar(lancamentos, ["CONTA TESTE"])
-    assert [i["id"] for i in alvos] == ["a", "b"]
-
-
-def test_ja_pago_nao_entra_na_pergunta():
-    """Não há o que decidir sobre ele."""
-    from pagamentos_dia import pagamentos_frame as frame
-
-    alvos = frame.alvos_para_confirmar(
-        [_pagamento("a"), _pagamento("b", pago=True)], ["CONTA TESTE"])
-    assert [i["id"] for i in alvos] == ["a"]
-
-
-def test_conta_nao_marcada_nao_entra_na_pergunta():
-    from pagamentos_dia import pagamentos_frame as frame
-
-    assert frame.alvos_para_confirmar([_pagamento("a")], ["OUTRA"]) == []
-
-
-#: Cadastro de mentira, no formato de `carregar_fornecedores`.
-_MARCADA = {"CONCESSIONARIA LUZ": {"so_marcador": True}}
-
-
-def _marcador(ident, valor=1.00):
-    """O lançamento de R$ 1,00 que a concessionária usa para abrir o mês."""
-    item = _pagamento(ident)
-    item.update(paidTo="CONCESSIONARIA LUZ S/A", remainingValue=valor)
-    return item
-
-
-def test_o_marcador_de_recorrencia_nao_ocupa_a_janela():
-    """A queixa de 20/08/2026: três linhas de R$ 1,00, desmarcadas todo dia.
-
-    A etapa 3 já as descartava por valor simbólico — mas ela roda depois, e a
-    janela existe para recolher decisão, não para repetir uma já tomada.
-    """
-    from pagamentos_dia import pagamentos_frame as frame
-
-    alvos = frame.alvos_para_confirmar(
-        [_pagamento("a"), _marcador("luz")], ["CONTA TESTE"], _MARCADA)
-    assert [i["id"] for i in alvos] == ["a"]
-
-
-def test_valor_de_verdade_da_mesma_concessionaria_continua_na_janela():
-    """A marca é sobre o R$ 1,00, não sobre o nome: a conta de luz aparece."""
-    from pagamentos_dia import pagamentos_frame as frame
-
-    alvos = frame.alvos_para_confirmar(
-        [_marcador("conta", valor=56.24)], ["CONTA TESTE"], _MARCADA)
-    assert [i["id"] for i in alvos] == ["conta"]
-
-
-def test_sem_cadastro_a_janela_lista_tudo_como_antes():
-    """`fornecedores` é opcional — sem ele, nada é filtrado."""
-    from pagamentos_dia import pagamentos_frame as frame
-
-    alvos = frame.alvos_para_confirmar([_marcador("luz")], ["CONTA TESTE"])
-    assert [i["id"] for i in alvos] == ["luz"]
-
-
-# ------------------------------------------------ a cor do "Quem recebe"
-# Três casos apareciam em VERMELHO na janela "Confira o que entra hoje" e
-# geravam assim mesmo: o lançamento entrava na planilha, e vermelho na frente
-# de algo que não impede nada é lido como defeito do app. Eles são ressalva —
-# entram, e o que não entra é a REMESSA deles.
-
-def _para_receber(**mudancas):
-    item = _pagamento("x")
-    item.update(mudancas)
-    return item
-
-
-def test_pix_sem_chave_e_ressalva_e_nao_erro():
-    from pagamentos_dia import pagamentos_frame as frame
-
-    _nome, dado, estado = frame.quem_recebe(
-        _para_receber(tradePayablePaymentMethod="Pix", paidToBankAccount=""))
-    assert estado == "atencao", "vermelho aqui parece impedimento, e não é"
-    assert "não entra na remessa" in dado
-    assert "à mão" in dado, "falta dizer o que a pessoa tem de fazer"
-
-
-def test_boleto_sem_linha_lida_e_ressalva():
-    from pagamentos_dia import pagamentos_frame as frame
-
-    _nome, dado, estado = frame.quem_recebe(
-        _para_receber(tradePayablePaymentMethod="Boleto"), ja_lido={})
-    assert estado == "atencao"
-    assert "planilha" in dado, "a consequência é essa: vai na planilha, não no .REM"
-
-
-def test_ted_sem_conta_no_cadastro_e_ressalva():
-    from pagamentos_dia import pagamentos_frame as frame
-
-    _nome, dado, estado = frame.quem_recebe(
-        _para_receber(tradePayablePaymentMethod="TED", paidToBankAccount=""))
-    assert estado == "atencao"
-    assert "à mão" in dado
-
-
-def test_dado_completo_continua_verde():
-    from pagamentos_dia import pagamentos_frame as frame
-
-    _nome, dado, estado = frame.quem_recebe(_para_receber(
-        tradePayablePaymentMethod="Pix",
-        paidToBankAccount="Chave Pix: 12.345.678/0001-95"))
-    assert estado == "ok"
-    assert "PIX" in dado
-
+# Desde 14/09/2026 ela mostra a leitura REAL (anexos lidos, situação da
+# remessa e os não aptos), e a regra dela mora em `confirmacao.py`, com os
+# testes em `tests/test_confirmacao.py` — inclusive os que moravam aqui: já
+# pago não é pergunta, o marcador de recorrência não ocupa a janela, e linha
+# sem dado de pagamento que entra é âmbar, não vermelha.
 
 def test_cada_estado_tem_a_sua_cor():
     """O mapa é o que impede o âmbar de cair no vermelho por omissão — que era
@@ -485,18 +365,6 @@ def test_cada_estado_tem_a_sua_cor():
 
     assert set(frame.ESTILO_DO_DADO) == {"ok", "atencao", "erro"}
     assert len(set(frame.ESTILO_DO_DADO.values())) == 3
-
-
-def test_nenhum_caso_de_falta_de_dado_sai_como_erro():
-    """`erro` fica reservado para o que não sai de jeito nenhum. Nenhuma das
-    três faltas é isso: as três entram na planilha."""
-    from pagamentos_dia import pagamentos_frame as frame
-
-    for metodo in ("Pix", "Boleto", "TED"):
-        _n, _d, estado = frame.quem_recebe(
-            _para_receber(tradePayablePaymentMethod=metodo,
-                          paidToBankAccount=""), ja_lido={})
-        assert estado != "erro", f"{metodo} sem dado voltou a ser vermelho"
 
 
 # ------------------------------------------------- a linha de prontidão da aba
