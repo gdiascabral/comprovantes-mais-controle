@@ -15,6 +15,8 @@ público.
 import datetime as _dt
 from pathlib import Path
 
+import pytest
+
 from extratos_sicoob import sicoob_contas
 from pagamentos_dia import confirmacao
 from pagamentos_dia import regras_pagamento as regras
@@ -428,15 +430,71 @@ def test_conta_de_outro_banco_nao_e_pendencia():
     assert texto == (f"APTO · {remessa_dia.MOTIVO_FORA_SICOOB} — "
                      f"{confirmacao.PAGUE_PELO_HTML}")
     assert estado == "ok"
-    # O motivo da remessa (a linha teria impedimento) não pesa numa conta que
-    # não faz remessa nenhuma...
-    assert confirmacao.situacao_da_linha(
-        {"status": "APTO"}, _cand(impedimento=remessa_dia.MOTIVO_SEM_DOCUMENTO),
-        sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)[1] == "ok"
-    # ...mas o ATENÇÃO da planilha continua âmbar.
+    # O ATENÇÃO da planilha continua âmbar.
     assert confirmacao.situacao_da_linha(
         {"status": "ATENÇÃO — sem anexo"}, _cand(),
         sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)[1] == "atencao"
+
+
+@pytest.mark.parametrize("motivo", [
+    remessa_dia.MOTIVO_MAO,
+    remessa_dia.MOTIVO_PARCIAL,
+    remessa_dia.MOTIVO_LINHA,
+    remessa_dia.MOTIVO_VALOR_DIVERGE,
+    remessa_dia.MOTIVO_REEMBOLSO,
+])
+def test_em_conta_de_outro_banco_o_impedimento_de_quem_paga_a_mao_e_ambar(motivo):
+    """A conta do Inter se paga À MÃO, pelo HTML — e estes impedimentos são
+    justamente o que quem paga à mão precisa ver: pagar a outra pessoa, não
+    pagar boleto pela metade, linha que não fecha, valor que diverge, reembolso
+    sem saber quem recebe. A situação diz o motivo, e não o recado genérico."""
+    assert motivo in confirmacao.MOTIVOS_DE_QUEM_PAGA_A_MAO
+    texto, estado = confirmacao.situacao_da_linha(
+        {"status": "APTO"}, _cand(impedimento=motivo),
+        sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)
+    assert texto == f"APTO · {motivo}"
+    assert confirmacao.PAGUE_PELO_HTML not in texto
+    assert estado == "atencao"
+
+
+def test_so_os_cinco_motivos_sao_de_quem_paga_a_mao():
+    """A lista referencia as constantes do `remessa_dia` — não copia texto."""
+    assert confirmacao.MOTIVOS_DE_QUEM_PAGA_A_MAO == (
+        remessa_dia.MOTIVO_MAO, remessa_dia.MOTIVO_PARCIAL,
+        remessa_dia.MOTIVO_LINHA, remessa_dia.MOTIVO_VALOR_DIVERGE,
+        remessa_dia.MOTIVO_REEMBOLSO)
+
+
+@pytest.mark.parametrize("motivo", [
+    remessa_dia.MOTIVO_SEM_DOCUMENTO,
+    remessa_dia.MOTIVO_COPIA_COLA,
+    remessa_dia.MOTIVO_CHAVE_AMBIGUA,
+    remessa_dia.MOTIVO_SANESC,
+])
+def test_em_conta_de_outro_banco_o_impedimento_tecnico_da_remessa_fica_neutro(
+        motivo):
+    """Sem CPF/CNPJ para o segmento B, copia-e-cola, chave sem tipo, SANESC:
+    são coisas do ARQUIVO do banco, e esta conta não gera arquivo nenhum."""
+    texto, estado = confirmacao.situacao_da_linha(
+        {"status": "APTO"}, _cand(impedimento=motivo),
+        sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)
+    assert texto == (f"APTO · {remessa_dia.MOTIVO_FORA_SICOOB} — "
+                     f"{confirmacao.PAGUE_PELO_HTML}")
+    assert estado == "ok"
+
+
+def test_em_conta_de_outro_banco_o_reembolso_barrado_pela_identificacao_e_ambar():
+    """O reembolso sem quem recebe nem sempre chega como `MOTIVO_REEMBOLSO`:
+    quando a identificação achou um problema, o impedimento é o recado DELA
+    (com o nome do aviso), copiado do `reembolso_impedimento` da linha. É a
+    mesma família — não se sabe a quem pagar — e pinta igual."""
+    recado = "o aviso manda pagar PESSOA DE EXEMPLO, que não está no cadastro"
+    texto, estado = confirmacao.situacao_da_linha(
+        {"status": "APTO* (reembolso)", "reembolso_impedimento": recado},
+        _cand(impedimento=recado, reembolso=True),
+        sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)
+    assert texto == f"APTO* (reembolso) · {recado}"
+    assert estado == "atencao"
 
 
 def test_conta_sicoob_com_cadastro_incompleto_continua_ambar():

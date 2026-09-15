@@ -305,6 +305,43 @@ def _frase_de_outro_banco() -> str:
     return f"{remessa_dia.MOTIVO_FORA_SICOOB} — {PAGUE_PELO_HTML}"
 
 
+#: Os impedimentos de remessa que interessam a QUEM PAGA À MÃO — e por isso
+#: pintam de âmbar mesmo na conta de outro banco, que se paga pelo HTML:
+#: a observação que manda pagar outra pessoa, o boleto que não se paga pela
+#: metade, a linha digitável que não fecha, o valor do boleto que diverge e o
+#: reembolso sem saber quem recebe. Os outros motivos da remessa (sem CPF/CNPJ
+#: para o segmento B, copia-e-cola, chave sem tipo, SANESC) são do ARQUIVO do
+#: banco, e numa conta que não gera arquivo não pedem nada de ninguém. As
+#: constantes do `remessa_dia`, e não os textos: dois textos para o mesmo
+#: motivo divergem em silêncio.
+MOTIVOS_DE_QUEM_PAGA_A_MAO = (
+    remessa_dia.MOTIVO_MAO,
+    remessa_dia.MOTIVO_PARCIAL,
+    remessa_dia.MOTIVO_LINHA,
+    remessa_dia.MOTIVO_VALOR_DIVERGE,
+    remessa_dia.MOTIVO_REEMBOLSO,
+)
+
+
+def _importa_a_quem_paga_a_mao(registro: dict, candidato) -> str:
+    """O impedimento da linha, quando ele é de interesse de quem paga à mão;
+    "" quando não há impedimento ou ele é só técnico da remessa.
+
+    O reembolso sem quem recebe tem DUAS formas: o `MOTIVO_REEMBOLSO` e o
+    recado da própria identificação (`reembolso_impedimento`, com o nome do
+    aviso), que o `remessa_dia._impedimento` devolve no lugar dele. A segunda
+    é a mesma pergunta sem resposta — a quem pagar —, então conta igual."""
+    impedimento = getattr(candidato, "impedimento", "") if candidato else ""
+    if not impedimento:
+        return ""
+    if impedimento in MOTIVOS_DE_QUEM_PAGA_A_MAO:
+        return impedimento
+    if (getattr(candidato, "reembolso", False)
+            and impedimento == (registro.get("reembolso_impedimento") or "")):
+        return impedimento
+    return ""
+
+
 def situacao_da_linha(registro: dict, candidato, sem_remessa: str = "",
                       contas_conferidas: bool = True) -> tuple[str, str]:
     """(texto, estado) da SITUAÇÃO de uma linha que ENTRA na planilha.
@@ -320,19 +357,27 @@ def situacao_da_linha(registro: dict, candidato, sem_remessa: str = "",
     coisa, e quem pinta de vermelho é `estado_na_tela`.
 
     **Conta de OUTRO banco não é pendência** (`MOTIVO_FORA_SICOOB`). Ela não
-    faz remessa CNAB e nunca vai fazer, então nem ela nem o impedimento de
-    remessa da linha dizem nada sobre o que o dono tem de corrigir: a
-    situação diz, em tom neutro, que a conta não faz remessa e se paga pelo
-    HTML, e a cor é a da planilha. Pintar toda linha do Inter de âmbar todo
-    dia é ensinar a pular o âmbar — e é no âmbar que mora a conta Sicoob sem
-    convênio, que essa continua pintando.
+    faz remessa CNAB e nunca vai fazer: a situação diz, em tom neutro, que a
+    conta não faz remessa e se paga pelo HTML, e a cor é a da planilha.
+    Pintar toda linha do Inter de âmbar todo dia é ensinar a pular o âmbar —
+    e é no âmbar que mora a conta Sicoob sem convênio, que essa continua
+    pintando. **A exceção é quem paga à mão**: a conta de outro banco se paga
+    pelo HTML, e alguns impedimentos são justamente o que essa pessoa precisa
+    ver (`MOTIVOS_DE_QUEM_PAGA_A_MAO`). Com um deles a linha fica âmbar e a
+    situação mostra O MOTIVO, no lugar do recado genérico; o impedimento só
+    técnico da remessa continua neutro.
     """
     status = (registro.get("status") or "").strip()
     partes = [status] if status else []
     atencao = status.upper().startswith("ATEN")
 
     if _conta_de_outro_banco(sem_remessa):
-        partes.append(_frase_de_outro_banco())
+        a_mao = _importa_a_quem_paga_a_mao(registro, candidato)
+        if a_mao:
+            partes.append(a_mao)
+            atencao = True
+        else:
+            partes.append(_frase_de_outro_banco())
     elif sem_remessa:
         partes.append(f"conta sem remessa: {sem_remessa}")
         atencao = True
