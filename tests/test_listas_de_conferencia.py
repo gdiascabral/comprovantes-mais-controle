@@ -286,6 +286,39 @@ def test_confirmar_tira_o_desmarcado_e_grava_a_planilha(monkeypatch, tmp_path):
     assert arquivo.exists() and arquivo.parent == tmp_path
 
 
+def test_a_busca_guarda_o_periodo_que_leu(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [])
+    dia = _dt.date(2026, 9, 14)
+    api = SimpleNamespace(
+        capturar_credenciais=lambda _log: True, _req_anexos=True,
+        listar_a_pagar=lambda _i, _f, log=None: [_lanc_api("L1")],
+        anexos_de_titulos=lambda *_a, **_k: {},
+        listar_overviews=lambda *_a, **_k: {},
+        listar_participantes=lambda log=None: {})
+    dono.anx = SimpleNamespace(garantir_sessao=lambda _log: api)
+    dono._t_buscar(dia, dia)
+    assert dono._periodo_da_busca == (dia, dia)
+    assert [i["id"] for i in dono.lancamentos] == ["L1"]
+
+
+def test_a_planilha_sai_do_periodo_buscado_e_nao_da_tela(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])
+    dia14, dia15 = _dt.date(2026, 9, 14), _dt.date(2026, 9, 15)
+    dono._periodo_da_busca = (dia14, dia14)
+    dono._periodo = lambda: (dia15, dia15)        # a pessoa mudou a data
+    for nome, valor in (("v_cruzar", False), ("v_incluir_pagos", False),
+                        ("v_pasta", str(tmp_path))):
+        setattr(dono, nome, SimpleNamespace(get=lambda v=valor: v))
+    pedidos = []
+    dono.anx = SimpleNamespace(
+        submeter=lambda _rotulo, _fn, *a, dona=None: pedidos.append(a))
+    dono._apurar_e_confirmar(["CONTA A"], depois="planilha")
+    (_escolhidas, opcoes, _depois), = pedidos
+    assert opcoes["periodo"] == (dia14, dia14)
+    avisos = [str(v) for t, v in _mensagens(dono) if t == "log"]
+    assert any("não são as da busca" in a for a in avisos)
+
+
 def _anexo_pdf(nome):
     return {"filename": nome, "tagName": "Nota Fiscal", "extension": ".pdf",
             "downloadUrl": f"https://exemplo.invalid/{nome}.pdf"}

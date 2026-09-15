@@ -419,6 +419,11 @@ class PagamentosDiaFrame(ttk.Frame):
         #: planilha: o que está em memória seria de outro dia, e a janela da
         #: remessa não tem como saber disso sozinha.
         self._periodo_do_resultado = None
+        #: O período que o "1. Buscar" LEU — o dos `self.lancamentos`. É dele
+        #: que saem o nome da planilha e o `_periodo_do_resultado`, e não das
+        #: datas da tela no clique do passo 2, que a pessoa pode ter mexido
+        #: depois de buscar (`confirmacao.periodo_da_planilha`).
+        self._periodo_da_busca = None
         #: O que o último `_conferir_prontidao` viu — a lista de `Conferencia`
         #: e, quando o cadastro não abriu, o recado do erro. Ficam aqui, e não
         #: dentro da janela do "Ver detalhes", porque quem os mostra são DOIS:
@@ -1028,6 +1033,10 @@ class PagamentosDiaFrame(ttk.Frame):
             # Rede de segurança: se a API ignorar o filtro, não deixamos o
             # relatório sair errado em silêncio.
             self.lancamentos = relatorio.filtrar_periodo(brutos, ini, fim, log=self._log)
+            # Junto com os lançamentos, e não no clique: se a busca cair antes
+            # daqui, os lançamentos e o período em memória continuam os da
+            # busca anterior, um de acordo com o outro.
+            self._periodo_da_busca = (ini, fim)
             self._log(f"{len(self.lancamentos)} lançamento(s) no período.")
             if not self.lancamentos:
                 self.q.put(("status", "Nenhum lançamento no período."))
@@ -1472,14 +1481,22 @@ class PagamentosDiaFrame(ttk.Frame):
         `"remessa"` (passo 3 sem planilha em memória — a mesma leitura, a
         mesma janela, e só então a conferência da remessa de sempre).
 
-        O período, as duas caixas e a pasta são lidos AQUI, na thread da
-        interface e no clique: são o que a pessoa via quando mandou gerar, e
-        a leitura dura minutos."""
+        As duas caixas e a pasta são lidas AQUI, na thread da interface e no
+        clique: são o que a pessoa via quando mandou gerar, e a leitura dura
+        minutos. O PERÍODO não: é o da busca, que é de onde vieram os
+        lançamentos — se a tela mudou desde então, o Registro avisa."""
         try:
-            periodo = self._periodo()
+            na_tela = self._periodo()
         except ValueError:
-            messagebox.showwarning("Período", "Use datas no formato dd/mm/aaaa.")
+            na_tela = None
+        periodo, aviso = confirmacao.periodo_da_planilha(
+            self._periodo_da_busca, na_tela)
+        if periodo is None:
+            messagebox.showinfo("Pagamentos do Dia",
+                                "Busque os lançamentos primeiro.")
             return
+        if aviso:
+            self._log(f"\n[!] {aviso[:1].upper()}{aviso[1:]}.")
         opcoes = {"periodo": periodo, "cruzar": bool(self.v_cruzar.get()),
                   "incluir_pagos": bool(self.v_incluir_pagos.get()),
                   "pasta": self.v_pasta.get().strip()}

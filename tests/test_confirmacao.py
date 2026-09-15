@@ -109,6 +109,22 @@ def test_o_desmarcado_sai_com_o_motivo_e_o_resto_fica():
         == [("L2", regras.MOTIVO_NAO_CONFIRMADO)]
 
 
+def test_a_planilha_sai_do_periodo_da_busca_e_avisa_se_a_tela_mudou():
+    """Os lançamentos em memória são os do período BUSCADO; nomear a planilha
+    (e o `_periodo_do_resultado`) pelas datas da tela no clique do passo 2
+    punha o dia 15 no nome de uma planilha do dia 14."""
+    dia14, dia15 = (_dt.date(2026, 9, 14),) * 2, (_dt.date(2026, 9, 15),) * 2
+    assert confirmacao.periodo_da_planilha(dia14, dia14) == (dia14, "")
+    periodo, aviso = confirmacao.periodo_da_planilha(dia14, dia15)
+    assert periodo == dia14
+    assert aviso == ("as datas na tela (15/09/2026 a 15/09/2026) não são as da "
+                     "busca (14/09/2026 a 14/09/2026): a planilha sai do período "
+                     "buscado — para outro período, busque de novo")
+    periodo, aviso = confirmacao.periodo_da_planilha(dia14, None)
+    assert periodo == dia14 and "14/09/2026 a 14/09/2026" in aviso
+    assert confirmacao.periodo_da_planilha(None, dia14) == (None, "")
+
+
 def test_o_aviso_de_anexos_nao_lidos_diz_quantos():
     assert confirmacao.aviso_de_anexos_nao_lidos(0) == ""
     assert confirmacao.aviso_de_anexos_nao_lidos(2) == (

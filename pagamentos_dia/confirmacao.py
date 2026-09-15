@@ -69,6 +69,36 @@ class Entradas:
     anexos_nao_lidos: int = 0
 
 
+def _periodo_legivel(periodo) -> str:
+    ini, fim = periodo
+    return f"{ini:%d/%m/%Y} a {fim:%d/%m/%Y}"
+
+
+def periodo_da_planilha(periodo_da_busca, periodo_na_tela) -> tuple:
+    """(período, aviso) da planilha do passo 2.
+
+    O período é o da BUSCA, e não o da tela no clique: os lançamentos em
+    memória são os que o "1. Buscar" leu, e nomear a planilha — e o
+    `_periodo_do_resultado`, de que a remessa depende — pelas datas que a
+    pessoa mexeu depois punha um dia no nome de uma planilha de outro. Se a
+    tela mudou (ou não é uma data), o aviso diz de qual período a planilha
+    sai e o que fazer para ter outro. Sem busca, `(None, "")`.
+    """
+    if periodo_da_busca is None:
+        return None, ""
+    if periodo_na_tela == periodo_da_busca:
+        return periodo_da_busca, ""
+    buscado = _periodo_legivel(periodo_da_busca)
+    if not periodo_na_tela:
+        return periodo_da_busca, (
+            f"as datas na tela não são válidas: a planilha sai do período "
+            f"buscado ({buscado}) — para outro período, busque de novo")
+    return periodo_da_busca, (
+        f"as datas na tela ({_periodo_legivel(periodo_na_tela)}) não são as "
+        f"da busca ({buscado}): a planilha sai do período buscado — para "
+        "outro período, busque de novo")
+
+
 def aviso_de_anexos_nao_lidos(quantos: int) -> str:
     """O aviso da janela para os anexos que não foram lidos, ou "".
 
