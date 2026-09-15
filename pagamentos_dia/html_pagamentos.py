@@ -142,15 +142,20 @@ def para_colar(texto) -> str:
 
 #: Quem recebe o reembolso não é informação para o extrato do banco (dono,
 #: 14/09/2026). "(Reembolso Fulano)" sai inteiro; fora de parênteses sai a
-#: palavra "reembolso" e até `_MAX_PALAVRAS_DE_QUEM` palavras só de letras
-#: depois dela — o nome. Tirar "até o próximo separador" apagava o que vinha
-#: depois: "Reembolso material QD 98 LT 97 casa 2" perdia o lote.
+#: palavra "reembolso" e as palavras só de letras depois dela — o nome —, até
+#: uma parada e no máximo `_MAX_PALAVRAS_DE_QUEM`. Tirar "até o próximo
+#: separador" apagava o que vinha depois ("Reembolso material QD 98 LT 97
+#: casa 2" perdia o lote); o teto de três deixava o fim de um nome comprido
+#: ("Reembolso Fulana Sicrana de Tal" sobrava "Tal").
 _REEMBOLSO_ENTRE_PARENTESES = re.compile(r"\([^()]*reembols[^()]*\)", re.I)
-_MAX_PALAVRAS_DE_QUEM = 3
-#: Palavras que abrem centro de custo ou imóvel. O filtro do reembolso para
-#: nelas: o que vem depois é o lote, e não o nome de quem recebe.
-PALAVRAS_DE_IMOVEL = frozenset({"QD", "LT", "TB", "RR", "RPB", "CASA", "CS",
-                                "LOTE", "QUADRA"})
+_MAX_PALAVRAS_DE_QUEM = 5
+#: As PARADAS do filtro do reembolso, numa lista só: palavras que abrem centro
+#: de custo ou imóvel (o que vem depois é o lote) e rótulos de documento (o
+#: que vem depois é o número, e o rótulo "NF"/"OC" é o que o Anexar lê — sem
+#: ele, "Reembolso NF 1234 material" virava "1234 material").
+PARADAS_DO_REEMBOLSO = frozenset({
+    "QD", "LT", "TB", "RR", "RPB", "CASA", "CS", "LOTE", "QUADRA",
+    "NF", "NFE", "NFS", "OC", "OS"})
 _PEDACOS = re.compile(r"[A-Za-z0-9]+|\s+|[^A-Za-z0-9\s]")
 _SO_LETRAS = re.compile(r"[A-Za-z]+")
 
@@ -158,11 +163,10 @@ _SO_LETRAS = re.compile(r"[A-Za-z]+")
 def _sem_reembolso(s: str) -> str:
     """O texto (já sem acento) sem a menção de reembolso.
 
-    Depois de "reembolso" saem, no máximo, três palavras só de letras; para
-    antes disso em palavra com dígito, em palavra de imóvel
-    (`PALAVRAS_DE_IMOVEL`) e em pontuação — "REEMBOLSO FULANO - CIMENTO"
-    guarda o "CIMENTO". O separador colado na palavra ("Reembolso: Fulano")
-    vai junto."""
+    Depois de "reembolso" saem as palavras só de letras, no máximo cinco;
+    para antes disso em palavra com dígito, numa das `PARADAS_DO_REEMBOLSO`
+    e em pontuação — "REEMBOLSO FULANO - CIMENTO" guarda o "CIMENTO". O
+    separador colado na palavra ("Reembolso: Fulano") vai junto."""
     pedacos = _PEDACOS.findall(_REEMBOLSO_ENTRE_PARENTESES.sub(" ", s))
 
     def proximo(i):
@@ -183,7 +187,7 @@ def _sem_reembolso(s: str) -> str:
         for _ in range(_MAX_PALAVRAS_DE_QUEM):
             j = proximo(i)
             if (j >= len(pedacos) or not _SO_LETRAS.fullmatch(pedacos[j])
-                    or pedacos[j].upper() in PALAVRAS_DE_IMOVEL):
+                    or pedacos[j].upper() in PARADAS_DO_REEMBOLSO):
                 break
             i = j + 1
         saida.append(" ")

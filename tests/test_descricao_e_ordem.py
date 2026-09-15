@@ -326,12 +326,11 @@ def test_o_reembolso_nao_vai_para_o_banco():
 
 
 def test_o_filtro_do_reembolso_nao_apaga_o_lote_nem_o_que_tem_numero():
-    """Tira "reembolso" e até três palavras só de letras depois dela (o nome
-    de quem recebe); para em palavra com dígito ou de imóvel."""
+    """Tira "reembolso" e as palavras só de letras depois dela (o nome de quem
+    recebe), até cinco; para em palavra com dígito, de imóvel ou de documento."""
     casos = {
         "Reembolso material QD 98 LT 97 casa 2": "QD 99 LT 99 QD 98 LT 97 casa 2",
         "Reembolso Fulana 3 parcelas": "QD 99 LT 99 3 parcelas",
-        "Reembolso de despesas com cimento e areia": "QD 99 LT 99 cimento e areia",
         "reembolso lote 5 muro": "QD 99 LT 99 lote 5 muro",
         "Reembolso Fulana CASA 2": "QD 99 LT 99 CASA 2",
         "Reembolso Fulana cs 2": "QD 99 LT 99 cs 2",
@@ -339,6 +338,29 @@ def test_o_filtro_do_reembolso_nao_apaga_o_lote_nem_o_que_tem_numero():
     for descricao, esperado in casos.items():
         obtido = hp.descricao_para_colar(_partes(descricao=descricao), INTER)
         assert obtido == esperado, descricao
+
+
+def test_o_filtro_do_reembolso_para_no_rotulo_do_documento():
+    """"Reembolso NF 1234 material" perdia o "NF", que o Anexar usa."""
+    casos = {
+        "Reembolso NF 1234 material": "QD 99 LT 99 NF 1234 material",
+        "Reembolso Fulana OC 1234": "QD 99 LT 99 OC 1234",
+        "reembolso fulana nfe 5678": "QD 99 LT 99 nfe 5678",
+        "Reembolso Fulana NFS 5678": "QD 99 LT 99 NFS 5678",
+        "Reembolso OS 12 pintura": "QD 99 LT 99 OS 12 pintura",
+    }
+    for descricao, esperado in casos.items():
+        obtido = hp.descricao_para_colar(_partes(descricao=descricao), INTER)
+        assert obtido == esperado, descricao
+
+
+def test_o_nome_inteiro_de_quem_recebe_sai_ate_cinco_palavras():
+    """"Reembolso Fulana Sicrana de Tal" deixava "Tal": o nome tem mais de três
+    palavras. O teto passa a cinco, e o que vem depois dele fica."""
+    r = _partes(descricao="Reembolso Fulana Sicrana de Tal")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99"
+    r = _partes(descricao="Reembolso Fulana Sicrana de Tal Modelo cimento")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 cimento"
 
 
 def test_o_centro_de_custo_nao_passa_pelo_filtro_do_reembolso():
