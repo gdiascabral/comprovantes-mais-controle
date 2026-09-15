@@ -679,6 +679,19 @@ def documento_declara_reembolso(item: dict, overview=None) -> bool:
                (item.get("documentNumber"), (overview or {}).get("documentNumber")))
 
 
+def quem_o_documento_diz_reembolsar(item: dict, overview=None) -> str:
+    """O nome escrito depois de "REEMBOLSO" no campo do documento, ou "".
+
+    É o único lugar em que o lançamento sem aviso "PAGAR PARA" diz de quem é
+    o dinheiro, e ele sumiu da descrição quando a frase deixou de sair como
+    NF — por isso volta pela Obs (`montar_registros`)."""
+    for doc in (item.get("documentNumber"), (overview or {}).get("documentNumber")):
+        m = re.search(r"REEMBOLS\w*[\s:\-–—]*(.*)", str(doc or ""), re.I)
+        if m:
+            return re.sub(r"\s+", " ", m.group(1)).strip(" -–—:")
+    return ""
+
+
 def centro_de_custo(item: dict) -> str:
     """O centro de custo, uma vez só.
 
@@ -1231,6 +1244,19 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             status = "ATENÇÃO — sem dados de pgto"
         if divergiu:
             status = "ATENÇÃO — documento não bate"
+        # O documento diz REEMBOLSO e não há aviso "PAGAR PARA": o favorecido
+        # é quem vendeu (a loja do cupom), e a chave é a do cadastro DELE — mas
+        # o dinheiro pode ser de quem pagou do bolso. Até 14/09/2026 o único
+        # sinal disso era o "NF REEMBOLSO FULANA" na descrição, que era
+        # defeito e saiu; sem este alarme a linha ia APTA e MARCADA para a
+        # remessa (`remessa_dia.preparar` só marca status "APTO…").
+        if (cls != "PAGAR_PARA" and not item.get("paid")
+                and documento_declara_reembolso(item, overview)):
+            status = "ATENÇÃO — documento declara reembolso"
+            quem = quem_o_documento_diz_reembolsar(item, overview)
+            obs = " · ".join(filter(None, [
+                f"o documento declara REEMBOLSO{' ' + quem if quem else ''}: "
+                "conferir se o favorecido é mesmo quem recebe", obs]))
         if chave_divergente:
             status = "ATENÇÃO — chave do reembolso divergente"
         # Por último entre os alarmes: pagar o valor errado é o pior deles.

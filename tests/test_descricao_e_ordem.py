@@ -8,6 +8,7 @@ import re
 
 from pagamentos_dia import html_pagamentos as hp
 from pagamentos_dia import relatorio
+from pagamentos_dia import remessa_dia
 
 
 def anexo(nome, tag=None, ext=".pdf", url=None):
@@ -50,16 +51,16 @@ def _boleto_sem_anexo(**mudancas):
 def test_documento_de_reembolso_continua_valendo_como_compra_documentada():
     """Em 73c52ce o detalhe devolvia "REEMBOLSO FULANO" como NF, e isso fazia a
     linha ser paga pela chave do cadastro. Tirar a falsa NF da descrição não
-    pode tirar a linha da planilha: o desfecho tem de ser o mesmo de antes
-    (tipo, dados, obs e status conferidos contra a base, não inventados)."""
+    pode tirar a linha da planilha: tipo, dados e a Obs da forma de pagar são
+    os que a base produz para o mesmo lançamento. O status deixou de ser o da
+    base de propósito — ver `test_reembolso_declarado_sem_aviso_vira_atencao…`."""
     detalhe = {"1": {"documentNumber": "REEMBOLSO FULANO MODELO"}}
     res = relatorio.montar_registros([_boleto_sem_anexo()], {}, detalhe, {})
     assert not res.omitidos
     linha = res.contas[CONTA][0]
-    assert (linha["tipo"], linha["dados"], linha["obs"], linha["status"]) == (
-        "Pix", "fornecedor@exemplo.com",
-        "Sem boleto anexado — pagar pela chave Pix do cadastro",
-        "ATENÇÃO — sem anexo")
+    assert (linha["tipo"], linha["dados"]) == ("Pix", "fornecedor@exemplo.com")
+    assert "Sem boleto anexado — pagar pela chave Pix do cadastro" in linha["obs"]
+    assert linha["status"].startswith("ATENÇÃO")
     assert linha["descricao"] == "QD 99 LT 99" and linha["nf"] == ""
 
 
@@ -75,6 +76,69 @@ def test_sem_nf_sem_oc_e_sem_reembolso_continua_fora():
     res = relatorio.montar_registros([_boleto_sem_anexo(documentNumber="")],
                                      {}, {}, {})
     assert not res.contas and len(res.omitidos) == 1
+
+
+# ------------------------ reembolso declarado sem aviso: quem recebe está em dúvida
+#: O mesmo CNPJ sintético de tests/test_remessa_dia.py (o exemplo de manual).
+CNPJ_SINTETICO = "11222333000181"
+CUPOM = {"t1": [anexo("cupom", ext=".jpg")]}
+DETALHE_REEMBOLSO = {"1": {"documentNumber": "REEMBOLSO FULANA MODELO"}}
+AVISO = ("o documento declara REEMBOLSO FULANA MODELO: conferir se o "
+         "favorecido é mesmo quem recebe")
+
+
+def _loja(**mudancas):
+    """A loja é o favorecido, a forma é Boleto, o anexo é a foto do cupom e o
+    cadastro tem o Pix DA LOJA — mas o documento diz que o dinheiro é da Fulana."""
+    return _boleto_sem_anexo(**dict({"paidTo": "LOJA MODELO SA",
+                                     "paidToBankAccount": "PIX EMAIL loja@exemplo.com",
+                                     "documentNumber": "REEMBOLSO FULANA MODELO"},
+                                    **mudancas))
+
+
+def _candidato(res):
+    c, = remessa_dia.preparar(res.contas,
+                              participantes={"LOJA MODELO SA": CNPJ_SINTETICO})[CONTA]
+    return c
+
+
+def test_reembolso_declarado_sem_aviso_vira_atencao_e_nasce_desmarcado():
+    """Sem o "NF REEMBOLSO FULANA" na descrição, nada dizia que o dinheiro era
+    da Fulana: a linha pagava o Pix da loja como APTO e ia MARCADA para a
+    remessa. Agora é ATENÇÃO, com o nome na Obs, e a remessa pede um clique."""
+    res = relatorio.montar_registros([_loja()], CUPOM, DETALHE_REEMBOLSO, {})
+    linha = res.contas[CONTA][0]
+    assert linha["status"] == "ATENÇÃO — documento declara reembolso"
+    assert AVISO in linha["obs"]
+    c = _candidato(res)
+    assert c.impedimento == "" and not c.marcado
+
+
+def test_reembolso_declarado_so_no_lancamento_tambem_vira_atencao():
+    res = relatorio.montar_registros([_loja()], CUPOM, {}, {})
+    linha = res.contas[CONTA][0]
+    assert linha["status"] == "ATENÇÃO — documento declara reembolso"
+    assert AVISO in linha["obs"]
+    assert not _candidato(res).marcado
+
+
+def test_a_mesma_linha_com_nf_de_verdade_continua_apta_e_marcada():
+    """O controle: sem isto, o desmarcado acima poderia vir de outra trava."""
+    res = relatorio.montar_registros([_loja(documentNumber="5678")], CUPOM, {}, {})
+    assert res.contas[CONTA][0]["status"] == "APTO"
+    c = _candidato(res)
+    assert c.impedimento == "" and c.marcado
+
+
+def test_aviso_pagar_para_nao_ganha_este_alarme():
+    """Com o aviso "PAGAR PARA", quem recebe já é decidido pelo aviso."""
+    aviso = {"t1": [anexo("PAGAR PARA FULANA MODELO")]}
+    res = relatorio.montar_registros([_loja()], aviso, DETALHE_REEMBOLSO, {})
+    linhas = res.contas.get(CONTA, []) + res.omitidos
+    assert linhas
+    for linha in res.contas.get(CONTA, []):
+        assert "documento declara reembolso" not in linha["status"]
+        assert "o documento declara REEMBOLSO" not in linha["obs"]
 
 
 def test_nf_de_verdade_no_nome_do_anexo_continua_valendo():
