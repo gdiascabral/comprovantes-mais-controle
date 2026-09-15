@@ -96,7 +96,8 @@ def origens_dos_pdfs(pasta) -> dict[str, dict]:
         if org is None:
             continue
         nome = linha["arquivo"]
-        novo = {"origem": org, "recebedor": linha.get("recebedor") or None}
+        novo = {"origem": org, "recebedor": linha.get("recebedor") or None,
+                "doc_recebedor": linha.get("doc_recebedor") or None}
         if nome in achado and achado[nome]["origem"] != org:
             duvidosos.add(nome)
         achado[nome] = novo
@@ -130,9 +131,36 @@ def origem_da_conta_erp(nome_erp: str, mapa_mc, empresas,
     return (banco, util.norm_espaco(destino.empresa))
 
 
+def ocs_do_overview(overview) -> set[str]:
+    """{"1234"} do `purchaseOrder.number` do overview; vazio sem OC."""
+    oc = ((overview or {}).get("purchaseOrder") or {}).get("number")
+    return {str(oc).strip()} if oc not in (None, "") else set()
+
+
+def documentos_do_grupo(empresas) -> dict[str, str]:
+    """{nome normalizado: CNPJ} das empresas do próprio cadastro.
+
+    O favorecido de um APORTE é uma empresa do grupo, que nem sempre está no
+    cadastro de Contatos do ERP; o `contas_sicoob.json` já tem o CNPJ dela,
+    com os nomes pelos quais ela aparece (pasta, razão social e os clientes do
+    ERP). Nome que cai em dois CNPJs sai do mapa."""
+    vistos: dict[str, set] = {}
+    for e in empresas or []:
+        cnpj = _digitos(getattr(e, "cnpj", ""))
+        if len(cnpj) != 14:
+            continue
+        nomes = [e.nome, getattr(e, "razao_social", "")] + list(
+            getattr(e, "clientes_erp", []) or [])
+        for nome in nomes:
+            chave = util.norm_espaco(nome or "")
+            if chave:
+                vistos.setdefault(chave, set()).add(cnpj)
+    return {n: docs.pop() for n, docs in vistos.items() if len(docs) == 1}
+
+
 # --------------------------------------------------------------- juntando
 def preencher(pendentes, pdfs, pasta, *, mapa_mc=None, empresas=None,
-              contas_inter=None) -> dict:
+              contas_inter=None, documentos=None) -> dict:
     """Põe `origem`/`recebedor` nos PDFs e `origem` nos lançamentos.
 
     Os cadastros podem vir por argumento (teste) ou são lidos aqui; um que não
@@ -162,6 +190,14 @@ def preencher(pendentes, pdfs, pasta, *, mapa_mc=None, empresas=None,
         info = origens.get(pd["fn"]) or {}
         pd["origem"] = info.get("origem")
         pd["recebedor"] = info.get("recebedor")
+        pd["doc_recebedor"] = info.get("doc_recebedor")
+    # O cadastro de Contatos (quem chamou leu do ERP) manda; as empresas do
+    # grupo completam o que ele não tem.
+    docs = dict(documentos_do_grupo(empresas))
+    docs.update({util.norm_espaco(k): _digitos(v)
+                 for k, v in (documentos or {}).items() if _digitos(v)})
+    for pe in pendentes:
+        pe["doc_favorecido"] = docs.get(util.norm_espaco(pe.get("favorecido") or ""))
     for pe in pendentes:
         try:
             pe["origem"] = origem_da_conta_erp(pe.get("conta") or "", mapa_mc,

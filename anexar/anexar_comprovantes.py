@@ -158,6 +158,8 @@ def _sinais(c: dict) -> list[str]:
     `conta` é o PDF ter saído da conta cadastrada no lançamento e `favorecido`
     é quem recebeu bater com o do ERP (regra do dono, 14/09/2026)."""
     return [nome for nome, bateu in (("OC/NF", c.get("ocnf")),
+                                     ("nº longo", c.get("idnum")),
+                                     ("documento", c.get("docrec")),
                                      ("conta", c.get("conta")),
                                      ("favorecido", c.get("fav")),
                                      ("centro de custo", c.get("cc")),
@@ -1194,8 +1196,34 @@ class AnexarFrame(ttk.Frame):
             # De onde saiu cada PDF e de que conta é cada lançamento: PDF de
             # outra conta não disputa (regra do dono, 14/09/2026). Não saber é
             # neutro, então uma falha aqui só desliga a regra nesta rodada.
+            # Identificadores exatos (14/09/2026). O CPF/CNPJ do favorecido sai
+            # do cadastro de Contatos do ERP; a OC, do overview -- lido só de
+            # quem disputa PDF. Os dois são opcionais: falhando, o casamento
+            # só fica sem aquela régua nesta rodada.
+            documentos = {}
             try:
-                n = origem.preencher(pendentes, pdfs, Path(pasta_pdfs))
+                documentos = self.api.listar_participantes(log=lambda _m: None)
+            except Exception:                                # noqa: BLE001
+                config.diag("listar_participantes falhou:\n" + traceback.format_exc())
+                self._log("[aviso] não li o cadastro de Contatos — o casamento "
+                          "segue sem o CPF/CNPJ de quem recebeu.")
+            disputa = matcher.disputados(pendentes, pdfs)
+            if disputa and not self._parar.is_set():
+                try:
+                    self._log(f"Lendo a OC de {len(disputa)} lançamento(s) em disputa...")
+                    overviews = self.api.listar_overviews(
+                        [str(pe["launchId"]) for pe in disputa], log=lambda _m: None,
+                        cancelar=self._checar_pausa)
+                    for pe in disputa:
+                        pe["ocs_erp"] = origem.ocs_do_overview(
+                            overviews.get(str(pe["launchId"])))
+                except Exception:                            # noqa: BLE001
+                    config.diag("listar_overviews falhou:\n" + traceback.format_exc())
+                    self._log("[aviso] não li as OCs do ERP — o casamento segue "
+                              "com a OC da descrição.")
+            try:
+                n = origem.preencher(pendentes, pdfs, Path(pasta_pdfs),
+                                     documentos=documentos)
                 self._log(f"Conta de origem conhecida: {n['pdfs_com_origem']} de "
                           f"{n['pdfs']} PDF(s) · {n['lancamentos_com_conta']} de "
                           f"{n['lancamentos']} lançamento(s).")

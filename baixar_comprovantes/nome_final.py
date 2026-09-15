@@ -134,6 +134,29 @@ def favorecido_do_comprovante(texto: str) -> str:
     return ""
 
 
+def documento_de_quem_recebeu(texto: str) -> str:
+    """O CPF/CNPJ de quem RECEBEU, só dígitos. "" quando não há ou vem mascarado.
+
+    O documento do PAGADOR também está no comprovante, então a âncora é o
+    BLOCO de quem recebe, como em `favorecido_do_comprovante`: "Beneficiário"
+    (boleto do Sicoob e do Inter) ou "Quem recebeu" (Pix do Inter). Serve ao
+    casamento do Anexar (14/09/2026): o CNPJ separa dois Pix de mesmo valor e
+    dia que o nome encurtado do Inter (só o começo da razão social) não separa.
+    Mascarado ("***.456.789-**") não serve para comparar e fica de fora."""
+    linhas = [l.strip() for l in (texto or "").splitlines()]
+    for i, linha in enumerate(linhas):
+        if not re.fullmatch(r"Benefici[áa]rio|Quem recebeu", linha, re.I):
+            continue
+        for seguinte in linhas[i + 1:i + 6]:
+            achado = re.match(r"CPF\s*/\s*CNPJ\s+(\S+)", seguinte, re.I)
+            if achado:
+                if "*" in achado.group(1):
+                    return ""
+                digitos = re.sub(r"\D", "", achado.group(1))
+                return digitos if len(digitos) in (11, 14) else ""
+    return ""
+
+
 # "Observação" é como o Sicoob chama o texto livre que quem pagou escreveu;
 # "Descrição" entra junto porque é o mesmo campo com outro nome, e custa nada
 # aceitar os dois, com ou sem ":". O rótulo pode vir sem valor nenhum na mesma

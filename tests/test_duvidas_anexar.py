@@ -73,6 +73,13 @@ def test_resumo_mostra_conta_e_favorecido_quando_batem():
     assert ac._resumo_cands(_duvida(1, [c])) == "a.pdf  [conta + favorecido + data]"
 
 
+def test_resumo_mostra_os_identificadores_exatos():
+    c = _cand(_pdf("a.pdf"), date=True)
+    c["idnum"] = True
+    c["docrec"] = True
+    assert ac._resumo_cands(_duvida(1, [c])) == "a.pdf  [nº longo + documento + data]"
+
+
 def test_a_aba_sem_par_do_relatorio_diz_o_motivo(tmp_path):
     """Até 14/09/2026 a aba SEM PAR não dizia nada, e "não havia PDF desse
     valor" e "havia, mas saiu de outra conta" pediam coisas diferentes."""
