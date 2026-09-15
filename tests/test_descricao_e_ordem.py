@@ -295,6 +295,16 @@ def test_hifen_acento_e_pontuacao_saem():
         "QD 99 LT 01 QD 99 LT 02 Instalacao eletrica CASA 2 fase 1 etapa no3")
 
 
+def test_hifen_entre_digitos_fica_e_o_que_separa_palavras_sai():
+    """"LT 10-11" partido em "LT 10 11" faz o Anexar ler "LT 10" e anexar no
+    lote errado. O hífen colado entre dígitos fica; o que separa palavras sai."""
+    r = _partes(cc="QD 99 LT 10-11", descricao="Muro de divisa 3-4 - ESCRITORIO-X")
+    assert hp.descricao_para_colar(r, INTER) == (
+        "QD 99 LT 10-11 Muro de divisa 3-4 ESCRITORIO X")
+    r = _partes(cc="QD 99 LT 10 - 11")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 10 11"
+
+
 def test_o_reembolso_nao_vai_para_o_banco():
     casos = {
         "Cimento e areia (Reembolso Fulano Modelo)": "QD 99 LT 99 Cimento e areia",

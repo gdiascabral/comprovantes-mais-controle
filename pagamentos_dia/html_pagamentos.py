@@ -152,13 +152,20 @@ def limite_da_descricao(conta) -> int:
             else LIMITE_DESCRICAO)
 
 
+#: Uma palavra do banco: letras e dígitos, mais o hífen COLADO entre dois
+#: dígitos. "LT 10-11" partido em "LT 10 11" faz o casamento do Anexar ler
+#: "LT 10" e anexar o comprovante no lote errado; o hífen que separa palavras
+#: ("ESCRITORIO - X", "ESCRITORIO-X") continua saindo.
+_PALAVRA = re.compile(r"(?:[A-Za-z0-9]|(?<=\d)-(?=\d))+")
+
+
 def _palavras(texto) -> list[str]:
     """As palavras que vão ao banco: sem acento, sem menção de reembolso e só
-    letra e número — todo o resto, INCLUSIVE o hífen, é separador."""
+    letra, número e o hífen entre dígitos — todo o resto é separador."""
     s = relatorio.sem_acento(str(texto or ""))
     s = _REEMBOLSO_ENTRE_PARENTESES.sub(" ", s)
     s = _REEMBOLSO_E_QUEM.sub(" ", s)
-    return re.findall(r"[A-Za-z0-9]+", s)
+    return _PALAVRA.findall(s)
 
 
 #: Pontuação ENTRE dois dígitos, dentro do número da NF ou da OC.
@@ -202,8 +209,10 @@ def descricao_para_colar(registro, conta) -> str:
       é de medição de mão de obra (a forma curta que a planilha já mostra);
     - água e luz continuam como na planilha (CC + descrição + OC): ali o
       "número da NF" é o da fatura e não identifica nada;
-    - sem menção de reembolso, sem acento e sem caractere especial (hífen
-      incluído), e sem repetir o centro de custo que a descrição já traz; no
+    - sem menção de reembolso, sem acento e sem caractere especial (o hífen
+      que separa palavras incluído; o COLADO entre dígitos, como em
+      "LT 10-11", fica), e sem repetir o centro de custo que a descrição já
+      traz; no
       nº da NF e da OC a pontuação entre dígitos some sem virar espaço
       ("1.234" é "1234", não "1 234");
     - no tamanho do banco (`limite_da_descricao`), cortando em fronteira de
