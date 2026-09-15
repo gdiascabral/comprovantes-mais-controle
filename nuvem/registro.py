@@ -137,7 +137,8 @@ class Envio:
     precisa saber se a resposta veio do arquivo ou do banco.
     """
 
-    __slots__ = ("nsa", "gerado_em", "convenio", "estado", "seu_numero")
+    __slots__ = ("nsa", "gerado_em", "convenio", "estado", "seu_numero",
+                 "retorno_estado")
 
     def __init__(self, linha: dict) -> None:
         remessa = linha.get("remessa") or {}
@@ -145,6 +146,11 @@ class Envio:
         self.convenio = remessa.get("convenio") or ""
         self.estado = remessa.get("estado") or ""
         self.seu_numero = linha.get("seu_numero") or ""
+        #: O que o RETORNO disse deste pagamento (`ok`/`pendente`/`rejeitado`),
+        #: "" enquanto nenhum retorno o citou. Não é o `estado` da remessa:
+        #: remessa "rejeitado" quer dizer que UM item foi recusado, e este
+        #: pode ter sido pago — a janela da confirmação decide pelo do item.
+        self.retorno_estado = linha.get("retorno_estado") or ""
         quando = remessa.get("gerado_em") or ""
         try:
             self.gerado_em = _dt.datetime.fromisoformat(quando) if quando else None
@@ -580,7 +586,7 @@ class Registro:
         vivos = ",".join(ESTADOS_VIVOS)
         linhas = rest.ler(
             "remessa_item", self._token,
-            colunas=f"seu_numero,{_REMESSA_VIVA}",
+            colunas=f"seu_numero,retorno_estado,{_REMESSA_VIVA}",
             filtro=(f"{coluna}=eq.{valor}"
                     f"&remessa.estado=in.({vivos})"
                     f"&order=id.desc&limit=1"))
@@ -646,7 +652,7 @@ class Registro:
         for lote in _blocos_do_filtro(alvos):
             linhas = rest.ler(
                 "remessa_item", self._token,
-                colunas=f"id,{coluna},seu_numero,{_REMESSA_VIVA}",
+                colunas=f"id,{coluna},seu_numero,retorno_estado,{_REMESSA_VIVA}",
                 filtro=(f"{coluna}=in.({','.join(lote)})"
                         f"&remessa.estado=in.({vivos})"
                         f"&order=id.desc"))
