@@ -1871,3 +1871,92 @@ def test_o_registro_so_guarda_documento_inteiro():
     reg.anotar("pix:E9", "10,00 - X - 01-09.pdf", doc_recebedor="***.456.789-**")
     assert "doc_recebedor" not in reg._dados["pix:E9"]
 
+
+# ------------------------------------------ vários logins do Sicoob (14/09/2026)
+# As contas de outra empresa ficam em OUTRO login do Sicoob (outro QR Code).
+# Cada abertura do Chrome pede o QR de novo, então trocar de login é fechar o
+# Chrome e abrir outro -- sem botão de sair e sem cadastro de "qual login".
+
+class _LoginFalso:
+    def __init__(self, contas, abertos):
+        self.contas = set(contas)
+        self.abertos = abertos
+
+    def __enter__(self):
+        self.abertos.append(sorted(self.contas))
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def _baixar_falso(cli, numero):
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    if numero not in cli.contas:
+        return sb.Resultado(conta=numero, motivo=sb.FORA_DESTE_LOGIN)
+    return sb.Resultado(conta=numero, baixados=[pathlib.Path(f"{numero}.pdf")])
+
+
+def _logins(*grupos):
+    abertos = []
+    fila = [_LoginFalso(g, abertos) for g in grupos]
+    return (lambda: fila.pop(0)), abertos
+
+
+def test_contas_de_outro_login_pedem_outro_chrome():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    abrir, abertos = _logins({"11", "22"}, {"33", "44"})
+    avisos = []
+    r = sb.baixar_em_varios_logins(["11", "33", "22", "44"], abrir, _baixar_falso,
+                                   avisar=avisos.append)
+    assert len(abertos) == 2
+    assert {n: bool(x.baixados) for n, x in r.items()} == {
+        "11": True, "22": True, "33": True, "44": True}
+    assert any("outro login" in a for a in avisos)
+
+
+def test_um_login_so_quando_todas_estao_nele():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    abrir, abertos = _logins({"11", "22"})
+    r = sb.baixar_em_varios_logins(["11", "22"], abrir, _baixar_falso)
+    assert len(abertos) == 1 and all(x.ok for x in r.values())
+
+
+def test_login_sem_nenhuma_das_que_faltam_para_e_avisa():
+    """Não pede QR para sempre: um login que não abre nenhuma das contas que
+    faltam encerra, e elas saem com o motivo."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    abrir, abertos = _logins({"11"}, {"99"}, {"33"})
+    r = sb.baixar_em_varios_logins(["11", "33"], abrir, _baixar_falso)
+    assert len(abertos) == 2
+    assert r["11"].ok
+    assert "nenhum dos logins" in r["33"].motivo
+
+
+def test_parar_nao_abre_outro_login():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    abrir, abertos = _logins({"11"}, {"33"})
+    parar = {"sim": False}
+
+    def baixar(cli, numero):
+        parar["sim"] = True
+        return _baixar_falso(cli, numero)
+
+    r = sb.baixar_em_varios_logins(["11", "33"], abrir, baixar,
+                                   parar=lambda: parar["sim"])
+    assert len(abertos) == 1
+    assert "33" not in r, "a que não rodou fica sem resultado, e a tela a marca como parada"
+
+
+def test_o_motivo_de_fora_do_login_e_o_mesmo_que_baixar_conta_devolve():
+    import inspect
+
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert "FORA_DESTE_LOGIN" in inspect.getsource(sb.baixar_conta)
+
