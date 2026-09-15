@@ -243,7 +243,7 @@ def detalhe_na_confirmacao(linha, marcado: bool = True) -> list:
     O não apto diz o motivo e ONDE ele se resolve, porque é para isso que ele
     está na janela."""
     estado = confirmacao.estado_na_tela(linha, marcado)
-    linhas = [(("⚠  " if linha.olhar else "") + (linha.favorecido or "—"),
+    linhas = [(("⚠  " if linha.olhar else "") + (linha.quem_recebe or "—"),
                "Forte.TLabel"),
               (linha.por_onde or "—", ESTILO_DO_DADO[estado])]
     partes = [f"vence {linha.vencimento:%d/%m/%Y}" if linha.vencimento
@@ -1301,23 +1301,27 @@ class PagamentosDiaFrame(ttk.Frame):
                 tabela.insert("", "end", iid=f"s{g}{sufixo}", tags=("secao",),
                               values=("", "", titulo, "", "") + ("",) * 4)
                 for pos, ln in enumerate(secao):
+                    # A que já saiu numa remessa nasce desmarcada
+                    # (`confirmacao.marcada_de_inicio`); a não apta, sem marca.
+                    de_inicio = confirmacao.marcada_de_inicio(ln)
                     if ln.marcavel:
-                        iid, marca = f"i{len(marcaveis)}", MARCADA
+                        iid = f"i{len(marcaveis)}"
+                        marca = MARCADA if de_inicio else DESMARCADA
                         marcaveis.append(ln)
-                        marcado.append(True)
+                        marcado.append(de_inicio)
                         posicao.append(pos)
                     else:
                         iid, marca = f"n{n_nao_aptos}", ""
                         n_nao_aptos += 1
                     por_iid[iid] = ln
                     destinos.append(ln.por_onde)
-                    estado = confirmacao.estado_na_tela(ln, True)
+                    estado = confirmacao.estado_na_tela(ln, de_inicio)
                     tabela.insert(
                         "", "end", iid=iid,
                         tags=widgets.linha_zebrada(pos, tag_de(estado)),
                         values=(marca, relatorio.brl(ln.valor),
                                 ("⚠  " if ln.olhar else "")
-                                + (ln.favorecido or "—"),
+                                + (ln.quem_recebe or "—"),
                                 f"{widgets.MARCAS_ESTADO[estado]}  "
                                 f"{ln.situacao or '—'}",
                                 ln.por_onde or "—",

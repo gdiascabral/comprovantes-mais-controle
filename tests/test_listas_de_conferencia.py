@@ -134,6 +134,12 @@ def test_o_detalhe_do_reembolso_diz_de_quem_e_o_documento():
                and "111.222.333-44" in t for t in textos)
 
 
+def test_no_reembolso_o_detalhe_abre_com_quem_recebe_de_verdade():
+    ln = _linha(1, reembolso=True, reembolso_nome="PESSOA DE EXEMPLO")
+    assert pf.detalhe_na_confirmacao(ln, True)[0] \
+        == ("PESSOA DE EXEMPLO (reembolso de FORNECEDOR 001)", "Forte.TLabel")
+
+
 # ----------------------------------------- confirmação: as duas fases, sem tela
 # O frame é montado sem `_build` e sem Tk (`__new__`), e a janela é trocada
 # pela resposta que a pessoa daria. O que se prova é a ordem de dinheiro: a
