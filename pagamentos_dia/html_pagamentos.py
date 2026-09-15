@@ -227,8 +227,8 @@ def _palavras_do_numero(texto) -> list[str]:
 
     Só o PONTO entre dígitos some sem virar espaço: "1.234" partido em
     "1 234" deixa de bater com a nota e com o casamento do Anexar. Barra e
-    hífen entre dígitos separam números — "3052/3053" são duas notas, e
-    juntá-las dava "30523053", um número que não existe —, então aqui o hífen
+    hífen entre dígitos separam números — "5678/5679" são duas notas, e
+    juntá-las dava "56785679", um número que não existe —, então aqui o hífen
     colado também vira espaço, ao contrário do centro de custo."""
     s = _PONTO_ENTRE_DIGITOS.sub("", relatorio.sem_acento(str(texto or "")))
     return [p for palavra in _palavras(s) for p in palavra.split("-") if p]
@@ -269,7 +269,7 @@ def descricao_para_colar(registro, conta) -> str:
       traz; no
       nº da NF e da OC só o ponto entre dígitos some sem virar espaço
       ("1.234" é "1234", não "1 234"), e barra ou hífen separam números
-      ("3052/3053" é "3052 3053");
+      ("5678/5679" é "5678 5679");
     - no tamanho do banco (`limite_da_descricao`), cortando em fronteira de
       palavra. A NF e a OC NUNCA são cortadas — são o que liga o pagamento ao
       documento; quem cede é a descrição do lançamento e, se ainda não

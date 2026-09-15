@@ -253,11 +253,11 @@ def test_nf_e_oc_nao_se_partem_no_ponto_de_milhar():
 
 
 def test_barra_e_hifen_entre_numeros_da_nf_separam_dois_numeros():
-    """"3052/3053" são duas notas; juntas viravam "30523053", que não existe."""
-    r = _partes(nf="3052/3053", oc="000.123-4")
-    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 3052 3053 OC 000123 4"
-    r = _partes(nf="3052-3053")
-    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 3052 3053"
+    """"5678/5679" são duas notas; juntas viravam "56785679", que não existe."""
+    r = _partes(nf="5678/5679", oc="000.123-4")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678 5679 OC 000123 4"
+    r = _partes(nf="5678-5679")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678 5679"
 
 
 def test_separador_que_nao_esta_entre_digitos_continua_virando_espaco():
