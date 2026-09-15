@@ -26,29 +26,35 @@ def _valores_do_in(texto: str) -> set:
 
 
 class _BancoFalso:
-    """A tabela `remessa_item` com o relacionamento `remessa` embutido."""
+    """A tabela `remessa_item` com o relacionamento `remessa` embutido.
+
+    Aplica o que o PostgREST aplica: sem `!inner`, o filtro do relacionamento
+    NÃO omite a linha — devolve `remessa: null`; com `remessa!inner(...)` nas
+    colunas, a linha cujo relacionamento não casa SAI do resultado, e isso
+    acontece antes de `order` e `limit`."""
 
     def __init__(self, itens):
         self.itens = itens
         self.filtros = []
+        self.colunas = []
 
     def ler(self, tabela, _token, *, colunas="*", filtro=""):
         assert tabela == "remessa_item"
         self.filtros.append(filtro)
+        self.colunas.append(colunas)
         linhas = [dict(i, remessa=dict(i["remessa"]) if i.get("remessa") else None)
                   for i in self.itens]
-        limite = None
+        limite, ordem = None, None
         for parte in filtro.split("&"):
             chave, _, valor = parte.partition("=")
             if chave == "remessa.estado":
                 vivos = _valores_do_in(valor)
                 for linha in linhas:
                     if linha["remessa"] and linha["remessa"]["estado"] not in vivos:
-                        # O PostgREST não omite a linha: devolve `remessa: null`.
                         linha["remessa"] = None
             elif chave == "order":
                 assert valor == "id.desc"
-                linhas.sort(key=lambda l: l["id"], reverse=True)
+                ordem = valor
             elif chave == "limit":
                 limite = int(valor)
             elif valor.startswith("eq."):
@@ -58,6 +64,10 @@ class _BancoFalso:
                 linhas = [l for l in linhas if str(l.get(chave)) in alvo]
             elif chave:
                 raise AssertionError(f"filtro que o dublê não conhece: {parte}")
+        if "remessa!inner(" in colunas:
+            linhas = [l for l in linhas if l["remessa"]]
+        if ordem:
+            linhas.sort(key=lambda l: l["id"], reverse=True)
         return linhas[:limite] if limite else linhas
 
 
@@ -81,8 +91,8 @@ ITENS = [
      "seu_numero": "260910-0003", "remessa": _remessa(9, "descartado")},
     {"id": 4, "identificador": BARRAS_DUAS_VEZES, "referencia": "L3",
      "seu_numero": "260911-0001", "remessa": _remessa(10, "enviado")},
-    # ...e o contrário: a antiga viva e a mais recente descartada. O um-a-um
-    # olha só o item mais recente, e o lote tem de dizer o mesmo.
+    # ...e o contrário: a antiga VIVA e a mais recente DESCARTADA. O envio
+    # que vale é o da viva: descartar a nova não desfaz a antiga, que saiu.
     {"id": 5, "identificador": "7" * 44, "referencia": "L5",
      "seu_numero": "260910-0005", "remessa": _remessa(11)},
     {"id": 6, "identificador": "7" * 44, "referencia": "L5",
@@ -126,10 +136,44 @@ def test_o_lote_responde_o_mesmo_que_o_um_a_um(banco):
         BARRAS_VIVO: (7, "gerado"),
         BARRAS_DESCARTADO: None,
         BARRAS_DUAS_VEZES: (10, "enviado"),
-        "7" * 44: None,
+        "7" * 44: (11, "gerado"),
         "8" * 44: None,
         BARRAS_NUNCA: None,
     }
+
+
+def test_envio_novo_descartado_nao_esconde_o_antigo_vivo(banco):
+    """O item de maior id era escolhido ANTES de descartar `remessa: null`: um
+    envio mais novo numa remessa DESCARTADA escondia o mais antigo numa VIVA,
+    e o pagamento voltava marcável — em dobro na geração seguinte, inclusive
+    no "Gerar remessa". Com `remessa!inner` o filtro de estado vale na LINHA."""
+    reg = registro.Registro("tok")
+    assert _resumo(reg.envio_de("7" * 44)) == (11, "gerado")
+    assert _resumo(reg.envio_da_referencia("L5")) == (11, "gerado")
+    por_barras, por_ref = reg.envios_em_lote(["7" * 44], ["L5"])
+    assert _resumo(por_barras["7" * 44]) == (11, "gerado")
+    assert _resumo(por_ref["L5"]) == (11, "gerado")
+
+
+def test_as_duas_consultas_pedem_o_relacionamento_inner(banco):
+    reg = registro.Registro("tok")
+    reg.envio_de(BARRAS_VIVO)
+    reg.envios_em_lote([BARRAS_VIVO], ["L1"])
+    assert banco.colunas and all("remessa!inner(" in c for c in banco.colunas)
+    assert "order=id.desc&limit=1" in banco.filtros[0], \
+        "o um-a-um continua pegando só o mais recente (vivo)"
+
+
+def test_bloco_que_bate_no_teto_do_banco_levanta(monkeypatch):
+    """O PostgREST corta a resposta em `max_rows` (1000) sem dizer nada: um
+    bloco que volta com 1000 linhas pode ter perdido a que importa. Levantar
+    faz quem chama cair no um-a-um, em vez de responder "não saiu"."""
+    muitas = [{"id": i, "identificador": "3" * 44, "referencia": "L1",
+               "seu_numero": f"260910-{i:04d}", "remessa": _remessa(7)}
+              for i in range(registro.LINHAS_MAXIMAS_POR_CONSULTA)]
+    monkeypatch.setattr(registro.rest, "ler", _BancoFalso(muitas).ler)
+    with pytest.raises(registro.LoteTruncado):
+        registro.Registro("tok").envios_em_lote(["3" * 44], [])
 
 
 def test_o_lote_devolve_o_envio_no_formato_do_um_a_um(banco):
