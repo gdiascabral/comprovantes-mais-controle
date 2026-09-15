@@ -681,7 +681,15 @@ def centro_de_custo(item: dict) -> str:
     return " | ".join(dict.fromkeys(n for n in nomes if n))
 
 
-def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> str:
+def partes_da_descricao(item: dict, files, comentario: str = "",
+                        overview=None) -> tuple[str, str, str]:
+    """(centro de custo, nº da nota, nº da OC) — as peças da descrição.
+
+    Existe separada da `monta_descricao` porque a descrição tem DOIS leitores
+    que a querem de formas diferentes: a planilha e a remessa leem a frase
+    montada, e o HTML dos pagamentos monta outra, limpa e curta, para colar no
+    campo de descrição do banco. As duas saem destas mesmas peças; ajustar
+    "documento é a OC" em dois lugares seria o começo de duas respostas."""
     cc = centro_de_custo(item)
     doc = achar_doc(item, files, overview)
     oc = achar_oc(item, files, comentario, overview)
@@ -692,6 +700,25 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> s
     if doc and regras.documento_e_a_oc(doc, oc):
         oc = oc or regras.oc_no_documento(doc) or re.sub(r"\D", "", doc)
         doc = ""
+    return cc, doc, oc
+
+
+def partes_no_registro(item: dict, files, comentario: str = "",
+                       overview=None) -> dict:
+    """As chaves que a linha leva para o HTML montar a descrição do banco.
+
+    `oc_da_descricao` não é o `oc` da linha: aquele é o `achar_oc` cru, que a
+    remessa já usa, e este é o que a descrição mostra (inclui a OC escrita no
+    campo do documento). `descricao_lancamento` vai crua — limpar e enxugar é
+    do HTML, que é quem sabe o limite de cada banco."""
+    _, doc, oc = partes_da_descricao(item, files, comentario, overview)
+    return {"nf": doc, "oc_da_descricao": oc,
+            "descricao_lancamento": (item.get("description") or "").strip(),
+            "utilidade": eh_utilidade(item)}
+
+
+def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> str:
+    cc, doc, oc = partes_da_descricao(item, files, comentario, overview)
 
     # Água/energia: o que identifica é a descrição (UC, mês, casa). O "número
     # da NF" ali é o número da fatura e não ajuda ninguém a conferir.
@@ -1201,6 +1228,11 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # de escrever — a mesma armadilha que o cabeçalho do arquivo avisa.
             "oc": oc,
             "centro_custo": centro_de_custo(item),
+            # As peças da descrição, soltas, para o HTML dos pagamentos montar a
+            # descrição de colar no banco (limpa e no tamanho do banco) sem
+            # reparsear a frase acima: `nf`, `oc_da_descricao`,
+            # `descricao_lancamento` e `utilidade`.
+            **partes_no_registro(item, files, coment, overview),
             # A posição do lançamento na lista que chegou aqui, que é a
             # ordem da TELA de pagamentos do ERP (`mc_api.listar_a_pagar`
             # reaproveita a URL que a tela manda, com a ordenação dela). É a

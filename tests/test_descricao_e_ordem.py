@@ -4,6 +4,8 @@
 Puro: só `relatorio` e `html_pagamentos`, sem janela, sem ERP e sem rede.
 Nenhum nome, lote, OC, NF ou valor aqui é de verdade — o repositório é público.
 """
+import re
+
 from pagamentos_dia import relatorio
 
 
@@ -81,3 +83,39 @@ def test_o_favorecido_nao_decide_mais_a_ordem():
     assert _ids(lancamentos) == [("Pix", "3"), ("Pix", "2"), ("Pix", "1")]
     # a mesma entrada dá sempre a mesma saída
     assert _ids(lancamentos) == _ids(list(lancamentos))
+
+
+# ------------------------------------- as partes da descrição viajam no registro
+def _registro(overview=None, **mudancas):
+    item = dict(_pix("1", "Fornecedor Modelo Ltda"), **mudancas)
+    res = relatorio.montar_registros([item], {}, {"1": overview or {}}, {})
+    return res.contas[CONTA][0]
+
+
+def test_o_registro_leva_nf_e_oc_ja_ajustadas():
+    """O HTML monta a descrição do banco a partir destas partes, e não
+    reparseando a frase pronta — a mesma armadilha que o cabeçalho do módulo
+    avisa."""
+    r = _registro(documentNumber="5678", description="Material de obra",
+                  overview={"purchaseOrder": {"number": 1234}})
+    assert (r["nf"], r["oc_da_descricao"]) == ("5678", "1234")
+    assert r["descricao_lancamento"] == "Material de obra"
+    assert r["utilidade"] is False
+    assert r["centro_custo"] == "QD 99 LT 99"
+
+
+def test_oc_escrita_no_documento_vai_como_oc_e_nao_como_nf():
+    """Sem o ajuste, "OC1234" no campo do documento viraria "NF OC1234" no
+    banco. O `oc` de sempre continua como estava: é o que a remessa lê."""
+    r = _registro(documentNumber="OC1234")
+    assert (r["nf"], r["oc_da_descricao"]) == ("", "1234")
+    assert r["oc"] == ""
+
+
+def test_conta_de_agua_e_luz_e_marcada_no_registro(monkeypatch):
+    # A lista de concessionárias é de nomes reais; aqui entra uma fictícia.
+    monkeypatch.setattr(relatorio, "_UTILIDADES",
+                        re.compile("concessionaria modelo", re.I))
+    r = _registro(paidTo="Concessionaria Modelo", documentNumber="2026000000001",
+                  description="UC 000000001 REF SET 2026")
+    assert r["utilidade"] is True
