@@ -941,7 +941,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
     ids_nao_confirmados = {str(i) for i in ids_nao_confirmados}
     registros, omitidos = defaultdict(list), []
 
-    for item in lancamentos:
+    for ordem, item in enumerate(lancamentos):
         conta = nome_da_conta(item)
         files = anexos.get(str(item.get("tradePayableId"))) or []
         overview = overviews.get(str(item.get("id"))) or {}
@@ -1201,6 +1201,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # de escrever — a mesma armadilha que o cabeçalho do arquivo avisa.
             "oc": oc,
             "centro_custo": centro_de_custo(item),
+            # A posição do lançamento na lista que chegou aqui, que é a
+            # ordem da TELA de pagamentos do ERP (`mc_api.listar_a_pagar`
+            # reaproveita a URL que a tela manda, com a ordenação dela). É a
+            # segunda chave da ordem das linhas: o dono confere o HTML e a
+            # planilha com o sistema aberto ao lado.
+            "ordem": ordem,
             # Não vão para a planilha: são para a remessa (`remessa_dia.py`).
             # O `id` é a única volta do arquivo de retorno até o lançamento,
             # e `parcial` decide se o título ainda pode ir como boleto — o
@@ -1229,7 +1235,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         })
 
     for regs in registros.values():
-        regs.sort(key=lambda r: (r["tipo"], r["favorecido"]))
+        # Boleto antes de Pix (a mesma comparação por `tipo` de sempre) e,
+        # dentro do tipo, o que aparece por ÚLTIMO no sistema vem primeiro —
+        # pedido do dono em 14/09/2026. Até ali a segunda chave era o
+        # favorecido em ordem alfabética, e a lista não conversava com a
+        # tela que ele tem aberta ao lado para conferir.
+        regs.sort(key=lambda r: (r["tipo"], -r["ordem"]))
     omitidos.sort(key=lambda o: (o["conta"], o["motivo"], o["favorecido"]))
     return Resultado(dict(sorted(registros.items())), omitidos)
 
