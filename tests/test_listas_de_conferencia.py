@@ -319,6 +319,63 @@ def test_a_planilha_sai_do_periodo_buscado_e_nao_da_tela(monkeypatch, tmp_path):
     assert any("não são as da busca" in a for a in avisos)
 
 
+def _api_da_busca(**troca):
+    base = dict(
+        capturar_credenciais=lambda _log: True, _req_anexos=True,
+        listar_a_pagar=lambda _i, _f, log=None: [_lanc_api("L1")],
+        anexos_de_titulos=lambda *_a, **_k: {},
+        listar_overviews=lambda *_a, **_k: {},
+        listar_participantes=lambda log=None: {})
+    base.update(troca)
+    return SimpleNamespace(**base)
+
+
+def test_busca_interrompida_nao_deixa_periodo(monkeypatch, tmp_path):
+    """Parar no meio dos anexos ou dos detalhes deixava o período da busca
+    valendo com metade dos dados — sem a observação, o "PAGAR À MÃO" nem é
+    detectado. Sem período, o passo 2 recusa."""
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [])
+    dia = _dt.date(2026, 9, 14)
+    dono._periodo_da_busca = (dia, dia)          # o de uma busca anterior
+
+    def anexos(*_a, **_k):
+        dono._parar.set()
+        return {}
+
+    dono.anx = SimpleNamespace(
+        garantir_sessao=lambda _log: _api_da_busca(anexos_de_titulos=anexos))
+    dono._t_buscar(dia, dia)
+    assert dono._periodo_da_busca is None
+
+
+def test_busca_que_cai_nao_deixa_periodo(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [])
+    dia = _dt.date(2026, 9, 14)
+    dono._periodo_da_busca = (dia, dia)
+
+    def cai(*_a, **_k):
+        raise OSError("a rede caiu nos detalhes")
+
+    dono.anx = SimpleNamespace(
+        garantir_sessao=lambda _log: _api_da_busca(listar_overviews=cai))
+    dono._t_buscar(dia, dia)
+    assert dono._periodo_da_busca is None
+
+
+def test_sem_periodo_da_busca_o_passo_2_recusa(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])
+    dono._periodo_da_busca = None
+    dono._periodo = lambda: (_dt.date(2026, 9, 14),) * 2
+    recados, pedidos = [], []
+    monkeypatch.setattr(pf.messagebox, "showinfo",
+                        lambda titulo, texto: recados.append(texto))
+    dono.anx = SimpleNamespace(
+        submeter=lambda _rotulo, _fn, *a, dona=None: pedidos.append(a))
+    dono._apurar_e_confirmar(["CONTA A"], depois="planilha")
+    assert pedidos == []
+    assert recados == ["Busque os lançamentos primeiro."]
+
+
 def _anexo_pdf(nome):
     return {"filename": nome, "tagName": "Nota Fiscal", "extension": ".pdf",
             "downloadUrl": f"https://exemplo.invalid/{nome}.pdf"}
@@ -369,8 +426,10 @@ def test_anexo_que_nao_foi_lido_vira_aviso_na_janela(monkeypatch, tmp_path):
     msgs = _mensagens(dono)
     entradas, _resultado, analise, _grupos, _depois, _pasta = next(
         v for t, v in msgs if t == "confirmar")
-    aviso = confirmacao.aviso_de_anexos_nao_lidos(2)
-    assert entradas.anexos_nao_lidos == 2
+    aviso = confirmacao.aviso_de_anexos_nao_lidos(entradas.anexos_nao_lidos)
+    assert entradas.anexos_nao_lidos == {"https://exemplo.invalid/nf-2.pdf",
+                                         "https://exemplo.invalid/nf-3.pdf"}
+    assert aviso.startswith("2 anexo(s)")
     assert analise.avisos[0] == aviso
     assert any(aviso in str(v) for t, v in msgs if t == "log")
     assert entradas.textos == {"https://exemplo.invalid/nf-1.pdf":

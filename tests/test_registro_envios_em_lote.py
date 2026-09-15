@@ -83,7 +83,8 @@ BARRAS_NUNCA = "6" * 44
 
 ITENS = [
     {"id": 1, "identificador": BARRAS_VIVO, "referencia": "L1",
-     "seu_numero": "260910-0001", "remessa": _remessa(7)},
+     "seu_numero": "260910-0001", "remessa": _remessa(7),
+     "retorno_estado": "rejeitado"},
     {"id": 2, "identificador": BARRAS_DESCARTADO, "referencia": "L2",
      "seu_numero": "260910-0002", "remessa": _remessa(8, "descartado")},
     # A mesma chave em duas remessas: a antiga descartada e a nova viva...
@@ -174,6 +175,18 @@ def test_bloco_que_bate_no_teto_do_banco_levanta(monkeypatch):
     monkeypatch.setattr(registro.rest, "ler", _BancoFalso(muitas).ler)
     with pytest.raises(registro.LoteTruncado):
         registro.Registro("tok").envios_em_lote(["3" * 44], [])
+
+
+def test_o_envio_traz_o_estado_da_remessa_e_o_retorno_do_item(banco):
+    """Quem confere precisa saber se o que "já saiu" foi REJEITADO: é esse o
+    pagamento que tem de sair de novo. A mesma consulta traz os dois."""
+    reg = registro.Registro("tok")
+    envio, _ = reg.envio_da_referencia("L1")
+    assert (envio.estado, envio.retorno_estado) == ("gerado", "rejeitado")
+    por_barras, _por_ref = reg.envios_em_lote([BARRAS_VIVO], [])
+    envio, _ = por_barras[BARRAS_VIVO]
+    assert (envio.estado, envio.retorno_estado) == ("gerado", "rejeitado")
+    assert all("retorno_estado" in c for c in banco.colunas)
 
 
 def test_o_lote_devolve_o_envio_no_formato_do_um_a_um(banco):

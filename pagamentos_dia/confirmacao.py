@@ -66,7 +66,7 @@ class Entradas:
     periodo: tuple              # (ini, fim) de quando a apuração rodou
     #: Anexos que deviam ser lidos e não foram (download que devolveu nada ou
     #: levantou). A forma de pagar dessas linhas foi decidida sem o documento.
-    anexos_nao_lidos: int = 0
+    anexos_nao_lidos: set = field(default_factory=set)
 
 
 def _periodo_legivel(periodo) -> str:
@@ -99,12 +99,13 @@ def periodo_da_planilha(periodo_da_busca, periodo_na_tela) -> tuple:
         "outro período, busque de novo")
 
 
-def aviso_de_anexos_nao_lidos(quantos: int) -> str:
+def aviso_de_anexos_nao_lidos(anexos) -> str:
     """O aviso da janela para os anexos que não foram lidos, ou "".
 
     Sem ele, o download que falhou passava calado: o boleto dentro da NF não
     lido vira o Pix do cadastro, verde, e nada na janela diz que a leitura
     daquela linha ficou pela metade."""
+    quantos = len(set(anexos or ()))
     if not quantos:
         return ""
     return (f"{quantos} anexo(s) não foram lidos: a forma de pagar dessas "
@@ -126,7 +127,8 @@ def remontar(entradas: Entradas, ids_nao_confirmados=()) -> relatorio.Resultado:
         regras_fornecedor=entradas.regras_fornecedor,
         ids_nao_confirmados=ids_nao_confirmados,
         participantes=entradas.participantes,
-        cadastro_reembolso=entradas.cadastro_reembolso)
+        cadastro_reembolso=entradas.cadastro_reembolso,
+        anexos_nao_lidos=entradas.anexos_nao_lidos)
 
 
 # --------------------------------------------------------------------------
@@ -143,8 +145,25 @@ AVISO_SEM_REGISTRO = ("não consegui falar com o registro de remessas: "
                       + NAO_CONFERI_ENVIO)
 AVISO_SEM_CADASTRO = ("não li o cadastro de contas: não sei quais contas "
                       "geram remessa")
-AVISO_SEM_ANALISE = ("não consegui conferir a remessa: a situação mostra só o "
-                     "que a planilha diz")
+#: A análise quebrou por um motivo que NÃO é o registro (um defeito, um dado
+#: que o `preparar` não esperava). O tipo do erro vai junto; culpar o registro
+#: mandaria conferir a internet quando o problema é outro.
+AVISO_ANALISE_FALHOU = "a análise da remessa falhou"
+
+#: Nomes de exceção que querem dizer "o registro de remessas não respondeu".
+#: Pelo NOME, e não por `isinstance`, pelo motivo do `widgets.explicar_erro`:
+#: importar `nuvem.rest` aqui arrastaria a rede para dentro da regra pura.
+_ERROS_DO_REGISTRO = frozenset({"RegistroMudo", "SemRede", "PrecisaEntrar",
+                                "RecusadoPeloBanco", "RequestException",
+                                "LoteTruncado"})
+
+
+def _e_do_registro(erro: Exception) -> bool:
+    """O `preparar` levantou porque o registro não respondeu (e aí vale a
+    segunda passada sem ele), ou por outro motivo (e aí não vale)?"""
+    if isinstance(erro, (remessa_dia.RegistroMudo, OSError)):
+        return True
+    return any(c.__name__ in _ERROS_DO_REGISTRO for c in type(erro).__mro__)
 
 #: O detalhe do erro vai junto do aviso, cortado: o recado do `carregar` diz
 #: qual linha do cadastro está torta, mas numa faixa de aviso cabe uma frase.
@@ -172,9 +191,15 @@ class AnaliseRemessa:
     #: registro não abriu, ou caiu antes de responder por elas. A linha diz
     #: `NAO_CONFERI_ENVIO` e fica âmbar: "não saiu" ali seria palpite.
     envios_nao_conferidos: set = field(default_factory=set)
+    #: `{id: (estado da remessa, retorno do item)}` das linhas que JÁ SAÍRAM
+    #: numa remessa — é o que diz se aquele envio foi rejeitado.
+    envios: dict = field(default_factory=dict)
 
     def envio_conferido(self, ident: str) -> bool:
         return str(ident or "") not in self.envios_nao_conferidos
+
+    def estado_do_envio(self, ident: str) -> tuple:
+        return self.envios.get(str(ident or ""), ("", ""))
 
     def candidato(self, conta: str, ident: str):
         """O `Candidato` do lançamento, ou None. Pelo id, e não pela posição:
@@ -299,6 +324,16 @@ class HistoricoPreCarregado:
             return 0
         return self._real.maior_ordem_do_dia(quando)
 
+    def envio_respondido(self, identificador: str, referencia: str):
+        """O envio que JÁ foi respondido para esta linha, sem perguntar de
+        novo: primeiro pelo código de barras, depois pela referência — a
+        mesma ordem do `remessa_dia._ja_enviado`."""
+        for cache, chave in ((self._por_identificador, identificador),
+                             (self._por_referencia, referencia)):
+            if chave and cache.get(chave):
+                return cache[chave]
+        return None
+
     def __getattr__(self, nome):
         # Só chega aqui o que não é atributo do invólucro. O `_` de fora evita
         # recursão se alguém perguntar por `_real` antes do `__init__`.
@@ -340,6 +375,8 @@ def analisar_remessa(contas: dict, participantes: dict | None,
             preparado = remessa_dia.preparar(contas, participantes,
                                              quando=quando, historico=historico)
         except Exception as e:                               # noqa: BLE001
+            if not _e_do_registro(e):
+                return _analise_que_falhou(contas, avisos, e)
             # `RegistroMudo` (a ordem do dia não veio) ou a rede caindo no
             # meio de um `envio_de` fora do lote. A segunda passada NÃO joga
             # fora o que já foi respondido: continua com o cache, sem voltar
@@ -354,12 +391,11 @@ def analisar_remessa(contas: dict, participantes: dict | None,
             preparado = remessa_dia.preparar(contas, participantes,
                                              quando=quando, historico=historico)
         except Exception as e:                               # noqa: BLE001
-            avisos.append(_com_erro(AVISO_SEM_ANALISE, e))
-            return AnaliseRemessa(preparado={}, sem_remessa={},
-                                  contas_conferidas=False, avisos=avisos)
+            return _analise_que_falhou(contas, avisos, e)
 
     nao_conferidos = _envios_sem_resposta(contas, preparado,
                                           historico.nao_respondidas)
+    envios = _estados_dos_envios(contas, preparado, historico)
 
     sem_remessa: dict[str, str] = {}
     conferidas = True
@@ -375,7 +411,47 @@ def analisar_remessa(contas: dict, participantes: dict | None,
         avisos.append(_com_erro(AVISO_SEM_CADASTRO, e))
     return AnaliseRemessa(preparado=preparado, sem_remessa=sem_remessa,
                           contas_conferidas=conferidas, avisos=avisos,
-                          envios_nao_conferidos=nao_conferidos)
+                          envios_nao_conferidos=nao_conferidos, envios=envios)
+
+
+def _analise_que_falhou(contas: dict, avisos: list, erro: Exception):
+    """A análise que não chegou ao fim: nenhuma linha fica verde por falta de
+    pergunta. Toda linha analisável entra em `envios_nao_conferidos` (âmbar,
+    "não conferi se já saiu em remessa"), e o aviso diz o TIPO do erro — sem
+    culpar o registro quando o motivo não foi ele."""
+    ids = {str(r.get("id")) for registros in (contas or {}).values()
+           for r in registros if r.get("id")}
+    avisos.append(f"{AVISO_ANALISE_FALHOU}: {type(erro).__name__}")
+    return AnaliseRemessa(preparado={}, sem_remessa={},
+                          contas_conferidas=False, avisos=avisos,
+                          envios_nao_conferidos=ids)
+
+
+def _estados_dos_envios(contas: dict, preparado: dict, historico) -> dict:
+    """`{id: (estado da remessa, retorno do item)}` das linhas que o
+    `preparar` achou JÁ ENVIADAS. Sai da resposta que o invólucro já guardou
+    — nada é perguntado de novo —, e o `remessa_dia` continua usando só o
+    `nsa`/`gerado_em` de sempre."""
+    envios: dict = {}
+    for conta, registros in (contas or {}).items():
+        for registro in registros:
+            ident = str(registro.get("id") or "")
+            candidato = next((c for c in preparado.get(conta, ())
+                              if ident and c.id == ident), None)
+            if candidato is None or not candidato.ja_enviado:
+                continue
+            codigo = (ocr_boleto.codigo_de_barras(
+                (registro.get("dados") or "").strip())
+                if registro.get("tipo") == "Boleto" else "")
+            achado = historico.envio_respondido(codigo, ident)
+            if not achado:
+                continue
+            remessa = achado[0]
+            item = achado[1] if len(achado) > 1 else None
+            retorno = (getattr(remessa, "retorno_estado", "")
+                       or getattr(item, "retorno_estado", "") or "")
+            envios[ident] = (getattr(remessa, "estado", "") or "", retorno)
+    return envios
 
 
 def _envios_sem_resposta(contas: dict, preparado: dict, nao_respondidas) -> set:
@@ -466,9 +542,30 @@ def _importa_a_quem_paga_a_mao(registro: dict, candidato) -> str:
     return ""
 
 
+def rotulo_do_envio(estado: str, retorno: str) -> str:
+    """O que vem depois de "já saiu na remessa nº…": o estado da remessa e,
+    quando o retorno citou este pagamento e diz outra coisa, o dele."""
+    if retorno and retorno != estado:
+        return f"{estado} (este pagamento: {retorno})" if estado else (
+            f"este pagamento: {retorno}")
+    return estado or retorno
+
+
+def envio_rejeitado(estado: str, retorno: str) -> bool:
+    """O envio anterior foi REJEITADO, e a linha pode sair de novo?
+
+    Decide o retorno DO ITEM quando há um: remessa "rejeitado" quer dizer que
+    ALGUM item foi recusado, e este pode ter sido pago — marcá-lo seria pagar
+    duas vezes. Sem retorno citando o item, vale o estado da remessa."""
+    if retorno:
+        return retorno == "rejeitado"
+    return estado == "rejeitado"
+
+
 def situacao_da_linha(registro: dict, candidato, sem_remessa: str = "",
                       contas_conferidas: bool = True,
-                      envio_conferido: bool = True) -> tuple[str, str]:
+                      envio_conferido: bool = True,
+                      estado_do_envio: tuple = ("", "")) -> tuple[str, str]:
     """(texto, estado) da SITUAÇÃO de uma linha que ENTRA na planilha.
 
     Primeiro o veredito da planilha (`APTO`, `ATENÇÃO — …`), depois o da
@@ -505,7 +602,9 @@ def situacao_da_linha(registro: dict, candidato, sem_remessa: str = "",
                or bool(registro.get("reembolso")))
 
     if candidato is not None and candidato.ja_enviado:
-        partes.append(candidato.ja_enviado)
+        rotulo = rotulo_do_envio(*estado_do_envio)
+        partes.append(f"{candidato.ja_enviado} — {rotulo}" if rotulo
+                      else candidato.ja_enviado)
         atencao = True
     elif not envio_conferido:
         partes.append(NAO_CONFERI_ENVIO)
@@ -590,6 +689,9 @@ class Linha:
     #: (quem o `reembolso.identificar` achou), não para o `favorecido`.
     reembolso: bool = False
     reembolso_nome: str = ""
+    #: A linha já saiu numa remessa e esse envio foi REJEITADO
+    #: (`envio_rejeitado`): é o pagamento que tem de sair de novo.
+    envio_rejeitado: bool = False
 
     @property
     def quem_recebe(self) -> str:
@@ -680,7 +782,9 @@ def grupos_da_confirmacao(resultado, analise: AnaliseRemessa | None,
             texto, estado = situacao_da_linha(
                 reg, candidato, sem_remessa.get(conta, ""), conferidas,
                 envio_conferido=(analise.envio_conferido(ident)
-                                 if analise else True))
+                                 if analise else True),
+                estado_do_envio=(analise.estado_do_envio(ident)
+                                 if analise else ("", "")))
             favorecido = reg.get("favorecido") or ""
             entram.setdefault(conta, []).append(Linha(
                 secao=ENTRA, id=ident, conta=conta,
@@ -697,7 +801,9 @@ def grupos_da_confirmacao(resultado, analise: AnaliseRemessa | None,
                 conferencia=reg.get("conferencia") or "",
                 candidato=candidato,
                 reembolso=bool(reg.get("reembolso")),
-                reembolso_nome=reg.get("reembolso_nome") or ""))
+                reembolso_nome=reg.get("reembolso_nome") or "",
+                envio_rejeitado=bool(analise) and envio_rejeitado(
+                    *analise.estado_do_envio(ident))))
 
     nao_aptos: dict[str, list] = {}
     for o in omitidos_da_janela(resultado.omitidos, fornecedores):
@@ -748,10 +854,15 @@ def marcada_de_inicio(linha: Linha) -> bool:
     """Se a linha nasce marcada na janela. Nasce marcada a que entra; a que
     JÁ SAIU numa remessa nasce desmarcada, como na conferência da remessa —
     marcá-la é o mesmo pagamento duas vezes, e isso pede o clique de quem leu
-    o aviso. A não apta não tem marca."""
+    o aviso. **A exceção é o envio REJEITADO** (`envio_rejeitado`): esse
+    boleto não foi pago, e nascer desmarcado era deixá-lo vencer — ele nasce
+    marcado, e continua âmbar com o estado escrito na situação. A não apta
+    não tem marca."""
     if not linha.marcavel:
         return False
-    return not getattr(linha.candidato, "ja_enviado", "")
+    if getattr(linha.candidato, "ja_enviado", ""):
+        return linha.envio_rejeitado
+    return True
 
 
 def estado_na_tela(linha: Linha, marcado: bool) -> str:
