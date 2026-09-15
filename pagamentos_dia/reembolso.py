@@ -161,11 +161,14 @@ def pessoa_e_o_favorecido(files, favorecido: str,
     **Igual, ou começo em fronteira de palavra**: "FULANA" é o começo de
     "FULANA DE TAL SOUZA", e não de "FULANARIA COMERCIO".
 
-    **Documento que não é CPF não é pessoa.** "PAGAR PARA FULANA" num título
-    da "Fulana Materiais Ltda" bate pelo nome, e pagar a chave dela seria pagar
-    o fornecedor de novo em vez de devolver o dinheiro a quem comprou. Quem
-    diz isso é o cadastro de Contatos; favorecido fora dele fica só com a
-    regra do nome, e a obs da linha diz de onde a chave veio.
+    **Falha FECHADA: só é a pessoa quem está nos Contatos com CPF que fecha.**
+    "PAGAR PARA FULANA" num título da "Fulana Materiais Ltda" bate pelo nome,
+    e pagar a chave dela seria pagar o fornecedor de novo em vez de devolver o
+    dinheiro a quem comprou. Cadastro que não carregou (`{}`) ou nome ambíguo
+    que saiu do mapa não provam nada — e, sem prova, empresa passaria por
+    pessoa. E mesmo sendo pessoa, pode ser a HOMÔNIMA do aviso: por isso isto
+    só abre a porta, e quem confirma é o aviso (ver `identificar` e o ramo do
+    reembolso no `relatorio`).
     """
     nome = util.norm_espaco(nome_do_aviso(files))
     alvo = util.norm_espaco(favorecido)
@@ -173,8 +176,7 @@ def pessoa_e_o_favorecido(files, favorecido: str,
         return False
     if alvo != nome and not alvo.startswith(nome + " "):
         return False
-    documento = re.sub(r"[^0-9A-Z]", "", str((participantes or {}).get(alvo) or "").upper())
-    return not documento or len(documento) == 11
+    return len(regras.documento_valido((participantes or {}).get(alvo) or "")) == 11
 
 
 def _item_da_chave(texto: str) -> str:
@@ -408,25 +410,34 @@ def identificar(files, textos: dict, participantes: dict | None = None,
     CONFERENTE — sendo um documento e não sendo o que resolvemos, o dinheiro
     e o arquivo apontariam para pessoas diferentes, e aí ninguém paga nada.
 
-    `favorecido` é o `paidTo` do lançamento. Quando ele É a pessoa do aviso
-    (`pessoa_e_o_favorecido`), as três fontes procuram pelo nome COMPLETO dele,
-    e não pelo primeiro nome escrito no aviso: é o que desempata dois
-    cadastros que começam igual. E, sendo o nome completo, **não se volta ao
-    primeiro nome** quando ele não está nos Contatos — o começo único acharia
-    a homônima, e a chave do lançamento (que é da pessoa) sairia declarando o
-    documento de outra.
+    `favorecido` é o `paidTo` do lançamento. Quando ele pode ser a pessoa do
+    aviso (`pessoa_e_o_favorecido`: começa com o nome dela e está nos Contatos
+    com CPF), o nome COMPLETO dele desempata dois cadastros que começam igual
+    — **mas só se o aviso confirmar**: o documento lido no aviso, o do
+    cadastro local ou a `chave` (que vem de um dos dois) tem de ser o MESMO
+    CPF que os Contatos têm para o favorecido. Sem isso, "PAGAR PARA FULANA"
+    num título da HOMÔNIMA a declararia com o CPF dela, e o começo do nome não
+    decide para quem vai. Não confirmando, vale a busca de sempre, pelo
+    primeiro nome.
     """
     nome = nome_do_aviso(files)
     if not nome:
         return Pessoa(impedimento=MOTIVO_SEM_NOME)
+
+    local = _do_cadastro_local(nome, cadastro or {})
+    erp = _do_erp(nome, participantes or {})
+    do_aviso = documento_do_aviso(files, textos)
     if pessoa_e_o_favorecido(files, favorecido, participantes):
-        nome = favorecido
+        completo = util.norm_espaco(favorecido)
+        do_favorecido = regras.documento_valido(participantes[completo])
+        if do_favorecido in {local[1], do_aviso, regras.documento_valido(chave)}:
+            erp = (completo, do_favorecido)
 
     achados = []                       # [(documento, nome oficial, origem)]
     for oficial, doc, origem in (
-        (*_do_cadastro_local(nome, cadastro or {}), ORIGEM_CADASTRO_LOCAL),
-        (*_do_erp(nome, participantes or {}), ORIGEM_ERP),
-        (util.norm_espaco(nome), documento_do_aviso(files, textos), ORIGEM_AVISO),
+        (*local, ORIGEM_CADASTRO_LOCAL),
+        (*erp, ORIGEM_ERP),
+        (util.norm_espaco(nome), do_aviso, ORIGEM_AVISO),
     ):
         if oficial and doc:
             achados.append((doc, oficial, origem))

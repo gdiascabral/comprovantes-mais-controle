@@ -175,29 +175,35 @@ def test_com_a_frase_no_texto_a_janela_continua_depois_dela():
 # ==========================================================================
 def test_o_nome_do_aviso_no_comeco_do_favorecido_e_a_pessoa():
     files = [aviso()]
-    assert reembolso.pessoa_e_o_favorecido(files, PESSOA)
-    assert reembolso.pessoa_e_o_favorecido(files, "FULANA")
-    assert reembolso.pessoa_e_o_favorecido(files, "  fulana   de tal souza ")
+    assert reembolso.pessoa_e_o_favorecido(files, PESSOA, CONTATOS)
+    assert reembolso.pessoa_e_o_favorecido(files, "  fulana   de tal souza ",
+                                           CONTATOS)
+    assert reembolso.pessoa_e_o_favorecido(files, "FULANA",
+                                           {"FULANA": CPF_DA_PESSOA_DIGITOS})
 
 
 def test_acento_e_caixa_nao_separam_a_pessoa_do_favorecido():
     files = [aviso(filename="PAGAR PARA JOSÉ")]
-    assert reembolso.pessoa_e_o_favorecido(files, "Jose Beltrano Exemplo")
+    assert reembolso.pessoa_e_o_favorecido(
+        files, "Jose Beltrano Exemplo",
+        {"JOSE BELTRANO EXEMPLO": CPF_DA_PESSOA_DIGITOS})
 
 
 def test_comeco_sem_fronteira_de_palavra_nao_e_a_pessoa():
     """"FULANA" está dentro de "FULANARIA", e não é o mesmo nome."""
-    assert not reembolso.pessoa_e_o_favorecido([aviso()], "Fulanaria Comercio")
+    assert not reembolso.pessoa_e_o_favorecido(
+        [aviso()], "Fulanaria Comercio",
+        {"FULANARIA COMERCIO": CPF_DA_PESSOA_DIGITOS})
 
 
 def test_fornecedor_nao_e_a_pessoa():
-    assert not reembolso.pessoa_e_o_favorecido([aviso()], FORNECEDOR)
-    assert not reembolso.pessoa_e_o_favorecido([aviso()], "")
+    assert not reembolso.pessoa_e_o_favorecido([aviso()], FORNECEDOR, CONTATOS)
+    assert not reembolso.pessoa_e_o_favorecido([aviso()], "", CONTATOS)
 
 
 def test_sem_aviso_nao_ha_pessoa_para_comparar():
     nf = {"filename": "NF 123", "tagName": "", "downloadUrl": URL_AVISO}
-    assert not reembolso.pessoa_e_o_favorecido([nf], PESSOA)
+    assert not reembolso.pessoa_e_o_favorecido([nf], PESSOA, CONTATOS)
 
 
 def test_favorecido_com_cnpj_no_cadastro_nao_e_a_pessoa():
@@ -209,13 +215,46 @@ def test_favorecido_com_cnpj_no_cadastro_nao_e_a_pessoa():
         [aviso()], "Fulana Materiais Ltda", contatos)
 
 
-def test_homonimos_se_desempatam_pelo_nome_completo_do_favorecido():
+def test_favorecido_fora_dos_contatos_nao_e_a_pessoa():
+    """Falha FECHADA. Cadastro que não carregou (`listar_participantes` falhou
+    e devolveu `{}`) ou nome ambíguo que saiu do mapa não provam nada — e sem
+    prova a empresa de mesmo começo passaria por pessoa."""
+    for contatos in ({}, None, {"OUTRA PESSOA": CPF_DE_OUTRA_DIGITOS}):
+        assert not reembolso.pessoa_e_o_favorecido(
+            [aviso()], "Fulana Materiais Ltda", contatos)
+        assert not reembolso.pessoa_e_o_favorecido([aviso()], PESSOA, contatos)
+
+
+def test_favorecido_com_cpf_que_nao_fecha_nao_e_a_pessoa():
+    assert not reembolso.pessoa_e_o_favorecido(
+        [aviso()], PESSOA, {"FULANA DE TAL SOUZA": "52998224726"})
+
+
+def test_homonimos_se_desempatam_pelo_favorecido_confirmado_pelo_aviso():
+    """O aviso diz o CPF, e ele é o do favorecido: aí o nome completo vale."""
     files = [aviso()]
-    p = reembolso.identificar(files, textos_do_aviso(""), CONTATOS, {}, "",
-                              favorecido=PESSOA)
+    p = reembolso.identificar(files, textos_do_aviso(f"PIX: {CPF_DA_PESSOA}"),
+                              CONTATOS, {}, CPF_DA_PESSOA, favorecido=PESSOA)
     assert p.resolvida
     assert (p.nome, p.documento, p.origem) == (
         "FULANA DE TAL SOUZA", CPF_DA_PESSOA_DIGITOS, reembolso.ORIGEM_ERP)
+
+
+def test_favorecido_sem_confirmacao_do_aviso_nao_identifica_ninguem():
+    """"PAGAR PARA FULANA" sem nada legível no aviso, num título da HOMÔNIMA:
+    o começo do nome bate com as duas, e só o título diz qual. Sem o aviso
+    confirmar, o nome completo do favorecido não decide para quem vai."""
+    files = [aviso()]
+    p = reembolso.identificar(files, textos_do_aviso(""), CONTATOS, {}, "",
+                              favorecido=HOMONIMA)
+    assert not p.resolvida
+
+
+def test_aviso_que_confirma_outra_pessoa_nao_vira_o_favorecido():
+    files = [aviso()]
+    p = reembolso.identificar(files, textos_do_aviso(f"PIX: {CPF_DA_PESSOA}"),
+                              CONTATOS, {}, CPF_DA_PESSOA, favorecido=HOMONIMA)
+    assert p.documento != CPF_DE_OUTRA_DIGITOS
 
 
 def test_favorecido_que_nao_e_a_pessoa_nao_desempata_homonimos():
@@ -224,17 +263,6 @@ def test_favorecido_que_nao_e_a_pessoa_nao_desempata_homonimos():
     files = [aviso()]
     p = reembolso.identificar(files, textos_do_aviso(""), CONTATOS, {}, "",
                               favorecido=FORNECEDOR)
-    assert not p.resolvida
-
-
-def test_favorecido_pessoa_fora_dos_contatos_nao_cai_no_primeiro_nome():
-    """Se o nome completo não está no cadastro, o primeiro nome NÃO volta a
-    ser procurado: o começo único acharia a homônima, e a chave do lançamento
-    (da pessoa) sairia declarando o documento de outra."""
-    files = [aviso()]
-    contatos = {"FULANA BELTRANA COSTA": CPF_DE_OUTRA_DIGITOS}
-    p = reembolso.identificar(files, textos_do_aviso(""), contatos, {}, "",
-                              favorecido=PESSOA)
     assert not p.resolvida
 
 
@@ -259,6 +287,12 @@ def montar(itens, texto_do_aviso, contatos=CONTATOS, pix_reembolso=None):
     return {linha["id"]: linha for linha in res.contas[CONTA]}
 
 
+def na_remessa(linhas, contatos=CONTATOS):
+    c, = remessa_dia.preparar({CONTA: list(linhas.values())},
+                              participantes=contatos)[CONTA]
+    return c
+
+
 def test_o_caso_do_dia_as_quatro_linhas_ganham_a_chave():
     """A forma do dia 14/09: duas linhas com a pessoa de favorecido, duas com o
     estacionamento; o aviso de todas é só `PIX: <cpf>`."""
@@ -273,24 +307,72 @@ def test_o_caso_do_dia_as_quatro_linhas_ganham_a_chave():
         assert linha["reembolso_documento"] == CPF_DA_PESSOA_DIGITOS, id_
         assert not linha["reembolso_impedimento"], id_
         assert "chave não cadastrada" not in linha["obs"], id_
-    # quem é o favorecido desempata o nome: a pessoa sai com o nome inteiro
+    # o favorecido confirmado pelo aviso desempata o nome: sai o nome inteiro
     assert linhas["2"]["reembolso_nome"] == "FULANA DE TAL SOUZA"
     assert linhas["2"]["reembolso_origem"] == reembolso.ORIGEM_ERP
+    assert "confere com a do lançamento" in linhas["2"]["obs"]
     # no título da loja só o aviso diz quem é
     assert linhas["1"]["reembolso_origem"] == reembolso.ORIGEM_AVISO
 
 
-def test_favorecido_pessoa_sem_chave_no_aviso_paga_a_chave_do_lancamento():
-    """O aviso é uma foto que o OCR não leu: a chave do lançamento é a dela."""
-    linha = montar([lancamento("9", PESSOA, CPF_DA_PESSOA)], "")["9"]
-    assert linha["dados"] == CPF_DA_PESSOA
-    assert linha["status"] == "APTO* (reembolso)"
-    assert "lançamento" in linha["obs"]
-    assert (linha["reembolso_nome"], linha["reembolso_documento"],
-            linha["reembolso_origem"]) == ("FULANA DE TAL SOUZA",
-                                           CPF_DA_PESSOA_DIGITOS,
-                                           reembolso.ORIGEM_ERP)
-    assert not linha["reembolso_impedimento"]
+def test_o_caso_do_dia_sai_na_remessa_declarando_a_pessoa():
+    linhas = montar([lancamento("9", PESSOA, CPF_DA_PESSOA)],
+                    f"PIX: {CPF_DA_PESSOA}")
+    c = na_remessa(linhas)
+    assert c.pode, c.impedimento
+    assert c.favorecido == "FULANA DE TAL SOUZA"
+    assert c.documento_favorecido == CPF_DA_PESSOA_DIGITOS
+    assert c.reembolso and not c.marcado            # continua pedindo o clique
+
+
+def test_chave_so_do_lancamento_nao_e_apta_e_fica_visivel_na_obs():
+    """O aviso é uma foto que o OCR não leu. A chave do lançamento é a do
+    cadastro do FAVORECIDO — e só o título diz que ele é a pessoa do aviso.
+    Sozinha ela não paga ninguém: fica na obs, a linha fica em ATENÇÃO e a
+    remessa recusa."""
+    linhas = montar([lancamento("9", PESSOA, CPF_DA_PESSOA)], "")
+    linha = linhas["9"]
+    assert linha["dados"] == ""
+    assert linha["status"].startswith("ATENÇÃO")
+    assert CPF_DA_PESSOA in linha["obs"]
+    assert "não confirmada pelo aviso" in linha["obs"]
+    assert not linha["reembolso_documento"]
+    assert not na_remessa(linhas).pode
+
+
+def test_homonima_no_titulo_sem_aviso_legivel_nao_recebe():
+    """O achado da revisão: "PAGAR PARA FULANA" sem chave legível num título
+    cuja favorecida é a OUTRA Fulana saía APTO*, com a chave e o CPF dela, e a
+    remessa aceitava."""
+    linhas = montar([lancamento("9", HOMONIMA, CPF_DE_OUTRA)], "")
+    linha = linhas["9"]
+    assert linha["dados"] == ""
+    assert not linha["status"].startswith("APTO")
+    assert not linha["reembolso_documento"]
+    assert not linha["reembolso_nome"]
+    c = na_remessa(linhas)
+    assert not c.pode
+
+
+def test_empresa_de_mesmo_comeco_com_contatos_vazio_nao_recebe():
+    """O outro achado: sem Contatos (a carga falhou) a guarda do CNPJ sumia, e
+    a "Fulana Materiais Ltda" saía APTO* com o CNPJ da empresa no HTML."""
+    for contatos in ({}, {"OUTRA PESSOA": CPF_DE_OUTRA_DIGITOS}):
+        linhas = montar([lancamento("9", "Fulana Materiais Ltda",
+                                    f"Pix CNPJ: {CNPJ_DO_FORNECEDOR}")], "",
+                        contatos=contatos)
+        linha = linhas["9"]
+        assert linha["dados"] == ""
+        assert CNPJ_DO_FORNECEDOR not in linha["obs"]
+        assert not linha["status"].startswith("APTO")
+        assert not na_remessa(linhas, contatos).pode
+
+
+def test_chave_cnpj_no_lancamento_nunca_e_chave_de_reembolso():
+    linhas = montar([lancamento("9", PESSOA, f"Pix CNPJ: {CNPJ_DO_FORNECEDOR}")],
+                    "")
+    assert linhas["9"]["dados"] == ""
+    assert CNPJ_DO_FORNECEDOR not in linhas["9"]["obs"]
 
 
 def test_favorecido_fornecedor_nunca_empresta_a_chave_dele():
@@ -299,7 +381,6 @@ def test_favorecido_fornecedor_nunca_empresta_a_chave_dele():
     linha = montar([lancamento("9", FORNECEDOR,
                                f"Pix CNPJ: {CNPJ_DO_FORNECEDOR}")], "")["9"]
     assert linha["dados"] == ""
-    assert CNPJ_DO_FORNECEDOR not in linha["dados"]
     assert linha["status"] == "ATENÇÃO — sem dados de pgto"
     assert "chave não cadastrada" in linha["obs"]
     assert not linha["reembolso_documento"]
@@ -318,7 +399,7 @@ def test_aviso_e_lancamento_com_a_mesma_chave_escrita_diferente_confirmam():
                    f"PIX: {CPF_DA_PESSOA}")["9"]
     assert linha["status"] == "APTO* (reembolso)"
     assert "próprio aviso" in linha["obs"]
-    assert "lançamento" in linha["obs"]
+    assert "confere com a do lançamento" in linha["obs"]
 
 
 def test_cadastro_local_e_lancamento_com_chaves_diferentes_viram_divergencia():
@@ -332,23 +413,13 @@ def test_lancamento_sem_cara_de_chave_nao_vira_chave():
     """"VER COMENTÁRIO" no campo da chave é recado, não chave."""
     linha = montar([lancamento("9", PESSOA, "VER COMENTARIO")], "")["9"]
     assert linha["dados"] == ""
-
-
-def test_reembolso_resolvido_pelo_lancamento_sai_na_remessa_declarando_a_pessoa():
-    linhas = montar([lancamento("9", PESSOA, CPF_DA_PESSOA)], "")
-    c, = remessa_dia.preparar({CONTA: list(linhas.values())},
-                              participantes=CONTATOS)[CONTA]
-    assert c.pode, c.impedimento
-    assert c.favorecido == "FULANA DE TAL SOUZA"
-    assert c.documento_favorecido == CPF_DA_PESSOA_DIGITOS
-    assert c.reembolso and not c.marcado            # continua pedindo o clique
+    assert "não confirmada pelo aviso" not in linha["obs"]
 
 
 def test_reembolso_sem_pessoa_continua_impedido_na_remessa():
     """O que a remessa decide para quem NÃO se resolveu não muda."""
     linhas = montar([lancamento("9", FORNECEDOR,
                                 f"Pix CNPJ: {CNPJ_DO_FORNECEDOR}")], "")
-    c, = remessa_dia.preparar({CONTA: list(linhas.values())},
-                              participantes=CONTATOS)[CONTA]
+    c = na_remessa(linhas)
     assert not c.pode
     assert "CPF de quem recebe não foi encontrado" in c.impedimento
