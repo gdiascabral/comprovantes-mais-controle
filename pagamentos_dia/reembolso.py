@@ -45,6 +45,14 @@ PAGAR_PARA = re.compile(r"pagar\s*_?\s*para", re.I)
 #: certo. É a mesma janela que o `relatorio` usa para achar a chave Pix.
 TAMANHO_DA_JANELA = 300
 
+#: A âncora da janela quando a frase NÃO está no texto — o aviso que é só
+#: `PIX: <chave>`, com o "PAGAR PARA" morando apenas no nome do arquivo (o
+#: caso de 14/09/2026). O rótulo da chave faz ali o papel da frase: diz onde a
+#: chave começa. Sem rótulo nenhum, o papel é outra coisa (o recibo da loja
+#: renomeado, por exemplo), e ler o começo dele pegaria o CNPJ da loja como
+#: chave e como documento de quem recebe.
+ROTULO_DA_CHAVE = re.compile(r"\b(?:pix|chave)\b", re.I)
+
 # --------------------------------------------------------------------------
 # Impedimentos — o texto vai para a tela e para o "ficou de fora"
 # --------------------------------------------------------------------------
@@ -120,12 +128,24 @@ def janelas_do_aviso(files, textos: dict):
     a chave Pix (no `relatorio`) e o documento (aqui). Fossem duas janelas,
     bastaria uma mudar de tamanho para os dois passarem a falar de pedaços
     diferentes do mesmo papel.
+
+    **O aviso nem sempre escreve a frase.** Há aviso cujo texto é só
+    `PIX: <cpf>`, e a frase está no nome do arquivo. Exigir a frase no texto
+    deixava os dois leitores sem janela — e a linha saía "chave não
+    cadastrada; abrir o aviso" com a chave escrita no próprio aviso. Sem a
+    frase, a janela começa no rótulo da chave (`ROTULO_DA_CHAVE`), e só em
+    anexo cujo NOME DO ARQUIVO diz "pagar para": é de lá que sai o nome da
+    pessoa (`nome_do_aviso`), e a etiqueta, que vem de lista fixa, pode estar
+    em qualquer anexo do título, a nota fiscal inclusive. Com a frase no
+    texto, nada muda — vale o que vem depois dela.
     """
     for f in files or ():
         if not eh_aviso(f):
             continue
         texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
         m = PAGAR_PARA.search(texto)
+        if not m and PAGAR_PARA.search(f.get("filename") or ""):
+            m = ROTULO_DA_CHAVE.search(texto)
         if m:
             yield texto[m.end():m.end() + TAMANHO_DA_JANELA]
 
