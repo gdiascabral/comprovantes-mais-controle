@@ -103,6 +103,28 @@ def test_o_destino_de_quem_fica_de_fora_sai_em_vermelho():
         "o não apto diz o motivo e onde se corrige"
 
 
+def test_o_detalhe_do_nao_apto_mostra_o_que_o_cadastro_tem():
+    """O motivo diz o que falta; o cadastro diz o que ESTÁ lá — é com os dois
+    que se corrige no ERP. Junto, a observação e a conferência de sempre."""
+    nao_apto = _linha(3, secao=confirmacao.NAO_APTO, estado="erro",
+                      situacao="sem forma de pagar (nem boleto anexado, nem "
+                               "chave Pix)", chave="",
+                      obs="Pix sem chave no cadastro — buscar no ERP",
+                      conferencia="(não cruzado)",
+                      pagamento_no_cadastro="TED BANCO 001 AG 1234 CC 56789-0")
+    textos = [t for t, _e in pf.detalhe_na_confirmacao(nao_apto, True)]
+    assert any("sem forma de pagar" in t for t in textos)
+    assert "Cadastro do ERP: TED BANCO 001 AG 1234 CC 56789-0" in textos
+    assert any("Pix sem chave no cadastro" in t for t in textos)
+    assert any("(não cruzado)" in t for t in textos)
+    assert len(textos) <= pf.PagamentosDiaFrame.ALTURAS_DO_DETALHE
+
+    sem_cadastro = _linha(4, secao=confirmacao.NAO_APTO, estado="erro",
+                          situacao="sem forma de pagar", chave="")
+    assert not any(t.startswith("Cadastro do ERP")
+                   for t, _e in pf.detalhe_na_confirmacao(sem_cadastro, True))
+
+
 def test_o_detalhe_do_reembolso_diz_de_quem_e_o_documento():
     c = _cand(1, reembolso=True, reembolso_de="FORNECEDOR ORIGINAL",
               documento_favorecido="11122233344", reembolso_origem="cadastro")

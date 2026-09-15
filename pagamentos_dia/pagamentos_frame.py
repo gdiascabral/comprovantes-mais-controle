@@ -258,6 +258,12 @@ def detalhe_na_confirmacao(linha, marcado: bool = True) -> list:
     if not linha.marcavel:
         linhas.append((f"Não entrou: {linha.situacao} — corrija no ERP e gere "
                        "de novo.", "Erro.TLabel"))
+        # O motivo diz o que FALTA; o cadastro diz o que ESTÁ lá (a TED
+        # escrita à mão, a chave com um dígito a mais) — os dois juntos são o
+        # que se leva ao ERP para corrigir.
+        if linha.pagamento_no_cadastro:
+            linhas.append((f"Cadastro do ERP: {linha.pagamento_no_cadastro}",
+                           "MonoMini.TLabel"))
     elif not marcado:
         linhas.append((f"Fica de fora da planilha e da remessa: "
                        f"{regras.MOTIVO_NAO_CONFIRMADO}.", "Erro.TLabel"))
@@ -1284,13 +1290,9 @@ class PagamentosDiaFrame(ttk.Frame):
         destinos: list = []
         n_nao_aptos = 0
         for g, grupo in enumerate(grupos):
-            resumo_conta = (f"{len(grupo.entram)} entra(m) · "
-                            f"{len(grupo.nao_aptos)} não apto(s)")
-            if grupo.sem_remessa:
-                resumo_conta += f" · conta sem remessa: {grupo.sem_remessa}"
             tabela.insert("", "end", iid=f"g{g}", tags=("grupo",), values=(
                 "", relatorio.brl(sum(ln.valor for ln in grupo.entram)),
-                grupo.conta, resumo_conta) + ("",) * 5)
+                grupo.conta, confirmacao.resumo_da_conta(grupo)) + ("",) * 5)
             for sufixo, titulo, secao in (
                     ("e", "ENTRAM", grupo.entram),
                     ("n", "NÃO APTOS — corrija no ERP", grupo.nao_aptos)):

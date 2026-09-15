@@ -249,6 +249,140 @@ def test_sem_cadastro_de_contas_a_analise_nao_inventa_conta_sem_remessa():
 
 
 # ==========================================================================
+# "Já saiu em remessa?" em LOTE, só na análise da janela
+# ==========================================================================
+class _RegistroDeLote(_RegistroFalso):
+    """O registro com a pergunta em lote, que anota quem perguntou o quê.
+
+    `envio_de`/`envio_da_referencia` anotam cada pergunta um-a-um: é assim que
+    o teste prova que a análise NÃO as fez para as chaves pré-carregadas — e
+    que as fez para as outras."""
+
+    def __init__(self, enviados=None, lote_cai=False, lote_esquece=()):
+        super().__init__(enviados=enviados)
+        self.lote_cai, self.lote_esquece = lote_cai, set(lote_esquece)
+        self.lotes, self.um_a_um = [], []
+
+    def envio_de(self, codigo):
+        self.um_a_um.append(("envio_de", codigo))
+        return super().envio_de(codigo)
+
+    def envio_da_referencia(self, referencia):
+        self.um_a_um.append(("envio_da_referencia", referencia))
+        return super().envio_da_referencia(referencia)
+
+    def envios_em_lote(self, identificadores, referencias):
+        self.lotes.append((sorted(identificadores), sorted(referencias)))
+        if self.lote_cai:
+            raise OSError("o lote caiu no meio")
+        por_barras = {c: None for c in identificadores
+                      if c not in self.lote_esquece}
+        por_ref = {r: _RegistroFalso.envio_da_referencia(self, r)
+                   for r in referencias if r not in self.lote_esquece}
+        return por_barras, por_ref
+
+
+def test_a_analise_pergunta_em_lote_e_nao_uma_por_uma():
+    registro = _RegistroDeLote(enviados={"L2": 7})
+    contas = {CONTA: [_registro("L1"), _registro("L2"),
+                      _registro("L3", parcial=True)]}
+    analise = confirmacao.analisar_remessa(
+        contas, {}, carregar_mapas=_mapas, abrir_historico=lambda: registro,
+        quando=HOJE)
+    assert analise.candidato(CONTA, "L2").ja_enviado \
+        == "já saiu na remessa nº 000007 de 10/09/2026"
+    assert analise.candidato(CONTA, "L1").ja_enviado == ""
+    assert len(registro.lotes) == 1
+    assert registro.um_a_um == [], \
+        "tudo o que o preparar pergunta já estava no lote"
+    assert registro.escritas == []
+
+
+def test_o_que_ficou_fora_do_lote_e_perguntado_ao_historico_de_verdade():
+    """Nunca "não saiu" sem ter perguntado: chave que o lote não respondeu vai
+    ao caminho de sempre, uma por uma."""
+    registro = _RegistroDeLote(enviados={"L2": 7}, lote_esquece={"L2"})
+    analise = confirmacao.analisar_remessa(
+        {CONTA: [_registro("L1"), _registro("L2")]}, {}, carregar_mapas=_mapas,
+        abrir_historico=lambda: registro, quando=HOJE)
+    assert analise.candidato(CONTA, "L2").ja_enviado \
+        == "já saiu na remessa nº 000007 de 10/09/2026"
+    assert ("envio_da_referencia", "L2") in registro.um_a_um
+    assert ("envio_da_referencia", "L1") not in registro.um_a_um
+
+
+def test_o_involucro_so_responde_o_que_pre_carregou():
+    registro = _RegistroDeLote(enviados={"L2": 7, "L9": 3})
+    envolto = confirmacao.HistoricoPreCarregado(registro, ["1" * 44], ["L2"])
+    assert envolto.envio_da_referencia("L2")[0].nsa == 7
+    assert envolto.envio_de("1" * 44) is None, "perguntado e não saiu"
+    assert registro.um_a_um == []
+    assert envolto.envio_da_referencia("L9")[0].nsa == 3
+    assert envolto.envio_de("2" * 44) is None
+    assert registro.um_a_um == [("envio_da_referencia", "L9"),
+                                ("envio_de", "2" * 44)], \
+        "fora do pré-carregamento, delegou"
+    assert envolto.maior_ordem_do_dia(HOJE) == 0, \
+        "o resto do histórico passa direto"
+
+
+def test_lote_que_cai_volta_ao_um_a_um():
+    registro = _RegistroDeLote(enviados={"L2": 7}, lote_cai=True)
+    analise = confirmacao.analisar_remessa(
+        {CONTA: [_registro("L1"), _registro("L2")]}, {}, carregar_mapas=_mapas,
+        abrir_historico=lambda: registro, quando=HOJE)
+    assert analise.avisos == [], "o lote é atalho; o caminho de sempre respondeu"
+    assert analise.candidato(CONTA, "L2").ja_enviado \
+        == "já saiu na remessa nº 000007 de 10/09/2026"
+    assert ("envio_da_referencia", "L2") in registro.um_a_um
+
+
+def test_historico_sem_lote_pergunta_um_a_um():
+    """O espelho local e os dublês antigos não têm `envios_em_lote`."""
+    registro = _RegistroFalso(enviados={"L2": 7})
+    envolto = confirmacao.HistoricoPreCarregado(registro, [], ["L2"])
+    assert envolto.envio_da_referencia("L2")[0].nsa == 7
+
+
+def test_as_chaves_pre_carregadas_sao_as_que_o_preparar_pergunta():
+    """Deriva igual ao `preparar`: o código de barras do boleto (44 dígitos,
+    pela conversão da linha digitável) e o id de toda linha."""
+    contas = {CONTA: [_registro("L1"),
+                      _registro("L2", tipo="Pix", dados="11.222.333/0001-81"),
+                      _registro("", dados="")]}
+    identificadores, referencias = confirmacao.chaves_do_preparar(contas)
+    from pagamentos_dia import ocr_boleto
+    assert identificadores == [ocr_boleto.codigo_de_barras(LINHA_BANCARIA)]
+    assert len(identificadores[0]) == 44
+    assert referencias == ["L1", "L2"]
+
+
+def test_cem_linhas_custam_poucas_consultas_ao_banco(monkeypatch):
+    """O registro de verdade, sobre um `rest.ler` que só conta: cem linhas
+    (metade boleto, metade Pix com CNPJ na chave) passam a custar a ordem do
+    dia e um punhado de consultas `in.(…)` — e nenhuma `eq.` uma por uma."""
+    from nuvem import registro as registro_nuvem
+
+    filtros = []
+
+    def ler(tabela, _token, *, colunas="*", filtro=""):
+        filtros.append(filtro)
+        return []
+
+    monkeypatch.setattr(registro_nuvem.rest, "ler", ler)
+    linhas = ([_registro(f"B{i:03d}") for i in range(50)]
+              + [_registro(f"P{i:03d}", tipo="Pix", dados="11.222.333/0001-81")
+                 for i in range(50)])
+    analise = confirmacao.analisar_remessa(
+        {CONTA: linhas}, {}, carregar_mapas=_mapas,
+        abrir_historico=lambda: registro_nuvem.Registro("tok"), quando=HOJE)
+    assert analise.avisos == []
+    assert all(c.pode for c in analise.preparado[CONTA])
+    assert not [f for f in filtros if "=eq." in f], filtros
+    assert len(filtros) <= 5, filtros
+
+
+# ==========================================================================
 # SITUAÇÃO: o veredito da planilha e o da remessa, lado a lado
 # ==========================================================================
 def _cand(ident="L1", **mudancas):
@@ -283,6 +417,44 @@ def test_a_conta_sem_remessa_pesa_em_toda_linha_dela():
         sem_remessa=remessa_dia.MOTIVO_SEM_CONVENIO)
     assert texto == f"APTO · conta sem remessa: {remessa_dia.MOTIVO_SEM_CONVENIO}"
     assert estado == "atencao"
+
+
+def test_conta_de_outro_banco_nao_e_pendencia():
+    """Conta do Inter não faz remessa CNAB e nunca vai fazer: pintar toda linha
+    dela de âmbar todo dia é ensinar a pular o âmbar. Ela diz, neutra, que a
+    conta não faz remessa e se paga pelo HTML, e a cor vem da planilha."""
+    texto, estado = confirmacao.situacao_da_linha(
+        {"status": "APTO"}, _cand(), sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)
+    assert texto == (f"APTO · {remessa_dia.MOTIVO_FORA_SICOOB} — "
+                     f"{confirmacao.PAGUE_PELO_HTML}")
+    assert estado == "ok"
+    # O motivo da remessa (a linha teria impedimento) não pesa numa conta que
+    # não faz remessa nenhuma...
+    assert confirmacao.situacao_da_linha(
+        {"status": "APTO"}, _cand(impedimento=remessa_dia.MOTIVO_SEM_DOCUMENTO),
+        sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)[1] == "ok"
+    # ...mas o ATENÇÃO da planilha continua âmbar.
+    assert confirmacao.situacao_da_linha(
+        {"status": "ATENÇÃO — sem anexo"}, _cand(),
+        sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)[1] == "atencao"
+
+
+def test_conta_sicoob_com_cadastro_incompleto_continua_ambar():
+    for motivo in (remessa_dia.MOTIVO_SEM_CONVENIO, remessa_dia.MOTIVO_SEM_BANCO,
+                   remessa_dia.MOTIVO_CONTA_DESCONHECIDA):
+        assert confirmacao.situacao_da_linha(
+            {"status": "APTO"}, _cand(), sem_remessa=motivo)[1] == "atencao"
+
+
+def test_o_resumo_da_conta_de_outro_banco_tambem_e_neutro():
+    fora = confirmacao.Grupo("CONTA INTER", [], [],
+                             sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)
+    incompleta = confirmacao.Grupo("CONTA SICOOB", [], [],
+                                   sem_remessa=remessa_dia.MOTIVO_SEM_CONVENIO)
+    assert "conta sem remessa" not in confirmacao.resumo_da_conta(fora)
+    assert confirmacao.PAGUE_PELO_HTML in confirmacao.resumo_da_conta(fora)
+    assert confirmacao.resumo_da_conta(incompleta).endswith(
+        f"conta sem remessa: {remessa_dia.MOTIVO_SEM_CONVENIO}")
 
 
 def test_o_que_ja_saiu_em_remessa_pede_olhada():
@@ -368,6 +540,20 @@ def test_cada_conta_mostra_o_que_entra_e_o_que_nao_entrou():
         == ("A9", regras.MOTIVO_SEM_PAGAR, "erro")
     assert not nao.marcavel, "não apto não se força: corrige-se no ERP"
     assert nao.obs == "Pix sem chave no cadastro — buscar no ERP"
+
+
+def test_o_nao_apto_traz_o_pagamento_do_cadastro_do_lancamento():
+    """"Sem forma de pagar" só se corrige sabendo o que o cadastro TEM: a TED
+    escrita à mão, a chave com um dígito a mais. O texto vem do lançamento do
+    passo 1, porque a linha omitida só guarda o que se conseguiu apurar."""
+    resultado = relatorio.Resultado({}, [_omit("A9", tipo="TED")])
+    lancamentos = [_lanc("A9", tradePayablePaymentMethod="TED",
+                         paidToBankAccount="  BANCO 001 AG 1234 CC 56789-0 ")]
+    grupo, = confirmacao.grupos_da_confirmacao(resultado, None, lancamentos)
+    nao, = grupo.nao_aptos
+    assert nao.pagamento_no_cadastro == "BANCO 001 AG 1234 CC 56789-0"
+    grupo, = confirmacao.grupos_da_confirmacao(resultado, None, [])
+    assert grupo.nao_aptos[0].pagamento_no_cadastro == ""
 
 
 def test_a_linha_que_entra_traz_a_situacao_da_remessa():

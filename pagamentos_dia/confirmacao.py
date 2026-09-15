@@ -131,6 +131,90 @@ class AnaliseRemessa:
                      if c.id == ident), None)
 
 
+def chaves_do_preparar(contas: dict) -> tuple[list, list]:
+    """`(códigos de barras, referências)` que o `preparar` vai perguntar.
+
+    Derivadas como ele deriva, linha a linha: o código de barras é
+    `ocr_boleto.codigo_de_barras` da linha digitável (`dados` sem espaço nas
+    pontas), só no Boleto, e a referência é o id da linha em texto
+    (`remessa_dia._ja_enviado`). Aqui vão TODAS as linhas — o `preparar` não
+    pergunta da linha impedida, e pré-carregar uma chave a mais custa um
+    item no `in.(…)`; uma a menos custaria uma ida ao banco, e o teste que
+    conta consultas pega. Sem repetição, na ordem em que aparecem.
+    """
+    identificadores: dict[str, None] = {}
+    referencias: dict[str, None] = {}
+    for registros in (contas or {}).values():
+        for registro in registros:
+            if registro.get("tipo") == "Boleto":
+                codigo = ocr_boleto.codigo_de_barras(
+                    (registro.get("dados") or "").strip())
+                if codigo:
+                    identificadores[codigo] = None
+            referencia = str(registro.get("id") or "")
+            if referencia:
+                referencias[referencia] = None
+    return list(identificadores), list(referencias)
+
+
+class HistoricoPreCarregado:
+    """O histórico de remessas com "já saiu?" respondido em LOTE — só para a
+    análise da janela.
+
+    O `preparar` pergunta `envio_de`/`envio_da_referencia` uma linha por vez,
+    e contra o registro da nuvem cada pergunta é uma ida ao Supabase: com
+    100–300 lançamentos, centenas de ida-e-volta dentro do worker do
+    navegador, a cada "Gerar planilha". Este invólucro pergunta tudo de uma
+    vez (`envios_em_lote`) ao ser criado e responde do que voltou.
+
+    **Nunca responde "não saiu" sem ter perguntado.** Responde do cache só a
+    chave que o lote DEVOLVEU — achada ou ausente —; qualquer outra (fora do
+    pré-carregamento, ou que o lote não quis pôr no filtro) vai ao histórico
+    de verdade, pelo caminho de sempre. Histórico sem `envios_em_lote` (o
+    espelho local, um dublê) ou lote que levanta deixam o cache vazio, e aí
+    tudo vai um-a-um, como antes. Qualquer outro atributo (`maior_ordem_do_dia`,
+    …) passa direto.
+
+    Fica AQUI, e não no `remessa_dia`, de propósito: o "Gerar remessa"
+    continua perguntando uma por uma, na hora de gravar, ao registro vivo — é
+    a pergunta que decide o arquivo, e não vale economizar nela.
+    """
+
+    def __init__(self, historico, identificadores, referencias) -> None:
+        self._real = historico
+        self._por_identificador: dict = {}
+        self._por_referencia: dict = {}
+        em_lote = getattr(historico, "envios_em_lote", None)
+        if em_lote is None:
+            return
+        try:
+            por_identificador, por_referencia = em_lote(list(identificadores),
+                                                        list(referencias))
+        except Exception:                                    # noqa: BLE001
+            # O lote é atalho: caindo, o caminho de sempre responde — e, se
+            # ele também cair, é ele que levanta e vira o aviso da janela.
+            return
+        self._por_identificador = dict(por_identificador or {})
+        self._por_referencia = dict(por_referencia or {})
+
+    def envio_de(self, identificador):
+        if identificador in self._por_identificador:
+            return self._por_identificador[identificador]
+        return self._real.envio_de(identificador)
+
+    def envio_da_referencia(self, referencia):
+        if referencia in self._por_referencia:
+            return self._por_referencia[referencia]
+        return self._real.envio_da_referencia(referencia)
+
+    def __getattr__(self, nome):
+        # Só chega aqui o que não é atributo do invólucro. O `_` de fora evita
+        # recursão se alguém perguntar por `_real` antes do `__init__`.
+        if nome.startswith("_"):
+            raise AttributeError(nome)
+        return getattr(self._real, nome)
+
+
 def analisar_remessa(contas: dict, participantes: dict | None,
                      carregar_mapas, abrir_historico,
                      quando: _dt.date | None = None) -> AnaliseRemessa:
@@ -154,6 +238,10 @@ def analisar_remessa(contas: dict, participantes: dict | None,
         historico = abrir_historico()
     except Exception as e:                                   # noqa: BLE001
         avisos.append(_com_erro(AVISO_SEM_REGISTRO, e))
+    if historico is not None:
+        # "Já saiu?" em lote: poucas consultas em vez de uma ou duas por linha.
+        historico = HistoricoPreCarregado(historico,
+                                          *chaves_do_preparar(contas))
 
     try:
         preparado = remessa_dia.preparar(contas, participantes, quando=quando,
@@ -202,6 +290,19 @@ SEM_IMPEDIMENTO_NA_LINHA = "sem impedimento na linha para a remessa"
 #: O que junta as partes da SITUAÇÃO — o mesmo separador da conferência da
 #: remessa (`situacao_na_conferencia`), para as duas janelas lerem igual.
 SEPARADOR = " · "
+#: O que se faz com a linha de uma conta de OUTRO banco: ela não entra em
+#: remessa CNAB nenhuma, e o caminho do dia para ela é o HTML dos pagamentos.
+PAGUE_PELO_HTML = "pague pelo HTML"
+
+
+def _conta_de_outro_banco(sem_remessa: str) -> bool:
+    """A conta não gera remessa porque é de outro banco — não por cadastro
+    incompleto. O motivo é o do `resolver_pagador`, comparado por inteiro."""
+    return sem_remessa == remessa_dia.MOTIVO_FORA_SICOOB
+
+
+def _frase_de_outro_banco() -> str:
+    return f"{remessa_dia.MOTIVO_FORA_SICOOB} — {PAGUE_PELO_HTML}"
 
 
 def situacao_da_linha(registro: dict, candidato, sem_remessa: str = "",
@@ -217,12 +318,22 @@ def situacao_da_linha(registro: dict, candidato, sem_remessa: str = "",
     quando a remessa não leva (a conta não gera, ou a linha tem impedimento)
     ou quando ela já saiu numa remessa; `ok` no resto. Desmarcar é outra
     coisa, e quem pinta de vermelho é `estado_na_tela`.
+
+    **Conta de OUTRO banco não é pendência** (`MOTIVO_FORA_SICOOB`). Ela não
+    faz remessa CNAB e nunca vai fazer, então nem ela nem o impedimento de
+    remessa da linha dizem nada sobre o que o dono tem de corrigir: a
+    situação diz, em tom neutro, que a conta não faz remessa e se paga pelo
+    HTML, e a cor é a da planilha. Pintar toda linha do Inter de âmbar todo
+    dia é ensinar a pular o âmbar — e é no âmbar que mora a conta Sicoob sem
+    convênio, que essa continua pintando.
     """
     status = (registro.get("status") or "").strip()
     partes = [status] if status else []
     atencao = status.upper().startswith("ATEN")
 
-    if sem_remessa:
+    if _conta_de_outro_banco(sem_remessa):
+        partes.append(_frase_de_outro_banco())
+    elif sem_remessa:
         partes.append(f"conta sem remessa: {sem_remessa}")
         atencao = True
     elif candidato is not None:
@@ -289,6 +400,10 @@ class Linha:
     obs: str = ""
     conferencia: str = ""
     candidato: object = None    # `remessa_dia.Candidato`, quando houve análise
+    #: O texto de pagamento do CADASTRO do lançamento (`paidToBankAccount`: a
+    #: TED escrita à mão, a chave como está lá). É o que ajuda a corrigir o
+    #: não apto no ERP — o motivo diz o que falta, este diz o que ESTÁ lá.
+    pagamento_no_cadastro: str = ""
 
     @property
     def marcavel(self) -> bool:
@@ -355,6 +470,10 @@ def grupos_da_confirmacao(resultado, analise: AnaliseRemessa | None,
         item = por_id.get(str(ident or ""))
         return relatorio.data_do_item(item) if item else None
 
+    def pagamento_no_cadastro(ident):
+        item = por_id.get(str(ident or "")) or {}
+        return (item.get("paidToBankAccount") or "").strip()
+
     entram: dict[str, list] = {}
     for conta, registros in (resultado.contas or {}).items():
         for reg in registros:
@@ -395,7 +514,8 @@ def grupos_da_confirmacao(resultado, analise: AnaliseRemessa | None,
             descricao=o.get("descricao") or "",
             situacao=o.get("motivo") or "", estado="erro",
             olhar=regras.exige_confirmacao(favorecido, destacar),
-            obs=o.get("obs") or "", conferencia=o.get("conferencia") or ""))
+            obs=o.get("obs") or "", conferencia=o.get("conferencia") or "",
+            pagamento_no_cadastro=pagamento_no_cadastro(ident)))
 
     grupos = []
     for conta in sorted(set(entram) | set(nao_aptos)):
@@ -405,6 +525,20 @@ def grupos_da_confirmacao(resultado, analise: AnaliseRemessa | None,
                             nao_aptos=nao_aptos.get(conta, []),
                             sem_remessa=sem_remessa.get(conta, "")))
     return grupos
+
+
+def resumo_da_conta(grupo: Grupo) -> str:
+    """A SITUAÇÃO da linha da conta, em cima das suas: quantas entram,
+    quantas não, e — quando a conta não gera remessa — por quê, com o mesmo
+    tom da linha (neutro para outro banco, "conta sem remessa" para cadastro
+    incompleto)."""
+    texto = (f"{len(grupo.entram)} entra(m) · "
+             f"{len(grupo.nao_aptos)} não apto(s)")
+    if _conta_de_outro_banco(grupo.sem_remessa):
+        texto += f"{SEPARADOR}{_frase_de_outro_banco()}"
+    elif grupo.sem_remessa:
+        texto += f"{SEPARADOR}conta sem remessa: {grupo.sem_remessa}"
+    return texto
 
 
 # --------------------------------------------------------------------------
