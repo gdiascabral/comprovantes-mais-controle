@@ -649,24 +649,34 @@ def achar_doc(item: dict, files, overview=None) -> str:
     """O número da nota: o campo do lançamento, o nome do anexo, o detalhe.
 
     "REEMBOLSO FULANO" no campo do documento não é número de nota — é quem
-    preencheu avisando que não há nota. O filtro vale para as TRÊS fontes:
-    enquanto só a primeira o tinha, o detalhe (que traz o mesmo texto)
-    devolvia a frase inteira, a descrição saía "NF REEMBOLSO FULANO" e a
-    conferência procurava uma nota que não existe. No nome do anexo o número
-    ao lado de "Nº" num arquivo de reembolso não é o da nota, pelo mesmo
-    motivo."""
+    preencheu avisando que não há nota. O filtro vale para os DOIS campos de
+    texto livre: enquanto só o do lançamento o tinha, o do detalhe (que traz
+    o mesmo texto) devolvia a frase inteira, a descrição saía "NF REEMBOLSO
+    FULANO" e a conferência procurava uma nota que não existe. O nome do
+    anexo não precisa do filtro: dali só se tiram DÍGITOS, e o número ao lado
+    de "NF" num arquivo de reembolso é a nota da compra reembolsada.
+    Quem precisa saber que o documento DECLARA reembolso pergunta a
+    `documento_declara_reembolso`."""
     doc = (item.get("documentNumber") or "").strip()
     if doc and not _REEMBOLSO.search(doc):
         return doc
     for f in files:
-        nome = f.get("filename") or ""
-        if _REEMBOLSO.search(nome):
-            continue
-        m = _DOC_NO_NOME.search(nome)
+        m = _DOC_NO_NOME.search(f.get("filename") or "")
         if m:
             return m.group(1)
     doc = str((overview or {}).get("documentNumber") or "").strip()
     return "" if _REEMBOLSO.search(doc) else doc
+
+
+def documento_declara_reembolso(item: dict, overview=None) -> bool:
+    """O campo do documento (no lançamento ou no detalhe) diz "REEMBOLSO"?
+
+    Não é número de nota, mas é compra documentada: quem lançou avisou que
+    a despesa foi paga por alguém e será reembolsada. Até 14/09/2026 isso
+    entrava pela porta errada — o `achar_doc` devolvia a frase como NF — e
+    era o que deixava o título sem boleto ser pago pela chave do cadastro."""
+    return any(_REEMBOLSO.search(str(d or "")) for d in
+               (item.get("documentNumber"), (overview or {}).get("documentNumber")))
 
 
 def centro_de_custo(item: dict) -> str:
@@ -1005,9 +1015,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
 
         # A compra está documentada? É o que decide se um título sem boleto
         # anexado pode ser pago pela chave do cadastro (abaixo) ou se é ruído.
+        # O documento que DECLARA reembolso conta: ele deixou de ser NF na
+        # descrição (não é número de nota), mas continua sendo compra
+        # documentada — sem esta linha, o título que antes era pago pela chave
+        # do cadastro passaria a cair em NÃO ENTRARAM.
         nf = achar_doc(item, files, overview)
         oc = achar_oc(item, files, coment, overview)
-        tem_nf_ou_oc = bool(oc or (nf and not regras.documento_e_a_oc(nf, oc)))
+        tem_nf_ou_oc = bool(oc or (nf and not regras.documento_e_a_oc(nf, oc))
+                            or documento_declara_reembolso(item, overview))
 
         avisos, obs, chave_divergente = [], "", False
         #: Quem recebe, quando o anexo é um aviso "PAGAR PARA". Fica None nas

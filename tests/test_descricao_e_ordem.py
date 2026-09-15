@@ -28,10 +28,53 @@ def test_reembolso_no_documento_do_detalhe_nao_vira_nf():
     assert relatorio.monta_descricao(item, [], "", overview) == "QD 99 LT 99 OC 1234"
 
 
-def test_reembolso_no_nome_do_anexo_nao_vira_nf():
+def test_reembolso_no_nome_do_anexo_nao_apaga_a_nf_de_verdade():
+    """Do nome do anexo só se tiram DÍGITOS: "REEMBOLSO" nunca saía dali, e o
+    número ao lado de "NF" num arquivo de reembolso é a nota da compra."""
     item = {"costCentreDetails": [{"workName": "QD 99 LT 99"}]}
-    files = [anexo("REEMBOLSO FULANO MODELO NO 55")]
-    assert relatorio.achar_doc(item, files) == ""
+    files = [anexo("Reembolso Fulano Modelo NF 5678")]
+    assert relatorio.achar_doc(item, files) == "5678"
+
+
+def _boleto_sem_anexo(**mudancas):
+    """A forma no ERP é Boleto, não há boleto anexado e o cadastro tem Pix."""
+    return dict({"id": "1", "tradePayableId": "t1", "paid": False,
+                 "tradePayableAccount": {"name": CONTA},
+                 "paidTo": "Fornecedor Modelo Ltda", "remainingValue": 10.0,
+                 "tradePayablePaymentMethod": "Boleto",
+                 "paidToBankAccount": "PIX EMAIL fornecedor@exemplo.com",
+                 "documentNumber": "REEMBOLSO FULANO MODELO",
+                 "costCentreDetails": [{"workName": "QD 99 LT 99"}]}, **mudancas)
+
+
+def test_documento_de_reembolso_continua_valendo_como_compra_documentada():
+    """Em 73c52ce o detalhe devolvia "REEMBOLSO FULANO" como NF, e isso fazia a
+    linha ser paga pela chave do cadastro. Tirar a falsa NF da descrição não
+    pode tirar a linha da planilha: o desfecho tem de ser o mesmo de antes
+    (tipo, dados, obs e status conferidos contra a base, não inventados)."""
+    detalhe = {"1": {"documentNumber": "REEMBOLSO FULANO MODELO"}}
+    res = relatorio.montar_registros([_boleto_sem_anexo()], {}, detalhe, {})
+    assert not res.omitidos
+    linha = res.contas[CONTA][0]
+    assert (linha["tipo"], linha["dados"], linha["obs"], linha["status"]) == (
+        "Pix", "fornecedor@exemplo.com",
+        "Sem boleto anexado — pagar pela chave Pix do cadastro",
+        "ATENÇÃO — sem anexo")
+    assert linha["descricao"] == "QD 99 LT 99" and linha["nf"] == ""
+
+
+def test_reembolso_declarado_so_no_lancamento_tambem_vale():
+    """Sem o detalhe carregado, o mesmo lançamento não pode ter outro desfecho."""
+    res = relatorio.montar_registros([_boleto_sem_anexo()], {}, {}, {})
+    assert not res.omitidos
+    assert res.contas[CONTA][0]["tipo"] == "Pix"
+
+
+def test_sem_nf_sem_oc_e_sem_reembolso_continua_fora():
+    """A exceção é o reembolso declarado, e não "qualquer documento"."""
+    res = relatorio.montar_registros([_boleto_sem_anexo(documentNumber="")],
+                                     {}, {}, {})
+    assert not res.contas and len(res.omitidos) == 1
 
 
 def test_nf_de_verdade_no_nome_do_anexo_continua_valendo():
