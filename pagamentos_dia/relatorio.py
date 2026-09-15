@@ -1063,16 +1063,43 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             tem_documento = True
             do_aviso = chave_pix_do_aviso(files, textos)
             do_mapa = pix_do_reembolso(files, item, pix_reembolso)
+            # A chave do LANÇAMENTO só vale quando o favorecido é a própria
+            # pessoa do aviso. Nas outras linhas ela é a chave do fornecedor, e
+            # pagá-la é pagar a loja de novo em vez de devolver o dinheiro a
+            # quem comprou — a regra de sempre deste ramo. Entra por último:
+            # o aviso é o papel do dia e o cadastro local foi digitado de
+            # propósito; o lançamento só CONFERE os dois quando eles existem.
+            do_lancamento = ""
+            if pago_para and reembolso.pessoa_e_o_favorecido(files, favorecido,
+                                                             participantes):
+                candidata = extrair_chave_pix(pago_para)
+                do_lancamento = candidata if parece_chave_pix(candidata) else ""
+            confere = " (confere com a do lançamento)" if do_lancamento else ""
             if do_aviso and do_mapa and not mesma_chave(do_aviso, do_mapa):
                 dados, chave_divergente = do_aviso, True
                 obs = (f"Reembolso — a chave do AVISO ({do_aviso}) difere da "
                        f"cadastrada ({do_mapa}); confirmar antes de pagar")
+            elif do_aviso and do_lancamento and not mesma_chave(do_aviso, do_lancamento):
+                dados, chave_divergente = do_aviso, True
+                obs = (f"Reembolso — a chave do AVISO ({do_aviso}) difere da do "
+                       f"lançamento ({do_lancamento}), cujo favorecido é a própria "
+                       "pessoa; confirmar antes de pagar")
             elif do_aviso:
                 dados = do_aviso
-                obs = "Reembolso — chave lida do próprio aviso, NÃO o pix do cadastro"
+                obs = ("Reembolso — chave lida do próprio aviso, NÃO o pix do "
+                       f"cadastro{confere}")
+            elif do_mapa and do_lancamento and not mesma_chave(do_mapa, do_lancamento):
+                dados, chave_divergente = do_mapa, True
+                obs = (f"Reembolso — a chave CADASTRADA ({do_mapa}) difere da do "
+                       f"lançamento ({do_lancamento}), cujo favorecido é a própria "
+                       "pessoa; confirmar antes de pagar")
             elif do_mapa:
                 dados = do_mapa
-                obs = "Reembolso — pagar a chave do aviso, NÃO o pix do cadastro"
+                obs = f"Reembolso — pagar a chave do aviso, NÃO o pix do cadastro{confere}"
+            elif do_lancamento:
+                dados = do_lancamento
+                obs = ("Reembolso — chave do lançamento: o favorecido é a própria "
+                       "pessoa do aviso, e o aviso não trouxe chave legível")
             else:
                 dados = ""
                 obs = (f"Reembolso para '{nome_do_reembolso(files) or '?'}' — chave não "
@@ -1082,7 +1109,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # chave); isto descobre PARA QUEM, que é o que o segmento B tem de
             # declarar. A chave entra como conferente, nunca como fonte.
             pessoa = reembolso.identificar(files, textos, participantes,
-                                           cadastro_reembolso, dados)
+                                           cadastro_reembolso, dados,
+                                           favorecido=favorecido)
             if pessoa.resolvida:
                 avisos.append(f"Reembolso para {pessoa.nome} "
                               f"(documento: {pessoa.origem})")
