@@ -1590,13 +1590,12 @@ class PagamentosDiaFrame(ttk.Frame):
         apuração não confirmada nunca vira resultado — senão o "Gerar
         remessa" sairia de linhas que ninguém confirmou.
         """
+        # Sem conferir `self.worker` aqui, de propósito: esta função é chamada
+        # pela mensagem que o PRÓPRIO worker da leitura deixou na fila, e o
+        # `Future` dele só fica `done()` depois que a função retorna — conferir
+        # seria descartar, de vez em quando, a confirmação da leitura que
+        # acabou de terminar.
         entradas, resultado, analise, grupos, depois, pasta = pacote
-        if self.worker and not self.worker.done():
-            # Outra rotina começou entre a leitura e esta janela: o que está
-            # em memória pode já não ser o desta leitura.
-            self._log("\n[!] Outra rotina começou antes da confirmação — "
-                      "nada foi gravado. Gere de novo.")
-            return
         if grupos:
             desmarcados = self._janela_confirmar(
                 grupos, analise.avisos,
