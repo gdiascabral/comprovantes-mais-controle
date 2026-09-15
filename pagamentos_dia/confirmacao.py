@@ -64,6 +64,21 @@ class Entradas:
     regras_fornecedor: dict
     participantes: dict
     periodo: tuple              # (ini, fim) de quando a apuração rodou
+    #: Anexos que deviam ser lidos e não foram (download que devolveu nada ou
+    #: levantou). A forma de pagar dessas linhas foi decidida sem o documento.
+    anexos_nao_lidos: int = 0
+
+
+def aviso_de_anexos_nao_lidos(quantos: int) -> str:
+    """O aviso da janela para os anexos que não foram lidos, ou "".
+
+    Sem ele, o download que falhou passava calado: o boleto dentro da NF não
+    lido vira o Pix do cadastro, verde, e nada na janela diz que a leitura
+    daquela linha ficou pela metade."""
+    if not quantos:
+        return ""
+    return (f"{quantos} anexo(s) não foram lidos: a forma de pagar dessas "
+            "linhas pode estar errada")
 
 
 def remontar(entradas: Entradas, ids_nao_confirmados=()) -> relatorio.Resultado:

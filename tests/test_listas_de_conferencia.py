@@ -286,6 +286,64 @@ def test_confirmar_tira_o_desmarcado_e_grava_a_planilha(monkeypatch, tmp_path):
     assert arquivo.exists() and arquivo.parent == tmp_path
 
 
+def _anexo_pdf(nome):
+    return {"filename": nome, "tagName": "Nota Fiscal", "extension": ".pdf",
+            "downloadUrl": f"https://exemplo.invalid/{nome}.pdf"}
+
+
+def test_parar_durante_a_leitura_nao_abre_a_janela(monkeypatch, tmp_path):
+    """Parar no meio do download deixava a janela abrir com leitura pela
+    metade: o boleto dentro da NF não lido virava Pix do cadastro, verde. Com
+    o Parar ligado depois da leitura, nada é apurado e a janela não abre."""
+    dono, _registro = _dono_sem_tela(
+        monkeypatch, tmp_path, [_lanc_api("L1"), _lanc_api("L2")])
+    dono.anexos = {"T-L1": [_anexo_pdf("nf-1")], "T-L2": [_anexo_pdf("nf-2")]}
+
+    def baixar(_url):
+        dono._parar.set()               # a pessoa clicou em Parar agora
+        return None
+
+    dono.anx = SimpleNamespace(api=SimpleNamespace(baixar_anexo=baixar))
+    dono._t_apurar(["CONTA A"], dict(_opcoes(tmp_path), cruzar=True),
+                   "planilha")
+    msgs = _mensagens(dono)
+    assert not [v for t, v in msgs if t == "confirmar"], "a janela não abre"
+    assert ("status", "Interrompido — nada foi apurado.") in msgs
+    assert any("nterrompido" in str(v) for t, v in msgs if t == "log")
+    assert dono.resultado == "o resultado de antes"
+    assert msgs[-1] == ("botoes", "normal")
+
+
+def test_anexo_que_nao_foi_lido_vira_aviso_na_janela(monkeypatch, tmp_path):
+    """Download que devolve None ou levanta não pode passar calado: a forma de
+    pagar daquela linha foi decidida sem o documento."""
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])
+    dono.anexos = {"T-L1": [_anexo_pdf("nf-1"), _anexo_pdf("nf-2"),
+                            _anexo_pdf("nf-3")]}
+    monkeypatch.setattr(pf.relatorio, "texto_de_pdf",
+                        lambda dados: "texto da nota" if dados else "")
+
+    def baixar(url):
+        if url.endswith("nf-2.pdf"):
+            return None
+        if url.endswith("nf-3.pdf"):
+            raise OSError("o download caiu")
+        return b"%PDF ficticio"
+
+    dono.anx = SimpleNamespace(api=SimpleNamespace(baixar_anexo=baixar))
+    dono._t_apurar(["CONTA A"], dict(_opcoes(tmp_path), cruzar=True),
+                   "planilha")
+    msgs = _mensagens(dono)
+    entradas, _resultado, analise, _grupos, _depois, _pasta = next(
+        v for t, v in msgs if t == "confirmar")
+    aviso = confirmacao.aviso_de_anexos_nao_lidos(2)
+    assert entradas.anexos_nao_lidos == 2
+    assert analise.avisos[0] == aviso
+    assert any(aviso in str(v) for t, v in msgs if t == "log")
+    assert entradas.textos == {"https://exemplo.invalid/nf-1.pdf":
+                               "texto da nota"}
+
+
 def test_a_remessa_sem_planilha_passa_pela_mesma_confirmacao(monkeypatch,
                                                             tmp_path):
     dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])

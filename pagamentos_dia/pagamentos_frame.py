@@ -1516,9 +1516,9 @@ class PagamentosDiaFrame(ttk.Frame):
             self.q.put(("status", "Nada a pagar nas contas marcadas."))
             return None
 
-        textos, urls_ocr = {}, set()
+        textos, urls_ocr, nao_lidos = {}, set(), 0
         if opcoes["cruzar"]:
-            textos, urls_ocr = self._baixar_textos(selecionados)
+            textos, urls_ocr, nao_lidos = self._baixar_textos(selecionados)
 
         return confirmacao.Entradas(
             selecionados=selecionados, anexos=self.anexos,
@@ -1531,7 +1531,8 @@ class PagamentosDiaFrame(ttk.Frame):
             # QUEM recebe um reembolso, e na análise da remessa que se
             # descobre o documento do fornecedor.
             participantes=self.participantes,
-            periodo=opcoes["periodo"])
+            periodo=opcoes["periodo"],
+            anexos_nao_lidos=nao_lidos)
 
     def _t_apurar(self, escolhidas, opcoes, depois):
         """Fase 1: a leitura completa e a análise da remessa, na thread do
@@ -1541,11 +1542,23 @@ class PagamentosDiaFrame(ttk.Frame):
         pergunta à nuvem ("já saiu numa remessa?") e isso é rede. Ela só LÊ:
         o NSA é reservado e a remessa é registrada no `_gravar_remessas`, que
         continua sendo o único caminho que escreve.
+
+        **Parar durante a leitura não abre a janela.** O `_baixar_textos` para
+        no meio e devolve o que leu; montar com isso punha na janela o boleto
+        dentro da NF não lido como Pix do cadastro, verde — uma leitura pela
+        metade com cara de leitura inteira. Com o Parar ligado, nada é
+        apurado e o recado diz isso.
         """
         comeco = time.time()
         try:
             entradas = self._juntar_entradas(escolhidas, opcoes)
             if entradas is None:
+                return
+            if self._parar.is_set():
+                self._log("\nInterrompido — nada foi apurado: a leitura dos "
+                          "anexos ficou pela metade, e a janela mostraria "
+                          "formas de pagar erradas. Gere de novo.")
+                self.q.put(("status", "Interrompido — nada foi apurado."))
                 return
             resultado = confirmacao.remontar(entradas)
             if not resultado.contas and not resultado.omitidos:
@@ -1556,6 +1569,10 @@ class PagamentosDiaFrame(ttk.Frame):
                 resultado.contas, entradas.participantes,
                 carregar_mapas=_carregar_mapas,
                 abrir_historico=lambda: _historico(self._log))
+            nao_lidos = confirmacao.aviso_de_anexos_nao_lidos(
+                entradas.anexos_nao_lidos)
+            if nao_lidos:
+                analise.avisos.insert(0, nao_lidos)
             for aviso in analise.avisos:
                 self._log(f"[!] {aviso}")
             grupos = confirmacao.grupos_da_confirmacao(
@@ -3208,8 +3225,8 @@ class PagamentosDiaFrame(ttk.Frame):
                     urls.append((url, pdf))
         return urls
 
-    def _baixar_textos(self, selecionados) -> tuple[dict, set]:
-        """({downloadUrl: texto}, {urls lidas por OCR}).
+    def _baixar_textos(self, selecionados) -> tuple[dict, set, int]:
+        """({downloadUrl: texto}, {urls lidas por OCR}, anexos não lidos).
 
         Um download serve para tudo: extrair a linha digitável do boleto,
         cruzar valor/fornecedor e achar a chave do aviso de reembolso.
@@ -3218,18 +3235,33 @@ class PagamentosDiaFrame(ttk.Frame):
         leu por OCR fica marcado, porque leitura de OCR não vale o mesmo
         que camada de texto: a linha digitável tirada dali só é aceita
         depois de fechar o dígito verificador e o valor (ver `ocr_boleto`).
+
+        Download que devolve nada ou levanta NÃO derruba a leitura: conta como
+        anexo não lido, e o número vira aviso na janela de confirmação
+        (`confirmacao.aviso_de_anexos_nao_lidos`) — a forma de pagar daquela
+        linha foi decidida sem o documento, e isso tem de aparecer.
         """
         alvos = self._anexos_a_ler(selecionados)
         if not alvos:
-            return {}, set()
+            return {}, set(), 0
 
         self._log(f"\nBaixando e lendo {len(alvos)} anexo(s) para o cruzamento...")
-        textos, urls_ocr, sem_texto = {}, set(), 0
+        textos, urls_ocr, sem_texto, nao_lidos = {}, set(), 0, 0
         for i, (url, eh_pdf) in enumerate(alvos, 1):
             if self._parar.is_set():
                 self._log("Interrompido a pedido — o cruzamento fica incompleto.")
                 break
-            dados = self.anx.api.baixar_anexo(url)
+            try:
+                dados = self.anx.api.baixar_anexo(url)
+            except Exception as e:                           # noqa: BLE001
+                self._log(f"  [!] não consegui baixar um anexo: {e}")
+                dados = None
+            if not dados:
+                # Não é "sem texto": o documento nem chegou. Fica fora dos
+                # textos e da contagem do OCR, e vira o aviso da janela.
+                nao_lidos += 1
+                self.q.put(("progresso", (i, len(alvos))))
+                continue
             texto = relatorio.texto_de_pdf(dados) if (dados and eh_pdf) else ""
             if dados and not texto.strip():
                 self.q.put(("status", f"Lendo por OCR... {i}/{len(alvos)}"))
@@ -3248,4 +3280,4 @@ class PagamentosDiaFrame(ttk.Frame):
         if sem_texto:
             self._log(f"  {sem_texto} anexo(s) que nem o OCR conseguiu ler — "
                       "esses não dá para cruzar.")
-        return textos, urls_ocr
+        return textos, urls_ocr, nao_lidos

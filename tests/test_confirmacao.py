@@ -109,6 +109,13 @@ def test_o_desmarcado_sai_com_o_motivo_e_o_resto_fica():
         == [("L2", regras.MOTIVO_NAO_CONFIRMADO)]
 
 
+def test_o_aviso_de_anexos_nao_lidos_diz_quantos():
+    assert confirmacao.aviso_de_anexos_nao_lidos(0) == ""
+    assert confirmacao.aviso_de_anexos_nao_lidos(2) == (
+        "2 anexo(s) não foram lidos: a forma de pagar dessas linhas pode "
+        "estar errada")
+
+
 def test_a_remontagem_usa_os_anexos_ja_lidos():
     """Confirmar não baixa nada: o boleto lido na apuração continua lido.
 
