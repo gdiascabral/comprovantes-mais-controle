@@ -61,11 +61,11 @@ def textos_do_aviso(texto, url=URL_AVISO):
     return {url: texto}
 
 
-def leitura(texto):
+def leitura(texto, urls_ocr=()):
     """(chave, documento) que os dois leitores tiram do aviso com este texto."""
     files, textos = [aviso()], textos_do_aviso(texto)
-    return (relatorio.chave_pix_do_aviso(files, textos),
-            reembolso.documento_do_aviso(files, textos))
+    return (relatorio.chave_pix_do_aviso(files, textos, urls_ocr=urls_ocr),
+            reembolso.documento_do_aviso(files, textos, urls_ocr=urls_ocr))
 
 
 # ==========================================================================
@@ -168,6 +168,52 @@ def test_com_a_frase_no_texto_a_janela_continua_depois_dela():
     assert leitura(f"LOJA PIX: {CPF_DE_OUTRA}\n"
                    f"PAGAR PARA FULANA\nCPF {CPF_DA_PESSOA}") == (
         CPF_DA_PESSOA, CPF_DA_PESSOA_DIGITOS)
+
+
+def test_aviso_sem_a_frase_so_vale_com_camada_de_texto():
+    """O MESMO papel: com camada de texto, a chave é lida; lido por OCR, não.
+
+    Sem a frase, quem separa o aviso do comprovante renomeado é a recusa por
+    PALAVRA — e o OCR de uma foto escreve "Comprovamte" e "Valor pagu". Não há
+    lista de erros de OCR que feche isso; o que fecha é não aceitar esse
+    caminho para texto de OCR.
+    """
+    texto = f"PIX: {CPF_DA_PESSOA}"
+    assert leitura(texto) == (CPF_DA_PESSOA, CPF_DA_PESSOA_DIGITOS)
+    assert leitura(texto, urls_ocr={URL_AVISO}) == ("", "")
+
+
+def test_comprovante_lido_por_ocr_com_palavras_tortas_nao_entrega_a_chave():
+    texto = (f"Comprovamte de Pagamnto\nPIX: {CPF_DE_OUTRA}\n"
+             "Valor pagu R$ 60,00")
+    assert leitura(texto, urls_ocr={URL_AVISO}) == ("", "")
+
+
+def test_aviso_com_a_frase_lido_por_ocr_continua_lido():
+    """Como em 73c52ce: a foto do aviso que ESCREVE "PAGAR PARA" é lida pela
+    janela depois da frase, e o CPF passa pelo dígito verificador."""
+    texto = f"PAGAR PARA FULANA\nCPF {CPF_DA_PESSOA}"
+    assert leitura(texto, urls_ocr={URL_AVISO}) == (CPF_DA_PESSOA,
+                                                    CPF_DA_PESSOA_DIGITOS)
+
+
+def test_ocr_de_outro_anexo_nao_fecha_o_caminho_do_aviso_com_texto():
+    """A marca de OCR é por ANEXO: a foto da nota do mesmo título, lida por
+    OCR, não tira a camada de texto do aviso."""
+    assert leitura(f"PIX: {CPF_DA_PESSOA}", urls_ocr={"https://exemplo/nota"}) == (
+        CPF_DA_PESSOA, CPF_DA_PESSOA_DIGITOS)
+
+
+# --------------------------------------------------------- quem é o anexo
+def test_aviso_e_autorizacao_no_mesmo_titulo_vale_o_aviso():
+    """O aviso diz QUEM recebe; a autorização só autoriza. Com "autorizado"
+    testado antes, o título saía "APTO (autorizado)" com a chave do
+    fornecedor — e nascia marcado na remessa."""
+    autorizacao = {"filename": "PAGAMENTO AUTORIZADO - FULANO", "tagName": "",
+                   "extension": ".pdf", "downloadUrl": "https://exemplo/aut"}
+    assert relatorio.classificar_anexos([autorizacao, aviso()]) == "PAGAR_PARA"
+    assert relatorio.classificar_anexos([aviso(), autorizacao]) == "PAGAR_PARA"
+    assert relatorio.classificar_anexos([autorizacao]) == "AUTORIZADO"
 
 
 # ==========================================================================
@@ -277,13 +323,16 @@ def lancamento(id_, favorecido, pix_do_lancamento):
             "costCentreDetails": [{"workName": "ESCRITORIO"}]}
 
 
-def montar(itens, texto_do_aviso, contatos=CONTATOS, pix_reembolso=None):
-    anexos = {f"t{i['id']}": [aviso(url=f"u{i['id']}")] for i in itens}
+def montar(itens, texto_do_aviso, contatos=CONTATOS, pix_reembolso=None,
+           ocr=False, outros_anexos=()):
+    anexos = {f"t{i['id']}": [*outros_anexos, aviso(url=f"u{i['id']}")]
+              for i in itens}
     textos = {f"u{i['id']}": texto_do_aviso for i in itens}
     res = relatorio.montar_registros(itens, anexos, {}, textos,
                                      participantes=contatos,
                                      pix_reembolso=pix_reembolso or {},
-                                     cadastro_reembolso={})
+                                     cadastro_reembolso={},
+                                     urls_ocr=set(textos) if ocr else ())
     return {linha["id"]: linha for linha in res.contas[CONTA]}
 
 
@@ -423,3 +472,31 @@ def test_reembolso_sem_pessoa_continua_impedido_na_remessa():
     c = na_remessa(linhas)
     assert not c.pode
     assert "CPF de quem recebe não foi encontrado" in c.impedimento
+
+
+def test_aviso_sem_a_frase_lido_por_ocr_nao_resolve_a_linha():
+    """O `urls_ocr` que o `montar_registros` já recebe chega aos dois leitores
+    do aviso: nem a chave nem o documento saem do caminho sem a frase."""
+    linhas = montar([lancamento("9", FORNECEDOR,
+                                f"Pix CNPJ: {CNPJ_DO_FORNECEDOR}")],
+                    f"PIX: {CPF_DA_PESSOA}", ocr=True)
+    linha = linhas["9"]
+    assert linha["dados"] == ""
+    assert not linha["reembolso_documento"]
+    assert linha["status"] == "ATENÇÃO — sem dados de pgto"
+    assert not na_remessa(linhas).pode
+
+
+def test_titulo_com_aviso_e_autorizacao_paga_a_pessoa_do_aviso():
+    autorizacao = {"filename": "PAGAMENTO AUTORIZADO - FULANO", "tagName": "",
+                   "extension": ".pdf", "downloadUrl": "https://exemplo/aut"}
+    linhas = montar([lancamento("9", FORNECEDOR,
+                                f"Pix CNPJ: {CNPJ_DO_FORNECEDOR}")],
+                    f"PIX: {CPF_DA_PESSOA}", outros_anexos=[autorizacao])
+    linha = linhas["9"]
+    assert linha["reembolso"]
+    assert linha["dados"] == CPF_DA_PESSOA
+    assert CNPJ_DO_FORNECEDOR not in linha["dados"]
+    assert linha["status"] == "APTO* (reembolso)"
+    c = na_remessa(linhas)
+    assert c.reembolso and not c.marcado
