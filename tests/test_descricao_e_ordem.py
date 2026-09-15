@@ -325,6 +325,27 @@ def test_o_reembolso_nao_vai_para_o_banco():
         assert obtido == esperado, descricao
 
 
+def test_o_filtro_do_reembolso_nao_apaga_o_lote_nem_o_que_tem_numero():
+    """Tira "reembolso" e até três palavras só de letras depois dela (o nome
+    de quem recebe); para em palavra com dígito ou de imóvel."""
+    casos = {
+        "Reembolso material QD 98 LT 97 casa 2": "QD 99 LT 99 QD 98 LT 97 casa 2",
+        "Reembolso Fulana 3 parcelas": "QD 99 LT 99 3 parcelas",
+        "Reembolso de despesas com cimento e areia": "QD 99 LT 99 cimento e areia",
+        "reembolso lote 5 muro": "QD 99 LT 99 lote 5 muro",
+        "Reembolso Fulana CASA 2": "QD 99 LT 99 CASA 2",
+        "Reembolso Fulana cs 2": "QD 99 LT 99 cs 2",
+    }
+    for descricao, esperado in casos.items():
+        obtido = hp.descricao_para_colar(_partes(descricao=descricao), INTER)
+        assert obtido == esperado, descricao
+
+
+def test_o_centro_de_custo_nao_passa_pelo_filtro_do_reembolso():
+    r = _partes(cc="REEMBOLSOS DIVERSOS", descricao="Material")
+    assert hp.descricao_para_colar(r, INTER) == "REEMBOLSOS DIVERSOS Material"
+
+
 def test_nf_de_reembolso_nao_vira_nf():
     """O `achar_doc` já não devolve isso; o HTML também não confia."""
     r = _partes(nf="REEMBOLSO FULANO MODELO", oc="1234")
