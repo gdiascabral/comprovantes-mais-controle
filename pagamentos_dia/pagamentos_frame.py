@@ -10,7 +10,9 @@ aceita uma thread, e abrir um segundo Chrome significaria um segundo login.
 FLUXO EM DOIS PASSOS, de propósito
 ----------------------------------
 1. Buscar    — lê os lançamentos e mostra as contas com os totais;
-2. Gerar     — só as contas marcadas viram planilha.
+2. Gerar     — só as contas marcadas viram planilha: lê os anexos, mostra a
+               leitura real na janela "Confirmar o que entra" (com o que a
+               remessa faria e o que não entrou) e grava o confirmado.
 
 Separado porque quem confere quer OLHAR a lista de contas antes (e quase
 sempre tira uma ou outra: "APENAS LANÇAMENTO", conta pessoal, conta zerada).
@@ -22,7 +24,6 @@ from __future__ import annotations
 import datetime
 import os
 import queue
-import re
 import subprocess
 import time
 import tkinter as tk
@@ -32,6 +33,7 @@ from tkinter import filedialog, messagebox, ttk
 
 
 from . import baixa_erp
+from . import confirmacao
 from . import html_pagamentos          # HTML provisório (ver o módulo)
 from . import ocr_boleto
 from . import painel_dia
@@ -97,141 +99,23 @@ def _historico(avisar=None):
     return registro.Espelhado(nuvem, local, avisar)
 
 
-def e_marcador_de_recorrencia(item: dict, fornecedores: dict) -> bool:
-    """R$ 1,00 de fornecedor marcado como `so_marcador` — não é pagamento.
-
-    A concessionária lança um valor simbólico por unidade consumidora para o
-    título nascer no mês. A etapa 3 já sabe descartá-lo (`MOTIVO_SIMBOLICO`),
-    mas ela roda DEPOIS desta janela: sem esta pergunta aqui, a linha aparece
-    para ser desmarcada à mão, todo dia, e a janela gasta a atenção que
-    deveria estar protegendo.
-
-    A marca é por NOME e mora no cadastro (`regras_fornecedor.json`), não aqui:
-    concessionária nova é uma linha lá, não uma versão nova do app.
-    """
-    return (regras.valor_simbolico(relatorio.valor_do_item(item))
-            and bool(regras.regra_do_fornecedor(
-                item.get("paidTo") or "", fornecedores).get("so_marcador")))
+def _carregar_mapas():
+    """`(mapa_mc, empresas)` — os dois cadastros que dizem se uma conta do ERP
+    gera remessa. Função, e não as duas linhas soltas, porque a análise da
+    confirmação (`confirmacao.analisar_remessa`) os recebe assim: é como o
+    teste troca o disco por um dublê."""
+    return contas_mc.carregar(), sicoob_contas.carregar().empresas
 
 
-#: Banco, agência e conta dentro do texto livre do cadastro do ERP. Só é
-#: usado quando a forma de pagar NÃO é Pix nem boleto — aí o campo
-#: `paidToBankAccount` costuma trazer a conta escrita à mão, em meia dúzia de
-#: feitios ("BANCO 756 AG 3007 CC 55696-3", "Sicoob ag. 3007 c/c 55696-3").
-_AGENCIA = re.compile(r"\bag(?:[êe]ncia|\.)?\s*:?\s*(\d{3,5})", re.I)
-_CONTA = re.compile(r"\b(?:c/c|cc|conta|c\.c\.)\s*:?\s*([\d.\-]{4,15})", re.I)
-# Preguiçoso e com parada explícita: `[\w .]+` guloso engolia "Sicoob ag 3007
-# c" inteiro, e o nome do banco saía com a agência dentro dele.
-_BANCO = re.compile(
-    r"\b(?:banco|bco)\.?\s*:?\s*(.{2,28}?)"
-    r"(?=\s+(?:ag|ag[êe]ncia|c/c|cc|conta|c\.c\.)\b|\s*$)", re.I)
-
-
-#: A cor do dado de pagamento, pelo que vai acontecer com o lançamento.
-#: Mora fora da função porque o teste aponta para ela: é o mapa que garante
-#: que `atencao` tem um estilo próprio, e não cai no vermelho por omissão.
+#: A cor do POR ONDE no detalhe da confirmação, pelo que vai acontecer com o
+#: lançamento. Mora fora da função porque o teste aponta para ela: é o mapa
+#: que garante que `atencao` tem um estilo próprio, e não cai no vermelho por
+#: omissão.
 ESTILO_DO_DADO = {
     "ok": "MonoMini.TLabel",
     "atencao": "MonoMiniAtencao.TLabel",
     "erro": "MonoMiniErro.TLabel",
 }
-
-def quem_recebe(item: dict, ja_lido: dict | None = None) -> tuple[str, str, str]:
-    """Para quem vai o dinheiro e POR ONDE. Devolve (nome, dado, estado).
-
-    O `dado` é a segunda linha da célula, em fonte de largura fixa: a chave
-    Pix, a linha digitável ou o trio banco/agência/conta. É o que se confere
-    contra o documento na mão antes de mandar pagar — e era exatamente o que
-    a janela de confirmação não mostrava: ela listava valor, favorecido e
-    descrição, e a pessoa confirmava um pagamento sem ver para onde ele ia.
-
-    NÃO busca nada. Usa o que a busca de lançamentos já trouxe
-    (`paidToBankAccount`, o método de pagamento) e, para o boleto, o que uma
-    passagem anterior do passo 2 já leu — o `ja_lido`, que é `{id: dados}`
-    montado do `self.resultado`. Ler o boleto exige baixar o PDF e às vezes
-    passar OCR, e isso é trabalho do passo 2, com o navegador na mão; fazê-lo
-    aqui abriria uma segunda coleta em rede no meio de uma janela modal.
-
-    Boleto ainda não lido aparece com o recado no lugar do dado, e não em
-    branco: "não sei a linha digitável" é uma informação sobre o pagamento, e
-    quem confirma precisa dela para decidir se abre o boleto antes.
-
-    **O estado diz o que vai acontecer, não o que está faltando.** Os três
-    casos sem dado de pagamento saíam como `erro` — vermelhos —, e vermelho
-    na frente de um item que continua marcado e gera assim mesmo é lido como
-    defeito do app. Eles são `atencao`: o lançamento ENTRA na planilha, e o
-    que ele não faz é entrar na remessa. Quem lê precisa da consequência
-    ("pagar à mão"), não do diagnóstico. `erro` fica reservado para o que não
-    sai de jeito nenhum.
-    """
-    favorecido = (item.get("paidTo") or "?").strip()
-    pago_para = (item.get("paidToBankAccount") or "").strip()
-    tipo = relatorio.tipo_de_pagamento(item)
-    ident = str(item.get("id") or "")
-
-    if tipo == "Pix":
-        chave = relatorio.extrair_chave_pix(pago_para) if pago_para else ""
-        if relatorio.parece_chave_pix(chave):
-            return favorecido, f"PIX  {chave}", "ok"
-        return (favorecido,
-                "PIX  sem chave no cadastro — não entra na remessa: pagar à mão",
-                "atencao")
-
-    if tipo == "Boleto":
-        linha = (ja_lido or {}).get(ident) or ""
-        if linha:
-            return favorecido, f"BOLETO  {ocr_boleto.formatar(linha)}", "ok"
-        return (favorecido,
-                "BOLETO  sem código de barras — não entra na remessa, "
-                "só na planilha",
-                "atencao")
-
-    # TED e o que mais o ERP chamar de forma de pagamento. O texto do cadastro
-    # é livre: quando dá para separar banco/agência/conta, separa; quando não
-    # dá, mostra o que está lá — o que está lá é o que a pessoa vai usar.
-    rotulo = (tipo or "TED").upper()
-    if not pago_para:
-        return (favorecido,
-                f"{rotulo}  sem conta no cadastro — não entra na remessa: "
-                "pagar à mão", "atencao")
-    banco = _BANCO.search(pago_para)
-    ag = _AGENCIA.search(pago_para)
-    cc = _CONTA.search(pago_para)
-    if ag and cc:
-        nome_banco = (banco.group(1).strip() if banco
-                      else pago_para.split()[0][:18])
-        return (favorecido,
-                f"{rotulo}  {nome_banco}  ag {ag.group(1)}  c/c {cc.group(1)}",
-                "ok")
-    return favorecido, f"{rotulo}  {pago_para[:64]}", "atencao"
-
-
-def alvos_para_confirmar(lancamentos, escolhidas, fornecedores=None) -> list:
-    """Que lançamentos a janela da etapa 2 lista.
-
-    Era "só os fornecedores do `confirmar_antes.json`", e por isso a janela
-    nem abria quando o arquivo estava vazio. Passou a ser TODO lançamento a
-    pagar das contas marcadas: sem isso, tirar um pagamento do dia obrigava a
-    desmarcar a conta inteira, junto com tudo o mais que ela tem. Aquele
-    arquivo continua valendo — só mudou de função, de porteiro para destaque
-    dentro da janela.
-
-    Já pago fica de fora: não há o que decidir sobre ele. Se ele entra ou não
-    na planilha é a caixa "incluir já pagos", que é outra pergunta.
-
-    O marcador de recorrência das concessionárias também fica de fora, pelo
-    mesmo motivo: `so_marcador` no cadastro já é a decisão tomada, e repeti-la
-    aqui todo dia é o que a janela deixou de fazer. `fornecedores` é o
-    `regras_pagamento.carregar_fornecedores()`; sem ele, nada é filtrado.
-
-    Fora da classe porque é decisão, não tela — e assim tem teste.
-    """
-    escolha = {relatorio.chave(n) for n in escolhidas}
-    marcados = fornecedores or {}
-    return [i for i in lancamentos
-            if relatorio.chave(relatorio.nome_da_conta(i)) in escolha
-            and not i.get("paid")
-            and not e_marcador_de_recorrencia(i, marcados)]
 
 
 def _doc_legivel(documento: str) -> str:
@@ -271,51 +155,6 @@ def _carregar_reembolsos() -> dict:
 #: marcar: o Treeview do Tk não aceita widget dentro de célula.
 MARCADA = "☑"
 DESMARCADA = "☐"
-
-
-def grupos_para_confirmar(alvos, destacar=()) -> list:
-    """A ordem da janela de confirmação: `[(conta, [(item, pede_olhada)])]`.
-
-    Contas em ordem alfabética; dentro de cada uma, quem o
-    `confirmar_antes.json` manda conferir (o ⚠) vem na frente, e o resto pelo
-    favorecido. Era o laço de dentro da janela; saiu dela pelo motivo do
-    `alvos_para_confirmar` — é decisão, não tela, e assim tem teste.
-    """
-    por_conta: dict[str, list] = {}
-    for item in alvos:
-        por_conta.setdefault(relatorio.nome_da_conta(item), []).append(item)
-    grupos = []
-    for conta in sorted(por_conta):
-        itens = [(item, regras.exige_confirmacao(item.get("paidTo") or "",
-                                                 destacar))
-                 for item in por_conta[conta]]
-        itens.sort(key=lambda par: (not par[1],
-                                    relatorio.chave(par[0].get("paidTo") or "")))
-        grupos.append((conta, itens))
-    return grupos
-
-
-def resumo_da_confirmacao(itens, marcado) -> tuple[int, float, int]:
-    """(quantos entram, quanto somam, quantos ficam de fora) — o número que se
-    confere antes de gerar. `marcado` é paralelo a `itens`."""
-    vao = [item for item, m in zip(itens, marcado) if m]
-    return (len(vao), sum(relatorio.valor_do_item(i) for i in vao),
-            len(itens) - len(vao))
-
-
-def nao_confirmados(itens, marcado) -> set:
-    """Os ids que a pessoa DESMARCOU — o que a janela devolve ao `gerar`, e o
-    que sai da planilha e da remessa com `MOTIVO_NAO_CONFIRMADO`."""
-    return {str(item.get("id")) for item, m in zip(itens, marcado) if not m}
-
-
-def estado_na_confirmacao(estado: str, marcado: bool) -> str:
-    """A cor de uma linha da confirmação, na legenda da própria janela.
-
-    Desmarcado é `erro` ("fica de fora") seja qual for o dado; marcado fica
-    com o estado do `quem_recebe` — `atencao` é "entra, mas a remessa não
-    leva". Sem esta amarração a legenda teria uma cor que nunca aparece."""
-    return estado if marcado else "erro"
 
 
 def forma_na_conferencia(c) -> tuple[str, str]:
@@ -369,9 +208,7 @@ def detalhe_na_conferencia(c) -> list:
               (f"{rotulo}  {dado or '—'}",
                "MonoMini.TLabel" if dado else "MonoMiniErro.TLabel")]
     if c.reembolso:
-        linhas.append((f"↳ reembolso de {c.reembolso_de[:30]} · documento "
-                       f"{_doc_legivel(c.documento_favorecido)} "
-                       f"({c.reembolso_origem})", "Tenue.TLabel"))
+        linhas.append(_linha_do_reembolso(c))
     if c.ja_enviado:
         linhas.append((f"↳ {c.ja_enviado} — marque para enviar de novo",
                        "Atencao.TLabel"))
@@ -379,6 +216,62 @@ def detalhe_na_conferencia(c) -> list:
         linhas.append((f"↳ {c.obs[:110]}", "Tenue.TLabel"))
     if not c.pode:
         linhas.append((f"↳ fica de fora: {c.impedimento}", "Atencao.TLabel"))
+    return linhas
+
+
+def _linha_do_reembolso(c) -> tuple[str, str]:
+    """De quem é o documento de um reembolso — a linha que o detalhe das DUAS
+    janelas mostra. Uma função só para as duas não dizerem a mesma coisa com
+    duas redações."""
+    return (f"↳ reembolso de {c.reembolso_de[:30]} · documento "
+            f"{_doc_legivel(c.documento_favorecido)} ({c.reembolso_origem})",
+            "Tenue.TLabel")
+
+
+def detalhe_na_confirmacao(linha, marcado: bool = True) -> list:
+    """[(texto, estilo)] do detalhe da linha selecionada na confirmação.
+
+    O que a tabela corta sai aqui inteiro, uma coisa por altura: quem
+    recebe (com o ⚠), POR ONDE em fonte de largura fixa — é o que se confere
+    dígito a dígito contra o documento —, vencimento/OC/centro de custo/
+    descrição, a situação, a observação SEM corte (o "pagar só metade" mora
+    no fim dela), a conferência dos documentos e, no reembolso, de quem é o
+    documento. `linha` é uma `confirmacao.Linha`.
+
+    A cor do destino segue `confirmacao.estado_na_tela`: vermelho é quem fica
+    de fora — o desmarcado e o não apto —, âmbar é "entra, com ressalva".
+    O não apto diz o motivo e ONDE ele se resolve, porque é para isso que ele
+    está na janela."""
+    estado = confirmacao.estado_na_tela(linha, marcado)
+    linhas = [(("⚠  " if linha.olhar else "") + (linha.favorecido or "—"),
+               "Forte.TLabel"),
+              (linha.por_onde or "—", ESTILO_DO_DADO[estado])]
+    partes = [f"vence {linha.vencimento:%d/%m/%Y}" if linha.vencimento
+              else "sem vencimento"]
+    if linha.oc:
+        partes.append(f"OC {linha.oc}")
+    if linha.centro_custo:
+        partes.append(linha.centro_custo)
+    if linha.descricao:
+        partes.append(linha.descricao)
+    linhas.append(("  ·  ".join(partes), "Tenue.TLabel"))
+    if not linha.marcavel:
+        linhas.append((f"Não entrou: {linha.situacao} — corrija no ERP e gere "
+                       "de novo.", "Erro.TLabel"))
+    elif not marcado:
+        linhas.append((f"Fica de fora da planilha e da remessa: "
+                       f"{regras.MOTIVO_NAO_CONFIRMADO}.", "Erro.TLabel"))
+    else:
+        linhas.append((f"Situação: {linha.situacao or '—'}",
+                       "Atencao.TLabel" if estado == "atencao"
+                       else "Tenue.TLabel"))
+    if linha.obs:
+        linhas.append((f"Obs: {linha.obs}", "Tenue.TLabel"))
+    if linha.conferencia:
+        linhas.append((f"Conferência: {linha.conferencia}", "Tenue.TLabel"))
+    if linha.candidato is not None and getattr(linha.candidato, "reembolso",
+                                               False):
+        linhas.append(_linha_do_reembolso(linha.candidato))
     return linhas
 
 
@@ -1052,11 +945,12 @@ class PagamentosDiaFrame(ttk.Frame):
                     self.b3.configure(state="normal" if valor == "normal"
                                       and self.lancamentos else "disabled")
                     self.b_stop.configure(state="disabled" if valor == "normal" else "normal")
-                elif tipo == "abrir_remessa":
-                    # A apuração terminou na thread do navegador; a janela é
+                elif tipo == "confirmar":
+                    # A leitura terminou na thread do navegador; a janela é
                     # aqui. `after_idle` para o `botoes normal` desta mesma
-                    # rodada do drain já ter sido aplicado quando ela abrir.
-                    self.after_idle(self.gerar_remessa)
+                    # rodada do drain já ter sido aplicado quando ela abrir —
+                    # e para o `wait_window` dela não segurar este laço.
+                    self.after_idle(self._confirmar_e_seguir, valor)
                 elif tipo == "arquivo":
                     self.ultimo_arquivo = valor
                     self.b_abrir.configure(state="normal")
@@ -1255,87 +1149,75 @@ class PagamentosDiaFrame(ttk.Frame):
                                    de_fora=len(self.vars_contas) - len(marcadas))
 
     # --------------------------------------------------------------- etapa 2
-    def _linhas_ja_lidas(self) -> dict:
-        """`{id do lançamento: linha digitável}` do que o passo 2 já leu.
-
-        Existe porque o boleto só é lido com o navegador na mão, no passo 2, e
-        a janela de confirmação roda ANTES dele. Quem já rodou o passo 2 uma
-        vez no mesmo período volta a ver as linhas; quem não rodou vê o
-        recado em vermelho, que é a verdade daquele momento."""
-        if not self.resultado:
-            return {}
-        return {r.get("id"): r.get("dados")
-                for regs in self.resultado.contas.values() for r in regs
-                if r.get("id") and r.get("dados") and r.get("tipo") == "Boleto"}
-
     #: As colunas da confirmação: (chave, título, largura a 100%,
-    #: alinhamento). POR ONDE é a que estica — e nunca corta, porque a largura
+    #: alinhamento). A SITUAÇÃO vem logo depois de QUEM RECEBE, e não no fim
+    #: como na conferência da remessa: são nove colunas, e no fim ela caía fora
+    #: da janela de 1280 px — justamente a coluna que diz se a linha tem
+    #: problema. POR ONDE é a que estica, e nunca corta, porque a largura
     #: mínima dela é medida no texto mais comprido (`_esticar_ate_caber`).
     COLUNAS_CONFIRMAR = (
         ("marca", MARCADA, 34, "center"),
         ("valor", "VALOR", 110, "e"),
-        ("quem", "QUEM RECEBE", 240, "w"),
-        ("onde", "POR ONDE", 360, "w"),
+        ("quem", "QUEM RECEBE", 220, "w"),
+        ("situacao", "SITUAÇÃO", 300, "w"),
+        ("onde", "POR ONDE", 340, "w"),
         ("venc", "VENCE", 90, "w"),
         ("oc", "OC", 70, "w"),
-        ("cc", "CENTRO DE CUSTO", 170, "w"),
-        ("desc", "DESCRIÇÃO", 260, "w"),
+        ("cc", "CENTRO DE CUSTO", 160, "w"),
+        ("desc", "DESCRIÇÃO", 240, "w"),
     )
 
-    def _janela_confirmar(self, alvos, destacar=()) -> set | None:
-        """Quais lançamentos entram hoje — um a um, antes de tudo.
+    #: Alturas do detalhe da linha selecionada — as de
+    #: `detalhe_na_confirmacao` no caso mais longo. Fixas, para a tabela não
+    #: pular a cada seleção (só a observação comprida, que quebra, ainda mexe).
+    ALTURAS_DO_DETALHE = 7
+
+    def _janela_confirmar(self, grupos, avisos=(),
+                          botao="Confirmar e gerar a planilha") -> set | None:
+        """Quais lançamentos entram hoje — com a leitura REAL de cada um.
 
         Ela nasceu só para os pagamentos que o dono do escritório quer ver
-        antes (distribuição de lucro para os sócios, por exemplo), e por isso
-        só abria quando o `confirmar_antes.json` tinha nomes. Marcar a linha
-        de laranja na planilha não bastava: a planilha é lida DEPOIS de
-        gerada, e a pergunta precisa acontecer antes.
+        antes (distribuição de lucro para os sócios, por exemplo); depois
+        passou a listar todo lançamento das contas marcadas, e o
+        `confirmar_antes.json` virou o ⚠ na frente da conta.
 
-        Mas o EFEITO dela sempre valeu para qualquer linha — o que se desmarca
-        aqui sai da planilha E da remessa, com motivo, porque as duas
-        descendem do mesmo `montar_registros`. Só o alcance é que era estreito:
-        um lançamento de fornecedor não cadastrado não tinha onde ser tirado
-        do dia, a não ser desmarcando a conta inteira.
+        **Desde 14/09/2026 ela abre DEPOIS da leitura, e não antes.** Antes o
+        POR ONDE saía do que a busca de lançamentos trazia, sem anexo lido:
+        o boleto que vinha dentro do PDF da nota aparecia como "sem código
+        de barras", e o que a apuração depois mandava para a aba NÃO
+        ENTRARAM nem aparecia. Hoje cada conta tem duas seções:
 
-        Agora ela lista tudo, e o `confirmar_antes.json` mudou de função: em
-        vez de decidir se a janela abre, decide quem aparece com ⚠ e na frente
-        dentro da conta. A regra já cadastrada não se perde — deixa de ser
-        porteiro e vira destaque.
+        - **ENTRAM** — marcáveis, já marcadas. SITUAÇÃO junta o veredito da
+          planilha (APTO, ATENÇÃO — …) e o da remessa ("vai na remessa",
+          "remessa não leva: …", "conta sem remessa: …"), com os textos da
+          própria remessa (`confirmacao.situacao_da_linha`);
+        - **NÃO APTOS** — em vermelho, SEM marca, com o motivo. Não se forçam
+          daqui: o motivo é um dado do ERP, e o que o dono faz com a linha é
+          corrigir lá antes de gerar.
 
-        Cada linha mostra QUEM RECEBE e, ao lado, POR ONDE: a chave Pix, a
-        linha digitável, o banco/agência/conta. Sem isso, confirmar era dizer
-        sim a um nome e a um valor sem ver para onde o dinheiro ia — e é
-        justamente o destino que a remessa não deixa mais ninguém conferir
-        depois. O lançamento selecionado se repete embaixo, INTEIRO, com o
-        destino em fonte de largura fixa, que é como se confere dígito a
-        dígito contra o documento na mão.
+        Os avisos (`confirmacao.analisar_remessa`) dizem o que NÃO foi
+        conferido — o registro de remessas ou o cadastro de contas que não
+        abriu — numa faixa em cima da tabela.
 
         **É UMA tabela, e não um bloco de widgets por lançamento**
-        (11/09/2026). Até ali cada linha era um Frame com caixa de marcar e
-        cinco rótulos, empilhado num Canvas rolável: medido com a janela fora
-        da tela, 300 lançamentos davam 2.802 widgets e 5,4 s antes de o
-        primeiro pixel aparecer — e depois a rolagem arrastava as 2.802
-        janelas nativas do Windows. O Treeview não aceita caixa de marcar
-        dentro da célula nem duas fontes numa célula só; por isso a marca é o
-        símbolo da primeira coluna (clique nela; ou selecione várias linhas,
-        com Shift ou Ctrl, e tecle Espaço) e as duas alturas viraram duas
-        colunas mais o detalhe. A regra não mudou e mora FORA da classe, com
-        teste: `grupos_para_confirmar` (a ordem e o ⚠),
-        `resumo_da_confirmacao` (o rodapé), `estado_na_confirmacao` (a cor) e
-        `nao_confirmados` (o que volta).
+        (11/09/2026): 300 lançamentos num Canvas davam 2.802 widgets e 5,4 s
+        antes do primeiro pixel. A marca é o símbolo da primeira coluna
+        (clique nela; ou selecione várias linhas e tecle Espaço), a conta é
+        uma linha em negrito em cima das suas, e a linha selecionada se repete
+        embaixo, inteira (`detalhe_na_confirmacao`). A regra mora em
+        `confirmacao.py`, com teste; aqui só se desenha.
 
-        Roda na thread da interface (é chamada de `gerar`, antes de submeter
-        ao navegador), então pode abrir janela e esperar resposta à vontade.
-        Devolve os ids NÃO confirmados, ou None se a pessoa cancelou tudo.
+        Roda na thread da interface. Devolve os ids NÃO confirmados, ou None
+        se a pessoa cancelou.
         """
         top = tk.Toplevel(self)
         top.title("Confirmar o que entra")
-        # Medida contra a TELA, como a conferência da remessa: são oito
+        # Medida contra a TELA, como a conferência da remessa: são nove
         # colunas, e uma delas guarda a linha digitável inteira.
         larg = min(px(1280), max(int(top.winfo_screenwidth() * 0.92), px(900)))
-        alt = min(px(780), max(int(top.winfo_screenheight() * 0.86), px(520)))
+        alt = min(px(820), max(int(top.winfo_screenheight() * 0.88), px(540)))
         top.geometry(f"{larg}x{alt}")
-        top.minsize(px(900), px(480))
+        top.minsize(px(900), px(500))
         top.transient(self.winfo_toplevel())
         widgets.barra_de_titulo(top)
         top.configure(background=widgets.cores()["fundo"])
@@ -1344,10 +1226,12 @@ class PagamentosDiaFrame(ttk.Frame):
         moldura.pack(fill="both", expand=True)
         cab = widgets.Cabecalho(
             moldura, "Confira o que entra hoje",
-            "Já vem tudo marcado. Desmarque o que NÃO deve entrar — clique na "
-            f"marca {MARCADA}, ou selecione as linhas e tecle Espaço. O que "
-            "sai fica fora da planilha e da remessa, e aparece na aba NÃO "
-            "ENTRARAM com o motivo. O ⚠ é quem você mandou conferir sempre.",
+            "Os anexos já foram lidos: a SITUAÇÃO diz o que a planilha e a "
+            "remessa vão fazer com cada linha. Desmarque o que NÃO deve "
+            f"entrar — clique na marca {MARCADA}, ou selecione as linhas e "
+            "tecle Espaço. Os NÃO APTOS não entraram por um motivo do ERP: "
+            "corrija lá e gere de novo. O ⚠ é quem você mandou conferir "
+            "sempre.",
             trilha="Diário  ›  Remessa e Retorno  ›  Passo 2")
         # A legenda existe porque a cor sozinha não diz o que ela significa, e
         # a pergunta que ela responde ("âmbar me impede de gerar?") é a que
@@ -1356,12 +1240,19 @@ class PagamentosDiaFrame(ttk.Frame):
         legenda.pack(anchor="w", pady=px((8, 0)))
         for texto, estilo in (
                 ("●  entra", "FundoOk.TLabel"),
-                ("●  entra com ressalva — a remessa não leva, pague à mão",
-                 "FundoAtencao.TLabel"),
-                ("●  fica de fora — desmarcado", "FundoErro.TLabel")):
+                ("●  entra com ressalva — ATENÇÃO na planilha, ou a remessa "
+                 "não leva", "FundoAtencao.TLabel"),
+                ("●  fica de fora — desmarcado, ou não apto",
+                 "FundoErro.TLabel")):
             ttk.Label(legenda, text=texto, style=estilo
                       ).pack(side="left", padx=px((0, 18)))
-        cab.pack(fill="x", pady=px((0, 14)))
+        cab.pack(fill="x", pady=px((0, 10)))
+        # O que a análise NÃO conferiu, antes da tabela: sem isto, a falta do
+        # "já saiu na remessa nº…" seria lida como "nada foi enviado".
+        for aviso in avisos:
+            ttk.Label(moldura, text=f"⚠  {aviso}", style="FundoAtencao.TLabel",
+                      wraplength=larg - px(60), justify="left"
+                      ).pack(anchor="w", pady=px((0, 6)))
 
         # Os botões entram no `pack` ANTES do cartão, pelo pé: com a janela
         # baixa quem encolhe é a tabela, e não a fileira do "Confirmar".
@@ -1369,11 +1260,15 @@ class PagamentosDiaFrame(ttk.Frame):
         acoes.pack(side="bottom", fill="x", pady=px((14, 0)))
 
         cartao = widgets.Cartao(moldura, "Lançamentos do dia")
-        cartao.pack(fill="both", expand=True)
+        cartao.pack(fill="both", expand=True, pady=px((4, 0)))
         rodape = widgets.RodapeTabela(cartao)
         rodape.pack(side="bottom", fill="x", pady=px((12, 0)))
         detalhe = ttk.Frame(cartao)
         detalhe.pack(side="bottom", fill="x", pady=px((10, 0)))
+        rotulos = [ttk.Label(detalhe, wraplength=larg - px(90), justify="left")
+                   for _ in range(self.ALTURAS_DO_DETALHE)]
+        for rotulo in rotulos:
+            rotulo.pack(anchor="w")
         caixa, tabela = _tabela_de_marcar(cartao, self.COLUNAS_CONFIRMAR,
                                           "onde", selecao="extended")
         caixa.pack(fill="both", expand=True)
@@ -1382,91 +1277,82 @@ class PagamentosDiaFrame(ttk.Frame):
             # Na tabela só `atencao` e `erro` se pintam (ver `estilo_tabela`).
             return "" if estado == "ok" else estado
 
-        ja_lido = self._linhas_ja_lidas()
-        linhas = []                     # uma por lançamento, na ordem da tabela
-        for g, (conta, itens) in enumerate(grupos_para_confirmar(alvos,
-                                                                 destacar)):
+        marcaveis: list = []            # as `Linha` que entram, em ordem
+        marcado: list = []              # paralelo a `marcaveis`
+        posicao: list = []              # a zebra de cada marcável
+        por_iid: dict = {}              # iid -> Linha (lançamentos)
+        destinos: list = []
+        n_nao_aptos = 0
+        for g, grupo in enumerate(grupos):
+            resumo_conta = (f"{len(grupo.entram)} entra(m) · "
+                            f"{len(grupo.nao_aptos)} não apto(s)")
+            if grupo.sem_remessa:
+                resumo_conta += f" · conta sem remessa: {grupo.sem_remessa}"
             tabela.insert("", "end", iid=f"g{g}", tags=("grupo",), values=(
-                "", relatorio.brl(sum(relatorio.valor_do_item(i)
-                                      for i, _olhar in itens)),
-                conta, f"{len(itens)} lançamento(s)", "", "", "", ""))
-            for pos, (item, olhar) in enumerate(itens):
-                nome, dado, estado = quem_recebe(item, ja_lido)
-                venc = relatorio.data_do_item(item)
-                # Vencimento, OC e centro de custo: são o que se procura para
-                # decidir se o pagamento é DESTE dia e DESTA obra. Saem do
-                # próprio lançamento, sem rede — `centro_de_custo` lê o item, e
-                # o `achar_oc` cai na descrição quando o detalhe não carregou.
-                ln = {"item": item, "olhar": olhar, "nome": nome,
-                      "dado": dado, "estado": estado, "pos": pos,
-                      "venc": f"{venc:%d/%m/%Y}" if venc else "",
-                      "oc": relatorio.achar_oc(
-                          item, self.anexos.get(
-                              str(item.get("tradePayableId"))) or [], "",
-                          self.overviews.get(str(item.get("id"))) or {}),
-                      "cc": relatorio.centro_de_custo(item),
-                      "desc": (item.get("description") or "").strip()}
-                linhas.append(ln)
-                tabela.insert(
-                    "", "end", iid=f"i{len(linhas) - 1}",
-                    tags=widgets.linha_zebrada(pos, tag_de(estado)),
-                    values=(MARCADA,
-                            relatorio.brl(relatorio.valor_do_item(item)),
-                            ("⚠  " if olhar else "") + nome, dado,
-                            ln["venc"] or "—", ln["oc"] or "—",
-                            ln["cc"] or "—", ln["desc"] or "—"))
-        _esticar_ate_caber(tabela, "onde", [ln["dado"] for ln in linhas])
-        itens = [ln["item"] for ln in linhas]
-        marcado = [True] * len(linhas)
+                "", relatorio.brl(sum(ln.valor for ln in grupo.entram)),
+                grupo.conta, resumo_conta) + ("",) * 5)
+            for sufixo, titulo, secao in (
+                    ("e", "ENTRAM", grupo.entram),
+                    ("n", "NÃO APTOS — corrija no ERP", grupo.nao_aptos)):
+                if not secao:
+                    continue
+                tabela.insert("", "end", iid=f"s{g}{sufixo}", tags=("secao",),
+                              values=("", "", titulo, "", "") + ("",) * 4)
+                for pos, ln in enumerate(secao):
+                    if ln.marcavel:
+                        iid, marca = f"i{len(marcaveis)}", MARCADA
+                        marcaveis.append(ln)
+                        marcado.append(True)
+                        posicao.append(pos)
+                    else:
+                        iid, marca = f"n{n_nao_aptos}", ""
+                        n_nao_aptos += 1
+                    por_iid[iid] = ln
+                    destinos.append(ln.por_onde)
+                    estado = confirmacao.estado_na_tela(ln, True)
+                    tabela.insert(
+                        "", "end", iid=iid,
+                        tags=widgets.linha_zebrada(pos, tag_de(estado)),
+                        values=(marca, relatorio.brl(ln.valor),
+                                ("⚠  " if ln.olhar else "")
+                                + (ln.favorecido or "—"),
+                                f"{widgets.MARCAS_ESTADO[estado]}  "
+                                f"{ln.situacao or '—'}",
+                                ln.por_onde or "—",
+                                f"{ln.vencimento:%d/%m/%Y}" if ln.vencimento
+                                else "—",
+                                ln.oc or "—", ln.centro_custo or "—",
+                                ln.descricao or "—"))
+        _esticar_ate_caber(tabela, "onde", destinos)
 
-        # ---- o detalhe: o lançamento com o foco, inteiro
-        topo = ttk.Frame(detalhe)
-        topo.pack(fill="x")
-        d_olhar = ttk.Label(topo, style="Atencao.TLabel")
-        d_olhar.pack(side="left")
-        d_nome = ttk.Label(topo, style="Forte.TLabel")
-        d_nome.pack(side="left")
-        d_desc = ttk.Label(topo, style="Tenue.TLabel")
-        d_desc.pack(side="left", padx=px((8, 0)))
-        d_dado = ttk.Label(detalhe, style="MonoMini.TLabel")
-        d_dado.pack(anchor="w", pady=px((2, 0)))
-        d_mais = ttk.Label(detalhe, style="Tenue.TLabel")
-        d_mais.pack(anchor="w", pady=px((2, 0)))
-
+        # ---- o detalhe: a linha com o foco, inteira
         def mostrar(_e=None):
             foco = tabela.focus()
-            if not foco.startswith("i"):
-                for rotulo in (d_olhar, d_nome, d_desc, d_mais):
-                    rotulo.configure(text="")
-                d_dado.configure(style="Tenue.TLabel",
-                                 text="Selecione um lançamento para ver para "
-                                      "onde o dinheiro vai, inteiro.")
-                return
-            k = int(foco[1:])
-            ln = linhas[k]
-            d_olhar.configure(text="⚠  " if ln["olhar"] else "")
-            d_nome.configure(text=ln["nome"])
-            d_desc.configure(text=f"·  {ln['desc'][:120]}" if ln["desc"] else "")
-            # A cor do que vai acontecer com o dinheiro: âmbar é "entra na
-            # planilha, mas a remessa não leva"; vermelho é só para quem fica
-            # de fora — e quem fica de fora, nesta janela, é o desmarcado.
-            d_dado.configure(text=ln["dado"], style=ESTILO_DO_DADO[
-                estado_na_confirmacao(ln["estado"], marcado[k])])
-            partes = [f"vence {ln['venc']}" if ln["venc"] else "sem vencimento"]
-            if ln["oc"]:
-                partes.append(f"OC {ln['oc']}")
-            if ln["cc"]:
-                partes.append(ln["cc"][:44])
-            d_mais.configure(text="  ·  ".join(partes))
+            ln = por_iid.get(foco)
+            if ln is None:
+                linhas_det = [("Selecione um lançamento para ver para onde o "
+                               "dinheiro vai, inteiro, e o que a planilha e a "
+                               "remessa dizem dele.", "Tenue.TLabel")]
+            else:
+                m = marcado[int(foco[1:])] if foco.startswith("i") else True
+                linhas_det = detalhe_na_confirmacao(ln, m)
+            for i, rotulo in enumerate(rotulos):
+                texto, estilo = (linhas_det[i] if i < len(linhas_det)
+                                 else ("", "TLabel"))
+                rotulo.configure(text=texto, style=estilo)
 
         # ---- marcar e desmarcar
         def marcar(ks, valor: bool):
             for k in ks:
                 marcado[k] = valor
+                ln = marcaveis[k]
+                estado = confirmacao.estado_na_tela(ln, valor)
                 tabela.set(f"i{k}", "marca", MARCADA if valor else DESMARCADA)
+                tabela.set(f"i{k}", "situacao",
+                           f"{widgets.MARCAS_ESTADO[estado]}  "
+                           f"{ln.situacao or '—'}")
                 tabela.item(f"i{k}", tags=widgets.linha_zebrada(
-                    linhas[k]["pos"],
-                    tag_de(estado_na_confirmacao(linhas[k]["estado"], valor))))
+                    posicao[k], tag_de(estado)))
             atualizar()
             mostrar()
 
@@ -1479,6 +1365,7 @@ class PagamentosDiaFrame(ttk.Frame):
 
         def clicou(evento):
             alvo = _marca_clicada(tabela, evento)
+            # Só o que ENTRA tem marca: o não apto, a conta e a seção não.
             if alvo.startswith("i"):
                 alternar([int(alvo[1:])])
             # Sem "break": a linha clicada também fica selecionada, e o
@@ -1495,7 +1382,7 @@ class PagamentosDiaFrame(ttk.Frame):
         # marca e desmarca, com a janela retirada e sem foco para tecla.
         tabela.bind("<<AlternarMarca>>", espaco)
         tabela.bind("<<TreeviewSelect>>", mostrar)
-        tabela.heading("marca", command=lambda: marcar(range(len(linhas)),
+        tabela.heading("marca", command=lambda: marcar(range(len(marcaveis)),
                                                        not all(marcado)))
 
         resposta = {"cancelou": True}
@@ -1504,25 +1391,25 @@ class PagamentosDiaFrame(ttk.Frame):
             resposta["cancelou"] = False
             top.destroy()
 
-        rodape.link("Marcar todas", lambda: marcar(range(len(linhas)), True))
+        rodape.link("Marcar todas", lambda: marcar(range(len(marcaveis)), True))
         rodape.link("Desmarcar todas",
-                    lambda: marcar(range(len(linhas)), False))
+                    lambda: marcar(range(len(marcaveis)), False))
 
         def atualizar():
-            """Quantos e quanto, a cada clique. É o número que se confere
-            antes de gerar; as outras ações irreversíveis do app (Aportes,
-            Acessórias) já o mostram antes de perguntar."""
-            n, total, fora = resumo_da_confirmacao(itens, marcado)
-            rodape.definir(marcados=n, total_reais=total, de_fora=fora)
+            """Quantos e quanto, a cada clique, e quantos não entraram. É o
+            número que se confere antes de gerar."""
+            rodape.definir(texto=confirmacao.frase_do_rodape(
+                *confirmacao.resumo(grupos, zip(marcaveis, marcado))))
 
         atualizar()
-        if linhas:
-            tabela.selection_set("i0")
-            tabela.focus("i0")
+        primeira = next(iter(por_iid), "")
+        if primeira:
+            tabela.selection_set(primeira)
+            tabela.focus(primeira)
         mostrar()
 
-        widgets.Botao(acoes, "Confirmar e gerar", papel="acao",
-                      command=confirmar).pack(side="right")
+        widgets.Botao(acoes, botao, papel="acao", command=confirmar
+                      ).pack(side="right")
         widgets.Botao(acoes, "Cancelar", papel="neutro", command=top.destroy
                       ).pack(side="right", padx=px((0, 8)))
 
@@ -1537,9 +1424,26 @@ class PagamentosDiaFrame(ttk.Frame):
 
         if resposta["cancelou"]:
             return None
-        return nao_confirmados(itens, marcado)
+        return confirmacao.nao_confirmados(zip(marcaveis, marcado))
 
     def gerar(self):
+        """Passo 2: lê de verdade, mostra a leitura, e só grava o confirmado.
+
+        **Duas fases desde 14/09/2026.** (1) O worker do navegador baixa e lê
+        os anexos, roda `montar_registros` SEM filtro de confirmação e a
+        análise da remessa (`_t_apurar`); (2) de volta à interface, a janela
+        mostra essa leitura, e o "Confirmar" remonta a partir do que foi
+        guardado — sem rede — e grava a planilha (`_confirmar_e_seguir`).
+
+        **A regra "quem cancela não consome sessão do ERP" deixou de valer
+        aqui, de propósito.** Ela existia porque a janela abria antes de
+        ocupar o navegador; e era exatamente por abrir antes que ela não sabia
+        o que estava confirmando — o boleto dentro da nota aparecia sem
+        código, e o que não entrava só aparecia na planilha, depois. A leitura
+        agora acontece ANTES da pergunta. O que ela gasta é leitura (os mesmos
+        downloads de sempre); cancelar não grava nada e não muda o
+        `self.resultado`.
+        """
         if self.worker and not self.worker.done():
             return
         escolhidas = [n for n, v in self.vars_contas.items() if v.get()]
@@ -1549,48 +1453,49 @@ class PagamentosDiaFrame(ttk.Frame):
         if not self.v_pasta.get().strip():
             messagebox.showwarning("Pasta", "Escolha onde salvar a planilha.")
             return
-
-        # Antes até da janela de confirmação: com o navegador ocupado nada vai
-        # rodar, e não se pede a alguém que confira pagamento por pagamento
-        # para depois dizer que não dava.
+        # Com o navegador ocupado nada vai rodar: recusar antes de apagar os
+        # botões, senão a aba fica travada sem passar pelo `_drain`.
         if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
             return
+        self._apurar_e_confirmar(escolhidas, depois="planilha")
 
-        # A pergunta vem ANTES de ocupar o navegador: quem cancela aqui não
-        # deve ter consumido a sessão do ERP, que é uma só por usuário.
-        nao_confirmados = self._confirmacoes_pendentes(escolhidas)
-        if nao_confirmados is None:
-            self.q.put(("status", "Cancelado — nada foi gerado."))
+    def _apurar_e_confirmar(self, escolhidas, depois: str):
+        """Manda a leitura para a thread do navegador; a janela abre na volta.
+
+        `depois` é o que o "Confirmar" faz: `"planilha"` (passo 2) ou
+        `"remessa"` (passo 3 sem planilha em memória — a mesma leitura, a
+        mesma janela, e só então a conferência da remessa de sempre).
+
+        O período, as duas caixas e a pasta são lidos AQUI, na thread da
+        interface e no clique: são o que a pessoa via quando mandou gerar, e
+        a leitura dura minutos."""
+        try:
+            periodo = self._periodo()
+        except ValueError:
+            messagebox.showwarning("Período", "Use datas no formato dd/mm/aaaa.")
             return
-
+        opcoes = {"periodo": periodo, "cruzar": bool(self.v_cruzar.get()),
+                  "incluir_pagos": bool(self.v_incluir_pagos.get()),
+                  "pasta": self.v_pasta.get().strip()}
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
-        self.worker = self.anx.submeter("Pagamentos do Dia — gerar planilha",
-                                        self._t_gerar, escolhidas,
-                                        nao_confirmados, dona=self)
+        rotulo = ("Pagamentos do Dia — ler e conferir" if depois == "planilha"
+                  else "Remessa — ler e conferir")
+        self.worker = self.anx.submeter(rotulo, self._t_apurar, escolhidas,
+                                        opcoes, depois, dona=self)
 
-    def _confirmacoes_pendentes(self, escolhidas) -> set | None:
-        """set() quando não há nada a perguntar; None quando cancelaram."""
-        alvos = alvos_para_confirmar(self.lancamentos, escolhidas,
-                                     regras.carregar_fornecedores())
-        if not alvos:
-            return set()
-        return self._janela_confirmar(alvos, regras.carregar_confirmar())
+    def _juntar_entradas(self, escolhidas, opcoes):
+        """Baixa e lê o que a planilha precisa. NÃO monta nem escreve nada.
 
-    def _montar_resultado(self, escolhidas, nao_confirmados=()):
-        """Apura os lançamentos das contas marcadas. NÃO escreve arquivo.
+        Devolve as `confirmacao.Entradas` — o que o `montar_registros` recebe,
+        guardado para a remontagem do "Confirmar" não voltar à rede —, ou None
+        quando não há o que apurar (e aí já deixou o recado no status).
 
-        Existe separado do `_t_gerar` desde 30/08/2026 porque a planilha e a
-        remessa saem daqui — e antes só a planilha sabia chegar. `self.resultado`
-        era preenchido dentro do passo 2, então "gerar remessa" exigia gerar o
-        .xlsx primeiro, mesmo quando ninguém o queria. O laço não era regra: era
-        onde a atribuição estava.
-
-        Roda na thread do NAVEGADOR (é ela quem baixa os PDFs quando o cruzamento
-        está ligado). Devolve o `Resultado`, ou None quando não há o que apurar —
-        e nesse caso já deixou o recado no status.
+        Roda na thread do NAVEGADOR: é ela quem baixa os PDFs quando o
+        cruzamento está ligado. Os cadastros locais (reembolso e regras de
+        fornecedor) são lidos UMA vez, aqui: a planilha gravada é a que a
+        janela mostrou, mesmo que alguém edite o JSON com ela aberta.
         """
-        ini, fim = self._periodo()
         escolha = {relatorio.chave(n) for n in escolhidas}
         selecionados = [i for i in self.lancamentos
                         if relatorio.chave(relatorio.nome_da_conta(i)) in escolha]
@@ -1598,76 +1503,133 @@ class PagamentosDiaFrame(ttk.Frame):
         a_pagar, pagos = relatorio.separar_pagos(selecionados)
         if pagos:
             self._log(f"\n{len(pagos)} já pago(s) no período"
-                      + ("; incluídos." if self.v_incluir_pagos.get() else "; fora."))
-        if not self.v_incluir_pagos.get():
+                      + ("; incluídos." if opcoes["incluir_pagos"] else "; fora."))
+        if not opcoes["incluir_pagos"]:
             selecionados = a_pagar
         if not selecionados:
             self.q.put(("status", "Nada a pagar nas contas marcadas."))
             return None
 
         textos, urls_ocr = {}, set()
-        if self.v_cruzar.get():
+        if opcoes["cruzar"]:
             textos, urls_ocr = self._baixar_textos(selecionados)
 
-        # O cadastro local é lido UMA vez e serve aos dois: a chave Pix
-        # (formato antigo) e a identidade de quem recebe (formato novo).
-        cadastro_reembolso = reembolso.carregar(_pasta_base())
-        resultado = relatorio.montar_registros(
-            selecionados, self.anexos, self.overviews, textos,
-            pix_reembolso=reembolso.chaves(cadastro_reembolso),
-            urls_ocr=urls_ocr,
+        return confirmacao.Entradas(
+            selecionados=selecionados, anexos=self.anexos,
+            overviews=self.overviews, textos=textos, urls_ocr=urls_ocr,
+            # Serve aos dois: a chave Pix (formato antigo) e a identidade de
+            # quem recebe (formato novo).
+            cadastro_reembolso=reembolso.carregar(_pasta_base()),
             regras_fornecedor=regras.carregar_fornecedores(),
-            ids_nao_confirmados=nao_confirmados,
-            # Os Contatos do ERP entram aqui porque é aqui que se descobre
-            # QUEM recebe um reembolso. Para o fornecedor comum eles
-            # continuam sendo consultados na remessa, onde sempre foram.
+            # Os Contatos do ERP entram porque é na apuração que se descobre
+            # QUEM recebe um reembolso, e na análise da remessa que se
+            # descobre o documento do fornecedor.
             participantes=self.participantes,
-            cadastro_reembolso=cadastro_reembolso)
-        self.resultado = resultado
-        self._periodo_do_resultado = (ini, fim)
-        if not resultado.contas and not resultado.omitidos:
-            self.q.put(("status", "Nenhuma linha para as contas marcadas."))
-            return None
-        return resultado
+            periodo=opcoes["periodo"])
 
-    def _t_apurar_para_remessa(self, escolhidas, nao_confirmados=()):
-        """Apura e devolve o controle à interface, que abre a conferência.
+    def _t_apurar(self, escolhidas, opcoes, depois):
+        """Fase 1: a leitura completa e a análise da remessa, na thread do
+        navegador. Não toca `self.resultado` — só o "Confirmar" o substitui.
 
-        É o caminho "Buscar -> Gerar remessa" sem passar pela planilha. O que
-        ele NÃO faz é escrever o .xlsx — quem quiser a planilha clica no passo
-        que a escreve.
+        A análise da remessa (`confirmacao.analisar_remessa`) roda aqui porque
+        pergunta à nuvem ("já saiu numa remessa?") e isso é rede. Ela só LÊ:
+        o NSA é reservado e a remessa é registrada no `_gravar_remessas`, que
+        continua sendo o único caminho que escreve.
         """
+        comeco = time.time()
         try:
-            resultado = self._montar_resultado(escolhidas, nao_confirmados)
-            if resultado is None:
+            entradas = self._juntar_entradas(escolhidas, opcoes)
+            if entradas is None:
                 return
-            n = sum(len(r) for r in resultado.contas.values())
-            self._log(f"\n{n} pagamento(s) apurado(s) em "
-                      f"{len(resultado.contas)} conta(s). Abrindo a conferência "
-                      f"da remessa.")
-            self.q.put(("status", f"{n} pagamento(s) — confira a remessa."))
-            # De volta à thread da interface: a conferência é uma janela, e
-            # gravar .REM é disco local. Nada disso é assunto do navegador, e
-            # segurá-lo enquanto alguém confere linha a linha bloquearia as
-            # outras oito abas pelo tempo da leitura.
-            self.q.put(("abrir_remessa", None))
+            resultado = confirmacao.remontar(entradas)
+            if not resultado.contas and not resultado.omitidos:
+                self.q.put(("status", "Nenhuma linha para as contas marcadas."))
+                return
+            self.q.put(("status", "Conferindo o que a remessa faria..."))
+            analise = confirmacao.analisar_remessa(
+                resultado.contas, entradas.participantes,
+                carregar_mapas=_carregar_mapas,
+                abrir_historico=lambda: _historico(self._log))
+            for aviso in analise.avisos:
+                self._log(f"[!] {aviso}")
+            grupos = confirmacao.grupos_da_confirmacao(
+                resultado, analise, entradas.selecionados,
+                destacar=regras.carregar_confirmar(),
+                fornecedores=entradas.regras_fornecedor)
+            entram = sum(len(g.entram) for g in grupos)
+            nao_aptos = sum(len(g.nao_aptos) for g in grupos)
+            self._log(f"\nLeitura pronta em {_fmt_dur(time.time() - comeco)}: "
+                      f"{entram} lançamento(s) para confirmar, {nao_aptos} não "
+                      "apto(s). Abrindo a confirmação.")
+            self.q.put(("status", f"{entram} lançamento(s) · {nao_aptos} não "
+                                  "apto(s) — confira e confirme."))
+            # De volta à thread da interface: a janela é dela, e segurar o
+            # navegador enquanto alguém confere linha a linha bloquearia as
+            # outras abas pelo tempo da leitura.
+            self.q.put(("confirmar", (entradas, resultado, analise, grupos,
+                                      depois, opcoes["pasta"])))
         except Exception as e:
             self._log(f"[!] {e}")
             self.q.put(("status", "Não consegui apurar os lançamentos."))
+            if depois == "planilha":
+                auditoria.registrar("Gerar a planilha", str(e)[:120],
+                                    aba="pag", resultado="erro")
         finally:
             self.q.put(("botoes", "normal"))
 
-    def _t_gerar(self, escolhidas, nao_confirmados=()):
-        comeco = time.time()
-        try:
-            ini, fim = self._periodo()
-            resultado = self._montar_resultado(escolhidas, nao_confirmados)
-            if resultado is None:
-                return
-            registros, omitidos = resultado.contas, resultado.omitidos
+    def _confirmar_e_seguir(self, pacote):
+        """Fase 2, na thread da INTERFACE: a janela e o que vem depois dela.
 
-            destino = (Path(self.v_pasta.get().strip())
-                       / f"pagamentos_{ini:%Y-%m-%d}"
+        Confirmou: remonta sem rede (só quando alguém desmarcou — sem
+        desmarcados, a remontagem daria o mesmo `Resultado`), põe em
+        `self.resultado` e grava a planilha — ou segue para a conferência da
+        remessa. Nada disso precisa do navegador, e escrever arquivo local não
+        justifica ocupar a sessão que só aceita um por vez.
+
+        Cancelou: nada gravado, e `self.resultado` fica como ESTAVA. A
+        apuração não confirmada nunca vira resultado — senão o "Gerar
+        remessa" sairia de linhas que ninguém confirmou.
+        """
+        entradas, resultado, analise, grupos, depois, pasta = pacote
+        if self.worker and not self.worker.done():
+            # Outra rotina começou entre a leitura e esta janela: o que está
+            # em memória pode já não ser o desta leitura.
+            self._log("\n[!] Outra rotina começou antes da confirmação — "
+                      "nada foi gravado. Gere de novo.")
+            return
+        if grupos:
+            desmarcados = self._janela_confirmar(
+                grupos, analise.avisos,
+                "Confirmar e gerar a planilha" if depois == "planilha"
+                else "Confirmar e conferir a remessa")
+            if desmarcados is None:
+                self._log("\nConfirmação cancelada — nada foi gravado.")
+                self.q.put(("status", "Cancelado — nada foi gerado."))
+                return
+        else:
+            desmarcados = set()          # nada a perguntar (só já pagos)
+
+        if desmarcados:
+            self.lbl.configure(text="Tirando o que foi desmarcado...")
+            self.update_idletasks()
+            resultado = confirmacao.remontar(entradas, desmarcados)
+            self._log(f"\n{len(desmarcados)} lançamento(s) desmarcado(s) na "
+                      "confirmação — ficam fora da planilha e da remessa.")
+        self.resultado = resultado
+        self._periodo_do_resultado = entradas.periodo
+        if depois == "planilha":
+            self._gravar_planilha(resultado, entradas.periodo, pasta)
+        else:
+            self.gerar_remessa()
+
+    def _gravar_planilha(self, resultado, periodo, pasta):
+        """Escreve o .xlsx do `resultado` confirmado, com o Registro, o status
+        e a auditoria de sempre. Thread da interface: é disco local."""
+        comeco = time.time()
+        ini, fim = periodo
+        try:
+            registros, omitidos = resultado.contas, resultado.omitidos
+            destino = (Path(pasta) / f"pagamentos_{ini:%Y-%m-%d}"
                        f"{'' if ini == fim else f'_a_{fim:%Y-%m-%d}'}.xlsx")
             arquivo = relatorio.gerar_excel(resultado, destino, log=self._log)
 
@@ -1709,8 +1671,6 @@ class PagamentosDiaFrame(ttk.Frame):
             self.q.put(("status", "Não consegui gerar a planilha."))
             auditoria.registrar("Gerar a planilha", str(e)[:120],
                                 aba="pag", resultado="erro")
-        finally:
-            self.q.put(("botoes", "normal"))
 
     def _diagnostico_documentos(self):
         """Onde, no que o ERP já mandou, existe CPF/CNPJ — e se ele varia.
@@ -2669,37 +2629,31 @@ class PagamentosDiaFrame(ttk.Frame):
         NÃO exige mais a planilha. Até 30/08/2026 exigia, e o laço era acidente
         de código: `self.resultado` só era preenchido pelo passo 2, que também
         escrevia o .xlsx — então quem só queria a remessa gerava uma planilha
-        que ninguém ia abrir. A apuração virou `_montar_resultado`, e os dois
-        passos leem dela.
+        que ninguém ia abrir. A apuração saiu do passo 2, e os dois passos
+        leem dela.
 
         Quando o resultado já está em memória (o passo 2 rodou), roda inteiro na
         thread da INTERFACE: não há navegador nem ERP, e escrever arquivo de
         texto local não justifica ocupar a sessão que só aceita um por vez.
-        Quando NÃO está, a apuração precisa do navegador — aí ela vai para a
-        thread dele, e a conferência abre quando ela volta.
+        Quando NÃO está, faz o MESMO caminho do passo 2 (`_apurar_e_confirmar`):
+        a leitura na thread do navegador, a mesma janela "Confirmar o que
+        entra" com a leitura real, e só depois do "Confirmar" esta conferência
+        — que volta a entrar aqui, agora com o resultado confirmado. Até
+        14/09/2026 este caminho tinha a sua própria confirmação, aberta antes
+        de ler os anexos; ela deixou de existir.
         """
         if not self.resultado:
+            if self.worker and not self.worker.done():
+                return
             escolhidas = [n for n, v in self.vars_contas.items() if v.get()]
             if not escolhidas:
                 messagebox.showinfo(
                     "Remessa",
                     "Busque os lançamentos e marque as contas primeiro.")
                 return
-            # A mesma pergunta do passo 2, e pelo mesmo motivo: o que se
-            # desmarca aqui sai do arquivo. Vem ANTES de ocupar o navegador —
-            # quem cancela não deve ter consumido a sessão do ERP.
-            nao_confirmados = self._confirmacoes_pendentes(escolhidas)
-            if nao_confirmados is None:
-                self.q.put(("status", "Cancelado — nada foi gerado."))
-                return
             if self.anx.avisar_se_ocupado("a remessa"):
                 return
-            self._parar.clear()
-            self.q.put(("botoes", "disabled"))
-            self.worker = self.anx.submeter(
-                "Remessa — apurar os lançamentos",
-                self._t_apurar_para_remessa, escolhidas, nao_confirmados,
-                dona=self)
+            self._apurar_e_confirmar(escolhidas, depois="remessa")
             return
 
         # O período na tela pode ter mudado depois do passo 2 sem que ninguém

@@ -421,7 +421,7 @@ def test_o_marcador_de_recorrencia_nao_ocupa_a_janela():
                      favorecido="CONCESSIONARIA LUZ S/A")
     outro = _omit("M2", motivo=regras.MOTIVO_SIMBOLICO, valor=1.0,
                   favorecido="Fornecedor Modelo Ltda")
-    de_verdade = _omit("M3", valor=56.24, favorecido="CONCESSIONARIA LUZ S/A")
+    de_verdade = _omit("M3", valor=87.50, favorecido="CONCESSIONARIA LUZ S/A")
     resultado = relatorio.Resultado({}, [marcador, outro, de_verdade])
 
     grupo, = confirmacao.grupos_da_confirmacao(resultado, None, [],
