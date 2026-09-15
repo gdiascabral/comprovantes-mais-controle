@@ -564,18 +564,29 @@ class Registro:
     # ------------------------------------------- "isto já foi mandado?"
 
     def _procurar(self, coluna: str, valor: str) -> Envio | None:
+        """O item mais recente da chave numa remessa VIVA, ou None.
+
+        **`remessa!inner`, e não `remessa`** (14/09/2026). Sem o `!inner`, o
+        filtro do relacionamento não tira a linha do resultado: devolve a
+        linha com `remessa: null`. Com `order=id.desc&limit=1` isso escolhia o
+        item de maior id ANTES de saber se a remessa dele estava viva — e um
+        envio mais novo numa remessa DESCARTADA escondia um mais antigo numa
+        VIVA. A resposta era "não saiu", o pagamento voltava marcável e saía
+        de novo, inclusive no "Gerar remessa". Com o `!inner` o estado vale
+        na LINHA, antes do `order` e do `limit`: o item que volta é o mais
+        recente dos vivos."""
         if not valor:
             return None
         vivos = ",".join(ESTADOS_VIVOS)
         linhas = rest.ler(
             "remessa_item", self._token,
-            colunas="seu_numero,remessa(nsa,convenio,estado,gerado_em)",
+            colunas=f"seu_numero,{_REMESSA_VIVA}",
             filtro=(f"{coluna}=eq.{valor}"
                     f"&remessa.estado=in.({vivos})"
                     f"&order=id.desc&limit=1"))
-        # O PostgREST devolve a linha com `remessa: null` quando o filtro do
-        # relacionamento não casa, em vez de omiti-la. Sem esta checagem, uma
-        # remessa DESCARTADA passaria por envio vivo — e descartar existe
+        # Com o `!inner` o `remessa: null` não deveria mais vir. A checagem
+        # fica: se o relacionamento um dia voltar a ser embutido sem ele, uma
+        # remessa DESCARTADA não pode passar por envio vivo — descartar existe
         # justamente para devolver o direito de reenviar.
         linhas = [l for l in linhas if l.get("remessa")]
         return Envio(linhas[0]) if linhas else None
@@ -612,15 +623,15 @@ class Registro:
         diferença entre "perguntei e não saiu" e "não perguntei".
 
         **A resposta é a do `_procurar`, caso a caso**, e não uma parecida:
-        o mesmo estado vivo no relacionamento, a mesma recusa de `remessa:
-        null` e o mesmo item — o MAIS RECENTE da chave (`id` maior). O
-        `_procurar` pede `order=id.desc&limit=1` e só DEPOIS descarta o
-        `remessa: null`; então, se o item mais recente é de remessa
-        descartada, a resposta é "não saiu" mesmo havendo um item mais antigo
-        em remessa viva. O lote repete isso escolhendo o maior `id` antes de
-        olhar o relacionamento — escolher "o mais recente VIVO" daria outra
-        resposta para a mesma pergunta, e a janela e a conferência da remessa
-        passariam a discordar sobre o mesmo boleto.
+        o mesmo `remessa!inner` com estado vivo e o mesmo item — o MAIS
+        RECENTE dos vivos da chave (`id` maior). Uma resposta diferente para a
+        mesma pergunta faria a janela e a conferência da remessa discordarem
+        sobre o mesmo boleto.
+
+        **Bloco que volta com `LINHAS_MAXIMAS_POR_CONSULTA` linhas levanta
+        `LoteTruncado`**: o PostgREST corta em `max_rows` sem avisar, e a
+        linha cortada podia ser justamente o envio vivo de uma chave. Quem
+        chama (`confirmacao.HistoricoPreCarregado`) cai no um-a-um.
         """
         return (self._envios_por("identificador", identificadores),
                 self._envios_por("referencia", referencias))
@@ -635,11 +646,15 @@ class Registro:
         for lote in _blocos_do_filtro(alvos):
             linhas = rest.ler(
                 "remessa_item", self._token,
-                colunas=(f"id,{coluna},seu_numero,"
-                         "remessa(nsa,convenio,estado,gerado_em)"),
+                colunas=f"id,{coluna},seu_numero,{_REMESSA_VIVA}",
                 filtro=(f"{coluna}=in.({','.join(lote)})"
                         f"&remessa.estado=in.({vivos})"
                         f"&order=id.desc"))
+            if len(linhas) >= LINHAS_MAXIMAS_POR_CONSULTA:
+                raise LoteTruncado(
+                    f"a consulta em lote por {coluna} voltou com "
+                    f"{len(linhas)} linhas, o teto do banco: pode ter vindo "
+                    "cortada")
             for linha in linhas:
                 chave = str(linha.get(coluna) or "")
                 if chave not in respostas:
@@ -648,11 +663,25 @@ class Registro:
                 if atual is None or _id_da_linha(linha) > _id_da_linha(atual):
                     mais_recente[chave] = linha
         for chave, linha in mais_recente.items():
-            # A mesma checagem do `_procurar`: `remessa: null` é o item de uma
-            # remessa que não está viva, e não um envio.
+            # A mesma checagem do `_procurar`: `remessa: null` nunca é envio.
             if linha.get("remessa"):
                 respostas[chave] = (Envio(linha), None)
         return respostas
+
+
+#: O relacionamento embutido nas duas perguntas "já saiu?". `!inner` faz o
+#: filtro `remessa.estado=in.(…)` tirar a LINHA do resultado, em vez de
+#: devolvê-la com `remessa: null` — ver o `Registro._procurar`.
+_REMESSA_VIVA = "remessa!inner(nsa,convenio,estado,gerado_em)"
+
+#: O `max_rows` do PostgREST do projeto: resposta com este tanto de linhas
+#: pode ter sido cortada sem aviso.
+LINHAS_MAXIMAS_POR_CONSULTA = 1000
+
+
+class LoteTruncado(RuntimeError):
+    """A consulta em lote bateu no teto de linhas do banco. Não se responde
+    "não saiu" com base nela: quem chama pergunta uma por uma."""
 
 
 #: O tamanho, em caracteres, da lista de um `in.(…)` na pergunta em lote. O

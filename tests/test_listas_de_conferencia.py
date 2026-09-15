@@ -134,6 +134,12 @@ def test_o_detalhe_do_reembolso_diz_de_quem_e_o_documento():
                and "111.222.333-44" in t for t in textos)
 
 
+def test_no_reembolso_o_detalhe_abre_com_quem_recebe_de_verdade():
+    ln = _linha(1, reembolso=True, reembolso_nome="PESSOA DE EXEMPLO")
+    assert pf.detalhe_na_confirmacao(ln, True)[0] \
+        == ("PESSOA DE EXEMPLO (reembolso de FORNECEDOR 001)", "Forte.TLabel")
+
+
 # ----------------------------------------- confirmação: as duas fases, sem tela
 # O frame é montado sem `_build` e sem Tk (`__new__`), e a janela é trocada
 # pela resposta que a pessoa daria. O que se prova é a ordem de dinheiro: a
@@ -278,6 +284,97 @@ def test_confirmar_tira_o_desmarcado_e_grava_a_planilha(monkeypatch, tmp_path):
     assert dono._periodo_do_resultado == _opcoes(tmp_path)["periodo"]
     arquivo = next(v for t, v in _mensagens(dono) if t == "arquivo")
     assert arquivo.exists() and arquivo.parent == tmp_path
+
+
+def test_a_busca_guarda_o_periodo_que_leu(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [])
+    dia = _dt.date(2026, 9, 14)
+    api = SimpleNamespace(
+        capturar_credenciais=lambda _log: True, _req_anexos=True,
+        listar_a_pagar=lambda _i, _f, log=None: [_lanc_api("L1")],
+        anexos_de_titulos=lambda *_a, **_k: {},
+        listar_overviews=lambda *_a, **_k: {},
+        listar_participantes=lambda log=None: {})
+    dono.anx = SimpleNamespace(garantir_sessao=lambda _log: api)
+    dono._t_buscar(dia, dia)
+    assert dono._periodo_da_busca == (dia, dia)
+    assert [i["id"] for i in dono.lancamentos] == ["L1"]
+
+
+def test_a_planilha_sai_do_periodo_buscado_e_nao_da_tela(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])
+    dia14, dia15 = _dt.date(2026, 9, 14), _dt.date(2026, 9, 15)
+    dono._periodo_da_busca = (dia14, dia14)
+    dono._periodo = lambda: (dia15, dia15)        # a pessoa mudou a data
+    for nome, valor in (("v_cruzar", False), ("v_incluir_pagos", False),
+                        ("v_pasta", str(tmp_path))):
+        setattr(dono, nome, SimpleNamespace(get=lambda v=valor: v))
+    pedidos = []
+    dono.anx = SimpleNamespace(
+        submeter=lambda _rotulo, _fn, *a, dona=None: pedidos.append(a))
+    dono._apurar_e_confirmar(["CONTA A"], depois="planilha")
+    (_escolhidas, opcoes, _depois), = pedidos
+    assert opcoes["periodo"] == (dia14, dia14)
+    avisos = [str(v) for t, v in _mensagens(dono) if t == "log"]
+    assert any("não são as da busca" in a for a in avisos)
+
+
+def _anexo_pdf(nome):
+    return {"filename": nome, "tagName": "Nota Fiscal", "extension": ".pdf",
+            "downloadUrl": f"https://exemplo.invalid/{nome}.pdf"}
+
+
+def test_parar_durante_a_leitura_nao_abre_a_janela(monkeypatch, tmp_path):
+    """Parar no meio do download deixava a janela abrir com leitura pela
+    metade: o boleto dentro da NF não lido virava Pix do cadastro, verde. Com
+    o Parar ligado depois da leitura, nada é apurado e a janela não abre."""
+    dono, _registro = _dono_sem_tela(
+        monkeypatch, tmp_path, [_lanc_api("L1"), _lanc_api("L2")])
+    dono.anexos = {"T-L1": [_anexo_pdf("nf-1")], "T-L2": [_anexo_pdf("nf-2")]}
+
+    def baixar(_url):
+        dono._parar.set()               # a pessoa clicou em Parar agora
+        return None
+
+    dono.anx = SimpleNamespace(api=SimpleNamespace(baixar_anexo=baixar))
+    dono._t_apurar(["CONTA A"], dict(_opcoes(tmp_path), cruzar=True),
+                   "planilha")
+    msgs = _mensagens(dono)
+    assert not [v for t, v in msgs if t == "confirmar"], "a janela não abre"
+    assert ("status", "Interrompido — nada foi apurado.") in msgs
+    assert any("nterrompido" in str(v) for t, v in msgs if t == "log")
+    assert dono.resultado == "o resultado de antes"
+    assert msgs[-1] == ("botoes", "normal")
+
+
+def test_anexo_que_nao_foi_lido_vira_aviso_na_janela(monkeypatch, tmp_path):
+    """Download que devolve None ou levanta não pode passar calado: a forma de
+    pagar daquela linha foi decidida sem o documento."""
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])
+    dono.anexos = {"T-L1": [_anexo_pdf("nf-1"), _anexo_pdf("nf-2"),
+                            _anexo_pdf("nf-3")]}
+    monkeypatch.setattr(pf.relatorio, "texto_de_pdf",
+                        lambda dados: "texto da nota" if dados else "")
+
+    def baixar(url):
+        if url.endswith("nf-2.pdf"):
+            return None
+        if url.endswith("nf-3.pdf"):
+            raise OSError("o download caiu")
+        return b"%PDF ficticio"
+
+    dono.anx = SimpleNamespace(api=SimpleNamespace(baixar_anexo=baixar))
+    dono._t_apurar(["CONTA A"], dict(_opcoes(tmp_path), cruzar=True),
+                   "planilha")
+    msgs = _mensagens(dono)
+    entradas, _resultado, analise, _grupos, _depois, _pasta = next(
+        v for t, v in msgs if t == "confirmar")
+    aviso = confirmacao.aviso_de_anexos_nao_lidos(2)
+    assert entradas.anexos_nao_lidos == 2
+    assert analise.avisos[0] == aviso
+    assert any(aviso in str(v) for t, v in msgs if t == "log")
+    assert entradas.textos == {"https://exemplo.invalid/nf-1.pdf":
+                               "texto da nota"}
 
 
 def test_a_remessa_sem_planilha_passa_pela_mesma_confirmacao(monkeypatch,

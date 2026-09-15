@@ -243,7 +243,7 @@ def detalhe_na_confirmacao(linha, marcado: bool = True) -> list:
     O não apto diz o motivo e ONDE ele se resolve, porque é para isso que ele
     está na janela."""
     estado = confirmacao.estado_na_tela(linha, marcado)
-    linhas = [(("⚠  " if linha.olhar else "") + (linha.favorecido or "—"),
+    linhas = [(("⚠  " if linha.olhar else "") + (linha.quem_recebe or "—"),
                "Forte.TLabel"),
               (linha.por_onde or "—", ESTILO_DO_DADO[estado])]
     partes = [f"vence {linha.vencimento:%d/%m/%Y}" if linha.vencimento
@@ -419,6 +419,11 @@ class PagamentosDiaFrame(ttk.Frame):
         #: planilha: o que está em memória seria de outro dia, e a janela da
         #: remessa não tem como saber disso sozinha.
         self._periodo_do_resultado = None
+        #: O período que o "1. Buscar" LEU — o dos `self.lancamentos`. É dele
+        #: que saem o nome da planilha e o `_periodo_do_resultado`, e não das
+        #: datas da tela no clique do passo 2, que a pessoa pode ter mexido
+        #: depois de buscar (`confirmacao.periodo_da_planilha`).
+        self._periodo_da_busca = None
         #: O que o último `_conferir_prontidao` viu — a lista de `Conferencia`
         #: e, quando o cadastro não abriu, o recado do erro. Ficam aqui, e não
         #: dentro da janela do "Ver detalhes", porque quem os mostra são DOIS:
@@ -1028,6 +1033,10 @@ class PagamentosDiaFrame(ttk.Frame):
             # Rede de segurança: se a API ignorar o filtro, não deixamos o
             # relatório sair errado em silêncio.
             self.lancamentos = relatorio.filtrar_periodo(brutos, ini, fim, log=self._log)
+            # Junto com os lançamentos, e não no clique: se a busca cair antes
+            # daqui, os lançamentos e o período em memória continuam os da
+            # busca anterior, um de acordo com o outro.
+            self._periodo_da_busca = (ini, fim)
             self._log(f"{len(self.lancamentos)} lançamento(s) no período.")
             if not self.lancamentos:
                 self.q.put(("status", "Nenhum lançamento no período."))
@@ -1301,23 +1310,27 @@ class PagamentosDiaFrame(ttk.Frame):
                 tabela.insert("", "end", iid=f"s{g}{sufixo}", tags=("secao",),
                               values=("", "", titulo, "", "") + ("",) * 4)
                 for pos, ln in enumerate(secao):
+                    # A que já saiu numa remessa nasce desmarcada
+                    # (`confirmacao.marcada_de_inicio`); a não apta, sem marca.
+                    de_inicio = confirmacao.marcada_de_inicio(ln)
                     if ln.marcavel:
-                        iid, marca = f"i{len(marcaveis)}", MARCADA
+                        iid = f"i{len(marcaveis)}"
+                        marca = MARCADA if de_inicio else DESMARCADA
                         marcaveis.append(ln)
-                        marcado.append(True)
+                        marcado.append(de_inicio)
                         posicao.append(pos)
                     else:
                         iid, marca = f"n{n_nao_aptos}", ""
                         n_nao_aptos += 1
                     por_iid[iid] = ln
                     destinos.append(ln.por_onde)
-                    estado = confirmacao.estado_na_tela(ln, True)
+                    estado = confirmacao.estado_na_tela(ln, de_inicio)
                     tabela.insert(
                         "", "end", iid=iid,
                         tags=widgets.linha_zebrada(pos, tag_de(estado)),
                         values=(marca, relatorio.brl(ln.valor),
                                 ("⚠  " if ln.olhar else "")
-                                + (ln.favorecido or "—"),
+                                + (ln.quem_recebe or "—"),
                                 f"{widgets.MARCAS_ESTADO[estado]}  "
                                 f"{ln.situacao or '—'}",
                                 ln.por_onde or "—",
@@ -1468,14 +1481,22 @@ class PagamentosDiaFrame(ttk.Frame):
         `"remessa"` (passo 3 sem planilha em memória — a mesma leitura, a
         mesma janela, e só então a conferência da remessa de sempre).
 
-        O período, as duas caixas e a pasta são lidos AQUI, na thread da
-        interface e no clique: são o que a pessoa via quando mandou gerar, e
-        a leitura dura minutos."""
+        As duas caixas e a pasta são lidas AQUI, na thread da interface e no
+        clique: são o que a pessoa via quando mandou gerar, e a leitura dura
+        minutos. O PERÍODO não: é o da busca, que é de onde vieram os
+        lançamentos — se a tela mudou desde então, o Registro avisa."""
         try:
-            periodo = self._periodo()
+            na_tela = self._periodo()
         except ValueError:
-            messagebox.showwarning("Período", "Use datas no formato dd/mm/aaaa.")
+            na_tela = None
+        periodo, aviso = confirmacao.periodo_da_planilha(
+            self._periodo_da_busca, na_tela)
+        if periodo is None:
+            messagebox.showinfo("Pagamentos do Dia",
+                                "Busque os lançamentos primeiro.")
             return
+        if aviso:
+            self._log(f"\n[!] {aviso[:1].upper()}{aviso[1:]}.")
         opcoes = {"periodo": periodo, "cruzar": bool(self.v_cruzar.get()),
                   "incluir_pagos": bool(self.v_incluir_pagos.get()),
                   "pasta": self.v_pasta.get().strip()}
@@ -1512,9 +1533,9 @@ class PagamentosDiaFrame(ttk.Frame):
             self.q.put(("status", "Nada a pagar nas contas marcadas."))
             return None
 
-        textos, urls_ocr = {}, set()
+        textos, urls_ocr, nao_lidos = {}, set(), 0
         if opcoes["cruzar"]:
-            textos, urls_ocr = self._baixar_textos(selecionados)
+            textos, urls_ocr, nao_lidos = self._baixar_textos(selecionados)
 
         return confirmacao.Entradas(
             selecionados=selecionados, anexos=self.anexos,
@@ -1527,7 +1548,8 @@ class PagamentosDiaFrame(ttk.Frame):
             # QUEM recebe um reembolso, e na análise da remessa que se
             # descobre o documento do fornecedor.
             participantes=self.participantes,
-            periodo=opcoes["periodo"])
+            periodo=opcoes["periodo"],
+            anexos_nao_lidos=nao_lidos)
 
     def _t_apurar(self, escolhidas, opcoes, depois):
         """Fase 1: a leitura completa e a análise da remessa, na thread do
@@ -1537,11 +1559,23 @@ class PagamentosDiaFrame(ttk.Frame):
         pergunta à nuvem ("já saiu numa remessa?") e isso é rede. Ela só LÊ:
         o NSA é reservado e a remessa é registrada no `_gravar_remessas`, que
         continua sendo o único caminho que escreve.
+
+        **Parar durante a leitura não abre a janela.** O `_baixar_textos` para
+        no meio e devolve o que leu; montar com isso punha na janela o boleto
+        dentro da NF não lido como Pix do cadastro, verde — uma leitura pela
+        metade com cara de leitura inteira. Com o Parar ligado, nada é
+        apurado e o recado diz isso.
         """
         comeco = time.time()
         try:
             entradas = self._juntar_entradas(escolhidas, opcoes)
             if entradas is None:
+                return
+            if self._parar.is_set():
+                self._log("\nInterrompido — nada foi apurado: a leitura dos "
+                          "anexos ficou pela metade, e a janela mostraria "
+                          "formas de pagar erradas. Gere de novo.")
+                self.q.put(("status", "Interrompido — nada foi apurado."))
                 return
             resultado = confirmacao.remontar(entradas)
             if not resultado.contas and not resultado.omitidos:
@@ -1552,6 +1586,10 @@ class PagamentosDiaFrame(ttk.Frame):
                 resultado.contas, entradas.participantes,
                 carregar_mapas=_carregar_mapas,
                 abrir_historico=lambda: _historico(self._log))
+            nao_lidos = confirmacao.aviso_de_anexos_nao_lidos(
+                entradas.anexos_nao_lidos)
+            if nao_lidos:
+                analise.avisos.insert(0, nao_lidos)
             for aviso in analise.avisos:
                 self._log(f"[!] {aviso}")
             grupos = confirmacao.grupos_da_confirmacao(
@@ -3204,8 +3242,8 @@ class PagamentosDiaFrame(ttk.Frame):
                     urls.append((url, pdf))
         return urls
 
-    def _baixar_textos(self, selecionados) -> tuple[dict, set]:
-        """({downloadUrl: texto}, {urls lidas por OCR}).
+    def _baixar_textos(self, selecionados) -> tuple[dict, set, int]:
+        """({downloadUrl: texto}, {urls lidas por OCR}, anexos não lidos).
 
         Um download serve para tudo: extrair a linha digitável do boleto,
         cruzar valor/fornecedor e achar a chave do aviso de reembolso.
@@ -3214,18 +3252,33 @@ class PagamentosDiaFrame(ttk.Frame):
         leu por OCR fica marcado, porque leitura de OCR não vale o mesmo
         que camada de texto: a linha digitável tirada dali só é aceita
         depois de fechar o dígito verificador e o valor (ver `ocr_boleto`).
+
+        Download que devolve nada ou levanta NÃO derruba a leitura: conta como
+        anexo não lido, e o número vira aviso na janela de confirmação
+        (`confirmacao.aviso_de_anexos_nao_lidos`) — a forma de pagar daquela
+        linha foi decidida sem o documento, e isso tem de aparecer.
         """
         alvos = self._anexos_a_ler(selecionados)
         if not alvos:
-            return {}, set()
+            return {}, set(), 0
 
         self._log(f"\nBaixando e lendo {len(alvos)} anexo(s) para o cruzamento...")
-        textos, urls_ocr, sem_texto = {}, set(), 0
+        textos, urls_ocr, sem_texto, nao_lidos = {}, set(), 0, 0
         for i, (url, eh_pdf) in enumerate(alvos, 1):
             if self._parar.is_set():
                 self._log("Interrompido a pedido — o cruzamento fica incompleto.")
                 break
-            dados = self.anx.api.baixar_anexo(url)
+            try:
+                dados = self.anx.api.baixar_anexo(url)
+            except Exception as e:                           # noqa: BLE001
+                self._log(f"  [!] não consegui baixar um anexo: {e}")
+                dados = None
+            if not dados:
+                # Não é "sem texto": o documento nem chegou. Fica fora dos
+                # textos e da contagem do OCR, e vira o aviso da janela.
+                nao_lidos += 1
+                self.q.put(("progresso", (i, len(alvos))))
+                continue
             texto = relatorio.texto_de_pdf(dados) if (dados and eh_pdf) else ""
             if dados and not texto.strip():
                 self.q.put(("status", f"Lendo por OCR... {i}/{len(alvos)}"))
@@ -3244,4 +3297,4 @@ class PagamentosDiaFrame(ttk.Frame):
         if sem_texto:
             self._log(f"  {sem_texto} anexo(s) que nem o OCR conseguiu ler — "
                       "esses não dá para cruzar.")
-        return textos, urls_ocr
+        return textos, urls_ocr, nao_lidos

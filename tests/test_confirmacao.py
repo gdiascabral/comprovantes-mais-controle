@@ -109,6 +109,29 @@ def test_o_desmarcado_sai_com_o_motivo_e_o_resto_fica():
         == [("L2", regras.MOTIVO_NAO_CONFIRMADO)]
 
 
+def test_a_planilha_sai_do_periodo_da_busca_e_avisa_se_a_tela_mudou():
+    """Os lançamentos em memória são os do período BUSCADO; nomear a planilha
+    (e o `_periodo_do_resultado`) pelas datas da tela no clique do passo 2
+    punha o dia 15 no nome de uma planilha do dia 14."""
+    dia14, dia15 = (_dt.date(2026, 9, 14),) * 2, (_dt.date(2026, 9, 15),) * 2
+    assert confirmacao.periodo_da_planilha(dia14, dia14) == (dia14, "")
+    periodo, aviso = confirmacao.periodo_da_planilha(dia14, dia15)
+    assert periodo == dia14
+    assert aviso == ("as datas na tela (15/09/2026 a 15/09/2026) não são as da "
+                     "busca (14/09/2026 a 14/09/2026): a planilha sai do período "
+                     "buscado — para outro período, busque de novo")
+    periodo, aviso = confirmacao.periodo_da_planilha(dia14, None)
+    assert periodo == dia14 and "14/09/2026 a 14/09/2026" in aviso
+    assert confirmacao.periodo_da_planilha(None, dia14) == (None, "")
+
+
+def test_o_aviso_de_anexos_nao_lidos_diz_quantos():
+    assert confirmacao.aviso_de_anexos_nao_lidos(0) == ""
+    assert confirmacao.aviso_de_anexos_nao_lidos(2) == (
+        "2 anexo(s) não foram lidos: a forma de pagar dessas linhas pode "
+        "estar errada")
+
+
 def test_a_remontagem_usa_os_anexos_ja_lidos():
     """Confirmar não baixa nada: o boleto lido na apuração continua lido.
 
@@ -260,9 +283,11 @@ class _RegistroDeLote(_RegistroFalso):
     o teste prova que a análise NÃO as fez para as chaves pré-carregadas — e
     que as fez para as outras."""
 
-    def __init__(self, enviados=None, lote_cai=False, lote_esquece=()):
-        super().__init__(enviados=enviados)
+    def __init__(self, enviados=None, lote_cai=False, lote_esquece=(),
+                 mudo=False, cai_em=()):
+        super().__init__(enviados=enviados, mudo=mudo)
         self.lote_cai, self.lote_esquece = lote_cai, set(lote_esquece)
+        self.cai_em = set(cai_em)
         self.lotes, self.um_a_um = [], []
 
     def envio_de(self, codigo):
@@ -271,6 +296,8 @@ class _RegistroDeLote(_RegistroFalso):
 
     def envio_da_referencia(self, referencia):
         self.um_a_um.append(("envio_da_referencia", referencia))
+        if referencia in self.cai_em:
+            raise OSError("a rede caiu no meio da pergunta")
         return super().envio_da_referencia(referencia)
 
     def envios_em_lote(self, identificadores, referencias):
@@ -384,6 +411,50 @@ def test_cem_linhas_custam_poucas_consultas_ao_banco(monkeypatch):
     assert len(filtros) <= 5, filtros
 
 
+def test_falha_da_ordem_do_dia_nao_joga_fora_o_que_o_lote_respondeu():
+    """A ordem do dia é do "seu número", que a análise descarta. Cair nela
+    rodava o `preparar` de novo SEM histórico, e o "já saiu na remessa nº 7"
+    que o lote tinha trazido sumia — a linha voltava verde."""
+    registro = _RegistroDeLote(enviados={"L2": 7}, mudo=True)
+    analise = confirmacao.analisar_remessa(
+        {CONTA: [_registro("L1"), _registro("L2")]}, {}, carregar_mapas=_mapas,
+        abrir_historico=lambda: registro, quando=HOJE)
+    aviso, = analise.avisos
+    assert aviso.startswith(confirmacao.AVISO_SEM_REGISTRO)
+    assert analise.candidato(CONTA, "L2").ja_enviado \
+        == "já saiu na remessa nº 000007 de 10/09/2026"
+    assert analise.envio_conferido("L1") and analise.envio_conferido("L2"), \
+        "o lote respondeu as duas: não há o que duvidar"
+
+
+def test_pergunta_fora_do_lote_que_cai_vira_nao_sei_so_dela():
+    registro = _RegistroDeLote(lote_esquece={"L2"}, cai_em={"L2"})
+    analise = confirmacao.analisar_remessa(
+        {CONTA: [_registro("L1"), _registro("L2")]}, {}, carregar_mapas=_mapas,
+        abrir_historico=lambda: registro, quando=HOJE)
+    assert analise.avisos and analise.avisos[0].startswith(
+        confirmacao.AVISO_SEM_REGISTRO)
+    assert analise.envio_conferido("L1") is True
+    assert analise.envio_conferido("L2") is False
+    assert analise.candidato(CONTA, "L2").ja_enviado == ""
+
+
+def test_sem_registro_a_linha_diz_que_nao_conferiu_e_fica_ambar():
+    def sem_nuvem():
+        raise RuntimeError("sem internet")
+
+    contas = {CONTA: [_registro("L1")]}
+    analise = confirmacao.analisar_remessa(
+        contas, {}, carregar_mapas=_mapas, abrir_historico=sem_nuvem,
+        quando=HOJE)
+    assert analise.envio_conferido("L1") is False
+    grupo, = confirmacao.grupos_da_confirmacao(
+        relatorio.Resultado(contas, []), analise, [])
+    linha, = grupo.entram
+    assert confirmacao.NAO_CONFERI_ENVIO in linha.situacao
+    assert linha.estado == "atencao"
+
+
 # ==========================================================================
 # SITUAÇÃO: o veredito da planilha e o da remessa, lado a lado
 # ==========================================================================
@@ -442,12 +513,15 @@ def test_conta_de_outro_banco_nao_e_pendencia():
     remessa_dia.MOTIVO_LINHA,
     remessa_dia.MOTIVO_VALOR_DIVERGE,
     remessa_dia.MOTIVO_REEMBOLSO,
+    remessa_dia.MOTIVO_CHAVE_AMBIGUA,
 ])
 def test_em_conta_de_outro_banco_o_impedimento_de_quem_paga_a_mao_e_ambar(motivo):
     """A conta do Inter se paga À MÃO, pelo HTML — e estes impedimentos são
     justamente o que quem paga à mão precisa ver: pagar a outra pessoa, não
     pagar boleto pela metade, linha que não fecha, valor que diverge, reembolso
-    sem saber quem recebe. A situação diz o motivo, e não o recado genérico."""
+    sem saber quem recebe, e a chave de onze dígitos que tanto pode ser CPF
+    quanto celular — quem a digita no app do banco precisa saber disso. A
+    situação diz o motivo, e não o recado genérico."""
     assert motivo in confirmacao.MOTIVOS_DE_QUEM_PAGA_A_MAO
     texto, estado = confirmacao.situacao_da_linha(
         {"status": "APTO"}, _cand(impedimento=motivo),
@@ -457,24 +531,23 @@ def test_em_conta_de_outro_banco_o_impedimento_de_quem_paga_a_mao_e_ambar(motivo
     assert estado == "atencao"
 
 
-def test_so_os_cinco_motivos_sao_de_quem_paga_a_mao():
+def test_so_estes_motivos_sao_de_quem_paga_a_mao():
     """A lista referencia as constantes do `remessa_dia` — não copia texto."""
     assert confirmacao.MOTIVOS_DE_QUEM_PAGA_A_MAO == (
         remessa_dia.MOTIVO_MAO, remessa_dia.MOTIVO_PARCIAL,
         remessa_dia.MOTIVO_LINHA, remessa_dia.MOTIVO_VALOR_DIVERGE,
-        remessa_dia.MOTIVO_REEMBOLSO)
+        remessa_dia.MOTIVO_REEMBOLSO, remessa_dia.MOTIVO_CHAVE_AMBIGUA)
 
 
 @pytest.mark.parametrize("motivo", [
     remessa_dia.MOTIVO_SEM_DOCUMENTO,
     remessa_dia.MOTIVO_COPIA_COLA,
-    remessa_dia.MOTIVO_CHAVE_AMBIGUA,
     remessa_dia.MOTIVO_SANESC,
 ])
 def test_em_conta_de_outro_banco_o_impedimento_tecnico_da_remessa_fica_neutro(
         motivo):
-    """Sem CPF/CNPJ para o segmento B, copia-e-cola, chave sem tipo, SANESC:
-    são coisas do ARQUIVO do banco, e esta conta não gera arquivo nenhum."""
+    """Sem CPF/CNPJ para o segmento B, copia-e-cola, SANESC: são coisas do
+    ARQUIVO do banco, e esta conta não gera arquivo nenhum."""
     texto, estado = confirmacao.situacao_da_linha(
         {"status": "APTO"}, _cand(impedimento=motivo),
         sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)
@@ -515,12 +588,66 @@ def test_o_resumo_da_conta_de_outro_banco_tambem_e_neutro():
         f"conta sem remessa: {remessa_dia.MOTIVO_SEM_CONVENIO}")
 
 
+JA_SAIU = "já saiu na remessa nº 000007 de 10/09/2026"
+
+
 def test_o_que_ja_saiu_em_remessa_pede_olhada():
-    aviso = "já saiu na remessa nº 000007 de 10/09/2026"
+    """O que faz a pessoa parar vem PRIMEIRO, como na conferência da remessa:
+    marcar é o mesmo pagamento duas vezes."""
     texto, estado = confirmacao.situacao_da_linha(
-        {"status": "APTO"}, _cand(ja_enviado=aviso))
-    assert texto == f"APTO · vai na remessa · {aviso}"
+        {"status": "APTO"}, _cand(ja_enviado=JA_SAIU))
+    assert texto == f"APTO · {JA_SAIU} · vai na remessa"
     assert estado == "atencao"
+
+
+def test_o_que_ja_saiu_aparece_em_conta_de_outro_banco():
+    """Um boleto que já saiu na remessa nº 7 aparecia verde "pague pelo HTML":
+    pagá-lo à mão é pagá-lo em dobro."""
+    texto, estado = confirmacao.situacao_da_linha(
+        {"status": "APTO"}, _cand(ja_enviado=JA_SAIU),
+        sem_remessa=remessa_dia.MOTIVO_FORA_SICOOB)
+    assert texto == (f"APTO · {JA_SAIU} · {remessa_dia.MOTIVO_FORA_SICOOB} — "
+                     f"{confirmacao.PAGUE_PELO_HTML}")
+    assert estado == "atencao"
+
+
+def test_o_que_ja_saiu_aparece_em_conta_sem_remessa():
+    texto, estado = confirmacao.situacao_da_linha(
+        {"status": "APTO"}, _cand(ja_enviado=JA_SAIU),
+        sem_remessa=remessa_dia.MOTIVO_SEM_CONVENIO)
+    assert texto == (f"APTO · {JA_SAIU} · conta sem remessa: "
+                     f"{remessa_dia.MOTIVO_SEM_CONVENIO}")
+    assert estado == "atencao"
+
+
+def test_o_que_ja_saiu_aparece_sem_o_cadastro_de_contas():
+    texto, estado = confirmacao.situacao_da_linha(
+        {"status": "APTO"}, _cand(ja_enviado=JA_SAIU), contas_conferidas=False)
+    assert texto == f"APTO · {JA_SAIU} · {confirmacao.SEM_IMPEDIMENTO_NA_LINHA}"
+    assert estado == "atencao"
+
+
+@pytest.mark.parametrize("sem_remessa", [
+    "", remessa_dia.MOTIVO_FORA_SICOOB, remessa_dia.MOTIVO_SEM_CONVENIO])
+def test_sem_saber_se_ja_saiu_a_linha_diz_e_pinta(sem_remessa):
+    """Registro não consultado: "não saiu" seria palpite. A linha diz que não
+    conferiu, em qualquer conta, e fica âmbar."""
+    texto, estado = confirmacao.situacao_da_linha(
+        {"status": "APTO"}, _cand(), sem_remessa=sem_remessa,
+        envio_conferido=False)
+    assert texto.startswith(f"APTO · {confirmacao.NAO_CONFERI_ENVIO} · ")
+    assert estado == "atencao"
+
+
+def test_reembolso_pinta_ambar_em_qualquer_conta():
+    """O dinheiro vai para quem NÃO é o favorecido do lançamento — na
+    conferência da remessa essa linha já nasce desmarcada."""
+    for sem_remessa in ("", remessa_dia.MOTIVO_FORA_SICOOB):
+        _texto, estado = confirmacao.situacao_da_linha(
+            {"status": "APTO* (reembolso)", "reembolso": True},
+            _cand(status="APTO* (reembolso)", reembolso=True),
+            sem_remessa=sem_remessa)
+        assert estado == "atencao"
 
 
 def test_sem_o_cadastro_de_contas_nao_se_promete_remessa():
@@ -648,6 +775,41 @@ def test_ja_pago_nao_e_pergunta():
     grupo, = confirmacao.grupos_da_confirmacao(
         resultado, None, [_lanc("A1"), _lanc("A2", paid=True)])
     assert [ln.id for ln in grupo.entram] == ["A1"]
+
+
+def test_no_reembolso_quem_recebe_e_a_pessoa_do_aviso():
+    """QUEM RECEBE dizia o fornecedor do lançamento, e o dinheiro vai para
+    outra pessoa: a coluna mostra quem recebe de verdade e de que compra é o
+    reembolso, e a linha fica âmbar."""
+    resultado = relatorio.Resultado({"CONTA A": [
+        _reg("R1", status="APTO* (reembolso)", reembolso=True,
+             reembolso_nome="PESSOA DE EXEMPLO"),
+        _reg("R2", status="APTO* (reembolso)", reembolso=True,
+             reembolso_nome=""),
+        _reg("N1")]}, [])
+    grupo, = confirmacao.grupos_da_confirmacao(resultado, None, [])
+    por_id = {ln.id: ln for ln in grupo.entram}
+    assert por_id["R1"].quem_recebe \
+        == "PESSOA DE EXEMPLO (reembolso de Fornecedor Modelo Ltda)"
+    assert por_id["R2"].quem_recebe == "? (reembolso de Fornecedor Modelo Ltda)"
+    assert por_id["R1"].estado == por_id["R2"].estado == "atencao"
+    assert por_id["N1"].quem_recebe == "Fornecedor Modelo Ltda"
+    assert por_id["N1"].estado == "ok"
+
+
+def test_o_que_ja_saiu_em_remessa_nasce_desmarcado():
+    """Como na conferência da remessa: marcar é o mesmo pagamento duas vezes,
+    e isso exige um clique de quem leu o aviso."""
+    resultado = relatorio.Resultado(
+        {CONTA: [_reg("L1"), _reg("L2")]}, [_omit("L9", conta=CONTA)])
+    analise = confirmacao.AnaliseRemessa(preparado={CONTA: [
+        _cand("L1", conta_erp=CONTA),
+        _cand("L2", conta_erp=CONTA, ja_enviado=JA_SAIU)]})
+    grupo, = confirmacao.grupos_da_confirmacao(resultado, analise, [])
+    por_id = {ln.id: ln for ln in grupo.entram + grupo.nao_aptos}
+    assert confirmacao.marcada_de_inicio(por_id["L1"]) is True
+    assert confirmacao.marcada_de_inicio(por_id["L2"]) is False
+    assert confirmacao.marcada_de_inicio(por_id["L9"]) is False
 
 
 #: Cadastro de mentira, no formato de `carregar_fornecedores`.
