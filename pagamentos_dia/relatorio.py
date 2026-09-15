@@ -292,12 +292,10 @@ def escolher_pdf_do_boleto(files) -> dict | None:
 _NAO_VARRER = re.compile(
     r"comprovante|contrato|medi[çc][ãa]o|qr\s*code|pagar\s*para", re.I)
 
-#: O texto de quem JÁ PAGOU: comprovante de banco, de Pix, de caixa. O boleto
-#: em si diz "local de pagamento", "comprovante de entrega" e "autenticação
-#: mecânica" — e nenhuma destas.
-_PROVA_DE_PAGAMENTO = re.compile(
-    r"comprovante\s+de\s+(?:pagamento|transa)|pagamento\s+(?:efetuado|realizado)|"
-    r"valor\s+pago|data\s+d[oe]\s+pagamento|pix\s+enviado", re.I)
+#: O texto de quem JÁ PAGOU (`regras.PROVA_DE_PAGAMENTO`): o MESMO regex que o
+#: `reembolso` usa para recusar comprovante renomeado como aviso. Duas cópias
+#: discordariam sobre o que é prova de pagamento.
+_PROVA_DE_PAGAMENTO = regras.PROVA_DE_PAGAMENTO
 
 
 #: Anexo que é IMAGEM: é assim que o QR Code do Pix costuma chegar — a guia do
@@ -1083,17 +1081,24 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             tem_documento = True
             do_aviso = chave_pix_do_aviso(files, textos)
             do_mapa = pix_do_reembolso(files, item, pix_reembolso)
-            # A chave do LANÇAMENTO só vale quando o favorecido é a própria
-            # pessoa do aviso. Nas outras linhas ela é a chave do fornecedor, e
-            # pagá-la é pagar a loja de novo em vez de devolver o dinheiro a
-            # quem comprou — a regra de sempre deste ramo. Entra por último:
-            # o aviso é o papel do dia e o cadastro local foi digitado de
-            # propósito; o lançamento só CONFERE os dois quando eles existem.
+            # A chave do LANÇAMENTO só é olhada quando o favorecido pode ser a
+            # própria pessoa do aviso (nos Contatos com CPF — falha fechada).
+            # Nas outras linhas ela é a chave do fornecedor, e pagá-la é pagar
+            # a loja de novo em vez de devolver o dinheiro a quem comprou — a
+            # regra de sempre deste ramo. E mesmo ali ela só CONFIRMA a do
+            # aviso ou a do cadastro local: sozinha, pode ser a chave da
+            # HOMÔNIMA que o título escolheu, e aí não paga ninguém (abaixo).
+            # CNPJ nunca: reembolso é para pessoa.
             do_lancamento = ""
             if pago_para and reembolso.pessoa_e_o_favorecido(files, favorecido,
                                                              participantes):
                 candidata = extrair_chave_pix(pago_para)
-                do_lancamento = candidata if parece_chave_pix(candidata) else ""
+                if (parece_chave_pix(candidata)
+                        and regras.tipo_de_chave_pix(pago_para) in (
+                            regras.CHAVE_CPF, regras.CHAVE_TELEFONE,
+                            regras.CHAVE_EMAIL, regras.CHAVE_ALEATORIA)
+                        and len(regras.documento_valido(candidata)) != 14):
+                    do_lancamento = candidata
             confere = " (confere com a do lançamento)" if do_lancamento else ""
             if do_aviso and do_mapa and not mesma_chave(do_aviso, do_mapa):
                 dados, chave_divergente = do_aviso, True
@@ -1117,9 +1122,16 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 dados = do_mapa
                 obs = f"Reembolso — pagar a chave do aviso, NÃO o pix do cadastro{confere}"
             elif do_lancamento:
-                dados = do_lancamento
-                obs = ("Reembolso — chave do lançamento: o favorecido é a própria "
-                       "pessoa do aviso, e o aviso não trouxe chave legível")
+                # Fica VISÍVEL na obs e fora dos dados: sem chave, a linha sai
+                # em ATENÇÃO, o "Copiar" do HTML não a entrega pronta e a
+                # remessa recusa (MOTIVO_SEM_CHAVE) — quem paga à mão confere
+                # antes. Nos dados, com a identidade saindo do título, seria o
+                # "PAGAR PARA FULANA" pago à homônima sem ninguém olhar.
+                dados = ""
+                obs = (f"Reembolso para '{nome_do_reembolso(files) or '?'}' — o "
+                       f"lançamento traz a chave {do_lancamento}, do cadastro do "
+                       f"favorecido ({favorecido}), não confirmada pelo aviso "
+                       "nem pelo cadastro local; conferir de quem é antes de pagar")
             else:
                 dados = ""
                 obs = (f"Reembolso para '{nome_do_reembolso(files) or '?'}' — chave não "
