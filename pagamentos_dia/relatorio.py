@@ -1233,11 +1233,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # reparsear a frase acima: `nf`, `oc_da_descricao`,
             # `descricao_lancamento` e `utilidade`.
             **partes_no_registro(item, files, coment, overview),
-            # A posição do lançamento na lista que chegou aqui, que é a
-            # ordem da TELA de pagamentos do ERP (`mc_api.listar_a_pagar`
-            # reaproveita a URL que a tela manda, com a ordenação dela). É a
-            # segunda chave da ordem das linhas: o dono confere o HTML e a
-            # planilha com o sistema aberto ao lado.
+            # A posição do lançamento na lista que chegou aqui. Os filtros do
+            # passo 1 e a seleção de contas não reordenam nada, então é a
+            # ordem em que a API devolveu — e `mc_api.listar_a_pagar` pergunta
+            # pela URL que a TELA de pagamentos manda, trocando só filtros e
+            # paginação. É a segunda chave da ordem das linhas: o dono confere
+            # o HTML e a planilha com o sistema aberto ao lado.
             "ordem": ordem,
             # Não vão para a planilha: são para a remessa (`remessa_dia.py`).
             # O `id` é a única volta do arquivo de retorno até o lançamento,

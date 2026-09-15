@@ -6,6 +6,7 @@ Nenhum nome, lote, OC, NF ou valor aqui é de verdade — o repositório é púb
 """
 import re
 
+from pagamentos_dia import html_pagamentos as hp
 from pagamentos_dia import relatorio
 
 
@@ -119,3 +120,123 @@ def test_conta_de_agua_e_luz_e_marcada_no_registro(monkeypatch):
     r = _registro(paidTo="Concessionaria Modelo", documentNumber="2026000000001",
                   description="UC 000000001 REF SET 2026")
     assert r["utilidade"] is True
+
+
+# -------------------------------------------- a descrição para colar no banco
+INTER = "CONTA MODELO - INTER"
+SICOOB = "CONTA MODELO - SICOOB"
+
+
+def _partes(nf="", oc="", descricao="", cc="QD 99 LT 99", utilidade=False):
+    return {"centro_custo": cc, "nf": nf, "oc_da_descricao": oc,
+            "descricao_lancamento": descricao, "utilidade": utilidade,
+            "descricao": "a frase da planilha, que o HTML não usa"}
+
+
+def test_nf_e_oc_vao_as_duas():
+    r = _partes(nf="5678", oc="1234", descricao="Material de obra")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678 OC 1234"
+
+
+def test_so_oc_vai_so_a_oc():
+    r = _partes(oc="1234", descricao="Material de obra")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 OC 1234"
+
+
+def test_so_nf_vai_so_a_nf():
+    r = _partes(nf="5678", descricao="Material de obra")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678"
+
+
+def test_sem_nf_nem_oc_vai_a_descricao_do_lancamento():
+    r = _partes(descricao="Material de obra")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Material de obra"
+
+
+def test_sem_nada_sobra_o_centro_de_custo():
+    assert hp.descricao_para_colar(_partes(), INTER) == "QD 99 LT 99"
+    assert hp.descricao_para_colar(_partes(cc=""), INTER) == ""
+
+
+def test_hifen_acento_e_pontuacao_saem():
+    r = _partes(descricao="Instalação elétrica - CASA 2 / fase 1 (etapa nº3).",
+                cc="QD 99 LT 01 | QD 99 LT 02")
+    assert hp.descricao_para_colar(r, INTER) == (
+        "QD 99 LT 01 QD 99 LT 02 Instalacao eletrica CASA 2 fase 1 etapa no3")
+
+
+def test_o_reembolso_nao_vai_para_o_banco():
+    casos = {
+        "Cimento e areia (Reembolso Fulano Modelo)": "QD 99 LT 99 Cimento e areia",
+        "REEMBOLSO FULANO MODELO - CIMENTO E AREIA": "QD 99 LT 99 CIMENTO E AREIA",
+        "Reembolso: Fulano Modelo": "QD 99 LT 99",
+        "Pintura / reembolsos Fulano Modelo": "QD 99 LT 99 Pintura",
+    }
+    for descricao, esperado in casos.items():
+        obtido = hp.descricao_para_colar(_partes(descricao=descricao), INTER)
+        assert obtido == esperado, descricao
+
+
+def test_nf_de_reembolso_nao_vira_nf():
+    """O `achar_doc` já não devolve isso; o HTML também não confia."""
+    r = _partes(nf="REEMBOLSO FULANO MODELO", oc="1234")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 OC 1234"
+
+
+def test_nao_repete_o_centro_de_custo_que_a_descricao_ja_traz():
+    r = _partes(descricao="qd 99 lt 99 - Pintura externa")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Pintura externa"
+    # "QD 9" não é o começo de "QD 99": só palavra inteira conta
+    r = _partes(cc="QD 9", descricao="QD 99 LT 1 pintura")
+    assert hp.descricao_para_colar(r, INTER) == "QD 9 QD 99 LT 1 pintura"
+
+
+def test_agua_e_luz_mantem_a_descricao_e_nao_usam_o_numero_da_fatura():
+    r = _partes(nf="2026000000001", descricao="UC 000000001 - REF SET/2026",
+                utilidade=True)
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 UC 000000001 REF SET 2026"
+    r = _partes(nf="2026000000001", oc="1234", descricao="UC 000000001",
+                utilidade=True)
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 UC 000000001 OC 1234"
+
+
+_ITENS = " ".join(f"ITEM{n:02d}" for n in range(1, 40))
+
+
+def test_sicoob_corta_em_100_e_as_outras_em_140_na_fronteira_de_palavra():
+    r = _partes(descricao=_ITENS)
+    sicoob = hp.descricao_para_colar(r, SICOOB)
+    inter = hp.descricao_para_colar(r, INTER)
+    assert sicoob == "QD 99 LT 99 " + " ".join(f"ITEM{n:02d}" for n in range(1, 13))
+    assert inter == "QD 99 LT 99 " + " ".join(f"ITEM{n:02d}" for n in range(1, 19))
+    assert len(sicoob) == 95 and len(inter) == 137
+    assert hp.descricao_para_colar(r, "conta modelo sicoob") == sicoob
+
+
+_RATEIO = " | ".join(f"QD {n:02d} LT {n:02d}" for n in range(1, 12))
+
+
+def _blocos(ate):
+    return " ".join(f"QD {n:02d} LT {n:02d}" for n in range(1, ate + 1))
+
+
+def test_nf_e_oc_nunca_sao_cortadas_quem_cede_e_o_centro_de_custo():
+    r = _partes(nf="5678", oc="1234", cc=_RATEIO)
+    assert hp.descricao_para_colar(r, SICOOB) == _blocos(7) + " NF 5678 OC 1234"
+
+
+def test_a_descricao_cede_antes_do_centro_de_custo():
+    r = _partes(descricao="Material eletrico", cc=_RATEIO)
+    assert hp.descricao_para_colar(r, INTER) == _blocos(11) + " Material"
+    assert hp.descricao_para_colar(r, SICOOB) == _blocos(8) + " QD"
+
+
+def test_o_html_geral_usa_a_descricao_para_colar():
+    linha = dict(_partes(oc="1234", descricao="Material (Reembolso Fulano Modelo)"),
+                 tipo="Pix", dados="fornecedor@exemplo.com", valor=10.0,
+                 favorecido="Fornecedor Modelo - Ltda.", status="APTO",
+                 conferencia="", obs="", id="1")
+    contas = hp.contas_do_html_geral(relatorio.Resultado({SICOOB: [linha]}, []))
+    entrada = contas[0]["entries"][0]
+    assert entrada["descricao"] == "QD 99 LT 99 OC 1234"
+    assert entrada["favorecido"] == "Fornecedor Modelo - Ltda."

@@ -26,10 +26,13 @@ PERIGOSO = '</script><script>alert("x")</script> <!-- \'aspas\' & "duplas"'
 
 def _linha(favorecido, valor, id_, tipo="Pix", dados="fulano@exemplo.com",
            **extra):
+    # `descricao` é a frase da planilha; o HTML geral monta a do banco com as
+    # peças soltas (`relatorio.partes_no_registro`), que a linha também leva.
     linha = {"tipo": tipo, "dados": dados, "valor": valor,
              "descricao": "OBRA TESTE QD 1 LT 1 NF 10", "favorecido": favorecido,
              "status": "APTO", "conferencia": "(não cruzado)", "obs": "",
-             "id": id_}
+             "id": id_, "centro_custo": "OBRA TESTE QD 1 LT 1", "nf": "10",
+             "oc_da_descricao": "", "descricao_lancamento": "", "utilidade": False}
     linha.update(extra)
     return linha
 
@@ -126,6 +129,8 @@ def test_toda_linha_do_passo_2_aparece_no_geral(tmp_path):
     favorecidos = {e["favorecido"] for c in dados["contas"] for e in c["entries"]}
     assert favorecidos == {"FORNECEDOR UM", "FORNECEDOR DOIS", "FORNECEDOR TRES",
                            "FORNECEDOR QUATRO"}
+    descricoes = {e["descricao"] for c in dados["contas"] for e in c["entries"]}
+    assert descricoes == {"OBRA TESTE QD 1 LT 1 NF 10"}
 
 
 def test_o_total_por_conta_bate_no_centavo(tmp_path):
