@@ -168,16 +168,20 @@ def _palavras(texto) -> list[str]:
     return _PALAVRA.findall(s)
 
 
-#: Pontuação ENTRE dois dígitos, dentro do número da NF ou da OC.
-_PONTUACAO_ENTRE_DIGITOS = re.compile(r"(?<=\d)[^\sA-Za-z0-9]+(?=\d)")
+#: O ponto de milhar dentro do número da NF ou da OC ("1.234").
+_PONTO_ENTRE_DIGITOS = re.compile(r"(?<=\d)\.(?=\d)")
 
 
 def _palavras_do_numero(texto) -> list[str]:
-    """As palavras do nº da NF ou da OC. A pontuação entre dígitos SOME, sem
-    virar espaço: "1.234" partido em "1 234" deixa de bater com a nota e com
-    o casamento do Anexar. O resto segue a regra de `_palavras`."""
-    s = relatorio.sem_acento(str(texto or ""))
-    return _palavras(_PONTUACAO_ENTRE_DIGITOS.sub("", s))
+    """As palavras do nº da NF ou da OC.
+
+    Só o PONTO entre dígitos some sem virar espaço: "1.234" partido em
+    "1 234" deixa de bater com a nota e com o casamento do Anexar. Barra e
+    hífen entre dígitos separam números — "3052/3053" são duas notas, e
+    juntá-las dava "30523053", um número que não existe —, então aqui o hífen
+    colado também vira espaço, ao contrário do centro de custo."""
+    s = _PONTO_ENTRE_DIGITOS.sub("", relatorio.sem_acento(str(texto or "")))
+    return [p for palavra in _palavras(s) for p in palavra.split("-") if p]
 
 
 def _que_cabem(palavras, espaco: int) -> list[str]:
@@ -213,8 +217,9 @@ def descricao_para_colar(registro, conta) -> str:
       que separa palavras incluído; o COLADO entre dígitos, como em
       "LT 10-11", fica), e sem repetir o centro de custo que a descrição já
       traz; no
-      nº da NF e da OC a pontuação entre dígitos some sem virar espaço
-      ("1.234" é "1234", não "1 234");
+      nº da NF e da OC só o ponto entre dígitos some sem virar espaço
+      ("1.234" é "1234", não "1 234"), e barra ou hífen separam números
+      ("3052/3053" é "3052 3053");
     - no tamanho do banco (`limite_da_descricao`), cortando em fronteira de
       palavra. A NF e a OC NUNCA são cortadas — são o que liga o pagamento ao
       documento; quem cede é a descrição do lançamento e, se ainda não

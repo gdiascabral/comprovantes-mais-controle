@@ -245,11 +245,19 @@ def test_nf_e_oc_vao_as_duas():
     assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678 OC 1234"
 
 
-def test_nf_e_oc_nao_se_partem_na_pontuacao_entre_digitos():
+def test_nf_e_oc_nao_se_partem_no_ponto_de_milhar():
     """"NF 1 234" não bate com a nota nem com o casamento do Anexar: dentro do
-    número, a pontuação entre dígitos some sem virar espaço."""
-    r = _partes(nf="1.234", oc="000.123-4")
-    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 1234 OC 0001234"
+    número, o ponto entre dígitos some sem virar espaço."""
+    r = _partes(nf="1.234", oc="000.123")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 1234 OC 000123"
+
+
+def test_barra_e_hifen_entre_numeros_da_nf_separam_dois_numeros():
+    """"3052/3053" são duas notas; juntas viravam "30523053", que não existe."""
+    r = _partes(nf="3052/3053", oc="000.123-4")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 3052 3053 OC 000123 4"
+    r = _partes(nf="3052-3053")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 3052 3053"
 
 
 def test_separador_que_nao_esta_entre_digitos_continua_virando_espaco():
