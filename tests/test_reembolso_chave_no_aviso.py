@@ -19,7 +19,7 @@ no lançamento e no cadastro de Contatos. Três causas em fila:
 Sem rede, sem tkinter, sem Excel. Nenhum dado real: nomes inventados e
 documentos sintéticos que fecham o dígito verificador.
 """
-from pagamentos_dia import reembolso, relatorio
+from pagamentos_dia import reembolso, relatorio, remessa_dia
 
 CPF_DA_PESSOA = "529.982.247-25"
 CPF_DA_PESSOA_DIGITOS = "52998224725"
@@ -114,3 +114,187 @@ def test_com_a_frase_no_texto_a_janela_continua_depois_dela():
                              f"PAGAR PARA FULANA\nCPF {CPF_DA_PESSOA}")
     assert reembolso.documento_do_aviso(files, textos) == CPF_DA_PESSOA_DIGITOS
     assert relatorio.chave_pix_do_aviso(files, textos) == CPF_DA_PESSOA
+
+
+# ==========================================================================
+# 2. O favorecido que é a própria pessoa do aviso
+# ==========================================================================
+def test_o_nome_do_aviso_no_comeco_do_favorecido_e_a_pessoa():
+    files = [aviso()]
+    assert reembolso.pessoa_e_o_favorecido(files, PESSOA)
+    assert reembolso.pessoa_e_o_favorecido(files, "FULANA")
+    assert reembolso.pessoa_e_o_favorecido(files, "  fulana   de tal souza ")
+
+
+def test_acento_e_caixa_nao_separam_a_pessoa_do_favorecido():
+    files = [aviso(filename="PAGAR PARA JOSÉ")]
+    assert reembolso.pessoa_e_o_favorecido(files, "Jose Beltrano Exemplo")
+
+
+def test_comeco_sem_fronteira_de_palavra_nao_e_a_pessoa():
+    """"FULANA" está dentro de "FULANARIA", e não é o mesmo nome."""
+    assert not reembolso.pessoa_e_o_favorecido([aviso()], "Fulanaria Comercio")
+
+
+def test_fornecedor_nao_e_a_pessoa():
+    assert not reembolso.pessoa_e_o_favorecido([aviso()], FORNECEDOR)
+    assert not reembolso.pessoa_e_o_favorecido([aviso()], "")
+
+
+def test_sem_aviso_nao_ha_pessoa_para_comparar():
+    nf = {"filename": "NF 123", "tagName": "", "downloadUrl": URL_AVISO}
+    assert not reembolso.pessoa_e_o_favorecido([nf], PESSOA)
+
+
+def test_favorecido_com_cnpj_no_cadastro_nao_e_a_pessoa():
+    """"PAGAR PARA FULANA" num título da "Fulana Materiais Ltda": o nome bate,
+    mas quem tem CNPJ é empresa — pagar a chave dela é pagar o fornecedor de
+    novo, e não devolver o dinheiro a quem comprou."""
+    contatos = {"FULANA MATERIAIS LTDA": CNPJ_DO_FORNECEDOR_DIGITOS}
+    assert not reembolso.pessoa_e_o_favorecido(
+        [aviso()], "Fulana Materiais Ltda", contatos)
+
+
+def test_homonimos_se_desempatam_pelo_nome_completo_do_favorecido():
+    files = [aviso()]
+    p = reembolso.identificar(files, textos_do_aviso(""), CONTATOS, {}, "",
+                              favorecido=PESSOA)
+    assert p.resolvida
+    assert (p.nome, p.documento, p.origem) == (
+        "FULANA DE TAL SOUZA", CPF_DA_PESSOA_DIGITOS, reembolso.ORIGEM_ERP)
+
+
+def test_favorecido_que_nao_e_a_pessoa_nao_desempata_homonimos():
+    """No título do estacionamento o favorecido é a loja: o nome completo dela
+    não diz nada sobre qual das duas Fulanas é a do aviso."""
+    files = [aviso()]
+    p = reembolso.identificar(files, textos_do_aviso(""), CONTATOS, {}, "",
+                              favorecido=FORNECEDOR)
+    assert not p.resolvida
+
+
+def test_favorecido_pessoa_fora_dos_contatos_nao_cai_no_primeiro_nome():
+    """Se o nome completo não está no cadastro, o primeiro nome NÃO volta a
+    ser procurado: o começo único acharia a homônima, e a chave do lançamento
+    (da pessoa) sairia declarando o documento de outra."""
+    files = [aviso()]
+    contatos = {"FULANA BELTRANA COSTA": CPF_DE_OUTRA_DIGITOS}
+    p = reembolso.identificar(files, textos_do_aviso(""), contatos, {}, "",
+                              favorecido=PESSOA)
+    assert not p.resolvida
+
+
+# ==========================================================================
+# 3. A linha inteira, do lançamento à remessa
+# ==========================================================================
+def lancamento(id_, favorecido, pix_do_lancamento):
+    return {"id": id_, "tradePayableId": f"t{id_}", "paidTo": favorecido,
+            "paidToBankAccount": pix_do_lancamento, "remainingValue": 60.0,
+            "documentNumber": "REEMBOLSO FULANA ",
+            "tradePayableAccount": {"name": CONTA},
+            "costCentreDetails": [{"workName": "ESCRITORIO"}]}
+
+
+def montar(itens, texto_do_aviso, contatos=CONTATOS, pix_reembolso=None):
+    anexos = {f"t{i['id']}": [aviso(url=f"u{i['id']}")] for i in itens}
+    textos = {f"u{i['id']}": texto_do_aviso for i in itens}
+    res = relatorio.montar_registros(itens, anexos, {}, textos,
+                                     participantes=contatos,
+                                     pix_reembolso=pix_reembolso or {},
+                                     cadastro_reembolso={})
+    return {linha["id"]: linha for linha in res.contas[CONTA]}
+
+
+def test_o_caso_do_dia_as_quatro_linhas_ganham_a_chave():
+    """A forma do dia 14/09: duas linhas com a pessoa de favorecido, duas com o
+    estacionamento; o aviso de todas é só `PIX: <cpf>`."""
+    itens = [lancamento("1", FORNECEDOR, f"Pix CNPJ: {CNPJ_DO_FORNECEDOR}"),
+             lancamento("2", PESSOA, CPF_DA_PESSOA),
+             lancamento("3", FORNECEDOR, f"Pix CNPJ: {CNPJ_DO_FORNECEDOR}"),
+             lancamento("4", PESSOA, CPF_DA_PESSOA)]
+    linhas = montar(itens, f"PIX: {CPF_DA_PESSOA}")
+    for id_, linha in linhas.items():
+        assert linha["dados"] == CPF_DA_PESSOA, id_
+        assert linha["status"] == "APTO* (reembolso)", id_
+        assert linha["reembolso_documento"] == CPF_DA_PESSOA_DIGITOS, id_
+        assert not linha["reembolso_impedimento"], id_
+        assert "chave não cadastrada" not in linha["obs"], id_
+    # quem é o favorecido desempata o nome: a pessoa sai com o nome inteiro
+    assert linhas["2"]["reembolso_nome"] == "FULANA DE TAL SOUZA"
+    assert linhas["2"]["reembolso_origem"] == reembolso.ORIGEM_ERP
+    # no título da loja só o aviso diz quem é
+    assert linhas["1"]["reembolso_origem"] == reembolso.ORIGEM_AVISO
+
+
+def test_favorecido_pessoa_sem_chave_no_aviso_paga_a_chave_do_lancamento():
+    """O aviso é uma foto que o OCR não leu: a chave do lançamento é a dela."""
+    linha = montar([lancamento("9", PESSOA, CPF_DA_PESSOA)], "")["9"]
+    assert linha["dados"] == CPF_DA_PESSOA
+    assert linha["status"] == "APTO* (reembolso)"
+    assert "lançamento" in linha["obs"]
+    assert (linha["reembolso_nome"], linha["reembolso_documento"],
+            linha["reembolso_origem"]) == ("FULANA DE TAL SOUZA",
+                                           CPF_DA_PESSOA_DIGITOS,
+                                           reembolso.ORIGEM_ERP)
+    assert not linha["reembolso_impedimento"]
+
+
+def test_favorecido_fornecedor_nunca_empresta_a_chave_dele():
+    """A regra que o ramo do reembolso sempre teve continua de pé: no título
+    da loja, a chave do lançamento é a da LOJA."""
+    linha = montar([lancamento("9", FORNECEDOR,
+                               f"Pix CNPJ: {CNPJ_DO_FORNECEDOR}")], "")["9"]
+    assert linha["dados"] == ""
+    assert CNPJ_DO_FORNECEDOR not in linha["dados"]
+    assert linha["status"] == "ATENÇÃO — sem dados de pgto"
+    assert "chave não cadastrada" in linha["obs"]
+    assert not linha["reembolso_documento"]
+
+
+def test_aviso_e_lancamento_com_chaves_diferentes_viram_divergencia():
+    linha = montar([lancamento("9", PESSOA, CPF_DE_OUTRA)],
+                   f"PIX: {CPF_DA_PESSOA}")["9"]
+    assert linha["status"] == "ATENÇÃO — chave do reembolso divergente"
+    assert linha["dados"] == CPF_DA_PESSOA          # o aviso é o papel do dia
+    assert CPF_DA_PESSOA in linha["obs"] and CPF_DE_OUTRA in linha["obs"]
+
+
+def test_aviso_e_lancamento_com_a_mesma_chave_escrita_diferente_confirmam():
+    linha = montar([lancamento("9", PESSOA, CPF_DA_PESSOA_DIGITOS)],
+                   f"PIX: {CPF_DA_PESSOA}")["9"]
+    assert linha["status"] == "APTO* (reembolso)"
+    assert "próprio aviso" in linha["obs"]
+    assert "lançamento" in linha["obs"]
+
+
+def test_cadastro_local_e_lancamento_com_chaves_diferentes_viram_divergencia():
+    linha = montar([lancamento("9", PESSOA, CPF_DE_OUTRA)], "",
+                   pix_reembolso={"FULANA": CPF_DA_PESSOA})["9"]
+    assert linha["status"] == "ATENÇÃO — chave do reembolso divergente"
+    assert CPF_DA_PESSOA in linha["obs"] and CPF_DE_OUTRA in linha["obs"]
+
+
+def test_lancamento_sem_cara_de_chave_nao_vira_chave():
+    """"VER COMENTÁRIO" no campo da chave é recado, não chave."""
+    linha = montar([lancamento("9", PESSOA, "VER COMENTARIO")], "")["9"]
+    assert linha["dados"] == ""
+
+
+def test_reembolso_resolvido_pelo_lancamento_sai_na_remessa_declarando_a_pessoa():
+    linhas = montar([lancamento("9", PESSOA, CPF_DA_PESSOA)], "")
+    c, = remessa_dia.preparar({CONTA: list(linhas.values())},
+                              participantes=CONTATOS)[CONTA]
+    assert c.pode, c.impedimento
+    assert c.favorecido == "FULANA DE TAL SOUZA"
+    assert c.documento_favorecido == CPF_DA_PESSOA_DIGITOS
+    assert c.reembolso and not c.marcado            # continua pedindo o clique
+
+
+def test_reembolso_sem_pessoa_continua_impedido_na_remessa():
+    """O que a remessa decide para quem NÃO se resolveu não muda."""
+    linhas = montar([lancamento("9", FORNECEDOR,
+                                f"Pix CNPJ: {CNPJ_DO_FORNECEDOR}")], "")
+    c, = remessa_dia.preparar({CONTA: list(linhas.values())},
+                              participantes=CONTATOS)[CONTA]
+    assert not c.pode
+    assert "CPF de quem recebe não foi encontrado" in c.impedimento
