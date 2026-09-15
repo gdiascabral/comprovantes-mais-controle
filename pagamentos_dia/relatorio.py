@@ -292,12 +292,10 @@ def escolher_pdf_do_boleto(files) -> dict | None:
 _NAO_VARRER = re.compile(
     r"comprovante|contrato|medi[çc][ãa]o|qr\s*code|pagar\s*para", re.I)
 
-#: O texto de quem JÁ PAGOU: comprovante de banco, de Pix, de caixa. O boleto
-#: em si diz "local de pagamento", "comprovante de entrega" e "autenticação
-#: mecânica" — e nenhuma destas.
-_PROVA_DE_PAGAMENTO = re.compile(
-    r"comprovante\s+de\s+(?:pagamento|transa)|pagamento\s+(?:efetuado|realizado)|"
-    r"valor\s+pago|data\s+d[oe]\s+pagamento|pix\s+enviado", re.I)
+#: O texto de quem JÁ PAGOU (`regras.PROVA_DE_PAGAMENTO`): o MESMO regex que o
+#: `reembolso` usa para recusar comprovante renomeado como aviso. Duas cópias
+#: discordariam sobre o que é prova de pagamento.
+_PROVA_DE_PAGAMENTO = regras.PROVA_DE_PAGAMENTO
 
 
 #: Anexo que é IMAGEM: é assim que o QR Code do Pix costuma chegar — a guia do
@@ -506,10 +504,15 @@ def classificar_anexos(files) -> str:
     if not files:
         return "SEM_ANEXO"
     s = " | ".join(chave(_rotulo(f)) for f in files)
+    # "Pagar para" ANTES de "autorizado": o aviso diz QUEM recebe, e a
+    # autorização só autoriza. Na ordem inversa, o título com os dois anexos
+    # saía "APTO (autorizado)" com a chave do FORNECEDOR — marcado na remessa
+    # — e o reembolso da pessoa nunca era lido. E antes de NF, pelo mesmo
+    # motivo: reembolso manda.
+    if re.search(r"pagar\s*_?\s*para", s):
+        return "PAGAR_PARA"
     if "autorizado" in s:
         return "AUTORIZADO"
-    if re.search(r"pagar\s*_?\s*para", s):      # antes de NF: reembolso manda
-        return "PAGAR_PARA"
     if re.search(r"nfe|danfe|nota fiscal", s):
         return "NF"
     if re.search(r"boleto|blt", s):
@@ -544,7 +547,7 @@ def pix_do_reembolso(files, item: dict, mapa: dict) -> str:
 _PAGAR_PARA = reembolso.PAGAR_PARA
 
 
-def chave_pix_do_aviso(files, textos: dict) -> str:
+def chave_pix_do_aviso(files, textos: dict, urls_ocr=()) -> str:
     """O número escrito DENTRO do aviso "PAGAR PARA", logo abaixo do nome.
 
     Quem monta o aviso já escreve ali o CPF ou o celular de quem recebe. O
@@ -560,8 +563,11 @@ def chave_pix_do_aviso(files, textos: dict) -> str:
     leitores: a chave (esta função) e o documento de quem recebe. Fossem dois
     recortes, bastaria um mudar de tamanho para os dois passarem a falar de
     pedaços diferentes do mesmo papel.
+
+    `urls_ocr` (os anexos lidos por OCR) segue para a janela: sem a frase no
+    texto, papel de OCR não entrega chave (`reembolso.janelas_do_aviso`).
     """
-    for janela in reembolso.janelas_do_aviso(files, textos):
+    for janela in reembolso.janelas_do_aviso(files, textos, urls_ocr):
         achado = chave_pix_por_padrao(janela)
         if achado and _chave_confiavel(achado):
             return achado
@@ -609,6 +615,7 @@ def mesma_chave(a: str, b: str) -> bool:
 _OC_NO_NOME = re.compile(
     r"\b(?:oc|ordem\s+de\s+compra)\s*[:\-–]?\s*n?[ºo°]?\s*(\d{2,7})\b", re.I)
 _DOC_NO_NOME = re.compile(r"\bN[ºo°F]\s*[:\-]?\s*(\d{2,10})\b", re.I)
+_REEMBOLSO = re.compile(r"REEMBOLSO", re.I)
 
 _UTILIDADES = re.compile(
     r"sanesc|saneago|equatorial|enel|celg|cemig|copasa|caesb|energisa|"
@@ -645,14 +652,50 @@ def achar_oc(item: dict, files, comentario: str = "", overview=None) -> str:
 
 
 def achar_doc(item: dict, files, overview=None) -> str:
+    """O número da nota: o campo do lançamento, o nome do anexo, o detalhe.
+
+    "REEMBOLSO FULANO" no campo do documento não é número de nota — é quem
+    preencheu avisando que não há nota. O filtro vale para os DOIS campos de
+    texto livre: enquanto só o do lançamento o tinha, o do detalhe (que traz
+    o mesmo texto) devolvia a frase inteira, a descrição saía "NF REEMBOLSO
+    FULANO" e a conferência procurava uma nota que não existe. O nome do
+    anexo não precisa do filtro: dali só se tiram DÍGITOS, e o número ao lado
+    de "NF" num arquivo de reembolso é a nota da compra reembolsada.
+    Quem precisa saber que o documento DECLARA reembolso pergunta a
+    `documento_declara_reembolso`."""
     doc = (item.get("documentNumber") or "").strip()
-    if doc and not re.search(r"REEMBOLSO", doc, re.I):
+    if doc and not _REEMBOLSO.search(doc):
         return doc
     for f in files:
         m = _DOC_NO_NOME.search(f.get("filename") or "")
         if m:
             return m.group(1)
-    return str((overview or {}).get("documentNumber") or "").strip()
+    doc = str((overview or {}).get("documentNumber") or "").strip()
+    return "" if _REEMBOLSO.search(doc) else doc
+
+
+def documento_declara_reembolso(item: dict, overview=None) -> bool:
+    """O campo do documento (no lançamento ou no detalhe) diz "REEMBOLSO"?
+
+    Não é número de nota, mas é compra documentada: quem lançou avisou que
+    a despesa foi paga por alguém e será reembolsada. Até 14/09/2026 isso
+    entrava pela porta errada — o `achar_doc` devolvia a frase como NF — e
+    era o que deixava o título sem boleto ser pago pela chave do cadastro."""
+    return any(_REEMBOLSO.search(str(d or "")) for d in
+               (item.get("documentNumber"), (overview or {}).get("documentNumber")))
+
+
+def quem_o_documento_diz_reembolsar(item: dict, overview=None) -> str:
+    """O nome escrito depois de "REEMBOLSO" no campo do documento, ou "".
+
+    É o único lugar em que o lançamento sem aviso "PAGAR PARA" diz de quem é
+    o dinheiro, e ele sumiu da descrição quando a frase deixou de sair como
+    NF — por isso volta pela Obs (`montar_registros`)."""
+    for doc in (item.get("documentNumber"), (overview or {}).get("documentNumber")):
+        m = re.search(r"REEMBOLS\w*[\s:\-–—]*(.*)", str(doc or ""), re.I)
+        if m:
+            return re.sub(r"\s+", " ", m.group(1)).strip(" -–—:")
+    return ""
 
 
 def centro_de_custo(item: dict) -> str:
@@ -667,7 +710,15 @@ def centro_de_custo(item: dict) -> str:
     return " | ".join(dict.fromkeys(n for n in nomes if n))
 
 
-def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> str:
+def partes_da_descricao(item: dict, files, comentario: str = "",
+                        overview=None) -> tuple[str, str, str]:
+    """(centro de custo, nº da nota, nº da OC) — as peças da descrição.
+
+    Existe separada da `monta_descricao` porque a descrição tem DOIS leitores
+    que a querem de formas diferentes: a planilha e a remessa leem a frase
+    montada, e o HTML dos pagamentos monta outra, limpa e curta, para colar no
+    campo de descrição do banco. As duas saem destas mesmas peças; ajustar
+    "documento é a OC" em dois lugares seria o começo de duas respostas."""
     cc = centro_de_custo(item)
     doc = achar_doc(item, files, overview)
     oc = achar_oc(item, files, comentario, overview)
@@ -678,6 +729,37 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> s
     if doc and regras.documento_e_a_oc(doc, oc):
         oc = oc or regras.oc_no_documento(doc) or re.sub(r"\D", "", doc)
         doc = ""
+    return cc, doc, oc
+
+
+def partes_no_registro(item: dict, files, comentario: str = "",
+                       overview=None) -> dict:
+    """As chaves que a linha leva para o HTML montar a descrição do banco.
+
+    `oc_da_descricao` não é o `oc` da linha: aquele é o `achar_oc` cru, que a
+    remessa já usa, e este é o que a descrição mostra (inclui a OC escrita no
+    campo do documento). `descricao_lancamento` vai crua — limpar e enxugar é
+    do HTML, que é quem sabe o limite de cada banco."""
+    _, doc, oc = partes_da_descricao(item, files, comentario, overview)
+    return {"nf": doc, "oc_da_descricao": oc,
+            "descricao_lancamento": (item.get("description") or "").strip(),
+            "utilidade": eh_utilidade(item)}
+
+
+_MEDICAO = re.compile(r"-\s*(\d+)\s*-\s*Medi[çc][ãa]o:\s*(\d+)")
+
+
+def contrato_e_medicao(descricao) -> tuple[str, str] | None:
+    """(contrato, medição) da descrição de mão de obra, ou None.
+
+    Um lugar só para o padrão: a planilha (`monta_descricao`) e o HTML dos
+    pagamentos escrevem a mesma forma curta, "C <contrato> M <medição>"."""
+    m = _MEDICAO.search(descricao or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
+def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> str:
+    cc, doc, oc = partes_da_descricao(item, files, comentario, overview)
 
     # Água/energia: o que identifica é a descrição (UC, mês, casa). O "número
     # da NF" ali é o número da fatura e não ajuda ninguém a conferir.
@@ -693,10 +775,9 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> s
     if oc:
         partes.append(f"OC {oc}")
     if not doc and not oc:
-        m = re.search(r"-\s*(\d+)\s*-\s*Medi[çc][ãa]o:\s*(\d+)",
-                      item.get("description") or "")
-        if m:
-            partes += [f"C {m.group(1)}", f"M {m.group(2)}"]
+        medicao = contrato_e_medicao(item.get("description"))
+        if medicao:
+            partes += [f"C {medicao[0]}", f"M {medicao[1]}"]
         elif item.get("description"):
             # 40 caracteres cortavam exatamente onde mora o que distingue as
             # linhas ("... - CASA 1/2/3"), deixando-as idênticas na planilha.
@@ -905,7 +986,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      incluir=(), excluir=(), pix_reembolso=None,
                      urls_ocr=(), regras_fornecedor=None,
                      ids_nao_confirmados=(), participantes=None,
-                     cadastro_reembolso=None) -> Resultado:
+                     cadastro_reembolso=None, anexos_nao_lidos=()) -> Resultado:
     """Transforma lançamentos do ERP em linhas de planilha.
 
     `anexos`             {tradePayableId: [anexo]}
@@ -921,13 +1002,18 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                          quem recebe um REEMBOLSO; o documento do fornecedor
                          continua sendo resolvido na remessa
     `cadastro_reembolso` o `reembolso.carregar()` do arquivo local
+    `anexos_nao_lidos`   `downloadUrl` dos anexos que deviam ter sido lidos e
+                         não foram (download que falhou). A linha cujo título
+                         tem um deles sai "ATENÇÃO — anexo não lido": a forma
+                         de pagar dela foi decidida sem o documento
     """
     pix_reembolso = pix_reembolso or {}
     regras_forn = regras_fornecedor or {}
     ids_nao_confirmados = {str(i) for i in ids_nao_confirmados}
+    anexos_nao_lidos = set(anexos_nao_lidos or ())
     registros, omitidos = defaultdict(list), []
 
-    for item in lancamentos:
+    for ordem, item in enumerate(lancamentos):
         conta = nome_da_conta(item)
         files = anexos.get(str(item.get("tradePayableId"))) or []
         overview = overviews.get(str(item.get("id"))) or {}
@@ -954,7 +1040,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 "favorecido": favorecido,
                 "motivo": "conta fora do recorte — regra de conta ignorada "
                           "(APENAS LANÇAMENTO/AJUSTE, ERRADA) ou filtro de "
-                          "contas da tela"})
+                          "contas da tela",
+                # Para a janela "Confirmar o que entra" (`confirmacao.py`),
+                # que NÃO lista esta linha: conta ignorada não é pendência a
+                # corrigir no ERP. Uma chave, e não o começo do `motivo`,
+                # porque texto de recado se reescreve sem ninguém lembrar de
+                # quem casava por ele. O Excel lê só as chaves de sempre.
+                "id": str(item.get("id") or ""),
+                "fora_do_recorte": True})
             continue
 
         do_item = [textos.get(f.get("downloadUrl") or "") for f in files]
@@ -964,9 +1057,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
 
         # A compra está documentada? É o que decide se um título sem boleto
         # anexado pode ser pago pela chave do cadastro (abaixo) ou se é ruído.
+        # O documento que DECLARA reembolso conta: ele deixou de ser NF na
+        # descrição (não é número de nota), mas continua sendo compra
+        # documentada — sem esta linha, o título que antes era pago pela chave
+        # do cadastro passaria a cair em NÃO ENTRARAM.
         nf = achar_doc(item, files, overview)
         oc = achar_oc(item, files, coment, overview)
-        tem_nf_ou_oc = bool(oc or (nf and not regras.documento_e_a_oc(nf, oc)))
+        tem_nf_ou_oc = bool(oc or (nf and not regras.documento_e_a_oc(nf, oc))
+                            or documento_declara_reembolso(item, overview))
 
         avisos, obs, chave_divergente = [], "", False
         #: Quem recebe, quando o anexo é um aviso "PAGAR PARA". Fica None nas
@@ -994,18 +1092,59 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if cls == "PAGAR_PARA":
             tipo = "Pix"
             tem_documento = True
-            do_aviso = chave_pix_do_aviso(files, textos)
+            do_aviso = chave_pix_do_aviso(files, textos, urls_ocr)
             do_mapa = pix_do_reembolso(files, item, pix_reembolso)
+            # A chave do LANÇAMENTO só é olhada quando o favorecido pode ser a
+            # própria pessoa do aviso (nos Contatos com CPF — falha fechada).
+            # Nas outras linhas ela é a chave do fornecedor, e pagá-la é pagar
+            # a loja de novo em vez de devolver o dinheiro a quem comprou — a
+            # regra de sempre deste ramo. E mesmo ali ela só CONFIRMA a do
+            # aviso ou a do cadastro local: sozinha, pode ser a chave da
+            # HOMÔNIMA que o título escolheu, e aí não paga ninguém (abaixo).
+            # CNPJ nunca: reembolso é para pessoa.
+            do_lancamento = ""
+            if pago_para and reembolso.pessoa_e_o_favorecido(files, favorecido,
+                                                             participantes):
+                candidata = extrair_chave_pix(pago_para)
+                if (parece_chave_pix(candidata)
+                        and regras.tipo_de_chave_pix(pago_para) in (
+                            regras.CHAVE_CPF, regras.CHAVE_TELEFONE,
+                            regras.CHAVE_EMAIL, regras.CHAVE_ALEATORIA)
+                        and len(regras.documento_valido(candidata)) != 14):
+                    do_lancamento = candidata
+            confere = " (confere com a do lançamento)" if do_lancamento else ""
             if do_aviso and do_mapa and not mesma_chave(do_aviso, do_mapa):
                 dados, chave_divergente = do_aviso, True
                 obs = (f"Reembolso — a chave do AVISO ({do_aviso}) difere da "
                        f"cadastrada ({do_mapa}); confirmar antes de pagar")
+            elif do_aviso and do_lancamento and not mesma_chave(do_aviso, do_lancamento):
+                dados, chave_divergente = do_aviso, True
+                obs = (f"Reembolso — a chave do AVISO ({do_aviso}) difere da do "
+                       f"lançamento ({do_lancamento}), cujo favorecido é a própria "
+                       "pessoa; confirmar antes de pagar")
             elif do_aviso:
                 dados = do_aviso
-                obs = "Reembolso — chave lida do próprio aviso, NÃO o pix do cadastro"
+                obs = ("Reembolso — chave lida do próprio aviso, NÃO o pix do "
+                       f"cadastro{confere}")
+            elif do_mapa and do_lancamento and not mesma_chave(do_mapa, do_lancamento):
+                dados, chave_divergente = do_mapa, True
+                obs = (f"Reembolso — a chave CADASTRADA ({do_mapa}) difere da do "
+                       f"lançamento ({do_lancamento}), cujo favorecido é a própria "
+                       "pessoa; confirmar antes de pagar")
             elif do_mapa:
                 dados = do_mapa
-                obs = "Reembolso — pagar a chave do aviso, NÃO o pix do cadastro"
+                obs = f"Reembolso — pagar a chave do aviso, NÃO o pix do cadastro{confere}"
+            elif do_lancamento:
+                # Fica VISÍVEL na obs e fora dos dados: sem chave, a linha sai
+                # em ATENÇÃO, o "Copiar" do HTML não a entrega pronta e a
+                # remessa recusa (MOTIVO_SEM_CHAVE) — quem paga à mão confere
+                # antes. Nos dados, com a identidade saindo do título, seria o
+                # "PAGAR PARA FULANA" pago à homônima sem ninguém olhar.
+                dados = ""
+                obs = (f"Reembolso para '{nome_do_reembolso(files) or '?'}' — o "
+                       f"lançamento traz a chave {do_lancamento}, do cadastro do "
+                       f"favorecido ({favorecido}), não confirmada pelo aviso "
+                       "nem pelo cadastro local; conferir de quem é antes de pagar")
             else:
                 dados = ""
                 obs = (f"Reembolso para '{nome_do_reembolso(files) or '?'}' — chave não "
@@ -1015,7 +1154,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # chave); isto descobre PARA QUEM, que é o que o segmento B tem de
             # declarar. A chave entra como conferente, nunca como fonte.
             pessoa = reembolso.identificar(files, textos, participantes,
-                                           cadastro_reembolso, dados)
+                                           cadastro_reembolso, dados,
+                                           favorecido=favorecido,
+                                           urls_ocr=urls_ocr)
             if pessoa.resolvida:
                 avisos.append(f"Reembolso para {pessoa.nome} "
                               f"(documento: {pessoa.origem})")
@@ -1154,7 +1295,17 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if motivo:
             omitidos.append({"conta": conta, "tipo": tipo, "valor": valor,
                              "descricao": descricao, "favorecido": favorecido,
-                             "motivo": motivo})
+                             "motivo": motivo,
+                             # O que a janela "Confirmar o que entra" mostra
+                             # do NÃO APTO, para o dono achar o título no ERP
+                             # e corrigir antes de gerar: o id (de que
+                             # lançamento é a linha), OC, centro de custo, o
+                             # que se conseguiu apurar como forma de pagar e
+                             # os avisos. A aba NÃO ENTRARAM não os lê.
+                             "id": str(item.get("id") or ""),
+                             "oc": oc, "centro_custo": centro_de_custo(item),
+                             "dados": dados, "obs": obs,
+                             "conferencia": conferencia})
             continue
 
         status = {"SEM_ANEXO": "ATENÇÃO — sem anexo",
@@ -1162,6 +1313,42 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                   "PAGAR_PARA": "APTO* (reembolso)"}.get(cls, "APTO")
         if not dados:
             status = "ATENÇÃO — sem dados de pgto"
+        # O documento diz REEMBOLSO e não há aviso "PAGAR PARA": o favorecido
+        # é quem vendeu (a loja do cupom), e a chave é a do cadastro DELE — mas
+        # o dinheiro pode ser de quem pagou do bolso. Até 14/09/2026 o único
+        # sinal disso era o "NF REEMBOLSO FULANA" na descrição, que era
+        # defeito e saiu; sem este alarme a linha ia APTA e MARCADA para a
+        # remessa (`remessa_dia.preparar` só marca status "APTO…").
+        # Não alarma quando o nome depois de REEMBOLSO é o PRÓPRIO favorecido,
+        # pela régua do `reembolso.pessoa_e_o_favorecido` (nome igual ou começo
+        # em fronteira de palavra, e CPF que fecha nos Contatos — sem Contatos,
+        # falha fechada e alarma). A régua lê o nome de um aviso "PAGAR PARA",
+        # então o nome do documento entra como um: usar a régua, e não uma
+        # cópia dela. Vem ANTES do `divergiu`, para "documento não bate" — a
+        # contradição concreta — ganhar do alarme; a Obs guarda os dois.
+        if (cls != "PAGAR_PARA" and not item.get("paid")
+                and documento_declara_reembolso(item, overview)):
+            quem = quem_o_documento_diz_reembolsar(item, overview)
+            e_o_favorecido = bool(quem) and reembolso.pessoa_e_o_favorecido(
+                [{"filename": f"PAGAR PARA {quem}"}], favorecido, participantes)
+            if not e_o_favorecido:
+                status = "ATENÇÃO — documento declara reembolso"
+                obs = " · ".join(filter(None, [
+                    f"o documento declara REEMBOLSO{' ' + quem if quem else ''}: "
+                    "conferir se o favorecido é mesmo quem recebe", obs]))
+        # Anexo que devia ser lido e não baixou: a forma de pagar desta linha
+        # saiu SEM ele. NF e boleto no mesmo PDF, sem o texto, viram o Pix do
+        # cadastro — APTO, verde e marcado para a remessa, e o boleto pago de
+        # novo. ATENÇÃO faz a remessa nascer desmarcada, e a Obs diz qual.
+        nao_lidos = [f for f in files
+                     if (f.get("downloadUrl") or "") in anexos_nao_lidos]
+        if nao_lidos and not item.get("paid"):
+            status = "ATENÇÃO — anexo não lido"
+            nomes = ", ".join(f"'{(f.get('filename') or '?').strip()}'"
+                              for f in nao_lidos)
+            obs = " · ".join(filter(None, [
+                f"anexo não lido: {nomes} — a forma de pagar desta linha foi "
+                "decidida sem ele; abrir o anexo no ERP antes de pagar", obs]))
         if divergiu:
             status = "ATENÇÃO — documento não bate"
         if chave_divergente:
@@ -1187,6 +1374,18 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # de escrever — a mesma armadilha que o cabeçalho do arquivo avisa.
             "oc": oc,
             "centro_custo": centro_de_custo(item),
+            # As peças da descrição, soltas, para o HTML dos pagamentos montar a
+            # descrição de colar no banco (limpa e no tamanho do banco) sem
+            # reparsear a frase acima: `nf`, `oc_da_descricao`,
+            # `descricao_lancamento` e `utilidade`.
+            **partes_no_registro(item, files, coment, overview),
+            # A posição do lançamento na lista que chegou aqui. Os filtros do
+            # passo 1 e a seleção de contas não reordenam nada, então é a
+            # ordem em que a API devolveu — e `mc_api.listar_a_pagar` pergunta
+            # pela URL que a TELA de pagamentos manda, trocando só filtros e
+            # paginação. É a segunda chave da ordem das linhas: o dono confere
+            # o HTML e a planilha com o sistema aberto ao lado.
+            "ordem": ordem,
             # Não vão para a planilha: são para a remessa (`remessa_dia.py`).
             # O `id` é a única volta do arquivo de retorno até o lançamento,
             # e `parcial` decide se o título ainda pode ir como boleto — o
@@ -1215,7 +1414,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         })
 
     for regs in registros.values():
-        regs.sort(key=lambda r: (r["tipo"], r["favorecido"]))
+        # Boleto antes de Pix (a mesma comparação por `tipo` de sempre) e,
+        # dentro do tipo, o que aparece por ÚLTIMO no sistema vem primeiro —
+        # pedido do dono em 14/09/2026. Até ali a segunda chave era o
+        # favorecido em ordem alfabética, e a lista não conversava com a
+        # tela que ele tem aberta ao lado para conferir.
+        regs.sort(key=lambda r: (r["tipo"], -r["ordem"]))
     omitidos.sort(key=lambda o: (o["conta"], o["motivo"], o["favorecido"]))
     return Resultado(dict(sorted(registros.items())), omitidos)
 

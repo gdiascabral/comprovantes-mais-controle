@@ -45,6 +45,39 @@ PAGAR_PARA = re.compile(r"pagar\s*_?\s*para", re.I)
 #: certo. É a mesma janela que o `relatorio` usa para achar a chave Pix.
 TAMANHO_DA_JANELA = 300
 
+#: O rótulo do aviso que é só `PIX: <chave>`, com o "PAGAR PARA" morando
+#: apenas no nome do arquivo (o caso de 14/09/2026). Exige os dois-pontos e a
+#: palavra PIX: "CHAVE DE ACESSO" (a DANFE) e "via PIX" (o recibo) não são
+#: rótulo de chave. O tipo declarado é aceito menos CNPJ — reembolso é para
+#: PESSOA, e "PIX CNPJ:" num papel sem a frase é a chave da loja.
+#: O grupo pega a linha do rótulo ou, vazia, a linha de baixo.
+ROTULO_DA_CHAVE = re.compile(
+    r"(?<!\w)(?:chave\s+)?pix(?:\s+(?:cpf|celular|telefone|e-?mail|aleat\w*))?"
+    r"\s*:[ \t]*(?:\r?\n[ \t]*)?([^\r\n]*)", re.I)
+
+#: O papel sem a frase que NÃO é aviso, mesmo renomeado "PAGAR PARA": o
+#: comprovante (a chave nele é de quem RECEBEU o pagamento), a nota fiscal e a
+#: DANFE (a chave de acesso tem 44 dígitos com pedaços de cara de celular), o
+#: recibo e o cupom. Um aviso que é só a chave não escreve nenhuma destas.
+_OUTRO_DOCUMENTO = re.compile(
+    r"comprovante|transfer[eê]ncia|transa[cç][aã]o|recebedor|\bdanfe\b|"
+    r"chave\s+de\s+acesso|nota\s+fiscal|\bnfc?-?e\b|\brecibo\b|\bcupom\b", re.I)
+
+#: O PRIMEIRO item depois do rótulo, casado no começo e fechado por espaço ou
+#: fim de linha — nunca uma janela varrida por padrão. Varrer uma janela de
+#: 300 caracteres com o padrão de CNPJ antes do de CPF foi o que fez a revisão
+#: achar o CNPJ da loja declarado como chave E como documento da pessoa. CNPJ
+#: não está na lista, e onze dígitos crus passam por aqui para o `relatorio`
+#: decidir (`_chave_confiavel`), como qualquer outra chave de aviso.
+_ITENS_DE_CHAVE = (
+    re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),
+    re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I),
+    re.compile(r"\d{3}\.?\d{3}\.?\d{3}-?\d{2}"),
+    re.compile(r"(?:\+?55\s?)?\(?\d{2}\)?\s?9?\d{4}-?\s?\d{4}"),
+)
+_TIPOS_DE_PESSOA = frozenset((regras.CHAVE_CPF, regras.CHAVE_TELEFONE,
+                              regras.CHAVE_EMAIL, regras.CHAVE_ALEATORIA))
+
 # --------------------------------------------------------------------------
 # Impedimentos — o texto vai para a tela e para o "ficou de fora"
 # --------------------------------------------------------------------------
@@ -113,21 +146,104 @@ def nome_do_aviso(files) -> str:
     return ""
 
 
-def janelas_do_aviso(files, textos: dict):
+def pessoa_e_o_favorecido(files, favorecido: str,
+                          participantes: dict | None = None) -> bool:
+    """O favorecido do LANÇAMENTO é a própria pessoa do aviso?
+
+    O reembolso nasceu para o caso em que não é — o título é da loja, e o
+    aviso manda o dinheiro para quem pagou a loja do próprio bolso. Mas há
+    lançamento feito direto no nome da pessoa, com a chave DELA no
+    `paidToBankAccount`, e o aviso anexado assim mesmo. Ali duas coisas que o
+    ramo do reembolso recusa por desenho passam a ser a resposta certa: o nome
+    completo do favorecido é o nome da pessoa (desempata os homônimos que o
+    primeiro nome do aviso não desempata), e a chave do lançamento é a dela.
+
+    **Igual, ou começo em fronteira de palavra**: "FULANA" é o começo de
+    "FULANA DE TAL SOUZA", e não de "FULANARIA COMERCIO".
+
+    **Falha FECHADA: só é a pessoa quem está nos Contatos com CPF que fecha.**
+    "PAGAR PARA FULANA" num título da "Fulana Materiais Ltda" bate pelo nome,
+    e pagar a chave dela seria pagar o fornecedor de novo em vez de devolver o
+    dinheiro a quem comprou. Cadastro que não carregou (`{}`) ou nome ambíguo
+    que saiu do mapa não provam nada — e, sem prova, empresa passaria por
+    pessoa. E mesmo sendo pessoa, pode ser a HOMÔNIMA do aviso: por isso isto
+    só abre a porta, e quem confirma é o aviso (ver `identificar` e o ramo do
+    reembolso no `relatorio`).
+    """
+    nome = util.norm_espaco(nome_do_aviso(files))
+    alvo = util.norm_espaco(favorecido)
+    if not nome or not alvo:
+        return False
+    if alvo != nome and not alvo.startswith(nome + " "):
+        return False
+    return len(regras.documento_valido((participantes or {}).get(alvo) or "")) == 11
+
+
+def _item_da_chave(texto: str) -> str:
+    """A chave do aviso que NÃO escreve a frase — ou "" quando não há certeza.
+
+    Exatamente um rótulo (`ROTULO_DA_CHAVE`), e dele só o primeiro item, que
+    tem de ser chave de PESSOA pelo `regras.tipo_de_chave_pix` — a mesma régua
+    que classifica a chave no resto do app. Papel com cara de outro documento
+    é recusado inteiro antes de qualquer leitura.
+    """
+    if regras.PROVA_DE_PAGAMENTO.search(texto) or _OUTRO_DOCUMENTO.search(texto):
+        return ""
+    rotulos = ROTULO_DA_CHAVE.findall(texto)
+    if len(rotulos) != 1:
+        return ""
+    linha = rotulos[0].strip()
+    for padrao in _ITENS_DE_CHAVE:
+        m = padrao.match(linha)
+        if m and (m.end() == len(linha) or linha[m.end()] in " \t,;"):
+            item = m.group(0)
+            return item if regras.tipo_de_chave_pix(item) in _TIPOS_DE_PESSOA else ""
+    return ""
+
+
+def janelas_do_aviso(files, textos: dict, urls_ocr=()):
     """O trecho de cada aviso logo depois do "PAGAR PARA".
 
     Existe como função própria porque DOIS leitores dependem da mesma janela —
     a chave Pix (no `relatorio`) e o documento (aqui). Fossem duas janelas,
     bastaria uma mudar de tamanho para os dois passarem a falar de pedaços
     diferentes do mesmo papel.
+
+    **O aviso nem sempre escreve a frase.** Há aviso cujo texto é só
+    `PIX: <cpf>`, e a frase está no nome do arquivo. Exigir a frase no texto
+    deixava os dois leitores sem janela — e a linha saía "chave não
+    cadastrada; abrir o aviso" com a chave escrita no próprio aviso.
+
+    Sem a frase, a "janela" é só a CHAVE (`_item_da_chave`), e só em anexo
+    cujo NOME DO ARQUIVO diz "pagar para": é de lá que sai o nome da pessoa
+    (`nome_do_aviso`), e a etiqueta, que vem de lista fixa, pode estar em
+    qualquer anexo do título, a nota fiscal inclusive. Não é uma janela de
+    300 caracteres depois de um "pix" qualquer: renomeado "PAGAR PARA", o
+    recibo, o comprovante e a DANFE entregavam o CNPJ da loja, a chave de
+    quem recebeu ou dígitos da chave de acesso — e os dois leitores os
+    declaravam como chave e como documento da pessoa.
+
+    **E só com camada de texto.** O caminho sem a frase separa o aviso do
+    comprovante renomeado por PALAVRA ("comprovante", "valor pago"...), e o
+    OCR de uma foto escreve "Comprovamte" e "Valor pagu" — não há lista de
+    erros de OCR que feche isso. `urls_ocr` são os anexos cujo texto veio de
+    OCR (o mesmo conjunto que o `montar_registros` já recebe); para eles, só
+    vale a janela depois da frase escrita no papel, como sempre valeu.
+
+    Com a frase no texto, nada muda — vale o que vem depois dela.
     """
     for f in files or ():
         if not eh_aviso(f):
             continue
-        texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
+        url = f.get("downloadUrl") or ""
+        texto = (textos or {}).get(url) or ""
         m = PAGAR_PARA.search(texto)
         if m:
             yield texto[m.end():m.end() + TAMANHO_DA_JANELA]
+        elif url not in (urls_ocr or ()) and PAGAR_PARA.search(f.get("filename") or ""):
+            item = _item_da_chave(texto)
+            if item:
+                yield item
 
 
 _CPF_CNPJ_ROTULADO = re.compile(r"\bCP\s*F\b|\bCNPJ\b", re.I)
@@ -165,7 +281,7 @@ def _documentos_em(texto: str) -> list[str]:
     return ordenados
 
 
-def documento_do_aviso(files, textos: dict) -> str:
+def documento_do_aviso(files, textos: dict, urls_ocr=()) -> str:
     """O CPF/CNPJ de quem recebe, escrito DENTRO do aviso.
 
     Quem monta o aviso já escreve ali o documento; o que faltava era lê-lo.
@@ -179,7 +295,7 @@ def documento_do_aviso(files, textos: dict) -> str:
       pagamento cai no impedimento. Escolher um dos dois é escolher para quem
       o dinheiro vai.
     """
-    for janela in janelas_do_aviso(files, textos):
+    for janela in janelas_do_aviso(files, textos, urls_ocr):
         achados = _documentos_em(janela)
         if len(achados) == 1:
             return achados[0]
@@ -289,7 +405,8 @@ def _do_erp(nome: str, participantes: dict) -> tuple[str, str]:
 # A decisão
 # --------------------------------------------------------------------------
 def identificar(files, textos: dict, participantes: dict | None = None,
-                cadastro: dict | None = None, chave: str = "") -> Pessoa:
+                cadastro: dict | None = None, chave: str = "",
+                favorecido: str = "", urls_ocr=()) -> Pessoa:
     """Quem recebe este reembolso — ou por que não dá para dizer.
 
     A ordem das fontes vai da mais DECLARADA para a menos: cadastro local
@@ -300,16 +417,38 @@ def identificar(files, textos: dict, participantes: dict | None = None,
     fosse, uma chave que é um CPF válido confirmaria a si mesma. Ela é
     CONFERENTE — sendo um documento e não sendo o que resolvemos, o dinheiro
     e o arquivo apontariam para pessoas diferentes, e aí ninguém paga nada.
+
+    `favorecido` é o `paidTo` do lançamento. Quando ele pode ser a pessoa do
+    aviso (`pessoa_e_o_favorecido`: começa com o nome dela e está nos Contatos
+    com CPF), o nome COMPLETO dele desempata dois cadastros que começam igual
+    — **mas só se o aviso confirmar**: o documento lido no aviso, o do
+    cadastro local ou a `chave` (que vem de um dos dois) tem de ser o MESMO
+    CPF que os Contatos têm para o favorecido. Sem isso, "PAGAR PARA FULANA"
+    num título da HOMÔNIMA a declararia com o CPF dela, e o começo do nome não
+    decide para quem vai. Não confirmando, vale a busca de sempre, pelo
+    primeiro nome.
+
+    `urls_ocr` vai para a leitura do documento no aviso: texto de OCR só
+    conta pela janela depois da frase (ver `janelas_do_aviso`).
     """
     nome = nome_do_aviso(files)
     if not nome:
         return Pessoa(impedimento=MOTIVO_SEM_NOME)
 
+    local = _do_cadastro_local(nome, cadastro or {})
+    erp = _do_erp(nome, participantes or {})
+    do_aviso = documento_do_aviso(files, textos, urls_ocr)
+    if pessoa_e_o_favorecido(files, favorecido, participantes):
+        completo = util.norm_espaco(favorecido)
+        do_favorecido = regras.documento_valido(participantes[completo])
+        if do_favorecido in {local[1], do_aviso, regras.documento_valido(chave)}:
+            erp = (completo, do_favorecido)
+
     achados = []                       # [(documento, nome oficial, origem)]
     for oficial, doc, origem in (
-        (*_do_cadastro_local(nome, cadastro or {}), ORIGEM_CADASTRO_LOCAL),
-        (*_do_erp(nome, participantes or {}), ORIGEM_ERP),
-        (util.norm_espaco(nome), documento_do_aviso(files, textos), ORIGEM_AVISO),
+        (*local, ORIGEM_CADASTRO_LOCAL),
+        (*erp, ORIGEM_ERP),
+        (util.norm_espaco(nome), do_aviso, ORIGEM_AVISO),
     ):
         if oficial and doc:
             achados.append((doc, oficial, origem))
