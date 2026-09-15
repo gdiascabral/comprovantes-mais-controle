@@ -727,6 +727,18 @@ def partes_no_registro(item: dict, files, comentario: str = "",
             "utilidade": eh_utilidade(item)}
 
 
+_MEDICAO = re.compile(r"-\s*(\d+)\s*-\s*Medi[çc][ãa]o:\s*(\d+)")
+
+
+def contrato_e_medicao(descricao) -> tuple[str, str] | None:
+    """(contrato, medição) da descrição de mão de obra, ou None.
+
+    Um lugar só para o padrão: a planilha (`monta_descricao`) e o HTML dos
+    pagamentos escrevem a mesma forma curta, "C <contrato> M <medição>"."""
+    m = _MEDICAO.search(descricao or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
 def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> str:
     cc, doc, oc = partes_da_descricao(item, files, comentario, overview)
 
@@ -744,10 +756,9 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> s
     if oc:
         partes.append(f"OC {oc}")
     if not doc and not oc:
-        m = re.search(r"-\s*(\d+)\s*-\s*Medi[çc][ãa]o:\s*(\d+)",
-                      item.get("description") or "")
-        if m:
-            partes += [f"C {m.group(1)}", f"M {m.group(2)}"]
+        medicao = contrato_e_medicao(item.get("description"))
+        if medicao:
+            partes += [f"C {medicao[0]}", f"M {medicao[1]}"]
         elif item.get("description"):
             # 40 caracteres cortavam exatamente onde mora o que distingue as
             # linhas ("... - CASA 1/2/3"), deixando-as idênticas na planilha.

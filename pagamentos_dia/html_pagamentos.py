@@ -198,7 +198,8 @@ def descricao_para_colar(registro, conta) -> str:
     - o centro de custo sempre NA FRENTE: é por ele que o Anexar casa o
       comprovante com o lançamento;
     - NF e OC → "CC NF x OC y"; só OC → "CC OC y"; só NF → "CC NF x"; nenhuma
-      das duas → "CC " + a descrição do lançamento;
+      das duas → "CC " + a descrição do lançamento, ou "CC C x M y" quando ela
+      é de medição de mão de obra (a forma curta que a planilha já mostra);
     - água e luz continuam como na planilha (CC + descrição + OC): ali o
       "número da NF" é o da fatura e não identifica nada;
     - sem menção de reembolso, sem acento e sem caractere especial (hífen
@@ -216,6 +217,12 @@ def descricao_para_colar(registro, conta) -> str:
     nf = [] if utilidade else _palavras_do_numero(r.get("nf"))
     oc = _palavras_do_numero(r.get("oc_da_descricao"))
     fixos = (["NF", *nf] if nf else []) + (["OC", *oc] if oc else [])
+    medicao = (None if utilidade or fixos
+               else relatorio.contrato_e_medicao(r.get("descricao_lancamento")))
+    if medicao:
+        # Mão de obra: a forma curta da planilha, que também não se corta.
+        fixos = ["C", *_palavras_do_numero(medicao[0]),
+                 "M", *_palavras_do_numero(medicao[1])]
 
     texto = []
     if utilidade or not fixos:

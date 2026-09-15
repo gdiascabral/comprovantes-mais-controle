@@ -208,6 +208,17 @@ def test_sem_nf_nem_oc_vai_a_descricao_do_lancamento():
     assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Material de obra"
 
 
+def test_mao_de_obra_sem_nf_nem_oc_sai_contrato_e_medicao():
+    """A forma curta que a planilha já mostra: o dono pediu sempre enxugar."""
+    r = _partes(descricao="Servico de pintura - 4412 - Medição: 7")
+    assert hp.descricao_para_colar(r, SICOOB) == "QD 99 LT 99 C 4412 M 7"
+
+
+def test_mao_de_obra_com_nf_continua_saindo_pela_nf():
+    r = _partes(nf="5678", descricao="Servico de pintura - 4412 - Medição: 7")
+    assert hp.descricao_para_colar(r, SICOOB) == "QD 99 LT 99 NF 5678"
+
+
 def test_sem_nada_sobra_o_centro_de_custo():
     assert hp.descricao_para_colar(_partes(), INTER) == "QD 99 LT 99"
     assert hp.descricao_para_colar(_partes(cc=""), INTER) == ""
