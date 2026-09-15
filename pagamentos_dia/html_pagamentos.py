@@ -308,6 +308,25 @@ def descricao_para_colar(registro, conta) -> str:
     return " ".join(cc + texto + fixos)
 
 
+def quem_recebe(registro) -> str:
+    """O que vai na coluna do favorecido do HTML geral.
+
+    No reembolso ("PAGAR PARA") o dinheiro vai para a PESSOA, não para o
+    fornecedor do lançamento, e o HTML é o caminho de pagar à mão: com o
+    fornecedor na coluna, quem paga por aqui erra o destinatário. É a mesma
+    forma da coluna QUEM RECEBE da janela de confirmação
+    (`confirmacao.Linha.quem_recebe`, que é propriedade de uma linha da
+    janela e por isso não se chama daqui) — "<pessoa ou ?> (reembolso de
+    <fornecedor>)" — e um teste confere que as duas continuam iguais. Cada
+    nome passa por `para_colar` sozinho, porque ele tira os parênteses."""
+    r = registro or {}
+    favorecido = para_colar(r.get("favorecido"))
+    if r.get("reembolso"):
+        return (f"{para_colar(r.get('reembolso_nome')) or '?'} "
+                f"(reembolso de {favorecido or '?'})")
+    return favorecido
+
+
 def dado_para_colar(tipo, dados) -> str:
     """O que o botão "Copiar" do dado de pagamento põe na área de transferência.
 
@@ -389,7 +408,7 @@ def contas_do_html_geral(resultado) -> list[dict]:
                 "valor": valor_para_colar(r.get("valor")),
                 "centavos": centavos(r.get("valor")),
                 "descricao": descricao_para_colar(r, nome),
-                "favorecido": para_colar(r.get("favorecido")),
+                "favorecido": quem_recebe(r),
                 "status": str(r.get("status") or ""),
                 "conferencia": str(r.get("conferencia") or ""),
                 "obs": str(r.get("obs") or ""),

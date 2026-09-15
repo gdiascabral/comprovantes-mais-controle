@@ -425,6 +425,45 @@ def test_a_descricao_cede_antes_do_centro_de_custo():
     assert hp.descricao_para_colar(r, SICOOB) == _blocos(8) + " QD"
 
 
+def _linha_do_html(**mudancas):
+    return dict(dict(_partes(descricao="Material"), tipo="Pix",
+                     dados="fulana@exemplo.com", valor=10.0, status="APTO",
+                     conferencia="", obs="", id="1",
+                     favorecido="Fornecedor Modelo Ltda", reembolso=False,
+                     reembolso_nome=""), **mudancas)
+
+
+def test_no_html_geral_o_reembolso_mostra_quem_recebe():
+    """O HTML é o caminho de pagar à mão: com o fornecedor na coluna, quem
+    paga pelo HTML manda o dinheiro do reembolso para a pessoa errada."""
+    linhas = [_linha_do_html(reembolso=True, reembolso_nome="FULANA MODELO"),
+              _linha_do_html(id="2", reembolso=True, reembolso_nome=""),
+              _linha_do_html(id="3")]
+    contas = hp.contas_do_html_geral(relatorio.Resultado({INTER: linhas}, []))
+    assert [e["favorecido"] for e in contas[0]["entries"]] == [
+        "FULANA MODELO (reembolso de Fornecedor Modelo Ltda)",
+        "? (reembolso de Fornecedor Modelo Ltda)",
+        "Fornecedor Modelo Ltda"]
+
+
+def test_o_quem_recebe_do_html_e_o_da_janela_de_confirmacao():
+    """A mesma forma da coluna QUEM RECEBE (`confirmacao.Linha.quem_recebe`):
+    duas telas dizendo quem recebe de dois jeitos é o começo de discordarem."""
+    from dataclasses import MISSING, fields
+    from pagamentos_dia import confirmacao
+    obrigatorios = {f.name: None for f in fields(confirmacao.Linha)
+                    if f.default is MISSING and f.default_factory is MISSING}
+    for reembolso, nome, favorecido in ((True, "FULANA MODELO", "Fornecedor Modelo"),
+                                        (True, "", "Fornecedor Modelo"),
+                                        (True, "FULANA MODELO", ""),
+                                        (False, "", "Fornecedor Modelo")):
+        janela = confirmacao.Linha(**dict(obrigatorios, favorecido=favorecido,
+                                          reembolso=reembolso, reembolso_nome=nome))
+        registro = {"favorecido": favorecido, "reembolso": reembolso,
+                    "reembolso_nome": nome}
+        assert hp.quem_recebe(registro) == janela.quem_recebe
+
+
 def test_o_html_geral_usa_a_descricao_para_colar():
     linha = dict(_partes(oc="1234", descricao="Material (Reembolso Fulano Modelo)"),
                  tipo="Pix", dados="fornecedor@exemplo.com", valor=10.0,
