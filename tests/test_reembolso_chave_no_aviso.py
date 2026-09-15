@@ -16,6 +16,11 @@ no lançamento e no cadastro de Contatos. Três causas em fila:
    chave dela no `paidToBankAccount` — e o ramo do reembolso ignora esse campo
    de propósito, porque na maioria das vezes ele é a chave do FORNECEDOR.
 
+O conserto abre caminhos novos para achar a chave, e a revisão mostrou que
+cada um deles, aberto demais, paga a pessoa errada. Por isso metade destes
+testes é do lado de FORA: o recibo, o comprovante e a DANFE renomeados como
+aviso, a homônima no título, o cadastro de Contatos que não carregou.
+
 Sem rede, sem tkinter, sem Excel. Nenhum dado real: nomes inventados e
 documentos sintéticos que fecham o dígito verificador.
 """
@@ -29,8 +34,10 @@ CPF_DE_OUTRA = "111.444.777-35"
 CPF_DE_OUTRA_DIGITOS = "11144477735"
 CNPJ_DO_FORNECEDOR = "11.222.333/0001-81"
 CNPJ_DO_FORNECEDOR_DIGITOS = "11222333000181"
+CELULAR = "(62) 99999-8888"
 
 PESSOA = "Fulana de Tal Souza"
+HOMONIMA = "Fulana Beltrana Costa"
 FORNECEDOR = "Estacionamento Modelo Ltda"
 
 #: `{nome normalizado: documento}`, como `mc_api.listar_participantes` devolve.
@@ -54,27 +61,38 @@ def textos_do_aviso(texto, url=URL_AVISO):
     return {url: texto}
 
 
+def leitura(texto):
+    """(chave, documento) que os dois leitores tiram do aviso com este texto."""
+    files, textos = [aviso()], textos_do_aviso(texto)
+    return (relatorio.chave_pix_do_aviso(files, textos),
+            reembolso.documento_do_aviso(files, textos))
+
+
 # ==========================================================================
 # 1. O aviso que é só a chave
 # ==========================================================================
-def test_aviso_so_com_a_chave_tem_a_chave_lida():
-    files = [aviso()]
-    textos = textos_do_aviso(f"PIX: {CPF_DA_PESSOA}")
-    assert relatorio.chave_pix_do_aviso(files, textos) == CPF_DA_PESSOA
+def test_aviso_so_com_a_chave_tem_a_chave_e_o_documento_lidos():
+    assert leitura(f"PIX: {CPF_DA_PESSOA}") == (CPF_DA_PESSOA,
+                                                CPF_DA_PESSOA_DIGITOS)
 
 
-def test_aviso_so_com_a_chave_tem_o_documento_lido():
-    files = [aviso()]
-    textos = textos_do_aviso(f"PIX: {CPF_DA_PESSOA}")
-    assert reembolso.documento_do_aviso(files, textos) == CPF_DA_PESSOA_DIGITOS
+def test_rotulo_com_o_tipo_e_chave_na_linha_de_baixo_tambem_valem():
+    assert leitura(f"PIX CPF: {CPF_DA_PESSOA}")[0] == CPF_DA_PESSOA
+    assert leitura(f"CHAVE PIX:\n{CPF_DA_PESSOA}")[0] == CPF_DA_PESSOA
+
+
+def test_celular_depois_do_rotulo_e_chave_e_nao_e_documento():
+    assert leitura(f"CHAVE PIX: {CELULAR}") == (CELULAR, "")
+
+
+def test_vale_o_primeiro_item_depois_do_rotulo():
+    """O que vem depois da chave, na mesma linha, não entra na chave."""
+    assert leitura(f"PIX: {CPF_DA_PESSOA} (conta da Fulana)")[0] == CPF_DA_PESSOA
 
 
 def test_aviso_so_com_a_chave_de_digito_trocado_continua_recusado():
     """A foto lida por OCR não ganha confiança só por mudar de caminho."""
-    files = [aviso()]
-    textos = textos_do_aviso(f"PIX: {CPF_DV_ERRADO}")
-    assert relatorio.chave_pix_do_aviso(files, textos) == ""
-    assert reembolso.documento_do_aviso(files, textos) == ""
+    assert leitura(f"PIX: {CPF_DV_ERRADO}") == ("", "")
 
 
 def test_anexo_que_nao_e_aviso_nao_abre_janela():
@@ -99,21 +117,57 @@ def test_recibo_renomeado_como_aviso_nao_empresta_o_cnpj_da_loja():
     """O papel do aviso sem a frase e sem rótulo de chave é outro documento —
     o recibo da loja renomeado, por exemplo. Ler o começo dele pegaria o CNPJ
     DA LOJA como chave e como documento de quem recebe o reembolso."""
+    assert leitura(f"ESTACIONAMENTO MODELO\nCNPJ {CNPJ_DO_FORNECEDOR}\n"
+                   "VALOR 60,00") == ("", "")
+
+
+def test_cnpj_nunca_e_chave_nem_documento_de_quem_recebe_o_reembolso():
+    """Sem a frase no texto, reembolso é para PESSOA: CNPJ depois do rótulo é
+    a loja, e a leitura antiga (padrão de CNPJ antes do de CPF, numa janela de
+    300) o declarava como chave e como documento, APTO e aceito na remessa."""
+    assert leitura(f"PIX: {CNPJ_DO_FORNECEDOR}") == ("", "")
+    assert leitura(f"PIX: {CNPJ_DO_FORNECEDOR_DIGITOS}") == ("", "")
+    assert leitura(f"PIX CNPJ: {CNPJ_DO_FORNECEDOR}") == ("", "")
+
+
+def test_cnpj_da_loja_perto_do_rotulo_nao_vira_chave():
+    assert leitura(f"PAGAMENTO VIA PIX\nCNPJ {CNPJ_DO_FORNECEDOR}\n"
+                   "VALOR 60,00") == ("", "")
+    assert leitura(f"CHAVE PIX:\nCNPJ {CNPJ_DO_FORNECEDOR}") == ("", "")
+
+
+def test_comprovante_de_pix_renomeado_nao_empresta_a_chave_de_quem_recebeu():
+    """O comprovante traz a chave de QUEM RECEBEU o pagamento — a loja, ou
+    qualquer um. Renomeado "PAGAR PARA", ele não diz para quem é o reembolso."""
+    assert leitura("Comprovante de Pix\nPix enviado\n"
+                   "Chave Pix: loja@exemplo.com\nValor R$ 60,00") == ("", "")
+    assert leitura("Comprovante de transferência\n"
+                   f"Chave Pix: {CPF_DE_OUTRA}\nValor pago R$ 60,00") == ("", "")
+
+
+def test_danfe_renomeada_nao_abre_janela():
+    """"CHAVE DE ACESSO" não é chave Pix, e os 44 dígitos dela têm pedaços
+    com cara de celular. Nota fiscal renomeada é recusada inteira, até com
+    uma chave Pix escrita no rodapé."""
+    danfe = ("DANFE\nDOCUMENTO AUXILIAR DA NOTA FISCAL ELETRONICA\n"
+             "CHAVE DE ACESSO\n5226 0911 2223 3300 0181 5500 1000 0012 3410 "
+             "0001 2345")
+    assert leitura(danfe) == ("", "")
+    assert leitura(f"{danfe}\nPIX: {CELULAR}") == ("", "")
     files = [aviso()]
-    textos = textos_do_aviso(f"ESTACIONAMENTO MODELO\nCNPJ {CNPJ_DO_FORNECEDOR}\n"
-                             "VALOR 60,00")
-    assert relatorio.chave_pix_do_aviso(files, textos) == ""
-    assert reembolso.documento_do_aviso(files, textos) == ""
+    assert list(reembolso.janelas_do_aviso(files, textos_do_aviso(danfe))) == []
+
+
+def test_dois_rotulos_de_chave_nao_se_resolvem_no_chute():
+    assert leitura(f"PIX: {CPF_DA_PESSOA}\nPIX: {CPF_DE_OUTRA}") == ("", "")
 
 
 def test_com_a_frase_no_texto_a_janela_continua_depois_dela():
     """Nada muda para o aviso que escreve a frase: vale o que vem DEPOIS dela,
     e não um "PIX" que apareça antes."""
-    files = [aviso()]
-    textos = textos_do_aviso(f"LOJA PIX: {CPF_DE_OUTRA}\n"
-                             f"PAGAR PARA FULANA\nCPF {CPF_DA_PESSOA}")
-    assert reembolso.documento_do_aviso(files, textos) == CPF_DA_PESSOA_DIGITOS
-    assert relatorio.chave_pix_do_aviso(files, textos) == CPF_DA_PESSOA
+    assert leitura(f"LOJA PIX: {CPF_DE_OUTRA}\n"
+                   f"PAGAR PARA FULANA\nCPF {CPF_DA_PESSOA}") == (
+        CPF_DA_PESSOA, CPF_DA_PESSOA_DIGITOS)
 
 
 # ==========================================================================

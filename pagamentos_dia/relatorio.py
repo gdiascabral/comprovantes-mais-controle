@@ -292,12 +292,10 @@ def escolher_pdf_do_boleto(files) -> dict | None:
 _NAO_VARRER = re.compile(
     r"comprovante|contrato|medi[çc][ãa]o|qr\s*code|pagar\s*para", re.I)
 
-#: O texto de quem JÁ PAGOU: comprovante de banco, de Pix, de caixa. O boleto
-#: em si diz "local de pagamento", "comprovante de entrega" e "autenticação
-#: mecânica" — e nenhuma destas.
-_PROVA_DE_PAGAMENTO = re.compile(
-    r"comprovante\s+de\s+(?:pagamento|transa)|pagamento\s+(?:efetuado|realizado)|"
-    r"valor\s+pago|data\s+d[oe]\s+pagamento|pix\s+enviado", re.I)
+#: O texto de quem JÁ PAGOU (`regras.PROVA_DE_PAGAMENTO`): o MESMO regex que o
+#: `reembolso` usa para recusar comprovante renomeado como aviso. Duas cópias
+#: discordariam sobre o que é prova de pagamento.
+_PROVA_DE_PAGAMENTO = regras.PROVA_DE_PAGAMENTO
 
 
 #: Anexo que é IMAGEM: é assim que o QR Code do Pix costuma chegar — a guia do
