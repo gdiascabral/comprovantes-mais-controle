@@ -159,8 +159,9 @@ def test_a_chave_do_codigo_e_a_publica():
 def _servidor_instavel(respostas: list, corpos: list | None = None):
     """HTTP local que responde `respostas[i]` (e `corpos[i]`) na i-ésima
     chamada, repetindo a última depois de esgotar a lista. `contador` guarda
-    quantas chamadas chegaram e por qual método — é o que o teste confere."""
-    contador = {"chamadas": 0, "metodos": []}
+    quantas chamadas chegaram, por qual método e com que corpo — é o que o
+    teste confere."""
+    contador = {"chamadas": 0, "metodos": [], "corpos": []}
     corpos = corpos or [b""] * len(respostas)
 
     class _Handler(http.server.BaseHTTPRequestHandler):
@@ -168,6 +169,20 @@ def _servidor_instavel(respostas: list, corpos: list | None = None):
             i = min(contador["chamadas"], len(respostas) - 1)
             contador["chamadas"] += 1
             contador["metodos"].append(self.command)
+            # LER o corpo do pedido não é zelo: é o que impede este teste de
+            # falhar sozinho. Quem encerra a conexão é o `socketserver`
+            # (`shutdown_request`: `shutdown(SHUT_WR)` e `close()`), e fechar
+            # socket com dado ainda na fila de RECEPÇÃO manda RST no lugar do
+            # FIN — o cliente, que às vezes ainda não leu nem a linha de
+            # status, recebe WinError 10053, o `Retry` não repete POST (é a
+            # política que este arquivo prova) e `rest._chamar` traduz tudo
+            # em `SemRede`, justamente onde o teste exige `RecusadoPeloBanco`.
+            # Medido em 400 POSTs por braço: 2,5% de falhas sem ler os 21
+            # bytes do corpo, 4,8% com 32 KB, 0% lendo — ANTES ou DEPOIS de
+            # responder, porque o que conta é a fila vazia no fechamento.
+            # Por isso o GET nunca falhou: pedido sem corpo não deixa fila.
+            contador["corpos"].append(
+                self.rfile.read(int(self.headers.get("Content-Length") or 0)))
             corpo = corpos[i]
             self.send_response(respostas[i])
             self.send_header("Content-Type", "application/json")
@@ -228,6 +243,13 @@ def test_post_nao_repete_5xx(monkeypatch):
             rest.inserir("empresa", "tok", [{"nome_pasta": "X"}])
         assert contador["chamadas"] == 1
         assert contador["metodos"] == ["POST"]
+        # O corpo chegou INTEIRO ao servidor. Prova o que o POST levou, e —
+        # de graça — é o que segura de pé o `rfile.read` do dublê: sem ele
+        # esta linha falha, e sem ele o teste voltava a cair em ~1 de cada 30
+        # rodadas do arquivo, com `SemRede` no lugar de `RecusadoPeloBanco`
+        # (ver o comentário em `_servidor_instavel`).
+        assert [json.loads(c or b"null") for c in contador["corpos"]] == [
+            [{"nome_pasta": "X"}]]
     finally:
         servidor.shutdown()
 
