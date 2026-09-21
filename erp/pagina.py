@@ -44,9 +44,12 @@ adaptador nenhum.
 """
 from __future__ import annotations
 
+import base64
+
 from . import hosts
 
-__all__ = ["JS_FETCH_JSON", "JS_POST_JSON", "TransportePagina"]
+__all__ = ["JS_FETCH_JSON", "JS_POST_JSON", "JS_PUT_JSON", "JS_PUT_BINARIO",
+           "TransportePagina"]
 
 #: GET de dentro da página logada: mesma origem, mesmos cookies, mesmo
 #: user-agent da tela. O servidor não distingue do uso normal.
@@ -68,6 +71,33 @@ JS_POST_JSON = """async ({url, headers, corpo}) => {
   try { dados = await r.json(); } catch (e) { dados = null; }
   if (!r.ok) return {__erro: r.status, __corpo: dados};
   return dados;
+}"""
+
+#: PUT com corpo JSON. Mesma regra do POST quanto ao `content-type`.
+JS_PUT_JSON = """async ({url, headers, corpo}) => {
+  const r = await fetch(url, {
+    method: 'PUT',
+    headers: Object.assign({'content-type': 'application/json'}, headers),
+    body: JSON.stringify(corpo),
+  });
+  let dados = null;
+  try { dados = await r.json(); } catch (e) { dados = null; }
+  if (!r.ok) return {__erro: r.status, __corpo: dados};
+  return dados;
+}"""
+
+#: PUT cru do binário numa URL pré-assinada (S3). SÓ `Content-Type`: qualquer
+#: outro cabeçalho — `authorization` em primeiro lugar — faz a assinatura da
+#: URL não bater e o S3 recusar. Estava em `anexar/mc_api._JS_PUT_S3`; mora
+#: aqui para haver UMA cópia da regra de transporte (o mesmo motivo de
+#: `aportes/erp_sessao.py` existir).
+JS_PUT_BINARIO = """async ({url, b64, contentType}) => {
+  const bin = atob(b64);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  const r = await fetch(url, {method: 'PUT',
+    headers: {'Content-Type': contentType}, body: buf});
+  return {status: r.status};
 }"""
 
 
@@ -148,3 +178,20 @@ class TransportePagina:
     #: navegador. Manter o nome antigo faz o consumidor mais fácil de migrar
     #: não precisar de adaptador nenhum.
     _buscar = buscar
+
+    def trocar(self, url: str, corpo: dict):
+        """PUT. Devolve o JSON, ou `{"__erro": status, "__corpo": …}`."""
+        return self.pagina.evaluate(
+            JS_PUT_JSON,
+            {"url": url, "headers": self.cabecalhos_para(url), "corpo": corpo})
+
+    def subir(self, url: str, dados: bytes,
+              content_type: str = "application/pdf"):
+        """PUT do binário cru na URL pré-assinada. Devolve `{"status": …}`.
+
+        Sem cabeçalho de autenticação, de propósito: a assinatura está na URL.
+        """
+        return self.pagina.evaluate(
+            JS_PUT_BINARIO,
+            {"url": url, "b64": base64.b64encode(dados).decode(),
+             "contentType": content_type})

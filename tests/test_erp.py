@@ -451,6 +451,33 @@ def test_o_transporte_de_pagina_serve_o_baixa_erp_sem_adaptador():
     assert transporte._buscar.__func__ is transporte.buscar.__func__
 
 
+
+def test_o_put_manda_content_type_json_e_pode_ser_sobrescrito():
+    """Mesma regra do POST: o `content-type` vem primeiro no Object.assign,
+    para que um cabeçalho capturado da página possa trocá-lo."""
+    falsa = _PaginaFalsa({"id": "tp-1"})
+    transporte = pagina.TransportePagina(falsa, {"authorization": "Bearer x"})
+
+    transporte.trocar(f"{hosts.LEGACY}/trade-payables/tp-1", {"value": 10})
+
+    js, arg = falsa.chamadas[-1]
+    assert "method: 'PUT'" in js
+    assert arg["corpo"] == {"value": 10}
+    assert arg["headers"]["authorization"] == "Bearer x"
+
+
+def test_o_put_binario_nao_manda_authorization():
+    """A URL pré-assinada do S3 recusa a requisição que traz `authorization`:
+    a assinatura está na própria URL (`anexar/mc_api._JS_PUT_S3`)."""
+    falsa = _PaginaFalsa({"status": 200})
+    transporte = pagina.TransportePagina(falsa, {"authorization": "Bearer x"})
+
+    transporte.subir("https://s3.exemplo.invalido/assinada", b"%PDF-1.4 ...")
+
+    _js, arg = falsa.chamadas[-1]
+    assert "authorization" not in {k.lower() for k in arg.get("headers", {})}
+    assert arg["contentType"] == "application/pdf"
+
 # ------------------------------------------------------------------- endereços
 def test_os_hosts_sao_os_tres_conhecidos():
     assert hosts.host_de(hosts.ACESSAR) == hosts.HOST_ACESSAR

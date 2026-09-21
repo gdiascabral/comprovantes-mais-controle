@@ -23,7 +23,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qsl, urlencode
 
 from . import config
-from erp.pagina import JS_POST_JSON
+from erp.pagina import JS_POST_JSON, JS_PUT_BINARIO
 
 import util
 
@@ -92,17 +92,9 @@ _JS_FETCH_ANEXOS = """async ({ base, ids, headers }) => {
 }"""
 
 
-#: PUT cru do binário na URL pré-assinada do S3. SÓ `Content-Type`: qualquer
-#: cabeçalho do ERP (authorization, company-id) quebra a assinatura da URL. O
-#: binário chega em base64 porque `page.evaluate` só transporta JSON. Mesmo
-#: padrão que subiu 29 anexos em produção em 28/08/2026
-#: (`agua_energia/coletor/lancar_mc.py`, `_JS_PUT_S3`).
-_JS_PUT_S3 = """async ({ url, b64, contentType }) => {
-  const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-  const r = await fetch(url, { method: 'PUT',
-    headers: { 'Content-Type': contentType }, body: bin });
-  return { status: r.status, body: (await r.text()).slice(0, 500) };
-}"""
+#: Mantido com o nome antigo para os usos locais; a regra mora em
+#: `erp/pagina.JS_PUT_BINARIO`, para não haver duas cópias.
+_JS_PUT_S3 = JS_PUT_BINARIO
 
 
 #: Os três desfechos possíveis da consulta de anexos de UM pagamento.
