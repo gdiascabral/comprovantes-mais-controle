@@ -187,7 +187,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 
 ## Arquitetura
 
-O mapa módulo a módulo saiu daqui em 14/09/2026 e mora em `.claude/rules/`, um
+O mapa módulo a módulo saiu daqui em 21/09/2026 e mora em `.claude/rules/`, um
 arquivo por pasta, com o texto intacto. Cada um carrega sozinho quando o Claude
 lê um arquivo daquela pasta. Numa sessão aberta fora do repositório (ou se não
 carregar), **leia o arquivo da pasta antes de mexer nela**.
@@ -494,7 +494,7 @@ DECISÃO (o resto está nos commits):
 
 ## Cadastro na nuvem e NSA das remessas
 
-Movido em 14/09/2026 para `.claude/rules/nuvem-e-remessas.md`, que carrega com `nuvem/`,
+Movido em 21/09/2026 para `.claude/rules/nuvem-e-remessas.md`, que carrega com `nuvem/`,
 `supabase/`, `cnab240/` e a remessa/retorno do dia.
 
 ## 02/09/2026 — a consolidação (relato)

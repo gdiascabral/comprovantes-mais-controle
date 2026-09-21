@@ -262,9 +262,17 @@ class MCApi:
                 if "authorization" in {k.lower() for k in h}:
                     self._req_pagos = (u, h)
             elif "/attachments" in u and "maiscontrole" in u:
+                base = u.split("?")[0]
+                # Só a LISTAGEM ensina o endereço da listagem. O `fetch` do
+                # próprio app também passa por aqui, e até 14/09/2026 o POST
+                # `/attachments/v2/batch` virava a "base": a prova do anexo
+                # seguinte consultava `/v2/batch?entityIds=…` e dava
+                # nao_confirmado para um arquivo que tinha subido.
+                if not base.rstrip("/").endswith("/attachments/v2"):
+                    return
                 h = {k: v for k, v in req.headers.items() if k.lower() in _H_ANEXO}
                 if "authorization" in {k.lower() for k in h}:
-                    self._req_anexos = (u.split("?")[0], h)
+                    self._req_anexos = (base, h)
         except Exception as e:
             if not self._diag_avisado:   # loga só a 1ª vez (evita spam)
                 self._diag_avisado = True

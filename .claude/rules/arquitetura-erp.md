@@ -13,7 +13,7 @@ paths:
 
 # Arquitetura: erp/ (falar com o Mais Controle)
 
-> Trecho da seção "Arquitetura", movido do `CLAUDE.md` em 14/09/2026 sem mudar uma palavra.
+> Trecho da seção "Arquitetura", movido do `CLAUDE.md` em 21/09/2026 sem mudar uma palavra.
 > Carrega sozinho quando o Claude lê um arquivo dos caminhos acima.
 > Mudou o código? Atualize AQUI — este é o lugar deste texto agora.
 

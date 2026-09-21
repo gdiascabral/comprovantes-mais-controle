@@ -92,6 +92,38 @@ class ClienteFalso:
         self.page = pagina
 
 
+class RequisicaoFalsa:
+    def __init__(self, url, headers, method):
+        self.url, self.headers, self.method = url, headers, method
+
+
+class PaginaQueOuve(PaginaFalsa):
+    """Como o Playwright de verdade: TODA chamada feita de dentro da página --
+    inclusive o `fetch` do próprio app -- dispara o evento `request`. A
+    `PaginaFalsa` não dispara, e foi por isso que o defeito de 14/09/2026
+    passou pelos testes."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.ouvintes = []
+
+    def on(self, evento, funcao):
+        if evento == "request":
+            self.ouvintes.append(funcao)
+
+    def _avisar(self, metodo, url, headers):
+        for f in self.ouvintes:
+            f(RequisicaoFalsa(url, headers, metodo))
+
+    def _get(self, url, headers):
+        self._avisar("GET", url, headers)
+        return super()._get(url, headers)
+
+    def _post(self, url, headers, corpo):
+        self._avisar("POST", url, headers)
+        return super()._post(url, headers, corpo)
+
+
 def _api(pagina, com_credencial=True):
     api = mc_api.MCApi(ClienteFalso(pagina))
     if com_credencial:
@@ -213,6 +245,24 @@ def test_sem_credencial_nao_toca_na_pagina(pdf):
 
 
 # ------------------------------------------ subiu e não confirmou: a tela NÃO tenta
+
+def test_dois_comprovantes_seguidos_saem_os_dois_anexados(pdf, tmp_path):
+    """O defeito de 14/09/2026: 40 casados com certeza, resultado alternado
+    nao_confirmado / anexado. O ouvinte de requisições guardava como endereço
+    da listagem QUALQUER URL com `/attachments` -- inclusive o POST
+    `/attachments/v2/batch` do próprio app --, e a prova seguinte consultava
+    `/v2/batch?entityIds=…`: o arquivo subia e o app dizia que não."""
+    pag = PaginaQueOuve()
+    api = _api(pag)
+    segundo = tmp_path / "678,90 - Fornecedor B - 0209.pdf"
+    segundo.write_bytes(b"%PDF-1.4 outro comprovante " + b"y" * 700)
+
+    assert api.anexar_por_api(PAID, pdf, log=lambda _m: None) == "anexado"
+    assert api.anexar_por_api("paid-0002", segundo, log=lambda _m: None) == "anexado"
+    listagens = [c[1] for c in pag.chamadas
+                 if c[0] == "GET" and "entityIds=" in c[1]]
+    assert listagens and all("/attachments/v2?entityIds=" in u for u in listagens)
+
 
 def test_put_ok_mas_a_listagem_nao_mostra_e_nao_confirmado(pdf):
     pag = PaginaFalsa(lista_apos_put=False)

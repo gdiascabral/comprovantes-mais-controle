@@ -13,7 +13,7 @@ paths:
 
 # Cadastro na nuvem, NSA das remessas e runbooks
 
-> As seções "O cadastro mora na nuvem" e "O NSA das remessas é da nuvem" e o tópico `supabase/runbooks/`, movido do `CLAUDE.md` em 14/09/2026 sem mudar uma palavra.
+> As seções "O cadastro mora na nuvem" e "O NSA das remessas é da nuvem" e o tópico `supabase/runbooks/`, movido do `CLAUDE.md` em 21/09/2026 sem mudar uma palavra.
 > Carrega sozinho quando o Claude lê um arquivo dos caminhos acima.
 > Mudou o código? Atualize AQUI — este é o lugar deste texto agora.
 

@@ -737,8 +737,11 @@ def _pix_sicoob(id_="E0000000000000000000000000000000",
                nome_pagador="EMPRESA TESTE LTDA", cnpj_pagador="11222333000181",
                nome_dest="Fulano de Tal", cpf_dest="12345678909",
                valor="1208,36", estado="FINALIZADO_SUCESSO",
-               meio="CHAVE"):
-    return {
+               meio="CHAVE", descricao=None,
+               criado="2026-09-08 17:57:29.63",
+               atualizado="2026-09-08 17:57:30.37",
+               envio="2026-09-08 17:57:30.12"):
+    item = {
         "id": id_,
         "origem": {"nome": nome_pagador, "cpfCnpj": cnpj_pagador,
                   "banco": {"NomeBanco": "COOPERATIVA DE CREDITO TESTE"}},
@@ -747,10 +750,14 @@ def _pix_sicoob(id_="E0000000000000000000000000000000",
         "valor": valor,
         "estado": estado,
         "tipo": "DEBITO",
-        "atualizadoEm": "2026-09-08 17:57:30.37",
-        "criadoEm": "2026-09-08 17:57:29.63",
+        "atualizadoEm": atualizado,
+        "criadoEm": criado,
+        "dataHoraEnvioLancamento": envio,
         "meioIniciacaoPix": meio,
     }
+    if descricao is not None:
+        item["descricao"] = descricao
+    return item
 
 
 def test_o_cnpj_do_pagador_sai_mascarado():
@@ -796,9 +803,62 @@ def test_campos_do_pix_sicoob_saem_do_json_sem_abrir_pdf():
     assert campos["data"] == "08/09/2026"
     assert campos["dest"] == "Fulano de Tal"
     assert campos["desc"] is None, (
-        "o JSON do Pix do Sicoob não traz descrição -- inventar uma aqui "
+        "sem `descricao` no JSON não há descrição -- inventar uma aqui "
         "esconderia que o Anexar vai casar só por valor/data/destinatário")
     assert campos["pag"] is None
+
+
+def test_a_descricao_do_pix_sicoob_vem_do_campo_descricao():
+    """O defeito de 11 a 14/09/2026: 71 de 71 Pix do Sicoob baixados sem
+    descrição. O JSON do comprovante TRAZ `descricao` (lido ao vivo em
+    14/09) -- é o texto que a própria tela imprime em "Descrição" --, e o app
+    o jogava fora. Sem ele o nome sai com o destinatário, e o Anexar perde a
+    OC/NF/QD/LT que desempata pagamentos de mesmo valor e data."""
+    from baixar_comprovantes import nome_final as nf
+
+    campos = nf.do_sicoob_pix(_pix_sicoob(descricao="OBRA TESTE QD 01 LT 02 OC 1234"))
+    assert campos["desc"] == "OBRA TESTE QD 01 LT 02 OC 1234"
+    assert nf.do_sicoob_pix(_pix_sicoob(descricao="   "))["desc"] is None
+
+
+def test_o_pix_sicoob_com_descricao_e_nomeado_pela_descricao():
+    """VALOR - DESCRIÇÃO - DATA, como os outros bancos -- não o destinatário."""
+    from baixar_comprovantes import nome_final as nf
+
+    campos = nf.do_sicoob_pix(_pix_sicoob(descricao="OBRA TESTE QD 01 LT 02 OC 1234"))
+    assert nf.nomear(campos) == "1208,36 - OBRA TESTE QD 01 LT 02 OC 1234 - 08-09"
+
+
+def test_a_data_do_pix_sicoob_e_a_do_pagamento_e_nao_a_da_criacao():
+    """`criadoEm` é quando o Pix foi montado; o comprovante do banco mostra
+    em "Data do pagamento" o `atualizadoEm` (medido em 14/09/2026: 17:52:18 na
+    tela, `atualizadoEm` 17:52:18.578, `criadoEm` 17:33). Montado num dia e
+    aprovado no outro, a data da criação erra o dia -- e o Anexar exige a
+    data exata."""
+    from baixar_comprovantes import nome_final as nf
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pix = _pix_sicoob(criado="2026-09-10 23:50:01.10",
+                      envio="2026-09-11 08:05:40.20",
+                      atualizado="2026-09-11 08:05:41.30")
+    assert nf.do_sicoob_pix(pix)["data"] == "11/09/2026"
+    assert "11/09/2026 08:05:41" in sb.html_do_comprovante_pix(pix)
+
+
+def test_pix_sicoob_mexido_dias_depois_fica_com_a_data_do_envio():
+    """Achado da revisão: `atualizadoEm` é a ÚLTIMA alteração do registro. Se
+    uma devolução, dias depois, o empurrar, o nome sairia com o dia da
+    devolução -- e o Anexar casaria pela data com outro pagamento de mesmo
+    valor daquele dia. `dataHoraEnvioLancamento` não muda: quando os dois
+    discordam no DIA, vale o envio."""
+    from baixar_comprovantes import nome_final as nf
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    pix = _pix_sicoob(criado="2026-09-02 17:33:38.10",
+                      envio="2026-09-02 17:52:17.42",
+                      atualizado="2026-09-05 10:00:00.00")
+    assert nf.do_sicoob_pix(pix)["data"] == "02/09/2026"
+    assert "02/09/2026 17:52:17" in sb.html_do_comprovante_pix(pix)
 
 
 def test_valor_com_milhar_tambem_converte():
@@ -852,6 +912,25 @@ def test_o_comprovante_de_pix_mostra_os_campos_certos():
     assert "12345678909" not in saida, "o CPF cru vazou sem máscara"
     assert "Pix via chave" in saida
     assert "Finalizado com sucesso" in saida
+
+
+def test_o_comprovante_de_pix_mostra_a_descricao_como_o_banco():
+    """A tela do Sicoob imprime "Descrição" logo depois do Valor; o PDF
+    montado aqui tem de trazer a mesma linha -- é dela que o Renomear e quem
+    confere o anexo leem a obra e a OC."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    saida = sb.html_do_comprovante_pix(
+        _pix_sicoob(descricao="OBRA TESTE QD 01 LT 02 OC 1234"))
+    assert "Descrição" in saida
+    assert "OBRA TESTE QD 01 LT 02 OC 1234" in saida
+    assert saida.index("R$ 1.208,36") < saida.index("OBRA TESTE")
+
+
+def test_sem_descricao_o_comprovante_nao_inventa_a_linha():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert "Descrição" not in sb.html_do_comprovante_pix(_pix_sicoob())
 
 
 def test_o_comprovante_de_pix_escapa_nome_com_caractere_especial():
@@ -1657,3 +1736,227 @@ def test_o_clique_na_linha_nao_engole_o_comando_do_cabecalho(abrir_aba):
     assert tabela.identify_column(Evento.x) == "#1"
     assert aba._clicou(Evento()) is None, (
         "devolver 'break' no cabecalho mata o comando da coluna")
+
+
+# ------------------------------------ de onde saiu, para o casamento do Anexar
+def test_o_pix_do_sicoob_anota_a_conta_e_quem_recebeu(tmp_path, monkeypatch):
+    """Regra do dono (14/09/2026): o Anexar precisa saber DE ONDE saiu cada
+    comprovante. Quem sabe é a baixa, e ela passa a deixar isso no registro."""
+    from baixar_comprovantes import ja_baixados
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    detalhe = _pix_sicoob(id_="E0000000000000000000000000000009",
+                          descricao="OBRA TESTE QD 01 LT 02 OC 1234")
+    monkeypatch.setattr(sb, "listar_pix", lambda *_a, **_k: [{"id": detalhe["id"]}])
+    monkeypatch.setattr(sb, "detalhar_pix", lambda *_a, **_k: detalhe)
+    monkeypatch.setattr(sb, "html_para_pdf",
+                        lambda _ctx, _html, alvo: alvo.write_bytes(b"%PDF-1.4"))
+
+    class Cli:
+        page = ctx = None
+
+    registro = ja_baixados.Registro(tmp_path)
+    resultado = sb.Resultado(conta="12.345-6")
+    sb._baixar_pix_da_conta(Cli(), "12.345-6", "01/09/2026", "02/09/2026",
+                            tmp_path, resultado, log=lambda _m: None,
+                            registro=registro)
+    linha = registro._dados[ja_baixados.chave("sicoob_pix", detalhe["id"], "12.345-6")]
+    assert linha["origem"] == "SICOOB:12.345-6"
+    assert linha["recebedor"] == "Fulano de Tal"
+
+
+def test_toda_anotacao_da_baixa_diz_de_onde_saiu():
+    """Os quatro lugares que anotam o registro -- Pix e comum do Sicoob, Pix e
+    2ª via do Inter -- levam `origem`. Um que esquecesse deixaria os PDFs
+    dele sem conta, e a regra de conta não valeria para eles, em silêncio."""
+    import re
+
+    from baixar_comprovantes import inter_baixar, sicoob_baixar
+
+    for modulo in (sicoob_baixar, inter_baixar):
+        fonte = pathlib.Path(modulo.__file__).read_text(encoding="utf-8")
+        chamadas = re.findall(r"registro\.anotar\((.*?)\)\n", fonte, re.S)
+        assert len(chamadas) == 2, modulo.__name__
+        for c in chamadas:
+            assert "origem=" in c, f"{modulo.__name__}: anotar sem origem"
+
+
+# ------------------------------- CPF/CNPJ de quem recebeu (14/09/2026)
+def test_documento_de_quem_recebeu_no_boleto_sai_do_bloco_beneficiario():
+    """O CPF/CNPJ do PAGADOR também aparece no comprovante; a âncora é o
+    bloco de quem recebeu, como em `favorecido_do_comprovante`."""
+    from baixar_comprovantes import nome_final as nf
+
+    texto = linhas("Beneficiario",
+                   "Nome/Razao Social FORNECEDOR EXEMPLO LTDA",
+                   "Nome Fantasia FORNECEDOR EXEMPLO",
+                   "CPF/CNPJ 11.222.333/0001-81",
+                   "Pagador",
+                   "Nome/Razao social EMPRESA PAGADORA LTDA",
+                   "CPF/CNPJ 44.555.666/0001-00")
+    assert nf.documento_de_quem_recebeu(texto) == "11222333000181"
+
+
+def test_documento_de_quem_recebeu_no_pix_do_inter():
+    from baixar_comprovantes import nome_final as nf
+
+    texto = linhas("Quem recebeu", "Nome Empresa Exemplo",
+                   "CPF/CNPJ 11.222.333/0001-81", "Instituicao Banco Exemplo",
+                   "Quem pagou", "Nome EMPRESA PAGADORA LTDA",
+                   "CPF/CNPJ 44.555.666/0001-00")
+    assert nf.documento_de_quem_recebeu(texto) == "11222333000181"
+
+
+def test_documento_mascarado_ou_ausente_nao_vira_documento():
+    from baixar_comprovantes import nome_final as nf
+
+    assert nf.documento_de_quem_recebeu(linhas(
+        "Quem recebeu", "Nome Fulano", "CPF/CNPJ ***.456.789-**")) == ""
+    assert nf.documento_de_quem_recebeu(linhas(
+        "Credito", "Conta 1.234-5 / FORNECEDOR EXEMPLO")) == ""
+    assert nf.documento_de_quem_recebeu("") == ""
+
+
+def test_o_pix_do_sicoob_anota_o_documento_de_quem_recebeu(tmp_path, monkeypatch):
+    from baixar_comprovantes import ja_baixados
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    detalhe = _pix_sicoob(id_="E0000000000000000000000000000010",
+                          cpf_dest="12345678909")
+    monkeypatch.setattr(sb, "listar_pix", lambda *_a, **_k: [{"id": detalhe["id"]}])
+    monkeypatch.setattr(sb, "detalhar_pix", lambda *_a, **_k: detalhe)
+    monkeypatch.setattr(sb, "html_para_pdf",
+                        lambda _ctx, _html, alvo: alvo.write_bytes(b"%PDF-1.4"))
+
+    class Cli:
+        page = ctx = None
+
+    registro = ja_baixados.Registro(tmp_path)
+    sb._baixar_pix_da_conta(Cli(), "12.345-6", "01/09/2026", "02/09/2026",
+                            tmp_path, sb.Resultado(conta="12.345-6"),
+                            log=lambda _m: None, registro=registro)
+    linha = registro._dados[ja_baixados.chave("sicoob_pix", detalhe["id"], "12.345-6")]
+    assert linha["doc_recebedor"] == "12345678909"
+
+
+def test_toda_anotacao_da_baixa_leva_o_documento_de_quem_recebeu():
+    import re
+
+    from baixar_comprovantes import inter_baixar, sicoob_baixar
+
+    for modulo in (sicoob_baixar, inter_baixar):
+        fonte = pathlib.Path(modulo.__file__).read_text(encoding="utf-8")
+        for c in re.findall(r"registro\.anotar\((.*?)\)\n", fonte, re.S):
+            assert "doc_recebedor=" in c, f"{modulo.__name__}: anotar sem documento"
+
+
+def test_documento_de_quem_recebeu_nao_escorrega_para_o_pagador():
+    """Revisão do #95: bloco de quem recebeu SEM linha de CPF/CNPJ, seguido do
+    bloco do pagador -- a leitura para no bloco seguinte, não pega o dele."""
+    from baixar_comprovantes import nome_final as nf
+
+    assert nf.documento_de_quem_recebeu(linhas(
+        "Beneficiario", "Nome/Razao Social FORNECEDOR EXEMPLO LTDA",
+        "Pagador", "CPF/CNPJ 44.555.666/0001-00")) == ""
+    assert nf.documento_de_quem_recebeu(linhas(
+        "Quem recebeu", "Nome Fulano", "Quem pagou",
+        "CPF/CNPJ 44.555.666/0001-00")) == ""
+
+
+def test_o_registro_so_guarda_documento_inteiro():
+    """Documento que chegar mascarado pela API (só o miolo) não se grava."""
+    from baixar_comprovantes import ja_baixados
+
+    reg = ja_baixados.Registro(pathlib.Path("."))
+    reg.anotar("pix:E9", "10,00 - X - 01-09.pdf", doc_recebedor="***.456.789-**")
+    assert "doc_recebedor" not in reg._dados["pix:E9"]
+
+
+# ------------------------------------------ vários logins do Sicoob (14/09/2026)
+# As contas de outra empresa ficam em OUTRO login do Sicoob (outro QR Code).
+# Cada abertura do Chrome pede o QR de novo, então trocar de login é fechar o
+# Chrome e abrir outro -- sem botão de sair e sem cadastro de "qual login".
+
+class _LoginFalso:
+    def __init__(self, contas, abertos):
+        self.contas = set(contas)
+        self.abertos = abertos
+
+    def __enter__(self):
+        self.abertos.append(sorted(self.contas))
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def _baixar_falso(cli, numero):
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    if numero not in cli.contas:
+        return sb.Resultado(conta=numero, motivo=sb.FORA_DESTE_LOGIN)
+    return sb.Resultado(conta=numero, baixados=[pathlib.Path(f"{numero}.pdf")])
+
+
+def _logins(*grupos):
+    abertos = []
+    fila = [_LoginFalso(g, abertos) for g in grupos]
+    return (lambda: fila.pop(0)), abertos
+
+
+def test_contas_de_outro_login_pedem_outro_chrome():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    abrir, abertos = _logins({"11", "22"}, {"33", "44"})
+    avisos = []
+    r = sb.baixar_em_varios_logins(["11", "33", "22", "44"], abrir, _baixar_falso,
+                                   avisar=avisos.append)
+    assert len(abertos) == 2
+    assert {n: bool(x.baixados) for n, x in r.items()} == {
+        "11": True, "22": True, "33": True, "44": True}
+    assert any("outro login" in a for a in avisos)
+
+
+def test_um_login_so_quando_todas_estao_nele():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    abrir, abertos = _logins({"11", "22"})
+    r = sb.baixar_em_varios_logins(["11", "22"], abrir, _baixar_falso)
+    assert len(abertos) == 1 and all(x.ok for x in r.values())
+
+
+def test_login_sem_nenhuma_das_que_faltam_para_e_avisa():
+    """Não pede QR para sempre: um login que não abre nenhuma das contas que
+    faltam encerra, e elas saem com o motivo."""
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    abrir, abertos = _logins({"11"}, {"99"}, {"33"})
+    r = sb.baixar_em_varios_logins(["11", "33"], abrir, _baixar_falso)
+    assert len(abertos) == 2
+    assert r["11"].ok
+    assert "nenhum dos logins" in r["33"].motivo
+
+
+def test_parar_nao_abre_outro_login():
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    abrir, abertos = _logins({"11"}, {"33"})
+    parar = {"sim": False}
+
+    def baixar(cli, numero):
+        parar["sim"] = True
+        return _baixar_falso(cli, numero)
+
+    r = sb.baixar_em_varios_logins(["11", "33"], abrir, baixar,
+                                   parar=lambda: parar["sim"])
+    assert len(abertos) == 1
+    assert "33" not in r, "a que não rodou fica sem resultado, e a tela a marca como parada"
+
+
+def test_o_motivo_de_fora_do_login_e_o_mesmo_que_baixar_conta_devolve():
+    import inspect
+
+    from baixar_comprovantes import sicoob_baixar as sb
+
+    assert "FORA_DESTE_LOGIN" in inspect.getsource(sb.baixar_conta)
+

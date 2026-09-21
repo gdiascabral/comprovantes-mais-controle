@@ -714,7 +714,7 @@ def html_do_comprovante_pix(detalhe: dict) -> str:
     banco_origem = (origem.get("banco") or {}).get("NomeBanco", "")
     banco_destino = (destino.get("banco") or {}).get("NomeBanco", "")
     campos = nome_final.do_sicoob_pix(detalhe)
-    quando = detalhe.get("atualizadoEm") or detalhe.get("criadoEm") or ""
+    quando = nome_final.momento_do_pix_sicoob(detalhe)
     data_pagamento = f"{campos['data']} {_hora_pix(quando)}".strip()
     situacao = ("Finalizado com sucesso"
                if detalhe.get("estado") == "FINALIZADO_SUCESSO"
@@ -742,6 +742,7 @@ def html_do_comprovante_pix(detalhe: dict) -> str:
         secao("Dados do pagamento"),
         linha("Data do pagamento", data_pagamento),
         linha("Valor", f"R$ {campos['valor']}" if campos["valor"] else ""),
+        linha("Descrição", campos["desc"]) if campos["desc"] else "",
         linha("ID Transação", detalhe.get("id") or ""),
         linha("Situação do pagamento", situacao),
     ))
@@ -804,15 +805,71 @@ def _baixar_pix_da_conta(cli, numero: str, inicio: str, fim: str,
             corpo_html = html_do_comprovante_pix(detalhe)
             alvo = nome_livre(destino, nome_do_pix_sicoob(detalhe))
             html_para_pdf(cli.ctx, corpo_html, alvo)
-            alvo = nome_final.renomear(alvo, nome_final.do_sicoob_pix(detalhe))
+            campos = nome_final.do_sicoob_pix(detalhe)
+            alvo = nome_final.renomear(alvo, campos)
             resultado.baixados.append(alvo)
             if registro is not None:
+                # De onde saiu e quem recebeu: é o que o Anexar usa para não
+                # casar este Pix com lançamento de outra conta.
                 registro.anotar(
-                    ja_baixados.chave("sicoob_pix", ident, numero), alvo)
+                    ja_baixados.chave("sicoob_pix", ident, numero), alvo,
+                    origem=f"SICOOB:{numero}", recebedor=campos["dest"],
+                    doc_recebedor=(detalhe.get("destino") or {}).get("cpfCnpj"))
             log(f"    {alvo.name}")
         except Exception as e:                               # noqa: BLE001
             resultado.falhas.append(str(ident))
             log(f"    Pix {ident} falhou ({e}) — seguindo")
+
+
+#: O motivo de `baixar_conta` quando a conta não está no login aberto. É ele que
+#: `baixar_em_varios_logins` reconhece para pedir o QR de OUTRO login.
+FORA_DESTE_LOGIN = "a conta não está na lista deste login"
+
+
+def baixar_em_varios_logins(numeros, abrir_login, baixar, *, parar=lambda: False,
+                            avisar=lambda _m: None) -> dict:
+    """{número: Resultado} das contas, abrindo quantos logins forem precisos.
+
+    Um login do Sicoob enxerga as contas de UM grupo: as de outra empresa
+    (14/09/2026) ficam noutro login, com outro QR Code. Cada
+    abertura do Chrome pede o QR de novo, então trocar de login é só fechar
+    este Chrome e abrir outro -- sem botão de sair e sem cadastrar "qual
+    login" em conta nenhuma (a agência não serve: há conta sem agência
+    cadastrada que está no login principal).
+
+    `abrir_login()` devolve um gerenciador de contexto que entrega o cliente já
+    logado; `baixar(cli, numero)` devolve o `Resultado`. As contas que saem
+    `FORA_DESTE_LOGIN` ficam para o próximo login. Um login que não abre
+    NENHUMA das que faltam encerra, para não pedir QR sem fim. Conta que não
+    chegou a rodar (Parar) fica fora do dicionário: quem chamou a marca."""
+    pendentes = list(numeros)
+    resultados: dict = {}
+    rodada = 0
+    while pendentes and not parar():
+        rodada += 1
+        if rodada > 1:
+            avisar(f"Sicoob: {len(pendentes)} conta(s) não estão no login lido — "
+                   "abrindo outro Chrome; leia o QR Code do outro login.")
+        faltam, abertas = [], 0
+        with abrir_login() as cli:
+            for numero in pendentes:
+                if parar():
+                    break
+                r = baixar(cli, numero)
+                if r.motivo == FORA_DESTE_LOGIN:
+                    faltam.append(numero)
+                    continue
+                abertas += 1
+                resultados[numero] = r
+        if parar():
+            break
+        if not abertas:
+            for numero in faltam:
+                resultados[numero] = Resultado(
+                    conta=numero, motivo="a conta não está em nenhum dos logins lidos")
+            break
+        pendentes = faltam
+    return resultados
 
 
 def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
@@ -822,7 +879,7 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
     destino = Path(pasta)
     try:
         if not cli.acessar_conta(numero):
-            resultado.motivo = "a conta não está na lista deste login"
+            resultado.motivo = FORA_DESTE_LOGIN
             return resultado
         ir_para_comprovantes(cli.page)
 
@@ -864,15 +921,17 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
                     # O favorecido e a Observação só existem DENTRO do
                     # comprovante — a lista do Sicoob não os traz. Por isso
                     # aqui o PDF é lido, e no Inter não: lá o JSON já tem tudo.
-                    alvo = nome_final.renomear(
-                        alvo, nome_final.do_sicoob(item,
-                                                   nome_final.texto_do_pdf(alvo)))
+                    texto = nome_final.texto_do_pdf(alvo)
+                    campos = nome_final.do_sicoob(item, texto)
+                    alvo = nome_final.renomear(alvo, campos)
                     resultado.baixados.append(alvo)
                     if registro is not None:
                         registro.anotar(
                             ja_baixados.chave("sicoob",
                                               item.get("idAgendamento"),
-                                              numero), alvo)
+                                              numero), alvo,
+                            origem=f"SICOOB:{numero}", recebedor=campos["dest"],
+                            doc_recebedor=nome_final.documento_de_quem_recebeu(texto))
                     log(f"    {alvo.name}")
                 except Exception as e:                       # noqa: BLE001
                     ident = item.get("idAgendamento") or "?"

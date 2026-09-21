@@ -1,4 +1,4 @@
-<!-- Movido do CLAUDE.md em 14/09/2026, sem mudar uma palavra. -->
+<!-- Movido do CLAUDE.md em 21/09/2026, sem mudar uma palavra. -->
 
 ## 02/09/2026 — a consolidação
 

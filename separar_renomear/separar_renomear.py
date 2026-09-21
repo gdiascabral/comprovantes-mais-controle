@@ -596,13 +596,42 @@ def _campos_impresso(t):
 
 
 # --------------------------------------------------------------- OCR
-_OCR = {"pronto": None, "lang": "por", "avisado": False}
+_OCR = {"pronto": None, "lang": "por", "avisado": False, "relato": None,
+        "erro_registrado": False}
+
+#: Onde procurar o Tesseract fora do exe (rodando como script).
+_CAMINHOS_TESSERACT_FIXOS = (Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),)
+
+_log_ocr = util.log("separar_renomear.ocr")
+
+
+def _diag_ocr(texto: str) -> None:
+    """Uma linha no diagnostico.log. Existe para o teste poder ouvir."""
+    _log_ocr.warning(texto)
+
+
+def _erro_curto(e: Exception) -> str:
+    return f"erro {type(e).__name__}: {e}"[:300]
 
 
 def _configurar_ocr() -> bool:
+    """Acha o Tesseract, liga o idioma e grava o RELATO no diagnostico.log.
+
+    O relato existe por causa de 14/09/2026: noutro PC o Renomear devolvia
+    "SEM VALOR - SEM DESCRICAO" e nada dizia se o Tesseract foi achado, se
+    chegou a RODAR (antivírus e Smart App Control barram .exe sem assinatura
+    na pasta temporária, onde o exe o descompacta) ou se faltava o idioma.
+    `get_tesseract_version` e `get_languages` executam o binário de verdade,
+    então o erro deles é o motivo que se procura."""
+    relato = {"escolhido": "", "candidatos": [], "tessdata": "",
+              "por_traineddata": False, "caminho_fora_do_ascii": False,
+              "versao": "", "idiomas": []}
+    _OCR["relato"] = relato
     try:
         import pytesseract
-    except ImportError:
+    except ImportError as e:
+        relato["versao"] = _erro_curto(e)
+        _diag_ocr(f"OCR: pytesseract não importou ({relato['versao']})")
         return False
     import shutil
     import sys
@@ -610,14 +639,19 @@ def _configurar_ocr() -> bool:
     base = getattr(sys, "_MEIPASS", None)
     if base:
         cands.append(Path(base) / "tesseract" / "tesseract.exe")
-    cands.append(Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"))
+    cands.extend(_CAMINHOS_TESSERACT_FIXOS)
     achado = shutil.which("tesseract")
     if achado:
         cands.append(Path(achado))
+    relato["candidatos"] = [(str(c), c.exists()) for c in cands]
     for c in cands:
         if c.exists():
             pytesseract.pytesseract.tesseract_cmd = str(c)
+            relato["escolhido"] = str(c)
             tess = c.parent / "tessdata"
+            relato["tessdata"] = str(tess) if tess.is_dir() else ""
+            relato["por_traineddata"] = (tess / "por.traineddata").is_file()
+            relato["caminho_fora_do_ascii"] = any(ord(ch) > 127 for ch in str(c))
             if tess.is_dir():
                 os.environ["TESSDATA_PREFIX"] = str(tess)
             # uma thread por processo do Tesseract: quem paraleliza é o nosso
@@ -625,11 +659,23 @@ def _configurar_ocr() -> bool:
             # núcleos e as chamadas simultâneas brigam entre si.
             os.environ.setdefault("OMP_THREAD_LIMIT", "1")
             try:
-                langs = set(pytesseract.get_languages(config=""))
-            except Exception:
-                langs = set()
-            _OCR["lang"] = "por" if "por" in langs else "eng"
+                relato["versao"] = str(pytesseract.get_tesseract_version())
+            except Exception as e:                           # noqa: BLE001
+                relato["versao"] = _erro_curto(e)            # vai no relato
+            try:
+                relato["idiomas"] = sorted(pytesseract.get_languages(config=""))
+            except Exception as e:                           # noqa: BLE001
+                relato["idiomas"] = [_erro_curto(e)]         # vai no relato
+            _OCR["lang"] = "por" if "por" in relato["idiomas"] else "eng"
+            _diag_ocr(f"OCR: tesseract={relato['escolhido']} "
+                      f"versao={relato['versao']} idiomas={relato['idiomas']} "
+                      f"tessdata={relato['tessdata'] or '(ausente)'} "
+                      f"por.traineddata={'sim' if relato['por_traineddata'] else 'NÃO'} "
+                      f"caminho_com_acento={'SIM' if relato['caminho_fora_do_ascii'] else 'não'}")
             return True
+    _diag_ocr("OCR: nenhum Tesseract encontrado; procurado em "
+              + "; ".join(f"{c} ({'existe' if e else 'não existe'})"
+                          for c, e in relato["candidatos"]))
     return False
 
 
@@ -677,6 +723,12 @@ def _ocr_em_lote(pl, indices, log, resolucao=300, ao_concluir=None) -> dict:
             return pytesseract.image_to_string(img, lang=lang)
         except Exception as e:
             log(f"[ERRO] OCR: {e}")
+            if not _OCR.get("erro_registrado"):
+                # Só o primeiro: com o Tesseract barrado, TODA página falha
+                # igual, e cem linhas iguais só empurram o relato para fora.
+                _OCR["erro_registrado"] = True
+                _diag_ocr(f"OCR: falhou ao reconhecer ({_erro_curto(e)}); "
+                          f"relato={_OCR.get('relato')}")
             return ""
 
     def colher(futuros):
@@ -702,6 +754,9 @@ def _ocr_em_lote(pl, indices, log, resolucao=300, ao_concluir=None) -> dict:
                 continue
             pendentes[ex.submit(reconhecer, img)] = i
         colher(list(pendentes))
+    if saida and not any((t or "").strip() for t in saida.values()):
+        log(f"[aviso] o OCR rodou em {len(saida)} página(s) e não leu texto "
+            "nenhum — o motivo provável está no diagnostico.log (linhas \"OCR:\").")
     return saida
 
 
@@ -780,6 +835,12 @@ def nome_arquivo(c, modelo: str | None = None,
         com_recebedor = False          # o modelo já pede o recebedor
     v, meio, dd = _partes_nome(c, com_recebedor)
     if usar_padrao:
+        # O corte dos 150 caracteres é na DESCRIÇÃO, nunca no fim: cortando o
+        # fim, uma descrição longa (a do Pix aceita 140) levava junto o
+        # " - dd-mm", e o casamento do Anexar perdia a data.
+        folga = 150 - len(v) - 3 - ((len(dd) + 3) if dd else 0)
+        if meio and len(meio) > folga:
+            meio = meio[:max(folga, 0)].rstrip(" -")
         partes = [v] + ([meio] if meio else []) + ([dd] if dd else [])
         nome = ' - '.join(partes)
     else:

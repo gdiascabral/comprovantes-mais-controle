@@ -8,7 +8,7 @@ paths:
 
 # Arquitetura: janela e widgets
 
-> Trecho da seção "Arquitetura", movido do `CLAUDE.md` em 14/09/2026 sem mudar uma palavra.
+> Trecho da seção "Arquitetura", movido do `CLAUDE.md` em 21/09/2026 sem mudar uma palavra.
 > Carrega sozinho quando o Claude lê um arquivo dos caminhos acima.
 > Mudou o código? Atualize AQUI — este é o lugar deste texto agora.
 
@@ -82,10 +82,11 @@ paths:
   `widgets.aplicar_estilos`, `widgets.barra_de_titulo` e o
   `aplicar_cores(escuro)` de cada aba — que hoje só trata `tk.Text` e
   `tk.Canvas`, porque o resto segue os estilos nomeados de `widgets.py`. A
-  versão aparece CURTA ("v2.0", o que se fala em voz alta) em três lugares —
-  título da janela, canto direito da barra e rodapé do menu —, e o número de
-  build inteiro fica na `widgets.Dica` dos dois rótulos: ele muda a cada push e
-  entre a v2.0.108 e a v2.0.109 pode não haver diferença nenhuma na tela.
+  versão aparece INTEIRA ("v2.0.201") em três lugares — título da janela,
+  canto direito da barra e rodapé do menu. Até 14/09/2026 aparecia curta
+  ("v2.0") com o número de build escondido numa `widgets.Dica`; o dono pediu
+  o número inteiro de volta, porque é ele que diz de relance se a máquina já
+  pegou a versão liberada (`_versao_na_tela`).
   Fechar a janela (`_sair`) percorre TODAS as abas atrás de um `fechar()`, e
   não uma tupla escrita à mão: a lista fixa citava dois navegadores e o Chrome
   da Acessórias sobrevivia ao fechar do app, esperando o Gerenciador de

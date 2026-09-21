@@ -17,6 +17,7 @@ janela congelar — o trabalho roda noutra thread, como nas outras abas.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import queue
 import threading
@@ -355,31 +356,53 @@ class ComprovantesFrame(ttk.Frame):
                          if c["banco"] == "Sicoob" and c["marcada"]]
             if do_sicoob:
                 self.q.put(("log", "Sicoob: um login para "
-                                   f"{len(do_sicoob)} conta(s)."))
+                                   f"{len(do_sicoob)} conta(s) — se alguma for "
+                                   "de outro login, o Chrome abre de novo."))
+                registrar = lambda m: self.q.put(("log", m))     # noqa: E731
+                feitas = {"n": 0}
+
+                @contextlib.contextmanager
+                def abrir_login():
+                    # Um Chrome por login: cada abertura pede o QR Code de novo,
+                    # e é assim que se troca de um login para o outro.
+                    with SicoobClient(log=registrar) as cli:
+                        cli.aguardar_login()
+                        yield cli
+
+                def baixar(cli, numero):
+                    chave = f"Sicoob:{numero}"
+                    self.q.put(("situacao", (chave, "trabalhando", {})))
+                    r = sicoob.baixar_conta(cli, numero, inicio, fim, destino,
+                                            log=registrar, registro=registro)
+                    if r.motivo == sicoob.FORA_DESTE_LOGIN:
+                        # Fica para o próximo login: volta a "aguardando login".
+                        self.q.put(("situacao", (chave, "qr", {})))
+                        return r
+                    feitas["n"] += 1
+                    self.q.put(("progresso", (feitas["n"], len(do_sicoob))))
+                    if not r.ok:
+                        self.q.put(("situacao", (chave, "erro", {"motivo": r.motivo})))
+                    elif not r.baixados:
+                        self.q.put(("situacao", (chave, "vazio", {})))
+                    else:
+                        self.q.put(("situacao", (chave, "ok", {"n": len(r.baixados)})))
+                    return r
+
                 for c in do_sicoob:
                     self.q.put(("situacao", (f"Sicoob:{c['conta']}", "qr", {})))
-                with SicoobClient(log=lambda m: self.q.put(("log", m))) as cli:
-                    cli.aguardar_login()
-                    for i, c in enumerate(do_sicoob, start=1):
-                        if self._parar.is_set():
-                            self._marcar_parados(do_sicoob[i - 1:])
-                            break
-                        chave = f"Sicoob:{c['conta']}"
-                        self.q.put(("situacao", (chave, "trabalhando", {})))
-                        self.q.put(("progresso", (i, len(do_sicoob))))
-                        r = sicoob.baixar_conta(
-                            cli, c["conta"], inicio, fim, destino,
-                            log=lambda m: self.q.put(("log", m)),
-                            registro=registro)
-                        if not r.ok:
-                            self.q.put(("situacao",
-                                        (chave, "erro", {"motivo": r.motivo})))
-                        elif not r.baixados:
-                            self.q.put(("situacao", (chave, "vazio", {})))
-                        else:
-                            self.q.put(("situacao", (chave, "ok",
-                                                     {"n": len(r.baixados)})))
-                registro.gravar()
+                try:
+                    resultados = sicoob.baixar_em_varios_logins(
+                        [c["conta"] for c in do_sicoob], abrir_login, baixar,
+                        parar=self._parar.is_set, avisar=registrar)
+                finally:
+                    registro.gravar()
+                for c in do_sicoob:
+                    r = resultados.get(c["conta"])
+                    if r is None:
+                        self._marcar_parados([c])
+                    elif "nenhum dos logins" in r.motivo:
+                        self.q.put(("situacao", (f"Sicoob:{c['conta']}", "erro",
+                                                 {"motivo": r.motivo})))
             self._fazer_inter(inicio, fim, destino)
             self.q.put(("fim", None))
         except Exception as e:                               # noqa: BLE001
