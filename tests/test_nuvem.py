@@ -204,6 +204,27 @@ def _servidor_instavel(respostas: list, corpos: list | None = None):
     return servidor, contador
 
 
+def _encerrar(servidor) -> None:
+    """Para o laço E fecha o socket de escuta — os dois, sempre.
+
+    `shutdown()` sozinho só faz o `serve_forever` voltar; o socket continua
+    aberto e preso à porta. O pior é que ele continua ATENDENDO: o núcleo
+    completa o aperto de mão pela fila de escuta e ninguém mais chama
+    `accept()`. Medido nesta máquina: 20 servidores encerrados só com
+    `shutdown()` deixam 20 sockets de escuta vivos, e um cliente que caia
+    numa dessas portas CONECTA e fica esperando resposta até o tempo
+    esgotar — os 20 s do `rest.ESPERA`. Seria trocar a falha rápida deste
+    arquivo por uma lenta. Com o `server_close()` o descritor vira -1 e a
+    porta deixa de atender.
+
+    Os dois numa função só porque são um par: escrito nos `finally` de cada
+    teste, é uma chance por teste de lembrar da metade que não dá erro
+    quando falta.
+    """
+    servidor.shutdown()
+    servidor.server_close()
+
+
 def _sessao_local(monkeypatch, servidor):
     """Uma sessão com a MESMA política de retry da produção (`_montar_sessao`
     de verdade, não uma cópia à mão), só que também válida para `http://` —
@@ -229,7 +250,7 @@ def test_get_repete_5xx_ate_o_sucesso(monkeypatch):
         assert contador["chamadas"] == 3
         assert contador["metodos"] == ["GET", "GET", "GET"]
     finally:
-        servidor.shutdown()
+        _encerrar(servidor)
 
 
 def test_post_nao_repete_5xx(monkeypatch):
@@ -251,7 +272,7 @@ def test_post_nao_repete_5xx(monkeypatch):
         assert [json.loads(c or b"null") for c in contador["corpos"]] == [
             [{"nome_pasta": "X"}]]
     finally:
-        servidor.shutdown()
+        _encerrar(servidor)
 
 
 # ----------------------------------------------------------------- sessao
