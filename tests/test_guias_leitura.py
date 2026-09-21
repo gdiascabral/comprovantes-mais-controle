@@ -29,13 +29,16 @@ def test_numero_do_documento_pelo_rotulo():
     assert item.documento == "0126090459266352-0"
 
 
-def test_linha_digitavel_vira_documento_quando_nao_ha_rotulo():
+def test_linha_digitavel_vira_documento_quando_nao_ha_rotulo(monkeypatch):
     """Boleto sem "nosso número" legível ainda tem a linha digitável."""
-    linha = "34191.79001 01043.510047 91020.150008 1 96610000104200"
-    item = leitura.ler_texto(f"Pague em qualquer banco {linha}")
+    from pagamentos_dia import ocr_boleto
 
-    assert item.documento.replace(".", "").replace(" ", "").isdigit()
-    assert len(item.documento.replace(".", "").replace(" ", "")) >= 44
+    monkeypatch.setattr(leitura.ocr_boleto, "valida",
+                        lambda d: len(ocr_boleto.digitos(d)) == 47)
+    linha = "3" * 47
+    item = leitura.ler_texto(f"Pague em qualquer banco {linha} Valor R$ 10,00")
+
+    assert ocr_boleto.digitos(item.documento) == linha
 
 
 def test_texto_sem_nada_devolve_item_vazio_e_nao_explode():
@@ -65,3 +68,46 @@ def test_pagina_sem_cobranca_nao_vira_item(tmp_path, monkeypatch):
     monkeypatch.setattr(leitura, "_paginas_de_texto", lambda _c: paginas)
 
     assert len(leitura.ler_pdf(tmp_path / "qualquer.pdf")) == 1
+
+
+def test_campo_zerado_antes_do_total_nao_vira_o_valor():
+    """Todo boleto imprime Desconto/Multa zerados ANTES do total. Pegar o
+    primeiro `NN,NN` da página é pegar o zero — dinheiro errado no ERP."""
+    texto = "Desconto R$ 0,00 Multa R$ 0,00 Valor da cobranca R$ 1.234,56"
+
+    assert leitura.ler_texto(texto).valor == Decimal("1234.56")
+
+
+def test_valor_a_pagar_e_rotulo_reconhecido():
+    texto = "Juros R$ 0,00 Valor a pagar R$ 641,31"
+
+    assert leitura.ler_texto(texto).valor == Decimal("641.31")
+
+
+def test_valor_sem_rotulo_nenhum_descarta_contexto_de_deducao():
+    texto = "Desconto R$ 12,00 R$ 738,00"
+
+    assert leitura.ler_texto(texto).valor == Decimal("738.00")
+
+
+def test_valor_zero_nunca_e_o_valor_do_documento():
+    assert leitura.ler_texto("Valor do documento R$ 0,00").valor is None
+
+
+def test_linha_digitavel_validada_vira_o_documento(monkeypatch):
+    """Só linha que fecha o dígito verificador vira documento."""
+    from pagamentos_dia import ocr_boleto
+
+    monkeypatch.setattr(leitura.ocr_boleto, "valida",
+                        lambda d: len(ocr_boleto.digitos(d)) == 47)
+    linha = "3" * 47
+    item = leitura.ler_texto(f"Pague em qualquer banco {linha} Valor R$ 10,00")
+
+    assert ocr_boleto.digitos(item.documento) == linha
+
+
+def test_linha_que_nao_fecha_o_dv_nao_vira_documento(monkeypatch):
+    monkeypatch.setattr(leitura.ocr_boleto, "valida", lambda _d: False)
+    item = leitura.ler_texto("Nosso numero 12345 Valor R$ 10,00")
+
+    assert item.documento == "12345"
