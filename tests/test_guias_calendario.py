@@ -40,6 +40,7 @@ def test_calendario_vazio_nao_quebra():
 class _PortalFalso:
     def __init__(self, falhar_download=()):
         self.baixados = []
+        self.tentativas = []
         self.falhar = set(falhar_download)
 
     def empresas(self):
@@ -49,6 +50,7 @@ class _PortalFalso:
         return CAL if vip_id == "701" else {}
 
     def baixar_guia(self, lnk, destino):
+        self.tentativas.append(lnk)
         if lnk in self.falhar:
             raise RuntimeError("o link da guia expirou")
         self.baixados.append(destino)
@@ -97,7 +99,12 @@ def test_empresa_do_portal_sem_cadastro_vira_linha_de_aviso(tmp_path):
 
 
 def test_guia_cujo_download_falhou_fica_com_erro_e_sem_pdf(tmp_path):
-    """Review Focus 3: sem PDF não se lança, por mais completo que esteja."""
+    """Review Focus 3: sem PDF não se lança, por mais completo que esteja.
+
+    E o retry tem TETO: o link do documento expira em 120 s e cada tentativa
+    é um download de verdade contra o portal do escritório. Falha persistente
+    tem de parar em exatamente 2 chamadas — 3 seria insistência que ninguém
+    pediu, e é o que este teste passa a vigiar."""
     portal = _PortalFalso(falhar_download=["https://exemplo.invalido/1"])
 
     guias = mod.varrer(portal, _MapaFalso(), 2026, 9,
@@ -106,6 +113,7 @@ def test_guia_cujo_download_falhou_fica_com_erro_e_sem_pdf(tmp_path):
     guia = [g for g in guias if g.anx_id == "111"][0]
     assert guia.pdf is None
     assert "expirou" in guia.erro
+    assert len(portal.tentativas) == 2
 
 
 def test_download_e_tentado_de_novo_uma_vez(tmp_path, monkeypatch):
