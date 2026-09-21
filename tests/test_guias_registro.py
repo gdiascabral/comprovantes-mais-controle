@@ -7,7 +7,7 @@ def test_anotar_e_reconhecer_na_rodada_seguinte(tmp_path):
     caminho = tmp_path / "guias_lancadas.jsonl"
     r = mod.Registro.carregar(caminho)
     r.anotar(vip_id="701", anx_id="111", competencia="2026-09",
-             acao="alterar", tpid="tp-1", conferido=True)
+             acao="alterar", estado="alterado", tpid="tp-1", conferido=True)
 
     outra = mod.Registro.carregar(caminho)
 
@@ -53,5 +53,32 @@ def test_arquivo_com_linha_corrompida_nao_derruba_a_leitura(tmp_path):
 
 def test_arquivo_ausente_comeca_vazio(tmp_path):
     r = mod.Registro.carregar(tmp_path / "nao-existe.jsonl")
+
+    assert r.ja_feito("701", "111", "2026-09") is None
+
+
+def test_a_trava_nao_depende_do_tipo_da_chave(tmp_path):
+    """Um lado número e o outro texto faria a trava falhar ABERTA, e a guia
+    seria lançada de novo."""
+    caminho = tmp_path / "guias_lancadas.jsonl"
+    r = mod.Registro.carregar(caminho)
+    r.anotar(vip_id=701, anx_id=111, competencia="2026-09",
+             acao="criar", estado="criado", tpid="tp-7")
+
+    outra = mod.Registro.carregar(caminho)
+
+    assert outra.ja_feito("701", "111", "2026-09")["tpid"] == "tp-7"
+
+
+def test_estado_desconhecido_avisa_em_vez_de_passar_calado(tmp_path, caplog):
+    """A trava falha ABERTA para o que não reconhece: silêncio aqui é
+    lançamento duplicado sem ninguém saber por quê."""
+    caminho = tmp_path / "guias_lancadas.jsonl"
+    caminho.write_text('{"vip_id": "701", "anx_id": "111", '
+                       '"competencia": "2026-09", "estado": "inventado"}\n',
+                       encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        r = mod.Registro.carregar(caminho)
 
     assert r.ja_feito("701", "111", "2026-09") is None

@@ -16,14 +16,23 @@ import json
 from pathlib import Path
 
 import util
+from guias.modelos import ALTERADO, ANEXO_PENDENTE, CRIADO, DIVERGE, ERRO
 
 log = util.log(__name__)
 
 NOME_ARQUIVO = "guias_lancadas.jsonl"
 
 #: Estados que significam "o título existe no ERP". Repetir criaria um segundo.
-#: `anexo_pendente` entra: o que falta é o PDF, não o lançamento.
-FEITOS = ("alterado", "criado", "diverge", "anexo_pendente")
+#: `diverge` entra porque gravou (só não bateu na releitura) e `anexo_pendente`
+#: porque o que falta é o PDF, não o lançamento. Os nomes vêm de
+#: `guias.modelos`: uma segunda cópia deles aqui é uma divergência esperando
+#: acontecer, e a divergência faria a trava falhar ABERTA — duplicando título.
+FEITOS = (ALTERADO, CRIADO, DIVERGE, ANEXO_PENDENTE)
+
+#: Todos os estados que este módulo conhece. Estado fora daqui é aviso, e não
+#: silêncio: a trava falha ABERTA para o que não reconhece, então um estado
+#: novo que ninguém registrou aqui vira lançamento duplicado.
+CONHECIDOS = FEITOS + (ERRO,)
 
 
 def caminho_padrao() -> Path:
@@ -59,7 +68,12 @@ class Registro:
         return (str(vip_id), str(anx_id), str(competencia))
 
     def _indexar(self, linha: dict) -> None:
-        if str(linha.get("estado") or "") not in FEITOS:
+        estado = str(linha.get("estado") or "")
+        if estado and estado not in CONHECIDOS:
+            log.warning("estado de guia desconhecido no registro: %r — a trava "
+                        "não o reconhece e a guia pode ser lançada de novo",
+                        estado)
+        if estado not in FEITOS:
             return
         self._indice[self._chave(linha.get("vip_id"), linha.get("anx_id"),
                                  linha.get("competencia"))] = linha
@@ -70,13 +84,6 @@ class Registro:
 
     def anotar(self, **campos) -> None:
         campos.setdefault("quando", dt.datetime.now().isoformat(timespec="seconds"))
-        # Inferir estado a partir de acao se não foi explicitado
-        if "estado" not in campos and "acao" in campos:
-            acao = campos["acao"]
-            if acao == "alterar":
-                campos["estado"] = "alterado"
-            elif acao == "criar":
-                campos["estado"] = "criado"
         self.linhas.append(campos)
         self._indexar(campos)
         self.caminho.parent.mkdir(parents=True, exist_ok=True)
