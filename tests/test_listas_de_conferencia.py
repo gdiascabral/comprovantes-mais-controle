@@ -14,26 +14,15 @@ O teste do TAMANHO é o que dá o motivo de tudo: até 11/09/2026 cada linha era
 um bloco de widgets num Canvas rolável, e 300 lançamentos davam 2.802 widgets
 (confirmação) e 3.589 (remessa) — 5,4 s e 6,5 s antes de a janela aparecer.
 """
+import datetime as _dt
 import tkinter as tk
 from tkinter import ttk
 from types import SimpleNamespace
 
+from pagamentos_dia import confirmacao
 from pagamentos_dia import pagamentos_frame as pf
 from pagamentos_dia import remessa_dia
 from pagamentos_dia.remessa_dia import Candidato
-
-
-def _lanc(i, conta="CONTA A", favorecido=None, valor=100.0,
-          chave="fulano@exemplo.com"):
-    """Um lançamento a pagar, no formato da API — com dados de mentira."""
-    return {"id": f"L{i}", "tradePayableId": f"T{i}",
-            "paidTo": favorecido or f"FORNECEDOR {i:03d}",
-            "description": f"MATERIAL OC {1000 + i}",
-            "remainingValue": valor, "plannedDate": "2026-09-11",
-            "tradePayableAccount": {"name": conta},
-            "tradePayablePaymentMethod": "Pix",
-            "paidToBankAccount": f"PIX EMAIL {chave}" if chave else "",
-            "paid": False}
 
 
 def _cand(i, conta="CONTA A", **mudancas):
@@ -52,31 +41,416 @@ def _cand(i, conta="CONTA A", **mudancas):
 
 
 # ------------------------------------------------------ confirmação: regras
+# O que entra, a situação, o rodapé e o que volta moram em
+# `pagamentos_dia/confirmacao.py` e são testados em `tests/test_confirmacao.py`.
+# Aqui fica o detalhe da linha selecionada, que é desenho de texto.
 
-def test_contas_em_ordem_e_quem_pede_olhada_na_frente():
-    alvos = [_lanc(1, "CONTA B", "ZULU MATERIAIS"), _lanc(2, "CONTA A", "BETA"),
-             _lanc(3, "CONTA B", "ALFA"), _lanc(4, "CONTA B", "SOCIO FICTICIO")]
-    grupos = pf.grupos_para_confirmar(alvos, destacar=["SOCIO FICTICIO"])
-    assert [conta for conta, _itens in grupos] == ["CONTA A", "CONTA B"]
-    assert [(i["paidTo"], olhar) for i, olhar in grupos[1][1]] == [
-        ("SOCIO FICTICIO", True), ("ALFA", False), ("ZULU MATERIAIS", False)]
+def _linha(i, conta="CONTA A", favorecido=None, valor=100.0,
+           chave="fulano@exemplo.com", secao=confirmacao.ENTRA,
+           situacao="APTO · vai na remessa", estado="ok", olhar=False, **mais):
+    """Uma `confirmacao.Linha` como o `grupos_da_confirmacao` a deixa."""
+    campos = dict(secao=secao, id=f"L{i}", conta=conta, valor=valor,
+                  favorecido=favorecido or f"FORNECEDOR {i:03d}", tipo="Pix",
+                  dados=chave, por_onde=f"PIX  {chave}", vencimento=None,
+                  oc=str(1000 + i), centro_custo="OBRA MODELO",
+                  descricao=f"MATERIAL OC {1000 + i}", situacao=situacao,
+                  estado=estado, olhar=olhar)
+    campos.update(mais)
+    return confirmacao.Linha(**campos)
 
 
-def test_rodape_e_o_que_volta_saem_das_mesmas_marcas():
-    itens = [_lanc(1, valor=100.0), _lanc(2, valor=250.5), _lanc(3, valor=10.0)]
-    marcado = [True, False, True]
-    assert pf.resumo_da_confirmacao(itens, marcado) == (2, 110.0, 1)
-    assert pf.nao_confirmados(itens, marcado) == {"L2"}
-    assert pf.nao_confirmados(itens, [True] * 3) == set()
+def _grupos(linhas, nao_aptos=()):
+    """Os grupos por conta, na ordem em que as linhas chegam."""
+    por_conta = {}
+    for ln in linhas:
+        por_conta.setdefault(ln.conta, confirmacao.Grupo(ln.conta, [], [])
+                             ).entram.append(ln)
+    for ln in nao_aptos:
+        por_conta.setdefault(ln.conta, confirmacao.Grupo(ln.conta, [], [])
+                             ).nao_aptos.append(ln)
+    return [por_conta[conta] for conta in sorted(por_conta)]
 
 
-def test_desmarcado_e_vermelho_seja_qual_for_o_dado():
-    assert pf.estado_na_confirmacao("ok", True) == "ok"
-    assert pf.estado_na_confirmacao("atencao", True) == "atencao"
-    assert pf.estado_na_confirmacao("ok", False) == "erro"
-    assert pf.estado_na_confirmacao("atencao", False) == "erro"
-    assert pf.ESTILO_DO_DADO[pf.estado_na_confirmacao("atencao", False)] \
-        == "MonoMiniErro.TLabel"
+def test_o_detalhe_da_confirmacao_traz_tudo_o_que_a_linha_nao_cabe():
+    """A observação vai INTEIRA: é nela que mora "pagar só metade" e "a chave
+    mudou", e o corte em 110 caracteres da conferência da remessa escondia
+    justamente o fim da frase."""
+    obs = "Observação do lançamento: " + "pagar só depois da vistoria " * 8
+    ln = _linha(1, olhar=True, obs=obs, conferencia="NF ✓ · valor ✓",
+                vencimento=_dt.date(2026, 9, 15))
+    textos = [texto for texto, _e in pf.detalhe_na_confirmacao(ln, True)]
+    assert textos[0] == "⚠  FORNECEDOR 001"
+    assert textos[1] == "PIX  fulano@exemplo.com"
+    assert "vence 15/09/2026" in textos[2] and "OC 1001" in textos[2]
+    assert any(obs in t for t in textos), "a observação não pode sair cortada"
+    assert any("NF ✓ · valor ✓" in t for t in textos)
+    assert any("APTO · vai na remessa" in t for t in textos)
+
+
+def test_o_destino_de_quem_fica_de_fora_sai_em_vermelho():
+    ln = _linha(1)
+    assert pf.detalhe_na_confirmacao(ln, True)[1][1] == "MonoMini.TLabel"
+    assert pf.detalhe_na_confirmacao(ln, False)[1][1] == "MonoMiniErro.TLabel"
+    atencao = _linha(2, estado="atencao")
+    assert pf.detalhe_na_confirmacao(atencao, True)[1][1] \
+        == "MonoMiniAtencao.TLabel"
+    nao_apto = _linha(3, secao=confirmacao.NAO_APTO, estado="erro",
+                      situacao="sem forma de pagar (nem boleto anexado, nem "
+                               "chave Pix)")
+    detalhe = pf.detalhe_na_confirmacao(nao_apto, True)
+    assert detalhe[1][1] == "MonoMiniErro.TLabel"
+    assert any("sem forma de pagar" in t and "ERP" in t for t, _e in detalhe), \
+        "o não apto diz o motivo e onde se corrige"
+
+
+def test_o_detalhe_do_nao_apto_mostra_o_que_o_cadastro_tem():
+    """O motivo diz o que falta; o cadastro diz o que ESTÁ lá — é com os dois
+    que se corrige no ERP. Junto, a observação e a conferência de sempre."""
+    nao_apto = _linha(3, secao=confirmacao.NAO_APTO, estado="erro",
+                      situacao="sem forma de pagar (nem boleto anexado, nem "
+                               "chave Pix)", chave="",
+                      obs="Pix sem chave no cadastro — buscar no ERP",
+                      conferencia="(não cruzado)",
+                      pagamento_no_cadastro="TED BANCO 001 AG 1234 CC 56789-0")
+    textos = [t for t, _e in pf.detalhe_na_confirmacao(nao_apto, True)]
+    assert any("sem forma de pagar" in t for t in textos)
+    assert "Cadastro do ERP: TED BANCO 001 AG 1234 CC 56789-0" in textos
+    assert any("Pix sem chave no cadastro" in t for t in textos)
+    assert any("(não cruzado)" in t for t in textos)
+    assert len(textos) <= pf.PagamentosDiaFrame.ALTURAS_DO_DETALHE
+
+    sem_cadastro = _linha(4, secao=confirmacao.NAO_APTO, estado="erro",
+                          situacao="sem forma de pagar", chave="")
+    assert not any(t.startswith("Cadastro do ERP")
+                   for t, _e in pf.detalhe_na_confirmacao(sem_cadastro, True))
+
+
+def test_o_detalhe_do_reembolso_diz_de_quem_e_o_documento():
+    c = _cand(1, reembolso=True, reembolso_de="FORNECEDOR ORIGINAL",
+              documento_favorecido="11122233344", reembolso_origem="cadastro")
+    textos = [t for t, _e in pf.detalhe_na_confirmacao(_linha(1, candidato=c),
+                                                      True)]
+    assert any("reembolso de FORNECEDOR ORIGINAL" in t
+               and "111.222.333-44" in t for t in textos)
+
+
+def test_no_reembolso_o_detalhe_abre_com_quem_recebe_de_verdade():
+    ln = _linha(1, reembolso=True, reembolso_nome="PESSOA DE EXEMPLO")
+    assert pf.detalhe_na_confirmacao(ln, True)[0] \
+        == ("PESSOA DE EXEMPLO (reembolso de FORNECEDOR 001)", "Forte.TLabel")
+
+
+# ----------------------------------------- confirmação: as duas fases, sem tela
+# O frame é montado sem `_build` e sem Tk (`__new__`), e a janela é trocada
+# pela resposta que a pessoa daria. O que se prova é a ordem de dinheiro: a
+# leitura não troca `self.resultado`; cancelar não grava nem troca; confirmar
+# remonta sem rede e grava o confirmado.
+
+def _lanc_api(ident, conta="CONTA A", favorecido=None, valor=100.0):
+    """Um lançamento a pagar, no formato da API — com dados de mentira."""
+    return {"id": ident, "tradePayableId": f"T-{ident}",
+            "paidTo": favorecido or f"FORNECEDOR {ident}",
+            "description": "MATERIAL OC 1234", "documentNumber": "1234",
+            "remainingValue": valor, "plannedDate": "2026-09-14",
+            "tradePayableAccount": {"name": conta},
+            "tradePayablePaymentMethod": "Pix",
+            "paidToBankAccount": "PIX EMAIL fulano@exemplo.com",
+            "paid": False}
+
+
+class _RegistroQueAnota:
+    """O registro de remessas: responde às leituras e anota escrita."""
+
+    def __init__(self):
+        self.escritas = []
+
+    def maior_ordem_do_dia(self, _quando):
+        return 0
+
+    def envio_de(self, _codigo):
+        return None
+
+    def envio_da_referencia(self, _referencia):
+        return None
+
+    def alocar_nsa(self, convenio):
+        self.escritas.append(("alocar_nsa", convenio))
+        return 1
+
+    def registrar(self, *a, **k):
+        self.escritas.append(("registrar", a, k))
+
+
+def _sem_cadastro():
+    raise ValueError("contas_mc.json ilegível")
+
+
+def _dono_sem_tela(monkeypatch, tmp_path, lancamentos):
+    import queue
+    from threading import Event
+
+    dono = pf.PagamentosDiaFrame.__new__(pf.PagamentosDiaFrame)
+    dono.q = queue.Queue()
+    dono._parar = Event()
+    dono.worker = None
+    dono.lancamentos = lancamentos
+    dono.anexos, dono.overviews, dono.participantes = {}, {}, {}
+    dono.resultado = "o resultado de antes"
+    dono._periodo_do_resultado = "o período de antes"
+    dono.lbl = SimpleNamespace(configure=lambda **_k: None)
+    dono.update_idletasks = lambda: None
+    registro = _RegistroQueAnota()
+    monkeypatch.setattr(pf, "_pasta_base", lambda: tmp_path)
+    monkeypatch.setattr(pf, "_historico", lambda avisar=None: registro)
+    monkeypatch.setattr(pf, "_carregar_mapas", _sem_cadastro)
+    monkeypatch.setattr(pf.auditoria, "registrar", lambda *a, **k: None)
+    monkeypatch.setattr(pf.regras, "carregar_fornecedores", lambda *_a: {})
+    monkeypatch.setattr(pf.regras, "carregar_confirmar", lambda *_a: [])
+    return dono, registro
+
+
+def _opcoes(tmp_path):
+    hoje = _dt.date(2026, 9, 14)
+    return {"periodo": (hoje, hoje), "cruzar": False, "incluir_pagos": False,
+            "pasta": str(tmp_path)}
+
+
+def _mensagens(dono):
+    saida = []
+    while not dono.q.empty():
+        saida.append(dono.q.get_nowait())
+    return saida
+
+
+def _ler(dono, tmp_path, depois="planilha"):
+    """Roda a fase 1 e devolve (pacote da janela, mensagens)."""
+    dono._t_apurar(["CONTA A"], _opcoes(tmp_path), depois)
+    msgs = _mensagens(dono)
+    pacote = next((v for t, v in msgs if t == "confirmar"), None)
+    return pacote, msgs
+
+
+def test_a_leitura_nao_troca_o_resultado_e_manda_a_janela(monkeypatch,
+                                                         tmp_path):
+    dono, registro = _dono_sem_tela(
+        monkeypatch, tmp_path,
+        [_lanc_api("L1"), _lanc_api("L2", conta="OUTRA CONTA")])
+    pacote, msgs = _ler(dono, tmp_path)
+    assert dono.resultado == "o resultado de antes", \
+        "só o Confirmar troca o resultado: o Gerar remessa sai dele"
+    entradas, resultado, analise, grupos, depois, pasta = pacote
+    assert [i["id"] for i in entradas.selecionados] == ["L1"], \
+        "só as contas marcadas"
+    assert [r["id"] for r in resultado.contas["CONTA A"]] == ["L1"]
+    assert (depois, pasta) == ("planilha", str(tmp_path))
+    aviso, = analise.avisos
+    assert aviso.startswith(confirmacao.AVISO_SEM_CADASTRO), \
+        "cadastro ilegível vira aviso na janela, e a planilha segue"
+    assert [g.conta for g in grupos] == ["CONTA A"]
+    assert registro.escritas == [], "a leitura não reserva NSA nem registra"
+    assert msgs[-1] == ("botoes", "normal")
+
+
+def test_cancelar_a_confirmacao_nao_grava_e_mantem_o_resultado(monkeypatch,
+                                                              tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])
+    pacote, _msgs = _ler(dono, tmp_path)
+    dono._janela_confirmar = lambda grupos, avisos, botao: None
+    gravou = []
+    dono._gravar_planilha = lambda *a: gravou.append(a)
+
+    dono._confirmar_e_seguir(pacote)
+    assert dono.resultado == "o resultado de antes"
+    assert dono._periodo_do_resultado == "o período de antes"
+    assert gravou == []
+    assert list(tmp_path.glob("*.xlsx")) == []
+
+
+def test_confirmar_tira_o_desmarcado_e_grava_a_planilha(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(
+        monkeypatch, tmp_path,
+        [_lanc_api("L1"), _lanc_api("L2", favorecido="OUTRO FORNECEDOR")])
+    pacote, _msgs = _ler(dono, tmp_path)
+    # A remontagem não pode voltar à rede: sem navegador nenhum aqui, baixar
+    # um anexo estouraria.
+    dono.anx = None
+    dono._janela_confirmar = lambda grupos, avisos, botao: {"L2"}
+
+    dono._confirmar_e_seguir(pacote)
+    contas = dono.resultado.contas
+    assert [r["id"] for regs in contas.values() for r in regs] == ["L1"]
+    assert [(o["id"], o["motivo"]) for o in dono.resultado.omitidos] \
+        == [("L2", pf.regras.MOTIVO_NAO_CONFIRMADO)]
+    assert dono._periodo_do_resultado == _opcoes(tmp_path)["periodo"]
+    arquivo = next(v for t, v in _mensagens(dono) if t == "arquivo")
+    assert arquivo.exists() and arquivo.parent == tmp_path
+
+
+def test_a_busca_guarda_o_periodo_que_leu(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [])
+    dia = _dt.date(2026, 9, 14)
+    api = SimpleNamespace(
+        capturar_credenciais=lambda _log: True, _req_anexos=True,
+        listar_a_pagar=lambda _i, _f, log=None: [_lanc_api("L1")],
+        anexos_de_titulos=lambda *_a, **_k: {},
+        listar_overviews=lambda *_a, **_k: {},
+        listar_participantes=lambda log=None: {})
+    dono.anx = SimpleNamespace(garantir_sessao=lambda _log: api)
+    dono._t_buscar(dia, dia)
+    assert dono._periodo_da_busca == (dia, dia)
+    assert [i["id"] for i in dono.lancamentos] == ["L1"]
+
+
+def test_a_planilha_sai_do_periodo_buscado_e_nao_da_tela(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])
+    dia14, dia15 = _dt.date(2026, 9, 14), _dt.date(2026, 9, 15)
+    dono._periodo_da_busca = (dia14, dia14)
+    dono._periodo = lambda: (dia15, dia15)        # a pessoa mudou a data
+    for nome, valor in (("v_cruzar", False), ("v_incluir_pagos", False),
+                        ("v_pasta", str(tmp_path))):
+        setattr(dono, nome, SimpleNamespace(get=lambda v=valor: v))
+    pedidos = []
+    dono.anx = SimpleNamespace(
+        submeter=lambda _rotulo, _fn, *a, dona=None: pedidos.append(a))
+    dono._apurar_e_confirmar(["CONTA A"], depois="planilha")
+    (_escolhidas, opcoes, _depois), = pedidos
+    assert opcoes["periodo"] == (dia14, dia14)
+    avisos = [str(v) for t, v in _mensagens(dono) if t == "log"]
+    assert any("não são as da busca" in a for a in avisos)
+
+
+def _api_da_busca(**troca):
+    base = dict(
+        capturar_credenciais=lambda _log: True, _req_anexos=True,
+        listar_a_pagar=lambda _i, _f, log=None: [_lanc_api("L1")],
+        anexos_de_titulos=lambda *_a, **_k: {},
+        listar_overviews=lambda *_a, **_k: {},
+        listar_participantes=lambda log=None: {})
+    base.update(troca)
+    return SimpleNamespace(**base)
+
+
+def test_busca_interrompida_nao_deixa_periodo(monkeypatch, tmp_path):
+    """Parar no meio dos anexos ou dos detalhes deixava o período da busca
+    valendo com metade dos dados — sem a observação, o "PAGAR À MÃO" nem é
+    detectado. Sem período, o passo 2 recusa."""
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [])
+    dia = _dt.date(2026, 9, 14)
+    dono._periodo_da_busca = (dia, dia)          # o de uma busca anterior
+
+    def anexos(*_a, **_k):
+        dono._parar.set()
+        return {}
+
+    dono.anx = SimpleNamespace(
+        garantir_sessao=lambda _log: _api_da_busca(anexos_de_titulos=anexos))
+    dono._t_buscar(dia, dia)
+    assert dono._periodo_da_busca is None
+
+
+def test_busca_que_cai_nao_deixa_periodo(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [])
+    dia = _dt.date(2026, 9, 14)
+    dono._periodo_da_busca = (dia, dia)
+
+    def cai(*_a, **_k):
+        raise OSError("a rede caiu nos detalhes")
+
+    dono.anx = SimpleNamespace(
+        garantir_sessao=lambda _log: _api_da_busca(listar_overviews=cai))
+    dono._t_buscar(dia, dia)
+    assert dono._periodo_da_busca is None
+
+
+def test_sem_periodo_da_busca_o_passo_2_recusa(monkeypatch, tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])
+    dono._periodo_da_busca = None
+    dono._periodo = lambda: (_dt.date(2026, 9, 14),) * 2
+    recados, pedidos = [], []
+    monkeypatch.setattr(pf.messagebox, "showinfo",
+                        lambda titulo, texto: recados.append(texto))
+    dono.anx = SimpleNamespace(
+        submeter=lambda _rotulo, _fn, *a, dona=None: pedidos.append(a))
+    dono._apurar_e_confirmar(["CONTA A"], depois="planilha")
+    assert pedidos == []
+    assert recados == ["Busque os lançamentos primeiro."]
+
+
+def _anexo_pdf(nome):
+    return {"filename": nome, "tagName": "Nota Fiscal", "extension": ".pdf",
+            "downloadUrl": f"https://exemplo.invalid/{nome}.pdf"}
+
+
+def test_parar_durante_a_leitura_nao_abre_a_janela(monkeypatch, tmp_path):
+    """Parar no meio do download deixava a janela abrir com leitura pela
+    metade: o boleto dentro da NF não lido virava Pix do cadastro, verde. Com
+    o Parar ligado depois da leitura, nada é apurado e a janela não abre."""
+    dono, _registro = _dono_sem_tela(
+        monkeypatch, tmp_path, [_lanc_api("L1"), _lanc_api("L2")])
+    dono.anexos = {"T-L1": [_anexo_pdf("nf-1")], "T-L2": [_anexo_pdf("nf-2")]}
+
+    def baixar(_url):
+        dono._parar.set()               # a pessoa clicou em Parar agora
+        return None
+
+    dono.anx = SimpleNamespace(api=SimpleNamespace(baixar_anexo=baixar))
+    dono._t_apurar(["CONTA A"], dict(_opcoes(tmp_path), cruzar=True),
+                   "planilha")
+    msgs = _mensagens(dono)
+    assert not [v for t, v in msgs if t == "confirmar"], "a janela não abre"
+    assert ("status", "Interrompido — nada foi apurado.") in msgs
+    assert any("nterrompido" in str(v) for t, v in msgs if t == "log")
+    assert dono.resultado == "o resultado de antes"
+    assert msgs[-1] == ("botoes", "normal")
+
+
+def test_anexo_que_nao_foi_lido_vira_aviso_na_janela(monkeypatch, tmp_path):
+    """Download que devolve None ou levanta não pode passar calado: a forma de
+    pagar daquela linha foi decidida sem o documento."""
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])
+    dono.anexos = {"T-L1": [_anexo_pdf("nf-1"), _anexo_pdf("nf-2"),
+                            _anexo_pdf("nf-3")]}
+    monkeypatch.setattr(pf.relatorio, "texto_de_pdf",
+                        lambda dados: "texto da nota" if dados else "")
+
+    def baixar(url):
+        if url.endswith("nf-2.pdf"):
+            return None
+        if url.endswith("nf-3.pdf"):
+            raise OSError("o download caiu")
+        return b"%PDF ficticio"
+
+    dono.anx = SimpleNamespace(api=SimpleNamespace(baixar_anexo=baixar))
+    dono._t_apurar(["CONTA A"], dict(_opcoes(tmp_path), cruzar=True),
+                   "planilha")
+    msgs = _mensagens(dono)
+    entradas, _resultado, analise, _grupos, _depois, _pasta = next(
+        v for t, v in msgs if t == "confirmar")
+    aviso = confirmacao.aviso_de_anexos_nao_lidos(entradas.anexos_nao_lidos)
+    assert entradas.anexos_nao_lidos == {"https://exemplo.invalid/nf-2.pdf",
+                                         "https://exemplo.invalid/nf-3.pdf"}
+    assert aviso.startswith("2 anexo(s)")
+    assert analise.avisos[0] == aviso
+    assert any(aviso in str(v) for t, v in msgs if t == "log")
+    assert entradas.textos == {"https://exemplo.invalid/nf-1.pdf":
+                               "texto da nota"}
+
+
+def test_a_remessa_sem_planilha_passa_pela_mesma_confirmacao(monkeypatch,
+                                                            tmp_path):
+    dono, _registro = _dono_sem_tela(monkeypatch, tmp_path, [_lanc_api("L1")])
+    pacote, _msgs = _ler(dono, tmp_path, depois="remessa")
+    botoes, conferiu = [], []
+    dono._janela_confirmar = lambda grupos, avisos, botao: (
+        botoes.append(botao) or set())
+    dono._gravar_planilha = lambda *a: conferiu.append("planilha")
+    dono.gerar_remessa = lambda: conferiu.append(dono.resultado)
+
+    dono._confirmar_e_seguir(pacote)
+    assert botoes == ["Confirmar e conferir a remessa"]
+    assert conferiu == [dono.resultado], \
+        "confirmado, vai à conferência da remessa — e não grava planilha"
+    assert dono.resultado != "o resultado de antes"
 
 
 # --------------------------------------------------------- remessa: regras
@@ -269,16 +643,18 @@ def test_a_confirmacao_nao_cresce_com_o_numero_de_lancamentos(raiz, monkeypatch)
         linhas["n"] = len(tabela.get_children())
 
     _r, pequena = _abrir(raiz, monkeypatch, "_janela_confirmar",
-                         [_lanc(i) for i in range(3)])
+                         _grupos([_linha(i) for i in range(3)]))
     _r, grande = _abrir(raiz, monkeypatch, "_janela_confirmar",
-                        [_lanc(i, conta=f"CONTA {i % 18:02d}")
-                         for i in range(300)], roteiro=contar)
+                        _grupos([_linha(i, conta=f"CONTA {i % 18:02d}")
+                                 for i in range(300)]), roteiro=contar)
     assert grande == pequena
-    assert linhas["n"] == 300 + 18, "um lançamento por linha, mais as contas"
+    assert linhas["n"] == 300 + 18 + 18, \
+        "um lançamento por linha, mais a conta e a seção ENTRAM de cada uma"
 
 
 def test_desmarcar_tira_do_dia_e_o_rodape_acompanha(raiz, monkeypatch):
-    alvos = [_lanc(1, valor=100.0), _lanc(2, valor=250.0), _lanc(3, valor=40.0)]
+    grupos = _grupos([_linha(1, valor=100.0), _linha(2, valor=250.0),
+                      _linha(3, valor=40.0)])
     visto = {}
 
     def roteiro(top, tabela):
@@ -290,7 +666,7 @@ def test_desmarcar_tira_do_dia_e_o_rodape_acompanha(raiz, monkeypatch):
         visto["rodape"] = _resumo(top)
         _botao(top, "Confirmar e gerar").invoke()
 
-    fora, _w = _abrir(raiz, monkeypatch, "_janela_confirmar", alvos,
+    fora, _w = _abrir(raiz, monkeypatch, "_janela_confirmar", grupos,
                       roteiro=roteiro)
     assert fora == {"L2"}
     assert visto["marca"] == pf.DESMARCADA
@@ -307,7 +683,7 @@ def test_marcar_de_novo_devolve_ao_dia(raiz, monkeypatch):
         _botao(top, "Confirmar e gerar").invoke()
 
     fora, _w = _abrir(raiz, monkeypatch, "_janela_confirmar",
-                      [_lanc(1), _lanc(2)], roteiro=roteiro)
+                      _grupos([_linha(1), _linha(2)]), roteiro=roteiro)
     assert fora == set()
 
 
@@ -316,16 +692,17 @@ def test_cancelar_ou_fechar_nao_gera_nada(raiz, monkeypatch):
         _alternar(raiz, tabela, "i0")
         _botao(top, "Cancelar").invoke()
 
-    assert _abrir(raiz, monkeypatch, "_janela_confirmar", [_lanc(1)],
+    assert _abrir(raiz, monkeypatch, "_janela_confirmar", _grupos([_linha(1)]),
                   roteiro=cancelar)[0] is None
-    assert _abrir(raiz, monkeypatch, "_janela_confirmar", [_lanc(1)])[0] is None
+    assert _abrir(raiz, monkeypatch, "_janela_confirmar",
+                  _grupos([_linha(1)]))[0] is None
 
 
-def test_o_destaque_vem_na_frente_e_o_detalhe_mostra_o_destino(raiz,
-                                                               monkeypatch):
-    alvos = [_lanc(1, favorecido="ALFA"),
-             _lanc(2, favorecido="SOCIO FICTICIO", chave="socio@exemplo.com")]
-    _nome, dado, _estado = pf.quem_recebe(alvos[1], {})
+def test_o_destaque_aparece_e_o_detalhe_mostra_o_destino(raiz, monkeypatch):
+    grupos = _grupos([_linha(2, favorecido="SOCIO FICTICIO",
+                             chave="socio@exemplo.com", olhar=True),
+                      _linha(1, favorecido="ALFA")])
+    dado = "PIX  socio@exemplo.com"
     visto = {}
 
     def roteiro(top, tabela):
@@ -337,12 +714,53 @@ def test_o_destaque_vem_na_frente_e_o_detalhe_mostra_o_destino(raiz,
         _alternar(raiz, tabela, "i0")
         visto["depois"] = str(_rotulo(top, dado).cget("style"))
 
-    _abrir(raiz, monkeypatch, "_janela_confirmar", alvos, ["SOCIO FICTICIO"],
-           roteiro=roteiro)
+    _abrir(raiz, monkeypatch, "_janela_confirmar", grupos, roteiro=roteiro)
     assert visto["primeira"] == "⚠  SOCIO FICTICIO"
     assert visto["antes"] != "MonoMiniErro.TLabel"
     assert visto["depois"] == "MonoMiniErro.TLabel", \
         "o destino de quem fica de fora sai em vermelho no detalhe"
+
+
+def test_o_nao_apto_aparece_sem_marca_e_nao_se_forca(raiz, monkeypatch):
+    """O pedido do dono: ver o que NÃO entrou antes de gerar, para corrigir no
+    ERP. Ele aparece em vermelho, com o motivo, e sem marca — um clique nele
+    não o põe na planilha."""
+    motivo = "sem forma de pagar (nem boleto anexado, nem chave Pix)"
+    grupos = _grupos([_linha(1, valor=100.0)],
+                     nao_aptos=[_linha(9, valor=250.0, secao=confirmacao.NAO_APTO,
+                                       estado="erro", situacao=motivo)])
+    visto = {}
+
+    def roteiro(top, tabela):
+        visto["marca"] = tabela.set("n0", "marca")
+        visto["tags"] = tabela.item("n0", "tags")
+        visto["situacao"] = tabela.set("n0", "situacao")
+        _alternar(raiz, tabela, "n0")
+        visto["depois"] = tabela.set("n0", "marca")
+        visto["rodape"] = _resumo(top)
+        _botao(top, "Confirmar e gerar").invoke()
+
+    fora, _w = _abrir(raiz, monkeypatch, "_janela_confirmar", grupos,
+                      roteiro=roteiro)
+    assert fora == set(), "o não apto não volta como desmarcado: nunca entrou"
+    assert visto["marca"] == visto["depois"] == ""
+    assert "erro" in visto["tags"]
+    assert visto["situacao"].endswith(motivo)
+    assert visto["rodape"].startswith("1 marcado")
+    assert "R$ 100,00" in visto["rodape"], "o não apto não soma no total"
+    assert visto["rodape"].endswith("1 não apto")
+
+
+def test_os_avisos_da_analise_aparecem_em_cima(raiz, monkeypatch):
+    visto = {}
+
+    def roteiro(top, _tabela):
+        visto["aviso"] = str(_rotulo(top, confirmacao.AVISO_SEM_REGISTRO
+                                     ).cget("text"))
+
+    _abrir(raiz, monkeypatch, "_janela_confirmar", _grupos([_linha(1)]),
+           [confirmacao.AVISO_SEM_REGISTRO], roteiro=roteiro)
+    assert confirmacao.AVISO_SEM_REGISTRO in visto["aviso"]
 
 
 def _pagador(convenio="C1", conta="50001"):

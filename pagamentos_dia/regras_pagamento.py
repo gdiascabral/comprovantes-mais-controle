@@ -231,6 +231,18 @@ CHAVE_COPIA_COLA = "COPIA_COLA"
 #: extrai do comentário precisam concordar sobre o que É um copia-e-cola.
 PIX_COPIA_COLA = re.compile(r"00020[01][0-9A-Za-z._@+\-/*:]{20,500}?6304[0-9A-F]{4}")
 
+#: O texto de quem JÁ PAGOU: comprovante de banco, de Pix, de caixa. O boleto
+#: em si diz "local de pagamento", "comprovante de entrega" e "autenticação
+#: mecânica" — e nenhuma destas.
+#: Mora aqui, e não no `relatorio.py`, porque dois leitores precisam concordar
+#: sobre o que é prova de pagamento: o `relatorio` (a linha de boleto JÁ PAGO
+#: não se paga de novo) e o `reembolso` (o comprovante renomeado "PAGAR PARA"
+#: traz a chave de quem RECEBEU, não a de quem deve ser reembolsado), e o
+#: `reembolso` não importa o `relatorio`.
+PROVA_DE_PAGAMENTO = re.compile(
+    r"comprovante\s+de\s+(?:pagamento|transa)|pagamento\s+(?:efetuado|realizado)|"
+    r"valor\s+pago|data\s+d[oe]\s+pagamento|pix\s+enviado", re.I)
+
 #: Os DDDs que existem no Brasil. A lista é EXATA de propósito: é ela que
 #: separa CPF de celular quando vêm onze dígitos crus. "03123456749" começa em
 #: 03, que não é DDD de lugar nenhum — logo não é telefone.

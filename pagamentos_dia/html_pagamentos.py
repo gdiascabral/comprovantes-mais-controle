@@ -63,6 +63,17 @@ _RODAPE_MAX_LINHAS = 4
 
 SUBTITULO_GERAL = "vencimentos em aberto no Mais Controle - todas as contas"
 
+#: Até quantos caracteres a descrição do HTML geral vai para o campo de
+#: descrição do banco. O Inter aceita bem mais (dono, 14/09/2026), e só a
+#: conta que diz INTER no nome leva 140. Todas as outras levam 100: no Sicoob
+#: o campo deixou digitar 140, mas "vira e mexe ele limita", e um limite que
+#: muda sem aviso é descoberto na hora de colar. O lado seguro é o curto —
+#: com a regra ao contrário ("SICOOB no nome → 100"), a conta Sicoob cujo
+#: nome não dissesse SICOOB levava 140, e o banco podia cortar justamente a
+#: NF e a OC do fim. Quem aplica é `descricao_para_colar`, sem cortar NF nem OC.
+LIMITE_DESCRICAO_INTER = 140
+LIMITE_DESCRICAO = 100
+
 _CENTAVO = Decimal("0.01")
 _PLACEHOLDER = re.compile(r"__([A-Z][A-Z_]*[A-Z])__")
 
@@ -127,6 +138,193 @@ def para_colar(texto) -> str:
     s = relatorio.sem_acento(texto or "").replace("\n", " ")
     s = re.sub(r"[^A-Za-z0-9 .,/\-]", " ", s)
     return re.sub(r"\s+", " ", s).strip()
+
+
+#: Quem recebe o reembolso não é informação para o extrato do banco (dono,
+#: 14/09/2026). "(Reembolso Fulano)" sai inteiro; fora de parênteses sai a
+#: palavra "reembolso" e as palavras só de letras depois dela — o nome —, até
+#: uma parada e no máximo `_MAX_PALAVRAS_DE_QUEM`. Tirar "até o próximo
+#: separador" apagava o que vinha depois ("Reembolso material QD 98 LT 97
+#: casa 2" perdia o lote); o teto de três deixava o fim de um nome comprido
+#: ("Reembolso Fulana Sicrana de Tal" sobrava "Tal").
+_REEMBOLSO_ENTRE_PARENTESES = re.compile(r"\([^()]*reembols[^()]*\)", re.I)
+_MAX_PALAVRAS_DE_QUEM = 5
+#: As PARADAS do filtro do reembolso, numa lista só: palavras que abrem centro
+#: de custo ou imóvel (o que vem depois é o lote) e rótulos de documento (o
+#: que vem depois é o número, e o rótulo "NF"/"OC" é o que o Anexar lê — sem
+#: ele, "Reembolso NF 1234 material" virava "1234 material").
+PARADAS_DO_REEMBOLSO = frozenset({
+    "QD", "LT", "TB", "RR", "RPB", "CASA", "CS", "LOTE", "QUADRA",
+    "NF", "NFE", "NFS", "OC", "OS"})
+_PEDACOS = re.compile(r"[A-Za-z0-9]+|\s+|[^A-Za-z0-9\s]")
+_SO_LETRAS = re.compile(r"[A-Za-z]+")
+
+
+def _sem_reembolso(s: str) -> str:
+    """O texto (já sem acento) sem a menção de reembolso.
+
+    Depois de "reembolso" saem as palavras só de letras, no máximo cinco;
+    para antes disso em palavra com dígito, numa das `PARADAS_DO_REEMBOLSO`
+    e em pontuação — "REEMBOLSO FULANO - CIMENTO" guarda o "CIMENTO". O
+    separador colado na palavra ("Reembolso: Fulano") vai junto."""
+    pedacos = _PEDACOS.findall(_REEMBOLSO_ENTRE_PARENTESES.sub(" ", s))
+
+    def proximo(i):
+        while i < len(pedacos) and pedacos[i].isspace():
+            i += 1
+        return i
+
+    saida, i = [], 0
+    while i < len(pedacos):
+        if not pedacos[i].casefold().startswith("reembols"):
+            saida.append(pedacos[i])
+            i += 1
+            continue
+        i += 1
+        j = proximo(i)
+        if j < len(pedacos) and pedacos[j] in (":", "-", "–", "—"):
+            i = j + 1
+        for _ in range(_MAX_PALAVRAS_DE_QUEM):
+            j = proximo(i)
+            if (j >= len(pedacos) or not _SO_LETRAS.fullmatch(pedacos[j])
+                    or pedacos[j].upper() in PARADAS_DO_REEMBOLSO):
+                break
+            i = j + 1
+        saida.append(" ")
+    return "".join(saida)
+
+
+def limite_da_descricao(conta) -> int:
+    """Quantos caracteres cabem na descrição do banco desta conta. INTER como
+    palavra inteira: "CONTA INTERNA" não é do Inter e fica no lado seguro."""
+    return (LIMITE_DESCRICAO_INTER
+            if re.search(r"\binter\b", relatorio.chave(conta or ""))
+            else LIMITE_DESCRICAO)
+
+
+#: Uma palavra do banco: letras e dígitos, mais o hífen COLADO entre dois
+#: dígitos. "LT 10-11" partido em "LT 10 11" faz o casamento do Anexar ler
+#: "LT 10" e anexar o comprovante no lote errado; o hífen que separa palavras
+#: ("ESCRITORIO - X", "ESCRITORIO-X") continua saindo.
+_PALAVRA = re.compile(r"(?:[A-Za-z0-9]|(?<=\d)-(?=\d))+")
+
+
+def _palavras(texto, tirar_reembolso: bool = True) -> list[str]:
+    """As palavras que vão ao banco: sem acento, sem menção de reembolso e só
+    letra, número e o hífen entre dígitos — todo o resto é separador.
+
+    O centro de custo passa com `tirar_reembolso=False`: ele é o nome do
+    imóvel ou da obra no cadastro, não recado de quem lançou, e é por ele que
+    o Anexar casa o comprovante."""
+    s = relatorio.sem_acento(str(texto or ""))
+    if tirar_reembolso:
+        s = _sem_reembolso(s)
+    return _PALAVRA.findall(s)
+
+
+#: O ponto de milhar dentro do número da NF ou da OC ("1.234").
+_PONTO_ENTRE_DIGITOS = re.compile(r"(?<=\d)\.(?=\d)")
+
+
+def _palavras_do_numero(texto) -> list[str]:
+    """As palavras do nº da NF ou da OC.
+
+    Só o PONTO entre dígitos some sem virar espaço: "1.234" partido em
+    "1 234" deixa de bater com a nota e com o casamento do Anexar. Barra e
+    hífen entre dígitos separam números — "5678/5679" são duas notas, e
+    juntá-las dava "56785679", um número que não existe —, então aqui o hífen
+    colado também vira espaço, ao contrário do centro de custo."""
+    s = _PONTO_ENTRE_DIGITOS.sub("", relatorio.sem_acento(str(texto or "")))
+    return [p for palavra in _palavras(s) for p in palavra.split("-") if p]
+
+
+def _que_cabem(palavras, espaco: int) -> list[str]:
+    """As primeiras `palavras` que, juntas por espaço, cabem em `espaco`.
+    Nunca corta palavra ao meio: um "LT 12" que vira "LT 1" aponta para outro
+    lote, e a palavra ausente não engana ninguém."""
+    saida, usado = [], 0
+    for p in palavras:
+        custo = len(p) + (1 if saida else 0)
+        if usado + custo > espaco:
+            break
+        saida.append(p)
+        usado += custo
+    return saida
+
+
+def descricao_para_colar(registro, conta) -> str:
+    """A descrição que o botão "Copiar" do HTML geral põe no campo do banco.
+
+    Não é a `descricao` da planilha: aquela é para conferir, esta é para o
+    extrato. Sai das peças soltas que `relatorio.partes_no_registro` pôs na
+    linha — nunca da frase pronta, que teria de ser reparseada. As regras são
+    do dono (14/09/2026):
+
+    - o centro de custo sempre NA FRENTE: é por ele que o Anexar casa o
+      comprovante com o lançamento;
+    - NF e OC → "CC NF x OC y"; só OC → "CC OC y"; só NF → "CC NF x"; nenhuma
+      das duas → "CC " + a descrição do lançamento, ou "CC C x M y" quando ela
+      é de medição de mão de obra (a forma curta que a planilha já mostra);
+    - água e luz continuam como na planilha (CC + descrição + OC): ali o
+      "número da NF" é o da fatura e não identifica nada;
+    - sem menção de reembolso, sem acento e sem caractere especial (o hífen
+      que separa palavras incluído; o COLADO entre dígitos, como em
+      "LT 10-11", fica), e sem repetir o centro de custo que a descrição já
+      traz; no
+      nº da NF e da OC só o ponto entre dígitos some sem virar espaço
+      ("1.234" é "1234", não "1 234"), e barra ou hífen separam números
+      ("5678/5679" é "5678 5679");
+    - no tamanho do banco (`limite_da_descricao`), cortando em fronteira de
+      palavra. A NF e a OC NUNCA são cortadas — são o que liga o pagamento ao
+      documento; quem cede é a descrição do lançamento e, se ainda não
+      couber, o centro de custo.
+    """
+    r = registro or {}
+    utilidade = bool(r.get("utilidade"))
+    cc = _palavras(r.get("centro_custo"), tirar_reembolso=False)
+    nf = [] if utilidade else _palavras_do_numero(r.get("nf"))
+    oc = _palavras_do_numero(r.get("oc_da_descricao"))
+    fixos = (["NF", *nf] if nf else []) + (["OC", *oc] if oc else [])
+    medicao = (None if utilidade or fixos
+               else relatorio.contrato_e_medicao(r.get("descricao_lancamento")))
+    if medicao:
+        # Mão de obra: a forma curta da planilha, que também não se corta.
+        fixos = ["C", *_palavras_do_numero(medicao[0]),
+                 "M", *_palavras_do_numero(medicao[1])]
+
+    texto = []
+    if utilidade or not fixos:
+        texto = _palavras(r.get("descricao_lancamento"))
+        n = len(cc)
+        if n and [p.casefold() for p in texto[:n]] == [p.casefold() for p in cc]:
+            texto = texto[n:]
+
+    limite = limite_da_descricao(conta)
+    if len(" ".join(cc + texto + fixos)) > limite:
+        resto = cc + fixos
+        texto = _que_cabem(texto, limite - len(" ".join(resto)) - (1 if resto else 0))
+    if len(" ".join(cc + texto + fixos)) > limite:
+        cc = _que_cabem(cc, limite - len(" ".join(fixos)) - (1 if fixos else 0))
+    return " ".join(cc + texto + fixos)
+
+
+def quem_recebe(registro) -> str:
+    """O que vai na coluna do favorecido do HTML geral.
+
+    No reembolso ("PAGAR PARA") o dinheiro vai para a PESSOA, não para o
+    fornecedor do lançamento, e o HTML é o caminho de pagar à mão: com o
+    fornecedor na coluna, quem paga por aqui erra o destinatário. É a mesma
+    forma da coluna QUEM RECEBE da janela de confirmação
+    (`confirmacao.Linha.quem_recebe`, que é propriedade de uma linha da
+    janela e por isso não se chama daqui) — "<pessoa ou ?> (reembolso de
+    <fornecedor>)" — e um teste confere que as duas continuam iguais. Cada
+    nome passa por `para_colar` sozinho, porque ele tira os parênteses."""
+    r = registro or {}
+    favorecido = para_colar(r.get("favorecido"))
+    if r.get("reembolso"):
+        return (f"{para_colar(r.get('reembolso_nome')) or '?'} "
+                f"(reembolso de {favorecido or '?'})")
+    return favorecido
 
 
 def dado_para_colar(tipo, dados) -> str:
@@ -209,8 +407,8 @@ def contas_do_html_geral(resultado) -> list[dict]:
                 "dados_limpo": dado_para_colar(tipo, r.get("dados")),
                 "valor": valor_para_colar(r.get("valor")),
                 "centavos": centavos(r.get("valor")),
-                "descricao": para_colar(r.get("descricao")),
-                "favorecido": para_colar(r.get("favorecido")),
+                "descricao": descricao_para_colar(r, nome),
+                "favorecido": quem_recebe(r),
                 "status": str(r.get("status") or ""),
                 "conferencia": str(r.get("conferencia") or ""),
                 "obs": str(r.get("obs") or ""),

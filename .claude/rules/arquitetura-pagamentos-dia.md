@@ -60,6 +60,35 @@ paths:
   não lê o QR (o exe não tem biblioteca para isso). Comprovante não conta —
   pelo rótulo ou pelo texto de quem já pagou —, e a remessa continua
   recusando a linha (`MOTIVO_SEM_CHAVE`): é pagamento à mão.
+  (f) **A ordem das linhas é (tipo, ordem do sistema invertida)** (dono,
+  14/09/2026): Boleto antes de Pix, como sempre, e dentro do tipo o que
+  aparece por ÚLTIMO na tela do ERP vem primeiro. `listar_a_pagar`
+  reaproveita a URL da tela, e nada no caminho até `montar_registros`
+  reordena, então a posição na lista (`registro["ordem"]`) é a ordem que o
+  dono vê. Vale para a planilha, o HTML e a sequência dos "seus números".
+  (g) **"REEMBOLSO X" no nº do documento não é NF** em nenhuma fonte (o
+  fallback do `overview` deixava passar, e a descrição saía "NF REEMBOLSO
+  X"), mas continua contando como compra documentada
+  (`documento_declara_reembolso`) — senão o título sem boleto deixaria de
+  entrar pela chave do cadastro. Sem aviso "PAGAR PARA", essa linha sai
+  ATENÇÃO: o dinheiro pode ser de outra pessoa que não o favorecido.
+  (h) **Aviso "PAGAR PARA" cuja frase está só no NOME do arquivo** (14/09/2026:
+  o texto do PDF era só "PIX: <cpf>" e a chave nunca era lida). A janela
+  antiga só abria depois da frase no texto; sem ela, vale só o primeiro item
+  logo depois de UM rótulo `PIX:`/`CHAVE PIX:` (com tipo declarado, menos
+  CNPJ), só se for CPF, telefone, e-mail ou aleatória, e o texto inteiro é
+  recusado se parecer comprovante, nota, DANFE, chave de acesso, recibo ou
+  cupom — renomear um desses como aviso não pode pôr a chave da loja no
+  reembolso (o revisor-dinheiro provou os três jeitos). Quando o favorecido
+  É a pessoa do aviso (nome igual ou começo em fronteira de palavra, e nos
+  Contatos com CPF que fecha — Contatos vazio falha FECHADO), o nome completo
+  desempata homônimos e a chave do lançamento só CONFIRMA a do aviso ou a do
+  cadastro local; sozinha, ela vai para a Obs ("não confirmada… conferir de
+  quem é") e a linha sai "ATENÇÃO — sem dados de pgto", que a remessa recusa.
+  `PROVA_DE_PAGAMENTO` mora em `regras_pagamento` e o `relatorio` aponta
+  para o mesmo objeto. Texto lido por OCR não abre o caminho sem a frase, e
+  `classificar_anexos` testa "pagar para" ANTES de "autorizado": o aviso diz
+  para quem o dinheiro vai, a autorização só autoriza.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e
@@ -248,9 +277,55 @@ paths:
   rodada custa uma sessão do ERP (que só aceita uma por usuário). Contas
   "APENAS LANÇAMENTO/AJUSTE" aparecem desmarcadas, não escondidas. As chaves
   Pix dos avisos "PAGAR PARA" ficam em `pix_reembolso.json` ao lado do exe —
-  é CPF de gente, não entra no repositório. A janela de confirmação dos
-  pagamentos aos sócios abre em `gerar()`, na thread da INTERFACE e **antes**
-  de `submeter()`: quem cancela ali não pode ter consumido a sessão do ERP.
+  é CPF de gente, não entra no repositório.
+  **O passo 2 tem DUAS fases desde 14/09/2026** (pedido do dono: "trazer as
+  análises do Gerar Remessa para o Gerar Planilha, e os lançamentos que não
+  estão aptos" — pagamentos quase ficaram de fora porque a janela não os
+  mostrava). Até ali a janela "Confirmar o que entra" abria ANTES do worker,
+  sem ter lido anexo nenhum: dizia "BOLETO sem código de barras" para o
+  boleto que estava dentro da NF e nunca mostrava quem ia para NÃO ENTRARAM.
+  Hoje o clique em "Gerar a planilha" (e o "Gerar remessa" sem planilha em
+  memória) manda o worker do navegador ler os anexos e rodar
+  `montar_registros` SEM filtro, guardando as entradas
+  (`confirmacao.Entradas`), e rodar `confirmacao.analisar_remessa`
+  (`remessa_dia.preparar` + `resolver_pagador`, só leitura). Só então a
+  janela abre, com a leitura real: por conta, ENTRAM (marcáveis, POR ONDE do
+  registro e SITUAÇÃO da planilha + da remessa) e NÃO APTOS (sem marca, em
+  vermelho, com o motivo e o `paidToBankAccount` para corrigir no ERP).
+  Confirmar remonta SEM rede (`Entradas.remontar` com os desmarcados) e grava
+  o xlsx na thread da interface; Cancelar não grava e não troca
+  `self.resultado` — apuração não confirmada nunca chega à remessa nem ao
+  HTML. **O preço, aceito**: a regra antiga "quem cancela não consome a sessão
+  do ERP" deixou de valer neste passo, porque a leitura tem de vir antes.
+  Duas decisões da análise: "já saiu em remessa?" é perguntado EM LOTE
+  (`confirmacao.HistoricoPreCarregado` sobre `Registro.envios_em_lote`,
+  poucas consultas `in.(…)`), e qualquer chave fora do lote ou lote que
+  falhe cai no um-a-um de sempre — nunca responde "não saiu" sem ter
+  perguntado; o "Gerar remessa" continua com o histórico real. E conta de
+  OUTRO BANCO não é pendência: a linha só fica âmbar por status ATENÇÃO ou
+  por impedimento que interessa a quem paga à mão
+  (`confirmacao.MOTIVOS_DE_QUEM_PAGA_A_MAO`). Sem registro de remessas ou sem
+  cadastro de contas a janela abre igual, com um aviso no topo. Cinco
+  travas que a revisão de dinheiro cobrou: o "já saiu na remessa nº…" pinta
+  âmbar em TODO ramo (inclusive conta do Inter, onde o HTML é o único
+  caminho e não consulta histórico); a linha já enviada nasce DESMARCADA, e
+  só nasce marcada quando o RETORNO DO ITEM diz "rejeitado" — remessa
+  rejeitada é sobre algum item, e o item sem ocorrência no arquivo do banco
+  não grava `retorno_estado`; se o registro cai no meio da análise, o que o
+  lote já respondeu fica, e a linha não conferida diz "não conferi se já saiu
+  em remessa" em âmbar — nunca verde por falta de pergunta; o reembolso
+  mostra em QUEM RECEBE a pessoa do aviso "(reembolso de <favorecido>)"; e
+  Parar durante a leitura não abre a janela (leitura pela metade transforma o
+  boleto dentro da NF em Pix do cadastro), enquanto anexo que não baixou vira
+  "ATENÇÃO — anexo não lido" NA LINHA, além do aviso no topo. O período da
+  planilha é o do "1. Buscar", não o da tela no clique, e busca interrompida
+  não gera nada. **O "já saiu?" do registro usa `remessa!inner(...)`**
+  (14/09/2026, `nuvem/registro.py`): sem o `!inner` o item de maior id era
+  escolhido antes de o filtro de estado valer, e um reenvio numa remessa
+  DESCARTADA escondia o envio antigo numa remessa VIVA — o boleto voltava
+  marcável no "Gerar remessa". A sintaxe foi conferida contra o PostgREST
+  real (passa do parse e esbarra na permissão de anon, como a consulta
+  antiga).
   Anexo que é foto só é baixado quando é aviso "PAGAR PARA" — baixar toda
   imagem de todo título seria pagar OCR por nada.
   **As duas listas de conferência são UMA tabela cada (11/09/2026).** A
@@ -271,8 +346,9 @@ paths:
   selecionada se repete embaixo, inteira, com o destino em fonte de largura
   fixa. O reembolso e o reenvio, que moravam na 2ª e na 3ª altura da célula,
   sobem para a SITUAÇÃO. A regra saiu da tela e tem teste
-  (`tests/test_listas_de_conferencia.py`): `grupos_para_confirmar`,
-  `resumo_da_confirmacao`, `nao_confirmados` e `estado_na_confirmacao` aqui;
+  (`tests/test_listas_de_conferencia.py`): `grupos_da_confirmacao`,
+  `situacao_da_linha`, `estado_na_tela`, `resumo` e `nao_confirmados` na
+  `pagamentos_dia/confirmacao.py`, pura, com `tests/test_confirmacao.py`;
   `nsa_previstos`, `resumo_da_conferencia` e `aplicar_marcas` no
   `remessa_dia`. A janela de contas novas da abertura
   (`nuvem/contas_novas_dialogo.py`) virou lista + editor pelo mesmo motivo:
@@ -475,7 +551,19 @@ paths:
   `tests/test_html_pagamentos.py`), e nada da empresa mora no repositório: o
   logotipo e o rodapé do PDF vêm de `logo_relatorio_pf.png` e
   `rodape_relatorio_pf.txt` ao lado da planilha (ou do app), e faltando saem
-  em branco. **Para remover**: apagar os dois módulos e o teste, o método
+  em branco. **A descrição do HTML não é a da planilha** (dono, 14/09/2026):
+  `html_pagamentos.descricao_para_colar` monta, das peças soltas que o
+  registro leva (`nf`, `oc_da_descricao`, `descricao_lancamento`,
+  `utilidade`), o texto de colar no banco — centro de custo SEMPRE na frente
+  (é por ele que o Anexar casa o comprovante), "NF x OC y" / "OC y" / "NF x",
+  e sem nenhum dos dois a descrição do lançamento ("C x M y" na medição);
+  sem acento, sem caractere especial e sem menção de reembolso, com o hífen
+  ENTRE DÍGITOS preservado ("LT 10-11" virando "LT 10 11" faria o matcher
+  casar o lote 10); no máximo 140 caracteres em conta do Inter e 100 nas
+  outras (o Sicoob "deixou digitar 140, mas vira e mexe limita"), cortando
+  em fronteira de palavra e nunca a NF, a OC ou o C/M. No reembolso, a coluna
+  do favorecido mostra quem recebe, "(reembolso de <favorecido>)".
+  **Para remover**: apagar os dois módulos e o teste, o método
   `_gerar_html_pagamentos` e as linhas marcadas "HTML provisório" deste
   arquivo (import, botão `b_html` e as duas que o acendem e apagam), e este
   parágrafo.
