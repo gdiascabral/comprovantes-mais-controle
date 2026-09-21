@@ -81,3 +81,19 @@ def test_nao_ha_conta_bancaria_em_regra_nenhuma(tmp_path):
     with pytest.raises(mod.RegraInvalida) as e:
         mod.Regras.carregar(caminho)
     assert "conta" in str(e.value).lower()
+
+
+def test_aprender_obra_sobrevive_ao_disco(tmp_path):
+    """O que o dono aprende sobre a obra de um tipo não pode ser perdido."""
+    caminho = _arquivo(tmp_path, {"versao": 1, "tipos": [
+        {"nome": "honorario", "quando": {"desc_contem": ["HONORARIO"]},
+         "acao": "alterar", "categoria": "Honorários"},
+    ]})
+    r = mod.Regras.carregar(caminho)
+
+    r.aprender_obra("honorario", "701", "obra-42")
+    r.gravar()
+
+    outra = mod.Regras.carregar(caminho)
+    assert outra.obra("honorario", "701") == "obra-42"
+    assert outra.obra("honorario", "702") == ""
