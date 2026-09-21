@@ -554,12 +554,14 @@ def rotulo_do_envio(estado: str, retorno: str) -> str:
 def envio_rejeitado(estado: str, retorno: str) -> bool:
     """O envio anterior foi REJEITADO, e a linha pode sair de novo?
 
-    Decide o retorno DO ITEM quando há um: remessa "rejeitado" quer dizer que
-    ALGUM item foi recusado, e este pode ter sido pago — marcá-lo seria pagar
-    duas vezes. Sem retorno citando o item, vale o estado da remessa."""
-    if retorno:
-        return retorno == "rejeitado"
-    return estado == "rejeitado"
+    Decide SÓ o retorno do item: remessa "rejeitado" quer dizer que ALGUM
+    item foi recusado, e este pode ter sido pago — marcá-lo seria pagar duas
+    vezes. E retorno vazio não é "rejeitado": item sem ocorrência no arquivo
+    do banco não grava `retorno_estado` (`retorno_dia`), então a remessa
+    rejeitada por causa de OUTRO item deixaria este marcado sem ninguém ter
+    dito nada sobre ele. Sem a palavra do banco, nasce desmarcado."""
+    del estado      # de propósito: o estado da remessa não fala por este item
+    return retorno == "rejeitado"
 
 
 def situacao_da_linha(registro: dict, candidato, sem_remessa: str = "",

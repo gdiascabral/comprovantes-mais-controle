@@ -568,6 +568,17 @@ def test_remessa_rejeitada_com_este_pagamento_pago_nao_marca():
     assert confirmacao.marcada_de_inicio(linha) is False
 
 
+def test_remessa_rejeitada_sem_retorno_deste_pagamento_nao_marca():
+    """A remessa fica "rejeitado" quando OUTRO item foi recusado, e item sem
+    ocorrência no retorno não grava `retorno_estado`. Sem a palavra do banco
+    sobre ESTE pagamento, ele pode ter sido pago: nasce desmarcado."""
+    linha = _linha_analisada(_RegistroFalso(
+        enviados={"L2": 7}, estados={"L2": ("rejeitado", "")}))
+    assert f"{JA_SAIU} — rejeitado" in linha.situacao
+    assert linha.estado == "atencao"
+    assert confirmacao.marcada_de_inicio(linha) is False
+
+
 def test_analise_que_quebra_por_outro_motivo_nao_culpa_o_registro(monkeypatch):
     """Um defeito no `preparar` não é queda do registro: o aviso diz o que
     foi, e nenhuma linha fica verde sem ter sido conferida."""
