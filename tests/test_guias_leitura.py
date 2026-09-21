@@ -29,18 +29,6 @@ def test_numero_do_documento_pelo_rotulo():
     assert item.documento == "0126090459266352-0"
 
 
-def test_linha_digitavel_vira_documento_quando_nao_ha_rotulo(monkeypatch):
-    """Boleto sem "nosso número" legível ainda tem a linha digitável."""
-    from pagamentos_dia import ocr_boleto
-
-    monkeypatch.setattr(leitura.ocr_boleto, "valida",
-                        lambda d: len(ocr_boleto.digitos(d)) == 47)
-    linha = "3" * 47
-    item = leitura.ler_texto(f"Pague em qualquer banco {linha} Valor R$ 10,00")
-
-    assert ocr_boleto.digitos(item.documento) == linha
-
-
 def test_texto_sem_nada_devolve_item_vazio_e_nao_explode():
     item = leitura.ler_texto("pagina em branco")
 
@@ -111,3 +99,36 @@ def test_linha_que_nao_fecha_o_dv_nao_vira_documento(monkeypatch):
     item = leitura.ler_texto("Nosso numero 12345 Valor R$ 10,00")
 
     assert item.documento == "12345"
+
+
+def test_ficha_de_arrecadacao_de_48_digitos_e_reconhecida():
+    """O alvo primário desta função é guia de FGTS/INSS, que é ficha de
+    arrecadação: 48 dígitos, quatro blocos de 11 + DV, e NÃO boleto bancário.
+    A linha é montada com os DV calculados de verdade — linha inventada não
+    fecha o DV e faria o teste provar o caminho errado."""
+    from pagamentos_dia import ocr_boleto
+
+    # `d[2]` fora de "89" escolhe o DV por módulo 10. O `_mod10` do próprio
+    # módulo é usado para MONTAR a linha: reimplementá-lo aqui seria uma
+    # segunda cópia da regra, e é ela que o teste quer exercitar.
+    blocos = ["81600000000", "00073800120", "26012345678", "90000000001"]
+    linha = "".join(b + str(ocr_boleto._mod10(b)) for b in blocos)
+    assert len(linha) == 48
+    assert ocr_boleto.valida(linha), "a linha do teste tem de fechar o DV"
+
+    item = leitura.ler_texto(f"Pague em qualquer casa loterica {linha}")
+
+    assert ocr_boleto.digitos(item.documento) == linha
+
+
+def test_digitos_espalhados_pela_pagina_nao_formam_linha_digitavel():
+    """Antes deste conserto a busca corria a página concatenada e podia casar
+    CNPJ+CEP+telefone como se fossem uma linha digitável — 2 a 4% das páginas.
+    Linha física curta não é candidata, por mais dígitos que a página tenha."""
+    texto = "\n".join(["CNPJ 00.000.000/0001-00", "CEP 74000-000",
+                       "Fone 62 0000-0000", "Competencia 09/2026",
+                       "Valor do documento R$ 641,31"])
+    item = leitura.ler_texto(texto)
+
+    assert item.documento == ""
+    assert item.valor == Decimal("641.31")

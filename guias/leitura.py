@@ -71,15 +71,27 @@ def _linha_digitavel(texto: str) -> str:
     Usa `pagamentos_dia.ocr_boleto`, que já sabe os DOIS formatos e é o mesmo
     código que valida linha digitável no resto do app: boleto bancário (47
     dígitos) e ficha de arrecadação (48, começando em 8) — e a guia de FGTS,
-    de INSS e de contribuição é ficha de arrecadação, que a regex anterior
-    nem reconhecia. Reprovando o DV, devolve "" e quem chama cai no rótulo.
+    de INSS e de contribuição é ficha de arrecadação. Reprovando o DV, devolve
+    "" e quem chama cai no rótulo.
+
+    A busca é por LINHA FÍSICA com 20 dígitos ou mais, e NÃO sobre a página
+    concatenada, como faz `ocr_boleto.achar_linha_digitavel`. O dígito
+    verificador sozinho aceita uma janela aleatória em cerca de 0,015% das
+    vezes; com as ~200 janelas que a página inteira oferece (CNPJ, CEP,
+    telefone, datas, colados), isso dá 2 a 4% de chance por página de casar
+    lixo — e numa ficha de arrecadação, que não traz valor rotulado, o lixo
+    viraria o VALOR do lançamento. `achar_linha_digitavel` pode varrer a
+    página toda porque ainda confere o valor esperado; aqui não há esse par.
     """
-    d = ocr_boleto.digitos(texto or "")
-    for tamanho in (47, 48):
-        for i in range(0, max(len(d) - tamanho, 0) + 1):
-            trecho = d[i:i + tamanho]
-            if ocr_boleto.valida(trecho):
-                return trecho
+    for bruto in (texto or "").splitlines():
+        if sum(c.isdigit() for c in bruto) < 20:
+            continue
+        d = ocr_boleto.digitos(bruto)
+        for tamanho in (47, 48):
+            for i in range(0, max(len(d) - tamanho, 0) + 1):
+                trecho = d[i:i + tamanho]
+                if ocr_boleto.valida(trecho):
+                    return trecho
     return ""
 
 
