@@ -91,13 +91,11 @@ JS_PUT_JSON = """async ({url, headers, corpo}) => {
 #: URL não bater e o S3 recusar. Estava em `anexar/mc_api._JS_PUT_S3`; mora
 #: aqui para haver UMA cópia da regra de transporte (o mesmo motivo de
 #: `aportes/erp_sessao.py` existir).
-JS_PUT_BINARIO = """async ({url, b64, contentType}) => {
-  const bin = atob(b64);
-  const buf = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-  const r = await fetch(url, {method: 'PUT',
-    headers: {'Content-Type': contentType}, body: buf});
-  return {status: r.status};
+JS_PUT_BINARIO = """async ({ url, b64, contentType }) => {
+  const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const r = await fetch(url, { method: 'PUT',
+    headers: { 'Content-Type': contentType }, body: bin });
+  return { status: r.status, body: (await r.text()).slice(0, 500) };
 }"""
 
 
