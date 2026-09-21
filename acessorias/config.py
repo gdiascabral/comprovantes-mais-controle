@@ -29,6 +29,17 @@ CAMINHO_EMPRESA = "/{vip_id}/"
 CAMINHO_SOLICITACOES = "/{vip_id}/SOL/"
 CAMINHO_SOLICITACAO_NOVA = "/{vip_id}/SOL/0"
 
+#: Calendário de uma empresa num mês. A página já traz o mês inteiro num JSON
+#: (`dataJson`), então é UMA ida ao portal por empresa, e não uma por dia.
+CAMINHO_CALENDARIO = "/{vip_id}/CLD/{competencia}"
+
+#: Onde as guias baixadas ficam, dentro da pasta da empresa no mês.
+SUBPASTA_GUIAS = "GUIAS"
+
+#: O link do documento devolve um HTML com um iframe apontando para um S3 que
+#: expira em 120 s: o download vem LOGO em seguida, na mesma passada.
+RE_IFRAME = r"<iframe[^>]+src=['\"]([^'\"]+)['\"]"
+
 #: Rótulos do formulário. Escolha por RÓTULO, nunca por índice: os `value` dos
 #: dois selects não seguem a ordem da tela (DPTO_FINANCEIRO é o último item e
 #: vale 4; a prioridade é invertida, Baixa=3 e Muito Alta=0). Escolher por

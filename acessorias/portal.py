@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
@@ -191,6 +192,54 @@ class PortalClient:
                        wait_until="domcontentloaded")
         self.page.wait_for_timeout(400)  # o portal troca a página inteira
         self._conferir_sessao()
+
+    # ------------------------------------------------------ calendário
+
+    def empresas(self) -> list[tuple[str, str]]:
+        """As empresas do "Trocar empresa": [(vip_id, nome na tela)].
+
+        Sai do portal, e não do nosso cadastro: empresa que o escritório
+        passou a atender aparece aqui antes de alguém cadastrá-la, e some em
+        silêncio é justamente o que não pode acontecer com guia a pagar."""
+        self.page.goto(self.vip_url, wait_until="domcontentloaded")
+        self._conferir_sessao()
+        caminho = urlsplit(self.vip_url).path.rstrip("/")
+        brutos = self.page.evaluate(
+            """(caminho) => [...document.querySelectorAll('[onclick]')]
+                 .map(e => [(e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 90),
+                            e.getAttribute('onclick') || ''])
+                 .filter(x => x[1].includes(caminho + '/'))""",
+            caminho)
+        vistos, saida = set(), []
+        for texto, onclick in brutos:
+            achado = re.search(re.escape(caminho) + r"/(\d+)", onclick)
+            if achado and achado.group(1) not in vistos:
+                vistos.add(achado.group(1))
+                saida.append((achado.group(1), texto))
+        return saida
+
+    def calendario(self, vip_id: str, ano: int, mes: int) -> dict:
+        """O `dataJson` do mês: {dia: [documento, …]}. `{}` quando não há."""
+        self._ir(cfg.CAMINHO_CALENDARIO, vip_id=vip_id,
+                 competencia=f"{ano:04d}-{mes:02d}")
+        dados = self.page.evaluate(
+            "() => (typeof dataJson !== 'undefined') ? dataJson : null")
+        return dados if isinstance(dados, dict) else {}
+
+    def baixar_guia(self, lnk: str, destino: Path) -> Path:
+        """Baixa o PDF do documento. O link do iframe expira em 120 s."""
+        resposta = self.ctx.request.get(lnk)
+        achado = re.search(cfg.RE_IFRAME, resposta.text() or "")
+        if not achado:
+            raise RuntimeError("o portal não devolveu o documento")
+        arquivo = self.ctx.request.get(achado.group(1))
+        dados = arquivo.body()
+        if dados[:4] != b"%PDF":
+            raise RuntimeError(
+                "o que veio não é PDF (o link da guia costuma expirar em 2 min)")
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_bytes(dados)
+        return destino
 
     # ------------------------------------------------------ solicitações
 
