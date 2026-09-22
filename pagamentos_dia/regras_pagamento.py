@@ -165,12 +165,23 @@ def exige_confirmacao(favorecido: str, nomes) -> bool:
 MOTIVO_SIMBOLICO = "valor simbólico (marcador de recorrência, não é pagamento)"
 MOTIVO_REEMBOLSO = "fornecedor só entra com aviso de reembolso anexado"
 MOTIVO_SEM_PAGAR = "sem forma de pagar (nem boleto anexado, nem chave Pix)"
+#: A variante correta quando o cadastro TEM chave Pix, só que "boleto ganha
+#: de Pix" a recusou por faltar NF/OC que documente a compra (`relatorio.py`,
+#: `tem_nf_ou_oc`). Sem esta distinção, `MOTIVO_SEM_PAGAR` ("nem chave Pix")
+#: contradizia o próprio aviso "Cadastro tem Pix (…)" que a mesma linha
+#: mostra na janela "Confirmar o que entra" — foi essa contradição que
+#: confundiu quem conferia (dono, 22/09/2026): a chave existe, só não pode
+#: ser usada sem prova da compra.
+MOTIVO_SEM_PAGAR_PIX_SEM_DOCUMENTO = (
+    "sem forma de pagar (boleto não anexado; há chave Pix no cadastro, mas "
+    "falta NF ou OC que documente a compra)")
 MOTIVO_NAO_CONFIRMADO = "não confirmado na janela antes de gerar"
 
 
 def motivo_omissao(valor: float, favorecido: str, dados: str,
                    tem_documento: bool, regras: dict,
-                   valor_documento: float | None = None) -> str:
+                   valor_documento: float | None = None,
+                   pix_sem_documento: bool = False) -> str:
     """Por que esta linha NÃO entra — "" quando ela entra.
 
     `dados` é o que já se conseguiu apurar como forma de pagar (linha
@@ -181,6 +192,10 @@ def motivo_omissao(valor: float, favorecido: str, dados: str,
     tentar todas seria descartar pagamento que dava para fazer.
 
     `valor_documento` é o valor lido do código de barras, quando há um.
+
+    `pix_sem_documento` diz que o cadastro TEM uma chave Pix com cara de
+    chave, e ela não foi usada só por faltar NF/OC — troca o motivo genérico
+    pelo que nomeia essa chave, em vez de negar que ela existe.
     """
     # O boleto MANDA no valor simbólico. No arquivo de 08 a 10/08/2026 havia
     # uma conta de concessionária lançada como R$ 1,00 cujo código de barras
@@ -208,7 +223,8 @@ def motivo_omissao(valor: float, favorecido: str, dados: str,
     # linha fica: alguém abre o anexo e digita. Sem documento nenhum não há o
     # que digitar, e a linha só custa uma conferência que termina em nada.
     if not dados and not tem_documento:
-        return MOTIVO_SEM_PAGAR
+        return (MOTIVO_SEM_PAGAR_PIX_SEM_DOCUMENTO if pix_sem_documento
+                else MOTIVO_SEM_PAGAR)
     return ""
 
 

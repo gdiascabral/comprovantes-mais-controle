@@ -128,12 +128,19 @@ def test_sem_boleto_com_oc_tambem_paga_pela_chave():
 
 
 def test_sem_boleto_e_sem_nf_nem_oc_nao_entra():
-    """Locação sem nota: nada documenta a compra, e a linha vira ruído."""
+    """Locação sem nota: nada documenta a compra, e a linha vira ruído.
+
+    O motivo é o específico de chave Pix bloqueada por falta de NF/OC — não
+    o genérico "nem chave Pix", que mentiria: `sem_boleto()` cadastra
+    "PIX CNPJ: 22.333.444/0001-55", e dizer que não há chave contradiz o
+    próprio "Cadastro tem Pix (…)" que a Obs também mostra (22/09/2026).
+    """
     item = sem_boleto(paidTo="Containers Modelo",
                       description="Locacao de conteiner 08/08 a 08/09")
     res = relatorio.montar_registros([item], {}, {}, {})
     assert res.contas == {}
-    assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR
+    assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR_PIX_SEM_DOCUMENTO
+    assert "Cadastro tem Pix" in res.omitidos[0]["obs"]
 
 
 def test_boleto_anexado_continua_ganhando_do_pix():

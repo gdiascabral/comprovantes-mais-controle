@@ -89,6 +89,23 @@ paths:
   para o mesmo objeto. Texto lido por OCR não abre o caminho sem a frase, e
   `classificar_anexos` testa "pagar para" ANTES de "autorizado": o aviso diz
   para quem o dinheiro vai, a autorização só autoriza.
+  (i) **"Nem chave Pix" não pode ser dito quando HÁ chave Pix** (dono,
+  22/09/2026, na janela "Confirmar o que entra"). Título com
+  `tradePayablePaymentMethod = "Boleto"`, sem boleto anexado e sem NF/OC que
+  documente a compra cai no `MOTIVO_SEM_PAGAR` genérico ("nem boleto
+  anexado, nem chave Pix") mesmo quando o cadastro TEM uma chave Pix — ela só
+  não é usada porque, sem NF/OC, "boleto ganha de Pix" não tem uma compra
+  documentada para aceitar o Pix no lugar (item (c) acima). O motivo genérico
+  contradizia o próprio aviso "Cadastro tem Pix (…), mas o título veio com
+  BOLETO" que a MESMA linha mostra, e foi essa contradição — chave dita
+  inexistente ao lado de chave citada — que confundiu quem conferia.
+  `pix_sem_documento` (calculado no `else` do ramo Boleto, quando nem `onde`
+  nem `pdf` existem) diz se a chave existe e só falta o documento; ali
+  `regras.motivo_omissao` devolve `MOTIVO_SEM_PAGAR_PIX_SEM_DOCUMENTO`
+  ("…há chave Pix no cadastro, mas falta NF ou OC…") em vez do genérico. Sem
+  cadastro (`pago_para` vazio) ou com texto sem cara de chave, continua o
+  motivo antigo — a mentira estava em negar uma chave que existe, não em
+  dizer que ela falta quando falta mesmo.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e
