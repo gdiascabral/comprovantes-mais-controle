@@ -14,6 +14,24 @@ from guias.modelos import (ALTERADO, ANEXO_PENDENTE, CRIADO, DIVERGE, ERRO,
                            Decisao, Guia)
 
 
+class _Fila:
+    """Respostas em sequência para a MESMA chamada (o GET do título antes e
+    depois do PUT).
+
+    Uma classe própria, e não "lista = fila": a listagem de prova do anexo É
+    uma lista legítima, e tratá-la como fila devolvia o primeiro item em vez da
+    lista inteira — foi o que derrubou três testes.
+    """
+
+    def __init__(self, *respostas):
+        self.respostas = list(respostas)
+
+    def proxima(self):
+        # A última fica, para chamadas extras não estourarem.
+        return (self.respostas.pop(0) if len(self.respostas) > 1
+                else self.respostas[0])
+
+
 class _Transporte:
     """GET/POST/PUT do ERP, do tamanho que `lancar` usa."""
 
@@ -30,7 +48,7 @@ class _Transporte:
     def buscar(self, url):
         self.chamadas.append(("GET", url, None))
         resposta = self._achar("GET", url)
-        return resposta.pop(0) if isinstance(resposta, list) else resposta
+        return resposta.proxima() if isinstance(resposta, _Fila) else resposta
 
     def postar(self, url, corpo):
         # consome de verdade: um corpo que não serializa é erro aqui, e não
@@ -109,7 +127,7 @@ def test_alterar_grava_a_categoria_especifica_e_so_esta_parcela(tmp_path):
     # os que vierem depois (ver test_alterar_nao_toca_na_descricao_nem_na_conta,
     # que já faz essa cópia).
     t = _Transporte({("GET", "/trade-payables/tp-1"):
-                     [json.loads(json.dumps(TITULO)), _gravado()],
+                     _Fila(json.loads(json.dumps(TITULO)), _gravado()),
                      ("PUT", "/trade-payables/tp-1"): {"id": "tp-1"},
                      ("POST", "/attachments/v2/batch"): BATCH,
                      ("PUT-S3", "s3.exemplo"): {"status": 200},
@@ -137,7 +155,7 @@ def test_alterar_nao_toca_na_descricao_nem_na_conta(tmp_path):
     titulo["description"] = "DESCRICAO QUE JA ESTAVA LA"
     depois = _gravado()
     depois["description"] = "DESCRICAO QUE JA ESTAVA LA"
-    t = _Transporte({("GET", "/trade-payables/tp-1"): [titulo, depois],
+    t = _Transporte({("GET", "/trade-payables/tp-1"): _Fila(titulo, depois),
                      ("PUT", "/trade-payables/tp-1"): {"id": "tp-1"},
                      ("POST", "/attachments/v2/batch"): BATCH,
                      ("PUT-S3", "s3.exemplo"): {"status": 200},
@@ -158,7 +176,7 @@ def test_alterar_guarda_o_original_antes_do_put(tmp_path):
     # o mais sensível a uma cópia esquecida (o valor "original" salvo seria o
     # já mutado por outro teste, não o 620.0 de verdade).
     t = _Transporte({("GET", "/trade-payables/tp-1"):
-                     [json.loads(json.dumps(TITULO)), _gravado()],
+                     _Fila(json.loads(json.dumps(TITULO)), _gravado()),
                      ("PUT", "/trade-payables/tp-1"): {"id": "tp-1"},
                      ("POST", "/attachments/v2/batch"): BATCH,
                      ("PUT-S3", "s3.exemplo"): {"status": 200},
@@ -188,7 +206,7 @@ def test_releitura_que_nao_bate_vira_diverge(tmp_path):
     """Gravou, mas não como pedido. Não é erro e não é feito."""
     # Cópia: mesmo motivo dos testes de ALTERAR acima.
     t = _Transporte({("GET", "/trade-payables/tp-1"):
-                     [json.loads(json.dumps(TITULO)), _gravado(valor=1.0)],
+                     _Fila(json.loads(json.dumps(TITULO)), _gravado(valor=1.0)),
                      ("PUT", "/trade-payables/tp-1"): {"id": "tp-1"},
                      ("POST", "/attachments/v2/batch"): BATCH,
                      ("PUT-S3", "s3.exemplo"): {"status": 200},

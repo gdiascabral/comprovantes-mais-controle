@@ -285,10 +285,10 @@ def test_s3_recusa_e_erro_upload_sem_segunda_tentativa(pdf):
 
 def test_batch_sem_url_s3_e_erro_upload():
     """2xx sem URL: o registro pode ter nascido. Fica do lado que não duplica."""
-    assert mc_api._primeira_url_s3({"attachments": [{"id": "a"}]}) is None
-    assert mc_api._primeira_url_s3(
+    assert mc_api.primeira_url_s3({"attachments": [{"id": "a"}]}) is None
+    assert mc_api.primeira_url_s3(
         {"x": [{"y": {"uploadUrl": URL_S3}}]}) == URL_S3
-    assert mc_api._primeira_url_s3(
+    assert mc_api.primeira_url_s3(
         {"link": "https://acessar.maiscontroleerp.com.br/#/x"}) is None
 
 

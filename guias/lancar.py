@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import re
 from decimal import Decimal
 from pathlib import Path
 
 import util
+from anexar.mc_api import primeira_url_s3
 from erp import hosts
 from guias.modelos import (ALTERADO, ANEXO_PENDENTE, CRIADO, DIVERGE, ERRO,
                            Resultado)
@@ -31,8 +31,6 @@ log = util.log(__name__)
 
 #: "Quem paga" nos nossos lançamentos, como nos aportes.
 QUEM_PAGA = "CLIENT"
-
-RE_S3 = re.compile(r"https://[^\"' ]*amazonaws[^\"' ]*")
 
 
 def _num(valor) -> float:
@@ -100,11 +98,14 @@ def anexar(transporte, tpid: str, pdf: Path, nome: str) -> list[str]:
     if _erro_de(resposta):
         log.warning("o batch do anexo foi recusado pelo ERP")
         return []
-    urls = RE_S3.findall(json.dumps(resposta))
-    if not urls:
+    url_s3 = primeira_url_s3(resposta)
+    if not url_s3:
+        # O nome do campo varia na resposta do batch, e é por isso que quem
+        # acha a URL é a função do `anexar/mc_api.py`, provada em produção, e
+        # não uma regex própria: cópia mais estreita falha sem dizer por quê.
         log.warning("o batch do anexo voltou sem URL pré-assinada")
         return []
-    subida = transporte.subir(json.loads(f'"{urls[0]}"'), dados)
+    subida = transporte.subir(url_s3, dados)
     if int((subida or {}).get("status") or 0) >= 300:
         return []
     prova = transporte.buscar(

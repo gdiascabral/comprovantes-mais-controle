@@ -132,9 +132,14 @@ def tela_pode_tentar(estado: str) -> bool:
     return estado == ERRO_SEM_CREDENCIAL or estado.startswith(_PREFIXO_BATCH)
 
 
-def _primeira_url_s3(objeto) -> str | None:
+def primeira_url_s3(objeto) -> str | None:
     """A URL pré-assinada na resposta do batch — o nome do campo varia, então
-    procura a primeira string http com cara de S3, em ordem de leitura."""
+    procura a primeira string http com cara de S3, em ordem de leitura.
+
+    Pública porque `guias/lancar.anexar` precisa da MESMA busca: uma segunda
+    cópia dela cobriria menos formatos de URL e o anexo falharia sem dizer
+    por quê.
+    """
     for u in _coletar_urls(objeto):
         ul = u.lower()
         if "s3" in ul or "amazonaws" in ul:
@@ -940,7 +945,7 @@ class MCApi:
             _log.warning("anexar_por_api: o batch respondeu %s (paid %s)",
                          resp["__erro"], paid_id)
             return f"{_PREFIXO_BATCH}{resp['__erro']}"
-        url_s3 = _primeira_url_s3(resp)
+        url_s3 = primeira_url_s3(resp)
         if not url_s3:
             campos = sorted(resp) if isinstance(resp, dict) else type(resp).__name__
             _log.warning("anexar_por_api: o batch respondeu sem URL de S3 "
