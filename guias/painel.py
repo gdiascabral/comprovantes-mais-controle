@@ -14,6 +14,7 @@ from __future__ import annotations
 import calendar
 import datetime as dt
 import os
+import time
 import tkinter as tk
 import webbrowser
 from collections import Counter
@@ -111,7 +112,49 @@ def _sessao_do_erp(painel):
         catalogos.definir_obras([])
         painel.aba._log(f"  aviso (obras): {e}")
 
+    # Devolve a página à LISTA de pagamentos antes de qualquer leitura nossa.
+    # `garantir_credenciais_anexos` abre a tela de UM lançamento para ouvir a
+    # chamada de anexos — é navegação —, e um `page.evaluate` disparado em
+    # cima dela morre com "Execution context was destroyed, most likely
+    # because of a navigation". Foi o que a primeira rodada real da v2.0.211
+    # mostrou, logo depois de "obras: 204". Voltar para a lista também deixa a
+    # aba do robô onde as outras abas esperam encontrá-la
+    # (`erp_sessao.na_lista_de_pagamentos`).
+    pagina.goto(anx_config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
+
     return transporte, catalogos, transporte.cabecalho("user-id") or ""
+
+
+#: A MESMA corrida, em três textos. A página do ERP navega entre o pedido e a
+#: resposta, e o que volta depende de onde ela estava: o contexto do
+#: `evaluate` morre, ou o `fetch` de dentro da página é abortado. As três
+#: rodadas reais da v2.0.211 falharam no primeiro pedido depois dos catálogos,
+#: uma com cada texto. Não entra aqui "browser has been closed": esse não é
+#: corrida, é navegador morto, e repetir sobre ele não tem o que dar certo.
+_CORRIDA_DE_NAVEGACAO = ("Execution context was destroyed",
+                         "Failed to fetch")
+
+#: Tempo para a navegação terminar antes da segunda tentativa. Fixo e curto,
+#: no mesmo espírito do `ESPERA_APOS_ENVIO` da aba: o que se espera aqui é uma
+#: troca de tela que já começou, não uma rede lenta.
+ESPERA_ANTES_DE_REFAZER = 1.5
+
+
+def _com_contexto(funcao, *args):
+    """Refaz UMA vez quando a página navegou no meio do pedido.
+
+    É falha de corrida, não de lógica. Uma segunda tentativa, já com a
+    navegação terminada, resolve — e insistir mais que isso esconderia um
+    defeito de verdade atrás de repetição.
+    """
+    try:
+        return funcao(*args)
+    except Exception as e:
+        if not any(t in str(e) for t in _CORRIDA_DE_NAVEGACAO):
+            raise
+        log.warning("a página navegou no meio do pedido; refazendo uma vez")
+        time.sleep(ESPERA_ANTES_DE_REFAZER)
+        return funcao(*args)
 
 
 def _nomes_de(indice) -> list[str]:
@@ -489,26 +532,21 @@ class GuiasPainel(ttk.Frame):
             # context or browser has been closed"), e um segundo Playwright
             # síncrono na mesma thread reclama de laço asyncio. Foi o que a
             # primeira rodada real da v2.0.209 mostrou.
+            # E o cliente FICA aberto quando a varredura acaba: quem o fecha é
+            # `AcessoriasFrame.fechar()`, ao sair do app. Fechar aqui e abrir de
+            # novo na rodada seguinte corre com o Chrome que ainda está saindo —
+            # o segundo nasce sobre um perfil que o primeiro ainda segura, e a
+            # segunda varredura da v2.0.211 morreu assim, depois de já ter
+            # listado as doze empresas. Reusar também poupa o login.
             cliente = self.aba.portal
-            meu = cliente is None
-            if meu:
+            if cliente is None:
                 cliente = PortalClient(mapa.vip_url,
                                        log=self.aba._log).__enter__()
                 self.aba.portal = cliente
-            try:
-                cliente.aguardar_login()
-                guias = calendario.varrer(cliente, mapa, ano, mes,
-                                          pasta_de=pasta_de, log=self.aba._log,
-                                          parar=self.aba._parar.is_set)
-            finally:
-                # Fecha na thread que abriu (exigência do Playwright síncrono)
-                # e só então solta a referência — trocar a ordem deixaria
-                # `fechar()` sem nada para fechar e o Chrome de pé.
-                if meu:
-                    try:
-                        cliente.__exit__(None, None, None)
-                    finally:
-                        self.aba.portal = None
+            cliente.aguardar_login()
+            guias = calendario.varrer(cliente, mapa, ano, mes,
+                                      pasta_de=pasta_de, log=self.aba._log,
+                                      parar=self.aba._parar.is_set)
             self.aba.q.put(("guias_baixadas", (guias, ano, mes)))
         except Exception as e:
             self.aba._log(f"[!] {e}")
@@ -583,7 +621,8 @@ class GuiasPainel(ttk.Frame):
             "batchOperationType": "NONE",
             "startDate": f"{ano:04d}-{mes:02d}-01",
             "endDate": f"{ano:04d}-{mes:02d}-{ultimo:02d}"})
-        resposta = transporte.buscar(
+        resposta = _com_contexto(
+            transporte.buscar,
             f"{hosts.LEGACY}/payable-installments/paginated-result?{parametros}")
         if isinstance(resposta, dict) and resposta.get("__erro"):
             raise RuntimeError(f"o ERP recusou a lista de parcelas "
