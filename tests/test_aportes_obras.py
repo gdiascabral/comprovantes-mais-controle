@@ -68,3 +68,20 @@ def test_status_chega_ao_lancamento():
     c.definir_obras(REST)
     assert c.obra("CONTROLE DE APORTES E DISTRIBUIÇÕES")["status"] == "IN_PROGRESS"
     assert "status" not in c.obra("TB 21 QD 51 LT 38")
+
+
+def test_a_condicao_de_pagamento_e_achada_pelo_type():
+    """O nome varia de instalação para instalação; o type não. E "à vista"
+    continua funcionando pelo caminho antigo, que os aportes usam."""
+    from aportes.mc_catalogos import Catalogos
+
+    cat = Catalogos.__new__(Catalogos)
+    cat.condicoes_pagamento = {
+        "a": {"id": "c1", "type": "IN_CASH", "name": "À Vista"},
+        "b": {"id": "c2", "type": "FINANCING", "name": "Parcelado"},
+    }
+
+    assert cat.condicao_de_pagamento("FINANCING")["id"] == "c2"
+    assert cat.condicao_de_pagamento()["id"] == "c1"
+    assert cat.condicao_a_vista_pagamento()["id"] == "c1"
+    assert cat.condicao_de_pagamento("NAO_EXISTE") is None
