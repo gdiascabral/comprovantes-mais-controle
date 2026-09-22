@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """O livro do que cada rodada lançou. É uma das duas travas contra duplicar."""
+import logging
+
 from guias import registro as mod
 
 
@@ -72,13 +74,23 @@ def test_a_trava_nao_depende_do_tipo_da_chave(tmp_path):
 
 def test_estado_desconhecido_avisa_em_vez_de_passar_calado(tmp_path, caplog):
     """A trava falha ABERTA para o que não reconhece: silêncio aqui é
-    lançamento duplicado sem ninguém saber por quê."""
+    lançamento duplicado sem ninguém saber por quê.
+
+    O handler do `caplog` é pendurado no logger NOMEADO porque `util.log` cria
+    os loggers do projeto com `propagate = False`: sem isso a asserção sobre a
+    mensagem passaria por construção, com o captador vendo nada.
+    """
     caminho = tmp_path / "guias_lancadas.jsonl"
     caminho.write_text('{"vip_id": "701", "anx_id": "111", '
                        '"competencia": "2026-09", "estado": "inventado"}\n',
                        encoding="utf-8")
-
-    with caplog.at_level("WARNING"):
-        r = mod.Registro.carregar(caminho)
+    logger = logging.getLogger("guias.registro")
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="guias.registro"):
+            r = mod.Registro.carregar(caminho)
+    finally:
+        logger.removeHandler(caplog.handler)
 
     assert r.ja_feito("701", "111", "2026-09") is None
+    assert "inventado" in caplog.text
