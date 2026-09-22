@@ -114,6 +114,20 @@ def test_editar_a_obra_troca_a_decisao_e_tira_a_marca_de_palpite(bloco):
     assert "?" not in bloco.texto_da_linha(iid)
 
 
+def test_duas_obras_de_mesmo_nome_nao_colapsam_na_escolha(bloco):
+    """A obra decide a conta que paga. Duas obras homônimas guardadas num
+    dicionário por nome deixariam só a última, e a escolha apontaria para a
+    outra em silêncio."""
+    bloco.obras = [{"id": "obra-1", "name": "CONDOMINIO IGUAL"},
+                   {"id": "obra-2", "name": "CONDOMINIO IGUAL"},
+                   {"id": "obra-3", "name": "CONDOMINIO UNICO"}]
+
+    opcoes = bloco._opcoes_de("obra")
+
+    assert sorted(opcoes.values()) == ["obra-1", "obra-2", "obra-3"]
+    assert "CONDOMINIO UNICO" in opcoes
+
+
 def test_editar_a_categoria_troca_a_decisao(bloco):
     bloco.mostrar([_decisao(ALTERAR, anx_id="1")])
     iid = bloco.linhas_de(ALTERAR)[0]

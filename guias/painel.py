@@ -15,6 +15,7 @@ import datetime as dt
 import os
 import tkinter as tk
 import webbrowser
+from collections import Counter
 from tkinter import ttk
 
 import util
@@ -199,15 +200,32 @@ class GuiasPainel(ttk.Frame):
         self._pedir_valor(iid, campo)
         return "break"
 
+    def _opcoes_de(self, campo: str) -> dict[str, str]:
+        """Rótulo -> valor gravável, para o `ComboBusca` de correção.
+
+        Duas obras com o MESMO nome no cadastro do ERP fariam o dicionário
+        guardar só a última, e a escolha do dono apontaria para a outra em
+        silêncio — e é a obra que decide a conta que paga. Nome que repete
+        ganha desempate visível; nome único fica limpo."""
+        if campo == "categoria":
+            return {nome: nome for nome in self.categorias}
+        vezes = Counter(str(o.get("name") or "") for o in self.obras)
+        opcoes = {}
+        for obra in self.obras:
+            nome = str(obra.get("name") or "")
+            ident = str(obra.get("id") or "")
+            if not nome or not ident:
+                continue
+            rotulo = nome if vezes[nome] == 1 else f"{nome} [{ident[:8]}]"
+            opcoes[rotulo] = ident
+        return opcoes
+
     def _pedir_valor(self, iid: str, campo: str) -> None:
         """Abre um `ComboBusca` com os nomes do cadastro do ERP.
 
         Digita-se para procurar, e nada é escolhido por adivinhação: texto que
         não é uma opção não vira nada (é a regra do próprio widget)."""
-        if campo == "categoria":
-            opcoes = {nome: nome for nome in self.categorias}
-        else:
-            opcoes = {str(o.get("name")): str(o.get("id")) for o in self.obras}
+        opcoes = self._opcoes_de(campo)
         if not opcoes:
             if self.aba is not None:
                 self.aba._log("[!] Varra o portal primeiro: os nomes de "
@@ -227,6 +245,9 @@ class GuiasPainel(ttk.Frame):
             janela.destroy()
             if escolhido:
                 self.editar(iid, campo, escolhido)
+            elif self.aba is not None:
+                self.aba._log(f"Nada gravado: o texto digitado não é uma opção "
+                              f"de {campo}.")
 
         combo.bind("<Return>", confirmar)
         ttk.Button(janela, text="Usar este", command=confirmar).pack(
