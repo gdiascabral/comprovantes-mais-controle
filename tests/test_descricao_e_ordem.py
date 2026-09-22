@@ -283,20 +283,20 @@ _LINHA_BANCARIA = "34191.57007 00024.924375 24177.010006 9 15340000115000"
 
 
 def test_arrecadacao_nao_rotula_nf():
-    """Ficha de arrecadação (tributo, taxa, órgão público) não tem cedente
-    nem Nota Fiscal atrás: escrever "NF x" inventaria uma nota que não
-    existe. O número do documento continua na descrição, sozinho — é o
-    caso real da Receita Federal, 22/09/2026."""
-    r = _partes(nf="262641912489", descricao="Guia DARF")
+    """Ficha de arrecadação (tributo, taxa, órgão público — ex.: guia da
+    Receita Federal) não tem cedente nem Nota Fiscal atrás: escrever "NF x"
+    inventaria uma nota que não existe. O número do documento continua na
+    descrição, sozinho (dono, 22/09/2026)."""
+    r = _partes(nf="123456789012", descricao="Guia DARF")
     r["tipo"], r["dados"] = "Boleto", _LINHA_ARRECADACAO
-    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 262641912489"
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 123456789012"
 
 
 def test_arrecadacao_com_oc_mantem_a_oc_rotulada():
     """Só a NF perde o rótulo; a OC, quando existir, continua "OC y"."""
-    r = _partes(nf="262641912489", oc="1234")
+    r = _partes(nf="123456789012", oc="1234")
     r["tipo"], r["dados"] = "Boleto", _LINHA_ARRECADACAO
-    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 262641912489 OC 1234"
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 123456789012 OC 1234"
 
 
 def test_boleto_comum_continua_rotulando_nf():

@@ -513,10 +513,8 @@ def test_endereco_do_pedido_confere_com_o_centro_de_custo():
 def test_endereco_com_ponto_entre_letra_e_numero_e_reconhecido():
     """O ERP escreve "LT 11", a NF do fornecedor às vezes escreve "LT.11" —
     mesmo lote, pontuação diferente. Dizer que ele "não aparece" nega um
-    dado que está ali, só com um ponto no lugar do espaço (dono, 22/09/2026:
-    caso real da Zenite Atacadista, NF com "QD.26A LT.11" nos dados
-    adicionais)."""
-    item = lancamento(documentNumber="65425", paidTo="Servicos Modelo",
+    dado que está ali, só com um ponto no lugar do espaço (dono, 22/09/2026)."""
+    item = lancamento(documentNumber="99999", paidTo="Atacadista Modelo",
                       remainingValue=1950.0,
                       costCentreDetails=[{"workName": "RPB 24 QD 26A LT 11"}])
     resumo, _ = relatorio.conferir_documento(
