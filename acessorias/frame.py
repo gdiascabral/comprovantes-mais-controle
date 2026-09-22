@@ -69,8 +69,9 @@ def _sicoob():
 
 
 class AcessoriasFrame(ttk.Frame):
-    def __init__(self, master):
+    def __init__(self, master, anx=None):
         super().__init__(master)
+        self.anx = anx                   # a aba Anexar: dona da sessão do ERP
         self.q = queue.Queue()
         self.exec = ThreadPoolExecutor(max_workers=1,
                                        thread_name_prefix="acessorias")
@@ -229,9 +230,19 @@ class AcessoriasFrame(ttk.Frame):
         widgets.registro_elastico(self.reg, self.log)
         corpo.encaixar(aviso, acao, self.reg)
 
+        # O bloco das guias é outro assunto e outro arquivo: esta aba já tem
+        # 660 linhas e dois assuntos; um terceiro dentro dela não caberia.
+        from guias.painel import GuiasPainel
+        self.guias = GuiasPainel(self, aba=self, anx=self.anx)
+        self.guias.pack(fill="both", expand=True, padx=widgets.px(10))
+
     # ------------------------------------------------------------- mensagens
     def _log(self, msg=""):
         self.q.put(("log", msg))
+
+    def _sicoob_mods(self):
+        """Os módulos do Sicoob, para o painel de guias não repetir o import."""
+        return _sicoob()
 
     def _drain(self):
         try:
@@ -264,6 +275,16 @@ class AcessoriasFrame(ttk.Frame):
                 elif tipo == "pasta_pronta":
                     self.ultima_pasta = valor
                     self.b_abrir.configure(state="normal")
+                elif tipo == "guias_baixadas":
+                    self.guias.casar(*valor)
+                elif tipo == "guias_cadastro":
+                    self.guias.categorias, self.guias.obras = valor
+                elif tipo == "guias":
+                    self.guias.mostrar(valor)
+                elif tipo == "guia_feita":
+                    decisao, resultado = valor
+                    self._log(f"  {decisao.guia.empresa}: {resultado.estado}"
+                              + (f" — {resultado.motivo}" if resultado.motivo else ""))
         except queue.Empty:
             pass
         except Exception as e:                              # noqa: BLE001
@@ -313,7 +334,10 @@ class AcessoriasFrame(ttk.Frame):
         fut = self.worker
         if fut is not None and not fut.done():
             return self._tarefa_atual or "Acessorias"
-        return None
+        # O bloco de guias roda no MESMO executor (é um `submit` a mais), mas
+        # tem o próprio marcador de tarefa — sem perguntar a ele, sair no meio
+        # de um lançamento pareceria seguro e não é.
+        return self.guias.ocupado() if getattr(self, "guias", None) else None
 
     def _parar_click(self):
         self._parar.set()
@@ -672,6 +696,8 @@ class AcessoriasFrame(ttk.Frame):
            espera na fila e o prazo vence: aí o `cancel_futures` o descarta e
            quem fecha o Chrome é o `finally` do próprio `_t_enviar`.
         """
+        if getattr(self, "guias", None):
+            self.guias.fechar()
         self._parar.set()
         cli = self.portal
         if cli is not None:

@@ -402,13 +402,23 @@ class Catalogos:
     def forma_recebimento(self, nome: str) -> dict | None:
         return self.formas_recebimento.get(chave(nome))
 
-    def condicao_a_vista_pagamento(self) -> dict | None:
-        """A condição "À Vista" — identificada pelo type, não pelo nome, que
-        pode variar de instalação para instalação."""
+    def condicao_de_pagamento(self, tipo: str = "IN_CASH") -> dict | None:
+        """A condição de pagamento pelo TYPE, e não pelo nome — o nome varia
+        de instalação para instalação, o type não.
+
+        `IN_CASH` é o lançamento de uma parcela só; `FINANCING` é o parcelado
+        (é a condição que o ERP usa quando a tela pede número de parcelas).
+        """
         for item in self.condicoes_pagamento.values():
-            if item.get("type") == "IN_CASH" or item.get("inCash"):
+            if item.get("type") == tipo:
+                return item
+            if tipo == "IN_CASH" and item.get("inCash"):
                 return item
         return None
+
+    def condicao_a_vista_pagamento(self) -> dict | None:
+        """Mantido: `aportes/mc_lancamentos.py` chama por este nome."""
+        return self.condicao_de_pagamento("IN_CASH")
 
     def condicao_a_vista_recebimento(self) -> dict | None:
         return self.condicoes_recebimento.get(chave("À Vista"))

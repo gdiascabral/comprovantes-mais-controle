@@ -23,7 +23,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qsl, urlencode
 
 from . import config
-from erp.pagina import JS_POST_JSON
+from erp.pagina import JS_POST_JSON, JS_PUT_BINARIO
 
 import util
 
@@ -92,17 +92,9 @@ _JS_FETCH_ANEXOS = """async ({ base, ids, headers }) => {
 }"""
 
 
-#: PUT cru do binário na URL pré-assinada do S3. SÓ `Content-Type`: qualquer
-#: cabeçalho do ERP (authorization, company-id) quebra a assinatura da URL. O
-#: binário chega em base64 porque `page.evaluate` só transporta JSON. Mesmo
-#: padrão que subiu 29 anexos em produção em 28/08/2026
-#: (`agua_energia/coletor/lancar_mc.py`, `_JS_PUT_S3`).
-_JS_PUT_S3 = """async ({ url, b64, contentType }) => {
-  const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-  const r = await fetch(url, { method: 'PUT',
-    headers: { 'Content-Type': contentType }, body: bin });
-  return { status: r.status, body: (await r.text()).slice(0, 500) };
-}"""
+#: Mantido com o nome antigo para os usos locais; a regra mora em
+#: `erp/pagina.JS_PUT_BINARIO`, para não haver duas cópias.
+_JS_PUT_S3 = JS_PUT_BINARIO
 
 
 #: Os três desfechos possíveis da consulta de anexos de UM pagamento.
@@ -140,9 +132,14 @@ def tela_pode_tentar(estado: str) -> bool:
     return estado == ERRO_SEM_CREDENCIAL or estado.startswith(_PREFIXO_BATCH)
 
 
-def _primeira_url_s3(objeto) -> str | None:
+def primeira_url_s3(objeto) -> str | None:
     """A URL pré-assinada na resposta do batch — o nome do campo varia, então
-    procura a primeira string http com cara de S3, em ordem de leitura."""
+    procura a primeira string http com cara de S3, em ordem de leitura.
+
+    Pública porque `guias/lancar.anexar` precisa da MESMA busca: uma segunda
+    cópia dela cobriria menos formatos de URL e o anexo falharia sem dizer
+    por quê.
+    """
     for u in _coletar_urls(objeto):
         ul = u.lower()
         if "s3" in ul or "amazonaws" in ul:
@@ -948,7 +945,7 @@ class MCApi:
             _log.warning("anexar_por_api: o batch respondeu %s (paid %s)",
                          resp["__erro"], paid_id)
             return f"{_PREFIXO_BATCH}{resp['__erro']}"
-        url_s3 = _primeira_url_s3(resp)
+        url_s3 = primeira_url_s3(resp)
         if not url_s3:
             campos = sorted(resp) if isinstance(resp, dict) else type(resp).__name__
             _log.warning("anexar_por_api: o batch respondeu sem URL de S3 "

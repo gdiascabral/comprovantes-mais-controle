@@ -321,9 +321,10 @@ def main():
     aba_con = ConciliacaoFrame(conteudo, aba_anx)
     # Contratos usa o mesmo ERP: divide navegador e thread, como as outras.
     aba_ctr = ContratosFrame(conteudo, aba_anx)
-    # Acessórias também NÃO recebe o aba_anx: é o portal do escritório
-    # contábil, terceiro site e terceiro login (ver acessorias/portal.py).
-    aba_acs = AcessoriasFrame(conteudo)
+    # Acessórias NÃO divide o navegador do escritório contábil (terceiro
+    # site e terceiro login, ver acessorias/portal.py) — mas recebe o
+    # aba_anx porque o bloco de guias dentro dela lança no MESMO ERP.
+    aba_acs = AcessoriasFrame(conteudo, aba_anx)
     # Baixar Comprovantes tem navegador PRÓPRIO, como os Extratos Sicoob: são
     # os sites dos bancos, com login e sessão que não têm nada a ver com o ERP.
     # O cadastro de contas é o mesmo `contas_sicoob.json` que os Extratos leem
