@@ -85,6 +85,13 @@ contas_sicoob*
 contas_inter*.json
 # Perfil do Chrome do portal Acessórias: sessão logada do escritório.
 .chrome_profile_acessorias/
+# O bloco de guias da aba Acessórias grava estes três na pasta do exe — que,
+# rodando pelo código-fonte, é a raiz deste repositório. Carregam nome de
+# fornecedor, id e nome de obra e, no backup, o título inteiro do ERP com a
+# conta bancária dentro.
+guias_regras.json
+guias_lancadas.jsonl*
+/guias_backup/
 # Mapa conta do Mais Controle -> pasta de destino. Mesma razão: nome de
 # empresa e número de conta. O `*` pela mesma lição do `contas_sicoob*` logo
 # acima: proteger o nome exato e vazar a cópia de backup é o pior dos dois
