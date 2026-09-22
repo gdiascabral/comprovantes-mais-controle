@@ -55,3 +55,27 @@ paths:
   (por empresa) e `vip_url` (o endereço do escritório) moram no
   `contas_sicoob.json`, FORA do repo — o URL carrega o nome de um fornecedor
   real, e um mapa a mais seria uma divergência a mais.
+
+## O segundo bloco: guias do mês → Mais Controle (22/09/2026)
+
+A aba passou a ter DOIS assuntos, e eles andam em sentidos opostos: o de cima
+manda o fechamento ao escritório; o de baixo traz de volta o que o escritório
+publicou e lança no ERP. O segundo mora em `guias/`, e não aqui, porque este
+arquivo já tinha 660 linhas — `acessorias/frame.py` só o embute.
+
+**Ele entra em `corpo`, como os cartões 1 e 2, e ANTES do `encaixar`.** A
+v2.0.208 saiu com ele invisível: era filho da ABA e empacotado DEPOIS, e o
+`pack` atende os filhos na ordem em que foram empacotados — a área rolável,
+que entra por último com `expand=True`, já tinha levado todo o espaço. O bloco
+era construído e ficava com altura zero, sem erro nenhum para denunciar, e
+nenhum teste pegou porque todos constroem o painel SOZINHO (`GuiasPainel(raiz,
+…)`) e nada exercitava a aba montada. Quem guarda isso agora é
+`test_o_bloco_das_guias_mora_na_area_que_rola_e_tem_altura`, que mede a
+geometria numa janela própria de tamanho conhecido — a `raiz` do conftest é
+compartilhada e pequena, e redimensioná-la mexeria com os testes vizinhos.
+
+A rodada dele é partida em DUAS fases, e a emenda passa pela fila da tela: o
+portal roda no executor DESTA aba (Chrome e thread próprios), e tudo que fala
+com o Mais Controle vai por `anx.submeter`, o executor dono dos objetos do
+Playwright — as outras cinco abas já faziam assim, e tocar `anx.mc.page` de
+fora dele dá erro de greenlet.

@@ -260,3 +260,48 @@ def test_uma_solicitacao_por_zip_encontrado(mes, tmp_path):
 ])
 def test_fmt_tamanho(bytes_, esperado):
     assert pacote.fmt_tamanho(bytes_) == esperado
+
+
+# ----------------------------------------------- o bloco das guias na ABA
+def test_o_bloco_das_guias_mora_na_area_que_rola_e_tem_altura(raiz):
+    """A v2.0.208 saiu com o bloco INVISÍVEL na tela, e nenhum teste pegou.
+
+    Os testes do painel o constroem sozinho (`GuiasPainel(raiz, ...)`): provam
+    o comportamento dele e nada sobre a aba. O defeito era de LAYOUT — o bloco
+    era filho da ABA e empacotado DEPOIS do `encaixar`, e a área rolável, que
+    entra por último com `expand=True`, já tinha levado todo o espaço. Ele era
+    construído e ficava com altura zero, sem erro nenhum para denunciar.
+
+    Duas asserções, porque uma só não pega:
+    - a ESTRUTURAL (mesmo pai dos cartões 1 e 2) é a que falha no código da
+      v2.0.208 e o `self.guias` existiria nos dois casos;
+    - a de GEOMETRIA prova que ele de fato ocupa espaço, e é feita numa janela
+      PRÓPRIA de tamanho conhecido: a `raiz` é compartilhada pela sessão
+      inteira, e redimensioná-la mexeria com os testes vizinhos.
+    """
+    import tkinter as tk
+
+    from acessorias.frame import AcessoriasFrame
+
+    janela = tk.Toplevel(raiz)
+    janela.attributes("-alpha", 0.0)
+    janela.geometry("1300x950")
+    try:
+        aba = AcessoriasFrame(janela)
+        aba.pack(fill="both", expand=True)
+        janela.update()
+
+        cartoes = [f for f in aba.guias.master.winfo_children()
+                   if f is not aba.guias]
+        assert cartoes, ("o bloco está sozinho no seu pai: ele não foi para "
+                         "dentro da área que rola, junto dos cartões da aba")
+        assert aba.guias.winfo_parent() != str(aba), (
+            "o bloco é filho da ABA; tem de ser filho do corpo que rola, como "
+            "os cartões 1 e 2")
+        assert aba.guias.winfo_ismapped()
+        assert aba.guias.winfo_height() > 50, (
+            "o bloco ficou sem altura útil: foi empacotado depois de quem já "
+            "levou o espaço")
+    finally:
+        janela.destroy()
+        raiz.update_idletasks()

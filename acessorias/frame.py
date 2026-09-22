@@ -228,13 +228,21 @@ class AcessoriasFrame(ttk.Frame):
         self.log.pack(fill="both", expand=True)
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
-        corpo.encaixar(aviso, acao, self.reg)
-
+        # ---- card 3: as guias do mês
         # O bloco das guias é outro assunto e outro arquivo: esta aba já tem
         # 660 linhas e dois assuntos; um terceiro dentro dela não caberia.
+        #
+        # Entra em `corpo`, como os cartões 1 e 2, e ANTES do `encaixar`. Na
+        # v2.0.208 ele era filho da ABA e empacotado DEPOIS, e a tela saiu sem
+        # ele: o `pack` atende os filhos na ordem em que foram empacotados, e a
+        # área rolável — que entra por último e com `expand=True` — já tinha
+        # levado todo o espaço. O bloco era construído e ficava com altura
+        # zero, sem erro nenhum para denunciar.
         from guias.painel import GuiasPainel
-        self.guias = GuiasPainel(self, aba=self, anx=self.anx)
-        self.guias.pack(fill="both", expand=True, padx=widgets.px(10))
+        self.guias = GuiasPainel(corpo, aba=self, anx=self.anx)
+        self.guias.pack(fill="both", expand=True, padx=PADX, pady=px((0, 12)))
+
+        corpo.encaixar(aviso, acao, self.reg)
 
     # ------------------------------------------------------------- mensagens
     def _log(self, msg=""):
