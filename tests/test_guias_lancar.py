@@ -347,6 +347,16 @@ def test_criar_parcelado_manda_as_quatro_parcelas_mensais(tmp_path):
         "2026-09-12", "2026-10-12", "2026-11-12", "2026-12-12"]
 
 
+def test_parcelas_com_vencimento_em_31_prende_no_ultimo_dia_do_mes():
+    """I4: dia 31 não existe em todo mês. Sem prender ao último dia, a 2ª
+    parcela de um vencimento em 31/03 levantava ValueError e derrubava o
+    resto da rodada, sem dizer quais linhas ficaram sem lançar."""
+    parcelas = mod._parcelas_mensais(date(2026, 3, 31), 4, 400.00)
+
+    assert [p["plannedDate"] for p in parcelas] == [
+        "2026-03-31", "2026-04-30", "2026-05-31", "2026-06-30"]
+
+
 def test_parcelado_a_ultima_parcela_fecha_o_total(tmp_path):
     """Três parcelas de R$ 10,00 não somam R$ 30,01 nem R$ 29,99: a última
     absorve o centavo, senão o título nasce com valor diferente da guia."""

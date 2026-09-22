@@ -16,6 +16,7 @@ Três regras que não se negociam aqui:
 """
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 import json
 import re
@@ -227,7 +228,13 @@ def _parcelas_mensais(primeira, quantas: int, total) -> list[dict]:
     saida, somado = [], Decimal("0")
     for i in range(quantas):
         mes = primeira.month - 1 + i
-        data = primeira.replace(year=primeira.year + mes // 12, month=mes % 12 + 1)
+        ano = primeira.year + mes // 12
+        mes = mes % 12 + 1
+        # Dia 31 não existe em todo mês: sem prender ao último dia, a 2ª
+        # parcela de um vencimento em 31/03 levanta ValueError e derruba o
+        # resto da rodada, sem dizer quais linhas ficaram sem lançar.
+        dia = min(primeira.day, calendar.monthrange(ano, mes)[1])
+        data = dt.date(ano, mes, dia)
         parte = valor if i < quantas - 1 else Decimal(str(total)) - somado
         somado += parte
         saida.append({"plannedDate": data.isoformat(), "plannedValue": _num(parte),
