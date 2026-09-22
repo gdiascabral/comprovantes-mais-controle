@@ -73,8 +73,7 @@ def vencimento_da(guia):
     A ficha de arrecadação não traz vencimento no código de barras, então para
     FGTS, INSS e contribuição o do PDF costuma vir vazio — e é justamente onde
     o vencimento decide tudo: qual parcela da recorrência é esta guia, e se já
-    existe título no dia. `guias/lancar.py:_parcelas_mensais` já lê o par nesta
-    ordem ao criar; ao ALTERAR ele usa só o do PDF e cai na data da parcela.
+    existe título no dia. `guias/lancar.criar` já lê o par nesta ordem; ao ALTERAR ele usa só o do PDF e cai na data da parcela.
     """
     return guia.vencimento or guia.vencimento_portal
 
@@ -111,12 +110,17 @@ def documento_igual(a, b) -> bool:
     return len(da) >= PISO_DE_DIGITOS and da == db
 
 
-def _mesmo_mes(parcela: dict, vencimento) -> bool:
+def _data_de(parcela: dict):
     try:
-        d = date.fromisoformat(str(parcela.get("plannedDate") or "")[:10])
+        return date.fromisoformat(str(parcela.get("plannedDate") or "")[:10])
     except ValueError:
-        return False
-    return (d.year, d.month) == (vencimento.year, vencimento.month)
+        return None
+
+
+def _mesmo_mes(parcela: dict, vencimento) -> bool:
+    d = _data_de(parcela)
+    return d is not None and (d.year, d.month) == (vencimento.year,
+                                                   vencimento.month)
 
 
 def parcela_da_recorrencia(parcelas: list[dict], trade_payable_id: str,
@@ -128,44 +132,46 @@ def parcela_da_recorrencia(parcelas: list[dict], trade_payable_id: str,
     parcela em cada um. Escolher a errada é alterar o título do mês errado — e
     o mês errado já pode estar pago, ou passa a pedir o valor do outro.
 
-    Por isso ela não chuta. Quando não dá para saber qual é, devolve a dúvida
-    escrita, e quem chama transforma isso em pergunta:
+    O MÊS do vencimento é filtro, não desempate. Como desempate ele respondia
+    coisas opostas para o mesmo formato de dado: recusava a parcela única de
+    outro mês e aceitava, sem perguntar, a mais próxima entre duas quando
+    nenhuma era do mês — justamente o caso com MAIS ambiguidade. A distância só
+    entra para escolher entre as que já são do mês certo.
 
-    - sem vencimento nenhum (nem do PDF nem do portal) não há como escolher.
-      Não é caso raro: a ficha de arrecadação — FGTS, INSS/IRRF, contribuição —
-      não carrega vencimento no código de barras;
-    - empate de distância (guia no meio do caminho entre as duas parcelas)
-      seria decidido pela ordem em que o ERP devolveu a lista, que não é
-      garantia de nada.
+    E ela não chuta: quando não dá para saber qual é, devolve a dúvida escrita,
+    e quem chama transforma isso em pergunta.
     """
     candidatas = [p for p in parcelas or []
                   if str(p.get("tradePayableId") or "") == str(trade_payable_id)]
     if not candidatas:
         return None, "a recorrência que eu conhecia não tem parcela na janela"
-    if len(candidatas) == 1:
-        if vencimento is None or _mesmo_mes(candidatas[0], vencimento):
-            return candidatas[0], ""
-        # Uma parcela só, mas de OUTRO mês. Alterar é mover a data e trocar o
-        # valor dela: a de setembro passaria a ser a guia de outubro.
-        return None, ("a única parcela desta recorrência na janela é de outro "
-                      "mês que o vencimento desta guia: é ela mesma?")
     if vencimento is None:
+        if len(candidatas) == 1:
+            return candidatas[0], ""
+        # Não é caso raro: a ficha de arrecadação — FGTS, INSS/IRRF,
+        # contribuição — não carrega vencimento no código de barras.
         return None, ("não consegui ler o vencimento desta guia, e a "
                       "recorrência tem parcela em mais de um mês: qual delas "
                       "é esta guia?")
 
+    sem_data = [p for p in candidatas if _data_de(p) is None]
+    no_mes = [p for p in candidatas if _mesmo_mes(p, vencimento)]
+    if not no_mes:
+        if sem_data:
+            # "De outro mês" seria afirmar sobre um dado que eu não li, e o
+            # dono iria ao ERP procurar uma diferença de mês que não existe.
+            return None, ("não consegui ler a data de uma parcela desta "
+                          "recorrência: qual delas é esta guia?")
+        return None, ("a recorrência não tem parcela no mês do vencimento "
+                      "desta guia: é alguma destas?")
+    if len(no_mes) == 1:
+        return no_mes[0], ""
+
     def _distancia(p):
-        try:
-            d = date.fromisoformat(str(p.get("plannedDate") or "")[:10])
-        except ValueError:
-            return (1, 0)          # sem data legível fica por último
-        return (0, abs((d - vencimento).days))
+        return abs((_data_de(p) - vencimento).days)
 
-    def _chave(p):
-        return (_distancia(p), 0 if _mesmo_mes(p, vencimento) else 1)
-
-    ordenadas = sorted(candidatas, key=_chave)
-    if _chave(ordenadas[0]) == _chave(ordenadas[1]):
+    ordenadas = sorted(no_mes, key=_distancia)
+    if _distancia(ordenadas[0]) == _distancia(ordenadas[1]):
         return None, ("a recorrência tem duas parcelas à mesma distância do "
                       "vencimento desta guia: qual delas é ela?")
     return ordenadas[0], ""
@@ -200,26 +206,6 @@ def titulo_igual(parcelas: list[dict], documento: str) -> dict | None:
 TETO = Decimal("1.5")
 
 
-def documento_comparavel(documento) -> bool:
-    """O número desta guia dá para comparar com o que está escrito no ERP?
-
-    Dá sempre que houver NÚMERO. A linha digitável é o caso óbvio — ela pode
-    estar no ERP com os dígitos crus, com o nosso-número ou com pontos, e não
-    bater não prova nada —, mas o mesmo vale para um número curto: quando a
-    linha digitável não fecha o dígito verificador, `guias/leitura` cai no
-    número solto do texto, e aí a guia sai com onze dígitos pontuados contra
-    onze dígitos crus no ERP. Exigir o tamanho da linha digitável aqui
-    desligava as DUAS proteções de uma vez para essa guia — nem "já lançado"
-    nem pergunta —, e o que sobra é criar por cima.
-
-    Não dá quando a guia traz um rótulo de gente, sem dígito nenhum: se ele
-    não é igual a nenhum `documentNumber` do mês, são dois documentos
-    diferentes, e segurar a criação aí só encheria a lista de perguntas
-    falsas.
-    """
-    return bool(_digitos(documento))
-
-
 def titulo_parecido(parcelas: list[dict], valor, vencimento) -> dict | None:
     """Título no MESMO vencimento que PODE ser esta guia — sem prova.
 
@@ -245,6 +231,22 @@ def titulo_parecido(parcelas: list[dict], valor, vencimento) -> dict | None:
     # para um alheio que só cabe na faixa faz o dono responder "não é" olhando
     # o título errado — e o certo fica lá, convidando o lançamento à mão.
     return min(perto, key=lambda par: par[0])[1]
+
+
+def quantos_parecidos(parcelas: list[dict], valor, vencimento) -> int:
+    """Quantos títulos cabem na pergunta. Mais de um e a pergunta tem de dizer
+    isso: apontar um só faria o dono responder olhando metade do caso."""
+    alvo, data = _dec(valor), (vencimento.isoformat() if vencimento else "")
+    if alvo is None or not data:
+        return 0
+    n = 0
+    for p in parcelas or []:
+        if str(p.get("plannedDate") or "")[:10] != data:
+            continue
+        v = valor_da_parcela(p)
+        if v is not None and v > 0 and max(alvo, v) <= min(alvo, v) * TETO:
+            n += 1
+    return n
 
 
 def sugerir_obra(texto: str, obras) -> str:
@@ -340,23 +342,29 @@ def _uma(guia, parcelas, regras, registro, competencia, marcas,
     # título no mesmo vencimento: o documento pode estar escrito de um jeito
     # que não reconheço (ou não estar escrito), e criar por cima é a única
     # coisa aqui que ninguém desfaz sozinho.
-    # ... e só quando o número da guia é do tipo que pode estar escrito de
-    # outro jeito no ERP (ou não existe). Rótulo curto que não bateu com
-    # nenhum documento do mês é outro documento, não um engano de grafia.
-    doc_guia = str(guia.documento or "").strip()
-    parecido = (titulo_parecido(parcelas, guia.valor, vencimento_da(guia))
-                if not doc_guia or documento_comparavel(doc_guia) else None)
+    # Vale para TODA guia, com documento ou sem. Cheguei a tentar isentar o
+    # "rótulo de gente, sem dígito nenhum" — e era conceito morto: o número da
+    # guia só nasce em `guias/leitura`, onde os dois caminhos (linha digitável
+    # e `RE_DOCUMENTO`) começam por dígito. A isenção não era alcançável e o
+    # único teste que a guardava usava uma entrada que o leitor não produz.
+    parecido = titulo_parecido(parcelas, guia.valor, vencimento_da(guia))
     if parecido is not None:
         sem_doc = not str(guia.documento or "").strip()
+        quantos = quantos_parecidos(parcelas, guia.valor, vencimento_da(guia))
+        # Dois títulos com o mesmo valor no mesmo dia acontecem (a mesma guia
+        # lançada duas vezes à mão, dois impostos iguais). Apontar um e calar
+        # sobre o outro faria o dono responder olhando metade do caso.
+        mais = f" (e mais {quantos - 1} neste dia)" if quantos > 1 else ""
         return Decisao(
             guia, DECIDIR, tipo=nome, categoria=categoria,
-            motivo=("existe título com este valor e vencimento, e esta guia "
-                    "não traz número de documento: confirme se é o mesmo"
+            motivo=("existe título com este valor e vencimento" + mais +
+                    ", e esta guia não traz número de documento: confirme se "
+                    "é o mesmo"
                     if sem_doc else
                     "existe título neste vencimento com valor compatível, mas "
                     "com outro número de documento ("
                     + str(parecido.get("documentNumber") or "sem número")
-                    + "): confirme se é o mesmo"),
+                    + ")" + mais + ": confirme se é o mesmo"),
             trade_payable_id=str(parecido.get("tradePayableId") or ""),
             parcela_id=str(parecido.get("id") or ""))
 

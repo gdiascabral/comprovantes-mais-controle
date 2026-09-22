@@ -193,7 +193,9 @@ def test_criar_usa_a_obra_da_regra_e_nao_a_sugestao(tmp_path):
     """Regra é o que o dono já confirmou; sugestão é palpite. Regra ganha."""
     guia = _guia(desc="BOLETO RET CONDOMINIO SEGUNDO", documento="DOC-RET")
 
-    [d] = mod.decidir([guia], PARCELAS, _regras(tmp_path, [TIPO_CRIAR]),
+    # Sem parcela nenhuma: aqui o que se prova é a escolha da OBRA, e uma
+    # parcela no mesmo vencimento faria a linha virar pergunta antes disso.
+    [d] = mod.decidir([guia], [], _regras(tmp_path, [TIPO_CRIAR]),
                       _registro(tmp_path), COMP, obras=OBRAS)
 
     assert d.obra_id == "obra-7"
@@ -204,7 +206,7 @@ def test_criar_sem_obra_na_regra_recebe_a_sugestao_marcada_como_tal(tmp_path):
     tipo.pop("obra")
     guia = _guia(desc="BOLETO RET CONDOMINIO SEGUNDO", documento="DOC-RET")
 
-    [d] = mod.decidir([guia], PARCELAS, _regras(tmp_path, [tipo]),
+    [d] = mod.decidir([guia], [], _regras(tmp_path, [tipo]),
                       _registro(tmp_path), COMP, obras=OBRAS)
 
     assert d.obra_id == "obra-2"
@@ -217,7 +219,7 @@ def test_criar_sem_obra_nenhuma_vira_decidir(tmp_path):
     tipo.pop("obra")
     guia = _guia(desc="BOLETO RET SEM NOME DE OBRA", documento="DOC-RET")
 
-    [d] = mod.decidir([guia], PARCELAS, _regras(tmp_path, [tipo]),
+    [d] = mod.decidir([guia], [], _regras(tmp_path, [tipo]),
                       _registro(tmp_path), COMP, obras=OBRAS)
 
     assert d.acao == DECIDIR
@@ -490,6 +492,44 @@ def test_empate_de_verdade_PERGUNTA_em_vez_de_seguir_a_ordem_da_api(tmp_path):
     assert "mesma distância" in d.motivo
 
 
+def test_data_ILEGIVEL_nao_vira_afirmacao_sobre_o_mes(tmp_path):
+    """"De outro mês" seria afirmar sobre um dado que eu não li, e o dono iria
+    ao ERP procurar uma diferença de mês que não existe. A ação é a mesma
+    (perguntar); o que não pode é o motivo mentir."""
+    parcelas = [{"id": "par-x", "tradePayableId": "tp-1", "plannedDate": "",
+                 "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+                 "documentNumber": ""}]
+    guia = _guia(vencimento=date(2026, 9, 12))
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_ALTERAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+    assert "ler a data" in d.motivo
+
+
+def test_DUAS_parcelas_fora_do_mes_do_vencimento_PERGUNTA(tmp_path):
+    """O mês é filtro, não desempate. Como desempate ele recusava a parcela
+    única de outro mês e aceitava, calado, a mais próxima entre duas quando
+    NENHUMA era do mês — o caso com mais ambiguidade escrevendo sem perguntar,
+    e o com menos recusando."""
+    parcelas = [
+        {"id": "par-set", "tradePayableId": "tp-1", "plannedDate": "2026-09-30",
+         "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+         "documentNumber": ""},
+        {"id": "par-nov", "tradePayableId": "tp-1", "plannedDate": "2026-11-30",
+         "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+         "documentNumber": ""},
+    ]
+    guia = _guia(vencimento=date(2026, 10, 7))
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_ALTERAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+    assert "no mês do vencimento" in d.motivo
+
+
 def test_parcela_unica_de_OUTRO_mes_pergunta(tmp_path):
     """Uma parcela só na janela não é licença para alterar: alterar move a
     data e troca o valor dela, então a de setembro viraria a guia de outubro."""
@@ -503,7 +543,7 @@ def test_parcela_unica_de_OUTRO_mes_pergunta(tmp_path):
                       _registro(tmp_path), COMP)
 
     assert d.acao == DECIDIR
-    assert "outro mês" in d.motivo
+    assert "no mês do vencimento" in d.motivo
 
 
 def test_nosso_numero_CURTO_nao_perde_as_duas_protecoes(tmp_path):
@@ -566,18 +606,46 @@ def test_titulo_MAIS_BARATO_que_a_guia_tambem_segura_a_criacao(tmp_path):
     assert d.acao == DECIDIR
 
 
-def test_rotulo_curto_que_nao_bateu_e_OUTRO_documento_e_pode_criar(tmp_path):
-    """O contrário do teste acima: quando a guia traz um rótulo curto de gente
-    e ele não é igual a nenhum documento do mês, são dois documentos
-    diferentes. Segurar aí encheria a lista de perguntas falsas, e pergunta
-    falsa demais ensina o dono a aprovar sem ler."""
-    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="DOC-RET",
+def test_TODA_guia_ganha_a_guarda_do_titulo_parecido(tmp_path):
+    """Eu tinha isentado o "rótulo de gente, sem dígito nenhum" — e era ramo
+    MORTO: o número da guia só nasce em `guias/leitura`, e os dois caminhos de
+    lá (linha digitável e `RE_DOCUMENTO`) começam por dígito. O teste que
+    guardava a isenção usava `documento="DOC-RET"`, que o leitor não produz:
+    ficava verde provando um caminho que não existe em produção.
+
+    A verdade, que custa caro e por isso fica escrita: com título no mesmo
+    vencimento e dentro da faixa, TODA guia de criar vira pergunta.
+    """
+    assert mod.documento_igual("DOC-RET", "DOC-RET") is True
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="45/2026",
                  valor=Decimal("620.00"), vencimento=date(2026, 9, 12))
 
     [d] = mod.decidir([guia], PARCELAS, _regras(tmp_path, [TIPO_CRIAR]),
                       _registro(tmp_path), COMP)
 
-    assert d.acao == CRIAR
+    assert d.acao == DECIDIR
+
+
+def test_a_pergunta_diz_QUANTOS_titulos_cabem_nela(tmp_path):
+    """Dois títulos com o mesmo valor no mesmo dia acontecem — a mesma guia
+    lançada duas vezes à mão, dois impostos iguais. Apontar um e calar sobre o
+    outro faria o dono responder olhando metade do caso."""
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="",
+                 valor=Decimal("620.00"), vencimento=date(2026, 9, 12))
+    parcelas = [
+        {"id": "par-a", "tradePayableId": "tp-a", "plannedDate": "2026-09-12",
+         "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+         "documentNumber": ""},
+        {"id": "par-b", "tradePayableId": "tp-b", "plannedDate": "2026-09-12",
+         "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+         "documentNumber": ""},
+    ]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+    assert "mais 1 neste dia" in d.motivo
 
 
 def test_ja_lancado_leva_a_PARCELA_para_o_botao_de_abrir_no_erp(tmp_path):
