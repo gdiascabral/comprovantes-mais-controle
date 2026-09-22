@@ -421,6 +421,13 @@ class GuiasPainel(ttk.Frame):
     def varrer(self) -> None:
         if self.ocupado():
             return
+        if self.aba is not None and self.aba.ocupado():
+            # O `_parar` é da ABA, compartilhado com o envio de conciliações:
+            # limpar aqui com o envio rodando DESFAZ a parada que o dono
+            # pediu, e o envio volta a subir solicitações sozinho.
+            self.aba._log(f"[!] {self.aba.ocupado()} está rodando; espere "
+                          f"terminar antes de varrer o portal.")
+            return
         ano, mes = self.periodo        # lido AQUI: o worker não fala com o Tcl
         if self.aba is not None:
             self.aba._parar.clear()
@@ -434,6 +441,13 @@ class GuiasPainel(ttk.Frame):
         if self.anx is None:
             return
         if self.anx.avisar_se_ocupado("as Guias do mês"):
+            return
+        if self.aba is not None and self.aba.ocupado():
+            # Mesma guarda de `varrer`: `self.aba.worker` (o envio ao
+            # escritório) é OUTRO executor, e este `clear()` é o mesmo que
+            # desfaria a parada que o dono pediu para ele.
+            self.aba._log(f"[!] {self.aba.ocupado()} está rodando; espere "
+                          f"terminar antes de lançar no Mais Controle.")
             return
         ano, mes = self.periodo
         if self.aba is not None:

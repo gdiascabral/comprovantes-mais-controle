@@ -197,12 +197,18 @@ class _AbaFalsa:
         self.submetidos = []
         self.exec = _ExecutorFalso(self.submetidos)
         self.worker = None
+        #: I10: o que a ABA (não o bloco de guias) está fazendo, para o teste
+        #: simular o envio ao escritório rodando ao mesmo tempo.
+        self._ocupada_com = None
 
     def _log(self, msg=""):
         self.linhas.append(msg)
 
     def _garantir_mapa(self):
         return False              # sem cadastro nesta falsa
+
+    def ocupado(self):
+        return self._ocupada_com
 
 
 class _AnexarFalso:
@@ -425,6 +431,40 @@ def test_navegador_ocupado_recusa_casar_e_lancar(raiz):
 
     assert anx.submetidos == []
     assert p.ocupado() is None
+
+
+def test_varrer_recusa_quando_a_aba_ja_esta_ocupada(raiz):
+    """I10: o `_parar` é da ABA, compartilhado com o envio de conciliações.
+    Limpar aqui com o envio rodando desfaz a parada que o dono pediu para
+    ele, e o envio volta a subir solicitações sozinho."""
+    aba, anx = _AbaFalsa(), _AnexarFalso()
+    aba._parar.set()                 # o dono pediu Parar no envio em curso
+    aba._ocupada_com = "enviando ao escritório"
+    p = mod.GuiasPainel(raiz, aba=aba, anx=anx)
+    try:
+        p.varrer()
+    finally:
+        p.destroy()
+
+    assert aba.submetidos == []
+    assert aba._parar.is_set(), "o clear() desfez a parada do envio em curso"
+    assert any("enviando ao escritório" in linha for linha in aba.linhas)
+
+
+def test_lancar_recusa_quando_a_aba_ja_esta_ocupada(raiz):
+    """I10, o outro botão: mesma guarda para "Lançar o marcado"."""
+    aba, anx = _AbaFalsa(), _AnexarFalso()
+    aba._parar.set()
+    aba._ocupada_com = "enviando ao escritório"
+    p = mod.GuiasPainel(raiz, aba=aba, anx=anx)
+    p.mostrar([_decisao(ALTERAR, anx_id="1")])
+    try:
+        p.lancar()
+    finally:
+        p.destroy()
+
+    assert anx.submetidos == []
+    assert aba._parar.is_set()
 
 
 def test_obra_do_erp_falha_fechado_quando_nao_esta_no_catalogo(raiz):
