@@ -137,9 +137,10 @@ def _uma_guia(cliente, empresa, item: dict, competencia: str,
                     valor=lido.valor, vencimento=lido.vencimento,
                     documento=lido.documento,
                     vencimento_portal=vencimento_portal)
-        if len(itens) > 1:
-            # Duas cobranças no mesmo arquivo: o `anx_id` deixa de ser único,
-            # e a trava do registro depende dele.
-            guia.anx_id = f"{base.anx_id}p{lido.pagina}"
+        # SEMPRE sufixado, mesmo com uma página só: se o sufixo só aparecesse
+        # quando `len(itens) > 1`, uma rodada que lesse duas páginas hoje e
+        # só uma amanhã (página ilegível) trocaria a CHAVE da guia — o
+        # registro não a reconheceria, e a trava local abriria.
+        guia.anx_id = f"{base.anx_id}p{lido.pagina}"
         saida.append(guia)
     return saida

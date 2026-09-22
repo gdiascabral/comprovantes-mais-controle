@@ -199,3 +199,36 @@ def test_guia_cujo_download_falhou_ainda_carrega_o_vencimento_do_portal(
 
     guia = [g for g in guias if g.anx_id == "111"][0]
     assert guia.vencimento_portal == date(2026, 9, 12)
+
+
+# ---------------------------------------------- I12: sufixo de página estável
+
+def test_anx_id_leva_o_sufixo_da_pagina_mesmo_com_uma_pagina_so(
+        tmp_path, monkeypatch):
+    """O sufixo só entrava quando `len(itens) > 1`. Rodada 1 lê as duas
+    cobranças do PDF e grava as chaves "...p1" e "...p2"; rodada 2, com uma
+    página ilegível, produzia `len(itens) == 1` e a chave SEM sufixo — que o
+    registro não conhece, e a trava local abria."""
+    monkeypatch.setattr(
+        mod.leitura, "ler_pdf",
+        lambda _c: [leitura.ItemLido(valor=None, documento="DOC-1", pagina=1)])
+
+    guias = mod.varrer(_PortalFalso(), _MapaFalso(), 2026, 9,
+                       pasta_de=lambda _e: tmp_path, log=lambda _m: None)
+
+    guia = [g for g in guias if g.vip_id == "701"][0]
+    assert guia.anx_id == "111p1"
+
+
+def test_anx_id_de_duas_cobrancas_leva_o_sufixo_de_cada_pagina(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        mod.leitura, "ler_pdf",
+        lambda _c: [leitura.ItemLido(valor=None, documento="DOC-1", pagina=1),
+                    leitura.ItemLido(valor=None, documento="DOC-2", pagina=2)])
+
+    guias = mod.varrer(_PortalFalso(), _MapaFalso(), 2026, 9,
+                       pasta_de=lambda _e: tmp_path, log=lambda _m: None)
+
+    ids = sorted(g.anx_id for g in guias if g.vip_id == "701")
+    assert ids == ["111p1", "111p2"]
