@@ -245,6 +245,59 @@ def test_lancar_anota_no_registro_mesmo_quando_o_erp_recusa(raiz, tmp_path,
     assert reg.linhas and reg.linhas[-1]["estado"] == ERRO
 
 
+def test_gravar_nao_relanca_guia_que_o_registro_ja_tem(raiz, tmp_path,
+                                                       monkeypatch):
+    """C2: clicar duas vezes em "Lançar o marcado" não pode relançar tudo —
+    a segunda passada tem de reconferir o registro ANTES de gravar de novo."""
+    from guias import registro as mod_registro
+    from guias.modelos import ALTERADO, Resultado
+
+    aba = _AbaFalsa()
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    reg = mod_registro.Registro.carregar(tmp_path / "r.jsonl")
+    reg.anotar(vip_id="701", anx_id="1", competencia="2026-09",
+              acao=ALTERAR, estado=ALTERADO, tpid="tp-1", motivo="",
+              anexos=["guia.pdf"])
+    chamadas = []
+    monkeypatch.setattr(
+        mod.lancar, "alterar",
+        lambda *a, **k: chamadas.append(1) or Resultado(ALTERADO, tpid="tp-2"))
+    try:
+        p._gravar([_decisao(ALTERAR, anx_id="1", trade_payable_id="tp-1")],
+                  transporte=object(), catalogos=object(), id_usuario="user-1",
+                  registro=reg, parcelas=[], regras=None, pasta_backup=tmp_path)
+    finally:
+        p.destroy()
+
+    assert chamadas == [], "gravou de novo uma guia que o registro já tinha"
+    assert len(reg.linhas) == 1, "o segundo clique escreveu uma linha nova"
+
+
+def test_gravar_nao_recria_titulo_que_o_erp_ja_tem(raiz, tmp_path, monkeypatch):
+    """C2, o lado do CRIAR: mesmo sem linha no registro local, se o ERP já tem
+    título com este documento no mês, recriar duplicaria a conta a pagar."""
+    from guias import registro as mod_registro
+    from guias.modelos import CRIADO, Resultado
+
+    aba = _AbaFalsa()
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    reg = mod_registro.Registro.carregar(tmp_path / "r.jsonl")
+    chamadas = []
+    monkeypatch.setattr(
+        mod.lancar, "criar",
+        lambda *a, **k: chamadas.append(1) or Resultado(CRIADO, tpid="tp-novo"))
+    parcelas = [{"documentNumber": "DOC-1", "tradePayableId": "tp-existente"}]
+    try:
+        p._gravar([_decisao(CRIAR, anx_id="1", obra_id="obra-1")],
+                  transporte=object(), catalogos=object(), id_usuario="user-1",
+                  registro=reg, parcelas=parcelas, regras=None,
+                  pasta_backup=tmp_path)
+    finally:
+        p.destroy()
+
+    assert chamadas == [], "criou um segundo título para um documento que já existe"
+
+
 def test_obra_com_cadastro_incompleto_fica_fora_da_lista_e_avisa(raiz):
     """Item extra da revisão da Tarefa 8: obra sem nome ou sem id sumia da
     lista sem dizer nada, e é a obra que decide a conta que paga."""

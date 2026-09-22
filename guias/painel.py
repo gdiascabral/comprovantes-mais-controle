@@ -26,7 +26,7 @@ from acessorias import pacote
 from acessorias.portal import PortalClient
 from anexar import config as anx_config
 from guias import calendario, casamento, lancar, regras, registro
-from guias.modelos import ALTERAR, CRIAR, DECIDIR, JA_LANCADO
+from guias.modelos import ALTERAR, CRIAR, DECIDIR, JA_LANCADO, Resultado
 
 log = util.log(__name__)
 
@@ -552,6 +552,29 @@ class GuiasPainel(ttk.Frame):
                 self.aba._log("Parado a pedido; o que já foi gravado está no "
                               "registro.")
                 return
+            guia = decisao.guia
+            # A decisão foi tomada minutos atrás, na fase 2. Reconferir aqui é
+            # o que impede o segundo clique em "Lançar" de gravar tudo de
+            # novo: a tela continua com as linhas marcadas depois da rodada.
+            feito = registro.ja_feito(guia.vip_id, guia.anx_id, guia.competencia)
+            if feito:
+                if self.aba is not None:
+                    self.aba.q.put(("guia_feita", (decisao, Resultado(
+                        JA_LANCADO, tpid=str(feito.get("tpid") or ""),
+                        motivo="já lançado nesta competência (" +
+                               str(feito.get("estado") or "") + ")"))))
+                continue
+            if decisao.acao == CRIAR:
+                igual = casamento.titulo_igual(parcelas, guia.documento,
+                                               guia.valor, guia.vencimento)
+                if igual is not None and str(guia.documento or "").strip():
+                    if self.aba is not None:
+                        self.aba.q.put(("guia_feita", (decisao, Resultado(
+                            JA_LANCADO,
+                            tpid=str(igual.get("tradePayableId") or ""),
+                            motivo="o ERP já tem título com este "
+                                   "documento"))))
+                    continue
             if decisao.acao == ALTERAR:
                 resultado = lancar.alterar(transporte, decisao, catalogos,
                                            pasta_backup=pasta_backup)
