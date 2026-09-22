@@ -1076,6 +1076,13 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         #: planilha, para alguém abrir e digitar) de "não veio boleto nenhum"
         #: (não fica: não há o que digitar, e a linha só custa conferência).
         tem_documento = False
+        #: Há chave Pix no cadastro, só que "boleto ganha de Pix" a recusou
+        #: por falta de NF/OC (abaixo): o MOTIVO_SEM_PAGAR genérico diz "nem
+        #: chave Pix", que é falso aqui e contradiz o próprio aviso "Cadastro
+        #: tem Pix" que a mesma linha mostra — foi o que confundiu quem
+        #: conferia (dono, 22/09/2026). Separado de `tem_documento` porque o
+        #: cadastro não é anexo: é dado do ERP, sem nada para abrir.
+        pix_sem_documento = False
 
         # Boleto que veio dentro de um PDF etiquetado como nota: a etiqueta não
         # o anuncia, mas ele existe, e "boleto ganha de Pix" vale igual —
@@ -1231,6 +1238,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     obs = "Sem boleto anexado — pagar pela chave Pix do cadastro"
                 else:
                     obs = "Nenhum anexo de boleto — conferir no ERP"
+                    pix_sem_documento = parece_chave_pix(do_cadastro)
 
         # Depois de resolver a forma de pagar, e não antes: quando a linha
         # acabou virando Pix por falta de boleto, mandar "pagar o boleto"
@@ -1291,7 +1299,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             else:
                 motivo = regras.motivo_omissao(valor, favorecido, dados,
                                                tem_documento, regras_forn,
-                                               valor_documento=valor_documento)
+                                               valor_documento=valor_documento,
+                                               pix_sem_documento=pix_sem_documento)
         if motivo:
             omitidos.append({"conta": conta, "tipo": tipo, "valor": valor,
                              "descricao": descricao, "favorecido": favorecido,
