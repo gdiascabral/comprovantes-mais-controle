@@ -148,6 +148,36 @@ def test_alterar_grava_a_categoria_especifica_e_so_esta_parcela(tmp_path):
     assert put[2]["costCentreDetails"][0]["value"] == 641.31
 
 
+def test_nome_do_anexo_nao_leva_separador_de_caminho(tmp_path):
+    """A descrição do portal traz competência com barra, e barra em nome de
+    objeto vira caminho no armazenamento."""
+    assert "/" not in mod._nome_de_arquivo("HONORARIO 09/2026")
+    assert chr(92) not in mod._nome_de_arquivo(f"INSS{chr(92)}IRRF")
+    assert mod._nome_de_arquivo("HONORARIO 09/2026") == "HONORARIO 09-2026"
+
+
+def test_nome_do_anexo_no_batch_de_alterar_nao_leva_barra(tmp_path):
+    """Prova o caminho inteiro: uma descrição com barra de verdade
+    ("HONORARIO 09/2026", como o portal do escritório manda) não pode chegar
+    ao POST do batch com separador de caminho no nome do arquivo."""
+    decisao = _decisao(tmp_path)
+    decisao.guia.desc = "HONORARIO 09/2026"
+    t = _Transporte({("GET", "/trade-payables/tp-1"):
+                     _Fila(json.loads(json.dumps(TITULO)), _gravado()),
+                     ("PUT", "/trade-payables/tp-1"): {"id": "tp-1"},
+                     ("POST", "/attachments/v2/batch"): BATCH,
+                     ("PUT-S3", "s3.exemplo"): {"status": 200},
+                     ("GET", "/attachments/v2?"): ANEXO_OK})
+
+    r = mod.alterar(t, decisao, _Catalogos(), pasta_backup=tmp_path / "bk")
+
+    assert r.estado == ALTERADO
+    batch = [c for c in t.chamadas if c[0] == "POST"][0][2]
+    nome = batch["attachmentsItem"][0]["name"]
+    assert "/" not in nome
+    assert chr(92) not in nome
+
+
 def test_alterar_nao_toca_na_descricao_nem_na_conta(tmp_path):
     """A conta vem da obra e a equipe nunca mexe nela; a descrição fica como
     está (decisões do dono)."""

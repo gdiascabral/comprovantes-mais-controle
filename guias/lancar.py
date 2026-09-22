@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -46,6 +47,17 @@ def _erro_de(resposta) -> str:
 
 def _mesmo(a, b) -> bool:
     return abs(float(a or 0) - float(b or 0)) < 0.005
+
+
+def _nome_de_arquivo(texto: str) -> str:
+    """Nome de anexo sem separador de caminho.
+
+    A descrição vem do portal do escritório e traz competência com barra
+    ("HONORARIO 09/2026"). Barra e contrabarra em nome de objeto viram
+    separador de caminho no armazenamento: o anexo sai com nome estranho, ou
+    é recusado — e isso só apareceria na primeira rodada real.
+    """
+    return re.sub(r"[\\/]+", "-", str(texto or "")).strip()
 
 
 # --------------------------------------------------------------- conta e obra
@@ -119,7 +131,8 @@ def anexar(transporte, tpid: str, pdf: Path, nome: str) -> list[str]:
 def _fechar(transporte, decisao, tpid: str, estado_ok: str,
             conferido: bool) -> Resultado:
     """Anexa e devolve o desfecho. Ordem: título primeiro, anexo depois."""
-    nome = f"{decisao.guia.desc[:60]} {decisao.guia.competencia}.pdf".strip()
+    nome = _nome_de_arquivo(f"{decisao.guia.desc[:60]} "
+                            f"{decisao.guia.competencia}") + ".pdf"
     anexos = anexar(transporte, tpid, decisao.guia.pdf, nome)
     if not anexos:
         return Resultado(ANEXO_PENDENTE, tpid=tpid,
