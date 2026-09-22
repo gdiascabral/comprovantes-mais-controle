@@ -250,7 +250,7 @@ def test_lancar_anota_no_registro_mesmo_quando_o_erp_recusa(raiz, tmp_path,
     p = mod.GuiasPainel(raiz, aba=aba, anx=None)
     reg = mod_registro.Registro.carregar(tmp_path / "r.jsonl")
     monkeypatch.setattr(mod, "_sessao_do_erp",
-                        lambda _p: (object(), object(), "user-1"))
+                        lambda _p: (object(), object(), "user-1", object()))
     monkeypatch.setattr(mod.lancar, "alterar",
                         lambda *a, **k: Resultado(ERRO, motivo="o ERP recusou"))
     try:
@@ -696,22 +696,33 @@ def test_a_leitura_das_parcelas_PASSA_pelo_refazer(raiz, monkeypatch):
     contém foi o que deixou o bloco inteiro sair invisível na v2.0.208."""
     tentativas = []
 
-    class _TransporteInstavel:
-        def buscar(self, _url):
-            tentativas.append(1)
+    class _ApiInstavel:
+        """Só tem `listar_a_pagar`.
+
+        É de propósito: se alguém voltar a montar a URL à mão e chamar
+        `buscar`/`page.evaluate`, este dublê estoura em AttributeError em vez
+        de concordar com o engano. Foi essa URL escrita de memória que matou as
+        quatro rodadas reais da v2.0.211/212.
+        """
+
+        def listar_a_pagar(self, inicio, fim, log=None):
+            tentativas.append((inicio, fim))
             if len(tentativas) == 1:
                 raise RuntimeError("Execution context was destroyed, most "
                                    "likely because of a navigation.")
-            return {"content": [{"id": "par-1"}]}
+            return [{"id": "par-1"}]
 
     p = mod.GuiasPainel(raiz, aba=None, anx=None)
     try:
-        parcelas = p._parcelas_do_mes(_TransporteInstavel(), 2026, 9)
+        parcelas = p._parcelas_do_mes(_ApiInstavel(), 2026, 9)
     finally:
         p.destroy()
 
     assert len(tentativas) == 2, "a leitura não passa pelo refazer"
     assert parcelas == [{"id": "par-1"}]
+    # O mês INTEIRO, do dia 1 ao último: setembro tem 30, e um `monthrange`
+    # trocado por um 31 fixo pediria 2026-09-31, que o ERP recusa.
+    assert tentativas[0] == ("2026-09-01", "2026-09-30")
 
 
 @pytest.mark.parametrize("texto", [

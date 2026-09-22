@@ -19,7 +19,6 @@ import tkinter as tk
 import webbrowser
 from collections import Counter
 from tkinter import ttk
-from urllib.parse import urlencode
 
 import util
 import widgets
@@ -59,7 +58,7 @@ COLUNAS = (("empresa", "Empresa", 170), ("documento", "Documento", 230),
 # --------------------------------------------------------- Mais Controle
 
 def _sessao_do_erp(painel):
-    """(transporte, catalogos, id_usuario), pela página que o app já tem logada.
+    """(transporte, catalogos, id_usuario, api), pela página que o app já tem logada.
 
     Mesmo caminho da aba Aportes: passar pela LISTA de Pagamentos faz o ERP
     autenticar os dois back-ends de cadastro, e os cabeçalhos são copiados do
@@ -122,7 +121,9 @@ def _sessao_do_erp(painel):
     # (`erp_sessao.na_lista_de_pagamentos`).
     pagina.goto(anx_config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
 
-    return transporte, catalogos, transporte.cabecalho("user-id") or ""
+    # O `api` sai junto: é ele que lê a lista de parcelas, a partir da URL
+    # que a própria tela capturou (ver `_parcelas_do_mes`).
+    return transporte, catalogos, transporte.cabecalho("user-id") or "", api
 
 
 #: A MESMA corrida, em três textos. A página do ERP navega entre o pedido e a
@@ -592,8 +593,8 @@ class GuiasPainel(ttk.Frame):
     def _t_casar(self, guias, ano: int, mes: int):
         """Roda na thread do NAVEGADOR (executor do Anexar). Nada de Tcl."""
         try:
-            transporte, catalogos, _uid = _sessao_do_erp(self)
-            parcelas = self._parcelas_do_mes(transporte, ano, mes)
+            transporte, catalogos, _uid, api = _sessao_do_erp(self)
+            parcelas = self._parcelas_do_mes(api, ano, mes)
             obras = list(getattr(catalogos, "obras", {}).values())
             regras_ = regras.Regras.carregar()
             registro_ = registro.Registro.carregar()
@@ -610,29 +611,36 @@ class GuiasPainel(ttk.Frame):
         finally:
             self._tarefa = ""
 
-    def _parcelas_do_mes(self, transporte, ano: int, mes: int) -> list[dict]:
-        """As parcelas do mês inteiro, numa leitura só (`size=3000`)."""
-        from erp import hosts
+    def _parcelas_do_mes(self, api, ano: int, mes: int) -> list[dict]:
+        """As parcelas do mês, pelo leitor que o app já tem.
+
+        Quem monta a URL é `anexar/mc_api`, a partir da requisição que a
+        PRÓPRIA TELA fez — host, caminho e os parâmetros da organização vêm de
+        lá, e só os filtros são nossos. O docstring dele avisa por quê: "o
+        resto tem de ser exatamente o que o navegador mandou… a terceira cópia
+        seria a primeira chance de os três discordarem".
+
+        Eu fiz essa terceira cópia, com o host escrito à mão e os parâmetros
+        digitados de memória, e as quatro rodadas reais da v2.0.211/212 morreram
+        nela com `TypeError: Failed to fetch` — erro que nasce DENTRO do bundle
+        do ERP, porque a página embrulha o `fetch`. Os catálogos, que passam
+        pelo caminho certo, carregavam normalmente na mesma rodada.
+
+        `listar_a_pagar` usa `type=ALL` e `dateField=PLANNED`, que é o que o
+        casamento precisa: o mês inteiro pela data prevista, pagos e a pagar
+        juntos, com o app separando pelo campo `paid`.
+        """
         ultimo = calendar.monthrange(ano, mes)[1]
-        parametros = urlencode({
-            "page": 0, "size": 3000, "type": "ALL", "onlyWork": "false",
-            "dateField": "PLANNED", "costCentreType": "ALL",
-            "conciliationType": "ALL", "tradePayableType": "ALL",
-            "batchOperationType": "NONE",
-            "startDate": f"{ano:04d}-{mes:02d}-01",
-            "endDate": f"{ano:04d}-{mes:02d}-{ultimo:02d}"})
-        resposta = _com_contexto(
-            transporte.buscar,
-            f"{hosts.LEGACY}/payable-installments/paginated-result?{parametros}")
-        if isinstance(resposta, dict) and resposta.get("__erro"):
-            raise RuntimeError(f"o ERP recusou a lista de parcelas "
-                               f"(HTTP {resposta['__erro']})")
-        return list((resposta or {}).get("content") or [])
+        return _com_contexto(
+            api.listar_a_pagar,
+            f"{ano:04d}-{mes:02d}-01",
+            f"{ano:04d}-{mes:02d}-{ultimo:02d}",
+            self.aba._log if self.aba is not None else (lambda _m: None))
 
     def _t_lancar(self, decisoes, ano: int, mes: int):
         try:
-            transporte, catalogos, id_usuario = _sessao_do_erp(self)
-            parcelas = self._parcelas_do_mes(transporte, ano, mes)
+            transporte, catalogos, id_usuario, api = _sessao_do_erp(self)
+            parcelas = self._parcelas_do_mes(api, ano, mes)
             self._gravar(decisoes, transporte=transporte, catalogos=catalogos,
                          id_usuario=id_usuario,
                          registro=registro.Registro.carregar(),
