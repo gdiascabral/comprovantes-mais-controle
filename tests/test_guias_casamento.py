@@ -278,6 +278,111 @@ def test_parcela_que_so_traz_plannedValue_NAO_e_lida(tmp_path):
     assert d.acao == CRIAR
 
 
+def test_linha_digitavel_FORMATADA_casa_com_os_digitos_crus(tmp_path):
+    """O caso que a primeira rodada real encontraria.
+
+    A guia com boleto traz a linha digitável com pontos e espaços, porque é
+    assim que ela sai do documento; quem lançou o título à mão no ERP digitou
+    os dígitos crus. Comparar só o texto diz "não é o mesmo" e manda CRIAR —
+    segundo título para uma conta que já existe.
+    """
+    linha = "00000.00000 00000.000000 00000.000000 0 00000000000001"
+    crus = "00000000000000000000000000000000000000000000001"
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento=linha)
+    parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
+                 "plannedDate": "2026-09-12", "value": None,
+                 "remainingValue": 641.31, "sumOfPaidValues": 0,
+                 "documentNumber": crus}]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == JA_LANCADO
+    assert d.trade_payable_id == "tp-9"
+
+
+def test_numero_curto_NAO_casa_por_digitos(tmp_path):
+    """Sem um piso de dígitos, "Guia 1" e "Doc 1" seriam o mesmo documento."""
+    assert mod.documento_igual("GUIA 1", "DOC 1") is False
+    assert mod.documento_igual("12345", "1-23-45") is False
+    assert mod.documento_igual("123456", "12.34.56") is True
+    assert mod.documento_igual("", "123456") is False
+
+
+def test_documento_que_nao_casa_com_titulo_no_mesmo_vencimento_vira_DECIDIR(tmp_path):
+    """Não reconhecer o documento não autoriza criar.
+
+    O título está lá, no mesmo vencimento e com valor compatível, e o número
+    dele foi escrito de um jeito que eu não sei ler. Criar por cima é a única
+    coisa aqui que ninguém desfaz sozinho; perguntar custa uma linha.
+    """
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="DOC-RET")
+    parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
+                 "plannedDate": "2026-09-12", "value": None,
+                 "remainingValue": 641.31, "sumOfPaidValues": 0,
+                 "documentNumber": "ESCRITO DE OUTRO JEITO"}]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+    assert d.trade_payable_id == "tp-9"
+    assert "outro número de documento" in d.motivo
+
+
+def test_guia_paga_com_juros_vira_DECIDIR_e_nao_CRIAR(tmp_path):
+    """`sumOfPaidValues` traz o que SAIU, com multa e juros: o título fica
+    MAIOR que a guia. Exigir valor igual mandaria criar de novo."""
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="",
+                 valor=Decimal("620.00"), vencimento=date(2026, 9, 12))
+    parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
+                 "plannedDate": "2026-09-12", "value": None,
+                 "remainingValue": 0, "sumOfPaidValues": 645.31,
+                 "documentNumber": ""}]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+
+
+def test_titulo_grande_demais_no_mesmo_dia_NAO_segura_a_criacao(tmp_path):
+    """O teto existe para o outro lado: um título de R$ 9.000 que só coincide
+    na data não é esta guia, e virar DECIDIR em cima dele encheria a lista de
+    perguntas falsas até o dono aprovar sem ler."""
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="",
+                 valor=Decimal("620.00"), vencimento=date(2026, 9, 12))
+    parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
+                 "plannedDate": "2026-09-12", "value": None,
+                 "remainingValue": 9000.00, "sumOfPaidValues": 0,
+                 "documentNumber": ""}]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == CRIAR
+
+
+def test_recorrencia_escolhe_a_parcela_do_vencimento_da_guia(tmp_path):
+    """A janela cobre dois meses, e a recorrência mensal tem uma parcela em
+    cada um. Pegar a primeira da lista alteraria o título do mês errado — que
+    pode já estar pago."""
+    parcelas = [
+        {"id": "par-out", "tradePayableId": "tp-1", "plannedDate": "2026-10-12",
+         "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+         "documentNumber": ""},
+        {"id": "par-set", "tradePayableId": "tp-1", "plannedDate": "2026-09-12",
+         "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+         "documentNumber": ""},
+    ]
+
+    [d] = mod.decidir([_guia()], parcelas, _regras(tmp_path, [TIPO_ALTERAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == ALTERAR
+    assert d.parcela_id == "par-set"
+
+
 def test_guia_com_erro_de_leitura_vira_decidir_com_o_motivo_do_erro(tmp_path):
     [d] = mod.decidir([_guia(erro="o link da guia expirou")], PARCELAS,
                       _regras(tmp_path, [TIPO_ALTERAR]), _registro(tmp_path), COMP)

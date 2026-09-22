@@ -714,15 +714,35 @@ def test_a_leitura_das_parcelas_PASSA_pelo_refazer(raiz, monkeypatch):
 
     p = mod.GuiasPainel(raiz, aba=None, anx=None)
     try:
-        parcelas = p._parcelas_do_mes(_ApiInstavel(), 2026, 9)
+        parcelas = p._parcelas_da_janela(_ApiInstavel(), 2026, 9)
     finally:
         p.destroy()
 
     assert len(tentativas) == 2, "a leitura não passa pelo refazer"
     assert parcelas == [{"id": "par-1"}]
-    # O mês INTEIRO, do dia 1 ao último: setembro tem 30, e um `monthrange`
-    # trocado por um 31 fixo pediria 2026-09-31, que o ERP recusa.
-    assert tentativas[0] == ("2026-09-01", "2026-09-30")
+    # Do dia 1 do mês ao último do MÊS SEGUINTE: outubro tem 31, e um
+    # `monthrange` trocado por número fixo pediria uma data que o ERP recusa.
+    assert tentativas[0] == ("2026-09-01", "2026-10-31")
+
+
+def test_a_janela_de_dezembro_atravessa_o_ANO(raiz):
+    """Mês + 1 em dezembro é janeiro do ano seguinte. Somar 1 ao mês daria
+    2026-13-31, e aí a leitura inteira falha em dezembro — uma vez por ano,
+    justamente na virada, quando ninguém está olhando."""
+    pedidos = []
+
+    class _Api:
+        def listar_a_pagar(self, inicio, fim, log=None):
+            pedidos.append((inicio, fim))
+            return []
+
+    p = mod.GuiasPainel(raiz, aba=None, anx=None)
+    try:
+        p._parcelas_da_janela(_Api(), 2026, 12)
+    finally:
+        p.destroy()
+
+    assert pedidos == [("2026-12-01", "2027-01-31")]
 
 
 @pytest.mark.parametrize("texto", [

@@ -11,6 +11,7 @@ vira parcela alterada na recorrência errada, e isso só se descobre no extrato.
 from __future__ import annotations
 
 from collections import Counter
+from datetime import date
 from decimal import Decimal
 
 import util
@@ -51,37 +52,104 @@ def valor_da_parcela(p: dict):
     por HTTP puro) já o viu preenchido; ler os dois não custa nada e ler só um
     custaria uma duplicata.
     """
-    falta, pago = p.get("remainingValue"), p.get("sumOfPaidValues")
+    falta, pago = _dec(p.get("remainingValue")), _dec(p.get("sumOfPaidValues"))
     if falta is None and pago is None:
+        # Os dois ausentes OU os dois ilegíveis. `or Decimal("0.00")` abaixo
+        # transformaria "não consegui ler" em "li, e é zero" — um valor de
+        # verdade, que depois aparece no aviso como se fosse do cadastro.
         return _dec(p.get("value"))
-    return (_dec(falta) or Decimal("0.00")) + (_dec(pago) or Decimal("0.00"))
+    return (falta or Decimal("0.00")) + (pago or Decimal("0.00"))
 
 
-def parcela_da_recorrencia(parcelas: list[dict],
-                           trade_payable_id: str) -> dict | None:
+def _digitos(texto) -> str:
+    return "".join(c for c in str(texto or "") if c.isdigit())
+
+
+def documento_igual(a, b) -> bool:
+    """O mesmo documento, escrito de dois jeitos.
+
+    A guia que tem linha digitável traz o número FORMATADO
+    (`00000.00000 00000.000000 00000.000000 0 00000000000000`), porque é assim
+    que ele sai do boleto; quem lançou o título à mão no ERP digitou os dígitos
+    crus. Comparar só o texto diz "não é o mesmo" para o mesmo documento — e
+    não reconhecer aqui não dá erro nenhum: dá um SEGUNDO título para uma guia
+    que já existe, e conta aberta em duplicata ninguém vê até pagar duas vezes.
+
+    Seis dígitos é o piso para a comparação por dígitos: abaixo disso ela
+    casaria números curtos de documentos diferentes.
+    """
+    ta = util.norm_espaco(str(a or "")).upper()
+    tb = util.norm_espaco(str(b or "")).upper()
+    if not ta or not tb:
+        return False
+    if ta == tb:
+        return True
+    da, db = _digitos(ta), _digitos(tb)
+    return len(da) >= 6 and da == db
+
+
+def parcela_da_recorrencia(parcelas: list[dict], trade_payable_id: str,
+                           vencimento=None) -> dict | None:
+    """A parcela desta recorrência, a MAIS PRÓXIMA do vencimento da guia.
+
+    A janela de leitura cobre dois meses de propósito (guia de competência 09
+    que vence em outubro tem o título em outubro), e recorrência mensal tem uma
+    parcela em cada um. Devolver a primeira da lista seria alterar o título do
+    mês errado — e o mês errado já pode estar pago.
+    """
+    candidatas = [p for p in parcelas or []
+                  if str(p.get("tradePayableId") or "") == str(trade_payable_id)]
+    if not candidatas or vencimento is None:
+        return candidatas[0] if candidatas else None
+
+    def _distancia(p):
+        try:
+            d = date.fromisoformat(str(p.get("plannedDate") or "")[:10])
+        except ValueError:
+            return (1, 0)          # sem data legível fica por último
+        return (0, abs((d - vencimento).days))
+
+    return min(candidatas, key=_distancia)
+
+
+def titulo_igual(parcelas: list[dict], documento: str) -> dict | None:
+    """Título que JÁ representa esta guia: mesmo número de documento.
+
+    Só o documento, que é o que identifica a guia. O casamento por valor e
+    vencimento mora em `titulo_parecido` e nunca vira "já lançado": ele vira
+    pergunta, porque valor e vencimento iguais acontecem entre fornecedores
+    diferentes.
+    """
     for p in parcelas or []:
-        if str(p.get("tradePayableId") or "") == str(trade_payable_id):
+        if documento_igual(documento, p.get("documentNumber")):
             return p
     return None
 
 
-def titulo_igual(parcelas: list[dict], documento: str, valor,
-                 vencimento) -> dict | None:
-    """Título que já representa esta guia no mês. Primeiro pelo número do
-    documento, que é o que identifica a guia; sem ele, por valor + vencimento.
+#: Teto do casamento por valor quando a guia foi paga com atraso. A lista traz
+#: `sumOfPaidValues` — o que SAIU, com multa e juros —, não o nominal, então o
+#: título fica MAIOR que a guia. Multa e juros de uma guia com um ou dois meses
+#: de atraso não chegam a metade do principal, e parar no meio evita casar a
+#: guia com um título grande que só coincide na data.
+TETO_DE_ACRESCIMO = Decimal("1.5")
+
+
+def titulo_parecido(parcelas: list[dict], valor, vencimento) -> dict | None:
+    """Título no MESMO vencimento que PODE ser esta guia — sem prova.
+
+    Serve para uma coisa só: impedir que o app CRIE por cima de um título que
+    já existe. Por isso é generoso de propósito, e por isso quem o usa devolve
+    DECIDIR, nunca JA_LANCADO. O preço de casar demais é uma linha para o dono
+    conferir; o de casar de menos é uma conta paga duas vezes.
     """
-    doc = util.norm_espaco(str(documento or "")).upper()
-    if doc:
-        for p in parcelas or []:
-            if util.norm_espaco(str(p.get("documentNumber") or "")).upper() == doc:
-                return p
-        return None
     alvo, data = _dec(valor), (vencimento.isoformat() if vencimento else "")
     if alvo is None or not data:
         return None
     for p in parcelas or []:
-        if (valor_da_parcela(p) == alvo
-                and str(p.get("plannedDate") or "")[:10] == data):
+        if str(p.get("plannedDate") or "")[:10] != data:
+            continue
+        v = valor_da_parcela(p)
+        if v is not None and alvo <= v <= alvo * TETO_DE_ACRESCIMO:
             return p
     return None
 
@@ -153,7 +221,8 @@ def _uma(guia, parcelas, regras, registro, competencia, marcas,
             return Decisao(guia, DECIDIR, tipo=nome, categoria=categoria,
                            motivo="ainda não sei qual é a recorrência desta "
                                   "empresa para este documento")
-        parcela = parcela_da_recorrencia(parcelas, tpid)
+        parcela = parcela_da_recorrencia(parcelas, tpid,
+                                         guia.vencimento)
         if parcela is None:
             return Decisao(guia, DECIDIR, tipo=nome, categoria=categoria,
                            motivo="a recorrência que eu conhecia não tem "
@@ -168,21 +237,29 @@ def _uma(guia, parcelas, regras, registro, competencia, marcas,
                              f"{_brl(guia.valor)}; vale a guia")
         return decisao
 
-    achado = titulo_igual(parcelas, guia.documento, guia.valor, guia.vencimento)
+    achado = titulo_igual(parcelas, guia.documento)
     if achado is not None:
-        if not str(guia.documento or "").strip():
-            # Sem número de documento a coincidência é fraca: valor e
-            # vencimento iguais acontecem entre fornecedores diferentes. Dar
-            # isso como "já lançado" faria a conta a pagar NUNCA ser criada, e
-            # conta que não existe ninguém percebe — pior que duplicar.
-            return Decisao(guia, DECIDIR, tipo=nome, categoria=categoria,
-                           motivo="existe título com este valor e vencimento, "
-                                  "e esta guia não traz número de documento: "
-                                  "confirme se é o mesmo",
-                           trade_payable_id=str(achado.get("tradePayableId") or ""))
         return Decisao(guia, JA_LANCADO, tipo=nome, categoria=categoria,
-                       motivo="já existe título com este documento no mês",
+                       motivo="já existe título com este documento",
                        trade_payable_id=str(achado.get("tradePayableId") or ""))
+
+    # Nada com o mesmo documento. Antes de mandar CRIAR, olhar se já existe
+    # título no mesmo vencimento: o documento pode estar escrito de um jeito
+    # que não reconheço (ou não estar escrito), e criar por cima é a única
+    # coisa aqui que ninguém desfaz sozinho.
+    parecido = titulo_parecido(parcelas, guia.valor, guia.vencimento)
+    if parecido is not None:
+        sem_doc = not str(guia.documento or "").strip()
+        return Decisao(
+            guia, DECIDIR, tipo=nome, categoria=categoria,
+            motivo=("existe título com este valor e vencimento, e esta guia "
+                    "não traz número de documento: confirme se é o mesmo"
+                    if sem_doc else
+                    "existe título neste vencimento com valor compatível, mas "
+                    "com outro número de documento ("
+                    + str(parecido.get("documentNumber") or "sem número")
+                    + "): confirme se é o mesmo"),
+            trade_payable_id=str(parecido.get("tradePayableId") or ""))
 
     # A regra é o que o dono já confirmou; a sugestão é palpite sobre o texto.
     # A regra ganha sempre, e o palpite viaja marcado como palpite.
