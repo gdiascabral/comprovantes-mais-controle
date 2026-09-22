@@ -39,12 +39,14 @@ def _chave(texto: str) -> str:
     return util.sem_acento(str(texto or "")).upper()
 
 
-def _tem_palavra(texto: str, palavra: str) -> bool:
+def tem_palavra(texto: str, palavra: str) -> bool:
     """Casa PALAVRA INTEIRA, sem acento. "RET" não casa com "RETENCAO".
 
     Casar por pedaço de palavra já produziu erro neste projeto (o lote 1
     casando com o lote 10); aqui o estrago seria lançar o documento de um
-    tipo com a categoria de outro."""
+    tipo com a categoria de outro. Pública porque `guias/casamento.sugerir_obra`
+    precisa da MESMA regra: duas cópias de um casamento de texto é uma
+    divergência esperando acontecer."""
     if not palavra:
         return False
     return re.search(rf"(?<![0-9A-Z]){re.escape(_chave(palavra))}(?![0-9A-Z])",
@@ -87,7 +89,7 @@ class Regras:
         """O tipo cujo `desc_contem` casa com a descrição, ou None."""
         for tipo in self.tipos:
             termos = (tipo.get("quando") or {}).get("desc_contem") or []
-            if any(_tem_palavra(desc, t) for t in termos):
+            if any(tem_palavra(desc, t) for t in termos):
                 return tipo
         return None
 

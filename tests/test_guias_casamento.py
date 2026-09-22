@@ -94,12 +94,13 @@ def test_duas_guias_do_mesmo_tipo_na_mesma_empresa_viram_decidir(tmp_path):
 
 
 def test_guia_sem_pdf_nunca_vira_lancamento(tmp_path):
-    """Review Focus 3."""
-    [d] = mod.decidir([_guia(pdf=None, erro="o link da guia expirou")], PARCELAS,
+    """Review Focus 3. Sem `erro` preenchido, para exercitar a guarda do PDF e
+    não a do erro — que é outro teste."""
+    [d] = mod.decidir([_guia(pdf=None)], PARCELAS,
                       _regras(tmp_path, [TIPO_ALTERAR]), _registro(tmp_path), COMP)
 
     assert d.acao == DECIDIR
-    assert "expirou" in d.motivo
+    assert "PDF" in d.motivo or "pdf" in d.motivo
 
 
 def test_guia_sem_valor_nunca_vira_lancamento(tmp_path):
@@ -212,3 +213,52 @@ def test_valor_do_pdf_diferente_do_titulo_avisa_mas_nao_impede(tmp_path):
     assert d.acao == ALTERAR
     assert d.aviso
     assert "620" in d.aviso and "999,99" in d.aviso.replace(".", ",")
+
+
+def test_guia_com_erro_de_leitura_vira_decidir_com_o_motivo_do_erro(tmp_path):
+    [d] = mod.decidir([_guia(erro="o link da guia expirou")], PARCELAS,
+                      _regras(tmp_path, [TIPO_ALTERAR]), _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+    assert "expirou" in d.motivo
+
+
+def test_alterar_funciona_com_obra_vazia_na_regra(tmp_path):
+    """Alterar NÃO precisa de obra: a conta e a obra já estão no título que o
+    ERP devolve, e não são tocadas. A regra "sem obra não há lançamento" vale
+    só para CRIAR, onde a conta tem de ser deduzida da obra."""
+    tipo = {"nome": "honorario", "quando": {"desc_contem": ["HONORARIO"]},
+            "acao": "alterar", "categoria": "Honorários",
+            "recorrencia": {"701": {"trade_payable_id": "tp-1", "obra": ""}}}
+
+    [d] = mod.decidir([_guia()], PARCELAS, _regras(tmp_path, [tipo]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == ALTERAR
+    assert d.obra_id == ""
+
+
+def test_sem_documento_colisao_de_valor_e_vencimento_vira_decidir(tmp_path):
+    """Valor e vencimento iguais acontecem entre fornecedores diferentes. Dar
+    isso como já lançado faz a conta a pagar nunca ser criada."""
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="",
+                 valor=Decimal("641.31"), vencimento=date(2026, 9, 12))
+    parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
+                 "plannedDate": "2026-09-12", "plannedValue": 641.31,
+                 "documentNumber": ""}]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+    assert "número de documento" in d.motivo
+
+
+def test_sem_documento_e_sem_colisao_segue_criando(tmp_path):
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="",
+                 valor=Decimal("2504.95"), vencimento=date(2026, 9, 15))
+
+    [d] = mod.decidir([guia], PARCELAS, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == CRIAR

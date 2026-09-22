@@ -14,9 +14,8 @@ from collections import Counter
 from decimal import Decimal
 
 import util
+from guias import regras as regras_mod
 from guias.modelos import ALTERAR, CRIAR, DECIDIR, JA_LANCADO, Decisao
-
-log = util.log(__name__)
 
 
 def _dec(valor) -> Decimal | None:
@@ -64,13 +63,14 @@ def sugerir_obra(texto: str, obras) -> str:
     """O id da obra cujo nome aparece no texto do documento. `""` se não houver
     exatamente uma.
 
-    Duas obras citadas no mesmo texto não viram escolha: escolher uma seria
-    palpite, e obra errada leva junto a conta errada (a conta vem da obra).
+    Casa por PALAVRA INTEIRA, com a mesma função que `guias/regras.py` usa para
+    classificar o documento: nome de obra que seja pedaço de outra palavra
+    sugeriria a obra errada, e obra errada leva a conta errada (a conta vem da
+    obra). Duas obras citadas no mesmo texto não viram escolha: escolher uma
+    seria palpite.
     """
-    alvo = util.sem_acento(str(texto or "")).upper()
     achadas = {str(o.get("id")) for o in (obras or [])
-               if o.get("name")
-               and util.sem_acento(str(o["name"])).upper() in alvo}
+               if o.get("name") and regras_mod.tem_palavra(texto, str(o["name"]))}
     return achadas.pop() if len(achadas) == 1 else ""
 
 
@@ -138,6 +138,16 @@ def _uma(guia, parcelas, regras, registro, competencia, marcas,
 
     achado = titulo_igual(parcelas, guia.documento, guia.valor, guia.vencimento)
     if achado is not None:
+        if not str(guia.documento or "").strip():
+            # Sem número de documento a coincidência é fraca: valor e
+            # vencimento iguais acontecem entre fornecedores diferentes. Dar
+            # isso como "já lançado" faria a conta a pagar NUNCA ser criada, e
+            # conta que não existe ninguém percebe — pior que duplicar.
+            return Decisao(guia, DECIDIR, tipo=nome, categoria=categoria,
+                           motivo="existe título com este valor e vencimento, "
+                                  "e esta guia não traz número de documento: "
+                                  "confirme se é o mesmo",
+                           trade_payable_id=str(achado.get("tradePayableId") or ""))
         return Decisao(guia, JA_LANCADO, tipo=nome, categoria=categoria,
                        motivo="já existe título com este documento no mês",
                        trade_payable_id=str(achado.get("tradePayableId") or ""))
