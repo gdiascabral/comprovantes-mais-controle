@@ -275,6 +275,38 @@ def test_so_nf_vai_so_a_nf():
     assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678"
 
 
+#: Ficha de arrecadação de verdade (48 dígitos, começa em 8, DV fecha) — o
+#: mesmo exemplo fictício de `tests/test_pagamentos_melhorias.py`.
+_LINHA_ARRECADACAO = "86860000026-5 70860161209-4 22026081001-8 61001177300-1"
+#: Boleto bancário comum (47 dígitos), para provar que ele CONTINUA com "NF".
+_LINHA_BANCARIA = "34191.57007 00024.924375 24177.010006 9 15340000115000"
+
+
+def test_arrecadacao_nao_rotula_nf():
+    """Ficha de arrecadação (tributo, taxa, órgão público — ex.: guia da
+    Receita Federal) não tem cedente nem Nota Fiscal atrás: escrever "NF x"
+    inventaria uma nota que não existe. O número do documento continua na
+    descrição, sozinho (dono, 22/09/2026)."""
+    r = _partes(nf="123456789012", descricao="Guia DARF")
+    r["tipo"], r["dados"] = "Boleto", _LINHA_ARRECADACAO
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 123456789012"
+
+
+def test_arrecadacao_com_oc_mantem_a_oc_rotulada():
+    """Só a NF perde o rótulo; a OC, quando existir, continua "OC y"."""
+    r = _partes(nf="123456789012", oc="1234")
+    r["tipo"], r["dados"] = "Boleto", _LINHA_ARRECADACAO
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 123456789012 OC 1234"
+
+
+def test_boleto_comum_continua_rotulando_nf():
+    """A régua é do CONTEÚDO da linha digitável, não do tipo "Boleto"
+    sozinho: boleto bancário comum continua dizendo "NF x"."""
+    r = _partes(nf="5678")
+    r["tipo"], r["dados"] = "Boleto", _LINHA_BANCARIA
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678"
+
+
 def test_sem_nf_nem_oc_vai_a_descricao_do_lancamento():
     r = _partes(descricao="Material de obra")
     assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Material de obra"

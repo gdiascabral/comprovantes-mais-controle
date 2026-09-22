@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import modelos_html
+from . import ocr_boleto
 from . import regras_pagamento as regras
 from . import relatorio
 
@@ -267,6 +268,12 @@ def descricao_para_colar(registro, conta) -> str:
       é de medição de mão de obra (a forma curta que a planilha já mostra);
     - água e luz continuam como na planilha (CC + descrição + OC): ali o
       "número da NF" é o da fatura e não identifica nada;
+    - **ficha de arrecadação** (tributo, taxa, órgão público —
+      `ocr_boleto.eh_arrecadacao`) também não rotula "NF": ela não tem
+      cedente, então o campo do documento é só uma referência (o nº do DARF
+      da Receita Federal, por exemplo), e "NF x" inventaria uma nota que não
+      existe. O número continua na descrição, sozinho: "CC x OC y" ou "CC x"
+      (dono, 22/09/2026);
     - sem menção de reembolso, sem acento e sem caractere especial (o hífen
       que separa palavras incluído; o COLADO entre dígitos, como em
       "LT 10-11", fica), e sem repetir o centro de custo que a descrição já
@@ -284,7 +291,12 @@ def descricao_para_colar(registro, conta) -> str:
     cc = _palavras(r.get("centro_custo"), tirar_reembolso=False)
     nf = [] if utilidade else _palavras_do_numero(r.get("nf"))
     oc = _palavras_do_numero(r.get("oc_da_descricao"))
-    fixos = (["NF", *nf] if nf else []) + (["OC", *oc] if oc else [])
+    # Arrecadação não tem cedente nem Nota Fiscal atrás: rotular o número
+    # de "NF" inventaria um documento que não existe.
+    arrecadacao = (r.get("tipo") == "Boleto"
+                  and ocr_boleto.eh_arrecadacao(r.get("dados") or ""))
+    fixos = ((["NF", *nf] if not arrecadacao else nf) if nf else []) + \
+            (["OC", *oc] if oc else [])
     medicao = (None if utilidade or fixos
                else relatorio.contrato_e_medicao(r.get("descricao_lancamento")))
     if medicao:
