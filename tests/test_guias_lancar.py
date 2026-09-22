@@ -116,7 +116,12 @@ REFERENCIA = {"account": {"id": "conta-3", "name": "CONTA X"},
               "paymentMethod": {"id": "forma-1", "name": "FORMA X"}}
 
 
-ANEXO_OK = [{"filename": "guia.pdf"}]
+#: O nome que `_fechar` calcula para a `_decisao(tmp_path)` PADRÃO (desc
+#: "HONORARIO", competência "2026-09"). Desde o achado I3 a prova do anexo
+#: exige o NOME exato na listagem, e não só uma lista não vazia — um dublê que
+#: devolvesse qualquer nome (como o antigo "guia.pdf") passaria pela prova
+#: errada.
+ANEXO_OK = [{"filename": "HONORARIO 2026-09.pdf"}]
 BATCH = {"attachmentsItem": [{"url": "https://s3.exemplo.invalido/assinada"}]}
 
 
@@ -167,7 +172,11 @@ def test_nome_do_anexo_no_batch_de_alterar_nao_leva_barra(tmp_path):
                      ("PUT", "/trade-payables/tp-1"): {"id": "tp-1"},
                      ("POST", "/attachments/v2/batch"): BATCH,
                      ("PUT-S3", "s3.exemplo"): {"status": 200},
-                     ("GET", "/attachments/v2?"): ANEXO_OK})
+                     # Nome diferente do ANEXO_OK padrão: o desc desta guia
+                     # tem a barra que o teste existe para provar sem
+                     # separador de caminho.
+                     ("GET", "/attachments/v2?"):
+                     [{"filename": "HONORARIO 09-2026 2026-09.pdf"}]})
 
     r = mod.alterar(t, decisao, _Catalogos(), pasta_backup=tmp_path / "bk")
 
@@ -369,6 +378,26 @@ def test_anexo_que_nao_aparece_na_listagem_vira_pendente(tmp_path):
 
     assert r.estado == ANEXO_PENDENTE
     assert r.tpid == "tp-novo"
+
+
+def test_anexo_com_nome_de_outro_mes_na_listagem_vira_pendente(tmp_path):
+    """I3: o ALTERAR reusa o MESMO título todo mês, então a listagem do anexo
+    nunca fica vazia a partir da segunda alteração — "não está vazia" prova o
+    PDF do mês passado, não o de agora. A prova certa é o NOME deste arquivo
+    estar na listagem."""
+    t = _Transporte({("GET", "/trade-payables/tp-1"):
+                     _Fila(json.loads(json.dumps(TITULO)), _gravado()),
+                     ("PUT", "/trade-payables/tp-1"): {"id": "tp-1"},
+                     ("POST", "/attachments/v2/batch"): BATCH,
+                     ("PUT-S3", "s3.exemplo"): {"status": 200},
+                     # A listagem não está vazia, mas é o PDF do mês passado.
+                     ("GET", "/attachments/v2?"): [{"filename": "guia antiga.pdf"}]})
+
+    r = mod.alterar(t, _decisao(tmp_path), _Catalogos(),
+                    pasta_backup=tmp_path / "bk")
+
+    assert r.estado == ANEXO_PENDENTE
+    assert r.tpid == "tp-1"
 
 
 def test_referencia_da_obra_sai_de_um_titulo_da_mesma_obra():

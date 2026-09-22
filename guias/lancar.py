@@ -134,7 +134,10 @@ def _fechar(transporte, decisao, tpid: str, estado_ok: str,
     nome = _nome_de_arquivo(f"{decisao.guia.desc[:60]} "
                             f"{decisao.guia.competencia}") + ".pdf"
     anexos = anexar(transporte, tpid, decisao.guia.pdf, nome)
-    if not anexos:
+    if nome not in anexos:
+        # A listagem traz TODOS os anexos do título, e o ALTERAR reusa o
+        # mesmo título todo mês: "a lista não está vazia" prova o PDF do mês
+        # passado, não este. A prova é o nome DESTE arquivo estar lá.
         return Resultado(ANEXO_PENDENTE, tpid=tpid,
                          motivo="o título está gravado; o PDF não subiu")
     return Resultado(estado_ok if conferido else DIVERGE, tpid=tpid,
