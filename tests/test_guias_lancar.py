@@ -241,6 +241,31 @@ def test_parcela_com_baixa_nao_e_tocada(tmp_path):
     assert not [c for c in t.chamadas if c[0] == "PUT"]
 
 
+def test_alterar_sem_documento_na_guia_nao_apaga_o_do_titulo(tmp_path):
+    """I9: uma guia chega ao ALTERAR só com valor e vencimento, às vezes sem
+    documento. Escrever "" por cima apagaria o identificador que o humano usa
+    para achar o título, e a conferência de "" == "" aprovaria isso — relatando
+    sucesso sobre um dado apagado."""
+    decisao = _decisao(tmp_path)
+    decisao.guia.documento = ""
+    # A releitura simula o ERP com "ANTIGO" intacto — exatamente o que
+    # acontece quando o PUT não toca no campo, que é o comportamento certo.
+    t = _Transporte({("GET", "/trade-payables/tp-1"):
+                     _Fila(json.loads(json.dumps(TITULO)),
+                          _gravado(doc="ANTIGO")),
+                     ("PUT", "/trade-payables/tp-1"): {"id": "tp-1"},
+                     ("POST", "/attachments/v2/batch"): BATCH,
+                     ("PUT-S3", "s3.exemplo"): {"status": 200},
+                     ("GET", "/attachments/v2?"): ANEXO_OK})
+
+    r = mod.alterar(t, decisao, _Catalogos(), pasta_backup=tmp_path / "bk")
+
+    put = [c for c in t.chamadas if c[0] == "PUT"][0]
+    assert put[2]["documentNumber"] == "ANTIGO", (
+        "o PUT apagou o documento do título mesmo a guia não trazendo nenhum")
+    assert r.estado == ALTERADO
+
+
 def test_releitura_que_nao_bate_vira_diverge(tmp_path):
     """Gravou, mas não como pedido. Não é erro e não é feito."""
     # Cópia: mesmo motivo dos testes de ALTERAR acima.

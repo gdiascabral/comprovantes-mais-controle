@@ -186,7 +186,13 @@ def alterar(transporte, decisao, catalogos, *, pasta_backup: Path) -> Resultado:
     # A descrição fica INTACTA: é o padrão da equipe ao alterar recorrência.
     # A conta e a obra também: vieram do título, e conta vem da obra.
     titulo["value"] = valor
-    titulo["documentNumber"] = decisao.guia.documento
+    documento = str(decisao.guia.documento or "").strip()
+    if documento:
+        # Uma guia chega ao ALTERAR só com valor e vencimento às vezes — sem
+        # documento. Escrever "" por cima apagaria o identificador que o
+        # humano usa para achar o título, e a conferência de "" == "" abaixo
+        # aprovaria isso em silêncio.
+        titulo["documentNumber"] = decisao.guia.documento
     if categoria:
         titulo["category"] = {"id": categoria["id"],
                               "name": categoria.get("name") or decisao.categoria}
@@ -212,10 +218,13 @@ def alterar(transporte, decisao, catalogos, *, pasta_backup: Path) -> Resultado:
         categoria_ok = (not categoria or
                         str((depois.get("category") or {}).get("id") or "")
                         == str(categoria["id"]))
-        conferido = bool(nova) and categoria_ok and (
+        # Só compara o documento quando ELE foi escrito: sem isso, "" == ""
+        # aprovaria uma alteração que nunca tocou no campo.
+        documento_ok = (not documento or
+                        str(depois.get("documentNumber") or "") == documento)
+        conferido = bool(nova) and categoria_ok and documento_ok and (
             str(nova[0].get("plannedDate") or "")[:10] == data
-            and _mesmo(nova[0].get("plannedValue"), valor)
-            and str(depois.get("documentNumber") or "") == decisao.guia.documento)
+            and _mesmo(nova[0].get("plannedValue"), valor))
     return _fechar(transporte, decisao, tpid, ALTERADO, conferido)
 
 
