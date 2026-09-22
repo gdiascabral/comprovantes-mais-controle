@@ -758,7 +758,8 @@ def contrato_e_medicao(descricao) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m else None
 
 
-def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> str:
+def monta_descricao(item: dict, files, comentario: str = "", overview=None,
+                    arrecadacao: bool = False) -> str:
     cc, doc, oc = partes_da_descricao(item, files, comentario, overview)
 
     # Água/energia: o que identifica é a descrição (UC, mês, casa). O "número
@@ -771,7 +772,13 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> s
 
     partes = [cc] if cc else []
     if doc:
-        partes.append(f"NF {doc}")
+        # Ficha de arrecadação (tributo, taxa, órgão público) não tem
+        # cedente nem Nota Fiscal atrás (`ocr_boleto.eh_arrecadacao`, a
+        # mesma régua que rotula "ARRECADAÇÃO" na janela de confirmação): o
+        # campo do documento é só uma referência — o nº do DARF da Receita
+        # Federal, por exemplo —, e escrever "NF" ali inventa um documento
+        # que não existe (dono, 22/09/2026).
+        partes.append(doc if arrecadacao else f"NF {doc}")
     if oc:
         partes.append(f"OC {oc}")
     if not doc and not oc:
@@ -823,20 +830,36 @@ def _valor_nos_textos(valor: float, textos) -> bool:
                                     f"{valor:.2f}".replace(".", ",")})
 
 
+#: QD/LT/CASA/CS + número, com ou sem ponto entre os dois ("LT 11", "LT.11",
+#: "LT . 11"): o ERP escreve com espaço, e a NF do fornecedor às vezes separa
+#: com ponto — mesmo lote, pontuação diferente.
+_TOKEN_ENDERECO = re.compile(r"\b(QD|LT|CASA|CS)\s*\.?\s*(\d{1,4})\b", re.I)
+
+
+def _tokens_de_endereco(texto: str) -> list[str]:
+    """Os tokens QD/LT/CASA/CS de um texto, canonizados em "LETRA NÚMERO".
+
+    Comparar por TOKEN (e não por substring do texto cru) é o que permite ao
+    ERP escrever "LT 11" e à NF do fornecedor escrever "LT.11" e as duas
+    baterem: antes, a busca de "LT 11" (com espaço) dentro do texto do anexo
+    falhava contra "LT.11" (com ponto), e a linha dizia "LT 11 não aparece"
+    quando ele estava ali, só com outra pontuação (dono, 22/09/2026).
+    """
+    return list(dict.fromkeys(
+        f"{letra.upper()} {numero}"
+        for letra, numero in _TOKEN_ENDERECO.findall(sem_acento(texto or ""))))
+
+
 def _enderecos(item: dict) -> tuple[list[str], list[str]]:
     """Duas formas de identificar o imóvel, porque as duas pontas escrevem
     diferente: estruturado (`QD 18`, `LT 8`) como o ERP escreve, e o nome do
     logradouro como a conta da concessionária escreve."""
     cc = centro_de_custo(item)
-    fonte = sem_acento(f"{cc} {item.get('description') or ''}")
-    estruturados = re.findall(r"\b(?:QD|LT|CASA|CS)\s*\.?\s*\d{1,4}\b", fonte, re.I)
+    fonte = f"{cc} {item.get('description') or ''}"
+    estruturados = _tokens_de_endereco(fonte)
     ruas = [p for p in re.findall(r"[A-Za-z]{4,}", sem_acento(cc))
             if p.lower() not in _RUIDO_ENDERECO]
     return estruturados, ruas
-
-
-def _normaliza_para_busca(textos) -> str:
-    return re.sub(r"\s+", " ", sem_acento(" ".join(textos)).upper())
 
 
 def _conferir_endereco(item: dict, textos) -> str:
@@ -850,12 +873,11 @@ def _conferir_endereco(item: dict, textos) -> str:
     "QD 40", e alarme falso ensina o usuário a ignorar alarme. Aqui só se
     informa o que foi possível confirmar.
     """
-    estruturados = dict.fromkeys(re.sub(r"\s+", " ", p.upper())
-                                 for p in _enderecos(item)[0])
+    estruturados = _enderecos(item)[0]
     if not estruturados:
         return ""
-    alvo = _normaliza_para_busca(textos)
-    faltando = [p for p in estruturados if p not in alvo]
+    achados = _tokens_de_endereco(" ".join(textos))
+    faltando = [p for p in estruturados if p not in achados]
     if not faltando:
         return f"endereço ✓ ({', '.join(estruturados)[:40]})"
     return f"endereço ? ({', '.join(faltando)[:40]} não aparece)"
@@ -883,7 +905,8 @@ def _conferir_utilidade(item, files, textos) -> tuple[list[str], bool]:
         partes.append("endereço ? (anexo sem texto)")
     else:
         alvo = re.sub(r"\s+", " ", sem_acento(" ".join(textos)).upper())
-        achados = [p for p in estruturados if re.sub(r"\s+", " ", p.upper()) in alvo]
+        tokens_do_anexo = _tokens_de_endereco(" ".join(textos))
+        achados = [p for p in estruturados if p in tokens_do_anexo]
         achados += [r for r in ruas if r.upper() in alvo]
         if achados:
             partes.append(f"endereço ✓ ({', '.join(dict.fromkeys(achados))[:40]})")
@@ -1211,11 +1234,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                                                        ignorar=url_pdf,
                                                        vencimento=venc_item)
                 if escondida:
+                    # Fornecedor que junta nota e boleto num único PDF é
+                    # prática comum e deliberada da equipe: separar os dois
+                    # arriscaria anexar o boleto errado a outro lançamento.
+                    # Deixou de ser motivo de "conferir a linha" a cada
+                    # título (dono, 22/09/2026) — o DV e o valor já
+                    # validaram a linha antes de chegar aqui, dentro de
+                    # `linha_em_outro_anexo`.
                     dados, tem_documento = escondida, True
-                    avisos.append(f"Boleto achado dentro do anexo "
-                                  f"'{(onde.get('filename') or '').strip()}' (etiqueta: "
-                                  f"{onde.get('tagName') or 'nenhuma'}), e não num anexo "
-                                  "de boleto — conferir a linha.")
             if not dados:
                 do_cadastro = extrair_chave_pix(pago_para) if pago_para else ""
                 if onde:
@@ -1297,7 +1323,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             avisos.append(f"Observação do lançamento: {coment[:220]}")
         obs = " · ".join(filter(None, [obs] + avisos))
 
-        descricao = monta_descricao(item, files, coment, overview)
+        # Ficha de arrecadação: usada por `monta_descricao` para não rotular
+        # de "NF" um documento que não é nota fiscal — a mesma régua que
+        # decide o rótulo "ARRECADAÇÃO" em `confirmacao.py` e o
+        # `Candidato.arrecadacao` da remessa, uma casa só.
+        arrecadacao_fiscal = (tipo == "Boleto" and bool(dados)
+                              and ocr_boleto.eh_arrecadacao(dados))
+        descricao = monta_descricao(item, files, coment, overview,
+                                    arrecadacao=arrecadacao_fiscal)
 
         # Já pago é informação, não pagamento: as regras de omissão não valem
         # ali. Uma linha "JÁ PAGO" sem forma de pagar é o normal, não um erro.

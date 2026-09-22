@@ -200,14 +200,19 @@ def nota_com(texto):
 def test_boleto_dentro_da_nota_entra_com_a_linha():
     """O fornecedor junta NF e boleto num PDF só e o ERP o etiqueta "Nota
     Fiscal". A etiqueta mandava ignorar o arquivo, a linha ia para NÃO
-    ENTRARAM como "sem forma de pagar" — e o título vencia sem ninguém ver."""
+    ENTRARAM como "sem forma de pagar" — e o título vencia sem ninguém ver.
+
+    Fornecedor que junta nota e boleto no mesmo PDF é prática comum e
+    deliberada da equipe (separar arriscaria anexar o boleto errado a outro
+    lançamento): a linha entra sem o aviso "conferir a linha" de cada vez
+    (dono, 22/09/2026)."""
     anexos, textos = nota_com(NF_COM_BOLETO)
     res = relatorio.montar_registros([boleto_na_nota()], anexos, {}, textos)
     assert res.omitidos == []
     linha = linhas(res)[0]
     assert linha["tipo"] == "Boleto"
     assert ocr_boleto.digitos(linha["dados"]) == ocr_boleto.digitos(LINHA_BANCARIA)
-    assert "dentro do anexo" in linha["obs"]
+    assert "conferir a linha" not in linha["obs"]
 
 
 def test_a_nota_continua_nao_sendo_escolhida_pelo_rotulo():
@@ -503,6 +508,21 @@ def test_endereco_do_pedido_confere_com_o_centro_de_custo():
     resumo, divergiu = relatorio.conferir_documento(
         item, [], ["PEDIDO 5928 - OBRA TB 18 QD 49 LT 38 - SERVICOS MODELO"])
     assert "endereço ✓" in resumo and not divergiu
+
+
+def test_endereco_com_ponto_entre_letra_e_numero_e_reconhecido():
+    """O ERP escreve "LT 11", a NF do fornecedor às vezes escreve "LT.11" —
+    mesmo lote, pontuação diferente. Dizer que ele "não aparece" nega um
+    dado que está ali, só com um ponto no lugar do espaço (dono, 22/09/2026:
+    caso real da Zenite Atacadista, NF com "QD.26A LT.11" nos dados
+    adicionais)."""
+    item = lancamento(documentNumber="65425", paidTo="Servicos Modelo",
+                      remainingValue=1950.0,
+                      costCentreDetails=[{"workName": "RPB 24 QD 26A LT 11"}])
+    resumo, _ = relatorio.conferir_documento(
+        item, [], ["OBRA: RPB 24 QD.26A LT.11 BENEFICIO ANEXO IX"])
+    assert "endereço ✓ (LT 11)" in resumo
+    assert "LT 11 não aparece" not in resumo
 
 
 def test_endereco_que_nao_aparece_informa_sem_alarmar():
