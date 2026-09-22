@@ -73,7 +73,8 @@ def vencimento_da(guia):
     A ficha de arrecadação não traz vencimento no código de barras, então para
     FGTS, INSS e contribuição o do PDF costuma vir vazio — e é justamente onde
     o vencimento decide tudo: qual parcela da recorrência é esta guia, e se já
-    existe título no dia. `guias/lancar.py` já lê o par nesta ordem.
+    existe título no dia. `guias/lancar.py:_parcelas_mensais` já lê o par nesta
+    ordem ao criar; ao ALTERAR ele usa só o do PDF e cai na data da parcela.
     """
     return guia.vencimento or guia.vencimento_portal
 
@@ -110,6 +111,14 @@ def documento_igual(a, b) -> bool:
     return len(da) >= PISO_DE_DIGITOS and da == db
 
 
+def _mesmo_mes(parcela: dict, vencimento) -> bool:
+    try:
+        d = date.fromisoformat(str(parcela.get("plannedDate") or "")[:10])
+    except ValueError:
+        return False
+    return (d.year, d.month) == (vencimento.year, vencimento.month)
+
+
 def parcela_da_recorrencia(parcelas: list[dict], trade_payable_id: str,
                            vencimento=None) -> tuple[dict | None, str]:
     """(parcela, dúvida) — a parcela desta recorrência no vencimento da guia.
@@ -134,7 +143,12 @@ def parcela_da_recorrencia(parcelas: list[dict], trade_payable_id: str,
     if not candidatas:
         return None, "a recorrência que eu conhecia não tem parcela na janela"
     if len(candidatas) == 1:
-        return candidatas[0], ""
+        if vencimento is None or _mesmo_mes(candidatas[0], vencimento):
+            return candidatas[0], ""
+        # Uma parcela só, mas de OUTRO mês. Alterar é mover a data e trocar o
+        # valor dela: a de setembro passaria a ser a guia de outubro.
+        return None, ("a única parcela desta recorrência na janela é de outro "
+                      "mês que o vencimento desta guia: é ela mesma?")
     if vencimento is None:
         return None, ("não consegui ler o vencimento desta guia, e a "
                       "recorrência tem parcela em mais de um mês: qual delas "
@@ -147,8 +161,11 @@ def parcela_da_recorrencia(parcelas: list[dict], trade_payable_id: str,
             return (1, 0)          # sem data legível fica por último
         return (0, abs((d - vencimento).days))
 
-    ordenadas = sorted(candidatas, key=_distancia)
-    if _distancia(ordenadas[0]) == _distancia(ordenadas[1]):
+    def _chave(p):
+        return (_distancia(p), 0 if _mesmo_mes(p, vencimento) else 1)
+
+    ordenadas = sorted(candidatas, key=_chave)
+    if _chave(ordenadas[0]) == _chave(ordenadas[1]):
         return None, ("a recorrência tem duas parcelas à mesma distância do "
                       "vencimento desta guia: qual delas é ela?")
     return ordenadas[0], ""
@@ -186,13 +203,21 @@ TETO = Decimal("1.5")
 def documento_comparavel(documento) -> bool:
     """O número desta guia dá para comparar com o que está escrito no ERP?
 
-    Dá quando ele é a linha digitável — aí o mesmo documento pode estar no ERP
-    com os dígitos crus, ou com o nosso-número, ou com pontos, e não bater não
-    prova nada. Não dá quando a guia traz um rótulo curto de gente: se ele não
-    é igual a nenhum `documentNumber` do mês, são dois documentos diferentes,
-    e segurar a criação nesse caso só encheria a lista de perguntas falsas.
+    Dá sempre que houver NÚMERO. A linha digitável é o caso óbvio — ela pode
+    estar no ERP com os dígitos crus, com o nosso-número ou com pontos, e não
+    bater não prova nada —, mas o mesmo vale para um número curto: quando a
+    linha digitável não fecha o dígito verificador, `guias/leitura` cai no
+    número solto do texto, e aí a guia sai com onze dígitos pontuados contra
+    onze dígitos crus no ERP. Exigir o tamanho da linha digitável aqui
+    desligava as DUAS proteções de uma vez para essa guia — nem "já lançado"
+    nem pergunta —, e o que sobra é criar por cima.
+
+    Não dá quando a guia traz um rótulo de gente, sem dígito nenhum: se ele
+    não é igual a nenhum `documentNumber` do mês, são dois documentos
+    diferentes, e segurar a criação aí só encheria a lista de perguntas
+    falsas.
     """
-    return len(_digitos(documento)) >= PISO_DE_DIGITOS
+    return bool(_digitos(documento))
 
 
 def titulo_parecido(parcelas: list[dict], valor, vencimento) -> dict | None:
@@ -206,13 +231,20 @@ def titulo_parecido(parcelas: list[dict], valor, vencimento) -> dict | None:
     alvo, data = _dec(valor), (vencimento.isoformat() if vencimento else "")
     if alvo is None or not data:
         return None
+    perto = []
     for p in parcelas or []:
         if str(p.get("plannedDate") or "")[:10] != data:
             continue
         v = valor_da_parcela(p)
         if v is not None and v > 0 and max(alvo, v) <= min(alvo, v) * TETO:
-            return p
-    return None
+            perto.append((abs(v - alvo), p))
+    if not perto:
+        return None
+    # O MAIS PRÓXIMO em valor, e não o primeiro que a lista trouxer: quem lê
+    # esta resposta pergunta ao dono "é este?" e abre o título no ERP. Apontar
+    # para um alheio que só cabe na faixa faz o dono responder "não é" olhando
+    # o título errado — e o certo fica lá, convidando o lançamento à mão.
+    return min(perto, key=lambda par: par[0])[1]
 
 
 def sugerir_obra(texto: str, obras) -> str:

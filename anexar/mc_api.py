@@ -446,11 +446,19 @@ class MCApi:
 
         NÃO manda os `FILTROS_NEUTROS`, ao contrário do `listar_a_pagar`: se a
         tela tiver ficado com um centro de custo ou um tipo de conciliação
-        escolhido, esta lista volta curta com cara de completa, e quem a lê
-        (`anexar/conferencia.py`) conclui "tudo anexado" sobre um período que
-        não foi lido inteiro. Mandá-los só ALARGA a lista — nada some —, mas
-        alarga um relatório que o dono usa todo dia, então a decisão é dele e
-        não minha. Enquanto não for tomada, isto fica escrito aqui.
+        escolhido, esta lista volta curta com cara de completa. São DOIS os que
+        a leem, e o segundo não é relatório:
+
+          `anexar/conferencia.py`        conclui "tudo anexado" sobre um
+                                         período que não foi lido inteiro;
+          `anexar/anexar_comprovantes`   monta a lista do que vai ser ANEXADO,
+                                         e o que ficou de fora é comprovante
+                                         que nunca sobe, em silêncio, e que
+                                         ninguém cobra depois.
+
+        Mandá-los só ALARGA a lista — nada some —, mas alarga o que o dono vê
+        e anexa todo dia, então a decisão é dele e não minha. Enquanto não for
+        tomada, isto fica escrito aqui.
         """
         filtros = [("type", "PAID"), ("dateField", "DATE_OF_PAYMENT"),
                    ("startDate", data_inicio), ("endDate", data_fim)]

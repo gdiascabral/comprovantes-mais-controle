@@ -442,21 +442,110 @@ def test_recorrencia_com_UMA_parcela_nao_precisa_de_vencimento(tmp_path):
     assert d.parcela_id == "par-1"
 
 
-def test_empate_de_distancia_PERGUNTA_em_vez_de_seguir_a_ordem_da_api(tmp_path):
-    """Guia no meio do caminho entre as duas parcelas. `min` ficaria com a
-    primeira da lista — a ordem em que o ERP devolveu, que não é garantia de
-    nada: a mesma rodada com a lista invertida escolheria a outra."""
-    guia = _guia(vencimento=date(2026, 10, 5))
+def test_empate_de_distancia_e_resolvido_pelo_MES_do_vencimento(tmp_path):
+    """Empate não é caso de borda: o dia do prazo no portal e o dia da parcela
+    no ERP são fixos por recorrência, então um offset de 15 dias empata em todo
+    mês de intervalo par. A MESMA recorrência perguntaria em setembro e não
+    perguntaria em agosto, sem nenhuma informação nova — e a resposta do dono
+    seria sempre a mesma."""
+    parcelas = [
+        {"id": "par-set", "tradePayableId": "tp-1", "plannedDate": "2026-09-05",
+         "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+         "documentNumber": ""},
+        {"id": "par-out", "tradePayableId": "tp-1", "plannedDate": "2026-10-05",
+         "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+         "documentNumber": ""},
+    ]
+    guia = _guia(vencimento=None, vencimento_portal=date(2026, 9, 20))
 
-    [d] = mod.decidir([guia], DUAS_DA_RECORRENCIA,
-                      _regras(tmp_path, [TIPO_ALTERAR]), _registro(tmp_path),
-                      COMP)
-    [invertida] = mod.decidir([guia], list(reversed(DUAS_DA_RECORRENCIA)),
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_ALTERAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == ALTERAR
+    assert d.parcela_id == "par-set"
+
+
+def test_empate_de_verdade_PERGUNTA_em_vez_de_seguir_a_ordem_da_api(tmp_path):
+    """Duas parcelas da mesma recorrência no MESMO mês, à mesma distância.
+    Aí não há critério: `min` ficaria com a primeira da lista, que é a ordem
+    em que o ERP devolveu — a mesma rodada com a lista invertida escolheria a
+    outra."""
+    parcelas = [
+        {"id": "par-a", "tradePayableId": "tp-1", "plannedDate": "2026-09-05",
+         "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+         "documentNumber": ""},
+        {"id": "par-b", "tradePayableId": "tp-1", "plannedDate": "2026-09-25",
+         "value": None, "remainingValue": 620.00, "sumOfPaidValues": 0,
+         "documentNumber": ""},
+    ]
+    guia = _guia(vencimento=date(2026, 9, 15))
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_ALTERAR]),
+                      _registro(tmp_path), COMP)
+    [invertida] = mod.decidir([guia], list(reversed(parcelas)),
                               _regras(tmp_path, [TIPO_ALTERAR]),
                               _registro(tmp_path), COMP)
 
     assert d.acao == DECIDIR and invertida.acao == DECIDIR
     assert "mesma distância" in d.motivo
+
+
+def test_parcela_unica_de_OUTRO_mes_pergunta(tmp_path):
+    """Uma parcela só na janela não é licença para alterar: alterar move a
+    data e troca o valor dela, então a de setembro viraria a guia de outubro."""
+    parcelas = [{"id": "par-set", "tradePayableId": "tp-1",
+                 "plannedDate": "2026-09-05", "value": None,
+                 "remainingValue": 620.00, "sumOfPaidValues": 0,
+                 "documentNumber": ""}]
+    guia = _guia(vencimento=date(2026, 10, 20))
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_ALTERAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+    assert "outro mês" in d.motivo
+
+
+def test_nosso_numero_CURTO_nao_perde_as_duas_protecoes(tmp_path):
+    """Quando a linha digitável não fecha o dígito verificador, a leitura cai
+    no número solto do texto e a guia sai com onze dígitos pontuados contra
+    onze dígitos crus no ERP. Exigir o tamanho da linha digitável desligava o
+    "já lançado" E a pergunta de uma vez — e o que sobra é criar por cima."""
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="123.456.789-01",
+                 valor=Decimal("641.31"), vencimento=date(2026, 9, 12))
+    parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
+                 "plannedDate": "2026-09-12", "value": None,
+                 "remainingValue": 641.31, "sumOfPaidValues": 0,
+                 "documentNumber": "12345678901"}]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+    assert d.trade_payable_id == "tp-9"
+
+
+def test_a_pergunta_aponta_para_o_titulo_MAIS_PROXIMO_em_valor(tmp_path):
+    """Quem lê a pergunta abre o título no ERP para responder. Apontar para um
+    alheio que só cabe na faixa faz o dono responder "não é" olhando o título
+    errado — e o certo fica lá, convidando o lançamento à mão."""
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="",
+                 valor=Decimal("1000.00"), vencimento=date(2026, 9, 12))
+    parcelas = [
+        {"id": "par-alheio", "tradePayableId": "tp-alheio",
+         "plannedDate": "2026-09-12", "value": None, "remainingValue": 700.00,
+         "sumOfPaidValues": 0, "documentNumber": "OUTRO"},
+        {"id": "par-certo", "tradePayableId": "tp-certo",
+         "plannedDate": "2026-09-12", "value": None, "remainingValue": 1000.00,
+         "sumOfPaidValues": 0, "documentNumber": ""},
+    ]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+    assert d.trade_payable_id == "tp-certo"
+    assert d.parcela_id == "par-certo"
 
 
 def test_titulo_MAIS_BARATO_que_a_guia_tambem_segura_a_criacao(tmp_path):
