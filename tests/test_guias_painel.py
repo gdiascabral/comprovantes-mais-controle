@@ -580,10 +580,16 @@ def test_varrer_nao_abre_um_segundo_navegador_do_portal(raiz, monkeypatch):
     assert aba.portal is ja_aberto
 
 
-def test_varrer_guarda_o_cliente_na_aba_e_solta_no_fim(raiz, monkeypatch):
+def test_varrer_guarda_o_cliente_na_aba_e_o_deixa_aberto(raiz, monkeypatch):
     """Nunca um `with` local: navegador que só a própria thread enxerga não
     pode ser fechado por quem está saindo do app, e o Chrome fica aberto
-    segurando o perfil — o defeito que o envio já teve e corrigiu."""
+    segurando o perfil — o defeito que o envio já teve e corrigiu.
+
+    E ele FICA aberto quando a varredura acaba: quem fecha é o `fechar()` da
+    aba, ao sair do app. Fechar aqui e reabrir na rodada seguinte corre com o
+    Chrome que ainda está saindo, e a segunda varredura da v2.0.211 morreu
+    assim — depois de já ter listado as doze empresas.
+    """
     aba = _preparar_portal(monkeypatch)
     vistos = []
     monkeypatch.setattr(mod.calendario, "varrer",
@@ -598,8 +604,23 @@ def test_varrer_guarda_o_cliente_na_aba_e_solta_no_fim(raiz, monkeypatch):
     assert len(_PortalFalso.abertos) == 1
     criado = _PortalFalso.abertos[0]
     assert vistos == [criado], "o cliente não estava em `aba.portal` durante o trabalho"
-    assert criado.fechado, "não fechou na thread que abriu"
-    assert aba.portal is None, "não soltou a referência depois de fechar"
+    assert not criado.fechado, "fechou ao fim da varredura; quem fecha é a aba"
+    assert aba.portal is criado, "soltou a referência, e aí `fechar()` não o alcança"
+
+
+def test_duas_varreduras_seguidas_usam_o_mesmo_navegador(raiz, monkeypatch):
+    """A segunda rodada da v2.0.211 abriu um Chrome sobre o perfil que o
+    primeiro ainda segurava, e morreu com "browser has been closed"."""
+    aba = _preparar_portal(monkeypatch)
+
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    try:
+        p._t_varrer(2026, 9)
+        p._t_varrer(2026, 9)
+    finally:
+        p.destroy()
+
+    assert len(_PortalFalso.abertos) == 1, "abriu um segundo navegador na 2a rodada"
 
 
 def test_varrer_nao_abre_o_portal_escondido(raiz, monkeypatch):
@@ -614,3 +635,117 @@ def test_varrer_nao_abre_o_portal_escondido(raiz, monkeypatch):
         p.destroy()
 
     assert _PortalFalso.abertos[0].kw.get("headless") is not True
+
+
+# ---------------------------- o contexto da pagina que morre com a navegacao
+def test_leitura_das_parcelas_refaz_quando_o_contexto_morre(monkeypatch):
+    monkeypatch.setattr(mod, "ESPERA_ANTES_DE_REFAZER", 0)
+    """`garantir_credenciais_anexos` ABRE a tela de um lançamento para ouvir a
+    chamada de anexos — é navegação. Um `page.evaluate` disparado em cima dela
+    morre com "Execution context was destroyed", e foi assim que a primeira
+    rodada real da v2.0.211 parou, logo depois de "obras: 204".
+    """
+    tentativas = []
+
+    def transporte_instavel(_url):
+        tentativas.append(1)
+        if len(tentativas) == 1:
+            raise RuntimeError(
+                "Execution context was destroyed, most likely because of a "
+                "navigation.")
+        return {"content": [{"id": "par-1"}]}
+
+    resposta = mod._com_contexto(transporte_instavel, "qualquer/url")
+
+    assert len(tentativas) == 2, "não refez a leitura"
+    assert resposta["content"] == [{"id": "par-1"}]
+
+
+def test_erro_que_nao_e_de_contexto_sobe_na_hora():
+    """Refazer qualquer erro esconderia defeito de verdade atrás de repetição."""
+    tentativas = []
+
+    def sempre_recusa(_url):
+        tentativas.append(1)
+        raise RuntimeError("o ERP recusou (HTTP 401)")
+
+    with pytest.raises(RuntimeError, match="401"):
+        mod._com_contexto(sempre_recusa, "qualquer/url")
+
+    assert len(tentativas) == 1, "tentou de novo um erro que não é de corrida"
+
+
+def test_contexto_que_morre_duas_vezes_nao_vira_laco(monkeypatch):
+    monkeypatch.setattr(mod, "ESPERA_ANTES_DE_REFAZER", 0)
+    tentativas = []
+
+    def sempre_morre(_url):
+        tentativas.append(1)
+        raise RuntimeError("Execution context was destroyed")
+
+    with pytest.raises(RuntimeError, match="Execution context"):
+        mod._com_contexto(sempre_morre, "qualquer/url")
+
+    assert len(tentativas) == 2, "insistiu mais que uma vez"
+
+
+def test_a_leitura_das_parcelas_PASSA_pelo_refazer(raiz, monkeypatch):
+    monkeypatch.setattr(mod, "ESPERA_ANTES_DE_REFAZER", 0)
+    """Não basta o ajudante existir e ser testado sozinho: o que importa é a
+    leitura das parcelas usá-lo. Testar a peça isolada e não o caminho que a
+    contém foi o que deixou o bloco inteiro sair invisível na v2.0.208."""
+    tentativas = []
+
+    class _TransporteInstavel:
+        def buscar(self, _url):
+            tentativas.append(1)
+            if len(tentativas) == 1:
+                raise RuntimeError("Execution context was destroyed, most "
+                                   "likely because of a navigation.")
+            return {"content": [{"id": "par-1"}]}
+
+    p = mod.GuiasPainel(raiz, aba=None, anx=None)
+    try:
+        parcelas = p._parcelas_do_mes(_TransporteInstavel(), 2026, 9)
+    finally:
+        p.destroy()
+
+    assert len(tentativas) == 2, "a leitura não passa pelo refazer"
+    assert parcelas == [{"id": "par-1"}]
+
+
+@pytest.mark.parametrize("texto", [
+    "Execution context was destroyed, most likely because of a navigation.",
+    "TypeError: Failed to fetch\n    at https://exemplo.invalido/main.js:2:34",
+])
+def test_os_tres_textos_da_MESMA_corrida_sao_refeitos(texto, monkeypatch):
+    """As três rodadas reais da v2.0.211 falharam no mesmo pedido, com textos
+    diferentes: o contexto do `evaluate` morre, ou o `fetch` de dentro da
+    página é abortado. É a mesma navegação no meio do caminho."""
+    monkeypatch.setattr(mod, "ESPERA_ANTES_DE_REFAZER", 0)
+    tentativas = []
+
+    def instavel(_url):
+        tentativas.append(1)
+        if len(tentativas) == 1:
+            raise RuntimeError(texto)
+        return {"ok": True}
+
+    assert mod._com_contexto(instavel, "url") == {"ok": True}
+    assert len(tentativas) == 2
+
+
+def test_navegador_morto_NAO_e_refeito(monkeypatch):
+    """"browser has been closed" não é corrida: é navegador morto, e repetir
+    sobre ele não tem o que dar certo."""
+    monkeypatch.setattr(mod, "ESPERA_ANTES_DE_REFAZER", 0)
+    tentativas = []
+
+    def morto(_url):
+        tentativas.append(1)
+        raise RuntimeError("Target page, context or browser has been closed")
+
+    with pytest.raises(RuntimeError, match="has been closed"):
+        mod._com_contexto(morto, "url")
+
+    assert len(tentativas) == 1
