@@ -498,3 +498,119 @@ def test_parar_na_fase_do_portal_nao_abre_o_erp(raiz):
     assert anx.submetidos == []
     assert p.ocupado() is None
     assert any("não vou abrir" in linha for linha in aba.linhas)
+
+
+# ------------------------------------- UM navegador do portal por aba (v2.0.209)
+class _MapaFalso:
+    raiz = "C:/nao/existe"
+    vip_url = "https://exemplo.invalido/escritorio"
+    empresas = []
+
+
+class _PortalFalso:
+    """O `PortalClient`, do tamanho que o `_t_varrer` usa."""
+
+    abertos = []
+
+    def __init__(self, vip_url, log=None, **kw):
+        self.kw = kw
+        self.fechado = False
+        _PortalFalso.abertos.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.fechado = True
+
+    def aguardar_login(self):
+        pass
+
+
+class _AbaComMapa(_AbaFalsa):
+    def __init__(self):
+        super().__init__()
+        self.mapa = _MapaFalso()
+        self.portal = None
+
+    def _garantir_mapa(self):
+        return True
+
+    def _sicoob_mods(self):
+        class _Cfg:
+            @staticmethod
+            def nome_do_mes(m):
+                return "MES"
+
+            @staticmethod
+            def nome_pasta_empresa(a, m, nome):
+                return "PASTA"
+        return _Cfg(), None
+
+
+def _preparar_portal(monkeypatch):
+    _PortalFalso.abertos = []
+    monkeypatch.setattr(mod, "PortalClient", _PortalFalso)
+    monkeypatch.setattr(mod.calendario, "varrer",
+                        lambda *a, **k: [])
+    return _AbaComMapa()
+
+
+def test_varrer_nao_abre_um_segundo_navegador_do_portal(raiz, monkeypatch):
+    """A aba já mantém UM cliente do portal em `self.portal`.
+
+    Abrir outro põe um segundo Chrome no MESMO `--user-data-dir`, que morre no
+    berço ("Target page, context or browser has been closed"), e um segundo
+    Playwright síncrono na mesma thread reclama de laço asyncio. Foi o que a
+    primeira rodada real da v2.0.209 mostrou.
+    """
+    aba = _preparar_portal(monkeypatch)
+    ja_aberto = _PortalFalso("url")
+    _PortalFalso.abertos = []          # o de fora não conta para a medição
+    aba.portal = ja_aberto
+
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    try:
+        p._t_varrer(2026, 9)
+    finally:
+        p.destroy()
+
+    assert _PortalFalso.abertos == [], "abriu um segundo navegador do portal"
+    assert not ja_aberto.fechado, "fechou o navegador que era do envio"
+    assert aba.portal is ja_aberto
+
+
+def test_varrer_guarda_o_cliente_na_aba_e_solta_no_fim(raiz, monkeypatch):
+    """Nunca um `with` local: navegador que só a própria thread enxerga não
+    pode ser fechado por quem está saindo do app, e o Chrome fica aberto
+    segurando o perfil — o defeito que o envio já teve e corrigiu."""
+    aba = _preparar_portal(monkeypatch)
+    vistos = []
+    monkeypatch.setattr(mod.calendario, "varrer",
+                        lambda *a, **k: vistos.append(aba.portal) or [])
+
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    try:
+        p._t_varrer(2026, 9)
+    finally:
+        p.destroy()
+
+    assert len(_PortalFalso.abertos) == 1
+    criado = _PortalFalso.abertos[0]
+    assert vistos == [criado], "o cliente não estava em `aba.portal` durante o trabalho"
+    assert criado.fechado, "não fechou na thread que abriu"
+    assert aba.portal is None, "não soltou a referência depois de fechar"
+
+
+def test_varrer_nao_abre_o_portal_escondido(raiz, monkeypatch):
+    """O login do portal é manual. Em headless, sessão caída vira dez minutos
+    de espera por um login que ninguém consegue fazer."""
+    aba = _preparar_portal(monkeypatch)
+
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    try:
+        p._t_varrer(2026, 9)
+    finally:
+        p.destroy()
+
+    assert _PortalFalso.abertos[0].kw.get("headless") is not True

@@ -480,15 +480,45 @@ class GuiasPainel(ttk.Frame):
                 return (pacote.pasta_do_mes(mapa.raiz, ano, mes, scfg.nome_do_mes)
                         / scfg.nome_pasta_empresa(ano, mes, empresa.nome))
 
-            with PortalClient(mapa.vip_url, log=self.aba._log,
-                              headless=True) as cliente:
+            # UM cliente do portal por aba, guardado em `self.aba.portal` —
+            # nunca um `with` local. O envio de conciliações já tinha esse
+            # defeito e o comentário dele conta o preço: navegador que só a
+            # própria thread enxerga não pode ser fechado por quem está saindo
+            # do app, e o Chrome fica aberto SEGURANDO O PERFIL. Um segundo
+            # Chrome no mesmo `--user-data-dir` morre no berço ("Target page,
+            # context or browser has been closed"), e um segundo Playwright
+            # síncrono na mesma thread reclama de laço asyncio. Foi o que a
+            # primeira rodada real da v2.0.209 mostrou.
+            cliente = self.aba.portal
+            meu = cliente is None
+            if meu:
+                cliente = PortalClient(mapa.vip_url,
+                                       log=self.aba._log).__enter__()
+                self.aba.portal = cliente
+            try:
                 cliente.aguardar_login()
                 guias = calendario.varrer(cliente, mapa, ano, mes,
                                           pasta_de=pasta_de, log=self.aba._log,
                                           parar=self.aba._parar.is_set)
+            finally:
+                # Fecha na thread que abriu (exigência do Playwright síncrono)
+                # e só então solta a referência — trocar a ordem deixaria
+                # `fechar()` sem nada para fechar e o Chrome de pé.
+                if meu:
+                    try:
+                        cliente.__exit__(None, None, None)
+                    finally:
+                        self.aba.portal = None
             self.aba.q.put(("guias_baixadas", (guias, ano, mes)))
         except Exception as e:
             self.aba._log(f"[!] {e}")
+            if "has been closed" in str(e):
+                # O Chrome morre no berço quando outro já segura o mesmo
+                # perfil. Dizer só "browser has been closed" manda a pessoa
+                # procurar o defeito no lugar errado.
+                self.aba._log("    Parece que já há um Chrome do portal aberto "
+                              "segurando o perfil. Feche as janelas do Chrome "
+                              "do portal e tente de novo.")
             log.warning("a varredura de guias parou", exc_info=True)
             self._tarefa = ""
 
