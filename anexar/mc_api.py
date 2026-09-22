@@ -443,6 +443,14 @@ class MCApi:
         data_inicio / data_fim no formato 'aaaa-mm-dd'.
         Retorna a lista bruta de lançamentos (cada um com paids[]).
         SEMPRE filtra por títulos pagos (type=PAID) e data de pagamento.
+
+        NÃO manda os `FILTROS_NEUTROS`, ao contrário do `listar_a_pagar`: se a
+        tela tiver ficado com um centro de custo ou um tipo de conciliação
+        escolhido, esta lista volta curta com cara de completa, e quem a lê
+        (`anexar/conferencia.py`) conclui "tudo anexado" sobre um período que
+        não foi lido inteiro. Mandá-los só ALARGA a lista — nada some —, mas
+        alarga um relatório que o dono usa todo dia, então a decisão é dele e
+        não minha. Enquanto não for tomada, isto fica escrito aqui.
         """
         filtros = [("type", "PAID"), ("dateField", "DATE_OF_PAYMENT"),
                    ("startDate", data_inicio), ("endDate", data_fim)]
@@ -536,11 +544,6 @@ class MCApi:
     #: um filtro esquecido na véspera não dá erro nenhum: ela volta "com sucesso".
     #: Em quem só relata, some uma linha; em quem CRIA lançamento a partir do que
     #: não encontrou, vira um segundo título para uma conta que já existe.
-    FILTROS_NEUTROS = (("onlyWork", "false"), ("costCentreType", "ALL"),
-                   ("conciliationType", "ALL"), ("tradePayableType", "ALL"),
-                   ("batchOperationType", "NONE"))
-
-
     def listar_a_pagar(self, data_inicio: str, data_fim: str, log=print) -> list[dict]:
         """Títulos do período pela DATA PREVISTA (dateField=PLANNED).
 

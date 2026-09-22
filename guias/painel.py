@@ -122,7 +122,7 @@ def _sessao_do_erp(painel):
     pagina.goto(anx_config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
 
     # O `api` sai junto: é ele que lê a lista de parcelas, a partir da URL
-    # que a própria tela capturou (ver `_parcelas_do_mes`).
+    # que a própria tela capturou (ver `_parcelas_da_janela`).
     return transporte, catalogos, transporte.cabecalho("user-id") or "", api
 
 

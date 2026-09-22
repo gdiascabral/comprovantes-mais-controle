@@ -61,6 +61,23 @@ def valor_da_parcela(p: dict):
     return (falta or Decimal("0.00")) + (pago or Decimal("0.00"))
 
 
+#: Piso para casar documento pelos dígitos. É a mesma régua de
+#: `guias/leitura._linha_digitavel`: 47 dígitos no boleto bancário, 48 na ficha
+#: de arrecadação.
+PISO_DE_DIGITOS = 20
+
+
+def vencimento_da(guia):
+    """O vencimento do PDF ou, na falta dele, o do portal.
+
+    A ficha de arrecadação não traz vencimento no código de barras, então para
+    FGTS, INSS e contribuição o do PDF costuma vir vazio — e é justamente onde
+    o vencimento decide tudo: qual parcela da recorrência é esta guia, e se já
+    existe título no dia. `guias/lancar.py` já lê o par nesta ordem.
+    """
+    return guia.vencimento or guia.vencimento_portal
+
+
 def _digitos(texto) -> str:
     return "".join(c for c in str(texto or "") if c.isdigit())
 
@@ -75,8 +92,13 @@ def documento_igual(a, b) -> bool:
     não reconhecer aqui não dá erro nenhum: dá um SEGUNDO título para uma guia
     que já existe, e conta aberta em duplicata ninguém vê até pagar duas vezes.
 
-    Seis dígitos é o piso para a comparação por dígitos: abaixo disso ela
-    casaria números curtos de documentos diferentes.
+    O piso é o tamanho do caso REAL, e não um número de conveniência: quem
+    motiva a comparação por dígitos é a linha digitável, que tem 47 ou 48
+    deles dos dois lados. Um piso baixo compraria falso positivo de graça
+    ("123456" com "NF 123456", "092026" com "09/2026"), e o preço dos dois
+    erros é muito diferente: não reconhecer vira uma pergunta na lista;
+    reconhecer errado vira JA_LANCADO, a linha sai da lista de trabalho e a
+    conta NUNCA é criada — e conta que não existe ninguém vê.
     """
     ta = util.norm_espaco(str(a or "")).upper()
     tb = util.norm_espaco(str(b or "")).upper()
@@ -85,22 +107,38 @@ def documento_igual(a, b) -> bool:
     if ta == tb:
         return True
     da, db = _digitos(ta), _digitos(tb)
-    return len(da) >= 6 and da == db
+    return len(da) >= PISO_DE_DIGITOS and da == db
 
 
 def parcela_da_recorrencia(parcelas: list[dict], trade_payable_id: str,
-                           vencimento=None) -> dict | None:
-    """A parcela desta recorrência, a MAIS PRÓXIMA do vencimento da guia.
+                           vencimento=None) -> tuple[dict | None, str]:
+    """(parcela, dúvida) — a parcela desta recorrência no vencimento da guia.
 
     A janela de leitura cobre dois meses de propósito (guia de competência 09
     que vence em outubro tem o título em outubro), e recorrência mensal tem uma
-    parcela em cada um. Devolver a primeira da lista seria alterar o título do
-    mês errado — e o mês errado já pode estar pago.
+    parcela em cada um. Escolher a errada é alterar o título do mês errado — e
+    o mês errado já pode estar pago, ou passa a pedir o valor do outro.
+
+    Por isso ela não chuta. Quando não dá para saber qual é, devolve a dúvida
+    escrita, e quem chama transforma isso em pergunta:
+
+    - sem vencimento nenhum (nem do PDF nem do portal) não há como escolher.
+      Não é caso raro: a ficha de arrecadação — FGTS, INSS/IRRF, contribuição —
+      não carrega vencimento no código de barras;
+    - empate de distância (guia no meio do caminho entre as duas parcelas)
+      seria decidido pela ordem em que o ERP devolveu a lista, que não é
+      garantia de nada.
     """
     candidatas = [p for p in parcelas or []
                   if str(p.get("tradePayableId") or "") == str(trade_payable_id)]
-    if not candidatas or vencimento is None:
-        return candidatas[0] if candidatas else None
+    if not candidatas:
+        return None, "a recorrência que eu conhecia não tem parcela na janela"
+    if len(candidatas) == 1:
+        return candidatas[0], ""
+    if vencimento is None:
+        return None, ("não consegui ler o vencimento desta guia, e a "
+                      "recorrência tem parcela em mais de um mês: qual delas "
+                      "é esta guia?")
 
     def _distancia(p):
         try:
@@ -109,7 +147,11 @@ def parcela_da_recorrencia(parcelas: list[dict], trade_payable_id: str,
             return (1, 0)          # sem data legível fica por último
         return (0, abs((d - vencimento).days))
 
-    return min(candidatas, key=_distancia)
+    ordenadas = sorted(candidatas, key=_distancia)
+    if _distancia(ordenadas[0]) == _distancia(ordenadas[1]):
+        return None, ("a recorrência tem duas parcelas à mesma distância do "
+                      "vencimento desta guia: qual delas é ela?")
+    return ordenadas[0], ""
 
 
 def titulo_igual(parcelas: list[dict], documento: str) -> dict | None:
@@ -126,12 +168,31 @@ def titulo_igual(parcelas: list[dict], documento: str) -> dict | None:
     return None
 
 
-#: Teto do casamento por valor quando a guia foi paga com atraso. A lista traz
-#: `sumOfPaidValues` — o que SAIU, com multa e juros —, não o nominal, então o
-#: título fica MAIOR que a guia. Multa e juros de uma guia com um ou dois meses
-#: de atraso não chegam a metade do principal, e parar no meio evita casar a
-#: guia com um título grande que só coincide na data.
-TETO_DE_ACRESCIMO = Decimal("1.5")
+#: Quanto os dois valores podem divergir e ainda serem a mesma conta.
+#:
+#: Os dois lados, porque o acréscimo aparece ora num ora noutro: em título já
+#: pago, `sumOfPaidValues` traz o que SAIU, com multa e juros, e o título fica
+#: MAIOR que a guia; em título em aberto o cadastro está pelo nominal e quem
+#: carrega o acréscimo é a GUIA, reimpressa com o valor do dia — aí o título
+#: fica MENOR. Uma faixa só para cima deixava um título um centavo mais barato
+#: passar direto para CRIAR, que é o erro caro.
+#:
+#: Metade é o bastante: multa e juros de uma guia com um ou dois meses de
+#: atraso não chegam lá, e parar aqui evita casar a guia com um título grande
+#: que só coincide na data.
+TETO = Decimal("1.5")
+
+
+def documento_comparavel(documento) -> bool:
+    """O número desta guia dá para comparar com o que está escrito no ERP?
+
+    Dá quando ele é a linha digitável — aí o mesmo documento pode estar no ERP
+    com os dígitos crus, ou com o nosso-número, ou com pontos, e não bater não
+    prova nada. Não dá quando a guia traz um rótulo curto de gente: se ele não
+    é igual a nenhum `documentNumber` do mês, são dois documentos diferentes,
+    e segurar a criação nesse caso só encheria a lista de perguntas falsas.
+    """
+    return len(_digitos(documento)) >= PISO_DE_DIGITOS
 
 
 def titulo_parecido(parcelas: list[dict], valor, vencimento) -> dict | None:
@@ -149,7 +210,7 @@ def titulo_parecido(parcelas: list[dict], valor, vencimento) -> dict | None:
         if str(p.get("plannedDate") or "")[:10] != data:
             continue
         v = valor_da_parcela(p)
-        if v is not None and alvo <= v <= alvo * TETO_DE_ACRESCIMO:
+        if v is not None and v > 0 and max(alvo, v) <= min(alvo, v) * TETO:
             return p
     return None
 
@@ -221,12 +282,11 @@ def _uma(guia, parcelas, regras, registro, competencia, marcas,
             return Decisao(guia, DECIDIR, tipo=nome, categoria=categoria,
                            motivo="ainda não sei qual é a recorrência desta "
                                   "empresa para este documento")
-        parcela = parcela_da_recorrencia(parcelas, tpid,
-                                         guia.vencimento)
+        parcela, duvida = parcela_da_recorrencia(parcelas, tpid,
+                                                 vencimento_da(guia))
         if parcela is None:
             return Decisao(guia, DECIDIR, tipo=nome, categoria=categoria,
-                           motivo="a recorrência que eu conhecia não tem "
-                                  "parcela neste mês")
+                           motivo=duvida)
         decisao = Decisao(guia, ALTERAR, tipo=nome, categoria=categoria,
                           obra_id=str(conhecida.get("obra") or ""),
                           trade_payable_id=tpid,
@@ -241,13 +301,19 @@ def _uma(guia, parcelas, regras, registro, competencia, marcas,
     if achado is not None:
         return Decisao(guia, JA_LANCADO, tipo=nome, categoria=categoria,
                        motivo="já existe título com este documento",
-                       trade_payable_id=str(achado.get("tradePayableId") or ""))
+                       trade_payable_id=str(achado.get("tradePayableId") or ""),
+                       parcela_id=str(achado.get("id") or ""))
 
     # Nada com o mesmo documento. Antes de mandar CRIAR, olhar se já existe
     # título no mesmo vencimento: o documento pode estar escrito de um jeito
     # que não reconheço (ou não estar escrito), e criar por cima é a única
     # coisa aqui que ninguém desfaz sozinho.
-    parecido = titulo_parecido(parcelas, guia.valor, guia.vencimento)
+    # ... e só quando o número da guia é do tipo que pode estar escrito de
+    # outro jeito no ERP (ou não existe). Rótulo curto que não bateu com
+    # nenhum documento do mês é outro documento, não um engano de grafia.
+    doc_guia = str(guia.documento or "").strip()
+    parecido = (titulo_parecido(parcelas, guia.valor, vencimento_da(guia))
+                if not doc_guia or documento_comparavel(doc_guia) else None)
     if parecido is not None:
         sem_doc = not str(guia.documento or "").strip()
         return Decisao(
@@ -259,7 +325,8 @@ def _uma(guia, parcelas, regras, registro, competencia, marcas,
                     "com outro número de documento ("
                     + str(parecido.get("documentNumber") or "sem número")
                     + "): confirme se é o mesmo"),
-            trade_payable_id=str(parecido.get("tradePayableId") or ""))
+            trade_payable_id=str(parecido.get("tradePayableId") or ""),
+            parcela_id=str(parecido.get("id") or ""))
 
     # A regra é o que o dono já confirmou; a sugestão é palpite sobre o texto.
     # A regra ganha sempre, e o palpite viaja marcado como palpite.

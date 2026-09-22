@@ -305,8 +305,16 @@ def test_numero_curto_NAO_casa_por_digitos(tmp_path):
     """Sem um piso de dígitos, "Guia 1" e "Doc 1" seriam o mesmo documento."""
     assert mod.documento_igual("GUIA 1", "DOC 1") is False
     assert mod.documento_igual("12345", "1-23-45") is False
-    assert mod.documento_igual("123456", "12.34.56") is True
     assert mod.documento_igual("", "123456") is False
+    # Os que um piso baixo casaria de graça, e que não têm nada a ver com a
+    # linha digitável — o único caso que motiva comparar por dígitos.
+    assert mod.documento_igual("123456", "NF 123456") is False
+    assert mod.documento_igual("092026", "09/2026") is False
+    assert mod.documento_igual("2026/0001", "2026-0001") is False
+    # E o caso de verdade: 47 dígitos com pontos contra 47 dígitos crus.
+    linha = "00000.00000 00000.000000 00000.000000 0 00000000000001"
+    crus = "00000000000000000000000000000000000000000000001"
+    assert mod.documento_igual(linha, crus) is True
 
 
 def test_documento_que_nao_casa_com_titulo_no_mesmo_vencimento_vira_DECIDIR(tmp_path):
@@ -316,11 +324,13 @@ def test_documento_que_nao_casa_com_titulo_no_mesmo_vencimento_vira_DECIDIR(tmp_
     dele foi escrito de um jeito que eu não sei ler. Criar por cima é a única
     coisa aqui que ninguém desfaz sozinho; perguntar custa uma linha.
     """
-    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="DOC-RET")
+    guia = _guia(desc="BOLETO RET 62 UNIDADES",
+                 documento="00000.00000 00000.000000 00000.000000 0 "
+                           "00000000000001")
     parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
                  "plannedDate": "2026-09-12", "value": None,
                  "remainingValue": 641.31, "sumOfPaidValues": 0,
-                 "documentNumber": "ESCRITO DE OUTRO JEITO"}]
+                 "documentNumber": "NOSSO NUMERO 12345"}]
 
     [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
                       _registro(tmp_path), COMP)
@@ -381,6 +391,121 @@ def test_recorrencia_escolhe_a_parcela_do_vencimento_da_guia(tmp_path):
 
     assert d.acao == ALTERAR
     assert d.parcela_id == "par-set"
+
+
+DUAS_DA_RECORRENCIA = [
+    {"id": "par-set", "tradePayableId": "tp-1", "plannedDate": "2026-09-20", "value": None, "remainingValue": 620.0, "sumOfPaidValues": 0, "documentNumber": ""},
+    {"id": "par-out", "tradePayableId": "tp-1", "plannedDate": "2026-10-20", "value": None, "remainingValue": 620.0, "sumOfPaidValues": 0, "documentNumber": ""},
+]
+
+
+def test_recorrencia_sem_vencimento_nenhum_PERGUNTA_em_vez_de_chutar(tmp_path):
+    """O caso normal da ficha de arrecadação.
+
+    FGTS, INSS e contribuição não levam vencimento no código de barras, então
+    o do PDF vem vazio. Com a janela de dois meses a recorrência tem uma
+    parcela em cada mês, e pegar a primeira da lista alteraria o título do mês
+    errado — que pode já estar pago, e que passa a pedir o valor do outro.
+    """
+    guia = _guia(vencimento=None)
+
+    [d] = mod.decidir([guia], DUAS_DA_RECORRENCIA,
+                      _regras(tmp_path, [TIPO_ALTERAR]), _registro(tmp_path),
+                      COMP)
+
+    assert d.acao == DECIDIR
+    assert "vencimento" in d.motivo
+
+
+def test_recorrencia_usa_o_vencimento_do_PORTAL_quando_o_pdf_nao_traz(tmp_path):
+    """O dado existe: o portal diz o prazo. Não usá-lo transformaria em
+    pergunta quase toda guia de imposto, que é o grosso da rodada."""
+    guia = _guia(vencimento=None, vencimento_portal=date(2026, 10, 20))
+
+    [d] = mod.decidir([guia], DUAS_DA_RECORRENCIA,
+                      _regras(tmp_path, [TIPO_ALTERAR]), _registro(tmp_path),
+                      COMP)
+
+    assert d.acao == ALTERAR
+    assert d.parcela_id == "par-out"
+
+
+def test_recorrencia_com_UMA_parcela_nao_precisa_de_vencimento(tmp_path):
+    """Sem ambiguidade não há o que perguntar: recorrência com uma parcela só
+    na janela continua virando ALTERAR."""
+    guia = _guia(vencimento=None)
+
+    [d] = mod.decidir([guia], PARCELAS, _regras(tmp_path, [TIPO_ALTERAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == ALTERAR
+    assert d.parcela_id == "par-1"
+
+
+def test_empate_de_distancia_PERGUNTA_em_vez_de_seguir_a_ordem_da_api(tmp_path):
+    """Guia no meio do caminho entre as duas parcelas. `min` ficaria com a
+    primeira da lista — a ordem em que o ERP devolveu, que não é garantia de
+    nada: a mesma rodada com a lista invertida escolheria a outra."""
+    guia = _guia(vencimento=date(2026, 10, 5))
+
+    [d] = mod.decidir([guia], DUAS_DA_RECORRENCIA,
+                      _regras(tmp_path, [TIPO_ALTERAR]), _registro(tmp_path),
+                      COMP)
+    [invertida] = mod.decidir([guia], list(reversed(DUAS_DA_RECORRENCIA)),
+                              _regras(tmp_path, [TIPO_ALTERAR]),
+                              _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR and invertida.acao == DECIDIR
+    assert "mesma distância" in d.motivo
+
+
+def test_titulo_MAIS_BARATO_que_a_guia_tambem_segura_a_criacao(tmp_path):
+    """Em título ainda em aberto o cadastro está pelo nominal e quem carrega
+    multa e juros é a GUIA, reimpressa com o valor do dia: o título fica MENOR.
+    Uma faixa só para cima deixava um título um centavo mais barato passar
+    direto para CRIAR."""
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="",
+                 valor=Decimal("1000.01"), vencimento=date(2026, 9, 12))
+    parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
+                 "plannedDate": "2026-09-12", "value": None,
+                 "remainingValue": 1000.00, "sumOfPaidValues": 0,
+                 "documentNumber": ""}]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+
+
+def test_rotulo_curto_que_nao_bateu_e_OUTRO_documento_e_pode_criar(tmp_path):
+    """O contrário do teste acima: quando a guia traz um rótulo curto de gente
+    e ele não é igual a nenhum documento do mês, são dois documentos
+    diferentes. Segurar aí encheria a lista de perguntas falsas, e pergunta
+    falsa demais ensina o dono a aprovar sem ler."""
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="DOC-RET",
+                 valor=Decimal("620.00"), vencimento=date(2026, 9, 12))
+
+    [d] = mod.decidir([guia], PARCELAS, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == CRIAR
+
+
+def test_ja_lancado_leva_a_PARCELA_para_o_botao_de_abrir_no_erp(tmp_path):
+    """A linha em que o app acaba de afirmar que o título existe é a que mais
+    precisa ser conferida a olho — e sem `parcela_id` o botão "Abrir no ERP"
+    responde "esta linha ainda não tem parcela no ERP", que é falso."""
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="DOC-RET")
+    parcelas = PARCELAS + [{"id": "par-9", "tradePayableId": "tp-9",
+                            "plannedDate": "2026-09-15", "value": None,
+                            "remainingValue": 641.31, "sumOfPaidValues": 0,
+                            "documentNumber": "DOC-RET"}]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == JA_LANCADO
+    assert d.parcela_id == "par-9"
 
 
 def test_guia_com_erro_de_leitura_vira_decidir_com_o_motivo_do_erro(tmp_path):
