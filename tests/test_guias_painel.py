@@ -245,6 +245,49 @@ def test_lancar_anota_no_registro_mesmo_quando_o_erp_recusa(raiz, tmp_path,
     assert reg.linhas and reg.linhas[-1]["estado"] == ERRO
 
 
+def test_parar_no_meio_do_lote_nao_perde_a_recorrencia_ja_gravada(
+        raiz, tmp_path, monkeypatch):
+    """I5: `regras.gravar()` tem de rodar mesmo quando o dono aperta Parar no
+    meio do lote — senão a recorrência aprendida nas linhas que JÁ saíram
+    certas evapora, e o mês seguinte não a acha: nasce um SEGUNDO título
+    parcelado, com as parcelas do primeiro ainda abertas."""
+    from guias import registro as mod_registro
+    from guias import regras as mod_regras
+    from guias.modelos import ALTERADO, Resultado
+
+    aba = _AbaFalsa()
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    reg = mod_registro.Registro.carregar(tmp_path / "r.jsonl")
+    caminho_regras = tmp_path / "regras.json"
+    regs = mod_regras.Regras.carregar(caminho_regras)
+    chamadas = []
+
+    def alterar_dublê(*a, **k):
+        chamadas.append(1)
+        if len(chamadas) == 1:
+            # Simula o dono clicando "Parar" logo depois da 1ª linha sair
+            # certa — antes de a 2ª ser processada.
+            aba._parar.set()
+        return Resultado(ALTERADO, tpid=f"tp-{len(chamadas)}")
+
+    monkeypatch.setattr(mod.lancar, "alterar", alterar_dublê)
+    decisoes = [_decisao(ALTERAR, anx_id="1", tipo="honorario",
+                        trade_payable_id="tp-a", obra_id="obra-1"),
+               _decisao(ALTERAR, anx_id="2", tipo="honorario",
+                        trade_payable_id="tp-b", obra_id="obra-1")]
+    try:
+        p._gravar(decisoes, transporte=object(), catalogos=object(),
+                  id_usuario="user-1", registro=reg, parcelas=[], regras=regs,
+                  pasta_backup=tmp_path)
+    finally:
+        p.destroy()
+
+    assert chamadas == [1], "a 2ª linha não podia ter sido processada"
+    relidas = mod_regras.Regras.carregar(caminho_regras)
+    assert relidas.recorrencia("honorario", "701") == {
+        "trade_payable_id": "tp-1", "obra": "obra-1"}
+
+
 def test_gravar_nao_relanca_guia_que_o_registro_ja_tem(raiz, tmp_path,
                                                        monkeypatch):
     """C2: clicar duas vezes em "Lançar o marcado" não pode relançar tudo —

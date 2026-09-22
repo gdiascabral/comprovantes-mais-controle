@@ -546,64 +546,75 @@ class GuiasPainel(ttk.Frame):
 
     def _gravar(self, decisoes, *, transporte, catalogos, id_usuario, registro,
                 parcelas, regras, pasta_backup) -> None:
-        """Grava uma decisão por vez, anotando SEMPRE — inclusive o erro."""
-        for decisao in decisoes:
-            if self.aba is not None and self.aba._parar.is_set():
-                self.aba._log("Parado a pedido; o que já foi gravado está no "
-                              "registro.")
-                return
-            guia = decisao.guia
-            # A decisão foi tomada minutos atrás, na fase 2. Reconferir aqui é
-            # o que impede o segundo clique em "Lançar" de gravar tudo de
-            # novo: a tela continua com as linhas marcadas depois da rodada.
-            feito = registro.ja_feito(guia.vip_id, guia.anx_id, guia.competencia)
-            if feito:
-                if self.aba is not None:
-                    self.aba.q.put(("guia_feita", (decisao, Resultado(
-                        JA_LANCADO, tpid=str(feito.get("tpid") or ""),
-                        motivo="já lançado nesta competência (" +
-                               str(feito.get("estado") or "") + ")"))))
-                continue
-            if decisao.acao == CRIAR:
-                igual = casamento.titulo_igual(parcelas, guia.documento,
-                                               guia.valor, guia.vencimento)
-                if igual is not None and str(guia.documento or "").strip():
+        """Grava uma decisão por vez, anotando SEMPRE — inclusive o erro.
+
+        `regras.gravar()` mora num `finally` que envolve o laço inteiro: o
+        `return` do "Parar" (e qualquer exceção) não pode pular a gravação da
+        recorrência aprendida nas linhas que JÁ saíram certas antes da parada
+        — senão o mês seguinte não acha a recorrência e nasce um SEGUNDO
+        título parcelado, com as parcelas do primeiro ainda abertas (I5).
+        """
+        try:
+            for decisao in decisoes:
+                if self.aba is not None and self.aba._parar.is_set():
+                    self.aba._log("Parado a pedido; o que já foi gravado "
+                                  "está no registro.")
+                    return
+                guia = decisao.guia
+                # A decisão foi tomada minutos atrás, na fase 2. Reconferir
+                # aqui é o que impede o segundo clique em "Lançar" de gravar
+                # tudo de novo: a tela continua com as linhas marcadas depois
+                # da rodada.
+                feito = registro.ja_feito(guia.vip_id, guia.anx_id,
+                                          guia.competencia)
+                if feito:
                     if self.aba is not None:
                         self.aba.q.put(("guia_feita", (decisao, Resultado(
-                            JA_LANCADO,
-                            tpid=str(igual.get("tradePayableId") or ""),
-                            motivo="o ERP já tem título com este "
-                                   "documento"))))
+                            JA_LANCADO, tpid=str(feito.get("tpid") or ""),
+                            motivo="já lançado nesta competência (" +
+                                   str(feito.get("estado") or "") + ")"))))
                     continue
-            if decisao.acao == ALTERAR:
-                resultado = lancar.alterar(transporte, decisao, catalogos,
-                                           pasta_backup=pasta_backup)
-            else:
-                referencia = lancar.referencia_da_obra(
-                    transporte, decisao.obra_id, parcelas)
-                obra = self._obra_do_erp(catalogos, decisao.obra_id)
-                resultado = lancar.criar(transporte, decisao, catalogos,
-                                         id_usuario=id_usuario,
-                                         referencia=referencia, obra=obra)
-            registro.anotar(vip_id=decisao.guia.vip_id,
-                            anx_id=decisao.guia.anx_id,
-                            competencia=decisao.guia.competencia,
-                            acao=decisao.acao, estado=resultado.estado,
-                            tpid=resultado.tpid, motivo=resultado.motivo,
-                            anexos=resultado.anexos)
-            if resultado.tpid and regras is not None and decisao.tipo:
-                # O mês seguinte casa exato porque o id ficou guardado — e é
-                # isto que impede o parcelado de nascer duas vezes.
-                regras.aprender_recorrencia(decisao.tipo, decisao.guia.vip_id,
-                                            resultado.tpid, decisao.obra_id)
-                if decisao.obra_id:
-                    # A obra que o dono deixou passar vale como confirmada.
-                    regras.aprender_obra(decisao.tipo, decisao.guia.vip_id,
-                                         decisao.obra_id)
-            if self.aba is not None:
-                self.aba.q.put(("guia_feita", (decisao, resultado)))
-        if regras is not None:
-            regras.gravar()
+                if decisao.acao == CRIAR:
+                    igual = casamento.titulo_igual(parcelas, guia.documento,
+                                                   guia.valor, guia.vencimento)
+                    if igual is not None and str(guia.documento or "").strip():
+                        if self.aba is not None:
+                            self.aba.q.put(("guia_feita", (decisao, Resultado(
+                                JA_LANCADO,
+                                tpid=str(igual.get("tradePayableId") or ""),
+                                motivo="o ERP já tem título com este "
+                                       "documento"))))
+                        continue
+                if decisao.acao == ALTERAR:
+                    resultado = lancar.alterar(transporte, decisao, catalogos,
+                                               pasta_backup=pasta_backup)
+                else:
+                    referencia = lancar.referencia_da_obra(
+                        transporte, decisao.obra_id, parcelas)
+                    obra = self._obra_do_erp(catalogos, decisao.obra_id)
+                    resultado = lancar.criar(transporte, decisao, catalogos,
+                                             id_usuario=id_usuario,
+                                             referencia=referencia, obra=obra)
+                registro.anotar(vip_id=decisao.guia.vip_id,
+                                anx_id=decisao.guia.anx_id,
+                                competencia=decisao.guia.competencia,
+                                acao=decisao.acao, estado=resultado.estado,
+                                tpid=resultado.tpid, motivo=resultado.motivo,
+                                anexos=resultado.anexos)
+                if resultado.tpid and regras is not None and decisao.tipo:
+                    # O mês seguinte casa exato porque o id ficou guardado —
+                    # e é isto que impede o parcelado de nascer duas vezes.
+                    regras.aprender_recorrencia(decisao.tipo, decisao.guia.vip_id,
+                                                resultado.tpid, decisao.obra_id)
+                    if decisao.obra_id:
+                        # A obra que o dono deixou passar vale como confirmada.
+                        regras.aprender_obra(decisao.tipo, decisao.guia.vip_id,
+                                             decisao.obra_id)
+                if self.aba is not None:
+                    self.aba.q.put(("guia_feita", (decisao, resultado)))
+        finally:
+            if regras is not None:
+                regras.gravar()
 
     @staticmethod
     def _obra_do_erp(catalogos, obra_id: str) -> dict:
