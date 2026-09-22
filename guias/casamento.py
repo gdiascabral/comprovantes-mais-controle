@@ -99,7 +99,12 @@ def _uma(guia, parcelas, regras, registro, competencia, marcas,
 
     feito = registro.ja_feito(guia.vip_id, guia.anx_id, competencia)
     if feito:
-        return Decisao(guia, JA_LANCADO, motivo="esta rodada já lançou",
+        # O estado anterior viaja no motivo: "anexo_pendente" é um título SEM
+        # PDF, e escondê-lo atrás de um "já lançado" genérico faz essa guia
+        # voltar toda rodada como pronta — e o PDF nunca mais é cobrado de
+        # ninguém.
+        return Decisao(guia, JA_LANCADO,
+                       motivo=f"esta rodada já lançou ({feito.get('estado')})",
                        trade_payable_id=str(feito.get("tpid") or ""))
 
     tipo = regras.classificar(guia.desc)

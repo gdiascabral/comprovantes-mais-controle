@@ -148,6 +148,21 @@ def test_registro_da_rodada_anterior_vira_ja_lancado(tmp_path):
     assert d.acao == JA_LANCADO
 
 
+def test_ja_lancado_leva_o_estado_anterior_no_motivo(tmp_path):
+    """I11: "anexo_pendente" é um título SEM PDF. Escondê-lo atrás de um
+    "já lançou" genérico faz essa guia voltar toda rodada como pronta, e o
+    PDF nunca mais é cobrado de ninguém."""
+    reg = _registro(tmp_path)
+    reg.anotar(vip_id="701", anx_id="111", competencia=COMP, acao="alterar",
+               estado="anexo_pendente", tpid="tp-1")
+
+    [d] = mod.decidir([_guia()], PARCELAS, _regras(tmp_path, [TIPO_ALTERAR]),
+                      reg, COMP)
+
+    assert d.acao == JA_LANCADO
+    assert "anexo_pendente" in d.motivo
+
+
 OBRAS = [{"id": "obra-1", "name": "CONDOMINIO PRIMEIRO"},
          {"id": "obra-2", "name": "CONDOMINIO SEGUNDO"}]
 
