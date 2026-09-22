@@ -46,8 +46,14 @@ TIPO_CRIAR = {"nome": "regularizacao", "quando": {"desc_contem": ["RET"]},
               "descricao": "{documento} - competencia {competencia}",
               "parcelas": 4, "obra": {"701": "obra-7"}}
 
+#: A forma REAL da lista de pagamentos: `value` nulo e o dinheiro partido em
+#: `remainingValue` + `sumOfPaidValues` (contrato conferido em produção,
+#: `conciliacao/erp/payments_api.py`). A fixtura antiga trazia `plannedValue`,
+#: que só existe no DETALHE do título — e por isso concordava com o engano do
+#: código em vez de expô-lo.
 PARCELAS = [{"id": "par-1", "tradePayableId": "tp-1",
-             "plannedDate": "2026-09-12", "plannedValue": 620.00,
+             "plannedDate": "2026-09-12", "value": None,
+             "remainingValue": 620.00, "sumOfPaidValues": 0,
              "documentNumber": "ANTIGO"}]
 
 
@@ -127,7 +133,8 @@ def test_titulo_com_o_mesmo_documento_no_mes_vira_ja_lancado(tmp_path):
     guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="DOC-RET")
     parcelas = PARCELAS + [{"id": "par-9", "tradePayableId": "tp-9",
                             "plannedDate": "2026-09-15",
-                            "plannedValue": 641.31,
+                            "value": None, "remainingValue": 641.31,
+                            "sumOfPaidValues": 0,
                             "documentNumber": "DOC-RET"}]
 
     [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
@@ -228,6 +235,49 @@ def test_valor_do_pdf_diferente_do_titulo_avisa_mas_nao_impede(tmp_path):
     assert "620" in d.aviso and "999,99" in d.aviso.replace(".", ",")
 
 
+def test_titulo_pago_em_parte_ainda_casa_pelo_valor_CHEIO(tmp_path):
+    """A guia traz o valor cheio; o ERP, na lista, traz o que FALTA pagar.
+
+    Se a comparação usar só `remainingValue`, um título já pago pela metade
+    deixa de ser reconhecido — e não reconhecer aqui não dá erro nenhum: dá um
+    SEGUNDO lançamento para a mesma guia, que ninguém vê até alguém pagar duas
+    vezes.
+    """
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="",
+                 valor=Decimal("641.31"), vencimento=date(2026, 9, 12))
+    parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
+                 "plannedDate": "2026-09-12", "value": None,
+                 "remainingValue": 400.00, "sumOfPaidValues": 241.31,
+                 "documentNumber": ""}]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == DECIDIR
+    assert d.trade_payable_id == "tp-9"
+
+
+def test_parcela_que_so_traz_plannedValue_NAO_e_lida(tmp_path):
+    """`plannedValue` é campo do DETALHE do título, não da lista.
+
+    Este teste existe para o dia em que alguém "consertar" a leitura de volta
+    para o nome que parece certo: a lista real não tem esse campo, e uma
+    fixtura que o tivesse concordaria com o engano em silêncio.
+    """
+    assert mod.valor_da_parcela({"plannedValue": 641.31}) is None
+
+    guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="",
+                 valor=Decimal("641.31"), vencimento=date(2026, 9, 12))
+    parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
+                 "plannedDate": "2026-09-12", "plannedValue": 641.31,
+                 "documentNumber": ""}]
+
+    [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),
+                      _registro(tmp_path), COMP)
+
+    assert d.acao == CRIAR
+
+
 def test_guia_com_erro_de_leitura_vira_decidir_com_o_motivo_do_erro(tmp_path):
     [d] = mod.decidir([_guia(erro="o link da guia expirou")], PARCELAS,
                       _regras(tmp_path, [TIPO_ALTERAR]), _registro(tmp_path), COMP)
@@ -257,7 +307,8 @@ def test_sem_documento_colisao_de_valor_e_vencimento_vira_decidir(tmp_path):
     guia = _guia(desc="BOLETO RET 62 UNIDADES", documento="",
                  valor=Decimal("641.31"), vencimento=date(2026, 9, 12))
     parcelas = [{"id": "par-9", "tradePayableId": "tp-9",
-                 "plannedDate": "2026-09-12", "plannedValue": 641.31,
+                 "plannedDate": "2026-09-12", "value": None,
+                 "remainingValue": 641.31, "sumOfPaidValues": 0,
                  "documentNumber": ""}]
 
     [d] = mod.decidir([guia], parcelas, _regras(tmp_path, [TIPO_CRIAR]),

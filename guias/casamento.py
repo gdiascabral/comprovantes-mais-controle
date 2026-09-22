@@ -31,6 +31,32 @@ def _brl(valor) -> str:
     return f"{_dec(valor):,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
 
 
+def valor_da_parcela(p: dict):
+    """O valor TOTAL da parcela, como a lista de pagamentos o entrega.
+
+    `plannedValue` NÃO existe nesta lista — ele é campo de escrita, do detalhe
+    do título (`installments[].plannedValue`, que é o que `lancar.alterar`
+    grava). Na resposta de `payable-installments/paginated-result` o `value`
+    vem NULL e o dinheiro está partido em dois: `remainingValue` (o que falta
+    pagar) e `sumOfPaidValues` (o que já saiu). Contrato conferido em produção
+    em 04/09/2026 sobre 2.576 parcelas e documentado em
+    `conciliacao/erp/payments_api.py`.
+
+    Somar os dois é o que faz um título PAGO EM PARTE ainda casar com a guia:
+    a guia traz o valor cheio, e comparar só com `remainingValue` deixaria de
+    reconhecer o título — e não reconhecer aqui significa criar um SEGUNDO
+    lançamento para a mesma guia.
+
+    O `value` fica como reserva porque o outro cliente desta rota (o vigia,
+    por HTTP puro) já o viu preenchido; ler os dois não custa nada e ler só um
+    custaria uma duplicata.
+    """
+    falta, pago = p.get("remainingValue"), p.get("sumOfPaidValues")
+    if falta is None and pago is None:
+        return _dec(p.get("value"))
+    return (_dec(falta) or Decimal("0.00")) + (_dec(pago) or Decimal("0.00"))
+
+
 def parcela_da_recorrencia(parcelas: list[dict],
                            trade_payable_id: str) -> dict | None:
     for p in parcelas or []:
@@ -54,7 +80,8 @@ def titulo_igual(parcelas: list[dict], documento: str, valor,
     if alvo is None or not data:
         return None
     for p in parcelas or []:
-        if _dec(p.get("plannedValue")) == alvo and str(p.get("plannedDate") or "")[:10] == data:
+        if (valor_da_parcela(p) == alvo
+                and str(p.get("plannedDate") or "")[:10] == data):
             return p
     return None
 
@@ -135,7 +162,7 @@ def _uma(guia, parcelas, regras, registro, competencia, marcas,
                           obra_id=str(conhecida.get("obra") or ""),
                           trade_payable_id=tpid,
                           parcela_id=str(parcela.get("id") or ""))
-        antes = _dec(parcela.get("plannedValue"))
+        antes = valor_da_parcela(parcela)
         if antes is not None and antes != _dec(guia.valor):
             decisao.aviso = (f"a parcela está {_brl(antes)} e a guia diz "
                              f"{_brl(guia.valor)}; vale a guia")
