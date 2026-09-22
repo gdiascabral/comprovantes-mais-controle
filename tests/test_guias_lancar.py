@@ -279,7 +279,7 @@ def test_criar_manda_a_conta_da_obra_e_nasce_a_pagar(tmp_path):
                        descricao="DOC-1 - competencia 2026-09",
                        obra_id="obra-9", trade_payable_id="", parcela_id="")
     criado = {"id": "tp-novo", "documentNumber": "DOC-1",
-              "account": {"id": "conta-3"},
+              "account": {"id": "conta-3"}, "category": {"id": "cat-nova"},
               "costCentreDetails": [{"work": {"id": "obra-9"}}],
               "installments": [{"plannedDate": "2026-09-12",
                                 "plannedValue": 641.31}]}
@@ -330,6 +330,71 @@ def test_criar_sem_vencimento_no_pdf_usa_o_do_portal(tmp_path):
             if c[0] == "POST" and "trade-payables" in c[1]][0][2]
     assert corpo["referenceDate"] == "2026-09-20"
     assert corpo["installments"][0]["plannedDate"] == "2026-09-20"
+
+
+def test_criar_sem_obra_no_catalogo_recusa_em_vez_de_criar_sem_centro_de_custo(
+        tmp_path):
+    """I8a: `_obra_do_erp` falha FECHADO (devolve `{}`) quando a obra não
+    está no catálogo — o gatilho mais comum é a listagem de obras ter
+    falhado em silêncio. Criar título sem centro de custo é pior que
+    recusar."""
+    decisao = _decisao(tmp_path, acao="criar", obra_id="obra-9",
+                       favorecido="FORNECEDOR FICTICIO", descricao="DOC-1",
+                       trade_payable_id="", parcela_id="")
+    t = _Transporte({})
+
+    r = mod.criar(t, decisao, _Catalogos(), id_usuario="user-1111",
+                  referencia=REFERENCIA, obra={})
+
+    assert r.estado == ERRO
+    assert "obra" in r.motivo.lower()
+    assert t.chamadas == []
+
+
+def test_criar_com_obra_diferente_na_releitura_vira_diverge(tmp_path):
+    """I8b: a conferência da criação tem de comparar também obra e
+    categoria — não só parcelas, conta e documento, como o spec exige."""
+    decisao = _decisao(tmp_path, acao="criar", obra_id="obra-9",
+                       favorecido="FORNECEDOR FICTICIO", descricao="DOC-1",
+                       trade_payable_id="", parcela_id="")
+    criado = {"id": "tp-novo", "documentNumber": "DOC-1",
+              "account": {"id": "conta-3"}, "category": {"id": "cat-nova"},
+              "costCentreDetails": [{"work": {"id": "obra-ERRADA"}}],
+              "installments": [{"plannedDate": "2026-09-12",
+                                "plannedValue": 641.31}]}
+    t = _Transporte({("POST", "/trade-payables?"): {"id": "tp-novo"},
+                     ("GET", "/trade-payables/tp-novo"): criado,
+                     ("POST", "/attachments/v2/batch"): BATCH,
+                     ("PUT-S3", "s3.exemplo"): {"status": 200},
+                     ("GET", "/attachments/v2?"): ANEXO_OK})
+
+    r = mod.criar(t, decisao, _Catalogos(), id_usuario="user-1111",
+                  referencia=REFERENCIA, obra={"id": "obra-9"})
+
+    assert r.estado == DIVERGE
+
+
+def test_criar_com_categoria_diferente_na_releitura_vira_diverge(tmp_path):
+    """I8b, o outro campo: categoria errada na releitura também não pode
+    passar como CRIADO."""
+    decisao = _decisao(tmp_path, acao="criar", obra_id="obra-9",
+                       favorecido="FORNECEDOR FICTICIO", descricao="DOC-1",
+                       trade_payable_id="", parcela_id="")
+    criado = {"id": "tp-novo", "documentNumber": "DOC-1",
+              "account": {"id": "conta-3"}, "category": {"id": "cat-ERRADA"},
+              "costCentreDetails": [{"work": {"id": "obra-9"}}],
+              "installments": [{"plannedDate": "2026-09-12",
+                                "plannedValue": 641.31}]}
+    t = _Transporte({("POST", "/trade-payables?"): {"id": "tp-novo"},
+                     ("GET", "/trade-payables/tp-novo"): criado,
+                     ("POST", "/attachments/v2/batch"): BATCH,
+                     ("PUT-S3", "s3.exemplo"): {"status": 200},
+                     ("GET", "/attachments/v2?"): ANEXO_OK})
+
+    r = mod.criar(t, decisao, _Catalogos(), id_usuario="user-1111",
+                  referencia=REFERENCIA, obra={"id": "obra-9"})
+
+    assert r.estado == DIVERGE
 
 
 def test_criar_sem_referencia_da_obra_nao_inventa_conta(tmp_path):

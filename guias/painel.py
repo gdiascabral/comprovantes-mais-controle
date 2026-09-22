@@ -636,10 +636,17 @@ class GuiasPainel(ttk.Frame):
     @staticmethod
     def _obra_do_erp(catalogos, obra_id: str) -> dict:
         """A obra inteira, como o ERP a devolve. O POST quer `name` e `status`
-        junto do `id` — mandar só o id cria o título sem centro de custo."""
+        junto do `id` — mandar só o id cria o título sem centro de custo.
+
+        `{}` quando a obra não está no catálogo — NUNCA `{"id": obra_id}`.
+        O gatilho mais comum é a listagem de obras ter falhado em silêncio na
+        abertura da sessão (`_sessao_do_erp` só registra um aviso e segue com
+        catálogo vazio); recuar para um id solto criaria o título SEM centro
+        de custo, sem ninguém perceber. Falhar fechado é `lancar.criar`, que
+        recusa com um erro claro quando recebe `{}`."""
         for obra in (getattr(catalogos, "obras", {}) or {}).values():
             if str(obra.get("id")) == str(obra_id):
                 return {k: obra.get(k) for k in ("id", "name", "status",
                                                  "customer", "planning", "cei")
                         if obra.get(k) is not None}
-        return {"id": obra_id}
+        return {}

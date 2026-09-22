@@ -252,6 +252,13 @@ def criar(transporte, decisao, catalogos, *, id_usuario: str,
         return Resultado(ERRO, motivo="sem título de referência nesta obra, "
                                       "não sei qual conta o ERP usaria; "
                                       "lance este pela tela do ERP")
+    if not obra.get("id"):
+        # `_obra_do_erp` falha FECHADO (devolve `{}`) quando a obra não está
+        # no catálogo — o gatilho mais comum é a listagem de obras ter
+        # falhado em silêncio na abertura da sessão. Criar título sem centro
+        # de custo é pior que recusar.
+        return Resultado(ERRO, motivo="não achei a obra no cadastro do ERP; "
+                                      "o catálogo de obras veio vazio?")
     categoria = catalogos.categoria(decisao.categoria)
     if not categoria:
         return Resultado(ERRO, motivo=f"categoria não cadastrada no ERP: "
@@ -319,7 +326,17 @@ def criar(transporte, decisao, catalogos, *, id_usuario: str,
                          for i in (depois.get("installments") or []))
         pedidas = sorted((p["plannedDate"], round(p["plannedValue"], 2))
                          for p in parcelas)
+        # Obra e categoria entram na conferência: são o centro de custo e a
+        # classificação do lançamento, e o spec exige os dois — conferir só
+        # parcela, conta e documento deixaria os dois passarem sem prova.
+        detalhes = depois.get("costCentreDetails") or []
+        obra_ok = bool(detalhes) and str(
+            (detalhes[0].get("work") or {}).get("id") or "") == str(
+                obra.get("id") or "")
+        categoria_ok = str((depois.get("category") or {}).get("id") or "") == \
+            str(categoria["id"])
         conferido = (criadas == pedidas
                      and str((depois.get("account") or {}).get("id")) == str(conta["id"])
-                     and str(depois.get("documentNumber") or "") == decisao.guia.documento)
+                     and str(depois.get("documentNumber") or "") == decisao.guia.documento
+                     and obra_ok and categoria_ok)
     return _fechar(transporte, decisao, tpid, CRIADO, conferido)

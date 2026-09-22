@@ -427,6 +427,21 @@ def test_navegador_ocupado_recusa_casar_e_lancar(raiz):
     assert p.ocupado() is None
 
 
+def test_obra_do_erp_falha_fechado_quando_nao_esta_no_catalogo(raiz):
+    """I8a: obra fora do catálogo tem de devolver `{}`, e NUNCA
+    `{"id": obra_id}` — mandar só o id cria o título sem centro de custo."""
+    aba = _AbaFalsa()
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    catalogos = type("C", (), {"obras": {"o1": {"id": "obra-1",
+                                                "name": "OBRA UM"}}})()
+    try:
+        obra = p._obra_do_erp(catalogos, "obra-desconhecida")
+    finally:
+        p.destroy()
+
+    assert obra == {}
+
+
 def test_parar_na_fase_do_portal_nao_abre_o_erp(raiz):
     """I6: `calendario.varrer` só observa o `parar` ENTRE empresas e devolve
     o que já baixou; quem apertou Parar normalmente quer o ERP LIVRE — e o
