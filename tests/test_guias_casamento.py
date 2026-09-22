@@ -8,8 +8,6 @@ import json
 from datetime import date
 from decimal import Decimal
 
-import pytest
-
 from guias import casamento as mod
 from guias import regras as mod_regras
 from guias import registro as mod_registro
