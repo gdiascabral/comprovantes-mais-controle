@@ -267,7 +267,11 @@ def criar(transporte, decisao, catalogos, *, id_usuario: str,
     if not condicao:
         return Resultado(ERRO, motivo="o ERP não tem a condição de pagamento "
                                       + ("parcelada" if parcelado else "à vista"))
-    primeira = decisao.guia.vencimento or dt.date.today()
+    # O prz do portal é o segundo dado autoritativo, de graça: sem ele, uma
+    # ficha de arrecadação (que não carrega vencimento no código de barras)
+    # nasceria vencendo HOJE.
+    primeira = (decisao.guia.vencimento or decisao.guia.vencimento_portal
+                or dt.date.today())
     total = _num(decisao.guia.valor)
     parcelas = _parcelas_mensais(primeira, int(decisao.parcelas or 1), total)
     forma = (referencia or {}).get("paymentMethod") or {}

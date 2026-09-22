@@ -303,6 +303,35 @@ def test_criar_manda_a_conta_da_obra_e_nasce_a_pagar(tmp_path):
     assert corpo["paymentCondition"]["type"] == "IN_CASH"
 
 
+def test_criar_sem_vencimento_no_pdf_usa_o_do_portal(tmp_path):
+    """I7: uma ficha de arrecadação (FGTS, INSS/IRRF, contribuição) não traz
+    vencimento no código de barras. Sem o `prz` do portal como segundo dado
+    autoritativo, o título nasceria vencendo HOJE."""
+    decisao = _decisao(tmp_path, acao="criar", obra_id="obra-9",
+                       favorecido="FORNECEDOR FICTICIO", descricao="DOC-1",
+                       trade_payable_id="", parcela_id="")
+    decisao.guia.vencimento = None
+    decisao.guia.vencimento_portal = date(2026, 9, 20)
+    criado = {"id": "tp-novo", "documentNumber": "DOC-1",
+              "account": {"id": "conta-3"},
+              "costCentreDetails": [{"work": {"id": "obra-9"}}],
+              "installments": [{"plannedDate": "2026-09-20",
+                                "plannedValue": 641.31}]}
+    t = _Transporte({("POST", "/trade-payables?"): {"id": "tp-novo"},
+                     ("GET", "/trade-payables/tp-novo"): criado,
+                     ("POST", "/attachments/v2/batch"): BATCH,
+                     ("PUT-S3", "s3.exemplo"): {"status": 200},
+                     ("GET", "/attachments/v2?"): ANEXO_OK})
+
+    mod.criar(t, decisao, _Catalogos(), id_usuario="user-1111",
+              referencia=REFERENCIA, obra={"id": "obra-9"})
+
+    corpo = [c for c in t.chamadas
+            if c[0] == "POST" and "trade-payables" in c[1]][0][2]
+    assert corpo["referenceDate"] == "2026-09-20"
+    assert corpo["installments"][0]["plannedDate"] == "2026-09-20"
+
+
 def test_criar_sem_referencia_da_obra_nao_inventa_conta(tmp_path):
     """A conta vem da obra. Sem título de referência, o robô não escolhe uma:
     lançar na conta errada manda o pagamento sair do lugar errado."""

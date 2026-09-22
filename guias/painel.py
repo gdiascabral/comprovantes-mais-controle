@@ -225,8 +225,16 @@ class GuiasPainel(ttk.Frame):
             # Palpite sobre o texto do documento, e não regra confirmada: a
             # linha diz isso, senão o "?" some junto com a diferença.
             obra += "  ?"
-        return (guia.empresa, guia.documento or guia.desc[:40],
-                guia.vencimento.strftime("%d/%m") if guia.vencimento else "",
+        if guia.vencimento:
+            vence = guia.vencimento.strftime("%d/%m")
+        elif guia.vencimento_portal:
+            # Mesma razão da obra sugerida: o `prz` do portal é palpite (o
+            # PDF não trouxe vencimento), e palpite tem de aparecer como
+            # palpite.
+            vence = guia.vencimento_portal.strftime("%d/%m") + "  ?"
+        else:
+            vence = ""
+        return (guia.empresa, guia.documento or guia.desc[:40], vence,
                 util.fmt_val(int((guia.valor or 0) * 100)) if guia.valor else "",
                 decisao.categoria, obra,
                 decisao.motivo or decisao.aviso or "")

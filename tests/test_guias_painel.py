@@ -128,6 +128,19 @@ def test_duas_obras_de_mesmo_nome_nao_colapsam_na_escolha(bloco):
     assert "CONDOMINIO UNICO" in opcoes
 
 
+def test_sem_vencimento_do_pdf_mostra_o_do_portal_marcado_como_palpite(bloco):
+    """I7: o `prz` do portal é palpite (o PDF não trouxe vencimento), e
+    palpite tem de aparecer como palpite — mesma razão da obra sugerida."""
+    decisao = _decisao(ALTERAR, anx_id="1")
+    decisao.guia.vencimento = None
+    decisao.guia.vencimento_portal = date(2026, 9, 18)
+    bloco.mostrar([decisao])
+    iid = bloco.linhas_de(ALTERAR)[0]
+
+    assert "18/09" in bloco.texto_da_linha(iid)
+    assert "?" in bloco.texto_da_linha(iid)
+
+
 def test_editar_a_categoria_troca_a_decisao(bloco):
     bloco.mostrar([_decisao(ALTERAR, anx_id="1")])
     iid = bloco.linhas_de(ALTERAR)[0]

@@ -35,6 +35,25 @@ def test_calendario_vazio_nao_quebra():
     assert mod.itens_do_mes(None) == []
 
 
+# ----------------------------------------------------- I7: vencimento do prz
+
+def test_vencimento_do_prz_le_dd_mm_aaaa():
+    from datetime import date
+    assert mod._vencimento_do_prz("12/09/2026") == date(2026, 9, 12)
+
+
+def test_vencimento_do_prz_aceita_texto_depois_da_data():
+    from datetime import date
+    assert mod._vencimento_do_prz("12/09/2026 - vencimento") == date(2026, 9, 12)
+
+
+def test_vencimento_do_prz_ilegivel_vira_none_sem_quebrar():
+    assert mod._vencimento_do_prz("") is None
+    assert mod._vencimento_do_prz(None) is None
+    assert mod._vencimento_do_prz("dia 12") is None
+    assert mod._vencimento_do_prz("31/02/2026") is None    # 31 de fevereiro
+
+
 # ------------------------------------------------------------ portal falso
 
 class _PortalFalso:
@@ -148,3 +167,35 @@ def test_parar_interrompe_entre_empresas(tmp_path):
                        parar=lambda: True)
 
     assert guias == []
+
+
+def test_guia_lida_carrega_o_vencimento_do_portal_mesmo_tendo_o_do_pdf(
+        tmp_path, monkeypatch):
+    """I7: o `prz` do calendário viaja na Guia sempre — é o `criar` quem
+    decide se usa (só na falta do vencimento do PDF)."""
+    from datetime import date
+    monkeypatch.setattr(
+        mod.leitura, "ler_pdf",
+        lambda _c: [leitura.ItemLido(valor=None, documento="DOC-1",
+                                     vencimento=date(2026, 9, 20))])
+
+    guias = mod.varrer(_PortalFalso(), _MapaFalso(), 2026, 9,
+                       pasta_de=lambda _e: tmp_path, log=lambda _m: None)
+
+    guia = [g for g in guias if g.vip_id == "701"][0]
+    assert guia.vencimento_portal == date(2026, 9, 12)   # o "prz" da fixture CAL
+
+
+def test_guia_cujo_download_falhou_ainda_carrega_o_vencimento_do_portal(
+        tmp_path):
+    """A ficha de arrecadação (FGTS, INSS/IRRF, contribuição) não traz
+    vencimento no código de barras: sem o `prz`, uma guia com erro de
+    download perderia o único dado autoritativo que tinha."""
+    from datetime import date
+    portal = _PortalFalso(falhar_download=["https://exemplo.invalido/1"])
+
+    guias = mod.varrer(portal, _MapaFalso(), 2026, 9,
+                       pasta_de=lambda _e: tmp_path, log=lambda _m: None)
+
+    guia = [g for g in guias if g.anx_id == "111"][0]
+    assert guia.vencimento_portal == date(2026, 9, 12)

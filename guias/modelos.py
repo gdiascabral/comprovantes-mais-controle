@@ -32,6 +32,11 @@ class Guia:
     valor: Decimal | None = None
     documento: str = ""
     erro: str = ""
+    #: O vencimento como o PORTAL informa (`prz` do calendário). Segundo dado
+    #: autoritativo, de graça: a ficha de arrecadação (FGTS, INSS/IRRF,
+    #: contribuição) não carrega vencimento no código de barras, e sem isto o
+    #: lançamento nasceria com a data de hoje.
+    vencimento_portal: date | None = None
 
 
 @dataclass

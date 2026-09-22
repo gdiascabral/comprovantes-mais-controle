@@ -7,6 +7,8 @@ conhecido e aceito, porque é o mesmo que a pessoa faria à mão.
 """
 from __future__ import annotations
 
+import re
+from datetime import date
 from pathlib import Path
 
 import util
@@ -18,6 +20,27 @@ log = util.log(__name__)
 
 #: Certidão não é conta a pagar. É o único descarte por assunto.
 PREFIXOS_FORA = ("CND",)
+
+#: O `prz` do calendário do portal: "dd/mm/aaaa", às vezes com texto depois.
+_RE_PRZ = re.compile(r"^\s*([0-3]?[0-9])/([01]?[0-9])/([0-9]{4})")
+
+
+def _vencimento_do_prz(prz) -> date | None:
+    """O vencimento que o PORTAL informa, ou `None` se ilegível.
+
+    Segundo dado autoritativo, de graça: hoje o `prz` só nomeia o arquivo
+    (`_nome_do_arquivo`), mas é justamente o que sobra quando o PDF é uma
+    ficha de arrecadação (FGTS, INSS/IRRF, contribuição) — que não carrega
+    vencimento no código de barras. Data ilegível não pode derrubar a
+    varredura: vira `None`, e quem usa trata como "não sei"."""
+    achado = _RE_PRZ.match(str(prz or ""))
+    if not achado:
+        return None
+    dia, mes, ano = (int(g) for g in achado.groups())
+    try:
+        return date(ano, mes, dia)
+    except ValueError:
+        return None
 
 
 def itens_do_mes(cal: dict | None) -> list[dict]:
@@ -75,9 +98,11 @@ def varrer(cliente, mapa, ano: int, mes: int, *, pasta_de, log=print,
 
 def _uma_guia(cliente, empresa, item: dict, competencia: str,
               pasta: Path) -> list[Guia]:
+    vencimento_portal = _vencimento_do_prz(item.get("prz"))
     base = Guia(vip_id=empresa.vip_id, empresa=empresa.nome,
                 desc=str(item.get("desc") or ""),
-                anx_id=str(item.get("AnxID") or ""), competencia=competencia)
+                anx_id=str(item.get("AnxID") or ""), competencia=competencia,
+                vencimento_portal=vencimento_portal)
     destino = pasta / _nome_do_arquivo(empresa.vip_id, item)
     # A pasta da empresa no mês pode não existir ainda: quem sabe onde o PDF
     # vai é este módulo, não o portal — criar aqui vale para qualquer cliente,
@@ -110,7 +135,8 @@ def _uma_guia(cliente, empresa, item: dict, competencia: str,
         guia = Guia(vip_id=base.vip_id, empresa=base.empresa, desc=base.desc,
                     anx_id=base.anx_id, competencia=competencia, pdf=destino,
                     valor=lido.valor, vencimento=lido.vencimento,
-                    documento=lido.documento)
+                    documento=lido.documento,
+                    vencimento_portal=vencimento_portal)
         if len(itens) > 1:
             # Duas cobranças no mesmo arquivo: o `anx_id` deixa de ser único,
             # e a trava do registro depende dele.
