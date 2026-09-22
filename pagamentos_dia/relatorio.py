@@ -1238,7 +1238,16 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     obs = "Sem boleto anexado — pagar pela chave Pix do cadastro"
                 else:
                     obs = "Nenhum anexo de boleto — conferir no ERP"
-                    pix_sem_documento = parece_chave_pix(do_cadastro)
+                    # A MESMA régua do aviso "Cadastro tem Pix (…)" logo
+                    # abaixo (`pix|chave` no texto cru do cadastro): sem ela,
+                    # uma TED escrita à mão ("BANCO 001 AG 1234 CC 5678-9",
+                    # que também tem dígito) virava "há chave Pix no
+                    # cadastro" — uma mentira nova no lugar da antiga, porque
+                    # aquele aviso nunca aparece para confirmar (revisão de
+                    # dinheiro, achado a, 22/09/2026).
+                    pix_sem_documento = bool(
+                        re.search(r"pix|chave", pago_para, re.I)
+                        and parece_chave_pix(do_cadastro))
 
         # Depois de resolver a forma de pagar, e não antes: quando a linha
         # acabou virando Pix por falta de boleto, mandar "pagar o boleto"

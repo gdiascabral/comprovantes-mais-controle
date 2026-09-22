@@ -143,6 +143,19 @@ def test_sem_boleto_e_sem_nf_nem_oc_nao_entra():
     assert "Cadastro tem Pix" in res.omitidos[0]["obs"]
 
 
+def test_conta_manuscrita_sem_nf_nem_oc_nao_vira_chave_pix():
+    """TED escrita à mão ("BANCO 001 AG 1234 CC 5678-9") tem dígito, mas não
+    é chave Pix. `parece_chave_pix` sozinho aceitaria — dizer "há chave Pix
+    no cadastro" ali seria uma mentira nova no lugar da antiga, e o aviso
+    "Cadastro tem Pix (…)" nunca apareceria para confirmar, porque ele exige
+    as mesmas palavras "pix"/"chave" (revisão de dinheiro, achado a,
+    22/09/2026)."""
+    item = sem_boleto(paidToBankAccount="BANCO 001 AG 1234 CC 5678-9")
+    res = relatorio.montar_registros([item], {}, {}, {})
+    assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR
+    assert "Cadastro tem Pix" not in res.omitidos[0]["obs"]
+
+
 def test_boleto_anexado_continua_ganhando_do_pix():
     """A trava antiga não pode ter afrouxado: com boleto na mão paga-se o
     boleto, senão o mesmo título é pago duas vezes."""

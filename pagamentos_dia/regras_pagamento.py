@@ -171,10 +171,14 @@ MOTIVO_SEM_PAGAR = "sem forma de pagar (nem boleto anexado, nem chave Pix)"
 #: contradizia o próprio aviso "Cadastro tem Pix (…)" que a mesma linha
 #: mostra na janela "Confirmar o que entra" — foi essa contradição que
 #: confundiu quem conferia (dono, 22/09/2026): a chave existe, só não pode
-#: ser usada sem prova da compra.
+#: ser usada sem prova da compra. O que muda primeiro é o que se lê: a
+#: coluna SITUAÇÃO da janela corta sem aviso perto dos 40 caracteres
+#: (revisão de dinheiro, achado b), e "sem forma de pagar (boleto não
+#: anexado; …" comeria a frase toda antes do "chave Pix" aparecer — por
+#: isso o fato que distingue este motivo do genérico vem na FRENTE.
 MOTIVO_SEM_PAGAR_PIX_SEM_DOCUMENTO = (
-    "sem forma de pagar (boleto não anexado; há chave Pix no cadastro, mas "
-    "falta NF ou OC que documente a compra)")
+    "chave Pix no cadastro, mas falta NF ou OC que documente a compra "
+    "(boleto não anexado)")
 MOTIVO_NAO_CONFIRMADO = "não confirmado na janela antes de gerar"
 
 
