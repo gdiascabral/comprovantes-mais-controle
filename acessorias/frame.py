@@ -275,6 +275,8 @@ class AcessoriasFrame(ttk.Frame):
                 elif tipo == "pasta_pronta":
                     self.ultima_pasta = valor
                     self.b_abrir.configure(state="normal")
+                elif tipo == "guias_baixadas":
+                    self.guias.casar(*valor)
                 elif tipo == "guias_cadastro":
                     self.guias.categorias, self.guias.obras = valor
                 elif tipo == "guias":

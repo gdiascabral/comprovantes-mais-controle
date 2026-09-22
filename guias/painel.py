@@ -423,21 +423,33 @@ class GuiasPainel(ttk.Frame):
         alvo = self.marcadas()
         if not alvo or self.ocupado():
             return
+        if self.anx is None:
+            return
+        if self.anx.avisar_se_ocupado("as Guias do mês"):
+            return
         ano, mes = self.periodo
         if self.aba is not None:
             self.aba._parar.clear()
         self._tarefa = "lançando no Mais Controle"
-        self._executar(self._t_lancar, alvo, ano, mes)
+        self.anx.submeter("Guias — lançar", self._t_lancar, alvo, ano, mes,
+                          dona=self.aba)
 
     def _t_varrer(self, ano: int, mes: int):
-        """Roda na thread do executor. Nada de Tcl aqui — só a fila.
+        """Roda na thread do executor DESTA aba (o portal, Chrome próprio).
 
         `ano` e `mes` chegam como argumento porque foram lidos na thread da
-        interface: ler `StringVar` daqui trava sem hora marcada."""
+        interface: ler `StringVar` daqui trava sem hora marcada.
+
+        Só a FASE 1 (portal) mora aqui. O caminho feliz entrega o que baixou
+        à fase 2 (`casar`, na thread da tela) pela fila e NÃO limpa
+        `self._tarefa` — a rodada continua, e quem limpa é `_t_casar`. Só os
+        ramos de saída antecipada (mapa ausente, erro) limpam aqui, porque
+        para eles não há fase 2 nenhuma vindo depois."""
         try:
             if not self.aba._garantir_mapa():
                 self.aba._log("[!] Preencha o arquivo de contas antes: é dele "
                               "que saem o endereço do portal e as empresas.")
+                self._tarefa = ""
                 return
             mapa = self.aba.mapa
             scfg, _ = self.aba._sicoob_mods()
@@ -452,7 +464,35 @@ class GuiasPainel(ttk.Frame):
                 guias = calendario.varrer(cliente, mapa, ano, mes,
                                           pasta_de=pasta_de, log=self.aba._log,
                                           parar=self.aba._parar.is_set)
+            self.aba.q.put(("guias_baixadas", (guias, ano, mes)))
+        except Exception as e:
+            self.aba._log(f"[!] {e}")
+            log.warning("a varredura de guias parou", exc_info=True)
+            self._tarefa = ""
 
+    def casar(self, guias, ano: int, mes: int) -> None:
+        """Fase 2 da rodada: lê o ERP e decide. THREAD DA TELA.
+
+        O ERP é falado pelo executor do Anexar, e não pelo desta aba: os
+        objetos do Playwright síncrono pertencem à thread que os criou, e
+        tocá-los de outra dá erro de greenlet. É o mesmo caminho que Aportes,
+        Contratos, Conciliação e Conferência usam.
+        """
+        if self.anx is None:
+            self._tarefa = ""
+            return
+        if self.anx.avisar_se_ocupado("as Guias do mês"):
+            # Recusar ANTES de mexer em botão ou fila: quem sai por aqui não
+            # passa mais pelo `_drain`.
+            self._tarefa = ""
+            return
+        self._tarefa = "casando no Mais Controle"
+        self.anx.submeter("Guias — casar no ERP", self._t_casar,
+                          guias, ano, mes, dona=self.aba)
+
+    def _t_casar(self, guias, ano: int, mes: int):
+        """Roda na thread do NAVEGADOR (executor do Anexar). Nada de Tcl."""
+        try:
             transporte, catalogos, _uid = _sessao_do_erp(self)
             parcelas = self._parcelas_do_mes(transporte, ano, mes)
             obras = list(getattr(catalogos, "obras", {}).values())
@@ -467,7 +507,7 @@ class GuiasPainel(ttk.Frame):
             self.aba.q.put(("guias", decisoes))
         except Exception as e:
             self.aba._log(f"[!] {e}")
-            log.warning("a varredura de guias parou", exc_info=True)
+            log.warning("o casamento das guias parou", exc_info=True)
         finally:
             self._tarefa = ""
 

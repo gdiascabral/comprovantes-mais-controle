@@ -162,18 +162,49 @@ def test_parar_pede_parada_sem_derrubar_a_tela(bloco):
 
 # ------------------------------------------------------------ Tarefa 9: ERP
 
+class _ExecutorFalso:
+    """O `exec` de `AcessoriasFrame`, sem thread de verdade: só anota o que
+    seria submetido, e NÃO executa — a fase 1 (portal) não pode abrir
+    navegador nenhum dentro do teste."""
+
+    def __init__(self, destino):
+        self._destino = destino
+
+    def submit(self, fn, *a):
+        self._destino.append((fn, a))
+        return None
+
+
 class _AbaFalsa:
     def __init__(self):
         self.q = __import__("queue").Queue()
         self._parar = __import__("threading").Event()
         self.linhas = []
         self.mapa = None
+        self.submetidos = []
+        self.exec = _ExecutorFalso(self.submetidos)
+        self.worker = None
 
     def _log(self, msg=""):
         self.linhas.append(msg)
 
     def _garantir_mapa(self):
         return False              # sem cadastro nesta falsa
+
+
+class _AnexarFalso:
+    """O `AnexarFrame`, do tamanho que o painel usa."""
+
+    def __init__(self, ocupado=False):
+        self._ocupado = ocupado
+        self.submetidos = []
+
+    def avisar_se_ocupado(self, _dona):
+        return self._ocupado
+
+    def submeter(self, rotulo, fn, *a, dona=None, **k):
+        self.submetidos.append((rotulo, fn))
+        return None          # não executa: o corpo fala com o ERP
 
 
 def test_varrer_sem_o_mapa_das_contas_avisa_e_nao_abre_navegador(raiz):
@@ -229,3 +260,59 @@ def test_obra_com_cadastro_incompleto_fica_fora_da_lista_e_avisa(raiz):
 
     assert sorted(opcoes.values()) == ["obra-1"]
     assert any("2 obra" in linha for linha in aba.linhas)
+
+
+# --------------------------------------------- Tarefa 9, rodada de conserto 1
+
+def test_varrer_usa_o_executor_da_aba_e_nao_o_do_navegador(raiz):
+    """A fase do PORTAL é do Chrome da aba Acessórias, que tem thread própria."""
+    aba, anx = _AbaFalsa(), _AnexarFalso()
+    p = mod.GuiasPainel(raiz, aba=aba, anx=anx)
+    try:
+        p.varrer()
+    finally:
+        p.destroy()
+
+    assert aba.submetidos and not anx.submetidos
+
+
+def test_casar_e_lancar_passam_pelo_executor_do_navegador(raiz):
+    """Os objetos do Playwright pertencem à thread que os criou: tocá-los de
+    outra dá erro de greenlet, e isso só apareceria no primeiro clique real."""
+    aba, anx = _AbaFalsa(), _AnexarFalso()
+    p = mod.GuiasPainel(raiz, aba=aba, anx=anx)
+    try:
+        p.casar([], 2026, 9)
+        # `anx.submeter` aqui é dublê e de propósito NÃO executa `_t_casar`
+        # (rodar o corpo chamaria o ERP de verdade). Em produção é `_t_casar`
+        # — na thread do Anexar — quem grava a decisão na fila E zera
+        # `_tarefa` no MESMO `finally`, os dois antes de o `_drain` (thread da
+        # tela) sequer processar a mensagem e chamar `mostrar()`. Sem o dublê
+        # rodar esse corpo, `_tarefa` nunca voltaria a "" sozinho — a linha
+        # abaixo simula o ponto em que a fase 2 de verdade já teria terminado.
+        p._tarefa = ""
+        p.mostrar([_decisao(ALTERAR, anx_id="1")])
+        p.lancar()
+    finally:
+        p.destroy()
+
+    rotulos = [r for r, _fn in anx.submetidos]
+    assert any("casar" in r for r in rotulos)
+    assert any("lançar" in r for r in rotulos)
+    assert aba.submetidos == []
+
+
+def test_navegador_ocupado_recusa_casar_e_lancar(raiz):
+    """Recusar ANTES de mexer em fila ou botão: quem sai por aqui não passa
+    mais pelo _drain, e a aba ficaria travada."""
+    aba, anx = _AbaFalsa(), _AnexarFalso(ocupado=True)
+    p = mod.GuiasPainel(raiz, aba=aba, anx=anx)
+    try:
+        p.casar([], 2026, 9)
+        p.mostrar([_decisao(ALTERAR, anx_id="1")])
+        p.lancar()
+    finally:
+        p.destroy()
+
+    assert anx.submetidos == []
+    assert p.ocupado() is None
