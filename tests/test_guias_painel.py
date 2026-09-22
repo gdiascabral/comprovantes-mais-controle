@@ -158,3 +158,74 @@ def test_abrir_pdf_de_linha_sem_pdf_nao_explode(bloco):
 
 def test_parar_pede_parada_sem_derrubar_a_tela(bloco):
     bloco.parar()                 # sem rodada em pé: não faz nada e não quebra
+
+
+# ------------------------------------------------------------ Tarefa 9: ERP
+
+class _AbaFalsa:
+    def __init__(self):
+        self.q = __import__("queue").Queue()
+        self._parar = __import__("threading").Event()
+        self.linhas = []
+        self.mapa = None
+
+    def _log(self, msg=""):
+        self.linhas.append(msg)
+
+    def _garantir_mapa(self):
+        return False              # sem cadastro nesta falsa
+
+
+def test_varrer_sem_o_mapa_das_contas_avisa_e_nao_abre_navegador(raiz):
+    """Sem o cadastro não há vip_url nem pasta: abrir o Chrome só para
+    descobrir isso custa meio minuto e assusta."""
+    aba = _AbaFalsa()
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    try:
+        p._t_varrer(2026, 9)
+    finally:
+        p.destroy()
+
+    assert any("contas" in linha.lower() for linha in aba.linhas)
+
+
+def test_lancar_anota_no_registro_mesmo_quando_o_erp_recusa(raiz, tmp_path,
+                                                            monkeypatch):
+    """Review Focus 5: a linha de erro fica registrada, e a rodada seguinte
+    sabe que esta guia ainda não foi lançada."""
+    from guias import registro as mod_registro
+    from guias.modelos import ERRO, Resultado
+
+    aba = _AbaFalsa()
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    reg = mod_registro.Registro.carregar(tmp_path / "r.jsonl")
+    monkeypatch.setattr(mod, "_sessao_do_erp",
+                        lambda _p: (object(), object(), "user-1"))
+    monkeypatch.setattr(mod.lancar, "alterar",
+                        lambda *a, **k: Resultado(ERRO, motivo="o ERP recusou"))
+    try:
+        p._gravar([_decisao(ALTERAR, anx_id="1", trade_payable_id="tp-1")],
+                  transporte=object(), catalogos=object(), id_usuario="user-1",
+                  registro=reg, parcelas=[], regras=None, pasta_backup=tmp_path)
+    finally:
+        p.destroy()
+
+    assert reg.ja_feito("701", "1", "2026-09") is None
+    assert reg.linhas and reg.linhas[-1]["estado"] == ERRO
+
+
+def test_obra_com_cadastro_incompleto_fica_fora_da_lista_e_avisa(raiz):
+    """Item extra da revisão da Tarefa 8: obra sem nome ou sem id sumia da
+    lista sem dizer nada, e é a obra que decide a conta que paga."""
+    aba = _AbaFalsa()
+    p = mod.GuiasPainel(raiz, aba=aba, anx=None)
+    p.obras = [{"id": "obra-1", "name": "OBRA COMPLETA"},
+               {"id": "", "name": "SEM ID"},
+               {"id": "obra-3", "name": ""}]
+    try:
+        opcoes = p._opcoes_de("obra")
+    finally:
+        p.destroy()
+
+    assert sorted(opcoes.values()) == ["obra-1"]
+    assert any("2 obra" in linha for linha in aba.linhas)

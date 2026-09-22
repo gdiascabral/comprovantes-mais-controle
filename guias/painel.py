@@ -11,16 +11,21 @@ trava sem hora marcada, que é a falha que nunca aparece em teste.
 """
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 import os
 import tkinter as tk
 import webbrowser
 from collections import Counter
 from tkinter import ttk
+from urllib.parse import urlencode
 
 import util
 import widgets
+from acessorias import pacote
+from acessorias.portal import PortalClient
 from anexar import config as anx_config
+from guias import calendario, casamento, lancar, regras, registro
 from guias.modelos import ALTERAR, CRIAR, DECIDIR, JA_LANCADO
 
 log = util.log(__name__)
@@ -48,6 +53,71 @@ COLUNAS = (("empresa", "Empresa", 170), ("documento", "Documento", 230),
            ("venc", "Vence", 90), ("valor", "Valor", 100),
            ("categoria", "Categoria", 150), ("obra", "Obra", 150),
            ("estado", "Situação", 260))
+
+
+# --------------------------------------------------------- Mais Controle
+
+def _sessao_do_erp(painel):
+    """(transporte, catalogos, id_usuario), pela página que o app já tem logada.
+
+    Mesmo caminho da aba Aportes: passar pela LISTA de Pagamentos faz o ERP
+    autenticar os dois back-ends de cadastro, e os cabeçalhos são copiados do
+    tráfego da própria página. Sem login novo — o ERP aceita uma sessão por
+    usuário, e um login por HTTP derrubaria a do dono.
+    """
+    from aportes import erp_sessao
+    from aportes.mc_catalogos import Catalogos
+    from erp.pagina import TransportePagina
+
+    api = painel.anx.garantir_sessao(painel.aba._log)
+    pagina = painel.anx.mc.page
+    cabecalhos: dict = {}
+    ao_requisitar = erp_sessao.ouvinte(cabecalhos)
+    pagina.on("request", ao_requisitar)
+    try:
+        if erp_sessao.na_lista_de_pagamentos(pagina.url):
+            pagina.reload(wait_until="domcontentloaded")
+        else:
+            pagina.goto(anx_config.MC_URL_PAGAMENTOS,
+                        wait_until="domcontentloaded")
+        for _ in range(60):
+            if all(h in cabecalhos for h in erp_sessao.HOSTS_CADASTRO):
+                break
+            pagina.wait_for_timeout(250)
+    finally:
+        try:
+            pagina.remove_listener("request", ao_requisitar)
+        except Exception:
+            pass
+
+    faltando = [h for h in erp_sessao.HOSTS_CADASTRO if h not in cabecalhos]
+    if faltando:
+        raise RuntimeError(
+            "não consegui a autenticação de " + ", ".join(faltando) + ".\n"
+            "Abra a LISTA de Pagamentos no Chrome (ou recarregue com F5).")
+
+    transporte = TransportePagina(pagina, cabecalhos)
+    catalogos = Catalogos(pagina, cabecalhos, painel.aba._log)
+    catalogos.carregar()
+
+    # As obras NÃO vêm do `carregar()`: elas saem do REST do outro back-end,
+    # pela mesma porta que a aba Contratos usa. Sem este passo `obras` fica
+    # vazio e toda criação morre com "Obra não encontrada" — cadastro que
+    # está lá, certo, o tempo todo (`aportes/aportes_frame._carregar_obras`).
+    try:
+        api.garantir_credenciais_anexos(painel.aba._log)
+        catalogos.definir_obras(api.listar_obras(painel.aba._log))
+    except Exception as e:                                  # noqa: BLE001
+        catalogos.definir_obras([])
+        painel.aba._log(f"  aviso (obras): {e}")
+
+    return transporte, catalogos, transporte.cabecalho("user-id") or ""
+
+
+def _nomes_de(indice) -> list[str]:
+    """Os `name` de um índice do `Catalogos` (que é {chave: item})."""
+    return sorted({str(item.get("name") or "") for item in (indice or {}).values()
+                   if item.get("name")})
 
 
 class GuiasPainel(ttk.Frame):
@@ -211,13 +281,21 @@ class GuiasPainel(ttk.Frame):
             return {nome: nome for nome in self.categorias}
         vezes = Counter(str(o.get("name") or "") for o in self.obras)
         opcoes = {}
+        descartadas = 0
         for obra in self.obras:
             nome = str(obra.get("name") or "")
             ident = str(obra.get("id") or "")
             if not nome or not ident:
+                # Obra com cadastro incompleto no ERP: some da lista em vez de
+                # aparecer em branco ou apontar para um id vazio — mas sumir
+                # calado faz o dono achar que a obra não existe.
+                descartadas += 1
                 continue
             rotulo = nome if vezes[nome] == 1 else f"{nome} [{ident[:8]}]"
             opcoes[rotulo] = ident
+        if descartadas and self.aba is not None:
+            self.aba._log(f"{descartadas} obra(s) com cadastro incompleto "
+                          f"ficaram fora da lista.")
         return opcoes
 
     def _pedir_valor(self, iid: str, campo: str) -> None:
@@ -351,10 +429,126 @@ class GuiasPainel(ttk.Frame):
         self._tarefa = "lançando no Mais Controle"
         self._executar(self._t_lancar, alvo, ano, mes)
 
-    # Os dois corpos de thread ficam em `_t_varrer`/`_t_lancar`, ligados na
-    # Tarefa 9, quando o painel passa a ter a aba e a sessão do ERP.
-    def _t_varrer(self, ano, mes):                        # pragma: no cover
-        raise NotImplementedError
+    def _t_varrer(self, ano: int, mes: int):
+        """Roda na thread do executor. Nada de Tcl aqui — só a fila.
 
-    def _t_lancar(self, decisoes, ano, mes):              # pragma: no cover
-        raise NotImplementedError
+        `ano` e `mes` chegam como argumento porque foram lidos na thread da
+        interface: ler `StringVar` daqui trava sem hora marcada."""
+        try:
+            if not self.aba._garantir_mapa():
+                self.aba._log("[!] Preencha o arquivo de contas antes: é dele "
+                              "que saem o endereço do portal e as empresas.")
+                return
+            mapa = self.aba.mapa
+            scfg, _ = self.aba._sicoob_mods()
+
+            def pasta_de(empresa):
+                return (pacote.pasta_do_mes(mapa.raiz, ano, mes, scfg.nome_do_mes)
+                        / scfg.nome_pasta_empresa(ano, mes, empresa.nome))
+
+            with PortalClient(mapa.vip_url, log=self.aba._log,
+                              headless=True) as cliente:
+                cliente.aguardar_login()
+                guias = calendario.varrer(cliente, mapa, ano, mes,
+                                          pasta_de=pasta_de, log=self.aba._log,
+                                          parar=self.aba._parar.is_set)
+
+            transporte, catalogos, _uid = _sessao_do_erp(self)
+            parcelas = self._parcelas_do_mes(transporte, ano, mes)
+            obras = list(getattr(catalogos, "obras", {}).values())
+            regras_ = regras.Regras.carregar()
+            registro_ = registro.Registro.carregar()
+            decisoes = casamento.decidir(guias, parcelas, regras_, registro_,
+                                         f"{ano:04d}-{mes:02d}", obras=obras)
+            # Os nomes do cadastro vão junto: é deles que os combos de
+            # correção da tela se servem, e sem eles o duplo clique não abre.
+            self.aba.q.put(("guias_cadastro",
+                            (_nomes_de(catalogos.categorias), obras)))
+            self.aba.q.put(("guias", decisoes))
+        except Exception as e:
+            self.aba._log(f"[!] {e}")
+            log.warning("a varredura de guias parou", exc_info=True)
+        finally:
+            self._tarefa = ""
+
+    def _parcelas_do_mes(self, transporte, ano: int, mes: int) -> list[dict]:
+        """As parcelas do mês inteiro, numa leitura só (`size=3000`)."""
+        from erp import hosts
+        ultimo = calendar.monthrange(ano, mes)[1]
+        parametros = urlencode({
+            "page": 0, "size": 3000, "type": "ALL", "onlyWork": "false",
+            "dateField": "PLANNED", "costCentreType": "ALL",
+            "conciliationType": "ALL", "tradePayableType": "ALL",
+            "batchOperationType": "NONE",
+            "startDate": f"{ano:04d}-{mes:02d}-01",
+            "endDate": f"{ano:04d}-{mes:02d}-{ultimo:02d}"})
+        resposta = transporte.buscar(
+            f"{hosts.LEGACY}/payable-installments/paginated-result?{parametros}")
+        if isinstance(resposta, dict) and resposta.get("__erro"):
+            raise RuntimeError(f"o ERP recusou a lista de parcelas "
+                               f"(HTTP {resposta['__erro']})")
+        return list((resposta or {}).get("content") or [])
+
+    def _t_lancar(self, decisoes, ano: int, mes: int):
+        try:
+            transporte, catalogos, id_usuario = _sessao_do_erp(self)
+            parcelas = self._parcelas_do_mes(transporte, ano, mes)
+            self._gravar(decisoes, transporte=transporte, catalogos=catalogos,
+                         id_usuario=id_usuario,
+                         registro=registro.Registro.carregar(),
+                         parcelas=parcelas, regras=regras.Regras.carregar(),
+                         pasta_backup=util.pasta_base() / "guias_backup")
+        except Exception as e:
+            self.aba._log(f"[!] {e}")
+            log.warning("o lançamento de guias parou", exc_info=True)
+        finally:
+            self._tarefa = ""
+
+    def _gravar(self, decisoes, *, transporte, catalogos, id_usuario, registro,
+                parcelas, regras, pasta_backup) -> None:
+        """Grava uma decisão por vez, anotando SEMPRE — inclusive o erro."""
+        for decisao in decisoes:
+            if self.aba is not None and self.aba._parar.is_set():
+                self.aba._log("Parado a pedido; o que já foi gravado está no "
+                              "registro.")
+                return
+            if decisao.acao == ALTERAR:
+                resultado = lancar.alterar(transporte, decisao, catalogos,
+                                           pasta_backup=pasta_backup)
+            else:
+                referencia = lancar.referencia_da_obra(
+                    transporte, decisao.obra_id, parcelas)
+                obra = self._obra_do_erp(catalogos, decisao.obra_id)
+                resultado = lancar.criar(transporte, decisao, catalogos,
+                                         id_usuario=id_usuario,
+                                         referencia=referencia, obra=obra)
+            registro.anotar(vip_id=decisao.guia.vip_id,
+                            anx_id=decisao.guia.anx_id,
+                            competencia=decisao.guia.competencia,
+                            acao=decisao.acao, estado=resultado.estado,
+                            tpid=resultado.tpid, motivo=resultado.motivo,
+                            anexos=resultado.anexos)
+            if resultado.tpid and regras is not None and decisao.tipo:
+                # O mês seguinte casa exato porque o id ficou guardado — e é
+                # isto que impede o parcelado de nascer duas vezes.
+                regras.aprender_recorrencia(decisao.tipo, decisao.guia.vip_id,
+                                            resultado.tpid, decisao.obra_id)
+                if decisao.obra_id:
+                    # A obra que o dono deixou passar vale como confirmada.
+                    regras.aprender_obra(decisao.tipo, decisao.guia.vip_id,
+                                         decisao.obra_id)
+            if self.aba is not None:
+                self.aba.q.put(("guia_feita", (decisao, resultado)))
+        if regras is not None:
+            regras.gravar()
+
+    @staticmethod
+    def _obra_do_erp(catalogos, obra_id: str) -> dict:
+        """A obra inteira, como o ERP a devolve. O POST quer `name` e `status`
+        junto do `id` — mandar só o id cria o título sem centro de custo."""
+        for obra in (getattr(catalogos, "obras", {}) or {}).values():
+            if str(obra.get("id")) == str(obra_id):
+                return {k: obra.get(k) for k in ("id", "name", "status",
+                                                 "customer", "planning", "cei")
+                        if obra.get(k) is not None}
+        return {"id": obra_id}
