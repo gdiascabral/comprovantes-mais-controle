@@ -3384,3 +3384,73 @@ Duas coisas que não são código e não podem ser esquecidas:
 
 1. **A medição da conta por obra** (spec, seção "Conta e obra"). Com a tela livre e o dono avisado, ler — só leitura — títulos existentes de duas ou três obras e conferir se a conta é sempre a mesma por obra. Confirmando, `referencia_da_obra` está certa como está. Não confirmando, a linha de criação passa a exigir a conta escolhida na tela, e isso vira uma tarefa nova.
 2. **A primeira rodada de verdade**, com o dono à vista, numa empresa só: varrer, conferir a lista, lançar UMA guia e abrir o título no ERP para ver categoria, valor, número do documento e o PDF anexado. Prova ao vivo, como o projeto exige antes de dar qualquer coisa por pronta.
+
+---
+
+## O que a execução mostrou que este plano errou
+
+**Leia esta seção antes de reusar qualquer trecho de código acima.** O plano
+foi executado em 21 e 22/09/2026 e as revisões acharam onze defeitos NELE — o
+código que está no repositório é o corrigido, e em alguns pontos ele não é mais
+o que está escrito acima. O registro completo, com o custo de cada decisão,
+ficou no ledger da execução; aqui vai o resumo do que este documento ensinaria
+errado.
+
+**Cinco defeitos de dinheiro:**
+
+1. **O valor do boleto vinha ZERO** quando a página trazia Desconto ou Multa
+   zerados antes do total — o caso normal de qualquer boleto. O vocabulário de
+   rótulo era estreito e o genérico pegava o primeiro `NN,NN` da página.
+   Medido: `ler_texto("Desconto R$ 0,00 Valor da cobranca R$ 1.234,56")`
+   devolvia `Decimal("0.00")`.
+2. **A linha digitável só reconhecia boleto bancário de 47 dígitos.** As guias
+   de FGTS e INSS — o alvo primário desta função — são ficha de arrecadação, de
+   48 dígitos começando em 8. O projeto já tinha leitor validado por dígito
+   verificador para os dois formatos em `pagamentos_dia/ocr_boleto.py`.
+3. **A varredura da linha digitável corria a página concatenada**, e o dígito
+   verificador sozinho aceita uma janela aleatória em ~0,015% das vezes: com as
+   ~200 janelas de uma página (CNPJ, CEP, telefone, datas colados), 2 a 4% de
+   chance por página de casar lixo — que numa ficha de arrecadação viraria o
+   VALOR do lançamento. A função do projeto filtra por linha física antes.
+4. **Sem número de documento, a trava dava JA_LANCADO por coincidência** de
+   valor e vencimento. Consequência pior que duplicar: a conta a pagar nunca
+   seria criada, e conta que não existe ninguém percebe. Hoje isso vira DECIDIR.
+5. **`registro.anotar` aprendeu a SUPOR o estado** a partir da ação, porque o
+   primeiro teste deste plano chamava `anotar` sem `estado`. Fabricar prova
+   contraria a regra do projeto de não dar nada por feito sem prova.
+
+**Três reinvenções piores de código que o projeto já tinha** — e a lição: antes
+de escrever regra de casamento de texto, de leitura de documento ou de
+localização de recurso, procurar no repositório quem já faz aquilo.
+
+6. o leitor de linha digitável (item 2);
+7. o casamento por palavra inteira: `sugerir_obra` casava por substring, e
+   `guias/regras.tem_palavra` existia justamente porque "lote 1" já casou com
+   "lote 10" neste projeto;
+8. a localização da URL pré-assinada do anexo: o plano escreveu uma regex que
+   só aceitava "amazonaws", e `anexar/mc_api.primeira_url_s3` — provada em
+   produção com 29 anexos — aceita "s3" também.
+
+**Um defeito de thread que nenhum teste pegaria:**
+
+9. `_sessao_do_erp` tocava os objetos do Playwright síncrono do navegador do
+   ERP a partir do executor da aba Acessórias. O `CLAUDE.md` diz que aquele
+   navegador só é tocado pelo executor do Anexar, e todas as outras cinco abas
+   passam por `anx.submeter`. Sintoma: erro de greenlet no primeiro clique. A
+   rodada agora é partida em duas fases, com a emenda pela fila da tela.
+
+**Duas omissões:**
+
+10. **A pasta nova não entrava no pacote.** `guias/` faltava na montagem do
+    `codigo.zip` do `build.yml` e em `_PASTAS` de
+    `tests/test_imports_do_motor.py` — sem isso o app não abre na máquina do
+    usuário. Os testes de empacotamento do projeto pegaram. Entrou junto o
+    `motor_minimo.txt` subindo UMA unidade (v2.0.163 → v2.0.164), que é a regra
+    para mudança de esteira.
+11. **O nome do anexo levava a barra da descrição do portal** ("HONORARIO
+    09/2026"), que em nome de objeto vira separador de caminho.
+
+E duas colunas que este plano propôs e que NÃO devem existir: `conta` no
+arquivo de regras (a conta vem da obra, decisão do dono), e obra no caminho de
+ALTERAR (o título que o ERP devolve já traz conta e obra, e elas não são
+tocadas).
