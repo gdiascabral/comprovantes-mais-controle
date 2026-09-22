@@ -478,6 +478,15 @@ class GuiasPainel(ttk.Frame):
         tocá-los de outra dá erro de greenlet. É o mesmo caminho que Aportes,
         Contratos, Conciliação e Conferência usam.
         """
+        if self.aba is not None and self.aba._parar.is_set():
+            # Quem aperta Parar na fase do portal normalmente quer o ERP
+            # LIVRE — e o ERP aceita uma sessão por usuário. `calendario.varrer`
+            # só observa o `parar` ENTRE empresas e devolve o que já baixou;
+            # sem esta guarda, essa saída antecipada ainda abriria a sessão do
+            # Mais Controle para casar o que sobrou.
+            self.aba._log("Parado a pedido: não vou abrir o Mais Controle.")
+            self._tarefa = ""
+            return
         if self.anx is None:
             self._tarefa = ""
             return

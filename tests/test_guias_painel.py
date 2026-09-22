@@ -412,3 +412,21 @@ def test_navegador_ocupado_recusa_casar_e_lancar(raiz):
 
     assert anx.submetidos == []
     assert p.ocupado() is None
+
+
+def test_parar_na_fase_do_portal_nao_abre_o_erp(raiz):
+    """I6: `calendario.varrer` só observa o `parar` ENTRE empresas e devolve
+    o que já baixou; quem apertou Parar normalmente quer o ERP LIVRE — e o
+    ERP aceita uma sessão por usuário. `casar()` não pode abrir a sessão do
+    Mais Controle nesse caso."""
+    aba, anx = _AbaFalsa(), _AnexarFalso()
+    aba._parar.set()
+    p = mod.GuiasPainel(raiz, aba=aba, anx=anx)
+    try:
+        p.casar([], 2026, 9)
+    finally:
+        p.destroy()
+
+    assert anx.submetidos == []
+    assert p.ocupado() is None
+    assert any("não vou abrir" in linha for linha in aba.linhas)
