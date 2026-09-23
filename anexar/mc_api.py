@@ -224,6 +224,19 @@ def estado_anexo(att: dict, paid_id: str) -> str:
     return COM_ANEXO if n > 0 else SEM_ANEXO
 
 
+#: O que a TELA pode ter deixado filtrado, e esta leitura precisa neutro.
+#:
+#: `_consulta_pagos` herda tudo o que não está na lista de exclusão — e a tela
+#: de Pagamentos guarda na query o filtro que alguém escolheu (é por isso que
+#: `accountIds` está lá desde o começo). Uma lista que volta CURTA por causa de
+#: um filtro esquecido na véspera não dá erro nenhum: ela volta "com sucesso".
+#: Em quem só relata, some uma linha; em quem CRIA lançamento a partir do que
+#: não encontrou, vira um segundo título para uma conta que já existe.
+FILTROS_NEUTROS = (("onlyWork", "false"), ("costCentreType", "ALL"),
+                   ("conciliationType", "ALL"), ("tradePayableType", "ALL"),
+                   ("batchOperationType", "NONE"))
+
+
 class MCApi:
     def __init__(self, cliente):
         """cliente = MCClient já aberto (não a página).
@@ -408,15 +421,21 @@ class MCApi:
         de anexos) só mudam de filtro — o resto (host, caminho e os parâmetros
         da organização) tem de ser exatamente o que o navegador mandou. Isto
         já morava copiado em dois lugares; a terceira cópia seria a primeira
-        chance de os três discordarem."""
+        chance de os três discordarem.
+
+        Todo parâmetro que o chamador manda em `filtros` ganha do que veio na
+        requisição: herdar é o padrão, mas o que ele pediu por escrito é
+        decisão dele, e sem isto o mesmo nome sairia duas vezes na query."""
         if not self._req_pagos:
             raise RuntimeError("Credenciais ainda não capturadas.")
         url_orig, headers = self._req_pagos
         partes = urlsplit(url_orig)
         base = f"{partes.scheme}://{partes.netloc}{partes.path}"
+        nossos = {k for k, _ in filtros}
         params = [(k, v) for k, v in parse_qsl(partes.query)
                   if k not in ("page", "size", "startDate", "endDate",
-                               "accountIds", "type", "dateField")]
+                               "accountIds", "type", "dateField")
+                  and k not in nossos]
         return base + "?" + urlencode(params + filtros), headers
 
     def listar_pagos(self, data_inicio: str, data_fim: str, log=print) -> list[dict]:
@@ -424,6 +443,22 @@ class MCApi:
         data_inicio / data_fim no formato 'aaaa-mm-dd'.
         Retorna a lista bruta de lançamentos (cada um com paids[]).
         SEMPRE filtra por títulos pagos (type=PAID) e data de pagamento.
+
+        NÃO manda os `FILTROS_NEUTROS`, ao contrário do `listar_a_pagar`: se a
+        tela tiver ficado com um centro de custo ou um tipo de conciliação
+        escolhido, esta lista volta curta com cara de completa. São DOIS os que
+        a leem, e o segundo não é relatório:
+
+          `anexar/conferencia.py`        conclui "tudo anexado" sobre um
+                                         período que não foi lido inteiro;
+          `anexar/anexar_comprovantes`   monta a lista do que vai ser ANEXADO,
+                                         e o que ficou de fora é comprovante
+                                         que nunca sobe, em silêncio, e que
+                                         ninguém cobra depois.
+
+        Mandá-los só ALARGA a lista — nada some —, mas alarga o que o dono vê
+        e anexa todo dia, então a decisão é dele e não minha. Enquanto não for
+        tomada, isto fica escrito aqui.
         """
         filtros = [("type", "PAID"), ("dateField", "DATE_OF_PAYMENT"),
                    ("startDate", data_inicio), ("endDate", data_fim)]
@@ -509,6 +544,14 @@ class MCApi:
 
 
     # ------------------------------------------- a pagar (aba Pagamentos do dia)
+    #: O que a TELA pode ter deixado filtrado, e esta leitura precisa neutro.
+    #:
+    #: `_consulta_pagos` herda tudo o que não está na lista de exclusão — e a tela
+    #: de Pagamentos guarda na query o filtro que alguém escolheu (é por isso que
+    #: `accountIds` está lá desde o começo). Uma lista que volta CURTA por causa de
+    #: um filtro esquecido na véspera não dá erro nenhum: ela volta "com sucesso".
+    #: Em quem só relata, some uma linha; em quem CRIA lançamento a partir do que
+    #: não encontrou, vira um segundo título para uma conta que já existe.
     def listar_a_pagar(self, data_inicio: str, data_fim: str, log=print) -> list[dict]:
         """Títulos do período pela DATA PREVISTA (dateField=PLANNED).
 
@@ -521,7 +564,8 @@ class MCApi:
         com content vazio e sem erro nenhum.
         """
         filtros = [("type", "ALL"), ("dateField", "PLANNED"),
-                   ("startDate", data_inicio), ("endDate", data_fim)]
+                   ("startDate", data_inicio), ("endDate", data_fim),
+                   *FILTROS_NEUTROS]
 
         todos, pagina = [], 0
         while True:

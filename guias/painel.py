@@ -122,7 +122,7 @@ def _sessao_do_erp(painel):
     pagina.goto(anx_config.MC_URL_PAGAMENTOS, wait_until="domcontentloaded")
 
     # O `api` sai junto: é ele que lê a lista de parcelas, a partir da URL
-    # que a própria tela capturou (ver `_parcelas_do_mes`).
+    # que a própria tela capturou (ver `_parcelas_da_janela`).
     return transporte, catalogos, transporte.cabecalho("user-id") or "", api
 
 
@@ -594,7 +594,7 @@ class GuiasPainel(ttk.Frame):
         """Roda na thread do NAVEGADOR (executor do Anexar). Nada de Tcl."""
         try:
             transporte, catalogos, _uid, api = _sessao_do_erp(self)
-            parcelas = self._parcelas_do_mes(api, ano, mes)
+            parcelas = self._parcelas_da_janela(api, ano, mes)
             obras = list(getattr(catalogos, "obras", {}).values())
             regras_ = regras.Regras.carregar()
             registro_ = registro.Registro.carregar()
@@ -611,8 +611,8 @@ class GuiasPainel(ttk.Frame):
         finally:
             self._tarefa = ""
 
-    def _parcelas_do_mes(self, api, ano: int, mes: int) -> list[dict]:
-        """As parcelas do mês, pelo leitor que o app já tem.
+    def _parcelas_da_janela(self, api, ano: int, mes: int) -> list[dict]:
+        """As parcelas do mês E DO MÊS SEGUINTE, pelo leitor que o app já tem.
 
         Quem monta a URL é `anexar/mc_api`, a partir da requisição que a
         PRÓPRIA TELA fez — host, caminho e os parâmetros da organização vêm de
@@ -626,21 +626,28 @@ class GuiasPainel(ttk.Frame):
         do ERP, porque a página embrulha o `fetch`. Os catálogos, que passam
         pelo caminho certo, carregavam normalmente na mesma rodada.
 
-        `listar_a_pagar` usa `type=ALL` e `dateField=PLANNED`, que é o que o
-        casamento precisa: o mês inteiro pela data prevista, pagos e a pagar
-        juntos, com o app separando pelo campo `paid`.
+        `listar_a_pagar` usa `type=ALL` e `dateField=PLANNED`: pela data
+        prevista, pagos e a pagar juntos.
+
+        DOIS MESES, e não um. Guia de competência 09 vence em outubro com
+        frequência (FGTS, ISS, contribuição), e o título dela no ERP está com
+        a data prevista de outubro. Lendo só setembro, esse título não aparece
+        — e título que não aparece vira um SEGUNDO título. O preço é uma
+        página a mais de leitura; `parcela_da_recorrencia` recebe o vencimento
+        da guia para não alterar a parcela do mês errado.
         """
-        ultimo = calendar.monthrange(ano, mes)[1]
+        fim_ano, fim_mes = (ano + 1, 1) if mes == 12 else (ano, mes + 1)
+        ultimo = calendar.monthrange(fim_ano, fim_mes)[1]
         return _com_contexto(
             api.listar_a_pagar,
             f"{ano:04d}-{mes:02d}-01",
-            f"{ano:04d}-{mes:02d}-{ultimo:02d}",
+            f"{fim_ano:04d}-{fim_mes:02d}-{ultimo:02d}",
             self.aba._log if self.aba is not None else (lambda _m: None))
 
     def _t_lancar(self, decisoes, ano: int, mes: int):
         try:
             transporte, catalogos, id_usuario, api = _sessao_do_erp(self)
-            parcelas = self._parcelas_do_mes(api, ano, mes)
+            parcelas = self._parcelas_da_janela(api, ano, mes)
             self._gravar(decisoes, transporte=transporte, catalogos=catalogos,
                          id_usuario=id_usuario,
                          registro=registro.Registro.carregar(),
@@ -683,8 +690,8 @@ class GuiasPainel(ttk.Frame):
                                    str(feito.get("estado") or "") + ")"))))
                     continue
                 if decisao.acao == CRIAR:
-                    igual = casamento.titulo_igual(parcelas, guia.documento,
-                                                   guia.valor, guia.vencimento)
+                    igual = casamento.titulo_igual(parcelas,
+                                                   guia.documento)
                     if igual is not None and str(guia.documento or "").strip():
                         if self.aba is not None:
                             self.aba.q.put(("guia_feita", (decisao, Resultado(
