@@ -333,16 +333,38 @@ ROTAS_DOCUMENTO = ("/api/comprovantes/pagamentos",
 #: Os parâmetros que o robô preenche; o resto da URL é o endereço.
 _FILTROS_DA_LISTA = ("tipoPagamento", "dataInicio", "dataFim")
 
+#: Paginação e filtro nunca são endereço: aprendê-los junto faria a próxima
+#: conta cair numa página ou situação que não é a dela. Comparação sem caixa;
+#: nomes que COMEÇAM com `tipo`/`situacao` também caem aqui (ex.: `tipoConta`).
+_PARAMS_DESCARTADOS = {"page", "size", "limit", "offset", "pagina", "tamanho",
+                       "situacao", "tipo"}
+
+#: 5+ dígitos seguidos no caminho ou num valor é conta, CPF/CNPJ ou id — dado
+#: da PESSOA, nunca do endereço. Aprender isso arrisca chamar outra conta com
+#: a sessão de quem estiver logado depois.
+_RE_DIGITOS_PERIGOSOS = re.compile(r"\d{5,}")
+
 #: Status que querem dizer "este endereço não serve" — e não "o servidor
 #: entendeu e recusou". 400 com texto fica de fora de propósito: é a resposta
 #: de um endereço CERTO (período inválido, conta parada), e trocar de rota
 #: por ele esconderia o motivo verdadeiro.
+#:
+#: **Limite conhecido (F9), decisão e não descuido**: para a busca da LISTA,
+#: um 400 cujo texto não está em `DIZERES_DE_VAZIO` continua sendo tratado
+#: como "endereço certo, motivo de verdade" — nunca como "este endereço não
+#: serve". Se o banco um dia trocar o endereço VELHO da lista por um que
+#: responda 400 (em vez de 404/500) com um texto novo, este código não se
+#: corrige sozinho: ele aparece como falha carregando o texto do banco, não
+#: como "a tela mudou". Quem revisar essa falha deve olhar aqui antes de
+#: supor bug novo.
 _ROTA_NAO_SERVE = (404, 405, 410, 500, 501, 502, 503)
 
 
 def rota_da_url(url: str) -> str:
     """`https://ib.sicoob.com.br/sicoobnet/api/x?a=1&dataInicio=..` ->
-    `/api/x?a=1`. "" quando a URL não é da API do internet banking.
+    `/api/x?a=1`. "" quando a URL não é da API do internet banking, ou
+    quando o caminho ou algum parâmetro que sobrar carrega 5+ dígitos
+    seguidos — conta, CPF/CNPJ ou id não são endereço (F2).
 
     Só se aprende endereço do próprio Sicoob e dentro de `/api/`: o que for
     parar no arquivo de rotas é chamado com a sessão do banco."""
@@ -356,8 +378,19 @@ def rota_da_url(url: str) -> str:
         caminho = caminho[len("/sicoobnet"):]
     if not caminho.startswith("/api/"):
         return ""
-    resto = [(k, v) for k, v in parse_qsl(partes.query, keep_blank_values=True)
-             if k not in _FILTROS_DA_LISTA]
+    if _RE_DIGITOS_PERIGOSOS.search(caminho):
+        return ""
+    resto = []
+    for k, v in parse_qsl(partes.query, keep_blank_values=True):
+        if k in _FILTROS_DA_LISTA:
+            continue
+        kl = k.lower()
+        if kl in _PARAMS_DESCARTADOS or kl.startswith("tipo") \
+                or kl.startswith("situacao"):
+            continue
+        if _RE_DIGITOS_PERIGOSOS.search(v):
+            return ""
+        resto.append((k, v))
     return caminho + (f"?{urlencode(resto, safe='/')}" if resto else "")
 
 
@@ -428,9 +461,21 @@ def _escutar(page, acao, reconhecer, tempo: float = 12.0) -> str:
     `reconhecer` aceitar. "" quando nada aparece no tempo.
 
     As respostas são guardadas pelo ouvinte e examinadas FORA dele: ler o
-    corpo dentro do callback do Playwright síncrono trava o despacho."""
+    corpo dentro do callback do Playwright síncrono trava o despacho.
+
+    **O ouvinte tem de ser uma função Python, nunca um método embutido.** O
+    Playwright sync faz `setattr(handler, "_pw_impl_instance_", ...)` no que
+    recebe — `vistas.append` é `list.append`, um `builtin_function_or_method`
+    que recusa `setattr` com `AttributeError`, e a descoberta de rota sempre
+    devolvia "" (provado ao vivo em 25/09/2026). `guardar` é uma função
+    interna comum, que aceita o atributo, e é o MESMO objeto passado ao `on`
+    que precisa ir para o `remove_listener` — não outro `lambda`."""
     vistas = []
-    page.on("response", vistas.append)
+
+    def guardar(resposta):
+        vistas.append(resposta)
+
+    page.on("response", guardar)
     try:
         acao()
         examinadas = 0
@@ -447,7 +492,7 @@ def _escutar(page, acao, reconhecer, tempo: float = 12.0) -> str:
         return ""
     finally:
         try:
-            page.remove_listener("response", vistas.append)
+            page.remove_listener("response", guardar)
         except Exception:                                    # noqa: BLE001
             pass
 
@@ -461,15 +506,24 @@ def _clicar_consultar(page) -> None:
 
 
 def _e_resposta_da_lista(resposta) -> bool:
+    """`all([])` é True — uma lista vazia não pode servir de prova de que o
+    endereço é o certo (F3): exige pelo menos um item reconhecível.
+
+    O 400 de "conta parada" só vale como prova quando o CAMINHO fala de
+    comprovante: um 400 de outro endpoint que por acaso caia no `dataInicio=`
+    não é a mesma coisa (F3)."""
     pedido = resposta.request
     if pedido.method != "GET" or "/api/" not in resposta.url \
             or "dataInicio=" not in resposta.url:
         return False
     if resposta.status == 400:
+        if "comprovante" not in resposta.url.lower():
+            return False
         return e_conta_sem_movimento({"status": 400, "corpo": resposta.text()})
     dado = resposta.json()
-    return isinstance(dado, list) and all(
-        isinstance(i, dict) and "idAgendamento" in i for i in dado[:3])
+    return isinstance(dado, list) and bool(dado) and all(
+        isinstance(i, dict) and "idAgendamento" in i and "situacao" in i
+        for i in dado[:3])
 
 
 def _descobrir_rota_da_lista(page) -> str:
@@ -499,13 +553,19 @@ def _descobrir_rota_do_documento(page, item: dict) -> str:
 
     Precisa da tabela montada, por isso consulta antes. O "Emitir" mora num
     menu que só abre no ⋮ da linha; o `click()` do DOM alcança o link mesmo
-    fechado. Depois fecha a gaveta do comprovante com Esc."""
+    fechado. Depois fecha a gaveta do comprovante com Esc.
+
+    **Desliga `window.print` antes do clique** (F6): ao vivo o Emitir abriu
+    só uma gaveta, sem imprimir, mas o diálogo de impressão do Chrome é
+    modal e travaria o lote inteiro se algum dia disparasse — defesa
+    barata, sem depender de nunca acontecer."""
     ident = str(item.get("idAgendamento") or "")
     try:
         ir_para_comprovantes(page)
         _clicar_consultar(page)
         linha = page.locator("tr").filter(has_text=ident).first
         linha.wait_for(timeout=10000)
+        page.evaluate("() => { window.print = () => {}; }")
         emitir = linha.locator("#btnEmitir")
         if not emitir.count():
             emitir = linha.get_by_text(re.compile(r"^\s*Emitir\s*$", re.I))
@@ -562,7 +622,8 @@ def listar(page, inicio: str, fim: str, tipo: str = TIPO_TODOS,
         dado = resposta.get("dado")
         return dado if isinstance(dado, list) else []
 
-    for rota in rotas.candidatas("lista"):
+    ja_tentadas = rotas.candidatas("lista")
+    for rota in ja_tentadas:
         resposta = pedir(rota)
         if not _nao_serve(resposta):
             return aceitar(rota, resposta)
@@ -572,6 +633,15 @@ def listar(page, inicio: str, fim: str, tipo: str = TIPO_TODOS,
         resposta = pedir(nova)
         if not _nao_serve(resposta):
             return aceitar(nova, resposta)
+        if nova in ja_tentadas:
+            # A própria tela apontou um endereço que JÁ tinha sido tentado
+            # nesta chamada e continuou sem servir (F8): não é a tela que
+            # mudou, é instabilidade do endereço certo — dizer "mudou" aqui
+            # mandaria procurar defeito onde não há.
+            raise SicoobFalhou(
+                "o Sicoob respondeu erro na consulta de comprovantes (a tela "
+                "não mudou: o endereço é o mesmo) — tente de novo mais tarde "
+                "— tentei " + "; ".join(tentadas))
     raise SicoobFalhou(
         "a tela de Comprovantes do Sicoob mudou e não consegui aprender o "
         "endereço novo sozinho — tentei " + "; ".join(tentadas))
@@ -579,24 +649,28 @@ def listar(page, inicio: str, fim: str, tipo: str = TIPO_TODOS,
 
 def _conteudo(resposta: dict):
     """O comprovante de uma resposta boa: `str` (HTML) ou `bytes` (PDF).
-    None quando a resposta não traz documento."""
+    None quando a resposta não traz documento; "" quando o que veio não é
+    documento nenhum — nunca vira PDF de lixo (F4).
+
+    Ramo sem base64: só serve texto com `<` (HTML de verdade). Ramo com
+    base64 (campo novo de 25/09/2026, ainda não visto em `true`): só
+    decodifica quando o texto, sem espaços, começa com `JVBER` — o prefixo
+    base64 de `%PDF` —, e só aceita o resultado se de fato começar com
+    `%PDF`; qualquer outra coisa é "" antes de chegar perto do disco."""
     dado = resposta.get("dado") or []
     if not (isinstance(dado, list) and dado and isinstance(dado[0], dict)):
         return None
     bruto = dado[0].get("comprovante") or ""
     if not dado[0].get("comprovanteBase64"):
-        return bruto
-    # O campo novo de 25/09/2026. Ainda não se viu um `true`: o que vier é
-    # aceito se for PDF (vai direto para o disco) ou HTML (vai para a
-    # impressão, como sempre); qualquer outra coisa não vira arquivo.
+        return bruto if "<" in bruto else ""
+    sem_espacos = re.sub(r"\s+", "", bruto)
+    if not sem_espacos.startswith("JVBER"):
+        return ""
     try:
-        decodificado = base64.b64decode(bruto)
+        decodificado = base64.b64decode(sem_espacos)
     except ValueError:
         return ""
-    if decodificado.startswith(b"%PDF"):
-        return decodificado
-    texto = decodificado.decode("utf-8", "replace")
-    return texto if "<" in texto else ""
+    return decodificado if decodificado.startswith(b"%PDF") else ""
 
 
 def detalhar(page, itens: list, rotas: "Rotas | None" = None) -> list:
@@ -619,11 +693,16 @@ def detalhar(page, itens: list, rotas: "Rotas | None" = None) -> list:
         conteudo = None
         for rota in rotas.candidatas("documento"):
             resposta = page.evaluate(_JS_API, [f"{BASE}{rota}", "POST", [item]])
-            if _nao_serve(resposta):
+            if resposta.get("erro"):
+                # Erro em QUALQUER status (400 incluso) não é prova de nada
+                # — só o conteúdo é. Aprender a rota que respondeu erro foi o
+                # defeito de F5: a próxima conta herdaria o endereço ruim.
                 continue
-            conteudo = _conteudo(resposta) if not resposta.get("erro") else ""
-            if conteudo is not None:
-                rotas.aprender("documento", rota)
+            candidato = _conteudo(resposta)
+            if not candidato:
+                continue
+            conteudo = candidato
+            rotas.aprender("documento", rota)
             break
         if conteudo is None and not aprendeu_pela_tela:
             aprendeu_pela_tela = True
@@ -631,8 +710,9 @@ def detalhar(page, itens: list, rotas: "Rotas | None" = None) -> list:
             if nova:
                 resposta = page.evaluate(_JS_API, [f"{BASE}{nova}", "POST", [item]])
                 if not resposta.get("erro"):
-                    conteudo = _conteudo(resposta)
-                    if conteudo is not None:
+                    candidato = _conteudo(resposta)
+                    if candidato:
+                        conteudo = candidato
                         rotas.aprender("documento", nova)
         saida.append((item, conteudo or ""))
     return saida
@@ -1216,7 +1296,12 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
         # conta, só que DEPOIS do Pix.
         falha_dos_comuns = ""
         try:
-            itens = so_efetivados(sem_pix(listar(cli.page, inicio, fim)))
+            brutos = listar(cli.page, inicio, fim)
+            sem_pix_itens = sem_pix(brutos)
+            n_pix_tirados = len(brutos) - len(sem_pix_itens)
+            if n_pix_tirados:
+                log(f"    {n_pix_tirados} Pix ficam para o Extrato Pix")
+            itens = so_efetivados(sem_pix_itens)
             no_periodo = [i for i in itens if dentro_do_periodo(i, inicio, fim)]
             resultado.no_periodo = len(no_periodo)
             log(f"  {numero}: {len(itens)} efetivados · {len(no_periodo)} no período")
