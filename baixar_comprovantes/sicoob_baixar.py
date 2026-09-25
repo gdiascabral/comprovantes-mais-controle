@@ -290,7 +290,7 @@ def conta_aberta(page) -> str:
 
 
 def mesma_conta(pedida: str, na_tela: str) -> bool:
-    """`50.019-4` e `500194` são a mesma conta; só os dígitos importam."""
+    """`50.019-4` e `123450` são a mesma conta; só os dígitos importam."""
     so = lambda t: re.sub(r"\D", "", t or "")                # noqa: E731
     return bool(so(pedida)) and so(pedida) == so(na_tela)
 

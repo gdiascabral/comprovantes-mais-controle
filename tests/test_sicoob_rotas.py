@@ -29,7 +29,7 @@ DOC_ANTIGO = "/api/comprovantes/detalhar"
 ERRO_500 = {"status": 500, "erro": "HTTP 500",
             "corpo": '{"mensagem":"Ocorreu um erro ao executar a operação."}'}
 
-TITULO = {"idAgendamento": "15220432", "valorLancamento": "99.99",
+TITULO = {"idAgendamento": "10000001", "valorLancamento": "99.99",
           "situacao": "EFETIVADO", "dataLancamento": "2026-09-25 00:00:00.0",
           "tipoAgendamento": "TÍTULO", "tipoComprovante": 2}
 
@@ -147,13 +147,13 @@ def test_arquivo_de_rotas_ilegivel_volta_as_conhecidas(tmp_path):
 def test_os_pix_saem_da_lista_dos_comprovantes_comuns():
     """Regra do dono: Pix só pela tela de Extrato Pix. A lista nova passou a
     trazer os Pix também, e baixá-los aqui duplicaria cada um."""
-    pix_chave = {"idAgendamento": "E04388688202609251609WSSgoRVzI6h",
+    pix_chave = {"idAgendamento": "E00000000202609010000AAAAAAAAAAA",
                  "tipoAgendamento": "Pix via chave", "tipoOperacaoPix": "Pagamento",
                  "situacao": "EFETIVADO"}
-    pix_qr = {"idAgendamento": "E04388688202609251608F4TraaNfSfe",
+    pix_qr = {"idAgendamento": "E00000000202609010000AAAAAAAAAAB",
               "tipoAgendamento": "Pix copia e cola", "tipoOperacaoPix": "Pagamento",
               "situacao": "EFETIVADO"}
-    transf = {"idAgendamento": "15199242", "situacao": "EFETIVADO",
+    transf = {"idAgendamento": "10000002", "situacao": "EFETIVADO",
               "tipoAgendamento": "TRANSF.CTA.CORRENTE X CTA.CORRENTE"}
     assert sb.sem_pix([pix_chave, TITULO, pix_qr, transf]) == [TITULO, transf]
 
@@ -279,13 +279,13 @@ def test_escutar_sobrevive_ao_setattr_do_playwright_sync():
 
 def test_rota_da_url_nao_aprende_parametro_de_conta():
     url = ("https://ib.sicoob.com.br/sicoobnet/api/comprovantes/pagamentos?"
-          "isNovaEmissao=true&numeroContaCorrente=500194&dataInicio=01/09/2026")
+          "isNovaEmissao=true&numeroContaCorrente=123450&dataInicio=01/09/2026")
     assert sb.rota_da_url(url) == ""
 
 
 def test_rota_da_url_nao_aprende_caminho_com_conta():
     assert sb.rota_da_url(
-        "https://ib.sicoob.com.br/sicoobnet/api/contas/500194/comprovantes") == ""
+        "https://ib.sicoob.com.br/sicoobnet/api/contas/123450/comprovantes") == ""
 
 
 def test_rota_da_url_descarta_paginacao_e_filtro():
