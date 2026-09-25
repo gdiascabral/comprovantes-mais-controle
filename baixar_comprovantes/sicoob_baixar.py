@@ -5,14 +5,20 @@
 contas seriam 18 QR. Aqui um login enxerga as 18, e é por isso que o Sicoob vem
 primeiro na fila da aba: um acesso resolve o que no Inter custaria dezoito.
 
-O que a tela faz, e que aqui se faz direto:
+O que a tela faz, e que aqui se faz direto (endereços de 25/09/2026):
 
-    GET  /api/comprovantes/consultar?tipoPagamento=&dataInicio=&dataFim=
+    GET  /api/comprovantes/pagamentos?isNovaEmissao=true&tipoPagamento=
+         &dataInicio=&dataFim=
          devolve a lista, com data, valor, situação e o código de barras
-    POST /api/comprovantes/detalhar   [os itens]
+    POST /api/comprovantes/pagamentos   [os itens]
          devolve o comprovante em HTML — um por item
 
-**O PDF não existe do lado do banco.** O `detalhar` entrega HTML, e a tela o
+Até 24/09/2026 eram `consultar` e `detalhar`. O Sicoob troca esses endereços
+sem aviso, e por isso eles não são constantes: ver `Rotas` e o bloco "os
+endereços que a tela usa" — o robô tenta os conhecidos e, sem nenhum, aprende
+o novo pela própria tela e o guarda para a rodada seguinte.
+
+**O PDF não existe do lado do banco.** O documento vem em HTML, e a tela o
 imprime. Isso cai na armadilha que o `extratos_sicoob/sicoob_client.py` já
 documenta e já resolveu: o botão de imprimir chama `window.print()`, que abre o
 diálogo modal do Windows e trava o lote inteiro. A saída, copiada de lá, é
@@ -59,6 +65,7 @@ from __future__ import annotations
 
 import base64
 import html
+import json
 import re
 import tempfile
 import unicodedata
@@ -185,7 +192,10 @@ def nome_do_comprovante(item: dict, conta: str = "") -> str:
 #: falha, e a mensagem mostra o que veio.
 DIZERES_DE_VAZIO = ("nenhum registro", "nao foram encontrados",
                     "não foram encontrados", "nenhum comprovante",
-                    "sem registros", "não encontrado", "nao encontrado")
+                    "sem registros", "não encontrado", "nao encontrado",
+                    # o endereço novo (25/09/2026): "Não existem comprovantes
+                    # para essa conta corrente no período informado"
+                    "não existem comprovantes", "nao existem comprovantes")
 
 
 def e_conta_sem_movimento(resposta: dict) -> bool:
@@ -198,6 +208,19 @@ def e_conta_sem_movimento(resposta: dict) -> bool:
         return False
     dito = (resposta.get("corpo") or "").lower()
     return any(marca in dito for marca in DIZERES_DE_VAZIO)
+
+
+def sem_pix(itens) -> list:
+    """Tira os Pix da lista de Comprovantes.
+
+    Regra do dono: Pix sai SÓ da tela de Extrato Pix; os demais, da Emissão
+    de comprovantes. Desde 25/09/2026 a lista da Emissão também traz os Pix
+    ("Pix via chave", "Pix copia e cola", com `tipoOperacaoPix`), e baixá-los
+    aqui daria dois arquivos para cada Pix."""
+    return [i for i in itens
+            if not i.get("tipoOperacaoPix")
+            and not (i.get("tipoAgendamento") or "").strip().lower()
+            .startswith("pix")]
 
 
 def so_efetivados(itens) -> list:
@@ -267,7 +290,7 @@ def conta_aberta(page) -> str:
 
 
 def mesma_conta(pedida: str, na_tela: str) -> bool:
-    """`50.019-4` e `500194` são a mesma conta; só os dígitos importam."""
+    """`50.019-4` e `123450` são a mesma conta; só os dígitos importam."""
     so = lambda t: re.sub(r"\D", "", t or "")                # noqa: E731
     return bool(so(pedida)) and so(pedida) == so(na_tela)
 
@@ -286,7 +309,284 @@ def ir_para_comprovantes(page) -> None:
     page.evaluate(JS_IR_PARA, ["#/comprovantes"])
     page.wait_for_timeout(3000)
 
-def listar(page, inicio: str, fim: str, tipo: str = TIPO_TODOS) -> list:
+# ------------------------------------------- os endereços que a tela usa
+# O Sicoob troca os endereços da tela de Comprovantes sem aviso. Em 25/09/2026
+# a lista saiu de `consultar` para `pagamentos?isNovaEmissao=true` e o
+# documento de `POST detalhar` para `POST pagamentos`; os antigos passaram a
+# responder 500 e a rodada inteira parou — nem o Pix, que não tinha mudado,
+# chegou a ser tentado. Nenhum código trazia o endereço novo.
+#
+# Por isso o endereço não é uma constante só: é uma FILA de tentativa. Primeiro
+# o que a última rodada aprendeu, depois os conhecidos. Se nenhum responde, o
+# robô faz o que a pessoa faria — clica Consultar (e Emitir) na própria tela —,
+# lê qual endereço a tela chamou, e guarda para as próximas rodadas
+# (`sicoob_rotas.json`, ao lado do app). A troca seguinte do banco se corrige
+# sozinha enquanto os botões da tela continuarem sendo Consultar e Emitir.
+
+#: A lista, do mais novo ao mais velho. O período e o tipo são acrescentados.
+ROTAS_LISTA = ("/api/comprovantes/pagamentos?isNovaEmissao=true",
+               "/api/comprovantes/consultar")
+#: O documento de UM item (POST com a lista de um item).
+ROTAS_DOCUMENTO = ("/api/comprovantes/pagamentos",
+                   "/api/comprovantes/detalhar")
+
+#: Os parâmetros que o robô preenche; o resto da URL é o endereço.
+_FILTROS_DA_LISTA = ("tipoPagamento", "dataInicio", "dataFim")
+
+#: Paginação e filtro nunca são endereço: aprendê-los junto faria a próxima
+#: conta cair numa página ou situação que não é a dela. Comparação sem caixa;
+#: nomes que COMEÇAM com `tipo`/`situacao` também caem aqui (ex.: `tipoConta`).
+_PARAMS_DESCARTADOS = {"page", "size", "limit", "offset", "pagina", "tamanho",
+                       "situacao", "tipo"}
+
+#: 5+ dígitos seguidos no caminho ou num valor é conta, CPF/CNPJ ou id — dado
+#: da PESSOA, nunca do endereço. Aprender isso arrisca chamar outra conta com
+#: a sessão de quem estiver logado depois.
+_RE_DIGITOS_PERIGOSOS = re.compile(r"\d{5,}")
+
+#: Status que querem dizer "este endereço não serve" — e não "o servidor
+#: entendeu e recusou". 400 com texto fica de fora de propósito: é a resposta
+#: de um endereço CERTO (período inválido, conta parada), e trocar de rota
+#: por ele esconderia o motivo verdadeiro.
+#:
+#: **Limite conhecido (F9), decisão e não descuido**: para a busca da LISTA,
+#: um 400 cujo texto não está em `DIZERES_DE_VAZIO` continua sendo tratado
+#: como "endereço certo, motivo de verdade" — nunca como "este endereço não
+#: serve". Se o banco um dia trocar o endereço VELHO da lista por um que
+#: responda 400 (em vez de 404/500) com um texto novo, este código não se
+#: corrige sozinho: ele aparece como falha carregando o texto do banco, não
+#: como "a tela mudou". Quem revisar essa falha deve olhar aqui antes de
+#: supor bug novo.
+_ROTA_NAO_SERVE = (404, 405, 410, 500, 501, 502, 503)
+
+
+def rota_da_url(url: str) -> str:
+    """`https://ib.sicoob.com.br/sicoobnet/api/x?a=1&dataInicio=..` ->
+    `/api/x?a=1`. "" quando a URL não é da API do internet banking, ou
+    quando o caminho ou algum parâmetro que sobrar carrega 5+ dígitos
+    seguidos — conta, CPF/CNPJ ou id não são endereço (F2).
+
+    Só se aprende endereço do próprio Sicoob e dentro de `/api/`: o que for
+    parar no arquivo de rotas é chamado com a sessão do banco."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit
+
+    partes = urlsplit(url or "")
+    if partes.scheme != "https" or partes.netloc != "ib.sicoob.com.br":
+        return ""
+    caminho = partes.path
+    if caminho.startswith("/sicoobnet"):
+        caminho = caminho[len("/sicoobnet"):]
+    if not caminho.startswith("/api/"):
+        return ""
+    if _RE_DIGITOS_PERIGOSOS.search(caminho):
+        return ""
+    resto = []
+    for k, v in parse_qsl(partes.query, keep_blank_values=True):
+        if k in _FILTROS_DA_LISTA:
+            continue
+        kl = k.lower()
+        if kl in _PARAMS_DESCARTADOS or kl.startswith("tipo") \
+                or kl.startswith("situacao"):
+            continue
+        if _RE_DIGITOS_PERIGOSOS.search(v):
+            return ""
+        resto.append((k, v))
+    return caminho + (f"?{urlencode(resto, safe='/')}" if resto else "")
+
+
+class Rotas:
+    """Os endereços a tentar, com o aprendido na frente. Nunca levanta.
+
+    O arquivo é só memória entre rodadas: ilegível, ou com algo que não é
+    endereço do Sicoob, vale como se não existisse — as conhecidas continuam
+    na fila. `caminho=None` não grava nada."""
+
+    CONHECIDAS = {"lista": "ROTAS_LISTA", "documento": "ROTAS_DOCUMENTO"}
+
+    def __init__(self, caminho=None):
+        self.caminho = Path(caminho) if caminho else None
+        self._aprendidas = self._ler()
+
+    def _ler(self) -> dict:
+        if not self.caminho:
+            return {}
+        try:
+            dados = json.loads(self.caminho.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(dados, dict):
+            return {}
+        return {tipo: rota for tipo, rota in dados.items()
+                if tipo in self.CONHECIDAS and isinstance(rota, str)
+                and rota.startswith("/api/")}
+
+    def candidatas(self, tipo: str) -> list:
+        conhecidas = list(globals()[self.CONHECIDAS[tipo]])
+        primeira = self._aprendidas.get(tipo)
+        fila = ([primeira] if primeira else []) + conhecidas
+        return list(dict.fromkeys(fila))
+
+    def aprender(self, tipo: str, rota: str) -> None:
+        if not rota.startswith("/api/") or self._aprendidas.get(tipo) == rota:
+            return
+        self._aprendidas[tipo] = rota
+        if not self.caminho:
+            return
+        try:
+            self.caminho.write_text(json.dumps(self._aprendidas, indent=1),
+                                    encoding="utf-8")
+        except OSError:
+            log.warning("guardando o endereço aprendido do Sicoob",
+                        exc_info=True)
+
+
+_ROTAS_DA_RODADA = None
+
+
+def rotas_do_app() -> Rotas:
+    """As rotas guardadas ao lado do app, uma instância por processo."""
+    global _ROTAS_DA_RODADA
+    if _ROTAS_DA_RODADA is None:
+        _ROTAS_DA_RODADA = Rotas(Path(util.pasta_base()) / "sicoob_rotas.json")
+    return _ROTAS_DA_RODADA
+
+
+def _nao_serve(resposta: dict) -> bool:
+    return bool(resposta.get("erro")) and \
+        int(resposta.get("status") or 0) in _ROTA_NAO_SERVE
+
+
+def _escutar(page, acao, reconhecer, tempo: float = 12.0) -> str:
+    """Faz `acao()` na tela e devolve a URL da primeira resposta que
+    `reconhecer` aceitar. "" quando nada aparece no tempo.
+
+    As respostas são guardadas pelo ouvinte e examinadas FORA dele: ler o
+    corpo dentro do callback do Playwright síncrono trava o despacho.
+
+    **O ouvinte tem de ser uma função Python, nunca um método embutido.** O
+    Playwright sync faz `setattr(handler, "_pw_impl_instance_", ...)` no que
+    recebe — `vistas.append` é `list.append`, um `builtin_function_or_method`
+    que recusa `setattr` com `AttributeError`, e a descoberta de rota sempre
+    devolvia "" (provado ao vivo em 25/09/2026). `guardar` é uma função
+    interna comum, que aceita o atributo, e é o MESMO objeto passado ao `on`
+    que precisa ir para o `remove_listener` — não outro `lambda`."""
+    vistas = []
+
+    def guardar(resposta):
+        vistas.append(resposta)
+
+    page.on("response", guardar)
+    try:
+        acao()
+        examinadas = 0
+        for _ in range(int(tempo * 4)):
+            while examinadas < len(vistas):
+                resposta = vistas[examinadas]
+                examinadas += 1
+                try:
+                    if reconhecer(resposta):
+                        return resposta.url
+                except Exception:                            # noqa: BLE001
+                    continue
+            page.wait_for_timeout(250)
+        return ""
+    finally:
+        try:
+            page.remove_listener("response", guardar)
+        except Exception:                                    # noqa: BLE001
+            pass
+
+
+def _clicar_consultar(page) -> None:
+    botao = page.locator('button[data-content-label="Consultar"]')
+    if not botao.count():
+        botao = page.get_by_role("button",
+                                 name=re.compile(r"^\s*Consultar\s*$", re.I))
+    botao.first.click(timeout=5000)
+
+
+def _e_resposta_da_lista(resposta) -> bool:
+    """`all([])` é True — uma lista vazia não pode servir de prova de que o
+    endereço é o certo (F3): exige pelo menos um item reconhecível.
+
+    O 400 de "conta parada" só vale como prova quando o CAMINHO fala de
+    comprovante: um 400 de outro endpoint que por acaso caia no `dataInicio=`
+    não é a mesma coisa (F3)."""
+    pedido = resposta.request
+    if pedido.method != "GET" or "/api/" not in resposta.url \
+            or "dataInicio=" not in resposta.url:
+        return False
+    if resposta.status == 400:
+        if "comprovante" not in resposta.url.lower():
+            return False
+        return e_conta_sem_movimento({"status": 400, "corpo": resposta.text()})
+    dado = resposta.json()
+    return isinstance(dado, list) and bool(dado) and all(
+        isinstance(i, dict) and "idAgendamento" in i and "situacao" in i
+        for i in dado[:3])
+
+
+def _descobrir_rota_da_lista(page) -> str:
+    """Clica Consultar na tela de Comprovantes e lê o endereço que ela usou.
+    "" quando não dá — nunca levanta."""
+    try:
+        ir_para_comprovantes(page)
+        return rota_da_url(_escutar(page, lambda: _clicar_consultar(page),
+                                    _e_resposta_da_lista))
+    except Exception:                                        # noqa: BLE001
+        log.warning("aprendendo o endereço da lista de Comprovantes pela tela",
+                    exc_info=True)
+        return ""
+
+
+def _e_resposta_do_documento(resposta) -> bool:
+    if resposta.request.method != "POST" or "/api/" not in resposta.url \
+            or resposta.status != 200:
+        return False
+    dado = resposta.json()
+    return isinstance(dado, list) and bool(dado) \
+        and isinstance(dado[0], dict) and "comprovante" in dado[0]
+
+
+def _descobrir_rota_do_documento(page, item: dict) -> str:
+    """Clica Emitir na linha do item e lê o endereço que a tela usou.
+
+    Precisa da tabela montada, por isso consulta antes. O "Emitir" mora num
+    menu que só abre no ⋮ da linha; o `click()` do DOM alcança o link mesmo
+    fechado. Depois fecha a gaveta do comprovante com Esc.
+
+    **Desliga `window.print` antes do clique** (F6): ao vivo o Emitir abriu
+    só uma gaveta, sem imprimir, mas o diálogo de impressão do Chrome é
+    modal e travaria o lote inteiro se algum dia disparasse — defesa
+    barata, sem depender de nunca acontecer."""
+    ident = str(item.get("idAgendamento") or "")
+    try:
+        ir_para_comprovantes(page)
+        _clicar_consultar(page)
+        linha = page.locator("tr").filter(has_text=ident).first
+        linha.wait_for(timeout=10000)
+        page.evaluate("() => { window.print = () => {}; }")
+        emitir = linha.locator("#btnEmitir")
+        if not emitir.count():
+            emitir = linha.get_by_text(re.compile(r"^\s*Emitir\s*$", re.I))
+        url = _escutar(page, lambda: emitir.first.evaluate("el => el.click()"),
+                       _e_resposta_do_documento)
+        page.keyboard.press("Escape")
+        return rota_da_url(url)
+    except Exception:                                        # noqa: BLE001
+        log.warning("aprendendo o endereço do comprovante pela tela",
+                    exc_info=True)
+        return ""
+
+
+def _url_da_lista(rota: str, tipo: str, inicio: str, fim: str) -> str:
+    junta = "&" if "?" in rota else "?"
+    return (f"{BASE}{rota}{junta}tipoPagamento={tipo}"
+            f"&dataInicio={inicio}&dataFim={fim}")
+
+
+def listar(page, inicio: str, fim: str, tipo: str = TIPO_TODOS,
+           rotas: "Rotas | None" = None) -> list:
     """Os comprovantes da conta ABERTA no período.
 
     Devolve lista vazia quando a conta não tem nada — inclusive quando o
@@ -296,41 +596,125 @@ def listar(page, inicio: str, fim: str, tipo: str = TIPO_TODOS) -> list:
 
     Levanta quando o 400 traz OUTRA coisa, e aí a mensagem carrega o que o
     servidor escreveu — "HTTP 400" sozinho não separa "conta sem movimento" de
-    "sessão caiu"."""
-    url = (f"{BASE}/api/comprovantes/consultar?tipoPagamento={tipo}"
-           f"&dataInicio={inicio}&dataFim={fim}")
-    resposta = page.evaluate(_JS_API, [url, "GET", None])
-    if resposta.get("erro"):
+    "sessão caiu".
+
+    O endereço sai de `rotas` (ver o bloco "os endereços que a tela usa"):
+    um que não serve cede a vez ao seguinte, e sem nenhum a própria tela
+    ensina o novo."""
+    rotas = rotas or rotas_do_app()
+    tentadas = []
+
+    def pedir(rota):
+        resposta = page.evaluate(_JS_API, [_url_da_lista(rota, tipo, inicio, fim),
+                                           "GET", None])
+        tentadas.append(f"{rota} ({resposta.get('status') or 'ok'})")
+        return resposta
+
+    def aceitar(rota, resposta):
         if e_conta_sem_movimento(resposta):
+            rotas.aprender("lista", rota)
             return []
-        dito = (resposta.get("corpo") or "").strip()
-        raise SicoobFalhou("a consulta falhou: " + resposta["erro"]
-                           + (f" — {dito[:160]}" if dito else ""))
-    dado = resposta.get("dado")
-    return dado if isinstance(dado, list) else []
+        if resposta.get("erro"):
+            dito = (resposta.get("corpo") or "").strip()
+            raise SicoobFalhou("a consulta falhou: " + resposta["erro"]
+                               + (f" — {dito[:160]}" if dito else ""))
+        rotas.aprender("lista", rota)
+        dado = resposta.get("dado")
+        return dado if isinstance(dado, list) else []
+
+    ja_tentadas = rotas.candidatas("lista")
+    for rota in ja_tentadas:
+        resposta = pedir(rota)
+        if not _nao_serve(resposta):
+            return aceitar(rota, resposta)
+
+    nova = _descobrir_rota_da_lista(page)
+    if nova:
+        resposta = pedir(nova)
+        if not _nao_serve(resposta):
+            return aceitar(nova, resposta)
+        if nova in ja_tentadas:
+            # A própria tela apontou um endereço que JÁ tinha sido tentado
+            # nesta chamada e continuou sem servir (F8): não é a tela que
+            # mudou, é instabilidade do endereço certo — dizer "mudou" aqui
+            # mandaria procurar defeito onde não há.
+            raise SicoobFalhou(
+                "o Sicoob respondeu erro na consulta de comprovantes (a tela "
+                "não mudou: o endereço é o mesmo) — tente de novo mais tarde "
+                "— tentei " + "; ".join(tentadas))
+    raise SicoobFalhou(
+        "a tela de Comprovantes do Sicoob mudou e não consegui aprender o "
+        "endereço novo sozinho — tentei " + "; ".join(tentadas))
 
 
-def detalhar(page, itens: list) -> list:
-    """O HTML de cada comprovante. Uma chamada, um item — ver o porquê.
+def _conteudo(resposta: dict):
+    """O comprovante de uma resposta boa: `str` (HTML) ou `bytes` (PDF).
+    None quando a resposta não traz documento; "" quando o que veio não é
+    documento nenhum — nunca vira PDF de lixo (F4).
+
+    Ramo sem base64: só serve texto com `<` (HTML de verdade). Ramo com
+    base64 (campo novo de 25/09/2026, ainda não visto em `true`): só
+    decodifica quando o texto, sem espaços, começa com `JVBER` — o prefixo
+    base64 de `%PDF` —, e só aceita o resultado se de fato começar com
+    `%PDF`; qualquer outra coisa é "" antes de chegar perto do disco."""
+    dado = resposta.get("dado") or []
+    if not (isinstance(dado, list) and dado and isinstance(dado[0], dict)):
+        return None
+    bruto = dado[0].get("comprovante") or ""
+    if not dado[0].get("comprovanteBase64"):
+        return bruto if "<" in bruto else ""
+    sem_espacos = re.sub(r"\s+", "", bruto)
+    if not sem_espacos.startswith("JVBER"):
+        return ""
+    try:
+        decodificado = base64.b64decode(sem_espacos)
+    except ValueError:
+        return ""
+    return decodificado if decodificado.startswith(b"%PDF") else ""
+
+
+def detalhar(page, itens: list, rotas: "Rotas | None" = None) -> list:
+    """O comprovante de cada item: `(item, html)` ou `(item, bytes do PDF)`;
+    `(item, "")` quando não veio. Uma chamada, um item — ver o porquê.
 
     O endpoint aceita uma LISTA, e é tentador mandar tudo de uma vez. Não vale:
     no Inter, o endpoint equivalente também aceitava, e pedindo dois devolveu
     UM — grudou os comprovantes num arquivo só. Aqui o casamento entre item e
     HTML seria por posição, e um a menos faria cada arquivo levar o nome do
     pagamento errado. Ninguém veria até procurar um comprovante e achar outro.
-    """
+
+    O endereço vem de `rotas`, como na `listar`; o que funcionar para o
+    primeiro item vale para os seguintes, e a tela só é usada para aprender
+    uma vez por rodada."""
+    rotas = rotas or rotas_do_app()
+    aprendeu_pela_tela = False
     saida = []
     for item in itens:
-        resposta = page.evaluate(
-            _JS_API, [f"{BASE}/api/comprovantes/detalhar", "POST", [item]])
-        if resposta.get("erro"):
-            saida.append((item, ""))
-            continue
-        dado = resposta.get("dado") or []
-        html = ""
-        if isinstance(dado, list) and dado:
-            html = (dado[0] or {}).get("comprovante") or ""
-        saida.append((item, html))
+        conteudo = None
+        for rota in rotas.candidatas("documento"):
+            resposta = page.evaluate(_JS_API, [f"{BASE}{rota}", "POST", [item]])
+            if resposta.get("erro"):
+                # Erro em QUALQUER status (400 incluso) não é prova de nada
+                # — só o conteúdo é. Aprender a rota que respondeu erro foi o
+                # defeito de F5: a próxima conta herdaria o endereço ruim.
+                continue
+            candidato = _conteudo(resposta)
+            if not candidato:
+                continue
+            conteudo = candidato
+            rotas.aprender("documento", rota)
+            break
+        if conteudo is None and not aprendeu_pela_tela:
+            aprendeu_pela_tela = True
+            nova = _descobrir_rota_do_documento(page, item)
+            if nova:
+                resposta = page.evaluate(_JS_API, [f"{BASE}{nova}", "POST", [item]])
+                if not resposta.get("erro"):
+                    candidato = _conteudo(resposta)
+                    if candidato:
+                        conteudo = candidato
+                        rotas.aprender("documento", nova)
+        saida.append((item, conteudo or ""))
     return saida
 
 
@@ -402,6 +786,16 @@ def html_para_pdf(ctx, html: str, destino: Path) -> Path:
     destino.parent.mkdir(parents=True, exist_ok=True)
     destino.write_bytes(base64.b64decode(resposta["data"]))
     return destino
+
+
+def gravar_comprovante(ctx, conteudo, destino: Path) -> Path:
+    """Grava o que `detalhar` trouxe: PDF pronto vai direto para o disco;
+    HTML passa pela impressão de `html_para_pdf`, como sempre."""
+    if isinstance(conteudo, bytes):
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_bytes(conteudo)
+        return destino
+    return html_para_pdf(ctx, conteudo, destino)
 
 
 def nome_livre(pasta: Path, nome: str) -> Path:
@@ -895,48 +1289,63 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
                 "comprovante de outra conta com o nome desta")
             return resultado
 
-        itens = so_efetivados(listar(cli.page, inicio, fim))
-        no_periodo = [i for i in itens if dentro_do_periodo(i, inicio, fim)]
-        resultado.no_periodo = len(no_periodo)
-        log(f"  {numero}: {len(itens)} efetivados · {len(no_periodo)} no período")
+        # Os comuns e o Pix são telas e APIs separadas: a falha de um não
+        # pode levar o outro. Em 25/09/2026 a lista dos comuns deu 500 e,
+        # com ela levantando daqui, o Pix -- que funcionava -- nem foi
+        # tentado em conta nenhuma. A falha continua virando o motivo da
+        # conta, só que DEPOIS do Pix.
+        falha_dos_comuns = ""
+        try:
+            brutos = listar(cli.page, inicio, fim)
+            sem_pix_itens = sem_pix(brutos)
+            n_pix_tirados = len(brutos) - len(sem_pix_itens)
+            if n_pix_tirados:
+                log(f"    {n_pix_tirados} Pix ficam para o Extrato Pix")
+            itens = so_efetivados(sem_pix_itens)
+            no_periodo = [i for i in itens if dentro_do_periodo(i, inicio, fim)]
+            resultado.no_periodo = len(no_periodo)
+            log(f"  {numero}: {len(itens)} efetivados · {len(no_periodo)} no período")
 
-        # `if no_periodo:` -- e não um `return` antecipado como este bloco
-        # tinha antes: sem comprovante NENHUM aqui não quer dizer que não há
-        # Pix, e o Pix precisa continuar sendo tentado logo abaixo.
-        if no_periodo:
-            pendentes = []
-            for item in no_periodo:
-                marca = ja_baixados.chave("sicoob", item.get("idAgendamento"),
-                                          numero)
-                if registro is not None and registro.tem(marca):
-                    continue
-                pendentes.append(item)
-            if len(pendentes) < len(no_periodo):
-                log(f"    {len(no_periodo) - len(pendentes)} já baixado(s) antes")
+            # `if no_periodo:` -- e não um `return` antecipado como este bloco
+            # tinha antes: sem comprovante NENHUM aqui não quer dizer que não há
+            # Pix, e o Pix precisa continuar sendo tentado logo abaixo.
+            if no_periodo:
+                pendentes = []
+                for item in no_periodo:
+                    marca = ja_baixados.chave("sicoob", item.get("idAgendamento"),
+                                              numero)
+                    if registro is not None and registro.tem(marca):
+                        continue
+                    pendentes.append(item)
+                if len(pendentes) < len(no_periodo):
+                    log(f"    {len(no_periodo) - len(pendentes)} já baixado(s) antes")
 
-            for item, html in detalhar(cli.page, pendentes):
-                try:
-                    alvo = nome_livre(destino, nome_do_comprovante(item, numero))
-                    html_para_pdf(cli.ctx, html, alvo)
-                    # O favorecido e a Observação só existem DENTRO do
-                    # comprovante — a lista do Sicoob não os traz. Por isso
-                    # aqui o PDF é lido, e no Inter não: lá o JSON já tem tudo.
-                    texto = nome_final.texto_do_pdf(alvo)
-                    campos = nome_final.do_sicoob(item, texto)
-                    alvo = nome_final.renomear(alvo, campos)
-                    resultado.baixados.append(alvo)
-                    if registro is not None:
-                        registro.anotar(
-                            ja_baixados.chave("sicoob",
-                                              item.get("idAgendamento"),
-                                              numero), alvo,
-                            origem=f"SICOOB:{numero}", recebedor=campos["dest"],
-                            doc_recebedor=nome_final.documento_de_quem_recebeu(texto))
-                    log(f"    {alvo.name}")
-                except Exception as e:                       # noqa: BLE001
-                    ident = item.get("idAgendamento") or "?"
-                    resultado.falhas.append(str(ident))
-                    log(f"    {ident} falhou ({e}) — seguindo")
+                for item, html in detalhar(cli.page, pendentes):
+                    try:
+                        alvo = nome_livre(destino, nome_do_comprovante(item, numero))
+                        gravar_comprovante(cli.ctx, html, alvo)
+                        # O favorecido e a Observação só existem DENTRO do
+                        # comprovante — a lista do Sicoob não os traz. Por isso
+                        # aqui o PDF é lido, e no Inter não: lá o JSON já tem tudo.
+                        texto = nome_final.texto_do_pdf(alvo)
+                        campos = nome_final.do_sicoob(item, texto)
+                        alvo = nome_final.renomear(alvo, campos)
+                        resultado.baixados.append(alvo)
+                        if registro is not None:
+                            registro.anotar(
+                                ja_baixados.chave("sicoob",
+                                                  item.get("idAgendamento"),
+                                                  numero), alvo,
+                                origem=f"SICOOB:{numero}", recebedor=campos["dest"],
+                                doc_recebedor=nome_final.documento_de_quem_recebeu(texto))
+                        log(f"    {alvo.name}")
+                    except Exception as e:                       # noqa: BLE001
+                        ident = item.get("idAgendamento") or "?"
+                        resultado.falhas.append(str(ident))
+                        log(f"    {ident} falhou ({e}) — seguindo")
+        except SicoobFalhou as e:
+            falha_dos_comuns = str(e)
+            log(f"  {numero}: comprovantes comuns — {e}")
 
         # A conta certa já foi confirmada aberta (as duas checagens de cima
         # passaram) -- é a partir daqui que também vale pedir o Pix dela.
@@ -946,6 +1355,8 @@ def baixar_conta(cli, numero: str, inicio: str, fim: str, pasta,
         # mãos, não para ser pega pelos `except` abaixo.
         _baixar_pix_da_conta(cli, numero, inicio, fim, destino, resultado,
                              log=log, registro=registro)
+        if falha_dos_comuns:
+            resultado.motivo = falha_dos_comuns
     except SicoobFalhou as e:
         resultado.motivo = str(e)
     except Exception as e:                                   # noqa: BLE001

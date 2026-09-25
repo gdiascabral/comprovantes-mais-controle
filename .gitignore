@@ -170,3 +170,7 @@ sonda.ALERTA.txt
 # estado da maquina, nao codigo; o sentinela.log ja cai na regra *.log.
 sentinela.ALERTA.txt
 /sentinela/
+
+# Endereços da tela de Comprovantes do Sicoob aprendidos pelo app (estado
+# da máquina, não código) -- ver baixar_comprovantes/sicoob_baixar.Rotas.
+/sicoob_rotas.json
