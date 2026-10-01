@@ -362,6 +362,17 @@ _NAO_VARRER = re.compile(
 #: discordariam sobre o que é prova de pagamento.
 _PROVA_DE_PAGAMENTO = regras.PROVA_DE_PAGAMENTO
 
+#: Marca FORTE de comprovante, para o PDF PRINCIPAL do boleto (dono,
+#: 01/10/2026). O regex amplo acima pega "valor pago", "data do pagamento" e
+#: "pagamento efetuado", que aparecem no histórico de fatura de concessionária
+#: e em boleto comum: ali, recusar a linha seria falso alarme em massa. Só
+#: estas frases dizem que o documento É o comprovante: "comprovante de
+#: pagamento/transação", "autenticação ELETRÔNICA" (a "mecânica" está em todo boleto) e "pagamento
+#: efetuado com sucesso". A varredura de anexo escondido segue com o amplo.
+_COMPROVANTE_FORTE = re.compile(
+    r"comprovante\s+de\s+(?:pagamento|transa)|autentica[çc][aã]o\s+eletr|"
+    r"pagamento\s+efetuado\s+com\s+sucesso", re.I)
+
 
 #: Anexo que é IMAGEM: é assim que o QR Code do Pix costuma chegar — a guia do
 #: cartório, o print da compra de marketplace.
@@ -932,7 +943,8 @@ def _valor_nos_textos(valor: float, textos) -> bool:
     br = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     junto = " ".join(textos)
     for a in {br, br.replace(".", ""), f"{valor:.2f}".replace(".", ",")}:
-        if re.search(r"(?<![\d.,])" + re.escape(a) + r"(?!\d|[.,]\d)", junto):
+        if re.search(r"(?:(?<![\d.,])|(?<=\.\.\.))" + re.escape(a)
+                     + r"(?!\d|[.,]\d)", junto):
             return True
     return False
 
@@ -941,24 +953,53 @@ def _valor_nos_textos(valor: float, textos) -> bool:
 # CNPJ escrito no TEXTO da nota
 # --------------------------------------------------------------------------
 _CNPJ_NO_TEXTO = re.compile(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)")
-#: Quem aparece como COMPRADOR no papel: o CNPJ dele não é o do emitente.
+#: Rótulos do bloco do COMPRADOR (o CNPJ dele não é o do emitente) e do bloco
+#: de quem VENDE. Um CNPJ pertence ao último rótulo que o precede.
 _PAPEL_DO_PAGADOR = re.compile(
     r"tomador|destinat[aá]rio|pagador|sacado|cliente|adquirente", re.I)
+_PAPEL_DO_EMITENTE = re.compile(
+    r"emitente|prestador|benefici[aá]rio|cedente|fornecedor", re.I)
+_E_DANFE = re.compile(r"danfe|documento\s+auxiliar", re.I)
+_E_BOLETO_TEXTO = re.compile(
+    r"ficha\s+de\s+compensa|recibo\s+do\s+pagador|benefici[aá]rio|linha\s+digit", re.I)
+_PERTO_DE_BANCO = re.compile(r"banco|institui[cç][aã]o\s+financeira", re.I)
 
 
 def cnpjs_do_emitente(texto: str) -> list[str]:
-    """Os CNPJs com DV válido do texto, menos os que vêm sob um rótulo de
-    comprador (tomador, destinatário, pagador, sacado…): o da empresa que paga
-    não é o de quem emitiu a nota (dono, 01/10/2026)."""
-    achados = []
-    for m in _CNPJ_NO_TEXTO.finditer(texto or ""):
+    """Os CNPJs com DV válido que podem ser do EMITENTE, por BLOCO.
+
+    Depois de um rótulo de tomador/destinatário/pagador/sacado, os CNPJs até o
+    próximo rótulo de emitente/prestador/beneficiário/cedente são do bloco do
+    comprador: na DANFE o rótulo DESTINATÁRIO fica longe do CNPJ, e uma janela
+    de caracteres não o alcança. Sem rótulo antes, vale como emitente. Na
+    DANFE o PRIMEIRO CNPJ do documento é o do emitente, qualquer que seja o
+    rótulo. Em boleto/ficha de compensação o CNPJ do BANCO também fica de fora
+    (o do beneficiário vale). Dono, 01/10/2026."""
+    texto = texto or ""
+    marcas = sorted(
+        [(m.start(), True) for m in _PAPEL_DO_PAGADOR.finditer(texto)]
+        + [(m.start(), False) for m in _PAPEL_DO_EMITENTE.finditer(texto)])
+    danfe = bool(_E_DANFE.search(texto))
+    boleto = bool(_E_BOLETO_TEXTO.search(texto))
+    achados, primeiro = [], True
+    for m in _CNPJ_NO_TEXTO.finditer(texto):
         cnpj = regras.documento_valido(m.group(0))
-        if len(cnpj) != 14 or cnpj in achados:
+        if len(cnpj) != 14:
             continue
-        janela = (texto or "")[max(0, m.start() - 70):m.start()]
-        if _PAPEL_DO_PAGADOR.search(janela):
+        era_primeiro, primeiro = primeiro, False
+        no_bloco_do_comprador = False
+        for pos, comprador in marcas:
+            if pos < m.start():
+                no_bloco_do_comprador = comprador
+            else:
+                break
+        if no_bloco_do_comprador and not (danfe and era_primeiro):
             continue
-        achados.append(cnpj)
+        if boleto and _PERTO_DE_BANCO.search(
+                texto[texto.rfind("\n", 0, m.start()) + 1:m.end()]):
+            continue
+        if cnpj not in achados:
+            achados.append(cnpj)
     return achados
 
 
@@ -1427,7 +1468,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 # pagamento: 47 dígitos soltos ("protocolo 1111…") não são
                 # boleto, e o texto de comprovante traz a linha de boleto JÁ
                 # PAGO (dono, 01/10/2026).
-                if dados and _PROVA_DE_PAGAMENTO.search(texto_pdf):
+                if dados and _COMPROVANTE_FORTE.search(texto_pdf):
                     dados = ""
                     obs_linha = ("O anexo é comprovante de pagamento — a linha "
                                  "dele é de boleto já pago; buscar o boleto")

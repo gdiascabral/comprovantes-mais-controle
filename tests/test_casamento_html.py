@@ -273,3 +273,60 @@ def test_m1_mesma_chave_exige_igualdade():
     assert not relatorio.mesma_chave("a1@x.com", "b1@x.com")
     assert not relatorio.mesma_chave("11122233344", "11122233344556")
     assert not relatorio.mesma_chave("a1@x.com", "11122233344")
+
+
+# --------------------------------------------------------------------------
+# Rodada de conserto 1/5: falsos alarmes em massa
+# --------------------------------------------------------------------------
+def test_i2_fatura_com_valor_pago_no_historico_nao_e_recusada():
+    """"Valor pago" e "data do pagamento" aparecem no histórico de fatura e
+    em boleto comum; "Autenticação mecânica" está em todo boleto."""
+    anexos = {"x1": [anexo("boleto.pdf", "Boleto", url="u1")]}
+    linha_ok = gera_linha()
+    texto = ("Historico: valor pago 950,00 data do pagamento 10/08/2026\n"
+             f"{linha_ok}\nAutenticacao Mecanica - Ficha de Compensacao\n")
+    linha = linhas(relatorio.montar_registros([item()], anexos, {}, {"u1": texto}))[0]
+    assert ocr_boleto.digitos(linha["dados"]) == ocr_boleto.digitos(linha_ok)
+    assert linha["status"] == "APTO"
+
+
+def test_i2_comprovante_de_pagamento_com_linha_e_recusado():
+    anexos = {"x1": [anexo("boleto.pdf", "Boleto", url="u1")]}
+    texto = f"Comprovante de pagamento\n{gera_linha()}\n"
+    linha = linhas(relatorio.montar_registros([item()], anexos, {}, {"u1": texto}))[0]
+    assert linha["dados"] == ""
+
+
+def danfe(emit, tomador):
+    return (f"DANFE Documento Auxiliar da Nota Fiscal Eletronica 64000\n"
+            f"Emitente: Atacado Modelo CNPJ {fmt(emit)}\n"
+            "Chave de acesso 0000\nNATUREZA DA OPERACAO VENDA\n" + "x " * 80 +
+            "\nDESTINATARIO / REMETENTE\nNome Cliente Exemplo\n" + "y " * 80 +
+            f"\nCNPJ / CPF {fmt(tomador)}\nValor 1.000,00\n")
+
+
+def test_i3_danfe_com_emitente_e_tomador_longe_do_rotulo():
+    emit, tom = gera_cnpj("11222333"), gera_cnpj("55666777")
+    assert relatorio.cnpjs_do_emitente(danfe(emit, tom)) == [emit]
+    anexos = {"x1": [anexo("NF 64000.pdf", "Nota Fiscal", url="un")]}
+
+    def roda(cadastro):
+        it = item(tradePayablePaymentMethod="Pix",
+                  paidToBankAccount="PIX CNPJ: " + fmt(cadastro))
+        return linhas(relatorio.montar_registros(
+            [it], anexos, {}, {"un": danfe(emit, tom)}))[0]
+    assert roda(emit)["status"] == "APTO"
+    assert roda(gera_cnpj("99888777"))["status"] == \
+        "ATENÇÃO — CNPJ da nota diferente do cadastro"
+
+
+def test_i3_cnpj_do_banco_no_boleto_nao_conta():
+    banco, benef = gera_cnpj("12345678"), gera_cnpj("11222333")
+    texto = (f"Banco Exemplo S.A. CNPJ {fmt(banco)}\n"
+             f"Beneficiario Atacado CNPJ {fmt(benef)}\nFicha de Compensacao\n")
+    assert relatorio.cnpjs_do_emitente(texto) == [benef]
+
+
+def test_i4_valor_com_pontos_de_preenchimento():
+    assert relatorio._valor_nos_textos(500.0, ["Valor......500,00"])
+    assert not relatorio._valor_nos_textos(500.0, ["Valor 1.500,00"])
