@@ -496,3 +496,107 @@ def test_documento_nao_fecha_se_outro_pdf_da_data_nao_tem_documento():
     certezas, duvidas, _ = matcher.casar(pend, pdfs)
     assert not certezas and len(duvidas) == 1
 
+
+
+# ------------------------------------------------ nº do documento sem o "NF"
+# (dono, 01/10/2026: o rótulo NF só sai quando há nota anexada)
+def _casa_solto(nome_pdf, doc, outro_pdf="500,00 - SERVICO - 11-09.pdf"):
+    """Dois PDFs de mesmo valor na mesma conta; o pendente A tem `doc`."""
+    pdfs = [_pdf(nome_pdf, origem=SICOOB_1), _pdf(outro_pdf, origem=SICOOB_1)]
+    pend = [_pend_conta("A", 50000, origem=SICOOB_1, doc=doc, desc="x")]
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    return {c["paidId"]: c["pdf"] for c in certezas}.get("A") == nome_pdf
+
+
+def test_numero_solto_igual_ao_documento_casa():
+    assert _casa_solto("500,00 - CC 1234 OC 55 - 11-09.pdf", "1234")
+
+
+def test_numero_depois_de_rotulo_de_endereco_nao_casa():
+    assert not _casa_solto("500,00 - CC QD 1234 LT 5 - 11-09.pdf", "1234")
+
+
+def test_faixa_de_lote_nao_casa():
+    assert not _casa_solto("500,00 - CC LT 10-11 - 11-09.pdf", "10")
+    assert not _casa_solto("500,00 - CC LT 10-11 - 11-09.pdf", "11")
+
+
+def test_data_no_nome_nao_casa_como_documento():
+    assert not _casa_solto("500,00 - CC 01/10/2026 - 11-09.pdf", "2026")
+
+
+def test_milhar_com_ponto_casa():
+    assert _casa_solto("500,00 - CC 1.234 - 11-09.pdf", "1234")
+
+
+def test_zeros_a_esquerda_do_documento_casam():
+    assert _casa_solto("500,00 - CC 12345 - 11-09.pdf", "0012345")
+
+
+def test_documento_de_dois_digitos_nao_vale_sozinho():
+    assert not _casa_solto("500,00 - CC 12 - 11-09.pdf", "12")
+
+
+def test_numero_nao_casa_por_substring():
+    assert not _casa_solto("500,00 - CC 12345 - 11-09.pdf", "1234")
+
+
+def test_valor_no_nome_nao_conta_como_documento():
+    assert not _casa_solto("500,00 - CC 500 - 11-09.pdf", "500")
+
+
+def test_numero_solto_escolhe_so_o_candidato_com_o_numero_igual():
+    pdfs = [_pdf("500,00 - CC 1234 - 11-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 50000, origem=SICOOB_1, doc="1234", desc="x"),
+            _pend_conta("B", 50000, origem=SICOOB_1, doc="9999", desc="y")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert [c["paidId"] for c in certezas] == ["A"]
+    assert "nº do documento" in certezas[0]["motivo"]
+
+
+def test_nf_rotulada_segue_igual():
+    assert _casa_solto("500,00 - CC NF 1234 - 11-09.pdf", "1234")
+
+
+# ---- conserto 1/5: soltos mais estritos (texto livre traz mais números)
+def _soltos(desc, cents=99999999):
+    return matcher._numeros_soltos(desc, cents)
+
+
+def test_soltos_ano_nao_conta():
+    assert _soltos("CC OBRA 2026 1234") == {"1234"}
+    assert _soltos("CC 456/2026 2026") == set()
+
+
+def test_documento_com_ano_nao_casa_pelo_ano():
+    assert "2026" not in matcher._numeros_do_documento("456/2026")
+    assert matcher._numeros_do_documento("456/2026") >= {"4562026"}
+    assert matcher._numeros_do_documento("12345/2026") >= {"12345"}
+    assert matcher._numeros_do_documento("1.234") == {"1234"}
+    assert matcher._numeros_do_documento("0012345") == {"12345"}
+
+
+def test_soltos_rotulos_por_extenso():
+    assert _soltos("LOTE 123 QUADRA 456 BLOCO 789 SALA 321") == set()
+    assert _soltos("CEP 74000 PEDIDO 5555 PARCELA 123 VIA 123") == set()
+    assert _soltos("AG 3233 CONTA 12345") == set()
+    assert _soltos("Nº 1234 N° 2345 NO 3456 KM 123") == set()
+
+
+def test_soltos_lista_de_enderecos():
+    for d in ("LT 100 101", "QD 100, 101", "LT 100 - 101", "LT 10 E 11",
+              "LT 100 E 101 E 102"):
+        assert _soltos(d) == set(), d
+    assert _soltos("LT 100 101 Material 4567") == {"4567"}
+
+
+def test_soltos_formatos_que_nao_sao_documento():
+    assert _soltos("REUNIAO 14:30") == set()
+    assert _soltos("AGENCIA 3233-1") == set()
+    assert _soltos("comprovante_1234") == set()
+    assert _soltos("2 vias") == set()
+    assert _soltos("CC 01/10/2026 e 01-10-2026") == set()
+
+
+def test_formato_novo_com_texto_livre_casa():
+    assert _casa_solto("500,00 - QD 9 LT 9 Material de obra 4567 - 11-09.pdf", "4567")
