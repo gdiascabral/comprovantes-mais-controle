@@ -556,3 +556,47 @@ def test_numero_solto_escolhe_so_o_candidato_com_o_numero_igual():
 
 def test_nf_rotulada_segue_igual():
     assert _casa_solto("500,00 - CC NF 1234 - 11-09.pdf", "1234")
+
+
+# ---- conserto 1/5: soltos mais estritos (texto livre traz mais números)
+def _soltos(desc, cents=99999999):
+    return matcher._numeros_soltos(desc, cents)
+
+
+def test_soltos_ano_nao_conta():
+    assert _soltos("CC OBRA 2026 1234") == {"1234"}
+    assert _soltos("CC 456/2026 2026") == set()
+
+
+def test_documento_com_ano_nao_casa_pelo_ano():
+    assert "2026" not in matcher._numeros_do_documento("456/2026")
+    assert matcher._numeros_do_documento("456/2026") >= {"4562026"}
+    assert matcher._numeros_do_documento("12345/2026") >= {"12345"}
+    assert matcher._numeros_do_documento("1.234") == {"1234"}
+    assert matcher._numeros_do_documento("0012345") == {"12345"}
+
+
+def test_soltos_rotulos_por_extenso():
+    assert _soltos("LOTE 123 QUADRA 456 BLOCO 789 SALA 321") == set()
+    assert _soltos("CEP 74000 PEDIDO 5555 PARCELA 123 VIA 123") == set()
+    assert _soltos("AG 3233 CONTA 12345") == set()
+    assert _soltos("Nº 1234 N° 2345 NO 3456 KM 123") == set()
+
+
+def test_soltos_lista_de_enderecos():
+    for d in ("LT 100 101", "QD 100, 101", "LT 100 - 101", "LT 10 E 11",
+              "LT 100 E 101 E 102"):
+        assert _soltos(d) == set(), d
+    assert _soltos("LT 100 101 Material 4567") == {"4567"}
+
+
+def test_soltos_formatos_que_nao_sao_documento():
+    assert _soltos("REUNIAO 14:30") == set()
+    assert _soltos("AGENCIA 3233-1") == set()
+    assert _soltos("comprovante_1234") == set()
+    assert _soltos("2 vias") == set()
+    assert _soltos("CC 01/10/2026 e 01-10-2026") == set()
+
+
+def test_formato_novo_com_texto_livre_casa():
+    assert _casa_solto("500,00 - QD 9 LT 9 Material de obra 4567 - 11-09.pdf", "4567")
