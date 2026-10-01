@@ -1048,7 +1048,7 @@ _PAPEL_DO_EMITENTE = re.compile(
 #: "cliente" também aparece em "SAC cliente" e "Central do cliente" no cabeçalho
 #: da nota: ali não abre o bloco do comprador.
 _CLIENTE_DE_ATENDIMENTO = re.compile(
-    r"(?:sac|atendimento\s+ao|central\s+do)\s*$", re.I)
+    r"(?:\bsac|atendimento\s+ao|central\s+do)\s*$", re.I)
 #: O rótulo "cliente" só vale para os CNPJs logo depois dele.
 _ALCANCE_DO_CLIENTE = 300
 _E_DANFE = re.compile(r"danfe|documento\s+auxiliar", re.I)

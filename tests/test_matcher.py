@@ -626,3 +626,10 @@ def test_pendente_sem_numero_de_documento_e_rival():
                 _pend_conta("B", 50000, origem=SICOOB_1, doc=doc, desc="y")]
         certezas, _, _ = matcher.casar(pend, pdfs)
         assert [c for c in certezas if c["paidId"] == "A"] == [], doc
+
+
+def test_soltos_corta_no_oc_pelo_padrao():
+    # "OC" nao esta em _ROTULOS_NUM: so o padrao de corte tira o 5555.
+    assert "OC" not in matcher._ROTULOS_NUM
+    assert _soltos("CC desc 1234 OC 5555") == {"1234"}
+    assert _soltos("CC desc 1234 oc 5555 9999") == {"1234"}

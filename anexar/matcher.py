@@ -80,7 +80,7 @@ def _numeros_soltos(desc: str, cents: int) -> set[str]:
     # O documento é o ÚLTIMO número da descrição (é ali que a descrição colada
     # sempre o põe); com OC no fim, o último antes do "OC". Os números do meio
     # do texto livre não valem (revisão final, 01/10/2026).
-    desc = re.split(r"OC", desc or "", maxsplit=1, flags=re.I)[0]
+    desc = re.split(r"\bOC\b", desc or "", maxsplit=1, flags=re.I)[0]
     for tok in desc.split():
         tok = tok.strip(",;:()")
         if endereco and _so_continuacao(tok):

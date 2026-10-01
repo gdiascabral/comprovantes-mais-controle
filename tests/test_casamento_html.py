@@ -359,3 +359,9 @@ def test_banco_longe_do_cnpj_ou_antes_do_beneficiario_nao_descarta():
 def test_comprovante_forte_aceita_transferencia_e_pix_enviado():
     for t in ("Comprovante de transferencia", "PIX enviado com sucesso"):
         assert relatorio._COMPROVANTE_FORTE.search(t), t
+
+
+def test_sac_cliente_sem_rotulo_de_emitente_devolve_o_cnpj():
+    emit = gera_cnpj("11222333")
+    texto = f"SAC cliente 0800 123 456 CNPJ {fmt(emit)}\n"
+    assert relatorio.cnpjs_do_emitente(texto) == [emit]
