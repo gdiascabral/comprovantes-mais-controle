@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import datetime
 import queue
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 
 from . import dados as cadastro
+from . import novo_cadastro
 from .mc_catalogos import Catalogos
 from .mc_lancamentos import criar_pagamento, criar_recebimento, ErroLancamento
 from . import erp_sessao
@@ -71,6 +73,11 @@ class AportesFrame(ttk.Frame):
         self.b_conferir = widgets.Botao(cab.acoes, "Conferir cadastro",
                                         papel="passo", command=self._conferir)
         self.b_conferir.pack(side="left", padx=px((0, 8)))
+        # Obra nova no ERP = alguém que manda e uma conta que recebe aporte.
+        # Antes era SQL no painel; ver `novo_cadastro.py`.
+        self.b_novo = widgets.Botao(cab.acoes, "+  Novo cadastro",
+                                    papel="passo", command=self._novo_cadastro)
+        self.b_novo.pack(side="left", padx=px((0, 8)))
         self.b_lancar = widgets.Botao(cab.acoes, "Lançar no Mais Controle",
                                       papel="acao", command=self._lancar)
         self.b_lancar.pack(side="left")
@@ -387,6 +394,91 @@ class AportesFrame(ttk.Frame):
         self.catalogos = None
         self._log("Cadastros locais relidos; os do ERP serão relidos no "
                   "próximo comando.")
+
+    def _novo_cadastro(self):
+        """Lê o cadastro FRESCO do banco, abre a janela e grava — banco
+        sempre fora da thread do Tk.
+
+        Fresco, e não o `contas.csv`: o motivo de clicar aqui costuma ser a
+        conta que entrou hoje, e o cache só é regravado na abertura."""
+        self.b_novo.configure(state="disabled")
+
+        def ler():
+            from nuvem import sessao
+            token = sessao.token()
+            return (token, *novo_cadastro.ler(token))
+
+        def leu(r):
+            token, contas, entidades = r
+            self._perguntar_novo(token, contas, entidades)
+
+        self._no_fundo(ler, leu, "Não deu para ler o cadastro da nuvem.",
+                       ao_fim=lambda: self.b_novo.configure(state="normal"))
+
+    def _no_fundo(self, tarefa, depois, falhou: str, ao_fim=None):
+        """Roda `tarefa` numa thread e entrega o resultado a `depois` na
+        thread do Tk. Erro vira janela com `falhou`."""
+        resposta: queue.Queue = queue.Queue()
+
+        def rodar():
+            try:
+                resposta.put(("ok", tarefa()))
+            except Exception as e:                          # noqa: BLE001
+                resposta.put(("erro", e))
+
+        def esperar():
+            try:
+                tipo, valor = resposta.get_nowait()
+            except queue.Empty:
+                self.after(100, esperar)
+                return
+            if ao_fim:
+                ao_fim()
+            if tipo == "erro":
+                self._log(f"[!] {falhou} {valor}")
+                messagebox.showerror("Novo cadastro",
+                                     widgets.recado_de_erro(valor, falhou))
+                return
+            depois(valor)
+
+        threading.Thread(target=rodar, daemon=True).start()
+        self.after(100, esperar)
+
+    def _perguntar_novo(self, token, contas, entidades):
+        from .novo_cadastro_dialogo import perguntar
+        novo = perguntar(self.winfo_toplevel(), contas, entidades)
+        if novo is None:
+            return
+        self.b_novo.configure(state="disabled")
+        self._no_fundo(lambda: novo_cadastro.gravar(token, novo),
+                       lambda _r: self._cadastrou(novo),
+                       "Não deu para cadastrar. Se o recado for de nome "
+                       "repetido, ele já entrou: clique em Recarregar "
+                       "cadastros.",
+                       ao_fim=lambda: self.b_novo.configure(state="normal"))
+
+    def _cadastrou(self, novo):
+        # A escolha de Pagou/Recebeu sobrevive: `_recarregar_listas` põe o
+        # 1º e o 2º nomes, e quem já tinha escolhido as contas e só parou
+        # para cadastrar um nome adicionaria a operação entre as erradas.
+        pagou, recebeu = self.cb_pagador.get(), self.cb_recebedor.get()
+        # Só a lista: `_recarregar_cadastros` zeraria os catálogos do ERP à
+        # toa, e a lista "A lançar" continua intacta.
+        self.entidades = cadastro.carregar_contas()
+        self._recarregar_listas()
+        for combo, antes in ((self.cb_pagador, pagou),
+                             (self.cb_recebedor, recebeu)):
+            if antes in combo.valores_completos():
+                combo.set(antes)
+        self._log(f"Cadastrado: {novo.nome_exibicao.strip()} — contato "
+                  f"\"{novo.nome_oficial.strip()}\""
+                  + (f", conta \"{novo.conta.strip()}\"" if novo.conta.strip()
+                     else " (sem conta)")
+                  + ". Já está em Pagou/Recebeu. Clique em Conferir cadastro "
+                    "para ver se os nomes batem com o Mais Controle.")
+        widgets.registrar_atividade(
+            "apt", "Novo cadastro", "ok", novo.nome_exibicao.strip(),
+            {"conta": novo.conta.strip() or None})
 
     def _conferir(self):
         if self.anx.avisar_se_ocupado("os Aportes"):
