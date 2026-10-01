@@ -455,3 +455,32 @@ def test_modelo_blinda_localstorage_e_mostra_a_conferir_no_resumo():
     html = _geral_completo()
     assert "typeof v === 'object'" in html
     assert "a conferir" in html
+
+
+def test_grafias_de_atencao_e_pagar_a_mao_bloqueiam():
+    import unicodedata
+    nfd = unicodedata.normalize("NFD", "Atenção - algo")
+    ent = _entradas(**{"CONTA A": [
+        _linha("F1", 1.0, "1", status="Atenção - algo"),
+        _linha("F2", 1.0, "2", status=nfd),
+        _linha("F3", 1.0, "3", status="ATENCAO - algo"),
+        _linha("F4", 1.0, "4", obs="PAGAR A MAO - fulano"),
+        _linha("F5", 1.0, "5", obs="pagar à  mão para fulano"),
+        _linha("F6", 1.0, "6", obs=unicodedata.normalize("NFD", "Pagar à mão"))]})
+    assert all(ent[i]["bloqueio"] for i in "123456")
+
+
+def test_linha_de_47_e_codigo_de_44_do_mesmo_boleto_bloqueiam_as_duas():
+    l47 = "34191.57007 00024.924375 24177.010006 9 15340000115000"
+    c44 = "34199153400001150001570000024924372417701000"
+    ent = _entradas(**{
+        "CONTA A": [_linha("F1", 1.0, "1", tipo="Boleto", dados=l47)],
+        "CONTA B": [_linha("F2", 1.0, "2", tipo="Boleto", dados=c44)]})
+    assert "mesma linha digitável" in ent["1"]["bloqueio"]
+    assert "mesma linha digitável" in ent["2"]["bloqueio"]
+
+
+def test_modelo_so_cria_copiar_do_dado_quando_nao_bloqueado():
+    html = _geral_completo()
+    assert "if(e.dados_limpo && !bloq){ const b = btns[bi];" in html
+    assert "(e.dados_limpo && bloq)" in html

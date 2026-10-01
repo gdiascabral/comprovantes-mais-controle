@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import unicodedata
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
@@ -425,20 +426,34 @@ def _chave_de_repeticao(tipo, dado_limpo: str) -> str:
         return "pix:" + re.sub(r"\s+", "", d)
     if str(tipo or "") == "Boleto":
         dig = re.sub(r"\D", "", d)
-        return "bol:" + dig if len(dig) >= 20 else ""
+        if len(dig) < 20:
+            return ""
+        # Linha digitável (47/48) e código de barras (44) do mesmo boleto
+        # têm de dar a mesma chave: tudo vira o código de barras de 44.
+        barras = dig if len(dig) == 44 else ocr_boleto.codigo_de_barras(dig)
+        return "bol:" + (barras or dig)
     return ""
+
+
+def _norm(texto) -> str:
+    """Sem acento (NFKD, também de entrada já decomposta), maiúsculas e
+    espaços colapsados: a grafia do status/obs não decide o bloqueio."""
+    t = unicodedata.normalize("NFKD", str(texto or ""))
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", t).strip().upper()
 
 
 def _motivo_do_bloqueio(r: dict) -> str:
     """Por que a linha não pode ser copiada às cegas (vazio = livre). "JÁ PAGO"
     fica de fora: não é bloqueio novo."""
-    status = str(r.get("status") or "").strip()
-    obs = str(r.get("obs") or "")
+    status = _norm(r.get("status"))
+    obs = _norm(r.get("obs"))
     motivos = []
-    if status.upper().startswith(("ATENÇÃO", "ATENCAO")):
-        resto = re.sub(r"^ATEN[CÇ][AÃ]O\s*[-:–]?\s*", "", status, flags=re.I)
+    if status.startswith("ATENCAO"):
+        resto = re.sub(r"^\S+\s*[-:–]?\s*", "",
+                       str(r.get("status") or "").strip())
         motivos.append(resto or "atenção")
-    if "PAGAR À MÃO" in obs.upper():
+    if "PAGAR A MAO" in obs:
         motivos.append("pagar à mão (a observação manda pagar outra pessoa)")
     if r.get("parcial"):
         motivos.append("boleto parcial: não pagar pela linha")
