@@ -842,6 +842,17 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None,
         return " ".join(partes).strip()
 
     partes = [cc] if cc else []
+    if doc and not oc:
+        # Documento SEM OC leva também a descrição do lançamento, antes do
+        # documento (dono, 01/10/2026); medição segue a forma curta abaixo.
+        descr = (item.get("description") or "").strip()
+        if descr and not contrato_e_medicao(descr):
+            if cc and descr.casefold().startswith(cc.casefold()):
+                descr = descr[len(cc):].strip(" -:|")
+            descr = re.sub(rf"(?<![\w]){re.escape(doc)}(?![\w])", " ", descr)
+            descr = re.sub(r"\s+", " ", descr).strip(" -:|")[:110]
+            if descr:
+                partes.append(descr)
     if doc:
         # Ficha de arrecadação (tributo, taxa, órgão público) não tem
         # cedente nem Nota Fiscal atrás (`ocr_boleto.eh_arrecadacao`, a

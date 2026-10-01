@@ -253,6 +253,22 @@ def _que_cabem(palavras, espaco: int) -> list[str]:
     return saida
 
 
+def _sem_sequencia(palavras, sequencia) -> list[str]:
+    """`palavras` sem as ocorrências da `sequencia` (palavras inteiras, sem
+    diferenciar caixa): o número do documento que a descrição já traz não se
+    repete."""
+    n = len(sequencia)
+    alvo = [p.casefold() for p in sequencia]
+    saida, i = [], 0
+    while i < len(palavras):
+        if n and [p.casefold() for p in palavras[i:i + n]] == alvo:
+            i += n
+            continue
+        saida.append(palavras[i])
+        i += 1
+    return saida
+
+
 def descricao_para_colar(registro, conta) -> str:
     """A descrição que o botão "Copiar" do HTML geral põe no campo do banco.
 
@@ -268,6 +284,11 @@ def descricao_para_colar(registro, conta) -> str:
       é de medição de mão de obra (a forma curta que a planilha já mostra);
     - água e luz continuam como na planilha (CC + descrição + OC): ali o
       "número da NF" é o da fatura e não identifica nada;
+    - **documento sem OC** leva também a descrição do lançamento, entre o
+      centro de custo e o documento: "CC desc NF x" / "CC desc x". Com OC
+      nada muda; a descrição é a primeira a ser cortada e o documento nunca;
+      número que a descrição já traz como palavra inteira não se repete
+      (dono, 01/10/2026);
     - **"NF" só com nota fiscal anexada** no lançamento (`nf_anexada`): nem
       todo número de documento é nota (o da prefeitura, por exemplo). Sem a
       NF anexada, ou sem a chave no registro, o número fica sozinho: "CC x OC
@@ -312,12 +333,19 @@ def descricao_para_colar(registro, conta) -> str:
         fixos = ["C", *_palavras_do_numero(medicao[0]),
                  "M", *_palavras_do_numero(medicao[1])]
 
+    # Documento SEM OC leva também a descrição do lançamento, entre o centro
+    # de custo e o documento (dono, 01/10/2026). Com OC nada muda, e a medição
+    # de mão de obra continua na forma curta.
+    com_descricao = bool(nf) and not oc and not relatorio.contrato_e_medicao(
+        r.get("descricao_lancamento"))
     texto = []
-    if utilidade or not fixos:
+    if utilidade or not fixos or com_descricao:
         texto = _palavras(r.get("descricao_lancamento"))
         n = len(cc)
         if n and [p.casefold() for p in texto[:n]] == [p.casefold() for p in cc]:
             texto = texto[n:]
+        if com_descricao:
+            texto = _sem_sequencia(texto, nf)
 
     limite = limite_da_descricao(conta)
     if len(" ".join(cc + texto + fixos)) > limite:
