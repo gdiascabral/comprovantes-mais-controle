@@ -22,6 +22,7 @@ import re
 
 import util
 
+from . import regras
 from .dados import INVESTIDOR_PREFIXO
 
 #: "11111-1", "22.222-2", "33333 - 3": o número da conta Sicoob no nome.
@@ -59,7 +60,7 @@ def _sem_repetir(nomes) -> list[str]:
 
 
 def validar(numero: str, investidores, obras, *, participantes=None,
-            centros=None) -> str:
+            centros=None, percentuais=None) -> str:
     """"" quando dá para gravar; senão, o motivo.
 
     `participantes`/`centros` são os nomes que o ERP devolveu. Quando vêm,
@@ -72,6 +73,10 @@ def validar(numero: str, investidores, obras, *, participantes=None,
         return "Falta pelo menos um investidor."
     if not _sem_repetir(obras):
         return "Falta pelo menos um centro de custo."
+    problema = regras.problema_dos_percentuais(_sem_repetir(obras),
+                                               percentuais or {})
+    if problema:
+        return f"Percentual dos centros de custo: {problema}."
     for rotulo, escolhidos, conhecidos in (
             ("investidor", investidores, participantes),
             ("centro de custo", obras, centros)):
@@ -104,9 +109,11 @@ def pagador(numero: str) -> str:
 # --------------------------------------------------------------------------
 # Banco
 # --------------------------------------------------------------------------
-def _filhos(token: str, tabela: str, subconta_id) -> list[dict]:
+def _filhos(token: str, tabela: str, subconta_id,
+            com_pct: bool = False) -> list[dict]:
     from nuvem import rest
-    return list(rest.ler(tabela, token, colunas="id,nome",
+    return list(rest.ler(tabela, token,
+                         colunas="id,nome,percentual" if com_pct else "id,nome",
                          filtro=f"subconta_id=eq.{int(subconta_id)}") or [])
 
 
@@ -115,17 +122,32 @@ def ler_rateios(token: str) -> dict:
     `subcontas.json` (sem as chaves `_`)."""
     from nuvem import rest
     subs = rest.ler("subconta", token, colunas="id,nome") or []
-    obras = rest.ler("subconta_obra", token, colunas="subconta_id,nome") or []
+    obras = rest.ler("subconta_obra", token,
+                     colunas="subconta_id,nome,percentual") or []
     invs = rest.ler("subconta_investidor", token,
                     colunas="subconta_id,nome") or []
     saida = {}
     for sub in subs:
+        dela = [o for o in obras if o["subconta_id"] == sub["id"]]
         saida[sub["nome"]] = {
-            "obras": [o["nome"] for o in obras
-                      if o["subconta_id"] == sub["id"]],
+            "obras": [o["nome"] for o in dela],
             "investidores": [i["nome"] for i in invs
                              if i["subconta_id"] == sub["id"]],
+            "percentuais": percentuais_das_linhas(dela),
         }
+    return saida
+
+
+def percentuais_das_linhas(linhas) -> dict:
+    """`{obra: "70"}` das linhas de `subconta_obra`; {} sem % nenhum.
+
+    Em TEXTO no JSON, e não float: é a fração de um valor em dinheiro, e
+    `regras` a lê como Decimal."""
+    saida = {}
+    for l in linhas:
+        pct = l.get("percentual")
+        if pct is not None and str(pct).strip() != "":
+            saida[l["nome"]] = format(regras.Decimal(str(pct)).normalize(), "f")
     return saida
 
 
@@ -133,12 +155,16 @@ def mudou(antes: dict, depois: dict, numero: str) -> bool:
     """O rateio de `numero` é outro (fora ordem, acento e caixa)?"""
     def forma(cfg):
         cfg = cfg or {}
+        pcts = frozenset(
+            (util.norm_espaco(n), regras.Decimal(str(v)))
+            for n, v in (cfg.get("percentuais") or {}).items())
         return tuple(frozenset(util.norm_espaco(n) for n in cfg.get(k) or [])
-                     for k in ("obras", "investidores"))
+                     for k in ("obras", "investidores")) + (pcts,)
     return forma(antes.get(numero)) != forma(depois.get(numero))
 
 
-def gravar(token: str, numero: str, investidores, obras) -> None:
+def gravar(token: str, numero: str, investidores, obras,
+           percentuais=None) -> None:
     """Cria a subconta se faltar e acerta CCs e investidores.
 
     Insere ANTES de apagar: se a rede cair no meio, sobra um nome a mais e
@@ -154,13 +180,33 @@ def gravar(token: str, numero: str, investidores, obras) -> None:
         else:
             ident = rest.inserir("subconta", token,
                                  [{"nome": numero}])[0]["id"]
+        percentuais = percentuais or {}
+
+        def pct(nome):
+            v = regras.percentual_de(percentuais, nome)
+            return None if v is None else str(v)
+
         for tabela, nomes in (("subconta_investidor", investidores),
                               ("subconta_obra", obras)):
-            inserir, apagar = diferenca(_filhos(token, tabela, ident), nomes)
+            com_pct = tabela == "subconta_obra"
+            antes = _filhos(token, tabela, ident, com_pct)
+            inserir, apagar = diferenca(antes, nomes)
             if inserir:
                 rest.inserir(tabela, token,
-                             [{"subconta_id": ident, "nome": n}
+                             [dict({"subconta_id": ident, "nome": n},
+                                   **({"percentual": pct(n)} if com_pct else {}))
                               for n in inserir], devolver=False)
+            if com_pct:
+                # O CC que fica mas mudou de %: só a coluna, linha por linha.
+                for linha in antes:
+                    if linha["id"] in apagar:
+                        continue
+                    novo = pct(linha["nome"])
+                    velho = linha.get("percentual")
+                    if (None if velho is None else regras.Decimal(str(velho))) \
+                            != (None if novo is None else regras.Decimal(novo)):
+                        rest.alterar(tabela, token, f"id=eq.{int(linha['id'])}",
+                                     {"percentual": novo})
             if apagar:
                 rest.apagar(tabela, token, "id=in.(" + ",".join(
                     str(int(i)) for i in apagar) + ")")
@@ -170,7 +216,8 @@ def gravar(token: str, numero: str, investidores, obras) -> None:
         except Exception:
             no_banco = None
         if no_banco is not None:
-            _no_cache(numero, no_banco["investidores"], no_banco["obras"])
+            _no_cache(numero, no_banco["investidores"], no_banco["obras"],
+                      no_banco.get("percentuais"))
             raise RuntimeError(
                 f"{e}\n\nA gravação parou no meio. O que ficou no banco para "
                 f"a subconta {numero}: investidores "
@@ -180,10 +227,10 @@ def gravar(token: str, numero: str, investidores, obras) -> None:
         raise
     no_banco = ler_rateios(token).get(numero) or {}
     _no_cache(numero, no_banco.get("investidores") or [],
-              no_banco.get("obras") or [])
+              no_banco.get("obras") or [], no_banco.get("percentuais"))
 
 
-def _no_cache(numero: str, investidores, obras) -> None:
+def _no_cache(numero: str, investidores, obras, percentuais=None) -> None:
     """O `subcontas.json` desta máquina já com a mudança, para a lista de
     hoje trazê-la sem reabrir o app (a abertura regrava tudo do banco)."""
     from nuvem import cache
@@ -191,4 +238,6 @@ def _no_cache(numero: str, investidores, obras) -> None:
     atual = dados.carregar_subcontas()
     atual[numero] = {"obras": _sem_repetir(obras),
                      "investidores": _sem_repetir(investidores)}
+    if percentuais:
+        atual[numero]["percentuais"] = dict(percentuais)
     cache.gravar_json("subcontas.json", atual, pasta=dados.ARQUIVO_SUBCONTAS.parent)

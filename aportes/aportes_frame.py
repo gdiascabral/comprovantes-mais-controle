@@ -545,7 +545,7 @@ class AportesFrame(ttk.Frame):
                       participantes, centros)
         if r is None:
             return
-        numero, investidores, obras = r
+        numero, investidores, obras, percentuais = r
         if self._subconta_em_andamento(numero):
             messagebox.showwarning(
                 "Rateio de subconta",
@@ -557,7 +557,8 @@ class AportesFrame(ttk.Frame):
 
         def gravar():
             from nuvem import sessao
-            rateio_subconta.gravar(sessao.token(), numero, investidores, obras)
+            rateio_subconta.gravar(sessao.token(), numero, investidores, obras,
+                                   percentuais)
 
         def gravou(_r):
             self.subcontas = cadastro.carregar_subcontas()
@@ -569,7 +570,11 @@ class AportesFrame(ttk.Frame):
             self._atualizar_total()
             self._log(f"Rateio da subconta {numero} gravado: "
                       f"{len(investidores)} investidor(es) × {len(obras)} "
-                      f"centro(s) de custo. Em Pagou: "
+                      f"centro(s) de custo"
+                      + (" com % (" + ", ".join(f"{n} {p}%" for n, p in
+                                               percentuais.items()) + ")"
+                         if percentuais else ", partes iguais")
+                      + ". Em Pagou: "
                       f"\"{rateio_subconta.pagador(numero)}\", modo "
                       "'Só recebimento'.")
             widgets.registrar_atividade(

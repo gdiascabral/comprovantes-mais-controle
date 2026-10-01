@@ -16,6 +16,8 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
+import util
+
 from .dados import INVESTIDOR_PREFIXO
 
 PREFIXO_DESCRICAO = {
@@ -140,6 +142,59 @@ def dividir_em_centavos(total, n: int) -> list[Decimal]:
     return [Decimal(base + (1 if i < sobra else 0)) / 100 for i in range(n)]
 
 
+def percentual_de(percentuais: dict, obra: str):
+    """O % de uma obra (Decimal) ou None. Procura sem acento e sem caixa."""
+    alvo = util.norm_espaco(obra)
+    for nome, pct in (percentuais or {}).items():
+        if util.norm_espaco(nome) == alvo and str(pct).strip() != "":
+            return Decimal(str(pct).replace(",", "."))
+    return None
+
+
+def problema_dos_percentuais(obras, percentuais) -> str:
+    """"" quando o rateio pode ser feito; senão, o motivo.
+
+    Sem % nenhum = partes iguais (como sempre foi). Com %, TODA obra precisa
+    do dela, cada um maior que zero, e a soma fecha 100 — senão parte do
+    aporte não iria para CC nenhum, ou iria a mais."""
+    if not percentuais:
+        return ""
+    pcts = [percentual_de(percentuais, o) for o in obras]
+    if all(p is None for p in pcts):
+        return ""
+    faltam = [o for o, p in zip(obras, pcts) if p is None]
+    if faltam:
+        return f"falta o % de: {', '.join(faltam)}"
+    if any(p <= 0 for p in pcts):
+        return "todo % precisa ser maior que zero"
+    soma = sum(pcts)
+    if soma != Decimal(100):
+        return f"os % somam {soma:g}, e precisam somar 100"
+    return ""
+
+
+def dividir_por_percentual(total, obras, percentuais) -> list[Decimal]:
+    """O valor de cada obra. Sem % = partes iguais (`dividir_em_centavos`).
+
+    Com %: cada obra leva o seu % arredondado PARA BAIXO em centavos, e os
+    centavos que sobram vão um a um para as obras de maior resto (empate: a
+    que vem antes). A soma fecha sempre com o total — é dinheiro."""
+    problema = problema_dos_percentuais(obras, percentuais)
+    if problema:
+        raise ValueError(f"rateio por %: {problema}")
+    pcts = [percentual_de(percentuais, o) for o in obras]
+    if not percentuais or all(p is None for p in pcts):
+        return dividir_em_centavos(total, len(obras))
+    centavos = int(como_dinheiro(total) * 100)
+    brutos = [Decimal(centavos) * p / 100 for p in pcts]
+    base = [int(b) for b in brutos]                  # para baixo
+    sobra = centavos - sum(base)
+    ordem = sorted(range(len(obras)), key=lambda i: (-(brutos[i] - base[i]), i))
+    for i in ordem[:sobra]:
+        base[i] += 1
+    return [Decimal(c) / 100 for c in base]
+
+
 @dataclass
 class Operacao:
     data: datetime.date
@@ -180,6 +235,10 @@ class Operacao:
             if not (cfg.get("investidores") or []):
                 erros.append(f"A subconta {grupo} não tem INVESTIDORES no "
                              "subcontas.json — o rateio ficaria vazio.")
+            problema = problema_dos_percentuais(cfg.get("obras") or [],
+                                                cfg.get("percentuais") or {})
+            if problema:
+                erros.append(f"Rateio da subconta {grupo}: {problema}.")
             conta_rec = entidades[self.recebedor].get("conta") or ""
             if grupo not in self.recebedor and grupo not in conta_rec:
                 erros.append(f"O recebedor de '{self.pagador}' deve ser a "
@@ -251,13 +310,15 @@ def expandir(op: Operacao, entidades: dict, subcontas: dict,
                     f"a subconta {grupo} está sem obras e/ou investidores no "
                     "subcontas.json — o rateio sairia vazio e o valor de "
                     f"{formatar_brl(op.valor)} sumiria.")
-            partes = dividir_em_centavos(op.valor, len(obras) * len(investidores))
-            i = 0
-            for obra in obras:
-                for investidor in investidores:
+            por_obra = dividir_por_percentual(
+                op.valor, obras, cfg.get("percentuais") or {})
+            for obra, valor_obra in zip(obras, por_obra):
+                for investidor, parte in zip(
+                        investidores,
+                        dividir_em_centavos(valor_obra, len(investidores))):
                     itens.append({
                         "tipo_lancamento": "recebimento",
-                        "data": op.data, "valor": partes[i],
+                        "data": op.data, "valor": parte,
                         "descricao": f"{PREFIXO_DESCRICAO[op.tipo]} - "
                                      f"{investidor} PARA "
                                      f"{nome_na_descricao(entidades, op.recebedor)}",
@@ -266,7 +327,6 @@ def expandir(op: Operacao, entidades: dict, subcontas: dict,
                         "natureza": NATUREZA_RECEBIMENTO[op.tipo],
                         "forma": op.forma, "obra": obra,
                     })
-                    i += 1
         else:
             itens.append({
                 "tipo_lancamento": "recebimento",

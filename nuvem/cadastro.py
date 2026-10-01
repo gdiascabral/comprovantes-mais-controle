@@ -19,6 +19,8 @@ conseguido falar com o servidor.
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from dataclasses import dataclass
 
 from . import cache, rest
@@ -192,6 +194,13 @@ def _subcontas(dados: dict) -> dict:
             "obras": [o["nome"] for o in obras.get(s["id"], [])],
             "investidores": [i["nome"] for i in invs.get(s["id"], [])],
         }
+        # % por centro de custo (01/10/2026). Só quando há: sem a chave, o
+        # rateio é em partes iguais, como sempre foi.
+        pcts = {o["nome"]: format(Decimal(str(o["percentual"])).normalize(), "f")
+                for o in obras.get(s["id"], [])
+                if o.get("percentual") is not None}
+        if pcts:
+            saida[s["nome"]]["percentuais"] = pcts
     return saida
 
 

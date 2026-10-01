@@ -73,6 +73,14 @@ class _Banco:
             saida.append(nova)
         return saida
 
+    def alterar(self, tabela, _token, filtro, mudancas):
+        self.ordem.append(f"alterar {tabela}")
+        ident = int(filtro.split("=eq.")[1])
+        for l in self.tabelas[tabela]:
+            if l["id"] == ident:
+                l.update(mudancas)
+        return []
+
     def apagar(self, tabela, _token, filtro):
         self.ordem.append(f"apagar {tabela}")
         ids = {int(i) for i in filtro[len("id=in.("):-1].split(",")}
@@ -84,7 +92,7 @@ class _Banco:
 def banco(monkeypatch, tmp_path):
     from nuvem import rest
     b = _Banco()
-    for nome in ("ler", "inserir", "apagar"):
+    for nome in ("ler", "inserir", "apagar", "alterar"):
         monkeypatch.setattr(rest, nome, getattr(b, nome))
     arquivo = tmp_path / "subcontas.json"
     arquivo.write_text(json.dumps({"_obra_padrao": "PADRAO"}), encoding="utf-8")
@@ -151,3 +159,32 @@ def test_aporte_lancado_pela_metade_trava_a_troca_do_rateio():
     assert AportesFrame._subconta_em_andamento(meio, "11111-1")
     assert not AportesFrame._subconta_em_andamento(nada, "11111-1")
     assert not AportesFrame._subconta_em_andamento(meio, "22222-2")
+
+
+def test_percentual_grava_troca_e_vai_para_o_cache(banco):
+    rs.gravar("tok", "11111-1", ["INV A"], ["LOTE 1", "LOTE 2"],
+              {"LOTE 1": "70", "LOTE 2": "30"})
+    pct = {o["nome"]: o["percentual"] for o in banco.tabelas["subconta_obra"]}
+    assert pct == {"LOTE 1": "70", "LOTE 2": "30"}
+    banco.ordem.clear()
+    rs.gravar("tok", "11111-1", ["INV A"], ["LOTE 1", "LOTE 2"],
+              {"LOTE 1": "50", "LOTE 2": "50"})
+    assert banco.ordem == ["alterar subconta_obra", "alterar subconta_obra"]
+    cache = cadastro.carregar_subcontas()["11111-1"]
+    assert cache["percentuais"] == {"LOTE 1": "50", "LOTE 2": "50"}
+    # tirar os % volta a partes iguais
+    rs.gravar("tok", "11111-1", ["INV A"], ["LOTE 1", "LOTE 2"], {})
+    assert "percentuais" not in cadastro.carregar_subcontas()["11111-1"]
+
+
+def test_validar_percentual_na_janela():
+    assert "somam" in rs.validar("11111-1", ["A"], ["L1", "L2"],
+                                 percentuais={"L1": "70", "L2": "20"})
+    assert rs.validar("11111-1", ["A"], ["L1", "L2"],
+                      percentuais={"L1": "70", "L2": "30"}) == ""
+
+
+def test_mudou_enxerga_troca_de_percentual():
+    a = {"1": {"obras": ["L"], "investidores": ["I"], "percentuais": {"L": "100"}}}
+    b = {"1": {"obras": ["L"], "investidores": ["I"]}}
+    assert rs.mudou(a, b, "1")
