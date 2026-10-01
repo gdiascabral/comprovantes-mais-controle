@@ -167,6 +167,10 @@ def problema_dos_percentuais(obras, percentuais) -> str:
         return f"falta o % de: {', '.join(faltam)}"
     if any(p <= 0 for p in pcts):
         return "todo % precisa ser maior que zero"
+    if any(p != p.quantize(Decimal("0.01")) for p in pcts):
+        # O banco guarda 2 casas; conferir 33,333 aqui e gravar 33,33 lá
+        # daria uma soma de 99,99 que só apareceria na hora de lançar.
+        return "use no máximo 2 casas no % (ex.: 33,33)"
     soma = sum(pcts)
     if soma != Decimal(100):
         return f"os % somam {soma:g}, e precisam somar 100"

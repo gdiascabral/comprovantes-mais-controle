@@ -282,3 +282,8 @@ def test_validar_barra_percentual_que_nao_fecha():
                  recebedor="SUB", valor=Decimal("10.00"),
                  tipo="Aporte de Capital", modo="Só recebimento")
     assert any("somam 90" in e for e in o.validar(entidades, subcontas))
+
+
+def test_percentual_com_mais_de_duas_casas_e_recusado():
+    assert "2 casas" in regras.problema_dos_percentuais(
+        ["A", "B", "C"], {"A": "33.333", "B": "33.333", "C": "33.334"})
