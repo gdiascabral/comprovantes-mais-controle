@@ -76,7 +76,7 @@ def perguntar(pai, contas: list[dict], entidades: list[dict]) -> nc.Novo | None:
                       lambda p, v=var: ttk.Entry(p, textvariable=v, width=66)
                       ).pack(anchor="w", fill="x", pady=(0, 10))
 
-    erro = ttk.Label(corpo, style="Apoio.TLabel", foreground="#c62828",
+    erro = ttk.Label(corpo, style="Erro.TLabel",
                      wraplength=560, justify="left", text="")
     erro.pack(anchor="w")
     if not livres:
