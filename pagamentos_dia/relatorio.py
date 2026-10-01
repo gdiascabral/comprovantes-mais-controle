@@ -370,7 +370,7 @@ _PROVA_DE_PAGAMENTO = regras.PROVA_DE_PAGAMENTO
 #: pagamento/transação", "autenticação ELETRÔNICA" (a "mecânica" está em todo boleto) e "pagamento
 #: efetuado com sucesso". A varredura de anexo escondido segue com o amplo.
 _COMPROVANTE_FORTE = re.compile(
-    r"comprovante\s+de\s+(?:pagamento|transa)|autentica[çc][aã]o\s+eletr|"
+    r"comprovante\s+de\s+(?:pagamento|transa|transfer)|pix\s+enviado|autentica[çc][aã]o\s+eletr|"
     r"pagamento\s+efetuado\s+com\s+sucesso", re.I)
 
 
@@ -885,6 +885,24 @@ def numero_tem_4_digitos(palavras) -> bool:
     return any(re.search(r"\d{4}", p) for p in palavras)
 
 
+_ROTULOS_DE_NOTA = ("nf", "nfe", "nota")
+
+
+def tira_rotulo_de_nota(saida: list[str]) -> None:
+    """Tira do FIM de `saida` (palavras já escritas) o rótulo de nota que
+    precede o número do documento: NF, NFE, NF-E (que chega como "NF", "E") ou
+    NOTA. O número é reescrito no fim da descrição, com ou sem "NF" conforme a
+    nota esteja anexada: o rótulo do texto livre inventaria um documento ou
+    sairia em dobro ("NF NF 1234"; revisão final, 01/10/2026). Mexe na lista
+    no lugar."""
+    def chave(t):
+        return re.sub(r"[^a-z0-9]", "", sem_acento(t).casefold())
+    if len(saida) >= 2 and chave(saida[-1]) == "e" and chave(saida[-2]) == "nf":
+        del saida[-2:]
+    elif saida and chave(saida[-1]) in _ROTULOS_DE_NOTA:
+        saida.pop()
+
+
 def descricao_sem_repeticao(descr: str, cc: str, doc: str,
                             limite: int = 110) -> str:
     """A descrição do lançamento para ir ANTES do documento na planilha.
@@ -911,6 +929,7 @@ def descricao_sem_repeticao(descr: str, cc: str, doc: str,
         while i < len(tokens):
             if ks[i] and ks[i:i + n] == alvo:
                 i += n
+                tira_rotulo_de_nota(saida)
                 continue
             saida.append(tokens[i])
             i += 1
@@ -1026,6 +1045,12 @@ _PAPEL_DO_PAGADOR = re.compile(
     r"tomador|destinat[aá]rio|pagador|sacado|cliente|adquirente", re.I)
 _PAPEL_DO_EMITENTE = re.compile(
     r"emitente|prestador|benefici[aá]rio|cedente|fornecedor", re.I)
+#: "cliente" também aparece em "SAC cliente" e "Central do cliente" no cabeçalho
+#: da nota: ali não abre o bloco do comprador.
+_CLIENTE_DE_ATENDIMENTO = re.compile(
+    r"(?:sac|atendimento\s+ao|central\s+do)\s*$", re.I)
+#: O rótulo "cliente" só vale para os CNPJs logo depois dele.
+_ALCANCE_DO_CLIENTE = 300
 _E_DANFE = re.compile(r"danfe|documento\s+auxiliar", re.I)
 _E_BOLETO_TEXTO = re.compile(
     r"ficha\s+de\s+compensa|recibo\s+do\s+pagador|benefici[aá]rio|linha\s+digit", re.I)
@@ -1043,9 +1068,17 @@ def cnpjs_do_emitente(texto: str) -> list[str]:
     rótulo. Em boleto/ficha de compensação o CNPJ do BANCO também fica de fora
     (o do beneficiário vale). Dono, 01/10/2026."""
     texto = texto or ""
-    marcas = sorted(
-        [(m.start(), True) for m in _PAPEL_DO_PAGADOR.finditer(texto)]
-        + [(m.start(), False) for m in _PAPEL_DO_EMITENTE.finditer(texto)])
+    marcas = []
+    for m in _PAPEL_DO_PAGADOR.finditer(texto):
+        alcance = None
+        if m.group(0).casefold() == "cliente":
+            if _CLIENTE_DE_ATENDIMENTO.search(texto[max(0, m.start() - 20):m.start()]):
+                continue
+            alcance = m.end() + _ALCANCE_DO_CLIENTE
+        marcas.append((m.start(), True, alcance))
+    marcas += [(m.start(), False, None)
+               for m in _PAPEL_DO_EMITENTE.finditer(texto)]
+    marcas.sort(key=lambda t: t[0])
     danfe = bool(_E_DANFE.search(texto))
     boleto = bool(_E_BOLETO_TEXTO.search(texto))
     achados, primeiro = [], True
@@ -1055,16 +1088,23 @@ def cnpjs_do_emitente(texto: str) -> list[str]:
             continue
         era_primeiro, primeiro = primeiro, False
         no_bloco_do_comprador = False
-        for pos, comprador in marcas:
+        for pos, comprador, alcance in marcas:
             if pos < m.start():
-                no_bloco_do_comprador = comprador
+                no_bloco_do_comprador = comprador and (
+                    alcance is None or m.start() <= alcance)
             else:
                 break
         if no_bloco_do_comprador and not (danfe and era_primeiro):
             continue
-        if boleto and _PERTO_DE_BANCO.search(
-                texto[texto.rfind("\n", 0, m.start()) + 1:m.end()]):
-            continue
+        if boleto:
+            # Só a janela logo antes do CNPJ, na mesma linha: "banco" lá no
+            # começo da linha não é do CNPJ do fim; e "banco ... beneficiário
+            # <cnpj>" é o beneficiário.
+            ini = max(texto.rfind(chr(10), 0, m.start()) + 1, m.start() - 40)
+            janela = texto[ini:m.start()]
+            bancos = list(_PERTO_DE_BANCO.finditer(janela))
+            if bancos and "benefici" not in janela[bancos[-1].end():].casefold():
+                continue
         if cnpj not in achados:
             achados.append(cnpj)
     return achados

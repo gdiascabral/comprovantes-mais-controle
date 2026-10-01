@@ -270,13 +270,14 @@ def _sem_sequencia(palavras, sequencia) -> list[str]:
     while i < len(palavras):
         if n and [p.casefold() for p in palavras[i:i + n]] == alvo:
             i += n
+            relatorio.tira_rotulo_de_nota(saida)
             continue
         saida.append(palavras[i])
         i += 1
     return saida
 
 
-def descricao_para_colar(registro, conta) -> str:
+def descricao_para_colar(registro, conta, limite: int | None = None) -> str:
     """A descrição que o botão "Copiar" do HTML geral põe no campo do banco.
 
     Não é a `descricao` da planilha: aquela é para conferir, esta é para o
@@ -317,6 +318,10 @@ def descricao_para_colar(registro, conta) -> str:
       palavra. A NF e a OC NUNCA são cortadas — são o que liga o pagamento ao
       documento; quem cede é a descrição do lançamento e, se ainda não
       couber, o centro de custo.
+
+    `limite` troca o tamanho do banco (`limite_da_descricao(conta)`): a
+    remessa CNAB usa o do campo do layout (38 no Pix, 30 no boleto) e passa
+    por esta MESMA função, para o documento nunca ser cortado lá também.
     """
     r = registro or {}
     utilidade = bool(r.get("utilidade"))
@@ -355,7 +360,7 @@ def descricao_para_colar(registro, conta) -> str:
             # Só número de 4+ dígitos: o curto pode ser lote.
             texto = _sem_sequencia(texto, nf)
 
-    limite = limite_da_descricao(conta)
+    limite = limite_da_descricao(conta) if limite is None else limite
     if len(" ".join(cc + texto + fixos)) > limite:
         resto = cc + fixos
         texto = _que_cabem(texto, limite - len(" ".join(resto)) - (1 if resto else 0))
@@ -474,12 +479,14 @@ def _norm(texto) -> str:
 
 def _motivo_do_bloqueio(r: dict) -> str:
     """Por que a linha não pode ser copiada às cegas (vazio = livre). "JÁ PAGO"
-    fica de fora: não é bloqueio novo."""
+    entra: copiar o boleto/Pix de quem já pagou é pagar de novo."""
     status = _norm(r.get("status"))
     obs = _norm(r.get("obs"))
     motivos = []
+    if status.startswith("JA PAGO"):
+        motivos.append("já pago — não pagar de novo")
     if status.startswith("ATENCAO"):
-        resto = re.sub(r"^\S+\s*[-:–]?\s*", "",
+        resto = re.sub(r"^\S+[\s\-:–—]*", "",
                        str(r.get("status") or "").strip())
         motivos.append(resto or "atenção")
     if "PAGAR A MAO" in obs:

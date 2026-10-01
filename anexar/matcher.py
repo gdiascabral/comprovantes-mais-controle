@@ -75,8 +75,12 @@ def _numeros_soltos(desc: str, cents: int) -> set[str]:
     que ele puxa: "LT 100 101", "QD 100, 101", "LT 10 E 11"), o próprio valor,
     o que parece ano (1990 a 2100: o texto livre traz datas) e menos de 3
     dígitos, ambíguo demais."""
-    achados = set()
+    achados = []
     endereco = False
+    # O documento é o ÚLTIMO número da descrição (é ali que a descrição colada
+    # sempre o põe); com OC no fim, o último antes do "OC". Os números do meio
+    # do texto livre não valem (revisão final, 01/10/2026).
+    desc = re.split(r"OC", desc or "", maxsplit=1, flags=re.I)[0]
     for tok in desc.split():
         tok = tok.strip(",;:()")
         if endereco and _so_continuacao(tok):
@@ -90,8 +94,8 @@ def _numeros_soltos(desc: str, cents: int) -> set[str]:
             n = _sem_zeros(tok)
             if (len(n) >= 3 and not _parece_ano(n)
                     and n not in (str(cents), str(cents // 100))):
-                achados.add(n)
-    return achados
+                achados.append(n)
+    return set(achados[-1:])
 
 
 def _numeros_do_documento(doc: str) -> set[str]:
@@ -283,7 +287,10 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
 
     # Valores que têm pendente SEM nº do documento: a NF de um PDF desse valor
     # pode ser dele, e aí a NF não aponta ninguém (2ª revisão do PR #94).
-    sem_documento = {v for q in pendentes if not str(q.get("doc") or "").strip()
+    # Sem número que sirva ("S/N", "RECIBO", 1 ou 2 dígitos, ano) também conta.
+    sem_documento = {v for q in pendentes
+                     if not any(not _parece_ano(n) for n in
+                                _numeros_do_documento(str(q.get("doc") or "")))
                      for v in _vals(q)}
 
     for pe in pendentes:

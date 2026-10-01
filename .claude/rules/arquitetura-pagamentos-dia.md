@@ -571,24 +571,40 @@ paths:
   em branco. **A descrição do HTML não é a da planilha** (dono, 14/09/2026):
   `html_pagamentos.descricao_para_colar` monta, das peças soltas que o
   registro leva (`nf`, `nf_anexada`, `oc_da_descricao`,
-  `descricao_lancamento`, `utilidade`), o texto de colar no banco — centro de custo SEMPRE na frente
-  (é por ele que o Anexar casa o comprovante), "NF x OC y" / "OC y" / "NF x" — o rótulo "NF" só sai com nota fiscal
-  ANEXADA (`nf_anexada`, de `relatorio.tem_nf_anexada`; registro sem a chave
-  fica sem rótulo; boleto com "NF" no nome só conta se o texto confirmar a
-  nota; ficha de arrecadação também fica sem "NF"; dono, 01/10/2026) —
-  e sem nenhum dos dois a descrição do lançamento. **Documento sem OC leva também a
-  descrição do lançamento** ("CC desc NF x" / "CC desc x", dono, 01/10/2026), na
-  planilha (`relatorio.monta_descricao`, corte em palavra em 110) e no HTML; com OC
-  nada muda; a descrição cede primeiro ao limite do banco e o documento nunca é
-  cortado; centro de custo e número do documento já presentes na descrição não se
-  repetem (por palavra inteira; o número só sai com 4+ dígitos, porque o curto pode
-  ser lote); medição e utilidade seguem na forma curta; ("C x M y" na medição);
-  sem acento, sem caractere especial e sem menção de reembolso, com o hífen
-  ENTRE DÍGITOS preservado ("LT 10-11" virando "LT 10 11" faria o matcher
-  casar o lote 10); no máximo 140 caracteres em conta do Inter e 100 nas
-  outras (o Sicoob "deixou digitar 140, mas vira e mexe limita"), cortando
-  em fronteira de palavra e nunca a NF, a OC ou o C/M. No reembolso, a coluna
-  do favorecido mostra quem recebe, "(reembolso de <favorecido>)".
+  `descricao_lancamento`, `utilidade`), o texto de colar no banco:
+  centro de custo SEMPRE na frente (é por ele que o Anexar casa o
+  comprovante), depois "NF x OC y" / "OC y" / "NF x". O rótulo "NF" só sai
+  com nota fiscal ANEXADA (`nf_anexada`, de `relatorio.tem_nf_anexada`;
+  registro sem a chave fica sem rótulo; boleto com "NF" no nome só conta se o
+  texto confirmar a nota; ficha de arrecadação também fica sem "NF"; dono,
+  01/10/2026). Sem NF nem OC, vale a descrição do lançamento, ou a forma curta
+  "C x M y" na medição de mão de obra.
+  **Documento sem OC leva também a descrição do lançamento** ("CC desc NF x" /
+  "CC desc x", dono, 01/10/2026), na planilha (`relatorio.monta_descricao`,
+  corte em palavra em 110) e no HTML; com OC nada muda. A descrição cede
+  primeiro ao limite do banco, depois o centro de custo, e o documento e a OC
+  nunca são cortados. Centro de custo e número do documento já presentes na
+  descrição não se repetem (por palavra inteira; o número só sai com 4+
+  dígitos, porque o curto pode ser lote), e o rótulo NF/NFE/NF-E/NOTA que vinha
+  antes do número repetido sai junto (`relatorio.tira_rotulo_de_nota`), para
+  não sobrar "NF" sem nota anexada nem "NF NF 1234". Medição e utilidade
+  seguem na forma curta. Sem acento, sem caractere especial e sem menção de
+  reembolso, com o hífen ENTRE DÍGITOS preservado ("LT 10-11" virando "LT 10
+  11" faria o matcher casar o lote 10); no máximo 140 caracteres em conta do
+  Inter e 100 nas outras (o Sicoob "deixou digitar 140, mas vira e mexe
+  limita"), cortando em fronteira de palavra. No reembolso, a coluna do
+  favorecido mostra quem recebe, "(reembolso de <favorecido>)".
+  **A remessa CNAB usa o MESMO texto** (revisão final, 01/10/2026):
+  `remessa_dia.etiqueta_do_banco` chama `descricao_para_colar(partes, None,
+  limite)` com o limite do campo (38 no Pix, 24.3A; 30 no boleto, 09.3J), e as
+  peças vêm em `Candidato.partes`. Antes a descrição da planilha ("CC +
+  descrição + doc") ia crua e o `fmt_alfa` cortava à direita: o documento, no
+  fim, era o primeiro a sumir. Registro sem as peças (teste antigo) cai na
+  descrição da planilha. O "seu número" e os valores não mudam.
+  **Bloqueio do Copiar** (`_motivo_do_bloqueio`): a linha JÁ PAGO também fica
+  sem o Copiar do boleto/Pix, com o motivo "já pago — não pagar de novo"
+  (copiar o dado de quem já pagou é pagar em dobro); o travessão (U+2014) do
+  status "ATENÇÃO — motivo" sai da frase do motivo.
   **Para remover**: apagar os dois módulos e o teste, o método
   `_gerar_html_pagamentos` e as linhas marcadas "HTML provisório" deste
   arquivo (import, botão `b_html` e as duas que o acendem e apagam), e este

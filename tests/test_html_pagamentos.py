@@ -422,10 +422,6 @@ def test_parcial_valor_diverge_e_pagar_a_mao_bloqueiam():
     assert "à mão" in ent["3"]["bloqueio"]
 
 
-def test_ja_pago_nao_e_bloqueio_novo():
-    ent = _entradas(**{"CONTA A": [_linha("F1", 1.0, "1", status="JÁ PAGO")]})
-    assert ent["1"]["bloqueio"] == ""
-
 
 def test_mesma_linha_digitavel_em_duas_contas_bloqueia_as_duas():
     ent = _entradas(**{
@@ -484,3 +480,14 @@ def test_modelo_so_cria_copiar_do_dado_quando_nao_bloqueado():
     html = _geral_completo()
     assert "if(e.dados_limpo && !bloq){ const b = btns[bi];" in html
     assert "(e.dados_limpo && bloq)" in html
+
+
+def test_ja_pago_bloqueia_o_copiar():
+    ent = _entradas(**{"CONTA A": [_linha("F1", 1.0, "1", status="JÁ PAGO em 01/10/2026")]})
+    assert ent["1"]["bloqueio"] == "já pago — não pagar de novo"
+
+
+def test_motivo_com_travessao_nao_sai_com_o_travessao():
+    ent = _entradas(**{"CONTA A": [_linha("F1", 1.0, "1", status="ATENÇÃO — sem dados de pgto")]})
+    assert ent["1"]["bloqueio"] == "sem dados de pgto"
+    assert hp._motivo_do_bloqueio({"status": "ATENÇÃO: — pagar à mão"}) == "pagar à mão"

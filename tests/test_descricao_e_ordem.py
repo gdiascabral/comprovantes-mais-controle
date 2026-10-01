@@ -745,3 +745,21 @@ def test_b2c_planilha_prefixo_parcial_de_cc_nao_e_cortado():
     item = {"documentNumber": "5678", "description": "QD 99 reboco",
             "costCentreDetails": [{"workName": "QD 99 LT 99"}]}
     assert relatorio.monta_descricao(item, []) == "QD 99 LT 99 QD 99 reboco 5678"
+
+
+# ---- revisão final: sem nota anexada o "NF" do texto livre não sobra
+def test_sem_nf_anexada_tira_o_nf_do_texto_livre_antes_do_numero():
+    r = _partes(nf="1234", descricao="COMPRA CIMENTO NF 1234", nf_anexada=False)
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 COMPRA CIMENTO 1234"
+    for rotulo in ("NF-E", "NFE", "NOTA", "nf"):
+        r = _partes(nf="1234", descricao=f"COMPRA CIMENTO {rotulo} 1234",
+                    nf_anexada=False)
+        assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 COMPRA CIMENTO 1234", rotulo
+    # com a nota anexada o texto livre fica como está (o documento sai do fim)
+    r = _partes(nf="1234", descricao="COMPRA CIMENTO NF 1234", nf_anexada=True)
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 COMPRA CIMENTO NF 1234", "sem NF NF"
+
+
+def test_monta_descricao_sem_nf_anexada_tira_o_nf_do_texto_livre():
+    item = dict(_ITEM_NF, description="COMPRA CIMENTO NF 1234")
+    assert relatorio.monta_descricao(item, []) == "QD 99 LT 99 COMPRA CIMENTO 1234"

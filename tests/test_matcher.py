@@ -600,3 +600,29 @@ def test_soltos_formatos_que_nao_sao_documento():
 
 def test_formato_novo_com_texto_livre_casa():
     assert _casa_solto("500,00 - QD 9 LT 9 Material de obra 4567 - 11-09.pdf", "4567")
+
+
+# ---- revisão final: só o ÚLTIMO número da descrição vale como documento solto
+def test_solto_so_o_ultimo_numero_da_descricao():
+    assert _soltos("EDIFICIO 1500 MATERIAL 4567") == {"4567"}
+    assert _soltos("CC desc 1234 OC 55") == {"1234"}
+    assert _soltos("CC COMPRA 450 TELHAS") == {"450"}
+
+
+def test_texto_livre_nao_anexa_o_pdf_no_lancamento_de_outro():
+    """A tem documento "S/N" e a descrição colada traz "COMPRA 450 TELHAS"; B tem
+    o documento 450. O PDF de A não pode ir para B só pelo número do meio."""
+    pdfs = [_pdf("500,00 - CC COMPRA 450 TELHAS S N - 11-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 50000, origem=SICOOB_1, doc="S/N", desc="x"),
+            _pend_conta("B", 50000, origem=SICOOB_1, doc="450", desc="y")]
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    assert [c for c in certezas if c["paidId"] == "B"] == []
+
+
+def test_pendente_sem_numero_de_documento_e_rival():
+    for doc in ("S/N", "RECIBO", "12", "2026"):
+        pdfs = [_pdf("500,00 - CC 1234 - 11-09.pdf", origem=SICOOB_1)]
+        pend = [_pend_conta("A", 50000, origem=SICOOB_1, doc="1234", desc="x"),
+                _pend_conta("B", 50000, origem=SICOOB_1, doc=doc, desc="y")]
+        certezas, _, _ = matcher.casar(pend, pdfs)
+        assert [c for c in certezas if c["paidId"] == "A"] == [], doc

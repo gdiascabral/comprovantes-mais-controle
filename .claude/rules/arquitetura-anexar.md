@@ -46,6 +46,16 @@ paths:
   NUNCA chuta: só casa por data se não há outro pagamento de valor igual;
   ambíguo vira DÚVIDA. `parse_pdf` reconhece valor/data em qualquer posição
   do nome (modelos personalizados) e ignora sufixo " (2)".
+  **Número solto como documento** (`_numeros_soltos`, dono 01/10/2026 e revisão
+  final): sem o rótulo "NF" no nome, vale só o ÚLTIMO número da parte
+  DESCRIÇÃO — é onde a descrição colada (`descricao_para_colar`) sempre põe o
+  documento. Com OC no fim ("... 1234 OC 55") é o último antes do "OC". Os
+  números do meio do texto livre ("COMPRA 450 TELHAS") não valem: a descrição
+  traz o texto livre do lançamento, e o 450 casava o PDF de A no lançamento B
+  como CERTEZA. Além disso, em `casar`, todo pendente cujo
+  `_numeros_do_documento(doc)` sai vazio ("S/N", "RECIBO", 1 ou 2 dígitos,
+  ano) entra em `sem_documento`: continua rival dos outros de mesmo valor e
+  impede a CERTEZA por número solto.
 - `anexar/mc_client.py` — Playwright controla o Chrome instalado
   (channel="chrome", perfil persistente `.chrome_profile` ao lado do exe).
   **Login**: a tela do ERP é AngularJS. Preencher o input (mesmo com setter

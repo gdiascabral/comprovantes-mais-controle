@@ -330,3 +330,32 @@ def test_i3_cnpj_do_banco_no_boleto_nao_conta():
 def test_i4_valor_com_pontos_de_preenchimento():
     assert relatorio._valor_nos_textos(500.0, ["Valor......500,00"])
     assert not relatorio._valor_nos_textos(500.0, ["Valor 1.500,00"])
+
+
+def test_cliente_de_atendimento_nao_abre_o_bloco_do_comprador():
+    emit = gera_cnpj("11222333")
+    for cab in ("SAC cliente 0800", "Central do cliente 0800", "Atendimento ao cliente"):
+        texto = f"{cab}\nEmitente Atacado CNPJ {fmt(emit)}\n"
+        assert relatorio.cnpjs_do_emitente(texto) == [emit], cab
+
+
+def test_bloco_do_cliente_termina_em_300_caracteres():
+    emit, tom = gera_cnpj("11222333"), gera_cnpj("55666777")
+    perto = f"Dados do cliente CNPJ {fmt(tom)}\n"
+    assert relatorio.cnpjs_do_emitente(perto) == []
+    longe = "Dados do cliente\n" + "x " * 200 + f"\nCNPJ {fmt(emit)}\n"
+    assert relatorio.cnpjs_do_emitente(longe) == [emit]
+
+
+def test_banco_longe_do_cnpj_ou_antes_do_beneficiario_nao_descarta():
+    benef = gera_cnpj("11222333")
+    longe = (f"Banco Exemplo S.A. 001 - atendimento e informacoes gerais pelo telefone"
+             f" CNPJ {fmt(benef)}\nFicha de Compensacao\n")
+    assert relatorio.cnpjs_do_emitente(longe) == [benef]
+    junto = f"Banco Exemplo Beneficiario CNPJ {fmt(benef)}\nFicha de Compensacao\n"
+    assert relatorio.cnpjs_do_emitente(junto) == [benef]
+
+
+def test_comprovante_forte_aceita_transferencia_e_pix_enviado():
+    for t in ("Comprovante de transferencia", "PIX enviado com sucesso"):
+        assert relatorio._COMPROVANTE_FORTE.search(t), t
