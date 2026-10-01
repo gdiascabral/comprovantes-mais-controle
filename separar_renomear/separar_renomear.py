@@ -117,9 +117,12 @@ def _valor_generico(t):
        comprovante. Mais de um valor diferente e nenhum rótulo é dúvida —
        e dúvida sai "SEM VALOR", nunca um chute."""
     for rotulo in _ROTULOS_VALOR:
-        pat = (r'(?i)(?<![\w])(?:' + rotulo + r')(?!\s*(?:original|principal|'
+        # [ \t] e não \s: o número tem de estar na MESMA linha do rótulo.
+        # Atravessando a quebra, no OCR em colunas "Valor pago:" casava com o
+        # número do rótulo de CIMA (o valor original).
+        pat = (r'(?i)(?<![\w])(?:' + rotulo + r')(?![ \t]*(?:original|principal|'
                r'base|bruto|unit|da\s+parcela|do\s+documento))'
-               r'(?:\s*\(R\$\))?\s*:?\s*(?:R\s?[S$]\$?\s*)?' + _NUM)
+               r'(?:[ \t]*\(R\$\))?[ \t]*:?[ \t]*(?:R\s?[S$]\$?[ \t]*)?' + _NUM)
         for m in re.finditer(pat, t):
             v = _numero_br(m.group(1))
             if v and v not in ("0,00",):
@@ -137,6 +140,17 @@ def _valor_generico(t):
     return achados.pop() if len(achados) == 1 else None
 
 
+def _valor_pago_explicito(t):
+    """"Valor do pagamento: R$ 1.701,20" / "Valor pago" / "Total pago", na
+    mesma linha do número. None quando não há, ou quando há dois diferentes
+    (aí não é com esse rótulo que se decide)."""
+    pat = (r'(?i)(?<![\w])(?:Valor[ \t]+(?:do[ \t]+)?(?:pagamento|pago)|'
+           r'Total[ \t]+pago)[ \t]*:?[ \t]*(?:R\s?[S$]\$?[ \t]*)?' + _NUM)
+    achados = {_numero_br(m.group(1)) for m in re.finditer(pat, t)}
+    achados -= {None, "0,00"}
+    return achados.pop() if len(achados) == 1 else None
+
+
 def _valor_em_colunas(t):
     """Imagem lida pelo OCR em colunas: "Valor:" sozinho numa linha, e o
     número só lá embaixo, no bloco dos valores — o primeiro número de
@@ -144,18 +158,26 @@ def _valor_em_colunas(t):
     banco ("-") somem no OCR, então casar o 3º rótulo com o 3º valor erraria;
     o PRIMEIRO rótulo de dinheiro com o PRIMEIRO número não erra."""
     linhas = [l.strip() for l in t.splitlines() if l.strip()]
-    for rotulo in _ROTULOS_VALOR:
-        sozinho = re.compile(r'(?i)^(?:' + rotulo + r')\s*(?:\(R\$\))?\s*:?$')
-        for i, l in enumerate(linhas):
-            if not sozinho.match(l) or _NAO_E_O_PAGO.search(l):
-                continue
-            for seguinte in linhas[i + 1:i + 40]:
-                m = re.fullmatch(r'(?:R\s?[S$]\$?\s*)?' + _NUM, seguinte)
-                if m:
-                    v = _numero_br(m.group(1))
-                    if v and v != "0,00":
-                        return v
-            return None
+    # Todo rótulo de dinheiro SOLTO, na ordem do texto (inclusive juros,
+    # multa, valor original). Só se o PRIMEIRO deles for o do valor pago é
+    # que o primeiro número lhe pertence; se antes dele vier "Valor
+    # original:" ou "Juros:", o primeiro número é desses — e aí, SEM VALOR.
+    dinheiro = re.compile(
+        r'(?i)^(?:valor\b.*|total\b.*|pago|quantia|import[âa]ncia|montante|'
+        r'juros\b.*|multa\b.*|desconto|abatimento|tarifa)\s*(?:\(R\$\))?\s*:?$')
+    pago = re.compile(r'(?i)^(?:' + '|'.join(_ROTULOS_VALOR)
+                      + r')\s*(?:\(R\$\))?\s*:?$')
+    soltos = [i for i, l in enumerate(linhas) if dinheiro.match(l)]
+    if not soltos:
+        return None
+    i = soltos[0]
+    if not pago.match(linhas[i]) or _NAO_E_O_PAGO.search(linhas[i]):
+        return None
+    for seguinte in linhas[i + 1:i + 40]:
+        m = re.fullmatch(r'(?:R\s?[S$]\$?\s*)?' + _NUM, seguinte)
+        if m:
+            v = _numero_br(m.group(1))
+            return v if v and v != "0,00" else None
     return None
 
 
@@ -248,9 +270,12 @@ RE_DESC_SEM_DOIS_PONTOS = re.compile(
     r'(?:Descri[çc][ãa]o|Observa[çc][ãa]o)(?=\s|$)\s*(.*)')
 RE_CONECTIVO = re.compile(r'(?i)d[aeo]s?\b')
 
-#: Linha que é só dinheiro, número ou data — o VALOR de outro rótulo, que o
-#: OCR em colunas pôs ao lado do "Descrição:" solto. Nunca é descrição.
-RE_SO_NUMERO = re.compile(r'\s*(?:R\s?[S$]\$?)?\s*[\d.,/:%\-\s]+')
+#: Linha que é só dinheiro, data ou % — o VALOR de outro rótulo, que o OCR
+#: em colunas pôs ao lado do "Descrição:" solto. Nunca é descrição. Número
+#: inteiro solto ("5587") continua valendo, como sempre valeu: é a OC.
+RE_SO_NUMERO = re.compile(
+    r'\s*(?:R\s?[S$]\$?\s*[\d.,]+|\d{1,3}(?:[.,]\d{3})*[.,]\d{2}'
+    r'|\d{2}/\d{2}/\d{2,4}.*|\d+(?:[.,]\d+)?\s*%)\s*')
 
 
 def _descricao(t, banco):
@@ -429,6 +454,13 @@ def campos(t):
     # leitura genérica entra SÓ aqui, no fim. Mais cedo ela mudava qual
     # leitor era escolhido, e comprovante que já saía certo perdia a
     # descrição (medido em 900 comprovantes reais desta máquina).
+    # O valor PAGO dito com todas as letras ("Valor do pagamento: R$ X",
+    # "Valor pago", "Total pago") manda sobre o "Valor:" do boleto, que é o
+    # de face: num boleto pago com juros os dois diferem, e o nome com o de
+    # face faria o Anexar casar com o título errado. Mesma linha só.
+    pago = _valor_pago_explicito(t)
+    if pago and pago != escolhido.get('valor'):
+        escolhido['valor'] = pago
     # "0,00" nunca é o valor de um pagamento: é a Multa ou o Desconto que
     # sobrou sozinho na linha. Melhor procurar de novo do que nomear "0,00".
     if escolhido.get('valor') and not escolhido['valor'].strip("0.,"):
@@ -440,9 +472,8 @@ def campos(t):
     # Imagem de banco desconhecido lida em colunas: há um rótulo "Descrição:"
     # solto e nenhum leitor achou o texto dele. Só com o rótulo presente —
     # sem ele, uma linha com "QD 12 LT 5" pode ser o ENDEREÇO de alguém.
-    if not escolhido.get('desc') and not imp and RE_ROTULO_DESC_SOLTO.search(t):
-        escolhido['desc'] = _desc_pela_cara(
-            [l.strip() for l in t.splitlines() if l.strip()])
+    if not escolhido.get('desc') and not imp:
+        escolhido['desc'] = _desc_em_colunas(t)
     return escolhido
 
 
@@ -645,6 +676,30 @@ def _desc_pela_cara(nl):
 RE_ROTULO_DESC_SOLTO = re.compile(
     r'(?im)^\s*(?:Descri[çc][ãa]o|Observa[çc][ãa]o|Hist[óo]rico|Mensagem)'
     r'\s*:?\s*$')
+
+
+RE_ENDERECO = re.compile(
+    r'(?i)^\s*(?:RUA|R\.|AV\.?|AVENIDA|ALAMEDA|AL\.|RODOVIA|ROD\.|TRAVESSA|'
+    r'PRA[ÇC]A|ESTRADA|ENDERE[ÇC]O)\b')
+
+
+def _desc_em_colunas(t):
+    """Imagem de banco desconhecido lida em colunas: o "Descrição:" fica
+    solto e o texto dele, lá embaixo. Vale só a linha DEPOIS do rótulo, com
+    centro de custo / OC / NF (a regra forte — "DISTRIBUI" é razão social de
+    fornecedor) e que não seja endereço ("RUA X QD 5 LT 9")."""
+    nl = [l.strip() for l in t.splitlines() if l.strip()]
+    i = next((k for k, l in enumerate(nl) if RE_ROTULO_DESC_SOLTO.match(l)), None)
+    if i is None:
+        return None
+    for l in nl[i + 1:]:
+        u = _sem_acento(l).upper()
+        if (RE_DESC_FORTE.search(u) or RE_DESC_COLADO.search(u)) \
+                and not RE_ID_LONGO.match(l) and len(l) < 90 \
+                and not RE_ENDERECO.match(u) and not l.endswith(":") \
+                and "OUVIDORIA" not in u and "COMPROVANTE" not in u:
+            return RE_ROTULO_DESC.sub("", l).strip() or None
+    return None
 
 
 def _campos_impresso(t):
@@ -1048,23 +1103,37 @@ def imagem_para_pdf(origem: Path, destino: Path) -> None:
     detalhe de foto boa, nem estica print pequeno."""
     from PIL import Image
     with Image.open(origem) as img:
-        img.seek(0)                              # gif/tiff: só o 1º quadro
-        try:
-            orientacao = img.getexif().get(0x0112, 1)
-        except Exception:
-            orientacao = 1
-        saida = img
-        for passo in _DESVIRAR.get(orientacao, ()):
-            saida = saida.transpose(getattr(Image.Transpose, passo))
-        if saida.mode != "RGB":
-            fundo = Image.new("RGB", saida.size, (255, 255, 255))
-            if saida.mode in ("RGBA", "LA", "P"):
-                saida = saida.convert("RGBA")
-                fundo.paste(saida, mask=saida.split()[-1])
-            else:
-                fundo.paste(saida.convert("RGB"))
-            saida = fundo
-        saida.save(destino, "PDF", resolution=300.0)
+        quadros = getattr(img, "n_frames", 1) or 1
+        # TIFF do scanner com vários comprovantes: uma página do PDF por
+        # quadro, e a separação de página já faz o resto. GIF animado não é
+        # comprovante: dele, só o 1º quadro.
+        if img.format != "TIFF":
+            quadros = 1
+        paginas = []
+        for q in range(quadros):
+            img.seek(q)
+            paginas.append(_em_pe_e_rgb(img, Image))
+        paginas[0].save(destino, "PDF", resolution=300.0, save_all=True,
+                        append_images=paginas[1:])
+
+
+def _em_pe_e_rgb(img, Image):
+    try:
+        orientacao = img.getexif().get(0x0112, 1)
+    except Exception:
+        orientacao = 1
+    saida = img
+    for passo in _DESVIRAR.get(orientacao, ()):
+        saida = saida.transpose(getattr(Image.Transpose, passo))
+    if saida.mode != "RGB":
+        fundo = Image.new("RGB", saida.size, (255, 255, 255))
+        if saida.mode in ("RGBA", "LA", "P"):
+            saida = saida.convert("RGBA")
+            fundo.paste(saida, mask=saida.split()[-1])
+        else:
+            fundo.paste(saida.convert("RGB"))
+        saida = fundo
+    return saida.copy() if saida is img else saida
 
 
 def _imagens_como_pdf(pasta_entrada: Path, pasta_saida: Path, temp: Path,
@@ -1077,10 +1146,9 @@ def _imagens_como_pdf(pasta_entrada: Path, pasta_saida: Path, temp: Path,
         if (img.suffix.lower() not in IMAGENS or not img.is_file()
                 or pasta_saida in img.parents):
             continue
-        alvo = temp / f"{img.stem}.pdf"
-        n = 2
-        while alvo.exists():
-            alvo = temp / f"{img.stem} ({n}).pdf"; n += 1
+        # "foto.jpg.pdf": o registro ("[OCR] foto.jpg.pdf pág 1") mostra o
+        # arquivo que a pessoa tem na pasta, e jpg/png de mesmo nome não colidem.
+        alvo = temp / f"{img.name}.pdf"
         try:
             imagem_para_pdf(img, alvo)
         except Exception as e:

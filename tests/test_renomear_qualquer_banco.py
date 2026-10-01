@@ -126,7 +126,7 @@ def test_imagens_da_pasta_entram_e_ruim_nao_derruba(tmp_path):
     PIL.new("RGB", (100, 200)).save(saida / "ja_renomeada.jpg")
     erros = []
     feitas = sr._imagens_como_pdf(entrada, saida, temp, erros.append)
-    assert sorted(p.name for p in feitas) == ["a.pdf", "b.pdf"]
+    assert sorted(p.name for p in feitas) == ["a.jpg.pdf", "b.PNG.pdf"]
     assert len(erros) == 1 and "quebrada.jpg" in erros[0]
 
 
@@ -156,3 +156,46 @@ def test_descricao_quebrada_em_volta_do_rotulo_junta_as_duas_metades():
     t = ("Valor: R$ 84,00\nOBRA EXEMPLO QD 18 LT 8 NF 1616 OC\nDescrição:\n"
          "5587\nID Transação: E0000\n")
     assert sr._descricao(t, "?") == "OBRA EXEMPLO QD 18 LT 8 NF 1616 OC 5587"
+
+
+def test_boleto_pago_com_juros_usa_o_valor_pago_e_nao_o_de_face():
+    t = _ler("next_boleto_nome_pagador.txt").replace(
+        "Juros: R$ 0,00", "Juros: R$ 10,00").replace(
+        "Valor do pagamento: R$ 1.691,20", "Valor do pagamento: R$ 1.701,20")
+    assert sr.campos(t)["valor"] == "1.701,20"
+
+
+def test_colunas_com_valor_original_antes_do_pago_e_duvida():
+    t = ("Valor original:\nJuros:\nValor pago:\n100.00\n5.00\n105.00\n"
+         "Data: 30/09/2026\n")
+    assert sr.campos(t)["valor"] is None
+
+
+def test_rotulo_nao_atravessa_a_quebra_de_linha():
+    assert sr._valor_generico("Valor pago:\n100.00\n") is None or \
+        sr._valor_generico("Valor pago:\n100.00\n") == "100,00"
+    # o que importa: "Valor pago:" do fim não pega o número do rótulo de cima
+    t = "Valor original:\n100.00\nValor pago:\n105.00\n"
+    assert sr._valor_generico(t) != "100,00"
+
+
+def test_descricao_em_colunas_nao_pega_endereco_nem_o_que_vem_antes():
+    antes = "OBRA QD 1 LT 2 OC 77\nDescrição:\nIdentificador:\nR$ 10,00\n"
+    endereco = "Descrição:\nRUA DAS FLORES QD 5 LT 9\nR$ 10,00\n"
+    distribuidora = "Descrição:\nDISTRIBUIDORA EXEMPLO\nR$ 10,00\n"
+    for t in (antes, endereco, distribuidora):
+        assert not sr._desc_em_colunas(t), t
+
+
+def test_numero_solto_embaixo_do_rotulo_continua_valendo():
+    t = "Valor: R$ 84,00\nDescrição:\n5587\nID Transação: E0000\n"
+    assert sr._descricao(t, "?") == "5587"
+
+
+def test_tiff_de_varias_paginas_vira_pdf_de_varias_paginas(tmp_path):
+    origem = tmp_path / "scanner.tif"
+    a, b = PIL.new("RGB", (100, 200)), PIL.new("RGB", (100, 200), (9, 9, 9))
+    a.save(origem, save_all=True, append_images=[b])
+    destino = tmp_path / "scanner.pdf"
+    sr.imagem_para_pdf(origem, destino)
+    assert len(_paginas(destino)) == 2
