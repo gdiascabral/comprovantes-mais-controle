@@ -570,9 +570,12 @@ paths:
   `rodape_relatorio_pf.txt` ao lado da planilha (ou do app), e faltando saem
   em branco. **A descrição do HTML não é a da planilha** (dono, 14/09/2026):
   `html_pagamentos.descricao_para_colar` monta, das peças soltas que o
-  registro leva (`nf`, `oc_da_descricao`, `descricao_lancamento`,
-  `utilidade`), o texto de colar no banco — centro de custo SEMPRE na frente
-  (é por ele que o Anexar casa o comprovante), "NF x OC y" / "OC y" / "NF x",
+  registro leva (`nf`, `nf_anexada`, `oc_da_descricao`,
+  `descricao_lancamento`, `utilidade`), o texto de colar no banco — centro de custo SEMPRE na frente
+  (é por ele que o Anexar casa o comprovante), "NF x OC y" / "OC y" / "NF x" — o rótulo "NF" só sai com nota fiscal
+  ANEXADA (`nf_anexada`, de `relatorio.tem_nf_anexada`; registro sem a chave
+  fica sem rótulo; boleto com "NF" no nome só conta se o texto confirmar a
+  nota; ficha de arrecadação também fica sem "NF"; dono, 01/10/2026) —
   e sem nenhum dos dois a descrição do lançamento ("C x M y" na medição);
   sem acento, sem caractere especial e sem menção de reembolso, com o hífen
   ENTRE DÍGITOS preservado ("LT 10-11" virando "LT 10 11" faria o matcher

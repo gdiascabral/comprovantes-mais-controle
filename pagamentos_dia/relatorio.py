@@ -239,13 +239,30 @@ def _rotulo(f: dict) -> str:
 
 _NAO_E_NOTA = re.compile(
     r"comprovante|contrato|medi[çc][ãa]o|qr\s*code|pagar\s*para", re.I)
+# Marca FORTE de nota no rótulo: sozinha basta, até num anexo de boleto.
+_NF_FORTE = r"nota\s*fiscal|DANFE|(?<![A-Za-z])NFS?-?e(?![A-Za-z])"
+_ROTULO_NF_FORTE = re.compile(_NF_FORTE, re.I)
+# Marca FRACA: a sigla NF/NFS solta ("NF 1234.pdf", "nf1234", "NFS 12").
 _ROTULO_DE_NF = re.compile(
-    r"nota\s*fiscal|(?<![A-Za-z])NF(?![A-Za-z])|(?<![A-Za-z])NFS?-?e(?![A-Za-z])|DANFE",
-    re.I)
+    _NF_FORTE + r"|(?<![A-Za-z])NFS?(?![A-Za-z])", re.I)
 _MARCA_DE_NOTA = re.compile(r"DANFE|NOTA\s+FISCAL|(?<![A-Za-z])NFS?-?e(?![A-Za-z])",
                             re.I)
-# Chave de acesso: 44 dígitos colados ou no agrupamento da DANFE (11 de 4).
+# Chave de acesso: 11 grupos de 4 dígitos (agrupamento da DANFE)...
 _CHAVE_NFE_AGRUPADA = re.compile(r"(?<!\d)(?:\d{4} ){10}\d{4}(?!\d)")
+# ...ou 44 dígitos colados, MAS só com a expressão "chave de acesso" perto: o
+# código de barras de boleto também tem 44 dígitos.
+_CHAVE_COM_PALAVRA = re.compile(r"chave\s+de\s+acesso\D{0,40}(?:\d[\s.]?){43}\d", re.I)
+
+
+def _texto_confirma_nota(texto: str) -> bool:
+    """O TEXTO extraído do anexo mostra que ali há uma nota fiscal?
+
+    DANFE, NOTA FISCAL, NF-e/NFS-e, a chave de acesso agrupada (11 x 4) ou a
+    expressão "chave de acesso" seguida dos 44 dígitos. 44 dígitos soltos NÃO
+    bastam: o código de barras do boleto tem 44 (dono, 01/10/2026)."""
+    return bool(texto and (_MARCA_DE_NOTA.search(texto)
+                           or _CHAVE_NFE_AGRUPADA.search(texto)
+                           or _CHAVE_COM_PALAVRA.search(texto)))
 
 
 def tem_nf_anexada(files, textos: dict | None = None) -> bool:
@@ -254,11 +271,14 @@ def tem_nf_anexada(files, textos: dict | None = None) -> bool:
     O "NF" da descrição só pode aparecer quando existe uma nota: nem todo
     número de documento é nota fiscal (o da prefeitura, por exemplo, é só o
     número do documento). Vale como NF o anexo cujo rótulo (nome do arquivo +
-    etiqueta do ERP, `_rotulo`) é de nota — "nota fiscal", NF, NF-e, NFS-e,
-    DANFE, inclusive "NF 1234.pdf" e "nf1234" — ou o PDF "merge" (NF + boleto
-    juntados) etiquetado Recibo cujo TEXTO extraído tem marca de nota (DANFE,
-    NOTA FISCAL, NFS-e, NF-e ou chave de acesso de 44 dígitos). O merge
-    etiquetado NF já vale pelo rótulo.
+    etiqueta do ERP, `_rotulo`) é de nota: "nota fiscal", NF, NFS, NF-e,
+    NFS-e, DANFE, inclusive "NF 1234.pdf" e "nf1234".
+
+    Rótulo de BOLETO ou de Recibo que cita "NF" ("boleto NF 5909") não é nota
+    por isso: ali só conta uma marca forte no rótulo (nota fiscal, DANFE,
+    NF-e/NFS-e) ou o TEXTO do anexo confirmando a nota (`_texto_confirma_nota`).
+    O PDF "merge" (NF + boleto juntados) também vale pelo texto, qualquer que
+    seja a etiqueta.
 
     Comprovante, contrato, medição e "PAGAR PARA" nunca contam, mesmo com "NF"
     no nome: o comprovante de pagamento de uma NF não é a NF (dono,
@@ -268,14 +288,17 @@ def tem_nf_anexada(files, textos: dict | None = None) -> bool:
         rotulo = _rotulo(f)
         if _NAO_E_NOTA.search(rotulo):
             continue
-        if _ROTULO_DE_NF.search(rotulo):
+        ambiguo = bool(_E_BOLETO.search(rotulo)
+                       or re.search(r"recibo", f.get("tagName") or "", re.I))
+        merge = bool(re.search(r"merge", f.get("filename") or "", re.I))
+        if _ROTULO_NF_FORTE.search(rotulo):
             return True
-        if (re.search(r"merge", f.get("filename") or "", re.I)
-                and re.search(r"recibo", f.get("tagName") or "", re.I)):
-            texto = textos.get(f.get("downloadUrl") or "") or ""
-            if (_MARCA_DE_NOTA.search(texto) or _CHAVE_NFE.search(texto)
-                    or _CHAVE_NFE_AGRUPADA.search(texto)):
-                return True
+        fraco = bool(_ROTULO_DE_NF.search(rotulo))
+        if fraco and not ambiguo:
+            return True
+        if (((fraco and ambiguo) or merge)
+                and _texto_confirma_nota(textos.get(f.get("downloadUrl") or "") or "")):
+            return True
     return False
 
 

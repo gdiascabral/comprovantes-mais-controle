@@ -544,7 +544,7 @@ def test_so_boleto_anexado_numero_sem_nf():
 def test_merge_etiquetado_recibo_com_danfe_no_texto_vale_nf():
     f = anexo("merge-1.pdf", tag="Recibo")
     assert relatorio.tem_nf_anexada([f], {f["downloadUrl"]: "DANFE ... chave"})
-    assert relatorio.tem_nf_anexada([f], {f["downloadUrl"]: "x " + "1" * 44 + " y"})
+    assert relatorio.tem_nf_anexada([f], {f["downloadUrl"]: "chave de acesso " + "1" * 44})
     assert not relatorio.tem_nf_anexada([f], {f["downloadUrl"]: "boleto 34191"})
     assert not relatorio.tem_nf_anexada([f])
     r = _com_anexos([f], {f["downloadUrl"]: "NOTA FISCAL ELETRONICA"})
@@ -588,3 +588,40 @@ def test_pelo_pai_a_chave_chega_ao_registro_e_a_descricao_para_colar():
         linha = res.contas[CONTA][0]
         assert linha["nf_anexada"] is nota
         assert hp.descricao_para_colar(linha, INTER) == esperado
+
+
+# ---------------------------------------- conserto 1/5: boleto com "NF" no nome
+def test_boleto_com_nf_no_nome_nao_e_nota():
+    for f in (anexo("boleto NF 5909.pdf", tag="Boleto"),
+              anexo("boleto nf 1234.pdf"),
+              anexo("[Boleto] boleto NF 5909", tag="Boleto"),
+              anexo("fatura NF 12.pdf")):
+        assert not relatorio.tem_nf_anexada([f]), f["filename"]
+        texto_de_boleto = {f["downloadUrl"]: "34191 57007 beneficiario valor"}
+        assert not relatorio.tem_nf_anexada([f], texto_de_boleto), f["filename"]
+
+
+def test_boleto_com_nf_no_nome_vale_se_o_texto_confirma_a_nota():
+    f = anexo("boleto NF 5909.pdf", tag="Boleto")
+    for texto in ("DANFE documento auxiliar", "NOTA FISCAL ELETRONICA", "NFS-e 5909",
+                  "NF-e", "chave de acesso " + "1" * 44):
+        assert relatorio.tem_nf_anexada([f], {f["downloadUrl"]: texto}), texto
+
+
+def test_marca_forte_no_rotulo_vale_ate_em_boleto():
+    assert relatorio.tem_nf_anexada([anexo("boleto e DANFE.pdf", tag="Boleto")])
+    assert relatorio.tem_nf_anexada([anexo("x.pdf", tag="Nota fiscal boleto")])
+
+
+def test_44_digitos_soltos_nao_confirmam_nota():
+    """O código de barras de boleto também tem 44 dígitos."""
+    f = anexo("merge-1.pdf", tag="Recibo")
+    assert not relatorio.tem_nf_anexada([f], {f["downloadUrl"]: "boleto " + "1" * 44})
+    agrupada = " ".join(["1234"] * 11)
+    assert relatorio.tem_nf_anexada([f], {f["downloadUrl"]: agrupada})
+
+
+def test_nfs_sem_e_conta_como_nota_e_palavras_parecidas_nao():
+    assert relatorio.tem_nf_anexada([anexo("NFS 123.pdf")])
+    for nome in ("confirmacao.pdf", "INFO.pdf", "conf 12.pdf"):
+        assert not relatorio.tem_nf_anexada([anexo(nome)]), nome
