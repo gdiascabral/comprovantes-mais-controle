@@ -225,3 +225,65 @@ def test_parcela_declarada_em_aberto_recebe_a_baixa():
     assert r.ok
     assert len(cat.postagens) == 2          # /sales e depois a baixa
     assert "receipts" in cat.postagens[1]
+
+
+# ------------------------------------------------------- % por centro de custo
+def test_percentual_divide_e_fecha_o_total():
+    partes = regras.dividir_por_percentual(
+        Decimal("1000.00"), ["A", "B", "C"], {"A": "50", "B": "33.33", "C": "16.67"})
+    assert partes == [Decimal("500.00"), Decimal("333.30"), Decimal("166.70")]
+    assert sum(partes) == Decimal("1000.00")
+
+
+def test_percentual_com_sobra_de_centavo_vai_para_o_maior_resto():
+    partes = regras.dividir_por_percentual(
+        Decimal("0.10"), ["A", "B", "C"], {"A": "33.33", "B": "33.33", "C": "33.34"})
+    assert sum(partes) == Decimal("0.10")
+
+
+def test_sem_percentual_continua_partes_iguais():
+    assert regras.dividir_por_percentual(Decimal("100.00"), ["A", "B", "C"], {}) == \
+        regras.dividir_em_centavos(Decimal("100.00"), 3)
+
+
+@pytest.mark.parametrize("pcts, pedaco", [
+    ({"A": "70"}, "falta o % de: B"),
+    ({"A": "70", "B": "20"}, "somam 90"),
+    ({"A": "100", "B": "0"}, "maior que zero"),
+])
+def test_percentual_incompleto_e_recusado(pcts, pedaco):
+    assert pedaco in regras.problema_dos_percentuais(["A", "B"], pcts)
+    with pytest.raises(ValueError):
+        regras.dividir_por_percentual(Decimal("10.00"), ["A", "B"], pcts)
+
+
+def test_expandir_com_percentual_por_obra_e_igual_entre_investidores():
+    subcontas = {"11111-1": {"obras": ["LOTE 1", "LOTE 2"],
+                             "investidores": ["INV A", "INV B"],
+                             "percentuais": {"lote 1": "70", "LOTE 2": "30"}}}
+    entidades = {"SUB": {"nome_oficial": "HOLDING", "conta": "Holding - SUBCONTA 11111-1",
+                         "nome_descricao": None}}
+    o = Operacao(data=datetime.date(2026, 10, 1), pagador="Investidor conta 11111-1",
+                 recebedor="SUB", valor=Decimal("1000.00"),
+                 tipo="Aporte de Capital", modo="Só recebimento")
+    assert o.validar(entidades, subcontas) == []
+    itens = expandir(o, entidades, subcontas, "PADRAO")
+    assert [(i["obra"], i["cliente"], i["valor"]) for i in itens] == [
+        ("LOTE 1", "INV A", Decimal("350.00")), ("LOTE 1", "INV B", Decimal("350.00")),
+        ("LOTE 2", "INV A", Decimal("150.00")), ("LOTE 2", "INV B", Decimal("150.00"))]
+
+
+def test_validar_barra_percentual_que_nao_fecha():
+    subcontas = {"11111-1": {"obras": ["LOTE 1", "LOTE 2"], "investidores": ["INV"],
+                             "percentuais": {"LOTE 1": "70", "LOTE 2": "20"}}}
+    entidades = {"SUB": {"nome_oficial": "H", "conta": "SUBCONTA 11111-1",
+                         "nome_descricao": None}}
+    o = Operacao(data=datetime.date(2026, 10, 1), pagador="Investidor conta 11111-1",
+                 recebedor="SUB", valor=Decimal("10.00"),
+                 tipo="Aporte de Capital", modo="Só recebimento")
+    assert any("somam 90" in e for e in o.validar(entidades, subcontas))
+
+
+def test_percentual_com_mais_de_duas_casas_e_recusado():
+    assert "2 casas" in regras.problema_dos_percentuais(
+        ["A", "B", "C"], {"A": "33.333", "B": "33.333", "C": "33.334"})
