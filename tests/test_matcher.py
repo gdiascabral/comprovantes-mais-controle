@@ -629,7 +629,8 @@ def test_pendente_sem_numero_de_documento_e_rival():
 
 
 def test_soltos_corta_no_oc_pelo_padrao():
-    # "OC" nao esta em _ROTULOS_NUM: so o padrao de corte tira o 5555.
-    assert "OC" not in matcher._ROTULOS_NUM
+    # "OC" esta em _ROTULOS_NUM, que so engole o numero logo depois; o que vem
+    # depois de uma palavra ("MATERIAL 9999") so some pelo corte no OC.
+    assert _soltos("CC desc 1234 OC 5555 MATERIAL 9999") == {"1234"}
     assert _soltos("CC desc 1234 OC 5555") == {"1234"}
     assert _soltos("CC desc 1234 oc 5555 9999") == {"1234"}
