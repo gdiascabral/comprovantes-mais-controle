@@ -234,8 +234,11 @@ INTER = "CONTA MODELO - INTER"
 SICOOB = "CONTA MODELO - SICOOB"
 
 
-def _partes(nf="", oc="", descricao="", cc="QD 99 LT 99", utilidade=False):
+def _partes(nf="", oc="", descricao="", cc="QD 99 LT 99", utilidade=False,
+            nf_anexada=True):
+    """Por padrão a linha tem NF anexada (o "NF x" depende disso desde 01/10/2026)."""
     return {"centro_custo": cc, "nf": nf, "oc_da_descricao": oc,
+            "nf_anexada": nf_anexada,
             "descricao_lancamento": descricao, "utilidade": utilidade,
             "descricao": "a frase da planilha, que o HTML não usa"}
 
@@ -505,3 +508,120 @@ def test_o_html_geral_usa_a_descricao_para_colar():
     entrada = contas[0]["entries"][0]
     assert entrada["descricao"] == "QD 99 LT 99 OC 1234"
     assert entrada["favorecido"] == "Fornecedor Modelo - Ltda."
+
+
+# ------------------------------------- "NF" só com nota fiscal anexada (01/10/2026)
+_ITEM_NF = {"id": "1", "documentNumber": "1234",
+            "costCentreDetails": [{"workName": "QD 99 LT 99"}]}
+
+
+def _com_anexos(files, textos=None, oc=""):
+    reg = relatorio.partes_no_registro(
+        _ITEM_NF, files, "", {"purchaseOrder": {"number": oc}} if oc else None,
+        textos)
+    reg["centro_custo"] = relatorio.centro_de_custo(_ITEM_NF)
+    return reg
+
+
+def test_anexo_nf_com_numero_no_nome_rotula_nf():
+    r = _com_anexos([anexo("NF 123.pdf")])
+    assert r["nf_anexada"] is True
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 1234"
+
+
+def test_nf_colada_ao_numero_e_nfse_e_danfe_valem():
+    for nome in ("nf1234.pdf", "NFS-e 55.pdf", "NF-e 9.pdf", "DANFE.pdf",
+                 "Nota Fiscal obra.pdf"):
+        assert relatorio.tem_nf_anexada([anexo(nome)]), nome
+
+
+def test_so_boleto_anexado_numero_sem_nf():
+    r = _com_anexos([anexo("boleto 1234.pdf", tag="Boleto")], oc="55")
+    assert r["nf_anexada"] is False
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 1234 OC 55"
+
+
+def test_merge_etiquetado_recibo_com_danfe_no_texto_vale_nf():
+    f = anexo("merge-1.pdf", tag="Recibo")
+    assert relatorio.tem_nf_anexada([f], {f["downloadUrl"]: "DANFE ... chave"})
+    assert relatorio.tem_nf_anexada([f], {f["downloadUrl"]: "chave de acesso " + "1" * 44})
+    assert not relatorio.tem_nf_anexada([f], {f["downloadUrl"]: "boleto 34191"})
+    assert not relatorio.tem_nf_anexada([f])
+    r = _com_anexos([f], {f["downloadUrl"]: "NOTA FISCAL ELETRONICA"})
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 1234"
+
+
+def test_comprovante_com_nf_no_nome_nao_e_nf():
+    for nome in ("Comprovante NF 1234.pdf", "contrato NF.pdf", "medicao NF 3.pdf"):
+        assert not relatorio.tem_nf_anexada([anexo(nome)]), nome
+    r = _com_anexos([anexo("comprovante NF 1234.pdf")])
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 1234"
+
+
+def test_registro_sem_a_chave_nf_anexada_fica_sem_rotulo():
+    r = _partes(nf="5678", oc="1234")
+    del r["nf_anexada"]
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 5678 OC 1234"
+
+
+def test_monta_descricao_com_e_sem_nf_anexada():
+    ov = {"purchaseOrder": {"number": 7}}
+    assert relatorio.monta_descricao(_ITEM_NF, [anexo("NF 1234.pdf")], "", ov) \
+        == "QD 99 LT 99 NF 1234 OC 7"
+    assert relatorio.monta_descricao(_ITEM_NF, [anexo("boleto.pdf", tag="Boleto")],
+                                     "", ov) == "QD 99 LT 99 1234 OC 7"
+    assert relatorio.monta_descricao(_ITEM_NF, [], "", None) == "QD 99 LT 99 1234"
+
+
+def test_pelo_pai_a_chave_chega_ao_registro_e_a_descricao_para_colar():
+    """`montar_registros` leva `nf_anexada` até o registro e dele ao HTML."""
+    nf = anexo("NF 1234.pdf", tag="Nota fiscal")
+    bol = anexo("boleto.pdf", tag="Boleto")
+    item = {"id": "1", "tradePayableId": "t1", "paid": False,
+            "tradePayableAccount": {"name": CONTA}, "paidTo": "Fornecedor Modelo",
+            "remainingValue": 10.0, "tradePayablePaymentMethod": "Boleto",
+            "documentNumber": "1234",
+            "costCentreDetails": [{"workName": "QD 99 LT 99"}]}
+    for files, esperado, nota in (([nf, bol], "QD 99 LT 99 NF 1234", True),
+                                  ([bol], "QD 99 LT 99 1234", False)):
+        res = relatorio.montar_registros([item], {"t1": files}, {}, {})
+        linha = res.contas[CONTA][0]
+        assert linha["nf_anexada"] is nota
+        assert hp.descricao_para_colar(linha, INTER) == esperado
+
+
+# ---------------------------------------- conserto 1/5: boleto com "NF" no nome
+def test_boleto_com_nf_no_nome_nao_e_nota():
+    for f in (anexo("boleto NF 5909.pdf", tag="Boleto"),
+              anexo("boleto nf 1234.pdf"),
+              anexo("[Boleto] boleto NF 5909", tag="Boleto"),
+              anexo("fatura NF 12.pdf")):
+        assert not relatorio.tem_nf_anexada([f]), f["filename"]
+        texto_de_boleto = {f["downloadUrl"]: "34191 57007 beneficiario valor"}
+        assert not relatorio.tem_nf_anexada([f], texto_de_boleto), f["filename"]
+
+
+def test_boleto_com_nf_no_nome_vale_se_o_texto_confirma_a_nota():
+    f = anexo("boleto NF 5909.pdf", tag="Boleto")
+    for texto in ("DANFE documento auxiliar", "NOTA FISCAL ELETRONICA", "NFS-e 5909",
+                  "NF-e", "chave de acesso " + "1" * 44):
+        assert relatorio.tem_nf_anexada([f], {f["downloadUrl"]: texto}), texto
+
+
+def test_marca_forte_no_rotulo_vale_ate_em_boleto():
+    assert relatorio.tem_nf_anexada([anexo("boleto e DANFE.pdf", tag="Boleto")])
+    assert relatorio.tem_nf_anexada([anexo("x.pdf", tag="Nota fiscal boleto")])
+
+
+def test_44_digitos_soltos_nao_confirmam_nota():
+    """O código de barras de boleto também tem 44 dígitos."""
+    f = anexo("merge-1.pdf", tag="Recibo")
+    assert not relatorio.tem_nf_anexada([f], {f["downloadUrl"]: "boleto " + "1" * 44})
+    agrupada = " ".join(["1234"] * 11)
+    assert relatorio.tem_nf_anexada([f], {f["downloadUrl"]: agrupada})
+
+
+def test_nfs_sem_e_conta_como_nota_e_palavras_parecidas_nao():
+    assert relatorio.tem_nf_anexada([anexo("NFS 123.pdf")])
+    for nome in ("confirmacao.pdf", "INFO.pdf", "conf 12.pdf"):
+        assert not relatorio.tem_nf_anexada([anexo(nome)]), nome

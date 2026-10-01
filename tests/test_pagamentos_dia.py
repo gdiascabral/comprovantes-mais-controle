@@ -59,8 +59,12 @@ def test_descricao_usa_nf_e_oc():
     item = {"documentNumber": "5909",
             "costCentreDetails": [{"workName": "RPB 24 QD 26A LT 12"}]}
     overview = {"purchaseOrder": {"number": 6510}}
-    assert relatorio.monta_descricao(item, [], "", overview) == \
+    # "NF" só com nota fiscal anexada (dono, 01/10/2026): sem anexo de NF o
+    # número vai sozinho.
+    assert relatorio.monta_descricao(item, [anexo("NF 5909.pdf")], "", overview) == \
         "RPB 24 QD 26A LT 12 NF 5909 OC 6510"
+    assert relatorio.monta_descricao(item, [], "", overview) == \
+        "RPB 24 QD 26A LT 12 5909 OC 6510"
 
 
 def test_oc_do_overview_vence_o_nome_do_anexo():
@@ -245,7 +249,9 @@ def test_linha_de_boleto_com_aviso_de_pix_no_cadastro():
             "documentNumber": "5909",
             "tradePayableAccount": {"name": "CONTA TESTE"},
             "costCentreDetails": [{"workName": "OBRA X"}]}
-    anexos = {"t1": [anexo("boleto oc 6510", "Boleto", url="u1")]}
+    # Com a NF anexada o número leva o rótulo "NF" (dono, 01/10/2026).
+    anexos = {"t1": [anexo("boleto oc 6510", "Boleto", url="u1"),
+                     anexo("NF 5909.pdf", url="u2")]}
     overviews = {"i1": {"purchaseOrder": {"number": 6510}, "comment": ""}}
     textos = {"u1": "34191.57007 00024.434375 24177.010000 1 99990000185000"}
 
