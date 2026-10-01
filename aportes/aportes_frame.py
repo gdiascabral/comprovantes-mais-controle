@@ -17,12 +17,15 @@ from tkinter import messagebox, ttk
 
 from . import dados as cadastro
 from . import novo_cadastro
+from . import rateio_subconta
 from .mc_catalogos import Catalogos
 from .mc_lancamentos import criar_pagamento, criar_recebimento, ErroLancamento
 from . import erp_sessao
 from .erp_sessao import ouvinte
-from .regras import Operacao, expandir, ler_valor_brl
+from .regras import (Operacao, expandir, ler_valor_brl,
+                     numero_subconta)
 
+import util
 import widgets
 
 #: A medida de layout que segue a fonte. `px(14)` são "os 14 px de quem
@@ -78,6 +81,11 @@ class AportesFrame(ttk.Frame):
         self.b_novo = widgets.Botao(cab.acoes, "+  Novo cadastro",
                                     papel="passo", command=self._novo_cadastro)
         self.b_novo.pack(side="left", padx=px((0, 8)))
+        # Investidores e centros de custo de uma subconta ("Investidor conta
+        # 00000-0" em Pagou). Ver `rateio_subconta.py`.
+        self.b_rateio = widgets.Botao(cab.acoes, "Rateio de subconta",
+                                      papel="passo", command=self._rateio)
+        self.b_rateio.pack(side="left", padx=px((0, 8)))
         self.b_lancar = widgets.Botao(cab.acoes, "Lançar no Mais Controle",
                                       papel="acao", command=self._lancar)
         self.b_lancar.pack(side="left")
@@ -415,7 +423,8 @@ class AportesFrame(ttk.Frame):
         self._no_fundo(ler, leu, "Não deu para ler o cadastro da nuvem.",
                        ao_fim=lambda: self.b_novo.configure(state="normal"))
 
-    def _no_fundo(self, tarefa, depois, falhou: str, ao_fim=None):
+    def _no_fundo(self, tarefa, depois, falhou: str, ao_fim=None,
+                  titulo: str = "Novo cadastro"):
         """Roda `tarefa` numa thread e entrega o resultado a `depois` na
         thread do Tk. Erro vira janela com `falhou`."""
         resposta: queue.Queue = queue.Queue()
@@ -436,7 +445,7 @@ class AportesFrame(ttk.Frame):
                 ao_fim()
             if tipo == "erro":
                 self._log(f"[!] {falhou} {valor}")
-                messagebox.showerror("Novo cadastro",
+                messagebox.showerror(titulo,
                                      widgets.recado_de_erro(valor, falhou))
                 return
             depois(valor)
@@ -479,6 +488,102 @@ class AportesFrame(ttk.Frame):
         widgets.registrar_atividade(
             "apt", "Novo cadastro", "ok", novo.nome_exibicao.strip(),
             {"conta": novo.conta.strip() or None})
+
+    def _rateio(self):
+        """Os nomes de investidor e de CC têm de ser os do ERP — então a
+        janela abre DEPOIS de ler os cadastros, na thread do navegador."""
+        if self.anx.avisar_se_ocupado("os Aportes"):
+            return
+        self.anx.submeter("Aportes — rateio de subconta", self._t_rateio,
+                          dona=self)
+
+    def _t_rateio(self):
+        try:
+            self._preparar_sessao()
+            participantes = sorted(
+                {p.get("name", "").strip()
+                 for p in self.catalogos.participantes.values()} - {""},
+                key=util.norm_espaco)
+            centros = sorted(
+                {o.get("name", "").strip()
+                 for o in getattr(self.catalogos, "obras", {}).values()} - {""},
+                key=util.norm_espaco)
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"[!] {e}")
+            return
+        if not centros:
+            self._log("[!] O Mais Controle não devolveu os centros de custo "
+                      "(obras); o rateio não pode ser montado agora.")
+            return
+        try:
+            # A janela mostra o que o BANCO tem, não o cache desta máquina:
+            # outra pessoa pode ter mudado o rateio depois da abertura.
+            from nuvem import sessao
+            atuais = rateio_subconta.ler_rateios(sessao.token())
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"[!] Não deu para ler os rateios da nuvem: {e}")
+            return
+        self.after(0, lambda: self._perguntar_rateio(participantes, centros,
+                                                     atuais))
+
+    def _subconta_em_andamento(self, numero: str) -> bool:
+        """Há na lista um aporte desta subconta lançado pela METADE?
+
+        `criados` guarda a POSIÇÃO de cada item do rateio, não o par (CC ×
+        investidor). Trocar o rateio no meio muda o que cada posição quer
+        dizer: o próximo Lançar pularia um par nunca criado e criaria outros
+        com o valor redividido — dinheiro a mais no ERP."""
+        for op, feitos in zip(self.operacoes, self.criados):
+            if feitos and numero_subconta(op.pagador, {numero: {}}) == numero:
+                return True
+        return False
+
+    def _perguntar_rateio(self, participantes, centros, atuais):
+        from .rateio_subconta_dialogo import perguntar
+        numeros = rateio_subconta.subcontas_possiveis(self.entidades, atuais)
+        r = perguntar(self.winfo_toplevel(), numeros, atuais,
+                      participantes, centros)
+        if r is None:
+            return
+        numero, investidores, obras = r
+        if self._subconta_em_andamento(numero):
+            messagebox.showwarning(
+                "Rateio de subconta",
+                f"A lista \"A lançar\" tem um aporte da subconta {numero} "
+                "que já entrou em parte no Mais Controle.\n\nTermine esse "
+                "lançamento (ou tire-o da lista) antes de mudar o rateio — "
+                "senão o que falta seria redividido e lançaria valor a mais.")
+            return
+
+        def gravar():
+            from nuvem import sessao
+            rateio_subconta.gravar(sessao.token(), numero, investidores, obras)
+
+        def gravou(_r):
+            self.subcontas = cadastro.carregar_subcontas()
+            pagou = self.cb_pagador.get()
+            recebeu = self.cb_recebedor.get()
+            self._recarregar_listas()
+            self.cb_pagador.set(pagou)
+            self.cb_recebedor.set(recebeu)
+            self._atualizar_total()
+            self._log(f"Rateio da subconta {numero} gravado: "
+                      f"{len(investidores)} investidor(es) × {len(obras)} "
+                      f"centro(s) de custo. Em Pagou: "
+                      f"\"{rateio_subconta.pagador(numero)}\", modo "
+                      "'Só recebimento'.")
+            widgets.registrar_atividade(
+                "apt", "Rateio de subconta", "ok", numero,
+                {"investidores": len(investidores), "centros": len(obras)})
+
+        def ao_fim():
+            # Deu certo ou não, o cache já tem o que o banco tem.
+            self.subcontas = cadastro.carregar_subcontas()
+            self.b_rateio.configure(state="normal")
+
+        self.b_rateio.configure(state="disabled")
+        self._no_fundo(gravar, gravou, "Não deu para gravar o rateio.",
+                       ao_fim=ao_fim, titulo="Rateio de subconta")
 
     def _conferir(self):
         if self.anx.avisar_se_ocupado("os Aportes"):
@@ -529,9 +634,42 @@ class AportesFrame(ttk.Frame):
         self.b_lancar.configure(state="disabled")
         self.anx.submeter("Aportes — lançar", self._t_lancar, dona=self)
 
+    def _rateios_frescos(self):
+        """Antes de montar o plano: o rateio das subcontas da lista como o
+        BANCO tem agora. Outra máquina pode tê-lo mudado depois que esta
+        abriu, e lançar pelo cache velho rateia pelos CCs de antes.
+
+        Sem rede, segue com o cache (como sempre foi) e diz. Mudou num
+        aporte já lançado em parte: PARA — redividir o que falta lançaria
+        valor a mais (ver `_subconta_em_andamento`)."""
+        numeros = {numero_subconta(op.pagador, self.subcontas)
+                   for op in self.operacoes} - {None}
+        if not numeros:
+            return
+        try:
+            from nuvem import sessao
+            frescos = rateio_subconta.ler_rateios(sessao.token())
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"  aviso: não deu para conferir o rateio na nuvem "
+                      f"({e}); seguindo com o desta máquina.")
+            return
+        for numero in sorted(numeros):
+            if not rateio_subconta.mudou(self.subcontas, frescos, numero):
+                continue
+            if self._subconta_em_andamento(numero):
+                raise RuntimeError(
+                    f"o rateio da subconta {numero} mudou na nuvem depois que "
+                    "parte deste aporte já tinha sido lançada. Confira no Mais "
+                    "Controle o que entrou e tire a operação da lista antes de "
+                    "lançar o resto.")
+            self._log(f"  O rateio da subconta {numero} mudou na nuvem; "
+                      "lançando pelo atual.")
+            self.subcontas[numero] = frescos[numero]
+
     def _t_lancar(self):
         try:
             self._preparar_sessao()
+            self._rateios_frescos()
             id_usuario = self.catalogos.cabecalho("user-id")
             if not id_usuario:
                 raise RuntimeError("não achei o usuário responsável.")
