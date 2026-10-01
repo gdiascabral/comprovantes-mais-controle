@@ -496,3 +496,63 @@ def test_documento_nao_fecha_se_outro_pdf_da_data_nao_tem_documento():
     certezas, duvidas, _ = matcher.casar(pend, pdfs)
     assert not certezas and len(duvidas) == 1
 
+
+
+# ------------------------------------------------ nº do documento sem o "NF"
+# (dono, 01/10/2026: o rótulo NF só sai quando há nota anexada)
+def _casa_solto(nome_pdf, doc, outro_pdf="500,00 - SERVICO - 11-09.pdf"):
+    """Dois PDFs de mesmo valor na mesma conta; o pendente A tem `doc`."""
+    pdfs = [_pdf(nome_pdf, origem=SICOOB_1), _pdf(outro_pdf, origem=SICOOB_1)]
+    pend = [_pend_conta("A", 50000, origem=SICOOB_1, doc=doc, desc="x")]
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    return {c["paidId"]: c["pdf"] for c in certezas}.get("A") == nome_pdf
+
+
+def test_numero_solto_igual_ao_documento_casa():
+    assert _casa_solto("500,00 - CC 1234 OC 55 - 11-09.pdf", "1234")
+
+
+def test_numero_depois_de_rotulo_de_endereco_nao_casa():
+    assert not _casa_solto("500,00 - CC QD 1234 LT 5 - 11-09.pdf", "1234")
+
+
+def test_faixa_de_lote_nao_casa():
+    assert not _casa_solto("500,00 - CC LT 10-11 - 11-09.pdf", "10")
+    assert not _casa_solto("500,00 - CC LT 10-11 - 11-09.pdf", "11")
+
+
+def test_data_no_nome_nao_casa_como_documento():
+    assert not _casa_solto("500,00 - CC 01/10/2026 - 11-09.pdf", "2026")
+
+
+def test_milhar_com_ponto_casa():
+    assert _casa_solto("500,00 - CC 1.234 - 11-09.pdf", "1234")
+
+
+def test_zeros_a_esquerda_do_documento_casam():
+    assert _casa_solto("500,00 - CC 12345 - 11-09.pdf", "0012345")
+
+
+def test_documento_de_dois_digitos_nao_vale_sozinho():
+    assert not _casa_solto("500,00 - CC 12 - 11-09.pdf", "12")
+
+
+def test_numero_nao_casa_por_substring():
+    assert not _casa_solto("500,00 - CC 12345 - 11-09.pdf", "1234")
+
+
+def test_valor_no_nome_nao_conta_como_documento():
+    assert not _casa_solto("500,00 - CC 500 - 11-09.pdf", "500")
+
+
+def test_numero_solto_escolhe_so_o_candidato_com_o_numero_igual():
+    pdfs = [_pdf("500,00 - CC 1234 - 11-09.pdf", origem=SICOOB_1)]
+    pend = [_pend_conta("A", 50000, origem=SICOOB_1, doc="1234", desc="x"),
+            _pend_conta("B", 50000, origem=SICOOB_1, doc="9999", desc="y")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert [c["paidId"] for c in certezas] == ["A"]
+    assert "nº do documento" in certezas[0]["motivo"]
+
+
+def test_nf_rotulada_segue_igual():
+    assert _casa_solto("500,00 - CC NF 1234 - 11-09.pdf", "1234")

@@ -43,6 +43,43 @@ _norm = util.norm_espaco
 
 
 # ------------------------------------------------------------------ PDFs
+#: Rótulos cujo número seguinte é endereço/identificação, nunca nº do documento.
+_ROTULOS_NUM = {"QD", "LT", "CASA", "CS", "TB", "OC", "C", "M", "AP", "APTO",
+                "BL", "NF", "NFS"}
+
+
+def _sem_zeros(n: str) -> str:
+    """Tira milhar e zeros à esquerda: 1.234 vira 1234, 0012345 vira 12345."""
+    return n.replace(".", "").lstrip("0")
+
+
+def _numeros_soltos(desc: str, cents: int) -> set[str]:
+    """Números SOLTOS da descrição, candidatos a nº do documento sem o rótulo
+    "NF" (dono, 01/10/2026: o rótulo só sai quando há nota anexada).
+
+    Só token inteiro: data (dd/mm/aaaa), faixa ("LT 10-11"), valor com vírgula e
+    número colado em letra não casam o `fullmatch`. Fora também o que vem logo
+    depois de QD/LT/CASA/TB/OC/... (endereço) e o próprio valor. Menos de 3
+    dígitos é ambíguo demais e não vale."""
+    achados = set()
+    anterior = ""
+    for tok in desc.split():
+        tok = tok.strip(",;:()")
+        if re.fullmatch(r"\d{1,3}(?:\.\d{3})+|\d+", tok) and (
+                anterior not in _ROTULOS_NUM):
+            n = _sem_zeros(tok)
+            if len(n) >= 3 and n not in (str(cents), str(cents // 100)):
+                achados.add(n)
+        anterior = tok.upper().rstrip(".:")
+    return achados
+
+
+def _numeros_do_documento(doc: str) -> set[str]:
+    """Nº do documento do ERP normalizado (milhar e zeros à esquerda fora)."""
+    return {n for n in (_sem_zeros(t) for t in
+                        re.findall(r"\d+(?:\.\d{3})*", doc or "")) if len(n) >= 3}
+
+
 def parse_pdf(fn: str) -> dict | None:
     """Extrai valor/descrição/data/OC/NF do NOME do arquivo.
 
@@ -76,6 +113,7 @@ def parse_pdf(fn: str) -> dict | None:
         "fn": fn, "valor": cents, "data": data, "desc": desc, "ndesc": _norm(desc),
         "ocs": set(re.findall(r"\bOC\s*(\d+)", desc, re.I)),
         "nfs": set(re.findall(r"\bNF\s*(\d+)", desc, re.I)),
+        "soltos": _numeros_soltos(desc, cents),
         "used_by": None,
         "origem": None,          # (banco, conta) -- o Anexar preenche
         "recebedor": None,       # quem recebeu -- o Anexar preenche
@@ -238,7 +276,11 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                 # contra NF escrita no nome do PDF. Contra OC, numa empresa de
                 # uma conta só, era o nº do documento sozinho de novo -- e
                 # trocava anexos (revisão do PR #94).
-                docnf = (bool(pd["nfs"] & set(re.findall(r"\d{3,}", pe["doc"])))
+                # Sem o rótulo "NF" no nome, o nº SOLTO igual ao do documento
+                # vale o mesmo (dono, 01/10/2026) -- sempre do ERP para o nome.
+                docnf = ((bool(pd["nfs"] & set(re.findall(r"\d{3,}", pe["doc"])))
+                          or bool(pd.get("soltos", set())
+                                  & _numeros_do_documento(pe["doc"])))
                          and not (_vals(pe) & sem_documento))
                 # Só as DESCRIÇÕES: o nº do documento aqui furaria a trava do
                 # rival sem nº do documento, logo acima.
