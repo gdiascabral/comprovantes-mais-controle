@@ -62,6 +62,12 @@ NOME_RODAPE = "rodape_relatorio_pf.txt"
 _LOGO_MAX = 2_000_000
 _RODAPE_MAX_LINHAS = 4
 
+#: Prefixo do link de um lançamento (parcela) no Mais Controle. É cópia de
+#: `anexar.config.MC_URL_LANCAMENTO` (o que `anexar/mc_api.py` usa para abrir
+#: um lançamento): este módulo é puro e não importa o `anexar`, que puxa
+#: `util`. Um teste confere que as duas continuam iguais.
+URL_LANCAMENTO = "https://acessar.maiscontroleerp.com.br/#/payable-installments/"
+
 SUBTITULO_GERAL = "vencimentos em aberto no Mais Controle - todas as contas"
 
 #: Até quantos caracteres a descrição do HTML geral vai para o campo de
@@ -412,8 +418,11 @@ def contas_do_html_geral(resultado) -> list[dict]:
         entradas = []
         for r in regs:
             tipo = str(r.get("tipo") or "-")
+            id_ = str(r.get("id") or "")
             entradas.append({
-                "id": str(r.get("id") or ""),
+                "id": id_,
+                # Sem id não há para onde ir: link vazio, sem botão na tela.
+                "link": URL_LANCAMENTO + id_ if id_ else "",
                 "tipo": tipo,
                 "dados_original": str(r.get("dados") or ""),
                 "dados_limpo": dado_para_colar(tipo, r.get("dados")),
