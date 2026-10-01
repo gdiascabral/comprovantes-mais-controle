@@ -828,6 +828,65 @@ def contrato_e_medicao(descricao) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m else None
 
 
+_PONTO_ENTRE_DIGITOS = re.compile(r"(?<=\d)\.(?=\d)")
+_PALAVRA_DO_NUMERO = re.compile(r"[A-Za-z0-9]+")
+
+
+def palavras_do_numero(texto) -> list[str]:
+    """As palavras do nº do documento/OC, a divisão que os dois leitores dividem.
+
+    O ponto entre dígitos some sem virar espaço ("1.234" é "1234"); barra e
+    hífen separam ("5678/5679" são duas notas; "12.345/B-2" vira 12345, B, 2).
+    A planilha e o HTML dos pagamentos usam esta mesma divisão."""
+    s = _PONTO_ENTRE_DIGITOS.sub("", sem_acento(str(texto or "")))
+    return _PALAVRA_DO_NUMERO.findall(s)
+
+
+def numero_tem_4_digitos(palavras) -> bool:
+    """Só número com ao menos 4 dígitos seguidos é tirado da descrição: o curto
+    ("10") pode ser lote, e tirá-lo perde o casamento por lote do Anexar."""
+    return any(re.search(r"\d{4}", p) for p in palavras)
+
+
+def descricao_sem_repeticao(descr: str, cc: str, doc: str,
+                            limite: int = 110) -> str:
+    """A descrição do lançamento para ir ANTES do documento na planilha.
+
+    Compara por palavras inteiras, sem acento nem caixa: tira o centro de custo
+    do começo (CC "LT 1" não come o "LT 10") e a sequência do número do
+    documento onde a descrição já o traz (só com 4+ dígitos). Corta em
+    fronteira de palavra no `limite`; o documento é escrito à parte e nunca
+    é cortado (dono, 01/10/2026)."""
+    def chaves(t):
+        return [re.sub(r"[^a-z0-9]", "", sem_acento(p).casefold()) for p in t]
+    tokens = (descr or "").split()
+    ks = chaves(tokens)
+    cck = [k for k in chaves((cc or "").split()) if k]
+    if cck:
+        vivos = [i for i, k in enumerate(ks) if k]
+        if [ks[i] for i in vivos[:len(cck)]] == cck:
+            corte = vivos[len(cck) - 1] + 1
+            tokens, ks = tokens[corte:], ks[corte:]
+    palavras = palavras_do_numero(doc)
+    alvo = [p.casefold() for p in palavras]
+    if alvo and numero_tem_4_digitos(palavras):
+        saida, i, n = [], 0, len(alvo)
+        while i < len(tokens):
+            if ks[i] and ks[i:i + n] == alvo:
+                i += n
+                continue
+            saida.append(tokens[i])
+            i += 1
+        tokens = saida
+    texto = ""
+    for t in tokens:
+        nova = f"{texto} {t}".strip()
+        if len(nova) > limite:
+            break
+        texto = nova
+    return texto.strip(" -:|")
+
+
 def monta_descricao(item: dict, files, comentario: str = "", overview=None,
                     arrecadacao: bool = False,
                     textos: dict | None = None) -> str:
@@ -842,6 +901,14 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None,
         return " ".join(partes).strip()
 
     partes = [cc] if cc else []
+    if doc and not oc:
+        # Documento SEM OC leva também a descrição do lançamento, antes do
+        # documento (dono, 01/10/2026); medição segue a forma curta abaixo.
+        descr = (item.get("description") or "").strip()
+        if descr and not contrato_e_medicao(descr):
+            descr = descricao_sem_repeticao(descr, cc, doc)
+            if descr:
+                partes.append(descr)
     if doc:
         # Ficha de arrecadação (tributo, taxa, órgão público) não tem
         # cedente nem Nota Fiscal atrás (`ocr_boleto.eh_arrecadacao`, a

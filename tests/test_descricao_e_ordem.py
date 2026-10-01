@@ -274,8 +274,9 @@ def test_so_oc_vai_so_a_oc():
 
 
 def test_so_nf_vai_so_a_nf():
+    # Documento sem OC leva a descrição do lançamento (dono, 01/10/2026).
     r = _partes(nf="5678", descricao="Material de obra")
-    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 5678"
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Material de obra NF 5678"
 
 
 #: Ficha de arrecadação de verdade (48 dígitos, começa em 8, DV fecha) — o
@@ -292,7 +293,7 @@ def test_arrecadacao_nao_rotula_nf():
     descrição, sozinho (dono, 22/09/2026)."""
     r = _partes(nf="123456789012", descricao="Guia DARF")
     r["tipo"], r["dados"] = "Boleto", _LINHA_ARRECADACAO
-    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 123456789012"
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Guia DARF 123456789012"
 
 
 def test_arrecadacao_com_oc_mantem_a_oc_rotulada():
@@ -625,3 +626,122 @@ def test_nfs_sem_e_conta_como_nota_e_palavras_parecidas_nao():
     assert relatorio.tem_nf_anexada([anexo("NFS 123.pdf")])
     for nome in ("confirmacao.pdf", "INFO.pdf", "conf 12.pdf"):
         assert not relatorio.tem_nf_anexada([anexo(nome)]), nome
+
+
+# ------------------------------- B2: documento sem OC leva a descrição (01/10/2026)
+def test_b2_doc_sem_oc_leva_a_descricao_com_e_sem_nf():
+    r = _partes(nf="123", descricao="Material de obra")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Material de obra NF 123"
+    r["nf_anexada"] = False
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Material de obra 123"
+
+
+def test_b2_doc_com_oc_fica_sem_descricao():
+    r = _partes(nf="123", oc="55", descricao="Material de obra")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 NF 123 OC 55"
+    r["nf_anexada"] = False
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 123 OC 55"
+
+
+def test_b2_limite_de_100_corta_a_descricao_e_preserva_o_numero():
+    longa = " ".join(["cimento"] * 30)
+    r = _partes(nf="987654", descricao=longa)
+    saida = hp.descricao_para_colar(r, "CONTA SICOOB")
+    assert len(saida) <= 100
+    assert saida.startswith("QD 99 LT 99 cimento")
+    assert saida.endswith("NF 987654")
+
+
+def test_b2_descricao_que_ja_traz_o_numero_nao_o_repete():
+    r = _partes(nf="1234", descricao="Cimento 1234 obra")
+    saida = hp.descricao_para_colar(r, INTER)
+    assert saida == "QD 99 LT 99 Cimento obra NF 1234"
+    r = _partes(nf="123", descricao="Cimento 1234")  # 123 não é palavra de 1234
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Cimento 1234 NF 123"
+
+
+def test_b2_nao_repete_o_centro_de_custo_e_medicao_e_utilidade_ficam():
+    r = _partes(nf="55", descricao="QD 99 LT 99 Reboco")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Reboco NF 55"
+    m = _partes(nf="55", descricao="X - 7 - Medição: 3")
+    assert hp.descricao_para_colar(m, INTER) == "QD 99 LT 99 NF 55"
+    u = _partes(nf="55", descricao="UC 1 jan", utilidade=True)
+    assert hp.descricao_para_colar(u, INTER) == "QD 99 LT 99 UC 1 jan"
+
+
+def test_b2_monta_descricao_doc_sem_oc_leva_a_descricao():
+    item = dict(_ITEM_NF, description="Material de obra")
+    com = [anexo("NF 1234.pdf")]
+    assert relatorio.monta_descricao(item, com) == "QD 99 LT 99 Material de obra NF 1234"
+    assert relatorio.monta_descricao(item, []) == "QD 99 LT 99 Material de obra 1234"
+    ov = {"purchaseOrder": {"number": 7}}
+    assert relatorio.monta_descricao(item, com, "", ov) == "QD 99 LT 99 NF 1234 OC 7"
+    rep_ = dict(item, description="Cimento 1234")
+    assert relatorio.monta_descricao(rep_, com) == "QD 99 LT 99 Cimento NF 1234"
+
+
+# ------------------------------------------------ B2 conserto 1/5
+def test_b2c_limite_de_140_no_inter_com_descricao_longa():
+    longa = " ".join(f"palavra{i}" for i in range(40))
+    r = _partes(nf="987654", descricao=longa)
+    saida = hp.descricao_para_colar(r, INTER)
+    esperado = "QD 99 LT 99 " + " ".join(f"palavra{i}" for i in range(12)) + " NF 987654"
+    assert saida == esperado and len(saida) <= 140
+
+
+def test_b2c_limite_de_100_com_texto_exato():
+    longa = " ".join(["cimento"] * 30)
+    r = _partes(nf="987654", descricao=longa)
+    assert hp.descricao_para_colar(r, "CONTA SICOOB") == \
+        "QD 99 LT 99 " + " ".join(["cimento"] * 9) + " NF 987654"
+
+
+def test_b2c_cc_e_documento_estourando_o_limite_corta_o_cc():
+    cc = " ".join(["BLOCO"] + [f"TORRE{i}" for i in range(20)])
+    r = _partes(nf="987654", descricao="cimento", cc=cc)
+    saida = hp.descricao_para_colar(r, "CONTA SICOOB")
+    assert len(saida) <= 100 and saida.endswith("NF 987654")
+    assert saida.startswith("BLOCO TORRE0") and "cimento" not in saida
+
+
+def test_b2c_reembolso_e_caractere_especial_na_descricao_com_documento():
+    r = _partes(nf="987654",
+                descricao="Reembolso Fulano - Cimento & areia (obra) #5")
+    assert hp.descricao_para_colar(r, INTER) == \
+        "QD 99 LT 99 Cimento areia obra 5 NF 987654"
+
+
+def test_b2c_documento_com_barra_passa_pela_remocao():
+    r = _partes(nf="5678/5679", descricao="Cimento 5678 5679 obra")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Cimento obra NF 5678 5679"
+    item = dict(_ITEM_NF, documentNumber="5678/5679",
+                description="Cimento 5678 5679 obra")
+    assert relatorio.monta_descricao(item, [anexo("NF 1.pdf")]) == \
+        "QD 99 LT 99 Cimento obra NF 5678/5679"
+
+
+def test_b2c_numero_curto_nao_sai_da_descricao_porque_pode_ser_lote():
+    r = _partes(nf="10", descricao="Cimento LT 10")
+    assert hp.descricao_para_colar(r, INTER) == "QD 99 LT 99 Cimento LT 10 NF 10"
+    item = dict(_ITEM_NF, documentNumber="10", description="Cimento LT 10")
+    assert relatorio.monta_descricao(item, [anexo("NF 1.pdf")]) == \
+        "QD 99 LT 99 Cimento LT 10 NF 10"
+
+
+def test_b2c_planilha_cc_por_palavra_inteira_e_corte_em_palavra():
+    item = {"documentNumber": "5678", "description": "LT 10 obra",
+            "costCentreDetails": [{"workName": "LT 1"}]}
+    assert relatorio.monta_descricao(item, []) == "LT 1 LT 10 obra 5678"
+    item = dict(_ITEM_NF, documentNumber="987654",
+                description=" ".join(["cimento"] * 30))
+    saida = relatorio.monta_descricao(item, [anexo("NF 1.pdf")])
+    miolo = saida[len("QD 99 LT 99 "):-len(" NF 987654")]
+    assert saida.endswith("NF 987654") and len(miolo) <= 110
+    assert set(miolo.split()) == {"cimento"} and miolo.startswith("cimento")
+    assert len(miolo.split()) == 13  # 13*7 + 12 = 103; a 14a estouraria 110
+
+
+def test_b2c_planilha_prefixo_parcial_de_cc_nao_e_cortado():
+    item = {"documentNumber": "5678", "description": "QD 99 reboco",
+            "costCentreDetails": [{"workName": "QD 99 LT 99"}]}
+    assert relatorio.monta_descricao(item, []) == "QD 99 LT 99 QD 99 reboco 5678"
