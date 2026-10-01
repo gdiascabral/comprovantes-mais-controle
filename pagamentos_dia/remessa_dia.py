@@ -588,6 +588,11 @@ class Candidato:
     #: anterior falha de verdade (arquivo recusado, pagamento que não caiu), e
     #: aí este pagamento precisa ir de novo. A linha nasce desmarcada.
     ja_enviado: str = ""
+    #: As peças do registro com que a descrição do banco é montada
+    #: (`relatorio.partes_no_registro`): a remessa usa o MESMO algoritmo do
+    #: HTML (`html_pagamentos.descricao_para_colar`), e o documento no fim da
+    #: descrição não pode ser cortado pelo campo de 30/38 posições.
+    partes: dict = field(default_factory=dict)
 
     @property
     def pode(self) -> bool:
@@ -925,6 +930,8 @@ def preparar(contas: dict, participantes: dict | None = None,
                 reembolso=e_reembolso,
                 reembolso_origem=registro.get("reembolso_origem") or "",
                 reembolso_de=(registro.get("favorecido") or "") if e_reembolso else "",
+                partes={k: registro.get(k) for k in _CHAVES_DA_DESCRICAO
+                        if k in registro},
             )
             if not impedimento:
                 sequencia += 1
@@ -970,6 +977,16 @@ def preparar(contas: dict, participantes: dict | None = None,
 TAMANHO_MENSAGEM_LOTE = 40
 
 
+#: As chaves do registro que a descrição do banco lê.
+_CHAVES_DA_DESCRICAO = ("nf", "nf_anexada", "oc_da_descricao",
+                        "descricao_lancamento", "centro_custo", "utilidade",
+                        "tipo", "dados")
+
+#: Tamanho do campo de texto de cada produto: `09.3J` do boleto e `24.3A` do Pix.
+LIMITE_ETIQUETA_BOLETO = 30
+LIMITE_ETIQUETA_PIX = 38
+
+
 def etiqueta_do_banco(c) -> str:
     """O texto que a tela de pendências do banco vai mostrar nesta linha.
 
@@ -982,10 +999,26 @@ def etiqueta_do_banco(c) -> str:
     Descrição vazia cai para o nome do fornecedor: em branco, a coluna não
     identificaria nada, e a linha ficaria pior do que era antes.
 
+    Com as peças do registro (`Candidato.partes`) o texto sai do MESMO
+    algoritmo da descrição do HTML (`html_pagamentos.descricao_para_colar`),
+    no limite do campo (38 no Pix, 30 no boleto): a descrição cede, depois o
+    centro de custo, e o documento e a OC no fim nunca são cortados — o
+    `fmt_alfa` corta à direita, e sem isto o documento era o primeiro a sumir.
+
     Quem recebe de verdade NÃO depende disto: o boleto é roteado pelo código
     de barras e o Pix pela chave. A identidade continua no J-52 (nome e
     documento do cedente) e, no Pix, no campo 15.3A.
     """
+    partes = getattr(c, "partes", None) or {}
+    if "descricao_lancamento" in partes:
+        # Import aqui: `html_pagamentos` puxa o relatório inteiro, e a
+        # remessa carrega antes dele.
+        from . import html_pagamentos
+        limite = (LIMITE_ETIQUETA_PIX if c.tipo == "Pix"
+                  else LIMITE_ETIQUETA_BOLETO)
+        texto = html_pagamentos.descricao_para_colar(partes, None, limite)
+        if texto:
+            return texto
     return (c.descricao or "").strip() or c.favorecido
 
 

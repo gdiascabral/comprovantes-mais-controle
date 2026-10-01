@@ -237,6 +237,71 @@ def _rotulo(f: dict) -> str:
     return f"{f.get('filename') or ''} {f.get('tagName') or ''}"
 
 
+_NAO_E_NOTA = re.compile(
+    r"comprovante|contrato|medi[çc][ãa]o|qr\s*code|pagar\s*para", re.I)
+# Marca FORTE de nota no rótulo: sozinha basta, até num anexo de boleto.
+_NF_FORTE = r"nota\s*fiscal|DANFE|(?<![A-Za-z])NFS?-?e(?![A-Za-z])"
+_ROTULO_NF_FORTE = re.compile(_NF_FORTE, re.I)
+# Marca FRACA: a sigla NF/NFS solta ("NF 1234.pdf", "nf1234", "NFS 12").
+_ROTULO_DE_NF = re.compile(
+    _NF_FORTE + r"|(?<![A-Za-z])NFS?(?![A-Za-z])", re.I)
+_MARCA_DE_NOTA = re.compile(r"DANFE|NOTA\s+FISCAL|(?<![A-Za-z])NFS?-?e(?![A-Za-z])",
+                            re.I)
+# Chave de acesso: 11 grupos de 4 dígitos (agrupamento da DANFE)...
+_CHAVE_NFE_AGRUPADA = re.compile(r"(?<!\d)(?:\d{4} ){10}\d{4}(?!\d)")
+# ...ou 44 dígitos colados, MAS só com a expressão "chave de acesso" perto: o
+# código de barras de boleto também tem 44 dígitos.
+_CHAVE_COM_PALAVRA = re.compile(r"chave\s+de\s+acesso\D{0,40}(?:\d[\s.]?){43}\d", re.I)
+
+
+def _texto_confirma_nota(texto: str) -> bool:
+    """O TEXTO extraído do anexo mostra que ali há uma nota fiscal?
+
+    DANFE, NOTA FISCAL, NF-e/NFS-e, a chave de acesso agrupada (11 x 4) ou a
+    expressão "chave de acesso" seguida dos 44 dígitos. 44 dígitos soltos NÃO
+    bastam: o código de barras do boleto tem 44 (dono, 01/10/2026)."""
+    return bool(texto and (_MARCA_DE_NOTA.search(texto)
+                           or _CHAVE_NFE_AGRUPADA.search(texto)
+                           or _CHAVE_COM_PALAVRA.search(texto)))
+
+
+def tem_nf_anexada(files, textos: dict | None = None) -> bool:
+    """Há nota fiscal ANEXADA no lançamento?
+
+    O "NF" da descrição só pode aparecer quando existe uma nota: nem todo
+    número de documento é nota fiscal (o da prefeitura, por exemplo, é só o
+    número do documento). Vale como NF o anexo cujo rótulo (nome do arquivo +
+    etiqueta do ERP, `_rotulo`) é de nota: "nota fiscal", NF, NFS, NF-e,
+    NFS-e, DANFE, inclusive "NF 1234.pdf" e "nf1234".
+
+    Rótulo de BOLETO ou de Recibo que cita "NF" ("boleto NF 5909") não é nota
+    por isso: ali só conta uma marca forte no rótulo (nota fiscal, DANFE,
+    NF-e/NFS-e) ou o TEXTO do anexo confirmando a nota (`_texto_confirma_nota`).
+    O PDF "merge" (NF + boleto juntados) também vale pelo texto, qualquer que
+    seja a etiqueta.
+
+    Comprovante, contrato, medição e "PAGAR PARA" nunca contam, mesmo com "NF"
+    no nome: o comprovante de pagamento de uma NF não é a NF (dono,
+    01/10/2026)."""
+    textos = textos or {}
+    for f in files or ():
+        rotulo = _rotulo(f)
+        if _NAO_E_NOTA.search(rotulo):
+            continue
+        ambiguo = bool(_E_BOLETO.search(rotulo)
+                       or re.search(r"recibo", f.get("tagName") or "", re.I))
+        merge = bool(re.search(r"merge", f.get("filename") or "", re.I))
+        if _ROTULO_NF_FORTE.search(rotulo):
+            return True
+        fraco = bool(_ROTULO_DE_NF.search(rotulo))
+        if fraco and not ambiguo:
+            return True
+        if (((fraco and ambiguo) or merge)
+                and _texto_confirma_nota(textos.get(f.get("downloadUrl") or "") or "")):
+            return True
+    return False
+
+
 def tem_boleto(files) -> bool:
     return any(_E_BOLETO.search(_rotulo(f)) and not _NAO_E_BOLETO.search(_rotulo(f))
                for f in (files or ()))
@@ -297,6 +362,17 @@ _NAO_VARRER = re.compile(
 #: discordariam sobre o que é prova de pagamento.
 _PROVA_DE_PAGAMENTO = regras.PROVA_DE_PAGAMENTO
 
+#: Marca FORTE de comprovante, para o PDF PRINCIPAL do boleto (dono,
+#: 01/10/2026). O regex amplo acima pega "valor pago", "data do pagamento" e
+#: "pagamento efetuado", que aparecem no histórico de fatura de concessionária
+#: e em boleto comum: ali, recusar a linha seria falso alarme em massa. Só
+#: estas frases dizem que o documento É o comprovante: "comprovante de
+#: pagamento/transação", "autenticação ELETRÔNICA" (a "mecânica" está em todo boleto) e "pagamento
+#: efetuado com sucesso". A varredura de anexo escondido segue com o amplo.
+_COMPROVANTE_FORTE = re.compile(
+    r"comprovante\s+de\s+(?:pagamento|transa|transfer)|pix\s+enviado|autentica[çc][aã]o\s+eletr|"
+    r"pagamento\s+efetuado\s+com\s+sucesso", re.I)
+
 
 #: Anexo que é IMAGEM: é assim que o QR Code do Pix costuma chegar — a guia do
 #: cartório, o print da compra de marketplace.
@@ -351,25 +427,13 @@ def _obs_pagar_pelo_anexo(f: dict) -> str:
             "pelos dados que ele trouxer")
 
 
-def linha_em_outro_anexo(files, textos: dict, valor: float, urls_ocr=(),
-                         ignorar: str = "", vencimento: date | None = None
-                         ) -> tuple[str, dict | None]:
-    """A linha digitável de um boleto que não se anuncia como boleto.
+def _linhas_dos_anexos(files, textos: dict, valor: float, urls_ocr=(),
+                       ignorar: str = "") -> list[tuple[str, dict]]:
+    """Todas as linhas digitáveis VÁLIDAS (DV fechando) dos PDFs do título.
 
-    Há fornecedor que junta a NF (página 1) e o boleto (página 2) num PDF só,
-    e o ERP o etiqueta "Nota Fiscal". `escolher_pdf_do_boleto` recusa o
-    arquivo pelo RÓTULO — e tem de recusar, senão chutaria nota como boleto —,
-    então a página 2 nunca era lida: a linha ia para NÃO ENTRARAM como "sem
-    forma de pagar" e o título vencia sem ninguém ver (09 e 10/09/2026).
-
-    Aqui quem decide é o CONTEÚDO, com a régua do OCR: só vale linha cujos
-    dígitos verificadores fecham. Uma linha só é a resposta, mesmo com outro
-    valor (a divergência é avisada adiante). Várias: fica a que tem o valor do
-    lançamento e, se ainda sobrar mais de uma — parcelas iguais do mesmo
-    título dividem os anexos —, a do vencimento dele. Devolve `(linha,
-    anexo)`; linha vazia com anexo quer dizer "há boleto aí dentro, mas não dá
-    para saber qual" — e quem chama não escolhe.
-    """
+    Uma por linha distinta (pelos dígitos), com o anexo onde apareceu. Fica de
+    fora o que prova pagamento — rótulo ou texto de comprovante — e o que não
+    é lugar de boleto a pagar (`_NAO_VARRER`)."""
     achadas = []
     for f in files or ():
         url = f.get("downloadUrl") or ""
@@ -389,20 +453,48 @@ def linha_em_outro_anexo(files, textos: dict, valor: float, urls_ocr=(),
                 linha = re.sub(r"\s+", " ", m.group(0)).strip()
                 if ocr_boleto.valida(linha):
                     achadas.append((linha, f))
-    if not achadas:
-        return "", None
     distintas = {}
     for linha, f in achadas:
         distintas.setdefault(ocr_boleto.digitos(linha), (linha, f))
-    candidatas = list(distintas.values())
+    return list(distintas.values())
+
+
+def _desempatar_linhas(candidatas: list, valor: float,
+                       vencimento: date | None) -> tuple[str, dict] | None:
+    """A única linha que o valor do lançamento e, sobrando mais de uma, o
+    vencimento dele apontam — ou None quando não decide com segurança."""
     if len(candidatas) > 1:
         candidatas = [c for c in candidatas if ocr_boleto.confere_valor(c[0], valor)]
         if len(candidatas) > 1 and vencimento:
             candidatas = [c for c in candidatas
                           if ocr_boleto.vencimento_da_linha(c[0]) == vencimento]
-    if len(candidatas) == 1:
-        return candidatas[0]
-    return "", achadas[0][1]
+    return candidatas[0] if len(candidatas) == 1 else None
+
+
+def linha_em_outro_anexo(files, textos: dict, valor: float, urls_ocr=(),
+                         ignorar: str = "", vencimento: date | None = None
+                         ) -> tuple[str, dict | None]:
+    """A linha digitável de um boleto que não se anuncia como boleto.
+
+    Há fornecedor que junta a NF (página 1) e o boleto (página 2) num PDF só,
+    e o ERP o etiqueta "Nota Fiscal". `escolher_pdf_do_boleto` recusa o
+    arquivo pelo RÓTULO — e tem de recusar, senão chutaria nota como boleto —,
+    então a página 2 nunca era lida: a linha ia para NÃO ENTRARAM como "sem
+    forma de pagar" e o título vencia sem ninguém ver (09 e 10/09/2026).
+
+    Aqui quem decide é o CONTEÚDO, com a régua do OCR: só vale linha cujos
+    dígitos verificadores fecham. Uma linha só é a resposta, mesmo com outro
+    valor (a divergência é avisada adiante). Várias: fica a que tem o valor do
+    lançamento e, se ainda sobrar mais de uma — parcelas iguais do mesmo
+    título dividem os anexos —, a do vencimento dele. Devolve `(linha,
+    anexo)`; linha vazia com anexo quer dizer "há boleto aí dentro, mas não dá
+    para saber qual" — e quem chama não escolhe.
+    """
+    distintas = _linhas_dos_anexos(files, textos, valor, urls_ocr, ignorar)
+    if not distintas:
+        return "", None
+    escolhida = _desempatar_linhas(distintas, valor, vencimento)
+    return escolhida if escolhida else ("", distintas[0][1])
 
 
 # --------------------------------------------------------------------------
@@ -602,11 +694,21 @@ def _chave_confiavel(chave: str) -> bool:
 
 
 def mesma_chave(a: str, b: str) -> bool:
-    """Duas grafias da mesma chave? '111.222.333-44' e 'Fulano 11122233344'."""
-    da, db = re.sub(r"\D", "", a or ""), re.sub(r"\D", "", b or "")
-    if da and db:
-        return da in db or db in da
-    return chave(a) == chave(b)
+    """Duas grafias da mesma chave? '111.222.333-44' e 'Fulano 11122233344'.
+
+    Igualdade (normalizada), e não "um contém o outro": "x1" e "x12" não são a
+    mesma chave, nem um e-mail com dígito e um CPF que o contém (dono,
+    01/10/2026). Chave numérica compara os dígitos; com letra, o texto."""
+    ka, kb = extrair_chave_pix(a or ""), extrair_chave_pix(b or "")
+    if not re.search(r"[A-Za-z@]", ka + kb):
+        da, db = re.sub(r"\D", "", ka), re.sub(r"\D", "", kb)
+        if da and db:
+            if da == db:
+                return True
+            # só o prefixo de país (55) do celular é tolerado
+            curto, longo = sorted((da, db), key=len)
+            return len(curto) in (10, 11) and longo == "55" + curto
+    return chave(ka) == chave(kb)
 
 
 # --------------------------------------------------------------------------
@@ -733,8 +835,12 @@ def partes_da_descricao(item: dict, files, comentario: str = "",
 
 
 def partes_no_registro(item: dict, files, comentario: str = "",
-                       overview=None) -> dict:
+                       overview=None, textos: dict | None = None) -> dict:
     """As chaves que a linha leva para o HTML montar a descrição do banco.
+
+    `nf_anexada` diz se há nota fiscal anexada (`tem_nf_anexada`): é ela, e
+    não a existência de um número, que autoriza o rótulo "NF" na descrição
+    (dono, 01/10/2026).
 
     `oc_da_descricao` não é o `oc` da linha: aquele é o `achar_oc` cru, que a
     remessa já usa, e este é o que a descrição mostra (inclui a OC escrita no
@@ -742,6 +848,7 @@ def partes_no_registro(item: dict, files, comentario: str = "",
     do HTML, que é quem sabe o limite de cada banco."""
     _, doc, oc = partes_da_descricao(item, files, comentario, overview)
     return {"nf": doc, "oc_da_descricao": oc,
+            "nf_anexada": tem_nf_anexada(files, textos),
             "descricao_lancamento": (item.get("description") or "").strip(),
             "utilidade": eh_utilidade(item)}
 
@@ -758,7 +865,87 @@ def contrato_e_medicao(descricao) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m else None
 
 
-def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> str:
+_PONTO_ENTRE_DIGITOS = re.compile(r"(?<=\d)\.(?=\d)")
+_PALAVRA_DO_NUMERO = re.compile(r"[A-Za-z0-9]+")
+
+
+def palavras_do_numero(texto) -> list[str]:
+    """As palavras do nº do documento/OC, a divisão que os dois leitores dividem.
+
+    O ponto entre dígitos some sem virar espaço ("1.234" é "1234"); barra e
+    hífen separam ("5678/5679" são duas notas; "12.345/B-2" vira 12345, B, 2).
+    A planilha e o HTML dos pagamentos usam esta mesma divisão."""
+    s = _PONTO_ENTRE_DIGITOS.sub("", sem_acento(str(texto or "")))
+    return _PALAVRA_DO_NUMERO.findall(s)
+
+
+def numero_tem_4_digitos(palavras) -> bool:
+    """Só número com ao menos 4 dígitos seguidos é tirado da descrição: o curto
+    ("10") pode ser lote, e tirá-lo perde o casamento por lote do Anexar."""
+    return any(re.search(r"\d{4}", p) for p in palavras)
+
+
+_ROTULOS_DE_NOTA = ("nf", "nfe", "nota")
+
+
+def tira_rotulo_de_nota(saida: list[str]) -> None:
+    """Tira do FIM de `saida` (palavras já escritas) o rótulo de nota que
+    precede o número do documento: NF, NFE, NF-E (que chega como "NF", "E") ou
+    NOTA. O número é reescrito no fim da descrição, com ou sem "NF" conforme a
+    nota esteja anexada: o rótulo do texto livre inventaria um documento ou
+    sairia em dobro ("NF NF 1234"; revisão final, 01/10/2026). Mexe na lista
+    no lugar."""
+    def chave(t):
+        return re.sub(r"[^a-z0-9]", "", sem_acento(t).casefold())
+    if len(saida) >= 2 and chave(saida[-1]) == "e" and chave(saida[-2]) == "nf":
+        del saida[-2:]
+    elif saida and chave(saida[-1]) in _ROTULOS_DE_NOTA:
+        saida.pop()
+
+
+def descricao_sem_repeticao(descr: str, cc: str, doc: str,
+                            limite: int = 110) -> str:
+    """A descrição do lançamento para ir ANTES do documento na planilha.
+
+    Compara por palavras inteiras, sem acento nem caixa: tira o centro de custo
+    do começo (CC "LT 1" não come o "LT 10") e a sequência do número do
+    documento onde a descrição já o traz (só com 4+ dígitos). Corta em
+    fronteira de palavra no `limite`; o documento é escrito à parte e nunca
+    é cortado (dono, 01/10/2026)."""
+    def chaves(t):
+        return [re.sub(r"[^a-z0-9]", "", sem_acento(p).casefold()) for p in t]
+    tokens = (descr or "").split()
+    ks = chaves(tokens)
+    cck = [k for k in chaves((cc or "").split()) if k]
+    if cck:
+        vivos = [i for i, k in enumerate(ks) if k]
+        if [ks[i] for i in vivos[:len(cck)]] == cck:
+            corte = vivos[len(cck) - 1] + 1
+            tokens, ks = tokens[corte:], ks[corte:]
+    palavras = palavras_do_numero(doc)
+    alvo = [p.casefold() for p in palavras]
+    if alvo and numero_tem_4_digitos(palavras):
+        saida, i, n = [], 0, len(alvo)
+        while i < len(tokens):
+            if ks[i] and ks[i:i + n] == alvo:
+                i += n
+                tira_rotulo_de_nota(saida)
+                continue
+            saida.append(tokens[i])
+            i += 1
+        tokens = saida
+    texto = ""
+    for t in tokens:
+        nova = f"{texto} {t}".strip()
+        if len(nova) > limite:
+            break
+        texto = nova
+    return texto.strip(" -:|")
+
+
+def monta_descricao(item: dict, files, comentario: str = "", overview=None,
+                    arrecadacao: bool = False,
+                    textos: dict | None = None) -> str:
     cc, doc, oc = partes_da_descricao(item, files, comentario, overview)
 
     # Água/energia: o que identifica é a descrição (UC, mês, casa). O "número
@@ -770,8 +957,25 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None) -> s
         return " ".join(partes).strip()
 
     partes = [cc] if cc else []
+    if doc and not oc:
+        # Documento SEM OC leva também a descrição do lançamento, antes do
+        # documento (dono, 01/10/2026); medição segue a forma curta abaixo.
+        descr = (item.get("description") or "").strip()
+        if descr and not contrato_e_medicao(descr):
+            descr = descricao_sem_repeticao(descr, cc, doc)
+            if descr:
+                partes.append(descr)
     if doc:
-        partes.append(f"NF {doc}")
+        # Ficha de arrecadação (tributo, taxa, órgão público) não tem
+        # cedente nem Nota Fiscal atrás (`ocr_boleto.eh_arrecadacao`, a
+        # mesma régua que rotula "ARRECADAÇÃO" na janela de confirmação): o
+        # campo do documento é só uma referência — o nº do DARF da Receita
+        # Federal, por exemplo —, e escrever "NF" ali inventa um documento
+        # que não existe (dono, 22/09/2026).
+        # Tampouco rotula "NF" sem nota fiscal anexada: o número do documento
+        # da prefeitura, por exemplo, não é de nota (dono, 01/10/2026).
+        partes.append(f"NF {doc}" if (not arrecadacao
+                                      and tem_nf_anexada(files, textos)) else doc)
     if oc:
         partes.append(f"OC {oc}")
     if not doc and not oc:
@@ -815,12 +1019,148 @@ def _cnpj_fmt(c: str) -> str:
 
 
 def _valor_nos_textos(valor: float, textos) -> bool:
+    """O valor aparece, INTEIRO, em algum dos textos?
+
+    Com fronteira de dígito (dono, 01/10/2026): "500,00" não está em
+    "1.500,00" — substring dava "valor ✓" a uma NF de R$ 1.500,00 num
+    lançamento de R$ 500,00, e em Pix é a única prova de valor."""
     if not valor:
         return False
     br = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     junto = " ".join(textos)
-    return any(a in junto for a in {br, br.replace(".", ""),
-                                    f"{valor:.2f}".replace(".", ",")})
+    for a in {br, br.replace(".", ""), f"{valor:.2f}".replace(".", ",")}:
+        if re.search(r"(?:(?<![\d.,])|(?<=\.\.\.))" + re.escape(a)
+                     + r"(?!\d|[.,]\d)", junto):
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------
+# CNPJ escrito no TEXTO da nota
+# --------------------------------------------------------------------------
+_CNPJ_NO_TEXTO = re.compile(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)")
+#: Rótulos do bloco do COMPRADOR (o CNPJ dele não é o do emitente) e do bloco
+#: de quem VENDE. Um CNPJ pertence ao último rótulo que o precede.
+_PAPEL_DO_PAGADOR = re.compile(
+    r"tomador|destinat[aá]rio|pagador|sacado|cliente|adquirente", re.I)
+_PAPEL_DO_EMITENTE = re.compile(
+    r"emitente|prestador|benefici[aá]rio|cedente|fornecedor", re.I)
+#: "cliente" também aparece em "SAC cliente" e "Central do cliente" no cabeçalho
+#: da nota: ali não abre o bloco do comprador.
+_CLIENTE_DE_ATENDIMENTO = re.compile(
+    r"(?:\bsac|atendimento\s+ao|central\s+do)\s*$", re.I)
+#: O rótulo "cliente" só vale para os CNPJs logo depois dele.
+_ALCANCE_DO_CLIENTE = 300
+_E_DANFE = re.compile(r"danfe|documento\s+auxiliar", re.I)
+_E_BOLETO_TEXTO = re.compile(
+    r"ficha\s+de\s+compensa|recibo\s+do\s+pagador|benefici[aá]rio|linha\s+digit", re.I)
+_PERTO_DE_BANCO = re.compile(r"banco|institui[cç][aã]o\s+financeira", re.I)
+
+
+def cnpjs_do_emitente(texto: str) -> list[str]:
+    """Os CNPJs com DV válido que podem ser do EMITENTE, por BLOCO.
+
+    Depois de um rótulo de tomador/destinatário/pagador/sacado, os CNPJs até o
+    próximo rótulo de emitente/prestador/beneficiário/cedente são do bloco do
+    comprador: na DANFE o rótulo DESTINATÁRIO fica longe do CNPJ, e uma janela
+    de caracteres não o alcança. Sem rótulo antes, vale como emitente. Na
+    DANFE o PRIMEIRO CNPJ do documento é o do emitente, qualquer que seja o
+    rótulo. Em boleto/ficha de compensação o CNPJ do BANCO também fica de fora
+    (o do beneficiário vale). Dono, 01/10/2026."""
+    texto = texto or ""
+    marcas = []
+    for m in _PAPEL_DO_PAGADOR.finditer(texto):
+        alcance = None
+        if m.group(0).casefold() == "cliente":
+            if _CLIENTE_DE_ATENDIMENTO.search(texto[max(0, m.start() - 20):m.start()]):
+                continue
+            alcance = m.end() + _ALCANCE_DO_CLIENTE
+        marcas.append((m.start(), True, alcance))
+    marcas += [(m.start(), False, None)
+               for m in _PAPEL_DO_EMITENTE.finditer(texto)]
+    marcas.sort(key=lambda t: t[0])
+    danfe = bool(_E_DANFE.search(texto))
+    boleto = bool(_E_BOLETO_TEXTO.search(texto))
+    achados, primeiro = [], True
+    for m in _CNPJ_NO_TEXTO.finditer(texto):
+        cnpj = regras.documento_valido(m.group(0))
+        if len(cnpj) != 14:
+            continue
+        era_primeiro, primeiro = primeiro, False
+        no_bloco_do_comprador = False
+        for pos, comprador, alcance in marcas:
+            if pos < m.start():
+                no_bloco_do_comprador = comprador and (
+                    alcance is None or m.start() <= alcance)
+            else:
+                break
+        if no_bloco_do_comprador and not (danfe and era_primeiro):
+            continue
+        if boleto:
+            # Só a janela logo antes do CNPJ, na mesma linha: "banco" lá no
+            # começo da linha não é do CNPJ do fim; e "banco ... beneficiário
+            # <cnpj>" é o beneficiário.
+            ini = max(texto.rfind(chr(10), 0, m.start()) + 1, m.start() - 40)
+            janela = texto[ini:m.start()]
+            bancos = list(_PERTO_DE_BANCO.finditer(janela))
+            if bancos and "benefici" not in janela[bancos[-1].end():].casefold():
+                continue
+        if cnpj not in achados:
+            achados.append(cnpj)
+    return achados
+
+
+def conferir_cnpj_da_nota(favorecido: str, pago_para: str, participantes,
+                          files, textos: dict) -> tuple[str, str]:
+    """Cruza o CNPJ do EMITENTE escrito nos anexos de NF com o do cadastro.
+
+    Devolve `(resultado, texto)`: "" (nada a dizer — sem CNPJ no texto ou sem
+    documento no cadastro), "ok", "filial" (raiz igual) ou "diverge". O
+    documento do cadastro é o CNPJ do favorecido nos Contatos e/ou o da chave
+    Pix do lançamento; CPF não entra (nota de pessoa jurídica não o traz)."""
+    conhecidos = []
+    do_contato = regras.documento_valido(
+        (participantes or {}).get(util.norm_espaco(favorecido)) or "")
+    achado = _CNPJ_NO_TEXTO.search(pago_para or "")
+    do_pix = regras.documento_valido(achado.group(0)) if achado else ""
+    for d in (do_contato, do_pix):
+        if len(d) == 14 and d not in conhecidos:
+            conhecidos.append(d)
+    if not conhecidos:
+        return "", ""
+    da_nota = []
+    for f in files or ():
+        texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
+        if texto and tem_nf_anexada([f], textos):
+            da_nota += [c for c in cnpjs_do_emitente(texto) if c not in da_nota]
+    if not da_nota:
+        return "", ""
+    if any(c in conhecidos for c in da_nota):
+        return "ok", "CNPJ ✓"
+    if any(c[:8] == k[:8] for c in da_nota for k in conhecidos):
+        return "filial", "CNPJ ✓ (filial: mesma raiz do cadastro)"
+    return "diverge", (f"CNPJ DIVERGE: nota {', '.join(_cnpj_fmt(c) for c in da_nota)}"
+                       f" × cadastro {', '.join(_cnpj_fmt(c) for c in conhecidos)}")
+
+
+#: QD/LT/CASA/CS + número, com ou sem ponto entre os dois ("LT 11", "LT.11",
+#: "LT . 11"): o ERP escreve com espaço, e a NF do fornecedor às vezes separa
+#: com ponto — mesmo lote, pontuação diferente.
+_TOKEN_ENDERECO = re.compile(r"\b(QD|LT|CASA|CS)\s*\.?\s*(\d{1,4})\b", re.I)
+
+
+def _tokens_de_endereco(texto: str) -> list[str]:
+    """Os tokens QD/LT/CASA/CS de um texto, canonizados em "LETRA NÚMERO".
+
+    Comparar por TOKEN (e não por substring do texto cru) é o que permite ao
+    ERP escrever "LT 11" e à NF do fornecedor escrever "LT.11" e as duas
+    baterem: antes, a busca de "LT 11" (com espaço) dentro do texto do anexo
+    falhava contra "LT.11" (com ponto), e a linha dizia "LT 11 não aparece"
+    quando ele estava ali, só com outra pontuação (dono, 22/09/2026).
+    """
+    return list(dict.fromkeys(
+        f"{letra.upper()} {numero}"
+        for letra, numero in _TOKEN_ENDERECO.findall(sem_acento(texto or ""))))
 
 
 def _enderecos(item: dict) -> tuple[list[str], list[str]]:
@@ -828,15 +1168,11 @@ def _enderecos(item: dict) -> tuple[list[str], list[str]]:
     diferente: estruturado (`QD 18`, `LT 8`) como o ERP escreve, e o nome do
     logradouro como a conta da concessionária escreve."""
     cc = centro_de_custo(item)
-    fonte = sem_acento(f"{cc} {item.get('description') or ''}")
-    estruturados = re.findall(r"\b(?:QD|LT|CASA|CS)\s*\.?\s*\d{1,4}\b", fonte, re.I)
+    fonte = f"{cc} {item.get('description') or ''}"
+    estruturados = _tokens_de_endereco(fonte)
     ruas = [p for p in re.findall(r"[A-Za-z]{4,}", sem_acento(cc))
             if p.lower() not in _RUIDO_ENDERECO]
     return estruturados, ruas
-
-
-def _normaliza_para_busca(textos) -> str:
-    return re.sub(r"\s+", " ", sem_acento(" ".join(textos)).upper())
 
 
 def _conferir_endereco(item: dict, textos) -> str:
@@ -850,12 +1186,11 @@ def _conferir_endereco(item: dict, textos) -> str:
     "QD 40", e alarme falso ensina o usuário a ignorar alarme. Aqui só se
     informa o que foi possível confirmar.
     """
-    estruturados = dict.fromkeys(re.sub(r"\s+", " ", p.upper())
-                                 for p in _enderecos(item)[0])
+    estruturados = _enderecos(item)[0]
     if not estruturados:
         return ""
-    alvo = _normaliza_para_busca(textos)
-    faltando = [p for p in estruturados if p not in alvo]
+    achados = _tokens_de_endereco(" ".join(textos))
+    faltando = [p for p in estruturados if p not in achados]
     if not faltando:
         return f"endereço ✓ ({', '.join(estruturados)[:40]})"
     return f"endereço ? ({', '.join(faltando)[:40]} não aparece)"
@@ -883,7 +1218,8 @@ def _conferir_utilidade(item, files, textos) -> tuple[list[str], bool]:
         partes.append("endereço ? (anexo sem texto)")
     else:
         alvo = re.sub(r"\s+", " ", sem_acento(" ".join(textos)).upper())
-        achados = [p for p in estruturados if re.sub(r"\s+", " ", p.upper()) in alvo]
+        tokens_do_anexo = _tokens_de_endereco(" ".join(textos))
+        achados = [p for p in estruturados if p in tokens_do_anexo]
         achados += [r for r in ruas if r.upper() in alvo]
         if achados:
             partes.append(f"endereço ✓ ({', '.join(dict.fromkeys(achados))[:40]})")
@@ -892,15 +1228,21 @@ def _conferir_utilidade(item, files, textos) -> tuple[list[str], bool]:
     return partes, divergiu
 
 
-def conferir_documento(item: dict, files, textos, overview=None) -> tuple[str, bool]:
-    """Cruza o anexo com o lançamento. Devolve (resumo, tem_divergência)."""
+def conferir_documento(item: dict, files, textos, overview=None,
+                       textos_valor=None) -> tuple[str, bool]:
+    """Cruza o anexo com o lançamento. Devolve (resumo, tem_divergência).
+
+    `textos_valor`: onde o valor pode ser provado — só os ANEXOS. A observação
+    do lançamento (`textos` a inclui) é o que o próprio lançamento diz, e não
+    prova nada contra ele (dono, 01/10/2026). Sem ele, vale `textos`."""
     partes, divergiu = [], False
     textos = [t for t in textos if t]
+    provas = textos if textos_valor is None else [t for t in textos_valor if t]
 
     if eh_utilidade(item):
         partes, divergiu = _conferir_utilidade(item, files, textos)
         if textos:
-            partes.append("valor ✓" if _valor_nos_textos(valor_do_item(item), textos)
+            partes.append("valor ✓" if _valor_nos_textos(valor_do_item(item), provas)
                           else "valor ?")
         return " · ".join(partes), divergiu
 
@@ -950,7 +1292,7 @@ def conferir_documento(item: dict, files, textos, overview=None) -> tuple[str, b
         partes.append("valor/fornecedor ? (anexo sem texto)")
         return " · ".join(partes), divergiu
 
-    partes.append("valor ✓" if _valor_nos_textos(valor_do_item(item), textos) else "valor ?")
+    partes.append("valor ✓" if _valor_nos_textos(valor_do_item(item), provas) else "valor ?")
 
     alvo = chave(" ".join(textos))
     esperados = [p for p in re.findall(r"[a-z0-9]+", chave(item.get("paidTo") or ""))
@@ -1036,7 +1378,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if not conta_entra(conta, incluir, excluir):
             omitidos.append({
                 "conta": conta, "tipo": tipo, "valor": valor,
-                "descricao": monta_descricao(item, files, coment, overview),
+                "descricao": monta_descricao(item, files, coment, overview,
+                                             textos=textos),
                 "favorecido": favorecido,
                 "motivo": "conta fora do recorte — regra de conta ignorada "
                           "(APENAS LANÇAMENTO/AJUSTE, ERRADA) ou filtro de "
@@ -1050,10 +1393,19 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 "fora_do_recorte": True})
             continue
 
-        do_item = [textos.get(f.get("downloadUrl") or "") for f in files]
-        do_item = [t for t in do_item if t] + ([coment] if coment else [])
-        conferencia, divergiu = (conferir_documento(item, files, do_item, overview)
+        do_anexo = [textos.get(f.get("downloadUrl") or "") for f in files]
+        do_anexo = [t for t in do_anexo if t]
+        do_item = do_anexo + ([coment] if coment else [])
+        conferencia, divergiu = (conferir_documento(item, files, do_item, overview,
+                                                    textos_valor=do_anexo)
                                  if textos else ("(não cruzado)", False))
+        # CNPJ escrito no TEXTO da nota x documento do cadastro (dono,
+        # 01/10/2026). Sem CNPJ no texto ou sem documento, não diz nada.
+        cnpj_res, cnpj_txt = (conferir_cnpj_da_nota(
+            favorecido, pago_para, participantes, files, textos)
+            if textos else ("", ""))
+        if cnpj_txt and "CNPJ" not in conferencia:
+            conferencia = " · ".join(filter(None, [conferencia, cnpj_txt]))
 
         # A compra está documentada? É o que decide se um título sem boleto
         # anexado pode ser pago pela chave do cadastro (abaixo) ou se é ruído.
@@ -1067,6 +1419,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                             or documento_declara_reembolso(item, overview))
 
         avisos, obs, chave_divergente = [], "", False
+        obs_linha, n_boletos = "", 0
         #: Quem recebe, quando o anexo é um aviso "PAGAR PARA". Fica None nas
         #: outras linhas: ali quem recebe é o favorecido do lançamento, e não
         #: há nada a descobrir.
@@ -1195,7 +1548,20 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             url_pdf = (pdf or {}).get("downloadUrl") or ""
             texto_pdf = textos.get(url_pdf) or ""
             tem_documento = bool(pdf)
-            if url_pdf in urls_ocr:
+            obs_linha, n_boletos = "", 0
+            # Parcelas do mesmo título dividem os anexos (os anexos são do
+            # TÍTULO). Havendo mais de uma linha válida entre TODOS os PDFs,
+            # a "primeira do primeiro PDF" entregaria a mesma linha a todas as
+            # parcelas: só valor + vencimento escolhem, e sem decidir a linha
+            # fica vazia para conferir (dono, 01/10/2026).
+            todas = _linhas_dos_anexos(files, textos, valor, urls_ocr)
+            if len(todas) > 1:
+                decidida = _desempatar_linhas(todas, valor, venc_item)
+                if decidida:
+                    dados = decidida[0]
+                else:
+                    dados, n_boletos = "", len(todas)
+            elif url_pdf in urls_ocr:
                 # Texto de OCR NUNCA passa pelo extrator solto: ali um "8"
                 # lido como "B" viraria linha digitável de mentira, com cara
                 # de verdade. Quem lê OCR é quem também confere DV e valor.
@@ -1205,18 +1571,37 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                                   "e valor conferem com o lançamento.")
             else:
                 dados = extrair_linha_digitavel(texto_pdf)
+                # O caminho "por texto" também confere DV e prova de
+                # pagamento: 47 dígitos soltos ("protocolo 1111…") não são
+                # boleto, e o texto de comprovante traz a linha de boleto JÁ
+                # PAGO (dono, 01/10/2026).
+                if dados and _COMPROVANTE_FORTE.search(texto_pdf):
+                    dados = ""
+                    obs_linha = ("O anexo é comprovante de pagamento — a linha "
+                                 "dele é de boleto já pago; buscar o boleto")
+                elif dados and not ocr_boleto.valida(dados):
+                    dados = ""
+                    obs_linha = ("Linha digitável do anexo não fecha o dígito "
+                                 "verificador — preencher manual")
             onde = None
-            if not dados:
+            if n_boletos:
+                tem_documento = True
+                obs = (f"Há {n_boletos} boletos no título, não dá para saber qual "
+                       "é desta parcela — conferir antes de pagar")
+            elif not dados:
                 escondida, onde = linha_em_outro_anexo(files, textos, valor, urls_ocr,
                                                        ignorar=url_pdf,
                                                        vencimento=venc_item)
                 if escondida:
+                    # Fornecedor que junta nota e boleto num único PDF é
+                    # prática comum e deliberada da equipe: separar os dois
+                    # arriscaria anexar o boleto errado a outro lançamento.
+                    # Deixou de ser motivo de "conferir a linha" a cada
+                    # título (dono, 22/09/2026) — o DV e o valor já
+                    # validaram a linha antes de chegar aqui, dentro de
+                    # `linha_em_outro_anexo`.
                     dados, tem_documento = escondida, True
-                    avisos.append(f"Boleto achado dentro do anexo "
-                                  f"'{(onde.get('filename') or '').strip()}' (etiqueta: "
-                                  f"{onde.get('tagName') or 'nenhuma'}), e não num anexo "
-                                  "de boleto — conferir a linha.")
-            if not dados:
+            if not dados and not n_boletos:
                 do_cadastro = extrair_chave_pix(pago_para) if pago_para else ""
                 if onde:
                     # Há boleto, só não se sabe qual: o Pix do cadastro não
@@ -1226,9 +1611,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                            "mas não dá para saber qual é o deste lançamento — "
                            "conferir antes de pagar")
                 elif pdf:
-                    obs = ("Boleto em imagem e o OCR não fechou — preencher manual"
-                           if url_pdf in urls_ocr else
-                           "Boleto em imagem — preencher manual")
+                    obs = obs_linha or ("Boleto em imagem e o OCR não fechou — preencher manual"
+                                        if url_pdf in urls_ocr else
+                                        "Boleto em imagem — preencher manual")
                 elif parece_chave_pix(do_cadastro) and tem_nf_ou_oc:
                     # Sem boleto anexado, a regra "boleto ganha de Pix" não
                     # tem premissa: não há boleto para ganhar. Havendo NF ou
@@ -1297,7 +1682,15 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             avisos.append(f"Observação do lançamento: {coment[:220]}")
         obs = " · ".join(filter(None, [obs] + avisos))
 
-        descricao = monta_descricao(item, files, coment, overview)
+        # Ficha de arrecadação: usada por `monta_descricao` para não rotular
+        # de "NF" um documento que não é nota fiscal — a mesma régua que
+        # decide o rótulo "ARRECADAÇÃO" em `confirmacao.py` e o
+        # `Candidato.arrecadacao` da remessa, uma casa só.
+        arrecadacao_fiscal = (tipo == "Boleto" and bool(dados)
+                              and ocr_boleto.eh_arrecadacao(dados))
+        descricao = monta_descricao(item, files, coment, overview,
+                                    arrecadacao=arrecadacao_fiscal,
+                                    textos=textos)
 
         # Já pago é informação, não pagamento: as regras de omissão não valem
         # ali. Uma linha "JÁ PAGO" sem forma de pagar é o normal, não um erro.
@@ -1367,6 +1760,28 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             obs = " · ".join(filter(None, [
                 f"anexo não lido: {nomes} — a forma de pagar desta linha foi "
                 "decidida sem ele; abrir o anexo no ERP antes de pagar", obs]))
+        # Alarmes novos (dono, 01/10/2026): o que a remessa já recusa
+        # (`_impedimento`) e o HTML entregava pronto para colar. Entram sem
+        # rebaixar um ATENÇÃO mais grave (só tomam o lugar de "sem anexo" e
+        # "sem dados de pgto", que são o mais leve) e antes dos três de baixo,
+        # que continuam ganhando. ATENÇÃO nasce DESMARCADO na remessa
+        # (`remessa_dia.preparar` só marca status "APTO…").
+        if cnpj_res == "diverge" and not item.get("paid"):
+            obs = " · ".join(filter(None, [cnpj_txt, obs]))
+        novos = []
+        if olhar:
+            novos.append("ATENÇÃO — pagar à mão")
+        if parcial:
+            novos.append("ATENÇÃO — pagamento parcial")
+        if n_boletos:
+            novos.append("ATENÇÃO — vários boletos no título")
+        if cnpj_res == "diverge":
+            novos.append("ATENÇÃO — CNPJ da nota diferente do cadastro")
+        if novos and not item.get("paid"):
+            if (not status.startswith("ATENÇÃO")
+                    or status in ("ATENÇÃO — sem anexo",
+                                  "ATENÇÃO — sem dados de pgto")):
+                status = novos[0]
         if divergiu:
             status = "ATENÇÃO — documento não bate"
         if chave_divergente:
@@ -1396,7 +1811,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # descrição de colar no banco (limpa e no tamanho do banco) sem
             # reparsear a frase acima: `nf`, `oc_da_descricao`,
             # `descricao_lancamento` e `utilidade`.
-            **partes_no_registro(item, files, coment, overview),
+            **partes_no_registro(item, files, coment, overview, textos),
             # A posição do lançamento na lista que chegou aqui. Os filtros do
             # passo 1 e a seleção de contas não reordenam nada, então é a
             # ordem em que a API devolveu — e `mc_api.listar_a_pagar` pergunta

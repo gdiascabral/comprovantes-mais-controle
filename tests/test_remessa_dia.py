@@ -1692,3 +1692,50 @@ def test_o_nome_separa_as_contas_da_mesma_empresa():
         assert nome.endswith(".REM")
         nsa = nome[:-4].rsplit("_", 1)[1]
         assert len(nsa) == 6 and nsa.isdigit()
+
+
+# ---- revisão final: o documento no fim não é cortado pelo campo do banco
+_PARTES = {"nf": "4521", "nf_anexada": False, "oc_da_descricao": "",
+           "centro_custo": "EDIFICIO MODELO QD 99 LT 99", "utilidade": False,
+           "descricao_lancamento": "Compra de material hidraulico para a obra"}
+
+
+def _etiqueta(tipo, **partes):
+    c, = preparar(registro(tipo=tipo, **({"dados": "PIX CNPJ 11.222.333/0001-81"}
+                                          if tipo == "Pix" else {}),
+                           **{**_PARTES, **partes}))
+    return c, remessa_dia.etiqueta_do_banco(c)
+
+
+def test_etiqueta_pix_cabe_em_38_e_termina_no_documento():
+    _, e = _etiqueta("Pix")
+    assert len(e) <= 38 and e.endswith(" 4521") and e.startswith("EDIFICIO")
+
+
+def test_etiqueta_boleto_cabe_em_30_e_termina_no_documento():
+    _, e = _etiqueta("Boleto")
+    assert len(e) <= 30 and e.endswith(" 4521")
+
+
+def test_etiqueta_com_oc_cabe_ou_corta_o_centro_de_custo():
+    _, e = _etiqueta("Boleto", nf_anexada=True, oc_da_descricao="789")
+    assert len(e) <= 30 and e.endswith("NF 4521 OC 789")
+    _, e = _etiqueta("Pix", nf_anexada=True, oc_da_descricao="789")
+    assert len(e) <= 38 and e.endswith("NF 4521 OC 789")
+
+
+def test_cnab_gerado_leva_o_documento_no_campo():
+    from cnab240 import validar
+
+    linhas = preparar(
+        registro(**_PARTES),
+        registro(id="id-erp-2", tipo="Pix", valor=840.00,
+                 dados="PIX CNPJ 11.222.333/0001-81", **_PARTES))
+    arq = remessa_dia.montar_arquivo(pagador(), linhas, nsa=1, quando=HOJE)
+    registros = arq.gerar()
+    assert validar(registros) == []
+    bol = remessa_dia.etiqueta_do_banco(linhas[0])
+    pix = remessa_dia.etiqueta_do_banco(linhas[1])
+    assert any(bol.ljust(30) in r for r in registros if r[13:14] == "J")
+    assert any(pix.ljust(38) in r for r in registros if r[13:14] == "A")
+    assert bol.endswith("4521") and pix.endswith("4521")

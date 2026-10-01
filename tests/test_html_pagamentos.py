@@ -31,7 +31,7 @@ def _linha(favorecido, valor, id_, tipo="Pix", dados="fulano@exemplo.com",
     linha = {"tipo": tipo, "dados": dados, "valor": valor,
              "descricao": "OBRA TESTE QD 1 LT 1 NF 10", "favorecido": favorecido,
              "status": "APTO", "conferencia": "(não cruzado)", "obs": "",
-             "id": id_, "centro_custo": "OBRA TESTE QD 1 LT 1", "nf": "10",
+             "id": id_, "centro_custo": "OBRA TESTE QD 1 LT 1", "nf": "10", "nf_anexada": True,
              "oc_da_descricao": "", "descricao_lancamento": "", "utilidade": False}
     linha.update(extra)
     return linha
@@ -131,6 +131,9 @@ def test_toda_linha_do_passo_2_aparece_no_geral(tmp_path):
                            "FORNECEDOR QUATRO"}
     descricoes = {e["descricao"] for c in dados["contas"] for e in c["entries"]}
     assert descricoes == {"OBRA TESTE QD 1 LT 1 NF 10"}
+    # Sem NF anexada o número vai sozinho (dono, 01/10/2026).
+    sem_nf = dict(_linha("FORNECEDOR UM", 1.0, "1"), nf_anexada=False)
+    assert hp.descricao_para_colar(sem_nf, PF) == "OBRA TESTE QD 1 LT 1 10"
 
 
 def test_o_total_por_conta_bate_no_centavo(tmp_path):
@@ -323,3 +326,168 @@ def test_os_dois_modulos_nao_importam_tkinter():
         importados |= {no.module.split(".")[0] for no in ast.walk(arvore)
                        if isinstance(no, ast.ImportFrom) and no.module}
         assert "tkinter" not in importados, nome
+
+
+# ------------------------------------------------- tela do HTML geral (A)
+def _geral_completo():
+    """O HTML COMPLETO, pelo pai: contas_do_html_geral -> html_geral."""
+    return hp.html_geral(hp.contas_do_html_geral(_resultado()), INI, FIM)
+
+
+def test_geral_sem_rolagem_lateral_e_sem_faixa_de_abas():
+    html = _geral_completo()
+    assert "overflow-x:auto" not in html
+    assert "table-layout:fixed" in html
+    assert "overflow-wrap:anywhere" in html
+    for resto in ("sticky-tabs", 'id="tabs"', "tab-btn"):
+        assert resto not in html
+
+
+def test_geral_nome_da_conta_no_resumo_leva_ate_a_conta():
+    html = _geral_completo()
+    assert 'href="#acc-${ci}"' in html
+    assert "scrollIntoView" in html
+    assert "&uarr; resumo" in html
+
+
+def test_geral_modelo_tem_excluir_e_restaurar_guardados_a_parte():
+    html = _geral_completo()
+    assert 'title="Excluir da lista"' in html
+    assert 'aria-label="Excluir da lista"' in html
+    assert "STORAGE_KEY + ':excluidos'" in html
+    assert "Restaurar exclu" in html
+
+
+def test_geral_botao_acessar_link_abre_em_nova_aba():
+    html = _geral_completo()
+    assert "Acessar link" in html
+    assert 'target="_blank"' in html and 'rel="noopener"' in html
+    assert "<svg" in html
+
+
+def test_entrada_traz_o_link_do_lancamento_e_vazio_sem_id():
+    contas = hp.contas_do_html_geral(_resultado(
+        **{"CONTA GAMA": [_linha("FORNECEDOR CINCO", 5.0, "")]}))
+    por_id = {e["id"]: e for c in contas for e in c["entries"]}
+    assert por_id["101"]["link"] == hp.URL_LANCAMENTO + "101"
+    assert por_id[""]["link"] == ""
+
+
+def test_o_prefixo_do_link_e_o_mesmo_do_anexar():
+    from anexar import config
+    assert hp.URL_LANCAMENTO == config.MC_URL_LANCAMENTO
+
+
+def test_o_link_passa_por_esc_no_html():
+    corpo = modelos_html.MODELO_GERAL
+    assert "esc(e.link)" in corpo
+
+
+# --------------------------------------------- linha bloqueada (I5 / C2)
+LINHA_A = "00190.00009 01234.567890 12345.678901 1 00000000000000"
+
+
+def _entradas(**contas):
+    res = Resultado(contas, [])
+    return {e["id"]: e for c in hp.contas_do_html_geral(res) for e in c["entries"]}
+
+
+def test_atencao_bloqueia_sem_copiar_do_dado_e_com_conferir():
+    ent = _entradas(**{"CONTA A": [
+        _linha("F1", 1.0, "1", status="ATENÇÃO - valor do boleto diverge"),
+        _linha("F2", 2.0, "2")]})
+    assert "valor do boleto diverge" in ent["1"]["bloqueio"]
+    assert ent["2"]["bloqueio"] == ""
+    html = hp.html_geral(hp.contas_do_html_geral(
+        Resultado({"CONTA A": [_linha("F1", 1.0, "1", status="ATENÇÃO - x")]}, [])), INI, FIM)
+    # o modelo: sem botão de copiar o dado quando há bloqueio, com a faixa
+    assert "CONFERIR: " in html and "row-bloqueada" in html
+    assert "e.dados_limpo && !bloq" in html
+
+
+def test_apto_livre_continua_com_copiar():
+    html = _geral_completo()
+    assert '"bloqueio": ""' in html or '"bloqueio":""' in html
+    assert "Copiar" in html
+
+
+def test_parcial_valor_diverge_e_pagar_a_mao_bloqueiam():
+    ent = _entradas(**{"CONTA A": [
+        _linha("F1", 1.0, "1", parcial=True),
+        _linha("F2", 2.0, "2", valor_diverge=True),
+        _linha("F3", 3.0, "3", obs="PAGAR À MÃO - 3,00 para FULANO")]})
+    assert all(ent[i]["bloqueio"] for i in "123")
+    assert "parcial" in ent["1"]["bloqueio"]
+    assert "diverge" in ent["2"]["bloqueio"]
+    assert "à mão" in ent["3"]["bloqueio"]
+
+
+
+def test_mesma_linha_digitavel_em_duas_contas_bloqueia_as_duas():
+    ent = _entradas(**{
+        "CONTA A": [_linha("F1", 10.0, "1", tipo="Boleto", dados=LINHA_A)],
+        "CONTA B": [_linha("F2", 10.0, "2", tipo="Boleto",
+                           dados=LINHA_A.replace(" ", "").replace(".", ""))]})
+    for i in "12":
+        assert "mesma linha digitável em 2 lançamentos" in ent[i]["bloqueio"]
+
+
+def test_mesma_linha_num_unico_lancamento_nao_bloqueia():
+    ent = _entradas(**{"CONTA A": [
+        _linha("F1", 10.0, "1", tipo="Boleto", dados=LINHA_A)]})
+    assert ent["1"]["bloqueio"] == ""
+
+
+def test_pix_copia_e_cola_repetido_bloqueia_mas_chave_repetida_nao():
+    cc = "00020126580014br.gov.bcb.pix0136abcd1234-aaaa-bbbb-cccc-1234567890125204000053039865802BR5909FULANO6009SAO PAULO62070503***6304ABCD"
+    ent = _entradas(**{"CONTA A": [
+        _linha("F1", 1.0, "1", dados=cc), _linha("F2", 1.0, "2", dados=cc),
+        _linha("F3", 1.0, "3"), _linha("F4", 2.0, "4")]})
+    assert ent["1"]["bloqueio"] and ent["2"]["bloqueio"]
+    assert ent["3"]["bloqueio"] == "" and ent["4"]["bloqueio"] == ""
+
+
+def test_modelo_blinda_localstorage_e_mostra_a_conferir_no_resumo():
+    html = _geral_completo()
+    assert "typeof v === 'object'" in html
+    assert "a conferir" in html
+
+
+def test_grafias_de_atencao_e_pagar_a_mao_bloqueiam():
+    import unicodedata
+    nfd = unicodedata.normalize("NFD", "Atenção - algo")
+    ent = _entradas(**{"CONTA A": [
+        _linha("F1", 1.0, "1", status="Atenção - algo"),
+        _linha("F2", 1.0, "2", status=nfd),
+        _linha("F3", 1.0, "3", status="ATENCAO - algo"),
+        _linha("F4", 1.0, "4", obs="PAGAR A MAO - fulano"),
+        _linha("F5", 1.0, "5", obs="pagar à  mão para fulano"),
+        _linha("F6", 1.0, "6", obs=unicodedata.normalize("NFD", "Pagar à mão"))]})
+    assert all(ent[i]["bloqueio"] for i in "123456")
+
+
+def test_linha_de_47_e_codigo_de_44_do_mesmo_boleto_bloqueiam_as_duas():
+    l47 = "34191.57007 00024.924375 24177.010006 9 15340000115000"
+    c44 = "34199153400001150001570000024924372417701000"
+    ent = _entradas(**{
+        "CONTA A": [_linha("F1", 1.0, "1", tipo="Boleto", dados=l47)],
+        "CONTA B": [_linha("F2", 1.0, "2", tipo="Boleto", dados=c44)]})
+    assert "mesma linha digitável" in ent["1"]["bloqueio"]
+    assert "mesma linha digitável" in ent["2"]["bloqueio"]
+
+
+def test_modelo_so_cria_copiar_do_dado_quando_nao_bloqueado():
+    html = _geral_completo()
+    assert "if(e.dados_limpo && !bloq){ const b = btns[bi];" in html
+    assert "(e.dados_limpo && bloq)" in html
+
+
+def test_ja_pago_bloqueia_o_copiar():
+    ent = _entradas(**{"CONTA A": [_linha("F1", 1.0, "1", status="JÁ PAGO em 01/10/2026")]})
+    assert ent["1"]["bloqueio"] == "já pago — não pagar de novo"
+
+
+def test_motivo_com_travessao_nao_sai_com_o_travessao():
+    ent = _entradas(**{"CONTA A": [_linha("F1", 1.0, "1", status="ATENÇÃO — sem dados de pgto")]})
+    assert ent["1"]["bloqueio"] == "sem dados de pgto"
+    assert hp._motivo_do_bloqueio({"status": "ATENÇÃO: — pagar à mão"}) == "pagar à mão"

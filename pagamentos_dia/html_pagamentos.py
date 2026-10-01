@@ -37,12 +37,14 @@ from __future__ import annotations
 import base64
 import json
 import re
+import unicodedata
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import NamedTuple
 
 from . import modelos_html
+from . import ocr_boleto
 from . import regras_pagamento as regras
 from . import relatorio
 
@@ -60,6 +62,12 @@ NOMES_LOGO = ("logo_relatorio_pf.png", "logo_mais_controle.png")
 NOME_RODAPE = "rodape_relatorio_pf.txt"
 _LOGO_MAX = 2_000_000
 _RODAPE_MAX_LINHAS = 4
+
+#: Prefixo do link de um lançamento (parcela) no Mais Controle. É cópia de
+#: `anexar.config.MC_URL_LANCAMENTO` (o que `anexar/mc_api.py` usa para abrir
+#: um lançamento): este módulo é puro e não importa o `anexar`, que puxa
+#: `util`. Um teste confere que as duas continuam iguais.
+URL_LANCAMENTO = "https://acessar.maiscontroleerp.com.br/#/payable-installments/"
 
 SUBTITULO_GERAL = "vencimentos em aberto no Mais Controle - todas as contas"
 
@@ -252,7 +260,24 @@ def _que_cabem(palavras, espaco: int) -> list[str]:
     return saida
 
 
-def descricao_para_colar(registro, conta) -> str:
+def _sem_sequencia(palavras, sequencia) -> list[str]:
+    """`palavras` sem as ocorrências da `sequencia` (palavras inteiras, sem
+    diferenciar caixa): o número do documento que a descrição já traz não se
+    repete."""
+    n = len(sequencia)
+    alvo = [p.casefold() for p in sequencia]
+    saida, i = [], 0
+    while i < len(palavras):
+        if n and [p.casefold() for p in palavras[i:i + n]] == alvo:
+            i += n
+            relatorio.tira_rotulo_de_nota(saida)
+            continue
+        saida.append(palavras[i])
+        i += 1
+    return saida
+
+
+def descricao_para_colar(registro, conta, limite: int | None = None) -> str:
     """A descrição que o botão "Copiar" do HTML geral põe no campo do banco.
 
     Não é a `descricao` da planilha: aquela é para conferir, esta é para o
@@ -267,6 +292,21 @@ def descricao_para_colar(registro, conta) -> str:
       é de medição de mão de obra (a forma curta que a planilha já mostra);
     - água e luz continuam como na planilha (CC + descrição + OC): ali o
       "número da NF" é o da fatura e não identifica nada;
+    - **documento sem OC** leva também a descrição do lançamento, entre o
+      centro de custo e o documento: "CC desc NF x" / "CC desc x". Com OC
+      nada muda; a descrição é a primeira a ser cortada e o documento nunca;
+      número que a descrição já traz como palavra inteira não se repete
+      (dono, 01/10/2026);
+    - **"NF" só com nota fiscal anexada** no lançamento (`nf_anexada`): nem
+      todo número de documento é nota (o da prefeitura, por exemplo). Sem a
+      NF anexada, ou sem a chave no registro, o número fica sozinho: "CC x OC
+      y" ou "CC x" (dono, 01/10/2026);
+    - **ficha de arrecadação** (tributo, taxa, órgão público —
+      `ocr_boleto.eh_arrecadacao`) também não rotula "NF": ela não tem
+      cedente, então o campo do documento é só uma referência (o nº do DARF
+      da Receita Federal, por exemplo), e "NF x" inventaria uma nota que não
+      existe. O número continua na descrição, sozinho: "CC x OC y" ou "CC x"
+      (dono, 22/09/2026);
     - sem menção de reembolso, sem acento e sem caractere especial (o hífen
       que separa palavras incluído; o COLADO entre dígitos, como em
       "LT 10-11", fica), e sem repetir o centro de custo que a descrição já
@@ -278,13 +318,26 @@ def descricao_para_colar(registro, conta) -> str:
       palavra. A NF e a OC NUNCA são cortadas — são o que liga o pagamento ao
       documento; quem cede é a descrição do lançamento e, se ainda não
       couber, o centro de custo.
+
+    `limite` troca o tamanho do banco (`limite_da_descricao(conta)`): a
+    remessa CNAB usa o do campo do layout (38 no Pix, 30 no boleto) e passa
+    por esta MESMA função, para o documento nunca ser cortado lá também.
     """
     r = registro or {}
     utilidade = bool(r.get("utilidade"))
     cc = _palavras(r.get("centro_custo"), tirar_reembolso=False)
     nf = [] if utilidade else _palavras_do_numero(r.get("nf"))
     oc = _palavras_do_numero(r.get("oc_da_descricao"))
-    fixos = (["NF", *nf] if nf else []) + (["OC", *oc] if oc else [])
+    # Arrecadação não tem cedente nem Nota Fiscal atrás: rotular o número
+    # de "NF" inventaria um documento que não existe.
+    arrecadacao = (r.get("tipo") == "Boleto"
+                  and ocr_boleto.eh_arrecadacao(r.get("dados") or ""))
+    # "NF" só com nota fiscal anexada (`nf_anexada`, de
+    # `relatorio.tem_nf_anexada`); registro sem a chave fica SEM rótulo: não
+    # inventa documento (dono, 01/10/2026).
+    rotula_nf = bool(r.get("nf_anexada")) and not arrecadacao
+    fixos = ((["NF", *nf] if rotula_nf else nf) if nf else []) + \
+            (["OC", *oc] if oc else [])
     medicao = (None if utilidade or fixos
                else relatorio.contrato_e_medicao(r.get("descricao_lancamento")))
     if medicao:
@@ -292,14 +345,22 @@ def descricao_para_colar(registro, conta) -> str:
         fixos = ["C", *_palavras_do_numero(medicao[0]),
                  "M", *_palavras_do_numero(medicao[1])]
 
+    # Documento SEM OC leva também a descrição do lançamento, entre o centro
+    # de custo e o documento (dono, 01/10/2026). Com OC nada muda, e a medição
+    # de mão de obra continua na forma curta.
+    com_descricao = bool(nf) and not oc and not relatorio.contrato_e_medicao(
+        r.get("descricao_lancamento"))
     texto = []
-    if utilidade or not fixos:
+    if utilidade or not fixos or com_descricao:
         texto = _palavras(r.get("descricao_lancamento"))
         n = len(cc)
         if n and [p.casefold() for p in texto[:n]] == [p.casefold() for p in cc]:
             texto = texto[n:]
+        if com_descricao and relatorio.numero_tem_4_digitos(nf):
+            # Só número de 4+ dígitos: o curto pode ser lote.
+            texto = _sem_sequencia(texto, nf)
 
-    limite = limite_da_descricao(conta)
+    limite = limite_da_descricao(conta) if limite is None else limite
     if len(" ".join(cc + texto + fixos)) > limite:
         resto = cc + fixos
         texto = _que_cabem(texto, limite - len(" ".join(resto)) - (1 if resto else 0))
@@ -386,6 +447,57 @@ def total_da_conta(regs) -> Decimal:
     return sum((dinheiro(r.get("valor")) for r in regs), Decimal("0.00"))
 
 
+def _chave_de_repeticao(tipo, dado_limpo: str) -> str:
+    """Identidade do que o dono cola no banco, para achar a MESMA cobrança em
+    duas linhas: boleto = só os dígitos da linha digitável (>= 20, para uma
+    chave curta nunca contar); Pix copia-e-cola = o código inteiro. Chave Pix
+    comum (CPF, e-mail) repetida é legítima (várias NFs do mesmo fornecedor)
+    e não entra."""
+    d = str(dado_limpo or "")
+    if not d:
+        return ""
+    if regras.PIX_COPIA_COLA.search(re.sub(r"\s+", "", d)):
+        return "pix:" + re.sub(r"\s+", "", d)
+    if str(tipo or "") == "Boleto":
+        dig = re.sub(r"\D", "", d)
+        if len(dig) < 20:
+            return ""
+        # Linha digitável (47/48) e código de barras (44) do mesmo boleto
+        # têm de dar a mesma chave: tudo vira o código de barras de 44.
+        barras = dig if len(dig) == 44 else ocr_boleto.codigo_de_barras(dig)
+        return "bol:" + (barras or dig)
+    return ""
+
+
+def _norm(texto) -> str:
+    """Sem acento (NFKD, também de entrada já decomposta), maiúsculas e
+    espaços colapsados: a grafia do status/obs não decide o bloqueio."""
+    t = unicodedata.normalize("NFKD", str(texto or ""))
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", t).strip().upper()
+
+
+def _motivo_do_bloqueio(r: dict) -> str:
+    """Por que a linha não pode ser copiada às cegas (vazio = livre). "JÁ PAGO"
+    entra: copiar o boleto/Pix de quem já pagou é pagar de novo."""
+    status = _norm(r.get("status"))
+    obs = _norm(r.get("obs"))
+    motivos = []
+    if status.startswith("JA PAGO"):
+        motivos.append("já pago — não pagar de novo")
+    if status.startswith("ATENCAO"):
+        resto = re.sub(r"^\S+[\s\-:–—]*", "",
+                       str(r.get("status") or "").strip())
+        motivos.append(resto or "atenção")
+    if "PAGAR A MAO" in obs:
+        motivos.append("pagar à mão (a observação manda pagar outra pessoa)")
+    if r.get("parcial"):
+        motivos.append("boleto parcial: não pagar pela linha")
+    if r.get("valor_diverge") and "diverge" not in " ".join(motivos).lower():
+        motivos.append("valor do boleto diverge do lançamento")
+    return "; ".join(motivos)
+
+
 def contas_do_html_geral(resultado) -> list[dict]:
     """As contas do passo 2, uma entrada por linha das abas por conta.
 
@@ -400,8 +512,11 @@ def contas_do_html_geral(resultado) -> list[dict]:
         entradas = []
         for r in regs:
             tipo = str(r.get("tipo") or "-")
+            id_ = str(r.get("id") or "")
             entradas.append({
-                "id": str(r.get("id") or ""),
+                "id": id_,
+                # Sem id não há para onde ir: link vazio, sem botão na tela.
+                "link": URL_LANCAMENTO + id_ if id_ else "",
                 "tipo": tipo,
                 "dados_original": str(r.get("dados") or ""),
                 "dados_limpo": dado_para_colar(tipo, r.get("dados")),
@@ -412,10 +527,25 @@ def contas_do_html_geral(resultado) -> list[dict]:
                 "status": str(r.get("status") or ""),
                 "conferencia": str(r.get("conferencia") or ""),
                 "obs": str(r.get("obs") or ""),
+                "bloqueio": _motivo_do_bloqueio(r),
             })
         contas.append({"nome": str(nome),
                        "total": reais(total_da_conta(regs)).replace("R$ ", "", 1),
                        "entries": entradas})
+    # C2: a mesma linha digitável / Pix copia-e-cola em mais de um lançamento.
+    por_chave: dict[str, list[dict]] = {}
+    for c in contas:
+        for e in c["entries"]:
+            k = _chave_de_repeticao(e["tipo"], e["dados_limpo"])
+            if k:
+                por_chave.setdefault(k, []).append(e)
+    for grupo in por_chave.values():
+        ids = {e["id"] or id(e) for e in grupo}
+        if len(ids) > 1:
+            m = (f"mesma linha digitável em {len(grupo)} lançamentos "
+                 "— risco de pagar em dobro")
+            for e in grupo:
+                e["bloqueio"] = (e["bloqueio"] + "; " + m) if e["bloqueio"] else m
     return contas
 
 
