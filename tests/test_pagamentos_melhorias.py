@@ -52,7 +52,7 @@ def test_rateio_no_mesmo_imovel_nao_repete_o_endereco():
     item = {"documentNumber": "61106",
             "costCentreDetails": [{"workName": "TB 21 QD 51 LT 38"},
                                   {"workName": "TB 21 QD 51 LT 38"}]}
-    assert relatorio.monta_descricao(item, []) == "TB 21 QD 51 LT 38 NF 61106"
+    assert relatorio.monta_descricao(item, [anexo("NF 61106.pdf")]) == "TB 21 QD 51 LT 38 NF 61106"
 
 
 def test_rateio_entre_imoveis_diferentes_continua_mostrando_os_dois():
@@ -60,7 +60,7 @@ def test_rateio_entre_imoveis_diferentes_continua_mostrando_os_dois():
     item = {"documentNumber": "77",
             "costCentreDetails": [{"workName": "QD 51 LT 38"},
                                   {"workName": "QD 51 LT 39"}]}
-    assert relatorio.monta_descricao(item, []) == "QD 51 LT 38 | QD 51 LT 39 NF 77"
+    assert relatorio.monta_descricao(item, [anexo("NF 77.pdf")]) == "QD 51 LT 38 | QD 51 LT 39 NF 77"
 
 
 # ==========================================================================
@@ -478,7 +478,9 @@ def test_documento_igual_a_oc_tambem_nao_vira_nf():
 
 def test_nota_de_verdade_continua_sendo_nf():
     item = {"documentNumber": "124613", "costCentreDetails": [{"workName": "QD 01 LT 16"}]}
-    assert relatorio.monta_descricao(item, [], "", {"purchaseOrder": {"number": 5710}}) \
+    # Só é "NF" com a nota anexada (dono, 01/10/2026).
+    assert relatorio.monta_descricao(item, [anexo("NF 124613.pdf")], "",
+                                     {"purchaseOrder": {"number": 5710}}) \
         == "QD 01 LT 16 NF 124613 OC 5710"
 
 

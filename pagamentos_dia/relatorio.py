@@ -237,6 +237,48 @@ def _rotulo(f: dict) -> str:
     return f"{f.get('filename') or ''} {f.get('tagName') or ''}"
 
 
+_NAO_E_NOTA = re.compile(
+    r"comprovante|contrato|medi[çc][ãa]o|qr\s*code|pagar\s*para", re.I)
+_ROTULO_DE_NF = re.compile(
+    r"nota\s*fiscal|(?<![A-Za-z])NF(?![A-Za-z])|(?<![A-Za-z])NFS?-?e(?![A-Za-z])|DANFE",
+    re.I)
+_MARCA_DE_NOTA = re.compile(r"DANFE|NOTA\s+FISCAL|(?<![A-Za-z])NFS?-?e(?![A-Za-z])",
+                            re.I)
+# Chave de acesso: 44 dígitos colados ou no agrupamento da DANFE (11 de 4).
+_CHAVE_NFE_AGRUPADA = re.compile(r"(?<!\d)(?:\d{4} ){10}\d{4}(?!\d)")
+
+
+def tem_nf_anexada(files, textos: dict | None = None) -> bool:
+    """Há nota fiscal ANEXADA no lançamento?
+
+    O "NF" da descrição só pode aparecer quando existe uma nota: nem todo
+    número de documento é nota fiscal (o da prefeitura, por exemplo, é só o
+    número do documento). Vale como NF o anexo cujo rótulo (nome do arquivo +
+    etiqueta do ERP, `_rotulo`) é de nota — "nota fiscal", NF, NF-e, NFS-e,
+    DANFE, inclusive "NF 1234.pdf" e "nf1234" — ou o PDF "merge" (NF + boleto
+    juntados) etiquetado Recibo cujo TEXTO extraído tem marca de nota (DANFE,
+    NOTA FISCAL, NFS-e, NF-e ou chave de acesso de 44 dígitos). O merge
+    etiquetado NF já vale pelo rótulo.
+
+    Comprovante, contrato, medição e "PAGAR PARA" nunca contam, mesmo com "NF"
+    no nome: o comprovante de pagamento de uma NF não é a NF (dono,
+    01/10/2026)."""
+    textos = textos or {}
+    for f in files or ():
+        rotulo = _rotulo(f)
+        if _NAO_E_NOTA.search(rotulo):
+            continue
+        if _ROTULO_DE_NF.search(rotulo):
+            return True
+        if (re.search(r"merge", f.get("filename") or "", re.I)
+                and re.search(r"recibo", f.get("tagName") or "", re.I)):
+            texto = textos.get(f.get("downloadUrl") or "") or ""
+            if (_MARCA_DE_NOTA.search(texto) or _CHAVE_NFE.search(texto)
+                    or _CHAVE_NFE_AGRUPADA.search(texto)):
+                return True
+    return False
+
+
 def tem_boleto(files) -> bool:
     return any(_E_BOLETO.search(_rotulo(f)) and not _NAO_E_BOLETO.search(_rotulo(f))
                for f in (files or ()))
@@ -733,8 +775,12 @@ def partes_da_descricao(item: dict, files, comentario: str = "",
 
 
 def partes_no_registro(item: dict, files, comentario: str = "",
-                       overview=None) -> dict:
+                       overview=None, textos: dict | None = None) -> dict:
     """As chaves que a linha leva para o HTML montar a descrição do banco.
+
+    `nf_anexada` diz se há nota fiscal anexada (`tem_nf_anexada`): é ela, e
+    não a existência de um número, que autoriza o rótulo "NF" na descrição
+    (dono, 01/10/2026).
 
     `oc_da_descricao` não é o `oc` da linha: aquele é o `achar_oc` cru, que a
     remessa já usa, e este é o que a descrição mostra (inclui a OC escrita no
@@ -742,6 +788,7 @@ def partes_no_registro(item: dict, files, comentario: str = "",
     do HTML, que é quem sabe o limite de cada banco."""
     _, doc, oc = partes_da_descricao(item, files, comentario, overview)
     return {"nf": doc, "oc_da_descricao": oc,
+            "nf_anexada": tem_nf_anexada(files, textos),
             "descricao_lancamento": (item.get("description") or "").strip(),
             "utilidade": eh_utilidade(item)}
 
@@ -759,7 +806,8 @@ def contrato_e_medicao(descricao) -> tuple[str, str] | None:
 
 
 def monta_descricao(item: dict, files, comentario: str = "", overview=None,
-                    arrecadacao: bool = False) -> str:
+                    arrecadacao: bool = False,
+                    textos: dict | None = None) -> str:
     cc, doc, oc = partes_da_descricao(item, files, comentario, overview)
 
     # Água/energia: o que identifica é a descrição (UC, mês, casa). O "número
@@ -778,7 +826,10 @@ def monta_descricao(item: dict, files, comentario: str = "", overview=None,
         # campo do documento é só uma referência — o nº do DARF da Receita
         # Federal, por exemplo —, e escrever "NF" ali inventa um documento
         # que não existe (dono, 22/09/2026).
-        partes.append(doc if arrecadacao else f"NF {doc}")
+        # Tampouco rotula "NF" sem nota fiscal anexada: o número do documento
+        # da prefeitura, por exemplo, não é de nota (dono, 01/10/2026).
+        partes.append(f"NF {doc}" if (not arrecadacao
+                                      and tem_nf_anexada(files, textos)) else doc)
     if oc:
         partes.append(f"OC {oc}")
     if not doc and not oc:
@@ -1059,7 +1110,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if not conta_entra(conta, incluir, excluir):
             omitidos.append({
                 "conta": conta, "tipo": tipo, "valor": valor,
-                "descricao": monta_descricao(item, files, coment, overview),
+                "descricao": monta_descricao(item, files, coment, overview,
+                                             textos=textos),
                 "favorecido": favorecido,
                 "motivo": "conta fora do recorte — regra de conta ignorada "
                           "(APENAS LANÇAMENTO/AJUSTE, ERRADA) ou filtro de "
@@ -1330,7 +1382,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         arrecadacao_fiscal = (tipo == "Boleto" and bool(dados)
                               and ocr_boleto.eh_arrecadacao(dados))
         descricao = monta_descricao(item, files, coment, overview,
-                                    arrecadacao=arrecadacao_fiscal)
+                                    arrecadacao=arrecadacao_fiscal,
+                                    textos=textos)
 
         # Já pago é informação, não pagamento: as regras de omissão não valem
         # ali. Uma linha "JÁ PAGO" sem forma de pagar é o normal, não um erro.
@@ -1429,7 +1482,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # descrição de colar no banco (limpa e no tamanho do banco) sem
             # reparsear a frase acima: `nf`, `oc_da_descricao`,
             # `descricao_lancamento` e `utilidade`.
-            **partes_no_registro(item, files, coment, overview),
+            **partes_no_registro(item, files, coment, overview, textos),
             # A posição do lançamento na lista que chegou aqui. Os filtros do
             # passo 1 e a seleção de contas não reordenam nada, então é a
             # ordem em que a API devolveu — e `mc_api.listar_a_pagar` pergunta

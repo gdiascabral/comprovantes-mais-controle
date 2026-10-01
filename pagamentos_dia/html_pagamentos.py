@@ -268,6 +268,10 @@ def descricao_para_colar(registro, conta) -> str:
       é de medição de mão de obra (a forma curta que a planilha já mostra);
     - água e luz continuam como na planilha (CC + descrição + OC): ali o
       "número da NF" é o da fatura e não identifica nada;
+    - **"NF" só com nota fiscal anexada** no lançamento (`nf_anexada`): nem
+      todo número de documento é nota (o da prefeitura, por exemplo). Sem a
+      NF anexada, ou sem a chave no registro, o número fica sozinho: "CC x OC
+      y" ou "CC x" (dono, 01/10/2026);
     - **ficha de arrecadação** (tributo, taxa, órgão público —
       `ocr_boleto.eh_arrecadacao`) também não rotula "NF": ela não tem
       cedente, então o campo do documento é só uma referência (o nº do DARF
@@ -295,7 +299,11 @@ def descricao_para_colar(registro, conta) -> str:
     # de "NF" inventaria um documento que não existe.
     arrecadacao = (r.get("tipo") == "Boleto"
                   and ocr_boleto.eh_arrecadacao(r.get("dados") or ""))
-    fixos = ((["NF", *nf] if not arrecadacao else nf) if nf else []) + \
+    # "NF" só com nota fiscal anexada (`nf_anexada`, de
+    # `relatorio.tem_nf_anexada`); registro sem a chave fica SEM rótulo: não
+    # inventa documento (dono, 01/10/2026).
+    rotula_nf = bool(r.get("nf_anexada")) and not arrecadacao
+    fixos = ((["NF", *nf] if rotula_nf else nf) if nf else []) + \
             (["OC", *oc] if oc else [])
     medicao = (None if utilidade or fixos
                else relatorio.contrato_e_medicao(r.get("descricao_lancamento")))
