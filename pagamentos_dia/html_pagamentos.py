@@ -344,7 +344,8 @@ def descricao_para_colar(registro, conta) -> str:
         n = len(cc)
         if n and [p.casefold() for p in texto[:n]] == [p.casefold() for p in cc]:
             texto = texto[n:]
-        if com_descricao:
+        if com_descricao and relatorio.numero_tem_4_digitos(nf):
+            # Só número de 4+ dígitos: o curto pode ser lote.
             texto = _sem_sequencia(texto, nf)
 
     limite = limite_da_descricao(conta)

@@ -576,7 +576,13 @@ paths:
   ANEXADA (`nf_anexada`, de `relatorio.tem_nf_anexada`; registro sem a chave
   fica sem rótulo; boleto com "NF" no nome só conta se o texto confirmar a
   nota; ficha de arrecadação também fica sem "NF"; dono, 01/10/2026) —
-  e sem nenhum dos dois a descrição do lançamento ("C x M y" na medição);
+  e sem nenhum dos dois a descrição do lançamento. **Documento sem OC leva também a
+  descrição do lançamento** ("CC desc NF x" / "CC desc x", dono, 01/10/2026), na
+  planilha (`relatorio.monta_descricao`, corte em palavra em 110) e no HTML; com OC
+  nada muda; a descrição cede primeiro ao limite do banco e o documento nunca é
+  cortado; centro de custo e número do documento já presentes na descrição não se
+  repetem (por palavra inteira; o número só sai com 4+ dígitos, porque o curto pode
+  ser lote); medição e utilidade seguem na forma curta; ("C x M y" na medição);
   sem acento, sem caractere especial e sem menção de reembolso, com o hífen
   ENTRE DÍGITOS preservado ("LT 10-11" virando "LT 10 11" faria o matcher
   casar o lote 10); no máximo 140 caracteres em conta do Inter e 100 nas
