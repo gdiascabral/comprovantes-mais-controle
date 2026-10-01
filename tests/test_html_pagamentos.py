@@ -323,3 +323,58 @@ def test_os_dois_modulos_nao_importam_tkinter():
         importados |= {no.module.split(".")[0] for no in ast.walk(arvore)
                        if isinstance(no, ast.ImportFrom) and no.module}
         assert "tkinter" not in importados, nome
+
+
+# ------------------------------------------------- tela do HTML geral (A)
+def _geral_completo():
+    """O HTML COMPLETO, pelo pai: contas_do_html_geral -> html_geral."""
+    return hp.html_geral(hp.contas_do_html_geral(_resultado()), INI, FIM)
+
+
+def test_geral_sem_rolagem_lateral_e_sem_faixa_de_abas():
+    html = _geral_completo()
+    assert "overflow-x:auto" not in html
+    assert "table-layout:fixed" in html
+    assert "overflow-wrap:anywhere" in html
+    for resto in ("sticky-tabs", 'id="tabs"', "tab-btn"):
+        assert resto not in html
+
+
+def test_geral_nome_da_conta_no_resumo_leva_ate_a_conta():
+    html = _geral_completo()
+    assert 'href="#acc-' in html or "'#acc-' + ci" in html or "#acc-${ci}" in html
+    assert "scrollIntoView" in html
+    assert "&uarr; resumo" in html
+
+
+def test_geral_modelo_tem_excluir_e_restaurar_guardados_a_parte():
+    html = _geral_completo()
+    assert 'title="Excluir da lista"' in html
+    assert 'aria-label="Excluir da lista"' in html
+    assert "STORAGE_KEY + ':excluidos'" in html
+    assert "Restaurar exclu" in html
+
+
+def test_geral_botao_acessar_link_abre_em_nova_aba():
+    html = _geral_completo()
+    assert "Acessar link" in html
+    assert 'target="_blank"' in html and 'rel="noopener"' in html
+    assert "<svg" in html
+
+
+def test_entrada_traz_o_link_do_lancamento_e_vazio_sem_id():
+    contas = hp.contas_do_html_geral(_resultado(
+        **{"CONTA GAMA": [_linha("FORNECEDOR CINCO", 5.0, "")]}))
+    por_id = {e["id"]: e for c in contas for e in c["entries"]}
+    assert por_id["101"]["link"] == hp.URL_LANCAMENTO + "101"
+    assert por_id[""]["link"] == ""
+
+
+def test_o_prefixo_do_link_e_o_mesmo_do_anexar():
+    from anexar import config
+    assert hp.URL_LANCAMENTO == config.MC_URL_LANCAMENTO
+
+
+def test_o_link_passa_por_esc_no_html():
+    corpo = modelos_html.MODELO_GERAL
+    assert "esc(e.link)" in corpo
