@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import unicodedata
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
@@ -412,6 +413,55 @@ def total_da_conta(regs) -> Decimal:
     return sum((dinheiro(r.get("valor")) for r in regs), Decimal("0.00"))
 
 
+def _chave_de_repeticao(tipo, dado_limpo: str) -> str:
+    """Identidade do que o dono cola no banco, para achar a MESMA cobrança em
+    duas linhas: boleto = só os dígitos da linha digitável (>= 20, para uma
+    chave curta nunca contar); Pix copia-e-cola = o código inteiro. Chave Pix
+    comum (CPF, e-mail) repetida é legítima (várias NFs do mesmo fornecedor)
+    e não entra."""
+    d = str(dado_limpo or "")
+    if not d:
+        return ""
+    if regras.PIX_COPIA_COLA.search(re.sub(r"\s+", "", d)):
+        return "pix:" + re.sub(r"\s+", "", d)
+    if str(tipo or "") == "Boleto":
+        dig = re.sub(r"\D", "", d)
+        if len(dig) < 20:
+            return ""
+        # Linha digitável (47/48) e código de barras (44) do mesmo boleto
+        # têm de dar a mesma chave: tudo vira o código de barras de 44.
+        barras = dig if len(dig) == 44 else ocr_boleto.codigo_de_barras(dig)
+        return "bol:" + (barras or dig)
+    return ""
+
+
+def _norm(texto) -> str:
+    """Sem acento (NFKD, também de entrada já decomposta), maiúsculas e
+    espaços colapsados: a grafia do status/obs não decide o bloqueio."""
+    t = unicodedata.normalize("NFKD", str(texto or ""))
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", t).strip().upper()
+
+
+def _motivo_do_bloqueio(r: dict) -> str:
+    """Por que a linha não pode ser copiada às cegas (vazio = livre). "JÁ PAGO"
+    fica de fora: não é bloqueio novo."""
+    status = _norm(r.get("status"))
+    obs = _norm(r.get("obs"))
+    motivos = []
+    if status.startswith("ATENCAO"):
+        resto = re.sub(r"^\S+\s*[-:–]?\s*", "",
+                       str(r.get("status") or "").strip())
+        motivos.append(resto or "atenção")
+    if "PAGAR A MAO" in obs:
+        motivos.append("pagar à mão (a observação manda pagar outra pessoa)")
+    if r.get("parcial"):
+        motivos.append("boleto parcial: não pagar pela linha")
+    if r.get("valor_diverge") and "diverge" not in " ".join(motivos).lower():
+        motivos.append("valor do boleto diverge do lançamento")
+    return "; ".join(motivos)
+
+
 def contas_do_html_geral(resultado) -> list[dict]:
     """As contas do passo 2, uma entrada por linha das abas por conta.
 
@@ -441,10 +491,25 @@ def contas_do_html_geral(resultado) -> list[dict]:
                 "status": str(r.get("status") or ""),
                 "conferencia": str(r.get("conferencia") or ""),
                 "obs": str(r.get("obs") or ""),
+                "bloqueio": _motivo_do_bloqueio(r),
             })
         contas.append({"nome": str(nome),
                        "total": reais(total_da_conta(regs)).replace("R$ ", "", 1),
                        "entries": entradas})
+    # C2: a mesma linha digitável / Pix copia-e-cola em mais de um lançamento.
+    por_chave: dict[str, list[dict]] = {}
+    for c in contas:
+        for e in c["entries"]:
+            k = _chave_de_repeticao(e["tipo"], e["dados_limpo"])
+            if k:
+                por_chave.setdefault(k, []).append(e)
+    for grupo in por_chave.values():
+        ids = {e["id"] or id(e) for e in grupo}
+        if len(ids) > 1:
+            m = (f"mesma linha digitável em {len(grupo)} lançamentos "
+                 "— risco de pagar em dobro")
+            for e in grupo:
+                e["bloqueio"] = (e["bloqueio"] + "; " + m) if e["bloqueio"] else m
     return contas
 
 
