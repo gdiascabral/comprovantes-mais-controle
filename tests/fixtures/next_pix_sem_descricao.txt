@@ -1,0 +1,25 @@
+Comprovante de transação Pix
+Pagamento
+Data da operação: 30/09/2026 15:44:37
+Nº do controle: 0000000000000 | Documento: 0
+Dados do pagador
+Nome: FULANA DE TAL
+CPF: ***.000.000-**
+Instituição: Next (237 - Banco Bradesco S. A.)
+Dados do recebedor
+Nome: EMPRESA DE AGUA EXEMPLO S/A
+CPF/CNPJ: 00.000.000/0001-00
+Instituição: 0 BANCO EXEMPLO S.A.
+Dados do pagamento
+Valor: 1,400.00
+Descrição: -
+Identificador: 0000000000000000000000000
+Valor original: -
+Vencimento: -
+Multa: R$ 0,00
+Juros diário: 0 %
+Desconto: R$ 0,00
+Id da transação: E00000000000000000000000000000000
+Data: 30/09/2026
+Hora: 15:44:37
+A transação acima foi realizada por meio do next e está sujeita a análise.

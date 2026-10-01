@@ -1,0 +1,27 @@
+Comprovante de Transação Bancária
+Boleto de Cobrança
+Data da operação::18/09/2026
+N do controle:00000000000000000000000000000000 | Documento:98
+Banco de origem: next (237 - Banco Bradesco S.A.)
+Conta de débito: Agência: 0000 | Conta: 000000-0 | Tipo: Conta Corrente
+Nome: FULANA DE TAL
+CPF: 000.000.000-00
+Código de barras: 00000.00000 00000.000000 00000.000000 0 00000000000000
+Banco destinatário: 237-BCO BRADESCO S.A.
+Razão social: LOJA DE TINTAS EXEMPLO
+Nome: LOJA DE TINTAS EXEMPLO
+CPF/CNPJ: 00.000.000/0001-00
+Razão Social Beneficiário Final:
+CPF/CNPJ Beneficiário Final:
+Instituição recebedora: BANCO BRADESCO S.A.
+Nome pagador: CONSTRUTORA EXEMPLO LTDA
+CPF/CNPJ do pagador: 00.000.000/0001-00
+Data do vencimento: 18/09/2026
+Data do pagamento: 18/09/2026
+Valor: R$ 1.691,20
+Desconto: R$ 0,00
+Multa: R$ 0,00
+Juros: R$ 0,00
+Valor do pagamento: R$ 1.691,20
+Descrição: -
+A transação acima foi realizada por meio do next.
