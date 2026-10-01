@@ -41,7 +41,7 @@ MODELO_GERAL = r'''<!doctype html>
     --bg:#f4f5f7; --card:#ffffff; --text:#1c1e21; --muted:#6b7280;
     --border:#e3e5e8; --accent:#0f6b4c; --accent-bg:#e8f5ef;
     --pix-bg:#eef4ff; --pix-text:#1d4ed8; --boleto-bg:#fff4e5; --boleto-text:#9a5b00;
-    --ok:#0f9d58; --danger:#c0392b;
+    --ok:#0f9d58; --danger:#c0392b; --bloq-bg:#fdecea; --bloq-text:#b3261e;
   }
   *{box-sizing:border-box;}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
@@ -81,6 +81,11 @@ MODELO_GERAL = r'''<!doctype html>
   .obs{font-size:10.5px;color:#b3261e;margin-top:3px;overflow-wrap:anywhere;word-break:break-word;}
   .conf{font-size:10px;color:var(--muted);margin-top:2px;}
   .chk-cell{text-align:center;}
+  tr.row-bloqueada td{background:var(--bloq-bg);}
+  tr.row-bloqueada td:first-child{box-shadow:inset 4px 0 0 var(--danger);}
+  .bloq{font-weight:700;color:var(--bloq-text);font-size:12px;margin-bottom:4px;overflow-wrap:anywhere;}
+  .code.sem-copiar{user-select:text;}
+  .aconferir{color:var(--bloq-text);font-weight:600;}
   .acoes{display:flex;flex-direction:column;gap:6px;align-items:stretch;}
   .linkbtn{display:inline-flex;align-items:center;justify-content:center;gap:4px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:6px;padding:4px 6px;font-size:11px;text-decoration:none;line-height:1.1;}
   .linkbtn:hover{background:#f0f1f3;}
@@ -110,6 +115,7 @@ MODELO_GERAL = r'''<!doctype html>
     .tabela-conta thead{display:none;}
     .tabela-conta,.tabela-conta tbody,.tabela-conta tr,.tabela-conta td{display:block;width:100%;}
     .tabela-conta tr{padding:8px 4px;border-bottom:1px solid var(--border);}
+    .tabela-conta tr.row-bloqueada{border-left:4px solid var(--danger);background:var(--bloq-bg);}
     .tabela-conta tr:last-child{border-bottom:none;}
     .tabela-conta td{border-bottom:none;padding:4px 10px;}
     .tabela-conta td[data-label]::before{content:attr(data-label);display:block;font-size:10px;font-weight:600;text-transform:uppercase;color:var(--muted);margin-bottom:2px;}
@@ -121,6 +127,7 @@ MODELO_GERAL = r'''<!doctype html>
     :root:not([data-theme="light"]){
       --bg:#15161a; --card:#1f2024; --text:#f0f1f3; --muted:#9aa0a6; --border:#2c2d32;
       --accent-bg:#123726; --pix-bg:#16233f; --pix-text:#8fb4ff; --boleto-bg:#3a2a10; --boleto-text:#f0b25a;
+      --bloq-bg:#3a1a17; --bloq-text:#ffb4a8;
     }
     :root:not([data-theme="light"]) .tipo-link{background:#33224a;color:#c9a6f0;}
     :root:not([data-theme="light"]) .linkbtn:hover,:root:not([data-theme="light"]) .delbtn:hover{background:#2c2d32;}
@@ -129,6 +136,7 @@ MODELO_GERAL = r'''<!doctype html>
   :root[data-theme="dark"]{
     --bg:#15161a; --card:#1f2024; --text:#f0f1f3; --muted:#9aa0a6; --border:#2c2d32;
     --accent-bg:#123726; --pix-bg:#16233f; --pix-text:#8fb4ff; --boleto-bg:#3a2a10; --boleto-text:#f0b25a;
+    --bloq-bg:#3a1a17; --bloq-text:#ffb4a8;
   }
   :root[data-theme="dark"] .tipo-link{background:#33224a;color:#c9a6f0;}
   :root[data-theme="dark"] .obs{color:#ffb4a8;}
@@ -143,9 +151,9 @@ MODELO_GERAL = r'''<!doctype html>
 
   <div class="summary" id="resumo">
     <table>
-      <thead><tr><th>Conta</th><th style="width:120px">Total</th><th style="width:140px">Marcado (pago)</th></tr></thead>
+      <thead><tr><th>Conta</th><th style="width:120px">Total</th><th style="width:110px">A conferir</th><th style="width:140px">Marcado (pago)</th></tr></thead>
       <tbody id="summaryBody"></tbody>
-      <tfoot><tr><td><b>Total geral</b></td><td id="grandTotal"><b></b></td><td id="grandMarked" class="marked-cell"></td></tr></tfoot>
+      <tfoot><tr><td><b>Total geral</b></td><td id="grandTotal"><b></b></td><td></td><td id="grandMarked" class="marked-cell"></td></tr></tfoot>
     </table>
   </div>
 
@@ -186,13 +194,16 @@ function formatBR(n){ return (Number(n)||0).toLocaleString('pt-BR', {minimumFrac
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 let checkedState = {};
-try{ checkedState = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }catch(e){ checkedState = {}; }
+function lerObjeto(chave){
+  try{ const v = JSON.parse(localStorage.getItem(chave) || '{}'); return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}; }catch(e){ return {}; }
+}
+checkedState = lerObjeto(STORAGE_KEY);
 function saveChecked(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(checkedState)); }catch(e){} }
 
 // "Excluir da lista" so esconde a linha desta pagina (e tira do total): nao
 // mexe no ERP. Fica numa chave separada da das marcas, pelo mesmo rowKey.
 let excluidosState = {};
-try{ excluidosState = JSON.parse(localStorage.getItem(STORAGE_KEY + ':excluidos') || '{}'); }catch(e){ excluidosState = {}; }
+excluidosState = lerObjeto(STORAGE_KEY + ':excluidos');
 function saveExcluidos(){ try{ localStorage.setItem(STORAGE_KEY + ':excluidos', JSON.stringify(excluidosState)); }catch(e){} }
 
 // A marca "ja paguei" e guardada pelo ID do lancamento no ERP, e nao pela
@@ -207,17 +218,18 @@ function updateSummary(){
   let grandTotal = 0, grandMarked = 0, grandMarkedCount = 0, grandCount = 0;
   DATA.contas.forEach((c, ci) => {
     let total = 0, marked = 0, markedCount = 0;
-    let count = 0;
+    let count = 0, bloq = 0;
     c.entries.forEach((e, idx) => {
       const k = rowKey(c, e, idx);
       if(excluidosState[k]) return;
-      count++; total += e.centavos;
+      count++; total += e.centavos; if(e.bloqueio) bloq++;
       if(checkedState[k]){ marked += e.centavos; markedCount++; }
     });
     grandTotal += total; grandMarked += marked; grandMarkedCount += markedCount; grandCount += count;
     const row = document.getElementById('sumrow-' + ci);
     if(row){
       row.querySelector('.sum-total').textContent = 'R$ ' + reais(total);
+      row.querySelector('.sum-conf').innerHTML = bloq ? `<span class="aconferir">${bloq} a conferir</span>` : '';
       row.querySelector('.sum-marked').innerHTML = markedCount ? `<b>${markedCount}/${count}</b> &middot; R$ ${reais(marked)}` : `0/${count}`;
     }
     const head = document.getElementById('acc-' + ci + '-total');
@@ -234,7 +246,7 @@ function renderSummary(){
   DATA.contas.forEach((c, ci) => {
     const tr = document.createElement('tr');
     tr.id = 'sumrow-' + ci;
-    tr.innerHTML = `<td><a class="sumlink" href="#acc-${ci}">${esc(c.nome)}</a></td><td class="sum-total"></td><td class="sum-marked marked-cell"></td>`;
+    tr.innerHTML = `<td><a class="sumlink" href="#acc-${ci}">${esc(c.nome)}</a></td><td class="sum-total"></td><td class="sum-conf marked-cell"></td><td class="sum-marked marked-cell"></td>`;
     tr.querySelector('.sumlink').addEventListener('click', ev => { ev.preventDefault(); document.getElementById('acc-' + ci).scrollIntoView({behavior:'smooth', block:'start'}); });
     body.appendChild(tr);
   });
@@ -274,9 +286,13 @@ function renderAccounts(){
       if(isChecked) tr.classList.add('row-checked');
       if(excluidosState[rowId]) tr.classList.add('row-excluida');
       const badgeClass = (e.tipo || '').startsWith('Pix') ? 'tipo-pix' : (e.tipo === 'Transferência' || e.tipo === 'Link' ? 'tipo-link' : 'tipo-boleto');
-      const dadosCell = e.dados_limpo
+      const bloq = e.bloqueio || '';
+      if(bloq) tr.classList.add('row-bloqueada');
+      const dadosCell = (e.dados_limpo && bloq)
+        ? `<div class="bloq">CONFERIR: ${esc(bloq)}</div><div class="code sem-copiar">${esc(e.dados_limpo)}</div>`
+        : e.dados_limpo
         ? `<div class="copy-cell"><span class="code">${esc(e.dados_limpo)}</span><button class="copybtn" type="button">Copiar</button></div>`
-        : `<div class="no-data-note">${esc(e.dados_original || 'Sem boleto/chave - ver observacao')}</div>`;
+        : `${bloq ? `<div class="bloq">CONFERIR: ${esc(bloq)}</div>` : ''}<div class="no-data-note">${esc(e.dados_original || 'Sem boleto/chave - ver observacao')}</div>`;
       tr.innerHTML = `
         <td class="chk-cell"><input type="checkbox" class="row-chk" ${isChecked ? 'checked' : ''}></td>
         <td data-label="Tipo"><span class="tipo-badge ${badgeClass}">${esc(e.tipo)}</span></td>
@@ -287,7 +303,7 @@ function renderAccounts(){
         <td class="acoes-cell"><div class="acoes">${e.link ? `<a class="linkbtn" href="${esc(e.link)}" target="_blank" rel="noopener" title="Acessar link" aria-label="Acessar link"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2h5v5M14 2L7.5 8.5M12 9.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3.5"/></svg>Acessar link</a>` : ''}<button class="delbtn" type="button" title="Excluir da lista" aria-label="Excluir da lista">&#10005; Excluir</button></div></td>`;
       const btns = tr.querySelectorAll('.copybtn');
       let bi = 0;
-      if(e.dados_limpo){ const b = btns[bi]; b.addEventListener('click', () => copyText(e.dados_limpo, b)); bi++; }
+      if(e.dados_limpo && !bloq){ const b = btns[bi]; b.addEventListener('click', () => copyText(e.dados_limpo, b)); bi++; }
       { const b = btns[bi]; b.addEventListener('click', () => copyText(e.valor, b)); bi++; }
       { const b = btns[bi]; b.addEventListener('click', () => copyText(e.descricao, b)); }
       const chk = tr.querySelector('.row-chk');

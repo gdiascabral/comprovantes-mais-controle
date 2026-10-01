@@ -345,7 +345,7 @@ def test_geral_sem_rolagem_lateral_e_sem_faixa_de_abas():
 
 def test_geral_nome_da_conta_no_resumo_leva_ate_a_conta():
     html = _geral_completo()
-    assert 'href="#acc-' in html or "'#acc-' + ci" in html or "#acc-${ci}" in html
+    assert 'href="#acc-${ci}"' in html
     assert "scrollIntoView" in html
     assert "&uarr; resumo" in html
 
@@ -381,3 +381,77 @@ def test_o_prefixo_do_link_e_o_mesmo_do_anexar():
 def test_o_link_passa_por_esc_no_html():
     corpo = modelos_html.MODELO_GERAL
     assert "esc(e.link)" in corpo
+
+
+# --------------------------------------------- linha bloqueada (I5 / C2)
+LINHA_A = "00190.00009 01234.567890 12345.678901 1 00000000000000"
+
+
+def _entradas(**contas):
+    res = Resultado(contas, [])
+    return {e["id"]: e for c in hp.contas_do_html_geral(res) for e in c["entries"]}
+
+
+def test_atencao_bloqueia_sem_copiar_do_dado_e_com_conferir():
+    ent = _entradas(**{"CONTA A": [
+        _linha("F1", 1.0, "1", status="ATENÇÃO - valor do boleto diverge"),
+        _linha("F2", 2.0, "2")]})
+    assert "valor do boleto diverge" in ent["1"]["bloqueio"]
+    assert ent["2"]["bloqueio"] == ""
+    html = hp.html_geral(hp.contas_do_html_geral(
+        Resultado({"CONTA A": [_linha("F1", 1.0, "1", status="ATENÇÃO - x")]}, [])), INI, FIM)
+    # o modelo: sem botão de copiar o dado quando há bloqueio, com a faixa
+    assert "CONFERIR: " in html and "row-bloqueada" in html
+    assert "e.dados_limpo && !bloq" in html
+
+
+def test_apto_livre_continua_com_copiar():
+    html = _geral_completo()
+    assert '"bloqueio": ""' in html or '"bloqueio":""' in html
+    assert "Copiar" in html
+
+
+def test_parcial_valor_diverge_e_pagar_a_mao_bloqueiam():
+    ent = _entradas(**{"CONTA A": [
+        _linha("F1", 1.0, "1", parcial=True),
+        _linha("F2", 2.0, "2", valor_diverge=True),
+        _linha("F3", 3.0, "3", obs="PAGAR À MÃO - 3,00 para FULANO")]})
+    assert all(ent[i]["bloqueio"] for i in "123")
+    assert "parcial" in ent["1"]["bloqueio"]
+    assert "diverge" in ent["2"]["bloqueio"]
+    assert "à mão" in ent["3"]["bloqueio"]
+
+
+def test_ja_pago_nao_e_bloqueio_novo():
+    ent = _entradas(**{"CONTA A": [_linha("F1", 1.0, "1", status="JÁ PAGO")]})
+    assert ent["1"]["bloqueio"] == ""
+
+
+def test_mesma_linha_digitavel_em_duas_contas_bloqueia_as_duas():
+    ent = _entradas(**{
+        "CONTA A": [_linha("F1", 10.0, "1", tipo="Boleto", dados=LINHA_A)],
+        "CONTA B": [_linha("F2", 10.0, "2", tipo="Boleto",
+                           dados=LINHA_A.replace(" ", "").replace(".", ""))]})
+    for i in "12":
+        assert "mesma linha digitável em 2 lançamentos" in ent[i]["bloqueio"]
+
+
+def test_mesma_linha_num_unico_lancamento_nao_bloqueia():
+    ent = _entradas(**{"CONTA A": [
+        _linha("F1", 10.0, "1", tipo="Boleto", dados=LINHA_A)]})
+    assert ent["1"]["bloqueio"] == ""
+
+
+def test_pix_copia_e_cola_repetido_bloqueia_mas_chave_repetida_nao():
+    cc = "00020126580014br.gov.bcb.pix0136abcd1234-aaaa-bbbb-cccc-1234567890125204000053039865802BR5909FULANO6009SAO PAULO62070503***6304ABCD"
+    ent = _entradas(**{"CONTA A": [
+        _linha("F1", 1.0, "1", dados=cc), _linha("F2", 1.0, "2", dados=cc),
+        _linha("F3", 1.0, "3"), _linha("F4", 2.0, "4")]})
+    assert ent["1"]["bloqueio"] and ent["2"]["bloqueio"]
+    assert ent["3"]["bloqueio"] == "" and ent["4"]["bloqueio"] == ""
+
+
+def test_modelo_blinda_localstorage_e_mostra_a_conferir_no_resumo():
+    html = _geral_completo()
+    assert "typeof v === 'object'" in html
+    assert "a conferir" in html
