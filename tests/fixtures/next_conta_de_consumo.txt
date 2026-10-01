@@ -1,0 +1,16 @@
+Comprovante de Transação Bancária
+Conta de Consumo
+Data da operação: 30/09/2026
+N do controle: 0000000000000000000000000000AAAA | Documento: 1111111
+Banco de origem: next (237 - Banco Bradesco S.A.)
+Conta de débito: Agência: 0000 | Conta: 000000-0 | Tipo: Conta Corrente
+Nome: FULANA DE TAL
+Código de barras: 82660000002-8 00000000000-0 00000000000-0 00000000000-0
+Concessionária: 00000
+Contrato: 0000000000000000000000000
+Valor do pagamento: R$ 206,63
+Data do pagamento: 30/09/2026
+Descrição: OBRA EXEMPLO QD 51 LT 29 UC 12345 AGO
+A transação acima foi realizada por meio do next.
+Autenticação:
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
