@@ -253,12 +253,14 @@ def test_linha_de_boleto_com_aviso_de_pix_no_cadastro():
     anexos = {"t1": [anexo("boleto oc 6510", "Boleto", url="u1"),
                      anexo("NF 5909.pdf", url="u2")]}
     overviews = {"i1": {"purchaseOrder": {"number": 6510}, "comment": ""}}
-    textos = {"u1": "34191.57007 00024.434375 24177.010000 1 99990000185000"}
+    # Linha com DV que FECHA: o caminho por texto passou a recusar a que não
+    # fecha (dono, 01/10/2026).
+    textos = {"u1": "34191.57072 00024.434375 52417.701001 4 99990000185000"}
 
     reg = relatorio.montar_registros([item], anexos, overviews, textos).contas
     linha = reg["CONTA TESTE"][0]
     assert linha["tipo"] == "Boleto"
-    assert linha["dados"].startswith("34191.57007")
+    assert linha["dados"].startswith("34191.57072")
     assert linha["descricao"] == "OBRA X NF 5909 OC 6510"
     assert "pagar o boleto" in linha["obs"]
 
