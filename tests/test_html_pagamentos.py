@@ -31,7 +31,7 @@ def _linha(favorecido, valor, id_, tipo="Pix", dados="fulano@exemplo.com",
     linha = {"tipo": tipo, "dados": dados, "valor": valor,
              "descricao": "OBRA TESTE QD 1 LT 1 NF 10", "favorecido": favorecido,
              "status": "APTO", "conferencia": "(não cruzado)", "obs": "",
-             "id": id_, "centro_custo": "OBRA TESTE QD 1 LT 1", "nf": "10",
+             "id": id_, "centro_custo": "OBRA TESTE QD 1 LT 1", "nf": "10", "nf_anexada": True,
              "oc_da_descricao": "", "descricao_lancamento": "", "utilidade": False}
     linha.update(extra)
     return linha
@@ -131,6 +131,9 @@ def test_toda_linha_do_passo_2_aparece_no_geral(tmp_path):
                            "FORNECEDOR QUATRO"}
     descricoes = {e["descricao"] for c in dados["contas"] for e in c["entries"]}
     assert descricoes == {"OBRA TESTE QD 1 LT 1 NF 10"}
+    # Sem NF anexada o número vai sozinho (dono, 01/10/2026).
+    sem_nf = dict(_linha("FORNECEDOR UM", 1.0, "1"), nf_anexada=False)
+    assert hp.descricao_para_colar(sem_nf, PF) == "OBRA TESTE QD 1 LT 1 10"
 
 
 def test_o_total_por_conta_bate_no_centavo(tmp_path):
