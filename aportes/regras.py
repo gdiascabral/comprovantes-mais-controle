@@ -20,9 +20,15 @@ import util
 
 from .dados import INVESTIDOR_PREFIXO
 
+#: "Aporte de Investidor" (01/10/2026): o dinheiro que um investidor de
+#: fora manda para a SUBCONTA dele. Só existe a perna do recebimento — o
+#: investidor não tem conta aqui —, e a natureza é a própria do ERP.
+TIPO_INVESTIDOR = "Aporte de Investidor"
+
 PREFIXO_DESCRICAO = {
     "Aporte de Capital": "APORTE CAPITAL",
     "Distribuição de Lucro": "DISTRIBUIÇÃO DE LUCRO",
+    TIPO_INVESTIDOR: "APORTE INVESTIDOR",
 }
 CATEGORIA_PAGAMENTO = {
     "Aporte de Capital": "APORTE CAPITAL",
@@ -31,6 +37,7 @@ CATEGORIA_PAGAMENTO = {
 NATUREZA_RECEBIMENTO = {
     "Aporte de Capital": "Aporte de Capital",
     "Distribuição de Lucro": "Outras receitas",
+    TIPO_INVESTIDOR: "Aporte de Investidor",
 }
 
 
@@ -43,6 +50,26 @@ def nome_na_descricao(entidades: dict, exibicao: str) -> str:
     dados = entidades.get(exibicao) or {}
     return (dados.get("nome_descricao") or dados.get("conta")
             or dados.get("nome_oficial") or exibicao)
+
+
+#: "11111-1", "22.222-2", "33333 - 3": o número da conta no nome. O
+#: `(?<!\d)` é o que impede ler "34567-8" de dentro de "1234567-8" — sem ele
+#: uma conta de 7 dígitos virava a subconta de outra pessoa.
+_NUMERO_CONTA = re.compile(r"(?<!\d)(\d{2})\.?(\d{3})\s*-\s*(\d)\b")
+
+
+def numero_da_conta(texto) -> str:
+    """O número no formato da tabela `subconta` ("00000-0"), ou ""."""
+    m = _NUMERO_CONTA.search(str(texto or ""))
+    return f"{m.group(1)}{m.group(2)}-{m.group(3)}" if m else ""
+
+
+def e_da_subconta(nome: str, dados: dict, numero: str) -> bool:
+    """A linha de Pagou/Recebeu é a conta desta subconta? Pelo NÚMERO lido
+    da conta (ou do nome), e não por "o texto contém": "112345-6" contém
+    "12345-6" e é outra conta."""
+    return numero_da_conta((dados or {}).get("conta") or "") == numero or \
+        numero_da_conta(nome) == numero
 
 
 def numero_subconta(pagador: str, subcontas: dict) -> str | None:
@@ -142,61 +169,71 @@ def dividir_em_centavos(total, n: int) -> list[Decimal]:
     return [Decimal(base + (1 if i < sobra else 0)) / 100 for i in range(n)]
 
 
-def percentual_de(percentuais: dict, obra: str):
-    """O % de uma obra (Decimal) ou None. Procura sem acento e sem caixa."""
-    alvo = util.norm_espaco(obra)
-    for nome, pct in (percentuais or {}).items():
-        if util.norm_espaco(nome) == alvo and str(pct).strip() != "":
-            return Decimal(str(pct).replace(",", "."))
+def peso_de(pesos: dict, investidor: str):
+    """A parte de um aportador (Decimal) ou None. Sem acento e sem caixa."""
+    alvo = util.norm_espaco(investidor)
+    for nome, peso in (pesos or {}).items():
+        if util.norm_espaco(nome) == alvo and str(peso).strip() != "":
+            return Decimal(str(peso).replace(",", "."))
     return None
 
 
-def problema_dos_percentuais(obras, percentuais) -> str:
-    """"" quando o rateio pode ser feito; senão, o motivo.
+def problema_dos_pesos(investidores, pesos) -> str:
+    """"" quando a divisão entre aportadores pode ser feita; senão, o motivo.
 
-    Sem % nenhum = partes iguais (como sempre foi). Com %, TODA obra precisa
-    do dela, cada um maior que zero, e a soma fecha 100 — senão parte do
-    aporte não iria para CC nenhum, ou iria a mais."""
-    if not percentuais:
+    A parte é um PESO, não um %: "60 e 40" e "3 e 2" dão o mesmo rateio, e
+    "2:1" se escreve 2 e 1. Por isso não há soma a fechar. Vazio em todos =
+    partes iguais. Preenchido, é em TODOS e maior que zero — um aportador sem
+    parte não teria como receber a dele."""
+    if not pesos:
         return ""
-    pcts = [percentual_de(percentuais, o) for o in obras]
-    if all(p is None for p in pcts):
+    valores = [peso_de(pesos, i) for i in investidores]
+    if all(v is None for v in valores):
         return ""
-    faltam = [o for o, p in zip(obras, pcts) if p is None]
+    faltam = [i for i, v in zip(investidores, valores) if v is None]
     if faltam:
-        return f"falta o % de: {', '.join(faltam)}"
-    if any(p <= 0 for p in pcts):
-        return "todo % precisa ser maior que zero"
-    if any(p != p.quantize(Decimal("0.01")) for p in pcts):
-        # O banco guarda 2 casas; conferir 33,333 aqui e gravar 33,33 lá
-        # daria uma soma de 99,99 que só apareceria na hora de lançar.
-        return "use no máximo 2 casas no % (ex.: 33,33)"
-    soma = sum(pcts)
-    if soma != Decimal(100):
-        return f"os % somam {soma:g}, e precisam somar 100"
+        return f"falta a parte de: {', '.join(faltam)}"
+    if any(not v.is_finite() for v in valores):
+        return "parte que não é número"
+    if any(v <= 0 for v in valores):
+        return "toda parte precisa ser maior que zero"
+    if any(v != v.quantize(Decimal("0.0001")) for v in valores):
+        return "use no máximo 4 casas na parte"
     return ""
 
 
-def dividir_por_percentual(total, obras, percentuais) -> list[Decimal]:
-    """O valor de cada obra. Sem % = partes iguais (`dividir_em_centavos`).
+def dividir_por_peso(total, nomes, pesos) -> list[Decimal]:
+    """O valor de cada um, na proporção dos pesos. Sem peso = partes iguais.
 
-    Com %: cada obra leva o seu % arredondado PARA BAIXO em centavos, e os
-    centavos que sobram vão um a um para as obras de maior resto (empate: a
+    Cada um leva a sua fração arredondada PARA BAIXO em centavos, e os
+    centavos que sobram vão um a um para quem teve o maior resto (empate: o
     que vem antes). A soma fecha sempre com o total — é dinheiro."""
-    problema = problema_dos_percentuais(obras, percentuais)
+    problema = problema_dos_pesos(nomes, pesos)
     if problema:
-        raise ValueError(f"rateio por %: {problema}")
-    pcts = [percentual_de(percentuais, o) for o in obras]
-    if not percentuais or all(p is None for p in pcts):
-        return dividir_em_centavos(total, len(obras))
+        raise ValueError(f"divisão entre aportadores: {problema}")
+    valores = [peso_de(pesos, n) for n in nomes]
+    if not pesos or all(v is None for v in valores):
+        return dividir_em_centavos(total, len(nomes))
     centavos = int(como_dinheiro(total) * 100)
-    brutos = [Decimal(centavos) * p / 100 for p in pcts]
+    soma = sum(valores)
+    brutos = [Decimal(centavos) * v / soma for v in valores]
     base = [int(b) for b in brutos]                  # para baixo
     sobra = centavos - sum(base)
-    ordem = sorted(range(len(obras)), key=lambda i: (-(brutos[i] - base[i]), i))
+    ordem = sorted(range(len(nomes)), key=lambda i: (-(brutos[i] - base[i]), i))
     for i in ordem[:sobra]:
         base[i] += 1
     return [Decimal(c) / 100 for c in base]
+
+
+def percentuais_dos_pesos(investidores, pesos) -> list[Decimal]:
+    """O % de cada aportador, para MOSTRAR (2 casas). Não entra em conta."""
+    valores = [peso_de(pesos, i) for i in investidores]
+    if not investidores:
+        return []
+    if not pesos or any(v is None for v in valores):
+        return [como_dinheiro(Decimal(100) / len(investidores))] * len(investidores)
+    soma = sum(valores)
+    return [como_dinheiro(v * 100 / soma) for v in valores]
 
 
 @dataclass
@@ -205,7 +242,7 @@ class Operacao:
     pagador: str
     recebedor: str
     valor: Decimal
-    tipo: str        # "Aporte de Capital" | "Distribuição de Lucro"
+    tipo: str        # "Aporte de Capital" | "Distribuição de Lucro" | TIPO_INVESTIDOR
     modo: str        # "Pagamento + Recebimento" | "Só pagamento" | "Só recebimento"
     forma: str = "Pix"
 
@@ -224,8 +261,9 @@ class Operacao:
             return erros
 
         if grupo is not None:
-            if self.tipo != "Aporte de Capital":
-                erros.append(f"'{self.pagador}' só vale para Aporte de Capital.")
+            if self.tipo != TIPO_INVESTIDOR:
+                erros.append(f"'{self.pagador}' é investidor de subconta: o "
+                             f"tipo tem de ser '{TIPO_INVESTIDOR}'.")
             if self.modo != "Só recebimento":
                 erros.append(f"'{self.pagador}' gera só recebimentos — "
                              "use o modo 'Só recebimento'.")
@@ -239,14 +277,29 @@ class Operacao:
             if not (cfg.get("investidores") or []):
                 erros.append(f"A subconta {grupo} não tem INVESTIDORES no "
                              "subcontas.json — o rateio ficaria vazio.")
-            problema = problema_dos_percentuais(cfg.get("obras") or [],
-                                                cfg.get("percentuais") or {})
+            problema = problema_dos_pesos(cfg.get("investidores") or [],
+                                          cfg.get("pesos") or {})
             if problema:
                 erros.append(f"Rateio da subconta {grupo}: {problema}.")
-            conta_rec = entidades[self.recebedor].get("conta") or ""
-            if grupo not in self.recebedor and grupo not in conta_rec:
+            if not e_da_subconta(self.recebedor, entidades[self.recebedor],
+                                 grupo):
                 erros.append(f"O recebedor de '{self.pagador}' deve ser a "
                              f"subconta {grupo}.")
+            return erros
+
+        if self.tipo == TIPO_INVESTIDOR:
+            # Aporte de investidor é sempre dinheiro de FORA entrando numa
+            # conta nossa: não há pagamento a lançar do outro lado. Pagador
+            # com conta nossa é empresa da casa — com este tipo, a saída dela
+            # nunca entraria no ERP.
+            if entidades[self.pagador].get("conta"):
+                erros.append(f"{self.pagador} tem conta no app: aporte entre "
+                             f"contas da casa não é '{TIPO_INVESTIDOR}'.")
+            if self.modo != "Só recebimento":
+                erros.append(f"'{TIPO_INVESTIDOR}' só existe como 'Só "
+                             "recebimento'.")
+            if entidades[self.recebedor].get("conta") is None:
+                erros.append(f"{self.recebedor} não tem conta para receber.")
             return erros
 
         # Pessoa física não tem conta cadastrada aqui, porque não controlamos
@@ -314,12 +367,15 @@ def expandir(op: Operacao, entidades: dict, subcontas: dict,
                     f"a subconta {grupo} está sem obras e/ou investidores no "
                     "subcontas.json — o rateio sairia vazio e o valor de "
                     f"{formatar_brl(op.valor)} sumiria.")
-            por_obra = dividir_por_percentual(
-                op.valor, obras, cfg.get("percentuais") or {})
-            for obra, valor_obra in zip(obras, por_obra):
-                for investidor, parte in zip(
-                        investidores,
-                        dividir_em_centavos(valor_obra, len(investidores))):
+            # Primeiro entre os aportadores, na proporção de cada um; depois
+            # a parte de cada aportador em partes IGUAIS entre as obras.
+            por_investidor = dividir_por_peso(op.valor, investidores,
+                                              cfg.get("pesos") or {})
+            partes = {inv: dividir_em_centavos(v, len(obras))
+                      for inv, v in zip(investidores, por_investidor)}
+            for k, obra in enumerate(obras):
+                for investidor in investidores:
+                    parte = partes[investidor][k]
                     itens.append({
                         "tipo_lancamento": "recebimento",
                         "data": op.data, "valor": parte,

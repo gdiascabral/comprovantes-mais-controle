@@ -194,13 +194,15 @@ def _subcontas(dados: dict) -> dict:
             "obras": [o["nome"] for o in obras.get(s["id"], [])],
             "investidores": [i["nome"] for i in invs.get(s["id"], [])],
         }
-        # % por centro de custo (01/10/2026). Só quando há: sem a chave, o
-        # rateio é em partes iguais, como sempre foi.
-        pcts = {o["nome"]: format(Decimal(str(o["percentual"])).normalize(), "f")
-                for o in obras.get(s["id"], [])
-                if o.get("percentual") is not None}
-        if pcts:
-            saida[s["nome"]]["percentuais"] = pcts
+        # Proporção entre os aportadores (01/10/2026). Só quando há: sem a
+        # chave, eles dividem em partes iguais, como sempre foi. As obras
+        # dividem sempre igual — o `percentual` de `subconta_obra` foi
+        # abandonado no mesmo dia e o app não o lê mais.
+        pesos = {i["nome"]: format(Decimal(str(i["peso"])).normalize(), "f")
+                 for i in invs.get(s["id"], [])
+                 if i.get("peso") is not None}
+        if pesos:
+            saida[s["nome"]]["pesos"] = pesos
     return saida
 
 

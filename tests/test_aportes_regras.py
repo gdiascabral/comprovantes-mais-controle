@@ -71,7 +71,7 @@ def test_so_pagamento_gera_um():
 
 
 def test_rateio_uma_linha_por_obra_x_investidor_e_soma_fecha():
-    o = op(pagador="Investidor conta 111-1", recebedor="SUBCONTA 111-1",
+    o = op(pagador="INVESTIDOR SUBCONTA 111-1", tipo=regras.TIPO_INVESTIDOR, recebedor="SUBCONTA 111-1",
            modo="Só recebimento", valor=como_dinheiro("1000.00"))
     itens = expandir(o, ENTIDADES, SUBCONTAS, "OBRA")
     assert len(itens) == 4                       # 2 obras x 2 investidores
@@ -81,7 +81,7 @@ def test_rateio_uma_linha_por_obra_x_investidor_e_soma_fecha():
 # --------------------------------------------------- rateio vazio come o valor
 def test_validar_reclama_de_subconta_sem_investidores():
     subcontas = {"111-1": {"obras": ["OBRA 1"], "investidores": []}}
-    o = op(pagador="Investidor conta 111-1", recebedor="SUBCONTA 111-1",
+    o = op(pagador="INVESTIDOR SUBCONTA 111-1", tipo=regras.TIPO_INVESTIDOR, recebedor="SUBCONTA 111-1",
            modo="Só recebimento")
     erros = o.validar(ENTIDADES, subcontas)
     assert any("INVESTIDORES" in e for e in erros)
@@ -89,7 +89,7 @@ def test_validar_reclama_de_subconta_sem_investidores():
 
 def test_validar_reclama_de_subconta_sem_obras():
     subcontas = {"111-1": {"obras": [], "investidores": ["X"]}}
-    o = op(pagador="Investidor conta 111-1", recebedor="SUBCONTA 111-1",
+    o = op(pagador="INVESTIDOR SUBCONTA 111-1", tipo=regras.TIPO_INVESTIDOR, recebedor="SUBCONTA 111-1",
            modo="Só recebimento")
     erros = o.validar(ENTIDADES, subcontas)
     assert any("OBRAS" in e for e in erros)
@@ -99,7 +99,7 @@ def test_expandir_recusa_rateio_vazio_em_vez_de_sumir_com_o_valor():
     """Antes: `max(1, 0)` evitava a divisão por zero, o laço não rodava e a
     operação virava ZERO lançamentos — o valor sumia sem erro nem aviso."""
     subcontas = {"111-1": {"obras": [], "investidores": []}}
-    o = op(pagador="Investidor conta 111-1", recebedor="SUBCONTA 111-1",
+    o = op(pagador="INVESTIDOR SUBCONTA 111-1", tipo=regras.TIPO_INVESTIDOR, recebedor="SUBCONTA 111-1",
            modo="Só recebimento", valor=como_dinheiro("500.00"))
     with pytest.raises(ValueError, match="sumiria|rateio"):
         expandir(o, ENTIDADES, subcontas, "OBRA")
@@ -227,63 +227,122 @@ def test_parcela_declarada_em_aberto_recebe_a_baixa():
     assert "receipts" in cat.postagens[1]
 
 
-# ------------------------------------------------------- % por centro de custo
-def test_percentual_divide_e_fecha_o_total():
-    partes = regras.dividir_por_percentual(
-        Decimal("1000.00"), ["A", "B", "C"], {"A": "50", "B": "33.33", "C": "16.67"})
-    assert partes == [Decimal("500.00"), Decimal("333.30"), Decimal("166.70")]
-    assert sum(partes) == Decimal("1000.00")
+# ------------------------------------------- aporte de investidor (01/10/2026)
+def test_peso_divide_na_proporcao_e_fecha_o_total():
+    assert regras.dividir_por_peso(Decimal("1000.00"), ["A", "B"],
+                                   {"A": "2", "B": "1"}) == \
+        [Decimal("666.67"), Decimal("333.33")]
+    assert regras.dividir_por_peso(Decimal("1000.00"), ["A", "B"],
+                                   {"A": "60", "B": "40"}) == \
+        [Decimal("600.00"), Decimal("400.00")]
 
 
-def test_percentual_com_sobra_de_centavo_vai_para_o_maior_resto():
-    partes = regras.dividir_por_percentual(
-        Decimal("0.10"), ["A", "B", "C"], {"A": "33.33", "B": "33.33", "C": "33.34"})
-    assert sum(partes) == Decimal("0.10")
+def test_peso_um_um_um_fecha_no_centavo():
+    partes = regras.dividir_por_peso(Decimal("100.00"), ["A", "B", "C"],
+                                     {"A": "1", "B": "1", "C": "1"})
+    assert sum(partes) == Decimal("100.00")
 
 
-def test_sem_percentual_continua_partes_iguais():
-    assert regras.dividir_por_percentual(Decimal("100.00"), ["A", "B", "C"], {}) == \
+def test_sem_peso_continua_partes_iguais():
+    assert regras.dividir_por_peso(Decimal("100.00"), ["A", "B", "C"], {}) == \
         regras.dividir_em_centavos(Decimal("100.00"), 3)
 
 
-@pytest.mark.parametrize("pcts, pedaco", [
-    ({"A": "70"}, "falta o % de: B"),
-    ({"A": "70", "B": "20"}, "somam 90"),
-    ({"A": "100", "B": "0"}, "maior que zero"),
+@pytest.mark.parametrize("pesos, pedaco", [
+    ({"A": "2"}, "falta a parte de: B"),
+    ({"A": "1", "B": "0"}, "maior que zero"),
+    ({"A": "1.00001", "B": "1"}, "4 casas"),
 ])
-def test_percentual_incompleto_e_recusado(pcts, pedaco):
-    assert pedaco in regras.problema_dos_percentuais(["A", "B"], pcts)
+def test_peso_incompleto_e_recusado(pesos, pedaco):
+    assert pedaco in regras.problema_dos_pesos(["A", "B"], pesos)
     with pytest.raises(ValueError):
-        regras.dividir_por_percentual(Decimal("10.00"), ["A", "B"], pcts)
+        regras.dividir_por_peso(Decimal("10.00"), ["A", "B"], pesos)
 
 
-def test_expandir_com_percentual_por_obra_e_igual_entre_investidores():
-    subcontas = {"11111-1": {"obras": ["LOTE 1", "LOTE 2"],
-                             "investidores": ["INV A", "INV B"],
-                             "percentuais": {"lote 1": "70", "LOTE 2": "30"}}}
-    entidades = {"SUB": {"nome_oficial": "HOLDING", "conta": "Holding - SUBCONTA 11111-1",
-                         "nome_descricao": None}}
-    o = Operacao(data=datetime.date(2026, 10, 1), pagador="Investidor conta 11111-1",
-                 recebedor="SUB", valor=Decimal("1000.00"),
-                 tipo="Aporte de Capital", modo="Só recebimento")
-    assert o.validar(entidades, subcontas) == []
-    itens = expandir(o, entidades, subcontas, "PADRAO")
+def test_percentuais_dos_pesos_para_mostrar():
+    assert regras.percentuais_dos_pesos(["A", "B"], {"A": "2", "B": "1"}) == \
+        [Decimal("66.67"), Decimal("33.33")]
+    assert regras.percentuais_dos_pesos(["A", "B"], {}) == \
+        [Decimal("50.00"), Decimal("50.00")]
+
+
+SUB_INV = {"11111-1": {"obras": ["LOTE 1", "LOTE 2"],
+                       "investidores": ["INV A", "INV B"],
+                       "pesos": {"inv a": "3", "INV B": "1"}}}
+ENT_INV = {"SUBCONTA 11111-1 - BANCO - INVESTIDOR": {
+    "nome_oficial": "HOLDING", "conta": "Holding - SUBCONTA 11111-1",
+    "nome_descricao": None}}
+
+
+def _op_inv(**kw):
+    base = dict(data=datetime.date(2026, 10, 1),
+                pagador="INVESTIDOR SUBCONTA 11111-1",
+                recebedor="SUBCONTA 11111-1 - BANCO - INVESTIDOR",
+                valor=Decimal("1000.00"), tipo=regras.TIPO_INVESTIDOR,
+                modo="Só recebimento")
+    base.update(kw)
+    return Operacao(**base)
+
+
+def test_aporte_de_investidor_proporcao_entre_aportadores_obras_iguais():
+    o = _op_inv()
+    assert o.validar(ENT_INV, SUB_INV) == []
+    itens = expandir(o, ENT_INV, SUB_INV, "PADRAO")
     assert [(i["obra"], i["cliente"], i["valor"]) for i in itens] == [
-        ("LOTE 1", "INV A", Decimal("350.00")), ("LOTE 1", "INV B", Decimal("350.00")),
-        ("LOTE 2", "INV A", Decimal("150.00")), ("LOTE 2", "INV B", Decimal("150.00"))]
+        ("LOTE 1", "INV A", Decimal("375.00")), ("LOTE 1", "INV B", Decimal("125.00")),
+        ("LOTE 2", "INV A", Decimal("375.00")), ("LOTE 2", "INV B", Decimal("125.00"))]
+    assert sum(i["valor"] for i in itens) == Decimal("1000.00")
+    assert {i["natureza"] for i in itens} == {"Aporte de Investidor"}
+    assert all(i["descricao"].startswith("APORTE INVESTIDOR - ") for i in itens)
 
 
-def test_validar_barra_percentual_que_nao_fecha():
-    subcontas = {"11111-1": {"obras": ["LOTE 1", "LOTE 2"], "investidores": ["INV"],
-                             "percentuais": {"LOTE 1": "70", "LOTE 2": "20"}}}
-    entidades = {"SUB": {"nome_oficial": "H", "conta": "SUBCONTA 11111-1",
-                         "nome_descricao": None}}
-    o = Operacao(data=datetime.date(2026, 10, 1), pagador="Investidor conta 11111-1",
-                 recebedor="SUB", valor=Decimal("10.00"),
-                 tipo="Aporte de Capital", modo="Só recebimento")
-    assert any("somam 90" in e for e in o.validar(entidades, subcontas))
+def test_subconta_de_investidor_exige_o_tipo_novo():
+    erros = _op_inv(tipo="Aporte de Capital").validar(ENT_INV, SUB_INV)
+    assert any("Aporte de Investidor" in e for e in erros)
 
 
-def test_percentual_com_mais_de_duas_casas_e_recusado():
-    assert "2 casas" in regras.problema_dos_percentuais(
-        ["A", "B", "C"], {"A": "33.333", "B": "33.333", "C": "33.334"})
+def test_tipo_investidor_so_como_recebimento():
+    o = Operacao(data=HOJE, pagador="EMPRESA A", recebedor="EMPRESA B",
+                 valor=Decimal("10.00"), tipo=regras.TIPO_INVESTIDOR,
+                 modo="Pagamento + Recebimento")
+    assert any("Só recebimento" in e for e in o.validar(ENTIDADES, SUBCONTAS))
+
+
+def test_validar_barra_peso_incompleto():
+    sub = {"11111-1": dict(SUB_INV["11111-1"], pesos={"INV A": "3"})}
+    assert any("falta a parte" in e for e in _op_inv().validar(ENT_INV, sub))
+
+
+def test_anexar_ignora_a_descricao_do_aporte_de_investidor():
+    from anexar import config
+    assert "APORTE INVESTIDOR" in config.IGNORAR_APORTES
+
+
+def test_peso_nan_vindo_do_banco_e_recusado():
+    assert "não é número" in regras.problema_dos_pesos(["A", "B"],
+                                                       {"A": "NaN", "B": "1"})
+
+
+@pytest.mark.parametrize("texto, numero", [
+    ("EMPRESA - INTER 1234567-8", ""),          # 7 dígitos: não é subconta
+    ("SICOOB 112345-6", ""),
+    ("Holding - SUBCONTA 12345-6 - BANCO", "12345-6"),
+    ("Holding - 12.345-6", "12345-6"),
+])
+def test_numero_da_conta_nao_le_de_dentro_de_outro_numero(texto, numero):
+    assert regras.numero_da_conta(texto) == numero
+
+
+def test_recebedor_da_subconta_pelo_numero_exato():
+    ent = dict(ENT_INV)
+    ent["OUTRA"] = {"nome_oficial": "X", "conta": "OUTRA - SICOOB 112345-6",
+                    "nome_descricao": None}
+    o = _op_inv(recebedor="OUTRA")
+    assert any("deve ser a subconta" in e for e in o.validar(ent, SUB_INV))
+
+
+def test_tipo_investidor_com_pagador_da_casa_e_recusado():
+    o = Operacao(data=HOJE, pagador="EMPRESA A", recebedor="EMPRESA B",
+                 valor=Decimal("10.00"), tipo=regras.TIPO_INVESTIDOR,
+                 modo="Só recebimento")
+    assert any("tem conta no app" in e for e in o.validar(ENTIDADES, SUBCONTAS))

@@ -36,10 +36,12 @@ CENTRO_DE_CUSTO_PADRAO = "Obra"
 
 FORMAS = ["Pix", "Transferência Bancária", "Boleto", "Depósito em conta",
           "Dinheiro"]
-TIPOS = ["Aporte de Capital", "Distribuição de Lucro"]
+TIPOS = ["Aporte de Capital", "Distribuição de Lucro", "Aporte de Investidor"]
 MODOS = ["Pagamento + Recebimento", "Só recebimento", "Só pagamento"]
 
-INVESTIDOR_PREFIXO = "Investidor conta "
+#: Como a subconta de investidor aparece em Pagou: "INVESTIDOR SUBCONTA
+#: 00000-0" (padrão do dono, 01/10/2026; era "Investidor conta ").
+INVESTIDOR_PREFIXO = "INVESTIDOR SUBCONTA "
 
 
 def carregar_contas() -> dict:
