@@ -128,3 +128,86 @@ def test_acrescentar_no_cache_existente_preserva_o_que_havia(tmp_path,
     with open(arquivo, encoding="utf-8-sig", newline="") as f:
         nomes = [l["nome_exibicao"] for l in csv.DictReader(f, delimiter=";")]
     assert nomes == ["VELHA", "NOVA"]
+
+
+# ------------------------------------------------- subconta de investidor
+SUBCONTAS = {"222-2": {"obras": ["LOTE 1"], "investidores": ["INV"]}}
+
+
+def test_contas_de_investidor_oferece_livres_e_as_que_ja_sao_subconta():
+    # A 333-3 está livre; a 222-2 já está na lista e já tem rateio.
+    entidades = ENTIDADES + [
+        {"nome_exibicao": "SUB 222", "nome_oficial": "HOLDING SPE",
+         "conta": "Holding - SUBCONTA 22222-2 - BANCO"}]
+    contas = CONTAS + [{"nome_erp": "Holding - SUBCONTA 22222-2 - BANCO",
+                        "empresa_id": 7, "ativa": True}]
+    opcoes = nc.contas_de_investidor(contas, entidades, {"22222-2": {}})
+    assert "Holding - SUBCONTA 22222-2 - BANCO" in opcoes
+    assert "Holding - SUBCONTA 333-3 - BANCO" in opcoes
+
+
+def test_banco_da_conta():
+    contas = [{"nome_erp": "X - SUBCONTA 11111-1", "banco": "sicoob"}]
+    assert nc.banco_da_conta("X - SUBCONTA 11111-1", contas) == "SICOOB"
+    assert nc.banco_da_conta("Y - 11111-1 - INTER", []) == "INTER"
+    assert nc.banco_da_conta("sem banco", []) == "SICOOB"
+
+
+def _inv(**kw):
+    base = dict(conta="Holding - SUBCONTA 44444-4 - BANCO", dono="HOLDING SPE",
+                aportadores=["INV A"], obras=["LOTE 1"], pesos={})
+    base.update(kw)
+    return nc.Investidor(**base)
+
+
+def test_investidor_nomes_automaticos():
+    inv = _inv(banco="SICOOB")
+    assert inv.numero == "44444-4"
+    assert inv.em_pagou == "INVESTIDOR SUBCONTA 44444-4"
+    assert inv.em_recebeu == "SUBCONTA 44444-4 - SICOOB - INVESTIDOR"
+
+
+def test_validar_investidor():
+    assert nc.validar_investidor(_inv(), ENTIDADES) == ""
+    assert "número" in nc.validar_investidor(_inv(conta="CONTA SEM NUMERO"),
+                                             ENTIDADES)
+    assert "dono" in nc.validar_investidor(_inv(dono=""), ENTIDADES)
+    assert "aportador" in nc.validar_investidor(_inv(aportadores=[]), ENTIDADES)
+    assert "não existe" in nc.validar_investidor(
+        _inv(), ENTIDADES, participantes=["OUTRO"], centros=["LOTE 1"])
+
+
+def test_gravar_investidor_cria_recebeu_so_quando_falta(tmp_path, monkeypatch):
+    from nuvem import rest
+    from aportes import rateio_subconta
+    monkeypatch.setattr(cadastro, "ARQUIVO_CONTAS", tmp_path / "contas.csv")
+    inseridas, rateios = [], []
+    monkeypatch.setattr(rest, "inserir",
+                        lambda tabela, tok, linhas, **kw: inseridas.append(
+                            (tabela, linhas[0])) or [linhas[0]])
+    monkeypatch.setattr(rateio_subconta, "gravar",
+                        lambda *a, **kw: rateios.append(a))
+    assert nc.gravar_investidor("tok", _inv(), ENTIDADES) is True
+    assert inseridas[0][0] == "entidade"
+    assert inseridas[0][1]["nome_exibicao"] == "SUBCONTA 44444-4 - SICOOB - INVESTIDOR"
+    assert rateios[0][1:] == ("44444-4", ["INV A"], ["LOTE 1"], {})
+    # a conta já está em Recebeu: só o rateio
+    inseridas.clear()
+    ja = ENTIDADES + [{"nome_exibicao": "QUALQUER", "nome_oficial": "H",
+                       "conta": "Holding - SUBCONTA 44444-4 - BANCO"}]
+    assert nc.gravar_investidor("tok", _inv(), ja) is False
+    assert inseridas == []
+
+
+def test_numero_que_ja_e_de_outra_conta_e_recusado():
+    ja = ENTIDADES + [{"nome_exibicao": "OUTRA", "nome_oficial": "H",
+                       "conta": "OUTRO BANCO - 44444-4"}]
+    assert "já é da conta" in nc.validar_investidor(_inv(), ja)
+
+
+def test_dono_conferido_no_erp_quando_a_conta_e_nova():
+    assert "não existe" in nc.validar_investidor(
+        _inv(), ENTIDADES, participantes=["INV A"], centros=["LOTE 1"])
+    assert nc.validar_investidor(
+        _inv(), ENTIDADES, participantes=["INV A", "HOLDING SPE"],
+        centros=["LOTE 1"]) == ""

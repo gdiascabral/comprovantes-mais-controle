@@ -118,13 +118,124 @@ def validar(novo: Novo, entidades: list[dict]) -> str:
 
 
 # --------------------------------------------------------------------------
+# Subconta de investidor
+# --------------------------------------------------------------------------
+@dataclass
+class Investidor:
+    """O que a opção "Subconta de investidor" da janela devolve."""
+    conta: str                      # nome da conta no ERP
+    dono: str                       # contato da empresa dona da conta
+    aportadores: list
+    obras: list
+    pesos: dict
+    banco: str = "SICOOB"
+
+    @property
+    def numero(self) -> str:
+        from .rateio_subconta import numero_da_conta
+        return numero_da_conta(self.conta)
+
+    @property
+    def em_recebeu(self) -> str:
+        from .rateio_subconta import nome_em_recebeu
+        return nome_em_recebeu(self.numero, self.banco)
+
+    @property
+    def em_pagou(self) -> str:
+        return cadastro.INVESTIDOR_PREFIXO + self.numero
+
+
+def entidade_da_conta(conta: str, entidades: list[dict]) -> dict | None:
+    """A linha de Pagou/Recebeu que já usa esta conta, ou None."""
+    alvo = _chave(conta)
+    return next((e for e in entidades if e.get("conta")
+                 and _chave(e["conta"]) == alvo), None)
+
+
+def contas_de_investidor(contas: list[dict], entidades: list[dict],
+                         subcontas: dict) -> list[str]:
+    """O que a opção "Subconta de investidor" oferece: as contas livres e as
+    que já são subconta de investidor (para mudar aportadores e obras)."""
+    from .rateio_subconta import numero_da_conta
+    opcoes = set(contas_livres(contas, entidades))
+    for e in entidades:
+        numero = numero_da_conta(e.get("conta") or "")
+        if numero and numero in subcontas:
+            opcoes.add(str(e["conta"]).strip())
+    return sorted(opcoes, key=_chave)
+
+
+def banco_da_conta(conta: str, contas: list[dict]) -> str:
+    """O banco pelo cadastro da conta; sem ele, pelo fim do nome; "SICOOB"."""
+    alvo = _chave(conta)
+    for c in contas:
+        if _chave(c.get("nome_erp")) == alvo and str(c.get("banco") or "").strip():
+            return str(c["banco"]).strip().upper()
+    for banco in ("SICOOB", "INTER", "CAIXA", "BRADESCO", "ITAU", "SANTANDER",
+                  "BANCO DO BRASIL", "NUBANK", "NEXT", "PAGBANK", "NEON", "C6"):
+        if banco in _chave(conta).upper():
+            return banco
+    return "SICOOB"
+
+
+def validar_investidor(inv: Investidor, entidades: list[dict], *,
+                       participantes=None, centros=None) -> str:
+    """"" quando dá para gravar; senão, o motivo em português."""
+    from . import rateio_subconta
+    if not inv.conta.strip():
+        return "Escolha a conta da subconta."
+    if not inv.numero:
+        return ("Não achei o número da conta (00000-0) no nome dela. Essa "
+                "conta não parece ser uma subconta.")
+    existente = entidade_da_conta(inv.conta, entidades)
+    for e in entidades:
+        outra = str(e.get("conta") or "")
+        if outra and _chave(outra) != _chave(inv.conta) and \
+                rateio_subconta.numero_da_conta(outra) == inv.numero:
+            return (f"O número {inv.numero} já é da conta \"{outra}\" "
+                    f"(\"{e['nome_exibicao']}\"). Duas contas não podem ser "
+                    "a mesma subconta.")
+    if existente is None:
+        if not inv.dono.strip():
+            return ("Falta o dono da conta (contato da empresa no Mais "
+                    "Controle).")
+        if participantes is not None and _chave(inv.dono) not in {
+                _chave(p) for p in participantes}:
+            return (f"O dono \"{inv.dono}\" não existe no Mais Controle com "
+                    "esse nome. Escreva como está no cadastro de Contatos.")
+        for e in entidades:
+            if _chave(e.get("nome_exibicao")) == _chave(inv.em_recebeu):
+                return f"Já existe \"{e['nome_exibicao']}\" na lista."
+    return rateio_subconta.validar(inv.numero, inv.aportadores, inv.obras,
+                                   participantes=participantes,
+                                   centros=centros, pesos=inv.pesos)
+
+
+def gravar_investidor(token: str, inv: Investidor, entidades: list[dict]) -> bool:
+    """Cria a linha de Recebeu (se a conta ainda não tem) e grava o rateio.
+    Devolve True quando criou a linha de Recebeu.
+
+    A linha primeiro: rateio sem a conta em Recebeu não teria para onde
+    lançar. Se o rateio falhar depois, a linha fica — e gravar de novo pela
+    mesma janela completa o resto, sem duplicar (a conta já está lá)."""
+    from . import rateio_subconta
+    criou = False
+    if entidade_da_conta(inv.conta, entidades) is None:
+        gravar(token, Novo(inv.em_recebeu, inv.dono, inv.conta))
+        criou = True
+    rateio_subconta.gravar(token, inv.numero, inv.aportadores, inv.obras,
+                           inv.pesos)
+    return criou
+
+
+# --------------------------------------------------------------------------
 # Banco — só aqui o módulo sai da máquina
 # --------------------------------------------------------------------------
 def ler(token: str) -> tuple[list[dict], list[dict]]:
     """`(contas, entidades)` do banco, frescos — não do cache: o motivo de
     abrir a janela costuma ser uma conta que entrou HOJE."""
     from nuvem import rest
-    contas = rest.ler("conta", token, colunas="nome_erp,empresa_id,ativa")
+    contas = rest.ler("conta", token, colunas="nome_erp,empresa_id,ativa,banco")
     entidades = rest.ler("entidade", token,
                          colunas="nome_exibicao,nome_oficial,conta")
     return list(contas or []), list(entidades or [])

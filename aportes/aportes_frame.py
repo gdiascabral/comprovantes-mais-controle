@@ -18,6 +18,7 @@ from tkinter import messagebox, ttk
 from . import dados as cadastro
 from . import novo_cadastro
 from . import rateio_subconta
+from . import regras
 from .mc_catalogos import Catalogos
 from .mc_lancamentos import criar_pagamento, criar_recebimento, ErroLancamento
 from . import erp_sessao
@@ -81,11 +82,6 @@ class AportesFrame(ttk.Frame):
         self.b_novo = widgets.Botao(cab.acoes, "+  Novo cadastro",
                                     papel="passo", command=self._novo_cadastro)
         self.b_novo.pack(side="left", padx=px((0, 8)))
-        # Investidores e centros de custo de uma subconta ("Investidor conta
-        # 00000-0" em Pagou). Ver `rateio_subconta.py`.
-        self.b_rateio = widgets.Botao(cab.acoes, "Rateio de subconta",
-                                      papel="passo", command=self._rateio)
-        self.b_rateio.pack(side="left", padx=px((0, 8)))
         self.b_lancar = widgets.Botao(cab.acoes, "Lançar no Mais Controle",
                                       papel="acao", command=self._lancar)
         self.b_lancar.pack(side="left")
@@ -115,6 +111,9 @@ class AportesFrame(ttk.Frame):
             linha2, "Pagou", lambda p: widgets.ComboBusca(p, width=38))
         campo_pag.pack(side="left", padx=px((0, 16)))
         self.cb_pagador = campo_pag.widget
+        self.cb_pagador.bind("<<ComboboxSelected>>", self._pagador_escolhido,
+                             add="+")
+        self.cb_pagador.bind("<FocusOut>", self._pagador_escolhido, add="+")
         campo_rec = widgets.Campo(
             linha2, "Recebeu", lambda p: widgets.ComboBusca(p, width=38))
         campo_rec.pack(side="left")
@@ -178,6 +177,28 @@ class AportesFrame(ttk.Frame):
         widgets.estilo_log(self.texto)
         widgets.registro_elastico(self.reg, self.texto)
         corpo.encaixar(self.reg)
+
+    def _pagador_escolhido(self, _ev=None):
+        """Escolheu "INVESTIDOR SUBCONTA 00000-0" em Pagou: o tipo vira
+        "Aporte de Investidor", o modo "Só recebimento", e Recebeu, a conta
+        dessa subconta — os três únicos valores que esse pagador aceita."""
+        numero = numero_subconta(self.cb_pagador.get().strip(), self.subcontas)
+        if numero is None:
+            # Saiu de um investidor para outro pagador: o tipo que ele pôs
+            # não gruda — "Aporte de Investidor" com empresa da casa deixaria
+            # a saída dela fora do ERP.
+            if self.cb_tipo.get() == regras.TIPO_INVESTIDOR:
+                self.cb_tipo.set(cadastro.TIPOS[0])
+                self.cb_modo.set(cadastro.MODOS[0])
+            return
+        self.cb_tipo.set(regras.TIPO_INVESTIDOR)
+        self.cb_modo.set("Só recebimento")
+        # Só com UM candidato pelo número exato; dois ou nenhum, a pessoa
+        # escolhe — chute aqui seria aporte na conta errada.
+        candidatos = [nome for nome, dados in self.entidades.items()
+                      if regras.e_da_subconta(nome, dados, numero)]
+        if len(candidatos) == 1:
+            self.cb_recebedor.set(candidatos[0])
 
     def _recarregar_listas(self):
         nomes = list(self.entidades)
@@ -404,24 +425,49 @@ class AportesFrame(ttk.Frame):
                   "próximo comando.")
 
     def _novo_cadastro(self):
-        """Lê o cadastro FRESCO do banco, abre a janela e grava — banco
-        sempre fora da thread do Tk.
+        """Abre a janela única de cadastro (investidor / conta / pessoa).
 
-        Fresco, e não o `contas.csv`: o motivo de clicar aqui costuma ser a
-        conta que entrou hoje, e o cache só é regravado na abertura."""
+        Lê, na thread do navegador: os aportadores e as obras do Mais
+        Controle (a opção de investidor só escolhe nomes que o ERP conhece)
+        e, da nuvem, conta, entidade e rateios FRESCOS — o motivo de clicar
+        aqui costuma ser a conta que entrou hoje, e o cache só é regravado
+        na abertura. Sem o ERP a janela abre do mesmo jeito, com a opção de
+        investidor desligada."""
+        if self.anx.avisar_se_ocupado("os Aportes"):
+            return
         self.b_novo.configure(state="disabled")
+        self.anx.submeter("Aportes — novo cadastro", self._t_novo_cadastro,
+                          dona=self)
 
-        def ler():
+    def _t_novo_cadastro(self):
+        participantes = centros = None
+        try:
+            # `_preparar_sessao` não navega quando os catálogos já foram
+            # lidos nesta sessão (Conferir, Lançar ou um cadastro anterior).
+            self._preparar_sessao()
+            participantes = sorted(
+                {p.get("name", "").strip()
+                 for p in self.catalogos.participantes.values()} - {""},
+                key=util.norm_espaco)
+            centros = sorted(
+                {o.get("name", "").strip()
+                 for o in getattr(self.catalogos, "obras", {}).values()} - {""},
+                key=util.norm_espaco) or None
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"  aviso: aportadores e obras do Mais Controle não "
+                      f"vieram ({e}); a opção de investidor fica desligada.")
+            participantes = centros = None
+        try:
             from nuvem import sessao
             token = sessao.token()
-            return (token, *novo_cadastro.ler(token))
-
-        def leu(r):
-            token, contas, entidades = r
-            self._perguntar_novo(token, contas, entidades)
-
-        self._no_fundo(ler, leu, "Não deu para ler o cadastro da nuvem.",
-                       ao_fim=lambda: self.b_novo.configure(state="normal"))
+            contas, entidades = novo_cadastro.ler(token)
+            rateios = rateio_subconta.ler_rateios(token)
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"[!] Não deu para ler o cadastro da nuvem: {e}")
+            self.after(0, lambda: self.b_novo.configure(state="normal"))
+            return
+        self.after(0, lambda: self._perguntar_novo(
+            token, contas, entidades, rateios, participantes, centros))
 
     def _no_fundo(self, tarefa, depois, falhou: str, ao_fim=None,
                   titulo: str = "Novo cadastro"):
@@ -453,18 +499,70 @@ class AportesFrame(ttk.Frame):
         threading.Thread(target=rodar, daemon=True).start()
         self.after(100, esperar)
 
-    def _perguntar_novo(self, token, contas, entidades):
+    def _perguntar_novo(self, token, contas, entidades, rateios,
+                        participantes, centros):
         from .novo_cadastro_dialogo import perguntar
-        novo = perguntar(self.winfo_toplevel(), contas, entidades)
-        if novo is None:
+        self.b_novo.configure(state="normal")
+        r = perguntar(self.winfo_toplevel(), contas, entidades, rateios,
+                      participantes, centros)
+        if r is None:
+            return
+        tipo, dados = r
+        if tipo == "investidor":
+            self._gravar_investidor(token, dados, entidades)
             return
         self.b_novo.configure(state="disabled")
-        self._no_fundo(lambda: novo_cadastro.gravar(token, novo),
-                       lambda _r: self._cadastrou(novo),
+        self._no_fundo(lambda: novo_cadastro.gravar(token, dados),
+                       lambda _r: self._cadastrou(dados),
                        "Não deu para cadastrar. Se o recado for de nome "
                        "repetido, ele já entrou: clique em Recarregar "
                        "cadastros.",
                        ao_fim=lambda: self.b_novo.configure(state="normal"))
+
+    def _gravar_investidor(self, token, inv, entidades):
+        if self._subconta_em_andamento(inv.numero):
+            messagebox.showwarning(
+                "Novo cadastro",
+                f"A lista \"A lançar\" tem um aporte da subconta {inv.numero} "
+                "que já entrou em parte no Mais Controle.\n\nTermine esse "
+                "lançamento (ou tire-o da lista) antes de mudar o rateio — "
+                "senão o que falta seria redividido e lançaria valor a mais.")
+            return
+
+        def gravou(criou):
+            pagou, recebeu = self.cb_pagador.get(), self.cb_recebedor.get()
+            self.entidades = cadastro.carregar_contas()
+            self.subcontas = cadastro.carregar_subcontas()
+            self._recarregar_listas()
+            for combo, antes in ((self.cb_pagador, pagou),
+                                 (self.cb_recebedor, recebeu)):
+                if antes in combo.valores_completos():
+                    combo.set(antes)
+            self._atualizar_total()
+            pcts = regras.percentuais_dos_pesos(inv.aportadores, inv.pesos)
+            self._log(
+                f"Subconta de investidor {inv.numero} gravada"
+                + (" (conta nova em Recebeu)" if criou else "") + ": "
+                + ", ".join(f"{a} {str(p).replace('.', ',')}%"
+                            for a, p in zip(inv.aportadores, pcts))
+                + f"; {len(inv.obras)} obra(s), partes iguais. Para lançar: "
+                f"Pagou \"{inv.em_pagou}\", tipo '{regras.TIPO_INVESTIDOR}', "
+                "modo 'Só recebimento'.")
+            widgets.registrar_atividade(
+                "apt", "Subconta de investidor", "ok", inv.numero,
+                {"aportadores": len(inv.aportadores), "obras": len(inv.obras)})
+
+        def ao_fim():
+            # Deu certo ou não, o cache já tem o que o banco tem.
+            self.entidades = cadastro.carregar_contas()
+            self.subcontas = cadastro.carregar_subcontas()
+            self.b_novo.configure(state="normal")
+
+        self.b_novo.configure(state="disabled")
+        self._no_fundo(
+            lambda: novo_cadastro.gravar_investidor(token, inv, entidades),
+            gravou, "Não deu para gravar a subconta de investidor.",
+            ao_fim=ao_fim, titulo="Novo cadastro")
 
     def _cadastrou(self, novo):
         # A escolha de Pagou/Recebeu sobrevive: `_recarregar_listas` põe o
@@ -489,43 +587,6 @@ class AportesFrame(ttk.Frame):
             "apt", "Novo cadastro", "ok", novo.nome_exibicao.strip(),
             {"conta": novo.conta.strip() or None})
 
-    def _rateio(self):
-        """Os nomes de investidor e de CC têm de ser os do ERP — então a
-        janela abre DEPOIS de ler os cadastros, na thread do navegador."""
-        if self.anx.avisar_se_ocupado("os Aportes"):
-            return
-        self.anx.submeter("Aportes — rateio de subconta", self._t_rateio,
-                          dona=self)
-
-    def _t_rateio(self):
-        try:
-            self._preparar_sessao()
-            participantes = sorted(
-                {p.get("name", "").strip()
-                 for p in self.catalogos.participantes.values()} - {""},
-                key=util.norm_espaco)
-            centros = sorted(
-                {o.get("name", "").strip()
-                 for o in getattr(self.catalogos, "obras", {}).values()} - {""},
-                key=util.norm_espaco)
-        except Exception as e:                              # noqa: BLE001
-            self._log(f"[!] {e}")
-            return
-        if not centros:
-            self._log("[!] O Mais Controle não devolveu os centros de custo "
-                      "(obras); o rateio não pode ser montado agora.")
-            return
-        try:
-            # A janela mostra o que o BANCO tem, não o cache desta máquina:
-            # outra pessoa pode ter mudado o rateio depois da abertura.
-            from nuvem import sessao
-            atuais = rateio_subconta.ler_rateios(sessao.token())
-        except Exception as e:                              # noqa: BLE001
-            self._log(f"[!] Não deu para ler os rateios da nuvem: {e}")
-            return
-        self.after(0, lambda: self._perguntar_rateio(participantes, centros,
-                                                     atuais))
-
     def _subconta_em_andamento(self, numero: str) -> bool:
         """Há na lista um aporte desta subconta lançado pela METADE?
 
@@ -537,58 +598,6 @@ class AportesFrame(ttk.Frame):
             if feitos and numero_subconta(op.pagador, {numero: {}}) == numero:
                 return True
         return False
-
-    def _perguntar_rateio(self, participantes, centros, atuais):
-        from .rateio_subconta_dialogo import perguntar
-        numeros = rateio_subconta.subcontas_possiveis(self.entidades, atuais)
-        r = perguntar(self.winfo_toplevel(), numeros, atuais,
-                      participantes, centros)
-        if r is None:
-            return
-        numero, investidores, obras, percentuais = r
-        if self._subconta_em_andamento(numero):
-            messagebox.showwarning(
-                "Rateio de subconta",
-                f"A lista \"A lançar\" tem um aporte da subconta {numero} "
-                "que já entrou em parte no Mais Controle.\n\nTermine esse "
-                "lançamento (ou tire-o da lista) antes de mudar o rateio — "
-                "senão o que falta seria redividido e lançaria valor a mais.")
-            return
-
-        def gravar():
-            from nuvem import sessao
-            rateio_subconta.gravar(sessao.token(), numero, investidores, obras,
-                                   percentuais)
-
-        def gravou(_r):
-            self.subcontas = cadastro.carregar_subcontas()
-            pagou = self.cb_pagador.get()
-            recebeu = self.cb_recebedor.get()
-            self._recarregar_listas()
-            self.cb_pagador.set(pagou)
-            self.cb_recebedor.set(recebeu)
-            self._atualizar_total()
-            self._log(f"Rateio da subconta {numero} gravado: "
-                      f"{len(investidores)} investidor(es) × {len(obras)} "
-                      f"centro(s) de custo"
-                      + (" com % (" + ", ".join(f"{n} {p}%" for n, p in
-                                               percentuais.items()) + ")"
-                         if percentuais else ", partes iguais")
-                      + ". Em Pagou: "
-                      f"\"{rateio_subconta.pagador(numero)}\", modo "
-                      "'Só recebimento'.")
-            widgets.registrar_atividade(
-                "apt", "Rateio de subconta", "ok", numero,
-                {"investidores": len(investidores), "centros": len(obras)})
-
-        def ao_fim():
-            # Deu certo ou não, o cache já tem o que o banco tem.
-            self.subcontas = cadastro.carregar_subcontas()
-            self.b_rateio.configure(state="normal")
-
-        self.b_rateio.configure(state="disabled")
-        self._no_fundo(gravar, gravou, "Não deu para gravar o rateio.",
-                       ao_fim=ao_fim, titulo="Rateio de subconta")
 
     def _conferir(self):
         if self.anx.avisar_se_ocupado("os Aportes"):

@@ -22,21 +22,36 @@ def test_numero_da_conta(texto, numero):
     assert rs.numero_da_conta(texto) == numero
 
 
-def test_subcontas_possiveis_junta_as_do_rateio_e_as_contas_novas():
-    entidades = {
-        "SUB 11111": {"conta": "Holding - SUBCONTA 11111-1 - BANCO"},
-        "MAE": {"conta": "Holding - MÃE - 22.222-2 - BANCO"},   # não é subconta
-        "PF": {"conta": None},
-    }
-    subcontas = {"_obra_padrao": "X", "44444-4": {}}
-    assert rs.subcontas_possiveis(entidades, subcontas) == ["11111-1", "44444-4"]
+def test_nome_em_recebeu_no_padrao_do_dono():
+    assert rs.nome_em_recebeu("11111-1", "sicoob") == \
+        "SUBCONTA 11111-1 - SICOOB - INVESTIDOR"
+    assert rs.pagador("11111-1") == "INVESTIDOR SUBCONTA 11111-1"
+
+
+@pytest.mark.parametrize("texto, peso", [
+    ("60", "60"), ("60%", "60"), ("33,5", "33.5"), (" 2 ", "2"), ("", None)])
+def test_ler_parte(texto, peso):
+    assert rs.ler_parte(texto) == peso
+
+
+def test_ler_parte_recusa_texto():
+    with pytest.raises(ValueError):
+        rs.ler_parte("muito")
+
+
+def test_proporcao_x_x():
+    assert rs.partes_de_proporcao("2:1", 2) == ["2", "1"]
+    assert rs.partes_de_proporcao("60 : 40", 2) == ["60", "40"]
+    assert rs.partes_de_proporcao("2", 2) is None
+    with pytest.raises(ValueError):
+        rs.partes_de_proporcao("1:1:1", 2)
 
 
 def test_validar():
     ok = dict(participantes=["INVESTIDOR A LTDA"], centros=["LOTE 1", "LOTE 2"])
     assert rs.validar("11111-1", ["investidor a ltda"], ["LOTE 1"], **ok) == ""
     assert "número" in rs.validar("1111", ["A"], ["B"])
-    assert "investidor" in rs.validar("11111-1", [" "], ["B"])
+    assert "aportador" in rs.validar("11111-1", [" "], ["B"])
     assert "centro de custo" in rs.validar("11111-1", ["A"], [])
     assert "não existe" in rs.validar("11111-1", ["OUTRO"], ["LOTE 1"], **ok)
     assert "não existe" in rs.validar("11111-1", ["INVESTIDOR A LTDA"],
@@ -161,30 +176,38 @@ def test_aporte_lancado_pela_metade_trava_a_troca_do_rateio():
     assert not AportesFrame._subconta_em_andamento(meio, "22222-2")
 
 
-def test_percentual_grava_troca_e_vai_para_o_cache(banco):
-    rs.gravar("tok", "11111-1", ["INV A"], ["LOTE 1", "LOTE 2"],
-              {"LOTE 1": "70", "LOTE 2": "30"})
-    pct = {o["nome"]: o["percentual"] for o in banco.tabelas["subconta_obra"]}
-    assert pct == {"LOTE 1": "70", "LOTE 2": "30"}
+def test_peso_grava_troca_e_vai_para_o_cache(banco):
+    rs.gravar("tok", "11111-1", ["INV A", "INV B"], ["LOTE 1"],
+              {"INV A": "2", "INV B": "1"})
+    pesos = {i["nome"]: i["peso"] for i in banco.tabelas["subconta_investidor"]}
+    assert pesos == {"INV A": "2", "INV B": "1"}
     banco.ordem.clear()
-    rs.gravar("tok", "11111-1", ["INV A"], ["LOTE 1", "LOTE 2"],
-              {"LOTE 1": "50", "LOTE 2": "50"})
-    assert banco.ordem == ["alterar subconta_obra", "alterar subconta_obra"]
+    rs.gravar("tok", "11111-1", ["INV A", "INV B"], ["LOTE 1"],
+              {"INV A": "60", "INV B": "40"})
+    assert banco.ordem == ["alterar subconta_investidor",
+                           "alterar subconta_investidor"]
     cache = cadastro.carregar_subcontas()["11111-1"]
-    assert cache["percentuais"] == {"LOTE 1": "50", "LOTE 2": "50"}
-    # tirar os % volta a partes iguais
-    rs.gravar("tok", "11111-1", ["INV A"], ["LOTE 1", "LOTE 2"], {})
-    assert "percentuais" not in cadastro.carregar_subcontas()["11111-1"]
+    assert cache["pesos"] == {"INV A": "60", "INV B": "40"}
+    # tirar as partes volta a partes iguais
+    rs.gravar("tok", "11111-1", ["INV A", "INV B"], ["LOTE 1"], {})
+    assert "pesos" not in cadastro.carregar_subcontas()["11111-1"]
 
 
-def test_validar_percentual_na_janela():
-    assert "somam" in rs.validar("11111-1", ["A"], ["L1", "L2"],
-                                 percentuais={"L1": "70", "L2": "20"})
-    assert rs.validar("11111-1", ["A"], ["L1", "L2"],
-                      percentuais={"L1": "70", "L2": "30"}) == ""
+def test_validar_peso_na_janela():
+    assert "falta a parte" in rs.validar("11111-1", ["A", "B"], ["L1"],
+                                         pesos={"A": "2"})
+    assert rs.validar("11111-1", ["A", "B"], ["L1"],
+                      pesos={"A": "2", "B": "1"}) == ""
 
 
-def test_mudou_enxerga_troca_de_percentual():
-    a = {"1": {"obras": ["L"], "investidores": ["I"], "percentuais": {"L": "100"}}}
+def test_mudou_enxerga_troca_de_peso():
+    a = {"1": {"obras": ["L"], "investidores": ["I"], "pesos": {"I": "2"}}}
     b = {"1": {"obras": ["L"], "investidores": ["I"]}}
     assert rs.mudou(a, b, "1")
+    assert not rs.mudou(a, {"1": dict(a["1"], pesos={"i": "2.0"})}, "1")
+
+
+@pytest.mark.parametrize("texto", ["nan", "Infinity", "-inf"])
+def test_ler_parte_recusa_nan_e_infinito(texto):
+    with pytest.raises(ValueError):
+        rs.ler_parte(texto)
