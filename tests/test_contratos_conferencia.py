@@ -7,6 +7,7 @@ contrato real tem nome, CPF e endereço de gente.
 from decimal import Decimal
 from pathlib import Path
 
+import contratos.destino as destino
 from contratos.conferencia import (CONFERE, DIVERGE, ILEGIVEL, PONTOS,
                                    conferir, divergencias, pode_gravar,
                                    ressalvas)
@@ -290,3 +291,27 @@ def test_o_proprio_destino_nao_conta_como_outro(tmp_path):
 
 def test_pasta_inexistente_nao_quebra(tmp_path):
     assert mesmo_contrato_na_pasta(tmp_path / "nao existe", "X", 1) is None
+
+
+def test_nome_do_distratado_leva_o_sufixo_antes_da_extensao():
+    assert destino.nome_arquivo("TB 21 QD 46 LT 18", 1,
+                                "PRIMEIRO COMPRADOR EXEMPLO", ".pdf",
+                                distratado=True) == (
+        "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 - "
+        "PRIMEIRO COMPRADOR EXEMPLO (Distratado).pdf")
+
+
+def test_sem_distrato_o_nome_nao_muda():
+    assert destino.nome_arquivo("TB 21 QD 46 LT 18", 1, "X", ".pdf") == \
+        "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 - X.pdf"
+
+
+def test_trava_aceita_os_irmaos_da_mesma_rodada(tmp_path):
+    a = tmp_path / destino.nome_arquivo("TB 21 QD 46 LT 18", 1, "A", ".pdf",
+                                        distratado=True)
+    b = tmp_path / destino.nome_arquivo("TB 21 QD 46 LT 18", 1, "B", ".pdf")
+    a.write_bytes(b"x")
+    assert destino.mesmo_contrato_na_pasta(tmp_path, "TB 21 QD 46 LT 18", 1,
+                                           exceto=b) == a
+    assert destino.mesmo_contrato_na_pasta(tmp_path, "TB 21 QD 46 LT 18", 1,
+                                           exceto={a, b}) is None
