@@ -36,9 +36,11 @@ def _aba(raiz, monkeypatch, lista):
     from relatorios import relatorio_frame as rf
     monkeypatch.setattr(rf.contas_central, "ler_lista",
                         lambda pasta=None: lista)
+    # O mapa vem do `carregar` (e não de um `_garantir_mapa` fingido): o
+    # gancho relê o mapa a cada chamada.
+    monkeypatch.setattr(rf.contas_mc, "carregar", lambda *a, **k: _MapaDuble())
     aba = rf.RelatorioFrame(raiz, _AnxDuble())
-    aba.mapa = _MapaDuble()
-    monkeypatch.setattr(aba, "_garantir_mapa", lambda: True)
+    monkeypatch.setattr(aba, "_conferir_mapas", lambda: None)
     return aba
 
 
@@ -75,6 +77,59 @@ def test_recarregar_preserva_as_marcacoes(raiz, monkeypatch):
         aba.recarregar_contas()
         assert aba.vars_contas["u-2"].get() is True
         assert aba.vars_contas["u-1"].get() is False
+    finally:
+        aba.destroy()
+
+
+def test_gancho_rele_o_mapa_e_remonta_mesmo_com_a_lista_igual(raiz, monkeypatch):
+    """Revisão final: conta incluída agora no contas_mc.json seguia "sem pasta
+    no mapa" até reabrir o app — o gancho não relia o mapa e, com a lista do
+    ERP igual, nem remontava."""
+    from relatorios import relatorio_frame as rf, contas_mc
+    monkeypatch.setattr(rf.contas_central, "ler_lista",
+                        lambda pasta=None: [{"id": "u-1", "nome": "A"}])
+    mapas = [contas_mc.Mapa("C:/x", []),
+             contas_mc.Mapa("C:/x", [contas_mc.Destino("A", "EMP", "BANCO",
+                                                       "SICOOB")])]
+    monkeypatch.setattr(rf.contas_mc, "carregar", lambda *a, **k: mapas.pop(0))
+    aba = rf.RelatorioFrame(raiz, _AnxDuble())
+    monkeypatch.setattr(aba, "_conferir_mapas", lambda: None)
+    try:
+        aba.recarregar_contas()
+        assert aba.vars_contas["u-1"].get() is False and "u-1" in aba.sem_destino
+        aba.recarregar_contas()
+        assert "u-1" not in aba.sem_destino
+        assert aba.vars_contas["u-1"].get() is True
+    finally:
+        aba.destroy()
+
+
+def test_ao_abrir_rele_o_mapa_so_quando_o_arquivo_muda(raiz, monkeypatch,
+                                                       tmp_path):
+    import os
+    from relatorios import relatorio_frame as rf, contas_mc
+    arquivo = tmp_path / "contas_mc.json"
+    arquivo.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(rf.contas_mc, "ARQUIVO_MAPA", arquivo)
+    monkeypatch.setattr(rf.contas_central, "ler_lista",
+                        lambda pasta=None: [{"id": "u-1", "nome": "A"}])
+    mapas = [contas_mc.Mapa("C:/x", []),
+             contas_mc.Mapa("C:/x", [contas_mc.Destino("A", "EMP", "BANCO",
+                                                       "SICOOB")])]
+    monkeypatch.setattr(rf.contas_mc, "carregar", lambda *a, **k: mapas.pop(0))
+    aba = rf.RelatorioFrame(raiz, _AnxDuble())
+    monkeypatch.setattr(aba, "_conferir_mapas", lambda: None)
+    try:
+        aba.ao_abrir()
+        antes = list(aba.contas_box.winfo_children())
+        aba.ao_abrir()                       # nada mudou: nem relê nem remonta
+        assert len(mapas) == 1
+        assert list(aba.contas_box.winfo_children()) == antes
+        st = arquivo.stat()
+        os.utime(arquivo, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+        aba.ao_abrir()
+        assert mapas == []
+        assert aba.vars_contas["u-1"].get() is True
     finally:
         aba.destroy()
 

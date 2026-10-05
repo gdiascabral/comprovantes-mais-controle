@@ -77,7 +77,10 @@ class RelatorioFrame(ttk.Frame):
         self.ultima_pasta: Path | None = None
         self.mapa: contas_mc.Mapa | None = None
         self._erro_mapa = ""             # último motivo (não repete no registro)
-        self._assinatura = None          # [(id, nome)] da lista montada
+        self._assinatura = None          # ([(id, nome)], data do mapa) montados
+        #: A data do contas_mc.json quando o mapa foi lido: arquivo mudado
+        #: faz o `ao_abrir` reler o mapa e remontar a lista.
+        self._data_mapa_lido = None
         self.sem_destino: set[str] = set()
         self.sem_banco: set[str] = set()
 
@@ -373,12 +376,34 @@ class RelatorioFrame(ttk.Frame):
         """O app chama a cada vez que a aba aparece: só arquivo local, barato.
 
         A lista não sai mais do ERP por aqui (isso abria o Chrome só para
-        listar): vem da busca central, que o menu "Atualizar contas" renova."""
-        self.recarregar_contas()
+        listar): vem da busca central, que o menu "Atualizar contas" renova.
+        Remonta só se a lista ou o contas_mc.json mudaram: a aba é reaberta a
+        todo momento, e remontar à toa pisca e volta a lista ao topo."""
+        self._atualizar_lista(forcar=False)
 
     def recarregar_contas(self):
+        """O gancho da busca central ("Atualizar contas" e abertura).
+
+        Relê o contas_mc.json e remonta SEMPRE (revisão final, 05/10/2026):
+        conta incluída agora no mapa seguia "sem pasta no mapa" até reabrir o
+        app, porque o mapa velho ficava guardado e, com a lista do ERP igual,
+        a lista nem era remontada."""
+        self._atualizar_lista(forcar=True)
+
+    @staticmethod
+    def _data_do_mapa():
+        """Quando o contas_mc.json mudou pela última vez (None se não há)."""
+        try:
+            return contas_mc.ARQUIVO_MAPA.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _atualizar_lista(self, forcar: bool):
         if self.worker and not self.worker.done():
             return                    # lote rodando: a lista não troca no meio
+        data_do_mapa = self._data_do_mapa()
+        if forcar or data_do_mapa != self._data_mapa_lido:
+            self.mapa = None          # o `_garantir_mapa` relê do arquivo
         if not self._garantir_mapa():
             self.q.put(("status", "Falta o mapa contas_mc.json."))
             self._mostrar_lista_vazia(
@@ -386,21 +411,32 @@ class RelatorioFrame(ttk.Frame):
             self._assinatura = None
             self.contas = []
             return
+        self._data_mapa_lido = data_do_mapa
         novas = contas_central.ler_lista()
-        assinatura = [(c.get("id"), c["nome"]) for c in novas]
-        if assinatura == self._assinatura:
+        # A data do mapa entra na assinatura: pasta nova no contas_mc.json
+        # muda o destino (e a marca) mesmo com a lista do ERP igual.
+        assinatura = ([(c.get("id"), c["nome"]) for c in novas], data_do_mapa)
+        if not forcar and assinatura == self._assinatura:
             return                    # nada mudou: não pisca nem volta ao topo
         self._assinatura = assinatura
         marcadas = {c["nome"] for c in self.contas
                     if self.vars_contas.get(c["id"]) is not None
                     and self.vars_contas[c["id"]].get()}
         antigas = {c["nome"] for c in self.contas}
+        travadas_antes = {c["nome"] for c in self.contas
+                          if c["id"] in self.sem_destino | self.sem_banco}
         self.contas = novas
         self._montar_contas(self.contas)
+        travadas = self.sem_destino | self.sem_banco
         # Quem já estava marcado continua: a aba é reaberta a todo momento, e
         # perder a seleção a cada visita faria refazer o trabalho de marcar.
+        # A exceção é a conta que estava desmarcada por falta de pasta ou de
+        # banco no mapa e que o mapa novo resolveu: aquilo não foi escolha de
+        # ninguém, e ela nasce marcada como qualquer outra.
         for c in self.contas:
-            if c["nome"] in antigas:
+            liberada = (c["nome"] in travadas_antes
+                        and c["id"] not in travadas)
+            if c["nome"] in antigas and not liberada:
                 self.vars_contas[c["id"]].set(c["nome"] in marcadas)
         self._contar_contas()
 
