@@ -30,9 +30,18 @@ linhas que cabem em `FRACAO_DA_TELA` da altura da tela.
 empresa daquela conta trocava em silêncio — foi assim que uma conta de pessoa
 física apareceu escolhida para uma SPE. O menu do editor desvia a roda para a
 lista e devolve "break", que impede a ligação da classe de rodar.
+
+**Desde 05/10/2026 a mesma janela também inclui contas no painel do Saldo de
+pagamentos**, que tinha uma janela só dela: o ERP é a fonte das duas listas, e
+duas janelas na abertura perguntavam a mesma coisa em dobro. Cada conta
+(`contas_central.Pendencia`) diz onde falta — cadastro, painel ou os dois — e
+a janela só deixa editar o que falta: empresa e pasta valem para o cadastro, a
+"linha no painel" vale para o painel. Devolve `Respostas(cadastro, painel)`,
+duas listas, porque quem grava cada uma é um código diferente.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import tkinter as tk
 from tkinter import ttk
 
@@ -72,28 +81,63 @@ def _passos_da_roda(delta: int) -> int:
     return passos
 
 
-def escolhas_marcadas(linhas, por_nome) -> list[dict]:
-    """O que vai para o cadastro: só as contas MARCADAS.
+@dataclass
+class Respostas:
+    """O que a janela devolve: o que vai para o cadastro e o que vai para o
+    painel do Saldo. `painel` é `[(conta, rotulo)]`."""
+    cadastro: list = field(default_factory=list)
+    painel: list = field(default_factory=list)
 
-    `linhas` é `[(conta, marcada, nome da empresa, pasta)]`, o estado da
-    janela; `por_nome` é `{nome da empresa: id}`. Marcada sem empresa sai com
-    `empresa_id` None — quem grava recusa com o motivo dito (ver o docstring
-    do módulo), e não este dicionário."""
+    def __bool__(self) -> bool:
+        return bool(self.cadastro or self.painel)
+
+
+def _falta_cadastro(conta) -> bool:
+    # Leitura tolerante: objetos antigos (sem os campos novos) são só cadastro.
+    return getattr(conta, "falta_cadastro", True)
+
+
+def _falta_painel(conta) -> bool:
+    return getattr(conta, "falta_painel", False)
+
+
+def _rotulo(conta) -> str:
+    return getattr(conta, "rotulo", conta.nome)
+
+
+def escolhas_marcadas(linhas, por_nome) -> list[dict]:
+    """O que vai para o cadastro: só as contas MARCADAS que faltam nele.
+
+    `linhas` é `[(conta, marcada, nome da empresa, pasta, rotulo)]`, o estado
+    da janela; `por_nome` é `{nome da empresa: id}`. Marcada sem empresa sai
+    com `empresa_id` None — quem grava recusa com o motivo dito (ver o
+    docstring do módulo), e não este dicionário. Conta que já está no cadastro
+    e só falta no painel não volta para cá: gravaria em duplicidade."""
     return [{"nome_erp": conta.nome,
              "empresa_id": por_nome.get(empresa),
              "pasta": pasta,
              "banco": conta.banco,
              "agencia": conta.agencia,
              "numero": conta.numero}
-            for conta, marcada, empresa, pasta in linhas if marcada]
+            for conta, marcada, empresa, pasta, _rot in linhas
+            if marcada and _falta_cadastro(conta)]
 
 
-def perguntar(pai, novas, empresas) -> list[dict]:
-    """Mostra as contas novas e devolve as escolhas.
+def painel_marcadas(linhas) -> list[tuple]:
+    """O que vai para o painel: `(conta, rotulo)` das MARCADAS que faltam
+    nele. O rótulo é o nome da linha como o dono quer vê-la na planilha."""
+    return [(conta, rotulo.strip())
+            for conta, marcada, _empresa, _pasta, rotulo in linhas
+            if marcada and _falta_painel(conta)]
 
-    `novas` são `contas_novas.ContaNova`; `empresas` é `[(id, nome)]`.
-    Devolve `[{nome_erp, empresa_id, pasta, banco, agencia, numero}]` — só as
-    marcadas. Fechar ou cancelar devolve `[]`.
+
+def perguntar(pai, novas, empresas) -> Respostas:
+    """Mostra as contas que faltam e devolve as respostas.
+
+    `novas` são `contas_central.Pendencia`; `empresas` é `[(id, nome)]`.
+    `Respostas.cadastro` é `[{nome_erp, empresa_id, pasta, banco, agencia,
+    numero}]` e `Respostas.painel` é `[(conta, rotulo)]` — só as marcadas.
+    Fechar ou cancelar devolve as duas vazias.
     """
     top = tk.Toplevel(pai)
     top.withdraw()                  # monta escondida; aparece já no tamanho
@@ -104,7 +148,8 @@ def perguntar(pai, novas, empresas) -> list[dict]:
     nomes_empresa = [nome for _id, nome in empresas]
     por_nome = {nome: ident for ident, nome in empresas}
     #: O estado da janela, uma entrada por conta: [conta, marcada, empresa,
-    #: pasta]. A tabela só o MOSTRA; é daqui que `escolhas_marcadas` lê.
+    #: pasta, rotulo]. A tabela só o MOSTRA; é daqui que `escolhas_marcadas`
+    #: e `painel_marcadas` leem.
     linhas = []
     for conta in novas:
         sugerida = ""
@@ -113,18 +158,22 @@ def perguntar(pai, novas, empresas) -> list[dict]:
         # A pasta nasce com a sugestão, para ser corrigida e não digitada; e
         # quem já vem com empresa sugerida chega marcada.
         linhas.append([conta, bool(sugerida), sugerida,
-                       getattr(conta, "pasta_sugerida", "")])
+                       getattr(conta, "pasta_sugerida", ""), _rotulo(conta)])
 
     cabeca = ttk.Frame(top, padding=(14, 14, 14, 6))
     cabeca.pack(side="top", fill="x")
     ttk.Label(cabeca, style="Secao.TLabel",
-              text=f"{len(novas)} conta(s) nova(s) no Mais Controle").pack(anchor="w")
+              text=f"{len(novas)} conta(s) do Mais Controle faltando no app"
+              ).pack(anchor="w")
     ttk.Label(cabeca, style="Apoio.TLabel", wraplength=640, justify="left",
-              text="Elas existem no ERP e não estão no cadastro do app. Marque "
+              text="Elas existem no ERP e faltam no cadastro do app, no painel "
+                   "do Saldo de pagamentos ou nos dois. Marque "
                    f"as que devem entrar nas automações (clique na marca "
                    f"{DESMARCADA}, ou tecle Espaço) e diga a empresa e a pasta "
-                   "de cada uma, embaixo da lista. As que já vêm com a empresa "
-                   "sugerida chegam marcadas — confira antes de cadastrar. O "
+                   "de cada uma, embaixo da lista. Quem falta no painel do Saldo "
+                   "de pagamentos entra com o nome da linha que está embaixo da "
+                   "lista. As que já vêm com a empresa "
+                   "sugerida chegam marcadas — confira antes de incluir. O "
                    "que ficar desmarcado não é gravado, e volta a aparecer na "
                    "próxima abertura."
               ).pack(anchor="w", pady=(0, 6))
@@ -143,15 +192,18 @@ def perguntar(pai, novas, empresas) -> list[dict]:
 
     corpo = ttk.Frame(top)
     corpo.pack(side="top", fill="both", expand=True, padx=14)
-    tabela = ttk.Treeview(corpo, columns=("marca", "conta", "erp", "empresa",
-                                          "pasta"),
+    tabela = ttk.Treeview(corpo, columns=("marca", "conta", "falta", "erp",
+                                          "empresa", "pasta", "linha"),
                           show="headings", selectmode="browse",
                           height=max(1, min(len(linhas), 12)))
     for col, titulo, largura, ancora in (("marca", "", 34, "center"),
                                          ("conta", "CONTA NO ERP", 300, "w"),
+                                         ("falta", "FALTA EM", 120, "w"),
                                          ("erp", "VINDOS DO ERP", 210, "w"),
                                          ("empresa", "EMPRESA", 210, "w"),
-                                         ("pasta", "PASTA", 230, "w")):
+                                         ("pasta", "PASTA", 230, "w"),
+                                         ("linha", "LINHA NO PAINEL", 190,
+                                          "w")):
         tabela.heading(col, text=titulo)
         tabela.column(col, width=largura, anchor=ancora, stretch=col == "conta")
     # O cabeçalho da marca é o "todas", como no Baixar Comprovantes: coluna
@@ -164,11 +216,20 @@ def perguntar(pai, novas, empresas) -> list[dict]:
     tabela.configure(yscrollcommand=barra.set)
     barra.pack(side="right", fill="y")
     tabela.pack(side="left", fill="both", expand=True)
-    for k, (conta, marcada, empresa, pasta) in enumerate(linhas):
+    def celulas(ln):
+        """O que a tabela mostra de uma linha do estado."""
+        conta, marcada, empresa, pasta, rotulo = ln
+        cadastrada = not _falta_cadastro(conta)
+        return (MARCADA if marcada else DESMARCADA, conta.nome,
+                getattr(conta, "falta_em", "cadastro"),
+                getattr(conta, "resumo", "") or "—",
+                "já cadastrada" if cadastrada else (empresa or "—"),
+                "já cadastrada" if cadastrada else pasta,
+                rotulo if _falta_painel(conta) else "—")
+
+    for k, ln in enumerate(linhas):
         tabela.insert("", "end", iid=str(k), tags=widgets.linha_zebrada(k),
-                      values=(MARCADA if marcada else DESMARCADA, conta.nome,
-                              getattr(conta, "resumo", "") or "—",
-                              empresa or "—", pasta))
+                      values=celulas(ln))
 
     # ---- o editor: empresa e pasta da conta SELECIONADA
     selecionada = ttk.Label(editor, style="Forte.TLabel")
@@ -182,8 +243,12 @@ def perguntar(pai, novas, empresas) -> list[dict]:
     empresa.pack(side="left", padx=(4, 12))
     ttk.Label(campos, text="pasta:").pack(side="left")
     v_pasta = tk.StringVar(top)
-    ttk.Entry(campos, textvariable=v_pasta, width=34).pack(side="left",
-                                                          padx=(4, 0))
+    e_pasta = ttk.Entry(campos, textvariable=v_pasta, width=34)
+    e_pasta.pack(side="left", padx=(4, 12))
+    ttk.Label(campos, text="linha no painel:").pack(side="left")
+    v_rotulo = tk.StringVar(top)
+    e_rotulo = ttk.Entry(campos, textvariable=v_rotulo, width=34)
+    e_rotulo.pack(side="left", padx=(4, 0))
 
     def rolar(evento):
         tabela.yview_scroll(_passos_da_roda(evento.delta), "units")
@@ -203,10 +268,18 @@ def perguntar(pai, novas, empresas) -> list[dict]:
             return
         k = int(foco)
         atual["k"] = None
-        conta, _marcada, emp, pas = linhas[k]
+        conta, _marcada, emp, pas, rot = linhas[k]
         selecionada.configure(text=conta.nome)
         v_empresa.set(emp)
         v_pasta.set(pas)
+        v_rotulo.set(rot)
+        # Só se edita o que falta: o que já existe no cadastro ou no painel
+        # não é gravado de novo, e deixar digitar enganaria.
+        no_cadastro = _falta_cadastro(conta)
+        empresa.configure(state="readonly" if no_cadastro else "disabled")
+        e_pasta.configure(state="normal" if no_cadastro else "disabled")
+        e_rotulo.configure(state="normal" if _falta_painel(conta)
+                           else "disabled")
         atual["k"] = k
 
     def escreveu(*_a):
@@ -215,11 +288,15 @@ def perguntar(pai, novas, empresas) -> list[dict]:
             return
         linhas[k][2] = v_empresa.get()
         linhas[k][3] = v_pasta.get()
-        tabela.set(str(k), "empresa", linhas[k][2] or "—")
-        tabela.set(str(k), "pasta", linhas[k][3])
+        linhas[k][4] = v_rotulo.get()
+        valores = celulas(linhas[k])
+        for coluna, valor in (("empresa", valores[4]), ("pasta", valores[5]),
+                              ("linha", valores[6])):
+            tabela.set(str(k), coluna, valor)
 
     v_empresa.trace_add("write", escreveu)
     v_pasta.trace_add("write", escreveu)
+    v_rotulo.trace_add("write", escreveu)
     tabela.bind("<<TreeviewSelect>>", mostrar)
 
     def marcar(ks, valor):
@@ -247,14 +324,15 @@ def perguntar(pai, novas, empresas) -> list[dict]:
     # marca, com a janela retirada e sem foco para receber tecla.
     tabela.bind("<<AlternarMarca>>", espaco)
 
-    escolhas: list[dict] = []
+    respostas = Respostas()
 
     def confirmar():
-        escolhas.extend(escolhas_marcadas(linhas, por_nome))
+        respostas.cadastro.extend(escolhas_marcadas(linhas, por_nome))
+        respostas.painel.extend(painel_marcadas(linhas))
         top.destroy()
 
     ttk.Button(rodape, text="Agora não", command=top.destroy).pack(side="right")
-    botao = ttk.Button(rodape, text="Cadastrar", command=confirmar)
+    botao = ttk.Button(rodape, text="Incluir", command=confirmar)
     botao.pack(side="right", padx=(0, 8))
     try:
         botao.configure(style="Accent.TButton")
@@ -295,4 +373,4 @@ def perguntar(pai, novas, empresas) -> list[dict]:
     except tk.TclError:
         pass
     pai.wait_window(top)
-    return escolhas
+    return respostas

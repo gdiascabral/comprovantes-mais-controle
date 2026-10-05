@@ -32,9 +32,9 @@ def _conta(i, sugerida=""):
 
 def test_so_as_marcadas_vao_e_a_empresa_vira_id():
     a, b, c = _conta(1), _conta(2), _conta(3)
-    linhas = [(a, True, "EMPRESA MODELO", "SICOOB"),
-              (b, False, "EMPRESA MODELO", "X"),
-              (c, True, "", "Y")]
+    linhas = [(a, True, "EMPRESA MODELO", "SICOOB", "ROTULO"),
+              (b, False, "EMPRESA MODELO", "X", "ROTULO"),
+              (c, True, "", "Y", "ROTULO")]
     escolhas = dialogo.escolhas_marcadas(linhas, {"EMPRESA MODELO": 7})
     assert [e["nome_erp"] for e in escolhas] == [a.nome, c.nome]
     assert escolhas[0] == {"nome_erp": a.nome, "empresa_id": 7,
@@ -65,7 +65,7 @@ def _um(top, classe):
 
 def _perguntar(raiz, monkeypatch, novas, roteiro=None):
     """Abre a janela RETIRADA, deixa o `roteiro(top, tabela)` agir e devolve
-    (as escolhas, quantos widgets a janela tinha)."""
+    (as respostas, quantos widgets a janela tinha)."""
     original = tk.Toplevel
 
     class Retirada(original):
@@ -96,6 +96,12 @@ def _perguntar(raiz, monkeypatch, novas, roteiro=None):
         pai.destroy()
 
 
+def _entradas(top):
+    """Os `TEntry` na ordem do editor: o primeiro é a pasta, o segundo a linha
+    do painel."""
+    return [w for w in _todos(top) if w.winfo_class() == "TEntry"]
+
+
 def _selecionar(raiz, tabela, iid):
     tabela.selection_set(iid)
     tabela.focus(iid)
@@ -116,9 +122,9 @@ def test_sugerida_chega_marcada_e_o_editor_preenche_a_conta_certa(raiz,
     def roteiro(top, tabela):
         visto["marcas"] = (tabela.set("0", "marca"), tabela.set("1", "marca"))
         _selecionar(raiz, tabela, "1")
-        visto["pasta_no_editor"] = _um(top, "TEntry").get()
+        visto["pasta_no_editor"] = _entradas(top)[0].get()
         _um(top, "TCombobox").set("OUTRA EMPRESA MODELO")
-        campo = _um(top, "TEntry")
+        campo = _entradas(top)[0]
         campo.delete(0, "end")
         campo.insert(0, "SUBCONTA NOVA")
         tabela.event_generate("<<AlternarMarca>>")
@@ -127,9 +133,10 @@ def test_sugerida_chega_marcada_e_o_editor_preenche_a_conta_certa(raiz,
         _selecionar(raiz, tabela, "0")
         visto["editor_da_primeira"] = _um(top, "TCombobox").get()
         next(w for w in _todos(top) if w.winfo_class() == "TButton"
-             and str(w.cget("text")) == "Cadastrar").invoke()
+             and str(w.cget("text")) == "Incluir").invoke()
 
-    escolhas, _w = _perguntar(raiz, monkeypatch, novas, roteiro)
+    respostas, _w = _perguntar(raiz, monkeypatch, novas, roteiro)
+    escolhas = respostas.cadastro
     assert visto["marcas"] == (dialogo.MARCADA, dialogo.DESMARCADA)
     assert visto["pasta_no_editor"] == "SUBCONTA 02"
     assert visto["celulas"] == ("OUTRA EMPRESA MODELO", "SUBCONTA NOVA")
@@ -144,6 +151,54 @@ def test_agora_nao_nao_grava_nada(raiz, monkeypatch):
         next(w for w in _todos(top) if w.winfo_class() == "TButton"
              and str(w.cget("text")) == "Agora não").invoke()
 
-    escolhas, _w = _perguntar(raiz, monkeypatch,
-                              [_conta(1, sugerida="EMPRESA MODELO")], roteiro)
-    assert escolhas == []
+    respostas, _w = _perguntar(raiz, monkeypatch,
+                               [_conta(1, sugerida="EMPRESA MODELO")], roteiro)
+    assert not respostas
+    assert respostas.cadastro == [] and respostas.painel == []
+
+
+# ------------------------------------------- cadastro + painel na mesma janela
+
+def _pend(i, *, cadastro=True, painel=False, sugerida=""):
+    c = _conta(i, sugerida)
+    c.falta_cadastro, c.falta_painel = cadastro, painel
+    c.rotulo = f"LINHA {i:02d}"
+    c.falta_em = ("painel" if not cadastro
+                  else ("cadastro e painel" if painel else "cadastro"))
+    return c
+
+
+def test_painel_marcadas_so_quem_falta_no_painel():
+    a, b = _pend(1, painel=True), _pend(2, painel=False)
+    linhas = [(a, True, "EMPRESA MODELO", "P", " LINHA 01 "),
+              (b, True, "EMPRESA MODELO", "P", "LINHA 02")]
+    assert dialogo.painel_marcadas(linhas) == [(a, "LINHA 01")]
+
+
+def test_quem_ja_tem_cadastro_nao_volta_para_o_cadastro():
+    a = _pend(1, cadastro=False, painel=True)
+    linhas = [(a, True, "", "", "LINHA 01")]
+    assert dialogo.escolhas_marcadas(linhas, {}) == []
+    assert dialogo.painel_marcadas(linhas) == [(a, "LINHA 01")]
+
+
+def test_so_painel_trava_empresa_e_pasta_e_grava_a_linha(raiz, monkeypatch):
+    novas = [_pend(1, cadastro=False, painel=True)]
+    visto = {}
+
+    def roteiro(top, tabela):
+        visto["falta"] = tabela.set("0", "falta")
+        visto["empresa"] = str(_um(top, "TCombobox").cget("state"))
+        entradas = _entradas(top)
+        visto["pasta"] = str(entradas[0].cget("state"))
+        entradas[1].delete(0, "end")
+        entradas[1].insert(0, "LINHA NOVA")
+        tabela.event_generate("<<AlternarMarca>>")
+        next(w for w in _todos(top) if w.winfo_class() == "TButton"
+             and str(w.cget("text")) == "Incluir").invoke()
+
+    respostas, _w = _perguntar(raiz, monkeypatch, novas, roteiro)
+    assert visto["falta"] == "painel"
+    assert visto["empresa"] == "disabled" and visto["pasta"] == "disabled"
+    assert respostas.cadastro == []
+    assert respostas.painel == [(novas[0], "LINHA NOVA")]
