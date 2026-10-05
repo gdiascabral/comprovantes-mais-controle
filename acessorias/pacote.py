@@ -26,6 +26,10 @@ import util
 #: `contratos/destino.py`; aqui ela é LIDA, lá é escrita.
 SUBPASTA_CONTRATOS = "CONTRATOS"
 
+#: Sufixo para contrato distratado. Repetido aqui porque acessorias não importa
+#: contratos; vide `contratos/destino.py`.
+SUFIXO_DISTRATADO = " (Distratado)"
+
 #: `CONTRATO DE COMPRA E VENDA RPB 99 QD 1A LT 2 CS 01 - FULANO DE TAL` ->
 #: partes. O nome é montado por `contratos/destino.nome_arquivo`. O prefixo
 #: sem "DE COMPRA E VENDA" é o contrato de FINANCIAMENTO (o da Caixa), que a
@@ -111,17 +115,26 @@ def linha_do_contrato(nome_do_arquivo: str) -> str:
     -> 'RPB 99 QD 1A LT 2 Casa 01 - Fulano de Tal'.
 
     'CONTRATO RPB 99 … CS 01 - FULANO.pdf' (o da Caixa)
-    -> 'RPB 99 QD 1A LT 2 Casa 01 - Fulano de Tal (contrato de financiamento)'."""
+    -> 'RPB 99 QD 1A LT 2 Casa 01 - Fulano de Tal (contrato de financiamento)'.
+
+    Se o arquivo termina com (Distratado), mantém a marca no final da linha."""
     base = PurePosixPath(nome_do_arquivo).stem.strip()
+    distratado = False
+    if base.endswith(SUFIXO_DISTRATADO):
+        distratado = True
+        base = base[:-len(SUFIXO_DISTRATADO)].strip()
     m = RE_CONTRATO.match(base)
     if not m:
-        return base                      # formato desconhecido: vai como está
-    linha = f"{m.group('obra').strip()} Casa {m.group('unidade')}"
-    comprador = (m.group("comprador") or "").strip()
-    if comprador:
-        linha += f" - {caixa_de_titulo(comprador)}"
-    if not m.group("tipo"):
-        linha += ROTULO_FINANCIAMENTO
+        linha = base                      # formato desconhecido: vai como está
+    else:
+        linha = f"{m.group('obra').strip()} Casa {m.group('unidade')}"
+        comprador = (m.group("comprador") or "").strip()
+        if comprador:
+            linha += f" - {caixa_de_titulo(comprador)}"
+        if not m.group("tipo"):
+            linha += ROTULO_FINANCIAMENTO
+    if distratado:
+        linha += SUFIXO_DISTRATADO
     return linha
 
 
