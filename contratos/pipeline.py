@@ -16,21 +16,30 @@ acontecer na mesma execução**. Por isso `levantar()` só monta a lista e
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import util
 
 from . import conferencia as conf
+from . import distrato as dist
 from .destino import (caminho_longo, empresa_de, mesmo_contrato_na_pasta,
                       nome_arquivo, pasta_do_contrato)
-from .escolha import candidatos_distintos, contrato_de
+from .escolha import candidatos_distintos, contrato_de, distratos_da_casa
 from .leitura import PAGINAS_INICIAIS
 from .regras import Imovel, imoveis_do_mes
 
 #: Até quantos candidatos em disputa o pipeline baixa para comparar. Acima
 #: disso a obra está bagunçada demais para decidir sem gente.
 MAXIMO_PARA_DESEMPATAR = 4
+
+#: Casa com distrato: até quantos contratos a busca baixa e lê para separar
+#: por comprador. Acima disso a pessoa escolhe à mão.
+MAXIMO_COM_DISTRATO = 6
+
+#: Quantos distratos da casa a busca baixa e lê (o texto inteiro) para dizer
+#: qual contrato foi desfeito.
+MAXIMO_DE_DISTRATOS = 3
 
 
 @dataclass
@@ -60,6 +69,21 @@ class Achado:
     leitura: str = ""               # "camada de texto", "OCR"...
     arquivado: bool = False
     ja_existia: bool = False        # o mesmo arquivo já estava na pasta
+    # Casa com distrato. Todos os padrões deixam a casa sem distrato igual a
+    # antes: uma linha, nada baixado na busca, o nome de sempre.
+    #: A marca da coluna Distrato; é ela que põe o sufixo no nome do arquivo.
+    distrato: bool = False
+    #: O que a leitura do distrato sugeriu (a marca pode ser mudada à mão).
+    distrato_sugerido: bool = False
+    casa_com_distrato: bool = False
+    #: Linha extra da casa: o contrato de OUTRO comprador, não o do
+    #: recebimento do mês.
+    outro_contrato: bool = False
+    #: O comprador como o próprio contrato o qualifica (lido do PDF).
+    comprador_contrato: str = ""
+    #: O PDF baixado na busca. O arquivar grava estes bytes em vez de baixar
+    #: de novo — e eles valem só para o `anexo` em que foram lidos.
+    dados: bytes | None = None
 
     @property
     def contrato(self) -> str:
@@ -138,11 +162,20 @@ def _definir_comprador(achado: Achado, empresas) -> None:
 
 
 def levantar(api, ano: int, mes: int, empresas, log=print,
-             cancelar=None) -> list[Achado]:
+             cancelar=None, abrir_pdf=None) -> list[Achado]:
     """Passo 1: quem recebeu, qual o contrato e para qual empresa vai.
 
-    Não baixa nem grava nada. É o que a aba mostra ANTES de o usuário mandar
-    arquivar — e é onde um erro do mapa cliente→empresa aparece."""
+    Não grava nada, e em casa sem distrato também não baixa (fora o desempate
+    de dois nomes pelo conteúdo). É o que a aba mostra ANTES de o usuário
+    mandar arquivar — e é onde um erro do mapa cliente→empresa aparece.
+
+    Casa com distrato (e `abrir_pdf` dado, o mesmo do `arquivar`): a busca
+    baixa os contratos e os distratos da casa, separa os contratos por
+    comprador lido no PDF e devolve uma linha por comprador — a do recebimento
+    primeiro, as outras logo depois com `outro_contrato`. A marca Distrato
+    vem sugerida pelo texto do distrato. Baixar aqui é obrigatório: a URL do
+    S3 expira, e o arquivar grava os mesmos bytes que foram lidos. Sem
+    `abrir_pdf` a casa segue a regra antiga, sem ler PDF nenhum."""
     _garantir_acesso(api, log)
     inicio, fim = _primeiro_dia(ano, mes), _ultimo_dia(ano, mes)
     log(f"Lendo os recebimentos de venda de {inicio} a {fim}...")
@@ -186,29 +219,40 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
     log(f"Lendo os anexos de {len(ids)} obra(s)...")
     anexos_por_obra = api.anexos_de_obras(ids, log, cancelar=cancelar)
 
+    saida: list[Achado] = []
     for a in achados:
+        saida.append(a)
         if a.obra_id:
             _definir_comprador(a, empresas)
         if a.revisao or not a.obra_id:
             continue
         a.anexos_da_obra = anexos_por_obra.get(a.obra_id) or []
-        anexo, motivo = contrato_de(a.anexos_da_obra, a.imovel.unidade)
-        if anexo is None and "disputam" in motivo:
-            anexo, motivo = _desempatar_por_conteudo(api, a, motivo, log)
-        if anexo is None:
-            a.revisao = motivo
-        else:
-            a.anexo = anexo
+        linhas = None
+        distratos = distratos_da_casa(a.anexos_da_obra, a.imovel.unidade)
+        if distratos and abrir_pdf is not None:
+            linhas = _casa_com_distrato(api, a, distratos, abrir_pdf, log)
+        if linhas is None:
+            linhas = [a]
+            anexo, motivo = contrato_de(a.anexos_da_obra, a.imovel.unidade)
+            if anexo is None and "disputam" in motivo:
+                anexo, motivo = _desempatar_por_conteudo(api, a, motivo, log)
+            if anexo is None:
+                a.revisao = motivo
+            else:
+                a.anexo = anexo
+        saida.extend(linhas[1:])
 
         # A empresa é resolvida mesmo sem contrato: as duas pendências são
         # independentes, e a janela de resolver só deve perguntar o que
-        # realmente falta.
+        # realmente falta. As linhas da mesma casa vão para a mesma empresa.
         empresa = empresa_de(a.cliente_erp, empresas)
-        if empresa is None:
-            a.revisao = a.revisao or _sem_empresa(a.cliente_erp)
-        else:
-            _definir_empresa(a, empresa)
+        for linha in linhas:
+            if empresa is None:
+                linha.revisao = linha.revisao or _sem_empresa(linha.cliente_erp)
+            else:
+                _definir_empresa(linha, empresa)
 
+    achados = saida
     for a in achados:
         a.marcado = not a.revisao and bool(a.anexo)
     return achados
@@ -251,6 +295,91 @@ def _desempatar_por_conteudo(api, achado: Achado, motivo: str,
                   f"{achado.imovel.rotulo}: {tamanhos}")
 
 
+def _baixar(api, anexo: dict) -> bytes | None:
+    try:
+        return api.baixar_anexo(anexo.get("downloadUrl")) or None
+    except Exception:
+        return None
+
+
+def _ler(abrir_pdf, dados: bytes, ate) -> str:
+    """Texto do PDF; "" quando o leitor falha (vira "comprador não lido")."""
+    try:
+        return abrir_pdf(dados).texto(ate) or ""
+    except Exception:
+        return ""
+
+
+def _casa_com_distrato(api, achado: Achado, distratos: list[dict], abrir_pdf,
+                       log=print) -> list[Achado] | None:
+    """Uma linha por comprador de contrato da casa; None = regra de sempre.
+
+    Regra do dono (05/10/2026): casa revendida tem o contrato do primeiro
+    comprador, o distrato dele e o contrato do novo. Os dois contratos vão
+    para a pasta — o desfeito com "(Distratado)" no nome —, e quem diz qual
+    foi desfeito é o texto do distrato, não o ERP (que só conhece o comprador
+    atual).
+
+    Preenche o próprio `achado` com o grupo do comprador do recebimento (o
+    primeiro de `agrupar`) e devolve as linhas extras logo depois dele."""
+    i = achado.imovel
+    cands = candidatos_distintos(achado.anexos_da_obra, i.unidade)
+    if not cands:
+        return None                         # "nenhum anexo de COMPRA E VENDA"
+    achado.casa_com_distrato = True
+    if len(cands) > MAXIMO_COM_DISTRATO:
+        achado.revisao = (f"{len(cands)} contratos e distrato na casa — "
+                          "escolha à mão")
+        return [achado]
+
+    versoes = []
+    for anexo in cands:
+        dados = _baixar(api, anexo)
+        if not dados:
+            achado.revisao = ("não consegui baixar "
+                              f"{(anexo.get('filename') or '').strip()}")
+            return [achado]
+        versoes.append(dist.Versao(anexo, dados,
+                                   _ler(abrir_pdf, dados, PAGINAS_INICIAIS)))
+
+    # Distrato que não baixa ou não lê só deixa de sugerir: a marca é
+    # sugestão, e a pessoa ainda a confere na tabela.
+    textos_distrato = []
+    for anexo in distratos[:MAXIMO_DE_DISTRATOS]:
+        dados = _baixar(api, anexo)
+        texto = _ler(abrir_pdf, dados, None) if dados else ""
+        if texto:
+            textos_distrato.append(texto)
+
+    linhas: list[Achado] = []
+    for n, grupo in enumerate(dist.agrupar(versoes, i.comprador)):
+        linha = achado if n == 0 else replace(
+            achado, outro_contrato=True, endereco=dict(achado.endereco),
+            resultado_conferencia={})
+        versao, motivo = dist.escolher(grupo)
+        comprador = (versao or grupo[0]).comprador
+        linha.comprador_contrato = comprador
+        linha.distrato_sugerido = dist.foi_distratado(comprador,
+                                                      textos_distrato)
+        linha.distrato = linha.distrato_sugerido
+        if versao is None:
+            linha.anexo, linha.dados, linha.revisao = {}, None, motivo
+        else:
+            linha.anexo, linha.dados, linha.revisao = versao.anexo, versao.dados, ""
+            if not comprador:
+                log(f"  não consegui ler o comprador de "
+                    f"{(versao.anexo.get('filename') or '').strip()}; "
+                    "Distrato fica desmarcado")
+        linhas.append(linha)
+
+    quem = ", ".join(
+        (x.comprador_contrato or "comprador não lido")
+        + (" (distratado)" if x.distrato else "") for x in linhas)
+    log(f"  {i.obra} {i.rotulo}: {len(linhas)} contrato(s) e "
+        f"{len(distratos)} distrato(s) — {quem}")
+    return linhas
+
+
 # ------------------------------------------------- resolver à mão
 def _sem_empresa(cliente_erp: str) -> str:
     return (f"o cliente \"{cliente_erp or '(sem cliente)'}\" não está mapeado "
@@ -289,6 +418,10 @@ def aplicar_resolucao(achado: Achado, anexo: dict | None = None,
     `empresas` (o cadastro) é o que dá CNPJ e razão social à empresa escolhida
     — sem eles a vendedora ficaria em `?` justo na casa decidida à mão."""
     if anexo is not None:
+        # Os bytes baixados na busca são do anexo de antes: gravá-los com o
+        # anexo escolhido agora poria na pasta o PDF de outro contrato.
+        if anexo is not achado.anexo:
+            achado.dados = None
         achado.anexo = anexo
         achado.contrato_manual = True
     if empresa_nome:
@@ -306,8 +439,11 @@ def aplicar_resolucao(achado: Achado, anexo: dict | None = None,
 
 
 def chave_da_casa(achado: Achado) -> tuple:
-    """Identidade da casa entre uma busca e outra: obra + unidade."""
-    return achado.imovel.chave
+    """Identidade da linha entre uma busca e outra: obra + unidade e, na
+    linha extra de uma casa com distrato, o comprador do contrato — senão a
+    escolha feita numa linha voltaria na outra da mesma casa."""
+    return achado.imovel.chave + (
+        (achado.comprador_contrato,) if achado.outro_contrato else ())
 
 
 def reaplicar(achados: list[Achado], escolhas: dict, log=print) -> int:
@@ -338,11 +474,20 @@ def preparar_destino(achado: Achado, raiz: Path, ano: int, mes: int,
     """Preenche `achado.destino`. Devolve "" ou o motivo de não dar."""
     if not achado.empresa or not achado.anexo or not achado.imovel.unidade:
         return achado.revisao or "sem empresa, sem contrato ou sem casa"
+    # A linha extra é o contrato de OUTRA pessoa: sem o comprador lido, o
+    # nome cairia no do recebimento e a pasta ganharia um contrato alheio com
+    # o nome de quem pagou — e a conferência, sem comprador esperado, não
+    # seguraria.
+    if achado.outro_contrato and not achado.comprador_contrato:
+        return ("não consegui ler o comprador deste contrato no PDF — "
+                "arquive à mão")
     pasta = pasta_do_contrato(raiz, ano, mes, achado.empresa,
                               nome_do_mes, nome_pasta_empresa)
+    comprador = achado.comprador_contrato or achado.imovel.comprador
     alvo = pasta / nome_arquivo(achado.imovel.obra, achado.imovel.unidade,
-                                achado.imovel.comprador,
-                                achado.anexo.get("extension") or ".pdf")
+                                comprador,
+                                achado.anexo.get("extension") or ".pdf",
+                                distratado=achado.distrato)
     passou = caminho_longo(alvo)
     if passou:
         return (f"o caminho ficaria com {passou} caracteres, acima do limite "
@@ -355,14 +500,19 @@ def esperado_da_conferencia(achado: Achado) -> dict:
     """O que o contrato precisa dizer, montado do que o ERP e o cadastro
     informaram."""
     end = achado.endereco or {}
+    # O contrato de outro comprador (ou o desfeito) é OUTRA venda: o nome que
+    # ele tem de trazer é o lido nele, e o valor de venda do ERP é o da venda
+    # atual — `None` vira `?`, que não retém.
+    outra_venda = achado.outro_contrato or achado.distrato
     return {
         "rua": end.get("address") or "",
         "complemento": end.get("complement") or "",
         "unidade": achado.imovel.unidade,
-        "comprador": achado.imovel.comprador,
+        "comprador": (achado.comprador_contrato if outra_venda
+                      else achado.imovel.comprador),
         "cnpj": achado.cnpj,
         "vendedora": [n for n in (achado.razao_social, achado.cliente_erp) if n],
-        "valor_venda": achado.imovel.valor_venda,
+        "valor_venda": None if outra_venda else achado.imovel.valor_venda,
     }
 
 
@@ -398,7 +548,13 @@ def arquivar(api, achados: list[Achado], raiz: Path, ano: int, mes: int,
 
     Nunca grava por cima. Arquivo de mesmo nome e mesmo conteúdo é "já
     estava"; de conteúdo diferente, ou a mesma casa com outro nome, é revisão
-    — a pasta CONTRATOS tem arquivos postos à mão desde 2024."""
+    — a pasta CONTRATOS tem arquivos postos à mão desde 2024.
+
+    Casa com distrato: as linhas da mesma casa nesta rodada são irmãs, e o
+    arquivo de uma não conta como "a mesma casa com outro nome" para a
+    outra — é por isso que os destinos de todas são preparados antes do
+    laço. A linha que já trouxe o PDF da busca (`dados`) grava esses bytes,
+    os mesmos que foram lidos para separar os compradores."""
     # Repetido de propósito: entre buscar e arquivar o ERP pode ter derrubado a
     # sessão (ele aceita uma por usuário), e aí a API é outra, sem cabeçalho
     # nenhum. Custa nada quando já está capturado.
@@ -407,6 +563,17 @@ def arquivar(api, achados: list[Achado], raiz: Path, ano: int, mes: int,
     # passo 2 arquivaria de novo o que a pessoa tirou da rodada de propósito.
     prontos = [a for a in achados if a.marcado and not a.revisao and a.anexo]
     total = len(prontos)
+
+    # Primeiro passo: o destino de todos (não toca disco). Assim cada linha
+    # sabe o nome dos arquivos das irmãs da mesma casa nesta rodada.
+    motivos: dict[int, str] = {}
+    irmaos: dict[tuple, set] = {}
+    for achado in prontos:
+        motivos[id(achado)] = preparar_destino(achado, raiz, ano, mes,
+                                               nome_do_mes, nome_pasta_empresa)
+        if not motivos[id(achado)]:
+            irmaos.setdefault(achado.imovel.chave, set()).add(achado.destino)
+
     for i, achado in enumerate(prontos, 1):
         if cancelar and cancelar():
             log("⏹ Interrompido — o que já foi arquivado continua no lugar.")
@@ -424,23 +591,21 @@ def arquivar(api, achados: list[Achado], raiz: Path, ano: int, mes: int,
                 achado.revisao = f"não consegui ler o endereço da obra: {e}"
                 continue
 
-        motivo = preparar_destino(achado, raiz, ano, mes, nome_do_mes,
-                                  nome_pasta_empresa)
+        motivo = motivos[id(achado)]
         if motivo:
             achado.revisao = motivo
             continue
 
-        outro = mesmo_contrato_na_pasta(achado.destino.parent,
-                                        achado.imovel.obra,
-                                        achado.imovel.unidade,
-                                        exceto=achado.destino)
+        outro = mesmo_contrato_na_pasta(
+            achado.destino.parent, achado.imovel.obra, achado.imovel.unidade,
+            exceto={achado.destino, *irmaos.get(achado.imovel.chave, ())})
         if outro is not None:
             achado.revisao = ("esta casa já tem contrato de compra e venda na "
                               f"pasta, com outro nome: {outro.name}")
             log(f"  [{i}/{total}] JÁ EXISTE {achado.resumo} — {outro.name}")
             continue
 
-        dados = api.baixar_anexo(achado.anexo.get("downloadUrl"))
+        dados = achado.dados or api.baixar_anexo(achado.anexo.get("downloadUrl"))
         if not dados:
             achado.revisao = ("o download do contrato falhou ou veio vazio "
                               "(a URL do S3 expira: rode a busca de novo)")
