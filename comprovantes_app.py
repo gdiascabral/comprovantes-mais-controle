@@ -541,12 +541,30 @@ def main():
     # Cadastro velho não impede o app de rodar, mas quem está conferindo um
     # fechamento precisa saber que a conta nova cadastrada hoje pode não estar
     # aqui. Sem este aviso, "usando a cópia" é indistinguível de "tudo certo".
-    if _sinc.usando_copia:
-        widgets.Pilula(lateral.rodape, "⚠  cadastro offline", "atencao"
-                       ).pack(anchor="w")
-    else:
-        widgets.Pilula(lateral.rodape, "✓  cadastro sincronizado", "ok"
-                       ).pack(anchor="w")
+    #
+    # A referência fica guardada porque o "Atualizar contas" sincroniza de
+    # novo: sem ela, a pílula continuaria dizendo "offline" depois de uma
+    # sincronização que deu certo.
+    def _estado_da_pilula(res):
+        if res.usando_copia:
+            return "⚠  cadastro offline", "atencao"
+        return "✓  cadastro sincronizado", "ok"
+
+    _pilula_cadastro = widgets.Pilula(lateral.rodape,
+                                      *_estado_da_pilula(_sinc))
+    _pilula_cadastro.pack(anchor="w")
+    # Logo abaixo da pílula: é a resposta a ela ("offline — e agora?") e o
+    # único lugar que relê as contas do ERP para TODAS as abas de uma vez.
+    # Antes, cada aba buscava a sua lista, e a conta incluída numa era
+    # esquecida na outra (ver `nuvem/contas_central.py`).
+    b_atualizar_contas = widgets.Botao(
+        lateral.rodape, "⟳  Atualizar contas", papel="neutro",
+        command=lambda: _atualizar_contas("botao"),
+        padx=px(10), pady=px(4))
+    b_atualizar_contas.pack(anchor="w", pady=px((6, 0)))
+    widgets.Dica(b_atualizar_contas,
+                 "Relê o cadastro e as contas do ERP, pergunta pelas contas "
+                 "novas e avisa as abas")
     if _v_tela:
         # A versão também aqui, embaixo de tudo: é onde ela morava antes do
         # redesenho, e é o primeiro lugar onde se procura por ela.
@@ -806,44 +824,150 @@ def main():
     # que a linha e da conferencia de contas, e nao da moldura da janela.
     #
     # `.info` e nao o logger inteiro porque `_anotar` continua sendo CHAMAVEL:
-    # ele e passado adiante como `log=` para `contas_novas.novidades`.
+    # ele e passado adiante como `log=` para `contas_central.ler_do_erp`.
     _anotar = util.log("contas_novas").info
 
-    def _perguntar_contas(novas, empresas, token):
-        from nuvem import contas_novas, contas_novas_dialogo
+    # A mesma rodada serve a abertura e ao botao "Atualizar contas" do menu:
+    # ler as contas do ERP UMA vez, guardar num lugar so (`contas_central`) e
+    # perguntar numa janela so o que falta no cadastro e no painel do Saldo.
+    # O que muda entre as duas e a thread: na abertura ainda nao ha Chrome, e
+    # uma thread comum basta; no botao pode haver, e o login por API derruba
+    # a sessao dele - entao a rodada vai para a thread do navegador
+    # (`aba_anx.submeter`), que e a unica que pode refazer o login do Chrome.
+    def _sinc_na_tela(sinc):
+        """Na thread da interface: pilula com o resultado e abas avisadas."""
+        from nuvem import contas_central
         try:
-            escolhas = contas_novas_dialogo.perguntar(root, novas, empresas)
-            if not escolhas:
+            _pilula_cadastro.definir(*_estado_da_pilula(sinc))
+        except Exception as e:                            # noqa: BLE001
+            _anotar(f"conferencia de contas (pilula): {e}")
+        contas_central.avisar_abas(quadros, log=_anotar)
+
+    def _perguntar(pend, empresas, token, crus):
+        """Na thread da interface: a janela unica e a gravacao."""
+        from nuvem import contas_central, contas_novas_dialogo
+        pasta = _pasta_dados()
+        try:
+            respostas = contas_novas_dialogo.perguntar(root, pend, empresas)
+            if not respostas:
                 return
-            avisos = contas_novas.gravar(token, escolhas)
-            quantas = len(escolhas) - len(avisos)
-            recado = f"{quantas} conta(s) cadastrada(s)."
-            if avisos:
-                recado += "\n\nNao gravadas:\n" + "\n".join(avisos)
-            messagebox.showinfo("Contas novas", recado)
+            recado = contas_central.aplicar(token, respostas, crus,
+                                            pasta_painel=util.pasta_base())
         except Exception as e:                            # noqa: BLE001
             _anotar(f"conferencia de contas (gravacao): {e}")
             messagebox.showerror(
-                "Contas novas",
-                widgets.recado_de_erro(e, "Nao deu para cadastrar as contas."))
+                "Contas",
+                widgets.recado_de_erro(e, "Não deu para atualizar as contas."))
+            return
 
-    def _conferir_contas():
-        from nuvem import contas_novas
+        # O cadastro acabou de mudar na nuvem: sincroniza de novo para as
+        # abas lerem a conta nova ja nesta sessao, e nao so na proxima
+        # abertura. Thread comum (nao toca navegador), volta pela `after`.
+        def _depois():
+            try:
+                sinc = cadastro.sincronizar(token, pasta)
+            except Exception as e:                        # noqa: BLE001
+                sinc = cadastro.Resultado(False, f"falha ao sincronizar: {e}")
+            root.after(0, lambda: _sinc_na_tela(sinc))
+        threading.Thread(target=_depois, daemon=True).start()
+        messagebox.showinfo("Contas", recado)
+
+    def _abertura():
+        """Thread comum, na abertura: antes de existir qualquer Chrome."""
+        from nuvem import contas_central, contas_novas
         try:
             pasta = _pasta_dados()
             token = _token_ou_vazio(pasta)
             if not token:
                 _anotar("conferencia de contas: sem sessao da nuvem; pulei.")
                 return
-            novas = contas_novas.novidades(pasta, log=_anotar)
-            if not novas:
+            crus = contas_central.ler_do_erp(pasta, log=_anotar)
+            pend = contas_central.pendencias(crus, pasta, util.pasta_base())
+            if not pend:
                 return
             empresas = contas_novas.empresas(token)
-            root.after(0, lambda: _perguntar_contas(novas, empresas, token))
+            root.after(0, lambda: _perguntar(pend, empresas, token, crus))
         except Exception as e:                            # noqa: BLE001
             _anotar(f"conferencia de contas: {e}")
 
-    threading.Thread(target=_conferir_contas, daemon=True).start()
+    def _fim_do_botao(sinc, pend, empresas, token, crus, erro):
+        """Na thread da interface: mostra o resultado e religa o botao.
+
+        O botao religa no `finally`, inclusive em erro: desligado para
+        sempre, o unico jeito de tentar de novo seria fechar o app."""
+        try:
+            if erro is not None:
+                messagebox.showerror(
+                    "Contas", widgets.recado_de_erro(
+                        erro, "Não deu para atualizar as contas."))
+                return
+            _sinc_na_tela(sinc)
+            if pend:
+                _perguntar(pend, empresas, token, crus)
+            else:
+                messagebox.showinfo(
+                    "Contas", "Nenhuma conta nova. As abas já estão com a "
+                              "lista de agora.")
+        finally:
+            try:
+                b_atualizar_contas.configure(state="normal")
+            except tk.TclError:
+                pass                     # janela fechada no meio da rodada
+
+    def _t_atualizar():
+        """Na thread do navegador (`aba_anx.submeter`): nada de tela aqui."""
+        from nuvem import contas_central, contas_novas
+        sinc = pend = empresas = crus = None
+        token = ""
+        erro = None
+        try:
+            pasta = _pasta_dados()
+            token = _token_ou_vazio(pasta)
+            try:
+                sinc = cadastro.sincronizar(token, pasta)
+            except Exception as e:                        # noqa: BLE001
+                sinc = cadastro.Resultado(False, f"falha ao sincronizar: {e}")
+            crus = contas_central.ler_do_erp(pasta, log=_anotar)
+            # O login por API acima derruba a sessao do Chrome do app, SE
+            # houver um aberto. Refaz o login dele aqui, como a aba do Saldo
+            # faz (`ConciliacaoFrame._revalidar_navegador_aberto`); falhar
+            # nisso nao estraga a rodada - a proxima aba passa pelo login.
+            cli = aba_anx.mc
+            if cli is not None:
+                try:
+                    if cli.vivo():
+                        cli.garantir_login()
+                except Exception as e:                    # noqa: BLE001
+                    _anotar(f"conferencia de contas: o login do navegador "
+                            f"nao foi refeito ({e})")
+            pend = contas_central.pendencias(crus, pasta, util.pasta_base())
+            if pend:
+                if not token:
+                    raise RuntimeError("Há contas novas, mas o app está sem "
+                                       "sessão da nuvem para cadastrá-las. "
+                                       "Entre de novo e tente outra vez.")
+                empresas = contas_novas.empresas(token)
+        except Exception as e:                            # noqa: BLE001
+            _anotar(f"conferencia de contas (botao): {e}")
+            erro = e
+        root.after(0, lambda: _fim_do_botao(sinc, pend, empresas, token,
+                                            crus, erro))
+
+    def _atualizar_contas(origem: str):
+        """`origem` e "abertura" (thread comum) ou "botao" (thread do
+        navegador, com o botao desligado enquanto roda)."""
+        if origem == "abertura":
+            threading.Thread(target=_abertura, daemon=True).start()
+            return
+        if aba_anx.avisar_se_ocupado("a atualização das contas"):
+            return
+        b_atualizar_contas.configure(state="disabled")
+        try:
+            aba_anx.submeter("Atualizar contas", _t_atualizar, dona=None)
+        except Exception as e:                            # noqa: BLE001
+            _fim_do_botao(None, None, None, "", None, e)
+
+    _atualizar_contas("abertura")
 
     root.mainloop()
 

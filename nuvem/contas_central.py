@@ -55,6 +55,35 @@ def ler_lista(pasta=None) -> list[dict]:
     return [c for c in contas if isinstance(c, dict) and c.get("nome")]
 
 
+
+def ler_do_erp(pasta=None, log=print) -> list:
+    """Lê as contas ativas do ERP (por HTTP), guarda e devolve as cruas.
+
+    Lista vazia quando o ERP não respondeu, e aí a lista guardada de antes
+    fica onde está (`guardar_lista` não grava vazio). Quem chama decide o que
+    fazer com o vazio; apagar a lista de ontem nunca é uma das opções.
+    """
+    crus = contas_novas.contas_do_erp(log=log)
+    guardar_lista(crus, pasta)
+    return crus
+
+
+def avisar_abas(quadros: dict, log=print) -> None:
+    """Avisa as abas que a lista de contas mudou.
+
+    Só as que têm o gancho `recarregar_contas`; as outras não usam a lista.
+    Cada uma num `try` próprio: uma aba que quebra ao recarregar não pode
+    deixar as seguintes com a lista velha, e o motivo vai para o log.
+    """
+    for nome, quadro in (quadros or {}).items():
+        recarregar = getattr(quadro, "recarregar_contas", None)
+        if recarregar is None:
+            continue
+        try:
+            recarregar()
+        except Exception as e:                          # noqa: BLE001
+            log(f"aba {nome}: não recarregou as contas ({e})")
+
 def mapa_do_painel(pasta_painel=None):
     """O `mapping.yaml` do painel, ou None se esta máquina não tem painel."""
     base = Path(pasta_painel or util.pasta_base())

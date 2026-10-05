@@ -180,3 +180,47 @@ def test_so_painel_nao_tem_linha_de_cadastro(monkeypatch, tmp_path):
 
 def test_nada_a_aplicar_devolve_recado_vazio(tmp_path):
     assert cc.aplicar("tok", dialogo.Respostas([], []), [], tmp_path) == ""
+
+
+def test_ler_do_erp_guarda_e_devolve(monkeypatch, tmp_path):
+    monkeypatch.setattr(cc.contas_novas, "contas_do_erp",
+                        lambda log=print: [_cru(1)])
+    assert cc.ler_do_erp(tmp_path) == [_cru(1)]
+    assert [c["id"] for c in cc.ler_lista(tmp_path)] == ["u-1"]
+
+
+def test_erp_fora_do_ar_nao_apaga_a_lista(monkeypatch, tmp_path):
+    cc.guardar_lista([_cru(1)], tmp_path)
+    monkeypatch.setattr(cc.contas_novas, "contas_do_erp", lambda log=print: [])
+    assert cc.ler_do_erp(tmp_path) == []
+    assert [c["id"] for c in cc.ler_lista(tmp_path)] == ["u-1"]
+
+
+def test_avisar_abas_chama_quem_tem_o_gancho_e_aguenta_falha():
+    chamadas = []
+
+    class Ok:
+        def recarregar_contas(self):
+            chamadas.append("ok")
+
+    class Quebra:
+        def recarregar_contas(self):
+            raise RuntimeError("x")
+
+    class Sem:
+        pass
+
+    linhas = []
+    cc.avisar_abas({"a": Quebra(), "b": Ok(), "c": Sem()}, log=linhas.append)
+    assert chamadas == ["ok"]
+    assert any("a" in l for l in linhas)
+
+
+def test_a_moldura_usa_a_central_e_tem_o_botao():
+    from pathlib import Path
+    fonte = Path("comprovantes_app.py").read_text(encoding="utf-8")
+    assert "Atualizar contas" in fonte
+    assert "contas_central.ler_do_erp" in fonte
+    assert "contas_central.avisar_abas" in fonte
+    assert "avisar_se_ocupado(\"a atualização das contas\")" in fonte
+    assert "contas_novas.novidades(" not in fonte
