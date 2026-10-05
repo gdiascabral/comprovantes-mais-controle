@@ -229,3 +229,8 @@ def test_a_moldura_usa_a_central_e_tem_o_botao():
     # ERP mudo no botao nao pode virar "nenhuma conta nova".
     assert "Não consegui ler as contas do ERP agora." in fonte
     assert "As contas já estão sendo atualizadas." in fonte
+    # O aviso de ocupado vem antes da trava: se ele levantar, nada fica preso.
+    ocupado = fonte.index("avisar_se_ocupado(\"a atualização das contas\")")
+    trava = fonte.index("if not _rodada_de_contas.acquire(blocking=False):\n"
+                        "            messagebox.showinfo(")
+    assert ocupado < trava

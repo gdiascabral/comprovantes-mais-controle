@@ -1002,15 +1002,20 @@ def main():
         if origem == "abertura":
             threading.Thread(target=_abertura, daemon=True).start()
             return
+        # O aviso de navegador ocupado vem ANTES de pegar a trava: ele abre
+        # janela e pode abrir a aba da pessoa, e o que levantar ali com a
+        # trava na mao a prenderia ate fechar o app - todo clique diria "ja
+        # estao sendo atualizadas" e a abertura seguinte pularia.
+        if aba_anx.avisar_se_ocupado("a atualização das contas"):
+            return
         if not _rodada_de_contas.acquire(blocking=False):
             messagebox.showinfo("Contas",
                                 "As contas já estão sendo atualizadas.")
             return
-        if aba_anx.avisar_se_ocupado("a atualização das contas"):
-            _rodada_de_contas.release()
-            return
-        b_atualizar_contas.configure(state="disabled")
+        # Da trava ate a entrega ao `submeter`, tudo dentro do `try`: o
+        # `_fim_do_botao` do `except` solta a trava e religa o botao.
         try:
+            b_atualizar_contas.configure(state="disabled")
             aba_anx.submeter("Atualizar contas", _t_atualizar, dona=None)
         except Exception as e:                            # noqa: BLE001
             _fim_do_botao(None, None, None, "", None, e)
