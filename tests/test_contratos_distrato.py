@@ -66,3 +66,38 @@ def test_sem_comprador_lido_e_sem_conferir_fica_sozinho():
     grupos = d.agrupar([sem, a], "PRIMEIRO COMPRADOR EXEMPLO")
     assert [len(g) for g in grupos] == [1, 1]
     assert grupos[0][0] is a
+
+
+def test_ilegivel_que_confere_entra_no_grupo_nomeado_do_comprador():
+    a = _v("CCV.pdf", TEXTO_A, b"1")
+    escaneado = _v("ESCANEADO.pdf", "PRIMEIRO COMPRADOR EXEMPLO " + "z" * 60,
+                   b"2")
+    grupos = d.agrupar([escaneado, a], "PRIMEIRO COMPRADOR EXEMPLO")
+    assert len(grupos) == 1 and len(grupos[0]) == 2
+
+
+def test_virgula_ausente_para_na_qualificacao():
+    assert d.comprador_do_contrato(
+        "COMPRADOR: FULANO EXEMPLO brasileiro portador da carteira, casado"
+    ) == "FULANO EXEMPLO"
+
+
+def test_hifen_solto_encerra_o_nome():
+    assert d.comprador_do_contrato(
+        "COMPRADOR: FULANO EXEMPLO - brasileiro") == "FULANO EXEMPLO"
+
+
+def test_quebra_de_linha_e_digito_encerram_o_nome():
+    assert d.comprador_do_contrato(
+        "COMPRADOR: FULANO EXEMPLO\nbrasileiro solteiro CPF 123") == \
+        "FULANO EXEMPLO"
+    assert d.comprador_do_contrato("COMPRADOR: FULANO EXEMPLO 123") == \
+        "FULANO EXEMPLO"
+
+
+def test_casal_com_e_vale_e_passou_do_teto_vira_vazio():
+    assert d.comprador_do_contrato(
+        "COMPRADORES: FULANO EXEMPLO E BELTRANA EXEMPLO, casados") == \
+        "FULANO EXEMPLO E BELTRANA EXEMPLO"
+    assert d.comprador_do_contrato(
+        "COMPRADOR: A B C D E F G H I J, casado") == ""

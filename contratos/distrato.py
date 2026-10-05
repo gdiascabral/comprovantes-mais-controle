@@ -25,18 +25,41 @@ import util
 from .conferencia import CONFERE, _preparar, _texto_util, conferir_nome
 from .escolha import eh_mais_completo
 
-#: "COMPRADOR:", "COMPRADORA:", "COMPRADOR(A):", "COMPRADORES:" e o nome ate a
-#: primeira virgula. Roda sobre `util.norm` com os espacos reduzidos e ANTES
-#: de `_preparar`, que solta a pontuacao e apagaria os `:` e `,` que delimitam.
+#: "COMPRADOR:", "COMPRADORA:", "COMPRADOR(A):", "COMPRADORES:" e o que vem
+#: depois. Roda sobre `util.norm` com os espacos reduzidos e ANTES de
+#: `_preparar`, que solta a pontuacao e apagaria os `:` e `,` que delimitam.
 RE_COMPRADOR = re.compile(
-    r"\bCOMPRADOR(?:A|ES|AS|\(A\)|\(ES\))?\s*:\s*([A-Z][A-Z' .-]*?)\s*,")
+    r"\bCOMPRADOR(?:A|ES|AS|\(A\)|\(ES\))?\s*:\s*([A-Z][^,;]*)")
+
+#: Palavras que abrem a qualificacao e, portanto, encerram o nome quando a
+#: virgula foi esquecida. "E" entre dois nomes (casal) nao esta aqui.
+QUALIFICACAO = ("BRASILEIR", "PORTADOR", "CPF", "RG", "NACIONALIDADE",
+                "SOLTEIR", "CASAD", "DIVORCIAD", "VIUV", "INSCRIT",
+                "RESIDENTE", "NASCID", "MAIOR", "EMPRESARI")
+
+#: Nome com mais palavras que isto e a qualificacao engolida: melhor "" (vai
+#: para revisao) do que um nome errado no arquivo.
+TETO_DE_PALAVRAS = 8
 
 
 def comprador_do_contrato(texto: str) -> str:
-    """O nome do comprador como o contrato o qualifica, ou "" se nao achar."""
+    """O nome do comprador como o contrato o qualifica, ou "" se nao achar.
+
+    Termina na primeira virgula/ponto-e-virgula, hifen solto, palavra com
+    digito ou palavra de qualificacao (virgula ausente no contrato)."""
     limpo = re.sub(r"\s+", " ", util.norm(texto or ""))
     achou = RE_COMPRADOR.search(limpo)
-    return achou.group(1).strip() if achou else ""
+    if not achou:
+        return ""
+    nome: list[str] = []
+    for palavra in achou.group(1).split():
+        if (palavra == "-" or any(c.isdigit() for c in palavra)
+                or palavra.startswith(QUALIFICACAO)):
+            break
+        nome.append(palavra)
+    if not nome or len(nome) > TETO_DE_PALAVRAS:
+        return ""
+    return " ".join(nome).strip()
 
 
 @dataclass
@@ -63,13 +86,12 @@ def agrupar(versoes: list[Versao],
     do recebimento so se o proprio texto confere com ele; senao fica sozinha,
     para uma pessoa olhar -- juntar no escuro esconderia um contrato alheio."""
     grupos: dict[str, list[Versao]] = {}
+    ilegiveis: list[tuple[int, Versao]] = []
     for i, v in enumerate(versoes):
-        chave = v.comprador
-        if not chave:
-            confere = conferir_nome(_texto_util(v.texto) or "",
-                                    comprador_recebimento) == CONFERE
-            chave = "" if confere else f"\0sozinha{i}"
-        grupos.setdefault(chave, []).append(v)
+        if v.comprador:
+            grupos.setdefault(v.comprador, []).append(v)
+        else:
+            ilegiveis.append((i, v))
 
     def do_recebimento(chave: str) -> bool:
         if chave == "":
@@ -78,6 +100,18 @@ def agrupar(versoes: list[Versao],
             return False
         return conferir_nome(_preparar(chave),
                              comprador_recebimento) == CONFERE
+
+    # Um comprador = um grupo: o ilegivel que confere entra no grupo nomeado
+    # do recebimento se ele existe; "" so quando nao ha onde juntar.
+    nomeado = next((c for c in sorted(grupos) if do_recebimento(c)), None)
+    for i, v in ilegiveis:
+        confere = conferir_nome(_texto_util(v.texto) or "",
+                                comprador_recebimento) == CONFERE
+        if confere:
+            chave = nomeado if nomeado is not None else ""
+        else:
+            chave = f"\0sozinha{i}"
+        grupos.setdefault(chave, []).append(v)
 
     chaves = sorted(grupos, key=lambda c: (not do_recebimento(c), c))
     return [grupos[c] for c in chaves]
