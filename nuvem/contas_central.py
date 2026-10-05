@@ -149,6 +149,35 @@ def pendencias(crus, pasta=None, pasta_painel=None) -> list[Pendencia]:
     return sorted(saida, key=lambda p: p.nome)
 
 
+def pendencias_da_abertura(pend: list) -> list:
+    """O que a ABERTURA do app pergunta: só quem falta no cadastro.
+
+    Conta que falta só no painel do Saldo aparece apenas no botão "Atualizar
+    contas" (antes, só o botão do Saldo a mostrava): o dono deixa contas fora
+    do painel de propósito, e a abertura não pode perguntar por elas todo dia.
+    Quem falta nos dois vem inteira — a parte do painel segue desmarcada."""
+    return [p for p in (pend or []) if getattr(p, "falta_cadastro", True)]
+
+
+def conferidor_do_painel(pasta_painel=None):
+    """A conferência que a janela faz antes de incluir no painel, ou None
+    se esta máquina não tem painel.
+
+    É a mesma `problemas_da_inclusao` que o `incluir_no_painel` roda antes de
+    gravar; feita na janela, o problema aparece com ela aberta e o que foi
+    digitado não se perde. O mapping é lido agora, uma vez por janela."""
+    mapa = mapa_do_painel(pasta_painel)
+    if mapa is None:
+        return None
+    from conciliacao import painel_novas
+
+    def conferir(painel) -> list[str]:
+        return painel_novas.problemas_da_inclusao(
+            [painel_novas.Inclusao(p.erp, rotulo) for p, rotulo in painel],
+            mapa)
+    return conferir
+
+
 def aplicar(token: str, respostas, crus: list, pasta_painel=None) -> str:
     """Grava o que a janela única devolveu: cadastro primeiro, painel depois.
 

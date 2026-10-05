@@ -234,3 +234,62 @@ def test_a_moldura_usa_a_central_e_tem_o_botao():
     trava = fonte.index("if not _rodada_de_contas.acquire(blocking=False):\n"
                         "            messagebox.showinfo(")
     assert ocupado < trava
+
+
+# ------------------------------------------------- revisão final (05/10/2026)
+
+def test_abertura_so_pergunta_pelo_cadastro():
+    """Conta deixada fora do painel de propósito não pode virar pergunta a
+    cada abertura: só pendência de cadastro abre a janela ali."""
+    so_painel = SimpleNamespace(falta_cadastro=False, falta_painel=True)
+    so_cad = SimpleNamespace(falta_cadastro=True, falta_painel=False)
+    os_dois = SimpleNamespace(falta_cadastro=True, falta_painel=True)
+    assert cc.pendencias_da_abertura([so_painel]) == []
+    assert cc.pendencias_da_abertura([so_painel, os_dois, so_cad]) == [
+        os_dois, so_cad]
+    assert cc.pendencias_da_abertura([]) == []
+
+
+def _fonte_da_abertura():
+    from pathlib import Path
+    fonte = (Path(__file__).resolve().parents[1]
+             / "comprovantes_app.py").read_text(encoding="utf-8")
+    ini = fonte.index("    def _abertura():")
+    return fonte[ini:fonte.index("\n    def ", ini + 10)]
+
+
+def test_a_abertura_filtra_o_cadastro_e_avisa_as_abas_sempre():
+    corpo = _fonte_da_abertura()
+    assert "contas_central.pendencias_da_abertura(" in corpo
+    # As abas ouvem a lista nova mesmo sem pendência (o Relatório Mensal
+    # mostra a lista já na primeira visita), e pela thread do Tk.
+    aviso = corpo.index("root.after(0, lambda: contas_central.avisar_abas(")
+    assert aviso < corpo.index("if not pend:")
+    assert corpo.index("contas_central.ler_do_erp(") < aviso
+
+
+def test_a_janela_recebe_a_conferencia_do_painel():
+    from pathlib import Path
+    fonte = (Path(__file__).resolve().parents[1]
+             / "comprovantes_app.py").read_text(encoding="utf-8")
+    assert "conferir_painel=contas_central.conferidor_do_painel(" in fonte
+
+
+def test_conferidor_sem_painel_e_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(cc, "mapa_do_painel", lambda _p=None: None)
+    assert cc.conferidor_do_painel(tmp_path) is None
+
+
+def test_conferidor_usa_os_problemas_da_inclusao(tmp_path, monkeypatch):
+    from conciliacao import painel_novas
+    mapa = object()
+    monkeypatch.setattr(cc, "mapa_do_painel", lambda _p=None: mapa)
+    vistos = []
+
+    def problemas(inclusoes, mapping):
+        vistos.append(([(i.conta.id, i.rotulo) for i in inclusoes], mapping))
+        return ["um problema"]
+    monkeypatch.setattr(painel_novas, "problemas_da_inclusao", problemas)
+    conferir = cc.conferidor_do_painel(tmp_path)
+    assert conferir([(_p(1), "LINHA 01")]) == ["um problema"]
+    assert vistos == [([("u-1", "LINHA 01")], mapa)]

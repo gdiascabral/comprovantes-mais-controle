@@ -107,6 +107,20 @@ uma linha por conta dizendo onde falta (cadastro, painel ou os dois), e depois
 de gravar **ressincroniza** o cadastro e avisa as abas, para a conta nova
 valer já nesta sessão.
 
+**Duas marcas, e a do painel nasce desmarcada** (revisão final). A primeira
+coluna marca só o CADASTRO (nasce marcada quando há empresa sugerida; quem já
+está no cadastro mostra "—"); a coluna PAINEL marca o painel do Saldo e nasce
+SEMPRE desmarcada, como na janela antiga — com uma marca só, conta de pessoa
+física sugerida entrava no MODELO.xlsx sem ninguém ter marcado. Antes de
+fechar, o "Incluir" roda `painel_novas.problemas_da_inclusao`
+(`contas_central.conferidor_do_painel`) e, havendo problema, mostra a lista e
+mantém a janela aberta com o que foi digitado. **Na ABERTURA a janela só abre
+com pendência de CADASTRO** (`pendencias_da_abertura`): o que falta só no
+painel aparece só pelo botão, porque o dono deixa contas fora do painel de
+propósito. Mesmo sem pendência, a abertura avisa as abas da lista nova. O
+gancho do Relatório Mensal relê o `contas_mc.json` e remonta sempre; o
+`ao_abrir` remonta quando a lista OU a data do `contas_mc.json` mudaram.
+
 Quem ouve: Relatório Mensal (lista vem do cache central; o id da tela
 `#/cash-flow` é resolvido pelo NOME na hora do "Gerar", e nome repetido na tela
 falha a conta em vez de adivinhar), Baixar Comprovantes, Aportes (a recarga

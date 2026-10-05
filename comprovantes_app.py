@@ -859,7 +859,10 @@ def main():
         from nuvem import contas_central, contas_novas_dialogo
         pasta = _pasta_dados()
         try:
-            respostas = contas_novas_dialogo.perguntar(root, pend, empresas)
+            respostas = contas_novas_dialogo.perguntar(
+                root, pend, empresas,
+                conferir_painel=contas_central.conferidor_do_painel(
+                    util.pasta_base()))
             if not respostas:
                 return
             recado = contas_central.aplicar(token, respostas, crus,
@@ -906,7 +909,16 @@ def main():
                 _anotar("conferencia de contas: sem sessao da nuvem; pulei.")
                 return
             crus = contas_central.ler_do_erp(pasta, log=_anotar)
-            pend = contas_central.pendencias(crus, pasta, util.pasta_base())
+            # A lista nova vale para as abas mesmo sem nada a perguntar (o
+            # Relatorio Mensal a mostra ja na primeira visita). Pela `after`:
+            # aqui e thread comum, e as abas mexem em Tk.
+            root.after(0, lambda: contas_central.avisar_abas(quadros,
+                                                             log=_anotar))
+            # Na abertura, so o que falta no CADASTRO abre a janela; o que
+            # falta so no painel fica para o botao "Atualizar contas" (ver
+            # `contas_central.pendencias_da_abertura`).
+            pend = contas_central.pendencias_da_abertura(
+                contas_central.pendencias(crus, pasta, util.pasta_base()))
             if not pend:
                 return
             empresas = contas_novas.empresas(token)
