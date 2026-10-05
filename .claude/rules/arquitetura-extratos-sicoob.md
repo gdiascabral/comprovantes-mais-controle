@@ -37,3 +37,15 @@ paths:
   há `select` de mês e ano (mês 0-indexed), dispensando as setas. Antes de
   arquivar, o OFX é conferido contra `ACCTID` e período — o pior erro possível
   é o extrato de uma empresa cair na pasta de outra, e nada no disco denuncia.
+- **O Chrome do Sicoob abre SEMPRE em pt-BR** (`locale="pt-BR"` e
+  `--lang=pt-BR` no `SicoobClient`), 05/10/2026. O Sicoob reconhece o "PC
+  cadastrado" — e aceita UM por usuário — por um retrato que a página monta
+  antes de criptografar: a extensão (CPU, memória, discos fixos, telas), WebGL,
+  `navigator.language`, resolução e núcleos. O perfil do app estava com o
+  idioma das páginas vazio, o Chrome caiu em pt-PT e o banco passou a pedir o
+  cadastro do PC. Provado ao vivo mudando só o idioma: `POST
+  /api/dispositivo-usuario/identificar` respondeu 3 (desconhecido) com pt-PT e
+  2 (reconhecido) com pt-BR. Para diagnosticar de novo: o retrato aparece
+  interceptando `JSON.stringify` na página, antes da cifra. Guardado por
+  `tests/test_sicoob_idioma.py`. NUNCA abrir este perfil num Chrome comum nem
+  com porta de depuração — só como o app abre.
