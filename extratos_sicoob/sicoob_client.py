@@ -118,11 +118,21 @@ class SicoobClient:
             # O Chrome 152 cai no 1º download de um perfil já usado — e o
             # extrato é um download. Ver `util.limpar_historico_de_downloads`.
             util.limpar_historico_de_downloads(cfg.PASTA_PERFIL_CHROME)
+            # O idioma é FIXO em português do Brasil, e não o que o perfil
+            # disser. O Sicoob reconhece o "PC cadastrado" por um retrato que
+            # inclui `navigator.language`; em 05/10/2026 o perfil do app estava
+            # com o idioma das páginas vazio, o Chrome caiu em pt-PT e o banco
+            # passou a pedir o cadastro do PC a cada login — e só aceita UM PC
+            # por usuário. Provado ao vivo mudando só isto: com pt-PT o
+            # "identificar dispositivo" responde 3 (desconhecido), com pt-BR
+            # responde 2 (reconhecido). `locale` cuida do que a página lê;
+            # `--lang` do idioma da interface, para os dois não divergirem.
             self.ctx = self._pw.chromium.launch_persistent_context(
                 str(cfg.PASTA_PERFIL_CHROME), channel="chrome",
                 headless=self._headless, accept_downloads=True,
                 ignore_default_args=["--disable-extensions"],
-                args=["--start-maximized"], no_viewport=True)
+                args=["--start-maximized", "--lang=pt-BR"],
+                locale="pt-BR", no_viewport=True)
             self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
         self.ctx.set_default_timeout(TEMPO_PADRAO)
         return self
