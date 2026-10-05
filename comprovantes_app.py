@@ -834,6 +834,15 @@ def main():
     # uma thread comum basta; no botao pode haver, e o login por API derruba
     # a sessao dele - entao a rodada vai para a thread do navegador
     # (`aba_anx.submeter`), que e a unica que pode refazer o login do Chrome.
+    #
+    # UMA rodada por vez, venha de onde vier. Duas ao mesmo tempo seriam dois
+    # logins por API no ERP (cada um derruba a sessao do outro) e duas janelas
+    # perguntando pelas MESMAS contas - quem respondesse as duas cadastraria
+    # em dobro. Trava e nao bool: a abertura pergunta de uma thread comum e o
+    # botao da thread da interface, e o "ver se esta livre e marcar" tem de
+    # ser um passo so. Vale do comeco da rodada ate a janela fechar.
+    _rodada_de_contas = threading.Lock()
+
     def _sinc_na_tela(sinc):
         """Na thread da interface: pilula com o resultado e abas avisadas."""
         from nuvem import contas_central
@@ -844,7 +853,9 @@ def main():
         contas_central.avisar_abas(quadros, log=_anotar)
 
     def _perguntar(pend, empresas, token, crus):
-        """Na thread da interface: a janela unica e a gravacao."""
+        """Na thread da interface: a janela unica e a gravacao.
+
+        Nao solta a trava da rodada: quem chamou solta, no `finally` dele."""
         from nuvem import contas_central, contas_novas_dialogo
         pasta = _pasta_dados()
         try:
@@ -872,9 +883,22 @@ def main():
         threading.Thread(target=_depois, daemon=True).start()
         messagebox.showinfo("Contas", recado)
 
+    def _perguntar_na_abertura(pend, empresas, token, crus):
+        try:
+            _perguntar(pend, empresas, token, crus)
+        finally:
+            _rodada_de_contas.release()
+
     def _abertura():
-        """Thread comum, na abertura: antes de existir qualquer Chrome."""
+        """Thread comum, na abertura: antes de existir qualquer Chrome.
+
+        Calada quando o ERP nao responde, como sempre foi: na abertura
+        ninguem pediu nada, e o botao do menu e quem diz o que houve."""
         from nuvem import contas_central, contas_novas
+        if not _rodada_de_contas.acquire(blocking=False):
+            _anotar("conferencia de contas: outra rodada em curso; pulei.")
+            return
+        entregue = False
         try:
             pasta = _pasta_dados()
             token = _token_ou_vazio(pasta)
@@ -886,22 +910,39 @@ def main():
             if not pend:
                 return
             empresas = contas_novas.empresas(token)
-            root.after(0, lambda: _perguntar(pend, empresas, token, crus))
+            root.after(0, lambda: _perguntar_na_abertura(pend, empresas,
+                                                         token, crus))
+            entregue = True              # a trava agora e da janela
         except Exception as e:                            # noqa: BLE001
             _anotar(f"conferencia de contas: {e}")
+        finally:
+            if not entregue:
+                _rodada_de_contas.release()
 
     def _fim_do_botao(sinc, pend, empresas, token, crus, erro):
         """Na thread da interface: mostra o resultado e religa o botao.
 
-        O botao religa no `finally`, inclusive em erro: desligado para
-        sempre, o unico jeito de tentar de novo seria fechar o app."""
+        O botao religa e a trava solta no `finally`, inclusive em erro:
+        presos, o unico jeito de tentar de novo seria fechar o app."""
         try:
+            # A sincronizacao do cadastro pode ter dado certo mesmo quando o
+            # resto falhou: a pilula e as abas ficam sabendo de qualquer jeito.
+            if sinc is not None:
+                _sinc_na_tela(sinc)
             if erro is not None:
                 messagebox.showerror(
                     "Contas", widgets.recado_de_erro(
                         erro, "Não deu para atualizar as contas."))
                 return
-            _sinc_na_tela(sinc)
+            if not crus:
+                # Lista vazia e o ERP que nao respondeu, nunca "zero contas"
+                # - dizer "nenhuma conta nova" aqui seria confirmar o que
+                # ninguem conferiu.
+                messagebox.showwarning(
+                    "Contas", "Não consegui ler as contas do ERP agora. As "
+                              "abas seguem com a lista de antes — o motivo "
+                              "está no diagnóstico.")
+                return
             if pend:
                 _perguntar(pend, empresas, token, crus)
             else:
@@ -909,6 +950,7 @@ def main():
                     "Contas", "Nenhuma conta nova. As abas já estão com a "
                               "lista de agora.")
         finally:
+            _rodada_de_contas.release()
             try:
                 b_atualizar_contas.configure(state="normal")
             except tk.TclError:
@@ -940,7 +982,8 @@ def main():
                 except Exception as e:                    # noqa: BLE001
                     _anotar(f"conferencia de contas: o login do navegador "
                             f"nao foi refeito ({e})")
-            pend = contas_central.pendencias(crus, pasta, util.pasta_base())
+            pend = (contas_central.pendencias(crus, pasta, util.pasta_base())
+                    if crus else [])
             if pend:
                 if not token:
                     raise RuntimeError("Há contas novas, mas o app está sem "
@@ -959,7 +1002,12 @@ def main():
         if origem == "abertura":
             threading.Thread(target=_abertura, daemon=True).start()
             return
+        if not _rodada_de_contas.acquire(blocking=False):
+            messagebox.showinfo("Contas",
+                                "As contas já estão sendo atualizadas.")
+            return
         if aba_anx.avisar_se_ocupado("a atualização das contas"):
+            _rodada_de_contas.release()
             return
         b_atualizar_contas.configure(state="disabled")
         try:

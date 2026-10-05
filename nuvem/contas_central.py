@@ -55,7 +55,6 @@ def ler_lista(pasta=None) -> list[dict]:
     return [c for c in contas if isinstance(c, dict) and c.get("nome")]
 
 
-
 def ler_do_erp(pasta=None, log=print) -> list:
     """Lê as contas ativas do ERP (por HTTP), guarda e devolve as cruas.
 

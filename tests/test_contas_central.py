@@ -213,14 +213,19 @@ def test_avisar_abas_chama_quem_tem_o_gancho_e_aguenta_falha():
     linhas = []
     cc.avisar_abas({"a": Quebra(), "b": Ok(), "c": Sem()}, log=linhas.append)
     assert chamadas == ["ok"]
-    assert any("a" in l for l in linhas)
+    assert len(linhas) == 1
+    assert linhas[0].startswith("aba a:")
 
 
 def test_a_moldura_usa_a_central_e_tem_o_botao():
     from pathlib import Path
-    fonte = Path("comprovantes_app.py").read_text(encoding="utf-8")
+    fonte = (Path(__file__).resolve().parents[1]
+             / "comprovantes_app.py").read_text(encoding="utf-8")
     assert "Atualizar contas" in fonte
     assert "contas_central.ler_do_erp" in fonte
     assert "contas_central.avisar_abas" in fonte
     assert "avisar_se_ocupado(\"a atualização das contas\")" in fonte
     assert "contas_novas.novidades(" not in fonte
+    # ERP mudo no botao nao pode virar "nenhuma conta nova".
+    assert "Não consegui ler as contas do ERP agora." in fonte
+    assert "As contas já estão sendo atualizadas." in fonte
