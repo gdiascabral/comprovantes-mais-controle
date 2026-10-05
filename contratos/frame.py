@@ -145,13 +145,19 @@ class ContratosFrame(ttk.Frame):
             corpo, "Casas que receberam no mês — marque as que entram", 2,
             padding=(16, 14))
         f2.pack(fill="both", expand=True, padx=PADX, pady=px((0, 12)))
+        ttk.Label(f2, style="Tenue.TLabel", wraplength=px(900), justify="left",
+                  text="Casa com distrato aparece com um contrato por "
+                       "comprador; marque DISTRATO no que foi distratado — "
+                       "ele é salvo com (Distratado) no nome."
+                  ).pack(fill="x", pady=px((0, 8)))
         grade = ttk.Frame(f2); grade.pack(fill="both", expand=True)
-        colunas = ("marca", "obra", "casa", "comprador", "recebido",
+        colunas = ("marca", "distrato", "obra", "casa", "comprador", "recebido",
                    "condicoes", "empresa", "situacao")
         self.tabela = ttk.Treeview(grade, columns=colunas, show="headings",
                                    height=9)
         for col, titulo, larg, ancora in (
-                ("marca", "✔", 34, "center"), ("obra", "OBRA", 170, "w"),
+                ("marca", "✔", 34, "center"),
+                ("distrato", "DISTRATO", 70, "center"), ("obra", "OBRA", 170, "w"),
                 ("casa", "CASA", 55, "w"),
                 ("comprador", "COMPRADOR", 190, "w"),
                 ("recebido", "RECEBIDO NO MÊS", 110, "e"),
@@ -160,7 +166,7 @@ class ContratosFrame(ttk.Frame):
                 ("situacao", "CONTRATO / MOTIVO", 280, "w")):
             self.tabela.heading(col, text=titulo)
             self.tabela.column(col, width=larg, anchor=ancora,
-                               stretch=col != "marca")
+                               stretch=col not in ("marca", "distrato"))
         widgets.estilo_tabela(self.tabela)
         self.tabela.pack(fill="both", expand=True, side="left")
         ttk.Scrollbar(grade, orient="vertical", command=self.tabela.yview
@@ -283,8 +289,12 @@ class ContratosFrame(ttk.Frame):
                       "info" if a.contrato else "erro")
             self.tabela.insert(
                 "", "end", iid=str(n),
-                values=(_MARCA[a.marcado], i.obra or "—", i.rotulo,
-                        i.comprador or i.descricao,
+                values=(_MARCA[a.marcado],
+                        _MARCA[a.distrato] if a.anexo else "",
+                        i.obra or "—", i.rotulo,
+                        (a.comprador_contrato or i.comprador or i.descricao)
+                        + ("  (outro contrato da casa)"
+                           if a.outro_contrato else ""),
                         f"{i.recebido:,.2f}", _condicoes_curtas(i),
                         a.empresa or "—",
                         f"{widgets.MARCAS_ESTADO[estado]}  {situacao}"),
@@ -322,6 +332,20 @@ class ContratosFrame(ttk.Frame):
         self.tabela.set(iid, "marca", _MARCA[a.marcado])
         self._contar()
 
+    def _alternar_distrato(self, iid: str) -> None:
+        """Inverte a marca DISTRATO da linha (é ela que põe o sufixo no nome).
+
+        Linha sem contrato (as em revisão) não tem o que marcar: só avisa."""
+        a = self._achado(iid)
+        if a is None:
+            return
+        if not a.anexo:
+            self.lbl.config(
+                text="Esta linha não tem contrato para marcar como distrato.")
+            return
+        a.distrato = not a.distrato
+        self.tabela.set(iid, "distrato", _MARCA[a.distrato])
+
     def _alternar_selecionada(self):
         for iid in self.tabela.selection():
             self._alternar(iid)
@@ -336,12 +360,16 @@ class ContratosFrame(ttk.Frame):
         self._contar()
 
     def _clique_na_tabela(self, ev):
-        if (self.tabela.identify_region(ev.x, ev.y) == "cell"
-                and self.tabela.identify_column(ev.x) == "#1"):
+        if self.tabela.identify_region(ev.x, ev.y) != "cell":
+            return
+        coluna = self.tabela.identify_column(ev.x)
+        if coluna == "#1":
             self._alternar(self.tabela.identify_row(ev.y))
+        elif coluna == "#2":
+            self._alternar_distrato(self.tabela.identify_row(ev.y))
 
     def _duplo_clique(self, ev):
-        if self.tabela.identify_column(ev.x) == "#1":
+        if self.tabela.identify_column(ev.x) in ("#1", "#2"):
             return "break"               # dois cliques no ☑ é só alternar
         self._resolver()
 
@@ -482,7 +510,8 @@ class ContratosFrame(ttk.Frame):
             self.q.put(("status", "Lendo os recebimentos do mês..."))
             self.achados = pipeline.levantar(
                 api, ano, mes, mapa.empresas, self._log,
-                cancelar=self._parar.is_set)
+                cancelar=self._parar.is_set,
+                abrir_pdf=lambda dados: leitura.abrir_pdf(dados, self._log))
 
             voltaram = pipeline.reaplicar(self.achados, self.escolhas, self._log)
             if voltaram:
@@ -602,7 +631,8 @@ class ContratosFrame(ttk.Frame):
                     continue
                 rs = conf.ressalvas(a.resultado_conferencia)
                 extra = f"   (não deu para conferir: {', '.join(rs)})" if rs else ""
-                linhas.append(f"OK   {a.resumo}")
+                linhas.append(f"OK   {a.resumo}"
+                              + ("  (Distratado)" if a.distrato else ""))
                 linhas.append(f"     -> {Path(a.destino).name}{extra}")
                 for r in a.imovel.recebimentos:
                     linhas.append(f"        {r.data}  {r.condicao:<28} "
