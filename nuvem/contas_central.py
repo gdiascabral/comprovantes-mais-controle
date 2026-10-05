@@ -141,14 +141,19 @@ def aplicar(token: str, respostas, crus: list, pasta_painel=None) -> str:
         if avisos:
             partes.append("Não gravadas no cadastro:\n" + "\n".join(avisos))
     if respostas.painel:
-        inclusoes = [painel_novas.Inclusao(p.erp, rotulo)
-                     for p, rotulo in respostas.painel]
-        contas_erp = [conta_do_erp(c) for c in crus if isinstance(c, dict)]
         try:
+            inclusoes = [painel_novas.Inclusao(p.erp, rotulo)
+                         for p, rotulo in respostas.painel]
+            contas_erp = [conta_do_erp(c) for c in crus if isinstance(c, dict)]
             res = painel_novas.incluir_no_painel(
                 Path(pasta_painel or util.pasta_base()), inclusoes, contas_erp)
         except painel_novas.InclusaoRecusada as e:
-            partes.append(f"O painel do Saldo NÃO mudou:\n{e}")
+            partes.append(f"O painel do Saldo NÃO mudou:{chr(10)}{e}")
+        except Exception as e:                          # noqa: BLE001
+            # O cadastro já foi gravado: o recado tem de chegar inteiro, senão
+            # a pessoa tenta de novo e duplica.
+            log.warning("incluindo no painel do Saldo", exc_info=True)
+            partes.append(f"O painel do Saldo NÃO mudou:{chr(10)}{e}")
         else:
             numeros = sorted(n for n, _ in res.linhas)
             if len(numeros) == 1:

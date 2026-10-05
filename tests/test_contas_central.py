@@ -151,3 +151,32 @@ def test_sem_painel_nao_chama_o_painel(monkeypatch, tmp_path):
     recado = cc.aplicar("tok", dialogo.Respostas([{"nome_erp": "X"}], []),
                         [_cru(1)], tmp_path)
     assert "painel" not in recado
+
+
+def test_erro_inesperado_do_painel_nao_perde_o_recado(monkeypatch, tmp_path):
+    from conciliacao import painel_novas
+    monkeypatch.setattr(cc.contas_novas, "gravar", lambda tok, esc: [])
+
+    def quebra(*_a, **_k):
+        raise OSError("disco cheio")
+
+    monkeypatch.setattr(painel_novas, "incluir_no_painel", quebra)
+    r = dialogo.Respostas([{"nome_erp": "X"}], [(_p(1), "LINHA 01")])
+    recado = cc.aplicar("tok", r, [_cru(1)], tmp_path)
+    assert "1 conta(s) cadastrada(s)." in recado
+    assert "NÃO mudou" in recado and "disco cheio" in recado
+
+
+def test_so_painel_nao_tem_linha_de_cadastro(monkeypatch, tmp_path):
+    from conciliacao import painel_novas
+    monkeypatch.setattr(
+        painel_novas, "incluir_no_painel",
+        lambda *a, **k: painel_novas.ResultadoInclusao(
+            linhas=[(34, "A")], copia=tmp_path))
+    recado = cc.aplicar("tok", dialogo.Respostas([], [(_p(1), "A")]),
+                        [_cru(1)], tmp_path)
+    assert "cadastrada" not in recado
+
+
+def test_nada_a_aplicar_devolve_recado_vazio(tmp_path):
+    assert cc.aplicar("tok", dialogo.Respostas([], []), [], tmp_path) == ""
