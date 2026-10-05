@@ -55,6 +55,10 @@ EXCLUSOES = (
     "CAIXA", "CEF", "FINANCIAMENTO", "MUTUO",
 )
 
+#: Palavras que, no nome, dizem que o arquivo é um distrato ou rescisão
+#: (não é o contrato de compra e venda vigente).
+MARCAS_DE_DISTRATO = ("DISTRATO", "RESCIS")
+
 #: Palavras que, no nome, dizem que aquele arquivo é a versão MAIS COMPLETA
 #: do contrato (com mais assinaturas). Vistas em agosto/2026: `… CS 02
 #: VENDEDOR`, `… CASA 01 ASSINATURA CORRETORA`, `… ASSINADO`. Regra do dono
@@ -89,6 +93,36 @@ def excluido_por(nome: str) -> str:
         if re.search(rf"\b{palavra}", n):
             return palavra
     return ""
+
+
+def eh_distrato(nome: str) -> bool:
+    """Verdadeiro se o nome começa (com limite de palavra) com marca de distrato.
+
+    Procura por DISTRATO ou RESCIS (e.g. "Termo de Rescisão") no nome normalizado.
+    """
+    n = _norm(nome)
+    for marca in MARCAS_DE_DISTRATO:
+        if re.search(rf"\b{marca}", n):
+            return True
+    return False
+
+
+def distratos_da_casa(anexos: list[dict], unidade: int | None) -> list[dict]:
+    """Anexos que são distratos, são da casa pedida, sem repetir nome normalizado.
+
+    Retorna na ordem do ERP. Sem unidade → [].
+    """
+    if not unidade:
+        return []
+    vistos: dict[str, dict] = {}
+    for a in anexos or []:
+        nome = _nome(a)
+        if not eh_distrato(nome):
+            continue
+        if numero_da_unidade(nome) != unidade:
+            continue
+        vistos.setdefault(_norm(nome), a)
+    return list(vistos.values())
 
 
 def candidatos(anexos: list[dict], unidade: int | None) -> list[dict]:
