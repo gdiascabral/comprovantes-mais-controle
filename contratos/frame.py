@@ -89,6 +89,10 @@ class ContratosFrame(ttk.Frame):
         #: {(obra, unidade): nome do arquivo} — o que foi escolhido à mão nesta
         #: sessão, para uma nova busca não fazer perguntar tudo de novo.
         self.escolhas: dict = {}
+        #: {chave_da_casa: distrato} — a marca DISTRATO mudada à mão nesta
+        #: sessão. A busca refeita volta à sugestão do texto; sem isto, a
+        #: correção da pessoa sumiria sem aviso.
+        self.marcas_distrato: dict = {}
         self.janela = None               # a de resolver, quando está aberta
 
         cfg, _ = _sicoob()
@@ -335,15 +339,23 @@ class ContratosFrame(ttk.Frame):
     def _alternar_distrato(self, iid: str) -> None:
         """Inverte a marca DISTRATO da linha (é ela que põe o sufixo no nome).
 
-        Linha sem contrato (as em revisão) não tem o que marcar: só avisa."""
+        Linha sem contrato (as em revisão) não tem o que marcar: só avisa. Nem
+        a já arquivada: o arquivo já está na pasta com o nome de antes, e a
+        marca trocada aqui não o renomearia."""
         a = self._achado(iid)
         if a is None:
+            return
+        if a.arquivado:
+            self.lbl.config(
+                text="Este contrato já foi arquivado — para mudar o nome, "
+                     "renomeie o arquivo na pasta.")
             return
         if not a.anexo:
             self.lbl.config(
                 text="Esta linha não tem contrato para marcar como distrato.")
             return
         a.distrato = not a.distrato
+        self.marcas_distrato[pipeline.chave_da_casa(a)] = a.distrato
         self.tabela.set(iid, "distrato", _MARCA[a.distrato])
 
     def _alternar_selecionada(self):
@@ -516,6 +528,13 @@ class ContratosFrame(ttk.Frame):
             voltaram = pipeline.reaplicar(self.achados, self.escolhas, self._log)
             if voltaram:
                 self._log(f"{voltaram} escolha(s) desta sessão reaplicadas.")
+            # Depois das escolhas: trocar o contrato à mão não mexe na marca,
+            # mas a marca só volta em linha que tem contrato.
+            marcas = pipeline.reaplicar_distratos(self.achados,
+                                                  self.marcas_distrato)
+            if marcas:
+                self._log(f"{marcas} marca(s) de distrato desta sessão "
+                          "reaplicadas.")
 
             self.q.put(("lista", self.achados))
             prontos = [a for a in self.achados if not a.revisao and a.anexo]
@@ -602,13 +621,23 @@ class ContratosFrame(ttk.Frame):
         except Exception as e:
             self.q.put(("resolver", f"não deu para abrir \"{nome}\": {e}"))
 
+    @staticmethod
+    def _recebimentos_da_linha(achado) -> list:
+        """Os recebimentos que a linha lista no resumo: os da casa, só na
+        linha do recebimento (a extra é o contrato de outra pessoa)."""
+        return [] if achado.outro_contrato else achado.imovel.recebimentos
+
     def _resumo(self, ano: int, mes: int, raiz) -> Path | None:
         """Grava o resumo do mês ao lado dos contratos.
 
         Texto, e não PDF: o que se precisa daqui é conferir o que entrou e o
         que ficou de fora, e um .txt abre em qualquer lugar, sobrevive a
         navegador fechado e não depende do CDP. Cada casa sai com os seus
-        recebimentos, um a um — é sobre eles que o contábil apura."""
+        recebimentos, um a um — é sobre eles que o contábil apura.
+
+        A linha extra de uma casa com distrato divide o `imovel` com a do
+        recebimento: ela não conta como casa, não soma o dinheiro e não lista
+        os recebimentos — senão o mês sairia com a casa e o valor em dobro."""
         cfg, _ = _sicoob()
         arquivados = [a for a in self.achados if a.arquivado]
         if not arquivados and not self.achados:
@@ -619,10 +648,11 @@ class ContratosFrame(ttk.Frame):
             alvo = pasta / f"CONTRATOS {ano}{mes:02d} - conferencia.txt"
             linhas = [f"Contratos de compra e venda — {cfg.nome_do_mes(mes)} {ano}",
                       "=" * 64, ""]
-            total = sum((a.imovel.recebido for a in self.achados),
+            casas = [a for a in self.achados if not a.outro_contrato]
+            total = sum((a.imovel.recebido for a in casas),
                         start=type(self.achados[0].imovel.recebido)(0))
-            n_receb = sum(len(a.imovel.recebimentos) for a in self.achados)
-            linhas.append(f"{len(self.achados)} casa(s) com {n_receb} "
+            n_receb = sum(len(a.imovel.recebimentos) for a in casas)
+            linhas.append(f"{len(casas)} casa(s) com {n_receb} "
                           f"recebimento(s) no mês, somando R$ {total:,.2f}")
             linhas.append(f"{len(arquivados)} arquivado(s)")
             linhas.append("")
@@ -634,7 +664,7 @@ class ContratosFrame(ttk.Frame):
                 linhas.append(f"OK   {a.resumo}"
                               + ("  (Distratado)" if a.distrato else ""))
                 linhas.append(f"     -> {Path(a.destino).name}{extra}")
-                for r in a.imovel.recebimentos:
+                for r in self._recebimentos_da_linha(a):
                     linhas.append(f"        {r.data}  {r.condicao:<28} "
                                   f"R$ {r.valor:>14,.2f}")
                 # Quem decidiu à mão fica registrado. Daqui a seis meses é a
@@ -655,7 +685,7 @@ class ContratosFrame(ttk.Frame):
                     motivo = a.revisao or "não foi marcada para arquivar nesta rodada"
                     linhas.append(f"     {a.resumo}")
                     linhas.append(f"       {motivo}")
-                    for r in a.imovel.recebimentos:
+                    for r in self._recebimentos_da_linha(a):
                         linhas.append(f"        {r.data}  {r.condicao:<28} "
                                       f"R$ {r.valor:>14,.2f}")
             alvo.write_text("\n".join(linhas) + "\n", encoding="utf-8")

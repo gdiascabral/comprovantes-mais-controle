@@ -92,6 +92,13 @@ class Achado:
     @property
     def resumo(self) -> str:
         i = self.imovel
+        # A linha extra é o contrato de OUTRA pessoa, e o dinheiro do mês é
+        # de quem pagou: repetir o nome e o valor do recebimento nela poria
+        # o pagador no contrato alheio do registro e da conferência.
+        if self.outro_contrato:
+            return (f"{i.obra} {i.rotulo} · "
+                    f"{self.comprador_contrato or 'comprador não lido'} · "
+                    "outro contrato da casa")
         return (f"{i.obra} {i.rotulo} · {i.comprador or i.descricao} · "
                 f"R$ {i.recebido:,.2f}")
 
@@ -230,7 +237,8 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
         linhas = None
         distratos = distratos_da_casa(a.anexos_da_obra, a.imovel.unidade)
         if distratos and abrir_pdf is not None:
-            linhas = _casa_com_distrato(api, a, distratos, abrir_pdf, log)
+            linhas = _casa_com_distrato(api, a, distratos, abrir_pdf, log,
+                                        cancelar)
         if linhas is None:
             linhas = [a]
             anexo, motivo = contrato_de(a.anexos_da_obra, a.imovel.unidade)
@@ -314,7 +322,7 @@ def _ler(abrir_pdf, dados: bytes, ate) -> str:
 
 
 def _casa_com_distrato(api, achado: Achado, distratos: list[dict], abrir_pdf,
-                       log=print) -> list[Achado] | None:
+                       log=print, cancelar=None) -> list[Achado] | None:
     """Uma linha por comprador de contrato da casa; None = regra de sempre.
 
     Regra do dono (05/10/2026): casa revendida tem o contrato do primeiro
@@ -324,8 +332,20 @@ def _casa_com_distrato(api, achado: Achado, distratos: list[dict], abrir_pdf,
     atual).
 
     Preenche o próprio `achado` com o grupo do comprador do recebimento (o
-    primeiro de `agrupar`) e devolve as linhas extras logo depois dele."""
+    primeiro de `agrupar`) e devolve as linhas extras logo depois dele.
+
+    O Parar é consultado antes de cada download: são até nove PDFs por casa,
+    e quem pediu para parar não espera todos. A casa interrompida fica em
+    revisão, sem contrato — meia leitura não separa comprador nenhum."""
     i = achado.imovel
+
+    def interrompida() -> bool:
+        if not (cancelar and cancelar()):
+            return False
+        achado.anexo, achado.dados = {}, None
+        achado.revisao = ("busca interrompida antes de ler os contratos "
+                          "desta casa — busque de novo")
+        return True
     cands = candidatos_distintos(achado.anexos_da_obra, i.unidade)
     if not cands:
         return None                         # "nenhum anexo de COMPRA E VENDA"
@@ -337,6 +357,8 @@ def _casa_com_distrato(api, achado: Achado, distratos: list[dict], abrir_pdf,
 
     versoes = []
     for anexo in cands:
+        if interrompida():
+            return [achado]
         dados = _baixar(api, anexo)
         if not dados:
             achado.revisao = ("não consegui baixar "
@@ -349,6 +371,8 @@ def _casa_com_distrato(api, achado: Achado, distratos: list[dict], abrir_pdf,
     # sugestão, e a pessoa ainda a confere na tabela.
     textos_distrato = []
     for anexo in distratos[:MAXIMO_DE_DISTRATOS]:
+        if interrompida():
+            return [achado]
         dados = _baixar(api, anexo)
         texto = _ler(abrir_pdf, dados, None) if dados else ""
         if texto:
@@ -496,6 +520,23 @@ def reaplicar(achados: list[Achado], escolhas: dict, log=print) -> int:
     return voltaram
 
 
+def reaplicar_distratos(achados: list[Achado], marcas: dict) -> int:
+    """Devolve as marcas DISTRATO mudadas à mão a uma lista recém-buscada.
+
+    A busca refeita volta à sugestão do texto do distrato; sem isto, a marca
+    que a pessoa corrigiu sumiria e o arquivo sairia com o nome que ela
+    tinha recusado. Só volta em linha que ainda existe e tem contrato (sem
+    contrato não há marca). Devolve quantas voltaram."""
+    voltaram = 0
+    for a in achados:
+        chave = chave_da_casa(a)
+        if chave not in marcas or not a.anexo:
+            continue
+        a.distrato = bool(marcas[chave])
+        voltaram += 1
+    return voltaram
+
+
 def preparar_destino(achado: Achado, raiz: Path, ano: int, mes: int,
                      nome_do_mes, nome_pasta_empresa) -> str:
     """Preenche `achado.destino`. Devolve "" ou o motivo de não dar."""
@@ -527,19 +568,26 @@ def esperado_da_conferencia(achado: Achado) -> dict:
     """O que o contrato precisa dizer, montado do que o ERP e o cadastro
     informaram."""
     end = achado.endereco or {}
-    # O contrato de outro comprador (ou o desfeito) é OUTRA venda: o nome que
-    # ele tem de trazer é o lido nele, e o valor de venda do ERP é o da venda
-    # atual — `None` vira `?`, que não retém.
+    # O contrato de outro comprador (ou o desfeito) traz o nome lido nele.
+    # Sem nome lido (casa sem distrato marcada à mão, grupo ilegível) vale o
+    # do recebimento: comprador vazio sumiria da conferência, e o arquivo
+    # sairia "(Distratado)" sem ninguém conferir de quem é.
     outra_venda = achado.outro_contrato or achado.distrato
+    comprador = ((achado.comprador_contrato or achado.imovel.comprador)
+                 if outra_venda else achado.imovel.comprador)
     return {
         "rua": end.get("address") or "",
         "complemento": end.get("complement") or "",
         "unidade": achado.imovel.unidade,
-        "comprador": (achado.comprador_contrato if outra_venda
-                      else achado.imovel.comprador),
+        "comprador": comprador,
         "cnpj": achado.cnpj,
         "vendedora": [n for n in (achado.razao_social, achado.cliente_erp) if n],
-        "valor_venda": None if outra_venda else achado.imovel.valor_venda,
+        # Só a linha extra é OUTRA venda: o valor de venda do ERP é o da
+        # venda atual, e `None` vira `?`, que não retém. A linha do
+        # recebimento marcada como distrato continua sendo a venda de quem
+        # pagou, e confere o valor dela.
+        "valor_venda": (None if achado.outro_contrato
+                        else achado.imovel.valor_venda),
     }
 
 

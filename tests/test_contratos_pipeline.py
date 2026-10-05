@@ -13,7 +13,7 @@ import pytest
 from contratos.pipeline import (Achado, aplicar_resolucao, arquivar,
                                 chave_da_casa, esperado_da_conferencia,
                                 levantar, pode_resolver, preparar_destino,
-                                reaplicar)
+                                reaplicar, reaplicar_distratos)
 
 
 class _Empresa:
@@ -803,3 +803,72 @@ def test_o_log_conta_os_distratos_lidos_nao_os_achados():
     achados = _levantar_com_distrato(api, log=recados.append)
     assert not any(a.distrato for a in achados)
     assert any("2 contrato(s) e 0 distrato(s)" in m for m in recados)
+
+
+# ------------------------------------------------- revisão final
+def test_resumo_da_linha_extra_e_do_comprador_do_contrato():
+    """A linha extra é o contrato de OUTRA pessoa: o resumo (registro e
+    conferência) não pode trazer o nome nem o dinheiro de quem pagou."""
+    atual, antigo = _levantar_com_distrato(_api_com_distrato())
+    assert "PRIMEIRO COMPRADOR EXEMPLO" in antigo.resumo
+    assert "SEGUNDO COMPRADOR EXEMPLO" not in antigo.resumo
+    assert "R$" not in antigo.resumo
+    assert "outro contrato da casa" in antigo.resumo
+    assert "SEGUNDO COMPRADOR EXEMPLO" in atual.resumo and "R$" in atual.resumo
+
+
+def test_distrato_marcado_em_casa_sem_distrato_ainda_confere_comprador_e_valor():
+    """Marcar DISTRATO numa casa comum não tira o comprador da conferência
+    (o contrato sairia com "(Distratado)" sem conferir de quem é)."""
+    a = next(x for x in _levantar() if x.anexo)
+    assert not a.comprador_contrato and a.imovel.comprador
+    a.distrato = True
+    esperado = esperado_da_conferencia(a)
+    assert esperado["comprador"] == a.imovel.comprador
+    assert esperado["valor_venda"] == a.imovel.valor_venda
+    assert esperado["valor_venda"] is not None
+
+
+def test_linha_do_recebimento_marcada_como_distrato_confere_o_valor():
+    atual, antigo = _levantar_com_distrato(_api_com_distrato())
+    atual.distrato = True
+    esperado = esperado_da_conferencia(atual)
+    assert esperado["comprador"] == "SEGUNDO COMPRADOR EXEMPLO"
+    assert str(esperado["valor_venda"]) == "245000.00"
+    assert esperado_da_conferencia(antigo)["valor_venda"] is None
+
+
+def test_marca_de_distrato_feita_a_mao_volta_na_busca_seguinte():
+    atual, antigo = _levantar_com_distrato(_api_com_distrato())
+    marcas = {chave_da_casa(atual): True, chave_da_casa(antigo): False}
+    de_novo = _levantar_com_distrato(_api_com_distrato())
+    assert reaplicar_distratos(de_novo, marcas) == 2
+    assert de_novo[0].distrato is True and de_novo[1].distrato is False
+    # a sugestão fica como estava: é a marca que a pessoa mudou
+    assert de_novo[1].distrato_sugerido is True
+
+
+def test_marca_de_distrato_de_linha_que_sumiu_nao_volta():
+    atual, antigo = _levantar_com_distrato(_api_com_distrato())
+    marcas = {chave_da_casa(antigo): False}
+    so_a_casa = _levantar_com_distrato(_api_so_do_distratado())
+    receb_ = so_a_casa[0]                     # sem anexo: nada a marcar
+    marcas[chave_da_casa(receb_)] = True
+    assert reaplicar_distratos(so_a_casa, marcas) == 1
+    assert receb_.distrato is False
+    assert so_a_casa[1].distrato is False
+    # casa comum, sem marca guardada, fica como veio
+    comum = _levantar()
+    assert reaplicar_distratos(comum, {chave_da_casa(antigo): True}) == 0
+    assert not any(a.distrato for a in comum)
+
+
+def test_parar_no_meio_da_casa_com_distrato_para_limpo():
+    api = _api_com_distrato()
+    achados = levantar(api, 2026, 8, EMPRESAS, log=_sem_log,
+                       abrir_pdf=_abrir_texto,
+                       cancelar=lambda: len(api.baixados) >= 1)
+    assert len(api.baixados) == 1
+    assert len(achados) == 1
+    assert "interrompida" in achados[0].revisao
+    assert not achados[0].marcado and not achados[0].anexo
