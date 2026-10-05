@@ -117,9 +117,6 @@ class ComprovantesFrame(ttk.Frame):
                                      command=self._pedir_parada,
                                      state="disabled")
         self.b_parar.pack(side="right", padx=px((0, 8)))
-        widgets.Botao(cab.acoes, "Atualizar lista", papel="neutro",
-                      command=self.ao_abrir).pack(side="right",
-                                                  padx=px((0, 8)))
 
         # ---- período e destino
         c_per = widgets.Cartao(corpo, "Período", numero=1)
@@ -219,6 +216,16 @@ class ComprovantesFrame(ttk.Frame):
         if not contas:
             self._log("Nenhuma conta no cadastro. Rode a sincronização ou "
                       "confira o contas_sicoob.json.")
+
+    def recarregar_contas(self):
+        """Gancho do "Atualizar contas" do menu: relê o cadastro já sincronizado.
+
+        Só arquivo local. Com a rodada andando a fila não troca: ela marca cada
+        conta como feita pela chave da linha, e remontar a tabela no meio
+        apagaria o andamento."""
+        if self.worker and not self.worker.done():
+            return
+        self.ao_abrir()
 
     def _clicou(self, evento):
         """Só a coluna da marca alterna; clique no resto seleciona a linha.

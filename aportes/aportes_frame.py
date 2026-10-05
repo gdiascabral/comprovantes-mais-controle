@@ -152,7 +152,6 @@ class AportesFrame(ttk.Frame):
         self.rodape.pack()
         self.rodape.link("Remover selecionado", self._remover)
         self.rodape.link("Limpar tudo", self._limpar)
-        self.rodape.link("Recarregar cadastros", self._recarregar_cadastros)
         grade = ttk.Frame(lista)
         grade.pack(fill="both", expand=True)
         self.tabela = ttk.Treeview(grade, columns=("op",), show="headings",
@@ -412,6 +411,15 @@ class AportesFrame(ttk.Frame):
             # um "obras: 0" sem explicação.
             self.catalogos.definir_obras([])
             self._log(f"  aviso (obras): {e}")
+
+    def recarregar_contas(self):
+        """Gancho do "Atualizar contas" do menu: relê o cadastro local.
+
+        Com um comando desta aba no navegador (conferir, lançar) não relê:
+        `_recarregar_cadastros` zera os catálogos do ERP que ele está usando."""
+        if self.anx.dona_ocupada() is self:
+            return
+        self._recarregar_cadastros()
 
     def _recarregar_cadastros(self):
         """Relê contas.csv e os cadastros do ERP. Para quando algo foi criado

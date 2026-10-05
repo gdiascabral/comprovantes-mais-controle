@@ -124,7 +124,7 @@ def test_o_que_cabe_nao_ganha_barra(tela):
 
 
 def test_a_area_percebe_quando_um_cartao_cresce(tela):
-    """"Carregar contas" enche o cartão 3 depois que a aba já está na tela."""
+    """A busca central enche o cartão 3 depois que a aba já está na tela."""
     a = _aba(tela, cartoes=1, campos=1)
     assert not a["corpo"].rola()
     for _ in range(30):
