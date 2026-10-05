@@ -17,7 +17,6 @@ from openpyxl.styles import Font, PatternFill
 
 from conciliacao import painel_novas as pn
 from conciliacao.config import load_config
-from conciliacao.contas_novas_janela import inclusoes_marcadas
 from conciliacao.mapping import AccountMapping
 from conciliacao.models import ErpAccount, ErpPayment, Periodo, Snapshot
 from conciliacao.pipeline import run_offline
@@ -369,12 +368,3 @@ def test_troca_que_falha_no_meio_devolve_o_que_ja_tinha_trocado(pasta, monkeypat
         pn.incluir_no_painel(pasta, [pn.Inclusao(DELTA, "Delta")], CONTAS)
     assert _bytes(pasta) == antes
     assert [a.name for a in pasta.iterdir() if ".novo." in a.name] == []
-
-
-# --------------------------------------------------------------- a janela
-
-def test_a_janela_devolve_so_as_marcadas_com_o_nome_digitado():
-    linhas = [[DELTA, True, "  Delta SPE  "], [PESSOA, False, "Pessoa"],
-              [SUBCONTA, True, "Holding"]]
-    assert inclusoes_marcadas(linhas) == [pn.Inclusao(DELTA, "Delta SPE"),
-                                          pn.Inclusao(SUBCONTA, "Holding")]
