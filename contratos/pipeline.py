@@ -254,7 +254,10 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
 
     achados = saida
     for a in achados:
-        a.marcado = not a.revisao and bool(a.anexo)
+        # Linha extra sem comprador lido: o arquivar a recusaria, e a
+        # tabela não pode mostrá-la marcada como se fosse entrar.
+        a.marcado = (not a.revisao and bool(a.anexo)
+                     and not (a.outro_contrato and not a.comprador_contrato))
     return achados
 
 
@@ -351,11 +354,24 @@ def _casa_com_distrato(api, achado: Achado, distratos: list[dict], abrir_pdf,
         if texto:
             textos_distrato.append(texto)
 
+    grupos = dist.agrupar(versoes, i.comprador)
+    # `agrupar` põe o grupo do recebimento primeiro — mas, se NENHUM contrato
+    # é de quem pagou, o primeiro é de outra pessoa. Tratá-lo como a linha do
+    # recebimento arquivaria o contrato alheio e calaria o que falta (a regra
+    # antiga retinha com "diverge em: comprador"). Aí a linha do recebimento
+    # fica em revisão, sem anexo, e todo grupo vira linha extra.
     linhas: list[Achado] = []
-    for n, grupo in enumerate(dist.agrupar(versoes, i.comprador)):
-        linha = achado if n == 0 else replace(
+    sem_o_do_recebimento = not _do_recebimento(grupos[0][0], i.comprador)
+    if sem_o_do_recebimento:
+        achado.revisao = (f"não achei o contrato de "
+                          f"{i.comprador or 'comprador do recebimento'} entre "
+                          f"os {len(cands)} contrato(s) da casa")
+        linhas.append(achado)
+
+    for grupo in grupos:
+        linha = achado if not linhas else replace(
             achado, outro_contrato=True, endereco=dict(achado.endereco),
-            resultado_conferencia={})
+            resultado_conferencia={}, revisao="")
         versao, motivo = dist.escolher(grupo)
         comprador = (versao or grupo[0]).comprador
         linha.comprador_contrato = comprador
@@ -372,12 +388,23 @@ def _casa_com_distrato(api, achado: Achado, distratos: list[dict], abrir_pdf,
                     "Distrato fica desmarcado")
         linhas.append(linha)
 
+    contratos = linhas[1:] if sem_o_do_recebimento else linhas
     quem = ", ".join(
         (x.comprador_contrato or "comprador não lido")
-        + (" (distratado)" if x.distrato else "") for x in linhas)
-    log(f"  {i.obra} {i.rotulo}: {len(linhas)} contrato(s) e "
-        f"{len(distratos)} distrato(s) — {quem}")
+        + (" (distratado)" if x.distrato else "") for x in contratos)
+    log(f"  {i.obra} {i.rotulo}: {len(contratos)} contrato(s) e "
+        f"{len(textos_distrato)} distrato(s) — {quem}")
     return linhas
+
+
+def _do_recebimento(versao, comprador_recebimento: str) -> bool:
+    """A versão é do comprador do recebimento? O mesmo critério do
+    `distrato.agrupar`: o nome lido confere; sem nome lido, o texto confere."""
+    if versao.comprador:
+        alvo = conf._preparar(versao.comprador)
+    else:
+        alvo = conf._texto_util(versao.texto) or ""
+    return conf.conferir_nome(alvo, comprador_recebimento) == conf.CONFERE
 
 
 # ------------------------------------------------- resolver à mão
