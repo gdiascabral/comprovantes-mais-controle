@@ -119,3 +119,44 @@ def pendencias(crus, pasta=None, pasta_painel=None) -> list[Pendencia]:
             saida.append(Pendencia(contas_novas.como_conta_nova(cru), erp,
                                    fc, fp, rotulo_sugerido(erp)))
     return sorted(saida, key=lambda p: p.nome)
+
+
+def aplicar(token: str, respostas, crus: list, pasta_painel=None) -> str:
+    """Grava o que a janela única devolveu: cadastro primeiro, painel depois.
+
+    Devolve o texto do recado. O painel recusado nunca desfaz o cadastro (são
+    dois lugares diferentes, o da nuvem já valeu) e nunca levanta: o motivo
+    entra no recado. Erro de rede/SQL do cadastro sobe, e o chamador mostra.
+    """
+    # Módulos buscados na hora da chamada (e não `from ... import`), para o
+    # teste poder trocar `gravar` e `incluir_no_painel`.
+    from conciliacao import painel_novas
+    from conciliacao.erp.api import conta_do_erp
+
+    partes: list[str] = []
+    if respostas.cadastro:
+        avisos = contas_novas.gravar(token, respostas.cadastro)
+        feitas = max(len(respostas.cadastro) - len(avisos), 0)
+        partes.append(f"{feitas} conta(s) cadastrada(s).")
+        if avisos:
+            partes.append("Não gravadas no cadastro:\n" + "\n".join(avisos))
+    if respostas.painel:
+        inclusoes = [painel_novas.Inclusao(p.erp, rotulo)
+                     for p, rotulo in respostas.painel]
+        contas_erp = [conta_do_erp(c) for c in crus if isinstance(c, dict)]
+        try:
+            res = painel_novas.incluir_no_painel(
+                Path(pasta_painel or util.pasta_base()), inclusoes, contas_erp)
+        except painel_novas.InclusaoRecusada as e:
+            partes.append(f"O painel do Saldo NÃO mudou:\n{e}")
+        else:
+            numeros = sorted(n for n, _ in res.linhas)
+            if len(numeros) == 1:
+                onde = f"linha {numeros[0]}"
+            else:
+                onde = f"linhas {numeros[0]} a {numeros[-1]}"
+            partes.append(f"{len(res.linhas)} conta(s) incluída(s) no painel "
+                          f"do Saldo ({onde}).")
+            partes.append("Quem aporta em cada uma é a aba Regras do "
+                          "MODELO.xlsx.")
+    return "\n".join(partes)

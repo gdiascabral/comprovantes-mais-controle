@@ -1,6 +1,10 @@
 import json
+from types import SimpleNamespace
+
+import pytest
 
 from nuvem import contas_central as cc
+from nuvem import contas_novas_dialogo as dialogo
 
 
 def _cru(i, ativa=True):
@@ -77,3 +81,73 @@ def test_ignorada_no_mapping_nao_e_pendencia_de_cadastro(tmp_path):
         "ignored_erp_accounts:\n  - CONTA NOVA FICTICIA 01\n", encoding="utf-8")
     pend = cc.pendencias([_cru(1)], tmp_path, pasta_painel=tmp_path)
     assert pend == []
+
+
+def _p(i):
+    from conciliacao.erp.api import conta_do_erp
+    return SimpleNamespace(erp=conta_do_erp(_cru(i)), nome=_cru(i)["name"])
+
+
+def test_aplica_cadastro_e_painel(monkeypatch, tmp_path):
+    from conciliacao import painel_novas
+    gravados, incluidos = [], []
+    monkeypatch.setattr(cc.contas_novas, "gravar",
+                        lambda tok, esc: gravados.extend(esc) or [])
+
+    def incluir(pasta, inclusoes, contas_erp):
+        incluidos.extend((i.conta.id, i.rotulo) for i in inclusoes)
+        assert {c.id for c in contas_erp} == {"u-1", "u-2"}
+        return painel_novas.ResultadoInclusao(linhas=[(34, "LINHA 02")],
+                                             copia=tmp_path)
+
+    monkeypatch.setattr(painel_novas, "incluir_no_painel", incluir)
+    r = dialogo.Respostas(cadastro=[{"nome_erp": "X"}],
+                          painel=[(_p(2), "LINHA 02")])
+    recado = cc.aplicar("tok", r, [_cru(1), _cru(2)], tmp_path)
+    assert gravados == [{"nome_erp": "X"}]
+    assert incluidos == [("u-2", "LINHA 02")]
+    assert "1 conta(s) cadastrada(s)." in recado
+    assert "1 conta(s) incluída(s) no painel do Saldo (linha 34)." in recado
+    assert "aba Regras do MODELO.xlsx" in recado
+
+
+def test_varias_linhas_e_avisos_do_cadastro(monkeypatch, tmp_path):
+    from conciliacao import painel_novas
+    monkeypatch.setattr(cc.contas_novas, "gravar",
+                        lambda tok, esc: ["Y: sem pasta"])
+    monkeypatch.setattr(
+        painel_novas, "incluir_no_painel",
+        lambda *a, **k: painel_novas.ResultadoInclusao(
+            linhas=[(34, "A"), (36, "B")], copia=tmp_path))
+    r = dialogo.Respostas([{"nome_erp": "X"}, {"nome_erp": "Y"}],
+                          [(_p(1), "A"), (_p(2), "B")])
+    recado = cc.aplicar("tok", r, [_cru(1), _cru(2)], tmp_path)
+    assert "1 conta(s) cadastrada(s)." in recado
+    assert "Não gravadas no cadastro:" + chr(10) + "Y: sem pasta" in recado
+    assert "(linhas 34 a 36)" in recado
+
+
+def test_painel_recusado_nao_desfaz_o_cadastro(monkeypatch, tmp_path):
+    from conciliacao import painel_novas
+    monkeypatch.setattr(cc.contas_novas, "gravar", lambda tok, esc: [])
+
+    def recusa(*_a, **_k):
+        raise painel_novas.InclusaoRecusada("o MODELO.xlsx está aberto no Excel")
+
+    monkeypatch.setattr(painel_novas, "incluir_no_painel", recusa)
+    r = dialogo.Respostas(cadastro=[{"nome_erp": "X"}],
+                          painel=[(_p(1), "LINHA 01")])
+    recado = cc.aplicar("tok", r, [_cru(1)], tmp_path)
+    assert "1 conta(s) cadastrada(s)." in recado
+    assert "O painel do Saldo NÃO mudou" in recado
+    assert "aberto no Excel" in recado
+
+
+def test_sem_painel_nao_chama_o_painel(monkeypatch, tmp_path):
+    from conciliacao import painel_novas
+    monkeypatch.setattr(cc.contas_novas, "gravar", lambda tok, esc: [])
+    monkeypatch.setattr(painel_novas, "incluir_no_painel",
+                        lambda *a, **k: pytest.fail("não devia incluir"))
+    recado = cc.aplicar("tok", dialogo.Respostas([{"nome_erp": "X"}], []),
+                        [_cru(1)], tmp_path)
+    assert "painel" not in recado
