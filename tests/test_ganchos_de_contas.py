@@ -64,3 +64,66 @@ def test_baixar_comprovantes_nao_recarrega_com_rodada_andando(raiz, monkeypatch)
     finally:
         aba.worker = None
         aba.destroy()
+
+
+class _AnxDuble:
+    """Só o que as abas perguntam ao dono do navegador."""
+    mc = None
+    dona = None
+
+    def dona_ocupada(self):
+        return self.dona
+
+    def ocupado(self):
+        return "tarefa" if self.dona is not None else None
+
+
+def test_aportes_adia_a_recarga_ate_o_comando_terminar(raiz, monkeypatch):
+    from aportes import aportes_frame as af
+
+    anx = _AnxDuble()
+    aba = af.AportesFrame(raiz, anx)
+    try:
+        chamadas = []
+        monkeypatch.setattr(aba, "_recarregar_cadastros",
+                            lambda: chamadas.append(1))
+        anx.dona = aba                       # um comando desta aba no navegador
+        aba.recarregar_contas()
+        aba.recarregar_contas()
+        assert chamadas == []
+        aba._drain()
+        assert chamadas == []                # ainda rodando: continua esperando
+        assert aba.texto.get("1.0", "end").count(
+            "As contas novas entram nos Aportes") == 1   # avisa uma vez só
+        anx.dona = None                      # o comando terminou
+        aba._drain()
+        assert chamadas == [1]
+        aba._drain()
+        assert chamadas == [1]               # uma vez só
+    finally:
+        aba.destroy()
+
+
+def test_remessa_retorno_so_recarrega_sem_rotina_andando(raiz, monkeypatch):
+    from pagamentos_dia import pagamentos_frame as pf
+
+    aba = pf.PagamentosDiaFrame(raiz, _AnxDuble())
+    try:
+        chamadas = []
+        monkeypatch.setattr(aba, "_conferir_prontidao",
+                            lambda: chamadas.append(1))
+
+        class _Andando:
+            def done(self):
+                return False
+        aba.worker = _Andando()
+        aba.recarregar_contas()
+        assert chamadas == []
+        aba.worker = None
+        aba.ao_abrir()
+        assert chamadas == [1]
+        aba.recarregar_contas()
+        assert chamadas == [1, 1]
+    finally:
+        aba.worker = None
+        aba.destroy()

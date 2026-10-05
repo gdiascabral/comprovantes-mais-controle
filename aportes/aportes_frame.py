@@ -47,6 +47,7 @@ class AportesFrame(ttk.Frame):
         # empilha aqui e QUEM mexe no Tk é o _drain, na thread da interface.
         # Escrever no Text direto da thread do navegador travava a aba.
         self.q = queue.Queue()
+        self._recarga_pendente = False
         self.operacoes: list[Operacao] = []
         # Para cada operação, os ÍNDICES dos lançamentos que já entraram no ERP.
         # Sem isso, tentar de novo depois de uma falha parcial recria o que deu
@@ -227,6 +228,15 @@ class AportesFrame(ttk.Frame):
                 self.texto.see("end")
         except queue.Empty:
             pass
+        except Exception:
+            pass                     # a bomba de UI nunca pode morrer
+        try:
+            # Recarga que ficou esperando o comando terminar: o `_drain` roda
+            # na thread do Tk e é o único laço que vê o fim de QUALQUER comando
+            # desta aba (conferir, lançar, novo cadastro).
+            if self._recarga_pendente and self.anx.dona_ocupada() is not self:
+                self._recarga_pendente = False
+                self._recarregar_cadastros()
         except Exception:
             pass                     # a bomba de UI nunca pode morrer
         finally:
@@ -418,7 +428,12 @@ class AportesFrame(ttk.Frame):
         Com um comando desta aba no navegador (conferir, lançar) não relê:
         `_recarregar_cadastros` zera os catálogos do ERP que ele está usando."""
         if self.anx.dona_ocupada() is self:
+            if not self._recarga_pendente:
+                self._log("As contas novas entram nos Aportes quando o "
+                          "comando atual terminar.")
+            self._recarga_pendente = True     # o `_drain` refaz ao terminar
             return
+        self._recarga_pendente = False
         self._recarregar_cadastros()
 
     def _recarregar_cadastros(self):
