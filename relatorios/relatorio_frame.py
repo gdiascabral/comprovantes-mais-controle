@@ -34,6 +34,8 @@ from extratos_sicoob import sicoob_config
 
 from anexar import config
 
+from nuvem import contas_central
+
 import util
 
 #: Duração e pasta-base vinham em cópias byte a byte por aba. Uma cópia de
@@ -98,9 +100,6 @@ class RelatorioFrame(ttk.Frame):
         self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
         corpo = widgets.AreaRolavel(self)
-        self.b1 = widgets.Botao(self.cab.acoes, "Carregar contas",
-                                papel="passo", command=self.carregar)
-        self.b1.pack(side="left", padx=px((0, 8)))
         self.b2 = widgets.Botao(self.cab.acoes, "Gerar os extratos",
                                 papel="acao", command=self.gerar,
                                 state="disabled")
@@ -168,7 +167,8 @@ class RelatorioFrame(ttk.Frame):
         # ela vira duas setinhas espremidas ao lado de uma frase.
         self.lbl_vazio = ttk.Label(
             self.contas_box, style="Tenue.TLabel",
-            text='Clique em "Carregar contas" para listar as contas.')
+            text='Ainda não há lista de contas. Clique em "Atualizar contas", '
+                 'no rodapé do menu.')
         self.lbl_vazio.pack(anchor="w")
 
         # ---- card 3: destino
@@ -347,10 +347,7 @@ class RelatorioFrame(ttk.Frame):
                 elif tipo == "progresso":
                     feitos, total = valor
                     self.barra_exec.progresso(feitos, total)
-                elif tipo == "contas":
-                    self._montar_contas(valor)
                 elif tipo == "botoes":
-                    self.b1.configure(state=valor)
                     self.b2.configure(
                         state="normal" if valor == "normal" and self.contas else "disabled")
                     self.b_stop.configure(
@@ -363,44 +360,43 @@ class RelatorioFrame(ttk.Frame):
         self.after(150, self._drain)
 
     # ------------------------------------------------------------- etapa 1
-    def carregar(self):
-        if self.worker and not self.worker.done():
-            return
-        # Recusar ANTES de desabilitar os botões: quem sai por aqui não passa
-        # mais pelo `_drain`, e a aba ficava travada — botões apagados, nada
-        # rodando — até reiniciar o app.
-        if self.anx.avisar_se_ocupado("o Relatório Mensal"):
-            return
-        self.q.put(("botoes", "disabled"))
-        self.b_stop.configure(state="disabled")
-        self.q.put(("status", "Abrindo o Mais Controle e lendo as contas..."))
-        self.worker = self.anx.submeter("Relatório Mensal — carregar contas",
-                                        self._t_carregar, dona=self)
+    def ao_abrir(self):
+        """O app chama a cada vez que a aba aparece: só arquivo local, barato.
 
-    def _t_carregar(self):
-        try:
-            if not self._garantir_mapa():
-                self.q.put(("status", "Falta o mapa contas_mc.json."))
-                return
-            self.anx.garantir_sessao(self._log)
-            self._log("Lendo as contas bancárias...")
-            contas = extrato_mc.listar_contas(self.anx.mc.page)
-            self.contas = contas
-            self._log(f"{len(contas)} conta(s) encontradas.")
-            self.q.put(("contas", contas))
-            self.q.put(("status", "Contas carregadas. Marque as desejadas e clique em 2."))
-        except Exception as e:
-            self._log(f"[!] {e}")
-            self.q.put(("status", "Não consegui carregar as contas."))
-        finally:
-            self.q.put(("botoes", "normal"))
+        A lista não sai mais do ERP por aqui (isso abria o Chrome só para
+        listar): vem da busca central, que o menu "Atualizar contas" renova."""
+        self.recarregar_contas()
+
+    def recarregar_contas(self):
+        if self.worker and not self.worker.done():
+            return                    # lote rodando: a lista não troca no meio
+        if not self._garantir_mapa():
+            self.q.put(("status", "Falta o mapa contas_mc.json."))
+            return
+        marcadas = {c["nome"] for c in self.contas
+                    if self.vars_contas.get(c["id"]) is not None
+                    and self.vars_contas[c["id"]].get()}
+        antigas = {c["nome"] for c in self.contas}
+        self.contas = contas_central.ler_lista()
+        self._montar_contas(self.contas)
+        # Quem já estava marcado continua: a aba é reaberta a todo momento, e
+        # perder a seleção a cada visita faria refazer o trabalho de marcar.
+        for c in self.contas:
+            if c["nome"] in antigas:
+                self.vars_contas[c["id"]].set(c["nome"] in marcadas)
+        self._contar_contas()
 
     def _montar_contas(self, contas):
+        if not contas:
+            self._mostrar_lista_vazia()
+            return
         self.canvas.configure(height=px(150))
         self.barra.pack(side="right", fill="y")
         widgets.cartao_elastico(self.f_contas, cheio=True)
         for w in self.contas_box.winfo_children():
-            w.destroy()
+            if w is not self.lbl_vazio:      # o aviso é reaproveitado
+                w.destroy()
+        self.lbl_vazio.pack_forget()
         self.vars_contas = {}
         self.sem_destino = set()
         self.sem_banco = set()
@@ -441,6 +437,16 @@ class RelatorioFrame(ttk.Frame):
             v.trace_add("write", lambda *_a: self._contar_contas())
         self._contar_contas()
         self.b2.configure(state="normal")
+
+    def _mostrar_lista_vazia(self):
+        for w in self.contas_box.winfo_children():
+            if w is not self.lbl_vazio:
+                w.destroy()
+        self.vars_contas, self.sem_destino, self.sem_banco = {}, set(), set()
+        self.lbl_vazio.pack(anchor="w")
+        self.rodape_contas.limpar_links()
+        self.rodape_contas.definir(texto="")
+        self.b2.configure(state="disabled")
 
     def _todas_contas(self, marcar: bool):
         for v in self.vars_contas.values():
@@ -552,6 +558,12 @@ class RelatorioFrame(ttk.Frame):
             self._conferir_mapas()
             self.anx.garantir_sessao(self._log)
             pagina = self.anx.mc.page
+            # Os ids da lista central são os da API; o fluxo de caixa usa os
+            # dele. A ponte é o nome, lido UMA vez da própria tela (aqui, na
+            # thread do navegador, que é onde a página pode ser tocada).
+            tela = extrato_mc.listar_contas(pagina)
+            ids_tela, ausentes = extrato_mc.ids_da_tela(
+                [c["nome"] for c in contas], tela)
             self._log(f"\nExtratos de {ini_txt} a {fim_txt} — {len(contas)} conta(s)")
             self._log(f"Pasta do mês: {str(pasta_mes).replace(chr(92), '/')}")
             if periodo:
@@ -568,13 +580,16 @@ class RelatorioFrame(ttk.Frame):
                 self.q.put(("status", f"{i}/{len(contas)} — {nome[:45]}"))
                 marca = time.time()
                 try:
+                    if nome in ausentes:
+                        raise RuntimeError("não aparece no fluxo de caixa do "
+                                           "Mais Controle")
                     destino = self.mapa.de(nome)
                     if destino is None:         # a interface já barra, mas o
                         raise RuntimeError("conta sem pasta no mapa")  # mapa manda
                     arquivo = contas_mc.caminho_do_arquivo(self.mapa, destino,
                                                            ano, mes, periodo)
 
-                    extrato_mc.abrir_extrato(pagina, conta["id"], ini_txt, fim_txt)
+                    extrato_mc.abrir_extrato(pagina, ids_tela[nome], ini_txt, fim_txt)
                     n = extrato_mc.carregar_tudo(pagina, parar=self._parar.is_set)
 
                     # Confere ANTES de gravar: conta certa e paginação encerrada.

@@ -93,6 +93,29 @@ def listar_contas(page, incluir_inativas: bool = False) -> list[dict]:
     return sorted(itens, key=lambda c: (c["nome"] or "").lower())
 
 
+
+def ids_da_tela(nomes: list[str], contas_tela: list[dict]) -> tuple[dict, list]:
+    """Casa nomes de conta (da lista central) com os ids do fluxo de caixa.
+
+    A lista central traz os ids da API do ERP, e a tela `#/cash-flow` usa
+    OUTROS: o `accountId` da URL é o da tela. Por isso a ponte é o NOME, que
+    é o que as duas listas têm em comum, comparado por `util.norm_espaco`
+    (o nome vem do cadastro, digitado por gente). Devolve
+    `({nome: id_da_tela}, [nomes que a tela não mostra])`; quem falta não é
+    adivinhado — vira falha daquela conta, e as outras seguem."""
+    por_nome = {}
+    for c in contas_tela:
+        por_nome.setdefault(util.norm_espaco(c.get("nome") or ""), c["id"])
+    ids, faltam = {}, []
+    for nome in nomes:
+        achado = por_nome.get(util.norm_espaco(nome))
+        if achado is None:
+            faltam.append(nome)
+        else:
+            ids[nome] = achado
+    return ids, faltam
+
+
 # ------------------------------------------------------------------- extrato
 
 _JS_CTRL_CASHFLOW = """
