@@ -160,3 +160,40 @@ def test_ninguem_apaga_perfil_nem_auditoria():
         if tabela in FORA:
             assert " for delete " not in f" {texto} ".lower(), (
                 f"{tabela}.{nome} permite apagar")
+
+
+#: As quatro permissões que o privilégio PADRÃO do projeto dava a `anon` e
+#: `authenticated` em toda tabela nova (`Dxtm`). TRUNCATE passa por cima da
+#: RLS: esvazia a tabela sem perguntar `e_ativo()`.
+_SOBRAS = ("truncate", "trigger", "references", "maintain")
+
+
+def test_a_api_nao_tem_truncate_nem_as_outras_sobras():
+    """Revogadas em 05/10/2026 nas tabelas existentes E no padrão das novas.
+
+    O padrão é a metade que se esquece: sem ele, a próxima migration que
+    criar tabela traz as quatro de volta, sem uma linha de SQL dizendo isso.
+    E depois da revogação, nenhuma migration pode concedê-las de novo — nem
+    por `grant all`."""
+    revogou_tabelas = revogou_padrao = False
+    for arquivo, comando in _comandos():
+        c = comando.lower()
+        papeis_da_api = "anon" in c or "authenticated" in c
+        if (c.startswith("revoke ") and papeis_da_api
+                and "on all tables in schema public" in c
+                and all(s in c for s in _SOBRAS)):
+            revogou_tabelas = True
+        if (c.startswith("alter default privileges for role postgres")
+                and "revoke" in c and papeis_da_api
+                and all(s in c for s in _SOBRAS)):
+            revogou_padrao = True
+        if (revogou_tabelas and c.startswith("grant ") and papeis_da_api
+                and (" all " in f" {c} "
+                     or any(re.search(rf"\b{s}\b", c) for s in _SOBRAS))):
+            raise AssertionError(
+                f"{arquivo} devolve a anon/authenticated uma permissão "
+                f"que passa por cima da RLS: {comando}")
+    assert revogou_tabelas, ("nenhuma migration revoga TRUNCATE/TRIGGER/"
+                             "REFERENCES/MAINTAIN das tabelas do public")
+    assert revogou_padrao, ("o padrão do `postgres` ainda dá as quatro a "
+                            "toda tabela nova")
