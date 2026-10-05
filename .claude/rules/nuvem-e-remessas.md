@@ -85,6 +85,36 @@ resolver. Três consequências:
   ninguém o via. Congelado dava no mesmo, então o desencontro só aparecia em
   desenvolvimento, que é justamente onde se testa.
 
+**Contas num lugar só (05/10/2026, pedido do dono).** Cada aba buscava a sua
+lista de contas, e a conta incluída numa era esquecida na outra. Agora a busca
+é uma só, `nuvem/contas_central.py`: lê as contas ATIVAS do ERP por HTTP e
+guarda em `contas_erp.json`, um cache como os outros. **Vazio nunca substitui
+cheio** — ERP fora do ar devolve lista vazia, e isso não apaga a de ontem. Dali
+sai o que falta no cadastro (Supabase) e/ou no painel do Saldo
+(`pendencias`), `aplicar` grava (cadastro primeiro, painel depois; painel
+recusado nunca desfaz o cadastro) e `avisar_abas` chama o gancho
+`recarregar_contas` das abas que o têm, cada uma num `try` próprio.
+
+O gatilho é o botão **"⟳ Atualizar contas"**, logo abaixo da pílula do cadastro
+no rodapé do menu (e a mesma rodada roda uma vez na abertura, calada se o ERP
+não responde). Uma rodada por vez, com trava: duas ao mesmo tempo seriam dois
+logins por API (cada um derruba a sessão do outro) e duas janelas perguntando
+pelas mesmas contas. O botão sincroniza o cadastro, lê o ERP, **refaz o login
+do Chrome do app** (o login por HTTP derruba a sessão dele) e roda na thread do
+navegador; se o ERP não respondeu, AVISA — nunca diz "nenhuma conta nova" sem
+ter conferido. Pergunta numa janela só (`nuvem/contas_novas_dialogo.py`), com
+uma linha por conta dizendo onde falta (cadastro, painel ou os dois), e depois
+de gravar **ressincroniza** o cadastro e avisa as abas, para a conta nova
+valer já nesta sessão.
+
+Quem ouve: Relatório Mensal (lista vem do cache central; o id da tela
+`#/cash-flow` é resolvido pelo NOME na hora do "Gerar", e nome repetido na tela
+falha a conta em vez de adivinhar), Baixar Comprovantes, Aportes (a recarga
+espera o comando em andamento terminar, porque zera os catálogos do ERP) e
+Remessa/Retorno. Saldo de pagamentos perdeu o "Verificar contas novas" e o
+Anexar teve o botão renomeado para "Buscar pagamentos" (já não carrega contas).
+Decisões do dono: busca num lugar só, e uma janela só para cadastro e painel.
+
 **Editar cadastro é no painel do Supabase**, que é uma planilha no navegador.
 Não há tela no app, de propósito: esses cadastros mudam raras vezes, e a
 validação mora no BANCO (`unique`, `check`, FK), onde vale independentemente
