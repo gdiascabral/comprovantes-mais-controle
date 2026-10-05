@@ -13,7 +13,7 @@ import pytest
 from contratos.pipeline import (Achado, aplicar_resolucao, arquivar,
                                 chave_da_casa, esperado_da_conferencia,
                                 levantar, pode_resolver, preparar_destino,
-                                reaplicar)
+                                reaplicar, reaplicar_distratos)
 
 
 class _Empresa:
@@ -95,8 +95,11 @@ class Leitor:
 class ApiDuble:
     """Só o que o pipeline usa. Registra o que foi pedido."""
 
-    def __init__(self, registros, credenciais=True):
+    def __init__(self, registros, credenciais=True, anexos=None):
         self.registros = registros
+        self.anexos = ANEXOS if anexos is None else anexos
+        #: Bytes por URL; o que não está aqui baixa como o PDF falso de sempre.
+        self.conteudos = {}
         self.baixados = []
         self.credenciais = credenciais     # a captura do 2º back-end deu certo?
         self.chamadas = []                 # em que ordem o pipeline pediu
@@ -114,14 +117,14 @@ class ApiDuble:
         return OBRAS
 
     def anexos_de_obras(self, ids, log=print, cancelar=None):
-        return {i: ANEXOS.get(i, []) for i in ids}
+        return {i: self.anexos.get(i, []) for i in ids}
 
     def detalhe_da_obra(self, work_id):
         return {"address": {"address": "Rua TB 21", "complement": "QD 46 LT 18"}}
 
     def baixar_anexo(self, url):
         self.baixados.append(url)
-        return b"%PDF-falso"
+        return self.conteudos.get(url, b"%PDF-falso")
 
 
 REGISTROS = [
@@ -538,3 +541,334 @@ def test_caminho_longo_demais_e_recusado_antes_de_gravar(tmp_path):
     motivo = preparar_destino(achado, fundo, 2026, 8, _nome_mes, _pasta_empresa)
     assert "260" in motivo
     assert achado.destino is None
+
+
+# ------------------------------------------------- casa com distrato
+#: Dois contratos da casa 01, de compradores diferentes, e o distrato do
+#: PRIMEIRO. O recebimento do mês é do SEGUNDO (a casa foi revendida).
+CCV_PRIMEIRO = "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 .pdf"
+CCV_SEGUNDO = "CONTRATO DE COMPRA E VENDA TB 21 QD46 LT18 CS 01 .pdf"
+DISTRATO_CS01 = "DISTRATO TB 21 QD 46 LT 18 C1 .pdf"
+URL_PRIMEIRO = "https://exemplo.invalid/p1"
+URL_SEGUNDO = "https://exemplo.invalid/s1"
+URL_DISTRATO = "https://exemplo.invalid/dt"
+
+ANEXOS_COM_DISTRATO = {
+    "obra-1": [
+        {"id": "p1", "filename": CCV_PRIMEIRO, "extension": ".pdf",
+         "downloadUrl": URL_PRIMEIRO},
+        {"id": "s1", "filename": CCV_SEGUNDO, "extension": ".pdf",
+         "downloadUrl": URL_SEGUNDO},
+        {"id": "dt", "filename": DISTRATO_CS01, "extension": ".pdf",
+         "downloadUrl": URL_DISTRATO},
+    ],
+}
+
+TEXTO_PRIMEIRO = TEXTO
+TEXTO_SEGUNDO = TEXTO.replace("PRIMEIRO", "SEGUNDO")
+TEXTO_DISTRATO = ("TERMO DE DISTRATO entre a vendedora e PRIMEIRO COMPRADOR "
+                  "EXEMPLO, referente ao imovel TB 21 QD 46 LT 18 CASA 01, "
+                  "desfeito por vontade das partes.")
+
+
+def _abrir_texto(dados):
+    """O leitor dublê lê os bytes como texto: o conteúdo baixado É o texto."""
+    return Leitor(dados.decode())
+
+
+def _api_com_distrato():
+    api = ApiDuble([receb("TB 21 QD 46 LT 18", 1, "SEGUNDO COMPRADOR EXEMPLO")],
+                   anexos=ANEXOS_COM_DISTRATO)
+    api.conteudos = {URL_PRIMEIRO: TEXTO_PRIMEIRO.encode(),
+                     URL_SEGUNDO: TEXTO_SEGUNDO.encode(),
+                     URL_DISTRATO: TEXTO_DISTRATO.encode()}
+    return api
+
+
+def _levantar_com_distrato(api, abrir_pdf=_abrir_texto, log=_sem_log):
+    return levantar(api, 2026, 8, EMPRESAS, log=log, abrir_pdf=abrir_pdf)
+
+
+def test_casa_com_distrato_vira_uma_linha_por_comprador():
+    recados = []
+    achados = _levantar_com_distrato(_api_com_distrato(), log=recados.append)
+    assert len(achados) == 2
+    atual, antigo = achados
+    assert atual.comprador_contrato == "SEGUNDO COMPRADOR EXEMPLO"
+    assert atual.contrato == CCV_SEGUNDO
+    assert not atual.outro_contrato and not atual.distrato
+    assert not atual.distrato_sugerido and atual.casa_com_distrato
+    assert antigo.comprador_contrato == "PRIMEIRO COMPRADOR EXEMPLO"
+    assert antigo.contrato == CCV_PRIMEIRO
+    assert antigo.outro_contrato and antigo.distrato and antigo.distrato_sugerido
+    assert antigo.casa_com_distrato
+    assert all(a.empresa == "BURITIS" and not a.revisao and a.marcado
+               for a in achados)
+    assert chave_da_casa(atual) != chave_da_casa(antigo)
+    assert any("2 contrato(s) e 1 distrato(s)" in m
+               and "PRIMEIRO COMPRADOR EXEMPLO (distratado)" in m
+               for m in recados)
+
+
+def test_sem_abrir_pdf_a_casa_segue_a_regra_de_hoje():
+    achados = levantar(_api_com_distrato(), 2026, 8, EMPRESAS, log=_sem_log)
+    assert len(achados) == 1
+    assert achados[0].revisao and not achados[0].anexo
+    assert not achados[0].casa_com_distrato
+
+
+def test_casa_sem_distrato_nao_baixa_nada_na_busca():
+    api = ApiDuble([receb("TB 21 QD 46 LT 18", 1, "PRIMEIRO COMPRADOR EXEMPLO")])
+    achados = _levantar_com_distrato(api)
+    assert len(achados) == 1 and achados[0].contrato == CCV_CS01
+    assert api.baixados == []
+    assert not achados[0].casa_com_distrato and achados[0].dados is None
+
+
+def test_comprador_ilegivel_fica_desmarcado():
+    recados = []
+    api = _api_com_distrato()
+    api.conteudos[URL_PRIMEIRO] = b"%PDF-escaneado"     # sem camada de texto
+    achados = _levantar_com_distrato(api, log=recados.append)
+    assert len(achados) == 2
+    extra = achados[1]
+    assert extra.outro_contrato and extra.contrato == CCV_PRIMEIRO
+    assert extra.distrato is False and extra.comprador_contrato == ""
+    assert extra.revisao == ""
+    assert extra.marcado is False           # o arquivar recusaria
+    assert achados[0].marcado
+    assert any("não consegui ler o comprador de" in m
+               and "Distrato fica desmarcado" in m for m in recados)
+
+
+def test_contrato_que_nao_baixa_deixa_a_casa_em_revisao():
+    api = _api_com_distrato()
+    api.conteudos[URL_SEGUNDO] = b""
+    achados = _levantar_com_distrato(api)
+    assert len(achados) == 1
+    assert "não consegui baixar" in achados[0].revisao
+    assert CCV_SEGUNDO.strip() in achados[0].revisao
+    assert not achados[0].marcado
+
+
+def test_casa_com_contratos_demais_vai_para_revisao():
+    anexos = {"obra-1": [
+        {"id": f"c{n}", "filename": f"CONTRATO DE COMPRA E VENDA V{n} TB 21 "
+         f"QD 46 LT 18 CS 01 .pdf", "extension": ".pdf",
+         "downloadUrl": f"https://exemplo.invalid/c{n}"} for n in range(7)
+    ] + ANEXOS_COM_DISTRATO["obra-1"][2:]}
+    api = ApiDuble([receb("TB 21 QD 46 LT 18", 1, "SEGUNDO COMPRADOR EXEMPLO")],
+                   anexos=anexos)
+    achados = _levantar_com_distrato(api)
+    assert len(achados) == 1
+    assert "7 contratos e distrato na casa" in achados[0].revisao
+    assert api.baixados == []
+
+
+def test_esperado_da_linha_extra_e_o_comprador_do_contrato():
+    atual, antigo = _levantar_com_distrato(_api_com_distrato())
+    esperado = esperado_da_conferencia(antigo)
+    assert esperado["comprador"] == "PRIMEIRO COMPRADOR EXEMPLO"
+    assert esperado["valor_venda"] is None
+    # a linha do recebimento segue conferindo o comprador e o valor de hoje
+    assert esperado_da_conferencia(atual)["comprador"] == \
+        "SEGUNDO COMPRADOR EXEMPLO"
+    assert str(esperado_da_conferencia(atual)["valor_venda"]) == "245000.00"
+
+
+def test_arquivar_grava_os_dois_e_o_distratado_com_sufixo(tmp_path):
+    api = _api_com_distrato()
+    achados = _levantar_com_distrato(api)
+    baixados_na_busca = list(api.baixados)
+    _arquivar(api, achados, tmp_path, leitor=_abrir_texto)
+
+    assert all(a.arquivado and not a.revisao for a in achados), \
+        [a.revisao for a in achados]
+    pasta = achados[0].destino.parent
+    nomes = sorted(p.name for p in pasta.iterdir())
+    assert len(nomes) == 2
+    assert sum(n.endswith("(Distratado).pdf") for n in nomes) == 1
+    assert achados[1].destino.name.endswith("(Distratado).pdf")
+    assert "PRIMEIRO COMPRADOR EXEMPLO" in achados[1].destino.name
+    assert "SEGUNDO COMPRADOR EXEMPLO" in achados[0].destino.name
+    assert achados[0].destino.read_bytes() == TEXTO_SEGUNDO.encode()
+    assert achados[1].destino.read_bytes() == TEXTO_PRIMEIRO.encode()
+    assert api.baixados == baixados_na_busca        # usou o que já tinha
+
+
+def test_rodada_refeita_diz_ja_estava(tmp_path):
+    api = _api_com_distrato()
+    achados = _levantar_com_distrato(api)
+    _arquivar(api, achados, tmp_path, leitor=_abrir_texto)
+    _arquivar(api, achados, tmp_path, leitor=_abrir_texto)
+    assert all(a.arquivado and a.ja_existia for a in achados), \
+        [a.revisao for a in achados]
+
+
+def test_busca_refeita_depois_de_arquivar_diz_ja_estava(tmp_path):
+    api = _api_com_distrato()
+    _arquivar(api, _levantar_com_distrato(api), tmp_path, leitor=_abrir_texto)
+    de_novo = _levantar_com_distrato(api)
+    _arquivar(api, de_novo, tmp_path, leitor=_abrir_texto)
+    assert all(a.arquivado and a.ja_existia for a in de_novo), \
+        [a.revisao for a in de_novo]
+
+
+def test_linha_extra_sem_comprador_lido_nao_grava_com_o_nome_do_recebimento(
+        tmp_path):
+    """Sem o comprador lido, o nome do arquivo cairia no do recebimento — e
+    o contrato de outra pessoa iria para a pasta com o nome errado."""
+    api = _api_com_distrato()
+    api.conteudos[URL_PRIMEIRO] = b"%PDF-escaneado"
+    achados = _levantar_com_distrato(api)
+    achados[0].marcado = False              # só a linha extra na rodada,
+    achados[1].marcado = True               # marcada à mão na tabela
+    _arquivar(api, achados, tmp_path, leitor=_abrir_texto)
+    extra = achados[1]
+    assert not extra.arquivado and "comprador" in extra.revisao
+    pasta = tmp_path / "2026" / "AGOSTO" / "AGOSTO 2026 - BURITIS" / "CONTRATOS"
+    assert not pasta.exists() or not any(pasta.iterdir())
+
+
+def test_escolher_outro_contrato_a_mao_descarta_o_pdf_ja_baixado():
+    """O PDF baixado na busca é do anexo escolhido ali; trocar o anexo à mão
+    e gravar os bytes antigos poria um arquivo com o nome do outro."""
+    achados = _levantar_com_distrato(_api_com_distrato())
+    atual = achados[0]
+    assert atual.dados
+    aplicar_resolucao(atual, anexo=ANEXOS_COM_DISTRATO["obra-1"][0])
+    assert atual.dados is None
+
+
+def test_duas_versoes_do_mesmo_comprador_sem_marca_ficam_em_revisao():
+    """Grupo sem escolha: a linha fica sem anexo e diz por quê; a outra linha
+    da casa segue normal."""
+    anexos = {"obra-1": ANEXOS_COM_DISTRATO["obra-1"] + [
+        {"id": "s2", "filename": "CONTRATO DE COMPRA E VENDA TB21 QD 46 LT 18 "
+         "CS 01 .pdf", "extension": ".pdf",
+         "downloadUrl": "https://exemplo.invalid/s2"}]}
+    api = _api_com_distrato()
+    api.anexos = anexos
+    api.conteudos["https://exemplo.invalid/s2"] = (
+        TEXTO_SEGUNDO + "\nversao revista").encode()
+    atual, antigo = _levantar_com_distrato(api)
+    assert not atual.anexo and atual.dados is None
+    assert "2 versões diferentes" in atual.revisao and not atual.marcado
+    assert atual.comprador_contrato == "SEGUNDO COMPRADOR EXEMPLO"
+    assert antigo.anexo and antigo.distrato and antigo.marcado
+
+
+def _api_so_do_distratado():
+    """O recebimento é do SEGUNDO, mas a casa só tem o contrato do PRIMEIRO
+    e o distrato dele: o contrato de quem pagou não está na obra."""
+    api = _api_com_distrato()
+    api.anexos = {"obra-1": [ANEXOS_COM_DISTRATO["obra-1"][0],
+                             ANEXOS_COM_DISTRATO["obra-1"][2]]}
+    return api
+
+
+def test_sem_o_contrato_de_quem_pagou_a_linha_do_recebimento_fica_em_revisao():
+    recados = []
+    achados = _levantar_com_distrato(_api_so_do_distratado(),
+                                     log=recados.append)
+    assert len(achados) == 2
+    receb_, antigo = achados
+    assert not receb_.outro_contrato and not receb_.anexo
+    assert receb_.dados is None and not receb_.marcado
+    assert receb_.revisao == ("não achei o contrato de SEGUNDO COMPRADOR "
+                              "EXEMPLO entre os 1 contrato(s) da casa")
+    assert antigo.outro_contrato and antigo.distrato and antigo.marcado
+    assert antigo.comprador_contrato == "PRIMEIRO COMPRADOR EXEMPLO"
+    assert any("1 contrato(s) e 1 distrato(s)" in m for m in recados)
+
+
+def test_sem_o_contrato_de_quem_pagou_so_o_distratado_vai_para_a_pasta(
+        tmp_path):
+    api = _api_so_do_distratado()
+    achados = _levantar_com_distrato(api)
+    _arquivar(api, achados, tmp_path, leitor=_abrir_texto)
+    receb_, antigo = achados
+    assert not receb_.arquivado and "não achei o contrato" in receb_.revisao
+    assert antigo.arquivado
+    pasta = antigo.destino.parent
+    assert [p.name for p in pasta.iterdir()] == [
+        "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 - "
+        "PRIMEIRO COMPRADOR EXEMPLO (Distratado).pdf"]
+
+
+def test_o_log_conta_os_distratos_lidos_nao_os_achados():
+    recados = []
+    api = _api_com_distrato()
+    api.conteudos[URL_DISTRATO] = b""           # o distrato não baixou
+    achados = _levantar_com_distrato(api, log=recados.append)
+    assert not any(a.distrato for a in achados)
+    assert any("2 contrato(s) e 0 distrato(s)" in m for m in recados)
+
+
+# ------------------------------------------------- revisão final
+def test_resumo_da_linha_extra_e_do_comprador_do_contrato():
+    """A linha extra é o contrato de OUTRA pessoa: o resumo (registro e
+    conferência) não pode trazer o nome nem o dinheiro de quem pagou."""
+    atual, antigo = _levantar_com_distrato(_api_com_distrato())
+    assert "PRIMEIRO COMPRADOR EXEMPLO" in antigo.resumo
+    assert "SEGUNDO COMPRADOR EXEMPLO" not in antigo.resumo
+    assert "R$" not in antigo.resumo
+    assert "outro contrato da casa" in antigo.resumo
+    assert "SEGUNDO COMPRADOR EXEMPLO" in atual.resumo and "R$" in atual.resumo
+
+
+def test_distrato_marcado_em_casa_sem_distrato_ainda_confere_comprador_e_valor():
+    """Marcar DISTRATO numa casa comum não tira o comprador da conferência
+    (o contrato sairia com "(Distratado)" sem conferir de quem é)."""
+    a = next(x for x in _levantar() if x.anexo)
+    assert not a.comprador_contrato and a.imovel.comprador
+    a.distrato = True
+    esperado = esperado_da_conferencia(a)
+    assert esperado["comprador"] == a.imovel.comprador
+    assert esperado["valor_venda"] == a.imovel.valor_venda
+    assert esperado["valor_venda"] is not None
+
+
+def test_linha_do_recebimento_marcada_como_distrato_confere_o_valor():
+    atual, antigo = _levantar_com_distrato(_api_com_distrato())
+    atual.distrato = True
+    esperado = esperado_da_conferencia(atual)
+    assert esperado["comprador"] == "SEGUNDO COMPRADOR EXEMPLO"
+    assert str(esperado["valor_venda"]) == "245000.00"
+    assert esperado_da_conferencia(antigo)["valor_venda"] is None
+
+
+def test_marca_de_distrato_feita_a_mao_volta_na_busca_seguinte():
+    atual, antigo = _levantar_com_distrato(_api_com_distrato())
+    marcas = {chave_da_casa(atual): True, chave_da_casa(antigo): False}
+    de_novo = _levantar_com_distrato(_api_com_distrato())
+    assert reaplicar_distratos(de_novo, marcas) == 2
+    assert de_novo[0].distrato is True and de_novo[1].distrato is False
+    # a sugestão fica como estava: é a marca que a pessoa mudou
+    assert de_novo[1].distrato_sugerido is True
+
+
+def test_marca_de_distrato_de_linha_que_sumiu_nao_volta():
+    atual, antigo = _levantar_com_distrato(_api_com_distrato())
+    marcas = {chave_da_casa(antigo): False}
+    so_a_casa = _levantar_com_distrato(_api_so_do_distratado())
+    receb_ = so_a_casa[0]                     # sem anexo: nada a marcar
+    marcas[chave_da_casa(receb_)] = True
+    assert reaplicar_distratos(so_a_casa, marcas) == 1
+    assert receb_.distrato is False
+    assert so_a_casa[1].distrato is False
+    # casa comum, sem marca guardada, fica como veio
+    comum = _levantar()
+    assert reaplicar_distratos(comum, {chave_da_casa(antigo): True}) == 0
+    assert not any(a.distrato for a in comum)
+
+
+def test_parar_no_meio_da_casa_com_distrato_para_limpo():
+    api = _api_com_distrato()
+    achados = levantar(api, 2026, 8, EMPRESAS, log=_sem_log,
+                       abrir_pdf=_abrir_texto,
+                       cancelar=lambda: len(api.baixados) >= 1)
+    assert len(api.baixados) == 1
+    assert len(achados) == 1
+    assert "interrompida" in achados[0].revisao
+    assert not achados[0].marcado and not achados[0].anexo

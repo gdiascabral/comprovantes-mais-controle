@@ -103,6 +103,13 @@ def test_linha_de_formato_desconhecido_vai_como_esta():
     assert pacote.linha_do_contrato("ADITIVO SEM PADRAO.pdf") == "ADITIVO SEM PADRAO"
 
 
+def test_linha_do_contrato_distratado_mantem_a_marca():
+    nome = ("CONTRATO DE COMPRA E VENDA RPB 99 QD 1A LT 2 CS 01 - "
+            "FULANO DE TAL (Distratado).pdf")
+    assert pacote.linha_do_contrato(nome) == \
+        "RPB 99 QD 1A LT 2 Casa 01 - Fulano de Tal (Distratado)"
+
+
 # ---------------------------------------------------------- contratos do zip
 
 def test_contratos_saem_de_dentro_do_zip_ordenados(mes):

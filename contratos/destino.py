@@ -36,6 +36,9 @@ SUBPASTA = "CONTRATOS"
 #: Começo do nome do arquivo gravado pelo app.
 PREFIXO = "CONTRATO DE COMPRA E VENDA"
 
+#: Sufixo para contrato distratado.
+SUFIXO_DISTRATADO = " (Distratado)"
+
 #: Proibidos em nome de arquivo no Windows. O comprador vem de texto digitado
 #: por gente e já apareceu com barra ("MARIA / JOSE").
 PROIBIDOS = '\\/:*?"<>|'
@@ -72,11 +75,12 @@ def limpar(texto: str) -> str:
 
 
 def nome_arquivo(obra: str, unidade: int, comprador: str,
-                 extensao: str = ".pdf") -> str:
+                 extensao: str = ".pdf", distratado: bool = False) -> str:
     """`CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 02 - FULANO DE TAL.pdf`.
 
     A extensão vem do anexo e chega COM ponto (`extension` da API), então não
-    se acrescenta outro."""
+    se acrescenta outro. Se `distratado` é True, acrescenta o sufixo
+    " (Distratado)" antes da extensão."""
     ext = (extensao or ".pdf").strip()
     if ext and not ext.startswith("."):
         ext = "." + ext
@@ -84,6 +88,8 @@ def nome_arquivo(obra: str, unidade: int, comprador: str,
     comprador = limpar(comprador)
     if comprador:
         base += f" - {comprador}"
+    if distratado:
+        base += SUFIXO_DISTRATADO
     return base + ext
 
 
@@ -111,23 +117,38 @@ def _compacto(texto: str) -> str:
 
 
 def mesmo_contrato_na_pasta(pasta: Path, obra: str, unidade: int,
-                            exceto: Path | None = None) -> Path | None:
+                            exceto: Path | set | None = None) -> Path | None:
     """Um contrato de compra e venda desta casa que JÁ está na pasta com outro
     nome, ou None.
 
     Serve para a rodada refeita e para o mês arquivado à mão: gravar um
     segundo arquivo da mesma casa faria a Acessórias listar a casa duas vezes
     ao escritório. Compara sem espaços porque o nome é digitado por gente
-    (`QD46 LT18` e `QD 46 LT 18` são a mesma obra)."""
+    (`QD46 LT18` e `QD 46 LT 18` são a mesma obra). `exceto` pode ser um único
+    Path ou uma coleção de Path/nomes; nenhum deles conta como "outro"."""
     try:
         if not Path(pasta).is_dir():
             return None
         arquivos = [p for p in Path(pasta).iterdir() if p.is_file()]
     except OSError:
         return None
+
+    # Normalizar exceto para um conjunto de nomes
+    nomes_exceto = set()
+    if exceto is not None:
+        if isinstance(exceto, Path):
+            nomes_exceto.add(exceto.name)
+        else:
+            # exceto é uma coleção
+            for item in exceto:
+                if isinstance(item, Path):
+                    nomes_exceto.add(item.name)
+                else:
+                    nomes_exceto.add(str(item))
+
     alvo_obra = _compacto(obra)
     for p in sorted(arquivos):
-        if exceto is not None and p.name == exceto.name:
+        if p.name in nomes_exceto:
             continue
         nome = _compacto(p.stem)
         if "COMPRAEVENDA" not in nome and "CCV" not in nome:

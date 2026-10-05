@@ -6,8 +6,9 @@ formato que importa, e o repositório é público. Eles trazem de graça três
 armadilhas que ninguém inventaria: a obra escrita errada dentro do arquivo
 (QD 26 numa obra QD 46), a versão sem espaço (QD46 LT18) e anexos repetidos.
 """
-from contratos.escolha import (candidatos, contrato_de, eh_compra_e_venda,
-                               excluido_por, ordenar_para_escolha)
+from contratos.escolha import (candidatos, contrato_de, distratos_da_casa,
+                               eh_compra_e_venda, eh_distrato, excluido_por,
+                               ordenar_para_escolha)
 
 # Os 52 anexos da obra TB 21 QD 46 LT 18, como o ERP devolve.
 NOMES = [
@@ -248,3 +249,17 @@ def test_a_lista_de_obra_vazia_nao_quebra():
     assert ordenar_para_escolha([], 1) == []
     assert ordenar_para_escolha(None, 1) == []
     assert ordenar_para_escolha(ANEXOS, None)[0][1] is False
+
+
+# --------------------------------------------------------- distratos
+def test_distrato_e_rescisao_sao_distrato():
+    assert eh_distrato("DISTRATO TB 21 QD 46 LT 18 C1 .pdf")
+    assert eh_distrato("Termo de Rescisão CS 01.pdf")
+    assert not eh_distrato("CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 .pdf")
+
+
+def test_casa_01_da_obra_real_tem_um_distrato_e_a_02_nenhum():
+    assert [a["filename"] for a in distratos_da_casa(ANEXOS, 1)] == [
+        "DISTRATO TB 21 QD 46 LT 18 C1 .pdf"]
+    assert distratos_da_casa(ANEXOS, 2) == []
+    assert distratos_da_casa(ANEXOS, None) == []
