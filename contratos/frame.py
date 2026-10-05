@@ -424,14 +424,18 @@ class ContratosFrame(ttk.Frame):
         """O que a janela decidiu, aplicado à lista (e ao cadastro)."""
         if empresa and gravar and empresa != achado.empresa:
             try:
-                _, contas = _sicoob()
-                contas.adicionar_cliente_erp(empresa, achado.cliente_erp)
+                # Na nuvem, e não só no `contas_sicoob.json`: o arquivo é
+                # regravado a partir da tabela `cliente_erp` a cada abertura,
+                # e a escolha gravada só nele sumia no dia seguinte.
+                from nuvem import clientes_erp, sessao
+                clientes_erp.gravar(sessao.token(), empresa,
+                                    achado.cliente_erp)
                 self._log(f'Cadastro: "{achado.cliente_erp}" agora é cliente '
-                          f"de {empresa} no contas_sicoob.json.")
+                          f"de {empresa} (gravado na nuvem).")
             except Exception as e:
                 # A escolha continua valendo para esta rodada: perder o
-                # trabalho da pessoa porque o arquivo estava aberto no bloco
-                # de notas seria pior do que perguntar de novo no mês que vem.
+                # trabalho da pessoa porque a internet caiu (ou o banco
+                # recusou) seria pior do que perguntar de novo no mês que vem.
                 messagebox.showwarning(
                     "Não gravei no cadastro",
                     widgets.recado_de_erro(e, "Não gravei no cadastro.")
