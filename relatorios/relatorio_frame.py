@@ -63,6 +63,9 @@ MESES = list(widgets.MESES)
 
 
 class RelatorioFrame(ttk.Frame):
+    _TEXTO_VAZIO = ('Ainda não há lista de contas. Clique em "Atualizar '
+                    'contas", no rodapé do menu.')
+
     def __init__(self, master, anexar_frame):
         super().__init__(master)
         self.anx = anexar_frame          # dono do navegador e da thread
@@ -73,6 +76,8 @@ class RelatorioFrame(ttk.Frame):
         self.vars_contas: dict[str, tk.BooleanVar] = {}
         self.ultima_pasta: Path | None = None
         self.mapa: contas_mc.Mapa | None = None
+        self._erro_mapa = ""             # último motivo (não repete no registro)
+        self._assinatura = None          # [(id, nome)] da lista montada
         self.sem_destino: set[str] = set()
         self.sem_banco: set[str] = set()
 
@@ -100,6 +105,8 @@ class RelatorioFrame(ttk.Frame):
         self.cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
         corpo = widgets.AreaRolavel(self)
+        # Sem botão de passo 1: o Enter global não faz nada aqui, de propósito
+        # (o b2 abre um lote longo no Chrome; Enter solto não pode iniciá-lo).
         self.b2 = widgets.Botao(self.cab.acoes, "Gerar os extratos",
                                 papel="acao", command=self.gerar,
                                 state="disabled")
@@ -167,8 +174,7 @@ class RelatorioFrame(ttk.Frame):
         # ela vira duas setinhas espremidas ao lado de uma frase.
         self.lbl_vazio = ttk.Label(
             self.contas_box, style="Tenue.TLabel",
-            text='Ainda não há lista de contas. Clique em "Atualizar contas", '
-                 'no rodapé do menu.')
+            text=self._TEXTO_VAZIO)
         self.lbl_vazio.pack(anchor="w")
 
         # ---- card 3: destino
@@ -284,8 +290,11 @@ class RelatorioFrame(ttk.Frame):
         try:
             self.mapa = contas_mc.carregar()
         except contas_mc.MapaInvalido as e:
-            self._log(f"[!] {e}")
+            if str(e) != self._erro_mapa:    # ao_abrir repete a cada visita
+                self._log(f"[!] {e}")
+            self._erro_mapa = str(e)
             return False
+        self._erro_mapa = ""
         self.v_pasta.set(str(self.mapa.raiz).replace("\\", "/"))
         self._conferir_mapas()
         return True
@@ -372,12 +381,21 @@ class RelatorioFrame(ttk.Frame):
             return                    # lote rodando: a lista não troca no meio
         if not self._garantir_mapa():
             self.q.put(("status", "Falta o mapa contas_mc.json."))
+            self._mostrar_lista_vazia(
+                self._erro_mapa or "Falta o mapa contas_mc.json.")
+            self._assinatura = None
+            self.contas = []
             return
+        novas = contas_central.ler_lista()
+        assinatura = [(c.get("id"), c["nome"]) for c in novas]
+        if assinatura == self._assinatura:
+            return                    # nada mudou: não pisca nem volta ao topo
+        self._assinatura = assinatura
         marcadas = {c["nome"] for c in self.contas
                     if self.vars_contas.get(c["id"]) is not None
                     and self.vars_contas[c["id"]].get()}
         antigas = {c["nome"] for c in self.contas}
-        self.contas = contas_central.ler_lista()
+        self.contas = novas
         self._montar_contas(self.contas)
         # Quem já estava marcado continua: a aba é reaberta a todo momento, e
         # perder a seleção a cada visita faria refazer o trabalho de marcar.
@@ -438,7 +456,8 @@ class RelatorioFrame(ttk.Frame):
         self._contar_contas()
         self.b2.configure(state="normal")
 
-    def _mostrar_lista_vazia(self):
+    def _mostrar_lista_vazia(self, motivo: str = ""):
+        self.lbl_vazio.configure(text=motivo or self._TEXTO_VAZIO)
         for w in self.contas_box.winfo_children():
             if w is not self.lbl_vazio:
                 w.destroy()
@@ -562,7 +581,7 @@ class RelatorioFrame(ttk.Frame):
             # dele. A ponte é o nome, lido UMA vez da própria tela (aqui, na
             # thread do navegador, que é onde a página pode ser tocada).
             tela = extrato_mc.listar_contas(pagina)
-            ids_tela, ausentes = extrato_mc.ids_da_tela(
+            ids_tela, ausentes, ambiguas = extrato_mc.ids_da_tela(
                 [c["nome"] for c in contas], tela)
             self._log(f"\nExtratos de {ini_txt} a {fim_txt} — {len(contas)} conta(s)")
             self._log(f"Pasta do mês: {str(pasta_mes).replace(chr(92), '/')}")
@@ -580,6 +599,10 @@ class RelatorioFrame(ttk.Frame):
                 self.q.put(("status", f"{i}/{len(contas)} — {nome[:45]}"))
                 marca = time.time()
                 try:
+                    if nome in ambiguas:
+                        raise RuntimeError("aparece mais de uma vez no fluxo "
+                                           "de caixa do Mais Controle — baixe "
+                                           "pela tela")
                     if nome in ausentes:
                         raise RuntimeError("não aparece no fluxo de caixa do "
                                            "Mais Controle")
