@@ -16,9 +16,12 @@
 --   delete  -> NAO. Idem.
 --
 -- O que isso troca: um token vazado de usuario ATIVO pode acrescentar nomes
--- de cliente a uma empresa -- chato e reversivel. Nao pode tirar cliente de
--- uma empresa nem move-lo para outra: o indice unico `cliente_erp_nome_unico`
--- (lower(nome)) recusa o mesmo nome numa segunda empresa.
+-- de cliente a uma empresa. Nao pode tirar cliente de uma empresa nem move-lo
+-- para outra: o indice unico `cliente_erp_nome_unico` (lower(nome)) recusa o
+-- mesmo nome numa segunda empresa. O avesso disso: quem grava PRIMEIRO numa
+-- empresa errada faz a escolha certa ser recusada, e os contratos daquele
+-- cliente vao para a pasta errada ate alguem corrigir pelo painel --
+-- reversivel, e restrito a conta liberada.
 --
 -- Idempotente: pode rodar duas vezes.
 
