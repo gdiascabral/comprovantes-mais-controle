@@ -87,7 +87,7 @@ from ..errors import ErpError, SessaoExpirada
 from ..models import ErpAccount
 from .auth import obter_credenciais
 
-__all__ = ["SessaoApi", "coletar_contas_api"]
+__all__ = ["SessaoApi", "conta_do_erp", "coletar_contas_api"]
 
 #: O `user-agent` que passa pelo WAF. O VALOR mora no `erp/` — aqui e so o
 #: nome, que continua existindo porque `ferramentas/sonda.py:353` se apresenta
@@ -315,19 +315,23 @@ class SessaoApi:
         """Contas + saldos unidos — o equivalente ao que a tela mostra."""
         crus = self.listar_contas(ativas=ativas)
         mapa = self.saldos([c["id"] for c in crus if c.get("id")])
-        return [
-            ErpAccount(
-                id=str(cru.get("id") or ""),
-                name=str(cru.get("name") or ""),
-                is_active=bool(cru.get("isActive", True)),
-                bank_code=_texto(cru.get("bankCode")),
-                agency=_texto(cru.get("agency")),
-                account_number=_numero_conta(cru),
-                raw_balance=_bruto(mapa, cru),
-                balance=mapa.get(str(cru.get("id"))),
-            )
-            for cru in crus
-        ]
+        return [conta_do_erp(cru, mapa) for cru in crus]
+
+
+def conta_do_erp(cru: dict, saldos: dict | None = None) -> ErpAccount:
+    """Uma conta CRUA da API vira `ErpAccount`. Sem `saldos`, sai sem saldo
+    (`balance=None`, que aqui quer dizer "não lido", nunca zero)."""
+    mapa = saldos or {}
+    return ErpAccount(
+        id=str(cru.get("id") or ""),
+        name=str(cru.get("name") or ""),
+        is_active=bool(cru.get("isActive", True)),
+        bank_code=_texto(cru.get("bankCode")),
+        agency=_texto(cru.get("agency")),
+        account_number=_numero_conta(cru),
+        raw_balance=_bruto(mapa, cru),
+        balance=mapa.get(str(cru.get("id"))),
+    )
 
 
 def coletar_contas_api(config, *, log=print) -> list[ErpAccount]:
