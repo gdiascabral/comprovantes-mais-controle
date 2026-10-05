@@ -1,3 +1,5 @@
+Atualizado em 05/10/2026: ver 2026-10-05-contas-num-lugar-so-design.md
+
 # Conta nova no ERP: o app pergunta na abertura — design
 
 Data: 21/08/2026

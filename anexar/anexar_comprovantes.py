@@ -5,7 +5,7 @@ Anexar Comprovantes — Mais Controle
 Fluxo da janela:
   1) Informe o PERÍODO (data de pagamento dos comprovantes) e a PASTA dos
      PDFs renomeados (padrão "VALOR - DESCRIÇÃO - DATA") e clique em
-     "Carregar contas" — o app abre o Chrome, ENTRA SOZINHO no Mais Controle
+     "Buscar pagamentos" — o app abre o Chrome, ENTRA SOZINHO no Mais Controle
      (com a senha guardada no 🔑 Login) e busca os títulos PAGOS do período.
   2) Marque as CONTAS BANCÁRIAS desejadas (caixas de seleção).
   3) "Casar e anexar": verifica quem já tem comprovante (pula), casa os
@@ -265,7 +265,7 @@ class AnexarFrame(ttk.Frame):
         # anexar é o que esta tela existe para fazer. O resto (login, pausar,
         # parar, abrir relatório) fica embaixo, junto da barra de execução —
         # não são passos, e ficavam do mesmo tamanho dos que são.
-        self.b1 = widgets.Botao(self.cab.acoes, "Carregar contas",
+        self.b1 = widgets.Botao(self.cab.acoes, "Buscar pagamentos",
                                 papel="passo", command=self.conectar)
         self.b1.pack(side="left", padx=(0, 8))
         self.b2 = widgets.Botao(self.cab.acoes, "Casar e anexar", papel="acao",
@@ -329,7 +329,7 @@ class AnexarFrame(ttk.Frame):
         self.contas_box = ttk.Frame(self.f_contas)
         self.contas_box.pack(fill="x")
         ttk.Label(self.contas_box, style="Tenue.TLabel",
-                  text='Clique em "Carregar contas" para listar as contas.'
+                  text='Clique em "Buscar pagamentos" para listar os pagamentos.'
                   ).pack(anchor="w")
 
         # ---- card: modo lista (mostrado só no modo "Por lista")
@@ -665,7 +665,7 @@ class AnexarFrame(ttk.Frame):
         try:
             self.garantir_sessao()
             self._log("Mais Controle aberto. Agora confira o período e a pasta dos "
-                      "PDFs e clique em \"1. Carregar contas\".")
+                      "PDFs e clique em \"1. Buscar pagamentos\".")
             self._log(f"⏱ Etapa 1 — fim: {time.strftime('%H:%M:%S')} "
                       f"({_fmt_dur(time.time() - inicio)})")
         except Exception as e:
@@ -1036,7 +1036,7 @@ class AnexarFrame(ttk.Frame):
         self.lbl.config(text="Conectando...")
         self.pb.config(mode="indeterminate")
         self.pb.start(12)
-        self.worker = self.submeter("Anexar — carregar contas",
+        self.worker = self.submeter("Anexar — buscar pagamentos",
                                     self._t_conectar, ini, fim)
 
     def _t_conectar(self, ini, fim):
@@ -1130,7 +1130,7 @@ class AnexarFrame(ttk.Frame):
             alvo, args = self._t_lista, (pasta, lista, simular)
         else:
             if not self.pagos:
-                messagebox.showerror("Erro", "Primeiro clique em \"1. Carregar contas\"."); return
+                messagebox.showerror("Erro", "Primeiro clique em \"1. Buscar pagamentos\"."); return
             contas_sel = {c for c, v in self.vars_contas.items() if v.get()}
             termos = []
             if self.v_ign.get():

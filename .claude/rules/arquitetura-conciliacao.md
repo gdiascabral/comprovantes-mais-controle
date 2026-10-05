@@ -55,8 +55,10 @@ paths:
   fixtures dos testes pulam quando faltam, então o CI passa sem os dados reais
   e a máquina de quem usa valida de verdade. Saída em
   `C:/Arquivos Morais/CONCILIACAO DIARIA/<ANO>/<MÊS>/`.
-  **Conta nova entra no painel pelo app** (botão "Verificar contas novas",
-  11/09/2026, `conciliacao/painel_novas.py`). Até então ela só virava o aviso
+  **Conta nova entra no painel pelo app** (11/09/2026; desde 05/10/2026 pelo
+  "Atualizar contas" do rodapé do menu, janela única com o cadastro, que
+  substituiu o botão "Verificar contas novas" desta aba — ver
+  `nuvem-e-remessas.md`, `conciliacao/painel_novas.py`). Até então ela só virava o aviso
   "conta nova no ERP fora do painel" no resumo, e incluí-la era mexer à mão
   em TRÊS arquivos combinados — a linha do `MODELO.xlsx` com as fórmulas, a
   entrada do `mapping.yaml` e a faixa do `config.yaml` —, em que errar um não

@@ -47,6 +47,7 @@ class AportesFrame(ttk.Frame):
         # empilha aqui e QUEM mexe no Tk é o _drain, na thread da interface.
         # Escrever no Text direto da thread do navegador travava a aba.
         self.q = queue.Queue()
+        self._recarga_pendente = False
         self.operacoes: list[Operacao] = []
         # Para cada operação, os ÍNDICES dos lançamentos que já entraram no ERP.
         # Sem isso, tentar de novo depois de uma falha parcial recria o que deu
@@ -152,7 +153,6 @@ class AportesFrame(ttk.Frame):
         self.rodape.pack()
         self.rodape.link("Remover selecionado", self._remover)
         self.rodape.link("Limpar tudo", self._limpar)
-        self.rodape.link("Recarregar cadastros", self._recarregar_cadastros)
         grade = ttk.Frame(lista)
         grade.pack(fill="both", expand=True)
         self.tabela = ttk.Treeview(grade, columns=("op",), show="headings",
@@ -228,6 +228,15 @@ class AportesFrame(ttk.Frame):
                 self.texto.see("end")
         except queue.Empty:
             pass
+        except Exception:
+            pass                     # a bomba de UI nunca pode morrer
+        try:
+            # Recarga que ficou esperando o comando terminar: o `_drain` roda
+            # na thread do Tk e é o único laço que vê o fim de QUALQUER comando
+            # desta aba (conferir, lançar, novo cadastro).
+            if self._recarga_pendente and self.anx.dona_ocupada() is not self:
+                self._recarga_pendente = False
+                self._recarregar_cadastros()
         except Exception:
             pass                     # a bomba de UI nunca pode morrer
         finally:
@@ -412,6 +421,20 @@ class AportesFrame(ttk.Frame):
             # um "obras: 0" sem explicação.
             self.catalogos.definir_obras([])
             self._log(f"  aviso (obras): {e}")
+
+    def recarregar_contas(self):
+        """Gancho do "Atualizar contas" do menu: relê o cadastro local.
+
+        Com um comando desta aba no navegador (conferir, lançar) não relê:
+        `_recarregar_cadastros` zera os catálogos do ERP que ele está usando."""
+        if self.anx.dona_ocupada() is self:
+            if not self._recarga_pendente:
+                self._log("As contas novas entram nos Aportes quando o "
+                          "comando atual terminar.")
+            self._recarga_pendente = True     # o `_drain` refaz ao terminar
+            return
+        self._recarga_pendente = False
+        self._recarregar_cadastros()
 
     def _recarregar_cadastros(self):
         """Relê contas.csv e os cadastros do ERP. Para quando algo foi criado

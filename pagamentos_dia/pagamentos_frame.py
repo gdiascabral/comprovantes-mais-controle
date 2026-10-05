@@ -812,6 +812,15 @@ class PagamentosDiaFrame(ttk.Frame):
         já relê."""
         self._conferir_prontidao()
 
+    def recarregar_contas(self):
+        """Gancho do "Atualizar contas" do menu: refaz a prontidão das contas.
+
+        Só dois arquivos locais, como o `ao_abrir`. Com busca ou apuração
+        andando fica quieto: o resumo é desta rodada e não pisca no meio."""
+        if self.worker and not self.worker.done():
+            return
+        self._conferir_prontidao()
+
     def _conferir_prontidao(self):
         """Relê o cadastro e devolve a prontidão de cada conta.
 

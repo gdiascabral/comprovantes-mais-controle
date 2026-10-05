@@ -85,6 +85,50 @@ resolver. Três consequências:
   ninguém o via. Congelado dava no mesmo, então o desencontro só aparecia em
   desenvolvimento, que é justamente onde se testa.
 
+**Contas num lugar só (05/10/2026, pedido do dono).** Cada aba buscava a sua
+lista de contas, e a conta incluída numa era esquecida na outra. Agora a busca
+é uma só, `nuvem/contas_central.py`: lê as contas ATIVAS do ERP por HTTP e
+guarda em `contas_erp.json`, um cache como os outros. **Vazio nunca substitui
+cheio** — ERP fora do ar devolve lista vazia, e isso não apaga a de ontem. Dali
+sai o que falta no cadastro (Supabase) e/ou no painel do Saldo
+(`pendencias`), `aplicar` grava (cadastro primeiro, painel depois; painel
+recusado nunca desfaz o cadastro) e `avisar_abas` chama o gancho
+`recarregar_contas` das abas que o têm, cada uma num `try` próprio.
+
+O gatilho é o botão **"⟳ Atualizar contas"**, logo abaixo da pílula do cadastro
+no rodapé do menu (e a mesma rodada roda uma vez na abertura, calada se o ERP
+não responde). Uma rodada por vez, com trava: duas ao mesmo tempo seriam dois
+logins por API (cada um derruba a sessão do outro) e duas janelas perguntando
+pelas mesmas contas. O botão sincroniza o cadastro, lê o ERP, **refaz o login
+do Chrome do app** (o login por HTTP derruba a sessão dele) e roda na thread do
+navegador; se o ERP não respondeu, AVISA — nunca diz "nenhuma conta nova" sem
+ter conferido. Pergunta numa janela só (`nuvem/contas_novas_dialogo.py`), com
+uma linha por conta dizendo onde falta (cadastro, painel ou os dois), e depois
+de gravar **ressincroniza** o cadastro e avisa as abas, para a conta nova
+valer já nesta sessão.
+
+**Duas marcas, e a do painel nasce desmarcada** (revisão final). A primeira
+coluna marca só o CADASTRO (nasce marcada quando há empresa sugerida; quem já
+está no cadastro mostra "—"); a coluna PAINEL marca o painel do Saldo e nasce
+SEMPRE desmarcada, como na janela antiga — com uma marca só, conta de pessoa
+física sugerida entrava no MODELO.xlsx sem ninguém ter marcado. Antes de
+fechar, o "Incluir" roda `painel_novas.problemas_da_inclusao`
+(`contas_central.conferidor_do_painel`) e, havendo problema, mostra a lista e
+mantém a janela aberta com o que foi digitado. **Na ABERTURA a janela só abre
+com pendência de CADASTRO** (`pendencias_da_abertura`): o que falta só no
+painel aparece só pelo botão, porque o dono deixa contas fora do painel de
+propósito. Mesmo sem pendência, a abertura avisa as abas da lista nova. O
+gancho do Relatório Mensal relê o `contas_mc.json` e remonta sempre; o
+`ao_abrir` remonta quando a lista OU a data do `contas_mc.json` mudaram.
+
+Quem ouve: Relatório Mensal (lista vem do cache central; o id da tela
+`#/cash-flow` é resolvido pelo NOME na hora do "Gerar", e nome repetido na tela
+falha a conta em vez de adivinhar), Baixar Comprovantes, Aportes (a recarga
+espera o comando em andamento terminar, porque zera os catálogos do ERP) e
+Remessa/Retorno. Saldo de pagamentos perdeu o "Verificar contas novas" e o
+Anexar teve o botão renomeado para "Buscar pagamentos" (já não carrega contas).
+Decisões do dono: busca num lugar só, e uma janela só para cadastro e painel.
+
 **Editar cadastro é no painel do Supabase**, que é uma planilha no navegador.
 Não há tela no app, de propósito: esses cadastros mudam raras vezes, e a
 validação mora no BANCO (`unique`, `check`, FK), onde vale independentemente

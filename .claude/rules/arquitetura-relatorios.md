@@ -47,7 +47,10 @@ paths:
 - `relatorios/contas_mc.py` — mapa conta do ERP → pasta de destino, lido de
   `contas_mc.json` ao lado do exe, **fora do repositório** (nome de empresa e
   número de conta), como o `contas_sicoob.json`. A LISTA de contas não sai
-  dali: é lida do ERP a cada execução, para que conta nova apareça sozinha; o
+  dali: desde 05/10/2026 vem da busca central (`contas_erp.json`, renovada pelo
+  "Atualizar contas" do menu; a aba perdeu o "Carregar contas" e não abre mais
+  Chrome para listar), e o id do fluxo de caixa é resolvido pelo nome na hora
+  do "Gerar" (nome repetido na tela falha a conta); o
   mapa só responde "onde salvo esta?" e admite não saber — conta sem destino
   nasce desmarcada e trava o lote **antes** do primeiro download, porque
   decidir destino com o lote pela metade vira improviso. Quatro contas da mesma

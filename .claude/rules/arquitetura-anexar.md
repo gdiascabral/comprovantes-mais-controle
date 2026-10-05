@@ -133,7 +133,7 @@ paths:
   abrindo o lançamento. O POST nunca se repete daqui; a retentativa com
   `resetar()` é só da tela. O modo "Por lista" só traz o link da parcela (sem
   `paidId`) e continua pela tela. Coberto por `tests/test_anexar_por_api.py`.
-- `anexar/anexar_comprovantes.py` — tela Anexar: 2 passos (Carregar contas /
+- `anexar/anexar_comprovantes.py` — tela Anexar: 2 passos (Buscar pagamentos /
   Casar e anexar) — "Abrir o Mais Controle" saiu do fluxo e virou botão
   auxiliar, porque com a senha guardada o app entra sozinho.
   Pausar/Parar, cronômetros ⏱, janela de
