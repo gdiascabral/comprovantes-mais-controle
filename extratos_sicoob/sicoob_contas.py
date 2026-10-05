@@ -176,6 +176,11 @@ def adicionar_cliente_erp(empresa: str, cliente: str,
     para o contrato ir para a pasta errada. Por isso a decisão tomada na tela
     vira cadastro — o MESMO que as outras abas leem, e não um mapa paralelo.
 
+    Este arquivo é só a CÓPIA local: `nuvem.cadastro.sincronizar` o regrava a
+    cada abertura a partir da tabela `cliente_erp`. Quem grava a escolha de
+    verdade é `nuvem.clientes_erp.gravar`, que vai ao banco e depois chama
+    esta função — chamá-la sozinha faz a escolha sumir na próxima abertura.
+
     Duas travas, pelas quais este arquivo vale mais que o resto:
 
     1. cliente que já é de OUTRA empresa não é movido em silêncio — levanta
