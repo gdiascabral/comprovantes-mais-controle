@@ -64,7 +64,10 @@ paths:
   aparecem no texto de um distrato (`distrato.foi_distratado`), e a pessoa
   alterna no clique; marcada, o arquivo sai com ` (Distratado)`. A trava dos
   irmãos aceita as linhas da mesma casa na mesma rodada. A conferência da
-  linha extra ou distratada usa o comprador lido no PDF e não confere VALOR da
-  venda (o contrato é de outra venda). A Acessórias mantém a marca na linha de
-  mensagem. Casa sem distrato segue a regra de um contrato por casa, sem ler
+  linha extra ou distratada usa o comprador lido no PDF (sem nome lido, o do
+  recebimento); só a linha extra deixa de conferir VALOR da venda (o
+  contrato é de outra venda). A marca mudada à mão volta na busca seguinte
+  (`reaplicar_distratos`) e não muda em linha já arquivada; o resumo do mês
+  conta a casa e os recebimentos uma vez, não por linha. A Acessórias mantém
+  a marca na linha de mensagem. Casa sem distrato segue a regra de um contrato por casa, sem ler
   PDF no levantamento.
