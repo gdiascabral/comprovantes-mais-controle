@@ -19,7 +19,7 @@ from . import dados as cadastro
 from . import novo_cadastro
 from . import rateio_subconta
 from . import regras
-from .mc_catalogos import Catalogos
+from .mc_catalogos import Catalogos, ErpRecusou
 from .mc_lancamentos import criar_pagamento, criar_recebimento, ErroLancamento
 from . import erp_sessao
 from .erp_sessao import ouvinte
@@ -37,6 +37,11 @@ px = widgets.px
 CampoData = widgets.CampoData
 
 URL_PAGAMENTOS = "https://acessar.maiscontroleerp.com.br/#/payable-installments"
+
+
+class AutenticacaoNaoCapturada(RuntimeError):
+    """A página não fez as chamadas de que a captura da autenticação precisa —
+    em geral porque a sessão caiu e ela foi para a tela de login."""
 
 
 class AportesFrame(ttk.Frame):
@@ -340,10 +345,54 @@ class AportesFrame(ttk.Frame):
 
         Os cadastros são lidos UMA vez por sessão. Reler a cada botão custava
         centenas de idas ao servidor (são ~440 participantes) e era o que
-        deixava a tela parada — os cadastros não mudam no meio do trabalho."""
+        deixava a tela parada — os cadastros não mudam no meio do trabalho.
+
+        **Leitura pela metade nunca fica guardada** (06/10/2026). O ERP aceita
+        UMA sessão por usuário, e um login feito por fora — o do próprio app na
+        abertura, no "Atualizar contas" ou na coleta dos saldos — cancela o
+        token curto do legacy-api do Chrome, enquanto o JWT do prod-erp-api
+        continua valendo. A leitura vinha com contas e participantes e parava
+        num 401 nas categorias; o objeto já estava em `self.catalogos`, então o
+        "Lançar" seguinte usava categorias e naturezas VAZIAS e acusava
+        "Nada parecido no cadastro" para cadastros que existiam. Agora a leitura
+        só é guardada inteira, e o 401 do legado leva a UM novo login e UMA
+        releitura — o `garantir_login` recarrega a página, que cai no login
+        quando o token foi cancelado (provado ao vivo, ver
+        tests/test_aportes_cadastro_401.py)."""
         api = self.anx.garantir_sessao(self._log)
         if self.catalogos is not None and not recarregar:
             return
+        self.catalogos = None
+        try:
+            catalogos = self._ler_cadastros()
+        except (ErpRecusou, AutenticacaoNaoCapturada) as e:
+            # As duas caras da MESMA situação — a sessão do Chrome cancelada por
+            # um login feito por fora: com o token velho ainda guardado, a
+            # leitura toma 401; sem ele, a página recarregada cai no login e
+            # nem faz as chamadas que a captura espera (visto ao vivo em
+            # 06/10/2026, depois do primeiro conserto). Outra recusa sobe.
+            if isinstance(e, ErpRecusou) and e.status != 401:
+                raise
+            self._log("A sessão do Chrome no Mais Controle caiu (houve outro "
+                      "login no ERP) — entrando de novo e relendo os "
+                      "cadastros...")
+            if not self.anx.mc.garantir_login():
+                raise
+            catalogos = self._ler_cadastros()
+        self.catalogos = catalogos
+        self._carregar_obras(api)
+
+    def _ler_cadastros(self) -> Catalogos:
+        """Captura a autenticação da página e lê os cadastros. Levanta se não
+        der — e não grava nada em `self.catalogos`: quem decide é
+        `_preparar_sessao`.
+
+        A captura começa SEM o token velho dos hosts de cadastro. A espera
+        termina quando todos estão capturados, e com o de antes ainda no
+        dicionário ela terminava na hora — a releitura depois de um novo login
+        usaria o mesmo token cancelado que provocou o 401."""
+        for host in erp_sessao.HOSTS_CADASTRO:
+            self._cabecalhos.pop(host, None)
         pagina = self.anx.mc.page
         alvos = erp_sessao.HOSTS_CADASTRO
 
@@ -389,15 +438,15 @@ class AportesFrame(ttk.Frame):
             # Parar aqui, e não seguir com metade: sem o legacy-api o cadastro
             # vem pela metade (401 nas categorias) E o lançamento morre depois
             # em "não achei o usuário responsável", que não diz o que houve.
-            raise RuntimeError(
+            raise AutenticacaoNaoCapturada(
                 "não consegui a autenticação de " + ", ".join(faltando) + ".\n"
                 "Abra a LISTA de Pagamentos na janela do Chrome (ou recarregue-a "
                 "com F5) e tente de novo.")
 
-        self.catalogos = Catalogos(pagina, self._cabecalhos, self._log)
+        catalogos = Catalogos(pagina, self._cabecalhos, self._log)
         self._log("Lendo os cadastros do Mais Controle:")
-        self.catalogos.carregar()
-        self._carregar_obras(api)
+        catalogos.carregar()
+        return catalogos
 
     def _carregar_obras(self, api):
         """As obras saem do REST, pela mesma porta da aba Contratos.
