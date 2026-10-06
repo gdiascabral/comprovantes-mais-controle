@@ -30,6 +30,20 @@ import util
 ERP_API = "https://prod-erp-api.maiscontroleerp.com.br"
 LEGACY = "https://legacy-api.maiscontroleerp.com.br/maiscontrole/services"
 
+class ErpRecusou(RuntimeError):
+    """O ERP respondeu com erro HTTP a uma leitura de cadastro.
+
+    Carrega o `status` para quem chama poder distinguir o 401 do legacy-api —
+    o token curto do Chrome cancelado por um login feito por fora (o ERP aceita
+    UMA sessão por usuário), que se resolve entrando de novo — de uma recusa
+    que não tem conserto automático. O texto continua o de sempre."""
+
+    def __init__(self, status, url: str, dica: str = ""):
+        super().__init__(f"o ERP respondeu {status} em {url}" + dica)
+        self.status = status
+        self.url = url
+
+
 # Páginas a mais que isso é sinal de laço infinito, não de cadastro grande.
 MAX_PAGINAS = 60
 
@@ -332,9 +346,9 @@ class Catalogos:
                     if tamanho:            # pode ter sido o pageSize
                         recusou = True
                         break
-                    raise RuntimeError(
-                        f"o ERP respondeu {resposta['__erro']} em {base}. "
-                        "Recarregue a tela do Mais Controle e tente de novo.")
+                    raise ErpRecusou(
+                        resposta["__erro"], base,
+                        ". Recarregue a tela do Mais Controle e tente de novo.")
                 lote = self._lista(resposta)
                 itens.extend(lote)
                 tem_proxima = isinstance(resposta, dict) and resposta.get("hasNextPage")
@@ -379,7 +393,7 @@ class Catalogos:
         for atributo, url in simples:
             resposta = self._buscar(url)
             if isinstance(resposta, dict) and resposta.get("__erro"):
-                raise RuntimeError(f"o ERP respondeu {resposta['__erro']} em {url}")
+                raise ErpRecusou(resposta["__erro"], url)
             setattr(self, atributo, self._indexar(self._lista(resposta)))
             self.log(f"  {atributo}: {len(getattr(self, atributo))}")
 

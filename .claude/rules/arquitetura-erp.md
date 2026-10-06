@@ -74,3 +74,16 @@ paths:
   Pagamentos do Dia e Contratos — migrar isso é trocar a fundação com a casa em
   cima. Enquanto ele não migra os dois convivem, o que é aceitável: o `erp/`
   nasce sabendo a regra dos tokens, e ele nasceu adivinhando-a.
+  **Login por fora derruba METADE da sessão do Chrome, e isso tem cara própria**
+  (06/10/2026). O `POST /users/login` feito por HTTP (o do próprio app na
+  abertura, no "⟳ Atualizar contas", na coleta dos saldos) cancela o
+  `accessToken` do legacy-api que o Chrome do app está usando, mas o `jwtToken`
+  do `prod-erp-api` continua valendo. A página parece logada, o que lê do
+  `prod-erp-api` funciona, e só o legado toma 401. Nos Aportes isso trazia
+  contas e participantes e parava nas categorias; a leitura pela metade ficava
+  guardada e o "Lançar" acusava "Nada parecido no cadastro" para cadastros que
+  existiam. Remédio em `aportes/aportes_frame._preparar_sessao`: leitura só é
+  guardada inteira; 401 do legado (ou captura que não acontece, porque a página
+  recarregada cai no login) leva a UM `garantir_login` e UMA releitura; e a
+  captura começa sem o token velho. Provado ao vivo forçando um login por fora
+  entre a captura e a leitura (`tests/test_aportes_cadastro_401.py`).
