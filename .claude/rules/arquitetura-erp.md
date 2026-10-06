@@ -74,7 +74,7 @@ paths:
   Pagamentos do Dia e Contratos — migrar isso é trocar a fundação com a casa em
   cima. Enquanto ele não migra os dois convivem, o que é aceitável: o `erp/`
   nasce sabendo a regra dos tokens, e ele nasceu adivinhando-a.
-  **Login por fora derruba META sessão do Chrome, e isso tem cara própria**
+  **Login por fora derruba METADE da sessão do Chrome, e isso tem cara própria**
   (06/10/2026). O `POST /users/login` feito por HTTP (o do próprio app na
   abertura, no "⟳ Atualizar contas", na coleta dos saldos) cancela o
   `accessToken` do legacy-api que o Chrome do app está usando, mas o `jwtToken`
