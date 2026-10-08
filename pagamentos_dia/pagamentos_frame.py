@@ -37,6 +37,7 @@ from . import confirmacao
 from . import html_pagamentos          # HTML provisório (ver o módulo)
 from . import ocr_boleto
 from . import painel_dia
+from . import qr_pix
 from . import reembolso
 from . import regras_pagamento as regras
 from . import relatorio
@@ -1554,9 +1555,9 @@ class PagamentosDiaFrame(ttk.Frame):
             self.q.put(("status", "Nada a pagar nas contas marcadas."))
             return None
 
-        textos, urls_ocr, nao_lidos = {}, set(), set()
+        textos, urls_ocr, nao_lidos, qrs = {}, set(), set(), {}
         if opcoes["cruzar"]:
-            textos, urls_ocr, nao_lidos = self._baixar_textos(selecionados)
+            textos, urls_ocr, nao_lidos, qrs = self._baixar_textos(selecionados)
 
         return confirmacao.Entradas(
             selecionados=selecionados, anexos=self.anexos,
@@ -1570,7 +1571,8 @@ class PagamentosDiaFrame(ttk.Frame):
             # descobre o documento do fornecedor.
             participantes=self.participantes,
             periodo=opcoes["periodo"],
-            anexos_nao_lidos=nao_lidos)
+            anexos_nao_lidos=nao_lidos,
+            qr_pix=qrs)
 
     def _t_apurar(self, escolhidas, opcoes, depois):
         """Fase 1: a leitura completa e a análise da remessa, na thread do
@@ -3243,13 +3245,15 @@ class PagamentosDiaFrame(ttk.Frame):
                 self._log(f"        {f['tipo']:<7} {relatorio.brl(f['valor']):>14}  "
                           f"{f['favorecido'][:34]}")
 
-    def _anexos_a_ler(self, selecionados) -> list[tuple[str, bool]]:
-        """[(downloadUrl, é_pdf)] sem repetição.
+    def _anexos_a_ler(self, selecionados) -> list[tuple[str, bool, bool]]:
+        """[(downloadUrl, é_pdf, ler_texto)] sem repetição.
 
-        Os PDFs sempre entram. Anexo que é FOTO só entra quando é um aviso
-        "PAGAR PARA": ali mora o CPF/celular de quem recebe o reembolso, e
-        sem ler a imagem a linha volta a sair como "chave não cadastrada".
-        Baixar toda foto de todo título seria pagar OCR por nada.
+        Os PDFs sempre entram, com texto. Anexo que é FOTO entra sempre — é
+        assim que chega o QR Code do Pix da guia do cartório e do print de
+        marketplace, e o QR é lido em toda imagem (dono, 08/10/2026) —, mas
+        só tem o TEXTO lido (OCR) quando é um aviso "PAGAR PARA": ali mora o
+        CPF/celular de quem recebe o reembolso. OCR de toda foto de todo
+        título seria pagar caro por nada; ler QR custa centésimos.
         """
         vistos, urls = set(), []
         for item in selecionados:
@@ -3258,13 +3262,15 @@ class PagamentosDiaFrame(ttk.Frame):
                 if not url or url in vistos:
                     continue
                 pdf = relatorio.eh_pdf(f)
-                if pdf or relatorio._PAGAR_PARA.search(relatorio._rotulo(f)):
+                aviso = bool(relatorio._PAGAR_PARA.search(relatorio._rotulo(f)))
+                if pdf or aviso or relatorio._e_imagem(f):
                     vistos.add(url)
-                    urls.append((url, pdf))
+                    urls.append((url, pdf, pdf or aviso))
         return urls
 
-    def _baixar_textos(self, selecionados) -> tuple[dict, set, set]:
-        """({downloadUrl: texto}, {urls lidas por OCR}, {urls não lidas}).
+    def _baixar_textos(self, selecionados) -> tuple[dict, set, set, dict]:
+        """({downloadUrl: texto}, {urls lidas por OCR}, {urls não lidas},
+        {downloadUrl: [Pix copia-e-cola dos QR Codes]}).
 
         Um download serve para tudo: extrair a linha digitável do boleto,
         cruzar valor/fornecedor e achar a chave do aviso de reembolso.
@@ -3281,14 +3287,19 @@ class PagamentosDiaFrame(ttk.Frame):
         e a contagem vira aviso no topo da janela
         (`confirmacao.aviso_de_anexos_nao_lidos`). A forma de pagar daquela
         linha foi decidida sem o documento, e isso tem de aparecer NELA.
+
+        O QR Code é lido em TODO anexo baixado (`qr_pix.ler`), com ou sem
+        texto: o QR do boleto é imagem dentro do PDF, e a camada de texto não
+        o traz. Só os códigos Pix válidos (CRC fechando) voltam.
         """
         alvos = self._anexos_a_ler(selecionados)
         if not alvos:
-            return {}, set(), set()
+            return {}, set(), set(), {}
 
         self._log(f"\nBaixando e lendo {len(alvos)} anexo(s) para o cruzamento...")
         textos, urls_ocr, sem_texto, nao_lidos = {}, set(), 0, set()
-        for i, (url, eh_pdf) in enumerate(alvos, 1):
+        qrs: dict[str, list[str]] = {}
+        for i, (url, eh_pdf, ler_texto) in enumerate(alvos, 1):
             if self._parar.is_set():
                 self._log("Interrompido a pedido — o cruzamento fica incompleto.")
                 break
@@ -3301,6 +3312,13 @@ class PagamentosDiaFrame(ttk.Frame):
                 # Não é "sem texto": o documento nem chegou. Fica fora dos
                 # textos e da contagem do OCR, e vira o aviso da janela.
                 nao_lidos.add(url)
+                self.q.put(("progresso", (i, len(alvos))))
+                continue
+            codigos = qr_pix.ler(dados, eh_pdf)
+            if codigos:
+                qrs[url] = codigos
+            if not ler_texto:
+                # Foto que não é aviso: só o QR interessava.
                 self.q.put(("progresso", (i, len(alvos))))
                 continue
             texto = relatorio.texto_de_pdf(dados) if (dados and eh_pdf) else ""
@@ -3321,4 +3339,6 @@ class PagamentosDiaFrame(ttk.Frame):
         if sem_texto:
             self._log(f"  {sem_texto} anexo(s) que nem o OCR conseguiu ler — "
                       "esses não dá para cruzar.")
-        return textos, urls_ocr, nao_lidos
+        if qrs:
+            self._log(f"  {len(qrs)} anexo(s) com QR Code Pix lido.")
+        return textos, urls_ocr, nao_lidos, qrs

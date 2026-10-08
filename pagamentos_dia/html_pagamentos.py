@@ -520,6 +520,9 @@ def contas_do_html_geral(resultado) -> list[dict]:
                 "tipo": tipo,
                 "dados_original": str(r.get("dados") or ""),
                 "dados_limpo": dado_para_colar(tipo, r.get("dados")),
+                # O Pix do QR Code do boleto, num segundo "Copiar" (dono,
+                # 08/10/2026). Copia-e-cola vai inteiro (`dado_para_colar`).
+                "pix_qr": dado_para_colar("Pix", r.get("pix_qr")),
                 "valor": valor_para_colar(r.get("valor")),
                 "centavos": centavos(r.get("valor")),
                 "descricao": descricao_para_colar(r, nome),

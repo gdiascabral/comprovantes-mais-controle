@@ -33,6 +33,7 @@ def _garantir_dependencias():        # nunca é chamada: só faz o PyInstaller
     from concurrent.futures import ThreadPoolExecutor  # noqa
     import requests, pdfplumber, pypdf, openpyxl      # noqa
     import pytesseract                                # noqa
+    import zxingcpp, pypdfium2                        # noqa  (pagamentos_dia/qr_pix: QR Code Pix dos anexos)
     import sv_ttk                                     # noqa
     import yaml                                       # noqa  (config da Conciliação)
     import decimal, json, urllib.request              # noqa  (conciliação: API + regras)

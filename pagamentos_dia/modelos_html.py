@@ -85,6 +85,8 @@ MODELO_GERAL = r'''<!doctype html>
   tr.row-bloqueada td:first-child{box-shadow:inset 4px 0 0 var(--danger);}
   .bloq{font-weight:700;color:var(--bloq-text);font-size:12px;margin-bottom:4px;overflow-wrap:anywhere;}
   .code.sem-copiar{user-select:text;}
+  .pix-qr{margin-top:6px;padding-top:6px;border-top:1px dashed currentColor;}
+  .pix-qr-rot{font-size:10.5px;font-weight:600;opacity:.75;white-space:nowrap;padding-top:3px;}
   .aconferir{color:var(--bloq-text);font-weight:600;}
   .acoes{display:flex;flex-direction:column;gap:6px;align-items:stretch;}
   .linkbtn{display:inline-flex;align-items:center;justify-content:center;gap:4px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:6px;padding:4px 6px;font-size:11px;text-decoration:none;line-height:1.1;}
@@ -293,15 +295,21 @@ function renderAccounts(){
         : e.dados_limpo
         ? `<div class="copy-cell"><span class="code">${esc(e.dados_limpo)}</span><button class="copybtn" type="button">Copiar</button></div>`
         : `${bloq ? `<div class="bloq">CONFERIR: ${esc(bloq)}</div>` : ''}<div class="no-data-note">${esc(e.dados_original || 'Sem boleto/chave - ver observacao')}</div>`;
+      // O Pix do QR Code do boleto: segundo "Copiar", nunca em linha bloqueada.
+      const pixQrCell = (e.pix_qr && !bloq)
+        ? `<div class="copy-cell pix-qr"><span class="pix-qr-rot">Pix (QR)</span><span class="code">${esc(e.pix_qr)}</span><button class="copybtn copy-pix" type="button">Copiar Pix</button></div>`
+        : '';
       tr.innerHTML = `
         <td class="chk-cell"><input type="checkbox" class="row-chk" ${isChecked ? 'checked' : ''}></td>
         <td data-label="Tipo"><span class="tipo-badge ${badgeClass}">${esc(e.tipo)}</span></td>
-        <td data-label="Dados do pagamento">${dadosCell}</td>
+        <td data-label="Dados do pagamento">${dadosCell}${pixQrCell}</td>
         <td data-label="Valor"><div class="copy-cell"><span class="code valor">${esc(e.valor)}</span><button class="copybtn" type="button">Copiar</button></div></td>
         <td data-label="Fornecedor"><div class="fav">${esc(e.favorecido)}<span class="pago-badge">PAGO</span></div><div class="status-badge">${esc(e.status)}</div>${e.conferencia ? `<div class="conf">${esc(e.conferencia)}</div>` : ''}${e.obs ? `<div class="obs">${esc(e.obs)}</div>` : ''}</td>
         <td data-label="Descricao"><div class="copy-cell"><span class="desc">${esc(e.descricao)}</span><button class="copybtn" type="button">Copiar</button></div></td>
         <td class="acoes-cell"><div class="acoes">${e.link ? `<a class="linkbtn" href="${esc(e.link)}" target="_blank" rel="noopener" title="Acessar link" aria-label="Acessar link"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2h5v5M14 2L7.5 8.5M12 9.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3.5"/></svg>Acessar link</a>` : ''}<button class="delbtn" type="button" title="Excluir da lista" aria-label="Excluir da lista">&#10005; Excluir</button></div></td>`;
-      const btns = tr.querySelectorAll('.copybtn');
+      const btns = tr.querySelectorAll('.copybtn:not(.copy-pix)');
+      const bPix = tr.querySelector('.copy-pix');
+      if(bPix){ bPix.addEventListener('click', () => copyText(e.pix_qr, bPix)); }
       let bi = 0;
       if(e.dados_limpo && !bloq){ const b = btns[bi]; b.addEventListener('click', () => copyText(e.dados_limpo, b)); bi++; }
       { const b = btns[bi]; b.addEventListener('click', () => copyText(e.valor, b)); bi++; }

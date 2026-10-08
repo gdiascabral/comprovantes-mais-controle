@@ -36,6 +36,7 @@ import datetime as _dt
 from dataclasses import dataclass, field
 
 from . import ocr_boleto
+from . import qr_pix
 from . import reembolso
 from . import regras_pagamento as regras
 from . import relatorio
@@ -67,6 +68,8 @@ class Entradas:
     #: Anexos que deviam ser lidos e não foram (download que devolveu nada ou
     #: levantou). A forma de pagar dessas linhas foi decidida sem o documento.
     anexos_nao_lidos: set = field(default_factory=set)
+    #: Os Pix copia-e-cola lidos dos QR Codes dos anexos, por `downloadUrl`.
+    qr_pix: dict = field(default_factory=dict)
 
 
 def _periodo_legivel(periodo) -> str:
@@ -128,7 +131,8 @@ def remontar(entradas: Entradas, ids_nao_confirmados=()) -> relatorio.Resultado:
         ids_nao_confirmados=ids_nao_confirmados,
         participantes=entradas.participantes,
         cadastro_reembolso=entradas.cadastro_reembolso,
-        anexos_nao_lidos=entradas.anexos_nao_lidos)
+        anexos_nao_lidos=entradas.anexos_nao_lidos,
+        qr_pix=entradas.qr_pix)
 
 
 # --------------------------------------------------------------------------
@@ -649,6 +653,15 @@ def por_onde(tipo: str, dados: str) -> str:
         return f"{rotulo}  {remessa_dia.MOTIVO_SEM_CHAVE}"
     if tipo == "Boleto":
         return f"{rotulo}  {ocr_boleto.formatar(dados)}"
+    if qr_pix.valido(dados):
+        # O copia-e-cola tem ~200-300 caracteres, e esta coluna tem a largura
+        # medida no texto mais comprido: inteiro, ele empurrava o resto da
+        # tabela para fora da janela. Quem recebe e o valor dizem o destino;
+        # o código inteiro está no HTML, para copiar.
+        valor = qr_pix.valor(dados)
+        return " ".join(filter(None, [
+            f"{rotulo}  copia-e-cola do QR Code —", qr_pix.recebedor(dados) or "?",
+            relatorio.brl(valor) if valor is not None else "(sem valor no código)"]))
     return f"{rotulo}  {dados}"
 
 
