@@ -8,6 +8,7 @@ quebrando a extração seguinte (o erro que apareceu de verdade) e o `start`
 rodando mesmo com a troca falhada.
 """
 import io
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -818,3 +819,47 @@ def test_com_a_release_certa_a_guarda_deixa_passar(monkeypatch):
     assert atualizador._oferecer_motor_novo("v2.0.161", "v2.0.161") is False
     assert tk.messagebox.perguntas, "a guarda barrou a troca legítima"
     assert any("recusado" in m for m in registro), registro
+
+
+def _rmtree_que_deixa_a_casca(real):
+    """O que o OneDrive fez na máquina de uma usuária em 02/10/2026: o
+    `rmtree(..., ignore_errors=True)` da `codigo_velha` apagou os arquivos e
+    deixou as pastas vazias, sem erro nenhum. Só nessa pasta — as outras
+    limpezas (o temporário, a `codigo_nova`) seguem apagando de verdade."""
+    def rmtree(caminho, ignore_errors=False, **kw):
+        caminho = Path(caminho)
+        if caminho.name != "codigo_velha":
+            return real(caminho, ignore_errors=ignore_errors, **kw)
+        for f in [p for p in caminho.rglob("*") if p.is_file()]:
+            f.unlink()
+    return rmtree
+
+
+def test_codigo_velha_que_nao_se_apaga_nao_trava_a_atualizacao(tmp_path,
+                                                                monkeypatch):
+    """Com a casca da `codigo_velha` no lugar, o `rename` seguinte dava
+    WinError 183 em TODA abertura: o app baixava a versão nova para a
+    `codigo_nova` e continuava rodando a velha — 6 dias e 8 versões atrás,
+    sem ninguém saber, porque o erro só ia para o `atualizacao.log`."""
+    pasta, emb = _instalado(tmp_path)
+    casca = tmp_path / "codigo_velha" / "anexar"
+    casca.mkdir(parents=True)
+    _fingir_rede(monkeypatch, _RequestsFalso("v1.0.78", _codigo_zip("v1.0.78")))
+    monkeypatch.setattr(atualizador.shutil, "rmtree",
+                        _rmtree_que_deixa_a_casca(shutil.rmtree))
+    atualizador._atualizar_codigo(pasta, emb)
+    assert (pasta / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.78"
+    # e o caminho de volta continua sendo a anterior, não a casca
+    velha = tmp_path / "codigo_velha"
+    assert (velha / "versao.txt").read_text(encoding="utf-8").strip() == "v1.0.77"
+
+
+def test_a_casca_presa_de_uma_abertura_anterior_e_tentada_de_novo(tmp_path,
+                                                                   monkeypatch):
+    """A casca renomeada não pode se acumular a cada abertura."""
+    pasta, emb = _instalado(tmp_path)
+    antiga = tmp_path / "codigo_velha.descartada-20261002-152233" / "anexar"
+    antiga.mkdir(parents=True)
+    _fingir_rede(monkeypatch, _RequestsFalso("v1.0.78", _codigo_zip("v1.0.78")))
+    atualizador._atualizar_codigo(pasta, emb)
+    assert not antiga.parent.exists()

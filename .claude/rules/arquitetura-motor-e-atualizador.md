@@ -23,3 +23,7 @@ paths:
 - `atualizador.py` — motor-side: baixa codigo.zip, troca de pasta atômica,
   download do exe completo com janela de progresso, troca via .bat com 30
   retentativas (OneDrive trava arquivos). Loga em `atualizacao.log`.
+  A `codigo_velha` sai por `_tirar_do_caminho`, que confere se ela sumiu
+  de fato: no OneDrive o `rmtree` silencioso deixou a casca de pastas vazias
+  e o app ficou 8 versões sem atualizar (02→08/10/2026). Casca presa vira
+  `codigo_velha.descartada-<data>` e é tentada de novo na abertura seguinte.
