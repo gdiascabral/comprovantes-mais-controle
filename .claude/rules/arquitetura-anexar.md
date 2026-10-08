@@ -56,6 +56,25 @@ paths:
   `_numeros_do_documento(doc)` sai vazio ("S/N", "RECIBO", 1 ou 2 dígitos,
   ano) entra em `sem_documento`: continua rival dos outros de mesmo valor e
   impede a CERTEZA por número solto.
+- `anexar/codigo_barras.py` — o código de barras do boleto como identificador
+  EXATO do casamento (dono, 08/10/2026: boleto pago de conta PF não leva
+  descrição). Lê o código no comprovante da pasta e no boleto anexado ao
+  TÍTULO (`anexos_de_titulos`, pelo `tradePayableId` que o `montar_pagos`
+  passou a guardar — o `launchId` é a parcela), e guarda os 44 dígitos em
+  `barras` dos dois lados. Só lê o que pode mudar um casamento: PDF de valor
+  de algum pendente, e título que tem, entre os PDFs do seu valor, um com
+  código. Do título só valem códigos cujo valor embutido é um dos valores do
+  pagamento (o parcelado guarda o boleto de todas as parcelas no mesmo
+  lugar). A busca no texto é em degraus — uma linha; duas linhas coladas;
+  o texto inteiro só com o valor batendo — porque cada junção multiplica as
+  janelas e com elas os falsos (colar a linha digitável com a de baixo deu um
+  2º "código" em 2 de 124 comprovantes do Sicoob). O mapa de confusões do OCR
+  só vale em texto de OCR: na camada de texto, um bloco de assinatura base64
+  de um Pix virou "código". No `matcher`, código igual fecha CERTEZA antes de
+  todas as regras; DIFERENTE tira o par de toda regra automática e ele vai
+  para a dúvida (decisão do dono), com "código de barras DIFERENTE" na janela
+  e no relatório; código de um lado só é neutro (o PDF do Inter não mostra o
+  código). Falhando a leitura, o casamento é exatamente o de antes.
 - `anexar/mc_client.py` — Playwright controla o Chrome instalado
   (channel="chrome", perfil persistente `.chrome_profile` ao lado do exe).
   **Login**: a tela do ERP é AngularJS. Preencher o input (mesmo com setter

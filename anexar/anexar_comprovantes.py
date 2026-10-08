@@ -33,7 +33,8 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from . import config, matcher, mc_api, planilha, credenciais, mc_client, origem
+from . import (codigo_barras, config, matcher, mc_api, planilha, credenciais,
+               mc_client, origem)
 from .mc_client import MCClient, SemRede
 
 import util
@@ -157,7 +158,11 @@ def _sinais(c: dict) -> list[str]:
 
     `conta` é o PDF ter saído da conta cadastrada no lançamento e `favorecido`
     é quem recebeu bater com o do ERP (regra do dono, 14/09/2026)."""
-    return [nome for nome, bateu in (("OC/NF", c.get("ocnf") or c.get("ocerp")),
+    if c.get("barras_conflito"):
+        # Não é um sinal a favor: é o motivo de o par não ter fechado sozinho.
+        return ["código de barras DIFERENTE"]
+    return [nome for nome, bateu in (("código de barras", c.get("barras")),
+                                     ("OC/NF", c.get("ocnf") or c.get("ocerp")),
                                      ("nº longo", c.get("idnum")),
                                      ("documento", c.get("docrec")),
                                      ("conta", c.get("conta")),
@@ -1145,6 +1150,46 @@ class AnexarFrame(ttk.Frame):
         self.b2.config(state="disabled")
         self.worker = self.submeter("Anexar — casar e anexar", alvo, *args)
 
+    def _ler_codigos_de_barras(self, pendentes, pdfs, pasta: Path) -> None:
+        """Código de barras dos PDFs e dos boletos anexados aos títulos.
+
+        Roda na thread do navegador (a API do ERP só existe dentro da página).
+        Opcional como as outras réguas: falhando, o casamento segue sem ela
+        nesta rodada -- e sem código nenhum, ele é exatamente o de antes.
+        """
+        if self._parar.is_set():
+            return
+
+        def ler_pdf(pd):
+            try:
+                dados = (pasta / pd["fn"]).read_bytes()
+            except OSError:
+                return "", False
+            return codigo_barras.texto_do_arquivo(pd["fn"], dados)
+
+        def baixar(url):
+            try:
+                return self.api.baixar_anexo(url)
+            except Exception:                                # noqa: BLE001
+                return None
+
+        try:
+            self._log("Lendo o código de barras dos comprovantes e dos boletos...")
+            n = codigo_barras.preencher(
+                pendentes, pdfs, ler_pdf=ler_pdf,
+                anexos_de=lambda ids: self.api.anexos_de_titulos(
+                    ids, log=lambda _m: None, cancelar=self._checar_pausa),
+                baixar=baixar, cancelar=self._checar_pausa)
+            self._log(f"Código de barras: {n['pdfs_com_codigo']} de "
+                      f"{n['pdfs_lidos']} PDF(s) · {n['lancamentos_com_codigo']} de "
+                      f"{n['titulos_lidos']} título(s) com boleto lido.")
+        except Exception:                                    # noqa: BLE001
+            config.diag("codigo_barras.preencher falhou:\n" + traceback.format_exc())
+            self._log("[aviso] não li os códigos de barras — o casamento segue "
+                      "sem essa regra nesta rodada.")
+            for x in list(pendentes) + list(pdfs):
+                x["barras"] = set()
+
     def _t_auto(self, contas_sel: set, termos: list, pasta_pdfs: str,
                 simular: bool):
         inicio = time.time()
@@ -1231,6 +1276,7 @@ class AnexarFrame(ttk.Frame):
                 config.diag("origem.preencher falhou:\n" + traceback.format_exc())
                 self._log("[aviso] não deu para saber a conta de origem — "
                           "o casamento segue sem essa regra nesta rodada.")
+            self._ler_codigos_de_barras(pendentes, pdfs, Path(pasta_pdfs))
             certezas, duvidas, sem_par = matcher.casar(pendentes, pdfs)
             self._log(f"Casamentos com certeza: {len(certezas)} | dúvida: {len(duvidas)} "
                       f"| sem par: {len(sem_par)}\n")

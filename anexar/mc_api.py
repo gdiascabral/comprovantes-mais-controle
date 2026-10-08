@@ -1207,6 +1207,9 @@ def montar_pagos(lancamentos: list[dict]) -> list[dict]:
             valor = _cents(p.get("paidValue")) or base or (max(valores) if valores else 0)
             pagos.append({
                 "launchId": l.get("id") or l.get("tradePayableId"),
+                # O TÍTULO, onde mora o boleto anexado (o `launchId` é a
+                # parcela): é dele que sai o código de barras do casamento.
+                "tradePayableId": l.get("tradePayableId"),
                 "paidId": p.get("id"),
                 "valor": valor,
                 "valores": sorted(valores) or [valor],

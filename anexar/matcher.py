@@ -11,6 +11,13 @@ Critérios, do mais forte para o mais fraco (todos exigem o MESMO valor):
   4. favorecido do lançamento = recebedor do comprovante, na mesma conta e data;
   5. data igual (dd-mm) como desempate.
 
+Código de barras do boleto (dono, 08/10/2026), antes de tudo: o do comprovante
+igual a um do boleto anexado ao título fecha CERTEZA; DIFERENTE, aquele PDF não
+fecha sozinho com aquele lançamento por regra nenhuma -- vira dúvida, e quem
+decide é gente. Faltando o código de um dos lados (o PDF do Inter não o mostra,
+título sem boleto anexado), nada muda. Quem preenche `barras` é
+`codigo_barras.preencher`.
+
 Identificadores EXATOS (14/09/2026, as dúvidas que o dono apontou), os três
 com a MESMA DATA -- a OC, a UC e o CNPJ identificam a compra, o imóvel e o
 fornecedor, não o PAGAMENTO: a parcela ou o mês anterior, com o PDF ainda na
@@ -325,6 +332,7 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                 idnum = bool(_numeros_longos(pe["desc"]) & _numeros_longos(pd["desc"]))
                 # A OC lida no overview do ERP só vale contra OC do PDF.
                 ocerp = bool(pd["ocs"] & set(pe.get("ocs_erp") or ()))
+                b_pe, b_pd = pe.get("barras") or set(), pd.get("barras") or set()
                 doc_fav = re.sub(r"\D", "", str(pe.get("doc_favorecido") or ""))
                 docrec = bool(doc_fav) and doc_fav == re.sub(
                     r"\D", "", str(pd.get("doc_recebedor") or ""))
@@ -334,6 +342,9 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                                     "docnum": docnum, "docnf": docnf,
                                     "idnum": idnum, "docrec": docrec,
                                     "ocerp": ocerp,
+                                    "barras": bool(b_pe & b_pd),
+                                    "barras_conflito": bool(b_pe and b_pd
+                                                            and not b_pe & b_pd),
                                     "conta": conta is True, "fav": fav,
                                     "score": (100 if ocnf else 0) + (10 if cc else 0)
                                              + (5 if docnum else 0) + (1 if date else 0)})
@@ -351,7 +362,10 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
             for c in pe["cands"]:
                 c[tipo + "_seguro"] = seguro
 
-    def atribuir(filtro):
+    def atribuir(regra):
+        # Código de barras diferente tira o par de TODA regra automática.
+        def filtro(c):
+            return not c["barras_conflito"] and regra(c)
         mudou = True
         while mudou:
             mudou = False
@@ -382,6 +396,7 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                             pe["status"] = "CERTEZA"
                             mudou = True
 
+    atribuir(lambda c: c["barras"])
     atribuir(lambda c: c["ocnf"] and c["cc"])
     atribuir(lambda c: c["ocnf"])
     # OC do ERP e número longo igual (a UC), sempre com a data.
@@ -427,7 +442,8 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
             # o que sobrou só fecha sozinho se a conta dele estiver CONFIRMADA:
             # de origem desconhecida, o certo pode ser justamente o excluído
             # (baixa lançada na conta errada do ERP). Revisão do PR #94.
-            return not pe["fora_da_conta"] or c.get("conta")
+            return (not c["barras_conflito"]
+                    and (not pe["fora_da_conta"] or c.get("conta")))
 
         if len(todos_val) == 1 and len(livres) == 1 and livres[0]["score"] > 0 \
                 and not concorrentes and confiavel(livres[0]):
@@ -450,6 +466,8 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     def motivo(pe):
         m = pe["match"]
         t = []
+        if m.get("barras"):
+            t.append("código de barras")
         if m["ocnf"] or m.get("ocerp"):
             t.append("OC/NF")
         if m.get("docnum") or m.get("docnf"):
