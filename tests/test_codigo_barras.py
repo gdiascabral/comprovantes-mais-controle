@@ -386,14 +386,54 @@ def test_veto_nao_entrega_o_lancamento_ao_rival_sem_codigo():
 def test_segunda_copia_do_comprovante_nao_vai_para_outro_lancamento():
     # Achado 3: agendamento + efetivação com o MESMO código. O 1 leva a
     # efetivação pelo código; a cópia do agendamento é do título do 1 e não
-    # pode fechar o 2 (mesmo valor, sem código) por data.
+    # pode fechar o 2 (mesmo valor, sem código) por data -- o código prova que
+    # ela não é dele, então ela nem é candidata do 2.
     a = _barras(_bancario(5000))
     pend = [_pend("1", 5000, "0110", [a]), _pend("2", 5000, "3009")]
     pdfs = [_pdf("50,00 - FULANO - 01-10.pdf", [a]),
             _pdf("50,00 - FULANO AGENDADO - 30-09.pdf", [a])]
-    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    certezas, duvidas, sem_par = matcher.casar(pend, pdfs)
     assert [(p["paidId"], p["pdf"]) for p in certezas] == [("1", "50,00 - FULANO - 01-10.pdf")]
-    assert [p["paidId"] for p in duvidas] == ["2"]
+    assert [p["paidId"] for p in sem_par] == ["2"]
+    assert "outro título" in sem_par[0]["motivo_sem_par"]
+
+
+def test_lancamento_travado_continua_disputando_os_pdfs():
+    # 2ª revisão, bloqueio: o 1 tem um candidato em conflito e não fecha; se
+    # ele sumisse da disputa, o 2 levaria A pelo centro de custo -- mas A pode
+    # ser justamente o comprovante do 1. Antes do código, os dois eram dúvida.
+    obra = ["RESIDENCIAL EXEMPLO"]
+    pend = [_pend("1", 5000, "0110", [_barras(_bancario(5000, 1))], works=obra),
+            _pend("2", 5000, "0110", works=obra)]
+    pdfs = [_pdf("50,00 - RESIDENCIAL EXEMPLO BOLETO - 30-09.pdf",
+                 [_barras(_bancario(5000, 9))]),
+            _pdf("50,00 - RESIDENCIAL EXEMPLO - 01-10.pdf")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and len(duvidas) == 2
+
+
+def test_pdf_de_outro_titulo_nao_prende_quem_fechava_sem_codigo():
+    # 2ª revisão, ajuste: o PDF da parcela anterior do título do 1 (c1) sobra
+    # na pasta; o 3 (outro título, sem código) tem o próprio PDF na data dele
+    # e fechava certo antes. O PDF de c1 não é do 3 -- sai, não prende.
+    c1, c2 = _barras(_bancario(5000, 1)), _barras(_bancario(5000, 2))
+    pend = [_pend("1", 5000, "0110", [c1, c2]), _pend("3", 5000, "0510")]
+    pdfs = [_pdf("50,00 - PARCELA - 01-10.pdf", [c2]),
+            _pdf("50,00 - PARCELA - 01-09.pdf", [c1]),
+            _pdf("50,00 - OUTRO - 05-10.pdf")]
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    assert {p["paidId"]: p["pdf"] for p in certezas} == {
+        "1": "50,00 - PARCELA - 01-10.pdf", "3": "50,00 - OUTRO - 05-10.pdf"}
+
+
+def test_motivo_so_cita_o_codigo_quando_ele_decidiu():
+    # O PDF da parcela anterior tem o código do título, mas fecha por outra
+    # regra (centro de custo): o motivo não pode dizer "código de barras".
+    c1 = _barras(_bancario(5000, 1))
+    pend = [_pend("2", 5000, "0110", [c1], works=["RESIDENCIAL EXEMPLO"])]
+    pdfs = [_pdf("50,00 - RESIDENCIAL EXEMPLO - 01-09.pdf", [c1])]
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    assert len(certezas) == 1 and "código de barras" not in certezas[0]["motivo"]
 
 
 def test_dois_pendentes_e_um_pdf_so_pela_data_e_duvida_em_qualquer_ordem():

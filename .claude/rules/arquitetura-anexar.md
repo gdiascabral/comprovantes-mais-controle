@@ -75,6 +75,14 @@ paths:
   para a dúvida (decisão do dono), com "código de barras DIFERENTE" na janela
   e no relatório; código de um lado só é neutro (o PDF do Inter não mostra o
   código). Falhando a leitura, o casamento é exatamente o de antes.
+  Três regras vieram das revisões e não são óbvias: o código só fecha com a
+  MESMA DATA (o título guarda o boleto de todas as parcelas; o comprovante da
+  anterior, ainda na pasta, fechava a de agora); o lançamento com candidato em
+  conflito não fecha por regra nenhuma mas CONTINUA no `quer` (fora dele, o
+  rival levava o PDF que podia ser o dele); e o PDF cujo código é do título de
+  OUTRO lançamento sai dos candidatos dos demais (motivo de SEM PAR próprio).
+  De carona, no fim do `casar`, quem virou DÚVIDA continua concorrente: antes
+  a ordem da lista dava o PDF ao 2º de dois pendentes de mesmo valor.
 - `anexar/mc_client.py` — Playwright controla o Chrome instalado
   (channel="chrome", perfil persistente `.chrome_profile` ao lado do exe).
   **Login**: a tela do ERP é AngularJS. Preencher o input (mesmo com setter
