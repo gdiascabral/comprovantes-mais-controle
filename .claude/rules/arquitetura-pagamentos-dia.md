@@ -88,6 +88,24 @@ paths:
   26 de 26 anexos com QR resolvidos, nenhum casado com valor errado. Na
   janela de confirmação o copia-e-cola aparece curto (quem recebe e valor),
   porque a coluna POR ONDE tem a largura do texto mais comprido.
+  **Seis travas da revisão de dinheiro (08/10/2026)**: (1) o Pix do QR do
+  boleto e a linha da guia trocada (`registro["linha_da_guia"]`) entram na
+  checagem de cobrança repetida do HTML (`chaves_extra`) — a mesma guia como
+  Pix num lançamento e boleto no outro bloqueia as duas; (2) o QR também
+  some com a régua FORTE de comprovante (`_COMPROVANTE_FORTE`: 2ª via com
+  "autenticação eletrônica"); (3) no ramo do boleto o QR só vem do anexo de
+  onde saiu a linha, ou, sem linha, do PDF que se ANUNCIA boleto — nunca de
+  outro anexo nem do PDF "neutro" único (orçamento com QR estático pagaria
+  antes de o boleto chegar); (4) QR sem valor embutido sai "ATENÇÃO — QR
+  Code sem valor" (bloqueia o Copiar), salvo guia cuja linha prova o valor;
+  (5) no Pix sem chave, nome do QR (campo 59) que não divide uma palavra
+  própria com o favorecido (`recebedor_confere`) sai "ATENÇÃO — conferir quem
+  recebe o QR", e título com pagamento anterior sai "ATENÇÃO — título já tem
+  pagamento" (o QR estático aceita de novo); (6) prefeitura exige
+  "PREFEITURA"/"PREF" ou "MUNICIPIO DE GOIANIA" — "MUNICIPAL" solto (mercado,
+  câmara, instituto) não é. Na conferência de 07/10 os 4 prints de cartório
+  ficaram em ATENÇÃO pela trava (5): o QR é do operador do registro, não do
+  cartório do lançamento.
   (f) **A ordem das linhas é (tipo, ordem do sistema invertida)** (dono,
   14/09/2026): Boleto antes de Pix, como sempre, e dentro do tipo o que
   aparece por ÚLTIMO na tela do ERP vem primeiro. `listar_a_pagar`

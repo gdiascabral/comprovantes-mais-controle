@@ -368,3 +368,107 @@ def test_a_janela_de_confirmacao_mostra_o_qr_curto():
     assert confirmacao.por_onde("Pix", c) == (
         "PIX  copia-e-cola do QR Code — CARTORIO EXEMPLO R$ 55,00")
     assert confirmacao.por_onde("Pix", brcode("LOJA")).endswith("(sem valor no código)")
+
+
+# ------------------------------- os seis achados da revisão de dinheiro (08/10)
+def _html(itens, anexos, textos, qrs):
+    r = relatorio.montar_registros(itens, anexos, {}, textos, qr_pix=qrs)
+    return {e["id"]: e for c in html_pagamentos.contas_do_html_geral(r)
+            for e in c["entries"]}
+
+
+def test_1_mesma_guia_como_pix_e_como_boleto_bloqueia_as_duas():
+    v = _valor(LINHA_ARRECADACAO)
+    a = item("PREFEITURA DE GOIANIA", valor=v, metodo="Boleto")
+    b = item("OUTRO NOME", valor=v, metodo="Boleto")
+    b.update(id="i2", tradePayableId="t2")
+    e = _html([a, b], {"t1": [anexo("guia.pdf", "Boleto", url="u1")],
+                       "t2": [anexo("guia2.pdf", "Boleto", url="u2")]},
+              {"u1": LINHA_ARRECADACAO, "u2": LINHA_ARRECADACAO},
+              {"u1": [brcode("MUNICIPIO DE GOIANIA", v)]})
+    assert e["i1"]["tipo"] == "Pix" and e["i2"]["tipo"] == "Boleto"
+    assert "mesma linha" in e["i1"]["bloqueio"]
+    assert "mesma linha" in e["i2"]["bloqueio"]
+
+
+def test_1_pix_do_qr_do_boleto_repetido_noutro_lancamento_bloqueia():
+    v = _valor(LINHA_BANCARIA)
+    c = brcode("FORNECEDOR EXEMPLO", v)
+    a = item(valor=v, metodo="Boleto")
+    b = item(valor=v)
+    b.update(id="i2", tradePayableId="t2")
+    e = _html([a, b], {"t1": [anexo("boleto.pdf", "Boleto", url="u1")],
+                       "t2": [anexo("qr.png", ext=".png", url="u2")]},
+              {"u1": LINHA_BANCARIA}, {"u1": [c], "u2": [c]})
+    assert e["i1"]["pix_qr"] == c and e["i2"]["dados_limpo"] == c
+    assert "mesma linha" in e["i1"]["bloqueio"]
+    assert "mesma linha" in e["i2"]["bloqueio"]
+
+
+def test_2_segunda_via_autenticada_nao_oferece_o_qr():
+    v = _valor(LINHA_BANCARIA)
+    reg, _ = linha([item(valor=v, metodo="Boleto")],
+                   {"t1": [anexo("boleto.pdf", "Boleto", url="u1")]},
+                   textos={"u1": LINHA_BANCARIA + "\nAutenticação eletrônica 123"},
+                   qrs={"u1": [brcode("FORNECEDOR EXEMPLO", v)]})
+    assert reg is None or (reg["tipo"] == "Boleto" and reg["pix_qr"] == ""
+                           and "comprovante" in reg["obs"])
+
+
+def test_3_qr_de_outro_anexo_nao_vai_para_o_boleto():
+    v = _valor(LINHA_BANCARIA)
+    reg, _ = linha([item(valor=v, metodo="Boleto")],
+                   {"t1": [anexo("boleto.pdf", "Boleto", url="u1"),
+                           anexo("orcamento.pdf", url="u2")]},
+                   textos={"u1": LINHA_BANCARIA, "u2": "orcamento"},
+                   qrs={"u2": [brcode("FORNECEDOR EXEMPLO", v)]})
+    assert reg["tipo"] == "Boleto" and reg["pix_qr"] == ""
+
+
+def test_3_sem_boleto_anexado_o_qr_de_outro_documento_nao_vira_pix():
+    reg, omitidos = linha([item(metodo="Boleto")],
+                          {"t1": [anexo("orcamento.pdf", tag="Orçamento", url="u2")]},
+                          textos={"u2": "orcamento"},
+                          qrs={"u2": [brcode("FORNECEDOR EXEMPLO", 55.0)]})
+    assert reg is None or reg["dados"] == ""
+
+
+def test_4_qr_sem_valor_sai_em_atencao_e_bloqueia_o_copiar():
+    c = brcode("CARTORIO EXEMPLO")
+    e = _html([item("CARTORIO EXEMPLO")],
+              {"t1": [anexo("guia.png", ext=".png", url="u1")]}, {}, {"u1": [c]})
+    assert e["i1"]["status"] == "ATENÇÃO — QR Code sem valor"
+    assert e["i1"]["bloqueio"]
+
+
+def test_5_recebedor_do_qr_diferente_do_favorecido_sai_em_atencao():
+    c = brcode("LOJA DIFERENTE", 55.0)
+    reg, _ = linha([item("CARTORIO EXEMPLO")],
+                   {"t1": [anexo("guia.png", ext=".png", url="u1")]}, qrs={"u1": [c]})
+    assert reg["dados"] == c
+    assert reg["status"] == "ATENÇÃO — conferir quem recebe o QR"
+    assert relatorio.recebedor_confere("CARTORIO 1 OFICIO", "1 CARTORIO DE NOTAS")
+    assert not relatorio.recebedor_confere("LOJA DIFERENTE LTDA", "CARTORIO LTDA")
+
+
+def test_5_titulo_com_pagamento_anterior_nao_paga_pelo_qr_as_cegas():
+    c = brcode("CARTORIO EXEMPLO", 55.0)
+    it = item("CARTORIO EXEMPLO")
+    it["sumOfPaidValues"] = 55.0
+    reg, _ = linha([it], {"t1": [anexo("guia.png", ext=".png", url="u1")]},
+                   qrs={"u1": [c]})
+    assert reg["status"].startswith("ATENÇÃO — título já tem pagamento")
+
+
+def test_6_municipal_solto_nao_e_prefeitura():
+    for nome in ("MERCADO MUNICIPAL DE GOIANIA", "CAMARA MUNICIPAL DE GOIANIA",
+                 "INSTITUTO MUNICIPAL DE ASSISTENCIA GOIANIA"):
+        assert not relatorio.e_prefeitura_de_goiania(nome), nome
+
+
+def test_2_qr_de_documento_com_autenticacao_eletronica_nao_paga_pix_sem_chave():
+    c = brcode("CARTORIO EXEMPLO", 55.0)
+    reg, _ = linha([item("CARTORIO EXEMPLO")],
+                   {"t1": [anexo("segunda via.pdf", url="u1")]},
+                   textos={"u1": "Autenticação eletrônica 9F3A"}, qrs={"u1": [c]})
+    assert reg is None or reg["dados"] != c

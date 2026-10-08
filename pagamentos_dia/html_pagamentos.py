@@ -523,6 +523,13 @@ def contas_do_html_geral(resultado) -> list[dict]:
                 # O Pix do QR Code do boleto, num segundo "Copiar" (dono,
                 # 08/10/2026). Copia-e-cola vai inteiro (`dado_para_colar`).
                 "pix_qr": dado_para_colar("Pix", r.get("pix_qr")),
+                # As OUTRAS identidades da mesma cobrança, para a checagem de
+                # repetição: o Pix do QR do boleto e a linha da guia que virou
+                # Pix (revisão de dinheiro, 08/10/2026).
+                "chaves_extra": [k for k in (
+                    _chave_de_repeticao("Pix", dado_para_colar("Pix", r.get("pix_qr"))),
+                    _chave_de_repeticao("Boleto", r.get("linha_da_guia")),
+                ) if k],
                 "valor": valor_para_colar(r.get("valor")),
                 "centavos": centavos(r.get("valor")),
                 "descricao": descricao_para_colar(r, nome),
@@ -539,8 +546,9 @@ def contas_do_html_geral(resultado) -> list[dict]:
     por_chave: dict[str, list[dict]] = {}
     for c in contas:
         for e in c["entries"]:
-            k = _chave_de_repeticao(e["tipo"], e["dados_limpo"])
-            if k:
+            chaves = {_chave_de_repeticao(e["tipo"], e["dados_limpo"]),
+                      *e.pop("chaves_extra", ())}
+            for k in chaves - {""}:
                 por_chave.setdefault(k, []).append(e)
     for grupo in por_chave.values():
         ids = {e["id"] or id(e) for e in grupo}
