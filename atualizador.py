@@ -163,6 +163,32 @@ def _extrair_seguro(zip_path: Path, destino: Path):
         z.extractall(destino_abs)
 
 
+def _tirar_do_caminho(velha: Path):
+    """Garante que `velha` não existe mais — conferindo o DEPOIS, e não o
+    retorno do `rmtree`.
+
+    O `rmtree(..., ignore_errors=True)` sozinho não basta: numa pasta dentro do
+    OneDrive ele apagou os arquivos e deixou as pastas vazias, sem erro
+    (02/10/2026). O `rename` seguinte dava WinError 183 em toda abertura e o
+    app ficou 8 versões atrás, baixando a nova para a `codigo_nova` e rodando
+    a velha. Se a casca não sai, ela é renomeada para um nome único — renomear
+    a pasta funciona onde apagar o que está dentro não funcionou — e as cascas
+    de aberturas anteriores são tentadas de novo aqui, sem cobrar nada se
+    continuarem presas."""
+    for antiga in velha.parent.glob(velha.name + ".descartada-*"):
+        shutil.rmtree(antiga, ignore_errors=True)
+    shutil.rmtree(velha, ignore_errors=True)
+    if not velha.exists():
+        return
+    try:
+        velha.rename(velha.with_name(
+            f"{velha.name}.descartada-{time.strftime('%Y%m%d-%H%M%S')}"))
+    except OSError as e:
+        raise RuntimeError(
+            f"não consegui apagar nem renomear a pasta {velha.as_posix()} — "
+            "feche o app e apague essa pasta à mão") from e
+
+
 def _atualizar_codigo(pasta: Path, emb: Path):
     """Baixa e instala o codigo.zip da release que vale agora (rápido).
 
@@ -239,7 +265,7 @@ def _atualizar_codigo(pasta: Path, emb: Path):
             raise RuntimeError("codigo.zip veio sem o app dentro")
 
         velha = pasta.with_name("codigo_velha")
-        shutil.rmtree(velha, ignore_errors=True)
+        _tirar_do_caminho(velha)
         if pasta.exists():
             pasta.rename(velha)
         nova.rename(pasta)
