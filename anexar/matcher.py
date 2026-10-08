@@ -11,6 +11,19 @@ Critérios, do mais forte para o mais fraco (todos exigem o MESMO valor):
   4. favorecido do lançamento = recebedor do comprovante, na mesma conta e data;
   5. data igual (dd-mm) como desempate.
 
+Código de barras do boleto (dono, 08/10/2026), antes de tudo: o do comprovante
+igual a um do boleto anexado ao título, NA MESMA DATA, fecha CERTEZA -- sem a
+data, o comprovante da parcela anterior de mesmo valor, ainda na pasta, fechava
+a parcela de agora (o título guarda o boleto de todas). DIFERENTE é conflito, e
+um lançamento com um candidato em conflito não fecha por regra automática
+nenhuma -- nem por eliminação, levando o rival sem código: vira dúvida, e quem
+decide é gente.
+O PDF cujo código é do título de OUTRO lançamento (a cópia do agendamento ao
+lado da efetivação) nem é candidato dos demais: o código prova de quem ele é.
+Faltando o código de um dos lados (o PDF do Inter não o mostra, título sem
+boleto anexado), nada muda. Quem preenche `barras` é
+`codigo_barras.preencher`.
+
 Identificadores EXATOS (14/09/2026, as dúvidas que o dono apontou), os três
 com a MESMA DATA -- a OC, a UC e o CNPJ identificam a compra, o imóvel e o
 fornecedor, não o PAGAMENTO: a parcela ou o mês anterior, com o PDF ainda na
@@ -293,10 +306,18 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                                 _numeros_do_documento(str(q.get("doc") or "")))
                      for v in _vals(q)}
 
+    # De quem é cada código: o PDF com o código do título de OUTRO lançamento
+    # é conflito para todos os demais, mesmo os que não têm código nenhum.
+    dono_do_codigo: dict[str, set] = defaultdict(set)
+    for q in pendentes:
+        for b in q.get("barras") or ():
+            dono_do_codigo[b].add(id(q))
+
     for pe in pendentes:
         pe["status"] = None
         pe["cands"] = []
         pe["fora_da_conta"] = 0
+        pe["de_outro_titulo"] = 0
         vistos = set()
         for v in sorted(_vals(pe)):
             for pd in byval.get(v, []):
@@ -325,6 +346,12 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                 idnum = bool(_numeros_longos(pe["desc"]) & _numeros_longos(pd["desc"]))
                 # A OC lida no overview do ERP só vale contra OC do PDF.
                 ocerp = bool(pd["ocs"] & set(pe.get("ocs_erp") or ()))
+                b_pe, b_pd = pe.get("barras") or set(), pd.get("barras") or set()
+                if not b_pe & b_pd and any(dono_do_codigo.get(b, set()) - {id(pe)}
+                                           for b in b_pd):
+                    # O código diz que o PDF é do título de outro lançamento.
+                    pe["de_outro_titulo"] += 1
+                    continue
                 doc_fav = re.sub(r"\D", "", str(pe.get("doc_favorecido") or ""))
                 docrec = bool(doc_fav) and doc_fav == re.sub(
                     r"\D", "", str(pd.get("doc_recebedor") or ""))
@@ -334,6 +361,9 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                                     "docnum": docnum, "docnf": docnf,
                                     "idnum": idnum, "docrec": docrec,
                                     "ocerp": ocerp,
+                                    "barras": bool(b_pe & b_pd),
+                                    "barras_conflito": bool(b_pe and b_pd
+                                                            and not b_pe & b_pd),
                                     "conta": conta is True, "fav": fav,
                                     "score": (100 if ocnf else 0) + (10 if cc else 0)
                                              + (5 if docnum else 0) + (1 if date else 0)})
@@ -351,7 +381,18 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
             for c in pe["cands"]:
                 c[tipo + "_seguro"] = seguro
 
-    def atribuir(filtro):
+    def atribuir(regra, nome=""):
+        # Código de barras diferente tira o lançamento da regra INTEIRA, não só
+        # o par: tirando só o par, o rival sem código ficava sozinho e fechava
+        # por eliminação. E quem está travado CONTINUA disputando (`quer`): o
+        # PDF que o rival levaria pode ser justamente o dele (as duas revisões
+        # do PR do código de barras).
+        def disputa(pe):
+            return [c for c in pe["cands"] if c["pdf"]["used_by"] is None and regra(c)]
+
+        def pode_fechar(pe):
+            nv = disputa(pe)
+            return [] if any(c["barras_conflito"] for c in nv) else nv
         mudou = True
         while mudou:
             mudou = False
@@ -359,17 +400,17 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
             for pe in pendentes:
                 if pe["status"]:
                     continue
-                for c in pe["cands"]:
-                    if c["pdf"]["used_by"] is None and filtro(c):
-                        quer[id(c["pdf"])].append(pe["paidId"])
+                for c in disputa(pe):
+                    quer[id(c["pdf"])].append(pe["paidId"])
             for pe in pendentes:
                 if pe["status"]:
                     continue
-                nv = [c for c in pe["cands"] if c["pdf"]["used_by"] is None and filtro(c)]
+                nv = pode_fechar(pe)
                 if len(nv) == 1 and len(quer[id(nv[0]["pdf"])]) == 1:
                     nv[0]["pdf"]["used_by"] = pe["paidId"]
                     pe["match"] = nv[0]
                     pe["status"] = "CERTEZA"
+                    pe["fechou_por"] = nome
                     mudou = True
                 elif len(nv) > 1:
                     com_data = [c for c in nv if c["date"]]
@@ -380,8 +421,10 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                             pdx["used_by"] = pe["paidId"]
                             pe["match"] = com_data[0]
                             pe["status"] = "CERTEZA"
+                            pe["fechou_por"] = nome
                             mudou = True
 
+    atribuir(lambda c: c["barras"] and c["date"], "barras")
     atribuir(lambda c: c["ocnf"] and c["cc"])
     atribuir(lambda c: c["ocnf"])
     # OC do ERP e número longo igual (a UC), sempre com a data.
@@ -416,10 +459,21 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
             elif pe["fora_da_conta"]:
                 pe["motivo_sem_par"] = (f"{pe['fora_da_conta']} PDF(s) de mesmo "
                                         "valor saíram de outra conta")
+            elif pe["de_outro_titulo"]:
+                pe["motivo_sem_par"] = (f"{pe['de_outro_titulo']} PDF(s) de mesmo "
+                                        "valor são de outro título (código de barras)")
             else:
                 pe["motivo_sem_par"] = "nenhum PDF com esse valor na pasta"
             continue
-        concorrentes = [q for q in pendentes if q is not pe and not q["status"]
+        if any(c["barras_conflito"] for c in livres):
+            pe["status"] = "DUVIDA"
+            continue
+        # Quem já virou DÚVIDA continua concorrente: sem isso, o 1º de dois
+        # pendentes de mesmo valor virava dúvida e o 2º fechava pela data
+        # sozinho -- a ORDEM da lista decidia o anexo (revisão do PR do código
+        # de barras; o defeito é anterior a ele).
+        concorrentes = [q for q in pendentes if q is not pe
+                        and q["status"] in (None, "DUVIDA")
                         and (_vals(q) & _vals(pe))]
 
         def confiavel(c):
@@ -450,6 +504,10 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     def motivo(pe):
         m = pe["match"]
         t = []
+        # Só quando foi o código que fechou: o PDF da parcela anterior tem o
+        # código do título e pode fechar por outra regra (2ª revisão).
+        if pe.get("fechou_por") == "barras":
+            t.append("código de barras")
         if m["ocnf"] or m.get("ocerp"):
             t.append("OC/NF")
         if m.get("docnum") or m.get("docnf"):
