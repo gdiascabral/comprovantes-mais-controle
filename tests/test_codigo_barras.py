@@ -446,6 +446,13 @@ def test_dois_pendentes_e_um_pdf_so_pela_data_e_duvida_em_qualquer_ordem():
         assert not certezas and len(duvidas) == 2, ordem
 
 
+def test_resumo_da_duvida_conta_os_pdfs_de_outro_titulo():
+    from anexar import anexar_comprovantes as ac
+    pe = {"cands": [], "de_outro_titulo": 2}
+    assert "2 PDF(s) de mesmo valor com o código de barras de outro título" in (
+        ac._resumo_cands(pe))
+
+
 def test_sinais_do_conflito_mostram_o_resto_tambem():
     from anexar import anexar_comprovantes as ac
     assert ac._sinais({"barras_conflito": True, "date": True, "cc": True}) == [

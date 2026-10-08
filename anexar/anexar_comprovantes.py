@@ -182,6 +182,11 @@ def _resumo_cands(pe: dict) -> str:
     if pe.get("fora_da_conta"):
         partes.append(f"(+{pe['fora_da_conta']} PDF(s) de mesmo valor saídos de "
                       "outra conta, fora da disputa)")
+    if pe.get("de_outro_titulo"):
+        # Quem confere precisa saber que o PDF existe: se o boleto foi anexado
+        # no título errado do ERP, é justamente ele o comprovante deste.
+        partes.append(f"(+{pe['de_outro_titulo']} PDF(s) de mesmo valor com o "
+                      "código de barras de outro título, fora da disputa)")
     return " || ".join(partes) or "(sem candidatos livres)"
 
 
