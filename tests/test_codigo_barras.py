@@ -264,6 +264,16 @@ def test_preencher_sem_codigo_nos_pdfs_nem_consulta_o_erp():
     assert pend[0]["barras"] == set() and pdfs[0]["barras"] == set()
 
 
+def test_preencher_conta_quem_ficou_sem_o_titulo():
+    pend = [_pend("1", 5000)]
+    del pend[0]["tradePayableId"]
+    pdfs = [_pdf("50,00 - FULANO - 01-10.pdf")]
+    n = codigo_barras.preencher(
+        pend, pdfs, ler_pdf=lambda pd: (_formatada(_bancario(5000)), False),
+        anexos_de=lambda ids: {}, baixar=None)
+    assert n["sem_titulo"] == 1 and pend[0]["barras"] == set()
+
+
 def test_nome_do_anexo_com_extensao_separada():
     assert codigo_barras._nome_do_anexo({"filename": "boleto", "extension": ".PDF"}) == "boleto.pdf"
     assert codigo_barras._nome_do_anexo({"filename": "b.pdf", "extension": "pdf"}) == "b.pdf"
@@ -289,7 +299,7 @@ def test_sinais_mostram_o_codigo_e_o_conflito():
     from anexar import anexar_comprovantes as ac
     assert ac._sinais({"barras": True, "date": True}) == ["código de barras", "data"]
     assert ac._sinais({"barras_conflito": True, "date": True, "conta": True}) == [
-        "código de barras DIFERENTE"]
+        "código de barras DIFERENTE", "conta", "data"]
 
 
 def test_falha_na_leitura_deixa_o_casamento_como_antes():
@@ -330,3 +340,73 @@ class _ArquivoFalso:
 
 
 _PASTA_FALSA = _PastaFalsa()
+
+
+# ------------------------------------------------------------ revisão do 916959b
+def test_parcela_vizinha_de_mesmo_valor_nao_fecha_pelo_codigo():
+    # Achado 1: o título guarda o boleto da parcela 1 (mesmo valor); a parcela
+    # 2 está pendente, o comprovante dela não tem código, e o da parcela 1
+    # (pago no mês anterior) ainda está na pasta. Antes fechava pela data.
+    c1 = _barras(_bancario(100000, 1))
+    pend = [_pend("2", 100000, "0110", [c1])]
+    pdfs = [_pdf("1.000,00 - ALUGUEL - 01-09.pdf", [c1]),
+            _pdf("1.000,00 - ALUGUEL - 01-10.pdf")]
+    certezas, _, _ = matcher.casar(pend, pdfs)
+    assert [p["pdf"] for p in certezas] == ["1.000,00 - ALUGUEL - 01-10.pdf"]
+
+
+def test_preencher_ignora_comprovante_anexado_no_titulo():
+    # Mesma família do achado 1: comprovante de parcela anterior anexado no
+    # TÍTULO não é boleto desta parcela.
+    pago, este = _bancario(5000, 1), _bancario(5000, 2)
+    pend = [_pend("1", 5000)]
+    pdfs = [_pdf("50,00 - FULANO - 01-10.pdf")]
+    anexos = {"T-1": [{"filename": "pgto.pdf", "tagName": "Comprovante", "downloadUrl": "a"},
+                      {"filename": "Comprovante setembro.pdf", "downloadUrl": "b"},
+                      {"filename": "boleto.pdf", "downloadUrl": "c"}]}
+    codigo_barras.preencher(
+        pend, pdfs, ler_pdf=lambda pd: (_formatada(este), False),
+        anexos_de=lambda ids: anexos, baixar=lambda url: url.encode(),
+        ler_anexo=lambda nome, d: (_formatada(este if d == b"c" else pago), False))
+    assert pend[0]["barras"] == {_barras(este)}
+
+
+def test_veto_nao_entrega_o_lancamento_ao_rival_sem_codigo():
+    # Achado 2: o comprovante certo (obra e data batem) tem código diferente do
+    # boleto anexado (2ª via); um Pix da mesma obra e valor, de outro dia, não
+    # pode fechar por eliminação. Tem de ser dúvida.
+    pend = [_pend("1", 5000, "0110", [_barras(_bancario(5000, 1))],
+                  works=["OBRA EXEMPLO NORTE"])]
+    pdfs = [_pdf("50,00 - OBRA EXEMPLO NORTE - 01-10.pdf", [_barras(_bancario(5000, 2))]),
+            _pdf("50,00 - OBRA EXEMPLO NORTE PIX - 03-10.pdf")]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert not certezas and [p["paidId"] for p in duvidas] == ["1"]
+
+
+def test_segunda_copia_do_comprovante_nao_vai_para_outro_lancamento():
+    # Achado 3: agendamento + efetivação com o MESMO código. O 1 leva a
+    # efetivação pelo código; a cópia do agendamento é do título do 1 e não
+    # pode fechar o 2 (mesmo valor, sem código) por data.
+    a = _barras(_bancario(5000))
+    pend = [_pend("1", 5000, "0110", [a]), _pend("2", 5000, "3009")]
+    pdfs = [_pdf("50,00 - FULANO - 01-10.pdf", [a]),
+            _pdf("50,00 - FULANO AGENDADO - 30-09.pdf", [a])]
+    certezas, duvidas, _ = matcher.casar(pend, pdfs)
+    assert [(p["paidId"], p["pdf"]) for p in certezas] == [("1", "50,00 - FULANO - 01-10.pdf")]
+    assert [p["paidId"] for p in duvidas] == ["2"]
+
+
+def test_dois_pendentes_e_um_pdf_so_pela_data_e_duvida_em_qualquer_ordem():
+    # Achado 5 (anterior a este PR): o 1º virava dúvida e deixava de ser
+    # concorrente do 2º, que fechava pela data -- a ORDEM decidia o anexo.
+    for ordem in (("1", "2"), ("2", "1")):
+        pend = [_pend(i, 5000, "0110") for i in ordem]
+        pdfs = [_pdf("50,00 - FULANO - 01-10.pdf")]
+        certezas, duvidas, _ = matcher.casar(pend, pdfs)
+        assert not certezas and len(duvidas) == 2, ordem
+
+
+def test_sinais_do_conflito_mostram_o_resto_tambem():
+    from anexar import anexar_comprovantes as ac
+    assert ac._sinais({"barras_conflito": True, "date": True, "cc": True}) == [
+        "código de barras DIFERENTE", "centro de custo", "data"]

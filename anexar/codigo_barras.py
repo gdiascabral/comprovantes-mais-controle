@@ -51,6 +51,20 @@ _EXT_PDF = (".pdf",)
 _EXT_IMAGEM = (".jpg", ".jpeg", ".png")
 #: Teto de arquivos lidos por título: cada um é um download (e talvez um OCR).
 MAX_ARQUIVOS_POR_TITULO = 6
+#: Anexo do título que é COMPROVANTE (etiqueta ou nome): o pagamento de uma
+#: parcela anterior anexado no título, e não no sub-pagamento, não é boleto
+#: desta parcela -- o mesmo critério do `pagamentos_dia/relatorio.py`.
+_COMPROVANTE = re.compile(r"comprovante", re.I)
+
+
+def _e_comprovante(f: dict) -> bool:
+    rotulo = " ".join(str(f.get(k) or "") for k in
+                      ("tagName", "tag", "filename", "name", "description"))
+    tags = f.get("tags")
+    if isinstance(tags, list):
+        rotulo += " " + " ".join(str(t.get("name") if isinstance(t, dict) else t)
+                                 for t in tags)
+    return bool(_COMPROVANTE.search(rotulo))
 
 
 def _janelas(digitos: str) -> list[str]:
@@ -161,7 +175,7 @@ def preencher(pendentes: list[dict], pdfs: list[dict], *, ler_pdf,
     [anexos]}`, `baixar(url) -> bytes`, `ler_anexo(nome, bytes) -> (texto, ocr)`.
     """
     contagem = {"pdfs_lidos": 0, "pdfs_com_codigo": 0, "titulos_lidos": 0,
-                "lancamentos_com_codigo": 0}
+                "lancamentos_com_codigo": 0, "sem_titulo": 0}
     valores_pendentes = set().union(*(_vals(pe) for pe in pendentes)) if pendentes else set()
     for pd in pdfs:
         pd.setdefault("barras", set())
@@ -181,6 +195,9 @@ def preencher(pendentes: list[dict], pdfs: list[dict], *, ler_pdf,
         if any(pd["barras"] for v in _vals(pe) for pd in por_valor.get(v, [])):
             alvos.append(pe)
     ids = sorted({str(pe["tradePayableId"]) for pe in alvos if pe.get("tradePayableId")})
+    # Sem o id do título a regra não roda -- e não rodar em silêncio parece
+    # "nenhum boleto com código". Quem chama avisa.
+    contagem["sem_titulo"] = sum(1 for pe in alvos if not pe.get("tradePayableId"))
     if not ids or cancelar():
         return contagem
     anexos = anexos_de(ids) or {}
@@ -189,7 +206,7 @@ def preencher(pendentes: list[dict], pdfs: list[dict], *, ler_pdf,
         if cancelar():
             break
         arquivos = [f for f in (anexos.get(str(pe.get("tradePayableId"))) or [])
-                    if f.get("downloadUrl")
+                    if f.get("downloadUrl") and not _e_comprovante(f)
                     and _nome_do_anexo(f).lower().endswith(_EXT_PDF + _EXT_IMAGEM)]
         codigos: set[str] = set()
         for f in arquivos[:MAX_ARQUIVOS_POR_TITULO]:

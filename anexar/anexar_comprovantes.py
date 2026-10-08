@@ -158,10 +158,11 @@ def _sinais(c: dict) -> list[str]:
 
     `conta` é o PDF ter saído da conta cadastrada no lançamento e `favorecido`
     é quem recebeu bater com o do ERP (regra do dono, 14/09/2026)."""
-    if c.get("barras_conflito"):
-        # Não é um sinal a favor: é o motivo de o par não ter fechado sozinho.
-        return ["código de barras DIFERENTE"]
-    return [nome for nome, bateu in (("código de barras", c.get("barras")),
+    # O conflito não é um sinal a favor: é o motivo de o par não ter fechado
+    # sozinho. Vai NA FRENTE dos outros, não no lugar deles -- no caso da 2ª via
+    # do boleto, a data, a conta e a obra batendo é o que diz que o PDF é dele.
+    conflito = ["código de barras DIFERENTE"] if c.get("barras_conflito") else []
+    return conflito + [nome for nome, bateu in (("código de barras", c.get("barras")),
                                      ("OC/NF", c.get("ocnf") or c.get("ocerp")),
                                      ("nº longo", c.get("idnum")),
                                      ("documento", c.get("docrec")),
@@ -1183,6 +1184,11 @@ class AnexarFrame(ttk.Frame):
             self._log(f"Código de barras: {n['pdfs_com_codigo']} de "
                       f"{n['pdfs_lidos']} PDF(s) · {n['lancamentos_com_codigo']} de "
                       f"{n['titulos_lidos']} título(s) com boleto lido.")
+            if n["sem_titulo"]:
+                config.diag(f"codigo_barras: {n['sem_titulo']} lançamento(s) sem "
+                            "tradePayableId na lista de pagos")
+                self._log(f"[aviso] {n['sem_titulo']} lançamento(s) sem o título no "
+                          "ERP — o código de barras não foi conferido neles.")
         except Exception:                                    # noqa: BLE001
             config.diag("codigo_barras.preencher falhou:\n" + traceback.format_exc())
             self._log("[aviso] não li os códigos de barras — o casamento segue "
