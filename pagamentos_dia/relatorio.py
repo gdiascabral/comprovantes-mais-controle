@@ -41,6 +41,7 @@ import util                              # utilitário compartilhado (raiz)
 
 # Irmãos, na mesma pasta.
 from . import ocr_boleto
+from . import qr_pix as qr_pix_mod     # `qr_pix` é nome de parâmetro aqui
 from . import reembolso
 from . import regras_pagamento as regras
 
@@ -396,8 +397,10 @@ def anexo_para_pagar_a_mao(files, textos: dict | None = None) -> dict | None:
     print da compra de marketplace). Sem isto a linha caía em "sem forma de
     pagar" e ia para NÃO ENTRARAM — o boleto em imagem sempre ficou na
     planilha para alguém abrir e digitar, e o QR Code em imagem é o mesmo
-    caso. O app não lê o QR (decodificar pediria biblioteca que o exe não
-    tem); ele só não esconde a linha, e diz em qual anexo está.
+    caso. Desde 08/10/2026 o QR é LIDO (`pix_do_qr`), e este é o plano B:
+    vale quando a leitura não deu um código que pague o lançamento (QR
+    ilegível, de outro valor, mais de um) — a linha não some, e diz em qual
+    anexo está.
 
     Nunca o COMPROVANTE — pelo rótulo ou pelo texto de quem já pagou —,
     porque ele prova pagamento feito, e pagar por ele é pagar em dobro.
@@ -417,6 +420,138 @@ def anexo_para_pagar_a_mao(files, textos: dict | None = None) -> dict | None:
     candidatos.sort(key=lambda f: 0 if _QR_OU_PIX.search(_rotulo(f))
                     else 1 if _e_imagem(f) else 2)
     return candidatos[0]
+
+
+class PixDoQr(NamedTuple):
+    """O Pix copia-e-cola que o QR Code de um anexo do título entrega.
+
+    `codigo` vazio quer dizer que nenhum serve para pagar ESTE lançamento; aí
+    `aviso` diz por quê, quando há o que dizer (QR de outro valor, mais de um
+    QR sem como escolher). `sem_valor` marca o código que não traz o valor
+    embutido — quem paga confere o valor na tela do banco."""
+    codigo: str
+    anexo: dict | None
+    aviso: str
+    sem_valor: bool = False
+
+
+_SEM_PIX_DO_QR = PixDoQr("", None, "")
+
+
+def pix_do_qr(files, textos: dict | None, qr_pix: dict | None,
+              valor: float) -> PixDoQr:
+    """O Pix lido do QR Code dos anexos que paga ESTE lançamento (dono,
+    08/10/2026: "sempre ler o QR Code do Pix no boleto e trazer ele").
+
+    `qr_pix` é `{downloadUrl: [copia-e-cola]}`, só com códigos que já
+    passaram nas provas de forma do `qr_pix` (é Pix, o CRC fecha). Aqui se
+    decide se o código é DESTE pagamento, e a régua é a do boleto:
+
+    - **Nunca do que prova pagamento** — rótulo "Comprovante" ou texto de
+      quem já pagou —, nem do aviso "PAGAR PARA": o QR de um comprovante é de
+      pagamento feito, e o do aviso é da loja, não de quem se reembolsa.
+    - **O valor manda.** Código com valor embutido (campo 54) só serve se for
+      o do lançamento; de outro valor, não paga — vira aviso (é o caso do
+      título pago em parte: o QR é do valor cheio).
+    - **Sem valor embutido**, só quando é o ÚNICO código do título: QR
+      dinâmico sem valor não se distingue de outro, e escolher entre dois é
+      chutar para quem o dinheiro vai.
+    """
+    textos = textos or {}
+    if not qr_pix:
+        return _SEM_PIX_DO_QR
+    achados: list[tuple[str, dict]] = []
+    for f in files or ():
+        url = f.get("downloadUrl") or ""
+        codigos = qr_pix.get(url) or ()
+        if not codigos:
+            continue
+        rotulo = _rotulo(f)
+        if re.search(r"comprovante", rotulo, re.I) or _PAGAR_PARA.search(rotulo):
+            continue
+        texto = textos.get(url) or ""
+        # As DUAS réguas de prova de pagamento: a ampla e a forte que o ramo
+        # do boleto usa ("autenticação eletrônica", "comprovante de
+        # transferência") — a 2ª via autenticada traz o QR do boleto JÁ PAGO.
+        if texto and (_PROVA_DE_PAGAMENTO.search(texto)
+                      or _COMPROVANTE_FORTE.search(texto)):
+            continue
+        for c in codigos:
+            if qr_pix_mod.valido(c) and c not in (a for a, _ in achados):
+                achados.append((c, f))
+    if not achados:
+        return _SEM_PIX_DO_QR
+    iguais = [(c, f) for c, f in achados
+              if qr_pix_mod.valor(c) is not None
+              and abs(qr_pix_mod.valor(c) - float(valor or 0)) < 0.005]
+    if len(iguais) == 1:
+        return PixDoQr(iguais[0][0], iguais[0][1], "")
+    if len(iguais) > 1:
+        return PixDoQr("", iguais[0][1],
+                       f"Há {len(iguais)} QR Codes Pix de {brl(valor)} nos anexos — "
+                       "não dá para saber qual é deste lançamento")
+    sem_valor = [(c, f) for c, f in achados if qr_pix_mod.valor(c) is None]
+    if len(achados) == 1 and sem_valor:
+        return PixDoQr(sem_valor[0][0], sem_valor[0][1], "", sem_valor=True)
+    outros = sorted({brl(qr_pix_mod.valor(c)) for c, _ in achados
+                     if qr_pix_mod.valor(c) is not None})
+    if outros:
+        return PixDoQr("", achados[0][1],
+                       f"QR Code Pix do anexo é de {', '.join(outros)} e o lançamento "
+                       f"é de {brl(valor)} — não usado")
+    return PixDoQr("", achados[0][1],
+                   f"Há {len(achados)} QR Codes Pix sem valor nos anexos — "
+                   "não dá para saber qual é deste lançamento")
+
+
+#: Quem recebe a guia da Prefeitura de Goiânia, como o ERP (favorecido) ou o
+#: próprio QR (campo 59) o escrevem: "PREFEITURA DE GOIANIA", "GOIANIA
+#: PREFEITURA MUNICIPAL…", "MUNICIPIO DE GOIANIA". "MUNICIPAL" solto não
+#: basta: "MERCADO MUNICIPAL", "CÂMARA MUNICIPAL DE GOIÂNIA" e "INSTITUTO
+#: MUNICIPAL…" não são a prefeitura (revisão de dinheiro, 08/10/2026). O TEXTO do anexo não
+#: entra: a NFS-e de Goiânia traz "Prefeitura de Goiânia" no cabeçalho, e o
+#: boleto de um prestador que veio junto da nota viraria guia da prefeitura.
+_PREFEITURA = re.compile(r"\bPREFEITURA\b|\bPREF\b|\bMUNICIPIO\W+DE\W+GOIANIA\b")
+
+
+def e_prefeitura_de_goiania(*nomes) -> bool:
+    """Algum dos nomes é o da Prefeitura de Goiânia?"""
+    for nome in nomes:
+        n = util.sem_acento(str(nome or "")).upper()
+        # Aparecida de Goiânia é OUTRO município, com outra prefeitura.
+        n = re.sub(r"APARECIDA\W+DE\W+GOIANIA", " ", n)
+        if "GOIANIA" in n and _PREFEITURA.search(n):
+            return True
+    return False
+
+
+#: Palavras que todo nome de empresa tem e que não dizem QUEM é.
+_PALAVRAS_GENERICAS = frozenset(
+    "LTDA EIRELI ME EPP SA S/A CIA COMERCIO SERVICOS SERVICO INDUSTRIA "
+    "DISTRIBUIDORA MATERIAIS CONSTRUCAO CONSTRUCOES BRASIL GOIANIA GOIAS "
+    "DE DA DO DAS DOS E".split())
+
+
+def _palavras_do_nome(nome) -> set:
+    n = util.sem_acento(str(nome or "")).upper()
+    return {p for p in re.findall(r"[A-Z0-9]{4,}", n) if p not in _PALAVRAS_GENERICAS}
+
+
+def recebedor_confere(nome_no_qr, favorecido) -> bool:
+    """O nome gravado no QR (campo 59, até 25 caracteres) é o do favorecido?
+    Basta uma palavra própria em comum (o QR corta e abrevia o nome)."""
+    a, b = _palavras_do_nome(nome_no_qr), _palavras_do_nome(favorecido)
+    return bool(a and b and (a & b or any(x.startswith(y) or y.startswith(x)
+                                          for x in a for y in b)))
+
+
+def _obs_pix_do_qr(do_qr: PixDoQr, valor, prefeitura: bool = False) -> str:
+    nome = ((do_qr.anexo or {}).get("filename") or "").strip() or "sem nome"
+    frase = (f"Prefeitura de Goiânia — pagar pelo Pix do QR Code da guia '{nome}'"
+             if prefeitura else f"Pix pelo QR Code do anexo '{nome}'")
+    if do_qr.sem_valor:
+        frase += f" — o código não traz o valor: conferir {brl(valor)} na tela do banco"
+    return frase
 
 
 def _obs_pagar_pelo_anexo(f: dict) -> str:
@@ -1328,7 +1463,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      incluir=(), excluir=(), pix_reembolso=None,
                      urls_ocr=(), regras_fornecedor=None,
                      ids_nao_confirmados=(), participantes=None,
-                     cadastro_reembolso=None, anexos_nao_lidos=()) -> Resultado:
+                     cadastro_reembolso=None, anexos_nao_lidos=(),
+                     qr_pix=None) -> Resultado:
     """Transforma lançamentos do ERP em linhas de planilha.
 
     `anexos`             {tradePayableId: [anexo]}
@@ -1348,6 +1484,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                          não foram (download que falhou). A linha cujo título
                          tem um deles sai "ATENÇÃO — anexo não lido": a forma
                          de pagar dela foi decidida sem o documento
+    `qr_pix`             `{downloadUrl: [Pix copia-e-cola]}` lidos dos QR Codes
+                         dos anexos (`qr_pix.ler`). Vazio, nada muda: é o
+                         comportamento de antes da leitura do QR
     """
     pix_reembolso = pix_reembolso or {}
     regras_forn = regras_fornecedor or {}
@@ -1419,6 +1558,20 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                             or documento_declara_reembolso(item, overview))
 
         avisos, obs, chave_divergente = [], "", False
+        #: O Pix copia-e-cola do QR Code do anexo. `qr_usado`: ele virou o
+        #: dado de pagamento da linha; `pix_qr`: a linha segue pelo boleto e
+        #: o QR vai junto, como segunda forma de pagar no HTML; `linha_da_guia`:
+        #: a linha digitável que o QR substituiu (guia da prefeitura), que
+        #: continua sendo a prova do valor e da arrecadação.
+        qr_usado, pix_qr, linha_da_guia = False, "", ""
+        #: Status ATENÇÃO que o QR pede (sem valor embutido, recebedor que não
+        #: confere, título com pagamento anterior) — vazio quando nada falta.
+        qr_alerta = ""
+        #: O anexo de onde saiu a linha do boleto, e o único de onde o QR do
+        #: boleto pode vir: QR de OUTRO anexo (fatura, orçamento) não paga o
+        #: boleto registrado (revisão de dinheiro, 08/10/2026).
+        anexo_da_linha, origem_qr = None, None
+        onde = None          # o anexo com boleto indeciso (ramo do boleto)
         obs_linha, n_boletos = "", 0
         #: Quem recebe, quando o anexo é um aviso "PAGAR PARA". Fica None nas
         #: outras linhas: ali quem recebe é o favorecido do lançamento, e não
@@ -1535,14 +1688,32 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     avisos.append("Chave/copia-e-cola veio da observação do lançamento.")
                 else:
                     dados, obs = "", "Pix sem chave no cadastro — buscar no ERP"
-                    # O QR Code anexado (em imagem, quase sempre) é por onde
-                    # se paga: a linha fica, como o boleto em imagem fica. A
-                    # remessa continua recusando — sem chave não há Pix no
-                    # arquivo do banco (`remessa_dia.MOTIVO_SEM_CHAVE`).
-                    pagar_por = anexo_para_pagar_a_mao(files, textos)
-                    if pagar_por is not None:
-                        tem_documento = True
-                        obs = _obs_pagar_pelo_anexo(pagar_por)
+                    # O QR Code anexado é por onde se paga. Lido e conferido
+                    # (`pix_do_qr`: é Pix, o CRC fecha, o valor é o do
+                    # lançamento), ele É o dado de pagamento — o copia-e-cola
+                    # pronto para o HTML (dono, 08/10/2026). A remessa recusa
+                    # o copia-e-cola (`remessa_dia.MOTIVO_COPIA_COLA`): é
+                    # pagamento à mão, como antes, só que sem digitar nada.
+                    do_qr = pix_do_qr(files, textos, qr_pix, valor)
+                    if do_qr.codigo:
+                        dados, tem_documento, qr_usado = do_qr.codigo, True, True
+                        obs = _obs_pix_do_qr(do_qr, valor)
+                        nome_qr = qr_pix_mod.recebedor(do_qr.codigo)
+                        if do_qr.sem_valor:
+                            qr_alerta = "ATENÇÃO — QR Code sem valor"
+                        elif not recebedor_confere(nome_qr, favorecido):
+                            qr_alerta = "ATENÇÃO — conferir quem recebe o QR"
+                            avisos.append(f"O QR Code é de '{nome_qr or '?'}', e o "
+                                          f"favorecido é '{favorecido or '?'}'")
+                    else:
+                        # Sem QR legível, a linha fica como o boleto em imagem
+                        # fica, dizendo em qual anexo procurar.
+                        pagar_por = anexo_para_pagar_a_mao(files, textos)
+                        if pagar_por is not None:
+                            tem_documento = True
+                            obs = _obs_pagar_pelo_anexo(pagar_por)
+                        if do_qr.aviso:
+                            avisos.append(do_qr.aviso)
         else:
             pdf = escolher_pdf_do_boleto(files)
             url_pdf = (pdf or {}).get("downloadUrl") or ""
@@ -1558,7 +1729,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             if len(todas) > 1:
                 decidida = _desempatar_linhas(todas, valor, venc_item)
                 if decidida:
-                    dados = decidida[0]
+                    dados, anexo_da_linha = decidida[0], decidida[1]
                 else:
                     dados, n_boletos = "", len(todas)
             elif url_pdf in urls_ocr:
@@ -1600,7 +1771,16 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     # título (dono, 22/09/2026) — o DV e o valor já
                     # validaram a linha antes de chegar aqui, dentro de
                     # `linha_em_outro_anexo`.
-                    dados, tem_documento = escondida, True
+                    dados, tem_documento, anexo_da_linha = escondida, True, onde
+            # De onde o QR do boleto pode vir: do anexo da linha ou, sem
+            # linha, do PDF que se ANUNCIA boleto — nunca do comprovante, e
+            # nunca do PDF "neutro" que só virou o do boleto por ser o único
+            # (um orçamento com QR estático pagaria antes do boleto chegar).
+            if dados:
+                origem_qr = anexo_da_linha or pdf
+            elif (pdf and _E_BOLETO.search(_rotulo(pdf))
+                  and not obs_linha.startswith("O anexo é comprovante")):
+                origem_qr = pdf
             if not dados and not n_boletos:
                 do_cadastro = extrair_chave_pix(pago_para) if pago_para else ""
                 if onde:
@@ -1634,6 +1814,45 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                         re.search(r"pix|chave", pago_para, re.I)
                         and parece_chave_pix(do_cadastro))
 
+        # O QR Code Pix impresso no boleto (dono, 08/10/2026: "sempre ler o
+        # QR Code do Pix no boleto e trazer ele, sempre"). Três desfechos:
+        # - guia da PREFEITURA DE GOIÂNIA (fora reembolso): paga-se pelo Pix
+        #   do QR, por padrão — a linha da guia fica como prova do valor;
+        # - boleto sem linha legível: o QR do mesmo documento é a forma de
+        #   pagar, em vez de "preencher manual";
+        # - qualquer outro boleto: segue pelo boleto, e o QR vai junto para o
+        #   botão "Copiar Pix" do HTML.
+        # Com vários boletos no título (`n_boletos`, `onde`) nada muda: o
+        # QR não resolve a dúvida de QUAL parcela é esta.
+        if (tipo == "Boleto" and cls != "PAGAR_PARA" and not item.get("paid")
+                and not n_boletos and not (onde and not dados)
+                and origem_qr is not None):
+            do_qr = pix_do_qr([origem_qr], textos, qr_pix, valor)
+            if do_qr.codigo:
+                linha_ok = bool(dados) and ocr_boleto.confere_valor(dados, valor)
+                prefeitura = (e_prefeitura_de_goiania(
+                                  favorecido, qr_pix_mod.recebedor(do_qr.codigo))
+                              and not documento_declara_reembolso(item, overview))
+                if prefeitura and (not do_qr.sem_valor or linha_ok or not dados):
+                    tipo, linha_da_guia, dados = "Pix", dados, do_qr.codigo
+                    tem_documento, qr_usado = True, True
+                    obs = _obs_pix_do_qr(do_qr, valor, prefeitura=True)
+                    if do_qr.sem_valor and not linha_ok:
+                        qr_alerta = "ATENÇÃO — QR Code sem valor"
+                elif not dados:
+                    tipo, dados, tem_documento, qr_usado = "Pix", do_qr.codigo, True, True
+                    if do_qr.sem_valor:
+                        qr_alerta = "ATENÇÃO — QR Code sem valor"
+                    obs = " · ".join(filter(None, [
+                        _obs_pix_do_qr(do_qr, valor),
+                        "a linha digitável do boleto não foi lida"]))
+                else:
+                    pix_qr = do_qr.codigo
+                    avisos.append('O boleto também tem QR Code Pix — '
+                                  '"Copiar Pix" no HTML')
+            elif do_qr.aviso:
+                avisos.append(do_qr.aviso)
+
         # Depois de resolver a forma de pagar, e não antes: quando a linha
         # acabou virando Pix por falta de boleto, mandar "pagar o boleto"
         # seria mandar pagar um documento que não existe.
@@ -1645,8 +1864,10 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # valor: quando ele discorda do lançamento, quem erra é o lançamento.
         # Vale para a linha que veio do PDF com texto, não só para a do OCR —
         # a do OCR já nasceu conferida contra o valor (`linha_confiavel`).
-        valor_documento = (ocr_boleto.valor_da_linha(dados)
-                           if dados and ocr_boleto.valida(dados) else None)
+        # A guia que virou Pix continua dizendo o valor pela linha dela.
+        linha_doc = linha_da_guia or dados
+        valor_documento = (ocr_boleto.valor_da_linha(linha_doc)
+                           if linha_doc and ocr_boleto.valida(linha_doc) else None)
         # Título quitado em vezes: o boleto é do valor CHEIO e o lançamento
         # traz só o que falta. Sem somar o que já foi pago, toda segunda
         # parcela com boleto anexado viraria alarme de divergência.
@@ -1665,7 +1886,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # Tipo da chave Pix: o ERP não tem o campo, e sem ele CPF e celular
         # são os mesmos onze dígitos. Só avisa quando HÁ chave e o tipo não
         # dá para saber — nas outras não há o que perguntar.
-        if tipo == "Pix" and regras.chave_pix_ambigua(pago_para or dados, dados):
+        if (tipo == "Pix" and not qr_usado
+                and regras.chave_pix_ambigua(pago_para or dados, dados)):
             avisos.append("Chave Pix sem tipo declarado — confirmar se é CPF, "
                           "celular ou aleatória.")
 
@@ -1686,8 +1908,10 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # de "NF" um documento que não é nota fiscal — a mesma régua que
         # decide o rótulo "ARRECADAÇÃO" em `confirmacao.py` e o
         # `Candidato.arrecadacao` da remessa, uma casa só.
-        arrecadacao_fiscal = (tipo == "Boleto" and bool(dados)
-                              and ocr_boleto.eh_arrecadacao(dados))
+        arrecadacao_fiscal = ((tipo == "Boleto" and bool(dados)
+                               and ocr_boleto.eh_arrecadacao(dados))
+                              or (bool(linha_da_guia)
+                                  and ocr_boleto.eh_arrecadacao(linha_da_guia)))
         descricao = monta_descricao(item, files, coment, overview,
                                     arrecadacao=arrecadacao_fiscal,
                                     textos=textos)
@@ -1777,6 +2001,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             novos.append("ATENÇÃO — vários boletos no título")
         if cnpj_res == "diverge":
             novos.append("ATENÇÃO — CNPJ da nota diferente do cadastro")
+        # O QR que virou o dado de pagamento num título que JÁ tem pagamento:
+        # o QR estático continua anexado depois de pago, e aceita de novo.
+        if qr_usado and ja_pago and not qr_alerta:
+            qr_alerta = "ATENÇÃO — título já tem pagamento; o QR pode ser da parcela paga"
+        if qr_alerta:
+            novos.append(qr_alerta)
         if novos and not item.get("paid"):
             if (not status.startswith("ATENÇÃO")
                     or status in ("ATENÇÃO — sem anexo",
@@ -1799,6 +2029,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         registros[conta].append({
             "tipo": tipo, "dados": dados, "valor": valor,
             "descricao": descricao, "favorecido": favorecido,
+            # O Pix do QR Code do boleto, quando a linha segue pelo boleto: o
+            # HTML o oferece num segundo "Copiar". Vazio quando não há QR ou
+            # quando o QR já é o próprio `dados`.
+            "pix_qr": pix_qr,
+            # A linha da guia que o Pix do QR substituiu: entra na checagem de
+            # cobrança repetida do HTML, senão a mesma guia lida como Pix num
+            # lançamento e como boleto no outro sairia duas vezes.
+            "linha_da_guia": linha_da_guia,
             "status": status, "conferencia": conferencia, "obs": obs,
             # OC e centro de custo SEPARADOS, além de dentro da `descricao`.
             # A planilha continua lendo a descrição montada; quem precisa deles

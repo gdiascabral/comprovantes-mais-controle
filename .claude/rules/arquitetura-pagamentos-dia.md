@@ -56,10 +56,56 @@ paths:
   sem chave no cadastro e só com a IMAGEM do QR Code; o ramo do Pix nunca
   olhava anexo, então a linha ia para NÃO ENTRARAM como "sem forma de pagar"
   — o boleto em imagem sempre ficou, e este é o mesmo caso. A linha fica com
-  "ATENÇÃO — sem dados de pgto" e a Obs diz em QUAL anexo está o QR; o app
-  não lê o QR (o exe não tem biblioteca para isso). Comprovante não conta —
-  pelo rótulo ou pelo texto de quem já pagou —, e a remessa continua
-  recusando a linha (`MOTIVO_SEM_CHAVE`): é pagamento à mão.
+  "ATENÇÃO — sem dados de pgto" e a Obs diz em QUAL anexo está o QR.
+  Comprovante não conta — pelo rótulo ou pelo texto de quem já pagou —, e a
+  remessa continua recusando a linha (`MOTIVO_SEM_CHAVE`): é pagamento à mão.
+  **Desde 08/10/2026 o QR é LIDO** (`pagamentos_dia/qr_pix.py`, biblioteca
+  `zxing-cpp` no exe — por isso o `motor_minimo` subiu) e o que está acima
+  virou o plano B. O dono pediu "sempre ler o QR Code do Pix no boleto e
+  trazer ele": `_baixar_textos` lê o QR de TODO anexo baixado (PDF, 3
+  primeiras páginas a 200 dpi — a 150 um boleto real não lia —, e toda
+  imagem, sem OCR nela; 0,23 s por PDF) e devolve
+  `{downloadUrl: [copia-e-cola]}`, que viaja em `Entradas.qr_pix` até
+  `montar_registros(qr_pix=…)`. Só passa código que é Pix (GUI
+  `br.gov.bcb.pix`), com o CRC16 fechando e que o `regras.PIX_COPIA_COLA`
+  reconhece inteiro (senão o HTML copiaria só os dígitos). Quem decide se o
+  código é DESTE lançamento é `relatorio.pix_do_qr`: nunca de comprovante
+  (rótulo ou texto) nem de aviso "PAGAR PARA"; o valor embutido (campo 54)
+  tem de ser o do lançamento — de outro valor vira aviso "não usado" (título
+  pago em parte: o QR é do valor cheio); sem valor embutido, só se for o
+  ÚNICO código do título; dois do mesmo valor, não escolhe. Três desfechos:
+  Pix sem chave paga pelo QR (APTO, com o copia-e-cola); boleto sem linha
+  legível paga pelo QR do mesmo documento; e boleto comum segue pelo boleto
+  com o QR em `registro["pix_qr"]`, que o HTML mostra num segundo botão
+  "Copiar Pix". **Guia da PREFEITURA DE GOIÂNIA sai pelo Pix do QR por
+  padrão** (dono, 08/10/2026), fora reembolso ("PAGAR PARA" ou documento que
+  declara reembolso): reconhecida pelo favorecido ou pelo nome no QR (campo
+  59) — nunca pelo texto do anexo, porque a NFS-e de Goiânia traz "Prefeitura
+  de Goiânia" no cabeçalho —, e "Aparecida de Goiânia" é outro município. A
+  linha da guia continua sendo a prova do valor e da arrecadação (sem "NF"
+  na descrição). A remessa recusa o copia-e-cola (`MOTIVO_COPIA_COLA`): essas
+  linhas se pagam pelo HTML. Medido na conferência de 07/10/2026 (offline):
+  26 de 26 anexos com QR resolvidos, nenhum casado com valor errado. Na
+  janela de confirmação o copia-e-cola aparece curto (quem recebe e valor),
+  porque a coluna POR ONDE tem a largura do texto mais comprido.
+  **Seis travas da revisão de dinheiro (08/10/2026)**: (1) o Pix do QR do
+  boleto e a linha da guia trocada (`registro["linha_da_guia"]`) entram na
+  checagem de cobrança repetida do HTML (`chaves_extra`) — a mesma guia como
+  Pix num lançamento e boleto no outro bloqueia as duas; (2) o QR também
+  some com a régua FORTE de comprovante (`_COMPROVANTE_FORTE`: 2ª via com
+  "autenticação eletrônica"); (3) no ramo do boleto o QR só vem do anexo de
+  onde saiu a linha, ou, sem linha, do PDF que se ANUNCIA boleto — nunca de
+  outro anexo nem do PDF "neutro" único (orçamento com QR estático pagaria
+  antes de o boleto chegar); (4) QR sem valor embutido sai "ATENÇÃO — QR
+  Code sem valor" (bloqueia o Copiar), salvo guia cuja linha prova o valor;
+  (5) no Pix sem chave, nome do QR (campo 59) que não divide uma palavra
+  própria com o favorecido (`recebedor_confere`) sai "ATENÇÃO — conferir quem
+  recebe o QR", e título com pagamento anterior sai "ATENÇÃO — título já tem
+  pagamento" (o QR estático aceita de novo); (6) prefeitura exige
+  "PREFEITURA"/"PREF" ou "MUNICIPIO DE GOIANIA" — "MUNICIPAL" solto (mercado,
+  câmara, instituto) não é. Na conferência de 07/10 os 4 prints de cartório
+  ficaram em ATENÇÃO pela trava (5): o QR é do operador do registro, não do
+  cartório do lançamento.
   (f) **A ordem das linhas é (tipo, ordem do sistema invertida)** (dono,
   14/09/2026): Boleto antes de Pix, como sempre, e dentro do tipo o que
   aparece por ÚLTIMO na tela do ERP vem primeiro. `listar_a_pagar`
