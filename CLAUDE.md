@@ -42,7 +42,11 @@ sem force-push e sem apagar a branch). O merge dispara o GitHub Actions
    código que chega depois de quem o importa é o app não abrindo na máquina de
    quem usa. Quem vigia a lista inteira é `tests/test_empacotamento.py`;
 3. builda **um** exe — `Comprovantes Mais Controle.exe` (PyInstaller onefile,
-   com Tesseract OCR embutido) — e publica a Release `v2.0.<run_number>`
+   com Tesseract OCR embutido) — **ou reaproveita o da release anterior**
+   quando nenhum dos cinco arquivos do motor mudou (ver "o exe é
+   reaproveitado", abaixo), roda o **`--autoteste`** do exe que vai sair (o
+   app importado dentro da stdlib podada, no lugar do exe de fumaça de antes)
+   e publica a Release `v2.0.<run_number>`
    **como PRÉVIA** (`prerelease: true`), com o exe + codigo.zip, nos **dois**
    repositórios: o de código e o de artefatos
    (`gdiascabral/comprovantes-releases`, a constante `REPO` do
@@ -124,6 +128,36 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   vai existir, e o app entra em laço — oferece os 152 MB, baixa o exe mais novo
   que há, continua abaixo do mínimo e pergunta de novo na abertura seguinte, em
   todas as máquinas.
+- **O exe é reaproveitado quando o motor não mudou** (PR do 14/10/2026,
+  vindo do rascunho #70). O exe só depende de CINCO arquivos — `motor.py`,
+  `atualizador.py`, `requirements.lock`, o próprio `build.yml` e o
+  `icone.ico` —, e a build assina cada release com a impressão digital deles
+  (o asset `motor-<sha256>.txt`, calculado sobre os blob-ids do git, cujo
+  CONTEÚDO é a versão do exe de verdade). Push que não toca em nenhum dos
+  cinco acha a assinatura numa release anterior, baixa o exe DELA em vez de
+  gerar outro, e a build cai de ~8–10 min para ~3: sem Python, sem pip, sem
+  Chocolatey e sem PyInstaller no runner. Duas consequências: (1) o
+  `motor_minimo.txt` é conferido contra a **versão do exe que vai na
+  release** (`MOTOR_VERSAO`), e não contra o número da build — um mínimo
+  acima do exe reaproveitado seria o mesmo laço de sempre por outra porta, e
+  a build para antes de publicar; (2) o `--autoteste` recebe a pasta do
+  código DESTA release por fora, porque o exe reaproveitado carrega o código
+  embutido da release em que nasceu — e é justamente "o código novo importa
+  dentro do motor que está na máquina de todo mundo?" que se quer provar.
+  Para forçar um exe do zero sem mexer no motor: Actions → Run workflow →
+  `forcar_exe`.
+- **O Tesseract mora na RAIZ do exe** desde o mesmo PR (`--add-binary` só do
+  `tesseract.exe`, mais `tessdata/por.traineddata`): a pasta inteira via
+  `--add-data` entrava DUAS vezes — o PyInstaller reclassifica binário em
+  dado e copia as DLLs dele para a raiz —, 118 MB extraídos em duplicidade
+  (~50 MB a menos no exe), mais idiomas e ferramentas que ninguém abre.
+  `separar_renomear._configurar_ocr` procura o exe nos dois lugares, porque o
+  codigo.zip roda em exes das duas gerações.
+- **Quando só a esteira muda e o mínimo JÁ é a última release**, subir uma
+  unidade cobraria o exe completo de quem está nele (foi o caso do PR do
+  14/10/2026: mínimo `v2.0.233`, máquinas no exe da v2.0.233). Aí a trava se
+  paga tocando o arquivo SEM mudar a versão (tirar ou pôr o fim de linha —
+  `_ler` usa `.strip()`), porque o código daquele push roda no motor velho.
 - **O `motor_minimo.txt` sobe UMA unidade quando só a esteira muda.** A trava
   do job `motor` é MECÂNICA: vigia cinco NOMES de arquivo — `motor.py`,
   `atualizador.py`, `requirements.txt`, **`requirements.lock`** e o próprio
@@ -178,7 +212,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
   #76 falhar, a próxima release passou a ser a v1.0.77. Quem for corrigir e
   subir de novo tem de **subir o `motor_minimo.txt` junto**, senão ele aponta
   para uma versão que nunca existiu.
-- Build leva ~8–10 min. Commits só de README/LICENSE/CLAUDE.md não disparam
+- Build completa leva ~8–10 min; com o exe reaproveitado, ~3. Commits só de README/LICENSE/CLAUDE.md não disparam
   build (paths-ignore). **`docs/`, `supabase/` e `tests/` NÃO estão lá**: os
   dois primeiros porque documento novo é barato de construir e sai como prévia,
   que ninguém baixa; `tests/**` e `requirements-dev.txt` de propósito, porque é
