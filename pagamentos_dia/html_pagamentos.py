@@ -202,12 +202,28 @@ def _sem_reembolso(s: str) -> str:
     return "".join(saida)
 
 
+def _e_inter(conta) -> bool:
+    """A conta é do Inter? INTER como palavra inteira: "CONTA INTERNA" não é
+    do Inter e fica no lado seguro. Com SICOOB no nome, é do Sicoob."""
+    nome = relatorio.chave(conta or "")
+    return (bool(re.search(r"\binter\b", nome))
+            and not re.search(r"\bsicoob\b", nome))
+
+
 def limite_da_descricao(conta) -> int:
-    """Quantos caracteres cabem na descrição do banco desta conta. INTER como
-    palavra inteira: "CONTA INTERNA" não é do Inter e fica no lado seguro."""
-    return (LIMITE_DESCRICAO_INTER
-            if re.search(r"\binter\b", relatorio.chave(conta or ""))
-            else LIMITE_DESCRICAO)
+    """Quantos caracteres cabem na descrição do banco desta conta."""
+    return LIMITE_DESCRICAO_INTER if _e_inter(conta) else LIMITE_DESCRICAO
+
+
+def _sem_hifen(palavras) -> list[str]:
+    """O hífen colado entre dígitos vira " E ": "LT 10-11" sai "LT 10 E 11".
+    O Sicoob não aceita "-" na descrição (dono, 14/10/2026), e partir em
+    "LT 10 11" faria o Anexar ler "LT 10" — "10 E 11" é o que o casamento lê
+    como "10-11" (`anexar.matcher._com_hifen`).
+
+    "10 E 11" continua UMA palavra: o corte por tamanho (`_que_cabem`) leva
+    ou deixa a faixa inteira. Partida em três, cabia "LT 10" — outro lote."""
+    return [" E ".join(x for x in p.split("-") if x) for p in palavras]
 
 
 #: Uma palavra do banco: letras e dígitos, mais o hífen COLADO entre dois
@@ -309,8 +325,9 @@ def descricao_para_colar(registro, conta, limite: int | None = None) -> str:
       (dono, 22/09/2026);
     - sem menção de reembolso, sem acento e sem caractere especial (o hífen
       que separa palavras incluído; o COLADO entre dígitos, como em
-      "LT 10-11", fica), e sem repetir o centro de custo que a descrição já
-      traz; no
+      "LT 10-11", fica só no Inter — fora dele vira "LT 10 E 11", porque o
+      Sicoob não aceita "-", dono 14/10/2026), e sem repetir o centro de
+      custo que a descrição já traz; no
       nº da NF e da OC só o ponto entre dígitos some sem virar espaço
       ("1.234" é "1234", não "1 234"), e barra ou hífen separam números
       ("5678/5679" é "5678 5679");
@@ -325,7 +342,10 @@ def descricao_para_colar(registro, conta, limite: int | None = None) -> str:
     """
     r = registro or {}
     utilidade = bool(r.get("utilidade"))
-    cc = _palavras(r.get("centro_custo"), tirar_reembolso=False)
+    # Fora do Inter (o Sicoob, e a remessa CNAB, que é do Sicoob e chega com
+    # `conta=None`) a descrição não leva "-" nenhum (dono, 14/10/2026).
+    hifen = (lambda ps: ps) if _e_inter(conta) else _sem_hifen
+    cc = hifen(_palavras(r.get("centro_custo"), tirar_reembolso=False))
     nf = [] if utilidade else _palavras_do_numero(r.get("nf"))
     oc = _palavras_do_numero(r.get("oc_da_descricao"))
     # Arrecadação não tem cedente nem Nota Fiscal atrás: rotular o número
@@ -352,7 +372,7 @@ def descricao_para_colar(registro, conta, limite: int | None = None) -> str:
         r.get("descricao_lancamento"))
     texto = []
     if utilidade or not fixos or com_descricao:
-        texto = _palavras(r.get("descricao_lancamento"))
+        texto = hifen(_palavras(r.get("descricao_lancamento")))
         n = len(cc)
         if n and [p.casefold() for p in texto[:n]] == [p.casefold() for p in cc]:
             texto = texto[n:]
