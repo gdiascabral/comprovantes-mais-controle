@@ -787,3 +787,32 @@ def test_nenhuma_descricao_do_sicoob_tem_hifen():
     for r in casos:
         for conta, limite in ((SICOOB, None), (None, 30), (None, 38)):
             assert "-" not in hp.descricao_para_colar(r, conta, limite)
+
+
+def test_corte_no_limite_nao_parte_a_faixa_do_lote():
+    """Revisão de dinheiro, 14/10/2026: com "10 E 11" em três palavras, o
+    corte do boleto (30) deixava "QD 99 LT 10" — outro lote. A faixa entra
+    inteira ou sai inteira."""
+    r = _partes(cc="QD 99 LT 10-11", nf="123456", oc="12345")
+    for limite in (30, 38):
+        texto = hp.descricao_para_colar(r, None, limite)
+        assert "LT 10 " not in texto + " " or "LT 10 E 11" in texto
+        assert not re.search(r"LT 10 (E )?(NF|OC)", texto)
+    r = _partes(cc="QD 99 LT 10-11", nf="1234567890123456")
+    assert hp.descricao_para_colar(r, None, 38) == "QD 99 LT 10 E 11 NF 1234567890123456"
+
+
+def test_conta_sicoob_com_inter_no_nome_e_do_sicoob():
+    r = _partes(cc="QD 99 LT 10-11")
+    assert hp.descricao_para_colar(r, "INTER SICOOB") == "QD 99 LT 10 E 11"
+
+
+def test_plano_b_da_remessa_sem_hifen():
+    class C:
+        partes = {}
+        tipo = "Pix"
+        descricao = "QD 99 LT 10-11 - X"
+        favorecido = "FORNECEDOR - ME"
+    assert remessa_dia.etiqueta_do_banco(C) == "QD 99 LT 10 11 X"
+    C.descricao = ""
+    assert remessa_dia.etiqueta_do_banco(C) == "FORNECEDOR ME"

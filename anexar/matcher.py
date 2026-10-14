@@ -64,6 +64,17 @@ _ROTULOS_NUM = {
     "NFS-E", "AG", "AGENCIA", "CONTA", "CEP", "PEDIDO", "PARCELA", "VIA", "VIAS"}
 
 
+#: "10 E 11" entre dígitos: a forma que a descrição colada do Sicoob dá ao
+#: "10-11" do centro de custo (`html_pagamentos._sem_hifen`; o banco não
+#: aceita "-").
+_E_ENTRE_DIGITOS = re.compile(r"(?<=\d) E (?=\d)")
+
+
+def _com_hifen(texto: str) -> str:
+    """Centro de custo comparável: "LT 10 E 11" e "LT 10-11" são o mesmo."""
+    return _E_ENTRE_DIGITOS.sub("-", texto)
+
+
 def _sem_zeros(n: str) -> str:
     """Tira milhar e zeros à esquerda: 1.234 vira 1234, 0012345 vira 12345."""
     return n.replace(".", "").lstrip("0")
@@ -94,6 +105,9 @@ def _numeros_soltos(desc: str, cents: int) -> set[str]:
     # sempre o põe); com OC no fim, o último antes do "OC". Os números do meio
     # do texto livre não valem (revisão final, 01/10/2026).
     desc = re.split(r"\bOC\b", desc or "", maxsplit=1, flags=re.I)[0]
+    # "450 E 460" é a faixa "450-460" na descrição do Sicoob, que não aceita
+    # "-": como antes, faixa não é documento.
+    desc = _com_hifen(desc)
     for tok in desc.split():
         tok = tok.strip(",;:()")
         if endereco and _so_continuacao(tok):
@@ -198,17 +212,6 @@ def _ocnf_rotulados(*textos) -> set[str]:
 def _numeros_longos(*textos) -> set[str]:
     """Números de 6+ dígitos (UC, matrícula, código): identificam sozinhos."""
     return {n for t in textos for n in re.findall(r"\d{6,}", t or "")}
-
-
-#: "10 E 11" entre dígitos: a forma que a descrição colada do Sicoob dá ao
-#: "10-11" do centro de custo (`html_pagamentos._sem_hifen`; o banco não
-#: aceita "-").
-_E_ENTRE_DIGITOS = re.compile(r"(?<=\d) E (?=\d)")
-
-
-def _com_hifen(texto: str) -> str:
-    """Centro de custo comparável: "LT 10 E 11" e "LT 10-11" são o mesmo."""
-    return _E_ENTRE_DIGITOS.sub("-", texto)
 
 
 def _features(pe: dict, pd: dict) -> tuple[bool, bool, bool, bool]:

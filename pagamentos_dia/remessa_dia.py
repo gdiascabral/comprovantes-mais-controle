@@ -1019,7 +1019,10 @@ def etiqueta_do_banco(c) -> str:
         texto = html_pagamentos.descricao_para_colar(partes, None, limite)
         if texto:
             return texto
-    return (c.descricao or "").strip() or c.favorecido
+    # A remessa é do Sicoob, que não aceita "-" na descrição (dono,
+    # 14/10/2026): o plano B também sai sem ele.
+    texto = (c.descricao or "").strip() or c.favorecido or ""
+    return re.sub(r"\s+", " ", texto.replace("-", " ")).strip()
 
 
 def _mensagem_do_lote(quando: _dt.date) -> str:

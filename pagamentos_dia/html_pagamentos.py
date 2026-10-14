@@ -204,8 +204,10 @@ def _sem_reembolso(s: str) -> str:
 
 def _e_inter(conta) -> bool:
     """A conta é do Inter? INTER como palavra inteira: "CONTA INTERNA" não é
-    do Inter e fica no lado seguro."""
-    return bool(re.search(r"\binter\b", relatorio.chave(conta or "")))
+    do Inter e fica no lado seguro. Com SICOOB no nome, é do Sicoob."""
+    nome = relatorio.chave(conta or "")
+    return (bool(re.search(r"\binter\b", nome))
+            and not re.search(r"\bsicoob\b", nome))
 
 
 def limite_da_descricao(conta) -> int:
@@ -214,17 +216,14 @@ def limite_da_descricao(conta) -> int:
 
 
 def _sem_hifen(palavras) -> list[str]:
-    """O hífen colado entre dígitos vira a palavra "E": "LT 10-11" sai
-    "LT 10 E 11". O Sicoob não aceita "-" na descrição (dono, 14/10/2026), e
-    partir em "LT 10 11" faria o Anexar ler "LT 10" — "E" é o que o casamento
-    já lê como continuação do endereço (`anexar.matcher`)."""
-    saida = []
-    for p in palavras:
-        for i, x in enumerate(x for x in p.split("-") if x):
-            if i:
-                saida.append("E")
-            saida.append(x)
-    return saida
+    """O hífen colado entre dígitos vira " E ": "LT 10-11" sai "LT 10 E 11".
+    O Sicoob não aceita "-" na descrição (dono, 14/10/2026), e partir em
+    "LT 10 11" faria o Anexar ler "LT 10" — "10 E 11" é o que o casamento lê
+    como "10-11" (`anexar.matcher._com_hifen`).
+
+    "10 E 11" continua UMA palavra: o corte por tamanho (`_que_cabem`) leva
+    ou deixa a faixa inteira. Partida em três, cabia "LT 10" — outro lote."""
+    return [" E ".join(x for x in p.split("-") if x) for p in palavras]
 
 
 #: Uma palavra do banco: letras e dígitos, mais o hífen COLADO entre dois

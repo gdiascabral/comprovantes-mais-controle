@@ -645,3 +645,9 @@ def test_lote_com_e_do_sicoob_casa_o_centro_de_custo_com_hifen():
     pd = matcher.parse_pdf("70,00 - RPB QD 99 LT 10 E 11 - 20-07.pdf")
     assert matcher._features(_pend("A", 7000, works=["X QD 99 LT 10-11"]), pd)[1]
     assert not matcher._features(_pend("B", 7000, works=["X QD 99 LT 10"]), pd)[1]
+
+
+def test_faixa_com_e_nao_vira_numero_solto():
+    """"450 E 460" é a faixa "450-460" do Sicoob: como antes, não é documento."""
+    assert matcher.parse_pdf("70,00 - COMPRA 450 E 460 - 20-07.pdf")["soltos"] == set()
+    assert matcher.parse_pdf("70,00 - COMPRA 450-460 - 20-07.pdf")["soltos"] == set()
