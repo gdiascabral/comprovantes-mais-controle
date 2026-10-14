@@ -68,6 +68,9 @@ class Entradas:
     #: Anexos que deviam ser lidos e não foram (download que devolveu nada ou
     #: levantou). A forma de pagar dessas linhas foi decidida sem o documento.
     anexos_nao_lidos: set = field(default_factory=set)
+    #: Títulos cuja LISTA de anexos falhou na busca: sem ela não dá para
+    #: dizer "sem anexo" (`relatorio.MOTIVO_ANEXOS_NAO_LIDOS`).
+    titulos_nao_lidos: set = field(default_factory=set)
     #: Os Pix copia-e-cola lidos dos QR Codes dos anexos, por `downloadUrl`.
     qr_pix: dict = field(default_factory=dict)
 
@@ -132,6 +135,7 @@ def remontar(entradas: Entradas, ids_nao_confirmados=()) -> relatorio.Resultado:
         participantes=entradas.participantes,
         cadastro_reembolso=entradas.cadastro_reembolso,
         anexos_nao_lidos=entradas.anexos_nao_lidos,
+        titulos_nao_lidos=entradas.titulos_nao_lidos,
         qr_pix=entradas.qr_pix)
 
 

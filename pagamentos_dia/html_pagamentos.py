@@ -603,7 +603,12 @@ def e_reembolso_de(nome, pessoas) -> bool:
 
 
 def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None):
-    """(resultado, lancamentos, quantos) sem os reembolsos das `pessoas`.
+    """(resultado, lancamentos, tirados) sem os reembolsos das `pessoas`.
+
+    `tirados` é a lista do que saiu, uma frase por linha ("FAVORECIDO — R$ x
+    — reembolso para Y"), para o Registro dizer QUEM saiu e não só quantos:
+    o nome casa pelo começo, e um homônimo tirado por engano tem de aparecer
+    para quem paga pelo HTML (revisão de dinheiro, 14/10/2026).
 
     Pedido do dono (14/10/2026): ao gerar o HTML o app pergunta se entram
     os reembolsos dos nomes do `confirmar_antes.json`; "não" tira as linhas
@@ -615,13 +620,18 @@ def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None):
     fora."""
     pessoas = [p for p in (pessoas or ()) if str(p).strip()]
     if not pessoas:
-        return resultado, list(lancamentos or ()), 0
-    tirados = 0
+        return resultado, list(lancamentos or ()), []
+    tirados = []
     contas = {}
     for nome, regs in (getattr(resultado, "contas", None) or {}).items():
-        ficam = [r for r in regs
-                 if not e_reembolso_de(r.get("reembolso_para"), pessoas)]
-        tirados += len(regs) - len(ficam)
+        ficam = []
+        for r in regs:
+            if e_reembolso_de(r.get("reembolso_para"), pessoas):
+                tirados.append(f"{r.get('favorecido') or '?'} — "
+                               f"{reais(r.get('valor') or 0)} — reembolso para "
+                               f"{r.get('reembolso_para')}")
+            else:
+                ficam.append(r)
         if ficam:
             contas[nome] = ficam
     novo = (resultado._replace(contas=contas)
@@ -633,7 +643,9 @@ def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None):
                 if relatorio.documento_declara_reembolso(item, overview) else "")
         if (e_conta_pf(relatorio.nome_da_conta(item)) and not item.get("paid")
                 and e_reembolso_de(quem, pessoas)):
-            tirados += 1
+            tirados.append(f"{_texto(item.get('paidTo')) or '?'} — "
+                           f"{reais(relatorio.valor_do_item(item))} — "
+                           f"reembolso para {quem} (pessoa física)")
             continue
         ficam_pf.append(item)
     return novo, ficam_pf, tirados

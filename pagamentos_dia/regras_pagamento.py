@@ -185,6 +185,10 @@ MOTIVO_NAO_CONFIRMADO = "não confirmado na janela antes de gerar"
 #: "ATENÇÃO — sem anexo", vermelho, e só custava conferência. Vem antes de
 #: tudo em `relatorio.montar_registros`: a chave Pix do cadastro não basta.
 MOTIVO_SEM_ANEXO = "sem anexo — sem anexo, sem pagamento"
+#: A lista de anexos do título NÃO foi lida (falha de rede na busca). Não é
+#: "sem anexo": o título pode ter boleto. Busque de novo.
+MOTIVO_ANEXOS_NAO_LIDOS = ("anexos não lidos (falha ao listar no ERP) — "
+                           "busque de novo antes de pagar")
 
 
 def cnpj_livre(favorecido: str, regras: dict) -> bool:

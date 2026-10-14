@@ -180,7 +180,8 @@ def test_nao_incluir_tira_os_reembolsos_dos_dois_htmls():
     assert [r["id"] for r in novo.contas["CONTA A"]] == ["a2", "a3"]
     assert "CONTA B" not in novo.contas            # conta que esvazia some
     assert [i["id"] for i in lanc] == ["p2", "p3"]
-    assert tirados == 3
+    assert len(tirados) == 3
+    assert any("reembolso para FULANO" in t for t in tirados)
     # o resultado da planilha/remessa não é tocado
     assert len(resultado.contas["CONTA A"]) == 3
 
@@ -188,7 +189,7 @@ def test_nao_incluir_tira_os_reembolsos_dos_dois_htmls():
 def test_sem_pessoas_nada_sai():
     resultado = relatorio.Resultado({"CONTA A": [{"id": "a1", "reembolso_para": "X"}]}, [])
     novo, lanc, tirados = html_pagamentos.tirar_reembolsos(resultado, [], [])
-    assert novo is resultado and tirados == 0
+    assert novo is resultado and tirados == []
 
 
 def test_o_registro_diz_para_quem_e_o_reembolso_declarado_no_documento():
@@ -242,3 +243,48 @@ def test_nome_igual_curto_confere():
     assert relatorio.recebedor_confere("ABC", "ABC")
     assert relatorio.recebedor_confere("A.B.C", "abc")
     assert not relatorio.recebedor_confere("ABC", "XYZ")
+
+
+# ==========================================================================
+# Revisão de dinheiro do PR (14/10/2026)
+# ==========================================================================
+def _titulo_pela_observacao(comentario):
+    item = _lanc(tradePayableMethod=None, tradePayablePaymentMethod="Boleto",
+                 paidToBankAccount=None)
+    overview = {"comment": comentario, "purchaseOrder": {"number": "4321"}}
+    anexos = {"T-L1": [_anexo("PEDIDO"), _anexo("CARTAO")]}
+    return relatorio.montar_registros([item], anexos, {"L1": overview}, {})
+
+
+def test_outro_numero_na_observacao_nao_tira_o_pagar_a_mao():
+    """Com "OC 4321" no texto a régua do redirecionamento não reconhecia a
+    chave, e a linha saía APTO e marcada na remessa."""
+    linha, = _linhas(_titulo_pela_observacao(
+        "OC 4321 PAGAR PARA EMPRESA EXEMPLO PIX 11222333000181"))
+    assert linha["dados"] == "11222333000181"
+    assert linha["status"] == "ATENÇÃO — pagar à mão"
+
+
+def test_duas_chaves_na_observacao_nao_escolhem_nenhuma():
+    res = _titulo_pela_observacao("PAGAR PARA FULANO PIX 111.444.777-35 / "
+                                  "PAGAR PARA EMPRESA EXEMPLO PIX 11.222.333/0001-81")
+    assert res.contas == {}
+    assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR
+
+
+def test_texto_livre_da_observacao_nao_vira_chave():
+    for texto in ("PIX SOMENTE APOS ENTREGA",
+                  "CHAVE DO FORNECEDOR NAO CONFERE, LIGAR"):
+        res = _titulo_pela_observacao(texto)
+        assert res.contas == {}, texto
+
+
+def test_cpf_com_celular_dentro_conta_como_uma_chave():
+    assert relatorio.chave_unica_da_observacao(
+        "REEMBOLSAR FULANO PIX: 111.444.777-35") == "111.444.777-35"
+
+
+def test_lista_de_anexos_que_falhou_nao_vira_sem_anexo():
+    res = relatorio.montar_registros([_lanc()], {}, {}, {},
+                                     titulos_nao_lidos={"T-L1"})
+    assert res.omitidos[0]["motivo"] == regras.MOTIVO_ANEXOS_NAO_LIDOS

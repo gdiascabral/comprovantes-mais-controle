@@ -673,6 +673,33 @@ def chave_pix_por_padrao(texto: str) -> str:
     return ""
 
 
+def chave_unica_da_observacao(texto: str) -> str:
+    """A chave Pix da observação — só quando há UMA, e com tipo conhecido.
+
+    Para o título sem boleto que paga pela observação (dono, 14/10/2026). A
+    revisão de dinheiro provou os dois jeitos de errar com a régua solta:
+    `chave_pix_do_comentario` devolve o texto livre quando não acha padrão
+    ("PIX SOMENTE APOS ENTREGA" virava chave), e `chave_pix_por_padrao` testa
+    os padrões em ordem, não por posição — com duas chaves na observação ("PAGAR
+    PARA FULANO PIX <cpf> / PAGAR PARA EMPRESA PIX <cnpj>") as duas parcelas
+    pagavam o CNPJ. Aqui: todas as ocorrências de todos os padrões, sem as que
+    estão dentro de outra (o celular dentro do CPF), sem repetição; uma só, e
+    `regras.tipo_de_chave_pix` sabendo o tipo dela — senão, ""."""
+    texto = texto or ""
+    achados = []
+    for padrao in _PADROES_PIX:
+        achados += [(m.start(), m.end(), m.group(0).strip())
+                    for m in padrao.finditer(texto)]
+    soltos = [a for a in achados
+              if not any(b is not a and b[0] <= a[0] and a[1] <= b[1]
+                         and (b[1] - b[0]) > (a[1] - a[0]) for b in achados)]
+    distintas = {re.sub(r"\W", "", c).lower(): c for _, _, c in soltos}
+    if len(distintas) != 1:
+        return ""
+    chave = next(iter(distintas.values()))
+    return chave if regras.tipo_de_chave_pix(chave) else ""
+
+
 def extrair_chave_pix(texto: str) -> str:
     """Devolve só a chave, sem o 'PIX CNPJ:' na frente."""
     achado = chave_pix_por_padrao(texto)
@@ -1491,7 +1518,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      urls_ocr=(), regras_fornecedor=None,
                      ids_nao_confirmados=(), participantes=None,
                      cadastro_reembolso=None, anexos_nao_lidos=(),
-                     qr_pix=None) -> Resultado:
+                     qr_pix=None, titulos_nao_lidos=()) -> Resultado:
     """Transforma lançamentos do ERP em linhas de planilha.
 
     `anexos`             {tradePayableId: [anexo]}
@@ -1519,6 +1546,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
     regras_forn = regras_fornecedor or {}
     ids_nao_confirmados = {str(i) for i in ids_nao_confirmados}
     anexos_nao_lidos = set(anexos_nao_lidos or ())
+    titulos_nao_lidos = {str(t) for t in (titulos_nao_lidos or ())}
     registros, omitidos = defaultdict(list), []
 
     for ordem, item in enumerate(lancamentos):
@@ -1622,6 +1650,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         #: conferia (dono, 22/09/2026). Separado de `tem_documento` porque o
         #: cadastro não é anexo: é dado do ERP, sem nada para abrir.
         pix_sem_documento = False
+        #: A forma de pagar saiu da OBSERVAÇÃO (título sem boleto nem chave no
+        #: cadastro). Força "PAGAR À MÃO" sem depender de a régua do texto
+        #: reconhecer o redirecionamento: sem isto, observação com outro
+        #: número no meio saía APTO e marcada na remessa (revisão de
+        #: dinheiro, 14/10/2026).
+        chave_da_observacao = False
 
         # Boleto que veio dentro de um PDF etiquetado como nota: a etiqueta não
         # o anuncia, mas ele existe, e "boleto ganha de Pix" vale igual —
@@ -1834,7 +1868,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     # forma de pagar. Sem NF nem OC, a linha não entra.
                     tipo, dados = "Pix", do_cadastro
                     obs = "Sem boleto anexado — pagar pela chave Pix do cadastro"
-                elif chave_pix_do_comentario(coment) and tem_nf_ou_oc:
+                elif chave_unica_da_observacao(coment) and tem_nf_ou_oc:
                     # A observação traz a chave ("PAGAR PARA <empresa> PIX:
                     # <cnpj>", "REEMBOLSAR <pessoa> PIX: <cpf>") e o título
                     # não tem boleto nem chave no cadastro — o caso do título
@@ -1843,8 +1877,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     # com a forma de pagar escrita na própria observação. A
                     # linha sai "ATENÇÃO — pagar à mão" (`precisa_de_olhar_
                     # humano`, abaixo): quem confere lê a observação.
-                    tipo, dados = "Pix", chave_pix_do_comentario(coment)
+                    tipo, dados = "Pix", chave_unica_da_observacao(coment)
                     obs = "Sem boleto anexado — pagar pela chave Pix da observação"
+                    chave_da_observacao = True
                 else:
                     obs = "Nenhum anexo de boleto — conferir no ERP"
                     # A MESMA régua do aviso "Cadastro tem Pix (…)" logo
@@ -1941,6 +1976,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # existe para a remessa, onde ninguém lê: linha marcada aqui não pode
         # ser paga automaticamente.
         olhar = regras.precisa_de_olhar_humano(coment, favorecido, regras_forn)
+        if chave_da_observacao and not olhar:
+            olhar = "a chave Pix veio da observação do lançamento"
         if olhar:
             avisos.append(f"PAGAR À MÃO — {olhar}.")
 
@@ -1966,6 +2003,10 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if not item.get("paid"):
             if str(item.get("id")) in ids_nao_confirmados:
                 motivo = regras.MOTIVO_NAO_CONFIRMADO
+            elif not files and str(item.get("tradePayableId")) in titulos_nao_lidos:
+                # A LISTA de anexos falhou (rede): não se sabe se há anexo, e
+                # "sem anexo" seria motivo falso (revisão de dinheiro).
+                motivo = regras.MOTIVO_ANEXOS_NAO_LIDOS
             elif not files:
                 # "Sem anexo, sem pagamento" (dono, 14/10/2026): a chave Pix
                 # do cadastro não basta. Antes a linha entrava em "ATENÇÃO —
