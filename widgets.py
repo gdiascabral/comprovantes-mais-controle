@@ -3688,6 +3688,57 @@ def estilo_canvas(canvas: tk.Canvas, escuro: bool | None = None) -> None:
 _calendario_aberto = None
 
 
+def _desligar(widget, sequencia: str, funcid: str) -> None:
+    """Desfaz UM `bind(..., add="+")`, deixando os outros da mesma sequência.
+
+    O `unbind(seq, funcid)` do tkinter (até o 3.12; o exe roda 3.11) apaga
+    TODOS os scripts da sequência, não só o daquele `funcid`: fechar a lista
+    de um `ComboBusca` desligaria junto o clique-fora do calendário aberto ao
+    lado. Aqui sai só a linha que chama o nosso comando."""
+    try:
+        atual = widget.tk.call("bind", str(widget), sequencia)
+        resto = "\n".join(linha for linha in str(atual).split("\n")
+                          if funcid not in linha)
+        widget.tk.call("bind", str(widget), sequencia, resto)
+        widget.deletecommand(funcid)
+    except tk.TclError:
+        pass
+
+
+def _ligar_etiqueta_da_lista(widget) -> None:
+    """Liga, uma vez por interpretador Tcl, as teclas da lista do `ComboBusca`
+    à etiqueta compartilhada. Cada tecla chama o método do combo que a
+    recebeu (`ev.widget`)."""
+    tag = ComboBusca._ETIQUETA
+    if widget.bind_class(tag):
+        return
+    acoes = {
+        "<Down>": lambda c: c._mover(1),
+        "<Up>": lambda c: c._mover(-1),
+        "<Next>": lambda c: c._mover(c.VISIVEIS),
+        "<Prior>": lambda c: c._mover(-c.VISIVEIS),
+        "<Return>": lambda c: c._confirmar(),
+        "<KP_Enter>": lambda c: c._confirmar(),
+        "<Escape>": lambda c: c._esc(),
+    }
+
+    def ligar(seq, acao):
+        def tratar(ev):
+            if isinstance(ev.widget, ComboBusca):
+                return acao(ev.widget)
+            return None
+        widget.bind_class(tag, seq, tratar)
+
+    for seq, acao in acoes.items():
+        ligar(seq, acao)
+
+    def clique(ev):
+        if isinstance(ev.widget, ComboBusca):
+            return ev.widget._clique(ev)
+        return None
+    widget.bind_class(tag, "<Button-1>", clique)
+
+
 class ComboBusca(ttk.Combobox):
     """Combo em que se DIGITA para procurar, além de escolher na lista.
 
@@ -3700,24 +3751,68 @@ class ComboBusca(ttk.Combobox):
     Compara sem acento e sem caixa, por PEDAÇO em qualquer posição (`util.
     filtrar`): "696" acha a subconta 55696-3, "livia" acha "Livian".
 
-    A lista NÃO se abre sozinha a cada tecla, de propósito. Com a lista posta,
-    o Tk manda as teclas para ELA — que tem busca própria, por prefixo — e a
-    pessoa acaba digitando num lugar diferente do que está olhando. Abrir fica
-    com quem abre: a seta, o clique ou ↓.
+    **A lista abre SOZINHA enquanto se digita** (14/10/2026, pedido do dono:
+    "comecei a escrever, tem que aparecer as opções"). Até então ela só abria
+    pela seta, porque a lista NATIVA do Tk, posta, toma as teclas para ela — que
+    tem busca própria, por prefixo — e a pessoa digitava num lugar diferente do
+    que estava olhando. A saída é a mesma da busca da `BarraTopo` e do
+    calendário do `CampoData`: a lista é um `Toplevel` nosso, **sem foco
+    nenhum**. O foco nunca sai do campo; ↑/↓ andam pela lista, Enter escolhe a
+    realçada, Esc fecha. A seta e o ↓ com a lista fechada abrem ESTA mesma
+    lista, e não a nativa — uma lista só, com a mesma cara nos dois caminhos.
+    Ela mostra `VISIVEIS` linhas de cada vez e rola (roda, barra ou setas):
+    um cadastro de cem contas não pode virar uma janela da altura do monitor.
 
     E nada é escolhido por adivinhação: texto que não é uma opção fica como foi
     digitado, e quem lança dinheiro recebe o erro em vez de uma conta parecida
     escolhida em silêncio. A única correção automática é de GRAFIA, quando o
-    que se digitou casa exatamente com uma opção fora acento e caixa.
+    que se digitou casa exatamente com uma opção fora acento e caixa. A lista
+    aberta não muda isso: Enter só escolhe o que está REALÇADO na tela, e sair
+    do campo com a lista aberta não escolhe nada.
     """
+
+    #: Quantas linhas a lista mostra de cada vez; o resto rola.
+    VISIVEIS = 8
+
+    #: A etiqueta (bindtag) das teclas da lista; ver `__init__`.
+    _ETIQUETA = "ComboBuscaLista"
+
+    #: Teclas que NÃO são digitação: filtrar nelas remontaria a lista
+    #: justamente enquanto a pessoa anda por ela.
+    _NAO_E_DIGITAR = ("Up", "Down", "Return", "KP_Enter", "Escape", "Tab",
+                      "Left", "Right", "Home", "End", "Prior", "Next",
+                      "Shift_L", "Shift_R", "Control_L", "Control_R",
+                      "Alt_L", "Alt_R")
 
     def __init__(self, master, width=38, **kw):
         kw.setdefault("state", "normal")          # readonly não deixa digitar
         super().__init__(master, width=width, **kw)
         self._todos: list[str] = []
+        #: O que a lista aberta mostra, a linha realçada (índice em `_achados`)
+        #: e a primeira linha visível — a lista rola por janela de `VISIVEIS`.
+        self._achados: list[str] = []
+        self._realce = 0
+        self._topo = 0
+        self._popup = None
+        self._linhas: list = []
+        self._barra = None
+        self._rodape = None
+        self._fora = None
+        self._vigia = None
+        self._onde = None
         self.bind("<KeyRelease>", self._ao_digitar)
         self.bind("<<ComboboxSelected>>", self._ao_escolher)
         self.bind("<FocusOut>", self._ao_sair)
+        # As teclas da lista ficam no CAMPO, porque o foco nunca sai dele — mas
+        # numa etiqueta própria, posta ANTES da do widget: quem usa o combo
+        # liga o seu `<Return>` direto nele (o "Novo cadastro" acrescenta à
+        # lista, as Guias confirmam), e um `bind` sem `add` apagaria o nosso.
+        # Assim, com a lista aberta o Enter escolhe e para ali ("break"); com
+        # ela fechada, segue para o Enter de quem usa e para o `bind_all` do
+        # app. O "break" do ↓ também impede a classe de abrir a lista nativa.
+        _ligar_etiqueta_da_lista(self)
+        self.bindtags((self._ETIQUETA,) + tuple(self.bindtags()))
+        self.bind("<Destroy>", lambda _e: self.fechar_lista(), add="+")
 
     # ------------------------------------------------------------ conteúdo
     def definir_valores(self, valores) -> None:
@@ -3734,13 +3829,15 @@ class ComboBusca(ttk.Combobox):
 
     # -------------------------------------------------------------- eventos
     def _ao_digitar(self, ev):
-        # Navegação e escolha não são digitação: filtrar aqui embaralharia a
-        # lista justamente enquanto a pessoa anda por ela.
-        if ev.keysym in ("Up", "Down", "Return", "Escape", "Tab", "Left",
-                         "Right", "Home", "End", "Shift_L", "Shift_R",
-                         "Control_L", "Control_R"):
+        if ev.keysym in self._NAO_E_DIGITAR:
             return
-        self["values"] = util.filtrar(self._todos, self.get())
+        texto = self.get()
+        self["values"] = util.filtrar(self._todos, texto)
+        if texto.strip():
+            self.abrir_lista()
+        else:
+            # Apagou tudo: a lista sai. Quem quer ver todas tem a seta e o ↓.
+            self.fechar_lista()
 
     def _ao_escolher(self, _ev=None):
         """Escolheu: a lista volta inteira, senão a próxima abertura ainda
@@ -3748,6 +3845,9 @@ class ComboBusca(ttk.Combobox):
         self["values"] = self._todos
 
     def _ao_sair(self, _ev=None):
+        # A lista não fecha AQUI: no Windows, clicar numa linha dela pode tirar
+        # o foco do campo antes de o clique chegar à linha, e fechá-la já
+        # perderia a escolha. Quem fecha é o vigia, logo depois.
         texto = self.get().strip()
         if not texto:
             self["values"] = self._todos
@@ -3757,6 +3857,320 @@ class ComboBusca(ttk.Combobox):
         if len(exatos) == 1 and exatos[0] != texto:
             self.set(exatos[0])          # só arruma a grafia
         self["values"] = self._todos
+
+    # ------------------------------------------------- teclas e clique
+    def lista_aberta(self) -> bool:
+        return self._popup is not None
+
+    def _mover(self, passo: int):
+        if self._popup is None:
+            # ↓ com a lista fechada abre ESTA lista; ↑ não faz nada.
+            if passo > 0:
+                self.abrir_lista(tudo_se_escolhido=True)
+            return "break"
+        if self._achados:
+            novo = self._realce + passo
+            if abs(passo) == 1:
+                novo %= len(self._achados)       # dá a volta, como na barra
+            self._realce = max(0, min(novo, len(self._achados) - 1))
+            self._mostrar_realce()
+        return "break"
+
+    def _confirmar(self, _ev=None):
+        """Enter com a lista aberta escolhe a linha realçada. Com ela fechada,
+        o Enter segue seu caminho (o passo principal da aba)."""
+        if self._popup is None:
+            return None
+        if self._achados and 0 <= self._realce < len(self._achados):
+            self.escolher(self._achados[self._realce])
+        else:
+            self.fechar_lista()
+        return "break"
+
+    def _esc(self, _ev=None):
+        if self._popup is None:
+            return None
+        self.fechar_lista()
+        return "break"
+
+    def _clique(self, ev):
+        """A seta abre (ou fecha) a NOSSA lista, e não a nativa."""
+        try:
+            elemento = self.identify(ev.x, ev.y)
+        except tk.TclError:
+            elemento = ""
+        na_seta = "arrow" in elemento or ev.x >= self.winfo_width() - px(26)
+        if not na_seta:
+            return None
+        self.focus_set()
+        if self._popup is not None:
+            self.fechar_lista()
+        else:
+            self.abrir_lista(tudo_se_escolhido=True)
+        return "break"
+
+    def escolher(self, valor: str) -> None:
+        """Põe `valor` no campo como se tivesse vindo da lista nativa: o
+        `<<ComboboxSelected>>` é gerado, e quem o escuta (o `_ao_escolher`, e
+        qualquer aba) reage do mesmo jeito pelos dois caminhos."""
+        self.fechar_lista()
+        self.set(valor)
+        self.icursor("end")
+        self.selection_clear()
+        try:
+            self.focus_set()
+        except tk.TclError:
+            pass
+        self.event_generate("<<ComboboxSelected>>")
+
+    # ------------------------------------------------------------ a lista
+    def abrir_lista(self, tudo_se_escolhido: bool = False) -> None:
+        """Abre (ou redesenha) a lista com o que casa com o texto do campo.
+
+        `tudo_se_escolhido`: pela seta ou pelo ↓, um campo que já mostra uma
+        opção escolhida abre a lista INTEIRA, com ela realçada — filtrar pelo
+        nome completo deixaria uma linha só, e quem abre a lista com algo
+        escolhido quer trocar de opção."""
+        if not self._todos:
+            self.fechar_lista()
+            return
+        texto = self.get()
+        realce = 0
+        if tudo_se_escolhido and texto in self._todos:
+            self._achados = list(self._todos)
+            realce = self._achados.index(texto)
+        else:
+            self._achados = util.filtrar(self._todos, texto)
+        self._realce = realce
+        self._topo = 0
+        self._desenhar()
+
+    def fechar_lista(self) -> None:
+        if self._vigia is not None:
+            try:
+                self.after_cancel(self._vigia)
+            except tk.TclError:
+                pass
+            self._vigia = None
+        if self._fora is not None:
+            _desligar(self._fora[0], "<Button-1>", self._fora[1])
+            self._fora = None
+        if self._popup is not None:
+            try:
+                self._popup.destroy()
+            except tk.TclError:              # a janela já a levou
+                pass
+            self._popup = None
+        self._linhas = []
+        self._barra = None
+        self._rodape = None
+        self._onde = None
+
+    def _desenhar(self):
+        c = cores()
+        if self._popup is None:
+            top = tk.Toplevel(self)
+            top.withdraw()                   # posiciona antes de aparecer
+            top.overrideredirect(True)       # sem barra de título e sem foco
+            top.transient(self.winfo_toplevel())
+            try:
+                top.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            # Se o Windows der o foco à lista (clique na barra de rolagem),
+            # ele volta ao campo: é nele que a pessoa está digitando.
+            top.bind("<FocusIn>", lambda _e: self.after_idle(self._focar_campo))
+            self._popup = top
+            moldura = tk.Frame(top, highlightthickness=1, background=c["cartao"],
+                               highlightbackground=c["borda"],
+                               highlightcolor=c["borda"])
+            moldura.pack(fill="both", expand=True)
+            corpo = tk.Frame(moldura, background=c["cartao"])
+            corpo.pack(fill="both", expand=True, padx=px(3), pady=px(3))
+            self._barra = ttk.Scrollbar(corpo, orient="vertical",
+                                        command=self._rolar_pela_barra)
+            linhas = tk.Frame(corpo, background=c["cartao"])
+            linhas.pack(side="left", fill="both", expand=True)
+            for i in range(self.VISIVEIS):
+                lin = tk.Label(linhas, anchor="w", padx=px(10), pady=px(5),
+                               cursor="hand2", font="TkDefaultFont",
+                               background=c["cartao"], foreground=c["texto"])
+                lin.bind("<Button-1>", lambda _e, n=i: self._clicou_linha(n))
+                lin.bind("<Enter>", lambda _e, n=i: self._passou_por(n))
+                lin.bind("<MouseWheel>", self._roda)
+                self._linhas.append(lin)
+            self._rodape = tk.Label(moldura, anchor="w", padx=px(13),
+                                    pady=px(4), font=FONTE_APOIO,
+                                    background=c["cartao"],
+                                    foreground=c["tenue"])
+            for w in (top, moldura, corpo, linhas, self._rodape):
+                w.bind("<MouseWheel>", self._roda)
+            # Clique fora fecha. O bind vai no toplevel do CAMPO (a aba ou o
+            # diálogo), `add="+"` para não derrubar quem já usa o <Button-1>.
+            janela = self.winfo_toplevel()
+            fid = janela.bind("<Button-1>", self._clique_fora, add="+")
+            self._fora = (janela, fid)
+            self._vigia = self.after(self.VIGIA_MS, self._vigiar)
+
+        n = len(self._achados)
+        visiveis = min(max(n, 1), self.VISIVEIS)
+        for i, lin in enumerate(self._linhas):
+            if i < visiveis and n:
+                lin.pack(fill="x")
+            else:
+                lin.pack_forget()
+        if n > self.VISIVEIS:
+            self._barra.pack(side="right", fill="y", padx=px((2, 0)))
+        else:
+            self._barra.pack_forget()
+        if not n:
+            # Dizer que não achou, em vez de sumir com a lista: campo que não
+            # responde a nada parece travado.
+            texto = self.get().strip()
+            self._rodape.configure(text=f"Nada com “{texto}”.")
+            self._rodape.pack(fill="x")
+        elif n > self.VISIVEIS:
+            total = len(self._todos)
+            conta = f"{n} opções" if n == total else f"{n} de {total}"
+            self._rodape.configure(
+                text=f"{conta}  ·  continue digitando para estreitar")
+            self._rodape.pack(fill="x")
+        else:
+            self._rodape.pack_forget()
+        self._mostrar_realce()
+        self._posicionar()
+
+    def _mostrar_realce(self):
+        """Rola a janela até a linha realçada aparecer e repinta as linhas."""
+        n = len(self._achados)
+        if self._realce < self._topo:
+            self._topo = self._realce
+        elif self._realce >= self._topo + self.VISIVEIS:
+            self._topo = self._realce - self.VISIVEIS + 1
+        self._topo = max(0, min(self._topo, max(n - self.VISIVEIS, 0)))
+        self._pintar()
+
+    def _pintar(self):
+        c = cores()
+        n = len(self._achados)
+        for i, lin in enumerate(self._linhas):
+            k = self._topo + i
+            marcada = k == self._realce
+            try:
+                lin.configure(
+                    text=self._achados[k] if k < n else "",
+                    background=c["marca_fundo"] if marcada else c["cartao"],
+                    foreground=c["marca"] if marcada else c["texto"])
+            except tk.TclError:
+                return
+        if self._barra is not None and n > self.VISIVEIS:
+            self._barra.set(self._topo / n, (self._topo + self.VISIVEIS) / n)
+
+    def _passou_por(self, linha: int):
+        """O mouse realça a mesma linha que ↑/↓ realçam: o Enter sempre
+        escolhe o que está destacado."""
+        k = self._topo + linha
+        if k < len(self._achados) and k != self._realce:
+            self._realce = k
+            self._pintar()
+
+    def _clicou_linha(self, linha: int):
+        k = self._topo + linha
+        if k < len(self._achados):
+            self.escolher(self._achados[k])
+        return "break"
+
+    def _rolar(self, linhas: int):
+        n = len(self._achados)
+        novo = max(0, min(self._topo + linhas, max(n - self.VISIVEIS, 0)))
+        if novo != self._topo:
+            self._topo = novo
+            self._pintar()
+
+    def _roda(self, ev):
+        self._rolar(-3 if ev.delta > 0 else 3)
+        return "break"
+
+    def _rolar_pela_barra(self, acao, *args):
+        n = len(self._achados)
+        if acao == "moveto":
+            self._rolar(round(float(args[0]) * n) - self._topo)
+        elif acao == "scroll":
+            passo = int(args[0])
+            self._rolar(passo * (self.VISIVEIS if args[1] == "pages" else 1))
+
+    def _posicionar(self):
+        top = self._popup
+        if top is None:
+            return
+        try:
+            top.update_idletasks()
+            larg = max(self.winfo_width(), px(260))
+            alt = top.winfo_reqheight()
+            x = self.winfo_rootx()
+            y = self.winfo_rooty() + self.winfo_height() + px(2)
+            # Puxada para dentro da tela: com `overrideredirect` o Windows não
+            # reposiciona nada sozinho. Sem espaço embaixo, abre para cima.
+            x = max(min(x, top.winfo_screenwidth() - larg - px(8)), px(8))
+            if y + alt > top.winfo_screenheight() - px(8):
+                y = max(self.winfo_rooty() - alt - px(2), px(8))
+            top.geometry(f"{larg}x{alt}+{x}+{y}")
+            top.deiconify()
+            self._onde = (self.winfo_rootx(), self.winfo_rooty(),
+                          self.winfo_width())
+        except tk.TclError:
+            self.fechar_lista()
+
+    #: De quanto em quanto tempo a lista aberta confere se o campo ainda está
+    #: onde estava (a página rola, a janela anda) e se ainda tem o foco.
+    VIGIA_MS = 200
+
+    def _vigiar(self):
+        """Acompanha o campo enquanto a lista está aberta.
+
+        Ela é uma janela à parte e não anda sozinha com a página: a roda do
+        mouse rola a aba (`AreaRolavel`) e a lista ficaria flutuando no lugar
+        antigo. E fecha quando o foco foi para outro campo (Tab, clique) ou
+        para outro programa — sem isso, `-topmost` a deixaria por cima de tudo."""
+        self._vigia = None
+        if self._popup is None:
+            return
+        try:
+            foco = self.focus_get()
+        except (KeyError, tk.TclError):
+            foco = None
+        dono = str(foco) if foco is not None else ""
+        if dono != str(self) and not dono.startswith(str(self._popup)):
+            self.fechar_lista()
+            return
+        try:
+            if not self.winfo_viewable():
+                self.fechar_lista()
+                return
+            onde = (self.winfo_rootx(), self.winfo_rooty(), self.winfo_width())
+        except tk.TclError:
+            self.fechar_lista()
+            return
+        if onde != self._onde:
+            self._posicionar()
+        self._vigia = self.after(self.VIGIA_MS, self._vigiar)
+
+    def _focar_campo(self):
+        try:
+            if self._popup is not None:
+                self.focus_set()
+        except tk.TclError:
+            pass
+
+    def _clique_fora(self, ev):
+        """Fecha, a não ser que o clique tenha sido no campo ou na lista —
+        compara o CAMINHO do widget no Tk, que é hierárquico."""
+        if self._popup is None:
+            return
+        alvo = str(ev.widget)
+        if alvo.startswith(str(self._popup)) or alvo == str(self):
+            return
+        self.fechar_lista()
 
 
 class CampoData(ttk.Frame):
