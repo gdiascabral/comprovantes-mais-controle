@@ -539,7 +539,15 @@ def _palavras_do_nome(nome) -> set:
 
 def recebedor_confere(nome_no_qr, favorecido) -> bool:
     """O nome gravado no QR (campo 59, até 25 caracteres) é o do favorecido?
-    Basta uma palavra própria em comum (o QR corta e abrevia o nome)."""
+    Basta uma palavra própria em comum (o QR corta e abrevia o nome).
+
+    Nome IGUAL confere sempre, mesmo curto: a régua de palavras ignora as de
+    menos de 4 letras, e uma sigla ("ABC" no QR e no favorecido) saía
+    "conferir quem recebe o QR" contra ela mesma (dono, 14/10/2026)."""
+    iguais = [re.sub(r"[^A-Z0-9]", "", util.sem_acento(str(n or "")).upper())
+              for n in (nome_no_qr, favorecido)]
+    if iguais[0] and iguais[0] == iguais[1]:
+        return True
     a, b = _palavras_do_nome(nome_no_qr), _palavras_do_nome(favorecido)
     return bool(a and b and (a & b or any(x.startswith(y) or y.startswith(x)
                                           for x in a for y in b)))
@@ -933,6 +941,25 @@ def quem_o_documento_diz_reembolsar(item: dict, overview=None) -> str:
         if m:
             return re.sub(r"\s+", " ", m.group(1)).strip(" -–—:")
     return ""
+
+
+#: "REEMBOLSAR JOÃO - PIX …", "PAGAR PARA FULANA PIX: …": o nome vai até a
+#: palavra PIX/CHAVE, um separador ou o fim da linha.
+_MANDA_PAGAR = re.compile(
+    r"\b(?:REEMBOLSAR|PAGAR\s+PARA)\s+(.+?)\s*(?:[-–—:]|\bPIX\b|\bCHAVE\b|$)",
+    re.I | re.M)
+
+
+def quem_a_observacao_manda_pagar(comentario) -> str:
+    """O nome depois de "REEMBOLSAR" ou "PAGAR PARA" na observação, ou "".
+
+    É o terceiro lugar onde um reembolso diz para quem vai (depois do aviso
+    "PAGAR PARA" anexado e do "REEMBOLSO X" no documento): o título
+    desmembrado em dois destinos leva o destino na observação. Serve à
+    pergunta do HTML (`html_pagamentos.tirar_reembolsos`), não à forma de
+    pagar."""
+    m = _MANDA_PAGAR.search(str(comentario or ""))
+    return re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
 
 
 def centro_de_custo(item: dict) -> str:
@@ -1364,7 +1391,7 @@ def _conferir_utilidade(item, files, textos) -> tuple[list[str], bool]:
 
 
 def conferir_documento(item: dict, files, textos, overview=None,
-                       textos_valor=None) -> tuple[str, bool]:
+                       textos_valor=None, cruzar_cnpj: bool = True) -> tuple[str, bool]:
     """Cruza o anexo com o lançamento. Devolve (resumo, tem_divergência).
 
     `textos_valor`: onde o valor pode ser provado — só os ANEXOS. A observação
@@ -1413,7 +1440,7 @@ def conferir_documento(item: dict, files, textos, overview=None,
         achado = re.search(r"\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}",
                            item.get("paidToBankAccount") or "")
         cnpj_pix = re.sub(r"\D", "", achado.group(0)) if achado else ""
-        if cnpj_pix:
+        if cnpj_pix and cruzar_cnpj:
             if cnpj_pix == nfe["cnpj"]:
                 partes.append("CNPJ ✓")
             else:
@@ -1535,14 +1562,20 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         do_anexo = [textos.get(f.get("downloadUrl") or "") for f in files]
         do_anexo = [t for t in do_anexo if t]
         do_item = do_anexo + ([coment] if coment else [])
+        # Fornecedor que emite por mais de um CNPJ e tem um só no cadastro
+        # (`cnpj_livre` no regras_fornecedor.json, dono 14/10/2026): o CNPJ da
+        # nota não é cruzado com o do cadastro — nem pela chave de acesso nem
+        # pelo texto. O resto da conferência continua.
+        livre = regras.cnpj_livre(favorecido, regras_forn)
         conferencia, divergiu = (conferir_documento(item, files, do_item, overview,
-                                                    textos_valor=do_anexo)
+                                                    textos_valor=do_anexo,
+                                                    cruzar_cnpj=not livre)
                                  if textos else ("(não cruzado)", False))
         # CNPJ escrito no TEXTO da nota x documento do cadastro (dono,
         # 01/10/2026). Sem CNPJ no texto ou sem documento, não diz nada.
         cnpj_res, cnpj_txt = (conferir_cnpj_da_nota(
             favorecido, pago_para, participantes, files, textos)
-            if textos else ("", ""))
+            if textos and not livre else ("", ""))
         if cnpj_txt and "CNPJ" not in conferencia:
             conferencia = " · ".join(filter(None, [conferencia, cnpj_txt]))
 
@@ -1801,6 +1834,17 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     # forma de pagar. Sem NF nem OC, a linha não entra.
                     tipo, dados = "Pix", do_cadastro
                     obs = "Sem boleto anexado — pagar pela chave Pix do cadastro"
+                elif chave_pix_do_comentario(coment) and tem_nf_ou_oc:
+                    # A observação traz a chave ("PAGAR PARA <empresa> PIX:
+                    # <cnpj>", "REEMBOLSAR <pessoa> PIX: <cpf>") e o título
+                    # não tem boleto nem chave no cadastro — o caso do título
+                    # desmembrado em dois destinos (dono, 14/10/2026). Até
+                    # aqui ia para NÃO ENTRARAM como "sem forma de pagar",
+                    # com a forma de pagar escrita na própria observação. A
+                    # linha sai "ATENÇÃO — pagar à mão" (`precisa_de_olhar_
+                    # humano`, abaixo): quem confere lê a observação.
+                    tipo, dados = "Pix", chave_pix_do_comentario(coment)
+                    obs = "Sem boleto anexado — pagar pela chave Pix da observação"
                 else:
                     obs = "Nenhum anexo de boleto — conferir no ERP"
                     # A MESMA régua do aviso "Cadastro tem Pix (…)" logo
@@ -1922,6 +1966,11 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if not item.get("paid"):
             if str(item.get("id")) in ids_nao_confirmados:
                 motivo = regras.MOTIVO_NAO_CONFIRMADO
+            elif not files:
+                # "Sem anexo, sem pagamento" (dono, 14/10/2026): a chave Pix
+                # do cadastro não basta. Antes a linha entrava em "ATENÇÃO —
+                # sem anexo", vermelha, e só custava conferência.
+                motivo = regras.MOTIVO_SEM_ANEXO
             else:
                 motivo = regras.motivo_omissao(valor, favorecido, dados,
                                                tem_documento, regras_forn,
@@ -2082,6 +2131,17 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             "reembolso_documento": pessoa.documento if pessoa else "",
             "reembolso_origem": pessoa.origem if pessoa else "",
             "reembolso_impedimento": pessoa.impedimento if pessoa else "",
+            # Para quem o dinheiro deste reembolso vai, pelo NOME como está
+            # escrito — no aviso "PAGAR PARA" (resolvido ou não) ou depois de
+            # "REEMBOLSO" no campo do documento. É o que a pergunta do HTML
+            # ("incluir os reembolsos de …?", `html_pagamentos.
+            # tirar_reembolsos`) compara; vazio quando a linha não é reembolso.
+            "reembolso_para": (
+                ((pessoa.nome if pessoa and pessoa.nome else "")
+                 or nome_do_reembolso(files)) if cls == "PAGAR_PARA"
+                else (quem_o_documento_diz_reembolsar(item, overview)
+                      if documento_declara_reembolso(item, overview)
+                      else quem_a_observacao_manda_pagar(coment))),
         })
 
     for regs in registros.values():

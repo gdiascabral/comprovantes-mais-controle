@@ -66,7 +66,7 @@ def test_o_nao_apto_carrega_id_e_o_que_a_janela_mostra():
     res = relatorio.montar_registros([item], {}, {}, {})
     assert res.contas == {}
     o, = res.omitidos
-    assert o["motivo"] == regras.MOTIVO_SEM_PAGAR
+    assert o["motivo"] == regras.MOTIVO_SEM_ANEXO  # sem anexo, sem pagamento
     assert (o["id"], o["oc"], o["centro_custo"], o["dados"]) \
         == ("L9", "4321", "OBRA MODELO", "")
     assert "Pix sem chave" in o["obs"]
@@ -98,7 +98,8 @@ def test_a_aba_nao_entraram_continua_com_as_mesmas_colunas(tmp_path):
 # A remontagem: o que a pessoa desmarcou sai, sem baixar nada de novo
 # ==========================================================================
 def test_o_desmarcado_sai_com_o_motivo_e_o_resto_fica():
-    e = _entradas([_lanc("L1"), _lanc("L2", favorecido="Outro Fornecedor Ltda")])
+    e = _entradas([_lanc("L1"), _lanc("L2", favorecido="Outro Fornecedor Ltda")],
+                  anexos={"T-L1": [NOTA], "T-L2": [NOTA]})
     todos = confirmacao.remontar(e)
     assert sorted(r["id"] for r in todos.contas["CONTA A"]) == ["L1", "L2"]
     assert todos.omitidos == []

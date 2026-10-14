@@ -719,9 +719,27 @@ class PagamentosDiaFrame(ttk.Frame):
         ini, fim = self._periodo_do_resultado
         pasta = (self.ultimo_arquivo.parent if self.ultimo_arquivo
                  else Path(self.v_pasta.get().strip()))
+        # Reembolsos das pessoas do `confirmar_antes.json` (dono, 14/10/2026):
+        # a pergunta vem toda vez, e "Não" tira as linhas delas dos dois
+        # HTMLs. Os nomes ficam no arquivo, fora do repositório. Sem nomes,
+        # não há o que perguntar.
+        resultado, lancamentos = self.resultado, self.lancamentos
+        pessoas = regras.carregar_confirmar()
+        if pessoas:
+            nomes = " e ".join(pessoas) if len(pessoas) <= 2 else ", ".join(pessoas)
+            incluir = messagebox.askyesno(
+                "HTML dos pagamentos",
+                f"Incluir reembolso para {nomes}?\n\n"
+                "Sim = os reembolsos deles entram no HTML.\n"
+                "Não = ficam fora dos dois HTMLs.")
+            if not incluir:
+                resultado, lancamentos, tirados = html_pagamentos.tirar_reembolsos(
+                    resultado, lancamentos, pessoas, self.overviews)
+                self._log(f"\nHTML sem os reembolsos de {nomes}: "
+                          f"{tirados} lançamento(s) fora.")
         try:
             gerados = html_pagamentos.gravar(
-                self.resultado, self.lancamentos, self.anexos, pasta, ini, fim,
+                resultado, lancamentos, self.anexos, pasta, ini, fim,
                 pastas_extras=(pasta, _pasta_base()))
         except Exception as e:                               # noqa: BLE001
             self._log(f"[!] HTML dos pagamentos: {e}")

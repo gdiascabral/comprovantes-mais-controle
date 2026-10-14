@@ -29,6 +29,12 @@ def anexo(nome, tag=None, ext=".pdf", url=None):
             "downloadUrl": url or f"https://exemplo.invalid/{nome}"}
 
 
+def neutro(*itens):
+    """Um anexo sem NF, OC nem boleto para cada título: "sem anexo, sem
+    pagamento" (14/10/2026) não é a regra que estes testes exercitam."""
+    return {i["tradePayableId"]: [anexo("documento", "Nota Fiscal")] for i in itens}
+
+
 def linhas(resultado):
     """As linhas da única conta do resultado."""
     return next(iter(resultado.contas.values()))
@@ -83,7 +89,7 @@ def test_valor_de_verdade_entra(valor):
 def test_linha_de_um_real_vai_para_os_omitidos_com_o_motivo():
     item = lancamento(remainingValue=1.00, tradePayablePaymentMethod="Pix",
                       paidToBankAccount="PIX CNPJ: 11.222.333/0001-44")
-    res = relatorio.montar_registros([item], {}, {}, {})
+    res = relatorio.montar_registros([item], neutro(item), {}, {})
     assert res.contas == {}
     assert [o["motivo"] for o in res.omitidos] == [regras.MOTIVO_SIMBOLICO]
     assert res.omitidos[0]["valor"] == 1.00
@@ -113,7 +119,8 @@ def sem_boleto(**extra):
 def test_sem_boleto_mas_com_nf_paga_pela_chave_do_cadastro():
     """Sem boleto anexado, "boleto ganha de Pix" não tem premissa: não existe
     boleto para ganhar. Com NF, a compra está documentada e o Pix serve."""
-    res = relatorio.montar_registros([sem_boleto(documentNumber="113")], {}, {}, {})
+    item = sem_boleto(documentNumber="113")
+    res = relatorio.montar_registros([item], neutro(item), {}, {})
     linha = linhas(res)[0]
     assert linha["tipo"] == "Pix"
     assert linha["dados"] == "22.333.444/0001-55"
@@ -122,8 +129,9 @@ def test_sem_boleto_mas_com_nf_paga_pela_chave_do_cadastro():
 
 
 def test_sem_boleto_com_oc_tambem_paga_pela_chave():
+    item = sem_boleto()
     res = relatorio.montar_registros(
-        [sem_boleto()], {}, {"x1": {"purchaseOrder": {"number": 6516}}}, {})
+        [item], neutro(item), {"x1": {"purchaseOrder": {"number": 6516}}}, {})
     assert linhas(res)[0]["dados"] == "22.333.444/0001-55"
 
 
@@ -137,7 +145,7 @@ def test_sem_boleto_e_sem_nf_nem_oc_nao_entra():
     """
     item = sem_boleto(paidTo="Containers Modelo",
                       description="Locacao de conteiner 08/08 a 08/09")
-    res = relatorio.montar_registros([item], {}, {}, {})
+    res = relatorio.montar_registros([item], neutro(item), {}, {})
     assert res.contas == {}
     assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR_PIX_SEM_DOCUMENTO
     assert "Cadastro tem Pix" in res.omitidos[0]["obs"]
@@ -151,7 +159,7 @@ def test_conta_manuscrita_sem_nf_nem_oc_nao_vira_chave_pix():
     as mesmas palavras "pix"/"chave" (revisão de dinheiro, achado a,
     22/09/2026)."""
     item = sem_boleto(paidToBankAccount="BANCO 001 AG 1234 CC 5678-9")
-    res = relatorio.montar_registros([item], {}, {}, {})
+    res = relatorio.montar_registros([item], neutro(item), {}, {})
     assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR
     assert "Cadastro tem Pix" not in res.omitidos[0]["obs"]
 
@@ -171,7 +179,7 @@ def test_boleto_anexado_continua_ganhando_do_pix():
 def test_sem_chave_e_sem_aviso_nao_entra():
     item = lancamento(tradePayablePaymentMethod="Cartão de crédito",
                       documentNumber="740")
-    res = relatorio.montar_registros([item], {}, {}, {})
+    res = relatorio.montar_registros([item], neutro(item), {}, {})
     assert res.contas == {}
     assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR
 
@@ -385,7 +393,8 @@ def test_fornecedor_de_reembolso_sem_aviso_nao_entra():
     item = lancamento(paidTo="VIDRACARIA MODELO LTDA", remainingValue=5020.0,
                       tradePayablePaymentMethod="Pix",
                       paidToBankAccount="PIX CNPJ: 11.222.333/0001-44")
-    res = relatorio.montar_registros([item], {}, {}, {}, regras_fornecedor=REGRAS_FORN)
+    res = relatorio.montar_registros([item], neutro(item), {}, {},
+                                     regras_fornecedor=REGRAS_FORN)
     assert res.contas == {}
     assert res.omitidos[0]["motivo"] == regras.MOTIVO_REEMBOLSO
 
@@ -456,7 +465,8 @@ def test_nao_confirmado_sai_com_motivo_e_nao_some():
 
 
 def test_confirmado_entra_normalmente():
-    res = relatorio.montar_registros([socio()], {}, {}, {}, ids_nao_confirmados=set())
+    res = relatorio.montar_registros([socio()], neutro(socio()), {}, {},
+                                     ids_nao_confirmados=set())
     assert linhas(res)[0]["dados"] == "111.222.333-44"
 
 
@@ -727,7 +737,8 @@ def test_omitidos_viram_aba_propria_com_o_motivo(tmp_path):
     simbolico = lancamento(id="x2", tradePayableId="x2", remainingValue=1.00,
                            paidTo="Equatorial", tradePayablePaymentMethod="Pix",
                            paidToBankAccount="PIX CPF: 111.222.333-44")
-    res = relatorio.montar_registros([bom, simbolico], {}, {}, {})
+    res = relatorio.montar_registros([bom, simbolico], neutro(bom, simbolico),
+                                     {}, {})
     ws = load_workbook(relatorio.gerar_excel(res, tmp_path / "s.xlsx")
                        )[relatorio.ABA_OMITIDOS]
     assert [c.value for c in ws[3]] == relatorio.HEADERS_OMITIDOS
@@ -743,7 +754,8 @@ def test_omitido_nao_soma_no_total_da_conta(tmp_path):
     simbolico = lancamento(id="x2", tradePayableId="x2", remainingValue=1.00,
                            tradePayablePaymentMethod="Pix",
                            paidToBankAccount="PIX CPF: 111.222.333-44")
-    res = relatorio.montar_registros([bom, simbolico], {}, {}, {})
+    res = relatorio.montar_registros([bom, simbolico], neutro(bom, simbolico),
+                                     {}, {})
     wb = load_workbook(relatorio.gerar_excel(res, tmp_path / "s.xlsx"))
     ws = wb.worksheets[0]
     total = [c.value for c in ws[ws.max_row]]
@@ -754,7 +766,7 @@ def test_sem_omitidos_nao_cria_a_aba(tmp_path):
     from openpyxl import load_workbook
     item = lancamento(tradePayablePaymentMethod="Pix",
                       paidToBankAccount="PIX CPF: 111.222.333-44")
-    res = relatorio.montar_registros([item], {}, {}, {})
+    res = relatorio.montar_registros([item], neutro(item), {}, {})
     wb = load_workbook(relatorio.gerar_excel(res, tmp_path / "s.xlsx"))
     assert relatorio.ABA_OMITIDOS not in wb.sheetnames
 

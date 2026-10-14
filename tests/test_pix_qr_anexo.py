@@ -83,9 +83,10 @@ def test_pdf_com_texto_de_quem_ja_pagou_continua_fora():
 
 
 def test_sem_anexo_nenhum_continua_fora():
+    """Sem nenhum anexo, "sem anexo, sem pagamento" (14/10/2026) barra a linha."""
     res = relatorio.montar_registros([pix_sem_chave()], {}, {}, {})
     assert res.contas == {}
-    assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_PAGAR
+    assert res.omitidos[0]["motivo"] == regras.MOTIVO_SEM_ANEXO
 
 
 def test_pix_com_chave_no_cadastro_nao_muda():

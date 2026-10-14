@@ -296,7 +296,7 @@ def test_excel_sai_com_as_colunas_na_ordem_pedida(tmp_path):
             "paidToBankAccount": "PIX CPF: 111.222.333-44",
             "tradePayableAccount": {"name": "CONTA TESTE"},
             "costCentreDetails": [{"workName": "OBRA"}]}
-    reg = relatorio.montar_registros([item], {}, {}, {})
+    reg = relatorio.montar_registros([item], {"t4": [anexo("documento")]}, {}, {})
     destino = relatorio.gerar_excel(reg, tmp_path / "saida.xlsx")
     ws = load_workbook(destino).worksheets[0]
     assert [c.value for c in ws[3]][:5] == \
@@ -351,7 +351,8 @@ def test_linha_comum_nao_ganha_campos_de_reembolso():
             "paidToBankAccount": "PIX CPF: 111.222.333-44",
             "tradePayableAccount": {"name": "CONTA TESTE"},
             "costCentreDetails": [{"workName": "OBRA"}]}
-    linha = relatorio.montar_registros([item], {}, {}, {}).contas["CONTA TESTE"][0]
+    linha = relatorio.montar_registros(
+        [item], {"t8": [anexo("documento")]}, {}, {}).contas["CONTA TESTE"][0]
     assert not linha["reembolso"]
     assert linha["reembolso_nome"] == linha["reembolso_documento"] == ""
     assert linha["reembolso_impedimento"] == ""

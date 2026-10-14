@@ -194,7 +194,10 @@ def _dono_sem_tela(monkeypatch, tmp_path, lancamentos):
     dono._parar = Event()
     dono.worker = None
     dono.lancamentos = lancamentos
-    dono.anexos, dono.overviews, dono.participantes = {}, {}, {}
+    # "Sem anexo, sem pagamento": cada título leva um anexo neutro.
+    dono.anexos = {f"T-{i['id']}": [_anexo_pdf("documento")]
+                   for i in lancamentos}
+    dono.overviews, dono.participantes = {}, {}
     dono.resultado = "o resultado de antes"
     dono._periodo_do_resultado = "o período de antes"
     dono.lbl = SimpleNamespace(configure=lambda **_k: None)
