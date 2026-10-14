@@ -400,6 +400,9 @@ class PagamentosDiaFrame(ttk.Frame):
         self._parar = Event()
         self.lancamentos: list[dict] = []
         self.anexos: dict = {}
+        #: Títulos cuja lista de anexos não foi lida (falha de rede): não são
+        #: "sem anexo" (`mc_api.titulos_sem_leitura`).
+        self.titulos_sem_leitura: set = set()
         self.overviews: dict = {}
         #: {nome normalizado: CPF/CNPJ} do cadastro de Contatos do ERP.
         #: É o que libera o Pix por telefone, e-mail e chave aleatória.
@@ -719,9 +722,29 @@ class PagamentosDiaFrame(ttk.Frame):
         ini, fim = self._periodo_do_resultado
         pasta = (self.ultimo_arquivo.parent if self.ultimo_arquivo
                  else Path(self.v_pasta.get().strip()))
+        # Reembolsos das pessoas do `confirmar_antes.json` (dono, 14/10/2026):
+        # a pergunta vem toda vez, e "Não" tira as linhas delas dos dois
+        # HTMLs. Os nomes ficam no arquivo, fora do repositório. Sem nomes,
+        # não há o que perguntar.
+        resultado, lancamentos = self.resultado, self.lancamentos
+        pessoas = regras.carregar_confirmar()
+        if pessoas:
+            nomes = " e ".join(pessoas) if len(pessoas) <= 2 else ", ".join(pessoas)
+            incluir = messagebox.askyesno(
+                "HTML dos pagamentos",
+                f"Incluir reembolso para {nomes}?\n\n"
+                "Sim = os reembolsos deles entram no HTML.\n"
+                "Não = ficam fora dos dois HTMLs.")
+            if not incluir:
+                resultado, lancamentos, tirados = html_pagamentos.tirar_reembolsos(
+                    resultado, lancamentos, pessoas, self.overviews)
+                self._log(f"\nHTML sem os reembolsos de {nomes}: "
+                          f"{len(tirados)} lançamento(s) fora.")
+                for linha in tirados:
+                    self._log(f"  - {linha}")
         try:
             gerados = html_pagamentos.gravar(
-                self.resultado, self.lancamentos, self.anexos, pasta, ini, fim,
+                resultado, lancamentos, self.anexos, pasta, ini, fim,
                 pastas_extras=(pasta, _pasta_base()))
         except Exception as e:                               # noqa: BLE001
             self._log(f"[!] HTML dos pagamentos: {e}")
@@ -1064,7 +1087,12 @@ class PagamentosDiaFrame(ttk.Frame):
                 progresso=lambda f, t: self.q.put(("progresso", (f, t))),
                 cancelar=self._parar.is_set)
             com = sum(1 for v in self.anexos.values() if v)
+            self.titulos_sem_leitura = set(getattr(api, "titulos_sem_leitura", ()) or ())
             self._log(f"{com} título(s) com anexo, {len(titulos) - com} sem.")
+            if self.titulos_sem_leitura:
+                self._log(f"[!] {len(self.titulos_sem_leitura)} título(s) com a "
+                          "lista de anexos NÃO lida — saem da planilha como "
+                          "\"anexos não lidos\"; busque de novo.")
 
             ids = [str(i.get("id")) for i in self.lancamentos if i.get("id")]
             self.q.put(("status", f"Lendo o detalhe de {len(ids)} lançamento(s)..."))
@@ -1572,7 +1600,8 @@ class PagamentosDiaFrame(ttk.Frame):
             participantes=self.participantes,
             periodo=opcoes["periodo"],
             anexos_nao_lidos=nao_lidos,
-            qr_pix=qrs)
+            qr_pix=qrs,
+            titulos_nao_lidos=set(getattr(self, "titulos_sem_leitura", ()) or ()))
 
     def _t_apurar(self, escolhidas, opcoes, depois):
         """Fase 1: a leitura completa e a análise da remessa, na thread do

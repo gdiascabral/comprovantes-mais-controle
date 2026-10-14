@@ -136,12 +136,49 @@ def ler(dados: bytes, eh_pdf: bool) -> list[str]:
     except Exception:                                     # pragma: no cover
         return []
     achados: list[str] = []
+
+    def _ler(img) -> bool:
+        achou = False
+        for b in zxingcpp.read_barcodes(img, formats=zxingcpp.BarcodeFormat.QRCode):
+            texto = (b.text or "").strip()
+            if valido(texto):
+                achou = True
+                if texto not in achados:
+                    achados.append(texto)
+        return achou
+
     try:
         for img in _imagens(dados, eh_pdf):
-            for b in zxingcpp.read_barcodes(img, formats=zxingcpp.BarcodeFormat.QRCode):
-                texto = (b.text or "").strip()
-                if valido(texto) and texto not in achados:
-                    achados.append(texto)
+            if not _ler(img) and not eh_pdf:
+                for variante in _variantes(img):
+                    if _ler(variante):
+                        break
     except Exception:
         return achados
     return achados
+
+
+#: Lado mínimo, em pixels, a que a imagem pequena é ampliada no plano B.
+LADO_MINIMO = 1000
+#: Limiar da binarização do plano B (0-255): acima vira branco.
+LIMIAR = 160
+
+
+def _variantes(img):
+    """Plano B da FOTO em que o leitor não achou QR nenhum (dono, 14/10/2026).
+
+    O QR "estilizado" do print de cartório — módulos redondos, cor, logotipo
+    no meio, 200x200 px e sem margem branca — não lia: o leitor precisa de
+    módulos com alguns pixels e de contraste duro. Duas tentativas, nesta
+    ordem: ampliar sem suavizar (cada módulo vira um bloco) e binarizar no
+    `LIMIAR`. Ler a mais não arrisca nada: só volta código que passa nas três
+    provas de `valido`, CRC incluído. Só para imagem — a página de PDF já é
+    renderizada a `DPI`."""
+    from PIL import Image
+    cinza = img.convert("L")
+    lado = min(cinza.size)
+    if lado and lado < LADO_MINIMO:
+        fator = -(-LADO_MINIMO // lado)
+        yield cinza.resize((cinza.width * fator, cinza.height * fator),
+                           Image.NEAREST)
+    yield cinza.point(lambda v: 255 if v > LIMIAR else 0)

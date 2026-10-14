@@ -580,6 +580,77 @@ def contas_do_html_geral(resultado) -> list[dict]:
     return contas
 
 
+def _palavras_do_nome(nome) -> list[str]:
+    return re.findall(r"[A-Z0-9]+", relatorio.sem_acento(str(nome or "")).upper())
+
+
+def e_reembolso_de(nome, pessoas) -> bool:
+    """O `nome` escrito no reembolso é uma das `pessoas`?
+
+    Casa por palavras do começo, sem acento nem caixa: "FULANO" e "FULANO
+    SILVA NETO" casam com "FULANO SILVA" (o aviso às vezes traz só o primeiro
+    nome, e o documento às vezes o nome inteiro); "FULANA" não casa com
+    "FULANO", nem "FULANO PEREIRA" com "FULANO SILVA". Nome vazio nunca casa."""
+    alvo = _palavras_do_nome(nome)
+    if not alvo:
+        return False
+    for pessoa in pessoas or ():
+        p = _palavras_do_nome(pessoa)
+        n = min(len(p), len(alvo))
+        if n and alvo[:n] == p[:n]:
+            return True
+    return False
+
+
+def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None):
+    """(resultado, lancamentos, tirados) sem os reembolsos das `pessoas`.
+
+    `tirados` é a lista do que saiu, uma frase por linha ("FAVORECIDO — R$ x
+    — reembolso para Y"), para o Registro dizer QUEM saiu e não só quantos:
+    o nome casa pelo começo, e um homônimo tirado por engano tem de aparecer
+    para quem paga pelo HTML (revisão de dinheiro, 14/10/2026).
+
+    Pedido do dono (14/10/2026): ao gerar o HTML o app pergunta se entram
+    os reembolsos dos nomes do `confirmar_antes.json`; "não" tira as linhas
+    deles dos DOIS HTMLs. No geral, a linha é reembolso de alguém pelo
+    `reembolso_para` do registro (aviso "PAGAR PARA" ou "REEMBOLSO <nome>" no
+    documento); no de pessoa física, pelo nome depois de "REEMBOLSO" no nº do
+    documento. Nada é apagado de `self.resultado`: a planilha e a remessa
+    continuam com o que o passo 2 confirmou — só o HTML deixa as linhas de
+    fora."""
+    pessoas = [p for p in (pessoas or ()) if str(p).strip()]
+    if not pessoas:
+        return resultado, list(lancamentos or ()), []
+    tirados = []
+    contas = {}
+    for nome, regs in (getattr(resultado, "contas", None) or {}).items():
+        ficam = []
+        for r in regs:
+            if e_reembolso_de(r.get("reembolso_para"), pessoas):
+                tirados.append(f"{r.get('favorecido') or '?'} — "
+                               f"{reais(r.get('valor') or 0)} — reembolso para "
+                               f"{r.get('reembolso_para')}")
+            else:
+                ficam.append(r)
+        if ficam:
+            contas[nome] = ficam
+    novo = (resultado._replace(contas=contas)
+            if hasattr(resultado, "_replace") else resultado)
+    ficam_pf = []
+    for item in lancamentos or ():
+        overview = (overviews or {}).get(str(item.get("id"))) or {}
+        quem = (relatorio.quem_o_documento_diz_reembolsar(item, overview)
+                if relatorio.documento_declara_reembolso(item, overview) else "")
+        if (e_conta_pf(relatorio.nome_da_conta(item)) and not item.get("paid")
+                and e_reembolso_de(quem, pessoas)):
+            tirados.append(f"{_texto(item.get('paidTo')) or '?'} — "
+                           f"{reais(relatorio.valor_do_item(item))} — "
+                           f"reembolso para {quem} (pessoa física)")
+            continue
+        ficam_pf.append(item)
+    return novo, ficam_pf, tirados
+
+
 def itens_pessoa_fisica(lancamentos, anexos=None,
                         vencimento_padrao: date | None = None) -> list[dict]:
     """Os lançamentos A PAGAR da conta de pessoa física, no formato do modelo.

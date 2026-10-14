@@ -152,6 +152,33 @@ paths:
   cadastro (`pago_para` vazio) ou com texto sem cara de chave, continua o
   motivo antigo — a mentira estava em negar uma chave que existe, não em
   dizer que ela falta quando falta mesmo.
+  (j) **Regras do dono de 14/10/2026** (`tests/test_regras_14_10.py`).
+  **Sem anexo, sem pagamento**: título a pagar sem arquivo nenhum vai para
+  NÃO ENTRARAM com `regras.MOTIVO_SEM_ANEXO`, logo depois do "não
+  confirmado" e antes de `motivo_omissao` — a chave Pix do cadastro não
+  basta, e o "ATENÇÃO — sem anexo" vermelho só custava conferência.
+  **`cnpj_livre`** no `regras_fornecedor.json`: fornecedor que vende por dois
+  CNPJs (distribuidora e atacadista do mesmo grupo) e tem um só no cadastro
+  não é cruzado por CNPJ — nem pela chave de acesso (`conferir_documento(
+  cruzar_cnpj=False)`) nem pelo texto da nota. **A chave Pix da observação**
+  paga o título de boleto que não tem boleto nem chave no cadastro, havendo
+  OC/NF (o título desmembrado em dois destinos, cada um com "PAGAR PARA
+  <empresa> PIX: …" ou "REEMBOLSAR <pessoa> PIX: …" na observação): sai Pix,
+  em "ATENÇÃO — pagar à mão", porque a observação manda pagar outra pessoa.
+  **`registro["reembolso_para"]`** guarda para quem vai o reembolso, pelo
+  nome escrito (aviso "PAGAR PARA", "REEMBOLSO X" no documento ou
+  "REEMBOLSAR/PAGAR PARA X" na observação). É o que o botão do HTML usa:
+  ele PERGUNTA "Incluir reembolso para <nomes do confirmar_antes.json>?" e,
+  no "Não", `html_pagamentos.tirar_reembolsos` tira as linhas dessas pessoas
+  dos DOIS HTMLs (no de PF, pelo "REEMBOLSO X" do nº do documento). O
+  `self.resultado` não é tocado: planilha e remessa seguem com o que o passo
+  2 confirmou. Casar o nome é por palavras do começo (`e_reembolso_de`:
+  "FULANO" casa com "FULANO SILVA"; "FULANA" não). **QR estilizado** (print
+  de cartório: módulos redondos, logotipo, 200 px, sem margem): quando a
+  FOTO não lê, `qr_pix._variantes` tenta ampliar até `LADO_MINIMO` sem
+  suavizar e binarizar no `LIMIAR` — só volta código que passa no CRC.
+  `recebedor_confere` aceita nome IGUAL mesmo curto (sigla de 3 letras no QR
+  e no favorecido saía "conferir quem recebe").
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e

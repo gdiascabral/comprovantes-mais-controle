@@ -645,6 +645,12 @@ class MCApi:
             raise RuntimeError("Credenciais de anexos ainda não capturadas.")
         base, headers = self._req_anexos
         resultado: dict[str, list] = {}
+        #: Títulos cuja LISTA de anexos falhou (401/429/500 no lote). Ficam
+        #: com [] no resultado, como antes, mas não podem ser lidos como "não
+        #: tem anexo": desde 14/10/2026 título sem anexo sai da planilha
+        #: ("sem anexo, sem pagamento"), e a falha de rede o tiraria com
+        #: motivo falso. Quem consome consulta este conjunto.
+        self.titulos_sem_leitura: set[str] = set()
         LOTE = 12
         for i in range(0, len(trade_payable_ids), LOTE):
             if cancelar and cancelar():
@@ -658,6 +664,8 @@ class MCApi:
             })
             for k, v in (parcial or {}).items():
                 resultado[k] = v if isinstance(v, list) else []
+                if not isinstance(v, list):
+                    self.titulos_sem_leitura.add(str(k))
             if progresso:
                 progresso(min(i + LOTE, len(trade_payable_ids)), len(trade_payable_ids))
         return resultado

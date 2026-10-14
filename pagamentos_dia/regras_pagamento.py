@@ -96,7 +96,7 @@ def _ler_json(nome: str, base: Path | None = None):
 
 def carregar_fornecedores(base: Path | None = None) -> dict:
     """{nome do fornecedor: {"so_com_reembolso": bool, "conferir_endereco": bool,
-    "oc_no_documento": bool}}.
+    "oc_no_documento": bool, "cnpj_livre": bool}}.
 
     O nome é o do cadastro do ERP, digitado por gente: a comparação usa
     `util.norm_espaco` e casa por PEDAÇO, como o resto do app faz com nome de
@@ -180,6 +180,26 @@ MOTIVO_SEM_PAGAR_PIX_SEM_DOCUMENTO = (
     "chave Pix no cadastro, mas falta NF ou OC que documente a compra "
     "(boleto não anexado)")
 MOTIVO_NAO_CONFIRMADO = "não confirmado na janela antes de gerar"
+#: Regra do dono (14/10/2026), sem exceção: "sem anexo, sem pagamento". O
+#: título sem arquivo nenhum não vai para a planilha nem para o HTML — ia como
+#: "ATENÇÃO — sem anexo", vermelho, e só custava conferência. Vem antes de
+#: tudo em `relatorio.montar_registros`: a chave Pix do cadastro não basta.
+MOTIVO_SEM_ANEXO = "sem anexo — sem anexo, sem pagamento"
+#: A lista de anexos do título NÃO foi lida (falha de rede na busca). Não é
+#: "sem anexo": o título pode ter boleto. Busque de novo.
+MOTIVO_ANEXOS_NAO_LIDOS = ("anexos não lidos (falha ao listar no ERP) — "
+                           "busque de novo antes de pagar")
+
+
+def cnpj_livre(favorecido: str, regras: dict) -> bool:
+    """O fornecedor emite nota por mais de um CNPJ, e o cadastro tem um só.
+
+    Pedido do dono em 14/10/2026: o mesmo grupo vende por duas empresas (uma
+    distribuidora e uma atacadista) e o lançamento vai sempre na única
+    cadastrada — o aviso "CNPJ da nota diferente do cadastro" ali é ruído.
+    Marcado no `regras_fornecedor.json`, o cruzamento do CNPJ não é feito
+    para ele; para todo o resto, continua."""
+    return bool(regra_do_fornecedor(favorecido, regras).get("cnpj_livre"))
 
 
 def motivo_omissao(valor: float, favorecido: str, dados: str,

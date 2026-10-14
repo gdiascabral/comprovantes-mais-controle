@@ -55,7 +55,7 @@ def test_documento_de_reembolso_continua_valendo_como_compra_documentada():
     os que a base produz para o mesmo lançamento. O status deixou de ser o da
     base de propósito — ver `test_reembolso_declarado_sem_aviso_vira_atencao…`."""
     detalhe = {"1": {"documentNumber": "REEMBOLSO FULANO MODELO"}}
-    res = relatorio.montar_registros([_boleto_sem_anexo()], {}, detalhe, {})
+    res = relatorio.montar_registros([_boleto_sem_anexo()], CUPOM, detalhe, {})
     assert not res.omitidos
     linha = res.contas[CONTA][0]
     assert (linha["tipo"], linha["dados"]) == ("Pix", "fornecedor@exemplo.com")
@@ -66,7 +66,7 @@ def test_documento_de_reembolso_continua_valendo_como_compra_documentada():
 
 def test_reembolso_declarado_so_no_lancamento_tambem_vale():
     """Sem o detalhe carregado, o mesmo lançamento não pode ter outro desfecho."""
-    res = relatorio.montar_registros([_boleto_sem_anexo()], {}, {}, {})
+    res = relatorio.montar_registros([_boleto_sem_anexo()], CUPOM, {}, {})
     assert not res.omitidos
     assert res.contas[CONTA][0]["tipo"] == "Pix"
 
@@ -167,7 +167,9 @@ def _boleto(ident, favorecido):
 
 
 def _ids(lancamentos, anexos=None):
-    res = relatorio.montar_registros(lancamentos, anexos or {}, {}, {})
+    # "Sem anexo, sem pagamento": quem não tem anexo próprio leva um neutro.
+    anexos = {f"t{i['id']}": [anexo("documento")] for i in lancamentos}         | dict(anexos or {})
+    res = relatorio.montar_registros(lancamentos, anexos, {}, {})
     return [(r["tipo"], r["id"]) for r in res.contas[CONTA]]
 
 
@@ -196,7 +198,8 @@ def test_o_favorecido_nao_decide_mais_a_ordem():
 # ------------------------------------- as partes da descrição viajam no registro
 def _registro(overview=None, **mudancas):
     item = dict(_pix("1", "Fornecedor Modelo Ltda"), **mudancas)
-    res = relatorio.montar_registros([item], {}, {"1": overview or {}}, {})
+    res = relatorio.montar_registros([item], {"t1": [anexo("documento")]},
+                                     {"1": overview or {}}, {})
     return res.contas[CONTA][0]
 
 

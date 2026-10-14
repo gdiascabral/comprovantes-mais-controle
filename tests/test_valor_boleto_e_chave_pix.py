@@ -25,7 +25,7 @@ from pagamentos_dia import regras_pagamento as regras
 from pagamentos_dia import relatorio
 import util
 
-from test_pagamentos_melhorias import LINHA_BANCARIA, VALOR_BANCARIA, anexo, lancamento, linhas
+from test_pagamentos_melhorias import LINHA_BANCARIA, VALOR_BANCARIA, anexo, lancamento, linhas, neutro
 
 
 # ==========================================================================
@@ -329,12 +329,12 @@ def test_chave_ambigua_so_alarma_quando_ha_chave():
 def test_a_planilha_pede_confirmacao_da_chave_sem_tipo():
     item = lancamento(tradePayablePaymentMethod="Pix", documentNumber="113",
                       paidToBankAccount="CHAVE PIX: 11900000083")
-    res = relatorio.montar_registros([item], {}, {}, {})
+    res = relatorio.montar_registros([item], neutro(item), {}, {})
     assert "sem tipo declarado" in linhas(res)[0]["obs"]
 
 
 def test_chave_com_tipo_declarado_nao_vira_ruido():
     item = lancamento(tradePayablePaymentMethod="Pix", documentNumber="113",
                       paidToBankAccount="PIX CNPJ: 11.222.333/0001-44")
-    res = relatorio.montar_registros([item], {}, {}, {})
+    res = relatorio.montar_registros([item], neutro(item), {}, {})
     assert "sem tipo declarado" not in linhas(res)[0]["obs"]
