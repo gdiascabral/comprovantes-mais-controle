@@ -763,3 +763,27 @@ def test_sem_nf_anexada_tira_o_nf_do_texto_livre_antes_do_numero():
 def test_monta_descricao_sem_nf_anexada_tira_o_nf_do_texto_livre():
     item = dict(_ITEM_NF, description="COMPRA CIMENTO NF 1234")
     assert relatorio.monta_descricao(item, []) == "QD 99 LT 99 COMPRA CIMENTO 1234"
+
+
+def test_sicoob_nao_leva_hifen_nem_entre_digitos():
+    """O Sicoob não aceita "-" na descrição (dono, 14/10/2026). O hífen colado
+    entre dígitos vira "E": "LT 10 11" faria o Anexar ler "LT 10"."""
+    r = _partes(cc="QD 99 LT 10-11", descricao="Muro de divisa 3-4 - ESCRITORIO-X")
+    assert hp.descricao_para_colar(r, SICOOB) == (
+        "QD 99 LT 10 E 11 Muro de divisa 3 E 4 ESCRITORIO X")
+    # O centro de custo repetido no começo da descrição continua saindo.
+    r = _partes(cc="QD 99 LT 10-11", descricao="QD 99 LT 10-11 Muro", nf="5678")
+    assert hp.descricao_para_colar(r, SICOOB) == "QD 99 LT 10 E 11 Muro NF 5678"
+    # A remessa CNAB (Sicoob) chama sem conta.
+    assert "-" not in hp.descricao_para_colar(
+        _partes(cc="QD 99 LT 10-11", nf="5678-5679", oc="000.123-4"), None, 38)
+
+
+def test_nenhuma_descricao_do_sicoob_tem_hifen():
+    casos = [_partes(cc="QD 1-2 LT 3-4-5", descricao="A-B 1-2 - C", nf="1-2/3",
+                     oc="4-5"),
+             _partes(cc="CASA 10-A", descricao="pgto 2026-10", nf_anexada=False),
+             _partes(utilidade=True, cc="LT 7-8", descricao="Agua 09-2026")]
+    for r in casos:
+        for conta, limite in ((SICOOB, None), (None, 30), (None, 38)):
+            assert "-" not in hp.descricao_para_colar(r, conta, limite)

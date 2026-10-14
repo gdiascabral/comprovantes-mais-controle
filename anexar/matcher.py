@@ -200,6 +200,17 @@ def _numeros_longos(*textos) -> set[str]:
     return {n for t in textos for n in re.findall(r"\d{6,}", t or "")}
 
 
+#: "10 E 11" entre dígitos: a forma que a descrição colada do Sicoob dá ao
+#: "10-11" do centro de custo (`html_pagamentos._sem_hifen`; o banco não
+#: aceita "-").
+_E_ENTRE_DIGITOS = re.compile(r"(?<=\d) E (?=\d)")
+
+
+def _com_hifen(texto: str) -> str:
+    """Centro de custo comparável: "LT 10 E 11" e "LT 10-11" são o mesmo."""
+    return _E_ENTRE_DIGITOS.sub("-", texto)
+
+
 def _features(pe: dict, pd: dict) -> tuple[bool, bool, bool, bool]:
     """(ocnf, cc, date, docnum).
 
@@ -209,16 +220,17 @@ def _features(pe: dict, pd: dict) -> tuple[bool, bool, bool, bool]:
     ocnf = bool(do_pdf & _ocnf_rotulados(pe["doc"], pe["desc"]))
     docnum = bool(do_pdf & set(re.findall(r"\d{3,}", pe["doc"])))
     cc = False
+    ndesc = _com_hifen(pd["ndesc"])
     for w in pe["works"]:
-        nw = _norm(w)
-        if len(nw) >= 6 and nw in pd["ndesc"]:
+        nw = _com_hifen(_norm(w))
+        if len(nw) >= 6 and nw in ndesc:
             cc = True
             break
     if not cc:
-        mq = re.search(r"QD\s*([0-9A-Z]+)\s+LT\s*([0-9A-Z\-]+)", pd["ndesc"])
+        mq = re.search(r"QD\s*([0-9A-Z]+)\s+LT\s*([0-9A-Z\-]+)", ndesc)
         if mq:
             pat = "QD " + mq.group(1) + " LT " + mq.group(2)
-            cc = any(pat in _norm(w) for w in pe["works"])
+            cc = any(pat in _com_hifen(_norm(w)) for w in pe["works"])
     date = bool(pe["data"]) and pe["data"] == pd["data"]
     return ocnf, cc, date, docnum
 
