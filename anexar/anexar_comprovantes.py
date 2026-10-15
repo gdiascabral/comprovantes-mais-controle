@@ -667,7 +667,15 @@ class AnexarFrame(ttk.Frame):
           thread estiver ocupada justamente abrindo o Chrome, espera.
 
         `mc.fechado` e não `mc.vivo()`: este método roda na thread da
-        interface, e `vivo()` fala com o navegador — coisa da thread dele."""
+        interface, e `vivo()` fala com o navegador — coisa da thread dele.
+
+        MODO CENTRAL: nenhuma das três. A aba nunca é de um robô nem passa por
+        vaga: o Chrome central sobe se preciso e a aba entra pelo endpoint de
+        depuração (`mc_client.abrir_aba_central`), numa thread à parte —
+        subir o Chrome leva segundos e a janela não pode congelar."""
+        if self._no_central():
+            self._em_segundo_plano(self._t_minha_aba_central)
+            return
         mc = self.mc
         ocupado = self.ocupado()
         if mc is not None and not mc.fechado and ocupado:
@@ -690,6 +698,29 @@ class AnexarFrame(ttk.Frame):
             return
         self.submeter("Minha aba no ERP", self._t_minha_aba)
 
+    def _em_segundo_plano(self, fn):
+        threading.Thread(target=fn, name="minha-aba", daemon=True).start()
+
+    def _t_minha_aba_central(self):
+        """Fora da interface e fora das vagas: só HTTP no CDP local, nada de
+        Playwright. O recado vai pela fila (`_log`), nunca por messagebox."""
+        try:
+            a = central.acesso()
+            if a is None:
+                raise RuntimeError("o Chrome central não está configurado")
+            central.garantir_chrome(a)
+            if mc_client.abrir_aba_central(a, config.MC_URL_PAGAMENTOS):
+                self._log("Sua aba está aberta no Chrome do app. O robô trabalha "
+                          "na dele e não mexe na sua — só não feche a janela.")
+                return
+            self._log("Não consegui abrir a sua aba por aqui. Na janela do "
+                      "Chrome do app, aperte Ctrl+T e entre no Mais Controle: "
+                      "a sessão já está lá.")
+        except Exception as e:                           # noqa: BLE001
+            config.diag(f"minha aba no central: {e!r}")
+            self._log(f"Não consegui abrir a sua aba ({e}). Na janela do "
+                      "Chrome do app, aperte Ctrl+T e entre no Mais Controle.")
+
     def _t_minha_aba(self):
         try:
             self.garantir_sessao()
@@ -708,6 +739,20 @@ class AnexarFrame(ttk.Frame):
         com o robô parado não há chamada nenhuma (ver `MCClient.pulsar`).
         Não conta como trabalho — `ocupado()` continua None."""
         if self._encerrando:
+            return
+        if self._no_central():
+            # Cada vaga pulsa o SEU cliente, no executor DELA: o objeto do
+            # Playwright nunca cruza de thread. Vaga trabalhando não pulsa
+            # (as chamadas dela já entregam os eventos).
+            for vaga in self._lista_de_vagas():
+                try:
+                    mc = vaga.mc
+                    if (mc is not None and not mc.fechado and not vaga.ocupada()
+                            and (vaga.pulso is None or vaga.pulso.done())):
+                        vaga.pulso = vaga.executor.submit(mc.pulsar)
+                except Exception as e:
+                    config.diag(f"pulso do navegador (vaga): {e!r}")
+            self.after(1200, self._pulsar_navegador)
             return
         try:
             mc = self.mc

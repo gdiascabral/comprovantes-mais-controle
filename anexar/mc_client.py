@@ -16,6 +16,8 @@ import contextlib
 import json
 import subprocess
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -1120,4 +1122,26 @@ def abrir_aba_por_fora(url: str = config.MC_URL_PAGAMENTOS) -> bool:
         return True
     except OSError as e:
         config.diag(f"abrir_aba_por_fora: {e!r}")
+        return False
+
+
+def abrir_aba_central(a, url: str = config.MC_URL_PAGAMENTOS, *,
+                      abrir=urllib.request.urlopen) -> bool:
+    """Abre uma aba DA PESSOA no Chrome central, SEM Playwright.
+
+    É o botão ↗ Minha aba no ERP no modo central: roda fora das threads das
+    vagas, e o Playwright síncrono não pode ser tocado de lá. O próprio
+    Chrome resolve pelo endpoint de depuração, `PUT /json/new?<url>` (o
+    Chrome 111+ recusa GET aqui). A aba nasce sem opener: nenhum robô a adota.
+
+    A URL vai escapada: o Chrome desescapa a consulta, e o `#` cru seria
+    cortado pelo urllib — a aba abriria no ERP sem a rota de Pagamentos.
+    Quem chama garante o Chrome de pé (`central.garantir_chrome`)."""
+    endereco = f"{central.endereco(a)}/json/new?{urllib.parse.quote(url, safe='')}"
+    try:
+        pedido = urllib.request.Request(endereco, method="PUT")
+        with abrir(pedido, timeout=5) as r:
+            return getattr(r, "status", 200) == 200
+    except Exception as e:                                   # noqa: BLE001
+        config.diag(f"abrir_aba_central: {e!r}")
         return False

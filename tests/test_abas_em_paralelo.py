@@ -239,3 +239,114 @@ def test_todo_aviso_diz_a_aba_que_vai_submeter(arquivo):
     donas = _chamadas(arquivo, "submeter", "dona")
     assert abas and "<faltou>" not in abas
     assert set(abas) == set(donas)
+
+
+# ----------------------------------- Minha aba, pulso e fechar (Tarefa 3)
+def _acesso(tmp_path):
+    from erp import central
+    return central.Acesso("principal", tmp_path / "perfil", 9230)
+
+
+def test_abrir_aba_central_pede_put_no_cdp(tmp_path):
+    pytest.importorskip("playwright")
+    from anexar import mc_client
+    pedidos = []
+
+    class _Resposta:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def abrir(req, timeout=None):
+        pedidos.append((req.get_method(), req.full_url))
+        return _Resposta()
+
+    url = "https://erp.exemplo/#/payable-installments"
+    assert mc_client.abrir_aba_central(_acesso(tmp_path), url, abrir=abrir) is True
+    metodo, endereco = pedidos[0]
+    assert metodo == "PUT"                    # o Chrome 111+ recusa GET aqui
+    assert endereco.startswith("http://127.0.0.1:9230/json/new?")
+    from urllib.parse import unquote
+    # o "#" vai escapado: sem isso o urllib cortaria a rota do ERP
+    assert unquote(endereco.split("?", 1)[1]) == url
+    assert "#" not in endereco
+
+
+def test_abrir_aba_central_sem_rede_devolve_false(tmp_path):
+    pytest.importorskip("playwright")
+    from anexar import mc_client
+
+    def abrir(req, timeout=None):
+        raise OSError("conexão recusada")
+
+    assert mc_client.abrir_aba_central(_acesso(tmp_path), "https://x/",
+                                       abrir=abrir) is False
+
+
+def test_minha_aba_no_central_abre_por_http_sem_submeter(ligado, modulo,
+                                                         monkeypatch, tmp_path):
+    a = _acesso(tmp_path)
+    passos = []
+    monkeypatch.setattr(modulo.central, "acesso", lambda *x, **k: a)
+    monkeypatch.setattr(modulo.central, "garantir_chrome",
+                        lambda ac, **k: passos.append(("chrome", ac)) or "x")
+    monkeypatch.setattr(modulo.mc_client, "abrir_aba_central",
+                        lambda ac, url, **k: passos.append(("aba", ac, url)) or True)
+    monkeypatch.setattr(modulo.mc_client, "abrir_aba_por_fora",
+                        lambda *x, **k: pytest.fail("no central não é por fora"))
+    ligado.submeter = lambda *x, **k: pytest.fail("Minha aba não usa vaga")
+    ligado._em_segundo_plano = lambda fn: fn()
+    ligado.abrir_minha_aba()
+    assert passos == [("chrome", a), ("aba", a, modulo.config.MC_URL_PAGAMENTOS)]
+    assert any("não mexe na sua" in linha for linha in ligado.registro)
+
+
+def test_minha_aba_no_central_falhando_da_o_caminho_do_ctrl_t(ligado, modulo,
+                                                              monkeypatch, tmp_path):
+    monkeypatch.setattr(modulo.central, "acesso", lambda *x, **k: _acesso(tmp_path))
+    monkeypatch.setattr(modulo.central, "garantir_chrome", lambda ac, **k: "x")
+    monkeypatch.setattr(modulo.mc_client, "abrir_aba_central",
+                        lambda ac, url, **k: False)
+    ligado._em_segundo_plano = lambda fn: fn()
+    ligado.abrir_minha_aba()
+    assert any("Ctrl+T" in linha for linha in ligado.registro)
+
+
+def test_pulso_no_central_e_um_por_vaga_livre_na_thread_dela(ligado):
+    a, b, c = _Dona(), _DonaB(), object()
+    pulsos = []
+    solta = threading.Event()
+
+    class _MC:
+        fechado = False
+
+        def pulsar(self):
+            pulsos.append((self, threading.get_ident()))
+
+    def abrir():
+        ligado.mc = _MC()
+        return ligado.mc, threading.get_ident()
+
+    mc_a, id_a = ligado.submeter("A", abrir, dona=a).result(timeout=5)
+    mc_b, id_b = ligado.submeter("B", abrir, dona=b).result(timeout=5)
+    ligado.submeter("C", abrir, dona=c).result(timeout=5)
+    ligado.submeter("C", solta.wait, 5, dona=c)        # C trabalhando
+    try:
+        ligado._pulsar_navegador()
+        for vaga in ligado._lista_de_vagas():
+            if vaga.pulso is not None:
+                vaga.pulso.result(timeout=5)
+        assert set(pulsos) == {(mc_a, id_a), (mc_b, id_b)}
+        assert ligado.ocupado(aba=a) is None       # pulso não é trabalho
+        # pulso ainda correndo não leva outro atrás
+        ligado._pulsar_navegador()
+    finally:
+        solta.set()
+    assert ligado._mc is None                       # nada no atributo comum
