@@ -364,7 +364,9 @@ def pontos_do_nome(entrada: dict, pendencia: dict) -> int:
     do_banco = _palavras(pendencia.get("detalhe"))
     if not do_html or not do_banco:
         return 0
-    if _nomes_iguais(_pedacos(nome_html), _pedacos(pendencia.get("detalhe"))):
+    detalhe = str(pendencia.get("detalhe") or "").strip()
+    if _nomes_iguais(_pedacos(nome_html), _pedacos(detalhe),
+                     cortado=len(detalhe) >= CORTE_DO_NOME):
         return 3
     proprias_html = do_html - GENERICAS
     comuns = proprias_html & (do_banco - GENERICAS)
@@ -387,16 +389,23 @@ def _pedacos(texto) -> list[str]:
     return [p for p in re.findall(r"[A-Z0-9]+", limpo) if p not in _FORMA]
 
 
-def _nomes_iguais(html: list[str], banco: list[str]) -> bool:
-    """Os mesmos pedaços, na mesma ordem — e o último do banco pode vir
-    CORTADO (o Sicoob corta o nome comprido: "… GESTAO IMOBILIARI", visto
-    em 15/10/2026), desde que o corte guarde 3+ letras do pedaço."""
+#: Onde o Sicoob corta o nome do recebedor: 40 caracteres, medido em
+#: 15/10/2026 ("… GESTAO IMOBILIARI"). Nome mais curto não foi cortado.
+CORTE_DO_NOME = 40
+
+
+def _nomes_iguais(html: list[str], banco: list[str], cortado: bool) -> bool:
+    """Os mesmos pedaços, na mesma ordem — e, quando o nome do banco chegou
+    ao tamanho em que o Sicoob corta (`cortado`), o último pedaço dele pode
+    ser só o começo do último do HTML, com 3+ letras. Sem o corte de
+    verdade, "JOSE MARIA" não é "JOSE MARIANO" (revisão, 15/10/2026)."""
     if not html or len(html) != len(banco):
         return False
     if html[:-1] != banco[:-1]:
         return False
     fim_h, fim_b = html[-1], banco[-1]
-    return fim_h == fim_b or (len(fim_b) >= 3 and fim_h.startswith(fim_b))
+    return fim_h == fim_b or (cortado and len(fim_b) >= 3
+                              and fim_h.startswith(fim_b))
 
 
 def _e_mei(detalhe) -> bool:
@@ -474,7 +483,12 @@ def sem_recebedor(pendencia: dict) -> bool:
     """O banco não diz quem recebe? É o boleto e o convênio: o `detalhe` vem
     "Observação: …" (ou vazio). No Pix ele é o nome do recebedor."""
     d = str(pendencia.get("detalhe") or "").strip()
-    if not d or re.match(r"observa[cç][aã]o\s*:", d, flags=re.I):
+    if not d:
+        # Vazio não é "boleto": é campo que não veio (ou que o banco
+        # renomeou). Contar como sem recebedor deixaria um Pix verde só pela
+        # descrição colada — o verde falso que a revisão fechou.
+        return False
+    if re.match(r"observa[cç][aã]o\s*:", d, flags=re.I):
         return True
     # Convênio (guia, certidão) devolve a observação crua no `detalhe`, sem o
     # rótulo — igual à `observacao`, não é nome de ninguém (15/10/2026).

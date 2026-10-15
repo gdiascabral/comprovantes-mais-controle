@@ -492,3 +492,16 @@ def test_nome_cortado_pelo_banco_no_fim_ainda_e_igual():
     [li] = A.confrontar([entrada(1000, "Alfa Beta")],
                         [pendencia(10.0, "ALFA BE")])
     assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_nome_curto_do_banco_nao_e_corte_de_nome_maior():
+    [li] = A.confrontar([entrada(1000, "Zacarias Mariano")],
+                        [pendencia(10.0, "ZACARIAS MARIA")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_pix_sem_detalhe_nao_vale_so_pela_descricao():
+    desc = "OBRA X QD 1 LT 2 OC 888 material"
+    [li] = A.confrontar([entrada(1000, "Fulano Exemplo", desc)],
+                        [pendencia(10.0, "", observacao=desc)])
+    assert li.situacao == A.NOME_DIFERENTE
