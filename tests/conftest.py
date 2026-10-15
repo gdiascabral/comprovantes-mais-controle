@@ -402,3 +402,26 @@ def planilha(config):
 @pytest.fixture(scope="session")
 def modelo_path() -> Path:
     return _ou_pula(_RAIZ / "MODELO.xlsx", "MODELO.xlsx")
+
+
+# ------------------------------------------------------------ Chrome central
+@pytest.fixture(autouse=True)
+def _sem_chrome_central(monkeypatch):
+    """Todo teste nasce com `MC_CENTRAL=off`.
+
+    Com o central ligado, `Sessao.logar` e `SessaoApi.logar` passam pela página
+    em vez do login HTTP. Se a máquina de quem roda a suíte tiver a pasta
+    `_central` com `acessos.json`, os testes antigos (que provam o login HTTP
+    com dublê) cairiam no central e abririam Chrome de verdade. Os testes do
+    central e os que o ligam de propósito ajustam `MC_CENTRAL` ou
+    `central.ligado` por conta própria, depois desta fixture."""
+    monkeypatch.setenv("MC_CENTRAL", "off")
+
+
+@pytest.fixture(autouse=True)
+def _sem_sessao_do_central_guardada():
+    """A sessão pela página é guardada por processo; um teste não herda a do outro."""
+    from erp import sessao
+    sessao._CENTRAIS.clear()
+    yield
+    sessao._CENTRAIS.clear()

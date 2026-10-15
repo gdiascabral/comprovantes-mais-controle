@@ -44,7 +44,10 @@ _PASTAS = ("", "inicio", "baixar_comprovantes", "separar_renomear", "anexar", "a
 #: `argparse` e `getpass`, que não estão no exe: o exe nunca chega a executá-los.
 #: Se um dia a interface passar a importar um deles, este teste volta a
 #: acusá-los assim que a linha de import existir.
-_FORA = {"motor.py", "atualizador.py", "migrar.py", "cli.py", "__main__.py"}
+#: `erp/porteiro.py` é o mesmo caso: entrada de `python -m erp.porteiro`, rodada
+#: pelo Agendador com o Python da máquina; o exe nunca o importa.
+_FORA = {"motor.py", "atualizador.py", "migrar.py", "cli.py", "__main__.py",
+         "porteiro.py"}
 
 
 def _arquivos_do_app():

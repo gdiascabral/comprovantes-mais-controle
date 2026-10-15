@@ -269,3 +269,28 @@ def test_sem_config_os_enderecos_saem_do_erp_hosts(monkeypatch):
     _sessao_pronta(_ConfigFalso()).listar_contas()
     assert falso.chamadas[-1]["url"].startswith(hosts.ERP_API)
     assert api._base_legacy(_ConfigFalso()) == hosts.LEGACY
+
+
+def test_sessaoapi_no_central_nao_exige_credencial(monkeypatch):
+    from conciliacao.erp import api
+    from erp import central
+    monkeypatch.setattr(central, "ligado", lambda nome="principal", pasta=None: True)
+    monkeypatch.setattr(api, "obter_credenciais", lambda: (None, None))
+
+    class _Interna:
+        jwt_token, company_id, usuario, empresa = "jwt", "emp", "Chrome central (principal)", None
+    monkeypatch.setattr(api.Sessao, "logar", classmethod(lambda cls, *a, **k: _Interna()))
+    s = api.SessaoApi.logar(object(), log=lambda *_: None)
+    assert s.token == "jwt" and s.company_id == "emp"
+
+
+def test_sessaoapi_acessos_corrompido_sai_como_erperror(monkeypatch):
+    from conciliacao.erp import api
+    from conciliacao.errors import ErpError
+    from erp import central
+
+    def estragado(nome="principal", pasta=None):
+        raise ValueError("porta repetida")
+    monkeypatch.setattr(central, "ligado", estragado)
+    with pytest.raises(ErpError, match="MC_CENTRAL=off"):
+        api.SessaoApi.logar(object(), log=lambda *_: None)

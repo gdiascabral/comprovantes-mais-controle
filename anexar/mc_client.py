@@ -12,6 +12,8 @@ Observação-chave: o botão do clipe ("Abrir Arquivos do Pagamento") só existe
 quando JÁ há anexo. Por isso ancoramos na seção "Histórico de Pagamentos" e no
 menu ⋮ (MoreVertIcon), que existem tanto nos pendentes quanto nos já anexados.
 """
+import contextlib
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -21,6 +23,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from . import config, credenciais
 
 import util
+from erp import central
 
 
 class SemRede(RuntimeError):
@@ -296,8 +299,25 @@ _JS_CLICK_ENTRAR = r"""
 
 
 class MCClient:
-    def __init__(self, headless: bool = False, log=print):
+    #: Padrões de classe, e não só do `__init__`: quem monta o cliente por
+    #: `MCClient.__new__` (os dublês dos testes, e quem herdar dele) continua
+    #: no modo de sempre, com o próprio Chrome.
+    central = False
+    _acesso = None
+    _browser = None
+
+    def __init__(self, headless: bool = False, log=print, acesso=None):
         self.headless = headless
+        # MODO CENTRAL: em vez de lançar o próprio Chrome, o cliente conecta
+        # por CDP no Chrome central do acesso (`erp/central.py`), abre UMA aba
+        # dele e trabalha só nela. O Chrome é de todos os robôs e da pessoa;
+        # sair não fecha nada além das abas deste cliente. Sem `acesso`
+        # explícito vale o central ligado (`acessos.json` com "principal");
+        # `MC_CENTRAL=off` devolve o comportamento de sempre.
+        self._acesso = acesso if acesso is not None else (
+            central.acesso() if central.ligado() else None)
+        self.central = self._acesso is not None
+        self._browser = None
         # sem o log da janela estas mensagens iam para o stdout — que no exe
         # (--noconsole) não existe, e o usuário nunca soube por que o login
         # automático não pegou
@@ -334,6 +354,8 @@ class MCClient:
             return None
 
     def __enter__(self):
+        if self.central:
+            return self._entrar_no_central()
         self._pw = sync_playwright().start()
         config.PASTA_PERFIL_CHROME.mkdir(parents=True, exist_ok=True)
         # Antes de abrir, e não depois: o Chrome 152 cai no primeiro download
@@ -366,7 +388,51 @@ class MCClient:
         # esvaziada — em lote longo isso é memória crescendo à toa.
         return self
 
+    def _entrar_no_central(self):
+        """Conecta no Chrome central e abre a aba DESTE cliente.
+
+        `new_page()` aqui é o começo da tarefa, não o meio: é a única aba que
+        o cliente abre por conta própria. As que já estavam no Chrome são de
+        outros robôs ou da pessoa e nunca entram em `_minhas`.
+
+        Sem `util.limpar_historico_de_downloads`: ele só funciona com o perfil
+        FECHADO, e aqui o Chrome já está de pé — quem limpa é quem sobe o
+        Chrome central, antes de subir."""
+        # O Chrome primeiro: se ele não sobe, o driver do Playwright nem
+        # nasce. Depois do `start()`, qualquer falha para o driver antes de
+        # relançar, porque o `__exit__` não roda quando o `__enter__` cai.
+        endereco = central.garantir_chrome(self._acesso)
+        self._pw = sync_playwright().start()
+        try:
+            self._browser = self._pw.chromium.connect_over_cdp(endereco)
+            self.ctx = self._browser.contexts[0]
+            self.page = self.ctx.new_page()
+            self._minhas.add(self.page)
+            self.ctx.on("page", self._nova_aba)
+            self.ctx.on("close", self._ao_fechar)
+        except BaseException:
+            try:
+                self._pw.stop()
+            finally:
+                self._pw = None
+            raise
+        return self
+
     def __exit__(self, *exc):
+        if self.central:
+            # Nunca `ctx.close()` nem `browser.close()`: o Chrome central é
+            # dos outros robôs também. Fecha só o que é deste cliente.
+            try:
+                for aba in list(self._minhas):
+                    try:
+                        if not aba.is_closed():
+                            aba.close()
+                    except Exception as e:
+                        config.diag(f"não consegui fechar a aba do robô: {e!r}")
+            finally:
+                if self._pw:
+                    self._pw.stop()
+            return
         try:
             if self.ctx:
                 self.ctx.close()
@@ -393,6 +459,11 @@ class MCClient:
             dona = None
         if dona is not None and dona in self._minhas:
             self._minhas.add(pagina)
+            return
+        if self.central:
+            # No Chrome central, aba que não nasceu de uma aba nossa é de
+            # OUTRO robô (ou da pessoa, que lá não é nossa): cada um ouve os
+            # próprios downloads, e ouvir os dos outros salvaria em dobro.
             return
         try:
             pagina.on("download", self._baixar_para_a_pessoa)
@@ -440,6 +511,10 @@ class MCClient:
         return minhas
 
     def _abas_da_pessoa(self) -> list:
+        if self.central:
+            # No Chrome central, aba que não é nossa pode ser de OUTRO robô
+            # trabalhando; o cliente não tem como distinguir a da pessoa.
+            return []
         try:
             abas = list(self.ctx.pages) if self.ctx else []
         except Exception:
@@ -466,7 +541,10 @@ class MCClient:
 
         Deve rodar na thread do navegador. A aba nasce pelo `new_page` e cai
         em `_nova_aba` sem opener — ou seja, como aba da pessoa: o robô nunca
-        vai adotá-la. Já chega logada, porque o token do ERP é do perfil."""
+        vai adotá-la. Já chega logada, porque o token do ERP é do perfil.
+
+        No modo central é sempre aba nova: `_abas_da_pessoa` vem vazia, e
+        reaproveitar uma aba alheia traria à frente a aba de outro robô."""
         for aba in self._abas_da_pessoa():
             try:
                 if "maiscontroleerp" in (aba.url or ""):
@@ -633,6 +711,34 @@ class MCClient:
                 time.sleep(3)
 
     def garantir_login(self):
+        """Garante a área logada (ver `_garantir_login_sem_trava`).
+
+        No modo central, dois robôs no mesmo Chrome nunca tentam entrar ao
+        mesmo tempo: a trava fica ao lado do perfil do acesso, e quem a pega
+        depois do outro já encontra a sessão de pé ("Login OK (sessão ainda
+        aberta)")."""
+        if not self.central:
+            return self._garantir_login_sem_trava()
+        caminho = self._acesso.perfil.parent / f".{self._acesso.nome}.login.trava"
+        # `velha` acima do pior caso do login (cada `goto` tem 60 s, com a
+        # espera de 90 s e as tentativas de rede): trava com menos que isso
+        # seria dada como abandonada no meio do uso, e o outro robô entraria
+        # junto.
+        # Só a ESPERA pela trava vira `False`; um erro de dentro do login
+        # continua subindo como sempre subiu.
+        with contextlib.ExitStack() as pilha:
+            try:
+                pilha.enter_context(
+                    central.trava(caminho, espera=600, velha=600))
+            except TimeoutError as e:
+                config.diag(f"trava de login do acesso "
+                            f"'{self._acesso.nome}': {e}")
+                self.log("[!] Não entrei: outro robô está entrando no ERP há "
+                         "muito tempo; tente de novo.")
+                return False
+            return self._garantir_login_sem_trava()
+
+    def _garantir_login_sem_trava(self):
         """Garante a área logada. Se cair na tela de login: usa a credencial
         salva (opcional, botão 🔑) OU deixa o Chrome autopreencher a senha
         guardada por ele, e clica em ENTRAR sozinho — aguardando a tela mudar.
@@ -718,7 +824,7 @@ class MCClient:
                 pass
             if not self._tem_campo_senha():
                 return
-            creds = credenciais.carregar()
+            creds = self._credencial()
             if creds:
                 # 1º pelo controller do Angular (é o caminho que funciona);
                 # se o ERP mudar e o scope não estiver lá, cai no DOM + clique
@@ -763,6 +869,26 @@ class MCClient:
             # "Remover".
         except Exception as e:
             self.log(f">>> login automático: {str(e)[:120]}")
+
+    def _credencial(self) -> tuple[str, str] | None:
+        """(email, senha) para o login automático, ou None.
+
+        No modo central, o acesso pode ter credencial própria (o mesmo JSON
+        cifrado com DPAPI do `credenciais.py`, noutro arquivo): é com ela que
+        se entra. Sem ela, vale o login salvo do app."""
+        arq = self._acesso.credencial if self.central else None
+        if arq is None or not arq.exists():
+            return credenciais.carregar()
+        try:
+            d = json.loads(util.revelar_bytes(arq.read_bytes()).decode("utf-8"))
+            return (d["email"], d["senha"])
+        except Exception as e:
+            # Só o tipo do erro: a mensagem de um JSON quebrado pode carregar
+            # um pedaço do texto decifrado — e ali dentro está a senha.
+            config.diag(f"credencial do acesso '{self._acesso.nome}' não pôde "
+                        f"ser lida ({type(e).__name__}) — vai pedir login "
+                        f"manual. Arquivo: {arq.name}")
+            return None
 
     def _tem_campo_senha(self, aba=None) -> bool:
         alvo = aba if aba is not None else self.page

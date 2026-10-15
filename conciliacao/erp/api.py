@@ -183,13 +183,18 @@ class SessaoApi:
 
     @classmethod
     def logar(cls, config, log=print) -> "SessaoApi":
-        email, senha = obter_credenciais()
-        if not (email and senha):
-            raise SessaoExpirada(
-                "nao ha credenciais guardadas para ler os saldos.\n"
-                "No app: clique em 'Login' na aba Anexar Comprovantes.\n"
-                "Pelos .bat: rode o atalho '1 - Salvar senha'."
-            )
+        with _traduzido():
+            no_central = erp_sessao.central_ligado()
+        if no_central:
+            email, senha = "", ""        # quem entra e o porteiro, pela tela
+        else:
+            email, senha = obter_credenciais()
+            if not (email and senha):
+                raise SessaoExpirada(
+                    "nao ha credenciais guardadas para ler os saldos.\n"
+                    "No app: clique em 'Login' na aba Anexar Comprovantes.\n"
+                    "Pelos .bat: rode o atalho '1 - Salvar senha'."
+                )
 
         # O `erp/` ja para com recado proprio no MFA, na troca de senha
         # obrigatoria e no login sem empresa — as tres situacoes que quebrariam
@@ -209,7 +214,7 @@ class SessaoApi:
         sessao = cls(
             token=interna.jwt_token,
             company_id=interna.company_id,
-            usuario=interna.usuario or email,
+            usuario=interna.usuario or email or "Chrome central",
             empresa=interna.empresa,
             config=config,
             _sessao=interna,

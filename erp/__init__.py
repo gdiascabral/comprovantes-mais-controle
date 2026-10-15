@@ -40,11 +40,15 @@ tokens e ele nasceu adivinhando-a.
 """
 from __future__ import annotations
 
+from . import central
 from .hosts import ACESSAR, ERP_API, LEGACY, URL_LOGIN
 from .pagina import TransportePagina
 from .sessao import USER_AGENT, ErpErro, Sessao, SessaoRecusada
+from .sessao_pagina import SessaoPelaPagina
 
 __all__ = [
+    "central",
+    "SessaoPelaPagina",
     "ACESSAR",
     "ERP_API",
     "LEGACY",
