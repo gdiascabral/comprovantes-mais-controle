@@ -853,11 +853,25 @@ class PagamentosDiaFrame(ttk.Frame):
                 str(c.get("nome") or ""), mapa_mc, empresas)
             (no_sicoob if numero else fora).append(
                 (c, numero, motivo))
+        sem_cadastro = [(c, m) for c, _n, m in fora
+                        if m != agendamentos_sicoob.MOTIVO_FORA_SICOOB]
         if not no_sicoob:
-            messagebox.showinfo(
-                "Conferir agendamentos",
-                "Nenhuma conta deste HTML é do Sicoob — não há o que conferir "
-                "no SicoobNet.")
+            # "Não há o que conferir" só quando TODAS são de outro banco. A
+            # conta do Sicoob que o cadastro não resolve (subconta nova fora
+            # do `contas_sicoob.json`) não pode ganhar o mesmo recado neutro:
+            # as pendências dela seriam assinadas sem conferência.
+            if sem_cadastro:
+                messagebox.showwarning(
+                    "Conferir agendamentos",
+                    "Nenhuma conta pôde ser conferida. Estas ficaram de fora "
+                    "por cadastro — confira-as à mão antes de assinar:\n\n"
+                    + "\n".join(f"• {c.get('nome')}: {m}"
+                                for c, m in sem_cadastro[:12]))
+            else:
+                messagebox.showinfo(
+                    "Conferir agendamentos",
+                    "Nenhuma conta deste HTML é do Sicoob — não há o que "
+                    "conferir no SicoobNet.")
             return
         inicio, fim = agendamentos_sicoob.periodo_da_consulta(
             datetime.date.today())

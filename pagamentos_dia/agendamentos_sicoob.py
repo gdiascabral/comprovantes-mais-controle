@@ -314,6 +314,8 @@ GENERICAS = frozenset("""
     JORGE ROBERTO SERGIO ANDRE DIEGO THIAGO TIAGO VITOR VICTOR LEONARDO
     JULIANA FERNANDA PATRICIA ALINE CAMILA AMANDA BRUNA LETICIA MARIANA
     ADRIANA FRANCISCA ANTONIA SANDRA LUCIANA VANESSA JESSICA GABRIELA
+    SAO SANTA SANTO BOM BOA JESUS IRMAOS NOSSA SENHORA REAL PRIMAVERA
+    ALIANCA MINAS CENTRAL UNIAO ESTRELA FORTE GERAL NACIONAL
 """.split())
 """O que não prova que dois nomes são a mesma pessoa ou empresa: o que o
 HTML escreve em volta do nome, a forma jurídica, o ramo de negócio, os
@@ -347,24 +349,61 @@ def pontos_do_nome(entrada: dict, pendencia: dict) -> int:
       Igual, e não "contido": "CASA DAS TINTAS" não é "NOVA CASA DAS TINTAS",
       nem "FULANO SILVA" é "FULANO SILVA PEREIRA";
     - **duas palavras próprias** (fora de `GENERICAS`) em comum;
-    - **uma palavra própria**, quando é a ÚNICA do nome do HTML: o cadastro
-      de reembolso ("Reembolso Eng <prenome raro>") e o MEI que o banco
-      escreve com o número na frente só têm essa. Com duas ou mais próprias
-      no HTML, uma em comum não basta.
+    - **uma palavra própria**, quando é a ÚNICA do nome do HTML E o nome é de
+      gente: o cadastro de reembolso ("Reembolso Eng <prenome raro>") ou o
+      recebedor que o banco escreve como MEI (`_e_mei`). Nome de empresa com
+      uma palavra própria só ("SAO JORGE MATERIAIS") não prova nada por ela —
+      "SAO BENTO TINTAS" dividiria a mesma.
+
+    "Iguais" compara TODOS os pedaços (`_pedacos`), siglas e números
+    incluídos: só com as palavras de 3+ letras, "JL MATERIAIS" era igual a
+    "JR MATERIAIS" (terceira rodada da revisão, 15/10/2026).
     """
-    do_html = _palavras(nome_de_quem_recebe(entrada.get("favorecido")))
+    nome_html = nome_de_quem_recebe(entrada.get("favorecido"))
+    do_html = _palavras(nome_html)
     do_banco = _palavras(pendencia.get("detalhe"))
     if not do_html or not do_banco:
         return 0
-    if do_html - _FORMA == do_banco - _FORMA:
+    if _nomes_iguais(_pedacos(nome_html), _pedacos(pendencia.get("detalhe"))):
         return 3
     proprias_html = do_html - GENERICAS
     comuns = proprias_html & (do_banco - GENERICAS)
     if len(comuns) >= 2:
         return 2
-    if len(comuns) == 1 and len(proprias_html) == 1:
+    reembolso = bool(re.search(r"\(\s*reembolso de",
+                               str(entrada.get("favorecido") or ""), re.I))
+    de_gente = (reembolso or "REEMBOLSO" in do_html
+                or _e_mei(pendencia.get("detalhe")))
+    if len(comuns) == 1 and len(proprias_html) == 1 and de_gente:
         return 1
     return 0
+
+
+def _pedacos(texto) -> list[str]:
+    """Todos os pedaços do nome, siglas e números incluídos, fora a forma
+    jurídica e o número de CNPJ que o banco põe na frente do MEI."""
+    limpo = util.sem_acento(str(texto or "")).upper()
+    limpo = re.sub(r"^\s*\d{2}[\s.]?\d{3}[\s.]?\d{3}\b", "", limpo)
+    return [p for p in re.findall(r"[A-Z0-9]+", limpo) if p not in _FORMA]
+
+
+def _nomes_iguais(html: list[str], banco: list[str]) -> bool:
+    """Os mesmos pedaços, na mesma ordem — e o último do banco pode vir
+    CORTADO (o Sicoob corta o nome comprido: "… GESTAO IMOBILIARI", visto
+    em 15/10/2026), desde que o corte guarde 3+ letras do pedaço."""
+    if not html or len(html) != len(banco):
+        return False
+    if html[:-1] != banco[:-1]:
+        return False
+    fim_h, fim_b = html[-1], banco[-1]
+    return fim_h == fim_b or (len(fim_b) >= 3 and fim_h.startswith(fim_b))
+
+
+def _e_mei(detalhe) -> bool:
+    """O banco escreve o MEI com a raiz do CNPJ na frente
+    ("11 222 333 FULANO …"): ali o nome é de UMA pessoa."""
+    return bool(re.match(r"\s*\d{2}[\s.]?\d{3}[\s.]?\d{3}\b",
+                         str(detalhe or "")))
 
 
 def mesmo_recebedor(entrada: dict, pendencia: dict) -> bool:
@@ -431,11 +470,31 @@ def pendente_de_verdade(pendencia: dict) -> bool:
     return s in ("", PENDENTE_ASSINATURA)
 
 
+def sem_recebedor(pendencia: dict) -> bool:
+    """O banco não diz quem recebe? É o boleto e o convênio: o `detalhe` vem
+    "Observação: …" (ou vazio). No Pix ele é o nome do recebedor."""
+    d = str(pendencia.get("detalhe") or "").strip()
+    if not d or re.match(r"observa[cç][aã]o\s*:", d, flags=re.I):
+        return True
+    # Convênio (guia, certidão) devolve a observação crua no `detalhe`, sem o
+    # rótulo — igual à `observacao`, não é nome de ninguém (15/10/2026).
+    return _descricao(d) == _descricao(pendencia.get("observacao"))
+
+
 def _pontos(entrada: dict, pendencia: dict) -> int:
-    """A força da prova de que é o mesmo pagamento: a descrição colada vale
-    mais que qualquer nome; entre nomes, `pontos_do_nome`."""
-    return (10 if mesma_descricao(entrada, pendencia) else 0) + \
-        pontos_do_nome(entrada, pendencia)
+    """A força da prova de que é o mesmo pagamento.
+
+    Sem recebedor (boleto), a descrição colada é a prova e vale mais que
+    tudo. COM recebedor (Pix), a descrição sozinha não prova nada: é o texto
+    que o HTML manda colar, e colá-lo certo com a chave de OUTRA pessoa daria
+    verde para o Pix errado (revisão de dinheiro, 15/10/2026) — ali manda o
+    nome, e a descrição só reforça."""
+    nome = pontos_do_nome(entrada, pendencia)
+    if sem_recebedor(pendencia):
+        return 10 if mesma_descricao(entrada, pendencia) else nome
+    if not nome:
+        return 0
+    return nome + (10 if mesma_descricao(entrada, pendencia) else 0)
 
 
 def confrontar(entradas, pendencias) -> list[Linha]:
@@ -449,8 +508,9 @@ def confrontar(entradas, pendencias) -> list[Linha]:
     diferente. O que sobra de cada lado é "falta no banco" ou "só no banco".
 
     Exceções que vêm da própria linha (revisão de dinheiro, 15/10/2026):
-    a linha JÁ PAGO só disputa agendamento DEPOIS das que estão por pagar, e
-    só com prova de nome ou descrição — casada, é pagamento em DOBRO; sem
+    a linha JÁ PAGO só disputa agendamento DEPOIS dos pares provados das que
+    estão por pagar (e ANTES das passadas sem prova), e só com prova de nome
+    ou descrição — casada, é pagamento em DOBRO; sem
     par, não é falta nenhuma. A linha com `bloqueio` e a pendência que não
     está "pendente de assinatura" nunca saem verdes."""
     vivas = [e for e in (entradas or []) if not ja_pago(e)]
@@ -497,10 +557,14 @@ def confrontar(entradas, pendencias) -> list[Linha]:
             casadas.append(Linha(situacao(e, par, base), e, par))
         return resto
 
+    # As JÁ PAGO procuram par logo depois das vivas PROVADAS e antes das
+    # passadas sem prova: senão o agendamento repetido de um título pago era
+    # levado só pelo valor por uma linha viva, e o pagamento em dobro saía
+    # âmbar em vez de vermelho (revisão de dinheiro, 15/10/2026).
     vivas = provadas(vivas)
+    pagas = provadas(pagas)
     vivas = passada(vivas, mesmo_valor, NOME_DIFERENTE)
     vivas = passada(vivas, mesma_descricao, VALOR_DIVERGE)
-    pagas = provadas(pagas)
 
     linhas = (casadas
               + [Linha(FALTA_NO_BANCO, e, None) for e in vivas]

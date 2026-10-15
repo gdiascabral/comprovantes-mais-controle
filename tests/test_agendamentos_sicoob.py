@@ -426,3 +426,69 @@ def test_pendencia_que_nao_esta_pendente_nunca_sai_verde():
     [li] = A.confrontar([entrada(1000)], [p])
     assert li.situacao == A.BLOQUEADO
     assert "CANCELADA" in li.frase
+
+
+# -------------------------------------- terceira rodada da revisão de dinheiro
+
+def test_pix_com_descricao_certa_e_recebedor_errado_nao_sai_verde():
+    desc = "OBRA X QD 1 LT 2 OC 777 material"
+    e = entrada(20000, "Fulano Exemplo", desc)
+    p = dict(pendencia(200.0, "BELTRANO DE TAL", observacao=desc),
+             nomeTransacao="Pagamento e Transferência Pix - via canal")
+    [li] = A.confrontar([e], [p])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_sigla_curta_diferente_nao_e_nome_igual():
+    for html, banco in (("JL Materiais", "JR MATERIAIS"),
+                        ("2 Irmaos Tintas", "3 IRMAOS TINTAS")):
+        [li] = A.confrontar([entrada(1000, html)], [pendencia(10.0, banco)])
+        assert li.situacao == A.NOME_DIFERENTE, (html, banco)
+
+
+def test_empresa_com_uma_palavra_propria_nao_prova_por_ela():
+    [li] = A.confrontar([entrada(1000, "Sao Jorge Materiais")],
+                        [pendencia(10.0, "SAO BENTO TINTAS")])
+    assert li.situacao == A.NOME_DIFERENTE
+    [li] = A.confrontar([entrada(1000, "Zacarias Materiais")],
+                        [pendencia(10.0, "ZACARIAS TINTAS")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_mei_com_numero_na_frente_prova_pelo_nome_unico():
+    [li] = A.confrontar([entrada(1000, "Zacarias")],
+                        [pendencia(10.0, "11 222 333 ZACARIAS EXEMPLO")])
+    assert li.situacao == A.OK
+
+
+def test_ja_pago_agendado_de_novo_nao_some_para_linha_viva_sem_prova():
+    paga = dict(entrada(50000, "Fornecedor Exemplo"), status="JÁ PAGO em 01/10")
+    viva = entrada(50000, "Outro Fornecedor")
+    linhas = A.confrontar([viva, paga],
+                          [pendencia(500.0, "FORNECEDOR EXEMPLO LTDA")])
+    por = {li.html["favorecido"]: li.situacao for li in linhas}
+    assert por == {"Fornecedor Exemplo": A.PAGO_E_AGENDADO,
+                   "Outro Fornecedor": A.FALTA_NO_BANCO}
+
+
+def test_convenio_com_observacao_crua_no_detalhe_casa_pela_descricao():
+    desc = "OBRA X QD 01 LT 21 CERTIDAO 1234567890"
+    [li] = A.confrontar([entrada(7700, "Orgao Exemplo", desc)],
+                        [pendencia(77.0, desc, observacao=desc)])
+    assert li.situacao == A.OK
+
+
+def test_reembolso_com_nome_unico_casa_com_o_nome_completo_no_banco():
+    e = entrada(10000, "ZACARIAS (reembolso de Loja Exemplo)")
+    [li] = A.confrontar([e], [pendencia(100.0, "Zacarias Exemplo de Tal Filho")])
+    assert li.situacao == A.OK
+
+
+def test_nome_cortado_pelo_banco_no_fim_ainda_e_igual():
+    [li] = A.confrontar([entrada(1000, "A B C DA SILVA EXEMPLO GESTAO IMOBILIARIA")],
+                        [pendencia(10.0, "A B C DA SILVA EXEMPLO GESTAO IMOBILIARI")])
+    assert li.situacao == A.OK
+    # Corte curto demais (2 letras) não conta como o mesmo nome.
+    [li] = A.confrontar([entrada(1000, "Alfa Beta")],
+                        [pendencia(10.0, "ALFA BE")])
+    assert li.situacao == A.NOME_DIFERENTE
