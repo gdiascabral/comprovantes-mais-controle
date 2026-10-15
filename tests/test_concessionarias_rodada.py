@@ -1,0 +1,115 @@
+# -*- coding: utf-8 -*-
+"""A rodada do água e energia disparada pelo app: comando, andamento e resumo."""
+import os
+from pathlib import Path
+
+import pytest
+
+from concessionarias import rodada as R
+
+
+def _instalar(raiz: Path) -> Path:
+    (raiz / "coletor" / "logs").mkdir(parents=True)
+    (raiz / "relatorios").mkdir()
+    return raiz
+
+
+def test_pasta_pela_variavel_e_desligada(tmp_path, monkeypatch):
+    monkeypatch.setenv("MC_AGUA_ENERGIA", "off")
+    assert R.pasta_agua_energia() is None
+    monkeypatch.setenv("MC_AGUA_ENERGIA", str(tmp_path))
+    assert R.pasta_agua_energia() is None            # sem o .bat não é instalação
+    _instalar(tmp_path)
+    (tmp_path / "coletor" / "rodada_diaria.bat").write_text("@echo off\n")
+    assert R.pasta_agua_energia() == tmp_path
+
+
+@pytest.mark.parametrize("nome, esperado", [
+    ("Fulano", "app: Fulano"),
+    ("Fulâno de Tál", "app: Fulano de Tal"),
+    ('Fu"la&no|%PATH%^!<x>', "app: FulanoPATHx"),
+    ("", "app: sem nome"),
+])
+def test_origem_segura(nome, esperado):
+    assert R.origem_segura(nome) == esperado
+
+
+def test_linha_de_comando():
+    linha = R.linha_de_comando(so=None, origem="app: Fulano")
+    assert linha == 'cmd.exe /d /s /c ".\\rodada_diaria.bat --forcar --esperar 0 --origem "app: Fulano""'
+    assert R.linha_de_comando(so="equatorial", origem="app: Fulano").endswith(
+        '--origem "app: Fulano" --so equatorial"')
+    with pytest.raises(ValueError):
+        R.linha_de_comando(so="sanesc; del", origem="app: Fulano")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe só existe no Windows")
+def test_comando_roda_um_bat_de_verdade_em_pasta_com_acento(tmp_path):
+    """O caminho de produção tem acento e espaço; o nome de quem disparou passa
+    por `origem_segura`. Um .bat dublê grava os argumentos que recebeu."""
+    raiz = _instalar(tmp_path / "AUTOMAÇÕES TESTE" / "agua_energia")
+    (raiz / "coletor" / "rodada_diaria.bat").write_text(
+        "@echo off\r\n"
+        'cd /d "%~dp0"\r\n'
+        'echo args=[%*]>> "logs\\rodada_agendada.log"\r\n'
+        "exit /b 3\r\n", encoding="ascii")
+    proc = R.iniciar(raiz, so="equatorial", origem=R.origem_segura('Fu"la & no'))
+    assert proc.wait(30) == 3
+    log = R.caminho_do_log(raiz).read_text(encoding="ascii")
+    assert 'args=[--forcar --esperar 0 --origem "app: Fula  no" --so equatorial]' in log
+
+
+def test_leitor_so_le_o_que_chegou_depois_e_guarda_a_linha_pela_metade(tmp_path):
+    log = tmp_path / "rodada_agendada.log"
+    log.write_text("de ontem\n", encoding="utf-8")
+    leitor = R.Leitor(log)
+    assert leitor.novas() == []
+    with open(log, "a", encoding="utf-8") as f:
+        f.write("=== RODADA 14/10/2026 10:00 ===\n[2/4] Equat")
+    assert leitor.novas() == ["=== RODADA 14/10/2026 10:00 ==="]
+    with open(log, "a", encoding="utf-8") as f:
+        f.write("orial:\n")
+    assert leitor.novas() == ["[2/4] Equatorial:"]
+
+
+def test_leitor_com_log_que_ainda_nao_existe(tmp_path):
+    log = tmp_path / "logs" / "rodada_agendada.log"
+    leitor = R.Leitor(log)
+    assert leitor.novas() == []
+    log.parent.mkdir()
+    log.write_text("primeira\n", encoding="utf-8")
+    assert leitor.novas() == ["primeira"]
+
+
+def test_resumo_do_log_pega_o_ultimo():
+    linhas = ["resumo salvo em C:\\x\\rodada_1.txt", "e-mail: enviado",
+              "resumo salvo em C:\\x\\rodada_2.txt"]
+    assert R.resumo_do_log(linhas) == Path("C:\\x\\rodada_2.txt")
+    assert R.resumo_do_log(["RODADA NÃO INICIADA: outra"]) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="trava do Windows")
+def test_em_andamento_le_a_trava_de_verdade(tmp_path):
+    import msvcrt
+    raiz = _instalar(tmp_path)
+    assert R.em_andamento(raiz) is None              # nunca rodou
+    trava = raiz / "relatorios" / R.NOME_TRAVA
+    with open(trava, "a+b") as f:
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        (raiz / "relatorios" / R.NOME_INFO).write_text(
+            '{"origem": "agendada", "inicio": "2026-10-14T05:30:00", "pid": 9}',
+            encoding="utf-8")
+        assert R.em_andamento(raiz)["origem"] == "agendada"
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+    assert R.em_andamento(raiz) is None              # info velho, trava solta
+
+
+def test_veredito_e_descrever():
+    assert "sem alertas" in R.veredito(0)
+    assert "ALERTA" in R.veredito(1)
+    assert "já estava" in R.veredito(R.CODIGO_OCUPADA)
+    assert "erro" in R.veredito(9009)
+    assert "14/10 05:30" in R.descrever({"origem": "agendada", "inicio": "2026-10-14T05:30:00"})
+    assert R.descrever({}) == "uma rodada está em andamento"
