@@ -7,7 +7,7 @@ from contratos.regras import Imovel
 class _AnxFalso:
     """O dono do navegador, de mentira: a aba só o guarda ao nascer."""
 
-    def avisar_se_ocupado(self, _quem):
+    def avisar_se_ocupado(self, _quem, *, aba=None):
         return False
 
     def submeter(self, *a, **_k):

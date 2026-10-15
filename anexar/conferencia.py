@@ -275,7 +275,7 @@ class ConferenciaFrame(ttk.Frame):
         if not ini or not fim:
             messagebox.showerror("Erro", "Datas inválidas. Use dd/mm/aaaa.")
             return
-        if self.anx.avisar_se_ocupado("a Conferência"):
+        if self.anx.avisar_se_ocupado("a Conferência", aba=self):
             return
         # TUDO que vem do formulário é lido AQUI, na thread da interface, e vai
         # por argumento. Ler `BooleanVar` é falar com o Tcl, e o Tcl é de quem

@@ -239,7 +239,7 @@ class AportesFrame(ttk.Frame):
             # Recarga que ficou esperando o comando terminar: o `_drain` roda
             # na thread do Tk e é o único laço que vê o fim de QUALQUER comando
             # desta aba (conferir, lançar, novo cadastro).
-            if self._recarga_pendente and self.anx.dona_ocupada() is not self:
+            if self._recarga_pendente and self.anx.dona_ocupada(aba=self) is not self:
                 self._recarga_pendente = False
                 self._recarregar_cadastros()
         except Exception:
@@ -476,7 +476,7 @@ class AportesFrame(ttk.Frame):
 
         Com um comando desta aba no navegador (conferir, lançar) não relê:
         `_recarregar_cadastros` zera os catálogos do ERP que ele está usando."""
-        if self.anx.dona_ocupada() is self:
+        if self.anx.dona_ocupada(aba=self) is self:
             if not self._recarga_pendente:
                 self._log("As contas novas entram nos Aportes quando o "
                           "comando atual terminar.")
@@ -505,7 +505,7 @@ class AportesFrame(ttk.Frame):
         aqui costuma ser a conta que entrou hoje, e o cache só é regravado
         na abertura. Sem o ERP a janela abre do mesmo jeito, com a opção de
         investidor desligada."""
-        if self.anx.avisar_se_ocupado("os Aportes"):
+        if self.anx.avisar_se_ocupado("os Aportes", aba=self):
             return
         self.b_novo.configure(state="disabled")
         self.anx.submeter("Aportes — novo cadastro", self._t_novo_cadastro,
@@ -672,7 +672,7 @@ class AportesFrame(ttk.Frame):
         return False
 
     def _conferir(self):
-        if self.anx.avisar_se_ocupado("os Aportes"):
+        if self.anx.avisar_se_ocupado("os Aportes", aba=self):
             return
         self.anx.submeter("Aportes — conferir cadastro", self._t_conferir,
                           dona=self)
@@ -715,7 +715,7 @@ class AportesFrame(ttk.Frame):
                 f"Criar {n} lançamento(s) no Mais Controle, "
                 f"somando {widgets.brl(total)}?\n\nIsso escreve no sistema."):
             return
-        if self.anx.avisar_se_ocupado("os Aportes"):
+        if self.anx.avisar_se_ocupado("os Aportes", aba=self):
             return
         self.b_lancar.configure(state="disabled")
         self.anx.submeter("Aportes — lançar", self._t_lancar, dona=self)

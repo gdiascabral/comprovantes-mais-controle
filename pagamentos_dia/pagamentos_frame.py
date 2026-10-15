@@ -1034,7 +1034,7 @@ class PagamentosDiaFrame(ttk.Frame):
         # Recusar ANTES de desabilitar os botões: quem sai por aqui não passa
         # mais pelo `_drain`, e a aba ficava travada — botões apagados, nada
         # rodando — até reiniciar o app.
-        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+        if self.anx.avisar_se_ocupado("os Pagamentos do Dia", aba=self):
             return
         # A planilha do período ANTERIOR morre aqui. Sem isto, `self.resultado`
         # sobrevivia à busca nova, o `_drain` reabilitava o passo 3 por causa
@@ -1520,7 +1520,7 @@ class PagamentosDiaFrame(ttk.Frame):
             return
         # Com o navegador ocupado nada vai rodar: recusar antes de apagar os
         # botões, senão a aba fica travada sem passar pelo `_drain`.
-        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+        if self.anx.avisar_se_ocupado("os Pagamentos do Dia", aba=self):
             return
         self._apurar_e_confirmar(escolhidas, depois="planilha")
 
@@ -1920,7 +1920,7 @@ class PagamentosDiaFrame(ttk.Frame):
         if not escolhidos:
             return
         fechar()
-        if self.anx.avisar_se_ocupado("os Pagamentos do Dia"):
+        if self.anx.avisar_se_ocupado("os Pagamentos do Dia", aba=self):
             return
         self.q.put(("botoes", "disabled"))
         self.worker = self.anx.submeter(
@@ -2742,7 +2742,7 @@ class PagamentosDiaFrame(ttk.Frame):
                     "Remessa",
                     "Busque os lançamentos e marque as contas primeiro.")
                 return
-            if self.anx.avisar_se_ocupado("a remessa"):
+            if self.anx.avisar_se_ocupado("a remessa", aba=self):
                 return
             self._apurar_e_confirmar(escolhidas, depois="remessa")
             return

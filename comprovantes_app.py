@@ -1018,7 +1018,7 @@ def main():
         # janela e pode abrir a aba da pessoa, e o que levantar ali com a
         # trava na mao a prenderia ate fechar o app - todo clique diria "ja
         # estao sendo atualizadas" e a abertura seguinte pularia.
-        if aba_anx.avisar_se_ocupado("a atualização das contas"):
+        if aba_anx.avisar_se_ocupado("a atualização das contas", aba=None):
             return
         if not _rodada_de_contas.acquire(blocking=False):
             messagebox.showinfo("Contas",

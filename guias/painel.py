@@ -484,7 +484,7 @@ class GuiasPainel(ttk.Frame):
             return
         if self.anx is None:
             return
-        if self.anx.avisar_se_ocupado("as Guias do mês"):
+        if self.anx.avisar_se_ocupado("as Guias do mês", aba=self.aba):
             return
         if self.aba is not None and self.aba.ocupado():
             # Mesma guarda de `varrer`: `self.aba.worker` (o envio ao
@@ -581,7 +581,7 @@ class GuiasPainel(ttk.Frame):
         if self.anx is None:
             self._tarefa = ""
             return
-        if self.anx.avisar_se_ocupado("as Guias do mês"):
+        if self.anx.avisar_se_ocupado("as Guias do mês", aba=self.aba):
             # Recusar ANTES de mexer em botão ou fila: quem sai por aqui não
             # passa mais pelo `_drain`.
             self._tarefa = ""

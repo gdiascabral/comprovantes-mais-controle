@@ -585,7 +585,7 @@ class RelatorioFrame(ttk.Frame):
                   "extratos.")
             return
 
-        if self.anx.avisar_se_ocupado("o Relatório Mensal"):
+        if self.anx.avisar_se_ocupado("o Relatório Mensal", aba=self):
             return
         self._parar.clear()
         self.q.put(("botoes", "disabled"))

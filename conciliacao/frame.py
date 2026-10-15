@@ -303,7 +303,7 @@ class ConciliacaoFrame(ttk.Frame):
         # Recusar ANTES de desabilitar os botões: quem sai por aqui não passa
         # mais pelo `_drain`, e a aba ficava travada — botões apagados, nada
         # rodando — até reiniciar o app.
-        if self.anx.avisar_se_ocupado("a Conciliação Diária"):
+        if self.anx.avisar_se_ocupado("a Conciliação Diária", aba=self):
             return
         self._parar.clear()
         self.q.put(("botoes", "disabled"))

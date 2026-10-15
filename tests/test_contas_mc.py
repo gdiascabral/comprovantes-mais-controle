@@ -322,7 +322,7 @@ class _AnxFalso:
     def __init__(self):
         self.submetidos = []
 
-    def avisar_se_ocupado(self, _quem):
+    def avisar_se_ocupado(self, _quem, *, aba=None):
         return False
 
     def submeter(self, *a, **_k):

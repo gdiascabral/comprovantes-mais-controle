@@ -203,5 +203,39 @@ def test_fechar_fecha_cada_mc_na_thread_da_vaga(ligado):
     mc_a, id_a = ligado.submeter("A", abrir, dona=a).result(timeout=5)
     mc_b, id_b = ligado.submeter("B", abrir, dona=b).result(timeout=5)
     ligado.fechar()
-    assert sorted(saidas, key=id) == sorted([(mc_a, id_a), (mc_b, id_b)], key=id)
+    assert len(saidas) == 2
+    assert set(saidas) == {(mc_a, id_a), (mc_b, id_b)}
     assert ligado._vagas == {}
+
+
+# ------------------------------------------------- os chamadores (Tarefa 2)
+_CHAMADORES = ("anexar/conferencia.py", "aportes/aportes_frame.py",
+               "comprovantes_app.py", "conciliacao/frame.py",
+               "contratos/frame.py", "guias/painel.py",
+               "pagamentos_dia/pagamentos_frame.py",
+               "relatorios/relatorio_frame.py")
+
+
+def _chamadas(arquivo: str, metodo: str, chave: str) -> list[str]:
+    import ast
+    from pathlib import Path
+    raiz_repo = Path(__file__).resolve().parents[1]
+    arvore = ast.parse((raiz_repo / arquivo).read_text(encoding="utf-8"))
+    achadas = []
+    for no in ast.walk(arvore):
+        if (isinstance(no, ast.Call) and isinstance(no.func, ast.Attribute)
+                and no.func.attr == metodo):
+            kw = [k for k in no.keywords if k.arg == chave]
+            achadas.append(ast.unparse(kw[0].value) if kw else "<faltou>")
+    return achadas
+
+
+@pytest.mark.parametrize("arquivo", _CHAMADORES)
+def test_todo_aviso_diz_a_aba_que_vai_submeter(arquivo):
+    """No central, o aviso só olha a vaga da `aba`. Se ela não for a mesma
+    dona do `submeter` daquele fluxo, o aviso olha a vaga errada: deixa
+    passar a aba que já trabalha, ou barra a que está livre."""
+    abas = _chamadas(arquivo, "avisar_se_ocupado", "aba")
+    donas = _chamadas(arquivo, "submeter", "dona")
+    assert abas and "<faltou>" not in abas
+    assert set(abas) == set(donas)
