@@ -133,11 +133,9 @@ def test_ao_abrir_mostra_a_rodada_dos_outros(raiz, tmp_path, monkeypatch):
 def test_resumo_nao_e_lido_quando_a_rodada_foi_recusada(raiz, tmp_path):
     pasta = _instalacao(tmp_path)
     resumo = pasta / "relatorios" / "velho.txt"
-    resumo.write_text("CONTEUDO DE OUTRA RODADA
-", encoding="utf-8")
+    resumo.write_text("CONTEUDO DE OUTRA RODADA\n", encoding="utf-8")
     aba, ch = _aba(raiz, pasta, _proc=_Proc([R.CODIGO_OCUPADA]),
-                   _escreve=f"resumo salvo em {resumo}
-")
+                   _escreve=f"resumo salvo em {resumo}\n")
     aba.rodar()
     aba._acompanhar()
     texto = aba.resumo.get("1.0", "end")
@@ -177,8 +175,7 @@ def test_registrar_que_quebra_nao_prende_a_aba(raiz, tmp_path):
 
 
 def test_leitor_nasce_antes_do_iniciar(raiz, tmp_path):
-    aba, ch = _aba(raiz, _instalacao(tmp_path), _escreve="[1/4] Primeira
-",
+    aba, ch = _aba(raiz, _instalacao(tmp_path), _escreve="[1/4] Primeira\n",
                    _proc=_Proc([0]))
     aba.rodar()
     aba._acompanhar()
