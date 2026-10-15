@@ -94,8 +94,12 @@ depois dele (linha inteira por vez; arquivo truncado recomeça).
   derrubaria a sessão dela no meio do lançamento. `AguaEnergiaFrame.bloqueio_do_erp()`
   devolve o texto da recusa só enquanto há rodada desta aba, COMPLETA, disparada
   com o central desligado (senão None). O `comprovantes_app.py` o registra em
-  `aba_anx.bloqueios_externos`, e `AnexarFrame.avisar_se_ocupado` o consulta
-  antes de tudo (aviso "ERP em uso", sem oferecer "abrir minha aba").
+  `aba_anx.bloqueios_externos`. Fica bloqueado, com o aviso "ERP em uso" (sem
+  oferecer "abrir minha aba"): tudo que passa por `AnexarFrame.avisar_se_ocupado`
+  (Aportes, Conciliação, Contratos, Guias, Pagamentos do Dia, Relatórios,
+  Conferência, atualizar contas) e as entradas da própria aba Anexar —
+  Buscar pagamentos, Casar e anexar, Abrir o Mais Controle e o botão
+  "↗ Minha aba no ERP".
 
 ## Sem `fechar()`, e por quê
 

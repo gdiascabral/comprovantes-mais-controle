@@ -168,6 +168,46 @@ def test_bloqueio_externo_que_levanta_e_ignorado(aba):
     assert aba.avisar_se_ocupado("a Conferência") is False
 
 
+class _Botao:
+    def __init__(self):
+        self.estados = []
+
+    def config(self, **k):
+        self.estados.append(k)
+
+
+@pytest.mark.parametrize("entrada", ["conectar", "executar", "abrir_mc", "abrir_minha_aba"])
+def test_entradas_proprias_do_anexar_recusam_com_bloqueio_externo(aba, monkeypatch, entrada):
+    """As quatro entradas que logam no ERP sem passar por avisar_se_ocupado:
+    com a rodada lançando, nada é submetido, nenhum botão muda e o aviso sai."""
+    from tkinter import messagebox
+    avisos = []
+    monkeypatch.setattr(messagebox, "showwarning", lambda *a, **k: avisos.append(a))
+    monkeypatch.setattr(messagebox, "askyesno",
+                        lambda *a, **k: pytest.fail("não devia oferecer a aba"))
+    aba.worker = None
+    aba.b0 = aba.b1 = aba.b2 = _Botao()
+    aba.garantir_sessao = lambda *a, **k: pytest.fail("não devia logar")
+    aba.mc = _MC()
+    monkeypatch.setattr(aba, "ocupado", lambda: "Conciliação")
+    aba.bloqueios_externos.append(lambda: "A rodada está lançando")
+    getattr(aba, entrada)()
+    assert aba.chamadas == []
+    assert aba.b0.estados == []
+    assert len(avisos) == 1 and avisos[0][0] == "ERP em uso"
+
+
+def test_sem_bloqueio_abrir_mc_e_minha_aba_seguem_como_antes(aba):
+    aba.worker = None
+    aba.b0 = _Botao()
+    aba.abrir_mc()
+    assert aba.b0.estados == [{"state": "disabled"}]
+    assert aba.chamadas == [("thread", "Abrir o Mais Controle")]
+    aba.chamadas.clear()
+    aba.abrir_minha_aba()
+    assert aba.chamadas == [("thread", "Minha aba no ERP")]
+
+
 def test_navegador_livre_nao_avisa_nem_pergunta(aba, monkeypatch):
     from tkinter import messagebox
     monkeypatch.setattr(messagebox, "askyesno",
