@@ -682,3 +682,25 @@ paths:
   `_gerar_html_pagamentos` e as linhas marcadas "HTML provisório" deste
   arquivo (import, botão `b_html` e as duas que o acendem e apagam), e este
   parágrafo.
+- `pagamentos_dia/agendamentos_sicoob.py` + `extratos_sicoob/pendencias.py` —
+  **"Conferir agendamentos"** (dono, 15/10/2026), botão da barra de ações,
+  sempre aceso. Confronta um HTML dos pagamentos JÁ GRAVADO (escolhido num
+  diálogo; sugere o desta sessão ou o `pagamentos_*.html` mais novo da pasta)
+  com as **transações pendentes de assinatura** de cada conta Sicoob dele, e
+  abre uma tabela por conta. **Só leitura no banco**: nada é assinado,
+  cancelado nem alterado. O Chrome é o `SicoobClient` de sempre (perfil do
+  exe, extensão, pt-BR), numa thread PRÓPRIA e não na do ERP; o login é da
+  pessoa. `sicoob_ocupado` (ligado pelo `comprovantes_app` à aba Extratos)
+  recusa começar com o mesmo perfil em uso. A conta do Sicoob sai do MESMO
+  caminho da remessa (`remessa_dia._escolher_conta`), sem cobrar convênio.
+  A API é a da tela `#/pendencia-assinatura`: `GET …/transacao-pendente/contas`
+  diz a conta ABERTA, e só se ela for a pedida vai o `POST …/consultar`
+  (`tipo` 0 = Todas), mês a mês, do dia 1 deste mês ao fim do seguinte; 400
+  "Não existem resultados" é lista vazia, qualquer outro erro é falha da conta
+  (nunca "nada pendente"). **O casamento é pelo valor em centavos e o nome só
+  desempata** — o banco escreve o recebedor do jeito dele (MEI com CNPJ na
+  frente, razão social inteira), e reembolso vai para quem pagou: valor que
+  bate com nome que não divide palavra sai âmbar ("conferir quem recebe"), não
+  erro. Sobra dos dois lados com a MESMA descrição vira "valor diferente no
+  banco" (o boleto agendado com R$ 0,00 de 15/10/2026); o resto é "não está
+  agendado" (vermelho) ou "agendado e não está no HTML" (âmbar).

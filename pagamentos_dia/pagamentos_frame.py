@@ -28,10 +28,11 @@ import subprocess
 import time
 import tkinter as tk
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from tkinter import filedialog, messagebox, ttk
 
 
+from . import agendamentos_sicoob
 from . import baixa_erp
 from . import confirmacao
 from . import html_pagamentos          # HTML provisório (ver o módulo)
@@ -398,6 +399,15 @@ class PagamentosDiaFrame(ttk.Frame):
         self.q = queue.Queue()
         self.worker = None
         self._parar = Event()
+        #: O último HTML geral gravado nesta sessão — o que o "Conferir
+        #: agendamentos" sugere primeiro.
+        self._html_geral: Path | None = None
+        #: A leitura do Sicoob em andamento (thread própria: é o navegador do
+        #: banco, não o do ERP — ver `_conferir_agendamentos`).
+        self._agendamentos = None
+        #: Quem está com o Chrome do Sicoob agora (a aba Extratos), ou None.
+        #: Quem monta as abas liga isto; sozinho, ninguém o usa.
+        self.sicoob_ocupado = lambda: None
         self.lancamentos: list[dict] = []
         self.anexos: dict = {}
         #: Títulos cuja lista de anexos não foi lida (falha de rede): não são
@@ -641,7 +651,13 @@ class PagamentosDiaFrame(ttk.Frame):
                                     command=self._gerar_html_pagamentos,
                                     state="disabled")
         self.b_html.pack(side="left", padx=px((8, 0)))
-        self.b_abrir_rem = widgets.Botao(btns, "📂  Abrir local da remessa",
+        # Sempre aceso: confere um HTML já GRAVADO contra o que está agendado
+        # no Sicoob, e o HTML pode ser de uma rodada que o app nem tem aberta.
+        self.b_agend = widgets.Botao(btns, "🔎  Conferir agendamentos",
+                                     papel="neutro",
+                                     command=self._conferir_agendamentos)
+        self.b_agend.pack(side="left", padx=px((8, 0)))
+        self.b_abrir_rem =widgets.Botao(btns, "📂  Abrir local da remessa",
                                          papel="neutro",
                                          command=self._abrir_remessa,
                                          state="disabled")
@@ -755,6 +771,7 @@ class PagamentosDiaFrame(ttk.Frame):
             return
         for linha in gerados.registro():
             self._log(linha)
+        self._html_geral = gerados.geral
         try:
             os.startfile(gerados.geral)                      # noqa: S606
         except Exception:                                    # noqa: BLE001
@@ -762,6 +779,214 @@ class PagamentosDiaFrame(ttk.Frame):
                 subprocess.Popen(["explorer", str(gerados.geral)])
             except Exception as e:                           # noqa: BLE001
                 self._log(f"[!] não consegui abrir o HTML: {e}")
+
+    # ------------------------------------------- conferir agendamentos (Sicoob)
+    def _html_sugerido(self) -> Path | None:
+        """O HTML geral a oferecer primeiro: o desta sessão ou, sem ele, o
+        `pagamentos_*.html` mais novo da pasta da planilha. O de pessoa física
+        não serve (não é pago pelo SicoobNet) e fica de fora."""
+        if self._html_geral and self._html_geral.exists():
+            return self._html_geral
+        pasta = (self.ultimo_arquivo.parent if self.ultimo_arquivo
+                 else Path(self.v_pasta.get().strip() or "."))
+        try:
+            candidatos = [p for p in pasta.glob("pagamentos_*.html")
+                          if "pessoa_fisica" not in p.name]
+        except OSError:
+            return None
+        return max(candidatos, key=lambda p: p.stat().st_mtime, default=None)
+
+    def _conferir_agendamentos(self):
+        """Confronta um HTML dos pagamentos com o que está AGENDADO no Sicoob.
+
+        Pedido do dono em 15/10/2026: agendar pelo HTML e, antes de assinar,
+        conferir se cada agendamento bate — valor, quem recebe e se nada
+        ficou de fora. A regra é `agendamentos_sicoob`; a leitura do banco é
+        `extratos_sicoob.pendencias`, SÓ LEITURA (nada é assinado, cancelado
+        nem alterado no banco).
+
+        Abre o Chrome do Sicoob como a aba Extratos abre (`SicoobClient`: o
+        mesmo perfil, a extensão e o idioma pt-BR que fazem o banco
+        reconhecer o PC) — e por isso numa thread PRÓPRIA, nunca na do ERP:
+        é outro site e outro login. O login é da pessoa, como nos extratos.
+        """
+        if self._agendamentos is not None and self._agendamentos.is_alive():
+            messagebox.showinfo("Conferir agendamentos",
+                                "A conferência anterior ainda está rodando.")
+            return
+        quem = self.sicoob_ocupado()
+        if quem:
+            messagebox.showinfo(
+                "Conferir agendamentos",
+                f"O Chrome do Sicoob está em uso ({quem}). Espere terminar: "
+                "os dois usariam o mesmo perfil do banco.")
+            return
+        sugerido = self._html_sugerido()
+        escolhido = filedialog.askopenfilename(
+            title="Qual HTML dos pagamentos conferir?",
+            initialdir=str(sugerido.parent) if sugerido else None,
+            initialfile=sugerido.name if sugerido else None,
+            filetypes=[("HTML dos pagamentos", "pagamentos_*.html"),
+                       ("HTML", "*.html")])
+        if not escolhido:
+            return
+        caminho = Path(escolhido)
+        try:
+            contas = agendamentos_sicoob.ler_html(
+                caminho.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            messagebox.showwarning("Conferir agendamentos",
+                                   widgets.recado_de_erro(
+                                       e, "Não consegui ler este HTML."))
+            return
+        try:
+            mapa_mc, empresas = _carregar_mapas()
+        except Exception as e:                               # noqa: BLE001
+            messagebox.showwarning("Conferir agendamentos",
+                                   widgets.recado_de_erro(
+                                       e, "Não consegui ler o cadastro de contas."))
+            return
+
+        no_sicoob, fora = [], []
+        for c in contas:
+            numero, motivo = agendamentos_sicoob.conta_sicoob(
+                str(c.get("nome") or ""), mapa_mc, empresas)
+            (no_sicoob if numero else fora).append(
+                (c, numero, motivo))
+        if not no_sicoob:
+            messagebox.showinfo(
+                "Conferir agendamentos",
+                "Nenhuma conta deste HTML é do Sicoob — não há o que conferir "
+                "no SicoobNet.")
+            return
+        inicio, fim = agendamentos_sicoob.periodo_da_consulta(
+            datetime.date.today())
+        if not messagebox.askokcancel(
+                "Conferir agendamentos",
+                f"Vou abrir o Chrome do Sicoob e ler as transações pendentes de "
+                f"assinatura de {len(no_sicoob)} conta(s), de "
+                f"{inicio:%d/%m} a {fim:%d/%m/%Y}.\n\n"
+                "É só leitura: nada é assinado, cancelado nem alterado no "
+                "banco.\n\nFaça o login quando a janela abrir."):
+            return
+
+        self._log("")
+        self._log(f"Conferir agendamentos: {caminho.name}")
+        for c, _n, motivo in fora:
+            self._log(f"  fora da conferência: {c.get('nome')} — {motivo}")
+        self.b_agend.configure(state="disabled")
+        self._agendamentos = Thread(
+            target=self._t_agendamentos, name="sicoob-agendamentos",
+            args=(caminho, no_sicoob, fora, inicio, fim), daemon=True)
+        self._agendamentos.start()
+
+    def _t_agendamentos(self, caminho, no_sicoob, fora, inicio, fim):
+        """Thread do Sicoob. Só fala com a tela pela fila."""
+        confrontos = [agendamentos_sicoob.Confronto(
+            conta_erp=str(c.get("nome") or ""), motivo=motivo)
+            for c, _n, motivo in fora]
+        try:
+            from extratos_sicoob import pendencias
+            from extratos_sicoob.sicoob_client import SicoobClient
+
+            registrar = lambda m: self._log(f"  {m}")       # noqa: E731
+            with SicoobClient(log=registrar) as cli:
+                cli.aguardar_login()
+                for c, numero, _m in no_sicoob:
+                    nome = str(c.get("nome") or "")
+                    conf = agendamentos_sicoob.Confronto(conta_erp=nome,
+                                                         numero=numero)
+                    try:
+                        lidas = pendencias.ler_conta(cli, numero, inicio, fim)
+                    except Exception as e:                   # noqa: BLE001
+                        conf.motivo = f"o Sicoob não respondeu: {e}"
+                    else:
+                        conf.linhas = agendamentos_sicoob.confrontar(
+                            c.get("entries") or [], lidas)
+                    confrontos.append(conf)
+                    self._log(f"  {nome} ({numero}): {conf.resumo()}")
+        except Exception as e:                               # noqa: BLE001
+            self._log(f"[!] Conferir agendamentos: {e}")
+            if not any(c.conferida for c in confrontos):
+                self.q.put(("agendamentos", None))
+                return
+        self.q.put(("agendamentos", (caminho, confrontos)))
+
+    def _janela_agendamentos(self, caminho, confrontos):
+        """A tabela do confronto: uma linha por conta e, debaixo dela, as
+        linhas que não batem primeiro. Só leitura — nada aqui mexe no banco."""
+        A = agendamentos_sicoob
+        conferidas = [c for c in confrontos if c.conferida]
+        com_diferenca = [c for c in conferidas if c.pior != A.OK]
+
+        top = tk.Toplevel(self)
+        top.title(f"Agendamentos no Sicoob × {caminho.name}")
+        top.geometry(f"{px(1280)}x{px(640)}")
+        widgets.barra_de_titulo(top)
+        moldura = ttk.Frame(top, padding=14)
+        moldura.pack(fill="both", expand=True)
+        ttk.Label(moldura, style="Titulo.TLabel",
+                  text=f"{len(conferidas)} conta(s) conferida(s) — "
+                       f"{len(conferidas) - len(com_diferenca)} batem, "
+                       f"{len(com_diferenca)} com diferença").pack(anchor="w")
+        ttk.Label(moldura, style="Apoio.TLabel",
+                  text="Casado pelo valor; o nome só desempata. Âmbar é para "
+                       "olhar antes de assinar, vermelho é diferença de "
+                       "dinheiro.").pack(anchor="w", pady=px((2, 8)))
+
+        colunas = ("situacao", "html", "banco", "no_html", "no_banco")
+        tabela = ttk.Treeview(moldura, columns=colunas, show="tree headings",
+                              height=18)
+        tabela.heading("#0", text="Conta")
+        tabela.column("#0", width=px(260), anchor="w")
+        for chave, titulo, larg, ancora in (
+                ("situacao", "Situação", 230, "w"),
+                ("html", "Valor no HTML", 110, "e"),
+                ("banco", "Valor no banco", 110, "e"),
+                ("no_html", "No HTML", 300, "w"),
+                ("no_banco", "No banco", 300, "w")):
+            tabela.heading(chave, text=titulo)
+            tabela.column(chave, width=larg, anchor=ancora)
+        widgets.estilo_tabela(tabela, ordenavel=False)
+        rolagem = ttk.Scrollbar(moldura, orient="vertical",
+                                command=tabela.yview)
+        tabela.configure(yscrollcommand=rolagem.set)
+        rolagem.pack(side="right", fill="y")
+        tabela.pack(fill="both", expand=True)
+
+        def brl(valor):
+            return "" if valor is None else relatorio.brl(float(valor))
+
+        i = 0
+        for conf in confrontos:
+            estado = ("info" if not conf.conferida
+                      else A.ESTADO[conf.pior])
+            pai = tabela.insert(
+                "", "end", text=conf.conta_erp, open=conf.pior != A.OK,
+                values=(conf.resumo(),
+                        brl(conf.total_html) if conf.conferida else "",
+                        brl(conf.total_banco) if conf.conferida else "",
+                        "", conf.numero),
+                tags=widgets.linha_zebrada(i, estado))
+            i += 1
+            for li in conf.linhas:
+                h, b = li.html or {}, li.banco or {}
+                no_html = " · ".join(x for x in (
+                    str(h.get("favorecido") or ""),
+                    str(h.get("descricao") or "")) if x)
+                no_banco = " · ".join(x for x in (
+                    str(b.get("detalhe") or ""),
+                    str(b.get("nomeTransacao") or "")) if x)
+                tabela.insert(pai, "end", text="", values=(
+                    li.frase, brl(li.valor_html), brl(li.valor_banco),
+                    no_html, no_banco),
+                    tags=widgets.linha_zebrada(i, A.ESTADO[li.situacao]))
+                i += 1
+
+        rodape = ttk.Frame(moldura)
+        rodape.pack(fill="x", pady=px((10, 0)))
+        widgets.Botao(rodape, "Fechar", papel="neutro",
+                      command=top.destroy).pack(side="right")
 
     def _abrir_remessa(self):
         """Abre a pasta do `.REM` com o arquivo já selecionado.
@@ -999,6 +1224,12 @@ class PagamentosDiaFrame(ttk.Frame):
                     self.ultimo_arquivo = valor
                     self.b_abrir.configure(state="normal")
                     self.b_html.configure(state="normal")   # HTML provisório
+                elif tipo == "agendamentos":
+                    # Fim da leitura do Sicoob: a tabela abre aqui, na thread
+                    # da interface, e o botão volta a aceitar clique.
+                    self.b_agend.configure(state="normal")
+                    if valor is not None:
+                        self.after_idle(self._janela_agendamentos, *valor)
                 elif tipo == "remessa_gerada":
                     self.ultimas_remessas = list(valor)
                     self.b_abrir_rem.configure(state="normal")

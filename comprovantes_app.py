@@ -316,6 +316,9 @@ def main():
     # Extratos Sicoob NÃO recebe o aba_anx: é outro site e outro login, então
     # tem navegador e thread próprios (ver extratos_frame.py).
     aba_ext = ExtratosSicoobFrame(conteudo)
+    # O "Conferir agendamentos" da Remessa/Retorno abre o MESMO perfil do
+    # Chrome do Sicoob: com os extratos rodando, os dois brigariam por ele.
+    aba_pag.sicoob_ocupado = aba_ext.ocupado
     # Conciliação volta a dividir navegador e thread do Anexar: é o mesmo ERP,
     # e ele só aceita uma sessão por usuário.
     aba_con = ConciliacaoFrame(conteudo, aba_anx)
