@@ -17,6 +17,7 @@ a tela (`frame.py`) que avisa do segundo caso.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -31,6 +32,8 @@ NOME_TRAVA = "RODADA_EM_ANDAMENTO.trava"
 NOME_INFO = "RODADA_EM_ANDAMENTO.json"
 SO_PERMITIDOS = ("equatorial",)          # os `choices` do --so de lá
 _SEM_JANELA = 0x08000000                 # CREATE_NO_WINDOW
+_ORIGEM_OK = re.compile(r"app: [A-Za-z0-9 .@_-]+\Z")   # o que origem_segura produz
+_TRANCADA = (errno.EACCES, errno.EDEADLK)             # o que o msvcrt levanta
 _RESUMO = re.compile(r"resumo salvo em (.+?)\s*$")
 
 
@@ -62,12 +65,22 @@ def linha_de_comando(*, so: str | None, origem: str) -> str:
     endurecido) o `cmd` não procura na pasta atual."""
     if so is not None and so not in SO_PERMITIDOS:
         raise ValueError(f"--so desconhecido: {so!r}")
-    if '"' in origem:
-        raise ValueError("origem com aspas: passe por origem_segura")
+    if not _ORIGEM_OK.match(origem):
+        raise ValueError("origem fora do formato: passe por origem_segura")
     args = f'--forcar --esperar 0 --origem "{origem}"'
     if so:
         args += f" --so {so}"
-    return f'cmd.exe /d /s /c ".\\rodada_diaria.bat {args}"'
+    return f'"{caminho_do_cmd()}" /d /s /c ".\\rodada_diaria.bat {args}"'
+
+
+def caminho_do_cmd() -> str:
+    """O `cmd.exe` pelo caminho completo (COMSPEC, ou System32): o nome solto
+    seria procurado primeiro na pasta do exe do app."""
+    comspec = (os.environ.get("COMSPEC") or "").strip()
+    if comspec:
+        return comspec
+    raiz = os.environ.get("SystemRoot") or r"C:\Windows"
+    return os.path.join(raiz, "System32", "cmd.exe")
 
 
 def iniciar(pasta: Path, *, so: str | None, origem: str) -> subprocess.Popen:
@@ -100,6 +113,9 @@ class Leitor:
     def novas(self) -> list[str]:
         try:
             with open(self.caminho, "rb") as f:
+                if os.fstat(f.fileno()).st_size < self._pos:
+                    self._pos = 0            # log apagado/truncado: recomeça
+                    self._resto = b""
                 f.seek(self._pos)
                 pedaco = f.read()
         except OSError:
@@ -119,7 +135,10 @@ def resumo_do_log(linhas: list[str]) -> Path | None:
 
 
 def em_andamento(pasta: Path) -> dict | None:
-    """O info de quem roda agora ({} se trancada sem info), ou None.
+    """O info de quem roda agora, ou None só quando comprovadamente livre.
+
+    {} = em andamento sem info, ou não deu para saber (erro ao abrir a trava,
+    errno inesperado): em qualquer dos dois, não dispare.
 
     Testa a trava de verdade (tranca e solta na hora): o `.json` sozinho pode
     ter sobrado de uma rodada que morreu no meio."""
@@ -132,11 +151,13 @@ def em_andamento(pasta: Path) -> dict | None:
     except ImportError:
         return None
     try:
-        with open(trava, "a+b") as f:
+        with _abrir_trava(trava) as f:
             f.seek(0)
             try:
                 msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError:
+            except OSError as e:
+                if e.errno not in _TRANCADA:
+                    return {}                # não sei: não dispare
                 try:
                     dados = json.loads((rel / NOME_INFO).read_text(encoding="utf-8"))
                 except (OSError, ValueError):
@@ -145,8 +166,12 @@ def em_andamento(pasta: Path) -> dict | None:
             f.seek(0)
             msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
     except OSError:
-        return None
+        return {}        # não consegui nem olhar a trava: "livre" seria mentira
     return None
+
+
+def _abrir_trava(trava: Path):
+    return open(trava, "a+b")
 
 
 def descrever(info: dict | None) -> str:

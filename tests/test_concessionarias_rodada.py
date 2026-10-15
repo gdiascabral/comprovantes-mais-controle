@@ -36,11 +36,30 @@ def test_origem_segura(nome, esperado):
 
 def test_linha_de_comando():
     linha = R.linha_de_comando(so=None, origem="app: Fulano")
-    assert linha == 'cmd.exe /d /s /c ".\\rodada_diaria.bat --forcar --esperar 0 --origem "app: Fulano""'
+    cmd = R.caminho_do_cmd()
+    assert linha == (f'"{cmd}" /d /s /c ".\\rodada_diaria.bat --forcar --esperar 0 '
+                     '--origem "app: Fulano""')
     assert R.linha_de_comando(so="equatorial", origem="app: Fulano").endswith(
         '--origem "app: Fulano" --so equatorial"')
     with pytest.raises(ValueError):
         R.linha_de_comando(so="sanesc; del", origem="app: Fulano")
+
+
+@pytest.mark.parametrize("origem", ['app: Fu"la', "app: %X%", "app: Fu&la",
+                                    "Fulano", "app: ", "app: a\nb", "app: a|b"])
+def test_linha_de_comando_recusa_origem_fora_do_formato(origem):
+    with pytest.raises(ValueError):
+        R.linha_de_comando(so=None, origem=origem)
+
+
+def test_cmd_pelo_caminho_completo(monkeypatch):
+    monkeypatch.setenv("COMSPEC", "C:\\Teste\\cmd.exe")
+    assert R.caminho_do_cmd() == "C:\\Teste\\cmd.exe"
+    assert R.linha_de_comando(so=None, origem="app: Fulano").startswith(
+        '"C:\\Teste\\cmd.exe" /d /s /c ')
+    monkeypatch.delenv("COMSPEC")
+    monkeypatch.setenv("SystemRoot", "C:\\Win")
+    assert R.caminho_do_cmd() == os.path.join("C:\\Win", "System32", "cmd.exe")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="cmd.exe só existe no Windows")
@@ -104,6 +123,77 @@ def test_em_andamento_le_a_trava_de_verdade(tmp_path):
         f.seek(0)
         msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
     assert R.em_andamento(raiz) is None              # info velho, trava solta
+
+
+@pytest.mark.skipif(os.name != "nt", reason="trava do Windows")
+def test_em_andamento_trancada_sem_json_da_vazio(tmp_path):
+    import msvcrt
+    raiz = _instalar(tmp_path)
+    with open(raiz / "relatorios" / R.NOME_TRAVA, "a+b") as f:
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        assert R.em_andamento(raiz) == {}
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def test_em_andamento_nao_consegue_abrir_a_trava_nao_diz_livre(tmp_path, monkeypatch):
+    raiz = _instalar(tmp_path)
+    (raiz / "relatorios" / R.NOME_TRAVA).write_bytes(b"")
+
+    def nega(_):
+        raise PermissionError(13, "negado")
+    monkeypatch.setattr(R, "_abrir_trava", nega)
+    assert R.em_andamento(raiz) == {}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="msvcrt")
+def test_em_andamento_errno_inesperado_no_locking_da_vazio(tmp_path, monkeypatch):
+    import msvcrt
+    raiz = _instalar(tmp_path)
+    (raiz / "relatorios" / R.NOME_TRAVA).write_bytes(b"")
+
+    def quebra(*a):
+        raise OSError(5, "erro de E/S")
+    monkeypatch.setattr(msvcrt, "locking", quebra)
+    assert R.em_andamento(raiz) == {}
+
+
+def test_leitor_recomeca_quando_o_log_encolhe(tmp_path):
+    log = tmp_path / "rodada_agendada.log"
+    log.write_text("antiga um\nantiga dois\n", encoding="utf-8")
+    leitor = R.Leitor(log)
+    with open(log, "a", encoding="utf-8") as f:
+        f.write("nova\nmeia")
+    assert leitor.novas() == ["nova"]
+    log.write_text("zero\nlinha", encoding="utf-8")     # menor que a posição
+    assert leitor.novas() == ["zero"]                   # "meia" velho descartado
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(" completa\n")
+    assert leitor.novas() == ["linha completa"]
+
+
+def test_leitor_letra_partida_entre_duas_escritas_sai_inteira(tmp_path):
+    log = tmp_path / "rodada_agendada.log"
+    log.write_bytes(b"")
+    leitor = R.Leitor(log)
+    dados = "ação feita\n".encode("utf-8")           # "ç" ocupa dois bytes
+    corte = dados.index("ç".encode("utf-8")) + 1     # no meio dela
+    with open(log, "ab") as f:
+        f.write(dados[:corte])
+    assert leitor.novas() == []
+    with open(log, "ab") as f:
+        f.write(dados[corte:])
+    assert leitor.novas() == ["ação feita"]
+
+
+def test_leitor_linhas_crlf_saem_sem_cr(tmp_path):
+    log = tmp_path / "rodada_agendada.log"
+    log.write_bytes(b"")
+    leitor = R.Leitor(log)
+    with open(log, "ab") as f:
+        f.write(b"um\r\ndois\r\n")
+    assert leitor.novas() == ["um", "dois"]
 
 
 def test_veredito_e_descrever():
