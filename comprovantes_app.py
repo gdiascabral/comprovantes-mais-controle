@@ -45,6 +45,7 @@ from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
+from concessionarias.frame import AguaEnergiaFrame
 from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
 
 
@@ -325,6 +326,14 @@ def main():
     # site e terceiro login, ver acessorias/portal.py) — mas recebe o
     # aba_anx porque o bloco de guias dentro dela lança no MESMO ERP.
     aba_acs = AcessoriasFrame(conteudo, aba_anx)
+    # Água e energia não tem navegador: a rodada é outro processo (o mesmo
+    # .bat da tarefa agendada). Recebe o aba_anx só para saber se o Anexar
+    # está usando o ERP quando o Chrome central está desligado.
+    aba_agu = AguaEnergiaFrame(conteudo, aba_anx)
+    # Com o Chrome central desligado, a rodada completa loga no ERP por HTTP
+    # com o mesmo usuário: iniciar qualquer aba do ERP no meio derrubaria a
+    # sessão dela. O Anexar recusa o começo (ver `avisar_se_ocupado`).
+    aba_anx.bloqueios_externos.append(aba_agu.bloqueio_do_erp)
     # Baixar Comprovantes tem navegador PRÓPRIO, como os Extratos Sicoob: são
     # os sites dos bancos, com login e sessão que não têm nada a ver com o ERP.
     # O cadastro de contas é o mesmo `contas_sicoob.json` que os Extratos leem
@@ -338,7 +347,8 @@ def main():
     quadros = {"ini": aba_ini, "sep": aba_sep, "anx": aba_anx,
                "conf": aba_conf, "apt": aba_apt, "rel": aba_rel,
                "pag": aba_pag, "ext": aba_ext, "con": aba_con,
-               "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc}
+               "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc,
+               "agu": aba_agu}
     atual = {"nome": None}
     itens = {}
 
@@ -484,7 +494,8 @@ def main():
     # retorno CNAB, e "Saldo de pagamentos" existe para dizer quanto falta em
     # cada conta para os pagamentos do dia fecharem.
     _grupo("diario", "DIÁRIO", (("pag", "🗓", "Remessa/Retorno"),
-                                ("con", "⚖", "Saldo de pagamentos")))
+                                ("con", "⚖", "Saldo de pagamentos"),
+                                ("agu", "💧", "Água e energia")))
     _grupo("mensal", "MENSAL", (("rel", "📊", "Relatório Mensal"),
                                 ("ext", "🏦", "Extratos Sicoob"),
                                 ("ctr", "📑", "Contratos"),
@@ -619,6 +630,9 @@ def main():
                 lambda: ("ext", aba_ext.ocupado()),
                 # ...e o do portal do escritório, pelo mesmo motivo
                 lambda: ("acs", aba_acs.ocupado()),
+                # A rodada do água e energia é outro processo, sem navegador
+                # do app — mas leva uma hora, e o ● diz onde ela está.
+                lambda: ("agu", aba_agu.ocupado()),
                 # A Separar não tem navegador nenhum — o trabalho dela é OCR e
                 # disco. Entra aqui mesmo assim porque um PDF de 107 páginas
                 # leva minutos, e a aba que não responde parece parada: o ●

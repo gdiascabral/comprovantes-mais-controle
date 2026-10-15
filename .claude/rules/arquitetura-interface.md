@@ -53,7 +53,9 @@ paths:
   aba ficaria destacada e invisível.
   **O pulso de 600 ms (`_pulso`) pergunta a TRÊS navegadores, não a um**: o do
   ERP (via `aba_anx.dona_ocupada()` e `aba_anx.ocupado()`) e os de
-  `extratos_sicoob/` e `acessorias/`, que são processo e login à parte. A
+  `extratos_sicoob/` e `acessorias/`, que são processo e login à parte; a aba
+  `agu` (Água e energia) também entra na varredura, sem navegador do app: a
+  rodada é um processo à parte e leva uma hora. A
   Separar entra na mesma varredura sem ter navegador nenhum — o trabalho dela é
   OCR e disco, mas um PDF de 107 páginas leva minutos e a aba que não responde
   parece parada; vem por último para nunca disputar o sinal com quem está com

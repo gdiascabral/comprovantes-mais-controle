@@ -233,6 +233,10 @@ class AnexarFrame(ttk.Frame):
         self._rotulo_atual = None
         self.mc = None                       # MCClient aberto entre as etapas
         self.api = None
+        # Recusas de fora do navegador do app: callables sem argumento que
+        # devolvem o texto da recusa ou None (ver `avisar_se_ocupado`). Hoje
+        # só a aba Água e energia (a rodada loga no ERP por HTTP).
+        self.bloqueios_externos: list = []
         # O pulso do navegador (ver `_pulsar_navegador`) e a trava que o
         # desliga ao sair — depois do `fechar()` o executor não aceita nada.
         self._pulso_nav = None
@@ -431,6 +435,8 @@ class AnexarFrame(ttk.Frame):
     def abrir_mc(self):
         if self.worker and not self.worker.done():
             return
+        if self._recusar_se_bloqueado("Abrir o Mais Controle"):
+            return
         self.b0.config(state="disabled")
         self.worker = self.submeter("Abrir o Mais Controle", self._t_abrir)
 
@@ -469,8 +475,38 @@ class AnexarFrame(ttk.Frame):
             return getattr(self, "_dona_atual", self)
         return None
 
+    def _bloqueio_externo(self) -> str | None:
+        """O texto do primeiro bloqueio externo ativo, ou None. Exceção num
+        bloqueio é logada e ignorada."""
+        for bloqueio in getattr(self, "bloqueios_externos", ()):
+            try:
+                texto = bloqueio()
+            except Exception:                                # noqa: BLE001
+                util.log("anexar").warning("bloqueio externo falhou; ignorado",
+                                           exc_info=True)
+                continue
+            if texto:
+                return texto
+        return None
+
+    def _recusar_se_bloqueado(self, dona: str) -> bool:
+        """True (e avisa) se algo fora do navegador do app usa o ERP agora.
+
+        Sem oferecer "abrir minha aba": abrir ou logar derrubaria a sessão do
+        processo que está lançando. Chamado ANTES de qualquer mudança de
+        estado ou de botão."""
+        texto = self._bloqueio_externo()
+        if not texto:
+            return False
+        messagebox.showwarning(
+            "ERP em uso",
+            f"{texto}.\n\n{dona} precisa esperar a rodada terminar.")
+        return True
+
     def avisar_se_ocupado(self, dona: str) -> bool:
         """True (e mostra o aviso) se o navegador já estiver em uso."""
+        if self._recusar_se_bloqueado(dona):
+            return True
         quem = self.ocupado()
         if not quem:
             return False
@@ -502,6 +538,8 @@ class AnexarFrame(ttk.Frame):
 
         `mc.fechado` e não `mc.vivo()`: este método roda na thread da
         interface, e `vivo()` fala com o navegador — coisa da thread dele."""
+        if self._recusar_se_bloqueado("A sua aba no ERP"):
+            return
         mc = self.mc
         ocupado = self.ocupado()
         if mc is not None and not mc.fechado and ocupado:
@@ -1037,6 +1075,8 @@ class AnexarFrame(ttk.Frame):
 
     # ---------------------------------------------------------------- etapa 2
     def conectar(self):
+        if self._recusar_se_bloqueado("Buscar pagamentos"):
+            return
         ini, fim = _data_api(self.v_ini.get()), _data_api(self.v_fim.get())
         if not ini or not fim:
             messagebox.showerror("Erro", "Datas inválidas. Use dd/mm/aaaa."); return
@@ -1126,6 +1166,8 @@ class AnexarFrame(ttk.Frame):
     # ---------------------------------------------------------------- etapa 2
     def executar(self):
         if self.worker and not self.worker.done():
+            return
+        if self._recusar_se_bloqueado("Casar e anexar"):
             return
         # TUDO que vem do formulário é lido AQUI, na thread da interface, e vai
         # por argumento para o worker. Ler `StringVar`/`BooleanVar` é falar com

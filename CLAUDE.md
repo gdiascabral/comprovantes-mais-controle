@@ -26,7 +26,8 @@ sem force-push e sem apagar a branch). O merge dispara o GitHub Actions
    inicio/*.py + separar_renomear/*.py + anexar/*.py +
    baixar_comprovantes/*.py + aportes/*.py + relatorios/*.py +
    pagamentos_dia/*.py + extratos_sicoob/*.py + conciliacao/*.py +
-   conciliacao/erp/*.py + contratos/*.py + acessorias/*.py + **erp/*.py** +
+   conciliacao/erp/*.py + contratos/*.py + acessorias/*.py + guias/*.py +
+   concessionarias/*.py + **erp/*.py** +
    cnab240/*.py + **cnab240/spec/*.json** + **nuvem/*.py exceto migrar.py** +
    versao.txt + motor_minimo.txt + icone.ico).
    **Pasta nova de aba OU arquivo novo na raiz = linha nova aqui**, senão o
@@ -115,7 +116,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 - Mudanças em `comprovantes_app.py`, `util.py`, `widgets.py`, `inicio/`,
   `separar_renomear/`, `anexar/`, `baixar_comprovantes/`, `aportes/`,
   `relatorios/`, `pagamentos_dia/`, `extratos_sicoob/`, `contratos/`,
-  `conciliacao/`, `acessorias/`, `cnab240/`, `nuvem/` e `erp/` → chegam
+  `conciliacao/`, `acessorias/`, `guias/`, `concessionarias/`, `cnab240/`, `nuvem/` e `erp/` → chegam
   sozinhas ao usuário no próximo abrir, **depois de liberadas**. Commitar e
   esperar a build deixou de bastar: falta virar a chave.
 - Mudanças em `motor.py`, `atualizador.py`, dependências novas no
@@ -242,6 +243,7 @@ carregar), **leia o arquivo da pasta antes de mexer nela**.
 | extratos_sicoob/ | `.claude/rules/arquitetura-extratos-sicoob.md` |
 | contratos/ | `.claude/rules/arquitetura-contratos.md` |
 | acessorias/ | `.claude/rules/arquitetura-acessorias.md` |
+| concessionarias/ | `.claude/rules/arquitetura-concessionarias.md` |
 | ferramentas/ | `.claude/rules/arquitetura-ferramentas.md` |
 | cadastro na nuvem, NSA e runbooks | `.claude/rules/nuvem-e-remessas.md` |
 
@@ -421,7 +423,7 @@ Texto novo sobre uma pasta vai para o arquivo dela, não para cá.
   vaivém real entre quem usa a máquina e uma suíte lançada do terminal em
   primeiro plano.
 - **Mudança visual passa pela galeria, antes e depois**:
-  `python -m ferramentas.galeria`, as 12 telas nos dois temas, e a comparação é
+  `python -m ferramentas.galeria`, as 13 telas nos dois temas, e a comparação é
   o olho de quem mexeu. **Os PNG não vão para o PR** — a tela pode carregar nome
   de empresa vindo do cache, e o repositório é público; o que vai é a diferença
   MEDIDA (o PR #15 relatou 6.605 px trocados no Anexar e 0 px no Início, e o

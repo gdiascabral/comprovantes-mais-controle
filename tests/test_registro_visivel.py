@@ -94,6 +94,7 @@ def _abas_com_registro(conteudo):
     from conciliacao.frame import ConciliacaoFrame
     from contratos.frame import ContratosFrame
     from acessorias.frame import AcessoriasFrame
+    from concessionarias.frame import AguaEnergiaFrame
     from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
 
     quadros, faltaram = {}, {}
@@ -109,6 +110,7 @@ def _abas_com_registro(conteudo):
     _montar("sep", lambda: SepararFrame(conteudo))
     _montar("ext", lambda: ExtratosSicoobFrame(conteudo))
     _montar("acs", lambda: AcessoriasFrame(conteudo))
+    _montar("agu", lambda: AguaEnergiaFrame(conteudo, pasta=None))
     _montar("bxc", lambda: ComprovantesFrame(conteudo))
     if anx is not None:
         _montar("conf", lambda: ConferenciaFrame(conteudo, anx))
@@ -132,6 +134,7 @@ ABAS = {
     "ext": "Extratos Sicoob",
     "ctr": "Contratos",
     "acs": "Acessorias",
+    "agu": "Água e energia",
     "bxc": "Baixar Comprovantes",
 }
 

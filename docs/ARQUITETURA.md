@@ -61,7 +61,8 @@ Não voltar a discutir sem motivo novo:
          |               orquestram; nunca calculam
          v
   3. ADAPTADORES ....... anexar/mc_api.py, conciliacao/erp/, nuvem/rest.py,
-         |               baixar_comprovantes/, extratos_sicoob/, acessorias/
+         |               baixar_comprovantes/, extratos_sicoob/, acessorias/,
+         |               concessionarias/ (dispara outro processo)
          |               falam com o mundo; traduzem erro em exceção com NOME
          v
   2. NÚCLEO PURO ....... util.py, cnab240/, conciliacao/pipeline|rules|parsing,
