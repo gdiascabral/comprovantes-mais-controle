@@ -454,7 +454,7 @@ class ContratosFrame(ttk.Frame):
 
     def _abrir_anexo(self, achado, anexo):
         """Baixa e abre o anexo para a pessoa olhar antes de escolher."""
-        if self.anx.avisar_se_ocupado("abrir o anexo"):
+        if self.anx.avisar_se_ocupado("abrir o anexo", aba=self):
             return
         self.worker = self.anx.submeter("Contratos — abrir anexo",
                                         self._t_abrir, achado, dict(anexo),
@@ -480,7 +480,7 @@ class ContratosFrame(ttk.Frame):
                                                   "pasta."))
 
     def buscar(self):
-        if self.anx.avisar_se_ocupado("os Contratos"):
+        if self.anx.avisar_se_ocupado("os Contratos", aba=self):
             return
         self._parar.clear()
         self.log.delete("1.0", "end")
@@ -489,7 +489,7 @@ class ContratosFrame(ttk.Frame):
                                         dona=self)
 
     def arquivar(self):
-        if self.anx.avisar_se_ocupado("os Contratos"):
+        if self.anx.avisar_se_ocupado("os Contratos", aba=self):
             return
         if not [a for a in self.achados if a.marcado and not a.revisao and a.anexo]:
             prontas = [a for a in self.achados if not a.revisao and a.anexo]

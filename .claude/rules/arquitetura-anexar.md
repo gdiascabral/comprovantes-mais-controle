@@ -212,3 +212,24 @@ ver `docs/PORTEIRO.md`). O que muda:
 - **`_abas_da_pessoa()` vem vazia**: aba que não é nossa pode ser de outro robô.
 - **`abrir_aba_da_pessoa` é sempre aba nova**, para não trazer à frente a de
   outro robô.
+
+## Abas em paralelo no modo central (15/10/2026)
+
+Teste do dono na v2.0.238: com Pagamentos do Dia buscando, o Saldo de
+pagamentos levou "Navegador ocupado" — o app ainda tinha UM executor para
+todas as abas. No central, `AnexarFrame` dá a cada aba dona uma **vaga**
+(`_Vaga`: executor de 1 thread `nav-<classe da aba>`, `mc`, `api`, trabalho
+atual). `submeter(..., dona=X)` manda para o executor da vaga de X
+(`dona=None` = a do próprio Anexar) e, dentro da thread, `self.mc`/`self.api`
+são **propriedades** que leem a vaga da thread (`threading.local`); fora de
+thread de vaga, os atributos de sempre (`_mc`/`_api`). O `MCClient` da vaga
+só nasce lá dentro, pelo `garantir_sessao`.
+`avisar_se_ocupado(texto, aba=X)` e `dona_ocupada(aba=X)` olham só a vaga de
+X; sem `aba`, `ocupado()`/`dona_ocupada()` devolvem a vaga ocupada mais
+recente (a barra lateral). Todo aviso passa `aba=` igual ao `dona=` do
+`submeter` do mesmo fluxo — `tests/test_abas_em_paralelo.py` confere por
+arquivo. **Minha aba no ERP** no central não usa vaga nem Playwright:
+`central.garantir_chrome` + `mc_client.abrir_aba_central` (`PUT
+/json/new?<url escapada>`), numa thread à parte. O **pulso** é por vaga livre,
+no executor dela; o **fechar** tira as vagas da lista sob trava e fecha cada
+`mc` na thread da vaga. Central desligado: idêntico a antes.

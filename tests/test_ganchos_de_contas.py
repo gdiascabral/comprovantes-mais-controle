@@ -71,8 +71,9 @@ class _AnxDuble:
     mc = None
     dona = None
 
-    def dona_ocupada(self):
-        return self.dona
+    def dona_ocupada(self, aba=None):
+        # no modo central a aba pergunta pela SUA vaga (`aba=self`)
+        return self.dona if aba is None or aba is self.dona else None
 
     def ocupado(self):
         return "tarefa" if self.dona is not None else None

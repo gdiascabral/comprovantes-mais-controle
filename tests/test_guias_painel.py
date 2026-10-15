@@ -217,8 +217,10 @@ class _AnexarFalso:
     def __init__(self, ocupado=False):
         self._ocupado = ocupado
         self.submetidos = []
+        self.avisos = []             # a `aba` de cada avisar_se_ocupado
 
-    def avisar_se_ocupado(self, _dona):
+    def avisar_se_ocupado(self, _dona, *, aba=None):
+        self.avisos.append(aba)
         return self._ocupado
 
     def submeter(self, rotulo, fn, *a, dona=None, **k):
@@ -431,6 +433,8 @@ def test_navegador_ocupado_recusa_casar_e_lancar(raiz):
 
     assert anx.submetidos == []
     assert p.ocupado() is None
+    # modo central: o aviso olha a vaga da MESMA aba que vai no `dona=`
+    assert anx.avisos == [aba, aba]
 
 
 def test_varrer_recusa_quando_a_aba_ja_esta_ocupada(raiz):
