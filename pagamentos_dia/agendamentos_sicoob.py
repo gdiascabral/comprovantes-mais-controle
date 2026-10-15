@@ -66,7 +66,7 @@ FRASES = {
     VALOR_DIVERGE: "valor diferente no banco",
     FALTA_NO_BANCO: "não está agendado no banco",
     SO_NO_BANCO: "agendado no banco e não está no HTML",
-    BLOQUEADO: "agendado, mas o HTML bloqueia esta linha",
+    BLOQUEADO: "agendado, mas não dá para dar como certo",
     NOME_DIFERENTE: "valor bate; conferir quem recebe",
     JA_PAGO: "já pago — nada a agendar",
     OK: "bate",
@@ -201,8 +201,11 @@ class Linha:
 
     @property
     def frase(self) -> str:
-        if self.situacao == BLOQUEADO and self.html is not None:
-            return f"{FRASES[BLOQUEADO]}: {self.html.get('bloqueio')}"
+        if self.situacao == BLOQUEADO:
+            por = str((self.html or {}).get("bloqueio") or "").strip() or (
+                "situação no banco: "
+                + str((self.banco or {}).get("situacao") or "?"))
+            return f"{FRASES[BLOQUEADO]}: {por}"
         return FRASES[self.situacao]
 
     @property
@@ -233,11 +236,13 @@ class Confronto:
 
     @property
     def falhou(self) -> bool:
-        """Conta DO Sicoob que devia ter sido lida e não foi. Não é a conta do
-        Inter que fica de fora por desenho: essa nem tem número do Sicoob.
-        A diferença é de cor — esta é vermelha, porque as pendências dela
-        vão ser assinadas sem conferência (revisão de dinheiro, 15/10)."""
-        return bool(self.numero) and not self.conferida
+        """Conta que devia ter sido conferida e não foi: a leitura falhou, ou
+        o cadastro não diz em que conta do Sicoob ela está. Só a conta de
+        OUTRO banco fica de fora por desenho. A diferença é de cor — esta é
+        vermelha, porque as pendências dela seriam assinadas sem conferência
+        (revisão de dinheiro, 15/10/2026: a subconta nova que ainda não está
+        no `contas_sicoob.json` ficava neutra, igual à do Inter)."""
+        return not self.conferida and self.motivo != MOTIVO_FORA_SICOOB
 
     def quantos(self, situacao: str) -> int:
         return sum(1 for li in self.linhas if li.situacao == situacao)
@@ -290,11 +295,6 @@ def _palavras(texto) -> set[str]:
     return {p for p in re.findall(r"[A-Z]+", limpo) if len(p) >= 3}
 
 
-#: O que não prova que dois nomes são a mesma pessoa ou empresa: o que o
-#: HTML escreve em volta do nome, a forma jurídica, o ramo de negócio e os
-#: sobrenomes mais comuns. Revisão de dinheiro (15/10/2026): com só a forma
-#: jurídica aqui, "ALFA MATERIAIS" no HTML e "BETA MATERIAIS" no banco
-#: saíam verdes pela palavra MATERIAIS — dinheiro para outra empresa.
 GENERICAS = frozenset("""
     REEMBOLSO ENG LTDA EIRELI SPE COM DOS DAS DE DA DO ME EPP MEI SA CIA
     MATERIAIS MATERIAL CONSTRUCAO CONSTRUCOES CONSTRUTORA COMERCIO
@@ -302,13 +302,24 @@ GENERICAS = frozenset("""
     FERRAGENS ATACADISTA ATACADO VAREJO INDUSTRIA INDUSTRIAL
     EMPREENDIMENTOS IMOBILIARIA IMOBILIARIOS GESTAO PARTICIPACOES LOJA
     CASA CENTRO GRUPO BRASIL GOIANIA GOIAS TRANSPORTES MADEIREIRA
-    ELETRICA HIDRAULICA PISOS TINTAS VIDRACARIA CONTABILIDADE
-    ADVOCACIA CONSULTORIA ASSESSORIA SOLUCOES TECNOLOGIA
+    ELETRICA HIDRAULICA PISOS TINTAS VIDRACARIA CONTABILIDADE NOVA NOVO
+    ADVOCACIA CONSULTORIA ASSESSORIA SOLUCOES TECNOLOGIA ELETRICOS
     SILVA SANTOS OLIVEIRA SOUZA SOUSA PEREIRA COSTA RODRIGUES ALMEIDA
     LIMA FERREIRA ALVES GOMES RIBEIRO CARVALHO MARTINS ROCHA DIAS
     MORAIS MORAES BARBOSA ARAUJO NASCIMENTO MENDES CARDOSO TEIXEIRA
     JUNIOR FILHO NETO SOBRINHO
+    JOAO JOSE MARIA ANA ANTONIO CARLOS PAULO PEDRO LUCAS LUIZ LUIS MARCOS
+    FRANCISCO MANOEL MANUEL RAIMUNDO SEBASTIAO GABRIEL RAFAEL DANIEL
+    MARCELO BRUNO EDUARDO FELIPE RODRIGO MATEUS GUSTAVO FERNANDO RICARDO
+    JORGE ROBERTO SERGIO ANDRE DIEGO THIAGO TIAGO VITOR VICTOR LEONARDO
+    JULIANA FERNANDA PATRICIA ALINE CAMILA AMANDA BRUNA LETICIA MARIANA
+    ADRIANA FRANCISCA ANTONIA SANDRA LUCIANA VANESSA JESSICA GABRIELA
 """.split())
+"""O que não prova que dois nomes são a mesma pessoa ou empresa: o que o
+HTML escreve em volta do nome, a forma jurídica, o ramo de negócio, os
+sobrenomes e os prenomes mais comuns. Duas rodadas da revisão de dinheiro
+(15/10/2026): "ALFA MATERIAIS" × "BETA MATERIAIS" e "MARIA PEREIRA" ×
+"MARIA MENDES" saíam verdes por uma palavra que metade do país divide."""
 
 
 def nome_de_quem_recebe(favorecido) -> str:
@@ -326,19 +337,34 @@ _FORMA = frozenset("LTDA EIRELI SPE DOS DAS DE DA DO ME EPP MEI SA CIA".split())
 
 
 def pontos_do_nome(entrada: dict, pendencia: dict) -> int:
-    """Quantas palavras PRÓPRIAS o nome do HTML divide com o do banco.
+    """A força da prova de que o recebedor do banco é o do HTML; 0 = nenhuma.
 
-    O nome INTEIRO do HTML (duas palavras ou mais, fora a forma jurídica)
-    contido no do banco vale como prova mesmo feito só de palavras
-    genéricas: "VIDRACARIA ALMEIDA" é a mesma "VIDRACARIA ALMEIDA LTDA", e
-    tratá-la como "conferir quem recebe" era alarme falso (prova ao vivo de
-    15/10/2026). "ALFA MATERIAIS" × "BETA MATERIAIS" continua sem prova."""
+    Três jeitos de provar, e nada além deles (as duas rodadas da revisão
+    de dinheiro mostraram que cada folga a mais vira um verde falso):
+
+    - **os dois nomes iguais**, fora a forma jurídica — "VIDRACARIA ALMEIDA"
+      e "VIDRACARIA ALMEIDA LTDA", mesmo feitos só de palavras genéricas.
+      Igual, e não "contido": "CASA DAS TINTAS" não é "NOVA CASA DAS TINTAS",
+      nem "FULANO SILVA" é "FULANO SILVA PEREIRA";
+    - **duas palavras próprias** (fora de `GENERICAS`) em comum;
+    - **uma palavra própria**, quando é a ÚNICA do nome do HTML: o cadastro
+      de reembolso ("Reembolso Eng <prenome raro>") e o MEI que o banco
+      escreve com o número na frente só têm essa. Com duas ou mais próprias
+      no HTML, uma em comum não basta.
+    """
     do_html = _palavras(nome_de_quem_recebe(entrada.get("favorecido")))
     do_banco = _palavras(pendencia.get("detalhe"))
-    inteiro = do_html - _FORMA
-    if len(inteiro) >= 2 and inteiro <= do_banco:
-        return len(inteiro)
-    return len((do_html & do_banco) - GENERICAS)
+    if not do_html or not do_banco:
+        return 0
+    if do_html - _FORMA == do_banco - _FORMA:
+        return 3
+    proprias_html = do_html - GENERICAS
+    comuns = proprias_html & (do_banco - GENERICAS)
+    if len(comuns) >= 2:
+        return 2
+    if len(comuns) == 1 and len(proprias_html) == 1:
+        return 1
+    return 0
 
 
 def mesmo_recebedor(entrada: dict, pendencia: dict) -> bool:
@@ -351,9 +377,10 @@ def _descricao(texto) -> str:
     return util.norm_espaco(s)
 
 
-#: Quantos caracteres o pedaço comum precisa ter para "uma descrição é o
-#: começo da outra" contar como prova (ver `mesma_descricao`).
+#: O pedaço que o banco guardou tem de ter ao menos isto, e ao menos
+#: `FRACAO_DO_PREFIXO` da descrição do HTML (ver `mesma_descricao`).
 MINIMO_DO_PREFIXO = 20
+FRACAO_DO_PREFIXO = 0.6
 
 
 def mesma_descricao(entrada: dict, pendencia: dict) -> bool:
@@ -365,11 +392,13 @@ def mesma_descricao(entrada: dict, pendencia: dict) -> bool:
     HTML — mais forte que o nome, porque leva centro de custo, NF e OC.
 
     **O banco corta a observação** (a de 15/10/2026 parou no meio de uma
-    palavra, bem antes dos 100 caracteres que o HTML deixa colar). Por isso
-    vale também uma ser o COMEÇO da outra, com duas travas: o pedaço comum
-    tem `MINIMO_DO_PREFIXO` caracteres (curto demais, "OBRA X" casaria com
-    qualquer lançamento da mesma obra), e o corte não cai no MEIO de um
-    número — "OC 300" é o começo de "OC 3001", e são duas ordens de compra."""
+    palavra). Por isso vale também o texto do BANCO ser o começo do texto do
+    HTML — nunca o contrário: o HTML do lote 10 ("… LT 10") é o começo do
+    agendamento dos lotes 10 e 11 ("… LT 10 E 11"), e são outro pagamento.
+    E o pedaço guardado tem de ser substancial: `MINIMO_DO_PREFIXO`
+    caracteres, `FRACAO_DO_PREFIXO` do texto do HTML (uma observação curta,
+    só o centro de custo, casaria com toda linha daquela obra), e sem cortar
+    um número ao meio ("OC 300" × "OC 3001")."""
     d = _descricao(entrada.get("descricao"))
     if not d:
         return False
@@ -379,9 +408,9 @@ def mesma_descricao(entrada: dict, pendencia: dict) -> bool:
             continue
         if d == b:
             return True
-        curta, longa = sorted((d, b), key=len)
-        if (len(curta) >= MINIMO_DO_PREFIXO and longa.startswith(curta)
-                and not (curta[-1].isdigit() and longa[len(curta)].isdigit())):
+        if (d.startswith(b) and len(b) >= MINIMO_DO_PREFIXO
+                and len(b) >= FRACAO_DO_PREFIXO * len(d)
+                and not (b[-1].isdigit() and d[len(b)].isdigit())):
             return True
     return False
 
@@ -392,9 +421,19 @@ def ja_pago(entrada: dict | None) -> bool:
             .lstrip().startswith("JA PAGO"))
 
 
+#: A única situação que a lista de pendências trouxe em 15/10/2026, em todas
+#: as contas. Outra (a consulta pede "Todas") nunca sai verde.
+PENDENTE_ASSINATURA = "PENDENTE_ASSINATURA"
+
+
+def pendente_de_verdade(pendencia: dict) -> bool:
+    s = str(pendencia.get("situacao") or "").strip().upper()
+    return s in ("", PENDENTE_ASSINATURA)
+
+
 def _pontos(entrada: dict, pendencia: dict) -> int:
     """A força da prova de que é o mesmo pagamento: a descrição colada vale
-    mais que qualquer nome; entre nomes, mais palavras próprias em comum."""
+    mais que qualquer nome; entre nomes, `pontos_do_nome`."""
     return (10 if mesma_descricao(entrada, pendencia) else 0) + \
         pontos_do_nome(entrada, pendencia)
 
@@ -403,49 +442,73 @@ def confrontar(entradas, pendencias) -> list[Linha]:
     """Casa as linhas do HTML de UMA conta com as pendências dela no banco.
 
     Três passadas, da prova mais forte para a mais fraca, e cada pendência
-    é usada uma vez só: (1) mesmo valor e prova de que é o mesmo pagamento
-    (a MELHOR prova entre as candidatas, não a primeira — senão a primeira
-    linha do HTML pegava o agendamento de outra); (2) mesmo valor;
-    (3) mesma descrição com valor diferente. O que sobra de cada lado é
-    "falta no banco" ou "só no banco".
+    é usada uma vez só: (1) mesmo valor e prova de que é o mesmo pagamento —
+    os pares são escolhidos do MAIS provado para o menos, na conta inteira,
+    e não na ordem do HTML (senão a primeira linha pegava o agendamento que
+    era de outra); (2) mesmo valor; (3) mesma descrição com valor
+    diferente. O que sobra de cada lado é "falta no banco" ou "só no banco".
 
-    Duas exceções que vêm da própria linha do HTML (revisão de dinheiro):
-    linha JÁ PAGO que casa com um agendamento é pagamento em DOBRO, e sem
-    agendamento não é falta nenhuma; linha com `bloqueio` (risco de pagar em
-    dobro, pagar à mão…) nunca sai verde."""
-    sobra_html = list(entradas or [])
+    Exceções que vêm da própria linha (revisão de dinheiro, 15/10/2026):
+    a linha JÁ PAGO só disputa agendamento DEPOIS das que estão por pagar, e
+    só com prova de nome ou descrição — casada, é pagamento em DOBRO; sem
+    par, não é falta nenhuma. A linha com `bloqueio` e a pendência que não
+    está "pendente de assinatura" nunca saem verdes."""
+    vivas = [e for e in (entradas or []) if not ja_pago(e)]
+    pagas = [e for e in (entradas or []) if ja_pago(e)]
     sobra_banco = list(pendencias or [])
     casadas: list[Linha] = []
 
-    def situacao(e, base):
+    def situacao(e, p, base):
         if ja_pago(e):
             return PAGO_E_AGENDADO
-        if base == OK and str(e.get("bloqueio") or "").strip():
+        if base == OK and (str(e.get("bloqueio") or "").strip()
+                           or not pendente_de_verdade(p)):
             return BLOQUEADO
         return base
-
-    def passada(combina, base, pontos=None):
-        for e in list(sobra_html):
-            candidatas = [p for p in sobra_banco if combina(e, p)]
-            if not candidatas:
-                continue
-            par = (max(candidatas, key=lambda p: pontos(e, p)) if pontos
-                   else candidatas[0])
-            sobra_html.remove(e)
-            sobra_banco.remove(par)
-            casadas.append(Linha(situacao(e, base), e, par))
 
     def mesmo_valor(e, p):
         return int(e.get("centavos") or 0) == centavos_do_banco(p)
 
-    passada(lambda e, p: mesmo_valor(e, p) and _pontos(e, p) > 0, OK, _pontos)
-    passada(mesmo_valor, NOME_DIFERENTE)
-    passada(mesma_descricao, VALOR_DIVERGE)
+    def provadas(sobra_html):
+        """Passada (1): todos os pares provados, do mais forte ao mais fraco."""
+        pares = sorted(((_pontos(e, p), -i, -j, e, p)
+                        for i, e in enumerate(sobra_html)
+                        for j, p in enumerate(sobra_banco)
+                        if mesmo_valor(e, p) and _pontos(e, p) > 0),
+                       key=lambda x: x[:3], reverse=True)
+        usados_e, usados_p = set(), set()
+        for _pts, _i, _j, e, p in pares:
+            if id(e) in usados_e or id(p) in usados_p:
+                continue
+            usados_e.add(id(e))
+            usados_p.add(id(p))
+            casadas.append(Linha(situacao(e, p, OK), e, p))
+        sobra_banco[:] = [p for p in sobra_banco if id(p) not in usados_p]
+        return [e for e in sobra_html if id(e) not in usados_e]
+
+    def passada(sobra_html, combina, base):
+        resto = []
+        for e in sobra_html:
+            par = next((p for p in sobra_banco if combina(e, p)), None)
+            if par is None:
+                resto.append(e)
+                continue
+            sobra_banco.remove(par)
+            casadas.append(Linha(situacao(e, par, base), e, par))
+        return resto
+
+    vivas = provadas(vivas)
+    vivas = passada(vivas, mesmo_valor, NOME_DIFERENTE)
+    vivas = passada(vivas, mesma_descricao, VALOR_DIVERGE)
+    pagas = provadas(pagas)
 
     linhas = (casadas
-              + [Linha(JA_PAGO if ja_pago(e) else FALTA_NO_BANCO, e, None)
-                 for e in sobra_html]
+              + [Linha(FALTA_NO_BANCO, e, None) for e in vivas]
+              + [Linha(JA_PAGO, e, None) for e in pagas]
               + [Linha(SO_NO_BANCO, None, p) for p in sobra_banco])
     ordem = {s: i for i, s in enumerate(GRAVIDADE)}
-    # Estável: dentro da mesma situação, a ordem do HTML (que é a do dono).
-    return sorted(linhas, key=lambda li: ordem[li.situacao])
+    posicao = {id(e): i for i, e in enumerate(entradas or [])}
+    # Dentro da mesma situação, a ordem do HTML (que é a do dono).
+    return sorted(linhas, key=lambda li: (
+        ordem[li.situacao],
+        posicao.get(id(li.html), len(posicao))))

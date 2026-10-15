@@ -706,15 +706,21 @@ paths:
   agendado" (vermelho) ou "agendado e não está no HTML" (âmbar).
   **Travas da revisão de dinheiro (15/10/2026)**, cada uma com teste:
   no reembolso só vale o nome da PESSOA (o "(reembolso de <loja>)" fazia o
-  Pix para a loja sair verde); palavra genérica, ramo de negócio e sobrenome
-  comum (`GENERICAS`) não provam nada — só o nome inteiro contido no do banco;
-  entre candidatas do mesmo valor ganha a MELHOR prova, não a primeira; em
-  boleto o banco não devolve o recebedor e a prova é a descrição colada
-  (inteira ou cortada pelo banco, com 20+ caracteres e sem cortar número);
-  linha JÁ PAGO agendada de novo é vermelha ("pagamento em dobro") e sem
-  agendamento não é falta; linha com `bloqueio` nunca sai verde; toda conta
-  do Sicoob nasce "não lida" e, se a leitura parar, aparece em VERMELHO no
-  topo da janela, nunca some nem se confunde com a do Inter; duas contas do
+  Pix para a loja sair verde); o nome prova só de três jeitos
+  (`pontos_do_nome`): os dois IGUAIS fora a forma jurídica, duas palavras
+  próprias em comum, ou uma quando é a única própria do nome do HTML —
+  ramo de negócio, sobrenome e prenome comuns (`GENERICAS`) não contam, e
+  nome maior no banco ("NOVA CASA DAS TINTAS") não é o mesmo; os pares
+  provados são escolhidos do mais forte ao mais fraco na conta inteira; em
+  boleto o banco não devolve o recebedor e a prova é a descrição colada,
+  inteira ou cortada PELO BANCO (o texto do banco como começo do HTML, nunca
+  o contrário, com 20+ caracteres, 60% do texto e sem cortar número); linha
+  JÁ PAGO só disputa agendamento depois das vivas e só com prova — casada é
+  vermelha ("pagamento em dobro"), sem par não é falta; linha com
+  `bloqueio`, ou pendência fora de PENDENTE_ASSINATURA, nunca sai verde;
+  toda conta do Sicoob nasce "não lida", e a que não foi conferida (leitura
+  parou ou cadastro não diz a conta) aparece em VERMELHO no topo da janela —
+  só a de outro banco fica neutra; duas contas do
   ERP com o mesmo número são conferidas juntas; a consulta começa no dia 1
   do mês PASSADO. Fica em aberto: a API devolver a lista paginada (não foi
   visto com 25 itens numa conta).

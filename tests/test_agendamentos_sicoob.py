@@ -48,8 +48,8 @@ def test_boleto_sem_nome_casa_pela_descricao_colada():
 def test_observacao_cortada_pelo_banco_ainda_casa():
     desc = "CONDOMINIO EXEMPLO Constituicao do CNPJ RET 10 unidades RPB 99"
     [li] = A.confrontar([entrada(10000, "Escritorio Exemplo", desc)],
-                        [pendencia(100.0, "Observação: " + desc[:45],
-                                   observacao=desc[:45])])
+                        [pendencia(100.0, "Observação: " + desc[:49],
+                                   observacao=desc[:49])])
     assert li.situacao == A.OK
 
 
@@ -352,3 +352,77 @@ def test_contas_do_erp_com_o_mesmo_numero_sao_conferidas_juntas():
 def test_conta_do_sicoob_nao_lida_e_falha_e_a_do_inter_nao():
     assert A.Confronto("C", "12.345-6", motivo=A.MOTIVO_NAO_LIDA).falhou
     assert not A.Confronto("C - INTER", "", motivo=A.MOTIVO_FORA_SICOOB).falhou
+
+
+# ------------------------------------- segunda rodada da revisão de dinheiro
+
+def test_um_prenome_comum_nao_prova_que_e_a_mesma_pessoa():
+    [li] = A.confrontar([entrada(30000, "Maria Pereira")],
+                        [pendencia(300.0, "MARIA MENDES")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_nome_maior_no_banco_nao_e_o_mesmo():
+    for html, banco in (("Casa das Tintas", "NOVA CASA DAS TINTAS"),
+                        ("Distribuidora de Materiais",
+                         "BETA DISTRIBUIDORA DE MATERIAIS ELETRICOS"),
+                        ("Joao Silva", "JOAO SILVA PEREIRA")):
+        [li] = A.confrontar([entrada(1000, html)], [pendencia(10.0, banco)])
+        assert li.situacao == A.NOME_DIFERENTE, (html, banco)
+
+
+def test_uma_palavra_so_basta_quando_e_a_unica_propria_do_nome():
+    [li] = A.confrontar([entrada(1000, "Reembolso Eng Zacarias")],
+                        [pendencia(10.0, "11 222 333 ZACARIAS EXEMPLO")])
+    assert li.situacao == A.OK
+    [li] = A.confrontar([entrada(1000, "Alfa Beta")],
+                        [pendencia(10.0, "ALFA GAMA")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_par_mais_provado_ganha_na_conta_inteira():
+    e1 = entrada(1000, "Alfa")
+    e2 = entrada(1000, "Alfa Beta")
+    linhas = A.confrontar([e1, e2], [pendencia(10.0, "ALFA BETA"),
+                                      pendencia(10.0, "GAMA DELTA")])
+    por_html = {li.html["favorecido"]: (li.situacao, li.banco["detalhe"])
+                for li in linhas}
+    assert por_html["Alfa Beta"] == (A.OK, "ALFA BETA")
+    assert por_html["Alfa"][0] == A.NOME_DIFERENTE
+
+
+def test_descricao_curta_do_html_nao_casa_com_a_mais_longa_do_banco():
+    curta = "OBRA EXEMPLO QD 1 LT 10"
+    [li] = A.confrontar([entrada(1000, "Fornecedor Exemplo", curta)],
+                        [pendencia(10.0, "Observação: " + curta + " E 11",
+                                   observacao=curta + " E 11")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_observacao_curta_do_banco_so_com_o_centro_de_custo_nao_prova():
+    longa = "RESIDENCIAL EXEMPLO QD 01 LT 05 NF 1234 OC 5678 cimento"
+    [li] = A.confrontar([entrada(1000, "Fornecedor Exemplo", longa)],
+                        [pendencia(10.0, "Observação: RESIDENCIAL EXEMPLO QD 01",
+                                   observacao="RESIDENCIAL EXEMPLO QD 01")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_conta_do_sicoob_com_cadastro_torto_e_vermelha():
+    assert A.Confronto("NOVA - SICOOB", "", motivo="conta não cadastrada").falhou
+    assert not A.Confronto("X - INTER", "", motivo=A.MOTIVO_FORA_SICOOB).falhou
+
+
+def test_ja_pago_nao_rouba_o_agendamento_da_linha_viva():
+    paga = dict(entrada(50000, "Fornecedor Exemplo"), status="JÁ PAGO em 01/10")
+    viva = entrada(50000, "Outro Fornecedor")
+    linhas = A.confrontar([paga, viva], [pendencia(500.0, "TERCEIRO QUALQUER")])
+    por = {li.html["favorecido"]: li.situacao for li in linhas}
+    assert por == {"Fornecedor Exemplo": A.JA_PAGO,
+                   "Outro Fornecedor": A.NOME_DIFERENTE}
+
+
+def test_pendencia_que_nao_esta_pendente_nunca_sai_verde():
+    p = dict(pendencia(10.0), situacao="CANCELADA")
+    [li] = A.confrontar([entrada(1000)], [p])
+    assert li.situacao == A.BLOQUEADO
+    assert "CANCELADA" in li.frase
