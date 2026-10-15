@@ -162,6 +162,20 @@ def test_iniciar_que_falha_deixa_a_aba_livre(raiz, tmp_path):
     assert ch["registrar"] == []
 
 
+def test_novo_log_que_falha_deixa_a_aba_livre(raiz, tmp_path, monkeypatch):
+    aba, ch = _aba(raiz, _instalacao(tmp_path))
+
+    def sem_log(pasta):
+        raise FileNotFoundError("sem coletor\logs")
+
+    monkeypatch.setattr(F.rodada, "novo_log", sem_log)
+    aba.rodar()
+    assert "Não consegui iniciar" in aba.v_status.get()
+    assert str(aba.b_rodar["state"]) == "normal"
+    assert aba.leitor is None and aba.ocupado() is None
+    assert ch["iniciar"] == [] and ch["registrar"] == []
+
+
 def test_registrar_que_quebra_nao_prende_a_aba(raiz, tmp_path):
     aba, ch = _aba(raiz, _instalacao(tmp_path), _registrar_quebra=True,
                    _proc=_Proc([None, 0]))

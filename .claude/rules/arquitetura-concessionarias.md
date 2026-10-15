@@ -29,9 +29,12 @@ Mudar um lado é mudar o outro (`coletor/trava_rodada.py` e
 - **Trava**: `relatorios/RODADA_EM_ANDAMENTO.trava` + `.json` (início e origem de
   quem roda). `rodada.em_andamento` **testa a trava de verdade** (tranca e solta
   na hora, `msvcrt.locking`): o `.json` sozinho pode ter sobrado de uma rodada
-  que morreu no meio. Retorna `None` só quando comprovadamente livre; **`{}` =
-  não dispare** (em andamento sem info, ou não deu para saber: erro ao abrir a
-  trava, errno inesperado). "Livre" dito sem ter conferido seria mentira.
+  que morreu no meio. Retorna `None` só quando comprovadamente livre. Dois "não
+  dispare" diferentes: **`{}`** = trancada, mas sem info (o normal nos instantes
+  em que uma rodada pega ou solta a trava; a aba diz "espere ela terminar");
+  **`{"ilegivel": True}`** = não deu para sondar a trava (erro ao abrir, errno
+  inesperado) — só este fala em chamar o suporte. "Livre" dito sem ter
+  conferido seria mentira.
 - **Linha de resumo**: o log termina com `resumo salvo em <caminho>`;
   `resumo_do_log` pega a última e a aba lê o arquivo.
 - **`--forcar --esperar 0 --origem "app: <nome>"`** (e `--so equatorial` na
@@ -60,8 +63,11 @@ O `.bat` anexa (`>>`) ao log da tarefa agendada, e o `cmd` **tranca** o arquivo
 enquanto o redirecionamento está aberto: um segundo disparo, com a agendada
 rodando, morria sem chegar a chamar o Python (e portanto sem o código 3 e sem a
 mensagem "já estava em andamento"). Por isso a rodada do app tem log próprio:
-`novo_log` escolhe `coletor\logs\rodada_app_AAAAMMDD_HHMMSS.log` (com sufixo se
-já existe) e `iniciar(..., log=)` o passa ao `.bat` pela variável de ambiente
+`novo_log` cria `coletor\logs` se faltar e escolhe
+`coletor\logs\rodada_app_AAAAMMDD_HHMMSS_<pid>[_n].log`, RESERVANDO o nome com
+`open(..., "x")` (duas rodadas no mesmo segundo não pegam o mesmo arquivo);
+`frame.rodar` chama `novo_log` dentro do mesmo `try OSError` do `iniciar` (status
+"Não consegui iniciar a rodada: ..."). `iniciar(..., log=)` o passa ao `.bat` e `iniciar(..., log=)` o passa ao `.bat` pela variável de ambiente
 `RODADA_LOG`. O `Leitor` nasce **antes** do `iniciar` e lê só o que chegar
 depois dele (linha inteira por vez; arquivo truncado recomeça).
 

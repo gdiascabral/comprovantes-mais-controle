@@ -210,6 +210,12 @@ def test_veredito_e_descrever():
     assert R.descrever({}) == "uma rodada está em andamento"
 
 
+def test_novo_log_cria_a_pasta_que_faltava(tmp_path):
+    caminho = R.novo_log(tmp_path / "agua_energia")      # sem coletor\logs
+    assert caminho.parent == tmp_path / "agua_energia" / "coletor" / "logs"
+    assert caminho.is_file()
+
+
 def test_novo_log_nome_e_colisao(tmp_path):
     from datetime import datetime
     raiz = _instalar(tmp_path)

@@ -167,10 +167,10 @@ class AguaEnergiaFrame(ttk.Frame):
                 return
         origem = rodada.origem_segura(self._quem())
         self._pedido = "--forcar" + (f" --so {so}" if so else "")
-        log = rodada.novo_log(self.pasta)
-        self.leitor = rodada.Leitor(log)              # ANTES do iniciar
         self._linhas = []
         try:
+            log = rodada.novo_log(self.pasta)
+            self.leitor = rodada.Leitor(log)          # ANTES do iniciar
             self.proc = self._iniciar(self.pasta, so=so, origem=origem, log=log)
         except OSError as e:
             self.leitor = None

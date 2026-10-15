@@ -12,10 +12,10 @@ precisar saber programar. São **nove abas**, numa janela só:
 | **💰 Aportes** | Lança aportes de capital e distribuições de lucro direto no ERP, sem planilha e sem importação. |
 | **🗓 Pagamentos do Dia** | *(diário)* Excel de conferência dos pagamentos do período, com uma aba por conta bancária. |
 | **⚖ Conciliação Diária** | *(diário)* Lê saldos e pagamentos a vencer e monta o painel do dia, com o aporte mínimo por conta. |
+| **💧 Água e energia** | *(diário)* Roda agora a rodada da Equatorial e da Sanesc (a mesma da tarefa agendada) e mostra o andamento e o resumo. |
 | **📊 Relatório Mensal** | *(mensal)* Baixa em PDF o extrato de cada conta bancária do ERP, arquivando na pasta da empresa. |
 | **🏦 Extratos Sicoob** | *(mensal)* Cria a árvore de pastas do fechamento e baixa OFX + PDF de cada conta no SicoobNet. |
 | **📑 Contratos** | *(mensal)* Acha o contrato de compra e venda das casas que receberam qualquer coisa no mês (sinal, entrada, financiamento, intermediação), confere o conteúdo (tipo, rua, quadra/lote, casa, comprador, vendedora e valor da venda) e arquiva na pasta da empresa, sem gravar por cima do que já está lá. |
-| **💧 Água e energia** | *(diário)* Roda agora a rodada da Equatorial e da Sanesc (a mesma da tarefa agendada) e mostra o andamento e o resumo. |
 | **📤 Acessórias** | *(mensal)* Envia o fechamento ao escritório contábil pelo portal: uma solicitação por empresa, com o .zip do mês anexado e a lista dos contratos lida de dentro do próprio zip. |
 
 As quatro primeiras ficam soltas na barra lateral; as outras vivem nos grupos

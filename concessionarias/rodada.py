@@ -90,6 +90,7 @@ def novo_log(pasta: Path, agora: datetime | None = None) -> Path:
     log próprio, passado ao `.bat` pela variável RODADA_LOG."""
     agora = agora or datetime.now()
     pasta_logs = Path(pasta) / "coletor" / "logs"
+    pasta_logs.mkdir(parents=True, exist_ok=True)   # instalação sem logs/ ainda
     base = f"rodada_app_{agora:%Y%m%d_%H%M%S}_{os.getpid()}"
     n = 1
     while True:
