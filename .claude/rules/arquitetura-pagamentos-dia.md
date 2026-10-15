@@ -704,3 +704,17 @@ paths:
   erro. Sobra dos dois lados com a MESMA descrição vira "valor diferente no
   banco" (o boleto agendado com R$ 0,00 de 15/10/2026); o resto é "não está
   agendado" (vermelho) ou "agendado e não está no HTML" (âmbar).
+  **Travas da revisão de dinheiro (15/10/2026)**, cada uma com teste:
+  no reembolso só vale o nome da PESSOA (o "(reembolso de <loja>)" fazia o
+  Pix para a loja sair verde); palavra genérica, ramo de negócio e sobrenome
+  comum (`GENERICAS`) não provam nada — só o nome inteiro contido no do banco;
+  entre candidatas do mesmo valor ganha a MELHOR prova, não a primeira; em
+  boleto o banco não devolve o recebedor e a prova é a descrição colada
+  (inteira ou cortada pelo banco, com 20+ caracteres e sem cortar número);
+  linha JÁ PAGO agendada de novo é vermelha ("pagamento em dobro") e sem
+  agendamento não é falta; linha com `bloqueio` nunca sai verde; toda conta
+  do Sicoob nasce "não lida" e, se a leitura parar, aparece em VERMELHO no
+  topo da janela, nunca some nem se confunde com a do Inter; duas contas do
+  ERP com o mesmo número são conferidas juntas; a consulta começa no dia 1
+  do mês PASSADO. Fica em aberto: a API devolver a lista paginada (não foi
+  visto com 25 itens numa conta).

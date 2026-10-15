@@ -881,10 +881,25 @@ class PagamentosDiaFrame(ttk.Frame):
         self._agendamentos.start()
 
     def _t_agendamentos(self, caminho, no_sicoob, fora, inicio, fim):
-        """Thread do Sicoob. Só fala com a tela pela fila."""
-        confrontos = [agendamentos_sicoob.Confronto(
-            conta_erp=str(c.get("nome") or ""), motivo=motivo)
-            for c, _n, motivo in fora]
+        """Thread do Sicoob. Só fala com a tela pela fila.
+
+        Toda conta do Sicoob nasce "não lida" ANTES de abrir o navegador, e
+        só troca de estado quando é lida de verdade: uma exceção no meio
+        (sessão que cai, login que não acontece) não pode fazer as contas que
+        faltavam SUMIREM da tabela — a que some é assinada sem conferência
+        (revisão de dinheiro, 15/10/2026). Duas contas do ERP com o mesmo
+        número do Sicoob são conferidas JUNTAS (`agrupar_por_numero`): lidas
+        uma vez cada, o mesmo agendamento casaria nas duas e pintaria de verde
+        dois pagamentos com um só agendado."""
+        A = agendamentos_sicoob
+        confrontos = [A.Confronto(conta_erp=str(c.get("nome") or ""),
+                                  motivo=motivo)
+                      for c, _n, motivo in fora]
+        grupos = A.agrupar_por_numero(no_sicoob)
+        pendentes = [A.Confronto(conta_erp=nome, numero=numero,
+                                 motivo=A.MOTIVO_NAO_LIDA)
+                     for nome, numero, _e in grupos]
+        confrontos.extend(pendentes)
         try:
             from extratos_sicoob import pendencias
             from extratos_sicoob.sicoob_client import SicoobClient
@@ -892,24 +907,17 @@ class PagamentosDiaFrame(ttk.Frame):
             registrar = lambda m: self._log(f"  {m}")       # noqa: E731
             with SicoobClient(log=registrar) as cli:
                 cli.aguardar_login()
-                for c, numero, _m in no_sicoob:
-                    nome = str(c.get("nome") or "")
-                    conf = agendamentos_sicoob.Confronto(conta_erp=nome,
-                                                         numero=numero)
+                for conf, (nome, numero, entradas) in zip(pendentes, grupos):
                     try:
                         lidas = pendencias.ler_conta(cli, numero, inicio, fim)
                     except Exception as e:                   # noqa: BLE001
                         conf.motivo = f"o Sicoob não respondeu: {e}"
                     else:
-                        conf.linhas = agendamentos_sicoob.confrontar(
-                            c.get("entries") or [], lidas)
-                    confrontos.append(conf)
+                        conf.linhas = A.confrontar(entradas, lidas)
+                        conf.motivo = ""
                     self._log(f"  {nome} ({numero}): {conf.resumo()}")
         except Exception as e:                               # noqa: BLE001
             self._log(f"[!] Conferir agendamentos: {e}")
-            if not any(c.conferida for c in confrontos):
-                self.q.put(("agendamentos", None))
-                return
         self.q.put(("agendamentos", (caminho, confrontos)))
 
     def _janela_agendamentos(self, caminho, confrontos):
@@ -918,6 +926,7 @@ class PagamentosDiaFrame(ttk.Frame):
         A = agendamentos_sicoob
         conferidas = [c for c in confrontos if c.conferida]
         com_diferenca = [c for c in conferidas if c.pior != A.OK]
+        nao_lidas = [c for c in confrontos if c.falhou]
 
         top = tk.Toplevel(self)
         top.title(f"Agendamentos no Sicoob × {caminho.name}")
@@ -929,6 +938,17 @@ class PagamentosDiaFrame(ttk.Frame):
                   text=f"{len(conferidas)} conta(s) conferida(s) — "
                        f"{len(conferidas) - len(com_diferenca)} batem, "
                        f"{len(com_diferenca)} com diferença").pack(anchor="w")
+        if nao_lidas:
+            # Em cima e em vermelho: é a conta cujas pendências seriam
+            # assinadas SEM conferência, e um número escondido no meio da
+            # tabela não segura ninguém.
+            ttk.Label(moldura, style="Erro.TLabel", wraplength=px(1200),
+                      justify="left",
+                      text=f"✖  {len(nao_lidas)} conta(s) do Sicoob NÃO "
+                           f"conferida(s): "
+                           + ", ".join(c.conta_erp for c in nao_lidas)
+                           + ". Não assine as pendências delas sem conferir."
+                      ).pack(anchor="w", pady=px((4, 0)))
         ttk.Label(moldura, style="Apoio.TLabel",
                   text="Casado pelo valor; o nome só desempata. Âmbar é para "
                        "olhar antes de assinar, vermelho é diferença de "
@@ -959,7 +979,8 @@ class PagamentosDiaFrame(ttk.Frame):
 
         i = 0
         for conf in confrontos:
-            estado = ("info" if not conf.conferida
+            estado = ("erro" if conf.falhou
+                      else "info" if not conf.conferida
                       else A.ESTADO[conf.pior])
             pai = tabela.insert(
                 "", "end", text=conf.conta_erp, open=conf.pior != A.OK,
@@ -974,9 +995,14 @@ class PagamentosDiaFrame(ttk.Frame):
                 no_html = " · ".join(x for x in (
                     str(h.get("favorecido") or ""),
                     str(h.get("descricao") or "")) if x)
+                # A situação do banco só aparece quando NÃO é a de sempre:
+                # "Todas" pode trazer o que já não está pendente.
+                situacao_banco = str(b.get("situacao") or "")
                 no_banco = " · ".join(x for x in (
                     str(b.get("detalhe") or ""),
-                    str(b.get("nomeTransacao") or "")) if x)
+                    str(b.get("nomeTransacao") or ""),
+                    situacao_banco if situacao_banco not in (
+                        "", "PENDENTE_ASSINATURA") else "") if x)
                 tabela.insert(pai, "end", text="", values=(
                     li.frase, brl(li.valor_html), brl(li.valor_banco),
                     no_html, no_banco),

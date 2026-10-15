@@ -66,7 +66,7 @@ async ([url, metodo, corpo]) => {
 
 
 def so_digitos(numero: str) -> str:
-    """`"50.019-4"` -> `"500194"`, o `contaCorrente` que a API usa."""
+    """`"12.345-6"` -> `"123456"`, o `contaCorrente` que a API usa."""
     return re.sub(r"\D", "", numero or "")
 
 

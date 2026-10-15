@@ -91,13 +91,13 @@ def test_sobra_do_banco_e_so_no_banco():
 
 
 def test_mesma_descricao_com_valor_diferente_vira_valor_diverge():
-    # O caso de 15/10: boleto agendado com R$ 0,00, observação idêntica.
+    # Boleto agendado com R$ 0,00 e observação idêntica à descrição.
     desc = "CONDOMINIO EXEMPLO Constituicao do CNPJ"
     linhas = A.confrontar(
-        [entrada(467500, "Escritorio Contabil Exemplo", desc)],
+        [entrada(250000, "Escritorio Contabil Exemplo", desc)],
         [pendencia(0.0, f"Observação: {desc}", observacao=desc)])
     assert [li.situacao for li in linhas] == [A.VALOR_DIVERGE]
-    assert linhas[0].valor_html == A.Decimal("4675.00")
+    assert linhas[0].valor_html == A.Decimal("2500.00")
     assert linhas[0].valor_banco == A.Decimal("0")
 
 
@@ -171,11 +171,13 @@ def test_conta_fora_do_mapa():
         A.MOTIVO_CONTA_DESCONHECIDA
 
 
-def test_periodo_vai_do_dia_1_ao_fim_do_mes_seguinte():
+def test_periodo_vai_do_mes_passado_ao_fim_do_seguinte():
     assert A.periodo_da_consulta(dt.date(2026, 10, 15)) == (
-        dt.date(2026, 10, 1), dt.date(2026, 11, 30))
+        dt.date(2026, 9, 1), dt.date(2026, 11, 30))
     assert A.periodo_da_consulta(dt.date(2026, 12, 31)) == (
-        dt.date(2026, 12, 1), dt.date(2027, 1, 31))
+        dt.date(2026, 11, 1), dt.date(2027, 1, 31))
+    # No dia 1º o agendamento da véspera continua dentro.
+    assert A.periodo_da_consulta(dt.date(2026, 11, 1))[0] == dt.date(2026, 10, 1)
 
 
 # ------------------------------------------------- o lado do banco (sem rede)
@@ -259,3 +261,94 @@ def test_instante_e_meia_noite_local_em_utc():
     assert corpo["periodoInicial"].endswith(".000Z")
     assert corpo["periodoFinal"].endswith(".000Z")
     assert corpo["periodoInicial"] < corpo["periodoFinal"]
+
+
+# ------------------------------------------ achados da revisão de dinheiro
+
+def test_reembolso_agendado_para_a_loja_nao_sai_verde():
+    e = entrada(50000, "Fulano Exemplo (reembolso de Vidracaria Modelo)")
+    [li] = A.confrontar([e], [pendencia(500.0, "VIDRACARIA MODELO LTDA")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_reembolso_para_a_pessoa_certa_sai_verde():
+    e = entrada(50000, "Fulano Exemplo (reembolso de Vidracaria Modelo)")
+    [li] = A.confrontar([e], [pendencia(500.0, "FULANO EXEMPLO")])
+    assert li.situacao == A.OK
+
+
+def test_reembolso_sem_nome_nunca_sai_verde_pelo_nome():
+    e = entrada(50000, "? (reembolso de Loja Exemplo)")
+    [li] = A.confrontar([e], [pendencia(500.0, "LOJA EXEMPLO")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_palavra_generica_nao_prova_que_e_a_mesma_empresa():
+    [li] = A.confrontar([entrada(100000, "Alfa Materiais")],
+                        [pendencia(1000.0, "BETA MATERIAIS")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_nome_inteiro_igual_vale_mesmo_feito_de_palavras_genericas():
+    [li] = A.confrontar([entrada(100000, "Vidracaria Silva")],
+                        [pendencia(1000.0, "VIDRACARIA SILVA LTDA")])
+    assert li.situacao == A.OK
+
+
+def test_melhor_prova_ganha_e_nao_a_primeira_candidata():
+    e1 = entrada(10000, "Alfa Materiais")
+    e2 = entrada(10000, "Gama Materiais")
+    linhas = A.confrontar([e1, e2], [pendencia(100.0, "GAMA MATERIAIS"),
+                                      pendencia(100.0, "ZETA QUALQUER")])
+    por_html = {li.html["favorecido"]: li.situacao for li in linhas}
+    assert por_html == {"Gama Materiais": A.OK,
+                        "Alfa Materiais": A.NOME_DIFERENTE}
+
+
+def test_ja_pago_e_agendado_de_novo_e_vermelho():
+    e = dict(entrada(80000), status="JÁ PAGO em 10/10/2026")
+    [li] = A.confrontar([e], [pendencia(800.0)])
+    assert li.situacao == A.PAGO_E_AGENDADO
+    assert A.ESTADO[li.situacao] == "erro"
+
+
+def test_ja_pago_sem_agendamento_nao_e_falta():
+    e = dict(entrada(80000), status="JÁ PAGO em 10/10/2026")
+    conf = A.Confronto("C", "1", linhas=A.confrontar([e], []))
+    assert [li.situacao for li in conf.linhas] == [A.JA_PAGO]
+    assert conf.pior == A.OK
+    assert conf.total_html == 0
+
+
+def test_linha_bloqueada_no_html_nunca_sai_verde():
+    e = dict(entrada(30000), bloqueio="mesma linha digitável em 2 lançamentos")
+    [li] = A.confrontar([e], [pendencia(300.0)])
+    assert li.situacao == A.BLOQUEADO
+    assert "mesma linha digitável" in li.frase
+
+
+def test_prefixo_cortado_no_meio_do_numero_nao_casa():
+    desc = "CC OBRA X QD 1 LT 2 OC 3001"
+    [li] = A.confrontar([entrada(10000, "Fornecedor Exemplo", desc)],
+                        [pendencia(100.0, "Observação: " + desc[:-1],
+                                   observacao=desc[:-1])])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_contas_do_erp_com_o_mesmo_numero_sao_conferidas_juntas():
+    c1 = {"nome": "CONTA A - SICOOB", "entries": [entrada(100)]}
+    c2 = {"nome": "CONTA B - SICOOB", "entries": [entrada(100)]}
+    c3 = {"nome": "CONTA C - SICOOB", "entries": []}
+    grupos = A.agrupar_por_numero([(c1, "12.345-6", ""), (c2, "12345-6", ""),
+                                   (c3, "99.999-9", "")])
+    assert [(n, num, len(ls)) for n, num, ls in grupos] == [
+        ("CONTA A - SICOOB + CONTA B - SICOOB", "12.345-6", 2),
+        ("CONTA C - SICOOB", "99.999-9", 0)]
+    # Um agendamento só para as duas linhas: uma bate, a outra FALTA.
+    linhas = A.confrontar(grupos[0][2], [pendencia(1.0)])
+    assert sorted(li.situacao for li in linhas) == [A.FALTA_NO_BANCO, A.OK]
+
+
+def test_conta_do_sicoob_nao_lida_e_falha_e_a_do_inter_nao():
+    assert A.Confronto("C", "12.345-6", motivo=A.MOTIVO_NAO_LIDA).falhou
+    assert not A.Confronto("C - INTER", "", motivo=A.MOTIVO_FORA_SICOOB).falhou
