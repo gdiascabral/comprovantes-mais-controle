@@ -52,7 +52,8 @@ ROTINAS = (
 #: Eventos que NÃO são rotina, mas aparecem em "Atividade recente": quem
 #: entrou no app e o que o administrador fez com as contas. Sem esta tabela a
 #: linha sairia com a chave crua ("acesso") em vez de um nome.
-OUTRAS_ORIGENS = {"acesso": "Acesso", "usuarios": "Usuários"}
+OUTRAS_ORIGENS = {"acesso": "Acesso", "usuarios": "Usuários",
+                  "agu": "Água e energia"}
 
 #: Os três atalhos do canto. São as três telas que se abrem todo dia, na
 #: ordem em que o dia acontece — e não as três primeiras do menu.

@@ -449,6 +449,10 @@ jobs:
           # nova aqui, senão o import falha no usuário e o app não abre.
           New-Item -ItemType Directory codigo_embutido/guias | Out-Null
           Copy-Item guias/*.py codigo_embutido/guias/
+          # `concessionarias/` é a aba Água e energia (dispara a rodada do
+          # coletor). Pasta nova de código = linha nova aqui.
+          New-Item -ItemType Directory codigo_embutido/concessionarias | Out-Null
+          Copy-Item concessionarias/*.py codigo_embutido/concessionarias/
           # cnab240 é o único pacote com DADOS: a parametrização do layout vive
           # em spec/*.json e é lida em runtime. Copiar só os .py faz o pacote
           # importar e estourar na primeira remessa — ver test_cnab240_pacote.py.

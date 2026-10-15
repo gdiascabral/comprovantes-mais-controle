@@ -35,7 +35,7 @@ várias abas no mesmo perfil.
 | # | Plano | Entrega que se sustenta sozinha | Arquivo |
 |---|---|---|---|
 | 1 | **Porteiro do ERP** | Um Chrome central por acesso; o app e o água e energia conectam a ele em vez de logar. Duas rotinas ao mesmo tempo, sem queda. | `2026-10-14-porteiro-do-erp.md` |
-| 2 | **Água e energia pelo app** | Botão no app que dispara a rodada (com `--forcar`), com trava contra duas rodadas e registro de quem disparou. | escrito depois do plano 1 |
+| 2 | **Água e energia pelo app** | Botão no app que dispara a rodada (com `--forcar`), com trava contra duas rodadas e registro de quem disparou. | `2026-10-14-agua-energia-pelo-app.md` |
 | 3 | **Página web no servidor** | A tela nova (`tela/`, React + `http.server`) passa a ouvir no IP do Tailscale, com login pelo Supabase. As rotinas viram pedidos numa fila que o servidor executa. | escrito depois do plano 2 |
 | 4 | **Sicoob e Inter pela página** | O Chrome do banco roda no servidor; a página mostra o QR code para a pessoa ler no celular. | depende da decisão abaixo |
 

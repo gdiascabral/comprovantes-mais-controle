@@ -4,7 +4,7 @@ Galeria de telas — ferramenta LOCAL para conferir o visual do app.
 
 O que é
 -------
-Monta as mesmas 12 telas que `comprovantes_app.py` monta (Início e as onze
+Monta as mesmas 13 telas que `comprovantes_app.py` monta (Início e as doze
 abas do menu) e fotografa cada uma — nos dois temas (claro e escuro) e,
 com `--escala`, também simulando a escala de exibição do Windows. Não é um
 teste: não compara nada contra ninguém e não falha sozinho. É o registro do
@@ -104,6 +104,7 @@ from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
+from concessionarias.frame import AguaEnergiaFrame
 from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
 
 
@@ -197,11 +198,12 @@ _ORDEM = (
     ("ext", "🏦", "Extratos Sicoob", "extratos-sicoob"),
     ("ctr", "📑", "Contratos", "contratos"),
     ("acs", "📤", "Acessorias", "acessorias"),
+    ("agu", "💧", "Água e energia", "agua-e-energia"),
 )
 
 
 def _montar_janela(root: tk.Tk, largura: int, altura: int):
-    """A moldura e as 12 abas, sem login e sem navegador nenhum.
+    """A moldura e as 13 telas, sem login e sem navegador nenhum.
 
     `root` já existe (e já tem a escala aplicada, se for o caso — ver
     `main()`: `tk scaling` muda o interpretador Tcl, e um `Tk()` novo não
@@ -305,6 +307,9 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
     # navegador e thread próprios, como no app de verdade.
     _montar("ext", lambda: ExtratosSicoobFrame(conteudo))
     _montar("acs", lambda: AcessoriasFrame(conteudo))
+    # Sem a instalação do água e energia (pasta=None) a aba nasce desligada:
+    # a galeria nunca dispara rodada.
+    _montar("agu", lambda: AguaEnergiaFrame(conteudo, pasta=None))
     # `obter_mapa=None`: sem cadastro de contas, a fila nasce vazia — a tela
     # aparece com a mensagem "nenhuma conta no cadastro", que é a tela real
     # de quem ainda não sincronizou.
@@ -364,7 +369,7 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
         for chave, icone, texto, _slug in itens_do_grupo:
             _item(corpo_g, chave, icone, texto, recuo=10)
 
-    _grupo("DIÁRIO", tuple(i for i in _ORDEM if i[0] in ("pag", "con")))
+    _grupo("DIÁRIO", tuple(i for i in _ORDEM if i[0] in ("pag", "con", "agu")))
     _grupo("MENSAL", tuple(i for i in _ORDEM if i[0] in ("rel", "ext", "ctr", "acs")))
 
     return quadros, mostrar, aplicar_tema
