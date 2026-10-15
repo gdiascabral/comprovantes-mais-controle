@@ -7,6 +7,8 @@ vez só. O inventário que levantou cada regra — com a evidência em
 """
 from __future__ import annotations
 
+import atexit
+import threading
 from dataclasses import dataclass, field
 
 import requests
@@ -210,6 +212,12 @@ class Sessao:
         registra do lado do ERP (`anexar/mc_api.py:537-540`). Vazio usa o
         `hosts.URL_LOGIN`, que é o endereço de verdade.
         """
+        # Regra do dono (14/10/2026): com o Chrome central ligado, o ERP e
+        # acessado SEMPRE pela pagina. Login HTTP aqui derrubaria a sessao do
+        # Chrome central (o ERP aceita uma por usuario). Vem antes de qualquer
+        # uso de e-mail e senha: quem entra e o porteiro, sem credencial.
+        if central_ligado():
+            return _sessao_do_central()
         if not (email and senha):
             raise SessaoRecusada("sem credenciais para entrar no Mais Controle.")
         url = url or hosts.URL_LOGIN
@@ -400,6 +408,69 @@ def cabecalhos_base() -> dict:
         "referer": hosts.ACESSAR + "/",
         "user-agent": USER_AGENT,
     }
+
+
+def central_ligado(nome: str = "principal") -> bool:
+    """`central.ligado`, com o arquivo de acessos estragado virando `ErpErro`.
+
+    Falha FECHADA de propósito: cair no login HTTP com o `acessos.json`
+    quebrado derrubaria a sessão do Chrome central (uma por usuário no ERP).
+    """
+    from . import central
+    try:
+        return central.ligado(nome)
+    except ValueError as e:
+        raise ErpErro(
+            f"o arquivo de acessos do Chrome central esta com problema: {e}. "
+            "Corrija-o ou defina MC_CENTRAL=off."
+        ) from e
+
+
+# UMA sessão pela página por (processo, nome do acesso): cada `logar` abria
+# thread e aba novas e ninguém as fechava; no servidor 24/7 acumulava uma aba
+# por abertura ou coleta. A trava impede duas threads de criarem duas.
+_CENTRAIS: dict = {}
+_TRAVA_CENTRAIS = threading.Lock()
+
+
+def _sessao_do_central(nome: str = "principal"):
+    from .sessao_pagina import SessaoPelaPagina
+    with _TRAVA_CENTRAIS:
+        atual = _CENTRAIS.get(nome)
+        if atual is None or not atual.viva:
+            if atual is not None:
+                # Fechada ou quebrada: fecha antes de trocar. Com CDP a aba
+                # sobrevive ao processo; sem isso ficaria órfã no Chrome central.
+                _CENTRAIS.pop(nome, None)
+                _fechar_quieto(atual)
+            atual = SessaoPelaPagina.do_acesso(nome)
+            _CENTRAIS[nome] = atual
+        return atual
+
+
+def _fechar_quieto(s) -> None:
+    try:
+        s.fechar()
+    except Exception:
+        pass          # aba já morta: fechar é cortesia, nunca derruba ninguém
+
+
+def _fechar_centrais() -> None:
+    """Fecha toda sessão pela página guardada. Registrada no `atexit`.
+
+    O `atexit` roda depois do join das threads comuns e ANTES de o
+    interpretador congelar as daemon — a thread dona de cada aba ainda está
+    viva para receber a sentinela de `fechar()` (que serve de qualquer thread)
+    e fechar a aba. Fecha fora da trava: `fechar()` pode esperar a dona sair.
+    """
+    with _TRAVA_CENTRAIS:
+        todas = list(_CENTRAIS.values())
+        _CENTRAIS.clear()
+    for s in todas:
+        _fechar_quieto(s)
+
+
+atexit.register(_fechar_centrais)
 
 
 def _pedir(url: str, *, metodo: str, corpo, cabecalhos: dict, transporte=None,

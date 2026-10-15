@@ -87,3 +87,31 @@ paths:
   recarregada cai no login) leva a UM `garantir_login` e UMA releitura; e a
   captura começa sem o token velho. Provado ao vivo forçando um login por fora
   entre a captura e a leitura (`tests/test_aportes_cadastro_401.py`).
+
+- **O Chrome central e o porteiro** (14/10/2026; manual em `docs/PORTEIRO.md`).
+  O ERP aceita uma sessão por usuário, mas abas do MESMO perfil do Chrome
+  dividem a sessão. Então um Chrome por acesso, com CDP só em 127.0.0.1, e os
+  robôs abrem aba nele em vez de logar. Três módulos:
+  `central.py` sabe ONDE está cada acesso (`acessos.json` na pasta central,
+  lido com BOM ou sem; formato errado vira `ValueError` com o caminho) e COMO
+  subir o Chrome uma vez (`garantir_chrome`, sob trava de arquivo, apagando o
+  `History` do perfil antes do `popen`, porque o Chrome 152 cai no 1º download
+  de perfil que já baixou). Não importa nada do app: o água e energia o copia
+  byte a byte em `coletor/mc_central.py` — mudou aqui, copie lá.
+  `sessao_pagina.py` é a `SessaoPelaPagina`, o que `Sessao.logar` devolve com
+  o central ligado: uma aba própria numa thread própria, que copia a
+  autenticação do tráfego da tela e faz `fetch` de dentro da página; uma por
+  (processo, acesso), guardada em `sessao._CENTRAIS` e fechada no `atexit`.
+  `porteiro.py` é o único que entra pela tela: sobe o Chrome, confere o login
+  a cada ciclo e fecha a própria aba ao sair (Ctrl+C, SIGTERM/SIGBREAK,
+  `atexit`).
+  **Regra: robô nunca fecha o Chrome central** — nem `browser.close()` nem
+  `ctx.close()`; com `connect_over_cdp` isso derruba os outros e a sessão.
+  Cada um fecha só as abas que abriu (`AbaCentral`).
+  **A trava de login é comum ao app e ao água e energia**:
+  `<perfil>/../.<nome>.login.trava`, pela mesma `central.trava`; quem precisa
+  logar no central espera quem já está logando.
+  **`MC_CENTRAL=off`** desliga tudo e o app volta a ser o de antes; renomear o
+  `acessos.json` para `acessos.json.off` faz o mesmo na máquina inteira.
+  Arquivo de acessos com problema falha FECHADO (`ErpErro`/`RuntimeError`),
+  nunca cai no login HTTP — que derrubaria a sessão central.

@@ -497,3 +497,194 @@ def test_a_telemetria_fica_de_fora_da_captura():
     assert not hosts.vale_a_pena("api-data-event.maiscontroleerp.com.br")
     assert not hosts.vale_a_pena("faro.exemplo.test")
     assert not hosts.vale_a_pena("outro-sistema.com.br")
+
+
+# --------------------------------------------------- Chrome central (porteiro)
+
+def test_logar_com_central_ligado_nao_toca_a_rede(monkeypatch):
+    from erp import central, sessao_pagina
+    monkeypatch.setattr(central, "ligado", lambda nome="principal", pasta=None: True)
+    falsa = type("Falsa", (), {"viva": True})()
+    monkeypatch.setattr(sessao_pagina.SessaoPelaPagina, "do_acesso",
+                        classmethod(lambda cls, nome="principal", **k: falsa))
+
+    def proibido(*a, **k):
+        raise AssertionError("login HTTP com o central ligado")
+    monkeypatch.setattr(sessao, "_pedir", proibido)
+    # Nem e-mail nem senha: quem entra e o porteiro, pela tela.
+    assert sessao.Sessao.logar("", "") is falsa
+    assert sessao.Sessao.logar("fulano@exemplo.test", "x") is falsa
+
+
+def test_logar_com_central_desligado_segue_como_antes(monkeypatch):
+    from erp import central
+    monkeypatch.setattr(central, "ligado", lambda nome="principal", pasta=None: False)
+    chamado = {}
+
+    def pedir_falso(*a, **k):
+        chamado["sim"] = True
+        return CORPO_DO_LOGIN
+    monkeypatch.setattr(sessao, "_pedir", pedir_falso)
+    s = sessao.Sessao.logar("fulano@exemplo.test", "x")
+    assert chamado and s.access_token == CORPO_DO_LOGIN["accessToken"]
+
+
+def _central_ligado(monkeypatch):
+    from erp import central
+    monkeypatch.setattr(central, "ligado", lambda nome="principal", pasta=None: True)
+
+
+def _fabrica_de_dubles(monkeypatch):
+    from erp import sessao_pagina
+    criadas = []
+
+    class Dubla:
+        viva = True
+        fechadas = 0
+
+        def fechar(self):
+            self.fechadas += 1
+
+    def do_acesso(cls, nome="principal", **k):
+        d = Dubla()
+        criadas.append(d)
+        return d
+    monkeypatch.setattr(sessao_pagina.SessaoPelaPagina, "do_acesso",
+                        classmethod(do_acesso))
+    return criadas
+
+
+def test_acessos_corrompido_falha_fechado_com_erperro(monkeypatch):
+    from erp import central
+
+    def estragado(nome="principal", pasta=None):
+        raise ValueError("JSON invalido")
+    monkeypatch.setattr(central, "ligado", estragado)
+    monkeypatch.setattr(sessao, "_pedir", lambda *a, **k: pytest.fail("rede"))
+    with pytest.raises(sessao.ErpErro, match="MC_CENTRAL=off"):
+        sessao.Sessao.logar("fulano@exemplo.test", "x")
+
+
+def test_dois_logar_devolvem_a_mesma_sessao_do_central(monkeypatch):
+    _central_ligado(monkeypatch)
+    criadas = _fabrica_de_dubles(monkeypatch)
+    a = sessao.Sessao.logar("", "")
+    assert sessao.Sessao.logar("", "") is a
+    assert len(criadas) == 1
+
+
+def test_logar_cria_outra_se_a_anterior_fechou_ou_quebrou(monkeypatch):
+    _central_ligado(monkeypatch)
+    criadas = _fabrica_de_dubles(monkeypatch)
+    a = sessao.Sessao.logar("", "")
+    a.viva = False
+    b = sessao.Sessao.logar("", "")
+    assert b is not a
+    b.viva = False
+    c = sessao.Sessao.logar("", "")
+    assert c is not b and len(criadas) == 3
+    # A quebrada substituída é fechada: com CDP a aba sobrevive ao processo.
+    assert (a.fechadas, b.fechadas, c.fechadas) == (1, 1, 0)
+
+
+def test_fechar_centrais_fecha_todas_as_guardadas(monkeypatch):
+    _central_ligado(monkeypatch)
+    criadas = _fabrica_de_dubles(monkeypatch)
+    sessao._sessao_do_central("principal")
+    sessao._sessao_do_central("robo2")
+    sessao._fechar_centrais()
+    assert [d.fechadas for d in criadas] == [1, 1]
+
+
+def test_fechar_centrais_segue_mesmo_se_uma_falha(monkeypatch):
+    class Ruim:
+        viva = True
+
+        def fechar(self):
+            raise RuntimeError("aba já morta")
+
+    class Boa:
+        viva = True
+        fechadas = 0
+
+        def fechar(self):
+            self.fechadas += 1
+    boa = Boa()
+    sessao._CENTRAIS.update({"a": Ruim(), "b": boa})
+    sessao._fechar_centrais()
+    assert boa.fechadas == 1
+
+
+def test_fechar_centrais_roda_na_saida_com_as_threads_daemon_vivas(tmp_path):
+    # Sem `fechar()`, a aba (CDP) sobrevive ao processo e cada abertura do app
+    # deixa uma no Chrome central. Prova de ponta a ponta: um processo que
+    # importa erp.sessao, guarda uma sessão e simplesmente termina.
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+    raiz = Path(sessao.__file__).resolve().parent.parent
+    marca = tmp_path / "fechou.txt"
+    codigo = textwrap.dedent("""
+        import sys, threading, time
+        raiz, marca = sys.argv[1], sys.argv[2]
+        sys.path.insert(0, raiz)
+        from erp import sessao
+        t = threading.Thread(target=lambda: time.sleep(60), daemon=True)
+        t.start()
+        class D:
+            viva = True
+            def fechar(self):
+                with open(marca, "w") as f:
+                    f.write(str(t.is_alive()))
+        sessao._CENTRAIS["principal"] = D()
+    """)
+    r = subprocess.run([sys.executable, "-c", codigo, str(raiz), str(marca)],
+                       capture_output=True,
+                       text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert marca.read_text() == "True"
+
+
+def test_duas_threads_em_logar_criam_uma_so(monkeypatch):
+    import threading
+    import time
+    import types
+    from erp import sessao_pagina
+    _central_ligado(monkeypatch)
+    n = []
+
+    def lento(cls, nome="principal", **k):
+        n.append(1)
+        time.sleep(0.2)
+        return types.SimpleNamespace(viva=True)
+    monkeypatch.setattr(sessao_pagina.SessaoPelaPagina, "do_acesso",
+                        classmethod(lento))
+    saida = []
+    ts = [threading.Thread(target=lambda: saida.append(sessao.Sessao.logar("", "")))
+          for _ in range(2)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len(n) == 1 and saida[0] is saida[1]
+
+
+def test_do_acesso_que_levanta_nao_fica_no_cache(monkeypatch):
+    from erp import sessao_pagina
+    _central_ligado(monkeypatch)
+    chamadas = []
+
+    def do_acesso(cls, nome="principal", **k):
+        chamadas.append(1)
+        if len(chamadas) == 1:
+            raise sessao.ErpErro("o porteiro precisa entrar")
+
+        class Ok:
+            viva = True
+        return Ok()
+    monkeypatch.setattr(sessao_pagina.SessaoPelaPagina, "do_acesso",
+                        classmethod(do_acesso))
+    with pytest.raises(sessao.ErpErro):
+        sessao.Sessao.logar("", "")
+    assert sessao._CENTRAIS == {}
+    assert sessao.Sessao.logar("", "") is sessao._CENTRAIS["principal"]
+    assert len(chamadas) == 2

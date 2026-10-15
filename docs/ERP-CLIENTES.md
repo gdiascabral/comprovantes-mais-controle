@@ -216,6 +216,8 @@ consumidor mais fácil de migrar não precisar de adaptador nenhum.
 | `pageIndex`/`pageSize` | `prod-erp-api` (contas, participantes, obras) | **1** | `hasNextPage` | trocar por `page`/`size` devolve sempre a primeira página, sem erro (`anexar/mc_api.py:627-629`) |
 | `page`/`size` | `legacy-api` (parcelas, recebimentos, contatos) | **0** | `hasNextPage` ou `last` | `pageIndex`/`pageSize` são aceitos e **ignorados**, e a resposta volta com o padrão de 20 registros parecendo completa (`anexar/mc_api.py:537-540`); `page=1` traz a segunda página, vazia (`:402-403`) |
 
+**`erp/central.py` e `erp/porteiro.py`** (Chrome central): um Chrome por acesso, logado só pelo porteiro, com os robôs em aba própria; ver `docs/PORTEIRO.md`.
+
 ### Ordem de migração
 
 Do que não tem como quebrar ao que quebra tudo. Um PR por linha.

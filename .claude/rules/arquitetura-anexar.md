@@ -197,3 +197,18 @@ paths:
   assinatura, mesmos chamadores, e o `ARQUIVO_DIAG` passou a sair de
   `util.pasta_base()`. O `ARQUIVO_LOG` (`log_anexos.csv`) ainda não — é o
   último caminho aqui calculado pela pasta do módulo.
+
+## MCClient no modo central (Chrome central ligado)
+
+Com `acesso=` (ou `acessos.json` com "principal" e `MC_CENTRAL` diferente de
+`off`), `MCClient.central` é True e o cliente não lança Chrome próprio: conecta
+por CDP no Chrome central (`erp/central.py`, mantido por `erp/porteiro.py`;
+ver `docs/PORTEIRO.md`). O que muda:
+
+- **Aba própria**: abre UMA aba e trabalha só nela; na saída fecha só as suas.
+- **Nunca `ctx.close()`/`browser.close()`**: fecharia o Chrome de todos.
+- **`garantir_login` pega a trava** `.<acesso>.login.trava` (espera e `velha`
+  de 600 s); se a espera estoura, devolve `False` sem entrar.
+- **`_abas_da_pessoa()` vem vazia**: aba que não é nossa pode ser de outro robô.
+- **`abrir_aba_da_pessoa` é sempre aba nova**, para não trazer à frente a de
+  outro robô.
