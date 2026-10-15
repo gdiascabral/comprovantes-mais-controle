@@ -140,9 +140,9 @@ class AportesFrame(ttk.Frame):
 
         ttk.Label(form, style="Tenue.TLabel", wraplength=px(760),
                   justify="left",
-                  text="Em Pagou e Recebeu, digite para procurar — sem acento e "
-                       "por pedaço do nome (\"696\", \"livia\"). A seta abre a "
-                       "lista já filtrada."
+                  text="Em Pagou e Recebeu, comece a digitar e a lista mostra o "
+                       "que contém as letras — sem acento e por pedaço do nome "
+                       "(\"696\", \"livia\"). ↑↓ andam, Enter escolhe, Esc fecha."
                   ).pack(anchor="w", pady=px((10, 0)))
 
         # É esta que o Enter dispara, e não "Lançar no Mais Controle": num
