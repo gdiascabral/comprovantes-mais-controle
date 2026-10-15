@@ -37,6 +37,37 @@ def test_valor_bate_e_nome_nao_divide_palavra_sai_ambar():
     assert A.ESTADO[li.situacao] == "atencao"
 
 
+def test_boleto_sem_nome_casa_pela_descricao_colada():
+    # Em boleto o Sicoob devolve só "Observação: <descrição>", sem recebedor.
+    desc = "OBRA X QD 9 LT 9 NF 123 OC 456"
+    [li] = A.confrontar([entrada(4500, "Fornecedor Exemplo", desc)],
+                        [pendencia(45.0, f"Observação: {desc}", observacao=desc)])
+    assert li.situacao == A.OK
+
+
+def test_observacao_cortada_pelo_banco_ainda_casa():
+    desc = "CONDOMINIO EXEMPLO Constituicao do CNPJ RET 10 unidades RPB 99"
+    [li] = A.confrontar([entrada(10000, "Escritorio Exemplo", desc)],
+                        [pendencia(100.0, "Observação: " + desc[:45],
+                                   observacao=desc[:45])])
+    assert li.situacao == A.OK
+
+
+def test_pedaco_curto_demais_nao_prova_nada():
+    [li] = A.confrontar([entrada(10000, "Fornecedor Exemplo",
+                                 "OBRA X QD 1 LT 2 OC 300")],
+                        [pendencia(100.0, "Observação: OBRA X",
+                                   observacao="OBRA X")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
+def test_boleto_de_mesmo_valor_e_outra_descricao_nao_e_ok():
+    [li] = A.confrontar([entrada(4500, "Fornecedor Exemplo", "OBRA X OC 1")],
+                        [pendencia(45.0, "Observação: OBRA Y OC 2",
+                                   observacao="OBRA Y OC 2")])
+    assert li.situacao == A.NOME_DIFERENTE
+
+
 def test_nome_desempata_dois_agendamentos_do_mesmo_valor():
     e1 = entrada(1000, "Alfa Materiais")
     e2 = entrada(1000, "Beta Servicos")

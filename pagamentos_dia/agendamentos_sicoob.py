@@ -255,6 +255,44 @@ def _descricao(texto) -> str:
     return util.norm_espaco(s)
 
 
+def mesma_descricao(entrada: dict, pendencia: dict) -> bool:
+    """A descrição do HTML é a observação (ou o detalhe) da pendência?
+
+    Em boleto e convênio o Sicoob NÃO devolve quem recebe: o `detalhe` é
+    "Observação: <o que se digitou>" (medido em 15/10/2026, em todas as
+    contas). Ali a prova de que é o mesmo pagamento é a descrição colada do
+    HTML — mais forte que o nome, porque leva centro de custo, NF e OC.
+
+    **O banco corta a observação** (a de 15/10/2026 parou no meio de uma
+    palavra, bem antes dos 100 caracteres que o HTML deixa colar). Por isso
+    vale também uma ser o COMEÇO da outra, desde que o pedaço comum tenha
+    `MINIMO_DO_PREFIXO` caracteres — curto demais, "OBRA X" casaria com
+    qualquer lançamento da mesma obra."""
+    d = _descricao(entrada.get("descricao"))
+    if not d:
+        return False
+    for b in (_descricao(pendencia.get("observacao")),
+              _descricao(pendencia.get("detalhe"))):
+        if not b:
+            continue
+        if d == b:
+            return True
+        curta, longa = sorted((d, b), key=len)
+        if len(curta) >= MINIMO_DO_PREFIXO and longa.startswith(curta):
+            return True
+    return False
+
+
+#: Quantos caracteres o pedaço comum precisa ter para "uma descrição é o
+#: começo da outra" contar como prova (ver `mesma_descricao`).
+MINIMO_DO_PREFIXO = 20
+
+
+def mesmo_pagamento(entrada: dict, pendencia: dict) -> bool:
+    return mesmo_recebedor(entrada, pendencia) or mesma_descricao(entrada,
+                                                                  pendencia)
+
+
 def confrontar(entradas, pendencias) -> list[Linha]:
     """Casa as linhas do HTML de UMA conta com as pendências dela no banco.
 
@@ -277,14 +315,10 @@ def confrontar(entradas, pendencias) -> list[Linha]:
     def mesmo_valor(e, p):
         return int(e.get("centavos") or 0) == centavos_do_banco(p)
 
-    passada(lambda e, p: mesmo_valor(e, p) and mesmo_recebedor(e, p),
+    passada(lambda e, p: mesmo_valor(e, p) and mesmo_pagamento(e, p),
             lambda e, p: OK)
     passada(mesmo_valor, lambda e, p: NOME_DIFERENTE)
-    passada(lambda e, p: (bool(_descricao(e.get("descricao")))
-                          and _descricao(e.get("descricao"))
-                          in (_descricao(p.get("observacao")),
-                              _descricao(p.get("detalhe")))),
-            lambda e, p: VALOR_DIVERGE)
+    passada(mesma_descricao, lambda e, p: VALOR_DIVERGE)
 
     linhas = (casadas
               + [Linha(FALTA_NO_BANCO, e, None) for e in sobra_html]
