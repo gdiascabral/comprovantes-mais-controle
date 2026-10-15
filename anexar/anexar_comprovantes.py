@@ -233,6 +233,10 @@ class AnexarFrame(ttk.Frame):
         self._rotulo_atual = None
         self.mc = None                       # MCClient aberto entre as etapas
         self.api = None
+        # Recusas de fora do navegador do app: callables sem argumento que
+        # devolvem o texto da recusa ou None (ver `avisar_se_ocupado`). Hoje
+        # só a aba Água e energia (a rodada loga no ERP por HTTP).
+        self.bloqueios_externos: list = []
         # O pulso do navegador (ver `_pulsar_navegador`) e a trava que o
         # desliga ao sair — depois do `fechar()` o executor não aceita nada.
         self._pulso_nav = None
@@ -471,6 +475,20 @@ class AnexarFrame(ttk.Frame):
 
     def avisar_se_ocupado(self, dona: str) -> bool:
         """True (e mostra o aviso) se o navegador já estiver em uso."""
+        for bloqueio in getattr(self, "bloqueios_externos", ()):
+            try:
+                texto = bloqueio()
+            except Exception:                                # noqa: BLE001
+                util.log("anexar").warning("bloqueio externo falhou; ignorado",
+                                           exc_info=True)
+                continue
+            if texto:
+                # Sem oferecer "abrir minha aba": abrir ou logar derrubaria
+                # a sessão do processo que está lançando.
+                messagebox.showwarning(
+                    "ERP em uso",
+                    f"{texto}.\n\n{dona} precisa esperar a rodada terminar.")
+                return True
         quem = self.ocupado()
         if not quem:
             return False

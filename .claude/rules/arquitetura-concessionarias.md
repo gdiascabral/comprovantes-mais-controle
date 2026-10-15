@@ -18,6 +18,15 @@ paths:
   `MC_AGUA_ENERGIA`; `MC_AGUA_ENERGIA=off` desliga (a aba abre com o botão
   apagado e diz por quê). Sem `coletor\rodada_diaria.bat` na pasta, é o mesmo
   que desligada.
+- **O marcador `RODADA_PELO_APP.txt`** (na pasta do água e energia, criado À MÃO
+  na máquina que roda a rodada; nada de nome de máquina no repositório). A trava
+  da rodada é local: uma cópia do água e energia noutro computador, com as
+  tarefas desligadas para não rodar em dobro, ligaria o botão e as duas máquinas
+  rodariam juntas. Sem o marcador o botão fica apagado e o status diz "Esta
+  máquina não está marcada para rodar o água e energia pelo app ... A rodada roda
+  na máquina das tarefas agendadas." `rodada.situacao_da_instalacao()` devolve
+  `(pasta | None, motivo)` e distingue "não instalado" de "instalado sem
+  marcador"; `pasta_agua_energia()` é o atalho.
 
 ## O contrato com o água e energia
 
@@ -67,19 +76,26 @@ mensagem "já estava em andamento"). Por isso a rodada do app tem log próprio:
 `coletor\logs\rodada_app_AAAAMMDD_HHMMSS_<pid>[_n].log`, RESERVANDO o nome com
 `open(..., "x")` (duas rodadas no mesmo segundo não pegam o mesmo arquivo);
 `frame.rodar` chama `novo_log` dentro do mesmo `try OSError` do `iniciar` (status
-"Não consegui iniciar a rodada: ..."). `iniciar(..., log=)` o passa ao `.bat` e `iniciar(..., log=)` o passa ao `.bat` pela variável de ambiente
-`RODADA_LOG`. O `Leitor` nasce **antes** do `iniciar` e lê só o que chegar
+"Não consegui iniciar a rodada: ..."). `iniciar(..., log=)` o passa ao `.bat` pela variável de ambiente `RODADA_LOG`. O `Leitor` nasce **antes** do `iniciar` e lê só o que chegar
 depois dele (linha inteira por vez; arquivo truncado recomeça).
 
 ## Chrome central ligado × desligado
 
 - **Ligado** (`erp.central.ligado()`): a rodada abre a aba dela no Chrome do
   porteiro e nenhuma sessão cai. A aba dispara direto.
-- **Desligado**: a rodada abre o próprio Chrome e entra no ERP com o login do
-  app — o ERP aceita **uma sessão por usuário**, e a do app cai. Por isso, só na
-  rodada completa (a `--so equatorial` não toca no ERP): se o Anexar está
-  trabalhando (`anx.ocupado()`), a aba **recusa**; se está livre, **pergunta**
-  antes. Quem perguntou "não" não dispara nada.
+- **Desligado**: a rodada entra no ERP por conta própria (login por HTTP, com a
+  credencial do app) — o ERP aceita **uma sessão por usuário**, e a do app cai.
+  Por isso, só na rodada completa (a `--so equatorial` não toca no ERP): se o
+  Anexar está trabalhando (`anx.ocupado()`), a aba **recusa**; se está livre,
+  **pergunta** antes. Quem perguntou "não" não dispara nada. O status de
+  "Rodando" acrescenta "Não use as abas do ERP até terminar."
+- **Bloqueios externos**: só o clique estava protegido; depois de a rodada
+  completa começar, iniciar Anexar/Aportes/Conciliação/Contratos/Remessa
+  derrubaria a sessão dela no meio do lançamento. `AguaEnergiaFrame.bloqueio_do_erp()`
+  devolve o texto da recusa só enquanto há rodada desta aba, COMPLETA, disparada
+  com o central desligado (senão None). O `comprovantes_app.py` o registra em
+  `aba_anx.bloqueios_externos`, e `AnexarFrame.avisar_se_ocupado` o consulta
+  antes de tudo (aviso "ERP em uso", sem oferecer "abrir minha aba").
 
 ## Sem `fechar()`, e por quê
 

@@ -12,8 +12,9 @@ código de saída 3 = outra rodada em andamento; a trava e o info em
 mudar o outro.
 
 O Chrome central não entra aqui: a rodada é que conecta nele quando está
-ligado (`mc_central.py` de lá) ou abre o próprio Chrome quando não está — e é
-a tela (`frame.py`) que avisa do segundo caso.
+ligado (`mc_central.py` de lá) ou entra no ERP por conta própria (login por
+HTTP, com a credencial do app) quando não está — e é a tela (`frame.py`) que
+avisa do segundo caso.
 """
 from __future__ import annotations
 
@@ -37,13 +38,39 @@ _TRANCADA = (errno.EACCES, errno.EDEADLK)             # o que o msvcrt levanta
 _RESUMO = re.compile(r"resumo salvo em (.+?)\s*$")
 
 
-def pasta_agua_energia() -> Path | None:
-    """A instalação do água e energia, ou None (desligada ou ausente)."""
+NOME_MARCADOR = "RODADA_PELO_APP.txt"
+MOTIVO_SEM_MARCADOR = (
+    "Esta máquina não está marcada para rodar o água e energia pelo app "
+    f"(falta {NOME_MARCADOR} na pasta do água e energia). "
+    "A rodada roda na máquina das tarefas agendadas.")
+MOTIVO_NAO_INSTALADO = ("O água e energia não está instalado nesta máquina "
+                        "(ou MC_AGUA_ENERGIA=off).")
+
+
+def situacao_da_instalacao() -> tuple[Path | None, str]:
+    """(pasta, motivo): a pasta quando o botão pode ficar ligado, ou None com
+    o motivo em texto de tela.
+
+    Duas condições além de não estar desligada: o `.bat` existe E existe o
+    marcador local `RODADA_PELO_APP.txt` ao lado das pastas dele. O marcador é
+    criado à mão na máquina que roda a rodada; sem ele, uma cópia do água e
+    energia noutro computador (cujas tarefas foram desligadas para não rodar
+    em dobro) ligaria o botão, e a trava da rodada é local — duas máquinas
+    rodariam ao mesmo tempo."""
     valor = (os.environ.get("MC_AGUA_ENERGIA") or "").strip()
     if valor.lower() == "off":
-        return None
+        return None, MOTIVO_NAO_INSTALADO
     pasta = Path(valor) if valor else PASTA_PADRAO
-    return pasta if (pasta / "coletor" / "rodada_diaria.bat").is_file() else None
+    if not (pasta / "coletor" / "rodada_diaria.bat").is_file():
+        return None, MOTIVO_NAO_INSTALADO
+    if not (pasta / NOME_MARCADOR).is_file():
+        return None, MOTIVO_SEM_MARCADOR
+    return pasta, ""
+
+
+def pasta_agua_energia() -> Path | None:
+    """A instalação do água e energia que roda pelo app, ou None."""
+    return situacao_da_instalacao()[0]
 
 
 def origem_segura(nome: str) -> str:

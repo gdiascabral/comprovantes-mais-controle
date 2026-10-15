@@ -7,9 +7,11 @@ não tem navegador nem thread própria, e por isso não tem `fechar()`: fechar o
 app não para a rodada, e a trava de lá impede uma segunda.
 
 Chrome central LIGADO: a rodada abre a aba dela no Chrome do porteiro e nada
-cai. DESLIGADO: ela abre o próprio Chrome e entra no ERP com o login do app —
-uma sessão por usuário, e a do app cai. Por isso, desligado, a aba recusa
-enquanto o Anexar trabalha e pede confirmação quando ele está livre.
+cai. DESLIGADO: ela entra no ERP por conta própria (login por HTTP, com a
+credencial do app) — uma sessão por usuário, e a do app cai. Por isso,
+desligado, a aba recusa enquanto o Anexar trabalha e pede confirmação quando
+ele está livre; e, durante a rodada completa, as outras abas do ERP ficam
+bloqueadas (`bloqueio_do_erp`, ligado ao `AnexarFrame.bloqueios_externos`).
 """
 from __future__ import annotations
 
@@ -23,6 +25,8 @@ from widgets import px
 from . import rodada
 
 _INTERVALO_MS = 1000
+_PRONTO = "Pronto. A tarefa agendada continua rodando nos horários dela."
+_LINHAS_DE_FALHA = 20
 _PADRAO = object()
 
 
@@ -63,7 +67,10 @@ class AguaEnergiaFrame(ttk.Frame):
                  central_ligado=None, perguntar=None, registrar=None, quem=None):
         super().__init__(master)
         self.anx = anx
-        self.pasta = rodada.pasta_agua_energia() if pasta is _PADRAO else pasta
+        if pasta is _PADRAO:
+            self.pasta, motivo = rodada.situacao_da_instalacao()
+        else:
+            self.pasta, motivo = pasta, rodada.MOTIVO_NAO_INSTALADO
         self._iniciar = iniciar or rodada.iniciar
         self._central_ligado = central_ligado or _central_ligado
         self._perguntar = perguntar or (lambda t, m: messagebox.askyesno(t, m, parent=self))
@@ -73,15 +80,19 @@ class AguaEnergiaFrame(ttk.Frame):
         self.leitor = None
         self._linhas: list[str] = []
         self._pedido = ""
+        # A rodada completa em curso foi disparada com o Chrome central
+        # desligado (ver `bloqueio_do_erp`).
+        self._completa_sem_central = False
+        # O status mostrado é "rodada em andamento" de outra origem (ao_abrir).
+        self._status_alheio = False
         self.v_so = tk.StringVar(value="completa")
         self.v_status = tk.StringVar()
         self._build()
         if self.pasta is None:
             self.b_rodar.configure(state="disabled")
-            self.v_status.set("O água e energia não está instalado nesta máquina "
-                              "(ou MC_AGUA_ENERGIA=off).")
+            self.v_status.set(motivo)
         else:
-            self.v_status.set("Pronto. A tarefa agendada continua rodando nos horários dela.")
+            self.v_status.set(_PRONTO)
 
     # ---------------------------------------------------------------- layout
     def _build(self):
@@ -140,11 +151,26 @@ class AguaEnergiaFrame(ttk.Frame):
             return "Rodada de água e energia"
         return None
 
+    def bloqueio_do_erp(self) -> str | None:
+        """Texto de recusa para as outras abas do ERP, ou None.
+
+        Só durante a rodada COMPLETA desta aba disparada com o Chrome central
+        desligado: ela loga no ERP por HTTP com o mesmo usuário, e o login de
+        qualquer outra aba derrubaria a sessão dela no meio do lançamento."""
+        if self.proc is not None and self._completa_sem_central:
+            return ("A rodada de água e energia está lançando no ERP com o "
+                    "Chrome central desligado")
+        return None
+
     def ao_abrir(self):
         if self.proc is None and self.pasta is not None:
             info = rodada.em_andamento(self.pasta)
             if info is not None:
                 self.v_status.set(_msg_andamento(info))
+                self._status_alheio = True
+            elif self._status_alheio:
+                self.v_status.set(_PRONTO)      # a rodada que estava ali acabou
+                self._status_alheio = False
 
     def rodar(self):
         if self.pasta is None or self.proc is not None:
@@ -152,9 +178,11 @@ class AguaEnergiaFrame(ttk.Frame):
         info = rodada.em_andamento(self.pasta)
         if info is not None:
             self.v_status.set(_msg_andamento(info))
+            self._status_alheio = True
             return
         so = None if self.v_so.get() == "completa" else self.v_so.get()
-        if so is None and not self._central_ligado():
+        sem_central = so is None and not self._central_ligado()
+        if sem_central:
             tarefa = self.anx.ocupado() if self.anx is not None else None
             if tarefa:
                 self.v_status.set(f"O Anexar está usando o ERP ({tarefa}). Sem o Chrome "
@@ -176,11 +204,14 @@ class AguaEnergiaFrame(ttk.Frame):
             self.leitor = None
             self.v_status.set(f"Não consegui iniciar a rodada: {e}")
             return
+        self._completa_sem_central = sem_central
+        self._status_alheio = False
         self.b_rodar.configure(state="disabled")
         self.log.delete("1.0", "end")
         self.resumo.delete("1.0", "end")
+        aviso = " Não use as abas do ERP até terminar." if sem_central else ""
         self.v_status.set(f"Rodando ({self._pedido}). Pode trocar de aba; o andamento "
-                          "continua aqui.")
+                          f"continua aqui.{aviso}")
         self.after(_INTERVALO_MS, self._acompanhar)
         self._auditar("Água e energia: rodada disparada", self._pedido, "ok")
 
@@ -207,6 +238,7 @@ class AguaEnergiaFrame(ttk.Frame):
             self._linhas.append(linha)
             self.log.insert("end", linha + "\n")
         self.proc = None
+        self._completa_sem_central = False
         self.b_rodar.configure(state="normal")
         texto = rodada.veredito(rc)
         self.v_status.set(f"A rodada {texto}.")
@@ -216,8 +248,11 @@ class AguaEnergiaFrame(ttk.Frame):
             caminho = rodada.resumo_do_log(self._linhas)
             try:
                 conteudo = caminho.read_text(encoding="utf-8") if caminho else ""
-            except OSError as e:
+            except Exception as e:                           # noqa: BLE001
                 conteudo = f"(não consegui ler {caminho}: {e})"
+            if not conteudo and rc != 0:
+                fim = "\n".join(self._linhas[-_LINHAS_DE_FALHA:])
+                conteudo = f"(sem resumo — fim do log:)\n{fim}"
         self.resumo.insert("1.0", conteudo or "(esta rodada não gravou resumo)")
         resultado = "ok" if rc == 0 else ("aviso" if rc in (1, rodada.CODIGO_OCUPADA) else "erro")
         self._auditar("Água e energia: rodada terminou",

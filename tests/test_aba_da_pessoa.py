@@ -84,6 +84,7 @@ def aba(monkeypatch):
     aba._rotulo_atual = None
     aba._pulso_nav = None
     aba._encerrando = False
+    aba.bloqueios_externos = []
     aba.registro = []
     aba._log = aba.registro.append
     aba.after = lambda *a, **k: None       # o Tk não está aqui
@@ -142,6 +143,29 @@ def test_aviso_de_ocupado_oferece_a_aba(aba, monkeypatch):
     monkeypatch.setattr(aba, "ocupado", lambda: "Conciliação")
     assert aba.avisar_se_ocupado("a Conferência") is True
     assert aba.chamadas == [("por_fora",)]
+
+
+def test_bloqueio_externo_recusa_sem_oferecer_a_aba(aba, monkeypatch):
+    """A rodada de água e energia loga no ERP por HTTP: abrir ou logar aqui
+    derrubaria a sessão dela, então não há "abrir minha aba" nesse aviso."""
+    from tkinter import messagebox
+    avisos = []
+    monkeypatch.setattr(messagebox, "showwarning", lambda *a, **k: avisos.append(a))
+    monkeypatch.setattr(messagebox, "askyesno",
+                        lambda *a, **k: pytest.fail("não devia oferecer a aba"))
+    aba.bloqueios_externos.append(lambda: "A rodada está lançando")
+    assert aba.avisar_se_ocupado("a Conferência") is True
+    assert aba.chamadas == []
+    assert avisos[0][0] == "ERP em uso"
+    assert "A rodada está lançando" in avisos[0][1] and "a Conferência" in avisos[0][1]
+
+
+def test_bloqueio_externo_que_levanta_e_ignorado(aba):
+    def quebra():
+        raise RuntimeError("falhou")
+
+    aba.bloqueios_externos.extend([quebra, lambda: None])
+    assert aba.avisar_se_ocupado("a Conferência") is False
 
 
 def test_navegador_livre_nao_avisa_nem_pergunta(aba, monkeypatch):

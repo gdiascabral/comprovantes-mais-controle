@@ -21,7 +21,25 @@ def test_pasta_pela_variavel_e_desligada(tmp_path, monkeypatch):
     assert R.pasta_agua_energia() is None            # sem o .bat não é instalação
     _instalar(tmp_path)
     (tmp_path / "coletor" / "rodada_diaria.bat").write_text("@echo off\n")
+    assert R.pasta_agua_energia() is None            # falta o marcador local
+    (tmp_path / R.NOME_MARCADOR).write_text("", encoding="utf-8")
     assert R.pasta_agua_energia() == tmp_path
+
+
+def test_situacao_da_instalacao_distingue_os_motivos(tmp_path, monkeypatch):
+    monkeypatch.setenv("MC_AGUA_ENERGIA", str(tmp_path))
+    pasta, motivo = R.situacao_da_instalacao()                  # sem .bat
+    assert pasta is None and "não está instalado" in motivo
+    _instalar(tmp_path)
+    (tmp_path / "coletor" / "rodada_diaria.bat").write_text("@echo off\n")
+    pasta, motivo = R.situacao_da_instalacao()                  # .bat, sem marcador
+    assert pasta is None and "RODADA_PELO_APP.txt" in motivo
+    assert "tarefas agendadas" in motivo
+    (tmp_path / R.NOME_MARCADOR).write_text("", encoding="utf-8")
+    assert R.situacao_da_instalacao() == (tmp_path, "")         # os dois
+    monkeypatch.setenv("MC_AGUA_ENERGIA", "off")                # desligada
+    pasta, motivo = R.situacao_da_instalacao()
+    assert pasta is None and "não está instalado" in motivo
 
 
 @pytest.mark.parametrize("nome, esperado", [

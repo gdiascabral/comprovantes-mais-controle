@@ -166,7 +166,7 @@ def test_novo_log_que_falha_deixa_a_aba_livre(raiz, tmp_path, monkeypatch):
     aba, ch = _aba(raiz, _instalacao(tmp_path))
 
     def sem_log(pasta):
-        raise FileNotFoundError("sem coletor\logs")
+        raise FileNotFoundError(r"sem coletor\logs")
 
     monkeypatch.setattr(F.rodada, "novo_log", sem_log)
     aba.rodar()
@@ -219,3 +219,57 @@ def test_trancada_sem_info_nao_chama_o_suporte(raiz, tmp_path, monkeypatch):
     assert "em andamento" in aba.v_status.get()
     assert "suporte" not in aba.v_status.get()
     assert ch["iniciar"] == []
+
+
+def test_instalado_sem_marcador_explica_o_motivo(raiz, tmp_path, monkeypatch):
+    pasta = _instalacao(tmp_path)
+    monkeypatch.setenv("MC_AGUA_ENERGIA", str(pasta))
+    aba = F.AguaEnergiaFrame(raiz, None, quem=lambda: "Fulano")
+    assert aba.pasta is None
+    assert str(aba.b_rodar["state"]) == "disabled"
+    assert "RODADA_PELO_APP.txt" in aba.v_status.get()
+    assert "tarefas agendadas" in aba.v_status.get()
+
+
+def test_ao_abrir_volta_ao_pronto_quando_a_rodada_alheia_acabou(raiz, tmp_path, monkeypatch):
+    estado = {"info": {"origem": "agendada", "inicio": "2026-10-14T05:30:00"}}
+    monkeypatch.setattr(F.rodada, "em_andamento", lambda p: estado["info"])
+    aba, ch = _aba(raiz, _instalacao(tmp_path))
+    aba.ao_abrir()
+    assert "agendada" in aba.v_status.get()
+    estado["info"] = None
+    aba.ao_abrir()
+    assert aba.v_status.get().startswith("Pronto")
+
+
+def test_sem_resumo_e_com_erro_mostra_o_fim_do_log(raiz, tmp_path):
+    linhas = "".join(f"linha {i}\n" for i in range(30))
+    aba, ch = _aba(raiz, _instalacao(tmp_path), _proc=_Proc([9009]), _escreve=linhas)
+    aba.rodar()
+    aba._acompanhar()
+    texto = aba.resumo.get("1.0", "end")
+    assert "sem resumo" in texto and "fim do log" in texto
+    assert "linha 29" in texto and "linha 10" in texto
+    assert "linha 9\n" not in texto                    # só as últimas 20
+
+
+def test_bloqueio_do_erp_so_na_completa_com_central_desligado(raiz, tmp_path):
+    pasta = _instalacao(tmp_path)
+    aba, ch = _aba(raiz, pasta, central_ligado=lambda: False, _proc=_Proc([None, 0]))
+    assert aba.bloqueio_do_erp() is None                # nada em curso
+    aba.rodar()
+    assert "Chrome central desligado" in aba.bloqueio_do_erp()
+    assert "Não use as abas do ERP" in aba.v_status.get()
+    aba._acompanhar()                                   # poll -> None: segue
+    assert aba.bloqueio_do_erp() is not None
+    aba._acompanhar()                                   # poll -> 0: terminou
+    assert aba.bloqueio_do_erp() is None
+
+    ligado, _ = _aba(raiz, pasta, central_ligado=lambda: True)
+    ligado.rodar()
+    assert ligado.bloqueio_do_erp() is None             # central ligado
+
+    parcial, _ = _aba(raiz, pasta, central_ligado=lambda: False)
+    parcial.v_so.set("equatorial")
+    parcial.rodar()
+    assert parcial.bloqueio_do_erp() is None            # parcial não toca no ERP

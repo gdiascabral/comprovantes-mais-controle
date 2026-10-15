@@ -184,6 +184,11 @@ paths:
   relatório (`_resumo_cands`).
   Botão Abrir relatório, modo "Por lista" (.csv/.xlsx; completa
   ".pdf" ausente). Relatório Excel: ANEXADOS/DUVIDA/SEM PAR.
+  `bloqueios_externos` (lista de callables sem argumento, `str | None`):
+  recusas de quem usa o ERP FORA do navegador do app (hoje a rodada da aba
+  Água e energia, que loga por HTTP). `avisar_se_ocupado` as consulta antes do
+  teste de navegador ocupado; a primeira que devolver texto mostra "ERP em uso"
+  e recusa, sem oferecer "abrir minha aba" (abrir/logar derrubaria a rodada).
 - `anexar/conferencia.py` — auditoria pós-anexo: lista pagos SEM anexo no
   período e, opcionalmente, baixa cada PDF anexado e confere se o VALOR
   (e data) aparecem no texto (OCR se preciso) → aba DIVERGENTES.

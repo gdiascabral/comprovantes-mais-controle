@@ -330,6 +330,10 @@ def main():
     # .bat da tarefa agendada). Recebe o aba_anx só para saber se o Anexar
     # está usando o ERP quando o Chrome central está desligado.
     aba_agu = AguaEnergiaFrame(conteudo, aba_anx)
+    # Com o Chrome central desligado, a rodada completa loga no ERP por HTTP
+    # com o mesmo usuário: iniciar qualquer aba do ERP no meio derrubaria a
+    # sessão dela. O Anexar recusa o começo (ver `avisar_se_ocupado`).
+    aba_anx.bloqueios_externos.append(aba_agu.bloqueio_do_erp)
     # Baixar Comprovantes tem navegador PRÓPRIO, como os Extratos Sicoob: são
     # os sites dos bancos, com login e sessão que não têm nada a ver com o ERP.
     # O cadastro de contas é o mesmo `contas_sicoob.json` que os Extratos leem
