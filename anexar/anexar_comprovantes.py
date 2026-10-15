@@ -22,7 +22,9 @@ Modo alternativo "Por lista": anexa a partir de um CSV (launchId,valor,arquivo_p
 ou de um Excel com aba CERTEZA (coluna link + PDF(s)).
 """
 import os
+import itertools
 import queue
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -38,6 +40,7 @@ from . import (codigo_barras, config, matcher, mc_api, planilha, credenciais,
 from .mc_client import MCClient, SemRede
 
 import util
+from erp import central
 
 LINK = config.MC_URL_LANCAMENTO
 _fmt_dur = util.fmt_dur
@@ -212,8 +215,44 @@ import widgets
 CampoData = widgets.CampoData
 
 
+#: Ordem das submissões entre as vagas: a barra lateral mostra a MAIS RECENTE
+#: quando várias abas trabalham ao mesmo tempo (ver `AnexarFrame.ocupado`).
+_ordem_das_vagas = itertools.count(1)
+
+
+class _Vaga:
+    """A "vaga" de UMA aba do app no modo central (plano de 15/10/2026).
+
+    Com o Chrome central ligado, cada aba do app trabalha numa thread SÓ DELA
+    e com um `MCClient` SÓ DELA — que no central abre a sua aba no Chrome e
+    fecha só ela na saída. Teste do dono na v2.0.238: com Pagamentos do Dia
+    buscando, o Saldo de pagamentos levava "Navegador ocupado", porque o app
+    ainda tinha UM executor para todas as abas.
+
+    Playwright síncrono: `mc` e `api` só são usados na thread do `executor`.
+    O `MCClient` nasce lá dentro, pelo `garantir_sessao` — nunca aqui."""
+
+    def __init__(self, dona):
+        self.dona = dona                 # guarda a referência: a chave é id(dona)
+        self.executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix=f"nav-{type(dona).__name__}")
+        self.mc = None
+        self.api = None
+        self.trabalho_atual = None
+        self.rotulo_atual = None
+        self.pulso = None
+        self.ordem = 0
+
+    def ocupada(self) -> bool:
+        fut = self.trabalho_atual
+        return fut is not None and not fut.done()
+
+
 class AnexarFrame(ttk.Frame):
     """Conteúdo do app Anexar Comprovantes (usável sozinho ou como aba)."""
+
+    #: Marca de "qualquer aba" para `ocupado`/`dona_ocupada` sem argumento.
+    _QUALQUER = object()
 
     def __init__(self, master):
         super().__init__(master)
@@ -231,8 +270,10 @@ class AnexarFrame(ttk.Frame):
         # Quem está com o navegador agora (ver `submeter`/`ocupado`).
         self._trabalho_atual = None
         self._rotulo_atual = None
-        self.mc = None                       # MCClient aberto entre as etapas
-        self.api = None
+        # `mc`/`api` são propriedades (ver `mc`, abaixo): fora do modo central
+        # leem estes dois; no central, numa thread de vaga, os da vaga.
+        self._mc = None                      # MCClient aberto entre as etapas
+        self._api = None
         # O pulso do navegador (ver `_pulsar_navegador`) e a trava que o
         # desliga ao sair — depois do `fechar()` o executor não aceita nada.
         self._pulso_nav = None
@@ -448,30 +489,155 @@ class AnexarFrame(ttk.Frame):
         `dona` é a ABA que pediu — o `rotulo` só descreve a tarefa. A barra
         lateral precisa das duas coisas: qual item marcar com ● e o que
         escrever no rodapé. Sem `dona`, o único jeito de descobrir a aba seria
-        adivinhar pelo texto do rótulo."""
+        adivinhar pelo texto do rótulo.
+
+        MODO CENTRAL (`erp.central.ligado()`): cada `dona` tem a SUA vaga —
+        thread e `MCClient` próprios —, e o trabalho vai para o executor dela.
+        Dentro da thread, `self.mc`/`self.api` passam a ser os da vaga (ver a
+        propriedade `mc`), e por isso `garantir_sessao` e as abas que usam
+        `self.anx.mc` no trabalho não precisaram mudar. `dona=None` é a vaga
+        do próprio Anexar. Desligado, o caminho de sempre."""
+        if self._no_central():
+            vaga = self._vaga_de(dona if dona is not None else self)
+            loc = self._tls()
+
+            def na_vaga():
+                loc.vaga = vaga          # esta thread é da vaga, para sempre
+                return fn(*a, **k)
+
+            fut = vaga.executor.submit(na_vaga)
+            vaga.trabalho_atual = fut
+            vaga.rotulo_atual = rotulo
+            vaga.ordem = next(_ordem_das_vagas)
+            return fut
         fut = self.exec.submit(fn, *a, **k)
         self._trabalho_atual = fut
         self._rotulo_atual = rotulo
         self._dona_atual = dona if dona is not None else self
         return fut
 
-    def ocupado(self) -> str | None:
-        """Rótulo da tarefa que está com o navegador agora, ou None."""
+    # ----------------------------------------- vagas do modo central
+    def _no_central(self) -> bool:
+        """O Chrome central está ligado? Lido UMA vez por janela: o
+        `acessos.json` não muda com o app aberto, e a barra lateral pergunta
+        `ocupado()` várias vezes por segundo. JSON quebrado vale desligado — o
+        `MCClient` dá o recado na hora de abrir."""
+        modo = getattr(self, "_modo_central", None)
+        if modo is None:
+            try:
+                modo = bool(central.ligado())
+            except Exception as e:                       # noqa: BLE001
+                config.diag(f"modo central ilegível: {e!r}")
+                modo = False
+            self._modo_central = modo
+        return modo
+
+    def _tls(self):
+        """O `threading.local` das vagas. Nasce na thread da interface (no
+        primeiro `submeter`), antes de existir thread de vaga."""
+        loc = getattr(self, "_local", None)
+        if loc is None:
+            loc = self._local = threading.local()
+        return loc
+
+    def _trava_das_vagas(self):
+        trava = getattr(self, "_vagas_trava", None)
+        if trava is None:
+            trava = self._vagas_trava = threading.Lock()
+        return trava
+
+    def _vaga_de(self, dona, criar: bool = True):
+        """A vaga da aba `dona` (criada na hora, se preciso). Criar a vaga
+        não toca no Playwright: o executor nasce vazio e o `MCClient` só vem
+        pelo `garantir_sessao`, já dentro da thread dela."""
+        with self._trava_das_vagas():
+            vagas = getattr(self, "_vagas", None)
+            if vagas is None:
+                vagas = self._vagas = {}
+            vaga = vagas.get(id(dona))
+            if vaga is None and criar:
+                vaga = vagas[id(dona)] = _Vaga(dona)
+            return vaga
+
+    def _lista_de_vagas(self) -> list:
+        with self._trava_das_vagas():
+            return list(getattr(self, "_vagas", {}).values())
+
+    def _vaga_da_thread(self):
+        loc = getattr(self, "_local", None)
+        return getattr(loc, "vaga", None) if loc is not None else None
+
+    @property
+    def mc(self):
+        """O `MCClient` de quem pergunta: o da vaga numa thread de vaga
+        (central), o de sempre em qualquer outro caso."""
+        vaga = self._vaga_da_thread()
+        return vaga.mc if vaga is not None else getattr(self, "_mc", None)
+
+    @mc.setter
+    def mc(self, valor):
+        vaga = self._vaga_da_thread()
+        if vaga is not None:
+            vaga.mc = valor
+        else:
+            self._mc = valor
+
+    @property
+    def api(self):
+        vaga = self._vaga_da_thread()
+        return vaga.api if vaga is not None else getattr(self, "_api", None)
+
+    @api.setter
+    def api(self, valor):
+        vaga = self._vaga_da_thread()
+        if vaga is not None:
+            vaga.api = valor
+        else:
+            self._api = valor
+
+    def _vaga_ocupada(self, aba=_QUALQUER):
+        """No central: a vaga ocupada da `aba` ou, sem aba, a ocupada mais
+        recente (é a que a barra lateral mostra). None se livre."""
+        if aba is AnexarFrame._QUALQUER:
+            ocupadas = [v for v in self._lista_de_vagas() if v.ocupada()]
+            return max(ocupadas, key=lambda v: v.ordem) if ocupadas else None
+        vaga = self._vaga_de(aba if aba is not None else self, criar=False)
+        return vaga if vaga is not None and vaga.ocupada() else None
+
+    def ocupado(self, aba=_QUALQUER) -> str | None:
+        """Rótulo da tarefa que está com o navegador agora, ou None.
+
+        No central, com `aba`, só a vaga dela; sem `aba`, qualquer vaga (a
+        mais recente). Desligado, `aba` não muda nada: o navegador é um só."""
+        if self._no_central():
+            vaga = self._vaga_ocupada(aba)
+            return (vaga.rotulo_atual or "outra tarefa") if vaga else None
         fut = self._trabalho_atual
         if fut is not None and not fut.done():
             return self._rotulo_atual or "outra tarefa"
         return None
 
-    def dona_ocupada(self):
-        """A ABA que está com o navegador agora, ou None."""
+    def dona_ocupada(self, aba=_QUALQUER):
+        """A ABA que está com o navegador agora, ou None (`aba` como em
+        `ocupado`: no central, `dona_ocupada(aba=X)` é X ocupada ou None)."""
+        if self._no_central():
+            vaga = self._vaga_ocupada(aba)
+            return vaga.dona if vaga else None
         fut = self._trabalho_atual
         if fut is not None and not fut.done():
             return getattr(self, "_dona_atual", self)
         return None
 
-    def avisar_se_ocupado(self, dona: str) -> bool:
-        """True (e mostra o aviso) se o navegador já estiver em uso."""
-        quem = self.ocupado()
+    def avisar_se_ocupado(self, dona: str, *, aba=None) -> bool:
+        """True (e mostra o aviso) se o navegador já estiver em uso.
+
+        `dona` é o texto do aviso ("os Aportes"); `aba` é a aba que vai pedir
+        o `submeter` (o mesmo objeto do `dona=` dele; None = o Anexar). No
+        central só a vaga dessa aba conta: abas diferentes não se esperam."""
+        if self._no_central():
+            quem = self.ocupado(aba=aba)
+        else:
+            quem = self.ocupado()
         if not quem:
             return False
         # O aviso vira oferta: é na hora em que a pessoa bate na parede que
@@ -554,7 +720,8 @@ class AnexarFrame(ttk.Frame):
 
     def garantir_sessao(self, log=None):
         """Abre o Chrome e prepara a API, se ainda não estiverem prontos.
-        Deve rodar na thread self.exec (a dona do navegador).
+        Deve rodar na thread do navegador: `self.exec` ou, no modo central,
+        a thread da vaga de quem pediu (aí `self.mc` é o cliente da vaga).
 
         Duas coisas que faltavam e davam erro longe da causa:
 
@@ -1538,6 +1705,28 @@ class AnexarFrame(ttk.Frame):
                 self.mc = None
         except Exception as e:
             config.diag(f"fechar(): o Chrome não fechou limpo: {e!r}")
+        # 2b) MODO CENTRAL: cada vaga fecha o SEU cliente na thread dela. O
+        # `__exit__` do `MCClient` central fecha só a aba dele — o Chrome
+        # central é de todos e fica de pé. As vagas saem da lista sob a trava
+        # ANTES de fechar: um `submeter` que chegasse agora criaria vaga nova
+        # em vez de cair num executor desligado.
+        with self._trava_das_vagas():
+            vagas = list(getattr(self, "_vagas", {}).values())
+            self._vagas = {}
+        for vaga in vagas:
+            try:
+                if vaga.mc is not None:
+                    vaga.executor.submit(vaga.mc.__exit__, None, None, None
+                                         ).result(timeout=8)
+                    vaga.mc = None
+                    vaga.api = None
+            except Exception as e:
+                config.diag(f"fechar(): a aba de {type(vaga.dona).__name__} "
+                            f"não fechou limpa: {e!r}")
+            try:
+                vaga.executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
         # 3) último recurso: descarta o que ainda estiver na fila
         try:
             self.exec.shutdown(wait=False, cancel_futures=True)
