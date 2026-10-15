@@ -16,6 +16,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+import util
 import widgets
 from widgets import px
 
@@ -41,6 +42,14 @@ def _quem() -> str:
         return sessao.quem().primeiro_nome
     except Exception:                                        # noqa: BLE001
         return ""
+
+
+_log = util.log("agua_energia_aba")
+
+
+def _msg_andamento(info) -> str:
+    final = "Espere ela terminar." if info else "Espere ou chame o suporte."
+    return f"{rodada.descrever(info)}. {final}"
 
 
 def _registrar(acao, detalhe="", **kw):
@@ -134,14 +143,14 @@ class AguaEnergiaFrame(ttk.Frame):
         if self.proc is None and self.pasta is not None:
             info = rodada.em_andamento(self.pasta)
             if info is not None:
-                self.v_status.set(f"{rodada.descrever(info)}. Espere ela terminar.")
+                self.v_status.set(_msg_andamento(info))
 
     def rodar(self):
         if self.pasta is None or self.proc is not None:
             return
         info = rodada.em_andamento(self.pasta)
         if info is not None:
-            self.v_status.set(f"{rodada.descrever(info)}. Espere ela terminar.")
+            self.v_status.set(_msg_andamento(info))
             return
         so = None if self.v_so.get() == "completa" else self.v_so.get()
         if so is None and not self._central_ligado():
@@ -157,21 +166,30 @@ class AguaEnergiaFrame(ttk.Frame):
                 return
         origem = rodada.origem_segura(self._quem())
         self._pedido = "--forcar" + (f" --so {so}" if so else "")
-        self.leitor = rodada.Leitor(rodada.caminho_do_log(self.pasta))
+        log = rodada.novo_log(self.pasta)
+        self.leitor = rodada.Leitor(log)              # ANTES do iniciar
         self._linhas = []
         try:
-            self.proc = self._iniciar(self.pasta, so=so, origem=origem)
+            self.proc = self._iniciar(self.pasta, so=so, origem=origem, log=log)
         except OSError as e:
+            self.leitor = None
             self.v_status.set(f"Não consegui iniciar a rodada: {e}")
             return
-        self._registrar("Água e energia: rodada disparada", self._pedido,
-                        aba="agu", resultado="ok")
         self.b_rodar.configure(state="disabled")
         self.log.delete("1.0", "end")
         self.resumo.delete("1.0", "end")
         self.v_status.set(f"Rodando ({self._pedido}). Pode trocar de aba; o andamento "
                           "continua aqui.")
         self.after(_INTERVALO_MS, self._acompanhar)
+        self._auditar("Água e energia: rodada disparada", self._pedido, "ok")
+
+    def _auditar(self, acao, detalhe, resultado):
+        """Falha de registro nunca prende a aba nem larga a rodada sem
+        acompanhamento: só anota no log do app."""
+        try:
+            self._registrar(acao, detalhe, aba="agu", resultado=resultado)
+        except Exception:                                    # noqa: BLE001
+            _log.warning("não consegui registrar '%s'", acao, exc_info=True)
 
     def _acompanhar(self):
         if self.proc is None:
@@ -191,12 +209,15 @@ class AguaEnergiaFrame(ttk.Frame):
         self.b_rodar.configure(state="normal")
         texto = rodada.veredito(rc)
         self.v_status.set(f"A rodada {texto}.")
-        caminho = rodada.resumo_do_log(self._linhas)
-        try:
-            conteudo = caminho.read_text(encoding="utf-8") if caminho else ""
-        except OSError as e:
-            conteudo = f"(não consegui ler {caminho}: {e})"
+        if rc == rodada.CODIGO_OCUPADA:
+            conteudo = "(esta rodada não rodou: outra já estava em andamento)"
+        else:
+            caminho = rodada.resumo_do_log(self._linhas)
+            try:
+                conteudo = caminho.read_text(encoding="utf-8") if caminho else ""
+            except OSError as e:
+                conteudo = f"(não consegui ler {caminho}: {e})"
         self.resumo.insert("1.0", conteudo or "(esta rodada não gravou resumo)")
         resultado = "ok" if rc == 0 else ("aviso" if rc in (1, rodada.CODIGO_OCUPADA) else "erro")
-        self._registrar("Água e energia: rodada terminou",
-                        f"{self._pedido} — {texto}", aba="agu", resultado=resultado)
+        self._auditar("Água e energia: rodada terminou",
+                      f"{self._pedido} — {texto}", resultado)

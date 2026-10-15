@@ -70,11 +70,15 @@ def test_comando_roda_um_bat_de_verdade_em_pasta_com_acento(tmp_path):
     (raiz / "coletor" / "rodada_diaria.bat").write_text(
         "@echo off\r\n"
         'cd /d "%~dp0"\r\n'
-        'echo args=[%*]>> "logs\\rodada_agendada.log"\r\n'
+        'if defined RODADA_LOG (set "L=%RODADA_LOG%") else (set "L=logs\\rodada_agendada.log")\r\n'
+        'echo args=[%*]>> "%L%"\r\n'
         "exit /b 3\r\n", encoding="ascii")
-    proc = R.iniciar(raiz, so="equatorial", origem=R.origem_segura('Fu"la & no'))
+    escolhido = R.novo_log(raiz)
+    proc = R.iniciar(raiz, so="equatorial", origem=R.origem_segura('Fu"la & no'),
+                     log=escolhido)
     assert proc.wait(30) == 3
-    log = R.caminho_do_log(raiz).read_text(encoding="ascii")
+    assert not (raiz / "coletor" / "logs" / "rodada_agendada.log").exists()
+    log = escolhido.read_text(encoding="ascii")
     assert 'args=[--forcar --esperar 0 --origem "app: Fula  no" --so equatorial]' in log
 
 
@@ -202,4 +206,18 @@ def test_veredito_e_descrever():
     assert "já estava" in R.veredito(R.CODIGO_OCUPADA)
     assert "erro" in R.veredito(9009)
     assert "14/10 05:30" in R.descrever({"origem": "agendada", "inicio": "2026-10-14T05:30:00"})
-    assert R.descrever({}) == "uma rodada está em andamento"
+    assert "não consegui conferir" in R.descrever({})
+
+
+def test_novo_log_nome_e_colisao(tmp_path):
+    from datetime import datetime
+    raiz = _instalar(tmp_path)
+    agora = datetime(2026, 10, 14, 9, 8, 7)
+    um = R.novo_log(raiz, agora)
+    assert um == raiz / "coletor" / "logs" / "rodada_app_20261014_090807.log"
+    um.write_text("x", encoding="utf-8")
+    dois = R.novo_log(raiz, agora)
+    assert dois.name == "rodada_app_20261014_090807_2.log"
+    dois.write_text("x", encoding="utf-8")
+    assert R.novo_log(raiz, agora).name == "rodada_app_20261014_090807_3.log"
+    assert R.novo_log(raiz).name.startswith("rodada_app_")

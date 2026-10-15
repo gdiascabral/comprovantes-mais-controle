@@ -25,11 +25,19 @@ def _instalacao(tmp_path) -> Path:
 def _aba(raiz_tk, pasta, **kw):
     chamadas = {"iniciar": [], "registrar": [], "perguntar": []}
 
-    def iniciar(p, *, so, origem):
+    def iniciar(p, *, so, origem, log):
         chamadas["iniciar"].append((p, so, origem))
+        chamadas["log"] = log
+        if "_erro_iniciar" in kw:
+            raise kw["_erro_iniciar"]
+        if "_escreve" in kw:
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(kw["_escreve"])
         return kw.pop("_proc", _Proc([None, 0]))
 
     def registrar(acao, detalhe="", **k):
+        if kw.get("_registrar_quebra"):
+            raise RuntimeError("nuvem fora")
         chamadas["registrar"].append((acao, detalhe, k))
 
     def perguntar(titulo, texto):
@@ -61,11 +69,11 @@ def test_dispara_acompanha_e_mostra_o_resumo(raiz, tmp_path):
     aba.rodar()
     assert ch["iniciar"] == [(pasta, "equatorial", "app: Fulano")]
     assert aba.ocupado()
-    with open(R.caminho_do_log(pasta), "a", encoding="utf-8") as f:
+    with open(ch["log"], "a", encoding="utf-8") as f:
         f.write("[2/4] Equatorial:\n")
     aba._acompanhar()                                  # poll -> None: segue
     assert "[2/4] Equatorial:" in aba.log.get("1.0", "end")
-    with open(R.caminho_do_log(pasta), "a", encoding="utf-8") as f:
+    with open(ch["log"], "a", encoding="utf-8") as f:
         f.write(f"resumo salvo em {resumo}\n")
     aba._acompanhar()                                  # poll -> 0: terminou
     assert aba.ocupado() is None
@@ -120,3 +128,74 @@ def test_ao_abrir_mostra_a_rodada_dos_outros(raiz, tmp_path, monkeypatch):
     assert "agendada" in aba.v_status.get()
     aba.rodar()
     assert ch["iniciar"] == []                          # não dispara a segunda
+
+
+def test_resumo_nao_e_lido_quando_a_rodada_foi_recusada(raiz, tmp_path):
+    pasta = _instalacao(tmp_path)
+    resumo = pasta / "relatorios" / "velho.txt"
+    resumo.write_text("CONTEUDO DE OUTRA RODADA
+", encoding="utf-8")
+    aba, ch = _aba(raiz, pasta, _proc=_Proc([R.CODIGO_OCUPADA]),
+                   _escreve=f"resumo salvo em {resumo}
+")
+    aba.rodar()
+    aba._acompanhar()
+    texto = aba.resumo.get("1.0", "end")
+    assert "CONTEUDO DE OUTRA RODADA" not in texto
+    assert "não rodou" in texto
+
+
+def test_disparo_e_termino_registram_aba_e_resultado(raiz, tmp_path):
+    pasta = _instalacao(tmp_path)
+    for rc, esperado in ((0, "ok"), (1, "aviso"), (9009, "erro")):
+        aba, ch = _aba(raiz, pasta, _proc=_Proc([rc]))
+        aba.rodar()
+        aba._acompanhar()
+        assert ch["registrar"][0][2] == {"aba": "agu", "resultado": "ok"}
+        assert ch["registrar"][-1][2] == {"aba": "agu", "resultado": esperado}
+
+
+def test_iniciar_que_falha_deixa_a_aba_livre(raiz, tmp_path):
+    aba, ch = _aba(raiz, _instalacao(tmp_path), _erro_iniciar=OSError("sem cmd"))
+    aba.rodar()
+    assert "Não consegui iniciar" in aba.v_status.get()
+    assert str(aba.b_rodar["state"]) == "normal"
+    assert aba.leitor is None and aba.ocupado() is None
+    assert ch["registrar"] == []
+
+
+def test_registrar_que_quebra_nao_prende_a_aba(raiz, tmp_path):
+    aba, ch = _aba(raiz, _instalacao(tmp_path), _registrar_quebra=True,
+                   _proc=_Proc([None, 0]))
+    aba.rodar()
+    assert str(aba.b_rodar["state"]) == "disabled" and aba.ocupado()
+    aba._acompanhar()
+    aba._acompanhar()
+    assert aba.ocupado() is None
+    assert str(aba.b_rodar["state"]) == "normal"
+    assert "sem alertas" in aba.v_status.get()
+
+
+def test_leitor_nasce_antes_do_iniciar(raiz, tmp_path):
+    aba, ch = _aba(raiz, _instalacao(tmp_path), _escreve="[1/4] Primeira
+",
+                   _proc=_Proc([0]))
+    aba.rodar()
+    aba._acompanhar()
+    assert "[1/4] Primeira" in aba.log.get("1.0", "end")
+
+
+def test_ao_abrir_sem_rodada_nao_muda_o_status(raiz, tmp_path):
+    aba, ch = _aba(raiz, _instalacao(tmp_path))
+    antes = aba.v_status.get()
+    aba.ao_abrir()
+    assert aba.v_status.get() == antes
+
+
+def test_trava_ilegivel_nao_afirma_que_ha_rodada(raiz, tmp_path, monkeypatch):
+    monkeypatch.setattr(F.rodada, "em_andamento", lambda p: {})
+    aba, ch = _aba(raiz, _instalacao(tmp_path))
+    aba.rodar()
+    assert "não consegui conferir" in aba.v_status.get()
+    assert "suporte" in aba.v_status.get()
+    assert ch["iniciar"] == []

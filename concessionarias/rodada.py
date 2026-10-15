@@ -83,24 +83,38 @@ def caminho_do_cmd() -> str:
     return os.path.join(raiz, "System32", "cmd.exe")
 
 
-def iniciar(pasta: Path, *, so: str | None, origem: str) -> subprocess.Popen:
+def novo_log(pasta: Path, agora: datetime | None = None) -> Path:
+    """Um log só desta rodada. O `.bat` anexa (`>>`) ao log da tarefa
+    agendada e o `cmd` tranca o arquivo: uma segunda execução, enquanto a
+    agendada roda, morria sem chamar o Python. Por isso a rodada do app tem
+    log próprio, passado ao `.bat` pela variável RODADA_LOG."""
+    agora = agora or datetime.now()
+    pasta_logs = Path(pasta) / "coletor" / "logs"
+    base = f"rodada_app_{agora:%Y%m%d_%H%M%S}"
+    caminho = pasta_logs / f"{base}.log"
+    n = 2
+    while caminho.exists():
+        caminho = pasta_logs / f"{base}_{n}.log"
+        n += 1
+    return caminho
+
+
+def iniciar(pasta: Path, *, so: str | None, origem: str, log: Path) -> subprocess.Popen:
     """Dispara a rodada e volta na hora. O processo segue mesmo que o app
-    feche; a trava de lá impede a segunda."""
+    feche; a trava de lá impede a segunda. `log` é o arquivo desta rodada
+    (ver `novo_log`)."""
+    env = {**os.environ, "RODADA_LOG": str(Path(log).absolute())}
     return subprocess.Popen(linha_de_comando(so=so, origem=origem),
-                            cwd=str(Path(pasta) / "coletor"),
+                            cwd=str(Path(pasta) / "coletor"), env=env,
                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, creationflags=_SEM_JANELA)
-
-
-def caminho_do_log(pasta: Path) -> Path:
-    return Path(pasta) / "coletor" / "logs" / "rodada_agendada.log"
 
 
 class Leitor:
     """Lê do log só o que chegou depois de ser criado, linha inteira por vez.
 
-    O `.bat` manda tudo para o MESMO log da tarefa agendada, então o começo
-    do arquivo é das rodadas de antes."""
+    Se o arquivo já existe, o começo dele é de antes: só vale o que chegar
+    depois."""
 
     def __init__(self, caminho: Path):
         self.caminho = Path(caminho)
@@ -176,7 +190,7 @@ def _abrir_trava(trava: Path):
 
 def descrever(info: dict | None) -> str:
     if not info:
-        return "uma rodada está em andamento"
+        return "não consegui conferir se há outra rodada (trava ilegível)"
     desde = ""
     try:
         desde = f" desde {datetime.fromisoformat(info['inicio']):%d/%m %H:%M}"
