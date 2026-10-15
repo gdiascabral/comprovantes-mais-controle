@@ -90,13 +90,15 @@ def novo_log(pasta: Path, agora: datetime | None = None) -> Path:
     log próprio, passado ao `.bat` pela variável RODADA_LOG."""
     agora = agora or datetime.now()
     pasta_logs = Path(pasta) / "coletor" / "logs"
-    base = f"rodada_app_{agora:%Y%m%d_%H%M%S}"
-    caminho = pasta_logs / f"{base}.log"
-    n = 2
-    while caminho.exists():
-        caminho = pasta_logs / f"{base}_{n}.log"
-        n += 1
-    return caminho
+    base = f"rodada_app_{agora:%Y%m%d_%H%M%S}_{os.getpid()}"
+    n = 1
+    while True:
+        caminho = pasta_logs / (f"{base}.log" if n == 1 else f"{base}_{n}.log")
+        try:
+            with open(caminho, "x"):                 # reserva o nome
+                return caminho
+        except FileExistsError:
+            n += 1
 
 
 def iniciar(pasta: Path, *, so: str | None, origem: str, log: Path) -> subprocess.Popen:
@@ -151,8 +153,10 @@ def resumo_do_log(linhas: list[str]) -> Path | None:
 def em_andamento(pasta: Path) -> dict | None:
     """O info de quem roda agora, ou None só quando comprovadamente livre.
 
-    {} = em andamento sem info, ou não deu para saber (erro ao abrir a trava,
-    errno inesperado): em qualquer dos dois, não dispare.
+    Dois "não dispare" diferentes: {} = trancada, mas sem info (o normal nos
+    instantes em que uma rodada pega ou solta a trava); {"ilegivel": True} =
+    não deu para saber (erro ao abrir a trava, errno inesperado). Quem chama
+    testa `is not None` e usa `descrever` para dizer qual dos dois.
 
     Testa a trava de verdade (tranca e solta na hora): o `.json` sozinho pode
     ter sobrado de uma rodada que morreu no meio."""
@@ -171,7 +175,7 @@ def em_andamento(pasta: Path) -> dict | None:
                 msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError as e:
                 if e.errno not in _TRANCADA:
-                    return {}                # não sei: não dispare
+                    return {"ilegivel": True}   # não sei: não dispare
                 try:
                     dados = json.loads((rel / NOME_INFO).read_text(encoding="utf-8"))
                 except (OSError, ValueError):
@@ -180,7 +184,7 @@ def em_andamento(pasta: Path) -> dict | None:
             f.seek(0)
             msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
     except OSError:
-        return {}        # não consegui nem olhar a trava: "livre" seria mentira
+        return {"ilegivel": True}        # não consegui nem olhar a trava: "livre" seria mentira
     return None
 
 
@@ -189,8 +193,10 @@ def _abrir_trava(trava: Path):
 
 
 def descrever(info: dict | None) -> str:
-    if not info:
+    if info and info.get("ilegivel"):
         return "não consegui conferir se há outra rodada (trava ilegível)"
+    if not info:
+        return "uma rodada está em andamento"
     desde = ""
     try:
         desde = f" desde {datetime.fromisoformat(info['inicio']):%d/%m %H:%M}"

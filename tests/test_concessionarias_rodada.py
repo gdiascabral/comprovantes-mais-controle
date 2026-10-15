@@ -148,7 +148,7 @@ def test_em_andamento_nao_consegue_abrir_a_trava_nao_diz_livre(tmp_path, monkeyp
     def nega(_):
         raise PermissionError(13, "negado")
     monkeypatch.setattr(R, "_abrir_trava", nega)
-    assert R.em_andamento(raiz) == {}
+    assert R.em_andamento(raiz) == {"ilegivel": True}
 
 
 @pytest.mark.skipif(os.name != "nt", reason="msvcrt")
@@ -160,7 +160,7 @@ def test_em_andamento_errno_inesperado_no_locking_da_vazio(tmp_path, monkeypatch
     def quebra(*a):
         raise OSError(5, "erro de E/S")
     monkeypatch.setattr(msvcrt, "locking", quebra)
-    assert R.em_andamento(raiz) == {}
+    assert R.em_andamento(raiz) == {"ilegivel": True}
 
 
 def test_leitor_recomeca_quando_o_log_encolhe(tmp_path):
@@ -206,18 +206,19 @@ def test_veredito_e_descrever():
     assert "já estava" in R.veredito(R.CODIGO_OCUPADA)
     assert "erro" in R.veredito(9009)
     assert "14/10 05:30" in R.descrever({"origem": "agendada", "inicio": "2026-10-14T05:30:00"})
-    assert "não consegui conferir" in R.descrever({})
+    assert "não consegui conferir" in R.descrever({"ilegivel": True})
+    assert R.descrever({}) == "uma rodada está em andamento"
 
 
 def test_novo_log_nome_e_colisao(tmp_path):
     from datetime import datetime
     raiz = _instalar(tmp_path)
     agora = datetime(2026, 10, 14, 9, 8, 7)
+    base = f"rodada_app_20261014_090807_{os.getpid()}"
     um = R.novo_log(raiz, agora)
-    assert um == raiz / "coletor" / "logs" / "rodada_app_20261014_090807.log"
-    um.write_text("x", encoding="utf-8")
+    assert um == raiz / "coletor" / "logs" / f"{base}.log"
     dois = R.novo_log(raiz, agora)
-    assert dois.name == "rodada_app_20261014_090807_2.log"
-    dois.write_text("x", encoding="utf-8")
-    assert R.novo_log(raiz, agora).name == "rodada_app_20261014_090807_3.log"
+    assert dois.name == f"{base}_2.log"
+    assert R.novo_log(raiz, agora).name == f"{base}_3.log"
+    assert um.exists() and dois.exists() and um != dois
     assert R.novo_log(raiz).name.startswith("rodada_app_")

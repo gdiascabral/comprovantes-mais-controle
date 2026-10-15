@@ -190,9 +190,18 @@ def test_ao_abrir_sem_rodada_nao_muda_o_status(raiz, tmp_path):
 
 
 def test_trava_ilegivel_nao_afirma_que_ha_rodada(raiz, tmp_path, monkeypatch):
-    monkeypatch.setattr(F.rodada, "em_andamento", lambda p: {})
+    monkeypatch.setattr(F.rodada, "em_andamento", lambda p: {"ilegivel": True})
     aba, ch = _aba(raiz, _instalacao(tmp_path))
     aba.rodar()
     assert "não consegui conferir" in aba.v_status.get()
     assert "suporte" in aba.v_status.get()
+    assert ch["iniciar"] == []
+
+
+def test_trancada_sem_info_nao_chama_o_suporte(raiz, tmp_path, monkeypatch):
+    monkeypatch.setattr(F.rodada, "em_andamento", lambda p: {})
+    aba, ch = _aba(raiz, _instalacao(tmp_path))
+    aba.rodar()
+    assert "em andamento" in aba.v_status.get()
+    assert "suporte" not in aba.v_status.get()
     assert ch["iniciar"] == []

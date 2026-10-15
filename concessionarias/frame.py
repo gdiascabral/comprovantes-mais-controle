@@ -48,7 +48,8 @@ _log = util.log("agua_energia_aba")
 
 
 def _msg_andamento(info) -> str:
-    final = "Espere ela terminar." if info else "Espere ou chame o suporte."
+    final = ("Espere ou chame o suporte." if info.get("ilegivel")
+             else "Espere ela terminar.")
     return f"{rodada.descrever(info)}. {final}"
 
 
