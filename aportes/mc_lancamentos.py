@@ -237,10 +237,19 @@ def criar_recebimento(
             erro="recebimento criado, mas NÃO foi possível dar a baixa "
                  "(não achei a parcela na resposta). Confira no ERP.")
 
-    baixa = catalogos.postar(
-        f"{LEGACY}/receipt-installments/{id_parcela}/receipts",
-        {"value": _num(valor), "receivedValue": _num(valor), "receivingDate": _iso(data),
-         "account": {"id": conta["id"]}, "responsible": {"id": id_usuario}})
+    try:
+        baixa = catalogos.postar(
+            f"{LEGACY}/receipt-installments/{id_parcela}/receipts",
+            {"value": _num(valor), "receivedValue": _num(valor), "receivingDate": _iso(data),
+             "account": {"id": conta["id"]}, "responsible": {"id": id_usuario}})
+    except Exception as e:                                  # noqa: BLE001
+        # A venda JÁ EXISTE. Deixar o erro subir (o Chrome fechou, o Playwright
+        # parou) perdia o `id_criado`, e o Lançar seguinte criava a mesma venda
+        # outra vez. A baixa pode ou não ter saído: quem confere é a pessoa.
+        return Resultado(
+            False, descricao, "recebimento", id_criado=(resposta or {}).get("id"),
+            erro=f"recebimento criado, mas a baixa não respondeu ({e}). Confira "
+                 "no ERP se ela saiu antes de mexer nele.")
     if isinstance(baixa, dict) and baixa.get("__erro"):
         return Resultado(
             False, descricao, "recebimento", id_criado=(resposta or {}).get("id"),
