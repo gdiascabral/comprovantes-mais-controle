@@ -262,3 +262,28 @@ def test_remover_e_limpar_recusam_com_o_lancar_rodando(raiz, monkeypatch):
         assert len(avisos) == 2
     finally:
         aba.destroy()
+
+
+# ------------------- índice fora do expandir (o rateio encolheu) — 3ª revisão
+def test_incerto_fora_do_rateio_atual_nao_e_perguntado(raiz, monkeypatch):
+    aba = _aba_lista(raiz, monkeypatch, [])           # nenhuma resposta na fila
+    avisos = []
+    monkeypatch.setattr(af.messagebox, "showwarning", lambda *a, **k: avisos.append(a))
+    try:
+        aba.incertos = [{5}]                           # o expandir só tem 3
+        aba._lancar()
+        assert aba.perguntas == []
+        assert aba.incertos == [{5}] and aba.criados == [{0}]
+        assert avisos
+    finally:
+        aba.destroy()
+
+
+def test_indice_fora_do_rateio_nao_conclui_a_operacao(raiz, monkeypatch):
+    aba = _aba(raiz, monkeypatch, 2, _ok)
+    try:
+        aba.criados = [{0, 7}]                         # 7 não existe mais
+        aba._retirar_concluidas()
+        assert len(aba.operacoes) == 1                 # o item 1 nunca entrou
+    finally:
+        aba.destroy()

@@ -360,7 +360,9 @@ class AportesFrame(ttk.Frame):
             total = len(expandir(op, self.entidades, self.subcontas,
                                  self.obra_padrao))
             # Incerto não conta como feito: a operação fica à vista até conferir.
-            if total and len(feitos) >= total and not incertos:
+            # Só as posições que existem no rateio de agora contam.
+            if (total and len({i for i in feitos if i < total}) >= total
+                    and not incertos):
                 concluidas += 1
                 continue
             sobrou_ops.append(op)
@@ -791,7 +793,17 @@ class AportesFrame(ttk.Frame):
             itens = expandir(op, self.entidades, self.subcontas,
                              self.obra_padrao)
             for i_item in sorted(self.incertos[i_op]):
-                item = itens[i_item] if i_item < len(itens) else {}
+                if i_item >= len(itens):
+                    # O rateio encolheu desde a tentativa: a posição não diz
+                    # mais qual lançamento era. Perguntar sobre ela seria pedir
+                    # que se conferisse um lançamento que não existe.
+                    messagebox.showwarning(
+                        "Lançamento incerto",
+                        f"{op.resumo()}\n\nO rateio desta operação mudou desde "
+                        "a tentativa em que o navegador caiu. Confira no Mais "
+                        "Controle o que entrou e lance o resto à mão.")
+                    continue
+                item = itens[i_item]
                 resposta = messagebox.askyesnocancel(
                     "Lançamento incerto",
                     "Na última tentativa o navegador caiu durante este "
