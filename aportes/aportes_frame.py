@@ -48,6 +48,19 @@ def _erro_do_playwright(e: BaseException) -> bool:
                for c in type(e).__mro__)
 
 
+def _pagina_fechada(pagina) -> bool:
+    """A pessoa fechou só a aba do robô: o `MCClient` pode continuar apontando
+    para ela, e a identidade sozinha não acusa. Dublê sem `is_closed` conta
+    como aberta; página que nem responde, como fechada."""
+    fechada = getattr(pagina, "is_closed", None)
+    if fechada is None:
+        return False
+    try:
+        return bool(fechada())
+    except Exception:                                       # noqa: BLE001
+        return True
+
+
 class AutenticacaoNaoCapturada(RuntimeError):
     """A página não fez as chamadas de que a captura da autenticação precisa —
     em geral porque a sessão caiu e ela foi para a tela de login."""
@@ -67,6 +80,11 @@ class AportesFrame(ttk.Frame):
         # Sem isso, tentar de novo depois de uma falha parcial recria o que deu
         # certo — e aporte duplicado é dinheiro duplicado, desfeito à mão.
         self.criados: list[set[int]] = []
+        # Os que podem ter entrado: o navegador caiu no meio do `criar_*`, e o
+        # POST pode ou não ter chegado ao ERP. Não se relançam — relançar um
+        # que entrou é aporte em dobro —, e a operação fica na lista até a
+        # pessoa conferir no Mais Controle.
+        self.incertos: list[set[int]] = []
         self.catalogos: Catalogos | None = None
         self._cabecalhos: dict = {}
 
@@ -289,6 +307,7 @@ class AportesFrame(ttk.Frame):
             return
         self.operacoes.append(op)
         self.criados.append(set())
+        self.incertos.append(set())
         self.tabela.insert("", "end", values=(op.resumo(),))
         self.var_valor.set("")
         self._atualizar_total()
@@ -301,12 +320,14 @@ class AportesFrame(ttk.Frame):
             self.tabela.delete(item)
             del self.operacoes[indice]
             del self.criados[indice]
+            del self.incertos[indice]
         self._atualizar_total()
 
     def _limpar(self):
         self.tabela.delete(*self.tabela.get_children())
         self.operacoes.clear()
         self.criados.clear()
+        self.incertos.clear()
         self._atualizar_total()
 
     def _retirar_concluidas(self):
@@ -315,19 +336,23 @@ class AportesFrame(ttk.Frame):
         Roda na thread da interface. O que falhou fica para nova tentativa; o
         que já foi criado sai da lista, senão o próximo clique em Lançar
         recriaria o mesmo aporte."""
-        sobrou_ops, sobrou_criados, concluidas = [], [], 0
-        for op, feitos in zip(self.operacoes, self.criados):
+        sobrou_ops, sobrou_criados, sobrou_incertos, concluidas = [], [], [], 0
+        for op, feitos, incertos in zip(self.operacoes, self.criados,
+                                        self.incertos):
             total = len(expandir(op, self.entidades, self.subcontas,
                                  self.obra_padrao))
-            if total and len(feitos) >= total:
+            # Incerto não conta como feito: a operação fica à vista até conferir.
+            if total and len(feitos) >= total and not incertos:
                 concluidas += 1
                 continue
             sobrou_ops.append(op)
             sobrou_criados.append(feitos)
+            sobrou_incertos.append(incertos)
 
         if concluidas:
             self.operacoes[:] = sobrou_ops
             self.criados[:] = sobrou_criados
+            self.incertos[:] = sobrou_incertos
             self.tabela.delete(*self.tabela.get_children())
             for op in self.operacoes:
                 self.tabela.insert("", "end", values=(op.resumo(),))
@@ -379,7 +404,8 @@ class AportesFrame(ttk.Frame):
         mais (tests/test_aportes_navegador_reiniciado.py)."""
         api = self.anx.garantir_sessao(self._log)
         if self.catalogos is not None and not recarregar:
-            if getattr(self.catalogos, "pagina", None) is self.anx.mc.page:
+            pagina = getattr(self.catalogos, "pagina", None)
+            if pagina is self.anx.mc.page and not _pagina_fechada(pagina):
                 return
             self._log("O Chrome do app foi reaberto desde a última leitura — "
                       "relendo os cadastros do Mais Controle...")
@@ -791,7 +817,7 @@ class AportesFrame(ttk.Frame):
             # Só o que AINDA não entrou no ERP. Numa segunda tentativa depois
             # de falha parcial, repetir o que deu certo duplicaria o aporte.
             plano = []                      # (i_op, i_item, item)
-            pulados = 0
+            pulados = incertos = 0
             for i_op, op in enumerate(self.operacoes):
                 for i_item, item in enumerate(
                         expandir(op, self.entidades, self.subcontas,
@@ -799,11 +825,19 @@ class AportesFrame(ttk.Frame):
                     if i_item in self.criados[i_op]:
                         pulados += 1
                         continue
+                    if i_item in self.incertos[i_op]:
+                        incertos += 1
+                        continue
                     plano.append((i_op, i_item, item))
 
             if pulados:
                 self._log(f"\n{pulados} lançamento(s) já criado(s) numa tentativa "
                           "anterior — pulados para não duplicar.")
+            if incertos:
+                self._log(f"\n{incertos} lançamento(s) de resultado incerto (o "
+                          "navegador caiu no meio) — NÃO relançados. Confira no "
+                          "Mais Controle; se não entraram, tire a operação da "
+                          "lista e lance o que falta.")
             if not plano:
                 self._log("Nada a criar: tudo desta lista já foi lançado.")
                 self.after(0, self._retirar_concluidas)
@@ -824,6 +858,18 @@ class AportesFrame(ttk.Frame):
                     self._log(f"  {i}/{len(plano)} FALHOU: {e}")
                     falhas.append(str(e))
                     continue
+                except Exception as e:                      # noqa: BLE001
+                    # Não é recusa do ERP: o navegador caiu com o POST talvez
+                    # já entregue. Não dá para saber se entrou, então não se
+                    # relança — e o resto do plano para aqui, porque o
+                    # navegador que caiu derrubaria os próximos do mesmo jeito.
+                    self.incertos[i_op].add(i_item)
+                    self._log(f"  {i}/{len(plano)} INCERTO — {especie} "
+                              f"{widgets.brl(item['valor'])}: {e}\n"
+                              "  Confira no Mais Controle se entrou. Ele NÃO "
+                              "será relançado; o resto da lista parou aqui.")
+                    falhas.append(f"resultado incerto: {e}")
+                    break
                 # O que decide "não crie de novo" é EXISTIR NO ERP, não ter
                 # dado tudo certo. `criar_recebimento` tem saídas em que a
                 # venda JÁ FOI criada e o resultado é `ok=False` — baixa que

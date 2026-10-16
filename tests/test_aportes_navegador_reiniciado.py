@@ -176,6 +176,7 @@ def test_lancar_com_catalogos_do_chrome_anterior_rele_em_vez_de_morrer(raiz, mon
     try:
         aba.operacoes = [SimpleNamespace(valor=Decimal("10.00"), pagador="p")]
         aba.criados = [set()]
+        aba.incertos = [set()]
         aba.catalogos = _cat(_PaginaMorta())
         aba._t_lancar()
         assert not any(_MSG in t for t in aba.anotado), aba.anotado
