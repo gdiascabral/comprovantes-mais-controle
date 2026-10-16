@@ -39,6 +39,15 @@ CampoData = widgets.CampoData
 URL_PAGAMENTOS = "https://acessar.maiscontroleerp.com.br/#/payable-installments"
 
 
+def _erro_do_playwright(e: BaseException) -> bool:
+    """O Playwright parou ou a página fechou ("Event loop is closed!", "Target
+    page, context or browser has been closed"). Pelo módulo da classe, como o
+    `widgets.explicar_erro`: importar o playwright aqui só para o isinstance
+    puxaria o navegador para a importação da aba."""
+    return any(c.__module__.split(".")[0] == "playwright"
+               for c in type(e).__mro__)
+
+
 class AutenticacaoNaoCapturada(RuntimeError):
     """A página não fez as chamadas de que a captura da autenticação precisa —
     em geral porque a sessão caiu e ela foi para a tela de login."""
@@ -358,10 +367,22 @@ class AportesFrame(ttk.Frame):
         só é guardada inteira, e o 401 do legado leva a UM novo login e UMA
         releitura — o `garantir_login` recarrega a página, que cai no login
         quando o token foi cancelado (provado ao vivo, ver
-        tests/test_aportes_cadastro_401.py)."""
+        tests/test_aportes_cadastro_401.py).
+
+        **A leitura vale enquanto a página dela for a página viva** (09/10/2026).
+        Outra aba achou o Chrome fechado e o reabriu; os catálogos guardados
+        ainda falavam com a página do Playwright ANTIGO, e o "Lançar" morreu
+        com "Event loop is closed!" no primeiro `evaluate` — erro do
+        Playwright, não `ErpRecusou`, então o caminho do 401 nem entrava. Agora
+        página trocada é leitura vencida, e erro do Playwright durante a
+        leitura pede a sessão de novo (que reabre o navegador) e lê UMA vez
+        mais (tests/test_aportes_navegador_reiniciado.py)."""
         api = self.anx.garantir_sessao(self._log)
         if self.catalogos is not None and not recarregar:
-            return
+            if getattr(self.catalogos, "pagina", None) is self.anx.mc.page:
+                return
+            self._log("O Chrome do app foi reaberto desde a última leitura — "
+                      "relendo os cadastros do Mais Controle...")
         self.catalogos = None
         try:
             catalogos = self._ler_cadastros()
@@ -378,6 +399,13 @@ class AportesFrame(ttk.Frame):
                       "cadastros...")
             if not self.anx.mc.garantir_login():
                 raise
+            catalogos = self._ler_cadastros()
+        except Exception as e:                              # noqa: BLE001
+            if not _erro_do_playwright(e):
+                raise
+            self._log("O Chrome do app parou no meio da leitura — abrindo de "
+                      "novo e relendo os cadastros...")
+            api = self.anx.garantir_sessao(self._log)
             catalogos = self._ler_cadastros()
         self.catalogos = catalogos
         self._carregar_obras(api)

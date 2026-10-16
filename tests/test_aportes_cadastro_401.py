@@ -139,6 +139,7 @@ def test_outra_recusa_nao_relogin_e_nao_guarda(raiz, monkeypatch):
 def test_leitura_ja_feita_nao_e_refeita(raiz, monkeypatch):
     cat = _CatFalso()
     aba, anx, _ = _aba(raiz, monkeypatch, [cat])
+    cat.pagina = anx.mc.page          # leitura feita na página viva do navegador
     try:
         aba._preparar_sessao()
         aba._preparar_sessao()                     # a fila só tinha uma resposta
