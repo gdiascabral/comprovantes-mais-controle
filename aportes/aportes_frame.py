@@ -61,6 +61,23 @@ def _pagina_fechada(pagina) -> bool:
         return True
 
 
+def assinatura(item: dict) -> tuple:
+    """O que um lançamento É, e não onde ele está na lista: tipo, conta,
+    centro de custo, participante e valor.
+
+    `criados`/`incertos` marcam a POSIÇÃO do item no `expandir`. Se o rateio
+    mudar entre duas tentativas (o "Atualizar contas" relê as subcontas sem
+    perguntar nada), a mesma posição passa a querer dizer outro par — e o
+    Lançar pularia um lançamento que nunca entrou e criaria outro em dobro.
+    Guardada a assinatura junto com a marca, dá para ver que mudou."""
+    if item.get("tipo_lancamento") == "pagamento":
+        conta, participante = item.get("conta_pagadora"), item.get("favorecido")
+    else:
+        conta, participante = item.get("conta_recebedora"), item.get("cliente")
+    return (item.get("tipo_lancamento"), conta, item.get("obra"), participante,
+            item.get("valor"))
+
+
 class AutenticacaoNaoCapturada(RuntimeError):
     """A página não fez as chamadas de que a captura da autenticação precisa —
     em geral porque a sessão caiu e ela foi para a tela de login."""
@@ -85,6 +102,10 @@ class AportesFrame(ttk.Frame):
         # que entrou é aporte em dobro —, e a operação fica na lista até a
         # pessoa conferir no Mais Controle.
         self.incertos: list[set[int]] = []
+        # Para cada posição marcada em `criados` ou `incertos`, a `assinatura`
+        # do lançamento no momento da marca. A operação cujo `expandir` não
+        # bate mais com elas é recusada (`_marcas_conferem`).
+        self.assinaturas: list[dict[int, tuple]] = []
         self.catalogos: Catalogos | None = None
         self._cabecalhos: dict = {}
 
@@ -310,6 +331,7 @@ class AportesFrame(ttk.Frame):
         self.operacoes.append(op)
         self.criados.append(set())
         self.incertos.append(set())
+        self.assinaturas.append({})
         self.tabela.insert("", "end", values=(op.resumo(),))
         self.var_valor.set("")
         self._atualizar_total()
@@ -337,6 +359,7 @@ class AportesFrame(ttk.Frame):
             del self.operacoes[indice]
             del self.criados[indice]
             del self.incertos[indice]
+            del self.assinaturas[indice]
         self._atualizar_total()
 
     def _limpar(self):
@@ -346,6 +369,7 @@ class AportesFrame(ttk.Frame):
         self.operacoes.clear()
         self.criados.clear()
         self.incertos.clear()
+        self.assinaturas.clear()
         self._atualizar_total()
 
     def _retirar_concluidas(self):
@@ -354,25 +378,30 @@ class AportesFrame(ttk.Frame):
         Roda na thread da interface. O que falhou fica para nova tentativa; o
         que já foi criado sai da lista, senão o próximo clique em Lançar
         recriaria o mesmo aporte."""
-        sobrou_ops, sobrou_criados, sobrou_incertos, concluidas = [], [], [], 0
-        for op, feitos, incertos in zip(self.operacoes, self.criados,
-                                        self.incertos):
-            total = len(expandir(op, self.entidades, self.subcontas,
-                                 self.obra_padrao))
+        sobrou_ops, sobrou_criados, sobrou_incertos, sobrou_assin = [], [], [], []
+        concluidas = 0
+        for i_op, (op, feitos, incertos, assin) in enumerate(zip(
+                self.operacoes, self.criados, self.incertos, self.assinaturas)):
+            itens = expandir(op, self.entidades, self.subcontas,
+                             self.obra_padrao)
+            total = len(itens)
             # Incerto não conta como feito: a operação fica à vista até conferir.
-            # Só as posições que existem no rateio de agora contam.
+            # Só as posições que existem no rateio de agora contam, e só se o
+            # que está nelas ainda for o que foi marcado.
             if (total and len({i for i in feitos if i < total}) >= total
-                    and not incertos):
+                    and not incertos and self._marcas_conferem(i_op, itens)):
                 concluidas += 1
                 continue
             sobrou_ops.append(op)
             sobrou_criados.append(feitos)
             sobrou_incertos.append(incertos)
+            sobrou_assin.append(assin)
 
         if concluidas:
             self.operacoes[:] = sobrou_ops
             self.criados[:] = sobrou_criados
             self.incertos[:] = sobrou_incertos
+            self.assinaturas[:] = sobrou_assin
             self.tabela.delete(*self.tabela.get_children())
             for op in self.operacoes:
                 self.tabela.insert("", "end", values=(op.resumo(),))
@@ -749,6 +778,34 @@ class AportesFrame(ttk.Frame):
                 return True
         return False
 
+    def _marcar(self, i_op: int, i_item: int, item: dict, onde: set[int]):
+        """Marca a posição como criada ou incerta (`onde`) e guarda a
+        assinatura do lançamento junto — sempre os dois, ou a marca não se
+        confere depois."""
+        self.assinaturas[i_op][i_item] = assinatura(item)
+        onde.add(i_item)
+
+    def _marcas_conferem(self, i_op: int, itens: list[dict]) -> bool:
+        """Cada posição marcada da operação ainda é o MESMO lançamento?
+
+        Não bate quando o rateio mudou desde a marca — par (CC × investidor)
+        em outra posição, peso novo, obra a mais ou a menos. Marca sem
+        assinatura também não bate: sem ela não há como conferir, e na dúvida
+        o lado seguro é não lançar."""
+        marcadas = self.criados[i_op] | self.incertos[i_op]
+        guardadas = self.assinaturas[i_op]
+        return all(i < len(itens) and i in guardadas
+                   and guardadas[i] == assinatura(itens[i])
+                   for i in marcadas)
+
+    def _recado_rateio_mudou(self, op) -> str:
+        return (f"{op.resumo()}\n\nO rateio desta operação mudou depois que "
+                "parte dela já tinha entrado (ou pode ter entrado) no Mais "
+                "Controle — o \"Atualizar contas\" ou um cadastro novo. Lançar "
+                "pelo rateio novo pularia um lançamento que nunca entrou e "
+                "criaria outro em dobro.\n\nConfira no Mais Controle o que "
+                "entrou, lance o resto à mão e tire a operação da lista.")
+
     def _conferir(self):
         if self.anx.avisar_se_ocupado("os Aportes", aba=self):
             return
@@ -792,17 +849,14 @@ class AportesFrame(ttk.Frame):
                 continue
             itens = expandir(op, self.entidades, self.subcontas,
                              self.obra_padrao)
+            if not self._marcas_conferem(i_op, itens):
+                # O rateio mudou desde a tentativa: a posição não diz mais
+                # qual lançamento era. Perguntar por ela seria pedir que se
+                # conferisse no ERP outro par — e "não entrou" relançaria.
+                messagebox.showwarning("Lançamento incerto",
+                                       self._recado_rateio_mudou(op))
+                continue
             for i_item in sorted(self.incertos[i_op]):
-                if i_item >= len(itens):
-                    # O rateio encolheu desde a tentativa: a posição não diz
-                    # mais qual lançamento era. Perguntar sobre ela seria pedir
-                    # que se conferisse um lançamento que não existe.
-                    messagebox.showwarning(
-                        "Lançamento incerto",
-                        f"{op.resumo()}\n\nO rateio desta operação mudou desde "
-                        "a tentativa em que o navegador caiu. Confira no Mais "
-                        "Controle o que entrou e lance o resto à mão.")
-                    continue
                 item = itens[i_item]
                 resposta = messagebox.askyesnocancel(
                     "Lançamento incerto",
@@ -815,10 +869,12 @@ class AportesFrame(ttk.Frame):
                     "Não — não entrou (será lançado agora)\n"
                     "Cancelar — ainda não conferi (fica pulado)")
                 if resposta is True:
+                    # A assinatura guardada já é a deste item: foi conferida.
                     self.criados[i_op].add(i_item)
                     self.incertos[i_op].discard(i_item)
                 elif resposta is False:
                     self.incertos[i_op].discard(i_item)
+                    self.assinaturas[i_op].pop(i_item, None)
 
     def _lancar(self):
         if not self.operacoes:
@@ -885,11 +941,18 @@ class AportesFrame(ttk.Frame):
             # Só o que AINDA não entrou no ERP. Numa segunda tentativa depois
             # de falha parcial, repetir o que deu certo duplicaria o aporte.
             plano = []                      # (i_op, i_item, item)
-            pulados = incertos = 0
+            pulados = incertos = recusadas = 0
             for i_op, op in enumerate(self.operacoes):
-                for i_item, item in enumerate(
-                        expandir(op, self.entidades, self.subcontas,
-                                 self.obra_padrao)):
+                itens = expandir(op, self.entidades, self.subcontas,
+                                 self.obra_padrao)
+                if not self._marcas_conferem(i_op, itens):
+                    # Rateio trocado desde a marca: pular por posição pularia
+                    # outro par e criaria o marcado em dobro. A operação
+                    # INTEIRA fica de fora até alguém conferir no ERP.
+                    recusadas += 1
+                    self._log("\nNÃO LANÇADA — " + self._recado_rateio_mudou(op))
+                    continue
+                for i_item, item in enumerate(itens):
                     if i_item in self.criados[i_op]:
                         pulados += 1
                         continue
@@ -907,13 +970,16 @@ class AportesFrame(ttk.Frame):
                           "Mais Controle e clique em Lançar de novo: o app "
                           "pergunta, um por um, se entrou.")
             if not plano:
-                self._log("Nada a criar: tudo desta lista já foi lançado.")
+                if not recusadas:
+                    self._log("Nada a criar: tudo desta lista já foi lançado.")
                 self.after(0, self._retirar_concluidas)
                 return
 
             self._log(f"\nCriando {len(plano)} lançamento(s):")
             feitos, falhas = 0, []
             for i, (i_op, i_item, item) in enumerate(plano, 1):
+                # Antes do `pop`: o tipo faz parte da assinatura.
+                assinado = dict(item)
                 especie = item.pop("tipo_lancamento")
                 try:
                     if especie == "pagamento":
@@ -931,7 +997,7 @@ class AportesFrame(ttk.Frame):
                     # já entregue. Não dá para saber se entrou, então não se
                     # relança — e o resto do plano para aqui, porque o
                     # navegador que caiu derrubaria os próximos do mesmo jeito.
-                    self.incertos[i_op].add(i_item)
+                    self._marcar(i_op, i_item, assinado, self.incertos[i_op])
                     self._log(f"  {i}/{len(plano)} INCERTO — {especie} "
                               f"{widgets.brl(item['valor'])}: {e}\n"
                               "  Confira no Mais Controle se entrou e clique em "
@@ -949,7 +1015,7 @@ class AportesFrame(ttk.Frame):
                 # app morrer aqui, o pior caso é a lista sobreviver sabendo o
                 # que já foi.
                 if r.ok or r.id_criado:
-                    self.criados[i_op].add(i_item)
+                    self._marcar(i_op, i_item, assinado, self.criados[i_op])
                 if r.ok:
                     feitos += 1
                     self._log(f"  {i}/{len(plano)} ok — {especie} "
