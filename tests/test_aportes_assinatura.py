@@ -292,6 +292,43 @@ def test_rateio_trocado_nao_conclui_a_operacao(raiz, monkeypatch):
         aba.destroy()
 
 
+def test_recado_final_nao_diz_que_nada_entrou_quando_recusou(raiz, monkeypatch):
+    """Revisor do PR: depois do "NÃO LANÇADA", a última linha dizia "ainda
+    NÃO foi criado… clique em Lançar de novo" — e quem lê só ela tira a
+    operação e inclui de novo, relançando o par que entrou."""
+    aba = _aba(raiz, monkeypatch, None)
+    try:
+        itens = regras.expandir(_op(), ENT, SUB_ANTES, "PADRAO")
+        aba.criados = [{0}]
+        aba.assinaturas = [{0: af.assinatura(itens[0])}]
+        aba.subcontas = {k: dict(v) for k, v in SUB_TROCADO.items()}
+        aba._retirar_concluidas()
+        texto = "\n".join(aba.anotado)
+        assert "ainda NÃO foi criado" not in texto
+        assert "Confira no Mais Controle" in texto
+    finally:
+        aba.destroy()
+
+
+def test_confirmacao_nao_conta_a_operacao_recusada(raiz, monkeypatch):
+    aba = _aba(raiz, monkeypatch, None)
+    perguntas = []
+    monkeypatch.setattr(af.messagebox, "askyesno",
+                        lambda t, texto, **k: perguntas.append(texto) or False)
+    try:
+        itens = regras.expandir(_op(), ENT, SUB_ANTES, "PADRAO")
+        aba.operacoes = [_op(), _op()]
+        aba.criados = [{0}, set()]
+        aba.incertos = [set(), set()]
+        aba.assinaturas = [{0: af.assinatura(itens[0])}, {}]
+        aba.subcontas = {k: dict(v) for k, v in SUB_TROCADO.items()}
+        aba._lancar()
+        assert "Criar 2 lançamento(s)" in perguntas[0]
+        assert "1.000,00" in perguntas[0] and "2.000,00" not in perguntas[0]
+    finally:
+        aba.destroy()
+
+
 def test_remover_limpar_e_adicionar_mantem_as_assinaturas_alinhadas(raiz, monkeypatch):
     aba = _aba(raiz, monkeypatch, None)
     monkeypatch.setattr(af.messagebox, "showinfo", lambda *a, **k: None)

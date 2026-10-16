@@ -379,19 +379,21 @@ class AportesFrame(ttk.Frame):
         que já foi criado sai da lista, senão o próximo clique em Lançar
         recriaria o mesmo aporte."""
         sobrou_ops, sobrou_criados, sobrou_incertos, sobrou_assin = [], [], [], []
-        concluidas = 0
+        concluidas = recusadas = 0
         for i_op, (op, feitos, incertos, assin) in enumerate(zip(
                 self.operacoes, self.criados, self.incertos, self.assinaturas)):
             itens = expandir(op, self.entidades, self.subcontas,
                              self.obra_padrao)
             total = len(itens)
+            conferem = self._marcas_conferem(i_op, itens)
             # Incerto não conta como feito: a operação fica à vista até conferir.
             # Só as posições que existem no rateio de agora contam, e só se o
             # que está nelas ainda for o que foi marcado.
             if (total and len({i for i in feitos if i < total}) >= total
-                    and not incertos and self._marcas_conferem(i_op, itens)):
+                    and not incertos and conferem):
                 concluidas += 1
                 continue
+            recusadas += not conferem
             sobrou_ops.append(op)
             sobrou_criados.append(feitos)
             sobrou_incertos.append(incertos)
@@ -407,7 +409,14 @@ class AportesFrame(ttk.Frame):
                 self.tabela.insert("", "end", values=(op.resumo(),))
             self._atualizar_total()
             self._log(f"{concluidas} operação(ões) concluída(s) saíram da lista.")
-        if self.operacoes:
+        if recusadas:
+            # Dizer "nada foi criado" aqui faria tirar e incluir de novo a
+            # operação — e o que entrou dela entraria outra vez.
+            self._log(f"{recusadas} operação(ões) da lista têm parte JÁ no Mais "
+                      "Controle e o rateio mudou: Confira no Mais Controle o "
+                      "que entrou antes de qualquer coisa — Lançar não as "
+                      "repete.")
+        elif self.operacoes:
             self._log("O que sobrou ainda NÃO foi criado — corrija o cadastro e "
                       "clique em Lançar de novo; o que já entrou será pulado.")
 
@@ -883,9 +892,14 @@ class AportesFrame(ttk.Frame):
         if self._lista_travada():
             return
         self._resolver_incertos()
-        n = sum(len(expandir(o, self.entidades, self.subcontas,
-                             self.obra_padrao)) for o in self.operacoes)
-        total = sum(o.valor for o in self.operacoes)
+        # Sem as operações que o `_t_lancar` vai recusar (rateio mudou): é
+        # este número que se compara depois com o Mais Controle.
+        n, total = 0, 0
+        for i_op, o in enumerate(self.operacoes):
+            itens = expandir(o, self.entidades, self.subcontas, self.obra_padrao)
+            if self._marcas_conferem(i_op, itens):
+                n += len(itens)
+                total += o.valor
         # Confirmação explícita: daqui em diante escreve no sistema, e desfazer
         # significa apagar lançamento por lançamento na tela do ERP.
         if not messagebox.askyesno(
