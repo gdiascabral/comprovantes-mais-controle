@@ -80,7 +80,17 @@ def _aba(raiz, monkeypatch, n_itens, criar):
                                      resumo=lambda: "op")]
     aba.criados = [set()]
     aba.incertos = [set()]
+    aba.assinaturas = [{}]
     return aba
+
+
+def _marcas(aba, criados, incertos):
+    """Marca as posições como o Lançar marca: com a assinatura junto (todo
+    item do `expandir` falso é o mesmo pagamento de 10,00)."""
+    aba.criados = [set(criados)]
+    aba.incertos = [set(incertos)]
+    sig = af.assinatura({"tipo_lancamento": "pagamento", "valor": Decimal("10.00")})
+    aba.assinaturas = [{i: sig for i in set(criados) | set(incertos)}]
 
 
 def _ok(*_a, **_k):
@@ -118,8 +128,7 @@ def test_lancar_de_novo_nao_relanca_o_incerto(raiz, monkeypatch):
 
     aba = _aba(raiz, monkeypatch, 3, criar)
     try:
-        aba.criados = [{0}]
-        aba.incertos = [{1}]
+        _marcas(aba, {0}, {1})
         aba._t_lancar()
         assert len(chamadas) == 1                # só o item 2, nunca tentado
         assert aba.criados == [{0, 2}]
@@ -132,8 +141,7 @@ def test_lancar_de_novo_nao_relanca_o_incerto(raiz, monkeypatch):
 def test_operacao_com_incerto_nao_sai_da_lista_como_concluida(raiz, monkeypatch):
     aba = _aba(raiz, monkeypatch, 2, _ok)
     try:
-        aba.criados = [{0}]
-        aba.incertos = [{1}]
+        _marcas(aba, {0}, {1})
         aba._retirar_concluidas()
         assert len(aba.operacoes) == 1           # fica à vista até conferir
         assert aba.incertos == [{1}]
@@ -177,8 +185,7 @@ def test_catalogos_de_pagina_fechada_sao_relidos_mesmo_sendo_a_mesma(raiz, monke
 def _aba_lista(raiz, monkeypatch, respostas):
     """Aba no ponto do clique em Lançar, com um incerto na posição 1."""
     aba = _aba(raiz, monkeypatch, 3, _ok)
-    aba.criados = [{0}]
-    aba.incertos = [{1}]
+    _marcas(aba, {0}, {1})
     fila = list(respostas)
     aba.perguntas = []
 
@@ -239,8 +246,7 @@ def test_subconta_com_incerto_conta_como_em_andamento(raiz, monkeypatch):
     aba = _aba(raiz, monkeypatch, 2, _ok)
     monkeypatch.setattr(af, "numero_subconta", lambda pagador, subcontas: "7")
     try:
-        aba.criados = [set()]
-        aba.incertos = [{0}]
+        _marcas(aba, set(), {0})
         assert aba._subconta_em_andamento("7")
     finally:
         aba.destroy()
@@ -270,7 +276,7 @@ def test_incerto_fora_do_rateio_atual_nao_e_perguntado(raiz, monkeypatch):
     avisos = []
     monkeypatch.setattr(af.messagebox, "showwarning", lambda *a, **k: avisos.append(a))
     try:
-        aba.incertos = [{5}]                           # o expandir só tem 3
+        _marcas(aba, {0}, {5})                         # o expandir só tem 3
         aba._lancar()
         assert aba.perguntas == []
         assert aba.incertos == [{5}] and aba.criados == [{0}]
@@ -282,7 +288,7 @@ def test_incerto_fora_do_rateio_atual_nao_e_perguntado(raiz, monkeypatch):
 def test_indice_fora_do_rateio_nao_conclui_a_operacao(raiz, monkeypatch):
     aba = _aba(raiz, monkeypatch, 2, _ok)
     try:
-        aba.criados = [{0, 7}]                         # 7 não existe mais
+        _marcas(aba, {0, 7}, set())                    # 7 não existe mais
         aba._retirar_concluidas()
         assert len(aba.operacoes) == 1                 # o item 1 nunca entrou
     finally:
