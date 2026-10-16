@@ -60,6 +60,9 @@ class _Anx:
     def garantir_sessao(self, _log):
         return object()
 
+    def dona_ocupada(self, aba=None):
+        return None                    # nenhum comando rodando
+
 
 def _aba(raiz, monkeypatch, n_itens, criar):
     pagina = _Pagina()
@@ -166,5 +169,96 @@ def test_catalogos_de_pagina_fechada_sao_relidos_mesmo_sendo_a_mesma(raiz, monke
         aba._preparar_sessao()
         assert leituras == [1]
         assert aba.catalogos is novo
+    finally:
+        aba.destroy()
+
+
+# --------------------------------------- resolver o incerto sem Remover (2ª revisão)
+def _aba_lista(raiz, monkeypatch, respostas):
+    """Aba no ponto do clique em Lançar, com um incerto na posição 1."""
+    aba = _aba(raiz, monkeypatch, 3, _ok)
+    aba.criados = [{0}]
+    aba.incertos = [{1}]
+    fila = list(respostas)
+    aba.perguntas = []
+
+    def pergunta(titulo, texto, **_k):
+        aba.perguntas.append(texto)
+        return fila.pop(0)
+
+    monkeypatch.setattr(af.messagebox, "askyesnocancel", pergunta)
+    monkeypatch.setattr(af.messagebox, "askyesno", lambda *a, **k: False)
+    monkeypatch.setattr(af.messagebox, "showinfo", lambda *a, **k: None)
+    return aba
+
+
+def test_lancar_pergunta_o_incerto_e_entrou_vira_criado(raiz, monkeypatch):
+    aba = _aba_lista(raiz, monkeypatch, [True])
+    try:
+        aba._lancar()
+        assert len(aba.perguntas) == 1
+        assert "10,00" in aba.perguntas[0]
+        assert aba.criados == [{0, 1}] and aba.incertos == [set()]
+    finally:
+        aba.destroy()
+
+
+def test_lancar_pergunta_o_incerto_e_nao_entrou_volta_a_lancar(raiz, monkeypatch):
+    aba = _aba_lista(raiz, monkeypatch, [False])
+    try:
+        aba._lancar()
+        assert aba.criados == [{0}] and aba.incertos == [set()]
+    finally:
+        aba.destroy()
+
+
+def test_lancar_sem_conferir_mantem_o_incerto(raiz, monkeypatch):
+    aba = _aba_lista(raiz, monkeypatch, [None])
+    try:
+        aba._lancar()
+        assert aba.criados == [{0}] and aba.incertos == [{1}]
+    finally:
+        aba.destroy()
+
+
+def test_recado_do_incerto_nao_manda_remover_a_operacao(raiz, monkeypatch):
+    def criar(catalogos, id_usuario, **item):
+        raise PlaywrightError(_MSG)
+
+    aba = _aba(raiz, monkeypatch, 1, criar)
+    try:
+        aba._t_lancar()
+        texto = "\n".join(aba.anotado).lower()
+        assert "tire a operação" not in texto
+        assert "lançar de novo" in texto
+    finally:
+        aba.destroy()
+
+
+def test_subconta_com_incerto_conta_como_em_andamento(raiz, monkeypatch):
+    aba = _aba(raiz, monkeypatch, 2, _ok)
+    monkeypatch.setattr(af, "numero_subconta", lambda pagador, subcontas: "7")
+    try:
+        aba.criados = [set()]
+        aba.incertos = [{0}]
+        assert aba._subconta_em_andamento("7")
+    finally:
+        aba.destroy()
+
+
+# ------------------------------------- a lista não muda com o Lançar rodando
+def test_remover_e_limpar_recusam_com_o_lancar_rodando(raiz, monkeypatch):
+    aba = _aba(raiz, monkeypatch, 1, _ok)
+    aba.anx.dona_ocupada = lambda aba=None: aba
+    avisos = []
+    monkeypatch.setattr(af.messagebox, "showinfo", lambda *a, **k: avisos.append(a))
+    try:
+        aba.tabela.insert("", "end", values=("op",))
+        aba.tabela.selection_set(aba.tabela.get_children())
+        aba._remover()
+        aba._limpar()
+        assert len(aba.operacoes) == 1
+        assert aba.criados == [set()] and aba.incertos == [set()]
+        assert len(avisos) == 2
     finally:
         aba.destroy()

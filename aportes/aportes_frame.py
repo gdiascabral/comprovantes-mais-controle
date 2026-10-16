@@ -305,6 +305,8 @@ class AportesFrame(ttk.Frame):
         if erros:
             messagebox.showwarning("Não dá para lançar assim", "\n".join(erros))
             return
+        if self._lista_travada():
+            return
         self.operacoes.append(op)
         self.criados.append(set())
         self.incertos.append(set())
@@ -312,7 +314,21 @@ class AportesFrame(ttk.Frame):
         self.var_valor.set("")
         self._atualizar_total()
 
+    def _lista_travada(self) -> bool:
+        """Com um comando desta aba no navegador, a lista não muda: o Lançar
+        marca `criados`/`incertos` pela POSIÇÃO de cada operação no plano que
+        montou, e tirar uma do meio faria a marca cair na vizinha — a que foi
+        criada ficaria sem marca (e seria criada de novo) e a vizinha pularia
+        um lançamento que nunca entrou."""
+        if self.anx.dona_ocupada(aba=self) is not self:
+            return False
+        messagebox.showinfo("Aportes", "Espere o comando atual terminar para "
+                                       "mexer na lista.")
+        return True
+
     def _remover(self):
+        if self._lista_travada():
+            return
         # De trás para frente: apagar pelo índice desloca os seguintes.
         for item in sorted(self.tabela.selection(),
                            key=self.tabela.index, reverse=True):
@@ -324,6 +340,8 @@ class AportesFrame(ttk.Frame):
         self._atualizar_total()
 
     def _limpar(self):
+        if self._lista_travada():
+            return
         self.tabela.delete(*self.tabela.get_children())
         self.operacoes.clear()
         self.criados.clear()
@@ -650,7 +668,7 @@ class AportesFrame(ttk.Frame):
             messagebox.showwarning(
                 "Novo cadastro",
                 f"A lista \"A lançar\" tem um aporte da subconta {inv.numero} "
-                "que já entrou em parte no Mais Controle.\n\nTermine esse "
+                "que já entrou (ou pode ter entrado) em parte no Mais Controle.\n\nTermine esse "
                 "lançamento (ou tire-o da lista) antes de mudar o rateio — "
                 "senão o que falta seria redividido e lançaria valor a mais.")
             return
@@ -720,8 +738,12 @@ class AportesFrame(ttk.Frame):
         investidor). Trocar o rateio no meio muda o que cada posição quer
         dizer: o próximo Lançar pularia um par nunca criado e criaria outros
         com o valor redividido — dinheiro a mais no ERP."""
-        for op, feitos in zip(self.operacoes, self.criados):
-            if feitos and numero_subconta(op.pagador, {numero: {}}) == numero:
+        for op, feitos, incertos in zip(self.operacoes, self.criados,
+                                        self.incertos):
+            # Incerto também: a posição dele fica pulada, e com o rateio novo
+            # ela passaria a querer dizer outro par.
+            if ((feitos or incertos)
+                    and numero_subconta(op.pagador, {numero: {}}) == numero):
                 return True
         return False
 
@@ -755,10 +777,44 @@ class AportesFrame(ttk.Frame):
         if not resultado["faltando"]:
             self._log("Nenhuma pendência de cadastro.")
 
+    def _resolver_incertos(self):
+        """Antes de lançar: para cada lançamento de resultado incerto, pergunta
+        se ele entrou. Sim vai para `criados` (não se relança), Não volta a
+        ser lançado, Cancelar deixa como está (continua pulado).
+
+        Sem esta pergunta a única saída era tirar a operação da lista e
+        digitá-la de novo — e uma operação com rateio volta INTEIRA, criando
+        outra vez os lançamentos que já tinham entrado."""
+        for i_op, op in enumerate(self.operacoes):
+            if not self.incertos[i_op]:
+                continue
+            itens = expandir(op, self.entidades, self.subcontas,
+                             self.obra_padrao)
+            for i_item in sorted(self.incertos[i_op]):
+                item = itens[i_item] if i_item < len(itens) else {}
+                resposta = messagebox.askyesnocancel(
+                    "Lançamento incerto",
+                    "Na última tentativa o navegador caiu durante este "
+                    f"lançamento:\n\n{op.resumo()}\n"
+                    f"{item.get('descricao', '')} · "
+                    f"{widgets.brl(item.get('valor', 0))}\n\n"
+                    "Confira no Mais Controle. Ele ENTROU?\n\n"
+                    "Sim — entrou (não será lançado de novo)\n"
+                    "Não — não entrou (será lançado agora)\n"
+                    "Cancelar — ainda não conferi (fica pulado)")
+                if resposta is True:
+                    self.criados[i_op].add(i_item)
+                    self.incertos[i_op].discard(i_item)
+                elif resposta is False:
+                    self.incertos[i_op].discard(i_item)
+
     def _lancar(self):
         if not self.operacoes:
             messagebox.showinfo("Aportes", "A lista está vazia.")
             return
+        if self._lista_travada():
+            return
+        self._resolver_incertos()
         n = sum(len(expandir(o, self.entidades, self.subcontas,
                              self.obra_padrao)) for o in self.operacoes)
         total = sum(o.valor for o in self.operacoes)
@@ -836,8 +892,8 @@ class AportesFrame(ttk.Frame):
             if incertos:
                 self._log(f"\n{incertos} lançamento(s) de resultado incerto (o "
                           "navegador caiu no meio) — NÃO relançados. Confira no "
-                          "Mais Controle; se não entraram, tire a operação da "
-                          "lista e lance o que falta.")
+                          "Mais Controle e clique em Lançar de novo: o app "
+                          "pergunta, um por um, se entrou.")
             if not plano:
                 self._log("Nada a criar: tudo desta lista já foi lançado.")
                 self.after(0, self._retirar_concluidas)
@@ -866,8 +922,9 @@ class AportesFrame(ttk.Frame):
                     self.incertos[i_op].add(i_item)
                     self._log(f"  {i}/{len(plano)} INCERTO — {especie} "
                               f"{widgets.brl(item['valor'])}: {e}\n"
-                              "  Confira no Mais Controle se entrou. Ele NÃO "
-                              "será relançado; o resto da lista parou aqui.")
+                              "  Confira no Mais Controle se entrou e clique em "
+                              "Lançar de novo: o app pergunta antes de relançar. "
+                              "O resto da lista parou aqui.")
                     falhas.append(f"resultado incerto: {e}")
                     break
                 # O que decide "não crie de novo" é EXISTIR NO ERP, não ter
