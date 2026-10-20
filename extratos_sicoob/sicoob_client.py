@@ -39,6 +39,9 @@ _norm = util.norm_espaco
 # renova. Como o robô nunca fica parado, o timeout generoso só cobre lentidão.
 TEMPO_PADRAO = 45_000
 TEMPO_LOGIN = 10 * 60 * 1000        # a pessoa precisa digitar e passar o captcha
+#: O clique no ⇄. Curto: se algo o cobre, esperar os 45s não o descobre —
+#: o que resolve é recarregar (`ir_para_selecao`).
+TEMPO_CLIQUE = 10_000
 
 RE_CONTA = re.compile(r"\b(\d{2}\.\d{3}-\d)\b")
 
@@ -63,6 +66,18 @@ JS_TEXTOS_DA_CONTA = """
             corpo: document.body.innerText || ''};
 }
 """
+
+#: O aviso do banco (SweetAlert2) que aparece por cima da Home depois do
+#: login. Ele cobre o ⇄, e o clique ficava esperando os 45s até estourar:
+#: foi o que derrubou a 1ª conferência de agendamentos pelo app, em
+#: 20/10/2026, antes da primeira conta. Os scripts da prova de 15/10 já o
+#: fechavam à mão; o app não.
+SEL_AVISO = ".swal2-container"
+
+#: Os únicos botões com que o robô fecha o aviso. Botão que CONFIRMA alguma
+#: coisa ("Sim", "Continuar", "Assinar") nunca é clicado: sem um destes,
+#: vai Esc, que no SweetAlert2 é sempre "dispensar".
+BOTOES_DE_FECHAR_AVISO = ("OK", "FECHAR", "ENTENDI")
 
 _RE_CONTA_NOVO = re.compile(r"\|\s*(\d[\d.]*[-–—]\d)\s*\|")
 _RE_CONTA_ANTIGA = re.compile(r"CONTA\s+(\d[\d.]*-\d)")
@@ -196,20 +211,58 @@ class SicoobClient:
         tela antiga, o ⇄ do cabeçalho da tela "Novo" e, sem nenhum dos dois,
         o endereço da seleção. Na tela "Novo" o endereço sozinho deixou a
         segunda conta da rodada de 11/09/2026 esperando 45s pela lista, e o
-        ⇄ foi o que a pessoa clicou para a rodada andar."""
+        ⇄ foi o que a pessoa clicou para a rodada andar.
+
+        Se a lista não abrir, recarrega a página e tenta UMA vez mais: na tela
+        "Novo" o cabeçalho com o ⇄ some depois de várias trocas, e o aviso do
+        banco pode chegar depois do primeiro olhar (15 e 20/10/2026)."""
         if self._na_selecao_de_contas():
             return
+        try:
+            self._abrir_selecao()
+        except PWTimeout:
+            self._conferir_sessao()   # sessão que caiu não volta com reload
+            self.log("A lista de contas não abriu; recarregando a página "
+                     "e tentando de novo.")
+            self.page.reload()
+            self.page.wait_for_timeout(3000)
+            self._abrir_selecao()
+        self._conferir_sessao()
+
+    def _abrir_selecao(self):
         self._fechar_painel()      # um drawer aberto bloquearia o clique
+        self._fechar_aviso()       # o aviso do banco também
         trocar = self.page.locator("a.cursor.texto-trocar-conta")
         trocar_novo = self.page.locator(SEL_TROCAR_CONTA_NOVO)
         if trocar.count():
-            trocar.first.click()
+            trocar.first.click(timeout=TEMPO_CLIQUE)
         elif trocar_novo.count():
-            trocar_novo.first.click()
+            trocar_novo.first.click(timeout=TEMPO_CLIQUE)
         else:
             self.page.goto(cfg.URL_SELECAO_CONTAS)
         self.page.wait_for_selector("div.seletor-conta", timeout=TEMPO_PADRAO)
-        self._conferir_sessao()
+
+    def _fechar_aviso(self):
+        """Fecha o aviso do banco (`SEL_AVISO`), se houver — só com
+        `BOTOES_DE_FECHAR_AVISO` ou Esc. Até três seguidos (o banco empilha).
+        Nunca levanta: sem aviso, ou se ele sumir no meio, segue a vida."""
+        for _ in range(3):
+            try:
+                caixa = self.page.locator(SEL_AVISO)
+                if not caixa.count():
+                    return
+                texto = _norm(caixa.first.inner_text(timeout=2000))[:160]
+                botoes = [b for b in caixa.first.locator("button:visible").all()
+                          if _norm(b.inner_text(timeout=2000)).upper()
+                          in BOTOES_DE_FECHAR_AVISO]
+                self.log(f"Fechei um aviso do Sicoob: {texto}")
+                if botoes:
+                    botoes[0].click(timeout=5000)
+                else:
+                    self.page.keyboard.press("Escape")
+                self.page.wait_for_timeout(500)
+            except Exception:                                # noqa: BLE001
+                return
 
     def listar_contas(self) -> list[str]:
         """Números das contas visíveis na lista, na ordem da tela."""

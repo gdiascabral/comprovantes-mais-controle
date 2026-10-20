@@ -707,7 +707,9 @@ def test_na_tela_nova_a_troca_de_conta_clica_no_icone_do_cabecalho():
     from extratos_sicoob import sicoob_client as sc
 
     assert 'icone="arrow-lr"' in sc.SEL_TROCAR_CONTA_NOVO
-    fonte = inspect.getsource(sc.SicoobClient.ir_para_selecao)
+    # o clique mora em `_abrir_selecao` desde 20/10/2026 (o reload ao redor)
+    fonte = inspect.getsource(sc.SicoobClient._abrir_selecao)
+    assert "_abrir_selecao" in inspect.getsource(sc.SicoobClient.ir_para_selecao)
     assert "SEL_TROCAR_CONTA_NOVO" in fonte
     assert fonte.index("SEL_TROCAR_CONTA_NOVO") < fonte.index(
         "URL_SELECAO_CONTAS"), "o endereco e o ultimo recurso, nao o primeiro"
