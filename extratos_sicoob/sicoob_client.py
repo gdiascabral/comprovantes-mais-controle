@@ -74,9 +74,10 @@ JS_TEXTOS_DA_CONTA = """
 #: fechavam à mão; o app não.
 SEL_AVISO = ".swal2-container"
 
-#: Os únicos botões com que o robô fecha o aviso. Botão que CONFIRMA alguma
-#: coisa ("Sim", "Continuar", "Assinar") nunca é clicado: sem um destes,
-#: vai Esc, que no SweetAlert2 é sempre "dispensar".
+#: Os únicos botões com que o robô fecha o aviso, e só quando é o ÚNICO
+#: botão visível. Botão que CONFIRMA alguma coisa ("Sim", "Assinar", ou o
+#: "OK" de um par OK/Cancelar) nunca é clicado: vai Esc, que no SweetAlert2
+#: é sempre "dispensar".
 BOTOES_DE_FECHAR_AVISO = ("OK", "FECHAR", "ENTENDI")
 
 _RE_CONTA_NOVO = re.compile(r"\|\s*(\d[\d.]*[-–—]\d)\s*\|")
@@ -252,12 +253,17 @@ class SicoobClient:
                 if not caixa.count():
                     return
                 texto = _norm(caixa.first.inner_text(timeout=2000))[:160]
-                botoes = [b for b in caixa.first.locator("button:visible").all()
-                          if _norm(b.inner_text(timeout=2000)).upper()
-                          in BOTOES_DE_FECHAR_AVISO]
-                self.log(f"Fechei um aviso do Sicoob: {texto}")
-                if botoes:
-                    botoes[0].click(timeout=5000)
+                visiveis = caixa.first.locator("button:visible").all()
+                # "OK" é também o texto padrão do CONFIRMAR do SweetAlert2:
+                # com "Cancelar" ao lado ele confirma. Só um botão visível é
+                # aviso de verdade; qualquer outra coisa vai por Esc
+                # (revisão de dinheiro, 20/10/2026).
+                so_um = (len(visiveis) == 1
+                         and _norm(visiveis[0].inner_text(timeout=2000))
+                         .upper() in BOTOES_DE_FECHAR_AVISO)
+                self.log(f"Fechando um aviso do Sicoob: {texto}")
+                if so_um:
+                    visiveis[0].click(timeout=5000)
                 else:
                     self.page.keyboard.press("Escape")
                 self.page.wait_for_timeout(500)

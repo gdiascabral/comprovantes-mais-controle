@@ -54,7 +54,7 @@ paths:
   17:01:59, Chrome fechado às 17:02:44 — os 45 s da espera pela lista; as seis
   contas saíram "não foi lida". Os scripts da prova de 15/10 fechavam o aviso
   à mão; o app não. Hoje `_abrir_selecao` chama `_fechar_aviso` antes do
-  clique — só com OK/FECHAR/ENTENDI, senão Esc; botão que confirma ("Sim",
+  clique — só com OK/FECHAR/ENTENDI quando é o único botão, senão Esc; botão que confirma ("Sim",
   "Assinar") nunca é clicado —, e `ir_para_selecao`, se a lista não abrir,
   confere a sessão, recarrega e tenta UMA vez mais (o cabeçalho com o ⇄
   também some depois de várias trocas). A conta que fica sem ler leva o

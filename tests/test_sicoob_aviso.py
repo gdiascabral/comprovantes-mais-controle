@@ -129,6 +129,15 @@ def test_aviso_sem_botao_de_fechar_vai_por_esc_e_nunca_clica_em_confirmar():
     assert p.na_lista
 
 
+def test_ok_ao_lado_de_cancelar_e_confirmar_e_nao_e_clicado():
+    """No SweetAlert2 "OK" é o texto padrão do botão que CONFIRMA."""
+    p = _Pagina()
+    p.avisos.append(_Aviso(p, "Excluir o agendamento?", ["OK", "Cancelar"]))
+    _cliente(p).ir_para_selecao()
+    assert "OK" not in p.cliques
+    assert p.teclas == ["Escape"]
+
+
 def test_avisos_empilhados_sao_fechados_um_a_um():
     p = _Pagina()
     p.avisos += [_Aviso(p, "Um", ["Entendi"]), _Aviso(p, "Dois", ["Fechar"])]
