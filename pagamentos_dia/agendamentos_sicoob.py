@@ -154,6 +154,19 @@ def conta_sicoob(conta_erp: str, mapa_mc, empresas) -> tuple[str, str]:
 MOTIVO_NAO_LIDA = "não foi lida (a leitura parou antes de chegar nela)"
 
 
+def motivo_da_parada(erro) -> str:
+    """`MOTIVO_NAO_LIDA` com o PORQUÊ. Em 20/10/2026 as seis contas saíram só
+    "não foi lida", e a causa (o clique no ⇄ estourou os 45s) ficou no
+    registro da aba, que ninguém lê com a tabela vermelha na frente. Só a
+    primeira linha do erro: a do Playwright traz o log da espera embaixo."""
+    texto = (str(erro or "").strip().splitlines() or [""])[0].strip()
+    if not texto:
+        texto = type(erro).__name__ if erro is not None else ""
+    if not texto:
+        return MOTIVO_NAO_LIDA
+    return f"{MOTIVO_NAO_LIDA}: {texto[:160]}"
+
+
 def agrupar_por_numero(no_sicoob) -> list[tuple[str, str, list]]:
     """`[(nomes das contas do ERP, número do Sicoob, linhas do HTML)]`.
 

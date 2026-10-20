@@ -932,6 +932,10 @@ class PagamentosDiaFrame(ttk.Frame):
                     self._log(f"  {nome} ({numero}): {conf.resumo()}")
         except Exception as e:                               # noqa: BLE001
             self._log(f"[!] Conferir agendamentos: {e}")
+            # As que ficaram para trás levam o porquê para a tabela.
+            for conf in pendentes:
+                if conf.motivo == A.MOTIVO_NAO_LIDA:
+                    conf.motivo = A.motivo_da_parada(e)
         self.q.put(("agendamentos", (caminho, confrontos)))
 
     def _janela_agendamentos(self, caminho, confrontos):
