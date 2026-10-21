@@ -1,9 +1,10 @@
 """Montagem da planilha final.
 
-Escreve apenas a celula da data e as quatro colunas de dados (saldo, pagamento,
-qtd sistema, qtd banco) nas linhas de conta. Todas as formulas do modelo — as
-tres abas — sao preservadas, e o programa confere isso celula por celula depois
-de salvar.
+Escreve a celula da data, as quatro colunas de dados (saldo, pagamento, qtd
+sistema, qtd banco) nas linhas de conta e, quando a tela nova manda, as celulas
+extras de aporte (so numero, so em celula vazia do modelo). Todas as formulas
+do modelo — as tres abas — sao preservadas, e o programa confere isso celula
+por celula depois de salvar.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 import openpyxl
+from openpyxl.utils import column_index_from_string
+from openpyxl.utils.cell import coordinate_from_string
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .config import PlanilhaConfig
@@ -82,6 +85,58 @@ def check_labels(ws: Worksheet, mapping: AccountMapping) -> None:
         )
 
 
+def _conferir_extras(modelo: Path, extras, planilha: PlanilhaConfig) -> dict[str, dict[str, float]]:
+    """As celulas extras (aporte definido, valor por aportador) ANTES de copiar.
+
+    So NUMERO entra: texto ou formula numa celula que o Excel soma seria o
+    "formula digitada a mao" que a tela nova existe para acabar — e um "=" vira
+    formula no openpyxl. Recusar antes de `copy2` e o que garante que o arquivo
+    do dia anterior nao foi trocado por uma copia crua do modelo.
+
+    Tambem limita ONDE: no painel, so dentro da area conferida e fora das colunas
+    de formula, das colunas que o programa ja escreve e da celula da data; em
+    qualquer aba, so celula que o modelo deixa VAZIA. Sem isso, uma extra em
+    coluna de formula passaria como "prevista" na conferencia."""
+    if not extras:
+        return {}
+    for aba, celulas in extras.items():
+        for coord, valor in celulas.items():
+            if isinstance(valor, bool) or not isinstance(valor, (int, float)):
+                raise WorkbookError(
+                    f"{aba}!{coord}: so numero entra no painel do dia, veio {valor!r}")
+    wb = openpyxl.load_workbook(modelo)
+    try:
+        nomes = list(wb.sheetnames)
+        faltam = sorted(set(extras) - set(nomes))
+        if faltam:
+            raise WorkbookError(f"o modelo nao tem a(s) aba(s) {faltam}; encontrei {nomes}")
+        (r1, r2), (c1, c2) = planilha.area_conferida
+        proibidas = {*planilha.colunas_formula, *planilha.colunas_escritas}
+        for aba, celulas in extras.items():
+            for coord in celulas:
+                if aba == planilha.aba:
+                    try:
+                        letra, linha = coordinate_from_string(coord)
+                        coluna = column_index_from_string(letra)
+                    except ValueError as exc:
+                        raise WorkbookError(f"{aba}!{coord}: coordenada invalida") from exc
+                    if not (r1 <= linha <= r2 and c1 <= coluna <= c2):
+                        raise WorkbookError(
+                            f"{aba}!{coord}: fora da area conferida do painel")
+                    if letra in proibidas:
+                        raise WorkbookError(
+                            f"{aba}!{coord}: coluna de formula ou que o programa ja escreve")
+                    if coord == planilha.celula_data:
+                        raise WorkbookError(f"{aba}!{coord}: e a celula da data")
+                if wb[aba][coord].value is not None:
+                    raise WorkbookError(
+                        f"{aba}!{coord}: o modelo ja tem valor ali "
+                        f"({wb[aba][coord].value!r}); extra so entra em celula vazia")
+    finally:
+        wb.close()
+    return {aba: dict(celulas) for aba, celulas in extras.items()}
+
+
 def build(
     modelo: str | Path,
     destino: str | Path,
@@ -89,11 +144,14 @@ def build(
     fills: list[RowFill],
     mapping: AccountMapping,
     planilha: PlanilhaConfig,
+    *,
+    extras: dict[str, dict[str, float]] | None = None,
 ) -> BuildResult:
     """Copia o modelo, preenche o dia e valida o resultado."""
     modelo, destino = Path(modelo), Path(destino)
     if not modelo.is_file():
         raise WorkbookError(f"modelo nao encontrado: {modelo}")
+    extras = _conferir_extras(modelo, extras, planilha)
 
     destino.parent.mkdir(parents=True, exist_ok=True)
     # Copia antes de abrir para nunca correr risco de salvar sobre o original.
@@ -119,10 +177,16 @@ def build(
         ws[f"{planilha.col_qtd_banco}{fill.row}"] = fill.bank_count
         escritas += 1
 
+    for aba, celulas in extras.items():
+        alvo = wb[aba]
+        for coord, valor in celulas.items():
+            alvo[coord] = valor
+
     wb.save(destino)
     wb.close()
 
-    conferidas = assert_untouched(modelo, destino, reference_date, fills, planilha)
+    conferidas = assert_untouched(
+        modelo, destino, reference_date, fills, planilha, extras=extras)
     return BuildResult(path=destino, linhas_escritas=escritas, celulas_conferidas=conferidas)
 
 
@@ -132,6 +196,8 @@ def assert_untouched(
     reference_date: date,
     fills: list[RowFill],
     planilha: PlanilhaConfig,
+    *,
+    extras: dict[str, dict[str, float]] | None = None,
 ) -> int:
     """Reabre os dois arquivos e prova que so as celulas previstas mudaram.
 
@@ -143,6 +209,8 @@ def assert_untouched(
     um VLOOKUP perdido ali sairia como zero na ordem de transferencia do dia.
     """
     esperado = _celulas_escritas(reference_date, fills, planilha)
+    extras = extras or {}
+    esperado.update(extras.get(planilha.aba, {}))
 
     wb_orig = openpyxl.load_workbook(Path(modelo))
     wb_novo = openpyxl.load_workbook(Path(destino))
@@ -182,14 +250,22 @@ def assert_untouched(
             if nome == planilha.aba:
                 continue
             oa, ob = wb_orig[nome], wb_novo[nome]
+            da_aba = extras.get(nome, {})
             for linha_o, linha_n in zip(oa.iter_rows(), ob.iter_rows()):
                 for original, novo in zip(linha_o, linha_n):
+                    if original.coordinate in da_aba:
+                        continue                      # conferida logo abaixo
                     conferidas += 1
                     if original.value != novo.value:
                         problemas.append(
                             f"  {nome}!{original.coordinate}: modelo={original.value!r} "
                             f"virou {novo.value!r}"
                         )
+            for coord, valor in da_aba.items():
+                gravado = ob[coord].value
+                conferidas += 1
+                if gravado != valor:
+                    problemas.append(f"  {nome}!{coord}: gravado={gravado!r} esperado={valor!r}")
 
         if problemas:
             raise WorkbookError("planilha final divergiu do modelo:\n" + "\n".join(problemas))
