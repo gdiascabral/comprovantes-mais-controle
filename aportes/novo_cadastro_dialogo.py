@@ -50,9 +50,11 @@ def _linhas(t):
 
 
 def perguntar(pai, contas, entidades, subcontas, participantes=None,
-              centros=None):
+              centros=None, conta_inicial=None):
     """`participantes`/`centros` são as listas do ERP; None quando não deu
-    para lê-las — aí a opção de investidor fica desligada, com o motivo."""
+    para lê-las — aí a opção de investidor fica desligada, com o motivo.
+    `conta_inicial` abre já na subconta escolhida (o "Editar rateio" da
+    janela Cadastros)."""
     top = tk.Toplevel(pai)
     top.withdraw()
     top.title("Novo cadastro — Aportes")
@@ -364,6 +366,8 @@ def perguntar(pai, contas, entidades, subcontas, participantes=None,
         pass
 
     trocou_tipo()
+    if conta_inicial and tem_erp and conta_inicial in de_investidor:
+        v_conta_inv.set(conta_inicial)
     top.update_idletasks()
     x = max(0, (top.winfo_screenwidth() - top.winfo_reqwidth()) // 2)
     y = max(0, (top.winfo_screenheight() - top.winfo_reqheight()) // 2 - 20)
