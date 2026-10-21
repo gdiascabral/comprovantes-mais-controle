@@ -73,6 +73,7 @@ def test_valido_passa():
     (Novo("OUTRO", "X", "HOLDING - SUBCONTA 111-1 - BANCO"), "já está na lista"),
     (Novo("A;B", "X"), "ponto e vírgula"),
     (Novo(cadastro.INVESTIDOR_PREFIXO + "9", "X"), "rateios"),
+    (Novo("FULANO - " + cadastro.INVESTIDOR_PREFIXO + "9", "X"), "rateios"),
 ])
 def test_invalido_diz_o_motivo(novo, pedaco):
     assert pedaco in nc.validar(novo, ENTIDADES)

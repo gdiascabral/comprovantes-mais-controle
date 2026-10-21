@@ -346,3 +346,48 @@ def test_tipo_investidor_com_pagador_da_casa_e_recusado():
                  valor=Decimal("10.00"), tipo=regras.TIPO_INVESTIDOR,
                  modo="Só recebimento")
     assert any("tem conta no app" in e for e in o.validar(ENTIDADES, SUBCONTAS))
+
+
+# ---------------------------------------------------------------- rótulo
+# 21/10/2026: a lista de Pagou mostra os investidores NA FRENTE da subconta,
+# para a busca achar pelo nome; a operação continua guardando o nome curto.
+
+def test_rotulo_poe_os_investidores_na_frente():
+    assert regras.rotulo_investidor("111-1", SUBCONTAS["111-1"]) == \
+        "INVESTIDOR X / INVESTIDOR Y - INVESTIDOR SUBCONTA 111-1"
+
+
+def test_rotulo_sem_investidor_fica_o_nome_curto():
+    assert regras.rotulo_investidor("111-1", {"investidores": []}) == \
+        "INVESTIDOR SUBCONTA 111-1"
+
+
+def test_numero_sai_do_rotulo_e_do_nome_curto():
+    rotulo = regras.rotulo_investidor("111-1", SUBCONTAS["111-1"])
+    assert regras.numero_subconta(rotulo, SUBCONTAS) == "111-1"
+    assert regras.numero_subconta("INVESTIDOR SUBCONTA 111-1", SUBCONTAS) == "111-1"
+
+
+@pytest.mark.parametrize("texto", [
+    "INVESTIDOR SUBCONTA 999-9",            # subconta que não existe
+    "INVESTIDOR X",                          # só o nome
+    "FULANOINVESTIDOR SUBCONTA 111-1",       # sem o " - " separando
+    "INVESTIDOR SUBCONTA 111-1 EXTRA",
+])
+def test_numero_nao_adivinha(texto):
+    assert regras.numero_subconta(texto, SUBCONTAS) is None
+
+
+def test_operacao_guarda_o_pagador_curto():
+    rotulo = regras.rotulo_investidor("111-1", SUBCONTAS["111-1"])
+    assert regras.pagador_canonico(rotulo, SUBCONTAS) == "INVESTIDOR SUBCONTA 111-1"
+    assert regras.pagador_canonico("EMPRESA A", SUBCONTAS) == "EMPRESA A"
+
+
+def test_busca_pelo_nome_do_investidor_acha_a_subconta():
+    import util
+    lista = list(ENTIDADES) + [regras.rotulo_investidor(n, d)
+                               for n, d in SUBCONTAS.items()
+                               if not n.startswith("_")]
+    achados = util.filtrar(lista, "investidor y")
+    assert any(regras.numero_subconta(a, SUBCONTAS) == "111-1" for a in achados)

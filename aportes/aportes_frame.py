@@ -207,8 +207,9 @@ class AportesFrame(ttk.Frame):
 
     def _recarregar_listas(self):
         nomes = list(self.entidades)
-        pagadores = nomes + [cadastro.INVESTIDOR_PREFIXO + n
-                             for n in self.subcontas if not n.startswith("_")]
+        pagadores = nomes + [regras.rotulo_investidor(n, dados)
+                             for n, dados in self.subcontas.items()
+                             if not n.startswith("_")]
         # Quem guarda a lista completa é o próprio combo: é dela que ele parte
         # a cada tecla, senão um filtro comeria o resultado do anterior.
         self.cb_pagador.definir_valores(pagadores)
@@ -270,7 +271,9 @@ class AportesFrame(ttk.Frame):
             messagebox.showwarning("Valor", str(e))
             return
 
-        op = Operacao(data=data, pagador=self.cb_pagador.get(),
+        op = Operacao(data=data,
+                      pagador=regras.pagador_canonico(self.cb_pagador.get(),
+                                                      self.subcontas),
                       recebedor=self.cb_recebedor.get(), valor=valor,
                       tipo=self.cb_tipo.get(), modo=self.cb_modo.get(),
                       forma=self.cb_forma.get())
