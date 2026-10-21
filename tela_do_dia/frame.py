@@ -111,6 +111,13 @@ class TelaDoDiaFrame(ttk.Frame):
 
         c2 = widgets.Cartao(corpo, "Pagamentos por conta", 2)
         c2.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        # Sem campo de data (decisão do dono): o período lido fica à vista, e o
+        # dia útil anterior fora dele ganha o lembrete do feriado.
+        self.lbl_periodo = ttk.Label(c2, style="Secao.TLabel", text="")
+        self.lbl_periodo.pack(anchor="w")
+        self.lbl_aviso_periodo = ttk.Label(c2, style="Atencao.TLabel", wraplength=px(900),
+                                           justify="left", text="")
+        self.lbl_aviso_periodo.pack(anchor="w")
         ttk.Label(c2, style="Tenue.TLabel",
                   text="A pagar = o que sai da conta: os aptos de hoje e o que já foi "
                        "enviado em remessa e ainda não está pago (esse não é gerado de "
@@ -317,6 +324,8 @@ class TelaDoDiaFrame(ttk.Frame):
             t.delete(*t.get_children())
         self.lbl_alerta.configure(text="")
         self.lbl_avisos.configure(text="")
+        self.lbl_periodo.configure(text="")
+        self.lbl_aviso_periodo.configure(text="")
         for b in self._botoes_do_dia:
             b.configure(state="disabled")
 
@@ -377,6 +386,10 @@ class TelaDoDiaFrame(ttk.Frame):
                       "sobrescrito).")
         for aviso in self.leitura.avisos:
             self._log(f"[!] {aviso}")
+        texto, aviso = dc.periodo_na_tela(self.periodo)
+        self.lbl_periodo.configure(text=texto)
+        self.lbl_aviso_periodo.configure(
+            text=f"{widgets.MARCAS_ESTADO['atencao']} {aviso}" if aviso else "")
         self._recalcular()
         for b in self._botoes_do_dia:
             b.configure(state="normal")

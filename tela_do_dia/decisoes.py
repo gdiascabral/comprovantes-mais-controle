@@ -8,6 +8,7 @@ liberação).
 """
 from __future__ import annotations
 
+import datetime
 from decimal import Decimal
 
 from .valores import brl, ler_valor_editado
@@ -138,6 +139,33 @@ def celulas_da_conta(conta) -> tuple[str, str, str, str]:
         partes.append(f"{len(conta.ja_enviados)} já enviado · "
                       f"{brl(conta.valor_ja_enviado)} (soma no a pagar)")
     return str(conta.qtd_a_pagar), brl(conta.a_pagar), bloqueados, " · ".join(partes)
+
+
+# ------------------------------------------------- período lido
+_DIAS = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
+
+
+def dia_util_anterior(dia):
+    """O dia de segunda a sexta antes de `dia` (feriado não é conhecido: o app
+    não tem calendário, a mesma limitação de `sugerir_periodo`)."""
+    anterior = dia - datetime.timedelta(days=1)
+    while anterior.weekday() >= 5:
+        anterior -= datetime.timedelta(days=1)
+    return anterior
+
+
+def periodo_na_tela(periodo) -> tuple[str, str]:
+    """(texto do período lido, aviso). Decisão do dono (21/10/2026): esta aba
+    não tem campo de data — o período é o de `sugerir_periodo(hoje)`. Ela
+    mostra o que leu e, quando o dia útil anterior ficou fora, lembra o
+    caminho para o caso de ele ter sido feriado (os vencidos dele não estão
+    aqui)."""
+    texto = f"Pagamentos de {periodo.inicio:%d/%m} a {periodo.fim:%d/%m}"
+    anterior = dia_util_anterior(periodo.fim)
+    if periodo.inicio <= anterior:
+        return texto, ""
+    return texto, (f"O período não cobre {_DIAS[anterior.weekday()]} {anterior:%d/%m} — "
+                   "se foi feriado, use a aba Remessa/Retorno para buscar os vencidos.")
 
 
 # ------------------------------------------------- arquivo e data do dia

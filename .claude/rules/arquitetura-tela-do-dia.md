@@ -77,6 +77,13 @@ a tela pede para buscar de novo. Sem lançamentos no período (`entradas is
 None`), o Excel pode sair (a pagar zero é verdade), mas planilha, HTML e
 Remessa recusam.
 
+**Sem campo de data** (decisão do dono, 21/10/2026): o período é o de
+`sugerir_periodo(hoje)`. A tela mostra o período lido ("Pagamentos de DD/MM a
+DD/MM") e, quando o dia útil anterior (seg–sex) ficou fora dele, o lembrete
+"se foi feriado, use a aba Remessa/Retorno para buscar os vencidos"
+(`decisoes.periodo_na_tela`). Sem calendário de feriados, o lembrete aparece
+em todo dia útil — é o caminho para o vencido de um feriado não sumir.
+
 ## Saldos pelo Chrome do app
 
 Regra do dono (14/10/2026): nada de `POST /users/login` por HTTP, que derruba a

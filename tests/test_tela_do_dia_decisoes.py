@@ -170,3 +170,29 @@ def test_excel_do_dia_que_ja_existe_pede_confirmacao(tmp_path):
 def test_aporte_leva_a_data_do_dia_de_trabalho_e_nao_a_do_relogio():
     from conciliacao.models import Periodo
     assert dc.data_das_operacoes(Periodo(date(2026, 10, 17), date(2026, 10, 19))) == date(2026, 10, 19)
+
+
+# ------------------------------------------------- período lido (sem campo de data)
+def test_periodo_lido_aparece_na_tela():
+    from conciliacao.models import Periodo
+    assert dc.periodo_na_tela(Periodo(date(2026, 10, 17), date(2026, 10, 19)))[0] == \
+        "Pagamentos de 17/10 a 19/10"
+    assert dc.periodo_na_tela(Periodo(HOJE, HOJE))[0] == "Pagamentos de 21/10 a 21/10"
+
+
+@pytest.mark.parametrize("inicio, fim, anterior", [
+    (date(2026, 10, 21), date(2026, 10, 21), "terça 20/10"),     # quarta: período só de hoje
+    (date(2026, 10, 20), date(2026, 10, 20), "segunda 19/10"),   # terça
+    (date(2026, 10, 17), date(2026, 10, 19), "sexta 16/10"),     # segunda: sáb..seg
+])
+def test_dia_util_anterior_fora_do_periodo_avisa_feriado(inicio, fim, anterior):
+    from conciliacao.models import Periodo
+    _texto, aviso = dc.periodo_na_tela(Periodo(inicio, fim))
+    assert aviso == (f"O período não cobre {anterior} — se foi feriado, use a aba "
+                     "Remessa/Retorno para buscar os vencidos.")
+
+
+def test_periodo_que_cobre_o_dia_util_anterior_nao_avisa():
+    from conciliacao.models import Periodo
+    assert dc.periodo_na_tela(Periodo(date(2026, 10, 16), date(2026, 10, 19)))[1] == ""
+    assert dc.periodo_na_tela(Periodo(date(2026, 10, 20), date(2026, 10, 21)))[1] == ""
