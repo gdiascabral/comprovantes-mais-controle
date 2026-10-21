@@ -72,12 +72,36 @@ def e_da_subconta(nome: str, dados: dict, numero: str) -> bool:
         numero_da_conta(nome) == numero
 
 
+def rotulo_investidor(numero: str, dados: dict) -> str:
+    """Como a subconta aparece na LISTA de Pagou: os investidores na frente
+    ("FULANO - INVESTIDOR SUBCONTA 00000-0"), para a busca achar pelo nome
+    (pedido do dono, 21/10/2026: digitar o nome do investidor só achava um
+    cadastro avulso dele). O que vai para a operação continua sendo
+    `pagador_canonico` — o rótulo é só da tela."""
+    dados = dados if isinstance(dados, dict) else {}
+    nomes = [str(n).strip() for n in dados.get("investidores") or []
+             if str(n).strip()]
+    base = INVESTIDOR_PREFIXO + numero
+    return f"{' / '.join(nomes)} - {base}" if nomes else base
+
+
 def numero_subconta(pagador: str, subcontas: dict) -> str | None:
-    if pagador.startswith(INVESTIDOR_PREFIXO):
-        numero = pagador[len(INVESTIDOR_PREFIXO):]
+    """O número da subconta de "INVESTIDOR SUBCONTA 00000-0", com ou sem os
+    investidores na frente (`rotulo_investidor`)."""
+    texto = str(pagador or "").strip()
+    i = texto.rfind(INVESTIDOR_PREFIXO)
+    if i == 0 or (i > 0 and texto[:i].endswith(" - ")):
+        numero = texto[i + len(INVESTIDOR_PREFIXO):]
         if numero in subcontas:
             return numero
     return None
+
+
+def pagador_canonico(pagador: str, subcontas: dict) -> str:
+    """O Pagou que a operação guarda: o rótulo com nomes volta a ser
+    "INVESTIDOR SUBCONTA 00000-0"; qualquer outro pagador fica como está."""
+    numero = numero_subconta(pagador, subcontas)
+    return INVESTIDOR_PREFIXO + numero if numero is not None else pagador
 
 
 def como_dinheiro(valor) -> Decimal:

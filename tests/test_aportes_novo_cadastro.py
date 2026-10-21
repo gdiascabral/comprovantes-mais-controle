@@ -73,6 +73,7 @@ def test_valido_passa():
     (Novo("OUTRO", "X", "HOLDING - SUBCONTA 111-1 - BANCO"), "já está na lista"),
     (Novo("A;B", "X"), "ponto e vírgula"),
     (Novo(cadastro.INVESTIDOR_PREFIXO + "9", "X"), "rateios"),
+    (Novo("FULANO - " + cadastro.INVESTIDOR_PREFIXO + "9", "X"), "rateios"),
 ])
 def test_invalido_diz_o_motivo(novo, pedaco):
     assert pedaco in nc.validar(novo, ENTIDADES)
@@ -211,3 +212,28 @@ def test_dono_conferido_no_erp_quando_a_conta_e_nova():
     assert nc.validar_investidor(
         _inv(), ENTIDADES, participantes=["INV A", "HOLDING SPE"],
         centros=["LOTE 1"]) == ""
+
+
+# --- opções do campo "Empresa dona da conta" (21/10/2026) -------------------
+def test_donos_possiveis_poe_quem_ja_e_dono_primeiro_e_depois_o_erp():
+    # FULANO não tem conta: é contato, não dono — fica no resto, em ordem.
+    assert nc.donos_possiveis(ENTIDADES, ["zeta ltda", "Holding SPE",
+                                          "FULANO DE TAL", "ALFA SA"]) == [
+        "Holding SPE", "ALFA SA", "FULANO DE TAL", "zeta ltda"]
+
+
+def test_donos_possiveis_nao_oferece_dono_que_o_erp_nao_tem():
+    # A validação recusaria: oferecer seria armadilha.
+    assert nc.donos_possiveis(ENTIDADES, ["OUTRA SPE"]) == ["OUTRA SPE"]
+
+
+def test_donos_possiveis_sem_erp_oferece_os_donos_do_cadastro():
+    assert nc.donos_possiveis(ENTIDADES, None) == ["HOLDING SPE"]
+
+
+def test_dono_escolhido_na_lista_passa_na_validacao():
+    participantes = ["INV A", "Holding SPE"]
+    dono = nc.donos_possiveis(ENTIDADES, participantes)[0]
+    inv = _inv(dono=dono)
+    assert nc.validar_investidor(inv, ENTIDADES, participantes=participantes,
+                                 centros=["LOTE 1"]) == ""

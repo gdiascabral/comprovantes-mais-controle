@@ -105,8 +105,11 @@ def validar(novo: Novo, entidades: list[dict]) -> str:
     if ";" in exibicao + novo.nome_oficial + novo.conta + novo.nome_descricao:
         # O cache local é CSV separado por ";".
         return "Os nomes não podem ter ponto e vírgula (;)."
-    if exibicao.startswith(cadastro.INVESTIDOR_PREFIXO):
-        return (f"Nomes que começam com \"{cadastro.INVESTIDOR_PREFIXO}\" são "
+    # Em qualquer posição, não só no começo: a lista de Pagou mostra a
+    # subconta como "FULANO - INVESTIDOR SUBCONTA 00000-0", e um nome assim
+    # seria lido como a subconta (`regras.numero_subconta`).
+    if cadastro.INVESTIDOR_PREFIXO.strip() in exibicao.upper():
+        return (f"Nomes com \"{cadastro.INVESTIDOR_PREFIXO.strip()}\" são "
                 "dos rateios de subconta. Escolha outro nome.")
     for e in entidades:
         if _chave(e.get("nome_exibicao")) == _chave(exibicao):
@@ -163,6 +166,33 @@ def contas_de_investidor(contas: list[dict], entidades: list[dict],
         if numero and numero in subcontas:
             opcoes.add(str(e["conta"]).strip())
     return sorted(opcoes, key=_chave)
+
+
+def donos_possiveis(entidades: list[dict], participantes=None) -> list[str]:
+    """As opções do campo "Empresa dona da conta" (pedido do dono, 21/10/2026:
+    o campo era texto livre e ninguém sabia o nome exato a digitar).
+
+    Primeiro as empresas que JÁ são dona de alguma conta da lista — é quase
+    sempre uma delas —, depois o resto dos contatos do ERP. Com a lista do
+    ERP em mãos, só entra nome que existe nela: é a mesma régua do
+    `validar_investidor`, e oferecer um nome que a validação recusa seria
+    armadilha."""
+    validos = None if participantes is None else {
+        _chave(p): str(p).strip() for p in participantes if str(p).strip()}
+    donos: dict[str, str] = {}
+    for e in entidades:
+        nome = str(e.get("nome_oficial") or "").strip()
+        if not e.get("conta") or not nome:
+            continue
+        if validos is not None:
+            if _chave(nome) not in validos:
+                continue
+            nome = validos[_chave(nome)]
+        donos.setdefault(_chave(nome), nome)
+    resto = [] if validos is None else [
+        v for k, v in validos.items() if k not in donos]
+    return (sorted(donos.values(), key=_chave)
+            + sorted(resto, key=_chave))
 
 
 def banco_da_conta(conta: str, contas: list[dict]) -> str:

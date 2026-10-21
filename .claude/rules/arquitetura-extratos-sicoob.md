@@ -49,3 +49,14 @@ paths:
   interceptando `JSON.stringify` na página, antes da cifra. Guardado por
   `tests/test_sicoob_idioma.py`. NUNCA abrir este perfil num Chrome comum nem
   com porta de depuração — só como o app abre.
+- **O aviso do banco (SweetAlert2, `.swal2-container`) cobre o ⇄**, 20/10/2026.
+  A 1ª "Conferir agendamentos" pelo app parou antes da 1ª conta: Home às
+  17:01:59, Chrome fechado às 17:02:44 — os 45 s da espera pela lista; as seis
+  contas saíram "não foi lida". Os scripts da prova de 15/10 fechavam o aviso
+  à mão; o app não. Hoje `_abrir_selecao` chama `_fechar_aviso` antes do
+  clique — só com OK/FECHAR/ENTENDI quando é o único botão, senão Esc; botão que confirma ("Sim",
+  "Assinar") nunca é clicado —, e `ir_para_selecao`, se a lista não abrir,
+  confere a sessão, recarrega e tenta UMA vez mais (o cabeçalho com o ⇄
+  também some depois de várias trocas). A conta que fica sem ler leva o
+  porquê para a tabela (`agendamentos_sicoob.motivo_da_parada`). Guardado
+  por `tests/test_sicoob_aviso.py`.
