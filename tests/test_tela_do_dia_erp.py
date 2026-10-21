@@ -77,3 +77,43 @@ def test_nenhuma_conta_e_erro():
     api = ApiDaAba({"bank-accounts?": {"items": [], "hasNextPage": False}})
     with pytest.raises(ErpError, match="nenhuma conta"):
         erp_do_dia.ler_saldos(Cfg(), api, central_ligado=lambda: False, logar=_nao_loga)
+
+
+def test_central_some_entre_as_leituras_nao_faz_login_http(monkeypatch):
+    """Janela de corrida: ligado na 1a leitura, desligado na 2a."""
+    from erp import sessao as erp_sessao
+    leituras = iter([True, False, False])
+    monkeypatch.setattr(erp_sessao, "central_ligado", lambda nome="principal": next(leituras))
+    monkeypatch.setattr(erp_sessao, "_pedir", _nao_loga)
+    monkeypatch.setattr(erp_sessao.Sessao, "de_login", _nao_loga)
+    api = ApiDaAba({})
+    with pytest.raises(ErpError):
+        erp_do_dia.ler_saldos(Cfg(), api)
+    assert api.urls == []
+
+
+def test_excecao_do_fetch_vira_erperror():
+    class Quebra(ApiDaAba):
+        def _fetch_json(self, url, headers):
+            raise RuntimeError("aba fechada")
+    with pytest.raises(ErpError) as e:
+        erp_do_dia.ler_saldos(Cfg(), Quebra({}), central_ligado=lambda: False,
+                              logar=_nao_loga)
+    assert isinstance(e.value.__cause__, RuntimeError)
+
+
+def test_acessos_estragado_propaga_sem_tocar_api_nem_login():
+    from erp.sessao import ErpErro
+
+    def estragado():
+        raise ErpErro("acessos.json estragado")
+    api = ApiDaAba({})
+    with pytest.raises(ErpErro):
+        erp_do_dia.ler_saldos(Cfg(), api, central_ligado=estragado, logar=_nao_loga)
+    assert api.urls == [] and not api.garantiu
+
+
+def test_conta_sem_saldo_no_lote_sai_none_nunca_zero():
+    api = ApiDaAba({"bank-accounts?": CONTAS, "balances?": {}})
+    contas = erp_do_dia.ler_saldos(Cfg(), api, central_ligado=lambda: False, logar=_nao_loga)
+    assert contas[0].balance is None

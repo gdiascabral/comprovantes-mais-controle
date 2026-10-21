@@ -21,6 +21,7 @@ from __future__ import annotations
 from conciliacao.erp.api import SessaoApi
 from conciliacao.errors import ErpError
 from erp import sessao as erp_sessao
+from erp.sessao import ErpErro, Sessao
 
 
 class PedirPelaAba:
@@ -38,7 +39,12 @@ class PedirPelaAba:
             raise ErpError("o Chrome do app ainda não tem o acesso ao cadastro "
                            "de contas — busque de novo.")
         _base, cabecalhos = captura
-        corpo = self._api._fetch_json(url, cabecalhos)
+        try:
+            corpo = self._api._fetch_json(url, cabecalhos)
+        except Exception as e:      # rede, aba fechada, resposta que não é JSON
+            raise ErpError("não consegui ler as contas pela aba do app "
+                           f"({type(e).__name__}). Recarregue o Mais Controle "
+                           "no Chrome do app e busque de novo.") from e
         if isinstance(corpo, dict) and corpo.get("__erro"):
             raise ErpError(f"o Mais Controle respondeu {corpo['__erro']} ao ler as "
                            "contas pela aba do app. Recarregue o Mais Controle no "
@@ -46,10 +52,35 @@ class PedirPelaAba:
         return corpo
 
 
+def _logar_pela_pagina(config, log=print):
+    """Sessão do porteiro, SEM nunca cair no login HTTP.
+
+    Não usa `SessaoApi.logar`: ele relê `central_ligado()` e, se o central
+    sumiu entre a leitura de `ler_saldos` e a dele, cai em `POST /users/login`.
+    Aqui `Sessao.logar("", "")` relê o central e, desligado, levanta
+    `SessaoRecusada` (sem credencial, sem HTTP). Traduzido para `ErpError`.
+    """
+    try:
+        interna = Sessao.logar("", "")
+    except ErpErro as e:
+        raise ErpError(str(e)) from e
+    if not interna.jwt_token:
+        raise ErpError("o porteiro entrou sem 'jwtToken' — o contrato mudou.")
+    return SessaoApi(token=interna.jwt_token, company_id=interna.company_id,
+                     usuario=interna.usuario or "Chrome central",
+                     empresa=interna.empresa, config=config, _sessao=interna)
+
+
 def ler_saldos(config, api, *, central_ligado=None, logar=None, log=print):
-    """Contas ativas com saldo, só pelo Chrome do app. Erro vira `ErpError`."""
+    """Contas ativas com saldo, só pelo Chrome do app.
+
+    Erro do ERP vira `ErpError`, nunca saldo zero. Conta sem saldo no lote
+    sai com `balance=None` ("não lido"). Com `acessos.json` estragado,
+    `central_ligado` levanta `ErpErro` (a classe do pacote `erp/`, não a
+    `ErpError` da conciliação) e a leitura para antes de tocar `api` ou login.
+    """
     central_ligado = central_ligado or erp_sessao.central_ligado
-    logar = logar or SessaoApi.logar
+    logar = logar or _logar_pela_pagina
     if central_ligado():
         contas = logar(config, log=log).contas(ativas=True)
     else:
