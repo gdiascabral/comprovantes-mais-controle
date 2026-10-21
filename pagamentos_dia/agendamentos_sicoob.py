@@ -140,17 +140,19 @@ def conta_sicoob(conta_erp: str, mapa_mc, empresas) -> tuple[str, str]:
         # Conta nova que nem o `contas_mc.json` conhece, mas que se diz do
         # Sicoob e traz o número no nome: confere pelo número.
         if _diz_sicoob(conta_erp):
-            numero = numero_no_nome(conta_erp)
-            if numero:
-                return numero, ""
+            numero, motivo = _numero_pelo_nome(empresas, conta_erp)
+            if numero or motivo:
+                return numero, motivo
         elif _diz_outro_banco(conta_erp):
             # "… BRADESCO 48147" fora do mapa saía vermelha, contada entre as
             # contas do Sicoob não conferidas (21/10/2026).
             return "", MOTIVO_FORA_SICOOB
         return "", MOTIVO_CONTA_DESCONHECIDA
     if not (destino.banco or "").strip():
-        numero = numero_no_nome(conta_erp) if _diz_sicoob(conta_erp) else ""
-        return (numero, "") if numero else ("", MOTIVO_SEM_BANCO)
+        if not _diz_sicoob(conta_erp):
+            return "", MOTIVO_SEM_BANCO
+        numero, motivo = _numero_pelo_nome(empresas, conta_erp)
+        return (numero, "") if numero else ("", motivo or MOTIVO_SEM_BANCO)
     if not remessa_dia._e_sicoob(destino.banco):
         return "", MOTIVO_FORA_SICOOB
     _empresa, conta, falta = remessa_dia._escolher_conta(destino, empresas)
@@ -160,13 +162,37 @@ def conta_sicoob(conta_erp: str, mapa_mc, empresas) -> tuple[str, str]:
         # PARTICIPAÇÕES) mora na `entidade`, não no cadastro de contas do
         # Sicoob, e ficava "fora da conferência" — as pendências dela seriam
         # assinadas sem confronto. O número está no nome da pasta ou da conta
-        # do ERP; um número errado não lê a conta de outro: `pendencias`
-        # confere a conta ABERTA antes de pedir, e o seletor recusa a que o
-        # login não enxerga.
-        numero = (numero_no_nome(getattr(destino, "pasta", ""))
-                  or numero_no_nome(conta_erp))
+        # do ERP. `pendencias` só garante que a conta lida é a PEDIDA, não
+        # que o número é desta conta: por isso número que já é de outra conta
+        # do cadastro, ou pasta e nome com números diferentes, ficam
+        # vermelhos (revisão de dinheiro, 21/10/2026).
+        numero, motivo = _numero_pelo_nome(
+            empresas, getattr(destino, "pasta", ""), conta_erp)
         if not numero:
-            return "", falta or MOTIVO_CONTA_DESCONHECIDA
+            return "", motivo or falta or MOTIVO_CONTA_DESCONHECIDA
+    return numero, ""
+
+
+MOTIVO_NUMEROS_DIFERENTES = ("a pasta e o nome da conta trazem números de "
+                             "conta diferentes — confira o cadastro")
+MOTIVO_NUMERO_DE_OUTRA = ("o número no nome ({numero}) é de outra conta do "
+                          "cadastro — confira o nome desta conta")
+
+
+def _numero_pelo_nome(empresas, *nomes) -> tuple[str, str]:
+    """`(número, "")` tirado dos nomes, ou `("", motivo)`; `("", "")` quando
+    nenhum nome traz número."""
+    achados = {n for n in (numero_no_nome(x) for x in nomes) if n}
+    if not achados:
+        return "", ""
+    if len(achados) > 1:
+        return "", MOTIVO_NUMEROS_DIFERENTES
+    numero = achados.pop()
+    digitos = re.sub(r"\D", "", numero)
+    for e in empresas or []:
+        for c in getattr(e, "contas", None) or []:
+            if re.sub(r"\D", "", getattr(c, "numero", "") or "") == digitos:
+                return "", MOTIVO_NUMERO_DE_OUTRA.format(numero=numero)
     return numero, ""
 
 
@@ -198,14 +224,22 @@ def _diz_sicoob(nome) -> bool:
 
 
 #: Outro banco escrito no nome da conta do ERP. Só nomes inteiros e sem
-#: ambiguidade: "BB" e "CAIXA" sozinhos são palavras de descrição também.
+#: ambiguidade ("BB" e "CAIXA" sozinhos são palavras de descrição também), e
+#: só como banco DA CONTA: a palavra que fecha o nome ("… - INTER") ou a que
+#: vem antes do número dela ("… BRADESCO 48147"). "BLOCO C6" no meio de uma
+#: subconta do Sicoob não a tira da conferência.
 _OUTROS_BANCOS = frozenset("INTER BRADESCO ITAU SANTANDER NUBANK SICREDI "
                            "BANRISUL C6 BTG".split())
 
 
 def _diz_outro_banco(nome) -> bool:
-    palavras = _palavras_do_nome(nome)
-    return "SICOOB" not in palavras and bool(palavras & _OUTROS_BANCOS)
+    if _diz_sicoob(nome):
+        return False
+    palavras = re.findall(r"[A-Z0-9]+",
+                          util.sem_acento(str(nome or "")).upper())
+    while palavras and palavras[-1].isdigit():
+        palavras.pop()
+    return bool(palavras) and palavras[-1] in _OUTROS_BANCOS
 
 
 #: Estado de toda conta do Sicoob ANTES de ser lida: se a leitura parar no
@@ -685,15 +719,26 @@ def chave_da_linha(conf: Confronto, li: Linha) -> str:
                        centavos_do_banco(b) if li.banco else None,
                        str(h.get("favorecido") or ""),
                        str(h.get("descricao") or ""),
+                       # Dois Pix iguais no HTML são dois pagamentos: o id
+                       # da linha os separa (revisão de dinheiro, 21/10).
+                       str(h.get("id") or ""),
                        str(b.get("pendencia") or ""),
                        str(b.get("detalhe") or "")], ensure_ascii=False)
 
 
 def chave_da_conta(conf: Confronto) -> str:
-    """A conta com o resumo que estava na tela: outra leitura que diga outra
-    coisa dela é outra conferência."""
-    return json.dumps(["conta", conf.conta_erp, conf.numero, conf.resumo()],
+    """A conta com TODAS as linhas que estavam na tela: outra leitura com o
+    mesmo resumo e outros valores é outra conferência (revisão de dinheiro,
+    21/10/2026 — só o resumo deixava a marca atravessar a troca)."""
+    return json.dumps(["conta", conf.conta_erp, conf.numero, conf.motivo,
+                       sorted(chave_da_linha(conf, li) for li in conf.linhas)],
                       ensure_ascii=False)
+
+
+def conta_marcavel(conf: Confronto) -> bool:
+    """Conta não lida no banco NÃO se marca: não há o que dar por conferido,
+    e uma marca nela atravessaria toda leitura que falhasse do mesmo jeito."""
+    return conf.conferida
 
 
 def precisa_olhar(li: Linha) -> bool:
@@ -769,7 +814,7 @@ def resumao(confrontos, marcas: dict) -> Resumao:
             r.outro_banco += 1
             continue
         r.contas_sicoob += 1
-        if conta_conferida(conf, marcas):
+        if conta_marcavel(conf) and conta_conferida(conf, marcas):
             r.contas_marcadas += 1
         if conf.falhou:
             r.nao_lidas += 1

@@ -625,3 +625,57 @@ def test_conta_de_outro_banco_fora_do_mapa_nao_e_sicoob_nao_conferido():
     assert (numero, motivo) == ("", A.MOTIVO_FORA_SICOOB)
     assert A.conta_sicoob("EMPRESA Z SEM BANCO", _mapa([]), [])[1] == \
         A.MOTIVO_CONTA_DESCONHECIDA
+
+
+# ------------------------------ revisão de dinheiro do PR #139 (21/10/2026)
+
+def test_numero_do_nome_que_ja_e_de_outra_conta_do_cadastro_fica_vermelho():
+    destino = NS(erp="Holding X - SUBCONTA 12345-6 - SICOOB", empresa="HOLDING X",
+                 pasta="SUBCONTA 12345-6 - SICOOB", banco="SICOOB", sufixo="")
+    empresas = [NS(nome="HOLDING X", contas=[
+        NS(numero="12.345-6", pasta="PRINCIPAL - SICOOB", sufixo="")])]
+    numero, motivo = A.conta_sicoob(destino.erp, _mapa([destino]), empresas)
+    assert numero == "" and "outra conta" in motivo
+    c = A.Confronto(conta_erp=destino.erp, motivo=motivo)
+    assert c.falhou
+
+
+def test_pasta_e_nome_com_numeros_diferentes_ficam_vermelhos():
+    destino = NS(erp="Holding X - 11111-1 - SICOOB", empresa="HOLDING X",
+                 pasta="SUBCONTA 22222-2 - SICOOB", banco="SICOOB", sufixo="")
+    numero, motivo = A.conta_sicoob(destino.erp, _mapa([destino]),
+                                    [NS(nome="HOLDING X", contas=[])])
+    assert numero == "" and motivo == A.MOTIVO_NUMEROS_DIFERENTES
+
+
+def test_marca_da_conta_nao_atravessa_leitura_com_o_mesmo_resumo():
+    antes = _conf("B", [entrada(50000, "Fulano", "OBRA Y OC 1")],
+                  [pendencia(0.0, "Observação: OBRA Y OC 1")])
+    depois = _conf("B", [entrada(120000, "Fulano", "OBRA Y OC 1")],
+                   [pendencia(120.0, "Observação: OBRA Y OC 1")])
+    assert antes.resumo() == depois.resumo()
+    marcas = {}
+    A.alternar(marcas, A.chave_da_conta(antes), "eu", "agora")
+    assert not A.conta_conferida(depois, marcas)
+
+
+def test_conta_nao_lida_nao_se_marca_nem_conta_como_marcada():
+    nao = _conf("C", [], [], motivo=A.MOTIVO_NAO_LIDA)
+    assert not A.conta_marcavel(nao)
+    marcas = {A.chave_da_conta(nao): {"por": "eu", "em": "agora"}}
+    assert A.resumao([nao], marcas).contas_marcadas == 0
+
+
+def test_dois_pagamentos_iguais_no_html_tem_marcas_separadas():
+    a = dict(entrada(500, "Outro", "OBRA Y OC 9"), id="L1")
+    b = dict(entrada(500, "Outro", "OBRA Y OC 9"), id="L2")
+    conf = _conf("B", [a, b], [])
+    k1, k2 = (A.chave_da_linha(conf, li) for li in conf.linhas)
+    assert k1 != k2
+
+
+def test_banco_no_meio_do_nome_nao_tira_conta_da_conferencia():
+    assert A.conta_sicoob("SUBCONTA BLOCO C6 NOVA", _mapa([]), [])[1] == \
+        A.MOTIVO_CONTA_DESCONHECIDA
+    assert A.conta_sicoob("EMPRESA Y - INTER", _mapa([]), [])[1] == \
+        A.MOTIVO_FORA_SICOOB

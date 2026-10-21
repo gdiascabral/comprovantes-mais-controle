@@ -730,17 +730,20 @@ paths:
   cadastro não dá a conta, `conta_sicoob` usa o número escrito na pasta ou
   no nome da conta do ERP (`numero_no_nome`: UM número `NN.NNN-D`, devolvido
   com o ponto, que é como o seletor do Sicoob o escreve); conta fora do
-  `contas_mc.json` também, se o nome diz SICOOB. Número errado não lê conta
-  de outro: `pendencias` confere a conta ABERTA, e o seletor recusa a que o
-  login não enxerga. Conta fora do mapa que diz outro banco no nome
-  (BRADESCO, INTER…) é "outro banco", não "Sicoob não conferida".
+  `contas_mc.json` também, se o nome diz SICOOB. `pendencias` só garante que
+  a conta lida é a PEDIDA, não que o número é desta conta: por isso número
+  que já é de outra conta do cadastro, ou pasta e nome com números
+  diferentes, ficam vermelhos. Conta fora do mapa cujo nome TERMINA em outro
+  banco (" - INTER", "BRADESCO 48147") é "outro banco", não "Sicoob não
+  conferida"; banco no meio do nome não conta.
   **A janela é o resumão + a marca "Conferido"** (dono, 21/10/2026): no topo
   contas lidas, batem, com diferença, não conferidas, totais HTML × banco e
   contas marcadas; embaixo a tabela, com a coluna ☐/☑ — clique ou Espaço. Na
   linha marca a linha; na conta, a conta inteira (com pergunta se ela tem
   vermelho ou linha sem marca). Linha que bate é ✓ e não se marca. As marcas
   ficam em `<html>.conferido.json`, ao lado do HTML, com quem e quando, e a
-  chave leva o que foi VISTO (valores, nomes, situação; na conta, o resumo):
-  uma leitura nova que mude a linha a deixa sem marca. A regra é pura
+  chave leva o que foi VISTO (valores, nomes, situação e o `id` da linha do
+  HTML; na conta, as chaves de todas as linhas): uma leitura nova que mude
+  qualquer linha a deixa sem marca. Conta NÃO LIDA não se marca. A regra é pura
   (`resumao`, `chave_da_linha`, `chave_da_conta`, `ler_marcas`,
   `gravar_marcas`) e tem teste.

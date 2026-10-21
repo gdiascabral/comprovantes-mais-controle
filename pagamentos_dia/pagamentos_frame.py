@@ -1057,7 +1057,7 @@ class PagamentosDiaFrame(ttk.Frame):
 
         def marca_de(conf, li):
             if li is None:
-                if not conf.conferida and not conf.falhou:
+                if not A.conta_marcavel(conf):
                     return ""
                 return "☑" if A.conta_conferida(conf, marcas) else "☐"
             if not A.precisa_olhar(li):
@@ -1112,8 +1112,7 @@ class PagamentosDiaFrame(ttk.Frame):
                 if A.tem_erro(conf) or faltam:
                     # Marcar a conta inteira por cima do vermelho é decisão
                     # de quem confere, mas não pode sair de um clique só.
-                    por = ("não foi lida no banco" if conf.falhou else
-                           f"tem {len(faltam)} linha(s) ainda sem marca"
+                    por = (f"tem {len(faltam)} linha(s) ainda sem marca"
                            if faltam else "tem diferença de dinheiro")
                     if not messagebox.askyesno(
                             "Conferir agendamentos",
