@@ -709,9 +709,10 @@ class AportesFrame(ttk.Frame):
         Aporte lançado pela METADE trava QUALQUER correção, e não só a da
         linha dele: a correção relê a lista inteira do banco, e o que outra
         máquina mudou nesse meio-tempo entraria junto — o resto do aporte
-        sairia com a conta nova. A memória do que já entrou (`criados`) é
-        por posição, e só vale com o cadastro de quando começou."""
-        if any(self.criados):
+        sairia com a conta nova. A memória do que já entrou (`criados`, e o
+        de resultado incerto, `incertos`) é por posição, e só vale com o
+        cadastro de quando começou."""
+        if any(self.criados) or any(self.incertos):
             return ("Há um aporte na lista \"A lançar\" que já entrou em "
                     "parte no Mais Controle. Termine esse lançamento (ou "
                     "tire-o da lista) antes de corrigir cadastros.")
