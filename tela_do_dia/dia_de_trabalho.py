@@ -31,6 +31,10 @@ class DiaDeTrabalho:
     #: O que já foi mandado para a aba Aportes hoje: "destino|aportador"
     #: (`para_aportes.chave_de_envio`) -> o VALOR mandado, em Decimal.
     enviados_aportes: dict = field(default_factory=dict)
+    #: Movimentos da seção «À MÃO» (spec, passo 3): [(origem, destino, valor)].
+    #: Origem None = entra de fora (aporte que entra na mãe); senão é outra
+    #: conta do painel (transferência entre contas). Valor em Decimal.
+    a_mao: list = field(default_factory=list)
 
 
 def pasta_do_dia(raiz_saida, data: date) -> Path:
@@ -60,6 +64,7 @@ def para_dict(dia: DiaDeTrabalho) -> dict:
         "aportes": [{"destino": d, "aportador": ap, "valor": str(v)}
                     for (d, ap), v in sorted(dia.aportes.items())],
         "enviados_aportes": {k: str(v) for k, v in sorted(dia.enviados_aportes.items())},
+        "a_mao": [{"origem": o, "destino": d, "valor": str(v)} for o, d, v in dia.a_mao],
     }
 
 
@@ -79,6 +84,15 @@ def de_dict(dados: dict, data: date) -> DiaDeTrabalho:
                                 for k, v in (dados.get("enviados_aportes") or {}).items()}
         if not all(v.is_finite() and v > 0 for v in dia.enviados_aportes.values()):
             raise ValueError("valor mandado que não é número maior que zero")
+        for item in dados.get("a_mao") or []:
+            origem, destino, valor = item.get("origem"), item["destino"], Decimal(str(item["valor"]))
+            if origem is not None and (not isinstance(origem, str) or not origem.strip()):
+                raise ValueError(f"movimento à mão com origem {origem!r}")
+            if not isinstance(destino, str) or not destino.strip():
+                raise ValueError(f"movimento à mão com destino {destino!r}")
+            if not valor.is_finite():
+                raise ValueError(f"movimento à mão com valor {item['valor']!r}")
+            dia.a_mao.append((origem, destino, valor))
     except (KeyError, TypeError, AttributeError, InvalidOperation) as e:
         raise ValueError(f"formato inesperado ({e!r})") from e
     return dia

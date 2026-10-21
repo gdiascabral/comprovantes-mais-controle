@@ -56,3 +56,33 @@ def test_enviado_sem_valor_em_decimal_levanta_em_vez_de_esquecer_o_envio(tmp_pat
                                    "enviados_aportes": {"A|B": valor}}), encoding="utf-8")
     with pytest.raises(ValueError, match="velho.json"):
         ddt.ler(caminho, HOJE)
+
+
+# ------------------------------------------- movimentos «À MÃO» (Tarefa 12)
+def test_movimentos_a_mao_ida_e_volta_em_decimal_com_origem_de_fora(tmp_path):
+    dia = ddt.DiaDeTrabalho(HOJE)
+    dia.a_mao = [(None, "Mae - Banco", D("1000.10")),
+                 ("Mae - Banco", "Conta Alfa - Banco", D("250.00"))]
+    volta = ddt.ler(ddt.gravar(dia, tmp_path / "d.json"), HOJE)
+    assert volta.a_mao == dia.a_mao
+    assert all(isinstance(v, D) for _o, _d, v in volta.a_mao)
+
+
+def test_arquivo_sem_movimentos_a_mao_continua_legivel(tmp_path):
+    caminho = tmp_path / "antigo.json"
+    caminho.write_text(json.dumps({"data": "2026-10-21"}), encoding="utf-8")
+    assert ddt.ler(caminho, HOJE).a_mao == []
+
+
+@pytest.mark.parametrize("item", [
+    {"origem": None, "destino": "Mae - Banco", "valor": "abc"},
+    {"origem": None, "destino": "Mae - Banco", "valor": "NaN"},
+    {"origem": None, "destino": "", "valor": "10.00"},
+    {"origem": 5, "destino": "Mae - Banco", "valor": "10.00"},
+    {"origem": None, "valor": "10.00"},
+])
+def test_movimento_a_mao_estragado_levanta_em_vez_de_sumir(tmp_path, item):
+    caminho = tmp_path / "mao.json"
+    caminho.write_text(json.dumps({"data": "2026-10-21", "a_mao": [item]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="mao.json"):
+        ddt.ler(caminho, HOJE)
