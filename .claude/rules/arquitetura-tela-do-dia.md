@@ -78,11 +78,11 @@ None`), o Excel pode sair (a pagar zero é verdade), mas planilha, HTML e
 Remessa recusam.
 
 **Sem campo de data** (decisão do dono, 21/10/2026): o período é o de
-`sugerir_periodo(hoje)`. A tela mostra o período lido ("Pagamentos de DD/MM a
-DD/MM") e, quando o dia útil anterior (seg–sex) ficou fora dele, o lembrete
-"se foi feriado, use a aba Remessa/Retorno para buscar os vencidos"
-(`decisoes.periodo_na_tela`). Sem calendário de feriados, o lembrete aparece
-em todo dia útil — é o caminho para o vencido de um feriado não sumir.
+`sugerir_periodo(hoje)`, e a tela mostra o período lido ("Pagamentos de DD/MM
+a DD/MM", `decisoes.periodo_na_tela`). Sem calendário de feriados, ela NÃO
+avisa nada sobre o dia anterior: "o dia útil anterior ficou fora" vale em todo
+dia útil e viraria ruído. **No dia seguinte a um feriado, os vencidos do
+feriado se buscam pela aba Remessa/Retorno** (que tem o campo de data).
 
 ## Saldos pelo Chrome do app
 

@@ -111,8 +111,8 @@ class TelaDoDiaFrame(ttk.Frame):
 
         c2 = widgets.Cartao(corpo, "Pagamentos por conta", 2)
         c2.pack(fill="x", padx=PADX, pady=px((0, 12)))
-        # Sem campo de data (decisão do dono): o período lido fica à vista, e o
-        # dia útil anterior fora dele ganha o lembrete do feriado.
+        # Sem campo de data (decisão do dono): o período lido fica à vista. O
+        # rótulo de aviso fica vazio hoje (`decisoes.periodo_na_tela`).
         self.lbl_periodo = ttk.Label(c2, style="Secao.TLabel", text="")
         self.lbl_periodo.pack(anchor="w")
         self.lbl_aviso_periodo = ttk.Label(c2, style="Atencao.TLabel", wraplength=px(900),

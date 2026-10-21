@@ -180,19 +180,14 @@ def test_periodo_lido_aparece_na_tela():
     assert dc.periodo_na_tela(Periodo(HOJE, HOJE))[0] == "Pagamentos de 21/10 a 21/10"
 
 
-@pytest.mark.parametrize("inicio, fim, anterior", [
-    (date(2026, 10, 21), date(2026, 10, 21), "terça 20/10"),     # quarta: período só de hoje
-    (date(2026, 10, 20), date(2026, 10, 20), "segunda 19/10"),   # terça
-    (date(2026, 10, 17), date(2026, 10, 19), "sexta 16/10"),     # segunda: sáb..seg
+@pytest.mark.parametrize("inicio, fim", [
+    (date(2026, 10, 21), date(2026, 10, 21)),     # quarta: período só de hoje
+    (date(2026, 10, 17), date(2026, 10, 19)),     # segunda: sáb..seg
+    (date(2026, 10, 16), date(2026, 10, 19)),
 ])
-def test_dia_util_anterior_fora_do_periodo_avisa_feriado(inicio, fim, anterior):
+def test_periodo_nunca_avisa_sem_calendario_de_feriados(inicio, fim):
+    """Sem calendário, "o dia útil anterior não está no período" vale em TODO
+    dia útil — avisar sempre é ruído. O vencido de feriado se busca pela aba
+    Remessa/Retorno (notas do PR e arquitetura-tela-do-dia.md)."""
     from conciliacao.models import Periodo
-    _texto, aviso = dc.periodo_na_tela(Periodo(inicio, fim))
-    assert aviso == (f"O período não cobre {anterior} — se foi feriado, use a aba "
-                     "Remessa/Retorno para buscar os vencidos.")
-
-
-def test_periodo_que_cobre_o_dia_util_anterior_nao_avisa():
-    from conciliacao.models import Periodo
-    assert dc.periodo_na_tela(Periodo(date(2026, 10, 16), date(2026, 10, 19)))[1] == ""
-    assert dc.periodo_na_tela(Periodo(date(2026, 10, 20), date(2026, 10, 21)))[1] == ""
+    assert dc.periodo_na_tela(Periodo(inicio, fim))[1] == ""
