@@ -2,8 +2,10 @@
 """Passo 3 da tela do dia: aporte mínimo por conta, quem põe e quanto.
 
 O espelho é o das fórmulas do Painel (ver `conciliacao/panel.py`):
-mínimo G = D + E − C (E = o que a conta MANDA para as outras), saldo final
-I = C − D − E + F (F = o que entra). A regra (aba «Regras») SUGERE, só quando
+mínimo G = D + E − C − M, nunca abaixo de zero (E = o que a conta MANDA para
+as outras; M = o que ENTRA nela pela seção «À MÃO» da aba Movimentações:
+transferência entre contas, aporte de sócio que entra na mãe), e saldo final
+I = C − D − E + F (F = o que entra: o aporte definido mais o M). A regra (aba «Regras») SUGERE, só quando
 todo participante tem peso (peso em branco = "o rateio é seu"); o dono digita
 o valor POR aportador. A conta-mãe — a que aporta em mais contas — vem primeiro
 e fechar negativa nela é alerta forte: é dela que sai o dinheiro das outras.
@@ -46,6 +48,8 @@ class AporteDaConta:
     definidos: dict = field(default_factory=dict)
     sai: Decimal = ZERO
     e_mae: bool = False
+    #: M do Painel: o que entra na conta pela seção «À MÃO».
+    entra_a_mao: Decimal = ZERO
 
     @property
     def sem_saldo(self) -> bool:
@@ -56,7 +60,7 @@ class AporteDaConta:
     def minimo(self) -> Decimal:
         if self.saldo is None:
             return ZERO                      # não calculado (ver `sem_saldo`)
-        falta = self.a_pagar + self.sai - self.saldo
+        falta = self.a_pagar + self.sai - self.saldo - self.entra_a_mao
         return falta if falta > ZERO else ZERO
 
     @property
@@ -76,7 +80,7 @@ class AporteDaConta:
         # Sem saldo, o número só mostra o movimento do dia; a conta já carrega
         # o alerta de erro e não entra em sugestão nem em alerta de negativa.
         return (self.saldo if self.saldo is not None else ZERO) \
-            - self.a_pagar - self.sai + self.definido
+            - self.a_pagar - self.sai + self.definido + self.entra_a_mao
 
     @property
     def sugestao(self) -> dict:
@@ -101,17 +105,33 @@ class PainelDeAportes:
     definidos_validos: dict
 
 
-def conta_mae(regras) -> str | None:
+def _destinos_por_aportador(regras) -> dict[str, set]:
     destinos: dict[str, set] = {}
     for r in regras:
         if r.do_painel:
             destinos.setdefault(r.aportador, set()).add(r.destino)
+    return destinos
+
+
+def _empatadas_na_mae(regras) -> list[str]:
+    """Todas as que aportam no maior número de contas, na ordem da aba."""
+    destinos = _destinos_por_aportador(regras)
     if not destinos:
-        return None
-    return max(destinos, key=lambda a: len(destinos[a]))   # empate: o primeiro da aba
+        return []
+    maior = max(len(d) for d in destinos.values())
+    return [a for a, d in destinos.items() if len(d) == maior]
 
 
-def montar_aportes(saldos, a_pagar, regras, definidos) -> PainelDeAportes:
+def conta_mae(regras) -> str | None:
+    empatadas = _empatadas_na_mae(regras)
+    return empatadas[0] if empatadas else None          # empate: a primeira da aba
+
+
+def montar_aportes(saldos, a_pagar, regras, definidos, a_mao=None) -> PainelDeAportes:
+    """`a_mao`: movimentos da seção «À MÃO», [(origem, destino, valor)].
+    Origem None = entra de fora (ex.: sócio aporta na mãe). O destino soma
+    no M dele (entra); a origem, se for conta do dia, soma no E (sai)."""
+    contas_do_dia = list(dict.fromkeys([*saldos, *a_pagar]))
     participantes: dict[str, list] = {}
     for r in regras:
         participantes.setdefault(r.destino, []).append(
@@ -130,19 +150,43 @@ def montar_aportes(saldos, a_pagar, regras, definidos) -> PainelDeAportes:
             alertas.append(("atencao", f"{aportador} → {destino}: não está na aba "
                                        f"Regras; o valor {brl(valor)} foi ignorado"))
     sai: dict[str, Decimal] = defaultdict(lambda: ZERO)
+    entra: dict[str, Decimal] = defaultdict(lambda: ZERO)
     por_destino: dict[str, dict] = defaultdict(dict)
     for (destino, aportador), valor in validos.items():
         sai[aportador] += valor
         por_destino[destino][aportador] = valor
+    for origem, destino, valor in (a_mao or ()):
+        de = origem if origem is not None else "fora"
+        if not valor:
+            continue
+        if valor < ZERO:
+            alertas.append(("atencao", f"À mão {de} → {destino}: valor negativo "
+                                       f"({brl(valor)}) foi ignorado"))
+        elif destino not in contas_do_dia:
+            alertas.append(("atencao", f"À mão {de} → {destino}: a conta de destino não "
+                                       f"está entre as do dia; o valor {brl(valor)} foi ignorado"))
+        else:
+            entra[destino] += valor
+            if origem is not None and origem in contas_do_dia:
+                sai[origem] += valor
     mae = conta_mae(regras)
+    empatadas = _empatadas_na_mae(regras)
+    if len(empatadas) > 1:
+        alertas.append(("atencao", f"{' e '.join(empatadas)} aportam no mesmo número de "
+                                   f"contas — conta-mãe escolhida: {mae}"))
+    if mae is not None and mae not in contas_do_dia:
+        alertas.append(("atencao", f"A conta-mãe {mae} não está entre as contas do dia — "
+                                   "o saldo final dela não é mostrado"))
     contas = []
-    for rotulo in dict.fromkeys([*saldos, *a_pagar]):
+    for rotulo in contas_do_dia:
         c = AporteDaConta(rotulo=rotulo, saldo=saldos.get(rotulo),
                           a_pagar=a_pagar.get(rotulo, ZERO),
                           participantes=participantes.get(rotulo, []),
                           definidos=dict(por_destino.get(rotulo, {})),
-                          sai=sai.get(rotulo, ZERO), e_mae=(rotulo == mae))
-        if c.e_mae or c.sem_saldo or c.minimo > ZERO or c.definidos:
+                          sai=sai.get(rotulo, ZERO), e_mae=(rotulo == mae),
+                          entra_a_mao=entra.get(rotulo, ZERO))
+        if (c.e_mae or c.sem_saldo or c.minimo > ZERO or c.definidos
+                or c.entra_a_mao or c.sai):
             contas.append(c)
     contas.sort(key=lambda c: not c.e_mae)                  # estável: mãe primeiro
     sem_saldo = []

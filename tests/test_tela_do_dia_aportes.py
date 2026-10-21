@@ -123,3 +123,66 @@ def test_tudo_e_decimal():
     for c in contas:
         for v in (c.minimo, c.definido, c.falta_ratear, c.sobra, c.saldo_final, c.sai, *c.sugestao.values()):
             assert isinstance(v, D)
+
+
+# --- conserto: termo M «À MÃO» do Painel, empate e mãe fora do dia ---------
+
+def test_transferencia_a_mao_entre_contas_zera_o_minimo():
+    # o caso de 08/09 com números fictícios: sem o M, ficava 21.600 de mínimo
+    saldos = {"Conta Beta - Banco": D("13400.00"), "Conta Gama - Banco": D("80000.00")}
+    a_pagar = {"Conta Beta - Banco": D("35000.00"), "Conta Gama - Banco": D("10000.00")}
+    sem = _por(ap.montar_aportes(saldos, a_pagar, [], {}))
+    assert sem["Conta Beta - Banco"].minimo == D("21600.00")
+    painel = ap.montar_aportes(saldos, a_pagar, [], {},
+                               a_mao=[("Conta Gama - Banco", "Conta Beta - Banco", D("35000.00"))])
+    contas = _por(painel)
+    beta, gama = contas["Conta Beta - Banco"], contas["Conta Gama - Banco"]
+    assert beta.entra_a_mao == D("35000.00")
+    assert beta.minimo == D("0.00") and beta.falta_ratear == D("0.00")
+    assert beta.saldo_final == D("13400.00")
+    assert gama.sai == D("35000.00") and gama.minimo == D("0.00")
+    assert gama.saldo_final == D("35000.00")
+    assert not any("Conta Beta" in f for _t, f in painel.alertas)
+
+
+def test_aporte_de_fora_na_mae_tira_a_mae_do_negativo():
+    definidos = {("Filha Um - Banco", "Mae - Banco"): D("800.00")}
+    painel = ap.montar_aportes(SALDOS, A_PAGAR, REGRAS, definidos,
+                               a_mao=[(None, "Mae - Banco", D("400.00"))])
+    mae = _por(painel)["Mae - Banco"]
+    assert mae.entra_a_mao == D("400.00") and mae.sai == D("800.00")
+    assert mae.minimo == D("0.00")                       # 500 + 800 − 1000 − 400 < 0
+    assert mae.saldo_final == D("100.00")
+    assert not [f for tag, f in painel.alertas if tag == "erro"]
+
+
+def test_movimento_a_mao_negativo_ou_para_conta_desconhecida_e_ignorado():
+    painel = ap.montar_aportes(SALDOS, A_PAGAR, REGRAS, {},
+                               a_mao=[("Mae - Banco", "Filha Um - Banco", D("-10.00")),
+                                      ("Mae - Banco", "Fantasma - Banco", D("20.00"))])
+    contas = _por(painel)
+    assert contas["Filha Um - Banco"].entra_a_mao == D("0.00")
+    assert contas["Mae - Banco"].sai == D("0.00")
+    avisos = [f for t, f in painel.alertas if t == "atencao"]
+    assert any("negativo" in f and "Filha Um - Banco" in f for f in avisos)
+    assert any("Fantasma - Banco" in f and "ignorado" in f for f in avisos)
+
+
+def test_empate_na_conta_mae_avisa_quem_foi_escolhida():
+    regras = [Regra("Filha Um - Banco", "Mae - Banco", None, "Aporte", True, linha=5),
+              Regra("Filha Dois - Banco", "Sobra - Banco", None, "Aporte", True, linha=6)]
+    painel = ap.montar_aportes(SALDOS, A_PAGAR, regras, {})
+    assert painel.mae == "Mae - Banco"
+    assert ("atencao", "Mae - Banco e Sobra - Banco aportam no mesmo número de contas "
+                       "— conta-mãe escolhida: Mae - Banco") in painel.alertas
+    assert not any("mesmo número" in f for _t, f in ap.montar_aportes(SALDOS, A_PAGAR, REGRAS, {}).alertas)
+
+
+def test_mae_fora_das_contas_do_dia_avisa():
+    saldos = {k: v for k, v in SALDOS.items() if k != "Mae - Banco"}
+    a_pagar = {k: v for k, v in A_PAGAR.items() if k != "Mae - Banco"}
+    painel = ap.montar_aportes(saldos, a_pagar, REGRAS, {})
+    assert painel.mae == "Mae - Banco"
+    assert "Mae - Banco" not in _por(painel)
+    assert any(t == "atencao" and "Mae - Banco" in f and "não está entre as contas do dia" in f
+               for t, f in painel.alertas)
