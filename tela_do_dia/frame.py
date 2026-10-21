@@ -783,6 +783,12 @@ class TelaDoDiaFrame(ttk.Frame):
             self._log(f"\nO EXCEL DO DIA NÃO FOI GERADO\n{e}")
             messagebox.showwarning(titulo, widgets.recado_de_erro(e, "Não gerei o Excel do dia."))
             return
+        except Exception as e:                              # noqa: BLE001
+            # Como os outros geradores: erro inesperado vira recado, nunca a
+            # exceção crua no callback do Tk (a pessoa acharia que gerou).
+            self._log(f"\nO EXCEL DO DIA NÃO FOI GERADO\n[!] {e!r}")
+            messagebox.showwarning(titulo, widgets.recado_de_erro(e, "Não gerei o Excel do dia."))
+            return
         self.ultimo_arquivo = r.path
         self.b_pasta.configure(state="normal")
         self._log(f"\nExcel do dia: {str(r.path).replace(chr(92), '/')} "
