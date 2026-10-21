@@ -207,8 +207,9 @@ class AportesFrame(ttk.Frame):
 
     def _recarregar_listas(self):
         nomes = list(self.entidades)
-        pagadores = nomes + [cadastro.INVESTIDOR_PREFIXO + n
-                             for n in self.subcontas if not n.startswith("_")]
+        pagadores = nomes + [regras.rotulo_investidor(n, dados)
+                             for n, dados in self.subcontas.items()
+                             if not n.startswith("_")]
         # Quem guarda a lista completa é o próprio combo: é dela que ele parte
         # a cada tecla, senão um filtro comeria o resultado do anterior.
         self.cb_pagador.definir_valores(pagadores)
@@ -270,7 +271,9 @@ class AportesFrame(ttk.Frame):
             messagebox.showwarning("Valor", str(e))
             return
 
-        op = Operacao(data=data, pagador=self.cb_pagador.get(),
+        op = Operacao(data=data,
+                      pagador=regras.pagador_canonico(self.cb_pagador.get(),
+                                                      self.subcontas),
                       recebedor=self.cb_recebedor.get(), valor=valor,
                       tipo=self.cb_tipo.get(), modo=self.cb_modo.get(),
                       forma=self.cb_forma.get())
@@ -606,10 +609,7 @@ class AportesFrame(ttk.Frame):
             self.entidades = cadastro.carregar_contas()
             self.subcontas = cadastro.carregar_subcontas()
             self._recarregar_listas()
-            for combo, antes in ((self.cb_pagador, pagou),
-                                 (self.cb_recebedor, recebeu)):
-                if antes in combo.valores_completos():
-                    combo.set(antes)
+            self._restaurar_escolha(pagou, recebeu)
             self._atualizar_total()
             pcts = regras.percentuais_dos_pesos(inv.aportadores, inv.pesos)
             self._log(
@@ -636,6 +636,24 @@ class AportesFrame(ttk.Frame):
             gravou, "Não deu para gravar a subconta de investidor.",
             ao_fim=ao_fim, titulo="Novo cadastro")
 
+    def _restaurar_escolha(self, pagou: str, recebeu: str) -> None:
+        """Devolve Pagou/Recebeu ao que estava antes de recarregar as listas.
+
+        A subconta volta pelo NÚMERO, não pelo texto: o rótulo dela leva os
+        investidores (`regras.rotulo_investidor`), e gravar o rateio muda
+        esse rótulo. Comparando o texto, a escolha caía no 1º nome da lista
+        com tipo e Recebeu ainda de investidor."""
+        numero = numero_subconta(pagou.strip(), self.subcontas)
+        if numero is not None:
+            self.cb_pagador.set(
+                regras.rotulo_investidor(numero, self.subcontas[numero]))
+        elif pagou in self.cb_pagador.valores_completos():
+            self.cb_pagador.set(pagou)
+        if recebeu in self.cb_recebedor.valores_completos():
+            self.cb_recebedor.set(recebeu)
+        # O que não voltou ficou no 1º nome: tipo e modo acompanham.
+        self._pagador_escolhido()
+
     def _cadastrou(self, novo):
         # A escolha de Pagou/Recebeu sobrevive: `_recarregar_listas` põe o
         # 1º e o 2º nomes, e quem já tinha escolhido as contas e só parou
@@ -645,10 +663,7 @@ class AportesFrame(ttk.Frame):
         # toa, e a lista "A lançar" continua intacta.
         self.entidades = cadastro.carregar_contas()
         self._recarregar_listas()
-        for combo, antes in ((self.cb_pagador, pagou),
-                             (self.cb_recebedor, recebeu)):
-            if antes in combo.valores_completos():
-                combo.set(antes)
+        self._restaurar_escolha(pagou, recebeu)
         self._log(f"Cadastrado: {novo.nome_exibicao.strip()} — contato "
                   f"\"{novo.nome_oficial.strip()}\""
                   + (f", conta \"{novo.conta.strip()}\"" if novo.conta.strip()

@@ -105,8 +105,11 @@ def validar(novo: Novo, entidades: list[dict]) -> str:
     if ";" in exibicao + novo.nome_oficial + novo.conta + novo.nome_descricao:
         # O cache local é CSV separado por ";".
         return "Os nomes não podem ter ponto e vírgula (;)."
-    if exibicao.startswith(cadastro.INVESTIDOR_PREFIXO):
-        return (f"Nomes que começam com \"{cadastro.INVESTIDOR_PREFIXO}\" são "
+    # Em qualquer posição, não só no começo: a lista de Pagou mostra a
+    # subconta como "FULANO - INVESTIDOR SUBCONTA 00000-0", e um nome assim
+    # seria lido como a subconta (`regras.numero_subconta`).
+    if cadastro.INVESTIDOR_PREFIXO.strip() in exibicao.upper():
+        return (f"Nomes com \"{cadastro.INVESTIDOR_PREFIXO.strip()}\" são "
                 "dos rateios de subconta. Escolha outro nome.")
     for e in entidades:
         if _chave(e.get("nome_exibicao")) == _chave(exibicao):
