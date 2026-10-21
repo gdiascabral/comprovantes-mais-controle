@@ -3799,7 +3799,8 @@ class PagamentosDiaFrame(ttk.Frame):
             messagebox.showinfo("Remessa", "Espere a rotina desta aba terminar.")
             return
         if leitura is None or leitura.entradas is None or leitura.interrompida:
-            messagebox.showinfo("Remessa", "A leitura do dia não terminou — busque de novo.")
+            messagebox.showinfo("Remessa", "A leitura do dia não terminou — busque de novo na aba "
+                                "Pagamentos do dia.")
             return
         ini, fim = leitura.periodo
         self.lancamentos = list(leitura.lancamentos)

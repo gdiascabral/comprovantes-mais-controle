@@ -77,8 +77,8 @@ def de_dict(dados: dict, data: date) -> DiaDeTrabalho:
             dia.aportes[(item["destino"], item["aportador"])] = Decimal(item["valor"])
         dia.enviados_aportes = {str(k): Decimal(str(v))
                                 for k, v in (dados.get("enviados_aportes") or {}).items()}
-        if not all(v.is_finite() for v in dia.enviados_aportes.values()):
-            raise ValueError("valor mandado que não é número")
+        if not all(v.is_finite() and v > 0 for v in dia.enviados_aportes.values()):
+            raise ValueError("valor mandado que não é número maior que zero")
     except (KeyError, TypeError, AttributeError, InvalidOperation) as e:
         raise ValueError(f"formato inesperado ({e!r})") from e
     return dia

@@ -114,23 +114,69 @@ def test_investidor_ja_mandado_segura_a_subconta_inteira():
     assert all(p.motivo.startswith("já mandado") for p in envio.pendentes)
 
 
-def test_conta_sem_saldo_do_sistema_vai_com_pendencia_marcada():
+def test_conta_sem_saldo_do_sistema_vai_com_aviso_e_nao_com_pendencia():
     envio = _envio({("Filha Um - Banco", "Mae - Banco"): D("300.00")}, sem_saldo={"Filha Um - Banco"})
-    assert len(envio.itens) == 1
-    (p,) = envio.pendentes
-    assert p.motivo == pa.MOTIVO_SEM_SALDO and p.destino == "Filha Um - Banco"
-    assert envio.sem_saldo == [0]
+    (op, _), = envio.itens
+    assert envio.pendentes == []                      # pendência = não foi
+    (a,) = envio.avisos                               # aviso = foi, mas confira
+    assert a.motivo == pa.MOTIVO_SEM_SALDO and a.destino == "Filha Um - Banco"
+    assert envio.sem_saldo == [op] and envio.sem_saldo[0] is op
 
 
-def test_aportador_sem_saldo_do_sistema_tambem_marca_pendencia():
+def test_aportador_sem_saldo_do_sistema_tambem_avisa():
     envio = _envio({("Filha Um - Banco", "Mae - Banco"): D("300.00")}, sem_saldo={"Mae - Banco"})
-    assert [p.motivo for p in envio.pendentes] == [pa.MOTIVO_SEM_SALDO]
-    assert envio.sem_saldo == [0]
+    assert [p.motivo for p in envio.avisos] == [pa.MOTIVO_SEM_SALDO] and envio.pendentes == []
+
+
+def test_pendencias_que_bloqueiam_nao_viram_aviso():
+    envio = _envio({("Filha Um - Banco", "Desconhecido Ficticio"): D("10.00")})
+    assert envio.avisos == [] and len(envio.pendentes) == 1
+
+
+def _dois():
+    envio = _envio({("Filha Um - Banco", "Mae - Banco"): D("300.00"),
+                    ("Mae - Banco", "Socio Ficticio A"): D("50.00")})
+    (op1, _), (op2, _) = envio.itens
+    return envio, op1, op2
+
+
+CH1 = pa.chave_de_envio("Filha Um - Banco", "Mae - Banco")
+CH2 = pa.chave_de_envio("Mae - Banco", "Socio Ficticio A")
 
 
 def test_marcar_enviados_guarda_o_valor_so_das_aceitas():
-    envio = _envio({("Filha Um - Banco", "Mae - Banco"): D("300.00"),
-                    ("Mae - Banco", "Socio Ficticio A"): D("50.00")})
+    envio, op1, op2 = _dois()
+    mandadas = [op1, op2]
+    recusadas = pa.operacoes_recusadas(mandadas, [(1, "recusada")])
     enviados = {}
-    pa.marcar_enviados(envio, [(1, "recusada")], enviados)
-    assert enviados == {pa.chave_de_envio("Filha Um - Banco", "Mae - Banco"): D("300.00")}
+    assert pa.marcar_enviados(envio, mandadas, recusadas, enviados) == [CH1]
+    assert enviados == {CH1: D("300.00")}
+
+
+def test_marcar_enviados_com_item_segurado_pela_tela_nao_desliza():
+    envio, op1, op2 = _dois()
+    mandadas = [op2]                                  # a tela segurou op1
+    enviados = {}
+    pa.marcar_enviados(envio, mandadas, pa.operacoes_recusadas(mandadas, []), enviados)
+    assert enviados == {CH2: D("50.00")}              # op1 não foi: sem marca
+    enviados = {}
+    pa.marcar_enviados(envio, mandadas, pa.operacoes_recusadas(mandadas, [(0, "x")]), enviados)
+    assert enviados == {}                             # a única mandada foi recusada
+
+
+def test_marcar_enviados_com_ordem_trocada_marca_certo():
+    envio, op1, op2 = _dois()
+    mandadas = [op2, op1]
+    recusadas = pa.operacoes_recusadas(mandadas, [(0, "recusada")])
+    assert recusadas == [op2] and recusadas[0] is op2
+    enviados = {}
+    pa.marcar_enviados(envio, mandadas, recusadas, enviados)
+    assert enviados == {CH1: D("300.00")}
+
+
+def test_operacao_fora_do_envio_nao_marca_nada():
+    envio, _op1, _op2 = _dois()
+    _outro, o1, _ = _dois()                          # igual em valor, outro objeto
+    enviados = {}
+    pa.marcar_enviados(envio, [o1], [], enviados)
+    assert enviados == {}

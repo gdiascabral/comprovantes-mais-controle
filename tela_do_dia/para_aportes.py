@@ -20,9 +20,12 @@ e clica "Lançar no Mais Controle" lá, como sempre. Quatro regras de dinheiro:
   porque a primeira pode já estar lançada e o ERP somaria 650,00. Aporte em
   dobro se desfaz à mão no ERP;
 - **conta sem saldo do sistema** (o ERP não trouxe; `AporteDaConta.sem_saldo`)
-  não sai calada: a operação vai em `itens`, mas ganha a pendência
-  `MOTIVO_SEM_SALDO` e o índice dela em `Envio.sem_saldo`. Quem decide se
-  trava é a tela.
+  não sai calada: a operação vai em `itens`, mas ganha o AVISO
+  `MOTIVO_SEM_SALDO` (em `Envio.avisos`, não em `pendentes`) e entra em
+  `Envio.sem_saldo`. Quem decide se trava é a tela.
+
+`Envio.pendentes` = o que NÃO foi (bloqueia: já mandado, nome não achado,
+divisão diferente…); `Envio.avisos` = o que foi, mas pede conferência.
 """
 from __future__ import annotations
 
@@ -52,11 +55,17 @@ class Pendente:
 
 @dataclass
 class Envio:
-    itens: list = field(default_factory=list)       # [(Operacao, [chave_de_envio])]
+    #: [(Operacao, [chave_de_envio])] — o que pode ir para a aba Aportes.
+    itens: list = field(default_factory=list)
+    #: [Pendente] que BLOQUEIAM: estes pares NÃO estão em `itens`.
     pendentes: list = field(default_factory=list)
+    #: [Pendente] que NÃO bloqueiam: o par está em `itens`, mas confira.
+    avisos: list = field(default_factory=list)
     #: chave_de_envio -> valor daquele aportador (o que `marcar_enviados` guarda).
     valores: dict = field(default_factory=dict)
-    #: Índices de `itens` cuja conta (destino ou aportador) está sem saldo.
+    #: As OPERAÇÕES de `itens` (os mesmos objetos) com conta sem saldo do
+    #: sistema, no destino ou no aportador. Objeto, não índice: a tela pode
+    #: filtrar `itens` e índice deslizaria.
     sem_saldo: list = field(default_factory=list)
 
 
@@ -66,15 +75,37 @@ def chave_de_envio(destino: str, aportador: str) -> str:
     return f"{destino}|{aportador}"
 
 
-def marcar_enviados(envio: Envio, recusas, enviados: dict) -> None:
-    """Guarda em `enviados` (chave -> valor) o que a aba Aportes ACEITOU.
-    `recusas` é o que `AportesFrame.receber_operacoes` devolveu."""
-    recusadas = {i for i, _motivo in recusas}
-    for i, (_op, chaves) in enumerate(envio.itens):
-        if i in recusadas:
+def operacoes_recusadas(mandadas, recusas) -> list:
+    """Traduz as recusas de `AportesFrame.receber_operacoes` — [(índice,
+    motivo)], índice na lista que FOI passada a ela — nas operações recusadas.
+    `mandadas` tem de ser exatamente essa lista, na mesma ordem: é o único
+    ponto em que índice e operação ainda se correspondem."""
+    return [mandadas[i] for i, _motivo in recusas]
+
+
+def marcar_enviados(envio: Envio, mandadas, recusadas, enviados: dict) -> list[str]:
+    """Guarda em `enviados` (chave -> valor mandado, Decimal) as chaves das
+    operações que FORAM para a aba Aportes e ela ACEITOU; devolve as chaves
+    marcadas.
+
+    - `mandadas`: as operações efetivamente passadas a `receber_operacoes`
+      (os mesmos objetos de `envio.itens`; a tela pode ter segurado algumas
+      e mudado a ordem);
+    - `recusadas`: as que a aba recusou (`operacoes_recusadas`).
+
+    Casa por IDENTIDADE do objeto `Operacao`, nunca por posição nem por
+    igualdade de valor: item segurado pela tela não é marcado (não foi),
+    recusado não é marcado (a aba não o tem), e ordem trocada não desliza.
+    Operação que não é de `envio.itens` não marca nada."""
+    foram = {id(op) for op in mandadas} - {id(op) for op in recusadas}
+    marcadas = []
+    for op, chaves in envio.itens:
+        if id(op) not in foram:
             continue
         for chave in chaves:
             enviados[chave] = envio.valores[chave]
+            marcadas.append(chave)
+    return marcadas
 
 
 def nome_no_cadastro(rotulo: str, entidades: dict) -> str | None:
@@ -140,15 +171,18 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
     def pendente(destino, aportador, valor, motivo):
         envio.pendentes.append(Pendente(destino, aportador, valor, motivo))
 
+    def aviso(destino, aportador, valor, motivo):
+        envio.avisos.append(Pendente(destino, aportador, valor, motivo))
+
     def incluir(op, pares):
         chaves = [chave_de_envio(d, a) for d, a, _v in pares]
         envio.itens.append((op, chaves))
         for chave, (_d, _a, v) in zip(chaves, pares):
             envio.valores[chave] = como_dinheiro(v)
         if any(d in sem_saldo or a in sem_saldo for d, a, _v in pares):
-            envio.sem_saldo.append(len(envio.itens) - 1)
+            envio.sem_saldo.append(op)
             for d, a, v in pares:
-                pendente(d, a, v, MOTIVO_SEM_SALDO)
+                aviso(d, a, v, MOTIVO_SEM_SALDO)
 
     for (destino, aportador), valor in definidos.items():
         if not valor or valor <= 0:

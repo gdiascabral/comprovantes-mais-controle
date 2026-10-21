@@ -49,7 +49,7 @@ def test_arquivo_ilegivel_levanta_com_o_caminho(tmp_path, conteudo):
         ddt.ler(caminho, HOJE)
 
 
-@pytest.mark.parametrize("valor", ["2026-10-21T10:00", "NaN"])
+@pytest.mark.parametrize("valor", ["2026-10-21T10:00", "NaN", "0", "-5.00"])
 def test_enviado_sem_valor_em_decimal_levanta_em_vez_de_esquecer_o_envio(tmp_path, valor):
     caminho = tmp_path / "velho.json"
     caminho.write_text(json.dumps({"data": "2026-10-21",

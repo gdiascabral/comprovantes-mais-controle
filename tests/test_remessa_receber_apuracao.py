@@ -62,4 +62,5 @@ def test_leitura_interrompida_nao_vira_remessa(monkeypatch):
     gerou = []
     aba = _aba(gerou)
     PagamentosDiaFrame.receber_apuracao(aba, _leitura(interrompida=True), set())
-    assert gerou == [] and avisos and not hasattr(aba, "resultado")
+    assert gerou == [] and not hasattr(aba, "resultado")
+    assert "busque de novo na aba Pagamentos do dia" in avisos[0][1]
