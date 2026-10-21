@@ -28,6 +28,8 @@ class DiaDeTrabalho:
     data: date
     ajustes: dict = field(default_factory=dict)
     aportes: dict = field(default_factory=dict)
+    #: O que já foi mandado para a aba Aportes hoje: "destino|aportador"
+    #: (`para_aportes.chave_de_envio`) -> o VALOR mandado, em Decimal.
     enviados_aportes: dict = field(default_factory=dict)
 
 
@@ -57,7 +59,7 @@ def para_dict(dia: DiaDeTrabalho) -> dict:
                     for campo, a in sorted(campos.items())],
         "aportes": [{"destino": d, "aportador": ap, "valor": str(v)}
                     for (d, ap), v in sorted(dia.aportes.items())],
-        "enviados_aportes": dict(sorted(dia.enviados_aportes.items())),
+        "enviados_aportes": {k: str(v) for k, v in sorted(dia.enviados_aportes.items())},
     }
 
 
@@ -73,9 +75,11 @@ def de_dict(dados: dict, data: date) -> DiaDeTrabalho:
                 motivo=a.get("motivo") or "", quando=a.get("quando") or "")
         for item in dados.get("aportes") or []:
             dia.aportes[(item["destino"], item["aportador"])] = Decimal(item["valor"])
-        dia.enviados_aportes = {str(k): str(v)
+        dia.enviados_aportes = {str(k): Decimal(str(v))
                                 for k, v in (dados.get("enviados_aportes") or {}).items()}
-    except (KeyError, TypeError, InvalidOperation) as e:
+        if not all(v.is_finite() for v in dia.enviados_aportes.values()):
+            raise ValueError("valor mandado que não é número")
+    except (KeyError, TypeError, AttributeError, InvalidOperation) as e:
         raise ValueError(f"formato inesperado ({e!r})") from e
     return dia
 

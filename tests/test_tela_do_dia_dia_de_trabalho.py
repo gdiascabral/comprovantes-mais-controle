@@ -22,7 +22,8 @@ def test_ida_e_volta_preserva_decimal(tmp_path):
     dia.ajustes["Conta Alfa - Banco"] = {SISTEMA: Ajuste(D("-5.10"), D("100.00"), "simulação", "2026-10-21T09:00"),
                                           BANCO: Ajuste(D("98.00"), None)}
     dia.aportes[("Conta Alfa - Banco", "Socio Ficticio")] = D("199.50")
-    dia.enviados_aportes["Conta Alfa - Banco|Socio Ficticio|199.50"] = "2026-10-21T10:00"
+    # chave = destino|aportador; o valor é o que foi mandado (Decimal).
+    dia.enviados_aportes["Conta Alfa - Banco|Socio Ficticio"] = D("199.50")
     caminho = ddt.gravar(dia, tmp_path / "x" / "dia.json")
     volta = ddt.ler(caminho, HOJE)
     assert volta == dia
@@ -45,4 +46,13 @@ def test_arquivo_ilegivel_levanta_com_o_caminho(tmp_path, conteudo):
     caminho = tmp_path / "ruim.json"
     caminho.write_text(conteudo, encoding="utf-8")
     with pytest.raises(ValueError, match="ruim.json"):
+        ddt.ler(caminho, HOJE)
+
+
+@pytest.mark.parametrize("valor", ["2026-10-21T10:00", "NaN"])
+def test_enviado_sem_valor_em_decimal_levanta_em_vez_de_esquecer_o_envio(tmp_path, valor):
+    caminho = tmp_path / "velho.json"
+    caminho.write_text(json.dumps({"data": "2026-10-21",
+                                   "enviados_aportes": {"A|B": valor}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="velho.json"):
         ddt.ler(caminho, HOJE)

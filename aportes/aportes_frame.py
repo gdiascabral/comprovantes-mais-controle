@@ -337,13 +337,44 @@ class AportesFrame(ttk.Frame):
             return
         if self._lista_travada():
             return
+        self._acrescentar(op)
+        self.var_valor.set("")
+        self._atualizar_total()
+
+    def _acrescentar(self, op) -> None:
+        """Uma operação no fim da lista, com as quatro listas de posição
+        juntas (`operacoes`, `criados`, `incertos`, `assinaturas`): o Lançar
+        marca pela POSIÇÃO, e uma lista a menos desalinharia as marcas."""
         self.operacoes.append(op)
         self.criados.append(set())
         self.incertos.append(set())
         self.assinaturas.append({})
         self.tabela.insert("", "end", values=(op.resumo(),))
-        self.var_valor.set("")
+
+    def receber_operacoes(self, ops) -> list[tuple[int, str]]:
+        """Operações vindas de outra aba (hoje, "Pagamentos do dia") entram na
+        lista "A lançar" como se tivessem sido digitadas aqui — e só vão ao ERP
+        no "Lançar no Mais Controle", depois de conferidas. Devolve
+        [(índice, motivo)] das RECUSADAS.
+
+        Duas recusas que o formulário não tem: a lista travada (o Lançar marca
+        por POSIÇÃO) e a operação IGUAL a uma que já está na lista — mandar duas
+        vezes da outra aba é clique repetido, não dois aportes."""
+        if self._lista_travada():
+            return [(i, "a aba Aportes está trabalhando — espere e mande de novo")
+                    for i in range(len(ops))]
+        recusas = []
+        for i, op in enumerate(ops):
+            if op in self.operacoes:
+                recusas.append((i, "já está na lista A lançar"))
+                continue
+            erros = op.validar(self.entidades, self.subcontas)
+            if erros:
+                recusas.append((i, "; ".join(erros)))
+                continue
+            self._acrescentar(op)
         self._atualizar_total()
+        return recusas
 
     def _lista_travada(self) -> bool:
         """Com um comando desta aba no navegador, a lista não muda: o Lançar
