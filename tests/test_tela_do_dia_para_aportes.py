@@ -105,6 +105,62 @@ def test_valor_corrigido_depois_de_mandado_vira_pendencia_e_nao_segunda_operacao
     assert "aba Aportes" in p.motivo
 
 
+def _op_na_aba(pagador, recebedor, valor, data=HOJE):
+    from aportes.regras import Operacao
+    return Operacao(data=data, pagador=pagador, recebedor=recebedor, valor=valor,
+                    tipo="Aporte de Capital", modo="Pagamento + Recebimento")
+
+
+def test_ja_mandado_que_ainda_esta_na_aba_aportes_manda_conferir_la():
+    chave = pa.chave_de_envio("Filha Um - Banco", "Mae - Banco")
+    na_aba = [_op_na_aba("MAE - BANCO", "FILHA UM - BANCO", D("300.00"))]
+    envio = pa.operacoes({("Filha Um - Banco", "Mae - Banco"): D("350.00")}, REGRAS, ENTIDADES,
+                         SUBCONTAS, HOJE, enviados={chave: D("300.00")}, na_aba_aportes=na_aba)
+    (p,) = envio.pendentes
+    assert "confira a aba Aportes" in p.motivo
+    assert pa.FORA_DA_ABA not in p.motivo
+
+
+def test_ja_mandado_que_saiu_da_aba_aportes_manda_conferir_no_erp():
+    """App fechado, "Limpar tudo" ou já lançado: a operação não está mais na
+    lista, e "confira a aba Aportes" mandaria procurar onde não há nada."""
+    chave = pa.chave_de_envio("Filha Um - Banco", "Mae - Banco")
+    outra = [_op_na_aba("MAE - BANCO", "FILHA UM - BANCO", D("300.00"), data=date(2026, 10, 20)),
+             _op_na_aba("SOCIO FICTICIO A", "MAE - BANCO", D("300.00"))]
+    for na_aba in ([], outra):
+        envio = pa.operacoes({("Filha Um - Banco", "Mae - Banco"): D("300.00")}, REGRAS, ENTIDADES,
+                             SUBCONTAS, HOJE, enviados={chave: D("300.00")}, na_aba_aportes=na_aba)
+        (p,) = envio.pendentes
+        assert envio.itens == []
+        assert p.motivo.startswith("já mandado R$ 300,00 hoje")
+        assert pa.FORA_DA_ABA in p.motivo and "confira no ERP" in p.motivo
+
+
+def test_subconta_ja_mandada_fora_da_aba_aportes_tambem_avisa():
+    chave_x = pa.chave_de_envio("Holding - Subconta 33333-3", "INVESTIDOR X")
+    envio = pa.operacoes({("Holding - Subconta 33333-3", "INVESTIDOR X"): D("500.00"),
+                          ("Holding - Subconta 33333-3", "INVESTIDOR Y"): D("500.00")},
+                         REGRAS, ENTIDADES, SUBCONTAS, HOJE, enviados={chave_x: D("500.00")},
+                         na_aba_aportes=[])
+    assert envio.itens == [] and len(envio.pendentes) == 2
+    assert all(pa.FORA_DA_ABA in p.motivo for p in envio.pendentes)
+    na_aba = [_op_na_aba("INVESTIDOR SUBCONTA 33333-3", "HOLDING - SUBCONTA 33333-3", D("1000.00"))]
+    envio = pa.operacoes({("Holding - Subconta 33333-3", "INVESTIDOR X"): D("500.00"),
+                          ("Holding - Subconta 33333-3", "INVESTIDOR Y"): D("500.00")},
+                         REGRAS, ENTIDADES, SUBCONTAS, HOJE, enviados={chave_x: D("500.00")},
+                         na_aba_aportes=na_aba)
+    assert not any(pa.FORA_DA_ABA in p.motivo for p in envio.pendentes)
+
+
+def test_ainda_na_aba_casa_pagador_recebedor_e_data():
+    na_aba = [_op_na_aba("MAE - BANCO", "FILHA UM - BANCO", D("1.00"))]
+    assert pa.ainda_na_aba("MAE - BANCO", "FILHA UM - BANCO", HOJE, na_aba) is True
+    assert pa.ainda_na_aba("FILHA UM - BANCO", "MAE - BANCO", HOJE, na_aba) is False
+    assert pa.ainda_na_aba("MAE - BANCO", "FILHA UM - BANCO", date(2026, 10, 22), na_aba) is False
+    assert pa.ainda_na_aba("MAE - BANCO", "FILHA UM - BANCO", HOJE, None) is None
+    assert pa.ainda_na_aba(None, "FILHA UM - BANCO", HOJE, na_aba) is None
+
+
 def test_investidor_ja_mandado_segura_a_subconta_inteira():
     chave_x = pa.chave_de_envio("Holding - Subconta 33333-3", "INVESTIDOR X")
     envio = _envio({("Holding - Subconta 33333-3", "INVESTIDOR X"): D("500.00"),
@@ -180,3 +236,20 @@ def test_operacao_fora_do_envio_nao_marca_nada():
     enviados = {}
     pa.marcar_enviados(envio, [o1], [], enviados)
     assert enviados == {}
+
+
+def test_enviados_antes_de_entregar_marcam_todas_as_mandadas_sem_mexer_no_original():
+    """A tela grava o registro ANTES de entregar à aba Aportes: se a gravação
+    falhar, nada vai; se der certo e a aba recusar algo, desmarca-se depois."""
+    envio, op1, op2 = _dois()
+    antes = {"Outra|Conta": D("1.00")}
+    pre = pa.enviados_apos(antes, envio, [op1, op2], [])
+    assert pre == {"Outra|Conta": D("1.00"), CH1: D("300.00"), CH2: D("50.00")}
+    assert antes == {"Outra|Conta": D("1.00")}         # o original fica intacto
+
+
+def test_enviados_depois_da_recusa_voltam_ao_antes_mais_as_aceitas():
+    envio, op1, op2 = _dois()
+    antes = {"Outra|Conta": D("1.00")}
+    pos = pa.enviados_apos(antes, envio, [op1, op2], [op2])
+    assert pos == {"Outra|Conta": D("1.00"), CH1: D("300.00")}

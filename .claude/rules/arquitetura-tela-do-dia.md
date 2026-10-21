@@ -107,6 +107,20 @@ oferecer "mandar de novo" — corrige-se na aba Aportes. Conta sem saldo do
 sistema: a tela pergunta antes e segura as operações se o dono disser não.
 `marcar_enviados` marca por IDENTIDADE do objeto, só o que a aba Aportes
 aceitou.
+
+**O registro é gravado ANTES de entregar** (`para_aportes.enviados_apos`): a
+tela anota todas as mandadas, grava o JSON e só então chama
+`receber_operacoes`; as recusadas são desmarcadas e gravadas de novo. Se a
+primeira gravação falhar, NADA vai (erro na tela); se a segunda falhar, o
+arquivo fica com as recusadas como mandadas — o lado seguro. Nos dois casos a
+sessão recusa novos envios (`_dia_bloqueado`) até o próximo Buscar. Antes, a
+falha ao gravar depois de mandar era calada, e o próximo Buscar esquecia o
+envio (aporte em dobro).
+
+O já mandado que **não está mais na lista da aba Aportes** (app fechado,
+"Limpar tudo", já lançado e retirado) muda de recado: "não está mais na aba
+Aportes — já lançou? confira no ERP antes de digitar de novo"
+(`para_aportes.ainda_na_aba`, por pagador, recebedor e data).
 A data das operações é a do dia de trabalho (`periodo.fim`), nunca a do
 relógio: tela aberta depois da meia-noite mandaria com outra data e anotaria
 no arquivo de outro dia.

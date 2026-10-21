@@ -43,6 +43,11 @@ from .valores import brl
 ZERO = Decimal("0.00")
 
 MOTIVO_SEM_SALDO = "conta sem saldo do sistema — confira antes de lançar"
+#: O já mandado que não está mais na lista da aba Aportes (app fechado,
+#: "Limpar tudo" ou já lançado e retirado): "confira lá" mandaria procurar
+#: onde não há nada, e digitar de novo pode ser o segundo aporte.
+FORA_DA_ABA = "não está mais na aba Aportes"
+_CONFIRA_NO_ERP = f"{FORA_DA_ABA} — já lançou? confira no ERP antes de digitar de novo"
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,20 @@ def marcar_enviados(envio: Envio, mandadas, recusadas, enviados: dict) -> list[s
     return marcadas
 
 
+def enviados_apos(antes: dict, envio: Envio, mandadas, recusadas) -> dict:
+    """Um `enviados_aportes` NOVO: `antes` mais as chaves das `mandadas` que
+    não estão em `recusadas` (por identidade, como `marcar_enviados`). `antes`
+    não muda.
+
+    A tela usa duas vezes: com `recusadas=[]`, para gravar o registro ANTES de
+    entregar à aba Aportes (gravação que falha = nada vai; o contrário — mandar
+    e não conseguir anotar — fazia o próximo Buscar esquecer o envio e o aporte
+    ir em dobro); e depois da entrega, com as recusadas, para desmarcá-las."""
+    novo = dict(antes)
+    marcar_enviados(envio, mandadas, recusadas, novo)
+    return novo
+
+
 def nome_no_cadastro(rotulo: str, entidades: dict) -> str | None:
     alvo = normalize_name(rotulo)
     if not alvo:
@@ -142,7 +161,22 @@ def _modo(pagador: str, recebedor: str, entidades: dict) -> str:
     return "Pagamento + Recebimento"
 
 
-def _ja_mandado(anterior, valor) -> str:
+def ainda_na_aba(pagador, recebedor, data, na_aba) -> bool | None:
+    """Se a aba Aportes ainda tem, na lista "A lançar", uma operação de
+    `pagador` para `recebedor` na `data`. None = não se sabe (a tela não
+    passou a lista, ou o nome não casou no cadastro): fica o recado de antes.
+    Casa por pagador, recebedor e data, sem o valor: a de lá tem o valor
+    MANDADO, e a pergunta é se ela ainda está lá, não se o número bate."""
+    if na_aba is None or not pagador or not recebedor:
+        return None
+    return any(op.pagador == pagador and op.recebedor == recebedor and op.data == data
+               for op in na_aba)
+
+
+def _ja_mandado(anterior, valor, fora_da_aba: bool = False) -> str:
+    if fora_da_aba:
+        quanto = "" if anterior is None else f" {brl(como_dinheiro(anterior))}"
+        return f"já mandado{quanto} hoje, mas {_CONFIRA_NO_ERP}"
     if anterior is None:
         return ("já mandado para a aba Aportes hoje — confira lá antes de "
                 "mandar de novo")
@@ -155,10 +189,12 @@ def _ja_mandado(anterior, valor) -> str:
 
 
 def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
-              sem_saldo=()) -> Envio:
+              sem_saldo=(), na_aba_aportes=None) -> Envio:
     """`enviados`: {chave_de_envio: valor mandado} do dia (um conjunto de
     chaves também serve, com o valor desconhecido). `sem_saldo`: rótulos das
-    contas do dia cujo saldo o sistema não trouxe."""
+    contas do dia cujo saldo o sistema não trouxe. `na_aba_aportes`: as
+    operações que a aba Aportes tem AGORA na lista (None = não se sabe); o já
+    mandado que não está mais lá ganha o recado `FORA_DA_ABA`."""
     if enviados is None:
         enviados = {}
     elif not isinstance(enviados, dict):
@@ -197,7 +233,10 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
             continue
         chave = chave_de_envio(destino, aportador)
         if chave in enviados:
-            pendente(destino, aportador, valor, _ja_mandado(enviados[chave], valor))
+            la = ainda_na_aba(nome_no_cadastro(aportador, entidades),
+                              nome_no_cadastro(destino, entidades), data, na_aba_aportes)
+            pendente(destino, aportador, valor,
+                     _ja_mandado(enviados[chave], valor, fora_da_aba=la is False))
             continue
         tipo = _tipo(regra.tipo)
         pagador, recebedor = nome_no_cadastro(aportador, entidades), nome_no_cadastro(destino, entidades)
@@ -223,11 +262,17 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
         ja = {a for a in valores if chave_de_envio(destino, a) in enviados}
         if ja:
             # A subconta é UMA operação: um investidor já mandado segura todos.
+            fora = ainda_na_aba(INVESTIDOR_PREFIXO + numero, nome_no_cadastro(destino, entidades),
+                                data, na_aba_aportes) is False
             for a, v in valores.items():
                 chave = chave_de_envio(destino, a)
-                pendente(destino, a, v, _ja_mandado(enviados[chave], v) if a in ja else
-                         f"já mandado outro investidor da subconta {numero} hoje (a "
-                         "subconta vai numa operação só) — confira a aba Aportes")
+                if a in ja:
+                    pendente(destino, a, v, _ja_mandado(enviados[chave], v, fora_da_aba=fora))
+                else:
+                    pendente(destino, a, v,
+                             f"já mandado outro investidor da subconta {numero} hoje (a "
+                             "subconta vai numa operação só) — "
+                             + (_CONFIRA_NO_ERP if fora else "confira a aba Aportes"))
             continue
         cfg = subcontas[numero]
         investidores = cfg.get("investidores") or []

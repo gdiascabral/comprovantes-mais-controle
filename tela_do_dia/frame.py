@@ -388,14 +388,19 @@ class TelaDoDiaFrame(ttk.Frame):
                 b.configure(state="disabled")
             self._log(motivo)
 
-    def _gravar_dia(self):
+    def _gravar_dia(self) -> bool:
+        """True = gravou. Quem depende da gravação (o envio à aba Aportes)
+        tem de olhar a resposta: falha calada era o próximo Buscar esquecendo
+        o que foi mandado."""
         if self._dia_bloqueado:
-            self._log("[!] dia de trabalho NÃO gravado (o arquivo do dia está ilegível).")
-            return
+            self._log(f"[!] dia de trabalho NÃO gravado: {self._dia_bloqueado}")
+            return False
         try:
             ddt.gravar(self.dia, ddt.caminho_do_dia(RAIZ_SAIDA, self.periodo.fim))
-        except OSError as e:
+        except Exception as e:                              # noqa: BLE001
             self._log(f"[!] não consegui gravar o dia de trabalho: {e}")
+            return False
+        return True
 
     # -------------------------------------------------------------- recálculo
     def _recalcular(self):
@@ -833,15 +838,17 @@ class TelaDoDiaFrame(ttk.Frame):
         if self._dia_bloqueado:
             # Sem o arquivo do dia, não se sabe o que já foi mandado hoje: mandar
             # agora pode ser o segundo aporte (o ERP somaria os dois).
-            messagebox.showwarning(titulo, "O arquivo do dia está ilegível, e é nele que "
-                                           "fica o que já foi mandado hoje. Confira o "
-                                           "arquivo (veja o Registro) antes de mandar.")
+            messagebox.showwarning(titulo, f"{self._dia_bloqueado}\n\nÉ no arquivo do dia "
+                                           "que fica o que já foi mandado hoje. Confira a "
+                                           "aba Aportes e o arquivo (veja o Registro) "
+                                           "antes de mandar.")
             return
         envio = para_aportes.operacoes(
             self.aportes.definidos_validos, self.regras, self.aba_aportes.entidades,
             self.aba_aportes.subcontas, dc.data_das_operacoes(self.periodo),
             enviados=dict(self.dia.enviados_aportes),
-            sem_saldo=dc.contas_sem_saldo(self.saldos))
+            sem_saldo=dc.contas_sem_saldo(self.saldos),
+            na_aba_aportes=list(self.aba_aportes.operacoes))
         # Pendência NÃO foi (bloqueia); aviso foi, mas pede conferência. "Já
         # mandado" se resolve na aba Aportes: mandar de novo daqui seria um
         # segundo aporte por cima do primeiro.
@@ -866,12 +873,37 @@ class TelaDoDiaFrame(ttk.Frame):
         if not mandadas:
             messagebox.showinfo(titulo, "Nada foi para a aba Aportes — veja o Registro.")
             return
+        # O registro do que foi mandado é gravado ANTES de entregar: gravação
+        # que falha não manda nada. Ao contrário (mandar e depois não conseguir
+        # anotar), o próximo Buscar esqueceria o envio e o aporte iria em dobro.
+        antes = dict(self.dia.enviados_aportes)
+        self.dia.enviados_aportes = para_aportes.enviados_apos(antes, envio, mandadas, [])
+        if not self._gravar_dia():
+            self.dia.enviados_aportes = antes
+            self._dia_bloqueado = self._dia_bloqueado or (
+                "não consegui gravar o arquivo do dia (veja o Registro)")
+            self._log("\nNADA foi para a aba Aportes: o registro do que é mandado não "
+                      "foi gravado.")
+            messagebox.showerror(titulo, "Não consegui gravar o arquivo do dia, onde fica o "
+                                         "registro do que foi mandado — por isso NADA foi "
+                                         "para a aba Aportes. Veja o Registro.")
+            return
         recusas = self.aba_aportes.receber_operacoes(mandadas)
         recusadas = para_aportes.operacoes_recusadas(mandadas, recusas)
         for (_i, motivo), op in zip(recusas, recusadas):
             self._log(f"  [!] a aba Aportes recusou {op.resumo()}: {motivo}")
-        para_aportes.marcar_enviados(envio, mandadas, recusadas, self.dia.enviados_aportes)
-        self._gravar_dia()
+        if recusadas:
+            # As recusadas não estão na aba: desmarcá-las. Se esta segunda
+            # gravação falhar, o arquivo fica com elas como mandadas — o lado
+            # seguro (seguram um envio, nunca liberam um segundo).
+            self.dia.enviados_aportes = para_aportes.enviados_apos(antes, envio, mandadas,
+                                                                   recusadas)
+            if not self._gravar_dia():
+                self._dia_bloqueado = self._dia_bloqueado or (
+                    "não consegui gravar o arquivo do dia (veja o Registro)")
+                messagebox.showerror(titulo, "O registro do que foi mandado NÃO foi salvo "
+                                             "— não mande de novo antes de conferir a aba "
+                                             "Aportes.")
         aceitas = len(mandadas) - len(recusadas)
         self._log(f"\n{aceitas} operação(ões) na lista da aba Aportes — confira lá e "
                   "clique em Lançar no Mais Controle.")
