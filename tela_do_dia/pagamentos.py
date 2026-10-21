@@ -4,8 +4,18 @@ BLOQUEADO. "A pagar" = o que vai sair — deixa de ser "tudo em aberto".
 
 Quem decide é a apuração da Remessa: vai sair = linha que ENTRA e nasce
 marcada (`confirmacao.marcada_de_inicio`: o já enviado nasce desmarcado, o
-rejeitado volta marcado). Bloqueado = não apto + já enviado. Conta do ERP sem
-linha utilizável no painel NÃO some: vai para `fora`, com o motivo.
+rejeitado volta marcado). Conta do ERP sem linha utilizável no painel NÃO
+some: vai para `fora`, com o motivo.
+
+Duas perguntas diferentes, que não se misturam:
+
+- **gera de novo?** Só `saem` (vai sair + liberados + à mão). O já enviado em
+  remessa viva NÃO entra em planilha, HTML nem remessa (`ids_que_nao_saem`):
+  gerá-lo de novo é o mesmo pagamento duas vezes;
+- **sai da conta?** `a_pagar` = `saem` + `ja_enviados`. O já enviado ainda
+  está em aberto no ERP (a leitura só traz o que não foi pago), então o banco
+  ainda vai debitá-lo: fora do a pagar, o D do painel, o D do Excel e o aporte
+  mínimo sairiam baixos. Bloqueado de verdade = não apto, que não sai.
 
 Ponto de extensão da entrega 2: `liberados` (bloqueado que o dono libera, com
 motivo) e `a_mao` (pagamento à mão) já somam no `a_pagar`; hoje nascem vazios.
@@ -46,21 +56,34 @@ class PagamentosDaConta:
     linha: int | None
     vao_sair: list = field(default_factory=list)
     bloqueados: list = field(default_factory=list)
+    #: Enviados em remessa e ainda em aberto no ERP: não se geram de novo,
+    #: mas o dinheiro ainda sai da conta — somam no `a_pagar`.
+    ja_enviados: list = field(default_factory=list)
     liberados: list = field(default_factory=list)     # entrega 2
     a_mao: list = field(default_factory=list)         # entrega 2
     motivo_fora: str = ""
 
     @property
     def saem(self) -> list:
+        """O que se GERA hoje (planilha, HTML, remessa)."""
         return [*self.vao_sair, *self.liberados, *self.a_mao]
 
     @property
+    def debitam(self) -> list:
+        """O que sai da conta: o que se gera hoje + o já enviado em aberto."""
+        return [*self.saem, *self.ja_enviados]
+
+    @property
     def a_pagar(self) -> Decimal:
-        return sum((p.valor for p in self.saem), ZERO)
+        return sum((p.valor for p in self.debitam), ZERO)
 
     @property
     def qtd_a_pagar(self) -> int:
-        return len(self.saem)
+        return len(self.debitam)
+
+    @property
+    def valor_ja_enviado(self) -> Decimal:
+        return sum((p.valor for p in self.ja_enviados), ZERO)
 
     @property
     def valor_bloqueado(self) -> Decimal:
@@ -86,10 +109,22 @@ def por_conta(grupos, mapping):
             else:
                 destino = painel.setdefault(row.row, PagamentosDaConta(row.label, row.row))
         for ln in g.entram:
-            alvo = destino.vao_sair if confirmacao.marcada_de_inicio(ln) else destino.bloqueados
+            if confirmacao.marcada_de_inicio(ln):
+                alvo = destino.vao_sair
+            elif _ja_enviado(ln):
+                alvo = destino.ja_enviados
+            else:
+                alvo = destino.bloqueados
             alvo.append(Pagamento.da_linha(ln))
         destino.bloqueados.extend(Pagamento.da_linha(ln) for ln in g.nao_aptos)
     return painel, list(fora.values())
+
+
+def _ja_enviado(ln) -> bool:
+    """Entra, já saiu numa remessa e o envio não foi rejeitado — a mesma
+    pergunta que `confirmacao.marcada_de_inicio` faz para desmarcá-la."""
+    return bool(ln.marcavel and getattr(ln.candidato, "ja_enviado", "")
+                and not ln.envio_rejeitado)
 
 
 def ids_que_nao_saem(grupos) -> set[str]:

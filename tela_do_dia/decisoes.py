@@ -127,11 +127,17 @@ def linhas_do_envio(envio) -> tuple[list[str], list[str]]:
 # ------------------------------------------------------------- passo 2
 def celulas_da_conta(conta) -> tuple[str, str, str, str]:
     """(vão sair, a pagar, bloqueados, situação) de uma `PagamentosDaConta`,
-    nas colunas do desenho aprovado: quantos vão sair e quanto, quantos estão
-    bloqueados (e quanto somam, que NÃO entra no a pagar)."""
+    nas colunas do desenho aprovado: quantos saem da conta e quanto, quantos
+    estão bloqueados (e quanto somam, que NÃO entra no a pagar). O já enviado
+    em remessa soma no a pagar (o banco ainda vai debitá-lo) e aparece na
+    situação, separado dos bloqueados: não se gera de novo, mas sai."""
     bloqueados = (f"{len(conta.bloqueados)} · {brl(conta.valor_bloqueado)}"
                   if conta.bloqueados else "0")
-    return str(conta.qtd_a_pagar), brl(conta.a_pagar), bloqueados, conta.motivo_fora
+    partes = [conta.motivo_fora] if conta.motivo_fora else []
+    if conta.ja_enviados:
+        partes.append(f"{len(conta.ja_enviados)} já enviado · "
+                      f"{brl(conta.valor_ja_enviado)} (soma no a pagar)")
+    return str(conta.qtd_a_pagar), brl(conta.a_pagar), bloqueados, " · ".join(partes)
 
 
 # ------------------------------------------------- arquivo e data do dia

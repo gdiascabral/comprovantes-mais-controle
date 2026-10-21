@@ -146,6 +146,19 @@ def test_celulas_da_conta_separam_vao_sair_a_pagar_e_bloqueados():
     assert dc.celulas_da_conta(fora)[3] == "sem linha"
 
 
+def test_celulas_da_conta_mostram_o_ja_enviado_somando_no_a_pagar():
+    from tela_do_dia.pagamentos import Pagamento, PagamentosDaConta
+    p = Pagamento(id="1", conta_erp=ALFA, favorecido="Fornecedor Ficticio",
+                  valor=D("10.00"), situacao="", estado="")
+    e = Pagamento(id="2", conta_erp=ALFA, favorecido="Fornecedor Ficticio",
+                  valor=D("40.00"), situacao="já enviado", estado="")
+    c = PagamentosDaConta(ALFA, 5, vao_sair=[p], ja_enviados=[e])
+    assert dc.celulas_da_conta(c) == (
+        "2", "R$ 50,00", "0", "1 já enviado · R$ 40,00 (soma no a pagar)")
+    fora = PagamentosDaConta("Conta Fora", None, ja_enviados=[e], motivo_fora="sem linha")
+    assert dc.celulas_da_conta(fora)[3] == "sem linha · 1 já enviado · R$ 40,00 (soma no a pagar)"
+
+
 def test_excel_do_dia_que_ja_existe_pede_confirmacao(tmp_path):
     destino = tmp_path / "21 10 - completa.xlsx"
     assert dc.pergunta_sobrescrever(destino) == ""

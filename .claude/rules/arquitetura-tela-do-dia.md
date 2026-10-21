@@ -33,7 +33,7 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 |---|---|
 | `valores.py` | dinheiro digitado e mostrado; o float da Remessa vira Decimal na entrada (`de_float`); "1500.50" ambíguo é recusado pela régua de `aportes.regras` |
 | `saldos.py` | passo 1: sistema × banco por conta; o ajuste guarda o original e acusa quando o ERP mudou depois dele; saldo do dia = banco se digitado, senão sistema |
-| `pagamentos.py` | passo 2: por linha do painel, o que VAI SAIR e o que está BLOQUEADO; conta sem linha no painel vai para `fora`, com o motivo, em vez de sumir |
+| `pagamentos.py` | passo 2: por linha do painel, o que VAI SAIR, o JÁ ENVIADO (soma no a pagar) e o que está BLOQUEADO; conta sem linha no painel vai para `fora`, com o motivo, em vez de sumir |
 | `aportes.py` | passo 3: mínimo, sugestão da aba Regras, conta-mãe primeiro com alerta forte, movimentos «À MÃO» no M (entra) e no E (sai) |
 | `para_aportes.py` | os aportes definidos viram `Operacao` da aba Aportes, com pendências (não foram) e avisos (foram, confira) |
 | `excel_do_dia.py` | passo 4: o MODELO.xlsx com os números da tela |
@@ -46,10 +46,16 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 Quem sabe o que vai sair é a apuração da Remessa, não esta aba: vai sair é a
 linha que ENTRA na confirmação e nasce marcada
 (`confirmacao.marcada_de_inicio` — o já enviado nasce desmarcado, o rejeitado
-volta marcado). Bloqueado = não apto + já enviado. "A pagar" (coluna D do
-Painel) passa a ser o que vai sair, e não "tudo em aberto". Planilha, HTML e
-Remessa saem do `confirmacao.remontar(entradas, ids_que_nao_saem)` — os mesmos
-que a janela da Remessa desmarcaria sozinha.
+volta marcado). Bloqueado = não apto. Planilha, HTML e Remessa saem do
+`confirmacao.remontar(entradas, ids_que_nao_saem)` — os mesmos que a janela da
+Remessa desmarcaria sozinha.
+
+**"Não gera de novo" não é "não sai da conta".** O já enviado em remessa viva
+(ainda em aberto no ERP) fica em `ja_enviados`: fora de planilha, HTML e
+remessa, mas SOMANDO no "a pagar" (coluna D do Painel, D do Excel e o aporte
+mínimo), porque o banco ainda vai debitá-lo. A tela o mostra como "já enviado
+(soma no a pagar)", separado dos bloqueados. Revisão final de 21/10/2026: fora
+do a pagar, o mínimo saía baixo e a conta podia fechar negativa.
 
 ## Leitura: duplicação conhecida
 

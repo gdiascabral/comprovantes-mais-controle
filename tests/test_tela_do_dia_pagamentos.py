@@ -45,18 +45,29 @@ def _grupos():
     ]
 
 
-def test_vai_sair_e_o_que_entra_marcado_e_bloqueado_o_resto(mapa):
+def test_vai_sair_ja_enviado_e_bloqueado_ficam_separados(mapa):
     painel, _fora = pg.por_conta(_grupos(), mapa)
     alfa = painel[8]
     assert [p.id for p in alfa.vao_sair] == ["A1", "A3"]        # rejeitado volta a sair
-    assert [p.id for p in alfa.bloqueados] == ["A2", "A4"]      # já enviado e não apto
-    assert alfa.valor_bloqueado == D("59.99")
+    assert [p.id for p in alfa.ja_enviados] == ["A2"]           # não gera de novo...
+    assert [p.id for p in alfa.bloqueados] == ["A4"]            # ...e só o não apto é bloqueado
+    assert alfa.valor_bloqueado == D("9.99")
+    assert alfa.valor_ja_enviado == D("50.00")
+
+
+def test_ja_enviado_soma_no_a_pagar_porque_ainda_sai_da_conta(mapa):
+    """Enviado em remessa e ainda não pago no ERP: o banco ainda vai debitar.
+    Fora do a pagar, o D do painel e o aporte mínimo sairiam baixos."""
+    painel, _fora = pg.por_conta(_grupos(), mapa)
+    assert painel[8].a_pagar == D("175.10")                    # 100,10 + 25 + 50 (já enviado)
+    assert painel[8].qtd_a_pagar == 3
+    assert [p.id for p in painel[8].saem] == ["A1", "A3"]       # o que se GERA hoje
 
 
 def test_a_pagar_e_decimal_exato(mapa):
     painel, _fora = pg.por_conta(_grupos(), mapa)
-    assert painel[8].a_pagar == D("125.10") and painel[8].qtd_a_pagar == 2
-    assert pg.totais_para_o_painel(painel) == {8: (D("125.10"), 2)}
+    assert painel[8].a_pagar == D("175.10") and painel[8].qtd_a_pagar == 3
+    assert pg.totais_para_o_painel(painel) == {8: (D("175.10"), 3)}
 
 
 def test_conta_fora_do_painel_aparece_com_o_motivo(mapa):
@@ -80,7 +91,7 @@ def test_liberados_e_a_mao_somam_no_a_pagar(mapa):
     painel, _ = pg.por_conta(_grupos(), mapa)
     alfa = painel[8]
     alfa.a_mao.append(pg.Pagamento("M1", "ALFA LTDA - BANCO", "Fulano Ficticio", D("30.00"), "à mão", "ok"))
-    assert alfa.a_pagar == D("155.10")
+    assert alfa.a_pagar == D("205.10")
 
 
 def test_ids_que_nao_saem_sao_so_os_ja_enviados():

@@ -48,8 +48,8 @@ class TelaDoDiaFrame(ttk.Frame):
     COLS_SALDOS = (("conta", "CONTA", 300, "w"), ("sistema", "SISTEMA (ERP)", 230, "e"),
                    ("banco", "BANCO", 230, "e"), ("dif", "DIFERENÇA", 130, "e"),
                    ("situacao", "SITUAÇÃO", 320, "w"))
-    # Passo 2 do desenho aprovado: quantos vão sair e quanto, quantos estão
-    # bloqueados (o valor deles não soma no a pagar).
+    # Passo 2 do desenho aprovado: quantos saem da conta e quanto (o já
+    # enviado em remessa soma), quantos estão bloqueados (não somam).
     COLS_PAG = (("vao", "VÃO SAIR", 110, "e"), ("a_pagar", "A PAGAR", 150, "e"),
                 ("bloq", "BLOQUEADOS", 180, "e"), ("situacao", "SITUAÇÃO", 400, "w"))
     COLS_APT = (("minimo", "MÍNIMO", 120, "e"), ("sugerido", "SUGERIDO", 120, "e"),
@@ -112,8 +112,9 @@ class TelaDoDiaFrame(ttk.Frame):
         c2 = widgets.Cartao(corpo, "Pagamentos por conta", 2)
         c2.pack(fill="x", padx=PADX, pady=px((0, 12)))
         ttk.Label(c2, style="Tenue.TLabel",
-                  text="A pagar = o que vai sair (os aptos). Bloqueados não somam: não "
-                       "aptos e o que já saiu em remessa. Abra a conta para ver as linhas."
+                  text="A pagar = o que sai da conta: os aptos de hoje e o que já foi "
+                       "enviado em remessa e ainda não está pago (esse não é gerado de "
+                       "novo). Bloqueados (não aptos) não somam. Abra a conta para ver."
                   ).pack(anchor="w")
         self.t_pag = self._tabela(c2, self.COLS_PAG, arvore=True, altura=10)
 
@@ -438,13 +439,18 @@ class TelaDoDiaFrame(ttk.Frame):
         t.delete(*t.get_children())
         contas = sorted(self.pagamentos.values(), key=lambda c: c.linha) + list(self.fora)
         for i, c in enumerate(contas):
-            estado = "erro" if c.motivo_fora else ("atencao" if c.bloqueados else "")
+            estado = ("erro" if c.motivo_fora else
+                      ("atencao" if c.bloqueados or c.ja_enviados else ""))
             pai = t.insert("", "end", text=c.rotulo, open=False,
                            tags=widgets.linha_zebrada(i, estado),
                            values=dc.celulas_da_conta(c))
             for p in c.vao_sair:
                 t.insert(pai, "end", text=f"   {p.favorecido}",
                          values=("vai sair", brl(p.valor), "", p.situacao))
+            for p in c.ja_enviados:
+                t.insert(pai, "end", text=f"   {p.favorecido}", tags=("atencao",),
+                         values=("já enviado", brl(p.valor), "",
+                                 f"já enviado (soma no a pagar) · {p.situacao}"))
             for p in c.bloqueados:
                 t.insert(pai, "end", text=f"   {p.favorecido}", tags=("erro",),
                          values=("", "", f"bloqueado · {brl(p.valor)}", p.situacao))
