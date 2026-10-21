@@ -25,7 +25,8 @@ sem force-push e sem apagar a branch). O merge dispara o GitHub Actions
 2. monta `codigo.zip` (comprovantes_app.py + util.py + widgets.py +
    inicio/*.py + separar_renomear/*.py + anexar/*.py +
    baixar_comprovantes/*.py + aportes/*.py + relatorios/*.py +
-   pagamentos_dia/*.py + extratos_sicoob/*.py + conciliacao/*.py +
+   pagamentos_dia/*.py + tela_do_dia/*.py + extratos_sicoob/*.py +
+   conciliacao/*.py +
    conciliacao/erp/*.py + contratos/*.py + acessorias/*.py + **erp/*.py** +
    cnab240/*.py + **cnab240/spec/*.json** + **nuvem/*.py exceto migrar.py** +
    versao.txt + motor_minimo.txt + icone.ico).
@@ -114,7 +115,7 @@ O exe do usuário é dividido em **motor** (Python + libs + OCR + `motor.py` +
 
 - Mudanças em `comprovantes_app.py`, `util.py`, `widgets.py`, `inicio/`,
   `separar_renomear/`, `anexar/`, `baixar_comprovantes/`, `aportes/`,
-  `relatorios/`, `pagamentos_dia/`, `extratos_sicoob/`, `contratos/`,
+  `relatorios/`, `pagamentos_dia/`, `tela_do_dia/`, `extratos_sicoob/`, `contratos/`,
   `conciliacao/`, `acessorias/`, `cnab240/`, `nuvem/` e `erp/` → chegam
   sozinhas ao usuário no próximo abrir, **depois de liberadas**. Commitar e
   esperar a build deixou de bastar: falta virar a chave.
@@ -238,6 +239,7 @@ carregar), **leia o arquivo da pasta antes de mexer nela**.
 | anexar/ | `.claude/rules/arquitetura-anexar.md` |
 | relatorios/ | `.claude/rules/arquitetura-relatorios.md` |
 | pagamentos_dia/ | `.claude/rules/arquitetura-pagamentos-dia.md` |
+| tela_do_dia/ | `.claude/rules/arquitetura-tela-do-dia.md` |
 | cnab240/ | `.claude/rules/arquitetura-cnab240.md` |
 | extratos_sicoob/ | `.claude/rules/arquitetura-extratos-sicoob.md` |
 | contratos/ | `.claude/rules/arquitetura-contratos.md` |

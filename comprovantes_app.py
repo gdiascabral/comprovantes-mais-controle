@@ -43,6 +43,7 @@ from relatorios.relatorio_frame import RelatorioFrame
 from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
 from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
+from tela_do_dia.frame import TelaDoDiaFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
 from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
@@ -322,6 +323,11 @@ def main():
     # Conciliação volta a dividir navegador e thread do Anexar: é o mesmo ERP,
     # e ele só aceita uma sessão por usuário.
     aba_con = ConciliacaoFrame(conteudo, aba_anx)
+    # Pagamentos do dia divide navegador e thread do Anexar, como a Remessa e o
+    # Saldo; recebe as duas abas para onde manda trabalho (Aportes e Remessa).
+    aba_dia = TelaDoDiaFrame(conteudo, aba_anx)
+    aba_dia.aba_aportes = aba_apt
+    aba_dia.aba_remessa = aba_pag
     # Contratos usa o mesmo ERP: divide navegador e thread, como as outras.
     aba_ctr = ContratosFrame(conteudo, aba_anx)
     # Acessórias NÃO divide o navegador do escritório contábil (terceiro
@@ -341,7 +347,8 @@ def main():
     quadros = {"ini": aba_ini, "sep": aba_sep, "anx": aba_anx,
                "conf": aba_conf, "apt": aba_apt, "rel": aba_rel,
                "pag": aba_pag, "ext": aba_ext, "con": aba_con,
-               "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc}
+               "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc,
+               "dia": aba_dia}
     atual = {"nome": None}
     itens = {}
 
@@ -390,6 +397,10 @@ def main():
         # `after_idle`: a aba acabou de ser empacotada e ainda não tem
         # geometria, e é a geometria que decide qual campo é o de cima.
         root.after_idle(lambda: _focar_primeiro(quadros[nome]))
+
+    # Para onde a aba Pagamentos do dia leva o trabalho que manda adiante.
+    aba_dia.abrir_aportes = lambda: mostrar("apt") if _pode("apt") else None
+    aba_dia.abrir_remessa = lambda: mostrar("pag") if _pode("pag") else None
 
     def _focar_primeiro(quadro):
         try:
@@ -486,7 +497,8 @@ def main():
     # nasceu: "Remessa/Retorno" gera a planilha do dia e também a remessa e o
     # retorno CNAB, e "Saldo de pagamentos" existe para dizer quanto falta em
     # cada conta para os pagamentos do dia fecharem.
-    _grupo("diario", "DIÁRIO", (("pag", "🗓", "Remessa/Retorno"),
+    _grupo("diario", "DIÁRIO", (("dia", "🧾", "Pagamentos do dia"),
+                                ("pag", "🗓", "Remessa/Retorno"),
                                 ("con", "⚖", "Saldo de pagamentos")))
     _grupo("mensal", "MENSAL", (("rel", "📊", "Relatório Mensal"),
                                 ("ext", "🏦", "Extratos Sicoob"),

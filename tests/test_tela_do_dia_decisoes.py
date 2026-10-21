@@ -47,6 +47,7 @@ def test_transferencia_entre_contas_do_painel():
 
 @pytest.mark.parametrize("origem, destino, valor, trecho", [
     (MAE, MAE, "10,00", "mesma conta"),
+    ("", ALFA, "10,00", "origem"),             # transferência sem origem não vira "de fora"
     (dc.DE_FORA, "Conta Inexistente", "10,00", "destino"),
     ("Conta Inexistente", MAE, "10,00", "origem"),
     (dc.DE_FORA, MAE, "0", "maior que zero"),

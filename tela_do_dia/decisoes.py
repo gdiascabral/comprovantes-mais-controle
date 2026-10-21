@@ -40,7 +40,11 @@ def novo_movimento(origem: str, destino: str, valor_texto, rotulos):
     rotulos = set(rotulos)
     origem = (origem or "").strip()
     destino = (destino or "").strip()
-    de = None if origem in ("", DE_FORA) else origem
+    if not origem:
+        # Vazio NÃO é "de fora": numa transferência, é a origem esquecida — e
+        # tratá-la como de fora somaria dinheiro que não saiu de conta nenhuma.
+        raise ValueError("escolha a origem do movimento")
+    de = None if origem == DE_FORA else origem
     if destino not in rotulos:
         raise ValueError(f"o destino {destino!r} não é conta do painel")
     if de is not None and de not in rotulos:

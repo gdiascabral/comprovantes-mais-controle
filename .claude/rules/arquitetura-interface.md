@@ -24,7 +24,8 @@ paths:
   longe dos itens do menu.
   As doze telas em quatro seções: VISÃO GERAL (Início), COMPROVANTES (Baixar
   Comprovantes, Separar e Renomear, Anexar, Conferência, Aportes) e os dois
-  grupos que abrem e fecham — DIÁRIO (Remessa/Retorno, Saldo de pagamentos) e
+  grupos que abrem e fecham — DIÁRIO (Pagamentos do dia — desde 21/10/2026,
+  ver `arquitetura-tela-do-dia.md` —, Remessa/Retorno, Saldo de pagamentos) e
   MENSAL (Relatório Mensal, Extratos Sicoob, Contratos, Acessorias). "Baixar"
   vem antes de "Separar" e "Anexar" porque é a ordem do dia. Os rótulos
   encurtaram junto com a coluna ("Anexar Comprovantes" dentro de um menu
