@@ -133,6 +133,14 @@ Decisões do dono: busca num lugar só, e uma janela só para cadastro e painel.
 Não há tela no app, de propósito: esses cadastros mudam raras vezes, e a
 validação mora no BANCO (`unique`, `check`, FK), onde vale independentemente
 de por onde a edição entrou. Depois de editar, o app pega na próxima abertura.
+**Exceção desde 21/10/2026: a lista de Pagou/Recebeu (`entidade`).** O dono
+pediu a janela "Cadastros" na aba Aportes (`aportes/cadastros.py` +
+`cadastros_dialogo.py`) para VER a lista e CORRIGIR as quatro colunas — e
+escolheu "corrigir, sem apagar". O banco libera UPDATE só nessas colunas, para
+`privado.e_ativo()`, e um gatilho grava cada correção na `auditoria` (migration
+`20261021100000_entidade_pode_ser_corrigida_pelo_app.sql`). DELETE continua
+fora do app. PATCH barrado pela RLS devolve zero linhas sem erro, por isso
+`cadastros.gravar` confere que alterou exatamente uma.
 
 **Segurança, e o que já está provado por teste.** Só a `anon key` está no
 código (`nuvem/rest.py`) — ela é pública por desenho e não abre nada sozinha;

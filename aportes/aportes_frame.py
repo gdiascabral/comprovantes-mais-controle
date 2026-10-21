@@ -15,6 +15,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 
+from . import cadastros
 from . import dados as cadastro
 from . import novo_cadastro
 from . import rateio_subconta
@@ -85,6 +86,11 @@ class AportesFrame(ttk.Frame):
         self.b_conferir.pack(side="left", padx=px((0, 8)))
         # Obra nova no ERP = alguém que manda e uma conta que recebe aporte.
         # Antes era SQL no painel; ver `novo_cadastro.py`.
+        # Ver e corrigir a lista de Pagou/Recebeu sem o painel; ver
+        # `cadastros.py`.
+        self.b_cad = widgets.Botao(cab.acoes, "Cadastros", papel="passo",
+                                   command=self._cadastros)
+        self.b_cad.pack(side="left", padx=px((0, 8)))
         self.b_novo = widgets.Botao(cab.acoes, "+  Novo cadastro",
                                     papel="passo", command=self._novo_cadastro)
         self.b_novo.pack(side="left", padx=px((0, 8)))
@@ -514,7 +520,18 @@ class AportesFrame(ttk.Frame):
         self.anx.submeter("Aportes — novo cadastro", self._t_novo_cadastro,
                           dona=self)
 
-    def _t_novo_cadastro(self):
+    def _cadastros(self):
+        """Abre a janela Cadastros (ver e corrigir). Lê o mesmo que o Novo
+        cadastro — as listas do ERP servem para escolher o contato certo —,
+        mais o id de cada linha, que é por onde se corrige."""
+        if self.anx.avisar_se_ocupado("os Aportes", aba=self):
+            return
+        self.b_cad.configure(state="disabled")
+        self.anx.submeter("Aportes — cadastros",
+                          lambda: self._t_novo_cadastro(janela="cadastros"),
+                          dona=self)
+
+    def _t_novo_cadastro(self, janela: str = "novo"):
         participantes = centros = None
         try:
             # `_preparar_sessao` não navega quando os catálogos já foram
@@ -536,12 +553,17 @@ class AportesFrame(ttk.Frame):
             from nuvem import sessao
             token = sessao.token()
             contas, entidades = novo_cadastro.ler(token)
+            if janela == "cadastros":
+                entidades = cadastros.ler(token)       # com o id
             rateios = rateio_subconta.ler_rateios(token)
         except Exception as e:                              # noqa: BLE001
             self._log(f"[!] Não deu para ler o cadastro da nuvem: {e}")
-            self.after(0, lambda: self.b_novo.configure(state="normal"))
+            self.after(0, lambda: (self.b_novo.configure(state="normal"),
+                                   self.b_cad.configure(state="normal")))
             return
-        self.after(0, lambda: self._perguntar_novo(
+        abrir = (self._abrir_cadastros if janela == "cadastros"
+                 else self._perguntar_novo)
+        self.after(0, lambda: abrir(
             token, contas, entidades, rateios, participantes, centros))
 
     def _no_fundo(self, tarefa, depois, falhou: str, ao_fim=None,
@@ -574,12 +596,100 @@ class AportesFrame(ttk.Frame):
         threading.Thread(target=rodar, daemon=True).start()
         self.after(100, esperar)
 
+    def _abrir_cadastros(self, token, contas, entidades, rateios,
+                         participantes, centros):
+        from .cadastros_dialogo import abrir
+        self.b_cad.configure(state="normal")
+        atual = {"entidades": entidades}
+
+        def gravar(antes, mud, pronto):
+            def feito(gravado):
+                atual["entidades"] = gravado.entidades
+                self._cadastro_corrigido(antes, mud, gravado)
+                pronto(gravado.entidades)
+
+            def ao_fim():
+                self.b_lancar.configure(state="normal")
+                self.acao_enter.configure(state="normal")
+
+            # Enquanto o banco não responde, nada entra na lista nem vai
+            # para o ERP: a correção chegaria no meio e o resto sairia com
+            # a conta nova.
+            self.b_lancar.configure(state="disabled")
+            self.acao_enter.configure(state="disabled")
+            self._no_fundo(lambda: cadastros.gravar(token, antes["id"], mud,
+                                                    atual["entidades"]),
+                           feito, "Não deu para corrigir o cadastro.",
+                           ao_fim=ao_fim, titulo="Cadastros")
+
+        r = abrir(self.winfo_toplevel(), entidades=entidades, rateios=rateios,
+                  contas=contas, participantes=participantes, gravar=gravar,
+                  em_uso=self._motivo_para_nao_corrigir)
+        if r and r[0] == "rateio":
+            self._perguntar_novo(token, contas, atual["entidades"], rateios,
+                                 participantes, centros, conta_inicial=r[1])
+
+    def _motivo_para_nao_corrigir(self, entidade) -> str:
+        """"" quando dá para corrigir agora; senão, a frase da recusa.
+
+        Aporte lançado pela METADE trava QUALQUER correção, e não só a da
+        linha dele: a correção relê a lista inteira do banco, e o que outra
+        máquina mudou nesse meio-tempo entraria junto — o resto do aporte
+        sairia com a conta nova. A memória do que já entrou (`criados`) é
+        por posição, e só vale com o cadastro de quando começou."""
+        if any(self.criados):
+            return ("Há um aporte na lista \"A lançar\" que já entrou em "
+                    "parte no Mais Controle. Termine esse lançamento (ou "
+                    "tire-o da lista) antes de corrigir cadastros.")
+        if cadastros.em_uso(entidade, [(op.pagador, op.recebedor)
+                                       for op in self.operacoes]):
+            return (f"\"{entidade['nome_exibicao']}\" está na lista \"A "
+                    "lançar\". Lance ou tire da lista antes de corrigir — "
+                    "corrigir no meio pode lançar o aporte em dobro ou no "
+                    "lugar errado.")
+        return ""
+
+    def _cadastro_corrigido(self, antes, mud, gravado):
+        pagou, recebeu = self.cb_pagador.get(), self.cb_recebedor.get()
+        # Do que o banco devolveu, e não do contas.csv: se a regravação
+        # falhou (arquivo aberto no Excel), reler traria o cadastro antigo
+        # com o log dizendo "corrigido".
+        self.entidades = (cadastros.como_dict(gravado.entidades)
+                          or cadastro.carregar_contas())
+        self._recarregar_listas()
+        novo_nome = mud.get("nome_exibicao")
+        for combo, escolhido in ((self.cb_pagador, pagou),
+                                 (self.cb_recebedor, recebeu)):
+            if novo_nome and escolhido == antes["nome_exibicao"]:
+                escolhido = novo_nome
+            if escolhido in combo.valores_completos():
+                combo.set(escolhido)
+        self._log(f"Cadastro corrigido: {antes['nome_exibicao']} — "
+                  + "; ".join(f"{c}: \"{antes.get(c) or ''}\" → "
+                              f"\"{v or ''}\"" for c, v in mud.items())
+                  + ". Clique em Conferir cadastro para ver se os nomes "
+                    "batem com o Mais Controle.")
+        for aviso in gravado.avisos:
+            self._log(f"  aviso: {aviso}")
+        # A lista do banco pode ter trazido mudança de OUTRA máquina:
+        # operação cujo nome sumiu não pode seguir para o Lançar calada.
+        for op in self.operacoes:
+            for nome in (op.pagador, op.recebedor):
+                if (nome not in self.entidades and
+                        not nome.startswith(cadastro.INVESTIDOR_PREFIXO)):
+                    self._log(f"[!] \"{nome}\", da lista A lançar, não está "
+                              "mais no cadastro. Tire essa operação e "
+                              "adicione de novo com o nome atual.")
+        widgets.registrar_atividade(
+            "apt", "Cadastro corrigido", "ok", antes["nome_exibicao"],
+            {"campos": len(mud)})
+
     def _perguntar_novo(self, token, contas, entidades, rateios,
-                        participantes, centros):
+                        participantes, centros, conta_inicial=None):
         from .novo_cadastro_dialogo import perguntar
         self.b_novo.configure(state="normal")
         r = perguntar(self.winfo_toplevel(), contas, entidades, rateios,
-                      participantes, centros)
+                      participantes, centros, conta_inicial=conta_inicial)
         if r is None:
             return
         tipo, dados = r
