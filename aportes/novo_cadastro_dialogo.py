@@ -105,8 +105,10 @@ def perguntar(pai, contas, entidades, subcontas, participantes=None,
     nomes.pack(anchor="w", pady=(0, 8))
     campo_dono = widgets.Campo(
         f_inv, "Empresa dona da conta (nome do cliente no Mais Controle)",
-        lambda p: ttk.Entry(p, textvariable=v_dono, width=74))
+        lambda p: widgets.ComboBusca(p, width=72, textvariable=v_dono))
     campo_dono.pack(anchor="w", fill="x", pady=(0, 10))
+    campo_dono.widget.definir_valores(
+        nc.donos_possiveis(entidades, participantes))
 
     ttk.Label(f_inv, text="APORTADORES (CLIENTES NO MAIS CONTROLE)",
               style="Rotulo.TLabel").pack(anchor="w", pady=(0, 3))
