@@ -505,3 +505,123 @@ def test_pix_sem_detalhe_nao_vale_so_pela_descricao():
     [li] = A.confrontar([entrada(1000, "Fulano Exemplo", desc)],
                         [pendencia(10.0, "", observacao=desc)])
     assert li.situacao == A.NOME_DIFERENTE
+
+
+# ------------------------------------- subconta fora do cadastro (21/10/2026)
+
+def test_subconta_sicoob_fora_do_cadastro_confere_pelo_numero_da_pasta():
+    destino = NS(erp="Holding X - SUBCONTA 12345-6 - FULANO - SICOOB",
+                 empresa="HOLDING X", pasta="SUBCONTA - 12345-6 - FULANO - SICOOB",
+                 banco="SICOOB", sufixo="")
+    empresas = [NS(nome="HOLDING X", contas=[])]
+    assert A.conta_sicoob(destino.erp, _mapa([destino]), empresas) == \
+        ("12.345-6", "")
+
+
+def test_conta_sicoob_sem_numero_no_nome_continua_fora_com_o_motivo():
+    destino = NS(erp="HOLDING X - SICOOB", empresa="HOLDING X",
+                 pasta="SICOOB", banco="SICOOB", sufixo="")
+    numero, motivo = A.conta_sicoob(destino.erp, _mapa([destino]),
+                                    [NS(nome="HOLDING X", contas=[])])
+    assert numero == "" and motivo
+
+
+def test_cadastro_ganha_do_numero_do_nome():
+    destino = NS(erp="EMPRESA X - 99999-9 - SICOOB", empresa="EMPRESA X",
+                 pasta="SICOOB", banco="SICOOB", sufixo="")
+    empresas = [NS(nome="EMPRESA X", contas=[
+        NS(numero="12.345-6", pasta="SICOOB", sufixo="")])]
+    assert A.conta_sicoob(destino.erp, _mapa([destino]), empresas)[0] == \
+        "12.345-6"
+
+
+def test_conta_fora_do_mapa_que_se_diz_sicoob_confere_pelo_numero():
+    assert A.conta_sicoob("NOVA - 54321-0 - SICOOB", _mapa([]), []) == \
+        ("54.321-0", "")
+
+
+def test_conta_de_outro_banco_com_numero_no_nome_continua_fora():
+    assert A.conta_sicoob("EMPRESA Y BRADESCO 48147", _mapa([]), [])[0] == ""
+    destino = NS(erp="EMPRESA Y - 12345-6 - INTER", empresa="EMPRESA Y",
+                 pasta="INTER", banco="INTER", sufixo="")
+    assert A.conta_sicoob(destino.erp, _mapa([destino]), [])[1] == \
+        A.MOTIVO_FORA_SICOOB
+
+
+def test_numero_no_nome_exige_um_so():
+    assert A.numero_no_nome("SUBCONTA 55.696-3 - TB 21 QD 51 LT 40") == "55.696-3"
+    assert A.numero_no_nome("TB 21 QD 51 LT 40") == ""
+    assert A.numero_no_nome("12345-6 E 65432-1") == ""
+    assert A.numero_no_nome("12345-6 / 12.345-6") == "12.345-6"
+    assert A.numero_no_nome("LT 10-11") == ""
+
+
+# --------------------------------------------- marcas de conferido (21/10)
+
+def _conf(nome, entradas, pendencias_, motivo=""):
+    c = A.Confronto(conta_erp=nome, numero="1", motivo=motivo)
+    if not motivo:
+        c.linhas = A.confrontar(entradas, pendencias_)
+    return c
+
+
+def test_resumao_conta_contas_totais_e_linhas_a_olhar():
+    ok = _conf("A", [entrada(1000)], [pendencia(10.0)])
+    dif = _conf("B", [entrada(2000), entrada(500, "Outro", "OBRA Y OC 9")],
+                [pendencia(20.0)])
+    nao = _conf("C", [], [], motivo=A.MOTIVO_NAO_LIDA)
+    inter = _conf("D", [], [], motivo=A.MOTIVO_FORA_SICOOB)
+    r = A.resumao([ok, dif, nao, inter], {})
+    assert (r.contas_sicoob, r.lidas, r.batem, r.com_diferenca,
+            r.nao_lidas, r.outro_banco) == (3, 2, 1, 1, 1, 1)
+    assert r.total_html == A.Decimal("35.00")
+    assert r.total_banco == A.Decimal("30.00")
+    assert r.por_situacao == {A.FALTA_NO_BANCO: 1}
+    assert (r.linhas_a_olhar, r.linhas_marcadas, r.contas_marcadas) == (1, 0, 0)
+
+
+def test_marca_de_linha_e_de_conta_contam_no_resumao(tmp_path):
+    dif = _conf("B", [entrada(500, "Outro", "OBRA Y OC 9")], [])
+    [li] = dif.linhas
+    marcas = {}
+    assert A.alternar(marcas, A.chave_da_linha(dif, li), "eu", "agora")
+    assert A.alternar(marcas, A.chave_da_conta(dif), "eu", "agora")
+    caminho = A.caminho_das_marcas(tmp_path / "pagamentos_x.html")
+    A.gravar_marcas(caminho, marcas)
+    lidas = A.ler_marcas(caminho)
+    r = A.resumao([dif], lidas)
+    assert (r.linhas_marcadas, r.contas_marcadas) == (1, 1)
+    assert A.linha_conferida(dif, li, lidas)
+    assert not A.alternar(lidas, A.chave_da_conta(dif), "eu", "agora")
+
+
+def test_marca_nao_passa_para_leitura_que_mudou():
+    antes = _conf("B", [entrada(500)], [])
+    marcas = {}
+    A.alternar(marcas, A.chave_da_conta(antes), "eu", "agora")
+    A.alternar(marcas, A.chave_da_linha(antes, antes.linhas[0]), "eu", "agora")
+    depois = _conf("B", [entrada(500)], [pendencia(5.0, "OUTRO NOME")])
+    assert not A.conta_conferida(depois, marcas)
+    assert all(not A.linha_conferida(depois, li, marcas)
+               for li in depois.linhas if A.precisa_olhar(li))
+
+
+def test_arquivo_de_marcas_ausente_ou_torto_e_nada_marcado(tmp_path):
+    assert A.ler_marcas(tmp_path / "nao_existe.json") == {}
+    torto = tmp_path / "torto.json"
+    torto.write_text("{nao é json", encoding="utf-8")
+    assert A.ler_marcas(torto) == {}
+
+
+def test_tem_erro_e_vermelho_ou_nao_lida():
+    assert A.tem_erro(_conf("B", [entrada(500)], []))
+    assert A.tem_erro(_conf("C", [], [], motivo=A.MOTIVO_NAO_LIDA))
+    assert not A.tem_erro(_conf("A", [entrada(1000)], [pendencia(10.0)]))
+    assert not A.tem_erro(_conf("D", [], [], motivo=A.MOTIVO_FORA_SICOOB))
+
+
+def test_conta_de_outro_banco_fora_do_mapa_nao_e_sicoob_nao_conferido():
+    numero, motivo = A.conta_sicoob("EMPRESA Y BRADESCO 48147", _mapa([]), [])
+    assert (numero, motivo) == ("", A.MOTIVO_FORA_SICOOB)
+    assert A.conta_sicoob("EMPRESA Z SEM BANCO", _mapa([]), [])[1] == \
+        A.MOTIVO_CONTA_DESCONHECIDA

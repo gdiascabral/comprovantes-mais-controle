@@ -37,10 +37,12 @@ vez de um "falta no banco" e um "só no banco" que ninguém liga um ao outro.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import util
 
@@ -135,18 +137,75 @@ def conta_sicoob(conta_erp: str, mapa_mc, empresas) -> tuple[str, str]:
     um agendamento só precisa saber em qual conta entrar."""
     destino = mapa_mc.de(conta_erp) if mapa_mc else None
     if destino is None:
+        # Conta nova que nem o `contas_mc.json` conhece, mas que se diz do
+        # Sicoob e traz o número no nome: confere pelo número.
+        if _diz_sicoob(conta_erp):
+            numero = numero_no_nome(conta_erp)
+            if numero:
+                return numero, ""
+        elif _diz_outro_banco(conta_erp):
+            # "… BRADESCO 48147" fora do mapa saía vermelha, contada entre as
+            # contas do Sicoob não conferidas (21/10/2026).
+            return "", MOTIVO_FORA_SICOOB
         return "", MOTIVO_CONTA_DESCONHECIDA
     if not (destino.banco or "").strip():
-        return "", MOTIVO_SEM_BANCO
+        numero = numero_no_nome(conta_erp) if _diz_sicoob(conta_erp) else ""
+        return (numero, "") if numero else ("", MOTIVO_SEM_BANCO)
     if not remessa_dia._e_sicoob(destino.banco):
         return "", MOTIVO_FORA_SICOOB
     _empresa, conta, falta = remessa_dia._escolher_conta(destino, empresas)
-    if falta or conta is None:
-        return "", falta or MOTIVO_CONTA_DESCONHECIDA
-    numero = (conta.numero or "").strip()
+    numero = "" if (falta or conta is None) else (conta.numero or "").strip()
     if not re.sub(r"\D", "", numero):
-        return "", MOTIVO_CONTA_DESCONHECIDA
+        # A subconta de investidor (21/10/2026: cinco da MORAIS
+        # PARTICIPAÇÕES) mora na `entidade`, não no cadastro de contas do
+        # Sicoob, e ficava "fora da conferência" — as pendências dela seriam
+        # assinadas sem confronto. O número está no nome da pasta ou da conta
+        # do ERP; um número errado não lê a conta de outro: `pendencias`
+        # confere a conta ABERTA antes de pedir, e o seletor recusa a que o
+        # login não enxerga.
+        numero = (numero_no_nome(getattr(destino, "pasta", ""))
+                  or numero_no_nome(conta_erp))
+        if not numero:
+            return "", falta or MOTIVO_CONTA_DESCONHECIDA
     return numero, ""
+
+
+#: Número de conta escrito num nome: "57517-8", "60.290-6". Nem antes nem
+#: depois pode haver dígito — "TB 21 QD 51 LT 40" não tem número de conta.
+_NUMERO_DE_CONTA = re.compile(r"(?<![\d.])(\d{2}\.?\d{3}-\d)(?![\d])")
+
+
+def numero_no_nome(nome) -> str:
+    """O número da conta escrito no nome, ou "" quando não há UM só.
+
+    Sai com o ponto ("57.517-8") porque é assim que o seletor de contas do
+    Sicoob o escreve, e `SicoobClient.acessar_conta` procura pelo texto."""
+    achados = {re.sub(r"\D", "", m) for m in
+               _NUMERO_DE_CONTA.findall(str(nome or ""))}
+    if len(achados) != 1:
+        return ""
+    d = achados.pop()
+    return f"{d[:-4]}.{d[-4:-1]}-{d[-1]}"
+
+
+def _palavras_do_nome(nome) -> set[str]:
+    return set(re.findall(r"[A-Z0-9]+",
+                          util.sem_acento(str(nome or "")).upper()))
+
+
+def _diz_sicoob(nome) -> bool:
+    return "SICOOB" in _palavras_do_nome(nome)
+
+
+#: Outro banco escrito no nome da conta do ERP. Só nomes inteiros e sem
+#: ambiguidade: "BB" e "CAIXA" sozinhos são palavras de descrição também.
+_OUTROS_BANCOS = frozenset("INTER BRADESCO ITAU SANTANDER NUBANK SICREDI "
+                           "BANRISUL C6 BTG".split())
+
+
+def _diz_outro_banco(nome) -> bool:
+    palavras = _palavras_do_nome(nome)
+    return "SICOOB" not in palavras and bool(palavras & _OUTROS_BANCOS)
 
 
 #: Estado de toda conta do Sicoob ANTES de ser lida: se a leitura parar no
@@ -603,3 +662,132 @@ def confrontar(entradas, pendencias) -> list[Linha]:
     return sorted(linhas, key=lambda li: (
         ordem[li.situacao],
         posicao.get(id(li.html), len(posicao))))
+
+
+# ------------------------------------------------- o "conferido" de quem olha
+
+#: Pedido do dono em 21/10/2026: depois da leitura, uma tela com o resumão e
+#: um campo para marcar como certo o que ele mesmo conferiu. A marca é presa
+#: ao que foi VISTO — a chave leva valores, nomes e a situação —, então uma
+#: nova leitura que mude a linha ou a conta a deixa sem marca, em vez de
+#: carregar um "conferido" sobre outra coisa.
+
+def caminho_das_marcas(html) -> Path:
+    """As marcas moram ao lado do HTML conferido, e vão junto com ele."""
+    p = Path(html)
+    return p.with_name(p.stem + ".conferido.json")
+
+
+def chave_da_linha(conf: Confronto, li: Linha) -> str:
+    h, b = li.html or {}, li.banco or {}
+    return json.dumps(["linha", conf.conta_erp, li.situacao,
+                       int(h.get("centavos") or 0) if li.html else None,
+                       centavos_do_banco(b) if li.banco else None,
+                       str(h.get("favorecido") or ""),
+                       str(h.get("descricao") or ""),
+                       str(b.get("pendencia") or ""),
+                       str(b.get("detalhe") or "")], ensure_ascii=False)
+
+
+def chave_da_conta(conf: Confronto) -> str:
+    """A conta com o resumo que estava na tela: outra leitura que diga outra
+    coisa dela é outra conferência."""
+    return json.dumps(["conta", conf.conta_erp, conf.numero, conf.resumo()],
+                      ensure_ascii=False)
+
+
+def precisa_olhar(li: Linha) -> bool:
+    """A linha que pede alguém: tudo menos o que bate e o já pago sem par."""
+    return li.situacao not in SEM_PENDENCIA
+
+
+def tem_erro(conf: Confronto) -> bool:
+    """Conta com diferença de DINHEIRO (vermelho) ou não lida."""
+    return conf.falhou or (conf.conferida and ESTADO[conf.pior] == "erro")
+
+
+def ler_marcas(caminho) -> dict:
+    """`{chave: {"por": ..., "em": ...}}`. Arquivo ausente ou torto = nada
+    marcado: perder uma marca custa olhar de novo, inventar uma custa
+    assinar sem conferir."""
+    try:
+        with open(caminho, encoding="utf-8") as f:
+            dado = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    marcas = dado.get("marcas") if isinstance(dado, dict) else None
+    return {str(k): v for k, v in (marcas or {}).items()
+            if isinstance(v, dict)} if isinstance(marcas, dict) else {}
+
+
+def gravar_marcas(caminho, marcas: dict) -> None:
+    """Grava num temporário e troca: nunca deixa o arquivo pela metade."""
+    tmp = f"{caminho}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"marcas": marcas}, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, caminho)
+
+
+def alternar(marcas: dict, chave: str, por: str, agora: str) -> bool:
+    """Liga ou desliga a marca; devolve se ficou marcada."""
+    if chave in marcas:
+        del marcas[chave]
+        return False
+    marcas[chave] = {"por": por, "em": agora}
+    return True
+
+
+def conta_conferida(conf: Confronto, marcas: dict) -> bool:
+    return chave_da_conta(conf) in marcas
+
+
+def linha_conferida(conf: Confronto, li: Linha, marcas: dict) -> bool:
+    return not precisa_olhar(li) or chave_da_linha(conf, li) in marcas
+
+
+@dataclass
+class Resumao:
+    contas_sicoob: int = 0
+    lidas: int = 0
+    batem: int = 0
+    com_diferenca: int = 0
+    nao_lidas: int = 0
+    outro_banco: int = 0
+    total_html: Decimal = Decimal("0.00")
+    total_banco: Decimal = Decimal("0.00")
+    #: Linhas que pedem alguém, por situação (na ordem de `GRAVIDADE`).
+    por_situacao: dict = field(default_factory=dict)
+    linhas_a_olhar: int = 0
+    linhas_marcadas: int = 0
+    contas_marcadas: int = 0
+
+
+def resumao(confrontos, marcas: dict) -> Resumao:
+    r = Resumao()
+    for conf in confrontos or []:
+        if not conf.conferida and not conf.falhou:
+            r.outro_banco += 1
+            continue
+        r.contas_sicoob += 1
+        if conta_conferida(conf, marcas):
+            r.contas_marcadas += 1
+        if conf.falhou:
+            r.nao_lidas += 1
+            continue
+        r.lidas += 1
+        if conf.pior == OK:
+            r.batem += 1
+        else:
+            r.com_diferenca += 1
+        r.total_html += conf.total_html
+        r.total_banco += conf.total_banco
+        for li in conf.linhas:
+            if not precisa_olhar(li):
+                continue
+            r.por_situacao[li.situacao] = r.por_situacao.get(li.situacao, 0) + 1
+            r.linhas_a_olhar += 1
+            if chave_da_linha(conf, li) in marcas:
+                r.linhas_marcadas += 1
+    r.por_situacao = {s: r.por_situacao[s] for s in GRAVIDADE
+                      if s in r.por_situacao}
+    return r
