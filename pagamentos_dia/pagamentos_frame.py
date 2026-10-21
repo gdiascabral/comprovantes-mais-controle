@@ -3785,7 +3785,7 @@ class PagamentosDiaFrame(ttk.Frame):
         return textos, urls_ocr, nao_lidos, qrs
 
     # ----------------------------------------- vindo da aba "Pagamentos do dia"
-    def receber_apuracao(self, leitura, desmarcados=()) -> None:
+    def receber_apuracao(self, leitura, desmarcados=(), *, hoje=None) -> None:
         """A leitura que a aba "Pagamentos do dia" já fez vira o passo 2 daqui,
         e a conferência da remessa de sempre abre — sem ler o ERP de novo.
 
@@ -3794,7 +3794,10 @@ class PagamentosDiaFrame(ttk.Frame):
         continua perguntando ao registro "já saiu?" (`gerar_remessa`), então a
         trava contra pagamento em dobro não depende desta passagem. Leitura
         interrompida não passa: pela metade, o boleto dentro da NF vira Pix do
-        cadastro (ver `_apurar_e_confirmar`)."""
+        cadastro (ver `_apurar_e_confirmar`). Apuração de OUTRO período que o
+        de hoje (`sugerir_periodo`; tela buscada ontem) também não: a remessa
+        sairia com os vencimentos de outro dia. `hoje` só existe para o teste."""
+        from conciliacao.models import sugerir_periodo
         if self.worker and not self.worker.done():
             messagebox.showinfo("Remessa", "Espere a rotina desta aba terminar.")
             return
@@ -3803,6 +3806,16 @@ class PagamentosDiaFrame(ttk.Frame):
                                 "Pagamentos do dia.")
             return
         ini, fim = leitura.periodo
+        de_hoje = sugerir_periodo(hoje or datetime.date.today())
+        if (ini, fim) != (de_hoje.inicio, de_hoje.fim):
+            messagebox.showinfo("Remessa", f"A apuração é de {ini:%d/%m/%Y} a {fim:%d/%m/%Y}, e o "
+                                f"período de hoje é {de_hoje.inicio:%d/%m/%Y} a "
+                                f"{de_hoje.fim:%d/%m/%Y} — busque de novo na aba Pagamentos "
+                                "do dia.")
+            return
+        # Os títulos cuja lista de anexos não foi lida: sem isto, saíam da
+        # planilha como "sem anexo" em vez de "anexos não lidos".
+        self.titulos_sem_leitura = set(leitura.entradas.titulos_nao_lidos or ())
         self.lancamentos = list(leitura.lancamentos)
         self.anexos = leitura.anexos
         self.overviews = leitura.overviews
