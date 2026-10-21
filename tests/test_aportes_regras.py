@@ -391,3 +391,38 @@ def test_busca_pelo_nome_do_investidor_acha_a_subconta():
                                if not n.startswith("_")]
     achados = util.filtrar(lista, "investidor y")
     assert any(regras.numero_subconta(a, SUBCONTAS) == "111-1" for a in achados)
+
+
+class _Combo:
+    def __init__(self, valores, atual):
+        self.valores, self.atual = list(valores), atual
+
+    def valores_completos(self):
+        return list(self.valores)
+
+    def set(self, v):
+        self.atual = v
+
+    def get(self):
+        return self.atual
+
+
+def test_gravar_rateio_nao_tira_a_subconta_do_pagou():
+    """Revisão de dinheiro 21/10: gravar o rateio muda o rótulo da subconta;
+    comparando o TEXTO, Pagou caía no 1º nome da lista em silêncio."""
+    from types import SimpleNamespace
+    from aportes.aportes_frame import AportesFrame
+    antes = regras.rotulo_investidor("111-1", SUBCONTAS["111-1"])
+    novos = {**SUBCONTAS, "111-1": {**SUBCONTAS["111-1"],
+             "investidores": ["INVESTIDOR X", "INVESTIDOR Y", "INVESTIDOR Z"]}}
+    depois = regras.rotulo_investidor("111-1", novos["111-1"])
+    chamadas = []
+    fake = SimpleNamespace(
+        subcontas=novos,
+        cb_pagador=_Combo(list(ENTIDADES) + [depois], "EMPRESA A"),
+        cb_recebedor=_Combo(list(ENTIDADES), "EMPRESA B"),
+        _pagador_escolhido=lambda: chamadas.append(1))
+    AportesFrame._restaurar_escolha(fake, antes, "SUBCONTA 111-1")
+    assert fake.cb_pagador.get() == depois
+    assert fake.cb_recebedor.get() == "SUBCONTA 111-1"
+    assert chamadas == [1]
