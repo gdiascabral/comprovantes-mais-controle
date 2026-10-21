@@ -932,64 +932,137 @@ class PagamentosDiaFrame(ttk.Frame):
                     self._log(f"  {nome} ({numero}): {conf.resumo()}")
         except Exception as e:                               # noqa: BLE001
             self._log(f"[!] Conferir agendamentos: {e}")
+            # As que ficaram para trás levam o porquê para a tabela.
+            for conf in pendentes:
+                if conf.motivo == A.MOTIVO_NAO_LIDA:
+                    conf.motivo = A.motivo_da_parada(e)
         self.q.put(("agendamentos", (caminho, confrontos)))
 
     def _janela_agendamentos(self, caminho, confrontos):
-        """A tabela do confronto: uma linha por conta e, debaixo dela, as
-        linhas que não batem primeiro. Só leitura — nada aqui mexe no banco."""
+        """O resumão do confronto e a tabela por conta, com a marca de quem
+        conferiu (dono, 21/10/2026: "abra uma tela me mostrando um resumão e
+        um campo pra eu marcar como certo/conferido").
+
+        Só leitura no BANCO — nada aqui mexe no Sicoob. A marca é da pessoa e
+        mora ao lado do HTML (`agendamentos_sicoob.caminho_das_marcas`), presa
+        ao que foi visto: outra leitura que mude a linha a deixa sem marca."""
         A = agendamentos_sicoob
-        conferidas = [c for c in confrontos if c.conferida]
-        com_diferenca = [c for c in conferidas if c.pior != A.OK]
-        nao_lidas = [c for c in confrontos if c.falhou]
+        arq_marcas = A.caminho_das_marcas(caminho)
+        marcas = A.ler_marcas(arq_marcas)
+        try:
+            from nuvem import sessao
+            quem = sessao.quem(_pasta_base()).email or os.environ.get(
+                "USERNAME", "")
+        except Exception:                                    # noqa: BLE001
+            quem = os.environ.get("USERNAME", "")
+
+        def brl(valor):
+            return "" if valor is None else relatorio.brl(float(valor))
 
         top = tk.Toplevel(self)
         top.title(f"Agendamentos no Sicoob × {caminho.name}")
-        top.geometry(f"{px(1280)}x{px(640)}")
+        top.geometry(f"{px(1320)}x{px(720)}")
         widgets.barra_de_titulo(top)
         moldura = ttk.Frame(top, padding=14)
         moldura.pack(fill="both", expand=True)
         ttk.Label(moldura, style="Titulo.TLabel",
-                  text=f"{len(conferidas)} conta(s) conferida(s) — "
-                       f"{len(conferidas) - len(com_diferenca)} batem, "
-                       f"{len(com_diferenca)} com diferença").pack(anchor="w")
+                  text="Resumo dos agendamentos no Sicoob").pack(anchor="w")
+        ttk.Label(moldura, style="Apoio.TLabel",
+                  text=f"{caminho.name} — só leitura: nada foi assinado, "
+                       "cancelado nem alterado no banco.").pack(anchor="w")
+
+        # O resumão: os números que respondem "posso assinar?".
+        quadro = ttk.Frame(moldura)
+        quadro.pack(fill="x", pady=px((10, 6)))
+        numeros = {}
+        for col, (chave, rotulo) in enumerate((
+                ("contas", "Contas do Sicoob lidas"), ("batem", "Batem"),
+                ("diferenca", "Com diferença"),
+                ("nao_lidas", "Não conferidas"),
+                ("html", "Total no HTML"), ("banco", "Total agendado"),
+                ("marcadas", "Contas marcadas"))):
+            caixa = ttk.Frame(quadro)
+            caixa.grid(row=0, column=col, sticky="w", padx=px((0, 28)))
+            ttk.Label(caixa, style="Apoio.TLabel",
+                      text=rotulo).pack(anchor="w")
+            numeros[chave] = ttk.Label(caixa, style="KPI.TLabel", text="")
+            numeros[chave].pack(anchor="w")
+        a_olhar = ttk.Label(moldura, style="Apoio.TLabel",
+                            wraplength=px(1260), justify="left")
+        a_olhar.pack(anchor="w")
+        nao_lidas = [c for c in confrontos if c.falhou]
         if nao_lidas:
             # Em cima e em vermelho: é a conta cujas pendências seriam
             # assinadas SEM conferência, e um número escondido no meio da
             # tabela não segura ninguém.
-            ttk.Label(moldura, style="Erro.TLabel", wraplength=px(1200),
+            ttk.Label(moldura, style="Erro.TLabel", wraplength=px(1260),
                       justify="left",
                       text=f"✖  {len(nao_lidas)} conta(s) do Sicoob NÃO "
                            f"conferida(s): "
                            + ", ".join(c.conta_erp for c in nao_lidas)
                            + ". Não assine as pendências delas sem conferir."
                       ).pack(anchor="w", pady=px((4, 0)))
-        ttk.Label(moldura, style="Apoio.TLabel",
+        ttk.Label(moldura, style="Apoio.TLabel", wraplength=px(1260),
+                  justify="left",
                   text="Casado pelo valor; o nome só desempata. Âmbar é para "
                        "olhar antes de assinar, vermelho é diferença de "
-                       "dinheiro.").pack(anchor="w", pady=px((2, 8)))
+                       "dinheiro. Clique no ☐ (ou selecione e aperte Espaço) "
+                       "para marcar como conferido — na linha da conta, a "
+                       "conta inteira.").pack(anchor="w", pady=px((4, 8)))
 
-        colunas = ("situacao", "html", "banco", "no_html", "no_banco")
+        def atualizar_resumao():
+            r = A.resumao(confrontos, marcas)
+            numeros["contas"].configure(
+                text=f"{r.lidas} de {r.contas_sicoob}")
+            numeros["batem"].configure(text=str(r.batem))
+            numeros["diferenca"].configure(text=str(r.com_diferenca))
+            numeros["nao_lidas"].configure(text=str(r.nao_lidas))
+            numeros["html"].configure(text=brl(r.total_html))
+            numeros["banco"].configure(text=brl(r.total_banco))
+            numeros["marcadas"].configure(
+                text=f"{r.contas_marcadas} de {r.contas_sicoob}")
+            partes = [f"{n} {A.FRASES[s]}" for s, n in r.por_situacao.items()]
+            if partes:
+                a_olhar.configure(text=(
+                    "Para olhar: " + " · ".join(partes)
+                    + f" — {r.linhas_marcadas} de {r.linhas_a_olhar} "
+                      "linha(s) já marcadas como conferidas."))
+            else:
+                a_olhar.configure(text="Nenhuma linha pede conferência: "
+                                       "tudo o que foi lido bate.")
+
+        colunas = ("conferido", "situacao", "html", "banco", "no_html",
+                   "no_banco")
         tabela = ttk.Treeview(moldura, columns=colunas, show="tree headings",
-                              height=18)
+                              height=16)
         tabela.heading("#0", text="Conta")
-        tabela.column("#0", width=px(260), anchor="w")
+        tabela.column("#0", width=px(250), anchor="w")
         for chave, titulo, larg, ancora in (
+                ("conferido", "Conferido", 90, "center"),
                 ("situacao", "Situação", 230, "w"),
                 ("html", "Valor no HTML", 110, "e"),
                 ("banco", "Valor no banco", 110, "e"),
-                ("no_html", "No HTML", 300, "w"),
-                ("no_banco", "No banco", 300, "w")):
+                ("no_html", "No HTML", 280, "w"),
+                ("no_banco", "No banco", 280, "w")):
             tabela.heading(chave, text=titulo)
             tabela.column(chave, width=larg, anchor=ancora)
         widgets.estilo_tabela(tabela, ordenavel=False)
         rolagem = ttk.Scrollbar(moldura, orient="vertical",
                                 command=tabela.yview)
         tabela.configure(yscrollcommand=rolagem.set)
-        rolagem.pack(side="right", fill="y")
-        tabela.pack(fill="both", expand=True)
 
-        def brl(valor):
-            return "" if valor is None else relatorio.brl(float(valor))
+        # iid -> (confronto, linha ou None). Conta de outro banco e linha que
+        # já bate não têm marca: não há o que conferir nelas.
+        alvo = {}
+
+        def marca_de(conf, li):
+            if li is None:
+                if not A.conta_marcavel(conf):
+                    return ""
+                return "☑" if A.conta_conferida(conf, marcas) else "☐"
+            if not A.precisa_olhar(li):
+                return "✓"
+            return "☑" if A.chave_da_linha(conf, li) in marcas else "☐"
 
         i = 0
         for conf in confrontos:
@@ -998,11 +1071,12 @@ class PagamentosDiaFrame(ttk.Frame):
                       else A.ESTADO[conf.pior])
             pai = tabela.insert(
                 "", "end", text=conf.conta_erp, open=conf.pior != A.OK,
-                values=(conf.resumo(),
+                values=(marca_de(conf, None), conf.resumo(),
                         brl(conf.total_html) if conf.conferida else "",
                         brl(conf.total_banco) if conf.conferida else "",
                         "", conf.numero),
                 tags=widgets.linha_zebrada(i, estado))
+            alvo[pai] = (conf, None)
             i += 1
             for li in conf.linhas:
                 h, b = li.html or {}, li.banco or {}
@@ -1017,16 +1091,83 @@ class PagamentosDiaFrame(ttk.Frame):
                     str(b.get("nomeTransacao") or ""),
                     situacao_banco if situacao_banco not in (
                         "", "PENDENTE_ASSINATURA") else "") if x)
-                tabela.insert(pai, "end", text="", values=(
-                    li.frase, brl(li.valor_html), brl(li.valor_banco),
-                    no_html, no_banco),
+                filho = tabela.insert(pai, "end", text="", values=(
+                    marca_de(conf, li), li.frase, brl(li.valor_html),
+                    brl(li.valor_banco), no_html, no_banco),
                     tags=widgets.linha_zebrada(i, A.ESTADO[li.situacao]))
+                alvo[filho] = (conf, li)
                 i += 1
 
+        def alternar(iid):
+            if iid not in alvo:
+                return
+            conf, li = alvo[iid]
+            if marca_de(conf, li) not in ("☐", "☑"):
+                return
+            chave = (A.chave_da_conta(conf) if li is None
+                     else A.chave_da_linha(conf, li))
+            if li is None and chave not in marcas:
+                faltam = [x for x in conf.linhas if A.precisa_olhar(x)
+                          and A.chave_da_linha(conf, x) not in marcas]
+                if A.tem_erro(conf) or faltam:
+                    # Marcar a conta inteira por cima do vermelho é decisão
+                    # de quem confere, mas não pode sair de um clique só.
+                    por = (f"tem {len(faltam)} linha(s) ainda sem marca"
+                           if faltam else "tem diferença de dinheiro")
+                    if not messagebox.askyesno(
+                            "Conferir agendamentos",
+                            f"A conta {conf.conta_erp} {por}.\n\nMarcar a "
+                            "conta inteira como conferida mesmo assim?",
+                            icon="warning", parent=top):
+                        return
+            antes = dict(marcas)
+            A.alternar(marcas, chave, quem,
+                       datetime.datetime.now().isoformat(timespec="seconds"))
+            try:
+                A.gravar_marcas(arq_marcas, marcas)
+            except OSError as e:
+                marcas.clear()
+                marcas.update(antes)
+                messagebox.showwarning(
+                    "Conferir agendamentos",
+                    widgets.recado_de_erro(
+                        e, "Não consegui guardar a marca ao lado do HTML."),
+                    parent=top)
+                return
+            tabela.set(iid, "conferido", marca_de(conf, li))
+            atualizar_resumao()
+
+        def ao_clicar(evento):
+            if tabela.identify_region(evento.x, evento.y) != "cell":
+                return None
+            if tabela.identify_column(evento.x) != "#1":
+                return None
+            iid = tabela.identify_row(evento.y)
+            if not iid:
+                return None
+            alternar(iid)
+            return "break"
+
+        def ao_espaco(_evento):
+            for iid in tabela.selection():
+                alternar(iid)
+            return "break"
+
+        tabela.bind("<Button-1>", ao_clicar, add="+")
+        tabela.bind("<space>", ao_espaco)
+
+        # O rodapé entra no pack ANTES da tabela: com pouca altura, quem
+        # cede é ela, e o botão de fechar nunca some.
         rodape = ttk.Frame(moldura)
-        rodape.pack(fill="x", pady=px((10, 0)))
+        rodape.pack(side="bottom", fill="x", pady=px((10, 0)))
+        ttk.Label(rodape, style="Apoio.TLabel",
+                  text=f"As marcas ficam em {arq_marcas.name}, ao lado do "
+                       "HTML.").pack(side="left")
         widgets.Botao(rodape, "Fechar", papel="neutro",
                       command=top.destroy).pack(side="right")
+        rolagem.pack(side="right", fill="y")
+        tabela.pack(fill="both", expand=True)
+        atualizar_resumao()
 
     def _abrir_remessa(self):
         """Abre a pasta do `.REM` com o arquivo já selecionado.
