@@ -2167,7 +2167,7 @@ class BarraTopo(tk.Frame):
             x = self.busca.winfo_rootx()
             y = self.busca.winfo_rooty() + self.busca.winfo_height() + px(3)
             # Puxada para dentro da tela: com `overrideredirect` o Windows não
-            # reposiciona nada sozinho, e numa janela baixa a lista das doze
+            # reposiciona nada sozinho, e numa janela baixa a lista das treze
             # telas nasceria com metade fora do monitor.
             x = max(min(x, top.winfo_screenwidth() - larg - px(8)), px(8))
             if y + alt > top.winfo_screenheight() - px(8):
@@ -2598,7 +2598,7 @@ class PainelMenu(tk.Frame):
         self.rodape = tk.Frame(self, highlightthickness=0)
         self.rodape.pack(side="bottom", fill="x", padx=px(14),
                          pady=px((8, 12)))
-        # O corpo ROLA. Com os dois grupos abertos são doze telas e quatro
+        # O corpo ROLA. Com os dois grupos abertos são treze telas e quatro
         # rótulos de seção, e numa tela baixa (1366x768) ou a 150% isso pode
         # passar da altura da coluna — o rodapé, empacotado antes, continua
         # no lugar, e são os itens de baixo que ficariam fora de alcance.

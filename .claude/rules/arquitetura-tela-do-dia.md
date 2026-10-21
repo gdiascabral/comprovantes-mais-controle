@@ -101,6 +101,9 @@ oferecer "mandar de novo" — corrige-se na aba Aportes. Conta sem saldo do
 sistema: a tela pergunta antes e segura as operações se o dono disser não.
 `marcar_enviados` marca por IDENTIDADE do objeto, só o que a aba Aportes
 aceitou.
+A data das operações é a do dia de trabalho (`periodo.fim`), nunca a do
+relógio: tela aberta depois da meia-noite mandaria com outra data e anotaria
+no arquivo de outro dia.
 
 ## Excel do dia: zero, e não vazio
 
@@ -112,3 +115,8 @@ vazio faria `I = IF(H<>"",H,G)` cair no VALOR SUGERIDO e somar dinheiro que
 ninguém definiu. A tela passa só os movimentos válidos (destino conta do
 painel, valor > 0) e `definidos_validos` — os mesmos que ela soma; o Excel
 recusa o resto, para nunca divergir da tela.
+
+O nome do arquivo ("DD MM - completa.xlsx") é o MESMO do painel da aba "Saldo
+de pagamentos": se já existe, a tela pergunta antes de substituir. A
+atividade é anotada como "dia", que o Início nomeia por `OUTRAS_ORIGENS` (e
+não por `ROTINAS`, onde viraria "não rodou hoje" enquanto as abas convivem).

@@ -129,3 +129,31 @@ def test_pendencias_e_avisos_saem_separados():
     pendentes, avisos = dc.linhas_do_envio(envio)
     assert pendentes == [f"Socio Ficticio A → {ALFA} (R$ 300,00): já mandado"]
     assert avisos == [f"INVESTIDOR X → {MAE} (R$ 5,00): {MOTIVO_SEM_SALDO}"]
+
+
+# ------------------------------------------------------------ conserto
+def test_celulas_da_conta_separam_vao_sair_a_pagar_e_bloqueados():
+    from tela_do_dia.pagamentos import Pagamento, PagamentosDaConta
+    p = Pagamento(id="1", conta_erp=ALFA, favorecido="Fornecedor Ficticio",
+                  valor=D("10.00"), situacao="", estado="")
+    q = Pagamento(id="2", conta_erp=ALFA, favorecido="Fornecedor Ficticio",
+                  valor=D("7.50"), situacao="não apto", estado="")
+    c = PagamentosDaConta(ALFA, 5, vao_sair=[p, p], bloqueados=[q])
+    assert dc.celulas_da_conta(c) == ("2", "R$ 20,00", "1 · R$ 7,50", "")
+    vazia = PagamentosDaConta(ALFA, 5, vao_sair=[p])
+    assert dc.celulas_da_conta(vazia) == ("1", "R$ 10,00", "0", "")
+    fora = PagamentosDaConta("Conta Fora", None, bloqueados=[q], motivo_fora="sem linha")
+    assert dc.celulas_da_conta(fora)[3] == "sem linha"
+
+
+def test_excel_do_dia_que_ja_existe_pede_confirmacao(tmp_path):
+    destino = tmp_path / "21 10 - completa.xlsx"
+    assert dc.pergunta_sobrescrever(destino) == ""
+    destino.write_bytes(b"x")
+    pergunta = dc.pergunta_sobrescrever(destino)
+    assert "21 10 - completa.xlsx" in pergunta and "Saldo de pagamentos" in pergunta
+
+
+def test_aporte_leva_a_data_do_dia_de_trabalho_e_nao_a_do_relogio():
+    from conciliacao.models import Periodo
+    assert dc.data_das_operacoes(Periodo(date(2026, 10, 17), date(2026, 10, 19))) == date(2026, 10, 19)

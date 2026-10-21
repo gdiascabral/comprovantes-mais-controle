@@ -122,3 +122,32 @@ def linhas_do_envio(envio) -> tuple[list[str], list[str]]:
     def linha(p):
         return f"{p.aportador} → {p.destino} ({brl(p.valor)}): {p.motivo}"
     return [linha(p) for p in envio.pendentes], [linha(p) for p in envio.avisos]
+
+
+# ------------------------------------------------------------- passo 2
+def celulas_da_conta(conta) -> tuple[str, str, str, str]:
+    """(vão sair, a pagar, bloqueados, situação) de uma `PagamentosDaConta`,
+    nas colunas do desenho aprovado: quantos vão sair e quanto, quantos estão
+    bloqueados (e quanto somam, que NÃO entra no a pagar)."""
+    bloqueados = (f"{len(conta.bloqueados)} · {brl(conta.valor_bloqueado)}"
+                  if conta.bloqueados else "0")
+    return str(conta.qtd_a_pagar), brl(conta.a_pagar), bloqueados, conta.motivo_fora
+
+
+# ------------------------------------------------- arquivo e data do dia
+def pergunta_sobrescrever(destino) -> str:
+    """Vazio = o Excel do dia ainda não existe. O nome é o mesmo do painel da
+    aba "Saldo de pagamentos" (as duas convivem): sobrescrever sem perguntar
+    apagaria o que a outra gerou."""
+    if not destino.exists():
+        return ""
+    return (f"Já existe {destino.name} (pode ter sido gerado pela aba Saldo de "
+            "pagamentos ou por esta mesma aba).\n\nSubstituir pelo desta tela?")
+
+
+def data_das_operacoes(periodo):
+    """A data dos aportes mandados para a aba Aportes: a do dia de trabalho
+    (`periodo.fim`, que é também o arquivo onde o envio fica anotado), e não a
+    do relógio — tela aberta depois da meia-noite mandaria com a data de
+    amanhã e anotaria no arquivo de ontem."""
+    return periodo.fim

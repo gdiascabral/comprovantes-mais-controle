@@ -48,8 +48,10 @@ class TelaDoDiaFrame(ttk.Frame):
     COLS_SALDOS = (("conta", "CONTA", 300, "w"), ("sistema", "SISTEMA (ERP)", 230, "e"),
                    ("banco", "BANCO", 230, "e"), ("dif", "DIFERENÇA", 130, "e"),
                    ("situacao", "SITUAÇÃO", 320, "w"))
-    COLS_PAG = (("qtd", "QUANTOS", 220, "w"), ("valor", "VALOR", 140, "e"),
-                ("situacao", "SITUAÇÃO", 440, "w"))
+    # Passo 2 do desenho aprovado: quantos vão sair e quanto, quantos estão
+    # bloqueados (o valor deles não soma no a pagar).
+    COLS_PAG = (("vao", "VÃO SAIR", 110, "e"), ("a_pagar", "A PAGAR", 150, "e"),
+                ("bloq", "BLOQUEADOS", 180, "e"), ("situacao", "SITUAÇÃO", 400, "w"))
     COLS_APT = (("minimo", "MÍNIMO", 120, "e"), ("sugerido", "SUGERIDO", 120, "e"),
                 ("definido", "DEFINIDO", 120, "e"), ("falta", "FALTA RATEAR", 120, "e"),
                 ("final", "SALDO FINAL", 130, "e"))
@@ -65,8 +67,10 @@ class TelaDoDiaFrame(ttk.Frame):
         self._erro_drain = None
         self.aba_aportes = None
         self.aba_remessa = None
-        self.abrir_aportes = lambda: None
-        self.abrir_remessa = lambda: None
+        # Ligados pelo app; devolvem True se a aba foi mostrada (o papel de
+        # quem entrou pode não a ter).
+        self.abrir_aportes = lambda: False
+        self.abrir_remessa = lambda: False
         self.cfg = self.mapping = self.leitura = self.modelo = self.periodo = None
         self.contas_erp, self.regras = [], []
         self.dia = None
@@ -97,17 +101,20 @@ class TelaDoDiaFrame(ttk.Frame):
         c1 = widgets.Cartao(corpo, "Saldos", 1)
         c1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         ttk.Label(c1, style="Tenue.TLabel",
-                  text="Dois cliques no valor do sistema ou do banco para editar (Enter "
-                       "edita o do banco). Vale só hoje; o original fica ao lado.").pack(anchor="w")
+                  text="As que não batem sobem para o topo. Clique no valor do sistema ou "
+                       "do banco para editar (Enter edita o do banco): o original fica ao "
+                       "lado, o motivo é opcional, e o ajuste vale só para o dia."
+                  ).pack(anchor="w")
         self.t_saldos = self._tabela(c1, self.COLS_SALDOS, arvore=False, altura=8)
-        self.t_saldos.bind("<Double-1>", self._duplo_saldo)
+        self.t_saldos.bind("<ButtonRelease-1>", self._clique_saldo)
         self.t_saldos.bind("<Return>", self._enter_saldo)
 
         c2 = widgets.Cartao(corpo, "Pagamentos por conta", 2)
         c2.pack(fill="x", padx=PADX, pady=px((0, 12)))
         ttk.Label(c2, style="Tenue.TLabel",
-                  text="A pagar = o que vai sair (aptos). Bloqueados não somam: "
-                       "não aptos e o que já saiu em remessa.").pack(anchor="w")
+                  text="A pagar = o que vai sair (os aptos). Bloqueados não somam: não "
+                       "aptos e o que já saiu em remessa. Abra a conta para ver as linhas."
+                  ).pack(anchor="w")
         self.t_pag = self._tabela(c2, self.COLS_PAG, arvore=True, altura=10)
 
         c3 = widgets.Cartao(corpo, "Aportes", 3)
@@ -121,7 +128,10 @@ class TelaDoDiaFrame(ttk.Frame):
                                     justify="left", text="")
         self.lbl_avisos.pack(anchor="w")
         ttk.Label(c3, style="Tenue.TLabel",
-                  text="Dois cliques (ou Enter) no aportador para digitar o valor dele."
+                  text="Para cada conta que precisa: o mínimo, quem põe e quanto, e o que "
+                       "ainda falta ratear. A conta-mãe vem primeiro, com o que entra e o "
+                       "que sai para as filhas. A regra sugere; dois cliques (ou Enter) no "
+                       "aportador para digitar o valor dele."
                   ).pack(anchor="w", pady=px((6, 0)))
         self.t_apt = self._tabela(c3, self.COLS_APT, arvore=True, altura=10)
         self.t_apt.bind("<Double-1>", self._duplo_aporte)
@@ -161,9 +171,13 @@ class TelaDoDiaFrame(ttk.Frame):
 
         c4 = widgets.Cartao(corpo, "Gerar", 4)
         c4.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        ttk.Label(c4, style="Tenue.TLabel",
+                  text="Sai o mesmo de hoje — e o Excel do painel do dia, cópia com os "
+                       "números da tela (ajustes e aportes)."
+                  ).pack(anchor="w", pady=px((0, 8)))
         botoes = ttk.Frame(c4)
         botoes.pack(fill="x")
-        self.b_excel = widgets.Botao(botoes, "Excel do dia (painel)", papel="passo",
+        self.b_excel = widgets.Botao(botoes, "Excel do painel do dia", papel="passo",
                                      state="disabled", command=self._gerar_excel)
         self.b_planilha = widgets.Botao(botoes, "Planilha por conta", papel="neutro",
                                         state="disabled", command=self._gerar_planilha)
@@ -171,7 +185,8 @@ class TelaDoDiaFrame(ttk.Frame):
                                     state="disabled", command=self._gerar_html)
         self.b_remessa = widgets.Botao(botoes, "Remessa do Sicoob…", papel="neutro",
                                        state="disabled", command=self._ir_para_remessa)
-        for i, b in enumerate((self.b_excel, self.b_planilha, self.b_html, self.b_remessa)):
+        # Na ordem do desenho aprovado: o de hoje primeiro, a cópia do dia por último.
+        for i, b in enumerate((self.b_html, self.b_planilha, self.b_remessa, self.b_excel)):
             b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
 
         acao = ttk.Frame(self, style="Fundo.TFrame")
@@ -424,18 +439,15 @@ class TelaDoDiaFrame(ttk.Frame):
         contas = sorted(self.pagamentos.values(), key=lambda c: c.linha) + list(self.fora)
         for i, c in enumerate(contas):
             estado = "erro" if c.motivo_fora else ("atencao" if c.bloqueados else "")
-            situacao = c.motivo_fora or (f"bloqueado: {brl(c.valor_bloqueado)}"
-                                         if c.bloqueados else "")
             pai = t.insert("", "end", text=c.rotulo, open=False,
                            tags=widgets.linha_zebrada(i, estado),
-                           values=(f"{c.qtd_a_pagar} vão sair · {len(c.bloqueados)} bloqueado(s)",
-                                   brl(c.a_pagar), situacao))
+                           values=dc.celulas_da_conta(c))
             for p in c.vao_sair:
                 t.insert(pai, "end", text=f"   {p.favorecido}",
-                         values=("vai sair", brl(p.valor), p.situacao))
+                         values=("vai sair", brl(p.valor), "", p.situacao))
             for p in c.bloqueados:
                 t.insert(pai, "end", text=f"   {p.favorecido}", tags=("erro",),
-                         values=("bloqueado", brl(p.valor), p.situacao))
+                         values=("", "", f"bloqueado · {brl(p.valor)}", p.situacao))
 
     def _encher_aportes(self):
         t = self.t_apt
@@ -467,7 +479,8 @@ class TelaDoDiaFrame(ttk.Frame):
                 t.insert(pai, "end", text="   entra à mão",
                          values=("", "", brl(c.entra_a_mao), "", ""))
             if c.sai:
-                t.insert(pai, "end", text="   sai para as outras contas",
+                t.insert(pai, "end", text=("   sai para as filhas" if c.e_mae
+                                           else "   sai para outras contas"),
                          values=("", "", brl(-c.sai), "", ""))
 
     def _encher_movimentos(self):
@@ -520,7 +533,7 @@ class TelaDoDiaFrame(ttk.Frame):
         widgets.Campo(corpo, "Valor R$", lambda p: ttk.Entry(p, textvariable=v_valor, width=18)
                       ).pack(anchor="w", pady=px((10, 0)))
         if com_motivo:
-            widgets.Campo(corpo, "Motivo (opcional)",
+            widgets.Campo(corpo, "Motivo (opcional — ex.: simulação, aporte ainda não caiu)",
                           lambda p: ttk.Entry(p, textvariable=v_motivo, width=48)
                           ).pack(anchor="w", pady=px((10, 0)))
         resposta = {}
@@ -543,7 +556,9 @@ class TelaDoDiaFrame(ttk.Frame):
                                   ("Aplicar", "acao", aplicar)), aplicar)
         return resposta.get("v")
 
-    def _duplo_saldo(self, evento):
+    def _clique_saldo(self, evento):
+        if self.t_saldos.identify_region(evento.x, evento.y) != "cell":
+            return
         iid = self.t_saldos.identify_row(evento.y)
         campo = {"#2": sd.SISTEMA, "#3": sd.BANCO}.get(self.t_saldos.identify_column(evento.x))
         self._editar_saldo(iid, campo)
@@ -588,7 +603,9 @@ class TelaDoDiaFrame(ttk.Frame):
         if not par or self.dia is None:
             return
         destino, aportador = par
-        conta = next(c for c in self.aportes.contas if c.rotulo == destino)
+        conta = next((c for c in self.aportes.contas if c.rotulo == destino), None)
+        if conta is None:                # a tabela mudou embaixo do clique
+            return
         sugerido = conta.sugestao.get(aportador)
         minimo, _definido, falta, _final = dc.celulas_do_aporte(conta)
         resposta = self._pedir_valor(
@@ -726,6 +743,9 @@ class TelaDoDiaFrame(ttk.Frame):
             return
         fim = self.periodo.fim
         destino = ddt.pasta_do_dia(RAIZ_SAIDA, fim) / output_name(fim)
+        pergunta = dc.pergunta_sobrescrever(destino)
+        if pergunta and not messagebox.askyesno(titulo, pergunta, default="no"):
+            return
         try:
             r = excel_do_dia.gerar(
                 modelo=self.modelo, destino=destino, data=fim, mapping=self.mapping,
@@ -794,7 +814,9 @@ class TelaDoDiaFrame(ttk.Frame):
     def _ir_para_remessa(self):
         if self.aba_remessa is None or not self._pode_gerar("Remessa do Sicoob"):
             return
-        self.abrir_remessa()
+        if not self.abrir_remessa():
+            self._log("[!] a aba Remessa/Retorno não está disponível para quem entrou.")
+            return
         self.aba_remessa.receber_apuracao(self.leitura, pg.ids_que_nao_saem(self.leitura.grupos))
 
     # --------------------------------------------------- aba Aportes
@@ -811,7 +833,7 @@ class TelaDoDiaFrame(ttk.Frame):
             return
         envio = para_aportes.operacoes(
             self.aportes.definidos_validos, self.regras, self.aba_aportes.entidades,
-            self.aba_aportes.subcontas, datetime.date.today(),
+            self.aba_aportes.subcontas, dc.data_das_operacoes(self.periodo),
             enviados=dict(self.dia.enviados_aportes),
             sem_saldo=dc.contas_sem_saldo(self.saldos))
         # Pendência NÃO foi (bloqueia); aviso foi, mas pede conferência. "Já

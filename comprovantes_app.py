@@ -399,8 +399,16 @@ def main():
         root.after_idle(lambda: _focar_primeiro(quadros[nome]))
 
     # Para onde a aba Pagamentos do dia leva o trabalho que manda adiante.
-    aba_dia.abrir_aportes = lambda: mostrar("apt") if _pode("apt") else None
-    aba_dia.abrir_remessa = lambda: mostrar("pag") if _pode("pag") else None
+    # Devolve se mostrou: sem a aba no papel de quem entrou, a tela do dia não
+    # entrega nada a ela (a pessoa não veria o que chegou).
+    def _abrir_se_pode(chave: str) -> bool:
+        if not _pode(chave):
+            return False
+        mostrar(chave)
+        return True
+
+    aba_dia.abrir_aportes = lambda: _abrir_se_pode("apt")
+    aba_dia.abrir_remessa = lambda: _abrir_se_pode("pag")
 
     def _focar_primeiro(quadro):
         try:

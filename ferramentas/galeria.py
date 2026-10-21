@@ -4,7 +4,7 @@ Galeria de telas — ferramenta LOCAL para conferir o visual do app.
 
 O que é
 -------
-Monta as mesmas 12 telas que `comprovantes_app.py` monta (Início e as onze
+Monta as mesmas 13 telas que `comprovantes_app.py` monta (Início e as doze
 abas do menu) e fotografa cada uma — nos dois temas (claro e escuro) e,
 com `--escala`, também simulando a escala de exibição do Windows. Não é um
 teste: não compara nada contra ninguém e não falha sozinho. É o registro do
@@ -102,6 +102,7 @@ from relatorios.relatorio_frame import RelatorioFrame
 from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
 from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
+from tela_do_dia.frame import TelaDoDiaFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
 from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
@@ -191,6 +192,7 @@ _ORDEM = (
     ("anx", "📎", "Anexar", "anexar"),
     ("conf", "✅", "Conferência", "conferencia"),
     ("apt", "💰", "Aportes", "aportes"),
+    ("dia", "🧾", "Pagamentos do dia", "pagamentos-do-dia"),
     ("pag", "🗓", "Remessa/Retorno", "remessa-retorno"),
     ("con", "⚖", "Saldo de pagamentos", "saldo-de-pagamentos"),
     ("rel", "📊", "Relatório Mensal", "relatorio-mensal"),
@@ -201,7 +203,7 @@ _ORDEM = (
 
 
 def _montar_janela(root: tk.Tk, largura: int, altura: int):
-    """A moldura e as 12 abas, sem login e sem navegador nenhum.
+    """A moldura e as 13 abas, sem login e sem navegador nenhum.
 
     `root` já existe (e já tem a escala aplicada, se for o caso — ver
     `main()`: `tk scaling` muda o interpretador Tcl, e um `Tk()` novo não
@@ -295,10 +297,12 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
         _montar("rel", lambda: RelatorioFrame(conteudo, aba_anx))
         _montar("pag", lambda: PagamentosDiaFrame(conteudo, aba_anx))
         _montar("con", lambda: ConciliacaoFrame(conteudo, aba_anx))
+        _montar("dia", lambda: TelaDoDiaFrame(conteudo, aba_anx))
         _montar("ctr", lambda: ContratosFrame(conteudo, aba_anx))
     else:
         print("[galeria] sem AnexarFrame: Conferência, Aportes, Relatório "
-              "Mensal, Remessa/Retorno, Saldo de pagamentos e Contratos "
+              "Mensal, Remessa/Retorno, Saldo de pagamentos, Pagamentos do "
+              "dia e Contratos "
               "ficam de fora (todas dependem dele).")
 
     # Extratos Sicoob e Acessórias NÃO recebem o aba_anx: cada uma tem
@@ -364,7 +368,7 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
         for chave, icone, texto, _slug in itens_do_grupo:
             _item(corpo_g, chave, icone, texto, recuo=10)
 
-    _grupo("DIÁRIO", tuple(i for i in _ORDEM if i[0] in ("pag", "con")))
+    _grupo("DIÁRIO", tuple(i for i in _ORDEM if i[0] in ("dia", "pag", "con")))
     _grupo("MENSAL", tuple(i for i in _ORDEM if i[0] in ("rel", "ext", "ctr", "acs")))
 
     return quadros, mostrar, aplicar_tema

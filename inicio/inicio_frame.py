@@ -52,7 +52,11 @@ ROTINAS = (
 #: Eventos que NÃO são rotina, mas aparecem em "Atividade recente": quem
 #: entrou no app e o que o administrador fez com as contas. Sem esta tabela a
 #: linha sairia com a chave crua ("acesso") em vez de um nome.
-OUTRAS_ORIGENS = {"acesso": "Acesso", "usuarios": "Usuários"}
+#: "Pagamentos do dia" fica AQUI e não em ROTINAS enquanto convive com
+#: Remessa/Retorno e Saldo de pagamentos: lá viraria "não rodou hoje" num dia
+#: em que o trabalho foi feito pelas abas antigas.
+OUTRAS_ORIGENS = {"acesso": "Acesso", "usuarios": "Usuários",
+                  "dia": "Pagamentos do dia"}
 
 #: Os três atalhos do canto. São as três telas que se abrem todo dia, na
 #: ordem em que o dia acontece — e não as três primeiras do menu.
