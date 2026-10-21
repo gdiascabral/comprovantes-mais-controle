@@ -35,6 +35,9 @@ class Regra:
     peso: Decimal | None
     tipo: str
     do_painel: bool  # o aportador tem conta no painel (sai de uma conta sua)
+    #: A linha da aba «Regras» de onde a regra saiu (0 = montada à mão). É o
+    #: endereço que a aba «Movimentações» cita em `Regras!$C<linha>`.
+    linha: int = 0
 
 
 def ler_regras(modelo: str | Path) -> list[Regra]:
@@ -50,8 +53,9 @@ def ler_regras(modelo: str | Path) -> list[Regra]:
             return []
         ws = wb[ABA]
         regras: list[Regra] = []
-        for linha in ws.iter_rows(min_row=PRIMEIRA_LINHA, min_col=2, max_col=6,
-                                  values_only=True):
+        for numero, linha in enumerate(
+                ws.iter_rows(min_row=PRIMEIRA_LINHA, min_col=2, max_col=6,
+                             values_only=True), start=PRIMEIRA_LINHA):
             destino, aportador, peso, tipo, do_painel = linha
             if not destino or not aportador:
                 continue
@@ -62,6 +66,7 @@ def ler_regras(modelo: str | Path) -> list[Regra]:
                     peso=Decimal(str(peso)) if peso not in (None, "") else None,
                     tipo=str(tipo or "Aporte").strip(),
                     do_painel=str(do_painel or "").strip().lower().startswith("s"),
+                    linha=numero,
                 )
             )
         return regras
