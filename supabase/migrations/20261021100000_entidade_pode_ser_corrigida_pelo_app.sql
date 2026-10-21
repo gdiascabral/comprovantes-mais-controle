@@ -18,7 +18,10 @@
 -- cada alteracao fica na `auditoria` pelo gatilho abaixo, que roda NO BANCO:
 -- um cliente que pule o registro do app nao pula o gatilho.
 --
--- Idempotente: pode rodar duas vezes.
+-- Idempotente: pode rodar duas vezes. Tudo numa transacao: politica, grant,
+-- funcao e gatilho so fazem sentido juntos.
+
+begin;
 
 drop policy if exists entidade_corrige on public.entidade;
 
@@ -35,11 +38,16 @@ grant update (nome_exibicao, nome_oficial, conta, nome_descricao)
 -- ------------------------------------------------- auditoria da correcao
 -- Uma linha por UPDATE que mudou alguma coisa, com o antes e o depois.
 --
--- `security definer` porque `authenticated` so pode inserir na `auditoria`
--- com `quem = auth.uid()` -- e e exatamente isso que a funcao grava: o
--- `quem` sai do token de quem fez o UPDATE, pelo default da coluna. O
--- `search_path` vazio e obrigatorio em funcao `security definer` (ver
--- `privado.e_admin`, 30/08).
+-- `security definer` para nao depender de grants futuros na `auditoria`. O
+-- `quem` continua saindo do token de quem fez o UPDATE, pelo default da
+-- coluna (`auth.uid()` le o JWT da requisicao, nao o papel). O `search_path`
+-- vazio e obrigatorio em funcao `security definer` (ver `privado.e_admin`).
+--
+-- Correcao pelo painel ou pelo SQL Editor (papel postgres) e pela chave de
+-- servico NAO tem usuario no token: `auditoria.quem` e not null e FK para
+-- `auth.users`, e sem o desvio abaixo o UPDATE inteiro seria recusado --
+-- trancando o caminho oficial de corrigir. Essas correcoes seguem sem
+-- auditoria, como sempre foram.
 create or replace function privado.auditar_entidade()
 returns trigger
 language plpgsql
@@ -47,6 +55,9 @@ security definer
 set search_path = ''
 as $$
 begin
+  if (select auth.uid()) is null then
+    return new;
+  end if;
   if (old.nome_exibicao, old.nome_oficial, old.conta, old.nome_descricao)
      is distinct from
      (new.nome_exibicao, new.nome_oficial, new.conta, new.nome_descricao) then
@@ -66,12 +77,14 @@ begin
 end;
 $$;
 
-revoke all on function privado.auditar_entidade() from public;
+revoke all on function privado.auditar_entidade() from public, anon, authenticated;
 
 drop trigger if exists entidade_auditar on public.entidade;
 
 create trigger entidade_auditar after update on public.entidade
   for each row execute function privado.auditar_entidade();
+
+commit;
 
 -- Reverter:
 --   drop trigger if exists entidade_auditar on public.entidade;
