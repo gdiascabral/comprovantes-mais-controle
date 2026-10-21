@@ -136,8 +136,12 @@ no arquivo de outro dia.
 
 Escreve C (saldo do dia), D (a pagar), J/K, E4, H do Painel (aporte definido)
 e H da Movimentações (valor definido por aportador), mais B/C/H das linhas
-54–73 (seção «À MÃO»). Só número entra, sem fórmula, e o `workbook.build`
-confere célula por célula. **Participante sem valor leva 0, nunca vazio**:
+54–73 (seção «À MÃO»). Só número entra (exceto B/C da seção «À MÃO», o nome
+da conta — texto, nunca começando com "="), sem fórmula, e o `workbook.build`
+confere célula por célula. **Nome de conta: a tela compara o texto EXATO; o
+SUMIF do Excel ignora maiúsculas.** Os dois só contam a mesma coisa se a aba
+Regras do MODELO usar o MESMO texto do rótulo do painel — "Conta Alfa - banco"
+na Regras passaria no Excel e não casaria na tela. **Participante sem valor leva 0, nunca vazio**:
 vazio faria `I = IF(H<>"",H,G)` cair no VALOR SUGERIDO e somar dinheiro que
 ninguém definiu. A tela passa só os movimentos válidos (destino conta do
 painel, valor > 0) e `definidos_validos` — os mesmos que ela soma; o Excel
