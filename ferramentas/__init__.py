@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Ferramentas locais do repositório. Nada daqui viaja no `codigo.zip`.
 
-A `galeria` fotografa as doze telas do app para comparar o visual antes e
+A `galeria` fotografa as treze telas do app para comparar o visual antes e
 depois de mexer nele; a `sonda` pergunta todo dia se o ERP, o Inter e o Sicoob
 ainda respondem; a `sentinela_erp` fotografa todo dia o inventário de rotas e
 telas do front do ERP e alarma quando algo sumiu ou apareceu — a sonda prova
