@@ -165,6 +165,33 @@ def contas_de_investidor(contas: list[dict], entidades: list[dict],
     return sorted(opcoes, key=_chave)
 
 
+def donos_possiveis(entidades: list[dict], participantes=None) -> list[str]:
+    """As opções do campo "Empresa dona da conta" (pedido do dono, 21/10/2026:
+    o campo era texto livre e ninguém sabia o nome exato a digitar).
+
+    Primeiro as empresas que JÁ são dona de alguma conta da lista — é quase
+    sempre uma delas —, depois o resto dos contatos do ERP. Com a lista do
+    ERP em mãos, só entra nome que existe nela: é a mesma régua do
+    `validar_investidor`, e oferecer um nome que a validação recusa seria
+    armadilha."""
+    validos = None if participantes is None else {
+        _chave(p): str(p).strip() for p in participantes if str(p).strip()}
+    donos: dict[str, str] = {}
+    for e in entidades:
+        nome = str(e.get("nome_oficial") or "").strip()
+        if not e.get("conta") or not nome:
+            continue
+        if validos is not None:
+            if _chave(nome) not in validos:
+                continue
+            nome = validos[_chave(nome)]
+        donos.setdefault(_chave(nome), nome)
+    resto = [] if validos is None else [
+        v for k, v in validos.items() if k not in donos]
+    return (sorted(donos.values(), key=_chave)
+            + sorted(resto, key=_chave))
+
+
 def banco_da_conta(conta: str, contas: list[dict]) -> str:
     """O banco pelo cadastro da conta; sem ele, pelo fim do nome; "SICOOB"."""
     alvo = _chave(conta)
