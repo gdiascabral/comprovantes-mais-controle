@@ -85,10 +85,37 @@ def check_labels(ws: Worksheet, mapping: AccountMapping) -> None:
         )
 
 
+#: Seção 3 «À MÃO» da aba «Movimentações»: origem (B) e destino (C) são o ÚNICO
+#: lugar onde um extra pode ser TEXTO — o nome da conta, como o SUMIF do painel
+#: o procura. Valor (H) continua só número.
+ABA_MOVIMENTACOES = "Movimentações"
+A_MAO_LINHAS = (54, 73)
+A_MAO_COLUNAS_TEXTO = ("B", "C")
+
+
+def _texto_da_secao_a_mao(aba: str, coord: str, valor) -> bool:
+    """True se `valor` é um nome de conta aceito em B/C54:73 da Movimentações.
+    Texto em qualquer outro lugar devolve False (e cai na recusa de "só número");
+    texto vazio ou começando por "=" (fórmula) é recusado aqui mesmo."""
+    if aba != ABA_MOVIMENTACOES or not isinstance(valor, str):
+        return False
+    try:
+        letra, linha = coordinate_from_string(coord)
+    except ValueError:
+        return False
+    if letra not in A_MAO_COLUNAS_TEXTO or not (A_MAO_LINHAS[0] <= linha <= A_MAO_LINHAS[1]):
+        return False
+    if not valor.strip() or valor.lstrip().startswith("="):
+        raise WorkbookError(
+            f"{aba}!{coord}: nome de conta vazio ou comecando por '=' (formula) nao entra")
+    return True
+
+
 def _conferir_extras(modelo: Path, extras, planilha: PlanilhaConfig) -> dict[str, dict[str, float]]:
     """As celulas extras (aporte definido, valor por aportador) ANTES de copiar.
 
-    So NUMERO entra: texto ou formula numa celula que o Excel soma seria o
+    So NUMERO entra (a unica excecao e o nome da conta em B/C54:73 da
+    «Movimentações», ver `_texto_da_secao_a_mao`): texto ou formula numa celula que o Excel soma seria o
     "formula digitada a mao" que a tela nova existe para acabar — e um "=" vira
     formula no openpyxl. Recusar antes de `copy2` e o que garante que o arquivo
     do dia anterior nao foi trocado por uma copia crua do modelo.
@@ -101,6 +128,8 @@ def _conferir_extras(modelo: Path, extras, planilha: PlanilhaConfig) -> dict[str
         return {}
     for aba, celulas in extras.items():
         for coord, valor in celulas.items():
+            if _texto_da_secao_a_mao(aba, coord, valor):
+                continue
             if isinstance(valor, bool) or not isinstance(valor, (int, float)):
                 raise WorkbookError(
                     f"{aba}!{coord}: so numero entra no painel do dia, veio {valor!r}")

@@ -1,34 +1,18 @@
 """Células EXTRAS do painel do dia (aporte definido, valor por aportador).
 Modelo fictício no tmp_path — o real fica fora do repositório."""
-from datetime import date
 from decimal import Decimal
 
 import openpyxl
 import pytest
 
-from conciliacao.config import PlanilhaConfig
-from conciliacao.mapping import AccountMapping
 from conciliacao.models import RowFill
 from conciliacao.workbook import WorkbookError, assert_untouched, build
-
-HOJE = date(2026, 10, 21)
-ROTULOS = ("Conta Alfa - Banco", "Conta Beta - Banco", "Conta Gama - Banco")
-PLANILHA = PlanilhaConfig(
-    aba="Painel", primeira_linha=8, ultima_linha=10, linha_totais=12,
-    ultima_coluna="M", celula_data="E4", celula_total_pagamentos="D12",
-    formato_data="DD/MM/YYYY", col_saldo="C", col_pagamento="D",
-    col_qtd_sistema="J", col_qtd_banco="K", colunas_formula=("E", "F", "G", "I", "L"))
-MAPA = ("model_rows:\n"
-        "- row: 8\n  label: Conta Alfa - Banco\n  uuid: uuid-alfa\n"
-        "- row: 9\n  label: Conta Beta - Banco\n  uuid: uuid-beta\n"
-        "- row: 10\n  label: Conta Gama - Banco\n  uuid: uuid-gama\n")
+from tests.modelo_ficticio_do_dia import HOJE, PLANILHA, ROTULOS, carregar_mapa
 
 
 @pytest.fixture
 def mapa(tmp_path):
-    caminho = tmp_path / "mapping.yaml"
-    caminho.write_text(MAPA, encoding="utf-8")
-    return AccountMapping.load(caminho)
+    return carregar_mapa(tmp_path)
 
 
 @pytest.fixture
@@ -136,3 +120,53 @@ def test_extra_gravado_errado_e_acusado(modelo, mapa, tmp_path):
     wb.close()
     with pytest.raises(WorkbookError, match="Movimentações!H9"):
         assert_untouched(modelo, destino, HOJE, _fills(), PLANILHA, extras=extras)
+
+
+# --- seção 3 «À MÃO» da Movimentações: B/C (origem/destino) aceitam TEXTO ---
+
+def test_texto_na_secao_a_mao_entra_e_e_conferido(modelo, mapa, tmp_path):
+    destino = tmp_path / "s.xlsx"
+    extras = {"Movimentações": {"B54": "Conta Alfa - Banco", "C54": "Conta Beta - Banco",
+                                "H54": 50.0, "C73": "Conta Gama - Banco", "H73": 7.0}}
+    build(modelo, destino, HOJE, _fills(), mapa, PLANILHA, extras=extras)
+    mov = openpyxl.load_workbook(destino)["Movimentações"]
+    assert (mov["B54"].value, mov["C54"].value, mov["H54"].value) == (
+        "Conta Alfa - Banco", "Conta Beta - Banco", 50.0)
+    assert mov["B73"].value is None and mov["C73"].value == "Conta Gama - Banco"
+    assert assert_untouched(modelo, destino, HOJE, _fills(), PLANILHA, extras=extras) > 0
+    mov_wb = openpyxl.load_workbook(destino)
+    mov_wb["Movimentações"]["C54"] = "Conta Gama - Banco"
+    mov_wb.save(destino)
+    with pytest.raises(WorkbookError, match="Movimentações!C54"):
+        assert_untouched(modelo, destino, HOJE, _fills(), PLANILHA, extras=extras)
+
+
+@pytest.mark.parametrize("aba, coord", [
+    ("Movimentações", "B53"), ("Movimentações", "C74"), ("Movimentações", "D54"),
+    ("Movimentações", "H55"), ("Movimentações", "A54"), ("Painel", "H8"),
+    ("Regras", "B54"),
+])
+def test_texto_fora_de_b_c_54_a_73_continua_recusado(modelo, mapa, tmp_path, aba, coord):
+    destino = tmp_path / "s.xlsx"
+    with pytest.raises(WorkbookError, match="so numero|texto"):
+        build(modelo, destino, HOJE, _fills(), mapa, PLANILHA,
+              extras={aba: {coord: "Conta Alfa - Banco"}})
+    assert not destino.exists()
+
+
+@pytest.mark.parametrize("texto", ["=1+1", "=Regras!C5", "", "   "])
+def test_formula_ou_texto_vazio_na_secao_a_mao_e_recusado(modelo, mapa, tmp_path, texto):
+    destino = tmp_path / "s.xlsx"
+    with pytest.raises(WorkbookError, match="B54"):
+        build(modelo, destino, HOJE, _fills(), mapa, PLANILHA,
+              extras={"Movimentações": {"B54": texto}})
+    assert not destino.exists()
+
+
+def test_texto_na_secao_a_mao_em_celula_ocupada_e_recusado(modelo, mapa, tmp_path):
+    wb = openpyxl.load_workbook(modelo)
+    wb["Movimentações"]["B54"] = "ja tem"
+    wb.save(modelo)
+    with pytest.raises(WorkbookError, match="B54"):
+        build(modelo, tmp_path / "s.xlsx", HOJE, _fills(), mapa, PLANILHA,
+              extras={"Movimentações": {"B54": "Conta Alfa - Banco"}})
