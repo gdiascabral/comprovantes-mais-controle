@@ -147,6 +147,25 @@ def test_a_mao_com_formula_ou_sem_destino_e_recusada(tmp_path, mapa, origem, des
     assert not (tmp_path / "saida").exists()
 
 
+def test_a_mao_para_destino_fora_do_painel_e_recusado(tmp_path, mapa):
+    with pytest.raises(WorkbookError, match="Conta Fora.*não é conta do painel"):
+        _gerar(tmp_path, mapa, {}, a_mao=[(ALFA, "Conta Fora", D("5"))])
+    assert not (tmp_path / "saida").exists()
+
+
+def test_a_mao_com_origem_de_fora_do_painel_continua_valendo(tmp_path, mapa):
+    wb = _gerar(tmp_path, mapa, {}, a_mao=[("Socio de fora", ALFA, D("5"))])
+    assert wb["Movimentações"]["B54"].value == "Socio de fora"
+
+
+def test_par_repetido_nas_regras_e_recusado(tmp_path, mapa):
+    modelo = _modelo(tmp_path / "MODELO.xlsx")
+    regras = ler_regras(modelo)
+    with pytest.raises(WorkbookError, match="mais de uma vez"):
+        xd.celulas_de_aporte(modelo, PLANILHA, mapa, regras + [regras[2]],
+                             {(ALFA, SOCIO): D("1")})
+
+
 def test_a_mao_com_cabecalho_mudado_para_tudo(tmp_path, mapa):
     with pytest.raises(WorkbookError, match="VALOR DEFINIDO"):
         _gerar(tmp_path, mapa, {}, a_mao=MAO, cabecalho_mov="VALOR (R$)")

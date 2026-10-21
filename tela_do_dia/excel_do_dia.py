@@ -31,10 +31,9 @@ from pathlib import Path
 import openpyxl
 
 from conciliacao.rules import build_row_fills
-from conciliacao.workbook import (A_MAO_LINHAS, BuildResult, WorkbookError,
-                                  build)
+from conciliacao.workbook import (A_MAO_LINHAS, ABA_MOVIMENTACOES, BuildResult,
+                                  WorkbookError, build)
 
-ABA_MOVIMENTACOES = "Movimentações"
 COLUNA_DEFINIDO = "H"
 CABECALHO_MOVIMENTACOES = "H7"
 PRIMEIRA_LINHA_A_MAO, ULTIMA_LINHA_A_MAO = A_MAO_LINHAS
@@ -59,7 +58,7 @@ def _conferir_cabecalho(ws, coord: str, oque: str) -> None:
             "mudou — não escrevo valor numa coluna que não sei qual é.")
 
 
-def _celulas_a_mao(a_mao) -> dict[str, object]:
+def _celulas_a_mao(a_mao, rotulos_do_painel) -> dict[str, object]:
     """B/C/H54..73 da seção «À MÃO». Ignora valor <= 0 (como a tela)."""
     movimentos = []
     for origem, destino, valor in (a_mao or ()):
@@ -71,6 +70,9 @@ def _celulas_a_mao(a_mao) -> dict[str, object]:
             raise WorkbookError("movimento à mão sem conta de destino")
         if origem is not None and (not isinstance(origem, str) or not origem.strip()):
             raise WorkbookError("movimento à mão com origem vazia (use None para 'de fora')")
+        if destino not in rotulos_do_painel:
+            raise WorkbookError(f"movimento à mão para {destino}, que não é conta do "
+                                "painel: a tela o ignora e o Excel divergiria dela.")
         movimentos.append((origem, destino, valor))
     if len(movimentos) > MAX_A_MAO:
         raise WorkbookError(
@@ -91,7 +93,7 @@ def celulas_de_aporte(modelo, planilha, mapping, regras, definidos, a_mao=()) ->
     for (destino, aportador), valor in validos.items():
         if valor < 0:
             raise WorkbookError(f"aporte negativo de {aportador} para {destino}: {valor}")
-    mao = _celulas_a_mao(a_mao)
+    mao = _celulas_a_mao(a_mao, {r.label for r in mapping.rows})
     if not validos and not mao:
         return {}
     wb = openpyxl.load_workbook(Path(modelo))
@@ -112,6 +114,13 @@ def celulas_de_aporte(modelo, planilha, mapping, regras, definidos, a_mao=()) ->
     regras_do_par = {(r.destino, r.aportador) for r in regras}
     linha_do_rotulo = {r.label: r.row for r in mapping.rows}
     totais: dict[str, Decimal] = {}
+    vistos: set = set()
+    for r in regras:
+        par = (r.destino, r.aportador)
+        if par in vistos and any(d == r.destino for d, _ in validos):
+            raise WorkbookError(f"{r.aportador} → {r.destino} aparece mais de uma vez na "
+                                "aba «Regras»: o valor seria contado em dobro no Excel.")
+        vistos.add(par)
     for (destino, aportador), valor in validos.items():
         if (destino, aportador) not in regras_do_par:
             raise WorkbookError(f"{aportador} → {destino} não está na aba «Regras» do "
