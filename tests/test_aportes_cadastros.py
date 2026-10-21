@@ -165,10 +165,11 @@ def test_gravar_altera_so_a_linha_pelo_id(monkeypatch):
     monkeypatch.setattr(cad, "_rest", lambda: falso)
     regravou = []
     monkeypatch.setattr(cad, "_regravar_cache", lambda e: regravou.append(e))
-    cad.gravar("tok", 1, {"nome_oficial": "OUTRA SPE"})
+    g = cad.gravar("tok", 1, {"nome_oficial": "OUTRA SPE"})
     assert falso.chamadas == [("entidade", "id=eq.1",
                                {"nome_oficial": "OUTRA SPE"})]
     assert regravou == [ENTIDADES]
+    assert g.entidades == ENTIDADES and g.avisos == []
 
 
 def test_banco_que_nao_altera_nada_e_erro_e_nao_mexe_no_cache(monkeypatch):
@@ -189,3 +190,59 @@ def test_gravar_sem_mudanca_ou_sem_id_recusa(monkeypatch):
         cad.gravar("tok", 1, {})
     with pytest.raises(ValueError):
         cad.gravar("tok", None, {"nome_oficial": "X"})
+
+
+def test_banco_aceitou_e_reler_falhou_vira_aviso_e_nao_erro(monkeypatch):
+    # Erro aqui faria a tela dizer "não corrigiu" sobre correção gravada.
+    class SemReler(_Rest):
+        def ler(self, *a, **k):
+            raise OSError("sem rede")
+    monkeypatch.setattr(cad, "_rest", lambda: SemReler(
+        [{"id": 1, "nome_oficial": "OUTRA SPE"}]))
+    monkeypatch.setattr(cad, "_regravar_cache", lambda e: None)
+    g = cad.gravar("tok", 1, {"nome_oficial": "OUTRA SPE"}, ENTIDADES)
+    assert _ent(1)["nome_oficial"] == "OBRA SPE"          # não mutou o original
+    corrigida = next(e for e in g.entidades if e["id"] == 1)
+    assert corrigida["nome_oficial"] == "OUTRA SPE"
+    assert "não deu para reler" in g.avisos[0]
+
+
+def test_cache_que_nao_regrava_vira_aviso(monkeypatch):
+    monkeypatch.setattr(cad, "_rest", lambda: _Rest([{"id": 1}]))
+
+    def aberto_no_excel(_e):
+        raise PermissionError("arquivo em uso")
+    monkeypatch.setattr(cad, "_regravar_cache", aberto_no_excel)
+    g = cad.gravar("tok", 1, {"nome_oficial": "OUTRA SPE"})
+    assert g.entidades == ENTIDADES
+    assert "contas.csv não foi atualizado" in g.avisos[0]
+
+
+def test_como_dict_no_formato_de_carregar_contas():
+    d = cad.como_dict(ENTIDADES)
+    assert d["FULANA (pessoa física)"] == {
+        "nome_oficial": "FULANA DE TAL", "conta": None,
+        "nome_descricao": "FULANA/BELTRANO"}
+    assert d["OBRA SPE - BANCO"]["conta"] == "OBRA SPE - BANCO"
+
+
+def test_numero_repetido_em_outro_banco_nao_vira_dono_da_subconta():
+    outra = {"id": 9, "nome_exibicao": "OUTRA EMPRESA - OUTRO BANCO",
+             "nome_oficial": "OUTRA SPE",
+             "conta": "OUTRA EMPRESA 22222-2 - OUTRO BANCO",
+             "nome_descricao": None}
+    ents = [outra] + ENTIDADES                  # a outra vem PRIMEIRO
+    linhas = {s.numero: s for s in cad.subcontas(ents, RATEIOS)}
+    assert linhas["22222-2"].entidade["id"] == 4
+    assert outra in cad.empresas(ents, RATEIOS)
+
+
+def test_duas_candidatas_sem_o_padrao_no_nome_nao_escolhe_nenhuma():
+    a = {"id": 8, "nome_exibicao": "A", "nome_oficial": "X",
+         "conta": "A 44444-4", "nome_descricao": None}
+    b = {"id": 9, "nome_exibicao": "B", "nome_oficial": "Y",
+         "conta": "B 44444-4", "nome_descricao": None}
+    rateios = {"44444-4": {"investidores": ["I"], "obras": ["L"], "pesos": {}}}
+    s = cad.subcontas([a, b], rateios)[0]
+    assert s.entidade is None
+    assert s.avisos == ["mais de uma conta com este número"]

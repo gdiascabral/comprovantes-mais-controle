@@ -120,12 +120,12 @@ def corrigir(pai, entidade, *, so_dono, entidades, rateios, contas,
         if problema:
             erro.configure(text=problema)
             return
-        if em_uso(entidade):
-            erro.configure(
-                text=f"\"{entidade['nome_exibicao']}\" está na lista \"A "
-                     "lançar\". Lance ou tire da lista antes de corrigir — "
-                     "corrigir no meio pode lançar o aporte em dobro ou no "
-                     "lugar errado.")
+        motivo = em_uso(entidade)
+        if motivo:
+            erro.configure(text=motivo if isinstance(motivo, str) else
+                           f"\"{entidade['nome_exibicao']}\" está na lista "
+                           "\"A lançar\". Lance ou tire da lista antes de "
+                           "corrigir.")
             return
         resultado.append(cad.mudancas(entidade, depois))
         top.destroy()

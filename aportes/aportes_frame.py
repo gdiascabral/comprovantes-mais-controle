@@ -558,7 +558,8 @@ class AportesFrame(ttk.Frame):
             self.after(0, lambda: (self.b_novo.configure(state="normal"),
                                    self.b_cad.configure(state="normal")))
             return
-        abrir = self._abrir_cadastros if janela == "cadastros"             else self._perguntar_novo
+        abrir = (self._abrir_cadastros if janela == "cadastros"
+                 else self._perguntar_novo)
         self.after(0, lambda: abrir(
             token, contas, entidades, rateios, participantes, centros))
 
@@ -599,25 +600,59 @@ class AportesFrame(ttk.Frame):
         atual = {"entidades": entidades}
 
         def gravar(antes, mud, pronto):
-            def feito(novas):
-                atual["entidades"] = novas
-                self._cadastro_corrigido(antes, mud)
-                pronto(novas)
-            self._no_fundo(lambda: cadastros.gravar(token, antes["id"], mud),
+            def feito(gravado):
+                atual["entidades"] = gravado.entidades
+                self._cadastro_corrigido(antes, mud, gravado)
+                pronto(gravado.entidades)
+
+            def ao_fim():
+                self.b_lancar.configure(state="normal")
+                self.acao_enter.configure(state="normal")
+
+            # Enquanto o banco não responde, nada entra na lista nem vai
+            # para o ERP: a correção chegaria no meio e o resto sairia com
+            # a conta nova.
+            self.b_lancar.configure(state="disabled")
+            self.acao_enter.configure(state="disabled")
+            self._no_fundo(lambda: cadastros.gravar(token, antes["id"], mud,
+                                                    atual["entidades"]),
                            feito, "Não deu para corrigir o cadastro.",
-                           titulo="Cadastros")
+                           ao_fim=ao_fim, titulo="Cadastros")
 
         r = abrir(self.winfo_toplevel(), entidades=entidades, rateios=rateios,
                   contas=contas, participantes=participantes, gravar=gravar,
-                  em_uso=lambda e: cadastros.em_uso(
-                      e, [(op.pagador, op.recebedor) for op in self.operacoes]))
+                  em_uso=self._motivo_para_nao_corrigir)
         if r and r[0] == "rateio":
             self._perguntar_novo(token, contas, atual["entidades"], rateios,
                                  participantes, centros, conta_inicial=r[1])
 
-    def _cadastro_corrigido(self, antes, mud):
+    def _motivo_para_nao_corrigir(self, entidade) -> str:
+        """"" quando dá para corrigir agora; senão, a frase da recusa.
+
+        Aporte lançado pela METADE trava QUALQUER correção, e não só a da
+        linha dele: a correção relê a lista inteira do banco, e o que outra
+        máquina mudou nesse meio-tempo entraria junto — o resto do aporte
+        sairia com a conta nova. A memória do que já entrou (`criados`) é
+        por posição, e só vale com o cadastro de quando começou."""
+        if any(self.criados):
+            return ("Há um aporte na lista \"A lançar\" que já entrou em "
+                    "parte no Mais Controle. Termine esse lançamento (ou "
+                    "tire-o da lista) antes de corrigir cadastros.")
+        if cadastros.em_uso(entidade, [(op.pagador, op.recebedor)
+                                       for op in self.operacoes]):
+            return (f"\"{entidade['nome_exibicao']}\" está na lista \"A "
+                    "lançar\". Lance ou tire da lista antes de corrigir — "
+                    "corrigir no meio pode lançar o aporte em dobro ou no "
+                    "lugar errado.")
+        return ""
+
+    def _cadastro_corrigido(self, antes, mud, gravado):
         pagou, recebeu = self.cb_pagador.get(), self.cb_recebedor.get()
-        self.entidades = cadastro.carregar_contas()
+        # Do que o banco devolveu, e não do contas.csv: se a regravação
+        # falhou (arquivo aberto no Excel), reler traria o cadastro antigo
+        # com o log dizendo "corrigido".
+        self.entidades = (cadastros.como_dict(gravado.entidades)
+                          or cadastro.carregar_contas())
         self._recarregar_listas()
         novo_nome = mud.get("nome_exibicao")
         for combo, escolhido in ((self.cb_pagador, pagou),
@@ -631,6 +666,17 @@ class AportesFrame(ttk.Frame):
                               f"\"{v or ''}\"" for c, v in mud.items())
                   + ". Clique em Conferir cadastro para ver se os nomes "
                     "batem com o Mais Controle.")
+        for aviso in gravado.avisos:
+            self._log(f"  aviso: {aviso}")
+        # A lista do banco pode ter trazido mudança de OUTRA máquina:
+        # operação cujo nome sumiu não pode seguir para o Lançar calada.
+        for op in self.operacoes:
+            for nome in (op.pagador, op.recebedor):
+                if (nome not in self.entidades and
+                        not nome.startswith(cadastro.INVESTIDOR_PREFIXO)):
+                    self._log(f"[!] \"{nome}\", da lista A lançar, não está "
+                              "mais no cadastro. Tire essa operação e "
+                              "adicione de novo com o nome atual.")
         widgets.registrar_atividade(
             "apt", "Cadastro corrigido", "ok", antes["nome_exibicao"],
             {"campos": len(mud)})

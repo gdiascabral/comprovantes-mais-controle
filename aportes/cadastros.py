@@ -37,16 +37,58 @@ def _numero(entidade: dict) -> str:
     return regras.numero_da_conta(entidade.get("conta") or "")
 
 
-def e_de_subconta(entidade: dict, rateios: dict) -> bool:
-    """A linha é a conta de uma subconta de investidor que tem rateio?"""
-    numero = _numero(entidade)
-    return bool(numero) and numero in rateios
+def linhas_das_subcontas(entidades: list[dict], rateios: dict) -> dict:
+    """{número: a linha de Pagou/Recebeu daquela subconta, ou None}.
+
+    Pelo número lido da conta — mas número de conta se repete entre bancos.
+    Com mais de uma candidata, vale a que tem "SUBCONTA 00000-0" no nome em
+    Pagou/Recebeu (o padrão do Novo cadastro); sem uma só, None: escolher a
+    primeira poria "Corrigir dono" na linha de outra empresa, e é o
+    `nome_oficial` dela que vira favorecido nos aportes."""
+    saida = {}
+    for numero in rateios:
+        if numero.startswith("_"):
+            continue
+        cands = [e for e in entidades if _numero(e) == numero]
+        if len(cands) > 1:
+            cands = [e for e in cands
+                     if f"subconta {numero}" in _chave(e.get("nome_exibicao"))]
+        saida[numero] = cands[0] if len(cands) == 1 else None
+    return saida
+
+
+def e_de_subconta(entidade: dict, rateios: dict, entidades: list[dict]) -> bool:
+    """A linha é a de uma subconta de investidor que tem rateio?"""
+    def mesma(e):
+        if e is None:
+            return False
+        if e is entidade:
+            return True
+        return e.get("id") is not None and e.get("id") == entidade.get("id")
+    return any(mesma(e)
+               for e in linhas_das_subcontas(entidades, rateios).values())
 
 
 def empresas(entidades: list[dict], rateios: dict) -> list[dict]:
     """A aba "Empresas e pessoas": tudo que não é linha de subconta."""
-    return sorted((e for e in entidades if not e_de_subconta(e, rateios)),
+    delas = [e for e in linhas_das_subcontas(entidades, rateios).values()
+             if e is not None]
+    return sorted((e for e in entidades if not any(e is d for d in delas)),
                   key=lambda e: _chave(e.get("nome_exibicao")))
+
+
+def como_dict(entidades: list[dict]) -> dict:
+    """A lista do banco no formato de `dados.carregar_contas` — o que a aba
+    usa para montar e lançar. Montar daqui, e não reler o `contas.csv`,
+    é o que garante que a aba lança com o que o banco ACABOU de aceitar:
+    com o CSV aberto no Excel a regravação falha, e reler traria a conta
+    antiga com o log dizendo "corrigido"."""
+    return {str(e["nome_exibicao"]).strip(): {
+                "nome_oficial": str(e.get("nome_oficial") or "").strip(),
+                "conta": str(e.get("conta") or "").strip() or None,
+                "nome_descricao": str(e.get("nome_descricao") or "").strip()
+                or None}
+            for e in entidades if str(e.get("nome_exibicao") or "").strip()}
 
 
 @dataclass
@@ -70,11 +112,7 @@ def subcontas(entidades: list[dict], rateios: dict) -> list[Subconta]:
     "Dono diferente" compara com o dono MAIS COMUM das outras subcontas: as
     subcontas de uma holding saem todas no contato dela, e uma que destoa
     quase sempre é o investidor posto no lugar do dono."""
-    da_conta = {}
-    for e in entidades:
-        numero = _numero(e)
-        if numero:
-            da_conta.setdefault(numero, e)
+    da_conta = linhas_das_subcontas(entidades, rateios)
     saida = []
     for numero in sorted(n for n in rateios if not n.startswith("_")):
         cfg = rateios[numero] or {}
@@ -90,7 +128,9 @@ def subcontas(entidades: list[dict], rateios: dict) -> list[Subconta]:
     donos = [s.dono for s in saida if s.dono]
     for s in saida:
         if s.entidade is None:
-            s.avisos.append("sem conta em Pagou/Recebeu")
+            repetidas = sum(1 for e in entidades if _numero(e) == s.numero)
+            s.avisos.append("mais de uma conta com este número" if repetidas > 1
+                            else "sem conta em Pagou/Recebeu")
         outros = [d for d in donos if _chave(d) != _chave(s.dono)]
         iguais = len(donos) - len(outros)
         if s.dono and outros:
@@ -133,7 +173,7 @@ def validar(antes: dict, depois: dict, entidades: list[dict], rateios: dict,
     oficial = _limpo(depois.get("nome_oficial"), "nome_oficial")
     conta = _limpo(depois.get("conta"), "conta") or ""
     apelido = _limpo(depois.get("nome_descricao"), "nome_descricao") or ""
-    if e_de_subconta(antes, rateios):
+    if e_de_subconta(antes, rateios, entidades):
         if "nome_exibicao" in mud:
             return ("O nome de uma subconta em Pagou/Recebeu segue o padrão "
                     "\"SUBCONTA 00000-0 - BANCO - INVESTIDOR\". Corrija só o "
@@ -221,13 +261,24 @@ def _regravar_cache(entidades: list[dict]) -> None:
     cache.gravar_csv("contas.csv", list(COLUNAS), linhas)
 
 
-def gravar(token: str, id_, mud: dict) -> list[dict]:
-    """Corrige UMA linha no banco e, só depois, o cache local. Devolve as
-    entidades como o banco tem agora.
+@dataclass
+class Gravado:
+    """O que `gravar` devolve: a lista como ficou e o que a tela deve
+    avisar (a correção já está no banco; os avisos são do resto)."""
+    entidades: list
+    avisos: list = field(default_factory=list)
+
+
+def gravar(token: str, id_, mud: dict, atuais=None) -> Gravado:
+    """Corrige UMA linha no banco e, só depois, o cache local.
 
     PATCH barrado pela RLS (o SQL ainda não aplicado, usuário desativado)
     NÃO dá erro no PostgREST: devolve zero linhas. Por isso a resposta é
-    conferida — "corrigido" sem ter corrigido é pior que a recusa."""
+    conferida — "corrigido" sem ter corrigido é pior que a recusa.
+
+    Depois que o banco aceitou, nada mais aqui vira erro: reler a lista ou
+    regravar o `contas.csv` falhando viram AVISO. Erro faria a tela dizer
+    "não corrigiu" sobre uma correção que está gravada."""
     if not id_ or not mud:
         raise ValueError("correção sem linha ou sem mudança")
     rest = _rest()
@@ -236,10 +287,20 @@ def gravar(token: str, id_, mud: dict) -> list[dict]:
         raise RuntimeError(
             "o banco não aceitou a correção (nenhuma linha alterada). Se é a "
             "primeira vez, falta aplicar o SQL que libera corrigir pelo app.")
-    entidades = ler(token)
+    avisos = []
+    try:
+        entidades = ler(token)
+    except Exception as e:                                   # noqa: BLE001
+        entidades = [dict(e_, **alteradas[0]) if e_.get("id") == id_ else e_
+                     for e_ in (atuais or [])]
+        avisos.append(f"a correção foi gravada, mas não deu para reler a "
+                      f"lista ({e}); a tela usa a lista de antes com a "
+                      "correção aplicada.")
     try:
         _regravar_cache(entidades)
-    except Exception:                                        # noqa: BLE001
-        # O banco já tem a correção; o cache se acerta na próxima abertura.
+    except Exception as e:                                   # noqa: BLE001
         util.log(__name__).warning("regravando contas.csv", exc_info=True)
-    return entidades
+        avisos.append(f"o arquivo contas.csv não foi atualizado ({e}) — está "
+                      "aberto no Excel? A aba já usa o cadastro corrigido; "
+                      "feche o arquivo e ele se acerta na próxima abertura.")
+    return Gravado(entidades, avisos)
