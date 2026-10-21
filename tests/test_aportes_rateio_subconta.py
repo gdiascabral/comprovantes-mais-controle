@@ -169,8 +169,9 @@ def test_aporte_lancado_pela_metade_trava_a_troca_do_rateio():
     from aportes.aportes_frame import AportesFrame
     op = SimpleNamespace(pagador=rs.pagador("11111-1"))
     outra = SimpleNamespace(pagador="EMPRESA X")
-    meio = SimpleNamespace(operacoes=[outra, op], criados=[{0}, {0}])
-    nada = SimpleNamespace(operacoes=[op], criados=[set()])
+    meio = SimpleNamespace(operacoes=[outra, op], criados=[{0}, {0}],
+                           incertos=[set(), set()])
+    nada = SimpleNamespace(operacoes=[op], criados=[set()], incertos=[set()])
     assert AportesFrame._subconta_em_andamento(meio, "11111-1")
     assert not AportesFrame._subconta_em_andamento(nada, "11111-1")
     assert not AportesFrame._subconta_em_andamento(meio, "22222-2")
