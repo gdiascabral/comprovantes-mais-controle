@@ -52,12 +52,27 @@ class LinhaDaTabela:
 
 
 # ------------------------------------------------- agendados a confirmar
-def marcas_iniciais(pendentes, antigas=None) -> dict:
+def _id_da_resposta(r):
+    return r.id if r is not None else None
+
+
+def marcas_iniciais(pendentes, antigas=None, anteriores=None) -> dict:
     """{agendado_id: marcado}. O que o dono já clicou continua; pendente
-    novo nasce com a pré-marca da prova (`Situacao.pre_marca`)."""
+    novo nasce com a pré-marca da prova (`Situacao.pre_marca`). Pendente que
+    recebeu QUALQUER resposta desde `anteriores` (os pendentes de antes da
+    releitura; "reagendado" inclusive, desta ou de outra máquina) volta
+    DESMARCADO: a marca de antes não vale para a resposta nova."""
     antigas = antigas or {}
-    return {a.id: (antigas[a.id] if a.id in antigas else bool(sit.pre_marca))
-            for a, sit, _r in pendentes}
+    resp_antes = {a.id: _id_da_resposta(r) for a, _s, r in anteriores or ()}
+    marcas = {}
+    for a, sit, r in pendentes:
+        if a.id in resp_antes and resp_antes[a.id] != _id_da_resposta(r):
+            marcas[a.id] = False
+        elif a.id in antigas:
+            marcas[a.id] = antigas[a.id]
+        else:
+            marcas[a.id] = bool(sit.pre_marca)
+    return marcas
 
 
 def alternar(marcas: dict, ident) -> dict:
@@ -89,13 +104,47 @@ def pagos_marcados(pendentes, marcas: dict) -> list[tuple]:
             for a, sit, _r in pendentes if marcas.get(a.id)]
 
 
-def pergunta_ao_pagar(pendentes, marcas: dict) -> str:
-    """Marcado SEM prova (sumiu, mudou, aguardando): o dono confirma."""
-    sem = [a for a, sit, _r in pendentes if marcas.get(a.id) and not sit.pre_marca]
-    if not sem:
-        return ""
-    return (f"{len(sem)} marcado(s) sem prova de pagamento (o app não viu baixa nem "
-            "retorno do banco). Confirma que foram pagos?")
+#: Quantos a pergunta do "Pago" lista pelo nome.
+CITADOS_NO_PAGO = 10
+
+
+def _prova_com_hora(sit, ident, provas_de) -> str:
+    if not sit.pre_marca:
+        return "SEM prova — confira"
+    if ident in (provas_de or {}):
+        hora = provas_de[ident]
+        return f"{sit.prova} — " + (f"lida às {hora}" if hora else "da última busca")
+    return sit.prova
+
+
+def pergunta_ao_pagar(pendentes, marcas: dict, provas_de=None) -> str:
+    """"Gravar N como pago?" com favorecido, valor e a prova de cada um
+    (a hora dela quando veio de leitura anterior). Sempre pergunta."""
+    marcados = [(a, sit) for a, sit, _r in pendentes if marcas.get(a.id)]
+    linhas = [f"• {a.favorecido or '?'} {brl(a.valor)} — {_prova_com_hora(sit, a.id, provas_de)}"
+              for a, sit in marcados[:CITADOS_NO_PAGO]]
+    if len(marcados) > CITADOS_NO_PAGO:
+        linhas.append(f"e mais {len(marcados) - CITADOS_NO_PAGO}")
+    return f"Gravar {len(marcados)} como pago?" + chr(10) * 2 + chr(10).join(linhas)
+
+
+def responder_um(cliente, ident, resposta, *, motivo="", nova_data=None) -> list:
+    cliente.responder(ident, resposta, motivo=motivo, nova_data=nova_data)
+    return [ident]
+
+
+def registro_das_respostas(pendentes, gravado) -> list[str]:
+    """As linhas do Registro: a resposta, o favorecido e o valor de cada
+    gravada. `gravado` = (resposta, [agendado_id])."""
+    resposta, ids = gravado if gravado else ("", [])
+    nomes = {"pago": "pago", "nao_saiu": "não saiu", "reagendado": "reagendado"}
+    por_id = {a.id: a for a, _s, _r in pendentes or ()}
+    linhas = []
+    for ident in ids or ():
+        a = por_id.get(ident)
+        quem = f"{a.favorecido or '?'} {brl(a.valor)}" if a else f"agendado {ident}"
+        linhas.append(f"{nomes.get(resposta, resposta)}: {quem}")
+    return linhas or ["Nenhuma resposta gravada."]
 
 
 def recusa_de_pagar(itens) -> str:
@@ -260,6 +309,9 @@ def reler_tudo(cliente, dia, anterior, lancamentos) -> LidoDaNuvem:
     nomes, lista_anterior = cliente.nomes_curtos(), cliente.lista_anterior(dia)
     ultimas = ag.ultima_resposta(respostas)
     antes = {a.id: sit for a, sit, _r in (anterior.pendentes if anterior is not None else ())}
+    lido_em = anterior.lido_em if anterior is not None else ""
+    provas_de_antes = anterior.provas_de if anterior is not None else {}
+    provas_de = {}
     titulos = {str(i.get("id")): i for i in lancamentos or () if i.get("id")}
     linhas = []
     for a in ag.pendentes(abertos, respostas):
@@ -271,5 +323,8 @@ def reler_tudo(cliente, dia, anterior, lancamentos) -> LidoDaNuvem:
                                   relido=titulo is not None or not a.lancamento_id)
             except Exception:                                # noqa: BLE001
                 sit = ag.Situacao("atencao", "não consegui ler o título no ERP — responda")
+        # Nada aqui foi lido do ERP agora: a situação é da última busca.
+        provas_de[a.id] = provas_de_antes.get(a.id, lido_em)
         linhas.append((a, sit, ultimas.get(a.id)))
-    return LidoDaNuvem(conf, de_hoje, linhas, nomes, lista_anterior, "", [])
+    return LidoDaNuvem(conf, de_hoje, linhas, nomes, lista_anterior, "", [],
+                       lido_em=lido_em, provas_de=provas_de)

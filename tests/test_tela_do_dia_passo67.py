@@ -72,9 +72,48 @@ def test_pago_dos_marcados_leva_a_prova_e_pergunta_sem_prova():
     pend = [(_ag(1), PAGO, None), (_ag(2, "L2"), SUMIU, None), (_ag(3, "L3"), AGUARDA, None)]
     itens = p67.pagos_marcados(pend, {1: True, 2: True, 3: False})
     assert itens == [(1, ag.PROVA_BAIXA), (2, "")]
-    assert "1 " in p67.pergunta_ao_pagar(pend, {1: True, 2: True})
-    assert p67.pergunta_ao_pagar(pend, {1: True}) == ""
+    pergunta = p67.pergunta_ao_pagar(pend, {1: True, 2: True})
+    assert pergunta.startswith("Gravar 2 como pago?")
+    assert "Fornecedor Modelo Ltda R$ 100,00 — baixa no ERP" in pergunta
+    assert "SEM prova" in pergunta
+    # Sempre pergunta, mesmo com tudo provado.
+    assert p67.pergunta_ao_pagar(pend, {1: True}).startswith("Gravar 1 como pago?")
     assert p67.recusa_de_pagar([]) and p67.recusa_de_pagar(itens) == ""
+
+
+def test_pergunta_do_pago_diz_a_hora_da_prova_reaproveitada_e_corta_em_10():
+    pend = [(_ag(1), PAGO, None), (_ag(2, "L2"), PAGO, None), (_ag(3, "L3"), PAGO, None)]
+    p = p67.pergunta_ao_pagar(pend, {1: True, 2: True, 3: True}, {1: "08:12", 2: ""})
+    assert "baixa no ERP — lida às 08:12" in p
+    assert "baixa no ERP — da última busca" in p
+    assert p.count("lida às") == 1 and p.count("da última busca") == 1
+    muitos = [(_ag(i, f"L{i}"), PAGO, None) for i in range(1, 14)]
+    p = p67.pergunta_ao_pagar(muitos, {i: True for i in range(1, 14)})
+    assert p.startswith("Gravar 13 como pago?") and p.count("•") == 10 and "e mais 3" in p
+
+
+def test_respondido_volta_desmarcado_e_nao_entra_no_proximo_pago():
+    antes = [(_ag(1), PAGO, None), (_ag(2, "L2"), PAGO, None)]
+    marcas = p67.marcas_iniciais(antes)
+    assert marcas == {1: True, 2: True}
+    reag = ag.Resposta(id=7, agendado_id=1, resposta="reagendado", motivo="sem saldo",
+                       nova_data=DIA)
+    depois = [(_ag(1), PAGO, reag), (_ag(2, "L2"), PAGO, None)]
+    marcas = p67.marcas_iniciais(depois, marcas, antes)
+    assert marcas == {1: False, 2: True}
+    assert p67.pagos_marcados(depois, marcas) == [(2, ag.PROVA_BAIXA)]
+    # Sem resposta nova, a marca do dono continua.
+    assert p67.marcas_iniciais(depois, {1: True, 2: False}, depois) == {1: True, 2: False}
+
+
+def test_registro_das_respostas_leva_favorecido_e_valor():
+    pend = [(_ag(1), PAGO, None), (_ag(2, "L2", "35.50"), AGUARDA, None)]
+    assert p67.registro_das_respostas(pend, ("pago", [1, 2])) == [
+        "pago: Fornecedor Modelo Ltda R$ 100,00", "pago: Fornecedor Modelo Ltda R$ 35,50"]
+    assert p67.registro_das_respostas(pend, ("nao_saiu", [2])) == [
+        "não saiu: Fornecedor Modelo Ltda R$ 35,50"]
+    c = _Cliente()
+    assert p67.responder_um(c, 5, "reagendado", motivo="x y z", nova_data=DIA) == [5]
 
 
 class _Cliente:
@@ -238,7 +277,8 @@ class _Nuvem:
 
 
 def test_reler_tudo_traz_agendados_nomes_lista_e_nunca_diz_sumiu_sem_reler():
-    anterior = nd.LidoDaNuvem(Conferencia(), pendentes=[(_ag(1, "L1"), PAGO, None)])
+    anterior = nd.LidoDaNuvem(Conferencia(), pendentes=[(_ag(1, "L1"), PAGO, None)],
+                              lido_em="08:12")
     nuvem = _Nuvem(de_hoje=[_linha(2, "L2"), _linha(3, "L3")],
                    abertos=[_linha(1, "L1", dia="2026-10-22"), _linha(2, "L2"), _linha(3, "L3")],
                    respostas=[{"id": 1, "agendado_id": 3, "resposta": "pago"}])
@@ -253,6 +293,9 @@ def test_reler_tudo_traz_agendados_nomes_lista_e_nunca_diz_sumiu_sem_reler():
     assert set(pend) == {"L1", "L2"}                      # L3 respondido pago
     assert pend["L1"] is PAGO
     assert pend["L2"].frase == "aguardando — responda" and not pend["L2"].pre_marca
+    assert lido.lido_em == "08:12" and lido.provas_de == {1: "08:12", 2: "08:12"}
+    # Segunda releitura: a hora continua a da leitura de onde a prova veio.
+    assert p67.reler_tudo(nuvem, DIA, lido, []).provas_de[1] == "08:12"
     # Pendente novo FORA da leitura do dia: "não reli", nunca "sumiu".
     lido = p67.reler_tudo(nuvem, DIA, None, [])
     pend = {a.alvo: s for a, s, _r in lido.pendentes}

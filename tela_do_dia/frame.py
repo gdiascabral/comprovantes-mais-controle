@@ -310,7 +310,7 @@ class TelaDoDiaFrame(ttk.Frame):
         for i, b in enumerate(self._botoes_da_lista):
             b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
 
-        acao =ttk.Frame(self, style="Fundo.TFrame")
+        acao = ttk.Frame(self, style="Fundo.TFrame")
         acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         btns = ttk.Frame(acao, style="Fundo.TFrame")
         btns.pack(side="right", padx=px((16, 0)))
@@ -609,6 +609,7 @@ class TelaDoDiaFrame(ttk.Frame):
         (self.cfg, self.mapping, self.leitura, self.contas_erp, self.regras,
          self.periodo, self.modelo, lido) = pacote
         self.lido, self.conferencia, self._nuvem_travada = lido, lido.conferencia, lido.erro
+        lido.lido_em = datetime.datetime.now().strftime("%H:%M")
         self.marcas_agd = passo67.marcas_iniciais(lido.pendentes)
         if lido.erro:
             self._log(f"[!] {lido.erro} — liberar, editar, à mão e agendados ficam "
@@ -1095,8 +1096,10 @@ class TelaDoDiaFrame(ttk.Frame):
             return
         # Decisão (a): a releitura é a da nuvem INTEIRA (`passo67.reler_tudo`).
         lido = g.conferencia
+        anteriores = self.lido.pendentes if self.lido is not None else ()
+        pend_antes = list(anteriores)
         self.lido, self.conferencia = lido, lido.conferencia
-        self.marcas_agd = passo67.marcas_iniciais(lido.pendentes, self.marcas_agd)
+        self.marcas_agd = passo67.marcas_iniciais(lido.pendentes, self.marcas_agd, anteriores)
         self._montar_lista()
         self._recalcular()               # passo 2, aportes e (mostrar_numeros) agendados/lista
         self._remontar_para_marcar()
@@ -1114,8 +1117,8 @@ class TelaDoDiaFrame(ttk.Frame):
             if len(resumo) > 1:          # as repetidas (já marcadas): recado, não erro
                 messagebox.showinfo(titulo, resumo[1])
         elif tipo == "respondido":
-            n = len(g.gravado) if isinstance(g.gravado, list) else 1
-            self._log(f"  {n} resposta(s) gravada(s).")
+            for linha in passo67.registro_das_respostas(pend_antes, g.gravado):
+                self._log(f"  {linha}")
 
     def _liberar(self):
         titulo = "Incluir mesmo assim"
@@ -1347,11 +1350,12 @@ class TelaDoDiaFrame(ttk.Frame):
             if recusa:
                 messagebox.showinfo(titulo, recusa)
                 return
-            # Marcado sem prova (sumiu, mudou, aguardando): o dono confirma.
-            pergunta = passo67.pergunta_ao_pagar(pend, self.marcas_agd)
-            if pergunta and not messagebox.askyesno(titulo, pergunta, default="no"):
+            # Sempre pergunta, com favorecido, valor e a prova (e a hora dela).
+            pergunta = passo67.pergunta_ao_pagar(pend, self.marcas_agd, self.lido.provas_de)
+            if not messagebox.askyesno(titulo, pergunta, default="no"):
                 return
-            self._na_nuvem(titulo, lambda c: passo67.responder_pagos(c, itens), "respondido")
+            self._na_nuvem(titulo, lambda c: ("pago", passo67.responder_pagos(c, itens)),
+                           "respondido")
             return
         sel = self.t_agd.selection()
         ident = int(sel[0]) if sel else None
@@ -1367,8 +1371,8 @@ class TelaDoDiaFrame(ttk.Frame):
         if recusa:
             messagebox.showwarning(titulo, recusa)
             return
-        self._na_nuvem(titulo, lambda c: c.responder(ident, resposta, motivo=motivo,
-                                                     nova_data=nova_data), "respondido")
+        self._na_nuvem(titulo, lambda c: (resposta, passo67.responder_um(
+            c, ident, resposta, motivo=motivo, nova_data=nova_data)), "respondido")
 
     # passo 6
     def _novos_para_marcar(self):

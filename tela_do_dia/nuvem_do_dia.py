@@ -28,6 +28,11 @@ class LidoDaNuvem:
     lista_anterior: list = field(default_factory=list)
     erro: str = ""
     avisos: list = field(default_factory=list)
+    #: Hora (HH:MM) da leitura do ERP desta busca; a tela a põe ("" = sem).
+    lido_em: str = ""
+    #: agendado_id → hora da leitura de onde veio a situação, quando ela foi
+    #: REAPROVEITADA numa releitura sem ERP ("" = hora desconhecida).
+    provas_de: dict = field(default_factory=dict)
 
 
 def _envio_deste_agendamento(envio, agendado):
