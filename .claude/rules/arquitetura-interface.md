@@ -369,6 +369,16 @@ paths:
   esquecer um desses passos. De graça: a lista sai do menu JÁ MONTADO
   (`definir_telas`), então vem filtrada pelo PAPEL de quem entrou, e a busca não
   leva ninguém a uma tela que o menu daquela pessoa não mostra.
+  **O `ComboBusca` nunca mostra a lista NATIVA do ttk** (22/10/2026). O
+  clique dele tomava só a seta, e o `ttk::combobox::Press` da classe posta a
+  nativa em todo clique fora do `textarea` (moldura, enchimento; com
+  `readonly`, em qualquer lugar) — era o "às vezes abre a lista antiga" do
+  "Recebeu" dos Aportes. Duas travas: `destino_do_clique` (pura) responde à
+  MESMA pergunta da classe, e só o clique no texto segue para ela; e o
+  `-postcommand` termina em `return`, o que faz o `Post` da classe desistir
+  antes de criar a listbox e abre a nossa no lugar — pega qualquer caminho que
+  ainda chegue lá. Testes: `tests/test_combo_busca_sem_lista_nativa.py`
+  (puro) e o fim de `tests/test_combo_busca.py` (fixture `raiz`).
   **Entrou em 02/09 (PR #30)**: "nenhuma aba escreve `#` seguido de seis
   dígitos" deixa de ser conferência a olho e vira teste — varredura por AST dos
   `.py` **rastreados pelo git**, fora do `widgets.py` e de `tests/`, atrás de

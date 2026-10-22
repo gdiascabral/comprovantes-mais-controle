@@ -280,3 +280,72 @@ def test_enter_de_quem_usa_o_combo_nao_apaga_o_da_lista(combo, teclar):
     assert chamadas == []
     teclar(c, "<Return>")
     assert chamadas == ["MORAIS ENGENHARIA - INTER"]
+
+
+# ---------------------------------------------- a lista nativa nunca abre
+# 22/10/2026: o print do dono mostrava, no "Recebeu" dos Aportes, ora a lista
+# nova, ora a nativa do ttk. A decisão do clique e a trava do -postcommand têm
+# testes puros em `test_combo_busca_sem_lista_nativa.py`; aqui, o combo real.
+def _nativa_visivel(c) -> bool:
+    popdown = f"{c}.popdown"
+    if not int(c.tk.call("winfo", "exists", popdown)):
+        return False
+    return bool(int(c.tk.call("winfo", "ismapped", popdown)))
+
+
+def test_o_post_da_classe_abre_a_nossa_e_nao_a_nativa(combo):
+    """Qualquer caminho que chegue ao `ttk::combobox::Post` (o que o clique na
+    moldura e o ↓ da classe chamam) cai no -postcommand e desiste."""
+    c, root = combo
+    c.tk.call("ttk::combobox::Post", str(c))
+    root.update()
+    assert c.lista_aberta()
+    assert not _nativa_visivel(c)
+
+
+def test_clique_na_moldura_do_campo_abre_a_nossa(combo):
+    """O canto de cima à esquerda é borda/enchimento, não `textarea`: a classe
+    postaria a nativa ali."""
+    c, root = combo
+    c.event_generate("<Button-1>", x=1, y=1)
+    root.update()
+    assert c.lista_aberta()
+    assert not _nativa_visivel(c)
+
+
+def test_clique_no_texto_nao_abre_lista(combo):
+    c, root = combo
+    c.set("MORAIS ENGENHARIA - INTER")
+    y = c.winfo_height() // 2
+    x = 20
+    assert str(c.identify(x, y)).endswith("textarea")
+    c.event_generate("<Button-1>", x=x, y=y)
+    root.update()
+    assert not c.lista_aberta()
+    assert not _nativa_visivel(c)
+
+
+def test_readonly_qualquer_clique_abre_a_nossa(raiz):
+    c = widgets.ComboBusca(raiz, width=30, state="readonly")
+    c.pack()
+    c.definir_valores(CONTAS)
+    raiz.update()
+    try:
+        c.event_generate("<Button-1>", x=20, y=c.winfo_height() // 2)
+        raiz.update()
+        assert c.lista_aberta()
+        assert not _nativa_visivel(c)
+    finally:
+        c.destroy()
+        raiz.update()
+
+
+def test_a_etiqueta_toma_o_clique_antes_da_classe(combo):
+    """A etiqueta vem antes da `TCombobox`, e nela só há `<Button-1>`, que o
+    Tk casa também com o duplo, o triplo e o com Shift."""
+    c, _root = combo
+    tags = c.bindtags()
+    assert tags.index(widgets.ComboBusca._ETIQUETA) < tags.index("TCombobox")
+    cliques = [s for s in c.bind_class(widgets.ComboBusca._ETIQUETA)
+               if "Button" in s]
+    assert cliques == ["<Button-1>"]
