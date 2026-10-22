@@ -179,6 +179,25 @@ paths:
   suavizar e binarizar no `LIMIAR` — só volta código que passa no CRC.
   `recebedor_confere` aceita nome IGUAL mesmo curto (sigla de 3 letras no QR
   e no favorecido saía "conferir quem recebe").
+  (k) **Pedidos do dono de 22/10/2026** (`tests/test_reembolso_socio_e_autorizado.py`),
+  os dois em falha FECHADA e só sem boleto anexado. **Reembolso de sócio**:
+  "REEMBOLSO <pessoa>" no documento, com a pessoa no `pix_reembolso.json`
+  (`reembolso.socio_do_documento`: casa por palavras do começo e com UMA
+  entrada; chave de pessoa, CPF fechando o DV; documento = o cadastrado ou a
+  própria chave CPF, e os dois têm de ser o mesmo) sai Pix pela chave dela,
+  "APTO* (reembolso)", Obs "reembolso a <pessoa> — chave do cadastro", e o
+  segmento B declara a pessoa (`reembolso=True`, desmarcado na remessa). Fora
+  do cadastro, continua "ATENÇÃO — documento declara reembolso".
+  **Pagamento autorizado**: anexo cujo nome diz "autoriza" ou cujo texto diz
+  "PAGAMENTO AUTORIZADO" (`eh_autorizacao`; nunca boleto, nota, comprovante
+  ou "PAGAR PARA") não é boleto — era o PDF "neutro" único e virava "Boleto em
+  imagem". Sem boleto nos OUTROS anexos e com chave inequívoca em
+  `paidToBankAccount` (`chave_dos_dados_bancarios`: tipo conhecido, DV
+  fechando), paga por ela, Obs "pagamento autorizado (anexo) — Pix dos dados
+  bancários do lançamento". `"pix_dos_dados_bancarios": true` no
+  `regras_fornecedor.json` faz o mesmo para o favorecido sem o anexo (aí só
+  anexo que SE ANUNCIA boleto conta como boleto). Vale para a Remessa/Retorno
+  igual: é o mesmo `montar_registros`.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e

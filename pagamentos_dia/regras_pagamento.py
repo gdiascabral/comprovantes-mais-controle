@@ -202,6 +202,18 @@ def cnpj_livre(favorecido: str, regras: dict) -> bool:
     return bool(regra_do_fornecedor(favorecido, regras).get("cnpj_livre"))
 
 
+def pix_dos_dados_bancarios(favorecido: str, regras: dict) -> bool:
+    """O favorecido está SEMPRE autorizado a receber pelo Pix dos Dados
+    Bancários do lançamento (`paidToBankAccount`), mesmo sem o anexo
+    "PAGAMENTO AUTORIZADO".
+
+    Pedido do dono em 22/10/2026 ("para essa favorecida sempre autorizar"):
+    o anexo da autorização era lido como boleto em imagem e a linha saía
+    "sem dados de pgto". O nome mora no `regras_fornecedor.json`, fora do
+    repositório; a chave continua tendo de ser válida (`relatorio`)."""
+    return bool(regra_do_fornecedor(favorecido, regras).get("pix_dos_dados_bancarios"))
+
+
 def motivo_omissao(valor: float, favorecido: str, dados: str,
                    tem_documento: bool, regras: dict,
                    valor_documento: float | None = None,

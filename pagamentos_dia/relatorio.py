@@ -784,6 +784,54 @@ def classificar_anexos(files) -> str:
     return "OUTRO"
 
 
+#: "PAGAMENTO AUTORIZADO - <nome>": a autorização de pagar, não um boleto
+#: (dono, 22/10/2026). O PDF era o único "neutro" do título e virava "Boleto
+#: em imagem — preencher manual", com o Pix nos Dados Bancários do próprio
+#: lançamento.
+_AUTORIZACAO_NO_ROTULO = re.compile(r"autoriza", re.I)
+_AUTORIZACAO_NO_TEXTO = re.compile(r"pagamento\s+autorizado", re.I)
+
+
+def eh_autorizacao(f: dict, textos: dict | None = None) -> bool:
+    """O anexo é uma AUTORIZAÇÃO de pagamento, pelo nome ou pelo texto.
+
+    Nunca o que se anuncia boleto, nota, comprovante ou aviso "PAGAR PARA"
+    (rótulo), nem texto de quem já pagou: "pagamento autorizado" num
+    comprovante é o banco dizendo que pagou."""
+    rotulo = _rotulo(f)
+    if _E_BOLETO.search(rotulo) or _NAO_E_BOLETO.search(rotulo):
+        return False
+    if _AUTORIZACAO_NO_ROTULO.search(rotulo):
+        return True
+    texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
+    return bool(_AUTORIZACAO_NO_TEXTO.search(texto)
+                and not _PROVA_DE_PAGAMENTO.search(texto))
+
+
+def chave_dos_dados_bancarios(pago_para: str) -> str:
+    """A chave Pix dos Dados Bancários do lançamento (`paidToBankAccount`),
+    só quando ela é inequívoca — senão "".
+
+    Tipo conhecido (`regras.tipo_de_chave_pix`: uma TED escrita à mão não tem)
+    e, sendo CPF/CNPJ, dígito verificador fechando (`_chave_confiavel`)."""
+    if not pago_para or not regras.tipo_de_chave_pix(pago_para):
+        return ""
+    achado = chave_pix_por_padrao(pago_para)
+    if not achado or not _chave_confiavel(achado):
+        return ""
+    digitos = re.sub(r"\D", "", achado)
+    if (regras.tipo_de_chave_pix(pago_para) in (regras.CHAVE_CPF, regras.CHAVE_CNPJ)
+            and not regras.documento_valido(digitos)):
+        return ""
+    return achado
+
+
+def _sem_boleto(files, textos: dict, valor, urls_ocr=()) -> bool:
+    """Nenhum anexo se anuncia boleto e nenhum traz linha digitável válida."""
+    return not tem_boleto(files) and not _linhas_dos_anexos(files, textos, valor,
+                                                            urls_ocr)
+
+
 def nome_do_reembolso(files) -> str:
     """Quem o aviso manda pagar. Mora no `reembolso`, que é quem decide.
 
@@ -1685,6 +1733,42 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             if escondida or onde:
                 tipo = "Boleto"
 
+        # Pedidos do dono de 22/10/2026, os dois em falha FECHADA: sem certeza,
+        # a linha segue o caminho de sempre (e o alarme de sempre).
+        # - `socio`: o documento diz "REEMBOLSO <pessoa>" e a pessoa está no
+        #   cadastro local com a chave (`reembolso.socio_do_documento`) — o
+        #   Pix vai para ELA, não para a loja do favorecido;
+        # - `autorizado_por`: anexo "PAGAMENTO AUTORIZADO" (ou o favorecido
+        #   com `pix_dos_dados_bancarios` no `regras_fornecedor.json`) — paga
+        #   o Pix dos Dados Bancários do próprio lançamento.
+        # Boleto anexado continua ganhando dos dois.
+        socio, chave_socio, autorizado_por, chave_db = None, "", "", ""
+        if not item.get("paid") and cls != "PAGAR_PARA":
+            if (documento_declara_reembolso(item, overview)
+                    and _sem_boleto(files, textos, valor, urls_ocr)):
+                achado = reembolso.socio_do_documento(
+                    quem_o_documento_diz_reembolsar(item, overview),
+                    cadastro_reembolso or {})
+                if achado:
+                    socio, chave_socio = achado
+            if socio is None:
+                autorizacoes = [f for f in files if eh_autorizacao(f, textos)]
+                pela_regra = regras.pix_dos_dados_bancarios(favorecido, regras_forn)
+                if autorizacoes:
+                    # A autorização não é boleto: o que sobra é que decide.
+                    outros = [f for f in files if f not in autorizacoes]
+                elif pela_regra:
+                    # O favorecido marcado: só o anexo que SE ANUNCIA boleto
+                    # conta como boleto (dono: "para essa sempre autorizar").
+                    outros = [f for f in files if tem_boleto([f])]
+                else:
+                    outros = None
+                if outros is not None:
+                    chave_db = chave_dos_dados_bancarios(pago_para)
+                    if chave_db and _sem_boleto(outros, textos, valor, urls_ocr):
+                        autorizado_por = ("anexo" if autorizacoes
+                                          else "regra do favorecido")
+
         if cls == "PAGAR_PARA":
             tipo = "Pix"
             tem_documento = True
@@ -1758,6 +1842,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                               f"(documento: {pessoa.origem})")
             elif pessoa.impedimento:
                 avisos.append(pessoa.impedimento)
+        elif socio is not None:
+            tipo, dados, tem_documento, onde = "Pix", chave_socio, True, None
+            pessoa = socio
+            obs = f"reembolso a {socio.nome} — chave do cadastro"
+        elif autorizado_por:
+            tipo, dados, tem_documento, onde = "Pix", chave_db, True, None
+            obs = (f"pagamento autorizado ({autorizado_por}) — Pix dos dados "
+                   "bancários do lançamento")
         elif tipo == "Pix":
             dados = extrair_chave_pix(pago_para) if pago_para else ""
             if not parece_chave_pix(dados):
@@ -1982,7 +2074,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # são os mesmos onze dígitos. Só avisa quando HÁ chave e o tipo não
         # dá para saber — nas outras não há o que perguntar.
         if (tipo == "Pix" and not qr_usado
-                and regras.chave_pix_ambigua(pago_para or dados, dados)):
+                and regras.chave_pix_ambigua(
+                    dados if socio is not None else (pago_para or dados), dados)):
             avisos.append("Chave Pix sem tipo declarado — confirmar se é CPF, "
                           "celular ou aleatória.")
 
@@ -2058,6 +2151,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         status = {"SEM_ANEXO": "ATENÇÃO — sem anexo",
                   "AUTORIZADO": "APTO (autorizado)",
                   "PAGAR_PARA": "APTO* (reembolso)"}.get(cls, "APTO")
+        if socio is not None:
+            # Reembolso como o do aviso: APTO*, e nasce desmarcado na remessa.
+            status = "APTO* (reembolso)"
         if not dados:
             status = "ATENÇÃO — sem dados de pgto"
         # O documento diz REEMBOLSO e não há aviso "PAGAR PARA": o favorecido
@@ -2073,7 +2169,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # então o nome do documento entra como um: usar a régua, e não uma
         # cópia dela. Vem ANTES do `divergiu`, para "documento não bate" — a
         # contradição concreta — ganhar do alarme; a Obs guarda os dois.
-        if (cls != "PAGAR_PARA" and not item.get("paid")
+        if (cls != "PAGAR_PARA" and socio is None and not item.get("paid")
                 and documento_declara_reembolso(item, overview)):
             quem = quem_o_documento_diz_reembolsar(item, overview)
             e_o_favorecido = bool(quem) and reembolso.pessoa_e_o_favorecido(
@@ -2188,7 +2284,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # tem um par nome/documento — ver MOTIVO_REEMBOLSO.
             # `valor_diverge` é o boleto que contradiz o lançamento; na planilha
             # ele é só um alarme, mas na remessa é o valor que sairia errado.
-            "reembolso": cls == "PAGAR_PARA",
+            # O sócio do "REEMBOLSO X" no documento (dono, 22/10/2026) também:
+            # o Pix é dele, e o segmento B tem de declará-lo, não a loja.
+            "reembolso": cls == "PAGAR_PARA" or socio is not None,
             "valor_diverge": bool(valor_diverge),
             # Quem recebe o reembolso, resolvido pelo `reembolso.identificar`.
             # Vêm preenchidos JUNTOS e da mesma fonte: é essa amarra que
