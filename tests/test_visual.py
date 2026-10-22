@@ -149,6 +149,25 @@ def test_os_dois_temas_tem_os_mesmos_papeis():
     assert set(widgets.PALETA["claro"]) == set(widgets.PALETA["escuro"])
 
 
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+def test_a_barra_de_cima_tem_a_cor_da_pagina(tema):
+    """22/10/2026: a barra de cima deixa de ser uma faixa azul e fica na cor
+    da página, como o cabeçalho das abas (protótipo da repaginada)."""
+    p = widgets.PALETA[tema]
+    assert p["marca_barra"] == p["fundo"]
+
+
+def test_o_escuro_e_azul_marinho():
+    """Pedido do dono em 22/10/2026: o tema escuro em azul-marinho, como no
+    protótipo aprovado, e não no cinza quase preto de antes. "Azul" aqui é
+    medido: o canal azul passa o vermelho com folga e passa o verde."""
+    escuro = widgets.PALETA["escuro"]
+    for papel in ("fundo", "cartao", "borda", "zebra", "cabecalho"):
+        cor = escuro[papel]
+        r, g, b = (int(cor[i:i + 2], 16) for i in (1, 3, 5))
+        assert b >= r + 20 and b > g, f"{papel} não é azul-marinho: {cor}"
+
+
 # ------------------------------------- o que a interface PINTA de verdade
 # Os três testes acima medem o que a PALETA permite; estes medem o que a TELA
 # usa, e a diferença não é acadêmica.
@@ -204,17 +223,23 @@ PARES_DE_TEXTO = (
     ("atencao", "atencao_fundo", "PillAtencao.TLabel"),
     ("erro", "erro_fundo", "PillErro.TLabel"),
     ("info", "info_fundo", "PillInfo.TLabel"),
-    ("marca", "marca_fundo", "ItemAtivo.TLabel (o item aberto do menu) e a "
-                             "linha selecionada da tabela"),
+    ("marca", "marca_fundo", "a linha selecionada da tabela"),
+    # O item aberto do menu é azul CHEIO com branco desde 22/10/2026
+    # (protótipo da repaginada); antes era azul-claro com texto azul.
+    (BRANCO, "marca_solida", "ItemAtivo.TLabel, o item aberto do menu"),
     # ---- branco sobre cor SÓLIDA: a direção que ninguém media
     (BRANCO, "acao", "Botao papel=\"acao\", o executar verde"),
     (BRANCO, "acao_ativo", "o mesmo botão verde sob o cursor"),
     (BRANCO, COR_DO_PASSO, "Botao papel=\"passo\", o círculo numerado do "
                            "Cartao e o dia escolhido do calendário"),
-    (BRANCO, "marca_barra", "Barra.TLabel e Marca.TLabel na barra de cima, e "
-                            "o botão de passo sob o cursor"),
+    # ---- a barra de cima: desde 22/10/2026 na cor da PÁGINA (sem faixa
+    # azul), então o texto dela é o do papel `barra_texto`, não branco fixo
+    ("barra_texto", "marca_barra", "Barra.TLabel e Marca.TLabel na barra de "
+                                   "cima"),
     ("marca_sub", "marca_barra", "BarraTenue.TLabel, o texto secundário "
                                  "DENTRO da barra de cima"),
+    ("marca_sub", "cartao", "a dica cinza no campo de busca da barra"),
+    ("barra_texto", "cartao", "o que se digita no campo de busca da barra"),
     # ---- o cabeçalho da página, que desde 22/10/2026 mora no MESMO fundo da
     # aba (sem faixa própria): as três linhas dele e o rótulo do botão
     # desligado, que é o mesmo cinza da trilha sobre o fundo do painel
@@ -240,6 +265,7 @@ PARES_DE_COMPONENTE = (
     ("acao", "cartao", "o botão verde, dentro de um cartão"),
     ("acao", "fundo", "o botão verde, no cabeçalho da página"),
     ("marca", "fundo", "o anel de foco do ItemMenu com o cursor no mesmo item"),
+    ("marca_solida", "cartao", "a pílula azul do item aberto contra o menu"),
 )
 
 
@@ -1090,3 +1116,89 @@ def test_o_subtitulo_longo_nao_corta_os_botoes_do_cabecalho(raiz):
         assert int(str(cab.lbl_apoio.cget("wraplength"))) < widgets.px(820)
     finally:
         aba.destroy()
+
+
+def test_a_barra_de_cima_escreve_na_cor_do_papel(raiz):
+    """Nada de branco fixo na barra: no tema claro ela agora é clara."""
+    st = ttk.Style()
+    try:
+        for escuro in (False, True):
+            widgets.aplicar_estilos(escuro)
+            p = widgets.PALETA["escuro" if escuro else "claro"]
+            for estilo in ("Barra.TLabel", "Marca.TLabel"):
+                frente = str(st.lookup(estilo, "foreground")).lower()
+                assert frente == p["barra_texto"].lower(), estilo
+    finally:
+        widgets.aplicar_estilos(False)
+
+
+def test_o_item_aberto_do_menu_e_azul_cheio(raiz):
+    """Protótipo de 22/10/2026: o item aberto é azul cheio com texto branco, e
+    o ● de aba trabalhando continua visível em cima dele (branco, não azul)."""
+    widgets.aplicar_estilos(False)
+    c = widgets.cores()
+    item = widgets.ItemMenu(raiz, "Pagamentos do dia")
+    item.pack()
+    try:
+        item.ativar(True)
+        assert str(item.cget("background")).lower() == c["marca_solida"].lower()
+        frente = str(ttk.Style().lookup("ItemAtivo.TLabel", "foreground"))
+        assert frente.lower() == "#ffffff"
+        item.trabalhando(True)
+        assert str(item.lbl_icone.cget("foreground")).lower() == "#ffffff"
+    finally:
+        item.destroy()
+
+
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+def test_o_botao_de_passo_sob_o_cursor_continua_legivel(tema):
+    """Revisão de 22/10/2026: clarear o azul sob o cursor deixava o branco em
+    4,2:1 no escuro. O tom sob o cursor ESCURECE, e o rótulo segue legível."""
+    paleta = widgets.PALETA[tema]
+    sob_o_cursor = widgets.cor_do_passo_sob_o_cursor(paleta)
+    assert _contraste(BRANCO, sob_o_cursor) >= MINIMO
+
+
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+def test_o_botao_da_barra_tem_contorno_visivel(tema):
+    """Desde 22/10/2026 o botão da barra ("Minha aba no ERP") é cartão sobre a
+    cor da página: sem moldura ele virava texto solto (1,13:1)."""
+    paleta = widgets.PALETA[tema]
+    razao = _contraste(paleta[widgets.BORDA_DA_BARRA], paleta["marca_barra"])
+    assert razao >= MINIMO_DESLIGADO, _br(razao)
+
+
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+@pytest.mark.parametrize("estado", ("livre", "ocupado"))
+def test_a_bolinha_do_navegador_aparece_na_barra(tema, estado):
+    """A bolinha livre/ocupado era um verde e um âmbar fixos, claros, feitos
+    para a barra azul; na barra da cor da página clara ela sumia (1,4:1)."""
+    paleta = widgets.PALETA[tema]
+    cor = widgets.cor_da_bolinha(paleta, estado)
+    assert _contraste(cor, paleta["marca_barra"]) >= MINIMO_COMPONENTE
+
+
+def _primeiro_elemento(st, estilo: str) -> str:
+    return st.layout(estilo)[0][0]
+
+
+def test_tabela_e_grupo_do_menu_seguem_a_paleta_nos_dois_temas(raiz):
+    """Galeria de 22/10/2026: no escuro azul-marinho, o fundo da tabela, o
+    cabeçalho dela e os botões DIÁRIO/MENSAL ficavam no cinza do sv-ttk, que
+    os desenha por IMAGEM e ignora a cor. Agora eles usam peças do tema
+    `clam` do próprio Tk, que aceitam cor — e a troca de tema as recria."""
+    st = ttk.Style()
+    try:
+        for escuro in (True, False, True):
+            widgets.aplicar_estilos(escuro)
+            c = widgets.PALETA["escuro" if escuro else "claro"]
+            for estilo in ("Tabela.Treeview", "Dupla.Treeview"):
+                assert _primeiro_elemento(st, estilo) == "Mc.Treeview.field"
+                assert str(st.lookup(estilo, "bordercolor")).lower() == c["borda"].lower()
+            for estilo in ("Tabela.Treeview.Heading", "Dupla.Treeview.Heading"):
+                assert _primeiro_elemento(st, estilo) == "Mc.Treeheading.cell"
+                assert str(st.lookup(estilo, "lightcolor")).lower() == c["cabecalho"].lower()
+            assert _primeiro_elemento(st, "Grupo.Toolbutton") == "Mc.Toolbutton.button"
+            assert str(st.lookup("Grupo.Toolbutton", "lightcolor")).lower() == c["cartao"].lower()
+    finally:
+        widgets.aplicar_estilos(False)
