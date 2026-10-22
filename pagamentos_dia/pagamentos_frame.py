@@ -3799,7 +3799,9 @@ class PagamentosDiaFrame(ttk.Frame):
         de hoje (`sugerir_periodo`; tela buscada ontem) também não: a remessa
         sairia com os vencimentos de outro dia. `hoje` só existe para o teste.
         `resultado` é o da tela do dia já com liberados/editados (entrega 2);
-        `None` remonta como sempre."""
+        `None` remonta como sempre. Com `resultado=`, os `desmarcados` NÃO são
+        aplicados aqui: eles já têm de vir aplicados no resultado (quem o
+        monta passa os mesmos ids a `remontar`/`montar_registros`)."""
         from conciliacao.models import sugerir_periodo
         if self.worker and not self.worker.done():
             messagebox.showinfo("Remessa", "Espere a rotina desta aba terminar.")

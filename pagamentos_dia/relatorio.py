@@ -1513,6 +1513,14 @@ class Resultado(NamedTuple):
     omitidos: list        # [{conta, tipo, valor, descricao, favorecido, motivo}]
 
 
+#: Status da linha que a tela "Pagamentos do dia" liberou e que as regras de
+#: sempre dariam como APTO (valor simbólico, fornecedor só com reembolso…).
+#: Começa com "ATENÇÃO" de propósito: nasce DESMARCADA na janela de
+#: confirmação e na remessa CNAB (`remessa_dia.Candidato.apto` só aceita
+#: "APTO…"), e quem quiser pagar marca à mão. Liberar não é aprovar.
+STATUS_LIBERADO = "ATENÇÃO — liberado na tela do dia"
+
+
 def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      incluir=(), excluir=(), pix_reembolso=None,
                      urls_ocr=(), regras_fornecedor=None,
@@ -1545,7 +1553,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
     `ids_liberados`      lançamentos que a tela "Pagamentos do dia" liberou
                          com motivo, na nuvem; saem dos omitidos com o
                          bloqueio em `bloqueio_liberado`; vazio = como sempre.
-                         Desmarcado (`ids_nao_confirmados`) continua ganhando
+                         Desmarcado (`ids_nao_confirmados`) continua ganhando.
+                         Liberado que seria APTO sai `STATUS_LIBERADO`, para
+                         nunca nascer marcado na confirmação nem na remessa
     """
     pix_reembolso = pix_reembolso or {}
     regras_forn = regras_fornecedor or {}
@@ -2121,6 +2131,10 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # Por último entre os alarmes: pagar o valor errado é o pior deles.
         if valor_diverge:
             status = "ATENÇÃO — valor do boleto diverge"
+        if liberado_de and status.startswith("APTO"):
+            # Só com `ids_liberados` preenchido: a Remessa nunca passa aqui.
+            # Alarme que já era ATENÇÃO fica como está (é mais específico).
+            status = STATUS_LIBERADO
         if item.get("paid"):
             # dateOfPayment as vezes vem em epoch (numero), e concatenar
             # numero com string levanta TypeError no meio do relatorio.
