@@ -37,6 +37,9 @@ class ResultadoVarios:
     por_arquivo: list = field(default_factory=list)   # (nome, resposta da API)
     entraram: list = field(default_factory=list)      # nomes que estão no pagamento
     faltaram: list = field(default_factory=list)      # nomes que NÃO estão
+    #: Por qual critério o "anexado" foi provado ("nome"; vazio sem prova).
+    #: Fica registrado para um critério novo (tamanho) entrar sem mudar o resto.
+    provado_por: str = ""
 
     @property
     def ok(self) -> bool:
@@ -96,14 +99,22 @@ def anexar_varios(api, paid_id, arquivos, *, dry_run=False, log=None) -> Resulta
         if r == "dry_run":
             continue
         if r != mc_api.ANEXADO:
-            entraram = [nome for nome, resp in por_arquivo if resp == mc_api.ANEXADO]
-            faltaram = [b.name for b in arquivos if b.name not in entraram]
-            talvez = (f" (o {a.name} pode ter ficado lá sem arquivo)"
-                      if r.startswith("erro:upload:") else "")
+            # Quem entrou se sabe pela RELEITURA, pelo nome — como na prova
+            # final; o "anexado" da API sozinho não basta.
+            depois, erro = _listagem(api, paid_id)
+            if erro:
+                entraram, faltaram = [], [b.name for b in arquivos]
+                releitura = f" (não deu para reler os anexos: {erro})"
+            else:
+                entraram, faltaram = _separar(depois, arquivos)
+                releitura = ""
+            # Só no erro:batch: o ERP recusou antes de o arquivo sair.
+            talvez = ("" if r.startswith("erro:batch:")
+                      else f" (o {a.name} pode ter ficado lá)")
             return ResultadoVarios(
                 f"erro:parcial:{k - 1}/{n} subiram, o {k}º deu {r} — entraram: "
                 f"{', '.join(entraram) or 'nenhum'}; faltaram: {', '.join(faltaram)}"
-                f"{talvez} — confira o lançamento", por_arquivo, entraram, faltaram)
+                f"{talvez}{releitura} — confira o lançamento", por_arquivo, entraram, faltaram)
     if dry_run:
         return ResultadoVarios("dry_run", por_arquivo)
     depois, erro = _listagem(api, paid_id)
@@ -112,7 +123,7 @@ def anexar_varios(api, paid_id, arquivos, *, dry_run=False, log=None) -> Resulta
                                [a.name for a in arquivos])
     entraram, faltaram = _separar(depois, arquivos)
     if not faltaram:
-        return ResultadoVarios(mc_api.ANEXADO, por_arquivo, entraram, [])
+        return ResultadoVarios(mc_api.ANEXADO, por_arquivo, entraram, [], provado_por="nome")
     return ResultadoVarios(f"erro:nao_confirmado:{len(entraram)}/{n}", por_arquivo,
                            entraram, faltaram)
 
@@ -137,16 +148,29 @@ def fase_das_somas(api, pagos, pasta, *, simular, carregar_pdfs=matcher.carregar
     `matcher_somado`. `pagos` são TODOS os do período.
 
     Dúvida de soma é quem tem `motivo_soma` (o `matcher_somado` grava e mantém o
-    status "SEM PAR"): vai para `somas.duvidas` com o motivo — inclusive a que
-    já vinha marcada de antes, que não é somada de novo."""
+    status "SEM PAR", com `motivo_sem_par` igual): vai para `somas.duvidas` com o
+    motivo — inclusive a que já vinha marcada de antes, que não é somada de
+    novo. `motivo_soma` de quem não está SEM PAR, ou que sobrou de outra rodada
+    (o `motivo_sem_par` desta rodada é outro), não prende ninguém.
+
+    Uma soma cujo total, data e obra coincidem com OUTRO pago do período que
+    já tem anexo (ou que não deu para verificar) vira dúvida: pode ser o par
+    que uma rodada anterior já anexou lá."""
     somas = Somas()
-    ja_em_duvida = [p for p in pagos if p.get("status") == "SEM PAR" and p.get("motivo_soma")]
+    ja_em_duvida = [p for p in pagos if p.get("status") == "SEM PAR" and p.get("motivo_soma")
+                    and p.get("motivo_sem_par") == p.get("motivo_soma")]
     somas.duvidas.extend(ja_em_duvida)
-    sem_par = [p for p in pagos if p.get("status") == "SEM PAR" and not p.get("motivo_soma")
+    sem_par = [p for p in pagos if p.get("status") == "SEM PAR"
                and p.get("motivo_sem_par") == matcher_somado.MOTIVO_NENHUM_PDF]
+    for p in sem_par:
+        p.pop("motivo_soma", None)                         # sobra de outra rodada
     if not sem_par or cancelar():
         return somas
-    att = api.verificar_anexos([p["paidId"] for p in sem_par], log, cancelar=cancelar)
+    ids_sem_par = {p["paidId"] for p in sem_par}
+    gemeos = {id(p): [q for q in pagos if _mesmo_valor_data_obra(p, q)] for p in sem_par}
+    ids_gemeos = sorted({q["paidId"] for qs in gemeos.values() for q in qs} - ids_sem_par)
+    att = api.verificar_anexos([p["paidId"] for p in sem_par] + ids_gemeos, log,
+                               cancelar=cancelar)
     if cancelar():
         return somas
     estados = {p["paidId"]: mc_api.estado_anexo(att, p["paidId"]) for p in sem_par}
@@ -165,15 +189,45 @@ def fase_das_somas(api, pagos, pasta, *, simular, carregar_pdfs=matcher.carregar
             log("[aviso] não deu para saber a conta de origem — as somas seguem sem essa regra.")
     somados, duvidas = matcher_somado.casar_somados(livres, pdfs, todos=pagos)
     somas.duvidas.extend(duvidas)
+    seguros = []
     for pe in somados:
+        if any(mc_api.estado_anexo(att, q["paidId"]) != mc_api.SEM_ANEXO
+               for q in gemeos[id(pe)]):
+            _desfazer_soma(pe, pdfs)
+            pe["motivo_soma"] = pe["motivo_sem_par"] = (
+                "outro pagamento com o mesmo valor, data e obra já tem anexo (ou não deu "
+                "para verificar) — a soma pode ser a dele; anexe à mão")
+            somas.duvidas.append(pe)
+        else:
+            seguros.append(pe)
+    for pe in seguros:
         if cancelar():
             break
         r = anexar_varios(api, pe["paidId"], [pasta / fn for fn in pe["pdfs"]],
                           dry_run=simular, log=log)
         pe["resultado"], pe["pdf"] = r.estado, " + ".join(pe["pdfs"])
         pe["entraram"], pe["faltaram"] = r.entraram, r.faltaram
+        pe["provado_por"] = r.provado_por
         somas.anexados.append(pe)
     return somas
+
+
+def _mesmo_valor_data_obra(pe, q) -> bool:
+    if q is pe or q.get("paidId") == pe.get("paidId") or q.get("data") != pe.get("data"):
+        return False
+    obras = {matcher._norm(w) for w in pe.get("works") or ()}
+    return bool(matcher._vals(q) & matcher._vals(pe)
+                and obras & {matcher._norm(w) for w in q.get("works") or ()})
+
+
+def _desfazer_soma(pe, pdfs):
+    """Devolve ao estado de dúvida um somado que não vai ser anexado."""
+    for pd in pdfs:
+        if pd.get("used_by") == pe["paidId"]:
+            pd["used_by"] = None
+    pe["status"] = "SEM PAR"
+    for k in ("pdfs", "motivo"):
+        pe.pop(k, None)
 
 
 def juntar_fim(fim1: tuple, somas: Somas) -> tuple:

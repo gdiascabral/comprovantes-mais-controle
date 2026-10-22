@@ -213,6 +213,80 @@ def test_fase_das_somas_relata_parcial(tmp_path):
     assert f"entraram: {A600}" in texto and f"faltaram: {A400}" in texto
 
 
+def test_anexado_registra_o_criterio_da_prova(tmp_path):
+    r = vc.anexar_varios(ApiFalsa(), "P1", _arquivos(tmp_path))
+    assert r.estado == "anexado" and r.provado_por == "nome"
+    r2 = vc.anexar_varios(ApiFalsa(some=True), "P1", _arquivos(tmp_path))
+    assert r2.provado_por == ""
+
+
+def test_parcial_rele_a_listagem_e_separa_pelo_nome(tmp_path):
+    """A API disse "anexado" no 1º, mas a releitura não o mostra pelo nome:
+    ele NÃO conta como entrou. E o 2º, com erro que não é de batch, pode ter
+    ficado lá."""
+    api = ApiFalsa(respostas=["anexado", "erro:nao_confirmado"], some=True)
+    r = vc.anexar_varios(api, "P1", _arquivos(tmp_path))
+    assert r.estado.startswith("erro:parcial:")
+    assert r.entraram == [] and r.faltaram == [A600, A400]
+    assert "pode ter ficado lá" in r.estado
+
+
+def test_parcial_por_erro_de_batch_nao_diz_que_pode_ter_ficado(tmp_path):
+    api = ApiFalsa(respostas=["anexado", "erro:batch:500"])
+    r = vc.anexar_varios(api, "P1", _arquivos(tmp_path))
+    assert r.entraram == [A600] and r.faltaram == [A400]
+    assert "pode ter ficado lá" not in r.estado
+
+
+def test_soma_igual_a_pago_que_ja_tem_anexo_vira_duvida(tmp_path):
+    """Rodada 1 anexou A600+A400 em P1. Rodada 2: P2, gêmeo (mesmo valor, data
+    e obra) SEM PAR, não pode receber os mesmos dois de novo."""
+    p1, p2 = _pend("P1"), _pend("P2")
+    matcher.casar([p2], [])
+    api = ApiFalsa()
+    api.anexos["P1"] = [{"name": A600, "sizeInBytes": 10}, {"name": A400, "sizeInBytes": 11}]
+    somas = _fase(tmp_path, api, [p1, p2])
+    assert somas.anexados == [] and api.enviados == []
+    assert somas.duvidas == [p2] and p2["status"] == "SEM PAR"
+    assert "já tem anexo" in p2["motivo_soma"]
+
+
+def test_soma_igual_a_pago_nao_verificado_tambem_vira_duvida(tmp_path):
+    p1, p2 = _pend("P1"), _pend("P2")
+    matcher.casar([p2], [])
+    api = ApiFalsa(nao_verifica={"P1"})
+    somas = _fase(tmp_path, api, [p1, p2])
+    assert somas.anexados == [] and api.enviados == [] and somas.duvidas == [p2]
+
+
+def test_pago_de_outra_obra_com_anexo_nao_atrapalha(tmp_path):
+    p1, p2 = _pend("P1"), _pend("P2")
+    p1["works"] = ["OUTRA OBRA"]
+    matcher.casar([p2], [])
+    api = ApiFalsa()
+    api.anexos["P1"] = [{"name": "x.pdf", "sizeInBytes": 3}]
+    somas = _fase(tmp_path, api, [p1, p2])
+    assert [p["paidId"] for p in somas.anexados] == ["P2"] and somas.ok == 1
+
+
+def test_motivo_soma_de_quem_nao_esta_sem_par_e_ignorado(tmp_path):
+    pe = _pend()
+    pe.update(status="CERTEZA", pdf="outro.pdf", motivo_soma="motivo velho")
+    somas = _fase(tmp_path, ApiFalsa(), [pe])
+    assert somas.duvidas == [] and somas.anexados == []
+
+
+def test_motivo_soma_velho_nao_prende_quem_esta_sem_par_agora(tmp_path):
+    """SEM PAR nesta rodada pelo matcher (motivo_sem_par = nenhum PDF) com um
+    `motivo_soma` que sobrou de antes: é somado de novo."""
+    pe = _pend()
+    pe["motivo_soma"] = "motivo velho"
+    matcher.casar([pe], [])
+    somas = _fase(tmp_path, ApiFalsa(), [pe])
+    assert [p["paidId"] for p in somas.anexados] == ["P1"] and somas.duvidas == []
+    assert "motivo_soma" not in pe
+
+
 def test_o_motivo_que_abre_a_porta_e_o_do_matcher_somado():
     assert vc.matcher_somado.MOTIVO_NENHUM_PDF is matcher_somado.MOTIVO_NENHUM_PDF
 
