@@ -171,6 +171,8 @@ def validar_edicao_da_tela(registro: dict, campos: dict, motivo: str) -> str:
       fornecedor (o dinheiro vai para OUTRA pessoa);
     - parte de lançamento dividido não muda a forma de pagar (a mesma linha
       digitável iria às N partes)."""
+    if "reembolso_nome" in campos and not _limpo(campos["reembolso_nome"]):
+        return "Para tirar o reembolso, use «Desfazer» (volta tudo ao que o ERP diz)."
     erro = cf.validar_edicao(campos, motivo)
     if erro:
         return erro
@@ -226,7 +228,7 @@ def gravar_e_reler(cliente, dia, fazer, *, recado=str, reler=reler_conferencia) 
     try:
         gravado = fazer(cliente)
     except Exception as e:                                   # noqa: BLE001
-        erro = recado(e)
+        erro = recado(e) + chr(10) * 2 + CONFIRA_DEPOIS_DO_ERRO
     try:
         conf = reler(cliente, dia)
     except Exception as e:                                   # noqa: BLE001
@@ -262,3 +264,62 @@ def recado_do_link(texto: str, lido, ident_do_texto: str) -> str:
     if lido.id != ident_do_texto:
         return "O link mudou depois de lido: leia o lançamento de novo."
     return ""
+
+
+# ------------------------------------------------- conserto da rodada 1
+#: Depois de um erro de gravação a resposta pode ter se perdido com a linha
+#: já gravada: a tabela relida é a verdade, e não o recado.
+CONFIRA_DEPOIS_DO_ERRO = ("Pode ter gravado ou não — a tabela abaixo mostra o que está na "
+                          "nuvem agora; confira antes de repetir.")
+PERGUNTA_SEM_NUVEM = ("Não consegui ler a nuvem: as decisões de hoje (liberados, "
+                      "desmarcados, edições, à mão) NÃO estão aplicadas. Gerar mesmo assim?")
+
+
+@dataclass(frozen=True)
+class Botoes:
+    """O que fica ligado na tela. `dia` = Excel, Mandar aportes, sugestão e
+    movimentos à mão; `geradores` = planilha, HTML e remessa; `passo2` = os
+    que gravam na nuvem; `buscar` = o Buscar."""
+
+    dia: bool
+    geradores: bool
+    passo2: bool
+    buscar: bool
+
+
+def botoes(*, tem_leitura: bool, gravando: bool, travada: str, sem_geradores: bool,
+           lendo: bool = False) -> Botoes:
+    """Gravando na nuvem, NADA fica ligado: gerar no meio da gravação
+    sairia com a decisão de antes; buscar limparia a tela embaixo dela."""
+    if gravando or lendo:
+        return Botoes(False, False, False, False)
+    if not tem_leitura:
+        return Botoes(False, False, False, True)
+    return Botoes(True, not sem_geradores, not travada, True)
+
+
+def pergunta_ao_gerar(travada: str) -> str:
+    """Nuvem que FALHOU (não a que ainda não foi lida): planilha, HTML e
+    remessa perguntam antes de sair sem as decisões do dono."""
+    return PERGUNTA_SEM_NUVEM if travada and travada != SEM_NUVEM else ""
+
+
+def recusa_da_selecao(ld, acao: str, tem_decisao: bool, recado: str) -> str:
+    """"" = a linha selecionada aceita `acao`; senão, o recado."""
+    if ld is None or acao not in acoes_da_linha(ld.tipo, tem_decisao):
+        return recado
+    if not str(getattr(ld.pagamento, "id", "") or "").strip():
+        return ("Esta linha não tem o número do lançamento: não dá para gravar uma "
+                "decisão para ela. Corrija no ERP.")
+    return ""
+
+
+def valores_para_editar(registro_erp: dict, conta: str, decisao) -> dict:
+    """O que o diálogo de edição mostra: o do ERP com as edições que já
+    valem (a decisão dobrada) por cima. Quem compara para saber o que mudou
+    é ISTO; o `antes` continua o do ERP (`valores_iniciais`)."""
+    vals = valores_iniciais(registro_erp, conta)
+    for k, v in (getattr(decisao, "edicoes", None) or {}).items():
+        if k in vals:
+            vals[k] = _limpo(v)
+    return vals

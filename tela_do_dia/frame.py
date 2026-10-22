@@ -146,6 +146,7 @@ class TelaDoDiaFrame(ttk.Frame):
                 "novo). Bloqueados (não aptos) não somam. Abra a conta para ver. "
                 "Selecione uma linha e use os botões abaixo.")
         self.t_pag = self._tabela(c2, self.COLS_PAG, arvore=True, altura=10)
+        self.t_pag.configure(selectmode="browse")    # uma linha por ação
         linha_pag = ttk.Frame(c2)
         linha_pag.pack(fill="x", pady=px((8, 0)))
         self.b_liberar = widgets.Botao(linha_pag, "Incluir mesmo assim…", papel="neutro",
@@ -269,12 +270,27 @@ class TelaDoDiaFrame(ttk.Frame):
         return (self.b_liberar, self.b_desmarcar, self.b_editar, self.b_desfazer,
                 self.b_remover, self.b_a_mao)
 
-    def _ligar_passo2(self):
-        estado = ("normal" if passo2.botoes_ligados(self.leitura is not None,
-                                                    self._nuvem_travada, self._gravando)
-                  else "disabled")
-        for b in self._botoes_do_passo2:
-            b.configure(state=estado)
+    def _ligar_botoes(self):
+        """O que fica ligado vem de `passo2.botoes`: gravando na nuvem, nada
+        (nem gerar, nem mandar aportes, nem buscar); sem leitura, só buscar;
+        sem apuração, sem os geradores; nuvem travada, sem o passo 2."""
+        b = passo2.botoes(tem_leitura=self.leitura is not None, gravando=self._gravando,
+                          travada=self._nuvem_travada,
+                          sem_geradores=(self.leitura is not None
+                                         and bool(dc.motivo_sem_geradores(self.leitura))))
+
+        def estado(ligado):
+            return "normal" if ligado else "disabled"
+        for w in (self.b_excel, self.b_mandar, self.b_sugestao, self.b_mao_mae,
+                  self.b_mao_transf, self.b_mao_tirar):
+            w.configure(state=estado(b.dia))
+        for w in (self.b_planilha, self.b_html, self.b_remessa):
+            w.configure(state=estado(b.geradores))
+        for w in self._botoes_do_passo2:
+            w.configure(state=estado(b.passo2))
+        # Durante a leitura quem manda no Buscar é a mensagem "botoes" do `_t_ler`.
+        if not (self.worker and not self.worker.done()):
+            self.b1.configure(state=estado(b.buscar))
 
     @staticmethod
     def _ajuda(pai, texto, *, estilo="Tenue.TLabel", pady=0):
@@ -509,15 +525,11 @@ class TelaDoDiaFrame(ttk.Frame):
             self._log(f"[!] {aviso}")
         self.mostrar_periodo(dc.periodo_na_tela(self.periodo))
         self._recalcular()
-        for b in self._botoes_do_dia:
-            b.configure(state="normal")
-        self._ligar_passo2()
+        # Sem apuração (nenhum lançamento a pagar), planilha, HTML e Remessa
+        # não têm de onde sair; o Excel do dia sai (a pagar zero).
+        self._ligar_botoes()
         motivo = dc.motivo_sem_geradores(self.leitura)
         if motivo:
-            # Sem apuração (nenhum lançamento a pagar), planilha, HTML e
-            # Remessa não têm de onde sair; o Excel do dia sai (a pagar zero).
-            for b in (self.b_planilha, self.b_html, self.b_remessa):
-                b.configure(state="disabled")
             self._log(motivo)
 
     def _mostrar_alertas(self, erro: str, atencao: str):
@@ -909,8 +921,9 @@ class TelaDoDiaFrame(ttk.Frame):
             return None
         ld = self._selecionada()
         tem_decisao = ld is not None and ld.pagamento.id in self.conferencia.decisoes
-        if ld is None or acao not in passo2.acoes_da_linha(ld.tipo, tem_decisao):
-            messagebox.showinfo(titulo, recado)
+        recusa = passo2.recusa_da_selecao(ld, acao, tem_decisao, recado)
+        if recusa:
+            messagebox.showinfo(titulo, recusa)
             return None
         return ld
 
@@ -923,7 +936,7 @@ class TelaDoDiaFrame(ttk.Frame):
             messagebox.showwarning(titulo, recusa)
             return
         self._gravando = True
-        self._ligar_passo2()
+        self._ligar_botoes()
         self.lbl.configure(text=f"{titulo}: gravando na nuvem...")
         dia, geracao_da_tela = self.periodo.fim, self._geracao
 
@@ -944,12 +957,13 @@ class TelaDoDiaFrame(ttk.Frame):
         if geracao_da_tela != self._geracao or self.leitura is None:
             self._log(f"[!] {titulo}: a gravação terminou depois de outra busca — "
                       "busque de novo para ver o estado da nuvem.")
-            self._ligar_passo2()
+            self._ligar_botoes()
             return
         if g.travar:
             # Sem reler, o que está na tela pode estar velho: limpa e pede busca.
             self._log(f"[!] {titulo}: {g.travar}")
             self._limpar()
+            self._ligar_botoes()         # sem leitura: só o Buscar volta
             self.lbl.configure(text="Busque de novo — a nuvem não foi relida.")
             messagebox.showwarning(titulo, "\n\n".join(filter(None, [
                 g.erro, ("A gravação foi aceita pela nuvem." if g.gravado is not None
@@ -960,7 +974,7 @@ class TelaDoDiaFrame(ttk.Frame):
         if self.lido is not None:
             self.lido.conferencia = g.conferencia
         self._recalcular()
-        self._ligar_passo2()
+        self._ligar_botoes()
         if g.erro:
             self._log(f"[!] {titulo}: {g.erro}")
             messagebox.showwarning(titulo, g.erro)
@@ -1054,17 +1068,22 @@ class TelaDoDiaFrame(ttk.Frame):
         if registro_erp is None:
             messagebox.showinfo(titulo, "Não achei este lançamento na apuração — busque de novo.")
             return
+        # O diálogo abre com o que VALE hoje (o ERP + as edições já gravadas);
+        # o `antes` continua o do ERP. Digitar o valor do ERP de volta é uma
+        # mudança como outra qualquer.
         iniciais = passo2.valores_iniciais(registro_erp, conta)
+        mostrados = passo2.valores_para_editar(registro_erp, conta,
+                                               self.conferencia.decisoes.get(ident))
         escolhido = {}
 
         def validar(r):
-            campos = passo2.campos_da_edicao(iniciais, r["campos"])
+            campos = passo2.campos_da_edicao(mostrados, r["campos"])
             erro = passo2.validar_edicao_da_tela(registro_erp, campos, r["motivo"])
             if not erro:
                 escolhido["campos"] = campos
             return erro
 
-        r = janelas.pedir_edicao(self, iniciais, explicacao=passo2.descricao_de(ld.pagamento),
+        r = janelas.pedir_edicao(self, mostrados, explicacao=passo2.descricao_de(ld.pagamento),
                                  validar=validar)
         if r is None or "campos" not in escolhido:
             return
@@ -1149,6 +1168,10 @@ class TelaDoDiaFrame(ttk.Frame):
         if self.worker and not self.worker.done():
             messagebox.showinfo(titulo, "Espere a leitura em andamento terminar.")
             return True
+        if self._gravando:
+            # Gerar no meio da gravação sairia com a decisão de antes.
+            messagebox.showinfo(titulo, "Espere a gravação na nuvem terminar.")
+            return True
         return False
 
     def _pode_gerar(self, titulo) -> bool:
@@ -1158,6 +1181,10 @@ class TelaDoDiaFrame(ttk.Frame):
         motivo = dc.motivo_sem_geradores(self.leitura)
         if motivo:
             messagebox.showinfo(titulo, motivo)
+            return False
+        # Nuvem que FALHOU: as decisões do dono não estão aplicadas.
+        pergunta = passo2.pergunta_ao_gerar(self._nuvem_travada)
+        if pergunta and not messagebox.askyesno(titulo, pergunta, default="no"):
             return False
         return True
 

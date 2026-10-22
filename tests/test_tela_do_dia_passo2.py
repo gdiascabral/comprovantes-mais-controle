@@ -209,7 +209,9 @@ def test_depois_de_gravar_a_tela_rele_a_nuvem():
 def test_erro_ao_gravar_vira_recado_e_a_tela_rele_mesmo_assim():
     nuvem = _Nuvem(falha_gravar=RuntimeError("recusado"))
     g = p2.gravar_e_reler(nuvem, DIA, _liberar, recado=lambda e: f"Não gravei: {e}")
-    assert g.erro == "Não gravei: recusado"
+    assert g.erro.startswith("Não gravei: recusado")
+    assert g.erro.endswith(p2.CONFIRA_DEPOIS_DO_ERRO)          # M1: pode ter gravado
+    assert "Pode ter gravado ou não" in g.erro
     assert g.conferencia is not None and g.conferencia.decisoes == {}
     assert g.travar == ""
 
@@ -242,3 +244,65 @@ def test_link_sem_ler_ou_trocado_depois_de_lido_e_recusado():
     assert "Ler o lançamento" in p2.recado_do_link("abc-1", None, "abc-1")
     assert "mudou" in p2.recado_do_link("abc-2", lido, "abc-2")
     assert p2.recado_do_link("abc-1", lido, "abc-1") == ""
+
+
+# --------------------------------------------- conserto da rodada 1
+def test_gravando_desliga_tudo_ate_o_buscar():
+    """I1: no meio da gravação nada gera, nada manda aportes, ninguém busca."""
+    b = p2.botoes(tem_leitura=True, gravando=True, travada="", sem_geradores=False)
+    assert b == p2.Botoes(dia=False, geradores=False, passo2=False, buscar=False)
+
+
+def test_botoes_sem_leitura_sem_apuracao_e_com_nuvem_travada():
+    assert p2.botoes(tem_leitura=False, gravando=False, travada=p2.SEM_NUVEM,
+                     sem_geradores=False) == p2.Botoes(False, False, False, True)
+    assert p2.botoes(tem_leitura=True, gravando=False, travada="",
+                     sem_geradores=True) == p2.Botoes(True, False, True, True)
+    assert p2.botoes(tem_leitura=True, gravando=False, travada="não li a nuvem (x)",
+                     sem_geradores=False) == p2.Botoes(True, True, False, True)
+    assert p2.botoes(tem_leitura=True, gravando=False, travada="",
+                     sem_geradores=False) == p2.Botoes(True, True, True, True)
+
+
+def test_nuvem_com_erro_pergunta_antes_de_gerar():
+    """I3: só a nuvem que FALHOU pergunta; a ainda não lida não chega a gerar."""
+    assert p2.pergunta_ao_gerar("não li a nuvem (timeout)") == p2.PERGUNTA_SEM_NUVEM
+    assert "NÃO estão aplicadas" in p2.PERGUNTA_SEM_NUVEM
+    assert p2.PERGUNTA_SEM_NUVEM.endswith("Gerar mesmo assim?")
+    assert p2.pergunta_ao_gerar("") == ""
+    assert p2.pergunta_ao_gerar(p2.SEM_NUVEM) == ""
+
+
+def test_selecao_sem_id_e_recusada():
+    """M3: decisão para alvo vazio não vai à nuvem."""
+    sem_id = p2.LinhaDaTabela("vai|0.0", "vai", _pag(""), "", (), ())
+    assert "número do lançamento" in p2.recusa_da_selecao(sem_id, p2.A_DESMARCAR, False, "x")
+    com_id = p2.LinhaDaTabela("vai|0.0", "vai", _pag("L1"), "", (), ())
+    assert p2.recusa_da_selecao(com_id, p2.A_DESMARCAR, False, "x") == ""
+    assert p2.recusa_da_selecao(com_id, p2.A_LIBERAR, False, "selecione") == "selecione"
+    assert p2.recusa_da_selecao(None, p2.A_EDITAR, False, "selecione") == "selecione"
+
+
+REG_ERP = {"tipo": "Pix", "dados": "PIX EMAIL fornecedor@exemplo.com", "descricao": "OBRA MODELO NF 123",
+           "descricao_editada": "OBRA MODELO NF 123", "valor": 10.0}
+
+
+def test_editar_abre_com_a_decisao_aplicada_e_volta_ao_erp():
+    """I2: o diálogo mostra o que vale (ERP + edição gravada); digitar o valor
+    do ERP de volta grava; o `antes` continua o do ERP."""
+    conta = "CONTA EXEMPLO - SICOOB"
+    d = cf.Decisao("L1", edicoes={"descricao": "OBRA MODELO NF 124", "tipo": "Pix", "dados": PIX_OK})
+    erp = p2.valores_iniciais(REG_ERP, conta)
+    mostrados = p2.valores_para_editar(REG_ERP, conta, d)
+    assert mostrados["descricao"] == "OBRA MODELO NF 124" and mostrados["dados"] == PIX_OK
+    assert p2.campos_da_edicao(mostrados, dict(mostrados)) == {}      # nada mudou
+    de_volta = {**mostrados, "descricao": erp["descricao"]}
+    campos = p2.campos_da_edicao(mostrados, de_volta)
+    assert campos == {"descricao": erp["descricao"]}
+    assert p2.antes_da_edicao(erp, campos) == {"descricao": erp["descricao"]}
+    assert p2.valores_para_editar(REG_ERP, conta, None) == erp
+
+
+def test_tirar_o_reembolso_e_pelo_desfazer():
+    campos = {"reembolso_nome": "", "reembolso_documento": "", "tipo": "Pix", "dados": PIX_OK}
+    assert "Desfazer" in p2.validar_edicao_da_tela({"reembolso": True}, campos, "engano")
