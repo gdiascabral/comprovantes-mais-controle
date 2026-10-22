@@ -426,3 +426,100 @@ def test_gravar_rateio_nao_tira_a_subconta_do_pagou():
     assert fake.cb_pagador.get() == depois
     assert fake.cb_recebedor.get() == "SUBCONTA 111-1"
     assert chamadas == [1]
+
+
+# ------------------------------------------------- Lançar preenchido sozinho
+# 22/10/2026, pedido do dono: escolher Pagou/Recebeu já põe o "Lançar" certo.
+# É SÓ padrão: a trava continua no `validar`.
+ENTIDADES_PF = {**ENTIDADES,
+                "OUTRA PESSOA": {"nome_oficial": "BELTRANO", "conta": None,
+                                 "nome_descricao": None}}
+
+
+@pytest.mark.parametrize("pagador, recebedor, esperado", [
+    ("EMPRESA A", "EMPRESA B", "Pagamento + Recebimento"),
+    ("PESSOA FISICA", "EMPRESA B", "Só recebimento"),
+    ("EMPRESA A", "PESSOA FISICA", "Só pagamento"),
+    # Os dois sem conta: não há modo que sirva; fica como está e o validar
+    # avisa.
+    ("PESSOA FISICA", "OUTRA PESSOA", None),
+    # Investidor de subconta só aceita a perna do recebimento.
+    ("INVESTIDOR SUBCONTA 111-1", "SUBCONTA 111-1", "Só recebimento"),
+    # Um lado ainda desconhecido (digitando): só a PF já decide.
+    ("PESSOA FISICA", "", "Só recebimento"),
+    ("", "PESSOA FISICA", "Só pagamento"),
+    ("EMPRESA A", "EMPR", None),
+    ("", "", None),
+])
+def test_modo_padrao(pagador, recebedor, esperado):
+    assert regras.modo_padrao(pagador, recebedor, ENTIDADES_PF,
+                              SUBCONTAS) == esperado
+
+
+def test_modo_padrao_bate_com_o_validar():
+    """O padrão nunca sugere um modo que o próprio `validar` recusaria."""
+    for pag in ENTIDADES_PF:
+        for rec in ENTIDADES_PF:
+            if pag == rec:
+                continue
+            modo = regras.modo_padrao(pag, rec, ENTIDADES_PF, SUBCONTAS)
+            if modo is None:
+                continue
+            erros = op(pagador=pag, recebedor=rec, modo=modo).validar(
+                ENTIDADES_PF, SUBCONTAS)
+            assert not any("pessoa física" in e for e in erros), (pag, rec)
+
+
+def test_pessoa_sem_conta():
+    assert regras.pessoa_sem_conta(ENTIDADES, "PESSOA FISICA")
+    assert not regras.pessoa_sem_conta(ENTIDADES, "EMPRESA A")
+    assert not regras.pessoa_sem_conta(ENTIDADES, "NINGUEM")   # desconhecido
+
+
+def _form(pagou, recebeu, modo="Pagamento + Recebimento"):
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        entidades=ENTIDADES_PF, subcontas=SUBCONTAS,
+        cb_pagador=_Combo(list(ENTIDADES_PF), pagou),
+        cb_recebedor=_Combo(list(ENTIDADES_PF), recebeu),
+        cb_modo=_Combo([], modo), _partes_do_modo=None)
+
+
+def test_escolher_pagou_ou_recebeu_preenche_o_lancar():
+    from aportes.aportes_frame import AportesFrame
+    f = _form("PESSOA FISICA", "EMPRESA B")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só recebimento"
+    f.cb_pagador.set("EMPRESA A")
+    f.cb_recebedor.set("PESSOA FISICA")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só pagamento"
+    f.cb_recebedor.set("EMPRESA B")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Pagamento + Recebimento"
+
+
+def test_troca_manual_do_lancar_sobrevive_ate_mudar_pagou_ou_recebeu():
+    """Sair do campo de novo (FocusOut) sem trocar Pagou/Recebeu não desfaz a
+    escolha do dono; trocar uma das partes volta a aplicar o padrão."""
+    from aportes.aportes_frame import AportesFrame
+    f = _form("EMPRESA A", "EMPRESA B")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Pagamento + Recebimento"
+    f.cb_modo.set("Só pagamento")                     # o dono trocou
+    AportesFrame._aplicar_modo_padrao(f)              # FocusOut de novo
+    assert f.cb_modo.get() == "Só pagamento"
+    f.cb_recebedor.set("PESSOA FISICA")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só pagamento"
+    f.cb_modo.set("Pagamento + Recebimento")          # trocou de novo
+    f.cb_recebedor.set("EMPRESA B")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Pagamento + Recebimento"
+
+
+def test_dois_sem_conta_deixa_o_lancar_como_esta():
+    from aportes.aportes_frame import AportesFrame
+    f = _form("PESSOA FISICA", "OUTRA PESSOA", modo="Só pagamento")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só pagamento"

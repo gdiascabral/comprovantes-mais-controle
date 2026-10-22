@@ -178,6 +178,15 @@ class AportesFrame(ttk.Frame):
             linha2, "Recebeu", lambda p: widgets.ComboBusca(p, width=38))
         campo_rec.pack(side="left")
         self.cb_recebedor = campo_rec.widget
+        # Escolher Recebeu também preenche o "Lançar" (`_aplicar_modo_padrao`);
+        # o Pagou chega lá pelo `_pagador_escolhido`.
+        self.cb_recebedor.bind("<<ComboboxSelected>>",
+                               self._aplicar_modo_padrao, add="+")
+        self.cb_recebedor.bind("<FocusOut>", self._aplicar_modo_padrao,
+                               add="+")
+        #: O par (Pagou, Recebeu) para o qual o padrão do "Lançar" já foi
+        #: aplicado: enquanto ele não muda, a troca manual do dono fica.
+        self._partes_do_modo = None
 
         linha3 = ttk.Frame(form)
         linha3.pack(fill="x", pady=px((12, 0)))
@@ -249,8 +258,11 @@ class AportesFrame(ttk.Frame):
             if self.cb_tipo.get() == regras.TIPO_INVESTIDOR:
                 self.cb_tipo.set(cadastro.TIPOS[0])
                 self.cb_modo.set(cadastro.MODOS[0])
+            self._aplicar_modo_padrao()
             return
         self.cb_tipo.set(regras.TIPO_INVESTIDOR)
+        # O mesmo que `regras.modo_padrao` dá para investidor de subconta; aqui
+        # é FORÇADO (o validar não aceita outro), mesmo sem Pagou mudar.
         self.cb_modo.set("Só recebimento")
         # Só com UM candidato pelo número exato; dois ou nenhum, a pessoa
         # escolhe — chute aqui seria aporte na conta errada.
@@ -258,6 +270,26 @@ class AportesFrame(ttk.Frame):
                       if regras.e_da_subconta(nome, dados, numero)]
         if len(candidatos) == 1:
             self.cb_recebedor.set(candidatos[0])
+        self._aplicar_modo_padrao()
+
+    def _aplicar_modo_padrao(self, _ev=None):
+        """Escolheu (ou saiu de) Pagou/Recebeu: o "Lançar" vira o padrão de
+        `regras.modo_padrao` — PF sem conta pagando, "Só recebimento";
+        recebendo, "Só pagamento"; os dois com conta, os dois lançamentos.
+
+        Só quando o PAR mudou desde a última vez: sair do campo de novo sem
+        trocar ninguém não desfaz o "Lançar" que o dono trocou à mão. Os dois
+        sem conta (ou um lado ainda incompleto): não mexe; o validar avisa."""
+        partes = (self.cb_pagador.get().strip(),
+                  self.cb_recebedor.get().strip())
+        if partes == getattr(self, "_partes_do_modo", None):
+            return
+        self._partes_do_modo = partes
+        modo = regras.modo_padrao(
+            regras.pagador_canonico(partes[0], self.subcontas), partes[1],
+            self.entidades, self.subcontas)
+        if modo is not None:
+            self.cb_modo.set(modo)
 
     def _recarregar_listas(self):
         nomes = list(self.entidades)
