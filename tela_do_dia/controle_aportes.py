@@ -13,8 +13,10 @@ vira "B deve R$ 50.000,00 para igualar" — a conta que o dono faz de cabeça.
 Quem é o aportador de um recebimento: o Cliente dele no ERP (`customerName`),
 pelo nome COMPLETO (`util.norm_espaco`: sem acento, caixa e espaço dobrado),
 contra os aportadores DAQUELA conta. Nunca por primeiro nome nem por pedaço:
-dois aportadores com o mesmo primeiro nome são pessoas diferentes. O que não
-casa vai para `sem_dono`, para o dono apontar — nunca some.
+dois aportadores com o mesmo primeiro nome são pessoas diferentes. Cliente
+vazio (a aba Aportes manda o Cliente só pelo id) se resolve pelo id do Cliente
+no cadastro de contatos — ainda pelo nome completo; ver `identificar_aportador`.
+O que não casa vai para `sem_dono`, para o dono apontar — nunca some.
 """
 from __future__ import annotations
 
@@ -58,6 +60,40 @@ class Recebimento:
     natureza: str = ""
     descricao: str = ""
     centro: str = ""
+    cliente_id: str = ""          # o id do Cliente no ERP, quando o item traz
+    cliente_cadastro: str = ""    # o nome do Cliente pelo cadastro de contatos (pelo id)
+
+
+#: Chave que `controle_erp` acrescenta ao item cru quando o Cliente veio vazio
+#: e o id dele foi achado no cadastro de contatos. Não é campo do ERP: o
+#: prefixo "_" deixa claro que é anotação nossa, e o `customerName` cru nunca é
+#: reescrito.
+CHAVE_CLIENTE_DO_CADASTRO = "_clienteDoCadastro"
+
+
+def nome_do_cliente(item) -> str:
+    """O Cliente do item cru: `customerName`, ou `customer.name` quando o ERP
+    o manda aninhado. "" quando vazio."""
+    item = item if isinstance(item, dict) else {}
+    nome = item.get("customerName")
+    if isinstance(nome, str) and nome.strip():
+        return nome.strip()
+    cliente = item.get("customer")
+    if isinstance(cliente, dict) and isinstance(cliente.get("name"), str):
+        return cliente["name"].strip()
+    return ""
+
+
+def id_do_cliente(item) -> str:
+    """O id do Cliente do item cru: `customerId` ou `customer.id`. "" quando
+    não vem (NÃO medido em produção que `receipt-installments` o traga)."""
+    item = item if isinstance(item, dict) else {}
+    for v in (item.get("customerId"),
+              (item.get("customer") or {}).get("id") if isinstance(item.get("customer"), dict)
+              else None):
+        if isinstance(v, (str, int)) and not isinstance(v, bool) and str(v).strip():
+            return str(v).strip()
+    return ""
 
 
 @dataclass(frozen=True)
@@ -97,11 +133,14 @@ def recebimento_do_erp(item: dict, natureza: str = "") -> Recebimento:
         valor = _dinheiro_do_erp(item.get("sumOfReceivedValues"))
     except ValueError as e:
         raise ValueError(f"recebimento {ident}: {e}") from None
+    cadastro = item.get(CHAVE_CLIENTE_DO_CADASTRO)
     return Recebimento(id=ident, data=data, valor=valor,
-                       cliente=str(item.get("customerName") or "").strip(),
+                       cliente=nome_do_cliente(item),
                        natureza=natureza,
                        descricao=str(item.get("description") or "").strip(),
-                       centro=str(item.get("workName") or "").strip())
+                       centro=str(item.get("workName") or "").strip(),
+                       cliente_id=id_do_cliente(item),
+                       cliente_cadastro=cadastro.strip() if isinstance(cadastro, str) else "")
 
 
 def problemas_da_conta(conta: ContaControlada, hoje: datetime.date, outras=()) -> list[str]:
@@ -312,21 +351,37 @@ def _linhas(conta: ContaControlada, do_erp: dict) -> list:
 def identificar_aportador(conta: ContaControlada, recebimento: Recebimento) -> tuple:
     """(Aportador, "") ou (None, motivo) para um recebimento SEM apontamento.
 
-    É o ÚNICO ponto que decide de quem é um recebimento pelos campos do ERP
-    — campo novo para identificar (a Tarefa 4 pode trazer outros) entra aqui.
-    Hoje: só o Cliente, pelo nome COMPLETO normalizado, contra os aportadores
-    desta conta. Cliente vazio (a equipe às vezes lança o aporte e preenche o
-    Cliente depois) é "não identificado": nunca se chuta — nem quando a conta
-    tem um aportador só, nem pela descrição ou pelo centro de custo. Vai para
-    sem dono, e o dono aponta."""
+    É o ÚNICO ponto que decide de quem é um recebimento pelos campos do ERP.
+    Só entram campos que dizem QUEM é a pessoa, e sempre pelo nome COMPLETO
+    normalizado, contra os aportadores desta conta:
+
+    1. o Cliente do recebimento (`customerName`, ou `customer.name`);
+    2. quando o Cliente vem vazio — a aba Aportes manda o Cliente só pelo id
+       (`mc_lancamentos.criar_recebimento`, `"name": ""`) e o fato de 21/10/2026
+       é que ele pode chegar vazio —, o nome que o cadastro de contatos dá ao
+       id do Cliente (`cliente_cadastro`, resolvido em `controle_erp`).
+
+    Os dois presentes e diferentes: sem dono (o ERP se contradiz). Nunca se
+    chuta: nem quando a conta tem um aportador só, nem pela descrição, nem
+    pelo centro de custo, nem por primeiro nome — mesmo que contenham o nome
+    completo. Sem nenhum dos dois, vai para sem dono, e o dono aponta."""
     cliente = (recebimento.cliente or "").strip()
-    if not util.norm_espaco(cliente):
+    cadastro = (recebimento.cliente_cadastro or "").strip()
+    if (util.norm_espaco(cliente) and util.norm_espaco(cadastro)
+            and util.norm_espaco(cliente) != util.norm_espaco(cadastro)):
+        return None, (f'o Cliente "{cliente}" diverge do cadastro do Cliente no Mais Controle '
+                      f'("{cadastro}") — confira e aponte o aportador')
+    nome, pelo_cadastro = (cliente, False) if util.norm_espaco(cliente) else (cadastro, True)
+    if not util.norm_espaco(nome):
         return None, ("recebimento sem Cliente no Mais Controle — não identificado; "
                       "preencha o Cliente no ERP ou aponte o aportador")
-    alvo = util.norm_espaco(cliente)
+    alvo = util.norm_espaco(nome)
     achados = [a for a in conta.aportadores if util.norm_espaco(a.nome_erp) == alvo]
     if len(achados) != 1:
-        return None, f'o Cliente "{cliente}" não é aportador desta conta'
+        if pelo_cadastro:
+            return None, (f'o Cliente veio vazio e o cadastro do id dele diz "{nome}", que '
+                          "não é aportador desta conta")
+        return None, f'o Cliente "{nome}" não é aportador desta conta'
     return achados[0], ""
 
 
@@ -414,4 +469,67 @@ def resumo(ap: Apuracao) -> list:
         soma = sum((s.recebimento.valor for s in ap.sem_dono), ZERO)
         saida.append(f"{nome}: {len(ap.sem_dono)} recebimento(s) sem dono ({brl(soma)}) "
                      "fora da conta até você apontar.")
+    return saida
+
+
+# ---- a orquestração pura da leitura (Tarefa 4): quem se lê e como se apura
+@dataclass(frozen=True)
+class Par:
+    rotulo: str            # conta_erp como está no controle (chave dos resultados)
+    conta_id: str          # `ErpAccount.id`
+    nome_no_erp: str       # `ErpAccount.name`
+    inicio: datetime.date
+
+
+def pares_para_ler(contas, contas_erp) -> tuple:
+    """([Par], {rótulo: motivo}) — a conta do controle casa com UMA conta
+    ativa do ERP pelo nome inteiro (`util.norm_espaco`)."""
+    pares, erros = [], {}
+    for c in contas:
+        alvo = util.norm_espaco(c.conta_erp)
+        achadas = [e for e in contas_erp if util.norm_espaco(e.name) == alvo]
+        if len(achadas) == 1:
+            pares.append(Par(c.conta_erp, achadas[0].id, achadas[0].name, c.abertura))
+        elif not achadas:
+            erros[c.conta_erp] = ("não está entre as contas ativas do Mais Controle (o nome "
+                                  "tem de ser o de lá, letra por letra)")
+        else:
+            erros[c.conta_erp] = ("há duas contas ativas no Mais Controle com esse nome — "
+                                  "não dá para saber qual")
+    return pares, erros
+
+
+def conta_de_contraprova(contas_erp, pares):
+    """Uma conta ativa FORA do controle, para provar que o filtro de conta vale."""
+    usadas = {p.conta_id for p in pares}
+    livres = sorted((e for e in contas_erp if e.id and e.id not in usadas),
+                    key=lambda e: util.norm_espaco(e.name))
+    if not livres or not pares:
+        return None
+    return Par("", livres[0].id, livres[0].name, min(p.inicio for p in pares))
+
+
+def recebimentos_de(itens_por_natureza: dict) -> list:
+    return [recebimento_do_erp(item, natureza)
+            for natureza, itens in itens_por_natureza.items() for item in itens]
+
+
+def apurar_tudo(contas, erros: dict, crus: dict, apontamentos: dict, hoje) -> list:
+    """Uma `Apuracao` por conta; o erro de uma não apaga as outras."""
+    saida = []
+    for c in contas:
+        if c.conta_erp in erros:
+            saida.append(Apuracao(conta=c, erro=erros[c.conta_erp]))
+            continue
+        if c.conta_erp not in crus:      # não lida não é "zero aportado"
+            saida.append(Apuracao(conta=c, erro="os recebimentos desta conta não foram lidos "
+                                                "do Mais Controle — nenhum número foi mostrado"))
+            continue
+        try:
+            recs = recebimentos_de(crus[c.conta_erp] or {})
+        except ValueError as e:
+            saida.append(Apuracao(conta=c, erro=f"recebimento que não se lê no Mais Controle "
+                                                f"({e}) — nenhum número desta conta foi mostrado"))
+            continue
+        saida.append(apurar(c, recs, apontamentos.get(c.id) or [], hoje))
     return saida
