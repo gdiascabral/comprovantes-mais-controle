@@ -392,3 +392,62 @@ def test_distribuicao_de_origem_sem_conta_no_cadastro_e_pendencia_clara():
     assert envio.itens == []
     (p,) = envio.pendentes
     assert "sem a conta do ERP" in p.motivo and "MAE - BANCO" in p.motivo
+
+
+# ------------- revisão geral de 22/10/2026, achado 1: nenhum fica para trás
+REGRAS_HTML = [
+    Regra("Filha Um - Banco", "Mae - Banco", None, "Aporte", True, linha=5),
+    Regra("Filha Dois - Banco", "Pessoa Um/Pessoa Dois", None, "Aporte", False, linha=6),
+    Regra("Mae - Banco", "Socio Ficticio A", None, "Aporte", False, linha=7),
+    Regra("Filha Um - Banco", "Holding - Banco", None, "Transferência", True, linha=9),
+]
+ROTULOS_HTML = ["Mae - Banco", "Filha Um - Banco", "Filha Dois - Banco", "Holding - Banco"]
+
+
+def test_html_leva_os_aportes_e_transferencias_da_aba_regras():
+    """O pedido do dono: "as transf e aportes e distribuições … criar o
+    lançamento no html tb … pra não ficar nenhum pra trás" — os da aba
+    Regras (o composto e a transferência do print) também."""
+    definidos = {("Filha Um - Banco", "Mae - Banco"): D("300.00"),
+                 ("Filha Dois - Banco", "Pessoa Um/Pessoa Dois"): D("5000.00"),
+                 ("Filha Um - Banco", "Holding - Banco"): D("10000.00")}
+    movs = dc.movimentos_do_dia([], [], definidos=definidos, regras=REGRAS_HTML,
+                                rotulos=ROTULOS_HTML)
+    assert movs == [
+        {"de": "Mae - Banco", "para": "Filha Um - Banco", "tipo": dc.TIPO_APORTE_REGRAS,
+         "valor": D("300.00")},
+        {"de": "Pessoa Um/Pessoa Dois", "para": "Filha Dois - Banco",
+         "tipo": dc.TIPO_APORTE_REGRAS, "valor": D("5000.00")},
+        {"de": "Holding - Banco", "para": "Filha Um - Banco",
+         "tipo": dc.TIPO_TRANSFERENCIA, "valor": D("10000.00")},
+    ]
+
+
+def test_html_nao_duplica_o_movimento_que_esta_nos_dois():
+    definidos = {("Filha Um - Banco", "Mae - Banco"): D("300.00"),
+                 ("Mae - Banco", "Socio Ficticio A"): D("50.00")}
+    a_mao = [("Mae - Banco", "Filha Um - Banco", D("300.00")),   # a mesma transferência
+             (None, "Mae - Banco", D("50.00")),                  # o mesmo aporte de fora
+             (None, "Mae - Banco", D("70.00"))]                  # outro: fica
+    movs = dc.movimentos_do_dia(a_mao, [("Mae - Banco", "SOCIO FICTICIO A", D("1.00"))],
+                                definidos=definidos, regras=REGRAS_HTML, rotulos=ROTULOS_HTML)
+    assert [(m["de"], m["para"], m["valor"]) for m in movs] == [
+        ("Mae - Banco", "Filha Um - Banco", D("300.00")),
+        ("Socio Ficticio A", "Mae - Banco", D("50.00")),
+        (dc.DE_FORA, "Mae - Banco", D("70.00")),
+        ("Mae - Banco", "SOCIO FICTICIO A", D("1.00")),
+    ]
+
+
+def test_html_sem_definidos_continua_igual():
+    a_mao = [(None, "Mae - Banco", D("400.00"))]
+    assert dc.movimentos_do_dia(a_mao, []) == dc.movimentos_do_dia(
+        a_mao, [], definidos={}, regras=REGRAS_HTML, rotulos=ROTULOS_HTML)
+
+
+def test_html_ignora_definido_zero_negativo_ou_fora_da_regra():
+    definidos = {("Filha Um - Banco", "Mae - Banco"): D("0.00"),
+                 ("Mae - Banco", "Socio Ficticio A"): D("-5.00"),
+                 ("Filha Um - Banco", "Desconhecido"): D("9.00")}
+    assert dc.movimentos_do_dia([], [], definidos=definidos, regras=REGRAS_HTML,
+                                rotulos=ROTULOS_HTML) == []

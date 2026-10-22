@@ -289,9 +289,15 @@ aba Aportes e não é pendência: `Envio.informativos`, "transferência entre
 contas: lance no banco; não é aporte", no Registro sem o "[!]" — também
 com destino em subconta (o tipo é olhado antes da subconta).
 
-O HTML dos pagamentos leva os movimentos à mão válidos como linhas só
-informativas (`decisoes.movimentos_do_dia` → `html_pagamentos.gravar
-(movimentos=)`; ver `arquitetura-pagamentos-dia.md`).
+O HTML dos pagamentos leva TODOS os movimentos definidos do dia que não são
+pagamento de conta como linhas só informativas (`decisoes.movimentos_do_dia`
+→ `html_pagamentos.gravar(movimentos=)`; ver `arquitetura-pagamentos-dia.md`):
+os aportes, transferências e distribuições da aba Regras (`definidos_validos`,
+os mesmos do painel e do Excel, tipo pela regra — revisão geral de
+22/10/2026, achado 1: a transferência e o composto do print ficavam fora) e
+os à mão válidos, sem repetir: à mão com o mesmo de, para e valor de uma
+linha da Regras sai (o "de fora" repete a regra cujo aportador não é conta
+do painel).
 
 ## Excel do dia: zero, e não vazio
 

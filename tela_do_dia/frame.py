@@ -1842,12 +1842,15 @@ class TelaDoDiaFrame(ttk.Frame):
                     self._log(f"  - fora do HTML: {linha}")
         ini, fim = self.leitura.periodo
         pasta = self._pasta_pagamentos()
-        # Os movimentos à mão do dia vão como linhas só informativas (item A):
-        # os mesmos que a tela soma, sem chave nem "Copiar", fora do total.
+        # Os movimentos do dia vão como linhas só informativas (item A): os
+        # da aba Regras (aportes e transferências definidos no painel) e os à
+        # mão, os mesmos que a tela soma, sem chave nem "Copiar", fora do total.
         rotulos = self._rotulos_do_painel
         movimentos = dc.movimentos_do_dia(
             dc.movimentos_validos(self.dia.a_mao, rotulos) if self.dia else (),
-            dc.distribuicoes_validas(self.dia.distribuicoes, rotulos) if self.dia else ())
+            dc.distribuicoes_validas(self.dia.distribuicoes, rotulos) if self.dia else (),
+            definidos=self.aportes.definidos_validos if self.aportes else None,
+            regras=self.regras, rotulos=rotulos)
         try:
             gerados = html_pagamentos.gravar(resultado, lancamentos, self.leitura.anexos,
                                              pasta, ini, fim, pastas_extras=(pasta, util.pasta_base()),

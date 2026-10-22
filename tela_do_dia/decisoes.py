@@ -154,17 +154,58 @@ def descrever_distribuicao(dist) -> str:
 TIPO_APORTE_NA_MAE = "Aporte que entra na mãe"
 TIPO_TRANSFERENCIA = "Transferência entre contas"
 TIPO_DISTRIBUICAO = "Distribuição de lucros"
+#: O aporte definido na aba Regras do MODELO (o painel e o Excel do dia).
+TIPO_APORTE_REGRAS = "Aporte (aba Regras)"
 
 
-def movimentos_do_dia(a_mao, distribuicoes) -> list[dict]:
-    """Os movimentos à mão como linhas INFORMATIVAS do HTML dos pagamentos
-    (dono, 22/10/2026: "só a informação pra não ficar nenhum pra trás"): de,
-    para, tipo e valor; os aportes e transferências primeiro, na ordem em
-    que foram incluídos, depois as distribuições. Valor zero ou negativo fica
-    de fora, como na tela e no Excel."""
+def _tipo_da_regra(tipo: str) -> str:
+    t = util.sem_acento(tipo or "Aporte").casefold().strip()
+    if t.startswith("transf"):
+        return TIPO_TRANSFERENCIA
+    if t.startswith("distribui"):
+        return TIPO_DISTRIBUICAO
+    return TIPO_APORTE_REGRAS
+
+
+def movimentos_do_dia(a_mao, distribuicoes, definidos=None, regras=(),
+                      rotulos=()) -> list[dict]:
+    """TODOS os movimentos definidos do dia que não são pagamento de conta,
+    como linhas INFORMATIVAS do HTML dos pagamentos (dono, 22/10/2026: "as
+    transf e aportes e distribuições … só a informação pra não ficar nenhum
+    pra trás"): de, para, tipo e valor.
+
+    Primeiro os da aba Regras (`definidos`: {(destino, aportador): valor},
+    os mesmos do painel e do Excel — aporte, transferência ou distribuição,
+    pelo tipo da regra; revisão geral de 22/10/2026, achado 1), depois os à
+    mão que não repetem um deles, depois as distribuições. Repetido = mesmo
+    de, para e valor; o à mão "de fora" repete a regra cujo aportador não é
+    conta do painel (`rotulos`). Cada linha da Regras apaga no máximo UM à
+    mão. Valor zero ou negativo, ou par fora da aba Regras, fica de fora,
+    como na tela e no Excel."""
     linhas = []
+    tipo_do_par = {(r.destino, r.aportador): r.tipo for r in regras or ()}
+    rotulos = {util.norm_espaco(r) for r in rotulos or ()}
+    das_regras = []
+    for (destino, aportador), valor in (definidos or {}).items():
+        if valor is None or valor <= ZERO or (destino, aportador) not in tipo_do_par:
+            continue
+        das_regras.append((aportador, destino, valor))
+        linhas.append({"de": aportador, "para": destino,
+                       "tipo": _tipo_da_regra(tipo_do_par[(destino, aportador)]),
+                       "valor": valor})
+
+    def repete(origem, destino, valor) -> bool:
+        for i, (de, para, v) in enumerate(das_regras):
+            if v != valor or util.norm_espaco(para) != util.norm_espaco(destino):
+                continue
+            if (util.norm_espaco(de) == util.norm_espaco(origem) if origem
+                    else util.norm_espaco(de) not in rotulos):
+                del das_regras[i]
+                return True
+        return False
+
     for origem, destino, valor in (a_mao or ()):
-        if valor is None or valor <= ZERO:
+        if valor is None or valor <= ZERO or repete(origem, destino, valor):
             continue
         linhas.append({"de": origem or DE_FORA, "para": destino,
                        "tipo": TIPO_TRANSFERENCIA if origem else TIPO_APORTE_NA_MAE,

@@ -704,8 +704,10 @@ paths:
   (copiar o dado de quem já pagou é pagar em dobro); o travessão (U+2014) do
   status "ATENÇÃO — motivo" sai da frase do motivo.
   **Movimentos do dia** (item A, 22/10/2026; só pela tela "Pagamentos do
-  dia"): `gravar(movimentos=)` recebe os movimentos à mão (aporte que entra
-  na mãe, transferência entre contas, distribuição de lucros) e
+  dia"): `gravar(movimentos=)` recebe os movimentos do dia (os da aba
+  Regras — aporte, transferência — e os à mão: aporte que entra na mãe,
+  transferência entre contas, distribuição de lucros; quem junta e tira os
+  repetidos é `tela_do_dia/decisoes.movimentos_do_dia`) e
   `movimentos_do_html` os põe em `DATA.movimentos`, numa seção própria
   "Movimentos do dia — já cadastrados no banco": de → para, tipo e valor,
   SEM chave, sem "Copiar" nem "já paguei" (dono: "não precisa colocar os pix
