@@ -379,6 +379,16 @@ paths:
   antes de criar a listbox e abre a nossa no lugar — pega qualquer caminho que
   ainda chegue lá. Testes: `tests/test_combo_busca_sem_lista_nativa.py`
   (puro) e o fim de `tests/test_combo_busca.py` (fixture `raiz`).
+  **O cabeçalho da página não tem faixa própria** (22/10/2026, pedido do
+  dono). As abas são `ttk.Frame` sem estilo — fundo de CARTÃO —, e o
+  `Cabecalho`, no fundo do painel, aparecia como um bloco de outra cor com a
+  moldura do cartão em volta (as margens do `pack`). Hoje o `Cabecalho` passa a
+  aba que o recebe para `Fundo.TFrame` (só `ttk.Frame` sem estilo) e fecha com
+  um filete de 1 px na cor `linha` (`Filete.TFrame`, `cab.filete`). O botão
+  DESLIGADO ganhou moldura `linha` (`widgets.BORDA_DESLIGADO`) no lugar da
+  `borda`: preenchido com o fundo, no cabeçalho ele virava texto solto (1,16:1
+  no claro, 1,51:1 no escuro); `test_o_botao_desligado_continua_com_contorno_visivel`
+  mede o piso de 2:1 — a WCAG dispensa o inativo dos 3:1.
   **Entrou em 02/09 (PR #30)**: "nenhuma aba escreve `#` seguido de seis
   dígitos" deixa de ser conferência a olho e vira teste — varredura por AST dos
   `.py` **rastreados pelo git**, fora do `widgets.py` e de `tests/`, atrás de

@@ -646,6 +646,9 @@ def aplicar_estilos(escuro: bool) -> None:
                      background=c["fundo"])
     st.configure("Trilha.TLabel", font=FONTE_MINI, foreground=c["tenue"],
                  background=c["fundo"])
+    # O filete que fecha o cabeçalho da página: 1 px na cor de filete, no
+    # lugar da faixa de cor que o cabeçalho parecia ter (ver `Cabecalho`).
+    st.configure("Filete.TFrame", background=c["linha"])
 
     # ------------------------------------------------------------- pílulas
     # Estado vira fundo colorido com texto da mesma família, como no ERP. O
@@ -755,6 +758,14 @@ def barra_de_titulo(janela, escuro: bool | None = None) -> None:
 # o app ganhar uma cor: nenhuma aba escreve `#` seguido de seis dígitos.
 
 
+#: O papel da paleta que contorna o botão DESLIGADO. Lido também pelo
+#: `tests/test_visual.py`, que mede o contraste dele contra o fundo e o cartão
+#: (2,70:1 e 3,05:1 no claro; 2,47:1 e 2,25:1 no escuro). A WCAG dispensa o
+#: componente inativo do 3:1, e um contorno mais forte faria o desligado
+#: parecer disponível — a régua aqui é "dá para ver que é um botão".
+BORDA_DESLIGADO = "linha"
+
+
 class Botao(tk.Button):
     """O botão do painel: chapado, colorido, com o papel dito pela cor.
 
@@ -821,14 +832,19 @@ class Botao(tk.Button):
             # Cinza chapado nos dois temas: o botão desligado não é "verde
             # apagado" nem "azul apagado" — ele é o mesmo lugar vazio,
             # qualquer que fosse a cor dele ligado.
+            # A moldura é a `linha`, e não a `borda`: preenchido com o
+            # `fundo`, no cabeçalho da página (que É o fundo) só a moldura o
+            # separa da tela, e a `borda` dava 1,16:1 no claro e 1,51:1 no
+            # escuro — o "Buscar pagamentos e saldos" desligado virava texto
+            # solto. Ver `BORDA_DESLIGADO`.
             try:
                 self.configure(background=c["fundo"], foreground=c["tenue"],
                                activebackground=c["fundo"],
                                activeforeground=c["tenue"],
                                disabledforeground=c["tenue"],
                                highlightthickness=1,
-                               highlightbackground=c["borda"],
-                               highlightcolor=c["borda"])
+                               highlightbackground=c[BORDA_DESLIGADO],
+                               highlightcolor=c[BORDA_DESLIGADO])
             except tk.TclError:
                 pass
             return
@@ -1373,13 +1389,35 @@ class Cabecalho(ttk.Frame):
     À direita fica `self.acoes`, onde a tela pendura os botões dela — o
     principal em verde. Antes eles moravam todos no rodapé, e o "executar" de
     cada tela ficava no canto de baixo, longe do que se acabou de preencher.
+
+    SEM FAIXA PRÓPRIA (22/10/2026, pedido do dono). As abas são `ttk.Frame`
+    sem estilo, e o fundo padrão do ttk neste app é o do CARTÃO; o cabeçalho,
+    no fundo do painel, aparecia como um bloco de outra cor com uma moldura do
+    cartão em volta (as margens do `pack`). Agora o cabeçalho passa a aba que
+    o recebe para o fundo do painel — só quando ela não escolheu estilo
+    nenhum —, e o que separa o cabeçalho dos cartões é um filete de 1 px
+    (`self.filete`, estilo `Filete.TFrame`), não um bloco de cor.
     """
 
     def __init__(self, pai, titulo: str, apoio: str = "", trilha: str = "",
                  **kw):
         kw.setdefault("style", "Fundo.TFrame")
+        # A aba inteira no fundo do painel: é o que tira a moldura em volta
+        # do cabeçalho. Só `ttk.Frame` sem estilo — um diálogo que já pôs
+        # `Fundo.TFrame`, ou quem escolheu outro estilo, fica como está.
+        if isinstance(pai, ttk.Frame):
+            try:
+                if not str(pai.cget("style")):
+                    pai.configure(style="Fundo.TFrame")
+            except tk.TclError:
+                pass
         super().__init__(pai, **kw)
-        esquerda = ttk.Frame(self, style="Fundo.TFrame")
+        topo = ttk.Frame(self, style="Fundo.TFrame")
+        topo.pack(side="top", fill="x")
+        #: O filete que fecha o cabeçalho, de ponta a ponta (título e botões).
+        self.filete = ttk.Frame(self, style="Filete.TFrame", height=1)
+        self.filete.pack(side="top", fill="x", pady=px((14, 0)))
+        esquerda = ttk.Frame(topo, style="Fundo.TFrame")
         esquerda.pack(side="left", fill="x", expand=True)
         if trilha:
             ttk.Label(esquerda, text=trilha, style="Trilha.TLabel"
@@ -1394,7 +1432,7 @@ class Cabecalho(ttk.Frame):
             self.lbl_apoio.pack(anchor="w", pady=px((3, 0)))
         #: Os botões da tela. `anchor="e"` para eles ficarem alinhados pelo
         #: alto do título, e não centralizados contra a linha de apoio.
-        self.acoes = ttk.Frame(self, style="Fundo.TFrame")
+        self.acoes = ttk.Frame(topo, style="Fundo.TFrame")
         self.acoes.pack(side="right", anchor="ne", padx=px((14, 0)))
         #: Espaço abaixo da linha de apoio, para quem quiser pendurar algo no
         #: cabeçalho. Nasce vazio e não ocupa lugar até alguém empacotá-lo.

@@ -215,6 +215,12 @@ PARES_DE_TEXTO = (
                             "o botão de passo sob o cursor"),
     ("marca_sub", "marca_barra", "BarraTenue.TLabel, o texto secundário "
                                  "DENTRO da barra de cima"),
+    # ---- o cabeçalho da página, que desde 22/10/2026 mora no MESMO fundo da
+    # aba (sem faixa própria): as três linhas dele e o rótulo do botão
+    # desligado, que é o mesmo cinza da trilha sobre o fundo do painel
+    ("texto", "fundo", "FundoTitulo.TLabel, o título do Cabecalho"),
+    ("apoio", "fundo", "FundoApoio.TLabel, a linha de apoio do Cabecalho"),
+    ("tenue", "fundo", "Trilha.TLabel e o rótulo do Botao desligado"),
 )
 
 #: Os mesmos objetos, medidos como FORMA e não como texto: a silhueta do botão
@@ -283,6 +289,29 @@ def test_a_forma_do_botao_se_separa_do_que_esta_atras(tema, frente, fundo,
         f"{onde}, no tema {tema}: {_cor(paleta, frente)} contra "
         f"{_cor(paleta, fundo)} ({frente} contra {fundo}) dá {_br(razao)}, "
         f"abaixo dos {_br(MINIMO_COMPONENTE)} de componente")
+
+
+#: Quanto a MOLDURA do botão desligado precisa se separar do que está atrás
+#: para ele continuar com cara de botão. Não é o 3:1 de componente: a WCAG
+#: dispensa o componente inativo (1.4.11), e um contorno forte demais faz o
+#: desligado parecer disponível. É o piso do "dá para ver onde ele está" — a
+#: `borda` de antes dava 1,16:1 sobre o fundo do painel no claro e 1,51:1 no
+#: escuro, e no cabeçalho o "Buscar pagamentos e saldos" desligado virava
+#: texto solto.
+MINIMO_DESLIGADO = 2.0
+
+
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+@pytest.mark.parametrize("atras", ("fundo", "cartao"))
+def test_o_botao_desligado_continua_com_contorno_visivel(tema, atras):
+    """O desligado é preenchido com o `fundo`, então no cabeçalho (que é o
+    fundo) só a moldura o separa da página — e dentro do cartão também."""
+    paleta = widgets.PALETA[tema]
+    borda = paleta[widgets.BORDA_DESLIGADO]
+    razao = _contraste(borda, paleta[atras])
+    assert razao >= MINIMO_DESLIGADO, (
+        f"moldura do botão desligado ({widgets.BORDA_DESLIGADO}) sobre "
+        f"{atras}, no tema {tema}: {_br(razao)}")
 
 
 # --------------------------------------------------------------------- fontes
@@ -682,6 +711,44 @@ def test_nenhum_icone_do_menu_ficou_fora_da_tabela():
 def test_o_cabecalho_sem_apoio_nao_cria_a_linha(raiz):
     assert widgets.Cabecalho(raiz, "Só título").lbl_apoio is None
     assert widgets.Cabecalho(raiz, "Título", "explica").lbl_apoio is not None
+
+
+def test_o_cabecalho_mora_no_fundo_da_aba_sem_faixa_propria(raiz):
+    """A aba é um `ttk.Frame` sem estilo (fundo de cartão); o cabeçalho, no
+    fundo do painel, virava uma faixa de outra cor com moldura em volta."""
+    aba = ttk.Frame(raiz)
+    try:
+        cab = widgets.Cabecalho(aba, "Título", "explica", trilha="A  ›  B")
+        assert str(aba.cget("style")) == "Fundo.TFrame"
+        assert str(cab.filete.cget("style")) == "Filete.TFrame"
+        c = widgets.cores()
+        filete = ttk.Style().lookup("Filete.TFrame", "background")
+        fundo = ttk.Style().lookup("Fundo.TFrame", "background")
+        assert str(filete).upper() == c["linha"].upper()
+        assert str(fundo).upper() == c["fundo"].upper()
+    finally:
+        aba.destroy()
+
+
+def test_o_cabecalho_nao_muda_o_estilo_que_a_aba_ja_escolheu(raiz):
+    aba = ttk.Frame(raiz, style="Menu.TFrame")
+    try:
+        widgets.Cabecalho(aba, "Título")
+        assert str(aba.cget("style")) == "Menu.TFrame"
+    finally:
+        aba.destroy()
+
+
+def test_o_botao_desligado_pinta_a_moldura_medida(raiz):
+    b = widgets.Botao(raiz, "Buscar", papel="acao")
+    try:
+        b.configure(state="disabled")
+        c = widgets.cores()
+        moldura = str(b.cget("highlightbackground")).upper()
+        assert moldura == c[widgets.BORDA_DESLIGADO].upper()
+        assert int(b.cget("highlightthickness")) == 1
+    finally:
+        b.destroy()
 
 
 # ----------------------------------------------------------------- foco
