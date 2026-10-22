@@ -195,3 +195,13 @@ def test_pergunta_do_outro_acesso_diz_quantas_e_quais():
     assert "QR Code" in texto
     um = ss.pergunta_outro_acesso(["34.567-8"], contas)
     assert um.startswith("1 conta é de outro acesso do Sicoob (34.567-8).")
+
+
+def test_sicoob_so_le_para_o_dia_de_hoje():
+    """O saldo lido é o de AGORA: com o período escolhido terminando noutro
+    dia (ou a tela de ontem depois da meia-noite), não se lê nem se guarda."""
+    assert ss.recusa_pela_data(HOJE, HOJE) == ""
+    texto = ss.recusa_pela_data(HOJE - dt.timedelta(days=6), HOJE)
+    assert "a tela é de 16/10" in texto and "só vale para hoje" in texto
+    assert "digite o saldo do banco" in texto
+    assert ss.recusa_pela_data(HOJE + dt.timedelta(days=1), HOJE)

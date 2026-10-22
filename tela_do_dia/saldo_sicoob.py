@@ -167,6 +167,18 @@ def texto_da_hora(leitura, contas, *, lendo=None, ligado=True) -> str:
     return texto
 
 
+def recusa_pela_data(data: date, hoje: date) -> str:
+    """Vazio = pode ler. O saldo lido do Sicoob é o de AGORA: só vale para o
+    dia de trabalho de hoje. Com o período escolhido terminando noutro dia
+    (campo de datas, 22/10/2026) — ou a tela de ontem depois da meia-noite —,
+    ler gravaria o saldo de hoje no arquivo de outro dia."""
+    if data == hoje:
+        return ""
+    return (f"O saldo do Sicoob é o de agora e só vale para hoje: a tela é de "
+            f"{data:%d/%m}. Para ler o Sicoob, busque com o período terminando "
+            "hoje; para outro dia, digite o saldo do banco.")
+
+
 def pergunta_outro_acesso(faltam, contas) -> str:
     """A pergunta do fim da leitura quando sobrou conta de OUTRO acesso do
     Sicoob (prova ao vivo de 22/10/2026). Cada conta pelo rótulo do painel;

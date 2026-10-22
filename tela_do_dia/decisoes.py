@@ -164,15 +164,62 @@ def detalhe_do_erro(erro) -> str:
     return f"detalhe: {type(erro).__name__}: {texto}"
 
 
-# ------------------------------------------------- período lido
-def periodo_na_tela(periodo) -> str:
-    """O texto do período lido. Decisão do dono (21/10/2026): esta aba não
-    tem campo de data — o período é o de `sugerir_periodo(hoje)`, e a tela
-    mostra o que leu. Não há aviso nenhum: sem calendário de feriados não há
+# ------------------------------------------------- período (campo de datas)
+FORMATO_DATA = "%d/%m/%Y"
+
+
+def textos_sugeridos(hoje) -> tuple[str, str]:
+    """O DE/ATÉ com que os campos nascem: a sugestão de `sugerir_periodo`
+    (hoje e os dias não úteis logo antes; numa segunda, sáb..seg)."""
+    from conciliacao.models import sugerir_periodo
+    p = sugerir_periodo(hoje)
+    return f"{p.inicio:{FORMATO_DATA}}", f"{p.fim:{FORMATO_DATA}}"
+
+
+def _data(texto: str, campo: str):
+    import datetime as _dt
+    try:
+        return _dt.datetime.strptime((texto or "").strip(), FORMATO_DATA).date()
+    except ValueError:
+        raise ValueError(f"Data inválida em {campo}: '{(texto or '').strip()}' — "
+                         "use dd/mm/aaaa.") from None
+
+
+def periodo_da_busca(txt_ini: str, txt_fim: str, sugerido, hoje):
+    """O período que o Buscar lê (pedido do dono, 22/10/2026: "já senti falta
+    de selecionar as datas aqui").
+
+    - O que está nos campos vale; invertido, troca (como a Remessa/Retorno);
+      data que não é dd/mm/aaaa levanta `ValueError` com o recado.
+    - Os campos AINDA com a sugestão que o app pôs (`sugerido`), de outro
+      dia — o app aberto de um dia para o outro —, viram a sugestão de HOJE:
+      ninguém escolheu ontem, e ler ontem calado seria o pior erro aqui.
+
+    O dia de trabalho é o ATÉ (`periodo.fim`): o JSON do dia, a nuvem do dia
+    (liberações, agendados, lista do diretor), a data dos aportes e o Excel
+    são desse dia. O Sicoob só é lido quando ele é hoje
+    (`saldo_sicoob.recusa_pela_data`)."""
+    from conciliacao.models import Periodo, sugerir_periodo
+    atual = ((txt_ini or "").strip(), (txt_fim or "").strip())
+    if sugerido is not None and atual == tuple(sugerido) and atual != textos_sugeridos(hoje):
+        return sugerir_periodo(hoje)
+    ini, fim = _data(atual[0], "DE"), _data(atual[1], "ATÉ")
+    return Periodo(min(ini, fim), max(ini, fim))
+
+
+def periodo_na_tela(periodo, hoje=None) -> str:
+    """O texto do período lido. Sem aviso de feriado: sem calendário não há
     como saber quando avisar ("o dia útil anterior ficou fora" vale em todo
-    dia útil, e aviso que aparece sempre é ruído). No dia seguinte a um
-    feriado, os vencidos do feriado se buscam pela aba Remessa/Retorno."""
-    return f"Pagamentos de {periodo.inicio:%d/%m} a {periodo.fim:%d/%m}"
+    dia útil, e aviso que aparece sempre é ruído) — com o campo de datas
+    (22/10/2026), o dono escolhe o período do dia seguinte a um feriado.
+
+    Com `hoje` e o ATÉ em outro dia, diz qual é o dia de trabalho e que o
+    Sicoob não é lido (o saldo dele é o de agora)."""
+    texto = f"Pagamentos de {periodo.inicio:%d/%m} a {periodo.fim:%d/%m}"
+    if hoje is not None and periodo.fim != hoje:
+        texto += (f" · dia de trabalho {periodo.fim:%d/%m} (não é hoje: o saldo do "
+                  "Sicoob não é lido — digite o do banco)")
+    return texto
 
 
 # ------------------------------------------------- arquivo e data do dia

@@ -245,3 +245,61 @@ def test_ler_o_dia_que_falha_escreve_o_detalhe_e_o_traceback():
     assert "Não consegui ler o dia." in ultimo
     assert "dc.detalhe_do_erro(e)" in ultimo
     assert 'util.log("tela_do_dia").exception(' in ultimo
+
+
+# ------------------------------------------- campo de datas (dono, 22/10)
+SEG = date(2026, 10, 19)          # segunda: a sugestão é sáb..seg
+
+
+def test_campos_nascem_com_a_sugestao_de_hoje():
+    assert dc.textos_sugeridos(SEG) == ("17/10/2026", "19/10/2026")
+    assert dc.textos_sugeridos(HOJE) == ("21/10/2026", "21/10/2026")
+
+
+def test_buscar_usa_o_periodo_escolhido():
+    from conciliacao.models import Periodo
+    sug = dc.textos_sugeridos(HOJE)
+    p = dc.periodo_da_busca("16/10/2026", "20/10/2026", sug, HOJE)
+    assert p == Periodo(date(2026, 10, 16), date(2026, 10, 20))
+    # Invertido: troca, como a aba Remessa/Retorno.
+    assert dc.periodo_da_busca("20/10/2026", "16/10/2026", sug, HOJE) == p
+    # Sem mexer nos campos: a sugestão de hoje.
+    assert dc.periodo_da_busca(*sug, sug, HOJE) == Periodo(HOJE, HOJE)
+
+
+def test_sugestao_de_ontem_nao_mexida_vira_a_de_hoje():
+    """App aberto de um dia para o outro: os campos ainda têm a sugestão de
+    ontem, que ninguém escolheu. Buscar hoje lê hoje — nunca ontem calado."""
+    from conciliacao.models import Periodo
+    ontem = dc.textos_sugeridos(date(2026, 10, 16))       # sexta
+    assert dc.periodo_da_busca(*ontem, ontem, SEG) == Periodo(date(2026, 10, 17), SEG)
+    # Mas se o dono ESCOLHEU (o texto não é o que o app pôs), vale o escolhido.
+    assert dc.periodo_da_busca("16/10/2026", "16/10/2026", ("x", "y"), SEG) == \
+        Periodo(date(2026, 10, 16), date(2026, 10, 16))
+
+
+@pytest.mark.parametrize("ini, fim", [("", "21/10/2026"), ("32/10/2026", "21/10/2026"),
+                                      ("21/10/2026", "21/10"), ("ontem", "21/10/2026")])
+def test_data_invalida_e_recusada_com_recado(ini, fim):
+    with pytest.raises(ValueError, match="dd/mm/aaaa"):
+        dc.periodo_da_busca(ini, fim, ("a", "b"), HOJE)
+
+
+def test_periodo_que_nao_termina_hoje_avisa_que_o_sicoob_nao_e_lido():
+    from conciliacao.models import Periodo
+    assert dc.periodo_na_tela(Periodo(HOJE, HOJE), HOJE) == "Pagamentos de 21/10 a 21/10"
+    passado = dc.periodo_na_tela(Periodo(date(2026, 10, 16), date(2026, 10, 16)), HOJE)
+    assert passado.startswith("Pagamentos de 16/10 a 16/10")
+    assert "dia de trabalho 16/10" in passado and "Sicoob" in passado
+
+
+def test_buscar_da_tela_usa_os_campos_e_nao_so_a_sugestao():
+    import ast
+    from pathlib import Path
+    fonte = (Path(__file__).resolve().parents[1] / "tela_do_dia" / "frame.py").read_text(
+        encoding="utf-8")
+    buscar = next(n for n in ast.walk(ast.parse(fonte))
+                  if isinstance(n, ast.FunctionDef) and n.name == "buscar")
+    trecho = ast.get_source_segment(fonte, buscar)
+    assert "dc.periodo_da_busca(" in trecho and "sugerir_periodo(" not in trecho
+    assert "CampoData(" in fonte

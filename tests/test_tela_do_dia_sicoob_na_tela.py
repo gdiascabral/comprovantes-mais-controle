@@ -291,12 +291,13 @@ def test_reler_depois_da_meia_noite_pede_novo_buscar(monkeypatch):
     l = _leitor(tela)
     l.contas = [ss.ContaDoPainel("Alfa", numero="12.345-6")]
     l.reler()
-    assert avisos[-1] == "Busque de novo: a tela é de 21/10." and l._thread is None
+    assert avisos[-1] == ss.recusa_pela_data(HOJE - dt.timedelta(days=1), HOJE)
+    assert "a tela é de 21/10" in avisos[-1] and l._thread is None
     # O automático (fim do Buscar) também recusa, sem janela.
     n = len(avisos)
     l.ler_se_faltar()
     assert len(avisos) == n and l._thread is None
-    assert any("Busque de novo: a tela é de 21/10" in r for r in tela.registro)
+    assert any("a tela é de 21/10" in r for r in tela.registro)
 
 
 # ------------------------------------------------- dois acessos (prova 22/10)

@@ -26,7 +26,6 @@ from conciliacao.aportadores import ler_regras
 from conciliacao.config import load_config
 from conciliacao.frame import RAIZ_SAIDA
 from conciliacao.mapping import AccountMapping
-from conciliacao.models import sugerir_periodo
 from conciliacao.workbook import WorkbookError, output_name
 from nuvem import registro, sessao
 from nuvem.pagamentos_do_dia import DiaNaNuvem
@@ -115,6 +114,12 @@ class TelaDoDiaFrame(ttk.Frame):
         self.para_marcar_itens = None    # None = "Montar a lista" ainda não foi clicado
         self.lista = []                  # [lista_diretor.LinhaDaLista]
         self._lista_ligada = False
+        # Campo de datas (pedido do dono, 22/10/2026): nasce com a sugestão de
+        # hoje; `_sugerido` é o que o APP pôs, para o Buscar do dia seguinte
+        # não ler ontem calado (`decisoes.periodo_da_busca`).
+        self._sugerido = dc.textos_sugeridos(datetime.date.today())
+        self.v_ini = tk.StringVar(value=self._sugerido[0])
+        self.v_fim = tk.StringVar(value=self._sugerido[1])
         self._build()
         self.after(150, self._drain)
 
@@ -159,6 +164,16 @@ class TelaDoDiaFrame(ttk.Frame):
 
         c1 = self.c1 = widgets.Cartao(corpo, "Saldos", 1)
         c1.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        # O período do Buscar, no topo do cartão 1, como na Remessa/Retorno.
+        # O dia de trabalho é o ATÉ; o Sicoob só é lido quando ele é hoje.
+        datas = ttk.Frame(c1)
+        datas.pack(fill="x", pady=px((0, 8)))
+        widgets.Campo(datas, "De", lambda p: widgets.CampoData(p, self.v_ini)
+                      ).pack(side="left", padx=px((0, 16)))
+        widgets.Campo(datas, "Até", lambda p: widgets.CampoData(p, self.v_fim)
+                      ).pack(side="left", padx=px((0, 16)))
+        widgets.Botao(datas, "Hoje", papel="neutro", command=self._datas_de_hoje
+                      ).pack(side="left", pady=px((15, 0)))
         self._ajuda(c1, "As que não batem sobem para o topo. Clique no valor do sistema ou "
                         "do banco para editar (Enter edita o do banco): o valor digitado leva "
                         "✎, o original e o motivo (opcional) aparecem embaixo da tabela, "
@@ -180,8 +195,8 @@ class TelaDoDiaFrame(ttk.Frame):
 
         c2 = widgets.Cartao(corpo, "Pagamentos por conta", 2)
         c2.pack(fill="x", padx=PADX, pady=px((0, 12)))
-        # Sem campo de data (decisão do dono): o período lido fica à vista,
-        # mas só DEPOIS de buscar — vazio, o rótulo era uma linha em branco
+        # O período lido fica à vista (o escolhido no cartão 1 pode ter
+        # mudado depois do Buscar), mas só DEPOIS de buscar — vazio, o rótulo era uma linha em branco
         # em cima da ajuda (`mostrar_periodo`).
         self.lbl_periodo = ttk.Label(c2, style="Secao.TLabel", text="")
         # A nuvem que não respondeu: em vermelho, fora do layout quando vazio.
@@ -544,7 +559,14 @@ class TelaDoDiaFrame(ttk.Frame):
         # Recusar ANTES de apagar os botões (ver "Um navegador, seis abas").
         if self.anx.avisar_se_ocupado("os Pagamentos do dia", aba=self):
             return
-        periodo = sugerir_periodo(datetime.date.today())
+        hoje = datetime.date.today()
+        try:
+            periodo = dc.periodo_da_busca(self.v_ini.get(), self.v_fim.get(),
+                                          self._sugerido, hoje)
+        except ValueError as e:
+            messagebox.showinfo("Pagamentos do dia", str(e))
+            return
+        self._mostrar_datas(periodo, hoje)
         self._limpar()
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
@@ -552,6 +574,20 @@ class TelaDoDiaFrame(ttk.Frame):
         self.q.put(("status", f"Lendo {periodo.descrever()}..."))
         self.worker = self.anx.submeter("Pagamentos do dia — ler", self._t_ler,
                                         periodo, dona=self)
+
+    def _mostrar_datas(self, periodo, hoje):
+        """Os campos mostram o período que vai ser lido (o invertido sai
+        desvirado; a sugestão de ontem, a de hoje)."""
+        ini, fim = f"{periodo.inicio:%d/%m/%Y}", f"{periodo.fim:%d/%m/%Y}"
+        self.v_ini.set(ini)
+        self.v_fim.set(fim)
+        if (ini, fim) == dc.textos_sugeridos(hoje):
+            self._sugerido = (ini, fim)
+
+    def _datas_de_hoje(self):
+        self._sugerido = dc.textos_sugeridos(datetime.date.today())
+        self.v_ini.set(self._sugerido[0])
+        self.v_fim.set(self._sugerido[1])
 
     def _limpar(self):
         """A leitura de antes sai da tela ANTES da nova começar: busca que cai
@@ -656,7 +692,7 @@ class TelaDoDiaFrame(ttk.Frame):
                       "sobrescrito).")
         for aviso in self.leitura.avisos:
             self._log(f"[!] {aviso}")
-        self.mostrar_periodo(dc.periodo_na_tela(self.periodo))
+        self.mostrar_periodo(dc.periodo_na_tela(self.periodo, datetime.date.today()))
         self._montar_lista()
         self._recalcular()
         # Sem apuração (nenhum lançamento a pagar), planilha, HTML e Remessa

@@ -150,12 +150,27 @@ a tela pede para buscar de novo. Sem lançamentos no período (`entradas is
 None`), o Excel pode sair (a pagar zero é verdade), mas planilha, HTML e
 Remessa recusam.
 
-**Sem campo de data** (decisão do dono, 21/10/2026): o período é o de
-`sugerir_periodo(hoje)`, e a tela mostra o período lido ("Pagamentos de DD/MM
-a DD/MM", `decisoes.periodo_na_tela`). Sem calendário de feriados, ela NÃO
-avisa nada sobre o dia anterior: "o dia útil anterior ficou fora" vale em todo
-dia útil e viraria ruído. **No dia seguinte a um feriado, os vencidos do
-feriado se buscam pela aba Remessa/Retorno** (que tem o campo de data).
+**Campo de datas DE/ATÉ** (pedido do dono, 22/10/2026, revendo a decisão de
+21/10 de não ter): no topo do cartão 1, `widgets.CampoData` como na
+Remessa/Retorno, mais o botão "Hoje". Os campos nascem com
+`sugerir_periodo(hoje)` (`decisoes.textos_sugeridos`) e o Buscar lê o que
+está neles (`decisoes.periodo_da_busca`: invertido troca, data inválida
+recusa com recado). **Os campos ainda com a sugestão que o APP pôs, de outro
+dia** (app aberto de um dia para o outro), **viram a sugestão de hoje** —
+ninguém escolheu ontem; a comparação é pelo TEXTO, e não por `trace` da
+variável, porque o `CampoData` reescreve a mesma data ao perder o foco.
+**O dia de trabalho é o ATÉ** (`periodo.fim`): o JSON do dia, a nuvem do
+dia (liberações, agendados, lista do diretor), a data dos aportes e o Excel
+são desse dia, e continuam coerentes com um período escolhido. **O Sicoob só
+é lido quando o ATÉ é hoje** (`saldo_sicoob.recusa_pela_data`): o saldo
+lido é o de AGORA, e gravá-lo no arquivo de outro dia seria mentir — com o
+ATÉ noutro dia, o Reler recusa com o recado, o automático do Buscar só
+escreve no Registro, a leitura já guardada daquele dia (se houver) continua
+valendo, e o rótulo do período diz "dia de trabalho DD/MM (não é hoje: o
+saldo do Sicoob não é lido — digite o do banco)" (`periodo_na_tela(p,
+hoje)`). É a mesma regra que já cobria a virada da meia-noite. Sem
+calendário de feriados, a tela NÃO avisa nada sobre o dia anterior; no dia
+seguinte a um feriado, o dono escolhe o período.
 
 
 ## Leitura e boletos somados (entrega 5)

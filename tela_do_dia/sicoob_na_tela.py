@@ -154,10 +154,11 @@ class LeitorSicoob:
                 self.tela._log(f"[!] {TITULO}: {texto}")
 
         data = self._data()
-        if data != _hoje():
-            # Virada da meia-noite: a tela é de ontem, e a leitura seria
-            # guardada no dia errado.
-            recusar(f"Busque de novo: a tela é de {data:%d/%m}.")
+        recusa = ss.recusa_pela_data(data, _hoje())
+        if recusa:
+            # Virada da meia-noite ou período escolhido noutro dia: o saldo
+            # lido é o de agora, e seria guardado no dia errado.
+            recusar(recusa)
             return
         if not self._ligado():
             from extratos_sicoob import saldo
