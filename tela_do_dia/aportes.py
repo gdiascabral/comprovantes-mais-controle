@@ -50,6 +50,10 @@ class AporteDaConta:
     e_mae: bool = False
     #: M do Painel: o que entra na conta pela seção «À MÃO».
     entra_a_mao: Decimal = ZERO
+    #: Distribuição de lucros feita à mão (item A, 22/10/2026): SAI desta
+    #: conta para um sócio ou investidor. No Excel é linha da seção «À MÃO»
+    #: com esta conta na origem — soma no E dela e no M de ninguém.
+    distribui: Decimal = ZERO
 
     @property
     def sem_saldo(self) -> bool:
@@ -60,7 +64,7 @@ class AporteDaConta:
     def minimo(self) -> Decimal:
         if self.saldo is None:
             return ZERO                      # não calculado (ver `sem_saldo`)
-        falta = self.a_pagar + self.sai - self.saldo - self.entra_a_mao
+        falta = self.a_pagar + self.sai + self.distribui - self.saldo - self.entra_a_mao
         return falta if falta > ZERO else ZERO
 
     @property
@@ -80,7 +84,7 @@ class AporteDaConta:
         # Sem saldo, o número só mostra o movimento do dia; a conta já carrega
         # o alerta de erro e não entra em sugestão nem em alerta de negativa.
         return (self.saldo if self.saldo is not None else ZERO) \
-            - self.a_pagar - self.sai + self.definido + self.entra_a_mao
+            - self.a_pagar - self.sai - self.distribui + self.definido + self.entra_a_mao
 
     @property
     def sugestao(self) -> dict:
@@ -127,10 +131,13 @@ def conta_mae(regras) -> str | None:
     return empatadas[0] if empatadas else None          # empate: a primeira da aba
 
 
-def montar_aportes(saldos, a_pagar, regras, definidos, a_mao=None) -> PainelDeAportes:
+def montar_aportes(saldos, a_pagar, regras, definidos, a_mao=None,
+                   distribuicoes=None) -> PainelDeAportes:
     """`a_mao`: movimentos da seção «À MÃO», [(origem, destino, valor)].
     Origem None = entra de fora (ex.: sócio aporta na mãe). O destino soma
-    no M dele (entra); a origem, se for conta do dia, soma no E (sai)."""
+    no M dele (entra); a origem, se for conta do dia, soma no E (sai).
+    `distribuicoes`: [(conta de origem, sócio, valor)] — só SAI da origem
+    (`distribui`), que tem de ser conta do dia."""
     contas_do_dia = list(dict.fromkeys([*saldos, *a_pagar]))
     participantes: dict[str, list] = {}
     for r in regras:
@@ -169,6 +176,19 @@ def montar_aportes(saldos, a_pagar, regras, definidos, a_mao=None) -> PainelDeAp
             entra[destino] += valor
             if origem is not None and origem in contas_do_dia:
                 sai[origem] += valor
+    distribui: dict[str, Decimal] = defaultdict(lambda: ZERO)
+    for origem, socio, valor in (distribuicoes or ()):
+        if not valor:
+            continue
+        if valor < ZERO:
+            alertas.append(("atencao", f"Distribuição {origem} → {socio}: valor negativo "
+                                       f"({brl(valor)}) foi ignorado"))
+        elif origem not in contas_do_dia:
+            alertas.append(("atencao", f"Distribuição {origem} → {socio}: a conta de origem "
+                                       f"não está entre as do dia; o valor {brl(valor)} "
+                                       "foi ignorado"))
+        else:
+            distribui[origem] += valor
     mae = conta_mae(regras)
     empatadas = _empatadas_na_mae(regras)
     if len(empatadas) > 1:
@@ -184,9 +204,10 @@ def montar_aportes(saldos, a_pagar, regras, definidos, a_mao=None) -> PainelDeAp
                           participantes=participantes.get(rotulo, []),
                           definidos=dict(por_destino.get(rotulo, {})),
                           sai=sai.get(rotulo, ZERO), e_mae=(rotulo == mae),
-                          entra_a_mao=entra.get(rotulo, ZERO))
+                          entra_a_mao=entra.get(rotulo, ZERO),
+                          distribui=distribui.get(rotulo, ZERO))
         if (c.e_mae or c.sem_saldo or c.minimo > ZERO or c.definidos
-                or c.entra_a_mao or c.sai):
+                or c.entra_a_mao or c.sai or c.distribui):
             contas.append(c)
     contas.sort(key=lambda c: not c.e_mae)                  # estável: mãe primeiro
     sem_saldo = []

@@ -71,6 +71,83 @@ def descrever_movimento(mov) -> str:
     return f"{origem or 'de fora'} → {destino}: {brl(valor)}"
 
 
+def nova_distribuicao(origem: str, socio: str, valor_texto, rotulos, socios=None):
+    """(conta de origem, sócio, Decimal) de uma distribuição de lucros digitada
+    (item A, 22/10/2026). Levanta ValueError com o motivo.
+
+    A origem é conta do painel (é de lá que o dinheiro SAI: soma no E dela e
+    no mínimo). O sócio não é conta do painel: é quem recebe, pelo NOME do
+    cadastro da aba Aportes — `socios` é essa lista, quando a tela a tem; com
+    ela, nome fora da lista é recusado (a aba Aportes não o acharia)."""
+    origem = (origem or "").strip()
+    socio = (socio or "").strip()
+    if not origem:
+        raise ValueError("escolha a conta de origem")
+    if origem not in set(rotulos):
+        raise ValueError(f"a origem {origem!r} não é conta do painel")
+    if not socio:
+        raise ValueError("escolha o sócio ou investidor que recebe")
+    if socios is not None and socio not in set(socios):
+        raise ValueError(f"{socio!r} não está no cadastro da aba Aportes — escolha da lista")
+    if socio in set(rotulos):
+        raise ValueError(f"{socio!r} é conta do painel: isso é transferência entre contas")
+    valor = ler_valor_editado(valor_texto)
+    if valor <= ZERO:
+        raise ValueError("o valor tem de ser maior que zero")
+    return origem, socio, valor
+
+
+def socios_do_cadastro(entidades, rotulos) -> list[str]:
+    """Quem pode receber uma distribuição, para a lista da janela: os nomes do
+    cadastro da aba Aportes (é por eles que o "Mandar" casa), sem a subconta
+    de investidor (ela só RECEBE aporte) e sem as contas do painel (para elas
+    é transferência)."""
+    from aportes.dados import INVESTIDOR_PREFIXO
+    rotulos = set(rotulos or ())
+    return sorted(n for n in (entidades or {})
+                  if not str(n).startswith(INVESTIDOR_PREFIXO) and n not in rotulos)
+
+
+def distribuicoes_validas(distribuicoes, rotulos) -> list:
+    """As que o Excel recebe: origem conta do painel e valor > 0 — as mesmas
+    que a tela soma (`aportes.montar_aportes` ignora as outras, com alerta)."""
+    rotulos = set(rotulos)
+    return [(o, s, v) for o, s, v in (distribuicoes or ())
+            if o in rotulos and v is not None and v > ZERO]
+
+
+def descrever_distribuicao(dist) -> str:
+    origem, socio, valor = dist
+    return f"distribuição de lucros {origem} → {socio}: {brl(valor)}"
+
+
+#: O tipo de cada movimento à mão, como o HTML e o Registro o escrevem.
+TIPO_APORTE_NA_MAE = "Aporte que entra na mãe"
+TIPO_TRANSFERENCIA = "Transferência entre contas"
+TIPO_DISTRIBUICAO = "Distribuição de lucros"
+
+
+def movimentos_do_dia(a_mao, distribuicoes) -> list[dict]:
+    """Os movimentos à mão como linhas INFORMATIVAS do HTML dos pagamentos
+    (dono, 22/10/2026: "só a informação pra não ficar nenhum pra trás"): de,
+    para, tipo e valor; os aportes e transferências primeiro, na ordem em
+    que foram incluídos, depois as distribuições. Valor zero ou negativo fica
+    de fora, como na tela e no Excel."""
+    linhas = []
+    for origem, destino, valor in (a_mao or ()):
+        if valor is None or valor <= ZERO:
+            continue
+        linhas.append({"de": origem or DE_FORA, "para": destino,
+                       "tipo": TIPO_TRANSFERENCIA if origem else TIPO_APORTE_NA_MAE,
+                       "valor": valor})
+    for origem, socio, valor in (distribuicoes or ()):
+        if valor is None or valor <= ZERO:
+            continue
+        linhas.append({"de": origem, "para": socio, "tipo": TIPO_DISTRIBUICAO,
+                       "valor": valor})
+    return linhas
+
+
 # ------------------------------------------------------------- passo 4
 def motivo_sem_excel(leitura, saldos, exigir_todos_os_saldos: bool) -> str:
     """Vazio = pode gerar. Leitura interrompida nunca vira Excel ("a pagar 0")
@@ -117,11 +194,20 @@ def separar_envio(envio, mandar_sem_saldo: bool):
     return mandadas, seguradas
 
 
+def _linha_do_envio(p) -> str:
+    return f"{p.aportador} → {p.destino} ({brl(p.valor)}): {p.motivo}"
+
+
 def linhas_do_envio(envio) -> tuple[list[str], list[str]]:
     """(pendências, avisos) em texto. Pendência NÃO foi; aviso foi, confira."""
-    def linha(p):
-        return f"{p.aportador} → {p.destino} ({brl(p.valor)}): {p.motivo}"
-    return [linha(p) for p in envio.pendentes], [linha(p) for p in envio.avisos]
+    return ([_linha_do_envio(p) for p in envio.pendentes],
+            [_linha_do_envio(p) for p in envio.avisos])
+
+
+def linhas_informativas(envio) -> list[str]:
+    """O que não vai e está certo não ir (transferência entre contas da
+    mesma empresa): o Registro informa, sem o "[!]" de erro."""
+    return [_linha_do_envio(p) for p in getattr(envio, "informativos", ())]
 
 
 # ------------------------------------------------------------- passo 2

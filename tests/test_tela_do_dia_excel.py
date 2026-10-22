@@ -191,3 +191,28 @@ def test_leitura_ausente_nunca_vira_excel(tmp_path, mapa):
         xd.gerar(modelo=modelo, destino=destino, data=HOJE, mapping=mapa, planilha=PLANILHA,
                  saldos={8: D("1")}, a_pagar=None, regras=[], definidos={})
     assert not destino.exists()
+
+
+# --- distribuição de lucros (item A, 22/10/2026): sai da origem, ninguém recebe no painel ---
+
+def test_distribuicao_vai_para_a_secao_a_mao_depois_dos_movimentos(tmp_path, mapa):
+    wb = _gerar(tmp_path, mapa, {}, a_mao=MAO, distribuicoes=[(ALFA, SOCIO, D("80.00"))])
+    mov = wb["Movimentações"]
+    assert [mov[f"{c}56"].value for c in "BCH"] == [ALFA, SOCIO, 80.0]
+    assert [mov[f"{c}57"].value for c in "BCH"] == [None, None, None]
+
+
+def test_distribuicao_de_conta_fora_do_painel_e_recusada(tmp_path, mapa):
+    with pytest.raises(WorkbookError, match="distribuição"):
+        _gerar(tmp_path, mapa, {}, distribuicoes=[("Conta Fora", SOCIO, D("5"))])
+
+
+def test_distribuicao_conta_no_limite_das_vinte_linhas(tmp_path, mapa):
+    with pytest.raises(WorkbookError, match="20"):
+        _gerar(tmp_path, mapa, {}, a_mao=[(None, ALFA, D(i + 1)) for i in range(20)],
+               distribuicoes=[(ALFA, SOCIO, D("1"))])
+
+
+def test_distribuicao_zero_fica_de_fora(tmp_path, mapa):
+    wb = _gerar(tmp_path, mapa, {}, distribuicoes=[(ALFA, SOCIO, D("0"))], a_mao=MAO)
+    assert wb["Movimentações"]["H56"].value is None
