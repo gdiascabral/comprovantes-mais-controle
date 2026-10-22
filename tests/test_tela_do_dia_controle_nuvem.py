@@ -112,7 +112,7 @@ def test_editar_muda_so_o_que_mudou_e_insere_antes_de_apagar(banco):
     nova = ca.ContaControlada(salva.conta_erp, ABRE, id=salva.id, aportadores=(
         ca.Aportador(ALFA, D(1), D("30000.00")), ca.Aportador("CICLANO GAMA", D(1))))
     cn.gravar_conta("tok", nova, HOJE, [salva], anotar=lambda *a: None,
-                    vistos=_ids(salva))
+                    vistos=_ids(salva), aberta=salva)
     assert banco.ordem == [f"alterar {cn.CONTAS}", f"inserir {cn.APORTADORES}",
                            f"alterar {cn.APORTADORES}", f"apagar {cn.APORTADORES}"]
     assert {l["nome_erp"] for l in banco.t[cn.APORTADORES]} == {ALFA, "CICLANO GAMA"}
@@ -128,7 +128,7 @@ def test_nao_tira_aportador_com_apontamento_e_nao_escreve_nada(banco):
     sem_beta = ca.ContaControlada(salva.conta_erp, ABRE, (salva.aportadores[0],), id=salva.id)
     with pytest.raises(ValueError, match=BETA):
         cn.gravar_conta("tok", sem_beta, HOJE, [salva], anotar=lambda *a: None,
-                        vistos=_ids(salva))
+                        vistos=_ids(salva), aberta=salva)
     assert banco.ordem == []
 
 
@@ -189,7 +189,7 @@ def test_alterar_barrado_pela_rls_nao_vira_gravado(banco):
     anotado = []
     with pytest.raises(cn.NaoGravou):
         cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda a, d: anotado.append(a),
-                        vistos=_ids(salva))
+                        vistos=_ids(salva), aberta=salva)
     assert anotado == []
 
 
@@ -214,7 +214,7 @@ def test_apagar_aportador_barrado_pela_rls_avisa(banco):
     banco.barra_apagar = True
     with pytest.raises(RuntimeError, match="parou no meio"):
         cn.gravar_conta("tok", sem_beta, HOJE, [salva], anotar=lambda *a: None,
-                        vistos=_ids(salva))
+                        vistos=_ids(salva), aberta=salva)
 
 
 def test_corrida_no_apontamento_vira_correcao(banco):
@@ -260,7 +260,7 @@ def test_aportador_incluido_por_outro_admin_nao_e_apagado(banco):
     banco.ordem.clear()
     with pytest.raises(ValueError, match="CICLANO GAMA"):
         cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None,
-                        vistos=_ids(salva))
+                        vistos=_ids(salva), aberta=salva)
     assert banco.ordem == []
 
 
@@ -279,7 +279,7 @@ def test_sem_rede_ou_login_vencido_sobe_como_esta(banco, monkeypatch):
         monkeypatch.setattr(rest, "alterar", falha)   # nada gravado ainda
         with pytest.raises(type(erro)):
             cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None,
-                            vistos=_ids(salva))
+                            vistos=_ids(salva), aberta=salva)
 
 
 def test_le_numeros_que_vieram_como_float_no_json(banco):
@@ -308,7 +308,7 @@ def test_sem_rede_depois_da_primeira_escrita_diz_que_parou_no_meio(banco, monkey
     monkeypatch.setattr(rest, "inserir", falha)      # a conta já foi alterada
     with pytest.raises(RuntimeError, match="parou no meio") as info:
         cn.gravar_conta("tok", nova, HOJE, [salva], anotar=lambda *a: None,
-                        vistos=_ids(salva))
+                        vistos=_ids(salva), aberta=salva)
     assert isinstance(info.value.__cause__, getattr(rest, erro))
 
 
@@ -335,7 +335,7 @@ def test_gravar_recusa_quando_outro_admin_mudou_o_aportador_carregado(banco, cam
     linha[campo] = valor                               # outro administrador gravou
     banco.ordem.clear()
     with pytest.raises(ValueError, match="mudou") as info:
-        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None, vistos=vistos)
+        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None, vistos=vistos, aberta=salva)
     assert "Nada foi gravado" in str(info.value)
     assert banco.ordem == []
 
@@ -346,7 +346,7 @@ def test_gravar_recusa_quando_outro_admin_tirou_um_aportador_carregado(banco):
     banco.t[cn.APORTADORES] = [l for l in banco.t[cn.APORTADORES] if l["nome_erp"] != BETA]
     banco.ordem.clear()
     with pytest.raises(ValueError, match="Nada foi gravado"):
-        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None, vistos=vistos)
+        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None, vistos=vistos, aberta=salva)
     assert banco.ordem == []
 
 
@@ -355,7 +355,7 @@ def test_gravar_com_o_mesmo_valor_escrito_de_outro_jeito_nao_recusa(banco):
     vistos = _ids(salva)
     for l in banco.t[cn.APORTADORES]:                  # o banco devolve 1.0 e 40000
         l["peso"], l["abertura"] = "1.0", l["abertura"].rstrip("0").rstrip(".")
-    cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None, vistos=vistos)
+    cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None, vistos=vistos, aberta=salva)
 
 
 def test_gravar_recusa_vistos_so_com_ids(banco):
@@ -363,3 +363,47 @@ def test_gravar_recusa_vistos_so_com_ids(banco):
     with pytest.raises(ValueError, match="carregou"):
         cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None,
                         vistos=[a.id for a in salva.aportadores])
+
+
+# ---- último conserto (canal combinado, 22/10) ---------------------------------
+
+@pytest.mark.parametrize("campo, valor", [("abertura", "2026-10-01"), ("conta_erp", "OUTRA CONTA"),
+                                          ("ativa", False)])
+def test_gravar_recusa_quando_outro_admin_mudou_a_conta(banco, campo, valor):
+    salva = _gravada(banco)
+    banco.t[cn.CONTAS][0][campo] = valor               # outro administrador / o painel
+    banco.ordem.clear()
+    with pytest.raises(ValueError, match="Nada foi gravado"):
+        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None,
+                        vistos=_ids(salva), aberta=salva)
+    assert banco.ordem == [] and banco.t[cn.CONTAS][0][campo] == valor
+
+
+def test_alterar_nunca_manda_ativa_e_nao_reativa(banco):
+    from dataclasses import replace
+    salva = _gravada(banco)
+    banco.t[cn.CONTAS][0]["ativa"] = False             # desativada no painel
+    aberta = replace(salva, ativa=False)               # e o formulário a viu assim
+    nova = replace(aberta, ativa=True, abertura=ABRE - datetime.timedelta(days=1))
+    cn.gravar_conta("tok", nova, HOJE, [salva], anotar=lambda *a: None,
+                    vistos=_ids(salva), aberta=aberta)
+    linha = banco.t[cn.CONTAS][0]
+    assert linha["ativa"] is False and linha["abertura"] == "2026-10-20"
+
+
+def test_gravar_conta_existente_sem_a_conta_aberta_recusa(banco):
+    salva = _gravada(banco)
+    banco.ordem.clear()
+    with pytest.raises(ValueError, match="formulário"):
+        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None, vistos=_ids(salva))
+    assert banco.ordem == []
+
+
+@pytest.mark.parametrize("escolhido", [4, None])
+def test_apontar_contra_o_cliente_do_erp_recusa_sem_gravar(banco, escolhido):
+    rec = ca.Recebimento("r1", HOJE, D("10.00"), ALFA)      # o Cliente identifica ALFA (id 3)
+    with pytest.raises(ValueError, match=f"o Cliente no ERP aponta para {ALFA}"):
+        cn.apontar("tok", _salva(), rec, escolhido, "pix", anotar=lambda *a: None)
+    assert banco.ordem == [] and banco.t[cn.APONTAMENTOS] == []
+    cn.apontar("tok", _salva(), rec, 3, "pix", anotar=lambda *a: None)   # para ele: vale
+    assert banco.t[cn.APONTAMENTOS][0]["aportador_id"] == 3

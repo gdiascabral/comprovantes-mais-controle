@@ -431,6 +431,37 @@ def _quem_no_texto(conta: ContaControlada, r: Recebimento) -> str:
     return f' (Cliente "{r.cliente}")' if (r.cliente or "").strip() else " (sem Cliente)"
 
 
+def conflito_do_apontamento(conta: ContaControlada, r: Recebimento, aportador_id) -> str:
+    """"" quando apontar `r` para `aportador_id` (None = "não é aporte") não
+    contradiz o Cliente do ERP; senão, o recado. Contradiz quando o Cliente
+    identifica um aportador desta conta (`identificar_aportador`) e a escolha
+    é outro aportador ou "não é aporte". Vale ao APONTAR (`controle_nuvem.apontar`
+    recusa) e ao APURAR (o apontamento volta para sem dono)."""
+    pelo_cliente, _motivo = identificar_aportador(conta, r)
+    if pelo_cliente is None:
+        return ""
+    if aportador_id is not None and not isinstance(aportador_id, bool):
+        try:
+            if pelo_cliente.id is not None and int(aportador_id) == pelo_cliente.id:
+                return ""
+        except (TypeError, ValueError):
+            pass
+    return (f"o Cliente no ERP aponta para {pelo_cliente.nome_erp} — corrija o Cliente no "
+            "ERP ou aponte para ele")
+
+
+#: Quantas vezes (de 50 ms) a releitura depois de gravar espera a leitura em
+#: curso terminar antes de tentar assim mesmo (~2 s).
+ESPERAS_PARA_RELER = 40
+
+
+def reler_ou_esperar(terminou: bool, tentativas: int) -> str:
+    """"reler" quando a leitura anterior já terminou (ou a espera estourou o
+    limite — aí o `atualizar` diz se o navegador está ocupado); senão
+    "esperar" mais um pouco."""
+    return "reler" if terminou or tentativas >= ESPERAS_PARA_RELER else "esperar"
+
+
 def _leitura_que_nao_se_soma(conta: ContaControlada, r: Recebimento, hoje) -> str:
     """"" quando o recebimento pode entrar na conta; senão, o motivo pelo qual
     a CONTA INTEIRA não se calcula. Fora do período pedido: o ERP não
@@ -490,15 +521,12 @@ def apurar(conta: ContaControlada, recebimentos, apontamentos, hoje: datetime.da
                                               f"{brl(r.valor)} no Mais Controle — aponte de novo"))
                 continue
             # O Cliente do ERP manda sobre o apontamento quando identifica
-            # OUTRO aportador (ou um aportador, num "não é aporte"): o dono
-            # apontou olhando outro Cliente, e o banco não guarda qual era —
-            # compara-se com a identificação pelo nome feita agora.
-            pelo_cliente, _motivo = identificar_aportador(conta, r)
-            if pelo_cliente is not None and (p.aportador_id is None
-                                             or pelo_cliente.id != p.aportador_id):
-                ap.sem_dono.append(SemDono(r, f"o Cliente do ERP mudou depois do apontamento "
-                                              f"(agora é {pelo_cliente.nome_erp}) — confira "
-                                              "e aponte de novo"))
+            # OUTRO aportador (ou um aportador, num "não é aporte"): o banco
+            # não guarda o Cliente da hora do apontamento — compara-se com a
+            # identificação pelo nome feita agora (`conflito_do_apontamento`).
+            conflito = conflito_do_apontamento(conta, r, p.aportador_id)
+            if conflito:
+                ap.sem_dono.append(SemDono(r, conflito))
                 continue
             if p.aportador_id is None:
                 ap.apontados.append((r, p, ""))

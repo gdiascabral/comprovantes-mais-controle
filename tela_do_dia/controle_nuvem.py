@@ -21,7 +21,8 @@ import util
 from aportes.regras import como_dinheiro
 
 from .controle_aportes import (Aportador, Apontamento, ContaControlada,
-                               aportador_do_apontamento, problemas_da_conta)
+                               aportador_do_apontamento, conflito_do_apontamento,
+                               problemas_da_conta)
 
 CONTAS = "controle_aporte_conta"
 APORTADORES = "controle_aporte_aportador"
@@ -142,14 +143,29 @@ def _mudados_desde_que_abriu(antes: list, carregados: dict) -> list:
     return saida
 
 
+def _conta_mudou_desde_que_abriu(linhas: list, aberta: ContaControlada) -> bool:
+    """A linha da conta no banco (lida agora) difere da que o formulário
+    abriu — ou sumiu."""
+    if len(linhas) != 1:
+        return True
+    l = linhas[0]
+    return (str(l.get("conta_erp")) != aberta.conta_erp
+            or str(l.get("abertura"))[:10] != aberta.abertura.isoformat()
+            or bool(l.get("ativa", True)) != bool(aberta.ativa))
+
+
 def gravar_conta(token: str, conta: ContaControlada, hoje: datetime.date, outras=(),
-                 anotar=None, vistos=None) -> None:
+                 anotar=None, vistos=None, aberta=None) -> None:
     """`vistos` = os aportadores (`Aportador`, com id) que o formulário
     CARREGOU desta conta — `controle_aportes.vistos_do_formulario`;
     obrigatório para conta já gravada. Recusa sem gravar nada quando o banco
     mudou depois que o formulário abriu (outro administrador): aportador a
     mais (nunca é apagado), a menos, ou com nome, parte ou já aportado
-    diferente do carregado.
+    diferente do carregado. `aberta` = a conta como o formulário a abriu:
+    também obrigatória na alteração, e recusa se o banco mudou o nome da
+    conta, a abertura ou o `ativa` (desativada no painel) desde então. A
+    alteração NUNCA manda `ativa` — só a inclusão —, para nunca reativar
+    pela aba uma conta desativada no painel.
 
     Depois da primeira escrita, QUALQUER falha (rede e login vencido
     inclusive) sobe como `RuntimeError` "a gravação parou no meio", com a
@@ -169,6 +185,14 @@ def gravar_conta(token: str, conta: ContaControlada, hoje: datetime.date, outras
         if vistos is None or not all(isinstance(v, Aportador) and v.id is not None
                                      for v in vistos):
             raise ValueError("Faltou informar os aportadores que o formulário carregou.")
+        if not isinstance(aberta, ContaControlada) or aberta.id != conta.id:
+            raise ValueError("Faltou informar a conta como o formulário a abriu.")
+        linha_conta = rest.ler(CONTAS, token, colunas="id,conta_erp,abertura,ativa",
+                               filtro=f"id=eq.{int(conta.id)}")
+        if _conta_mudou_desde_que_abriu(linha_conta, aberta):
+            raise ValueError(f'A conta "{aberta.conta_erp}" mudou na nuvem (outro administrador '
+                             "ou o painel: nome, abertura ou desativada) depois que você a "
+                             "abriu. Nada foi gravado: atualize a aba e refaça a edição.")
         conhecidos = {int(v.id): v for v in vistos}
         novos_no_banco = [l["nome_erp"] for l in antes if int(l["id"]) not in conhecidos]
         if novos_no_banco:
@@ -197,7 +221,8 @@ def gravar_conta(token: str, conta: ContaControlada, hoje: datetime.date, outras
             ident = int(rest.inserir(CONTAS, token, [campos])[0]["id"])
         else:
             ident = int(conta.id)
-            _alterar_um(token, CONTAS, f"id=eq.{ident}", campos, "a conta")
+            sem_ativa = {k: v for k, v in campos.items() if k != "ativa"}
+            _alterar_um(token, CONTAS, f"id=eq.{ident}", sem_ativa, "a conta")
         escreveu = True
         por_chave = {util.norm_espaco(l["nome_erp"]): l for l in antes}
         novos, mudados = [], []
@@ -244,6 +269,9 @@ def apontar(token: str, conta: ContaControlada, recebimento, aportador_id, motiv
         raise ValueError("A conta ainda não foi gravada na nuvem: grave a conta antes de apontar.")
     conta_id = int(conta.id)
     aportador_do_apontamento(conta, aportador_id)
+    conflito = conflito_do_apontamento(conta, recebimento, aportador_id)
+    if conflito:
+        raise ValueError(f"Não apontei: {conflito}.")
     motivo = (motivo or "").strip()
     if not motivo:
         raise ValueError("Escreva o motivo do apontamento.")

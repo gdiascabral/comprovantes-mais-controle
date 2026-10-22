@@ -592,14 +592,16 @@ def test_apontado_para_um_mas_o_cliente_agora_e_outro_aportador_volta_para_sem_d
     p = ca.Apontamento("r1", 11, D("100.00"), "pix de terceiro")      # apontado para BETA
     ap = ca.apurar(_conta(), [_rec("r1", "100.00", ALFA)], [p], HOJE)  # Cliente agora é ALFA
     assert [s.recebimento.id for s in ap.sem_dono] == ["r1"] and not ap.apontados
-    assert "o Cliente do ERP mudou depois do apontamento" in ap.sem_dono[0].motivo
+    motivo = ap.sem_dono[0].motivo
+    assert f"o Cliente no ERP aponta para {ALFA}" in motivo
+    assert "corrija o Cliente no ERP ou aponte para ele" in motivo
     assert [l.do_erp for l in ap.linhas] == [ZERO, ZERO]
 
 
 def test_nao_e_aporte_mas_o_cliente_agora_e_aportador_volta_para_sem_dono():
     p = ca.Apontamento("r1", None, D("100.00"), "devolução")
     ap = ca.apurar(_conta(), [_rec("r1", "100.00", BETA)], [p], HOJE)
-    assert "o Cliente do ERP mudou depois do apontamento" in ap.sem_dono[0].motivo
+    assert f"o Cliente no ERP aponta para {BETA}" in ap.sem_dono[0].motivo
     assert not ap.apontados and [l.do_erp for l in ap.linhas] == [ZERO, ZERO]
 
 
@@ -660,3 +662,25 @@ def test_depois_da_nuvem_limpa_e_rele_com_ou_sem_erro(erro, lendo, acao):
     recado, quando = ca.depois_da_nuvem(erro, lendo)
     assert quando == acao                 # com erro também: a nuvem pode ter mudado
     assert recado and ("Não gravou" in recado) == erro
+
+
+# ---- último conserto (canal combinado, 22/10) ---------------------------------
+
+def test_conflito_do_apontamento_com_o_cliente_do_erp():
+    rec = _rec("r1", "10.00", ALFA)
+    assert ca.conflito_do_apontamento(_conta(), rec, 10) == ""         # para ele
+    for outro in (11, None):
+        texto = ca.conflito_do_apontamento(_conta(), rec, outro)
+        assert f"o Cliente no ERP aponta para {ALFA}" in texto
+        assert "corrija o Cliente no ERP ou aponte para ele" in texto
+    for sem in ("", "OUTRA PESSOA"):                                   # não identifica
+        assert ca.conflito_do_apontamento(_conta(), _rec("r1", "10.00", sem), 11) == ""
+        assert ca.conflito_do_apontamento(_conta(), _rec("r1", "10.00", sem), None) == ""
+
+
+def test_reler_espera_a_leitura_terminar_com_limite():
+    assert ca.reler_ou_esperar(terminou=True, tentativas=0) == "reler"
+    assert ca.reler_ou_esperar(terminou=False, tentativas=0) == "esperar"
+    assert ca.reler_ou_esperar(terminou=False, tentativas=ca.ESPERAS_PARA_RELER - 1) == "esperar"
+    # no limite, tenta assim mesmo: o `atualizar` diz se o navegador está ocupado
+    assert ca.reler_ou_esperar(terminou=False, tentativas=ca.ESPERAS_PARA_RELER) == "reler"

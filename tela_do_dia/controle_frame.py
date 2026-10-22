@@ -244,10 +244,18 @@ class ControleAportesFrame(ttk.Frame):
         self._acender_botoes()
         if self._reler:
             self._reler = False
-            # Num instante, e não já: o `fim` sai da fila antes de o
-            # `worker.done()` virar True, e o `atualizar` recusaria por
-            # "navegador ocupado" a releitura que mais importa.
-            self.after(50, self._reler_depois_de_gravar)
+            # Não já: o `fim` sai da fila antes de o `worker.done()` virar
+            # True, e o `atualizar` recusaria por "navegador ocupado" a
+            # releitura que mais importa. Espera a leitura terminar, com teto
+            # (`controle_aportes.reler_ou_esperar`).
+            self._reler_quando_livre(0)
+
+    def _reler_quando_livre(self, tentativas: int):
+        terminou = not (self.worker and not self.worker.done())
+        if ca.reler_ou_esperar(terminou, tentativas) == "esperar":
+            self.after(50, self._reler_quando_livre, tentativas + 1)
+            return
+        self._reler_depois_de_gravar()
 
     def _limpar(self, recado: str):
         self._leu_bem = False
@@ -520,7 +528,7 @@ class ControleAportesFrame(ttk.Frame):
                 return "break"
             jan.destroy()
             self._na_nuvem("Conta gravada", lambda: controle_nuvem.gravar_conta(
-                sessao.token(), nova, hoje, outras, vistos=vistos))
+                sessao.token(), nova, hoje, outras, vistos=vistos, aberta=conta))
             return "break"
 
         _rodape(jan, corpo, (("Cancelar", "neutro", jan.destroy),

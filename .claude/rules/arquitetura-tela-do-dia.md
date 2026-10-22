@@ -195,7 +195,11 @@ cortada no centavo a favor do devedor (o líder nunca passa a dever 0,01).
 data com fuso vira data de Brasília, `data_do_erp`) e recebimento zero ou
 negativo (estorno) — nunca somam nem ficam "sem dono". Apontamento perde para o
 Cliente do ERP quando este passa a identificar OUTRO aportador (ou um aportador,
-num "não é aporte"): volta para sem dono, sem coluna nova no banco. Recebimento
+num "não é aporte"): volta para sem dono, sem coluna nova no banco, e
+`apontar` recusa a escolha que contradiz o Cliente (`conflito_do_apontamento`:
+"o Cliente no ERP aponta para X — corrija o Cliente no ERP ou aponte para ele").
+`gravar_conta` em alteração também recusa se o nome, a abertura ou o `ativa` da
+conta mudaram desde que o formulário abriu, e nunca manda `ativa`. Recebimento
 parcial (`plannedValue` ≠ recebido) só alerta. A nuvem que volta com 1000 linhas
 (o `max_rows`) é recusada (`LeituraCortada`), e `gravar_conta` recusa se o banco
 mudou nome, parte ou já aportado depois que o formulário abriu.
