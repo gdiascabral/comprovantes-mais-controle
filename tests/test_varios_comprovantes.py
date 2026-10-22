@@ -303,3 +303,36 @@ def test_relatorio_ganha_as_abas_das_somas(tmp_path):
     pe = dict(_pend(), pdfs=[A600, A400], motivo="soma exata", resultado="anexado")
     vc.acrescentar_ao_relatorio(str(caminho), vc.Somas(anexados=[pe]))
     assert "ANEXADOS POR SOMA" in load_workbook(caminho).sheetnames
+
+
+def test_excecao_no_meio_das_somas_nao_perde_o_que_ja_entrou(tmp_path, monkeypatch):
+    """O 1º pagamento subiu; o 2º explodiu (página morta, rede): a conta volta
+    com o 1º anexado e o 2º como erro — e o 3º não é tentado."""
+    pagos = [_pend("P1", 100000), _pend("P2", 90000), _pend("P3", 80000)]
+    for p in pagos:
+        p.update(status="SEM PAR", motivo_sem_par=matcher_somado.MOTIVO_NENHUM_PDF)
+
+    def somar(livres, pdfs, *, todos):
+        for p in livres:
+            p.update(status=matcher_somado.STATUS_SOMA, pdfs=[A600, A400], motivo="OC/NF")
+        return livres, []
+
+    tentados = []
+
+    def anexar(api, pid, arquivos, *, dry_run=False, log=None):
+        tentados.append(pid)
+        if pid == "P2":
+            raise RuntimeError("a página do ERP fechou")
+        return vc.ResultadoVarios("anexado", entraram=[A600, A400], provado_por="nome")
+
+    monkeypatch.setattr(vc.matcher_somado, "casar_somados", somar)
+    monkeypatch.setattr(vc, "anexar_varios", anexar)
+    logs = []
+    somas = vc.fase_das_somas(ApiFalsa(), pagos, tmp_path, simular=False,
+                              carregar_pdfs=lambda pasta, log: [], log=logs.append)
+    assert tentados == ["P1", "P2"]
+    assert [p["paidId"] for p in somas.anexados] == ["P1", "P2"] and somas.ok == 1
+    assert pagos[1]["resultado"].startswith("erro:excecao:")
+    assert "confira" in pagos[1]["resultado"]
+    assert any("a página do ERP fechou" in m for m in logs)
+    assert vc.juntar_fim((0, 0, 0, 3, ""), somas)[:2] == (1, 2)

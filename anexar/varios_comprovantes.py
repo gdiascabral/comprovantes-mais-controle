@@ -203,8 +203,21 @@ def fase_das_somas(api, pagos, pasta, *, simular, carregar_pdfs=matcher.carregar
     for pe in seguros:
         if cancelar():
             break
-        r = anexar_varios(api, pe["paidId"], [pasta / fn for fn in pe["pdfs"]],
-                          dry_run=simular, log=log)
+        try:
+            r = anexar_varios(api, pe["paidId"], [pasta / fn for fn in pe["pdfs"]],
+                              dry_run=simular, log=log)
+        except Exception as e:                              # noqa: BLE001
+            # Exceção no meio (página do ERP fechada, rede): o que já entrou
+            # nos pagamentos anteriores continua contado, este vira erro com o
+            # aviso de conferir (pode ter subido parte) e o resto NÃO é
+            # tentado — a mesma causa derrubaria o próximo no meio também.
+            pe["resultado"] = (f"erro:excecao:{type(e).__name__} — confira o "
+                               "lançamento no ERP: pode ter subido parte")
+            pe["pdf"] = " + ".join(pe["pdfs"])
+            log(f"[erro] {util.fmt_val(pe['valor'])} ({pe['pdf']}): {e} — as somas "
+                "pararam aqui; confira este lançamento no ERP.")
+            somas.anexados.append(pe)
+            break
         pe["resultado"], pe["pdf"] = r.estado, " + ".join(pe["pdfs"])
         pe["entraram"], pe["faltaram"] = r.entraram, r.faltaram
         pe["provado_por"] = r.provado_por
