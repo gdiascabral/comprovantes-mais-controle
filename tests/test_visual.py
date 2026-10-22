@@ -149,6 +149,14 @@ def test_os_dois_temas_tem_os_mesmos_papeis():
     assert set(widgets.PALETA["claro"]) == set(widgets.PALETA["escuro"])
 
 
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+def test_a_barra_de_cima_tem_a_cor_da_pagina(tema):
+    """22/10/2026: a barra de cima deixa de ser uma faixa azul e fica na cor
+    da página, como o cabeçalho das abas (protótipo da repaginada)."""
+    p = widgets.PALETA[tema]
+    assert p["marca_barra"] == p["fundo"]
+
+
 def test_o_escuro_e_azul_marinho():
     """Pedido do dono em 22/10/2026: o tema escuro em azul-marinho, como no
     protótipo aprovado, e não no cinza quase preto de antes. "Azul" aqui é
@@ -222,10 +230,14 @@ PARES_DE_TEXTO = (
     (BRANCO, "acao_ativo", "o mesmo botão verde sob o cursor"),
     (BRANCO, COR_DO_PASSO, "Botao papel=\"passo\", o círculo numerado do "
                            "Cartao e o dia escolhido do calendário"),
-    (BRANCO, "marca_barra", "Barra.TLabel e Marca.TLabel na barra de cima, e "
-                            "o botão de passo sob o cursor"),
+    # ---- a barra de cima: desde 22/10/2026 na cor da PÁGINA (sem faixa
+    # azul), então o texto dela é o do papel `barra_texto`, não branco fixo
+    ("barra_texto", "marca_barra", "Barra.TLabel e Marca.TLabel na barra de "
+                                   "cima"),
     ("marca_sub", "marca_barra", "BarraTenue.TLabel, o texto secundário "
                                  "DENTRO da barra de cima"),
+    ("marca_sub", "cartao", "a dica cinza no campo de busca da barra"),
+    ("barra_texto", "cartao", "o que se digita no campo de busca da barra"),
     # ---- o cabeçalho da página, que desde 22/10/2026 mora no MESMO fundo da
     # aba (sem faixa própria): as três linhas dele e o rótulo do botão
     # desligado, que é o mesmo cinza da trilha sobre o fundo do painel
@@ -1101,3 +1113,16 @@ def test_o_subtitulo_longo_nao_corta_os_botoes_do_cabecalho(raiz):
         assert int(str(cab.lbl_apoio.cget("wraplength"))) < widgets.px(820)
     finally:
         aba.destroy()
+
+
+def test_a_barra_de_cima_escreve_na_cor_do_papel(raiz):
+    """Nada de branco fixo na barra: no tema claro ela agora é clara."""
+    st = ttk.Style()
+    try:
+        for escuro in (False, True):
+            widgets.aplicar_estilos(escuro)
+            p = widgets.PALETA["escuro" if escuro else "claro"]
+            for estilo in ("Barra.TLabel", "Marca.TLabel"):
+                assert str(st.lookup(estilo, "foreground")).lower() ==                     p["barra_texto"].lower(), estilo
+    finally:
+        widgets.aplicar_estilos(False)

@@ -116,9 +116,12 @@ PALETA = {
         # ela já servia nos dois papéis, e mudá-la mexeria na tela de quem não
         # tem problema nenhum.
         "marca_solida": "#1746C7",  # branco por cima 7,7:1 · 7,7:1 no cartão
-        "marca_barra": "#1746C7",   # a barra superior
+        # A barra de cima: desde 22/10/2026 na cor da PÁGINA, sem faixa azul
+        # (protótipo da repaginada). O texto dela é o `barra_texto`.
+        "marca_barra": "#EEF1F7",
         "marca_fundo": "#E8EEFC",   # item ativo do menu, pílula de informação
-        "marca_sub":   "#C6D4F5",   # texto secundário DENTRO da barra  5,2:1
+        "marca_sub":   "#5B6880",   # texto secundário da barra e dica da busca
+        "barra_texto": "#1C2537",   # o texto da barra de cima
         # ---- ação
         "acao":        "#088347",   # o botão verde: branco por cima  4,8:1
         "acao_ativo":  "#066B3A",   # o mesmo botão sob o cursor
@@ -151,9 +154,10 @@ PALETA = {
         # ao mesmo tempo — clarear mais afunda o branco, escurecer mais some a
         # forma do botão dentro do cartão.
         "marca_solida": "#3D5AFE",  # branco por cima 5,13:1 · 3,30:1 no cartão
-        "marca_barra": "#12379C",   # a barra continua azul, um tom mais fundo
+        "marca_barra": "#0B1529",   # a cor da página (ver o tema claro)
         "marca_fundo": "#192A5E",
-        "marca_sub":   "#BFD0F5",
+        "marca_sub":   "#A9B6CF",
+        "barra_texto": "#E8EDF7",
         "acao":        "#12864F",   # branco por cima  4,6:1
         "acao_ativo":  "#0D6E40",
         "acao_viva":   "#2FBE79",
@@ -590,11 +594,11 @@ def aplicar_estilos(escuro: bool) -> None:
     # A barra superior e o menu lateral pintam os próprios filhos.
     st.configure("Barra.TFrame", background=c["marca_barra"])
     st.configure("Barra.TLabel", background=c["marca_barra"],
-                 foreground="#FFFFFF")
+                 foreground=c["barra_texto"])
     st.configure("BarraTenue.TLabel", background=c["marca_barra"],
                  foreground=c["marca_sub"], font=FONTE_MINI)
     st.configure("Marca.TLabel", background=c["marca_barra"],
-                 foreground="#FFFFFF", font=FONTE_MARCA)
+                 foreground=c["barra_texto"], font=FONTE_MARCA)
     st.configure("Menu.TFrame", background=c["cartao"])
     st.configure("Menu.TLabel", background=c["cartao"], foreground=c["texto"])
     st.configure("MenuSecao.TLabel", background=c["cartao"],
@@ -854,7 +858,10 @@ class Botao(tk.Button):
             "acao":   ("#FFFFFF", c["acao"], c["acao_ativo"]),
             # `marca_solida` e não `marca`: aqui o azul é FUNDO e o branco é a
             # letra. No escuro a `marca` deixava o rótulo em 2,69:1.
-            "passo":  ("#FFFFFF", c["marca_solida"], c["marca_barra"]),
+            # Sob o cursor, um tom mais claro do mesmo azul. Era a cor da
+            # barra de cima, que desde 22/10/2026 é a cor da página.
+            "passo":  ("#FFFFFF", c["marca_solida"],
+                       _mistura(c["marca_solida"], "#FFFFFF", 0.12)),
             # O neutro é CINZA e não branco: no cartão branco, um botão
             # branco com borda de 1 px não se lia como botão — o "Hoje" ao
             # lado do campo de data passava por rótulo.
@@ -865,8 +872,9 @@ class Botao(tk.Button):
             # ler como botão, e não como mais um rótulo), e mais claro ainda
             # ao passar o cursor. Misturado, e não da paleta, porque no tema
             # claro marca e barra são a mesma cor e o botão não reagiria.
-            "barra":  ("#FFFFFF", _mistura(c["marca_barra"], "#FFFFFF", 0.14),
-                       _mistura(c["marca_barra"], "#FFFFFF", 0.28)),
+            # Desde 22/10/2026 a barra é a cor da página: o botão dela é
+            # cinza como o "neutro", com o realce azul-claro sob o cursor.
+            "barra":  (c["barra_texto"], c["cartao"], c["marca_fundo"]),
             "perigo": (c["erro"], c["fundo"], c["erro_fundo"]),
         }.get(self._papel, (c["texto"], c["cartao"], c["fundo"]))
         try:
@@ -2020,14 +2028,14 @@ class Campo(ttk.Frame):
 
 
 # ------------------------------------------------------- moldura da janela
-# A barra azul do topo e o menu branco da esquerda. Moram aqui pelo mesmo
+# A barra do topo (na cor da página desde 22/10/2026) e o menu da esquerda. Moram aqui pelo mesmo
 # motivo do resto: são `tk.Frame` clássicos (o ttk não deixa pintar), e o
 # `comprovantes_app.py` não pode passar a ser o segundo lugar do app onde
 # existe um `#` seguido de seis dígitos.
 
 
 class BarraTopo(tk.Frame):
-    """A faixa da cor da marca, acima de tudo.
+    """A faixa acima de tudo, na cor da página desde 22/10/2026 (antes azul).
 
     Ela responde três perguntas que antes moravam em cantos diferentes da
     janela, ou em canto nenhum:
@@ -2148,7 +2156,7 @@ class BarraTopo(tk.Frame):
     def _entrou(self, _ev=None):
         if self._vazia:
             self.busca.delete(0, "end")
-            self.busca.configure(foreground="#FFFFFF")
+            self.busca.configure(foreground=cores()["barra_texto"])
             self._vazia = False
 
     def _saiu(self, _ev=None):
@@ -2368,16 +2376,16 @@ class BarraTopo(tk.Frame):
             self.configure(background=c["marca_barra"])
             for filho in (self.esquerda, self.centro, self.direita):
                 filho.configure(background=c["marca_barra"])
-            # O campo de busca é mais claro que a barra por dentro, e não
-            # branco: branco no meio do azul vira o elemento mais forte da
-            # tela, e a busca não é a coisa mais importante desta janela.
-            fundo = _mistura(c["marca_barra"], "#FFFFFF", 0.16)
-            self.busca.configure(background=fundo, insertbackground="#FFFFFF",
-                                 highlightbackground=_mistura(
-                                     c["marca_barra"], "#FFFFFF", 0.30),
-                                 highlightcolor="#FFFFFF",
+            # O campo de busca tem a cor de cartão, com borda fina: desde
+            # 22/10/2026 a barra é a cor da página (antes era azul, e o campo
+            # era um azul mais claro por dentro).
+            fundo = c["cartao"]
+            self.busca.configure(background=fundo,
+                                 insertbackground=c["barra_texto"],
+                                 highlightbackground=c["borda"],
+                                 highlightcolor=c["marca"],
                                  foreground=c["marca_sub"] if self._vazia
-                                 else "#FFFFFF",
+                                 else c["barra_texto"],
                                  disabledbackground=fundo)
         except tk.TclError:
             pass
@@ -2419,9 +2427,10 @@ class Avatar(tk.Canvas):
     def aplicar_cores(self, escuro: bool | None = None):
         c = cores()
         fundo = c["marca_barra"] if self._na_barra else c["cartao"]
-        bolha = (_mistura(c["marca_barra"], "#FFFFFF", 0.26) if self._na_barra
-                 else c["marca_fundo"])
-        frente = "#FFFFFF" if self._na_barra else c["marca"]
+        # Na barra ou fora dela, a mesma bolinha: desde 22/10/2026 a barra é
+        # a cor da página, e o branco sobre ela sumiria no tema claro.
+        bolha = c["marca_fundo"]
+        frente = c["marca"]
         try:
             self.configure(background=fundo)
             self.delete("all")
