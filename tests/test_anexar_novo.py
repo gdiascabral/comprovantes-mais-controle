@@ -566,3 +566,44 @@ def test_o_t_auto_passa_o_preparo_da_copia_as_somas(modulo, novo, monkeypatch, t
     monkeypatch.setattr(novo.varios_comprovantes, "fase_das_somas", somas)
     f._t_auto({"C"}, [], str(tmp_path), False)
     assert vistos == [(["pe"], ["pd"], Path(str(tmp_path)))]
+
+
+CODIGO = "1" * 44
+
+
+def _barras_falsas(novo, monkeypatch, lidos):
+    def texto(nome, dados):
+        lidos.append(nome)
+        return (CODIGO if nome == A400 else ""), False
+
+    monkeypatch.setattr(novo.codigo_barras, "texto_do_arquivo", texto)
+    monkeypatch.setattr(novo.codigo_barras, "codigos_no_texto",
+                        lambda t, valores=(), ocr=False: {t} if t else set())
+
+
+def test_a_fase_2_le_o_codigo_de_barras_dos_pdfs_recarregados(novo, monkeypatch, tmp_path):
+    lidos = []
+    _barras_falsas(novo, monkeypatch, lidos)
+    monkeypatch.setattr(novo.origem, "preencher", lambda *a, **k: {})
+    f = _nova(novo, _Dono())
+    for nome in (A400, A600, "1000,00 - X.pdf"):
+        (tmp_path / nome).write_bytes(b"x")
+    pdfs = [{"fn": A400, "valor": 40000}, {"fn": A600, "valor": 60000},
+            {"fn": "1000,00 - X.pdf", "valor": 100000}]
+    f._preparar_somas([_pend_x()], pdfs, tmp_path)
+    assert [pd["barras"] for pd in pdfs] == [{CODIGO}, set(), set()]
+    assert sorted(lidos) == sorted([A400, A600])         # o do valor cheio não é parcela
+
+
+def test_pdf_com_codigo_do_titulo_de_outro_nao_entra_na_soma(novo, monkeypatch, tmp_path):
+    from anexar import matcher
+    _barras_falsas(novo, monkeypatch, [])
+    monkeypatch.setattr(novo.origem, "preencher", lambda *a, **k: {})
+    f = _nova(novo, _Dono())
+    pe = _pend_x()
+    outro = dict(_pend_x(), paidId="P2", launchId="L-P2", valor=55500, valores=[55500],
+                 data="0110", barras={CODIGO}, status="CERTEZA")
+    matcher.casar([pe], [])
+    api = _ApiFalsa()
+    somas = _fase_com_a_copia(novo, f, tmp_path, [pe, outro], api)
+    assert somas.anexados == [] and api.enviados == []

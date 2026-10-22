@@ -32,7 +32,7 @@ import queue
 import tkinter as tk
 from pathlib import Path
 
-from . import origem, varios_comprovantes
+from . import codigo_barras, matcher, origem, varios_comprovantes
 from .anexar_comprovantes import AnexarFrame, _texto_do_erro
 
 
@@ -155,6 +155,34 @@ class AnexarNovoFrame(AnexarFrame):
         except Exception:                                   # noqa: BLE001
             self._log("[aviso] não deu para saber a conta de origem dos "
                       "comprovantes — as somas seguem sem essa regra.")
+        self._ler_barras_da_soma(pendentes, pdfs, pasta)
+
+    def _ler_barras_da_soma(self, pendentes, pdfs, pasta: Path) -> None:
+        """O código de barras dos PDFs que podem ser PARCELA de uma soma.
+
+        Os PDFs da fase 2 chegam da pasta sem `barras`, e sem elas a guarda
+        "o código é do título de OUTRO pagamento" do `matcher_somado` nunca
+        vale. O `_ler_codigos_de_barras` da fase 1 não serve aqui: ele só lê
+        PDF cujo valor é o de um pendente, e a parcela nunca é. Lê os de valor
+        abaixo do maior pendente; o código dos títulos ficou da fase 1, nos
+        mesmos registros. Opcional como as outras réguas."""
+        teto = max((v for pe in pendentes for v in matcher._vals(pe)), default=0)
+        try:
+            for pd in pdfs:
+                pd.setdefault("barras", set())
+                if not 0 < (pd.get("valor") or 0) < teto:
+                    continue
+                if self._checar_pausa():
+                    return
+                try:
+                    dados = (Path(pasta) / pd["fn"]).read_bytes()
+                except OSError:
+                    continue
+                texto, ocr = codigo_barras.texto_do_arquivo(pd["fn"], dados)
+                pd["barras"] = codigo_barras.codigos_no_texto(texto, {pd["valor"]}, ocr)
+        except Exception:                                   # noqa: BLE001
+            self._log("[aviso] não li os códigos de barras dos comprovantes da "
+                      "soma — as somas seguem sem essa regra.")
 
     def _t_auto(self, contas_sel: set, termos: list, pasta_pdfs: str, simular: bool):
         # Roda na thread do navegador (`self.submeter` → dono): as duas fases
