@@ -16,8 +16,8 @@ e nada na tela o denunciaria. A resposta também diz a conta
 saldos na tela do banco: é o que a Home do SicoobNet pede para o quadro de
 movimentações, um GET sem conta no endereço nem no pedido — a resposta é da
 conta SELECIONADA. A página chama com `?block-ui=...`; o `fetch` daqui não
-leva, como as pendências — pelo nome é o "carregando" da tela, mas isso NÃO
-foi conferido: se a prova ao vivo falhar, é o primeiro suspeito.
+leva, como as pendências, e a prova ao vivo de 22/10/2026 (só leitura, depois
+do `acessar_conta` do app) deu HTTP 200 nas três contas assim.
 
 **O endereço e o formato são do Sicoob, que os troca sem aviso** (fez isso
 com os comprovantes em 25/09/2026). Por isso moram num bloco só, logo abaixo.
@@ -114,22 +114,16 @@ def so_digitos(texto) -> str:
 def mesma_conta(da_resposta, pedida: str) -> bool:
     """A conta que a resposta diz é a pedida?
 
-    O cadastro escreve a conta do Sicoob com o dígito ("12.345-6"), e a API
-    das pendências usa os dígitos com o DV ("123456"). O `numContaCorrente`
-    desta resposta é número JSON: perde zero à esquerda, e não se sabe ao
-    certo se traz o DV. Valem os dois — com o DV, ou sem ele (o pedido sem o
-    último dígito) —, sempre sem zeros à esquerda. Resposta sem número é
-    RECUSADA (falha fechada).
-
-    O risco que sobra, aceito: sem o DV, "12345" seria também a conta
-    "1.234-5" COM o DV. Para isso enganar, as duas teriam de estar no mesmo
-    login, o cabeçalho da tela (conferido antes, com o DV) teria de mostrar a
-    pedida e o servidor responder com a outra."""
+    O cadastro escreve a conta do Sicoob com o dígito ("12.345-6"). O
+    `numContaCorrente` da resposta é um NÚMERO JSON com todos os dígitos,
+    INCLUINDO o DV (conferido ao vivo em 22/10/2026: "12.345-6" → 123456),
+    como o `contaCorrente` das pendências. A comparação é de igualdade exata
+    dos dígitos; só os zeros à esquerda são ignorados, porque um número JSON
+    não os carrega. Sem o DV não vale, e resposta sem número é RECUSADA
+    (falha fechada)."""
     r = so_digitos(da_resposta).lstrip("0")
     p = so_digitos(pedida).lstrip("0")
-    if not r or not p:
-        return False
-    return r == p or (len(p) > 1 and r == p[:-1].lstrip("0"))
+    return bool(r) and r == p
 
 
 def medido() -> bool:

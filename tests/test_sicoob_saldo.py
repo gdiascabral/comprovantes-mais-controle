@@ -235,10 +235,16 @@ def test_formato_medido_natureza_desconhecida_e_recusada():
     assert S.interpretar(medida(saldo=0, natureza=""), "12.345-6") == D("0.00")
 
 
-def test_formato_medido_conta_com_ou_sem_digito_e_zeros_a_esquerda():
+def test_formato_medido_conta_com_o_digito_e_zeros_a_esquerda():
+    """`numContaCorrente` traz todos os dígitos COM o DV (medido ao vivo)."""
     assert S.interpretar(medida(conta=123456), "12.345-6") == D("1234.56")
-    assert S.interpretar(medida(conta=12345), "12.345-6") == D("1234.56")
-    assert S.interpretar(medida(conta="0123456"), "12.345-6") == D("1234.56")
+    assert S.interpretar(medida(conta=12345), "01.234-5") == D("1234.56")
+    assert S.interpretar(medida(saldo=110.4), "12.345-6") == D("110.40")
+
+
+def test_formato_medido_conta_sem_o_digito_e_recusada():
+    with pytest.raises(S.OutraConta):
+        S.interpretar(medida(conta=12345), "12.345-6")
 
 
 def test_formato_medido_outra_conta_e_recusada():
@@ -260,7 +266,7 @@ def test_formato_medido_erro_do_servico_nao_vira_saldo():
 
 def test_formato_medido_na_fila_inteira():
     pagina = Pagina({"123456": medida(saldo=10, conta=123456),
-                     "234567": medida(saldo=20, natureza="D", conta=23456)})
+                     "234567": medida(saldo=20, natureza="D", conta=234567)})
     cli = Cliente(pagina, ["12.345-6", "23.456-7"])
     lidos = S.ler_contas(cli, ["12.345-6", "23.456-7"], agora=lambda: AGORA)
     assert [l.saldo for l in lidos] == [D("10.00"), D("-20.00")]

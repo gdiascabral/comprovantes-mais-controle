@@ -67,13 +67,14 @@ paths:
   dono logado e os saldos conferidos na tela: `GET /api/home/obter-informacoes-
   widget-movimentacoes-inicio` (o do quadro de movimentações da Home), sem
   conta no endereço nem no pedido — a resposta é da conta SELECIONADA. A
-  página chama com `?block-ui=...` e o fetch do app não leva (pelo nome, o
-  "carregando" da tela — não conferido; primeiro suspeito se a prova falhar). O saldo é `contaCorrente.extratoContaCorrente.resumo.
+  página chama com `?block-ui=...` e o fetch do app não leva (provado sem ele). O saldo é `contaCorrente.extratoContaCorrente.resumo.
   saldoEmContaCorrente` com o sinal em `naturezaSaldoRes` (C/D; outro valor
   é recusado); `erroServicoMovimentoContaCorrente` true vira "não lido"; e a
   conta da resposta (`cabecalho.numContaCorrente`, número JSON) é conferida
-  de novo contra a pedida, com ou sem o DV e sem zeros à esquerda — sem
-  número, recusa. Tudo num bloco de constantes; `ROTA_SALDO = ""` desliga a
+  de novo contra a pedida: o número traz TODOS os dígitos com o DV
+  (conferido ao vivo), e a igualdade é exata, ignorando só zeros à esquerda;
+  sem número, recusa. A prova ao vivo do coordenador (22/10, só leitura) deu
+  HTTP 200 nas 3 contas, sem `block-ui`. Tudo num bloco de constantes; `ROTA_SALDO = ""` desliga a
   leitura. Se a prova ao vivo der 401/403 com a sessão viva, a contingência
   está na docstring (voltar a "" e escutar a resposta da Home, num plano à
   parte). Guardado por `tests/test_sicoob_saldo.py`.
