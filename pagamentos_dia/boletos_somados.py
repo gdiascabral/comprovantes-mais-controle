@@ -60,25 +60,39 @@ def _numero(valor) -> int:
         return 0
 
 
-def _outras_parcelas_no_erp(item: dict, overview, alvo: Decimal) -> str:
-    """Por que o ERP diz que o título tem mais parcelas que esta, ou "".
+#: O que vira aviso quando nada diz quantas parcelas o título tem.
+NAO_SEI_AS_PARCELAS = "não sei se o título tem outras parcelas — não dividi"
+
+
+def _outras_parcelas_no_erp(item: dict, overview, alvo: Decimal,
+                            titulo_erp=None) -> str:
+    """Por que o título pode ter mais parcelas que esta, ou "" quando se SABE
+    que é uma só.
 
     A lista do passo 1 (`payable-installments/paginated-result`) NÃO traz o
     número de parcelas nem o valor do título (campos provados em produção:
     `id`, `tradePayableId`, `remainingValue`, `sumOfPaidValues`, `paids`,
-    `plannedValue`…). Os nomes daqui são os do corpo do TÍTULO no ERP
-    (`numberOfInstallments`, `installments[]`, o que `guias/lancar.py` grava)
-    e o `totalValue`; lidos só quando vêm, no item ou no overview. Vindo, só
-    servem para RECUSAR — nunca para liberar a divisão."""
-    for fonte in (item, overview if isinstance(overview, dict) else {}):
+    `plannedValue`…). Quem os traz é o TÍTULO inteiro lido no ERP
+    (`titulo_erp`, `GET trade-payables/<tradePayableId>` — a tarefa 3 o lê só
+    para os candidatos a dividir): `numberOfInstallments`, `installments[]`
+    (o que `guias/lancar.py` grava) e o valor (`totalValue`/
+    `tradePayableValue`). Também valem se vierem no item ou no overview.
+    Algum deles dizendo "mais de uma" recusa; NENHUM deles vindo também
+    recusa (decisão do coordenador, 22/10/2026: "não sei" = não divide)."""
+    soube = False
+    for fonte in (item, overview, titulo_erp):
+        if not isinstance(fonte, dict):
+            continue
         n = _numero(fonte.get("numberOfInstallments"))
         if n > 1:
             return (f"o título tem {n} parcelas no ERP — não dá para saber quais "
                     "boletos são desta; não dividi")
+        soube = soube or n == 1
         parcelas = fonte.get("installments")
         if isinstance(parcelas, list) and len(parcelas) > 1:
             return (f"o título tem {len(parcelas)} parcelas no ERP — não dá para "
                     "saber quais boletos são desta; não dividi")
+        soube = soube or (isinstance(parcelas, list) and len(parcelas) == 1)
         for campo in ("totalValue", "tradePayableValue"):
             try:
                 total = _em_centavos(fonte.get(campo))
@@ -88,7 +102,8 @@ def _outras_parcelas_no_erp(item: dict, overview, alvo: Decimal) -> str:
                 return (f"o título vale {relatorio.brl(total)} e o lançamento é "
                         f"{relatorio.brl(alvo)} — pode haver outras parcelas; "
                         "não dividi")
-    return ""
+            soube = soube or total > ZERO
+    return "" if soube else NAO_SEI_AS_PARCELAS
 
 
 def _e_pdf_de_boleto(f: dict, textos: dict) -> bool:
@@ -112,11 +127,19 @@ def _campo_livre(linha: str) -> str:
 
 def decidir(registro: dict, item: dict, files, textos: dict, urls_ocr=(),
             parcelas_abertas: int = 1, *, overview=None, parcelas_na_lista: int = 1,
-            anexos_nao_lidos=(), titulo_nao_lido: bool = False) -> Decisao:
+            anexos_nao_lidos=(), titulo_nao_lido: bool = False,
+            titulo_erp: dict | None = None) -> Decisao:
     """Divide? Só a linha de "vários boletos", sem dado de pagamento, de título
     com UMA parcela (em aberto, na lista e no ERP) e sem pagamento anterior,
     e só com o CONJUNTO INTEIRO dos boletos do título lido e somando ao
-    centavo — nunca um subconjunto escolhido aqui. Na dúvida, não divide."""
+    centavo — nunca um subconjunto escolhido aqui. Na dúvida, não divide.
+
+    `titulo_erp` é o título INTEIRO lido no ERP (`GET trade-payables/<id>`),
+    que diz quantas parcelas ele tem (`numberOfInstallments`,
+    `installments[]`) e quanto vale (`totalValue`/`tradePayableValue`). A
+    lista do passo 1 não traz nada disso: sem `titulo_erp` (leitura que não
+    houve ou falhou) e sem esses campos no item/overview, não divide
+    (`NAO_SEI_AS_PARCELAS`)."""
     if (registro.get("tipo") != "Boleto" or registro.get("status") != STATUS_VARIOS
             or (registro.get("dados") or "").strip() or item.get("paid")
             or registro.get("parcial") or registro.get("valor_diverge")
@@ -132,7 +155,7 @@ def decidir(registro: dict, item: dict, files, textos: dict, urls_ocr=(),
                              "boletos podem ser dela; não dividi")
     valor = float(registro.get("valor") or 0)
     alvo = _em_centavos(valor)
-    aviso = _outras_parcelas_no_erp(item, overview, alvo)
+    aviso = _outras_parcelas_no_erp(item, overview, alvo, titulo_erp)
     if aviso:
         return Decisao(aviso=aviso)
     nao_lidos = set(anexos_nao_lidos or ())
@@ -192,9 +215,13 @@ def _partes_do_registro(registro: dict, decisao: Decisao) -> list[dict]:
     return saida
 
 
-def dividir(resultado: relatorio.Resultado, entradas) -> relatorio.Resultado:
+def dividir(resultado: relatorio.Resultado, entradas,
+            titulos_erp: dict | None = None) -> relatorio.Resultado:
     """O `Resultado` com cada lançamento de boletos que somam exato em N
-    linhas, no lugar da original. Não muda o `resultado` recebido."""
+    linhas, no lugar da original. Não muda o `resultado` recebido.
+
+    `titulos_erp` é `{tradePayableId: título inteiro lido no ERP}` — o
+    `titulo_erp` de `decidir`. Título que não está ali não divide."""
     selecionados = list(entradas.selecionados or ())
     por_id = {str(i.get("id")): i for i in selecionados if i.get("id")}
     abertas = Counter(str(i.get("tradePayableId")) for i in selecionados
@@ -217,7 +244,8 @@ def dividir(resultado: relatorio.Resultado, entradas) -> relatorio.Resultado:
                         overview=overviews.get(str(item.get("id"))),
                         parcelas_na_lista=na_lista[titulo],
                         anexos_nao_lidos=anexos_nao_lidos,
-                        titulo_nao_lido=titulo in titulos_nao_lidos)
+                        titulo_nao_lido=titulo in titulos_nao_lidos,
+                        titulo_erp=(titulos_erp or {}).get(titulo))
             if d.partes:
                 novos.extend(_partes_do_registro(reg, d))
             elif d.aviso:

@@ -12,6 +12,8 @@ DIA = date(2026, 10, 21)
 CONTA = "CONTA EXEMPLO - SICOOB"
 RAIZ = Path(__file__).resolve().parents[1]
 OUTRO_LIVRE = "2680800035545486352881211"
+#: O título inteiro lido no ERP (tarefa 3): uma parcela só.
+UMA_PARCELA = {"T1": {"numberOfInstallments": 1}}
 
 
 def gera_linha(valor_centavos, fator=9999, livre=None):
@@ -87,7 +89,7 @@ def _dividido(valores, itens=None, livres=None):
     itens = itens or [_item()]
     entradas = _entradas(itens, valores, livres)
     base = relatorio.montar_registros(entradas.selecionados, entradas.anexos, {}, entradas.textos)
-    return base, bs.dividir(base, entradas)
+    return base, bs.dividir(base, entradas, titulos_erp=UMA_PARCELA)
 
 
 def test_o_status_que_dispara_e_o_do_relatorio():
@@ -180,7 +182,8 @@ def _entradas_de(itens, linhas, nomes=None, extras=(), overviews=None, **k):
 def _dividir(entradas):
     base = relatorio.montar_registros(entradas.selecionados, entradas.anexos, {},
                                       entradas.textos)
-    return [r for r in _linhas(bs.dividir(base, entradas)) if r["id"] == "L1"]
+    return [r for r in _linhas(bs.dividir(base, entradas, titulos_erp=UMA_PARCELA))
+            if r["id"] == "L1"]
 
 
 def _nao_dividiu(linhas, trecho):
@@ -310,7 +313,40 @@ def test_mesma_linha_em_dois_anexos_conta_uma_vez():
 
 def test_obs_vazia_nao_quebra():
     reg, e = _registro_varios(obs=None)
-    d = bs.decidir(reg, _item(), e.anexos["T1"], e.textos)
+    d = bs.decidir(reg, _item(), e.anexos["T1"], e.textos,
+                   titulo_erp=UMA_PARCELA["T1"])
     partes = bs._partes_do_registro(reg, d)
     assert len(partes) == 2 and all(p["obs"] for p in partes)
     assert bs._obs_sem_a_frase(None) == []
+
+
+# ------------------------------------------------------ conserto, rodada 2
+def test_sem_saber_as_parcelas_do_titulo_nao_divide():
+    """Decisão do coordenador: sem número de parcelas nem valor do título, não
+    se sabe se há outra parcela fora do período — não divide."""
+    entradas = _entradas([_item()], [40000, 60000])
+    base = relatorio.montar_registros(entradas.selecionados, entradas.anexos, {},
+                                      entradas.textos)
+    (linha,) = _linhas(bs.dividir(base, entradas))
+    assert linha["status"] == bs.STATUS_VARIOS and "parte" not in linha
+    assert "não sei se o título tem outras parcelas — não dividi" in linha["obs"]
+    assert "não sei se o título tem outras parcelas" in bs.avisos(
+        bs.dividir(base, entradas))[0]
+
+
+def test_titulo_lido_no_erp_com_uma_parcela_e_valor_igual_divide():
+    entradas = _entradas([_item()], [40000, 60000])
+    base = relatorio.montar_registros(entradas.selecionados, entradas.anexos, {},
+                                      entradas.textos)
+    titulo = {"T1": {"numberOfInstallments": 1, "totalValue": 1000.0}}
+    linhas = _linhas(bs.dividir(base, entradas, titulos_erp=titulo))
+    assert [r["parte"] for r in linhas] == ["1/2", "2/2"]
+
+
+def test_titulo_lido_no_erp_com_mais_parcelas_nao_divide():
+    entradas = _entradas([_item()], [40000, 60000])
+    base = relatorio.montar_registros(entradas.selecionados, entradas.anexos, {},
+                                      entradas.textos)
+    titulo = {"T1": {"numberOfInstallments": 2}}
+    (linha,) = _linhas(bs.dividir(base, entradas, titulos_erp=titulo))
+    assert "2 parcelas no ERP" in linha["obs"]
