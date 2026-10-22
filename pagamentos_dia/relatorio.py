@@ -334,6 +334,33 @@ def eh_pdf(f: dict) -> bool:
             or (f.get("filename") or "").lower().endswith(".pdf"))
 
 
+#: Nome de arquivo que COMEÇA pela sigla da nota ("NF 1234.pdf", "NF-1234",
+#: "NFE 1234", "NFS 12"): é a nota, não um boleto de nome neutro. O
+#: `_NAO_E_BOLETO` não pega "NF " solto, e por isso fica só aqui, na escolha
+#: entre neutros — no `tem_boleto` mudaria "NF 5909 - boleto.pdf", que se
+#: anuncia boleto e continua sendo um (re-revisão de dinheiro, 22/10/2026).
+_NOME_COMECA_COM_NF = re.compile(r"\s*NFS?(?:E|[\s\-_.])", re.I)
+
+
+def _pdfs_neutros(files) -> list:
+    """Os PDFs que não se anunciam nem boleto nem outra coisa: podem ser o
+    boleto (escaneado, nome só de número). Fora a nota pelo nome, o aviso
+    "pagar para", o comprovante… (`_NAO_E_BOLETO`), a nota pela sigla no
+    começo do nome e a autorização de pagamento (`eh_autorizacao`, pelo
+    rótulo): com um deles contado como neutro, o boleto escaneado deixava de
+    ser o ÚNICO e o título caía no Pix do cadastro, APTO e marcado na remessa
+    — o boleto ficava em aberto (pagamento em dobro)."""
+    return [f for f in _pdfs_sem_rotulo_de_outra_coisa(files)
+            if not _NOME_COMECA_COM_NF.match(f.get("filename") or "")
+            and not eh_autorizacao(f)]
+
+
+def _pdfs_sem_rotulo_de_outra_coisa(files) -> list:
+    """A régua antiga dos neutros: PDF que o `_NAO_E_BOLETO` não recusa."""
+    return [f for f in files or ()
+            if eh_pdf(f) and not _NAO_E_BOLETO.search(_rotulo(f))]
+
+
 def escolher_pdf_do_boleto(files) -> dict | None:
     """O PDF do boleto. Nunca devolve a NF, mas não exige a palavra 'boleto':
     metade das faturas da concessionária vem com tagName nulo e nome só de
@@ -343,7 +370,13 @@ def escolher_pdf_do_boleto(files) -> dict | None:
     for f in explicitos:
         if eh_pdf(f):
             return f
-    neutros = [f for f in files if eh_pdf(f) and not _NAO_E_BOLETO.search(_rotulo(f))]
+    # Primeiro a régua estreita (sem a nota pela sigla nem a autorização): o
+    # scan ao lado de "NF 1234.pdf" ou de "PAGAMENTO AUTORIZADO" é o único
+    # candidato. Sem nenhum ali, a régua de sempre — o PDF único continua
+    # sendo o do boleto, como antes (re-revisão de dinheiro, 22/10/2026).
+    neutros = _pdfs_neutros(files)
+    if not neutros:
+        neutros = _pdfs_sem_rotulo_de_outra_coisa(files)
     if len(neutros) == 1:
         return neutros[0]
     return explicitos[0] if explicitos else None
@@ -810,6 +843,16 @@ def _lido_com_certeza(f: dict, textos: dict, urls_ocr=()) -> bool:
         return True
     url = f.get("downloadUrl") or ""
     return bool((textos.get(url) or "").strip()) and url not in urls_ocr
+
+
+def _neutros_nao_lidos(files, textos: dict, urls_ocr=()) -> list:
+    """Os PDFs que podem esconder boleto e NÃO foram lidos com certeza
+    (`_lido_com_certeza`): sem eles lidos, não dá para dizer "não há boleto".
+    Conta a nota pela sigla no nome (NF e boleto num PDF só é prática comum);
+    só a autorização de pagamento fica de fora."""
+    return [f for f in _pdfs_sem_rotulo_de_outra_coisa(files)
+            if not eh_autorizacao(f)
+            and not _lido_com_certeza(f, textos, urls_ocr)]
 
 
 def eh_autorizacao(f: dict, textos: dict | None = None) -> bool:
@@ -2006,6 +2049,21 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     obs = obs_linha or ("Boleto em imagem e o OCR não fechou — preencher manual"
                                         if url_pdf in urls_ocr else
                                         "Boleto em imagem — preencher manual")
+                elif (parece_chave_pix(do_cadastro) and tem_nf_ou_oc
+                      and _neutros_nao_lidos(files, textos, urls_ocr)):
+                    # Dois ou mais PDFs neutros e algum NÃO LIDO com certeza
+                    # (sem texto, ou só OCR que não fechou): ele pode ser o
+                    # boleto escaneado. O Pix do cadastro saía APTO e marcado
+                    # na remessa, e o boleto ficava em aberto — pagamento em
+                    # dobro (re-revisão de dinheiro, 22/10/2026). Fica sem
+                    # dado de pagamento ("ATENÇÃO — sem dados de pgto"), na
+                    # planilha, para alguém abrir o anexo.
+                    tem_documento = True
+                    nomes = ", ".join(
+                        f"'{(f.get('filename') or '?').strip()}'"
+                        for f in _neutros_nao_lidos(files, textos, urls_ocr))
+                    obs = (f"anexo não lido — pode ser boleto: {nomes}; abrir no "
+                           "ERP antes de pagar (sem boleto, o cadastro tem chave Pix)")
                 elif parece_chave_pix(do_cadastro) and tem_nf_ou_oc:
                     # Sem boleto anexado, a regra "boleto ganha de Pix" não
                     # tem premissa: não há boleto para ganhar. Havendo NF ou

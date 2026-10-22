@@ -204,6 +204,17 @@ paths:
   para o favorecido sem o anexo, com as MESMAS travas (revisão de dinheiro de
   22/10/2026, A1/A2/A6). Vale para a Remessa/Retorno igual: é o mesmo
   `montar_registros`.
+  **Boleto escaneado de nome neutro** (re-revisão de dinheiro, 22/10/2026):
+  `escolher_pdf_do_boleto` escolhe primeiro entre `_pdfs_neutros`, que tira
+  também a autorização (`eh_autorizacao`, pelo rótulo) e o nome que COMEÇA
+  pela sigla da nota (`_NOME_COMECA_COM_NF`: "NF 1234", "NF-1234", "NFE…" —
+  só aqui, não no `_NAO_E_BOLETO`, para "NF 5909 - boleto" continuar boleto);
+  sem nenhum ali, vale a régua antiga (o PDF único continua o do boleto). E o
+  Pix do cadastro "sem boleto anexado" exige todo PDF que pode esconder
+  boleto (`_neutros_nao_lidos`: régua antiga menos a autorização) LIDO com
+  certeza; senão fica sem dado de pagamento, "ATENÇÃO — sem dados de pgto",
+  Obs "anexo não lido — pode ser boleto: …". Antes, autorização ou "NF 1234"
+  + scan davam Pix APTO e marcado na remessa, com o boleto em aberto.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e

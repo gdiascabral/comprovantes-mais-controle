@@ -416,7 +416,7 @@ def test_a2_autoriza_solto_no_nome_nao_e_autorizacao():
 
 def test_a2_pagamento_autorizado_sem_acento_nem_caixa():
     for nome in ("PAGAMENTO AUTORIZADO - FULANO", "pagamento autorizado",
-                 "Pagamento_Autorizado julio", "PAGAMENTO  AUTORIZADO"):
+                 "Pagamento_Autorizado fulano", "PAGAMENTO  AUTORIZADO"):
         assert relatorio.eh_autorizacao(anexo(nome)), nome
     assert relatorio.eh_autorizacao(anexo("doc 9", url="u"),
                                     {"u": "Pagamento Autorizado pela diretoria"})
@@ -484,3 +484,78 @@ def test_a3_documento_que_so_comeca_pelo_nome_do_cadastro_nao_casa(tmp_path):
 def test_a3_documento_mais_curto_que_o_cadastro_nao_casa(tmp_path):
     cad = _cadastro(tmp_path, {"SOCIO UM": SOCIOS["SOCIO UM"]})
     assert reembolso.socio_do_documento("SOCIO", cad) is None
+
+
+# ==========================================================================
+# Re-revisão de dinheiro (22/10/2026): boleto escaneado de nome neutro
+# ==========================================================================
+# Forma Boleto, NF no número do documento, Pix no cadastro e um PDF de nome
+# neutro que não foi lido com certeza (sem texto ou só OCR que não fechou):
+# pode ser o boleto. Pagar pelo Pix do cadastro e marcar na remessa deixava o
+# boleto em aberto — pagamento em dobro.
+def _boleto_nf(**mudancas):
+    return _autorizado(**dict({"tradePayablePaymentMethod": "Boleto",
+                               "documentNumber": "NF 1234"}, **mudancas))
+
+
+def _nao_pagou_pelo_cadastro(res):
+    for linha in res.contas.get(CONTA, []):
+        assert not linha["status"].startswith("APTO"), linha["status"]
+    for c in remessa_dia.preparar(res.contas, participantes={
+            "FAVORECIDA MODELO": CPF_FAVORECIDA}).get(CONTA, []):
+        assert not c.marcado
+
+
+def test_rr_autorizacao_e_scan_neutro_nao_paga_pix_do_cadastro():
+    for textos, ocr in (({}, set()),
+                        ({"scan": "texto borrado sem linha"}, {"scan"})):
+        anexos = {"t1": [anexo("PAGAMENTO AUTORIZADO - FULANO.pdf", url="a"),
+                         anexo("digitalizar0001.pdf", url="scan")]}
+        res = relatorio.montar_registros([_boleto_nf()], anexos, {},
+                                         dict(textos, a="PAGAMENTO AUTORIZADO"),
+                                         urls_ocr=ocr)
+        _nao_pagou_pelo_cadastro(res)
+
+
+def test_rr_nf_solta_e_scan_neutro_nao_paga_pix_do_cadastro():
+    for nome_nf in ("NF 1234.pdf", "NF-1234.pdf", "NFE 1234.pdf"):
+        anexos = {"t1": [anexo(nome_nf, url="nf"),
+                         anexo("digitalizar0001.pdf", url="scan")]}
+        res = relatorio.montar_registros([_boleto_nf()], anexos, {},
+                                         {"nf": "NOTA FISCAL 1234"})
+        _nao_pagou_pelo_cadastro(res)
+
+
+def test_rr_dois_neutros_sem_leitura_ficam_atencao_com_obs():
+    anexos = {"t1": [anexo("digitalizar0001.pdf", url="s1"),
+                     anexo("digitalizar0002.pdf", url="s2")]}
+    res = relatorio.montar_registros([_boleto_nf()], anexos, {}, {})
+    linha = _linha(res)
+    assert linha["status"].startswith("ATENÇÃO"), linha["status"]
+    assert "anexo não lido — pode ser boleto" in linha["obs"]
+    _nao_pagou_pelo_cadastro(res)
+
+
+def test_rr_controle_pix_do_cadastro_sem_anexo_neutro_continua_apto():
+    """Só a NF anexada (lida) e a autorização: nada que possa ser boleto."""
+    for anexos, textos in (
+            ({"t1": [anexo("NF 1234", "Nota Fiscal", url="nf")]},
+             {"nf": "NOTA FISCAL 1234"}),
+            ({"t1": [anexo("NOTA FISCAL 1234.pdf", url="nf"),
+                     anexo("orcamento.xlsx", ext=".xlsx", url="x")]},
+             {"nf": "NOTA FISCAL 1234"})):
+        res = relatorio.montar_registros([_boleto_nf()], anexos, {}, textos)
+        linha = _linha(res)
+        assert linha["tipo"] == "Pix"
+        assert linha["dados"] == "111.444.777-35"
+        assert linha["status"].startswith("APTO"), linha["status"]
+        assert "Sem boleto anexado" in linha["obs"]
+
+
+def test_rr_boleto_que_se_anuncia_continua_escolhido():
+    files = [anexo("NF 1234.pdf"), anexo("boleto 55.pdf", "Boleto"),
+             anexo("PAGAMENTO AUTORIZADO - FULANO.pdf")]
+    assert relatorio.escolher_pdf_do_boleto(files)["filename"] == "boleto 55.pdf"
+    files = [anexo("NF 1234.pdf"), anexo("PAGAMENTO AUTORIZADO - FULANO.pdf"),
+             anexo("digitalizar0001.pdf")]
+    assert relatorio.escolher_pdf_do_boleto(files)["filename"] == "digitalizar0001.pdf"
