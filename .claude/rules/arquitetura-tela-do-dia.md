@@ -220,8 +220,31 @@ Regras que viraram lei:
   `default="no"`): "as decisões de hoje (liberados, desmarcados, edições, à
   mão) NÃO estão aplicadas". Nuvem ainda não lida (`SEM_NUVEM`) só apaga os
   botões.
-- O iid da tabela é por POSIÇÃO (`tipo|conta.n`), nunca o id do lançamento
-  (id repetido em partes derrubaria o Treeview).
+- O iid da tabela é a chave **(id, parte_linha)** (`passo2.chave_da_linha`,
+  "<id>|<dígitos da linha>"), estável entre recálculos — nunca a posição; a
+  chave igual (id vazio) ganha "#2", "#3"… para o Treeview não recusar.
+
+## Lançamento dividido em N boletos (entrega 5, tarefa 3b)
+
+`boletos_somados` faz N linhas com o MESMO id; cada `confirmacao.Linha` e cada
+`pagamentos.Pagamento` leva `parte` ("k/N") e `parte_linha`. As decisões do
+dono continuam por id:
+
+- **Desmarcar** tira as N partes (o diálogo diz "saem as N partes");
+  **editar a descrição** vale para as N.
+- **Liberar** e **editar forma de pagar/reembolso** de linha dividida são
+  RECUSADOS (`conferencia.recusa_de_dividido`: "lançamento dividido em N
+  boletos: edite/libere no ERP ou pague as partes como estão"). Liberação ou
+  forma editada que chegue pela nuvem também não vale (`geracao`,
+  `pagamentos.por_conta`), e a tela e os arquivos concordam.
+- **Já enviado é por id**: uma parte já saída segura TODAS (lado seguro).
+- **Agendado**: o índice único é (dia, alvo), então o lançamento vira UM
+  agendado com a SOMA das partes que saem e `foto["partes"]` (linha e valor
+  de cada uma); a lista do diretor soma igual.
+- **Baixa no ERP**: na Remessa/Retorno, pago de lançamento dividido que veio
+  da tela nova fica "de fora" (`baixa_erp.MOTIVO_DIVIDIDO`, "baixe no ERP
+  quando todos saírem"), pelos `divididos_do_resultado(self.resultado)`.
+  Resultado montado pela própria Remessa não tem `parte`: nada muda.
 
 ## Agendados (entrega 2)
 

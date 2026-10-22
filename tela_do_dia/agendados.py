@@ -212,10 +212,20 @@ def para_marcar(painel, fora, lancamentos, conferencia, ja_marcados) -> list[Par
     por_id = {str(i.get("id")): i for i in lancamentos or () if i.get("id")}
     a_mao = {p.alvo: p for p in conferencia.a_mao} if conferencia is not None else {}
     saida = []
+    #: Lançamento dividido em N boletos (entrega 5): o índice único da nuvem
+    #: é (dia, alvo), então vira UM agendado com a SOMA das partes que saem e
+    #: a lista delas na foto (`foto["partes"]`: linha e valor de cada uma).
+    divididos: dict[str, ParaMarcar] = {}
     for c in [*sorted(painel.values(), key=lambda c: c.linha), *fora]:
         for p in c.saem:
             if p.valor is None or p.valor <= 0:
                 continue        # a constraint valor > 0 recusaria o lote inteiro
+            parte = {"parte_linha": getattr(p, "parte_linha", "") or "", "valor": str(p.valor)}
+            if getattr(p, "parte", "") and p.id in divididos:
+                junto = divididos[p.id]
+                junto.valor += p.valor
+                junto.foto["partes"].append(parte)
+                continue
             m = a_mao.get(p.id)
             if m is not None:
                 item = ParaMarcar(p.id, m.conta, c.rotulo, m.lancamento_id, m.id, p.favorecido,
@@ -230,6 +240,9 @@ def para_marcar(painel, fora, lancamentos, conferencia, ja_marcados) -> list[Par
                                   foto_do_lancamento(lanc, p.valor))
             item.ja_marcado = p.id in ja_marcados
             item.marcado = not item.ja_marcado
+            if getattr(p, "parte", "") and m is None:
+                item.foto = {**item.foto, "partes": [parte]}
+                divididos[p.id] = item
             saida.append(item)
     return saida
 

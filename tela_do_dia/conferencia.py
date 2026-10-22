@@ -197,6 +197,26 @@ class Conferencia:
         return Conferencia(self.eventos, (*self.pagamentos_a_mao, PagamentoAMao.de_linha(linha)))
 
 
+#: O recado de liberar ou mudar a forma de pagar de um lançamento dividido
+#: em N boletos (entrega 5): a decisão é por id e valeria para as N partes.
+RECADO_DIVIDIDO = ("lançamento dividido em {n} boletos: edite/libere no ERP ou pague as "
+                   "partes como estão")
+
+
+def partes_de(alvo) -> int:
+    """Quantos boletos tem o lançamento desta linha/registro/pagamento ("k/N"
+    em `parte`), ou 0 quando ele não foi dividido."""
+    parte = alvo.get("parte") if isinstance(alvo, dict) else getattr(alvo, "parte", "")
+    _k, _barra, n = str(parte or "").partition("/")
+    return int(n) if n.isdigit() and int(n) > 1 else 0
+
+
+def recusa_de_dividido(alvo) -> str:
+    """"" = não é parte de lançamento dividido; senão, o recado da recusa."""
+    n = partes_de(alvo)
+    return RECADO_DIVIDIDO.format(n=n) if n else ""
+
+
 def pode_liberar(linha) -> bool:
     """Não apto (qualquer motivo: decisão do dono), ou já enviado (entra mas
     nasce desmarcado). O que já vai sair não tem o que liberar."""

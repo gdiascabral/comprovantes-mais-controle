@@ -102,6 +102,27 @@ MOTIVO_SEM_REFERENCIA = ("o banco pagou, mas este pagamento não tem lançamento
                          "ligado a ele no registro — baixe à mão")
 MOTIVO_VALOR_DIVERGE = ("o valor da baixa ({erp}) não bate com o que o banco "
                         "pagou ({banco}) — confira antes de baixar")
+#: Lançamento que a aba "Pagamentos do dia" dividiu em N boletos (entrega 5):
+#: cada parte volta do banco com o valor DELA, e o ERP só conhece o valor
+#: cheio — a baixa de uma parte cairia no `MOTIVO_VALOR_DIVERGE` (ou, sem o
+#: campo de valor no `default-paid`, fecharia a parcela com uma parte só).
+#: Fica de fora, dito com todas as letras: o dono baixa no ERP.
+MOTIVO_DIVIDIDO = ("lançamento dividido em {n} boletos — baixe no ERP quando "
+                   "todos saírem")
+
+
+def divididos_do_resultado(resultado) -> dict[str, int]:
+    """{id do lançamento: N} dos registros com `parte` ("k/N") — o que só o
+    `Resultado` da tela nova traz (`boletos_somados.dividir`). O da própria
+    Remessa/Retorno não divide e devolve {}; `None` também."""
+    saida: dict[str, int] = {}
+    for regs in (getattr(resultado, "contas", None) or {}).values():
+        for r in regs:
+            _k, _barra, n = str(r.get("parte") or "").partition("/")
+            ident = str(r.get("id") or "")
+            if ident and n.isdigit() and int(n) > 1:
+                saida[ident] = int(n)
+    return saida
 
 
 @dataclass
@@ -130,8 +151,12 @@ class Separacao:
     de_fora: list = field(default_factory=list)        # [(Linha, motivo)]
 
 
-def separar(resumo) -> Separacao:
+def separar(resumo, divididos=None) -> Separacao:
     """Quem do retorno pode ser baixado.
+
+    `divididos` ({id: N}, `divididos_do_resultado`) só vem do caminho da tela
+    nova: o pago cujo lançamento foi dividido em boletos fica de fora com
+    `MOTIVO_DIVIDIDO`. Sem ele (a Remessa/Retorno lendo sozinha), nada muda.
 
     Só entra ocorrência de PAGO (`estado == "ok"`). Pendente de assinatura é o
     estado normal do mesmo dia — baixar ali seria dizer que saiu dinheiro que
@@ -147,6 +172,10 @@ def separar(resumo) -> Separacao:
             continue
         if not (linha.referencia or "").strip():
             saida.de_fora.append((linha, MOTIVO_SEM_REFERENCIA))
+            continue
+        n = (divididos or {}).get(linha.referencia.strip())
+        if n:
+            saida.de_fora.append((linha, MOTIVO_DIVIDIDO.format(n=n)))
             continue
         saida.baixaveis.append(linha)
     return saida

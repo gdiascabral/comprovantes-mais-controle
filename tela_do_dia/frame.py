@@ -741,6 +741,7 @@ class TelaDoDiaFrame(ttk.Frame):
         t.delete(*t.get_children())
         self._iid_pag = {}
         contas = sorted(self.pagamentos.values(), key=lambda c: c.linha) + list(self.fora)
+        vistos = set()                   # iid único na tabela inteira
         for i, c in enumerate(contas):
             estado = ("erro" if c.motivo_fora else
                       ("atencao" if (c.bloqueados or c.ja_enviados or c.liberados or c.a_mao
@@ -748,9 +749,10 @@ class TelaDoDiaFrame(ttk.Frame):
             pai = t.insert("", "end", text=c.rotulo, open=c.rotulo in abertas,
                            tags=widgets.linha_zebrada(i, estado),
                            values=dc.celulas_da_conta(c))
-            # iid por POSIÇÃO (`passo2.linhas_da_conta`): o id do lançamento
-            # pode repetir (partes) e o Treeview recusa iid repetido.
-            for ln in passo2.linhas_da_conta(c, i):
+            # iid = a chave (id, parte_linha) (`passo2.chave_da_linha`): estável
+            # entre recálculos; o id sozinho repete nas partes de um lançamento
+            # dividido, e o Treeview recusa iid repetido.
+            for ln in passo2.linhas_da_conta(c, i, vistos):
                 t.insert(pai, "end", iid=ln.iid, text=ln.texto, tags=ln.tags, values=ln.valores)
                 self._iid_pag[ln.iid] = ln
 
@@ -1024,7 +1026,8 @@ class TelaDoDiaFrame(ttk.Frame):
         return self._iid_pag.get(sel[0]) if sel else None
 
     def _linha_erp(self, ld):
-        return passo2.linha_do_id(self.leitura.grupos, ld.pagamento.id, ld.pagamento.conta_erp)
+        return passo2.linha_do_id(self.leitura.grupos, ld.pagamento.id, ld.pagamento.conta_erp,
+                                  getattr(ld.pagamento, "parte_linha", ""))
 
     def _selecao_para(self, acao, titulo, recado):
         """A linha selecionada, se ela aceita `acao` e a nuvem deixa gravar."""
@@ -1127,10 +1130,13 @@ class TelaDoDiaFrame(ttk.Frame):
         if ld is None:
             return
         linha = self._linha_erp(ld)
+        recusa = passo2.recusa_de_liberar(linha)
+        if recusa:
+            messagebox.showinfo(titulo, recusa[:1].upper() + recusa[1:] + ".")
+            return
         if not passo2.pode_liberar(linha):
-            messagebox.showinfo(titulo, "Esta linha não se libera aqui (lançamento dividido "
-                                        "em partes, ou já vai sair): resolva no ERP ou na "
-                                        "Remessa.")
+            messagebox.showinfo(titulo, "Esta linha não se libera aqui (já vai sair): "
+                                        "resolva no ERP ou na Remessa.")
             return
         motivo = janelas.pedir_motivo(self, titulo, f"{passo2.descricao_de(ld.pagamento)}\n"
                                                     f"Bloqueado por: {linha.situacao}")
@@ -1157,7 +1163,7 @@ class TelaDoDiaFrame(ttk.Frame):
         if ld is None:
             return
         motivo = janelas.pedir_motivo(self, titulo, f"{passo2.descricao_de(ld.pagamento)}\n"
-                                                    "Sai da planilha, do HTML e da remessa.",
+                                                    + passo2.texto_do_desmarcar(ld.pagamento),
                                       obrigatorio=False)
         if motivo is None:
             return
@@ -1202,7 +1208,8 @@ class TelaDoDiaFrame(ttk.Frame):
         if ld is None:
             return
         ident, conta = ld.pagamento.id, ld.pagamento.conta_erp
-        registro_erp = (geracao.registro_atual(self.leitura.resultado, ident)
+        registro_erp = (geracao.registro_atual(self.leitura.resultado, ident,
+                                               getattr(ld.pagamento, "parte_linha", ""))
                         if self.leitura.resultado is not None else None)
         if registro_erp is None:
             messagebox.showinfo(titulo, "Não achei este lançamento na apuração — busque de novo.")

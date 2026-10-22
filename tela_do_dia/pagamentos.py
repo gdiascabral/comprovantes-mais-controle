@@ -59,11 +59,18 @@ class Pagamento:
     origem: str = ""
     #: Texto curto para a tabela: o que o dono mudou ("editado: descricao").
     nota: str = ""
+    #: Lançamento dividido em N boletos (entrega 5): "k/N" e os dígitos da
+    #: linha digitável desta parte. A chave da linha na tela é
+    #: (id, parte_linha); a decisão do dono continua por id (vale para as N).
+    parte: str = ""
+    parte_linha: str = ""
 
     @classmethod
     def da_linha(cls, ln) -> "Pagamento":
         return cls(id=ln.id, conta_erp=ln.conta, favorecido=ln.quem_recebe,
-                   valor=de_float(ln.valor), situacao=ln.situacao, estado=ln.estado)
+                   valor=de_float(ln.valor), situacao=ln.situacao, estado=ln.estado,
+                   parte=getattr(ln, "parte", "") or "",
+                   parte_linha=getattr(ln, "parte_linha", "") or "")
 
 
 @dataclass
@@ -135,17 +142,25 @@ def por_conta(grupos, mapping, conferencia=None):
             p = replace(p, nota="editado: " + ", ".join(sorted(d.edicoes)))
         return replace(p, origem=origem)
 
+    # Lançamento dividido em N boletos (entrega 5): o "já saiu?" é por id, e
+    # uma parte já enviada segura TODAS (lado seguro) — a mesma resposta do
+    # `ids_que_nao_saem`, que tira o id inteiro de planilha, HTML e remessa.
+    # A liberação também não vale para parte: liberar é por id e devolveria
+    # a parte já paga (a tela recusa; aqui, nem a vinda de outra máquina).
+    enviados = {ln.id for g in grupos for ln in g.entram if _ja_enviado(ln)}
     for g in grupos:
         destino = _destino(g.conta)
         for ln in g.entram:
             d = decisoes.get(ln.id)
-            if confirmacao.marcada_de_inicio(ln):
+            parte = bool(getattr(ln, "parte", ""))
+            enviado = _ja_enviado(ln) or (parte and ln.id in enviados)
+            if confirmacao.marcada_de_inicio(ln) and not (parte and enviado):
                 if d is not None and d.desmarcado:
                     destino.desmarcados.append(_pag(ln, d))
                 else:
                     destino.vao_sair.append(_pag(ln, d))
-            elif _ja_enviado(ln):
-                if d is not None and d.liberado:
+            elif enviado:
+                if d is not None and d.liberado and not parte:
                     destino.liberados.append(_pag(ln, d, "liberado"))
                 else:
                     destino.ja_enviados.append(_pag(ln, d))

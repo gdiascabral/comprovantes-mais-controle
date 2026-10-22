@@ -4,9 +4,11 @@
 `frame.py` só desenha, pergunta e manda gravar; o que ele decidiria com `if`
 mora aqui, com teste puro (a máquina do dono não roda teste de tela):
 
-- as linhas da tabela do passo 2 (`linhas_da_conta`): iid por POSIÇÃO, nunca
-  pelo id do lançamento — um lançamento dividido em partes (entrega 5) teria
-  o mesmo id em N linhas, e o Treeview recusa iid repetido;
+- as linhas da tabela do passo 2 (`linhas_da_conta`): iid = a chave
+  (id, parte_linha) — um lançamento dividido em partes (entrega 5) tem o mesmo
+  id em N linhas, e a linha digitável da parte as separa; a chave não muda
+  quando a linha troca de grupo ou de posição (desmarcar, reler), e nunca se
+  repete (o Treeview recusa iid repetido);
 - quais ações cada linha aceita (`acoes_da_linha`): o à mão só se REMOVE;
 - a edição (`campos_da_edicao`, `validar_edicao_da_tela`): o reembolso muda
   junto com a forma de pagar (tipo + dado de quem recebe);
@@ -51,10 +53,19 @@ def _com_nota(p) -> str:
     return " · ".join(filter(None, [p.situacao, p.nota]))
 
 
-def linhas_da_conta(conta, posicao: int) -> list[LinhaDaTabela]:
+def chave_da_linha(p) -> str:
+    """A chave da linha na tela: "<id>|<parte_linha>" (decisão do
+    coordenador, 22/10/2026). Estável entre recálculos — nada de posição."""
+    return f"{p.id}|{getattr(p, 'parte_linha', '') or ''}"
+
+
+def linhas_da_conta(conta, posicao: int, vistos: set | None = None) -> list[LinhaDaTabela]:
     """As filhas de uma conta do passo 2, na ordem: vai sair, liberados, à
-    mão, já enviados, desmarcados, bloqueados. `posicao` = a da conta na
-    tabela; o iid é "<tipo>|<posicao>.<n>"."""
+    mão, já enviados, desmarcados, bloqueados. O iid é `chave_da_linha`;
+    `vistos` (o mesmo conjunto para a tabela inteira) garante que ele nunca
+    se repete: a chave igual (id vazio, o mesmo lançamento em duas contas)
+    ganha "#2", "#3"… `posicao` fica por compatibilidade."""
+    vistos = set() if vistos is None else vistos
     grupos = (
         (VAI, conta.vao_sair, lambda p: ("vai sair", brl(p.valor), "", _com_nota(p)),
          lambda p: ("atencao",) if p.origem == "editado" else ()),
@@ -70,12 +81,16 @@ def linhas_da_conta(conta, posicao: int) -> list[LinhaDaTabela]:
         (BLOQ, conta.bloqueados,
          lambda p: ("", "", f"bloqueado · {brl(p.valor)}", _com_nota(p)), lambda p: ("erro",)),
     )
-    linhas, n = [], 0
+    linhas = []
     for tipo, pagamentos, valores, tags in grupos:
         for p in pagamentos:
-            linhas.append(LinhaDaTabela(f"{tipo}|{posicao}.{n}", tipo, p,
-                                        f"   {p.favorecido}", valores(p), tags(p)))
-            n += 1
+            base = iid = chave_da_linha(p)
+            n = 1
+            while iid in vistos:
+                n += 1
+                iid = f"{base}#{n}"
+            vistos.add(iid)
+            linhas.append(LinhaDaTabela(iid, tipo, p, f"   {p.favorecido}", valores(p), tags(p)))
     return linhas
 
 
@@ -111,6 +126,21 @@ def pode_liberar(linha) -> bool:
     return linha is not None and not getattr(linha, "parte", "") and cf.pode_liberar(linha)
 
 
+def recusa_de_liberar(linha) -> str:
+    """O recado de liberar a parte de um lançamento dividido, ou ""."""
+    return cf.recusa_de_dividido(linha) if linha is not None else ""
+
+
+def texto_do_desmarcar(pagamento) -> str:
+    """O que o diálogo do Desmarcar diz. Desmarcar é por id: no lançamento
+    dividido, saem TODAS as partes."""
+    texto = "Sai da planilha, do HTML e da remessa."
+    n = cf.partes_de(pagamento)
+    if n:
+        texto += chr(10) + f"Lançamento dividido em {n} boletos: saem as {n} partes."
+    return texto
+
+
 def certeza_ao_liberar(linha) -> str:
     """A 2ª pergunta, DEPOIS do motivo: já enviado ou favorecido fora dos
     Contatos. É a única trava contra pagar em dobro pelo HTML."""
@@ -121,9 +151,13 @@ def ids_do_dia(grupos) -> set[str]:
     return {ln.id for g in grupos for ln in (*g.entram, *g.nao_aptos) if ln.id}
 
 
-def linha_do_id(grupos, ident: str, conta: str = ""):
-    """A `confirmacao.Linha` do lançamento (a da conta, se houver duas)."""
+def linha_do_id(grupos, ident: str, conta: str = "", parte_linha: str = ""):
+    """A `confirmacao.Linha` do lançamento (a da conta, se houver duas; a da
+    parte daquela linha digitável, no lançamento dividido)."""
     achadas = [ln for g in grupos for ln in (*g.entram, *g.nao_aptos) if ln.id == ident]
+    if parte_linha:
+        achadas = ([ln for ln in achadas if getattr(ln, "parte_linha", "") == parte_linha]
+                   or achadas)
     return next((ln for ln in achadas if not conta or ln.conta == conta),
                 achadas[0] if achadas else None)
 
@@ -173,12 +207,12 @@ def validar_edicao_da_tela(registro: dict, campos: dict, motivo: str) -> str:
       digitável iria às N partes)."""
     if "reembolso_nome" in campos and not _limpo(campos["reembolso_nome"]):
         return "Para tirar o reembolso, use «Desfazer» (volta tudo ao que o ERP diz)."
+    if cf.recusa_de_dividido(registro) and campos.keys() & {
+            "tipo", "dados", "reembolso_nome", "reembolso_documento"}:
+        return cf.recusa_de_dividido(registro)
     erro = cf.validar_edicao(campos, motivo)
     if erro:
         return erro
-    if registro.get("parte") and ("tipo" in campos or "dados" in campos):
-        return ("Este lançamento está dividido em partes: a forma de pagar de uma "
-                "parte se corrige no ERP.")
     if "reembolso_nome" in campos or "reembolso_documento" in campos:
         if not campos.get("tipo") or not campos.get("dados"):
             return ("O reembolso muda junto com a forma de pagar: escolha o tipo e "

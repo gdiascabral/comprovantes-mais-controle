@@ -47,6 +47,12 @@ ORDEM_A_MAO = 1_000_000
 _GATILHO_A_MAO = re.compile(r"pagar\s+a\s+mao", re.IGNORECASE)
 
 
+def ids_divididos(grupos) -> set[str]:
+    """Os lançamentos divididos em N boletos (linhas com `parte`)."""
+    return {ln.id for g in grupos for ln in (*g.entram, *g.nao_aptos)
+            if ln.id and getattr(ln, "parte", "")}
+
+
 def ids_nao_aptos(grupos) -> set[str]:
     return {ln.id for g in grupos for ln in g.nao_aptos if ln.id}
 
@@ -93,9 +99,17 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "") -> dic
         return reg
     antes, notas, rotulos = str(reg.get("status") or ""), [], []
     cede: tuple = ()
+    # Parte de lançamento dividido (entrega 5): a edição é por id e a forma
+    # de pagar (ou o reembolso) iria igual às N partes — o mesmo boleto N
+    # vezes. Só a descrição vale para elas; a tela já recusa o resto.
+    dividido = bool(reg.get("parte"))
     if d.edicoes:
         campos = []
-        if "tipo" in d.edicoes:
+        if dividido and d.edicoes.keys() & {"tipo", "dados", "reembolso_nome",
+                                             "reembolso_documento"}:
+            notas.append("forma de pagar editada não vale aqui: lançamento dividido "
+                         "em boletos — corrija no ERP")
+        if "tipo" in d.edicoes and not dividido:
             tipo = d.edicoes["tipo"]
             reg["tipo"], reg["dados"] = tipo, d.edicoes.get("dados", "")
             # O que era da cobrança antiga não acompanha a forma nova: o Pix do
@@ -109,7 +123,7 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "") -> dic
             reg["parcial"] = bool(reg.get("parcial")) and tipo == "Boleto"
             campos.append("forma de pagar")
             cede = _CEDE_A_EDICAO
-        if "reembolso_nome" in d.edicoes:
+        if "reembolso_nome" in d.edicoes and not dividido:
             nome = d.edicoes["reembolso_nome"]
             reg.update(reembolso=True, reembolso_nome=nome, reembolso_para=nome,
                        reembolso_documento=d.edicoes.get("reembolso_documento", ""),
@@ -125,7 +139,7 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "") -> dic
             notas.append(f"corrigir no ERP: lançamento {reg.get('id') or '?'}")
         if campos:                         # só a descrição: o status não muda
             rotulos.append("EDITADO — " + ", ".join(campos))
-    if d.liberado and liberavel:
+    if d.liberado and liberavel and not dividido:
         bloqueio = reg.get("bloqueio_liberado") or bloqueio or BLOQUEIO_JA_ENVIADO
         rotulos.insert(0, f"LIBERADO — {bloqueio} · {_texto_do_dono(d.motivo_liberacao)}")
         notas.append(f"liberado na tela por {d.quem_nome or '?'} em {d.quando[:16]}")
@@ -169,7 +183,11 @@ def resultado_da_tela(entradas, grupos, conferencia) -> relatorio.Resultado:
     `remontar(entradas, ids_que_nao_saem(grupos))`. Desmarcado ganha de tudo
     (vai para os omitidos com `MOTIVO_NAO_CONFIRMADO`)."""
     decisoes = conferencia.decisoes
-    liberados = {a for a, d in decisoes.items() if d.liberado}
+    # Liberar é por id: num lançamento dividido devolveria também a parte já
+    # enviada (pagar em dobro). A tela recusa; a liberação que chegue pela
+    # nuvem não vale para ele (`pagamentos.por_conta` diz o mesmo).
+    divididos = ids_divididos(grupos)
+    liberados = {a for a, d in decisoes.items() if d.liberado and a not in divididos}
     desmarcados = {a for a, d in decisoes.items() if d.desmarcado}
     ja_enviados = _ja_enviados(grupos)
     nao_aptos = ids_nao_aptos(grupos)
@@ -202,11 +220,16 @@ def chaves_que_saem(resultado) -> set[str]:
             for regs in resultado.contas.values() for r in regs}
 
 
-def registro_atual(resultado, ident: str) -> dict | None:
+def registro_atual(resultado, ident: str, parte_linha: str = "") -> dict | None:
     """O registro do LANÇAMENTO `ident` (nunca um à mão com o mesmo link), ou
-    o omitido dele."""
-    for regs in resultado.contas.values():
-        for r in regs:
-            if not r.get("a_mao") and str(r.get("id") or "") == ident:
-                return r
+    o omitido dele. Com `parte_linha` (lançamento dividido), o da parte
+    daquela linha digitável; sem ela, o primeiro do id (o de sempre)."""
+    achados = [r for regs in resultado.contas.values() for r in regs
+               if not r.get("a_mao") and str(r.get("id") or "") == ident]
+    if parte_linha:
+        da_parte = next((r for r in achados if r.get("parte_linha") == parte_linha), None)
+        if da_parte is not None:
+            return da_parte
+    if achados:
+        return achados[0]
     return next((o for o in resultado.omitidos if str(o.get("id") or "") == ident), None)

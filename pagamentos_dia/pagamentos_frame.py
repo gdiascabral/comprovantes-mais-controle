@@ -2316,8 +2316,12 @@ class PagamentosDiaFrame(ttk.Frame):
         # `separar` só olha o `.linhas` do que recebe. O resumo montado aqui é
         # o saco que carrega as linhas até lá, e não um retorno de verdade —
         # daí o NSA zero, que nunca vai à tela nem ao banco.
+        # Lançamento que a aba "Pagamentos do dia" dividiu em N boletos fica de
+        # fora da baixa (o ERP só conhece o valor cheio). Só o resultado que
+        # veio de lá tem `parte`: a apuração desta aba não divide, e aí nada muda.
         sep = baixa_erp.separar(retorno_dia.Resumo(
-            convenio="", nsa=0, empresa="", linhas=list(linhas)))
+            convenio="", nsa=0, empresa="", linhas=list(linhas)),
+            divididos=baixa_erp.divididos_do_resultado(self.resultado))
         for linha, motivo in sep.de_fora:
             self._log(f"  fora da baixa: {linha.seu_numero} "
                       f"{linha.favorecido[:28]} — {motivo}")

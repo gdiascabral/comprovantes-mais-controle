@@ -756,6 +756,12 @@ class Linha:
     #: A linha já saiu numa remessa e esse envio foi REJEITADO
     #: (`envio_rejeitado`): é o pagamento que tem de sair de novo.
     envio_rejeitado: bool = False
+    #: Lançamento dividido em N boletos (`boletos_somados`, só na tela nova):
+    #: "k/N" e os dígitos da linha digitável DESTA parte. Vazios no resto — a
+    #: Remessa não lê estes campos. Com eles, a tela do dia acha a linha pela
+    #: chave (id, parte_linha), que não muda entre recálculos.
+    parte: str = ""
+    parte_linha: str = ""
 
     @property
     def quem_recebe(self) -> str:
@@ -869,7 +875,9 @@ def grupos_da_confirmacao(resultado, analise: AnaliseRemessa | None,
                 reembolso=bool(reg.get("reembolso")),
                 reembolso_nome=reg.get("reembolso_nome") or "",
                 envio_rejeitado=bool(analise) and envio_rejeitado(
-                    *analise.estado_do_envio(ident))))
+                    *analise.estado_do_envio(ident)),
+                parte=str(reg.get("parte") or ""),
+                parte_linha=str(reg.get("parte_linha") or "")))
 
     nao_aptos: dict[str, list] = {}
     for o in omitidos_da_janela(resultado.omitidos, fornecedores):

@@ -29,14 +29,16 @@ def _ln(secao, ident="L1", situacao="", candidato=None, rejeitado=False, conta="
 
 
 # ------------------------------------------------------------- tabela
-def test_iid_por_posicao_aguenta_o_mesmo_id_em_varias_linhas():
+def test_iid_aguenta_o_mesmo_id_em_varias_linhas():
     """Lançamento dividido (entrega 5): N linhas com o mesmo id. O Treeview
-    recusa iid repetido — o iid é por posição, nunca pelo id."""
+    recusa iid repetido. Desde a tarefa 3b da entrega 5 o iid é a chave
+    (id, parte_linha) — estável entre recálculos — e a chave igual ganha
+    "#2", "#3"… (antes era por posição: "vai|3.0")."""
     conta = PagamentosDaConta("Conta Alfa - Banco", 8, vao_sair=[_pag("L1"), _pag("L1")],
                               bloqueados=[_pag("L1")])
     linhas = p2.linhas_da_conta(conta, 3)
     assert len({ln.iid for ln in linhas}) == 3
-    assert [ln.iid for ln in linhas] == ["vai|3.0", "vai|3.1", "bloq|3.2"]
+    assert [ln.iid for ln in linhas] == ["L1|", "L1|#2", "L1|#3"]
 
 
 def test_ordem_valores_e_cores_de_cada_tipo():
