@@ -225,14 +225,34 @@ class AnaliseRemessa:
     #: `NAO_CONFERI_ENVIO` e fica âmbar: "não saiu" ali seria palpite.
     envios_nao_conferidos: set = field(default_factory=set)
     #: `{id: (estado da remessa, retorno do item)}` das linhas que JÁ SAÍRAM
-    #: numa remessa — é o que diz se aquele envio foi rejeitado.
+    #: numa remessa — é o que diz se aquele envio foi rejeitado. A parte de
+    #: um lançamento dividido em N boletos (mesmo id) que o registro achou
+    #: pelo SEU código de barras fica em `{(id, código de barras): ...}`: por
+    #: id, a última parte sobrescrevia as outras (revisão de 22/10).
     envios: dict = field(default_factory=dict)
 
     def envio_conferido(self, ident: str) -> bool:
         return str(ident or "") not in self.envios_nao_conferidos
 
-    def estado_do_envio(self, ident: str) -> tuple:
-        return self.envios.get(str(ident or ""), ("", ""))
+    def estado_do_envio(self, ident: str, parte_linha: str = "") -> tuple:
+        """O estado do envio da linha. Com `parte_linha`, o da SUA parte
+        (pelo código de barras do boleto dela). Sem dar para separar — a parte
+        não foi achada pelo código, ou a pergunta veio sem parte num id que
+        tem várias —, e os estados do id divergindo: o lado seguro, nunca
+        "rejeitado" (rejeitado nasce marcado e sai de novo; uma parte paga
+        sairia duas vezes). Iguais, vale o deles."""
+        ident = str(ident or "")
+        if parte_linha:
+            codigo = ocr_boleto.codigo_de_barras(parte_linha)
+            if codigo and (ident, codigo) in self.envios:
+                return self.envios[(ident, codigo)]
+        estados = [v for k, v in self.envios.items()
+                   if k == ident or (isinstance(k, tuple) and k[0] == ident)]
+        if not estados:
+            return ("", "")
+        if len({envio_rejeitado(*e) for e in estados}) == 1:
+            return estados[0]
+        return next(e for e in estados if not envio_rejeitado(*e))
 
     def candidato(self, conta: str, ident: str, parte_linha: str = ""):
         """O `Candidato` do lançamento, ou None. Pelo id, e não pela posição:
@@ -486,16 +506,31 @@ def _estados_dos_envios(contas: dict, preparado: dict, historico) -> dict:
     — nada é perguntado de novo —, e o `remessa_dia` continua usando só o
     `nsa`/`gerado_em` de sempre."""
     envios: dict = {}
+    escolher = AnaliseRemessa(preparado=preparado)
     for conta, registros in (contas or {}).items():
         for registro in registros:
             ident = str(registro.get("id") or "")
-            candidato = next((c for c in preparado.get(conta, ())
-                              if ident and c.id == ident), None)
+            parte_linha = registro.get("parte_linha") or ""
+            # A parte de um lançamento dividido: o candidato do SEU boleto.
+            candidato = (escolher.candidato(conta, ident, parte_linha) if ident
+                         else None)
             if candidato is None or not candidato.ja_enviado:
                 continue
             codigo = (ocr_boleto.codigo_de_barras(
                 (registro.get("dados") or "").strip())
                 if registro.get("tipo") == "Boleto" else "")
+            if parte_linha and codigo:
+                # Só o que o registro achou pelo código É desta parte; pela
+                # referência (o id) é de qualquer uma delas.
+                achado = historico.envio_respondido(codigo, "")
+                if achado:
+                    remessa = achado[0]
+                    item = achado[1] if len(achado) > 1 else None
+                    retorno = (getattr(remessa, "retorno_estado", "")
+                               or getattr(item, "retorno_estado", "") or "")
+                    envios[(ident, codigo)] = (getattr(remessa, "estado", "") or "", retorno)
+                    continue
+                codigo = ""
             achado = historico.envio_respondido(codigo, ident)
             if not achado:
                 continue
@@ -855,7 +890,7 @@ def grupos_da_confirmacao(resultado, analise: AnaliseRemessa | None,
                 reg, candidato, sem_remessa.get(conta, ""), conferidas,
                 envio_conferido=(analise.envio_conferido(ident)
                                  if analise else True),
-                estado_do_envio=(analise.estado_do_envio(ident)
+                estado_do_envio=(analise.estado_do_envio(ident, reg.get("parte_linha") or "")
                                  if analise else ("", "")))
             favorecido = reg.get("favorecido") or ""
             entram.setdefault(conta, []).append(Linha(
@@ -875,7 +910,7 @@ def grupos_da_confirmacao(resultado, analise: AnaliseRemessa | None,
                 reembolso=bool(reg.get("reembolso")),
                 reembolso_nome=reg.get("reembolso_nome") or "",
                 envio_rejeitado=bool(analise) and envio_rejeitado(
-                    *analise.estado_do_envio(ident)),
+                    *analise.estado_do_envio(ident, reg.get("parte_linha") or "")),
                 parte=str(reg.get("parte") or ""),
                 parte_linha=str(reg.get("parte_linha") or "")))
 
