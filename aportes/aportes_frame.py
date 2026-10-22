@@ -129,19 +129,24 @@ class AportesFrame(ttk.Frame):
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
         corpo = widgets.AreaRolavel(self)
-        self.b_conferir = widgets.Botao(cab.acoes, "Conferir cadastro",
+        # Os três de conferir/cadastrar numa 2ª linha, embaixo do apoio; no
+        # alto à direita fica só o verde. Os quatro lado a lado passavam da
+        # largura a 1280 px e o "Lançar no Mais Controle" saía cortado — o
+        # botão que manda dinheiro para o ERP era justamente o que sumia.
+        cab.rodape.pack(anchor="w", pady=px((8, 0)))
+        self.b_conferir = widgets.Botao(cab.rodape, "Conferir cadastro",
                                         papel="passo", command=self._conferir)
         self.b_conferir.pack(side="left", padx=px((0, 8)))
         # Obra nova no ERP = alguém que manda e uma conta que recebe aporte.
         # Antes era SQL no painel; ver `novo_cadastro.py`.
         # Ver e corrigir a lista de Pagou/Recebeu sem o painel; ver
         # `cadastros.py`.
-        self.b_cad = widgets.Botao(cab.acoes, "Cadastros", papel="passo",
+        self.b_cad = widgets.Botao(cab.rodape, "Cadastros", papel="passo",
                                    command=self._cadastros)
         self.b_cad.pack(side="left", padx=px((0, 8)))
-        self.b_novo = widgets.Botao(cab.acoes, "+  Novo cadastro",
+        self.b_novo = widgets.Botao(cab.rodape, "+  Novo cadastro",
                                     papel="passo", command=self._novo_cadastro)
-        self.b_novo.pack(side="left", padx=px((0, 8)))
+        self.b_novo.pack(side="left")
         self.b_lancar = widgets.Botao(cab.acoes, "Lançar no Mais Controle",
                                       papel="acao", command=self._lancar)
         self.b_lancar.pack(side="left")

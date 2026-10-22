@@ -62,3 +62,23 @@ def test_situacao_do_aportador_cabe_na_coluna():
     linha = SimpleNamespace(diferenca=__import__("decimal").Decimal("1234567.89"))
     assert ca.situacao_do_aportador(linha) == "deve R$ 1.234.567,89"
     assert len(ca.situacao_do_aportador(linha)) <= MAX_SITUACAO
+
+
+def test_aportes_so_o_verde_fica_ao_lado_do_titulo():
+    """Os quatro botões do cabeçalho dos Aportes lado a lado passavam de
+    1280 px e cortavam o "Lançar no Mais Controle". No alto à direita
+    (`cab.acoes`) fica só ele; os outros vão na 2ª linha (`cab.rodape`)."""
+    import ast
+    from pathlib import Path
+    fonte = (Path(__file__).resolve().parents[1] / "aportes" / "aportes_frame.py"
+             ).read_text(encoding="utf-8")
+    pais = {}
+    for n in ast.walk(ast.parse(fonte)):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "Botao" and len(n.args) >= 2
+                and isinstance(n.args[1], ast.Constant)
+                and isinstance(n.args[0], ast.Attribute)
+                and isinstance(n.args[0].value, ast.Name) and n.args[0].value.id == "cab"):
+            pais[n.args[1].value] = n.args[0].attr
+    assert pais == {"Lançar no Mais Controle": "acoes", "Conferir cadastro": "rodape",
+                    "Cadastros": "rodape", "+  Novo cadastro": "rodape"}
