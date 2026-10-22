@@ -315,7 +315,7 @@ def test_clique_na_moldura_do_campo_abre_a_nossa(combo):
 
 def test_clique_no_texto_nao_abre_lista(combo):
     c, root = combo
-    c.set("MORAIS ENGENHARIA - INTER")
+    c.set("CONTA EXEMPLO - INTER")
     y = c.winfo_height() // 2
     x = 20
     assert str(c.identify(x, y)).endswith("textarea")
