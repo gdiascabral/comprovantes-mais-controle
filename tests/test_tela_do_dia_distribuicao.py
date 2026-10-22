@@ -97,7 +97,7 @@ def test_composto_em_subconta_de_investidor_vira_aporte_de_investidor():
         "INVESTIDOR SUBCONTA 44444-4", "FILHA DOIS - BANCO", D("5000.00"), TIPO_INVESTIDOR,
         "Só recebimento")
     assert op.validar(ENTIDADES, SUBCONTAS) == []
-    assert chaves == [pa.chave_de_envio("Filha Dois - Banco", "Pessoa Um/Pessoa Dois")]
+    assert chaves == [pa.chave_da_subconta("44444-4", "Filha Dois - Banco")]
     assert envio.pendentes == []
     # foi, mas o dono confere: a divisão é a do cadastro, com os nomes de lá
     (aviso,) = envio.avisos
@@ -257,3 +257,105 @@ def test_socios_do_cadastro_tira_subconta_de_investidor_e_conta_do_painel():
                  "HOLDING FICTICIA": {}}
     assert dc.socios_do_cadastro(entidades, ROTULOS) == ["HOLDING FICTICIA", "SOCIO FICTICIO A"]
     assert dc.socios_do_cadastro(None, ROTULOS) == []
+
+
+# ---------------------- revisão de dinheiro de 22/10/2026 (A4, A5) e geral
+SUB = "44444-4"
+DESTINO_SUB = "Filha Dois - Subconta 44444-4"
+INV_UM, INV_DOIS = "PESSOA FICTICIA UM SOBRENOME", "PESSOA FICTICIA DOIS SOBRENOME"
+#: A mesma subconta pelas duas portas: uma linha composta e uma por investidor.
+REGRAS_SUB = [
+    Regra("Filha Dois - Banco", "Pessoa Um/Pessoa Dois", None, "Aporte", False, linha=6),
+    Regra(DESTINO_SUB, INV_UM, None, "Aporte", False, linha=7),
+    Regra(DESTINO_SUB, INV_DOIS, None, "Aporte", False, linha=8),
+]
+ENTIDADES_SUB = dict(ENTIDADES, **{
+    "FILHA DOIS - SUBCONTA 44444-4": {"nome_oficial": "FILHA DOIS SUB LTDA",
+                                      "conta": "FILHA DOIS - SUBCONTA 44.444-4",
+                                      "nome_descricao": None}})
+
+
+def _envio_sub(definidos, enviados=None):
+    return pa.operacoes(definidos, REGRAS_SUB, ENTIDADES_SUB, SUBCONTAS, HOJE,
+                        enviados=enviados)
+
+
+def test_a4_chave_da_subconta_e_pelo_numero_nos_dois_ramos():
+    composto = _envio_sub({("Filha Dois - Banco", "Pessoa Um/Pessoa Dois"): D("5000.00")})
+    (_op, chaves), = composto.itens
+    assert chaves == [pa.chave_da_subconta(SUB, "Filha Dois - Banco")]
+    assert composto.valores == {chaves[0]: D("5000.00")}
+    por_investidor = _envio_sub({(DESTINO_SUB, INV_UM): D("100.00"),
+                                 (DESTINO_SUB, INV_DOIS): D("100.00")})
+    (_op, chaves), = por_investidor.itens
+    assert chaves == [pa.chave_da_subconta(SUB, DESTINO_SUB)]
+    assert por_investidor.valores == {chaves[0]: D("200.00")}
+    assert pa.chave_da_subconta(SUB, "X").startswith(f"subconta:{SUB}|")
+
+
+def test_a4_composto_ja_mandado_segura_a_linha_por_investidor_e_vice_versa():
+    """A aba Regras mudou de composto para uma linha por investidor (ou o
+    contrário) no mesmo dia: a subconta é a mesma, e o aporte não vai de novo."""
+    enviados = {pa.chave_da_subconta(SUB, "Filha Dois - Banco"): D("5000.00")}
+    # A mesma subconta, chave pelo número: vale para qualquer rótulo do destino.
+    envio = pa.operacoes({(DESTINO_SUB, INV_UM): D("100.00"),
+                          (DESTINO_SUB, INV_DOIS): D("100.00")},
+                         REGRAS_SUB, ENTIDADES_SUB, SUBCONTAS, HOJE,
+                         enviados={pa.chave_da_subconta(SUB, DESTINO_SUB): D("200.00")})
+    assert envio.itens == [] and all("já mandado" in p.motivo for p in envio.pendentes)
+    envio = _envio_sub({("Filha Dois - Banco", "Pessoa Um/Pessoa Dois"): D("5000.00")},
+                       enviados=enviados)
+    assert envio.itens == [] and "já mandado" in envio.pendentes[0].motivo
+
+
+def test_a4_ja_mandado_por_qualquer_destino_da_mesma_subconta():
+    """O rótulo do destino muda entre as duas portas; o número não."""
+    enviados = {pa.chave_da_subconta(SUB, "Filha Dois - Banco"): D("200.00")}
+    envio = _envio_sub({(DESTINO_SUB, INV_UM): D("100.00"),
+                        (DESTINO_SUB, INV_DOIS): D("100.00")}, enviados=enviados)
+    assert envio.itens == [] and len(envio.pendentes) == 2
+    assert all(p.motivo.startswith("já mandado") for p in envio.pendentes)
+    enviados = {pa.chave_da_subconta(SUB, DESTINO_SUB): D("200.00")}
+    envio = _envio_sub({("Filha Dois - Banco", "Pessoa Um/Pessoa Dois"): D("200.00")},
+                       enviados=enviados)
+    assert envio.itens == [] and envio.pendentes[0].motivo.startswith("já mandado")
+
+
+def test_a4_chaves_antigas_do_json_do_dia_continuam_segurando():
+    # composto gravado com a chave velha "destino|Fulano/Beltrano"
+    velha = pa.chave_de_envio("Filha Dois - Banco", "Pessoa Um/Pessoa Dois")
+    envio = _envio_sub({("Filha Dois - Banco", "Pessoa Um/Pessoa Dois"): D("5000.00")},
+                       enviados={velha: D("5000.00")})
+    assert envio.itens == [] and "já mandado" in envio.pendentes[0].motivo
+    # e a velha do composto segura a linha por investidor da mesma subconta
+    envio = _envio_sub({(DESTINO_SUB, INV_UM): D("100.00"),
+                        (DESTINO_SUB, INV_DOIS): D("100.00")}, enviados={velha: D("5000.00")})
+    assert envio.itens == []
+    # por investidor gravado com a chave velha "destino|investidor"
+    velha_inv = pa.chave_de_envio(DESTINO_SUB, INV_UM)
+    envio = _envio_sub({(DESTINO_SUB, INV_UM): D("100.00"),
+                        (DESTINO_SUB, INV_DOIS): D("100.00")},
+                       enviados={velha_inv: D("100.00")})
+    assert envio.itens == [] and len(envio.pendentes) == 2
+    envio = _envio_sub({("Filha Dois - Banco", "Pessoa Um/Pessoa Dois"): D("200.00")},
+                       enviados={velha_inv: D("100.00")})
+    assert envio.itens == []
+
+
+def test_a5_composto_que_nao_e_aporte_vira_pendencia_clara():
+    regras = [Regra("Filha Dois - Banco", "Pessoa Um/Pessoa Dois", None,
+                    "Distribuição de lucros", False, linha=6)]
+    envio = pa.operacoes({("Filha Dois - Banco", "Pessoa Um/Pessoa Dois"): D("10.00")},
+                         regras, ENTIDADES, SUBCONTAS, HOJE)
+    assert envio.itens == []
+    (p,) = envio.pendentes
+    assert "Distribuição de lucros" in p.motivo and "aporte" in p.motivo
+
+
+def test_transferencia_com_destino_em_subconta_e_informativo():
+    regras = [Regra(DESTINO_SUB, "Mae - Banco", None, "Transferência", False, linha=6)]
+    envio = pa.operacoes({(DESTINO_SUB, "Mae - Banco"): D("10.00")}, regras,
+                         ENTIDADES_SUB, SUBCONTAS, HOJE)
+    assert envio.itens == [] and envio.pendentes == []
+    (info,) = envio.informativos
+    assert info.motivo == pa.TRANSFERENCIA

@@ -219,7 +219,8 @@ FECHADO. Conta sem saldo mostra "—" no mínimo e no saldo final, com situaçã
 `<RAIZ_SAIDA>/<ano>/<MÊS>/DD MM - dia de trabalho.json`, ao lado do Excel do
 dia. Guarda os ajustes de saldo, o valor por aportador, os movimentos à mão e o
 que já foi mandado para a aba Aportes (chave `destino|aportador` → VALOR
-mandado, em Decimal). Arquivo ausente = dia vazio; ilegível ou de outra data
+mandado, em Decimal; a subconta de investidor é `subconta:<número>|<destino>`
+com o total — ver abaixo). Arquivo ausente = dia vazio; ilegível ou de outra data
 LEVANTA, e aí a tela não grava nada (sobrescrever apagaria o que a pessoa fez)
 e **não manda nada para a aba Aportes** (sem o arquivo não se sabe o que já
 foi mandado hoje). **Os ajustes de saldo, a simulação e `enviados_aportes` continuam aqui, no JSON, de propósito** (entrega 2, 22/10/2026): o ajuste é rascunho que vale só para o dia, não decide o que é pago nem vai a banco ou ERP, muda várias vezes por dia (seria UPDATE numa base que é só de acrescentar), já guarda o original e o `quando`, e já falha fechado. O que decide o que SAI da conta (liberação, edição, à mão, agendado, lista do diretor) vai para a nuvem — ver "Conferência editável" e as seções seguintes.
@@ -272,9 +273,17 @@ cadastro) vira UMA operação "Aporte de Investidor" daquela subconta,
 dividida pelo cadastro, com um aviso listando os investidores de lá — desde
 que a quantidade de nomes bata. Senão é pendência que diz o que cadastrar
 (Novo cadastro → Subconta de investidor, ou um aportador por linha na aba
-Regras com o nome completo). **Transferência da aba Regras** não vai para a
+Regras com o nome completo). Só vale para regra de tipo **aporte**: composto
+com outro tipo é pendência (A5). **O já mandado da subconta é pelo NÚMERO**
+(`para_aportes.chave_da_subconta`, revisão de dinheiro de 22/10/2026, A4),
+na linha composta e nas linhas por investidor, que são a mesma operação: a
+mandada por uma porta segura a outra, com qualquer rótulo de destino. As
+chaves antigas do JSON do dia (`destino|Fulano/Beltrano` e
+`destino|<investidor>` cujo destino é a subconta) continuam lidas como já
+mandado (`_ja_da_subconta`). **Transferência da aba Regras** não vai para a
 aba Aportes e não é pendência: `Envio.informativos`, "transferência entre
-contas: lance no banco; não é aporte", no Registro sem o "[!]".
+contas: lance no banco; não é aporte", no Registro sem o "[!]" — também
+com destino em subconta (o tipo é olhado antes da subconta).
 
 O HTML dos pagamentos leva os movimentos à mão válidos como linhas só
 informativas (`decisoes.movimentos_do_dia` → `html_pagamentos.gravar
