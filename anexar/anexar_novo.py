@@ -61,6 +61,8 @@ class AnexarNovoFrame(AnexarFrame):
 
     def __init__(self, master, dono: AnexarFrame):
         self.anx = dono                  # antes do super: tudo abaixo pode perguntar
+        # A Anexar de sempre pergunta por esta antes de casar (`executar`).
+        dono._copias = tuple(getattr(dono, "_copias", ())) + (self,)
         super().__init__(master)
         self.q = _FilaComDesvio()        # antes do 1º `_drain` (150 ms)
 

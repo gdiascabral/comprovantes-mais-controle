@@ -1352,6 +1352,19 @@ class AnexarFrame(ttk.Frame):
     def executar(self):
         if self.worker and not self.worker.done():
             return
+        # Com a cópia "Anexar (novo)" casando, esta não começa: no modo
+        # central as duas têm vagas diferentes e subiriam o MESMO PDF. Sem
+        # cópia registrada (`_copias`, posto por ela) ou com ela parada, nada
+        # muda. A pergunta vem antes de tocar em qualquer botão.
+        for copia in getattr(self, "_copias", ()):
+            if self.dona_ocupada(aba=copia) is copia:
+                messagebox.showwarning(
+                    f"{copia.TITULO} trabalhando",
+                    f"A aba {copia.TITULO} está em: "
+                    f"{self.ocupado(aba=copia) or 'outra tarefa'}.\n\n"
+                    f"As duas casam e anexam os mesmos comprovantes: espere a "
+                    f"{copia.TITULO} terminar e clique de novo aqui.")
+                return
         # TUDO que vem do formulário é lido AQUI, na thread da interface, e vai
         # por argumento para o worker. Ler `StringVar`/`BooleanVar` é falar com
         # o Tcl, e o Tcl é de quem criou a janela: da thread do navegador isso

@@ -735,3 +735,72 @@ def test_anexados_no_mes_so_com_uma_das_duas(monkeypatch):
     assert _kpi_anexados(monkeypatch, [_ev("anx", 3, 4, 0)]) == ("3", "75% dos pagos")
     assert _kpi_anexados(monkeypatch, [_ev("anx2", 7, 9, 0)]) == ("7", "77% dos pagos")
     assert _kpi_anexados(monkeypatch, [])[0] == "—"
+
+
+# ---- o outro lado: a Anexar de sempre não começa com a cópia casando
+class _Seguiu(Exception):
+    """A `executar` da Anexar passou da recusa e foi ler o formulário."""
+
+
+class _Campo:
+    def get(self):
+        raise _Seguiu
+
+
+def _anexar_executa(modulo, novo, monkeypatch, *, ligado, quem, registrar=True):
+    """`quem` está com o navegador: "copia", "anexar", "outra" ou None."""
+    dono = _dono_de_verdade(modulo, monkeypatch, ligado=ligado)
+    copia = _nova(novo, dono)
+    if registrar:
+        dono._copias = (copia,)
+    dono.worker = None
+    dono.v_pasta = _Campo()
+    if quem:
+        dona = {"copia": copia, "anexar": dono, "outra": object()}[quem]
+        rotulo = "Anexar — casar e anexar"
+        if ligado:
+            dono._vaga_de(dona).trabalho_atual = _Rodando()
+            dono._vaga_de(dona).rotulo_atual = rotulo
+        else:
+            dono._trabalho_atual, dono._dona_atual, dono._rotulo_atual = (
+                _Rodando(), dona, rotulo)
+    avisos = []
+    monkeypatch.setattr(modulo.messagebox, "showwarning",
+                        lambda titulo, texto, **k: avisos.append(texto))
+    try:
+        try:
+            modulo.AnexarFrame.executar(dono)
+            seguiu = False
+        except _Seguiu:
+            seguiu = True
+    finally:
+        _desligar(dono)
+    return seguiu, avisos
+
+
+@pytest.mark.parametrize("ligado", [False, True])
+def test_a_anexar_nao_comeca_com_a_copia_casando(modulo, novo, monkeypatch, ligado):
+    seguiu, avisos = _anexar_executa(modulo, novo, monkeypatch, ligado=ligado, quem="copia")
+    assert not seguiu and len(avisos) == 1
+    assert "Anexar (novo)" in avisos[0] and "Anexar — casar e anexar" in avisos[0]
+
+
+@pytest.mark.parametrize("ligado", [False, True])
+@pytest.mark.parametrize("quem", [None, "anexar", "outra"])
+def test_sem_a_copia_trabalhando_a_anexar_e_a_de_hoje(modulo, novo, monkeypatch, ligado,
+                                                      quem):
+    seguiu, avisos = _anexar_executa(modulo, novo, monkeypatch, ligado=ligado, quem=quem)
+    assert seguiu and avisos == []
+
+
+@pytest.mark.parametrize("ligado", [False, True])
+def test_sem_copia_registrada_a_anexar_e_a_de_hoje(modulo, novo, monkeypatch, ligado):
+    seguiu, avisos = _anexar_executa(modulo, novo, monkeypatch, ligado=ligado, quem="copia",
+                                     registrar=False)
+    assert seguiu and avisos == []
+
+
+def test_a_copia_se_registra_no_dono(modulo, novo, monkeypatch):
+    dono = _Dono()
+    f, _ch = _construir(modulo, monkeypatch, novo.AnexarNovoFrame, dono)
+    assert dono._copias == (f,)
