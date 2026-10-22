@@ -32,7 +32,9 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 | Módulo | Decide |
 |---|---|
 | `valores.py` | dinheiro digitado e mostrado; o float da Remessa vira Decimal na entrada (`de_float`); "1500.50" ambíguo é recusado pela régua de `aportes.regras` |
-| `saldos.py` | passo 1: sistema × banco por conta; o ajuste guarda o original e acusa quando o ERP mudou depois dele; saldo do dia = banco se digitado, senão sistema |
+| `saldos.py` | passo 1: sistema × banco por conta; o ajuste guarda o original e acusa quando o ERP mudou depois dele; saldo do dia = banco (digitado, senão lido do Sicoob), senão sistema; `nota_banco` diz por que o Sicoob não foi lido e `banco_mudou` acusa o lido que mudou depois do ajuste |
+| `saldo_sicoob.py` | passo 1: qual conta do Sicoob é cada linha (`agendamentos_sicoob.conta_sicoob`, o caminho da Remessa), o lido, a hora, o recado de falha, o JSON `DD MM - saldos do sicoob.json` |
+| `sicoob_na_tela.py` | o "Reler Sicoob" e a frase da hora: thread própria daemon, fila, botão pela regra dos botões da tela |
 | `pagamentos.py` | passo 2: por linha do painel, o que VAI SAIR, o JÁ ENVIADO (soma no a pagar) e o que está BLOQUEADO; conta sem linha no painel vai para `fora`, com o motivo, em vez de sumir |
 | `aportes.py` | passo 3: mínimo, sugestão da aba Regras, conta-mãe primeiro com alerta forte, movimentos «À MÃO» no M (entra) e no E (sai) |
 | `para_aportes.py` | os aportes definidos viram `Operacao` da aba Aportes, com pendências (não foram) e avisos (foram, confira) |
@@ -65,6 +67,49 @@ remessa, mas SOMANDO no "a pagar" (coluna D do Painel, D do Excel e o aporte
 mínimo), porque o banco ainda vai debitá-lo. A tela o mostra como "já enviado
 (soma no a pagar)", separado dos bloqueados. Revisão final de 21/10/2026: fora
 do a pagar, o mínimo saía baixo e a conta podia fechar negativa.
+
+## Saldo do Sicoob (entrega 4, 22/10/2026)
+
+A coluna BANCO das contas do Sicoob vem lida do SicoobNet, só leitura
+(`extratos_sicoob/saldo.py`); no alto do passo 1, "Sicoob lido às HH:MM" e o
+botão "Reler Sicoob" (`sicoob_na_tela.LeitorSicoob`). O frame só cria o
+leitor no cartão 1 e o chama em quatro pontos: `_recalcular` (`aplicar`),
+fim do `_receber_leitura` (`ler_se_faltar`), `_ligar_botoes`/`_limpar`
+(`ligar`) e `fechar`.
+
+- **O digitado vale sobre o lido.** A spec trata o saldo do banco como valor
+  editável "inclusive para simular", com o original visível: o lido é o
+  original, o digitado é o ajuste do dia (`banco_usado`). Se o Sicoob ler um
+  valor DIFERENTE do que havia quando o ajuste foi feito, a linha fica em
+  âmbar: "vale o digitado; o banco leu R$ X depois do seu ajuste".
+- **O Buscar lê o Sicoob só sem leitura de hoje** (`ler_se_faltar`, ao fim do
+  Buscar, quando já se sabe quais linhas são do Sicoob); com leitura do dia,
+  vale a hora mostrada e o "Reler Sicoob" refaz.
+- **Reler substitui a leitura inteira**: conta que falha fica "Sicoob não
+  lido: motivo" com o banco VAZIO, nunca o valor velho calado nem R$ 0,00.
+  A hora é a da conta lida há mais tempo; parcial diz "N de M contas".
+- **Outro banco fica digitado** (spec: "só Sicoob"). Duas linhas na mesma
+  conta do Sicoob, ou linha que diz SICOOB e o cadastro não resolve, não são
+  preenchidas e dizem por quê.
+- **A leitura do dia é guardada** em `<RAIZ_SAIDA>/<ano>/<MÊS>/DD MM - saldos
+  do sicoob.json`, arquivo PRÓPRIO (não disputa o dia de trabalho); de outro
+  dia é ignorado, estragado vira aviso.
+- **`ROTA_SALDO = ""` desliga tudo sem abrir o Chrome**: o rótulo diz
+  "leitura ainda não ligada — digite o saldo do banco" e o Reler explica.
+  Desde 22/10/2026 o endereço está medido e ligado.
+- **Thread própria, nunca a do ERP**: o `SicoobClient` nasce e morre em
+  `LeitorSicoob._t_ler` (`Thread` daemon, nome `sicoob-saldo`), e a tela só
+  recebe pela fila. O perfil do banco é o da instalação, aberto só como o app
+  abre.
+- **Botão**: apagado sem leitura do ERP, lendo o ERP ou gravando na nuvem
+  (`ligar(b.dia)`, a mesma regra de `passo2.botoes`) e enquanto lê o Sicoob;
+  `reler` também recusa durante a gravação.
+- **Um perfil do banco, uma sessão**: a leitura recusa com os Extratos ou o
+  "Conferir agendamentos" da Remessa rodando (`outros_no_sicoob`, ligado no
+  `comprovantes_app.py`), e o "Conferir agendamentos" passa a recusar
+  enquanto esta aba lê, com o nome dela na mensagem
+  (`LeitorSicoob.OCUPADO`). É a única mudança de comportamento da Remessa. A
+  barra lateral mostra o ● em "dia" durante a leitura.
 
 ## Leitura: duplicação conhecida
 

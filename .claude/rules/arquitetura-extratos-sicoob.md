@@ -77,4 +77,11 @@ paths:
   HTTP 200 nas 3 contas, sem `block-ui`. Tudo num bloco de constantes; `ROTA_SALDO = ""` desliga a
   leitura. Se a prova ao vivo der 401/403 com a sessão viva, a contingência
   está na docstring (voltar a "" e escutar a resposta da Home, num plano à
-  parte). Guardado por `tests/test_sicoob_saldo.py`.
+  parte). O bloco de constantes é o ÚNICO lugar do endereço e dos campos.
+  **Falhas**: sessão caída e endereço mudado (`EnderecoMudou`: 404/405/410,
+  resposta que não é JSON) PARAM a fila e marcam as contas que faltavam com o
+  porquê; formato estranho numa conta (`FormatoDaConta`) deixa só ela "não
+  lida", e duas seguidas param a fila. Nenhuma conta some e nenhuma vira
+  R$ 0,00. Quem chama é `tela_do_dia/sicoob_na_tela.py`, numa thread própria
+  (o `SicoobClient` nasce e morre nela). Guardado por
+  `tests/test_sicoob_saldo.py`.
