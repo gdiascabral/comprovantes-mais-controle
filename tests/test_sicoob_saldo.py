@@ -55,6 +55,7 @@ class Cliente:
         self.page, self.na_lista, self.trava, self.trocas = pagina, na_lista, trava, []
 
     def listar_contas(self):
+        self.listagens = getattr(self, "listagens", 0) + 1
         return list(self.na_lista)
 
     def acessar_conta(self, numero):
@@ -455,3 +456,12 @@ def test_parar_depois_do_primeiro_acesso_nao_pergunta(medido):
     S.ler_em_dois_acessos(_Abrir(c1), ["12.345-6", "23.456-7"], parar=parar, log=log,
                           perguntar=lambda f: perguntas.append(f) or True, agora=lambda: AGORA)
     assert perguntas == []
+
+
+# ------------------------------------------------- revisão do pacote (22/10)
+def test_lista_as_contas_uma_vez_por_login(medido):
+    pagina = Pagina({"123456": ok("1"), "234567": ok("2"), "345678": ok("3")})
+    cli = Cliente(pagina, ["12.345-6", "23.456-7", "34.567-8"])
+    lidos = S.ler_contas(cli, ["12345-6", "23456-7", "34567-8"], agora=lambda: AGORA)
+    assert all(l.ok for l in lidos) and cli.listagens == 1
+

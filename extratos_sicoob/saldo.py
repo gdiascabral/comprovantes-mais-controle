@@ -298,25 +298,32 @@ def como_na_lista(lista, numero: str) -> str | None:
     return None
 
 
-def _acessar(cli, numero: str) -> bool:
+def _acessar(cli, numero: str, lista: dict) -> bool:
     """Entra pelo número da LISTA quando ele bate em dígitos; sem achar (a
-    lista não reconheceu a linha), tenta como veio — o caminho de antes."""
-    escrito = como_na_lista(cli.listar_contas(), numero) or numero
+    lista não reconheceu a linha), tenta como veio — o caminho de antes.
+
+    `lista` guarda a lista de contas do login (`{"contas": [...]}`): lida UMA
+    vez por login, não a cada conta (revisão do pacote, 22/10/2026)."""
+    if lista.get("contas") is None:
+        lista["contas"] = list(cli.listar_contas() or [])
+    escrito = como_na_lista(lista["contas"], numero) or numero
     return cli.acessar_conta(escrito)
 
 
-def entrar(cli, numero: str) -> None:
+def entrar(cli, numero: str, lista: dict | None = None) -> None:
     """Como `pendencias.ler_conta`: o ⇄ some depois de várias trocas, e um
-    `reload` o traz de volta — tenta uma segunda vez. Sessão que caiu não volta
-    com reload: sobe."""
+    `reload` o traz de volta — tenta uma segunda vez (e relê a lista). Sessão
+    que caiu não volta com reload: sobe."""
+    lista = {} if lista is None else lista
     try:
-        entrou = _acessar(cli, numero)
+        entrou = _acessar(cli, numero, lista)
     except SessaoPerdida:
         raise
     except Exception:                                        # noqa: BLE001
+        lista["contas"] = None
         cli.page.reload()
         cli.page.wait_for_timeout(3000)
-        entrou = _acessar(cli, numero)
+        entrou = _acessar(cli, numero, lista)
     if not entrou:
         raise ContaNaoEncontrada(FORA_DESTE_LOGIN)
 
@@ -327,11 +334,14 @@ def _primeira_linha(erro) -> str:
 
 
 def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
-               log=print, progresso=lambda feitas, total: None) -> list[Lido]:
+               log=print, progresso=lambda feitas, total: None,
+               lista: dict | None = None) -> list[Lido]:
     """Uma `Lido` por conta, NA ORDEM pedida; nenhuma some. Sessão caída e
     endereço mudado param a fila (as que faltavam levam o porquê); o resto
-    falha só na conta."""
+    falha só na conta. `lista` guarda a lista de contas DESTE login (uma
+    leitura por login); sem ela, cada chamada guarda a sua."""
     exigir_medido()
+    lista = {} if lista is None else lista
     vistos, fila = set(), []
     for n in numeros:
         if so_digitos(n) and so_digitos(n) not in vistos:
@@ -345,7 +355,7 @@ def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
             break
         progresso(i, len(fila))
         try:
-            entrar(cli, numero)
+            entrar(cli, numero, lista)
             valor = ler_saldo(cli.page, numero)
         except SessaoPerdida:
             log(SESSAO_CAIU)
