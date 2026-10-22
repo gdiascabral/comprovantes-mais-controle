@@ -188,16 +188,22 @@ paths:
   "APTO* (reembolso)", Obs "reembolso a <pessoa> — chave do cadastro", e o
   segmento B declara a pessoa (`reembolso=True`, desmarcado na remessa). Fora
   do cadastro, continua "ATENÇÃO — documento declara reembolso".
-  **Pagamento autorizado**: anexo cujo nome diz "autoriza" ou cujo texto diz
-  "PAGAMENTO AUTORIZADO" (`eh_autorizacao`; nunca boleto, nota, comprovante
-  ou "PAGAR PARA") não é boleto — era o PDF "neutro" único e virava "Boleto em
-  imagem". Sem boleto nos OUTROS anexos e com chave inequívoca em
-  `paidToBankAccount` (`chave_dos_dados_bancarios`: tipo conhecido, DV
-  fechando), paga por ela, Obs "pagamento autorizado (anexo) — Pix dos dados
-  bancários do lançamento". `"pix_dos_dados_bancarios": true` no
-  `regras_fornecedor.json` faz o mesmo para o favorecido sem o anexo (aí só
-  anexo que SE ANUNCIA boleto conta como boleto). Vale para a Remessa/Retorno
-  igual: é o mesmo `montar_registros`.
+  **Pagamento autorizado**: anexo cujo nome ou texto diz "PAGAMENTO
+  AUTORIZADO" (a frase inteira, sem acento nem caixa — "OC AUTORIZADA" e
+  "AUTORIZAÇÃO DE FORNECIMENTO" não; `eh_autorizacao`; nunca boleto, nota,
+  comprovante ou "PAGAR PARA") não é boleto — era o PDF "neutro" único e
+  virava "Boleto em imagem". Sem boleto nos OUTROS anexos (nem anunciado, nem
+  linha digitável válida em PDF, nem o achado dentro da NF por
+  `linha_em_outro_anexo`, que ganha sempre), com todos os outros anexos LIDOS
+  com certeza (`_lido_com_certeza`: imagem, PDF sem texto e PDF lido só pelo
+  OCR seguram a autorização — podem ser o boleto que não fechou) e com chave
+  inequívoca em `paidToBankAccount` (`chave_dos_dados_bancarios`: UMA chave só,
+  `chave_unica_da_observacao`, tipo conhecido, DV fechando), paga por ela, Obs
+  "pagamento autorizado (anexo) — Pix dos dados bancários do lançamento".
+  `"pix_dos_dados_bancarios": true` no `regras_fornecedor.json` faz o mesmo
+  para o favorecido sem o anexo, com as MESMAS travas (revisão de dinheiro de
+  22/10/2026, A1/A2/A6). Vale para a Remessa/Retorno igual: é o mesmo
+  `montar_registros`.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e

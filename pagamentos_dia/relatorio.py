@@ -832,18 +832,30 @@ def chave_dos_dados_bancarios(pago_para: str) -> str:
     """A chave Pix dos Dados Bancários do lançamento (`paidToBankAccount`),
     só quando ela é inequívoca — senão "".
 
-    Tipo conhecido (`regras.tipo_de_chave_pix`: uma TED escrita à mão não tem)
-    e, sendo CPF/CNPJ, dígito verificador fechando (`_chave_confiavel`)."""
+    UMA chave só no texto (`chave_unica_da_observacao`: com CPF e CNPJ juntos
+    a ordem dos padrões escolhia o CNPJ), tipo conhecido e, sendo CPF/CNPJ,
+    dígito verificador fechando (`_chave_confiavel`). Dados de TED (banco,
+    agência, conta, titular) sem a palavra Pix/chave não são chave: o
+    "CPF/CNPJ do titular" é a identificação da conta, não um Pix (revisão de
+    dinheiro de 22/10/2026, A6)."""
     if not pago_para or not regras.tipo_de_chave_pix(pago_para):
         return ""
-    achado = chave_pix_por_padrao(pago_para)
+    if _DADOS_DE_TED.search(pago_para) and not _DECLARA_PIX.search(pago_para):
+        return ""
+    achado = chave_unica_da_observacao(pago_para)
     if not achado or not _chave_confiavel(achado):
         return ""
     digitos = re.sub(r"\D", "", achado)
-    if (regras.tipo_de_chave_pix(pago_para) in (regras.CHAVE_CPF, regras.CHAVE_CNPJ)
+    tipos = {regras.tipo_de_chave_pix(pago_para), regras.tipo_de_chave_pix(achado)}
+    if (tipos & {regras.CHAVE_CPF, regras.CHAVE_CNPJ}
             and not regras.documento_valido(digitos)):
         return ""
     return achado
+
+
+_DADOS_DE_TED = re.compile(
+    r"\b(?:ted|doc|ag[eê]ncia|ag|conta|c/c|cc|banco|titular)\b", re.I)
+_DECLARA_PIX = re.compile(r"\b(?:pix|chave)\b", re.I)
 
 
 def _sem_boleto(files, textos: dict, valor, urls_ocr=()) -> bool:

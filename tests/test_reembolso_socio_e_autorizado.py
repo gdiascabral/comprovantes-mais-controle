@@ -422,3 +422,27 @@ def test_a2_pagamento_autorizado_sem_acento_nem_caixa():
                                     {"u": "Pagamento Autorizado pela diretoria"})
     assert not relatorio.eh_autorizacao(anexo("doc 9", url="u"),
                                         {"u": "Ordem de compra autorizada"})
+
+
+# ==========================================================================
+# Revisão de dinheiro de 22/10/2026 — A6
+# ==========================================================================
+def test_a6_dois_documentos_nos_dados_bancarios_nao_escolhe():
+    for texto in ("PIX CPF 111.444.777-35 / CNPJ 11.222.333/0001-81",
+                  "CNPJ 11.222.333/0001-81 ou CPF 111.444.777-35"):
+        assert relatorio.chave_dos_dados_bancarios(texto) == "", texto
+
+
+def test_a6_dados_de_ted_nao_viram_chave():
+    for texto in ("BANCO 756 AG 3001 CC 12345-6 CPF/CNPJ DO TITULAR 111.444.777-35",
+                  "TED - Agência 3001 Conta 12345-6 - titular 111.444.777-35"):
+        assert relatorio.chave_dos_dados_bancarios(texto) == "", texto
+
+
+def test_a6_chave_unica_continua_valendo():
+    assert relatorio.chave_dos_dados_bancarios("111.444.777-35") == "111.444.777-35"
+    assert relatorio.chave_dos_dados_bancarios("PIX CPF 111.444.777-35") == "111.444.777-35"
+    assert relatorio.chave_dos_dados_bancarios(
+        "PIX EMAIL fulano@exemplo.com") == "fulano@exemplo.com"
+    assert relatorio.chave_dos_dados_bancarios(
+        "CHAVE PIX CNPJ 11.222.333/0001-81") == "11.222.333/0001-81"
