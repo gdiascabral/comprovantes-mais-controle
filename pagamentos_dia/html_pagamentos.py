@@ -543,8 +543,14 @@ def contas_do_html_geral(resultado) -> list[dict]:
         for r in regs:
             tipo = str(r.get("tipo") or "-")
             id_ = str(r.get("id") or "")
+            # O pagamento À MÃO da tela "Pagamentos do dia" (só ela põe a
+            # chave `a_mao`): o mesmo lançamento pode estar na lista do dia, e
+            # o id é a chave do "já paguei" e do "Conferido" desta página —
+            # "<lançamento>#mao:<n>", e o link continua o do lançamento.
+            # Registro sem a chave (todos os da Remessa) não muda.
+            a_mao = str(r.get("a_mao") or "")
             entradas.append({
-                "id": id_,
+                "id": (f"{id_}#{a_mao}" if id_ else a_mao) if a_mao else id_,
                 # Sem id não há para onde ir: link vazio, sem botão na tela.
                 "link": URL_LANCAMENTO + id_ if id_ else "",
                 "tipo": tipo,
