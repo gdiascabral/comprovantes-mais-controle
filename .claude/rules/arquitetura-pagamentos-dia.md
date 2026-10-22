@@ -747,3 +747,22 @@ paths:
   qualquer linha a deixa sem marca. Conta NÃO LIDA não se marca. A regra é pura
   (`resumao`, `chave_da_linha`, `chave_da_conta`, `ler_marcas`,
   `gravar_marcas`) e tem teste.
+
+- **Quatro ganchos opcionais para a aba "Pagamentos do dia"** (entrega 2,
+  22/10/2026). Cada um tem padrão igual ao comportamento de antes, e a
+  Remessa/Retorno e o Saldo de pagamentos não mudam sem eles:
+  (1) `relatorio.montar_registros(..., ids_liberados=())` e
+  `confirmacao.remontar(entradas, ids_nao_confirmados=(), *, ids_liberados=())`:
+  o liberado sai dos omitidos com o bloqueio anotado em `bloqueio_liberado`;
+  vazio = `Resultado` idêntico (`tests/test_ganchos_da_tela_do_dia.py::
+  test_sem_liberados_o_resultado_e_identico` e `::test_remontar_sem_liberados_e_o_de_sempre`);
+  (2) `registro["descricao_editada"]`, que só a tela põe:
+  `html_pagamentos.descricao_para_colar` a honra (limpa e cortada no limite);
+  sem a chave o texto é o de sempre (`::test_descricao_sem_a_chave_nova_nao_muda`);
+  (3) `remessa_dia._CHAVES_DA_DESCRICAO` ganhou `"descricao_editada"`, repassada
+  só quando existe (`::test_remessa_so_leva_a_descricao_editada_quando_ela_existe`);
+  (4) `PagamentosDiaFrame.receber_apuracao(leitura, desmarcados=(), *, hoje=None,
+  resultado=None)`: com `resultado` pronto da tela ele é usado sem remontar,
+  sem ele remonta como sempre (os testes antigos de
+  `tests/test_remessa_receber_apuracao.py` passam sem mudança, e
+  `::test_resultado_pronto_da_tela_e_usado_sem_remontar` cobre o novo caminho).

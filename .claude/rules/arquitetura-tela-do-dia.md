@@ -40,6 +40,15 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 | `erp_do_dia.py` | os saldos do ERP, sempre pelo Chrome do app |
 | `dia_de_trabalho.py` | o JSON do dia |
 | `decisoes.py` | o que a tela faria com `if`: "—" de conta sem saldo, movimento à mão válido, quando o Excel e os geradores recusam, quais operações seguram |
+| `conferencia.py` | passo 2 editável: eventos da nuvem → decisão por alvo (`dobrar`); liberar, desmarcar, editar, desfazer, remover à mão; validações (motivo, forma de pagar, reembolso, à mão); o "tem certeza?" (`pede_certeza`); o aviso de casamento do Anexar |
+| `geracao.py` | o `Resultado` que planilha, HTML e remessa leem: o da Remessa + liberados, editados e à mão (status LIBERADO / EDITADO / À MÃO); `para_a_remessa` tira o à mão |
+| `lancamento_do_erp.py` | o link do lançamento (só leitura, pelo Chrome do app): fornecedor, CC, NF, OC, conta, valor em aberto, se já está pago |
+| `agendados.py` | passo 6 e "a confirmar": a foto de cada pagamento, a situação (o que se prova e o que espera resposta), quando reler, validação da resposta |
+| `lista_diretor.py` | passo 7: nome curto por conta, ordinais, ordem de ontem como sugestão, o texto do WhatsApp |
+| `nuvem_do_dia.py` | a leitura orquestrada: nuvem + releitura do ERP + retorno do banco, sem tela (dublês nos testes) |
+| `passo2.py` | regras puras do passo 2: que botão vale em cada linha, edição, a pergunta ao gerar com a nuvem em erro, gravar-e-reler |
+| `passo67.py` | regras puras de "Agendados a confirmar", "Marcar agendados" e "Lista do diretor": marcas, confirmação do "Pago", `reler_tudo` |
+| `janelas.py` | os diálogos finos (motivo, edição, à mão, resposta, nome curto); a regra que valida mora nos módulos acima |
 
 ## "Vai sair" = entra e nasce marcada
 
@@ -103,7 +112,7 @@ que já foi mandado para a aba Aportes (chave `destino|aportador` → VALOR
 mandado, em Decimal). Arquivo ausente = dia vazio; ilegível ou de outra data
 LEVANTA, e aí a tela não grava nada (sobrescrever apagaria o que a pessoa fez)
 e **não manda nada para a aba Aportes** (sem o arquivo não se sabe o que já
-foi mandado hoje). Sem SQL nesta entrega; a nuvem é a entrega 2.
+foi mandado hoje). **Os ajustes de saldo, a simulação e `enviados_aportes` continuam aqui, no JSON, de propósito** (entrega 2, 22/10/2026): o ajuste é rascunho que vale só para o dia, não decide o que é pago nem vai a banco ou ERP, muda várias vezes por dia (seria UPDATE numa base que é só de acrescentar), já guarda o original e o `quando`, e já falha fechado. O que decide o que SAI da conta (liberação, edição, à mão, agendado, lista do diretor) vai para a nuvem — ver "Conferência editável" e as seções seguintes.
 
 ## Aporte não se repete
 
@@ -165,6 +174,103 @@ o teto de cada uma. Texto de ajuda quebra na largura do cartão (`_ajuda`,
 `aplicar_cores` repassa o `estilo_tabela` (as cores das linhas são tags da
 tabela). A `ferramentas/galeria.py` fotografa a aba PREENCHIDA com dados
 fictícios (`_preencher_dia` → `mostrar_numeros()`), sem mudar o app.
+
+## Conferência editável (entrega 2, 22/10/2026)
+
+O passo 2 deixa o dono LIBERAR um bloqueado (com motivo), DESMARCAR, EDITAR a
+forma de pagar, o dado de reembolso e a descrição, e lançar um pagamento À MÃO.
+Cada clique é uma linha nova na nuvem (só acrescenta); o estado de um alvo é a
+"dobra" dos eventos dele, na ordem do id do banco; "Desfazer" volta ao que o
+ERP diz. Tudo chega ao "a pagar", ao mínimo de aporte, à planilha, ao HTML, à
+remessa e ao Excel pelo MESMO `Resultado` (`geracao.resultado_da_tela`): sem
+decisão nenhuma ele é idêntico ao da entrega 1.
+
+Regras que viraram lei:
+
+- **LIBERADO, EDITADO e À MÃO nunca começam com "APTO"**, então na conferência
+  da Remessa nascem DESMARCADOS: liberar não marca remessa sozinho. ATENÇÃO
+  grave (valor diverge, documento não bate, JÁ PAGO) continua na frente do
+  status; só cedem à liberação os alarmes de forma de pagar, e à edição da
+  forma, só "sem dados de pgto".
+- **Liberar "já enviado" ou "fora dos Contatos" pede "tem certeza?"**
+  (`default="no"`), depois do motivo. Linha de lançamento dividido (com
+  `parte`) não se libera nem tem a forma editada.
+- **Reembolso exige tipo + dados**: editar o nome arrasta a forma, e o dado não
+  pode ser o do fornecedor quando o registro não era reembolso. Tirar o
+  reembolso é pelo "Desfazer".
+- **Forma de pagar editada** exige chave com tipo declarado ou linha digitável
+  que fecha nos DVs. **Pix de 11 dígitos crus (ambíguo CPF/telefone) é
+  recusado.** Editar a descrição roda `aviso_de_casamento` (com as MESMAS
+  funções do `anexar/matcher.py`: CC e número do documento no fim); só ela
+  pergunta antes de gravar.
+- **À mão: só remover.** Não se edita nem se desmarca: remove-se (com motivo)
+  e lança-se de novo. **À mão em conta PF é recusado** (a PF é paga pelo
+  celular, fora do HTML). Com link do lançamento: não paga título já pago, de
+  outra conta, nem mais que o em aberto (somando o que já está à mão para ele);
+  herda CC/NF/OC para o Anexar casar. Sem link, avisa que o Anexar não tem o
+  que casar.
+- **À mão NUNCA vai na remessa CNAB** (`geracao.para_a_remessa`): sem
+  lançamento do dia, não há referência para retorno nem baixa. No HTML o id é
+  `<lançamento>#mao:<n>`.
+- **Durante a gravação**, geradores, aportes e Buscar ficam apagados
+  (`passo2.botoes`); a gravação é seguida de releitura da nuvem, também quando
+  falhou, e releitura que falha limpa a tela e pede nova busca (nunca número
+  velho).
+- **Nuvem com erro: os geradores perguntam** (`passo2.pergunta_ao_gerar`,
+  `default="no"`): "as decisões de hoje (liberados, desmarcados, edições, à
+  mão) NÃO estão aplicadas". Nuvem ainda não lida (`SEM_NUVEM`) só apaga os
+  botões.
+- O iid da tabela é por POSIÇÃO (`tipo|conta.n`), nunca o id do lançamento
+  (id repetido em partes derrubaria o Treeview).
+
+## Agendados (entrega 2)
+
+O passo 6 grava uma FOTO de cada pagamento marcado (valor, em aberto, forma,
+favorecido); "Agendados a confirmar", no topo, lista o que ainda não teve
+resposta final. **Nada se resolve sozinho.**
+
+- **Pré-marca de "pago" só com prova**: baixa no ERP (`paid` OU `markedAsPaid`,
+  inteira, ou parcial batendo ao centavo) ou retorno "ok" do banco numa remessa
+  do dia do agendado ou depois (`nuvem_do_dia`: envio sem `gerado_em` ou
+  anterior ao agendado não vale). A prova por comprovante baixado fica para
+  depois: `prova_extra` é o ponto de extensão e nunca vence "sumiu"/"mudou".
+- **Restante 0 sem baixa** = "baixa sem confirmação — responda", sem pré-marca,
+  mesmo com retorno "ok". **"Sumiu" e "mudou" só saem com resposta**; sem a
+  foto do valor em aberto, ou sem o valor em aberto do ERP, também é
+  "responda". Sem releitura do ERP nunca se diz "sumiu".
+- Respostas: pago, não saiu (motivo de 3 letras ou mais), reagendado (data de
+  hoje em diante; continua pendente). A resposta TIRA a marca ☑
+  (`marcas_iniciais`: o id cuja última resposta mudou volta desmarcado, também
+  quando a resposta veio de outra máquina).
+- **"Pago" SEMPRE pergunta** ("Gravar N como pago?", `default="no"`), listando
+  favorecido, valor e a prova com a hora ("baixa no ERP — lida às 08:12", ou
+  "da última busca"); o item sem prova aparece como "SEM prova — confira".
+- Já marcado hoje não se marca de novo (índice único dia + alvo): remarcar é
+  responder "reagendado" com a data de hoje. As repetidas viram recado.
+- **A releitura depois de gravar relê a nuvem (`reler_tudo`), NÃO o ERP**:
+  pendente antigo guarda a situação da última Buscar, e um pago no ERP durante
+  o dia só aparece pré-marcado no próximo Buscar. É o lado seguro.
+
+## Lista do diretor (entrega 2)
+
+Passo 7: uma linha por conta que tem agendado, com NOME CURTO (por conta, na
+nuvem, 1 a 60 caracteres, sem quebra de linha nem tab, nunca igual ao de outra
+conta), ordinais alternáveis e a ordem de ontem como SUGESTÃO; a ordem que o
+dono arrumou hoje vale sobre a de ontem. As setas não cruzam a fronteira
+numerados × demais. **"Copiar para o WhatsApp" exige nome curto único em todas
+as linhas** (linha sem nome é recusada, com a lista dos rótulos e o aviso para
+usar «Nome curto…»); copia primeiro e só então grava a lista (falha ao gravar
+só avisa: perde-se a sugestão de amanhã). Dinheiro em `Decimal`; valor zero ou
+negativo não entra.
+
+## Sem nuvem, a entrega 2 trava (falha fechada)
+
+Sem nuvem lida (erro ao ler, ou sem login) a tela volta ao comportamento da
+entrega 1, com o recado no topo (`lbl_nuvem`): botões do passo 2, de agendados
+e da lista apagados e nada grava. A nuvem que falha ao LER devolve
+`Conferencia()` vazia e pendentes vazios com `erro`, e os geradores perguntam
+antes de gerar (ver acima). A nuvem só acrescenta e só para conta liberada
+(`privado.e_ativo()`); quem fez e quando são carimbados pelo servidor.
 
 ## Aba "Controle de aportes" (entrega 3, 22/10/2026)
 
