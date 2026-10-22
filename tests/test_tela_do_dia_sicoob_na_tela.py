@@ -233,3 +233,67 @@ def test_guarda_nenhum_teste_puro_chega_ao_messagebox_real():
         mb.Message(title="x", message="y").show()
     # E o leitor, sem dublê no teste, cai no registro e não abre nada.
     assert m.messagebox.askokcancel("t", "m") is False
+
+
+# ---------------------------------------------------------------- onda de menores (22/10)
+@pytest.fixture(autouse=True)
+def _hoje_fixo(monkeypatch):
+    """O "hoje" do leitor é o da tela dos testes (a virada da meia-noite é
+    conferida contra ele, e não contra o relógio da máquina)."""
+    monkeypatch.setattr(m, "_hoje", lambda: HOJE)
+
+
+def test_baixar_comprovantes_rodando_conta_como_sicoob_em_uso():
+    class _Tarefa:
+        def __init__(self, viva): self.viva = viva
+        def done(self): return not self.viva
+
+    aba = type("Bxc", (), {"worker": None})()
+    assert m.baixar_comprovantes_no_sicoob(aba) is None
+    aba.worker = _Tarefa(viva=True)
+    assert "Baixar comprovantes" in m.baixar_comprovantes_no_sicoob(aba)
+    aba.worker = _Tarefa(viva=False)
+    assert m.baixar_comprovantes_no_sicoob(aba) is None
+    # Aba sem o atributo (ou que falha ao responder): não trava ninguém.
+    assert m.baixar_comprovantes_no_sicoob(object()) is None
+
+
+def test_app_pergunta_ao_baixar_comprovantes_nas_duas_pontas():
+    app = (RAIZ / "comprovantes_app.py").read_text(encoding="utf-8")
+    trecho_dia = app.split("aba_dia.sicoob.outros_no_sicoob =", 1)[1].split("\n    #", 1)[0]
+    trecho_pag = app.split("aba_pag.sicoob_ocupado =", 1)[1].split("\n    #", 1)[0]
+    assert "baixar_comprovantes_no_sicoob(aba_bxc)" in trecho_dia
+    assert "baixar_comprovantes_no_sicoob(aba_bxc)" in trecho_pag
+
+
+def test_ler_se_faltar_com_outra_aba_no_sicoob_so_escreve_no_registro(monkeypatch):
+    from extratos_sicoob import saldo
+    janelas = []
+    monkeypatch.setattr(m.messagebox, "showinfo", lambda *a, **k: janelas.append(a))
+    monkeypatch.setattr(m.messagebox, "askokcancel", lambda *a, **k: janelas.append(a))
+    monkeypatch.setattr(saldo, "medido", lambda: True)
+    tela = _tela()
+    l = _leitor(tela)
+    l.contas = [ss.ContaDoPainel("Alfa", numero="12.345-6")]
+    l.outros_no_sicoob = lambda: "Baixar comprovantes"
+    l.ler_se_faltar()
+    assert janelas == [] and l._thread is None
+    assert any("Baixar comprovantes" in r for r in tela.registro)
+
+
+def test_reler_depois_da_meia_noite_pede_novo_buscar(monkeypatch):
+    from extratos_sicoob import saldo
+    avisos = []
+    monkeypatch.setattr(m.messagebox, "showinfo", lambda t, msg: avisos.append(msg))
+    monkeypatch.setattr(saldo, "medido", lambda: True)
+    tela = _tela()
+    tela.periodo = type("P", (), {"fim": HOJE - dt.timedelta(days=1)})()
+    l = _leitor(tela)
+    l.contas = [ss.ContaDoPainel("Alfa", numero="12.345-6")]
+    l.reler()
+    assert avisos[-1] == "Busque de novo: a tela é de 21/10." and l._thread is None
+    # O automático (fim do Buscar) também recusa, sem janela.
+    n = len(avisos)
+    l.ler_se_faltar()
+    assert len(avisos) == n and l._thread is None
+    assert any("Busque de novo: a tela é de 21/10" in r for r in tela.registro)

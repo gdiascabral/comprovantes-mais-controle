@@ -34,6 +34,25 @@ TITULO = "Reler Sicoob"
 #: O que a barra lateral e a Remessa ("Conferir agendamentos") mostram quando
 #: recusam por causa desta aba (achado 19: a mensagem diz QUEM usa o Sicoob).
 OCUPADO = "Pagamentos do dia — lendo o saldo do Sicoob"
+#: A aba Baixar comprovantes abre o MESMO perfil do Chrome do Sicoob.
+BAIXAR_COMPROVANTES = "Baixar comprovantes — baixando do banco"
+
+
+def _hoje() -> datetime.date:
+    """Separado para o teste fixar o dia (virada da meia-noite)."""
+    return datetime.date.today()
+
+
+def baixar_comprovantes_no_sicoob(aba) -> str | None:
+    """A aba Baixar comprovantes está rodando? Ela não tem `ocupado()`: a
+    pergunta é a mesma que ela própria faz antes de começar (`_comecar`), o
+    `worker` vivo. Aba sem o atributo, ou que falha ao responder, não trava
+    ninguém."""
+    try:
+        w = getattr(aba, "worker", None)
+        return BAIXAR_COMPROVANTES if w is not None and not w.done() else None
+    except Exception:                                        # noqa: BLE001
+        return None
 
 
 class LeitorSicoob:
@@ -121,31 +140,45 @@ class LeitorSicoob:
         não há leitura de hoje, e nunca com o endereço ainda não medido."""
         if self.leitura is None and self._ligado() and not self.ocupado() \
                 and not self._gravando() and ss.numeros_a_ler(self.contas):
-            self.reler(perguntar=False)
+            self.reler(perguntar=False, automatico=True)
 
-    def reler(self, perguntar=True):
+    def reler(self, perguntar=True, automatico=False):
         if self.ocupado():
+            return
+
+        def recusar(texto):
+            # O automático (fim do Buscar) não abre janela: só o Registro.
+            if not automatico:
+                messagebox.showinfo(TITULO, texto)
+            else:
+                self.tela._log(f"[!] {TITULO}: {texto}")
+
+        data = self._data()
+        if data != _hoje():
+            # Virada da meia-noite: a tela é de ontem, e a leitura seria
+            # guardada no dia errado.
+            recusar(f"Busque de novo: a tela é de {data:%d/%m}.")
             return
         if not self._ligado():
             from extratos_sicoob import saldo
             messagebox.showinfo(TITULO, saldo.NAO_MEDIDO[0].upper() + saldo.NAO_MEDIDO[1:] + ".")
             return
         if self._gravando():
-            messagebox.showinfo(TITULO, "Espere a gravação na nuvem terminar.")
+            recusar("Espere a gravação na nuvem terminar.")
             return
         if self.tela.mapping is None or self.tela.dia is None:
-            messagebox.showinfo(TITULO, "Busque os pagamentos e saldos primeiro: é a leitura "
-                                        "do ERP que diz quais contas do painel são do Sicoob.")
+            recusar("Busque os pagamentos e saldos primeiro: é a leitura "
+                    "do ERP que diz quais contas do painel são do Sicoob.")
             return
         numeros = ss.numeros_a_ler(self.contas)
         if not numeros:
-            messagebox.showinfo(TITULO, "Nenhuma conta do painel é do Sicoob (ou o cadastro não "
-                                        "diz qual é) — o saldo do banco fica digitado.")
+            recusar("Nenhuma conta do painel é do Sicoob (ou o cadastro não "
+                    "diz qual é) — o saldo do banco fica digitado.")
             return
         quem = self.outros_no_sicoob()
         if quem:
-            messagebox.showinfo(TITULO, f"O Chrome do Sicoob está em uso ({quem}). Espere "
-                                        "terminar: os dois usariam o mesmo perfil do banco.")
+            recusar(f"O Chrome do Sicoob está em uso ({quem}). Espere "
+                    "terminar: os dois usariam o mesmo perfil do banco.")
             return
         if perguntar and not messagebox.askokcancel(
                 TITULO, f"Vou abrir o Chrome do Sicoob e ler o saldo de {len(numeros)} "
@@ -157,7 +190,7 @@ class LeitorSicoob:
         self.b_reler.configure(state="disabled")
         self._lendo = (0, len(numeros))
         self._mostrar_hora()
-        self._thread = threading.Thread(target=self._t_ler, args=(numeros, self._data()),
+        self._thread = threading.Thread(target=self._t_ler, args=(numeros, data),
                                         name="sicoob-saldo", daemon=True)
         self._thread.start()
 

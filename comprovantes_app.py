@@ -44,6 +44,7 @@ from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
 from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from tela_do_dia.frame import TelaDoDiaFrame
+from tela_do_dia import sicoob_na_tela as _sicoob_na_tela
 from tela_do_dia.controle_frame import ControleAportesFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
@@ -332,11 +333,15 @@ def main():
     # Pagamentos do dia lê o saldo do Sicoob no MESMO perfil do banco (uma
     # sessão só): ela pergunta aos Extratos e ao "Conferir agendamentos", e
     # este passa a perguntar às duas — só uma recusa a mais na Remessa, com o
-    # nome de quem está usando o Sicoob (`LeitorSicoob.OCUPADO`).
+    # nome de quem está usando o Sicoob (`LeitorSicoob.OCUPADO`). O Baixar
+    # comprovantes também abre o perfil do Sicoob; a aba dele (`aba_bxc`) só
+    # nasce mais abaixo, mas as perguntas só correm depois da janela montada.
     aba_dia.sicoob.outros_no_sicoob = lambda: aba_ext.ocupado() or (
+        _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
         "Remessa/Retorno — Conferir agendamentos"
         if aba_pag._agendamentos is not None and aba_pag._agendamentos.is_alive() else None)
-    aba_pag.sicoob_ocupado = lambda: aba_ext.ocupado() or aba_dia.sicoob.ocupado()
+    aba_pag.sicoob_ocupado = lambda: aba_ext.ocupado() or aba_dia.sicoob.ocupado() or (
+        _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc))
     # Controle de aportes divide navegador e thread do Anexar: lê o MESMO ERP
     # (só GET). Só o admin edita abertura, proporção e apontamentos — a RLS
     # nega o resto; aqui só se apagam os botões.
