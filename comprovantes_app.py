@@ -37,6 +37,7 @@ from nuvem.usuarios_frame import UsuariosFrame
 from inicio.inicio_frame import InicioFrame
 from separar_renomear.separar_renomear import SepararFrame
 from anexar.anexar_comprovantes import AnexarFrame
+from anexar.anexar_novo import AnexarNovoFrame
 from anexar.conferencia import ConferenciaFrame
 from aportes.aportes_frame import AportesFrame
 from relatorios.relatorio_frame import RelatorioFrame
@@ -309,6 +310,10 @@ def main():
     aba_ini = InicioFrame(conteudo)
     aba_sep = SepararFrame(conteudo)
     aba_anx = AnexarFrame(conteudo)
+    # A cópia provisória da Anexar (entrega 5): a mesma tela, mais os
+    # comprovantes que SOMAM um pagamento. NÃO tem navegador: divide o do
+    # Anexar, como a Conferência e as outras (`DONO_DO_NAVEGADOR = False`).
+    aba_anx2 = AnexarNovoFrame(conteudo, aba_anx)
     aba_conf = ConferenciaFrame(conteudo, aba_anx)
     # Aportes divide o navegador e a thread do Anexar, como a Conferência:
     # o Playwright síncrono só aceita uma thread, e um segundo Chrome
@@ -363,7 +368,10 @@ def main():
         return _sc.carregar()
 
     aba_bxc = ComprovantesFrame(conteudo, _mapa_das_contas)
-    quadros = {"ini": aba_ini, "sep": aba_sep, "anx": aba_anx,
+    # "anx2" ANTES de "anx": o `_sair` fecha na ordem deste dicionário, e a
+    # cópia precisa soltar a thread que espera na janela de dúvidas dela antes
+    # de o dono fechar o Chrome.
+    quadros = {"ini": aba_ini, "sep": aba_sep, "anx2": aba_anx2, "anx": aba_anx,
                "conf": aba_conf, "apt": aba_apt, "rel": aba_rel,
                "pag": aba_pag, "ext": aba_ext, "con": aba_con,
                "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc,
@@ -531,7 +539,10 @@ def main():
     _grupo("mensal", "MENSAL", (("rel", "📊", "Relatório Mensal"),
                                 ("ext", "🏦", "Extratos Sicoob"),
                                 ("ctr", "📑", "Contratos"),
-                                ("acs", "📤", "Acessorias")))
+                                ("acs", "📤", "Acessorias"),
+                                # Provisória, e por isso a ÚLTIMA do menu: no
+                                # meio, empurraria o Ctrl+1..9 das outras.
+                                ("anx2", "📎", "Anexar (novo)")))
 
     # ---------------- canto direito da barra: navegador, versão, quem entrou
     chip = widgets.ChipStatus(barra.direita)

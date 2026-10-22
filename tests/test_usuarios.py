@@ -138,6 +138,11 @@ def test_o_aprovador_ve_duas_abas():
     assert usuarios.abas_do_papel("aprovador", todas) == ("ini", "pag")
 
 
+def test_o_aprovador_nao_ve_a_anexar_nova():
+    """A aba provisória "Anexar (novo)" não entra na lista branca dele."""
+    assert usuarios.abas_do_papel("aprovador", ["ini", "anx", "anx2", "pag"]) == ("ini", "pag")
+
+
 @pytest.mark.parametrize("papel", ["admin", "operador"])
 def test_admin_e_operador_veem_tudo(papel):
     todas = ["ini", "sep", "pag"]

@@ -55,8 +55,10 @@ ROTINAS = (
 #: "Pagamentos do dia" fica AQUI e não em ROTINAS enquanto convive com
 #: Remessa/Retorno e Saldo de pagamentos: lá viraria "não rodou hoje" num dia
 #: em que o trabalho foi feito pelas abas antigas.
+#: "Anexar (novo)" também: é cópia provisória da Anexar, e como rotina diária
+#: diria "não rodou hoje" no dia em que o trabalho foi feito pela de sempre.
 OUTRAS_ORIGENS = {"acesso": "Acesso", "usuarios": "Usuários",
-                  "dia": "Pagamentos do dia"}
+                  "dia": "Pagamentos do dia", "anx2": "Anexar (novo)"}
 
 #: Os três atalhos do canto. São as três telas que se abrem todo dia, na
 #: ordem em que o dia acontece — e não as três primeiras do menu.
@@ -286,9 +288,20 @@ class InicioFrame(ttk.Frame):
         else:
             self.kpis["sem_remessa"].definir("—", sem_dado)
 
-        anexados = numeros("anx", "anexados", so_hoje=False, so_mes=True)
+        # A Anexar de sempre e a cópia "Anexar (novo)" ("anx2"): para o dono é
+        # tudo anexo. Cada aba entra com a SUA última rodada do mês — a regra
+        # de sempre do Início —, então nenhuma rodada conta duas vezes; e as
+        # duas não se sobrepõem, porque o que uma anexou a outra já vê com
+        # anexo e não tenta de novo.
+        def das_duas(chave):
+            vals = [numeros(aba, chave, so_hoje=False, so_mes=True)
+                    for aba in ("anx", "anx2")]
+            vals = [int(v) for v in vals if v is not None]
+            return sum(vals) if vals else None
+
+        anexados = das_duas("anexados")
         if anexados is not None:
-            pagos = int(numeros("anx", "pagos", so_hoje=False, so_mes=True) or 0)
+            pagos = int(das_duas("pagos") or 0)
             pct = f"{int(anexados) * 100 // pagos}% dos pagos" if pagos else ""
             self.kpis["anexados"].definir(str(int(anexados)), pct)
         else:

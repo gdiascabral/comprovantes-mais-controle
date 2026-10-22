@@ -209,7 +209,8 @@ def test_fechar_fecha_cada_mc_na_thread_da_vaga(ligado):
 
 
 # ------------------------------------------------- os chamadores (Tarefa 2)
-_CHAMADORES = ("anexar/conferencia.py", "aportes/aportes_frame.py",
+_CHAMADORES = ("anexar/anexar_novo.py", "anexar/conferencia.py",
+               "aportes/aportes_frame.py",
                "comprovantes_app.py", "conciliacao/frame.py",
                "contratos/frame.py", "guias/painel.py",
                "pagamentos_dia/pagamentos_frame.py",

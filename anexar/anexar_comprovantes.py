@@ -253,6 +253,17 @@ class AnexarFrame(ttk.Frame):
 
     #: Marca de "qualquer aba" para `ocupado`/`dona_ocupada` sem argumento.
     _QUALQUER = object()
+    #: O cabeçalho da tela. A aba "Anexar (novo)" (`anexar_novo`) troca só isto.
+    TITULO = "Anexar Comprovantes"
+    TRILHA = "Comprovantes  ›  Anexar"
+    #: Esta aba é a DONA do navegador do ERP: cria o executor e pulsa o Chrome.
+    #: A cópia "Anexar (novo)" é False — usa o navegador desta, como as outras
+    #: abas, e não cria executor nem pulso.
+    DONO_DO_NAVEGADOR = True
+    #: A chave com que o "Casar e anexar" anota a atividade do Início. A
+    #: cópia anota com a dela ("anx2"): o "Anexados no mês" segue sendo o
+    #: desta aba.
+    ATIVIDADE = "anx"
 
     def __init__(self, master):
         super().__init__(master)
@@ -260,7 +271,8 @@ class AnexarFrame(ttk.Frame):
         self.worker = None
         # TODO o trabalho com o navegador roda nesta ÚNICA thread (exigência
         # do Playwright: os objetos só podem ser usados na thread que os criou).
-        self.exec = ThreadPoolExecutor(max_workers=1)
+        self.exec = (ThreadPoolExecutor(max_workers=1)
+                     if self.DONO_DO_NAVEGADOR else None)
         self._pausa = Event()   # ⏸ pausado enquanto setado
         self._parar = Event()   # ⏹ interrompe o processo em andamento
         # Events em que a thread do navegador está BLOQUEADA esperando gente
@@ -297,7 +309,8 @@ class AnexarFrame(ttk.Frame):
         except Exception:
             pass
         self.after(150, self._drain)
-        self.after(1200, self._pulsar_navegador)
+        if self.DONO_DO_NAVEGADOR:
+            self.after(1200, self._pulsar_navegador)
 
     # ---------------------------------------------------------------- layout
     def _build(self):
@@ -305,10 +318,10 @@ class AnexarFrame(ttk.Frame):
 
         # ---- cabeçalho
         self.cab = widgets.Cabecalho(
-            self, "Anexar Comprovantes",
+            self, self.TITULO,
             "Busca os pagos do período, descobre quem está sem comprovante "
             "e anexa o PDF certo em cada um.",
-            trilha="Comprovantes  ›  Anexar")
+            trilha=self.TRILHA)
         self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
         # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
         corpo = widgets.AreaRolavel(self)
@@ -1339,6 +1352,19 @@ class AnexarFrame(ttk.Frame):
     def executar(self):
         if self.worker and not self.worker.done():
             return
+        # Com a cópia "Anexar (novo)" casando, esta não começa: no modo
+        # central as duas têm vagas diferentes e subiriam o MESMO PDF. Sem
+        # cópia registrada (`_copias`, posto por ela) ou com ela parada, nada
+        # muda. A pergunta vem antes de tocar em qualquer botão.
+        for copia in getattr(self, "_copias", ()):
+            if self.dona_ocupada(aba=copia) is copia:
+                messagebox.showwarning(
+                    f"{copia.TITULO} trabalhando",
+                    f"A aba {copia.TITULO} está em: "
+                    f"{self.ocupado(aba=copia) or 'outra tarefa'}.\n\n"
+                    f"As duas casam e anexam os mesmos comprovantes: espere a "
+                    f"{copia.TITULO} terminar e clique de novo aqui.")
+                return
         # TUDO que vem do formulário é lido AQUI, na thread da interface, e vai
         # por argumento para o worker. Ler `StringVar`/`BooleanVar` é falar com
         # o Tcl, e o Tcl é de quem criou a janela: da thread do navegador isso
@@ -1691,7 +1717,7 @@ class AnexarFrame(ttk.Frame):
                     # O "Anexados no mês" do Início sai daqui: quem contou foi
                     # esta rotina, e recontar custaria outra sessão do ERP.
                     widgets.registrar_atividade(
-                        "anx", "Casar e anexar",
+                        self.ATIVIDADE, "Casar e anexar",
                         "atencao" if (duv or sp) else "ok",
                         f"{ok} de {tot} anexado(s)"
                         + (f" · {duv} em dúvida, {sp} sem par" if duv or sp
