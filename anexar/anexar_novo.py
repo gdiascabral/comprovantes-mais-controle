@@ -30,6 +30,7 @@ from __future__ import annotations
 import copy
 import queue
 import tkinter as tk
+from tkinter import messagebox
 from pathlib import Path
 
 from . import codigo_barras, matcher, origem, varios_comprovantes
@@ -142,6 +143,27 @@ class AnexarNovoFrame(AnexarFrame):
                     pass
 
     # ------------------------------------------- casar e anexar
+    def executar(self):
+        """O "Casar e anexar" da cópia, com uma recusa a mais.
+
+        No modo central a Anexar de sempre e esta têm vagas (threads)
+        diferentes e não se esperam: as duas casando ao mesmo tempo podiam
+        subir o MESMO PDF em dois lugares, ou duas vezes no mesmo. A cópia não
+        começa enquanto a Anexar de sempre trabalha. (O inverso — a Anexar
+        recusar enquanto a cópia trabalha — mexeria na aba de sempre, que
+        fica idêntica.) A pergunta vem antes de tocar em qualquer botão."""
+        if self.worker and not self.worker.done():
+            return
+        dono = self.anx
+        if dono.dona_ocupada(aba=dono) is dono:
+            messagebox.showwarning(
+                "Anexar trabalhando",
+                f"A aba Anexar está em: {dono.ocupado(aba=dono) or 'outra tarefa'}.\n\n"
+                "As duas casam e anexam os mesmos comprovantes: espere a Anexar "
+                "terminar e clique de novo aqui.")
+            return
+        super().executar()
+
     def _preparar_somas(self, pendentes, pdfs, pasta: Path) -> None:
         """As réguas da fase 2, nos PDFs que ela recarregou da pasta.
 

@@ -607,3 +607,49 @@ def test_pdf_com_codigo_do_titulo_de_outro_nao_entra_na_soma(novo, monkeypatch, 
     api = _ApiFalsa()
     somas = _fase_com_a_copia(novo, f, tmp_path, [pe, outro], api)
     assert somas.anexados == [] and api.enviados == []
+
+
+class _Rodando:
+    def done(self):
+        return False
+
+
+def _executar_com(modulo, novo, monkeypatch, *, ligado, quem):
+    """`quem` está com o navegador: "anexar" (a aba de sempre), "outra" ou None."""
+    dono = _dono_de_verdade(modulo, monkeypatch, ligado=ligado)
+    f = _nova(novo, dono)
+    f.worker = None
+    outra = object()
+    if quem:
+        dona = dono if quem == "anexar" else outra
+        if ligado:
+            dono._vaga_de(dona).trabalho_atual = _Rodando()
+            dono._vaga_de(dona).rotulo_atual = "Anexar — casar e anexar"
+        else:
+            dono._trabalho_atual, dono._dona_atual = _Rodando(), dona
+            dono._rotulo_atual = "Anexar — casar e anexar"
+    chamadas = []
+    monkeypatch.setattr(modulo.AnexarFrame, "executar", lambda self: chamadas.append("fase"))
+    monkeypatch.setattr(novo.messagebox, "showwarning",
+                        lambda titulo, texto, **k: chamadas.append(("aviso", texto)))
+    try:
+        f.executar()
+    finally:
+        _desligar(dono)
+    return chamadas
+
+
+@pytest.mark.parametrize("ligado", [False, True])
+def test_a_copia_nao_comeca_com_a_anexar_de_sempre_trabalhando(modulo, novo, monkeypatch,
+                                                               ligado):
+    """No central as duas abas têm vagas diferentes: casariam ao mesmo tempo e
+    subiriam o mesmo PDF duas vezes."""
+    chamadas = _executar_com(modulo, novo, monkeypatch, ligado=ligado, quem="anexar")
+    assert "fase" not in chamadas
+    assert len(chamadas) == 1 and "Anexar" in chamadas[0][1]
+
+
+@pytest.mark.parametrize("ligado", [False, True])
+@pytest.mark.parametrize("quem", [None, "outra"])
+def test_a_copia_comeca_com_a_anexar_livre(modulo, novo, monkeypatch, ligado, quem):
+    assert _executar_com(modulo, novo, monkeypatch, ligado=ligado, quem=quem) == ["fase"]
