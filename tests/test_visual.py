@@ -149,6 +149,17 @@ def test_os_dois_temas_tem_os_mesmos_papeis():
     assert set(widgets.PALETA["claro"]) == set(widgets.PALETA["escuro"])
 
 
+def test_o_escuro_e_azul_marinho():
+    """Pedido do dono em 22/10/2026: o tema escuro em azul-marinho, como no
+    protótipo aprovado, e não no cinza quase preto de antes. "Azul" aqui é
+    medido: o canal azul passa o vermelho com folga e passa o verde."""
+    escuro = widgets.PALETA["escuro"]
+    for papel in ("fundo", "cartao", "borda", "zebra", "cabecalho"):
+        cor = escuro[papel]
+        r, g, b = (int(cor[i:i + 2], 16) for i in (1, 3, 5))
+        assert b >= r + 20 and b > g, f"{papel} não é azul-marinho: {cor}"
+
+
 # ------------------------------------- o que a interface PINTA de verdade
 # Os três testes acima medem o que a PALETA permite; estes medem o que a TELA
 # usa, e a diferença não é acadêmica.

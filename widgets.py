@@ -134,32 +134,34 @@ PALETA = {
         "log_texto":   "#C7D2E4",   # 11,9:1
     },
     "escuro": {
-        "fundo":       "#0F131B",
-        "cartao":      "#171D28",
-        "borda":       "#2B3546",
-        "linha":       "#4A5568",   # filete, ícone — nunca texto
-        "zebra":       "#1B2230",
-        "cabecalho":   "#1E2634",
-        "texto":       "#E8ECF4",   # 14,3:1 no cartão · 15,7:1 no fundo
-        "apoio":       "#A6B2C6",   #  7,9:1            ·  8,7:1
-        "tenue":       "#8792A8",   #  5,4:1            ·  5,9:1
-        "marca":       "#6F9BFF",   #  6,3:1 no cartão — só como TEXTO
+        # Azul-marinho desde 22/10/2026 (protótipo da repaginada aprovado pelo
+        # dono); antes era um cinza quase preto. Contrastes medidos de novo.
+        "fundo":       "#0B1529",
+        "cartao":      "#0F1C36",
+        "borda":       "#1F3053",
+        "linha":       "#4A5D85",   # filete, ícone — nunca texto · 2,77:1 no fundo
+        "zebra":       "#12203D",
+        "cabecalho":   "#14223F",
+        "texto":       "#E8EDF7",   # 14,4:1 no cartão · 15,5:1 no fundo
+        "apoio":       "#A9B6CF",   #  8,3:1            ·  8,9:1
+        "tenue":       "#8C9AB8",   #  6,0:1            ·  6,4:1
+        "marca":       "#7C9BFF",   #  6,4:1 no cartão — só como TEXTO
         # Aqui os dois papéis se separam: como fundo sólido, a `marca` deixa o
         # branco em 2,69:1. Este tom é o ponto em que as duas medidas passam
         # ao mesmo tempo — clarear mais afunda o branco, escurecer mais some a
         # forma do botão dentro do cartão.
-        "marca_solida": "#3B6FE0",  # branco por cima 4,63:1 · 3,65:1 no cartão
+        "marca_solida": "#3D5AFE",  # branco por cima 5,13:1 · 3,30:1 no cartão
         "marca_barra": "#12379C",   # a barra continua azul, um tom mais fundo
-        "marca_fundo": "#1B2A50",
+        "marca_fundo": "#192A5E",
         "marca_sub":   "#BFD0F5",
         "acao":        "#12864F",   # branco por cima  4,6:1
         "acao_ativo":  "#0D6E40",
         "acao_viva":   "#2FBE79",
         "ativo":       "#6F9BFF",
-        "ok":          "#63D38F",   "ok_fundo":      "#12301F",   # 7,7:1
-        "atencao":     "#F2B65C",   "atencao_fundo": "#33260C",   # 8,2:1
-        "erro":        "#FF8F84",   "erro_fundo":    "#3A1A18",   # 7,1:1
-        "info":        "#8FB2FF",   "info_fundo":    "#1B2A50",   # 6,7:1
+        "ok":          "#63D38F",   "ok_fundo":      "#0E3226",   # 7,5:1
+        "atencao":     "#F2B65C",   "atencao_fundo": "#382A0B",   # 7,7:1
+        "erro":        "#FF8F84",   "erro_fundo":    "#3B1421",   # 7,3:1
+        "info":        "#8FB2FF",   "info_fundo":    "#192A5E",   # 6,5:1
         "log_fundo":   "#101623",
         "log_texto":   "#C7D2E4",
     },
