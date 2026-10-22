@@ -216,3 +216,20 @@ def test_app_liga_as_tres_pontas():
     assert '("dia", aba_dia.sicoob.ocupado())' in app
     # A linha antiga (só Extratos) foi substituída, não duplicada.
     assert "aba_pag.sicoob_ocupado = aba_ext.ocupado\n" not in app
+
+
+def test_guarda_nenhum_teste_puro_chega_ao_messagebox_real():
+    """22/10: um teste deste arquivo abriu na tela do dono a pergunta real
+    "abrir o Chrome do Sicoob". O `conftest` troca as janelas do
+    `tkinter.messagebox` por dublês que registram, e arma o `Message.show`
+    (por onde TODA janela do messagebox passa) para derrubar o teste."""
+    import tkinter.messagebox as mb
+    for nome in ("askokcancel", "askyesno", "askyesnocancel", "askretrycancel",
+                 "askquestion", "showinfo", "showwarning", "showerror"):
+        assert getattr(mb, nome).__module__ != "tkinter.messagebox", nome
+        assert getattr(m.messagebox, nome) is getattr(mb, nome)
+    # O caminho comum de todas elas: chegar nele é falha, não janela.
+    with pytest.raises(AssertionError, match="janela real"):
+        mb.Message(title="x", message="y").show()
+    # E o leitor, sem dublê no teste, cai no registro e não abre nada.
+    assert m.messagebox.askokcancel("t", "m") is False
