@@ -646,3 +646,85 @@ def test_cadastro_corrigido_chama_o_acompanhar_par():
     chamadas = [n.func.attr for n in ast.walk(metodo)
                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
     assert "_acompanhar_par" in chamadas
+
+
+# ------------------------------- o "Lançar" à mão vale só para uma operação
+# 22/10, layout 1280 (itens 5 e 5b): "Adicionar à lista" recomeça o
+# formulário, e a escolha manual do Lançar não gruda na operação seguinte;
+# sair do investidor de subconta também solta a escolha feita enquanto ele
+# estava em Pagou (o validar do investidor só aceita "Só recebimento").
+class _Var:
+    def __init__(self, v):
+        self.v = v
+
+    def get(self):
+        return self.v
+
+    def set(self, v):
+        self.v = v
+
+
+def _form_para_adicionar(pagou, recebeu, modo):
+    f = _form_com_registro(pagou, recebeu, modo)
+    f.cb_tipo = _Combo([], "Aporte de Capital")
+    f.cb_forma = _Combo([], "Pix")
+    f.var_data, f.var_valor = _Var("22/10/2026"), _Var("100,00")
+    f.entidades = ENTIDADES_PF
+    f.acrescentadas = []
+    f._lista_travada = lambda: False
+    f._acrescentar = f.acrescentadas.append
+    f._atualizar_total = lambda: None
+    return f
+
+
+def _ligar(f):
+    from aportes.aportes_frame import AportesFrame
+    f._aplicar_modo_padrao = lambda _ev=None: AportesFrame._aplicar_modo_padrao(f)
+    f._recomecar_modo = lambda: AportesFrame._recomecar_modo(f)
+    return AportesFrame
+
+
+def test_adicionar_a_lista_zera_o_lancar_trocado_a_mao():
+    f = _form_para_adicionar("EMPRESA A", "EMPRESA B", "Pagamento + Recebimento")
+    aba = _ligar(f)
+    aba._aplicar_modo_padrao(f)
+    f.cb_modo.set("Só pagamento")                      # o dono trocou
+    aba._aplicar_modo_padrao(f)                        # FocusOut: vira manual
+    assert f._modo_manual
+    aba._adicionar(f)
+    assert [o.modo for o in f.acrescentadas] == ["Só pagamento"]   # a 1ª foi como ele quis
+    assert f._modo_manual is False
+    assert f.cb_modo.get() == "Pagamento + Recebimento"            # o padrão voltou
+    f.cb_recebedor.set("PESSOA FISICA")                # par novo: o padrão aplica
+    aba._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só pagamento" and f.registro == []
+
+
+def test_adicionar_recusado_nao_mexe_no_lancar():
+    f = _form_para_adicionar("EMPRESA A", "EMPRESA B", "Pagamento + Recebimento")
+    aba = _ligar(f)
+    aba._aplicar_modo_padrao(f)
+    f.cb_modo.set("Só pagamento")
+    aba._aplicar_modo_padrao(f)
+    f.var_data.set("data ruim")
+    import aportes.aportes_frame as mod
+    avisos = []
+    antes = mod.messagebox.showwarning
+    mod.messagebox.showwarning = lambda *a, **k: avisos.append(a)
+    try:
+        aba._adicionar(f)
+    finally:
+        mod.messagebox.showwarning = antes
+    assert avisos and f.acrescentadas == []
+    assert f._modo_manual and f.cb_modo.get() == "Só pagamento"
+
+
+def test_sair_do_investidor_solta_o_lancar_escolhido_a_mao():
+    f = _form_com_registro("EMPRESA A", "EMPRESA B", modo="Só pagamento")
+    f.cb_tipo.set(regras.TIPO_INVESTIDOR)
+    f._modo_manual = True                              # escolheu com o investidor
+    aba = _ligar(f)
+    aba._pagador_escolhido(f)
+    assert f._modo_manual is False
+    assert f.cb_modo.get() == "Pagamento + Recebimento"            # o padrão do par
+    assert f.registro == []

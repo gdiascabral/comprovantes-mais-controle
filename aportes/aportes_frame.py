@@ -267,8 +267,11 @@ class AportesFrame(ttk.Frame):
                 self.cb_tipo.set(cadastro.TIPOS[0])
                 AportesFrame._por_modo(self, cadastro.MODOS[0])
                 # O padrão reaplica: o "Lançar" do investidor era forçado, e o
-                # par de TEXTO pode não ter mudado (só o tipo).
+                # par de TEXTO pode não ter mudado (só o tipo). A escolha à mão
+                # feita com o investidor em Pagou não vale para o pagador novo
+                # (o validar do investidor só aceitava "Só recebimento").
                 self._partes_do_modo = None
+                self._modo_manual = False
             self._aplicar_modo_padrao()
             return
         self.cb_tipo.set(regras.TIPO_INVESTIDOR)
@@ -410,6 +413,16 @@ class AportesFrame(ttk.Frame):
         self._acrescentar(op)
         self.var_valor.set("")
         self._atualizar_total()
+        self._recomecar_modo()
+
+    def _recomecar_modo(self) -> None:
+        """Depois de "Adicionar à lista" o formulário recomeça: o "Lançar"
+        trocado à mão valeu para AQUELA operação, e o padrão volta a valer
+        (já para o par que ficou nos campos)."""
+        self._modo_manual = False
+        self._modo_aplicado = self.cb_modo.get()
+        self._partes_do_modo = None
+        self._aplicar_modo_padrao()
 
     def _acrescentar(self, op) -> None:
         """Uma operação no fim da lista, com as quatro listas de posição
