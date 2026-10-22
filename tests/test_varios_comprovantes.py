@@ -303,3 +303,28 @@ def test_relatorio_ganha_as_abas_das_somas(tmp_path):
     pe = dict(_pend(), pdfs=[A600, A400], motivo="soma exata", resultado="anexado")
     vc.acrescentar_ao_relatorio(str(caminho), vc.Somas(anexados=[pe]))
     assert "ANEXADOS POR SOMA" in load_workbook(caminho).sheetnames
+
+
+class _ApiQueParaDeListar(ApiFalsa):
+    """A 1ª listagem (antes de subir) responde; as seguintes caem."""
+
+    def __init__(self, **k):
+        super().__init__(**k)
+        self.listagens = 0
+
+    def _anexos_brutos(self, pid):
+        self.listagens += 1
+        if self.listagens > 1:
+            return {"__erro": 500}
+        return super()._anexos_brutos(pid)
+
+
+def test_parcial_com_releitura_que_falha_nao_da_ninguem_como_entrou(tmp_path):
+    """Sem a releitura, NENHUM está provado pelo nome — nem o 1º, que a API
+    disse "anexado": entraram vazio, faltaram todos, e o aviso diz por quê."""
+    api = _ApiQueParaDeListar(respostas=["anexado", "erro:batch:500"])
+    r = vc.anexar_varios(api, "P1", _arquivos(tmp_path))
+    assert r.estado.startswith("erro:parcial:1/2") and not r.ok
+    assert r.entraram == [] and r.faltaram == [A600, A400]
+    assert "não deu para reler os anexos" in r.estado
+    assert api.listagens == 2

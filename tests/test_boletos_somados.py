@@ -662,3 +662,44 @@ def test_dois_lancamentos_diferentes_com_a_mesma_linha_seguem_com_o_aviso():
     res.contas[CONTA].append(outro)           # parte do L1 copiada sob outro lançamento
     entradas = [e for c in hp.contas_do_html_geral(res) for e in c["entries"]]
     assert any("mesma linha digitável" in e["bloqueio"] for e in entradas)
+
+
+# ------------------------------------- Parar no meio da leitura dos títulos (22/10)
+class _ApiDeTitulos:
+    def __init__(self):
+        self.lidos = []
+
+    def _base_legacy(self, caminho):
+        return f"https://exemplo.invalid/legacy/{caminho}", {}
+
+    def _fetch_json(self, url, headers):
+        self.lidos.append(url)
+        return {"id": url.rsplit("/", 1)[1], "numberOfInstallments": 1}
+
+
+def test_ler_titulos_consulta_o_cancelar_entre_um_titulo_e_outro():
+    api = _ApiDeTitulos()
+    lidos = ld.ler_titulos_no_erp(api, ["T1", "T2", "T3"], log=lambda m: None,
+                                  cancelar=lambda: len(api.lidos) >= 1)
+    assert list(lidos) == ["T1"] and len(api.lidos) == 1
+    # Sem pedido de parada, lê todos (o padrão de quem não passa `cancelar`).
+    assert list(ld.ler_titulos_no_erp(_ApiDeTitulos(), ["T1", "T2"], log=lambda m: None)) == [
+        "T1", "T2"]
+
+
+def test_parar_na_leitura_dos_titulos_interrompe_e_nada_e_dividido():
+    linhas = _linhas_dos_boletos([40000, 60000])
+    anexos = {"T1": [_anexo(f"boleto {i}", f"u{i}") for i in range(1, len(linhas) + 1)]}
+    arquivos = {f"u{i}": f"Banco Exemplo\n{ln}\n".encode("utf-8")
+                for i, ln in enumerate(linhas, 1)}
+    api = _ApiDoDia([_item()], anexos, arquivos)
+    leitura = ld.ler_pagamentos(
+        api, DIA, DIA,
+        abrir_historico=_sem, carregar_mapas=_sem, ler_qr=lambda d, pdf: [],
+        texto_pdf=lambda d: d.decode("utf-8"), ocr_pdf=lambda d, log=print: "",
+        ocr_imagem=lambda d: "", log=lambda m: None,
+        # O "Parar" chega quando o 1º título já foi pedido ao ERP.
+        cancelar=lambda: bool(api.lidos))
+    assert api.lidos, "o título chegou a ser lido: o Parar veio no meio"
+    assert leitura.interrompida is True
+    assert leitura.resultado is None and leitura.grupos == []

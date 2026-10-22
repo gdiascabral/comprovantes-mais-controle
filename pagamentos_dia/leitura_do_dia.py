@@ -174,12 +174,15 @@ def titulo_no_erp(api, tpid: str) -> dict | None:
     return j
 
 
-def ler_titulos_no_erp(api, tpids, log=print) -> dict:
+def ler_titulos_no_erp(api, tpids, log=print, cancelar=lambda: False) -> dict:
     """`{tpid: título}` dos que leram. Falha fechada: o título que não leu
     (erro, vazio, exceção) fica de fora, e por isso NÃO divide — com aviso
-    no log."""
+    no log. `cancelar()` é consultado antes de cada título: o "Parar" para
+    a fila ali (quem chama marca a leitura como interrompida)."""
     lidos = {}
     for tpid in tpids:
+        if cancelar():
+            break
         try:
             titulo = titulo_no_erp(api, tpid)
         except Exception as e:                               # noqa: BLE001
@@ -261,7 +264,12 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
     # Sem título lido nada divide, e as linhas candidatas continuam com o
     # status "vários boletos": é por ele que se sabe QUAIS títulos ler.
     entradas.titulos_erp = ler_titulos_no_erp(
-        api, titulos_a_dividir(confirmacao.remontar(entradas), a_pagar), log=log)
+        api, titulos_a_dividir(confirmacao.remontar(entradas), a_pagar), log=log,
+        cancelar=cancelar)
+    if cancelar():
+        # Parou no meio dos títulos: nada apurado, nada dividido pela metade.
+        leitura.interrompida = True
+        return leitura
     leitura.entradas = entradas
     leitura.resultado = confirmacao.remontar(entradas)
     leitura.avisos.extend(boletos_somados.avisos(leitura.resultado))
