@@ -107,6 +107,7 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "",
     # de pagar (ou o reembolso) iria igual às N partes — o mesmo boleto N
     # vezes. Só a descrição vale para elas; a tela já recusa o resto.
     dividido = bool(reg.get("parte"))
+    valor_diverge = False
     if d.edicoes:
         campos = []
         if dividido and d.edicoes.keys() & {"tipo", "dados", "reembolso_nome",
@@ -143,6 +144,14 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "",
             reg[remessa_dia.CHAVE_EDITADA] = True
             notas.append(cf.nota_da_chave_editada(
                 reg["dados"], remessa_dia.documento_sem_edicao(reg, participantes)))
+        if "tipo" in d.edicoes and not dividido and reg["tipo"] == "Boleto":
+            # A linha editada × o valor do pagamento (dono, 22/10/2026). A tela
+            # já perguntou antes de gravar a que diverge; aqui ela fica em
+            # ATENÇÃO (Copiar do HTML bloqueado, desmarcada na Remessa).
+            conferido = cf.conferir_valor_da_linha(reg["dados"], reg.get("valor"))
+            if conferido.nota:
+                notas.append(conferido.nota)
+            valor_diverge = conferido.estado == cf.VALOR_DIVERGE
         era = "; ".join(f"{k}={v}" for k, v in d.antes.items())
         notas.append(f"editado na tela por {d.quem_nome or '?'} "
                      f"({_texto_do_dono(d.motivo_edicao)})"
@@ -158,6 +167,10 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "",
         cede = _CEDE_A_LIBERACAO
     if rotulos:
         reg["status"] = _status(antes, rotulos, cede)
+    if valor_diverge and not reg["status"].startswith(("ATENÇÃO", "JÁ PAGO")):
+        # Na FRENTE: é o "ATENÇÃO" que bloqueia o Copiar do HTML e faz a
+        # Remessa não marcar. Um ATENÇÃO ou JÁ PAGO que já estava fica na frente.
+        reg["status"] = f"{cf.STATUS_VALOR_DIVERGE} · {reg['status']}"
     if reg.get("status") != antes and antes:
         notas.append(f"status antes: {antes}")
     if notas:

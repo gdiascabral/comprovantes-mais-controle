@@ -283,6 +283,18 @@ Regras que viraram lei:
   12 da forma 03 já leva a chave; os dois discordariam); e-mail, celular e
   aleatória seguem com o do cadastro. Sem a marca (Remessa/Retorno sozinha)
   nada muda.
+- **Linha digitável editada confere o valor** (dono, 22/10/2026). O valor
+  embutido (`ocr_boleto.valor_embutido`, Decimal, lido dos dígitos; zerado e
+  arrecadação de REFERÊNCIA = sem valor) contra o do pagamento, ao centavo
+  (`conferencia.conferir_valor_da_linha`). Bate: segue. Sem valor: grava com
+  a Obs "linha sem valor embutido — confira". Diverge: a tela pergunta "A
+  linha digitável é de R$ X e o pagamento é de R$ Y. Gravar mesmo assim?"
+  (`passo2.pergunta_do_valor`, `default="no"`); gravada, a `geracao` põe
+  "ATENÇÃO — valor da linha diverge" na frente do status (Copiar bloqueado,
+  desmarcada na Remessa) e a Obs "valor da linha R$ X ≠ pagamento R$ Y"; a
+  tela mostra a mesma nota em âmbar. Linha que não fecha nos DVs continua
+  recusada. A conferência é refeita na geração a partir da edição gravada
+  (nada novo na nuvem).
 - **À mão: só remover.** Não se edita nem se desmarca: remove-se (com motivo)
   e lança-se de novo. **À mão em conta PF é recusado** (a PF é paga pelo
   celular, fora do HTML). Com link do lançamento: não paga título já pago, de

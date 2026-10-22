@@ -146,6 +146,8 @@ def por_conta(grupos, mapping, conferencia=None, participantes=None):
             notas = _notas_da_forma(ln, d, participantes)
             if notas:
                 p = replace(p, nota=" · ".join([p.nota, *notas]))
+            if _diverge(ln, d):
+                p = replace(p, estado="atencao")
         n = _partes(ln)
         if n and d is not None:
             # Decisão da nuvem que não vale para lançamento dividido (outra
@@ -220,7 +222,18 @@ def _notas_da_forma(ln, d, participantes) -> list[str]:
         else:
             doc = remessa_dia.documento_sem_edicao({"favorecido": ln.favorecido}, participantes)
         return [cf.nota_da_chave_editada(dados, doc)]
+    if d.edicoes["tipo"] == "Boleto":
+        nota = cf.conferir_valor_da_linha(dados, ln.valor).nota
+        return [nota] if nota else []
     return []
+
+
+def _diverge(ln, d) -> bool:
+    """A linha digitável editada não é do valor do pagamento: a linha fica
+    em ATENÇÃO (`geracao` põe "ATENÇÃO — valor da linha diverge")."""
+    return (not _partes(ln) and d.edicoes.get("tipo") == "Boleto"
+            and cf.conferir_valor_da_linha(str(d.edicoes.get("dados") or ""),
+                                           ln.valor).estado == cf.VALOR_DIVERGE)
 
 
 def _partes(ln) -> int:

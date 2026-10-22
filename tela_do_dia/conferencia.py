@@ -26,7 +26,7 @@ from anexar import matcher
 from pagamentos_dia import confirmacao, html_pagamentos, ocr_boleto, remessa_dia
 from pagamentos_dia import regras_pagamento as regras
 
-from .valores import CENTAVO, brl, ler_valor_editado
+from .valores import CENTAVO, brl, de_float, ler_valor_editado
 
 LIBERAR, DESMARCAR, EDITAR, DESFAZER, REMOVER_A_MAO = (
     "liberar", "desmarcar", "editar", "desfazer", "remover_a_mao")
@@ -310,6 +310,40 @@ def nota_da_chave_editada(dados: str, doc_erp: str) -> str:
     if da_chave and erp and da_chave != erp:
         return NOTA_DOC_DIFERENTE.format(doc=mascarar_documento(erp))
     return NOTA_CHAVE_EDITADA
+
+
+#: Linha digitável editada × valor do pagamento (dono, 22/10/2026: ele QUER
+#: a conferência). Bate: segue. Sem valor embutido: aceita com observação.
+#: Diverge: a tela pergunta (padrão "não") e, gravada, a linha fica em ATENÇÃO.
+VALOR_BATE, VALOR_SEM, VALOR_DIVERGE = "bate", "sem_valor", "diverge"
+NOTA_SEM_VALOR = "linha sem valor embutido — confira"
+STATUS_VALOR_DIVERGE = "ATENÇÃO — valor da linha diverge"
+
+
+@dataclass(frozen=True)
+class ValorDaLinha:
+    estado: str
+    #: A observação da linha (planilha, HTML, tela); "" quando bate.
+    nota: str = ""
+    #: O que a tela pergunta antes de gravar; "" quando não pergunta.
+    pergunta: str = ""
+
+
+def conferir_valor_da_linha(dados: str, valor) -> ValorDaLinha:
+    """O valor embutido na linha (`ocr_boleto.valor_embutido`, Decimal)
+    contra o do pagamento, ao centavo. Quem chama já recusou a linha que não
+    fecha nos DVs (`validar_edicao`)."""
+    na_linha = ocr_boleto.valor_embutido(dados)
+    if na_linha is None:
+        return ValorDaLinha(VALOR_SEM, NOTA_SEM_VALOR)
+    pagamento = de_float(valor)
+    if na_linha == pagamento:
+        return ValorDaLinha(VALOR_BATE)
+    return ValorDaLinha(
+        VALOR_DIVERGE,
+        f"valor da linha {brl(na_linha)} ≠ pagamento {brl(pagamento)}",
+        f"A linha digitável é de {brl(na_linha)} e o pagamento é de {brl(pagamento)}. "
+        "Gravar mesmo assim?")
 
 
 def validar_edicao(campos: dict, motivo: str) -> str:

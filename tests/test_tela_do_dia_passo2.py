@@ -317,3 +317,53 @@ def test_botoes_e_a_unica_regra_dos_botoes():
         "tem_leitura", "gravando", "travada", "sem_geradores"]
     assert not p2.botoes(tem_leitura=True, gravando=False, travada="ainda não li a nuvem",
                          sem_geradores=False).passo2
+
+
+# --------------------------- linha digitável editada: o valor confere (22/10/2026)
+
+
+LINHA_1150 = "34191.57007 00024.924375 24177.010006 9 15340000115000"
+LINHA_1150_50 = "34191570070002492437524177010006115340000115050"
+LINHA_ZERADA = "34191570070002492437524177010006115340000000000"
+ARRECADACAO_REFERENCIA = "818900000019234500012021610150000001000123456789"
+
+
+def test_valor_da_linha_que_bate_segue():
+    v = cf.conferir_valor_da_linha(LINHA_1150, D("1150.00"))
+    assert v.estado == cf.VALOR_BATE and v.nota == "" and v.pergunta == ""
+
+
+def test_linha_sem_valor_aceita_com_observacao():
+    for linha in (LINHA_ZERADA, ARRECADACAO_REFERENCIA):
+        v = cf.conferir_valor_da_linha(linha, D("1150.00"))
+        assert v.estado == cf.VALOR_SEM and v.pergunta == ""
+        assert v.nota == "linha sem valor embutido — confira"
+
+
+def test_linha_que_diverge_pergunta_e_anota():
+    v = cf.conferir_valor_da_linha(LINHA_1150_50, D("1150.00"))
+    assert v.estado == cf.VALOR_DIVERGE
+    assert v.pergunta == ("A linha digitável é de R$ 1.150,50 e o pagamento é de R$ 1.150,00. "
+                          "Gravar mesmo assim?")
+    assert v.nota == "valor da linha R$ 1.150,50 ≠ pagamento R$ 1.150,00"
+
+
+def test_um_centavo_ja_diverge():
+    v = cf.conferir_valor_da_linha(LINHA_1150, D("1149.99"))
+    assert v.estado == cf.VALOR_DIVERGE
+
+
+def test_pergunta_do_valor_so_para_boleto_editado():
+    reg = {"valor": 1150.0, "tipo": "Pix", "dados": "PIX EMAIL a@exemplo.com"}
+    assert p2.pergunta_do_valor(reg, {"tipo": "Boleto", "dados": LINHA_1150_50}).startswith(
+        "A linha digitável é de R$ 1.150,50")
+    assert p2.pergunta_do_valor(reg, {"tipo": "Boleto", "dados": LINHA_1150}) == ""
+    assert p2.pergunta_do_valor(reg, {"tipo": "Boleto", "dados": LINHA_ZERADA}) == ""
+    assert p2.pergunta_do_valor(reg, {"tipo": "Pix", "dados": "PIX EMAIL b@exemplo.com"}) == ""
+    assert p2.pergunta_do_valor(reg, {"descricao": "OBRA MODELO 1234"}) == ""
+
+
+def test_linha_invalida_continua_recusada():
+    torta = LINHA_1150.replace("9 1534", "8 1534")
+    assert cf.validar_edicao({"tipo": "Boleto", "dados": torta}, "linha nova") == (
+        "A linha digitável não fecha nos dígitos verificadores.")

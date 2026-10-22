@@ -1799,3 +1799,27 @@ def test_cnab_da_chave_editada_declara_o_titular_da_chave_e_valida():
     assert seg_b[17:18] == "1"                          # 07.3B: CPF
     assert seg_b[18:32] == CPF_DA_CHAVE.zfill(14)       # 08.3B: o da chave, não o do ERP
     assert CPF_DA_CHAVE in seg_b[32:]                   # Informação 12: a chave
+
+
+# ------------------------------- valor embutido na linha, em Decimal (22/10/2026)
+from decimal import Decimal  # noqa: E402
+
+#: A LINHA_BANCARIA com o valor zerado e com R$ 1.150,50, DVs recalculados.
+LINHA_ZERADA = "34191570070002492437524177010006115340000000000"
+LINHA_1150_50 = "34191570070002492437524177010006115340000115050"
+#: Fichas de arrecadação fictícias: valor efetivo (3º dígito 6) e de referência (8).
+ARRECADACAO_EFETIVA = "816600000011234500012021610150000004000123456782"
+ARRECADACAO_REFERENCIA = "818900000019234500012021610150000001000123456789"
+
+
+def test_valor_embutido_em_decimal_ao_centavo():
+    assert ocr_boleto.valor_embutido(LINHA_BANCARIA) == Decimal("1150.00")
+    assert ocr_boleto.valor_embutido(LINHA_1150_50) == Decimal("1150.50")
+    assert ocr_boleto.valor_embutido(ARRECADACAO_EFETIVA) == Decimal("123.45")
+
+
+def test_linha_sem_valor_embutido_devolve_none():
+    """Zerado (boleto a combinar) e arrecadação com valor de REFERÊNCIA não dizem o valor."""
+    assert ocr_boleto.valor_embutido(LINHA_ZERADA) is None
+    assert ocr_boleto.valor_embutido(ARRECADACAO_REFERENCIA) is None
+    assert ocr_boleto.valor_embutido("123") is None

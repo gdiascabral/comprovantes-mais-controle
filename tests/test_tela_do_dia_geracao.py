@@ -361,3 +361,44 @@ def test_sem_edicao_nao_ha_marca_de_chave_editada(dia):
     e, grupos = dia
     r = ge.resultado_da_tela(e, grupos, _conf())
     assert not any(x.get(remessa_dia.CHAVE_EDITADA) for regs in r.contas.values() for x in regs)
+
+
+# ------------------------- linha digitável editada: o valor confere (22/10/2026)
+
+
+def _linha_bancaria(centavos: int) -> str:
+    """Linha bancária fictícia com o valor pedido e os DVs fechando."""
+    from pagamentos_dia import ocr_boleto
+    d = ocr_boleto.digitos("34191.57007 00024.924375 24177.010006 9 15340000115000")
+    d = d[:37] + f"{centavos:010d}"
+    barra43 = d[0:4] + d[33:47] + d[4:9] + d[10:20] + d[21:31]
+    return d[:32] + str(ocr_boleto._mod11_geral(barra43)) + d[33:]
+
+
+def test_boleto_editado_que_bate_nao_anota(dia):
+    e, grupos = dia
+    r = ge.resultado_da_tela(e, grupos, _editar_l1(_linha_bancaria(10000), "Boleto"))
+    reg = ge.registro_atual(r, "L1")
+    assert reg["status"] == "EDITADO — forma de pagar"
+    assert "valor da linha" not in reg["obs"] and "sem valor" not in reg["obs"]
+
+
+def test_boleto_editado_sem_valor_entra_com_observacao(dia):
+    e, grupos = dia
+    r = ge.resultado_da_tela(e, grupos, _editar_l1(_linha_bancaria(0), "Boleto"))
+    reg = ge.registro_atual(r, "L1")
+    assert reg["status"] == "EDITADO — forma de pagar"
+    assert "linha sem valor embutido — confira" in reg["obs"]
+
+
+def test_boleto_editado_que_diverge_fica_em_atencao_com_a_observacao(dia):
+    e, grupos = dia
+    r = ge.resultado_da_tela(e, grupos, _editar_l1(_linha_bancaria(10050), "Boleto"))
+    reg = ge.registro_atual(r, "L1")
+    assert reg["status"].startswith("ATENÇÃO — valor da linha diverge")
+    assert "EDITADO — forma de pagar" in reg["status"]
+    assert "valor da linha R$ 100,50 ≠ pagamento R$ 100,00" in reg["obs"]
+    assert _html(r, "L1")["bloqueio"]                         # o Copiar não vai às cegas
+    cand = next(c for c in remessa_dia.preparar(ge.para_a_remessa(r).contas, participantes=CONTATOS)[CONTA]
+                if c.id == "L1")
+    assert not cand.marcado                                   # nasce desmarcado na Remessa

@@ -220,6 +220,17 @@ def validar_edicao_da_tela(registro: dict, campos: dict, motivo: str) -> str:
     return ""
 
 
+def pergunta_do_valor(registro: dict, campos: dict) -> str:
+    """A pergunta antes de gravar a linha digitável editada cujo valor
+    embutido NÃO é o do pagamento (a tela pergunta com `default="no"`), ou
+    "". Linha sem valor embutido não pergunta: grava com observação
+    (`geracao`)."""
+    if campos.get("tipo") != "Boleto":
+        return ""
+    return cf.conferir_valor_da_linha(_limpo(campos.get("dados")),
+                                      registro.get("valor")).pergunta
+
+
 def antes_da_edicao(iniciais: dict, campos: dict) -> dict:
     return {k: iniciais.get(k, "") for k in campos}
 

@@ -250,3 +250,17 @@ def test_chave_editada_mostra_a_observacao_na_tela(mapa):
                         participantes={"FORNECEDOR A1": "52998224725"})[0][8]
     a1 = next(p for p in alfa.vao_sair if p.id == "A1")
     assert "chave Pix editada: CPF/CNPJ diferente do favorecido do ERP (***.982.247-**)" in a1.nota
+
+
+def test_linha_editada_que_diverge_aparece_em_atencao_na_tela(mapa):
+    from pagamentos_dia import ocr_boleto
+    d = ocr_boleto.digitos("34191.57007 00024.924375 24177.010006 9 15340000115000")
+    d = d[:37] + f"{10050:010d}"                     # R$ 100,50; A1 é de R$ 100,10
+    barra43 = d[0:4] + d[33:47] + d[4:9] + d[10:20] + d[21:31]
+    linha = d[:32] + str(ocr_boleto._mod11_geral(barra43)) + d[33:]
+    conf = _conf([{"id": 1, "alvo": "A1", "acao": cf.EDITAR, "motivo": "boleto novo",
+                   "campos": {"tipo": "Boleto", "dados": linha}}])
+    alfa = pg.por_conta(_grupos(), mapa, conf)[0][8]
+    a1 = next(p for p in alfa.vao_sair if p.id == "A1")
+    assert "valor da linha R$ 100,50 ≠ pagamento R$ 100,10" in a1.nota
+    assert a1.estado == "atencao"

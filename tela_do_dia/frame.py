@@ -1274,6 +1274,9 @@ class TelaDoDiaFrame(ttk.Frame):
         if r is None or "campos" not in escolhido:
             return
         campos = escolhido["campos"]
+        pergunta = passo2.pergunta_do_valor(registro_erp, campos)
+        if pergunta and not messagebox.askyesno(titulo, pergunta, default="no"):
+            return
         if "descricao" in campos:
             aviso = cf.aviso_de_casamento({**registro_erp, "descricao_editada": campos["descricao"]},
                                           conta)
