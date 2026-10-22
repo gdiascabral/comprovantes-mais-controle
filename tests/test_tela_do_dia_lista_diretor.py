@@ -145,10 +145,10 @@ MESMO_BANCO = [
     "EMPRESA ALFA ENGENHARIA - Sicoob",
     "Empresa Alfa Incorporações Delta 20002-2 - Sicoob",
     "Empresa Alfa Participações - MÃE - 20.003-3 - SICOOB",
-    "EMPRESA DELTA EMPREENDIMENTOS GOIANIA SPE I LTDA - 20004-4 - SICOOB",
+    "EMPRESA DELTA EMPREENDIMENTOS CIDADE MODELO SPE I LTDA - 20004-4 - SICOOB",
     "Empresa Alfa Part. Subconta 20005-5 TB 7 QD 3 LT 2 Sicoob",
     "Empresa Alfa Participações - SUBCONTA 20006-6 - QRS PARTICIPACOES LTDA - SICOOB",
-    "Obra Vale das Pedras Sicoob",
+    "Obra Modelo das Ficções Sicoob",
     "EMPRESA ÉPSILON S/A - SICOOB",
 ]
 
@@ -160,13 +160,13 @@ MESMO_BANCO = [
     ("EMPRESA ALFA ENGENHARIA - Sicoob", "Empresa Alfa Eng."),
     ("Empresa Alfa Incorporações Delta 20002-2 - Sicoob", "Empresa Alfa Incorp. Delta"),
     ("Empresa Alfa Participações - MÃE - 20.003-3 - SICOOB", "Empresa Alfa Part. Mãe"),
-    ("EMPRESA DELTA EMPREENDIMENTOS GOIANIA SPE I LTDA - 20004-4 - SICOOB",
-     "Empresa Delta Empreend. Goiania"),
+    ("EMPRESA DELTA EMPREENDIMENTOS CIDADE MODELO SPE I LTDA - 20004-4 - SICOOB",
+     "Empresa Delta Empreend. Cidade Modelo"),
     ("Empresa Alfa Part. Subconta 20005-5 TB 7 QD 3 LT 2 Sicoob",
      "Empresa Alfa Part. Sub. 20005 TB 7 QD 3 LT 2"),
     ("Empresa Alfa Participações - SUBCONTA 20006-6 - QRS PARTICIPACOES LTDA - SICOOB",
      "Empresa Alfa Part. Sub. 20006 QRS Part."),
-    ("Obra Vale das Pedras Sicoob", "Obra Vale das Pedras"),
+    ("Obra Modelo das Ficções Sicoob", "Obra Modelo das Ficções"),
     ("EMPRESA ÉPSILON S/A - SICOOB", "Empresa Épsilon"),
 ])
 def test_sugere_nome_curto_com_a_lista_toda_do_mesmo_banco(conta, esperado):
