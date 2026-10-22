@@ -448,6 +448,26 @@ def _sessao_do_central(nome: str = "principal"):
         return atual
 
 
+def esquecer_central(nome: str, sessao) -> None:
+    """Descarta a sessão pela página guardada deste acesso (e fecha a aba
+    dela, quieto) — SÓ se a guardada `is` a `sessao` que falhou. O próximo
+    `Sessao.logar` monta uma nova.
+
+    Para quem pegou erro com uma sessão que parecia `viva`: quando o Chrome
+    do app precisou LOGAR no ERP na mesma rodada, a guardada continuava com
+    a autenticação de antes do login, e a leitura dos saldos da tela do dia
+    caía ("Não consegui ler o dia", 21 e 22/10/2026). A comparação por
+    identidade protege a sessão que OUTRA aba (Conciliação) acabou de
+    recriar; `sessao=None` (não se sabe qual falhou) não descarta nada."""
+    if sessao is None:
+        return
+    with _TRAVA_CENTRAIS:
+        if _CENTRAIS.get(nome) is not sessao:
+            return
+        _CENTRAIS.pop(nome, None)
+    _fechar_quieto(sessao)           # fora da trava: `fechar` espera a dona sair
+
+
 def _fechar_quieto(s) -> None:
     try:
         s.fechar()

@@ -102,6 +102,10 @@ paths:
   o central ligado: uma aba própria numa thread própria, que copia a
   autenticação do tráfego da tela e faz `fetch` de dentro da página; uma por
   (processo, acesso), guardada em `sessao._CENTRAIS` e fechada no `atexit`.
+  `esquecer_central(nome, sessao)` descarta a guardada (fecha a aba, quieto)
+  SÓ se ela `is` a sessão que falhou — a recriada por outra aba não cai —,
+  para o próximo `logar` montar outra — a tela do dia usa depois de um erro do ERP
+  (a guardada pode estar `viva` com a autenticação de antes de um login).
   `porteiro.py` é o único que entra pela tela: sobe o Chrome, confere o login
   a cada ciclo e fecha a própria aba ao sair (Ctrl+C, SIGTERM/SIGBREAK,
   `atexit`).

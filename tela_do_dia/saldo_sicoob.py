@@ -98,6 +98,9 @@ class SaldoLido:
     saldo: Decimal | None
     lido_em: datetime | None
     motivo: str = ""
+    #: De que leitura veio: 1 = o primeiro login; 2 = o OUTRO acesso do
+    #: Sicoob (`extratos_sicoob.saldo.ler_em_dois_acessos`).
+    acesso: int = 1
 
 
 @dataclass
@@ -107,7 +110,8 @@ class LeituraSicoob:
 
     @classmethod
     def de_resultados(cls, data: date, resultados) -> "LeituraSicoob":
-        return cls(data, {_digitos(r.numero): SaldoLido(r.numero, r.saldo, r.lido_em, r.motivo)
+        return cls(data, {_digitos(r.numero): SaldoLido(r.numero, r.saldo, r.lido_em, r.motivo,
+                                                        int(getattr(r, "acesso", 1) or 1))
                           for r in resultados})
 
     @property
@@ -163,6 +167,31 @@ def texto_da_hora(leitura, contas, *, lendo=None, ligado=True) -> str:
     return texto
 
 
+def recusa_pela_data(data: date, hoje: date) -> str:
+    """Vazio = pode ler. O saldo lido do Sicoob é o de AGORA: só vale para o
+    dia de trabalho de hoje. Com o período escolhido terminando noutro dia
+    (campo de datas, 22/10/2026) — ou a tela de ontem depois da meia-noite —,
+    ler gravaria o saldo de hoje no arquivo de outro dia."""
+    if data == hoje:
+        return ""
+    return (f"O saldo do Sicoob é o de agora e só vale para hoje: a tela é de "
+            f"{data:%d/%m}. Para ler o Sicoob, busque com o período terminando "
+            "hoje; para outro dia, digite o saldo do banco.")
+
+
+def pergunta_outro_acesso(faltam, contas) -> str:
+    """A pergunta do fim da leitura quando sobrou conta de OUTRO acesso do
+    Sicoob (prova ao vivo de 22/10/2026). Cada conta pelo rótulo do painel;
+    sem ele, pelo número."""
+    rotulo = {_digitos(c.numero): c.rotulo for c in contas if c.numero}
+    nomes = ", ".join(rotulo.get(_digitos(n)) or n for n in faltam)
+    n = len(faltam)
+    quantas = "1 conta é" if n == 1 else f"{n} contas são"
+    return (f"{quantas} de outro acesso do Sicoob ({nomes}). Entrar com o outro "
+            "acesso agora?\n\nO Chrome do Sicoob fecha e abre de novo: entre com o "
+            "outro acesso (QR Code) e o app lê só essas. É só leitura.")
+
+
 def recado_da_falha(erro) -> str:
     texto = str(erro or "").strip()
     if any(p in texto.lower() for p in _PERFIL_EM_USO):
@@ -183,7 +212,7 @@ def para_dict(leitura: LeituraSicoob) -> dict:
     return {"versao": VERSAO, "data": leitura.data.isoformat(), "contas": [
         {"numero": l.numero, "saldo": None if l.saldo is None else str(l.saldo),
          "lido_em": None if l.lido_em is None else l.lido_em.isoformat(timespec="seconds"),
-         "motivo": l.motivo} for l in leitura.contas.values()]}
+         "motivo": l.motivo, "acesso": l.acesso} for l in leitura.contas.values()]}
 
 
 def de_dict(dados: dict, data: date) -> LeituraSicoob:
@@ -191,7 +220,8 @@ def de_dict(dados: dict, data: date) -> LeituraSicoob:
         itens = [SaldoLido(str(c["numero"]),
                            None if c.get("saldo") is None else Decimal(str(c["saldo"])),
                            None if c.get("lido_em") is None else datetime.fromisoformat(c["lido_em"]),
-                           str(c.get("motivo") or ""))
+                           str(c.get("motivo") or ""),
+                           int(c.get("acesso") or 1))
                  for c in dados.get("contas") or []]
     except (KeyError, TypeError, ValueError, AttributeError, InvalidOperation) as e:
         raise ValueError(f"formato inesperado ({e!r})") from e

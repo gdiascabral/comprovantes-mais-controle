@@ -152,15 +152,94 @@ def celulas_da_conta(conta) -> tuple[str, str, str, str]:
     return str(conta.qtd_a_pagar), brl(conta.a_pagar), bloqueados, " · ".join(partes)
 
 
-# ------------------------------------------------- período lido
-def periodo_na_tela(periodo) -> str:
-    """O texto do período lido. Decisão do dono (21/10/2026): esta aba não
-    tem campo de data — o período é o de `sugerir_periodo(hoje)`, e a tela
-    mostra o que leu. Não há aviso nenhum: sem calendário de feriados não há
+# ------------------------------------------------- erro com o motivo
+def detalhe_do_erro(erro) -> str:
+    """A linha do Registro que diz o QUE caiu: "detalhe: <Tipo>: <mensagem>".
+
+    O recado amigável (`widgets.recado_de_erro`) ficou genérico demais para
+    o "Não consegui ler o dia." de 21 e 22/10/2026 (ErpErro/ErpError sem
+    detalhe). Uma linha só, com teto: o traceback inteiro vai para o
+    diagnostico.log."""
+    texto = " ".join(str(erro or "").split())[:300] or "(sem mensagem)"
+    return f"detalhe: {type(erro).__name__}: {texto}"
+
+
+# ------------------------------------------------- período (campo de datas)
+FORMATO_DATA = "%d/%m/%Y"
+MAXIMO_DE_DIAS = 31
+
+
+def textos_sugeridos(hoje) -> tuple[str, str]:
+    """O DE/ATÉ com que os campos nascem: a sugestão de `sugerir_periodo`
+    (hoje e os dias não úteis logo antes; numa segunda, sáb..seg)."""
+    from conciliacao.models import sugerir_periodo
+    p = sugerir_periodo(hoje)
+    return f"{p.inicio:{FORMATO_DATA}}", f"{p.fim:{FORMATO_DATA}}"
+
+
+def _data(texto: str, campo: str):
+    import datetime as _dt
+    try:
+        return _dt.datetime.strptime((texto or "").strip(), FORMATO_DATA).date()
+    except ValueError:
+        raise ValueError(f"Data inválida em {campo}: '{(texto or '').strip()}' — "
+                         "use dd/mm/aaaa.") from None
+
+
+def periodo_da_busca(txt_ini: str, txt_fim: str, sugerido, hoje):
+    """O período que o Buscar lê (pedido do dono, 22/10/2026: "já senti falta
+    de selecionar as datas aqui").
+
+    - O que está nos campos vale; invertido, troca (como a Remessa/Retorno);
+      data que não é dd/mm/aaaa levanta `ValueError` com o recado.
+    - Os campos AINDA com a sugestão que o app pôs (`sugerido`), de outro
+      dia — o app aberto de um dia para o outro —, viram a sugestão de HOJE:
+      ninguém escolheu ontem, e ler ontem calado seria o pior erro aqui.
+
+    O dia de trabalho é o ATÉ (`periodo.fim`): o JSON do dia, a nuvem do dia
+    (liberações, agendados, lista do diretor), a data dos aportes e o Excel
+    são desse dia. O Sicoob só é lido quando ele é hoje
+    (`saldo_sicoob.recusa_pela_data`)."""
+    from conciliacao.models import Periodo, sugerir_periodo
+    atual = ((txt_ini or "").strip(), (txt_fim or "").strip())
+    if sugerido is not None and atual == tuple(sugerido) and atual != textos_sugeridos(hoje):
+        return sugerir_periodo(hoje)
+    ini, fim = _data(atual[0], "DE"), _data(atual[1], "ATÉ")
+    ini, fim = min(ini, fim), max(ini, fim)
+    if fim > hoje:
+        raise ValueError(f"Não dá para buscar o futuro: o ATÉ ({fim:%d/%m/%Y}) é depois "
+                         f"de hoje ({hoje:%d/%m/%Y}).")
+    dias = (fim - ini).days + 1
+    if dias > MAXIMO_DE_DIAS:
+        raise ValueError(f"O período tem {dias} dias; o máximo é {MAXIMO_DE_DIAS} dias. "
+                         "Para mais, busque em partes.")
+    return Periodo(ini, fim)
+
+
+def pergunta_saldo_de_agora(periodo, lido_em, acao: str = "Gerar") -> str:
+    """Vazio = o dia de trabalho é o dia em que os saldos foram lidos. Com o
+    ATÉ no passado, os saldos (sistema E Sicoob) são os de AGORA, não os
+    daquele dia: Excel do dia e "Mandar para Aportes" perguntam antes, com
+    padrão "não" (revisão do pacote, 22/10/2026)."""
+    if periodo.fim >= lido_em:
+        return ""
+    return f"O saldo é o de agora, não o de {periodo.fim:%d/%m}. {acao} mesmo assim?"
+
+
+def periodo_na_tela(periodo, hoje=None) -> str:
+    """O texto do período lido. Sem aviso de feriado: sem calendário não há
     como saber quando avisar ("o dia útil anterior ficou fora" vale em todo
-    dia útil, e aviso que aparece sempre é ruído). No dia seguinte a um
-    feriado, os vencidos do feriado se buscam pela aba Remessa/Retorno."""
-    return f"Pagamentos de {periodo.inicio:%d/%m} a {periodo.fim:%d/%m}"
+    dia útil, e aviso que aparece sempre é ruído) — com o campo de datas
+    (22/10/2026), o dono escolhe o período do dia seguinte a um feriado.
+
+    Com `hoje` e o ATÉ em outro dia, diz qual é o dia de trabalho e que os
+    saldos (sistema e Sicoob) são os de agora — e o Sicoob nem é lido."""
+    texto = f"Pagamentos de {periodo.inicio:%d/%m} a {periodo.fim:%d/%m}"
+    if hoje is not None and periodo.fim != hoje:
+        texto += (f" · dia de trabalho {periodo.fim:%d/%m}: os saldos (sistema e Sicoob) "
+                  f"são os de agora, não os de {periodo.fim:%d/%m}; o Sicoob não é lido — "
+                  "confira antes do Excel e dos aportes")
+    return texto
 
 
 # ------------------------------------------------- arquivo e data do dia

@@ -875,6 +875,12 @@ def escolha_do_apontamento(opcoes, rotulo: str, motivo: str) -> tuple:
     return rotulos[rotulo], motivo
 
 
+def linhas_da_tabela(visiveis: int, minimo: int, maximo: int) -> int:
+    """Altura em linhas de uma tabela: as que há à vista, entre o mínimo
+    (tabela vazia) e o teto, para os botões abaixo ficarem sempre à vista."""
+    return max(minimo, min(visiveis, maximo))
+
+
 def estado_dos_botoes_do_dono(pode_editar: bool, lendo: bool, leu_bem: bool) -> str:
     """"+ Conta", "Editar", "Apontar" e "Desfazer": só para admin, com a
     ÚLTIMA leitura inteira na tela e nenhuma rodando. Sem leitura boa, a

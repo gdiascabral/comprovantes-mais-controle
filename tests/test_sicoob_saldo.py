@@ -54,13 +54,38 @@ class Cliente:
     def __init__(self, pagina, na_lista, trava=()):
         self.page, self.na_lista, self.trava, self.trocas = pagina, na_lista, trava, []
 
+    def listar_contas(self):
+        self.listagens = getattr(self, "listagens", 0) + 1
+        return list(self.na_lista)
+
     def acessar_conta(self, numero):
+        # Como o real: procura a linha da lista pelo TEXTO (`has_text`), então
+        # "12345-6" não acha "12.345-6".
         self.trocas.append(numero)
         if numero not in self.na_lista:
             return False
         if numero not in self.trava:                # troca que "não pegou"
             self.page.aberta = numero
         return True
+
+
+def test_conta_do_cadastro_sem_o_ponto_casa_pelos_digitos(medido):
+    """Prova ao vivo 22/10: o cadastro tinha a conta sem o ponto e o Sicoob a
+    escreve com ele — ficava "não aparece neste login". Conta fictícia."""
+    pagina = Pagina({"123456": ok("7.00")})
+    cli = Cliente(pagina, ["12.345-6"])
+    [a] = S.ler_contas(cli, ["12345-6"], agora=lambda: AGORA)
+    assert a.ok and a.saldo == D("7.00") and a.numero == "12345-6"
+    assert cli.trocas == ["12.345-6"]               # entrou com o número da lista
+
+
+def test_conta_que_a_lista_nao_mostra_ainda_tenta_como_veio(medido):
+    """A lista não reconheceu a linha (formato novo): vale o caminho antigo."""
+    pagina = Pagina({"123456": ok("1")})
+    cli = Cliente(pagina, ["12.345-6"])
+    cli.listar_contas = lambda: []
+    [a] = S.ler_contas(cli, ["12.345-6"], agora=lambda: AGORA)
+    assert a.ok and cli.trocas == ["12.345-6"]
 
 
 def test_sem_endereco_medido_recusa_antes_de_tocar_no_banco(monkeypatch):
@@ -332,3 +357,123 @@ def test_resposta_que_nao_e_json_ainda_para_a_fila(medido):
     a, b = S.ler_contas(cli, ["12.345-6", "23.456-7"], agora=lambda: AGORA)
     assert "não devolveu JSON" in a.motivo and b.motivo == a.motivo
     assert cli.trocas == ["12.345-6"]
+
+
+# ------------------------------------------------- dois acessos (prova 22/10)
+class _Abrir:
+    """`abrir()` do Chrome do Sicoob: cada chamada é um login (um QR Code)."""
+
+    def __init__(self, *clientes):
+        self.clientes, self.abertos, self.logins = list(clientes), 0, 0
+
+    def __call__(self):
+        dono = self
+
+        class _Ctx:
+            def __enter__(self_):
+                cli = dono.clientes[dono.abertos]
+                dono.abertos += 1
+                cli.aguardar_login = lambda: setattr(dono, "logins", dono.logins + 1)
+                return cli
+
+            def __exit__(self_, *a):
+                return False
+        return _Ctx()
+
+
+def test_conta_de_outro_acesso_pergunta_e_le_so_as_que_faltaram(medido):
+    p1 = Pagina({"123456": ok("1")})
+    p2 = Pagina({"234567": ok("2"), "345678": ok("3")})
+    c1 = Cliente(p1, ["12.345-6"])
+    c2 = Cliente(p2, ["23.456-7", "34.567-8"])
+    perguntas = []
+    lidos = S.ler_em_dois_acessos(
+        _Abrir(c1, c2), ["12.345-6", "23.456-7", "34.567-8"],
+        perguntar=lambda faltam: perguntas.append(list(faltam)) or True,
+        agora=lambda: AGORA)
+    assert perguntas == [["23.456-7", "34.567-8"]]
+    assert [(l.numero, l.saldo, l.acesso) for l in lidos] == [
+        ("12.345-6", D("1.00"), 1), ("23.456-7", D("2.00"), 2), ("34.567-8", D("3.00"), 2)]
+    assert c2.trocas == ["23.456-7", "34.567-8"]     # só as que faltaram
+
+
+def test_dono_diz_nao_e_ficam_nao_lidas_como_hoje(medido):
+    c1 = Cliente(Pagina({"123456": ok("1")}), ["12.345-6"])
+    abrir = _Abrir(c1)
+    a, b = S.ler_em_dois_acessos(abrir, ["12.345-6", "23.456-7"],
+                                 perguntar=lambda faltam: False, agora=lambda: AGORA)
+    assert a.ok and b.motivo == S.FORA_DESTE_LOGIN and abrir.abertos == 1
+
+
+def test_sem_conta_de_fora_nao_pergunta(medido):
+    c1 = Cliente(Pagina({"123456": {"status": 500, "corpo": "x"}}), ["12.345-6"])
+    perguntas = []
+    S.ler_em_dois_acessos(_Abrir(c1), ["12.345-6"],
+                          perguntar=lambda f: perguntas.append(f) or True, agora=lambda: AGORA)
+    assert perguntas == []
+
+
+def test_conta_que_nao_esta_em_nenhum_dos_dois_diz_isso(medido):
+    c1 = Cliente(Pagina({}), ["98.765-4"])
+    c2 = Cliente(Pagina({}), ["87.654-3"])
+    [a] = S.ler_em_dois_acessos(_Abrir(c1, c2), ["12.345-6"],
+                                perguntar=lambda f: True, agora=lambda: AGORA)
+    assert not a.ok and a.motivo == S.EM_NENHUM_ACESSO and a.acesso == 2
+
+
+def test_segundo_login_que_falha_nao_perde_a_primeira_leitura(medido):
+    c1 = Cliente(Pagina({"123456": ok("1")}), ["12.345-6"])
+
+    class _Quebra:
+        def __enter__(self): raise RuntimeError("Timeout 600000ms exceeded")
+        def __exit__(self, *a): return False
+
+    abrir = _Abrir(c1)
+    chamadas = []
+
+    def abrir2():
+        chamadas.append(1)
+        return abrir() if len(chamadas) == 1 else _Quebra()
+
+    a, b = S.ler_em_dois_acessos(abrir2, ["12.345-6", "23.456-7"],
+                                 perguntar=lambda f: True, agora=lambda: AGORA)
+    assert a.ok and a.saldo == D("1.00")
+    assert not b.ok and "outro acesso" in b.motivo and "Timeout" in b.motivo
+
+
+def test_parar_depois_do_primeiro_acesso_nao_pergunta(medido):
+    c1 = Cliente(Pagina({"123456": ok("1")}), ["12.345-6"])
+    perguntas = []
+    parado = []
+
+    def parar():
+        return bool(parado)
+
+    def log(msg):
+        if "lido" in msg:
+            parado.append(1)
+
+    S.ler_em_dois_acessos(_Abrir(c1), ["12.345-6", "23.456-7"], parar=parar, log=log,
+                          perguntar=lambda f: perguntas.append(f) or True, agora=lambda: AGORA)
+    assert perguntas == []
+
+
+# ------------------------------------------------- revisão do pacote (22/10)
+def test_lista_as_contas_uma_vez_por_login(medido):
+    pagina = Pagina({"123456": ok("1"), "234567": ok("2"), "345678": ok("3")})
+    cli = Cliente(pagina, ["12.345-6", "23.456-7", "34.567-8"])
+    lidos = S.ler_contas(cli, ["12345-6", "23456-7", "34567-8"], agora=lambda: AGORA)
+    assert all(l.ok for l in lidos) and cli.listagens == 1
+
+
+def test_chrome_que_volta_no_mesmo_acesso_nao_le_de_novo_e_diz_o_que_fazer(medido):
+    p = Pagina({"123456": ok("1")})
+    c1 = Cliente(p, ["12.345-6"])
+    c2 = Cliente(p, ["12.345-6"])                    # o mesmo acesso de novo
+    perguntas, registro = [], []
+    a, b = S.ler_em_dois_acessos(_Abrir(c1, c2), ["12.345-6", "23.456-7"],
+                                 perguntar=lambda f: perguntas.append(f) or True,
+                                 agora=lambda: AGORA, log=registro.append)
+    assert a.ok and not b.ok and b.motivo == S.MESMO_ACESSO and b.acesso == 2
+    assert "botão Sair" in S.MESMO_ACESSO and "Reler Sicoob" in S.MESMO_ACESSO
+    assert c2.trocas == [] and any(S.MESMO_ACESSO in r for r in registro)

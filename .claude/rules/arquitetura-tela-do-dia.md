@@ -88,6 +88,25 @@ fim do `_receber_leitura` (`ler_se_faltar`), `_ligar_botoes`/`_limpar`
 - **Reler substitui a leitura inteira**: conta que falha fica "Sicoob não
   lido: motivo" com o banco VAZIO, nunca o valor velho calado nem R$ 0,00.
   A hora é a da conta lida há mais tempo; parcial diz "N de M contas".
+- **Dois acessos do Sicoob** (prova ao vivo 22/10/2026: 19 lidas, 4 de
+  OUTRO acesso, com outro QR Code). Sobrou conta "não aparece neste login"
+  no fim da leitura: a tela pergunta (`askyesno`, padrão sim, pela fila —
+  `_perguntar_outro_acesso`; a thread espera, e fechar o app responde não)
+  "N contas são de outro acesso do Sicoob (…). Entrar com o outro acesso
+  agora?". Sim: o Chrome do Sicoob do app (o MESMO perfil) fecha e abre de
+  novo, espera o login do dono e lê SÓ as que faltaram
+  (`saldo.ler_em_dois_acessos`). É o caminho já provado de
+  `baixar_em_varios_logins`: o app não tem um "sair" do SicoobNet, e nada
+  digita senha nem clica em aceite/2FA. As duas leituras viram UMA, cada
+  conta com `acesso` (1 ou 2, guardado no JSON); a hora continua a da conta
+  lida há mais tempo. Não: ficam "não lido", como antes. Segundo login que
+  falha não perde o primeiro (as que faltavam levam o porquê); a que não está
+  em nenhum dos dois diz isso. **Chrome que volta no MESMO acesso** (a
+  sessão ficou no perfil; a lista de contas do 2º login é igual à do 1º, pelos
+  dígitos): não lê de novo; as que faltavam ficam "não lido" com "o Chrome
+  voltou no mesmo acesso do Sicoob: saia do SicoobNet (botão Sair) e clique em
+  Reler Sicoob para entrar com o outro acesso" (`saldo.MESMO_ACESSO`). A
+  lista de contas é lida UMA vez por login.
 - **Outro banco fica digitado** (spec: "só Sicoob"). Duas linhas na mesma
   conta do Sicoob, ou linha que diz SICOOB e o cadastro não resolve, não são
   preenchidas e dizem por quê.
@@ -136,12 +155,34 @@ a tela pede para buscar de novo. Sem lançamentos no período (`entradas is
 None`), o Excel pode sair (a pagar zero é verdade), mas planilha, HTML e
 Remessa recusam.
 
-**Sem campo de data** (decisão do dono, 21/10/2026): o período é o de
-`sugerir_periodo(hoje)`, e a tela mostra o período lido ("Pagamentos de DD/MM
-a DD/MM", `decisoes.periodo_na_tela`). Sem calendário de feriados, ela NÃO
-avisa nada sobre o dia anterior: "o dia útil anterior ficou fora" vale em todo
-dia útil e viraria ruído. **No dia seguinte a um feriado, os vencidos do
-feriado se buscam pela aba Remessa/Retorno** (que tem o campo de data).
+**Campo de datas DE/ATÉ** (pedido do dono, 22/10/2026, revendo a decisão de
+21/10 de não ter): no topo do cartão 1, `widgets.CampoData` como na
+Remessa/Retorno, mais o botão "Hoje". Os campos nascem com
+`sugerir_periodo(hoje)` (`decisoes.textos_sugeridos`) e o Buscar lê o que
+está neles (`decisoes.periodo_da_busca`: invertido troca, data inválida
+recusa com recado). **Os campos ainda com a sugestão que o APP pôs, de outro
+dia** (app aberto de um dia para o outro), **viram a sugestão de hoje** —
+ninguém escolheu ontem; a comparação é pelo TEXTO, e não por `trace` da
+variável, porque o `CampoData` reescreve a mesma data ao perder o foco.
+**O dia de trabalho é o ATÉ** (`periodo.fim`): o JSON do dia, a nuvem do
+dia (liberações, agendados, lista do diretor), a data dos aportes e o Excel
+são desse dia, e continuam coerentes com um período escolhido. **O Sicoob só
+é lido quando o ATÉ é hoje** (`saldo_sicoob.recusa_pela_data`): o saldo
+lido é o de AGORA, e gravá-lo no arquivo de outro dia seria mentir — com o
+ATÉ noutro dia, o Reler recusa com o recado, o automático do Buscar só
+escreve no Registro, a leitura já guardada daquele dia (se houver) continua
+valendo, e o rótulo do período diz "dia de trabalho DD/MM (não é hoje: o
+saldo do Sicoob não é lido — digite o do banco)" (`periodo_na_tela(p,
+hoje)`). É a mesma regra que já cobria a virada da meia-noite.
+**Revisão do pacote (22/10/2026): o saldo do ERP também é o de agora.** O
+Buscar recusa ATÉ depois de hoje ("não dá para buscar o futuro") e período
+de mais de 31 dias. Com o ATÉ antes do dia em que os saldos foram lidos
+(`_lido_no_dia`), o Excel do dia e o "Mandar para a aba Aportes" perguntam
+primeiro, padrão NÃO: "O saldo é o de agora, não o de DD/MM. Gerar (Mandar)
+mesmo assim?" (`decisoes.pergunta_saldo_de_agora`), e o rótulo do período
+diz que os saldos (sistema e Sicoob) são os de agora. Sem
+calendário de feriados, a tela NÃO avisa nada sobre o dia anterior; no dia
+seguinte a um feriado, o dono escolhe o período.
 
 
 ## Leitura e boletos somados (entrega 5)
@@ -161,6 +202,13 @@ Regra do dono (14/10/2026): nada de `POST /users/login` por HTTP, que derruba a
 sessão do Chrome. Central ligado: a sessão do porteiro (`Sessao.logar("", "")`,
 que, se o central sumiu no meio, levanta em vez de cair no login). Central
 desligado: a MESMA aba do robô que leu os pagamentos (`mc_api._fetch_json`).
+**Central: erro do ERP na 1ª leitura esquece a sessão guardada e lê UMA vez
+de novo** (`erp.sessao.esquecer_central`; prova ao vivo 21 e 22/10/2026: com o
+Chrome do app logando no ERP na mesma rodada, a `SessaoPelaPagina` guardada em
+`_CENTRAIS` ficava com a autenticação velha e o dia não era lido). A 2ª falha
+sobe com o motivo dela; erro que não é do ERP não tenta de novo. Só se
+esquece a sessão que FALHOU (`SessaoApi._sessao`, ou `erro.sessao` do porteiro
+sem token), por identidade: a que a Conciliação acabou de recriar fica.
 Erro do ERP vira `ErpError`, nunca saldo zero; `acessos.json` estragado falha
 FECHADO. Conta sem saldo mostra "—" no mínimo e no saldo final, com situação
 "erro"; o Excel recusa quando `validacao.exigir_todos_os_saldos` está ligado

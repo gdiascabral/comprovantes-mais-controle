@@ -646,6 +646,9 @@ def aplicar_estilos(escuro: bool) -> None:
                      background=c["fundo"])
     st.configure("Trilha.TLabel", font=FONTE_MINI, foreground=c["tenue"],
                  background=c["fundo"])
+    # O filete que fecha o cabeçalho da página: 1 px na cor de filete, no
+    # lugar da faixa de cor que o cabeçalho parecia ter (ver `Cabecalho`).
+    st.configure("Filete.TFrame", background=c["linha"])
 
     # ------------------------------------------------------------- pílulas
     # Estado vira fundo colorido com texto da mesma família, como no ERP. O
@@ -755,6 +758,14 @@ def barra_de_titulo(janela, escuro: bool | None = None) -> None:
 # o app ganhar uma cor: nenhuma aba escreve `#` seguido de seis dígitos.
 
 
+#: O papel da paleta que contorna o botão DESLIGADO. Lido também pelo
+#: `tests/test_visual.py`, que mede o contraste dele contra o fundo e o cartão
+#: (2,70:1 e 3,05:1 no claro; 2,47:1 e 2,25:1 no escuro). A WCAG dispensa o
+#: componente inativo do 3:1, e um contorno mais forte faria o desligado
+#: parecer disponível — a régua aqui é "dá para ver que é um botão".
+BORDA_DESLIGADO = "linha"
+
+
 class Botao(tk.Button):
     """O botão do painel: chapado, colorido, com o papel dito pela cor.
 
@@ -821,14 +832,19 @@ class Botao(tk.Button):
             # Cinza chapado nos dois temas: o botão desligado não é "verde
             # apagado" nem "azul apagado" — ele é o mesmo lugar vazio,
             # qualquer que fosse a cor dele ligado.
+            # A moldura é a `linha`, e não a `borda`: preenchido com o
+            # `fundo`, no cabeçalho da página (que É o fundo) só a moldura o
+            # separa da tela, e a `borda` dava 1,16:1 no claro e 1,51:1 no
+            # escuro — o "Buscar pagamentos e saldos" desligado virava texto
+            # solto. Ver `BORDA_DESLIGADO`.
             try:
                 self.configure(background=c["fundo"], foreground=c["tenue"],
                                activebackground=c["fundo"],
                                activeforeground=c["tenue"],
                                disabledforeground=c["tenue"],
                                highlightthickness=1,
-                               highlightbackground=c["borda"],
-                               highlightcolor=c["borda"])
+                               highlightbackground=c[BORDA_DESLIGADO],
+                               highlightcolor=c[BORDA_DESLIGADO])
             except tk.TclError:
                 pass
             return
@@ -1358,6 +1374,18 @@ class Cartao(tk.Frame):
             pass
 
 
+#: O menor `wraplength` do subtítulo do cabeçalho: antes do layout o
+#: `<Configure>` chega com largura 1, e quebrar em 1 px faria uma letra por
+#: linha por um instante.
+APOIO_MINIMO = 200
+
+
+def largura_do_apoio(largura: int, teto: int) -> int:
+    """O `wraplength` do subtítulo: a largura que sobrou ao lado dos botões,
+    nunca acima do `teto` (linha legível) nem abaixo de `APOIO_MINIMO`."""
+    return max(APOIO_MINIMO, min(int(largura), int(teto)))
+
+
 class Cabecalho(ttk.Frame):
     """O cabeçalho da PÁGINA: onde estou, o que é isto, e o que dá para fazer.
 
@@ -1373,13 +1401,43 @@ class Cabecalho(ttk.Frame):
     À direita fica `self.acoes`, onde a tela pendura os botões dela — o
     principal em verde. Antes eles moravam todos no rodapé, e o "executar" de
     cada tela ficava no canto de baixo, longe do que se acabou de preencher.
+
+    SEM FAIXA PRÓPRIA (22/10/2026, pedido do dono). As abas são `ttk.Frame`
+    sem estilo, e o fundo padrão do ttk neste app é o do CARTÃO; o cabeçalho,
+    no fundo do painel, aparecia como um bloco de outra cor com uma moldura do
+    cartão em volta (as margens do `pack`). Agora o cabeçalho passa a aba que
+    o recebe para o fundo do painel — só quando ela não escolheu estilo
+    nenhum —, e o que separa o cabeçalho dos cartões é um filete de 1 px
+    (`self.filete`, estilo `Filete.TFrame`), não um bloco de cor.
     """
 
     def __init__(self, pai, titulo: str, apoio: str = "", trilha: str = "",
                  **kw):
         kw.setdefault("style", "Fundo.TFrame")
+        # A aba inteira no fundo do painel: é o que tira a moldura em volta
+        # do cabeçalho. Só `ttk.Frame` sem estilo — um diálogo que já pôs
+        # `Fundo.TFrame`, ou quem escolheu outro estilo, fica como está.
+        if isinstance(pai, ttk.Frame):
+            try:
+                if not str(pai.cget("style")):
+                    pai.configure(style="Fundo.TFrame")
+            except tk.TclError:
+                pass
         super().__init__(pai, **kw)
-        esquerda = ttk.Frame(self, style="Fundo.TFrame")
+        topo = ttk.Frame(self, style="Fundo.TFrame")
+        topo.pack(side="top", fill="x")
+        #: O filete que fecha o cabeçalho, de ponta a ponta (título e botões).
+        self.filete = ttk.Frame(self, style="Filete.TFrame", height=1)
+        self.filete.pack(side="top", fill="x", pady=px((14, 0)))
+        #: Os botões da tela. `anchor="e"` para eles ficarem alinhados pelo
+        #: alto do título, e não centralizados contra a linha de apoio.
+        #: Empacotados ANTES do texto (galeria 1280x800, 22/10/2026): o `pack`
+        #: reparte o espaço na ordem, e o subtítulo longo, empacotado primeiro,
+        #: levava a largura toda e cortava o botão ("Baixar comprova"). Assim
+        #: as ações levam o que pedem e o texto fica com o resto.
+        self.acoes = ttk.Frame(topo, style="Fundo.TFrame")
+        self.acoes.pack(side="right", anchor="ne", padx=px((14, 0)))
+        esquerda = ttk.Frame(topo, style="Fundo.TFrame")
         esquerda.pack(side="left", fill="x", expand=True)
         if trilha:
             ttk.Label(esquerda, text=trilha, style="Trilha.TLabel"
@@ -1388,14 +1446,21 @@ class Cabecalho(ttk.Frame):
                   ).pack(anchor="w")
         self.lbl_apoio = None
         if apoio:
+            teto = px(820)
             self.lbl_apoio = ttk.Label(esquerda, text=apoio,
                                        style="FundoApoio.TLabel",
-                                       wraplength=px(820), justify="left")
+                                       wraplength=teto, justify="left")
             self.lbl_apoio.pack(anchor="w", pady=px((3, 0)))
-        #: Os botões da tela. `anchor="e"` para eles ficarem alinhados pelo
-        #: alto do título, e não centralizados contra a linha de apoio.
-        self.acoes = ttk.Frame(self, style="Fundo.TFrame")
-        self.acoes.pack(side="right", anchor="ne", padx=px((14, 0)))
+            lbl = self.lbl_apoio
+
+            # O subtítulo quebra na largura que SOBROU ao lado dos botões
+            # (com o teto de antes, para a linha continuar legível na tela
+            # larga), em vez de pedir 820 px e empurrar os botões.
+            def _quebrar(e):
+                alvo = largura_do_apoio(e.width, teto)
+                if str(lbl.cget("wraplength")) != str(alvo):
+                    lbl.configure(wraplength=alvo)
+            esquerda.bind("<Configure>", _quebrar, add="+")
         #: Espaço abaixo da linha de apoio, para quem quiser pendurar algo no
         #: cabeçalho. Nasce vazio e não ocupa lugar até alguém empacotá-lo.
         self.rodape = ttk.Frame(esquerda, style="Fundo.TFrame")
@@ -1412,6 +1477,29 @@ def passos_da_roda(delta: int) -> int:
     if passos == 0 and delta:
         passos = -1 if delta > 0 else 1
     return passos
+
+
+def quadros_da_rolagem(distancia: int, n: int) -> list[int]:
+    """Reparte `distancia` pixels em até `n` quadros que desaceleram (ease-out).
+
+    O primeiro quadro anda mais, o último menos; a soma é EXATAMENTE
+    `distancia` (com o sinal dela) e todo quadro é inteiro e não nulo, então
+    a animação nunca gasta quadro parado."""
+    distancia = int(distancia)
+    if distancia == 0 or n < 1:
+        return []
+    sinal = 1 if distancia > 0 else -1
+    total = abs(distancia)
+    n = min(int(n), total)
+    pesos = [n - i for i in range(n)]
+    soma = sum(pesos)
+    quadros, acum, dado = [], 0, 0
+    for peso in pesos:
+        acum += peso
+        alvo = (total * acum + soma // 2) // soma
+        quadros.append(sinal * (alvo - dado))
+        dado = alvo
+    return [q for q in quadros if q]
 
 
 def _tem_o_que_rolar(widget) -> bool:
@@ -1580,11 +1668,17 @@ class AreaRolavel(tk.Frame):
     #: na hora, e esta conferência pega o resto — só enquanto a área está na
     #: tela, então as abas escondidas não custam nada.
     VIGIA_MS = 250
+    #: Rolagem suave: cada dente vira um deslocamento em pixels, gasto em
+    #: `QUADROS` passos de `QUADRO_MS` (~16 ms, 60 quadros por segundo).
+    QUADROS = 6
+    QUADRO_MS = 16
 
     def __init__(self, pai, fundo: str = "fundo", **kw):
         c = cores()
         self._fundo = fundo
         self._morrendo = False
+        self._fila: list[int] = []
+        self._anim = None
         self._medida = None
         self._vigiados: set[str] = set()
         self._barra_visivel = False
@@ -1594,10 +1688,10 @@ class AreaRolavel(tk.Frame):
         self.canvas = tk.Canvas(self.moldura, background=c[fundo],
                                 highlightthickness=0, borderwidth=0,
                                 width=1, height=1,
-                                yscrollincrement=px(self.PASSO))
+                                yscrollincrement=1)
         self.canvas.pack(fill="both", expand=True)
         self.barra = ttk.Scrollbar(self.moldura, orient="vertical",
-                                   command=self.canvas.yview)
+                                   command=self._barra_pediu)
         self.canvas.configure(yscrollcommand=self._barra_mudou)
         kw.setdefault("background", c[fundo])
         kw.setdefault("highlightthickness", 0)
@@ -1646,6 +1740,7 @@ class AreaRolavel(tk.Frame):
             tk.Frame.destroy(self)
             return
         self._morrendo = True
+        self._parar_animacao()
         if self._vigia is not None:
             try:
                 self.after_cancel(self._vigia)
@@ -1771,14 +1866,67 @@ class AreaRolavel(tk.Frame):
         """Tem conteúdo fora da vista agora?"""
         return _tem_o_que_rolar(self.canvas)
 
+    def _parar_animacao(self):
+        """Descarta o que faltava andar e cancela o quadro pendente."""
+        self._fila = []
+        if self._anim is not None:
+            try:
+                self.after_cancel(self._anim)
+            except tk.TclError:
+                pass
+            self._anim = None
+
+    def _barra_pediu(self, *args):
+        """A barra mexeu: a animação em curso perde a vez. O Canvas anda 1 px
+        por unidade (para a animação ser fina); a seta da barra continua
+        andando um PASSO."""
+        self._parar_animacao()
+        if len(args) == 3 and args[0] == "scroll" and args[2] == "units":
+            self.canvas.yview_scroll(int(args[1]) * px(self.PASSO), "units")
+        else:
+            self.canvas.yview(*args)
+
     def rolar(self, passos: int):
-        if self.rola():
-            self.canvas.yview_scroll(int(passos) * 3, "units")
+        """Soma `passos` dentes ao que falta andar e (re)divide em quadros.
+
+        Dentes seguidos NÃO reiniciam a animação: a distância nova entra na
+        conta e o conjunto desacelera junto. A distância por dente é a de
+        sempre: 3 passos de `PASSO`."""
+        if not self.rola():
+            return
+        faltava = sum(self._fila)
+        distancia = faltava + int(passos) * 3 * px(self.PASSO)
+        if self._anim is not None:
+            try:
+                self.after_cancel(self._anim)
+            except tk.TclError:
+                pass
+            self._anim = None
+        self._fila = quadros_da_rolagem(distancia, self.QUADROS)
+        self._quadro()
+
+    def _quadro(self):
+        self._anim = None
+        if self._morrendo or not self._fila:
+            self._fila = []
+            return
+        passo = self._fila.pop(0)
+        try:
+            antes = self.canvas.canvasy(0)
+            self.canvas.yview_scroll(passo, "units")
+            if self.canvas.canvasy(0) == antes:     # bateu no topo ou no fim
+                self._fila = []
+                return
+            if self._fila:
+                self._anim = self.after(self.QUADRO_MS, self._quadro)
+        except tk.TclError:
+            self._fila = []
 
     def mostrar(self, widget):
         """Rola o mínimo para `widget` ficar inteiro à vista."""
         if not self.rola():
             return
+        self._parar_animacao()
         try:
             topo = widget.winfo_rooty() - self.winfo_rooty()
             fim = topo + widget.winfo_height()
