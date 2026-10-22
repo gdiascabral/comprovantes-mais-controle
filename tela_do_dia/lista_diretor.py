@@ -5,7 +5,7 @@ ordem de ontem como sugestão, texto pronto para o WhatsApp. ("Arrastar" é
 Módulo puro: sem tela, sem rede. Dinheiro em Decimal."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 
 from .valores import brl
@@ -21,50 +21,70 @@ class LinhaDaLista:
     nome: str
     valor: Decimal
     ordinal: int | None = None
+    sem_nome_curto: bool = False
 
 
 def montar(agendados_hoje, rotulo_de, nomes) -> list[LinhaDaLista]:
+    """Soma por rótulo de conta. Valor None ou <= 0 não vira linha."""
     soma: dict[str, Decimal] = {}
     for a in agendados_hoje:
+        if a.valor is None or a.valor <= 0:
+            continue
         r = rotulo_de(a.conta) or a.conta
+        if not r:
+            raise ValueError("Agendado sem conta nem rótulo: a lista não pode ter linha sem nome.")
         soma[r] = soma.get(r, ZERO) + a.valor
-    return [LinhaDaLista(r, nomes.get(r) or r, v) for r, v in soma.items()]
+    return [LinhaDaLista(r, nomes.get(r) or r, v, None, not nomes.get(r))
+            for r, v in soma.items()]
 
 
 def renumerar(linhas) -> list[LinhaDaLista]:
-    com = [l for l in linhas if l.ordinal is not None]
+    """Lista nova: numerados primeiro, ordenados por (ordinal, posição) e
+    renumerados de 1; depois os sem ordinal. Não altera os objetos recebidos."""
+    linhas = list(linhas)
+    com = sorted((p for p in enumerate(linhas) if p[1].ordinal is not None),
+                 key=lambda p: (p[1].ordinal, p[0]))
     sem = [l for l in linhas if l.ordinal is None]
-    for i, l in enumerate(com, 1):
-        l.ordinal = i
-    return com + sem
+    return [replace(l, ordinal=n) for n, (_, l) in enumerate(com, 1)] + [replace(l) for l in sem]
+
+
+def _ordinal_de_ontem(x):
+    try:
+        n = int(x.get("ordinal"))
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
 
 
 def sugerir_ordem(linhas, anterior) -> list[LinhaDaLista]:
-    pos = {str(x.get("conta")): (i, x.get("ordinal")) for i, x in enumerate(anterior or ())}
+    pos: dict[str, tuple[int, int | None]] = {}
+    for i, x in enumerate(anterior or ()):
+        pos.setdefault(str(x.get("conta")), (i, _ordinal_de_ontem(x)))
     com = sorted((l for l in linhas if pos.get(l.rotulo, (0, None))[1]),
-                 key=lambda l: pos[l.rotulo][1])
-    marcados = {id(l) for l in com}
-    sem = sorted((l for l in linhas if id(l) not in marcados),
+                 key=lambda l: (pos[l.rotulo][1], pos[l.rotulo][0]))
+    ids = {id(l) for l in com}
+    sem = sorted((l for l in linhas if id(l) not in ids),
                  key=lambda l: (pos.get(l.rotulo, (_FIM, None))[0], -l.valor, l.rotulo))
-    for l in com:
-        l.ordinal = 0
-    for l in sem:
-        l.ordinal = None
-    return renumerar(com + sem)
+    return renumerar([replace(l, ordinal=n) for n, l in enumerate(com, 1)]
+                     + [replace(l, ordinal=None) for l in sem])
 
 
 def mover(linhas, i, delta) -> list[LinhaDaLista]:
+    """Troca a linha i com a vizinha (nos limites não faz nada) e renumera
+    os numerados pela posição na lista."""
     linhas, j = list(linhas), i + delta
     if 0 <= i < len(linhas) and 0 <= j < len(linhas):
         linhas[i], linhas[j] = linhas[j], linhas[i]
-    return renumerar(linhas)
+    com = [l for l in linhas if l.ordinal is not None]
+    sem = [l for l in linhas if l.ordinal is None]
+    return [replace(l, ordinal=n) for n, l in enumerate(com, 1)] + [replace(l) for l in sem]
 
 
 def alternar_ordinal(linhas, i) -> list[LinhaDaLista]:
-    """Liga/desliga o ordinal da linha i. Quem ganha ordinal vai para o fim dos
-    numerados (`_FIM` só serve para ordenar; o `renumerar` põe o número real)."""
+    """Liga/desliga o ordinal da linha i; quem ganha vai para o fim dos
+    numerados (`_FIM` só ordena; o `renumerar` põe o número real)."""
     linhas = list(linhas)
-    linhas[i].ordinal = None if linhas[i].ordinal is not None else _FIM
+    linhas[i] = replace(linhas[i], ordinal=None if linhas[i].ordinal is not None else _FIM)
     return renumerar(linhas)
 
 
