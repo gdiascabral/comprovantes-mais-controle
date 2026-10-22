@@ -411,11 +411,19 @@ def _palavras(s) -> list[str]:
     return re.findall(r"[a-z0-9]+", _comparavel(s))
 
 
-def _mesmo_comeco(a: list[str], b: list[str]) -> bool:
-    """Um nome é o começo do outro, palavra por palavra ("SOCIO UM" e "SOCIO
-    UM SOBRENOME" sim; "SOCIO UM" e "SOCIO UMBERTO" não)."""
-    n = min(len(a), len(b))
-    return n > 0 and a[:n] == b[:n]
+def _cadastro_cabe_no_documento(documento: list[str], entrada: list[str]) -> bool:
+    """TODAS as palavras da entrada do cadastro aparecem, na ordem, no nome
+    do documento ("SOCIO UM" cabe em "SOCIO UM SOBRENOME"; não em "SOCIO",
+    "SOCIO UMBERTO" nem "UM SOCIO"), e a entrada tem ao menos DUAS palavras.
+
+    Comparar só até o nome mais curto (revisão de dinheiro de 22/10/2026, A3)
+    fazia a entrada "FULANO" — o cadastro guarda toda pessoa de aviso PAGAR
+    PARA — casar com "REEMBOLSO FULANO OUTRAPESSOA": Pix pronto no HTML para
+    a pessoa errada."""
+    if len(entrada) < 2:
+        return False
+    resto = iter(documento)
+    return all(palavra in resto for palavra in entrada)
 
 
 def socio_do_documento(quem: str, cadastro: dict) -> tuple[Pessoa, str] | None:
@@ -427,8 +435,9 @@ def socio_do_documento(quem: str, cadastro: dict) -> tuple[Pessoa, str] | None:
     `pix_reembolso.json`. Falha FECHADA em todo caminho, e a linha volta a
     ser "ATENÇÃO — documento declara reembolso":
 
-    - o nome casa por PALAVRAS do começo, e com UMA entrada só — dois
-      cadastros possíveis é escolher entre duas pessoas;
+    - todas as palavras da entrada (duas ou mais) aparecem, na ordem, no
+      nome do documento, e com UMA entrada só — dois cadastros possíveis é
+      escolher entre duas pessoas;
     - a chave tem de ser de pessoa (CPF, celular, e-mail ou aleatória) e, se
       for CPF, fechar o dígito verificador;
     - o documento (o que o segmento B declara) é o do cadastro ou, sem ele, a
@@ -440,8 +449,8 @@ def socio_do_documento(quem: str, cadastro: dict) -> tuple[Pessoa, str] | None:
         return None
     casadas = [dado for chave_nome, dado in cadastro.items()
                if dado.get("chave") and (
-                   _mesmo_comeco(alvo, _palavras(chave_nome))
-                   or _mesmo_comeco(alvo, _palavras(dado.get("nome"))))]
+                   _cadastro_cabe_no_documento(alvo, _palavras(chave_nome))
+                   or _cadastro_cabe_no_documento(alvo, _palavras(dado.get("nome"))))]
     if len(casadas) != 1:
         return None
     dado = casadas[0]

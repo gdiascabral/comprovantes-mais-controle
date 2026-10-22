@@ -446,3 +446,41 @@ def test_a6_chave_unica_continua_valendo():
         "PIX EMAIL fulano@exemplo.com") == "fulano@exemplo.com"
     assert relatorio.chave_dos_dados_bancarios(
         "CHAVE PIX CNPJ 11.222.333/0001-81") == "11.222.333/0001-81"
+
+
+# ==========================================================================
+# Revisão de dinheiro de 22/10/2026 — A3
+# ==========================================================================
+def test_a3_entrada_de_uma_palavra_nunca_casa(tmp_path):
+    """"FULANO" no cadastro (toda pessoa de aviso PAGAR PARA mora lá) não
+    pode pagar "REEMBOLSO FULANO OUTRAPESSOA" com a chave do Fulano."""
+    cad = _cadastro(tmp_path, {"FULANO": {"nome": "FULANO", "chave": CPF_SOCIO_UM}})
+    for quem in ("FULANO OUTRAPESSOA", "FULANO"):
+        assert reembolso.socio_do_documento(quem, cad) is None, quem
+
+
+def test_a3_todas_as_palavras_do_cadastro_tem_de_estar_no_documento(tmp_path):
+    cad = _cadastro(tmp_path, SOCIOS)
+    # Documento mais curto que o cadastro: "SOCIO" sozinho não é "SOCIO UM".
+    assert reembolso.socio_do_documento("SOCIO", cad) is None
+    # Primeira palavra igual, segunda diferente.
+    assert reembolso.socio_do_documento("SOCIO TRES", cad) is None
+    # Fora de ordem não vale.
+    assert reembolso.socio_do_documento("UM SOCIO", cad) is None
+    achado = reembolso.socio_do_documento("SOCIO UM SOBRENOME", cad)
+    assert achado and achado[0].nome == "SOCIO UM SOBRENOME"
+
+
+def test_a3_documento_que_so_comeca_pelo_nome_do_cadastro_nao_casa(tmp_path):
+    """O caso da revisão: "REEMBOLSO <primeiro nome> <outra pessoa>"."""
+    cad = _cadastro(tmp_path, {"FULANO DE TAL": {"nome": "FULANO DE TAL",
+                                                 "chave": CPF_SOCIO_UM}})
+    res = relatorio.montar_registros(
+        [_lanc(documentNumber="REEMBOLSO FULANO OUTRAPESSOA")], OC, {}, {},
+        cadastro_reembolso=cad)
+    assert _linha(res)["status"] == "ATENÇÃO — documento declara reembolso"
+
+
+def test_a3_documento_mais_curto_que_o_cadastro_nao_casa(tmp_path):
+    cad = _cadastro(tmp_path, {"SOCIO UM": SOCIOS["SOCIO UM"]})
+    assert reembolso.socio_do_documento("SOCIO", cad) is None

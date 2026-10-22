@@ -182,8 +182,8 @@ paths:
   (k) **Pedidos do dono de 22/10/2026** (`tests/test_reembolso_socio_e_autorizado.py`),
   os dois em falha FECHADA e só sem boleto anexado. **Reembolso de sócio**:
   "REEMBOLSO <pessoa>" no documento, com a pessoa no `pix_reembolso.json`
-  (`reembolso.socio_do_documento`: casa por palavras do começo e com UMA
-  entrada; chave de pessoa, CPF fechando o DV; documento = o cadastrado ou a
+  (`reembolso.socio_do_documento`: todas as palavras da entrada — duas ou
+  mais — aparecem, na ordem, no nome do documento, e com UMA entrada; chave de pessoa, CPF fechando o DV; documento = o cadastrado ou a
   própria chave CPF, e os dois têm de ser o mesmo) sai Pix pela chave dela,
   "APTO* (reembolso)", Obs "reembolso a <pessoa> — chave do cadastro", e o
   segmento B declara a pessoa (`reembolso=True`, desmarcado na remessa). Fora
