@@ -178,9 +178,12 @@ def aberturas_para_divida(aportadores, devedor: str, valor) -> dict:
     PARA CIMA no centavo. Como a `apurar` corta a dívida no centavo (ver
     `_linhas`), com partes que não dividem exato a dívida sairia um centavo ou
     mais acima de V; a diferença vai para o próprio devedor, como "já aportado"
-    (sempre >= 0 e menor que alguns centavos). Com 3 ou mais aportadores, um
-    outro que não seja o líder pode ficar devendo uma fração de centavo cortada
-    — a tela mostra o resultado.
+    (sempre >= 0 e menor que alguns centavos). Com 3 ou mais aportadores e
+    partes desiguais, o arredondamento para cima pode deixar um outro abaixo do
+    nível do líder (3:1:100 devendo 1,00 deixaria o terceiro "devendo" 0,66):
+    por isso cada outro é levado até o nível do líder cortado no centavo
+    (`aportou do líder × parte dele ÷ parte do líder`). Resultado: só o
+    devedor deve, e deve exatamente V.
 
     Peso ausente, zero, negativo ou que não é número levanta `ValueError` —
     nunca `DivisionByZero`."""
@@ -205,6 +208,9 @@ def aberturas_para_divida(aportadores, devedor: str, valor) -> dict:
         saida = {a.nome_erp: _sobe(valor * p / p_dev) for a, p in outros}
         l = _lider([(saida[a.nome_erp], p) for a, p in outros])
         lider, p_lider = outros[l]
+        for a, p in outros:      # ninguém além do devedor fica abaixo do líder
+            saida[a.nome_erp] = max(saida[a.nome_erp],
+                                    _corta(saida[lider.nome_erp] * p / p_lider))
         deveria_dev = _corta(saida[lider.nome_erp] * p_dev / p_lider)
     saida[quem.nome_erp] = deveria_dev - valor
     return {a.nome_erp: saida[a.nome_erp] for a in aportadores}
@@ -349,6 +355,10 @@ def apurar(conta: ContaControlada, recebimentos, apontamentos, hoje: datetime.da
             continue                 # o ERP já devia ter filtrado; aqui não entra
         p = apontado.get(r.id)
         if p is not None:
+            if r.valor <= 0:         # apontado não pode reduzir o aportado
+                ap.sem_dono.append(SemDono(r, "valor não positivo no Mais Controle — "
+                                              "recebimento assim não se aponta"))
+                continue
             if como_dinheiro(p.valor) != r.valor:
                 ap.sem_dono.append(SemDono(r, f"apontado com {brl(p.valor)}; agora é "
                                               f"{brl(r.valor)} no Mais Controle — aponte de novo"))

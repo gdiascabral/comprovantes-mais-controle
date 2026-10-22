@@ -308,3 +308,27 @@ def test_identificar_aportador_pelo_nome_completo():
 def test_abertura_sem_data_e_problema_e_nao_typeerror():
     assert "abertura" in " ".join(ca.problemas_da_conta(replace(_conta(), abertura=None), HOJE))
     assert ca.apurar(replace(_conta(), abertura=None), [], [], HOJE).erro
+
+
+# --- Conserto da revisão da Tarefa 3 ---
+
+@pytest.mark.parametrize("pesos, valor", [
+    (("3", "1", "100"), "1.00"), (("3", "1", "2"), "1.00"),
+    (("3", "1", "100"), "12345.67"), (("7", "3", "11"), "0.01")])
+def test_aberturas_para_divida_com_tres_so_o_devedor_deve(pesos, valor):
+    conta = ca.ContaControlada("CONTA MAE - BANCO", ABRE, id=1, aportadores=tuple(
+        ca.Aportador(f"FULANO P{i} SILVA", D(p), ZERO, id=10 + i) for i, p in enumerate(pesos)))
+    aberturas = ca.aberturas_para_divida(conta.aportadores, "FULANO P0 SILVA", D(valor))
+    assert all(v >= 0 for v in aberturas.values())
+    ap = ca.apurar(ca.com_aberturas(conta, aberturas), [], [], HOJE)
+    assert [l.diferenca for l in ap.linhas] == [D(valor), ZERO, ZERO]
+
+
+@pytest.mark.parametrize("valor", ["0.00", "-100.00"])
+def test_apontamento_de_valor_nao_positivo_vai_para_sem_dono(valor):
+    for aportador_id in (11, None):
+        p = ca.Apontamento("r1", aportador_id, D(valor), "x")
+        ap = ca.apurar(_conta(), [_rec("r1", valor, "OUTRA PESSOA")], [p], HOJE)
+        assert [s.recebimento.id for s in ap.sem_dono] == ["r1"]
+        assert "valor não positivo" in ap.sem_dono[0].motivo and not ap.apontados
+        assert [l.aportou for l in ap.linhas] == [D("50000.00"), ZERO]
