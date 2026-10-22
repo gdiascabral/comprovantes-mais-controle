@@ -6,7 +6,10 @@ from decimal import Decimal
 from pathlib import Path
 
 from pagamentos_dia import boletos_somados as bs
-from pagamentos_dia import confirmacao, ocr_boleto, relatorio
+from pagamentos_dia import confirmacao, ocr_boleto, relatorio, remessa_dia
+from pagamentos_dia import leitura_do_dia as ld
+from tela_do_dia import conferencia as tdc
+from tela_do_dia import geracao
 
 DIA = date(2026, 10, 21)
 CONTA = "CONTA EXEMPLO - SICOOB"
@@ -350,3 +353,212 @@ def test_titulo_lido_no_erp_com_mais_parcelas_nao_divide():
     titulo = {"T1": {"numberOfInstallments": 2}}
     (linha,) = _linhas(bs.dividir(base, entradas, titulos_erp=titulo))
     assert "2 parcelas no ERP" in linha["obs"]
+
+
+# ------------------------------------------------------ tarefa 3: só a tela nova divide
+def test_campo_livre_e_a_fatia_do_codigo_de_barras():
+    """Pina o slice: o campo livre lido de volta é o mesmo que gerou a linha."""
+    assert bs._campo_livre(gera_linha(40000, livre=OUTRO_LIVRE)) == OUTRO_LIVRE
+    assert bs._campo_livre(gera_linha(40000)) == "157070002443437524" + "0040000"
+
+
+def test_entradas_nascem_sem_dividir_e_o_remontar_de_sempre_fica(monkeypatch):
+    entradas = _entradas([_item()], [40000, 60000], titulos_erp=UMA_PARCELA)
+    assert entradas.dividir_boletos is False
+
+    def _nao(*_a, **_k):
+        raise AssertionError("a Remessa não divide")
+    monkeypatch.setattr(confirmacao.boletos_somados, "dividir", _nao)
+    assert [r["status"] for r in _linhas(confirmacao.remontar(entradas))] == [bs.STATUS_VARIOS]
+
+
+def test_com_a_chave_e_o_titulo_lido_o_remontar_divide():
+    entradas = _entradas([_item()], [40000, 60000], dividir_boletos=True,
+                         titulos_erp=UMA_PARCELA)
+    assert [r["parte"] for r in _linhas(confirmacao.remontar(entradas))] == ["1/2", "2/2"]
+
+
+def test_com_a_chave_mas_sem_o_titulo_lido_nao_divide():
+    entradas = _entradas([_item()], [40000, 60000], dividir_boletos=True)
+    (linha,) = _linhas(confirmacao.remontar(entradas))
+    assert "parte" not in linha and bs.NAO_SEI_AS_PARCELAS in linha["obs"]
+
+
+def test_desmarcar_o_lancamento_tira_as_n_linhas():
+    entradas = _entradas([_item()], [40000, 60000], dividir_boletos=True,
+                         titulos_erp=UMA_PARCELA)
+    res = confirmacao.remontar(entradas, {"L1"})
+    assert _linhas(res) == [] and [o["id"] for o in res.omitidos] == ["L1"]
+
+
+def test_o_remontar_dividido_continua_passando_os_liberados(monkeypatch):
+    """Achado 4: a divisão vem DEPOIS do `montar_registros`, que ainda recebe
+    `ids_liberados`."""
+    real, visto = relatorio.montar_registros, {}
+
+    def espiao(*a, **k):
+        visto.update(k)
+        return real(*a, **k)
+    monkeypatch.setattr(confirmacao.relatorio, "montar_registros", espiao)
+    entradas = _entradas([_item()], [40000, 60000], dividir_boletos=True,
+                         titulos_erp=UMA_PARCELA)
+    res = confirmacao.remontar(entradas, ids_liberados={"L9"})
+    assert visto["ids_liberados"] == {"L9"}
+    assert len(_linhas(res)) == 2
+
+
+def _cand(ident, codigo="", impedimento=""):
+    return remessa_dia.Candidato(id=ident, conta_erp=CONTA, tipo="Boleto", valor=1.0,
+                                 favorecido="F", descricao="D", status="APTO",
+                                 codigo_barras=codigo, impedimento=impedimento)
+
+
+def test_candidato_sem_parte_e_o_primeiro_de_sempre():
+    a, b, c = _cand("1"), _cand("2"), _cand("2")
+    analise = confirmacao.AnaliseRemessa(preparado={CONTA: [a, b, c]})
+    assert analise.candidato(CONTA, "2") is b
+    assert analise.candidato(CONTA, "") is None and analise.candidato(CONTA, "3") is None
+
+
+def test_candidato_da_parte_e_pela_linha_e_nao_pela_posicao():
+    l4, l6 = gera_linha(40000), gera_linha(60000)
+    c4 = _cand("L1", ocr_boleto.codigo_de_barras(l4))
+    c6 = _cand("L1", ocr_boleto.codigo_de_barras(l6))
+    analise = confirmacao.AnaliseRemessa(preparado={CONTA: [c6, c4]})   # fora de ordem
+    assert analise.candidato(CONTA, "L1", parte_linha=ocr_boleto.digitos(l4)) is c4
+    assert analise.candidato(CONTA, "L1", parte_linha=ocr_boleto.digitos(l6)) is c6
+    assert analise.candidato(CONTA, "L1", parte_linha=ocr_boleto.digitos(
+        gera_linha(12345))) is None
+
+
+def test_candidato_da_parte_impedida_so_com_o_mesmo_impedimento():
+    """Impedida, o Candidato não tem código de barras: só serve o impedimento,
+    e só quando todas as partes dizem o mesmo."""
+    linha = ocr_boleto.digitos(gera_linha(40000))
+    a, b = _cand("L1", impedimento="pagar à mão"), _cand("L1", impedimento="pagar à mão")
+    assert confirmacao.AnaliseRemessa(preparado={CONTA: [a, b]}).candidato(
+        CONTA, "L1", parte_linha=linha) is a
+    c = _cand("L1", impedimento="outro motivo")
+    assert confirmacao.AnaliseRemessa(preparado={CONTA: [a, c]}).candidato(
+        CONTA, "L1", parte_linha=linha) is None
+
+
+class _ApiDoDia:
+    """O mínimo que `ler_pagamentos` chama (formato de tests/test_leitura_do_dia.py),
+    mais o GET do título (`_base_legacy` + `_fetch_json`)."""
+    _req_anexos = ("https://exemplo.invalid/attachments/v2", {"authorization": "x"})
+    titulos_sem_leitura = ()
+
+    def __init__(self, itens, anexos, arquivos, titulos=None):
+        self._itens, self._anexos, self._arquivos = itens, anexos, arquivos
+        self._titulos = {"T1": {"numberOfInstallments": 1}} if titulos is None else titulos
+        self.lidos = []
+
+    def capturar_credenciais(self, log=print):
+        return True
+
+    def capturar_credenciais_anexos(self, launch_id):
+        return True
+
+    def listar_a_pagar(self, ini, fim, log=print):
+        return list(self._itens)
+
+    def anexos_de_titulos(self, ids, log=print, progresso=None, cancelar=None):
+        return {i: self._anexos.get(i, []) for i in ids}
+
+    def listar_overviews(self, ids, log=print, progresso=None, cancelar=None):
+        return {i: {} for i in ids}
+
+    def listar_participantes(self, log=print):
+        return {}
+
+    def baixar_anexo(self, url):
+        return self._arquivos[url]
+
+    def _base_legacy(self, caminho):
+        return f"https://exemplo.invalid/legacy/{caminho}", {"authorization": "x"}
+
+    def _fetch_json(self, url, headers):
+        self.lidos.append(url)
+        r = self._titulos.get(url.rsplit("/", 1)[1])
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+
+def _sem(*_a):
+    raise RuntimeError("sem nuvem/cadastro no teste")
+
+
+def _ler_o_dia(valores, titulos=None, log=print):
+    linhas = _linhas_dos_boletos(valores)
+    anexos = {"T1": [_anexo(f"boleto {i}", f"u{i}") for i in range(1, len(linhas) + 1)]}
+    arquivos = {f"u{i}": f"Banco Exemplo\n{ln}\n".encode("utf-8")
+                for i, ln in enumerate(linhas, 1)}
+    api = _ApiDoDia([_item()], anexos, arquivos, titulos)
+    leitura = ld.ler_pagamentos(
+        api, DIA, DIA,
+        abrir_historico=_sem, carregar_mapas=_sem, ler_qr=lambda d, pdf: [],
+        texto_pdf=lambda d: d.decode("utf-8"), ocr_pdf=lambda d, log=print: "",
+        ocr_imagem=lambda d: "", log=log)
+    return leitura, linhas, api
+
+
+def test_a_leitura_do_dia_divide_e_cada_linha_tem_o_seu_candidato():
+    leitura, linhas, api = _ler_o_dia([40000, 60000])
+    assert leitura.entradas.dividir_boletos is True
+    assert api.lidos == ["https://exemplo.invalid/legacy/trade-payables/T1"]
+    entram = [ln for g in leitura.grupos for ln in g.entram]
+    assert sorted(ln.valor for ln in entram) == [400.0, 600.0]
+    for ln in entram:   # cada linha com o candidato do SEU boleto
+        assert ocr_boleto.valor_da_linha(ln.dados) == ln.valor
+        assert ln.candidato.codigo_barras == ocr_boleto.codigo_de_barras(ln.dados)
+    assert {ln.candidato.codigo_barras for ln in entram} == {
+        ocr_boleto.codigo_de_barras(x) for x in linhas}
+    assert all(bs.status_dividido(2) in ln.situacao for ln in entram)
+    assert any("1 lançamento virou 2 boletos" in a for a in leitura.avisos)
+
+
+def test_a_leitura_do_dia_so_le_o_titulo_de_quem_e_candidato():
+    """Lançamento de um boleto só (não é 'vários boletos'): nenhum GET a mais."""
+    leitura, _l, api = _ler_o_dia([100000])
+    assert api.lidos == []
+    assert [ln.valor for g in leitura.grupos for ln in g.entram] == [1000.0]
+
+
+def test_leitura_do_titulo_que_falha_nao_divide_e_avisa_no_log():
+    for falha in ({"__erro": 500}, {}, None, RuntimeError("caiu")):
+        log = []
+        leitura, _l, _api = _ler_o_dia([40000, 60000], titulos={"T1": falha},
+                                       log=log.append)
+        regs = _linhas(leitura.resultado)
+        assert len(regs) == 1 and "parte" not in regs[0], falha
+        assert bs.NAO_SEI_AS_PARCELAS in regs[0]["obs"]
+        assert any("T1" in str(m) and "não li o título" in str(m) for m in log), falha
+
+
+def test_o_que_a_remessa_recebe_da_tela_nova_tem_as_n_linhas():
+    """Achado 6: a tela manda `geracao.para_a_remessa(resultado_da_tela(...))`."""
+    leitura, _l, _api = _ler_o_dia([40000, 60000])
+    res = geracao.para_a_remessa(geracao.resultado_da_tela(
+        leitura.entradas, leitura.grupos, tdc.Conferencia()))
+    assert sorted(r["valor"] for r in _linhas(res)) == [400.0, 600.0]
+
+
+def test_so_a_leitura_do_dia_liga_a_divisao():
+    arvore = ast.parse((RAIZ / "pagamentos_dia/leitura_do_dia.py").read_text(encoding="utf-8"))
+    (kw,) = [kw for no in ast.walk(arvore) if isinstance(no, ast.Call)
+             for kw in no.keywords if kw.arg == "dividir_boletos"]
+    assert isinstance(kw.value, ast.Constant) and kw.value.value is True
+    for pasta in ("pagamentos_dia", "tela_do_dia", "anexar"):
+        for caminho in (RAIZ / pasta).glob("*.py"):
+            if caminho.name == "leitura_do_dia.py":
+                continue
+            assert "dividir_boletos=True" not in caminho.read_text(encoding="utf-8"), caminho
+
+
+def test_a_remessa_nao_le_o_titulo_no_erp():
+    """O caminho da Remessa/Retorno não ganha leitura nenhuma do ERP."""
+    texto = (RAIZ / "pagamentos_dia/pagamentos_frame.py").read_text(encoding="utf-8")
+    assert "titulo_no_erp" not in texto and "titulos_erp" not in texto
+    assert "trade-payables/" not in texto

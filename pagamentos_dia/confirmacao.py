@@ -35,6 +35,7 @@ from __future__ import annotations
 import datetime as _dt
 from dataclasses import dataclass, field
 
+from . import boletos_somados
 from . import ocr_boleto
 from . import qr_pix
 from . import reembolso
@@ -73,6 +74,16 @@ class Entradas:
     titulos_nao_lidos: set = field(default_factory=set)
     #: Os Pix copia-e-cola lidos dos QR Codes dos anexos, por `downloadUrl`.
     qr_pix: dict = field(default_factory=dict)
+    #: Só a aba "Pagamentos do dia" liga (`leitura_do_dia`): o lançamento
+    #: cujos boletos somam EXATAMENTE o valor vira N linhas
+    #: (`boletos_somados`). A Remessa/Retorno monta as dela sem isto, e nada
+    #: muda para ela — nem quando recebe a apuração da tela nova, que já
+    #: chega dividida porque a chave viaja com as Entradas.
+    dividir_boletos: bool = False
+    #: `{tradePayableId: título inteiro lido no ERP}` — só dos títulos
+    #: candidatos a dividir, lidos pela `leitura_do_dia`. Título fora daqui
+    #: não divide ("não sei se o título tem outras parcelas").
+    titulos_erp: dict = field(default_factory=dict)
 
 
 def _periodo_legivel(periodo) -> str:
@@ -129,8 +140,12 @@ def remontar(entradas: Entradas, ids_nao_confirmados=(), *,
     `ids_liberados` são os que a tela "Pagamentos do dia" liberou com motivo
     (entrega 2): saem dos omitidos com o bloqueio anotado. Vazio — o caso de
     toda chamada da Remessa — dá o resultado de sempre.
+
+    Com `entradas.dividir_boletos` (só a tela nova), a divisão em N boletos
+    vem DEPOIS, sobre o resultado já com os liberados; desligada — o padrão,
+    e o caso de toda Entradas da Remessa — nem é chamada.
     """
-    return relatorio.montar_registros(
+    resultado = relatorio.montar_registros(
         entradas.selecionados, entradas.anexos, entradas.overviews,
         entradas.textos,
         pix_reembolso=reembolso.chaves(entradas.cadastro_reembolso),
@@ -143,6 +158,10 @@ def remontar(entradas: Entradas, ids_nao_confirmados=(), *,
         titulos_nao_lidos=entradas.titulos_nao_lidos,
         qr_pix=entradas.qr_pix,
         ids_liberados=ids_liberados)
+    if entradas.dividir_boletos:
+        resultado = boletos_somados.dividir(resultado, entradas,
+                                            titulos_erp=entradas.titulos_erp)
+    return resultado
 
 
 # --------------------------------------------------------------------------
@@ -215,14 +234,34 @@ class AnaliseRemessa:
     def estado_do_envio(self, ident: str) -> tuple:
         return self.envios.get(str(ident or ""), ("", ""))
 
-    def candidato(self, conta: str, ident: str):
+    def candidato(self, conta: str, ident: str, parte_linha: str = ""):
         """O `Candidato` do lançamento, ou None. Pelo id, e não pela posição:
-        a posição é um acordo com o laço do `preparar` que ninguém escreveu."""
+        a posição é um acordo com o laço do `preparar` que ninguém escreveu.
+
+        `parte_linha` (os dígitos da linha digitável de uma parte, o
+        `registro["parte_linha"]` do `boletos_somados`): o lançamento
+        dividido tem N linhas com o MESMO id, e cada uma acha o SEU
+        Candidato pelo código de barras daquele boleto — nunca pela posição.
+        O Candidato impedido não tem código de barras; aí só serve se TODOS
+        os do id disserem o mesmo impedimento (é só o motivo que a linha
+        mostra, e ele não sai na remessa). Fora isso, None: sem certeza de
+        qual é o candidato da parte, a linha fica sem ele. Sem `parte_linha`,
+        o primeiro do id — o de sempre."""
         ident = str(ident or "")
         if not ident:
             return None
-        return next((c for c in self.preparado.get(conta, ())
-                     if c.id == ident), None)
+        mesmos = [c for c in self.preparado.get(conta, ()) if c.id == ident]
+        if not parte_linha:
+            return mesmos[0] if mesmos else None
+        codigo = ocr_boleto.codigo_de_barras(parte_linha)
+        do_boleto = [c for c in mesmos if codigo and c.codigo_barras == codigo]
+        if len(do_boleto) == 1:
+            return do_boleto[0]
+        if (do_boleto or not mesmos
+                or any(c.codigo_barras or not c.impedimento for c in mesmos)
+                or len({c.impedimento for c in mesmos}) != 1):
+            return None
+        return mesmos[0]
 
 
 def chaves_do_preparar(contas: dict) -> tuple[list, list]:
@@ -803,7 +842,9 @@ def grupos_da_confirmacao(resultado, analise: AnaliseRemessa | None,
             ident = str(reg.get("id") or "")
             if _ja_pago(reg, por_id.get(ident) or {}):
                 continue
-            candidato = analise.candidato(conta, ident) if analise else None
+            # A parte de um lançamento dividido acha o candidato do SEU boleto.
+            candidato = (analise.candidato(conta, ident, reg.get("parte_linha") or "")
+                         if analise else None)
             texto, estado = situacao_da_linha(
                 reg, candidato, sem_remessa.get(conta, ""), conferidas,
                 envio_conferido=(analise.envio_conferido(ident)
