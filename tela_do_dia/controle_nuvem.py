@@ -33,6 +33,31 @@ def _anotar_na_auditoria(acao: str, detalhe: str) -> None:
     auditoria.gravar_agora(acao, detalhe)
 
 
+class NaoGravou(RuntimeError):
+    """O banco respondeu sem erro, mas a linha não mudou (RLS barrou, ou a
+    linha sumiu). Nunca vira "gravado" na auditoria."""
+
+
+def _alterar_um(token: str, tabela: str, filtro: str, mudancas: dict, o_que: str) -> None:
+    from nuvem import rest
+    feitas = rest.alterar(tabela, token, filtro, mudancas)
+    if len(feitas) != 1:
+        raise NaoGravou(f"Não consegui gravar {o_que}: o banco não alterou a linha (sem "
+                        "permissão, ou outro administrador a mexeu). Atualize a aba e tente de novo.")
+
+
+def _apagar_conferido(token: str, tabela: str, filtro: str, quantas: int, o_que: str) -> None:
+    """Apaga e CONFERE: lê antes (têm de ser `quantas`) e depois (nenhuma)."""
+    from nuvem import rest
+    antes = rest.ler(tabela, token, colunas="id", filtro=filtro)
+    if len(antes) != quantas:
+        raise NaoGravou(f"Não consegui apagar {o_que}: já não está na nuvem como estava. "
+                        "Atualize a aba.")
+    rest.apagar(tabela, token, filtro)
+    if rest.ler(tabela, token, colunas="id", filtro=filtro):
+        raise NaoGravou(f"Não consegui apagar {o_que}: o banco não apagou (sem permissão?).")
+
+
 def _dec(valor, o_que: str) -> Decimal:
     try:
         d = Decimal(str(valor))
@@ -89,7 +114,10 @@ def ler(token: str) -> tuple:
 
 
 def gravar_conta(token: str, conta: ContaControlada, hoje: datetime.date, outras=(),
-                 anotar=None) -> None:
+                 anotar=None, vistos=None) -> None:
+    """`vistos` = ids dos aportadores que o formulário CARREGOU desta conta
+    (obrigatório para conta já gravada). Se o banco tiver outro, um
+    administrador o incluiu depois: recusa sem gravar, para nunca apagá-lo."""
     from nuvem import rest
     erros = problemas_da_conta(conta, hoje, outras)
     if erros:
@@ -102,6 +130,14 @@ def gravar_conta(token: str, conta: ContaControlada, hoje: datetime.date, outras
         antes = rest.ler(APORTADORES, token, colunas="id,nome_erp,peso,abertura",
                          filtro=f"conta_id=eq.{int(conta.id)}")
         ficam = {util.norm_espaco(a.nome_erp) for a in conta.aportadores}
+        if vistos is None:
+            raise ValueError("Faltou informar os aportadores que o formulário carregou.")
+        conhecidos = {int(v) for v in vistos}
+        novos_no_banco = [l["nome_erp"] for l in antes if int(l["id"]) not in conhecidos]
+        if novos_no_banco:
+            raise ValueError(f"{', '.join(novos_no_banco)} foi incluído(s) por outro administrador "
+                             "depois que você abriu a conta. Nada foi gravado: atualize a aba e "
+                             "refaça a edição.")
         sair = [l for l in antes if util.norm_espaco(l["nome_erp"]) not in ficam]
         if sair:
             # ANTES de escrever qualquer coisa: o banco recusaria o apagar no
@@ -113,12 +149,14 @@ def gravar_conta(token: str, conta: ContaControlada, hoje: datetime.date, outras
             if presos:
                 raise ValueError(f"{', '.join(presos)} tem recebimento(s) apontado(s) nesta "
                                  "conta: desfaça os apontamentos antes de tirá-lo(s).")
+    escreveu = False
     try:
         if conta.id is None:
             ident = int(rest.inserir(CONTAS, token, [campos])[0]["id"])
         else:
             ident = int(conta.id)
-            rest.alterar(CONTAS, token, f"id=eq.{ident}", campos)
+            _alterar_um(token, CONTAS, f"id=eq.{ident}", campos, "a conta")
+        escreveu = True
         por_chave = {util.norm_espaco(l["nome_erp"]): l for l in antes}
         novos, mudados = [], []
         for a in conta.aportadores:
@@ -134,11 +172,14 @@ def gravar_conta(token: str, conta: ContaControlada, hoje: datetime.date, outras
         if novos:
             rest.inserir(APORTADORES, token, novos, devolver=False)
         for i, linha in mudados:
-            rest.alterar(APORTADORES, token, f"id=eq.{i}", linha)
+            _alterar_um(token, APORTADORES, f"id=eq.{i}", linha, "um aportador")
         if sair:
-            rest.apagar(APORTADORES, token,
-                        "id=in.(" + ",".join(str(int(l["id"])) for l in sair) + ")")
+            _apagar_conferido(token, APORTADORES,
+                              "id=in.(" + ",".join(str(int(l["id"])) for l in sair) + ")",
+                              len(sair), "aportador(es) retirado(s)")
     except Exception as e:
+        if not escreveu or isinstance(e, (rest.SemRede, rest.PrecisaEntrar)):
+            raise      # nada gravado, ou erro que o chamador trata como está
         raise RuntimeError(f"{e}\n\nA gravação parou no meio. Atualize a aba para ver o que "
                            "ficou na nuvem e grave de novo o que você quer.") from e
     anotar("Controle de aportes: conta gravada",
@@ -171,11 +212,26 @@ def apontar(token: str, conta: ContaControlada, recebimento, aportador_id, motiv
     filtro = (f"conta_id=eq.{int(conta_id)}"
               f"&recebimento_erp=eq.{quote(recebimento.id, safe='')}")
     achados = rest.ler(APONTAMENTOS, token, colunas="id", filtro=filtro)
+    if not achados:
+        try:
+            rest.inserir(APONTAMENTOS, token, [dict(corpo, conta_id=int(conta_id),
+                                                    recebimento_erp=recebimento.id)],
+                         devolver=False)
+        except rest.RecusadoPeloBanco as e:
+            if "duplicate key" not in str(e) and "409" not in str(e):
+                raise
+            # corrida: outro administrador apontou este recebimento agora
+            achados = rest.ler(APONTAMENTOS, token, colunas="id", filtro=filtro)
+            if not achados:
+                raise NaoGravou("Outro administrador acabou de apontar este recebimento; "
+                                "atualize a aba.") from e
     if achados:
-        rest.alterar(APONTAMENTOS, token, f"id=eq.{int(achados[0]['id'])}", corpo)
-    else:
-        rest.inserir(APONTAMENTOS, token, [dict(corpo, conta_id=int(conta_id),
-                                                recebimento_erp=recebimento.id)], devolver=False)
+        try:
+            _alterar_um(token, APONTAMENTOS, f"id=eq.{int(achados[0]['id'])}", corpo,
+                        "o apontamento")
+        except NaoGravou as e:
+            raise NaoGravou("Outro administrador acabou de apontar este recebimento; "
+                            "atualize a aba.") from e
     (anotar or _anotar_na_auditoria)(
         "Controle de aportes: recebimento apontado",
         f"conta {int(conta_id)} | recebimento {recebimento.id} | {corpo['valor']} | "
@@ -183,7 +239,7 @@ def apontar(token: str, conta: ContaControlada, recebimento, aportador_id, motiv
 
 
 def desfazer(token: str, apontamento_id: int, anotar=None) -> None:
-    from nuvem import rest
-    rest.apagar(APONTAMENTOS, token, f"id=eq.{int(apontamento_id)}")
+    _apagar_conferido(token, APONTAMENTOS, f"id=eq.{int(apontamento_id)}", 1,
+                      "o apontamento")
     (anotar or _anotar_na_auditoria)("Controle de aportes: apontamento desfeito",
                                      f"apontamento {int(apontamento_id)}")

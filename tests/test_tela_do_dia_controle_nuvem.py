@@ -20,6 +20,8 @@ class Banco:
     def __init__(self):
         self.t = {cn.CONTAS: [], cn.APORTADORES: [], cn.APONTAMENTOS: []}
         self.ordem, self._id = [], 0
+        self.barra_alterar = self.barra_apagar = False   # simula a RLS
+        self.ao_inserir = None                           # gancho de corrida
 
     @staticmethod
     def _casa(linha, filtro):
@@ -38,6 +40,9 @@ class Banco:
 
     def inserir(self, tabela, _tok, linhas, devolver=True):
         self.ordem.append(f"inserir {tabela}")
+        if self.ao_inserir:
+            gancho, self.ao_inserir = self.ao_inserir, None
+            gancho(self)
         saida = []
         for l in linhas:
             self._id += 1
@@ -48,13 +53,17 @@ class Banco:
 
     def alterar(self, tabela, _tok, filtro, mudancas):
         self.ordem.append(f"alterar {tabela}")
+        feitas = []
         for l in self.t[tabela]:
-            if self._casa(l, filtro):
+            if not self.barra_alterar and self._casa(l, filtro):
                 l.update(mudancas)
-        return []
+                feitas.append(dict(l))
+        return feitas
 
     def apagar(self, tabela, _tok, filtro):
         self.ordem.append(f"apagar {tabela}")
+        if self.barra_apagar:
+            return
         self.t[tabela] = [l for l in self.t[tabela] if not self._casa(l, filtro)]
 
 
@@ -72,6 +81,10 @@ def _conta(**kw):
         ca.Aportador(ALFA, D(1), D("50000.00")), ca.Aportador(BETA, D(1), D("0.00"))))
     base.update(kw)
     return ca.ContaControlada(**base)
+
+
+def _ids(conta):
+    return [a.id for a in conta.aportadores]
 
 
 def _salva():
@@ -97,7 +110,8 @@ def test_editar_muda_so_o_que_mudou_e_insere_antes_de_apagar(banco):
     banco.ordem.clear()
     nova = ca.ContaControlada(salva.conta_erp, ABRE, id=salva.id, aportadores=(
         ca.Aportador(ALFA, D(1), D("40000.00")), ca.Aportador("CICLANO GAMA", D(1))))
-    cn.gravar_conta("tok", nova, HOJE, [salva], anotar=lambda *a: None)
+    cn.gravar_conta("tok", nova, HOJE, [salva], anotar=lambda *a: None,
+                    vistos=_ids(salva))
     assert banco.ordem == [f"alterar {cn.CONTAS}", f"inserir {cn.APORTADORES}",
                            f"alterar {cn.APORTADORES}", f"apagar {cn.APORTADORES}"]
     assert {l["nome_erp"] for l in banco.t[cn.APORTADORES]} == {ALFA, "CICLANO GAMA"}
@@ -112,7 +126,8 @@ def test_nao_tira_aportador_com_apontamento_e_nao_escreve_nada(banco):
     banco.ordem.clear()
     sem_beta = ca.ContaControlada(salva.conta_erp, ABRE, (salva.aportadores[0],), id=salva.id)
     with pytest.raises(ValueError, match=BETA):
-        cn.gravar_conta("tok", sem_beta, HOJE, [salva], anotar=lambda *a: None)
+        cn.gravar_conta("tok", sem_beta, HOJE, [salva], anotar=lambda *a: None,
+                        vistos=_ids(salva))
     assert banco.ordem == []
 
 
@@ -160,3 +175,119 @@ def test_apontar_nao_exige_a_coluna_de_autor(banco):
     cn.apontar("tok", _salva(), ca.Recebimento("r1", HOJE, D("10.00"), "X"), 3, "pix",
                anotar=lambda *a: None)
     assert "alterado_por" not in banco.t[cn.APONTAMENTOS][0]
+
+
+def _gravada(banco):
+    cn.gravar_conta("tok", _conta(), HOJE, anotar=lambda *a: None)
+    return cn.ler("tok")[0][0]
+
+
+def test_alterar_barrado_pela_rls_nao_vira_gravado(banco):
+    salva = _gravada(banco)
+    banco.barra_alterar = True
+    anotado = []
+    with pytest.raises(cn.NaoGravou):
+        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda a, d: anotado.append(a),
+                        vistos=_ids(salva))
+    assert anotado == []
+
+
+def test_apagar_barrado_pela_rls_nao_vira_desfeito(banco):
+    rec = ca.Recebimento("r1", HOJE, D("10.00"), "X")
+    cn.apontar("tok", _salva(), rec, 3, "pix", anotar=lambda *a: None)
+    apont = cn.ler("tok")[1][7][0]
+    banco.barra_apagar = True
+    anotado = []
+    with pytest.raises(cn.NaoGravou):
+        cn.desfazer("tok", apont.id, anotar=lambda a, d: anotado.append(a))
+    assert anotado == [] and len(banco.t[cn.APONTAMENTOS]) == 1
+    banco.barra_apagar = False
+    with pytest.raises(cn.NaoGravou):           # linha que já sumiu
+        cn.desfazer("tok", 999, anotar=lambda a, d: anotado.append(a))
+    assert anotado == []
+
+
+def test_apagar_aportador_barrado_pela_rls_avisa(banco):
+    salva = _gravada(banco)
+    sem_beta = ca.ContaControlada(salva.conta_erp, ABRE, (salva.aportadores[0],), id=salva.id)
+    banco.barra_apagar = True
+    with pytest.raises(RuntimeError, match="parou no meio"):
+        cn.gravar_conta("tok", sem_beta, HOJE, [salva], anotar=lambda *a: None,
+                        vistos=_ids(salva))
+
+
+def test_corrida_no_apontamento_vira_correcao(banco):
+    from nuvem import rest
+    rec = ca.Recebimento("r1", HOJE, D("10.00"), "X")
+
+    def outro_admin(b):
+        b.t[cn.APONTAMENTOS].append(dict(id=50, conta_id=7, recebimento_erp="r1",
+                                         aportador_id=4, valor="10.00", motivo="outro"))
+        raise rest.RecusadoPeloBanco("duplicate key value [HTTP 409]")
+    banco.ao_inserir = outro_admin
+    cn.apontar("tok", _salva(), rec, 3, "meu", anotar=lambda *a: None)
+    linhas = banco.t[cn.APONTAMENTOS]
+    assert len(linhas) == 1 and linhas[0]["aportador_id"] == 3 and linhas[0]["motivo"] == "meu"
+
+
+def test_corrida_que_ainda_falha_da_mensagem_em_portugues(banco):
+    from nuvem import rest
+    rec = ca.Recebimento("r1", HOJE, D("10.00"), "X")
+
+    def estranho(b):
+        raise rest.RecusadoPeloBanco("duplicate key value [HTTP 409]")
+    banco.ao_inserir = estranho
+    with pytest.raises(cn.NaoGravou, match="Outro administrador"):
+        cn.apontar("tok", _salva(), rec, 3, "meu", anotar=lambda *a: None)
+
+
+def test_recusa_do_banco_que_nao_e_duplicata_sobe_como_esta(banco):
+    from nuvem import rest
+
+    def nega(b):
+        raise rest.RecusadoPeloBanco("violates check constraint")
+    banco.ao_inserir = nega
+    with pytest.raises(rest.RecusadoPeloBanco):
+        cn.apontar("tok", _salva(), ca.Recebimento("r1", HOJE, D("10.00"), "X"), 3, "m",
+                   anotar=lambda *a: None)
+
+
+def test_aportador_incluido_por_outro_admin_nao_e_apagado(banco):
+    salva = _gravada(banco)
+    banco.t[cn.APORTADORES].append(dict(id=99, conta_id=salva.id, nome_erp="CICLANO GAMA",
+                                        peso="1", abertura="0.00"))
+    banco.ordem.clear()
+    with pytest.raises(ValueError, match="CICLANO GAMA"):
+        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None,
+                        vistos=_ids(salva))
+    assert banco.ordem == []
+
+
+def test_conta_existente_sem_vistos_recusa(banco):
+    salva = _gravada(banco)
+    with pytest.raises(ValueError, match="carregou"):
+        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None)
+
+
+def test_sem_rede_ou_login_vencido_sobe_como_esta(banco, monkeypatch):
+    from nuvem import rest
+    salva = _gravada(banco)
+    for erro in (rest.SemRede("x"), rest.PrecisaEntrar("y")):
+        def falha(*a, _e=erro, **k):
+            raise _e
+        monkeypatch.setattr(rest, "alterar", falha)   # nada gravado ainda
+        with pytest.raises(type(erro)):
+            cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None,
+                            vistos=_ids(salva))
+
+
+def test_le_numeros_que_vieram_como_float_no_json(banco):
+    banco.t[cn.CONTAS].append(dict(id=1, conta_erp="C", abertura="2026-10-21", ativa=True))
+    banco.t[cn.APORTADORES].append(dict(id=2, conta_id=1, nome_erp=ALFA, peso=1.0,
+                                        abertura=50000.0))
+    banco.t[cn.APONTAMENTOS].append(dict(id=3, conta_id=1, recebimento_erp="r", aportador_id=2,
+                                         valor=10.5, motivo="m"))
+    contas, apont = cn.ler("tok")
+    assert contas[0].aportadores[0].peso == D(1)
+    assert contas[0].aportadores[0].abertura == D("50000.00")
+    assert apont[1][0].valor == D("10.50")
