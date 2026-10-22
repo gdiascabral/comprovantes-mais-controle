@@ -168,7 +168,7 @@ class AportesFrame(ttk.Frame):
                                           width=14)).pack(side="left")
 
         # São ~19 contas e ~440 participantes: rolar a lista até achar
-        # "Morais Participações - SUBCONTA 55696-3" é trabalho que a máquina
+        # "EMPRESA X - SUBCONTA 11111-1" é trabalho que a máquina
         # faz melhor. Digitar no PRÓPRIO campo filtra a lista dele.
         linha2 = ttk.Frame(form)
         linha2.pack(fill="x", pady=px((12, 0)))
@@ -218,7 +218,7 @@ class AportesFrame(ttk.Frame):
                   justify="left",
                   text="Em Pagou e Recebeu, comece a digitar e a lista mostra o "
                        "que contém as letras — sem acento e por pedaço do nome "
-                       "(\"696\", \"livia\"). ↑↓ andam, Enter escolhe, Esc fecha."
+                       "(\"111\", \"fulan\"). ↑↓ andam, Enter escolhe, Esc fecha."
                   ).pack(anchor="w", pady=px((10, 0)))
 
         # É esta que o Enter dispara, e não "Lançar no Mais Controle": num

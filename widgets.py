@@ -3792,7 +3792,7 @@ class ComboBusca(ttk.Combobox):
     o próprio buscador, e cada um filtra o seu.
 
     Compara sem acento e sem caixa, por PEDAÇO em qualquer posição (`util.
-    filtrar`): "696" acha a subconta 55696-3, "livia" acha "Livian".
+    filtrar`): "111" acha a subconta 11111-1, "fulan" acha "Fulana".
 
     **A lista abre SOZINHA enquanto se digita** (14/10/2026, pedido do dono:
     "comecei a escrever, tem que aparecer as opções"). Até então ela só abria
