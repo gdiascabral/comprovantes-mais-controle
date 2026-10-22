@@ -689,7 +689,49 @@ def test_o_inicio_le_eventos_da_anx2_sem_quebrar(monkeypatch):
     f._pintar_rotinas = lambda ultimos: pintado.update(rotinas=ultimos)
     f._pintar_atividade = lambda evs: pintado.update(atividade=evs)
     f.ao_abrir()
-    assert pintado["kpis"]["anx"]["anexados"] == 3          # o Anexar de sempre intacto
+    assert pintado["kpis"]["anx"]["anexados"] == 3          # cada aba com os seus
     assert pintado["kpis"]["anx2"]["anexados"] == 7
     assert pintado["rotinas"]["anx"]["aba"] == "anx"
     assert len(pintado["atividade"]) == 2
+
+
+class _Cartao:
+    def __init__(self):
+        self.valor = None
+
+    def definir(self, valor, apoio="", **_k):
+        self.valor = (valor, apoio)
+
+
+def _kpi_anexados(monkeypatch, eventos):
+    import widgets
+    from inicio import inicio_frame
+    monkeypatch.setattr(widgets, "atividades", lambda n: list(eventos))
+    f = inicio_frame.InicioFrame.__new__(inicio_frame.InicioFrame)
+    f.kpis = {k: _Cartao() for k in ("hoje", "sem_remessa", "anexados", "pendencias")}
+    f._pintar_rotinas = lambda ultimos: None
+    f._pintar_atividade = lambda evs: None
+    f.ao_abrir()
+    return f.kpis["anexados"].valor
+
+
+def _ev(aba, anexados, pagos, horas_atras):
+    import datetime as dt
+    quando = (dt.datetime.now() - dt.timedelta(hours=horas_atras)).isoformat(timespec="seconds")
+    if quando[:7] != dt.datetime.now().isoformat()[:7]:      # virada do mês: fica no mês
+        quando = dt.datetime.now().replace(day=1, hour=0, minute=0).isoformat()
+    return {"quando": quando, "aba": aba, "evento": "Casar e anexar", "resultado": "ok",
+            "numeros": {"anexados": anexados, "pagos": pagos}}
+
+
+def test_anexados_no_mes_soma_a_anexar_e_a_anexar_nova_sem_contar_em_dobro(monkeypatch):
+    """Para o dono é tudo anexo. Cada aba entra com a SUA última rodada (a
+    regra de sempre do Início); a rodada mais velha da cópia não soma de novo."""
+    eventos = [_ev("anx2", 7, 9, 0), _ev("anx2", 5, 6, 1), _ev("anx", 3, 4, 2)]
+    assert _kpi_anexados(monkeypatch, eventos) == ("10", "76% dos pagos")
+
+
+def test_anexados_no_mes_so_com_uma_das_duas(monkeypatch):
+    assert _kpi_anexados(monkeypatch, [_ev("anx", 3, 4, 0)]) == ("3", "75% dos pagos")
+    assert _kpi_anexados(monkeypatch, [_ev("anx2", 7, 9, 0)]) == ("7", "77% dos pagos")
+    assert _kpi_anexados(monkeypatch, [])[0] == "—"
