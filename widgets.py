@@ -255,7 +255,10 @@ ICONES_FAMILIAS = ("Segoe Fluent Icons", "Segoe MDL2 Assets")
 #:
 #: Nome oficial de cada um, na tabela da Microsoft (confira por lá, não por
 #: aqui): Home, Download, Cut, Attach, CheckList, PaymentCard, Calendar,
-#: Calculator, ReportDocument, Bank, Document, Send e Contact.
+#: Calculator, ReportDocument, Bank, Document, Send e Contact. O décimo
+#: quarto, BulletedList (Pagamentos do dia, 21/10/2026), entrou pela tabela da
+#: Microsoft e ainda pede a conferência na galeria (`python -m
+#: ferramentas.galeria`, máquina livre).
 ICONES_FLUENT = {
     "▦": "\uE80F",      # Home           — Início
     "⬇": "\uE896",      # Download       — Baixar Comprovantes
@@ -270,6 +273,7 @@ ICONES_FLUENT = {
     "📑": "\uE8A5",      # Document       — Contratos
     "📤": "\uE724",      # Send           — Acessorias
     "👥": "\uE77B",      # Contact        — Usuários (o item de admin, no rodapé)
+    "🧾": "\uE8FD",      # BulletedList   — Pagamentos do dia
 }
 
 #: A MESMA tabela para o Windows 10. Os valores coincidem hoje — ver acima —, e
@@ -290,6 +294,7 @@ ICONES_MDL2 = {
     "📑": "\uE8A5",      # Document
     "📤": "\uE724",      # Send
     "👥": "\uE77B",      # Contact
+    "🧾": "\uE8FD",      # BulletedList
 }
 
 ICONES_POR_FAMILIA = {
@@ -2162,7 +2167,7 @@ class BarraTopo(tk.Frame):
             x = self.busca.winfo_rootx()
             y = self.busca.winfo_rooty() + self.busca.winfo_height() + px(3)
             # Puxada para dentro da tela: com `overrideredirect` o Windows não
-            # reposiciona nada sozinho, e numa janela baixa a lista das doze
+            # reposiciona nada sozinho, e numa janela baixa a lista das treze
             # telas nasceria com metade fora do monitor.
             x = max(min(x, top.winfo_screenwidth() - larg - px(8)), px(8))
             if y + alt > top.winfo_screenheight() - px(8):
@@ -2593,7 +2598,7 @@ class PainelMenu(tk.Frame):
         self.rodape = tk.Frame(self, highlightthickness=0)
         self.rodape.pack(side="bottom", fill="x", padx=px(14),
                          pady=px((8, 12)))
-        # O corpo ROLA. Com os dois grupos abertos são doze telas e quatro
+        # O corpo ROLA. Com os dois grupos abertos são treze telas e quatro
         # rótulos de seção, e numa tela baixa (1366x768) ou a 150% isso pode
         # passar da altura da coluna — o rodapé, empacotado antes, continua
         # no lugar, e são os itens de baixo que ficariam fora de alcance.

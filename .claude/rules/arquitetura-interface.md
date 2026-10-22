@@ -22,9 +22,10 @@ paths:
   navegador. **O estado do navegador era o pior deles**: é a informação que se
   procura ANTES de clicar noutra aba, e ficava no ponto mais baixo da tela,
   longe dos itens do menu.
-  As doze telas em quatro seções: VISÃO GERAL (Início), COMPROVANTES (Baixar
+  As treze telas em quatro seções: VISÃO GERAL (Início), COMPROVANTES (Baixar
   Comprovantes, Separar e Renomear, Anexar, Conferência, Aportes) e os dois
-  grupos que abrem e fecham — DIÁRIO (Remessa/Retorno, Saldo de pagamentos) e
+  grupos que abrem e fecham — DIÁRIO (Pagamentos do dia — desde 21/10/2026,
+  ver `arquitetura-tela-do-dia.md` —, Remessa/Retorno, Saldo de pagamentos) e
   MENSAL (Relatório Mensal, Extratos Sicoob, Contratos, Acessorias). "Baixar"
   vem antes de "Separar" e "Anexar" porque é a ordem do dia. Os rótulos
   encurtaram junto com a coluna ("Anexar Comprovantes" dentro de um menu
@@ -309,7 +310,7 @@ paths:
   trabalho nenhum.
   **O `ItemMenu` entra no Tab** (PR #28). Ele era `tk.Frame` e só escutava
   `<Button-1>`, `<Enter>` e `<Leave>`: quem usa só o teclado alcançava DIÁRIO e
-  MENSAL — que são `ttk.Button` — e não alcançava NENHUMA das doze telas que
+  MENSAL — que são `ttk.Button` — e não alcançava NENHUMA das doze telas (hoje treze) que
   eles agrupam, o contrário da regra escrita dois parágrafos acima do código
   que a desmentia. Hoje tem `takefocus=1`, e `<Return>` e `<space>` disparam o
   **mesmo** `_comando` do clique: um caminho só, senão existiria a chance de o
@@ -355,7 +356,7 @@ paths:
   primeiro campo da aba aberta — procurar lançamento pede um índice do ERP que
   ninguém tem, e um campo que promete três coisas e não faz nenhuma ensina a
   pessoa a não usar campo nenhum. Hoje a `BarraTopo.DICA` é "Ir para uma
-  tela…  (Ctrl+K)", digitar filtra os nomes das doze telas por `util.filtrar`
+  tela…  (Ctrl+K)", digitar filtra os nomes das treze telas por `util.filtrar`
   (sem acento, sem caixa, pedaço em qualquer posição), ↑/↓ andam pela lista e
   Enter pula para a realçada; texto sem par **não move o foco** e a lista diz
   que não achou, porque campo que não responde a nada parece travado. Duas

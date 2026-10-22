@@ -43,6 +43,7 @@ from relatorios.relatorio_frame import RelatorioFrame
 from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
 from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
+from tela_do_dia.frame import TelaDoDiaFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
 from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
@@ -322,6 +323,11 @@ def main():
     # Conciliação volta a dividir navegador e thread do Anexar: é o mesmo ERP,
     # e ele só aceita uma sessão por usuário.
     aba_con = ConciliacaoFrame(conteudo, aba_anx)
+    # Pagamentos do dia divide navegador e thread do Anexar, como a Remessa e o
+    # Saldo; recebe as duas abas para onde manda trabalho (Aportes e Remessa).
+    aba_dia = TelaDoDiaFrame(conteudo, aba_anx)
+    aba_dia.aba_aportes = aba_apt
+    aba_dia.aba_remessa = aba_pag
     # Contratos usa o mesmo ERP: divide navegador e thread, como as outras.
     aba_ctr = ContratosFrame(conteudo, aba_anx)
     # Acessórias NÃO divide o navegador do escritório contábil (terceiro
@@ -341,7 +347,8 @@ def main():
     quadros = {"ini": aba_ini, "sep": aba_sep, "anx": aba_anx,
                "conf": aba_conf, "apt": aba_apt, "rel": aba_rel,
                "pag": aba_pag, "ext": aba_ext, "con": aba_con,
-               "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc}
+               "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc,
+               "dia": aba_dia}
     atual = {"nome": None}
     itens = {}
 
@@ -390,6 +397,18 @@ def main():
         # `after_idle`: a aba acabou de ser empacotada e ainda não tem
         # geometria, e é a geometria que decide qual campo é o de cima.
         root.after_idle(lambda: _focar_primeiro(quadros[nome]))
+
+    # Para onde a aba Pagamentos do dia leva o trabalho que manda adiante.
+    # Devolve se mostrou: sem a aba no papel de quem entrou, a tela do dia não
+    # entrega nada a ela (a pessoa não veria o que chegou).
+    def _abrir_se_pode(chave: str) -> bool:
+        if not _pode(chave):
+            return False
+        mostrar(chave)
+        return True
+
+    aba_dia.abrir_aportes = lambda: _abrir_se_pode("apt")
+    aba_dia.abrir_remessa = lambda: _abrir_se_pode("pag")
 
     def _focar_primeiro(quadro):
         try:
@@ -462,7 +481,7 @@ def main():
         #
         # Até 02/09/2026 estes dois cabeçalhos eram as ÚNICAS paradas de Tab da
         # coluna: o `ItemMenu` não entrava no foco, então o teclado abria e
-        # fechava os grupos sem alcançar uma só das doze telas dentro deles. A
+        # fechava os grupos sem alcançar uma só das doze telas (hoje treze). A
         # regra escrita aqui valia para o cabeçalho e era desmentida logo
         # abaixo; agora o item também entra no Tab, e o Tab percorre a coluna
         # inteira na ordem em que ela é lida.
@@ -486,7 +505,8 @@ def main():
     # nasceu: "Remessa/Retorno" gera a planilha do dia e também a remessa e o
     # retorno CNAB, e "Saldo de pagamentos" existe para dizer quanto falta em
     # cada conta para os pagamentos do dia fecharem.
-    _grupo("diario", "DIÁRIO", (("pag", "🗓", "Remessa/Retorno"),
+    _grupo("diario", "DIÁRIO", (("dia", "🧾", "Pagamentos do dia"),
+                                ("pag", "🗓", "Remessa/Retorno"),
                                 ("con", "⚖", "Saldo de pagamentos")))
     _grupo("mensal", "MENSAL", (("rel", "📊", "Relatório Mensal"),
                                 ("ext", "🏦", "Extratos Sicoob"),
@@ -691,8 +711,8 @@ def main():
     # ---------------- o menu pelo teclado
     # O `widgets.ItemMenu` passou a entrar no Tab (antes só escutava o clique,
     # e quem usa só o teclado alcançava DIÁRIO e MENSAL sem alcançar nenhuma
-    # das doze telas que eles agrupam). Tab percorre a coluna; estes atalhos
-    # são o caminho DIRETO — doze telas atrás de doze Tabs é alcançável, não é
+    # das treze telas do menu). Tab percorre a coluna; estes atalhos
+    # são o caminho DIRETO — treze telas atrás de treze Tabs é alcançável, não é
     # usável.
     #
     # A ordem é a do menu, e sai do próprio `itens`: o `_item` insere na ordem
@@ -735,8 +755,9 @@ def main():
 
     def _atalho_numero(ev=None):
         # Ctrl+1..9 alcançam as NOVE primeiras telas do menu. Não há Ctrl+0 nem
-        # Ctrl+10: dez teclas de dígito para doze telas escolheria duas para
-        # ficar de fora sem critério nenhum. Da décima em diante é o Ctrl+Tab.
+        # Ctrl+10: dez teclas de dígito para treze telas (catorze com a de
+        # Usuários, do admin) escolheria quais ficam de fora sem critério
+        # nenhum. Da décima em diante é o Ctrl+Tab.
         try:
             _ir_para(int(ev.keysym) - 1)
         except (AttributeError, ValueError):

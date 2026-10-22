@@ -469,6 +469,10 @@ jobs:
           # o importa é o app não abrindo na máquina de quem usa.
           New-Item -ItemType Directory codigo_embutido/erp | Out-Null
           Copy-Item erp/*.py codigo_embutido/erp/
+          # `tela_do_dia/` é a aba "Pagamentos do dia". Pasta nova de aba =
+          # linha nova aqui, senão o import falha no usuário e o app não abre.
+          New-Item -ItemType Directory codigo_embutido/tela_do_dia | Out-Null
+          Copy-Item tela_do_dia/*.py codigo_embutido/tela_do_dia/
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
           "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
 

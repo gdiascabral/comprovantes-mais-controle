@@ -3783,3 +3783,50 @@ class PagamentosDiaFrame(ttk.Frame):
         if qrs:
             self._log(f"  {len(qrs)} anexo(s) com QR Code Pix lido.")
         return textos, urls_ocr, nao_lidos, qrs
+
+    # ----------------------------------------- vindo da aba "Pagamentos do dia"
+    def receber_apuracao(self, leitura, desmarcados=(), *, hoje=None) -> None:
+        """A leitura que a aba "Pagamentos do dia" já fez vira o passo 2 daqui,
+        e a conferência da remessa de sempre abre — sem ler o ERP de novo.
+
+        `desmarcados` são os que a tela do dia não deixa sair (já enviados):
+        o `remontar` os tira com o motivo de sempre. A conferência da remessa
+        continua perguntando ao registro "já saiu?" (`gerar_remessa`), então a
+        trava contra pagamento em dobro não depende desta passagem. Leitura
+        interrompida não passa: pela metade, o boleto dentro da NF vira Pix do
+        cadastro (ver `_apurar_e_confirmar`). Apuração de OUTRO período que o
+        de hoje (`sugerir_periodo`; tela buscada ontem) também não: a remessa
+        sairia com os vencimentos de outro dia. `hoje` só existe para o teste."""
+        from conciliacao.models import sugerir_periodo
+        if self.worker and not self.worker.done():
+            messagebox.showinfo("Remessa", "Espere a rotina desta aba terminar.")
+            return
+        if leitura is None or leitura.entradas is None or leitura.interrompida:
+            messagebox.showinfo("Remessa", "A leitura do dia não terminou — busque de novo na aba "
+                                "Pagamentos do dia.")
+            return
+        ini, fim = leitura.periodo
+        de_hoje = sugerir_periodo(hoje or datetime.date.today())
+        if (ini, fim) != (de_hoje.inicio, de_hoje.fim):
+            messagebox.showinfo("Remessa", f"A apuração é de {ini:%d/%m/%Y} a {fim:%d/%m/%Y}, e o "
+                                f"período de hoje é {de_hoje.inicio:%d/%m/%Y} a "
+                                f"{de_hoje.fim:%d/%m/%Y} — busque de novo na aba Pagamentos "
+                                "do dia.")
+            return
+        # Os títulos cuja lista de anexos não foi lida: sem isto, saíam da
+        # planilha como "sem anexo" em vez de "anexos não lidos".
+        self.titulos_sem_leitura = set(leitura.entradas.titulos_nao_lidos or ())
+        self.lancamentos = list(leitura.lancamentos)
+        self.anexos = leitura.anexos
+        self.overviews = leitura.overviews
+        self.participantes = leitura.participantes
+        self._periodo_da_busca = (ini, fim)
+        self.v_ini.set(f"{ini:%d/%m/%Y}")
+        self.v_fim.set(f"{fim:%d/%m/%Y}")
+        self.resultado = confirmacao.remontar(leitura.entradas, set(desmarcados))
+        self._periodo_do_resultado = (ini, fim)
+        self.contas = relatorio.resumo_por_conta(self.lancamentos)
+        self.q.put(("contas", self.contas))
+        self._log(f"\nApuração recebida da aba Pagamentos do dia "
+                  f"({ini:%d/%m/%Y} a {fim:%d/%m/%Y}).")
+        self.gerar_remessa()

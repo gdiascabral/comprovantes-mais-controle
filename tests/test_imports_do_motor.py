@@ -28,7 +28,7 @@ _RAIZ = Path(__file__).resolve().parent.parent
 _PASTAS = ("", "inicio", "baixar_comprovantes", "separar_renomear", "anexar", "aportes", "relatorios",
            "pagamentos_dia", "extratos_sicoob", "conciliacao",
            "conciliacao/erp", "contratos", "acessorias", "guias", "cnab240", "erp",
-           "nuvem")
+           "nuvem", "tela_do_dia")
 
 #: Não são código de aba: o motor e o atualizador rodam DENTRO do exe, onde
 #: a biblioteca padrão está completa — quem os empacota é o PyInstaller.
