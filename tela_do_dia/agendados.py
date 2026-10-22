@@ -139,15 +139,19 @@ def situacao(ag, titulo, envio=None, *, relido=True, prova_extra="") -> Situacao
         extra = " · o retorno do banco diz pago" if pago_no_banco else ""
         return Situacao("erro", f"título sumiu do ERP — era {brl(ag.valor)}, "
                                 f"favorecido {ag.favorecido or '?'}{extra}")
-    if titulo.get("paid"):
+    if titulo.get("paid") or titulo.get("markedAsPaid"):
         return Situacao("ok", "pago no ERP (baixa)", True, PROVA_BAIXA)
     if titulo.get("remainingValue") is None:
         return Situacao("atencao", "o ERP não disse o valor em aberto — responda")
+    agora = de_float(titulo.get("remainingValue"))
+    if agora == 0:
+        # Zerado sem `paid`/`markedAsPaid`: pode ser baixa, pode ser título
+        # mexido. Não prova nada, nem com retorno "ok".
+        return Situacao("atencao", "baixa sem confirmação — responda")
     antes = _dinheiro(ag.foto.get("em_aberto"))
     if antes is None:
         # Sem a foto não há como saber se o valor mudou: nada se prova.
         return Situacao("atencao", "sem a foto do valor de quando agendou — responda")
-    agora = de_float(titulo.get("remainingValue"))
     if ag.valor < antes and agora == antes - ag.valor:
         return Situacao("ok", f"baixa parcial no ERP ({brl(antes)} → {brl(agora)})", True,
                         PROVA_BAIXA_PARCIAL)
@@ -189,12 +193,14 @@ class ParaMarcar:
 
 def foto_do_lancamento(item: dict, valor: Decimal) -> dict:
     """O que se guarda do título na hora de agendar, para comparar depois.
-    Sem o item, o em aberto é o próprio valor do dia."""
+    Sem o item (ou sem `remainingValue`), `em_aberto` fica "" — sem foto, e
+    `situacao` nunca pré-marca esse agendado. `valor` fica na assinatura por
+    compatibilidade."""
     item = item or {}
     venc = relatorio.data_do_item(item) if item else None
-    em_aberto = (de_float(item["remainingValue"]) if item.get("remainingValue") is not None
-                 else valor)
-    return {"em_aberto": str(em_aberto), "vencimento": venc.isoformat() if venc else "",
+    em_aberto = (str(de_float(item["remainingValue"])) if item.get("remainingValue") is not None
+                 else "")
+    return {"em_aberto": em_aberto, "vencimento": venc.isoformat() if venc else "",
             "favorecido": str(item.get("paidTo") or ""),
             "titulo": str(item.get("tradePayableId") or "")}
 
@@ -208,6 +214,8 @@ def para_marcar(painel, fora, lancamentos, conferencia, ja_marcados) -> list[Par
     saida = []
     for c in [*sorted(painel.values(), key=lambda c: c.linha), *fora]:
         for p in c.saem:
+            if p.valor is None or p.valor <= 0:
+                continue        # a constraint valor > 0 recusaria o lote inteiro
             m = a_mao.get(p.id)
             if m is not None:
                 item = ParaMarcar(p.id, m.conta, c.rotulo, m.lancamento_id, m.id, p.favorecido,

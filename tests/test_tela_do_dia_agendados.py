@@ -141,8 +141,8 @@ def test_linhas_para_nuvem_nao_mandam_carimbo_nem_desmarcado():
     linhas = ag.linhas_para_nuvem(itens)
     assert [l["alvo"] for l in linhas] == ["L1"]
     assert not {"quem", "quem_nome", "quando", "dia"} & set(linhas[0])
-    # sem o item do ERP, a foto guarda o valor do dia como "em aberto"
-    assert linhas[0]["foto"]["em_aberto"] == "10.00"
+    # sem o item do ERP não há foto do em aberto, e nada se prova depois
+    assert linhas[0]["foto"]["em_aberto"] == ""
 
 
 def test_a_mao_usa_o_registro_a_mao():
@@ -178,3 +178,34 @@ def test_recado_das_repetidas_diz_o_que_fazer():
     assert "reagendado" in r and "hoje" in r
     r2 = ag.recado_das_repetidas([{"alvo": "L1", "valor": "10.00"}, {"alvo": "L2", "valor": "5.00"}])
     assert "2 pagamentos já estavam marcados hoje" in r2
+
+
+def test_marcado_como_pago_no_erp_e_baixa():
+    s = ag.situacao(_ag(), {"id": "L1", "paid": False, "markedAsPaid": True, "remainingValue": 100.0})
+    assert s.pre_marca and s.prova == ag.PROVA_BAIXA
+
+
+def test_zerado_sem_pago_e_baixa_sem_confirmacao_mesmo_com_retorno_ok():
+    titulo = {"id": "L1", "paid": False, "remainingValue": 0.0}
+    for envio in (None, SimpleNamespace(retorno_estado="ok")):
+        s = ag.situacao(_ag(), titulo, envio)
+        assert not s.pre_marca and s.tag == "atencao" and s.frase == "baixa sem confirmação — responda"
+    # nem o parcial: 100 de 100 agendado, zerado, não é "baixa parcial"
+    assert not ag.situacao(_ag(valor="100.00", em_aberto="100.00"), titulo).pre_marca
+
+
+def test_valor_zero_nao_vira_item_nem_linha():
+    p0 = SimpleNamespace(id="L0", conta_erp="C", favorecido="F", valor=D("0.00"))
+    p1 = SimpleNamespace(id="L1", conta_erp="C", favorecido="F", valor=D("10.00"))
+    painel = {8: SimpleNamespace(rotulo="Conta Alfa - Banco", linha=8, saem=[p0, p1])}
+    itens = ag.para_marcar(painel, [], [], None, set())
+    assert [i.alvo for i in itens] == ["L1"]
+    assert [l["alvo"] for l in ag.linhas_para_nuvem(itens)] == ["L1"]
+
+
+def test_sem_o_item_do_erp_o_agendado_nunca_pre_marca():
+    (item,) = [i for i in ag.para_marcar(_painel(), [], [], None, set()) if i.alvo == "L1"]
+    a = ag.Agendado.de_linha({"id": 1, "dia": "2026-10-22", "conta": "C", "alvo": "L1",
+                              "lancamento_id": "L1", "valor": "10.00", "foto": item.foto})
+    s = ag.situacao(a, {"id": "L1", "paid": False, "remainingValue": 10.0}, SimpleNamespace(retorno_estado="ok"))
+    assert not s.pre_marca and "sem a foto" in s.frase
