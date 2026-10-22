@@ -43,6 +43,7 @@ _CEDE_A_EDICAO = ("ATENÇÃO — sem dados de pgto",)
 #: O status do `relatorio` para o boleto do ERP que contradiz o lançamento:
 #: cede só à linha digitável editada cujo valor embutido BATE.
 _ATENCAO_VALOR_DO_BOLETO = "ATENÇÃO — valor do boleto diverge"
+STATUS_DOCUMENTO_NAO_BATE = "ATENÇÃO — documento não bate"
 ORDEM_A_MAO = 1_000_000
 #: "pagar à mão" escrito num motivo não pode virar a ordem de pagar outra
 #: pessoa: o HTML (`_motivo_do_bloqueio`, texto normalizado) e a remessa
@@ -111,6 +112,7 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "",
     # vezes. Só a descrição vale para elas; a tela já recusa o resto.
     dividido = bool(reg.get("parte"))
     valor_diverge = False
+    conferencia_antiga, documento_nao_bate = "", False
     if d.edicoes:
         campos = []
         if dividido and d.edicoes.keys() & {"tipo", "dados", "reembolso_nome",
@@ -127,6 +129,7 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "",
             reg["pix_qr"], reg["linha_da_guia"] = "", ""
             # A conferência do documento (cruzamento NF × boleto) era da
             # cobrança antiga: não vale para a forma nova.
+            conferencia_antiga = str(reg.get("conferencia") or "")
             reg["conferencia"] = ""
             reg["parcial"] = bool(reg.get("parcial")) and tipo == "Boleto"
             campos.append("forma de pagar")
@@ -159,8 +162,15 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "",
                 # Decisão do coordenador (22/10/2026): o "valor do boleto
                 # diverge" era do boleto ANTIGO; a linha nova prova o valor.
                 # Sem valor ou divergindo, o alarme antigo continua.
-                reg["valor_diverge"] = False
-                cede = (*cede, _ATENCAO_VALOR_DO_BOLETO)
+                if "DIVERGE" in conferencia_antiga:
+                    # A linha prova o VALOR, não a NF/OC/CNPJ: o relatório
+                    # escreve "valor do boleto diverge" por cima de
+                    # "documento não bate", e liberar aqui o esconderia.
+                    documento_nao_bate = True
+                    notas.append(f"documento do ERP não bate: {conferencia_antiga}")
+                else:
+                    reg["valor_diverge"] = False
+                    cede = (*cede, _ATENCAO_VALOR_DO_BOLETO)
         era = "; ".join(f"{k}={v}" for k, v in d.antes.items())
         notas.append(f"editado na tela por {d.quem_nome or '?'} "
                      f"({_texto_do_dono(d.motivo_edicao)})"
@@ -173,9 +183,14 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "",
         bloqueio = reg.get("bloqueio_liberado") or bloqueio or BLOQUEIO_JA_ENVIADO
         rotulos.insert(0, f"LIBERADO — {bloqueio} · {_texto_do_dono(d.motivo_liberacao)}")
         notas.append(f"liberado na tela por {d.quem_nome or '?'} em {d.quando[:16]}")
-        cede = _CEDE_A_LIBERACAO
+        cede = (*_CEDE_A_LIBERACAO, *cede)
     if rotulos:
         reg["status"] = _status(antes, rotulos, cede)
+    if documento_nao_bate and not reg["status"].startswith("JÁ PAGO"):
+        resto = reg["status"]
+        if resto.startswith(_ATENCAO_VALOR_DO_BOLETO):
+            resto = resto[len(_ATENCAO_VALOR_DO_BOLETO):].lstrip(" ·")
+        reg["status"] = " · ".join(filter(None, [STATUS_DOCUMENTO_NAO_BATE, resto]))
     if valor_diverge and not reg["status"].startswith(("ATENÇÃO", "JÁ PAGO")):
         # Na FRENTE: é o "ATENÇÃO" que bloqueia o Copiar do HTML e faz a
         # Remessa não marcar. Um ATENÇÃO ou JÁ PAGO que já estava fica na frente.

@@ -433,3 +433,33 @@ def test_linha_editada_sem_valor_ou_que_diverge_mantem_o_alarme_antigo(centavos)
     assert reg["status"].startswith("ATENÇÃO — valor do boleto diverge")
     cand, = remessa_dia.preparar({CONTA: [reg]})[CONTA]
     assert cand.impedimento == remessa_dia.MOTIVO_VALOR_DIVERGE
+
+
+# ------------------------------------------- revisão de dinheiro dos 3 commits
+def test_linha_que_bate_nao_esconde_documento_que_nao_bate():
+    """O relatório escreve "valor do boleto diverge" POR CIMA de "documento não bate";
+    a linha nova prova o valor, não a NF: o alarme de documento volta para a frente."""
+    reg = {**_reg_boleto_que_divergia(), "conferencia": "NF DIVERGE: anexo 999 × lançamento 1234"}
+    reg = ge.aplicar_decisao(reg, _editar_x(10000), liberavel=False)
+    assert reg["status"].startswith("ATENÇÃO — documento não bate")
+    assert "NF DIVERGE" in reg["obs"]
+    assert hp.contas_do_html_geral(relatorio.Resultado({CONTA: [reg]}, []))[0]["entries"][0]["bloqueio"]
+    cand, = remessa_dia.preparar({CONTA: [reg]})[CONTA]
+    assert not cand.pode
+
+
+def test_liberar_nao_apaga_o_que_a_linha_que_bate_cedeu():
+    eventos = [cf.Evento.de_linha({"id": 1, "alvo": "X", "acao": cf.EDITAR, "motivo": "linha certa",
+                                   "campos": {"tipo": "Boleto", "dados": _linha_bancaria(10000)}}),
+               cf.Evento.de_linha({"id": 2, "alvo": "X", "acao": cf.LIBERAR, "motivo": "pode pagar"})]
+    reg = ge.aplicar_decisao(_reg_boleto_que_divergia(), cf.dobrar(eventos)["X"], liberavel=True)
+    assert reg["status"].startswith("LIBERADO") and "valor do boleto diverge" not in reg["status"]
+
+
+def test_nota_da_chave_compara_cnpj_alfanumerico_inteiro():
+    from cnab240.dominios import dv_cnpj
+    base = "12ABC34501DE"
+    alfa = next(base + f"{n:02d}" for n in range(100) if dv_cnpj(base + f"{n:02d}"))
+    assert cf.nota_da_chave_editada(f"PIX CNPJ {alfa}", alfa) == cf.NOTA_CHAVE_EDITADA
+    assert "diferente" in cf.nota_da_chave_editada("PIX CNPJ 11.222.333/0001-81", alfa)
+    assert cf.mascarar_documento(alfa) == f"**.{alfa[2:5]}.{alfa[5:8]}/{alfa[8:12]}-**"

@@ -292,7 +292,8 @@ def mascarar_documento(doc: str) -> str:
     """CPF/CNPJ como o Sicoob mostra no comprovante (`***.982.247-**`,
     `**.222.333/0001-**`): o miolo sozinho não identifica ninguém, e a
     observação vai à planilha e ao HTML."""
-    d = re.sub(r"\D", "", doc or "")
+    # CNPJ alfanumérico (Receita, 07/2026): as letras são do documento.
+    d = remessa_dia.documento_valido(doc or "") or re.sub(r"\D", "", doc or "")
     if len(d) == 14:
         return f"**.{d[2:5]}.{d[5:8]}/{d[8:12]}-**"
     if len(d) == 11:
@@ -306,7 +307,7 @@ def nota_da_chave_editada(dados: str, doc_erp: str) -> str:
     declara o da chave (`remessa_dia.preparar`) e a observação diz isso, com
     o do ERP mascarado. `doc_erp` = `remessa_dia.documento_sem_edicao`."""
     da_chave = remessa_dia.documento_da_chave(dados)
-    erp = re.sub(r"\D", "", doc_erp or "")
+    erp = remessa_dia.documento_valido(doc_erp or "")
     if da_chave and erp and da_chave != erp:
         return NOTA_DOC_DIFERENTE.format(doc=mascarar_documento(erp))
     return NOTA_CHAVE_EDITADA
