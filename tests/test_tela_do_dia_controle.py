@@ -463,8 +463,10 @@ def test_linha_do_aportador_mostra_quem_deve_e_quem_esta_em_dia():
     ap = ca.apurar(_conta(), [], [], HOJE)
     alfa, beta = (ca.valores_do_aportador(l) for l in ap.linhas)
     assert alfa == ("50,00%", "R$ 40.000,00", "R$ 40.000,00", "—", "em dia")
+    # "para igualar" saiu da célula (layout a 1280 px): é o título da coluna
+    # ao lado, e a frase inteira não cabia na SITUAÇÃO.
     assert beta == ("50,00%", "R$ 0,00", "R$ 40.000,00", "R$ 40.000,00",
-                    "deve R$ 40.000,00 para igualar")
+                    "deve R$ 40.000,00")
     assert ca.valores_da_conta(ap)[1] == "R$ 40.000,00"
 
 

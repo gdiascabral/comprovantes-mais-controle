@@ -40,16 +40,19 @@ SEM_LEITURA = ("Não li o controle de aportes — nenhum número é mostrado. Ve
 
 
 class ControleAportesFrame(ttk.Frame):
-    COLS_CONTAS = (("parte", "PARTE", 70, "e"), ("aportou", "APORTOU", 125, "e"),
-                   ("deveria", "DEVERIA", 125, "e"), ("dif", "PARA IGUALAR", 125, "e"),
-                   ("situacao", "SITUAÇÃO", 220, "w"))
-    COLS_SEM_DONO = (("data", "DATA", 85, "w"), ("conta", "CONTA", 170, "w"),
-                     ("cliente", "CLIENTE NO ERP", 190, "w"), ("valor", "VALOR", 110, "e"),
-                     ("motivo", "MOTIVO", 280, "w"))
-    COLS_APONTADOS = (("data", "DATA", 85, "w"), ("conta", "CONTA", 170, "w"),
-                      ("valor", "VALOR", 110, "e"), ("para", "APONTADO PARA", 190, "w"),
-                      ("motivo", "MOTIVO", 280, "w"))
-    LARGURA_CONTA = 220
+    # Larguras a 100% (o `estilo_tabela` escala). Cada tabela soma no máximo
+    # 680 (`tests/test_layout_1280.py`): a 1280x800 com o Windows a 125% a
+    # SITUAÇÃO ficava para fora. Só o texto (âncora "w") estica na tela larga.
+    COLS_CONTAS = (("parte", "PARTE", 55, "e"), ("aportou", "APORTOU", 100, "e"),
+                   ("deveria", "DEVERIA", 100, "e"), ("dif", "PARA IGUALAR", 100, "e"),
+                   ("situacao", "SITUAÇÃO", 145, "w"))
+    COLS_SEM_DONO = (("data", "DATA", 75, "w"), ("conta", "CONTA", 140, "w"),
+                     ("cliente", "CLIENTE NO ERP", 150, "w"), ("valor", "VALOR", 95, "e"),
+                     ("motivo", "MOTIVO", 220, "w"))
+    COLS_APONTADOS = (("data", "DATA", 75, "w"), ("conta", "CONTA", 140, "w"),
+                      ("valor", "VALOR", 95, "e"), ("para", "APONTADO PARA", 150, "w"),
+                      ("motivo", "MOTIVO", 220, "w"))
+    LARGURA_CONTA = 180
     LINHAS_FORM = 6
 
     def __init__(self, master, anexar_frame):
@@ -76,6 +79,9 @@ class ControleAportesFrame(ttk.Frame):
             "Quanto cada um aportou em cada conta desde a abertura, quanto deveria pela "
             "proporção e quem deve quanto para igualar. Lê o Mais Controle; não escreve "
             "nada nele.", trilha="Diário  ›  Controle de aportes")
+        # O apoio quebra em 820 px (o padrão do `Cabecalho`), e a 1280 px com
+        # o botão ao lado só há ~640: a frase saía cortada ("não escreve n").
+        cab.lbl_apoio.configure(wraplength=px(600))
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         self.b1 = widgets.Botao(cab.acoes, "Atualizar", papel="acao", command=self.atualizar)
         self.b1.pack(side="left")

@@ -552,19 +552,22 @@ def apurar(conta: ContaControlada, recebimentos, apontamentos, hoje: datetime.da
     return ap
 
 
+# As duas abaixo são a coluna SITUAÇÃO do "Por conta", que tem de caber a
+# 1280 px (~26 letras): "para igualar" é o título da coluna ao lado, e os
+# alertas já vão um a um para o Registro.
 def situacao_do_aportador(linha: LinhaAportador) -> str:
-    return "em dia" if linha.diferenca <= 0 else f"deve {brl(linha.diferenca)} para igualar"
+    return "em dia" if linha.diferenca <= 0 else f"deve {brl(linha.diferenca)}"
 
 
 def situacao_da_conta(ap: Apuracao) -> str:
     if ap.erro:
         return f"erro: {ap.erro}"
-    partes = [f"desde {ap.conta.abertura:%d/%m/%Y}"]
+    partes = []
     if ap.sem_dono:
         partes.append(f"{len(ap.sem_dono)} sem dono")
     if ap.alertas:
-        partes.append(f"{len(ap.alertas)} alerta(s) — veja o Registro")
-    return " · ".join(partes)
+        partes.append(f"{len(ap.alertas)} alerta(s)")
+    return " · ".join(partes) or f"desde {ap.conta.abertura:%d/%m/%Y}"
 
 
 def status_da_leitura(apuracoes) -> str:
