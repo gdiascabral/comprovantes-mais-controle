@@ -560,6 +560,10 @@ def contas_do_html_geral(resultado) -> list[dict]:
                 else (f"{id_}#{parte}" if id_ and parte else id_),
                 # Sem id não há para onde ir: link vazio, sem botão na tela.
                 "link": URL_LANCAMENTO + id_ if id_ else "",
+                # Só para a checagem de repetição abaixo (sai antes de devolver):
+                # as partes do MESMO lançamento dividido herdam as chaves
+                # extras (Pix do QR, linha da guia) e não são repetição.
+                "_lancamento": id_ if (parte and id_ and not a_mao) else "",
                 "tipo": tipo,
                 "dados_original": str(r.get("dados") or ""),
                 "dados_limpo": dado_para_colar(tipo, r.get("dados")),
@@ -594,12 +598,15 @@ def contas_do_html_geral(resultado) -> list[dict]:
             for k in chaves - {""}:
                 por_chave.setdefault(k, []).append(e)
     for grupo in por_chave.values():
-        ids = {e["id"] or id(e) for e in grupo}
+        ids = {e["_lancamento"] or e["id"] or id(e) for e in grupo}
         if len(ids) > 1:
             m = (f"mesma linha digitável em {len(grupo)} lançamentos "
                  "— risco de pagar em dobro")
             for e in grupo:
                 e["bloqueio"] = (e["bloqueio"] + "; " + m) if e["bloqueio"] else m
+    for c in contas:
+        for e in c["entries"]:
+            e.pop("_lancamento", None)
     return contas
 
 

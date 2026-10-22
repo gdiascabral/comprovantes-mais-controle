@@ -643,3 +643,22 @@ def test_a_aba_remessa_montando_a_propria_leitura_segue_com_uma_linha():
     res = confirmacao.remontar(_entradas([_item()], [40000, 60000]))
     assert [r.get("parte") for r in _linhas(res)] == [None]
     assert [e["id"] for c in hp.contas_do_html_geral(res) for e in c["entries"]] == ["L1"]
+
+
+def test_partes_do_mesmo_lancamento_com_chave_extra_herdada_nao_sao_repeticao():
+    _base, res = _dividido([40000, 60000])
+    for r in _linhas(res):
+        r["pix_qr"] = "00020126580014br.gov.bcb.pix0136chave-modelo"
+        r["linha_da_guia"] = gera_linha(12345)
+    entradas = [e for c in hp.contas_do_html_geral(res) for e in c["entries"]]
+    assert len(entradas) == 2
+    assert not any("mesma linha digitável" in e["bloqueio"] for e in entradas)
+    assert all("_lancamento" not in e for e in entradas)
+
+
+def test_dois_lancamentos_diferentes_com_a_mesma_linha_seguem_com_o_aviso():
+    _base, res = _dividido([40000, 60000])
+    outro = dict(_linhas(res)[0], id="L2")
+    res.contas[CONTA].append(outro)           # parte do L1 copiada sob outro lançamento
+    entradas = [e for c in hp.contas_do_html_geral(res) for e in c["entries"]]
+    assert any("mesma linha digitável" in e["bloqueio"] for e in entradas)
