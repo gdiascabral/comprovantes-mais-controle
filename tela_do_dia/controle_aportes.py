@@ -747,3 +747,18 @@ def escolha_do_apontamento(opcoes, rotulo: str, motivo: str) -> tuple:
     if not motivo:
         raise ValueError("Escreva o motivo.")
     return rotulos[rotulo], motivo
+
+
+def estado_dos_botoes_do_dono(pode_editar: bool, lendo: bool, leu_bem: bool) -> str:
+    """"+ Conta", "Editar", "Apontar" e "Desfazer": só para admin, com a
+    ÚLTIMA leitura inteira na tela e nenhuma rodando. Sem leitura boa, a
+    tela não sabe as contas que já existem (o "já está no controle" de
+    `problemas_da_conta`) nem os ids que o formulário carregaria."""
+    return "normal" if (pode_editar and leu_bem and not lendo) else "disabled"
+
+
+def depois_de_gravar(lendo: bool) -> str:
+    """Gravou na nuvem: a tela relê JÁ, ou — com uma leitura em curso, que
+    pode ter começado antes da gravação — no fim dela. Nunca fica com os
+    números de antes da gravação como se fossem os de agora."""
+    return "reler_no_fim" if lendo else "reler"

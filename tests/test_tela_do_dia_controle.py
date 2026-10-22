@@ -516,3 +516,20 @@ def test_apontamento_exige_aportador_da_lista_e_motivo():
     for rotulo, motivo in (("", "x"), ("FULANO", "x"), (BETA, "  ")):
         with pytest.raises(ValueError):
             ca.escolha_do_apontamento(opcoes, rotulo, motivo)
+
+
+# ---- conserto da Tarefa 7: botões do dono e reler depois de gravar ----------
+
+@pytest.mark.parametrize("pode,lendo,leu_bem,estado", [
+    (True, False, True, "normal"),
+    (True, True, True, "disabled"),       # leitura rodando: nada de editar
+    (True, False, False, "disabled"),     # sem leitura boa (antes da 1ª, ou falhou)
+    (False, False, True, "disabled"),     # não é admin
+])
+def test_botoes_do_dono_so_com_leitura_boa_e_parada(pode, lendo, leu_bem, estado):
+    assert ca.estado_dos_botoes_do_dono(pode, lendo, leu_bem) == estado
+
+
+def test_depois_de_gravar_rele_agora_ou_no_fim_da_leitura_em_curso():
+    assert ca.depois_de_gravar(lendo=False) == "reler"
+    assert ca.depois_de_gravar(lendo=True) == "reler_no_fim"

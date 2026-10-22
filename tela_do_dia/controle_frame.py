@@ -60,6 +60,9 @@ class ControleAportesFrame(ttk.Frame):
         self._erro_drain = None
         self.pode_editar = False      # o app liga para admin; a RLS nega o resto
         self._nuvem_ocupada = False
+        self._lendo = False           # leitura rodando na thread do navegador
+        self._leu_bem = False         # a tela tem uma leitura INTEIRA à vista
+        self._reler = False           # gravou durante uma leitura: reler no fim
         self.contas, self.apontamentos, self.contas_erp, self.apuracoes = [], {}, [], []
         self._linha_conta, self._linha_sem_dono, self._linha_apontado = {}, {}, {}
         self._build()
@@ -133,8 +136,12 @@ class ControleAportesFrame(ttk.Frame):
     def liberar_edicao(self, sim: bool):
         """O app liga para admin. Esconder não protege: quem nega é a RLS."""
         self.pode_editar = bool(sim)
+        self._acender_botoes()
+
+    def _acender_botoes(self):
+        estado = ca.estado_dos_botoes_do_dono(self.pode_editar, self._lendo, self._leu_bem)
         for b in self._botoes_do_dono:
-            b.configure(state="normal" if self.pode_editar else "disabled")
+            b.configure(state=estado)
 
     def _tabela(self, pai, colunas, *, arvore: bool, altura: int):
         grade = ttk.Frame(pai)
@@ -180,6 +187,8 @@ class ControleAportesFrame(ttk.Frame):
                     (self.pb.start(12) if valor else self.pb.stop())
                 elif tipo == "botoes":
                     self.b1.configure(state=valor)
+                elif tipo == "fim":
+                    self._fim_da_leitura()
                 elif tipo == "leitura":
                     self._receber(valor)
                 elif tipo == "falha":
@@ -198,22 +207,35 @@ class ControleAportesFrame(ttk.Frame):
             self.after(150, self._drain)
 
     # --------------------------------------------------------------- leitura
-    def atualizar(self):
+    def atualizar(self) -> bool:
+        """True se a leitura começou."""
         if self.worker and not self.worker.done():
-            return
+            return False
         # Recusar ANTES de apagar os botões (ver "Um navegador, seis abas").
         if self.anx.avisar_se_ocupado("o Controle de aportes", aba=self):
-            return
+            return False
         # Os números de antes saem da tela ANTES da leitura nova: leitura que
         # cai no meio não pode deixar a conta de ontem à vista.
         self._limpar("Lendo...")
+        self._lendo = True
+        self._acender_botoes()
         self.q.put(("botoes", "disabled"))
         self.q.put(("ocupado", True))
         self.q.put(("status", "Lendo o controle na nuvem e os aportes no Mais Controle..."))
         self.worker = self.anx.submeter("Controle de aportes — ler", self._t_ler,
                                         datetime.date.today(), dona=self)
+        return True
+
+    def _fim_da_leitura(self):
+        """Na thread do Tk, depois da última mensagem da leitura."""
+        self._lendo = False
+        self._acender_botoes()
+        if self._reler:
+            self._reler = False
+            self._reler_depois_de_gravar()
 
     def _limpar(self, recado: str):
+        self._leu_bem = False
         self.apuracoes = []
         self._linha_conta, self._linha_sem_dono, self._linha_apontado = {}, {}, {}
         for t in (self.t_contas, self.t_sem_dono, self.t_apontados):
@@ -254,8 +276,24 @@ class ControleAportesFrame(ttk.Frame):
         finally:
             self.q.put(("ocupado", False))
             self.q.put(("botoes", "normal"))
+            self.q.put(("fim", None))
 
     def _receber(self, pacote):
+        if self._reler:
+            # Esta leitura pode ter começado antes da gravação: não mostra
+            # nada dela; a releitura vem no `_fim_da_leitura`.
+            return
+        try:
+            self._mostrar(pacote)
+        except Exception as e:                              # noqa: BLE001
+            # Tabela pela metade é pior que nenhuma: apaga tudo e diz que não leu.
+            self._limpar(SEM_LEITURA)
+            self._log("\n" + widgets.recado_de_erro(
+                e, "Não consegui mostrar o controle de aportes."))
+            self.lbl.configure(text="Não consegui mostrar — veja o Registro.")
+        self._acender_botoes()
+
+    def _mostrar(self, pacote):
         self.contas, self.apontamentos, self.contas_erp, apuracoes = pacote
         self._limpar("")
         self.apuracoes = apuracoes
@@ -289,6 +327,7 @@ class ControleAportesFrame(ttk.Frame):
         if not self.apuracoes:
             resumo.append("Nenhuma conta no controle.")
         self.lbl_resumo.configure(text="\n".join(resumo))
+        self._leu_bem = True
 
     # ----------------------------------------------------------------- nuvem
     def _na_nuvem(self, feito: str, trabalho):
@@ -316,9 +355,21 @@ class ControleAportesFrame(ttk.Frame):
             self._log("\n" + erro)
             self.q.put(("status", "Não gravou — veja o Registro."))
             return
-        # O que vale é o que a nuvem tem: relê, nunca muda a tabela na mão.
+        # O que vale é o que a nuvem tem: relê, nunca muda a tabela na mão —
+        # e os números de antes da gravação saem da tela já.
         self._log(f"{feito}. Atualizando os números...")
-        self.atualizar()
+        self._limpar("Gravado — atualizando…")
+        self._acender_botoes()
+        if ca.depois_de_gravar(self._lendo) == "reler_no_fim":
+            self._reler = True
+            return
+        self._reler_depois_de_gravar()
+
+    def _reler_depois_de_gravar(self):
+        if not self.atualizar():         # navegador ocupado por outra aba
+            self._limpar("Gravado. O navegador está ocupado: clique Atualizar quando ele "
+                         "liberar — nenhum número é mostrado até lá.")
+            self._acender_botoes()
 
     # -------------------------------------------------------------- diálogos
     def _janela(self, titulo):
