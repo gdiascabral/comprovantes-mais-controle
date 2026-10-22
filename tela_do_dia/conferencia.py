@@ -37,7 +37,17 @@ TIPOS = ("Pix", "Boleto", "Transferência")
 CAMPOS_EDITAVEIS = ("tipo", "dados", "reembolso_nome", "reembolso_documento", "descricao")
 #: O trecho do `remessa_dia.MOTIVO_SEM_DOCUMENTO` que aparece na situação.
 _FORA_DOS_CONTATOS = "cadastro de Contatos"
-_ONZE_CRUS = re.compile(r"\d{11}")
+#: Formas da chave que dizem o tipo sozinhas (as mesmas de `regras_pagamento`).
+_COM_TIPO = (*(p for p, _t in regras._TIPO_DECLARADO), regras._EMAIL, regras._ALEATORIA,
+             regras._CPF_PONTUADO, regras._TELEFONE_PONTUADO)
+
+
+def _onze_sem_tipo(dados: str) -> bool:
+    """Onze dígitos sem tipo declarado nem pontuação de CPF/telefone:
+    "62999999999", "PIX 62999999999", "chave: 52998224725"."""
+    if any(p.search(dados) for p in _COM_TIPO):
+        return False
+    return len(re.sub(r"\D", "", dados)) == 11
 
 
 @dataclass(frozen=True)
@@ -237,12 +247,14 @@ def _validar_forma(tipo, dados: str) -> str:
         if chave == regras.CHAVE_COPIA_COLA:
             return ("Pix copia-e-cola não vai pela remessa: escreva a chave, "
                     "ou pague à mão.")
-        # Onze dígitos crus: CPF ou celular, e quem digita é quem sabe. Mais
+        # Onze dígitos sem tipo: CPF ou celular, e quem digita é quem sabe. Mais
         # estrito que `tipo_de_chave_pix` (que adivinha pelo DV e pelo DDD) de
         # propósito: quem escolhe o tipo aqui escolhe para quem o dinheiro vai.
-        if not chave or _ONZE_CRUS.fullmatch(re.sub(r"\s+", "", dados)):
+        if not chave or _onze_sem_tipo(dados):
             return ("A chave Pix não diz o tipo (CPF ou celular têm 11 dígitos): escreva "
                     "\"PIX CPF …\", \"PIX CELULAR …\", o e-mail ou a chave aleatória.")
+        if chave in (regras.CHAVE_CPF, regras.CHAVE_CNPJ) and not regras.documento_valido(dados):
+            return f"A chave Pix {chave} não fecha no dígito verificador."
     if tipo == "Boleto" and not ocr_boleto.codigo_de_barras(dados):
         return "A linha digitável não fecha nos dígitos verificadores."
     if tipo == "Transferência" and len(dados) < 8:
@@ -296,22 +308,27 @@ def _cc_na_descricao(cc: str, ndesc: str) -> bool:
 
 
 def aviso_de_casamento(registro: dict, conta: str) -> str:
-    """O que o Anexar vai deixar de achar com ESTA descrição — com as mesmas
-    funções dele (`anexar/matcher.py`): centro de custo no texto e o número do
-    documento como último número (ou rotulado NF/OC). "" = casa como hoje."""
+    """O que o Anexar vai deixar de achar com ESTA descrição. Simula o nome
+    do comprovante ("VALOR - DESCRIÇÃO - DD-MM.pdf") e o lê com a régua do
+    próprio Anexar (`matcher.parse_pdf`): centro de custo no texto (como em
+    `matcher._features`) e o número do documento entre os NF/OC rotulados e o
+    último número solto. "" = casa como hoje."""
     texto = html_pagamentos.descricao_para_colar(registro, conta)
-    ndesc = matcher._com_hifen(matcher._norm(texto))
+    cents = html_pagamentos.centavos(registro.get("valor"))
+    pd = matcher.parse_pdf(f"{cents // 100},{cents % 100:02d} - {texto} - 01-01.pdf") or {
+        "ndesc": matcher._norm(texto), "nfs": set(), "ocs": set(), "soltos": set()}
+    ndesc = matcher._com_hifen(pd["ndesc"])
     avisos = []
     cc = str(registro.get("centro_custo") or "")
     if cc.strip() and not _cc_na_descricao(cc, ndesc):
         avisos.append("o centro de custo não está na descrição")
     numeros = set()
     for doc in (registro.get("nf"), registro.get("oc_da_descricao")):
-        numeros |= matcher._numeros_do_documento(str(doc or ""))
+        doc = str(doc or "")
+        numeros |= matcher._numeros_do_documento(doc) | set(re.findall(r"\d{3,}", doc))
     if numeros:
-        cents = html_pagamentos.centavos(registro.get("valor"))
-        achados = (matcher._numeros_soltos(texto, cents)
-                   | {matcher._sem_zeros(n) for n in matcher._ocnf_rotulados(texto)})
+        achados = pd["nfs"] | pd["ocs"] | pd["soltos"]
+        achados |= {matcher._sem_zeros(n) for n in achados}
         if not numeros & achados:
             avisos.append("o número do documento não é o último número da descrição")
     if not avisos:
@@ -325,10 +342,19 @@ def _dinheiro(valor: Decimal) -> str:
 
 
 def nova_a_mao(*, conta, valor_texto, descricao, motivo, contas, lido=None,
-               tipo="", dados="", favorecido="") -> tuple[dict | None, str]:
+               tipo="", dados="", favorecido="", ids_do_dia=(),
+               a_mao_existentes=()) -> tuple[dict | None, str]:
     """A linha de `pagamento_a_mao` a gravar e "", ou (None, recado).
+
     Com `lido` (o lançamento do link), não paga título já PAGO, de outra
-    conta, nem mais que o em aberto, e herda CC/NF/OC para o Anexar casar."""
+    conta, nem mais que o em aberto — somando as linhas à mão que já valem
+    para o MESMO lançamento (`a_mao_existentes`, os `PagamentoAMao` de
+    `Conferencia.a_mao`) — e herda CC/NF/OC para o Anexar casar.
+
+    **`linha["pergunta"]`** (texto, ou ausente): a tela pergunta "tem
+    certeza?" antes de gravar — lançamento que já está na lista do dia
+    (`ids_do_dia`: sairia duas vezes) ou em aberto desconhecido. A chave não
+    é coluna da tabela: o cliente da nuvem a descarta."""
     if conta not in contas:
         return None, "Escolha a conta na lista."
     try:
@@ -355,8 +381,23 @@ def nova_a_mao(*, conta, valor_texto, descricao, motivo, contas, lido=None,
             return None, "Este lançamento já está PAGO no ERP."
         if lido.conta and lido.conta != conta:
             return None, f"O lançamento é da conta {lido.conta}, não de {conta}."
-        if lido.em_aberto is not None and valor > lido.em_aberto:
+        ja_a_mao = sum((p.valor for p in a_mao_existentes or ()
+                        if p.lancamento_id and p.lancamento_id == lido.id), Decimal("0"))
+        if lido.em_aberto is not None and valor + ja_a_mao > lido.em_aberto:
+            if ja_a_mao:
+                return None, (f"Com o que já está à mão para este lançamento "
+                              f"({brl(ja_a_mao)}), o valor passa do em aberto "
+                              f"({brl(lido.em_aberto)}).")
             return None, f"O valor passa do que está em aberto no lançamento ({brl(lido.em_aberto)})."
+        perguntas = []
+        if lido.id in set(ids_do_dia or ()):
+            perguntas.append("Este lançamento JÁ ESTÁ na lista do dia: pagar à mão também "
+                             "pode pagar duas vezes.")
+        if lido.em_aberto is None:
+            perguntas.append("Não consegui ler quanto está em aberto neste lançamento: "
+                             "confira no ERP que o valor não passa dele.")
+        if perguntas:
+            linha["pergunta"] = "\n\n".join(perguntas) + "\n\nTem certeza?"
         # O que vem do ERP cabe no teto do banco (200), para a nuvem não recusar.
         linha.update(lancamento_id=lido.id[:TEXTO_MAXIMO],
                      centro_custo=lido.centro_custo[:TEXTO_MAXIMO],

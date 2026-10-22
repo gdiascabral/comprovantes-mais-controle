@@ -169,3 +169,49 @@ def test_a_mao_sem_link_recusa_o_que_nao_fecha():
     assert "tipo" in nova(tipo="Pix", dados="62999999999")[1]
     assert nova(tipo="Pix", dados="PIX EMAIL fulano@exemplo.com")[1] == ""
     assert "200" in nova(favorecido="x" * 201)[1]
+
+
+# ---------------------------------------------------------------- conserto 1
+def test_pix_de_onze_digitos_sem_tipo_e_recusado_mesmo_com_rotulo_generico():
+    assert "tipo" in cf.validar_edicao({"tipo": "Pix", "dados": "PIX 62999999999"}, "erro do ERP")
+    assert "tipo" in cf.validar_edicao({"tipo": "Pix", "dados": "chave: 52998224725"}, "erro do ERP")
+    assert cf.validar_edicao({"tipo": "Pix", "dados": "(62) 99999-9999"}, "erro do ERP") == ""
+    assert cf.validar_edicao({"tipo": "Pix", "dados": "529.982.247-25"}, "erro do ERP") == ""
+
+
+def test_pix_cpf_ou_cnpj_declarado_confere_o_dv():
+    assert cf.validar_edicao({"tipo": "Pix", "dados": "PIX CPF 52998224725"}, "erro do ERP") == ""
+    assert "verificador" in cf.validar_edicao({"tipo": "Pix", "dados": "PIX CPF 52998224726"}, "erro do ERP")
+    assert "verificador" in cf.validar_edicao({"tipo": "Pix", "dados": "PIX CNPJ 11.222.333/0001-80"},
+                                              "erro do ERP")
+    assert cf.validar_edicao({"tipo": "Pix", "dados": "PIX CNPJ 11.222.333/0001-81"}, "erro do ERP") == ""
+
+
+def _a_mao(i, valor, lancamento_id="L9"):
+    return cf.PagamentoAMao(id=i, conta="C", valor=D(valor), descricao="parcela", motivo="combinado",
+                            lancamento_id=lancamento_id)
+
+
+def test_a_mao_soma_as_outras_do_mesmo_lancamento_e_pergunta_se_ja_esta_no_dia():
+    lido = LancamentoLido(id="L9", conta="C", em_aberto=D("100.00"))
+    base = dict(conta="C", descricao="parcela", motivo="combinado", contas={"C"}, lido=lido)
+    _l, erro = cf.nova_a_mao(valor_texto="50,00", a_mao_existentes=[_a_mao(1, "60.00")], **base)
+    assert "já está à mão" in erro and "em aberto" in erro
+    linha, erro = cf.nova_a_mao(valor_texto="40,00", **base,
+                                a_mao_existentes=[_a_mao(1, "60.00"), _a_mao(2, "99.00", "L8")])
+    assert erro == "" and "pergunta" not in linha
+    linha, erro = cf.nova_a_mao(valor_texto="40,00", ids_do_dia={"L9", "L1"}, **base)
+    assert erro == "" and "JÁ ESTÁ na lista do dia" in linha["pergunta"] and "Tem certeza" in linha["pergunta"]
+
+
+def test_a_mao_com_em_aberto_desconhecido_pergunta():
+    linha, erro = cf.nova_a_mao(conta="C", valor_texto="40,00", descricao="parcela", motivo="combinado",
+                                contas={"C"}, lido=LancamentoLido(id="L9", conta="C"))
+    assert erro == "" and "em aberto" in linha["pergunta"] and linha["valor_em_aberto"] is None
+
+
+def test_aviso_de_casamento_usa_a_regua_do_nome_do_anexar():
+    reg = {"centro_custo": "OBRA MODELO QD 1", "nf": "1234", "valor": 10.0}
+    aviso = cf.aviso_de_casamento({**reg, "descricao_editada": "OBRA MODELO QD 1 NFS 1234"}, "C")
+    assert "número do documento" in aviso and "centro de custo não está" not in aviso
+    assert cf.aviso_de_casamento({**reg, "descricao_editada": "OBRA MODELO QD 1 NF 01234"}, "C") == ""
