@@ -491,7 +491,9 @@ só (`gravar_nomes_curtos`).
 do app fechou a aba do ERP; clique em Ler de novo". A causa estava em
 `MCClient._abas_do_robo`, que punha a `self.page` FECHADA na lista e a
 adotava como logada. Excel do dia aberto no Excel (errno 13) vira o recado
-de `recados.excel_aberto`.
+de `recados.excel_aberto` só quando o erro é sobre o PRÓPRIO .xlsx do dia
+(caminho comparado sem barra nem caixa); outro `PermissionError` (pasta, modelo,
+OneDrive) mostra o erro de verdade.
 
 ## Sem nuvem, a entrega 2 trava (falha fechada)
 

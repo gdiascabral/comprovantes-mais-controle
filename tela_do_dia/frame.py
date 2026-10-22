@@ -1790,7 +1790,7 @@ class TelaDoDiaFrame(ttk.Frame):
                                                        self._rotulos_do_painel),
                 leitura_interrompida=self.leitura.interrompida)
         except (WorkbookError, OSError) as e:
-            aberto = recados.excel_aberto(e)       # "[Errno 13]": o arquivo está aberto no Excel
+            aberto = recados.excel_aberto(e, destino)   # "[Errno 13]" no .xlsx do dia: aberto no Excel
             self._log(f"\nO EXCEL DO DIA NÃO FOI GERADO\n{aberto or e}")
             messagebox.showwarning(titulo, f"Não gerei o Excel do dia.\n\n{aberto}" if aberto
                                    else widgets.recado_de_erro(e, "Não gerei o Excel do dia."))
