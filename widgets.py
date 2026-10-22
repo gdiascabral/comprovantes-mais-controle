@@ -715,6 +715,8 @@ def aplicar_estilos(escuro: bool) -> None:
     st.map("Dupla.Treeview", background=[("selected", c["marca_fundo"])],
            foreground=[("selected", c["marca"])])
 
+    _pecas_que_aceitam_cor(st, c)
+
     # -------------------------------------------------------- progresso fino
     # A barra do sv-ttk é imagem e não afina; a do painel é a `BarraFina`, que
     # é Canvas. Este estilo fica para quem ainda usa `ttk.Progressbar` direto.
@@ -726,6 +728,50 @@ def aplicar_estilos(escuro: bool) -> None:
         pass
 
     _repintar_todos()
+
+def _pecas_que_aceitam_cor(st, c: dict) -> None:
+    """Troca as peças do sv-ttk que são IMAGEM por peças do tema `clam`.
+
+    O sv-ttk desenha o fundo da tabela, o cabeçalho dela e o `Toolbutton` por
+    imagem, com a cor dele assada dentro: o `fieldbackground` e o `background`
+    que `aplicar_estilos` passava eram ignorados. No cinza de antes isso mal
+    se via; no azul-marinho de 22/10/2026 (repaginada) a tabela vazia e os
+    botões DIÁRIO/MENSAL viravam blocos cinza no meio do azul. As peças do
+    `clam` vêm com o próprio Tk e aceitam cor de fundo e de borda.
+
+    Elemento e layout são do TEMA ativo, e o `sv_ttk.set_theme` recria o tema:
+    por isso isto roda dentro de `aplicar_estilos`, a cada troca, e o
+    `element_create` repetido no mesmo tema é ignorado."""
+    for elemento in ("Mc.Treeview.field", "Mc.Treeheading.cell",
+                     "Mc.Toolbutton.button"):
+        try:
+            st.element_create(elemento, "from", "clam")
+        except tk.TclError:
+            pass                       # já existe neste tema
+    area = [("Treeview.padding", {"sticky": "nswe", "children": [
+        ("Treeview.treearea", {"sticky": "nswe"})]})]
+    cabeca = [("Treeheading.padding", {"sticky": "nswe", "children": [
+        ("Treeheading.image", {"side": "right", "sticky": ""}),
+        ("Treeheading.text", {"sticky": "we"})]})]
+    for estilo in ("Tabela.Treeview", "Dupla.Treeview"):
+        st.layout(estilo, [("Mc.Treeview.field", {
+            "sticky": "nswe", "border": "1", "children": area})])
+        st.configure(estilo, bordercolor=c["borda"], lightcolor=c["cartao"],
+                     darkcolor=c["cartao"])
+        st.layout(estilo + ".Heading",
+                  [("Mc.Treeheading.cell", {"sticky": "nswe"})] + cabeca)
+        st.configure(estilo + ".Heading", bordercolor=c["borda"],
+                     lightcolor=c["cabecalho"], darkcolor=c["cabecalho"])
+    st.layout("Grupo.Toolbutton", [("Mc.Toolbutton.button", {
+        "sticky": "nswe", "children": [("Toolbutton.padding", {
+            "sticky": "nswe", "children": [("Toolbutton.label", {
+                "expand": "1", "sticky": "nswe"})]})]})])
+    st.configure("Grupo.Toolbutton", bordercolor=c["cartao"],
+                 lightcolor=c["cartao"], darkcolor=c["cartao"])
+    sob = [("active", c["fundo"]), ("pressed", c["fundo"])]
+    st.map("Grupo.Toolbutton", background=sob, bordercolor=sob,
+           lightcolor=sob, darkcolor=sob)
+
 
 def barra_de_titulo(janela, escuro: bool | None = None) -> None:
     """Pinta a barra de título do Windows na cor do tema.

@@ -1176,3 +1176,29 @@ def test_a_bolinha_do_navegador_aparece_na_barra(tema, estado):
     paleta = widgets.PALETA[tema]
     cor = widgets.cor_da_bolinha(paleta, estado)
     assert _contraste(cor, paleta["marca_barra"]) >= MINIMO_COMPONENTE
+
+
+def _primeiro_elemento(st, estilo: str) -> str:
+    return st.layout(estilo)[0][0]
+
+
+def test_tabela_e_grupo_do_menu_seguem_a_paleta_nos_dois_temas(raiz):
+    """Galeria de 22/10/2026: no escuro azul-marinho, o fundo da tabela, o
+    cabeçalho dela e os botões DIÁRIO/MENSAL ficavam no cinza do sv-ttk, que
+    os desenha por IMAGEM e ignora a cor. Agora eles usam peças do tema
+    `clam` do próprio Tk, que aceitam cor — e a troca de tema as recria."""
+    st = ttk.Style()
+    try:
+        for escuro in (True, False, True):
+            widgets.aplicar_estilos(escuro)
+            c = widgets.PALETA["escuro" if escuro else "claro"]
+            for estilo in ("Tabela.Treeview", "Dupla.Treeview"):
+                assert _primeiro_elemento(st, estilo) == "Mc.Treeview.field"
+                assert str(st.lookup(estilo, "bordercolor")).lower() == c["borda"].lower()
+            for estilo in ("Tabela.Treeview.Heading", "Dupla.Treeview.Heading"):
+                assert _primeiro_elemento(st, estilo) == "Mc.Treeheading.cell"
+                assert str(st.lookup(estilo, "lightcolor")).lower() == c["cabecalho"].lower()
+            assert _primeiro_elemento(st, "Grupo.Toolbutton") == "Mc.Toolbutton.button"
+            assert str(st.lookup("Grupo.Toolbutton", "lightcolor")).lower() == c["cartao"].lower()
+    finally:
+        widgets.aplicar_estilos(False)
