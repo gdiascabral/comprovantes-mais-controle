@@ -44,6 +44,7 @@ from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
 from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from tela_do_dia.frame import TelaDoDiaFrame
+from tela_do_dia.controle_frame import ControleAportesFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
 from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
@@ -328,6 +329,11 @@ def main():
     aba_dia = TelaDoDiaFrame(conteudo, aba_anx)
     aba_dia.aba_aportes = aba_apt
     aba_dia.aba_remessa = aba_pag
+    # Controle de aportes divide navegador e thread do Anexar: lê o MESMO ERP
+    # (só GET). Só o admin edita abertura, proporção e apontamentos — a RLS
+    # nega o resto; aqui só se apagam os botões.
+    aba_cap = ControleAportesFrame(conteudo, aba_anx)
+    aba_cap.liberar_edicao(_eu.admin)
     # Contratos usa o mesmo ERP: divide navegador e thread, como as outras.
     aba_ctr = ContratosFrame(conteudo, aba_anx)
     # Acessórias NÃO divide o navegador do escritório contábil (terceiro
@@ -348,7 +354,7 @@ def main():
                "conf": aba_conf, "apt": aba_apt, "rel": aba_rel,
                "pag": aba_pag, "ext": aba_ext, "con": aba_con,
                "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc,
-               "dia": aba_dia}
+               "dia": aba_dia, "cap": aba_cap}
     atual = {"nome": None}
     itens = {}
 
@@ -481,7 +487,7 @@ def main():
         #
         # Até 02/09/2026 estes dois cabeçalhos eram as ÚNICAS paradas de Tab da
         # coluna: o `ItemMenu` não entrava no foco, então o teclado abria e
-        # fechava os grupos sem alcançar uma só das doze telas (hoje treze). A
+        # fechava os grupos sem alcançar uma só das doze telas (hoje catorze). A
         # regra escrita aqui valia para o cabeçalho e era desmentida logo
         # abaixo; agora o item também entra no Tab, e o Tab percorre a coluna
         # inteira na ordem em que ela é lida.
@@ -507,7 +513,8 @@ def main():
     # cada conta para os pagamentos do dia fecharem.
     _grupo("diario", "DIÁRIO", (("dia", "🧾", "Pagamentos do dia"),
                                 ("pag", "🗓", "Remessa/Retorno"),
-                                ("con", "⚖", "Saldo de pagamentos")))
+                                ("con", "⚖", "Saldo de pagamentos"),
+                                ("cap", "🤝", "Controle de aportes")))
     _grupo("mensal", "MENSAL", (("rel", "📊", "Relatório Mensal"),
                                 ("ext", "🏦", "Extratos Sicoob"),
                                 ("ctr", "📑", "Contratos"),
@@ -711,8 +718,8 @@ def main():
     # ---------------- o menu pelo teclado
     # O `widgets.ItemMenu` passou a entrar no Tab (antes só escutava o clique,
     # e quem usa só o teclado alcançava DIÁRIO e MENSAL sem alcançar nenhuma
-    # das treze telas do menu). Tab percorre a coluna; estes atalhos
-    # são o caminho DIRETO — treze telas atrás de treze Tabs é alcançável, não é
+    # das catorze telas do menu). Tab percorre a coluna; estes atalhos
+    # são o caminho DIRETO — catorze telas atrás de catorze Tabs é alcançável, não é
     # usável.
     #
     # A ordem é a do menu, e sai do próprio `itens`: o `_item` insere na ordem
@@ -755,7 +762,7 @@ def main():
 
     def _atalho_numero(ev=None):
         # Ctrl+1..9 alcançam as NOVE primeiras telas do menu. Não há Ctrl+0 nem
-        # Ctrl+10: dez teclas de dígito para treze telas (catorze com a de
+        # Ctrl+10: dez teclas de dígito para catorze telas (quinze com a de
         # Usuários, do admin) escolheria quais ficam de fora sem critério
         # nenhum. Da décima em diante é o Ctrl+Tab.
         try:
