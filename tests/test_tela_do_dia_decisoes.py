@@ -303,3 +303,46 @@ def test_buscar_da_tela_usa_os_campos_e_nao_so_a_sugestao():
     trecho = ast.get_source_segment(fonte, buscar)
     assert "dc.periodo_da_busca(" in trecho and "sugerir_periodo(" not in trecho
     assert "CampoData(" in fonte
+
+
+# ------------------------------- revisão do pacote: saldo de agora ≠ do dia
+def test_nao_busca_o_futuro():
+    with pytest.raises(ValueError, match="futuro"):
+        dc.periodo_da_busca("21/10/2026", "22/10/2026", ("a", "b"), HOJE)
+
+
+def test_periodo_de_no_maximo_31_dias():
+    from conciliacao.models import Periodo
+    assert dc.periodo_da_busca("21/09/2026", "21/10/2026", ("a", "b"), HOJE) == \
+        Periodo(date(2026, 9, 21), HOJE)                          # 31 dias
+    with pytest.raises(ValueError, match="31 dias"):
+        dc.periodo_da_busca("20/09/2026", "21/10/2026", ("a", "b"), HOJE)
+
+
+def test_dia_passado_pergunta_antes_de_gerar_com_o_saldo_de_agora():
+    from conciliacao.models import Periodo
+    assert dc.pergunta_saldo_de_agora(Periodo(HOJE, HOJE), HOJE) == ""
+    texto = dc.pergunta_saldo_de_agora(Periodo(date(2026, 10, 16), date(2026, 10, 16)), HOJE)
+    assert texto == "O saldo é o de agora, não o de 16/10. Gerar mesmo assim?"
+    assert dc.pergunta_saldo_de_agora(Periodo(date(2026, 10, 16), date(2026, 10, 16)), HOJE,
+                                      acao="Mandar").endswith("Mandar mesmo assim?")
+
+
+def test_periodo_passado_avisa_que_todos_os_saldos_sao_os_de_agora():
+    from conciliacao.models import Periodo
+    texto = dc.periodo_na_tela(Periodo(date(2026, 10, 16), date(2026, 10, 16)), HOJE)
+    assert "sistema e Sicoob" in texto and "os de agora" in texto
+
+
+def test_excel_e_aportes_perguntam_o_saldo_de_agora_com_padrao_nao():
+    import ast
+    from pathlib import Path
+    fonte = (Path(__file__).resolve().parents[1] / "tela_do_dia" / "frame.py").read_text(
+        encoding="utf-8")
+    funcs = {n.name: ast.get_source_segment(fonte, n) for n in ast.walk(ast.parse(fonte))
+             if isinstance(n, ast.FunctionDef)}
+    for nome in ("_gerar_excel", "_mandar_aportes"):
+        trecho = funcs[nome]
+        assert "dc.pergunta_saldo_de_agora(" in trecho, nome
+        depois = trecho.split("dc.pergunta_saldo_de_agora(", 1)[1]
+        assert 'default="no"' in depois.split("return", 1)[0], nome

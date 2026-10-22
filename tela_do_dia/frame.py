@@ -120,6 +120,9 @@ class TelaDoDiaFrame(ttk.Frame):
         self._sugerido = dc.textos_sugeridos(datetime.date.today())
         self.v_ini = tk.StringVar(value=self._sugerido[0])
         self.v_fim = tk.StringVar(value=self._sugerido[1])
+        # O dia em que os saldos foram lidos (o Buscar): com o ATÉ antes dele,
+        # o saldo é o de agora (`decisoes.pergunta_saldo_de_agora`).
+        self._lido_no_dia = None
         self._build()
         self.after(150, self._drain)
 
@@ -673,6 +676,7 @@ class TelaDoDiaFrame(ttk.Frame):
     def _receber_leitura(self, pacote):
         (self.cfg, self.mapping, self.leitura, self.contas_erp, self.regras,
          self.periodo, self.modelo, lido) = pacote
+        self._lido_no_dia = datetime.date.today()
         self.lido, self.conferencia, self._nuvem_travada = lido, lido.conferencia, lido.erro
         lido.lido_em = datetime.datetime.now().strftime("%H:%M")
         self.marcas_agd = passo67.marcas_iniciais(lido.pendentes)
@@ -1666,6 +1670,10 @@ class TelaDoDiaFrame(ttk.Frame):
             self._log(f"\nO EXCEL DO DIA NÃO FOI GERADO\n{motivo}")
             messagebox.showwarning(titulo, motivo)
             return
+        agora = dc.pergunta_saldo_de_agora(self.periodo,
+                                           self._lido_no_dia or datetime.date.today())
+        if agora and not messagebox.askyesno(titulo, agora, default="no"):
+            return
         sem_saldo = sorted(dc.contas_sem_saldo(self.saldos))
         if sem_saldo and not messagebox.askyesno(
                 titulo, "Sem o saldo do sistema: " + ", ".join(sem_saldo)
@@ -1778,6 +1786,11 @@ class TelaDoDiaFrame(ttk.Frame):
                                            "que fica o que já foi mandado hoje. Confira a "
                                            "aba Aportes e o arquivo (veja o Registro) "
                                            "antes de mandar.")
+            return
+        agora = dc.pergunta_saldo_de_agora(self.periodo,
+                                           self._lido_no_dia or datetime.date.today(),
+                                           acao="Mandar")
+        if agora and not messagebox.askyesno(titulo, agora, default="no"):
             return
         envio = para_aportes.operacoes(
             self.aportes.definidos_validos, self.regras, self.aba_aportes.entidades,

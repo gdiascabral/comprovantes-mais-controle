@@ -168,7 +168,14 @@ ATÉ noutro dia, o Reler recusa com o recado, o automático do Buscar só
 escreve no Registro, a leitura já guardada daquele dia (se houver) continua
 valendo, e o rótulo do período diz "dia de trabalho DD/MM (não é hoje: o
 saldo do Sicoob não é lido — digite o do banco)" (`periodo_na_tela(p,
-hoje)`). É a mesma regra que já cobria a virada da meia-noite. Sem
+hoje)`). É a mesma regra que já cobria a virada da meia-noite.
+**Revisão do pacote (22/10/2026): o saldo do ERP também é o de agora.** O
+Buscar recusa ATÉ depois de hoje ("não dá para buscar o futuro") e período
+de mais de 31 dias. Com o ATÉ antes do dia em que os saldos foram lidos
+(`_lido_no_dia`), o Excel do dia e o "Mandar para a aba Aportes" perguntam
+primeiro, padrão NÃO: "O saldo é o de agora, não o de DD/MM. Gerar (Mandar)
+mesmo assim?" (`decisoes.pergunta_saldo_de_agora`), e o rótulo do período
+diz que os saldos (sistema e Sicoob) são os de agora. Sem
 calendário de feriados, a tela NÃO avisa nada sobre o dia anterior; no dia
 seguinte a um feriado, o dono escolhe o período.
 

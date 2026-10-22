@@ -166,6 +166,7 @@ def detalhe_do_erro(erro) -> str:
 
 # ------------------------------------------------- período (campo de datas)
 FORMATO_DATA = "%d/%m/%Y"
+MAXIMO_DE_DIAS = 31
 
 
 def textos_sugeridos(hoje) -> tuple[str, str]:
@@ -204,7 +205,25 @@ def periodo_da_busca(txt_ini: str, txt_fim: str, sugerido, hoje):
     if sugerido is not None and atual == tuple(sugerido) and atual != textos_sugeridos(hoje):
         return sugerir_periodo(hoje)
     ini, fim = _data(atual[0], "DE"), _data(atual[1], "ATÉ")
-    return Periodo(min(ini, fim), max(ini, fim))
+    ini, fim = min(ini, fim), max(ini, fim)
+    if fim > hoje:
+        raise ValueError(f"Não dá para buscar o futuro: o ATÉ ({fim:%d/%m/%Y}) é depois "
+                         f"de hoje ({hoje:%d/%m/%Y}).")
+    dias = (fim - ini).days + 1
+    if dias > MAXIMO_DE_DIAS:
+        raise ValueError(f"O período tem {dias} dias; o máximo é {MAXIMO_DE_DIAS} dias. "
+                         "Para mais, busque em partes.")
+    return Periodo(ini, fim)
+
+
+def pergunta_saldo_de_agora(periodo, lido_em, acao: str = "Gerar") -> str:
+    """Vazio = o dia de trabalho é o dia em que os saldos foram lidos. Com o
+    ATÉ no passado, os saldos (sistema E Sicoob) são os de AGORA, não os
+    daquele dia: Excel do dia e "Mandar para Aportes" perguntam antes, com
+    padrão "não" (revisão do pacote, 22/10/2026)."""
+    if periodo.fim >= lido_em:
+        return ""
+    return f"O saldo é o de agora, não o de {periodo.fim:%d/%m}. {acao} mesmo assim?"
 
 
 def periodo_na_tela(periodo, hoje=None) -> str:
@@ -213,12 +232,13 @@ def periodo_na_tela(periodo, hoje=None) -> str:
     dia útil, e aviso que aparece sempre é ruído) — com o campo de datas
     (22/10/2026), o dono escolhe o período do dia seguinte a um feriado.
 
-    Com `hoje` e o ATÉ em outro dia, diz qual é o dia de trabalho e que o
-    Sicoob não é lido (o saldo dele é o de agora)."""
+    Com `hoje` e o ATÉ em outro dia, diz qual é o dia de trabalho e que os
+    saldos (sistema e Sicoob) são os de agora — e o Sicoob nem é lido."""
     texto = f"Pagamentos de {periodo.inicio:%d/%m} a {periodo.fim:%d/%m}"
     if hoje is not None and periodo.fim != hoje:
-        texto += (f" · dia de trabalho {periodo.fim:%d/%m} (não é hoje: o saldo do "
-                  "Sicoob não é lido — digite o do banco)")
+        texto += (f" · dia de trabalho {periodo.fim:%d/%m}: os saldos (sistema e Sicoob) "
+                  f"são os de agora, não os de {periodo.fim:%d/%m}; o Sicoob não é lido — "
+                  "confira antes do Excel e dos aportes")
     return texto
 
 
