@@ -787,9 +787,29 @@ def classificar_anexos(files) -> str:
 #: "PAGAMENTO AUTORIZADO - <nome>": a autorização de pagar, não um boleto
 #: (dono, 22/10/2026). O PDF era o único "neutro" do título e virava "Boleto
 #: em imagem — preencher manual", com o Pix nos Dados Bancários do próprio
-#: lançamento.
-_AUTORIZACAO_NO_ROTULO = re.compile(r"autoriza", re.I)
-_AUTORIZACAO_NO_TEXTO = re.compile(r"pagamento\s+autorizado", re.I)
+#: lançamento. Só a frase inteira "pagamento autorizado" (sem acento nem
+#: caixa, com espaço ou "_" no meio): "autoriza" solto pegava "OC 5909
+#: AUTORIZADA" e "AUTORIZAÇÃO DE FORNECIMENTO", que são documento de compra,
+#: e a linha nascia MARCADA na remessa (revisão de dinheiro, 22/10/2026).
+_PAGAMENTO_AUTORIZADO = re.compile(r"pagamento[\s_\-]*autorizado")
+
+
+def _diz_pagamento_autorizado(texto: str) -> bool:
+    return bool(_PAGAMENTO_AUTORIZADO.search(chave(texto)))
+
+
+def _lido_com_certeza(f: dict, textos: dict, urls_ocr=()) -> bool:
+    """O anexo foi lido de um jeito que permite dizer "não há boleto aqui".
+
+    Imagem nunca (o boleto escaneado em foto); PDF só com a camada de texto
+    dele — sem texto, ou lido só pelo OCR, a linha digitável pode estar lá
+    sem ter fechado. Outro formato (planilha, xml) não carrega boleto."""
+    if _e_imagem(f):
+        return False
+    if not eh_pdf(f):
+        return True
+    url = f.get("downloadUrl") or ""
+    return bool((textos.get(url) or "").strip()) and url not in urls_ocr
 
 
 def eh_autorizacao(f: dict, textos: dict | None = None) -> bool:
@@ -801,10 +821,10 @@ def eh_autorizacao(f: dict, textos: dict | None = None) -> bool:
     rotulo = _rotulo(f)
     if _E_BOLETO.search(rotulo) or _NAO_E_BOLETO.search(rotulo):
         return False
-    if _AUTORIZACAO_NO_ROTULO.search(rotulo):
+    if _diz_pagamento_autorizado(rotulo):
         return True
     texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
-    return bool(_AUTORIZACAO_NO_TEXTO.search(texto)
+    return bool(_diz_pagamento_autorizado(texto)
                 and not _PROVA_DE_PAGAMENTO.search(texto))
 
 
@@ -1727,11 +1747,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # Vale até sem saber QUAL boleto: aí a linha vai para conferência.
         # Título já pago fica como está: ali não há o que decidir.
         venc_item = data_do_item(item)
+        #: Boleto achado por CONTEÚDO dentro de outro anexo: ganha de tudo
+        #: abaixo (sócio, autorização, regra do favorecido).
+        boleto_escondido = False
         if tipo == "Pix" and cls != "PAGAR_PARA" and not item.get("paid"):
             escondida, onde = linha_em_outro_anexo(files, textos, valor, urls_ocr,
                                                    vencimento=venc_item)
             if escondida or onde:
-                tipo = "Boleto"
+                tipo, boleto_escondido = "Boleto", True
 
         # Pedidos do dono de 22/10/2026, os dois em falha FECHADA: sem certeza,
         # a linha segue o caminho de sempre (e o alarme de sempre).
@@ -1741,7 +1764,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # - `autorizado_por`: anexo "PAGAMENTO AUTORIZADO" (ou o favorecido
         #   com `pix_dos_dados_bancarios` no `regras_fornecedor.json`) — paga
         #   o Pix dos Dados Bancários do próprio lançamento.
-        # Boleto anexado continua ganhando dos dois.
+        # Boleto em QUALQUER anexo ganha dos dois: o que se anuncia boleto, o
+        # achado dentro da NF (`boleto_escondido`) e a linha digitável válida
+        # em qualquer outro PDF. E a autorização só vale com todos os outros
+        # anexos LIDOS com certeza (`_lido_com_certeza`): foto, PDF sem texto
+        # ou lido só pelo OCR podem ser o boleto que não fechou — aí fica
+        # ATENÇÃO, como antes (revisão de dinheiro de 22/10/2026, A1 e A2).
         socio, chave_socio, autorizado_por, chave_db = None, "", "", ""
         if not item.get("paid") and cls != "PAGAR_PARA":
             if (documento_declara_reembolso(item, overview)
@@ -1751,21 +1779,18 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     cadastro_reembolso or {})
                 if achado:
                     socio, chave_socio = achado
-            if socio is None:
+            if socio is None and not boleto_escondido:
                 autorizacoes = [f for f in files if eh_autorizacao(f, textos)]
                 pela_regra = regras.pix_dos_dados_bancarios(favorecido, regras_forn)
-                if autorizacoes:
-                    # A autorização não é boleto: o que sobra é que decide.
+                if autorizacoes or pela_regra:
+                    # A autorização não é boleto: o que sobra é que decide —
+                    # inteiro, também na regra do favorecido (dono: "para essa
+                    # sempre autorizar" não quer dizer pagar boleto em dobro).
                     outros = [f for f in files if f not in autorizacoes]
-                elif pela_regra:
-                    # O favorecido marcado: só o anexo que SE ANUNCIA boleto
-                    # conta como boleto (dono: "para essa sempre autorizar").
-                    outros = [f for f in files if tem_boleto([f])]
-                else:
-                    outros = None
-                if outros is not None:
                     chave_db = chave_dos_dados_bancarios(pago_para)
-                    if chave_db and _sem_boleto(outros, textos, valor, urls_ocr):
+                    if (chave_db and _sem_boleto(outros, textos, valor, urls_ocr)
+                            and all(_lido_com_certeza(f, textos, urls_ocr)
+                                    for f in outros)):
                         autorizado_por = ("anexo" if autorizacoes
                                           else "regra do favorecido")
 

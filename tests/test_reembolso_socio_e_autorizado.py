@@ -303,8 +303,9 @@ def test_autorizacao_nao_ganha_de_boleto_anexado():
 def test_regra_do_favorecido_autoriza_sem_o_anexo_dizer():
     regras_forn = {"FAVORECIDA MODELO": {"pix_dos_dados_bancarios": True}}
     res = relatorio.montar_registros(
-        [_autorizado(tradePayablePaymentMethod=None)], {"t1": [anexo("foto 1")]},
-        {}, {}, regras_fornecedor=regras_forn)
+        [_autorizado(tradePayablePaymentMethod=None)],
+        {"t1": [anexo("orcamento 1", url="o")]},
+        {}, {"o": "ORCAMENTO 1 - madeira"}, regras_fornecedor=regras_forn)
     linha = _linha(res)
     assert linha["tipo"] == "Pix"
     assert linha["dados"] == "111.444.777-35"
@@ -329,3 +330,95 @@ def test_regra_lida_do_regras_fornecedor_json(tmp_path):
     assert regras.pix_dos_dados_bancarios("FAVORECIDA MODELO DE TAL", cad)
     assert not regras.pix_dos_dados_bancarios("OUTRA PESSOA", cad)
     assert not regras.pix_dos_dados_bancarios("FAVORECIDA MODELO", {})
+
+
+# ==========================================================================
+# Revisão de dinheiro de 22/10/2026 — A1 e A2
+# ==========================================================================
+LINHA_VALIDA = "34191.57007 00024.924375 24177.010006 9 15340000115000"
+REGRA_FAVORECIDA = {"FAVORECIDA MODELO": {"pix_dos_dados_bancarios": True}}
+
+
+def _nao_autorizou(res):
+    """Sem certeza, a linha volta ao caminho de antes: ATENÇÃO na planilha
+    ou NÃO ENTRARAM — nunca APTO pelo Pix dos Dados Bancários."""
+    for linha in res.contas.get(CONTA, []):
+        assert "pagamento autorizado" not in linha["obs"]
+        assert not linha["status"].startswith("APTO")
+        assert linha["dados"] != "111.444.777-35"
+
+
+def test_a1_regra_nao_passa_por_cima_do_boleto_dentro_da_nf():
+    """A1: boleto achado DENTRO da NF (a etiqueta não o anuncia) ganha do Pix
+    dos Dados Bancários, mesmo com a regra do favorecido — senão a remessa
+    pagava o boleto em aberto E o Pix (pagamento em dobro)."""
+    anexos = {"t1": [anexo("NF 5909", "Nota Fiscal", url="nf")]}
+    textos = {"nf": f"NOTA FISCAL 5909\nRecibo do pagador\n{LINHA_VALIDA}"}
+    for forma in ("Pix", None):
+        res = relatorio.montar_registros(
+            [_autorizado(tradePayablePaymentMethod=forma)], anexos, {}, textos,
+            regras_fornecedor=REGRA_FAVORECIDA)
+        linha = _linha(res)
+        assert linha["tipo"] == "Boleto", forma
+        assert "pagamento autorizado" not in linha["obs"], forma
+        assert linha["dados"] != "111.444.777-35", forma
+
+
+def test_a1_autorizacao_nao_passa_por_cima_do_boleto_dentro_da_nf():
+    anexos = {"t1": [anexo("PAGAMENTO AUTORIZADO - FULANO", url="a"),
+                     anexo("NF 5909", "Nota Fiscal", url="nf")]}
+    textos = {"a": "PAGAMENTO AUTORIZADO",
+              "nf": f"NOTA FISCAL 5909\n{LINHA_VALIDA}"}
+    res = relatorio.montar_registros([_autorizado()], anexos, {}, textos)
+    linha = _linha(res)
+    assert linha["tipo"] == "Boleto"
+    assert OBS_AUTORIZADO not in linha["obs"]
+
+
+def test_a2_autorizacao_com_anexo_em_imagem_fica_atencao():
+    """Uma foto ao lado da autorização pode ser o boleto escaneado: sem ler
+    com certeza, não autoriza (fica como antes, ATENÇÃO)."""
+    anexos = {"t1": [anexo("PAGAMENTO AUTORIZADO - FULANO", url="a"),
+                     anexo("scan 01", ext=".jpg", url="img")]}
+    res = relatorio.montar_registros(
+        [_autorizado(tradePayablePaymentMethod=None)], anexos, {},
+        {"a": "PAGAMENTO AUTORIZADO", "img": "texto qualquer do ocr"},
+        urls_ocr={"img"})
+    linha = _linha(res)
+    assert OBS_AUTORIZADO not in linha["obs"]
+    assert not linha["status"].startswith("APTO")
+
+
+def test_a2_autorizacao_com_pdf_sem_texto_ou_so_ocr_fica_atencao():
+    for textos, ocr in (({}, set()),                         # PDF não lido
+                        ({"p": "texto borrado sem linha"}, {"p"})):  # OCR não fechou
+        anexos = {"t1": [anexo("PAGAMENTO AUTORIZADO - FULANO"),
+                         anexo("documento 2", url="p")]}
+        res = relatorio.montar_registros(
+            [_autorizado(tradePayablePaymentMethod=None)], anexos, {}, textos,
+            urls_ocr=ocr)
+        _nao_autorizou(res)
+
+
+def test_a2_regra_com_anexo_nao_lido_fica_atencao():
+    res = relatorio.montar_registros(
+        [_autorizado(tradePayablePaymentMethod=None)],
+        {"t1": [anexo("scan 01", ext=".jpg")]}, {}, {},
+        regras_fornecedor=REGRA_FAVORECIDA)
+    _nao_autorizou(res)
+
+
+def test_a2_autoriza_solto_no_nome_nao_e_autorizacao():
+    for nome in ("OC 5909 AUTORIZADA", "orçamento autorizado",
+                 "AUTORIZAÇÃO DE FORNECIMENTO", "autorizacao de compra"):
+        assert not relatorio.eh_autorizacao(anexo(nome)), nome
+
+
+def test_a2_pagamento_autorizado_sem_acento_nem_caixa():
+    for nome in ("PAGAMENTO AUTORIZADO - FULANO", "pagamento autorizado",
+                 "Pagamento_Autorizado julio", "PAGAMENTO  AUTORIZADO"):
+        assert relatorio.eh_autorizacao(anexo(nome)), nome
+    assert relatorio.eh_autorizacao(anexo("doc 9", url="u"),
+                                    {"u": "Pagamento Autorizado pela diretoria"})
+    assert not relatorio.eh_autorizacao(anexo("doc 9", url="u"),
+                                        {"u": "Ordem de compra autorizada"})
