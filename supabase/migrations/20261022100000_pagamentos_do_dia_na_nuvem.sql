@@ -34,7 +34,8 @@ create table if not exists public.pagamento_decisao (
   constraint pagamento_decisao_acao check (acao in ('liberar', 'desmarcar', 'editar', 'desfazer', 'remover_a_mao')),
   constraint pagamento_decisao_motivo check (length(motivo) <= 200
     and (acao not in ('liberar', 'editar', 'remover_a_mao') or length(trim(motivo)) >= 3)),
-  constraint pagamento_decisao_json check (jsonb_typeof(campos) = 'object' and jsonb_typeof(antes) = 'object')
+  constraint pagamento_decisao_json check (jsonb_typeof(campos) = 'object' and jsonb_typeof(antes) = 'object'),
+  constraint pagamento_decisao_tamanho check (length(alvo) <= 200 and length(conta) <= 200 and length(quem_nome) <= 200 and pg_column_size(campos) <= 16384 and pg_column_size(antes) <= 16384)
 );
 create index if not exists pagamento_decisao_dia_idx on public.pagamento_decisao (dia, id);
 
@@ -61,7 +62,8 @@ create table if not exists public.pagamento_a_mao (
   constraint pagamento_a_mao_conta check (length(trim(conta)) > 0),
   constraint pagamento_a_mao_descricao check (length(trim(descricao)) >= 3 and length(descricao) <= 200),
   constraint pagamento_a_mao_motivo check (length(trim(motivo)) >= 3 and length(motivo) <= 200),
-  constraint pagamento_a_mao_tipo check (tipo in ('', 'Pix', 'Boleto', 'Transferência'))
+  constraint pagamento_a_mao_tipo check (tipo in ('', 'Pix', 'Boleto', 'Transferência')),
+  constraint pagamento_a_mao_tamanho check (length(conta) <= 200 and length(favorecido) <= 200 and length(descricao) <= 200 and length(lancamento_id) <= 200 and length(centro_custo) <= 200 and length(nf) <= 200 and length(oc) <= 200 and length(quem_nome) <= 200 and length(dados) <= 500)
 );
 create index if not exists pagamento_a_mao_dia_idx on public.pagamento_a_mao (dia, id);
 
@@ -82,11 +84,13 @@ create table if not exists public.pagamento_agendado (
   quando        timestamptz not null default now(),
   constraint pagamento_agendado_valor check (valor > 0),
   constraint pagamento_agendado_alvo check (length(trim(alvo)) > 0),
-  constraint pagamento_agendado_foto check (jsonb_typeof(foto) = 'object')
+  constraint pagamento_agendado_foto check (jsonb_typeof(foto) = 'object'),
+  constraint pagamento_agendado_tamanho check (length(conta) <= 200 and length(alvo) <= 200 and length(lancamento_id) <= 200 and length(favorecido) <= 200 and length(descricao) <= 200 and length(tipo) <= 200 and length(quem_nome) <= 200 and pg_column_size(foto) <= 16384)
 );
 -- Duas maquinas marcando o mesmo pagamento no mesmo dia: o banco recusa a
 -- segunda (a trava e o indice, como o `seu_numero_unico_no_dia`).
 create unique index if not exists pagamento_agendado_um_por_dia on public.pagamento_agendado (dia, alvo);
+create index if not exists pagamento_agendado_a_mao_idx on public.pagamento_agendado (a_mao_id) where a_mao_id is not null;
 create index if not exists pagamento_agendado_dia_idx on public.pagamento_agendado (dia desc);
 
 create table if not exists public.agendado_resposta (
@@ -102,7 +106,8 @@ create table if not exists public.agendado_resposta (
   constraint agendado_resposta_tipo check (resposta in ('pago', 'nao_saiu', 'reagendado')),
   constraint agendado_resposta_motivo check (length(motivo) <= 200
     and (resposta <> 'nao_saiu' or length(trim(motivo)) >= 3)),
-  constraint agendado_resposta_data check (resposta <> 'reagendado' or nova_data is not null)
+  constraint agendado_resposta_data check (resposta <> 'reagendado' or nova_data is not null),
+  constraint agendado_resposta_tamanho check (length(quem_nome) <= 200 and length(prova) <= 500)
 );
 create index if not exists agendado_resposta_agendado_idx on public.agendado_resposta (agendado_id, id);
 
@@ -114,7 +119,8 @@ create table if not exists public.lista_diretor_nome (
   quem_nome  text not null default '',
   quando     timestamptz not null default now(),
   constraint lista_diretor_nome_conta check (length(trim(conta)) > 0),
-  constraint lista_diretor_nome_nome check (length(trim(nome_curto)) between 1 and 60)
+  constraint lista_diretor_nome_nome check (length(trim(nome_curto)) between 1 and 60),
+  constraint lista_diretor_nome_tamanho check (length(conta) <= 200 and length(quem_nome) <= 200)
 );
 create index if not exists lista_diretor_nome_conta_idx on public.lista_diretor_nome (conta, id);
 
@@ -126,7 +132,8 @@ create table if not exists public.lista_diretor (
   quem      uuid not null default auth.uid() references auth.users (id),
   quem_nome text not null default '',
   quando    timestamptz not null default now(),
-  constraint lista_diretor_ordem check (jsonb_typeof(ordem) = 'array')
+  constraint lista_diretor_ordem check (jsonb_typeof(ordem) = 'array'),
+  constraint lista_diretor_tamanho check (length(quem_nome) <= 200 and length(texto) <= 20000 and pg_column_size(ordem) <= 16384)
 );
 create index if not exists lista_diretor_dia_idx on public.lista_diretor (dia desc, id desc);
 
@@ -169,27 +176,27 @@ alter table public.lista_diretor      enable row level security;
 drop policy if exists pagamento_decisao_le on public.pagamento_decisao;
 create policy pagamento_decisao_le on public.pagamento_decisao for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists pagamento_decisao_grava on public.pagamento_decisao;
-create policy pagamento_decisao_grava on public.pagamento_decisao for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()));
+create policy pagamento_decisao_grava on public.pagamento_decisao for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
 drop policy if exists pagamento_a_mao_le on public.pagamento_a_mao;
 create policy pagamento_a_mao_le on public.pagamento_a_mao for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists pagamento_a_mao_grava on public.pagamento_a_mao;
-create policy pagamento_a_mao_grava on public.pagamento_a_mao for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()));
+create policy pagamento_a_mao_grava on public.pagamento_a_mao for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
 drop policy if exists pagamento_agendado_le on public.pagamento_agendado;
 create policy pagamento_agendado_le on public.pagamento_agendado for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists pagamento_agendado_grava on public.pagamento_agendado;
-create policy pagamento_agendado_grava on public.pagamento_agendado for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()));
+create policy pagamento_agendado_grava on public.pagamento_agendado for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
 drop policy if exists agendado_resposta_le on public.agendado_resposta;
 create policy agendado_resposta_le on public.agendado_resposta for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists agendado_resposta_grava on public.agendado_resposta;
-create policy agendado_resposta_grava on public.agendado_resposta for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()));
+create policy agendado_resposta_grava on public.agendado_resposta for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
 drop policy if exists lista_diretor_nome_le on public.lista_diretor_nome;
 create policy lista_diretor_nome_le on public.lista_diretor_nome for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists lista_diretor_nome_grava on public.lista_diretor_nome;
-create policy lista_diretor_nome_grava on public.lista_diretor_nome for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()));
+create policy lista_diretor_nome_grava on public.lista_diretor_nome for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
 drop policy if exists lista_diretor_le on public.lista_diretor;
 create policy lista_diretor_le on public.lista_diretor for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists lista_diretor_grava on public.lista_diretor;
-create policy lista_diretor_grava on public.lista_diretor for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()));
+create policy lista_diretor_grava on public.lista_diretor for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
 
 notify pgrst, 'reload schema';
 

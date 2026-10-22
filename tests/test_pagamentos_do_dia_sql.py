@@ -28,7 +28,9 @@ def test_toda_tabela_tem_rls_e_as_duas_politicas_com_a_porteira():
         assert (f"create policy {nome}_le on public.{nome} for select to authenticated "
                 "using ((select privado.e_ativo()))") in t
         assert (f"create policy {nome}_grava on public.{nome} for insert to authenticated "
-                "with check ((select privado.e_ativo()) and quem = (select auth.uid()))") in t
+                "with check ((select privado.e_ativo()) and quem = (select auth.uid()) "
+                "and quem_nome = coalesce((select p.nome from public.perfil p "
+                "where p.user_id = (select auth.uid())), ''))") in t
 
 
 def test_o_app_so_le_e_acrescenta():
@@ -67,3 +69,20 @@ def test_a_api_recarrega_o_esquema_antes_de_fechar_a_transacao():
     # fica em "nao li a nuvem" (falha fechada).
     t = _texto()
     assert "notify pgrst, 'reload schema'; commit;" in t
+
+
+def test_o_indice_do_a_mao_id_existe():
+    assert ("create index if not exists pagamento_agendado_a_mao_idx "
+            "on public.pagamento_agendado (a_mao_id) where a_mao_id is not null") in _texto()
+
+
+def test_toda_tabela_tem_teto_de_tamanho():
+    t = _texto()
+    for nome in TABELAS:
+        m = re.search(rf"constraint {nome}_tamanho check \((.*?)\)\s*\);", t)
+        assert m, nome
+        assert "length(quem_nome) <= 200" in m.group(1), nome
+    for coluna in ("campos", "antes", "foto", "ordem"):
+        assert f"pg_column_size({coluna}) <= 16384" in t
+    for coluna in ("dados", "prova"):
+        assert f"length({coluna}) <= 500" in t
