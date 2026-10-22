@@ -54,6 +54,7 @@ class ControleAportesFrame(ttk.Frame):
                       ("motivo", "MOTIVO", 220, "w"))
     LARGURA_CONTA = 180
     LINHAS_FORM = 6
+    LINHAS_VAZIA = 4              # tabela vazia ou quase: nunca some
 
     def __init__(self, master, anexar_frame):
         super().__init__(master)
@@ -94,7 +95,7 @@ class ControleAportesFrame(ttk.Frame):
                    "do Mais Controle desde a abertura. Deveria = o que cada um precisa ter "
                    "posto, pela proporção, para igualar quem mais pôs. Para igualar = a "
                    "diferença.")
-        self.t_contas = self._tabela(c1, self.COLS_CONTAS, arvore=True, altura=12)
+        self.t_contas = self._tabela(c1, self.COLS_CONTAS, arvore=True, altura=10)
         linha = ttk.Frame(c1)
         linha.pack(fill="x", pady=px((8, 0)))
         self.b_nova = widgets.Botao(linha, "+ Conta no controle…", papel="neutro",
@@ -109,14 +110,14 @@ class ControleAportesFrame(ttk.Frame):
         _ajuda(c2, "Recebimentos de aporte cujo Cliente no Mais Controle não é aportador da "
                    "conta (nome completo, letra por letra). Ficam FORA da conta até o "
                    "administrador apontar de quem são — ou que não são aporte desta conta.")
-        self.t_sem_dono = self._tabela(c2, self.COLS_SEM_DONO, arvore=False, altura=8)
+        self.t_sem_dono = self._tabela(c2, self.COLS_SEM_DONO, arvore=False, altura=6)
         self.b_apontar = widgets.Botao(c2, "Apontar o selecionado…", papel="neutro",
                                        state="disabled", command=self._apontar)
         self.b_apontar.pack(anchor="w", pady=px((8, 0)))
 
         c3 = widgets.Cartao(corpo, "Apontados por você", 3)
         c3.pack(fill="x", padx=PADX, pady=px((0, 12)))
-        self.t_apontados = self._tabela(c3, self.COLS_APONTADOS, arvore=False, altura=6)
+        self.t_apontados = self._tabela(c3, self.COLS_APONTADOS, arvore=False, altura=5)
         self.b_desfazer = widgets.Botao(c3, "Desfazer o selecionado", papel="link",
                                         state="disabled", command=self._desfazer)
         self.b_desfazer.pack(anchor="w", pady=px((8, 0)))
@@ -151,9 +152,14 @@ class ControleAportesFrame(ttk.Frame):
 
     def _tabela(self, pai, colunas, *, arvore: bool, altura: int):
         grade = ttk.Frame(pai)
-        grade.pack(fill="both", expand=True, pady=px((8, 0)))
+        # Sem `expand` vertical: a área rolável só pede a sobra da tela a quem
+        # tem filho com expand, e a tabela empurrava os botões para baixo da
+        # barra de status. A altura vem das linhas (`_ajustar_altura`).
+        grade.pack(fill="x", pady=px((8, 0)))
         t = ttk.Treeview(grade, columns=[c[0] for c in colunas],
-                         show="tree headings" if arvore else "headings", height=altura)
+                         show="tree headings" if arvore else "headings",
+                         height=self.LINHAS_VAZIA)
+        t._altura_maxima = altura
         if arvore:
             t.heading("#0", text="CONTA / APORTADOR", anchor="w")
             t.column("#0", width=px(self.LARGURA_CONTA), anchor="w", stretch=True)
@@ -165,8 +171,26 @@ class ControleAportesFrame(ttk.Frame):
         widgets.estilo_tabela(t, ordenavel=False)
         # A barra ANTES da tabela (ver `TelaDoDiaFrame._tabela`).
         ttk.Scrollbar(grade, orient="vertical", command=t.yview).pack(side="right", fill="y")
-        t.pack(side="left", fill="both", expand=True)
+        t.pack(side="left", fill="x", expand=True)
+        if arvore:
+            for ev in ("<<TreeviewOpen>>", "<<TreeviewClose>>"):
+                t.bind(ev, lambda _e, t=t: t.after_idle(self._ajustar_altura, t), add="+")
         return t
+
+    def _ajustar_altura(self, t):
+        """Linhas à vista (filhos só de conta aberta), entre o mínimo e o teto."""
+        def visiveis(pai):
+            n = 0
+            for iid in t.get_children(pai):
+                n += 1
+                if t.item(iid, "open"):
+                    n += visiveis(iid)
+            return n
+        try:
+            t.configure(height=ca.linhas_da_tabela(
+                visiveis(""), self.LINHAS_VAZIA, t._altura_maxima))
+        except tk.TclError:
+            pass                         # aba fechada antes do idle
 
     def aplicar_cores(self, escuro: bool):
         try:
@@ -269,6 +293,7 @@ class ControleAportesFrame(ttk.Frame):
         self._linha_conta, self._linha_sem_dono, self._linha_apontado = {}, {}, {}
         for t in (self.t_contas, self.t_sem_dono, self.t_apontados):
             t.delete(*t.get_children())
+            self._ajustar_altura(t)
         self.lbl_resumo.configure(text=recado)
 
     def _t_ler(self, hoje):
@@ -355,6 +380,8 @@ class ControleAportesFrame(ttk.Frame):
                 self._linha_apontado[iid] = p
         if not self.apuracoes:
             resumo.append("Nenhuma conta no controle.")
+        for t in (self.t_contas, self.t_sem_dono, self.t_apontados):
+            self._ajustar_altura(t)
         self.lbl_resumo.configure(text="\n".join(resumo))
         self._leu_bem = True
 
