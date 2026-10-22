@@ -426,3 +426,305 @@ def test_gravar_rateio_nao_tira_a_subconta_do_pagou():
     assert fake.cb_pagador.get() == depois
     assert fake.cb_recebedor.get() == "SUBCONTA 111-1"
     assert chamadas == [1]
+
+
+# ------------------------------------------------- Lançar preenchido sozinho
+# 22/10/2026, pedido do dono: escolher Pagou/Recebeu já põe o "Lançar" certo.
+# É SÓ padrão: a trava continua no `validar`.
+ENTIDADES_PF = {**ENTIDADES,
+                "OUTRA PESSOA": {"nome_oficial": "BELTRANO", "conta": None,
+                                 "nome_descricao": None}}
+
+
+@pytest.mark.parametrize("pagador, recebedor, esperado", [
+    ("EMPRESA A", "EMPRESA B", "Pagamento + Recebimento"),
+    ("PESSOA FISICA", "EMPRESA B", "Só recebimento"),
+    ("EMPRESA A", "PESSOA FISICA", "Só pagamento"),
+    # Os dois sem conta: não há modo que sirva; fica como está e o validar
+    # avisa.
+    ("PESSOA FISICA", "OUTRA PESSOA", None),
+    # Investidor de subconta só aceita a perna do recebimento.
+    ("INVESTIDOR SUBCONTA 111-1", "SUBCONTA 111-1", "Só recebimento"),
+    # Um lado ainda desconhecido (digitando): só a PF já decide.
+    ("PESSOA FISICA", "", "Só recebimento"),
+    ("", "PESSOA FISICA", "Só pagamento"),
+    ("EMPRESA A", "EMPR", None),
+    ("", "", None),
+])
+def test_modo_padrao(pagador, recebedor, esperado):
+    assert regras.modo_padrao(pagador, recebedor, ENTIDADES_PF,
+                              SUBCONTAS) == esperado
+
+
+def test_modo_padrao_bate_com_o_validar():
+    """O padrão nunca sugere um modo que o próprio `validar` recusaria."""
+    for pag in ENTIDADES_PF:
+        for rec in ENTIDADES_PF:
+            if pag == rec:
+                continue
+            modo = regras.modo_padrao(pag, rec, ENTIDADES_PF, SUBCONTAS)
+            if modo is None:
+                continue
+            erros = op(pagador=pag, recebedor=rec, modo=modo).validar(
+                ENTIDADES_PF, SUBCONTAS)
+            assert not any("pessoa física" in e for e in erros), (pag, rec)
+
+
+def test_pessoa_sem_conta():
+    assert regras.pessoa_sem_conta(ENTIDADES, "PESSOA FISICA")
+    assert not regras.pessoa_sem_conta(ENTIDADES, "EMPRESA A")
+    assert not regras.pessoa_sem_conta(ENTIDADES, "NINGUEM")   # desconhecido
+
+
+def _form(pagou, recebeu, modo="Pagamento + Recebimento"):
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        entidades=ENTIDADES_PF, subcontas=SUBCONTAS,
+        cb_pagador=_Combo(list(ENTIDADES_PF), pagou),
+        cb_recebedor=_Combo(list(ENTIDADES_PF), recebeu),
+        cb_modo=_Combo([], modo), _partes_do_modo=None)
+
+
+def test_escolher_pagou_ou_recebeu_preenche_o_lancar():
+    from aportes.aportes_frame import AportesFrame
+    f = _form("PESSOA FISICA", "EMPRESA B")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só recebimento"
+    f.cb_pagador.set("EMPRESA A")
+    f.cb_recebedor.set("PESSOA FISICA")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só pagamento"
+    f.cb_recebedor.set("EMPRESA B")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Pagamento + Recebimento"
+
+
+def test_troca_manual_do_lancar_sobrevive_ate_mudar_pagou_ou_recebeu():
+    """Sair do campo de novo (FocusOut) sem trocar Pagou/Recebeu não desfaz a
+    escolha do dono; trocar uma das partes também não (revisão de 22/10: o
+    padrão só avisa no Registro quando discorda, ver os testes abaixo)."""
+    from aportes.aportes_frame import AportesFrame
+    f = _form("EMPRESA A", "EMPRESA B")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Pagamento + Recebimento"
+    f.cb_modo.set("Só pagamento")                     # o dono trocou
+    AportesFrame._aplicar_modo_padrao(f)              # FocusOut de novo
+    assert f.cb_modo.get() == "Só pagamento"
+    f.cb_recebedor.set("PESSOA FISICA")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só pagamento"
+    f.cb_modo.set("Pagamento + Recebimento")          # trocou de novo
+    f.cb_recebedor.set("EMPRESA B")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Pagamento + Recebimento"
+
+
+def test_dois_sem_conta_deixa_o_lancar_como_esta():
+    from aportes.aportes_frame import AportesFrame
+    f = _form("PESSOA FISICA", "OUTRA PESSOA", modo="Só pagamento")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só pagamento"
+
+
+# ----------------------------------- o Lançar do dono não é sobrescrito (22/10)
+# Revisão de dinheiro: depois que o dono troca o Lançar à mão, o padrão nunca
+# mais o sobrescreve, nem quando o par Pagou/Recebeu muda — só avisa no
+# Registro. Antes de ele mexer, o padrão aplica a cada par novo.
+def _form_com_registro(pagou, recebeu, modo="Pagamento + Recebimento"):
+    f = _form(pagou, recebeu, modo)
+    f.registro = []
+    f._log = f.registro.append
+    f.cb_tipo = _Combo([], "Aporte")
+    f._modo_aplicado, f._modo_manual = modo, False
+    return f
+
+
+def test_lancar_trocado_a_mao_nunca_e_sobrescrito_pelo_padrao():
+    from aportes.aportes_frame import AportesFrame
+    f = _form_com_registro("EMPRESA A", "EMPRESA B")
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Pagamento + Recebimento" and f.registro == []
+    f.cb_modo.set("Só recebimento")                   # o dono trocou
+    f.cb_recebedor.set("PESSOA FISICA")               # par novo: padrão "Só pagamento"
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só recebimento"
+    assert f.registro == ["Confira o Lançar: ficou 'Só recebimento' (o padrão "
+                          "para este par seria 'Só pagamento')."]
+    # Voltar ao mesmo valor do padrão não desliga a escolha do dono.
+    f.cb_modo.set("Pagamento + Recebimento")
+    f.cb_recebedor.set("EMPRESA B")
+    AportesFrame._aplicar_modo_padrao(f)
+    f.cb_pagador.set("PESSOA FISICA")                 # padrão "Só recebimento"
+    AportesFrame._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Pagamento + Recebimento"
+    assert "seria 'Só recebimento'" in f.registro[-1]
+
+
+def test_antes_do_dono_mexer_o_padrao_aplica_a_cada_par_novo():
+    from aportes.aportes_frame import AportesFrame
+    f = _form_com_registro("EMPRESA A", "EMPRESA B")
+    for pagou, recebeu, esperado in (("EMPRESA A", "EMPRESA B", "Pagamento + Recebimento"),
+                                     ("PESSOA FISICA", "EMPRESA B", "Só recebimento"),
+                                     ("EMPRESA A", "PESSOA FISICA", "Só pagamento")):
+        f.cb_pagador.set(pagou)
+        f.cb_recebedor.set(recebeu)
+        AportesFrame._aplicar_modo_padrao(f)
+        assert f.cb_modo.get() == esperado
+    assert f.registro == []
+
+
+def test_sair_do_investidor_reaplica_o_padrao_mesmo_par_de_texto(monkeypatch):
+    """Item 4: o ramo que devolve Tipo/Lançar ao primeiro valor zera o par,
+    senão o padrão não reaplica e o Lançar fica no MODOS[0]."""
+    from aportes import dados as cadastro
+    from aportes.aportes_frame import AportesFrame
+    f = _form_com_registro("PESSOA FISICA", "EMPRESA B", modo="Só recebimento")
+    f.cb_tipo.set(regras.TIPO_INVESTIDOR)
+    f._partes_do_modo = ("PESSOA FISICA", "EMPRESA B")    # o par já visto
+    f._aplicar_modo_padrao = lambda: AportesFrame._aplicar_modo_padrao(f)
+    AportesFrame._pagador_escolhido(f)
+    assert f.cb_tipo.get() == cadastro.TIPOS[0]
+    assert f.cb_modo.get() == "Só recebimento"           # o padrão, e não MODOS[0]
+    assert f.registro == []
+
+
+def test_rotulo_novo_do_rateio_nao_conta_como_par_novo():
+    """Item 5: gravar o rateio muda o TEXTO do Pagou (rótulo do investidor);
+    não é par novo, e o Lançar fica como estava."""
+    from types import SimpleNamespace
+    from aportes.aportes_frame import AportesFrame
+    antes = regras.rotulo_investidor("111-1", SUBCONTAS["111-1"])
+    novos = {**SUBCONTAS, "111-1": {**SUBCONTAS["111-1"],
+             "investidores": ["INVESTIDOR X", "INVESTIDOR Y", "INVESTIDOR Z"]}}
+    depois = regras.rotulo_investidor("111-1", novos["111-1"])
+    fake = SimpleNamespace(
+        subcontas=novos,
+        cb_pagador=_Combo(list(ENTIDADES) + [depois], "EMPRESA A"),
+        cb_recebedor=_Combo(list(ENTIDADES), "EMPRESA B"),
+        _partes_do_modo=(antes, "SUBCONTA 111-1"),
+        _pagador_escolhido=lambda: None)
+    AportesFrame._restaurar_escolha(fake, antes, "SUBCONTA 111-1")
+    assert fake._partes_do_modo == (depois, "SUBCONTA 111-1")
+    # O que NÃO voltou (sumiu da lista) é par novo de verdade: não acompanha.
+    fake2 = SimpleNamespace(
+        subcontas=SUBCONTAS,
+        cb_pagador=_Combo(list(ENTIDADES), "EMPRESA A"),
+        cb_recebedor=_Combo(list(ENTIDADES), "EMPRESA A"),
+        _partes_do_modo=("EMPRESA A", "SUMIU"),
+        _pagador_escolhido=lambda: None)
+    AportesFrame._restaurar_escolha(fake2, "EMPRESA A", "SUMIU")
+    assert fake2._partes_do_modo == ("EMPRESA A", "SUMIU")
+
+
+def test_renome_de_cadastro_acompanha_o_par_do_lancar():
+    """Item 5: corrigir o nome de quem está em Pagou/Recebeu troca o texto do
+    combo; não é par novo, e o Lançar trocado à mão não é revisto."""
+    from aportes.aportes_frame import AportesFrame
+    f = _form_com_registro("EMPRESA A", "EMPRESA B")
+    f._partes_do_modo = ("EMPRESA A", "EMPRESA B")
+    f.cb_pagador.valores.append("EMPRESA A NOVA")
+    f.cb_pagador.set("EMPRESA A NOVA")
+    AportesFrame._acompanhar_par(f, ("EMPRESA A", "EMPRESA B"), voltou=True)
+    assert f._partes_do_modo == ("EMPRESA A NOVA", "EMPRESA B")
+    f._partes_do_modo = ("EMPRESA A", "EMPRESA B")
+    AportesFrame._acompanhar_par(f, ("EMPRESA A", "EMPRESA B"), voltou=False)
+    assert f._partes_do_modo == ("EMPRESA A", "EMPRESA B")
+    # Par antigo que não era o do Lançar (padrão nem aplicado): não mexe.
+    f._partes_do_modo = None
+    AportesFrame._acompanhar_par(f, ("EMPRESA A", "EMPRESA B"), voltou=True)
+    assert f._partes_do_modo is None
+
+
+def test_cadastro_corrigido_chama_o_acompanhar_par():
+    import ast
+    from pathlib import Path
+    fonte = (Path(__file__).resolve().parents[1] / "aportes" / "aportes_frame.py"
+             ).read_text(encoding="utf-8")
+    arvore = ast.parse(fonte)
+    metodo = next(n for n in ast.walk(arvore)
+                  if isinstance(n, ast.FunctionDef) and n.name == "_cadastro_corrigido")
+    chamadas = [n.func.attr for n in ast.walk(metodo)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+    assert "_acompanhar_par" in chamadas
+
+
+# ------------------------------- o "Lançar" à mão vale só para uma operação
+# 22/10, layout 1280 (itens 5 e 5b): "Adicionar à lista" recomeça o
+# formulário, e a escolha manual do Lançar não gruda na operação seguinte;
+# sair do investidor de subconta também solta a escolha feita enquanto ele
+# estava em Pagou (o validar do investidor só aceita "Só recebimento").
+class _Var:
+    def __init__(self, v):
+        self.v = v
+
+    def get(self):
+        return self.v
+
+    def set(self, v):
+        self.v = v
+
+
+def _form_para_adicionar(pagou, recebeu, modo):
+    f = _form_com_registro(pagou, recebeu, modo)
+    f.cb_tipo = _Combo([], "Aporte de Capital")
+    f.cb_forma = _Combo([], "Pix")
+    f.var_data, f.var_valor = _Var("22/10/2026"), _Var("100,00")
+    f.entidades = ENTIDADES_PF
+    f.acrescentadas = []
+    f._lista_travada = lambda: False
+    f._acrescentar = f.acrescentadas.append
+    f._atualizar_total = lambda: None
+    return f
+
+
+def _ligar(f):
+    from aportes.aportes_frame import AportesFrame
+    f._aplicar_modo_padrao = lambda _ev=None: AportesFrame._aplicar_modo_padrao(f)
+    f._recomecar_modo = lambda: AportesFrame._recomecar_modo(f)
+    return AportesFrame
+
+
+def test_adicionar_a_lista_zera_o_lancar_trocado_a_mao():
+    f = _form_para_adicionar("EMPRESA A", "EMPRESA B", "Pagamento + Recebimento")
+    aba = _ligar(f)
+    aba._aplicar_modo_padrao(f)
+    f.cb_modo.set("Só pagamento")                      # o dono trocou
+    aba._aplicar_modo_padrao(f)                        # FocusOut: vira manual
+    assert f._modo_manual
+    aba._adicionar(f)
+    assert [o.modo for o in f.acrescentadas] == ["Só pagamento"]   # a 1ª foi como ele quis
+    assert f._modo_manual is False
+    assert f.cb_modo.get() == "Pagamento + Recebimento"            # o padrão voltou
+    f.cb_recebedor.set("PESSOA FISICA")                # par novo: o padrão aplica
+    aba._aplicar_modo_padrao(f)
+    assert f.cb_modo.get() == "Só pagamento" and f.registro == []
+
+
+def test_adicionar_recusado_nao_mexe_no_lancar():
+    f = _form_para_adicionar("EMPRESA A", "EMPRESA B", "Pagamento + Recebimento")
+    aba = _ligar(f)
+    aba._aplicar_modo_padrao(f)
+    f.cb_modo.set("Só pagamento")
+    aba._aplicar_modo_padrao(f)
+    f.var_data.set("data ruim")
+    import aportes.aportes_frame as mod
+    avisos = []
+    antes = mod.messagebox.showwarning
+    mod.messagebox.showwarning = lambda *a, **k: avisos.append(a)
+    try:
+        aba._adicionar(f)
+    finally:
+        mod.messagebox.showwarning = antes
+    assert avisos and f.acrescentadas == []
+    assert f._modo_manual and f.cb_modo.get() == "Só pagamento"
+
+
+def test_sair_do_investidor_solta_o_lancar_escolhido_a_mao():
+    f = _form_com_registro("EMPRESA A", "EMPRESA B", modo="Só pagamento")
+    f.cb_tipo.set(regras.TIPO_INVESTIDOR)
+    f._modo_manual = True                              # escolheu com o investidor
+    aba = _ligar(f)
+    aba._pagador_escolhido(f)
+    assert f._modo_manual is False
+    assert f.cb_modo.get() == "Pagamento + Recebimento"            # o padrão do par
+    assert f.registro == []

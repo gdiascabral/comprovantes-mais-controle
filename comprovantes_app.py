@@ -37,6 +37,7 @@ from nuvem.usuarios_frame import UsuariosFrame
 from inicio.inicio_frame import InicioFrame
 from separar_renomear.separar_renomear import SepararFrame
 from anexar.anexar_comprovantes import AnexarFrame
+from anexar.anexar_novo import AnexarNovoFrame
 from anexar.conferencia import ConferenciaFrame
 from aportes.aportes_frame import AportesFrame
 from relatorios.relatorio_frame import RelatorioFrame
@@ -44,6 +45,8 @@ from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
 from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from tela_do_dia.frame import TelaDoDiaFrame
+from tela_do_dia import sicoob_na_tela as _sicoob_na_tela
+from tela_do_dia.controle_frame import ControleAportesFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
 from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
@@ -307,6 +310,10 @@ def main():
     aba_ini = InicioFrame(conteudo)
     aba_sep = SepararFrame(conteudo)
     aba_anx = AnexarFrame(conteudo)
+    # A cópia provisória da Anexar (entrega 5): a mesma tela, mais os
+    # comprovantes que SOMAM um pagamento. NÃO tem navegador: divide o do
+    # Anexar, como a Conferência e as outras (`DONO_DO_NAVEGADOR = False`).
+    aba_anx2 = AnexarNovoFrame(conteudo, aba_anx)
     aba_conf = ConferenciaFrame(conteudo, aba_anx)
     # Aportes divide o navegador e a thread do Anexar, como a Conferência:
     # o Playwright síncrono só aceita uma thread, e um segundo Chrome
@@ -319,7 +326,7 @@ def main():
     aba_ext = ExtratosSicoobFrame(conteudo)
     # O "Conferir agendamentos" da Remessa/Retorno abre o MESMO perfil do
     # Chrome do Sicoob: com os extratos rodando, os dois brigariam por ele.
-    aba_pag.sicoob_ocupado = aba_ext.ocupado
+    # (Quem mais pergunta é ligado depois de criar a aba Pagamentos do dia.)
     # Conciliação volta a dividir navegador e thread do Anexar: é o mesmo ERP,
     # e ele só aceita uma sessão por usuário.
     aba_con = ConciliacaoFrame(conteudo, aba_anx)
@@ -328,6 +335,23 @@ def main():
     aba_dia = TelaDoDiaFrame(conteudo, aba_anx)
     aba_dia.aba_aportes = aba_apt
     aba_dia.aba_remessa = aba_pag
+    # Pagamentos do dia lê o saldo do Sicoob no MESMO perfil do banco (uma
+    # sessão só): ela pergunta aos Extratos e ao "Conferir agendamentos", e
+    # este passa a perguntar às duas — só uma recusa a mais na Remessa, com o
+    # nome de quem está usando o Sicoob (`LeitorSicoob.OCUPADO`). O Baixar
+    # comprovantes também abre o perfil do Sicoob; a aba dele (`aba_bxc`) só
+    # nasce mais abaixo, mas as perguntas só correm depois da janela montada.
+    aba_dia.sicoob.outros_no_sicoob = lambda: aba_ext.ocupado() or (
+        _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
+        "Remessa/Retorno — Conferir agendamentos"
+        if aba_pag._agendamentos is not None and aba_pag._agendamentos.is_alive() else None)
+    aba_pag.sicoob_ocupado = lambda: aba_ext.ocupado() or aba_dia.sicoob.ocupado() or (
+        _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc))
+    # Controle de aportes divide navegador e thread do Anexar: lê o MESMO ERP
+    # (só GET). Só o admin edita abertura, proporção e apontamentos — a RLS
+    # nega o resto; aqui só se apagam os botões.
+    aba_cap = ControleAportesFrame(conteudo, aba_anx)
+    aba_cap.liberar_edicao(_eu.admin)
     # Contratos usa o mesmo ERP: divide navegador e thread, como as outras.
     aba_ctr = ContratosFrame(conteudo, aba_anx)
     # Acessórias NÃO divide o navegador do escritório contábil (terceiro
@@ -344,11 +368,18 @@ def main():
         return _sc.carregar()
 
     aba_bxc = ComprovantesFrame(conteudo, _mapa_das_contas)
-    quadros = {"ini": aba_ini, "sep": aba_sep, "anx": aba_anx,
+    # O contrário da pergunta da tela do dia: Extratos e Baixar comprovantes
+    # recusam começar enquanto ela lê o saldo no MESMO perfil do Sicoob.
+    aba_ext.sicoob_ocupado = aba_dia.sicoob.ocupado
+    aba_bxc.sicoob_ocupado = aba_dia.sicoob.ocupado
+    # "anx2" ANTES de "anx": o `_sair` fecha na ordem deste dicionário, e a
+    # cópia precisa soltar a thread que espera na janela de dúvidas dela antes
+    # de o dono fechar o Chrome.
+    quadros = {"ini": aba_ini, "sep": aba_sep, "anx2": aba_anx2, "anx": aba_anx,
                "conf": aba_conf, "apt": aba_apt, "rel": aba_rel,
                "pag": aba_pag, "ext": aba_ext, "con": aba_con,
                "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc,
-               "dia": aba_dia}
+               "dia": aba_dia, "cap": aba_cap}
     atual = {"nome": None}
     itens = {}
 
@@ -481,7 +512,7 @@ def main():
         #
         # Até 02/09/2026 estes dois cabeçalhos eram as ÚNICAS paradas de Tab da
         # coluna: o `ItemMenu` não entrava no foco, então o teclado abria e
-        # fechava os grupos sem alcançar uma só das doze telas (hoje treze). A
+        # fechava os grupos sem alcançar uma só das doze telas (hoje quinze). A
         # regra escrita aqui valia para o cabeçalho e era desmentida logo
         # abaixo; agora o item também entra no Tab, e o Tab percorre a coluna
         # inteira na ordem em que ela é lida.
@@ -507,11 +538,15 @@ def main():
     # cada conta para os pagamentos do dia fecharem.
     _grupo("diario", "DIÁRIO", (("dia", "🧾", "Pagamentos do dia"),
                                 ("pag", "🗓", "Remessa/Retorno"),
-                                ("con", "⚖", "Saldo de pagamentos")))
+                                ("con", "⚖", "Saldo de pagamentos"),
+                                ("cap", "🤝", "Controle de aportes")))
     _grupo("mensal", "MENSAL", (("rel", "📊", "Relatório Mensal"),
                                 ("ext", "🏦", "Extratos Sicoob"),
                                 ("ctr", "📑", "Contratos"),
-                                ("acs", "📤", "Acessorias")))
+                                ("acs", "📤", "Acessorias"),
+                                # Provisória, e por isso a ÚLTIMA do menu: no
+                                # meio, empurraria o Ctrl+1..9 das outras.
+                                ("anx2", "📎", "Anexar (novo)")))
 
     # ---------------- canto direito da barra: navegador, versão, quem entrou
     chip = widgets.ChipStatus(barra.direita)
@@ -640,6 +675,7 @@ def main():
                          aba_anx.ocupado()),
                 # ...o do Sicoob, que é processo e login à parte...
                 lambda: ("ext", aba_ext.ocupado()),
+                lambda: ("dia", aba_dia.sicoob.ocupado()),
                 # ...e o do portal do escritório, pelo mesmo motivo
                 lambda: ("acs", aba_acs.ocupado()),
                 # A Separar não tem navegador nenhum — o trabalho dela é OCR e
@@ -711,8 +747,8 @@ def main():
     # ---------------- o menu pelo teclado
     # O `widgets.ItemMenu` passou a entrar no Tab (antes só escutava o clique,
     # e quem usa só o teclado alcançava DIÁRIO e MENSAL sem alcançar nenhuma
-    # das treze telas do menu). Tab percorre a coluna; estes atalhos
-    # são o caminho DIRETO — treze telas atrás de treze Tabs é alcançável, não é
+    # das quinze telas do menu). Tab percorre a coluna; estes atalhos
+    # são o caminho DIRETO — quinze telas atrás de quinze Tabs é alcançável, não é
     # usável.
     #
     # A ordem é a do menu, e sai do próprio `itens`: o `_item` insere na ordem
@@ -755,7 +791,7 @@ def main():
 
     def _atalho_numero(ev=None):
         # Ctrl+1..9 alcançam as NOVE primeiras telas do menu. Não há Ctrl+0 nem
-        # Ctrl+10: dez teclas de dígito para treze telas (catorze com a de
+        # Ctrl+10: dez teclas de dígito para quinze telas (dezesseis com a de
         # Usuários, do admin) escolheria quais ficam de fora sem critério
         # nenhum. Da décima em diante é o Ctrl+Tab.
         try:

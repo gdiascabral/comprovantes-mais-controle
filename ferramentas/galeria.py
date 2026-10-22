@@ -4,7 +4,7 @@ Galeria de telas — ferramenta LOCAL para conferir o visual do app.
 
 O que é
 -------
-Monta as mesmas 13 telas que `comprovantes_app.py` monta (Início e as doze
+Monta as mesmas 15 telas que `comprovantes_app.py` monta (Início e as catorze
 abas do menu) e fotografa cada uma — nos dois temas (claro e escuro) e,
 com `--escala`, também simulando a escala de exibição do Windows. Não é um
 teste: não compara nada contra ninguém e não falha sozinho. É o registro do
@@ -96,6 +96,7 @@ import widgets
 from inicio.inicio_frame import InicioFrame
 from separar_renomear.separar_renomear import SepararFrame
 from anexar.anexar_comprovantes import AnexarFrame
+from anexar.anexar_novo import AnexarNovoFrame
 from anexar.conferencia import ConferenciaFrame
 from aportes.aportes_frame import AportesFrame
 from relatorios.relatorio_frame import RelatorioFrame
@@ -103,6 +104,7 @@ from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
 from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from tela_do_dia.frame import TelaDoDiaFrame
+from tela_do_dia.controle_frame import ControleAportesFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
 from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
@@ -195,10 +197,12 @@ _ORDEM = (
     ("dia", "🧾", "Pagamentos do dia", "pagamentos-do-dia"),
     ("pag", "🗓", "Remessa/Retorno", "remessa-retorno"),
     ("con", "⚖", "Saldo de pagamentos", "saldo-de-pagamentos"),
+    ("cap", "🤝", "Controle de aportes", "controle-de-aportes"),
     ("rel", "📊", "Relatório Mensal", "relatorio-mensal"),
     ("ext", "🏦", "Extratos Sicoob", "extratos-sicoob"),
     ("ctr", "📑", "Contratos", "contratos"),
     ("acs", "📤", "Acessorias", "acessorias"),
+    ("anx2", "📎", "Anexar (novo)", "anexar-novo"),
 )
 
 
@@ -277,7 +281,7 @@ def _preencher_dia(aba) -> None:
 
 
 def _montar_janela(root: tk.Tk, largura: int, altura: int):
-    """A moldura e as 13 abas, sem login e sem navegador nenhum.
+    """A moldura e as 14 abas, sem login e sem navegador nenhum.
 
     `root` já existe (e já tem a escala aplicada, se for o caso — ver
     `main()`: `tk scaling` muda o interpretador Tcl, e um `Tk()` novo não
@@ -366,12 +370,14 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
     _montar("anx", lambda: AnexarFrame(conteudo))
     aba_anx = quadros.get("anx")
     if aba_anx is not None:
+        _montar("anx2", lambda: AnexarNovoFrame(conteudo, aba_anx))
         _montar("conf", lambda: ConferenciaFrame(conteudo, aba_anx))
         _montar("apt", lambda: AportesFrame(conteudo, aba_anx))
         _montar("rel", lambda: RelatorioFrame(conteudo, aba_anx))
         _montar("pag", lambda: PagamentosDiaFrame(conteudo, aba_anx))
         _montar("con", lambda: ConciliacaoFrame(conteudo, aba_anx))
         _montar("dia", lambda: TelaDoDiaFrame(conteudo, aba_anx))
+        _montar("cap", lambda: ControleAportesFrame(conteudo, aba_anx))
         if "dia" in quadros:
             try:
                 _preencher_dia(quadros["dia"])
@@ -381,7 +387,7 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
     else:
         print("[galeria] sem AnexarFrame: Conferência, Aportes, Relatório "
               "Mensal, Remessa/Retorno, Saldo de pagamentos, Pagamentos do "
-              "dia e Contratos "
+              "dia, Controle de aportes, Contratos e Anexar (novo) "
               "ficam de fora (todas dependem dele).")
 
     # Extratos Sicoob e Acessórias NÃO recebem o aba_anx: cada uma tem
@@ -431,7 +437,10 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
     lateral.secao("Visão geral")
     _item(lateral.corpo, "ini", "▦", "Início")
     lateral.secao("Comprovantes")
-    for _chave, _icone, _texto, _slug in _ORDEM[1:6]:
+    # Por CHAVE, nunca por fatia de posição: item novo no `_ORDEM` empurrava
+    # a aba Aportes para fora da seção.
+    for _chave, _icone, _texto, _slug in (
+            i for i in _ORDEM if i[0] in ("bxc", "sep", "anx", "conf", "apt")):
         _item(lateral.corpo, _chave, _icone, _texto)
 
     def _grupo(rotulo: str, itens_do_grupo):
@@ -447,8 +456,8 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
         for chave, icone, texto, _slug in itens_do_grupo:
             _item(corpo_g, chave, icone, texto, recuo=10)
 
-    _grupo("DIÁRIO", tuple(i for i in _ORDEM if i[0] in ("dia", "pag", "con")))
-    _grupo("MENSAL", tuple(i for i in _ORDEM if i[0] in ("rel", "ext", "ctr", "acs")))
+    _grupo("DIÁRIO", tuple(i for i in _ORDEM if i[0] in ("dia", "pag", "con", "cap")))
+    _grupo("MENSAL", tuple(i for i in _ORDEM if i[0] in ("rel", "ext", "ctr", "acs", "anx2")))
 
     return quadros, mostrar, aplicar_tema
 

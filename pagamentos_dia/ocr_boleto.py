@@ -30,6 +30,7 @@ from __future__ import annotations
 import datetime as _dt
 import io
 import re
+from decimal import Decimal
 
 #: O OCR troca letra por dígito nos tipos condensados do boleto. Aplicar o
 #: mapa inteiro e deixar o DV julgar é mais seguro do que adivinhar caso a
@@ -150,6 +151,25 @@ def valor_da_linha(linha: str) -> float | None:
     except ValueError:
         return None
     return None
+
+
+def valor_embutido(linha: str) -> Decimal | None:
+    """O valor que a linha digitável carrega, em Decimal e ao centavo, ou
+    None quando ela NÃO diz o valor: linha que não fecha nos DVs, boleto
+    zerado (a combinar) e ficha de arrecadação com valor de REFERÊNCIA (3º
+    dígito 8 ou 9 — o campo é índice, não reais). Lido dos dígitos, sem
+    passar por float (`valor_da_linha` passa, e devolve a referência como
+    se fosse dinheiro)."""
+    d = digitos(linha)
+    if not valida(d):
+        return None
+    if len(d) == 47:
+        centavos = int(d[37:47])
+    else:
+        if d[2] in "89":
+            return None
+        centavos = int(codigo_de_barras(d)[4:15])
+    return (Decimal(centavos) / 100).quantize(Decimal("0.01")) if centavos else None
 
 
 def formatar(linha: str) -> str:

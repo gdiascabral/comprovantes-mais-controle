@@ -258,7 +258,8 @@ ICONES_FAMILIAS = ("Segoe Fluent Icons", "Segoe MDL2 Assets")
 #: Calculator, ReportDocument, Bank, Document, Send e Contact. O décimo
 #: quarto, BulletedList (Pagamentos do dia, 21/10/2026), entrou pela tabela da
 #: Microsoft e ainda pede a conferência na galeria (`python -m
-#: ferramentas.galeria`, máquina livre).
+#: ferramentas.galeria`, máquina livre); o décimo quinto, People (Controle de
+#: aportes), também.
 ICONES_FLUENT = {
     "▦": "\uE80F",      # Home           — Início
     "⬇": "\uE896",      # Download       — Baixar Comprovantes
@@ -274,6 +275,7 @@ ICONES_FLUENT = {
     "📤": "\uE724",      # Send           — Acessorias
     "👥": "\uE77B",      # Contact        — Usuários (o item de admin, no rodapé)
     "🧾": "\uE8FD",      # BulletedList   — Pagamentos do dia
+    "🤝": "\uE716",      # People         — Controle de aportes
 }
 
 #: A MESMA tabela para o Windows 10. Os valores coincidem hoje — ver acima —, e
@@ -295,6 +297,7 @@ ICONES_MDL2 = {
     "📤": "\uE724",      # Send
     "👥": "\uE77B",      # Contact
     "🧾": "\uE8FD",      # BulletedList
+    "🤝": "\uE716",      # People — Controle de aportes
 }
 
 ICONES_POR_FAMILIA = {
@@ -3744,6 +3747,41 @@ def _ligar_etiqueta_da_lista(widget) -> None:
     widget.bind_class(tag, "<Button-1>", clique)
 
 
+def destino_do_clique(elemento: str, *, x: int, largura: int, faixa_seta: int,
+                      desabilitado: bool, so_leitura: bool) -> str:
+    """Para onde vai um clique no `ComboBusca`: "texto", "lista" ou "nada".
+
+    É a MESMA pergunta do `ttk::combobox::Press` do Tk, virada do avesso. A
+    classe posiciona o cursor só quando o campo é editável E o clique cai no
+    `textarea`; em todo o resto — seta, borda, enchimento, campo `readonly` —
+    ela posta a lista NATIVA. Até 22/10/2026 o nosso clique tomava só a SETA,
+    e a moldura do campo ficava com a classe: era o "às vezes abre a lista
+    antiga" do print do dono. Respondendo à pergunta dela, nenhum clique que a
+    levaria a postar chega até ela.
+
+    `faixa_seta`: os últimos pixels contam como seta mesmo quando o `identify`
+    diz texto (em escala alta o texto encosta nela)."""
+    if desabilitado:
+        return "nada"
+    if so_leitura or x >= largura - faixa_seta:
+        return "lista"
+    if str(elemento).endswith("textarea"):
+        return "texto"
+    return "lista"
+
+
+def _script_sem_lista_nativa(comando: str) -> str:
+    """O `-postcommand` que impede a lista nativa de abrir.
+
+    `ttk::combobox::Post` roda `uplevel #0 [$cb cget -postcommand]` antes de
+    criar a listbox; com `return` no fim, o `uplevel` devolve TCL_RETURN e o
+    `Post` sai ali, sem erro e sem a lista existir. É a segunda trava: a
+    primeira é o clique e as teclas na etiqueta do combo, e esta pega qualquer
+    caminho que ainda chegue ao `Post` (um binding da classe que não
+    previmos, um `event generate`, uma versão nova do Tk)."""
+    return f"{comando}; return"
+
+
 class ComboBusca(ttk.Combobox):
     """Combo em que se DIGITA para procurar, além de escolher na lista.
 
@@ -3754,7 +3792,7 @@ class ComboBusca(ttk.Combobox):
     o próprio buscador, e cada um filtra o seu.
 
     Compara sem acento e sem caixa, por PEDAÇO em qualquer posição (`util.
-    filtrar`): "696" acha a subconta 55696-3, "livia" acha "Livian".
+    filtrar`): "111" acha a subconta 11111-1, "fulan" acha "Fulana".
 
     **A lista abre SOZINHA enquanto se digita** (14/10/2026, pedido do dono:
     "comecei a escrever, tem que aparecer as opções"). Até então ela só abria
@@ -3765,7 +3803,10 @@ class ComboBusca(ttk.Combobox):
     nenhum**. O foco nunca sai do campo; ↑/↓ andam pela lista, Enter escolhe a
     realçada, Esc fecha. A seta e o ↓ com a lista fechada abrem ESTA mesma
     lista, e não a nativa — uma lista só, com a mesma cara nos dois caminhos.
-    Ela mostra `VISIVEIS` linhas de cada vez e rola (roda, barra ou setas):
+    Desde 22/10/2026 isso vale para TODO clique fora do texto (a moldura do
+    campo abria a nativa, "às vezes", no print do dono) e para qualquer outro
+    caminho até o `Post` da classe, travado pelo `-postcommand`
+    (`destino_do_clique`, `_script_sem_lista_nativa`). Ela mostra `VISIVEIS` linhas de cada vez e rola (roda, barra ou setas):
     um cadastro de cem contas não pode virar uma janela da altura do monitor.
 
     E nada é escolhido por adivinhação: texto que não é uma opção fica como foi
@@ -3791,7 +3832,12 @@ class ComboBusca(ttk.Combobox):
 
     def __init__(self, master, width=38, **kw):
         kw.setdefault("state", "normal")          # readonly não deixa digitar
+        self._postcommand_de_quem_usa = kw.pop("postcommand", None)
         super().__init__(master, width=width, **kw)
+        # A lista nativa NUNCA abre: qualquer caminho que chegue ao `Post` da
+        # classe roda este script, que abre a NOSSA e faz o `Post` desistir.
+        self.configure(postcommand=_script_sem_lista_nativa(
+            self.register(self._pediram_a_nativa)))
         self._todos: list[str] = []
         #: O que a lista aberta mostra, a linha realçada (índice em `_achados`)
         #: e a primeira linha visível — a lista rola por janela de `VISIVEIS`.
@@ -3899,20 +3945,40 @@ class ComboBusca(ttk.Combobox):
         return "break"
 
     def _clique(self, ev):
-        """A seta abre (ou fecha) a NOSSA lista, e não a nativa."""
+        """Todo clique que a classe usaria para postar a lista nativa abre (ou
+        fecha) a NOSSA; o clique no texto segue para a classe e só posiciona
+        o cursor. Vale para o simples, o duplo, o triplo e o com Shift: na
+        etiqueta só existe `<Button-1>`, e o Tk o casa com os quatro.
+        Ver `destino_do_clique`."""
         try:
-            elemento = self.identify(ev.x, ev.y)
+            elemento = str(self.identify(ev.x, ev.y))
         except tk.TclError:
             elemento = ""
-        na_seta = "arrow" in elemento or ev.x >= self.winfo_width() - px(26)
-        if not na_seta:
+        destino = destino_do_clique(
+            elemento, x=ev.x, largura=self.winfo_width(), faixa_seta=px(26),
+            desabilitado=self.instate(["disabled"]),
+            so_leitura=self.instate(["readonly"]))
+        if destino == "texto":
             return None
+        if destino == "nada":
+            return "break"
         self.focus_set()
         if self._popup is not None:
             self.fechar_lista()
         else:
             self.abrir_lista(tudo_se_escolhido=True)
         return "break"
+
+    def _pediram_a_nativa(self):
+        """O `-postcommand`: alguém chegou ao `Post` da classe. Abre a nossa
+        no lugar (o script devolve `return`, e a nativa não abre)."""
+        if self._postcommand_de_quem_usa is not None:
+            try:
+                self._postcommand_de_quem_usa()
+            except Exception:              # noqa: BLE001 — não derruba o combo
+                pass
+        if self._popup is None and not self.instate(["disabled"]):
+            self.abrir_lista(tudo_se_escolhido=True)
 
     def escolher(self, valor: str) -> None:
         """Põe `valor` no campo como se tivesse vindo da lista nativa: o

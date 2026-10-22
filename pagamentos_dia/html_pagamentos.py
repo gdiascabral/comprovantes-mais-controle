@@ -341,6 +341,16 @@ def descricao_para_colar(registro, conta, limite: int | None = None) -> str:
     por esta MESMA função, para o documento nunca ser cortado lá também.
     """
     r = registro or {}
+    editada = str(r.get("descricao_editada") or "").strip()
+    if editada:
+        # Escrita pelo dono na tela "Pagamentos do dia" (entrega 2). Vai como
+        # ele escreveu, só limpa e no tamanho do banco; a tela avisa antes de
+        # gravar se ela perdeu o centro de custo ou o documento no fim
+        # (`tela_do_dia.conferencia.aviso_de_casamento`). Registro sem a
+        # chave — todos os da Remessa — segue o caminho de sempre abaixo.
+        tirar = (lambda ps: ps) if _e_inter(conta) else _sem_hifen
+        espaco = limite_da_descricao(conta) if limite is None else limite
+        return " ".join(_que_cabem(tirar(_palavras(editada)), espaco))
     utilidade = bool(r.get("utilidade"))
     # Fora do Inter (o Sicoob, e a remessa CNAB, que é do Sicoob e chega com
     # `conta=None`) a descrição não leva "-" nenhum (dono, 14/10/2026).
@@ -533,10 +543,27 @@ def contas_do_html_geral(resultado) -> list[dict]:
         for r in regs:
             tipo = str(r.get("tipo") or "-")
             id_ = str(r.get("id") or "")
+            # O pagamento À MÃO da tela "Pagamentos do dia" (só ela põe a
+            # chave `a_mao`): o mesmo lançamento pode estar na lista do dia, e
+            # o id é a chave do "já paguei" e do "Conferido" desta página —
+            # "<lançamento>#mao:<n>", e o link continua o do lançamento.
+            # Registro sem a chave (todos os da Remessa) não muda.
+            a_mao = str(r.get("a_mao") or "")
+            # A linha de um lançamento dividido em N boletos
+            # (`boletos_somados`) leva a SUA linha digitável no id (dígitos,
+            # a chave estável da parte; na falta, o "k/N"): é a chave do "já
+            # paguei" (`rowKey`) e do "Conferido". Nunca a posição na lista.
+            # Não colide com "#mao:<n>" (dígitos x "mao:") nem entre partes.
+            parte = str(r.get("parte_linha") or r.get("parte") or "")
             entradas.append({
-                "id": id_,
+                "id": (f"{id_}#{a_mao}" if id_ else a_mao) if a_mao
+                else (f"{id_}#{parte}" if id_ and parte else id_),
                 # Sem id não há para onde ir: link vazio, sem botão na tela.
                 "link": URL_LANCAMENTO + id_ if id_ else "",
+                # Só para a checagem de repetição abaixo (sai antes de devolver):
+                # as partes do MESMO lançamento dividido herdam as chaves
+                # extras (Pix do QR, linha da guia) e não são repetição.
+                "_lancamento": id_ if (parte and id_ and not a_mao) else "",
                 "tipo": tipo,
                 "dados_original": str(r.get("dados") or ""),
                 "dados_limpo": dado_para_colar(tipo, r.get("dados")),
@@ -571,12 +598,15 @@ def contas_do_html_geral(resultado) -> list[dict]:
             for k in chaves - {""}:
                 por_chave.setdefault(k, []).append(e)
     for grupo in por_chave.values():
-        ids = {e["id"] or id(e) for e in grupo}
+        ids = {e["_lancamento"] or e["id"] or id(e) for e in grupo}
         if len(ids) > 1:
             m = (f"mesma linha digitável em {len(grupo)} lançamentos "
                  "— risco de pagar em dobro")
             for e in grupo:
                 e["bloqueio"] = (e["bloqueio"] + "; " + m) if e["bloqueio"] else m
+    for c in contas:
+        for e in c["entries"]:
+            e.pop("_lancamento", None)
     return contas
 
 

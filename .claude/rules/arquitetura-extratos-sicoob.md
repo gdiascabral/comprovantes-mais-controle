@@ -60,3 +60,28 @@ paths:
   também some depois de várias trocas). A conta que fica sem ler leva o
   porquê para a tabela (`agendamentos_sicoob.motivo_da_parada`). Guardado
   por `tests/test_sicoob_aviso.py`.
+- **`saldo.py` lê o saldo de cada conta do Sicoob** (entrega 4, "Pagamentos
+  do dia"), só leitura e par de `pendencias.py`: entra na conta pelo ⇄
+  (`acessar_conta`), confere a conta no cabeçalho da tela e só então pede, com
+  o mesmo `fetch` da página logada. **Endereço medido em 22/10/2026** com o
+  dono logado e os saldos conferidos na tela: `GET /api/home/obter-informacoes-
+  widget-movimentacoes-inicio` (o do quadro de movimentações da Home), sem
+  conta no endereço nem no pedido — a resposta é da conta SELECIONADA. A
+  página chama com `?block-ui=...` e o fetch do app não leva (provado sem ele). O saldo é `contaCorrente.extratoContaCorrente.resumo.
+  saldoEmContaCorrente` com o sinal em `naturezaSaldoRes` (C/D; outro valor
+  é recusado); `erroServicoMovimentoContaCorrente` true vira "não lido"; e a
+  conta da resposta (`cabecalho.numContaCorrente`, número JSON) é conferida
+  de novo contra a pedida: o número traz TODOS os dígitos com o DV
+  (conferido ao vivo), e a igualdade é exata, ignorando só zeros à esquerda;
+  sem número, recusa. A prova ao vivo do coordenador (22/10, só leitura) deu
+  HTTP 200 nas 3 contas, sem `block-ui`. Tudo num bloco de constantes; `ROTA_SALDO = ""` desliga a
+  leitura. Se a prova ao vivo der 401/403 com a sessão viva, a contingência
+  está na docstring (voltar a "" e escutar a resposta da Home, num plano à
+  parte). O bloco de constantes é o ÚNICO lugar do endereço e dos campos.
+  **Falhas**: sessão caída e endereço mudado (`EnderecoMudou`: 404/405/410,
+  resposta que não é JSON) PARAM a fila e marcam as contas que faltavam com o
+  porquê; formato estranho numa conta (`FormatoDaConta`) deixa só ela "não
+  lida", e duas seguidas param a fila. Nenhuma conta some e nenhuma vira
+  R$ 0,00. Quem chama é `tela_do_dia/sicoob_na_tela.py`, numa thread própria
+  (o `SicoobClient` nasce e morre nela). Guardado por
+  `tests/test_sicoob_saldo.py`.

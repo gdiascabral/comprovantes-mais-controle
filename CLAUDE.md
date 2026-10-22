@@ -423,7 +423,7 @@ Texto novo sobre uma pasta vai para o arquivo dela, não para cá.
   vaivém real entre quem usa a máquina e uma suíte lançada do terminal em
   primeiro plano.
 - **Mudança visual passa pela galeria, antes e depois**:
-  `python -m ferramentas.galeria`, as 13 telas nos dois temas, e a comparação é
+  `python -m ferramentas.galeria`, as 15 telas nos dois temas, e a comparação é
   o olho de quem mexeu. **Os PNG não vão para o PR** — a tela pode carregar nome
   de empresa vindo do cache, e o repositório é público; o que vai é a diferença
   MEDIDA (o PR #15 relatou 6.605 px trocados no Anexar e 0 px no Início, e o

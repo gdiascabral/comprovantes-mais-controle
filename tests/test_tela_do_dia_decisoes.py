@@ -192,3 +192,28 @@ def test_periodo_nunca_avisa_sem_calendario_de_feriados(inicio, fim):
     from conciliacao.models import Periodo
     texto = dc.periodo_na_tela(Periodo(inicio, fim))
     assert isinstance(texto, str) and "útil" not in texto and "fora" not in texto
+
+
+def test_celulas_da_conta_citam_liberados_a_mao_e_desmarcados():
+    from tela_do_dia.pagamentos import Pagamento, PagamentosDaConta
+
+    def pag(i, v):
+        return Pagamento(id=i, conta_erp=ALFA, favorecido="Fornecedor Ficticio",
+                         valor=D(v), situacao="", estado="")
+    c = PagamentosDaConta(ALFA, 5, vao_sair=[pag("1", "10.00")], liberados=[pag("2", "5.00")],
+                          a_mao=[pag("mao:1", "2.50")], desmarcados=[pag("3", "99.00")])
+    qtd, a_pagar, bloqueados, situacao = dc.celulas_da_conta(c)
+    assert (qtd, a_pagar, bloqueados) == ("3", "R$ 17,50", "0")     # o desmarcado não soma
+    assert "1 liberado" in situacao and "1 à mão" in situacao and "1 desmarcado (fora)" in situacao
+    dois = PagamentosDaConta(ALFA, 5, liberados=[pag("2", "5.00"), pag("4", "1.00")],
+                             desmarcados=[pag("3", "9.00"), pag("5", "9.00")])
+    texto = dc.celulas_da_conta(dois)[3]
+    assert "2 liberados" in texto and "2 desmarcados (fora)" in texto
+
+
+def test_celulas_da_conta_sem_conferencia_e_o_texto_de_hoje():
+    from types import SimpleNamespace
+    # objeto da entrega 1: não tem liberados, a_mao nem desmarcados
+    antiga = SimpleNamespace(bloqueados=[], valor_bloqueado=D("0"), motivo_fora="", ja_enviados=[],
+                             qtd_a_pagar=0, a_pagar=D("0"))
+    assert dc.celulas_da_conta(antiga) == ("0", "R$ 0,00", "0", "")

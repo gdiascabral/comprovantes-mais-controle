@@ -2306,7 +2306,7 @@ class PagamentosDiaFrame(ttk.Frame):
             self._log(f"  [!] não deu para guardar a cópia do retorno"
                       f"{f' ({resumo.origem})' if resumo.origem else ''}: {e}")
 
-    def _seguir_para_a_baixa(self, linhas, fechar):
+    def _seguir_para_a_baixa(self, linhas, fechar, divididos=None):
         """Do retorno lido até a thread do navegador — um caminho só.
 
         Recebe LINHAS e não um `Resumo` porque a janela de vários junta as de
@@ -2316,8 +2316,15 @@ class PagamentosDiaFrame(ttk.Frame):
         # `separar` só olha o `.linhas` do que recebe. O resumo montado aqui é
         # o saco que carrega as linhas até lá, e não um retorno de verdade —
         # daí o NSA zero, que nunca vai à tela nem ao banco.
+        # Lançamento que a aba "Pagamentos do dia" dividiu em N boletos fica de
+        # fora da baixa (o ERP só conhece o valor cheio). Duas fontes: a mesma
+        # referência mais de uma vez no MESMO retorno (`divididos`, calculado
+        # por resumo por quem chama — não depende da apuração estar viva) e o
+        # resultado que veio da tela nova (`parte`). Sem nenhuma, nada muda.
         sep = baixa_erp.separar(retorno_dia.Resumo(
-            convenio="", nsa=0, empresa="", linhas=list(linhas)))
+            convenio="", nsa=0, empresa="", linhas=list(linhas)),
+            divididos=baixa_erp.juntar_divididos(
+                divididos, baixa_erp.divididos_do_resultado(self.resultado)))
         for linha, motivo in sep.de_fora:
             self._log(f"  fora da baixa: {linha.seu_numero} "
                       f"{linha.favorecido[:28]} — {motivo}")
@@ -2479,7 +2486,8 @@ class PagamentosDiaFrame(ttk.Frame):
             top.destroy()
 
         def _baixar():
-            self._seguir_para_a_baixa(resumo.linhas, top.destroy)
+            self._seguir_para_a_baixa(resumo.linhas, top.destroy,
+                                      divididos=baixa_erp.divididos_do_retorno(resumo))
 
         if historico is not None and not resumo.remessa_desconhecida:
             widgets.Botao(rodape, "Guardar o resultado", papel="acao",
@@ -2659,8 +2667,12 @@ class PagamentosDiaFrame(ttk.Frame):
             # As linhas de TODAS as remessas conhecidas num saco só. A baixa
             # não depende da conta pagadora: ela casa pela `referencia` do
             # item, que é o id do lançamento no ERP.
+            # O "dividido" é contado POR RESUMO, antes de juntar: a mesma
+            # referência em duas remessas é reenvio, não divisão.
             self._seguir_para_a_baixa(
-                [linha for r in conhecidos for linha in r.linhas], top.destroy)
+                [linha for r in conhecidos for linha in r.linhas], top.destroy,
+                divididos=baixa_erp.juntar_divididos(
+                    *(baixa_erp.divididos_do_retorno(r) for r in conhecidos)))
 
         if historico is not None and conhecidos:
             widgets.Botao(rodape, "Guardar tudo", papel="acao",
@@ -3785,7 +3797,8 @@ class PagamentosDiaFrame(ttk.Frame):
         return textos, urls_ocr, nao_lidos, qrs
 
     # ----------------------------------------- vindo da aba "Pagamentos do dia"
-    def receber_apuracao(self, leitura, desmarcados=(), *, hoje=None) -> None:
+    def receber_apuracao(self, leitura, desmarcados=(), *, hoje=None,
+                         resultado=None) -> None:
         """A leitura que a aba "Pagamentos do dia" já fez vira o passo 2 daqui,
         e a conferência da remessa de sempre abre — sem ler o ERP de novo.
 
@@ -3796,7 +3809,11 @@ class PagamentosDiaFrame(ttk.Frame):
         interrompida não passa: pela metade, o boleto dentro da NF vira Pix do
         cadastro (ver `_apurar_e_confirmar`). Apuração de OUTRO período que o
         de hoje (`sugerir_periodo`; tela buscada ontem) também não: a remessa
-        sairia com os vencimentos de outro dia. `hoje` só existe para o teste."""
+        sairia com os vencimentos de outro dia. `hoje` só existe para o teste.
+        `resultado` é o da tela do dia já com liberados/editados (entrega 2);
+        `None` remonta como sempre. Com `resultado=`, os `desmarcados` NÃO são
+        aplicados aqui: eles já têm de vir aplicados no resultado (quem o
+        monta passa os mesmos ids a `remontar`/`montar_registros`)."""
         from conciliacao.models import sugerir_periodo
         if self.worker and not self.worker.done():
             messagebox.showinfo("Remessa", "Espere a rotina desta aba terminar.")
@@ -3823,7 +3840,8 @@ class PagamentosDiaFrame(ttk.Frame):
         self._periodo_da_busca = (ini, fim)
         self.v_ini.set(f"{ini:%d/%m/%Y}")
         self.v_fim.set(f"{fim:%d/%m/%Y}")
-        self.resultado = confirmacao.remontar(leitura.entradas, set(desmarcados))
+        self.resultado = (resultado if resultado is not None
+                          else confirmacao.remontar(leitura.entradas, set(desmarcados)))
         self._periodo_do_resultado = (ini, fim)
         self.contas = relatorio.resumo_por_conta(self.lancamentos)
         self.q.put(("contas", self.contas))

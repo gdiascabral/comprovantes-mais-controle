@@ -14,6 +14,7 @@ import datetime
 import os
 import queue
 import subprocess
+import threading
 import time
 import tkinter as tk
 from threading import Event
@@ -27,18 +28,25 @@ from conciliacao.frame import RAIZ_SAIDA
 from conciliacao.mapping import AccountMapping
 from conciliacao.models import sugerir_periodo
 from conciliacao.workbook import WorkbookError, output_name
-from pagamentos_dia import confirmacao, html_pagamentos, leitura_do_dia
+from nuvem import registro, sessao
+from nuvem.pagamentos_do_dia import DiaNaNuvem
+from pagamentos_dia import html_pagamentos, leitura_do_dia
 from pagamentos_dia import reembolso, relatorio
 from pagamentos_dia import regras_pagamento as regras_pag
 from pagamentos_dia.pagamentos_frame import _carregar_mapas, _historico
 
 from . import aportes as ap
+from . import conferencia as cf
 from . import decisoes as dc
 from . import dia_de_trabalho as ddt
-from . import erp_do_dia, excel_do_dia, para_aportes
+from . import erp_do_dia, excel_do_dia, geracao, janelas, lancamento_do_erp
+from . import agendados as agd
+from . import lista_diretor as ldr
+from . import nuvem_do_dia, para_aportes, passo2, passo67
 from . import pagamentos as pg
 from . import saldos as sd
-from .valores import brl, ler_valor_editado
+from .sicoob_na_tela import LeitorSicoob
+from .valores import brl, de_float, ler_valor_editado
 
 px = widgets.px
 REMOVER = "remover"
@@ -62,6 +70,9 @@ class TelaDoDiaFrame(ttk.Frame):
                 ("final", "SALDO FINAL", 95, "e"))
     COLS_MAO = (("origem", "DE", 260, "w"), ("destino", "PARA", 260, "w"),
                 ("valor", "VALOR", 120, "e"))
+    #: O rótulo embaixo da tabela de saldos, sem linha selecionada.
+    DETALHE_VAZIO = ("Selecione uma conta para ver a situação inteira e, do valor "
+                     "digitado (✎), o original e o motivo.")
     #: Largura da #0 ("CONTA") das tabelas em árvore, a 100%.
     LARGURA_CONTA = 200
     #: Tabela vazia fica baixa (não empurra os passos de baixo para longe);
@@ -90,6 +101,20 @@ class TelaDoDiaFrame(ttk.Frame):
         self.aportes = None
         self._iid_aporte = {}
         self.ultimo_arquivo = None
+        # Entrega 2: o passo 2 editável, gravado na nuvem. Sem a nuvem lida
+        # (`_nuvem_travada`), nada desta parte grava — falha fechada.
+        self.lido = None
+        self.conferencia = cf.Conferencia()
+        self._nuvem_travada = passo2.SEM_NUVEM
+        self._gravando = False
+        self._iid_pag = {}               # iid da tabela do passo 2 → passo2.LinhaDaTabela
+        self._ao_ler_link = None
+        self._geracao = 0                # muda a cada _limpar: gravação velha não pinta tela nova
+        # "Agendados a confirmar" e passos 6/7: as regras moram em `passo67`.
+        self.marcas_agd = {}             # agendado_id → marcado (pré-marca só da prova)
+        self.para_marcar_itens = None    # None = "Montar a lista" ainda não foi clicado
+        self.lista = []                  # [lista_diretor.LinhaDaLista]
+        self._lista_ligada = False
         self._build()
         self.after(150, self._drain)
 
@@ -108,14 +133,50 @@ class TelaDoDiaFrame(ttk.Frame):
                                 command=self.buscar)
         self.b1.pack(side="left")
 
-        c1 = widgets.Cartao(corpo, "Saldos", 1)
+        self._padx = PADX
+        # No topo, e só quando há pendentes (`_encher_agendados`): empacotado
+        # antes do cartão 1.
+        self.c0 = widgets.Cartao(corpo, "Agendados a confirmar")
+        self._ajuda(self.c0, "Agendados esperando a sua resposta, de hoje e de dias anteriores. "
+                             "O app marca (☑) só o que ele prova pago — baixa no ERP ou "
+                             "retorno do banco; título que sumiu ou mudou de valor espera "
+                             "você. Clique na 1ª coluna (ou Espaço) para marcar ou desmarcar.")
+        self.t_agd = self._tabela(self.c0, passo67.COLS_AGD, arvore=False, altura=8)
+        self.t_agd.configure(selectmode="browse")
+        self.t_agd.bind("<ButtonRelease-1>", self._clique_agd)
+        self.t_agd.bind("<space>", lambda _e: self._alternar_agd(self.t_agd.focus()) or "break")
+        linha_agd = ttk.Frame(self.c0)
+        linha_agd.pack(fill="x", pady=px((8, 0)))
+        self.b_agd_pago = widgets.Botao(linha_agd, "Pago (os marcados)", papel="passo",
+                                        state="disabled", command=lambda: self._responder("pago"))
+        self.b_agd_nao = widgets.Botao(linha_agd, "Não saiu…", papel="neutro", state="disabled",
+                                       command=lambda: self._responder("nao_saiu"))
+        self.b_agd_reag = widgets.Botao(linha_agd, "Reagendado…", papel="neutro",
+                                        state="disabled",
+                                        command=lambda: self._responder("reagendado"))
+        for i, b in enumerate((self.b_agd_pago, self.b_agd_nao, self.b_agd_reag)):
+            b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
+
+        c1 = self.c1 = widgets.Cartao(corpo, "Saldos", 1)
         c1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self._ajuda(c1, "As que não batem sobem para o topo. Clique no valor do sistema ou "
-                        "do banco para editar (Enter edita o do banco): o original fica ao "
-                        "lado, o motivo é opcional, e o ajuste vale só para o dia.")
+                        "do banco para editar (Enter edita o do banco): o valor digitado leva "
+                        "✎, o original e o motivo (opcional) aparecem embaixo da tabela, "
+                        "na linha selecionada, e o ajuste vale só para o dia. Nas "
+                        "contas do Sicoob o banco vem lido (Reler Sicoob refaz); o "
+                        "digitado vale por cima do lido.")
+        # Entrega 4: a hora da leitura do Sicoob e o "Reler Sicoob" no alto do
+        # passo 1 (spec). Tudo do Sicoob mora em `sicoob_na_tela`.
+        self.sicoob = LeitorSicoob(c1, tela=self)
+        self.sicoob.barra.pack(fill="x", pady=px((6, 0)))
         self.t_saldos = self._tabela(c1, self.COLS_SALDOS, arvore=False, altura=8)
         self.t_saldos.bind("<ButtonRelease-1>", self._clique_saldo)
         self.t_saldos.bind("<Return>", self._enter_saldo)
+        # A frase inteira da situação e o original do digitado: na célula vai
+        # o curto (`sd.celula`, `situacao_curta`), que cabe a 1280 px.
+        self.lbl_saldo_detalhe = self._ajuda(c1, self.DETALHE_VAZIO, pady=px((6, 0)))
+        self.t_saldos.bind("<<TreeviewSelect>>", lambda _e: self._mostrar_detalhe_saldo(),
+                           add="+")
 
         c2 = widgets.Cartao(corpo, "Pagamentos por conta", 2)
         c2.pack(fill="x", padx=PADX, pady=px((0, 12)))
@@ -123,11 +184,33 @@ class TelaDoDiaFrame(ttk.Frame):
         # mas só DEPOIS de buscar — vazio, o rótulo era uma linha em branco
         # em cima da ajuda (`mostrar_periodo`).
         self.lbl_periodo = ttk.Label(c2, style="Secao.TLabel", text="")
+        # A nuvem que não respondeu: em vermelho, fora do layout quando vazio.
+        self.lbl_nuvem = self._ajuda(c2, "", estilo="Erro.TLabel")
+        self.lbl_nuvem.pack_forget()
         self._ajuda_pag = self._ajuda(
             c2, "A pagar = o que sai da conta: os aptos de hoje e o que já foi "
                 "enviado em remessa e ainda não está pago (esse não é gerado de "
-                "novo). Bloqueados (não aptos) não somam. Abra a conta para ver.")
+                "novo). Bloqueados (não aptos) não somam. Abra a conta para ver. "
+                "Selecione uma linha e use os botões abaixo.")
         self.t_pag = self._tabela(c2, self.COLS_PAG, arvore=True, altura=10)
+        self.t_pag.configure(selectmode="browse")    # uma linha por ação
+        linha_pag = ttk.Frame(c2)
+        linha_pag.pack(fill="x", pady=px((8, 0)))
+        self.b_liberar = widgets.Botao(linha_pag, "Incluir mesmo assim…", papel="neutro",
+                                       state="disabled", command=self._liberar)
+        self.b_desmarcar = widgets.Botao(linha_pag, "Desmarcar", papel="neutro",
+                                         state="disabled", command=self._desmarcar)
+        self.b_editar = widgets.Botao(linha_pag, "Editar…", papel="neutro",
+                                      state="disabled", command=self._editar)
+        self.b_desfazer = widgets.Botao(linha_pag, "Desfazer", papel="neutro",
+                                        state="disabled", command=self._desfazer)
+        # À mão só se remove (decisão do coordenador): nunca "desmarcar".
+        self.b_remover = widgets.Botao(linha_pag, "Remover à mão", papel="neutro",
+                                       state="disabled", command=self._remover_a_mao)
+        self.b_a_mao = widgets.Botao(linha_pag, "+ Pagamento à mão…", papel="neutro",
+                                     state="disabled", command=self._novo_a_mao)
+        for i, b in enumerate(self._botoes_do_passo2):
+            b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
 
         c3 = widgets.Cartao(corpo, "Aportes", 3)
         c3.pack(fill="x", padx=PADX, pady=px((0, 12)))
@@ -196,6 +279,53 @@ class TelaDoDiaFrame(ttk.Frame):
         for i, b in enumerate((self.b_html, self.b_planilha, self.b_remessa, self.b_excel)):
             b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
 
+        c5 = widgets.Cartao(corpo, "Agendar (no banco)", 5)
+        c5.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        self._ajuda(c5, "Agende no banco como sempre — isto fica fora do app. Depois, marque "
+                        "aqui embaixo o que agendou.")
+
+        c6 = widgets.Cartao(corpo, "Marcar agendados", 6)
+        c6.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        self._ajuda(c6, "«Montar a lista» traz o que sai hoje, tudo marcado: desmarque o que "
+                        "não agendou e grave. O já marcado hoje aparece apagado e não vai de "
+                        "novo. Clique na 1ª coluna (ou Espaço) para marcar ou desmarcar.")
+        self.t_marcar = self._tabela(c6, passo67.COLS_MARCAR, arvore=False, altura=10)
+        self.t_marcar.configure(selectmode="browse")
+        self.t_marcar.bind("<ButtonRelease-1>", self._clique_marcar)
+        self.t_marcar.bind("<space>",
+                           lambda _e: self._alternar_marcar(self.t_marcar.focus()) or "break")
+        linha6 = ttk.Frame(c6)
+        linha6.pack(fill="x", pady=px((8, 0)))
+        self.b_montar = widgets.Botao(linha6, "Montar a lista", papel="neutro", state="disabled",
+                                      command=self._montar_para_marcar)
+        self.b_gravar_agd = widgets.Botao(linha6, "Gravar agendados", papel="passo",
+                                          state="disabled", command=self._gravar_agendados)
+        self.b_montar.pack(side="left")
+        self.b_gravar_agd.pack(side="left", padx=px((8, 0)))
+
+        c7 = widgets.Cartao(corpo, "Lista do diretor", 7)
+        c7.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        self._ajuda(c7, "Só o que foi agendado hoje, uma linha por conta. ↑/↓ mudam a ordem "
+                        "(dentro dos numerados ou dentro dos demais); «Ordinal» liga ou "
+                        "desliga o 1º, 2º…; o nome curto fica gravado para os próximos dias.")
+        self.t_lista = self._tabela(c7, passo67.COLS_LISTA, arvore=False, altura=10)
+        self.t_lista.configure(selectmode="browse")
+        self.t_lista.bind("<<TreeviewSelect>>", lambda _e: self._ligar_lista())
+        linha7 = ttk.Frame(c7)
+        linha7.pack(fill="x", pady=px((8, 0)))
+        self.b_subir = widgets.Botao(linha7, "↑", papel="neutro", state="disabled",
+                                     command=lambda: self._lista_mover(-1))
+        self.b_descer = widgets.Botao(linha7, "↓", papel="neutro", state="disabled",
+                                      command=lambda: self._lista_mover(1))
+        self.b_ordinal = widgets.Botao(linha7, "Ordinal sim/não", papel="neutro",
+                                       state="disabled", command=self._lista_ordinal)
+        self.b_nome = widgets.Botao(linha7, "Nome curto…", papel="neutro", state="disabled",
+                                    command=self._nome_curto)
+        self.b_copiar = widgets.Botao(linha7, "Copiar para o WhatsApp", papel="passo",
+                                      state="disabled", command=self._copiar_lista)
+        for i, b in enumerate(self._botoes_da_lista):
+            b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
+
         acao = ttk.Frame(self, style="Fundo.TFrame")
         acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         btns = ttk.Frame(acao, style="Fundo.TFrame")
@@ -224,7 +354,60 @@ class TelaDoDiaFrame(ttk.Frame):
     def _botoes_do_dia(self):
         """Os que só fazem sentido com uma leitura inteira na tela."""
         return (self.b_excel, self.b_planilha, self.b_html, self.b_remessa, self.b_mandar,
-                self.b_sugestao, self.b_mao_mae, self.b_mao_transf, self.b_mao_tirar)
+                self.b_sugestao, self.b_mao_mae, self.b_mao_transf, self.b_mao_tirar,
+                *self._botoes_do_passo2, *self._botoes_67, *self._botoes_da_lista)
+
+    @property
+    def _botoes_do_passo2(self):
+        """Os que GRAVAM na nuvem: apagados sem a nuvem lida e durante uma
+        gravação (`passo2.botoes`, o campo `passo2`)."""
+        return (self.b_liberar, self.b_desmarcar, self.b_editar, self.b_desfazer,
+                self.b_remover, self.b_a_mao)
+
+    @property
+    def _botoes_67(self):
+        """"Agendados a confirmar" e passo 6: a mesma regra do passo 2 (nuvem
+        lida, sem gravação em andamento)."""
+        return (self.b_agd_pago, self.b_agd_nao, self.b_agd_reag, self.b_montar,
+                self.b_gravar_agd)
+
+    @property
+    def _botoes_da_lista(self):
+        return (self.b_subir, self.b_descer, self.b_ordinal, self.b_nome, self.b_copiar)
+
+    def _ligar_botoes(self):
+        """O que fica ligado vem de `passo2.botoes`: gravando na nuvem, nada
+        (nem gerar, nem mandar aportes, nem buscar); sem leitura, só buscar;
+        sem apuração, sem os geradores; nuvem travada, sem o passo 2."""
+        b = passo2.botoes(tem_leitura=self.leitura is not None, gravando=self._gravando,
+                          travada=self._nuvem_travada,
+                          sem_geradores=(self.leitura is not None
+                                         and bool(dc.motivo_sem_geradores(self.leitura))))
+
+        def estado(ligado):
+            return "normal" if ligado else "disabled"
+        for w in (self.b_excel, self.b_mandar, self.b_sugestao, self.b_mao_mae,
+                  self.b_mao_transf, self.b_mao_tirar):
+            w.configure(state=estado(b.dia))
+        for w in (self.b_planilha, self.b_html, self.b_remessa):
+            w.configure(state=estado(b.geradores))
+        for w in (*self._botoes_do_passo2, *self._botoes_67):
+            w.configure(state=estado(b.passo2))
+        self._lista_ligada = b.passo2
+        self._ligar_lista()
+        # Durante a leitura quem manda no Buscar é a mensagem "botoes" do `_t_ler`.
+        if not (self.worker and not self.worker.done()):
+            self.b1.configure(state=estado(b.buscar))
+        # O "Reler Sicoob" segue a regra do Excel (leitura na tela, sem gravação).
+        self.sicoob.ligar(b.dia)
+
+    def _ligar_lista(self):
+        """↑/↓ só dentro do mesmo lado (numerados × demais), pela seleção."""
+        estados = passo67.botoes_da_lista(self.lista, self._indice_lista(),
+                                          ligado=self._lista_ligada)
+        for chave, w in zip(("subir", "descer", "ordinal", "nome", "copiar"),
+                            self._botoes_da_lista):
+            w.configure(state="normal" if estados[chave] else "disabled")
 
     @staticmethod
     def _ajuda(pai, texto, *, estilo="Tenue.TLabel", pady=0):
@@ -302,6 +485,13 @@ class TelaDoDiaFrame(ttk.Frame):
                     self.b_stop.configure(state="disabled" if valor == "normal" else "normal")
                 elif tipo == "leitura":
                     self._receber_leitura(valor)
+                elif tipo == "gravou":
+                    self._receber_gravacao(*valor)
+                elif tipo == "link_lido":
+                    if self._ao_ler_link is not None:
+                        self._ao_ler_link(*valor)
+                elif tipo == "aviso":
+                    messagebox.showwarning(*valor)
         except queue.Empty:
             pass
         except Exception as e:                              # noqa: BLE001
@@ -320,10 +510,16 @@ class TelaDoDiaFrame(ttk.Frame):
             # tabela quando ela nasce: sem repassar, trocar o tema deixava as
             # linhas claras dentro do app escuro. As larguras não mudam (o
             # `estilo_tabela` guarda as de origem).
-            for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+            for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao, self.t_agd,
+                      self.t_marcar, self.t_lista):
                 widgets.estilo_tabela(t, ordenavel=False)
         except tk.TclError:
             pass
+
+    def fechar(self):
+        """O `_sair` do app chama `fechar` de toda aba: a leitura do Sicoob
+        para entre uma conta e outra (a thread é daemon)."""
+        self.sicoob.fechar()
 
     def _parar_click(self):
         self._parar.set()
@@ -341,6 +537,9 @@ class TelaDoDiaFrame(ttk.Frame):
     # ---------------------------------------------------------------- leitura
     def buscar(self):
         if self.worker and not self.worker.done():
+            return
+        if self._gravando:
+            messagebox.showinfo("Pagamentos do dia", "Espere a gravação na nuvem terminar.")
             return
         # Recusar ANTES de apagar os botões (ver "Um navegador, seis abas").
         if self.anx.avisar_se_ocupado("os Pagamentos do dia", aba=self):
@@ -361,16 +560,26 @@ class TelaDoDiaFrame(ttk.Frame):
         self.leitura = None
         self.aportes = None
         self.dia = None                  # sem dia, nenhuma edição grava nada
+        self.lido = None
+        self.conferencia = cf.Conferencia()
+        self._nuvem_travada = passo2.SEM_NUVEM
+        self._iid_pag = {}
+        self._geracao += 1
+        self._mostrar_nuvem("")
         self.saldos, self.fora, self.pagamentos = [], [], {}
         self._iid_aporte = {}
-        for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+        self.marcas_agd, self.para_marcar_itens, self.lista = {}, None, []
+        for t in self._tabelas:
             t.delete(*t.get_children())
+        self.c0.pack_forget()
         self._mostrar_alertas("", "")
         self.mostrar_periodo("")
-        for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+        self._mostrar_detalhe_saldo()
+        for t in self._tabelas:
             self._ajustar_altura(t)
         for b in self._botoes_do_dia:
             b.configure(state="disabled")
+        self.sicoob.ligar(False)
 
     def _t_ler(self, periodo):
         comeco = time.time()
@@ -404,10 +613,15 @@ class TelaDoDiaFrame(ttk.Frame):
                 return
             self.q.put(("status", "Lendo os saldos..."))
             contas = erp_do_dia.ler_saldos(cfg, api, log=self._log)
+            self.q.put(("status", "Lendo a nuvem (liberações, à mão, agendados)..."))
+            # Nuvem que falha não derruba a leitura: volta `erro`, a tela fica
+            # como na entrega 1 e o passo 2 trava (falha fechada).
+            lido = nuvem_do_dia.ler(self._cliente_nuvem(), periodo.fim, datetime.date.today(),
+                                    api=api, registro=self._registro_nuvem(), log=self._log)
             # Como a Conciliação (`conciliacao/frame.py`): relativo à pasta base.
             modelo = base / cfg.caminhos.get("modelo", "MODELO.xlsx")
             self.q.put(("leitura", (cfg, mapping, leitura, contas, ler_regras(modelo),
-                                    periodo, modelo)))
+                                    periodo, modelo, lido)))
             self.q.put(("status", f"Leitura pronta em {util.fmt_dur(time.time() - comeco)}."))
         except Exception as e:                              # noqa: BLE001
             self._log("\n" + widgets.recado_de_erro(e, "Não consegui ler o dia."))
@@ -418,7 +632,16 @@ class TelaDoDiaFrame(ttk.Frame):
 
     def _receber_leitura(self, pacote):
         (self.cfg, self.mapping, self.leitura, self.contas_erp, self.regras,
-         self.periodo, self.modelo) = pacote
+         self.periodo, self.modelo, lido) = pacote
+        self.lido, self.conferencia, self._nuvem_travada = lido, lido.conferencia, lido.erro
+        lido.lido_em = datetime.datetime.now().strftime("%H:%M")
+        self.marcas_agd = passo67.marcas_iniciais(lido.pendentes)
+        if lido.erro:
+            self._log(f"[!] {lido.erro} — liberar, editar, à mão e agendados ficam "
+                      "travados até buscar de novo")
+        self._mostrar_nuvem(lido.erro)
+        for aviso in lido.avisos:
+            self._log(f"[!] {aviso}")
         caminho = ddt.caminho_do_dia(RAIZ_SAIDA, self.periodo.fim)
         try:
             self.dia, self._dia_bloqueado = ddt.ler(caminho, self.periodo.fim), ""
@@ -430,16 +653,15 @@ class TelaDoDiaFrame(ttk.Frame):
         for aviso in self.leitura.avisos:
             self._log(f"[!] {aviso}")
         self.mostrar_periodo(dc.periodo_na_tela(self.periodo))
+        self._montar_lista()
         self._recalcular()
-        for b in self._botoes_do_dia:
-            b.configure(state="normal")
+        # Sem apuração (nenhum lançamento a pagar), planilha, HTML e Remessa
+        # não têm de onde sair; o Excel do dia sai (a pagar zero).
+        self._ligar_botoes()
         motivo = dc.motivo_sem_geradores(self.leitura)
         if motivo:
-            # Sem apuração (nenhum lançamento a pagar), planilha, HTML e
-            # Remessa não têm de onde sair; o Excel do dia sai (a pagar zero).
-            for b in (self.b_planilha, self.b_html, self.b_remessa):
-                b.configure(state="disabled")
             self._log(motivo)
+        self.sicoob.ler_se_faltar()
 
     def _mostrar_alertas(self, erro: str, atencao: str):
         """Erro em cima, atenção embaixo; o vazio não ocupa linha."""
@@ -449,6 +671,17 @@ class TelaDoDiaFrame(ttk.Frame):
         for lbl, texto in ((self.lbl_alerta, erro), (self.lbl_avisos, atencao)):
             if texto:
                 lbl.pack(fill="x", anchor="w")
+
+    def _mostrar_nuvem(self, erro: str):
+        """O recado da nuvem que não respondeu; vazio sai do layout."""
+        texto = (f"{widgets.MARCAS_ESTADO['erro']} Nuvem: {erro} — liberar, editar, "
+                 "pagamento à mão, agendados e lista do diretor travados até buscar de "
+                 "novo." if erro else "")
+        self.lbl_nuvem.configure(text=texto)
+        if texto:
+            self.lbl_nuvem.pack(fill="x", anchor="w", before=self._ajuda_pag)
+        else:
+            self.lbl_nuvem.pack_forget()
 
     def mostrar_periodo(self, texto: str):
         """Sem texto, o rótulo sai do layout (não deixa linha em branco)."""
@@ -476,8 +709,11 @@ class TelaDoDiaFrame(ttk.Frame):
     def _recalcular(self):
         """Só com leitura inteira: `_t_ler` nunca entrega a interrompida."""
         base = sd.montar_saldos(self.contas_erp, self.mapping)
+        base = self.sicoob.aplicar(base, self.contas_erp, self.mapping)
         self.saldos = sd.ordenar(sd.aplicar_ajustes(base, self.dia.ajustes))
-        self.pagamentos, self.fora = pg.por_conta(self.leitura.grupos, self.mapping)
+        self.pagamentos, self.fora = pg.por_conta(
+            self.leitura.grupos, self.mapping, self.conferencia,
+            participantes=getattr(self.leitura.entradas, "participantes", None))
         em_ordem = sorted(self.saldos, key=lambda ln: ln.linha)
         self.aportes = ap.montar_aportes(
             {ln.rotulo: ln.saldo_do_dia for ln in em_ordem},
@@ -493,50 +729,65 @@ class TelaDoDiaFrame(ttk.Frame):
         self._encher_pagamentos()
         self._encher_aportes()
         self._encher_movimentos()
-        for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+        # Sem a nuvem (a galeria monta a aba sem ela), as três ficam vazias.
+        self._encher_agendados()
+        self._encher_para_marcar()
+        self._encher_lista()
+        for t in self._tabelas:
             self._ajustar_altura(t)
+
+    @property
+    def _tabelas(self):
+        return (self.t_saldos, self.t_pag, self.t_apt, self.t_mao, self.t_agd, self.t_marcar,
+                self.t_lista)
 
     @property
     def _rotulos_do_painel(self) -> list[str]:
         return [ln.rotulo for ln in sorted(self.saldos, key=lambda ln: ln.linha)]
 
-    @staticmethod
-    def _celula(lido, ajuste):
-        if ajuste is None:
-            return brl(lido)
-        motivo = f" · {ajuste.motivo}" if ajuste.motivo else ""
-        return f"{brl(ajuste.valor)}  (era {brl(ajuste.original)}{motivo})"
-
     def _encher_saldos(self):
         t = self.t_saldos
+        selecionada = t.focus()
         t.delete(*t.get_children())
         for i, ln in enumerate(self.saldos):
-            tag, frase = ln.situacao()
+            tag, frase = ln.situacao_curta()
             t.insert("", "end", iid=ln.rotulo, tags=widgets.linha_zebrada(i, tag), values=(
-                ln.rotulo, self._celula(ln.sistema, ln.ajuste_sistema),
-                self._celula(ln.banco, ln.ajuste_banco), brl(ln.diferenca),
+                ln.rotulo, sd.celula(ln.sistema, ln.ajuste_sistema),
+                sd.celula(ln.banco, ln.ajuste_banco), brl(ln.diferenca),
                 f"{widgets.MARCAS_ESTADO[tag]} {frase}"))
+        # A linha editada continua selecionada (e o detalhe dela à vista).
+        if selecionada and t.exists(selecionada):
+            t.focus(selecionada)
+            t.selection_set(selecionada)
+        self._mostrar_detalhe_saldo()
+
+    def _mostrar_detalhe_saldo(self):
+        sel = self.t_saldos.selection()
+        linha = next((ln for ln in self.saldos if sel and ln.rotulo == sel[0]), None)
+        self.lbl_saldo_detalhe.configure(
+            text=linha.detalhe() if linha is not None else self.DETALHE_VAZIO)
 
     def _encher_pagamentos(self):
         t = self.t_pag
+        # A conta aberta continua aberta depois de gravar e reler.
+        abertas = {t.item(i, "text") for i in t.get_children() if t.item(i, "open")}
         t.delete(*t.get_children())
+        self._iid_pag = {}
         contas = sorted(self.pagamentos.values(), key=lambda c: c.linha) + list(self.fora)
+        vistos = set()                   # iid único na tabela inteira
         for i, c in enumerate(contas):
             estado = ("erro" if c.motivo_fora else
-                      ("atencao" if c.bloqueados or c.ja_enviados else ""))
-            pai = t.insert("", "end", text=c.rotulo, open=False,
+                      ("atencao" if (c.bloqueados or c.ja_enviados or c.liberados or c.a_mao
+                                     or getattr(c, "desmarcados", ())) else ""))
+            pai = t.insert("", "end", text=c.rotulo, open=c.rotulo in abertas,
                            tags=widgets.linha_zebrada(i, estado),
                            values=dc.celulas_da_conta(c))
-            for p in c.vao_sair:
-                t.insert(pai, "end", text=f"   {p.favorecido}",
-                         values=("vai sair", brl(p.valor), "", p.situacao))
-            for p in c.ja_enviados:
-                t.insert(pai, "end", text=f"   {p.favorecido}", tags=("atencao",),
-                         values=("já enviado", brl(p.valor), "",
-                                 f"já enviado (soma no a pagar) · {p.situacao}"))
-            for p in c.bloqueados:
-                t.insert(pai, "end", text=f"   {p.favorecido}", tags=("erro",),
-                         values=("", "", f"bloqueado · {brl(p.valor)}", p.situacao))
+            # iid = a chave (id, parte_linha) (`passo2.chave_da_linha`): estável
+            # entre recálculos; o id sozinho repete nas partes de um lançamento
+            # dividido, e o Treeview recusa iid repetido.
+            for ln in passo2.linhas_da_conta(c, i, vistos):
+                t.insert(pai, "end", iid=ln.iid, text=ln.texto, tags=ln.tags, values=ln.valores)
+                self._iid_pag[ln.iid] = ln
 
     def _encher_aportes(self):
         t = self.t_apt
@@ -785,10 +1036,558 @@ class TelaDoDiaFrame(ttk.Frame):
         self._gravar_dia()
         self._recalcular()
 
+    # ------------------------------------------------ passo 2 editável (nuvem)
+    # Regra nenhuma mora aqui: quem decide é `passo2` / `conferencia` (puros,
+    # com teste). Toda gravação e toda releitura correm FORA da thread do Tk
+    # (`_na_nuvem`), e a tela só muda com o que a nuvem devolveu ao reler.
+    def _cliente_nuvem(self):
+        try:
+            return DiaNaNuvem(sessao.token(util.pasta_base()))
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"[!] nuvem: {e}")
+            return None
+
+    def _registro_nuvem(self):
+        try:
+            return registro.Registro(sessao.token(util.pasta_base()))
+        except Exception:                                   # noqa: BLE001
+            return None
+
+    def _selecionada(self):
+        """A `passo2.LinhaDaTabela` selecionada no passo 2, ou None."""
+        sel = self.t_pag.selection()
+        return self._iid_pag.get(sel[0]) if sel else None
+
+    def _linha_erp(self, ld):
+        return passo2.linha_do_id(self.leitura.grupos, ld.pagamento.id, ld.pagamento.conta_erp,
+                                  getattr(ld.pagamento, "parte_linha", ""))
+
+    def _selecao_para(self, acao, titulo, recado):
+        """A linha selecionada, se ela aceita `acao` e a nuvem deixa gravar."""
+        recusa = passo2.recusa_de_gravar(self._nuvem_travada, self._gravando)
+        if recusa:
+            messagebox.showwarning(titulo, recusa)
+            return None
+        if self.leitura is None or self.periodo is None:
+            return None
+        ld = self._selecionada()
+        tem_decisao = ld is not None and ld.pagamento.id in self.conferencia.decisoes
+        recusa = passo2.recusa_da_selecao(ld, acao, tem_decisao, recado)
+        if recusa:
+            messagebox.showinfo(titulo, recusa)
+            return None
+        return ld
+
+    def _na_nuvem(self, titulo, fazer, tipo="decisao", *, depois=""):
+        """Grava e RELÊ fora da thread da tela (o rest espera até 20 s) e
+        devolve pelo `q` ("gravou"). Nada muda na tela antes da releitura;
+        enquanto grava, os botões de gravar ficam apagados (`_gravando`).
+        A releitura traz TUDO da nuvem (`passo67.reler_tudo`: decisões, à
+        mão, agendados, pendentes, nomes curtos, lista de ontem); o ERP não é
+        relido aqui (fora da thread do navegador)."""
+        recusa = passo2.recusa_de_gravar(self._nuvem_travada, self._gravando)
+        if recusa:
+            messagebox.showwarning(titulo, recusa)
+            return
+        self._gravando = True
+        self._ligar_botoes()
+        self.lbl.configure(text=f"{titulo}: gravando na nuvem...")
+        dia, geracao_da_tela = self.periodo.fim, self._geracao
+        anterior = self.lido
+        lancamentos = list(self.leitura.lancamentos or ()) if self.leitura is not None else []
+
+        def recado(e):
+            base = widgets.recado_de_erro(getattr(e, "causa", None) or e, "Não gravei na nuvem.")
+            return passo67.recado_do_erro(e, base, depois=depois)
+
+        def correr():
+            try:
+                g = passo2.gravar_e_reler(
+                    self._cliente_nuvem(), dia, fazer, recado=recado,
+                    reler=lambda c, d: passo67.reler_tudo(c, d, anterior, lancamentos))
+            except Exception as e:                          # noqa: BLE001
+                g = passo2.Gravacao(erro=widgets.recado_de_erro(e, "Não gravei na nuvem."),
+                                    travar=f"falha inesperada ao gravar ({e!r}) — busque de novo")
+            self.q.put(("gravou", (titulo, tipo, geracao_da_tela, g)))
+        threading.Thread(target=correr, daemon=True).start()
+
+    def _receber_gravacao(self, titulo, tipo, geracao_da_tela, g):
+        self._gravando = False
+        self.lbl.configure(text="")
+        if geracao_da_tela != self._geracao or self.leitura is None:
+            self._log(f"[!] {titulo}: a gravação terminou depois de outra busca — "
+                      "busque de novo para ver o estado da nuvem.")
+            self._ligar_botoes()
+            return
+        pend_antes = list(self.lido.pendentes) if self.lido is not None else []
+        # "Pago" em lote que parou no meio: QUAIS já entraram (favorecido e valor).
+        parcial = (passo67.registro_do_parcial(pend_antes, g.gravado)
+                   if g.erro and tipo == "respondido" else [])
+        if g.travar:
+            # Sem reler, o que está na tela pode estar velho: limpa e pede busca.
+            self._log(f"[!] {titulo}: {g.travar}")
+            for linha in parcial:
+                self._log(f"  {linha}")
+            self._limpar()
+            self._ligar_botoes()         # sem leitura: só o Buscar volta
+            self.lbl.configure(text="Busque de novo — a nuvem não foi relida.")
+            messagebox.showwarning(titulo, "\n\n".join(filter(None, [
+                g.erro, ("A gravação foi aceita pela nuvem." if g.gravado is not None
+                         and not g.erro else ""),
+                f"{g.travar}.\nA tela foi limpa para não mostrar número velho."])))
+            return
+        # Decisão (a): a releitura é a da nuvem INTEIRA (`passo67.reler_tudo`).
+        lido = g.conferencia
+        anteriores = self.lido.pendentes if self.lido is not None else ()
+        self.lido, self.conferencia = lido, lido.conferencia
+        self.marcas_agd = passo67.marcas_iniciais(lido.pendentes, self.marcas_agd, anteriores)
+        self._montar_lista()
+        self._recalcular()               # passo 2, aportes e (mostrar_numeros) agendados/lista
+        self._remontar_para_marcar()
+        self._encher_para_marcar()
+        self._ligar_botoes()
+        if g.erro:
+            self._log(f"[!] {titulo}: {g.erro}")
+            for linha in parcial:
+                self._log(f"  {linha}")
+            messagebox.showwarning(titulo, g.erro)
+            return
+        self._log(f"{titulo}: gravado na nuvem.")
+        if tipo == "agendados":
+            resumo = passo67.resumo_da_marcacao(g.gravado)
+            for linha in resumo:
+                self._log(f"  {linha}")
+            if len(resumo) > 1:          # as repetidas (já marcadas): recado, não erro
+                messagebox.showinfo(titulo, resumo[1])
+        elif tipo == "respondido":
+            for linha in passo67.registro_das_respostas(pend_antes, g.gravado):
+                self._log(f"  {linha}")
+
+    def _liberar(self):
+        titulo = "Incluir mesmo assim"
+        ld = self._selecao_para(passo2.A_LIBERAR, titulo,
+                                "Selecione um bloqueado ou um já enviado.")
+        if ld is None:
+            return
+        linha = self._linha_erp(ld)
+        recusa = passo2.recusa_de_liberar(linha)
+        if recusa:
+            messagebox.showinfo(titulo, recusa[:1].upper() + recusa[1:] + ".")
+            return
+        if not passo2.pode_liberar(linha):
+            messagebox.showinfo(titulo, "Esta linha não se libera aqui (já vai sair): "
+                                        "resolva no ERP ou na Remessa.")
+            return
+        motivo = janelas.pedir_motivo(self, titulo, f"{passo2.descricao_de(ld.pagamento)}\n"
+                                                    f"Bloqueado por: {linha.situacao}")
+        if motivo is None:
+            return
+        # Decisão (a): DEPOIS do motivo, o "tem certeza?" do já enviado e do
+        # favorecido fora dos Contatos — a única trava contra pagar em dobro
+        # pelo HTML.
+        certeza = passo2.certeza_ao_liberar(linha)
+        if certeza and not messagebox.askyesno(titulo, certeza, default="no"):
+            return
+        dia = self.periodo.fim
+        self._na_nuvem(titulo, lambda c: c.registrar_decisao(
+            dia, alvo=linha.id, conta=linha.conta, acao=cf.LIBERAR, motivo=motivo))
+
+    def _desmarcar(self):
+        titulo = "Desmarcar"
+        ld = self._selecionada()
+        if ld is not None and ld.tipo == passo2.MAO:
+            messagebox.showinfo(titulo, "Pagamento à mão não se desmarca: use «Remover à mão».")
+            return
+        ld = self._selecao_para(passo2.A_DESMARCAR, titulo,
+                                "Selecione um pagamento que vai sair.")
+        if ld is None:
+            return
+        motivo = janelas.pedir_motivo(self, titulo, f"{passo2.descricao_de(ld.pagamento)}\n"
+                                                    + passo2.texto_do_desmarcar(ld.pagamento),
+                                      obrigatorio=False)
+        if motivo is None:
+            return
+        p, dia = ld.pagamento, self.periodo.fim
+        self._na_nuvem(titulo, lambda c: c.registrar_decisao(
+            dia, alvo=p.id, conta=p.conta_erp, acao=cf.DESMARCAR, motivo=motivo))
+
+    def _remover_a_mao(self):
+        titulo = "Remover à mão"
+        ld = self._selecao_para(passo2.A_REMOVER, titulo, "Selecione um pagamento à mão.")
+        if ld is None:
+            return
+        motivo = janelas.pedir_motivo(self, titulo, f"{passo2.descricao_de(ld.pagamento)}\n"
+                                                    "Sai da tela e do HTML.")
+        if motivo is None:
+            return
+        p, dia = ld.pagamento, self.periodo.fim
+        self._na_nuvem(titulo, lambda c: c.registrar_decisao(
+            dia, alvo=p.id, conta=p.conta_erp, acao=cf.REMOVER_A_MAO, motivo=motivo))
+
+    def _desfazer(self):
+        titulo = "Desfazer"
+        ld = self._selecao_para(passo2.A_DESFAZER, titulo,
+                                "Selecione uma linha liberada, desmarcada ou editada.")
+        if ld is None:
+            return
+        p = ld.pagamento
+        if not messagebox.askyesno(titulo, f"Desfazer o que foi decidido para "
+                                           f"{passo2.descricao_de(p)}?\n\nLiberação, "
+                                           "desmarcação e edições saem: volta a ser o que "
+                                           "o ERP diz.", default="no"):
+            return
+        dia = self.periodo.fim
+        self._na_nuvem(titulo, lambda c: c.registrar_decisao(
+            dia, alvo=p.id, conta=p.conta_erp, acao=cf.DESFAZER))
+
+    def _editar(self):
+        titulo = "Editar o pagamento"
+        ld = self._selecao_para(passo2.A_EDITAR, titulo,
+                                "Selecione um pagamento que vai sair, liberado ou bloqueado. "
+                                "(À mão não se edita: remova e lance de novo.)")
+        if ld is None:
+            return
+        ident, conta = ld.pagamento.id, ld.pagamento.conta_erp
+        registro_erp = (geracao.registro_atual(self.leitura.resultado, ident,
+                                               getattr(ld.pagamento, "parte_linha", ""))
+                        if self.leitura.resultado is not None else None)
+        if registro_erp is None:
+            messagebox.showinfo(titulo, "Não achei este lançamento na apuração — busque de novo.")
+            return
+        # O diálogo abre com o que VALE hoje (o ERP + as edições já gravadas);
+        # o `antes` continua o do ERP. Digitar o valor do ERP de volta é uma
+        # mudança como outra qualquer.
+        iniciais = passo2.valores_iniciais(registro_erp, conta)
+        mostrados = passo2.valores_para_editar(registro_erp, conta,
+                                               self.conferencia.decisoes.get(ident))
+        escolhido = {}
+
+        def validar(r):
+            campos = passo2.campos_da_edicao(mostrados, r["campos"])
+            erro = passo2.validar_edicao_da_tela(registro_erp, campos, r["motivo"])
+            if not erro:
+                escolhido["campos"] = campos
+            return erro
+
+        r = janelas.pedir_edicao(self, mostrados, explicacao=passo2.descricao_de(ld.pagamento),
+                                 validar=validar)
+        if r is None or "campos" not in escolhido:
+            return
+        campos = escolhido["campos"]
+        pergunta = passo2.pergunta_do_valor(registro_erp, campos)
+        if pergunta and not messagebox.askyesno(titulo, pergunta, default="no"):
+            return
+        if "descricao" in campos:
+            aviso = cf.aviso_de_casamento({**registro_erp, "descricao_editada": campos["descricao"]},
+                                          conta)
+            if aviso and not messagebox.askyesno(titulo, aviso + "\n\nGravar assim mesmo?",
+                                                 default="no"):
+                return
+        antes, dia = passo2.antes_da_edicao(iniciais, campos), self.periodo.fim
+        self._na_nuvem(titulo, lambda c: c.registrar_decisao(
+            dia, alvo=ident, conta=conta, acao=cf.EDITAR, motivo=r["motivo"], campos=campos,
+            antes=antes, corrigir_no_erp=r["corrigir_no_erp"]))
+
+    def _novo_a_mao(self):
+        titulo = "Pagamento à mão"
+        recusa = passo2.recusa_de_gravar(self._nuvem_travada, self._gravando)
+        if recusa:
+            messagebox.showwarning(titulo, recusa)
+            return
+        if self.leitura is None or self.periodo is None:
+            return
+        contas = passo2.contas_para_a_mao(self.contas_erp, self.mapping, self.leitura.grupos)
+        ids, existentes = passo2.ids_do_dia(self.leitura.grupos), self.conferencia.a_mao
+
+        def montar(r):
+            link = r.get("link") or ""
+            erro = passo2.recado_do_link(link, r.get("lido"), lancamento_do_erp.id_do_link(link))
+            if erro:
+                return None, erro
+            return cf.nova_a_mao(conta=r["conta"], valor_texto=r["valor"],
+                                 descricao=r["descricao"], motivo=r["motivo"],
+                                 contas=set(contas), lido=r["lido"] if link.strip() else None,
+                                 tipo=r["tipo"], dados=r["dados"], favorecido=r["favorecido"],
+                                 ids_do_dia=ids, a_mao_existentes=existentes)
+
+        try:
+            dados = janelas.pedir_a_mao(self, contas, self._ler_link,
+                                        validar=lambda r: montar(r)[1])
+        finally:
+            self._ao_ler_link = None
+        if dados is None:
+            return
+        linha, erro = montar(dados)
+        if erro:
+            messagebox.showwarning(titulo, erro)
+            return
+        # Lançamento que já está no dia, ou em aberto desconhecido: pergunta.
+        pergunta = linha.pop("pergunta", "")
+        if pergunta and not messagebox.askyesno(titulo, pergunta, default="no"):
+            return
+        if not linha.get("lancamento_id") and not messagebox.askyesno(
+                titulo, "Sem o link do lançamento, o Anexar não tem o que casar depois. "
+                        "Gravar assim mesmo?", default="no"):
+            return
+        dia = self.periodo.fim
+        self._na_nuvem(titulo, lambda c: c.registrar_a_mao(dia, linha), "a_mao")
+
+    def _ler_link(self, texto, ao_ler):
+        ident = lancamento_do_erp.id_do_link(texto)
+        if not ident:
+            ao_ler(None, "Isto não parece o link de um lançamento do Mais Controle.")
+            return
+        if self.anx.avisar_se_ocupado("ler o lançamento", aba=self):
+            ao_ler(None, "O navegador está ocupado — tente de novo daqui a pouco.")
+            return
+        self._ao_ler_link = ao_ler
+        self.anx.submeter("Pagamentos do dia — ler lançamento", self._t_ler_link, ident, dona=self)
+
+    def _t_ler_link(self, ident):
+        try:
+            api = self.anx.garantir_sessao(self._log)
+            conhecidos = self.leitura.lancamentos if self.leitura is not None else ()
+            lido = lancamento_do_erp.ler(api, ident, conhecidos, log=self._log)
+            self.q.put(("link_lido", (lido, "")))
+        except Exception as e:                              # noqa: BLE001
+            self.q.put(("link_lido", (None, widgets.recado_de_erro(e, "Não li o lançamento."))))
+
+    # ------------------------------- agendados a confirmar, passos 6 e 7 (nuvem)
+    # Regra nenhuma mora aqui: quem decide é `passo67` / `agendados` /
+    # `lista_diretor` (puros, com teste). Gravar passa por `_na_nuvem`.
+    def _pode_gravar(self, titulo) -> bool:
+        recusa = passo2.recusa_de_gravar(self._nuvem_travada, self._gravando)
+        if recusa:
+            messagebox.showwarning(titulo, recusa)
+            return False
+        return self.leitura is not None and self.lido is not None and self.periodo is not None
+
+    def _encher_agendados(self):
+        t = self.t_agd
+        t.delete(*t.get_children())
+        pendentes = self.lido.pendentes if self.lido is not None else []
+        for i, ln in enumerate(passo67.linhas_agendados(pendentes, self.marcas_agd)):
+            t.insert("", "end", iid=ln.iid, values=ln.valores,
+                     tags=widgets.linha_zebrada(i, ln.tags[0] if ln.tags else ""))
+        if pendentes:
+            self.c0.pack(fill="x", padx=self._padx, pady=px((0, 12)), before=self.c1)
+        else:
+            self.c0.pack_forget()
+
+    def _clique_agd(self, evento):
+        t = self.t_agd
+        if t.identify_region(evento.x, evento.y) == "cell" and t.identify_column(evento.x) == "#1":
+            self._alternar_agd(t.identify_row(evento.y))
+
+    def _alternar_agd(self, iid):
+        if not iid or self.lido is None:
+            return
+        self.marcas_agd = passo67.alternar(self.marcas_agd, int(iid))
+        self._encher_agendados()
+        if self.t_agd.exists(iid):
+            self.t_agd.selection_set(iid)
+            self.t_agd.focus(iid)
+
+    def _responder(self, resposta):
+        nomes = {"pago": "Pago", "nao_saiu": "Não saiu", "reagendado": "Reagendado"}
+        titulo = f"Agendados a confirmar — {nomes[resposta]}"
+        if not self._pode_gravar(titulo):
+            return
+        pend = self.lido.pendentes
+        if resposta == "pago":
+            itens = passo67.pagos_marcados(pend, self.marcas_agd)
+            recusa = passo67.recusa_de_pagar(itens)
+            if recusa:
+                messagebox.showinfo(titulo, recusa)
+                return
+            # Sempre pergunta, com favorecido, valor e a prova (e a hora dela).
+            pergunta = passo67.pergunta_ao_pagar(pend, self.marcas_agd, self.lido.provas_de)
+            if not messagebox.askyesno(titulo, pergunta, default="no"):
+                return
+            self._na_nuvem(titulo, lambda c: ("pago", passo67.responder_pagos(c, itens)),
+                           "respondido")
+            return
+        sel = self.t_agd.selection()
+        ident = int(sel[0]) if sel else None
+        if ident is None:
+            messagebox.showinfo(titulo, "Selecione um agendado da lista.")
+            return
+        r = janelas.pedir_resposta(self, titulo, com_data=resposta == "reagendado")
+        if r is None:
+            return
+        motivo, nova_data = r
+        recusa = passo67.recusa_da_resposta(pend, ident, resposta, motivo, nova_data,
+                                            datetime.date.today())
+        if recusa:
+            messagebox.showwarning(titulo, recusa)
+            return
+        self._na_nuvem(titulo, lambda c: (resposta, passo67.responder_um(
+            c, ident, resposta, motivo=motivo, nova_data=nova_data)), "respondido")
+
+    # passo 6
+    def _novos_para_marcar(self):
+        return agd.para_marcar(self.pagamentos, self.fora, self.leitura.lancamentos,
+                               self.conferencia, {a.alvo for a in self.lido.agendados_hoje})
+
+    def _montar_para_marcar(self):
+        if not self._pode_gravar("Marcar agendados"):
+            return
+        self.para_marcar_itens = self._novos_para_marcar()
+        self._encher_para_marcar()
+        self._ajustar_altura(self.t_marcar)
+        if not self.para_marcar_itens:
+            self._log("Marcar agendados: nada sai hoje.")
+
+    def _remontar_para_marcar(self):
+        """Depois de reler: a lista nova, com o desmarcado pelo dono guardado."""
+        if self.para_marcar_itens is None or self.leitura is None or self.lido is None:
+            return
+        self.para_marcar_itens = passo67.remontar_para_marcar(self._novos_para_marcar(),
+                                                              self.para_marcar_itens)
+
+    def _encher_para_marcar(self):
+        t = self.t_marcar
+        t.delete(*t.get_children())
+        for i, ln in enumerate(passo67.linhas_para_marcar(self.para_marcar_itens or ())):
+            t.insert("", "end", iid=ln.iid, values=ln.valores,
+                     tags=widgets.linha_zebrada(i, ln.tags[0] if ln.tags else ""))
+
+    def _clique_marcar(self, evento):
+        t = self.t_marcar
+        if t.identify_region(evento.x, evento.y) == "cell" and t.identify_column(evento.x) == "#1":
+            self._alternar_marcar(t.identify_row(evento.y))
+
+    def _alternar_marcar(self, iid):
+        if not iid or self.para_marcar_itens is None:
+            return
+        self.para_marcar_itens, recado = passo67.alternar_para_marcar(self.para_marcar_itens,
+                                                                      int(iid))
+        if recado:
+            messagebox.showinfo("Marcar agendados", recado)
+            return
+        self._encher_para_marcar()
+        if self.t_marcar.exists(iid):
+            self.t_marcar.selection_set(iid)
+            self.t_marcar.focus(iid)
+
+    def _gravar_agendados(self):
+        titulo = "Gravar agendados"
+        if not self._pode_gravar(titulo):
+            return
+        recusa = passo67.recusa_de_marcar(self.para_marcar_itens)
+        if recusa:
+            messagebox.showinfo(titulo, recusa)
+            return
+        linhas, dia = agd.linhas_para_nuvem(self.para_marcar_itens), self.periodo.fim
+        self._na_nuvem(titulo, lambda c: c.marcar_agendados(dia, linhas), "agendados")
+
+    # passo 7
+    def _montar_lista(self):
+        """A lista de HOJE; a ordem que o dono já arrumou vale sobre a de ontem."""
+        if self.lido is None or self.mapping is None:
+            self.lista = []
+            return
+
+        def rotulo(conta):
+            achado = self.mapping.resolve_label(conta)
+            return achado.label if achado else conta
+        try:
+            self.lista = passo67.montar_lista(self.lido.agendados_hoje, rotulo,
+                                              self.lido.nomes_curtos, self.lido.lista_anterior,
+                                              atual=self.lista)
+        except ValueError as e:
+            self.lista = []
+            self._log(f"[!] lista do diretor: {e}")
+
+    def _indice_lista(self):
+        sel = self.t_lista.selection()
+        try:
+            i = int(sel[0]) if sel else None
+        except ValueError:
+            return None
+        return i if i is not None and 0 <= i < len(self.lista) else None
+
+    def _encher_lista(self, selecionar=None):
+        t = self.t_lista
+        t.delete(*t.get_children())
+        for i, ln in enumerate(self.lista):
+            t.insert("", "end", iid=str(i), tags=widgets.linha_zebrada(
+                         i, "atencao" if ln.sem_nome_curto else ""),
+                     values=(f"{ln.ordinal}º" if ln.ordinal else "", ln.nome, brl(ln.valor)))
+        if selecionar is not None:
+            i = next((n for n, ln in enumerate(self.lista) if ln.rotulo == selecionar), None)
+            if i is not None:
+                t.selection_set(str(i))
+                t.focus(str(i))
+        self._ligar_lista()
+
+    def _lista_mover(self, delta):
+        i = self._indice_lista()
+        if not passo67.pode_mover(self.lista, i, delta):
+            return
+        rotulo = self.lista[i].rotulo
+        self.lista = ldr.mover(self.lista, i, delta)
+        self._encher_lista(selecionar=rotulo)
+
+    def _lista_ordinal(self):
+        i = self._indice_lista()
+        if i is None:
+            return
+        rotulo = self.lista[i].rotulo
+        self.lista = ldr.alternar_ordinal(self.lista, i)
+        self._encher_lista(selecionar=rotulo)
+
+    def _nome_curto(self):
+        titulo = "Nome curto da conta"
+        if not self._pode_gravar(titulo):
+            return
+        i = self._indice_lista()
+        if i is None:
+            messagebox.showinfo(titulo, "Selecione uma linha da lista do diretor.")
+            return
+        rotulo, nomes = self.lista[i].rotulo, self.lido.nomes_curtos
+        atual = nomes.get(rotulo, "")
+        while True:
+            nome = janelas.pedir_nome_curto(self, rotulo, atual)
+            if nome is None:
+                return
+            erro = passo67.validar_nome_curto(nome, rotulo, nomes, self.lista)
+            if not erro:
+                break
+            messagebox.showwarning(titulo, erro)
+            atual = nome
+        nome = nome.strip()
+        if nome == nomes.get(rotulo):
+            return
+        self._na_nuvem(titulo, lambda c: c.gravar_nome_curto(rotulo, nome), "nome_curto")
+
+    def _copiar_lista(self):
+        titulo = "Lista do diretor"
+        if not self._pode_gravar(titulo):
+            return
+        recusa = passo67.recusa_de_copiar(self.lista)
+        if recusa:
+            messagebox.showinfo(titulo, recusa)
+            return
+        texto = ldr.texto_whatsapp(self.lista)
+        # Clipboard só na thread da tela; a gravação vai depois, para a
+        # sugestão de amanhã — falhar nela não desfaz a cópia.
+        self.clipboard_clear()
+        self.clipboard_append(texto)
+        self._log("Lista copiada — cole no WhatsApp.")
+        ordem, dia = ldr.para_nuvem(self.lista), self.periodo.fim
+        self._na_nuvem(titulo, lambda c: c.gravar_lista(dia, ordem, texto), "lista",
+                       depois="A lista JÁ foi copiada; o que se perdeu é só a sugestão de "
+                              "ordem de amanhã.")
+
     # ----------------------------------------------------------------- gerar
     def _ocupado(self, titulo) -> bool:
         if self.worker and not self.worker.done():
             messagebox.showinfo(titulo, "Espere a leitura em andamento terminar.")
+            return True
+        if self._gravando:
+            # Gerar no meio da gravação sairia com a decisão de antes.
+            messagebox.showinfo(titulo, "Espere a gravação na nuvem terminar.")
             return True
         return False
 
@@ -800,10 +1599,17 @@ class TelaDoDiaFrame(ttk.Frame):
         if motivo:
             messagebox.showinfo(titulo, motivo)
             return False
+        # Nuvem que FALHOU: as decisões do dono não estão aplicadas.
+        pergunta = passo2.pergunta_ao_gerar(self._nuvem_travada)
+        if pergunta and not messagebox.askyesno(titulo, pergunta, default="no"):
+            return False
         return True
 
     def _resultado_que_sai(self):
-        return confirmacao.remontar(self.leitura.entradas, pg.ids_que_nao_saem(self.leitura.grupos))
+        """Planilha, HTML e (sem os à mão) remessa: o da Remessa com as
+        decisões do dono. Conferência vazia (nuvem fora) = entrega 1."""
+        return geracao.resultado_da_tela(self.leitura.entradas, self.leitura.grupos,
+                                         self.conferencia)
 
     def _pasta_pagamentos(self):
         pasta = util.pasta_base() / "Pagamentos do dia"
@@ -913,7 +1719,12 @@ class TelaDoDiaFrame(ttk.Frame):
         if not self.abrir_remessa():
             self._log("[!] a aba Remessa/Retorno não está disponível para quem entrou.")
             return
-        self.aba_remessa.receber_apuracao(self.leitura, pg.ids_que_nao_saem(self.leitura.grupos))
+        resultado = self._resultado_que_sai()
+        for r in (r for regs in resultado.contas.values() for r in regs if r.get("a_mao")):
+            self._log(f"  à mão não vai na remessa — pague pelo HTML: "
+                      f"{r['favorecido']} {brl(de_float(r['valor']))}")
+        self.aba_remessa.receber_apuracao(self.leitura, pg.ids_que_nao_saem(self.leitura.grupos),
+                                          resultado=geracao.para_a_remessa(resultado))
 
     # --------------------------------------------------- aba Aportes
     def _mandar_aportes(self):

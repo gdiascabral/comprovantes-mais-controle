@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from . import confirmacao, ocr_boleto, qr_pix, relatorio
+from . import boletos_somados, confirmacao, ocr_boleto, qr_pix, relatorio
 
 
 @dataclass
@@ -140,6 +140,63 @@ def baixar_textos(baixar, alvos, *, log=print, progresso=lambda f, t: None,
     return textos, urls_ocr, nao_lidos, qrs
 
 
+def titulos_a_dividir(resultado, lancamentos) -> list[str]:
+    """Os `tradePayableId` das linhas que o relatório marcou "vários boletos
+    no título" — os ÚNICOS candidatos a dividir, e os únicos cujo título se lê
+    no ERP. Sem repetição, em ordem."""
+    titulo_de = {str(i.get("id")): str(i.get("tradePayableId") or "")
+                 for i in lancamentos or () if i.get("id")}
+    saida: dict[str, None] = {}
+    for registros in (resultado.contas or {}).values():
+        for reg in registros:
+            if reg.get("status") == boletos_somados.STATUS_VARIOS:
+                tpid = titulo_de.get(str(reg.get("id") or ""), "")
+                if tpid:
+                    saida[tpid] = None
+    return list(saida)
+
+
+def titulo_no_erp(api, tpid: str) -> dict | None:
+    """O título INTEIRO no ERP (`numberOfInstallments`, `installments[]`,
+    `totalValue`…), ou None. Só leitura, de dentro da página do Chrome do app
+    (`_base_legacy` + `_fetch_json`, os mesmos da `mc_api`) — nunca login
+    HTTP por fora.
+
+    Endereço a confirmar na prova ao vivo: `GET <legacy>/trade-payables/<id>`,
+    o mesmo que `guias/lancar.py` já lê (pelo transporte do porteiro) para
+    pegar `installments`/`account` do título. Aqui ainda não foi medido pela
+    sessão da `mc_api`. Resposta de erro (`__erro`), vazia ou que não é
+    objeto vira None, e o título fica sem dados (não divide)."""
+    url, headers = api._base_legacy(f"trade-payables/{tpid}")
+    j = api._fetch_json(url, headers)
+    if not isinstance(j, dict) or not j or j.get("__erro"):
+        return None
+    return j
+
+
+def ler_titulos_no_erp(api, tpids, log=print, cancelar=lambda: False) -> dict:
+    """`{tpid: título}` dos que leram. Falha fechada: o título que não leu
+    (erro, vazio, exceção) fica de fora, e por isso NÃO divide — com aviso
+    no log. `cancelar()` é consultado antes de cada título: o "Parar" para
+    a fila ali (quem chama marca a leitura como interrompida)."""
+    lidos = {}
+    for tpid in tpids:
+        if cancelar():
+            break
+        try:
+            titulo = titulo_no_erp(api, tpid)
+        except Exception as e:                               # noqa: BLE001
+            titulo, motivo = None, str(e)
+        else:
+            motivo = "resposta vazia ou com erro"
+        if titulo is None:
+            log(f"não li o título {tpid} no ERP ({motivo}): os boletos dele "
+                "não são divididos")
+            continue
+        lidos[tpid] = titulo
+    return lidos
+
+
 def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
                    cadastro_reembolso=None, regras_fornecedor=None, destacar=(),
                    conta_entra=relatorio.conta_entra, log=print,
@@ -200,9 +257,22 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         textos=textos, urls_ocr=urls_ocr, cadastro_reembolso=cadastro_reembolso,
         regras_fornecedor=regras_fornecedor or {}, participantes=leitura.participantes,
         periodo=(ini, fim), anexos_nao_lidos=nao_lidos, qr_pix=qrs,
-        titulos_nao_lidos=set(getattr(api, "titulos_sem_leitura", ()) or ()))
+        titulos_nao_lidos=set(getattr(api, "titulos_sem_leitura", ()) or ()),
+        # A tela nova divide o lançamento cujos boletos somam exato
+        # (`boletos_somados`); a Remessa/Retorno, lendo sozinha, não.
+        dividir_boletos=True)
+    # Sem título lido nada divide, e as linhas candidatas continuam com o
+    # status "vários boletos": é por ele que se sabe QUAIS títulos ler.
+    entradas.titulos_erp = ler_titulos_no_erp(
+        api, titulos_a_dividir(confirmacao.remontar(entradas), a_pagar), log=log,
+        cancelar=cancelar)
+    if cancelar():
+        # Parou no meio dos títulos: nada apurado, nada dividido pela metade.
+        leitura.interrompida = True
+        return leitura
     leitura.entradas = entradas
     leitura.resultado = confirmacao.remontar(entradas)
+    leitura.avisos.extend(boletos_somados.avisos(leitura.resultado))
     leitura.analise = confirmacao.analisar_remessa(
         leitura.resultado.contas, leitura.participantes,
         carregar_mapas=carregar_mapas, abrir_historico=abrir_historico)

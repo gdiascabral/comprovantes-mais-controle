@@ -697,6 +697,29 @@ def documento_do_favorecido(registro: dict, participantes: dict | None) -> str:
             or documento_valido(registro.get("dados") or ""))
 
 
+#: A chave do registro que diz "o dono EDITOU esta chave Pix à mão na tela do
+#: dia" (`tela_do_dia.geracao.aplicar_decisao`). Só a tela do dia a põe: a aba
+#: Remessa/Retorno sozinha nunca a tem, e para ela nada muda.
+CHAVE_EDITADA = "chave_editada"
+
+
+def documento_sem_edicao(registro: dict, participantes: dict | None) -> str:
+    """O CPF/CNPJ que a remessa declara para quem recebe, sem a edição do
+    dono: o da pessoa no reembolso (quando veio com o nome), senão o do
+    cadastro de Contatos — e só o que fecha no DV. É o mesmo que o `preparar`
+    usa, e a tela compara a chave editada com ELE."""
+    if registro.get("reembolso") and registro.get("reembolso_documento"):
+        return documento_valido(registro.get("reembolso_documento") or "")
+    return documento_valido(documento_do_cadastro(registro, participantes))
+
+
+def documento_da_chave(dados: str) -> str:
+    """O CPF/CNPJ que a chave Pix É (tipo CPF ou CNPJ e DV que fecha), ou ""."""
+    if regras.tipo_de_chave_pix(dados or "") in (regras.CHAVE_CPF, regras.CHAVE_CNPJ):
+        return documento_valido(dados or "")
+    return ""
+
+
 #: Do nome do tipo de chave (regras_pagamento) para o domínio G100 do
 #: segmento B. São os mesmos cinco casos, com nomes diferentes dos dois lados.
 _FORMA_POR_TIPO = {
@@ -895,6 +918,14 @@ def preparar(contas: dict, participantes: dict | None = None,
             if registro.get("tipo") == "Pix":
                 documento = do_cadastro or documento_valido(dados)
                 forma = forma_de_iniciacao(dados, do_cadastro)
+                # Chave EDITADA à mão na tela do dia (dono, 22/10/2026: "tem
+                # que ir o que eu coloquei"). Sendo CPF/CNPJ, ela É o titular:
+                # o 08.3B declara o documento dela, e não o do cadastro — com
+                # forma 03, a Informação 12 já leva a chave, e os dois campos
+                # discordariam. Telefone, e-mail e aleatória não carregam
+                # documento: segue o do cadastro. A tela avisa na observação.
+                if registro.get(CHAVE_EDITADA) and documento_da_chave(dados):
+                    documento = documento_da_chave(dados)
 
             impedimento = _impedimento(registro, documento, forma)
             # O código de barras sai ANTES da consulta ao histórico: é ele a
@@ -977,10 +1008,12 @@ def preparar(contas: dict, participantes: dict | None = None,
 TAMANHO_MENSAGEM_LOTE = 40
 
 
-#: As chaves do registro que a descrição do banco lê.
+#: As chaves do registro que a descrição do banco lê. `descricao_editada` só
+#: existe no registro que a tela "Pagamentos do dia" editou; o `preparar` só
+#: copia a chave que está no registro, então os da Remessa não mudam.
 _CHAVES_DA_DESCRICAO = ("nf", "nf_anexada", "oc_da_descricao",
                         "descricao_lancamento", "centro_custo", "utilidade",
-                        "tipo", "dados")
+                        "tipo", "dados", "descricao_editada")
 
 #: Tamanho do campo de texto de cada produto: `09.3J` do boleto e `24.3A` do Pix.
 LIMITE_ETIQUETA_BOLETO = 30

@@ -22,10 +22,11 @@ paths:
   navegador. **O estado do navegador era o pior deles**: é a informação que se
   procura ANTES de clicar noutra aba, e ficava no ponto mais baixo da tela,
   longe dos itens do menu.
-  As treze telas em quatro seções: VISÃO GERAL (Início), COMPROVANTES (Baixar
+  As quinze telas em quatro seções: VISÃO GERAL (Início), COMPROVANTES (Baixar
   Comprovantes, Separar e Renomear, Anexar, Conferência, Aportes) e os dois
   grupos que abrem e fecham — DIÁRIO (Pagamentos do dia — desde 21/10/2026,
-  ver `arquitetura-tela-do-dia.md` —, Remessa/Retorno, Saldo de pagamentos) e
+  ver `arquitetura-tela-do-dia.md` —, Remessa/Retorno, Saldo de pagamentos,
+  Controle de aportes — desde 22/10/2026) e
   MENSAL (Relatório Mensal, Extratos Sicoob, Contratos, Acessorias). "Baixar"
   vem antes de "Separar" e "Anexar" porque é a ordem do dia. Os rótulos
   encurtaram junto com a coluna ("Anexar Comprovantes" dentro de um menu
@@ -310,7 +311,7 @@ paths:
   trabalho nenhum.
   **O `ItemMenu` entra no Tab** (PR #28). Ele era `tk.Frame` e só escutava
   `<Button-1>`, `<Enter>` e `<Leave>`: quem usa só o teclado alcançava DIÁRIO e
-  MENSAL — que são `ttk.Button` — e não alcançava NENHUMA das doze telas (hoje treze) que
+  MENSAL — que são `ttk.Button` — e não alcançava NENHUMA das doze telas (hoje quinze) que
   eles agrupam, o contrário da regra escrita dois parágrafos acima do código
   que a desmentia. Hoje tem `takefocus=1`, e `<Return>` e `<space>` disparam o
   **mesmo** `_comando` do clique: um caminho só, senão existiria a chance de o
@@ -356,7 +357,7 @@ paths:
   primeiro campo da aba aberta — procurar lançamento pede um índice do ERP que
   ninguém tem, e um campo que promete três coisas e não faz nenhuma ensina a
   pessoa a não usar campo nenhum. Hoje a `BarraTopo.DICA` é "Ir para uma
-  tela…  (Ctrl+K)", digitar filtra os nomes das treze telas por `util.filtrar`
+  tela…  (Ctrl+K)", digitar filtra os nomes das quinze telas por `util.filtrar`
   (sem acento, sem caixa, pedaço em qualquer posição), ↑/↓ andam pela lista e
   Enter pula para a realçada; texto sem par **não move o foco** e a lista diz
   que não achou, porque campo que não responde a nada parece travado. Duas
@@ -368,6 +369,16 @@ paths:
   esquecer um desses passos. De graça: a lista sai do menu JÁ MONTADO
   (`definir_telas`), então vem filtrada pelo PAPEL de quem entrou, e a busca não
   leva ninguém a uma tela que o menu daquela pessoa não mostra.
+  **O `ComboBusca` nunca mostra a lista NATIVA do ttk** (22/10/2026). O
+  clique dele tomava só a seta, e o `ttk::combobox::Press` da classe posta a
+  nativa em todo clique fora do `textarea` (moldura, enchimento; com
+  `readonly`, em qualquer lugar) — era o "às vezes abre a lista antiga" do
+  "Recebeu" dos Aportes. Duas travas: `destino_do_clique` (pura) responde à
+  MESMA pergunta da classe, e só o clique no texto segue para ela; e o
+  `-postcommand` termina em `return`, o que faz o `Post` da classe desistir
+  antes de criar a listbox e abre a nossa no lugar — pega qualquer caminho que
+  ainda chegue lá. Testes: `tests/test_combo_busca_sem_lista_nativa.py`
+  (puro) e o fim de `tests/test_combo_busca.py` (fixture `raiz`).
   **Entrou em 02/09 (PR #30)**: "nenhuma aba escreve `#` seguido de seis
   dígitos" deixa de ser conferência a olho e vira teste — varredura por AST dos
   `.py` **rastreados pelo git**, fora do `widgets.py` e de `tests/`, atrás de

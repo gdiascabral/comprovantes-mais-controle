@@ -404,6 +404,51 @@ def modelo_path() -> Path:
     return _ou_pula(_RAIZ / "MODELO.xlsx", "MODELO.xlsx")
 
 
+# ------------------------------------------------------------- janelas reais
+_JANELAS = ("askokcancel", "askyesno", "askyesnocancel", "askretrycancel",
+            "askquestion", "showinfo", "showwarning", "showerror")
+
+
+@pytest.fixture(autouse=True)
+def janelas_do_messagebox(monkeypatch):
+    """Nenhum teste abre janela real do `tkinter.messagebox`.
+
+    22/10/2026: um teste chamou `LeitorSicoob.reler` sem dublê e a pergunta
+    real "abrir o Chrome do Sicoob" apareceu na tela do dono. Toda função do
+    messagebox vira um dublê que registra a chamada e responde "não" (as
+    perguntas devolvem False: nada segue adiante sem o teste querer). O teste
+    que precisa de outra resposta troca a função por conta própria, depois
+    desta fixture. Quem importou a função solta (`from tkinter.messagebox
+    import ...`) escapa do dublê, mas não da trava: toda janela do messagebox
+    passa por `Message.show`, que aqui derruba o teste em vez de abrir.
+
+    Quem quiser conferir o que foi perguntado pede esta fixture e lê a lista.
+    """
+    try:
+        import tkinter.messagebox as mb
+    except ImportError:                       # Python sem Tk: nada a proteger
+        yield []
+        return
+    chamadas = []
+
+    def _dubla(nome):
+        resposta = False if nome.startswith("ask") else "ok"
+
+        def _janela(*a, **k):
+            chamadas.append((nome, a, k))
+            return resposta
+        _janela.__module__ = __name__
+        return _janela
+
+    for nome in _JANELAS:
+        monkeypatch.setattr(mb, nome, _dubla(nome))
+
+    def _real(self, **k):
+        raise AssertionError(f"janela real do messagebox num teste: {self.options!r}")
+    monkeypatch.setattr(mb.Message, "show", _real)
+    yield chamadas
+
+
 # ------------------------------------------------------------ Chrome central
 @pytest.fixture(autouse=True)
 def _sem_chrome_central(monkeypatch):

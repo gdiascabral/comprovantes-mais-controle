@@ -358,6 +358,9 @@ lançados, que seguem em `self.criados`, memória do processo em
 apaga a proteção contra duplicar; e os envios da Acessórias, hoje conferidos
 relendo o portal, que funciona.
 
+Também ficam FORA da nuvem os ajustes de saldo, a simulação e o `enviados_aportes` da
+aba "Pagamentos do dia": moram no JSON do dia (ver a seção seguinte).
+
 **Migrar de novo** (máquina nova, ou recomeçar): `python nuvem/migrar.py
 --conferir` critica sem escrever; `--subir` escreve e depois relê para
 comparar campo a campo. Precisa do Supabase CLI autenticado
@@ -385,3 +388,36 @@ ninguém pedir, o texto que o contador recebe todo mês.
   `docs/PROVENIENCIA.md`, que não depende do conteúdo — e é lá que está o
   achado da comparação: o `grant` da migration `20260824141500` não aparece em
   runbook nenhum.
+
+## O dia de trabalho da tela na nuvem (22/10/2026)
+
+Migration `20261022100000_pagamentos_do_dia_na_nuvem.sql` (cliente:
+`nuvem/pagamentos_do_dia.py`, `DiaNaNuvem`), para a aba "Pagamentos do dia":
+
+| Tabela | Guarda |
+|---|---|
+| `pagamento_decisao` | liberar, desmarcar, editar, desfazer, remover à mão, por `alvo` (id do lançamento ou `mao:<n>`), com motivo, campos editados e o valor de antes |
+| `pagamento_a_mao` | o pagamento lançado à mão (conta, valor, descrição, motivo, link opcional do lançamento e o em aberto) |
+| `pagamento_agendado` | a FOTO de cada pagamento marcado como agendado; índice único `(dia, alvo)` |
+| `agendado_resposta` | pago, não saiu, reagendado, com motivo, nova data e a prova |
+| `lista_diretor_nome` | o nome curto de cada conta |
+| `lista_diretor` | a ordem e o texto copiados em cada dia (a ordem de ontem é a sugestão de hoje) |
+| view `agendado_em_aberto` | o agendado cuja última resposta não é final (`security_invoker`: a RLS vale para quem consulta) |
+
+- **Só acrescenta**: o app tem `select` e `insert`; não há `update` nem `delete`
+  (mudar de ideia é uma linha nova; o estado é a última linha, dobrada no
+  Python). Escrever e ler exigem `privado.e_ativo()`.
+- **`quem` é carimbado pelo servidor** (`default auth.uid()` + `with check`) e
+  `quem_nome` por gatilho (`privado.carimbar_quem_nome`): o app não manda
+  nenhum dos dois, e `quem_nome` serve só para mostrar.
+- O índice único `(dia, alvo)` é o que impede duas máquinas de agendar o mesmo
+  pagamento no mesmo dia; a segunda volta como "repetida" (23505) e vira recado.
+- A migration termina com `notify pgrst, 'reload schema'`. Sem a nuvem lida,
+  a tela trava a entrega 2 (falha fechada; ver `arquitetura-tela-do-dia.md`).
+- O SQL também existe na raiz como `APLICAR NO SUPABASE - 2026-10-22 pagamentos
+  do dia na nuvem.sql` (fora do repo, com a mesma estrutura); foi aplicado pelo
+  CLI em 22/10/2026 depois do revisor.
+
+**Ajustes de saldo, simulação e `enviados_aportes` NÃO estão na nuvem**: seguem
+no JSON do dia da tela (rascunho que vale só para o dia e não decide o que é
+pago).

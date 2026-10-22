@@ -130,13 +130,25 @@ def celulas_da_conta(conta) -> tuple[str, str, str, str]:
     nas colunas do desenho aprovado: quantos saem da conta e quanto, quantos
     estão bloqueados (e quanto somam, que NÃO entra no a pagar). O já enviado
     em remessa soma no a pagar (o banco ainda vai debitá-lo) e aparece na
-    situação, separado dos bloqueados: não se gera de novo, mas sai."""
+    situação, separado dos bloqueados: não se gera de novo, mas sai. Da
+    conferência (entrega 2) a situação cita "N liberado(s)", "N à mão" e
+    "N desmarcado(s) (fora)" — o desmarcado não soma em nada."""
     bloqueados = (f"{len(conta.bloqueados)} · {brl(conta.valor_bloqueado)}"
                   if conta.bloqueados else "0")
     partes = [conta.motivo_fora] if conta.motivo_fora else []
     if conta.ja_enviados:
         partes.append(f"{len(conta.ja_enviados)} já enviado · "
                       f"{brl(conta.valor_ja_enviado)} (soma no a pagar)")
+    # `getattr`: objetos da entrega 1 não têm os campos da conferência.
+    liberados = len(getattr(conta, "liberados", ()))
+    a_mao = len(getattr(conta, "a_mao", ()))
+    desmarcados = len(getattr(conta, "desmarcados", ()))
+    if liberados:
+        partes.append(f"{liberados} liberado" + ("s" if liberados > 1 else ""))
+    if a_mao:
+        partes.append(f"{a_mao} à mão")
+    if desmarcados:
+        partes.append(f"{desmarcados} desmarcado" + ("s" if desmarcados > 1 else "") + " (fora)")
     return str(conta.qtd_a_pagar), brl(conta.a_pagar), bloqueados, " · ".join(partes)
 
 

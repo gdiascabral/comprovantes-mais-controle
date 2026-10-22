@@ -1038,3 +1038,78 @@ def test_a_cor_da_linha_na_tela():
     assert confirmacao.estado_na_tela(por_id["A2"], True) == "atencao"
     assert confirmacao.estado_na_tela(por_id["A1"], False) == "erro"
     assert confirmacao.estado_na_tela(por_id["A9"], True) == "erro"
+
+
+# ------------------------------------------- lançamento dividido em N boletos
+class _RegistroPorBoleto(_RegistroFalso):
+    """Cada boleto saiu na MESMA remessa (rejeitada por causa de um item), e o
+    retorno fala de cada item pelo código de barras."""
+
+    def __init__(self, retorno_por_codigo):
+        super().__init__(enviados={"L1": 7}, estados={"L1": ("rejeitado", "")})
+        self.retorno_por_codigo = retorno_por_codigo
+
+    def _remessa(self):
+        return type("R", (), {"nsa": 7, "estado": "rejeitado", "retorno_estado": "",
+                              "gerado_em": _dt.date(2026, 9, 10)})()
+
+    def envio_de(self, codigo):
+        if codigo not in self.retorno_por_codigo:
+            return None
+        item = type("I", (), {"retorno_estado": self.retorno_por_codigo[codigo]})()
+        return self._remessa(), item
+
+
+def _partes_analisadas(retornos):
+    """L1 de R$ 1.000 dividido em 400 + 600; `retornos` = o retorno de cada
+    parte, na ordem."""
+    from pagamentos_dia import ocr_boleto
+    from test_boletos_somados import gera_linha
+
+    linhas = [gera_linha(40000), gera_linha(60000)]
+    regs = [_registro("L1", dados=ln, valor=v, parte=f"{k}/2",
+                      parte_linha=ocr_boleto.digitos(ln))
+            for k, (ln, v) in enumerate(zip(linhas, (400.0, 600.0)), 1)]
+    codigos = [ocr_boleto.codigo_de_barras(ln) for ln in linhas]
+    registro = _RegistroPorBoleto(dict(zip(codigos, retornos)))
+    contas = {CONTA: regs}
+    analise = confirmacao.analisar_remessa(
+        contas, {}, carregar_mapas=_mapas, abrir_historico=lambda: registro, quando=HOJE)
+    grupo, = confirmacao.grupos_da_confirmacao(
+        relatorio.Resultado(contas, []), analise, [])
+    return {ln.parte: ln for ln in grupo.entram}
+
+
+@pytest.mark.parametrize("retornos", [("ok", "rejeitado"), ("rejeitado", "ok")])
+def test_parte_paga_nao_herda_o_rejeitado_da_outra_parte(retornos):
+    """Revisão de 22/10: o estado do envio era guardado por id, a última parte
+    sobrescrevia as outras e as N linhas liam o mesmo — a parte PAGA aparecia
+    "rejeitado", nascia marcada e saía de novo (pagar em dobro)."""
+    partes = _partes_analisadas(retornos)
+    for parte, retorno in zip(("1/2", "2/2"), retornos):
+        linha = partes[parte]
+        rejeitada = retorno == "rejeitado"
+        assert linha.envio_rejeitado is rejeitada, (parte, retorno)
+        assert confirmacao.marcada_de_inicio(linha) is rejeitada, (parte, retorno)
+
+
+def test_estados_de_partes_que_nao_se_separam_nunca_viram_rejeitado():
+    """Sem dar para dizer qual estado é de qual parte (o código da parte não
+    está entre os respondidos), e os estados divergindo: lado seguro, "já
+    enviado" — nunca "rejeitado"."""
+    analise = confirmacao.AnaliseRemessa(envios={
+        ("L1", "1" * 44): ("rejeitado", "ok"),
+        ("L1", "2" * 44): ("rejeitado", "rejeitado")})
+    estado = analise.estado_do_envio("L1", "9" * 47)
+    assert not confirmacao.envio_rejeitado(*estado)
+    assert not confirmacao.envio_rejeitado(*analise.estado_do_envio("L1"))
+    # Estados iguais: aí não há dúvida, vale o deles.
+    igual = confirmacao.AnaliseRemessa(envios={
+        ("L1", "1" * 44): ("rejeitado", "rejeitado"),
+        ("L1", "2" * 44): ("rejeitado", "rejeitado")})
+    assert confirmacao.envio_rejeitado(*igual.estado_do_envio("L1", "9" * 47))
+
+
+def test_remessa_sem_parte_continua_pelo_id():
+    analise = confirmacao.AnaliseRemessa(envios={"L2": ("rejeitado", "rejeitado")})
+    assert analise.estado_do_envio("L2") == ("rejeitado", "rejeitado")

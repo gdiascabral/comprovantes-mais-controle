@@ -260,6 +260,41 @@ def percentuais_dos_pesos(investidores, pesos) -> list[Decimal]:
     return [como_dinheiro(v * 100 / soma) for v in valores]
 
 
+def pessoa_sem_conta(entidades: dict, nome: str) -> bool:
+    """`nome` é um cadastro SEM conta no app (pessoa física, investidor de
+    fora)? A mesma régua do `Operacao.validar`: conta `None`. Nome que não está
+    no cadastro não é "sem conta" — é desconhecido, e quem diz isso é o
+    `validar`."""
+    return nome in entidades and (entidades[nome] or {}).get("conta") is None
+
+
+def modo_padrao(pagador: str, recebedor: str, entidades: dict,
+                subcontas: dict) -> str | None:
+    """O "Lançar" que a tela põe sozinha ao escolher Pagou/Recebeu (pedido do
+    dono, 22/10/2026). É só o PADRÃO — quem trava é o `validar`, com a mesma
+    régua (`pessoa_sem_conta`):
+
+    - Pagou é investidor de subconta ou sem conta  -> "Só recebimento";
+    - Recebeu é sem conta                          -> "Só pagamento";
+    - os dois com conta                            -> "Pagamento + Recebimento".
+
+    `None` = não mexer: os DOIS sem conta (nenhum modo serve, e o `validar`
+    avisa) ou um lado ainda desconhecido sem que o outro já decida."""
+    if numero_subconta(pagador, subcontas) is not None:
+        return "Só recebimento"
+    pag_sem = pessoa_sem_conta(entidades, pagador)
+    rec_sem = pessoa_sem_conta(entidades, recebedor)
+    if pag_sem and rec_sem:
+        return None
+    if pag_sem:
+        return "Só recebimento"
+    if rec_sem:
+        return "Só pagamento"
+    if pagador in entidades and recebedor in entidades:
+        return "Pagamento + Recebimento"
+    return None
+
+
 @dataclass
 class Operacao:
     data: datetime.date
@@ -330,11 +365,12 @@ class Operacao:
         # contas pessoais. Só existe a perna da empresa:
         #   PF paga   -> lançamos só a entrada  (Só recebimento)
         #   PF recebe -> lançamos só a saída    (Só pagamento)
-        if entidades[self.pagador].get("conta") is None and self.modo in (
+        # A tela já PREENCHE o modo assim (`modo_padrao`); aqui é a trava.
+        if pessoa_sem_conta(entidades, self.pagador) and self.modo in (
                 "Pagamento + Recebimento", "Só pagamento"):
             erros.append(f"{self.pagador} é pessoa física sem conta — só pode "
                          "ser lançado como 'Só recebimento'.")
-        if entidades[self.recebedor].get("conta") is None and self.modo in (
+        if pessoa_sem_conta(entidades, self.recebedor) and self.modo in (
                 "Pagamento + Recebimento", "Só recebimento"):
             erros.append(f"{self.recebedor} é pessoa física sem conta — só pode "
                          "ser lançado como 'Só pagamento'.")

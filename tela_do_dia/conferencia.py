@@ -1,0 +1,498 @@
+# -*- coding: utf-8 -*-
+"""A conferência editável do passo 2 da aba "Pagamentos do dia". Sem tela.
+
+O dono pode LIBERAR um bloqueado (com motivo), DESMARCAR o que ia sair,
+EDITAR a forma de pagar, o dado de reembolso e a descrição, e lançar um
+pagamento À MÃO. Cada clique é uma linha nova na nuvem
+(`nuvem.pagamentos_do_dia`, só acrescenta); o estado de cada alvo é a
+"dobra" de todos os eventos dele, na ordem do id do banco (`dobrar`).
+"Desfazer" apaga a decisão e o alvo volta a ser o que o ERP diz.
+
+Quem e quando vêm do servidor (`quem_nome`/`quando` carimbados lá): aqui só
+se leem. As validações usam os tetos das constraints do banco (motivo e
+descrição até 200, dados até 500), para a tela recusar antes da nuvem.
+
+O casamento do Anexar (`aviso_de_casamento`) usa as MESMAS funções de
+`anexar/matcher.py`: centro de custo na descrição e o número do documento
+como último número (ou rotulado NF/OC).
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from decimal import Decimal
+
+from anexar import matcher
+from pagamentos_dia import confirmacao, html_pagamentos, ocr_boleto, remessa_dia
+from pagamentos_dia import regras_pagamento as regras
+
+from .valores import CENTAVO, brl, de_float, ler_valor_editado
+
+LIBERAR, DESMARCAR, EDITAR, DESFAZER, REMOVER_A_MAO = (
+    "liberar", "desmarcar", "editar", "desfazer", "remover_a_mao")
+PREFIXO_A_MAO = "mao:"
+#: Tetos das constraints de `pagamento_decisao`/`pagamento_a_mao`.
+MOTIVO_MINIMO, TEXTO_MAXIMO, DADOS_MAXIMO = 3, 200, 500
+TIPOS = ("Pix", "Boleto", "Transferência")
+CAMPOS_EDITAVEIS = ("tipo", "dados", "reembolso_nome", "reembolso_documento", "descricao")
+#: O trecho do `remessa_dia.MOTIVO_SEM_DOCUMENTO` que aparece na situação.
+_FORA_DOS_CONTATOS = "cadastro de Contatos"
+#: Formas da chave que dizem o tipo sozinhas (as mesmas de `regras_pagamento`).
+_COM_TIPO = (*(p for p, _t in regras._TIPO_DECLARADO), regras._EMAIL, regras._ALEATORIA,
+             regras._CPF_PONTUADO, regras._TELEFONE_PONTUADO)
+
+
+def _onze_sem_tipo(dados: str) -> bool:
+    """Onze dígitos sem tipo declarado nem pontuação de CPF/telefone:
+    "62999999999", "PIX 62999999999", "chave: 52998224725"."""
+    if any(p.search(dados) for p in _COM_TIPO):
+        return False
+    return len(re.sub(r"\D", "", dados)) == 11
+
+
+@dataclass(frozen=True)
+class Evento:
+    """Uma linha de `pagamento_decisao`."""
+
+    id: int
+    alvo: str
+    conta: str
+    acao: str
+    motivo: str = ""
+    campos: dict = field(default_factory=dict)
+    antes: dict = field(default_factory=dict)
+    corrigir_no_erp: bool = False
+    quem_nome: str = ""
+    quando: str = ""
+
+    @classmethod
+    def de_linha(cls, linha: dict) -> "Evento":
+        return cls(id=int(linha.get("id") or 0), alvo=str(linha.get("alvo") or ""),
+                   conta=str(linha.get("conta") or ""), acao=str(linha.get("acao") or ""),
+                   motivo=str(linha.get("motivo") or ""), campos=dict(linha.get("campos") or {}),
+                   antes=dict(linha.get("antes") or {}),
+                   corrigir_no_erp=bool(linha.get("corrigir_no_erp")),
+                   quem_nome=str(linha.get("quem_nome") or ""), quando=str(linha.get("quando") or ""))
+
+
+@dataclass
+class Decisao:
+    """O estado de um alvo (id do lançamento, ou "mao:<id>") depois dos eventos."""
+
+    alvo: str
+    conta: str = ""
+    liberado: bool = False
+    motivo_liberacao: str = ""
+    desmarcado: bool = False
+    motivo_desmarcar: str = ""
+    edicoes: dict = field(default_factory=dict)
+    antes: dict = field(default_factory=dict)
+    motivo_edicao: str = ""
+    corrigir_no_erp: bool = False
+    removido: bool = False
+    quem_nome: str = ""
+    quando: str = ""
+
+    @property
+    def editado(self) -> bool:
+        return bool(self.edicoes)
+
+
+def dobrar(eventos) -> dict[str, Decisao]:
+    """O estado de cada alvo depois de TODOS os eventos, na ordem do id
+    (a do banco). Ação desconhecida (app mais novo) não decide nada."""
+    estado: dict[str, Decisao] = {}
+    for ev in sorted(eventos, key=lambda e: e.id):
+        if ev.acao == DESFAZER:
+            estado.pop(ev.alvo, None)
+            continue
+        if ev.acao not in (LIBERAR, DESMARCAR, EDITAR, REMOVER_A_MAO):
+            continue
+        d = estado.setdefault(ev.alvo, Decisao(ev.alvo, conta=ev.conta))
+        if ev.acao == LIBERAR:
+            d.liberado, d.desmarcado, d.motivo_liberacao = True, False, ev.motivo
+        elif ev.acao == DESMARCAR:
+            d.desmarcado, d.liberado, d.motivo_desmarcar = True, False, ev.motivo
+        elif ev.acao == EDITAR:
+            for k, v in ev.antes.items():
+                d.antes.setdefault(k, v)          # o ORIGINAL do ERP, não o da edição anterior
+            d.edicoes.update({k: v for k, v in ev.campos.items() if k in CAMPOS_EDITAVEIS})
+            d.motivo_edicao = ev.motivo
+            d.corrigir_no_erp = d.corrigir_no_erp or ev.corrigir_no_erp
+        else:
+            d.removido = True
+        d.quem_nome, d.quando = ev.quem_nome, ev.quando
+    return estado
+
+
+def _decimal_ou_none(valor) -> Decimal | None:
+    return None if valor in (None, "") else Decimal(str(valor))
+
+
+@dataclass(frozen=True)
+class PagamentoAMao:
+    """Uma linha de `pagamento_a_mao`. Valores em Decimal (a nuvem manda texto)."""
+
+    id: int
+    conta: str
+    valor: Decimal
+    descricao: str
+    motivo: str
+    favorecido: str = ""
+    tipo: str = ""
+    dados: str = ""
+    lancamento_id: str = ""
+    centro_custo: str = ""
+    nf: str = ""
+    oc: str = ""
+    valor_em_aberto: Decimal | None = None
+    quem_nome: str = ""
+    quando: str = ""
+
+    @property
+    def alvo(self) -> str:
+        return f"{PREFIXO_A_MAO}{self.id}"
+
+    @classmethod
+    def de_linha(cls, linha: dict) -> "PagamentoAMao":
+        return cls(id=int(linha["id"]), conta=str(linha["conta"]),
+                   valor=Decimal(str(linha["valor"])), descricao=str(linha.get("descricao") or ""),
+                   motivo=str(linha.get("motivo") or ""), favorecido=str(linha.get("favorecido") or ""),
+                   tipo=str(linha.get("tipo") or ""), dados=str(linha.get("dados") or ""),
+                   lancamento_id=str(linha.get("lancamento_id") or ""),
+                   centro_custo=str(linha.get("centro_custo") or ""), nf=str(linha.get("nf") or ""),
+                   oc=str(linha.get("oc") or ""),
+                   valor_em_aberto=_decimal_ou_none(linha.get("valor_em_aberto")),
+                   quem_nome=str(linha.get("quem_nome") or ""), quando=str(linha.get("quando") or ""))
+
+
+@dataclass(frozen=True)
+class Conferencia:
+    """Tudo o que a nuvem guarda do passo 2 de um dia. Imutável: `com_*`
+    devolve outra, com a linha gravada acrescentada."""
+
+    eventos: tuple = ()
+    pagamentos_a_mao: tuple = ()
+
+    @property
+    def decisoes(self) -> dict[str, Decisao]:
+        return dobrar(self.eventos)
+
+    @property
+    def a_mao(self) -> list[PagamentoAMao]:
+        """Os pagamentos à mão que valem (sem os removidos)."""
+        d = self.decisoes
+        return [p for p in self.pagamentos_a_mao
+                if not (d.get(p.alvo) and d[p.alvo].removido)]
+
+    @classmethod
+    def da_nuvem(cls, decisoes, a_mao) -> "Conferencia":
+        return cls(tuple(Evento.de_linha(x) for x in decisoes or ()),
+                   tuple(PagamentoAMao.de_linha(x) for x in a_mao or ()))
+
+    def com_evento(self, linha: dict) -> "Conferencia":
+        return Conferencia((*self.eventos, Evento.de_linha(linha)), self.pagamentos_a_mao)
+
+    def com_a_mao(self, linha: dict) -> "Conferencia":
+        return Conferencia(self.eventos, (*self.pagamentos_a_mao, PagamentoAMao.de_linha(linha)))
+
+
+#: O recado de liberar ou mudar a forma de pagar de um lançamento dividido
+#: em N boletos (entrega 5): a decisão é por id e valeria para as N partes.
+RECADO_DIVIDIDO = ("lançamento dividido em {n} boletos: edite/libere no ERP ou pague as "
+                   "partes como estão")
+
+
+def partes_de(alvo) -> int:
+    """Quantos boletos tem o lançamento desta linha/registro/pagamento ("k/N"
+    em `parte`), ou 0 quando ele não foi dividido."""
+    parte = alvo.get("parte") if isinstance(alvo, dict) else getattr(alvo, "parte", "")
+    _k, _barra, n = str(parte or "").partition("/")
+    return int(n) if n.isdigit() and int(n) > 1 else 0
+
+
+def recusa_de_dividido(alvo) -> str:
+    """"" = não é parte de lançamento dividido; senão, o recado da recusa."""
+    n = partes_de(alvo)
+    return RECADO_DIVIDIDO.format(n=n) if n else ""
+
+
+def pode_liberar(linha) -> bool:
+    """Não apto (qualquer motivo: decisão do dono), ou já enviado (entra mas
+    nasce desmarcado). O que já vai sair não tem o que liberar."""
+    return linha.secao == confirmacao.NAO_APTO or (
+        linha.marcavel and not confirmacao.marcada_de_inicio(linha))
+
+
+def pede_certeza(linha) -> str:
+    """A pergunta a mais ("tem certeza?") antes de liberar, ou "".
+    Pedem: o já enviado (não rejeitado) e o favorecido fora dos Contatos."""
+    enviado = getattr(linha.candidato, "ja_enviado", "")
+    if enviado and not linha.envio_rejeitado:
+        return (f"Este pagamento JÁ SAIU numa remessa ({enviado}). Liberar é gerar de "
+                "novo — o banco pode pagar duas vezes.\n\nTem certeza?")
+    if _FORA_DOS_CONTATOS in (linha.situacao or ""):
+        return ("O favorecido não está no cadastro de Contatos do ERP: a remessa não "
+                "tem o documento dele.\n\nTem certeza?")
+    return ""
+
+
+def validar_motivo(motivo: str) -> str:
+    """"" se o motivo serve; senão, o recado."""
+    m = (motivo or "").strip()
+    if len(m) < MOTIVO_MINIMO:
+        return "Escreva um motivo curto (3 letras ou mais)."
+    if len(m) > TEXTO_MAXIMO:
+        return f"O motivo passa de {TEXTO_MAXIMO} caracteres."
+    return ""
+
+
+def _validar_texto(nome: str, texto) -> str:
+    t = str(texto or "").strip()
+    if not MOTIVO_MINIMO <= len(t) <= TEXTO_MAXIMO or t.startswith("="):
+        return (f"A {nome} tem de ter de {MOTIVO_MINIMO} a {TEXTO_MAXIMO} caracteres "
+                "(e não começar com \"=\").")
+    return ""
+
+
+def _validar_forma(tipo, dados: str) -> str:
+    if tipo not in TIPOS:
+        return f"Forma de pagar desconhecida: {tipo or '(vazia)'}."
+    if not dados:
+        return "Escreva o dado da forma de pagar (chave, linha digitável ou conta)."
+    if len(dados) > DADOS_MAXIMO:
+        return f"O dado da forma de pagar passa de {DADOS_MAXIMO} caracteres."
+    if tipo == "Pix":
+        chave = regras.tipo_de_chave_pix(dados)
+        if chave == regras.CHAVE_COPIA_COLA:
+            return ("Pix copia-e-cola não vai pela remessa: escreva a chave, "
+                    "ou pague à mão.")
+        # Onze dígitos sem tipo: CPF ou celular, e quem digita é quem sabe. Mais
+        # estrito que `tipo_de_chave_pix` (que adivinha pelo DV e pelo DDD) de
+        # propósito: quem escolhe o tipo aqui escolhe para quem o dinheiro vai.
+        if not chave or _onze_sem_tipo(dados):
+            return ("A chave Pix não diz o tipo (CPF ou celular têm 11 dígitos): escreva "
+                    "\"PIX CPF …\", \"PIX CELULAR …\", o e-mail ou a chave aleatória.")
+        if chave in (regras.CHAVE_CPF, regras.CHAVE_CNPJ) and not regras.documento_valido(dados):
+            return f"A chave Pix {chave} não fecha no dígito verificador."
+    if tipo == "Boleto" and not ocr_boleto.codigo_de_barras(dados):
+        return "A linha digitável não fecha nos dígitos verificadores."
+    if tipo == "Transferência" and len(dados) < 8:
+        return "Escreva banco, agência e conta da transferência."
+    return ""
+
+
+#: A observação de toda chave Pix editada à mão (dono, 22/10/2026: "tem que
+#: ir o que eu coloquei, ok? Só deixa com observação").
+NOTA_CHAVE_EDITADA = "chave Pix editada à mão"
+NOTA_DOC_DIFERENTE = "chave Pix editada: CPF/CNPJ diferente do favorecido do ERP ({doc})"
+
+
+def mascarar_documento(doc: str) -> str:
+    """CPF/CNPJ como o Sicoob mostra no comprovante (`***.982.247-**`,
+    `**.222.333/0001-**`): o miolo sozinho não identifica ninguém, e a
+    observação vai à planilha e ao HTML."""
+    # CNPJ alfanumérico (Receita, 07/2026): as letras são do documento.
+    d = remessa_dia.documento_valido(doc or "") or re.sub(r"\D", "", doc or "")
+    if len(d) == 14:
+        return f"**.{d[2:5]}.{d[5:8]}/{d[8:12]}-**"
+    if len(d) == 11:
+        return f"***.{d[3:6]}.{d[6:9]}-**"
+    return ""
+
+
+def nota_da_chave_editada(dados: str, doc_erp: str) -> str:
+    """A observação da chave Pix editada. A chave vai como foi digitada; se
+    ela é um CPF/CNPJ DIFERENTE do documento do favorecido no ERP, a remessa
+    declara o da chave (`remessa_dia.preparar`) e a observação diz isso, com
+    o do ERP mascarado. `doc_erp` = `remessa_dia.documento_sem_edicao`."""
+    da_chave = remessa_dia.documento_da_chave(dados)
+    erp = remessa_dia.documento_valido(doc_erp or "")
+    if da_chave and erp and da_chave != erp:
+        return NOTA_DOC_DIFERENTE.format(doc=mascarar_documento(erp))
+    return NOTA_CHAVE_EDITADA
+
+
+#: Linha digitável editada × valor do pagamento (dono, 22/10/2026: ele QUER
+#: a conferência). Bate: segue. Sem valor embutido: aceita com observação.
+#: Diverge: a tela pergunta (padrão "não") e, gravada, a linha fica em ATENÇÃO.
+VALOR_BATE, VALOR_SEM, VALOR_DIVERGE = "bate", "sem_valor", "diverge"
+NOTA_SEM_VALOR = "linha sem valor embutido — confira"
+STATUS_VALOR_DIVERGE = "ATENÇÃO — valor da linha diverge"
+
+
+@dataclass(frozen=True)
+class ValorDaLinha:
+    estado: str
+    #: A observação da linha (planilha, HTML, tela); "" quando bate.
+    nota: str = ""
+    #: O que a tela pergunta antes de gravar; "" quando não pergunta.
+    pergunta: str = ""
+
+
+def conferir_valor_da_linha(dados: str, valor) -> ValorDaLinha:
+    """O valor embutido na linha (`ocr_boleto.valor_embutido`, Decimal)
+    contra o do pagamento, ao centavo. Quem chama já recusou a linha que não
+    fecha nos DVs (`validar_edicao`)."""
+    na_linha = ocr_boleto.valor_embutido(dados)
+    if na_linha is None:
+        return ValorDaLinha(VALOR_SEM, NOTA_SEM_VALOR)
+    pagamento = de_float(valor)
+    if na_linha == pagamento:
+        return ValorDaLinha(VALOR_BATE)
+    return ValorDaLinha(
+        VALOR_DIVERGE,
+        f"valor da linha {brl(na_linha)} ≠ pagamento {brl(pagamento)}",
+        f"A linha digitável é de {brl(na_linha)} e o pagamento é de {brl(pagamento)}. "
+        "Gravar mesmo assim?")
+
+
+def validar_edicao(campos: dict, motivo: str) -> str:
+    """"" se a edição pode ir à nuvem; senão, o recado. A forma de pagar muda
+    inteira (tipo + dado); o reembolso, nome + documento que fecha no DV."""
+    erro = validar_motivo(motivo)
+    if erro:
+        return erro
+    if not campos:
+        return "Nada mudou."
+    fora = set(campos) - set(CAMPOS_EDITAVEIS)
+    if fora:
+        return "Campo que não se edita aqui: " + ", ".join(sorted(fora))
+    if ("tipo" in campos) != ("dados" in campos):
+        return "A forma de pagar muda junto: o tipo e o dado."
+    if "tipo" in campos:
+        erro = _validar_forma(campos["tipo"], str(campos.get("dados") or "").strip())
+        if erro:
+            return erro
+    if "reembolso_nome" in campos or "reembolso_documento" in campos:
+        nome = str(campos.get("reembolso_nome") or "").strip()
+        if not nome:
+            return "Falta o nome de quem recebe o reembolso."
+        if len(nome) > TEXTO_MAXIMO:
+            return f"O nome de quem recebe o reembolso passa de {TEXTO_MAXIMO} caracteres."
+        if not regras.documento_valido(str(campos.get("reembolso_documento") or "")):
+            return "O CPF/CNPJ de quem recebe o reembolso não fecha no dígito verificador."
+    if "descricao" in campos:
+        erro = _validar_texto("descrição", campos["descricao"])
+        if erro:
+            return erro
+    return ""
+
+
+def _cc_na_descricao(cc: str, ndesc: str) -> bool:
+    """O teste do `matcher._features`: algum centro de custo (6+ caracteres)
+    dentro da descrição, ou o "QD x LT y" da descrição dentro de um deles."""
+    nomes = [matcher._com_hifen(matcher._norm(x)) for x in cc.split("|") if x.strip()]
+    if any(len(n) >= 6 and n in ndesc for n in nomes):
+        return True
+    mq = re.search(r"QD\s*([0-9A-Z]+)\s+LT\s*([0-9A-Z\-]+)", ndesc)
+    if mq:
+        pat = "QD " + mq.group(1) + " LT " + mq.group(2)
+        return any(pat in n for n in nomes)
+    return False
+
+
+def aviso_de_casamento(registro: dict, conta: str) -> str:
+    """O que o Anexar vai deixar de achar com ESTA descrição. Simula o nome
+    do comprovante ("VALOR - DESCRIÇÃO - DD-MM.pdf") e o lê com a régua do
+    próprio Anexar (`matcher.parse_pdf`): centro de custo no texto (como em
+    `matcher._features`) e o número do documento entre os NF/OC rotulados e o
+    último número solto. "" = casa como hoje."""
+    texto = html_pagamentos.descricao_para_colar(registro, conta)
+    cents = html_pagamentos.centavos(registro.get("valor"))
+    pd = matcher.parse_pdf(f"{cents // 100},{cents % 100:02d} - {texto} - 01-01.pdf") or {
+        "ndesc": matcher._norm(texto), "nfs": set(), "ocs": set(), "soltos": set()}
+    ndesc = matcher._com_hifen(pd["ndesc"])
+    avisos = []
+    cc = str(registro.get("centro_custo") or "")
+    if cc.strip() and not _cc_na_descricao(cc, ndesc):
+        avisos.append("o centro de custo não está na descrição")
+    numeros = set()
+    for doc in (registro.get("nf"), registro.get("oc_da_descricao")):
+        doc = str(doc or "")
+        numeros |= matcher._numeros_do_documento(doc) | set(re.findall(r"\d{3,}", doc))
+    if numeros:
+        achados = pd["nfs"] | pd["ocs"] | pd["soltos"]
+        achados |= {matcher._sem_zeros(n) for n in achados}
+        if not numeros & achados:
+            avisos.append("o número do documento não é o último número da descrição")
+    if not avisos:
+        return ""
+    return ("O Anexar casa o comprovante pelo centro de custo e pelo último número da "
+            "descrição: " + "; ".join(avisos) + f".\nVai ao banco: {texto}")
+
+
+def _dinheiro(valor: Decimal) -> str:
+    return str(valor.quantize(CENTAVO))
+
+
+def nova_a_mao(*, conta, valor_texto, descricao, motivo, contas, lido=None,
+               tipo="", dados="", favorecido="", ids_do_dia=(),
+               a_mao_existentes=()) -> tuple[dict | None, str]:
+    """A linha de `pagamento_a_mao` a gravar e "", ou (None, recado).
+
+    Com `lido` (o lançamento do link), não paga título já PAGO, de outra
+    conta, nem mais que o em aberto — somando as linhas à mão que já valem
+    para o MESMO lançamento (`a_mao_existentes`, os `PagamentoAMao` de
+    `Conferencia.a_mao`) — e herda CC/NF/OC para o Anexar casar.
+
+    **`linha["pergunta"]`** (texto, ou ausente): a tela pergunta "tem
+    certeza?" antes de gravar — lançamento que já está na lista do dia
+    (`ids_do_dia`: sairia duas vezes) ou em aberto desconhecido. A chave não
+    é coluna da tabela: o cliente da nuvem a descarta."""
+    if conta not in contas:
+        return None, "Escolha a conta na lista."
+    if html_pagamentos.e_conta_pf(conta):
+        # O HTML geral não mostra esta conta (`contas_do_html_geral`): a PF é
+        # paga pelo celular, fora do dia. À mão ali sairia na tela e em lugar
+        # nenhum para pagar.
+        return None, ("A conta PESSOA FISICA - APENAS LANÇAMENTO não recebe pagamento à "
+                      "mão aqui: ela é paga pelo celular, fora do HTML do dia.")
+    try:
+        valor = ler_valor_editado(valor_texto)
+    except ValueError as e:
+        return None, str(e)
+    if valor <= 0:
+        return None, "O valor tem de ser maior que zero."
+    erro = _validar_texto("descrição", descricao) or validar_motivo(motivo)
+    if not erro and (tipo or dados):
+        erro = _validar_forma(tipo, (dados or "").strip())
+    favorecido = (favorecido or "").strip()
+    if not erro and len(favorecido) > TEXTO_MAXIMO:
+        erro = f"O favorecido passa de {TEXTO_MAXIMO} caracteres."
+    if erro:
+        return None, erro
+    linha = {"conta": conta, "valor": _dinheiro(valor), "descricao": descricao.strip(),
+             "motivo": motivo.strip(), "favorecido": favorecido,
+             "tipo": tipo, "dados": (dados or "").strip()}
+    if lido is not None:
+        if not lido.id:
+            return None, "O link não trouxe o lançamento."
+        if lido.pago:
+            return None, "Este lançamento já está PAGO no ERP."
+        if lido.conta and lido.conta != conta:
+            return None, f"O lançamento é da conta {lido.conta}, não de {conta}."
+        ja_a_mao = sum((p.valor for p in a_mao_existentes or ()
+                        if p.lancamento_id and p.lancamento_id == lido.id), Decimal("0"))
+        if lido.em_aberto is not None and valor + ja_a_mao > lido.em_aberto:
+            if ja_a_mao:
+                return None, (f"Com o que já está à mão para este lançamento "
+                              f"({brl(ja_a_mao)}), o valor passa do em aberto "
+                              f"({brl(lido.em_aberto)}).")
+            return None, f"O valor passa do que está em aberto no lançamento ({brl(lido.em_aberto)})."
+        perguntas = []
+        if lido.id in set(ids_do_dia or ()):
+            perguntas.append("Este lançamento JÁ ESTÁ na lista do dia: pagar à mão também "
+                             "pode pagar duas vezes.")
+        if lido.em_aberto is None:
+            perguntas.append("Não consegui ler quanto está em aberto neste lançamento: "
+                             "confira no ERP que o valor não passa dele.")
+        if perguntas:
+            linha["pergunta"] = "\n\n".join(perguntas) + "\n\nTem certeza?"
+        # O que vem do ERP cabe no teto do banco (200), para a nuvem não recusar.
+        linha.update(lancamento_id=lido.id[:TEXTO_MAXIMO],
+                     centro_custo=lido.centro_custo[:TEXTO_MAXIMO],
+                     nf=lido.nf[:TEXTO_MAXIMO], oc=lido.oc[:TEXTO_MAXIMO],
+                     favorecido=favorecido or lido.favorecido[:TEXTO_MAXIMO],
+                     valor_em_aberto=None if lido.em_aberto is None else _dinheiro(lido.em_aberto))
+    return linha, ""

@@ -13,7 +13,7 @@ paths:
 - `ferramentas/` — as três ferramentas locais, **fora do `codigo.zip`** por
   `_PASTAS_SO_DO_REPO` (`tests/test_empacotamento.py`), o mesmo tratamento do
   `cnab240/ferramentas/` e do `nuvem/migrar.py`: o app nunca as importa.
-  **`galeria.py`** monta as 13 telas num esqueleto FIEL — a mesma
+  **`galeria.py`** monta as 15 telas num esqueleto FIEL — a mesma
   `widgets.BarraTopo`, o mesmo `widgets.painel_menu` e as mesmas classes de
   aba, construídas direto dentro de um `Tk()`, sem login, sem cadastro e sem
   rede — e fotografa cada uma nos dois temas, com `--escala` para simular a

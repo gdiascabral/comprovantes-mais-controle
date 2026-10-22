@@ -747,3 +747,54 @@ paths:
   qualquer linha a deixa sem marca. Conta NÃO LIDA não se marca. A regra é pura
   (`resumao`, `chave_da_linha`, `chave_da_conta`, `ler_marcas`,
   `gravar_marcas`) e tem teste.
+
+- **Quatro ganchos opcionais para a aba "Pagamentos do dia"** (entrega 2,
+  22/10/2026). Cada um tem padrão igual ao comportamento de antes, e a
+  Remessa/Retorno e o Saldo de pagamentos não mudam sem eles:
+  (1) `relatorio.montar_registros(..., ids_liberados=())` e
+  `confirmacao.remontar(entradas, ids_nao_confirmados=(), *, ids_liberados=())`:
+  o liberado sai dos omitidos com o bloqueio anotado em `bloqueio_liberado`;
+  vazio = `Resultado` idêntico (`tests/test_ganchos_da_tela_do_dia.py::
+  test_sem_liberados_o_resultado_e_identico` e `::test_remontar_sem_liberados_e_o_de_sempre`);
+  (2) `registro["descricao_editada"]`, que só a tela põe:
+  `html_pagamentos.descricao_para_colar` a honra (limpa e cortada no limite);
+  sem a chave o texto é o de sempre (`::test_descricao_sem_a_chave_nova_nao_muda`);
+  (3) `remessa_dia._CHAVES_DA_DESCRICAO` ganhou `"descricao_editada"`, repassada
+  só quando existe (`::test_remessa_so_leva_a_descricao_editada_quando_ela_existe`);
+  (4) `PagamentosDiaFrame.receber_apuracao(leitura, desmarcados=(), *, hoje=None,
+  resultado=None)`: com `resultado` pronto da tela ele é usado sem remontar,
+  sem ele remonta como sempre (os testes antigos de
+  `tests/test_remessa_receber_apuracao.py` passam sem mudança, e
+  `::test_resultado_pronto_da_tela_e_usado_sem_remontar` cobre o novo caminho).
+
+- **`boletos_somados.py` — lançamento pago com N boletos** (entrega 5,
+  22/10/2026). Pós-processamento puro do `relatorio.Resultado`, só quando a
+  linha já saiu do `montar_registros` com "ATENÇÃO — vários boletos no título".
+  Quem liga é `confirmacao.Entradas.dividir_boletos` (padrão `False`; só a
+  `leitura_do_dia` põe `True`): a Remessa/Retorno, lendo sozinha, continua com
+  UMA linha. A regra é de falha fechada:
+  - **Divide só com soma exata e título de 1 parcela confirmado no ERP.** O
+    conjunto inteiro das linhas válidas soma o lançamento AO CENTAVO
+    (`Decimal`), o título tem 1 parcela em aberto e nenhum pagamento anterior.
+    O título vem de um GET (`leitura_do_dia.titulo_no_erp`, pelo Chrome do
+    app, endereço ainda a confirmar ao vivo). Não leu, não sei, soma não bate:
+    NÃO divide, só avisa (`boletos_somados.avisos`).
+  - **Mesmo id, mesma descrição.** As N linhas guardam o `id` do lançamento
+    (retorno e baixa voltam por ele) e a descrição que o Anexar casa. Nascem em
+    ATENÇÃO: desmarcadas na remessa, Copiar bloqueado no HTML.
+  - **A parte é identificada por `parte_linha`** (dígitos da linha digitável),
+    nunca pela posição: `AnaliseRemessa.candidato(conta, ident, parte_linha)`
+    acha o `Candidato` pelo código de barras; sem `parte_linha` é o primeiro do
+    id, como sempre. O HTML separa as linhas pelo id `"<id>#<linha>"` (cai em
+    `"#k/N"` só sem `parte_linha`; não colide com o à mão `"<id>#mao:<n>"`).
+  - **Estado do envio por (id, código de barras)**: a parte paga não herda o
+    "rejeitado" da outra; partes que não se separam, com estados divergentes,
+    nunca viram "rejeitado". Já enviado segura TODAS as partes (é por id).
+  - **Um agendado somado por lançamento**, com `foto["partes"]`.
+  - **Baixa de dividido nunca é automática.** `baixa_erp.separar(resumo,
+    divididos=)` põe o pago de lançamento dividido "de fora"
+    (`MOTIVO_DIVIDIDO`); o dono baixa no ERP quando todas as partes saírem. O
+    dividido é detectado pela tela nova (`divididos_do_resultado`) E pelo
+    próprio retorno (`divididos_do_retorno`: a mesma referência mais de uma vez
+    no mesmo retorno), então a Remessa/Retorno que não dividiu também não
+    baixa. Nunca uma baixa parcial N vezes na mesma parcela.
