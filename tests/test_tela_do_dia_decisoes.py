@@ -217,3 +217,31 @@ def test_celulas_da_conta_sem_conferencia_e_o_texto_de_hoje():
     antiga = SimpleNamespace(bloqueados=[], valor_bloqueado=D("0"), motivo_fora="", ja_enviados=[],
                              qtd_a_pagar=0, a_pagar=D("0"))
     assert dc.celulas_da_conta(antiga) == ("0", "R$ 0,00", "0", "")
+
+
+# ------------------------------------------- recado com o motivo (prova 22/10)
+def test_detalhe_do_erro_diz_o_tipo_e_a_mensagem():
+    from conciliacao.errors import ErpError
+    assert dc.detalhe_do_erro(ErpError("token recusado (401)")) == \
+        "detalhe: ErpError: token recusado (401)"
+    assert dc.detalhe_do_erro(RuntimeError("")) == "detalhe: RuntimeError: (sem mensagem)"
+    longo = dc.detalhe_do_erro(ValueError("linha 1\nlinha 2 " + "x" * 600))
+    assert "\n" not in longo and len(longo) <= 400
+
+
+def test_ler_o_dia_que_falha_escreve_o_detalhe_e_o_traceback():
+    """O "Não consegui ler o dia." genérico de 21 e 22/10 não dizia o motivo:
+    o `except` de `_t_ler` escreve o detalhe no Registro e o traceback no
+    diagnostico.log."""
+    import ast
+    from pathlib import Path
+    fonte = (Path(__file__).resolve().parents[1] / "tela_do_dia" / "frame.py").read_text(
+        encoding="utf-8")
+    arvore = ast.parse(fonte)
+    t_ler = next(n for n in ast.walk(arvore)
+                 if isinstance(n, ast.FunctionDef) and n.name == "_t_ler")
+    trecho = ast.get_source_segment(fonte, t_ler)
+    ultimo = trecho.rsplit("except Exception as e:", 1)[1].split("finally:", 1)[0]
+    assert "Não consegui ler o dia." in ultimo
+    assert "dc.detalhe_do_erro(e)" in ultimo
+    assert 'util.log("tela_do_dia").exception(' in ultimo

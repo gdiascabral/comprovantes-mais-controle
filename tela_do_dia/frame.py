@@ -625,6 +625,10 @@ class TelaDoDiaFrame(ttk.Frame):
             self.q.put(("status", f"Leitura pronta em {util.fmt_dur(time.time() - comeco)}."))
         except Exception as e:                              # noqa: BLE001
             self._log("\n" + widgets.recado_de_erro(e, "Não consegui ler o dia."))
+            # O recado amigável não dizia o motivo (21 e 22/10/2026): o tipo e
+            # a mensagem no Registro, o traceback no diagnostico.log.
+            self._log(dc.detalhe_do_erro(e))
+            util.log("tela_do_dia").exception("Não consegui ler o dia")
             self.q.put(("status", "Não consegui ler o dia — veja o Registro."))
         finally:
             self.q.put(("ocupado", False))

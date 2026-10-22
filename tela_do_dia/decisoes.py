@@ -152,6 +152,18 @@ def celulas_da_conta(conta) -> tuple[str, str, str, str]:
     return str(conta.qtd_a_pagar), brl(conta.a_pagar), bloqueados, " · ".join(partes)
 
 
+# ------------------------------------------------- erro com o motivo
+def detalhe_do_erro(erro) -> str:
+    """A linha do Registro que diz o QUE caiu: "detalhe: <Tipo>: <mensagem>".
+
+    O recado amigável (`widgets.recado_de_erro`) ficou genérico demais para
+    o "Não consegui ler o dia." de 21 e 22/10/2026 (ErpErro/ErpError sem
+    detalhe). Uma linha só, com teto: o traceback inteiro vai para o
+    diagnostico.log."""
+    texto = " ".join(str(erro or "").split())[:300] or "(sem mensagem)"
+    return f"detalhe: {type(erro).__name__}: {texto}"
+
+
 # ------------------------------------------------- período lido
 def periodo_na_tela(periodo) -> str:
     """O texto do período lido. Decisão do dono (21/10/2026): esta aba não
