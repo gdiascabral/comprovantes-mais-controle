@@ -70,6 +70,9 @@ class TelaDoDiaFrame(ttk.Frame):
                 ("final", "SALDO FINAL", 95, "e"))
     COLS_MAO = (("origem", "DE", 260, "w"), ("destino", "PARA", 260, "w"),
                 ("valor", "VALOR", 120, "e"))
+    #: O rótulo embaixo da tabela de saldos, sem linha selecionada.
+    DETALHE_VAZIO = ("Selecione uma conta para ver a situação inteira e, do valor "
+                     "digitado (✎), o original e o motivo.")
     #: Largura da #0 ("CONTA") das tabelas em árvore, a 100%.
     LARGURA_CONTA = 200
     #: Tabela vazia fica baixa (não empurra os passos de baixo para longe);
@@ -157,8 +160,9 @@ class TelaDoDiaFrame(ttk.Frame):
         c1 = self.c1 = widgets.Cartao(corpo, "Saldos", 1)
         c1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self._ajuda(c1, "As que não batem sobem para o topo. Clique no valor do sistema ou "
-                        "do banco para editar (Enter edita o do banco): o original fica ao "
-                        "lado, o motivo é opcional, e o ajuste vale só para o dia. Nas "
+                        "do banco para editar (Enter edita o do banco): o valor digitado leva "
+                        "✎, o original e o motivo (opcional) aparecem embaixo da tabela, "
+                        "na linha selecionada, e o ajuste vale só para o dia. Nas "
                         "contas do Sicoob o banco vem lido (Reler Sicoob refaz); o "
                         "digitado vale por cima do lido.")
         # Entrega 4: a hora da leitura do Sicoob e o "Reler Sicoob" no alto do
@@ -168,6 +172,11 @@ class TelaDoDiaFrame(ttk.Frame):
         self.t_saldos = self._tabela(c1, self.COLS_SALDOS, arvore=False, altura=8)
         self.t_saldos.bind("<ButtonRelease-1>", self._clique_saldo)
         self.t_saldos.bind("<Return>", self._enter_saldo)
+        # A frase inteira da situação e o original do digitado: na célula vai
+        # o curto (`sd.celula`, `situacao_curta`), que cabe a 1280 px.
+        self.lbl_saldo_detalhe = self._ajuda(c1, self.DETALHE_VAZIO, pady=px((6, 0)))
+        self.t_saldos.bind("<<TreeviewSelect>>", lambda _e: self._mostrar_detalhe_saldo(),
+                           add="+")
 
         c2 = widgets.Cartao(corpo, "Pagamentos por conta", 2)
         c2.pack(fill="x", padx=PADX, pady=px((0, 12)))
@@ -565,6 +574,7 @@ class TelaDoDiaFrame(ttk.Frame):
         self.c0.pack_forget()
         self._mostrar_alertas("", "")
         self.mostrar_periodo("")
+        self._mostrar_detalhe_saldo()
         for t in self._tabelas:
             self._ajustar_altura(t)
         for b in self._botoes_do_dia:
@@ -734,22 +744,27 @@ class TelaDoDiaFrame(ttk.Frame):
     def _rotulos_do_painel(self) -> list[str]:
         return [ln.rotulo for ln in sorted(self.saldos, key=lambda ln: ln.linha)]
 
-    @staticmethod
-    def _celula(lido, ajuste):
-        if ajuste is None:
-            return brl(lido)
-        motivo = f" · {ajuste.motivo}" if ajuste.motivo else ""
-        return f"{brl(ajuste.valor)}  (era {brl(ajuste.original)}{motivo})"
-
     def _encher_saldos(self):
         t = self.t_saldos
+        selecionada = t.focus()
         t.delete(*t.get_children())
         for i, ln in enumerate(self.saldos):
-            tag, frase = ln.situacao()
+            tag, frase = ln.situacao_curta()
             t.insert("", "end", iid=ln.rotulo, tags=widgets.linha_zebrada(i, tag), values=(
-                ln.rotulo, self._celula(ln.sistema, ln.ajuste_sistema),
-                self._celula(ln.banco, ln.ajuste_banco), brl(ln.diferenca),
+                ln.rotulo, sd.celula(ln.sistema, ln.ajuste_sistema),
+                sd.celula(ln.banco, ln.ajuste_banco), brl(ln.diferenca),
                 f"{widgets.MARCAS_ESTADO[tag]} {frase}"))
+        # A linha editada continua selecionada (e o detalhe dela à vista).
+        if selecionada and t.exists(selecionada):
+            t.focus(selecionada)
+            t.selection_set(selecionada)
+        self._mostrar_detalhe_saldo()
+
+    def _mostrar_detalhe_saldo(self):
+        sel = self.t_saldos.selection()
+        linha = next((ln for ln in self.saldos if sel and ln.rotulo == sel[0]), None)
+        self.lbl_saldo_detalhe.configure(
+            text=linha.detalhe() if linha is not None else self.DETALHE_VAZIO)
 
     def _encher_pagamentos(self):
         t = self.t_pag

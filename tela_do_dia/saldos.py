@@ -99,6 +99,47 @@ class LinhaSaldo:
             return ("atencao", "bate com o digitado" + aviso) if aviso else ("ok", "bate")
         return "erro", f"não bate — diferença de {brl(dif)}{aviso}"
 
+    def situacao_curta(self) -> tuple[str, str]:
+        """A `situacao()` que cabe na coluna SITUAÇÃO a 1280 px (no máximo
+        ~20 letras). A mesma tag; a frase inteira vai no `detalhe()`. "Não
+        bate" sem o valor: a DIFERENÇA é a coluna ao lado."""
+        tag, _frase = self.situacao()
+        if self.sistema_usado is None:
+            return tag, "sem saldo do sistema"
+        if self.original_mudou:
+            return tag, "o sistema mudou"
+        if self.banco_usado is None:
+            return tag, "banco não lido" if self.nota_banco else "sem saldo do banco"
+        if self.diferenca == 0:
+            return tag, "o banco mudou" if self.banco_mudou else "bate"
+        # Com o banco relido depois do ajuste, o aviso fica só no detalhe: o
+        # que a linha tem de gritar é "não bate", e as duas não cabem.
+        return tag, "não bate"
+
+    def detalhe(self) -> str:
+        """A frase inteira da situação e, de cada valor digitado, o original e
+        o motivo — o que a célula curta (`celula`) deixa de mostrar."""
+        partes = [self.situacao()[1]]
+        for nome, aj in (("sistema", self.ajuste_sistema), ("banco", self.ajuste_banco)):
+            if aj is None:
+                continue
+            era = brl(aj.original) if aj.original is not None else "sem leitura"
+            motivo = f" · {aj.motivo}" if aj.motivo else ""
+            partes.append(f"{nome} digitado {brl(aj.valor)} (era {era}{motivo})")
+        return f"{self.rotulo}: " + "; ".join(partes)
+
+
+#: Marca da célula com valor digitado (o original está no `detalhe`).
+MARCA_EDITADO = "✎"
+
+
+def celula(lido, ajuste: Ajuste | None) -> str:
+    """O valor da célula SISTEMA/BANCO: o usado, com a marca se foi digitado.
+    O "(era …)" ao lado cortava a coluna a 1280 px; ele vai no `detalhe`."""
+    if ajuste is None:
+        return brl(lido)
+    return f"{brl(ajuste.valor)} {MARCA_EDITADO}"
+
 
 def montar_saldos(contas, mapping) -> list[LinhaSaldo]:
     """Uma linha por conta VIVA do painel, na ordem das linhas. Mesma régua do
