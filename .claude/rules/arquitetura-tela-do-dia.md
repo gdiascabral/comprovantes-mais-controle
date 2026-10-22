@@ -190,5 +190,14 @@ real é duplicidade entre contas + contraprova. Proporção é PRÓPRIA (não a 
 Regras do MODELO, nem viva da `subconta_investidor`, que entra só como sugestão
 e aviso de divergência). Distribuição de lucro não abate. Dívida da abertura
 cortada no centavo a favor do devedor (o líder nunca passa a dever 0,01).
+**Leitura duvidosa derruba a CONTA, com erro e sem número** (onda final,
+22/10/2026): parcela repetida, recebimento fora do período pedido (abertura..hoje;
+data com fuso vira data de Brasília, `data_do_erp`) e recebimento zero ou
+negativo (estorno) — nunca somam nem ficam "sem dono". Apontamento perde para o
+Cliente do ERP quando este passa a identificar OUTRO aportador (ou um aportador,
+num "não é aporte"): volta para sem dono, sem coluna nova no banco. Recebimento
+parcial (`plannedValue` ≠ recebido) só alerta. A nuvem que volta com 1000 linhas
+(o `max_rows`) é recusada (`LeituraCortada`), e `gravar_conta` recusa se o banco
+mudou nome, parte ou já aportado depois que o formulário abriu.
 **Conta desativada (`ativa = false`) some da aba e só se reativa pelo painel do
 Supabase — de propósito**: a aba não tem botão de desativar nem de reativar.

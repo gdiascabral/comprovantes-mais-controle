@@ -101,8 +101,8 @@ class ControleAportesFrame(ttk.Frame):
         c2 = widgets.Cartao(corpo, "Sem dono", 2)
         c2.pack(fill="x", padx=PADX, pady=px((0, 12)))
         _ajuda(c2, "Recebimentos de aporte cujo Cliente no Mais Controle não é aportador da "
-                   "conta (nome completo, letra por letra). Ficam FORA da conta até você "
-                   "apontar de quem são — ou que não são aporte desta conta.")
+                   "conta (nome completo, letra por letra). Ficam FORA da conta até o "
+                   "administrador apontar de quem são — ou que não são aporte desta conta.")
         self.t_sem_dono = self._tabela(c2, self.COLS_SEM_DONO, arvore=False, altura=8)
         self.b_apontar = widgets.Botao(c2, "Apontar o selecionado…", papel="neutro",
                                        state="disabled", command=self._apontar)
@@ -222,8 +222,20 @@ class ControleAportesFrame(ttk.Frame):
         self.q.put(("botoes", "disabled"))
         self.q.put(("ocupado", True))
         self.q.put(("status", "Lendo o controle na nuvem e os aportes no Mais Controle..."))
-        self.worker = self.anx.submeter("Controle de aportes — ler", self._t_ler,
-                                        datetime.date.today(), dona=self)
+        try:
+            self.worker = self.anx.submeter("Controle de aportes — ler", self._t_ler,
+                                            datetime.date.today(), dona=self)
+        except Exception as e:                              # noqa: BLE001
+            # Sem isto, `_lendo` ficava ligado para sempre e a aba presa: o
+            # `fim` só vem da própria leitura, que nunca começou.
+            self._lendo = False
+            self._limpar(SEM_LEITURA)
+            self._acender_botoes()
+            self.q.put(("ocupado", False))
+            self.q.put(("botoes", "normal"))
+            self.q.put(("status", "Não consegui começar a leitura — veja o Registro."))
+            self._log("\n" + widgets.recado_de_erro(e, "Não consegui começar a leitura."))
+            return False
         return True
 
     def _fim_da_leitura(self):
@@ -232,7 +244,10 @@ class ControleAportesFrame(ttk.Frame):
         self._acender_botoes()
         if self._reler:
             self._reler = False
-            self._reler_depois_de_gravar()
+            # Num instante, e não já: o `fim` sai da fila antes de o
+            # `worker.done()` virar True, e o `atualizar` recusaria por
+            # "navegador ocupado" a releitura que mais importa.
+            self.after(50, self._reler_depois_de_gravar)
 
     def _limpar(self, recado: str):
         self._leu_bem = False
@@ -256,7 +271,7 @@ class ControleAportesFrame(ttk.Frame):
                 self._log("Nenhuma conta no controle ainda. O dono acrescenta em "
                           "\"+ Conta no controle…\".")
                 self.q.put(("leitura", (contas, apontamentos, contas_erp, [])))
-                self.q.put(("status", "Nenhuma conta no controle."))
+                self.q.put(("status", ca.status_da_leitura([])))
                 return
             pares, erros = ca.pares_para_ler(ativas, contas_erp)
             # Contraprova SEMPRE (uma conta fora do controle): é ela que prova
@@ -266,7 +281,7 @@ class ControleAportesFrame(ttk.Frame):
                 log=self._log) if pares else {})
             apuracoes = ca.apurar_tudo(ativas, erros, crus, apontamentos, hoje)
             self.q.put(("leitura", (contas, apontamentos, contas_erp, apuracoes)))
-            self.q.put(("status", "Controle de aportes atualizado."))
+            self.q.put(("status", ca.status_da_leitura(apuracoes)))
         except Exception as e:                              # noqa: BLE001
             # Genérica de propósito: a rede do Playwright cai sem ErpError, e
             # qualquer falha aqui vira "não li" — nunca "em dia".
@@ -307,7 +322,7 @@ class ControleAportesFrame(ttk.Frame):
                 filho = self.t_contas.insert(pai, "end", text=l.nome,
                                              values=ca.valores_do_aportador(l))
                 self._linha_conta[filho] = ap.conta
-            resumo += ca.resumo(ap)
+            resumo += ca.resumo(ap, pode_apontar=self.pode_editar)
             aviso = ca.divergencia_do_rateio(ap.conta, subcontas)
             if aviso:
                 resumo.append(f"{ap.conta.conta_erp}: {aviso}")
@@ -354,21 +369,24 @@ class ControleAportesFrame(ttk.Frame):
         if erro:
             self._log("\n" + erro)
             self.q.put(("status", "Não gravou — veja o Registro."))
-            return
+        else:
+            self._log(f"{feito}. Atualizando os números...")
         # O que vale é o que a nuvem tem: relê, nunca muda a tabela na mão —
-        # e os números de antes da gravação saem da tela já.
-        self._log(f"{feito}. Atualizando os números...")
-        self._limpar("Gravado — atualizando…")
+        # e os números de antes da gravação saem da tela já. COM ERRO também:
+        # a gravação pode ter parado no meio (`controle_aportes.depois_da_nuvem`).
+        recado, quando = ca.depois_da_nuvem(bool(erro), self._lendo)
+        self._limpar(recado)
         self._acender_botoes()
-        if ca.depois_de_gravar(self._lendo) == "reler_no_fim":
+        if quando == "reler_no_fim":
             self._reler = True
             return
         self._reler_depois_de_gravar()
 
     def _reler_depois_de_gravar(self):
         if not self.atualizar():         # navegador ocupado por outra aba
-            self._limpar("Gravado. O navegador está ocupado: clique Atualizar quando ele "
-                         "liberar — nenhum número é mostrado até lá.")
+            self._limpar("A nuvem mudou (ou pode ter mudado). O navegador está ocupado: "
+                         "clique Atualizar quando ele liberar — nenhum número é mostrado "
+                         "até lá.")
             self._acender_botoes()
 
     # -------------------------------------------------------------- diálogos
@@ -406,7 +424,7 @@ class ControleAportesFrame(ttk.Frame):
             p, textvariable=v_conta, width=52,
             values=sorted((c.name for c in self.contas_erp), key=util.norm_espaco))
         ).pack(anchor="w", pady=px((10, 0)))
-        widgets.Campo(corpo, "Abertura (DD/MM/AAAA)", lambda p: ttk.Entry(
+        widgets.Campo(corpo, ca.ROTULO_ABERTURA, lambda p: ttk.Entry(
             p, textvariable=v_abre, width=14)).pack(anchor="w", pady=px((10, 0)))
         grade = ttk.Frame(corpo)
         grade.pack(anchor="w", pady=px((10, 0)))
