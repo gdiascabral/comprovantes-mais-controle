@@ -55,7 +55,7 @@ class _FilaComDesvio(queue.Queue):
 
 class AnexarNovoFrame(AnexarFrame):
     TITULO = "Anexar (novo)"
-    TRILHA = "Comprovantes  ›  Anexar (novo)"
+    TRILHA = "Mensal  ›  Anexar (novo)"
     DONO_DO_NAVEGADOR = False
     ATIVIDADE = "anx2"
 

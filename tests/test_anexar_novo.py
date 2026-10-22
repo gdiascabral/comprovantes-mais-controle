@@ -134,7 +134,7 @@ def test_a_copia_nao_cria_executor_nem_pulso(modulo, novo, monkeypatch):
     f, ch = _construir(modulo, monkeypatch, novo.AnexarNovoFrame, dono)
     assert novo.AnexarNovoFrame.DONO_DO_NAVEGADOR is False
     assert novo.AnexarNovoFrame.TITULO == "Anexar (novo)"
-    assert novo.AnexarNovoFrame.TRILHA == "Comprovantes  ›  Anexar (novo)"
+    assert novo.AnexarNovoFrame.TRILHA == "Mensal  ›  Anexar (novo)"
     assert ch["executor"] == 0 and f.exec is None
     assert ch["after"] == ["_drain"]
     assert f.anx is dono and isinstance(f.q, novo._FilaComDesvio)
