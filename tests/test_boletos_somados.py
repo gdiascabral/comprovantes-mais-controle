@@ -562,3 +562,84 @@ def test_a_remessa_nao_le_o_titulo_no_erp():
     texto = (RAIZ / "pagamentos_dia/pagamentos_frame.py").read_text(encoding="utf-8")
     assert "titulo_no_erp" not in texto and "titulos_erp" not in texto
     assert "trade-payables/" not in texto
+
+
+# ------------------------------------------- HTML e remessa da tela nova (E5-T4)
+from pagamentos_dia import html_pagamentos as hp  # noqa: E402
+
+
+def _a_mao_com_link(res):
+    """Um pagamento à mão com link para o MESMO lançamento (id "<lançamento>#mao:1")."""
+    mao = dict(_linhas(res)[0])
+    for k in ("parte", "parte_linha", "anexo_parte", "valor_do_lancamento"):
+        mao.pop(k, None)
+    mao["a_mao"] = "mao:1"
+    return mao
+
+
+def test_html_separa_as_partes_pela_linha_e_mantem_o_link_do_lancamento():
+    _base, res = _dividido([40000, 60000])
+    entradas = [e for c in hp.contas_do_html_geral(res) for e in c["entries"]]
+    esperado = {"L1#" + r["parte_linha"] for r in _linhas(res)}
+    assert {e["id"] for e in entradas} == esperado and len(entradas) == 2
+    assert {e["link"] for e in entradas} == {hp.URL_LANCAMENTO + "L1"}
+    assert not any("mesma linha digitável" in e["bloqueio"] for e in entradas)
+    assert all(e["bloqueio"] for e in entradas)                          # ATENÇÃO: conferir
+
+
+def test_id_da_parte_nao_depende_da_posicao_na_lista():
+    _base, res = _dividido([40000, 60000])
+    antes = {e["id"] for c in hp.contas_do_html_geral(res) for e in c["entries"]}
+    res.contas[CONTA].reverse()
+    depois = [e["id"] for c in hp.contas_do_html_geral(res) for e in c["entries"]]
+    assert set(depois) == antes
+
+
+def test_partes_e_a_mao_com_link_do_mesmo_lancamento_nao_colidem():
+    _base, res = _dividido([40000, 60000])
+    res.contas[CONTA].append(_a_mao_com_link(res))
+    ids = [e["id"] for c in hp.contas_do_html_geral(res) for e in c["entries"]]
+    assert len(ids) == 3 and len(set(ids)) == 3
+    assert "L1#mao:1" in ids
+
+
+def test_html_de_linha_sem_parte_continua_com_o_id_do_lancamento():
+    base, _res = _dividido([40000, 60000])
+    assert [e["id"] for c in hp.contas_do_html_geral(base) for e in c["entries"]] == ["L1"]
+
+
+def test_html_da_parte_sem_parte_linha_usa_k_de_n():
+    _base, res = _dividido([40000, 60000])
+    for r in _linhas(res):
+        r.pop("parte_linha")
+    ids = [e["id"] for c in hp.contas_do_html_geral(res) for e in c["entries"]]
+    assert ids == ["L1#1/2", "L1#2/2"]
+
+
+def test_remessa_da_tela_nova_leva_as_n_linhas_com_seus_numeros_proprios():
+    _base, res = _dividido([40000, 60000])
+    cands = remessa_dia.preparar(res.contas, {}, quando=DIA)[CONTA]
+    assert len(cands) == 2 and len({c.seu_numero for c in cands}) == 2
+    assert len({c.codigo_barras for c in cands}) == 2
+    assert all(c.id == "L1" and c.pode and not c.marcado for c in cands)   # nasce desmarcada
+    assert sorted(c.valor for c in cands) == [400.0, 600.0]
+    # a soma das partes é o valor do lançamento
+    assert round(sum(c.valor for c in cands), 2) == 1000.0
+    for c in cands:
+        c.marcado = True
+    assert set(remessa_dia.referencias(cands).values()) == {"L1"}
+
+
+def test_descricao_de_colar_e_a_mesma_nas_partes():
+    _base, res = _dividido([40000, 60000])
+    a, b = _linhas(res)
+    assert hp.descricao_para_colar(a, CONTA) == hp.descricao_para_colar(b, CONTA)
+    assert "OBRA MODELO" in hp.descricao_para_colar(a, CONTA)
+
+
+def test_a_aba_remessa_montando_a_propria_leitura_segue_com_uma_linha():
+    """(d) Sem `dividir_boletos` (o que a aba Remessa/Retorno monta) o HTML e a
+    remessa levam UMA linha "vários boletos", com o id do lançamento."""
+    res = confirmacao.remontar(_entradas([_item()], [40000, 60000]))
+    assert [r.get("parte") for r in _linhas(res)] == [None]
+    assert [e["id"] for c in hp.contas_do_html_geral(res) for e in c["entries"]] == ["L1"]

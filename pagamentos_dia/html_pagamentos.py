@@ -549,8 +549,15 @@ def contas_do_html_geral(resultado) -> list[dict]:
             # "<lançamento>#mao:<n>", e o link continua o do lançamento.
             # Registro sem a chave (todos os da Remessa) não muda.
             a_mao = str(r.get("a_mao") or "")
+            # A linha de um lançamento dividido em N boletos
+            # (`boletos_somados`) leva a SUA linha digitável no id (dígitos,
+            # a chave estável da parte; na falta, o "k/N"): é a chave do "já
+            # paguei" (`rowKey`) e do "Conferido". Nunca a posição na lista.
+            # Não colide com "#mao:<n>" (dígitos x "mao:") nem entre partes.
+            parte = str(r.get("parte_linha") or r.get("parte") or "")
             entradas.append({
-                "id": (f"{id_}#{a_mao}" if id_ else a_mao) if a_mao else id_,
+                "id": (f"{id_}#{a_mao}" if id_ else a_mao) if a_mao
+                else (f"{id_}#{parte}" if id_ and parte else id_),
                 # Sem id não há para onde ir: link vazio, sem botão na tela.
                 "link": URL_LANCAMENTO + id_ if id_ else "",
                 "tipo": tipo,
