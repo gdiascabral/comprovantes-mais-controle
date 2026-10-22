@@ -29,8 +29,8 @@ def test_toda_tabela_tem_rls_e_as_duas_politicas_com_a_porteira():
                 "using ((select privado.e_ativo()))") in t
         assert (f"create policy {nome}_grava on public.{nome} for insert to authenticated "
                 "with check ((select privado.e_ativo()) and quem = (select auth.uid()) "
-                "and quem_nome = coalesce((select p.nome from public.perfil p "
-                "where p.user_id = (select auth.uid())), ''))") in t
+                "and quem_nome = left(coalesce((select p.nome from public.perfil p "
+                "where p.user_id = (select auth.uid())), ''), 200))") in t
 
 
 def test_o_app_so_le_e_acrescenta():
@@ -86,3 +86,15 @@ def test_toda_tabela_tem_teto_de_tamanho():
         assert f"pg_column_size({coluna}) <= 16384" in t
     for coluna in ("dados", "prova"):
         assert f"length({coluna}) <= 500" in t
+
+
+def test_o_servidor_carimba_o_nome_nas_seis_tabelas():
+    t = _texto()
+    assert ("create or replace function privado.carimbar_quem_nome() returns trigger "
+            "language plpgsql security definer set search_path = ''") in t
+    assert ("revoke execute on function privado.carimbar_quem_nome() "
+            "from public, anon, authenticated") in t
+    for nome in TABELAS:
+        assert f"drop trigger if exists {nome}_quem_nome on public.{nome}" in t
+        assert (f"create trigger {nome}_quem_nome before insert on public.{nome} "
+                "for each row execute function privado.carimbar_quem_nome()") in t

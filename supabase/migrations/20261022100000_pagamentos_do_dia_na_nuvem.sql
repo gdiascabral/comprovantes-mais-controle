@@ -166,6 +166,34 @@ grant select, insert, update, delete on table public.pagamento_decisao, public.p
   public.pagamento_agendado, public.agendado_resposta, public.lista_diretor_nome,
   public.lista_diretor to service_role;
 
+-- O servidor carimba o nome de quem gravou (o app nao precisa mandar
+-- `quem_nome`, e nome em cache ou cortado nao faz a gravacao ser recusada).
+create or replace function privado.carimbar_quem_nome()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  new.quem_nome := left(coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''), 200);
+  return new;
+end;
+$$;
+revoke execute on function privado.carimbar_quem_nome() from public, anon, authenticated;
+
+drop trigger if exists pagamento_decisao_quem_nome on public.pagamento_decisao;
+create trigger pagamento_decisao_quem_nome before insert on public.pagamento_decisao for each row execute function privado.carimbar_quem_nome();
+drop trigger if exists pagamento_a_mao_quem_nome on public.pagamento_a_mao;
+create trigger pagamento_a_mao_quem_nome before insert on public.pagamento_a_mao for each row execute function privado.carimbar_quem_nome();
+drop trigger if exists pagamento_agendado_quem_nome on public.pagamento_agendado;
+create trigger pagamento_agendado_quem_nome before insert on public.pagamento_agendado for each row execute function privado.carimbar_quem_nome();
+drop trigger if exists agendado_resposta_quem_nome on public.agendado_resposta;
+create trigger agendado_resposta_quem_nome before insert on public.agendado_resposta for each row execute function privado.carimbar_quem_nome();
+drop trigger if exists lista_diretor_nome_quem_nome on public.lista_diretor_nome;
+create trigger lista_diretor_nome_quem_nome before insert on public.lista_diretor_nome for each row execute function privado.carimbar_quem_nome();
+drop trigger if exists lista_diretor_quem_nome on public.lista_diretor;
+create trigger lista_diretor_quem_nome before insert on public.lista_diretor for each row execute function privado.carimbar_quem_nome();
+
 alter table public.pagamento_decisao  enable row level security;
 alter table public.pagamento_a_mao    enable row level security;
 alter table public.pagamento_agendado enable row level security;
@@ -176,27 +204,27 @@ alter table public.lista_diretor      enable row level security;
 drop policy if exists pagamento_decisao_le on public.pagamento_decisao;
 create policy pagamento_decisao_le on public.pagamento_decisao for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists pagamento_decisao_grava on public.pagamento_decisao;
-create policy pagamento_decisao_grava on public.pagamento_decisao for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
+create policy pagamento_decisao_grava on public.pagamento_decisao for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = left(coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''), 200));
 drop policy if exists pagamento_a_mao_le on public.pagamento_a_mao;
 create policy pagamento_a_mao_le on public.pagamento_a_mao for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists pagamento_a_mao_grava on public.pagamento_a_mao;
-create policy pagamento_a_mao_grava on public.pagamento_a_mao for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
+create policy pagamento_a_mao_grava on public.pagamento_a_mao for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = left(coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''), 200));
 drop policy if exists pagamento_agendado_le on public.pagamento_agendado;
 create policy pagamento_agendado_le on public.pagamento_agendado for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists pagamento_agendado_grava on public.pagamento_agendado;
-create policy pagamento_agendado_grava on public.pagamento_agendado for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
+create policy pagamento_agendado_grava on public.pagamento_agendado for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = left(coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''), 200));
 drop policy if exists agendado_resposta_le on public.agendado_resposta;
 create policy agendado_resposta_le on public.agendado_resposta for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists agendado_resposta_grava on public.agendado_resposta;
-create policy agendado_resposta_grava on public.agendado_resposta for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
+create policy agendado_resposta_grava on public.agendado_resposta for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = left(coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''), 200));
 drop policy if exists lista_diretor_nome_le on public.lista_diretor_nome;
 create policy lista_diretor_nome_le on public.lista_diretor_nome for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists lista_diretor_nome_grava on public.lista_diretor_nome;
-create policy lista_diretor_nome_grava on public.lista_diretor_nome for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
+create policy lista_diretor_nome_grava on public.lista_diretor_nome for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = left(coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''), 200));
 drop policy if exists lista_diretor_le on public.lista_diretor;
 create policy lista_diretor_le on public.lista_diretor for select to authenticated using ((select privado.e_ativo()));
 drop policy if exists lista_diretor_grava on public.lista_diretor;
-create policy lista_diretor_grava on public.lista_diretor for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''));
+create policy lista_diretor_grava on public.lista_diretor for insert to authenticated with check ((select privado.e_ativo()) and quem = (select auth.uid()) and quem_nome = left(coalesce((select p.nome from public.perfil p where p.user_id = (select auth.uid())), ''), 200));
 
 notify pgrst, 'reload schema';
 
