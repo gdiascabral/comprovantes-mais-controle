@@ -258,7 +258,8 @@ ICONES_FAMILIAS = ("Segoe Fluent Icons", "Segoe MDL2 Assets")
 #: Calculator, ReportDocument, Bank, Document, Send e Contact. O décimo
 #: quarto, BulletedList (Pagamentos do dia, 21/10/2026), entrou pela tabela da
 #: Microsoft e ainda pede a conferência na galeria (`python -m
-#: ferramentas.galeria`, máquina livre).
+#: ferramentas.galeria`, máquina livre); o décimo quinto, People (Controle de
+#: aportes), também.
 ICONES_FLUENT = {
     "▦": "\uE80F",      # Home           — Início
     "⬇": "\uE896",      # Download       — Baixar Comprovantes
@@ -274,6 +275,7 @@ ICONES_FLUENT = {
     "📤": "\uE724",      # Send           — Acessorias
     "👥": "\uE77B",      # Contact        — Usuários (o item de admin, no rodapé)
     "🧾": "\uE8FD",      # BulletedList   — Pagamentos do dia
+    "🤝": "\uE716",      # People         — Controle de aportes
 }
 
 #: A MESMA tabela para o Windows 10. Os valores coincidem hoje — ver acima —, e
@@ -295,6 +297,7 @@ ICONES_MDL2 = {
     "📤": "\uE724",      # Send
     "👥": "\uE77B",      # Contact
     "🧾": "\uE8FD",      # BulletedList
+    "🤝": "\uE716",      # People — Controle de aportes
 }
 
 ICONES_POR_FAMILIA = {

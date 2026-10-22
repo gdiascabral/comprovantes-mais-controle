@@ -165,3 +165,43 @@ o teto de cada uma. Texto de ajuda quebra na largura do cartão (`_ajuda`,
 `aplicar_cores` repassa o `estilo_tabela` (as cores das linhas são tags da
 tabela). A `ferramentas/galeria.py` fotografa a aba PREENCHIDA com dados
 fictícios (`_preencher_dia` → `mostrar_numeros()`), sem mudar o app.
+
+## Aba "Controle de aportes" (entrega 3, 22/10/2026)
+
+Mora neste pacote (`controle_*.py`) por ser do mesmo projeto e para não
+pedir pasta nova no `build.yml`. Grupo DIÁRIO, no FIM (chave `cap`, sem
+Ctrl+N), invisível ao aprovador. **Não escreve no Mais Controle.**
+
+| Módulo | Decide |
+|---|---|
+| `controle_aportes.py` | a conta (aportou = já aportado antes da abertura + recebimentos do ERP; nível = maior aportou÷parte; deveria = nível×parte; para igualar = deveria − aportou), quem é o aportador, sem dono, apontamentos, formulário |
+| `controle_erp.py` | `GET receipt-installments` por conta × natureza (Aporte de Capital, Aporte de Investidor), pela aba do robô |
+| `controle_nuvem.py` | `controle_aporte_conta`, `_aportador`, `_atribuicao` (ler: e_ativo; escrever: e_admin) |
+| `controle_frame.py` | tela fina; nuvem numa thread própria |
+
+**Aportador = Cliente do recebimento pelo nome COMPLETO** (`util.norm_espaco`),
+contra os aportadores daquela conta; o resto vai para "Sem dono", fora da conta
+até o dono apontar. Apontamento guarda o valor: se o ERP mudar, volta para sem
+dono ("apontado com R$ X; agora R$ Y"). **Filtros conferidos**: a mesma parcela
+em duas contas, duas naturezas ou na conta de contraprova PARA a leitura. Medido
+em 22/10/2026: o LISTAR devolve por item só `customerName` (sem `customerId` e
+sem nome de conta), então o caminho pelo id do Cliente está dormente e a defesa
+real é duplicidade entre contas + contraprova. Proporção é PRÓPRIA (não a aba
+Regras do MODELO, nem viva da `subconta_investidor`, que entra só como sugestão
+e aviso de divergência). Distribuição de lucro não abate. Dívida da abertura
+cortada no centavo a favor do devedor (o líder nunca passa a dever 0,01).
+**Leitura duvidosa derruba a CONTA, com erro e sem número** (onda final,
+22/10/2026): parcela repetida, recebimento fora do período pedido (abertura..hoje;
+data com fuso vira data de Brasília, `data_do_erp`) e recebimento zero ou
+negativo (estorno) — nunca somam nem ficam "sem dono". Apontamento perde para o
+Cliente do ERP quando este passa a identificar OUTRO aportador (ou um aportador,
+num "não é aporte"): volta para sem dono, sem coluna nova no banco, e
+`apontar` recusa a escolha que contradiz o Cliente (`conflito_do_apontamento`:
+"o Cliente no ERP aponta para X — corrija o Cliente no ERP ou aponte para ele").
+`gravar_conta` em alteração também recusa se o nome, a abertura ou o `ativa` da
+conta mudaram desde que o formulário abriu, e nunca manda `ativa`. Recebimento
+parcial (`plannedValue` ≠ recebido) só alerta. A nuvem que volta com 1000 linhas
+(o `max_rows`) é recusada (`LeituraCortada`), e `gravar_conta` recusa se o banco
+mudou nome, parte ou já aportado depois que o formulário abriu.
+**Conta desativada (`ativa = false`) some da aba e só se reativa pelo painel do
+Supabase — de propósito**: a aba não tem botão de desativar nem de reativar.
