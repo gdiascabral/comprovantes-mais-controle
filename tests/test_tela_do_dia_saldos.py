@@ -1,4 +1,5 @@
 """Saldos da tela do dia. Contas fictícias."""
+from dataclasses import replace
 from decimal import Decimal as D
 
 import pytest
@@ -65,3 +66,58 @@ def test_ordem_poe_o_que_nao_bate_em_cima(mapa):
     beta = linhas[1]
     linhas = sd.aplicar_ajustes(linhas, {"Conta Beta - Banco": {sd.BANCO: sd.novo_ajuste(beta, sd.BANCO, D("1.00"))}})
     assert [ln.linha for ln in sd.ordenar(linhas)] == [9, 10, 8]
+
+
+# ------------------------------------- entrega 4: o banco lido do Sicoob
+
+def test_lido_do_banco_vira_saldo_do_dia(mapa):
+    alfa = replace(sd.montar_saldos(CONTAS, mapa)[0], banco=D("100.00"))
+    assert alfa.saldo_do_dia == D("100.00") and alfa.situacao() == ("ok", "bate")
+
+
+def test_digitado_vale_sobre_o_lido_e_avisa_quando_o_lido_mudou(mapa):
+    alfa = sd.montar_saldos(CONTAS, mapa)[0]                       # banco None
+    digitado = sd.aplicar_ajustes([alfa], {alfa.rotulo: {
+        sd.BANCO: sd.novo_ajuste(alfa, sd.BANCO, D("100.00"))}})[0]
+    lido_depois = replace(digitado, banco=D("80.00"))              # Sicoob leu depois
+    assert lido_depois.saldo_do_dia == D("100.00")                 # vale o digitado
+    assert lido_depois.banco_mudou
+    tag, frase = lido_depois.situacao()
+    assert tag == "atencao" and "o banco leu R$ 80,00 depois do seu ajuste" in frase
+
+
+def test_ajuste_feito_sobre_o_lido_nao_avisa(mapa):
+    lida = replace(sd.montar_saldos(CONTAS, mapa)[0], banco=D("80.00"))
+    simulada = sd.aplicar_ajustes([lida], {lida.rotulo: {
+        sd.BANCO: sd.novo_ajuste(lida, sd.BANCO, D("100.00"), "simulação")}})[0]
+    assert not simulada.banco_mudou and simulada.situacao()[0] == "ok"
+
+
+def test_digitado_igual_ao_lido_nao_avisa(mapa):
+    alfa = sd.montar_saldos(CONTAS, mapa)[0]
+    d = sd.aplicar_ajustes([alfa], {alfa.rotulo: {sd.BANCO: sd.novo_ajuste(alfa, sd.BANCO, D("100.00"))}})[0]
+    assert not replace(d, banco=D("100.00")).banco_mudou
+
+
+def test_diferenca_continua_erro_e_leva_o_aviso(mapa):
+    alfa = sd.montar_saldos(CONTAS, mapa)[0]
+    d = sd.aplicar_ajustes([alfa], {alfa.rotulo: {sd.BANCO: sd.novo_ajuste(alfa, sd.BANCO, D("90.00"))}})[0]
+    tag, frase = replace(d, banco=D("70.00")).situacao()
+    assert tag == "erro" and "R$ 10,00" in frase and "o banco leu R$ 70,00" in frase
+
+
+def test_nota_do_banco_sobe_como_atencao(mapa):
+    alfa = replace(sd.montar_saldos(CONTAS, mapa)[0], nota_banco="Sicoob não lido: x")
+    assert alfa.situacao() == ("atencao", "Sicoob não lido: x")
+    assert sd.ordenar([sd.montar_saldos(CONTAS, mapa)[1], alfa])[0] is alfa
+
+
+def test_nota_do_banco_some_quando_ha_digitado(mapa):
+    alfa = replace(sd.montar_saldos(CONTAS, mapa)[0], nota_banco="Sicoob não lido: x")
+    d = sd.aplicar_ajustes([alfa], {alfa.rotulo: {sd.BANCO: sd.novo_ajuste(alfa, sd.BANCO, D("100.00"))}})[0]
+    assert d.situacao() == ("ok", "bate") and d.nota_banco == "Sicoob não lido: x"
+
+
+def test_campo_novo_por_ultimo_nao_quebra_quem_constroi_por_posicao():
+    ln = sd.LinhaSaldo(8, "x", D("1"), D("1"), None, None)
+    assert ln.nota_banco == "" and ln.situacao() == ("ok", "bate")

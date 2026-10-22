@@ -7,8 +7,10 @@ saldo depois do ajuste, a linha avisa em vez de esconder — simulação feita
 sobre um número que já não é o do sistema é o tipo de engano que só aparece
 quando o dinheiro falta.
 
-O saldo do dia (coluna C do Excel) é o do BANCO quando foi digitado; senão, o
-do SISTEMA com o ajuste (decisão do dono).
+O saldo do dia (coluna C do Excel) é o do BANCO — o digitado, senão o lido do
+Sicoob —; senão, o do SISTEMA com o ajuste (decisão do dono). O digitado vale
+sobre o lido; se o Sicoob ler um valor diferente DEPOIS do ajuste, a linha
+avisa (`banco_mudou`), como faz quando o sistema muda.
 """
 from __future__ import annotations
 
@@ -37,9 +39,13 @@ class LinhaSaldo:
     linha: int
     rotulo: str
     sistema: Decimal | None
-    banco: Decimal | None = None          # entrega 3 (Sicoob) preenche
+    banco: Decimal | None = None          # lido do banco (entrega 4: Sicoob)
     ajuste_sistema: Ajuste | None = None
     ajuste_banco: Ajuste | None = None
+    #: Por que o banco não foi lido (conta do Sicoob que falhou). Vazio para
+    #: as contas digitadas à mão — o "sem o saldo do banco" de sempre. Por
+    #: ÚLTIMO e com default: há quem construa a linha por posição.
+    nota_banco: str = ""
 
     @property
     def sistema_usado(self) -> Decimal | None:
@@ -66,6 +72,16 @@ class LinhaSaldo:
         a = self.ajuste_sistema
         return a is not None and a.original != self.sistema
 
+    @property
+    def banco_mudou(self) -> bool:
+        """O LIDO mudou depois do ajuste do banco (ex.: digitou antes de o
+        Sicoob ser lido). O digitado continua valendo — a spec manda o ajuste
+        mandar no dia —, mas a linha avisa, como `original_mudou` faz com o
+        sistema."""
+        a = self.ajuste_banco
+        return (a is not None and self.banco is not None
+                and a.original != self.banco and a.valor != self.banco)
+
     def situacao(self) -> tuple[str, str]:
         if self.sistema_usado is None:
             return "erro", "o sistema não trouxe o saldo"
@@ -73,11 +89,15 @@ class LinhaSaldo:
             return "atencao", (f"o sistema mudou desde o ajuste: era "
                                f"{brl(self.ajuste_sistema.original)}, agora {brl(self.sistema)}")
         if self.banco_usado is None:
+            if self.nota_banco:
+                return "atencao", self.nota_banco
             return "info", "sem o saldo do banco"
+        aviso = (f" · o banco leu {brl(self.banco)} depois do seu ajuste"
+                 if self.banco_mudou else "")
         dif = self.diferenca
         if dif == 0:
-            return "ok", "bate"
-        return "erro", f"não bate — diferença de {brl(dif)}"
+            return ("atencao", "bate com o digitado" + aviso) if aviso else ("ok", "bate")
+        return "erro", f"não bate — diferença de {brl(dif)}{aviso}"
 
 
 def montar_saldos(contas, mapping) -> list[LinhaSaldo]:
