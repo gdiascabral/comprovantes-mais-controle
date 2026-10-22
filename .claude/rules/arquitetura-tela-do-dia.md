@@ -175,6 +175,11 @@ Regra do dono (14/10/2026): nada de `POST /users/login` por HTTP, que derruba a
 sessão do Chrome. Central ligado: a sessão do porteiro (`Sessao.logar("", "")`,
 que, se o central sumiu no meio, levanta em vez de cair no login). Central
 desligado: a MESMA aba do robô que leu os pagamentos (`mc_api._fetch_json`).
+**Central: erro do ERP na 1ª leitura esquece a sessão guardada e lê UMA vez
+de novo** (`erp.sessao.esquecer_central`; prova ao vivo 21 e 22/10/2026: com o
+Chrome do app logando no ERP na mesma rodada, a `SessaoPelaPagina` guardada em
+`_CENTRAIS` ficava com a autenticação velha e o dia não era lido). A 2ª falha
+sobe com o motivo dela; erro que não é do ERP não tenta de novo.
 Erro do ERP vira `ErpError`, nunca saldo zero; `acessos.json` estragado falha
 FECHADO. Conta sem saldo mostra "—" no mínimo e no saldo final, com situação
 "erro"; o Excel recusa quando `validacao.exigir_todos_os_saldos` está ligado

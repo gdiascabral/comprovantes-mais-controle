@@ -71,18 +71,33 @@ def _logar_pela_pagina(config, log=print):
                      empresa=interna.empresa, config=config, _sessao=interna)
 
 
-def ler_saldos(config, api, *, central_ligado=None, logar=None, log=print):
+def ler_saldos(config, api, *, central_ligado=None, logar=None, esquecer=None,
+               log=print):
     """Contas ativas com saldo, só pelo Chrome do app.
 
     Erro do ERP vira `ErpError`, nunca saldo zero. Conta sem saldo no lote
     sai com `balance=None` ("não lido"). Com `acessos.json` estragado,
     `central_ligado` levanta `ErpErro` (a classe do pacote `erp/`, não a
     `ErpError` da conciliação) e a leitura para antes de tocar `api` ou login.
+
+    Central ligado: erro do ERP na 1ª leitura descarta a sessão central
+    guardada (`erp.sessao.esquecer_central`) e lê UMA vez de novo. Prova ao
+    vivo 21 e 22/10/2026: quando o Chrome do app precisa logar no ERP na
+    mesma rodada, a sessão guardada fica com a autenticação velha e a
+    leitura caía; com a sessão já aberta, passava. Se a 2ª também falhar, sobe
+    o erro dela, com o motivo real.
     """
     central_ligado = central_ligado or erp_sessao.central_ligado
     logar = logar or _logar_pela_pagina
+    esquecer = esquecer or erp_sessao.esquecer_central
     if central_ligado():
-        contas = logar(config, log=log).contas(ativas=True)
+        try:
+            contas = logar(config, log=log).contas(ativas=True)
+        except (ErpError, ErpErro) as e:
+            log(f"  Saldos do ERP: a sessão do Chrome central falhou ({type(e).__name__}: "
+                f"{e}) — abrindo uma nova e lendo de novo.")
+            esquecer("principal")
+            contas = logar(config, log=log).contas(ativas=True)
     else:
         if not getattr(api, "_req_anexos", None) and not api.garantir_credenciais_anexos(log):
             raise ErpError("não consegui o acesso do Chrome do app ao cadastro de "

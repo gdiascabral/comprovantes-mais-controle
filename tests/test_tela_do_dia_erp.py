@@ -117,3 +117,59 @@ def test_conta_sem_saldo_no_lote_sai_none_nunca_zero():
     api = ApiDaAba({"bank-accounts?": CONTAS, "balances?": {}})
     contas = erp_do_dia.ler_saldos(Cfg(), api, central_ligado=lambda: False, logar=_nao_loga)
     assert contas[0].balance is None
+
+
+# ------------------------------- prova ao vivo 22/10: login na mesma rodada
+class _SessaoQue:
+    def __init__(self, erro=None):
+        self.erro = erro
+
+    def contas(self, *, ativas=True):
+        if self.erro:
+            raise self.erro
+        return ["conta"]
+
+
+def test_sessao_central_velha_e_esquecida_e_le_de_novo_uma_vez():
+    """Quando o Chrome do app precisou logar na mesma rodada, a sessão central
+    guardada estava velha e o "Não consegui ler o dia" aparecia (22/10)."""
+    from erp.sessao import ErpErro
+    sessoes = iter([_SessaoQue(ErpErro("401 do prod-erp-api")), _SessaoQue()])
+    esquecidas, registro = [], []
+    contas = erp_do_dia.ler_saldos(
+        Cfg(), ApiDaAba({}), central_ligado=lambda: True,
+        logar=lambda cfg, log=print: next(sessoes),
+        esquecer=esquecidas.append, log=registro.append)
+    assert contas == ["conta"] and esquecidas == ["principal"]
+    assert any("de novo" in r and "401 do prod-erp-api" in r for r in registro)
+
+
+def test_sessao_central_que_falha_duas_vezes_sobe_o_motivo_real():
+    sessoes = iter([_SessaoQue(ErpError("primeira")), _SessaoQue(ErpError("token recusado"))])
+    esquecidas = []
+    with pytest.raises(ErpError, match="token recusado"):
+        erp_do_dia.ler_saldos(Cfg(), ApiDaAba({}), central_ligado=lambda: True,
+                              logar=lambda cfg, log=print: next(sessoes),
+                              esquecer=esquecidas.append, log=lambda m: None)
+    assert esquecidas == ["principal"]           # só UMA nova tentativa
+
+
+def test_erro_que_nao_e_do_erp_nao_tenta_de_novo():
+    sessoes = iter([_SessaoQue(ValueError("bug")), _SessaoQue()])
+    esquecidas = []
+    with pytest.raises(ValueError):
+        erp_do_dia.ler_saldos(Cfg(), ApiDaAba({}), central_ligado=lambda: True,
+                              logar=lambda cfg, log=print: next(sessoes),
+                              esquecer=esquecidas.append, log=lambda m: None)
+    assert esquecidas == []
+
+
+def test_esquecer_central_fecha_e_tira_da_guarda(monkeypatch):
+    from erp import sessao as erp_sessao
+    fechadas = []
+    velha = type("S", (), {"fechar": lambda self: fechadas.append(self)})()
+    monkeypatch.setattr(erp_sessao, "_CENTRAIS", {"principal": velha})
+    erp_sessao.esquecer_central("principal")
+    assert erp_sessao._CENTRAIS == {} and fechadas == [velha]
+    erp_sessao.esquecer_central("principal")     # sem nada guardado: nada acontece
+    assert fechadas == [velha]

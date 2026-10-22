@@ -448,6 +448,20 @@ def _sessao_do_central(nome: str = "principal"):
         return atual
 
 
+def esquecer_central(nome: str = "principal") -> None:
+    """Descarta a sessão pela página guardada deste acesso (e fecha a aba
+    dela, quieto): o próximo `Sessao.logar` monta uma nova.
+
+    Para quem pegou erro com uma sessão que parecia `viva`: quando o Chrome
+    do app precisou LOGAR no ERP na mesma rodada, a guardada continuava com
+    a autenticação de antes do login, e a leitura dos saldos da tela do dia
+    caía ("Não consegui ler o dia", 21 e 22/10/2026)."""
+    with _TRAVA_CENTRAIS:
+        atual = _CENTRAIS.pop(nome, None)
+    if atual is not None:
+        _fechar_quieto(atual)        # fora da trava: `fechar` espera a dona sair
+
+
 def _fechar_quieto(s) -> None:
     try:
         s.fechar()
