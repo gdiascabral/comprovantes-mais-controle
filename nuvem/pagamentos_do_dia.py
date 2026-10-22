@@ -12,6 +12,7 @@ pior que a recusa (a mesma conferência de `aportes.cadastros.gravar`).
 from __future__ import annotations
 
 import datetime as _dt
+from decimal import ROUND_HALF_UP, Decimal
 
 from . import rest
 
@@ -24,12 +25,36 @@ LIMITE_DESCRICAO = 200
 _COLUNAS_A_MAO = frozenset({"conta", "valor", "descricao", "motivo", "favorecido", "tipo",
                             "dados", "lancamento_id", "centro_custo", "nf", "oc",
                             "valor_em_aberto"})
+#: Colunas que o app escreve em `pagamento_agendado` (o resto é descartado) e
+#: as de texto, todas com teto de 200 na constraint `_tamanho`.
+_COLUNAS_AGENDADO = frozenset({"conta", "alvo", "lancamento_id", "a_mao_id", "favorecido",
+                               "valor", "descricao", "tipo", "foto"})
+_TEXTO_AGENDADO = ("conta", "alvo", "lancamento_id", "favorecido", "tipo", "descricao")
+#: Índice único (dia, alvo): a ÚNICA recusa que significa "já marcado".
+_DUPLICADO = "23505"
 #: Carimbo do servidor: nunca sai do app, nem que a linha de entrada o traga.
 _CARIMBO = ("quem", "quem_nome", "quando")
 
 
 class NaoGravou(rest.ErroDaNuvem):
     """O banco respondeu sem devolver as linhas pedidas."""
+
+
+def _dinheiro(valor) -> str:
+    """Decimal/int/str -> "10.50". Float é recusado: dinheiro não passa por ele."""
+    if isinstance(valor, (float, bool)):
+        raise TypeError(f"dinheiro em {type(valor).__name__}: use Decimal")
+    try:
+        return str(Decimal(str(valor).strip()).quantize(Decimal("0.01"), ROUND_HALF_UP))
+    except ArithmeticError as e:
+        raise ValueError(f"valor inválido: {valor!r}") from e
+
+
+def _e_duplicado(erro: rest.RecusadoPeloBanco) -> bool:
+    """Só o conflito do índice único. 400 de check, 409 de FK e 5xx não são."""
+    if erro.codigo:
+        return erro.codigo == _DUPLICADO
+    return erro.status == 409 and "duplicate key" in str(erro).lower()
 
 
 def _iso(dia: _dt.date) -> str:
@@ -65,6 +90,11 @@ class DiaNaNuvem:
 
     def registrar_a_mao(self, dia, linha: dict) -> dict:
         corpo = {k: v for k, v in linha.items() if k in _COLUNAS_A_MAO}
+        corpo["valor"] = _dinheiro(corpo["valor"])
+        if corpo.get("valor_em_aberto") not in (None, ""):
+            corpo["valor_em_aberto"] = _dinheiro(corpo["valor_em_aberto"])
+        else:
+            corpo.pop("valor_em_aberto", None)
         return self._gravar(A_MAO, [{"dia": _iso(dia), **corpo}])[0]
 
     # ---------------------------------------------------------- agendados
@@ -85,29 +115,47 @@ class DiaNaNuvem:
 
     def marcar_agendados(self, dia, linhas) -> tuple[list[dict], list[dict]]:
         """(gravadas, já marcadas). O índice único (dia, alvo) recusa a
-        segunda máquina; o lote recusado é refeito um a um para gravar o resto."""
-        ja = {str(l.get("alvo")) for l in self.agendados_do_dia(dia)}
-        repetidas = [l for l in linhas if str(l["alvo"]) in ja]
-        corpo = []
+        segunda máquina; o lote recusado POR DUPLICIDADE é refeito um a um
+        para gravar o resto. Qualquer outra recusa (check, coluna, FK, 5xx)
+        SOBE: não é "já marcado". Se subir no meio do um a um, a exceção leva
+        `gravadas` (o que já entrou) e `repetidas`, para a tela não dizer
+        "não gravou" sobre o que gravou.
+
+        Só as colunas da tabela vão, e os textos são cortados em 200. O
+        tamanho dos campos DIGITADOS (motivo <= 200, dados <= 500, nome curto
+        1 a 60) é validado pela tela, não aqui. `valor` é Decimal (float é
+        recusado) e vai com 2 casas."""
+        todas = []
         for l in linhas:
-            if str(l["alvo"]) in ja:
-                continue
-            nova = {"dia": _iso(dia), **l}
-            if "descricao" in nova:
-                nova["descricao"] = str(nova["descricao"] or "")[:LIMITE_DESCRICAO]
-            corpo.append(nova)
+            nova = {k: v for k, v in l.items() if k in _COLUNAS_AGENDADO}
+            for k in _TEXTO_AGENDADO:
+                if k in nova:
+                    nova[k] = str(nova[k] if nova[k] is not None else "")[:LIMITE_DESCRICAO]
+            nova["valor"] = _dinheiro(nova["valor"])
+            todas.append({"dia": _iso(dia), **nova})
+        ja = {str(l.get("alvo")) for l in self.agendados_do_dia(dia)}
+        repetidas = [l for l in todas if str(l["alvo"]) in ja]
+        corpo = [l for l in todas if str(l["alvo"]) not in ja]
         if not corpo:
             return [], repetidas
+        gravadas: list[dict] = []
         try:
-            return self._gravar(AGENDADO, corpo), repetidas
-        except rest.RecusadoPeloBanco:
-            gravadas = []
+            try:
+                return self._gravar(AGENDADO, corpo), repetidas
+            except rest.RecusadoPeloBanco as e:
+                if not _e_duplicado(e):
+                    raise
             for linha in corpo:
                 try:
                     gravadas.extend(self._gravar(AGENDADO, [linha]))
-                except rest.RecusadoPeloBanco:
+                except rest.RecusadoPeloBanco as e:
+                    if not _e_duplicado(e):
+                        raise
                     repetidas.append(linha)
             return gravadas, repetidas
+        except rest.ErroDaNuvem as e:
+            e.gravadas, e.repetidas = gravadas, repetidas
+            raise
 
     def responder(self, agendado_id, resposta, *, motivo="", nova_data=None, prova="") -> dict:
         return self._gravar(RESPOSTA, [{
@@ -120,8 +168,9 @@ class DiaNaNuvem:
     def nomes_curtos(self) -> dict[str, str]:
         nomes = {}
         for linha in rest.ler(NOME, self._token, colunas="conta,nome_curto",
-                              filtro="order=id.asc"):
-            nomes[str(linha["conta"])] = str(linha["nome_curto"])
+                              filtro="order=id.desc"):
+            # Mais novo primeiro: o teto de linhas do PostgREST corta só os velhos.
+            nomes.setdefault(str(linha["conta"]), str(linha["nome_curto"]))
         return nomes
 
     def gravar_nome_curto(self, conta, nome) -> dict:

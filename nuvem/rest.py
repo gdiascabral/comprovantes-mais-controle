@@ -93,7 +93,16 @@ class PrecisaEntrar(ErroDaNuvem):
 class RecusadoPeloBanco(ErroDaNuvem):
     """O banco entendeu e disse não: trava de unicidade, regra violada.
 
-    Erro de PROGRAMA ou de cadastro, não de rede — repetir não resolve."""
+    Erro de PROGRAMA ou de cadastro, não de rede — repetir não resolve.
+
+    `status` (HTTP) e `codigo` (o `code` do corpo do PostgREST, p.ex. "23505"
+    para chave duplicada) são opcionais: quem constrói só com a frase continua
+    funcionando, e quem precisa distinguir a causa os lê."""
+
+    def __init__(self, *args, status=None, codigo=""):
+        super().__init__(*args)
+        self.status = status
+        self.codigo = codigo or ""
 
 
 def _cabecalhos(token: str | None) -> dict:
@@ -141,12 +150,15 @@ def _resposta(r) -> object:
         raise PrecisaEntrar(f"{base} [HTTP {r.status_code}]"
                             + (f": {motivo}" if motivo else ""))
     if r.status_code >= 400:
+        codigo = ""
         try:
             corpo = r.json()
             recado = corpo.get("message") or corpo.get("msg") or str(corpo)
+            codigo = str(corpo.get("code") or "")
         except ValueError:
             recado = (r.text or "")[:300]
-        raise RecusadoPeloBanco(f"HTTP {r.status_code}: {recado}")
+        raise RecusadoPeloBanco(f"HTTP {r.status_code}: {recado}",
+                                status=r.status_code, codigo=codigo)
     if not r.content:
         return None
     try:
