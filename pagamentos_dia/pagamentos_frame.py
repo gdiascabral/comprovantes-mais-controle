@@ -2306,7 +2306,7 @@ class PagamentosDiaFrame(ttk.Frame):
             self._log(f"  [!] não deu para guardar a cópia do retorno"
                       f"{f' ({resumo.origem})' if resumo.origem else ''}: {e}")
 
-    def _seguir_para_a_baixa(self, linhas, fechar):
+    def _seguir_para_a_baixa(self, linhas, fechar, divididos=None):
         """Do retorno lido até a thread do navegador — um caminho só.
 
         Recebe LINHAS e não um `Resumo` porque a janela de vários junta as de
@@ -2317,11 +2317,14 @@ class PagamentosDiaFrame(ttk.Frame):
         # o saco que carrega as linhas até lá, e não um retorno de verdade —
         # daí o NSA zero, que nunca vai à tela nem ao banco.
         # Lançamento que a aba "Pagamentos do dia" dividiu em N boletos fica de
-        # fora da baixa (o ERP só conhece o valor cheio). Só o resultado que
-        # veio de lá tem `parte`: a apuração desta aba não divide, e aí nada muda.
+        # fora da baixa (o ERP só conhece o valor cheio). Duas fontes: a mesma
+        # referência mais de uma vez no MESMO retorno (`divididos`, calculado
+        # por resumo por quem chama — não depende da apuração estar viva) e o
+        # resultado que veio da tela nova (`parte`). Sem nenhuma, nada muda.
         sep = baixa_erp.separar(retorno_dia.Resumo(
             convenio="", nsa=0, empresa="", linhas=list(linhas)),
-            divididos=baixa_erp.divididos_do_resultado(self.resultado))
+            divididos=baixa_erp.juntar_divididos(
+                divididos, baixa_erp.divididos_do_resultado(self.resultado)))
         for linha, motivo in sep.de_fora:
             self._log(f"  fora da baixa: {linha.seu_numero} "
                       f"{linha.favorecido[:28]} — {motivo}")
@@ -2483,7 +2486,8 @@ class PagamentosDiaFrame(ttk.Frame):
             top.destroy()
 
         def _baixar():
-            self._seguir_para_a_baixa(resumo.linhas, top.destroy)
+            self._seguir_para_a_baixa(resumo.linhas, top.destroy,
+                                      divididos=baixa_erp.divididos_do_retorno(resumo))
 
         if historico is not None and not resumo.remessa_desconhecida:
             widgets.Botao(rodape, "Guardar o resultado", papel="acao",
@@ -2663,8 +2667,12 @@ class PagamentosDiaFrame(ttk.Frame):
             # As linhas de TODAS as remessas conhecidas num saco só. A baixa
             # não depende da conta pagadora: ela casa pela `referencia` do
             # item, que é o id do lançamento no ERP.
+            # O "dividido" é contado POR RESUMO, antes de juntar: a mesma
+            # referência em duas remessas é reenvio, não divisão.
             self._seguir_para_a_baixa(
-                [linha for r in conhecidos for linha in r.linhas], top.destroy)
+                [linha for r in conhecidos for linha in r.linhas], top.destroy,
+                divididos=baixa_erp.juntar_divididos(
+                    *(baixa_erp.divididos_do_retorno(r) for r in conhecidos)))
 
         if historico is not None and conhecidos:
             widgets.Botao(rodape, "Guardar tudo", papel="acao",

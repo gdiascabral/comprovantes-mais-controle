@@ -129,6 +129,10 @@ def situacao(ag, titulo, envio=None, *, relido=True, prova_extra="") -> Situacao
     None); `relido=False` = a releitura do ERP não aconteceu, e aí ausência
     não é "sumiu"."""
     pago_no_banco = getattr(envio, "retorno_estado", "") == "ok"
+    # Lançamento dividido em N boletos (entrega 5): o "ok" do retorno é de UM
+    # envio e não diz que todas as partes saíram — só a baixa no ERP prova.
+    if len(ag.foto.get("partes") or ()) > 1:
+        pago_no_banco = False
     if not ag.lancamento_id:
         if prova_extra:
             return Situacao("ok", prova_extra, True, prova_extra)

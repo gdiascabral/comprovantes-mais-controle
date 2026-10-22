@@ -125,6 +125,30 @@ def divididos_do_resultado(resultado) -> dict[str, int]:
     return saida
 
 
+def divididos_do_retorno(resumo) -> dict[str, int]:
+    """{referência: N} das referências que aparecem em MAIS DE UMA linha
+    (qualquer estado) do MESMO retorno: um lançamento só sai N vezes numa
+    remessa quando a tela o dividiu em N boletos. Não depende de a apuração
+    da tela estar viva na aba — o retorno costuma ser lido horas depois.
+    Calcule POR RESUMO: a mesma referência em duas remessas é reenvio, não
+    divisão."""
+    conta: dict[str, int] = {}
+    for linha in getattr(resumo, "linhas", None) or ():
+        ref = (getattr(linha, "referencia", "") or "").strip()
+        if ref:
+            conta[ref] = conta.get(ref, 0) + 1
+    return {ref: n for ref, n in conta.items() if n > 1}
+
+
+def juntar_divididos(*fontes) -> dict[str, int]:
+    """Os {id: N} de várias fontes num só (o maior N de cada id)."""
+    saida: dict[str, int] = {}
+    for fonte in fontes:
+        for ident, n in (fonte or {}).items():
+            saida[ident] = max(n, saida.get(ident, 0))
+    return saida
+
+
 @dataclass
 class Resultado:
     """O desfecho de UMA baixa. Uma que falhe não fala pelas outras."""

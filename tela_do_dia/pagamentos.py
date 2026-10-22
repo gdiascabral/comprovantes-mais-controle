@@ -140,6 +140,20 @@ def por_conta(grupos, mapping, conferencia=None):
         if d is not None and d.editado:
             origem = origem or "editado"
             p = replace(p, nota="editado: " + ", ".join(sorted(d.edicoes)))
+        n = _partes(ln)
+        if n and d is not None:
+            # Decisão da nuvem que não vale para lançamento dividido (outra
+            # máquina, app velho): `geracao` a ignora; a tela diz isso.
+            avisos = []
+            if d.edicoes.keys() & _FORMA:
+                avisos.append(f"forma editada IGNORADA: lançamento dividido em {n} boletos "
+                              "— corrija no ERP")
+            if d.liberado and origem != "liberado" and ln.id in enviados:
+                avisos.append(f"liberação IGNORADA: lançamento dividido em {n} boletos "
+                              "— uma parte já saiu; resolva no ERP ou na Remessa")
+            if avisos:
+                p = replace(p, nota=" · ".join(filter(None, [p.nota, *avisos])),
+                            estado="atencao")
         return replace(p, origem=origem)
 
     # Lançamento dividido em N boletos (entrega 5): o "já saiu?" é por id, e
@@ -179,6 +193,15 @@ def por_conta(grupos, mapping, conferencia=None):
     for c in [*painel.values(), *fora.values()]:
         c.liberados.sort(key=lambda p: p.id)
     return painel, list(fora.values())
+
+
+_FORMA = {"tipo", "dados", "reembolso_nome", "reembolso_documento"}
+
+
+def _partes(ln) -> int:
+    """N do "k/N" da linha dividida, ou 0."""
+    _k, _barra, n = str(getattr(ln, "parte", "") or "").partition("/")
+    return int(n) if n.isdigit() and int(n) > 1 else 0
 
 
 def _ja_enviado(ln) -> bool:

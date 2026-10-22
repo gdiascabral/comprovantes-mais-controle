@@ -265,7 +265,7 @@ def test_a_aba_remessa_passa_os_divididos_do_resultado_que_recebeu():
     fonte = (RAIZ / "pagamentos_dia/pagamentos_frame.py").read_text(encoding="utf-8")
     trecho = fonte[fonte.index("def _seguir_para_a_baixa"):]
     trecho = trecho[:trecho.index("\n    def ", 10)]
-    assert "divididos=baixa_erp.divididos_do_resultado(self.resultado)" in trecho
+    assert "baixa_erp.divididos_do_resultado(self.resultado)" in trecho
 
 
 # ---------------------------------------------- (f) sem parte, nada muda
@@ -276,3 +276,76 @@ def test_registro_sem_parte_continua_recebendo_a_forma_editada():
     out = geracao.aplicar_decisao(dict(reg), d, liberavel=False)
     assert (out["tipo"], out["dados"]) == ("Pix", "PIX EMAIL f@exemplo.com")
     assert confirmacao.Linha.__dataclass_fields__["parte"].default == ""
+
+
+# ------------------------------------------------- conserto, rodada 1
+def test_b1_retorno_com_duas_linhas_da_mesma_referencia_e_dividido_sem_resultado():
+    resumo = _retorno(_ret("1", "L1", "400.00"), _ret("2", "L1", "600.00"),
+                      _ret("3", "L2", "10.00"))
+    assert baixa_erp.divididos_do_retorno(resumo) == {"L1": 2}
+    sep = baixa_erp.separar(resumo, divididos=baixa_erp.divididos_do_retorno(resumo))
+    assert [l.referencia for l in sep.baixaveis] == ["L2"]
+    assert [(l.referencia, m) for l, m in sep.de_fora] == [
+        ("L1", baixa_erp.MOTIVO_DIVIDIDO.format(n=2))] * 2
+
+
+def test_b1_conta_qualquer_estado_e_junta_com_o_do_resultado():
+    pendente = replace(_ret("2", "L1", "600.00"), estado="pendente")
+    resumo = _retorno(_ret("1", "L1", "400.00"), pendente)
+    assert baixa_erp.divididos_do_retorno(resumo) == {"L1": 2}
+    assert baixa_erp.juntar_divididos({"L1": 2}, {"L3": 3}, {}) == {"L1": 2, "L3": 3}
+
+
+def test_b1_mesma_referencia_em_dois_retornos_nao_e_divisao():
+    a, b = _retorno(_ret("1", "L1", "100.00")), _retorno(_ret("9", "L1", "100.00"))
+    divididos = baixa_erp.juntar_divididos(*(baixa_erp.divididos_do_retorno(r) for r in (a, b)))
+    assert divididos == {}
+    sep = baixa_erp.separar(_retorno(*a.linhas, *b.linhas), divididos=divididos)
+    assert len(sep.baixaveis) == 2
+
+
+def test_b1_a_aba_calcula_por_resumo_antes_de_juntar():
+    fonte = (RAIZ / "pagamentos_dia/pagamentos_frame.py").read_text(encoding="utf-8")
+    assert "self._seguir_para_a_baixa(resumo.linhas, top.destroy,\n" in fonte
+    assert "divididos=baixa_erp.divididos_do_retorno(resumo)" in fonte
+    assert "baixa_erp.divididos_do_retorno(r) for r in conhecidos" in fonte
+    trecho = fonte[fonte.index("def _seguir_para_a_baixa"):]
+    trecho = trecho[:trecho.index("\n    def ", 10)]
+    assert "baixa_erp.juntar_divididos(" in trecho
+
+
+def test_i2_retorno_do_banco_nao_prova_agendado_dividido():
+    envio = NS(retorno_estado="ok")
+    linha = {"id": 1, "dia": "2026-10-22", "conta": CONTA, "alvo": "L1", "lancamento_id": "L1",
+             "favorecido": "Fornecedor Modelo Ltda", "valor": "50.00",
+             "foto": {"em_aberto": "50.00", "partes": [{"parte_linha": "111", "valor": "30.00"},
+                                                       {"parte_linha": "222", "valor": "20.00"}]}}
+    titulo = {"id": "L1", "paid": False, "remainingValue": 50.0}
+    s = ag.situacao(ag.Agendado.de_linha(linha), titulo, envio)
+    assert not s.pre_marca
+    um = {**linha, "foto": {"em_aberto": "50.00"}}
+    assert ag.situacao(ag.Agendado.de_linha(um), titulo, envio).prova == ag.PROVA_RETORNO
+    pago = ag.situacao(ag.Agendado.de_linha(linha), {**titulo, "paid": True}, envio)
+    assert pago.pre_marca and pago.prova == ag.PROVA_BAIXA
+
+
+def test_m1_forma_editada_e_liberacao_da_nuvem_avisam_na_tela():
+    leitura, _l = _dividido()
+    conf = cf.Conferencia((cf.Evento.de_linha(_ev(1, "L1", cf.EDITAR, motivo="erro do ERP",
+                                                  campos={"tipo": "Pix",
+                                                          "dados": "PIX EMAIL f@exemplo.com"})),))
+    painel, _fora = pg.por_conta(leitura.grupos, _Mapa(), conf)
+    for p in painel[8].saem:
+        assert "forma editada IGNORADA: lançamento dividido em 2 boletos" in p.nota
+        assert p.estado == "atencao"
+    grupos = _com_um_enviado(leitura, todas=True)
+    conf = cf.Conferencia((cf.Evento.de_linha(_ev(1, "L1", cf.LIBERAR, motivo="pagar já")),))
+    painel, _fora = pg.por_conta(grupos, _Mapa(), conf)
+    for p in painel[8].ja_enviados:
+        assert "liberação IGNORADA: lançamento dividido em 2 boletos" in p.nota
+        assert p.estado == "atencao"
+    # Só a descrição: nada de aviso.
+    conf = cf.Conferencia((cf.Evento.de_linha(_ev(1, "L1", cf.EDITAR, motivo="ajuste",
+                                                  campos={"descricao": "OBRA MODELO NF 9"})),))
+    painel, _fora = pg.por_conta(leitura.grupos, _Mapa(), conf)
+    assert all("IGNORADA" not in p.nota for p in painel[8].saem)
