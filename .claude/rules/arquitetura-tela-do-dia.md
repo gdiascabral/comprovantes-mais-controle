@@ -474,7 +474,10 @@ rede): tira o banco do fim quando a lista inteira é do mesmo banco (senão
 fica curto, "Obra - Inter"), sufixos jurídicos (LTDA, SPE [I], S/A, ME,
 EIRELI, EPP) e números de conta; encurta PARTICIPAÇÕES/SUBCONTA/ENGENHARIA/
 INCORPORAÇÕES/EMPREENDIMENTOS; "SUBCONTA 12345-6" vira "Sub. 12345"; Title
-Case (sigla sem vogal fica maiúscula). Sugestões são ÚNICAS entre si e
+Case (sigla sem vogal fica maiúscula). O banco sai também quando é um trecho
+só dele no MEIO do rótulo ("EMPRESA - SICOOB - SUBCONTA 30001-1" → "Empresa
+Sub. 30001"); rótulo que é só banco e número vira "<Banco> <número curto>"
+("SICOOB 40001-1" → "Sicoob 40001"); nunca o banco duas vezes. Sugestões são ÚNICAS entre si e
 diferentes dos nomes gravados de outras contas: empate desempata pelo número
 da conta (5 dígitos), depois banco, depois contador, em ordem alfabética dos
 rótulos (a ordem de chegada não muda nada). A tela mostra "~ nome"

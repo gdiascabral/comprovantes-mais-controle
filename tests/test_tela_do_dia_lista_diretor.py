@@ -216,3 +216,33 @@ def test_montar_usa_a_sugestao_unica_e_nao_repete_nome_gravado():
     assert [(l.nome, l.sugerido, l.sem_nome_curto) for l in linhas] == [
         ("Obra Beta 30001", True, False), ("Obra Beta 30002", True, False), ("Zeta", False, False)]
     assert ld.texto_whatsapp(linhas).splitlines()[0].startswith("Obra Beta 30001 — ")
+
+
+# --------------- revisão geral de 22/10/2026 (achado 10): nomes feios
+def _vezes_do_banco(nome: str, banco: str = "sicoob") -> int:
+    return [p.strip("-.").casefold() for p in nome.split()].count(banco)
+
+
+def test_banco_no_meio_do_rotulo_sai_do_nome():
+    sug = ld.sugerir_nomes(["EMPRESA - SICOOB - SUBCONTA 30001-1", "Obra Beta Sicoob"])
+    assert sug["EMPRESA - SICOOB - SUBCONTA 30001-1"] == "Empresa Sub. 30001"
+    sug = ld.sugerir_nomes(["EMPRESA - SICOOB - SUBCONTA 30001-1", "Obra Beta - Inter"])
+    assert sug["EMPRESA - SICOOB - SUBCONTA 30001-1"] == "Empresa Sub. 30001 - Sicoob"
+
+
+def test_rotulo_so_de_banco_e_numero_vira_banco_e_numero_curto():
+    for outras in (["Obra Beta Sicoob"], ["Obra Beta - Inter"], []):
+        sug = ld.sugerir_nomes(["SICOOB 40001-1"] + outras)
+        assert sug["SICOOB 40001-1"] == "Sicoob 40001", outras
+    assert ld.sugerir_nomes(["40001-1 - SICOOB", "OBRA X - INTER"])["40001-1 - SICOOB"] == \
+        "Sicoob 40001"
+
+
+def test_nunca_o_banco_duas_vezes():
+    rotulos = ["SICOOB 40001-1", "SICOOB 40002-2", "SICOOB - 40001-1",
+               "EMPRESA - SICOOB - SUBCONTA 30001-1", "EMPRESA - SICOOB - SUBCONTA 30002-2",
+               "Obra Beta - Inter", "Sicoob"] + MESMO_BANCO
+    for nome in ld.sugerir_nomes(rotulos).values():
+        assert _vezes_do_banco(nome) <= 1, nome
+    for nome in ld.sugerir_nomes(MESMO_BANCO + ["SICOOB 40001-1", "SICOOB - 40001-1"]).values():
+        assert _vezes_do_banco(nome) <= 1, nome

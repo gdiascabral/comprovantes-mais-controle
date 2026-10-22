@@ -97,12 +97,19 @@ def _palavra(tok: str) -> str:
 
 def _pecas(rotulo: str):
     """(nome sem banco nem número, banco curto, número da conta)."""
-    toks = [t for t in str(rotulo or "").replace(" - ", " ").split() if t != "-"]
-    toks = [t.strip("-") for t in toks if t.strip("-")]
     banco = ""
-    # O banco é a última palavra que não é número de conta ("X - SICOOB - 1234-5").
+    # Banco num trecho só dele, em qualquer lugar ("EMPRESA - SICOOB -
+    # SUBCONTA 1234-5"): no meio, ficava no nome ("Empresa Sicoob Sub. …").
+    trechos = [t.strip() for t in str(rotulo or "").split(" - ")]
+    for i, trecho in enumerate(trechos):
+        if _sem_acento(trecho).upper() in _BANCOS:
+            banco = _BANCOS[_sem_acento(trechos.pop(i)).upper()]
+            break
+    toks = [t for t in " ".join(trechos).split() if t != "-"]
+    toks = [t.strip("-") for t in toks if t.strip("-")]
+    # Senão, o banco é a última palavra que não é número de conta.
     fim = next((i for i in range(len(toks) - 1, -1, -1) if not _numero_de_conta(toks[i])), None)
-    if fim is not None and _sem_acento(toks[fim]).upper() in _BANCOS:
+    if not banco and fim is not None and _sem_acento(toks[fim]).upper() in _BANCOS:
         banco = _BANCOS[_sem_acento(toks.pop(fim)).upper()]
     numero, saida, i = "", [], 0
     while i < len(toks):
@@ -129,6 +136,10 @@ def _pecas(rotulo: str):
     return " ".join(saida), banco, numero
 
 
+def _tem_banco(texto: str, banco: str) -> bool:
+    return banco.casefold() in [p.strip("-.").casefold() for p in texto.split()]
+
+
 def _caber(nome: str) -> str:
     nome = " ".join(nome.split())
     return nome if len(nome) <= NOME_MAXIMO else nome[:NOME_MAXIMO].rstrip()
@@ -148,13 +159,21 @@ def sugerir_nomes(rotulos, ocupados=()) -> dict[str, str]:
     usados = {_chave(o) for o in ocupados or () if o}
     candidatos = {}
     for r, (nome, banco, numero) in pecas.items():
-        base = nome or _caber(str(r).strip()) or "Conta"
-        com_banco = f"{base} - {banco}" if banco and not tirar_banco else base
+        if nome:
+            base = nome
+        elif numero:
+            # Só banco e número: "<Banco> <número curto>", nunca o banco duas
+            # vezes ("SICOOB 40001-1 - Sicoob").
+            base = f"{banco} {numero}" if banco else numero
+        else:
+            base = _caber(str(r).strip()) or "Conta"
+        sufixo = bool(banco) and not _tem_banco(base, banco)
+        com_banco = f"{base} - {banco}" if sufixo and not tirar_banco else base
         lista = [com_banco]
         if numero and numero not in base:
             lista.append(f"{com_banco.removesuffix(f' - {banco}')} {numero}"
-                         + (f" - {banco}" if banco and not tirar_banco else ""))
-        if banco and tirar_banco:
+                         + (f" - {banco}" if sufixo and not tirar_banco else ""))
+        if sufixo and tirar_banco:
             lista.append(f"{lista[-1]} - {banco}")
         candidatos[r] = [_caber(c) for c in lista]
     contagem: dict[str, int] = {}
