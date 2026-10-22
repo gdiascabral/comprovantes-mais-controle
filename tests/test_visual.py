@@ -1070,3 +1070,23 @@ def test_a_varredura_de_cor_realmente_acha_cor():
     assert len(achados) > 50, (
         f"a varredura achou só {len(achados)} cores no widgets.py, que tem a "
         "paleta dos dois temas inteira: ela parou de enxergar cor")
+
+
+def test_o_subtitulo_longo_nao_corta_os_botoes_do_cabecalho(raiz):
+    """Galeria 1280x800 (22/10/2026): "Baixar comprova" cortado. Numa aba
+    estreita, o botão do cabeçalho tem a largura que pediu e o subtítulo
+    quebra."""
+    aba = ttk.Frame(raiz, width=640, height=300)
+    aba.pack_propagate(False)
+    aba.pack()
+    try:
+        cab = widgets.Cabecalho(aba, "Baixar Comprovantes", "palavra " * 60)
+        cab.pack(fill="x")
+        b = widgets.Botao(cab.acoes, "Baixar comprovantes", papel="acao")
+        b.pack(side="left")
+        raiz.update_idletasks()
+        raiz.update()
+        assert b.winfo_width() >= b.winfo_reqwidth()
+        assert int(str(cab.lbl_apoio.cget("wraplength"))) < widgets.px(820)
+    finally:
+        aba.destroy()

@@ -1374,6 +1374,18 @@ class Cartao(tk.Frame):
             pass
 
 
+#: O menor `wraplength` do subtítulo do cabeçalho: antes do layout o
+#: `<Configure>` chega com largura 1, e quebrar em 1 px faria uma letra por
+#: linha por um instante.
+APOIO_MINIMO = 200
+
+
+def largura_do_apoio(largura: int, teto: int) -> int:
+    """O `wraplength` do subtítulo: a largura que sobrou ao lado dos botões,
+    nunca acima do `teto` (linha legível) nem abaixo de `APOIO_MINIMO`."""
+    return max(APOIO_MINIMO, min(int(largura), int(teto)))
+
+
 class Cabecalho(ttk.Frame):
     """O cabeçalho da PÁGINA: onde estou, o que é isto, e o que dá para fazer.
 
@@ -1417,6 +1429,14 @@ class Cabecalho(ttk.Frame):
         #: O filete que fecha o cabeçalho, de ponta a ponta (título e botões).
         self.filete = ttk.Frame(self, style="Filete.TFrame", height=1)
         self.filete.pack(side="top", fill="x", pady=px((14, 0)))
+        #: Os botões da tela. `anchor="e"` para eles ficarem alinhados pelo
+        #: alto do título, e não centralizados contra a linha de apoio.
+        #: Empacotados ANTES do texto (galeria 1280x800, 22/10/2026): o `pack`
+        #: reparte o espaço na ordem, e o subtítulo longo, empacotado primeiro,
+        #: levava a largura toda e cortava o botão ("Baixar comprova"). Assim
+        #: as ações levam o que pedem e o texto fica com o resto.
+        self.acoes = ttk.Frame(topo, style="Fundo.TFrame")
+        self.acoes.pack(side="right", anchor="ne", padx=px((14, 0)))
         esquerda = ttk.Frame(topo, style="Fundo.TFrame")
         esquerda.pack(side="left", fill="x", expand=True)
         if trilha:
@@ -1426,14 +1446,21 @@ class Cabecalho(ttk.Frame):
                   ).pack(anchor="w")
         self.lbl_apoio = None
         if apoio:
+            teto = px(820)
             self.lbl_apoio = ttk.Label(esquerda, text=apoio,
                                        style="FundoApoio.TLabel",
-                                       wraplength=px(820), justify="left")
+                                       wraplength=teto, justify="left")
             self.lbl_apoio.pack(anchor="w", pady=px((3, 0)))
-        #: Os botões da tela. `anchor="e"` para eles ficarem alinhados pelo
-        #: alto do título, e não centralizados contra a linha de apoio.
-        self.acoes = ttk.Frame(topo, style="Fundo.TFrame")
-        self.acoes.pack(side="right", anchor="ne", padx=px((14, 0)))
+            lbl = self.lbl_apoio
+
+            # O subtítulo quebra na largura que SOBROU ao lado dos botões
+            # (com o teto de antes, para a linha continuar legível na tela
+            # larga), em vez de pedir 820 px e empurrar os botões.
+            def _quebrar(e):
+                alvo = largura_do_apoio(e.width, teto)
+                if str(lbl.cget("wraplength")) != str(alvo):
+                    lbl.configure(wraplength=alvo)
+            esquerda.bind("<Configure>", _quebrar, add="+")
         #: Espaço abaixo da linha de apoio, para quem quiser pendurar algo no
         #: cabeçalho. Nasce vazio e não ocupa lugar até alguém empacotá-lo.
         self.rodape = ttk.Frame(esquerda, style="Fundo.TFrame")
