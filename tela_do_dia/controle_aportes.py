@@ -7,8 +7,8 @@ Sem tela e sem rede — a aba (`controle_frame.py`) só mostra o que sai daqui.
 A conta, numa frase: `aportou` = o já aportado antes da abertura + os
 recebimentos de aporte do ERP desde a abertura; o NÍVEL é o maior
 `aportou ÷ parte`; `deveria` = nível × parte; `para igualar` = deveria −
-aportou. Com dois aportadores meio a meio, "A já pôs 50 mil a mais que B"
-vira "B deve R$ 50.000,00 para igualar" — a conta que o dono faz de cabeça.
+aportou. Com dois aportadores meio a meio, "A já pôs 40 mil a mais que B"
+vira "B deve R$ 40.000,00 para igualar" — a conta que o dono faz de cabeça.
 
 Quem é o aportador de um recebimento: o Cliente dele no ERP (`customerName`),
 pelo nome COMPLETO (`util.norm_espaco`: sem acento, caixa e espaço dobrado),
@@ -678,7 +678,7 @@ def texto_da_parte(parte) -> str:
 
 
 def texto_de_dinheiro(valor) -> str:
-    """O valor como se digita no formulário ("50.000,00"): `ler_abertura` o lê igual."""
+    """O valor como se digita no formulário ("40.000,00"): `ler_abertura` o lê igual."""
     return brl(valor).replace("R$", "").strip()
 
 

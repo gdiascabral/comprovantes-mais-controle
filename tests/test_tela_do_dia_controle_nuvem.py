@@ -78,7 +78,7 @@ def banco(monkeypatch):
 
 def _conta(**kw):
     base = dict(conta_erp="CONTA MAE - BANCO", abertura=ABRE, aportadores=(
-        ca.Aportador(ALFA, D(1), D("50000.00")), ca.Aportador(BETA, D(1), D("0.00"))))
+        ca.Aportador(ALFA, D(1), D("40000.00")), ca.Aportador(BETA, D(1), D("0.00"))))
     base.update(kw)
     return ca.ContaControlada(**base)
 
@@ -98,9 +98,9 @@ def test_grava_conta_nova_com_numero_em_texto_e_le_de_volta(banco):
     cn.gravar_conta("tok", _conta(), HOJE, anotar=lambda a, d: anotado.append(a))
     assert banco.t[cn.CONTAS][0]["abertura"] == "2026-10-21"
     assert {(l["nome_erp"], l["peso"], l["abertura"]) for l in banco.t[cn.APORTADORES]} == \
-        {(ALFA, "1", "50000.00"), (BETA, "1", "0.00")}
+        {(ALFA, "1", "40000.00"), (BETA, "1", "0.00")}
     contas, apont = cn.ler("tok")
-    assert contas[0].aportadores[0].abertura == D("50000.00") and apont == {}
+    assert contas[0].aportadores[0].abertura == D("40000.00") and apont == {}
     assert anotado and "Controle de aportes" in anotado[0]
 
 
@@ -109,7 +109,7 @@ def test_editar_muda_so_o_que_mudou_e_insere_antes_de_apagar(banco):
     salva = cn.ler("tok")[0][0]
     banco.ordem.clear()
     nova = ca.ContaControlada(salva.conta_erp, ABRE, id=salva.id, aportadores=(
-        ca.Aportador(ALFA, D(1), D("40000.00")), ca.Aportador("CICLANO GAMA", D(1))))
+        ca.Aportador(ALFA, D(1), D("30000.00")), ca.Aportador("CICLANO GAMA", D(1))))
     cn.gravar_conta("tok", nova, HOJE, [salva], anotar=lambda *a: None,
                     vistos=_ids(salva))
     assert banco.ordem == [f"alterar {cn.CONTAS}", f"inserir {cn.APORTADORES}",
@@ -284,10 +284,10 @@ def test_sem_rede_ou_login_vencido_sobe_como_esta(banco, monkeypatch):
 def test_le_numeros_que_vieram_como_float_no_json(banco):
     banco.t[cn.CONTAS].append(dict(id=1, conta_erp="C", abertura="2026-10-21", ativa=True))
     banco.t[cn.APORTADORES].append(dict(id=2, conta_id=1, nome_erp=ALFA, peso=1.0,
-                                        abertura=50000.0))
+                                        abertura=40000.0))
     banco.t[cn.APONTAMENTOS].append(dict(id=3, conta_id=1, recebimento_erp="r", aportador_id=2,
                                          valor=10.5, motivo="m"))
     contas, apont = cn.ler("tok")
     assert contas[0].aportadores[0].peso == D(1)
-    assert contas[0].aportadores[0].abertura == D("50000.00")
+    assert contas[0].aportadores[0].abertura == D("40000.00")
     assert apont[1][0].valor == D("10.50")

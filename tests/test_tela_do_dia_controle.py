@@ -19,7 +19,7 @@ HOJE = datetime.date(2026, 10, 23)
 ALFA, BETA = "FULANO ALFA DA SILVA", "FULANO BETA SOUZA"
 
 
-def _conta(alfa_abertura="50000.00", beta_abertura="0.00", pesos=("1", "1")):
+def _conta(alfa_abertura="40000.00", beta_abertura="0.00", pesos=("1", "1")):
     return ca.ContaControlada(
         conta_erp="CONTA MAE - BANCO", abertura=ABRE, id=1, aportadores=(
             ca.Aportador(ALFA, D(pesos[0]), D(alfa_abertura), id=10),
@@ -71,8 +71,8 @@ def test_problemas_da_conta():
 
 
 def test_aberturas_para_divida_meio_a_meio():
-    assert ca.aberturas_para_divida(_conta().aportadores, "Fulano Beta  Souza", D("50000")) \
-        == {ALFA: D("50000.00"), BETA: ZERO}
+    assert ca.aberturas_para_divida(_conta().aportadores, "Fulano Beta  Souza", D("40000")) \
+        == {ALFA: D("40000.00"), BETA: ZERO}
 
 
 def test_aberturas_para_divida_recusa_primeiro_nome_e_negativo():
@@ -85,17 +85,17 @@ def test_aberturas_para_divida_recusa_primeiro_nome_e_negativo():
 def test_so_a_abertura_quem_esta_em_dia_nao_deve_e_o_outro_deve_tudo():
     ap = ca.apurar(_conta(), [], [], HOJE)
     a, b = ap.linhas
-    assert (a.aportou, a.deveria, a.diferenca) == (D("50000.00"), D("50000.00"), ZERO)
-    assert (b.aportou, b.deveria, b.diferenca) == (ZERO, D("50000.00"), D("50000.00"))
-    assert ca.resumo(ap) == [f"CONTA MAE - BANCO: {BETA} deve R$ 50.000,00 para igualar."]
+    assert (a.aportou, a.deveria, a.diferenca) == (D("40000.00"), D("40000.00"), ZERO)
+    assert (b.aportou, b.deveria, b.diferenca) == (ZERO, D("40000.00"), D("40000.00"))
+    assert ca.resumo(ap) == [f"CONTA MAE - BANCO: {BETA} deve R$ 40.000,00 para igualar."]
     assert [str(l.parte) for l in ap.linhas] == ["50.00", "50.00"]
 
 
 def test_aporte_do_devedor_abate_e_o_que_passa_vira_divida_do_outro():
     ap = ca.apurar(_conta(), [_rec("r1", "20000.00", BETA)], [], HOJE)
-    assert ap.linhas[1].diferenca == D("30000.00") and ap.total == D("70000.00")
+    assert ap.linhas[1].diferenca == D("20000.00") and ap.total == D("60000.00")
     ap = ca.apurar(_conta(), [_rec("r1", "60000.00", BETA)], [], HOJE)
-    assert [l.diferenca for l in ap.linhas] == [D("10000.00"), ZERO]
+    assert [l.diferenca for l in ap.linhas] == [D("20000.00"), ZERO]
     assert ca.situacao_do_aportador(ap.linhas[1]) == "em dia"
 
 
@@ -168,8 +168,8 @@ def test_conta_com_problema_nao_mostra_numero():
     assert ap.erro and ap.linhas == [] and ca.situacao_da_conta(ap).startswith("erro")
 
 
-@pytest.mark.parametrize("pesos, valor", [(("1", "1"), "50000.00"), (("2", "1"), "100.00"),
-                                          (("1", "2"), "100.00"), (("60", "40"), "50000.00")])
+@pytest.mark.parametrize("pesos, valor", [(("1", "1"), "40000.00"), (("2", "1"), "100.00"),
+                                          (("1", "2"), "100.00"), (("60", "40"), "40000.00")])
 def test_aberturas_para_divida_reproduzem_a_divida_na_apuracao(pesos, valor):
     conta = _conta(alfa_abertura="0", pesos=pesos)
     conta = ca.com_aberturas(conta, ca.aberturas_para_divida(conta.aportadores, BETA, D(valor)))
@@ -331,7 +331,7 @@ def test_apontamento_de_valor_nao_positivo_vai_para_sem_dono(valor):
         ap = ca.apurar(_conta(), [_rec("r1", valor, "OUTRA PESSOA")], [p], HOJE)
         assert [s.recebimento.id for s in ap.sem_dono] == ["r1"]
         assert "valor não positivo" in ap.sem_dono[0].motivo and not ap.apontados
-        assert [l.aportou for l in ap.linhas] == [D("50000.00"), ZERO]
+        assert [l.aportou for l in ap.linhas] == [D("40000.00"), ZERO]
 
 
 # ---- formulário, sugestão da subconta e nomes conhecidos (tarefa 6) ----------
@@ -350,7 +350,7 @@ def test_ler_data():
 
 def test_ler_abertura():
     assert ca.ler_abertura("") == ZERO and ca.ler_abertura("0") == ZERO
-    assert ca.ler_abertura("50.000,00") == D("50000.00")
+    assert ca.ler_abertura("40.000,00") == D("40000.00")
     for ruim in ("1500.50", "-1,00"):
         with pytest.raises(ValueError):
             ca.ler_abertura(ruim)
@@ -358,9 +358,9 @@ def test_ler_abertura():
 
 def test_conta_do_formulario_pula_linha_vazia_e_partes_vazias_sao_iguais():
     c = ca.conta_do_formulario(" CONTA MAE - BANCO ", "21/10/2026",
-                               [(ALFA, "", "50.000,00"), ("", "", ""), (BETA, "", "")])
+                               [(ALFA, "", "40.000,00"), ("", "", ""), (BETA, "", "")])
     assert c == ca.ContaControlada("CONTA MAE - BANCO", ABRE, (
-        ca.Aportador(ALFA, D(1), D("50000.00")), ca.Aportador(BETA, D(1), ZERO)))
+        ca.Aportador(ALFA, D(1), D("40000.00")), ca.Aportador(BETA, D(1), ZERO)))
 
 
 def test_conta_do_formulario_recusa_parte_pela_metade_e_linha_sem_nome():
@@ -401,7 +401,7 @@ def test_nomes_conhecidos_sem_repetir_e_sem_vazio():
 def test_opcoes_de_apontamento_e_descricao():
     assert ca.opcoes_de_apontamento(_conta()) == [(ALFA, 10), (BETA, 11), (ca.NAO_E_APORTE, None)]
     texto = ca.descrever_conta(_conta())
-    assert "21/10/2026" in texto and ALFA in texto and "R$ 50.000,00" in texto and "50,00%" in texto
+    assert "21/10/2026" in texto and ALFA in texto and "R$ 40.000,00" in texto and "50,00%" in texto
 
 
 def test_nomes_parecidos_nao_se_juntam_nos_nomes_conhecidos():
@@ -465,10 +465,10 @@ def test_conta_com_erro_nao_mostra_numero_nenhum():
 def test_linha_do_aportador_mostra_quem_deve_e_quem_esta_em_dia():
     ap = ca.apurar(_conta(), [], [], HOJE)
     alfa, beta = (ca.valores_do_aportador(l) for l in ap.linhas)
-    assert alfa == ("50,00%", "R$ 50.000,00", "R$ 50.000,00", "—", "em dia")
-    assert beta == ("50,00%", "R$ 0,00", "R$ 50.000,00", "R$ 50.000,00",
-                    "deve R$ 50.000,00 para igualar")
-    assert ca.valores_da_conta(ap)[1] == "R$ 50.000,00"
+    assert alfa == ("50,00%", "R$ 40.000,00", "R$ 40.000,00", "—", "em dia")
+    assert beta == ("50,00%", "R$ 0,00", "R$ 40.000,00", "R$ 40.000,00",
+                    "deve R$ 40.000,00 para igualar")
+    assert ca.valores_da_conta(ap)[1] == "R$ 40.000,00"
 
 
 def test_vistos_sao_os_ids_que_o_formulario_carregou():
@@ -480,15 +480,15 @@ def test_vistos_sao_os_ids_que_o_formulario_carregou():
 
 
 def test_dinheiro_do_formulario_volta_igual():
-    for v in ("0.00", "0.01", "1500.50", "50000.00", "1234567.89"):
+    for v in ("0.00", "0.01", "1500.50", "40000.00", "1234567.89"):
         assert ca.ler_abertura(ca.texto_de_dinheiro(D(v))) == D(v)
 
 
 def test_rateio_da_subconta_leva_o_ja_aportado_pelo_nome_e_nunca_pela_posicao():
-    digitadas = [(BETA, "1", "300,00"), (ALFA, "1", "50.000,00"), ("", "", "")]
+    digitadas = [(BETA, "1", "300,00"), (ALFA, "1", "40.000,00"), ("", "", "")]
     vindos = (ca.Aportador(ALFA, D("2")), ca.Aportador(BETA, D("1")))
     linhas, descartados = ca.linhas_do_rateio(digitadas, vindos)
-    assert linhas == [(ALFA, "2", "50.000,00"), (BETA, "1", "300,00"), ("", "", "")]
+    assert linhas == [(ALFA, "2", "40.000,00"), (BETA, "1", "300,00"), ("", "", "")]
     assert descartados == []
 
 
@@ -504,8 +504,8 @@ def test_rateio_da_subconta_avisa_quem_some_com_ja_aportado_e_cresce_o_formulari
 
 def test_preencher_o_ja_aportado_casa_pelo_nome_completo():
     digitadas = [(ALFA, "1", ""), (BETA.lower() + "  ", "1", "5,00"), ("FULANO", "1", "7,00")]
-    saida = ca.aberturas_nas_linhas(digitadas, {ALFA: D("50000.00"), BETA: D("0.00")})
-    assert saida == [(ALFA, "1", "50.000,00"), (BETA.lower() + "  ", "1", "0,00"),
+    saida = ca.aberturas_nas_linhas(digitadas, {ALFA: D("40000.00"), BETA: D("0.00")})
+    assert saida == [(ALFA, "1", "40.000,00"), (BETA.lower() + "  ", "1", "0,00"),
                      ("FULANO", "1", "7,00")]                  # primeiro nome não casa
 
 

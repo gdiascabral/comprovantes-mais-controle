@@ -1,6 +1,6 @@
 # Plano de implementação: Entrega 3, aba "Controle de aportes"
 
-> **Para quem executa:** este plano segue o superpowers:writing-plans. Ele vai para `docs/superpowers/plans/2026-10-22-pagamentos-do-dia-entrega-3-controle-de-aportes.md` no worktree `C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-pagamentos-do-dia-2` (branch `codigo/pagamentos-do-dia-2`). O código de cada tarefa sai na ordem; as tarefas 2 a 6 são puras e seguem TDD.
+> **Para quem executa:** este plano segue o superpowers:writing-plans. Ele vai para `docs/superpowers/plans/2026-10-22-pagamentos-do-dia-entrega-3-controle-de-aportes.md` no worktree `C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-controle-aportes` (branch `codigo/controle-de-aportes`). O código de cada tarefa sai na ordem; as tarefas 2 a 6 são puras e seguem TDD.
 
 **Goal:** uma aba nova, "Controle de aportes", que mostra por conta e por aportador:
 - quanto cada um aportou desde a data de abertura;
@@ -44,7 +44,7 @@ A leitura dos recebimentos de aporte do ERP é só-leitura e vai pelo Chrome do 
 ## Review Focus
 
 1. **Identificação do aportador.** O casamento é só pelo nome completo normalizado, e os dois "Fulano" nunca se misturam.
-2. **A conta.** `aportou` = abertura + ERP; o nível é o maior `aportou ÷ parte`; `deveria` = nível × parte; `para igualar` = deveria − aportou. Com dois sócios meio a meio e abertura 50.000 × 0, o resultado tem de ser "deve R$ 50.000,00".
+2. **A conta.** `aportou` = abertura + ERP; o nível é o maior `aportou ÷ parte`; `deveria` = nível × parte; `para igualar` = deveria − aportou. Com dois sócios meio a meio e abertura 40.000 × 0, o resultado tem de ser "deve R$ 40.000,00".
 3. **Filtros do ERP conferidos.** A mesma parcela em duas contas, em duas naturezas ou na contraprova PARA a leitura.
 4. **RLS.** A escrita é só do admin ativo, os grants vão por coluna, a conta não se apaga pelo app, e o aportador com apontamento não some.
 5. **Tkinter só na thread da interface.** A nuvem roda numa thread própria e os valores de `StringVar` são lidos antes dela.
@@ -100,7 +100,7 @@ Daí a regra: **natureza ∈ {Aporte de Capital, Aporte de Investidor}** (filtro
 
 A abertura fica guardada como "já aportado antes da abertura" por aportador. É um crédito ≥ 0, que compõe com qualquer proporção. O formulário tem o atalho "Quem deve quanto…" (`aberturas_para_divida`), que transforma "X deve R$ V" nesses créditos.
 
-Para a conta-mãe, meio a meio: o sócio em dia fica com 50.000,00 e o devedor com 0. Resultado: o devedor deve R$ 50.000,00 para igualar.
+Para a conta-mãe, meio a meio: o sócio em dia fica com 40.000,00 e o devedor com 0. Resultado: o devedor deve R$ 40.000,00 para igualar.
 
 ### Menu
 
@@ -437,7 +437,7 @@ commit;
 
   É a migration inteira seguida do bloco de dados abaixo. Para montar no Git Bash:
   ```bash
-  W="/c/AUTOMAÇÕES MAIS CONTROLE/_worktrees/app-pagamentos-do-dia-2"
+  W="/c/AUTOMAÇÕES MAIS CONTROLE/_worktrees/app-controle-aportes"
   R="/c/AUTOMAÇÕES MAIS CONTROLE/APLICAR NO SUPABASE - 2026-10-22 controle de aportes.sql"
   { echo "-- APLICAR NO SUPABASE - 2026-10-22 - controle de aportes"
     echo "-- PARTE 1: estrutura (copia byte a byte da migration 20261022130000)"
@@ -454,9 +454,9 @@ commit;
 --            nome_oficial da Pagou/Recebeu da aba Aportes:
 --              select nome_exibicao, nome_oficial from public.entidade
 --               where conta is null order by 1;
--- Abertura = 21/10/2026, meio a meio. "O devedor deve R$ 50.000,00 para
--- igualar" vira: socio EM DIA com 50.000,00 ja aportado antes da abertura e
--- o DEVEDOR com 0 (com 1:1, para igualar = 50.000 x 1/1 - 0 = 50.000).
+-- Abertura = 21/10/2026, meio a meio. "O devedor deve R$ 40.000,00 para
+-- igualar" vira: socio EM DIA com 40.000,00 ja aportado antes da abertura e
+-- o DEVEDOR com 0 (com 1:1, para igualar = 40.000 x 1/1 - 0 = 40.000).
 -- Os recebimentos de 21/10 ENTRAM na conta (startDate inclusivo).
 do $$
 declare
@@ -476,19 +476,19 @@ begin
   end if;
   insert into public.controle_aporte_conta (conta_erp, abertura, observacao)
   values (trim(v_conta), date '2026-10-21',
-          'Abertura: o devedor deve R$ 50.000,00 para igualar; meio a meio.')
+          'Abertura: o devedor deve R$ 40.000,00 para igualar; meio a meio.')
   on conflict (conta_erp) do nothing
   returning id into v_id;
   if v_id is null then
     raise exception 'A conta ja esta no controle -- confira antes de rodar de novo.';
   end if;
   insert into public.controle_aporte_aportador (conta_id, nome_erp, peso, abertura)
-  values (v_id, trim(v_em_dia), 1, 50000.00),
+  values (v_id, trim(v_em_dia), 1, 40000.00),
          (v_id, trim(v_deve),   1,     0.00);
 end
 $$;
 
--- Conferencia (tem de mostrar 1 conta e 2 aportadores, 50.000,00 e 0,00):
+-- Conferencia (tem de mostrar 1 conta e 2 aportadores, 40.000,00 e 0,00):
 select c.conta_erp, c.abertura, a.nome_erp, a.peso, a.abertura
   from public.controle_aporte_conta c
   join public.controle_aporte_aportador a on a.conta_id = c.id
@@ -517,7 +517,7 @@ select c.conta_erp, c.abertura, a.nome_erp, a.peso, a.abertura
 - `aportes.regras.como_dinheiro(valor) -> Decimal` (`aportes/regras.py:107`).
 - `problema_dos_pesos(investidores, pesos) -> str` (`:205`). Atenção: `peso_de` (`:196`) faz `Decimal(str(peso))`, então **peso `None` tem de ser barrado antes** (`str(None)` vira `"None"` e levanta `InvalidOperation`).
 - `util.norm_espaco(s) -> str` (`util.py:230`).
-- `tela_do_dia.valores.brl(valor) -> str` (`tela_do_dia/valores.py:40`, que dá "R$ 50.000,00").
+- `tela_do_dia.valores.brl(valor) -> str` (`tela_do_dia/valores.py:40`, que dá "R$ 40.000,00").
 
 - [ ] **Passo 1 (RED): os testes**
 
@@ -543,7 +543,7 @@ HOJE = datetime.date(2026, 10, 23)
 ALFA, BETA = "FULANO ALFA DA SILVA", "FULANO BETA SOUZA"
 
 
-def _conta(alfa_abertura="50000.00", beta_abertura="0.00", pesos=("1", "1")):
+def _conta(alfa_abertura="40000.00", beta_abertura="0.00", pesos=("1", "1")):
     return ca.ContaControlada(
         conta_erp="CONTA MAE - BANCO", abertura=ABRE, id=1, aportadores=(
             ca.Aportador(ALFA, D(pesos[0]), D(alfa_abertura), id=10),
@@ -595,8 +595,8 @@ def test_problemas_da_conta():
 
 
 def test_aberturas_para_divida_meio_a_meio():
-    assert ca.aberturas_para_divida(_conta().aportadores, "Fulano Beta  Souza", D("50000")) \
-        == {ALFA: D("50000.00"), BETA: ZERO}
+    assert ca.aberturas_para_divida(_conta().aportadores, "Fulano Beta  Souza", D("40000")) \
+        == {ALFA: D("40000.00"), BETA: ZERO}
 
 
 def test_aberturas_para_divida_recusa_primeiro_nome_e_negativo():
@@ -620,8 +620,8 @@ Sem tela e sem rede — a aba (`controle_frame.py`) só mostra o que sai daqui.
 A conta, numa frase: `aportou` = o já aportado antes da abertura + os
 recebimentos de aporte do ERP desde a abertura; o NÍVEL é o maior
 `aportou ÷ parte`; `deveria` = nível × parte; `para igualar` = deveria −
-aportou. Com dois aportadores meio a meio, "A já pôs 50 mil a mais que B"
-vira "B deve R$ 50.000,00 para igualar" — a conta que o dono faz de cabeça.
+aportou. Com dois aportadores meio a meio, "A já pôs 40 mil a mais que B"
+vira "B deve R$ 40.000,00 para igualar" — a conta que o dono faz de cabeça.
 
 Quem é o aportador de um recebimento: o Cliente dele no ERP (`customerName`),
 pelo nome COMPLETO (`util.norm_espaco`: sem acento, caixa e espaço dobrado),
@@ -797,17 +797,17 @@ def aberturas_para_divida(aportadores, devedor: str, valor) -> dict:
 def test_so_a_abertura_quem_esta_em_dia_nao_deve_e_o_outro_deve_tudo():
     ap = ca.apurar(_conta(), [], [], HOJE)
     a, b = ap.linhas
-    assert (a.aportou, a.deveria, a.diferenca) == (D("50000.00"), D("50000.00"), ZERO)
-    assert (b.aportou, b.deveria, b.diferenca) == (ZERO, D("50000.00"), D("50000.00"))
-    assert ca.resumo(ap) == [f"CONTA MAE - BANCO: {BETA} deve R$ 50.000,00 para igualar."]
+    assert (a.aportou, a.deveria, a.diferenca) == (D("40000.00"), D("40000.00"), ZERO)
+    assert (b.aportou, b.deveria, b.diferenca) == (ZERO, D("40000.00"), D("40000.00"))
+    assert ca.resumo(ap) == [f"CONTA MAE - BANCO: {BETA} deve R$ 40.000,00 para igualar."]
     assert [str(l.parte) for l in ap.linhas] == ["50.00", "50.00"]
 
 
 def test_aporte_do_devedor_abate_e_o_que_passa_vira_divida_do_outro():
     ap = ca.apurar(_conta(), [_rec("r1", "20000.00", BETA)], [], HOJE)
-    assert ap.linhas[1].diferenca == D("30000.00") and ap.total == D("70000.00")
+    assert ap.linhas[1].diferenca == D("20000.00") and ap.total == D("60000.00")
     ap = ca.apurar(_conta(), [_rec("r1", "60000.00", BETA)], [], HOJE)
-    assert [l.diferenca for l in ap.linhas] == [D("10000.00"), ZERO]
+    assert [l.diferenca for l in ap.linhas] == [D("20000.00"), ZERO]
     assert ca.situacao_do_aportador(ap.linhas[1]) == "em dia"
 
 
@@ -880,8 +880,8 @@ def test_conta_com_problema_nao_mostra_numero():
     assert ap.erro and ap.linhas == [] and ca.situacao_da_conta(ap).startswith("erro")
 
 
-@pytest.mark.parametrize("pesos, valor", [(("1", "1"), "50000.00"), (("2", "1"), "100.00"),
-                                          (("1", "2"), "100.00"), (("60", "40"), "50000.00")])
+@pytest.mark.parametrize("pesos, valor", [(("1", "1"), "40000.00"), (("2", "1"), "100.00"),
+                                          (("1", "2"), "100.00"), (("60", "40"), "40000.00")])
 def test_aberturas_para_divida_reproduzem_a_divida_na_apuracao(pesos, valor):
     conta = _conta(alfa_abertura="0", pesos=pesos)
     conta = ca.com_aberturas(conta, ca.aberturas_para_divida(conta.aportadores, BETA, D(valor)))
@@ -1555,7 +1555,7 @@ def banco(monkeypatch):
 
 def _conta(**kw):
     base = dict(conta_erp="CONTA MAE - BANCO", abertura=ABRE, aportadores=(
-        ca.Aportador(ALFA, D(1), D("50000.00")), ca.Aportador(BETA, D(1), D("0.00"))))
+        ca.Aportador(ALFA, D(1), D("40000.00")), ca.Aportador(BETA, D(1), D("0.00"))))
     base.update(kw)
     return ca.ContaControlada(**base)
 
@@ -1565,9 +1565,9 @@ def test_grava_conta_nova_com_numero_em_texto_e_le_de_volta(banco):
     cn.gravar_conta("tok", _conta(), HOJE, anotar=lambda a, d: anotado.append(a))
     assert banco.t[cn.CONTAS][0]["abertura"] == "2026-10-21"
     assert {(l["nome_erp"], l["peso"], l["abertura"]) for l in banco.t[cn.APORTADORES]} == \
-        {(ALFA, "1", "50000.00"), (BETA, "1", "0.00")}
+        {(ALFA, "1", "40000.00"), (BETA, "1", "0.00")}
     contas, apont = cn.ler("tok")
-    assert contas[0].aportadores[0].abertura == D("50000.00") and apont == {}
+    assert contas[0].aportadores[0].abertura == D("40000.00") and apont == {}
     assert anotado and "Controle de aportes" in anotado[0]
 
 
@@ -1576,7 +1576,7 @@ def test_editar_muda_so_o_que_mudou_e_insere_antes_de_apagar(banco):
     salva = cn.ler("tok")[0][0]
     banco.ordem.clear()
     nova = ca.ContaControlada(salva.conta_erp, ABRE, id=salva.id, aportadores=(
-        ca.Aportador(ALFA, D(1), D("40000.00")), ca.Aportador("CICLANO GAMA", D(1))))
+        ca.Aportador(ALFA, D(1), D("30000.00")), ca.Aportador("CICLANO GAMA", D(1))))
     cn.gravar_conta("tok", nova, HOJE, [salva], anotar=lambda *a: None)
     assert banco.ordem == [f"alterar {cn.CONTAS}", f"inserir {cn.APORTADORES}",
                            f"alterar {cn.APORTADORES}", f"apagar {cn.APORTADORES}"]
@@ -1847,7 +1847,7 @@ def test_ler_data():
 
 def test_ler_abertura():
     assert ca.ler_abertura("") == ZERO and ca.ler_abertura("0") == ZERO
-    assert ca.ler_abertura("50.000,00") == D("50000.00")
+    assert ca.ler_abertura("40.000,00") == D("40000.00")
     for ruim in ("1500.50", "-1,00"):
         with pytest.raises(ValueError):
             ca.ler_abertura(ruim)
@@ -1855,9 +1855,9 @@ def test_ler_abertura():
 
 def test_conta_do_formulario_pula_linha_vazia_e_partes_vazias_sao_iguais():
     c = ca.conta_do_formulario(" CONTA MAE - BANCO ", "21/10/2026",
-                               [(ALFA, "", "50.000,00"), ("", "", ""), (BETA, "", "")])
+                               [(ALFA, "", "40.000,00"), ("", "", ""), (BETA, "", "")])
     assert c == ca.ContaControlada("CONTA MAE - BANCO", ABRE, (
-        ca.Aportador(ALFA, D(1), D("50000.00")), ca.Aportador(BETA, D(1), ZERO)))
+        ca.Aportador(ALFA, D(1), D("40000.00")), ca.Aportador(BETA, D(1), ZERO)))
 
 
 def test_conta_do_formulario_recusa_parte_pela_metade_e_linha_sem_nome():
@@ -1898,7 +1898,7 @@ def test_nomes_conhecidos_sem_repetir_e_sem_vazio():
 def test_opcoes_de_apontamento_e_descricao():
     assert ca.opcoes_de_apontamento(_conta()) == [(ALFA, 10), (BETA, 11), (ca.NAO_E_APORTE, None)]
     texto = ca.descrever_conta(_conta())
-    assert "21/10/2026" in texto and ALFA in texto and "R$ 50.000,00" in texto and "50,00%" in texto
+    assert "21/10/2026" in texto and ALFA in texto and "R$ 40.000,00" in texto and "50,00%" in texto
 ```
 
 - [ ] **Passo 2:** `python -m pytest tests/test_tela_do_dia_controle.py -q` → FAIL.
@@ -2740,7 +2740,7 @@ git grep -n -i -E "<<|nome real" -- tela_do_dia tests supabase
 - [ ] **Passo 7 (coordenador):**
   - Antes do PR, o revisor de SQL revisa os dois arquivos SQL e o revisor de dinheiro revisa as Tarefas 3 e 4.
   - O coordenador aplica o arquivo da raiz pelo CLI antes de liberar.
-  - Prova de aceite no app real (o dono logado): Atualizar mostra a conta-mãe com o devedor devendo R$ 50.000,00 menos o que ele aportou desde 21/10 pelo ERP.
+  - Prova de aceite no app real (o dono logado): Atualizar mostra a conta-mãe com o devedor devendo R$ 40.000,00 menos o que ele aportou desde 21/10 pelo ERP.
 
 ---
 
@@ -2748,7 +2748,7 @@ git grep -n -i -E "<<|nome real" -- tela_do_dia tests supabase
 
 1. **Não medido:** se `accountIds` e `natureIds` filtram em `receipt-installments`. Se o ERP os ignorar, a aba PARA com erro claro, porque a contraprova e as parcelas repetidas acusam. O conserto exige medir com o dono logado.
 2. **Só contam as naturezas "Aporte de Capital" e "Aporte de Investidor".** Aporte lançado pela equipe com outra natureza fica invisível, nem aparece em "sem dono". Distribuição de lucro e devolução não abatem nada (fora do escopo).
-3. **A abertura é inclusiva (21/10 entra).** Se os R$ 50.000,00 do dono já descontam aportes lançados em 21/10, eles contam em dobro. **Confirmar com o dono antes de aplicar o arquivo da raiz.**
+3. **A abertura é inclusiva (21/10 entra).** Se os R$ 40.000,00 do dono já descontam aportes lançados em 21/10, eles contam em dobro. **Confirmar com o dono antes de aplicar o arquivo da raiz.**
 4. **Só quem é admin escreve** (`privado.e_admin()` junto da porteira `e_ativo`). Se o dono não for admin ativo, não edita; o arquivo da raiz para se não houver admin ativo.
 5. **A proporção é própria do controle.** A da subconta é só sugestão e aviso de divergência; a aba Regras do MODELO não entra (vocabulário do painel, arquivo local).
 6. **O aportador é o Cliente exato no ERP.** Contato duplicado ou grafado diferente vai para "sem dono" (visível) e nunca é chutado.
@@ -2758,8 +2758,8 @@ git grep -n -i -E "<<|nome real" -- tela_do_dia tests supabase
 ---
 
 ### Critical Files for Implementation
-- C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-pagamentos-do-dia-2\tela_do_dia\controle_aportes.py (novo; regra de dinheiro e identificação)
-- C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-pagamentos-do-dia-2\tela_do_dia\controle_erp.py (novo; espelha `anexar/mc_api.py:677-735`)
-- C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-pagamentos-do-dia-2\supabase\migrations\20261022130000_controle_de_aportes.sql (novo; RLS)
-- C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-pagamentos-do-dia-2\comprovantes_app.py (existente; menu e fiação)
-- C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-pagamentos-do-dia-2\aportes\regras.py (referência só leitura: naturezas `:37-41`, pesos `:196-260`, `como_dinheiro` `:107`)
+- C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-controle-aportes\tela_do_dia\controle_aportes.py (novo; regra de dinheiro e identificação)
+- C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-controle-aportes\tela_do_dia\controle_erp.py (novo; espelha `anexar/mc_api.py:677-735`)
+- C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-controle-aportes\supabase\migrations\20261022130000_controle_de_aportes.sql (novo; RLS)
+- C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-controle-aportes\comprovantes_app.py (existente; menu e fiação)
+- C:\AUTOMAÇÕES MAIS CONTROLE\_worktrees\app-controle-aportes\aportes\regras.py (referência só leitura: naturezas `:37-41`, pesos `:196-260`, `como_dinheiro` `:107`)

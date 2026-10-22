@@ -190,3 +190,5 @@ real é duplicidade entre contas + contraprova. Proporção é PRÓPRIA (não a 
 Regras do MODELO, nem viva da `subconta_investidor`, que entra só como sugestão
 e aviso de divergência). Distribuição de lucro não abate. Dívida da abertura
 cortada no centavo a favor do devedor (o líder nunca passa a dever 0,01).
+**Conta desativada (`ativa = false`) some da aba e só se reativa pelo painel do
+Supabase — de propósito**: a aba não tem botão de desativar nem de reativar.
