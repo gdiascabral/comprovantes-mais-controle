@@ -451,3 +451,68 @@ def test_peso_invalido_do_cache_nao_derruba_a_tela(pesos):
 def test_formulario_recusa_parte_ambigua_ou_que_o_rateio_recusaria(partes):
     with pytest.raises(ValueError):
         ca.conta_do_formulario("C", "21/10/2026", [(ALFA, partes[0], ""), (BETA, partes[1], "")])
+
+
+# ---- o que a tela (Tarefa 7) mostra e manda: tudo decidido aqui, sem janela ----
+
+def test_conta_com_erro_nao_mostra_numero_nenhum():
+    ap = ca.Apuracao(conta=_conta(), erro="os recebimentos desta conta não foram lidos")
+    parte, aportou, deveria, dif, situacao = ca.valores_da_conta(ap)
+    assert (parte, aportou, deveria, dif) == ("", "—", "", "")
+    assert situacao.startswith("erro:") and "em dia" not in situacao
+
+
+def test_linha_do_aportador_mostra_quem_deve_e_quem_esta_em_dia():
+    ap = ca.apurar(_conta(), [], [], HOJE)
+    alfa, beta = (ca.valores_do_aportador(l) for l in ap.linhas)
+    assert alfa == ("50,00%", "R$ 50.000,00", "R$ 50.000,00", "—", "em dia")
+    assert beta == ("50,00%", "R$ 0,00", "R$ 50.000,00", "R$ 50.000,00",
+                    "deve R$ 50.000,00 para igualar")
+    assert ca.valores_da_conta(ap)[1] == "R$ 50.000,00"
+
+
+def test_vistos_sao_os_ids_que_o_formulario_carregou():
+    assert ca.vistos_do_formulario(None) is None                 # conta nova
+    assert ca.vistos_do_formulario(replace(_conta(), id=None)) is None
+    assert ca.vistos_do_formulario(_conta()) == [10, 11]
+    sem_ninguem = replace(_conta(), aportadores=())
+    assert ca.vistos_do_formulario(sem_ninguem) == []            # [] não é None
+
+
+def test_dinheiro_do_formulario_volta_igual():
+    for v in ("0.00", "0.01", "1500.50", "50000.00", "1234567.89"):
+        assert ca.ler_abertura(ca.texto_de_dinheiro(D(v))) == D(v)
+
+
+def test_rateio_da_subconta_leva_o_ja_aportado_pelo_nome_e_nunca_pela_posicao():
+    digitadas = [(BETA, "1", "300,00"), (ALFA, "1", "50.000,00"), ("", "", "")]
+    vindos = (ca.Aportador(ALFA, D("2")), ca.Aportador(BETA, D("1")))
+    linhas, descartados = ca.linhas_do_rateio(digitadas, vindos)
+    assert linhas == [(ALFA, "2", "50.000,00"), (BETA, "1", "300,00"), ("", "", "")]
+    assert descartados == []
+
+
+def test_rateio_da_subconta_avisa_quem_some_com_ja_aportado_e_cresce_o_formulario():
+    digitadas = [("FULANO GAMA", "1", "10,00"), (ALFA, "1", "")]
+    vindos = (ca.Aportador(ALFA, D("1")), ca.Aportador(BETA, D("1")),
+              ca.Aportador("FULANO DELTA", D("1")))
+    linhas, descartados = ca.linhas_do_rateio(digitadas, vindos)
+    assert [n for n, _p, _a in linhas] == [ALFA, BETA, "FULANO DELTA"]   # ninguém cortado
+    assert descartados == ["FULANO GAMA"]
+    assert ca.linhas_do_rateio([("FULANO GAMA", "1", "")], vindos)[1] == []  # sem valor: sem aviso
+
+
+def test_preencher_o_ja_aportado_casa_pelo_nome_completo():
+    digitadas = [(ALFA, "1", ""), (BETA.lower() + "  ", "1", "5,00"), ("FULANO", "1", "7,00")]
+    saida = ca.aberturas_nas_linhas(digitadas, {ALFA: D("50000.00"), BETA: D("0.00")})
+    assert saida == [(ALFA, "1", "50.000,00"), (BETA.lower() + "  ", "1", "0,00"),
+                     ("FULANO", "1", "7,00")]                  # primeiro nome não casa
+
+
+def test_apontamento_exige_aportador_da_lista_e_motivo():
+    opcoes = ca.opcoes_de_apontamento(_conta())
+    assert ca.escolha_do_apontamento(opcoes, BETA, "  depósito do sócio ") == (11, "depósito do sócio")
+    assert ca.escolha_do_apontamento(opcoes, ca.NAO_E_APORTE, "devolução") == (None, "devolução")
+    for rotulo, motivo in (("", "x"), ("FULANO", "x"), (BETA, "  ")):
+        with pytest.raises(ValueError):
+            ca.escolha_do_apontamento(opcoes, rotulo, motivo)

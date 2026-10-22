@@ -669,3 +669,81 @@ def descrever_conta(conta: ContaControlada) -> str:
     linhas += [f"• {a.nome_erp} — parte {str(p).replace('.', ',')}% — já aportado antes "
                f"da abertura: {brl(a.abertura)}" for a, p in zip(conta.aportadores, pcts)]
     return "\n".join(linhas)
+
+
+# ---- o que a tela mostra e manda (Tarefa 7): a aba só pendura isto em widgets ----
+
+def texto_da_parte(parte) -> str:
+    return f"{str(parte).replace('.', ',')}%"
+
+
+def texto_de_dinheiro(valor) -> str:
+    """O valor como se digita no formulário ("50.000,00"): `ler_abertura` o lê igual."""
+    return brl(valor).replace("R$", "").strip()
+
+
+def valores_da_conta(ap: Apuracao) -> tuple:
+    """A linha-mãe da tabela "Por conta". Conta com erro: NENHUM número."""
+    return ("", "—" if ap.erro else brl(ap.total), "", "", situacao_da_conta(ap))
+
+
+def valores_do_aportador(linha: LinhaAportador) -> tuple:
+    return (texto_da_parte(linha.parte), brl(linha.aportou), brl(linha.deveria),
+            brl(linha.diferenca) if linha.diferenca > 0 else "—",
+            situacao_do_aportador(linha))
+
+
+def vistos_do_formulario(conta):
+    """Os ids dos aportadores que o formulário CARREGOU (o `vistos` de
+    `controle_nuvem.gravar_conta`). Conta nova: None. Lista vazia continua
+    sendo lista: "carreguei e não havia ninguém" não é "não sei"."""
+    if conta is None or conta.id is None:
+        return None
+    return [a.id for a in conta.aportadores if a.id is not None]
+
+
+def linhas_do_rateio(digitadas, vindos) -> tuple:
+    """([(nome, parte, já aportado)], [nomes descartados com já aportado]).
+
+    "Trazer do rateio da subconta" troca os nomes e as partes pelos do rateio.
+    O já aportado acompanha o NOME, nunca a posição (a ordem do rateio não é
+    a do formulário); quem sai e tinha valor digitado é devolvido para a tela
+    avisar. O resultado tem pelo menos uma linha por aportador do rateio —
+    o formulário cresce em vez de cortar alguém."""
+    digitadas = list(digitadas)
+    ja = {}
+    for nome, _parte, valor in digitadas:
+        if util.norm_espaco(nome):
+            ja[util.norm_espaco(nome)] = (nome.strip(), str(valor or "").strip())
+    ficam = {util.norm_espaco(a.nome_erp) for a in vindos}
+    linhas = [(a.nome_erp, format(Decimal(a.peso).normalize(), "f"),
+               ja.get(util.norm_espaco(a.nome_erp), ("", ""))[1]) for a in vindos]
+    linhas += [("", "", "")] * (len(digitadas) - len(linhas))
+    descartados = [nome for k, (nome, valor) in ja.items() if k not in ficam and valor]
+    return linhas, descartados
+
+
+def aberturas_nas_linhas(digitadas, aberturas: dict) -> list:
+    """O "já aportado" de `aberturas_para_divida` posto nas linhas pelo nome
+    COMPLETO (`util.norm_espaco`); linha de outro nome fica como estava."""
+    por_chave = {util.norm_espaco(n): v for n, v in aberturas.items()}
+    saida = []
+    for nome, parte, valor in digitadas:
+        k = util.norm_espaco(nome)
+        if k and k in por_chave:
+            valor = texto_de_dinheiro(por_chave[k])
+        saida.append((nome, parte, valor))
+    return saida
+
+
+def escolha_do_apontamento(opcoes, rotulo: str, motivo: str) -> tuple:
+    """(aportador_id ou None, motivo) a partir do que o dono escolheu no
+    diálogo; `opcoes` é `opcoes_de_apontamento(conta)`. Fora da lista ou sem
+    motivo levanta `ValueError`."""
+    rotulos = dict(opcoes)
+    if rotulo not in rotulos:
+        raise ValueError("Escolha de quem é o recebimento, na lista.")
+    motivo = (motivo or "").strip()
+    if not motivo:
+        raise ValueError("Escreva o motivo.")
+    return rotulos[rotulo], motivo

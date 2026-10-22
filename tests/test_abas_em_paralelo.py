@@ -213,7 +213,8 @@ _CHAMADORES = ("anexar/conferencia.py", "aportes/aportes_frame.py",
                "comprovantes_app.py", "conciliacao/frame.py",
                "contratos/frame.py", "guias/painel.py",
                "pagamentos_dia/pagamentos_frame.py",
-               "relatorios/relatorio_frame.py", "tela_do_dia/frame.py")
+               "relatorios/relatorio_frame.py", "tela_do_dia/controle_frame.py",
+               "tela_do_dia/frame.py")
 
 
 def _chamadas(arquivo: str, metodo: str, chave: str) -> list[str]:
