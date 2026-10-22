@@ -35,6 +35,14 @@ from .valores import brl, ler_valor_editado
 
 ZERO = Decimal("0.00")
 CENTAVO = Decimal("0.01")
+#: O horário de Brasília (UTC-3, sem horário de verão desde 2019). Data do ERP
+#: que vem com fuso ("…T03:00:00Z") é convertida para ele ANTES de comparar
+#: com a abertura e com hoje — ver `data_do_erp`. Fixo, e não o fuso da
+#: máquina: o mesmo recebimento não pode cair em dias diferentes conforme o
+#: relógio de quem abre o app.
+BRASILIA = datetime.timezone(datetime.timedelta(hours=-3), "Brasilia")
+#: O rótulo da data de abertura no formulário: o dia da abertura CONTA.
+ROTULO_ABERTURA = "Abertura — primeiro dia contado (inclusive), DD/MM/AAAA"
 
 
 @dataclass(frozen=True)
@@ -65,6 +73,9 @@ class Recebimento:
     centro: str = ""
     cliente_id: str = ""          # o id do Cliente no ERP, quando o item traz
     cliente_cadastro: str = ""    # o nome do Cliente pelo cadastro de contatos (pelo id)
+    #: O valor ORIGINAL da parcela (`plannedValue`); None quando não veio ou
+    #: não se lê. Só serve ao alerta de recebimento parcial — nunca à soma.
+    valor_original: Decimal | None = None
 
 
 #: Chave que `controle_erp` acrescenta ao item cru quando o Cliente veio vazio
@@ -120,6 +131,30 @@ def _dinheiro_do_erp(valor) -> Decimal:
     return d.quantize(CENTAVO, rounding=ROUND_HALF_UP)
 
 
+def data_do_erp(texto) -> datetime.date:
+    """A data de recebimento do ERP. Só a data ("2026-10-22") ou data e hora
+    SEM fuso ("2026-10-22T00:00:00"): a data como veio. Com fuso ("…Z",
+    "…+00:00", "…-03:00"): convertida para o horário de Brasília (`BRASILIA`)
+    antes de virar data — "2026-10-22T02:00:00Z" é 23h do dia 21 aqui.
+    Ilegível levanta `ValueError`."""
+    t = str(texto or "").strip()
+    if len(t) == 10:
+        return datetime.date.fromisoformat(t)
+    if t[-1:] in ("Z", "z"):
+        t = t[:-1] + "+00:00"
+    momento = datetime.datetime.fromisoformat(t)
+    if momento.tzinfo is not None:
+        momento = momento.astimezone(BRASILIA)
+    return momento.date()
+
+
+def _valor_original(item) -> Decimal | None:
+    try:
+        return _dinheiro_do_erp(item.get("plannedValue"))
+    except ValueError:
+        return None
+
+
 def recebimento_do_erp(item: dict, natureza: str = "") -> Recebimento:
     """Um item de `receipt-installments`, com os campos que a aba Contratos já
     lê em produção (`contratos/regras.py:183-212`). Levanta `ValueError` sem
@@ -129,7 +164,7 @@ def recebimento_do_erp(item: dict, natureza: str = "") -> Recebimento:
     if not ident:
         raise ValueError("recebimento sem id")
     try:
-        data = datetime.date.fromisoformat(str(item.get("dateOfReceipt") or "")[:10])
+        data = data_do_erp(item.get("dateOfReceipt"))
     except ValueError:
         raise ValueError(f"recebimento {ident} sem data de recebimento") from None
     try:
@@ -143,7 +178,8 @@ def recebimento_do_erp(item: dict, natureza: str = "") -> Recebimento:
                        descricao=str(item.get("description") or "").strip(),
                        centro=str(item.get("workName") or "").strip(),
                        cliente_id=id_do_cliente(item),
-                       cliente_cadastro=cadastro.strip() if isinstance(cadastro, str) else "")
+                       cliente_cadastro=cadastro.strip() if isinstance(cadastro, str) else "",
+                       valor_original=_valor_original(item))
 
 
 def problemas_da_conta(conta: ContaControlada, hoje: datetime.date, outras=()) -> list[str]:
@@ -388,9 +424,38 @@ def identificar_aportador(conta: ContaControlada, recebimento: Recebimento) -> t
     return achados[0], ""
 
 
+def _quem_no_texto(conta: ContaControlada, r: Recebimento) -> str:
+    dono, _motivo = identificar_aportador(conta, r)
+    if dono is not None:
+        return f" ({dono.nome_erp})"
+    return f' (Cliente "{r.cliente}")' if (r.cliente or "").strip() else " (sem Cliente)"
+
+
+def _leitura_que_nao_se_soma(conta: ContaControlada, r: Recebimento, hoje) -> str:
+    """"" quando o recebimento pode entrar na conta; senão, o motivo pelo qual
+    a CONTA INTEIRA não se calcula. Fora do período pedido: o ERP não
+    respeitou o filtro de data — descartar em silêncio esconderia isso.
+    Zero ou negativo (estorno): somar reduziria o aportado no escuro, e
+    deixar "sem dono" o esconderia para sempre (não se aponta valor assim)."""
+    if r.data < conta.abertura or r.data > hoje:
+        return (f"o ERP devolveu recebimento fora do período pedido ({brl(r.valor)} em "
+                f"{r.data:%d/%m/%Y}{_quem_no_texto(conta, r)}; o período é "
+                f"{conta.abertura:%d/%m/%Y} a {hoje:%d/%m/%Y}) — leitura não confiável, "
+                "confira no ERP")
+    if r.valor < 0:
+        return (f"estorno/recebimento negativo de {brl(r.valor)} em {r.data:%d/%m}"
+                f"{_quem_no_texto(conta, r)} — a conta não pode ser calculada; confira no ERP")
+    if r.valor == 0:
+        return (f"recebimento zerado ({brl(r.valor)}) em {r.data:%d/%m}"
+                f"{_quem_no_texto(conta, r)} — a conta não pode ser calculada; confira no ERP")
+    return ""
+
+
 def apurar(conta: ContaControlada, recebimentos, apontamentos, hoje: datetime.date) -> Apuracao:
     """A conta de UMA conta. Conta com cadastro ruim ou leitura duvidosa sai
-    com `erro` e SEM linhas — nunca números pela metade."""
+    com `erro` e SEM linhas — nunca números pela metade. Leitura duvidosa:
+    parcela repetida, recebimento fora do período pedido ou de valor zero ou
+    negativo (`_leitura_que_nao_se_soma`)."""
     ap = Apuracao(conta=conta)
     problemas = problemas_da_conta(conta, hoje)
     if problemas:
@@ -401,25 +466,39 @@ def apurar(conta: ContaControlada, recebimentos, apontamentos, hoje: datetime.da
     por_id = {a.id: a for a in conta.aportadores if a.id is not None}
     do_erp = {a.nome_erp: ZERO for a in conta.aportadores}
     apontado = {p.recebimento_id: p for p in apontamentos}
+    ordenados = sorted(recebimentos, key=lambda x: (x.data, x.id))
     vistos: set = set()
-    for r in sorted(recebimentos, key=lambda x: (x.data, x.id)):
+    for r in ordenados:
         if r.id in vistos:
             ap.erro = (f"o recebimento {r.id} veio duas vezes do Mais Controle — leitura "
                        "não confiável, nenhum número desta conta foi mostrado")
-            ap.linhas, ap.sem_dono, ap.apontados, ap.alertas = [], [], [], []
             return ap
         vistos.add(r.id)
-        if r.data < conta.abertura or r.data > hoje:
-            continue                 # o ERP já devia ter filtrado; aqui não entra
+    falhas = [f for f in (_leitura_que_nao_se_soma(conta, r, hoje) for r in ordenados) if f]
+    if falhas:
+        ap.erro = " · ".join(falhas) + " — nenhum número desta conta foi mostrado"
+        return ap
+    for r in ordenados:
+        if r.valor_original is not None and r.valor_original != r.valor:
+            ap.alertas.append(f"recebimento parcial — confira: {brl(r.valor)} de "
+                              f"{brl(r.valor_original)} em {r.data:%d/%m/%Y}"
+                              f"{_quem_no_texto(conta, r)} (a conta soma o recebido)")
         p = apontado.get(r.id)
         if p is not None:
-            if r.valor <= 0:         # apontado não pode reduzir o aportado
-                ap.sem_dono.append(SemDono(r, "valor não positivo no Mais Controle — "
-                                              "recebimento assim não se aponta"))
-                continue
             if como_dinheiro(p.valor) != r.valor:
                 ap.sem_dono.append(SemDono(r, f"apontado com {brl(p.valor)}; agora é "
                                               f"{brl(r.valor)} no Mais Controle — aponte de novo"))
+                continue
+            # O Cliente do ERP manda sobre o apontamento quando identifica
+            # OUTRO aportador (ou um aportador, num "não é aporte"): o dono
+            # apontou olhando outro Cliente, e o banco não guarda qual era —
+            # compara-se com a identificação pelo nome feita agora.
+            pelo_cliente, _motivo = identificar_aportador(conta, r)
+            if pelo_cliente is not None and (p.aportador_id is None
+                                             or pelo_cliente.id != p.aportador_id):
+                ap.sem_dono.append(SemDono(r, f"o Cliente do ERP mudou depois do apontamento "
+                                              f"(agora é {pelo_cliente.nome_erp}) — confira "
+                                              "e aponte de novo"))
                 continue
             if p.aportador_id is None:
                 ap.apontados.append((r, p, ""))
@@ -431,9 +510,6 @@ def apurar(conta: ContaControlada, recebimentos, apontamentos, hoje: datetime.da
                 continue
             do_erp[dono.nome_erp] += r.valor
             ap.apontados.append((r, p, dono.nome_erp))
-            continue
-        if r.valor <= 0:
-            ap.sem_dono.append(SemDono(r, "valor zero ou negativo no Mais Controle"))
             continue
         dono, motivo = identificar_aportador(conta, r)
         if dono is None:
@@ -458,10 +534,27 @@ def situacao_da_conta(ap: Apuracao) -> str:
     partes = [f"desde {ap.conta.abertura:%d/%m/%Y}"]
     if ap.sem_dono:
         partes.append(f"{len(ap.sem_dono)} sem dono")
+    if ap.alertas:
+        partes.append(f"{len(ap.alertas)} alerta(s) — veja o Registro")
     return " · ".join(partes)
 
 
-def resumo(ap: Apuracao) -> list:
+def status_da_leitura(apuracoes) -> str:
+    """A frase da barra depois de uma leitura: "atualizado" só quando alguma
+    conta saiu com números."""
+    if not apuracoes:
+        return "Nenhuma conta no controle."
+    com_erro = sum(1 for ap in apuracoes if ap.erro)
+    if com_erro == len(apuracoes):
+        return "Li, mas nenhuma conta pôde ser calculada — veja os erros na tabela."
+    if com_erro:
+        return f"Controle de aportes atualizado — {com_erro} conta(s) com erro, veja a tabela."
+    return "Controle de aportes atualizado."
+
+
+def resumo(ap: Apuracao, pode_apontar: bool = True) -> list:
+    """`pode_apontar`: quem está vendo pode apontar (admin). Sem isso, o
+    texto não manda ninguém "apontar"."""
     nome = ap.conta.conta_erp
     if ap.erro:
         return [f"{nome}: {ap.erro}"]
@@ -471,7 +564,8 @@ def resumo(ap: Apuracao) -> list:
     if ap.sem_dono:
         soma = sum((s.recebimento.valor for s in ap.sem_dono), ZERO)
         saida.append(f"{nome}: {len(ap.sem_dono)} recebimento(s) sem dono ({brl(soma)}) "
-                     "fora da conta até você apontar.")
+                     + ("fora da conta até você apontar." if pode_apontar else
+                        "fora da conta — o administrador aponta de quem são."))
     return saida
 
 
@@ -694,12 +788,13 @@ def valores_do_aportador(linha: LinhaAportador) -> tuple:
 
 
 def vistos_do_formulario(conta):
-    """Os ids dos aportadores que o formulário CARREGOU (o `vistos` de
-    `controle_nuvem.gravar_conta`). Conta nova: None. Lista vazia continua
+    """Os aportadores que o formulário CARREGOU — id, nome, parte e já
+    aportado (o `vistos` de `controle_nuvem.gravar_conta`, que recusa se o
+    banco mudou algum deles depois). Conta nova: None. Lista vazia continua
     sendo lista: "carreguei e não havia ninguém" não é "não sei"."""
     if conta is None or conta.id is None:
         return None
-    return [a.id for a in conta.aportadores if a.id is not None]
+    return [a for a in conta.aportadores if a.id is not None]
 
 
 def linhas_do_rateio(digitadas, vindos) -> tuple:
@@ -762,3 +857,12 @@ def depois_de_gravar(lendo: bool) -> str:
     pode ter começado antes da gravação — no fim dela. Nunca fica com os
     números de antes da gravação como se fossem os de agora."""
     return "reler_no_fim" if lendo else "reler"
+
+
+def depois_da_nuvem(erro: bool, lendo: bool) -> tuple:
+    """(recado da tela, `depois_de_gravar(lendo)`) quando a thread da nuvem
+    termina. COM ERRO também apaga os números e relê: a gravação pode ter
+    parado no meio, e a nuvem já não é a que a tela mostrava."""
+    recado = ("Não gravou (ou gravou só uma parte) — veja o Registro; relendo a nuvem…"
+              if erro else "Gravado — atualizando…")
+    return recado, depois_de_gravar(lendo)

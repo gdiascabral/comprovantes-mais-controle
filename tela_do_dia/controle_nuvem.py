@@ -33,6 +33,13 @@ def _anotar_na_auditoria(acao: str, detalhe: str) -> None:
     auditoria.gravar_agora(acao, detalhe)
 
 
+class LeituraCortada(RuntimeError):
+    """Uma leitura voltou com o teto de linhas do PostgREST (`max_rows` do
+    `supabase/config.toml`): pode ter vindo cortada sem aviso, e um
+    aportador ou apontamento a menos mudaria a conta. Mesmo padrão do
+    `nuvem.registro.LoteTruncado`."""
+
+
 class NaoGravou(RuntimeError):
     """O banco respondeu sem erro, mas a linha não mudou (RLS barrou, ou a
     linha sumiu). Nunca vira "gravado" na auditoria."""
@@ -106,18 +113,47 @@ def apontamentos_das_linhas(linhas: list) -> dict:
 def ler(token: str) -> tuple:
     """([ContaControlada], {conta_id: [Apontamento]}) — como o BANCO tem agora."""
     from nuvem import rest
+    from nuvem.registro import LINHAS_MAXIMAS_POR_CONSULTA
     contas = rest.ler(CONTAS, token, colunas="id,conta_erp,abertura,ativa")
     aps = rest.ler(APORTADORES, token, colunas="id,conta_id,nome_erp,peso,abertura")
     atrs = rest.ler(APONTAMENTOS, token,
                     colunas="id,conta_id,recebimento_erp,aportador_id,valor,motivo")
+    for tabela, linhas in ((CONTAS, contas), (APORTADORES, aps), (APONTAMENTOS, atrs)):
+        if len(linhas) >= LINHAS_MAXIMAS_POR_CONSULTA:
+            raise LeituraCortada(
+                f"A nuvem devolveu {len(linhas)} linhas de {tabela}, o teto do banco "
+                f"({LINHAS_MAXIMAS_POR_CONSULTA}): a leitura pode ter vindo cortada. "
+                "Nenhum número foi mostrado — avise quem cuida do cadastro.")
     return contas_das_linhas(contas, aps), apontamentos_das_linhas(atrs)
+
+
+def _mudados_desde_que_abriu(antes: list, carregados: dict) -> list:
+    """Os nomes dos aportadores que o formulário carregou e que o banco agora
+    não tem, ou tem com outro nome, parte ou já aportado. Compara VALOR
+    (Decimal), não texto: "1.0" e "1" são a mesma parte."""
+    no_banco = {int(l["id"]): l for l in antes}
+    saida = []
+    for ident, a in carregados.items():
+        l = no_banco.get(ident)
+        if (l is None or str(l["nome_erp"]) != a.nome_erp
+                or _dec(l["peso"], "parte") != Decimal(a.peso)
+                or como_dinheiro(_dec(l["abertura"], "já aportado")) != como_dinheiro(a.abertura)):
+            saida.append(a.nome_erp)
+    return saida
 
 
 def gravar_conta(token: str, conta: ContaControlada, hoje: datetime.date, outras=(),
                  anotar=None, vistos=None) -> None:
-    """`vistos` = ids dos aportadores que o formulário CARREGOU desta conta
-    (obrigatório para conta já gravada). Se o banco tiver outro, um
-    administrador o incluiu depois: recusa sem gravar, para nunca apagá-lo."""
+    """`vistos` = os aportadores (`Aportador`, com id) que o formulário
+    CARREGOU desta conta — `controle_aportes.vistos_do_formulario`;
+    obrigatório para conta já gravada. Recusa sem gravar nada quando o banco
+    mudou depois que o formulário abriu (outro administrador): aportador a
+    mais (nunca é apagado), a menos, ou com nome, parte ou já aportado
+    diferente do carregado.
+
+    Depois da primeira escrita, QUALQUER falha (rede e login vencido
+    inclusive) sobe como `RuntimeError` "a gravação parou no meio", com a
+    original em `__cause__`: a nuvem pode ter ficado pela metade."""
     from nuvem import rest
     erros = problemas_da_conta(conta, hoje, outras)
     if erros:
@@ -130,12 +166,18 @@ def gravar_conta(token: str, conta: ContaControlada, hoje: datetime.date, outras
         antes = rest.ler(APORTADORES, token, colunas="id,nome_erp,peso,abertura",
                          filtro=f"conta_id=eq.{int(conta.id)}")
         ficam = {util.norm_espaco(a.nome_erp) for a in conta.aportadores}
-        if vistos is None:
+        if vistos is None or not all(isinstance(v, Aportador) and v.id is not None
+                                     for v in vistos):
             raise ValueError("Faltou informar os aportadores que o formulário carregou.")
-        conhecidos = {int(v) for v in vistos}
+        conhecidos = {int(v.id): v for v in vistos}
         novos_no_banco = [l["nome_erp"] for l in antes if int(l["id"]) not in conhecidos]
         if novos_no_banco:
             raise ValueError(f"{', '.join(novos_no_banco)} foi incluído(s) por outro administrador "
+                             "depois que você abriu a conta. Nada foi gravado: atualize a aba e "
+                             "refaça a edição.")
+        mudados_no_banco = _mudados_desde_que_abriu(antes, conhecidos)
+        if mudados_no_banco:
+            raise ValueError(f"{', '.join(mudados_no_banco)} mudou na nuvem (outro administrador) "
                              "depois que você abriu a conta. Nada foi gravado: atualize a aba e "
                              "refaça a edição.")
         sair = [l for l in antes if util.norm_espaco(l["nome_erp"]) not in ficam]
@@ -178,8 +220,8 @@ def gravar_conta(token: str, conta: ContaControlada, hoje: datetime.date, outras
                               "id=in.(" + ",".join(str(int(l["id"])) for l in sair) + ")",
                               len(sair), "aportador(es) retirado(s)")
     except Exception as e:
-        if not escreveu or isinstance(e, (rest.SemRede, rest.PrecisaEntrar)):
-            raise      # nada gravado, ou erro que o chamador trata como está
+        if not escreveu:
+            raise      # nada gravado: o erro sobe como está
         raise RuntimeError(f"{e}\n\nA gravação parou no meio. Atualize a aba para ver o que "
                            "ficou na nuvem e grave de novo o que você quer.") from e
     anotar("Controle de aportes: conta gravada",

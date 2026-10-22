@@ -84,7 +84,8 @@ def _conta(**kw):
 
 
 def _ids(conta):
-    return [a.id for a in conta.aportadores]
+    """O `vistos` que a tela manda: os aportadores que o formulário carregou."""
+    return ca.vistos_do_formulario(conta)
 
 
 def _salva():
@@ -291,3 +292,74 @@ def test_le_numeros_que_vieram_como_float_no_json(banco):
     assert contas[0].aportadores[0].peso == D(1)
     assert contas[0].aportadores[0].abertura == D("40000.00")
     assert apont[1][0].valor == D("10.50")
+
+
+# ---- onda final de consertos (22/10) ------------------------------------------
+
+@pytest.mark.parametrize("erro", ["SemRede", "PrecisaEntrar"])
+def test_sem_rede_depois_da_primeira_escrita_diz_que_parou_no_meio(banco, monkeypatch, erro):
+    from nuvem import rest
+    salva = _gravada(banco)
+    nova = ca.ContaControlada(salva.conta_erp, ABRE, id=salva.id, aportadores=(
+        *salva.aportadores, ca.Aportador("CICLANO GAMA", D(1))))
+
+    def falha(*a, **k):
+        raise getattr(rest, erro)("caiu")
+    monkeypatch.setattr(rest, "inserir", falha)      # a conta já foi alterada
+    with pytest.raises(RuntimeError, match="parou no meio") as info:
+        cn.gravar_conta("tok", nova, HOJE, [salva], anotar=lambda *a: None,
+                        vistos=_ids(salva))
+    assert isinstance(info.value.__cause__, getattr(rest, erro))
+
+
+@pytest.mark.parametrize("tabela", [cn.CONTAS, cn.APORTADORES, cn.APONTAMENTOS])
+def test_ler_recusa_resposta_no_teto_de_linhas_do_banco(banco, tabela):
+    from nuvem.registro import LINHAS_MAXIMAS_POR_CONSULTA
+    modelo = {cn.CONTAS: dict(conta_erp="C", abertura="2026-10-21", ativa=True),
+              cn.APORTADORES: dict(conta_id=1, nome_erp=ALFA, peso="1", abertura="0"),
+              cn.APONTAMENTOS: dict(conta_id=1, recebimento_erp="r", aportador_id=None,
+                                    valor="1", motivo="m")}[tabela]
+    banco.t[tabela] = [dict(modelo, id=i) for i in range(LINHAS_MAXIMAS_POR_CONSULTA - 1)]
+    cn.ler("tok")                                     # 999: ainda inteiro
+    banco.t[tabela].append(dict(modelo, id=99999))
+    with pytest.raises(cn.LeituraCortada, match="1000"):
+        cn.ler("tok")
+
+
+@pytest.mark.parametrize("campo, valor", [("peso", "2"), ("abertura", "123.45"),
+                                          ("nome_erp", "FULANO ALFA DA SILVA JUNIOR")])
+def test_gravar_recusa_quando_outro_admin_mudou_o_aportador_carregado(banco, campo, valor):
+    salva = _gravada(banco)
+    vistos = _ids(salva)                               # o que o formulário carregou
+    linha = next(l for l in banco.t[cn.APORTADORES] if l["nome_erp"] == ALFA)
+    linha[campo] = valor                               # outro administrador gravou
+    banco.ordem.clear()
+    with pytest.raises(ValueError, match="mudou") as info:
+        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None, vistos=vistos)
+    assert "Nada foi gravado" in str(info.value)
+    assert banco.ordem == []
+
+
+def test_gravar_recusa_quando_outro_admin_tirou_um_aportador_carregado(banco):
+    salva = _gravada(banco)
+    vistos = _ids(salva)
+    banco.t[cn.APORTADORES] = [l for l in banco.t[cn.APORTADORES] if l["nome_erp"] != BETA]
+    banco.ordem.clear()
+    with pytest.raises(ValueError, match="Nada foi gravado"):
+        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None, vistos=vistos)
+    assert banco.ordem == []
+
+
+def test_gravar_com_o_mesmo_valor_escrito_de_outro_jeito_nao_recusa(banco):
+    salva = _gravada(banco)
+    vistos = _ids(salva)
+    for l in banco.t[cn.APORTADORES]:                  # o banco devolve 1.0 e 40000
+        l["peso"], l["abertura"] = "1.0", l["abertura"].rstrip("0").rstrip(".")
+    cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None, vistos=vistos)
+
+
+def test_gravar_recusa_vistos_so_com_ids(banco):
+    salva = _gravada(banco)
+    with pytest.raises(ValueError, match="carregou"):
+        cn.gravar_conta("tok", salva, HOJE, [salva], anotar=lambda *a: None,
+                        vistos=[a.id for a in salva.aportadores])

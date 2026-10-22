@@ -112,19 +112,18 @@ def test_dois_aportadores_de_mesmo_primeiro_nome_nao_se_misturam():
     assert [l.do_erp for l in ap.linhas] == [D("5.00"), D("10.00")]
 
 
-def test_sem_cliente_e_valor_zero_vao_para_sem_dono():
-    ap = ca.apurar(_conta(), [_rec("r1", "10.00", ""), _rec("r2", "0.00", ALFA)], [], HOJE)
+def test_sem_cliente_vai_para_sem_dono():
+    ap = ca.apurar(_conta(), [_rec("r1", "10.00", "")], [], HOJE)
     motivos = {s.recebimento.id: s.motivo for s in ap.sem_dono}
-    assert "sem Cliente" in motivos["r1"] and "zero" in motivos["r2"]
+    assert "sem Cliente" in motivos["r1"]
     assert ap.linhas[0].do_erp == ZERO
     assert any("sem dono" in linha for linha in ca.resumo(ap))
 
 
-def test_fora_do_periodo_nao_entra():
-    ap = ca.apurar(_conta(), [_rec("r1", "10.00", BETA, ABRE - datetime.timedelta(days=1)),
-                              _rec("r2", "10.00", BETA, HOJE + datetime.timedelta(days=1)),
-                              _rec("r3", "10.00", BETA, ABRE)], [], HOJE)
-    assert ap.linhas[1].do_erp == D("10.00")
+def test_abertura_e_hoje_entram_no_periodo():
+    ap = ca.apurar(_conta(), [_rec("r1", "10.00", BETA, ABRE), _rec("r2", "5.00", BETA, HOJE)],
+                   [], HOJE)
+    assert not ap.erro and ap.linhas[1].do_erp == D("15.00")
 
 
 def test_parcela_repetida_para_a_conta():
@@ -148,7 +147,7 @@ def test_apontamento_com_valor_mudado_volta_para_sem_dono():
 
 def test_nao_e_aporte_fica_fora_da_conta_mas_a_vista():
     p = ca.Apontamento("r1", None, D("100.00"), "devolução")
-    ap = ca.apurar(_conta(), [_rec("r1", "100.00", ALFA)], [p], HOJE)
+    ap = ca.apurar(_conta(), [_rec("r1", "100.00", "OUTRA PESSOA")], [p], HOJE)
     assert ap.linhas[0].do_erp == ZERO and ap.apontados[0][2] == "" and not ap.sem_dono
 
 
@@ -325,13 +324,11 @@ def test_aberturas_para_divida_com_tres_so_o_devedor_deve(pesos, valor):
 
 
 @pytest.mark.parametrize("valor", ["0.00", "-100.00"])
-def test_apontamento_de_valor_nao_positivo_vai_para_sem_dono(valor):
+def test_apontamento_de_valor_nao_positivo_derruba_a_conta(valor):
     for aportador_id in (11, None):
         p = ca.Apontamento("r1", aportador_id, D(valor), "x")
         ap = ca.apurar(_conta(), [_rec("r1", valor, "OUTRA PESSOA")], [p], HOJE)
-        assert [s.recebimento.id for s in ap.sem_dono] == ["r1"]
-        assert "valor não positivo" in ap.sem_dono[0].motivo and not ap.apontados
-        assert [l.aportou for l in ap.linhas] == [D("40000.00"), ZERO]
+        assert ap.erro and ap.linhas == [] and ap.sem_dono == [] and not ap.apontados
 
 
 # ---- formulário, sugestão da subconta e nomes conhecidos (tarefa 6) ----------
@@ -471,10 +468,14 @@ def test_linha_do_aportador_mostra_quem_deve_e_quem_esta_em_dia():
     assert ca.valores_da_conta(ap)[1] == "R$ 40.000,00"
 
 
-def test_vistos_sao_os_ids_que_o_formulario_carregou():
+def test_vistos_sao_os_aportadores_que_o_formulario_carregou():
     assert ca.vistos_do_formulario(None) is None                 # conta nova
     assert ca.vistos_do_formulario(replace(_conta(), id=None)) is None
-    assert ca.vistos_do_formulario(_conta()) == [10, 11]
+    # Com id, nome, parte e já aportado: `gravar_conta` confere os três.
+    assert ca.vistos_do_formulario(_conta()) == list(_conta().aportadores)
+    sem_id = replace(_conta(), aportadores=(_conta().aportadores[0],
+                                            replace(_conta().aportadores[1], id=None)))
+    assert ca.vistos_do_formulario(sem_id) == [_conta().aportadores[0]]
     sem_ninguem = replace(_conta(), aportadores=())
     assert ca.vistos_do_formulario(sem_ninguem) == []            # [] não é None
 
@@ -533,3 +534,129 @@ def test_botoes_do_dono_so_com_leitura_boa_e_parada(pode, lendo, leu_bem, estado
 def test_depois_de_gravar_rele_agora_ou_no_fim_da_leitura_em_curso():
     assert ca.depois_de_gravar(lendo=False) == "reler"
     assert ca.depois_de_gravar(lendo=True) == "reler_no_fim"
+
+
+# ---- onda final de consertos (revisão final + revisor de dinheiro, 22/10) ----
+
+def _so_erro(ap):
+    """Conta com erro: nenhum número, nada em sem dono nem em apontados."""
+    return bool(ap.erro) and ap.linhas == [] and ap.sem_dono == [] and ap.apontados == []
+
+
+def test_estorno_identificado_pelo_cliente_derruba_a_conta_com_erro_claro():
+    ap = ca.apurar(_conta(), [_rec("r1", "1000.00", BETA),
+                              _rec("r2", "-100.00", BETA, datetime.date(2026, 10, 22))], [], HOJE)
+    assert _so_erro(ap)
+    assert "estorno" in ap.erro and "100,00" in ap.erro and "22/10" in ap.erro
+    assert "confira no ERP" in ap.erro
+    assert ca.valores_da_conta(ap)[1] == "—"
+
+
+@pytest.mark.parametrize("cliente", ["", "OUTRA PESSOA", ALFA])
+@pytest.mark.parametrize("valor", ["0.00", "-0.01"])
+def test_recebimento_zero_ou_negativo_nunca_fica_sem_dono_nem_soma(cliente, valor):
+    ap = ca.apurar(_conta(), [_rec("r1", valor, cliente)], [], HOJE)
+    assert _so_erro(ap) and "confira no ERP" in ap.erro
+
+
+@pytest.mark.parametrize("data", [ABRE - datetime.timedelta(days=1),
+                                  HOJE + datetime.timedelta(days=1)])
+def test_recebimento_fora_do_periodo_pedido_derruba_a_conta(data):
+    ap = ca.apurar(_conta(), [_rec("r1", "10.00", BETA, ABRE), _rec("r2", "10.00", BETA, data)],
+                   [], HOJE)
+    assert _so_erro(ap) and "fora do período" in ap.erro and f"{data:%d/%m/%Y}" in ap.erro
+
+
+@pytest.mark.parametrize("texto, dia", [
+    ("2026-10-22", 22),
+    ("2026-10-22T00:00:00", 22),              # sem fuso: a data como veio
+    ("2026-10-22T23:59:59.123", 22),
+    ("2026-10-22T03:00:00Z", 22),             # 00:00 em Brasília
+    ("2026-10-22T02:59:59Z", 21),             # 23:59 do dia 21 em Brasília
+    ("2026-10-22T00:00:00+00:00", 21),
+    ("2026-10-21T23:30:00-03:00", 21),
+])
+def test_data_do_erp_com_hora_e_fuso_vira_a_data_de_brasilia(texto, dia):
+    assert ca.data_do_erp(texto) == datetime.date(2026, 10, dia)
+    item = {"id": "r", "dateOfReceipt": texto, "sumOfReceivedValues": 1}
+    assert ca.recebimento_do_erp(item).data == datetime.date(2026, 10, dia)
+
+
+@pytest.mark.parametrize("texto", ["", "ontem", "2026-13-01", None])
+def test_data_do_erp_ilegivel_levanta(texto):
+    with pytest.raises(ValueError):
+        ca.data_do_erp(texto)
+
+
+def test_apontado_para_um_mas_o_cliente_agora_e_outro_aportador_volta_para_sem_dono():
+    p = ca.Apontamento("r1", 11, D("100.00"), "pix de terceiro")      # apontado para BETA
+    ap = ca.apurar(_conta(), [_rec("r1", "100.00", ALFA)], [p], HOJE)  # Cliente agora é ALFA
+    assert [s.recebimento.id for s in ap.sem_dono] == ["r1"] and not ap.apontados
+    assert "o Cliente do ERP mudou depois do apontamento" in ap.sem_dono[0].motivo
+    assert [l.do_erp for l in ap.linhas] == [ZERO, ZERO]
+
+
+def test_nao_e_aporte_mas_o_cliente_agora_e_aportador_volta_para_sem_dono():
+    p = ca.Apontamento("r1", None, D("100.00"), "devolução")
+    ap = ca.apurar(_conta(), [_rec("r1", "100.00", BETA)], [p], HOJE)
+    assert "o Cliente do ERP mudou depois do apontamento" in ap.sem_dono[0].motivo
+    assert not ap.apontados and [l.do_erp for l in ap.linhas] == [ZERO, ZERO]
+
+
+@pytest.mark.parametrize("cliente", [BETA, "", "OUTRA PESSOA"])
+def test_apontamento_vale_quando_o_cliente_confirma_ou_nao_identifica(cliente):
+    p = ca.Apontamento("r1", 11, D("100.00"), "x")
+    ap = ca.apurar(_conta(), [_rec("r1", "100.00", cliente)], [p], HOJE)
+    assert not ap.sem_dono and ap.linhas[1].do_erp == D("100.00")
+
+
+def test_recebimento_do_erp_le_o_valor_original_da_parcela():
+    item = {"id": "r", "dateOfReceipt": "2026-10-22", "sumOfReceivedValues": 100,
+            "plannedValue": "250.5"}
+    assert ca.recebimento_do_erp(item).valor_original == D("250.50")
+    sem = {"id": "r", "dateOfReceipt": "2026-10-22", "sumOfReceivedValues": 100}
+    assert ca.recebimento_do_erp(sem).valor_original is None
+    ruim = dict(sem, plannedValue="abc")
+    assert ca.recebimento_do_erp(ruim).valor_original is None   # só o alerta depende dele
+
+
+def test_recebimento_parcial_alerta_e_nao_muda_a_soma():
+    parcial = replace(_rec("r1", "100.00", BETA), valor_original=D("250.00"))
+    inteiro = replace(_rec("r2", "30.00", BETA), valor_original=D("30.00"))
+    ap = ca.apurar(_conta(), [parcial, inteiro], [], HOJE)
+    assert ap.linhas[1].do_erp == D("130.00")
+    assert [a for a in ap.alertas if "recebimento parcial — confira" in a] and \
+        any("R$ 100,00" in a and "R$ 250,00" in a for a in ap.alertas)
+    assert len(ap.alertas) == 1
+    assert "alerta" in ca.situacao_da_conta(ap)
+
+
+def test_resumo_so_fala_em_apontar_quando_apontar_e_possivel():
+    ap = ca.apurar(_conta(), [_rec("r1", "10.00", "")], [], HOJE)
+    assert any("até você apontar" in l for l in ca.resumo(ap, pode_apontar=True))
+    sem = ca.resumo(ap, pode_apontar=False)
+    assert not any("apontar" in l and "você" in l for l in sem)
+    assert any("sem dono" in l and "administrador" in l for l in sem)
+
+
+def test_status_da_leitura_nao_diz_atualizado_com_todas_as_contas_em_erro():
+    boa = ca.apurar(_conta(), [], [], HOJE)
+    ruim = ca.Apuracao(conta=_conta(), erro="x")
+    assert ca.status_da_leitura([boa]) == "Controle de aportes atualizado."
+    assert ca.status_da_leitura([]) == "Nenhuma conta no controle."
+    tudo_ruim = ca.status_da_leitura([ruim, ruim])
+    assert "atualizado" not in tudo_ruim and "nenhuma" in tudo_ruim.lower()
+    meio = ca.status_da_leitura([boa, ruim])
+    assert "1 conta" in meio and "erro" in meio
+
+
+def test_rotulo_da_abertura_diz_que_o_dia_conta():
+    assert ca.ROTULO_ABERTURA.startswith("Abertura — primeiro dia contado (inclusive)")
+
+
+@pytest.mark.parametrize("erro", [False, True])
+@pytest.mark.parametrize("lendo, acao", [(False, "reler"), (True, "reler_no_fim")])
+def test_depois_da_nuvem_limpa_e_rele_com_ou_sem_erro(erro, lendo, acao):
+    recado, quando = ca.depois_da_nuvem(erro, lendo)
+    assert quando == acao                 # com erro também: a nuvem pode ter mudado
+    assert recado and ("Não gravou" in recado) == erro
