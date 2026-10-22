@@ -653,3 +653,43 @@ def test_a_copia_nao_comeca_com_a_anexar_de_sempre_trabalhando(modulo, novo, mon
 @pytest.mark.parametrize("quem", [None, "outra"])
 def test_a_copia_comeca_com_a_anexar_livre(modulo, novo, monkeypatch, ligado, quem):
     assert _executar_com(modulo, novo, monkeypatch, ligado=ligado, quem=quem) == ["fase"]
+
+
+# ---- a atividade do Início: a cópia anota "anx2", não "anx"
+def test_cada_aba_anota_a_atividade_com_a_sua_chave(modulo, novo):
+    import ast
+    assert modulo.AnexarFrame.ATIVIDADE == "anx"
+    assert novo.AnexarNovoFrame.ATIVIDADE == "anx2"
+    arvore = ast.parse((RAIZ / "anexar" / "anexar_comprovantes.py").read_text(encoding="utf-8"))
+    primeiros = [ast.unparse(no.args[0]) for no in ast.walk(arvore)
+                 if isinstance(no, ast.Call) and isinstance(no.func, ast.Attribute)
+                 and no.func.attr == "registrar_atividade"]
+    assert primeiros == ["self.ATIVIDADE"]
+
+
+def test_o_inicio_da_nome_a_anx2_sem_virar_rotina_nem_mexer_no_anexar():
+    from inicio.inicio_frame import OUTRAS_ORIGENS, ROTINAS
+    assert OUTRAS_ORIGENS.get("anx2") == "Anexar (novo)"
+    assert "anx2" not in {c for c, _n, _r in ROTINAS}
+
+
+def test_o_inicio_le_eventos_da_anx2_sem_quebrar(monkeypatch):
+    import widgets
+    from inicio import inicio_frame
+    eventos = [
+        {"quando": "2026-10-22T10:00:00", "aba": "anx2", "evento": "Casar e anexar",
+         "resultado": "ok", "numeros": {"anexados": 7, "pagos": 9}},
+        {"quando": "2026-10-21T10:00:00", "aba": "anx", "evento": "Casar e anexar",
+         "resultado": "ok", "numeros": {"anexados": 3, "pagos": 4}},
+    ]
+    monkeypatch.setattr(widgets, "atividades", lambda n: list(eventos))
+    f = inicio_frame.InicioFrame.__new__(inicio_frame.InicioFrame)
+    pintado = {}
+    f._pintar_kpis = lambda numeros: pintado.update(kpis=numeros)
+    f._pintar_rotinas = lambda ultimos: pintado.update(rotinas=ultimos)
+    f._pintar_atividade = lambda evs: pintado.update(atividade=evs)
+    f.ao_abrir()
+    assert pintado["kpis"]["anx"]["anexados"] == 3          # o Anexar de sempre intacto
+    assert pintado["kpis"]["anx2"]["anexados"] == 7
+    assert pintado["rotinas"]["anx"]["aba"] == "anx"
+    assert len(pintado["atividade"]) == 2

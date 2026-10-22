@@ -55,8 +55,10 @@ ROTINAS = (
 #: "Pagamentos do dia" fica AQUI e não em ROTINAS enquanto convive com
 #: Remessa/Retorno e Saldo de pagamentos: lá viraria "não rodou hoje" num dia
 #: em que o trabalho foi feito pelas abas antigas.
+#: "Anexar (novo)" também: é cópia provisória da Anexar, e como rotina diária
+#: diria "não rodou hoje" no dia em que o trabalho foi feito pela de sempre.
 OUTRAS_ORIGENS = {"acesso": "Acesso", "usuarios": "Usuários",
-                  "dia": "Pagamentos do dia"}
+                  "dia": "Pagamentos do dia", "anx2": "Anexar (novo)"}
 
 #: Os três atalhos do canto. São as três telas que se abrem todo dia, na
 #: ordem em que o dia acontece — e não as três primeiras do menu.

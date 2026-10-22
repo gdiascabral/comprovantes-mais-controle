@@ -57,6 +57,7 @@ class AnexarNovoFrame(AnexarFrame):
     TITULO = "Anexar (novo)"
     TRILHA = "Comprovantes  ›  Anexar (novo)"
     DONO_DO_NAVEGADOR = False
+    ATIVIDADE = "anx2"
 
     def __init__(self, master, dono: AnexarFrame):
         self.anx = dono                  # antes do super: tudo abaixo pode perguntar

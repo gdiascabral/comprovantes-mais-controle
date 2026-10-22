@@ -260,6 +260,10 @@ class AnexarFrame(ttk.Frame):
     #: A cópia "Anexar (novo)" é False — usa o navegador desta, como as outras
     #: abas, e não cria executor nem pulso.
     DONO_DO_NAVEGADOR = True
+    #: A chave com que o "Casar e anexar" anota a atividade do Início. A
+    #: cópia anota com a dela ("anx2"): o "Anexados no mês" segue sendo o
+    #: desta aba.
+    ATIVIDADE = "anx"
 
     def __init__(self, master):
         super().__init__(master)
@@ -1700,7 +1704,7 @@ class AnexarFrame(ttk.Frame):
                     # O "Anexados no mês" do Início sai daqui: quem contou foi
                     # esta rotina, e recontar custaria outra sessão do ERP.
                     widgets.registrar_atividade(
-                        "anx", "Casar e anexar",
+                        self.ATIVIDADE, "Casar e anexar",
                         "atencao" if (duv or sp) else "ok",
                         f"{ok} de {tot} anexado(s)"
                         + (f" · {duv} em dúvida, {sp} sem par" if duv or sp
