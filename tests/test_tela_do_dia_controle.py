@@ -407,3 +407,47 @@ def test_opcoes_de_apontamento_e_descricao():
 def test_nomes_parecidos_nao_se_juntam_nos_nomes_conhecidos():
     # mesmo primeiro nome, pessoas diferentes: os dois ficam
     assert ca.nomes_conhecidos({}, {}, [_rec("a", "1", ALFA), _rec("b", "1", BETA)]) == [ALFA, BETA]
+
+
+# ---- conserto: peso do cache e parte do formulário ---------------------------
+
+_SUB = "SUBCONTA 11111-1 - SICOOB - INVESTIDOR"
+
+
+def _subs(pesos):
+    return {"11111-1": {"investidores": ["INV A LTDA", "INV B LTDA"], "pesos": pesos}}
+
+
+def test_rateio_sem_nenhuma_parte_sao_partes_iguais():
+    assert ca.do_rateio_da_subconta(_SUB, _subs({})) == (
+        ca.Aportador("INV A LTDA", D(1)), ca.Aportador("INV B LTDA", D(1)))
+
+
+def test_rateio_com_parte_so_de_um_nao_chuta_peso_um():
+    subs = _subs({"INV A LTDA": "2"})
+    assert ca.do_rateio_da_subconta(_SUB, subs) is None
+    conta = ca.ContaControlada(_SUB, ABRE, (ca.Aportador("INV A LTDA", D(1)),
+                                            ca.Aportador("INV B LTDA", D(1))))
+    assert ca.divergencia_do_rateio(conta, subs) == ""
+
+
+@pytest.mark.parametrize("pesos", [
+    {"INV A LTDA": "abc", "INV B LTDA": "1"},
+    {"INV A LTDA": "0", "INV B LTDA": "0"},
+    {"INV A LTDA": "-1", "INV B LTDA": "2"},
+    {"INV A LTDA": "NaN", "INV B LTDA": "1"},
+    {"INV A LTDA": "1,12345", "INV B LTDA": "1"},
+])
+def test_peso_invalido_do_cache_nao_derruba_a_tela(pesos):
+    subs = _subs(pesos)
+    assert ca.do_rateio_da_subconta(_SUB, subs) is None
+    conta = ca.ContaControlada(_SUB, ABRE, (ca.Aportador("INV A LTDA", D(1)),
+                                            ca.Aportador("INV B LTDA", D(1))))
+    assert ca.divergencia_do_rateio(conta, subs) == ""
+
+
+@pytest.mark.parametrize("partes", [("1.500", "1"), ("0", "0"), ("-1", "2"),
+                                    ("1,12345", "1"), ("NaN", "1")])
+def test_formulario_recusa_parte_ambigua_ou_que_o_rateio_recusaria(partes):
+    with pytest.raises(ValueError):
+        ca.conta_do_formulario("C", "21/10/2026", [(ALFA, partes[0], ""), (BETA, partes[1], "")])

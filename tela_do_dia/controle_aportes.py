@@ -21,6 +21,7 @@ O que não casa vai para `sem_dono`, para o dono apontar — nunca some.
 from __future__ import annotations
 
 import datetime
+import re
 from dataclasses import dataclass, field, replace
 from decimal import (ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP, Decimal, InvalidOperation,
                      localcontext)
@@ -539,6 +540,7 @@ def apurar_tudo(contas, erros: dict, crus: dict, apontamentos: dict, hoje) -> li
 
 # ---- formulário, sugestão da subconta e nomes conhecidos ---------------------
 
+_PARTE_COM_MILHAR = re.compile(r"\d{1,3}(\.\d{3})+")
 NAO_E_APORTE = "Não é aporte desta conta (fica fora da conta)"
 
 
@@ -577,6 +579,9 @@ def conta_do_formulario(conta_erp, abertura, linhas, *, id=None, ativa=True) -> 
             continue
         if not nome:
             raise ValueError("Há uma linha com parte ou valor e sem o nome do aportador.")
+        if _PARTE_COM_MILHAR.fullmatch(parte):
+            raise ValueError(f'A parte "{parte}" é ambígua: use vírgula para decimais '
+                             f'(ex.: 1,5) ou escreva só o número (ex.: 1500).')
         preenchidas.append((nome, rateio_subconta.ler_parte(parte), ler_abertura(ja)))
     if not preenchidas:
         raise ValueError("Falta pelo menos um aportador.")
@@ -586,6 +591,10 @@ def conta_do_formulario(conta_erp, abertura, linhas, *, id=None, ativa=True) -> 
     elif any(p is None for p in partes):
         raise ValueError("Preencha a parte de todos os aportadores, ou de nenhum "
                          "(partes iguais).")
+    problema = problema_dos_pesos([n for n, _p, _a in preenchidas],
+                                  {n: p for (n, _p0, _a), p in zip(preenchidas, partes)})
+    if problema:
+        raise ValueError(f"Partes dos aportadores: {problema}.")
     return ContaControlada(conta_erp=nome_conta, abertura=data, id=id, ativa=ativa,
                            aportadores=tuple(Aportador(nome_erp=n, peso=Decimal(p), abertura=a)
                                              for (n, _p, a), p in zip(preenchidas, partes)))
@@ -598,13 +607,17 @@ def do_rateio_da_subconta(conta_erp: str, subcontas: dict):
     cfg = (subcontas or {}).get(numero) if numero else None
     if not isinstance(cfg, dict) or not cfg.get("investidores"):
         return None
+    nomes = [str(n).strip() for n in cfg["investidores"]]
     pesos = cfg.get("pesos") or {}
-    saida = []
-    for nome in cfg["investidores"]:
-        p = peso_de(pesos, nome)
-        saida.append(Aportador(nome_erp=str(nome).strip(),
-                               peso=p if p is not None else Decimal(1)))
-    return tuple(saida)
+    try:   # o cache pode trazer "abc", NaN, zero: nada disso derruba a tela
+        if problema_dos_pesos(nomes, pesos):
+            return None            # parcial/ inválido: sem sugestão, nunca chute
+        valores = [peso_de(pesos, n) for n in nomes]
+    except (ArithmeticError, ValueError):
+        return None
+    if all(v is None for v in valores):
+        valores = [Decimal(1)] * len(nomes)       # nenhum tem parte: iguais
+    return tuple(Aportador(nome_erp=n, peso=v) for n, v in zip(nomes, valores))
 
 
 def _proporcao(aportadores) -> frozenset:
