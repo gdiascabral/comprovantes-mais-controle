@@ -142,6 +142,20 @@ class AnexarNovoFrame(AnexarFrame):
                     pass
 
     # ------------------------------------------- casar e anexar
+    def _preparar_somas(self, pendentes, pdfs, pasta: Path) -> None:
+        """As réguas da fase 2, nos PDFs que ela recarregou da pasta.
+
+        Os pendentes NÃO passam pelo `origem.preencher` de novo: são os mesmos
+        registros da fase 1, que já trazem a origem e o `doc_favorecido` lido
+        do cadastro de Contatos do ERP. Chamado sem `documentos`, o
+        `preencher` APAGAVA esse documento — e com ele a regra "recebedor ≠
+        favorecido", que segura PDFs pagos a Y no pagamento de X."""
+        try:
+            origem.preencher([], pdfs, pasta)
+        except Exception:                                   # noqa: BLE001
+            self._log("[aviso] não deu para saber a conta de origem dos "
+                      "comprovantes — as somas seguem sem essa regra.")
+
     def _t_auto(self, contas_sel: set, termos: list, pasta_pdfs: str, simular: bool):
         # Roda na thread do navegador (`self.submeter` → dono): as duas fases
         # aqui dentro, na mesma chamada — nada de `submeter` novo no meio.
@@ -163,7 +177,7 @@ class AnexarNovoFrame(AnexarFrame):
             pasta = Path(pasta_pdfs)
             somas = varios_comprovantes.fase_das_somas(
                 self.api, self.pagos, pasta, simular=simular,
-                preencher_origem=lambda pend, pdfs: origem.preencher(pend, pdfs, pasta),
+                preencher_origem=lambda pend, pdfs: self._preparar_somas(pend, pdfs, pasta),
                 log=self._log, cancelar=self._checar_pausa)
             # A conta vem ANTES do Excel: um relatório que não grava (aberto na
             # máquina) não pode apagar do "Concluído" o anexo que já foi feito.

@@ -461,3 +461,108 @@ def test_a_galeria_monta_a_copia_e_nao_perde_os_aportes():
     menu = (["ini", "bxc", "sep", "anx", "conf", "apt"]
             + [c for c, _i, _t in grupos["diario"]] + [c for c, _i, _t in grupos["mensal"]])
     assert chaves == menu
+
+
+# ------------------------------------------- conserto (rodada 1)
+A400 = "400,00 - OBRA MODELO OC 5555 - 22-10.pdf"
+A600 = "600,00 - OBRA MODELO OC 5555 - 22-10.pdf"
+DOC_X, DOC_Y = "11111111000111", "22222222000122"
+
+
+class _ApiFalsa:
+    def __init__(self):
+        self.anexos, self.enviados = {}, []
+
+    def verificar_anexos(self, ids, log=print, progresso=None, cancelar=None):
+        return {i: len(self.anexos.get(i, [])) for i in ids}
+
+    def _anexos_brutos(self, pid):
+        return list(self.anexos.get(pid, []))
+
+    def anexar_por_api(self, pid, caminho, *, log=None, dry_run=False, tag=None):
+        caminho = Path(caminho)
+        self.enviados.append(caminho.name)
+        self.anexos.setdefault(pid, []).append(
+            {"name": caminho.name, "sizeInBytes": caminho.stat().st_size})
+        return "anexado"
+
+
+def _pend_x():
+    """Pago a X (o cadastro do ERP, lido na fase 1, deu o CNPJ de X)."""
+    return {"paidId": "P1", "launchId": "L-P1", "valor": 100000, "valores": [100000],
+            "doc": "", "desc": "COMPRA OC 5555", "works": ["OBRA MODELO"], "data": "2210",
+            "conta": "CONTA EXEMPLO - SICOOB", "favorecido": "Fornecedor Modelo Ltda",
+            "dataFull": "22/10/2026", "categoria": "", "doc_favorecido": DOC_X}
+
+
+def _origem_como_a_de_verdade(pendentes, pdfs, pasta, *, documentos=None, **_k):
+    """O que o `origem.preencher` faz: recebedor nos PDFs e, sem `documentos`,
+    o `doc_favorecido` dos lançamentos vira None."""
+    for pd in pdfs:
+        pd.update(origem=None, recebedor="Outro Modelo Ltda", doc_recebedor=DOC_Y)
+    for pe in pendentes:
+        pe["doc_favorecido"] = (documentos or {}).get(pe.get("favorecido"))
+        pe["origem"] = None
+    return {}
+
+
+def _fase_com_a_copia(novo, f, tmp_path, pagos, api):
+    from anexar import matcher
+    for nome, n in ((A600, 10), (A400, 11)):
+        (tmp_path / nome).write_bytes(b"x" * n)
+    return novo.varios_comprovantes.fase_das_somas(
+        api, pagos, tmp_path, simular=False,
+        carregar_pdfs=lambda pasta, log: [matcher.parse_pdf(n) for n in (A400, A600)],
+        preencher_origem=lambda pend, pdfs: f._preparar_somas(pend, pdfs, tmp_path),
+        log=lambda _m: None)
+
+
+def test_a_fase_2_preserva_o_doc_favorecido_da_fase_1(novo, monkeypatch, tmp_path):
+    from anexar import matcher
+    monkeypatch.setattr(novo.origem, "preencher", _origem_como_a_de_verdade)
+    f = _nova(novo, _Dono())
+    pe = _pend_x()
+    matcher.casar([pe], [])                               # fase 1: SEM PAR
+    api = _ApiFalsa()
+    somas = _fase_com_a_copia(novo, f, tmp_path, [pe], api)
+    assert pe["doc_favorecido"] == DOC_X
+    # PDFs pagos a Y não entram no pagamento de X
+    assert somas.anexados == [] and api.enviados == [] and pe["status"] == "SEM PAR"
+
+
+def test_controle_mesmo_recebedor_casa(novo, monkeypatch, tmp_path):
+    """Controle positivo: recebedor = favorecido, a soma sobe."""
+    from anexar import matcher
+
+    def mesmo(pendentes, pdfs, pasta, **k):
+        _origem_como_a_de_verdade(pendentes, pdfs, pasta, **k)
+        for pd in pdfs:
+            pd["doc_recebedor"] = DOC_X
+
+    monkeypatch.setattr(novo.origem, "preencher", mesmo)
+    f = _nova(novo, _Dono())
+    pe = _pend_x()
+    matcher.casar([pe], [])
+    api = _ApiFalsa()
+    somas = _fase_com_a_copia(novo, f, tmp_path, [pe], api)
+    assert [p["paidId"] for p in somas.anexados] == ["P1"]
+    assert sorted(api.enviados) == sorted([A400, A600])
+
+
+def test_o_t_auto_passa_o_preparo_da_copia_as_somas(modulo, novo, monkeypatch, tmp_path):
+    f = _nova(novo, _Dono())
+    vistos = []
+    monkeypatch.setattr(novo.AnexarNovoFrame, "_preparar_somas",
+                        lambda self, pend, pdfs, pasta: vistos.append((pend, pdfs, pasta)))
+
+    def fase1(self, *a):
+        self.q.put(("fim", (0, 0, 0, 1, "")))
+
+    def somas(api, pagos, pasta, *, preencher_origem, **k):
+        preencher_origem(["pe"], ["pd"])
+        return _somas(novo)
+
+    monkeypatch.setattr(modulo.AnexarFrame, "_t_auto", fase1)
+    monkeypatch.setattr(novo.varios_comprovantes, "fase_das_somas", somas)
+    f._t_auto({"C"}, [], str(tmp_path), False)
+    assert vistos == [(["pe"], ["pd"], Path(str(tmp_path)))]
