@@ -174,8 +174,74 @@ def test_a_roda_rola_a_area(tela, teclar, focar):
     alvo = a["entradas"][0]
     antes = _focado(focar, tela, a["corpo"], alvo)
     _rodar(teclar, alvo)
+    # A rolagem é suave: anda em quadros de ~16 ms, não num salto.
+    assert _esperar(lambda: a["corpo"].canvas.canvasy(0) > antes, tela)
+
+
+@pytest.mark.parametrize("distancia", [60, -60, 75, 1, -1, 3, 125, 0])
+@pytest.mark.parametrize("n", [1, 5, 6])
+def test_quadros_somam_exatamente_a_distancia(distancia, n):
+    quadros = widgets.quadros_da_rolagem(distancia, n)
+    assert sum(quadros) == distancia
+    assert len(quadros) <= n
+    assert all(isinstance(q, int) and q != 0 for q in quadros)
+    assert all(q * (1 if distancia > 0 else -1) > 0 for q in quadros)
+
+
+def test_quadros_desaceleram():
+    quadros = widgets.quadros_da_rolagem(60, 6)
+    assert quadros == sorted(quadros, reverse=True)
+    assert quadros[0] > quadros[-1]
+
+
+def test_quadros_sem_distancia_ou_sem_quadros():
+    assert widgets.quadros_da_rolagem(0, 6) == []
+    assert widgets.quadros_da_rolagem(60, 0) == []
+
+
+def test_a_roda_anda_a_mesma_distancia_de_antes_mas_em_quadros(tela, teclar,
+                                                               focar):
+    a = _aba(tela, cartoes=6, campos=8)
+    corpo = a["corpo"]
     _assentar(tela)
-    assert a["corpo"].canvas.canvasy(0) > antes
+    antes = corpo.canvas.canvasy(0)
+    corpo.rolar(1)
+    primeiro = corpo.canvas.canvasy(0) - antes
+    esperado = 3 * widgets.px(widgets.AreaRolavel.PASSO)
+    assert 0 < primeiro < esperado, "o primeiro quadro não pode ser o salto"
+    assert _esperar(lambda: corpo.canvas.canvasy(0) - antes == esperado, tela)
+
+
+def test_dentes_seguidos_somam_sem_reiniciar(tela):
+    a = _aba(tela, cartoes=8, campos=8)
+    corpo = a["corpo"]
+    _assentar(tela)
+    antes = corpo.canvas.canvasy(0)
+    corpo.rolar(1)
+    corpo.rolar(1)
+    esperado = 2 * 3 * widgets.px(widgets.AreaRolavel.PASSO)
+    assert _esperar(lambda: corpo.canvas.canvasy(0) - antes == esperado, tela)
+
+
+def test_mostrar_cancela_a_animacao_pendente(tela):
+    a = _aba(tela, cartoes=8, campos=8)
+    corpo = a["corpo"]
+    _assentar(tela)
+    corpo.rolar(3)
+    corpo.mostrar(a["entradas"][0])
+    assert corpo._fila == [] and corpo._anim is None
+
+
+def test_rolagem_para_no_fim_sem_travar(tela):
+    a = _aba(tela, cartoes=4, campos=8)
+    corpo = a["corpo"]
+    _assentar(tela)
+    for _ in range(40):
+        corpo.rolar(1)
+    assert _esperar(lambda: not corpo._fila and corpo._anim is None, tela)
+    assert corpo.canvas.yview()[1] == pytest.approx(1.0, abs=0.01)
+    corpo.rolar(-1000)
+    assert _esperar(lambda: corpo.canvas.canvasy(0) == 0, tela)
 
 
 def test_a_roda_sobre_o_combobox_nao_troca_o_valor(tela, teclar, focar):
