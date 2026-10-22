@@ -253,6 +253,13 @@ class AnexarFrame(ttk.Frame):
 
     #: Marca de "qualquer aba" para `ocupado`/`dona_ocupada` sem argumento.
     _QUALQUER = object()
+    #: O cabeçalho da tela. A aba "Anexar (novo)" (`anexar_novo`) troca só isto.
+    TITULO = "Anexar Comprovantes"
+    TRILHA = "Comprovantes  ›  Anexar"
+    #: Esta aba é a DONA do navegador do ERP: cria o executor e pulsa o Chrome.
+    #: A cópia "Anexar (novo)" é False — usa o navegador desta, como as outras
+    #: abas, e não cria executor nem pulso.
+    DONO_DO_NAVEGADOR = True
 
     def __init__(self, master):
         super().__init__(master)
@@ -260,7 +267,8 @@ class AnexarFrame(ttk.Frame):
         self.worker = None
         # TODO o trabalho com o navegador roda nesta ÚNICA thread (exigência
         # do Playwright: os objetos só podem ser usados na thread que os criou).
-        self.exec = ThreadPoolExecutor(max_workers=1)
+        self.exec = (ThreadPoolExecutor(max_workers=1)
+                     if self.DONO_DO_NAVEGADOR else None)
         self._pausa = Event()   # ⏸ pausado enquanto setado
         self._parar = Event()   # ⏹ interrompe o processo em andamento
         # Events em que a thread do navegador está BLOQUEADA esperando gente
@@ -297,7 +305,8 @@ class AnexarFrame(ttk.Frame):
         except Exception:
             pass
         self.after(150, self._drain)
-        self.after(1200, self._pulsar_navegador)
+        if self.DONO_DO_NAVEGADOR:
+            self.after(1200, self._pulsar_navegador)
 
     # ---------------------------------------------------------------- layout
     def _build(self):
@@ -305,10 +314,10 @@ class AnexarFrame(ttk.Frame):
 
         # ---- cabeçalho
         self.cab = widgets.Cabecalho(
-            self, "Anexar Comprovantes",
+            self, self.TITULO,
             "Busca os pagos do período, descobre quem está sem comprovante "
             "e anexa o PDF certo em cada um.",
-            trilha="Comprovantes  ›  Anexar")
+            trilha=self.TRILHA)
         self.cab.pack(fill="x", padx=PADX, pady=(16, 12))
         # O meio da tela rola quando não cabe (ver `widgets.AreaRolavel`).
         corpo = widgets.AreaRolavel(self)
