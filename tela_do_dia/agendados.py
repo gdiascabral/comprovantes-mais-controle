@@ -172,7 +172,7 @@ def intervalo_de_releitura(pend, hoje) -> tuple[date, date] | None:
     if not datas:
         return None
     folga = timedelta(days=FOLGA_DIAS)
-    return min(datas) - folga, hoje + folga
+    return min(datas) - folga, max(hoje, max(datas)) + folga
 
 
 @dataclass

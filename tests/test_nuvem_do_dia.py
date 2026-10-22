@@ -104,3 +104,18 @@ def test_resposta_final_tira_dos_pendentes_e_reagendado_continua():
     reag = {"id": 9, "agendado_id": 1, "resposta": "reagendado", "nova_data": "2026-10-25"}
     (_a, _s, resp), = nd.ler(_Nuvem(respostas=[reag]), DIA, HOJE, api=_Api(ABERTO_NO_ERP)).pendentes
     assert resp.resposta == "reagendado"
+
+
+def test_valor_ilegivel_no_erp_nao_derruba_a_leitura():
+    for ruim in ("abc", float("nan")):
+        lido = nd.ler(_Nuvem(), DIA, HOJE,
+                      api=_Api([{"id": "L1", "paid": False, "remainingValue": ruim}]))
+        (_a, sit, _r), = lido.pendentes
+        assert sit.tag == "atencao" and not sit.pre_marca and lido.avisos
+
+
+def test_janela_de_releitura_cobre_vencimento_distante():
+    from tela_do_dia import agendados as ag
+    a = ag.Agendado.de_linha({**ABERTO, "foto": {"em_aberto": "100.00", "vencimento": "2027-03-01"}})
+    ini, fim = ag.intervalo_de_releitura([a], HOJE)
+    assert fim >= date(2027, 3, 1)

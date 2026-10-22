@@ -78,7 +78,11 @@ def ler(nuvem, dia, hoje, *, api=None, registro=None, log=print) -> LidoDaNuvem:
     linhas = []
     for a in pend:
         envio = _envio_deste_agendamento((envios.get(a.lancamento_id) or (None,))[0], a)
-        sit = ag.situacao(a, titulos.get(a.lancamento_id), envio,
-                          relido=relido or not a.lancamento_id)
+        try:
+            sit = ag.situacao(a, titulos.get(a.lancamento_id), envio,
+                              relido=relido or not a.lancamento_id)
+        except Exception as e:                               # noqa: BLE001
+            sit = ag.Situacao("atencao", "não consegui ler o título no ERP — responda")
+            avisos.append(f"título {a.lancamento_id or a.alvo} ilegível no ERP ({e}): sem pré-marca")
         linhas.append((a, sit, ultimas.get(a.id)))
     return LidoDaNuvem(conf, de_hoje, linhas, nomes, anterior, "", avisos)

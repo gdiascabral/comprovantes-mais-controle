@@ -16,3 +16,8 @@ Testes novos além do brief: envio ok de remessa anterior ao dia do agendado, en
 ## Concerns
 - Quando o título sumiu, o recado "o retorno do banco diz pago" não aparece mais se o envio for descartado por (b); só afeta o texto.
 - Itens do ERP casados por `item["id"]` == `lancamento_id` (como no brief).
+
+## Conserto (rodada 1)
+1. `ag.situacao` agora é chamada dentro de try em `nuvem_do_dia.ler`: erro (remainingValue "abc"/NaN) vira `Situacao("atencao", "não consegui ler o título no ERP — responda")` sem pré-marca, mais um aviso. Teste com "abc" e NaN.
+2. `intervalo_de_releitura` termina em `max(hoje, maior vencimento) + 31 dias`. Teste com vencimento distante.
+Testes: test_nuvem_do_dia + test_tela_do_dia_agendados -> 38 passed; ruff E9,F e vermin limpos.
