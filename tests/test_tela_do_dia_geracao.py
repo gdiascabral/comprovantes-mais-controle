@@ -402,3 +402,34 @@ def test_boleto_editado_que_diverge_fica_em_atencao_com_a_observacao(dia):
     cand = next(c for c in remessa_dia.preparar(ge.para_a_remessa(r).contas, participantes=CONTATOS)[CONTA]
                 if c.id == "L1")
     assert not cand.marcado                                   # nasce desmarcado na Remessa
+
+
+def _reg_boleto_que_divergia():
+    return {"id": "X", "tipo": "Boleto", "dados": _linha_bancaria(9900), "valor": 100.0,
+            "status": "ATENÇÃO — valor do boleto diverge", "valor_diverge": True, "obs": "",
+            "favorecido": "Fornecedor Modelo Ltda", "parcial": False}
+
+
+def _editar_x(centavos):
+    return cf.dobrar([cf.Evento.de_linha({"id": 1, "alvo": "X", "acao": cf.EDITAR, "motivo": "linha certa",
+                                          "campos": {"tipo": "Boleto",
+                                                     "dados": _linha_bancaria(centavos)}})])["X"]
+
+
+def test_linha_editada_que_bate_tira_o_valor_diverge_antigo():
+    """Decisão do coordenador (22/10/2026): a linha nova que BATE vale; o alarme era do boleto antigo."""
+    reg = ge.aplicar_decisao(_reg_boleto_que_divergia(), _editar_x(10000), liberavel=False)
+    assert reg["valor_diverge"] is False
+    assert reg["status"] == "EDITADO — forma de pagar"
+    assert hp.contas_do_html_geral(relatorio.Resultado({CONTA: [reg]}, []))[0]["entries"][0]["bloqueio"] == ""
+    cand, = remessa_dia.preparar({CONTA: [reg]})[CONTA]
+    assert cand.pode and not cand.marcado                 # sai, desmarcada como toda editada
+
+
+@pytest.mark.parametrize("centavos", [0, 10050])
+def test_linha_editada_sem_valor_ou_que_diverge_mantem_o_alarme_antigo(centavos):
+    reg = ge.aplicar_decisao(_reg_boleto_que_divergia(), _editar_x(centavos), liberavel=False)
+    assert reg["valor_diverge"] is True
+    assert reg["status"].startswith("ATENÇÃO — valor do boleto diverge")
+    cand, = remessa_dia.preparar({CONTA: [reg]})[CONTA]
+    assert cand.impedimento == remessa_dia.MOTIVO_VALOR_DIVERGE

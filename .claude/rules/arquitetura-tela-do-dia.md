@@ -294,7 +294,10 @@ Regras que viraram lei:
   desmarcada na Remessa) e a Obs "valor da linha R$ X ≠ pagamento R$ Y"; a
   tela mostra a mesma nota em âmbar. Linha que não fecha nos DVs continua
   recusada. A conferência é refeita na geração a partir da edição gravada
-  (nada novo na nuvem).
+  (nada novo na nuvem). **Linha nova que BATE derruba o "valor do boleto
+  diverge" do boleto antigo do ERP** (`valor_diverge` vira False e o status
+  vira só EDITADO; decisão do coordenador, 22/10/2026); sem valor ou
+  divergindo, o alarme antigo continua.
 - **À mão: só remover.** Não se edita nem se desmarca: remove-se (com motivo)
   e lança-se de novo. **À mão em conta PF é recusado** (a PF é paga pelo
   celular, fora do HTML). Com link do lançamento: não paga título já pago, de

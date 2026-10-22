@@ -40,6 +40,9 @@ ATENCOES_DE_FORMA = ("ATENÇÃO — sem anexo", "ATENÇÃO — sem dados de pgto
 _CEDE_A_LIBERACAO = (*ATENCOES_DE_FORMA, relatorio.STATUS_LIBERADO)
 #: O que a edição da forma de pagar resolve: só a falta do dado de pagar.
 _CEDE_A_EDICAO = ("ATENÇÃO — sem dados de pgto",)
+#: O status do `relatorio` para o boleto do ERP que contradiz o lançamento:
+#: cede só à linha digitável editada cujo valor embutido BATE.
+_ATENCAO_VALOR_DO_BOLETO = "ATENÇÃO — valor do boleto diverge"
 ORDEM_A_MAO = 1_000_000
 #: "pagar à mão" escrito num motivo não pode virar a ordem de pagar outra
 #: pessoa: o HTML (`_motivo_do_bloqueio`, texto normalizado) e a remessa
@@ -152,6 +155,12 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "",
             if conferido.nota:
                 notas.append(conferido.nota)
             valor_diverge = conferido.estado == cf.VALOR_DIVERGE
+            if conferido.estado == cf.VALOR_BATE:
+                # Decisão do coordenador (22/10/2026): o "valor do boleto
+                # diverge" era do boleto ANTIGO; a linha nova prova o valor.
+                # Sem valor ou divergindo, o alarme antigo continua.
+                reg["valor_diverge"] = False
+                cede = (*cede, _ATENCAO_VALOR_DO_BOLETO)
         era = "; ".join(f"{k}={v}" for k, v in d.antes.items())
         notas.append(f"editado na tela por {d.quem_nome or '?'} "
                      f"({_texto_do_dono(d.motivo_edicao)})"
