@@ -256,7 +256,9 @@ no arquivo de outro dia.
 
 O cartão "Movimentos à mão" tem três botões: aporte que entra na mãe,
 transferência entre contas e **distribuição de lucros** (conta do painel →
-sócio ou investidor do cadastro da aba Aportes, `decisoes.socios_do_cadastro`;
+sócio ou investidor do cadastro da aba Aportes, `decisoes.socios_do_cadastro`:
+só pessoas — sem conta no ERP ou aportador da aba Regras —, nunca nome com
+cara de empresa;
 `dia.distribuicoes`, chave `distribuicoes` do JSON do dia). A distribuição
 SAI da origem (`AporteDaConta.distribui`: soma no mínimo e tira do saldo
 final), vai para a seção «À MÃO» do Excel DEPOIS dos movimentos (B origem,

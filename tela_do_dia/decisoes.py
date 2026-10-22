@@ -8,7 +8,10 @@ liberação).
 """
 from __future__ import annotations
 
+import re
 from decimal import Decimal
+
+import util
 
 from .valores import brl, ler_valor_editado
 
@@ -97,15 +100,41 @@ def nova_distribuicao(origem: str, socio: str, valor_texto, rotulos, socios=None
     return origem, socio, valor
 
 
-def socios_do_cadastro(entidades, rotulos) -> list[str]:
-    """Quem pode receber uma distribuição, para a lista da janela: os nomes do
-    cadastro da aba Aportes (é por eles que o "Mandar" casa), sem a subconta
-    de investidor (ela só RECEBE aporte) e sem as contas do painel (para elas
-    é transferência)."""
+#: Palavras que fazem de um nome do cadastro uma EMPRESA (sem acento, maiúsculo).
+_DE_EMPRESA = re.compile(
+    r"\b(?:LTDA|S\s*/?\s*A|SPE|EIRELI|ME|EPP|HOLDING|PARTICIPACOES|EMPREENDIMENTOS|"
+    r"ENGENHARIA|INCORPORACOES|INCORPORADORA|CONSTRUTORA|CONSTRUCOES|COMERCIO|SERVICOS|"
+    r"CONDOMINIO|ASSOCIACAO|INSTITUTO|BANCO|EMPRESA|SUBCONTA)\b")
+
+
+def _cara_de_empresa(nome: str, dado: dict) -> bool:
+    texto = util.norm_espaco(f"{nome} {(dado or {}).get('nome_oficial') or ''}")
+    return bool(_DE_EMPRESA.search(texto))
+
+
+def socios_do_cadastro(entidades, rotulos, aportadores=()) -> list[str]:
+    """Quem pode receber uma distribuição, para a lista da janela: PESSOAS do
+    cadastro da aba Aportes (é por ele que o "Mandar" casa) — sem conta no ERP,
+    ou aportador da aba Regras (`aportadores`, casado pelo nome completo) —,
+    nunca nome com cara de empresa (LTDA, SPE, HOLDING, PARTICIPAÇÕES…: revisão
+    geral de 22/10/2026, a lista oferecia o cadastro inteiro e dava para
+    "distribuir lucro" para outra empresa), nem a subconta de investidor (ela
+    só RECEBE aporte), nem as contas do painel (para elas é transferência)."""
     from aportes.dados import INVESTIDOR_PREFIXO
     rotulos = set(rotulos or ())
-    return sorted(n for n in (entidades or {})
-                  if not str(n).startswith(INVESTIDOR_PREFIXO) and n not in rotulos)
+    entidades = entidades or {}
+    dos_aportadores = {util.norm_espaco(a) for a in aportadores or () if a}
+    saida = []
+    for n, dado in entidades.items():
+        if str(n).startswith(INVESTIDOR_PREFIXO) or n in rotulos:
+            continue
+        if _cara_de_empresa(n, dado):
+            continue
+        oficial = util.norm_espaco((dado or {}).get("nome_oficial") or "")
+        if ((dado or {}).get("conta") is None or util.norm_espaco(n) in dos_aportadores
+                or (oficial and oficial in dos_aportadores)):
+            saida.append(n)
+    return sorted(saida)
 
 
 def distribuicoes_validas(distribuicoes, rotulos) -> list:

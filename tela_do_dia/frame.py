@@ -1089,7 +1089,8 @@ class TelaDoDiaFrame(ttk.Frame):
         entidades = getattr(self.aba_aportes, "entidades", None) or {}
         # Quem recebe sai do cadastro da aba Aportes (o "Mandar" casa por ele);
         # sem cadastro carregado, digita-se, e o Mandar avisa se não achar.
-        socios = dc.socios_do_cadastro(entidades, rotulos)
+        socios = dc.socios_do_cadastro(entidades, rotulos,
+                                       aportadores=[r.aportador for r in self.regras or ()])
         jan, corpo = self._janela(titulo)
         ttk.Label(corpo, wraplength=px(440), justify="left",
                   text=("Lucro que sai de uma conta do painel hoje para um sócio ou "

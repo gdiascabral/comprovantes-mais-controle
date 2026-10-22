@@ -255,8 +255,27 @@ def test_distribuicoes_validas_sao_as_que_a_tela_soma():
 def test_socios_do_cadastro_tira_subconta_de_investidor_e_conta_do_painel():
     entidades = {"SOCIO FICTICIO A": {}, "INVESTIDOR SUBCONTA 44444-4": {}, "Mae - Banco": {},
                  "HOLDING FICTICIA": {}}
-    assert dc.socios_do_cadastro(entidades, ROTULOS) == ["HOLDING FICTICIA", "SOCIO FICTICIO A"]
+    assert dc.socios_do_cadastro(entidades, ROTULOS) == ["SOCIO FICTICIO A"]
     assert dc.socios_do_cadastro(None, ROTULOS) == []
+
+
+def test_socios_do_cadastro_so_pessoas_e_aportadores_nunca_empresas():
+    """Revisão geral de 22/10/2026, achado 7: a lista "Para" oferecia o
+    cadastro inteiro, e dava para "distribuir lucro" para outra empresa."""
+    entidades = {
+        "SOCIO FICTICIO A": {"nome_oficial": "SOCIO FICTICIO A", "conta": None},
+        "PESSOA COM CONTA": {"nome_oficial": "PESSOA COM CONTA", "conta": "PESSOA - BANCO"},
+        "EMPRESA BETA - BANCO": {"nome_oficial": "EMPRESA BETA LTDA", "conta": "EMPRESA BETA - BANCO"},
+        "EMPRESA GAMA": {"nome_oficial": "EMPRESA GAMA SPE LTDA", "conta": None},
+        "HOLDING FICTICIA": {"nome_oficial": "HOLDING FICTICIA SA", "conta": "HOLDING - BANCO"},
+        "ALFA PARTICIPACOES": {"nome_oficial": "ALFA PARTICIPAÇÕES", "conta": None},
+    }
+    # Sem conta no ERP e sem cara de empresa: pessoa.
+    assert dc.socios_do_cadastro(entidades, ROTULOS) == ["SOCIO FICTICIO A"]
+    # Aportador da aba Regras entra mesmo com conta — se não tiver cara de empresa.
+    assert dc.socios_do_cadastro(
+        entidades, ROTULOS, aportadores=["Pessoa com Conta", "Empresa Beta - Banco"]) == [
+        "PESSOA COM CONTA", "SOCIO FICTICIO A"]
 
 
 # ---------------------- revisão de dinheiro de 22/10/2026 (A4, A5) e geral
