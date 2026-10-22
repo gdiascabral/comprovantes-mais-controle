@@ -61,7 +61,7 @@ As proporções vêm de uma tabela própria na nuvem, `controle_aporte_aportador
 
 - **Aba Regras do MODELO.xlsx** (`conciliacao/aportadores.py:43`), NÃO:
   - é um arquivo local, de uma máquina só;
-  - usa o vocabulário do painel (o rótulo da conta e o rótulo do aportador), não o nome do Cliente no ERP, então casar seria chutar, que é o que a regra dos dois "Julio" proíbe;
+  - usa o vocabulário do painel (o rótulo da conta e o rótulo do aportador), não o nome do Cliente no ERP, então casar seria chutar, que é o que a regra dos dois aportadores de mesmo primeiro nome proíbe;
   - peso vazio quer dizer "sem regra fixa", o que não define dívida;
   - responde "quem manda hoje", não "quem deve desde a abertura".
 - **`subconta_investidor`** (`aportes/rateio_subconta.py:148`), NÃO como fonte viva:
