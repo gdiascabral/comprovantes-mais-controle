@@ -45,6 +45,7 @@ from . import lista_diretor as ldr
 from . import nuvem_do_dia, para_aportes, passo2, passo67
 from . import pagamentos as pg
 from . import saldos as sd
+from .sicoob_na_tela import LeitorSicoob
 from .valores import brl, de_float, ler_valor_editado
 
 px = widgets.px
@@ -157,7 +158,13 @@ class TelaDoDiaFrame(ttk.Frame):
         c1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self._ajuda(c1, "As que não batem sobem para o topo. Clique no valor do sistema ou "
                         "do banco para editar (Enter edita o do banco): o original fica ao "
-                        "lado, o motivo é opcional, e o ajuste vale só para o dia.")
+                        "lado, o motivo é opcional, e o ajuste vale só para o dia. Nas "
+                        "contas do Sicoob o banco vem lido (Reler Sicoob refaz); o "
+                        "digitado vale por cima do lido.")
+        # Entrega 4: a hora da leitura do Sicoob e o "Reler Sicoob" no alto do
+        # passo 1 (spec). Tudo do Sicoob mora em `sicoob_na_tela`.
+        self.sicoob = LeitorSicoob(c1, tela=self)
+        self.sicoob.barra.pack(fill="x", pady=px((6, 0)))
         self.t_saldos = self._tabela(c1, self.COLS_SALDOS, arvore=False, altura=8)
         self.t_saldos.bind("<ButtonRelease-1>", self._clique_saldo)
         self.t_saldos.bind("<Return>", self._enter_saldo)
@@ -382,6 +389,8 @@ class TelaDoDiaFrame(ttk.Frame):
         # Durante a leitura quem manda no Buscar é a mensagem "botoes" do `_t_ler`.
         if not (self.worker and not self.worker.done()):
             self.b1.configure(state=estado(b.buscar))
+        # O "Reler Sicoob" segue a regra do Excel (leitura na tela, sem gravação).
+        self.sicoob.ligar(b.dia)
 
     def _ligar_lista(self):
         """↑/↓ só dentro do mesmo lado (numerados × demais), pela seleção."""
@@ -498,6 +507,11 @@ class TelaDoDiaFrame(ttk.Frame):
         except tk.TclError:
             pass
 
+    def fechar(self):
+        """O `_sair` do app chama `fechar` de toda aba: a leitura do Sicoob
+        para entre uma conta e outra (a thread é daemon)."""
+        self.sicoob.fechar()
+
     def _parar_click(self):
         self._parar.set()
         self.lbl.configure(text="Parando...")
@@ -555,6 +569,7 @@ class TelaDoDiaFrame(ttk.Frame):
             self._ajustar_altura(t)
         for b in self._botoes_do_dia:
             b.configure(state="disabled")
+        self.sicoob.ligar(False)
 
     def _t_ler(self, periodo):
         comeco = time.time()
@@ -636,6 +651,7 @@ class TelaDoDiaFrame(ttk.Frame):
         motivo = dc.motivo_sem_geradores(self.leitura)
         if motivo:
             self._log(motivo)
+        self.sicoob.ler_se_faltar()
 
     def _mostrar_alertas(self, erro: str, atencao: str):
         """Erro em cima, atenção embaixo; o vazio não ocupa linha."""
@@ -683,6 +699,7 @@ class TelaDoDiaFrame(ttk.Frame):
     def _recalcular(self):
         """Só com leitura inteira: `_t_ler` nunca entrega a interrompida."""
         base = sd.montar_saldos(self.contas_erp, self.mapping)
+        base = self.sicoob.aplicar(base, self.contas_erp, self.mapping)
         self.saldos = sd.ordenar(sd.aplicar_ajustes(base, self.dia.ajustes))
         self.pagamentos, self.fora = pg.por_conta(self.leitura.grupos, self.mapping,
                                                   self.conferencia)

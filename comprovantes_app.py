@@ -320,7 +320,7 @@ def main():
     aba_ext = ExtratosSicoobFrame(conteudo)
     # O "Conferir agendamentos" da Remessa/Retorno abre o MESMO perfil do
     # Chrome do Sicoob: com os extratos rodando, os dois brigariam por ele.
-    aba_pag.sicoob_ocupado = aba_ext.ocupado
+    # (Quem mais pergunta é ligado depois de criar a aba Pagamentos do dia.)
     # Conciliação volta a dividir navegador e thread do Anexar: é o mesmo ERP,
     # e ele só aceita uma sessão por usuário.
     aba_con = ConciliacaoFrame(conteudo, aba_anx)
@@ -329,6 +329,14 @@ def main():
     aba_dia = TelaDoDiaFrame(conteudo, aba_anx)
     aba_dia.aba_aportes = aba_apt
     aba_dia.aba_remessa = aba_pag
+    # Pagamentos do dia lê o saldo do Sicoob no MESMO perfil do banco (uma
+    # sessão só): ela pergunta aos Extratos e ao "Conferir agendamentos", e
+    # este passa a perguntar às duas — só uma recusa a mais na Remessa, com o
+    # nome de quem está usando o Sicoob (`LeitorSicoob.OCUPADO`).
+    aba_dia.sicoob.outros_no_sicoob = lambda: aba_ext.ocupado() or (
+        "Remessa/Retorno — Conferir agendamentos"
+        if aba_pag._agendamentos is not None and aba_pag._agendamentos.is_alive() else None)
+    aba_pag.sicoob_ocupado = lambda: aba_ext.ocupado() or aba_dia.sicoob.ocupado()
     # Controle de aportes divide navegador e thread do Anexar: lê o MESMO ERP
     # (só GET). Só o admin edita abertura, proporção e apontamentos — a RLS
     # nega o resto; aqui só se apagam os botões.
@@ -647,6 +655,7 @@ def main():
                          aba_anx.ocupado()),
                 # ...o do Sicoob, que é processo e login à parte...
                 lambda: ("ext", aba_ext.ocupado()),
+                lambda: ("dia", aba_dia.sicoob.ocupado()),
                 # ...e o do portal do escritório, pelo mesmo motivo
                 lambda: ("acs", aba_acs.ocupado()),
                 # A Separar não tem navegador nenhum — o trabalho dela é OCR e
