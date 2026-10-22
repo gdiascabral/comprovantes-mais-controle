@@ -219,7 +219,8 @@ FECHADO. Conta sem saldo mostra "—" no mínimo e no saldo final, com situaçã
 `<RAIZ_SAIDA>/<ano>/<MÊS>/DD MM - dia de trabalho.json`, ao lado do Excel do
 dia. Guarda os ajustes de saldo, o valor por aportador, os movimentos à mão e o
 que já foi mandado para a aba Aportes (chave `destino|aportador` → VALOR
-mandado, em Decimal). Arquivo ausente = dia vazio; ilegível ou de outra data
+mandado, em Decimal; a subconta de investidor é `subconta:<número>|<destino>`
+com o total — ver abaixo). Arquivo ausente = dia vazio; ilegível ou de outra data
 LEVANTA, e aí a tela não grava nada (sobrescrever apagaria o que a pessoa fez)
 e **não manda nada para a aba Aportes** (sem o arquivo não se sabe o que já
 foi mandado hoje). **Os ajustes de saldo, a simulação e `enviados_aportes` continuam aqui, no JSON, de propósito** (entrega 2, 22/10/2026): o ajuste é rascunho que vale só para o dia, não decide o que é pago nem vai a banco ou ERP, muda várias vezes por dia (seria UPDATE numa base que é só de acrescentar), já guarda o original e o `quando`, e já falha fechado. O que decide o que SAI da conta (liberação, edição, à mão, agendado, lista do diretor) vai para a nuvem — ver "Conferência editável" e as seções seguintes.
@@ -250,6 +251,53 @@ Aportes — já lançou? confira no ERP antes de digitar de novo"
 A data das operações é a do dia de trabalho (`periodo.fim`), nunca a do
 relógio: tela aberta depois da meia-noite mandaria com outra data e anotaria
 no arquivo de outro dia.
+
+## Movimentos à mão, distribuição e investidores numa linha só (item A, 22/10/2026)
+
+O cartão "Movimentos à mão" tem três botões: aporte que entra na mãe,
+transferência entre contas e **distribuição de lucros** (conta do painel →
+sócio ou investidor do cadastro da aba Aportes, `decisoes.socios_do_cadastro`:
+só pessoas — sem conta no ERP ou aportador da aba Regras —, nunca nome com
+cara de empresa;
+`dia.distribuicoes`, chave `distribuicoes` do JSON do dia). A distribuição
+SAI da origem (`AporteDaConta.distribui`: soma no mínimo e tira do saldo
+final), vai para a seção «À MÃO» do Excel DEPOIS dos movimentos (B origem,
+C sócio, H valor: o E do Painel a soma; o M não acha linha com o nome do
+sócio) e conta no limite de 20 linhas. O "Mandar para a aba Aportes" a leva
+como **Distribuição de Lucro**, com o modo do cadastro (sócio sem conta →
+Só pagamento; origem no cadastro SEM conta do ERP é pendência — a
+distribuição sai dela, e "Só recebimento" lançaria só a entrada do sócio);
+o mesmo par no dia vira UMA operação somada, com chave
+própria de "já mandado" (`para_aportes.chave_da_distribuicao`).
+
+**Aportador composto na aba Regras** ("Fulano/Beltrano"): nunca se casa pelo
+primeiro nome (há aportadores diferentes com o mesmo primeiro nome). Destino
+que é subconta de investidor no cadastro (número no rótulo ou na conta do
+cadastro) vira UMA operação "Aporte de Investidor" daquela subconta,
+dividida pelo cadastro, com um aviso listando os investidores de lá — desde
+que a quantidade de nomes bata. Senão é pendência que diz o que cadastrar
+(Novo cadastro → Subconta de investidor, ou um aportador por linha na aba
+Regras com o nome completo). Só vale para regra de tipo **aporte**: composto
+com outro tipo é pendência (A5). **O já mandado da subconta é pelo NÚMERO**
+(`para_aportes.chave_da_subconta`, revisão de dinheiro de 22/10/2026, A4),
+na linha composta e nas linhas por investidor, que são a mesma operação: a
+mandada por uma porta segura a outra, com qualquer rótulo de destino. As
+chaves antigas do JSON do dia (`destino|Fulano/Beltrano` e
+`destino|<investidor>` cujo destino é a subconta) continuam lidas como já
+mandado (`_ja_da_subconta`). **Transferência da aba Regras** não vai para a
+aba Aportes e não é pendência: `Envio.informativos`, "transferência entre
+contas: lance no banco; não é aporte", no Registro sem o "[!]" — também
+com destino em subconta (o tipo é olhado antes da subconta).
+
+O HTML dos pagamentos leva TODOS os movimentos definidos do dia que não são
+pagamento de conta como linhas só informativas (`decisoes.movimentos_do_dia`
+→ `html_pagamentos.gravar(movimentos=)`; ver `arquitetura-pagamentos-dia.md`):
+os aportes, transferências e distribuições da aba Regras (`definidos_validos`,
+os mesmos do painel e do Excel, tipo pela regra — revisão geral de
+22/10/2026, achado 1: a transferência e o composto do print ficavam fora) e
+os à mão válidos, sem repetir: à mão com o mesmo de, para e valor de uma
+linha da Regras sai (o "de fora" repete a regra cujo aportador não é conta
+do painel).
 
 ## Excel do dia: zero, e não vazio
 
@@ -428,6 +476,34 @@ as linhas** (linha sem nome é recusada, com a lista dos rótulos e o aviso para
 usar «Nome curto…»); copia primeiro e só então grava a lista (falha ao gravar
 só avisa: perde-se a sugestão de amanhã). Dinheiro em `Decimal`; valor zero ou
 negativo não entra.
+
+**Nome curto sugerido** (pedido do dono 22/10/2026: "fazer por IA isso e
+deixar meio que pronto, não consegui copiar"). Conta sem nome gravado nasce
+com a sugestão de `lista_diretor.sugerir_nomes` (regra fixa, sem IA nem
+rede): tira o banco do fim quando a lista inteira é do mesmo banco (senão
+fica curto, "Obra - Inter"), sufixos jurídicos (LTDA, SPE [I], S/A, ME,
+EIRELI, EPP) e números de conta; encurta PARTICIPAÇÕES/SUBCONTA/ENGENHARIA/
+INCORPORAÇÕES/EMPREENDIMENTOS; "SUBCONTA 12345-6" vira "Sub. 12345"; Title
+Case (sigla sem vogal fica maiúscula). O banco sai também quando é um trecho
+só dele no MEIO do rótulo ("EMPRESA - SICOOB - SUBCONTA 30001-1" → "Empresa
+Sub. 30001"); rótulo que é só banco e número vira "<Banco> <número curto>"
+("SICOOB 40001-1" → "Sicoob 40001"); nunca o banco duas vezes. Sugestões são ÚNICAS entre si e
+diferentes dos nomes gravados de outras contas: empate desempata pelo número
+da conta (5 dígitos), depois banco, depois contador, em ordem alfabética dos
+rótulos (a ordem de chegada não muda nada). A tela mostra "~ nome"
+(`sugerido`), o Copiar aceita (só recusa linha sem nome nenhum), «Nome
+curto…» abre já com a sugestão e «Gravar sugestões» grava todas num pedido
+só (`gravar_nomes_curtos`).
+
+**Ler o lançamento com a aba do ERP fechada** (22/10/2026,
+"TargetClosedError"): `lancamento_do_erp.ler_pela_aba` reabre pelo
+`garantir_sessao` e lê UMA vez de novo; fechou de novo, o recado é "O Chrome
+do app fechou a aba do ERP; clique em Ler de novo". A causa estava em
+`MCClient._abas_do_robo`, que punha a `self.page` FECHADA na lista e a
+adotava como logada. Excel do dia aberto no Excel (errno 13) vira o recado
+de `recados.excel_aberto` só quando o erro é sobre o PRÓPRIO .xlsx do dia
+(caminho comparado sem barra nem caixa); outro `PermissionError` (pasta, modelo,
+OneDrive) mostra o erro de verdade.
 
 ## Sem nuvem, a entrega 2 trava (falha fechada)
 

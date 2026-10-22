@@ -35,6 +35,9 @@ class DiaDeTrabalho:
     #: Origem None = entra de fora (aporte que entra na mãe); senão é outra
     #: conta do painel (transferência entre contas). Valor em Decimal.
     a_mao: list = field(default_factory=list)
+    #: Distribuições de lucros feitas à mão (item A, 22/10/2026):
+    #: [(conta de origem do painel, sócio do cadastro, valor Decimal)].
+    distribuicoes: list = field(default_factory=list)
 
 
 def pasta_do_dia(raiz_saida, data: date) -> Path:
@@ -65,6 +68,8 @@ def para_dict(dia: DiaDeTrabalho) -> dict:
                     for (d, ap), v in sorted(dia.aportes.items())],
         "enviados_aportes": {k: str(v) for k, v in sorted(dia.enviados_aportes.items())},
         "a_mao": [{"origem": o, "destino": d, "valor": str(v)} for o, d, v in dia.a_mao],
+        "distribuicoes": [{"origem": o, "socio": s, "valor": str(v)}
+                          for o, s, v in dia.distribuicoes],
     }
 
 
@@ -93,6 +98,14 @@ def de_dict(dados: dict, data: date) -> DiaDeTrabalho:
             if not valor.is_finite():
                 raise ValueError(f"movimento à mão com valor {item['valor']!r}")
             dia.a_mao.append((origem, destino, valor))
+        for item in dados.get("distribuicoes") or []:
+            origem, socio, valor = item["origem"], item["socio"], Decimal(str(item["valor"]))
+            for oque, texto in (("origem", origem), ("sócio", socio)):
+                if not isinstance(texto, str) or not texto.strip():
+                    raise ValueError(f"distribuição com {oque} {texto!r}")
+            if not valor.is_finite():
+                raise ValueError(f"distribuição com valor {item['valor']!r}")
+            dia.distribuicoes.append((origem, socio, valor))
     except (KeyError, TypeError, AttributeError, InvalidOperation) as e:
         raise ValueError(f"formato inesperado ({e!r})") from e
     return dia

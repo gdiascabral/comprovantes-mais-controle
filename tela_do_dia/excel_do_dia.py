@@ -58,8 +58,12 @@ def _conferir_cabecalho(ws, coord: str, oque: str) -> None:
             "mudou — não escrevo valor numa coluna que não sei qual é.")
 
 
-def _celulas_a_mao(a_mao, rotulos_do_painel) -> dict[str, object]:
-    """B/C/H54..73 da seção «À MÃO». Ignora valor <= 0 (como a tela)."""
+def _celulas_a_mao(a_mao, rotulos_do_painel, distribuicoes=()) -> dict[str, object]:
+    """B/C/H54..73 da seção «À MÃO». Ignora valor <= 0 (como a tela).
+
+    As distribuições de lucros (item A) vêm DEPOIS dos movimentos, com a conta
+    de origem em B e o sócio em C: o E do Painel (SUMIF da origem) as soma, e o
+    M (SUMIF do destino) não acha linha do painel com o nome do sócio."""
     movimentos = []
     for origem, destino, valor in (a_mao or ()):
         if not isinstance(valor, Decimal):
@@ -74,9 +78,21 @@ def _celulas_a_mao(a_mao, rotulos_do_painel) -> dict[str, object]:
             raise WorkbookError(f"movimento à mão para {destino}, que não é conta do "
                                 "painel: a tela o ignora e o Excel divergiria dela.")
         movimentos.append((origem, destino, valor))
+    for origem, socio, valor in (distribuicoes or ()):
+        if not isinstance(valor, Decimal):
+            raise WorkbookError(f"distribuição com valor que não é Decimal: {valor!r}")
+        if valor <= ZERO:
+            continue
+        if not isinstance(socio, str) or not socio.strip():
+            raise WorkbookError("distribuição sem o sócio que recebe")
+        if origem not in rotulos_do_painel:
+            raise WorkbookError(f"distribuição de {origem}, que não é conta do painel: a "
+                                "tela a ignora e o Excel divergiria dela.")
+        movimentos.append((origem, socio, valor))
     if len(movimentos) > MAX_A_MAO:
         raise WorkbookError(
-            f"{len(movimentos)} movimentos à mão: a seção «À MÃO» do modelo só tem "
+            f"{len(movimentos)} movimentos à mão (com as distribuições): a seção "
+            "«À MÃO» do modelo só tem "
             f"{MAX_A_MAO} linhas ({PRIMEIRA_LINHA_A_MAO} a {ULTIMA_LINHA_A_MAO}).")
     celulas: dict[str, object] = {}
     for i, (origem, destino, valor) in enumerate(movimentos):
@@ -88,12 +104,13 @@ def _celulas_a_mao(a_mao, rotulos_do_painel) -> dict[str, object]:
     return celulas
 
 
-def celulas_de_aporte(modelo, planilha, mapping, regras, definidos, a_mao=()) -> dict:
+def celulas_de_aporte(modelo, planilha, mapping, regras, definidos, a_mao=(),
+                      distribuicoes=()) -> dict:
     validos = {par: valor for par, valor in definidos.items() if valor}
     for (destino, aportador), valor in validos.items():
         if valor < 0:
             raise WorkbookError(f"aporte negativo de {aportador} para {destino}: {valor}")
-    mao = _celulas_a_mao(a_mao, {r.label for r in mapping.rows})
+    mao = _celulas_a_mao(a_mao, {r.label for r in mapping.rows}, distribuicoes)
     if not validos and not mao:
         return {}
     wb = openpyxl.load_workbook(Path(modelo))
@@ -151,13 +168,15 @@ def celulas_de_aporte(modelo, planilha, mapping, regras, definidos, a_mao=()) ->
 
 
 def gerar(*, modelo, destino, data, mapping, planilha, saldos, a_pagar, regras,
-          definidos, a_mao=(), leitura_interrompida: bool = False) -> BuildResult:
+          definidos, a_mao=(), distribuicoes=(),
+          leitura_interrompida: bool = False) -> BuildResult:
     if leitura_interrompida:
         raise WorkbookError("a leitura dos pagamentos foi interrompida: não gero o Excel "
                             "do dia com 'a pagar' incompleto.")
     if a_pagar is None:
         raise WorkbookError("a leitura dos pagamentos está ausente: não gero o Excel do "
                             "dia sem ela (sairia 'a pagar 0').")
-    extras = celulas_de_aporte(modelo, planilha, mapping, regras, definidos, a_mao)
+    extras = celulas_de_aporte(modelo, planilha, mapping, regras, definidos, a_mao,
+                               distribuicoes)
     fills = build_row_fills(mapping, saldos, a_pagar)
     return build(modelo, destino, data, fills, mapping, planilha, extras=extras)

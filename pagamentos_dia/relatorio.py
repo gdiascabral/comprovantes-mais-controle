@@ -334,6 +334,33 @@ def eh_pdf(f: dict) -> bool:
             or (f.get("filename") or "").lower().endswith(".pdf"))
 
 
+#: Nome de arquivo que COMEÇA pela sigla da nota ("NF 1234.pdf", "NF-1234",
+#: "NFE 1234", "NFS 12"): é a nota, não um boleto de nome neutro. O
+#: `_NAO_E_BOLETO` não pega "NF " solto, e por isso fica só aqui, na escolha
+#: entre neutros — no `tem_boleto` mudaria "NF 5909 - boleto.pdf", que se
+#: anuncia boleto e continua sendo um (re-revisão de dinheiro, 22/10/2026).
+_NOME_COMECA_COM_NF = re.compile(r"\s*NFS?(?:E|[\s\-_.])", re.I)
+
+
+def _pdfs_neutros(files) -> list:
+    """Os PDFs que não se anunciam nem boleto nem outra coisa: podem ser o
+    boleto (escaneado, nome só de número). Fora a nota pelo nome, o aviso
+    "pagar para", o comprovante… (`_NAO_E_BOLETO`), a nota pela sigla no
+    começo do nome e a autorização de pagamento (`eh_autorizacao`, pelo
+    rótulo): com um deles contado como neutro, o boleto escaneado deixava de
+    ser o ÚNICO e o título caía no Pix do cadastro, APTO e marcado na remessa
+    — o boleto ficava em aberto (pagamento em dobro)."""
+    return [f for f in _pdfs_sem_rotulo_de_outra_coisa(files)
+            if not _NOME_COMECA_COM_NF.match(f.get("filename") or "")
+            and not eh_autorizacao(f)]
+
+
+def _pdfs_sem_rotulo_de_outra_coisa(files) -> list:
+    """A régua antiga dos neutros: PDF que o `_NAO_E_BOLETO` não recusa."""
+    return [f for f in files or ()
+            if eh_pdf(f) and not _NAO_E_BOLETO.search(_rotulo(f))]
+
+
 def escolher_pdf_do_boleto(files) -> dict | None:
     """O PDF do boleto. Nunca devolve a NF, mas não exige a palavra 'boleto':
     metade das faturas da concessionária vem com tagName nulo e nome só de
@@ -343,7 +370,13 @@ def escolher_pdf_do_boleto(files) -> dict | None:
     for f in explicitos:
         if eh_pdf(f):
             return f
-    neutros = [f for f in files if eh_pdf(f) and not _NAO_E_BOLETO.search(_rotulo(f))]
+    # Primeiro a régua estreita (sem a nota pela sigla nem a autorização): o
+    # scan ao lado de "NF 1234.pdf" ou de "PAGAMENTO AUTORIZADO" é o único
+    # candidato. Sem nenhum ali, a régua de sempre — o PDF único continua
+    # sendo o do boleto, como antes (re-revisão de dinheiro, 22/10/2026).
+    neutros = _pdfs_neutros(files)
+    if not neutros:
+        neutros = _pdfs_sem_rotulo_de_outra_coisa(files)
     if len(neutros) == 1:
         return neutros[0]
     return explicitos[0] if explicitos else None
@@ -782,6 +815,96 @@ def classificar_anexos(files) -> str:
     if "recibo" in s:
         return "RECIBO"
     return "OUTRO"
+
+
+#: "PAGAMENTO AUTORIZADO - <nome>": a autorização de pagar, não um boleto
+#: (dono, 22/10/2026). O PDF era o único "neutro" do título e virava "Boleto
+#: em imagem — preencher manual", com o Pix nos Dados Bancários do próprio
+#: lançamento. Só a frase inteira "pagamento autorizado" (sem acento nem
+#: caixa, com espaço ou "_" no meio): "autoriza" solto pegava "OC 5909
+#: AUTORIZADA" e "AUTORIZAÇÃO DE FORNECIMENTO", que são documento de compra,
+#: e a linha nascia MARCADA na remessa (revisão de dinheiro, 22/10/2026).
+_PAGAMENTO_AUTORIZADO = re.compile(r"pagamento[\s_\-]*autorizado")
+
+
+def _diz_pagamento_autorizado(texto: str) -> bool:
+    return bool(_PAGAMENTO_AUTORIZADO.search(chave(texto)))
+
+
+def _lido_com_certeza(f: dict, textos: dict, urls_ocr=()) -> bool:
+    """O anexo foi lido de um jeito que permite dizer "não há boleto aqui".
+
+    Imagem nunca (o boleto escaneado em foto); PDF só com a camada de texto
+    dele — sem texto, ou lido só pelo OCR, a linha digitável pode estar lá
+    sem ter fechado. Outro formato (planilha, xml) não carrega boleto."""
+    if _e_imagem(f):
+        return False
+    if not eh_pdf(f):
+        return True
+    url = f.get("downloadUrl") or ""
+    return bool((textos.get(url) or "").strip()) and url not in urls_ocr
+
+
+def _neutros_nao_lidos(files, textos: dict, urls_ocr=()) -> list:
+    """Os PDFs que podem esconder boleto e NÃO foram lidos com certeza
+    (`_lido_com_certeza`): sem eles lidos, não dá para dizer "não há boleto".
+    Conta a nota pela sigla no nome (NF e boleto num PDF só é prática comum);
+    só a autorização de pagamento fica de fora."""
+    return [f for f in _pdfs_sem_rotulo_de_outra_coisa(files)
+            if not eh_autorizacao(f)
+            and not _lido_com_certeza(f, textos, urls_ocr)]
+
+
+def eh_autorizacao(f: dict, textos: dict | None = None) -> bool:
+    """O anexo é uma AUTORIZAÇÃO de pagamento, pelo nome ou pelo texto.
+
+    Nunca o que se anuncia boleto, nota, comprovante ou aviso "PAGAR PARA"
+    (rótulo), nem texto de quem já pagou: "pagamento autorizado" num
+    comprovante é o banco dizendo que pagou."""
+    rotulo = _rotulo(f)
+    if _E_BOLETO.search(rotulo) or _NAO_E_BOLETO.search(rotulo):
+        return False
+    if _diz_pagamento_autorizado(rotulo):
+        return True
+    texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
+    return bool(_diz_pagamento_autorizado(texto)
+                and not _PROVA_DE_PAGAMENTO.search(texto))
+
+
+def chave_dos_dados_bancarios(pago_para: str) -> str:
+    """A chave Pix dos Dados Bancários do lançamento (`paidToBankAccount`),
+    só quando ela é inequívoca — senão "".
+
+    UMA chave só no texto (`chave_unica_da_observacao`: com CPF e CNPJ juntos
+    a ordem dos padrões escolhia o CNPJ), tipo conhecido e, sendo CPF/CNPJ,
+    dígito verificador fechando (`_chave_confiavel`). Dados de TED (banco,
+    agência, conta, titular) sem a palavra Pix/chave não são chave: o
+    "CPF/CNPJ do titular" é a identificação da conta, não um Pix (revisão de
+    dinheiro de 22/10/2026, A6)."""
+    if not pago_para or not regras.tipo_de_chave_pix(pago_para):
+        return ""
+    if _DADOS_DE_TED.search(pago_para) and not _DECLARA_PIX.search(pago_para):
+        return ""
+    achado = chave_unica_da_observacao(pago_para)
+    if not achado or not _chave_confiavel(achado):
+        return ""
+    digitos = re.sub(r"\D", "", achado)
+    tipos = {regras.tipo_de_chave_pix(pago_para), regras.tipo_de_chave_pix(achado)}
+    if (tipos & {regras.CHAVE_CPF, regras.CHAVE_CNPJ}
+            and not regras.documento_valido(digitos)):
+        return ""
+    return achado
+
+
+_DADOS_DE_TED = re.compile(
+    r"\b(?:ted|doc|ag[eê]ncia|ag|conta|c/c|cc|banco|titular)\b", re.I)
+_DECLARA_PIX = re.compile(r"\b(?:pix|chave)\b", re.I)
+
+
+def _sem_boleto(files, textos: dict, valor, urls_ocr=()) -> bool:
+    """Nenhum anexo se anuncia boleto e nenhum traz linha digitável válida."""
+    return not tem_boleto(files) and not _linhas_dos_anexos(files, textos, valor,
+                                                            urls_ocr)
 
 
 def nome_do_reembolso(files) -> str:
@@ -1679,11 +1802,52 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # Vale até sem saber QUAL boleto: aí a linha vai para conferência.
         # Título já pago fica como está: ali não há o que decidir.
         venc_item = data_do_item(item)
+        #: Boleto achado por CONTEÚDO dentro de outro anexo: ganha de tudo
+        #: abaixo (sócio, autorização, regra do favorecido).
+        boleto_escondido = False
         if tipo == "Pix" and cls != "PAGAR_PARA" and not item.get("paid"):
             escondida, onde = linha_em_outro_anexo(files, textos, valor, urls_ocr,
                                                    vencimento=venc_item)
             if escondida or onde:
-                tipo = "Boleto"
+                tipo, boleto_escondido = "Boleto", True
+
+        # Pedidos do dono de 22/10/2026, os dois em falha FECHADA: sem certeza,
+        # a linha segue o caminho de sempre (e o alarme de sempre).
+        # - `socio`: o documento diz "REEMBOLSO <pessoa>" e a pessoa está no
+        #   cadastro local com a chave (`reembolso.socio_do_documento`) — o
+        #   Pix vai para ELA, não para a loja do favorecido;
+        # - `autorizado_por`: anexo "PAGAMENTO AUTORIZADO" (ou o favorecido
+        #   com `pix_dos_dados_bancarios` no `regras_fornecedor.json`) — paga
+        #   o Pix dos Dados Bancários do próprio lançamento.
+        # Boleto em QUALQUER anexo ganha dos dois: o que se anuncia boleto, o
+        # achado dentro da NF (`boleto_escondido`) e a linha digitável válida
+        # em qualquer outro PDF. E a autorização só vale com todos os outros
+        # anexos LIDOS com certeza (`_lido_com_certeza`): foto, PDF sem texto
+        # ou lido só pelo OCR podem ser o boleto que não fechou — aí fica
+        # ATENÇÃO, como antes (revisão de dinheiro de 22/10/2026, A1 e A2).
+        socio, chave_socio, autorizado_por, chave_db = None, "", "", ""
+        if not item.get("paid") and cls != "PAGAR_PARA":
+            if (documento_declara_reembolso(item, overview)
+                    and _sem_boleto(files, textos, valor, urls_ocr)):
+                achado = reembolso.socio_do_documento(
+                    quem_o_documento_diz_reembolsar(item, overview),
+                    cadastro_reembolso or {})
+                if achado:
+                    socio, chave_socio = achado
+            if socio is None and not boleto_escondido:
+                autorizacoes = [f for f in files if eh_autorizacao(f, textos)]
+                pela_regra = regras.pix_dos_dados_bancarios(favorecido, regras_forn)
+                if autorizacoes or pela_regra:
+                    # A autorização não é boleto: o que sobra é que decide —
+                    # inteiro, também na regra do favorecido (dono: "para essa
+                    # sempre autorizar" não quer dizer pagar boleto em dobro).
+                    outros = [f for f in files if f not in autorizacoes]
+                    chave_db = chave_dos_dados_bancarios(pago_para)
+                    if (chave_db and _sem_boleto(outros, textos, valor, urls_ocr)
+                            and all(_lido_com_certeza(f, textos, urls_ocr)
+                                    for f in outros)):
+                        autorizado_por = ("anexo" if autorizacoes
+                                          else "regra do favorecido")
 
         if cls == "PAGAR_PARA":
             tipo = "Pix"
@@ -1758,6 +1922,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                               f"(documento: {pessoa.origem})")
             elif pessoa.impedimento:
                 avisos.append(pessoa.impedimento)
+        elif socio is not None:
+            tipo, dados, tem_documento, onde = "Pix", chave_socio, True, None
+            pessoa = socio
+            obs = f"reembolso a {socio.nome} — chave do cadastro"
+        elif autorizado_por:
+            tipo, dados, tem_documento, onde = "Pix", chave_db, True, None
+            obs = (f"pagamento autorizado ({autorizado_por}) — Pix dos dados "
+                   "bancários do lançamento")
         elif tipo == "Pix":
             dados = extrair_chave_pix(pago_para) if pago_para else ""
             if not parece_chave_pix(dados):
@@ -1877,6 +2049,21 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                     obs = obs_linha or ("Boleto em imagem e o OCR não fechou — preencher manual"
                                         if url_pdf in urls_ocr else
                                         "Boleto em imagem — preencher manual")
+                elif (parece_chave_pix(do_cadastro) and tem_nf_ou_oc
+                      and _neutros_nao_lidos(files, textos, urls_ocr)):
+                    # Dois ou mais PDFs neutros e algum NÃO LIDO com certeza
+                    # (sem texto, ou só OCR que não fechou): ele pode ser o
+                    # boleto escaneado. O Pix do cadastro saía APTO e marcado
+                    # na remessa, e o boleto ficava em aberto — pagamento em
+                    # dobro (re-revisão de dinheiro, 22/10/2026). Fica sem
+                    # dado de pagamento ("ATENÇÃO — sem dados de pgto"), na
+                    # planilha, para alguém abrir o anexo.
+                    tem_documento = True
+                    nomes = ", ".join(
+                        f"'{(f.get('filename') or '?').strip()}'"
+                        for f in _neutros_nao_lidos(files, textos, urls_ocr))
+                    obs = (f"anexo não lido — pode ser boleto: {nomes}; abrir no "
+                           "ERP antes de pagar (sem boleto, o cadastro tem chave Pix)")
                 elif parece_chave_pix(do_cadastro) and tem_nf_ou_oc:
                     # Sem boleto anexado, a regra "boleto ganha de Pix" não
                     # tem premissa: não há boleto para ganhar. Havendo NF ou
@@ -1982,7 +2169,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # são os mesmos onze dígitos. Só avisa quando HÁ chave e o tipo não
         # dá para saber — nas outras não há o que perguntar.
         if (tipo == "Pix" and not qr_usado
-                and regras.chave_pix_ambigua(pago_para or dados, dados)):
+                and regras.chave_pix_ambigua(
+                    dados if socio is not None else (pago_para or dados), dados)):
             avisos.append("Chave Pix sem tipo declarado — confirmar se é CPF, "
                           "celular ou aleatória.")
 
@@ -2058,6 +2246,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         status = {"SEM_ANEXO": "ATENÇÃO — sem anexo",
                   "AUTORIZADO": "APTO (autorizado)",
                   "PAGAR_PARA": "APTO* (reembolso)"}.get(cls, "APTO")
+        if socio is not None:
+            # Reembolso como o do aviso: APTO*, e nasce desmarcado na remessa.
+            status = "APTO* (reembolso)"
         if not dados:
             status = "ATENÇÃO — sem dados de pgto"
         # O documento diz REEMBOLSO e não há aviso "PAGAR PARA": o favorecido
@@ -2073,7 +2264,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # então o nome do documento entra como um: usar a régua, e não uma
         # cópia dela. Vem ANTES do `divergiu`, para "documento não bate" — a
         # contradição concreta — ganhar do alarme; a Obs guarda os dois.
-        if (cls != "PAGAR_PARA" and not item.get("paid")
+        if (cls != "PAGAR_PARA" and socio is None and not item.get("paid")
                 and documento_declara_reembolso(item, overview)):
             quem = quem_o_documento_diz_reembolsar(item, overview)
             e_o_favorecido = bool(quem) and reembolso.pessoa_e_o_favorecido(
@@ -2188,7 +2379,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # tem um par nome/documento — ver MOTIVO_REEMBOLSO.
             # `valor_diverge` é o boleto que contradiz o lançamento; na planilha
             # ele é só um alarme, mas na remessa é o valor que sairia errado.
-            "reembolso": cls == "PAGAR_PARA",
+            # O sócio do "REEMBOLSO X" no documento (dono, 22/10/2026) também:
+            # o Pix é dele, e o segmento B tem de declará-lo, não a loja.
+            "reembolso": cls == "PAGAR_PARA" or socio is not None,
             "valor_diverge": bool(valor_diverge),
             # Quem recebe o reembolso, resolvido pelo `reembolso.identificar`.
             # Vêm preenchidos JUNTOS e da mesma fonte: é essa amarra que

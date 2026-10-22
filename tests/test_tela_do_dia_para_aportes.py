@@ -78,8 +78,10 @@ def test_subconta_de_investidor_vira_uma_operacao_quando_a_divisao_bate():
     assert (op.pagador, op.recebedor, op.valor, op.tipo, op.modo) == (
         "INVESTIDOR SUBCONTA 33333-3", "HOLDING - SUBCONTA 33333-3", D("1000.00"),
         TIPO_INVESTIDOR, "Só recebimento")
-    assert len(chaves) == 2 and op.validar(ENTIDADES, SUBCONTAS) == []
-    assert envio.valores == {chaves[0]: D("500.00"), chaves[1]: D("500.00")}
+    # Uma operação, UMA chave pelo número da subconta, com o total (A4).
+    assert chaves == [pa.chave_da_subconta("33333-3", "Holding - Subconta 33333-3")]
+    assert op.validar(ENTIDADES, SUBCONTAS) == []
+    assert envio.valores == {chaves[0]: D("1000.00")}
 
 
 def test_subconta_com_divisao_diferente_do_cadastro_vira_pendencia():

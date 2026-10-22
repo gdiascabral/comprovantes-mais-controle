@@ -25,10 +25,26 @@ e clica "Lançar no Mais Controle" lá, como sempre. Quatro regras de dinheiro:
   `Envio.sem_saldo`. Quem decide se trava é a tela.
 
 `Envio.pendentes` = o que NÃO foi (bloqueia: já mandado, nome não achado,
-divisão diferente…); `Envio.avisos` = o que foi, mas pede conferência.
+divisão diferente…); `Envio.avisos` = o que foi, mas pede conferência;
+`Envio.informativos` = o que não vai e está CERTO não ir (transferência entre
+contas da mesma empresa: lança-se no banco, não é aporte).
+
+Item A (22/10/2026), duas entradas novas:
+
+- **aportador composto da aba Regras** ("Fulano/Beltrano", dois investidores
+  numa linha só): nunca se casa pelo primeiro nome. Se o DESTINO é subconta de
+  investidor no cadastro (pelo número no rótulo ou na conta do cadastro), vai
+  como "Aporte de Investidor" daquela subconta, dividido pelo cadastro, com um
+  aviso que mostra os investidores de lá — desde que o número de nomes bata.
+  Senão é pendência que diz o que cadastrar;
+- **distribuição de lucros** feita à mão na tela (conta do painel → sócio ou
+  investidor do cadastro): vira "Distribuição de Lucro", e o modo sai do
+  cadastro (sócio sem conta → "Só pagamento"). A chave de envio é própria
+  (`chave_da_distribuicao`) e o mesmo par no dia vira UMA operação somada.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -66,6 +82,9 @@ class Envio:
     pendentes: list = field(default_factory=list)
     #: [Pendente] que NÃO bloqueiam: o par está em `itens`, mas confira.
     avisos: list = field(default_factory=list)
+    #: [Pendente] que não vão e está certo não irem (transferência entre
+    #: contas): só para o Registro, sem cara de erro.
+    informativos: list = field(default_factory=list)
     #: chave_de_envio -> valor daquele aportador (o que `marcar_enviados` guarda).
     valores: dict = field(default_factory=dict)
     #: As OPERAÇÕES de `itens` (os mesmos objetos) com conta sem saldo do
@@ -78,6 +97,83 @@ def chave_de_envio(destino: str, aportador: str) -> str:
     """Sem o valor, de propósito: o valor mandado é o VALOR do dicionário
     `enviados_aportes`, e mudar o número não abre a porta para mandar de novo."""
     return f"{destino}|{aportador}"
+
+
+#: O que distingue a chave de uma distribuição da de um aporte da aba Regras
+#: ("destino|aportador"): sem o prefixo, distribuir para quem também aporta
+#: noutra linha dividiria o mesmo registro de "já mandado".
+PREFIXO_DISTRIBUICAO = "distribuição→"
+
+#: O recado da transferência da aba Regras: informa, não acusa.
+TRANSFERENCIA = "transferência entre contas: lance no banco; não é aporte"
+
+
+def chave_da_distribuicao(origem: str, socio: str) -> str:
+    return chave_de_envio(PREFIXO_DISTRIBUICAO + socio, origem)
+
+
+#: A chave de "já mandado" de uma subconta de investidor é pelo NÚMERO dela
+#: (revisão de dinheiro de 22/10/2026, A4): a linha composta da aba Regras
+#: ("destino|Fulano/Beltrano") e as linhas por investidor ("destino|Fulano")
+#: são a MESMA operação na aba Aportes, e chaves diferentes deixavam a segunda
+#: porta mandar outro Aporte de Investidor da mesma subconta no mesmo dia.
+PREFIXO_SUBCONTA = "subconta:"
+
+
+def chave_da_subconta(numero: str, destino: str) -> str:
+    return f"{PREFIXO_SUBCONTA}{numero}|{destino}"
+
+
+def _ja_da_subconta(numero, enviados, entidades, subcontas):
+    """As chaves de `enviados` que já mandaram a subconta `numero` hoje: a
+    nova (`chave_da_subconta`, qualquer destino) e as antigas, gravadas antes
+    desta correção no JSON do dia — "destino|Fulano/Beltrano" (composto) e
+    "destino|<investidor>" —, quando o destino é aquela subconta. Devolve
+    (chaves, valor somado ou None quando algum valor não se sabe)."""
+    investidores = {util.norm_espaco(i)
+                    for i in (subcontas.get(numero) or {}).get("investidores") or ()}
+    achadas = []
+    for chave in enviados:
+        if chave.startswith(PREFIXO_SUBCONTA):
+            if chave[len(PREFIXO_SUBCONTA):].partition("|")[0] == numero:
+                achadas.append(chave)
+            continue
+        destino, sep, aportador = chave.partition("|")
+        if not sep or not (nomes_do_composto(aportador)
+                           or util.norm_espaco(aportador) in investidores):
+            continue
+        recebedor = nome_no_cadastro(destino, entidades)
+        if _subconta_do_destino(destino, recebedor, entidades, subcontas) == numero:
+            achadas.append(chave)
+    valores = [enviados[c] for c in achadas]
+    soma = None if any(v is None for v in valores) else sum(
+        (como_dinheiro(v) for v in valores), ZERO)
+    return achadas, soma
+
+
+def nomes_do_composto(aportador: str) -> list[str]:
+    """Os nomes de um rótulo composto da aba Regras ("Fulano/Beltrano") —
+    [] quando não é composto. Só para CONTAR: nome pela metade não casa."""
+    partes = [p.strip() for p in re.split(r"[/&+]", aportador or "")]
+    partes = [p for p in partes if p]
+    return partes if len(partes) > 1 else []
+
+
+def _subconta_do_destino(destino: str, recebedor, entidades: dict, subcontas: dict) -> str:
+    """O número da subconta de investidor que é o destino, ou ""."""
+    numero = numero_da_conta(destino)
+    if not numero and recebedor is not None:
+        numero = numero_da_conta((entidades.get(recebedor) or {}).get("conta") or "")
+    return numero if numero and numero in subcontas else ""
+
+
+def _o_que_cadastrar(aportador: str, destino: str) -> str:
+    return (f"{aportador!r} junta mais de um aportador numa linha da aba Regras e "
+            f"{destino!r} não é subconta de investidor no cadastro da aba Aportes — "
+            "cadastre a subconta de investidor dessa conta (aba Aportes → Novo "
+            "cadastro → Subconta de investidor, com cada investidor pelo nome "
+            "completo) ou ponha na aba Regras um aportador por linha, com o nome "
+            "completo como está no cadastro")
 
 
 def operacoes_recusadas(mandadas, recusas) -> list:
@@ -189,12 +285,14 @@ def _ja_mandado(anterior, valor, fora_da_aba: bool = False) -> str:
 
 
 def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
-              sem_saldo=(), na_aba_aportes=None) -> Envio:
+              sem_saldo=(), na_aba_aportes=None, distribuicoes=()) -> Envio:
     """`enviados`: {chave_de_envio: valor mandado} do dia (um conjunto de
     chaves também serve, com o valor desconhecido). `sem_saldo`: rótulos das
     contas do dia cujo saldo o sistema não trouxe. `na_aba_aportes`: as
     operações que a aba Aportes tem AGORA na lista (None = não se sabe); o já
-    mandado que não está mais lá ganha o recado `FORA_DA_ABA`."""
+    mandado que não está mais lá ganha o recado `FORA_DA_ABA`.
+    `distribuicoes`: [(conta de origem, sócio do cadastro, valor)] feitas à
+    mão na tela."""
     if enviados is None:
         enviados = {}
     elif not isinstance(enviados, dict):
@@ -203,6 +301,7 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
     envio = Envio()
     regra_do_par = {(r.destino, r.aportador): r for r in regras}
     da_subconta: dict[tuple[str, str], dict] = {}
+    compostos: list[tuple] = []
 
     def pendente(destino, aportador, valor, motivo):
         envio.pendentes.append(Pendente(destino, aportador, valor, motivo))
@@ -210,11 +309,16 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
     def aviso(destino, aportador, valor, motivo):
         envio.avisos.append(Pendente(destino, aportador, valor, motivo))
 
-    def incluir(op, pares):
-        chaves = [chave_de_envio(d, a) for d, a, _v in pares]
+    def incluir(op, pares, subconta=""):
+        if subconta:
+            # A subconta é UMA operação e UMA chave, com o total.
+            chaves = [chave_da_subconta(subconta, pares[0][0])]
+            envio.valores[chaves[0]] = como_dinheiro(op.valor)
+        else:
+            chaves = [chave_de_envio(d, a) for d, a, _v in pares]
+            for chave, (_d, _a, v) in zip(chaves, pares):
+                envio.valores[chave] = como_dinheiro(v)
         envio.itens.append((op, chaves))
-        for chave, (_d, _a, v) in zip(chaves, pares):
-            envio.valores[chave] = como_dinheiro(v)
         if any(d in sem_saldo or a in sem_saldo for d, a, _v in pares):
             envio.sem_saldo.append(op)
             for d, a, v in pares:
@@ -228,6 +332,15 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
             pendente(destino, aportador, valor, "não está na aba Regras do modelo")
             continue
         numero = numero_da_conta(destino)
+        # Transferência primeiro: com destino em subconta ela cairia na
+        # pendência dos investidores, que não é o assunto dela.
+        if util.sem_acento(regra.tipo or "").casefold().strip().startswith("transf"):
+            envio.informativos.append(Pendente(destino, aportador, valor, TRANSFERENCIA))
+            continue
+        if (nomes_do_composto(aportador) and not regra.do_painel
+                and nome_no_cadastro(aportador, entidades) is None):
+            compostos.append((destino, aportador, valor, regra))
+            continue
         if numero and numero in subcontas and not regra.do_painel:
             da_subconta.setdefault((destino, numero), {})[aportador] = valor
             continue
@@ -259,20 +372,17 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
         def todos(motivo):
             for a, v in valores.items():
                 pendente(destino, a, v, motivo)
-        ja = {a for a in valores if chave_de_envio(destino, a) in enviados}
+        ja, anterior = _ja_da_subconta(numero, enviados, entidades, subcontas)
         if ja:
-            # A subconta é UMA operação: um investidor já mandado segura todos.
+            # A subconta é UMA operação: já mandada por qualquer porta (linha
+            # composta ou por investidor), segura todos os investidores.
             fora = ainda_na_aba(INVESTIDOR_PREFIXO + numero, nome_no_cadastro(destino, entidades),
                                 data, na_aba_aportes) is False
+            total = sum(valores.values(), ZERO)
             for a, v in valores.items():
-                chave = chave_de_envio(destino, a)
-                if a in ja:
-                    pendente(destino, a, v, _ja_mandado(enviados[chave], v, fora_da_aba=fora))
-                else:
-                    pendente(destino, a, v,
-                             f"já mandado outro investidor da subconta {numero} hoje (a "
-                             "subconta vai numa operação só) — "
-                             + (_CONFIRA_NO_ERP if fora else "confira a aba Aportes"))
+                pendente(destino, a, v,
+                         f"{_ja_mandado(anterior, total, fora_da_aba=fora)} (subconta "
+                         f"{numero}, numa operação só)")
             continue
         cfg = subcontas[numero]
         investidores = cfg.get("investidores") or []
@@ -301,5 +411,101 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
         if erros:
             todos("; ".join(erros))
             continue
-        incluir(op, [(destino, a, v) for a, v in valores.items()])
+        incluir(op, [(destino, a, v) for a, v in valores.items()], subconta=numero)
+
+    subcontas_por_investidor = {n for (_d, n) in da_subconta}
+    for destino, aportador, valor, regra in compostos:
+        nomes = nomes_do_composto(aportador)
+        if _tipo(regra.tipo) != "Aporte de Capital":
+            # O composto só sabe ir como Aporte de Investidor (A5): outro tipo
+            # viraria aporte sem ninguém pedir.
+            pendente(destino, aportador, valor,
+                     f"tipo {regra.tipo!r} da aba Regras com {aportador!r} (mais de um "
+                     "nome numa linha): a linha composta só vai como aporte da subconta "
+                     "de investidor — lance este à mão na aba Aportes ou ponha um nome "
+                     "por linha na aba Regras")
+            continue
+        recebedor = nome_no_cadastro(destino, entidades)
+        if recebedor is None:
+            pendente(destino, aportador, valor,
+                     f"não achei {destino!r} (um só) no cadastro da aba Aportes")
+            continue
+        numero = _subconta_do_destino(destino, recebedor, entidades, subcontas)
+        if not numero:
+            pendente(destino, aportador, valor, _o_que_cadastrar(aportador, destino))
+            continue
+        if numero in subcontas_por_investidor:
+            pendente(destino, aportador, valor,
+                     f"a subconta {numero} tem valor no grupo {aportador!r} e também por "
+                     "investidor — digite num lugar só (a subconta vai numa operação só)")
+            continue
+        pagador = INVESTIDOR_PREFIXO + numero
+        ja, anterior = _ja_da_subconta(numero, enviados, entidades, subcontas)
+        if ja:
+            la = ainda_na_aba(pagador, recebedor, data, na_aba_aportes)
+            pendente(destino, aportador, valor,
+                     _ja_mandado(anterior, valor, fora_da_aba=la is False))
+            continue
+        investidores = [str(i).strip() for i in (subcontas[numero].get("investidores") or [])
+                        if str(i).strip()]
+        if len(nomes) != len(investidores):
+            pendente(destino, aportador, valor,
+                     f"{aportador!r} tem {len(nomes)} nomes e a subconta {numero} tem "
+                     f"{len(investidores)} investidores no cadastro "
+                     f"({', '.join(investidores) or 'nenhum'}) — confira a aba Regras ou "
+                     "o cadastro da subconta (aba Aportes → Novo cadastro)")
+            continue
+        op = Operacao(data=data, pagador=pagador, recebedor=recebedor,
+                      valor=como_dinheiro(valor), tipo=TIPO_INVESTIDOR, modo="Só recebimento")
+        erros = op.validar(entidades, subcontas)
+        if erros:
+            pendente(destino, aportador, valor, "; ".join(erros))
+            continue
+        incluir(op, [(destino, aportador, valor)], subconta=numero)
+        aviso(destino, aportador, valor,
+              f"vai como {TIPO_INVESTIDOR} da subconta {numero}, dividido pelo cadastro "
+              f"entre {', '.join(investidores)} — confira na aba Aportes")
+
+    # Distribuição de lucros feita à mão: o mesmo par no dia é UMA operação.
+    somadas: dict[tuple[str, str], Decimal] = {}
+    for origem, socio, valor in (distribuicoes or ()):
+        if valor is None or valor <= 0:
+            continue
+        somadas[(origem, socio)] = somadas.get((origem, socio), ZERO) + valor
+    for (origem, socio), valor in somadas.items():
+        rotulo = f"{socio} (distribuição de lucros)"
+        chave = chave_da_distribuicao(origem, socio)
+        pagador = nome_no_cadastro(origem, entidades)
+        recebedor = socio if socio in entidades else nome_no_cadastro(socio, entidades)
+        if chave in enviados:
+            la = ainda_na_aba(pagador, recebedor, data, na_aba_aportes)
+            pendente(rotulo, origem, valor,
+                     _ja_mandado(enviados[chave], valor, fora_da_aba=la is False))
+            continue
+        if pagador is None or recebedor is None:
+            falta = origem if pagador is None else socio
+            pendente(rotulo, origem, valor,
+                     f"não achei {falta!r} (um só) no cadastro da aba Aportes")
+            continue
+        if (entidades[pagador] or {}).get("conta") is None:
+            # A origem é conta do painel: o dinheiro SAI dela. Sem a conta no
+            # cadastro, o modo sairia "Só recebimento" e lançaria só a entrada
+            # do sócio (revisão geral de 22/10/2026).
+            pendente(rotulo, origem, valor,
+                     f"{pagador!r} está no cadastro da aba Aportes sem a conta do ERP, "
+                     "e a distribuição SAI dela — complete a conta no cadastro (aba "
+                     "Aportes) e mande de novo")
+            continue
+        op = Operacao(data=data, pagador=pagador, recebedor=recebedor,
+                      valor=como_dinheiro(valor), tipo="Distribuição de Lucro",
+                      modo=_modo(pagador, recebedor, entidades))
+        erros = op.validar(entidades, subcontas)
+        if erros:
+            pendente(rotulo, origem, valor, "; ".join(erros))
+            continue
+        envio.itens.append((op, [chave]))
+        envio.valores[chave] = como_dinheiro(valor)
+        if origem in sem_saldo:
+            envio.sem_saldo.append(op)
+            aviso(rotulo, origem, valor, MOTIVO_SEM_SALDO)
     return envio

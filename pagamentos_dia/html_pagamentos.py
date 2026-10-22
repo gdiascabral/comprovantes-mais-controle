@@ -610,6 +610,26 @@ def contas_do_html_geral(resultado) -> list[dict]:
     return contas
 
 
+def movimentos_do_html(movimentos) -> list[dict]:
+    """Os movimentos à mão do dia (aporte que entra na mãe, transferência
+    entre contas, distribuição de lucros) como linhas INFORMATIVAS do HTML
+    geral — item A, 22/10/2026, dono: "não precisa colocar os pix pq tem
+    salvo no banco já, só a informação pra não ficar nenhum pra trás".
+
+    Só de, para, tipo e valor: nenhuma chave, nada para copiar. Não são
+    `Resultado.contas`, então não entram no total das contas nem na remessa
+    (que lê o `Resultado`). Zero ou negativo fica de fora."""
+    linhas = []
+    for m in movimentos or ():
+        valor = m.get("valor")
+        if valor is None or dinheiro(valor) <= 0:
+            continue
+        linhas.append({"de": str(m.get("de") or ""), "para": str(m.get("para") or ""),
+                       "tipo": str(m.get("tipo") or ""),
+                       "valor": valor_para_colar(valor), "centavos": centavos(valor)})
+    return linhas
+
+
 def _palavras_do_nome(nome) -> list[str]:
     return re.findall(r"[A-Z0-9]+", relatorio.sem_acento(str(nome or "")).upper())
 
@@ -776,12 +796,13 @@ def _preencher(modelo: str, valores: dict) -> str:
         lambda m: valores.get(m.group(1), m.group(0)), modelo)
 
 
-def html_geral(contas: list[dict], ini: date, fim: date) -> str:
+def html_geral(contas: list[dict], ini: date, fim: date, movimentos=()) -> str:
+    """`movimentos`: as linhas de `movimentos_do_html` (já prontas)."""
     titulo = _br(ini) if ini == fim else f"{_br(ini)} a {_br(fim)}"
     return _preencher(modelos_html.MODELO_GERAL, {
         "TITULO": escapar(titulo),
         "SUB": escapar(SUBTITULO_GERAL),
-        "JSON": json_para_script({"contas": contas}),
+        "JSON": json_para_script({"contas": contas, "movimentos": list(movimentos or ())}),
         "STORAGE": json_para_script(f"pagamentos_{rotulo_periodo(ini, fim)}"),
     })
 
@@ -814,6 +835,9 @@ class Gerados(NamedTuple):
     pf_sem: dict
     tem_logo: bool
     tem_rodape: bool
+    #: Os movimentos à mão do dia, só informativos (fora de `total`).
+    movimentos: int = 0
+    total_movimentos: Decimal = Decimal("0.00")
 
     def registro(self) -> list[str]:
         def caminho(p):
@@ -827,6 +851,9 @@ class Gerados(NamedTuple):
             f"  pessoa física: {self.linhas_pf} lançamento(s), "
             f"{reais(self.total_pf)}  ->  {caminho(self.pessoa_fisica)}",
         ]
+        if self.movimentos:
+            linhas.append(f"  movimentos do dia (só informação, fora do total e da "
+                          f"remessa): {self.movimentos}, {reais(self.total_movimentos)}")
         faltas = [f"{n} sem {campo}" for campo, n in self.pf_sem.items() if n]
         if faltas:
             linhas.append("  (pessoa física: " + " · ".join(faltas) + ")")
@@ -840,24 +867,26 @@ class Gerados(NamedTuple):
 
 
 def gravar(resultado, lancamentos, anexos, pasta, ini: date, fim: date,
-           hoje: date | None = None, pastas_extras=()) -> Gerados:
+           hoje: date | None = None, pastas_extras=(), movimentos=()) -> Gerados:
     """Grava os dois HTMLs na `pasta` (a da planilha) e devolve o resumo.
 
     `resultado` é o `Resultado` do passo 2; `lancamentos` e `anexos` são os
     do passo 1. `pastas_extras` diz onde procurar o logotipo e o rodapé
-    (sem ela, só na própria `pasta`)."""
+    (sem ela, só na própria `pasta`). `movimentos`: os movimentos à mão do
+    dia ({de, para, tipo, valor}), só informativos (`movimentos_do_html`)."""
     hoje = hoje or date.today()
     pasta = Path(pasta)
     pasta.mkdir(parents=True, exist_ok=True)
     periodo = rotulo_periodo(ini, fim)
 
     contas = contas_do_html_geral(resultado)
+    movs = movimentos_do_html(movimentos)
     itens = itens_pessoa_fisica(lancamentos, anexos, vencimento_padrao=fim)
     logo, rodape = ler_extras(pastas_extras or (pasta,))
 
     geral = pasta / f"pagamentos_{periodo}.html"
     pf = pasta / f"pagamentos_pessoa_fisica_lancamento_{periodo}.html"
-    geral.write_text(html_geral(contas, ini, fim), encoding="utf-8")
+    geral.write_text(html_geral(contas, ini, fim, movs), encoding="utf-8")
     pf.write_text(html_pessoa_fisica(itens, ini, fim, hoje, logo, rodape),
                   encoding="utf-8")
 
@@ -874,4 +903,7 @@ def gravar(resultado, lancamentos, anexos, pasta, ini: date, fim: date,
                 "categoria": sum(1 for i in itens if not i["categoria"]),
                 "nº doc": sum(1 for i in itens if not i["doc"]),
                 "centro de custo": sum(1 for i in itens if not i["obras"])},
-        tem_logo=bool(logo), tem_rodape=bool(rodape))
+        tem_logo=bool(logo), tem_rodape=bool(rodape),
+        movimentos=len(movs),
+        total_movimentos=sum((Decimal(m["centavos"]) / 100 for m in movs),
+                             Decimal("0.00")))

@@ -508,9 +508,19 @@ class MCClient:
         except Exception:
             abas = []
         minhas = [a for a in abas if a in self._minhas]
-        if self.page is not None and self.page not in minhas:
+        if self.page is not None and self.page not in minhas and not self._fechada(self.page):
+            # Aba fechada fica de fora: ela ainda diz a URL do ERP, e o sinal
+            # de login que estoura nela contava como "logada" — o app lia
+            # numa aba morta (TargetClosedError, 22/10/2026).
             minhas.insert(0, self.page)
         return minhas
+
+    @staticmethod
+    def _fechada(aba) -> bool:
+        try:
+            return aba.is_closed()
+        except Exception:
+            return True
 
     def _abas_da_pessoa(self) -> list:
         if self.central:

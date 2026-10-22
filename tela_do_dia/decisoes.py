@@ -8,7 +8,10 @@ liberação).
 """
 from __future__ import annotations
 
+import re
 from decimal import Decimal
+
+import util
 
 from .valores import brl, ler_valor_editado
 
@@ -71,6 +74,150 @@ def descrever_movimento(mov) -> str:
     return f"{origem or 'de fora'} → {destino}: {brl(valor)}"
 
 
+def nova_distribuicao(origem: str, socio: str, valor_texto, rotulos, socios=None):
+    """(conta de origem, sócio, Decimal) de uma distribuição de lucros digitada
+    (item A, 22/10/2026). Levanta ValueError com o motivo.
+
+    A origem é conta do painel (é de lá que o dinheiro SAI: soma no E dela e
+    no mínimo). O sócio não é conta do painel: é quem recebe, pelo NOME do
+    cadastro da aba Aportes — `socios` é essa lista, quando a tela a tem; com
+    ela, nome fora da lista é recusado (a aba Aportes não o acharia)."""
+    origem = (origem or "").strip()
+    socio = (socio or "").strip()
+    if not origem:
+        raise ValueError("escolha a conta de origem")
+    if origem not in set(rotulos):
+        raise ValueError(f"a origem {origem!r} não é conta do painel")
+    if not socio:
+        raise ValueError("escolha o sócio ou investidor que recebe")
+    if socios is not None and socio not in set(socios):
+        raise ValueError(f"{socio!r} não está no cadastro da aba Aportes — escolha da lista")
+    if socio in set(rotulos):
+        raise ValueError(f"{socio!r} é conta do painel: isso é transferência entre contas")
+    valor = ler_valor_editado(valor_texto)
+    if valor <= ZERO:
+        raise ValueError("o valor tem de ser maior que zero")
+    return origem, socio, valor
+
+
+#: Palavras que fazem de um nome do cadastro uma EMPRESA (sem acento, maiúsculo).
+_DE_EMPRESA = re.compile(
+    r"\b(?:LTDA|S\s*/?\s*A|SPE|EIRELI|ME|EPP|HOLDING|PARTICIPACOES|EMPREENDIMENTOS|"
+    r"ENGENHARIA|INCORPORACOES|INCORPORADORA|CONSTRUTORA|CONSTRUCOES|COMERCIO|SERVICOS|"
+    r"CONDOMINIO|ASSOCIACAO|INSTITUTO|BANCO|EMPRESA|SUBCONTA)\b")
+
+
+def _cara_de_empresa(nome: str, dado: dict) -> bool:
+    texto = util.norm_espaco(f"{nome} {(dado or {}).get('nome_oficial') or ''}")
+    return bool(_DE_EMPRESA.search(texto))
+
+
+def socios_do_cadastro(entidades, rotulos, aportadores=()) -> list[str]:
+    """Quem pode receber uma distribuição, para a lista da janela: PESSOAS do
+    cadastro da aba Aportes (é por ele que o "Mandar" casa) — sem conta no ERP,
+    ou aportador da aba Regras (`aportadores`, casado pelo nome completo) —,
+    nunca nome com cara de empresa (LTDA, SPE, HOLDING, PARTICIPAÇÕES…: revisão
+    geral de 22/10/2026, a lista oferecia o cadastro inteiro e dava para
+    "distribuir lucro" para outra empresa), nem a subconta de investidor (ela
+    só RECEBE aporte), nem as contas do painel (para elas é transferência)."""
+    from aportes.dados import INVESTIDOR_PREFIXO
+    rotulos = set(rotulos or ())
+    entidades = entidades or {}
+    dos_aportadores = {util.norm_espaco(a) for a in aportadores or () if a}
+    saida = []
+    for n, dado in entidades.items():
+        if str(n).startswith(INVESTIDOR_PREFIXO) or n in rotulos:
+            continue
+        if _cara_de_empresa(n, dado):
+            continue
+        oficial = util.norm_espaco((dado or {}).get("nome_oficial") or "")
+        if ((dado or {}).get("conta") is None or util.norm_espaco(n) in dos_aportadores
+                or (oficial and oficial in dos_aportadores)):
+            saida.append(n)
+    return sorted(saida)
+
+
+def distribuicoes_validas(distribuicoes, rotulos) -> list:
+    """As que o Excel recebe: origem conta do painel e valor > 0 — as mesmas
+    que a tela soma (`aportes.montar_aportes` ignora as outras, com alerta)."""
+    rotulos = set(rotulos)
+    return [(o, s, v) for o, s, v in (distribuicoes or ())
+            if o in rotulos and v is not None and v > ZERO]
+
+
+def descrever_distribuicao(dist) -> str:
+    origem, socio, valor = dist
+    return f"distribuição de lucros {origem} → {socio}: {brl(valor)}"
+
+
+#: O tipo de cada movimento à mão, como o HTML e o Registro o escrevem.
+TIPO_APORTE_NA_MAE = "Aporte que entra na mãe"
+TIPO_TRANSFERENCIA = "Transferência entre contas"
+TIPO_DISTRIBUICAO = "Distribuição de lucros"
+#: O aporte definido na aba Regras do MODELO (o painel e o Excel do dia).
+TIPO_APORTE_REGRAS = "Aporte (aba Regras)"
+
+
+def _tipo_da_regra(tipo: str) -> str:
+    t = util.sem_acento(tipo or "Aporte").casefold().strip()
+    if t.startswith("transf"):
+        return TIPO_TRANSFERENCIA
+    if t.startswith("distribui"):
+        return TIPO_DISTRIBUICAO
+    return TIPO_APORTE_REGRAS
+
+
+def movimentos_do_dia(a_mao, distribuicoes, definidos=None, regras=(),
+                      rotulos=()) -> list[dict]:
+    """TODOS os movimentos definidos do dia que não são pagamento de conta,
+    como linhas INFORMATIVAS do HTML dos pagamentos (dono, 22/10/2026: "as
+    transf e aportes e distribuições … só a informação pra não ficar nenhum
+    pra trás"): de, para, tipo e valor.
+
+    Primeiro os da aba Regras (`definidos`: {(destino, aportador): valor},
+    os mesmos do painel e do Excel — aporte, transferência ou distribuição,
+    pelo tipo da regra; revisão geral de 22/10/2026, achado 1), depois os à
+    mão que não repetem um deles, depois as distribuições. Repetido = mesmo
+    de, para e valor; o à mão "de fora" repete a regra cujo aportador não é
+    conta do painel (`rotulos`). Cada linha da Regras apaga no máximo UM à
+    mão. Valor zero ou negativo, ou par fora da aba Regras, fica de fora,
+    como na tela e no Excel."""
+    linhas = []
+    tipo_do_par = {(r.destino, r.aportador): r.tipo for r in regras or ()}
+    rotulos = {util.norm_espaco(r) for r in rotulos or ()}
+    das_regras = []
+    for (destino, aportador), valor in (definidos or {}).items():
+        if valor is None or valor <= ZERO or (destino, aportador) not in tipo_do_par:
+            continue
+        das_regras.append((aportador, destino, valor))
+        linhas.append({"de": aportador, "para": destino,
+                       "tipo": _tipo_da_regra(tipo_do_par[(destino, aportador)]),
+                       "valor": valor})
+
+    def repete(origem, destino, valor) -> bool:
+        for i, (de, para, v) in enumerate(das_regras):
+            if v != valor or util.norm_espaco(para) != util.norm_espaco(destino):
+                continue
+            if (util.norm_espaco(de) == util.norm_espaco(origem) if origem
+                    else util.norm_espaco(de) not in rotulos):
+                del das_regras[i]
+                return True
+        return False
+
+    for origem, destino, valor in (a_mao or ()):
+        if valor is None or valor <= ZERO or repete(origem, destino, valor):
+            continue
+        linhas.append({"de": origem or DE_FORA, "para": destino,
+                       "tipo": TIPO_TRANSFERENCIA if origem else TIPO_APORTE_NA_MAE,
+                       "valor": valor})
+    for origem, socio, valor in (distribuicoes or ()):
+        if valor is None or valor <= ZERO:
+            continue
+        linhas.append({"de": origem, "para": socio, "tipo": TIPO_DISTRIBUICAO,
+                       "valor": valor})
+    return linhas
+
+
 # ------------------------------------------------------------- passo 4
 def motivo_sem_excel(leitura, saldos, exigir_todos_os_saldos: bool) -> str:
     """Vazio = pode gerar. Leitura interrompida nunca vira Excel ("a pagar 0")
@@ -117,11 +264,20 @@ def separar_envio(envio, mandar_sem_saldo: bool):
     return mandadas, seguradas
 
 
+def _linha_do_envio(p) -> str:
+    return f"{p.aportador} → {p.destino} ({brl(p.valor)}): {p.motivo}"
+
+
 def linhas_do_envio(envio) -> tuple[list[str], list[str]]:
     """(pendências, avisos) em texto. Pendência NÃO foi; aviso foi, confira."""
-    def linha(p):
-        return f"{p.aportador} → {p.destino} ({brl(p.valor)}): {p.motivo}"
-    return [linha(p) for p in envio.pendentes], [linha(p) for p in envio.avisos]
+    return ([_linha_do_envio(p) for p in envio.pendentes],
+            [_linha_do_envio(p) for p in envio.avisos])
+
+
+def linhas_informativas(envio) -> list[str]:
+    """O que não vai e está certo não ir (transferência entre contas da
+    mesma empresa): o Registro informa, sem o "[!]" de erro."""
+    return [_linha_do_envio(p) for p in getattr(envio, "informativos", ())]
 
 
 # ------------------------------------------------------------- passo 2

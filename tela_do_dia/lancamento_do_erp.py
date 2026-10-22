@@ -85,6 +85,46 @@ def do_item(item: dict, overview: dict | None, *, avisos=()) -> LancamentoLido:
         avisos=tuple(avisos))
 
 
+class AbaDoErpFechada(RuntimeError):
+    """A aba do ERP fechou duas vezes seguidas: o recado já é a frase da tela."""
+
+
+RECADO_ABA_FECHADA = ("O Chrome do app fechou a aba do ERP; clique em Ler de novo.")
+
+
+def pagina_fechada(e: BaseException) -> bool:
+    """Erro de aba/navegador fechado do Playwright (pelo NOME da classe, sem
+    importar o Playwright aqui, ou pela frase dele)."""
+    nomes = {c.__name__ for c in type(e).__mro__}
+    texto = str(e)
+    return ("TargetClosedError" in nomes or "has been closed" in texto
+            or "Target closed" in texto)
+
+
+def ler_pela_aba(garantir, ident: str, conhecidos=(), *, log=print, ler=None) -> LancamentoLido:
+    """`ler` pela aba do robô, com UMA nova tentativa se a aba fechou.
+
+    `garantir()` devolve a api do Chrome do app (`AnexarFrame.garantir_sessao`):
+    na 2ª vez ela abre outra aba do robô (ou outro Chrome, se ele morreu).
+    Pedido do dono 22/10/2026: "Ler o lançamento" mostrava
+    "TargetClosedError: Target page, context or browser has been closed".
+    Fechou de novo: `AbaDoErpFechada` com o recado da tela. Outro erro sobe
+    como veio, sem repetir."""
+    ler = ler or globals()["ler"]
+    try:
+        return ler(garantir(), ident, conhecidos, log=log)
+    except Exception as e:                              # noqa: BLE001
+        if not pagina_fechada(e):
+            raise
+        log("  A aba do ERP no Chrome do app tinha fechado — abrindo outra e lendo de novo.")
+    try:
+        return ler(garantir(), ident, conhecidos, log=log)
+    except Exception as e:                              # noqa: BLE001
+        if pagina_fechada(e):
+            raise AbaDoErpFechada(RECADO_ABA_FECHADA) from e
+        raise
+
+
 def ler(api, ident: str, conhecidos=(), *, log=print) -> LancamentoLido:
     """Lê o lançamento `ident`; `LookupError` se o ERP não o conhece."""
     if not ident:

@@ -83,3 +83,79 @@ def test_lancamento_que_nao_existe_levanta():
         le.ler(_Api(), "L9")
     with pytest.raises(LookupError):
         le.ler(_Api(), "")
+
+
+# ------------------------------------------- aba do ERP fechada no meio (D)
+class TargetClosedError(Exception):
+    """Mesmo nome da exceção do Playwright (o código olha o nome, não importa
+    o Playwright)."""
+
+
+def _leitor(*respostas):
+    chamadas = []
+    fila = list(respostas)
+
+    def ler(api, ident, conhecidos=(), *, log=print):
+        chamadas.append(api)
+        r = fila.pop(0)          # sem resposta sobrando: chamada a mais estoura
+        if isinstance(r, Exception):
+            raise r
+        return r
+    return ler, chamadas
+
+
+def _garantir():
+    abertas = []
+
+    def garantir():
+        abertas.append(len(abertas) + 1)
+        return f"api{len(abertas)}"
+    return garantir, abertas
+
+
+def test_aba_fechada_reabre_e_le_uma_vez_de_novo():
+    ler, chamadas = _leitor(TargetClosedError("Target page, context or browser has been closed"),
+                            "LIDO")
+    garantir, abertas = _garantir()
+    log = []
+    assert le.ler_pela_aba(garantir, "L9", (), log=log.append, ler=ler) == "LIDO"
+    assert chamadas == ["api1", "api2"] and abertas == [1, 2]
+    assert any("abrindo" in m for m in log)
+
+
+def test_aba_fechada_duas_vezes_vira_recado_claro_sem_terceira_tentativa():
+    erro = TargetClosedError("Target page, context or browser has been closed")
+    ler, chamadas = _leitor(erro, erro, "NUNCA")
+    garantir, abertas = _garantir()
+    with pytest.raises(le.AbaDoErpFechada) as e:
+        le.ler_pela_aba(garantir, "L9", (), log=lambda *_: None, ler=ler)
+    assert len(chamadas) == 2 and abertas == [1, 2]
+    assert "fechou a aba do ERP" in str(e.value) and "Ler de novo" in str(e.value)
+    assert "TargetClosedError" not in str(e.value)
+
+
+def test_aba_fechada_ao_abrir_a_sessao_tambem_tenta_de_novo():
+    ler, chamadas = _leitor("LIDO")
+    vezes = []
+
+    def garantir():
+        vezes.append(1)
+        if len(vezes) == 1:
+            raise TargetClosedError("Target closed")
+        return "api"
+    assert le.ler_pela_aba(garantir, "L9", (), log=lambda *_: None, ler=ler) == "LIDO"
+    assert chamadas == ["api"] and len(vezes) == 2
+
+
+def test_outro_erro_nao_tenta_de_novo():
+    ler, chamadas = _leitor(LookupError("não achei o lançamento L9 no ERP"), "NUNCA")
+    garantir, abertas = _garantir()
+    with pytest.raises(LookupError):
+        le.ler_pela_aba(garantir, "L9", (), log=lambda *_: None, ler=ler)
+    assert len(chamadas) == 1 and abertas == [1]
+
+
+def test_pagina_fechada_reconhece_pelo_nome_ou_pela_frase():
+    assert le.pagina_fechada(TargetClosedError("x"))
+    assert le.pagina_fechada(RuntimeError("Target page, context or browser has been closed"))
+    assert not le.pagina_fechada(RuntimeError("timeout"))

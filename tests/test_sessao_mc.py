@@ -183,3 +183,25 @@ def test_pulsar_com_navegador_morto_nao_estoura():
     c = cliente([])
     c.ctx = CtxMorto()
     c.pulsar()                              # não pode levantar
+
+
+class AbaFechada(AbaFalsa):
+    """A aba que a pessoa (ou outro robô) fechou: o Playwright ainda devolve
+    a URL antiga, e toda pergunta à página estoura."""
+
+    def is_closed(self):
+        return True
+
+    def locator(self, seletor):
+        raise RuntimeError("Target page, context or browser has been closed")
+
+
+def test_aba_do_robo_fechada_nao_conta_como_logada():
+    """Pedido do dono 22/10/2026 ("Ler o lançamento" deu TargetClosedError):
+    a aba guardada em `self.page` estava fechada, mas ainda dizia a URL do
+    ERP, e o sinal de login que estoura contava como "sem tela de login" —
+    o app adotava a aba MORTA como logada e lia nela."""
+    morta = AbaFechada(f"{BASE}/#/payable-installments")
+    c = cliente([], atual=morta)
+    assert c._abas_do_robo() == []
+    assert not c.esta_logado()

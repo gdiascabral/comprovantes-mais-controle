@@ -179,6 +179,42 @@ paths:
   suavizar e binarizar no `LIMIAR` — só volta código que passa no CRC.
   `recebedor_confere` aceita nome IGUAL mesmo curto (sigla de 3 letras no QR
   e no favorecido saía "conferir quem recebe").
+  (k) **Pedidos do dono de 22/10/2026** (`tests/test_reembolso_socio_e_autorizado.py`),
+  os dois em falha FECHADA e só sem boleto anexado. **Reembolso de sócio**:
+  "REEMBOLSO <pessoa>" no documento, com a pessoa no `pix_reembolso.json`
+  (`reembolso.socio_do_documento`: todas as palavras da entrada — duas ou
+  mais — aparecem, na ordem, no nome do documento, e com UMA entrada; chave de pessoa, CPF fechando o DV; documento = o cadastrado ou a
+  própria chave CPF, e os dois têm de ser o mesmo) sai Pix pela chave dela,
+  "APTO* (reembolso)", Obs "reembolso a <pessoa> — chave do cadastro", e o
+  segmento B declara a pessoa (`reembolso=True`, desmarcado na remessa). Fora
+  do cadastro, continua "ATENÇÃO — documento declara reembolso".
+  **Pagamento autorizado**: anexo cujo nome ou texto diz "PAGAMENTO
+  AUTORIZADO" (a frase inteira, sem acento nem caixa — "OC AUTORIZADA" e
+  "AUTORIZAÇÃO DE FORNECIMENTO" não; `eh_autorizacao`; nunca boleto, nota,
+  comprovante ou "PAGAR PARA") não é boleto — era o PDF "neutro" único e
+  virava "Boleto em imagem". Sem boleto nos OUTROS anexos (nem anunciado, nem
+  linha digitável válida em PDF, nem o achado dentro da NF por
+  `linha_em_outro_anexo`, que ganha sempre), com todos os outros anexos LIDOS
+  com certeza (`_lido_com_certeza`: imagem, PDF sem texto e PDF lido só pelo
+  OCR seguram a autorização — podem ser o boleto que não fechou) e com chave
+  inequívoca em `paidToBankAccount` (`chave_dos_dados_bancarios`: UMA chave só,
+  `chave_unica_da_observacao`, tipo conhecido, DV fechando), paga por ela, Obs
+  "pagamento autorizado (anexo) — Pix dos dados bancários do lançamento".
+  `"pix_dos_dados_bancarios": true` no `regras_fornecedor.json` faz o mesmo
+  para o favorecido sem o anexo, com as MESMAS travas (revisão de dinheiro de
+  22/10/2026, A1/A2/A6). Vale para a Remessa/Retorno igual: é o mesmo
+  `montar_registros`.
+  **Boleto escaneado de nome neutro** (re-revisão de dinheiro, 22/10/2026):
+  `escolher_pdf_do_boleto` escolhe primeiro entre `_pdfs_neutros`, que tira
+  também a autorização (`eh_autorizacao`, pelo rótulo) e o nome que COMEÇA
+  pela sigla da nota (`_NOME_COMECA_COM_NF`: "NF 1234", "NF-1234", "NFE…" —
+  só aqui, não no `_NAO_E_BOLETO`, para "NF 5909 - boleto" continuar boleto);
+  sem nenhum ali, vale a régua antiga (o PDF único continua o do boleto). E o
+  Pix do cadastro "sem boleto anexado" exige todo PDF que pode esconder
+  boleto (`_neutros_nao_lidos`: régua antiga menos a autorização) LIDO com
+  certeza; senão fica sem dado de pagamento, "ATENÇÃO — sem dados de pgto",
+  Obs "anexo não lido — pode ser boleto: …". Antes, autorização ou "NF 1234"
+  + scan davam Pix APTO e marcado na remessa, com o boleto em aberto.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e
@@ -678,6 +714,18 @@ paths:
   sem o Copiar do boleto/Pix, com o motivo "já pago — não pagar de novo"
   (copiar o dado de quem já pagou é pagar em dobro); o travessão (U+2014) do
   status "ATENÇÃO — motivo" sai da frase do motivo.
+  **Movimentos do dia** (item A, 22/10/2026; só pela tela "Pagamentos do
+  dia"): `gravar(movimentos=)` recebe os movimentos do dia (os da aba
+  Regras — aporte, transferência — e os à mão: aporte que entra na mãe,
+  transferência entre contas, distribuição de lucros; quem junta e tira os
+  repetidos é `tela_do_dia/decisoes.movimentos_do_dia`) e
+  `movimentos_do_html` os põe em `DATA.movimentos`, numa seção própria
+  "Movimentos do dia — já cadastrados no banco": de → para, tipo e valor,
+  SEM chave, sem "Copiar" nem "já paguei" (dono: "não precisa colocar os pix
+  pq tem salvo no banco já, só a informação pra não ficar nenhum pra trás").
+  Total próprio (`Gerados.total_movimentos`), fora do `total` das contas e
+  do total geral da página; não são `Resultado.contas`, então não chegam à
+  remessa. Sem movimentos, a seção fica escondida.
   **Para remover**: apagar os dois módulos e o teste, o método
   `_gerar_html_pagamentos` e as linhas marcadas "HTML provisório" deste
   arquivo (import, botão `b_html` e as duas que o acendem e apagam), e este

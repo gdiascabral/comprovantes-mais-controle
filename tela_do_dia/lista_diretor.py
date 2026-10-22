@@ -5,6 +5,7 @@ ordem de ontem como sugestão, texto pronto para o WhatsApp. ("Arrastar" é
 Módulo puro: sem tela, sem rede. Dinheiro em Decimal."""
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, replace
 from decimal import Decimal
 
@@ -22,10 +23,15 @@ class LinhaDaLista:
     valor: Decimal
     ordinal: int | None = None
     sem_nome_curto: bool = False
+    sugerido: bool = False          # nome = sugestão do app (não gravada)
 
 
 def montar(agendados_hoje, rotulo_de, nomes) -> list[LinhaDaLista]:
-    """Soma por rótulo de conta. Valor None ou <= 0 não vira linha."""
+    """Soma por rótulo de conta. Valor None ou <= 0 não vira linha.
+
+    Conta sem nome curto gravado nasce com a SUGESTÃO (`sugerir_nomes`,
+    `sugerido=True`): a lista copia direto, e o dono troca quando quiser.
+    A sugestão nunca repete um nome curto gravado de outra conta."""
     soma: dict[str, Decimal] = {}
     for a in agendados_hoje:
         if a.valor is None or a.valor <= 0:
@@ -34,8 +40,174 @@ def montar(agendados_hoje, rotulo_de, nomes) -> list[LinhaDaLista]:
         if not r:
             raise ValueError("Agendado sem conta nem rótulo: a lista não pode ter linha sem nome.")
         soma[r] = soma.get(r, ZERO) + a.valor
-    return [LinhaDaLista(r, nomes.get(r) or r, v, None, not nomes.get(r))
-            for r, v in soma.items()]
+    nomes = nomes or {}
+    sug = sugerir_nomes(list(soma), ocupados={v for v in nomes.values() if v})
+    linhas = []
+    for r, v in soma.items():
+        gravado = nomes.get(r)
+        nome = gravado or sug.get(r) or r
+        linhas.append(LinhaDaLista(r, nome, v, None, sem_nome_curto=not gravado and not sug.get(r),
+                                   sugerido=not gravado and bool(sug.get(r))))
+    return linhas
+
+
+# ------------------------------------------------------ nome curto sugerido
+# Regra fixa (sem IA, sem rede): o mesmo rótulo dá sempre o mesmo nome.
+_BANCOS = {"SICOOB": "Sicoob", "INTER": "Inter", "BRADESCO": "Bradesco",
+           "CAIXA": "Caixa", "CEF": "Caixa", "ITAU": "Itaú", "SANTANDER": "Santander",
+           "BB": "BB", "SICREDI": "Sicredi", "NUBANK": "Nubank", "C6": "C6"}
+_JURIDICOS = {"LTDA", "LTDA.", "SPE", "S/A", "S.A.", "S.A", "SA", "ME", "EIRELI", "EPP"}
+_ROMANOS = {"I", "II", "III", "IV", "V", "VI"}
+_CURTOS = {"PARTICIPACOES": "Part.", "SUBCONTA": "Sub.", "ENGENHARIA": "Eng.",
+           "INCORPORACOES": "Incorp.", "EMPREENDIMENTOS": "Empreend."}
+_MINUSCULAS = {"DE", "DA", "DO", "DAS", "DOS", "E"}
+
+
+def _sem_acento(t: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", t) if not unicodedata.combining(c))
+
+
+def _chave(nome: str) -> str:
+    return " ".join(str(nome or "").split()).casefold()
+
+
+def _numero_de_conta(tok: str) -> str:
+    """'20001-1' / '20.003-3' / '1234567' → só os dígitos antes do DV; '' se não é."""
+    t = tok.replace(".", "")
+    corpo = t.split("-")[0] if t.count("-") == 1 else t
+    dv = t.split("-")[1] if t.count("-") == 1 else ""
+    if corpo.isdigit() and len(corpo) >= 4 and (dv == "" or (len(dv) == 1 and dv.isalnum())) \
+            and (dv or len(corpo) >= 5):
+        return corpo[:5] if len(corpo) > 5 else corpo
+    return ""
+
+
+def _palavra(tok: str) -> str:
+    base = _sem_acento(tok).upper()
+    if base in _CURTOS:
+        return _CURTOS[base]
+    if tok.endswith(".") or any(c.isdigit() for c in tok):
+        return tok
+    if base in _MINUSCULAS:
+        return tok.lower()
+    if len(tok) <= 3 and not any(c in "AEIOU" for c in base):
+        return tok.upper()                   # sigla: QRS, TB, QD, LT
+    return tok[:1].upper() + tok[1:].lower()
+
+
+def _pecas(rotulo: str):
+    """(nome sem banco nem número, banco curto, número da conta)."""
+    banco = ""
+    # Banco num trecho só dele, em qualquer lugar ("EMPRESA - SICOOB -
+    # SUBCONTA 1234-5"): no meio, ficava no nome ("Empresa Sicoob Sub. …").
+    trechos = [t.strip() for t in str(rotulo or "").split(" - ")]
+    for i, trecho in enumerate(trechos):
+        if _sem_acento(trecho).upper() in _BANCOS:
+            banco = _BANCOS[_sem_acento(trechos.pop(i)).upper()]
+            break
+    toks = [t for t in " ".join(trechos).split() if t != "-"]
+    toks = [t.strip("-") for t in toks if t.strip("-")]
+    # Senão, o banco é a última palavra que não é número de conta.
+    fim = next((i for i in range(len(toks) - 1, -1, -1) if not _numero_de_conta(toks[i])), None)
+    if not banco and fim is not None and _sem_acento(toks[fim]).upper() in _BANCOS:
+        banco = _BANCOS[_sem_acento(toks.pop(fim)).upper()]
+    numero, saida, i = "", [], 0
+    while i < len(toks):
+        t = toks[i]
+        cima = _sem_acento(t).upper()
+        if cima == "SUBCONTA" and i + 1 < len(toks) and _numero_de_conta(toks[i + 1]):
+            saida.append(f"Sub. {_numero_de_conta(toks[i + 1])}")
+            i += 2
+            continue
+        if cima in _JURIDICOS:
+            i += 1
+            if cima == "SPE" and i < len(toks) and toks[i].upper() in _ROMANOS:
+                i += 1
+            continue
+        n = _numero_de_conta(t)
+        if n:
+            numero = numero or n
+            i += 1
+            continue
+        saida.append(_palavra(t))
+        i += 1
+    if saida and saida[0] in {w.lower() for w in _MINUSCULAS}:
+        saida[0] = saida[0].capitalize()
+    return " ".join(saida), banco, numero
+
+
+def _tem_banco(texto: str, banco: str) -> bool:
+    return banco.casefold() in [p.strip("-.").casefold() for p in texto.split()]
+
+
+def _caber(nome: str) -> str:
+    nome = " ".join(nome.split())
+    return nome if len(nome) <= NOME_MAXIMO else nome[:NOME_MAXIMO].rstrip()
+
+
+def sugerir_nomes(rotulos, ocupados=()) -> dict[str, str]:
+    """Nome curto sugerido para cada rótulo, ÚNICOS entre si e diferentes dos
+    `ocupados` (nomes curtos já gravados). Banco sai quando a lista inteira é
+    do mesmo banco; senão fica curto no fim ("Obra Beta - Inter"). Empate
+    desempata pelo número da conta (5 dígitos), depois pelo banco, depois por
+    um contador — na ordem alfabética dos rótulos, então a ordem de chegada
+    não muda o resultado."""
+    unicos = sorted({str(r) for r in rotulos if r is not None})
+    pecas = {r: _pecas(r) for r in unicos}
+    bancos = {b for _n, b, _num in pecas.values()}
+    tirar_banco = len(bancos) == 1
+    usados = {_chave(o) for o in ocupados or () if o}
+    candidatos = {}
+    for r, (nome, banco, numero) in pecas.items():
+        if nome:
+            base = nome
+        elif numero:
+            # Só banco e número: "<Banco> <número curto>", nunca o banco duas
+            # vezes ("SICOOB 40001-1 - Sicoob").
+            base = f"{banco} {numero}" if banco else numero
+        else:
+            base = _caber(str(r).strip()) or "Conta"
+        sufixo = bool(banco) and not _tem_banco(base, banco)
+        com_banco = f"{base} - {banco}" if sufixo and not tirar_banco else base
+        lista = [com_banco]
+        if numero and numero not in base:
+            lista.append(f"{com_banco.removesuffix(f' - {banco}')} {numero}"
+                         + (f" - {banco}" if sufixo and not tirar_banco else ""))
+        if sufixo and tirar_banco:
+            lista.append(f"{lista[-1]} - {banco}")
+        candidatos[r] = [_caber(c) for c in lista]
+    contagem: dict[str, int] = {}
+    for r in unicos:
+        k = _chave(candidatos[r][0])
+        contagem[k] = contagem.get(k, 0) + 1
+    saida: dict[str, str] = {}
+    # 1º os que não empatam com ninguém ficam com o nome base.
+    for r in unicos:
+        k = _chave(candidatos[r][0])
+        if contagem[k] == 1 and k not in usados:
+            saida[r] = candidatos[r][0]
+            usados.add(k)
+    for r in unicos:
+        if r in saida:
+            continue
+        escolha = next((c for c in candidatos[r][1:] if _chave(c) not in usados), "")
+        n = 2
+        while not escolha:
+            c = _caber(f"{candidatos[r][-1][:NOME_MAXIMO - 4]} {n}")
+            escolha = c if _chave(c) not in usados else ""
+            n += 1
+        saida[r] = escolha
+        usados.add(_chave(escolha))
+    return saida
+
+
+def sugerir_nome_curto(conta, todas) -> str:
+    """O nome curto que o app sugere para `conta`, olhando a lista `todas`
+    (para decidir o banco e desempatar)."""
+    rotulos = list(todas or ())
+    if conta not in rotulos:
+        rotulos.append(conta)
+    return sugerir_nomes(rotulos)[str(conta)]
 
 
 def renumerar(linhas) -> list[LinhaDaLista]:

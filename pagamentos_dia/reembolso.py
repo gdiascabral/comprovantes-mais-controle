@@ -401,6 +401,79 @@ def _do_erp(nome: str, participantes: dict) -> tuple[str, str]:
     return "", ""
 
 
+#: Tipos de chave que pagam uma PESSOA. CNPJ fica de fora: reembolso é para
+#: gente, e a chave de empresa no cadastro de uma pessoa é engano de cadastro.
+_CHAVES_DE_PESSOA = (regras.CHAVE_CPF, regras.CHAVE_TELEFONE,
+                     regras.CHAVE_EMAIL, regras.CHAVE_ALEATORIA)
+
+
+def _palavras(s) -> list[str]:
+    return re.findall(r"[a-z0-9]+", _comparavel(s))
+
+
+def _cadastro_cabe_no_documento(documento: list[str], entrada: list[str]) -> bool:
+    """TODAS as palavras da entrada do cadastro aparecem, na ordem, no nome
+    do documento ("SOCIO UM" cabe em "SOCIO UM SOBRENOME"; não em "SOCIO",
+    "SOCIO UMBERTO" nem "UM SOCIO"), e a entrada tem ao menos DUAS palavras.
+
+    Comparar só até o nome mais curto (revisão de dinheiro de 22/10/2026, A3)
+    fazia a entrada "FULANO" — o cadastro guarda toda pessoa de aviso PAGAR
+    PARA — casar com "REEMBOLSO FULANO OUTRAPESSOA": Pix pronto no HTML para
+    a pessoa errada."""
+    if len(entrada) < 2:
+        return False
+    resto = iter(documento)
+    return all(palavra in resto for palavra in entrada)
+
+
+def socio_do_documento(quem: str, cadastro: dict) -> tuple[Pessoa, str] | None:
+    """(pessoa, chave) de quem o documento manda reembolsar ("REEMBOLSO
+    <nome>"), pelo cadastro local — ou None quando não dá para ter certeza.
+
+    Pedido do dono em 22/10/2026: o reembolso dos sócios sai "sempre com a
+    chave Pix deles (que é o CPF de cada um)", memorizada no
+    `pix_reembolso.json`. Falha FECHADA em todo caminho, e a linha volta a
+    ser "ATENÇÃO — documento declara reembolso":
+
+    - todas as palavras da entrada (duas ou mais) aparecem, na ordem, no
+      nome do documento, e com UMA entrada só — dois cadastros possíveis é
+      escolher entre duas pessoas;
+    - a chave tem de ser de pessoa (CPF, celular, e-mail ou aleatória) e, se
+      for CPF, fechar o dígito verificador;
+    - o documento (o que o segmento B declara) é o do cadastro ou, sem ele, a
+      própria chave quando ela é um CPF que fecha — e chave CPF diferente do
+      documento cadastrado é Pix para um e arquivo declarando outro: None.
+    """
+    alvo = _palavras(quem)
+    if not alvo or not cadastro:
+        return None
+    casadas = [dado for chave_nome, dado in cadastro.items()
+               if dado.get("chave") and (
+                   _cadastro_cabe_no_documento(alvo, _palavras(chave_nome))
+                   or _cadastro_cabe_no_documento(alvo, _palavras(dado.get("nome"))))]
+    if len(casadas) != 1:
+        return None
+    dado = casadas[0]
+    chave = str(dado.get("chave") or "").strip()
+    if regras.tipo_de_chave_pix(chave) not in _CHAVES_DE_PESSOA:
+        return None
+    digitos = re.sub(r"\D", "", chave)
+    cpf_da_chave = ""
+    if regras.tipo_de_chave_pix(chave) == regras.CHAVE_CPF:
+        cpf_da_chave = regras.documento_valido(digitos)
+        if len(cpf_da_chave) != 11:
+            return None
+    documento = regras.documento_valido(dado.get("documento") or "")
+    if documento and cpf_da_chave and documento != cpf_da_chave:
+        return None
+    documento = documento or cpf_da_chave
+    if not documento:
+        return None
+    nome = util.norm_espaco(dado.get("nome") or quem)
+    return (Pessoa(nome=nome, documento=documento, origem=ORIGEM_CADASTRO_LOCAL),
+            chave)
+
+
 # --------------------------------------------------------------------------
 # A decisão
 # --------------------------------------------------------------------------

@@ -112,6 +112,11 @@ MODELO_GERAL = r'''<!doctype html>
   .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--text);color:#fff;padding:8px 16px;border-radius:20px;font-size:12.5px;opacity:0;pointer-events:none;transition:opacity .2s;}
   .toast.show{opacity:1;}
   input.copy-source{position:absolute;left:-9999px;}
+  .movs{background:var(--card);border:1px dashed var(--border);border-radius:12px;margin-bottom:22px;overflow:hidden;}
+  .movs .account-head h2{font-size:15px;margin:0;}
+  .movs .movs-nota{font-size:11.5px;color:var(--muted);padding:8px 18px 0;}
+  .movs td,.movs th{overflow-wrap:anywhere;word-break:break-word;}
+  .tipo-mov{background:var(--accent-bg);color:var(--accent);}
   @media (max-width:640px){
     .wrap{padding:16px 10px 50px;}
     .tabela-conta thead{display:none;}
@@ -160,6 +165,15 @@ MODELO_GERAL = r'''<!doctype html>
   </div>
 
   <div id="accounts"></div>
+
+  <div class="movs" id="movimentos" hidden>
+    <div class="account-head"><h2>Movimentos do dia — já cadastrados no banco</h2><div class="account-total">Total <b id="movTotal"></b></div></div>
+    <div class="movs-nota">Só para nada ficar para trás: não entram no total das contas nem na remessa, e não há o que copiar.</div>
+    <table>
+      <thead><tr><th>De</th><th>Para</th><th style="width:22%">Tipo</th><th style="width:16%">Valor</th></tr></thead>
+      <tbody id="movBody"></tbody>
+    </table>
+  </div>
 </div>
 
 <div class="toast" id="toast">Copiado</div>
@@ -325,12 +339,28 @@ function renderAccounts(){
   });
 
 }
+// Movimentos a mao do dia: linhas so informativas (sem chave, sem Copiar,
+// sem "ja paguei"), com total proprio, fora do total geral das contas.
+function renderMovimentos(){
+  const movs = DATA.movimentos || [];
+  if(!movs.length) return;
+  const body = document.getElementById('movBody');
+  let movTotal = 0;
+  movs.forEach(m => {
+    movTotal += m.centavos;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(m.de)}</td><td>${esc(m.para)}</td><td><span class="tipo-badge tipo-mov">${esc(m.tipo)}</span></td><td class="valor">R$ ${esc(m.valor)}</td>`;
+    body.appendChild(tr);
+  });
+  document.getElementById('movTotal').textContent = 'R$ ' + reais(movTotal);
+  document.getElementById('movimentos').hidden = false;
+}
 document.getElementById('restoreBtn').addEventListener('click', () => {
   excluidosState = {}; saveExcluidos();
   document.querySelectorAll('tr.row-excluida').forEach(t => t.classList.remove('row-excluida'));
   updateSummary();
 });
-renderSummary(); renderAccounts(); updateSummary();
+renderSummary(); renderAccounts(); renderMovimentos(); updateSummary();
 </script>
 </body>
 </html>
