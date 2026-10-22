@@ -141,14 +141,14 @@ def celulas_da_conta(conta) -> tuple[str, str, str, str]:
 
 
 # ------------------------------------------------- período lido
-def periodo_na_tela(periodo) -> tuple[str, str]:
-    """(texto do período lido, aviso). Decisão do dono (21/10/2026): esta aba
-    não tem campo de data — o período é o de `sugerir_periodo(hoje)`, e a tela
-    mostra o que leu. O aviso fica SEMPRE vazio: sem calendário de feriados
-    não há como saber quando avisar ("o dia útil anterior ficou fora" vale em
-    todo dia útil, e aviso que aparece sempre é ruído). No dia seguinte a um
+def periodo_na_tela(periodo) -> str:
+    """O texto do período lido. Decisão do dono (21/10/2026): esta aba não
+    tem campo de data — o período é o de `sugerir_periodo(hoje)`, e a tela
+    mostra o que leu. Não há aviso nenhum: sem calendário de feriados não há
+    como saber quando avisar ("o dia útil anterior ficou fora" vale em todo
+    dia útil, e aviso que aparece sempre é ruído). No dia seguinte a um
     feriado, os vencidos do feriado se buscam pela aba Remessa/Retorno."""
-    return f"Pagamentos de {periodo.inicio:%d/%m} a {periodo.fim:%d/%m}", ""
+    return f"Pagamentos de {periodo.inicio:%d/%m} a {periodo.fim:%d/%m}"
 
 
 # ------------------------------------------------- arquivo e data do dia

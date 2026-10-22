@@ -175,9 +175,9 @@ def test_aporte_leva_a_data_do_dia_de_trabalho_e_nao_a_do_relogio():
 # ------------------------------------------------- período lido (sem campo de data)
 def test_periodo_lido_aparece_na_tela():
     from conciliacao.models import Periodo
-    assert dc.periodo_na_tela(Periodo(date(2026, 10, 17), date(2026, 10, 19)))[0] == \
+    assert dc.periodo_na_tela(Periodo(date(2026, 10, 17), date(2026, 10, 19))) == \
         "Pagamentos de 17/10 a 19/10"
-    assert dc.periodo_na_tela(Periodo(HOJE, HOJE))[0] == "Pagamentos de 21/10 a 21/10"
+    assert dc.periodo_na_tela(Periodo(HOJE, HOJE)) == "Pagamentos de 21/10 a 21/10"
 
 
 @pytest.mark.parametrize("inicio, fim", [
@@ -190,4 +190,5 @@ def test_periodo_nunca_avisa_sem_calendario_de_feriados(inicio, fim):
     dia útil — avisar sempre é ruído. O vencido de feriado se busca pela aba
     Remessa/Retorno (notas do PR e arquitetura-tela-do-dia.md)."""
     from conciliacao.models import Periodo
-    assert dc.periodo_na_tela(Periodo(inicio, fim))[1] == ""
+    texto = dc.periodo_na_tela(Periodo(inicio, fim))
+    assert isinstance(texto, str) and "útil" not in texto and "fora" not in texto

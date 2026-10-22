@@ -45,18 +45,28 @@ REMOVER = "remover"
 
 
 class TelaDoDiaFrame(ttk.Frame):
-    COLS_SALDOS = (("conta", "CONTA", 300, "w"), ("sistema", "SISTEMA (ERP)", 230, "e"),
-                   ("banco", "BANCO", 230, "e"), ("dif", "DIFERENÇA", 130, "e"),
-                   ("situacao", "SITUAÇÃO", 320, "w"))
+    # Larguras a 100% (o `estilo_tabela` escala). A soma de cada tabela cabe
+    # no cartão a 1280x800 com o menu aberto e o Windows a 125%: o Treeview
+    # não encolhe coluna para caber, ele CORTA as da direita (era o BANCO, a
+    # DIFERENÇA e a SITUAÇÃO sumindo). Só a coluna de texto estica (a #0,
+    # "CONTA", nas tabelas em árvore), e é ela que ganha a sobra da tela larga.
+    COLS_SALDOS = (("conta", "CONTA", 200, "w"), ("sistema", "SISTEMA (ERP)", 125, "e"),
+                   ("banco", "BANCO", 125, "e"), ("dif", "DIFERENÇA", 100, "e"),
+                   ("situacao", "SITUAÇÃO", 130, "w"))
     # Passo 2 do desenho aprovado: quantos saem da conta e quanto (o já
     # enviado em remessa soma), quantos estão bloqueados (não somam).
-    COLS_PAG = (("vao", "VÃO SAIR", 110, "e"), ("a_pagar", "A PAGAR", 150, "e"),
-                ("bloq", "BLOQUEADOS", 180, "e"), ("situacao", "SITUAÇÃO", 400, "w"))
-    COLS_APT = (("minimo", "MÍNIMO", 120, "e"), ("sugerido", "SUGERIDO", 120, "e"),
-                ("definido", "DEFINIDO", 120, "e"), ("falta", "FALTA RATEAR", 120, "e"),
-                ("final", "SALDO FINAL", 130, "e"))
-    COLS_MAO = (("origem", "DE", 300, "w"), ("destino", "PARA", 300, "w"),
-                ("valor", "VALOR", 140, "e"))
+    COLS_PAG = (("vao", "VÃO SAIR", 75, "e"), ("a_pagar", "A PAGAR", 115, "e"),
+                ("bloq", "BLOQUEADOS", 130, "e"), ("situacao", "SITUAÇÃO", 150, "w"))
+    COLS_APT = (("minimo", "MÍNIMO", 95, "e"), ("sugerido", "SUGERIDO", 95, "e"),
+                ("definido", "DEFINIDO", 95, "e"), ("falta", "FALTA RATEAR", 100, "e"),
+                ("final", "SALDO FINAL", 95, "e"))
+    COLS_MAO = (("origem", "DE", 260, "w"), ("destino", "PARA", 260, "w"),
+                ("valor", "VALOR", 120, "e"))
+    #: Largura da #0 ("CONTA") das tabelas em árvore, a 100%.
+    LARGURA_CONTA = 200
+    #: Tabela vazia fica baixa (não empurra os passos de baixo para longe);
+    #: cheia, cresce até o teto de cada uma e rola dali em diante.
+    LINHAS_VAZIA = 3
 
     def __init__(self, master, anexar_frame):
         super().__init__(master)
@@ -100,58 +110,49 @@ class TelaDoDiaFrame(ttk.Frame):
 
         c1 = widgets.Cartao(corpo, "Saldos", 1)
         c1.pack(fill="x", padx=PADX, pady=px((0, 12)))
-        ttk.Label(c1, style="Tenue.TLabel",
-                  text="As que não batem sobem para o topo. Clique no valor do sistema ou "
-                       "do banco para editar (Enter edita o do banco): o original fica ao "
-                       "lado, o motivo é opcional, e o ajuste vale só para o dia."
-                  ).pack(anchor="w")
+        self._ajuda(c1, "As que não batem sobem para o topo. Clique no valor do sistema ou "
+                        "do banco para editar (Enter edita o do banco): o original fica ao "
+                        "lado, o motivo é opcional, e o ajuste vale só para o dia.")
         self.t_saldos = self._tabela(c1, self.COLS_SALDOS, arvore=False, altura=8)
         self.t_saldos.bind("<ButtonRelease-1>", self._clique_saldo)
         self.t_saldos.bind("<Return>", self._enter_saldo)
 
         c2 = widgets.Cartao(corpo, "Pagamentos por conta", 2)
         c2.pack(fill="x", padx=PADX, pady=px((0, 12)))
-        # Sem campo de data (decisão do dono): o período lido fica à vista. O
-        # rótulo de aviso fica vazio hoje (`decisoes.periodo_na_tela`).
+        # Sem campo de data (decisão do dono): o período lido fica à vista,
+        # mas só DEPOIS de buscar — vazio, o rótulo era uma linha em branco
+        # em cima da ajuda (`mostrar_periodo`).
         self.lbl_periodo = ttk.Label(c2, style="Secao.TLabel", text="")
-        self.lbl_periodo.pack(anchor="w")
-        self.lbl_aviso_periodo = ttk.Label(c2, style="Atencao.TLabel", wraplength=px(900),
-                                           justify="left", text="")
-        self.lbl_aviso_periodo.pack(anchor="w")
-        ttk.Label(c2, style="Tenue.TLabel",
-                  text="A pagar = o que sai da conta: os aptos de hoje e o que já foi "
-                       "enviado em remessa e ainda não está pago (esse não é gerado de "
-                       "novo). Bloqueados (não aptos) não somam. Abra a conta para ver."
-                  ).pack(anchor="w")
+        self._ajuda_pag = self._ajuda(
+            c2, "A pagar = o que sai da conta: os aptos de hoje e o que já foi "
+                "enviado em remessa e ainda não está pago (esse não é gerado de "
+                "novo). Bloqueados (não aptos) não somam. Abra a conta para ver.")
         self.t_pag = self._tabela(c2, self.COLS_PAG, arvore=True, altura=10)
 
         c3 = widgets.Cartao(corpo, "Aportes", 3)
         c3.pack(fill="x", padx=PADX, pady=px((0, 12)))
         # Erro em cima, em vermelho, e atenção à parte: a conta-mãe negativa
         # não pode se perder no meio de "falta ratear".
-        self.lbl_alerta = ttk.Label(c3, style="Erro.TLabel", wraplength=px(900),
-                                    justify="left", text="")
-        self.lbl_alerta.pack(anchor="w")
-        self.lbl_avisos = ttk.Label(c3, style="Atencao.TLabel", wraplength=px(900),
-                                    justify="left", text="")
-        self.lbl_avisos.pack(anchor="w")
-        ttk.Label(c3, style="Tenue.TLabel",
-                  text="Para cada conta que precisa: o mínimo, quem põe e quanto, e o que "
-                       "ainda falta ratear. A conta-mãe vem primeiro, com o que entra e o "
-                       "que sai para as filhas. A regra sugere; dois cliques (ou Enter) no "
-                       "aportador para digitar o valor dele."
-                  ).pack(anchor="w", pady=px((6, 0)))
+        # Vazios saem do layout (`_mostrar_alertas`): rótulo vazio empacotado
+        # é uma linha em branco embaixo do título do cartão.
+        alertas = ttk.Frame(c3)
+        alertas.pack(fill="x")
+        self.lbl_alerta = self._ajuda(alertas, "", estilo="Erro.TLabel")
+        self.lbl_avisos = self._ajuda(alertas, "", estilo="Atencao.TLabel")
+        self._mostrar_alertas("", "")
+        self._ajuda(c3, "Para cada conta que precisa: o mínimo, quem põe e quanto, e o que "
+                        "ainda falta ratear. A conta-mãe vem primeiro, com o que entra e o "
+                        "que sai para as filhas. A regra sugere; dois cliques (ou Enter) no "
+                        "aportador para digitar o valor dele.", pady=px((6, 0)))
         self.t_apt = self._tabela(c3, self.COLS_APT, arvore=True, altura=10)
         self.t_apt.bind("<Double-1>", self._duplo_aporte)
         self.t_apt.bind("<Return>", self._enter_aporte)
 
         ttk.Label(c3, text="Movimentos à mão", style="Secao.TLabel"
                   ).pack(anchor="w", pady=px((12, 0)))
-        ttk.Label(c3, style="Tenue.TLabel",
-                  text="Dinheiro que entra numa conta sem ser aporte da aba Regras: o "
-                       "sócio que aporta na mãe, a transferência entre contas. Entram no "
-                       "mínimo e no saldo final, e na seção «À MÃO» do Excel."
-                  ).pack(anchor="w")
+        self._ajuda(c3, "Dinheiro que entra numa conta sem ser aporte da aba Regras: o "
+                        "sócio que aporta na mãe, a transferência entre contas. Entram no "
+                        "mínimo e no saldo final, e na seção «À MÃO» do Excel.")
         self.t_mao = self._tabela(c3, self.COLS_MAO, arvore=False, altura=4)
         self.t_mao.bind("<Delete>", lambda _e: self._remover_movimento())
         linha_mao = ttk.Frame(c3)
@@ -179,10 +180,8 @@ class TelaDoDiaFrame(ttk.Frame):
 
         c4 = widgets.Cartao(corpo, "Gerar", 4)
         c4.pack(fill="x", padx=PADX, pady=px((0, 12)))
-        ttk.Label(c4, style="Tenue.TLabel",
-                  text="Sai o mesmo de hoje — e o Excel do painel do dia, cópia com os "
-                       "números da tela (ajustes e aportes)."
-                  ).pack(anchor="w", pady=px((0, 8)))
+        self._ajuda(c4, "Sai o mesmo de hoje — e o Excel do painel do dia, cópia com os "
+                        "números da tela (ajustes e aportes).", pady=px((0, 8)))
         botoes = ttk.Frame(c4)
         botoes.pack(fill="x")
         self.b_excel = widgets.Botao(botoes, "Excel do painel do dia", papel="passo",
@@ -227,23 +226,61 @@ class TelaDoDiaFrame(ttk.Frame):
         return (self.b_excel, self.b_planilha, self.b_html, self.b_remessa, self.b_mandar,
                 self.b_sugestao, self.b_mao_mae, self.b_mao_transf, self.b_mao_tirar)
 
+    @staticmethod
+    def _ajuda(pai, texto, *, estilo="Tenue.TLabel", pady=0):
+        """Texto que quebra a linha na largura do cartão. `wraplength` fixo
+        cortava a frase à direita na janela estreita ("o motivo é o..."): a
+        largura certa só se sabe depois do layout, e muda com a janela."""
+        lbl = ttk.Label(pai, style=estilo, text=texto, justify="left")
+        lbl.pack(fill="x", anchor="w", pady=pady)
+
+        def _quebrar(e):
+            if e.width > 1 and str(lbl.cget("wraplength")) != str(e.width):
+                lbl.configure(wraplength=e.width)
+        lbl.bind("<Configure>", _quebrar, add="+")
+        return lbl
+
     def _tabela(self, pai, colunas, *, arvore: bool, altura: int):
         grade = ttk.Frame(pai)
         grade.pack(fill="both", expand=True, pady=px((8, 0)))
         t = ttk.Treeview(grade, columns=[c[0] for c in colunas],
-                         show="tree headings" if arvore else "headings", height=altura)
+                         show="tree headings" if arvore else "headings",
+                         height=self.LINHAS_VAZIA)
+        t._altura_maxima = altura
         if arvore:
             t.heading("#0", text="CONTA", anchor="w")
-            t.column("#0", width=px(320), anchor="w")
+            t.column("#0", width=px(self.LARGURA_CONTA), anchor="w", stretch=True)
         for chave, titulo, largura, ancora in colunas:
             t.heading(chave, text=titulo, anchor=ancora)
             # Sem `px`: o `estilo_tabela` escala as colunas de dados (e só
             # elas, guardando a largura de origem); a #0 é escalada acima.
-            t.column(chave, width=largura, anchor=ancora)
+            # Valor não estica (fica colado no título); texto ganha a sobra.
+            t.column(chave, width=largura, anchor=ancora, stretch=ancora == "w")
         widgets.estilo_tabela(t, ordenavel=False)
-        t.pack(side="left", fill="both", expand=True)
+        # A barra ANTES da tabela: empacotada depois, ela só ganhava o que a
+        # tabela deixasse — nada, quando as colunas passavam da largura.
         ttk.Scrollbar(grade, orient="vertical", command=t.yview).pack(side="right", fill="y")
+        t.pack(side="left", fill="both", expand=True)
+        if arvore:
+            for ev in ("<<TreeviewOpen>>", "<<TreeviewClose>>"):
+                t.bind(ev, lambda _e, t=t: t.after_idle(self._ajustar_altura, t), add="+")
         return t
+
+    def _ajustar_altura(self, t):
+        """Linhas à vista (filhos só de conta aberta), entre o mínimo da
+        tabela vazia e o teto dela."""
+        def visiveis(pai):
+            n = 0
+            for iid in t.get_children(pai):
+                n += 1
+                if t.item(iid, "open"):
+                    n += visiveis(iid)
+            return n
+        try:
+            t.configure(height=max(self.LINHAS_VAZIA,
+                                   min(visiveis(""), t._altura_maxima)))
+        except tk.TclError:
+            pass                         # aba fechada antes do idle
 
     # ------------------------------------------------------------- mensagens
     def _log(self, msg=""):
@@ -279,6 +316,12 @@ class TelaDoDiaFrame(ttk.Frame):
     def aplicar_cores(self, escuro: bool):
         try:
             widgets.estilo_log(self.log, escuro)
+            # As cores das linhas (zebra, atenção, erro) são tags gravadas na
+            # tabela quando ela nasce: sem repassar, trocar o tema deixava as
+            # linhas claras dentro do app escuro. As larguras não mudam (o
+            # `estilo_tabela` guarda as de origem).
+            for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+                widgets.estilo_tabela(t, ordenavel=False)
         except tk.TclError:
             pass
 
@@ -322,10 +365,10 @@ class TelaDoDiaFrame(ttk.Frame):
         self._iid_aporte = {}
         for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
             t.delete(*t.get_children())
-        self.lbl_alerta.configure(text="")
-        self.lbl_avisos.configure(text="")
-        self.lbl_periodo.configure(text="")
-        self.lbl_aviso_periodo.configure(text="")
+        self._mostrar_alertas("", "")
+        self.mostrar_periodo("")
+        for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+            self._ajustar_altura(t)
         for b in self._botoes_do_dia:
             b.configure(state="disabled")
 
@@ -386,10 +429,7 @@ class TelaDoDiaFrame(ttk.Frame):
                       "sobrescrito).")
         for aviso in self.leitura.avisos:
             self._log(f"[!] {aviso}")
-        texto, aviso = dc.periodo_na_tela(self.periodo)
-        self.lbl_periodo.configure(text=texto)
-        self.lbl_aviso_periodo.configure(
-            text=f"{widgets.MARCAS_ESTADO['atencao']} {aviso}" if aviso else "")
+        self.mostrar_periodo(dc.periodo_na_tela(self.periodo))
         self._recalcular()
         for b in self._botoes_do_dia:
             b.configure(state="normal")
@@ -400,6 +440,23 @@ class TelaDoDiaFrame(ttk.Frame):
             for b in (self.b_planilha, self.b_html, self.b_remessa):
                 b.configure(state="disabled")
             self._log(motivo)
+
+    def _mostrar_alertas(self, erro: str, atencao: str):
+        """Erro em cima, atenção embaixo; o vazio não ocupa linha."""
+        for lbl, texto in ((self.lbl_alerta, erro), (self.lbl_avisos, atencao)):
+            lbl.configure(text=texto)
+            lbl.pack_forget()
+        for lbl, texto in ((self.lbl_alerta, erro), (self.lbl_avisos, atencao)):
+            if texto:
+                lbl.pack(fill="x", anchor="w")
+
+    def mostrar_periodo(self, texto: str):
+        """Sem texto, o rótulo sai do layout (não deixa linha em branco)."""
+        self.lbl_periodo.configure(text=texto)
+        if texto:
+            self.lbl_periodo.pack(anchor="w", before=self._ajuda_pag)
+        else:
+            self.lbl_periodo.pack_forget()
 
     def _gravar_dia(self) -> bool:
         """True = gravou. Quem depende da gravação (o envio à aba Aportes)
@@ -426,10 +483,18 @@ class TelaDoDiaFrame(ttk.Frame):
             {ln.rotulo: ln.saldo_do_dia for ln in em_ordem},
             {c.rotulo: c.a_pagar for c in self.pagamentos.values()},
             self.regras, self.dia.aportes, a_mao=self.dia.a_mao)
+        self.mostrar_numeros()
+
+    def mostrar_numeros(self):
+        """Põe na tela o que já está em `saldos`, `pagamentos`, `fora`,
+        `aportes` e `dia`. Pública porque a `ferramentas/galeria.py` monta
+        esse estado com dados fictícios para fotografar a aba preenchida."""
         self._encher_saldos()
         self._encher_pagamentos()
         self._encher_aportes()
         self._encher_movimentos()
+        for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+            self._ajustar_altura(t)
 
     @property
     def _rotulos_do_painel(self) -> list[str]:
@@ -478,10 +543,11 @@ class TelaDoDiaFrame(ttk.Frame):
         t.delete(*t.get_children())
         self._iid_aporte = {}
         alertas = self.aportes.alertas
-        self.lbl_alerta.configure(text="\n".join(f"{widgets.MARCAS_ESTADO['erro']} {f}"
-                                                 for tag, f in alertas if tag == "erro"))
-        self.lbl_avisos.configure(text="\n".join(f"{widgets.MARCAS_ESTADO['atencao']} {f}"
-                                                 for tag, f in alertas if tag != "erro"))
+        self._mostrar_alertas(
+            "\n".join(f"{widgets.MARCAS_ESTADO['erro']} {f}"
+                      for tag, f in alertas if tag == "erro"),
+            "\n".join(f"{widgets.MARCAS_ESTADO['atencao']} {f}"
+                      for tag, f in alertas if tag != "erro"))
         for i, c in enumerate(self.aportes.contas):
             if c.sem_saldo or (c.saldo_final < 0 and c.e_mae):
                 estado = "erro"

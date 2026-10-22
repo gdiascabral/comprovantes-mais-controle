@@ -151,3 +151,17 @@ O nome do arquivo ("DD MM - completa.xlsx") é o MESMO do painel da aba "Saldo
 de pagamentos": se já existe, a tela pergunta antes de substituir. A
 atividade é anotada como "dia", que o Início nomeia por `OUTRAS_ORIGENS` (e
 não por `ROTINAS`, onde viraria "não rodou hoje" enquanto as abas convivem).
+
+## Visual (21/10/2026)
+
+As quatro tabelas cabem a 1280x800 com o menu aberto e o Windows a 125%: o
+Treeview não encolhe coluna, ele CORTA as da direita, então a soma das
+larguras de cada `COLS_*` (mais a #0, `LARGURA_CONTA`) é a medida, e só a
+coluna de texto (âncora "w") estica na tela larga. A barra de rolagem é
+empacotada antes da tabela. Tabela vazia tem `LINHAS_VAZIA` linhas e cresce
+com o que está à vista (`_ajustar_altura`, também ao abrir/fechar conta) até
+o teto de cada uma. Texto de ajuda quebra na largura do cartão (`_ajuda`,
+`wraplength` no `<Configure>`); período e alertas vazios saem do layout.
+`aplicar_cores` repassa o `estilo_tabela` (as cores das linhas são tags da
+tabela). A `ferramentas/galeria.py` fotografa a aba PREENCHIDA com dados
+fictícios (`_preencher_dia` → `mostrar_numeros()`), sem mudar o app.

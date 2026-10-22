@@ -202,6 +202,80 @@ _ORDEM = (
 )
 
 
+def _preencher_dia(aba) -> None:
+    """Põe números FICTÍCIOS na aba "Pagamentos do dia", só aqui na galeria.
+
+    Vazia, a foto não mostra nada do que a tela faz (colunas, árvore, alertas,
+    texto quebrando). O estado é montado com os módulos puros da aba — os
+    mesmos que o Buscar usa — e entregue por `mostrar_numeros()`; o app não
+    muda nada. Contas, sócios e favorecidos são inventados (o repositório é
+    público): nada aqui é dado de ninguém."""
+    import datetime
+    from decimal import Decimal as D
+
+    from conciliacao.aportadores import Regra
+    from conciliacao.models import Periodo
+    from tela_do_dia import aportes as ap
+    from tela_do_dia import dia_de_trabalho as ddt
+    from tela_do_dia import pagamentos as pg
+    from tela_do_dia import saldos as sd
+    from tela_do_dia.decisoes import periodo_na_tela
+
+    hoje = datetime.date(2026, 10, 21)
+    contas = (("Mae - Banco", D("1000.00"), D("1000.00")),
+              ("Conta Alfa - Banco", D("200.00"), D("150.00")),
+              ("Conta Beta - Banco", D("50.00"), None),
+              ("Conta Gama - Banco", D("300.00"), D("300.00")))
+    linhas = [sd.LinhaSaldo(5 + i, rotulo, sistema, banco)
+              for i, (rotulo, sistema, banco) in enumerate(contas)]
+    gama = linhas[3]
+    ajuste = sd.novo_ajuste(gama, sd.SISTEMA, D("250.00"), "simulação")
+    linhas = sd.aplicar_ajustes(linhas, {"Conta Gama - Banco": {sd.SISTEMA: ajuste}})
+    linhas = [ln if ln.rotulo != "Conta Gama - Banco"
+              else sd.aplicar_ajustes([ln], {ln.rotulo: {sd.BANCO: sd.novo_ajuste(
+                  ln, sd.BANCO, D("250.00"))}})[0] for ln in linhas]
+
+    def pag(n, conta, quem, valor, situacao):
+        return pg.Pagamento(f"fic-{n}", conta, quem, D(valor), situacao, "")
+
+    alfa = pg.PagamentosDaConta("Conta Alfa - Banco", 6)
+    alfa.vao_sair += [pag(1, "ALFA", "Fornecedor Ficticio A", "400.00", "apto"),
+                      pag(2, "ALFA", "Fornecedor Ficticio B", "100.00", "apto")]
+    alfa.bloqueados.append(pag(3, "ALFA", "Fornecedor Ficticio C", "80.00",
+                               "sem nota fiscal anexada"))
+    beta = pg.PagamentosDaConta("Conta Beta - Banco", 7)
+    beta.vao_sair.append(pag(4, "BETA", "Fornecedor Ficticio D", "300.00", "apto"))
+    beta.ja_enviados.append(pag(5, "BETA", "Fornecedor Ficticio E", "50.00",
+                                "remessa enviada, em aberto no ERP"))
+    mae = pg.PagamentosDaConta("Mae - Banco", 5)
+    mae.vao_sair.append(pag(6, "MAE", "Fornecedor Ficticio F", "200.00", "apto"))
+    fora = pg.PagamentosDaConta("CONTA FICTICIA SEM LINHA", None, motivo_fora=pg.SEM_LINHA)
+    fora.bloqueados.append(pag(7, "FORA", "Fornecedor Ficticio G", "60.00", "não apto"))
+
+    regras = [Regra("Conta Alfa - Banco", "Mae - Banco", D("2"), "Aporte", True, linha=5),
+              Regra("Conta Alfa - Banco", "Socio Ficticio A", D("1"), "Aporte", False, linha=6),
+              Regra("Conta Beta - Banco", "Mae - Banco", None, "Aporte", True, linha=7),
+              Regra("Mae - Banco", "Socio Ficticio A", D("1"), "Aporte", False, linha=8),
+              Regra("Mae - Banco", "Socio Ficticio B", D("1"), "Aporte", False, linha=9)]
+    dia = ddt.DiaDeTrabalho(hoje)
+    dia.aportes = {("Conta Alfa - Banco", "Mae - Banco"): D("300.00")}
+    dia.a_mao = [(None, "Mae - Banco", D("500.00"))]
+
+    aba.saldos = sd.ordenar(linhas)
+    aba.pagamentos = {c.linha: c for c in (mae, alfa, beta)}
+    aba.fora = [fora]
+    aba.dia = dia
+    em_ordem = sorted(aba.saldos, key=lambda ln: ln.linha)
+    aba.aportes = ap.montar_aportes(
+        {ln.rotulo: ln.saldo_do_dia for ln in em_ordem},
+        {c.rotulo: c.a_pagar for c in aba.pagamentos.values()},
+        regras, dia.aportes, a_mao=dia.a_mao)
+    aba.mostrar_periodo(periodo_na_tela(Periodo(hoje, hoje)))
+    aba.mostrar_numeros()
+    for botao in aba._botoes_do_dia:     # como depois de um Buscar
+        botao.configure(state="normal")
+
+
 def _montar_janela(root: tk.Tk, largura: int, altura: int):
     """A moldura e as 13 abas, sem login e sem navegador nenhum.
 
@@ -298,6 +372,11 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
         _montar("pag", lambda: PagamentosDiaFrame(conteudo, aba_anx))
         _montar("con", lambda: ConciliacaoFrame(conteudo, aba_anx))
         _montar("dia", lambda: TelaDoDiaFrame(conteudo, aba_anx))
+        if "dia" in quadros:
+            try:
+                _preencher_dia(quadros["dia"])
+            except Exception as e:                        # noqa: BLE001
+                print(f"[galeria] a aba \"dia\" ficou vazia: {e}")
         _montar("ctr", lambda: ContratosFrame(conteudo, aba_anx))
     else:
         print("[galeria] sem AnexarFrame: Conferência, Aportes, Relatório "
