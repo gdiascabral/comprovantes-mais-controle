@@ -40,7 +40,9 @@ from . import conferencia as cf
 from . import decisoes as dc
 from . import dia_de_trabalho as ddt
 from . import erp_do_dia, excel_do_dia, geracao, janelas, lancamento_do_erp
-from . import nuvem_do_dia, para_aportes, passo2
+from . import agendados as agd
+from . import lista_diretor as ldr
+from . import nuvem_do_dia, para_aportes, passo2, passo67
 from . import pagamentos as pg
 from . import saldos as sd
 from .valores import brl, de_float, ler_valor_editado
@@ -104,6 +106,11 @@ class TelaDoDiaFrame(ttk.Frame):
         self._iid_pag = {}               # iid da tabela do passo 2 → passo2.LinhaDaTabela
         self._ao_ler_link = None
         self._geracao = 0                # muda a cada _limpar: gravação velha não pinta tela nova
+        # "Agendados a confirmar" e passos 6/7: as regras moram em `passo67`.
+        self.marcas_agd = {}             # agendado_id → marcado (pré-marca só da prova)
+        self.para_marcar_itens = None    # None = "Montar a lista" ainda não foi clicado
+        self.lista = []                  # [lista_diretor.LinhaDaLista]
+        self._lista_ligada = False
         self._build()
         self.after(150, self._drain)
 
@@ -122,7 +129,31 @@ class TelaDoDiaFrame(ttk.Frame):
                                 command=self.buscar)
         self.b1.pack(side="left")
 
-        c1 = widgets.Cartao(corpo, "Saldos", 1)
+        self._padx = PADX
+        # No topo, e só quando há pendentes (`_encher_agendados`): empacotado
+        # antes do cartão 1.
+        self.c0 = widgets.Cartao(corpo, "Agendados a confirmar")
+        self._ajuda(self.c0, "Agendados esperando a sua resposta, de hoje e de dias anteriores. "
+                             "O app marca (☑) só o que ele prova pago — baixa no ERP ou "
+                             "retorno do banco; título que sumiu ou mudou de valor espera "
+                             "você. Clique na 1ª coluna (ou Espaço) para marcar ou desmarcar.")
+        self.t_agd = self._tabela(self.c0, passo67.COLS_AGD, arvore=False, altura=8)
+        self.t_agd.configure(selectmode="browse")
+        self.t_agd.bind("<ButtonRelease-1>", self._clique_agd)
+        self.t_agd.bind("<space>", lambda _e: self._alternar_agd(self.t_agd.focus()) or "break")
+        linha_agd = ttk.Frame(self.c0)
+        linha_agd.pack(fill="x", pady=px((8, 0)))
+        self.b_agd_pago = widgets.Botao(linha_agd, "Pago (os marcados)", papel="passo",
+                                        state="disabled", command=lambda: self._responder("pago"))
+        self.b_agd_nao = widgets.Botao(linha_agd, "Não saiu…", papel="neutro", state="disabled",
+                                       command=lambda: self._responder("nao_saiu"))
+        self.b_agd_reag = widgets.Botao(linha_agd, "Reagendado…", papel="neutro",
+                                        state="disabled",
+                                        command=lambda: self._responder("reagendado"))
+        for i, b in enumerate((self.b_agd_pago, self.b_agd_nao, self.b_agd_reag)):
+            b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
+
+        c1 = self.c1 = widgets.Cartao(corpo, "Saldos", 1)
         c1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self._ajuda(c1, "As que não batem sobem para o topo. Clique no valor do sistema ou "
                         "do banco para editar (Enter edita o do banco): o original fica ao "
@@ -232,7 +263,54 @@ class TelaDoDiaFrame(ttk.Frame):
         for i, b in enumerate((self.b_html, self.b_planilha, self.b_remessa, self.b_excel)):
             b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
 
-        acao = ttk.Frame(self, style="Fundo.TFrame")
+        c5 = widgets.Cartao(corpo, "Agendar (no banco)", 5)
+        c5.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        self._ajuda(c5, "Agende no banco como sempre — isto fica fora do app. Depois, marque "
+                        "aqui embaixo o que agendou.")
+
+        c6 = widgets.Cartao(corpo, "Marcar agendados", 6)
+        c6.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        self._ajuda(c6, "«Montar a lista» traz o que sai hoje, tudo marcado: desmarque o que "
+                        "não agendou e grave. O já marcado hoje aparece apagado e não vai de "
+                        "novo. Clique na 1ª coluna (ou Espaço) para marcar ou desmarcar.")
+        self.t_marcar = self._tabela(c6, passo67.COLS_MARCAR, arvore=False, altura=10)
+        self.t_marcar.configure(selectmode="browse")
+        self.t_marcar.bind("<ButtonRelease-1>", self._clique_marcar)
+        self.t_marcar.bind("<space>",
+                           lambda _e: self._alternar_marcar(self.t_marcar.focus()) or "break")
+        linha6 = ttk.Frame(c6)
+        linha6.pack(fill="x", pady=px((8, 0)))
+        self.b_montar = widgets.Botao(linha6, "Montar a lista", papel="neutro", state="disabled",
+                                      command=self._montar_para_marcar)
+        self.b_gravar_agd = widgets.Botao(linha6, "Gravar agendados", papel="passo",
+                                          state="disabled", command=self._gravar_agendados)
+        self.b_montar.pack(side="left")
+        self.b_gravar_agd.pack(side="left", padx=px((8, 0)))
+
+        c7 = widgets.Cartao(corpo, "Lista do diretor", 7)
+        c7.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        self._ajuda(c7, "Só o que foi agendado hoje, uma linha por conta. ↑/↓ mudam a ordem "
+                        "(dentro dos numerados ou dentro dos demais); «Ordinal» liga ou "
+                        "desliga o 1º, 2º…; o nome curto fica gravado para os próximos dias.")
+        self.t_lista = self._tabela(c7, passo67.COLS_LISTA, arvore=False, altura=10)
+        self.t_lista.configure(selectmode="browse")
+        self.t_lista.bind("<<TreeviewSelect>>", lambda _e: self._ligar_lista())
+        linha7 = ttk.Frame(c7)
+        linha7.pack(fill="x", pady=px((8, 0)))
+        self.b_subir = widgets.Botao(linha7, "↑", papel="neutro", state="disabled",
+                                     command=lambda: self._lista_mover(-1))
+        self.b_descer = widgets.Botao(linha7, "↓", papel="neutro", state="disabled",
+                                      command=lambda: self._lista_mover(1))
+        self.b_ordinal = widgets.Botao(linha7, "Ordinal sim/não", papel="neutro",
+                                       state="disabled", command=self._lista_ordinal)
+        self.b_nome = widgets.Botao(linha7, "Nome curto…", papel="neutro", state="disabled",
+                                    command=self._nome_curto)
+        self.b_copiar = widgets.Botao(linha7, "Copiar para o WhatsApp", papel="passo",
+                                      state="disabled", command=self._copiar_lista)
+        for i, b in enumerate(self._botoes_da_lista):
+            b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
+
+        acao =ttk.Frame(self, style="Fundo.TFrame")
         acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
         btns = ttk.Frame(acao, style="Fundo.TFrame")
         btns.pack(side="right", padx=px((16, 0)))
@@ -261,7 +339,7 @@ class TelaDoDiaFrame(ttk.Frame):
         """Os que só fazem sentido com uma leitura inteira na tela."""
         return (self.b_excel, self.b_planilha, self.b_html, self.b_remessa, self.b_mandar,
                 self.b_sugestao, self.b_mao_mae, self.b_mao_transf, self.b_mao_tirar,
-                *self._botoes_do_passo2)
+                *self._botoes_do_passo2, *self._botoes_67, *self._botoes_da_lista)
 
     @property
     def _botoes_do_passo2(self):
@@ -269,6 +347,17 @@ class TelaDoDiaFrame(ttk.Frame):
         gravação (`passo2.botoes_ligados`)."""
         return (self.b_liberar, self.b_desmarcar, self.b_editar, self.b_desfazer,
                 self.b_remover, self.b_a_mao)
+
+    @property
+    def _botoes_67(self):
+        """"Agendados a confirmar" e passo 6: a mesma regra do passo 2 (nuvem
+        lida, sem gravação em andamento)."""
+        return (self.b_agd_pago, self.b_agd_nao, self.b_agd_reag, self.b_montar,
+                self.b_gravar_agd)
+
+    @property
+    def _botoes_da_lista(self):
+        return (self.b_subir, self.b_descer, self.b_ordinal, self.b_nome, self.b_copiar)
 
     def _ligar_botoes(self):
         """O que fica ligado vem de `passo2.botoes`: gravando na nuvem, nada
@@ -286,11 +375,21 @@ class TelaDoDiaFrame(ttk.Frame):
             w.configure(state=estado(b.dia))
         for w in (self.b_planilha, self.b_html, self.b_remessa):
             w.configure(state=estado(b.geradores))
-        for w in self._botoes_do_passo2:
+        for w in (*self._botoes_do_passo2, *self._botoes_67):
             w.configure(state=estado(b.passo2))
+        self._lista_ligada = b.passo2
+        self._ligar_lista()
         # Durante a leitura quem manda no Buscar é a mensagem "botoes" do `_t_ler`.
         if not (self.worker and not self.worker.done()):
             self.b1.configure(state=estado(b.buscar))
+
+    def _ligar_lista(self):
+        """↑/↓ só dentro do mesmo lado (numerados × demais), pela seleção."""
+        estados = passo67.botoes_da_lista(self.lista, self._indice_lista(),
+                                          ligado=self._lista_ligada)
+        for chave, w in zip(("subir", "descer", "ordinal", "nome", "copiar"),
+                            self._botoes_da_lista):
+            w.configure(state="normal" if estados[chave] else "disabled")
 
     @staticmethod
     def _ajuda(pai, texto, *, estilo="Tenue.TLabel", pady=0):
@@ -393,7 +492,8 @@ class TelaDoDiaFrame(ttk.Frame):
             # tabela quando ela nasce: sem repassar, trocar o tema deixava as
             # linhas claras dentro do app escuro. As larguras não mudam (o
             # `estilo_tabela` guarda as de origem).
-            for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+            for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao, self.t_agd,
+                      self.t_marcar, self.t_lista):
                 widgets.estilo_tabela(t, ordenavel=False)
         except tk.TclError:
             pass
@@ -445,11 +545,13 @@ class TelaDoDiaFrame(ttk.Frame):
         self._mostrar_nuvem("")
         self.saldos, self.fora, self.pagamentos = [], [], {}
         self._iid_aporte = {}
-        for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+        self.marcas_agd, self.para_marcar_itens, self.lista = {}, None, []
+        for t in self._tabelas:
             t.delete(*t.get_children())
+        self.c0.pack_forget()
         self._mostrar_alertas("", "")
         self.mostrar_periodo("")
-        for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+        for t in self._tabelas:
             self._ajustar_altura(t)
         for b in self._botoes_do_dia:
             b.configure(state="disabled")
@@ -507,6 +609,7 @@ class TelaDoDiaFrame(ttk.Frame):
         (self.cfg, self.mapping, self.leitura, self.contas_erp, self.regras,
          self.periodo, self.modelo, lido) = pacote
         self.lido, self.conferencia, self._nuvem_travada = lido, lido.conferencia, lido.erro
+        self.marcas_agd = passo67.marcas_iniciais(lido.pendentes)
         if lido.erro:
             self._log(f"[!] {lido.erro} — liberar, editar, à mão e agendados ficam "
                       "travados até buscar de novo")
@@ -524,6 +627,7 @@ class TelaDoDiaFrame(ttk.Frame):
         for aviso in self.leitura.avisos:
             self._log(f"[!] {aviso}")
         self.mostrar_periodo(dc.periodo_na_tela(self.periodo))
+        self._montar_lista()
         self._recalcular()
         # Sem apuração (nenhum lançamento a pagar), planilha, HTML e Remessa
         # não têm de onde sair; o Excel do dia sai (a pagar zero).
@@ -543,8 +647,9 @@ class TelaDoDiaFrame(ttk.Frame):
 
     def _mostrar_nuvem(self, erro: str):
         """O recado da nuvem que não respondeu; vazio sai do layout."""
-        texto = (f"{widgets.MARCAS_ESTADO['erro']} Nuvem: {erro} — liberar, editar e "
-                 "pagamento à mão travados até buscar de novo." if erro else "")
+        texto = (f"{widgets.MARCAS_ESTADO['erro']} Nuvem: {erro} — liberar, editar, "
+                 "pagamento à mão, agendados e lista do diretor travados até buscar de "
+                 "novo." if erro else "")
         self.lbl_nuvem.configure(text=texto)
         if texto:
             self.lbl_nuvem.pack(fill="x", anchor="w", before=self._ajuda_pag)
@@ -595,8 +700,17 @@ class TelaDoDiaFrame(ttk.Frame):
         self._encher_pagamentos()
         self._encher_aportes()
         self._encher_movimentos()
-        for t in (self.t_saldos, self.t_pag, self.t_apt, self.t_mao):
+        # Sem a nuvem (a galeria monta a aba sem ela), as três ficam vazias.
+        self._encher_agendados()
+        self._encher_para_marcar()
+        self._encher_lista()
+        for t in self._tabelas:
             self._ajustar_altura(t)
+
+    @property
+    def _tabelas(self):
+        return (self.t_saldos, self.t_pag, self.t_apt, self.t_mao, self.t_agd, self.t_marcar,
+                self.t_lista)
 
     @property
     def _rotulos_do_painel(self) -> list[str]:
@@ -927,10 +1041,13 @@ class TelaDoDiaFrame(ttk.Frame):
             return None
         return ld
 
-    def _na_nuvem(self, titulo, fazer, tipo="decisao"):
+    def _na_nuvem(self, titulo, fazer, tipo="decisao", *, depois=""):
         """Grava e RELÊ fora da thread da tela (o rest espera até 20 s) e
         devolve pelo `q` ("gravou"). Nada muda na tela antes da releitura;
-        enquanto grava, os botões de gravar ficam apagados (`_gravando`)."""
+        enquanto grava, os botões de gravar ficam apagados (`_gravando`).
+        A releitura traz TUDO da nuvem (`passo67.reler_tudo`: decisões, à
+        mão, agendados, pendentes, nomes curtos, lista de ontem); o ERP não é
+        relido aqui (fora da thread do navegador)."""
         recusa = passo2.recusa_de_gravar(self._nuvem_travada, self._gravando)
         if recusa:
             messagebox.showwarning(titulo, recusa)
@@ -939,19 +1056,25 @@ class TelaDoDiaFrame(ttk.Frame):
         self._ligar_botoes()
         self.lbl.configure(text=f"{titulo}: gravando na nuvem...")
         dia, geracao_da_tela = self.periodo.fim, self._geracao
+        anterior = self.lido
+        lancamentos = list(self.leitura.lancamentos or ()) if self.leitura is not None else []
+
+        def recado(e):
+            base = widgets.recado_de_erro(getattr(e, "causa", None) or e, "Não gravei na nuvem.")
+            return passo67.recado_do_erro(e, base, depois=depois)
 
         def correr():
             try:
                 g = passo2.gravar_e_reler(
-                    self._cliente_nuvem(), dia, fazer,
-                    recado=lambda e: widgets.recado_de_erro(e, "Não gravei na nuvem."))
+                    self._cliente_nuvem(), dia, fazer, recado=recado,
+                    reler=lambda c, d: passo67.reler_tudo(c, d, anterior, lancamentos))
             except Exception as e:                          # noqa: BLE001
                 g = passo2.Gravacao(erro=widgets.recado_de_erro(e, "Não gravei na nuvem."),
                                     travar=f"falha inesperada ao gravar ({e!r}) — busque de novo")
             self.q.put(("gravou", (titulo, tipo, geracao_da_tela, g)))
         threading.Thread(target=correr, daemon=True).start()
 
-    def _receber_gravacao(self, titulo, _tipo, geracao_da_tela, g):
+    def _receber_gravacao(self, titulo, tipo, geracao_da_tela, g):
         self._gravando = False
         self.lbl.configure(text="")
         if geracao_da_tela != self._geracao or self.leitura is None:
@@ -970,16 +1093,29 @@ class TelaDoDiaFrame(ttk.Frame):
                          and not g.erro else ""),
                 f"{g.travar}.\nA tela foi limpa para não mostrar número velho."])))
             return
-        self.conferencia = g.conferencia
-        if self.lido is not None:
-            self.lido.conferencia = g.conferencia
-        self._recalcular()
+        # Decisão (a): a releitura é a da nuvem INTEIRA (`passo67.reler_tudo`).
+        lido = g.conferencia
+        self.lido, self.conferencia = lido, lido.conferencia
+        self.marcas_agd = passo67.marcas_iniciais(lido.pendentes, self.marcas_agd)
+        self._montar_lista()
+        self._recalcular()               # passo 2, aportes e (mostrar_numeros) agendados/lista
+        self._remontar_para_marcar()
+        self._encher_para_marcar()
         self._ligar_botoes()
         if g.erro:
             self._log(f"[!] {titulo}: {g.erro}")
             messagebox.showwarning(titulo, g.erro)
-        else:
-            self._log(f"{titulo}: gravado na nuvem.")
+            return
+        self._log(f"{titulo}: gravado na nuvem.")
+        if tipo == "agendados":
+            resumo = passo67.resumo_da_marcacao(g.gravado)
+            for linha in resumo:
+                self._log(f"  {linha}")
+            if len(resumo) > 1:          # as repetidas (já marcadas): recado, não erro
+                messagebox.showinfo(titulo, resumo[1])
+        elif tipo == "respondido":
+            n = len(g.gravado) if isinstance(g.gravado, list) else 1
+            self._log(f"  {n} resposta(s) gravada(s).")
 
     def _liberar(self):
         titulo = "Incluir mesmo assim"
@@ -1162,6 +1298,233 @@ class TelaDoDiaFrame(ttk.Frame):
             self.q.put(("link_lido", (lido, "")))
         except Exception as e:                              # noqa: BLE001
             self.q.put(("link_lido", (None, widgets.recado_de_erro(e, "Não li o lançamento."))))
+
+    # ------------------------------- agendados a confirmar, passos 6 e 7 (nuvem)
+    # Regra nenhuma mora aqui: quem decide é `passo67` / `agendados` /
+    # `lista_diretor` (puros, com teste). Gravar passa por `_na_nuvem`.
+    def _pode_gravar(self, titulo) -> bool:
+        recusa = passo2.recusa_de_gravar(self._nuvem_travada, self._gravando)
+        if recusa:
+            messagebox.showwarning(titulo, recusa)
+            return False
+        return self.leitura is not None and self.lido is not None and self.periodo is not None
+
+    def _encher_agendados(self):
+        t = self.t_agd
+        t.delete(*t.get_children())
+        pendentes = self.lido.pendentes if self.lido is not None else []
+        for i, ln in enumerate(passo67.linhas_agendados(pendentes, self.marcas_agd)):
+            t.insert("", "end", iid=ln.iid, values=ln.valores,
+                     tags=widgets.linha_zebrada(i, ln.tags[0] if ln.tags else ""))
+        if pendentes:
+            self.c0.pack(fill="x", padx=self._padx, pady=px((0, 12)), before=self.c1)
+        else:
+            self.c0.pack_forget()
+
+    def _clique_agd(self, evento):
+        t = self.t_agd
+        if t.identify_region(evento.x, evento.y) == "cell" and t.identify_column(evento.x) == "#1":
+            self._alternar_agd(t.identify_row(evento.y))
+
+    def _alternar_agd(self, iid):
+        if not iid or self.lido is None:
+            return
+        self.marcas_agd = passo67.alternar(self.marcas_agd, int(iid))
+        self._encher_agendados()
+        if self.t_agd.exists(iid):
+            self.t_agd.selection_set(iid)
+            self.t_agd.focus(iid)
+
+    def _responder(self, resposta):
+        nomes = {"pago": "Pago", "nao_saiu": "Não saiu", "reagendado": "Reagendado"}
+        titulo = f"Agendados a confirmar — {nomes[resposta]}"
+        if not self._pode_gravar(titulo):
+            return
+        pend = self.lido.pendentes
+        if resposta == "pago":
+            itens = passo67.pagos_marcados(pend, self.marcas_agd)
+            recusa = passo67.recusa_de_pagar(itens)
+            if recusa:
+                messagebox.showinfo(titulo, recusa)
+                return
+            # Marcado sem prova (sumiu, mudou, aguardando): o dono confirma.
+            pergunta = passo67.pergunta_ao_pagar(pend, self.marcas_agd)
+            if pergunta and not messagebox.askyesno(titulo, pergunta, default="no"):
+                return
+            self._na_nuvem(titulo, lambda c: passo67.responder_pagos(c, itens), "respondido")
+            return
+        sel = self.t_agd.selection()
+        ident = int(sel[0]) if sel else None
+        if ident is None:
+            messagebox.showinfo(titulo, "Selecione um agendado da lista.")
+            return
+        r = janelas.pedir_resposta(self, titulo, com_data=resposta == "reagendado")
+        if r is None:
+            return
+        motivo, nova_data = r
+        recusa = passo67.recusa_da_resposta(pend, ident, resposta, motivo, nova_data,
+                                            datetime.date.today())
+        if recusa:
+            messagebox.showwarning(titulo, recusa)
+            return
+        self._na_nuvem(titulo, lambda c: c.responder(ident, resposta, motivo=motivo,
+                                                     nova_data=nova_data), "respondido")
+
+    # passo 6
+    def _novos_para_marcar(self):
+        return agd.para_marcar(self.pagamentos, self.fora, self.leitura.lancamentos,
+                               self.conferencia, {a.alvo for a in self.lido.agendados_hoje})
+
+    def _montar_para_marcar(self):
+        if not self._pode_gravar("Marcar agendados"):
+            return
+        self.para_marcar_itens = self._novos_para_marcar()
+        self._encher_para_marcar()
+        self._ajustar_altura(self.t_marcar)
+        if not self.para_marcar_itens:
+            self._log("Marcar agendados: nada sai hoje.")
+
+    def _remontar_para_marcar(self):
+        """Depois de reler: a lista nova, com o desmarcado pelo dono guardado."""
+        if self.para_marcar_itens is None or self.leitura is None or self.lido is None:
+            return
+        self.para_marcar_itens = passo67.remontar_para_marcar(self._novos_para_marcar(),
+                                                              self.para_marcar_itens)
+
+    def _encher_para_marcar(self):
+        t = self.t_marcar
+        t.delete(*t.get_children())
+        for i, ln in enumerate(passo67.linhas_para_marcar(self.para_marcar_itens or ())):
+            t.insert("", "end", iid=ln.iid, values=ln.valores,
+                     tags=widgets.linha_zebrada(i, ln.tags[0] if ln.tags else ""))
+
+    def _clique_marcar(self, evento):
+        t = self.t_marcar
+        if t.identify_region(evento.x, evento.y) == "cell" and t.identify_column(evento.x) == "#1":
+            self._alternar_marcar(t.identify_row(evento.y))
+
+    def _alternar_marcar(self, iid):
+        if not iid or self.para_marcar_itens is None:
+            return
+        self.para_marcar_itens, recado = passo67.alternar_para_marcar(self.para_marcar_itens,
+                                                                      int(iid))
+        if recado:
+            messagebox.showinfo("Marcar agendados", recado)
+            return
+        self._encher_para_marcar()
+        if self.t_marcar.exists(iid):
+            self.t_marcar.selection_set(iid)
+            self.t_marcar.focus(iid)
+
+    def _gravar_agendados(self):
+        titulo = "Gravar agendados"
+        if not self._pode_gravar(titulo):
+            return
+        recusa = passo67.recusa_de_marcar(self.para_marcar_itens)
+        if recusa:
+            messagebox.showinfo(titulo, recusa)
+            return
+        linhas, dia = agd.linhas_para_nuvem(self.para_marcar_itens), self.periodo.fim
+        self._na_nuvem(titulo, lambda c: c.marcar_agendados(dia, linhas), "agendados")
+
+    # passo 7
+    def _montar_lista(self):
+        """A lista de HOJE; a ordem que o dono já arrumou vale sobre a de ontem."""
+        if self.lido is None or self.mapping is None:
+            self.lista = []
+            return
+
+        def rotulo(conta):
+            achado = self.mapping.resolve_label(conta)
+            return achado.label if achado else conta
+        try:
+            self.lista = passo67.montar_lista(self.lido.agendados_hoje, rotulo,
+                                              self.lido.nomes_curtos, self.lido.lista_anterior,
+                                              atual=self.lista)
+        except ValueError as e:
+            self.lista = []
+            self._log(f"[!] lista do diretor: {e}")
+
+    def _indice_lista(self):
+        sel = self.t_lista.selection()
+        try:
+            i = int(sel[0]) if sel else None
+        except ValueError:
+            return None
+        return i if i is not None and 0 <= i < len(self.lista) else None
+
+    def _encher_lista(self, selecionar=None):
+        t = self.t_lista
+        t.delete(*t.get_children())
+        for i, ln in enumerate(self.lista):
+            t.insert("", "end", iid=str(i), tags=widgets.linha_zebrada(
+                         i, "atencao" if ln.sem_nome_curto else ""),
+                     values=(f"{ln.ordinal}º" if ln.ordinal else "", ln.nome, brl(ln.valor)))
+        if selecionar is not None:
+            i = next((n for n, ln in enumerate(self.lista) if ln.rotulo == selecionar), None)
+            if i is not None:
+                t.selection_set(str(i))
+                t.focus(str(i))
+        self._ligar_lista()
+
+    def _lista_mover(self, delta):
+        i = self._indice_lista()
+        if not passo67.pode_mover(self.lista, i, delta):
+            return
+        rotulo = self.lista[i].rotulo
+        self.lista = ldr.mover(self.lista, i, delta)
+        self._encher_lista(selecionar=rotulo)
+
+    def _lista_ordinal(self):
+        i = self._indice_lista()
+        if i is None:
+            return
+        rotulo = self.lista[i].rotulo
+        self.lista = ldr.alternar_ordinal(self.lista, i)
+        self._encher_lista(selecionar=rotulo)
+
+    def _nome_curto(self):
+        titulo = "Nome curto da conta"
+        if not self._pode_gravar(titulo):
+            return
+        i = self._indice_lista()
+        if i is None:
+            messagebox.showinfo(titulo, "Selecione uma linha da lista do diretor.")
+            return
+        rotulo, nomes = self.lista[i].rotulo, self.lido.nomes_curtos
+        atual = nomes.get(rotulo, "")
+        while True:
+            nome = janelas.pedir_nome_curto(self, rotulo, atual)
+            if nome is None:
+                return
+            erro = passo67.validar_nome_curto(nome, rotulo, nomes, self.lista)
+            if not erro:
+                break
+            messagebox.showwarning(titulo, erro)
+            atual = nome
+        nome = nome.strip()
+        if nome == nomes.get(rotulo):
+            return
+        self._na_nuvem(titulo, lambda c: c.gravar_nome_curto(rotulo, nome), "nome_curto")
+
+    def _copiar_lista(self):
+        titulo = "Lista do diretor"
+        if not self._pode_gravar(titulo):
+            return
+        recusa = passo67.recusa_de_copiar(self.lista)
+        if recusa:
+            messagebox.showinfo(titulo, recusa)
+            return
+        texto = ldr.texto_whatsapp(self.lista)
+        # Clipboard só na thread da tela; a gravação vai depois, para a
+        # sugestão de amanhã — falhar nela não desfaz a cópia.
+        self.clipboard_clear()
+        self.clipboard_append(texto)
+        self._log("Lista copiada — cole no WhatsApp.")
+        ordem, dia = ldr.para_nuvem(self.lista), self.periodo.fim
+        self._na_nuvem(titulo, lambda c: c.gravar_lista(dia, ordem, texto), "lista",
+                       depois="A lista JÁ foi copiada; o que se perdeu é só a sugestão de "
+                              "ordem de amanhã.")
 
     # ----------------------------------------------------------------- gerar
     def _ocupado(self, titulo) -> bool:
