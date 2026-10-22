@@ -115,10 +115,6 @@ def recusa_de_gravar(travada: str, gravando: bool) -> str:
     return ""
 
 
-def botoes_ligados(tem_leitura: bool, travada: str, gravando: bool) -> bool:
-    return bool(tem_leitura) and not travada and not gravando
-
-
 def pode_liberar(linha) -> bool:
     """`conferencia.pode_liberar`, e nunca a PARTE de um lançamento dividido:
     liberar é por id e devolveria também a parte já enviada (pagar em dobro).
@@ -263,6 +259,8 @@ def gravar_e_reler(cliente, dia, fazer, *, recado=str, reler=reler_conferencia) 
         gravado = fazer(cliente)
     except Exception as e:                                   # noqa: BLE001
         erro = recado(e) + chr(10) * 2 + CONFIRA_DEPOIS_DO_ERRO
+        # Parou no meio (`passo67.ParouNoMeio`): o que já entrou.
+        gravado = getattr(e, "gravado_parcial", None)
     try:
         conf = reler(cliente, dia)
     except Exception as e:                                   # noqa: BLE001
@@ -321,11 +319,11 @@ class Botoes:
     buscar: bool
 
 
-def botoes(*, tem_leitura: bool, gravando: bool, travada: str, sem_geradores: bool,
-           lendo: bool = False) -> Botoes:
+def botoes(*, tem_leitura: bool, gravando: bool, travada: str, sem_geradores: bool) -> Botoes:
     """Gravando na nuvem, NADA fica ligado: gerar no meio da gravação
-    sairia com a decisão de antes; buscar limparia a tela embaixo dela."""
-    if gravando or lendo:
+    sairia com a decisão de antes; buscar limparia a tela embaixo dela.
+    Lendo o ERP, a tela está sem leitura (o Buscar limpa antes): só buscar."""
+    if gravando:
         return Botoes(False, False, False, False)
     if not tem_leitura:
         return Botoes(False, False, False, True)

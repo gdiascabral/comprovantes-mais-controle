@@ -308,3 +308,40 @@ def test_gravar_e_reler_com_reler_tudo():
                               reler=lambda c, d: p67.reler_tudo(c, d, None, []))
     assert isinstance(g.conferencia, nd.LidoDaNuvem) and g.erro == "" and not g.travar
     assert [a.alvo for a in g.conferencia.agendados_hoje] == ["L2"]
+
+
+# ------------------------------------- "Pago" em lote que para no meio (22/10)
+def test_pago_que_para_no_meio_lista_no_registro_cada_um_ja_gravado():
+    """O recado dizia só "Gravei 2 de 3"; o Registro passa a dizer QUAIS
+    (favorecido e valor), para o dono não responder duas vezes."""
+    pend = [(_ag(1), PAGO, None), (_ag(2, "L2", "35.50"), PAGO, None),
+            (_ag(3, "L3", "7.00"), PAGO, None)]
+    c = _Cliente(falhar_no=3)
+    g = passo2.gravar_e_reler(c, DIA, lambda cli: ("pago", p67.responder_pagos(
+        cli, [(1, ""), (2, ""), (3, "")])), recado=str, reler=lambda cli, d: "relido")
+    assert g.erro and g.gravado == ("pago", [1, 2])
+    assert p67.registro_do_parcial(pend, g.gravado) == [
+        "já gravado antes do erro — pago: Fornecedor Modelo Ltda R$ 100,00",
+        "já gravado antes do erro — pago: Fornecedor Modelo Ltda R$ 35,50"]
+    # Nada entrou antes do erro: nada a listar (nem "Nenhuma resposta gravada").
+    assert p67.registro_do_parcial(pend, ("pago", [])) == []
+    assert p67.registro_do_parcial(pend, None) == []
+
+
+def test_erro_comum_nao_inventa_gravado_parcial():
+    def quebra(_c):
+        raise rest.ErroDaNuvem("HTTP 500")
+    g = passo2.gravar_e_reler(_Cliente(), DIA, quebra, reler=lambda cli, d: "relido")
+    assert g.erro and g.gravado is None
+
+
+def test_frame_poe_o_parcial_no_registro():
+    import ast
+    from pathlib import Path
+    fonte = (Path(__file__).resolve().parents[1] / "tela_do_dia" / "frame.py"
+             ).read_text(encoding="utf-8")
+    metodo = next(n for n in ast.walk(ast.parse(fonte))
+                  if isinstance(n, ast.FunctionDef) and n.name == "_receber_gravacao")
+    chamadas = [n.func.attr for n in ast.walk(metodo)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+    assert "registro_do_parcial" in chamadas

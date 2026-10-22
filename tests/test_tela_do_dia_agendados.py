@@ -209,3 +209,14 @@ def test_sem_o_item_do_erp_o_agendado_nunca_pre_marca():
                               "lancamento_id": "L1", "valor": "10.00", "foto": item.foto})
     s = ag.situacao(a, {"id": "L1", "paid": False, "remainingValue": 10.0}, SimpleNamespace(retorno_estado="ok"))
     assert not s.pre_marca and "sem a foto" in s.frase
+
+
+@pytest.mark.parametrize("valor", [None, D("-0.01"), D("-10.00")])
+def test_valor_sem_numero_ou_negativo_nao_vira_item_nem_linha(valor):
+    """A constraint da nuvem é valor > 0: um só desses recusaria o lote."""
+    pv = SimpleNamespace(id="LX", conta_erp="C", favorecido="F", valor=valor)
+    p1 = SimpleNamespace(id="L1", conta_erp="C", favorecido="F", valor=D("10.00"))
+    painel = {8: SimpleNamespace(rotulo="Conta Alfa - Banco", linha=8, saem=[pv, p1])}
+    itens = ag.para_marcar(painel, [], [], None, set())
+    assert [i.alvo for i in itens] == ["L1"]
+    assert [l["alvo"] for l in ag.linhas_para_nuvem(itens)] == ["L1"]

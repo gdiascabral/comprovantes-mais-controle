@@ -111,3 +111,21 @@ def test_mover_nos_limites():
     linhas = [ld.LinhaDaLista("A", "A", D("1"), 1), ld.LinhaDaLista("B", "B", D("1"))]
     assert [l.rotulo for l in ld.mover(linhas, 0, -1)] == ["A", "B"]
     assert [l.rotulo for l in ld.mover(linhas, 1, 1)] == ["A", "B"]
+
+
+def test_empate_de_ordinal_de_ontem_desempata_pela_posicao_de_ontem():
+    """Duas contas com o MESMO ordinal ontem: vale quem vinha antes na lista
+    de ontem — nem a ordem de hoje, nem o valor."""
+    linhas = [ld.LinhaDaLista("A", "A", D("900")), ld.LinhaDaLista("B", "B", D("1"))]
+    anterior = [{"conta": "B", "ordinal": 1}, {"conta": "A", "ordinal": 1}]
+    sug = ld.sugerir_ordem(linhas, anterior)
+    assert [(l.rotulo, l.ordinal) for l in sug] == [("B", 1), ("A", 2)]
+
+
+def test_conta_cujo_unico_ordinal_de_ontem_e_invalido_fica_sem_ordinal():
+    linhas = [ld.LinhaDaLista(r, r, D("1")) for r in ("A", "B", "C", "E")]
+    anterior = [{"conta": "A", "ordinal": "x"}, {"conta": "B", "ordinal": 1},
+                {"conta": "C", "ordinal": 0}, {"conta": "E", "ordinal": -2}]
+    sug = ld.sugerir_ordem(linhas, anterior)
+    assert [(l.rotulo, l.ordinal) for l in sug] == [("B", 1), ("A", None), ("C", None),
+                                                    ("E", None)]

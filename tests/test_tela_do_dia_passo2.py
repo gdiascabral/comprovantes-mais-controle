@@ -75,10 +75,6 @@ def test_nuvem_travada_e_gravacao_em_curso_recusam_gravar():
     assert "não li a nuvem" in p2.recusa_de_gravar("não li a nuvem (x)", True)
     assert p2.recusa_de_gravar("", True) == "Espere a gravação anterior terminar."
     assert p2.recusa_de_gravar("", False) == ""
-    assert p2.botoes_ligados(True, "", False)
-    assert not p2.botoes_ligados(True, "ainda não li a nuvem", False)
-    assert not p2.botoes_ligados(True, "", True)
-    assert not p2.botoes_ligados(False, "", False)
 
 
 # ------------------------------------------------------------ liberar
@@ -308,3 +304,16 @@ def test_editar_abre_com_a_decisao_aplicada_e_volta_ao_erp():
 def test_tirar_o_reembolso_e_pelo_desfazer():
     campos = {"reembolso_nome": "", "reembolso_documento": "", "tipo": "Pix", "dados": PIX_OK}
     assert "Desfazer" in p2.validar_edicao_da_tela({"reembolso": True}, campos, "engano")
+
+
+def test_botoes_e_a_unica_regra_dos_botoes():
+    """Onda de menores (22/10): `botoes_ligados` (morto, ninguém chamava) saiu,
+    e o `lendo` de `botoes` também — o frame nunca o passava. A regra que o
+    `botoes_ligados` dizia (sem leitura, nuvem travada ou gravando: o passo 2
+    apagado) é a de `botoes`, coberta pelos testes acima."""
+    import inspect
+    assert not hasattr(p2, "botoes_ligados")
+    assert list(inspect.signature(p2.botoes).parameters) == [
+        "tem_leitura", "gravando", "travada", "sem_geradores"]
+    assert not p2.botoes(tem_leitura=True, gravando=False, travada="ainda não li a nuvem",
+                         sem_geradores=False).passo2

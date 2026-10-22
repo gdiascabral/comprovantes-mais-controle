@@ -147,6 +147,16 @@ def registro_das_respostas(pendentes, gravado) -> list[str]:
     return linhas or ["Nenhuma resposta gravada."]
 
 
+def registro_do_parcial(pendentes, gravado) -> list[str]:
+    """As linhas do Registro de uma gravação que PAROU NO MEIO: cada resposta
+    que entrou antes do erro, com favorecido e valor — o recado só dizia
+    "Gravei N de M". Nada entrou: nada a listar."""
+    if not gravado or not gravado[1]:
+        return []
+    return [f"já gravado antes do erro — {linha}"
+            for linha in registro_das_respostas(pendentes, gravado)]
+
+
 def recusa_de_pagar(itens) -> str:
     return "" if itens else "Marque (clique na 1ª coluna ou Espaço) o que foi pago."
 
@@ -154,9 +164,12 @@ def recusa_de_pagar(itens) -> str:
 class ParouNoMeio(Exception):
     """A gravação de várias respostas parou no meio: `gravados` entraram."""
 
-    def __init__(self, causa, gravados, total):
+    def __init__(self, causa, gravados, total, resposta="pago"):
         super().__init__(str(causa))
         self.causa, self.gravados, self.total = causa, list(gravados), total
+        #: (resposta, [agendado_id]) do que entrou: o `gravado` da `Gravacao`
+        #: (`passo2.gravar_e_reler`), que a tela lista no Registro.
+        self.gravado_parcial = (resposta, list(gravados))
 
 
 def responder_pagos(cliente, itens) -> list:

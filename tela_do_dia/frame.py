@@ -351,7 +351,7 @@ class TelaDoDiaFrame(ttk.Frame):
     @property
     def _botoes_do_passo2(self):
         """Os que GRAVAM na nuvem: apagados sem a nuvem lida e durante uma
-        gravação (`passo2.botoes_ligados`)."""
+        gravação (`passo2.botoes`, o campo `passo2`)."""
         return (self.b_liberar, self.b_desmarcar, self.b_editar, self.b_desfazer,
                 self.b_remover, self.b_a_mao)
 
@@ -1103,9 +1103,15 @@ class TelaDoDiaFrame(ttk.Frame):
                       "busque de novo para ver o estado da nuvem.")
             self._ligar_botoes()
             return
+        pend_antes = list(self.lido.pendentes) if self.lido is not None else []
+        # "Pago" em lote que parou no meio: QUAIS já entraram (favorecido e valor).
+        parcial = (passo67.registro_do_parcial(pend_antes, g.gravado)
+                   if g.erro and tipo == "respondido" else [])
         if g.travar:
             # Sem reler, o que está na tela pode estar velho: limpa e pede busca.
             self._log(f"[!] {titulo}: {g.travar}")
+            for linha in parcial:
+                self._log(f"  {linha}")
             self._limpar()
             self._ligar_botoes()         # sem leitura: só o Buscar volta
             self.lbl.configure(text="Busque de novo — a nuvem não foi relida.")
@@ -1117,7 +1123,6 @@ class TelaDoDiaFrame(ttk.Frame):
         # Decisão (a): a releitura é a da nuvem INTEIRA (`passo67.reler_tudo`).
         lido = g.conferencia
         anteriores = self.lido.pendentes if self.lido is not None else ()
-        pend_antes = list(anteriores)
         self.lido, self.conferencia = lido, lido.conferencia
         self.marcas_agd = passo67.marcas_iniciais(lido.pendentes, self.marcas_agd, anteriores)
         self._montar_lista()
@@ -1127,6 +1132,8 @@ class TelaDoDiaFrame(ttk.Frame):
         self._ligar_botoes()
         if g.erro:
             self._log(f"[!] {titulo}: {g.erro}")
+            for linha in parcial:
+                self._log(f"  {linha}")
             messagebox.showwarning(titulo, g.erro)
             return
         self._log(f"{titulo}: gravado na nuvem.")
