@@ -773,6 +773,25 @@ def barra_de_titulo(janela, escuro: bool | None = None) -> None:
 #: parecer disponível — a régua aqui é "dá para ver que é um botão".
 BORDA_DESLIGADO = "linha"
 
+#: A moldura do botão da barra de cima ("Minha aba no ERP"). Desde 22/10/2026
+#: a barra é a cor da página e o botão é cartão: sem moldura ele virava texto
+#: solto (1,13:1). Medido em `tests/test_visual.py`.
+BORDA_DA_BARRA = "linha"
+
+
+def cor_do_passo_sob_o_cursor(c: dict) -> str:
+    """O azul do botão de passo sob o cursor: um tom MAIS ESCURO do mesmo.
+
+    Clarear (o que se fez primeiro, em 22/10/2026) deixava o branco do rótulo
+    em 4,2:1 no tema escuro; escurecer só aumenta o contraste dele."""
+    return _mistura(c["marca_solida"], "#000000", 0.15)
+
+
+def cor_da_bolinha(c: dict, estado: str) -> str:
+    """A bolinha do navegador: âmbar se ocupado, verde se livre — da paleta
+    do tema, porque desde 22/10/2026 a barra de cima é a cor da página."""
+    return c["atencao"] if estado == "ocupado" else c["acao_viva"]
+
 
 class Botao(tk.Button):
     """O botão do painel: chapado, colorido, com o papel dito pela cor.
@@ -860,10 +879,10 @@ class Botao(tk.Button):
             "acao":   ("#FFFFFF", c["acao"], c["acao_ativo"]),
             # `marca_solida` e não `marca`: aqui o azul é FUNDO e o branco é a
             # letra. No escuro a `marca` deixava o rótulo em 2,69:1.
-            # Sob o cursor, um tom mais claro do mesmo azul. Era a cor da
-            # barra de cima, que desde 22/10/2026 é a cor da página.
+            # Sob o cursor, um tom mais escuro do mesmo azul (era a cor da
+            # barra de cima, que desde 22/10/2026 é a cor da página).
             "passo":  ("#FFFFFF", c["marca_solida"],
-                       _mistura(c["marca_solida"], "#FFFFFF", 0.12)),
+                       cor_do_passo_sob_o_cursor(c)),
             # O neutro é CINZA e não branco: no cartão branco, um botão
             # branco com borda de 1 px não se lia como botão — o "Hoje" ao
             # lado do campo de data passava por rótulo.
@@ -890,6 +909,10 @@ class Botao(tk.Button):
                 self.configure(highlightthickness=1,
                                highlightbackground=c["borda"],
                                highlightcolor=c["borda"])
+            elif self._papel == "barra":
+                self.configure(highlightthickness=1,
+                               highlightbackground=c[BORDA_DA_BARRA],
+                               highlightcolor=c[BORDA_DA_BARRA])
             else:
                 self.configure(highlightthickness=0)
         except tk.TclError:
@@ -2452,7 +2475,7 @@ class ChipStatus(tk.Frame):
     ele responde ("dá para clicar noutra aba agora?") se faz ANTES do clique,
     e o rodapé da lateral é o canto mais longe do olho de quem vai clicar.
 
-    A BOLINHA é o que muda de cor; o texto fica sempre legível sobre o azul.
+    A BOLINHA é o que muda de cor; o texto fica sempre legível sobre a barra.
     Verde parado é livre, âmbar piscando é ocupado — e aí a frase diz o que a
     aba está fazendo, que é a informação cara.
     """
@@ -2489,12 +2512,10 @@ class ChipStatus(tk.Frame):
 
     def _pintar_bolha(self):
         c = cores()
-        cor = c["atencao"] if self._estado == "ocupado" else c["acao_viva"]
-        if self._na_barra:
-            # Sobre o azul da marca, o verde e o âmbar da paleta clara somem.
-            # Estes dois são os mesmos tons puxados para o claro — a barra é
-            # escura nos dois temas, então servem para os dois.
-            cor = "#FFC24D" if self._estado == "ocupado" else "#5FD08E"
+        # Na barra ou fora dela, as cores do tema: até 22/10/2026 a barra era
+        # azul escura e usava um verde e um âmbar fixos, claros, que na barra
+        # da cor da página clara sumiam (1,4:1).
+        cor = cor_da_bolinha(c, self._estado)
         try:
             self.bolha.delete("all")
             self.bolha.create_oval(1, 1, self._bolinha - 1,
@@ -2708,10 +2729,10 @@ class ItemMenu(tk.Frame):
         try:
             if hover and not self._ativo:
                 estilo = "ItemSobre.TLabel"
-            # No item aberto o anel de foco é da cor do TEXTO: a `marca` sobre
-            # o azul cheio sumiria.
+            # No item aberto o anel de foco é BRANCO: a `marca` sobre o azul
+            # cheio sumiria, e o `texto` do claro dava 2,0:1 contra ele.
             self.configure(background=fundo, highlightbackground=fundo,
-                           highlightcolor=c["texto"] if self._ativo
+                           highlightcolor="#FFFFFF" if self._ativo
                            else c["marca"])
             self.corpo.configure(background=fundo)
             self.filete.configure(background=filete)

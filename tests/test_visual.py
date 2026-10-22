@@ -1148,3 +1148,31 @@ def test_o_item_aberto_do_menu_e_azul_cheio(raiz):
         assert str(item.lbl_icone.cget("foreground")).lower() == "#ffffff"
     finally:
         item.destroy()
+
+
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+def test_o_botao_de_passo_sob_o_cursor_continua_legivel(tema):
+    """Revisão de 22/10/2026: clarear o azul sob o cursor deixava o branco em
+    4,2:1 no escuro. O tom sob o cursor ESCURECE, e o rótulo segue legível."""
+    paleta = widgets.PALETA[tema]
+    sob_o_cursor = widgets.cor_do_passo_sob_o_cursor(paleta)
+    assert _contraste(BRANCO, sob_o_cursor) >= MINIMO
+
+
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+def test_o_botao_da_barra_tem_contorno_visivel(tema):
+    """Desde 22/10/2026 o botão da barra ("Minha aba no ERP") é cartão sobre a
+    cor da página: sem moldura ele virava texto solto (1,13:1)."""
+    paleta = widgets.PALETA[tema]
+    razao = _contraste(paleta[widgets.BORDA_DA_BARRA], paleta["marca_barra"])
+    assert razao >= MINIMO_DESLIGADO, _br(razao)
+
+
+@pytest.mark.parametrize("tema", sorted(widgets.PALETA))
+@pytest.mark.parametrize("estado", ("livre", "ocupado"))
+def test_a_bolinha_do_navegador_aparece_na_barra(tema, estado):
+    """A bolinha livre/ocupado era um verde e um âmbar fixos, claros, feitos
+    para a barra azul; na barra da cor da página clara ela sumia (1,4:1)."""
+    paleta = widgets.PALETA[tema]
+    cor = widgets.cor_da_bolinha(paleta, estado)
+    assert _contraste(cor, paleta["marca_barra"]) >= MINIMO_COMPONENTE
