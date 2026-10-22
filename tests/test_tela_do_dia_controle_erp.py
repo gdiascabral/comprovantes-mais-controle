@@ -285,13 +285,14 @@ def test_cadastro_de_contatos_que_falha_deixa_sem_dono_e_avisa():
     assert [s.recebimento.id for s in aps[0].sem_dono] == ["r1"]
 
 
-def test_cliente_vazio_sem_id_avisa_so_os_nomes_dos_campos():
+def test_cliente_vazio_sem_id_avisa_em_uma_linha_curta():
     avisos = []
     api = ApiComContatos({("id-a", "n-cap"): [_item("r1", cliente="", description="X")]}, [])
     ce.ler_recebimentos(api, [PAR_A], HOJE, log=avisos.append)
     assert not any("contacts" in u for u in api.urls)
     aviso = [a for a in avisos if "sem Cliente" in a]
-    assert aviso and "customerName" in aviso[0] and "description" in aviso[0]
+    assert aviso and "1 recebimento(s) sem Cliente" in aviso[0]
+    assert "customerName" not in aviso[0] and "description" not in aviso[0]
     assert "2026-10-22" not in aviso[0]                         # só nomes, nunca valores
 
 

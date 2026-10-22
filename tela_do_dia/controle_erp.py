@@ -44,6 +44,9 @@ POR_PAGINA = 200
 MAX_PAGINAS = 50
 CONTATOS_POR_PAGINA = 100
 CHAVE_CLIENTE_DO_CADASTRO = ca.CHAVE_CLIENTE_DO_CADASTRO
+# O LISTAR do ERP (medido em 22/10/2026) NÃO traz nome de conta por item: estas
+# chaves só valem se o ERP um dia passar a mandá-las. A defesa real contra filtro
+# ignorado é a duplicidade da mesma parcela entre contas/naturezas + a contraprova.
 _CHAVES_CONTA = ("accountName", "defaultAccountName", "bankAccountName")
 _RECADO = "Recarregue o Mais Controle no Chrome do app e atualize de novo."
 _NADA = "Nada foi somado."
@@ -211,10 +214,7 @@ def _anotar_clientes_vazios(api, crus: dict, log=print) -> dict:
         return crus
     sem_id = [item for _, _, _, item in vazios if not ca.id_do_cliente(item)]
     if sem_id:
-        campos = sorted({str(k) for item in sem_id for k in item})
-        log(f"[!] {len(sem_id)} recebimento(s) de aporte sem Cliente e sem id de Cliente: "
-            f"ficam sem dono até alguém apontar. Campos que o Mais Controle mandou: "
-            f"{', '.join(campos)}.")
+        log(f"[!] {len(sem_id)} recebimento(s) sem Cliente: ficam sem dono até alguém apontar")
     ids = {ca.id_do_cliente(item) for _, _, _, item in vazios} - {""}
     if not ids:
         return crus

@@ -14,8 +14,8 @@ Quem é o aportador de um recebimento: o Cliente dele no ERP (`customerName`),
 pelo nome COMPLETO (`util.norm_espaco`: sem acento, caixa e espaço dobrado),
 contra os aportadores DAQUELA conta. Nunca por primeiro nome nem por pedaço:
 dois aportadores com o mesmo primeiro nome são pessoas diferentes. Cliente
-vazio (a aba Aportes manda o Cliente só pelo id) se resolve pelo id do Cliente
-no cadastro de contatos — ainda pelo nome completo; ver `identificar_aportador`.
+vazio: o caminho pelo id do Cliente no cadastro de contatos está DORMENTE (o
+LISTAR medido em 22/10/2026 não traz customerId); ver `identificar_aportador`.
 O que não casa vai para `sem_dono`, para o dono apontar — nunca some.
 """
 from __future__ import annotations
@@ -359,10 +359,10 @@ def identificar_aportador(conta: ContaControlada, recebimento: Recebimento) -> t
     normalizado, contra os aportadores desta conta:
 
     1. o Cliente do recebimento (`customerName`, ou `customer.name`);
-    2. quando o Cliente vem vazio — a aba Aportes manda o Cliente só pelo id
-       (`mc_lancamentos.criar_recebimento`, `"name": ""`) e o fato de 21/10/2026
-       é que ele pode chegar vazio —, o nome que o cadastro de contatos dá ao
-       id do Cliente (`cliente_cadastro`, resolvido em `controle_erp`).
+    2. quando o Cliente vem vazio, o nome que o cadastro de contatos dá ao id do
+       Cliente (`cliente_cadastro`, resolvido em `controle_erp`). Caminho
+       DORMENTE: o LISTAR medido em 22/10/2026 não traz customerId, então
+       hoje Cliente vazio vai direto para sem dono.
 
     Os dois presentes e diferentes: sem dono (o ERP se contradiz). Nunca se
     chuta: nem quando a conta tem um aportador só, nem pela descrição, nem
