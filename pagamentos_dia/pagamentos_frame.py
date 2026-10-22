@@ -3785,7 +3785,8 @@ class PagamentosDiaFrame(ttk.Frame):
         return textos, urls_ocr, nao_lidos, qrs
 
     # ----------------------------------------- vindo da aba "Pagamentos do dia"
-    def receber_apuracao(self, leitura, desmarcados=(), *, hoje=None) -> None:
+    def receber_apuracao(self, leitura, desmarcados=(), *, hoje=None,
+                         resultado=None) -> None:
         """A leitura que a aba "Pagamentos do dia" já fez vira o passo 2 daqui,
         e a conferência da remessa de sempre abre — sem ler o ERP de novo.
 
@@ -3796,7 +3797,9 @@ class PagamentosDiaFrame(ttk.Frame):
         interrompida não passa: pela metade, o boleto dentro da NF vira Pix do
         cadastro (ver `_apurar_e_confirmar`). Apuração de OUTRO período que o
         de hoje (`sugerir_periodo`; tela buscada ontem) também não: a remessa
-        sairia com os vencimentos de outro dia. `hoje` só existe para o teste."""
+        sairia com os vencimentos de outro dia. `hoje` só existe para o teste.
+        `resultado` é o da tela do dia já com liberados/editados (entrega 2);
+        `None` remonta como sempre."""
         from conciliacao.models import sugerir_periodo
         if self.worker and not self.worker.done():
             messagebox.showinfo("Remessa", "Espere a rotina desta aba terminar.")
@@ -3823,7 +3826,8 @@ class PagamentosDiaFrame(ttk.Frame):
         self._periodo_da_busca = (ini, fim)
         self.v_ini.set(f"{ini:%d/%m/%Y}")
         self.v_fim.set(f"{fim:%d/%m/%Y}")
-        self.resultado = confirmacao.remontar(leitura.entradas, set(desmarcados))
+        self.resultado = (resultado if resultado is not None
+                          else confirmacao.remontar(leitura.entradas, set(desmarcados)))
         self._periodo_do_resultado = (ini, fim)
         self.contas = relatorio.resumo_por_conta(self.lancamentos)
         self.q.put(("contas", self.contas))

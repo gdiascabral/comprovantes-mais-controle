@@ -118,12 +118,17 @@ def aviso_de_anexos_nao_lidos(anexos) -> str:
             "linhas pode estar errada")
 
 
-def remontar(entradas: Entradas, ids_nao_confirmados=()) -> relatorio.Resultado:
+def remontar(entradas: Entradas, ids_nao_confirmados=(), *,
+             ids_liberados=()) -> relatorio.Resultado:
     """O `Resultado` da planilha, com o que a pessoa desmarcou de fora.
 
     É a MESMA chamada nas duas fases — sem filtro na apuração e com os
     desmarcados no "Confirmar" —, e por isso a janela e a planilha não têm
     como discordar sobre uma linha que ninguém tocou. Pura: não baixa nada.
+
+    `ids_liberados` são os que a tela "Pagamentos do dia" liberou com motivo
+    (entrega 2): saem dos omitidos com o bloqueio anotado. Vazio — o caso de
+    toda chamada da Remessa — dá o resultado de sempre.
     """
     return relatorio.montar_registros(
         entradas.selecionados, entradas.anexos, entradas.overviews,
@@ -136,7 +141,8 @@ def remontar(entradas: Entradas, ids_nao_confirmados=()) -> relatorio.Resultado:
         cadastro_reembolso=entradas.cadastro_reembolso,
         anexos_nao_lidos=entradas.anexos_nao_lidos,
         titulos_nao_lidos=entradas.titulos_nao_lidos,
-        qr_pix=entradas.qr_pix)
+        qr_pix=entradas.qr_pix,
+        ids_liberados=ids_liberados)
 
 
 # --------------------------------------------------------------------------

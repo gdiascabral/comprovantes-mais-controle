@@ -95,3 +95,11 @@ def test_titulos_com_anexos_nao_lidos_passam_para_a_remessa():
     aba = _aba(gerou)
     PagamentosDiaFrame.receber_apuracao(aba, _leitura(titulos_nao_lidos={"T-L2"}), set(), hoje=DIA)
     assert aba.titulos_sem_leitura == {"T-L2"}
+
+
+def test_resultado_pronto_da_tela_e_usado_sem_remontar():
+    gerou = []
+    aba = _aba(gerou)
+    pronto = confirmacao.remontar(_leitura().entradas, {"L1"})
+    PagamentosDiaFrame.receber_apuracao(aba, _leitura(), set(), hoje=DIA, resultado=pronto)
+    assert aba.resultado is pronto and gerou == [True]

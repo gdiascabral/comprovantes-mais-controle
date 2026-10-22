@@ -977,10 +977,12 @@ def preparar(contas: dict, participantes: dict | None = None,
 TAMANHO_MENSAGEM_LOTE = 40
 
 
-#: As chaves do registro que a descrição do banco lê.
+#: As chaves do registro que a descrição do banco lê. `descricao_editada` só
+#: existe no registro que a tela "Pagamentos do dia" editou; o `preparar` só
+#: copia a chave que está no registro, então os da Remessa não mudam.
 _CHAVES_DA_DESCRICAO = ("nf", "nf_anexada", "oc_da_descricao",
                         "descricao_lancamento", "centro_custo", "utilidade",
-                        "tipo", "dados")
+                        "tipo", "dados", "descricao_editada")
 
 #: Tamanho do campo de texto de cada produto: `09.3J` do boleto e `24.3A` do Pix.
 LIMITE_ETIQUETA_BOLETO = 30

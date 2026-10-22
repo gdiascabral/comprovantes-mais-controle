@@ -341,6 +341,16 @@ def descricao_para_colar(registro, conta, limite: int | None = None) -> str:
     por esta MESMA função, para o documento nunca ser cortado lá também.
     """
     r = registro or {}
+    editada = str(r.get("descricao_editada") or "").strip()
+    if editada:
+        # Escrita pelo dono na tela "Pagamentos do dia" (entrega 2). Vai como
+        # ele escreveu, só limpa e no tamanho do banco; a tela avisa antes de
+        # gravar se ela perdeu o centro de custo ou o documento no fim
+        # (`tela_do_dia.conferencia.aviso_de_casamento`). Registro sem a
+        # chave — todos os da Remessa — segue o caminho de sempre abaixo.
+        tirar = (lambda ps: ps) if _e_inter(conta) else _sem_hifen
+        espaco = limite_da_descricao(conta) if limite is None else limite
+        return " ".join(_que_cabem(tirar(_palavras(editada)), espaco))
     utilidade = bool(r.get("utilidade"))
     # Fora do Inter (o Sicoob, e a remessa CNAB, que é do Sicoob e chega com
     # `conta=None`) a descrição não leva "-" nenhum (dono, 14/10/2026).

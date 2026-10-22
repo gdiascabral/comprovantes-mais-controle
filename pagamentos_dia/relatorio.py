@@ -1518,7 +1518,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      urls_ocr=(), regras_fornecedor=None,
                      ids_nao_confirmados=(), participantes=None,
                      cadastro_reembolso=None, anexos_nao_lidos=(),
-                     qr_pix=None, titulos_nao_lidos=()) -> Resultado:
+                     qr_pix=None, titulos_nao_lidos=(),
+                     ids_liberados=()) -> Resultado:
     """Transforma lançamentos do ERP em linhas de planilha.
 
     `anexos`             {tradePayableId: [anexo]}
@@ -1541,10 +1542,15 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
     `qr_pix`             `{downloadUrl: [Pix copia-e-cola]}` lidos dos QR Codes
                          dos anexos (`qr_pix.ler`). Vazio, nada muda: é o
                          comportamento de antes da leitura do QR
+    `ids_liberados`      lançamentos que a tela "Pagamentos do dia" liberou
+                         com motivo, na nuvem; saem dos omitidos com o
+                         bloqueio em `bloqueio_liberado`; vazio = como sempre.
+                         Desmarcado (`ids_nao_confirmados`) continua ganhando
     """
     pix_reembolso = pix_reembolso or {}
     regras_forn = regras_fornecedor or {}
     ids_nao_confirmados = {str(i) for i in ids_nao_confirmados}
+    ids_liberados = {str(i) for i in (ids_liberados or ())}
     anexos_nao_lidos = set(anexos_nao_lidos or ())
     titulos_nao_lidos = {str(t) for t in (titulos_nao_lidos or ())}
     registros, omitidos = defaultdict(list), []
@@ -1999,7 +2005,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
 
         # Já pago é informação, não pagamento: as regras de omissão não valem
         # ali. Uma linha "JÁ PAGO" sem forma de pagar é o normal, não um erro.
-        motivo = ""
+        motivo, liberado_de = "", ""
         if not item.get("paid"):
             if str(item.get("id")) in ids_nao_confirmados:
                 motivo = regras.MOTIVO_NAO_CONFIRMADO
@@ -2017,6 +2023,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                                                tem_documento, regras_forn,
                                                valor_documento=valor_documento,
                                                pix_sem_documento=pix_sem_documento)
+        if (motivo and motivo != regras.MOTIVO_NAO_CONFIRMADO
+                and str(item.get("id")) in ids_liberados):
+            # Liberado na tela do dia: o motivo não some, vai junto
+            # (`bloqueio_liberado`) e a tela decide o status. Desmarcado
+            # continua ganhando: desmarcar é a última palavra de quem confere.
+            liberado_de, motivo = motivo, ""
         if motivo:
             omitidos.append({"conta": conta, "tipo": tipo, "valor": valor,
                              "descricao": descricao, "favorecido": favorecido,
@@ -2183,6 +2195,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 else (quem_o_documento_diz_reembolsar(item, overview)
                       if documento_declara_reembolso(item, overview)
                       else quem_a_observacao_manda_pagar(coment))),
+            # Só a linha liberada na tela do dia leva a chave: as da Remessa
+            # saem com o MESMO dicionário de sempre.
+            **({"bloqueio_liberado": liberado_de} if liberado_de else {}),
         })
 
     for regs in registros.values():
