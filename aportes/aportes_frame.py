@@ -185,8 +185,12 @@ class AportesFrame(ttk.Frame):
         self.cb_recebedor.bind("<FocusOut>", self._aplicar_modo_padrao,
                                add="+")
         #: O par (Pagou, Recebeu) para o qual o padrão do "Lançar" já foi
-        #: aplicado: enquanto ele não muda, a troca manual do dono fica.
+        #: aplicado: enquanto ele não muda, o padrão não roda de novo.
         self._partes_do_modo = None
+        #: O último valor que o PROGRAMA pôs no "Lançar" (`_por_modo`), e se
+        #: o dono já o trocou à mão — daí em diante o padrão só avisa.
+        self._modo_aplicado = None
+        self._modo_manual = False
 
         linha3 = ttk.Frame(form)
         linha3.pack(fill="x", pady=px((12, 0)))
@@ -200,6 +204,10 @@ class AportesFrame(ttk.Frame):
             campo.pack(side="left", padx=px((0, 16)))
             campo.widget.current(0)
             setattr(self, atributo, campo.widget)
+        self._modo_aplicado = self.cb_modo.get()
+        # Escolha do dono no "Lançar" (o `set` do programa não dispara isto).
+        self.cb_modo.bind("<<ComboboxSelected>>",
+                          lambda _e: setattr(self, "_modo_manual", True), add="+")
 
         ttk.Label(form, style="Tenue.TLabel", wraplength=px(760),
                   justify="left",
@@ -257,13 +265,18 @@ class AportesFrame(ttk.Frame):
             # a saída dela fora do ERP.
             if self.cb_tipo.get() == regras.TIPO_INVESTIDOR:
                 self.cb_tipo.set(cadastro.TIPOS[0])
-                self.cb_modo.set(cadastro.MODOS[0])
+                AportesFrame._por_modo(self, cadastro.MODOS[0])
+                # O padrão reaplica: o "Lançar" do investidor era forçado, e o
+                # par de TEXTO pode não ter mudado (só o tipo).
+                self._partes_do_modo = None
             self._aplicar_modo_padrao()
             return
         self.cb_tipo.set(regras.TIPO_INVESTIDOR)
         # O mesmo que `regras.modo_padrao` dá para investidor de subconta; aqui
-        # é FORÇADO (o validar não aceita outro), mesmo sem Pagou mudar.
-        self.cb_modo.set("Só recebimento")
+        # é FORÇADO (o validar não aceita outro), mesmo sem Pagou mudar — e
+        # passa por cima da escolha do dono, que deixa de valer.
+        AportesFrame._por_modo(self, "Só recebimento")
+        self._modo_manual = False
         # Só com UM candidato pelo número exato; dois ou nenhum, a pessoa
         # escolhe — chute aqui seria aporte na conta errada.
         candidatos = [nome for nome, dados in self.entidades.items()
@@ -272,14 +285,24 @@ class AportesFrame(ttk.Frame):
             self.cb_recebedor.set(candidatos[0])
         self._aplicar_modo_padrao()
 
+    def _por_modo(self, modo: str) -> None:
+        """O PROGRAMA põe o "Lançar" — e anota, para não confundir com o dono."""
+        self.cb_modo.set(modo)
+        self._modo_aplicado = modo
+
     def _aplicar_modo_padrao(self, _ev=None):
         """Escolheu (ou saiu de) Pagou/Recebeu: o "Lançar" vira o padrão de
         `regras.modo_padrao` — PF sem conta pagando, "Só recebimento";
         recebendo, "Só pagamento"; os dois com conta, os dois lançamentos.
 
-        Só quando o PAR mudou desde a última vez: sair do campo de novo sem
-        trocar ninguém não desfaz o "Lançar" que o dono trocou à mão. Os dois
+        Só quando o PAR mudou desde a última vez. **Depois que o dono troca o
+        "Lançar" à mão, o padrão nunca mais o sobrescreve** (revisão de
+        22/10), nem com par novo: só escreve no Registro qual seria. Os dois
         sem conta (ou um lado ainda incompleto): não mexe; o validar avisa."""
+        atual = self.cb_modo.get()
+        aplicado = getattr(self, "_modo_aplicado", None)
+        if aplicado is not None and atual != aplicado:
+            self._modo_manual = True
         partes = (self.cb_pagador.get().strip(),
                   self.cb_recebedor.get().strip())
         if partes == getattr(self, "_partes_do_modo", None):
@@ -288,8 +311,23 @@ class AportesFrame(ttk.Frame):
         modo = regras.modo_padrao(
             regras.pagador_canonico(partes[0], self.subcontas), partes[1],
             self.entidades, self.subcontas)
-        if modo is not None:
-            self.cb_modo.set(modo)
+        if modo is None:
+            return
+        if getattr(self, "_modo_manual", False):
+            if atual != modo:
+                self._log(f"Confira o Lançar: ficou '{atual}' (o padrão para "
+                          f"este par seria '{modo}').")
+            return
+        AportesFrame._por_modo(self, modo)
+
+    def _acompanhar_par(self, antes: tuple, voltou: bool) -> None:
+        """Pagou/Recebeu voltaram aos MESMOS cadastros com outro texto (renome
+        do cadastro, rótulo novo do rateio): não é par novo — o par do
+        "Lançar" acompanha, e o padrão não roda por causa disso. O que não
+        voltou (caiu no 1º nome da lista) é par novo de verdade."""
+        if voltou and getattr(self, "_partes_do_modo", None) == antes:
+            self._partes_do_modo = (self.cb_pagador.get().strip(),
+                                    self.cb_recebedor.get().strip())
 
     def _recarregar_listas(self):
         nomes = list(self.entidades)
@@ -834,12 +872,17 @@ class AportesFrame(ttk.Frame):
                           or cadastro.carregar_contas())
         self._recarregar_listas()
         novo_nome = mud.get("nome_exibicao")
+        voltou = True
         for combo, escolhido in ((self.cb_pagador, pagou),
                                  (self.cb_recebedor, recebeu)):
             if novo_nome and escolhido == antes["nome_exibicao"]:
                 escolhido = novo_nome
             if escolhido in combo.valores_completos():
                 combo.set(escolhido)
+            else:
+                voltou = False
+        # O mesmo cadastro com outro nome não é par novo para o "Lançar".
+        self._acompanhar_par((pagou.strip(), recebeu.strip()), voltou)
         self._log(f"Cadastro corrigido: {antes['nome_exibicao']} — "
                   + "; ".join(f"{c}: \"{antes.get(c) or ''}\" → "
                               f"\"{v or ''}\"" for c, v in mud.items())
@@ -930,13 +973,20 @@ class AportesFrame(ttk.Frame):
         esse rótulo. Comparando o texto, a escolha caía no 1º nome da lista
         com tipo e Recebeu ainda de investidor."""
         numero = numero_subconta(pagou.strip(), self.subcontas)
+        voltou = True
         if numero is not None:
             self.cb_pagador.set(
                 regras.rotulo_investidor(numero, self.subcontas[numero]))
         elif pagou in self.cb_pagador.valores_completos():
             self.cb_pagador.set(pagou)
+        else:
+            voltou = False
         if recebeu in self.cb_recebedor.valores_completos():
             self.cb_recebedor.set(recebeu)
+        else:
+            voltou = False
+        # A mesma subconta com rótulo novo não é par novo para o "Lançar".
+        AportesFrame._acompanhar_par(self, (pagou.strip(), recebeu.strip()), voltou)
         # O que não voltou ficou no 1º nome: tipo e modo acompanham.
         self._pagador_escolhido()
 
