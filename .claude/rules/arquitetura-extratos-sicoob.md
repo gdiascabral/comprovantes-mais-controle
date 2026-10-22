@@ -85,3 +85,9 @@ paths:
   R$ 0,00. Quem chama é `tela_do_dia/sicoob_na_tela.py`, numa thread própria
   (o `SicoobClient` nasce e morre nela). Guardado por
   `tests/test_sicoob_saldo.py`.
+  **A conta casa pelos DÍGITOS** (prova ao vivo 22/10/2026): o
+  `acessar_conta` procura a linha da lista pelo TEXTO, e o cadastro com
+  "12345-6" não achava "12.345-6". `entrar` pega o número como o
+  `listar_contas()` o escreve (`como_na_lista`) e passa ESSE; sem achar, tenta
+  como veio. `pendencias.py` e `baixar_comprovantes` ainda passam o número do
+  cadastro direto.

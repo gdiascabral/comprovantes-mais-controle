@@ -54,13 +54,37 @@ class Cliente:
     def __init__(self, pagina, na_lista, trava=()):
         self.page, self.na_lista, self.trava, self.trocas = pagina, na_lista, trava, []
 
+    def listar_contas(self):
+        return list(self.na_lista)
+
     def acessar_conta(self, numero):
+        # Como o real: procura a linha da lista pelo TEXTO (`has_text`), então
+        # "12345-6" não acha "12.345-6".
         self.trocas.append(numero)
         if numero not in self.na_lista:
             return False
         if numero not in self.trava:                # troca que "não pegou"
             self.page.aberta = numero
         return True
+
+
+def test_conta_do_cadastro_sem_o_ponto_casa_pelos_digitos(medido):
+    """Prova ao vivo 22/10: o cadastro tinha a conta sem o ponto e o Sicoob a
+    escreve com ele — ficava "não aparece neste login". Conta fictícia."""
+    pagina = Pagina({"123456": ok("7.00")})
+    cli = Cliente(pagina, ["12.345-6"])
+    [a] = S.ler_contas(cli, ["12345-6"], agora=lambda: AGORA)
+    assert a.ok and a.saldo == D("7.00") and a.numero == "12345-6"
+    assert cli.trocas == ["12.345-6"]               # entrou com o número da lista
+
+
+def test_conta_que_a_lista_nao_mostra_ainda_tenta_como_veio(medido):
+    """A lista não reconheceu a linha (formato novo): vale o caminho antigo."""
+    pagina = Pagina({"123456": ok("1")})
+    cli = Cliente(pagina, ["12.345-6"])
+    cli.listar_contas = lambda: []
+    [a] = S.ler_contas(cli, ["12.345-6"], agora=lambda: AGORA)
+    assert a.ok and cli.trocas == ["12.345-6"]
 
 
 def test_sem_endereco_medido_recusa_antes_de_tocar_no_banco(monkeypatch):

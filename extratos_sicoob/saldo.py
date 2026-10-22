@@ -73,6 +73,8 @@ NAO_MEDIDO = ("a leitura do saldo do Sicoob ainda não está ligada (o "
 SESSAO_CAIU = ("a sessão do Sicoob caiu antes desta conta — faça o login de "
                "novo e clique em Reler Sicoob")
 INTERROMPIDA = "leitura interrompida antes desta conta"
+#: A conta não está na lista do login aberto (é de OUTRO acesso do Sicoob).
+FORA_DESTE_LOGIN = "esta conta não aparece neste login do Sicoob"
 ERRO_DO_SERVICO = ("o Sicoob disse que não conseguiu ler o movimento desta "
                    "conta agora — clique em Reler Sicoob ou digite o saldo")
 CENTAVO = Decimal("0.01")
@@ -276,20 +278,43 @@ def ler_saldo(page, numero: str) -> Decimal:
                        getattr(page, "url", ""))
 
 
+def como_na_lista(lista, numero: str) -> str | None:
+    """O número como o seletor do Sicoob o ESCREVE, achado pelos dígitos.
+
+    `SicoobClient.acessar_conta` procura a linha pelo TEXTO: o cadastro com
+    "12345-6" não achava "12.345-6" e a conta saía "não aparece neste login"
+    (prova ao vivo de 22/10/2026). Zeros à esquerda não contam, como em
+    `mesma_conta`."""
+    alvo = so_digitos(numero).lstrip("0")
+    if not alvo:
+        return None
+    for n in lista or []:
+        if so_digitos(n).lstrip("0") == alvo:
+            return n
+    return None
+
+
+def _acessar(cli, numero: str) -> bool:
+    """Entra pelo número da LISTA quando ele bate em dígitos; sem achar (a
+    lista não reconheceu a linha), tenta como veio — o caminho de antes."""
+    escrito = como_na_lista(cli.listar_contas(), numero) or numero
+    return cli.acessar_conta(escrito)
+
+
 def entrar(cli, numero: str) -> None:
     """Como `pendencias.ler_conta`: o ⇄ some depois de várias trocas, e um
     `reload` o traz de volta — tenta uma segunda vez. Sessão que caiu não volta
     com reload: sobe."""
     try:
-        entrou = cli.acessar_conta(numero)
+        entrou = _acessar(cli, numero)
     except SessaoPerdida:
         raise
     except Exception:                                        # noqa: BLE001
         cli.page.reload()
         cli.page.wait_for_timeout(3000)
-        entrou = cli.acessar_conta(numero)
+        entrou = _acessar(cli, numero)
     if not entrou:
-        raise ContaNaoEncontrada("esta conta não aparece neste login do Sicoob")
+        raise ContaNaoEncontrada(FORA_DESTE_LOGIN)
 
 
 def _primeira_linha(erro) -> str:
