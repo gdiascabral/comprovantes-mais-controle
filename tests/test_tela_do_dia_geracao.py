@@ -1,5 +1,7 @@
 """O Resultado da tela: liberados, editados e à mão — e a remessa sem os à mão."""
+import unicodedata
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -170,9 +172,10 @@ def test_forma_editada_limpa_o_que_era_da_cobranca_antiga():
     d = cf.dobrar([cf.Evento.de_linha({"id": 1, "alvo": "X", "acao": cf.EDITAR, "motivo": "boleto novo",
                                        "campos": {"tipo": "Pix", "dados": "PIX EMAIL a@exemplo.com"}})])["X"]
     reg = ge.aplicar_decisao({"id": "X", "status": "APTO", "obs": "", "tipo": "Boleto", "dados": "1" * 47,
-                              "pix_qr": "000201abc", "linha_da_guia": "2" * 48, "parcial": True}, d,
-                             liberavel=False)
+                              "pix_qr": "000201abc", "linha_da_guia": "2" * 48, "parcial": True,
+                              "conferencia": "NF 1234 × boleto: ok"}, d, liberavel=False)
     assert (reg["pix_qr"], reg["linha_da_guia"], reg["parcial"]) == ("", "", False)
+    assert reg["conferencia"] == ""
     html = hp.contas_do_html_geral(relatorio.Resultado({CONTA: [{**reg, "valor": 10.0}]}, []))
     assert "parcial" not in html[0]["entries"][0]["bloqueio"]
 
@@ -232,3 +235,67 @@ def test_html_sem_a_mao_e_o_de_sempre(dia):
     r = confirmacao.remontar(e)
     assert [x["id"] for c in hp.contas_do_html_geral(r) for x in c["entries"]] == [
         str(x["id"]) for regs in r.contas.values() for x in regs]
+
+
+# ------------------------------------------------------------- conserto (T5)
+def _linha_ja_enviada(ident):
+    return confirmacao.Linha(
+        secao=confirmacao.ENTRA, id=ident, conta=CONTA, valor=100.0, favorecido="Fornecedor Modelo Ltda",
+        tipo="Pix", dados="PIX EMAIL fulano@exemplo.com", por_onde="", vencimento=DIA, oc="",
+        centro_custo="OBRA MODELO", descricao="", situacao="", estado="atencao", olhar=False,
+        candidato=SimpleNamespace(ja_enviado="já saiu na remessa nº 7"))
+
+
+def test_liberar_um_ja_enviado():
+    e = _entradas([_lanc("L1")], {"T-L1": [NF("n1")]})
+    grupos = [confirmacao.Grupo(CONTA, entram=[_linha_ja_enviada("L1")], nao_aptos=[])]
+    assert pg.ids_que_nao_saem(grupos) == {"L1"}
+    sem = ge.resultado_da_tela(e, grupos, _conf())
+    assert ge.registro_atual(sem, "L1") not in [x for regs in sem.contas.values() for x in regs]
+    assert "L1" not in ge.chaves_que_saem(sem)
+    r = ge.resultado_da_tela(e, grupos, _conf([{"id": 1, "alvo": "L1", "acao": cf.LIBERAR,
+                                                "motivo": "o banco recusou o arquivo"}]))
+    reg = ge.registro_atual(r, "L1")
+    assert reg in r.contas[CONTA]
+    assert reg["status"].startswith("LIBERADO — já saiu na remessa nº 7")
+    cand = remessa_dia.preparar(ge.para_a_remessa(r).contas, participantes=CONTATOS)[CONTA][0]
+    assert cand.id == "L1" and not cand.apto and not cand.marcado
+    assert _html(r, "L1")["bloqueio"] == ""
+
+
+@pytest.mark.parametrize("motivo", [
+    "senão vou pagar á mão", "PAGAR Á MÃO amanhã", "Pagar  a  mao",
+    unicodedata.normalize("NFD", "senão vou pagar à mão")])
+def test_gatilho_de_pagar_a_mao_em_qualquer_grafia(motivo):
+    d = cf.dobrar([cf.Evento.de_linha({"id": 1, "alvo": "X", "acao": cf.EDITAR,
+                                       "motivo": motivo, "campos": {"descricao": "OBRA MODELO 1"}})])["X"]
+    reg = ge.aplicar_decisao({"id": "X", "status": "APTO", "obs": "", "tipo": "Pix",
+                              "dados": "PIX EMAIL a@exemplo.com", "valor": 10.0}, d, liberavel=False)
+    assert "PAGAR A MAO" not in hp._norm(reg["obs"]) and "PAGAR À MÃO" not in reg["obs"]
+    assert hp.contas_do_html_geral(relatorio.Resultado({CONTA: [reg]}, []))[0]["entries"][0]["bloqueio"] == ""
+    assert remessa_dia.preparar({CONTA: [reg]})[CONTA][0].impedimento != remessa_dia.MOTIVO_MAO
+
+
+def test_motivo_sem_gatilho_fica_como_foi_escrito():
+    d = cf.dobrar([cf.Evento.de_linha({"id": 1, "alvo": "X", "acao": cf.EDITAR,
+                                       "motivo": "descrição não batia", "campos": {"descricao": "OBRA MODELO 1"}})])["X"]
+    reg = ge.aplicar_decisao({"id": "X", "status": "APTO", "obs": ""}, d, liberavel=False)
+    assert "(descrição não batia)" in reg["obs"]
+
+
+def test_edicao_de_reembolso_vira_o_registro_de_reembolso(dia):
+    e, grupos = dia
+    r = ge.resultado_da_tela(e, grupos, _conf([{
+        "id": 1, "alvo": "L1", "acao": cf.EDITAR, "motivo": "reembolso combinado",
+        "campos": {"reembolso_nome": "Fulano Ficticio", "reembolso_documento": "52998224725"}}]))
+    reg = ge.registro_atual(r, "L1")
+    assert reg["reembolso"] is True
+    assert (reg["reembolso_nome"], reg["reembolso_para"], reg["reembolso_documento"]) == (
+        "Fulano Ficticio", "Fulano Ficticio", "52998224725")
+    assert (reg["reembolso_origem"], reg["reembolso_impedimento"]) == ("tela", "")
+    assert reg["status"] == "EDITADO — reembolso"
+    assert reg["favorecido"] == "Fornecedor Modelo Ltda"                 # a planilha não troca
+    assert _html(r, "L1")["favorecido"] == "Fulano Ficticio (reembolso de Fornecedor Modelo Ltda)"
+    cand = next(c for c in remessa_dia.preparar(ge.para_a_remessa(r).contas, participantes=CONTATOS)[CONTA]
+                if c.id == "L1")
+    assert cand.reembolso and cand.favorecido == "Fulano Ficticio" and not cand.marcado

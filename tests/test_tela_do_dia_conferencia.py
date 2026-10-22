@@ -215,3 +215,15 @@ def test_aviso_de_casamento_usa_a_regua_do_nome_do_anexar():
     aviso = cf.aviso_de_casamento({**reg, "descricao_editada": "OBRA MODELO QD 1 NFS 1234"}, "C")
     assert "número do documento" in aviso and "centro de custo não está" not in aviso
     assert cf.aviso_de_casamento({**reg, "descricao_editada": "OBRA MODELO QD 1 NF 01234"}, "C") == ""
+
+
+# ---------------------------------------------------------------- conserto (T5)
+def test_a_mao_na_conta_pf_e_recusado():
+    """Ruling: a PESSOA FISICA - APENAS LANÇAMENTO é paga pelo celular; o HTML
+    geral não a mostra, e o à mão sairia na tela e em lugar nenhum para pagar."""
+    pf = "PESSOA FISICA - APENAS LANÇAMENTO"
+    linha, erro = cf.nova_a_mao(conta=pf, valor_texto="10,00", descricao="parcela",
+                                motivo="combinado", contas={pf, "C"})
+    assert linha is None and "PESSOA FISICA" in erro and "celular" in erro
+    assert cf.nova_a_mao(conta="C", valor_texto="10,00", descricao="parcela",
+                         motivo="combinado", contas={pf, "C"})[1] == ""

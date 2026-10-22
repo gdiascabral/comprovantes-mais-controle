@@ -357,6 +357,12 @@ def nova_a_mao(*, conta, valor_texto, descricao, motivo, contas, lido=None,
     é coluna da tabela: o cliente da nuvem a descarta."""
     if conta not in contas:
         return None, "Escolha a conta na lista."
+    if html_pagamentos.e_conta_pf(conta):
+        # O HTML geral não mostra esta conta (`contas_do_html_geral`): a PF é
+        # paga pelo celular, fora do dia. À mão ali sairia na tela e em lugar
+        # nenhum para pagar.
+        return None, ("A conta PESSOA FISICA - APENAS LANÇAMENTO não recebe pagamento à "
+                      "mão aqui: ela é paga pelo celular, fora do HTML do dia.")
     try:
         valor = ler_valor_editado(valor_texto)
     except ValueError as e:

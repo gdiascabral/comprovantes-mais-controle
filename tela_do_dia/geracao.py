@@ -26,6 +26,7 @@ lançamento pode estar na lista do dia, e o id é a chave do "já paguei" e do
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from pagamentos_dia import confirmacao, relatorio
 
@@ -40,9 +41,10 @@ _CEDE_A_LIBERACAO = (*ATENCOES_DE_FORMA, relatorio.STATUS_LIBERADO)
 _CEDE_A_EDICAO = ("ATENÇÃO — sem dados de pgto",)
 ORDEM_A_MAO = 1_000_000
 #: "pagar à mão" escrito num motivo não pode virar a ordem de pagar outra
-#: pessoa: o HTML (`_motivo_do_bloqueio`) e a remessa (`_impedimento`) leem
-#: esse texto na Obs.
-_GATILHO_A_MAO = re.compile(r"pagar\s+[àa]\s+m[ãa]o", re.IGNORECASE)
+#: pessoa: o HTML (`_motivo_do_bloqueio`, texto normalizado) e a remessa
+#: (`_impedimento`, "PAGAR À MÃO" exato) leem esse texto na Obs. Procura-se
+#: no texto SEM ACENTO (NFKD), como o HTML: "á", "Á", NFD, tudo cai aqui.
+_GATILHO_A_MAO = re.compile(r"pagar\s+a\s+mao", re.IGNORECASE)
 
 
 def ids_nao_aptos(grupos) -> set[str]:
@@ -57,8 +59,20 @@ def _ja_enviados(grupos) -> dict[str, str]:
             for g in grupos for ln in g.entram if ln.id in ids}
 
 
+def _sem_acento(texto: str) -> str:
+    t = unicodedata.normalize("NFKD", texto)
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
 def _texto_do_dono(texto) -> str:
-    return _GATILHO_A_MAO.sub("pagar (à mão)", str(texto or ""))
+    """O texto livre do dono, sem o gatilho "pagar à mão" (em qualquer
+    grafia). Só quando o gatilho existe o texto perde os acentos — é o preço
+    de trocar o trecho no texto que o HTML e a remessa leem."""
+    t = str(texto or "")
+    sem = _sem_acento(t)
+    if not _GATILHO_A_MAO.search(sem):
+        return t
+    return _GATILHO_A_MAO.sub("pagar (a mao)", sem)
 
 
 def _status(antes: str, rotulos: list[str], cede: tuple) -> str:
@@ -89,6 +103,9 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "") -> dic
             # HTML) e o "boleto parcial", que a remessa só lê no boleto e o
             # HTML lê sempre — sem isto os dois discordariam.
             reg["pix_qr"], reg["linha_da_guia"] = "", ""
+            # A conferência do documento (cruzamento NF × boleto) era da
+            # cobrança antiga: não vale para a forma nova.
+            reg["conferencia"] = ""
             reg["parcial"] = bool(reg.get("parcial")) and tipo == "Boleto"
             campos.append("forma de pagar")
             cede = _CEDE_A_EDICAO
