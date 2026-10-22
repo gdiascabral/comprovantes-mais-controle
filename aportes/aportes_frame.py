@@ -214,7 +214,10 @@ class AportesFrame(ttk.Frame):
         self.cb_modo.bind("<<ComboboxSelected>>",
                           lambda _e: setattr(self, "_modo_manual", True), add="+")
 
-        ttk.Label(form, style="Tenue.TLabel", wraplength=px(760),
+        # A quebra cabe no cartão a 1280 px com o Windows a 125% (largura útil
+        # de ~680 a 100%, a mesma conta de tests/test_layout_1280.py): a
+        # px(760) a linha passava da borda e saía cortada.
+        ttk.Label(form, style="Tenue.TLabel", wraplength=px(680),
                   justify="left",
                   text="Em Pagou e Recebeu, comece a digitar e a lista mostra o "
                        "que contém as letras — sem acento e por pedaço do nome "

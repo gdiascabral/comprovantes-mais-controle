@@ -82,3 +82,23 @@ def test_aportes_so_o_verde_fica_ao_lado_do_titulo():
             pais[n.args[1].value] = n.args[0].attr
     assert pais == {"Lançar no Mais Controle": "acoes", "Conferir cadastro": "rodape",
                     "Cadastros": "rodape", "+  Novo cadastro": "rodape"}
+
+
+def test_aportes_texto_de_ajuda_quebra_dentro_do_cartao():
+    """A ajuda embaixo dos campos dos Aportes quebrava a px(760), mais largo
+    que o cartão a 1280 px: a linha saía cortada ("r escolhe," sumia). O
+    `wraplength` de todo rótulo da aba cabe no mesmo ORCAMENTO das tabelas
+    (largura útil de um cartão a 100%)."""
+    import ast
+    from pathlib import Path
+    fonte = (Path(__file__).resolve().parents[1] / "aportes" / "aportes_frame.py"
+             ).read_text(encoding="utf-8")
+    larguras = [
+        kw.value.args[0].value
+        for n in ast.walk(ast.parse(fonte)) if isinstance(n, ast.Call)
+        for kw in n.keywords
+        if kw.arg == "wraplength" and isinstance(kw.value, ast.Call)
+        and getattr(kw.value.func, "id", "") == "px"
+        and isinstance(kw.value.args[0], ast.Constant)]
+    assert larguras, "o texto de ajuda dos Aportes perdeu o wraplength em px()"
+    assert all(w <= ORCAMENTO for w in larguras), larguras
