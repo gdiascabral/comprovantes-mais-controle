@@ -217,7 +217,13 @@ com o que está à vista (`_ajustar_altura`, também ao abrir/fechar conta) até
 o teto de cada uma. Texto de ajuda quebra na largura do cartão (`_ajuda`,
 `wraplength` no `<Configure>`); período e alertas vazios saem do layout.
 `aplicar_cores` repassa o `estilo_tabela` (as cores das linhas são tags da
-tabela). A `ferramentas/galeria.py` fotografa a aba PREENCHIDA com dados
+tabela). **Cada tabela soma no máximo 680 a 100%** (as desta aba e as do
+Controle de aportes), conferido por `tests/test_layout_1280.py`. Na tabela de
+saldos a célula é CURTA (22/10/2026): o digitado aparece como "R$ 250,00 ✎"
+(`saldos.celula`) e a SITUAÇÃO como `situacao_curta()` ("não bate", sem o
+valor, que é a coluna DIFERENÇA); a frase inteira e o original com o motivo
+(`LinhaSaldo.detalhe()`) ficam no rótulo embaixo da tabela, da linha
+selecionada. O "(era …)" na célula cortava a coluna a 1280 px. A `ferramentas/galeria.py` fotografa a aba PREENCHIDA com dados
 fictícios (`_preencher_dia` → `mostrar_numeros()`), sem mudar o app.
 
 ## Conferência editável (entrega 2, 22/10/2026)
