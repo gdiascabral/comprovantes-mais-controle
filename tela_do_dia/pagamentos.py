@@ -37,8 +37,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 
-from pagamentos_dia import confirmacao
+from pagamentos_dia import confirmacao, remessa_dia
 
+from . import conferencia as cf
 from .valores import de_float
 
 ZERO = Decimal("0.00")
@@ -115,10 +116,12 @@ class PagamentosDaConta:
         return sum((p.valor for p in self.bloqueados), ZERO)
 
 
-def por_conta(grupos, mapping, conferencia=None):
+def por_conta(grupos, mapping, conferencia=None, participantes=None):
     """{linha do painel: contas} e as contas de fora. `conferencia`
     (`tela_do_dia.conferencia.Conferencia`) põe na conta o que o dono liberou,
-    desmarcou, editou e pagou à mão; `None` (ou vazia) = entrega 1."""
+    desmarcou, editou e pagou à mão; `None` (ou vazia) = entrega 1.
+    `participantes` (o cadastro de Contatos): a nota da chave Pix editada
+    compara o CPF/CNPJ dela com o do favorecido, como os geradores."""
     painel: dict[int, PagamentosDaConta] = {}
     fora: dict[str, PagamentosDaConta] = {}
     decisoes = conferencia.decisoes if conferencia is not None else {}
@@ -140,6 +143,9 @@ def por_conta(grupos, mapping, conferencia=None):
         if d is not None and d.editado:
             origem = origem or "editado"
             p = replace(p, nota="editado: " + ", ".join(sorted(d.edicoes)))
+            notas = _notas_da_forma(ln, d, participantes)
+            if notas:
+                p = replace(p, nota=" · ".join([p.nota, *notas]))
         n = _partes(ln)
         if n and d is not None:
             # Decisão da nuvem que não vale para lançamento dividido (outra
@@ -196,6 +202,25 @@ def por_conta(grupos, mapping, conferencia=None):
 
 
 _FORMA = {"tipo", "dados", "reembolso_nome", "reembolso_documento"}
+
+
+def _notas_da_forma(ln, d, participantes) -> list[str]:
+    """As observações da forma de pagar editada que os geradores também
+    escrevem (`geracao.aplicar_decisao`). Parte de lançamento dividido não
+    tem a forma editada (`geracao` a ignora)."""
+    if _partes(ln) or "tipo" not in d.edicoes:
+        return []
+    dados = str(d.edicoes.get("dados") or "")
+    if d.edicoes["tipo"] == "Pix":
+        if d.edicoes.get("reembolso_documento"):
+            doc = remessa_dia.documento_valido(d.edicoes["reembolso_documento"])
+        elif ln.reembolso:
+            doc = remessa_dia.documento_valido(
+                getattr(ln.candidato, "documento_favorecido", "") or "")
+        else:
+            doc = remessa_dia.documento_sem_edicao({"favorecido": ln.favorecido}, participantes)
+        return [cf.nota_da_chave_editada(dados, doc)]
+    return []
 
 
 def _partes(ln) -> int:

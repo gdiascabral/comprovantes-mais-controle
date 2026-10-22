@@ -711,8 +711,9 @@ class TelaDoDiaFrame(ttk.Frame):
         base = sd.montar_saldos(self.contas_erp, self.mapping)
         base = self.sicoob.aplicar(base, self.contas_erp, self.mapping)
         self.saldos = sd.ordenar(sd.aplicar_ajustes(base, self.dia.ajustes))
-        self.pagamentos, self.fora = pg.por_conta(self.leitura.grupos, self.mapping,
-                                                  self.conferencia)
+        self.pagamentos, self.fora = pg.por_conta(
+            self.leitura.grupos, self.mapping, self.conferencia,
+            participantes=getattr(self.leitura.entradas, "participantes", None))
         em_ordem = sorted(self.saldos, key=lambda ln: ln.linha)
         self.aportes = ap.montar_aportes(
             {ln.rotulo: ln.saldo_do_dia for ln in em_ordem},

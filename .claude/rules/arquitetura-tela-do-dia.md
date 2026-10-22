@@ -271,6 +271,18 @@ Regras que viraram lei:
   recusado.** Editar a descrição roda `aviso_de_casamento` (com as MESMAS
   funções do `anexar/matcher.py`: CC e número do documento no fim); só ela
   pergunta antes de gravar.
+- **Chave Pix editada vai como foi digitada, com observação** (dono,
+  22/10/2026: "se eu editar manual, tem que ir o que eu coloquei"). A
+  `geracao` marca o registro (`remessa_dia.CHAVE_EDITADA`) e escreve na Obs
+  (planilha, HTML) e a tela na nota (`pagamentos.por_conta(participantes=)`):
+  "chave Pix editada à mão", ou, quando a chave é CPF/CNPJ DIFERENTE do
+  documento que a remessa usaria (`remessa_dia.documento_sem_edicao`:
+  reembolso, senão cadastro de Contatos), "chave Pix editada: CPF/CNPJ
+  diferente do favorecido do ERP (<doc mascarado>)". Com a marca e a chave
+  CPF/CNPJ, o `preparar` declara no 08.3B o documento DA CHAVE (a Informação
+  12 da forma 03 já leva a chave; os dois discordariam); e-mail, celular e
+  aleatória seguem com o do cadastro. Sem a marca (Remessa/Retorno sozinha)
+  nada muda.
 - **À mão: só remover.** Não se edita nem se desmarca: remove-se (com motivo)
   e lança-se de novo. **À mão em conta PF é recusado** (a PF é paga pelo
   celular, fora do HTML). Com link do lançamento: não paga título já pago, de

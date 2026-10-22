@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from anexar import matcher
-from pagamentos_dia import confirmacao, html_pagamentos, ocr_boleto
+from pagamentos_dia import confirmacao, html_pagamentos, ocr_boleto, remessa_dia
 from pagamentos_dia import regras_pagamento as regras
 
 from .valores import CENTAVO, brl, ler_valor_editado
@@ -280,6 +280,36 @@ def _validar_forma(tipo, dados: str) -> str:
     if tipo == "Transferência" and len(dados) < 8:
         return "Escreva banco, agência e conta da transferência."
     return ""
+
+
+#: A observação de toda chave Pix editada à mão (dono, 22/10/2026: "tem que
+#: ir o que eu coloquei, ok? Só deixa com observação").
+NOTA_CHAVE_EDITADA = "chave Pix editada à mão"
+NOTA_DOC_DIFERENTE = "chave Pix editada: CPF/CNPJ diferente do favorecido do ERP ({doc})"
+
+
+def mascarar_documento(doc: str) -> str:
+    """CPF/CNPJ como o Sicoob mostra no comprovante (`***.982.247-**`,
+    `**.222.333/0001-**`): o miolo sozinho não identifica ninguém, e a
+    observação vai à planilha e ao HTML."""
+    d = re.sub(r"\D", "", doc or "")
+    if len(d) == 14:
+        return f"**.{d[2:5]}.{d[5:8]}/{d[8:12]}-**"
+    if len(d) == 11:
+        return f"***.{d[3:6]}.{d[6:9]}-**"
+    return ""
+
+
+def nota_da_chave_editada(dados: str, doc_erp: str) -> str:
+    """A observação da chave Pix editada. A chave vai como foi digitada; se
+    ela é um CPF/CNPJ DIFERENTE do documento do favorecido no ERP, a remessa
+    declara o da chave (`remessa_dia.preparar`) e a observação diz isso, com
+    o do ERP mascarado. `doc_erp` = `remessa_dia.documento_sem_edicao`."""
+    da_chave = remessa_dia.documento_da_chave(dados)
+    erp = re.sub(r"\D", "", doc_erp or "")
+    if da_chave and erp and da_chave != erp:
+        return NOTA_DOC_DIFERENTE.format(doc=mascarar_documento(erp))
+    return NOTA_CHAVE_EDITADA
 
 
 def validar_edicao(campos: dict, motivo: str) -> str:

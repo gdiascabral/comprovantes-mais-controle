@@ -1739,3 +1739,63 @@ def test_cnab_gerado_leva_o_documento_no_campo():
     assert any(bol.ljust(30) in r for r in registros if r[13:14] == "J")
     assert any(pix.ljust(38) in r for r in registros if r[13:14] == "A")
     assert bol.endswith("4521") and pix.endswith("4521")
+
+
+# ------------------------- chave Pix editada à mão na tela do dia (22/10/2026)
+#: CPF fictício válido diferente do CPF_OK: a chave que o dono digitou.
+CPF_DA_CHAVE = "11144477735"
+
+
+def _pix_editado(dados, **troca):
+    return remessa_dia.preparar(
+        {CONTA: [registro(tipo="Pix", dados=dados, **{remessa_dia.CHAVE_EDITADA: True}, **troca)]},
+        participantes=CADASTRO, quando=HOJE)[CONTA][0]
+
+
+def test_chave_cpf_editada_diferente_do_cadastro_leva_o_documento_da_chave():
+    """"Se eu editar manual, tem que ir o que eu coloquei": o 08.3B é o titular da chave."""
+    c = _pix_editado("PIX CPF 111.444.777-35")
+    assert c.pode and c.chave == "PIX CPF 111.444.777-35"
+    assert c.documento_favorecido == CPF_DA_CHAVE and c.forma_iniciacao == "03"
+
+
+def test_chave_cnpj_editada_leva_o_documento_da_chave():
+    c = remessa_dia.preparar(
+        {CONTA: [registro(tipo="Pix", dados="PIX CNPJ 11.222.333/0001-81",
+                          **{remessa_dia.CHAVE_EDITADA: True})]},
+        participantes={"FORNECEDOR SA": CPF_OK}, quando=HOJE)[CONTA][0]
+    assert c.documento_favorecido == CNPJ_OK
+
+
+def test_chave_email_editada_continua_com_o_documento_do_cadastro():
+    c = _pix_editado("PIX EMAIL outro@exemplo.com")
+    assert c.pode and c.chave == "PIX EMAIL outro@exemplo.com"
+    assert c.documento_favorecido == CNPJ_OK and c.forma_iniciacao == "02"
+
+
+def test_sem_edicao_a_remessa_nao_muda():
+    """A aba Remessa/Retorno sozinha não marca nada: vale o cadastro, como sempre."""
+    c = remessa_dia.preparar(
+        {CONTA: [registro(tipo="Pix", dados="PIX CPF 111.444.777-35")]},
+        participantes=CADASTRO, quando=HOJE)[CONTA][0]
+    assert c.documento_favorecido == CNPJ_OK
+
+
+def test_documento_sem_edicao_e_o_do_cadastro_ou_do_reembolso():
+    assert remessa_dia.documento_sem_edicao(registro(), CADASTRO) == CNPJ_OK
+    assert remessa_dia.documento_sem_edicao(
+        registro(reembolso=True, reembolso_documento=CPF_OK), CADASTRO) == CPF_OK
+    assert remessa_dia.documento_sem_edicao(registro(), {"FORNECEDOR SA": CPF_NAO_FECHA}) == ""
+
+
+def test_cnab_da_chave_editada_declara_o_titular_da_chave_e_valida():
+    from cnab240 import validar
+
+    c = _pix_editado("PIX CPF 111.444.777-35")
+    c.marcado = True
+    registros = remessa_dia.montar_arquivo(pagador(), [c], nsa=1, quando=HOJE).gerar()
+    assert validar(registros) == []
+    seg_b = next(r for r in registros if r[13:14] == "B")
+    assert seg_b[17:18] == "1"                          # 07.3B: CPF
+    assert seg_b[18:32] == CPF_DA_CHAVE.zfill(14)       # 08.3B: o da chave, não o do ERP
+    assert CPF_DA_CHAVE in seg_b[32:]                   # Informação 12: a chave

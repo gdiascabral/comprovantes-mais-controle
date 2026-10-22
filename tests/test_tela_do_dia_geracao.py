@@ -299,3 +299,65 @@ def test_edicao_de_reembolso_vira_o_registro_de_reembolso(dia):
     cand = next(c for c in remessa_dia.preparar(ge.para_a_remessa(r).contas, participantes=CONTATOS)[CONTA]
                 if c.id == "L1")
     assert cand.reembolso and cand.favorecido == "Fulano Ficticio" and not cand.marcado
+
+
+# ------------------------------- chave Pix editada à mão (pedido do dono, 22/10/2026)
+#: CPF fictício válido, diferente do de CONTATOS: a chave que o dono digitou.
+CPF_DA_CHAVE = "11144477735"
+
+
+def _editar_l1(dados, tipo="Pix"):
+    return _conf([{"id": 1, "alvo": "L1", "acao": cf.EDITAR, "motivo": "chave nova",
+                   "campos": {"tipo": tipo, "dados": dados}}])
+
+
+def _entradas_com_contatos():
+    e = _entradas([_lanc("L1"), _lanc("L2"), _lanc("L3")], {"T-L1": [NF("n1")], "T-L3": [NF("n3")]})
+    e = confirmacao.Entradas(**{**e.__dict__, "participantes": {"FORNECEDOR MODELO LTDA": "52998224725"}})
+    return e, confirmacao.grupos_da_confirmacao(confirmacao.remontar(e), None, e.selecionados)
+
+
+def test_mascara_do_documento():
+    assert cf.mascarar_documento("52998224725") == "***.982.247-**"
+    assert cf.mascarar_documento("11.222.333/0001-81") == "**.222.333/0001-**"
+    assert cf.mascarar_documento("") == ""
+
+
+def test_nota_da_chave_editada():
+    assert cf.nota_da_chave_editada("PIX CPF 111.444.777-35", "52998224725") == (
+        "chave Pix editada: CPF/CNPJ diferente do favorecido do ERP (***.982.247-**)")
+    assert cf.nota_da_chave_editada("PIX CPF 529.982.247-25", "52998224725") == cf.NOTA_CHAVE_EDITADA
+    assert cf.nota_da_chave_editada("PIX EMAIL a@exemplo.com", "52998224725") == cf.NOTA_CHAVE_EDITADA
+    assert cf.nota_da_chave_editada("PIX CPF 111.444.777-35", "") == cf.NOTA_CHAVE_EDITADA
+
+
+def test_chave_cpf_editada_vai_como_digitada_com_observacao_nos_tres_geradores(tmp_path):
+    e, grupos = _entradas_com_contatos()
+    r = ge.resultado_da_tela(e, grupos, _editar_l1("PIX CPF 111.444.777-35"))
+    reg = ge.registro_atual(r, "L1")
+    nota = "chave Pix editada: CPF/CNPJ diferente do favorecido do ERP (***.982.247-**)"
+    assert reg["dados"] == "PIX CPF 111.444.777-35" and nota in reg["obs"]
+    assert reg[remessa_dia.CHAVE_EDITADA] is True
+    assert "52998224725" not in reg["obs"]                       # o documento do ERP vai mascarado
+    assert nota in _html(r, "L1")["obs"]
+    cand = next(c for c in remessa_dia.preparar(ge.para_a_remessa(r).contas,
+                                                participantes=e.participantes)[CONTA] if c.id == "L1")
+    assert cand.chave == "PIX CPF 111.444.777-35" and cand.documento_favorecido == CPF_DA_CHAVE
+    from openpyxl import load_workbook
+    caminho = relatorio.gerar_excel(r, tmp_path / "dia.xlsx", log=lambda *_: None)
+    textos = [str(c.value) for ws in load_workbook(caminho).worksheets
+              for linha in ws.iter_rows() for c in linha if c.value]
+    assert any(nota in t for t in textos)
+
+
+def test_chave_email_editada_leva_a_observacao_simples(dia):
+    e, grupos = dia
+    r = ge.resultado_da_tela(e, grupos, _editar_l1("PIX EMAIL outro@exemplo.com"))
+    reg = ge.registro_atual(r, "L1")
+    assert cf.NOTA_CHAVE_EDITADA in reg["obs"] and "diferente" not in reg["obs"]
+
+
+def test_sem_edicao_nao_ha_marca_de_chave_editada(dia):
+    e, grupos = dia
+    r = ge.resultado_da_tela(e, grupos, _conf())
+    assert not any(x.get(remessa_dia.CHAVE_EDITADA) for regs in r.contas.values() for x in regs)

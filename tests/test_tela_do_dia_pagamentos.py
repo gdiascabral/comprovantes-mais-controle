@@ -241,3 +241,12 @@ def test_ja_enviado_usa_a_mesma_regra_dos_geradores():
     from tela_do_dia import geracao as ge
     grupos = _grupos()
     assert set(ge._ja_enviados(grupos)) == pg.ids_que_nao_saem(grupos) == {"A2"}
+
+
+def test_chave_editada_mostra_a_observacao_na_tela(mapa):
+    conf = _conf([{"id": 1, "alvo": "A1", "acao": cf.EDITAR, "motivo": "chave nova",
+                   "campos": {"tipo": "Pix", "dados": "PIX CPF 111.444.777-35"}}])
+    alfa = pg.por_conta(_grupos(), mapa, conf,
+                        participantes={"FORNECEDOR A1": "52998224725"})[0][8]
+    a1 = next(p for p in alfa.vao_sair if p.id == "A1")
+    assert "chave Pix editada: CPF/CNPJ diferente do favorecido do ERP (***.982.247-**)" in a1.nota

@@ -28,8 +28,9 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from pagamentos_dia import confirmacao, relatorio
+from pagamentos_dia import confirmacao, relatorio, remessa_dia
 
+from . import conferencia as cf
 from . import pagamentos as pg
 
 BLOQUEIO_JA_ENVIADO = "já enviado em remessa"
@@ -88,13 +89,16 @@ def _status(antes: str, rotulos: list[str], cede: tuple) -> str:
     return f"{antes} · {novo}"           # ATENÇÃO que fica, JÁ PAGO…
 
 
-def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "") -> dict:
+def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "",
+                    participantes: dict | None = None) -> dict:
     """O registro com a decisão do dono aplicada (o mesmo dicionário).
 
     `liberavel`: a linha estava bloqueada (não apta ou já enviada) quando a
     tela a mostrou; liberação de linha que já sai não muda nada. `bloqueio`:
     o que a prendia, quando o registro não traz `bloqueio_liberado` (o já
-    enviado: "já saiu na remessa nº …")."""
+    enviado: "já saiu na remessa nº …"). `participantes`: o cadastro de
+    Contatos (`Entradas.participantes`), para a chave Pix editada dizer se o
+    CPF/CNPJ dela é o do favorecido do ERP."""
     if d is None:
         return reg
     antes, notas, rotulos = str(reg.get("status") or ""), [], []
@@ -131,6 +135,14 @@ def aplicar_decisao(reg: dict, d, *, liberavel: bool, bloqueio: str = "") -> dic
             campos.append("reembolso")
         if "descricao" in d.edicoes:
             reg["descricao"] = reg["descricao_editada"] = d.edicoes["descricao"]
+        if "tipo" in d.edicoes and not dividido and reg["tipo"] == "Pix":
+            # A chave editada vai como foi digitada, com observação (dono,
+            # 22/10/2026). A marca faz a remessa declarar o titular da chave
+            # quando ela é CPF/CNPJ (`remessa_dia.preparar`); a comparação é
+            # com o documento que a remessa usaria sem a edição.
+            reg[remessa_dia.CHAVE_EDITADA] = True
+            notas.append(cf.nota_da_chave_editada(
+                reg["dados"], remessa_dia.documento_sem_edicao(reg, participantes)))
         era = "; ".join(f"{k}={v}" for k, v in d.antes.items())
         notas.append(f"editado na tela por {d.quem_nome or '?'} "
                      f"({_texto_do_dono(d.motivo_edicao)})"
@@ -191,6 +203,7 @@ def resultado_da_tela(entradas, grupos, conferencia) -> relatorio.Resultado:
     desmarcados = {a for a, d in decisoes.items() if d.desmarcado}
     ja_enviados = _ja_enviados(grupos)
     nao_aptos = ids_nao_aptos(grupos)
+    participantes = getattr(entradas, "participantes", None)
     r = confirmacao.remontar(entradas, (set(ja_enviados) - liberados) | desmarcados,
                              ids_liberados=nao_aptos & liberados)
     bloqueados = nao_aptos | set(ja_enviados)
@@ -201,7 +214,8 @@ def resultado_da_tela(entradas, grupos, conferencia) -> relatorio.Resultado:
             ident = str(reg.get("id") or "")
             saem.append(aplicar_decisao(dict(reg), decisoes.get(ident),
                                         liberavel=ident in bloqueados,
-                                        bloqueio=ja_enviados.get(ident, "")))
+                                        bloqueio=ja_enviados.get(ident, ""),
+                                        participantes=participantes))
         contas[conta] = saem
     for i, p in enumerate(conferencia.a_mao):
         contas.setdefault(p.conta, []).append(registro_a_mao(p, ORDEM_A_MAO + i))
