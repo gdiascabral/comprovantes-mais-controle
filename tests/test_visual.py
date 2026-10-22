@@ -1123,6 +1123,7 @@ def test_a_barra_de_cima_escreve_na_cor_do_papel(raiz):
             widgets.aplicar_estilos(escuro)
             p = widgets.PALETA["escuro" if escuro else "claro"]
             for estilo in ("Barra.TLabel", "Marca.TLabel"):
-                assert str(st.lookup(estilo, "foreground")).lower() ==                     p["barra_texto"].lower(), estilo
+                frente = str(st.lookup(estilo, "foreground")).lower()
+                assert frente == p["barra_texto"].lower(), estilo
     finally:
         widgets.aplicar_estilos(False)
