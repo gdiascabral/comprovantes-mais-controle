@@ -123,6 +123,7 @@ def test_conta_sem_saldo_no_lote_sai_none_nunca_zero():
 class _SessaoQue:
     def __init__(self, erro=None):
         self.erro = erro
+        self._sessao = object()          # a SessaoPelaPagina por baixo
 
     def contas(self, *, ativas=True):
         if self.erro:
@@ -134,13 +135,14 @@ def test_sessao_central_velha_e_esquecida_e_le_de_novo_uma_vez():
     """Quando o Chrome do app precisou logar na mesma rodada, a sessão central
     guardada estava velha e o "Não consegui ler o dia" aparecia (22/10)."""
     from erp.sessao import ErpErro
-    sessoes = iter([_SessaoQue(ErpErro("401 do prod-erp-api")), _SessaoQue()])
+    velha = _SessaoQue(ErpErro("401 do prod-erp-api"))
+    sessoes = iter([velha, _SessaoQue()])
     esquecidas, registro = [], []
     contas = erp_do_dia.ler_saldos(
         Cfg(), ApiDaAba({}), central_ligado=lambda: True,
         logar=lambda cfg, log=print: next(sessoes),
-        esquecer=esquecidas.append, log=registro.append)
-    assert contas == ["conta"] and esquecidas == ["principal"]
+        esquecer=lambda nome, sessao: esquecidas.append((nome, sessao)), log=registro.append)
+    assert contas == ["conta"] and esquecidas == [("principal", velha._sessao)]
     assert any("de novo" in r and "401 do prod-erp-api" in r for r in registro)
 
 
@@ -150,7 +152,7 @@ def test_sessao_central_que_falha_duas_vezes_sobe_o_motivo_real():
     with pytest.raises(ErpError, match="token recusado"):
         erp_do_dia.ler_saldos(Cfg(), ApiDaAba({}), central_ligado=lambda: True,
                               logar=lambda cfg, log=print: next(sessoes),
-                              esquecer=esquecidas.append, log=lambda m: None)
+                              esquecer=lambda n, s: esquecidas.append(n), log=lambda m: None)
     assert esquecidas == ["principal"]           # só UMA nova tentativa
 
 
@@ -160,16 +162,34 @@ def test_erro_que_nao_e_do_erp_nao_tenta_de_novo():
     with pytest.raises(ValueError):
         erp_do_dia.ler_saldos(Cfg(), ApiDaAba({}), central_ligado=lambda: True,
                               logar=lambda cfg, log=print: next(sessoes),
-                              esquecer=esquecidas.append, log=lambda m: None)
+                              esquecer=lambda n, s: esquecidas.append(n), log=lambda m: None)
     assert esquecidas == []
 
 
-def test_esquecer_central_fecha_e_tira_da_guarda(monkeypatch):
+def test_porteiro_sem_token_leva_a_sessao_na_excecao(monkeypatch):
+    """O `_logar_pela_pagina` que recusa diz QUAL sessão guardada falhou."""
+    from erp import sessao as erp_sessao
+    sem_token = type("S", (), {"jwt_token": "", "company_id": "", "usuario": "",
+                               "empresa": None})()
+    monkeypatch.setattr(erp_sessao.Sessao, "logar", classmethod(lambda cls, e, s: sem_token))
+    with pytest.raises(ErpError) as e:
+        erp_do_dia._logar_pela_pagina(Cfg())
+    assert e.value.sessao is sem_token
+
+
+def test_esquecer_central_fecha_so_a_que_falhou(monkeypatch):
     from erp import sessao as erp_sessao
     fechadas = []
-    velha = type("S", (), {"fechar": lambda self: fechadas.append(self)})()
-    monkeypatch.setattr(erp_sessao, "_CENTRAIS", {"principal": velha})
-    erp_sessao.esquecer_central("principal")
-    assert erp_sessao._CENTRAIS == {} and fechadas == [velha]
-    erp_sessao.esquecer_central("principal")     # sem nada guardado: nada acontece
-    assert fechadas == [velha]
+
+    def nova():
+        return type("S", (), {"fechar": lambda self: fechadas.append(self)})()
+    velha, recriada = nova(), nova()
+    # Outra aba (Conciliação) já recriou a sessão: a que falhou não está mais
+    # guardada, e a nova NÃO pode cair.
+    monkeypatch.setattr(erp_sessao, "_CENTRAIS", {"principal": recriada})
+    erp_sessao.esquecer_central("principal", velha)
+    assert erp_sessao._CENTRAIS == {"principal": recriada} and fechadas == []
+    erp_sessao.esquecer_central("principal", None)       # sem saber qual: nada
+    assert erp_sessao._CENTRAIS == {"principal": recriada}
+    erp_sessao.esquecer_central("principal", recriada)
+    assert erp_sessao._CENTRAIS == {} and fechadas == [recriada]

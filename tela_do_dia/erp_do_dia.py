@@ -65,7 +65,9 @@ def _logar_pela_pagina(config, log=print):
     except ErpErro as e:
         raise ErpError(str(e)) from e
     if not interna.jwt_token:
-        raise ErpError("o porteiro entrou sem 'jwtToken' — o contrato mudou.")
+        erro = ErpError("o porteiro entrou sem 'jwtToken' — o contrato mudou.")
+        erro.sessao = interna        # qual sessão guardada falhou (`ler_saldos`)
+        raise erro
     return SessaoApi(token=interna.jwt_token, company_id=interna.company_id,
                      usuario=interna.usuario or "Chrome central",
                      empresa=interna.empresa, config=config, _sessao=interna)
@@ -91,12 +93,18 @@ def ler_saldos(config, api, *, central_ligado=None, logar=None, esquecer=None,
     logar = logar or _logar_pela_pagina
     esquecer = esquecer or erp_sessao.esquecer_central
     if central_ligado():
+        sessao = None
         try:
-            contas = logar(config, log=log).contas(ativas=True)
+            sessao = logar(config, log=log)
+            contas = sessao.contas(ativas=True)
         except (ErpError, ErpErro) as e:
             log(f"  Saldos do ERP: a sessão do Chrome central falhou ({type(e).__name__}: "
                 f"{e}) — abrindo uma nova e lendo de novo.")
-            esquecer("principal")
+            # Só a que FALHOU: a guardada pode já ser outra, recriada por
+            # outra aba, e essa não cai.
+            falhou = (getattr(sessao, "_sessao", None) if sessao is not None
+                      else getattr(e, "sessao", None))
+            esquecer("principal", falhou)
             contas = logar(config, log=log).contas(ativas=True)
     else:
         if not getattr(api, "_req_anexos", None) and not api.garantir_credenciais_anexos(log):

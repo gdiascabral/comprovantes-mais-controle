@@ -201,7 +201,9 @@ desligado: a MESMA aba do robô que leu os pagamentos (`mc_api._fetch_json`).
 de novo** (`erp.sessao.esquecer_central`; prova ao vivo 21 e 22/10/2026: com o
 Chrome do app logando no ERP na mesma rodada, a `SessaoPelaPagina` guardada em
 `_CENTRAIS` ficava com a autenticação velha e o dia não era lido). A 2ª falha
-sobe com o motivo dela; erro que não é do ERP não tenta de novo.
+sobe com o motivo dela; erro que não é do ERP não tenta de novo. Só se
+esquece a sessão que FALHOU (`SessaoApi._sessao`, ou `erro.sessao` do porteiro
+sem token), por identidade: a que a Conciliação acabou de recriar fica.
 Erro do ERP vira `ErpError`, nunca saldo zero; `acessos.json` estragado falha
 FECHADO. Conta sem saldo mostra "—" no mínimo e no saldo final, com situação
 "erro"; o Excel recusa quando `validacao.exigir_todos_os_saldos` está ligado
