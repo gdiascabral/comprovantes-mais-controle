@@ -487,6 +487,15 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
             pendente(rotulo, origem, valor,
                      f"não achei {falta!r} (um só) no cadastro da aba Aportes")
             continue
+        if (entidades[pagador] or {}).get("conta") is None:
+            # A origem é conta do painel: o dinheiro SAI dela. Sem a conta no
+            # cadastro, o modo sairia "Só recebimento" e lançaria só a entrada
+            # do sócio (revisão geral de 22/10/2026).
+            pendente(rotulo, origem, valor,
+                     f"{pagador!r} está no cadastro da aba Aportes sem a conta do ERP, "
+                     "e a distribuição SAI dela — complete a conta no cadastro (aba "
+                     "Aportes) e mande de novo")
+            continue
         op = Operacao(data=data, pagador=pagador, recebedor=recebedor,
                       valor=como_dinheiro(valor), tipo="Distribuição de Lucro",
                       modo=_modo(pagador, recebedor, entidades))

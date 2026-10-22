@@ -265,7 +265,9 @@ final), vai para a seção «À MÃO» do Excel DEPOIS dos movimentos (B origem,
 C sócio, H valor: o E do Painel a soma; o M não acha linha com o nome do
 sócio) e conta no limite de 20 linhas. O "Mandar para a aba Aportes" a leva
 como **Distribuição de Lucro**, com o modo do cadastro (sócio sem conta →
-Só pagamento); o mesmo par no dia vira UMA operação somada, com chave
+Só pagamento; origem no cadastro SEM conta do ERP é pendência — a
+distribuição sai dela, e "Só recebimento" lançaria só a entrada do sócio);
+o mesmo par no dia vira UMA operação somada, com chave
 própria de "já mandado" (`para_aportes.chave_da_distribuicao`).
 
 **Aportador composto na aba Regras** ("Fulano/Beltrano"): nunca se casa pelo

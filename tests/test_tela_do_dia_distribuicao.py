@@ -378,3 +378,17 @@ def test_transferencia_com_destino_em_subconta_e_informativo():
     assert envio.itens == [] and envio.pendentes == []
     (info,) = envio.informativos
     assert info.motivo == pa.TRANSFERENCIA
+
+
+def test_distribuicao_de_origem_sem_conta_no_cadastro_e_pendencia_clara():
+    """Revisão geral de 22/10/2026, achado 5: a origem é conta da empresa no
+    painel, então o dinheiro SAI dela. Cadastro sem a conta não vira "Só
+    recebimento" (que lançaria só a entrada do sócio): é pendência que diz o
+    que completar."""
+    entidades = dict(ENTIDADES, **{"MAE - BANCO": {"nome_oficial": "MAE FICTICIA LTDA",
+                                                   "conta": None, "nome_descricao": None}})
+    envio = pa.operacoes({}, REGRAS, entidades, SUBCONTAS, HOJE,
+                         distribuicoes=[("Mae - Banco", "SOCIO FICTICIO A", D("100.00"))])
+    assert envio.itens == []
+    (p,) = envio.pendentes
+    assert "sem a conta do ERP" in p.motivo and "MAE - BANCO" in p.motivo
