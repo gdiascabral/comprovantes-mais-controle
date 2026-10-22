@@ -609,8 +609,10 @@ def aplicar_estilos(escuro: bool) -> None:
     st.configure("Item.TLabel", background=c["cartao"], foreground=c["texto"])
     st.configure("ItemSobre.TLabel", background=c["fundo"],
                  foreground=c["texto"])
-    st.configure("ItemAtivo.TLabel", background=c["marca_fundo"],
-                 foreground=c["marca"], font=FONTE_FORTE)
+    # O item aberto é azul CHEIO com texto branco desde 22/10/2026
+    # (protótipo da repaginada); antes era azul-claro com texto azul.
+    st.configure("ItemAtivo.TLabel", background=c["marca_solida"],
+                 foreground="#FFFFFF", font=FONTE_FORTE)
 
     # --------------------------------------------------------------- texto
     st.configure("Titulo.TLabel", font=FONTE_TITULO, foreground=c["texto"])
@@ -2519,10 +2521,10 @@ class ItemMenu(tk.Frame):
     coluna, e o aberto virava o objeto mais pesado da janela inteira, mais
     forte que o botão de executar da tela que ele abriu.
 
-    Aqui o aberto é fundo azul-claro, texto azul e um filete de 3 px na
-    borda esquerda. Os três juntos porque o filete sozinho some em tela
-    pequena, e o fundo sozinho não distingue "aberto" de "o cursor está em
-    cima".
+    Aqui o aberto é azul CHEIO com texto branco (desde 22/10/2026, protótipo
+    da repaginada; antes era fundo azul-claro, texto azul e um filete de 3 px
+    na borda esquerda). O azul cheio separa sozinho "aberto" de "o cursor
+    está em cima", que continua sendo o cinza do painel.
 
     O ícone é trocado por ● quando a aba está trabalhando (ver `_pulso` no
     `comprovantes_app.py`). Guardado à parte para o ● poder voltar a ser o
@@ -2690,7 +2692,7 @@ class ItemMenu(tk.Frame):
     def _pintar(self, hover: bool = False):
         c = cores()
         if self._ativo:
-            fundo, frente, filete = c["marca_fundo"], c["marca"], c["marca"]
+            fundo, frente, filete = c["marca_solida"], "#FFFFFF", c["marca_solida"]
         elif hover:
             fundo, frente, filete = c["fundo"], c["texto"], c["fundo"]
         else:
@@ -2706,8 +2708,11 @@ class ItemMenu(tk.Frame):
         try:
             if hover and not self._ativo:
                 estilo = "ItemSobre.TLabel"
+            # No item aberto o anel de foco é da cor do TEXTO: a `marca` sobre
+            # o azul cheio sumiria.
             self.configure(background=fundo, highlightbackground=fundo,
-                           highlightcolor=c["marca"])
+                           highlightcolor=c["texto"] if self._ativo
+                           else c["marca"])
             self.corpo.configure(background=fundo)
             self.filete.configure(background=filete)
             self.lbl.configure(style=estilo)
@@ -2727,7 +2732,8 @@ class ItemMenu(tk.Frame):
             # uma versão para cada um dos três.
             self.lbl_icone.configure(
                 text=desenho, font=fonte_icone, style=estilo,
-                foreground=c["ativo"] if self._trabalhando else frente)
+                foreground=frente if self._ativo
+                else (c["ativo"] if self._trabalhando else frente))
         except tk.TclError:
             pass
 

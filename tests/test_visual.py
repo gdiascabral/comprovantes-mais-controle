@@ -223,8 +223,10 @@ PARES_DE_TEXTO = (
     ("atencao", "atencao_fundo", "PillAtencao.TLabel"),
     ("erro", "erro_fundo", "PillErro.TLabel"),
     ("info", "info_fundo", "PillInfo.TLabel"),
-    ("marca", "marca_fundo", "ItemAtivo.TLabel (o item aberto do menu) e a "
-                             "linha selecionada da tabela"),
+    ("marca", "marca_fundo", "a linha selecionada da tabela"),
+    # O item aberto do menu é azul CHEIO com branco desde 22/10/2026
+    # (protótipo da repaginada); antes era azul-claro com texto azul.
+    (BRANCO, "marca_solida", "ItemAtivo.TLabel, o item aberto do menu"),
     # ---- branco sobre cor SÓLIDA: a direção que ninguém media
     (BRANCO, "acao", "Botao papel=\"acao\", o executar verde"),
     (BRANCO, "acao_ativo", "o mesmo botão verde sob o cursor"),
@@ -263,6 +265,7 @@ PARES_DE_COMPONENTE = (
     ("acao", "cartao", "o botão verde, dentro de um cartão"),
     ("acao", "fundo", "o botão verde, no cabeçalho da página"),
     ("marca", "fundo", "o anel de foco do ItemMenu com o cursor no mesmo item"),
+    ("marca_solida", "cartao", "a pílula azul do item aberto contra o menu"),
 )
 
 
@@ -1127,3 +1130,21 @@ def test_a_barra_de_cima_escreve_na_cor_do_papel(raiz):
                 assert frente == p["barra_texto"].lower(), estilo
     finally:
         widgets.aplicar_estilos(False)
+
+
+def test_o_item_aberto_do_menu_e_azul_cheio(raiz):
+    """Protótipo de 22/10/2026: o item aberto é azul cheio com texto branco, e
+    o ● de aba trabalhando continua visível em cima dele (branco, não azul)."""
+    widgets.aplicar_estilos(False)
+    c = widgets.cores()
+    item = widgets.ItemMenu(raiz, "Pagamentos do dia")
+    item.pack()
+    try:
+        item.ativar(True)
+        assert str(item.cget("background")).lower() == c["marca_solida"].lower()
+        frente = str(ttk.Style().lookup("ItemAtivo.TLabel", "foreground"))
+        assert frente.lower() == "#ffffff"
+        item.trabalhando(True)
+        assert str(item.lbl_icone.cget("foreground")).lower() == "#ffffff"
+    finally:
+        item.destroy()
