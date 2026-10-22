@@ -218,7 +218,8 @@ def test_mover_nao_cruza_a_fronteira_numerado_sem_ordinal():
 def test_botoes_da_lista():
     linhas = [_l("A", 1), _l("B")]
     b = p67.botoes_da_lista(linhas, 0, ligado=True)
-    assert b == {"subir": False, "descer": False, "ordinal": True, "nome": True, "copiar": True}
+    assert b == {"subir": False, "descer": False, "ordinal": True, "nome": True, "copiar": True,
+                 "sugestoes": False}
     assert not any(p67.botoes_da_lista(linhas, 0, ligado=False).values())
     b = p67.botoes_da_lista(linhas, None, ligado=True)
     assert b["copiar"] and not b["nome"] and not b["ordinal"]
@@ -345,3 +346,17 @@ def test_frame_poe_o_parcial_no_registro():
     chamadas = [n.func.attr for n in ast.walk(metodo)
                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
     assert "registro_do_parcial" in chamadas
+
+
+def test_gravar_sugestoes_so_com_linha_sugerida():
+    sug = ldr.LinhaDaLista("Obra Beta - Sicoob", "Obra Beta", D("1"), sugerido=True)
+    gravada = _l("B", nome="Beta")
+    assert p67.botoes_da_lista([sug, gravada], None, ligado=True)["sugestoes"]
+    assert not p67.botoes_da_lista([sug], None, ligado=False)["sugestoes"]
+    assert not p67.botoes_da_lista([gravada], None, ligado=True)["sugestoes"]
+    assert p67.sugestoes_a_gravar([sug, gravada]) == [("Obra Beta - Sicoob", "Obra Beta")]
+
+
+def test_copiar_aceita_lista_so_com_sugestoes():
+    sug = ldr.LinhaDaLista("Obra Beta - Sicoob", "Obra Beta", D("1"), sugerido=True)
+    assert p67.recusa_de_copiar([sug]) == ""

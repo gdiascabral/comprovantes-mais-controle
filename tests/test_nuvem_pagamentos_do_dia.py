@@ -178,3 +178,12 @@ def test_recusa_do_banco_carrega_status_e_codigo():
     assert e.value.status == 409 and e.value.codigo == "23505"
     assert str(e.value) == "HTTP 409: duplicate key value"
     assert rest.RecusadoPeloBanco("so a frase").status is None
+
+
+def test_gravar_nomes_curtos_vai_num_pedido_so(falso):
+    pdd.DiaNaNuvem("tok").gravar_nomes_curtos([("Conta Alfa - Banco", " Alfa "),
+                                               ("Conta Beta - Banco", "Beta")])
+    assert len(falso.inseridas) == 1
+    _tabela, linhas = falso.inseridas[0]
+    assert linhas == [{"conta": "Conta Alfa - Banco", "nome_curto": "Alfa"},
+                      {"conta": "Conta Beta - Banco", "nome_curto": "Beta"}]

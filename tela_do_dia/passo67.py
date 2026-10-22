@@ -279,7 +279,14 @@ def botoes_da_lista(linhas, i, *, ligado: bool) -> dict:
     tem = ligado and i is not None and 0 <= i < len(linhas)
     return {"subir": ligado and pode_mover(linhas, i, -1),
             "descer": ligado and pode_mover(linhas, i, 1),
-            "ordinal": tem, "nome": tem, "copiar": ligado and bool(linhas)}
+            "ordinal": tem, "nome": tem, "copiar": ligado and bool(linhas),
+            "sugestoes": ligado and any(l.sugerido for l in linhas)}
+
+
+def sugestoes_a_gravar(linhas) -> list[tuple[str, str]]:
+    """(rótulo, nome) das linhas cujo nome curto é a sugestão do app — o que
+    o "Gravar sugestões" manda à nuvem de uma vez."""
+    return [(l.rotulo, l.nome) for l in linhas if l.sugerido]
 
 
 def recusa_de_copiar(linhas) -> str:

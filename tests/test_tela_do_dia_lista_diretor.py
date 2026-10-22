@@ -2,6 +2,8 @@
 from decimal import Decimal as D
 from types import SimpleNamespace
 
+import pytest
+
 from tela_do_dia import lista_diretor as ld
 from tela_do_dia.valores import brl
 
@@ -14,13 +16,13 @@ def test_soma_por_conta_com_nome_curto():
     linhas = ld.montar([_ag("ERP A", "10.00"), _ag("ERP A", "5.00"), _ag("ERP B", "7.00")],
                        {"ERP A": "Conta Alfa - Banco", "ERP B": "Conta Beta - Banco"}.get,
                        {"Conta Alfa - Banco": "Alfa - Banco"})
-    assert [(l.nome, l.valor) for l in linhas] == [("Alfa - Banco", D("15.00")),
-                                                   ("Conta Beta - Banco", D("7.00"))]
+    assert [(l.nome, l.valor, l.sugerido) for l in linhas] == [
+        ("Alfa - Banco", D("15.00"), False), ("Conta Beta Banco", D("7.00"), True)]
 
 
 def test_conta_sem_rotulo_usa_o_proprio_nome():
     linhas = ld.montar([_ag("ERP X", "1.00")], lambda c: None, {})
-    assert [(l.rotulo, l.nome) for l in linhas] == [("ERP X", "ERP X")]
+    assert [(l.rotulo, l.nome) for l in linhas] == [("ERP X", "Erp X")]
 
 
 def test_ordem_de_ontem_sugere_ordinais_e_demais():
@@ -58,8 +60,11 @@ def test_mover_e_alternar_renumeram():
 
 
 def test_sem_nome_curto_e_conta_sem_rotulo():
+    """Conta sem nome curto gravado nasce com a SUGESTÃO (marcada), não
+    bloqueia a cópia."""
     linhas = ld.montar([_ag("ERP A", "1.00"), _ag("ERP B", "1.00")], lambda c: c, {"ERP A": "Alfa"})
-    assert [(l.nome, l.sem_nome_curto) for l in linhas] == [("Alfa", False), ("ERP B", True)]
+    assert [(l.nome, l.sem_nome_curto, l.sugerido) for l in linhas] == [
+        ("Alfa", False, False), ("Erp B", False, True)]
     import pytest
     with pytest.raises(ValueError):
         ld.montar([_ag(None, "1.00")], lambda c: None, {})
@@ -129,3 +134,85 @@ def test_conta_cujo_unico_ordinal_de_ontem_e_invalido_fica_sem_ordinal():
     sug = ld.sugerir_ordem(linhas, anterior)
     assert [(l.rotulo, l.ordinal) for l in sug] == [("B", 1), ("A", None), ("C", None),
                                                     ("E", None)]
+
+
+# ------------------------------------------------- nome curto sugerido (E)
+# Nomes FICTÍCIOS, no formato dos rótulos reais do painel.
+MESMO_BANCO = [
+    "EMPRESA ALFA PARTICIPAÇÕES - SUBCONTA 12345-6 - SICOOB",
+    "Obra Beta Sicoob",
+    "EMPRESA GAMA SPE LTDA - 20001-1 - SICOOB",
+    "EMPRESA ALFA ENGENHARIA - Sicoob",
+    "Empresa Alfa Incorporações Delta 20002-2 - Sicoob",
+    "Empresa Alfa Participações - MÃE - 20.003-3 - SICOOB",
+    "EMPRESA DELTA EMPREENDIMENTOS GOIANIA SPE I LTDA - 20004-4 - SICOOB",
+    "Empresa Alfa Part. Subconta 20005-5 TB 7 QD 3 LT 2 Sicoob",
+    "Empresa Alfa Participações - SUBCONTA 20006-6 - QRS PARTICIPACOES LTDA - SICOOB",
+    "Obra Vale das Pedras Sicoob",
+    "EMPRESA ÉPSILON S/A - SICOOB",
+]
+
+
+@pytest.mark.parametrize("conta, esperado", [
+    ("EMPRESA ALFA PARTICIPAÇÕES - SUBCONTA 12345-6 - SICOOB", "Empresa Alfa Part. Sub. 12345"),
+    ("Obra Beta Sicoob", "Obra Beta"),
+    ("EMPRESA GAMA SPE LTDA - 20001-1 - SICOOB", "Empresa Gama"),
+    ("EMPRESA ALFA ENGENHARIA - Sicoob", "Empresa Alfa Eng."),
+    ("Empresa Alfa Incorporações Delta 20002-2 - Sicoob", "Empresa Alfa Incorp. Delta"),
+    ("Empresa Alfa Participações - MÃE - 20.003-3 - SICOOB", "Empresa Alfa Part. Mãe"),
+    ("EMPRESA DELTA EMPREENDIMENTOS GOIANIA SPE I LTDA - 20004-4 - SICOOB",
+     "Empresa Delta Empreend. Goiania"),
+    ("Empresa Alfa Part. Subconta 20005-5 TB 7 QD 3 LT 2 Sicoob",
+     "Empresa Alfa Part. Sub. 20005 TB 7 QD 3 LT 2"),
+    ("Empresa Alfa Participações - SUBCONTA 20006-6 - QRS PARTICIPACOES LTDA - SICOOB",
+     "Empresa Alfa Part. Sub. 20006 QRS Part."),
+    ("Obra Vale das Pedras Sicoob", "Obra Vale das Pedras"),
+    ("EMPRESA ÉPSILON S/A - SICOOB", "Empresa Épsilon"),
+])
+def test_sugere_nome_curto_com_a_lista_toda_do_mesmo_banco(conta, esperado):
+    assert ld.sugerir_nome_curto(conta, MESMO_BANCO) == esperado
+
+
+def test_bancos_misturados_deixam_o_banco_curto_no_fim():
+    todas = ["Obra Beta - Inter", "Obra Beta Sicoob", "OBRA ZETA - SICOOB - 30001-1"]
+    assert [ld.sugerir_nome_curto(c, todas) for c in todas] == [
+        "Obra Beta - Inter", "Obra Beta - Sicoob", "Obra Zeta - Sicoob"]
+
+
+def test_mesmo_nome_desempata_pelo_numero_da_conta():
+    todas = ["Familia Teta 30001-1 - Sicoob", "Familia Teta 30002-2 - Sicoob",
+             "Familia Teta 30003-3 - Sicoob", "Obra Beta Sicoob"]
+    assert [ld.sugerir_nome_curto(c, todas) for c in todas] == [
+        "Familia Teta 30001", "Familia Teta 30002", "Familia Teta 30003", "Obra Beta"]
+
+
+def test_sugestoes_sao_unicas_mesmo_sem_numero_para_desempatar():
+    todas = ["Obra Beta Sicoob", "OBRA BETA - SICOOB", "obra beta  sicoob", "Obra Zeta Sicoob"]
+    sug = ld.sugerir_nomes(todas)
+    nomes = [sug[c].casefold() for c in todas]
+    assert len(set(nomes)) == len(nomes)
+    assert sug["Obra Zeta Sicoob"] == "Obra Zeta"
+    # Determinística: a ordem da lista não muda o que cada conta recebe.
+    assert ld.sugerir_nomes(list(reversed(todas))) == sug
+
+
+def test_sugestao_nao_repete_nome_curto_ja_gravado_de_outra_conta():
+    todas = ["Obra Beta 30001-1 Sicoob", "Obra Zeta Sicoob"]
+    sug = ld.sugerir_nomes(todas, ocupados={"OBRA BETA"})
+    assert sug["Obra Beta 30001-1 Sicoob"] == "Obra Beta 30001"
+
+
+def test_sugestao_sempre_valida_para_gravar():
+    for conta in MESMO_BANCO + ["Sicoob", "  ", "X" * 90 + " Sicoob", "- 12345-6 -"]:
+        nome = ld.sugerir_nome_curto(conta, [conta])
+        assert ld.validar_nome_curto(nome) == "", (conta, nome)
+
+
+def test_montar_usa_a_sugestao_unica_e_nao_repete_nome_gravado():
+    linhas = ld.montar([_ag("a", "1.00"), _ag("b", "2.00"), _ag("c", "3.00")],
+                       {"a": "Obra Beta 30001-1 - Sicoob", "b": "Obra Beta 30002-2 - Sicoob",
+                        "c": "Obra Zeta - Sicoob"}.get,
+                       {"Obra Zeta - Sicoob": "Zeta"})
+    assert [(l.nome, l.sugerido, l.sem_nome_curto) for l in linhas] == [
+        ("Obra Beta 30001", True, False), ("Obra Beta 30002", True, False), ("Zeta", False, False)]
+    assert ld.texto_whatsapp(linhas).splitlines()[0].startswith("Obra Beta 30001 — ")

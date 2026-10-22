@@ -41,7 +41,7 @@ from . import dia_de_trabalho as ddt
 from . import erp_do_dia, excel_do_dia, geracao, janelas, lancamento_do_erp
 from . import agendados as agd
 from . import lista_diretor as ldr
-from . import nuvem_do_dia, para_aportes, passo2, passo67
+from . import nuvem_do_dia, para_aportes, passo2, passo67, recados
 from . import pagamentos as pg
 from . import saldos as sd
 from .sicoob_na_tela import LeitorSicoob
@@ -325,7 +325,9 @@ class TelaDoDiaFrame(ttk.Frame):
         c7.pack(fill="x", padx=PADX, pady=px((0, 12)))
         self._ajuda(c7, "Só o que foi agendado hoje, uma linha por conta. ↑/↓ mudam a ordem "
                         "(dentro dos numerados ou dentro dos demais); «Ordinal» liga ou "
-                        "desliga o 1º, 2º…; o nome curto fica gravado para os próximos dias.")
+                        "desliga o 1º, 2º…; o nome curto fica gravado para os próximos dias. "
+                        "Nome com «~» é a sugestão do app: já copia assim; «Nome curto…» "
+                        "troca e «Gravar sugestões» grava todas.")
         self.t_lista = self._tabela(c7, passo67.COLS_LISTA, arvore=False, altura=10)
         self.t_lista.configure(selectmode="browse")
         self.t_lista.bind("<<TreeviewSelect>>", lambda _e: self._ligar_lista())
@@ -339,6 +341,8 @@ class TelaDoDiaFrame(ttk.Frame):
                                        state="disabled", command=self._lista_ordinal)
         self.b_nome = widgets.Botao(linha7, "Nome curto…", papel="neutro", state="disabled",
                                     command=self._nome_curto)
+        self.b_sugestoes = widgets.Botao(linha7, "Gravar sugestões", papel="neutro",
+                                         state="disabled", command=self._gravar_sugestoes)
         self.b_copiar = widgets.Botao(linha7, "Copiar para o WhatsApp", papel="passo",
                                       state="disabled", command=self._copiar_lista)
         for i, b in enumerate(self._botoes_da_lista):
@@ -391,7 +395,8 @@ class TelaDoDiaFrame(ttk.Frame):
 
     @property
     def _botoes_da_lista(self):
-        return (self.b_subir, self.b_descer, self.b_ordinal, self.b_nome, self.b_copiar)
+        return (self.b_subir, self.b_descer, self.b_ordinal, self.b_nome, self.b_sugestoes,
+                self.b_copiar)
 
     def _ligar_botoes(self):
         """O que fica ligado vem de `passo2.botoes`: gravando na nuvem, nada
@@ -423,7 +428,7 @@ class TelaDoDiaFrame(ttk.Frame):
         """↑/↓ só dentro do mesmo lado (numerados × demais), pela seleção."""
         estados = passo67.botoes_da_lista(self.lista, self._indice_lista(),
                                           ligado=self._lista_ligada)
-        for chave, w in zip(("subir", "descer", "ordinal", "nome", "copiar"),
+        for chave, w in zip(("subir", "descer", "ordinal", "nome", "sugestoes", "copiar"),
                             self._botoes_da_lista):
             w.configure(state="normal" if estados[chave] else "disabled")
 
@@ -1389,10 +1394,13 @@ class TelaDoDiaFrame(ttk.Frame):
 
     def _t_ler_link(self, ident):
         try:
-            api = self.anx.garantir_sessao(self._log)
             conhecidos = self.leitura.lancamentos if self.leitura is not None else ()
-            lido = lancamento_do_erp.ler(api, ident, conhecidos, log=self._log)
+            # Aba do ERP fechada: reabre pelo `garantir_sessao` e lê UMA vez de novo.
+            lido = lancamento_do_erp.ler_pela_aba(lambda: self.anx.garantir_sessao(self._log),
+                                                  ident, conhecidos, log=self._log)
             self.q.put(("link_lido", (lido, "")))
+        except lancamento_do_erp.AbaDoErpFechada as e:
+            self.q.put(("link_lido", (None, f"Não li o lançamento.\n\n{e}")))
         except Exception as e:                              # noqa: BLE001
             self.q.put(("link_lido", (None, widgets.recado_de_erro(e, "Não li o lançamento."))))
 
@@ -1557,7 +1565,8 @@ class TelaDoDiaFrame(ttk.Frame):
         for i, ln in enumerate(self.lista):
             t.insert("", "end", iid=str(i), tags=widgets.linha_zebrada(
                          i, "atencao" if ln.sem_nome_curto else ""),
-                     values=(f"{ln.ordinal}º" if ln.ordinal else "", ln.nome, brl(ln.valor)))
+                     values=(f"{ln.ordinal}º" if ln.ordinal else "",
+                             f"~ {ln.nome}" if ln.sugerido else ln.nome, brl(ln.valor)))
         if selecionar is not None:
             i = next((n for n, ln in enumerate(self.lista) if ln.rotulo == selecionar), None)
             if i is not None:
@@ -1590,7 +1599,7 @@ class TelaDoDiaFrame(ttk.Frame):
             messagebox.showinfo(titulo, "Selecione uma linha da lista do diretor.")
             return
         rotulo, nomes = self.lista[i].rotulo, self.lido.nomes_curtos
-        atual = nomes.get(rotulo, "")
+        atual = nomes.get(rotulo) or (self.lista[i].nome if self.lista[i].sugerido else "")
         while True:
             nome = janelas.pedir_nome_curto(self, rotulo, atual)
             if nome is None:
@@ -1604,6 +1613,21 @@ class TelaDoDiaFrame(ttk.Frame):
         if nome == nomes.get(rotulo):
             return
         self._na_nuvem(titulo, lambda c: c.gravar_nome_curto(rotulo, nome), "nome_curto")
+
+    def _gravar_sugestoes(self):
+        """Grava de uma vez os nomes sugeridos («~») da lista, num pedido só."""
+        titulo = "Gravar sugestões"
+        if not self._pode_gravar(titulo):
+            return
+        pares = passo67.sugestoes_a_gravar(self.lista)
+        if not pares:
+            return
+        lista = "\n".join(f"{n}  ←  {r}" for r, n in pares)
+        if not messagebox.askyesno(
+                titulo, f"Gravar {len(pares)} nome(s) curto(s) sugerido(s)?\n\n{lista}",
+                default="yes"):
+            return
+        self._na_nuvem(titulo, lambda c: c.gravar_nomes_curtos(pares), "nome_curto")
 
     def _copiar_lista(self):
         titulo = "Lista do diretor"
@@ -1700,8 +1724,10 @@ class TelaDoDiaFrame(ttk.Frame):
                 a_mao=dc.movimentos_validos(self.dia.a_mao, self._rotulos_do_painel),
                 leitura_interrompida=self.leitura.interrompida)
         except (WorkbookError, OSError) as e:
-            self._log(f"\nO EXCEL DO DIA NÃO FOI GERADO\n{e}")
-            messagebox.showwarning(titulo, widgets.recado_de_erro(e, "Não gerei o Excel do dia."))
+            aberto = recados.excel_aberto(e)       # "[Errno 13]": o arquivo está aberto no Excel
+            self._log(f"\nO EXCEL DO DIA NÃO FOI GERADO\n{aberto or e}")
+            messagebox.showwarning(titulo, f"Não gerei o Excel do dia.\n\n{aberto}" if aberto
+                                   else widgets.recado_de_erro(e, "Não gerei o Excel do dia."))
             return
         except Exception as e:                              # noqa: BLE001
             # Como os outros geradores: erro inesperado vira recado, nunca a

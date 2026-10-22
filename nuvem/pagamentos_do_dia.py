@@ -176,6 +176,12 @@ class DiaNaNuvem:
     def gravar_nome_curto(self, conta, nome) -> dict:
         return self._gravar(NOME, [{"conta": conta, "nome_curto": (nome or "").strip()}])[0]
 
+    def gravar_nomes_curtos(self, pares) -> list[dict]:
+        """Vários nomes curtos num pedido só (o "Gravar sugestões" da lista do
+        diretor): ou entram todos, ou nenhum."""
+        return self._gravar(NOME, [{"conta": c, "nome_curto": (n or "").strip()}
+                                   for c, n in pares])
+
     def lista_anterior(self, dia) -> list[dict]:
         linhas = rest.ler(LISTA, self._token, colunas="dia,ordem",
                           filtro=f"dia=lt.{_iso(dia)}&order=dia.desc,id.desc&limit=1")

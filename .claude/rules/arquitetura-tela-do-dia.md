@@ -429,6 +429,29 @@ usar «Nome curto…»); copia primeiro e só então grava a lista (falha ao gra
 só avisa: perde-se a sugestão de amanhã). Dinheiro em `Decimal`; valor zero ou
 negativo não entra.
 
+**Nome curto sugerido** (pedido do dono 22/10/2026: "fazer por IA isso e
+deixar meio que pronto, não consegui copiar"). Conta sem nome gravado nasce
+com a sugestão de `lista_diretor.sugerir_nomes` (regra fixa, sem IA nem
+rede): tira o banco do fim quando a lista inteira é do mesmo banco (senão
+fica curto, "Obra - Inter"), sufixos jurídicos (LTDA, SPE [I], S/A, ME,
+EIRELI, EPP) e números de conta; encurta PARTICIPAÇÕES/SUBCONTA/ENGENHARIA/
+INCORPORAÇÕES/EMPREENDIMENTOS; "SUBCONTA 12345-6" vira "Sub. 12345"; Title
+Case (sigla sem vogal fica maiúscula). Sugestões são ÚNICAS entre si e
+diferentes dos nomes gravados de outras contas: empate desempata pelo número
+da conta (5 dígitos), depois banco, depois contador, em ordem alfabética dos
+rótulos (a ordem de chegada não muda nada). A tela mostra "~ nome"
+(`sugerido`), o Copiar aceita (só recusa linha sem nome nenhum), «Nome
+curto…» abre já com a sugestão e «Gravar sugestões» grava todas num pedido
+só (`gravar_nomes_curtos`).
+
+**Ler o lançamento com a aba do ERP fechada** (22/10/2026,
+"TargetClosedError"): `lancamento_do_erp.ler_pela_aba` reabre pelo
+`garantir_sessao` e lê UMA vez de novo; fechou de novo, o recado é "O Chrome
+do app fechou a aba do ERP; clique em Ler de novo". A causa estava em
+`MCClient._abas_do_robo`, que punha a `self.page` FECHADA na lista e a
+adotava como logada. Excel do dia aberto no Excel (errno 13) vira o recado
+de `recados.excel_aberto`.
+
 ## Sem nuvem, a entrega 2 trava (falha fechada)
 
 Sem nuvem lida (erro ao ler, ou sem login) a tela volta ao comportamento da
