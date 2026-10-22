@@ -17,12 +17,24 @@ Duas perguntas diferentes, que não se misturam:
   ainda vai debitá-lo: fora do a pagar, o D do painel, o D do Excel e o aporte
   mínimo sairiam baixos. Bloqueado de verdade = não apto, que não sai.
 
-Ponto de extensão da entrega 2: `liberados` (bloqueado que o dono libera, com
-motivo) e `a_mao` (pagamento à mão) já somam no `a_pagar`; hoje nascem vazios.
+Entrega 2 (a conferência do passo 2, `tela_do_dia.conferencia`):
+
+- `liberados`: bloqueado (não apto OU já enviado) que o dono liberou, com
+  motivo. O liberado de já enviado SAI de `ja_enviados` e entra aqui: soma
+  uma vez só no `a_pagar` (era "já enviado" e agora é gerado de novo);
+- `a_mao`: pagamento à mão, chave "mao:<n>" (nunca o id do lançamento do
+  link, que pode estar na lista do dia);
+- `desmarcados`: o que ia sair e o dono tirou. Não soma em nada (nem no
+  `a_pagar`): é o que `geracao.resultado_da_tela` põe nos omitidos.
+
+Regra de ouro: `saem` é, id a id, o `geracao.chaves_que_saem` do resultado
+que vai para planilha, HTML e remessa; `a_pagar` = `saem` + `ja_enviados`
+(o já enviado ainda não pago). Os dois lados leem as mesmas decisões; quem
+muda um muda o outro (teste `test_a_tela_e_os_arquivos_concordam`).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 
 from pagamentos_dia import confirmacao
@@ -43,6 +55,10 @@ class Pagamento:
     valor: Decimal
     situacao: str
     estado: str
+    #: "" (do ERP), "liberado", "editado" ou "a_mao": de onde veio a decisão.
+    origem: str = ""
+    #: Texto curto para a tabela: o que o dono mudou ("editado: descricao").
+    nota: str = ""
 
     @classmethod
     def da_linha(cls, ln) -> "Pagamento":
@@ -61,6 +77,8 @@ class PagamentosDaConta:
     ja_enviados: list = field(default_factory=list)
     liberados: list = field(default_factory=list)     # entrega 2
     a_mao: list = field(default_factory=list)         # entrega 2
+    #: Tirados pelo dono: NÃO somam (nem em `saem` nem em `debitam`).
+    desmarcados: list = field(default_factory=list)
     motivo_fora: str = ""
 
     @property
@@ -90,33 +108,61 @@ class PagamentosDaConta:
         return sum((p.valor for p in self.bloqueados), ZERO)
 
 
-def por_conta(grupos, mapping):
+def por_conta(grupos, mapping, conferencia=None):
+    """{linha do painel: contas} e as contas de fora. `conferencia`
+    (`tela_do_dia.conferencia.Conferencia`) põe na conta o que o dono liberou,
+    desmarcou, editou e pagou à mão; `None` (ou vazia) = entrega 1."""
     painel: dict[int, PagamentosDaConta] = {}
     fora: dict[str, PagamentosDaConta] = {}
+    decisoes = conferencia.decisoes if conferencia is not None else {}
 
-    def _fora(conta: str, motivo: str) -> PagamentosDaConta:
-        return fora.setdefault(conta, PagamentosDaConta(conta, None, motivo_fora=motivo))
+    def _destino(conta: str) -> PagamentosDaConta:
+        if mapping.is_ignored(conta):
+            return fora.setdefault(conta, PagamentosDaConta(conta, None, motivo_fora=FORA_POR_CONFIGURACAO))
+        row = mapping.resolve_label(conta)
+        if row is None:
+            return fora.setdefault(conta, PagamentosDaConta(conta, None, motivo_fora=SEM_LINHA))
+        if not row.exists_in_erp:
+            return fora.setdefault(conta, PagamentosDaConta(conta, None, motivo_fora=LINHA_FORA_DO_ERP))
+        return painel.setdefault(row.row, PagamentosDaConta(row.label, row.row))
+
+    def _pag(ln, d, origem=""):
+        p = Pagamento.da_linha(ln)
+        if origem == "liberado":
+            p = replace(p, situacao=f"liberado · {d.motivo_liberacao} (era: {ln.situacao})")
+        if d is not None and d.editado:
+            origem = origem or "editado"
+            p = replace(p, nota="editado: " + ", ".join(sorted(d.edicoes)))
+        return replace(p, origem=origem)
 
     for g in grupos:
-        if mapping.is_ignored(g.conta):
-            destino = _fora(g.conta, FORA_POR_CONFIGURACAO)
-        else:
-            row = mapping.resolve_label(g.conta)
-            if row is None:
-                destino = _fora(g.conta, SEM_LINHA)
-            elif not row.exists_in_erp:
-                destino = _fora(g.conta, LINHA_FORA_DO_ERP)
-            else:
-                destino = painel.setdefault(row.row, PagamentosDaConta(row.label, row.row))
+        destino = _destino(g.conta)
         for ln in g.entram:
+            d = decisoes.get(ln.id)
             if confirmacao.marcada_de_inicio(ln):
-                alvo = destino.vao_sair
+                if d is not None and d.desmarcado:
+                    destino.desmarcados.append(_pag(ln, d))
+                else:
+                    destino.vao_sair.append(_pag(ln, d))
             elif _ja_enviado(ln):
-                alvo = destino.ja_enviados
+                if d is not None and d.liberado:
+                    destino.liberados.append(_pag(ln, d, "liberado"))
+                else:
+                    destino.ja_enviados.append(_pag(ln, d))
             else:
-                alvo = destino.bloqueados
-            alvo.append(Pagamento.da_linha(ln))
-        destino.bloqueados.extend(Pagamento.da_linha(ln) for ln in g.nao_aptos)
+                destino.bloqueados.append(_pag(ln, d))
+        for ln in g.nao_aptos:
+            d = decisoes.get(ln.id)
+            if d is not None and d.liberado:
+                destino.liberados.append(_pag(ln, d, "liberado"))
+            else:
+                destino.bloqueados.append(Pagamento.da_linha(ln))
+    for m in (conferencia.a_mao if conferencia is not None else ()):
+        _destino(m.conta).a_mao.append(Pagamento(
+            id=m.alvo, conta_erp=m.conta, favorecido=m.favorecido or "(à mão)", valor=m.valor,
+            situacao=f"à mão · {m.motivo}", estado="atencao", origem="a_mao"))
+    for c in [*painel.values(), *fora.values()]:
+        c.liberados.sort(key=lambda p: p.id)
     return painel, list(fora.values())
 
 

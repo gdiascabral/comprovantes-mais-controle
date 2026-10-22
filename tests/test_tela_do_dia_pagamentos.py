@@ -96,3 +96,148 @@ def test_liberados_e_a_mao_somam_no_a_pagar(mapa):
 
 def test_ids_que_nao_saem_sao_so_os_ja_enviados():
     assert pg.ids_que_nao_saem(_grupos()) == {"A2"}
+
+
+# ------------------------------------------------------------ entrega 2: conferência
+from tela_do_dia import conferencia as cf  # noqa: E402
+
+
+def _conf(eventos=(), a_mao=()):
+    return cf.Conferencia.da_nuvem(list(eventos), list(a_mao))
+
+
+def test_sem_conferencia_e_o_de_antes(mapa):
+    a, _ = pg.por_conta(_grupos(), mapa)
+    b, _ = pg.por_conta(_grupos(), mapa, None)
+    c, _ = pg.por_conta(_grupos(), mapa, _conf())
+    assert {k: v.a_pagar for k, v in a.items()} == {k: v.a_pagar for k, v in b.items()}
+    assert {k: v.a_pagar for k, v in a.items()} == {k: v.a_pagar for k, v in c.items()}
+    assert [p.id for p in a[8].ja_enviados] == [p.id for p in c[8].ja_enviados] == ["A2"]
+
+
+def test_liberar_desmarcar_e_a_mao_mudam_o_a_pagar(mapa):
+    conf = _conf([{"id": 1, "alvo": "A4", "acao": cf.LIBERAR, "motivo": "ok"},
+                  {"id": 2, "alvo": "A1", "acao": cf.DESMARCAR},
+                  {"id": 3, "alvo": "A2", "acao": cf.LIBERAR, "motivo": "reenviar"}],
+                 [{"id": 7, "conta": "ALFA LTDA - BANCO", "valor": "5.00", "descricao": "taxa",
+                   "motivo": "combinado"}])
+    alfa = pg.por_conta(_grupos(), mapa, conf)[0][8]
+    assert [p.id for p in alfa.liberados] == ["A2", "A4"]
+    assert [p.id for p in alfa.desmarcados] == ["A1"] and alfa.ja_enviados == []
+    assert [p.id for p in alfa.a_mao] == ["mao:7"]
+    assert alfa.a_pagar == D("25.00") + D("50.00") + D("9.99") + D("5.00")   # A3 + A2 + A4 + à mão
+
+
+def test_liberar_o_ja_enviado_nao_conta_em_dobro(mapa):
+    """O liberado de já enviado soma UMA vez: sai de `ja_enviados` e entra em `liberados`."""
+    antes = pg.por_conta(_grupos(), mapa)[0][8]
+    conf = _conf([{"id": 1, "alvo": "A2", "acao": cf.LIBERAR, "motivo": "reenviar"}])
+    alfa = pg.por_conta(_grupos(), mapa, conf)[0][8]
+    assert alfa.a_pagar == antes.a_pagar            # o dinheiro é o mesmo: só mudou de lista
+    assert alfa.qtd_a_pagar == antes.qtd_a_pagar == 3
+    assert [p.id for p in alfa.liberados] == ["A2"] and alfa.ja_enviados == []
+    assert alfa.liberados[0].origem == "liberado"
+    assert "reenviar" in alfa.liberados[0].situacao and "motivo ficticio" in alfa.liberados[0].situacao
+
+
+def test_desmarcar_o_ja_enviado_nao_tira_do_a_pagar(mapa):
+    """O já enviado nem era gerado; desmarcá-lo não o paga nem o tira da conta."""
+    antes = pg.por_conta(_grupos(), mapa)[0][8]
+    conf = _conf([{"id": 1, "alvo": "A2", "acao": cf.DESMARCAR}])
+    alfa = pg.por_conta(_grupos(), mapa, conf)[0][8]
+    assert alfa.a_pagar == antes.a_pagar and [p.id for p in alfa.ja_enviados] == ["A2"]
+
+
+def test_desfazer_volta_ao_de_antes(mapa):
+    conf = _conf([{"id": 1, "alvo": "A1", "acao": cf.DESMARCAR},
+                  {"id": 2, "alvo": "A1", "acao": cf.DESFAZER}])
+    alfa = pg.por_conta(_grupos(), mapa, conf)[0][8]
+    assert [p.id for p in alfa.vao_sair] == ["A1", "A3"] and alfa.desmarcados == []
+
+
+def test_a_mao_em_conta_fora_do_painel_vai_para_fora(mapa):
+    conf = _conf(a_mao=[{"id": 2, "conta": "GAMA SPE - BANCO", "valor": "3.00",
+                         "descricao": "x", "motivo": "m"}])
+    _painel, fora = pg.por_conta(_grupos(), mapa, conf)
+    gama = next(c for c in fora if c.rotulo == "GAMA SPE - BANCO")
+    assert [p.id for p in gama.a_mao] == ["mao:2"]
+
+
+def test_editado_leva_nota_e_origem(mapa):
+    conf = _conf([{"id": 1, "alvo": "A1", "acao": cf.EDITAR, "motivo": "troca",
+                   "campos": {"descricao": "nova"}, "antes": {"descricao": "velha"}}])
+    alfa = pg.por_conta(_grupos(), mapa, conf)[0][8]
+    a1 = next(p for p in alfa.vao_sair if p.id == "A1")
+    assert a1.origem == "editado" and "descricao" in a1.nota
+
+
+def _cenario(tmp_path):
+    from datetime import date
+    dia, conta = date(2026, 10, 22), "CONTA EXEMPLO - SICOOB"
+    caminho = tmp_path / "mapping.yaml"
+    caminho.write_text("model_rows:\n- row: 8\n  label: Conta Exemplo\n  uuid: u\n"
+                       f"  erp_name: {conta}\n", encoding="utf-8")
+    mapa = AccountMapping.load(caminho)
+
+    def lanc(i):
+        return {"id": i, "tradePayableId": f"T-{i}", "paidTo": "Fornecedor Modelo Ltda",
+                "remainingValue": 100.0, "plannedDate": "2026-10-22",
+                "tradePayableAccount": {"name": conta}, "tradePayablePaymentMethod": "Pix",
+                "paidToBankAccount": "PIX EMAIL fulano@exemplo.com", "documentNumber": "1234",
+                "costCentreDetails": [{"workName": "OBRA MODELO"}], "paid": False}
+    nf = {"filename": "n", "tagName": "Nota Fiscal", "extension": ".pdf",
+          "downloadUrl": "https://exemplo.invalid/n.pdf"}
+    e = confirmacao.Entradas(selecionados=[lanc("L1"), lanc("L2"), lanc("L3")],
+                             anexos={"T-L1": [nf], "T-L3": [nf]}, overviews={}, textos={}, urls_ocr=set(),
+                             cadastro_reembolso=None, regras_fornecedor={}, participantes={},
+                             periodo=(dia, dia))
+    grupos = confirmacao.grupos_da_confirmacao(confirmacao.remontar(e), None, e.selecionados)
+    return conta, mapa, e, grupos
+
+
+def test_a_tela_e_os_arquivos_concordam(tmp_path):
+    """O que a tela soma (fora o já enviado) é exatamente o que sai nos arquivos."""
+    from tela_do_dia import geracao as ge
+    conta, mapa, e, grupos = _cenario(tmp_path)
+    conf = _conf([{"id": 1, "alvo": "L2", "acao": cf.LIBERAR, "motivo": "ok"},
+                  {"id": 2, "alvo": "L3", "acao": cf.DESMARCAR}],
+                 [{"id": 4, "conta": conta, "valor": "30.00", "descricao": "parcela", "motivo": "acordo"}])
+    painel, fora = pg.por_conta(grupos, mapa, conf)
+    na_tela = {p.id for c in [*painel.values(), *fora] for p in c.saem}
+    assert na_tela == ge.chaves_que_saem(ge.resultado_da_tela(e, grupos, conf)) == {"L1", "L2", "mao:4"}
+
+
+def test_a_pagar_da_tela_e_o_dos_geradores_em_dinheiro(tmp_path):
+    """Ponto de dinheiro, em valores e não só em ids. O à mão com link para um
+    lançamento do dia NÃO colide com o lançamento (chave `mao:<n>`)."""
+    from tela_do_dia import geracao as ge
+    from tela_do_dia.valores import de_float
+    conta, mapa, e, grupos = _cenario(tmp_path)
+    cenarios = [
+        _conf(),
+        _conf([{"id": 1, "alvo": "L2", "acao": cf.LIBERAR, "motivo": "ok"},
+               {"id": 2, "alvo": "L3", "acao": cf.DESMARCAR}]),
+        _conf([{"id": 1, "alvo": "L1", "acao": cf.DESMARCAR}],
+              [{"id": 4, "conta": conta, "valor": "30.00", "descricao": "parcela", "motivo": "acordo"},
+               {"id": 5, "conta": conta, "valor": "40.00", "descricao": "parcial", "motivo": "acordo",
+                "lancamento_id": "L1", "valor_em_aberto": "100.00"}]),
+        _conf(a_mao=[{"id": 6, "conta": conta, "valor": "40.00", "descricao": "parcial",
+                      "motivo": "acordo", "lancamento_id": "L2", "valor_em_aberto": "100.00"}]),
+    ]
+    for conf in cenarios:
+        resultado = ge.resultado_da_tela(e, grupos, conf)
+        dos_arquivos = sum((de_float(r["valor"]) for regs in resultado.contas.values() for r in regs),
+                           D("0.00"))
+        painel, fora = pg.por_conta(grupos, mapa, conf)
+        contas = [*painel.values(), *fora]
+        assert sum((c.a_pagar - c.valor_ja_enviado for c in contas), D("0.00")) == dos_arquivos
+        assert {p.id for c in contas for p in c.saem} == ge.chaves_que_saem(resultado)
+        assert sum(len(c.saem) for c in contas) == sum(len(r) for r in resultado.contas.values())
+
+
+def test_ja_enviado_usa_a_mesma_regra_dos_geradores():
+    """Os ids do "já enviado" da tela e os que o gerador tira do `remontar`
+    saem da mesma pergunta (`ids_que_nao_saem`); liberar um deles o move de lista."""
+    from tela_do_dia import geracao as ge
+    grupos = _grupos()
+    assert set(ge._ja_enviados(grupos)) == pg.ids_que_nao_saem(grupos) == {"A2"}
