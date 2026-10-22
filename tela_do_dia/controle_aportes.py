@@ -26,9 +26,11 @@ from decimal import (ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP, Decimal, InvalidO
                      localcontext)
 
 import util
-from aportes.regras import como_dinheiro, percentuais_dos_pesos, problema_dos_pesos
+from aportes import rateio_subconta
+from aportes.regras import (como_dinheiro, numero_da_conta, percentuais_dos_pesos, peso_de,
+                            problema_dos_pesos)
 
-from .valores import brl
+from .valores import brl, ler_valor_editado
 
 ZERO = Decimal("0.00")
 CENTAVO = Decimal("0.01")
@@ -533,3 +535,124 @@ def apurar_tudo(contas, erros: dict, crus: dict, apontamentos: dict, hoje) -> li
             continue
         saida.append(apurar(c, recs, apontamentos.get(c.id) or [], hoje))
     return saida
+
+
+# ---- formulário, sugestão da subconta e nomes conhecidos ---------------------
+
+NAO_E_APORTE = "Não é aporte desta conta (fica fora da conta)"
+
+
+def ler_data(texto) -> datetime.date:
+    t = str(texto or "").strip()
+    for formato in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(t, formato).date()
+        except ValueError:
+            pass
+    raise ValueError(f'Data inválida: "{t}". Use DD/MM/AAAA, ex.: 21/10/2026.')
+
+
+def ler_abertura(texto) -> Decimal:
+    """O já aportado antes da abertura: vazio é zero; negativo é recusado."""
+    t = str(texto or "").strip()
+    if not t:
+        return ZERO
+    valor = ler_valor_editado(t)
+    if valor < 0:
+        raise ValueError("O já aportado antes da abertura não pode ser negativo.")
+    return valor
+
+
+def conta_do_formulario(conta_erp, abertura, linhas, *, id=None, ativa=True) -> ContaControlada:
+    """`linhas`: [(nome, parte, já aportado)] como digitadas. Linha toda
+    vazia é pulada; partes vazias em TODOS = partes iguais."""
+    nome_conta = str(conta_erp or "").strip()
+    if not nome_conta:
+        raise ValueError("Escolha a conta, com o nome que ela tem no Mais Controle.")
+    data = ler_data(abertura)
+    preenchidas = []
+    for nome, parte, ja in linhas:
+        nome, parte, ja = (str(x or "").strip() for x in (nome, parte, ja))
+        if not (nome or parte or ja):
+            continue
+        if not nome:
+            raise ValueError("Há uma linha com parte ou valor e sem o nome do aportador.")
+        preenchidas.append((nome, rateio_subconta.ler_parte(parte), ler_abertura(ja)))
+    if not preenchidas:
+        raise ValueError("Falta pelo menos um aportador.")
+    partes = [p for _n, p, _a in preenchidas]
+    if all(p is None for p in partes):
+        partes = ["1"] * len(preenchidas)
+    elif any(p is None for p in partes):
+        raise ValueError("Preencha a parte de todos os aportadores, ou de nenhum "
+                         "(partes iguais).")
+    return ContaControlada(conta_erp=nome_conta, abertura=data, id=id, ativa=ativa,
+                           aportadores=tuple(Aportador(nome_erp=n, peso=Decimal(p), abertura=a)
+                                             for (n, _p, a), p in zip(preenchidas, partes)))
+
+
+def do_rateio_da_subconta(conta_erp: str, subcontas: dict):
+    """Os aportadores do rateio da subconta (aba Aportes), quando a conta é
+    uma subconta de investidor com rateio; senão None. Só SUGESTÃO."""
+    numero = numero_da_conta(conta_erp)
+    cfg = (subcontas or {}).get(numero) if numero else None
+    if not isinstance(cfg, dict) or not cfg.get("investidores"):
+        return None
+    pesos = cfg.get("pesos") or {}
+    saida = []
+    for nome in cfg["investidores"]:
+        p = peso_de(pesos, nome)
+        saida.append(Aportador(nome_erp=str(nome).strip(),
+                               peso=p if p is not None else Decimal(1)))
+    return tuple(saida)
+
+
+def _proporcao(aportadores) -> frozenset:
+    soma = sum((Decimal(a.peso) for a in aportadores), Decimal(0))
+    return frozenset((util.norm_espaco(a.nome_erp),
+                      (Decimal(a.peso) / soma).quantize(Decimal("0.000001")))
+                     for a in aportadores)
+
+
+def divergencia_do_rateio(conta: ContaControlada, subcontas: dict) -> str:
+    vindos = do_rateio_da_subconta(conta.conta_erp, subcontas)
+    if not vindos or not conta.aportadores or any(a.peso is None for a in conta.aportadores):
+        return ""
+    if _proporcao(vindos) == _proporcao(conta.aportadores):
+        return ""
+    return (f"a proporção do controle não é a do rateio da subconta "
+            f"{numero_da_conta(conta.conta_erp)} (aba Aportes) — confira qual vale")
+
+
+def nomes_conhecidos(entidades: dict, subcontas: dict, recebimentos=()) -> list:
+    """Sugestões para o nome do aportador: o nome oficial da Pagou/Recebeu
+    (é o Cliente que a aba Aportes lança), os investidores das subcontas e os
+    Clientes que vieram do ERP. Sem repetir, sem vazio. Nomes diferentes
+    (mesmo primeiro nome) ficam todos: a comparação é pelo nome completo."""
+    nomes = [str((d or {}).get("nome_oficial") or "") for d in (entidades or {}).values()]
+    for cfg in (subcontas or {}).values():
+        if isinstance(cfg, dict):
+            nomes += [str(n) for n in cfg.get("investidores") or []]
+    for r in recebimentos:
+        nomes += [r.cliente, r.cliente_cadastro]
+    vistos, saida = set(), []
+    for n in sorted((n.strip() for n in nomes if n and n.strip()), key=util.norm_espaco):
+        k = util.norm_espaco(n)
+        if k not in vistos:
+            vistos.add(k)
+            saida.append(n)
+    return saida
+
+
+def opcoes_de_apontamento(conta: ContaControlada) -> list:
+    return ([(a.nome_erp, a.id) for a in conta.aportadores if a.id is not None]
+            + [(NAO_E_APORTE, None)])
+
+
+def descrever_conta(conta: ContaControlada) -> str:
+    nomes = [a.nome_erp for a in conta.aportadores]
+    pcts = percentuais_dos_pesos(nomes, {a.nome_erp: a.peso for a in conta.aportadores})
+    linhas = [f"Conta: {conta.conta_erp}", f"Abertura: {conta.abertura:%d/%m/%Y}"]
+    linhas += [f"• {a.nome_erp} — parte {str(p).replace('.', ',')}% — já aportado antes "
+               f"da abertura: {brl(a.abertura)}" for a, p in zip(conta.aportadores, pcts)]
+    return "\n".join(linhas)

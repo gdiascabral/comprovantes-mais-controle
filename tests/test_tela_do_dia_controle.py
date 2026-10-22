@@ -332,3 +332,78 @@ def test_apontamento_de_valor_nao_positivo_vai_para_sem_dono(valor):
         assert [s.recebimento.id for s in ap.sem_dono] == ["r1"]
         assert "valor não positivo" in ap.sem_dono[0].motivo and not ap.apontados
         assert [l.aportou for l in ap.linhas] == [D("50000.00"), ZERO]
+
+
+# ---- formulário, sugestão da subconta e nomes conhecidos (tarefa 6) ----------
+
+SUBS = {"_obra_padrao": "X",
+        "11111-1": {"investidores": ["INV A LTDA", "INV B LTDA"],
+                    "pesos": {"INV A LTDA": "2", "INV B LTDA": "1"}}}
+
+
+def test_ler_data():
+    assert ca.ler_data("21/10/2026") == ca.ler_data("2026-10-21") == ABRE
+    for ruim in ("21/10", "31/02/2026", ""):
+        with pytest.raises(ValueError):
+            ca.ler_data(ruim)
+
+
+def test_ler_abertura():
+    assert ca.ler_abertura("") == ZERO and ca.ler_abertura("0") == ZERO
+    assert ca.ler_abertura("50.000,00") == D("50000.00")
+    for ruim in ("1500.50", "-1,00"):
+        with pytest.raises(ValueError):
+            ca.ler_abertura(ruim)
+
+
+def test_conta_do_formulario_pula_linha_vazia_e_partes_vazias_sao_iguais():
+    c = ca.conta_do_formulario(" CONTA MAE - BANCO ", "21/10/2026",
+                               [(ALFA, "", "50.000,00"), ("", "", ""), (BETA, "", "")])
+    assert c == ca.ContaControlada("CONTA MAE - BANCO", ABRE, (
+        ca.Aportador(ALFA, D(1), D("50000.00")), ca.Aportador(BETA, D(1), ZERO)))
+
+
+def test_conta_do_formulario_recusa_parte_pela_metade_e_linha_sem_nome():
+    with pytest.raises(ValueError, match="parte"):
+        ca.conta_do_formulario("C", "21/10/2026", [(ALFA, "60", ""), (BETA, "", "")])
+    with pytest.raises(ValueError, match="nome"):
+        ca.conta_do_formulario("C", "21/10/2026", [("", "1", "10,00")])
+    with pytest.raises(ValueError):
+        ca.conta_do_formulario("", "21/10/2026", [(ALFA, "1", "")])
+
+
+def test_do_rateio_da_subconta():
+    assert ca.do_rateio_da_subconta("SUBCONTA 11111-1 - SICOOB - INVESTIDOR", SUBS) == (
+        ca.Aportador("INV A LTDA", D(2)), ca.Aportador("INV B LTDA", D(1)))
+    assert ca.do_rateio_da_subconta("CONTA MAE - BANCO", SUBS) is None
+
+
+def test_divergencia_do_rateio():
+    nome = "SUBCONTA 11111-1 - SICOOB - INVESTIDOR"
+    igual = ca.ContaControlada(nome, ABRE, (ca.Aportador("inv a ltda", D(4)),
+                                            ca.Aportador("INV B LTDA", D(2))))
+    assert ca.divergencia_do_rateio(igual, SUBS) == ""
+    outra = replace(igual, aportadores=(ca.Aportador("INV A LTDA", D(1)),
+                                        ca.Aportador("INV B LTDA", D(1))))
+    assert "11111-1" in ca.divergencia_do_rateio(outra, SUBS)
+    assert ca.divergencia_do_rateio(_conta(), SUBS) == ""
+
+
+def test_nomes_conhecidos_sem_repetir_e_sem_vazio():
+    entidades = {"Alfa": {"nome_oficial": ALFA, "conta": None},
+                 "Empresa": {"nome_oficial": "EMPRESA FICTICIA LTDA", "conta": "1"},
+                 "Vazia": {"nome_oficial": ""}}
+    nomes = ca.nomes_conhecidos(entidades, SUBS, [_rec("r1", "1.00", "fulano alfa da silva"),
+                                                  _rec("r2", "1.00", "")])
+    assert nomes == ["EMPRESA FICTICIA LTDA", ALFA, "INV A LTDA", "INV B LTDA"]
+
+
+def test_opcoes_de_apontamento_e_descricao():
+    assert ca.opcoes_de_apontamento(_conta()) == [(ALFA, 10), (BETA, 11), (ca.NAO_E_APORTE, None)]
+    texto = ca.descrever_conta(_conta())
+    assert "21/10/2026" in texto and ALFA in texto and "R$ 50.000,00" in texto and "50,00%" in texto
+
+
+def test_nomes_parecidos_nao_se_juntam_nos_nomes_conhecidos():
+    # mesmo primeiro nome, pessoas diferentes: os dois ficam
+    assert ca.nomes_conhecidos({}, {}, [_rec("a", "1", ALFA), _rec("b", "1", BETA)]) == [ALFA, BETA]
