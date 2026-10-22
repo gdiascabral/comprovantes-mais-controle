@@ -76,6 +76,8 @@ INTERROMPIDA = "leitura interrompida antes desta conta"
 #: A conta não está na lista do login aberto (é de OUTRO acesso do Sicoob).
 FORA_DESTE_LOGIN = "esta conta não aparece neste login do Sicoob"
 EM_NENHUM_ACESSO = "esta conta não aparece em nenhum dos dois acessos lidos do Sicoob"
+MESMO_ACESSO = ("o Chrome voltou no mesmo acesso do Sicoob: saia do SicoobNet (botão "
+                "Sair) e clique em Reler Sicoob para entrar com o outro acesso")
 ERRO_DO_SERVICO = ("o Sicoob disse que não conseguiu ler o movimento desta "
                    "conta agora — clique em Reler Sicoob ou digite o saldo")
 CENTAVO = Decimal("0.01")
@@ -386,6 +388,14 @@ def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
     return lidos
 
 
+def _mesmas_contas(a, b) -> bool:
+    """As duas listas de contas são a mesma (pelos dígitos)? Lista que não
+    foi lida (`None`) ou vazia não prova nada: nunca é igual."""
+    if not a or not b:
+        return False
+    return sorted(so_digitos(n) for n in a) == sorted(so_digitos(n) for n in b)
+
+
 def ler_em_dois_acessos(abrir, numeros, *, perguntar, agora=_dt.datetime.now,
                         parar=lambda: False, log=print,
                         progresso=lambda feitas, total: None) -> list[Lido]:
@@ -406,10 +416,11 @@ def ler_em_dois_acessos(abrir, numeros, *, perguntar, agora=_dt.datetime.now,
     O resultado vem NA ORDEM pedida, cada uma com o `acesso` de onde veio. Se
     o segundo login falhar (tempo esgotado, Chrome fechado), a primeira
     leitura NÃO se perde: as que faltavam levam o porquê."""
+    primeira: dict = {}
     with abrir() as cli:
         cli.aguardar_login()
         lidos = ler_contas(cli, numeros, agora=agora, parar=parar, log=log,
-                           progresso=progresso)
+                           progresso=progresso, lista=primeira)
     faltam = [l.numero for l in lidos if l.motivo == FORA_DESTE_LOGIN]
     if not faltam or parar() or not perguntar(faltam):
         return lidos
@@ -418,8 +429,15 @@ def ler_em_dois_acessos(abrir, numeros, *, perguntar, agora=_dt.datetime.now,
     try:
         with abrir() as cli:
             cli.aguardar_login()
-            segunda = ler_contas(cli, faltam, agora=agora, parar=parar, log=log,
-                                 progresso=progresso)
+            outra = {"contas": list(cli.listar_contas() or [])}
+            if _mesmas_contas(primeira.get("contas"), outra["contas"]):
+                # A sessão ficou no perfil e o Chrome voltou no MESMO acesso:
+                # ler de novo daria "em nenhum dos dois", e não é verdade.
+                log(MESMO_ACESSO)
+                segunda = [Lido(n, motivo=MESMO_ACESSO) for n in faltam]
+            else:
+                segunda = ler_contas(cli, faltam, agora=agora, parar=parar, log=log,
+                                     progresso=progresso, lista=outra)
         segunda = [replace(l, acesso=2, motivo=EM_NENHUM_ACESSO
                            if l.motivo == FORA_DESTE_LOGIN else l.motivo)
                    for l in segunda]

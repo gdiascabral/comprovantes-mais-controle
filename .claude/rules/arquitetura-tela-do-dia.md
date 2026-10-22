@@ -101,7 +101,12 @@ fim do `_receber_leitura` (`ler_se_faltar`), `_ligar_botoes`/`_limpar`
   conta com `acesso` (1 ou 2, guardado no JSON); a hora continua a da conta
   lida há mais tempo. Não: ficam "não lido", como antes. Segundo login que
   falha não perde o primeiro (as que faltavam levam o porquê); a que não está
-  em nenhum dos dois diz isso.
+  em nenhum dos dois diz isso. **Chrome que volta no MESMO acesso** (a
+  sessão ficou no perfil; a lista de contas do 2º login é igual à do 1º, pelos
+  dígitos): não lê de novo; as que faltavam ficam "não lido" com "o Chrome
+  voltou no mesmo acesso do Sicoob: saia do SicoobNet (botão Sair) e clique em
+  Reler Sicoob para entrar com o outro acesso" (`saldo.MESMO_ACESSO`). A
+  lista de contas é lida UMA vez por login.
 - **Outro banco fica digitado** (spec: "só Sicoob"). Duas linhas na mesma
   conta do Sicoob, ou linha que diz SICOOB e o cadastro não resolve, não são
   preenchidas e dizem por quê.

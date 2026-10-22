@@ -414,8 +414,8 @@ def test_sem_conta_de_fora_nao_pergunta(medido):
 
 
 def test_conta_que_nao_esta_em_nenhum_dos_dois_diz_isso(medido):
-    c1 = Cliente(Pagina({}), [])
-    c2 = Cliente(Pagina({}), [])
+    c1 = Cliente(Pagina({}), ["98.765-4"])
+    c2 = Cliente(Pagina({}), ["87.654-3"])
     [a] = S.ler_em_dois_acessos(_Abrir(c1, c2), ["12.345-6"],
                                 perguntar=lambda f: True, agora=lambda: AGORA)
     assert not a.ok and a.motivo == S.EM_NENHUM_ACESSO and a.acesso == 2
@@ -465,3 +465,15 @@ def test_lista_as_contas_uma_vez_por_login(medido):
     lidos = S.ler_contas(cli, ["12345-6", "23456-7", "34567-8"], agora=lambda: AGORA)
     assert all(l.ok for l in lidos) and cli.listagens == 1
 
+
+def test_chrome_que_volta_no_mesmo_acesso_nao_le_de_novo_e_diz_o_que_fazer(medido):
+    p = Pagina({"123456": ok("1")})
+    c1 = Cliente(p, ["12.345-6"])
+    c2 = Cliente(p, ["12.345-6"])                    # o mesmo acesso de novo
+    perguntas, registro = [], []
+    a, b = S.ler_em_dois_acessos(_Abrir(c1, c2), ["12.345-6", "23.456-7"],
+                                 perguntar=lambda f: perguntas.append(f) or True,
+                                 agora=lambda: AGORA, log=registro.append)
+    assert a.ok and not b.ok and b.motivo == S.MESMO_ACESSO and b.acesso == 2
+    assert "botão Sair" in S.MESMO_ACESSO and "Reler Sicoob" in S.MESMO_ACESSO
+    assert c2.trocas == [] and any(S.MESMO_ACESSO in r for r in registro)
