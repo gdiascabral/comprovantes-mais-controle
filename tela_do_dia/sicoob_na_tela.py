@@ -203,23 +203,45 @@ class LeitorSicoob:
             def registrar(msg):
                 self.tela._log(f"  Sicoob: {msg}")
 
-            with SicoobClient(log=registrar) as cli:
-                cli.aguardar_login()
-                lidos = saldo.ler_contas(
-                    cli, numeros, parar=self._parar.is_set, log=registrar,
-                    progresso=lambda f, t: self.q.put(("lendo", (f, t))))
+            # Conta de OUTRO acesso do Sicoob (outro QR Code): no fim do
+            # primeiro login a tela pergunta, e o mesmo Chrome do app (o mesmo
+            # perfil) abre de novo para o outro acesso — ver
+            # `saldo.ler_em_dois_acessos`.
+            lidos = saldo.ler_em_dois_acessos(
+                lambda: SicoobClient(log=registrar), numeros,
+                perguntar=self._perguntar_outro_acesso,
+                parar=self._parar.is_set, log=registrar,
+                progresso=lambda f, t: self.q.put(("lendo", (f, t))))
             self.q.put(("lida", ss.LeituraSicoob.de_resultados(data, lidos)))
         except Exception as e:                               # noqa: BLE001
             self.q.put(("falhou", ss.recado_da_falha(e)))
         finally:
             self.q.put(("fim", None))
 
+    def _perguntar_outro_acesso(self, faltam) -> bool:
+        """Chamado da thread do Sicoob: a pergunta vai pela fila (Tk só na
+        thread da tela) e a thread espera a resposta. Fechar o app (`fechar`)
+        responde "não"."""
+        caixa = {"ev": threading.Event(), "sim": False}
+        self.q.put(("perguntar", (ss.pergunta_outro_acesso(faltam, self.contas), caixa)))
+        while not caixa["ev"].wait(0.2):
+            if self._parar.is_set():
+                return False
+        return bool(caixa["sim"]) and not self._parar.is_set()
+
     # ------------------------------------------------------------- tela
     def _drain(self):
         try:
             while True:
                 tipo, valor = self.q.get_nowait()
-                if tipo == "lendo":
+                if tipo == "perguntar":
+                    texto, caixa = valor
+                    try:
+                        caixa["sim"] = bool(messagebox.askyesno(
+                            TITULO, texto, default=messagebox.YES))
+                    finally:
+                        caixa["ev"].set()
+                elif tipo == "lendo":
                     self._lendo = valor
                 elif tipo == "lida":
                     self._receber(valor)

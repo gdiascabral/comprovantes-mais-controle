@@ -88,6 +88,20 @@ fim do `_receber_leitura` (`ler_se_faltar`), `_ligar_botoes`/`_limpar`
 - **Reler substitui a leitura inteira**: conta que falha fica "Sicoob não
   lido: motivo" com o banco VAZIO, nunca o valor velho calado nem R$ 0,00.
   A hora é a da conta lida há mais tempo; parcial diz "N de M contas".
+- **Dois acessos do Sicoob** (prova ao vivo 22/10/2026: 19 lidas, 4 de
+  OUTRO acesso, com outro QR Code). Sobrou conta "não aparece neste login"
+  no fim da leitura: a tela pergunta (`askyesno`, padrão sim, pela fila —
+  `_perguntar_outro_acesso`; a thread espera, e fechar o app responde não)
+  "N contas são de outro acesso do Sicoob (…). Entrar com o outro acesso
+  agora?". Sim: o Chrome do Sicoob do app (o MESMO perfil) fecha e abre de
+  novo, espera o login do dono e lê SÓ as que faltaram
+  (`saldo.ler_em_dois_acessos`). É o caminho já provado de
+  `baixar_em_varios_logins`: o app não tem um "sair" do SicoobNet, e nada
+  digita senha nem clica em aceite/2FA. As duas leituras viram UMA, cada
+  conta com `acesso` (1 ou 2, guardado no JSON); a hora continua a da conta
+  lida há mais tempo. Não: ficam "não lido", como antes. Segundo login que
+  falha não perde o primeiro (as que faltavam levam o porquê); a que não está
+  em nenhum dos dois diz isso.
 - **Outro banco fica digitado** (spec: "só Sicoob"). Duas linhas na mesma
   conta do Sicoob, ou linha que diz SICOOB e o cadastro não resolve, não são
   preenchidas e dizem por quê.

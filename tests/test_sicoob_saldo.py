@@ -356,3 +356,102 @@ def test_resposta_que_nao_e_json_ainda_para_a_fila(medido):
     a, b = S.ler_contas(cli, ["12.345-6", "23.456-7"], agora=lambda: AGORA)
     assert "não devolveu JSON" in a.motivo and b.motivo == a.motivo
     assert cli.trocas == ["12.345-6"]
+
+
+# ------------------------------------------------- dois acessos (prova 22/10)
+class _Abrir:
+    """`abrir()` do Chrome do Sicoob: cada chamada é um login (um QR Code)."""
+
+    def __init__(self, *clientes):
+        self.clientes, self.abertos, self.logins = list(clientes), 0, 0
+
+    def __call__(self):
+        dono = self
+
+        class _Ctx:
+            def __enter__(self_):
+                cli = dono.clientes[dono.abertos]
+                dono.abertos += 1
+                cli.aguardar_login = lambda: setattr(dono, "logins", dono.logins + 1)
+                return cli
+
+            def __exit__(self_, *a):
+                return False
+        return _Ctx()
+
+
+def test_conta_de_outro_acesso_pergunta_e_le_so_as_que_faltaram(medido):
+    p1 = Pagina({"123456": ok("1")})
+    p2 = Pagina({"234567": ok("2"), "345678": ok("3")})
+    c1 = Cliente(p1, ["12.345-6"])
+    c2 = Cliente(p2, ["23.456-7", "34.567-8"])
+    perguntas = []
+    lidos = S.ler_em_dois_acessos(
+        _Abrir(c1, c2), ["12.345-6", "23.456-7", "34.567-8"],
+        perguntar=lambda faltam: perguntas.append(list(faltam)) or True,
+        agora=lambda: AGORA)
+    assert perguntas == [["23.456-7", "34.567-8"]]
+    assert [(l.numero, l.saldo, l.acesso) for l in lidos] == [
+        ("12.345-6", D("1.00"), 1), ("23.456-7", D("2.00"), 2), ("34.567-8", D("3.00"), 2)]
+    assert c2.trocas == ["23.456-7", "34.567-8"]     # só as que faltaram
+
+
+def test_dono_diz_nao_e_ficam_nao_lidas_como_hoje(medido):
+    c1 = Cliente(Pagina({"123456": ok("1")}), ["12.345-6"])
+    abrir = _Abrir(c1)
+    a, b = S.ler_em_dois_acessos(abrir, ["12.345-6", "23.456-7"],
+                                 perguntar=lambda faltam: False, agora=lambda: AGORA)
+    assert a.ok and b.motivo == S.FORA_DESTE_LOGIN and abrir.abertos == 1
+
+
+def test_sem_conta_de_fora_nao_pergunta(medido):
+    c1 = Cliente(Pagina({"123456": {"status": 500, "corpo": "x"}}), ["12.345-6"])
+    perguntas = []
+    S.ler_em_dois_acessos(_Abrir(c1), ["12.345-6"],
+                          perguntar=lambda f: perguntas.append(f) or True, agora=lambda: AGORA)
+    assert perguntas == []
+
+
+def test_conta_que_nao_esta_em_nenhum_dos_dois_diz_isso(medido):
+    c1 = Cliente(Pagina({}), [])
+    c2 = Cliente(Pagina({}), [])
+    [a] = S.ler_em_dois_acessos(_Abrir(c1, c2), ["12.345-6"],
+                                perguntar=lambda f: True, agora=lambda: AGORA)
+    assert not a.ok and a.motivo == S.EM_NENHUM_ACESSO and a.acesso == 2
+
+
+def test_segundo_login_que_falha_nao_perde_a_primeira_leitura(medido):
+    c1 = Cliente(Pagina({"123456": ok("1")}), ["12.345-6"])
+
+    class _Quebra:
+        def __enter__(self): raise RuntimeError("Timeout 600000ms exceeded")
+        def __exit__(self, *a): return False
+
+    abrir = _Abrir(c1)
+    chamadas = []
+
+    def abrir2():
+        chamadas.append(1)
+        return abrir() if len(chamadas) == 1 else _Quebra()
+
+    a, b = S.ler_em_dois_acessos(abrir2, ["12.345-6", "23.456-7"],
+                                 perguntar=lambda f: True, agora=lambda: AGORA)
+    assert a.ok and a.saldo == D("1.00")
+    assert not b.ok and "outro acesso" in b.motivo and "Timeout" in b.motivo
+
+
+def test_parar_depois_do_primeiro_acesso_nao_pergunta(medido):
+    c1 = Cliente(Pagina({"123456": ok("1")}), ["12.345-6"])
+    perguntas = []
+    parado = []
+
+    def parar():
+        return bool(parado)
+
+    def log(msg):
+        if "lido" in msg:
+            parado.append(1)
+
+    S.ler_em_dois_acessos(_Abrir(c1), ["12.345-6", "23.456-7"], parar=parar, log=log,
+                          perguntar=lambda f: perguntas.append(f) or True, agora=lambda: AGORA)
+    assert perguntas == []

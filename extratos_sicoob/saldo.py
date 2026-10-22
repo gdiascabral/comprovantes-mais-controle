@@ -40,7 +40,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from .pendencias import _JS as _JS_FETCH        # o mesmo fetch, com a sessão do banco
@@ -75,6 +75,7 @@ SESSAO_CAIU = ("a sessão do Sicoob caiu antes desta conta — faça o login de 
 INTERROMPIDA = "leitura interrompida antes desta conta"
 #: A conta não está na lista do login aberto (é de OUTRO acesso do Sicoob).
 FORA_DESTE_LOGIN = "esta conta não aparece neste login do Sicoob"
+EM_NENHUM_ACESSO = "esta conta não aparece em nenhum dos dois acessos lidos do Sicoob"
 ERRO_DO_SERVICO = ("o Sicoob disse que não conseguiu ler o movimento desta "
                    "conta agora — clique em Reler Sicoob ou digite o saldo")
 CENTAVO = Decimal("0.01")
@@ -113,6 +114,9 @@ class Lido:
     saldo: Decimal | None = None
     lido_em: _dt.datetime | None = None
     motivo: str = ""
+    #: De que leitura veio: 1 = o login aberto primeiro; 2 = o OUTRO acesso
+    #: do Sicoob (`ler_em_dois_acessos`).
+    acesso: int = 1
 
     @property
     def ok(self) -> bool:
@@ -370,3 +374,48 @@ def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
             log(f"{numero}: lido")
     progresso(len(fila), len(fila))
     return lidos
+
+
+def ler_em_dois_acessos(abrir, numeros, *, perguntar, agora=_dt.datetime.now,
+                        parar=lambda: False, log=print,
+                        progresso=lambda feitas, total: None) -> list[Lido]:
+    """`ler_contas` no login que o dono abrir e, se sobrar conta "não aparece
+    neste login", no OUTRO acesso do Sicoob — só as que faltaram.
+
+    Um login do Sicoob enxerga as contas de UM grupo; as de outra empresa
+    ficam noutro acesso, com outro QR Code (prova ao vivo de 22/10/2026: 19
+    lidas, 4 de outro acesso; o dono: "tem que abrir outro QR code pra ler
+    depois que finaliza"). `abrir()` devolve o gerenciador de contexto do
+    Chrome do Sicoob do app (o MESMO perfil); trocar de acesso é fechar este
+    Chrome e abrir de novo, que pede o login outra vez — o caminho provado de
+    `baixar_comprovantes.sicoob_baixar.baixar_em_varios_logins`: o SicoobNet
+    não tem um "sair" que o app já use, e nada aqui digita senha nem clica em
+    aceite. `perguntar(faltam)` é a tela (padrão "sim"); "não" deixa as contas
+    "não lidas", como antes.
+
+    O resultado vem NA ORDEM pedida, cada uma com o `acesso` de onde veio. Se
+    o segundo login falhar (tempo esgotado, Chrome fechado), a primeira
+    leitura NÃO se perde: as que faltavam levam o porquê."""
+    with abrir() as cli:
+        cli.aguardar_login()
+        lidos = ler_contas(cli, numeros, agora=agora, parar=parar, log=log,
+                           progresso=progresso)
+    faltam = [l.numero for l in lidos if l.motivo == FORA_DESTE_LOGIN]
+    if not faltam or parar() or not perguntar(faltam):
+        return lidos
+    log(f"{len(faltam)} conta(s) de outro acesso — abrindo o Chrome do Sicoob de "
+        "novo; entre com o outro acesso (QR Code).")
+    try:
+        with abrir() as cli:
+            cli.aguardar_login()
+            segunda = ler_contas(cli, faltam, agora=agora, parar=parar, log=log,
+                                 progresso=progresso)
+        segunda = [replace(l, acesso=2, motivo=EM_NENHUM_ACESSO
+                           if l.motivo == FORA_DESTE_LOGIN else l.motivo)
+                   for l in segunda]
+    except Exception as e:                                   # noqa: BLE001
+        motivo = f"o outro acesso do Sicoob não entrou: {_primeira_linha(e)}"
+        log(motivo)
+        segunda = [Lido(n, motivo=motivo, acesso=2) for n in faltam]
+    por_digitos = {so_digitos(l.numero): l for l in segunda}
+    return [por_digitos.get(so_digitos(l.numero), l) for l in lidos]

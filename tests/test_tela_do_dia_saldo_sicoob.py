@@ -165,3 +165,33 @@ def test_reler_que_falha_apaga_o_lido_anterior(linhas, mapa):
     assert g.banco is None and g.nota_banco.startswith("Sicoob não lido: ")
     de_novo = {ln.rotulo: ln for ln in ss.aplicar(list(por.values()), contas, _leitura())}
     assert de_novo["Alfa - Sicoob"].banco == D("90.00") and de_novo["Alfa - Sicoob"].nota_banco == ""
+
+
+# ------------------------------------------------- dois acessos (prova 22/10)
+def test_cada_conta_guarda_de_que_acesso_veio_e_a_hora_e_a_mais_antiga(tmp_path):
+    leitura = ss.LeituraSicoob.de_resultados(HOJE, [
+        NS(numero="12.345-6", saldo=D("1"), lido_em=dt.datetime(2026, 10, 22, 8, 12),
+           motivo="", acesso=1),
+        NS(numero="23.456-7", saldo=D("2"), lido_em=dt.datetime(2026, 10, 22, 8, 30),
+           motivo="", acesso=2)])
+    assert leitura.contas["123456"].acesso == 1 and leitura.contas["234567"].acesso == 2
+    contas = [ss.ContaDoPainel("A", numero="12.345-6"), ss.ContaDoPainel("B", numero="23.456-7")]
+    assert ss.texto_da_hora(leitura, contas) == "Sicoob lido às 08:12"
+    p = ss.caminho(tmp_path, HOJE)
+    ss.gravar(leitura, p)
+    lida, _ = ss.ler(p, HOJE)
+    assert lida.contas["234567"].acesso == 2
+    # Arquivo de antes (sem "acesso") continua lendo: é o primeiro acesso.
+    antigo = ss.de_dict({"contas": [{"numero": "12.345-6", "saldo": "1", "lido_em": None}]}, HOJE)
+    assert antigo.contas["123456"].acesso == 1
+
+
+def test_pergunta_do_outro_acesso_diz_quantas_e_quais():
+    contas = [ss.ContaDoPainel("Alfa - Sicoob", numero="12.345-6"),
+              ss.ContaDoPainel("Gama - Sicoob", numero="23.456-7")]
+    texto = ss.pergunta_outro_acesso(["12.345-6", "23.456-7"], contas)
+    assert texto.startswith("2 contas são de outro acesso do Sicoob (Alfa - Sicoob, "
+                            "Gama - Sicoob). Entrar com o outro acesso agora?")
+    assert "QR Code" in texto
+    um = ss.pergunta_outro_acesso(["34.567-8"], contas)
+    assert um.startswith("1 conta é de outro acesso do Sicoob (34.567-8).")

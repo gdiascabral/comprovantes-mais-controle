@@ -297,3 +297,57 @@ def test_reler_depois_da_meia_noite_pede_novo_buscar(monkeypatch):
     l.ler_se_faltar()
     assert len(avisos) == n and l._thread is None
     assert any("Busque de novo: a tela é de 21/10" in r for r in tela.registro)
+
+
+# ------------------------------------------------- dois acessos (prova 22/10)
+def test_t_ler_usa_os_dois_acessos_com_a_pergunta_da_tela(monkeypatch):
+    from extratos_sicoob import saldo, sicoob_client
+    abertos, recebido = [], {}
+
+    class _Cli:
+        def __init__(self, log): abertos.append(self)
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def _dois(abrir, numeros, **kw):
+        recebido.update(kw, numeros=numeros)
+        with abrir():
+            pass
+        return [saldo.Lido("12.345-6", D("1.00"), dt.datetime(2026, 10, 22, 8, 12)),
+                saldo.Lido("23.456-7", D("2.00"), dt.datetime(2026, 10, 22, 8, 40), acesso=2)]
+
+    monkeypatch.setattr(sicoob_client, "SicoobClient", _Cli)
+    monkeypatch.setattr(saldo, "ler_em_dois_acessos", _dois)
+    l = _leitor(_tela())
+    l._t_ler(["12.345-6", "23.456-7"], HOJE)
+    assert recebido["perguntar"] == l._perguntar_outro_acesso and len(abertos) == 1
+    tipo, leitura = l.q.get()
+    while tipo != "lida":
+        tipo, leitura = l.q.get()
+    assert leitura.contas["234567"].acesso == 2
+    assert leitura.hora == dt.datetime(2026, 10, 22, 8, 12)
+
+
+def test_pergunta_do_outro_acesso_passa_pela_tela_com_padrao_sim(monkeypatch):
+    perguntas = []
+    monkeypatch.setattr(m.messagebox, "askyesno",
+                        lambda t, msg, **kw: perguntas.append((msg, kw)) or True)
+    l = _leitor(_tela())
+    l.contas = [ss.ContaDoPainel("Alfa", numero="12.345-6")]
+    resposta = {}
+    t = threading.Thread(target=lambda: resposta.update(r=l._perguntar_outro_acesso(["12.345-6"])))
+    t.start()
+    for _ in range(200):                      # a tela drena a fila
+        l._drain()
+        if not t.is_alive():
+            break
+        t.join(0.02)
+    assert resposta == {"r": True}
+    assert perguntas[0][0].startswith("1 conta é de outro acesso do Sicoob (Alfa).")
+    assert perguntas[0][1].get("default") == m.messagebox.YES
+
+
+def test_pergunta_do_outro_acesso_desiste_ao_fechar_o_app():
+    l = _leitor(_tela())
+    l._parar.set()
+    assert l._perguntar_outro_acesso(["12.345-6"]) is False
