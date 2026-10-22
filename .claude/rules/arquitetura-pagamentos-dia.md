@@ -697,6 +697,16 @@ paths:
   sem o Copiar do boleto/Pix, com o motivo "já pago — não pagar de novo"
   (copiar o dado de quem já pagou é pagar em dobro); o travessão (U+2014) do
   status "ATENÇÃO — motivo" sai da frase do motivo.
+  **Movimentos do dia** (item A, 22/10/2026; só pela tela "Pagamentos do
+  dia"): `gravar(movimentos=)` recebe os movimentos à mão (aporte que entra
+  na mãe, transferência entre contas, distribuição de lucros) e
+  `movimentos_do_html` os põe em `DATA.movimentos`, numa seção própria
+  "Movimentos do dia — já cadastrados no banco": de → para, tipo e valor,
+  SEM chave, sem "Copiar" nem "já paguei" (dono: "não precisa colocar os pix
+  pq tem salvo no banco já, só a informação pra não ficar nenhum pra trás").
+  Total próprio (`Gerados.total_movimentos`), fora do `total` das contas e
+  do total geral da página; não são `Resultado.contas`, então não chegam à
+  remessa. Sem movimentos, a seção fica escondida.
   **Para remover**: apagar os dois módulos e o teste, o método
   `_gerar_html_pagamentos` e as linhas marcadas "HTML provisório" deste
   arquivo (import, botão `b_html` e as duas que o acendem e apagam), e este

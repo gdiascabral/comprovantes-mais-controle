@@ -251,6 +251,35 @@ A data das operações é a do dia de trabalho (`periodo.fim`), nunca a do
 relógio: tela aberta depois da meia-noite mandaria com outra data e anotaria
 no arquivo de outro dia.
 
+## Movimentos à mão, distribuição e investidores numa linha só (item A, 22/10/2026)
+
+O cartão "Movimentos à mão" tem três botões: aporte que entra na mãe,
+transferência entre contas e **distribuição de lucros** (conta do painel →
+sócio ou investidor do cadastro da aba Aportes, `decisoes.socios_do_cadastro`;
+`dia.distribuicoes`, chave `distribuicoes` do JSON do dia). A distribuição
+SAI da origem (`AporteDaConta.distribui`: soma no mínimo e tira do saldo
+final), vai para a seção «À MÃO» do Excel DEPOIS dos movimentos (B origem,
+C sócio, H valor: o E do Painel a soma; o M não acha linha com o nome do
+sócio) e conta no limite de 20 linhas. O "Mandar para a aba Aportes" a leva
+como **Distribuição de Lucro**, com o modo do cadastro (sócio sem conta →
+Só pagamento); o mesmo par no dia vira UMA operação somada, com chave
+própria de "já mandado" (`para_aportes.chave_da_distribuicao`).
+
+**Aportador composto na aba Regras** ("Fulano/Beltrano"): nunca se casa pelo
+primeiro nome (há aportadores diferentes com o mesmo primeiro nome). Destino
+que é subconta de investidor no cadastro (número no rótulo ou na conta do
+cadastro) vira UMA operação "Aporte de Investidor" daquela subconta,
+dividida pelo cadastro, com um aviso listando os investidores de lá — desde
+que a quantidade de nomes bata. Senão é pendência que diz o que cadastrar
+(Novo cadastro → Subconta de investidor, ou um aportador por linha na aba
+Regras com o nome completo). **Transferência da aba Regras** não vai para a
+aba Aportes e não é pendência: `Envio.informativos`, "transferência entre
+contas: lance no banco; não é aporte", no Registro sem o "[!]".
+
+O HTML dos pagamentos leva os movimentos à mão válidos como linhas só
+informativas (`decisoes.movimentos_do_dia` → `html_pagamentos.gravar
+(movimentos=)`; ver `arquitetura-pagamentos-dia.md`).
+
 ## Excel do dia: zero, e não vazio
 
 Escreve C (saldo do dia), D (a pagar), J/K, E4, H do Painel (aporte definido)

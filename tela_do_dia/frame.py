@@ -251,9 +251,10 @@ class TelaDoDiaFrame(ttk.Frame):
 
         ttk.Label(c3, text="Movimentos à mão", style="Secao.TLabel"
                   ).pack(anchor="w", pady=px((12, 0)))
-        self._ajuda(c3, "Dinheiro que entra numa conta sem ser aporte da aba Regras: o "
-                        "sócio que aporta na mãe, a transferência entre contas. Entram no "
-                        "mínimo e no saldo final, e na seção «À MÃO» do Excel.")
+        self._ajuda(c3, "Dinheiro que entra ou sai de uma conta sem ser aporte da aba "
+                        "Regras: o sócio que aporta na mãe, a transferência entre contas, a "
+                        "distribuição de lucros para um sócio. Entram no mínimo e no saldo "
+                        "final, na seção «À MÃO» do Excel e, só como informação, no HTML.")
         self.t_mao = self._tabela(c3, self.COLS_MAO, arvore=False, altura=4)
         self.t_mao.bind("<Delete>", lambda _e: self._remover_movimento())
         linha_mao = ttk.Frame(c3)
@@ -264,9 +265,13 @@ class TelaDoDiaFrame(ttk.Frame):
         self.b_mao_transf = widgets.Botao(linha_mao, "+ Transferência entre contas",
                                           papel="neutro", state="disabled",
                                           command=lambda: self._novo_movimento(de_fora=False))
+        self.b_mao_dist = widgets.Botao(linha_mao, "+ Distribuição de lucros",
+                                        papel="neutro", state="disabled",
+                                        command=self._nova_distribuicao)
         self.b_mao_tirar = widgets.Botao(linha_mao, "Remover o selecionado", papel="link",
                                          state="disabled", command=self._remover_movimento)
-        for i, b in enumerate((self.b_mao_mae, self.b_mao_transf, self.b_mao_tirar)):
+        for i, b in enumerate((self.b_mao_mae, self.b_mao_transf, self.b_mao_dist,
+                               self.b_mao_tirar)):
             b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
 
         linha = ttk.Frame(c3)
@@ -376,8 +381,8 @@ class TelaDoDiaFrame(ttk.Frame):
     def _botoes_do_dia(self):
         """Os que só fazem sentido com uma leitura inteira na tela."""
         return (self.b_excel, self.b_planilha, self.b_html, self.b_remessa, self.b_mandar,
-                self.b_sugestao, self.b_mao_mae, self.b_mao_transf, self.b_mao_tirar,
-                *self._botoes_do_passo2, *self._botoes_67, *self._botoes_da_lista)
+                self.b_sugestao, self.b_mao_mae, self.b_mao_transf, self.b_mao_dist,
+                self.b_mao_tirar, *self._botoes_do_passo2, *self._botoes_67, *self._botoes_da_lista)
 
     @property
     def _botoes_do_passo2(self):
@@ -410,7 +415,7 @@ class TelaDoDiaFrame(ttk.Frame):
         def estado(ligado):
             return "normal" if ligado else "disabled"
         for w in (self.b_excel, self.b_mandar, self.b_sugestao, self.b_mao_mae,
-                  self.b_mao_transf, self.b_mao_tirar):
+                  self.b_mao_transf, self.b_mao_dist, self.b_mao_tirar):
             w.configure(state=estado(b.dia))
         for w in (self.b_planilha, self.b_html, self.b_remessa):
             w.configure(state=estado(b.geradores))
@@ -767,7 +772,8 @@ class TelaDoDiaFrame(ttk.Frame):
         self.aportes = ap.montar_aportes(
             {ln.rotulo: ln.saldo_do_dia for ln in em_ordem},
             {c.rotulo: c.a_pagar for c in self.pagamentos.values()},
-            self.regras, self.dia.aportes, a_mao=self.dia.a_mao)
+            self.regras, self.dia.aportes, a_mao=self.dia.a_mao,
+            distribuicoes=self.dia.distribuicoes)
         self.mostrar_numeros()
 
     def mostrar_numeros(self):
@@ -872,13 +878,20 @@ class TelaDoDiaFrame(ttk.Frame):
                 t.insert(pai, "end", text=("   sai para as filhas" if c.e_mae
                                            else "   sai para outras contas"),
                          values=("", "", brl(-c.sai), "", ""))
+            if c.distribui:
+                t.insert(pai, "end", text="   distribuição de lucros",
+                         values=("", "", brl(-c.distribui), "", ""))
 
     def _encher_movimentos(self):
         t = self.t_mao
         t.delete(*t.get_children())
         for i, (origem, destino, valor) in enumerate(self.dia.a_mao):
-            t.insert("", "end", iid=str(i), tags=widgets.linha_zebrada(i),
+            t.insert("", "end", iid=f"m{i}", tags=widgets.linha_zebrada(i),
                      values=(origem or "de fora", destino, brl(valor)))
+        n = len(self.dia.a_mao)
+        for i, (origem, socio, valor) in enumerate(self.dia.distribuicoes):
+            t.insert("", "end", iid=f"d{i}", tags=widgets.linha_zebrada(n + i),
+                     values=(origem, f"{socio} (distribuição de lucros)", brl(valor)))
 
     # ---------------------------------------------------------------- edição
     def _janela(self, titulo):
@@ -1068,6 +1081,55 @@ class TelaDoDiaFrame(ttk.Frame):
         self._gravar_dia()
         self._recalcular()
 
+    def _nova_distribuicao(self):
+        if self.dia is None:
+            return
+        rotulos = self._rotulos_do_painel
+        titulo = "Distribuição de lucros"
+        entidades = getattr(self.aba_aportes, "entidades", None) or {}
+        # Quem recebe sai do cadastro da aba Aportes (o "Mandar" casa por ele);
+        # sem cadastro carregado, digita-se, e o Mandar avisa se não achar.
+        socios = dc.socios_do_cadastro(entidades, rotulos)
+        jan, corpo = self._janela(titulo)
+        ttk.Label(corpo, wraplength=px(440), justify="left",
+                  text=("Lucro que sai de uma conta do painel hoje para um sócio ou "
+                        "investidor. Sai da conta (entra no mínimo e no saldo final) e o "
+                        "«Mandar para a aba Aportes» a leva como Distribuição de Lucro.")
+                  ).pack(anchor="w")
+        v_origem = tk.StringVar(value=(self.aportes.mae or "") if self.aportes else "")
+        v_socio = tk.StringVar()
+        v_valor = tk.StringVar()
+        widgets.Campo(corpo, "Sai de", lambda p: ttk.Combobox(
+            p, textvariable=v_origem, values=rotulos, state="readonly", width=46)
+                      ).pack(anchor="w", pady=px((10, 0)))
+        widgets.Campo(corpo, "Para (sócio ou investidor)", lambda p: ttk.Combobox(
+            p, textvariable=v_socio, values=socios,
+            state="readonly" if socios else "normal", width=46)
+                      ).pack(anchor="w", pady=px((10, 0)))
+        widgets.Campo(corpo, "Valor R$", lambda p: ttk.Entry(p, textvariable=v_valor, width=18)
+                      ).pack(anchor="w", pady=px((10, 0)))
+        resposta = {}
+
+        def aplicar(_e=None):
+            try:
+                resposta["v"] = dc.nova_distribuicao(v_origem.get(), v_socio.get(),
+                                                     v_valor.get(), rotulos,
+                                                     socios if socios else None)
+            except ValueError as e:
+                messagebox.showwarning(titulo, str(e), parent=jan)
+                return "break"
+            jan.destroy()
+            return "break"
+
+        self._rodape(jan, corpo, (("Cancelar", "neutro", jan.destroy),
+                                  ("Incluir", "acao", aplicar)), aplicar)
+        if "v" not in resposta:
+            return
+        self.dia.distribuicoes.append(resposta["v"])
+        self._log(f"Incluída: {dc.descrever_distribuicao(resposta['v'])}")
+        self._gravar_dia()
+        self._recalcular()
+
     def _remover_movimento(self):
         if self.dia is None:
             return
@@ -1075,13 +1137,15 @@ class TelaDoDiaFrame(ttk.Frame):
         if not sel:
             messagebox.showinfo("Movimentos à mão", "Selecione o movimento a remover.")
             return
-        i = int(sel[0])
-        mov = self.dia.a_mao[i]
-        if not messagebox.askyesno("Movimentos à mão",
-                                   f"Remover {dc.descrever_movimento(mov)}?", default="no"):
+        lista, i = ((self.dia.distribuicoes, int(sel[0][1:])) if sel[0].startswith("d")
+                    else (self.dia.a_mao, int(sel[0][1:])))
+        mov = lista[i]
+        texto = (dc.descrever_distribuicao(mov) if lista is self.dia.distribuicoes
+                 else dc.descrever_movimento(mov))
+        if not messagebox.askyesno("Movimentos à mão", f"Remover {texto}?", default="no"):
             return
-        del self.dia.a_mao[i]
-        self._log(f"Movimento à mão removido: {dc.descrever_movimento(mov)}")
+        del lista[i]
+        self._log(f"Movimento à mão removido: {texto}")
         self._gravar_dia()
         self._recalcular()
 
@@ -1722,6 +1786,8 @@ class TelaDoDiaFrame(ttk.Frame):
                 a_pagar=pg.totais_para_o_painel(self.pagamentos),
                 regras=self.regras, definidos=self.aportes.definidos_validos,
                 a_mao=dc.movimentos_validos(self.dia.a_mao, self._rotulos_do_painel),
+                distribuicoes=dc.distribuicoes_validas(self.dia.distribuicoes,
+                                                       self._rotulos_do_painel),
                 leitura_interrompida=self.leitura.interrompida)
         except (WorkbookError, OSError) as e:
             aberto = recados.excel_aberto(e)       # "[Errno 13]": o arquivo está aberto no Excel
@@ -1775,9 +1841,16 @@ class TelaDoDiaFrame(ttk.Frame):
                     self._log(f"  - fora do HTML: {linha}")
         ini, fim = self.leitura.periodo
         pasta = self._pasta_pagamentos()
+        # Os movimentos à mão do dia vão como linhas só informativas (item A):
+        # os mesmos que a tela soma, sem chave nem "Copiar", fora do total.
+        rotulos = self._rotulos_do_painel
+        movimentos = dc.movimentos_do_dia(
+            dc.movimentos_validos(self.dia.a_mao, rotulos) if self.dia else (),
+            dc.distribuicoes_validas(self.dia.distribuicoes, rotulos) if self.dia else ())
         try:
             gerados = html_pagamentos.gravar(resultado, lancamentos, self.leitura.anexos,
-                                             pasta, ini, fim, pastas_extras=(pasta, util.pasta_base()))
+                                             pasta, ini, fim, pastas_extras=(pasta, util.pasta_base()),
+                                             movimentos=movimentos)
         except Exception as e:                              # noqa: BLE001
             self._log(f"[!] HTML dos pagamentos: {e}")
             messagebox.showwarning("HTML dos pagamentos",
@@ -1823,7 +1896,9 @@ class TelaDoDiaFrame(ttk.Frame):
             self.aba_aportes.subcontas, dc.data_das_operacoes(self.periodo),
             enviados=dict(self.dia.enviados_aportes),
             sem_saldo=dc.contas_sem_saldo(self.saldos),
-            na_aba_aportes=list(self.aba_aportes.operacoes))
+            na_aba_aportes=list(self.aba_aportes.operacoes),
+            distribuicoes=dc.distribuicoes_validas(self.dia.distribuicoes,
+                                                   self._rotulos_do_painel))
         # Pendência NÃO foi (bloqueia); aviso foi, mas pede conferência. "Já
         # mandado" se resolve na aba Aportes: mandar de novo daqui seria um
         # segundo aporte por cima do primeiro.
@@ -1836,6 +1911,11 @@ class TelaDoDiaFrame(ttk.Frame):
             self._log("\nForam, mas confira:")
             for linha in avisos:
                 self._log(f"  [!] {linha}")
+        informativos = dc.linhas_informativas(envio)
+        if informativos:
+            self._log("\nNão vão para a aba Aportes (está certo assim):")
+            for linha in informativos:
+                self._log(f"  - {linha}")
         mandar_sem_saldo = True
         if envio.sem_saldo:
             mandar_sem_saldo = messagebox.askyesno(
@@ -1846,7 +1926,10 @@ class TelaDoDiaFrame(ttk.Frame):
         for op in seguradas:
             self._log(f"  segurada (conta sem saldo): {op.resumo()}")
         if not mandadas:
-            messagebox.showinfo(titulo, "Nada foi para a aba Aportes — veja o Registro.")
+            messagebox.showinfo(titulo, (
+                "Nada a mandar: só transferência entre contas (lance no banco; não é "
+                "aporte)." if informativos and not pendentes and not seguradas
+                else "Nada foi para a aba Aportes — veja o Registro."))
             return
         # O registro do que foi mandado é gravado ANTES de entregar: gravação
         # que falha não manda nada. Ao contrário (mandar e depois não conseguir
