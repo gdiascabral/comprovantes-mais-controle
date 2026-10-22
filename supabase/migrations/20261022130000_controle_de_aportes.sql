@@ -19,7 +19,9 @@
 -- depois das duas cascatas.
 --
 -- `alterado_por` aceita nulo: o arquivo da raiz grava pelo SQL Editor, onde
--- auth.uid() e nulo. Pelo app, o default e o gatilho o preenchem.
+-- auth.uid() e nulo. Pelo app, o default (insert) e o gatilho (update)
+-- gravam quem chamou; update sem usuario (painel) deixa nulo, nunca o
+-- nome do autor anterior.
 --
 -- Nada de nome real aqui: os dados de abertura vao pelo arquivo da raiz.
 -- ORDEM: aplicar ANTES de liberar o app (app novo com banco velho = a aba
@@ -59,7 +61,9 @@ create table if not exists public.controle_aporte_aportador (
   constraint controle_aporte_aportador_peso_possivel
     check (peso > 0 and peso < 'Infinity' and scale(peso) <= 4),
   constraint controle_aporte_aportador_abertura_possivel check (abertura >= 0),
-  constraint controle_aporte_aportador_unico unique (conta_id, nome_erp)
+  constraint controle_aporte_aportador_unico unique (conta_id, nome_erp),
+  -- alvo da chave composta de controle_aporte_atribuicao
+  constraint controle_aporte_aportador_conta_id_unico unique (conta_id, id)
 );
 
 comment on column public.controle_aporte_aportador.nome_erp is
@@ -77,15 +81,19 @@ create table if not exists public.controle_aporte_atribuicao (
   conta_id         bigint not null
                    references public.controle_aporte_conta (id) on delete cascade,
   recebimento_erp  text not null,
-  aportador_id     bigint
-                   references public.controle_aporte_aportador (id) on delete no action,
+  aportador_id     bigint,
   valor            numeric(15, 2) not null,
   motivo           text not null,
   alterado_por     uuid default auth.uid() references auth.users (id),
   alterado_em      timestamptz not null default now(),
   constraint controle_aporte_atribuicao_valor_positivo check (valor > 0),
   constraint controle_aporte_atribuicao_tem_motivo check (length(trim(motivo)) > 0),
-  constraint controle_aporte_atribuicao_unica unique (conta_id, recebimento_erp)
+  constraint controle_aporte_atribuicao_unica unique (conta_id, recebimento_erp),
+  -- chave composta: o aportador apontado tem de ser DESTA conta. Com
+  -- aportador_id nulo (MATCH SIMPLE) a chave nao se aplica.
+  constraint controle_aporte_atribuicao_aportador_da_conta
+    foreign key (conta_id, aportador_id)
+    references public.controle_aporte_aportador (conta_id, id) on delete no action
 );
 
 comment on table public.controle_aporte_atribuicao is
@@ -94,7 +102,7 @@ comment on table public.controle_aporte_atribuicao is
   'ERP mudar, o app devolve a linha para "sem dono" (nunca se resolve sozinho).';
 
 create index if not exists controle_aporte_atribuicao_aportador_idx
-  on public.controle_aporte_atribuicao (aportador_id);
+  on public.controle_aporte_atribuicao (conta_id, aportador_id);
 
 -- ------------------------------------------------ carimbo de quem alterou
 create or replace function privado.controle_aporte_carimbo()
@@ -105,7 +113,7 @@ set search_path = ''
 as $$
 begin
   new.alterado_em := now();
-  new.alterado_por := coalesce((select auth.uid()), old.alterado_por);
+  new.alterado_por := (select auth.uid());
   return new;
 end;
 $$;

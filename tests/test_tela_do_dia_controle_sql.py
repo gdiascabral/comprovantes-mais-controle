@@ -53,3 +53,20 @@ def test_a_api_so_ganha_o_que_a_tela_usa():
 def test_estrutura_so_sem_dado():
     """Os nomes reais e a abertura vão pelo arquivo da raiz, fora do repositório."""
     assert "insert into" not in _SQL.read_text(encoding="utf-8").lower()
+
+
+def test_apontamento_so_aponta_aportador_da_mesma_conta():
+    """Chave composta: um aportador de outra conta não pode receber o apontamento."""
+    cmds = _comandos()
+    assert any("unique (conta_id, id)" in c and "create table if not exists public.controle_aporte_aportador" in c
+               for c in cmds)
+    atrib = next(c for c in cmds
+                 if c.startswith("create table if not exists public.controle_aporte_atribuicao"))
+    assert "foreign key (conta_id, aportador_id) references public.controle_aporte_aportador (conta_id, id)" in atrib
+    assert "aportador_id bigint," in atrib
+
+
+def test_o_carimbo_nao_herda_o_autor_antigo():
+    texto = _SQL.read_text(encoding="utf-8")
+    assert "new.alterado_por := (select auth.uid());" in texto
+    assert "coalesce((select auth.uid()), old.alterado_por)" not in texto
