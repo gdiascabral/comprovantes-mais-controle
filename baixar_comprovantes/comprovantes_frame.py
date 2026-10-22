@@ -23,7 +23,7 @@ import queue
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import widgets
 
@@ -301,8 +301,32 @@ class ComprovantesFrame(ttk.Frame):
         return contas
 
     # ------------------------------------------------------------ execução
+    #: Ligado pelo comprovantes_app.py: quem mais está com o Chrome do Sicoob
+    #: (hoje, a tela do dia lendo o saldo), ou None. Sem ele, nada muda.
+    sicoob_ocupado = None
+
+    def _sicoob_em_uso(self) -> bool:
+        """Recusa com recado se há conta do Sicoob marcada e outra aba está
+        com o perfil do banco. Só Inter marcado não abre o Sicoob."""
+        pergunta = getattr(self, "sicoob_ocupado", None)
+        if pergunta is None or not any(
+                c["marcada"] and c["banco"] == "Sicoob"
+                for c in self.linhas.values()):
+            return False
+        quem = pergunta()
+        if not quem:
+            return False
+        messagebox.showinfo(
+            "Baixar comprovantes",
+            f"O Chrome do Sicoob está em uso ({quem}). Espere terminar: "
+            "os dois usariam o mesmo perfil do banco.")
+        return True
+
     def _comecar(self):
         if self.worker and not self.worker.done():
+            return
+        # Antes de mexer em botão, pasta ou registro (ver `_sicoob_em_uso`).
+        if self._sicoob_em_uso():
             return
         destino = self.v_pasta.get().strip()
         if not destino:

@@ -368,6 +368,10 @@ def main():
         return _sc.carregar()
 
     aba_bxc = ComprovantesFrame(conteudo, _mapa_das_contas)
+    # O contrário da pergunta da tela do dia: Extratos e Baixar comprovantes
+    # recusam começar enquanto ela lê o saldo no MESMO perfil do Sicoob.
+    aba_ext.sicoob_ocupado = aba_dia.sicoob.ocupado
+    aba_bxc.sicoob_ocupado = aba_dia.sicoob.ocupado
     # "anx2" ANTES de "anx": o `_sair` fecha na ordem deste dicionário, e a
     # cópia precisa soltar a thread que espera na janela de dúvidas dela antes
     # de o dono fechar o Chrome.

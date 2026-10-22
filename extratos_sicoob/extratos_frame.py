@@ -340,11 +340,32 @@ class ExtratosSicoobFrame(ttk.Frame):
     def baixar(self):
         if self.worker and not self.worker.done():
             return
+        # O mesmo perfil do Chrome do Sicoob é aberto pela tela do dia (Reler
+        # Sicoob). A pergunta vem ANTES de apagar botão ou pôr algo na fila:
+        # quem sai pelo `return` não passa pelo `_drain`.
+        if self._sicoob_em_uso():
+            return
         self._parar.clear()
         self.q.put(("botoes", "disabled"))
         self.q.put(("status", "Abrindo o Chrome do Sicoob..."))
         self._tarefa_atual = "Extratos Sicoob — baixar"
         self.worker = self.exec.submit(self._t_baixar)
+
+    #: Ligado pelo comprovantes_app.py: quem mais está com o Chrome do Sicoob
+    #: (hoje, a tela do dia lendo o saldo), ou None. Sem ele, nada muda.
+    sicoob_ocupado = None
+
+    def _sicoob_em_uso(self) -> bool:
+        """Recusa com recado se outra aba está com o perfil do Sicoob."""
+        pergunta = getattr(self, "sicoob_ocupado", None)
+        quem = pergunta() if pergunta is not None else None
+        if not quem:
+            return False
+        messagebox.showinfo(
+            "Extratos Sicoob",
+            f"O Chrome do Sicoob está em uso ({quem}). Espere terminar: "
+            "os dois usariam o mesmo perfil do banco.")
+        return True
 
     def _t_baixar(self):
         inicio = time.time()

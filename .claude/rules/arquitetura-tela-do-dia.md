@@ -109,7 +109,12 @@ fim do `_receber_leitura` (`ler_se_faltar`), `_ligar_botoes`/`_limpar`
   `comprovantes_app.py`), e o "Conferir agendamentos" passa a recusar
   enquanto esta aba lê, com o nome dela na mensagem
   (`LeitorSicoob.OCUPADO`). É a única mudança de comportamento da Remessa. A
-  barra lateral mostra o ● em "dia" durante a leitura.
+  barra lateral mostra o ● em "dia" durante a leitura. O contrário também
+  vale: "Baixar extratos" (Extratos Sicoob) e "Começar" (Baixar comprovantes,
+  só quando há conta do Sicoob marcada) recusam enquanto esta aba lê, com o
+  mesmo nome na mensagem — o `sicoob_ocupado` de cada uma é ligado no
+  `comprovantes_app.py` e conferido antes de mexer em qualquer botão; sem ele
+  (testes antigos), nada muda (`tests/test_sicoob_disputado.py`).
 
 ## Leitura: duplicação conhecida
 
