@@ -185,12 +185,15 @@ class AnexarNovoFrame(AnexarFrame):
     def _ler_barras_da_soma(self, pendentes, pdfs, pasta: Path) -> None:
         """O código de barras dos PDFs que podem ser PARCELA de uma soma.
 
-        Os PDFs da fase 2 chegam da pasta sem `barras`, e sem elas a guarda
-        "o código é do título de OUTRO pagamento" do `matcher_somado` nunca
-        vale. O `_ler_codigos_de_barras` da fase 1 não serve aqui: ele só lê
-        PDF cujo valor é o de um pendente, e a parcela nunca é. Lê os de valor
-        abaixo do maior pendente; o código dos títulos ficou da fase 1, nos
-        mesmos registros. Opcional como as outras réguas."""
+        Os PDFs da fase 2 chegam da pasta sem `barras`. O uso que vale é o
+        de `matcher_somado._repetidos`: dois PDFs iguais só somam juntos com
+        códigos diferentes. A guarda "o código é do título de OUTRO pendente"
+        quase nunca tem com quem comparar: o código dos títulos ficou da fase
+        1, que só lê os de valor igual a um pendente (o das parcelas de outros
+        títulos não é lido), e PDF desse valor já sai pela regra do valor de
+        outro pago. O `_ler_codigos_de_barras` da fase 1 não serve aqui: ele
+        só lê PDF cujo valor é o de um pendente, e a parcela nunca é. Lê os de
+        valor abaixo do maior pendente. Opcional como as outras réguas."""
         teto = max((v for pe in pendentes for v in matcher._vals(pe)), default=0)
         try:
             for pd in pdfs:

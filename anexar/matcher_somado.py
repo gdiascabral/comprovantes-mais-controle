@@ -11,8 +11,12 @@ Cada PDF do conjunto tem de apontar o pagamento SOZINHO pela régua do matcher:
 a MESMA data e OC/NF rotulada, ou centro de custo com a conta CONFIRMADA
 (`matcher._features`, `matcher.mesma_conta`); nunca de outra conta, nem de
 recebedor com CPF/CNPJ diferente do favorecido, nem com o código de barras do
-título de outro pendente. Todos os PDFs do conjunto têm a MESMA descrição (o
-caso real: a descrição colada nos N boletos). E NUNCA soma quando há dúvida:
+título de outro pendente — trava que quase nunca tem com quem comparar: o
+código dos títulos só é lido na fase 1, só os de valor igual a um pendente, e
+PDF desse valor já sai pela regra do valor de outro pago (ver
+`.claude/rules/arquitetura-anexar.md`). Todos os PDFs do conjunto têm a MESMA
+descrição (o caso real: a descrição colada nos N boletos). E NUNCA soma quando
+há dúvida:
 - PDF cujo valor é de OUTRO pago do período não entra (pode ser o dele);
 - dois conjuntos possíveis → dúvida;
 - PDF repetido (mesmo valor, descrição e data) → dúvida (pode ser o mesmo

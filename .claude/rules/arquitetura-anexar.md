@@ -270,3 +270,22 @@ navegador próprio**: sem executor, sem pulso, sem Chrome; `submeter`, `mc`,
   aparecer pelo nome (`provado_por`); sem isso, `erro:nao_confirmado`, nunca
   "anexado". Também lê o código de barras das parcelas e preserva o CPF/CNPJ do
   favorecido lido na fase 1.
+- **O que o código de barras das parcelas protege na soma, e o que não.** A
+  fase 2 lê o código dos PDFs de valor abaixo do maior pendente
+  (`AnexarNovoFrame._ler_barras_da_soma`). O uso que vale de verdade é o de
+  `_repetidos`: dois PDFs de mesmo valor, descrição e data só somam juntos se
+  os dois trazem código e os códigos são diferentes (partes iguais legítimas);
+  sem isso, é o mesmo comprovante duas vezes e vira dúvida. Já a trava "o
+  código do PDF é do título de OUTRO pendente" (`_de_outro_titulo`, a régua da
+  fase 1) **quase nunca tem com quem comparar**: o código dos TÍTULOS só é lido
+  na fase 1, só para o pendente que tem na pasta um PDF do valor DELE com
+  código, e só os códigos de valor igual a um valor desse pendente
+  (`codigo_barras.preencher`); dos pagos que já têm anexo, nada é lido. Então o
+  código de uma parcela só bate com o de outro título quando o valor embutido
+  nele é o de outro pago — e PDF com o valor de outro pago do período já fica
+  fora pela regra do valor. Ela só acrescenta algo quando o valor pago no PDF
+  difere do valor do código (juros/desconto) e o outro pendente tem o próprio
+  PDF com código na pasta. **Limitação registrada, não consertada**: o código
+  das parcelas de outros títulos não é lido; quem segura a soma errada são as
+  outras réguas (valor de outro pago, mesma descrição, favorecido, OC/NF ou
+  centro de custo com conta confirmada, gêmeo e dúvida).
