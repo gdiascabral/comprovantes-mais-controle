@@ -508,7 +508,7 @@ def main():
         #
         # Até 02/09/2026 estes dois cabeçalhos eram as ÚNICAS paradas de Tab da
         # coluna: o `ItemMenu` não entrava no foco, então o teclado abria e
-        # fechava os grupos sem alcançar uma só das doze telas (hoje catorze). A
+        # fechava os grupos sem alcançar uma só das doze telas (hoje quinze). A
         # regra escrita aqui valia para o cabeçalho e era desmentida logo
         # abaixo; agora o item também entra no Tab, e o Tab percorre a coluna
         # inteira na ordem em que ela é lida.
@@ -743,8 +743,8 @@ def main():
     # ---------------- o menu pelo teclado
     # O `widgets.ItemMenu` passou a entrar no Tab (antes só escutava o clique,
     # e quem usa só o teclado alcançava DIÁRIO e MENSAL sem alcançar nenhuma
-    # das catorze telas do menu). Tab percorre a coluna; estes atalhos
-    # são o caminho DIRETO — catorze telas atrás de catorze Tabs é alcançável, não é
+    # das quinze telas do menu). Tab percorre a coluna; estes atalhos
+    # são o caminho DIRETO — quinze telas atrás de quinze Tabs é alcançável, não é
     # usável.
     #
     # A ordem é a do menu, e sai do próprio `itens`: o `_item` insere na ordem
@@ -787,7 +787,7 @@ def main():
 
     def _atalho_numero(ev=None):
         # Ctrl+1..9 alcançam as NOVE primeiras telas do menu. Não há Ctrl+0 nem
-        # Ctrl+10: dez teclas de dígito para catorze telas (quinze com a de
+        # Ctrl+10: dez teclas de dígito para quinze telas (dezesseis com a de
         # Usuários, do admin) escolheria quais ficam de fora sem critério
         # nenhum. Da décima em diante é o Ctrl+Tab.
         try:

@@ -233,3 +233,40 @@ arquivo. **Minha aba no ERP** no central não usa vaga nem Playwright:
 /json/new?<url escapada>`), numa thread à parte. O **pulso** é por vaga livre,
 no executor dela; o **fechar** tira as vagas da lista sob trava e fecha cada
 `mc` na thread da vaga. Central desligado: idêntico a antes.
+
+## Anexar (novo) — entrega 5 (22/10/2026)
+
+`anexar/anexar_novo.AnexarNovoFrame` é uma subclasse do `AnexarFrame`, aba
+provisória, **último item do grupo MENSAL** (último do menu: nenhum Ctrl+1..9
+das outras muda). O `AnexarFrame` ganhou três atributos de classe (`TITULO`,
+`TRILHA`, `DONO_DO_NAVEGADOR = True`); a cópia põe `False` e **não tem
+navegador próprio**: sem executor, sem pulso, sem Chrome; `submeter`, `mc`,
+`api`, `garantir_sessao`, `ocupado` e os avisos vão ao `AnexarFrame` dono com
+`dona=self` (no central ganha vaga própria, como as outras abas).
+
+- **Duas fases, no mesmo executor do dono.** O "Casar e anexar" roda a fase 1 de
+  sempre (`AnexarFrame._t_auto`, sem cópia) e, na MESMA chamada ao `submeter`,
+  a fase 2 (`varios_comprovantes.fase_das_somas`) sobre os SEM PAR. A
+  `_FilaComDesvio` desvia a fila da fase 1 para a cópia. `pagos` é **remontado
+  a cada rodada** de um molde intocado (nada de `motivo_soma`/`pdf` sobrando).
+  Se o relatório não grava, o "Concluído" mantém os anexos já feitos.
+- **As duas abas Anexar nunca trabalham ao mesmo tempo**: uma não começa a
+  casar com a outra trabalhando (mesma pasta, mesmos pagamentos). "Anexados no
+  mês" do Início soma `anx` + `anx2`.
+- **`matcher_somado.casar_somados`** (camada pura por cima de `matcher.casar`,
+  que não muda), em centavos `int`, só para pagamento SEM PAR e PDF livre:
+  mesma descrição em todos os PDFs; **soma só com mesma descrição + favorecido
+  não conflitante (CPF/CNPJ conhecido diferente barra) + OC/NF rotulada ou
+  centro de custo com conta confirmada**; PDF com o valor de outro pago do
+  período fica de fora. Repetido, dois conjuntos possíveis ou PDF disputado →
+  dúvida, nada marcado. Limites: até 4 PDFs por soma e 12 candidatos. **Gêmeo
+  com anexo vira dúvida.** A dúvida de soma vai ao relatório (aba "SOMA EM
+  DUVIDA", `motivo_soma`), não à janela de dúvidas.
+- **`varios_comprovantes.anexar_varios`: só a API**, nunca a tela (`mc.anexar`
+  devolveria "ja_tinha" no 2º comprovante). Exige tamanhos distintos e o
+  pagamento VAZIO numa listagem feita na hora (só `SEM_ANEXO`; `NAO_VERIFICADO`
+  fica fora); para no primeiro erro, nunca repete um POST e relata
+  "entraram/faltaram". **Prova por nome**: relê a listagem e cada arquivo tem de
+  aparecer pelo nome (`provado_por`); sem isso, `erro:nao_confirmado`, nunca
+  "anexado". Também lê o código de barras das parcelas e preserva o CPF/CNPJ do
+  favorecido lido na fase 1.

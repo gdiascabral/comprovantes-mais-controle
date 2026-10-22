@@ -138,6 +138,18 @@ avisa nada sobre o dia anterior: "o dia útil anterior ficou fora" vale em todo
 dia útil e viraria ruído. **No dia seguinte a um feriado, os vencidos do
 feriado se buscam pela aba Remessa/Retorno** (que tem o campo de data).
 
+
+## Leitura e boletos somados (entrega 5)
+
+A tela liga `Entradas.dividir_boletos`; a Remessa, lendo sozinha, não (teste
+por AST). Para dividir, a leitura lê o título no ERP só das linhas "vários
+boletos" (`titulos_a_dividir` → `ler_titulos_no_erp`, falha fechada, só GET) e
+remonta uma segunda vez. O resultado que a Remessa recebe da tela vai por
+`geracao.para_a_remessa(geracao.resultado_da_tela(...))`, com os liberados
+preservados: a divisão acontece DEPOIS deles. Regras de dividir, `parte_linha`,
+id do HTML e baixa: ver "Lançamento dividido em N boletos" abaixo e
+`arquitetura-pagamentos-dia.md` (`boletos_somados.py`).
+
 ## Saldos pelo Chrome do app
 
 Regra do dono (14/10/2026): nada de `POST /users/login` por HTTP, que derruba a
