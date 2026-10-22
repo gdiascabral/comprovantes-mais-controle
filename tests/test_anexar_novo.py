@@ -6,8 +6,11 @@ dublês, como `tests/test_abas_em_paralelo.py` faz com `__new__`."""
 import copy
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
+
+RAIZ = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
@@ -392,3 +395,69 @@ def test_fase_1_e_somas_rodam_na_mesma_thread_do_navegador(modulo, novo, monkeyp
     assert visto["fase1"].name.startswith(esperado)
     api = "api-da-vaga-da-copia" if ligado else "api-do-dono"
     assert visto["api1"] == visto["api2"] == api
+
+
+# ------------------------------------------- tarefa 9: menu e galeria
+def _grupos_do_app() -> dict:
+    import ast
+    saida = {}
+    arvore = ast.parse((RAIZ / "comprovantes_app.py").read_text(encoding="utf-8"))
+    for no in ast.walk(arvore):
+        if isinstance(no, ast.Call) and getattr(no.func, "id", "") == "_grupo":
+            saida[ast.literal_eval(no.args[0])] = ast.literal_eval(no.args[2])
+    return saida
+
+
+def test_a_copia_e_o_ultimo_item_do_mensal_e_o_app_a_monta_sobre_o_dono():
+    texto = (RAIZ / "comprovantes_app.py").read_text(encoding="utf-8")
+    assert "from anexar.anexar_novo import AnexarNovoFrame" in texto
+    assert "aba_anx2 = AnexarNovoFrame(conteudo, aba_anx)" in texto
+    assert texto.index("aba_anx = AnexarFrame(conteudo)") < texto.index("aba_anx2 =")
+    mensal = _grupos_do_app()["mensal"]
+    assert mensal[-1] == ("anx2", "📎", "Anexar (novo)")
+    assert [c for c, _i, _t in mensal] == ["rel", "ext", "ctr", "acs", "anx2"]
+    # a seção Comprovantes não muda: a cópia não está nela
+    assert '("bxc", "sep", "anx", "conf", "apt")' in texto
+    assert '("anx2"' not in texto[texto.index('lateral.secao("Comprovantes")'):
+                                  texto.index("grupos: dict[str, dict] = {}")]
+
+
+def test_o_sair_fecha_a_copia_antes_do_dono():
+    """O `_sair` fecha na ordem de `quadros`: a cópia solta a thread que
+    espera na janela de dúvidas ANTES de o dono fechar o Chrome nela."""
+    texto = (RAIZ / "comprovantes_app.py").read_text(encoding="utf-8")
+    assert texto.index('"anx2": aba_anx2') < texto.index('"anx": aba_anx,')
+
+
+def test_nenhum_atalho_ctrl_1_a_9_existente_muda_com_a_copia():
+    """A ordem do menu é a ordem dos atalhos (`itens`): Início, a seção
+    Comprovantes e os grupos. A cópia, no fim, não empurra ninguém."""
+    grupos = _grupos_do_app()
+    ordem = (["ini", "bxc", "sep", "anx", "conf", "apt"]
+             + [c for c, _i, _t in grupos["diario"]]
+             + [c for c, _i, _t in grupos["mensal"]])
+    assert ordem[:9] == ["ini", "bxc", "sep", "anx", "conf", "apt", "dia", "pag", "con"]
+    assert ordem[-1] == "anx2" and ordem.count("anx2") == 1
+
+
+def test_a_galeria_monta_a_copia_e_nao_perde_os_aportes():
+    """Achado 8: a seção Comprovantes da galeria vai por CHAVE — uma fatia
+    por posição do `_ORDEM` tiraria a aba Aportes quando entra item novo."""
+    import ast
+    texto = (RAIZ / "ferramentas" / "galeria.py").read_text(encoding="utf-8")
+    ordem = None
+    for no in ast.walk(ast.parse(texto)):
+        if (isinstance(no, ast.Assign) and getattr(no.targets[0], "id", "") == "_ORDEM"):
+            ordem = ast.literal_eval(no.value)
+    chaves = [i[0] for i in ordem]
+    assert chaves[-1] == "anx2" and ordem[-1][:3] == ("anx2", "📎", "Anexar (novo)")
+    assert "_ORDEM[1:" not in texto
+    assert 'i[0] in ("bxc", "sep", "anx", "conf", "apt")' in texto
+    assert 'i[0] in ("rel", "ext", "ctr", "acs", "anx2")' in texto
+    assert '_montar("anx2", lambda: AnexarNovoFrame(conteudo, aba_anx))' in texto
+    assert "from anexar.anexar_novo import AnexarNovoFrame" in texto
+    # o menu da galeria segue o do app: mesma ordem de chaves
+    grupos = _grupos_do_app()
+    menu = (["ini", "bxc", "sep", "anx", "conf", "apt"]
+            + [c for c, _i, _t in grupos["diario"]] + [c for c, _i, _t in grupos["mensal"]])
+    assert chaves == menu
