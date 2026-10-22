@@ -2,6 +2,7 @@
 """O saldo do Sicoob na tela do dia, sem tela e sem navegador. Fictício."""
 import datetime as dt
 from decimal import Decimal as D
+from dataclasses import replace
 from types import SimpleNamespace as NS
 
 import pytest
@@ -145,3 +146,22 @@ def test_conta_lida_sem_saldo_no_painel_nao_vira_zero(linhas, mapa):
     por = {ln.rotulo: ln for ln in ss.aplicar(linhas, contas, leitura)}
     assert por["Alfa - Sicoob"].banco is None
     assert "não estava na leitura" in por["Alfa - Sicoob"].nota_banco
+
+
+def test_reler_que_falha_apaga_o_lido_anterior(linhas, mapa):
+    contas = ss.contas_do_painel(linhas, ERP, mapa, MAPA_MC, EMPRESAS)
+    lidas = ss.aplicar(linhas, contas, ss.LeituraSicoob.de_resultados(HOJE, [
+        NS(numero="12.345-6", saldo=D("90.00"), lido_em=dt.datetime(2026, 10, 22, 8, 12), motivo=""),
+        NS(numero="23.456-7", saldo=D("7.00"), lido_em=dt.datetime(2026, 10, 22, 8, 12), motivo="")]))
+    falhou = ss.LeituraSicoob.de_resultados(HOJE, [
+        NS(numero="12.345-6", saldo=None, lido_em=None, motivo="a sessão caiu")])
+    por = {ln.rotulo: ln for ln in ss.aplicar(lidas, contas, falhou)}
+    assert por["Alfa - Sicoob"].banco is None
+    assert por["Alfa - Sicoob"].nota_banco == "Sicoob não lido: a sessão caiu"
+    assert por["Delta - Sicoob"].banco is None                     # fora da releitura
+    assert "não estava na leitura" in por["Delta - Sicoob"].nota_banco
+    gama = replace(next(ln for ln in lidas if ln.rotulo == "Gama - Sicoob"), banco=D("5"))
+    [g] = ss.aplicar([gama], contas, falhou)                      # conta sem cadastro
+    assert g.banco is None and g.nota_banco.startswith("Sicoob não lido: ")
+    de_novo = {ln.rotulo: ln for ln in ss.aplicar(list(por.values()), contas, _leitura())}
+    assert de_novo["Alfa - Sicoob"].banco == D("90.00") and de_novo["Alfa - Sicoob"].nota_banco == ""

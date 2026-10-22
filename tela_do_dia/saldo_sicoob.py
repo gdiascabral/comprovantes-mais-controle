@@ -127,16 +127,20 @@ def aplicar(linhas, contas, leitura) -> list:
         c = por_rotulo.get(ln.rotulo)
         if c is None or not c.do_sicoob:
             saida.append(ln)
+        # Reler SUBSTITUI a leitura: falha zera o lido antigo (nunca um valor
+        # velho calado ao lado da nota), e o lido novo apaga a nota antiga.
         elif c.motivo:
-            saida.append(replace(ln, nota_banco=PREFIXO + c.motivo))
+            saida.append(replace(ln, banco=None, nota_banco=PREFIXO + c.motivo))
         else:
             lido = leitura.contas.get(_digitos(c.numero))
             if lido is None:
-                saida.append(replace(ln, nota_banco=PREFIXO + MOTIVO_FORA_DA_LEITURA))
+                saida.append(replace(ln, banco=None,
+                                     nota_banco=PREFIXO + MOTIVO_FORA_DA_LEITURA))
             elif lido.saldo is None:
-                saida.append(replace(ln, nota_banco=PREFIXO + (lido.motivo or "sem motivo")))
+                saida.append(replace(ln, banco=None,
+                                     nota_banco=PREFIXO + (lido.motivo or "sem motivo")))
             else:
-                saida.append(replace(ln, banco=lido.saldo))
+                saida.append(replace(ln, banco=lido.saldo, nota_banco=""))
     return saida
 
 

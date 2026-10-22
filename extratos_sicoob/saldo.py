@@ -21,8 +21,9 @@ do `acessar_conta` do app) deu HTTP 200 nas três contas assim.
 
 **O endereço e o formato são do Sicoob, que os troca sem aviso** (fez isso
 com os comprovantes em 25/09/2026). Por isso moram num bloco só, logo abaixo.
-Endereço que some (404/405/410), resposta que não é JSON ou sem o campo viram
-`EnderecoMudou`, que PARA a leitura (não adianta trocar de conta 20 vezes)
+Endereço que some (404/405/410), resposta que não é JSON e DUAS contas
+seguidas sem o campo (ou com saldo que não é número) viram `EnderecoMudou`,
+que PARA a leitura (não adianta trocar de conta 20 vezes)
 com um recado que diz o endereço; a pessoa digita o saldo à mão até medirem
 de novo. `ROTA_SALDO = ""` desliga a leitura inteira (`medido()`).
 
@@ -75,6 +76,9 @@ INTERROMPIDA = "leitura interrompida antes desta conta"
 ERRO_DO_SERVICO = ("o Sicoob disse que não conseguiu ler o movimento desta "
                    "conta agora — clique em Reler Sicoob ou digite o saldo")
 CENTAVO = Decimal("0.01")
+FORMATO_MUDOU = ("duas contas seguidas vieram num formato que o app não "
+                 "conhece — o formato do Sicoob provavelmente mudou; digite o "
+                 "saldo à mão e peça para medir de novo")
 _ENDERECO_SUMIU = (404, 405, 410)
 _VERDADE = ("true", "s", "sim", "1")
 
@@ -85,6 +89,12 @@ class SaldoFalhou(RuntimeError):
 
 class EnderecoMudou(SaldoFalhou):
     """O Sicoob mudou o endereço ou o formato: vale para TODAS as contas."""
+
+
+class FormatoDaConta(SaldoFalhou):
+    """A resposta DESTA conta veio sem um campo, com saldo que não é número
+    ou natureza que não é C nem D. Só esta conta fica sem ler; duas seguidas
+    param a fila (`FORMATO_MUDOU`)."""
 
 
 class ContaNaoEncontrada(SaldoFalhou):
@@ -233,12 +243,18 @@ def interpretar(resposta: dict, numero: str, url_da_pagina: str = "") -> Decimal
     except ValueError:
         raise EnderecoMudou("o endereço do saldo não devolveu JSON — a tela "
                             "do banco mudou") from None
-    if _erro_do_servico(dado):
-        raise SaldoFalhou(ERRO_DO_SERVICO)
-    if CAMPO_CONTA and not mesma_conta(extrair_conta(dado), numero):
-        raise OutraConta(f"pedi o saldo da conta {numero} e a resposta é de "
-                         "outra conta (ou não diz qual) — não uso")
-    return extrair_saldo(dado)
+    # Daqui para baixo, formato ruim é desta conta: a fila segue (ou para em
+    # `ler_contas`, se duas seguidas vierem assim). Só param a fila sozinhos
+    # a sessão caída, o endereço que sumiu e a resposta que não é JSON.
+    try:
+        if _erro_do_servico(dado):
+            raise SaldoFalhou(ERRO_DO_SERVICO)
+        if CAMPO_CONTA and not mesma_conta(extrair_conta(dado), numero):
+            raise OutraConta(f"pedi o saldo da conta {numero} e a resposta é de "
+                             "outra conta (ou não diz qual) — não uso")
+        return extrair_saldo(dado)
+    except EnderecoMudou as e:
+        raise FormatoDaConta(str(e)) from None
 
 
 def conta_na_tela(page) -> str:
@@ -293,6 +309,7 @@ def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
             vistos.add(so_digitos(n))
             fila.append(n)
     lidos: list[Lido] = []
+    formato_ruim_seguido = 0
     for i, numero in enumerate(fila):
         if parar():
             lidos += [Lido(n, motivo=INTERROMPIDA) for n in fila[i:]]
@@ -309,10 +326,21 @@ def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
             log(str(e))
             lidos += [Lido(n, motivo=str(e)) for n in fila[i:]]
             break
+        except FormatoDaConta as e:
+            formato_ruim_seguido += 1
+            if formato_ruim_seguido >= 2:
+                parou = str(EnderecoMudou(FORMATO_MUDOU))
+                log(parou)
+                lidos += [Lido(n, motivo=parou) for n in fila[i:]]
+                break
+            lidos.append(Lido(numero, motivo=_primeira_linha(e)))
+            log(f"{numero}: não lido — {_primeira_linha(e)}")
         except Exception as e:                               # noqa: BLE001
+            formato_ruim_seguido = 0
             lidos.append(Lido(numero, motivo=_primeira_linha(e)))
             log(f"{numero}: não lido — {_primeira_linha(e)}")
         else:
+            formato_ruim_seguido = 0
             lidos.append(Lido(numero, valor, agora()))
             log(f"{numero}: lido")
     progresso(len(fila), len(fila))

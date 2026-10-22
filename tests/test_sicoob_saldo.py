@@ -227,10 +227,12 @@ def test_formato_medido_devedor_vira_negativo():
 
 
 def test_formato_medido_natureza_desconhecida_e_recusada():
-    with pytest.raises(S.EnderecoMudou, match="naturezaSaldoRes"):
+    with pytest.raises(S.SaldoFalhou, match="naturezaSaldoRes") as e:
         S.interpretar(medida(natureza="X"), "12.345-6")
-    with pytest.raises(S.EnderecoMudou):
+    assert not isinstance(e.value, S.EnderecoMudou)       # só esta conta
+    with pytest.raises(S.SaldoFalhou) as e:
         S.interpretar(medida(natureza=""), "12.345-6")
+    assert not isinstance(e.value, S.EnderecoMudou)
     # saldo zero não depende do sinal
     assert S.interpretar(medida(saldo=0, natureza=""), "12.345-6") == D("0.00")
 
@@ -271,3 +273,62 @@ def test_formato_medido_na_fila_inteira():
     lidos = S.ler_contas(cli, ["12.345-6", "23.456-7"], agora=lambda: AGORA)
     assert [l.saldo for l in lidos] == [D("10.00"), D("-20.00")]
     assert all(p[1] == "GET" and p[2] is None for p in pagina.pedidos)
+
+
+# ------------------------------- conserto: formato ruim numa conta só segue
+
+def _so_da_conta(resposta):
+    with pytest.raises(S.SaldoFalhou) as e:
+        S.interpretar(resposta, "12.345-6")
+    assert not isinstance(e.value, S.EnderecoMudou)
+    return str(e.value)
+
+
+def test_campo_ausente_ou_saldo_que_nao_e_numero_e_falha_so_da_conta():
+    nulo = {"status": 200, "corpo": json.dumps(
+        {"contaCorrente": {"erroServicoMovimentoContaCorrente": False,
+                           "extratoContaCorrente": None}})}
+    assert "o formato do Sicoob mudou" in _so_da_conta(nulo)
+    texto = medida(saldo="abc")
+    assert "não é número" in _so_da_conta(texto)
+    assert "não é número" in _so_da_conta(medida(saldo=None))
+
+
+def test_natureza_desconhecida_numa_conta_e_a_fila_segue():
+    pagina = Pagina({"123456": medida(natureza="X"),
+                     "234567": medida(saldo=20, conta=234567)})
+    cli = Cliente(pagina, ["12.345-6", "23.456-7"])
+    a, b = S.ler_contas(cli, ["12.345-6", "23.456-7"], agora=lambda: AGORA)
+    assert not a.ok and "naturezaSaldoRes" in a.motivo
+    assert b.saldo == D("20.00") and cli.trocas == ["12.345-6", "23.456-7"]
+
+
+def test_formato_ruim_alternado_nao_para_a_fila():
+    ruim = {"status": 200, "corpo": '{"contaCorrente": null}'}
+    pagina = Pagina({"123456": ruim, "234567": medida(saldo=2, conta=234567),
+                     "345678": ruim})
+    cli = Cliente(pagina, ["12.345-6", "23.456-7", "34.567-8"])
+    a, b, c = S.ler_contas(cli, ["12.345-6", "23.456-7", "34.567-8"], agora=lambda: AGORA)
+    assert not a.ok and b.ok and not c.ok
+    assert cli.trocas == ["12.345-6", "23.456-7", "34.567-8"]
+
+
+def test_duas_contas_seguidas_com_formato_ruim_param_a_fila():
+    ruim = {"status": 200, "corpo": '{"contaCorrente": null}'}
+    pagina = Pagina({"123456": medida(saldo=1), "234567": ruim, "345678": ruim,
+                     "456789": medida(saldo=4, conta=456789)})
+    cli = Cliente(pagina, ["12.345-6", "23.456-7", "34.567-8", "45.678-9"])
+    a, b, c, d = S.ler_contas(cli, ["12.345-6", "23.456-7", "34.567-8", "45.678-9"],
+                              agora=lambda: AGORA)
+    assert a.ok and not b.ok
+    assert "o formato do Sicoob mudou" in b.motivo
+    assert "duas contas seguidas" in c.motivo and d.motivo == c.motivo
+    assert cli.trocas == ["12.345-6", "23.456-7", "34.567-8"]   # a 4ª nem é aberta
+
+
+def test_resposta_que_nao_e_json_ainda_para_a_fila(medido):
+    pagina = Pagina({"123456": {"status": 200, "corpo": "<html>"}, "234567": ok("2")})
+    cli = Cliente(pagina, ["12.345-6", "23.456-7"])
+    a, b = S.ler_contas(cli, ["12.345-6", "23.456-7"], agora=lambda: AGORA)
+    assert "não devolveu JSON" in a.motivo and b.motivo == a.motivo
+    assert cli.trocas == ["12.345-6"]
