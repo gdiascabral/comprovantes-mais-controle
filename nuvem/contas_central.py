@@ -20,7 +20,7 @@ from pathlib import Path
 
 import util
 
-from . import cache, contas_novas
+from . import cache, contas_novas, rest
 
 log = util.log(__name__)
 
@@ -147,8 +147,8 @@ class Pendencia:
                 texto = (f"nome mudou no ERP: antes "
                          f"'{self.renomeada.get('nome_erp') or '(sem nome)'}'")
                 if not self.conferida:
-                    texto += (" — confira: o número bate, mas banco/agência "
-                              "não foram conferidos")
+                    texto += (" — confira: o número bate, mas banco, agência "
+                              "ou a origem do número não foram conferidos")
             else:
                 texto = (f"nome mudou no ERP? o número bate com "
                          f"{len(self.antes)} contas do cadastro")
@@ -254,6 +254,8 @@ def aplicar(token: str, respostas, crus: list, pasta_painel=None) -> str:
     if novas:
         try:
             av = contas_novas.gravar(token, novas)
+        except rest.PrecisaEntrar:
+            raise                     # sessão vencida: o chamador pede login
         except Exception as e:                          # noqa: BLE001
             log.warning("cadastrando as contas novas", exc_info=True)
             partes.append(f"As contas novas NÃO foram cadastradas: {e}")
@@ -264,6 +266,8 @@ def aplicar(token: str, respostas, crus: list, pasta_painel=None) -> str:
     if renomear:
         try:
             feitas, av = contas_novas.corrigir_nomes(token, renomear)
+        except rest.PrecisaEntrar:
+            raise
         except Exception as e:                          # noqa: BLE001
             log.warning("corrigindo o nome das contas", exc_info=True)
             partes.append(f"Os nomes NÃO foram corrigidos no cadastro: {e}")

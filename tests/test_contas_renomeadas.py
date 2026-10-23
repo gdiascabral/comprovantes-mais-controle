@@ -362,7 +362,7 @@ def test_patch_filtra_tambem_pelo_nome_antigo_escapado(monkeypatch):
     from urllib.parse import unquote
     valor = filtro.split("&nome_erp=eq.", 1)[1]
     assert "&" not in valor and "#" not in valor and " " not in valor
-    assert unquote(valor) in (antigo, f'"{antigo}"')
+    assert unquote(valor) == antigo          # sem aspas: eq. é literal
 
 
 def test_nome_antigo_vazio_filtra_por_nulo(monkeypatch):
@@ -439,8 +439,8 @@ def test_nao_conferida_avisa_na_coluna(tmp_path):
     p, = cc.pendencias([_cru(banco=None)], tmp_path, tmp_path,
                        cadastradas=[_cad()])
     assert p.renomeada is not None
-    assert ("confira: o número bate, mas banco/agência não foram "
-            "conferidos") in p.falta_em
+    assert ("confira: o número bate, mas banco, agência ou a origem do "
+            "número não foram conferidos") in p.falta_em
 
 
 def test_marca_inicial_so_para_a_conferida():

@@ -613,12 +613,12 @@ def corrigir_nomes(token: str, escolhas: list[dict]) -> tuple[int, list[str]]:
 
 
 def _valor_postgrest(texto: str) -> str:
-    """O valor de um filtro `eq.` do PostgREST: entre aspas (vírgula, ponto e
-    parênteses são reservados lá), com `"` e a barra invertida escapados, e
-    depois codificado para URL (`&`, `#`, espaço, `+`)."""
-    barra = chr(92)
-    dentro = texto.replace(barra, barra + barra).replace('"', barra + '"')
-    return quote(f'"{dentro}"', safe="")
+    """O valor de um filtro `eq.` do PostgREST: o texto cru, só codificado
+    para URL (`&`, `#`, espaço, `+`, vírgula). Sem aspas: no `eq.` simples o
+    PostgREST compara o resto da string ao pé da letra — aspas só valem dentro
+    de `in.(...)`/`or=(...)` — e o nome entre aspas nunca casaria (revisão de
+    23/10/2026). Mesmo jeito de `tela_do_dia/controle_nuvem.py`."""
+    return quote(texto, safe="")
 
 
 def filtro_da_correcao(alvo: dict) -> str:
