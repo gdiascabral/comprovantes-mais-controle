@@ -297,7 +297,8 @@ os mesmos do painel e do Excel, tipo pela regra — revisão geral de
 22/10/2026, achado 1: a transferência e o composto do print ficavam fora) e
 os à mão válidos, sem repetir: à mão com o mesmo de, para e valor de uma
 linha da Regras sai (o "de fora" repete a regra cujo aportador não é conta
-do painel).
+do painel). A seção fica logo depois do quadro-resumo, com uma linha
+no resumo que leva até ela (dono, 23/10/2026).
 
 ## Excel do dia: zero, e não vazio
 

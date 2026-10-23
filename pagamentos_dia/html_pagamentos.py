@@ -528,8 +528,22 @@ def _motivo_do_bloqueio(r: dict) -> str:
     return "; ".join(motivos)
 
 
-def contas_do_html_geral(resultado) -> list[dict]:
+def _vencimento(registro, dia: date | None) -> tuple[str, bool]:
+    """("dd/mm/aaaa", vencido?) do `registro["vencimento"]` (ISO, de
+    `relatorio.montar_registros`). Sem data — a linha à mão, o registro
+    antigo — sai ("", False), e o HTML mostra "—". Vencido = antes do `dia`
+    do HTML; sem `dia`, nada é vencido."""
+    d = relatorio.para_data(registro.get("vencimento"))
+    if not d:
+        return "", False
+    return _br(d), bool(dia and d < dia)
+
+
+def contas_do_html_geral(resultado, dia: date | None = None) -> list[dict]:
     """As contas do passo 2, uma entrada por linha das abas por conta.
+
+    `dia`: o dia do HTML (o primeiro do período); vencimento anterior a ele
+    sai marcado `vencido` (dono, 23/10/2026).
 
     A conta de pessoa física nunca entra aqui: ela não chega a
     `Resultado.contas` (é conta de ajuste, `relatorio.CONTAS_IGNORAR`), e o
@@ -555,6 +569,7 @@ def contas_do_html_geral(resultado) -> list[dict]:
             # paguei" (`rowKey`) e do "Conferido". Nunca a posição na lista.
             # Não colide com "#mao:<n>" (dígitos x "mao:") nem entre partes.
             parte = str(r.get("parte_linha") or r.get("parte") or "")
+            vencimento, vencido = _vencimento(r, dia)
             entradas.append({
                 "id": (f"{id_}#{a_mao}" if id_ else a_mao) if a_mao
                 else (f"{id_}#{parte}" if id_ and parte else id_),
@@ -565,6 +580,9 @@ def contas_do_html_geral(resultado) -> list[dict]:
                 # extras (Pix do QR, linha da guia) e não são repetição.
                 "_lancamento": id_ if (parte and id_ and not a_mao) else "",
                 "tipo": tipo,
+                # Coluna VENC.: "dd/mm/aaaa" ou "" (o HTML mostra "—").
+                "vencimento": vencimento,
+                "vencido": vencido,
                 "dados_original": str(r.get("dados") or ""),
                 "dados_limpo": dado_para_colar(tipo, r.get("dados")),
                 # O Pix do QR Code do boleto, num segundo "Copiar" (dono,
@@ -879,8 +897,8 @@ def gravar(resultado, lancamentos, anexos, pasta, ini: date, fim: date,
     pasta.mkdir(parents=True, exist_ok=True)
     periodo = rotulo_periodo(ini, fim)
 
-    contas = contas_do_html_geral(resultado)
-    movs = movimentos_do_html(movimentos)
+    contas = contas_do_html_geral(resultado, dia=ini)
+    movs =movimentos_do_html(movimentos)
     itens = itens_pessoa_fisica(lancamentos, anexos, vencimento_padrao=fim)
     logo, rodape = ler_extras(pastas_extras or (pasta,))
 

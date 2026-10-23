@@ -117,6 +117,14 @@ MODELO_GERAL = r'''<!doctype html>
   .movs .movs-nota{font-size:11.5px;color:var(--muted);padding:8px 18px 0;}
   .movs td,.movs th{overflow-wrap:anywhere;word-break:break-word;}
   .tipo-mov{background:var(--accent-bg);color:var(--accent);}
+  .movs-resumo{padding:9px 12px;font-size:12.5px;border-top:1px solid var(--border);}
+  .movs-resumo a{color:var(--accent);font-weight:600;text-decoration:none;}
+  .movs-resumo a:hover{text-decoration:underline;}
+  .movs{scroll-margin-top:12px;}
+  .venc{font-size:11.5px;white-space:nowrap;}
+  .venc.vencido{color:var(--danger);font-weight:700;}
+  .venc-tag{display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;}
+  .venc.sem{color:var(--muted);}
   @media (max-width:640px){
     .wrap{padding:16px 10px 50px;}
     .tabela-conta thead{display:none;}
@@ -162,9 +170,8 @@ MODELO_GERAL = r'''<!doctype html>
       <tbody id="summaryBody"></tbody>
       <tfoot><tr><td><b>Total geral</b></td><td id="grandTotal"><b></b></td><td></td><td id="grandMarked" class="marked-cell"></td></tr></tfoot>
     </table>
+    <div class="movs-resumo" id="movResumo" hidden><a href="#movimentos" id="movResumoLink"></a> <span class="marked-cell">(fora do total geral)</span></div>
   </div>
-
-  <div id="accounts"></div>
 
   <div class="movs" id="movimentos" hidden>
     <div class="account-head"><h2>Movimentos do dia — já cadastrados no banco</h2><div class="account-total">Total <b id="movTotal"></b></div></div>
@@ -174,6 +181,8 @@ MODELO_GERAL = r'''<!doctype html>
       <tbody id="movBody"></tbody>
     </table>
   </div>
+
+  <div id="accounts"></div>
 </div>
 
 <div class="toast" id="toast">Copiado</div>
@@ -283,10 +292,11 @@ function renderAccounts(){
     const table = document.createElement('table');
     table.className = 'tabela-conta';
     table.innerHTML = `
-      <colgroup><col style="width:5%"><col style="width:8%"><col style="width:25%"><col style="width:13%"><col style="width:15%"><col style="width:22%"><col style="width:12%"></colgroup>
+      <colgroup><col style="width:4%"><col style="width:7%"><col style="width:9%"><col style="width:22%"><col style="width:12%"><col style="width:14%"><col style="width:21%"><col style="width:11%"></colgroup>
       <thead><tr>
         <th class="chk-cell" title="Ja paguei">Ok</th>
         <th>Tipo</th>
+        <th>Venc.</th>
         <th>Dados do pagamento (boleto / chave pix)</th>
         <th>Valor</th>
         <th>Fornecedor</th>
@@ -303,6 +313,10 @@ function renderAccounts(){
       if(excluidosState[rowId]) tr.classList.add('row-excluida');
       const badgeClass = (e.tipo || '').startsWith('Pix') ? 'tipo-pix' : (e.tipo === 'Transferência' || e.tipo === 'Link' ? 'tipo-link' : 'tipo-boleto');
       const bloq = e.bloqueio || '';
+      // Vencimento do lancamento: antes do dia do HTML sai em vermelho.
+      const vencCell = e.vencimento
+        ? `<span class="venc${e.vencido ? ' vencido' : ''}">${esc(e.vencimento)}${e.vencido ? '<span class="venc-tag">vencido</span>' : ''}</span>`
+        : '<span class="venc sem">—</span>';
       if(bloq) tr.classList.add('row-bloqueada');
       const dadosCell = (e.dados_limpo && bloq)
         ? `<div class="bloq">CONFERIR: ${esc(bloq)}</div><div class="code sem-copiar">${esc(e.dados_limpo)}</div>`
@@ -316,6 +330,7 @@ function renderAccounts(){
       tr.innerHTML = `
         <td class="chk-cell"><input type="checkbox" class="row-chk" ${isChecked ? 'checked' : ''}></td>
         <td data-label="Tipo"><span class="tipo-badge ${badgeClass}">${esc(e.tipo)}</span></td>
+        <td data-label="Venc.">${vencCell}</td>
         <td data-label="Dados do pagamento">${dadosCell}${pixQrCell}</td>
         <td data-label="Valor"><div class="copy-cell"><span class="code valor">${esc(e.valor)}</span><button class="copybtn" type="button">Copiar</button></div></td>
         <td data-label="Fornecedor"><div class="fav">${esc(e.favorecido)}<span class="pago-badge">PAGO</span></div><div class="status-badge">${esc(e.status)}</div>${e.conferencia ? `<div class="conf">${esc(e.conferencia)}</div>` : ''}${e.obs ? `<div class="obs">${esc(e.obs)}</div>` : ''}</td>
@@ -354,6 +369,12 @@ function renderMovimentos(){
   });
   document.getElementById('movTotal').textContent = 'R$ ' + reais(movTotal);
   document.getElementById('movimentos').hidden = false;
+  // A linha do quadro-resumo que leva a secao (dono, 23/10/2026: no fim da
+  // pagina ninguem a achava).
+  const link = document.getElementById('movResumoLink');
+  link.textContent = 'Movimentos do dia: ' + movs.length + ' · R$ ' + reais(movTotal) + ' ↓';
+  link.addEventListener('click', ev => { ev.preventDefault(); document.getElementById('movimentos').scrollIntoView({behavior:'smooth', block:'start'}); });
+  document.getElementById('movResumo').hidden = false;
 }
 document.getElementById('restoreBtn').addEventListener('click', () => {
   excluidosState = {}; saveExcluidos();
