@@ -124,14 +124,69 @@ def escolhas_marcadas(linhas, por_nome) -> list[dict]:
     com `empresa_id` None — quem grava recusa com o motivo dito (ver o
     docstring do módulo), e não este dicionário. Conta que já está no cadastro
     e só falta no painel não volta para cá: gravaria em duplicidade."""
-    return [{"nome_erp": conta.nome,
-             "empresa_id": por_nome.get(empresa),
-             "pasta": pasta,
-             "banco": conta.banco,
-             "agencia": conta.agencia,
-             "numero": conta.numero}
-            for conta, marcada, empresa, pasta, *_resto in linhas
-            if marcada and _falta_cadastro(conta)]
+    saida = []
+    for conta, marcada, empresa, pasta, *_resto in linhas:
+        if not (marcada and _falta_cadastro(conta)):
+            continue
+        escolha = {"nome_erp": conta.nome,
+                   "empresa_id": por_nome.get(empresa),
+                   "pasta": pasta,
+                   "banco": conta.banco,
+                   "agencia": conta.agencia,
+                   "numero": conta.numero}
+        # Conta que só mudou de NOME no ERP: leva quem ela é no cadastro, e
+        # quem grava corrige o nome (UPDATE) em vez de inserir. Empresa e
+        # pasta não contam — a conta já as tem.
+        if _antes(conta):
+            escolha["renomear"] = [{"id": c.get("id"),
+                                    "nome_erp": c.get("nome_erp"),
+                                    "disputada": bool(c.get("disputada"))}
+                                   for c in _antes(conta)]
+        saida.append(escolha)
+    return saida
+
+
+def _antes(conta) -> list:
+    """As contas do cadastro que esta é, com outro nome (ver
+    `contas_central.Pendencia.antes`); [] para conta nova."""
+    return list(getattr(conta, "antes", None) or [])
+
+
+def nasce_marcada(conta, sugerida: str) -> bool:
+    """A marca do cadastro ao abrir a janela.
+
+    Conta nova: marcada quando há empresa sugerida. Conta RENOMEADA: só
+    quando a renomeação é conferida (número do campo da conta, banco e
+    agência batendo dos dois lados) e a linha do cadastro não é disputada
+    por outra conta do ERP. A não conferida nasce desmarcada, com a dica na
+    coluna FALTA EM — nunca renomeia sem alguém marcar (revisão de
+    23/10/2026)."""
+    if not _falta_cadastro(conta):
+        return False
+    antes = _antes(conta)
+    if antes:
+        return (len(antes) == 1 and bool(antes[0].get("conferida"))
+                and not antes[0].get("disputada"))
+    return bool(sugerida)
+
+
+def recado_para_ignorar(linhas, ks) -> str:
+    """"" quando dá para ignorar as linhas `ks`; o motivo quando não dá.
+
+    Linha "nome mudou" não se ignora: ela é uma conta que JÁ está no
+    cadastro, e ignorá-la esconderia para sempre a correção do nome."""
+    nomes = [linhas[k][0].nome for k in ks if _antes(linhas[k][0])]
+    if not nomes:
+        return ""
+    return ("Linha de \"nome mudou no ERP\" não se ignora: a conta já está no "
+            "cadastro, e o que falta é corrigir o nome. Tire da seleção:"
+            + chr(10) + chr(10).join(nomes))
+
+
+def sem_as_linhas(linhas, ks) -> list:
+    """O estado da janela sem as linhas `ks` (as que o "Ignorar" tirou)."""
+    ks = set(ks)
+    return [ln for k, ln in enumerate(linhas) if k not in ks]
 
 
 def painel_marcadas(linhas) -> list[tuple]:
@@ -144,7 +199,13 @@ def painel_marcadas(linhas) -> list[tuple]:
             if no_painel and _falta_painel(conta)]
 
 
-def perguntar(pai, novas, empresas, conferir_painel=None) -> Respostas:
+#: A pergunta do botão "Ignorar" (pedido do dono, 23/10/2026).
+PERGUNTA_IGNORAR = (
+    "Ignorar sempre esta conta? Ela não aparece mais nesta janela.")
+
+
+def perguntar(pai, novas, empresas, conferir_painel=None,
+              ignorar=None) -> Respostas:
     """Mostra as contas que faltam e devolve as respostas.
 
     `novas` são `contas_central.Pendencia`; `empresas` é `[(id, nome)]`.
@@ -156,7 +217,17 @@ def perguntar(pai, novas, empresas, conferir_painel=None) -> Respostas:
     para o painel ANTES de fechar: havendo problema, a lista aparece e a
     janela fica aberta com o que foi digitado — como a janela antiga do
     painel fazia. Sem ela (máquina sem painel), não confere.
+
+    Conta RENOMEADA no ERP (`antes` preenchido) chega marcada e mostra o nome
+    antigo em FALTA EM; o "Incluir" dela corrige o nome no cadastro, e por
+    isso empresa e pasta ficam travadas.
+
+    `ignorar(nomes)` grava as contas que o botão "Ignorar" tirou da janela
+    (padrão: `contas_novas.ignorar_sempre`, arquivo local desta máquina).
     """
+    if ignorar is None:
+        from . import contas_novas
+        ignorar = contas_novas.ignorar_sempre
     top = tk.Toplevel(pai)
     top.withdraw()                  # monta escondida; aparece já no tamanho
     top.title("Contas novas no Mais Controle")
@@ -175,16 +246,18 @@ def perguntar(pai, novas, empresas, conferir_painel=None) -> Respostas:
             sugerida = conta.empresa_sugerida(nomes_empresa)
         # A pasta nasce com a sugestão, para ser corrigida e não digitada; e
         # quem já vem com empresa sugerida chega marcada PARA O CADASTRO. A
-        # marca do painel nasce sempre desmarcada (ver o docstring).
-        linhas.append([conta, bool(sugerida) and _falta_cadastro(conta),
+        # marca do painel nasce sempre desmarcada (ver o docstring). A conta
+        # renomeada só chega marcada quando CONFERIDA (`nasce_marcada`).
+        linhas.append([conta, nasce_marcada(conta, sugerida),
                        sugerida, getattr(conta, "pasta_sugerida", ""),
                        _rotulo(conta), False])
 
     cabeca = ttk.Frame(top, padding=(14, 14, 14, 6))
     cabeca.pack(side="top", fill="x")
-    ttk.Label(cabeca, style="Secao.TLabel",
-              text=f"{len(novas)} conta(s) do Mais Controle faltando no app"
-              ).pack(anchor="w")
+    contagem = ttk.Label(cabeca, style="Secao.TLabel",
+                         text=f"{len(novas)} conta(s) do Mais Controle "
+                              "faltando no app")
+    contagem.pack(anchor="w")
     ttk.Label(cabeca, style="Apoio.TLabel", wraplength=640, justify="left",
               text="Elas existem no ERP e faltam no cadastro do app, no painel "
                    "do Saldo de pagamentos ou nos dois. Na primeira coluna, "
@@ -195,7 +268,9 @@ def perguntar(pai, novas, empresas, conferir_painel=None) -> Respostas:
                    "o painel do Saldo, marque a coluna PAINEL: ela nasce "
                    "sempre desmarcada, e a conta entra com o nome da linha que "
                    "está embaixo da lista. O que ficar desmarcado não é "
-                   "gravado."
+                   "gravado. Conta que só mudou de nome no ERP tem o nome "
+                   "corrigido no cadastro. \"Ignorar\" tira as contas "
+                   "selecionadas desta janela para sempre."
               ).pack(anchor="w", pady=(0, 6))
 
     todas = tk.BooleanVar(value=False)
@@ -216,7 +291,7 @@ def perguntar(pai, novas, empresas, conferir_painel=None) -> Respostas:
     colunas = ("marca", "conta", "falta", "erp", "empresa", "pasta", "painel",
                "linha")
     tabela = ttk.Treeview(corpo, columns=colunas,
-                          show="headings", selectmode="browse",
+                          show="headings", selectmode="extended",
                           height=max(1, min(len(linhas), 12)))
     for col, titulo, largura, ancora in (("marca", "", 34, "center"),
                                          ("conta", "CONTA NO ERP", 300, "w"),
@@ -246,19 +321,27 @@ def perguntar(pai, novas, empresas, conferir_painel=None) -> Respostas:
         """O que a tabela mostra de uma linha do estado."""
         conta, marcada, empresa, pasta, rotulo, no_painel = ln
         cadastrada = not _falta_cadastro(conta)
+        # A renomeada já está no cadastro com empresa e pasta: só o nome muda.
+        trava = cadastrada or bool(_antes(conta))
         return (SEM_MARCA if cadastrada
                 else (MARCADA if marcada else DESMARCADA), conta.nome,
                 getattr(conta, "falta_em", "cadastro"),
                 getattr(conta, "resumo", "") or "—",
-                "já cadastrada" if cadastrada else (empresa or "—"),
-                "já cadastrada" if cadastrada else pasta,
+                "já cadastrada" if trava else (empresa or "—"),
+                ("já cadastrada" if cadastrada
+                 else "só o nome muda" if trava else pasta),
                 (MARCADA if no_painel else DESMARCADA)
                 if _falta_painel(conta) else SEM_MARCA,
                 rotulo if _falta_painel(conta) else "—")
 
-    for k, ln in enumerate(linhas):
-        tabela.insert("", "end", iid=str(k), tags=widgets.linha_zebrada(k),
-                      values=celulas(ln))
+    def preencher():
+        """(Re)monta a tabela a partir de `linhas`; o iid é o índice nela."""
+        tabela.delete(*tabela.get_children())
+        for k, ln in enumerate(linhas):
+            tabela.insert("", "end", iid=str(k),
+                          tags=widgets.linha_zebrada(k), values=celulas(ln))
+
+    preencher()
 
     # ---- o editor: empresa e pasta da conta SELECIONADA
     selecionada = ttk.Label(editor, style="Forte.TLabel")
@@ -304,7 +387,8 @@ def perguntar(pai, novas, empresas, conferir_painel=None) -> Respostas:
         v_rotulo.set(rot)
         # Só se edita o que falta: o que já existe no cadastro ou no painel
         # não é gravado de novo, e deixar digitar enganaria.
-        no_cadastro = _falta_cadastro(conta)
+        # A renomeada só tem o nome corrigido: empresa e pasta ela já tem.
+        no_cadastro = _falta_cadastro(conta) and not _antes(conta)
         empresa.configure(state="readonly" if no_cadastro else "disabled")
         e_pasta.configure(state="normal" if no_cadastro else "disabled")
         e_rotulo.configure(state="normal" if _falta_painel(conta)
@@ -396,6 +480,48 @@ def perguntar(pai, novas, empresas, conferir_painel=None) -> Respostas:
         respostas.painel.extend(painel)
         top.destroy()
 
+    def ignorar_selecionadas():
+        """Tira da janela, para sempre, as contas selecionadas.
+
+        Grava SÓ o arquivo local (`ignorar`); nada vai para a nuvem nem para
+        o ERP. Não gravou = a linha fica, com o motivo dito. Janela vazia
+        fecha sozinha, sem nada a incluir."""
+        ks = sorted(int(i) for i in tabela.selection())
+        if not ks:
+            messagebox.showinfo("Ignorar", "Selecione a conta na lista "
+                                "primeiro.", parent=top)
+            return
+        recusa = recado_para_ignorar(linhas, ks)
+        if recusa:
+            messagebox.showinfo("Ignorar", recusa, parent=top)
+            return
+        nomes = [linhas[k][0].nome for k in ks]
+        pergunta = PERGUNTA_IGNORAR + "\n\n" + "\n".join(nomes)
+        if not messagebox.askyesno("Ignorar", pergunta, parent=top):
+            return
+        try:
+            ignorar(nomes)
+        except Exception as e:                          # noqa: BLE001
+            log.warning("gravando as contas ignoradas", exc_info=True)
+            messagebox.showerror(
+                "Ignorar", widgets.recado_de_erro(
+                    e, "Não consegui guardar as contas ignoradas."),
+                parent=top)
+            return
+        atual["k"] = None
+        linhas[:] = sem_as_linhas(linhas, ks)
+        if not linhas:
+            top.destroy()
+            return
+        preencher()
+        contagem.configure(text=f"{len(linhas)} conta(s) do Mais Controle "
+                                "faltando no app")
+        tabela.selection_set("0")
+        tabela.focus("0")
+        mostrar()
+
+    ttk.Button(rodape, text="Ignorar", command=ignorar_selecionadas
+               ).pack(side="left")
     ttk.Button(rodape, text="Agora não", command=top.destroy).pack(side="right")
     botao = ttk.Button(rodape, text="Incluir", command=confirmar)
     botao.pack(side="right", padx=(0, 8))
