@@ -129,6 +129,32 @@ Remessa/Retorno. Saldo de pagamentos perdeu o "Verificar contas novas" e o
 Anexar teve o botão renomeado para "Buscar pagamentos" (já não carrega contas).
 Decisões do dono: busca num lugar só, e uma janela só para cadastro e painel.
 
+**Conta renomeada no ERP não é conta nova (23/10/2026).** A comparação era só
+pelo nome: o dono renomeou uma subconta no ERP, a janela a listou como nova e o
+"Incluir" levou `409 conta_numero_unico` — a conta já estava no cadastro com o
+nome antigo. Hoje `pendencias(..., cadastradas=contas_novas.contas_cadastradas(
+token))` lê a tabela `conta` da nuvem e `contas_novas.renomeacoes` casa pelo
+NÚMERO (só dígitos; banco e agência também, quando os dois lados têm). A
+`Pendencia` ganha `antes` e a coluna FALTA EM diz "nome mudou no ERP: antes
+'<nome antigo>'"; a linha nasce marcada, com empresa e pasta travadas, e o
+"Incluir" dela faz **PATCH do `nome_erp` por id** (`contas_novas.
+corrigir_nomes`), nunca INSERT, conferindo que alterou exatamente uma linha
+(zero = "falta aplicar o SQL"). Não é renomeação, e não se adivinha: número que
+bate com mais de uma conta (vira recado) ou nome antigo ainda ativo no ERP.
+Nuvem muda = sem `cadastradas`, a conta segue como nova; e qualquer 409
+`conta_numero_unico` que escape no INSERT vira aviso "essa conta já está no
+cadastro com outro nome: <nome>", com o resto do lote reenviado. O painel do
+Saldo NÃO precisa ser renomeado: `mapping.resolve_account` casa por uuid,
+depois número, e só então por nome.
+
+**"Ignorar" na janela** (mesmo dia): marca uma ou várias linhas, pergunta
+"Ignorar sempre esta conta?" e grava `contas_ignoradas.json` na
+`util.pasta_base()` (lista de nomes, gravação atômica; arquivo ilegível não é
+sobrescrito). `ignorados()` junta os PEDAÇOS do `ignored_erp_accounts` do
+`mapping.yaml` com esses nomes INTEIROS (`NomeInteiro`, casa só igual), e a
+conta ignorada some também da pendência só de painel. Nada vai à nuvem nem ao
+ERP; é decisão desta máquina.
+
 **Editar cadastro é no painel do Supabase**, que é uma planilha no navegador.
 Não há tela no app, de propósito: esses cadastros mudam raras vezes, e a
 validação mora no BANCO (`unique`, `check`, FK), onde vale independentemente
@@ -141,6 +167,11 @@ escolheu "corrigir, sem apagar". O banco libera UPDATE só nessas colunas, para
 `20261021100000_entidade_pode_ser_corrigida_pelo_app.sql`). DELETE continua
 fora do app. PATCH barrado pela RLS devolve zero linhas sem erro, por isso
 `cadastros.gravar` confere que alterou exatamente uma.
+**E desde 23/10/2026 o `nome_erp` da `conta`** (migration
+`20261023100000_conta_nome_erp_pode_ser_corrigido_pelo_app.sql`): o UPDATE de
+TABELA de 24/08 foi revogado e voltou só na coluna `nome_erp`, com
+`conta_corrige` em `privado.e_ativo()` e o gatilho `conta_auditar_nome` na
+`auditoria`.
 
 **Segurança, e o que já está provado por teste.** Só a `anon key` está no
 código (`nuvem/rest.py`) — ela é pública por desenho e não abre nada sozinha;
