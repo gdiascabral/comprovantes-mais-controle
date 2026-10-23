@@ -3749,6 +3749,14 @@ class PagamentosDiaFrame(ttk.Frame):
         if not alvos:
             return {}, set(), set(), {}
 
+        # A aba do robô pode ter fechado por estar parada desde o "Buscar"
+        # (`ABA_OCIOSA_SEG`, modo central): sem pedir a sessão de novo,
+        # `self.anx.api` era None e TODO download falhava calado, virando
+        # "anexo não lido". Com a sessão viva as duas chamadas não custam nada.
+        api = self.anx.garantir_sessao(self._log)
+        if not api.garantir_credenciais_anexos(self._log):
+            raise RuntimeError("não consegui o acesso aos anexos do Mais "
+                               "Controle — rode de novo.")
         self._log(f"\nBaixando e lendo {len(alvos)} anexo(s) para o cruzamento...")
         textos, urls_ocr, sem_texto, nao_lidos = {}, set(), 0, set()
         qrs: dict[str, list[str]] = {}
@@ -3757,7 +3765,7 @@ class PagamentosDiaFrame(ttk.Frame):
                 self._log("Interrompido a pedido — o cruzamento fica incompleto.")
                 break
             try:
-                dados = self.anx.api.baixar_anexo(url)
+                dados = api.baixar_anexo(url)
             except Exception as e:                           # noqa: BLE001
                 self._log(f"  [!] não consegui baixar um anexo: {e}")
                 dados = None

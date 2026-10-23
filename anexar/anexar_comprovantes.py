@@ -1488,6 +1488,13 @@ class AnexarFrame(ttk.Frame):
         try:
             if not contas_sel:
                 self._log("[!] Nenhuma conta marcada."); self.q.put(("reabilitar2", None)); return
+            # Entre o "1. Buscar" e este clique a aba do robô pode ter fechado
+            # por estar parada (`ABA_OCIOSA_SEG`, modo central): sem isto,
+            # `self.api` era None. Com a sessão viva as duas chamadas não
+            # custam nada; com a aba fechada, abrem outra e recapturam.
+            self.garantir_sessao()
+            if not self.api.capturar_credenciais(self._log):
+                raise RuntimeError("Não capturei a lista de pagamentos.")
             pagos = [p for p in self.pagos if p["conta"] in contas_sel]
             if termos:
                 antes = len(pagos)

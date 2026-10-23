@@ -559,6 +559,23 @@ class ContratosFrame(ttk.Frame):
         finally:
             self.q.put(("botoes", (True, bool(self.achados))))
 
+    def _api_com_anexos(self):
+        """A sessão do ERP com os DOIS cabeçalhos prontos. Thread do navegador.
+
+        Entre a busca e o "Arquivar"/"Abrir" a aba do robô pode ter fechado
+        por estar parada (`ABA_OCIOSA_SEG`, modo central): o `MCApi` novo
+        nasce sem credencial nenhuma, e o download morria em "Credenciais de
+        anexos ainda não capturadas". Com a sessão viva, as duas capturas
+        devolvem na hora."""
+        api = self.anx.garantir_sessao(self._log)
+        if not api.capturar_credenciais(self._log):
+            raise RuntimeError("Não capturei a lista de pagamentos — é dela "
+                               "que saem os cabeçalhos de autenticação.")
+        if not api.garantir_credenciais_anexos(self._log):
+            raise RuntimeError("Não consegui o acesso aos anexos do Mais "
+                               "Controle — rode de novo.")
+        return api
+
     def _t_arquivar(self):
         comeco = time.time()
         try:
@@ -567,7 +584,7 @@ class ContratosFrame(ttk.Frame):
             mapa = contas.carregar()
             raiz = mapa.raiz or cfg.RAIZ_PADRAO
 
-            api = self.anx.garantir_sessao(self._log)
+            api = self._api_com_anexos()
             self._log("")
             self._log("Baixando e conferindo cada contrato "
                       "(contrato escaneado passa por OCR e demora mais)...")
@@ -606,7 +623,7 @@ class ContratosFrame(ttk.Frame):
         a busca de novo", que é justamente o que a janela existe para evitar."""
         nome = (anexo.get("filename") or "anexo").strip()
         try:
-            api = self.anx.garantir_sessao(self._log)
+            api = self._api_com_anexos()
             frescos = api.anexos_de_obras([achado.obra_id], log=lambda m: None)
             atual = next(
                 (x for x in (frescos.get(achado.obra_id) or [])
