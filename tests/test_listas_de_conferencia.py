@@ -384,6 +384,15 @@ def _anexo_pdf(nome):
             "downloadUrl": f"https://exemplo.invalid/{nome}.pdf"}
 
 
+def _anx_com(baixar):
+    """O dono do navegador: a sessão devolve a API que baixa os anexos
+    (o `_baixar_textos` pede a sessão antes, porque a aba do robô pode ter
+    fechado por estar parada)."""
+    api = SimpleNamespace(baixar_anexo=baixar,
+                          garantir_credenciais_anexos=lambda *_a, **_k: True)
+    return SimpleNamespace(api=api, garantir_sessao=lambda *_a: api)
+
+
 def test_parar_durante_a_leitura_nao_abre_a_janela(monkeypatch, tmp_path):
     """Parar no meio do download deixava a janela abrir com leitura pela
     metade: o boleto dentro da NF não lido virava Pix do cadastro, verde. Com
@@ -396,7 +405,7 @@ def test_parar_durante_a_leitura_nao_abre_a_janela(monkeypatch, tmp_path):
         dono._parar.set()               # a pessoa clicou em Parar agora
         return None
 
-    dono.anx = SimpleNamespace(api=SimpleNamespace(baixar_anexo=baixar))
+    dono.anx = _anx_com(baixar)
     dono._t_apurar(["CONTA A"], dict(_opcoes(tmp_path), cruzar=True),
                    "planilha")
     msgs = _mensagens(dono)
@@ -423,7 +432,7 @@ def test_anexo_que_nao_foi_lido_vira_aviso_na_janela(monkeypatch, tmp_path):
             raise OSError("o download caiu")
         return b"%PDF ficticio"
 
-    dono.anx = SimpleNamespace(api=SimpleNamespace(baixar_anexo=baixar))
+    dono.anx = _anx_com(baixar)
     dono._t_apurar(["CONTA A"], dict(_opcoes(tmp_path), cruzar=True),
                    "planilha")
     msgs = _mensagens(dono)

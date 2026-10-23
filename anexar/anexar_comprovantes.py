@@ -219,6 +219,13 @@ CampoData = widgets.CampoData
 #: quando várias abas trabalham ao mesmo tempo (ver `AnexarFrame.ocupado`).
 _ordem_das_vagas = itertools.count(1)
 
+#: Vaga parada há mais que isto fecha a SUA aba no Chrome central (dono,
+#: 23/10/2026: "depois que a automação acaba a guia fica aberta, aí fica
+#: lotado de guias"). A próxima tarefa daquela tela abre outra pelo
+#: `garantir_sessao` — alguns segundos, que é o preço de não acumular uma aba
+#: por tela usada até o app fechar.
+ABA_OCIOSA_SEG = 180
+
 
 class _Vaga:
     """A "vaga" de UMA aba do app no modo central (plano de 15/10/2026).
@@ -242,6 +249,9 @@ class _Vaga:
         self.rotulo_atual = None
         self.pulso = None
         self.ordem = 0
+        #: `time.monotonic()` de quando o último trabalho acabou; None
+        #: enquanto trabalha (ou antes do primeiro). Ver `ABA_OCIOSA_SEG`.
+        self.livre_desde = None
 
     def ocupada(self) -> bool:
         fut = self.trabalho_atual
@@ -518,10 +528,18 @@ class AnexarFrame(ttk.Frame):
                 loc.vaga = vaga          # esta thread é da vaga, para sempre
                 return fn(*a, **k)
 
+            vaga.livre_desde = None
             fut = vaga.executor.submit(na_vaga)
             vaga.trabalho_atual = fut
             vaga.rotulo_atual = rotulo
             vaga.ordem = next(_ordem_das_vagas)
+
+            def acabou(f, vaga=vaga):
+                # Só o último trabalho da vaga liga o relógio: um anterior que
+                # termina depois de outro entrar não conta como "parada".
+                if vaga.trabalho_atual is f:
+                    vaga.livre_desde = time.monotonic()
+            fut.add_done_callback(acabou)
             return fut
         fut = self.exec.submit(fn, *a, **k)
         self._trabalho_atual = fut
@@ -743,6 +761,36 @@ class AnexarFrame(ttk.Frame):
         except Exception as e:
             self._log(_texto_do_erro(e))
 
+    @staticmethod
+    def _fechar_aba_da_vaga(vaga, mc):
+        """Fecha a aba do Chrome central desta vaga — na thread DELA.
+
+        Solta `mc`/`api` antes de sair: a próxima tarefa da tela acha a vaga
+        sem cliente e o `garantir_sessao` abre outro. O `__exit__` do
+        `MCClient` central fecha só a aba dele; o Chrome fica de pé.
+
+        Aba do robô À VISTA (a pessoa olhando a tela dele, ou usando a aba
+        que o ERP abriu a partir dela) não fecha: o relógio recomeça e a
+        próxima tentativa é daqui a `ABA_OCIOSA_SEG`."""
+        try:
+            a_vista = mc.alguma_aba_a_vista()
+        except Exception as e:
+            config.diag(f"aba parada de {type(vaga.dona).__name__}: não "
+                        f"consegui ver se está à vista: {e!r}")
+            a_vista = False
+        if a_vista:
+            vaga.livre_desde = time.monotonic()
+            return
+        if vaga.mc is mc:
+            vaga.mc = None
+            vaga.api = None
+        vaga.livre_desde = None
+        try:
+            mc.__exit__(None, None, None)
+        except Exception as e:
+            config.diag(f"aba parada de {type(vaga.dona).__name__} "
+                        f"não fechou limpa: {e!r}")
+
     def _pulsar_navegador(self):
         """A cada ~1 s com o navegador livre, uma ida curta até ele.
 
@@ -756,13 +804,20 @@ class AnexarFrame(ttk.Frame):
         if self._no_central():
             # Cada vaga pulsa o SEU cliente, no executor DELA: o objeto do
             # Playwright nunca cruza de thread. Vaga trabalhando não pulsa
-            # (as chamadas dela já entregam os eventos).
+            # (as chamadas dela já entregam os eventos). Vaga parada há mais de
+            # `ABA_OCIOSA_SEG` fecha a aba dela em vez de pulsar.
+            agora = time.monotonic()
             for vaga in self._lista_de_vagas():
                 try:
                     mc = vaga.mc
-                    if (mc is not None and not mc.fechado and not vaga.ocupada()
+                    if (mc is not None and not vaga.ocupada()
                             and (vaga.pulso is None or vaga.pulso.done())):
-                        vaga.pulso = vaga.executor.submit(mc.pulsar)
+                        if (vaga.livre_desde is not None
+                                and agora - vaga.livre_desde >= ABA_OCIOSA_SEG):
+                            vaga.pulso = vaga.executor.submit(
+                                self._fechar_aba_da_vaga, vaga, mc)
+                        elif not mc.fechado:
+                            vaga.pulso = vaga.executor.submit(mc.pulsar)
                 except Exception as e:
                     config.diag(f"pulso do navegador (vaga): {e!r}")
             self.after(1200, self._pulsar_navegador)
@@ -1446,6 +1501,13 @@ class AnexarFrame(ttk.Frame):
         try:
             if not contas_sel:
                 self._log("[!] Nenhuma conta marcada."); self.q.put(("reabilitar2", None)); return
+            # Entre o "1. Buscar" e este clique a aba do robô pode ter fechado
+            # por estar parada (`ABA_OCIOSA_SEG`, modo central): sem isto,
+            # `self.api` era None. Com a sessão viva as duas chamadas não
+            # custam nada; com a aba fechada, abrem outra e recapturam.
+            self.garantir_sessao()
+            if not self.api.capturar_credenciais(self._log):
+                raise RuntimeError("Não capturei a lista de pagamentos.")
             pagos = [p for p in self.pagos if p["conta"] in contas_sel]
             if termos:
                 antes = len(pagos)
