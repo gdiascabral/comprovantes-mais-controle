@@ -139,7 +139,8 @@ def escolhas_marcadas(linhas, por_nome) -> list[dict]:
         # pasta não contam — a conta já as tem.
         if _antes(conta):
             escolha["renomear"] = [{"id": c.get("id"),
-                                    "nome_erp": c.get("nome_erp")}
+                                    "nome_erp": c.get("nome_erp"),
+                                    "disputada": bool(c.get("disputada"))}
                                    for c in _antes(conta)]
         saida.append(escolha)
     return saida
@@ -149,6 +150,37 @@ def _antes(conta) -> list:
     """As contas do cadastro que esta é, com outro nome (ver
     `contas_central.Pendencia.antes`); [] para conta nova."""
     return list(getattr(conta, "antes", None) or [])
+
+
+def nasce_marcada(conta, sugerida: str) -> bool:
+    """A marca do cadastro ao abrir a janela.
+
+    Conta nova: marcada quando há empresa sugerida. Conta RENOMEADA: só
+    quando a renomeação é conferida (número do campo da conta, banco e
+    agência batendo dos dois lados) e a linha do cadastro não é disputada
+    por outra conta do ERP. A não conferida nasce desmarcada, com a dica na
+    coluna FALTA EM — nunca renomeia sem alguém marcar (revisão de
+    23/10/2026)."""
+    if not _falta_cadastro(conta):
+        return False
+    antes = _antes(conta)
+    if antes:
+        return (len(antes) == 1 and bool(antes[0].get("conferida"))
+                and not antes[0].get("disputada"))
+    return bool(sugerida)
+
+
+def recado_para_ignorar(linhas, ks) -> str:
+    """"" quando dá para ignorar as linhas `ks`; o motivo quando não dá.
+
+    Linha "nome mudou" não se ignora: ela é uma conta que JÁ está no
+    cadastro, e ignorá-la esconderia para sempre a correção do nome."""
+    nomes = [linhas[k][0].nome for k in ks if _antes(linhas[k][0])]
+    if not nomes:
+        return ""
+    return ("Linha de \"nome mudou no ERP\" não se ignora: a conta já está no "
+            "cadastro, e o que falta é corrigir o nome. Tire da seleção:"
+            + chr(10) + chr(10).join(nomes))
 
 
 def sem_as_linhas(linhas, ks) -> list:
@@ -215,11 +247,8 @@ def perguntar(pai, novas, empresas, conferir_painel=None,
         # A pasta nasce com a sugestão, para ser corrigida e não digitada; e
         # quem já vem com empresa sugerida chega marcada PARA O CADASTRO. A
         # marca do painel nasce sempre desmarcada (ver o docstring). A conta
-        # renomeada com UMA candidata também chega marcada: é só corrigir o
-        # nome que o ERP já mudou.
-        renomeada = len(_antes(conta)) == 1
-        linhas.append([conta, (bool(sugerida) or renomeada)
-                       and _falta_cadastro(conta),
+        # renomeada só chega marcada quando CONFERIDA (`nasce_marcada`).
+        linhas.append([conta, nasce_marcada(conta, sugerida),
                        sugerida, getattr(conta, "pasta_sugerida", ""),
                        _rotulo(conta), False])
 
@@ -461,6 +490,10 @@ def perguntar(pai, novas, empresas, conferir_painel=None,
         if not ks:
             messagebox.showinfo("Ignorar", "Selecione a conta na lista "
                                 "primeiro.", parent=top)
+            return
+        recusa = recado_para_ignorar(linhas, ks)
+        if recusa:
+            messagebox.showinfo("Ignorar", recusa, parent=top)
             return
         nomes = [linhas[k][0].nome for k in ks]
         pergunta = PERGUNTA_IGNORAR + "\n\n" + "\n".join(nomes)

@@ -125,15 +125,30 @@ class Pendencia:
     @property
     def renomeada(self):
         """A conta do cadastro que esta é, com outro nome; None se não há UMA
-        só (nova, ou o número bate com mais de uma)."""
-        return self.antes[0] if len(self.antes) == 1 else None
+        só (nova, ou o número bate com mais de uma) ou se a linha do cadastro
+        é disputada por mais de uma conta do ERP."""
+        if len(self.antes) != 1 or self.antes[0].get("disputada"):
+            return None
+        return self.antes[0]
+
+    @property
+    def conferida(self) -> bool:
+        """Renomeação com número do campo da conta e banco e agência batendo
+        dos dois lados: a única que a janela traz marcada."""
+        r = self.renomeada
+        return bool(r is not None and r.get("conferida"))
 
     @property
     def falta_em(self) -> str:
         if self.falta_cadastro and self.antes:
-            if self.renomeada is not None:
+            if any(c.get("disputada") for c in self.antes):
+                texto = contas_novas.RECADO_DISPUTADA
+            elif self.renomeada is not None:
                 texto = (f"nome mudou no ERP: antes "
                          f"'{self.renomeada.get('nome_erp') or '(sem nome)'}'")
+                if not self.conferida:
+                    texto += (" — confira: o número bate, mas banco/agência "
+                              "não foram conferidos")
             else:
                 texto = (f"nome mudou no ERP? o número bate com "
                          f"{len(self.antes)} contas do cadastro")
@@ -159,14 +174,18 @@ def pendencias(crus, pasta=None, pasta_painel=None,
 
     ignorar = contas_novas.ignorados(pasta_painel or pasta)
     locais = [p for p in ignorar if isinstance(p, contas_novas.NomeInteiro)]
-    ativas = [c for c in (crus or []) if isinstance(c, dict)
-              and c.get("isActive") is not False and c.get("name")
-              and not contas_novas.casa_ignorada(
-                  util.norm_espaco(str(c.get("name"))), locais)]
+    todas = [c for c in (crus or []) if isinstance(c, dict)
+             and c.get("isActive") is not False and c.get("name")]
+    # A renomeação olha TODAS as ativas, ignoradas inclusive: uma conta
+    # ignorada com o nome antigo (ou com o mesmo número) continua existindo
+    # no ERP, e é isso que decide se a nova é a antiga renomeada. O filtro
+    # das ignoradas vale só para o que aparece na janela.
+    ren = (contas_novas.renomeacoes(todas, cadastradas)
+           if cadastradas is not None else {})
+    ativas = [c for c in todas if not contas_novas.casa_ignorada(
+        util.norm_espaco(str(c.get("name"))), locais)]
     sem_cadastro = {n.id_erp for n in contas_novas.comparar(
         ativas, contas_novas.nomes_cadastrados(pasta), ignorar)}
-    ren = (contas_novas.renomeacoes(ativas, cadastradas)
-           if cadastradas is not None else {})
     mapa = mapa_do_painel(pasta_painel)
     erps = [conta_do_erp(c) for c in ativas]
     sem_painel = ({c.id for c in _fora_do_painel(erps, mapa)}
@@ -215,7 +234,8 @@ def aplicar(token: str, respostas, crus: list, pasta_painel=None) -> str:
 
     Devolve o texto do recado. O painel recusado nunca desfaz o cadastro (são
     dois lugares diferentes, o da nuvem já valeu) e nunca levanta: o motivo
-    entra no recado. Erro de rede/SQL do cadastro sobe, e o chamador mostra.
+    entra no recado. Cadastrar as novas e corrigir os nomes também são
+    independentes: o erro de uma vira recado e a outra roda igual.
     """
     # Módulos buscados na hora da chamada (e não `from ... import`), para o
     # teste poder trocar `gravar` e `incluir_no_painel`.
@@ -229,15 +249,28 @@ def aplicar(token: str, respostas, crus: list, pasta_painel=None) -> str:
     renomear = [e for e in respostas.cadastro if e.get("renomear")]
     novas = [e for e in respostas.cadastro if not e.get("renomear")]
     avisos: list[str] = []
+    # As duas são INDEPENDENTES (revisão de 23/10/2026): a falha de uma não
+    # pode pular a outra, e cada uma diz o que houve no próprio recado.
     if novas:
-        av = contas_novas.gravar(token, novas)
-        avisos.extend(av)
-        partes.append(f"{max(len(novas) - len(av), 0)} conta(s) "
-                      "cadastrada(s).")
+        try:
+            av = contas_novas.gravar(token, novas)
+        except Exception as e:                          # noqa: BLE001
+            log.warning("cadastrando as contas novas", exc_info=True)
+            partes.append(f"As contas novas NÃO foram cadastradas: {e}")
+        else:
+            avisos.extend(av)
+            partes.append(f"{max(len(novas) - len(av), 0)} conta(s) "
+                          "cadastrada(s).")
     if renomear:
-        feitas, av = contas_novas.corrigir_nomes(token, renomear)
-        avisos.extend(av)
-        partes.append(f"{feitas} nome(s) de conta corrigido(s) no cadastro.")
+        try:
+            feitas, av = contas_novas.corrigir_nomes(token, renomear)
+        except Exception as e:                          # noqa: BLE001
+            log.warning("corrigindo o nome das contas", exc_info=True)
+            partes.append(f"Os nomes NÃO foram corrigidos no cadastro: {e}")
+        else:
+            avisos.extend(av)
+            partes.append(f"{feitas} nome(s) de conta corrigido(s) no "
+                          "cadastro.")
     if avisos:
         partes.append("Não gravadas no cadastro:\n" + "\n".join(avisos))
     if respostas.painel:
