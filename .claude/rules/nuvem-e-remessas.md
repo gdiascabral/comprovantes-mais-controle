@@ -147,6 +147,25 @@ cadastro com outro nome: <nome>", com o resto do lote reenviado. O painel do
 Saldo NÃO precisa ser renomeado: `mapping.resolve_account` casa por uuid,
 depois número, e só então por nome.
 
+**Revisão de dinheiro do mesmo dia** (cinco travas):
+- linha do cadastro candidata de MAIS de uma conta do ERP é `disputada`:
+  nenhuma vira renomeação, todas mostram "número igual em mais de uma conta do
+  ERP — confira no painel", e `corrigir_nomes` recusa sem chamar o banco;
+- o PATCH filtra id E nome antigo (`id=eq.X&nome_erp=eq."<antigo>"`, entre
+  aspas e codificado; `is.null` sem nome). Segundo clique ou outra máquina
+  alteram zero linhas, e o recado diz "o nome já tinha mudado (agora: …)" —
+  só sobra "falta aplicar o SQL" quando o nome antigo continua lá;
+- `renomeacoes` recebe TODAS as ativas, ignoradas inclusive; o filtro das
+  ignoradas vale só para o que aparece na janela;
+- só nasce MARCADA a renomeação conferida (número do campo `account`, não do
+  nome, e banco e agência preenchidos e batendo dos dois lados —
+  `nasce_marcada`); as outras nascem desmarcadas com "confira: o número bate,
+  mas banco/agência não foram conferidos";
+- 409 com número repetido DENTRO do lote vira aviso das duas e o resto é
+  reenviado no mesmo cuidado; em `aplicar`, cadastrar as novas e corrigir os
+  nomes são independentes, cada uma com o seu recado. "Ignorar" recusa linha
+  de "nome mudou".
+
 **"Ignorar" na janela** (mesmo dia): marca uma ou várias linhas, pergunta
 "Ignorar sempre esta conta?" e grava `contas_ignoradas.json` na
 `util.pasta_base()` (lista de nomes, gravação atômica; arquivo ilegível não é
