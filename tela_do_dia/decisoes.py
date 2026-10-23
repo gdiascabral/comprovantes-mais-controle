@@ -74,7 +74,8 @@ def descrever_movimento(mov) -> str:
     return f"{origem or 'de fora'} → {destino}: {brl(valor)}"
 
 
-def nova_distribuicao(origem: str, socio: str, valor_texto, rotulos, socios=None):
+def nova_distribuicao(origem: str, socio: str, valor_texto, rotulos, socios=None,
+                      definidos=None, regras=()):
     """(conta de origem, quem recebe, Decimal) de uma distribuição de lucros
     digitada (item A, 22/10/2026). Levanta ValueError com o motivo.
 
@@ -84,7 +85,10 @@ def nova_distribuicao(origem: str, socio: str, valor_texto, rotulos, socios=None
     dono 23/10/2026) — `socios` é a lista da janela, quando a tela a tem; com
     ela, nome fora da lista é recusado (a aba Aportes não o acharia). Conta do
     painel escrita com outra caixa vira o rótulo EXATO: o SUMIF do Excel
-    ignora maiúsculas e a tela não, e os dois têm de contar a mesma coisa."""
+    ignora maiúsculas e a tela não, e os dois têm de contar a mesma coisa.
+    O par que a aba Regras já define como distribuição (`definidos`,
+    `regras`) é recusado: à mão por cima seria o dobro."""
+    from .para_aportes import distribuicao_da_regras
     origem = (origem or "").strip()
     socio = (socio or "").strip()
     if not origem:
@@ -96,6 +100,9 @@ def nova_distribuicao(origem: str, socio: str, valor_texto, rotulos, socios=None
     socio = rotulo_do_painel(socio, rotulos) or socio
     if socio.casefold() == origem.casefold():
         raise ValueError(f"{socio!r} é a própria conta de origem")
+    ja = distribuicao_da_regras(origem, socio, definidos, regras)
+    if ja is not None:
+        raise ValueError(f"essa distribuição já vem da aba Regras ({brl(ja)}); ajuste lá")
     if socios is not None and socio not in set(socios):
         raise ValueError(f"{socio!r} não está no cadastro da aba Aportes — escolha da lista")
     valor = ler_valor_editado(valor_texto)
@@ -127,19 +134,6 @@ def _cara_de_empresa(nome: str, dado: dict) -> bool:
     return bool(_DE_EMPRESA.search(texto))
 
 
-def cadastro_da_conta(rotulo: str, entidades) -> list[str]:
-    """Os nomes do cadastro da aba Aportes que são a conta do painel
-    `rotulo`: o nome, o nome oficial ou a CONTA do ERP iguais a ele
-    (`normalize_name`: sem acento, caixa ou pontuação)."""
-    from conciliacao.parsing import normalize_name
-    alvo = normalize_name(rotulo)
-    if not alvo:
-        return []
-    return [n for n, d in (entidades or {}).items()
-            if alvo in {normalize_name(n), normalize_name((d or {}).get("nome_oficial") or ""),
-                        normalize_name((d or {}).get("conta") or "")}]
-
-
 def socios_do_cadastro(entidades, rotulos, aportadores=(), origem=None) -> list[str]:
     """Quem pode receber uma distribuição, para a lista "Para" da janela:
 
@@ -152,16 +146,30 @@ def socios_do_cadastro(entidades, rotulos, aportadores=(), origem=None) -> list[
 
     Ordem alfabética dentro de cada grupo. A conta que está no painel E no
     cadastro aparece UMA vez, pelo rótulo do painel: é ele que o Excel
-    (SUMIF da seção «À MÃO») e a tela somam no destino, e o "Mandar" o casa
-    pelo nome ou pela conta do cadastro. A subconta de investidor nunca entra
-    (ela só RECEBE aporte)."""
+    (SUMIF da seção «À MÃO») e a tela somam no destino. Casa pela MESMA regra
+    do envio (`para_aportes.casar_no_cadastro`): só o nome ou a conta do ERP
+    escondem o nome do cadastro; casamento ambíguo ou só pelo número deixa
+    os nomes do cadastro à vista (o "Mandar" dá a pendência). A subconta de
+    investidor nunca entra (ela só RECEBE aporte), nem a conta do painel que
+    é uma delas — também quando só o número bate."""
     from aportes.dados import INVESTIDOR_PREFIXO
+    from aportes.regras import e_da_subconta, numero_da_conta
+
+    from .para_aportes import casar_no_cadastro
     rotulos = list(dict.fromkeys(rotulos or ()))
     entidades = entidades or {}
     dos_aportadores = {util.norm_espaco(a) for a in aportadores or () if a}
-    do_painel = set()
+    investidores = {n: d for n, d in entidades.items() if str(n).startswith(INVESTIDOR_PREFIXO)}
+    do_painel, contas = set(), []
     for r in rotulos:
-        do_painel.update(cadastro_da_conta(r, entidades))
+        c = casar_no_cadastro(r, entidades)
+        numero = numero_da_conta(r)
+        if str(c.nome or "").startswith(INVESTIDOR_PREFIXO) or (numero and any(
+                e_da_subconta(n, d or {}, numero) for n, d in investidores.items())):
+            continue
+        if c.como in ("nome", "conta"):
+            do_painel.add(c.nome)
+        contas.append(r)
     pessoas, empresas = [], []
     for n, dado in entidades.items():
         if str(n).startswith(INVESTIDOR_PREFIXO) or n in do_painel:
@@ -172,12 +180,7 @@ def socios_do_cadastro(entidades, rotulos, aportadores=(), origem=None) -> list[
             or (oficial and oficial in dos_aportadores))
         (pessoas if pessoa else empresas).append(n)
     alvo = (origem or "").strip().casefold()
-    for r in rotulos:
-        if r.casefold() == alvo:
-            continue
-        if any(str(n).startswith(INVESTIDOR_PREFIXO) for n in cadastro_da_conta(r, entidades)):
-            continue
-        empresas.append(r)
+    empresas.extend(r for r in contas if r.casefold() != alvo)
 
     def ordem(nome):
         return util.sem_acento(str(nome)).casefold()

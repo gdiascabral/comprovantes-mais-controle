@@ -265,12 +265,22 @@ Regras; sem cara de empresa), depois as EMPRESAS do cadastro e as contas do
 painel, menos a própria origem (a lista muda quando a origem muda). A
 "cara de empresa" (LTDA, SPE, HOLDING…) só ORDENA, não tira ninguém — o
 filtro de 22/10 (commit e55fdb3) tirava justamente a empresa sócia. A conta
-que está no painel E no cadastro (pelo nome, nome oficial ou CONTA do ERP,
-`decisoes.cadastro_da_conta`) aparece UMA vez, pelo rótulo do painel: é ele
-que a tela e o SUMIF do Excel somam no destino. A subconta de investidor
-nunca entra. `nova_distribuicao` recusa a própria origem e troca a conta do
-painel escrita com outra caixa pelo rótulo exato (o SUMIF ignora
-maiúsculas; a tela não).
+que está no painel E no cadastro aparece UMA vez, pelo rótulo do painel: é
+ele que a tela e o SUMIF do Excel somam no destino. **Lista e envio casam
+pela MESMA regra** (`para_aportes.casar_no_cadastro`, revisão de dinheiro de
+23/10/2026): nome ou nome oficial exatos, senão a conta do ERP exata, senão
+o número da conta como último recurso — um candidato só no critério que
+achou alguém; dois é "ambíguo" e não desce para o seguinte. Só o casamento
+por nome ou conta esconde o nome do cadastro: ambíguo (ex.: uma pessoa que
+divide a conta do ERP com a conta do painel) ou só pelo número deixa os
+nomes à vista. A subconta de investidor nunca entra, nem a conta do painel
+que é uma delas — também quando só o número bate ("Empresa - Sicoob -
+Subconta 30001-1" × "INVESTIDOR SUBCONTA 30001-1"). `nova_distribuicao`
+recusa a própria origem, troca a conta do painel escrita com outra caixa
+pelo rótulo exato (o SUMIF ignora maiúsculas; a tela não) e recusa o par que
+a aba Regras já define como Distribuição com valor ("essa distribuição já
+vem da aba Regras (R$ X); ajuste lá" — à mão por cima seria o dobro no
+painel e no envio; `para_aportes.distribuicao_da_regras`).
 
 A distribuição SAI da origem (`AporteDaConta.distribui`: soma no mínimo e
 tira do saldo final); **para outra conta do painel ela também ENTRA no
@@ -281,10 +291,13 @@ recebe é conta do painel — e aí a tela também soma) e conta no limite de 20
 linhas. O HTML a mostra de → para como os outros movimentos. O "Mandar para
 a aba Aportes" a leva como **Distribuição de Lucro**, com o modo do cadastro
 (sócio sem conta → Só pagamento; as duas pontas com conta → Pagamento +
-Recebimento). Conta do painel casa no cadastro pelo nome e, se não achar,
-pela CONTA do ERP do cadastro (`para_aportes._da_conta_no_cadastro`, um só
-candidato). Pendências claras: origem no cadastro SEM conta do ERP (a
-distribuição sai dela, e "Só recebimento" lançaria só a entrada) e destino
+Recebimento). Cada ponta casa pelo `casar_no_cadastro`, e vira pendência
+clara: ambígua ("mais de um no cadastro…", com os nomes), não achada,
+subconta de investidor ("distribuição de lucros não vai para subconta de
+investidor") ou que só bate pelo NÚMERO ("confira o cadastro: só o número
+bate"); o par que já vem da aba Regras também (a mesma recusa da janela,
+para o que já estava gravado). Pendências de cadastro: origem SEM conta do
+ERP (a distribuição sai dela, e "Só recebimento" lançaria só a entrada) e destino
 que é conta do painel (`operacoes(contas_do_painel=)`) SEM conta do ERP no
 cadastro (o dinheiro entra nela, e "Só pagamento" lançaria só a saída).
 Destino conta do painel sem saldo do sistema ganha o aviso de sem saldo,

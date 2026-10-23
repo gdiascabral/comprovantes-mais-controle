@@ -240,19 +240,79 @@ def nome_no_cadastro(rotulo: str, entidades: dict) -> str | None:
     return pelo_numero[0] if len(pelo_numero) == 1 else None
 
 
-def _da_conta_no_cadastro(rotulo: str, entidades: dict) -> str | None:
-    """`nome_no_cadastro` e, se ele não achar, a conta do painel pela CONTA
-    do ERP no cadastro (o nome do cadastro pode ser outro) — um só candidato.
-    Só para a distribuição: as duas pontas dela podem ser contas do painel."""
-    achado = nome_no_cadastro(rotulo, entidades)
-    if achado is not None:
-        return achado
+@dataclass(frozen=True)
+class Casamento:
+    """Quem do cadastro da aba Aportes é um rótulo (conta do painel ou nome),
+    e por onde casou: "nome" (nome ou nome oficial), "conta" (a conta do ERP
+    do cadastro), "numero" (só o número da conta), "ambiguo" (mais de um no
+    primeiro critério que achou alguém; `nome` None) ou "" (ninguém)."""
+    nome: str | None
+    como: str
+    candidatos: tuple = ()
+
+
+def casar_no_cadastro(rotulo: str, entidades: dict) -> Casamento:
+    """A regra ÚNICA de casar uma conta do painel no cadastro, da lista "Para"
+    da distribuição (`decisoes.socios_do_cadastro`) e do envio dela (revisão
+    de dinheiro de 23/10/2026): nome ou nome oficial exatos, senão a conta do
+    ERP exata, senão o número da conta como ÚLTIMO recurso — sempre com um
+    candidato só no critério que achou alguém; mais de um é "ambiguo" e não
+    desce para o critério seguinte (`normalize_name`: sem acento, caixa ou
+    pontuação)."""
     alvo = normalize_name(rotulo)
     if not alvo:
-        return None
-    pela_conta = [n for n, d in entidades.items()
-                  if normalize_name((d or {}).get("conta") or "") == alvo]
-    return pela_conta[0] if len(pela_conta) == 1 else None
+        return Casamento(None, "")
+    criterios = (
+        ("nome", lambda n, d: alvo in (normalize_name(n),
+                                       normalize_name(d.get("nome_oficial") or ""))),
+        ("conta", lambda n, d: normalize_name(d.get("conta") or "") == alvo),
+    )
+    for como, bate in criterios:
+        achados = tuple(n for n, d in entidades.items() if bate(n, d or {}))
+        if len(achados) == 1:
+            return Casamento(achados[0], como, achados)
+        if achados:
+            return Casamento(None, "ambiguo", achados)
+    numero = numero_da_conta(rotulo)
+    if numero:
+        achados = tuple(n for n, d in entidades.items() if e_da_subconta(n, d or {}, numero))
+        if len(achados) == 1:
+            return Casamento(achados[0], "numero", achados)
+        if achados:
+            return Casamento(None, "ambiguo", achados)
+    return Casamento(None, "")
+
+
+def _problema_do_casamento(rotulo: str, c: Casamento) -> str:
+    """O motivo da pendência de uma ponta da distribuição, ou ""."""
+    if c.como == "ambiguo":
+        return (f"mais de um no cadastro da aba Aportes para {rotulo!r} "
+                f"({', '.join(c.candidatos)}) — deixe um só com esse nome ou conta")
+    if c.nome is None:
+        return f"não achei {rotulo!r} (um só) no cadastro da aba Aportes"
+    if str(c.nome).startswith(INVESTIDOR_PREFIXO):
+        return (f"{rotulo!r} é subconta de investidor no cadastro ({c.nome}): "
+                "distribuição de lucros não vai para subconta de investidor")
+    if c.como == "numero":
+        return (f"confira o cadastro: só o número bate entre {rotulo!r} e {c.nome!r} "
+                "— ponha no cadastro o nome ou a conta do ERP dessa conta")
+    return ""
+
+
+def distribuicao_da_regras(origem: str, socio: str, definidos, regras) -> Decimal | None:
+    """O valor que a aba Regras já define para o MESMO par (aportador =
+    origem, destino = quem recebe, tipo Distribuição), ou None. À mão por
+    cima seria o dobro no painel e no envio (revisão de dinheiro de
+    23/10/2026)."""
+    de_distribuicao = {(util.norm_espaco(r.destino), util.norm_espaco(r.aportador))
+                       for r in regras or ()
+                       if util.sem_acento(r.tipo or "").casefold().strip().startswith("distribui")}
+    par = (util.norm_espaco(socio), util.norm_espaco(origem))
+    for (destino, aportador), valor in (definidos or {}).items():
+        chave = (util.norm_espaco(destino), util.norm_espaco(aportador))
+        if chave == par and chave in de_distribuicao and valor is not None and valor > ZERO:
+            return valor
+    return None
 
 
 def _tipo(tipo_regra: str) -> str:
@@ -493,17 +553,25 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
     for (origem, socio), valor in somadas.items():
         rotulo = f"{socio} (distribuição de lucros)"
         chave = chave_da_distribuicao(origem, socio)
-        pagador = _da_conta_no_cadastro(origem, entidades)
-        recebedor = socio if socio in entidades else _da_conta_no_cadastro(socio, entidades)
+        ja_na_regra = distribuicao_da_regras(origem, socio, definidos, regras)
+        if ja_na_regra is not None:
+            pendente(rotulo, origem, valor,
+                     f"essa distribuição já vem da aba Regras ({brl(ja_na_regra)}); "
+                     "ajuste lá — à mão ela iria em dobro")
+            continue
+        c_pag = casar_no_cadastro(origem, entidades)
+        c_rec = (Casamento(socio, "nome", (socio,)) if socio in entidades
+                 else casar_no_cadastro(socio, entidades))
+        pagador, recebedor = c_pag.nome, c_rec.nome
         if chave in enviados:
             la = ainda_na_aba(pagador, recebedor, data, na_aba_aportes)
             pendente(rotulo, origem, valor,
                      _ja_mandado(enviados[chave], valor, fora_da_aba=la is False))
             continue
-        if pagador is None or recebedor is None:
-            falta = origem if pagador is None else socio
-            pendente(rotulo, origem, valor,
-                     f"não achei {falta!r} (um só) no cadastro da aba Aportes")
+        problema = (_problema_do_casamento(origem, c_pag)
+                    or _problema_do_casamento(socio, c_rec))
+        if problema:
+            pendente(rotulo, origem, valor, problema)
             continue
         if (entidades[pagador] or {}).get("conta") is None:
             # A origem é conta do painel: o dinheiro SAI dela. Sem a conta no

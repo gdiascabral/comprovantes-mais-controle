@@ -375,6 +375,101 @@ def test_mandar_para_conta_do_painel_sem_saldo_vai_com_aviso():
     assert envio.sem_saldo == [op] and envio.avisos[0].motivo == pa.MOTIVO_SEM_SALDO
 
 
+# ------------- revisão de dinheiro do 669eb6a (23/10/2026): casamento e dobro
+ENTIDADES_CASA = dict(ENTIDADES, **{
+    "INVESTIDOR SUBCONTA 30001-1": {"nome_oficial": "INVESTIDOR SUBCONTA 30001-1",
+                                    "conta": None, "nome_descricao": None},
+    "EMPRESA DELTA": {"nome_oficial": "EMPRESA DELTA LTDA", "conta": "DELTA - BANCO 30.002-2",
+                      "nome_descricao": None},
+    "NOME DIFERENTE": {"nome_oficial": "NOME DIFERENTE LTDA", "conta": "OUTRA CONTA - BANCO",
+                       "nome_descricao": None},
+    "PESSOA X": {"nome_oficial": "PESSOA X", "conta": "OUTRA CONTA - BANCO",
+                 "nome_descricao": None},
+    "CONTA X - BANCO": {"nome_oficial": "CONTA X LTDA", "conta": None, "nome_descricao": None},
+    "OUTRO NOME": {"nome_oficial": "OUTRO NOME LTDA", "conta": "CONTA X - BANCO",
+                   "nome_descricao": None},
+})
+SUB_DO_PAINEL = "Empresa Socia - Sicoob - Subconta 30001-1"
+
+
+def _envio_casa(destino, origem="Mae - Banco", **kw):
+    return pa.operacoes({}, REGRAS, ENTIDADES_CASA, SUBCONTAS, HOJE,
+                        distribuicoes=[(origem, destino, D("10.00"))], **kw)
+
+
+def test_casamento_nome_vence_conta_que_vence_numero():
+    assert pa.casar_no_cadastro("Conta X - Banco", ENTIDADES_CASA) == pa.Casamento(
+        "CONTA X - BANCO", "nome", ("CONTA X - BANCO",))
+    assert pa.casar_no_cadastro("Holding - Banco", ENTIDADES_CASA).como == "conta"
+    assert pa.casar_no_cadastro("Delta Nova 30002-2", ENTIDADES_CASA) == pa.Casamento(
+        "EMPRESA DELTA", "numero", ("EMPRESA DELTA",))
+    amb = pa.casar_no_cadastro("Outra Conta - Banco", ENTIDADES_CASA)
+    assert (amb.nome, amb.como, set(amb.candidatos)) == (
+        None, "ambiguo", {"NOME DIFERENTE", "PESSOA X"})
+
+
+def test_distribuicao_que_so_bate_pelo_numero_e_pendencia():
+    envio = _envio_casa("Delta Nova 30002-2")
+    assert envio.itens == []
+    assert "só o número bate" in envio.pendentes[0].motivo
+
+
+def test_distribuicao_para_subconta_de_investidor_e_pendencia():
+    for destino in ("INVESTIDOR SUBCONTA 30001-1", SUB_DO_PAINEL):
+        envio = _envio_casa(destino)
+        assert envio.itens == [], destino
+        assert "subconta de investidor" in envio.pendentes[0].motivo, destino
+
+
+def test_distribuicao_ambigua_no_cadastro_e_pendencia():
+    envio = _envio_casa("Outra Conta - Banco")
+    assert envio.itens == []
+    motivo = envio.pendentes[0].motivo
+    assert "mais de um" in motivo and "NOME DIFERENTE" in motivo and "PESSOA X" in motivo
+
+
+def test_lista_para_tira_a_subconta_de_investidor_do_painel_pelo_numero():
+    lista = dc.socios_do_cadastro(ENTIDADES_CASA, ["Mae - Banco", SUB_DO_PAINEL],
+                                  origem="Mae - Banco")
+    assert SUB_DO_PAINEL not in lista
+    assert not any(n.startswith("INVESTIDOR") for n in lista)
+
+
+def test_lista_para_com_conta_ambigua_mostra_os_dois_nomes():
+    lista = dc.socios_do_cadastro(ENTIDADES_CASA, ["Mae - Banco", "Outra Conta - Banco"],
+                                  origem="Mae - Banco")
+    assert {"NOME DIFERENTE", "PESSOA X", "Outra Conta - Banco"} <= set(lista)
+
+
+def test_lista_para_esconde_so_quem_casou_pelo_nome():
+    lista = dc.socios_do_cadastro(ENTIDADES_CASA, ["Mae - Banco", "Conta X - Banco"],
+                                  origem="Mae - Banco")
+    assert "Conta X - Banco" in lista and "CONTA X - BANCO" not in lista
+    assert "OUTRO NOME" in lista
+
+
+REGRAS_DIST = [Regra("Filha Um - Banco", "Mae - Banco", None, "Distribuição", True, linha=3)]
+DEFINIDOS_DIST = {("Filha Um - Banco", "Mae - Banco"): D("300.00")}
+
+
+def test_nova_distribuicao_recusa_o_par_que_ja_vem_da_aba_regras():
+    with pytest.raises(ValueError, match=r"já vem da aba Regras \(R\$ 300,00\)"):
+        dc.nova_distribuicao("Mae - Banco", "Filha Um - Banco", "10,00", ROTULOS,
+                             definidos=DEFINIDOS_DIST, regras=REGRAS_DIST)
+    # Sem valor definido na Regras, ou outro par: segue.
+    assert dc.nova_distribuicao("Mae - Banco", "Filha Um - Banco", "10,00", ROTULOS,
+                                definidos={}, regras=REGRAS_DIST)[2] == D("10.00")
+
+
+def test_envio_nao_manda_a_mao_o_par_que_ja_vem_da_aba_regras():
+    envio = pa.operacoes(DEFINIDOS_DIST, REGRAS_DIST, ENTIDADES, SUBCONTAS, HOJE,
+                         distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("300.00"))])
+    chave = pa.chave_da_distribuicao("Mae - Banco", "Filha Um - Banco")
+    assert all(chave not in chaves for _op, chaves in envio.itens)
+    assert any("aba Regras" in p.motivo and "distribuição de lucros" in p.destino
+               for p in envio.pendentes)
+
+
 # ---------------------- revisão de dinheiro de 22/10/2026 (A4, A5) e geral
 SUB = "44444-4"
 DESTINO_SUB = "Filha Dois - Subconta 44444-4"

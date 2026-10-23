@@ -1132,9 +1132,11 @@ class TelaDoDiaFrame(ttk.Frame):
 
         def aplicar(_e=None):
             try:
-                resposta["v"] = dc.nova_distribuicao(v_origem.get(), v_socio.get(),
-                                                     v_valor.get(), rotulos,
-                                                     socios if entidades else None)
+                resposta["v"] = dc.nova_distribuicao(
+                    v_origem.get(), v_socio.get(), v_valor.get(), rotulos,
+                    socios if entidades else None,
+                    definidos=self.aportes.definidos_validos if self.aportes else None,
+                    regras=self.regras)
             except ValueError as e:
                 messagebox.showwarning(titulo, str(e), parent=jan)
                 return "break"
