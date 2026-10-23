@@ -44,6 +44,7 @@ from . import lista_diretor as ldr
 from . import nuvem_do_dia, para_aportes, passo2, passo67, recados
 from . import pagamentos as pg
 from . import saldos as sd
+from .agendamentos_na_tela import ConferenciaNaTela
 from .sicoob_na_tela import LeitorSicoob
 from .valores import brl, de_float, ler_valor_editado
 
@@ -304,8 +305,14 @@ class TelaDoDiaFrame(ttk.Frame):
 
         c5 = widgets.Cartao(corpo, "Agendar (no banco)", 5)
         c5.pack(fill="x", padx=PADX, pady=px((0, 12)))
-        self._ajuda(c5, "Agende no banco como sempre — isto fica fora do app. Depois, marque "
-                        "aqui embaixo o que agendou.")
+        self._ajuda(c5, "Agende no banco como sempre — isto fica fora do app. «Conferir "
+                        "agendamentos» confronta o que ficou pendente de assinatura no "
+                        "Sicoob com o HTML do dia (só leitura: nada é assinado). Depois, "
+                        "marque aqui embaixo o que agendou.")
+        # Dono, 23/10/2026: o mesmo "Conferir agendamentos" da Remessa/Retorno,
+        # contra o HTML do dia desta tela. Tudo dele mora em `agendamentos_na_tela`.
+        self.agendamentos = ConferenciaNaTela(c5, tela=self)
+        self.agendamentos.b_conferir.pack(anchor="w", pady=px((8, 0)))
 
         c6 = widgets.Cartao(corpo, "Marcar agendados", 6)
         c6.pack(fill="x", padx=PADX, pady=px((0, 12)))
@@ -548,6 +555,13 @@ class TelaDoDiaFrame(ttk.Frame):
         """O `_sair` do app chama `fechar` de toda aba: a leitura do Sicoob
         para entre uma conta e outra (a thread é daemon)."""
         self.sicoob.fechar()
+        self.agendamentos.fechar()
+
+    def sicoob_ocupado(self) -> str | None:
+        """Esta aba está com o Chrome do Sicoob? (o saldo OU a conferência dos
+        agendamentos). É o que as outras abas que abrem o mesmo perfil
+        perguntam, ligado no `comprovantes_app.py`."""
+        return self.sicoob.ocupado() or self.agendamentos.ocupado()
 
     def _parar_click(self):
         self._parar.set()

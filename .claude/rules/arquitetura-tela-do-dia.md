@@ -35,6 +35,7 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 | `saldos.py` | passo 1: sistema × banco por conta; o ajuste guarda o original e acusa quando o ERP mudou depois dele; saldo do dia = banco (digitado, senão lido do Sicoob), senão sistema; `nota_banco` diz por que o Sicoob não foi lido e `banco_mudou` acusa o lido que mudou depois do ajuste |
 | `saldo_sicoob.py` | passo 1: qual conta do Sicoob é cada linha (`agendamentos_sicoob.conta_sicoob`, o caminho da Remessa), o lido, a hora, o recado de falha, o JSON `DD MM - saldos do sicoob.json` |
 | `sicoob_na_tela.py` | o "Reler Sicoob" e a frase da hora: thread própria daemon, fila, botão pela regra dos botões da tela |
+| `agendamentos_na_tela.py` | o "Conferir agendamentos" do cartão 5: qual é o HTML do dia, as recusas, a thread própria e a pergunta do outro acesso; o motor é o da Remessa (`pagamentos_dia/conferir_agendamentos.py`) |
 | `pagamentos.py` | passo 2: por linha do painel, o que VAI SAIR, o JÁ ENVIADO (soma no a pagar) e o que está BLOQUEADO; conta sem linha no painel vai para `fora`, com o motivo, em vez de sumir |
 | `aportes.py` | passo 3: mínimo, sugestão da aba Regras, conta-mãe primeiro com alerta forte, movimentos «À MÃO» no M (entra) e no E (sai) |
 | `para_aportes.py` | os aportes definidos viram `Operacao` da aba Aportes, com pendências (não foram) e avisos (foram, confira) |
@@ -133,7 +134,50 @@ fim do `_receber_leitura` (`ler_se_faltar`), `_ligar_botoes`/`_limpar`
   só quando há conta do Sicoob marcada) recusam enquanto esta aba lê, com o
   mesmo nome na mensagem — o `sicoob_ocupado` de cada uma é ligado no
   `comprovantes_app.py` e conferido antes de mexer em qualquer botão; sem ele
-  (testes antigos), nada muda (`tests/test_sicoob_disputado.py`).
+  (testes antigos), nada muda (`tests/test_sicoob_disputado.py`). Desde
+  23/10/2026 o que as outras abas perguntam é `TelaDoDiaFrame.sicoob_ocupado()`
+  — o saldo OU o "Conferir agendamentos" desta aba (ver abaixo); a barra
+  lateral também.
+
+## Conferir agendamentos (23/10/2026)
+
+Pedido do dono: "já acrescente o de verificar os agendamentos no pagamentos
+do dia". O cartão 5 ("Agendar (no banco)") tem o botão «🔎 Conferir
+agendamentos», sempre aceso (não depende da leitura do ERP nem da nuvem: só
+do HTML e do Sicoob) e apagado enquanto confere
+(`agendamentos_na_tela.ConferenciaNaTela`). A Remessa/Retorno continua com o
+dela, sem mudança de comportamento.
+
+- **O HTML é o do dia DESTA tela, nunca escolhido num diálogo**:
+  `<pasta base>/Pagamentos do dia/pagamentos_<período>.html`, o que o
+  «HTML dos pagamentos» do passo 4 grava (`html_do_dia`). O período é o da
+  leitura na tela; sem leitura (app recém-aberto), o dos campos DE/ATÉ pela
+  regra do Buscar (`periodo_do_html`). Sem o arquivo, o botão diz "Gere o
+  HTML do dia primeiro…" (`SEM_HTML`) e não abre nada. A pergunta antes de
+  abrir o Chrome diz o nome do HTML e a hora em que foi gravado — HTML
+  gerado antes de uma decisão do passo 2 é conferido como está; gere de novo.
+- **O motor é o da Remessa** (`pagamentos_dia/conferir_agendamentos.py`):
+  `separar` (as contas pelo caminho da remessa, as recusas "nenhuma do
+  Sicoob" e "fora por cadastro"), `ler_no_banco` (toda conta nasce "não
+  lida", contas do mesmo número juntas, só leitura) e `abrir_janela` (o
+  resumão com a marca "Conferido" em `<html>.conferido.json`). Nada de regra
+  de confronto nesta pasta (guarda em `tests/test_tela_do_dia_agendamentos.py`).
+- **Outro acesso do Sicoob**: conta "não aparece neste login" faz a tela
+  perguntar pela fila (padrão sim; fechar o app responde não) e o MESMO
+  Chrome do app abre de novo para o outro acesso (QR Code), lendo só as que
+  faltaram; volta no mesmo acesso → "saia do SicoobNet… e clique em Conferir
+  agendamentos de novo" (`conferir_agendamentos.MESMO_ACESSO`); em nenhum dos
+  dois, ou o 2º login que falha, deixa a conta VERMELHA com o porquê, sem
+  perder as do 1º. Só esta aba passa `perguntar`; na Remessa a conta de outro
+  acesso continua "não conferida".
+- **Quem espera quem** (`comprovantes_app.py`): a conferência recusa com os
+  Extratos, o Baixar comprovantes, o saldo do Sicoob DESTA aba ou o
+  "Conferir agendamentos" da Remessa rodando
+  (`agendamentos.outros_no_sicoob`); e o saldo desta aba, a Remessa, os
+  Extratos e o Baixar comprovantes recusam enquanto ela roda, com
+  "Pagamentos do dia — conferindo agendamentos" na mensagem
+  (`agendamentos_na_tela.OCUPADO`). Thread daemon `sicoob-agendamentos-dia`,
+  nunca a do ERP; `fechar` a interrompe.
 
 ## Leitura: duplicação conhecida
 

@@ -213,7 +213,8 @@ def test_app_liga_as_tres_pontas():
     app = (RAIZ / "comprovantes_app.py").read_text(encoding="utf-8")
     assert "aba_dia.sicoob.outros_no_sicoob" in app
     assert "aba_dia.sicoob.ocupado()" in app
-    assert '("dia", aba_dia.sicoob.ocupado())' in app
+    # Desde 23/10/2026 a barra pergunta à aba (saldo OU conferência dos agendamentos).
+    assert '("dia", aba_dia.sicoob_ocupado())' in app
     # A linha antiga (só Extratos) foi substituída, não duplicada.
     assert "aba_pag.sicoob_ocupado = aba_ext.ocupado\n" not in app
 
