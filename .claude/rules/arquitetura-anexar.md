@@ -233,6 +233,7 @@ arquivo. **Minha aba no ERP** no central não usa vaga nem Playwright:
 /json/new?<url escapada>`), numa thread à parte. O **pulso** é por vaga livre,
 no executor dela; o **fechar** tira as vagas da lista sob trava e fecha cada
 `mc` na thread da vaga. Central desligado: idêntico a antes.
+**Aba parada fecha sozinha (23/10/2026)**: o dono via o Chrome lotado de abas do ERP — cada vaga guardava o seu `MCClient` (e a aba dele) até o app fechar. Agora `submeter` marca `vaga.livre_desde` quando o último trabalho acaba, e o pulso, com a vaga livre há `ABA_OCIOSA_SEG` (180 s), manda `_fechar_aba_da_vaga` ao executor dela: solta `mc`/`api` e chama o `__exit__` central (só a aba dela). A próxima tarefa da tela reabre pelo `garantir_sessao`; a aba Aportes relê os cadastros porque a página mudou.
 
 ## Anexar (novo) — entrega 5 (22/10/2026)
 

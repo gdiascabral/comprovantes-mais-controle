@@ -352,3 +352,99 @@ def test_pulso_no_central_e_um_por_vaga_livre_na_thread_dela(ligado):
     finally:
         solta.set()
     assert ligado._mc is None                       # nada no atributo comum
+
+
+# ------------------------------------ aba do ERP parada fecha sozinha (23/10)
+# Dono, 23/10/2026: "quando roda uma automação, depois que ela acaba a guia
+# fica aberta, aí fica lotado de guias". No central cada vaga guardava o seu
+# MCClient — e a aba dele no Chrome — até o app fechar: uma aba por tela usada.
+class _MCQueFecha:
+    fechado = False
+
+    def __init__(self, saidas):
+        self.saidas = saidas
+
+    def pulsar(self):
+        pass
+
+    def __exit__(self, *exc):
+        self.saidas.append((self, threading.get_ident()))
+
+
+def _abrir_na_vaga(ligado, saidas):
+    def abrir():
+        ligado.mc = _MCQueFecha(saidas)
+        return ligado.mc, threading.get_ident()
+    return abrir
+
+
+def _esperar_pulsos(ligado):
+    for vaga in ligado._lista_de_vagas():
+        if vaga.pulso is not None:
+            vaga.pulso.result(timeout=5)
+
+
+def test_vaga_parada_ha_tempo_fecha_a_aba_na_thread_dela(ligado, modulo,
+                                                         monkeypatch):
+    a = _Dona()
+    saidas = []
+    mc, ident = ligado.submeter("A", _abrir_na_vaga(ligado, saidas),
+                                dona=a).result(timeout=5)
+    vaga = ligado._vaga_de(a, criar=False)
+    agora = vaga.livre_desde + modulo.ABA_OCIOSA_SEG + 1
+    monkeypatch.setattr(modulo.time, "monotonic", lambda: agora)
+    ligado._pulsar_navegador()
+    _esperar_pulsos(ligado)
+    assert saidas == [(mc, ident)]
+    assert vaga.mc is None and vaga.api is None
+
+
+def test_vaga_parada_ha_pouco_fica_com_a_aba(ligado, modulo, monkeypatch):
+    a = _Dona()
+    saidas = []
+    ligado.submeter("A", _abrir_na_vaga(ligado, saidas), dona=a).result(timeout=5)
+    vaga = ligado._vaga_de(a, criar=False)
+    agora = vaga.livre_desde + modulo.ABA_OCIOSA_SEG - 5
+    monkeypatch.setattr(modulo.time, "monotonic", lambda: agora)
+    ligado._pulsar_navegador()
+    _esperar_pulsos(ligado)
+    assert saidas == []
+    assert vaga.mc is not None
+
+
+def test_vaga_trabalhando_nunca_fecha_a_aba(ligado, modulo, monkeypatch):
+    a = _Dona()
+    saidas = []
+    solta = threading.Event()
+    ligado.submeter("A", _abrir_na_vaga(ligado, saidas), dona=a).result(timeout=5)
+    vaga = ligado._vaga_de(a, criar=False)
+    antes = vaga.livre_desde
+    ligado.submeter("A", solta.wait, 5, dona=a)
+    try:
+        monkeypatch.setattr(modulo.time, "monotonic",
+                            lambda: antes + modulo.ABA_OCIOSA_SEG + 60)
+        ligado._pulsar_navegador()
+        _esperar_pulsos(ligado)
+        assert saidas == []
+        assert vaga.livre_desde is None          # trabalho novo zera o relógio
+    finally:
+        solta.set()
+
+
+def test_depois_de_fechar_a_proxima_tarefa_abre_outra(ligado, modulo,
+                                                      monkeypatch):
+    a = _Dona()
+    saidas = []
+    abrir = _abrir_na_vaga(ligado, saidas)
+    ligado.submeter("A", abrir, dona=a).result(timeout=5)
+    vaga = ligado._vaga_de(a, criar=False)
+    agora = vaga.livre_desde + modulo.ABA_OCIOSA_SEG + 1
+    monkeypatch.setattr(modulo.time, "monotonic", lambda: agora)
+    ligado._pulsar_navegador()
+    _esperar_pulsos(ligado)
+
+    def ve_mc():
+        return ligado.mc
+    assert ligado.submeter("A", ve_mc, dona=a).result(timeout=5) is None
+    mc2, _ = ligado.submeter("A", abrir, dona=a).result(timeout=5)
+    assert vaga.mc is mc2 and len(saidas) == 1
