@@ -89,5 +89,8 @@ paths:
   `acessar_conta` procura a linha da lista pelo TEXTO, e o cadastro com
   "12345-6" não achava "12.345-6". `entrar` pega o número como o
   `listar_contas()` o escreve (`como_na_lista`) e passa ESSE; sem achar, tenta
-  como veio. `pendencias.py` e `baixar_comprovantes` ainda passam o número do
+  como veio. A falha da conta que o login não enxerga é a constante
+  `pendencias.FORA_DESTE_LOGIN` (a mesma frase de `saldo.FORA_DESTE_LOGIN`):
+  é por ela que o "Conferir agendamentos" da tela do dia oferece o outro
+  acesso. `pendencias.py` e `baixar_comprovantes` ainda passam o número do
   cadastro direto.

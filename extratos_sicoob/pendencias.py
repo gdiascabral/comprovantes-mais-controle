@@ -140,6 +140,13 @@ def consultar(page, numero: str, inicio: _dt.date, fim: _dt.date) -> list[dict]:
     return [p for p in dado if isinstance(p, dict)]
 
 
+#: A falha da conta que este login do Sicoob não enxerga (é de OUTRO acesso,
+#: com outro QR Code). O "Conferir agendamentos" da aba Pagamentos do dia a
+#: reconhece por esta frase para oferecer o outro acesso; é a MESMA de
+#: `saldo.FORA_DESTE_LOGIN`.
+FORA_DESTE_LOGIN = "esta conta não aparece neste login do Sicoob"
+
+
 def ler_conta(cli, numero: str, inicio: _dt.date, fim: _dt.date) -> list[dict]:
     """Entra na conta pelo seletor do app e lê as pendências dela.
 
@@ -155,7 +162,7 @@ def ler_conta(cli, numero: str, inicio: _dt.date, fim: _dt.date) -> list[dict]:
         cli.page.wait_for_timeout(3000)
         entrou = cli.acessar_conta(numero)
     if not entrou:
-        raise PendenciasFalhou("esta conta não aparece neste login do Sicoob")
+        raise PendenciasFalhou(FORA_DESTE_LOGIN)
     vistas, todas = set(), []
     for de, ate in meses(inicio, fim):
         for p in consultar(cli.page, numero, de, ate):

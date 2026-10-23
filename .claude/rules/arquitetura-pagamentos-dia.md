@@ -749,7 +749,14 @@ paths:
   parágrafo.
 - `pagamentos_dia/agendamentos_sicoob.py` + `extratos_sicoob/pendencias.py` —
   **"Conferir agendamentos"** (dono, 15/10/2026), botão da barra de ações,
-  sempre aceso. Confronta um HTML dos pagamentos JÁ GRAVADO (escolhido num
+  sempre aceso. **Desde 23/10/2026 o que não é tela mora em
+  `pagamentos_dia/conferir_agendamentos.py`** (`separar`, `ler_no_banco`,
+  `abrir_janela`, recados), que a aba "Pagamentos do dia" também chama
+  (`tela_do_dia/agendamentos_na_tela.py`, ver `arquitetura-tela-do-dia.md`);
+  o frame da Remessa ficou só com a escolha do HTML e a thread, e o
+  comportamento dele não mudou (sem `perguntar`, a conta de outro acesso do
+  Sicoob continua "não conferida"). Guardado por
+  `tests/test_conferir_agendamentos.py`. Confronta um HTML dos pagamentos JÁ GRAVADO (escolhido num
   diálogo; sugere o desta sessão ou o `pagamentos_*.html` mais novo da pasta)
   com as **transações pendentes de assinatura** de cada conta Sicoob dele, e
   abre uma tabela por conta. **Só leitura no banco**: nada é assinado,
