@@ -364,7 +364,7 @@ function renderMovimentos(){
   movs.forEach(m => {
     movTotal += m.centavos;
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${esc(m.de)}</td><td>${esc(m.para)}</td><td><span class="tipo-badge tipo-mov">${esc(m.tipo)}</span></td><td class="valor">R$ ${esc(m.valor)}</td>`;
+    tr.innerHTML = `<td>${esc(m.de)}</td><td>${esc(m.para)}</td><td><span class="tipo-badge tipo-mov">${esc(m.tipo)}</span></td><td class="valor">R$ ${reais(m.centavos)}</td>`;
     body.appendChild(tr);
   });
   document.getElementById('movTotal').textContent = 'R$ ' + reais(movTotal);
