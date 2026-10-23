@@ -25,6 +25,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 import util
 
@@ -392,14 +393,36 @@ def renomeacoes(contas_erp, cadastradas) -> dict:
         numero = digitos(conta.numero)
         if not numero or chave in conhecidos:
             continue
-        candidatas = [
-            c for c in cadastro
-            if digitos(c.get("numero")) == numero
-            and util.norm_espaco(c.get("nome_erp") or "") not in nomes_erp
-            and _mesmo_banco(c.get("banco_codigo"), conta.banco)
-            and _mesma_agencia(c.get("agencia"), conta.agencia)]
+        do_campo = bool(_texto(cru.get("account")))
+        candidatas = []
+        for c in cadastro:
+            if (digitos(c.get("numero")) != numero
+                    or util.norm_espaco(c.get("nome_erp") or "") in nomes_erp
+                    or not _mesmo_banco(c.get("banco_codigo"), conta.banco)
+                    or not _mesma_agencia(c.get("agencia"), conta.agencia)):
+                continue
+            # CONFERIDA só quando o número veio do campo da conta (e não do
+            # nome) e banco e agência existem e batem dos DOIS lados. É a
+            # única que a janela traz marcada (revisão de 23/10/2026).
+            conferida = (do_campo
+                         and bool(digitos(conta.banco))
+                         and bool(digitos(c.get("banco_codigo")))
+                         and bool(digitos(conta.agencia))
+                         and bool(digitos(c.get("agencia"))))
+            candidatas.append(dict(c, conferida=conferida, disputada=False))
         if candidatas:
             saida[conta.id_erp] = candidatas
+    # A MESMA linha do cadastro candidata de mais de uma conta do ERP: nenhuma
+    # delas é renomeação — renomear as duas faria a segunda apagar o nome que
+    # a primeira acabou de gravar. Vira recado, e o painel decide.
+    por_linha: dict = {}
+    for cands in saida.values():
+        for c in cands:
+            por_linha[c.get("id")] = por_linha.get(c.get("id"), 0) + 1
+    for cands in saida.values():
+        if any(por_linha[c.get("id")] > 1 for c in cands):
+            for c in cands:
+                c["disputada"] = True
     return saida
 
 
@@ -544,6 +567,8 @@ def desempatar(linhas: list[dict], ocupados=()) -> None:
 
 RECADO_SEM_SQL = ("o banco não deixou corrigir — falta aplicar o SQL que "
                   "libera corrigir o nome da conta pelo app")
+RECADO_DISPUTADA = ("número igual em mais de uma conta do ERP — confira no "
+                    "painel")
 
 
 def corrigir_nomes(token: str, escolhas: list[dict]) -> tuple[int, list[str]]:
@@ -558,6 +583,9 @@ def corrigir_nomes(token: str, escolhas: list[dict]) -> tuple[int, list[str]]:
     for escolha in escolhas:
         nome = str(escolha.get("nome_erp") or "").strip()
         candidatas = escolha.get("renomear") or []
+        if any(c.get("disputada") for c in candidatas):
+            avisos.append(f"{nome}: {RECADO_DISPUTADA}.")
+            continue
         if len(candidatas) != 1:
             antigos = "; ".join(str(c.get("nome_erp") or "(sem nome)")
                                 for c in candidatas)
@@ -568,7 +596,7 @@ def corrigir_nomes(token: str, escolhas: list[dict]) -> tuple[int, list[str]]:
         alvo = candidatas[0]
         try:
             alteradas = rest.alterar("conta", token,
-                                     f"id=eq.{int(alvo['id'])}",
+                                     filtro_da_correcao(alvo),
                                      {"nome_erp": nome})
         except rest.RecusadoPeloBanco as e:
             if "conta_nome_erp_unico" in str(e):
@@ -578,10 +606,47 @@ def corrigir_nomes(token: str, escolhas: list[dict]) -> tuple[int, list[str]]:
                 avisos.append(f"{nome}: o banco recusou a correção ({e}).")
             continue
         if len(alteradas or []) != 1:
-            avisos.append(f"{nome}: {RECADO_SEM_SQL}.")
+            avisos.append(f"{nome}: {_por_que_zero(token, alvo)}.")
             continue
         feitas += 1
     return feitas, avisos
+
+
+def _valor_postgrest(texto: str) -> str:
+    """O valor de um filtro `eq.` do PostgREST: entre aspas (vírgula, ponto e
+    parênteses são reservados lá), com `"` e a barra invertida escapados, e
+    depois codificado para URL (`&`, `#`, espaço, `+`)."""
+    barra = chr(92)
+    dentro = texto.replace(barra, barra + barra).replace('"', barra + '"')
+    return quote(f'"{dentro}"', safe="")
+
+
+def filtro_da_correcao(alvo: dict) -> str:
+    """Filtro do PATCH: o id E o nome antigo. Se o nome já mudou (outra
+    máquina, ou um segundo clique), o PATCH altera zero linhas em vez de
+    gravar por cima de quem corrigiu antes."""
+    antigo = alvo.get("nome_erp")
+    nome = ("is.null" if antigo is None
+            else "eq." + _valor_postgrest(str(antigo)))
+    return f"id=eq.{int(alvo['id'])}&nome_erp={nome}"
+
+
+def _por_que_zero(token: str, alvo: dict) -> str:
+    """Zero linhas alteradas: o nome já tinha mudado, ou a RLS barrou."""
+    try:
+        linhas = rest.ler("conta", token, colunas="id,nome_erp",
+                          filtro=f"id=eq.{int(alvo['id'])}")
+    except Exception:                                       # noqa: BLE001
+        log.warning("relendo a conta depois de um PATCH sem efeito",
+                    exc_info=True)
+        linhas = None
+    if linhas:
+        atual = linhas[0].get("nome_erp")
+        if util.norm_espaco(atual or "") != util.norm_espaco(
+                alvo.get("nome_erp") or ""):
+            return (f"o nome já tinha mudado no cadastro (agora: "
+                    f"{atual or '(sem nome)'}); nada foi alterado")
+    return RECADO_SEM_SQL
 
 
 def _recado_numero_repetido(token: str, linhas: list[dict]):
@@ -594,16 +659,29 @@ def _recado_numero_repetido(token: str, linhas: list[dict]):
                   for c in contas_cadastradas(token) or []
                   if isinstance(c, dict) and digitos(c.get("numero"))}
     batem = [ln for ln in linhas if digitos(ln.get("numero")) in por_numero]
-    if not batem:
-        return ([f"{ln['nome_erp']}: essa conta já está no cadastro com outro "
-                 "nome (o número dela já existe lá) — nada deste lote foi "
-                 "gravado." for ln in linhas], [])
     avisos = []
     for ln in batem:
         antigo = por_numero[digitos(ln.get("numero"))].get("nome_erp")
         avisos.append(f"{ln['nome_erp']}: essa conta já está no cadastro com "
                       f"outro nome: {antigo or '(sem nome)'}")
-    return avisos, [ln for ln in linhas if ln not in batem]
+    # O mesmo número duas vezes DENTRO do lote também é o 409, e nenhuma das
+    # duas está no cadastro: as duas ficam de fora, com o motivo.
+    vezes: dict = {}
+    for ln in linhas:
+        d = digitos(ln.get("numero"))
+        if d:
+            vezes[d] = vezes.get(d, 0) + 1
+    repetidas = [ln for ln in linhas if ln not in batem
+                 and vezes.get(digitos(ln.get("numero")), 0) > 1]
+    avisos += [f"{ln['nome_erp']}: número repetido dentro deste lote — "
+               "confira qual das duas é a conta certa" for ln in repetidas]
+    if not batem and not repetidas:
+        return ([f"{ln['nome_erp']}: essa conta já está no cadastro com outro "
+                 "nome (o banco recusou o número; não deu para ver qual) — "
+                 "nada deste lote foi gravado."
+                 for ln in linhas], [])
+    return avisos, [ln for ln in linhas
+                    if ln not in batem and ln not in repetidas]
 
 
 def gravar(token: str, escolhas: list[dict]) -> list[str]:
@@ -652,6 +730,13 @@ def gravar(token: str, escolhas: list[dict]) -> list[str]:
                 raise
             novos, resto = _recado_numero_repetido(token, linhas)
             avisos.extend(novos)
-            if resto:
-                rest.inserir("conta", token, resto)
+            # O reenvio no MESMO cuidado: recusado de novo, cada conta dele
+            # vira aviso, e quem chamou segue para o resto do clique.
+            try:
+                if resto:
+                    rest.inserir("conta", token, resto)
+            except rest.RecusadoPeloBanco as e2:
+                avisos.extend(f"{ln['nome_erp']}: o banco recusou de novo "
+                              f"({e2}); nada foi gravado para ela."
+                              for ln in resto)
     return avisos
