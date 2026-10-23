@@ -14,7 +14,7 @@ ar devolve lista vazia, e isso não pode apagar a lista de ontem.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -108,6 +108,9 @@ class Pendencia:
     falta_cadastro: bool
     falta_painel: bool
     rotulo: str = ""
+    #: As contas do cadastro com o MESMO número e outro nome (a conta foi
+    #: renomeada no ERP, ver `contas_novas.renomeacoes`). Vazia = conta nova.
+    antes: list = field(default_factory=list)
 
     nome = property(lambda s: s.conta.nome)
     banco = property(lambda s: s.conta.banco)
@@ -120,22 +123,50 @@ class Pendencia:
         return self.conta.empresa_sugerida(nomes)
 
     @property
+    def renomeada(self):
+        """A conta do cadastro que esta é, com outro nome; None se não há UMA
+        só (nova, ou o número bate com mais de uma)."""
+        return self.antes[0] if len(self.antes) == 1 else None
+
+    @property
     def falta_em(self) -> str:
+        if self.falta_cadastro and self.antes:
+            if self.renomeada is not None:
+                texto = (f"nome mudou no ERP: antes "
+                         f"'{self.renomeada.get('nome_erp') or '(sem nome)'}'")
+            else:
+                texto = (f"nome mudou no ERP? o número bate com "
+                         f"{len(self.antes)} contas do cadastro")
+            return texto + (" (e falta no painel)" if self.falta_painel else "")
         if self.falta_cadastro and self.falta_painel:
             return "cadastro e painel"
         return "cadastro" if self.falta_cadastro else "painel"
 
 
-def pendencias(crus, pasta=None, pasta_painel=None) -> list[Pendencia]:
-    """O que falta no cadastro (Supabase) e/ou no painel, por conta ativa."""
+def pendencias(crus, pasta=None, pasta_painel=None,
+               cadastradas=None) -> list[Pendencia]:
+    """O que falta no cadastro (Supabase) e/ou no painel, por conta ativa.
+
+    `cadastradas` é a tabela `conta` da nuvem (`contas_novas.
+    contas_cadastradas`): com ela, a conta que só mudou de NOME no ERP vem
+    com `antes` preenchido, e o "Incluir" corrige o nome em vez de inserir.
+    Sem ela (None, nuvem muda), segue como nova.
+
+    A conta ignorada pelo botão "Ignorar" da janela some inteira — também da
+    pendência só de painel: "ela não aparece mais nesta janela"."""
     from conciliacao.erp.api import conta_do_erp
     from conciliacao.painel_novas import rotulo_sugerido
 
+    ignorar = contas_novas.ignorados(pasta_painel or pasta)
+    locais = [p for p in ignorar if isinstance(p, contas_novas.NomeInteiro)]
     ativas = [c for c in (crus or []) if isinstance(c, dict)
-              and c.get("isActive") is not False and c.get("name")]
+              and c.get("isActive") is not False and c.get("name")
+              and not contas_novas.casa_ignorada(
+                  util.norm_espaco(str(c.get("name"))), locais)]
     sem_cadastro = {n.id_erp for n in contas_novas.comparar(
-        ativas, contas_novas.nomes_cadastrados(pasta),
-        contas_novas.ignorados(pasta_painel or pasta))}
+        ativas, contas_novas.nomes_cadastrados(pasta), ignorar)}
+    ren = (contas_novas.renomeacoes(ativas, cadastradas)
+           if cadastradas is not None else {})
     mapa = mapa_do_painel(pasta_painel)
     erps = [conta_do_erp(c) for c in ativas]
     sem_painel = ({c.id for c in _fora_do_painel(erps, mapa)}
@@ -145,7 +176,8 @@ def pendencias(crus, pasta=None, pasta_painel=None) -> list[Pendencia]:
         fc, fp = erp.id in sem_cadastro, erp.id in sem_painel
         if fc or fp:
             saida.append(Pendencia(contas_novas.como_conta_nova(cru), erp,
-                                   fc, fp, rotulo_sugerido(erp)))
+                                   fc, fp, rotulo_sugerido(erp),
+                                   list(ren.get(erp.id, [])) if fc else []))
     return sorted(saida, key=lambda p: p.nome)
 
 
@@ -191,12 +223,23 @@ def aplicar(token: str, respostas, crus: list, pasta_painel=None) -> str:
     from conciliacao.erp.api import conta_do_erp
 
     partes: list[str] = []
-    if respostas.cadastro:
-        avisos = contas_novas.gravar(token, respostas.cadastro)
-        feitas = max(len(respostas.cadastro) - len(avisos), 0)
-        partes.append(f"{feitas} conta(s) cadastrada(s).")
-        if avisos:
-            partes.append("Não gravadas no cadastro:\n" + "\n".join(avisos))
+    # A conta renomeada no ERP só corrige o nome (UPDATE por id); a nova é
+    # inserida. Contadas à parte: "cadastrada" para quem só mudou de nome
+    # seria mentir sobre o que aconteceu no banco.
+    renomear = [e for e in respostas.cadastro if e.get("renomear")]
+    novas = [e for e in respostas.cadastro if not e.get("renomear")]
+    avisos: list[str] = []
+    if novas:
+        av = contas_novas.gravar(token, novas)
+        avisos.extend(av)
+        partes.append(f"{max(len(novas) - len(av), 0)} conta(s) "
+                      "cadastrada(s).")
+    if renomear:
+        feitas, av = contas_novas.corrigir_nomes(token, renomear)
+        avisos.extend(av)
+        partes.append(f"{feitas} nome(s) de conta corrigido(s) no cadastro.")
+    if avisos:
+        partes.append("Não gravadas no cadastro:\n" + "\n".join(avisos))
     if respostas.painel:
         try:
             inclusoes = [painel_novas.Inclusao(p.erp, rotulo)

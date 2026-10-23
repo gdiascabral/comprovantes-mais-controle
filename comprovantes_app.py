@@ -977,8 +977,12 @@ def main():
             # Na abertura, so o que falta no CADASTRO abre a janela; o que
             # falta so no painel fica para o botao "Atualizar contas" (ver
             # `contas_central.pendencias_da_abertura`).
+            # Com o cadastro da nuvem, a conta que so mudou de NOME no ERP
+            # vira correcao do nome, e nao "conta nova" (que levava 409).
             pend = contas_central.pendencias_da_abertura(
-                contas_central.pendencias(crus, pasta, util.pasta_base()))
+                contas_central.pendencias(
+                    crus, pasta, util.pasta_base(),
+                    cadastradas=contas_novas.contas_cadastradas(token)))
             if not pend:
                 return
             empresas = contas_novas.empresas(token)
@@ -1054,8 +1058,10 @@ def main():
                 except Exception as e:                    # noqa: BLE001
                     _anotar(f"conferencia de contas: o login do navegador "
                             f"nao foi refeito ({e})")
-            pend = (contas_central.pendencias(crus, pasta, util.pasta_base())
-                    if crus else [])
+            pend = (contas_central.pendencias(
+                crus, pasta, util.pasta_base(),
+                cadastradas=contas_novas.contas_cadastradas(token))
+                if crus else [])
             if pend:
                 if not token:
                     raise RuntimeError("Há contas novas, mas o app está sem "

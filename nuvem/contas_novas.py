@@ -21,6 +21,7 @@ derrubar este token — e tudo bem, porque a conferência já acabou.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,10 @@ LEGACY_BASE = "https://legacy-api.maiscontroleerp.com.br/maiscontrole/services"
 
 ARQUIVO_CONTAS = "contas_mc.json"
 ARQUIVO_MAPA = "mapping.yaml"
+#: As contas que o dono mandou ignorar PELA JANELA (botão "Ignorar"). Arquivo
+#: desta máquina, ao lado do `mapping.yaml`: lista de nomes do ERP. Não vai
+#: para a nuvem nem para o ERP.
+ARQUIVO_IGNORADAS = "contas_ignoradas.json"
 
 MOTIVO_SEM_PASTA = "marcada, mas sem pasta — a pasta é obrigatória no cadastro"
 MOTIVO_SEM_EMPRESA = "marcada, mas sem empresa — o cadastro exige a empresa"
@@ -173,28 +178,89 @@ def nomes_cadastrados(pasta=None) -> set[str]:
             if isinstance(c, dict) and c.get("erp")}
 
 
+class NomeInteiro(str):
+    """Ignorada que casa pelo nome INTEIRO (as da janela), e não por pedaço
+    (as do `mapping.yaml`). "CONTA X - NEXT" não pode engolir "CONTA X -
+    NEXT 2", que é outra conta."""
+
+
+def casa_ignorada(chave: str, ignorar) -> bool:
+    return any((chave == p) if isinstance(p, NomeInteiro) else (p in chave)
+               for p in ignorar or ())
+
+
+def _ler_ignoradas_cruas(caminho: Path) -> list[str]:
+    """Os nomes do `contas_ignoradas.json`, como foram gravados. Levanta
+    `ValueError` se o arquivo existe e não é uma lista legível."""
+    if not caminho.exists():
+        return []
+    try:
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+    except Exception as e:                                  # noqa: BLE001
+        raise ValueError(f"{caminho.name} ilegível ({e})") from e
+    if not isinstance(dados, list):
+        raise ValueError(f"{caminho.name} não é uma lista de nomes")
+    return [str(x) for x in dados if str(x).strip()]
+
+
+def ignoradas_locais(pasta=None) -> list[str]:
+    """As contas ignoradas pela janela, já normalizadas. [] quando não há
+    arquivo ou ele não se lê (com aviso no log)."""
+    caminho = Path(pasta or util.pasta_base()) / ARQUIVO_IGNORADAS
+    try:
+        return [util.norm_espaco(n) for n in _ler_ignoradas_cruas(caminho)]
+    except ValueError:
+        log.warning("lendo as contas ignoradas pela janela", exc_info=True)
+        return []
+
+
+def ignorar_sempre(nomes, pasta=None) -> list[str]:
+    """Acrescenta `nomes` ao `contas_ignoradas.json` e devolve a lista gravada.
+
+    Grava ao lado e troca (`os.replace`, atômico no mesmo volume): queda no
+    meio nunca deixa meio arquivo. Arquivo existente e ilegível NÃO é
+    sobrescrito — levanta `ValueError`, e a decisão antiga não se perde."""
+    caminho = Path(pasta or util.pasta_base()) / ARQUIVO_IGNORADAS
+    lista = _ler_ignoradas_cruas(caminho)
+    vistos = {util.norm_espaco(n) for n in lista}
+    for nome in nomes or ():
+        nome = str(nome or "").strip()
+        if nome and util.norm_espaco(nome) not in vistos:
+            vistos.add(util.norm_espaco(nome))
+            lista.append(nome)
+    temp = caminho.with_suffix(caminho.suffix + ".novo")
+    temp.write_text(json.dumps(lista, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8")
+    os.replace(temp, caminho)
+    return lista
+
+
 def ignorados(pasta=None) -> list[str]:
-    """Os pedaços de nome que o painel já mandou ignorar para sempre.
+    """O que a janela não pergunta: os pedaços do `mapping.yaml` e os nomes
+    inteiros do `contas_ignoradas.json`.
 
-    Sai de `ignored_erp_accounts`, no `mapping.yaml` — a MESMA lista que a
-    Conciliação respeita ha meses. A primeira versão desta janela não a
-    conhecia, e perguntava sobre conta que o dono já tinha decidido ignorar:
-    das 15 que ela mostrou em 21/08/2026, sete eram isso. Cadastro de decisão
-    já tomada não se duplica; se lê de onde ele está.
+    Os pedaços saem de `ignored_erp_accounts`, no `mapping.yaml` — a MESMA
+    lista que a Conciliação respeita ha meses. A primeira versão desta janela
+    não a conhecia, e perguntava sobre conta que o dono já tinha decidido
+    ignorar: das 15 que ela mostrou em 21/08/2026, sete eram isso. Cadastro de
+    decisão já tomada não se duplica; se lê de onde ele está. Casam por
+    PEDAÇO, como lá: "APENAS AJUSTE DE CAIXA" cobre duas contas de uma vez.
 
-    Casa por PEDAÇO, como lá: "APENAS AJUSTE DE CAIXA" cobre a conta da Morais
-    Engenharia e a da Buritis de uma vez.
+    Os nomes inteiros vêm do botão "Ignorar" da janela (23/10/2026) e casam
+    só com a conta de nome igual (`NomeInteiro`).
     """
     caminho = Path(pasta or util.pasta_base()) / ARQUIVO_MAPA
+    lista: list[str] = []
     try:
         import yaml
         dados = yaml.safe_load(caminho.read_text(encoding="utf-8")) or {}
+        lista = [util.norm_espaco(str(x))
+                 for x in (dados.get("ignored_erp_accounts") or [])
+                 if str(x).strip()]
     except Exception:
         log.warning("lendo a lista de contas ignoradas (%s)", ARQUIVO_MAPA,
                     exc_info=True)
-        return []
-    lista = dados.get("ignored_erp_accounts") or []
-    return [util.norm_espaco(str(x)) for x in lista if str(x).strip()]
+    return lista + [NomeInteiro(n) for n in ignoradas_locais(pasta)]
 
 
 # --------------------------------------------------------------------------
@@ -271,11 +337,85 @@ def comparar(contas_erp, ja_cadastrados: set[str],
         chave = util.norm_espaco(conta.nome)
         if chave in vistos:
             continue
-        if any(pedaco in chave for pedaco in ignorar):
+        if casa_ignorada(chave, ignorar):
             continue
         vistos.add(chave)                # não repete a mesma duas vezes
         novas.append(conta)
     return sorted(novas, key=lambda c: c.nome)
+
+
+def digitos(texto) -> str:
+    """Só os dígitos: "12.345-6" e "12345-6" são o mesmo número de conta."""
+    return re.sub(r"\D", "", str(texto or ""))
+
+
+def _mesmo_banco(a, b) -> bool:
+    a, b = digitos(a).lstrip("0"), digitos(b).lstrip("0")
+    return not (a and b) or a == b
+
+
+def _mesma_agencia(a, b) -> bool:
+    # Um lado com o dígito verificador e o outro sem ("1234-5" × "1234") é a
+    # mesma agência: basta um começar pelo outro.
+    a, b = digitos(a), digitos(b)
+    return not (a and b) or a.startswith(b) or b.startswith(a)
+
+
+def renomeacoes(contas_erp, cadastradas) -> dict:
+    """`{id_erp: [contas do cadastro]}` das contas do ERP que mudaram de NOME.
+
+    O caso de 23/10/2026: o dono renomeou uma subconta no ERP, a janela a
+    listou como nova (a comparação era só pelo nome) e o "Incluir" levou um
+    409 do banco, `conta_numero_unico` — a conta já estava no cadastro, com o
+    nome antigo. Aqui o NÚMERO decide: conta ativa do ERP cujo nome o cadastro
+    não conhece, cujo número (só os dígitos) bate com o de uma conta do
+    cadastro de outro `nome_erp`, é a mesma conta com nome novo. Banco e
+    agência, quando os dois lados têm, também têm de bater.
+
+    Mais de uma candidata volta inteira: quem decide é o painel, não um
+    palpite. E se o nome ANTIGO continua ativo no ERP, não é renomeação — são
+    duas contas com o mesmo número, e também não se adivinha.
+
+    `cadastradas` é `[{id, nome_erp, numero, banco_codigo, agencia}]`, a
+    tabela `conta` da nuvem (`contas_cadastradas`).
+    """
+    ativas = [c for c in contas_erp or []
+              if isinstance(c, dict) and c.get("isActive") is not False
+              and _texto(c.get("name"))]
+    nomes_erp = {util.norm_espaco(_texto(c.get("name"))) for c in ativas}
+    cadastro = [c for c in cadastradas or [] if isinstance(c, dict)]
+    conhecidos = {util.norm_espaco(c.get("nome_erp") or "") for c in cadastro}
+    saida: dict = {}
+    for cru in ativas:
+        conta = como_conta_nova(cru)
+        chave = util.norm_espaco(conta.nome)
+        numero = digitos(conta.numero)
+        if not numero or chave in conhecidos:
+            continue
+        candidatas = [
+            c for c in cadastro
+            if digitos(c.get("numero")) == numero
+            and util.norm_espaco(c.get("nome_erp") or "") not in nomes_erp
+            and _mesmo_banco(c.get("banco_codigo"), conta.banco)
+            and _mesma_agencia(c.get("agencia"), conta.agencia)]
+        if candidatas:
+            saida[conta.id_erp] = candidatas
+    return saida
+
+
+def contas_cadastradas(token: str):
+    """As contas do cadastro da nuvem com o que identifica cada uma, ou None
+    quando não deu para ler (aí ninguém vira "renomeada": segue como nova, e
+    o recado do 409 em `gravar` cobre o resto)."""
+    if not token:
+        return None
+    try:
+        return rest.ler("conta", token,
+                        colunas="id,nome_erp,numero,banco_codigo,agencia")
+    except Exception:
+        log.warning("lendo o cadastro de contas para achar as renomeadas",
+                    exc_info=True)
+        return None
 
 
 # --------------------------------------------------------------------------
@@ -402,17 +542,92 @@ def desempatar(linhas: list[dict], ocupados=()) -> None:
                 linha["sufixo"] = sufixo_do_nome(linha["nome_erp"])
 
 
+RECADO_SEM_SQL = ("o banco não deixou corrigir — falta aplicar o SQL que "
+                  "libera corrigir o nome da conta pelo app")
+
+
+def corrigir_nomes(token: str, escolhas: list[dict]) -> tuple[int, list[str]]:
+    """Corrige o `nome_erp` das contas RENOMEADAS no ERP. `(feitas, avisos)`.
+
+    Só UPDATE do nome, por id, uma conta por vez — nunca INSERT (era o
+    INSERT que levava o 409). PATCH barrado pela RLS (SQL ainda não
+    aplicado, usuário desativado) NÃO dá erro no PostgREST: devolve zero
+    linhas. Por isso a resposta é conferida, como em `aportes/cadastros`.
+    """
+    feitas, avisos = 0, []
+    for escolha in escolhas:
+        nome = str(escolha.get("nome_erp") or "").strip()
+        candidatas = escolha.get("renomear") or []
+        if len(candidatas) != 1:
+            antigos = "; ".join(str(c.get("nome_erp") or "(sem nome)")
+                                for c in candidatas)
+            avisos.append(f"{nome}: o número bate com {len(candidatas)} contas "
+                          f"do cadastro ({antigos}); não adivinhei — corrija "
+                          "no painel do Supabase.")
+            continue
+        alvo = candidatas[0]
+        try:
+            alteradas = rest.alterar("conta", token,
+                                     f"id=eq.{int(alvo['id'])}",
+                                     {"nome_erp": nome})
+        except rest.RecusadoPeloBanco as e:
+            if "conta_nome_erp_unico" in str(e):
+                avisos.append(f"{nome}: já existe outra conta com esse nome "
+                              "no cadastro; confira no painel do Supabase.")
+            else:
+                avisos.append(f"{nome}: o banco recusou a correção ({e}).")
+            continue
+        if len(alteradas or []) != 1:
+            avisos.append(f"{nome}: {RECADO_SEM_SQL}.")
+            continue
+        feitas += 1
+    return feitas, avisos
+
+
+def _recado_numero_repetido(token: str, linhas: list[dict]):
+    """`(avisos, resto)` depois de um 409 `conta_numero_unico` no INSERT.
+
+    Diz QUAL conta do cadastro já tem aquele número, em vez do genérico "o
+    servidor entendeu o pedido e recusou". Sem conseguir dizer quem é, todas
+    as do lote ganham o recado e nada é reenviado."""
+    por_numero = {digitos(c.get("numero")): c
+                  for c in contas_cadastradas(token) or []
+                  if isinstance(c, dict) and digitos(c.get("numero"))}
+    batem = [ln for ln in linhas if digitos(ln.get("numero")) in por_numero]
+    if not batem:
+        return ([f"{ln['nome_erp']}: essa conta já está no cadastro com outro "
+                 "nome (o número dela já existe lá) — nada deste lote foi "
+                 "gravado." for ln in linhas], [])
+    avisos = []
+    for ln in batem:
+        antigo = por_numero[digitos(ln.get("numero"))].get("nome_erp")
+        avisos.append(f"{ln['nome_erp']}: essa conta já está no cadastro com "
+                      f"outro nome: {antigo or '(sem nome)'}")
+    return avisos, [ln for ln in linhas if ln not in batem]
+
+
 def gravar(token: str, escolhas: list[dict]) -> list[str]:
     """Insere as contas escolhidas. Devolve os avisos do que ficou de fora.
 
     Só INSERT: apagar cadastro continua sendo assunto do painel do Supabase.
+    A escolha que traz `renomear` (conta que só mudou de nome no ERP) NÃO é
+    inserida: vai para `corrigir_nomes`, que faz o UPDATE do nome.
 
     Toda linha leva as MESMAS chaves (`sufixo` e `banco_codigo` inclusive,
     vazios): o PostgREST recusa o lote inteiro quando os objetos de um
     INSERT em massa não têm as mesmas colunas.
+
+    Um 409 `conta_numero_unico` que ainda escape (o cadastro da nuvem não foi
+    lido quando a janela abriu) vira aviso com o nome que está no cadastro, e
+    as outras contas do lote são reenviadas.
     """
     linhas, avisos = [], []
+    renomear = [e for e in escolhas if e.get("renomear")]
+    if renomear:
+        avisos.extend(corrigir_nomes(token, renomear)[1])
     for escolha in escolhas:
+        if escolha.get("renomear"):
+            continue
         problema = validar(escolha)
         if problema:
             avisos.append(f"{escolha.get('nome_erp', '?')}: {problema}")
@@ -430,5 +645,13 @@ def gravar(token: str, escolhas: list[dict]) -> list[str]:
         })
     if linhas:
         desempatar(linhas, _destinos_ocupados(token))
-        rest.inserir("conta", token, linhas)
+        try:
+            rest.inserir("conta", token, linhas)
+        except rest.RecusadoPeloBanco as e:
+            if "conta_numero_unico" not in str(e):
+                raise
+            novos, resto = _recado_numero_repetido(token, linhas)
+            avisos.extend(novos)
+            if resto:
+                rest.inserir("conta", token, resto)
     return avisos
