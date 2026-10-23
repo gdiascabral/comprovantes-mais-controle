@@ -160,7 +160,7 @@ depois número, e só então por nome.
 - só nasce MARCADA a renomeação conferida (número do campo `account`, não do
   nome, e banco e agência preenchidos e batendo dos dois lados —
   `nasce_marcada`); as outras nascem desmarcadas com "confira: o número bate,
-  mas banco/agência não foram conferidos";
+  mas banco, agência ou a origem do número não foram conferidos";
 - 409 com número repetido DENTRO do lote vira aviso das duas e o resto é
   reenviado no mesmo cuidado; em `aplicar`, cadastrar as novas e corrigir os
   nomes são independentes, cada uma com o seu recado. "Ignorar" recusa linha
