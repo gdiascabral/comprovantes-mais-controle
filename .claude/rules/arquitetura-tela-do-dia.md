@@ -273,14 +273,23 @@ o número da conta como último recurso — um candidato só no critério que
 achou alguém; dois é "ambíguo" e não desce para o seguinte. Só o casamento
 por nome ou conta esconde o nome do cadastro: ambíguo (ex.: uma pessoa que
 divide a conta do ERP com a conta do painel) ou só pelo número deixa os
-nomes à vista. A subconta de investidor nunca entra, nem a conta do painel
-que é uma delas — também quando só o número bate ("Empresa - Sicoob -
-Subconta 30001-1" × "INVESTIDOR SUBCONTA 30001-1"). `nova_distribuicao`
-recusa a própria origem, troca a conta do painel escrita com outra caixa
-pelo rótulo exato (o SUMIF ignora maiúsculas; a tela não) e recusa o par que
-a aba Regras já define como Distribuição com valor ("essa distribuição já
-vem da aba Regras (R$ X); ajuste lá" — à mão por cima seria o dobro no
-painel e no envio; `para_aportes.distribuicao_da_regras`).
+nomes à vista. A subconta de investidor nunca entra, nem a conta (do painel
+ou do cadastro) que é uma delas — pela função única
+`para_aportes.numero_de_subconta_de_investidor`, que olha o número no
+rótulo e na conta do ERP de quem ele casa no cadastro ("Empresa - Sicoob -
+Subconta 30001-1" × "INVESTIDOR SUBCONTA 30001-1"; a empresa cuja conta do
+ERP é a subconta dos investidores); a mesma função vira pendência no envio.
+`nova_distribuicao` recusa a própria origem, troca a conta do painel escrita
+com outra caixa pelo rótulo exato (o SUMIF ignora maiúsculas; a tela não) e
+recusa o par que a aba Regras já define como Distribuição com valor ("essa
+distribuição já vem da aba Regras (R$ X); ajuste lá" — à mão por cima seria
+o dobro no painel e no envio; `para_aportes.distribuicao_da_regras`, que
+compara o par pelo texto e pelos nomes RESOLVIDOS no cadastro,
+`mesmo_par`). **O par nos dois lugares** (gravado antes, ou posto na aba
+Regras depois) não é somado calado: o painel mostra o erro "Distribuição em
+dobro: origem → destino está à mão e na aba Regras — remova uma"
+(`montar_aportes`, no alto dos alertas). O Excel continua somando os dois,
+como a tela; o aviso é para o dono tirar um.
 
 A distribuição SAI da origem (`AporteDaConta.distribui`: soma no mínimo e
 tira do saldo final); **para outra conta do painel ela também ENTRA no
@@ -296,7 +305,12 @@ clara: ambígua ("mais de um no cadastro…", com os nomes), não achada,
 subconta de investidor ("distribuição de lucros não vai para subconta de
 investidor") ou que só bate pelo NÚMERO ("confira o cadastro: só o número
 bate"); o par que já vem da aba Regras também (a mesma recusa da janela,
-para o que já estava gravado). Pendências de cadastro: origem SEM conta do
+para o que já estava gravado) — mas o "já mandado" vem ANTES, para o recado
+dizer o que aconteceu. **Ao contrário também**: linha da aba Regras de tipo
+Distribuição cujo par já foi mandado À MÃO hoje (chave
+`chave_da_distribuicao`, comparada por `mesmo_par`) vira pendência "já
+mandado à mão hoje (R$ X) como distribuição de lucros". Pendências de
+cadastro: origem SEM conta do
 ERP (a distribuição sai dela, e "Só recebimento" lançaria só a entrada) e destino
 que é conta do painel (`operacoes(contas_do_painel=)`) SEM conta do ERP no
 cadastro (o dinheiro entra nela, e "Só pagamento" lançaria só a saída).

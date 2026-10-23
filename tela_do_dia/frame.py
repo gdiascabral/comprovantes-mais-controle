@@ -1136,7 +1136,7 @@ class TelaDoDiaFrame(ttk.Frame):
                     v_origem.get(), v_socio.get(), v_valor.get(), rotulos,
                     socios if entidades else None,
                     definidos=self.aportes.definidos_validos if self.aportes else None,
-                    regras=self.regras)
+                    regras=self.regras, entidades=entidades)
             except ValueError as e:
                 messagebox.showwarning(titulo, str(e), parent=jan)
                 return "break"

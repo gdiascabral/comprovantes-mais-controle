@@ -470,6 +470,68 @@ def test_envio_nao_manda_a_mao_o_par_que_ja_vem_da_aba_regras():
                for p in envio.pendentes)
 
 
+def test_regras_depois_da_mao_ja_mandada_e_pendencia():
+    """Re-revisão do 8f9f2b7: mandada À MÃO e depois posta na aba Regras (mesmo
+    par, tipo Distribuição) ia duas vezes."""
+    chave = pa.chave_da_distribuicao("Mae - Banco", "Filha Um - Banco")
+    envio = pa.operacoes(DEFINIDOS_DIST, REGRAS_DIST, ENTIDADES, SUBCONTAS, HOJE,
+                         enviados={chave: D("300.00")})
+    assert envio.itens == []
+    (p,) = envio.pendentes
+    assert "já mandado à mão hoje (R$ 300,00)" in p.motivo
+
+
+def test_mao_ja_mandada_diz_ja_mandado_antes_de_aba_regras():
+    chave = pa.chave_da_distribuicao("Mae - Banco", "Filha Um - Banco")
+    envio = pa.operacoes(DEFINIDOS_DIST, REGRAS_DIST, ENTIDADES, SUBCONTAS, HOJE,
+                         enviados={chave: D("300.00")},
+                         distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("300.00"))])
+    (da_mao,) = [p for p in envio.pendentes if "distribuição de lucros" in p.destino]
+    assert da_mao.motivo.startswith("já mandado")
+
+
+def test_painel_avisa_distribuicao_em_dobro():
+    saldos = {"Mae - Banco": D("1000.00"), "Filha Um - Banco": D("0.00")}
+    painel = ap.montar_aportes(saldos, {}, REGRAS_DIST, DEFINIDOS_DIST,
+                               distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("10.00"))])
+    assert any("distribuição em dobro" in f.casefold() and "remova uma" in f
+               for _t, f in painel.alertas)
+    sem = ap.montar_aportes(saldos, {}, REGRAS_DIST, DEFINIDOS_DIST)
+    assert not any("dobro" in f for _t, f in sem.alertas)
+
+
+ENTIDADES_INV44 = dict(ENTIDADES, **{
+    "INVESTIDOR SUBCONTA 44444-4": {"nome_oficial": "INVESTIDOR SUBCONTA 44444-4",
+                                    "conta": None, "nome_descricao": None}})
+
+
+def test_destino_cuja_conta_e_de_subconta_de_investidor_e_pendencia():
+    assert pa.numero_de_subconta_de_investidor("Filha Dois - Banco", ENTIDADES_INV44) == "44444-4"
+    assert pa.numero_de_subconta_de_investidor("Filha Um - Banco", ENTIDADES_INV44) == ""
+    envio = pa.operacoes({}, REGRAS, ENTIDADES_INV44, SUBCONTAS, HOJE,
+                         distribuicoes=[("Mae - Banco", "Filha Dois - Banco", D("10.00"))])
+    assert envio.itens == []
+    assert "subconta de investidor" in envio.pendentes[0].motivo
+    lista = dc.socios_do_cadastro(ENTIDADES_INV44, ["Mae - Banco", "Filha Dois - Banco"],
+                                  origem="Mae - Banco")
+    assert "Filha Dois - Banco" not in lista and "FILHA DOIS - BANCO" not in lista
+
+
+REGRAS_HOLD = [Regra("Holding - Banco", "Mae - Banco", None, "Distribuição", True, linha=4)]
+DEFINIDOS_HOLD = {("Holding - Banco", "Mae - Banco"): D("50.00")}
+
+
+def test_par_da_aba_regras_casa_pelo_cadastro_resolvido():
+    """O rótulo do painel e o nome do cadastro são a MESMA conta."""
+    envio = pa.operacoes(DEFINIDOS_HOLD, REGRAS_HOLD, ENTIDADES, SUBCONTAS, HOJE,
+                         distribuicoes=[("Mae - Banco", "HOLDING FICTICIA", D("50.00"))])
+    (da_mao,) = [p for p in envio.pendentes if "distribuição de lucros" in p.destino]
+    assert "aba Regras" in da_mao.motivo
+    with pytest.raises(ValueError, match="aba Regras"):
+        dc.nova_distribuicao("Mae - Banco", "HOLDING FICTICIA", "50,00", ROTULOS,
+                             definidos=DEFINIDOS_HOLD, regras=REGRAS_HOLD, entidades=ENTIDADES)
+
+
 # ---------------------- revisão de dinheiro de 22/10/2026 (A4, A5) e geral
 SUB = "44444-4"
 DESTINO_SUB = "Filha Dois - Subconta 44444-4"

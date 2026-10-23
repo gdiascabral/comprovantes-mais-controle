@@ -199,6 +199,17 @@ def montar_aportes(saldos, a_pagar, regras, definidos, a_mao=None,
                             if c.casefold() == str(socio or "").strip().casefold()), None)
             if destino is not None and destino != origem:
                 entra[destino] += valor
+    # O mesmo par à mão E na aba Regras (tipo Distribuição, com valor) soma
+    # duas vezes no painel e no Excel: avisa alto em vez de somar calado
+    # (re-revisão de dinheiro de 23/10/2026).
+    from .para_aportes import distribuicao_da_regras
+    em_dobro = set()
+    for origem, socio, valor in (distribuicoes or ()):
+        if (valor and valor > ZERO and (origem, socio) not in em_dobro
+                and distribuicao_da_regras(origem, socio, validos, regras) is not None):
+            em_dobro.add((origem, socio))
+            alertas.insert(0, ("erro", f"Distribuição em dobro: {origem} → {socio} está à mão "
+                                       "e na aba Regras — remova uma"))
     mae = conta_mae(regras)
     empatadas = _empatadas_na_mae(regras)
     if len(empatadas) > 1:

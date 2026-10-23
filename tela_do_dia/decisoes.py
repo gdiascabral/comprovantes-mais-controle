@@ -75,7 +75,7 @@ def descrever_movimento(mov) -> str:
 
 
 def nova_distribuicao(origem: str, socio: str, valor_texto, rotulos, socios=None,
-                      definidos=None, regras=()):
+                      definidos=None, regras=(), entidades=None):
     """(conta de origem, quem recebe, Decimal) de uma distribuição de lucros
     digitada (item A, 22/10/2026). Levanta ValueError com o motivo.
 
@@ -87,7 +87,8 @@ def nova_distribuicao(origem: str, socio: str, valor_texto, rotulos, socios=None
     painel escrita com outra caixa vira o rótulo EXATO: o SUMIF do Excel
     ignora maiúsculas e a tela não, e os dois têm de contar a mesma coisa.
     O par que a aba Regras já define como distribuição (`definidos`,
-    `regras`) é recusado: à mão por cima seria o dobro."""
+    `regras`; com `entidades`, também pelo cadastro resolvido) é recusado: à
+    mão por cima seria o dobro."""
     from .para_aportes import distribuicao_da_regras
     origem = (origem or "").strip()
     socio = (socio or "").strip()
@@ -100,7 +101,7 @@ def nova_distribuicao(origem: str, socio: str, valor_texto, rotulos, socios=None
     socio = rotulo_do_painel(socio, rotulos) or socio
     if socio.casefold() == origem.casefold():
         raise ValueError(f"{socio!r} é a própria conta de origem")
-    ja = distribuicao_da_regras(origem, socio, definidos, regras)
+    ja = distribuicao_da_regras(origem, socio, definidos, regras, entidades)
     if ja is not None:
         raise ValueError(f"essa distribuição já vem da aba Regras ({brl(ja)}); ajuste lá")
     if socios is not None and socio not in set(socios):
@@ -153,26 +154,26 @@ def socios_do_cadastro(entidades, rotulos, aportadores=(), origem=None) -> list[
     investidor nunca entra (ela só RECEBE aporte), nem a conta do painel que
     é uma delas — também quando só o número bate."""
     from aportes.dados import INVESTIDOR_PREFIXO
-    from aportes.regras import e_da_subconta, numero_da_conta
 
-    from .para_aportes import casar_no_cadastro
+    from .para_aportes import casar_no_cadastro, numero_de_subconta_de_investidor
     rotulos = list(dict.fromkeys(rotulos or ()))
     entidades = entidades or {}
     dos_aportadores = {util.norm_espaco(a) for a in aportadores or () if a}
-    investidores = {n: d for n, d in entidades.items() if str(n).startswith(INVESTIDOR_PREFIXO)}
     do_painel, contas = set(), []
     for r in rotulos:
         c = casar_no_cadastro(r, entidades)
-        numero = numero_da_conta(r)
-        if str(c.nome or "").startswith(INVESTIDOR_PREFIXO) or (numero and any(
-                e_da_subconta(n, d or {}, numero) for n, d in investidores.items())):
+        if str(c.nome or "").startswith(INVESTIDOR_PREFIXO) or \
+                numero_de_subconta_de_investidor(r, entidades):
+            if c.nome is not None:
+                do_painel.add(c.nome)
             continue
         if c.como in ("nome", "conta"):
             do_painel.add(c.nome)
         contas.append(r)
     pessoas, empresas = [], []
     for n, dado in entidades.items():
-        if str(n).startswith(INVESTIDOR_PREFIXO) or n in do_painel:
+        if (str(n).startswith(INVESTIDOR_PREFIXO) or n in do_painel
+                or numero_de_subconta_de_investidor(n, entidades)):
             continue
         oficial = util.norm_espaco((dado or {}).get("nome_oficial") or "")
         pessoa = not _cara_de_empresa(n, dado) and (
