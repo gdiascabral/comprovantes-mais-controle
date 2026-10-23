@@ -767,7 +767,20 @@ class AnexarFrame(ttk.Frame):
 
         Solta `mc`/`api` antes de sair: a próxima tarefa da tela acha a vaga
         sem cliente e o `garantir_sessao` abre outro. O `__exit__` do
-        `MCClient` central fecha só a aba dele; o Chrome fica de pé."""
+        `MCClient` central fecha só a aba dele; o Chrome fica de pé.
+
+        Aba do robô À VISTA (a pessoa olhando a tela dele, ou usando a aba
+        que o ERP abriu a partir dela) não fecha: o relógio recomeça e a
+        próxima tentativa é daqui a `ABA_OCIOSA_SEG`."""
+        try:
+            a_vista = mc.alguma_aba_a_vista()
+        except Exception as e:
+            config.diag(f"aba parada de {type(vaga.dona).__name__}: não "
+                        f"consegui ver se está à vista: {e!r}")
+            a_vista = False
+        if a_vista:
+            vaga.livre_desde = time.monotonic()
+            return
         if vaga.mc is mc:
             vaga.mc = None
             vaga.api = None

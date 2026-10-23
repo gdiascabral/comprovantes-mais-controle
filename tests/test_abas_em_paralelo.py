@@ -659,3 +659,76 @@ def test_arquivar_contratos_depois_da_aba_fechada_tem_credenciais(
     recados = _recados(aba)
     assert any(t == "status" and str(v).startswith("Concluído")
                for t, v in recados), recados
+
+
+# ------------------------------- aba à vista da pessoa não fecha (revisão)
+def test_aba_do_robo_a_vista_nao_fecha_e_o_relogio_recomeca(ligado, modulo,
+                                                            monkeypatch):
+    a = _Dona()
+    mc = _MCDaVaga(a_vista=True)
+
+    def abrir():
+        ligado.mc = mc
+    ligado.submeter("A", abrir, dona=a).result(timeout=5)
+    vaga = _vaga_livre(ligado, a)
+    agora = vaga.livre_desde + modulo.ABA_OCIOSA_SEG + 1
+    monkeypatch.setattr(modulo.time, "monotonic", lambda: agora)
+    ligado._pulsar_navegador()
+    _esperar_pulsos(ligado)
+    assert mc.saidas == 0
+    assert vaga.mc is mc
+    assert vaga.livre_desde == agora           # tenta de novo daqui a 180 s
+
+
+class _AbaFalsa:
+    def __init__(self, estado="hidden", fechada=False, erro=False):
+        self.estado = estado
+        self.fechada = fechada
+        self.erro = erro
+        self.fechamentos = 0
+
+    def is_closed(self):
+        return self.fechada
+
+    def close(self):
+        self.fechamentos += 1
+        self.fechada = True
+
+    def wait_for_function(self, _expr, **_k):
+        if self.erro or self.fechada:
+            raise RuntimeError("Target closed" if self.fechada else "travou")
+        if self.estado == "visible":
+            raise TimeoutError("continua visível")
+        return True
+
+
+def _cliente_central(*abas):
+    pytest.importorskip("playwright")
+    from anexar.mc_client import MCClient
+    cli = MCClient.__new__(MCClient)
+    cli.central = True
+    cli._minhas = set(abas)
+    cli.page = abas[0] if abas else None
+    return cli
+
+
+def test_alguma_aba_a_vista_olha_as_abas_do_robo():
+    assert _cliente_central(_AbaFalsa("hidden")).alguma_aba_a_vista() is False
+    assert _cliente_central(_AbaFalsa("hidden"),
+                            _AbaFalsa("visible")).alguma_aba_a_vista() is True
+    # fechada não está à vista; erro numa aba aberta conta como à vista
+    assert _cliente_central(_AbaFalsa(fechada=True)
+                            ).alguma_aba_a_vista() is False
+    assert _cliente_central(_AbaFalsa(erro=True)).alguma_aba_a_vista() is True
+
+
+# ------------------------------------- __exit__ do central uma vez só (revisão)
+def test_exit_do_central_duas_vezes_fecha_e_para_uma_vez():
+    aba = _AbaFalsa()
+    cli = _cliente_central(aba)
+    paradas = []
+    cli._pw = type("Pw", (), {"stop": lambda self: paradas.append(1)})()
+    cli.__exit__(None, None, None)
+    cli.__exit__(None, None, None)
+    assert aba.fechamentos == 1
+    assert paradas == [1]

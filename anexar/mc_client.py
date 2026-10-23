@@ -338,6 +338,8 @@ class MCClient:
         #: pelo evento "close" do contexto na primeira chamada seguinte ao
         #: Playwright — sem ir até o navegador, que é o que `vivo()` faz.
         self.fechado = False
+        #: O `__exit__` já rodou (ele é idempotente — ver lá).
+        self._saiu = False
 
     @staticmethod
     def _tamanho_tela() -> tuple[int, int] | None:
@@ -421,6 +423,13 @@ class MCClient:
         return self
 
     def __exit__(self, *exc):
+        # UMA vez só: o `fechar()` do app e o fechamento da aba parada
+        # (`AnexarFrame._fechar_aba_da_vaga`) podem chegar ao mesmo cliente,
+        # um enfileirado atrás do outro, e o segundo `_pw.stop()` num driver
+        # já parado só servia para sujar o diagnóstico.
+        if getattr(self, "_saiu", False):
+            return
+        self._saiu = True
         if self.central:
             # Nunca `ctx.close()` nem `browser.close()`: o Chrome central é
             # dos outros robôs também. Fecha só o que é deste cliente.
@@ -441,6 +450,32 @@ class MCClient:
         finally:
             if self._pw:
                 self._pw.stop()
+
+    #: Quanto a aba pode demorar a dizer que está escondida (ms).
+    ESPERA_VISIBILIDADE_MS = 400
+
+    def alguma_aba_a_vista(self) -> bool:
+        """Alguma aba DO ROBÔ está na frente, à vista de quem usa o Chrome?
+
+        Thread do navegador. A aba parada fecha sozinha depois de
+        `ABA_OCIOSA_SEG` (ver `AnexarFrame._fechar_aba_da_vaga`), e fechar
+        a aba que a pessoa está lendo — ou a que o ERP abriu a partir da do
+        robô e ela está usando — é arrancar a tela da mão dela. Aba
+        escondida (atrás de outra, janela minimizada) responde na hora; a
+        visível segura a espera até estourar. Erro numa aba ABERTA conta como
+        à vista: na dúvida, não se fecha a tela de ninguém — o relógio
+        recomeça e a próxima tentativa decide. Aba fechada não está à vista."""
+        for aba in list(self._minhas):
+            if self._fechada(aba):
+                continue
+            try:
+                aba.wait_for_function(
+                    "() => document.visibilityState !== 'visible'",
+                    polling=100, timeout=self.ESPERA_VISIBILIDADE_MS)
+            except Exception:
+                if not self._fechada(aba):
+                    return True
+        return False
 
     # ------------------------------------------------- de quem é cada aba
     def _nova_aba(self, pagina):
