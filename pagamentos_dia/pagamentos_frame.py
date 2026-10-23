@@ -852,6 +852,12 @@ class PagamentosDiaFrame(ttk.Frame):
         if not messagebox.askokcancel(titulo, conferir_agendamentos.pergunta_de_abrir(
                 len(sep.no_sicoob), inicio, fim)):
             return
+        # De novo depois da pergunta: com ela aberta, outra aba (o saldo da
+        # tela do dia, os Extratos) pode ter aberto o MESMO perfil do Sicoob.
+        quem = self.sicoob_ocupado()
+        if quem:
+            messagebox.showinfo(titulo, conferir_agendamentos.recado_em_uso(quem))
+            return
 
         self._log("")
         self._log(f"Conferir agendamentos: {caminho.name}")

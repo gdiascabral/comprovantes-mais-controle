@@ -149,15 +149,6 @@ def ler_no_banco(no_sicoob, fora, inicio, fim, *, log, abrir=None, ler_conta=Non
     `pendencias.ler_conta`. `perguntar(nomes)` liga o outro acesso (ver o
     docstring do módulo)."""
     A = agendamentos_sicoob
-    from extratos_sicoob import pendencias
-    if ler_conta is None:
-        ler_conta = pendencias.ler_conta
-    if abrir is None:
-        from extratos_sicoob.sicoob_client import SicoobClient
-
-        def abrir():
-            return SicoobClient(log=lambda m: log(f"  {m}"))
-
     confrontos = [A.Confronto(conta_erp=str(c.get("nome") or ""), motivo=motivo)
                   for c, _n, motivo in fora]
     grupos = A.agrupar_por_numero(no_sicoob)
@@ -172,7 +163,7 @@ def ler_no_banco(no_sicoob, fora, inicio, fim, *, log, abrir=None, ler_conta=Non
             lidas = ler_conta(cli, numero, inicio, fim)
         except Exception as e:                               # noqa: BLE001
             conf.motivo = f"o Sicoob não respondeu: {e}"
-            fora_do_login = str(e) == pendencias.FORA_DESTE_LOGIN
+            fora_do_login = str(e) == fora_deste_login
         else:
             conf.linhas = A.confrontar(entradas, lidas)
             conf.motivo = ""
@@ -180,8 +171,20 @@ def ler_no_banco(no_sicoob, fora, inicio, fim, *, log, abrir=None, ler_conta=Non
         log(f"  {nome} ({numero}): {conf.resumo()}")
         return fora_do_login
 
-    faltam, contas_do_login = [], None
+    faltam, contas_do_login, fora_deste_login = [], None, None
     try:
+        # Os imports moram DENTRO do try (revisão de 23/10/2026): fora dele,
+        # uma falha ao carregar o Chrome matava a thread de quem chama sem
+        # nada na fila, e o botão ficava apagado para sempre.
+        from extratos_sicoob import pendencias
+        fora_deste_login = pendencias.FORA_DESTE_LOGIN
+        if ler_conta is None:
+            ler_conta = pendencias.ler_conta
+        if abrir is None:
+            from extratos_sicoob.sicoob_client import SicoobClient
+
+            def abrir():
+                return SicoobClient(log=lambda m: log(f"  {m}"))
         with abrir() as cli:
             cli.aguardar_login()
             for conf, grupo in zip(pendentes, grupos):

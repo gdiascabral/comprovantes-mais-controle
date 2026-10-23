@@ -276,3 +276,68 @@ def test_remessa_usa_o_motor_e_nao_uma_copia():
     assert "pendencias.ler_conta" not in frame
     assert "A.confrontar(" not in frame
 
+
+
+def test_import_do_chrome_que_falha_nao_deixa_a_thread_muda(monkeypatch):
+    """Revisão de 23/10/2026: o import do SicoobClient fora do try fazia a
+    thread da Remessa morrer sem pôr nada na fila — botão apagado para
+    sempre. Agora a falha vira o porquê de cada conta."""
+    import sys
+    monkeypatch.setitem(sys.modules, "extratos_sicoob.sicoob_client", None)
+    registro = []
+    confs = ca.ler_no_banco(_separado(("A", "11.111-1", (100,))), [], INI, FIM,
+                            log=registro.append, ler_conta=_ler_conta({}))
+    assert len(confs) == 1 and confs[0].falhou
+    assert confs[0].motivo.startswith(A.MOTIVO_NAO_LIDA)
+    assert any("Conferir agendamentos" in r for r in registro)
+
+
+def _remessa(monkeypatch, tmp_path, ocupado_depois):
+    """A Remessa por __new__, com o HTML escolhido e a pergunta respondida
+    "OK"; `ocupado_depois` é quem pegou o Sicoob enquanto ela estava aberta."""
+    from pagamentos_dia import pagamentos_frame as pf
+    html = tmp_path / "pagamentos_2026-10-23.html"
+    html.write_text("<html><script>\nconst DATA = "
+                    + __import__("json").dumps({"contas": [{"nome": "A - SICOOB",
+                                                             "entries": []}]})
+                    + ";\n</script></html>", encoding="utf-8")
+    aba = pf.PagamentosDiaFrame.__new__(pf.PagamentosDiaFrame)
+    aba._agendamentos = None
+    quem = {"agora": None}
+    aba.sicoob_ocupado = lambda: quem["agora"]
+    aba._html_sugerido = lambda: None
+    aba.b_agend = NS(configure=lambda **k: estados.append(k))
+    estados, criadas, avisos = [], [], []
+    aba._log = lambda m="": None
+    monkeypatch.setattr(pf.filedialog, "askopenfilename", lambda **k: str(html))
+    monkeypatch.setattr(pf, "_carregar_mapas", lambda: (None, None))
+    monkeypatch.setattr(A, "conta_sicoob", lambda n, m, e: ("11.111-1", ""))
+
+    def ok(*a, **k):
+        quem["agora"] = ocupado_depois
+        return True
+    monkeypatch.setattr(pf.messagebox, "askokcancel", ok)
+    monkeypatch.setattr(pf.messagebox, "showinfo", lambda t, txt, **k: avisos.append(txt))
+
+    class _Thread:
+        def __init__(self, **k):
+            criadas.append(k)
+
+        def start(self):
+            pass
+    monkeypatch.setattr(pf, "Thread", _Thread)
+    return aba, estados, criadas, avisos
+
+
+def test_remessa_confere_o_sicoob_de_novo_depois_da_pergunta(monkeypatch, tmp_path):
+    aba, estados, criadas, avisos = _remessa(
+        monkeypatch, tmp_path, "Pagamentos do dia — lendo o saldo do Sicoob")
+    aba._conferir_agendamentos()
+    assert criadas == [] and estados == []
+    assert len(avisos) == 1 and "lendo o saldo do Sicoob" in avisos[0]
+
+
+def test_remessa_com_o_sicoob_livre_abre_a_thread(monkeypatch, tmp_path):
+    aba, estados, criadas, avisos = _remessa(monkeypatch, tmp_path, None)
+    aba._conferir_agendamentos()
+    assert len(criadas) == 1 and avisos == []

@@ -304,3 +304,23 @@ def test_frame_nao_abre_o_sicoob_e_fecha_a_conferencia():
     # O motor é o da Remessa, não uma cópia.
     assert "ca.ler_no_banco(" in modulo and "ca.abrir_janela(" in modulo
     assert "ca.separar(" in modulo and "A.confrontar(" not in modulo
+
+
+def test_saldo_que_abre_o_sicoob_durante_a_pergunta_segura_a_conferencia(
+        tmp_path, monkeypatch, janelas, threads):
+    """Revisão de 23/10/2026: a pergunta é modal, mas o saldo (o Buscar) pode
+    abrir o Chrome do Sicoob enquanto ela está aberta."""
+    _html(tmp_path, HOJE, HOJE, [{"nome": "A - SICOOB", "entries": []}])
+    monkeypatch.setattr(m, "_carregar_mapas", lambda: (None, None))
+    monkeypatch.setattr(A, "conta_sicoob", lambda n, mm, e: ("11.111-1", ""))
+    c = _conf(_Tela(tmp_path))
+    quem = {"agora": None}
+    c.outros_no_sicoob = lambda: quem["agora"]
+
+    def ok(*a, **k):
+        quem["agora"] = "Pagamentos do dia — lendo o saldo do Sicoob"
+        return True
+    monkeypatch.setattr(m.messagebox, "askokcancel", ok)
+    c.conferir()
+    assert threads == [] and c.b_conferir.estado == {}
+    assert len(janelas) == 1 and "lendo o saldo do Sicoob" in janelas[0][1]

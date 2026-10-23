@@ -152,6 +152,12 @@ class ConferenciaNaTela:
                 TITULO, f"HTML do dia: {caminho.name}{quando}.\n\n"
                         + ca.pergunta_de_abrir(len(sep.no_sicoob), inicio, fim_consulta)):
             return
+        # De novo depois da pergunta: com ela aberta, o saldo (o fim do Buscar)
+        # pode ter aberto o Chrome do Sicoob no MESMO perfil.
+        quem = self.outros_no_sicoob()
+        if quem:
+            messagebox.showinfo(TITULO, ca.recado_em_uso(quem))
+            return
         log = self.tela._log
         log("")
         log(f"Conferir agendamentos: {caminho.name}")
