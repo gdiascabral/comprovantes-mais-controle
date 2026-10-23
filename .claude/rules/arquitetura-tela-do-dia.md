@@ -256,18 +256,39 @@ no arquivo de outro dia.
 
 O cartão "Movimentos à mão" tem três botões: aporte que entra na mãe,
 transferência entre contas e **distribuição de lucros** (conta do painel →
-sócio ou investidor do cadastro da aba Aportes, `decisoes.socios_do_cadastro`:
-só pessoas — sem conta no ERP ou aportador da aba Regras —, nunca nome com
-cara de empresa;
-`dia.distribuicoes`, chave `distribuicoes` do JSON do dia). A distribuição
-SAI da origem (`AporteDaConta.distribui`: soma no mínimo e tira do saldo
-final), vai para a seção «À MÃO» do Excel DEPOIS dos movimentos (B origem,
-C sócio, H valor: o E do Painel a soma; o M não acha linha com o nome do
-sócio) e conta no limite de 20 linhas. O "Mandar para a aba Aportes" a leva
-como **Distribuição de Lucro**, com o modo do cadastro (sócio sem conta →
-Só pagamento; origem no cadastro SEM conta do ERP é pendência — a
-distribuição sai dela, e "Só recebimento" lançaria só a entrada do sócio);
-o mesmo par no dia vira UMA operação somada, com chave
+quem recebe, `dia.distribuicoes`, chave `distribuicoes` do JSON do dia).
+**A lista "Para"** (`decisoes.socios_do_cadastro`, dono 23/10/2026: a SPE
+distribui lucro para a empresa sócia, que é conta do PAINEL, e ela "não
+apareceu") tem dois grupos, cada um em ordem alfabética: primeiro as
+PESSOAS do cadastro da aba Aportes (sem conta no ERP, ou aportador da aba
+Regras; sem cara de empresa), depois as EMPRESAS do cadastro e as contas do
+painel, menos a própria origem (a lista muda quando a origem muda). A
+"cara de empresa" (LTDA, SPE, HOLDING…) só ORDENA, não tira ninguém — o
+filtro de 22/10 (commit e55fdb3) tirava justamente a empresa sócia. A conta
+que está no painel E no cadastro (pelo nome, nome oficial ou CONTA do ERP,
+`decisoes.cadastro_da_conta`) aparece UMA vez, pelo rótulo do painel: é ele
+que a tela e o SUMIF do Excel somam no destino. A subconta de investidor
+nunca entra. `nova_distribuicao` recusa a própria origem e troca a conta do
+painel escrita com outra caixa pelo rótulo exato (o SUMIF ignora
+maiúsculas; a tela não).
+
+A distribuição SAI da origem (`AporteDaConta.distribui`: soma no mínimo e
+tira do saldo final); **para outra conta do painel ela também ENTRA no
+destino** (`entra_a_mao`, como uma transferência), senão o painel fecharia
+errado. Vai para a seção «À MÃO» do Excel DEPOIS dos movimentos (B origem,
+C quem recebe, H valor: o E do Painel a soma; o M só acha linha quando quem
+recebe é conta do painel — e aí a tela também soma) e conta no limite de 20
+linhas. O HTML a mostra de → para como os outros movimentos. O "Mandar para
+a aba Aportes" a leva como **Distribuição de Lucro**, com o modo do cadastro
+(sócio sem conta → Só pagamento; as duas pontas com conta → Pagamento +
+Recebimento). Conta do painel casa no cadastro pelo nome e, se não achar,
+pela CONTA do ERP do cadastro (`para_aportes._da_conta_no_cadastro`, um só
+candidato). Pendências claras: origem no cadastro SEM conta do ERP (a
+distribuição sai dela, e "Só recebimento" lançaria só a entrada) e destino
+que é conta do painel (`operacoes(contas_do_painel=)`) SEM conta do ERP no
+cadastro (o dinheiro entra nela, e "Só pagamento" lançaria só a saída).
+Destino conta do painel sem saldo do sistema ganha o aviso de sem saldo,
+como a origem. O mesmo par no dia vira UMA operação somada, com chave
 própria de "já mandado" (`para_aportes.chave_da_distribuicao`).
 
 **Aportador composto na aba Regras** ("Fulano/Beltrano"): nunca se casa pelo

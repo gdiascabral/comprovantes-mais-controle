@@ -252,30 +252,127 @@ def test_distribuicoes_validas_sao_as_que_a_tela_soma():
     assert dc.distribuicoes_validas(dist, ROTULOS) == [dist[0]]
 
 
-def test_socios_do_cadastro_tira_subconta_de_investidor_e_conta_do_painel():
+def test_socios_do_cadastro_tira_subconta_de_investidor_e_junta_a_mesma_conta():
     entidades = {"SOCIO FICTICIO A": {}, "INVESTIDOR SUBCONTA 44444-4": {}, "Mae - Banco": {},
                  "HOLDING FICTICIA": {}}
-    assert dc.socios_do_cadastro(entidades, ROTULOS) == ["SOCIO FICTICIO A"]
-    assert dc.socios_do_cadastro(None, ROTULOS) == []
+    # Pessoas primeiro; depois empresas e contas do painel, sem repetir a
+    # conta que está no cadastro e no painel (fica o rótulo do painel).
+    assert dc.socios_do_cadastro(entidades, ROTULOS) == [
+        "SOCIO FICTICIO A", "Filha Um - Banco", "HOLDING FICTICIA", "Mae - Banco"]
+    assert dc.socios_do_cadastro(None, ROTULOS) == ["Filha Um - Banco", "Mae - Banco"]
 
 
-def test_socios_do_cadastro_so_pessoas_e_aportadores_nunca_empresas():
-    """Revisão geral de 22/10/2026, achado 7: a lista "Para" oferecia o
-    cadastro inteiro, e dava para "distribuir lucro" para outra empresa."""
-    entidades = {
-        "SOCIO FICTICIO A": {"nome_oficial": "SOCIO FICTICIO A", "conta": None},
-        "PESSOA COM CONTA": {"nome_oficial": "PESSOA COM CONTA", "conta": "PESSOA - BANCO"},
-        "EMPRESA BETA - BANCO": {"nome_oficial": "EMPRESA BETA LTDA", "conta": "EMPRESA BETA - BANCO"},
-        "EMPRESA GAMA": {"nome_oficial": "EMPRESA GAMA SPE LTDA", "conta": None},
-        "HOLDING FICTICIA": {"nome_oficial": "HOLDING FICTICIA SA", "conta": "HOLDING - BANCO"},
-        "ALFA PARTICIPACOES": {"nome_oficial": "ALFA PARTICIPAÇÕES", "conta": None},
-    }
-    # Sem conta no ERP e sem cara de empresa: pessoa.
-    assert dc.socios_do_cadastro(entidades, ROTULOS) == ["SOCIO FICTICIO A"]
-    # Aportador da aba Regras entra mesmo com conta — se não tiver cara de empresa.
-    assert dc.socios_do_cadastro(
-        entidades, ROTULOS, aportadores=["Pessoa com Conta", "Empresa Beta - Banco"]) == [
-        "PESSOA COM CONTA", "SOCIO FICTICIO A"]
+#: O print do dono (23/10/2026), com nomes fictícios: a SPE distribui lucro
+#: para a empresa sócia, que é conta do PAINEL e está no cadastro com conta.
+ROTULOS_PRINT = ["Origem Spe - Sicoob", "Empresa Socia Eng - Inter", "Outra Conta - Banco"]
+ENTIDADES_PRINT = {
+    "SOCIO FICTICIO A": {"nome_oficial": "SOCIO FICTICIO A", "conta": None},
+    "SOCIA FICTICIA B": {"nome_oficial": "SOCIA FICTICIA B", "conta": None},
+    "PESSOA COM CONTA": {"nome_oficial": "PESSOA COM CONTA", "conta": "PESSOA - BANCO"},
+    "EMPRESA SOCIA ENG": {"nome_oficial": "EMPRESA SOCIA ENGENHARIA LTDA",
+                          "conta": "EMPRESA SOCIA ENG - INTER"},
+    "ORIGEM SPE - SICOOB": {"nome_oficial": "ORIGEM SPE LTDA", "conta": "ORIGEM SPE - SICOOB"},
+    "NOME DIFERENTE": {"nome_oficial": "NOME DIFERENTE LTDA", "conta": "OUTRA CONTA - BANCO"},
+    "EMPRESA GAMA": {"nome_oficial": "EMPRESA GAMA SPE LTDA", "conta": None},
+    "INVESTIDOR SUBCONTA 44444-4": {"nome_oficial": "INVESTIDOR SUBCONTA 44444-4",
+                                    "conta": "SUBCONTA 44.444-4"},
+}
+
+
+def test_socios_do_cadastro_tem_a_empresa_socia_que_e_conta_do_painel():
+    """Dono, 23/10/2026: "NAO APARECEU" a empresa sócia — o filtro de "cara
+    de empresa" e o de conta do painel a tiravam da lista "Para"."""
+    lista = dc.socios_do_cadastro(ENTIDADES_PRINT, ROTULOS_PRINT,
+                                  origem="Origem Spe - Sicoob")
+    assert lista == ["SOCIA FICTICIA B", "SOCIO FICTICIO A",
+                     "EMPRESA GAMA", "Empresa Socia Eng - Inter", "Outra Conta - Banco",
+                     "PESSOA COM CONTA"]
+    # A própria origem nunca, nem pelo nome do cadastro; subconta de investidor nunca.
+    assert not any("ORIGEM" in n.upper() or "INVESTIDOR" in n for n in lista)
+
+
+def test_socios_do_cadastro_aportador_com_conta_conta_como_pessoa():
+    lista = dc.socios_do_cadastro(ENTIDADES_PRINT, ROTULOS_PRINT,
+                                  aportadores=["Pessoa com Conta"], origem="Origem Spe - Sicoob")
+    assert lista[:3] == ["PESSOA COM CONTA", "SOCIA FICTICIA B", "SOCIO FICTICIO A"]
+
+
+def test_socios_sem_origem_lista_todas_as_contas_do_painel():
+    lista = dc.socios_do_cadastro(ENTIDADES_PRINT, ROTULOS_PRINT)
+    assert "Origem Spe - Sicoob" in lista and "ORIGEM SPE - SICOOB" not in lista
+
+
+def test_nova_distribuicao_para_conta_do_painel_e_aceita():
+    assert dc.nova_distribuicao("Mae - Banco", "Filha Um - Banco", "10,00", ROTULOS,
+                                ["Filha Um - Banco"]) == ("Mae - Banco", "Filha Um - Banco",
+                                                          D("10.00"))
+    # O SUMIF do Excel ignora maiúsculas: o texto vira o rótulo exato do painel.
+    feita = dc.nova_distribuicao("Mae - Banco", "FILHA UM - BANCO", "10,00", ROTULOS)
+    assert feita[1] == "Filha Um - Banco"
+
+
+def test_nova_distribuicao_para_a_propria_origem_e_recusada():
+    with pytest.raises(ValueError, match="origem"):
+        dc.nova_distribuicao("Mae - Banco", "mae - banco", "10,00", ROTULOS)
+
+
+def test_distribuicao_para_conta_do_painel_entra_no_destino():
+    saldos = {"Mae - Banco": D("1000.00"), "Filha Um - Banco": D("100.00")}
+    painel = ap.montar_aportes(saldos, {}, [], {},
+                               distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("300.00")),
+                                              ("Mae - Banco", "SOCIO FICTICIO A", D("50.00"))])
+    contas = {c.rotulo: c for c in painel.contas}
+    assert contas["Mae - Banco"].distribui == D("350.00")
+    assert contas["Mae - Banco"].saldo_final == D("650.00")
+    assert contas["Filha Um - Banco"].entra_a_mao == D("300.00")
+    assert contas["Filha Um - Banco"].saldo_final == D("400.00")
+
+
+def test_excel_e_html_levam_a_distribuicao_para_conta_do_painel():
+    from tela_do_dia import excel_do_dia as ex
+    dist = [("Mae - Banco", "Filha Um - Banco", D("300.00"))]
+    celulas = ex._celulas_a_mao([], set(ROTULOS), dist)
+    linha = ex.PRIMEIRA_LINHA_A_MAO
+    assert (celulas[f"B{linha}"], celulas[f"C{linha}"]) == ("Mae - Banco", "Filha Um - Banco")
+    assert dc.movimentos_do_dia([], dist) == [
+        {"de": "Mae - Banco", "para": "Filha Um - Banco", "tipo": "Distribuição de lucros",
+         "valor": D("300.00")}]
+
+
+def test_mandar_distribuicao_para_conta_do_painel_vai_com_as_duas_pernas():
+    envio = _envio(distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("300.00"))])
+    (op, chaves), = envio.itens
+    assert (op.pagador, op.recebedor, op.tipo, op.modo) == (
+        "MAE - BANCO", "FILHA UM - BANCO", "Distribuição de Lucro", "Pagamento + Recebimento")
+    assert chaves == [pa.chave_da_distribuicao("Mae - Banco", "Filha Um - Banco")]
+    # Já mandado: a mesma chave segura.
+    envio = _envio(distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("300.00"))],
+                   enviados={chaves[0]: D("300.00")})
+    assert envio.itens == [] and "já mandado" in envio.pendentes[0].motivo
+
+
+def test_mandar_casa_conta_do_painel_pela_conta_do_cadastro():
+    """Rótulo do painel que só bate com a CONTA do cadastro (o nome é outro)."""
+    (op, _), = _envio(distribuicoes=[("Mae - Banco", "Holding - Banco", D("10.00"))]).itens
+    assert op.recebedor == "HOLDING FICTICIA" and op.modo == "Pagamento + Recebimento"
+
+
+def test_mandar_para_conta_do_painel_sem_conta_no_cadastro_e_pendencia():
+    entidades = dict(ENTIDADES, **{"FILHA UM - BANCO": {"nome_oficial": "FILHA UM LTDA",
+                                                        "conta": None, "nome_descricao": None}})
+    envio = pa.operacoes({}, REGRAS, entidades, SUBCONTAS, HOJE,
+                         distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("10.00"))],
+                         contas_do_painel=ROTULOS)
+    assert envio.itens == []
+    (p,) = envio.pendentes
+    assert "sem a conta do ERP" in p.motivo and "FILHA UM - BANCO" in p.motivo
+
+
+def test_mandar_para_conta_do_painel_sem_saldo_vai_com_aviso():
+    envio = _envio(distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("10.00"))],
+                   sem_saldo={"Filha Um - Banco"})
+    (op, _), = envio.itens
+    assert envio.sem_saldo == [op] and envio.avisos[0].motivo == pa.MOTIVO_SEM_SALDO
 
 
 # ---------------------- revisão de dinheiro de 22/10/2026 (A4, A5) e geral

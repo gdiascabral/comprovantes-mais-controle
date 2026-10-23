@@ -240,6 +240,21 @@ def nome_no_cadastro(rotulo: str, entidades: dict) -> str | None:
     return pelo_numero[0] if len(pelo_numero) == 1 else None
 
 
+def _da_conta_no_cadastro(rotulo: str, entidades: dict) -> str | None:
+    """`nome_no_cadastro` e, se ele não achar, a conta do painel pela CONTA
+    do ERP no cadastro (o nome do cadastro pode ser outro) — um só candidato.
+    Só para a distribuição: as duas pontas dela podem ser contas do painel."""
+    achado = nome_no_cadastro(rotulo, entidades)
+    if achado is not None:
+        return achado
+    alvo = normalize_name(rotulo)
+    if not alvo:
+        return None
+    pela_conta = [n for n, d in entidades.items()
+                  if normalize_name((d or {}).get("conta") or "") == alvo]
+    return pela_conta[0] if len(pela_conta) == 1 else None
+
+
 def _tipo(tipo_regra: str) -> str:
     t = util.sem_acento(tipo_regra or "Aporte").casefold().strip()
     if t.startswith("aporte"):
@@ -285,14 +300,17 @@ def _ja_mandado(anterior, valor, fora_da_aba: bool = False) -> str:
 
 
 def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
-              sem_saldo=(), na_aba_aportes=None, distribuicoes=()) -> Envio:
+              sem_saldo=(), na_aba_aportes=None, distribuicoes=(),
+              contas_do_painel=()) -> Envio:
     """`enviados`: {chave_de_envio: valor mandado} do dia (um conjunto de
     chaves também serve, com o valor desconhecido). `sem_saldo`: rótulos das
     contas do dia cujo saldo o sistema não trouxe. `na_aba_aportes`: as
     operações que a aba Aportes tem AGORA na lista (None = não se sabe); o já
     mandado que não está mais lá ganha o recado `FORA_DA_ABA`.
-    `distribuicoes`: [(conta de origem, sócio do cadastro, valor)] feitas à
-    mão na tela."""
+    `distribuicoes`: [(conta de origem, quem recebe, valor)] feitas à mão
+    na tela; quem recebe é nome do cadastro ou OUTRA conta do painel
+    (`contas_do_painel`: os rótulos, para exigir a conta do ERP no cadastro
+    dela também — o dinheiro entra nela)."""
     if enviados is None:
         enviados = {}
     elif not isinstance(enviados, dict):
@@ -475,8 +493,8 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
     for (origem, socio), valor in somadas.items():
         rotulo = f"{socio} (distribuição de lucros)"
         chave = chave_da_distribuicao(origem, socio)
-        pagador = nome_no_cadastro(origem, entidades)
-        recebedor = socio if socio in entidades else nome_no_cadastro(socio, entidades)
+        pagador = _da_conta_no_cadastro(origem, entidades)
+        recebedor = socio if socio in entidades else _da_conta_no_cadastro(socio, entidades)
         if chave in enviados:
             la = ainda_na_aba(pagador, recebedor, data, na_aba_aportes)
             pendente(rotulo, origem, valor,
@@ -496,6 +514,16 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
                      "e a distribuição SAI dela — complete a conta no cadastro (aba "
                      "Aportes) e mande de novo")
             continue
+        destino_no_painel = any(socio.casefold() == r.casefold()
+                                for r in contas_do_painel or ())
+        if destino_no_painel and (entidades[recebedor] or {}).get("conta") is None:
+            # Conta do painel (a empresa sócia, dono 23/10/2026): o dinheiro
+            # ENTRA nela. "Só pagamento" lançaria só a saída da origem.
+            pendente(rotulo, origem, valor,
+                     f"{recebedor!r} está no cadastro da aba Aportes sem a conta do ERP, "
+                     "e a distribuição ENTRA nela — complete a conta no cadastro (aba "
+                     "Aportes) e mande de novo")
+            continue
         op = Operacao(data=data, pagador=pagador, recebedor=recebedor,
                       valor=como_dinheiro(valor), tipo="Distribuição de Lucro",
                       modo=_modo(pagador, recebedor, entidades))
@@ -505,7 +533,7 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
             continue
         envio.itens.append((op, [chave]))
         envio.valores[chave] = como_dinheiro(valor)
-        if origem in sem_saldo:
+        if origem in sem_saldo or socio in sem_saldo:
             envio.sem_saldo.append(op)
             aviso(rotulo, origem, valor, MOTIVO_SEM_SALDO)
     return envio
