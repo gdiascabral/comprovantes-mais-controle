@@ -337,11 +337,15 @@ def _primeira_linha(erro) -> str:
 
 def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
                log=print, progresso=lambda feitas, total: None,
-               lista: dict | None = None) -> list[Lido]:
+               lista: dict | None = None, ao_ler=None) -> list[Lido]:
     """Uma `Lido` por conta, NA ORDEM pedida; nenhuma some. Sessão caída e
     endereço mudado param a fila (as que faltavam levam o porquê); o resto
     falha só na conta. `lista` guarda a lista de contas DESTE login (uma
-    leitura por login); sem ela, cada chamada guarda a sua."""
+    leitura por login); sem ela, cada chamada guarda a sua.
+
+    `ao_ler(page, numero)` (Prova de saldos) roda logo depois de cada leitura
+    OK, com a conta ainda aberta; se falhar, a leitura continua valendo e o
+    porquê vai ao `log`."""
     exigir_medido()
     lista = {} if lista is None else lista
     vistos, fila = set(), []
@@ -384,6 +388,11 @@ def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
             formato_ruim_seguido = 0
             lidos.append(Lido(numero, valor, agora()))
             log(f"{numero}: lido")
+            if ao_ler is not None:
+                try:
+                    ao_ler(cli.page, numero)
+                except Exception as e:                       # noqa: BLE001
+                    log(f"{numero}: lido, mas o print não saiu — {_primeira_linha(e)}")
     progresso(len(fila), len(fila))
     return lidos
 
@@ -398,7 +407,8 @@ def _mesmas_contas(a, b) -> bool:
 
 def ler_em_dois_acessos(abrir, numeros, *, perguntar, agora=_dt.datetime.now,
                         parar=lambda: False, log=print,
-                        progresso=lambda feitas, total: None) -> list[Lido]:
+                        progresso=lambda feitas, total: None,
+                        ao_ler=None) -> list[Lido]:
     """`ler_contas` no login que o dono abrir e, se sobrar conta "não aparece
     neste login", no OUTRO acesso do Sicoob — só as que faltaram.
 
@@ -420,7 +430,7 @@ def ler_em_dois_acessos(abrir, numeros, *, perguntar, agora=_dt.datetime.now,
     with abrir() as cli:
         cli.aguardar_login()
         lidos = ler_contas(cli, numeros, agora=agora, parar=parar, log=log,
-                           progresso=progresso, lista=primeira)
+                           progresso=progresso, lista=primeira, ao_ler=ao_ler)
     faltam = [l.numero for l in lidos if l.motivo == FORA_DESTE_LOGIN]
     if not faltam or parar() or not perguntar(faltam):
         return lidos
@@ -437,7 +447,7 @@ def ler_em_dois_acessos(abrir, numeros, *, perguntar, agora=_dt.datetime.now,
                 segunda = [Lido(n, motivo=MESMO_ACESSO) for n in faltam]
             else:
                 segunda = ler_contas(cli, faltam, agora=agora, parar=parar, log=log,
-                                     progresso=progresso, lista=outra)
+                                     progresso=progresso, lista=outra, ao_ler=ao_ler)
         segunda = [replace(l, acesso=2, motivo=EM_NENHUM_ACESSO
                            if l.motivo == FORA_DESTE_LOGIN else l.motivo)
                    for l in segunda]

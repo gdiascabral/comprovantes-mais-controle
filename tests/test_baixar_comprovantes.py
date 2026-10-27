@@ -350,14 +350,14 @@ def test_so_pix_de_saida_entra():
 def test_o_codigo_do_pix_e_o_endToEnd():
     """De graça no JSON, e é o mesmo identificador que a fase 3 do plano ia
     extrair de dentro do PDF para não baixar em dobro."""
-    pedido = inter.pedido_de_pdf_pix(_movimentacao(), "362674043")
+    pedido = inter.pedido_de_pdf_pix(_movimentacao(), "123456789")
     assert pedido["codigo"] == "E0041696820260828"
-    assert pedido["contaCorrente"] == "362674043"
+    assert pedido["contaCorrente"] == "123456789"
     assert pedido["tipo"] == "PIX" and pedido["operacao"] == "PAGAMENTO_PIX"
 
 
 def test_sem_endToEnd_ou_sem_conta_nao_vira_pedido():
-    assert inter.pedido_de_pdf_pix(_movimentacao(e2e=""), "362674043") is None
+    assert inter.pedido_de_pdf_pix(_movimentacao(e2e=""), "123456789") is None
     assert inter.pedido_de_pdf_pix(_movimentacao(), "") is None
 
 

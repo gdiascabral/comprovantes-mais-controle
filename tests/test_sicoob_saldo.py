@@ -477,3 +477,37 @@ def test_chrome_que_volta_no_mesmo_acesso_nao_le_de_novo_e_diz_o_que_fazer(medid
     assert a.ok and not b.ok and b.motivo == S.MESMO_ACESSO and b.acesso == 2
     assert "botão Sair" in S.MESMO_ACESSO and "Reler Sicoob" in S.MESMO_ACESSO
     assert c2.trocas == [] and any(S.MESMO_ACESSO in r for r in registro)
+
+
+# ------------------------------------------------- Prova de saldos: ao_ler
+def test_ao_ler_tira_o_print_so_da_conta_lida(medido):
+    pagina = Pagina({"123456": ok("1.00"), "234567": {"status": 500, "corpo": "x"}})
+    cli = Cliente(pagina, ["12.345-6", "23.456-7"])
+    vistos = []
+    lidos = S.ler_contas(cli, ["12.345-6", "23.456-7"], agora=lambda: AGORA,
+                         ao_ler=lambda page, numero: vistos.append((page, numero, page.aberta)))
+    assert [l.ok for l in lidos] == [True, False]
+    assert vistos == [(pagina, "12.345-6", "12.345-6")]      # com a conta ABERTA
+
+
+def test_print_que_falha_nao_desfaz_a_leitura(medido):
+    pagina = Pagina({"123456": ok("1.00")})
+    cli = Cliente(pagina, ["12.345-6"])
+    registro = []
+
+    def quebra(page, numero):
+        raise RuntimeError("tela fechou")
+    [a] = S.ler_contas(cli, ["12.345-6"], agora=lambda: AGORA, log=registro.append,
+                       ao_ler=quebra)
+    assert a.ok and a.saldo == D("1.00")
+    assert any("print" in r and "tela fechou" in r for r in registro)
+
+
+def test_ao_ler_vale_tambem_no_outro_acesso(medido):
+    c1 = Cliente(Pagina({"123456": ok("1")}), ["12.345-6"])
+    c2 = Cliente(Pagina({"234567": ok("2")}), ["23.456-7"])
+    vistos = []
+    S.ler_em_dois_acessos(_Abrir(c1, c2), ["12.345-6", "23.456-7"],
+                          perguntar=lambda faltam: True, agora=lambda: AGORA,
+                          ao_ler=lambda page, numero: vistos.append(numero))
+    assert vistos == ["12.345-6", "23.456-7"]

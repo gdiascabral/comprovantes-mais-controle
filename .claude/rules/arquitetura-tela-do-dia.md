@@ -36,6 +36,11 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 | `saldo_sicoob.py` | passo 1: qual conta do Sicoob é cada linha (`agendamentos_sicoob.conta_sicoob`, o caminho da Remessa), o lido, a hora, o recado de falha, o JSON `DD MM - saldos do sicoob.json` |
 | `sicoob_na_tela.py` | o "Reler Sicoob" e a frase da hora: thread própria daemon, fila, botão pela regra dos botões da tela |
 | `agendamentos_na_tela.py` | o "Conferir agendamentos" do cartão 5: qual é o HTML do dia, as recusas, a thread própria e a pergunta do outro acesso; o motor é o da Remessa (`pagamentos_dia/conferir_agendamentos.py`) |
+| `prova_saldos.py` | Prova de saldos: quais contas Sicoob/Inter do painel entram (Sicoob por `saldo_sicoob.contas_do_painel`; Inter por `contas_mc` × `contas_inter.json`, só empresa com UM login), ✅/❌/⚠ em centavos, células e nomes de arquivo |
+| `prova_pdf.py` | o PDF da prova com o Pillow do exe: resumo paginado (18 linhas) + página(s) por conta com os dois prints empilhados a 1:1 |
+| `prova_erp.py` | saldo atual do ERP (o caminho do Buscar) + print do cabeçalho com a linha da conta na grade `#/accounts`, numa aba do robô fechada no fim |
+| `prova_sicoob.py` | saldo do Sicoob com print pelo gancho `ao_ler` de `extratos_sicoob.saldo` |
+| `prova_na_tela.py` | o botão "📸 Prova de saldos": recusas, ERP na vaga do Anexar, bancos na thread `prova-saldos`, Parar, PDF e pasta |
 | `pagamentos.py` | passo 2: por linha do painel, o que VAI SAIR, o JÁ ENVIADO (soma no a pagar) e o que está BLOQUEADO; conta sem linha no painel vai para `fora`, com o motivo, em vez de sumir |
 | `aportes.py` | passo 3: mínimo, sugestão da aba Regras, conta-mãe primeiro com alerta forte, movimentos «À MÃO» no M (entra) e no E (sai) |
 | `para_aportes.py` | os aportes definidos viram `Operacao` da aba Aportes, com pendências (não foram) e avisos (foram, confira) |
@@ -178,6 +183,59 @@ dela, sem mudança de comportamento.
   "Pagamentos do dia — conferindo agendamentos" na mensagem
   (`agendamentos_na_tela.OCUPADO`). Thread daemon `sicoob-agendamentos-dia`,
   nunca a do ERP; `fechar` a interrompe.
+
+## Prova de saldos (27/10/2026)
+
+Botão "📸 Prova de saldos" no cartão Saldos (`prova_na_tela.ProvaNaTela`,
+criada logo abaixo da barra do "Reler Sicoob"). Spec:
+`docs/superpowers/specs/2026-10-27-prova-de-saldos-design.md`; plano:
+`docs/superpowers/plans/2026-10-27-prova-de-saldos.md`.
+
+- **Duas threads em paralelo**: o ERP vai para a vaga desta aba no Anexar
+  (`anx.submeter(ROTULO_ERP, prova_erp.ler, ..., dona=tela)`, com
+  `avisar_se_ocupado(aba=tela)` antes — o arquivo está em `_CHAMADORES` de
+  `tests/test_abas_em_paralelo.py`); Sicoob e Inter vão na `Thread` daemon
+  `prova-saldos`, que no fim espera o ERP (até `ESPERA_ERP`, em fatias que
+  olham o Parar), monta as linhas e grava
+  `Pagamentos do dia/Prova de saldos/Prova de saldos AAAA-MM-DD HHhMM.pdf`,
+  com os prints em `Pagamentos do dia/Prova de saldos/prints/AAAA-MM-DD HHhMM/`.
+  No fim o Explorer abre com o PDF selecionado (`explorer /select,`).
+- **Foco (exceção consciente à regra "nunca `new_page()` no meio de uma
+  tarefa")**: a aba do robô no ERP vem para a frente; por isso ela abre
+  PRIMEIRO — `prova_erp` avisa (`ao_abrir_aba`) e a thread dos bancos espera
+  (`_esperar_aba_do_erp`, até `ESPERA_ABA_ERP`, ou ERP pronto, ou Parar)
+  antes de abrir o Chrome do Sicoob ou do Inter.
+- **Rótulo** muda a cada fase (lendo o ERP, Sicoob conta N de T, QR da X,
+  Inter X lendo/lido/não lido, Esperando o ERP, Gerando o PDF); conta Inter
+  não lida (QR vencido inclusive) vai na hora ao Registro como ⚠.
+- **Parar**: corta a espera do QR do Inter e a do ERP (contas = "parado");
+  o login do Sicoob é um `wait_for_selector` só — o rótulo manda fechar o
+  Chrome dele.
+- **Sicoob casa pela LINHA**: `contas_da_prova` usa a posição em
+  `saldo_sicoob.contas_do_painel` (uma por linha, na ordem), nunca o
+  rótulo; falha inteira do Sicoob usa `recado_da_falha(e, depois=...)`
+  ("tente de novo a Prova de saldos").
+- **Conta incerta não bate**: falha, outra conta aberta no Inter, valor que
+  não chegou → ⚠ com o motivo; Parar → nenhum PDF. O print é só prova: o
+  número nunca sai de imagem; print que falha vira "Sem print: <porquê>".
+- **Trava**: a prova pergunta `outros_no_sicoob` (Extratos, Baixar
+  comprovantes — inclusive só Inter —, Reler Sicoob, Conferir agendamentos
+  das duas abas) antes de qualquer botão apagar; enquanto roda, entra no
+  `sicoob_ocupado` desta aba (que Extratos, Remessa e Baixar consultam) e no
+  `ComprovantesFrame.inter_ocupado` (Baixar com conta Inter marcada recusa).
+- **ERP**: saldo pelo `erp_do_dia.ler_saldos` (nunca login HTTP); print do
+  cabeçalho (`SEL_CABECALHO_GRADE`, a medir) unido à linha
+  `.MuiDataGrid-row[data-id=<UUID>]` em `#/accounts` (`recorte` → `clip`; sem
+  cabeçalho visível, só a linha), clicando só
+  "Exibir valores" e "próxima página", numa aba do robô
+  (`MCClient._nova_aba_do_robo`) fechada e retirada de `_minhas` no fim.
+- **PDF**: cores RGB do próprio `prova_pdf` (papel, não tema); situação em
+  palavra (BATE/NÃO BATE/NÃO LIDA), porque Arial/Segoe UI não têm ✅/❌.
+  Legível no celular: print nunca ampliado e só reduzido ao que passa da
+  `LARGURA_UTIL` (1634 px), ERP em cima e banco embaixo, bloco que não cabe
+  continua na página seguinte; JPEG `quality=95`, `subsampling=0`. Sem
+  FreeType no exe, cai na fonte de bitmap (`_escrever` troca o que não é
+  latin-1). O `--autoteste` (motor.py) só importa: não gera PDF.
 
 ## Leitura: duplicação conhecida
 

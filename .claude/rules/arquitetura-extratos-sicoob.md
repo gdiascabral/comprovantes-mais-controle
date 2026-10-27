@@ -94,3 +94,20 @@ paths:
   é por ela que o "Conferir agendamentos" da tela do dia oferece o outro
   acesso. `pendencias.py` e `baixar_comprovantes` ainda passam o número do
   cadastro direto.
+- **Prova de saldos (27/10/2026)**: `saldo.ler_contas` e
+  `saldo.ler_em_dois_acessos` aceitam `ao_ler(page, numero)`, chamado só
+  depois de uma leitura OK, com a conta ainda aberta; exceção dele vai ao
+  `log` e não desfaz a leitura. Quem usa é `tela_do_dia/prova_sicoob.py`
+  (print da Home). E `baixar_comprovantes/inter_saldo.py` lê o saldo ATUAL de
+  uma conta Inter no perfil dela (`inter_baixar.pasta_do_perfil`): espera o
+  QR (`esperar_login`), OUVE `GET cdpj-api…/cc/saldo/v3/` (`disponivel`) ou
+  repete o pedido de dentro da página, confere número E nome da empresa na
+  tela (`conferir_conta`) antes de usar o valor, e fotografa. O número da
+  conta na tela sai de `inter_baixar.numero_no_texto`, a MESMA regra de
+  `conta_da_pagina`. Correções da revisão final (27/10): SEM o número no
+  ERP, só a razão social INTEIRA (linha da tela igual, normalizada) confere
+  — nome curto não; a conta é conferida ANTES do print (`_ler_na_pagina`;
+  conta errada = sem print); `esperar_login(..., parar=)` corta a espera do
+  QR (padrão: nunca, o Baixar comprovantes não muda); `SELETOR_MOSTRAR_SALDO`
+  (Sicoob em `prova_sicoob`, Inter em `inter_saldo`) é o gancho do "olho"
+  do saldo mascarado — vazio = não clica, medir ao vivo.

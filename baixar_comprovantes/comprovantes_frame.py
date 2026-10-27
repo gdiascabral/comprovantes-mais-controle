@@ -322,11 +322,32 @@ class ComprovantesFrame(ttk.Frame):
             "os dois usariam o mesmo perfil do banco.")
         return True
 
+    #: Ligado pelo comprovantes_app.py: a Prova de saldos da tela do dia abre os
+    #: MESMOS perfis do Inter (um por conta). Sem ele, nada muda.
+    inter_ocupado = None
+
+    def _inter_em_uso(self) -> bool:
+        """Recusa com recado se há conta do Inter marcada e a Prova de saldos
+        está com os perfis do Inter."""
+        pergunta = getattr(self, "inter_ocupado", None)
+        if pergunta is None or not any(
+                c["marcada"] and c["banco"] == "Inter"
+                for c in self.linhas.values()):
+            return False
+        quem = pergunta()
+        if not quem:
+            return False
+        messagebox.showinfo(
+            "Baixar comprovantes",
+            f"O Chrome do Inter está em uso ({quem}). Espere terminar: os dois "
+            "usariam o mesmo perfil da conta.")
+        return True
+
     def _comecar(self):
         if self.worker and not self.worker.done():
             return
         # Antes de mexer em botão, pasta ou registro (ver `_sicoob_em_uso`).
-        if self._sicoob_em_uso():
+        if self._sicoob_em_uso() or self._inter_em_uso():
             return
         destino = self.v_pasta.get().strip()
         if not destino:

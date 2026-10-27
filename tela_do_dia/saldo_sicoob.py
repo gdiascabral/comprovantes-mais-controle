@@ -192,12 +192,14 @@ def pergunta_outro_acesso(faltam, contas) -> str:
             "outro acesso (QR Code) e o app lê só essas. É só leitura.")
 
 
-def recado_da_falha(erro) -> str:
+def recado_da_falha(erro, depois: str = "clique em Reler Sicoob.") -> str:
+    """`depois` = o que fazer quando a outra aba terminar (a Prova de saldos
+    não tem o botão Reler Sicoob)."""
     texto = str(erro or "").strip()
     if any(p in texto.lower() for p in _PERFIL_EM_USO):
         return ("O Chrome do Sicoob já está aberto por outra aba (Extratos, "
                 "Comprovantes ou Conferir agendamentos). Espere ela terminar e "
-                "clique em Reler Sicoob.")
+                + depois)
     primeira = (texto.splitlines() or [""])[0].strip()[:200]
     return f"Sicoob: {primeira or type(erro).__name__}"
 
