@@ -223,12 +223,28 @@ def enviados_apos(antes: dict, envio: Envio, mandadas, recusadas) -> dict:
     return novo
 
 
+#: O "(pessoa física)" que o cadastro da aba Aportes põe no fim do nome de
+#: exibição. A aba Regras escreve a pessoa sem ele ("Fulana"), e o aporte dela
+#: ficava de fora com "não achei no cadastro" (dono, 26/10/2026).
+_SUFIXO_ENTRE_PARENTESES = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def _nomes_da_entidade(nome: str, dado: dict) -> set:
+    """Os nomes NORMALIZADOS por que uma entidade é chamada: o de exibição, o
+    mesmo sem o parêntese do fim e o oficial. Sempre o nome INTEIRO — nunca
+    primeiro nome de outra pessoa."""
+    oficial = (dado or {}).get("nome_oficial") or ""
+    nomes = {normalize_name(nome), normalize_name(oficial),
+             normalize_name(_SUFIXO_ENTRE_PARENTESES.sub("", nome or ""))}
+    nomes.discard("")
+    return nomes
+
+
 def nome_no_cadastro(rotulo: str, entidades: dict) -> str | None:
     alvo = normalize_name(rotulo)
     if not alvo:
         return None
-    iguais = [n for n, d in entidades.items()
-              if alvo in (normalize_name(n), normalize_name((d or {}).get("nome_oficial") or ""))]
+    iguais = [n for n, d in entidades.items() if alvo in _nomes_da_entidade(n, d)]
     if len(iguais) == 1:
         return iguais[0]
     if iguais:
@@ -263,8 +279,7 @@ def casar_no_cadastro(rotulo: str, entidades: dict) -> Casamento:
     if not alvo:
         return Casamento(None, "")
     criterios = (
-        ("nome", lambda n, d: alvo in (normalize_name(n),
-                                       normalize_name(d.get("nome_oficial") or ""))),
+        ("nome", lambda n, d: alvo in _nomes_da_entidade(n, d)),
         ("conta", lambda n, d: normalize_name(d.get("conta") or "") == alvo),
     )
     for como, bate in criterios:
