@@ -269,6 +269,7 @@ def test_frame_junta_saldo_e_conferencia_numa_resposta_so():
     t = f.TelaDoDiaFrame.__new__(f.TelaDoDiaFrame)
     t.sicoob = NS(ocupado=lambda: None)
     t.agendamentos = NS(ocupado=lambda: None)
+    t.prova = NS(ocupado=lambda: None)
     assert t.sicoob_ocupado() is None
     t.agendamentos = NS(ocupado=lambda: m.OCUPADO)
     assert t.sicoob_ocupado() == m.OCUPADO

@@ -313,7 +313,11 @@ def _texto_da_tela(page) -> str:
         return ""                        # navegando: a página troca no meio
 
 
-def esperar_login(page, tempo: int = TEMPO_LOGIN, log=print) -> None:
+PARADO_NO_LOGIN = "parada pelo botão Parar antes de o QR ser lido"
+
+
+def esperar_login(page, tempo: int = TEMPO_LOGIN, log=print,
+                  parar=lambda: False) -> None:
     """Espera a pessoa escanear o QR, olhando a tela em vez de o teclado.
 
     O laço vai ao extrato e pergunta se ele carregou. Enquanto a tela ainda
@@ -323,11 +327,15 @@ def esperar_login(page, tempo: int = TEMPO_LOGIN, log=print) -> None:
 
     Levanta `InterFalhou` no estouro do tempo, com o que estava na tela: sem
     isso o recado seria "não deu", que não diz se foi o QR, a rede ou o site.
+    `parar()` verdadeiro (Prova de saldos) levanta `InterFalhou` na hora,
+    sem esperar o tempo todo.
     """
     log("Escaneie o QR code com o app do Inter. Eu sigo sozinho depois.")
     limite = time.time() + tempo
     ultima = ""
     while time.time() < limite:
+        if parar():
+            raise InterFalhou(PARADO_NO_LOGIN)
         texto = _texto_da_tela(page)
         if tela_diz(texto, MARCAS_DE_EXTRATO) and not tela_diz(texto, MARCAS_DE_LOGIN):
             log("Sessão aberta.")
@@ -1125,6 +1133,20 @@ async ([base, cabecalho]) => {
 """
 
 
+def numero_no_texto(texto: str) -> str:
+    """O número da conta num texto de tela do Inter: a primeira linha (das 40
+    primeiras) que é só de sete a dez dígitos. "" se não houver.
+
+    Sete a dez dígitos soltos numa linha é a forma da conta do Inter. Data e
+    valor não passam por aqui — têm barra e vírgula. Pura para a Prova de
+    saldos conferir a conta aberta sem abrir navegador no teste."""
+    for linha in (texto or "").splitlines()[:40]:
+        achado = re.fullmatch(r"\s*(\d{7,10})\s*", linha)
+        if achado:
+            return achado.group(1)
+    return ""
+
+
 def conta_da_pagina(page) -> str:
     """O número da conta, lido do cabeçalho da própria tela.
 
@@ -1140,13 +1162,7 @@ def conta_da_pagina(page) -> str:
         log.warning("lendo a tela do Inter para achar o número da conta",
                     exc_info=True)
         return ""
-    # Sete a dez dígitos soltos numa linha: é a forma da conta do Inter
-    # (362674043). Data e valor não passam por aqui — têm barra e vírgula.
-    for linha in texto.splitlines()[:40]:
-        achado = re.fullmatch(r"\s*(\d{7,10})\s*", linha)
-        if achado:
-            return achado.group(1)
-    return ""
+    return numero_no_texto(texto)
 
 
 def e_pix_enviado(mov: dict) -> bool:

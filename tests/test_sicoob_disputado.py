@@ -151,3 +151,25 @@ def test_comprovantes_sem_callback_comeca_como_antes(monkeypatch, tmp_path):
     aba._comecar()
     assert criadas == [aba._trabalhar]
     assert vistos == []
+
+
+# ---------------------------------------- Prova de saldos × Baixar do Inter
+PROVA = "Pagamentos do dia — prova de saldos"
+
+
+def test_baixar_inter_recusa_durante_a_prova(monkeypatch, tmp_path):
+    m, aba, criadas = _comprovantes(monkeypatch, tmp_path, bancos=("Inter",))
+    vistos = _avisos(monkeypatch, m)
+    aba.sicoob_ocupado = lambda: None
+    aba.inter_ocupado = lambda: PROVA
+    aba._comecar()
+    assert criadas == [] and aba.b_ir.estado == {}
+    assert len(vistos) == 1 and PROVA in vistos[0][1] and "Inter" in vistos[0][1]
+
+
+def test_baixar_so_sicoob_nao_olha_a_trava_do_inter(monkeypatch, tmp_path):
+    m, aba, criadas = _comprovantes(monkeypatch, tmp_path)
+    aba.sicoob_ocupado = lambda: None
+    aba.inter_ocupado = lambda: PROVA
+    aba._comecar()
+    assert criadas == [aba._trabalhar]

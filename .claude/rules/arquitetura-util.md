@@ -67,3 +67,11 @@ paths:
   `anexar/` em modo script — e era por isso que a sonda, rodando da raiz, não
   achava a senha do ERP. Falta um: o `ARQUIVO_LOG` (`log_anexos.csv`) do
   `anexar/config.py` ainda sai do `_AQUI`.
+- `util.fotografar(alvo, arquivo) -> str` (27/10/2026, Prova de saldos):
+  print de uma página ou pedaço de página do Playwright; "" = saiu, senão o
+  porquê numa linha. Nunca levanta — o print é prova, não leitura. Não
+  importa Playwright (duck typing), então o `util.py` continua sem tkinter e
+  sem navegador. Aceita `clip=` (recorte da página: o ERP fotografa o
+  cabeçalho da grade junto da linha).
+- `util.revelar(page, seletor) -> bool`: clica no "olho" de um valor
+  mascarado antes do print; seletor vazio não toca na página; nunca levanta.

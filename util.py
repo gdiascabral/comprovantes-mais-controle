@@ -104,6 +104,42 @@ def pasta_do_perfil(nome: str = "") -> Path:
     return pasta_base() / f".chrome_profile{'_' + limpo if limpo else ''}"
 
 
+def fotografar(alvo, arquivo, clip=None) -> str:
+    """Print de `alvo` (página ou pedaço de página do Playwright) em `arquivo`;
+    `clip` (só com página) = o retângulo da tela a guardar.
+
+    "" = saiu; senão, o porquê numa linha. NUNCA levanta: o print é prova, não
+    leitura (Prova de saldos, 27/10/2026) — sem ele a conta continua com o
+    saldo lido, e o PDF diz que faltou a imagem."""
+    try:
+        Path(arquivo).parent.mkdir(parents=True, exist_ok=True)
+        if clip is None:
+            alvo.screenshot(path=str(arquivo))
+        else:
+            alvo.screenshot(path=str(arquivo), clip=clip)
+    except Exception as e:                                   # noqa: BLE001
+        texto = (str(e).strip().splitlines() or [""])[0].strip()[:160]
+        return f"o print não saiu ({texto or type(e).__name__})"
+    return ""
+
+
+def revelar(page, seletor: str) -> bool:
+    """Clica no "olho" que mostra um valor mascarado antes do print (Prova de
+    saldos). `seletor` vazio = não toca na página. NUNCA levanta: sem o
+    clique, o print sai como está. True = clicou."""
+    if not seletor:
+        return False
+    try:
+        botao = page.locator(seletor).first
+        if not botao.count():
+            return False
+        botao.click()
+        page.wait_for_timeout(800)
+    except Exception:                                        # noqa: BLE001
+        return False
+    return True
+
+
 # --------------------------------------------------------------- diagnóstico
 
 _handler = None  # o UM RotatingFileHandler que TODO nome de logger compartilha
