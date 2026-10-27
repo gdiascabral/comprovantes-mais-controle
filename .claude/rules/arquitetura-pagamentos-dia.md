@@ -726,13 +726,37 @@ paths:
   Total próprio (`Gerados.total_movimentos`), fora do `total` das contas e
   do total geral da página; não são `Resultado.contas`, então não chegam à
   remessa. Sem movimentos, a seção fica escondida.
+  **A seção vem logo DEPOIS do quadro-resumo, antes das contas** (dono,
+  23/10/2026: no fim da página ele não a achou e pensou que os aportes não
+  tinham vindo), e o resumo ganha a linha "Movimentos do dia: N · R$ total ↓"
+  (`movResumo`), com link para ela e "(fora do total geral)" ao lado.
+  **Coluna VENC.** (dono, 23/10/2026, "já havia solicitado"): cada linha das
+  contas leva o vencimento do lançamento, entre TIPO e DADOS. A data é a de
+  `relatorio.data_do_item` (o `plannedDate`, o mesmo campo que filtra o
+  período e que o HTML de pessoa física já chama de vencimento), gravada pelo
+  `montar_registros` em `registro["vencimento"]` (ISO ou "") — então vale para
+  as duas abas, e a linha dividida em N boletos (`boletos_somados`, que copia
+  o registro) leva o mesmo vencimento. `contas_do_html_geral(resultado,
+  dia=)` a põe em `entries[].vencimento` ("dd/mm/aaaa" ou "") e
+  `entries[].vencido` (antes do `dia`; o `gravar` passa o PRIMEIRO dia do
+  período). Vencido sai em vermelho com "VENCIDO" embaixo; sem data (linha à
+  mão, `tela_do_dia.geracao.registro_a_mao`) mostra "—". A planilha Excel
+  NÃO ganhou a coluna: mexer nas colunas do `gerar_excel` desloca o TOTAL e
+  as larguras, e isso não é trivial. Testes: `tests/test_html_vencimento.py`.
   **Para remover**: apagar os dois módulos e o teste, o método
   `_gerar_html_pagamentos` e as linhas marcadas "HTML provisório" deste
   arquivo (import, botão `b_html` e as duas que o acendem e apagam), e este
   parágrafo.
 - `pagamentos_dia/agendamentos_sicoob.py` + `extratos_sicoob/pendencias.py` —
   **"Conferir agendamentos"** (dono, 15/10/2026), botão da barra de ações,
-  sempre aceso. Confronta um HTML dos pagamentos JÁ GRAVADO (escolhido num
+  sempre aceso. **Desde 23/10/2026 o que não é tela mora em
+  `pagamentos_dia/conferir_agendamentos.py`** (`separar`, `ler_no_banco`,
+  `abrir_janela`, recados), que a aba "Pagamentos do dia" também chama
+  (`tela_do_dia/agendamentos_na_tela.py`, ver `arquitetura-tela-do-dia.md`);
+  o frame da Remessa ficou só com a escolha do HTML e a thread, e o
+  comportamento dele não mudou (sem `perguntar`, a conta de outro acesso do
+  Sicoob continua "não conferida"). Guardado por
+  `tests/test_conferir_agendamentos.py`. Confronta um HTML dos pagamentos JÁ GRAVADO (escolhido num
   diálogo; sugere o desta sessão ou o `pagamentos_*.html` mais novo da pasta)
   com as **transações pendentes de assinatura** de cada conta Sicoob dele, e
   abre uma tabela por conta. **Só leitura no banco**: nada é assinado,

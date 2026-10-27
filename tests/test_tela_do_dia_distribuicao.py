@@ -252,30 +252,284 @@ def test_distribuicoes_validas_sao_as_que_a_tela_soma():
     assert dc.distribuicoes_validas(dist, ROTULOS) == [dist[0]]
 
 
-def test_socios_do_cadastro_tira_subconta_de_investidor_e_conta_do_painel():
+def test_socios_do_cadastro_tira_subconta_de_investidor_e_junta_a_mesma_conta():
     entidades = {"SOCIO FICTICIO A": {}, "INVESTIDOR SUBCONTA 44444-4": {}, "Mae - Banco": {},
                  "HOLDING FICTICIA": {}}
-    assert dc.socios_do_cadastro(entidades, ROTULOS) == ["SOCIO FICTICIO A"]
-    assert dc.socios_do_cadastro(None, ROTULOS) == []
+    # Pessoas primeiro; depois empresas e contas do painel, sem repetir a
+    # conta que está no cadastro e no painel (fica o rótulo do painel).
+    assert dc.socios_do_cadastro(entidades, ROTULOS) == [
+        "SOCIO FICTICIO A", "Filha Um - Banco", "HOLDING FICTICIA", "Mae - Banco"]
+    assert dc.socios_do_cadastro(None, ROTULOS) == ["Filha Um - Banco", "Mae - Banco"]
 
 
-def test_socios_do_cadastro_so_pessoas_e_aportadores_nunca_empresas():
-    """Revisão geral de 22/10/2026, achado 7: a lista "Para" oferecia o
-    cadastro inteiro, e dava para "distribuir lucro" para outra empresa."""
-    entidades = {
-        "SOCIO FICTICIO A": {"nome_oficial": "SOCIO FICTICIO A", "conta": None},
-        "PESSOA COM CONTA": {"nome_oficial": "PESSOA COM CONTA", "conta": "PESSOA - BANCO"},
-        "EMPRESA BETA - BANCO": {"nome_oficial": "EMPRESA BETA LTDA", "conta": "EMPRESA BETA - BANCO"},
-        "EMPRESA GAMA": {"nome_oficial": "EMPRESA GAMA SPE LTDA", "conta": None},
-        "HOLDING FICTICIA": {"nome_oficial": "HOLDING FICTICIA SA", "conta": "HOLDING - BANCO"},
-        "ALFA PARTICIPACOES": {"nome_oficial": "ALFA PARTICIPAÇÕES", "conta": None},
-    }
-    # Sem conta no ERP e sem cara de empresa: pessoa.
-    assert dc.socios_do_cadastro(entidades, ROTULOS) == ["SOCIO FICTICIO A"]
-    # Aportador da aba Regras entra mesmo com conta — se não tiver cara de empresa.
-    assert dc.socios_do_cadastro(
-        entidades, ROTULOS, aportadores=["Pessoa com Conta", "Empresa Beta - Banco"]) == [
-        "PESSOA COM CONTA", "SOCIO FICTICIO A"]
+#: O print do dono (23/10/2026), com nomes fictícios: a SPE distribui lucro
+#: para a empresa sócia, que é conta do PAINEL e está no cadastro com conta.
+ROTULOS_PRINT = ["Origem Spe - Sicoob", "Empresa Socia Eng - Inter", "Outra Conta - Banco"]
+ENTIDADES_PRINT = {
+    "SOCIO FICTICIO A": {"nome_oficial": "SOCIO FICTICIO A", "conta": None},
+    "SOCIA FICTICIA B": {"nome_oficial": "SOCIA FICTICIA B", "conta": None},
+    "PESSOA COM CONTA": {"nome_oficial": "PESSOA COM CONTA", "conta": "PESSOA - BANCO"},
+    "EMPRESA SOCIA ENG": {"nome_oficial": "EMPRESA SOCIA ENGENHARIA LTDA",
+                          "conta": "EMPRESA SOCIA ENG - INTER"},
+    "ORIGEM SPE - SICOOB": {"nome_oficial": "ORIGEM SPE LTDA", "conta": "ORIGEM SPE - SICOOB"},
+    "NOME DIFERENTE": {"nome_oficial": "NOME DIFERENTE LTDA", "conta": "OUTRA CONTA - BANCO"},
+    "EMPRESA GAMA": {"nome_oficial": "EMPRESA GAMA SPE LTDA", "conta": None},
+    "INVESTIDOR SUBCONTA 44444-4": {"nome_oficial": "INVESTIDOR SUBCONTA 44444-4",
+                                    "conta": "SUBCONTA 44.444-4"},
+}
+
+
+def test_socios_do_cadastro_tem_a_empresa_socia_que_e_conta_do_painel():
+    """Dono, 23/10/2026: "NAO APARECEU" a empresa sócia — o filtro de "cara
+    de empresa" e o de conta do painel a tiravam da lista "Para"."""
+    lista = dc.socios_do_cadastro(ENTIDADES_PRINT, ROTULOS_PRINT,
+                                  origem="Origem Spe - Sicoob")
+    assert lista == ["SOCIA FICTICIA B", "SOCIO FICTICIO A",
+                     "EMPRESA GAMA", "Empresa Socia Eng - Inter", "Outra Conta - Banco",
+                     "PESSOA COM CONTA"]
+    # A própria origem nunca, nem pelo nome do cadastro; subconta de investidor nunca.
+    assert not any("ORIGEM" in n.upper() or "INVESTIDOR" in n for n in lista)
+
+
+def test_socios_do_cadastro_aportador_com_conta_conta_como_pessoa():
+    lista = dc.socios_do_cadastro(ENTIDADES_PRINT, ROTULOS_PRINT,
+                                  aportadores=["Pessoa com Conta"], origem="Origem Spe - Sicoob")
+    assert lista[:3] == ["PESSOA COM CONTA", "SOCIA FICTICIA B", "SOCIO FICTICIO A"]
+
+
+def test_socios_sem_origem_lista_todas_as_contas_do_painel():
+    lista = dc.socios_do_cadastro(ENTIDADES_PRINT, ROTULOS_PRINT)
+    assert "Origem Spe - Sicoob" in lista and "ORIGEM SPE - SICOOB" not in lista
+
+
+def test_nova_distribuicao_para_conta_do_painel_e_aceita():
+    assert dc.nova_distribuicao("Mae - Banco", "Filha Um - Banco", "10,00", ROTULOS,
+                                ["Filha Um - Banco"]) == ("Mae - Banco", "Filha Um - Banco",
+                                                          D("10.00"))
+    # O SUMIF do Excel ignora maiúsculas: o texto vira o rótulo exato do painel.
+    feita = dc.nova_distribuicao("Mae - Banco", "FILHA UM - BANCO", "10,00", ROTULOS)
+    assert feita[1] == "Filha Um - Banco"
+
+
+def test_nova_distribuicao_para_a_propria_origem_e_recusada():
+    with pytest.raises(ValueError, match="origem"):
+        dc.nova_distribuicao("Mae - Banco", "mae - banco", "10,00", ROTULOS)
+
+
+def test_distribuicao_para_conta_do_painel_entra_no_destino():
+    saldos = {"Mae - Banco": D("1000.00"), "Filha Um - Banco": D("100.00")}
+    painel = ap.montar_aportes(saldos, {}, [], {},
+                               distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("300.00")),
+                                              ("Mae - Banco", "SOCIO FICTICIO A", D("50.00"))])
+    contas = {c.rotulo: c for c in painel.contas}
+    assert contas["Mae - Banco"].distribui == D("350.00")
+    assert contas["Mae - Banco"].saldo_final == D("650.00")
+    assert contas["Filha Um - Banco"].entra_a_mao == D("300.00")
+    assert contas["Filha Um - Banco"].saldo_final == D("400.00")
+
+
+def test_excel_e_html_levam_a_distribuicao_para_conta_do_painel():
+    from tela_do_dia import excel_do_dia as ex
+    dist = [("Mae - Banco", "Filha Um - Banco", D("300.00"))]
+    celulas = ex._celulas_a_mao([], set(ROTULOS), dist)
+    linha = ex.PRIMEIRA_LINHA_A_MAO
+    assert (celulas[f"B{linha}"], celulas[f"C{linha}"]) == ("Mae - Banco", "Filha Um - Banco")
+    assert dc.movimentos_do_dia([], dist) == [
+        {"de": "Mae - Banco", "para": "Filha Um - Banco", "tipo": "Distribuição de lucros",
+         "valor": D("300.00")}]
+
+
+def test_mandar_distribuicao_para_conta_do_painel_vai_com_as_duas_pernas():
+    envio = _envio(distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("300.00"))])
+    (op, chaves), = envio.itens
+    assert (op.pagador, op.recebedor, op.tipo, op.modo) == (
+        "MAE - BANCO", "FILHA UM - BANCO", "Distribuição de Lucro", "Pagamento + Recebimento")
+    assert chaves == [pa.chave_da_distribuicao("Mae - Banco", "Filha Um - Banco")]
+    # Já mandado: a mesma chave segura.
+    envio = _envio(distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("300.00"))],
+                   enviados={chaves[0]: D("300.00")})
+    assert envio.itens == [] and "já mandado" in envio.pendentes[0].motivo
+
+
+def test_mandar_casa_conta_do_painel_pela_conta_do_cadastro():
+    """Rótulo do painel que só bate com a CONTA do cadastro (o nome é outro)."""
+    (op, _), = _envio(distribuicoes=[("Mae - Banco", "Holding - Banco", D("10.00"))]).itens
+    assert op.recebedor == "HOLDING FICTICIA" and op.modo == "Pagamento + Recebimento"
+
+
+def test_mandar_para_conta_do_painel_sem_conta_no_cadastro_e_pendencia():
+    entidades = dict(ENTIDADES, **{"FILHA UM - BANCO": {"nome_oficial": "FILHA UM LTDA",
+                                                        "conta": None, "nome_descricao": None}})
+    envio = pa.operacoes({}, REGRAS, entidades, SUBCONTAS, HOJE,
+                         distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("10.00"))],
+                         contas_do_painel=ROTULOS)
+    assert envio.itens == []
+    (p,) = envio.pendentes
+    assert "sem a conta do ERP" in p.motivo and "FILHA UM - BANCO" in p.motivo
+
+
+def test_mandar_para_conta_do_painel_sem_saldo_vai_com_aviso():
+    envio = _envio(distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("10.00"))],
+                   sem_saldo={"Filha Um - Banco"})
+    (op, _), = envio.itens
+    assert envio.sem_saldo == [op] and envio.avisos[0].motivo == pa.MOTIVO_SEM_SALDO
+
+
+# ------------- revisão de dinheiro do 669eb6a (23/10/2026): casamento e dobro
+ENTIDADES_CASA = dict(ENTIDADES, **{
+    "INVESTIDOR SUBCONTA 30001-1": {"nome_oficial": "INVESTIDOR SUBCONTA 30001-1",
+                                    "conta": None, "nome_descricao": None},
+    "EMPRESA DELTA": {"nome_oficial": "EMPRESA DELTA LTDA", "conta": "DELTA - BANCO 30.002-2",
+                      "nome_descricao": None},
+    "NOME DIFERENTE": {"nome_oficial": "NOME DIFERENTE LTDA", "conta": "OUTRA CONTA - BANCO",
+                       "nome_descricao": None},
+    "PESSOA X": {"nome_oficial": "PESSOA X", "conta": "OUTRA CONTA - BANCO",
+                 "nome_descricao": None},
+    "CONTA X - BANCO": {"nome_oficial": "CONTA X LTDA", "conta": None, "nome_descricao": None},
+    "OUTRO NOME": {"nome_oficial": "OUTRO NOME LTDA", "conta": "CONTA X - BANCO",
+                   "nome_descricao": None},
+})
+SUB_DO_PAINEL = "Empresa Socia - Sicoob - Subconta 30001-1"
+
+
+def _envio_casa(destino, origem="Mae - Banco", **kw):
+    return pa.operacoes({}, REGRAS, ENTIDADES_CASA, SUBCONTAS, HOJE,
+                        distribuicoes=[(origem, destino, D("10.00"))], **kw)
+
+
+def test_casamento_nome_vence_conta_que_vence_numero():
+    assert pa.casar_no_cadastro("Conta X - Banco", ENTIDADES_CASA) == pa.Casamento(
+        "CONTA X - BANCO", "nome", ("CONTA X - BANCO",))
+    assert pa.casar_no_cadastro("Holding - Banco", ENTIDADES_CASA).como == "conta"
+    assert pa.casar_no_cadastro("Delta Nova 30002-2", ENTIDADES_CASA) == pa.Casamento(
+        "EMPRESA DELTA", "numero", ("EMPRESA DELTA",))
+    amb = pa.casar_no_cadastro("Outra Conta - Banco", ENTIDADES_CASA)
+    assert (amb.nome, amb.como, set(amb.candidatos)) == (
+        None, "ambiguo", {"NOME DIFERENTE", "PESSOA X"})
+
+
+def test_distribuicao_que_so_bate_pelo_numero_e_pendencia():
+    envio = _envio_casa("Delta Nova 30002-2")
+    assert envio.itens == []
+    assert "só o número bate" in envio.pendentes[0].motivo
+
+
+def test_distribuicao_para_subconta_de_investidor_e_pendencia():
+    for destino in ("INVESTIDOR SUBCONTA 30001-1", SUB_DO_PAINEL):
+        envio = _envio_casa(destino)
+        assert envio.itens == [], destino
+        assert "subconta de investidor" in envio.pendentes[0].motivo, destino
+
+
+def test_distribuicao_ambigua_no_cadastro_e_pendencia():
+    envio = _envio_casa("Outra Conta - Banco")
+    assert envio.itens == []
+    motivo = envio.pendentes[0].motivo
+    assert "mais de um" in motivo and "NOME DIFERENTE" in motivo and "PESSOA X" in motivo
+
+
+def test_lista_para_tira_a_subconta_de_investidor_do_painel_pelo_numero():
+    lista = dc.socios_do_cadastro(ENTIDADES_CASA, ["Mae - Banco", SUB_DO_PAINEL],
+                                  origem="Mae - Banco")
+    assert SUB_DO_PAINEL not in lista
+    assert not any(n.startswith("INVESTIDOR") for n in lista)
+
+
+def test_lista_para_com_conta_ambigua_mostra_os_dois_nomes():
+    lista = dc.socios_do_cadastro(ENTIDADES_CASA, ["Mae - Banco", "Outra Conta - Banco"],
+                                  origem="Mae - Banco")
+    assert {"NOME DIFERENTE", "PESSOA X", "Outra Conta - Banco"} <= set(lista)
+
+
+def test_lista_para_esconde_so_quem_casou_pelo_nome():
+    lista = dc.socios_do_cadastro(ENTIDADES_CASA, ["Mae - Banco", "Conta X - Banco"],
+                                  origem="Mae - Banco")
+    assert "Conta X - Banco" in lista and "CONTA X - BANCO" not in lista
+    assert "OUTRO NOME" in lista
+
+
+REGRAS_DIST = [Regra("Filha Um - Banco", "Mae - Banco", None, "Distribuição", True, linha=3)]
+DEFINIDOS_DIST = {("Filha Um - Banco", "Mae - Banco"): D("300.00")}
+
+
+def test_nova_distribuicao_recusa_o_par_que_ja_vem_da_aba_regras():
+    with pytest.raises(ValueError, match=r"já vem da aba Regras \(R\$ 300,00\)"):
+        dc.nova_distribuicao("Mae - Banco", "Filha Um - Banco", "10,00", ROTULOS,
+                             definidos=DEFINIDOS_DIST, regras=REGRAS_DIST)
+    # Sem valor definido na Regras, ou outro par: segue.
+    assert dc.nova_distribuicao("Mae - Banco", "Filha Um - Banco", "10,00", ROTULOS,
+                                definidos={}, regras=REGRAS_DIST)[2] == D("10.00")
+
+
+def test_envio_nao_manda_a_mao_o_par_que_ja_vem_da_aba_regras():
+    envio = pa.operacoes(DEFINIDOS_DIST, REGRAS_DIST, ENTIDADES, SUBCONTAS, HOJE,
+                         distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("300.00"))])
+    chave = pa.chave_da_distribuicao("Mae - Banco", "Filha Um - Banco")
+    assert all(chave not in chaves for _op, chaves in envio.itens)
+    assert any("aba Regras" in p.motivo and "distribuição de lucros" in p.destino
+               for p in envio.pendentes)
+
+
+def test_regras_depois_da_mao_ja_mandada_e_pendencia():
+    """Re-revisão do 8f9f2b7: mandada À MÃO e depois posta na aba Regras (mesmo
+    par, tipo Distribuição) ia duas vezes."""
+    chave = pa.chave_da_distribuicao("Mae - Banco", "Filha Um - Banco")
+    envio = pa.operacoes(DEFINIDOS_DIST, REGRAS_DIST, ENTIDADES, SUBCONTAS, HOJE,
+                         enviados={chave: D("300.00")})
+    assert envio.itens == []
+    (p,) = envio.pendentes
+    assert "já mandado à mão hoje (R$ 300,00)" in p.motivo
+
+
+def test_mao_ja_mandada_diz_ja_mandado_antes_de_aba_regras():
+    chave = pa.chave_da_distribuicao("Mae - Banco", "Filha Um - Banco")
+    envio = pa.operacoes(DEFINIDOS_DIST, REGRAS_DIST, ENTIDADES, SUBCONTAS, HOJE,
+                         enviados={chave: D("300.00")},
+                         distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("300.00"))])
+    (da_mao,) = [p for p in envio.pendentes if "distribuição de lucros" in p.destino]
+    assert da_mao.motivo.startswith("já mandado")
+
+
+def test_painel_avisa_distribuicao_em_dobro():
+    saldos = {"Mae - Banco": D("1000.00"), "Filha Um - Banco": D("0.00")}
+    painel = ap.montar_aportes(saldos, {}, REGRAS_DIST, DEFINIDOS_DIST,
+                               distribuicoes=[("Mae - Banco", "Filha Um - Banco", D("10.00"))])
+    assert any("distribuição em dobro" in f.casefold() and "remova uma" in f
+               for _t, f in painel.alertas)
+    sem = ap.montar_aportes(saldos, {}, REGRAS_DIST, DEFINIDOS_DIST)
+    assert not any("dobro" in f for _t, f in sem.alertas)
+
+
+ENTIDADES_INV44 = dict(ENTIDADES, **{
+    "INVESTIDOR SUBCONTA 44444-4": {"nome_oficial": "INVESTIDOR SUBCONTA 44444-4",
+                                    "conta": None, "nome_descricao": None}})
+
+
+def test_destino_cuja_conta_e_de_subconta_de_investidor_e_pendencia():
+    assert pa.numero_de_subconta_de_investidor("Filha Dois - Banco", ENTIDADES_INV44) == "44444-4"
+    assert pa.numero_de_subconta_de_investidor("Filha Um - Banco", ENTIDADES_INV44) == ""
+    envio = pa.operacoes({}, REGRAS, ENTIDADES_INV44, SUBCONTAS, HOJE,
+                         distribuicoes=[("Mae - Banco", "Filha Dois - Banco", D("10.00"))])
+    assert envio.itens == []
+    assert "subconta de investidor" in envio.pendentes[0].motivo
+    lista = dc.socios_do_cadastro(ENTIDADES_INV44, ["Mae - Banco", "Filha Dois - Banco"],
+                                  origem="Mae - Banco")
+    assert "Filha Dois - Banco" not in lista and "FILHA DOIS - BANCO" not in lista
+
+
+REGRAS_HOLD = [Regra("Holding - Banco", "Mae - Banco", None, "Distribuição", True, linha=4)]
+DEFINIDOS_HOLD = {("Holding - Banco", "Mae - Banco"): D("50.00")}
+
+
+def test_par_da_aba_regras_casa_pelo_cadastro_resolvido():
+    """O rótulo do painel e o nome do cadastro são a MESMA conta."""
+    envio = pa.operacoes(DEFINIDOS_HOLD, REGRAS_HOLD, ENTIDADES, SUBCONTAS, HOJE,
+                         distribuicoes=[("Mae - Banco", "HOLDING FICTICIA", D("50.00"))])
+    (da_mao,) = [p for p in envio.pendentes if "distribuição de lucros" in p.destino]
+    assert "aba Regras" in da_mao.motivo
+    with pytest.raises(ValueError, match="aba Regras"):
+        dc.nova_distribuicao("Mae - Banco", "HOLDING FICTICIA", "50,00", ROTULOS,
+                             definidos=DEFINIDOS_HOLD, regras=REGRAS_HOLD, entidades=ENTIDADES)
 
 
 # ---------------------- revisão de dinheiro de 22/10/2026 (A4, A5) e geral

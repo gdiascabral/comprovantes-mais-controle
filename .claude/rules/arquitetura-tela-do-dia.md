@@ -35,6 +35,7 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 | `saldos.py` | passo 1: sistema × banco por conta; o ajuste guarda o original e acusa quando o ERP mudou depois dele; saldo do dia = banco (digitado, senão lido do Sicoob), senão sistema; `nota_banco` diz por que o Sicoob não foi lido e `banco_mudou` acusa o lido que mudou depois do ajuste |
 | `saldo_sicoob.py` | passo 1: qual conta do Sicoob é cada linha (`agendamentos_sicoob.conta_sicoob`, o caminho da Remessa), o lido, a hora, o recado de falha, o JSON `DD MM - saldos do sicoob.json` |
 | `sicoob_na_tela.py` | o "Reler Sicoob" e a frase da hora: thread própria daemon, fila, botão pela regra dos botões da tela |
+| `agendamentos_na_tela.py` | o "Conferir agendamentos" do cartão 5: qual é o HTML do dia, as recusas, a thread própria e a pergunta do outro acesso; o motor é o da Remessa (`pagamentos_dia/conferir_agendamentos.py`) |
 | `pagamentos.py` | passo 2: por linha do painel, o que VAI SAIR, o JÁ ENVIADO (soma no a pagar) e o que está BLOQUEADO; conta sem linha no painel vai para `fora`, com o motivo, em vez de sumir |
 | `aportes.py` | passo 3: mínimo, sugestão da aba Regras, conta-mãe primeiro com alerta forte, movimentos «À MÃO» no M (entra) e no E (sai) |
 | `para_aportes.py` | os aportes definidos viram `Operacao` da aba Aportes, com pendências (não foram) e avisos (foram, confira) |
@@ -133,7 +134,50 @@ fim do `_receber_leitura` (`ler_se_faltar`), `_ligar_botoes`/`_limpar`
   só quando há conta do Sicoob marcada) recusam enquanto esta aba lê, com o
   mesmo nome na mensagem — o `sicoob_ocupado` de cada uma é ligado no
   `comprovantes_app.py` e conferido antes de mexer em qualquer botão; sem ele
-  (testes antigos), nada muda (`tests/test_sicoob_disputado.py`).
+  (testes antigos), nada muda (`tests/test_sicoob_disputado.py`). Desde
+  23/10/2026 o que as outras abas perguntam é `TelaDoDiaFrame.sicoob_ocupado()`
+  — o saldo OU o "Conferir agendamentos" desta aba (ver abaixo); a barra
+  lateral também.
+
+## Conferir agendamentos (23/10/2026)
+
+Pedido do dono: "já acrescente o de verificar os agendamentos no pagamentos
+do dia". O cartão 5 ("Agendar (no banco)") tem o botão «🔎 Conferir
+agendamentos», sempre aceso (não depende da leitura do ERP nem da nuvem: só
+do HTML e do Sicoob) e apagado enquanto confere
+(`agendamentos_na_tela.ConferenciaNaTela`). A Remessa/Retorno continua com o
+dela, sem mudança de comportamento.
+
+- **O HTML é o do dia DESTA tela, nunca escolhido num diálogo**:
+  `<pasta base>/Pagamentos do dia/pagamentos_<período>.html`, o que o
+  «HTML dos pagamentos» do passo 4 grava (`html_do_dia`). O período é o da
+  leitura na tela; sem leitura (app recém-aberto), o dos campos DE/ATÉ pela
+  regra do Buscar (`periodo_do_html`). Sem o arquivo, o botão diz "Gere o
+  HTML do dia primeiro…" (`SEM_HTML`) e não abre nada. A pergunta antes de
+  abrir o Chrome diz o nome do HTML e a hora em que foi gravado — HTML
+  gerado antes de uma decisão do passo 2 é conferido como está; gere de novo.
+- **O motor é o da Remessa** (`pagamentos_dia/conferir_agendamentos.py`):
+  `separar` (as contas pelo caminho da remessa, as recusas "nenhuma do
+  Sicoob" e "fora por cadastro"), `ler_no_banco` (toda conta nasce "não
+  lida", contas do mesmo número juntas, só leitura) e `abrir_janela` (o
+  resumão com a marca "Conferido" em `<html>.conferido.json`). Nada de regra
+  de confronto nesta pasta (guarda em `tests/test_tela_do_dia_agendamentos.py`).
+- **Outro acesso do Sicoob**: conta "não aparece neste login" faz a tela
+  perguntar pela fila (padrão sim; fechar o app responde não) e o MESMO
+  Chrome do app abre de novo para o outro acesso (QR Code), lendo só as que
+  faltaram; volta no mesmo acesso → "saia do SicoobNet… e clique em Conferir
+  agendamentos de novo" (`conferir_agendamentos.MESMO_ACESSO`); em nenhum dos
+  dois, ou o 2º login que falha, deixa a conta VERMELHA com o porquê, sem
+  perder as do 1º. Só esta aba passa `perguntar`; na Remessa a conta de outro
+  acesso continua "não conferida".
+- **Quem espera quem** (`comprovantes_app.py`): a conferência recusa com os
+  Extratos, o Baixar comprovantes, o saldo do Sicoob DESTA aba ou o
+  "Conferir agendamentos" da Remessa rodando
+  (`agendamentos.outros_no_sicoob`); e o saldo desta aba, a Remessa, os
+  Extratos e o Baixar comprovantes recusam enquanto ela roda, com
+  "Pagamentos do dia — conferindo agendamentos" na mensagem
+  (`agendamentos_na_tela.OCUPADO`). Thread daemon `sicoob-agendamentos-dia`,
+  nunca a do ERP; `fechar` a interrompe.
 
 ## Leitura: duplicação conhecida
 
@@ -256,18 +300,66 @@ no arquivo de outro dia.
 
 O cartão "Movimentos à mão" tem três botões: aporte que entra na mãe,
 transferência entre contas e **distribuição de lucros** (conta do painel →
-sócio ou investidor do cadastro da aba Aportes, `decisoes.socios_do_cadastro`:
-só pessoas — sem conta no ERP ou aportador da aba Regras —, nunca nome com
-cara de empresa;
-`dia.distribuicoes`, chave `distribuicoes` do JSON do dia). A distribuição
-SAI da origem (`AporteDaConta.distribui`: soma no mínimo e tira do saldo
-final), vai para a seção «À MÃO» do Excel DEPOIS dos movimentos (B origem,
-C sócio, H valor: o E do Painel a soma; o M não acha linha com o nome do
-sócio) e conta no limite de 20 linhas. O "Mandar para a aba Aportes" a leva
-como **Distribuição de Lucro**, com o modo do cadastro (sócio sem conta →
-Só pagamento; origem no cadastro SEM conta do ERP é pendência — a
-distribuição sai dela, e "Só recebimento" lançaria só a entrada do sócio);
-o mesmo par no dia vira UMA operação somada, com chave
+quem recebe, `dia.distribuicoes`, chave `distribuicoes` do JSON do dia).
+**A lista "Para"** (`decisoes.socios_do_cadastro`, dono 23/10/2026: a SPE
+distribui lucro para a empresa sócia, que é conta do PAINEL, e ela "não
+apareceu") tem dois grupos, cada um em ordem alfabética: primeiro as
+PESSOAS do cadastro da aba Aportes (sem conta no ERP, ou aportador da aba
+Regras; sem cara de empresa), depois as EMPRESAS do cadastro e as contas do
+painel, menos a própria origem (a lista muda quando a origem muda). A
+"cara de empresa" (LTDA, SPE, HOLDING…) só ORDENA, não tira ninguém — o
+filtro de 22/10 (commit e55fdb3) tirava justamente a empresa sócia. A conta
+que está no painel E no cadastro aparece UMA vez, pelo rótulo do painel: é
+ele que a tela e o SUMIF do Excel somam no destino. **Lista e envio casam
+pela MESMA regra** (`para_aportes.casar_no_cadastro`, revisão de dinheiro de
+23/10/2026): nome ou nome oficial exatos, senão a conta do ERP exata, senão
+o número da conta como último recurso — um candidato só no critério que
+achou alguém; dois é "ambíguo" e não desce para o seguinte. Só o casamento
+por nome ou conta esconde o nome do cadastro: ambíguo (ex.: uma pessoa que
+divide a conta do ERP com a conta do painel) ou só pelo número deixa os
+nomes à vista. A subconta de investidor nunca entra, nem a conta (do painel
+ou do cadastro) que é uma delas — pela função única
+`para_aportes.numero_de_subconta_de_investidor`, que olha o número no
+rótulo e na conta do ERP de quem ele casa no cadastro ("Empresa - Sicoob -
+Subconta 30001-1" × "INVESTIDOR SUBCONTA 30001-1"; a empresa cuja conta do
+ERP é a subconta dos investidores); a mesma função vira pendência no envio.
+`nova_distribuicao` recusa a própria origem, troca a conta do painel escrita
+com outra caixa pelo rótulo exato (o SUMIF ignora maiúsculas; a tela não) e
+recusa o par que a aba Regras já define como Distribuição com valor ("essa
+distribuição já vem da aba Regras (R$ X); ajuste lá" — à mão por cima seria
+o dobro no painel e no envio; `para_aportes.distribuicao_da_regras`, que
+compara o par pelo texto e pelos nomes RESOLVIDOS no cadastro,
+`mesmo_par`). **O par nos dois lugares** (gravado antes, ou posto na aba
+Regras depois) não é somado calado: o painel mostra o erro "Distribuição em
+dobro: origem → destino está à mão e na aba Regras — remova uma"
+(`montar_aportes`, no alto dos alertas). O Excel continua somando os dois,
+como a tela; o aviso é para o dono tirar um.
+
+A distribuição SAI da origem (`AporteDaConta.distribui`: soma no mínimo e
+tira do saldo final); **para outra conta do painel ela também ENTRA no
+destino** (`entra_a_mao`, como uma transferência), senão o painel fecharia
+errado. Vai para a seção «À MÃO» do Excel DEPOIS dos movimentos (B origem,
+C quem recebe, H valor: o E do Painel a soma; o M só acha linha quando quem
+recebe é conta do painel — e aí a tela também soma) e conta no limite de 20
+linhas. O HTML a mostra de → para como os outros movimentos. O "Mandar para
+a aba Aportes" a leva como **Distribuição de Lucro**, com o modo do cadastro
+(sócio sem conta → Só pagamento; as duas pontas com conta → Pagamento +
+Recebimento). Cada ponta casa pelo `casar_no_cadastro`, e vira pendência
+clara: ambígua ("mais de um no cadastro…", com os nomes), não achada,
+subconta de investidor ("distribuição de lucros não vai para subconta de
+investidor") ou que só bate pelo NÚMERO ("confira o cadastro: só o número
+bate"); o par que já vem da aba Regras também (a mesma recusa da janela,
+para o que já estava gravado) — mas o "já mandado" vem ANTES, para o recado
+dizer o que aconteceu. **Ao contrário também**: linha da aba Regras de tipo
+Distribuição cujo par já foi mandado À MÃO hoje (chave
+`chave_da_distribuicao`, comparada por `mesmo_par`) vira pendência "já
+mandado à mão hoje (R$ X) como distribuição de lucros". Pendências de
+cadastro: origem SEM conta do
+ERP (a distribuição sai dela, e "Só recebimento" lançaria só a entrada) e destino
+que é conta do painel (`operacoes(contas_do_painel=)`) SEM conta do ERP no
+cadastro (o dinheiro entra nela, e "Só pagamento" lançaria só a saída).
+Destino conta do painel sem saldo do sistema ganha o aviso de sem saldo,
+como a origem. O mesmo par no dia vira UMA operação somada, com chave
 própria de "já mandado" (`para_aportes.chave_da_distribuicao`).
 
 **Aportador composto na aba Regras** ("Fulano/Beltrano"): nunca se casa pelo
@@ -297,7 +389,8 @@ os mesmos do painel e do Excel, tipo pela regra — revisão geral de
 22/10/2026, achado 1: a transferência e o composto do print ficavam fora) e
 os à mão válidos, sem repetir: à mão com o mesmo de, para e valor de uma
 linha da Regras sai (o "de fora" repete a regra cujo aportador não é conta
-do painel).
+do painel). A seção fica logo depois do quadro-resumo, com uma linha
+no resumo que leva até ela (dono, 23/10/2026).
 
 ## Excel do dia: zero, e não vazio
 

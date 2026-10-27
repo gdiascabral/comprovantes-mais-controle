@@ -2364,6 +2364,10 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # paginação. É a segunda chave da ordem das linhas: o dono confere
             # o HTML e a planilha com o sistema aberto ao lado.
             "ordem": ordem,
+            # O vencimento do lançamento (`data_do_item`: o `plannedDate`, o
+            # mesmo que filtra o período), ISO ou "" — para a coluna VENC. do
+            # HTML dos pagamentos (dono, 23/10/2026). A planilha não o lê.
+            "vencimento": venc_item.isoformat() if venc_item else "",
             # Não vão para a planilha: são para a remessa (`remessa_dia.py`).
             # O `id` é a única volta do arquivo de retorno até o lançamento,
             # e `parcial` decide se o título ainda pode ir como boleto — o

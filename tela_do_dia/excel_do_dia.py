@@ -62,8 +62,9 @@ def _celulas_a_mao(a_mao, rotulos_do_painel, distribuicoes=()) -> dict[str, obje
     """B/C/H54..73 da seção «À MÃO». Ignora valor <= 0 (como a tela).
 
     As distribuições de lucros (item A) vêm DEPOIS dos movimentos, com a conta
-    de origem em B e o sócio em C: o E do Painel (SUMIF da origem) as soma, e o
-    M (SUMIF do destino) não acha linha do painel com o nome do sócio."""
+    de origem em B e quem recebe em C: o E do Painel (SUMIF da origem) as soma;
+    o M (SUMIF do destino) só acha linha quando quem recebe é outra conta do
+    painel (a empresa sócia, 23/10/2026) — e aí a tela também a soma nela."""
     movimentos = []
     for origem, destino, valor in (a_mao or ()):
         if not isinstance(valor, Decimal):

@@ -341,11 +341,20 @@ def main():
     # nome de quem está usando o Sicoob (`LeitorSicoob.OCUPADO`). O Baixar
     # comprovantes também abre o perfil do Sicoob; a aba dele (`aba_bxc`) só
     # nasce mais abaixo, mas as perguntas só correm depois da janela montada.
+    def _remessa_conferindo():
+        return ("Remessa/Retorno — Conferir agendamentos"
+                if aba_pag._agendamentos is not None and aba_pag._agendamentos.is_alive()
+                else None)
+
     aba_dia.sicoob.outros_no_sicoob = lambda: aba_ext.ocupado() or (
         _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
-        "Remessa/Retorno — Conferir agendamentos"
-        if aba_pag._agendamentos is not None and aba_pag._agendamentos.is_alive() else None)
-    aba_pag.sicoob_ocupado = lambda: aba_ext.ocupado() or aba_dia.sicoob.ocupado() or (
+        aba_dia.agendamentos.ocupado()) or _remessa_conferindo()
+    # O "Conferir agendamentos" da própria tela do dia (dono, 23/10/2026) abre o
+    # MESMO perfil: pergunta a todos, inclusive ao saldo da própria aba.
+    aba_dia.agendamentos.outros_no_sicoob = lambda: aba_ext.ocupado() or (
+        _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
+        aba_dia.sicoob.ocupado()) or _remessa_conferindo()
+    aba_pag.sicoob_ocupado = lambda: aba_ext.ocupado() or aba_dia.sicoob_ocupado() or (
         _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc))
     # Controle de aportes divide navegador e thread do Anexar: lê o MESMO ERP
     # (só GET). Só o admin edita abertura, proporção e apontamentos — a RLS
@@ -370,8 +379,8 @@ def main():
     aba_bxc = ComprovantesFrame(conteudo, _mapa_das_contas)
     # O contrário da pergunta da tela do dia: Extratos e Baixar comprovantes
     # recusam começar enquanto ela lê o saldo no MESMO perfil do Sicoob.
-    aba_ext.sicoob_ocupado = aba_dia.sicoob.ocupado
-    aba_bxc.sicoob_ocupado = aba_dia.sicoob.ocupado
+    aba_ext.sicoob_ocupado = aba_dia.sicoob_ocupado
+    aba_bxc.sicoob_ocupado = aba_dia.sicoob_ocupado
     # "anx2" ANTES de "anx": o `_sair` fecha na ordem deste dicionário, e a
     # cópia precisa soltar a thread que espera na janela de dúvidas dela antes
     # de o dono fechar o Chrome.
@@ -675,7 +684,7 @@ def main():
                          aba_anx.ocupado()),
                 # ...o do Sicoob, que é processo e login à parte...
                 lambda: ("ext", aba_ext.ocupado()),
-                lambda: ("dia", aba_dia.sicoob.ocupado()),
+                lambda: ("dia", aba_dia.sicoob_ocupado()),
                 # ...e o do portal do escritório, pelo mesmo motivo
                 lambda: ("acs", aba_acs.ocupado()),
                 # A Separar não tem navegador nenhum — o trabalho dela é OCR e

@@ -44,6 +44,7 @@ from . import lista_diretor as ldr
 from . import nuvem_do_dia, para_aportes, passo2, passo67, recados
 from . import pagamentos as pg
 from . import saldos as sd
+from .agendamentos_na_tela import ConferenciaNaTela
 from .sicoob_na_tela import LeitorSicoob
 from .valores import brl, de_float, ler_valor_editado
 
@@ -304,8 +305,14 @@ class TelaDoDiaFrame(ttk.Frame):
 
         c5 = widgets.Cartao(corpo, "Agendar (no banco)", 5)
         c5.pack(fill="x", padx=PADX, pady=px((0, 12)))
-        self._ajuda(c5, "Agende no banco como sempre — isto fica fora do app. Depois, marque "
-                        "aqui embaixo o que agendou.")
+        self._ajuda(c5, "Agende no banco como sempre — isto fica fora do app. «Conferir "
+                        "agendamentos» confronta o que ficou pendente de assinatura no "
+                        "Sicoob com o HTML do dia (só leitura: nada é assinado). Depois, "
+                        "marque aqui embaixo o que agendou.")
+        # Dono, 23/10/2026: o mesmo "Conferir agendamentos" da Remessa/Retorno,
+        # contra o HTML do dia desta tela. Tudo dele mora em `agendamentos_na_tela`.
+        self.agendamentos = ConferenciaNaTela(c5, tela=self)
+        self.agendamentos.b_conferir.pack(anchor="w", pady=px((8, 0)))
 
         c6 = widgets.Cartao(corpo, "Marcar agendados", 6)
         c6.pack(fill="x", padx=PADX, pady=px((0, 12)))
@@ -548,6 +555,13 @@ class TelaDoDiaFrame(ttk.Frame):
         """O `_sair` do app chama `fechar` de toda aba: a leitura do Sicoob
         para entre uma conta e outra (a thread é daemon)."""
         self.sicoob.fechar()
+        self.agendamentos.fechar()
+
+    def sicoob_ocupado(self) -> str | None:
+        """Esta aba está com o Chrome do Sicoob? (o saldo OU a conferência dos
+        agendamentos). É o que as outras abas que abrem o mesmo perfil
+        perguntam, ligado no `comprovantes_app.py`."""
+        return self.sicoob.ocupado() or self.agendamentos.ocupado()
 
     def _parar_click(self):
         self._parar.set()
@@ -1087,14 +1101,21 @@ class TelaDoDiaFrame(ttk.Frame):
         rotulos = self._rotulos_do_painel
         titulo = "Distribuição de lucros"
         entidades = getattr(self.aba_aportes, "entidades", None) or {}
-        # Quem recebe sai do cadastro da aba Aportes (o "Mandar" casa por ele);
-        # sem cadastro carregado, digita-se, e o Mandar avisa se não achar.
-        socios = dc.socios_do_cadastro(entidades, rotulos,
-                                       aportadores=[r.aportador for r in self.regras or ()])
+        # Quem recebe: pessoas e empresas do cadastro da aba Aportes (o
+        # "Mandar" casa por ele) e as outras contas do painel; sem cadastro
+        # carregado, as contas do painel ou digita-se, e o Mandar avisa se
+        # não achar. A lista muda com a origem (a própria origem sai).
+        aportadores = [r.aportador for r in self.regras or ()]
+
+        def lista_para(origem):
+            return dc.socios_do_cadastro(entidades, rotulos, aportadores=aportadores,
+                                         origem=origem)
+        socios = lista_para((self.aportes.mae or "") if self.aportes else "")
         jan, corpo = self._janela(titulo)
         ttk.Label(corpo, wraplength=px(440), justify="left",
-                  text=("Lucro que sai de uma conta do painel hoje para um sócio ou "
-                        "investidor. Sai da conta (entra no mínimo e no saldo final) e o "
+                  text=("Lucro que sai de uma conta do painel hoje para um sócio, "
+                        "investidor ou empresa sócia. Sai da conta (entra no mínimo e no "
+                        "saldo final); se quem recebe é conta do painel, entra nela. O "
                         "«Mandar para a aba Aportes» a leva como Distribuição de Lucro.")
                   ).pack(anchor="w")
         v_origem = tk.StringVar(value=(self.aportes.mae or "") if self.aportes else "")
@@ -1103,19 +1124,33 @@ class TelaDoDiaFrame(ttk.Frame):
         widgets.Campo(corpo, "Sai de", lambda p: ttk.Combobox(
             p, textvariable=v_origem, values=rotulos, state="readonly", width=46)
                       ).pack(anchor="w", pady=px((10, 0)))
-        widgets.Campo(corpo, "Para (sócio ou investidor)", lambda p: ttk.Combobox(
-            p, textvariable=v_socio, values=socios,
-            state="readonly" if socios else "normal", width=46)
+        caixa = {}
+
+        def criar_para(p):
+            caixa["para"] = ttk.Combobox(p, textvariable=v_socio, values=socios,
+                                         state="readonly" if entidades else "normal", width=46)
+            return caixa["para"]
+        widgets.Campo(corpo, "Para (sócio, investidor ou empresa)", criar_para
                       ).pack(anchor="w", pady=px((10, 0)))
+
+        def origem_mudou(*_a):
+            novos = lista_para(v_origem.get())
+            socios[:] = novos
+            caixa["para"].configure(values=novos)
+            if v_socio.get() not in novos:
+                v_socio.set("")
+        v_origem.trace_add("write", origem_mudou)
         widgets.Campo(corpo, "Valor R$", lambda p: ttk.Entry(p, textvariable=v_valor, width=18)
                       ).pack(anchor="w", pady=px((10, 0)))
         resposta = {}
 
         def aplicar(_e=None):
             try:
-                resposta["v"] = dc.nova_distribuicao(v_origem.get(), v_socio.get(),
-                                                     v_valor.get(), rotulos,
-                                                     socios if socios else None)
+                resposta["v"] = dc.nova_distribuicao(
+                    v_origem.get(), v_socio.get(), v_valor.get(), rotulos,
+                    socios if entidades else None,
+                    definidos=self.aportes.definidos_validos if self.aportes else None,
+                    regras=self.regras, entidades=entidades)
             except ValueError as e:
                 messagebox.showwarning(titulo, str(e), parent=jan)
                 return "break"
@@ -1902,7 +1937,8 @@ class TelaDoDiaFrame(ttk.Frame):
             sem_saldo=dc.contas_sem_saldo(self.saldos),
             na_aba_aportes=list(self.aba_aportes.operacoes),
             distribuicoes=dc.distribuicoes_validas(self.dia.distribuicoes,
-                                                   self._rotulos_do_painel))
+                                                   self._rotulos_do_painel),
+            contas_do_painel=self._rotulos_do_painel)
         # Pendência NÃO foi (bloqueia); aviso foi, mas pede conferência. "Já
         # mandado" se resolve na aba Aportes: mandar de novo daqui seria um
         # segundo aporte por cima do primeiro.

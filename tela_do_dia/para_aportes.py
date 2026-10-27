@@ -223,12 +223,28 @@ def enviados_apos(antes: dict, envio: Envio, mandadas, recusadas) -> dict:
     return novo
 
 
+#: O "(pessoa física)" que o cadastro da aba Aportes põe no fim do nome de
+#: exibição. A aba Regras escreve a pessoa sem ele ("Fulana"), e o aporte dela
+#: ficava de fora com "não achei no cadastro" (dono, 26/10/2026).
+_SUFIXO_ENTRE_PARENTESES = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def _nomes_da_entidade(nome: str, dado: dict) -> set:
+    """Os nomes NORMALIZADOS por que uma entidade é chamada: o de exibição, o
+    mesmo sem o parêntese do fim e o oficial. Sempre o nome INTEIRO — nunca
+    primeiro nome de outra pessoa."""
+    oficial = (dado or {}).get("nome_oficial") or ""
+    nomes = {normalize_name(nome), normalize_name(oficial),
+             normalize_name(_SUFIXO_ENTRE_PARENTESES.sub("", nome or ""))}
+    nomes.discard("")
+    return nomes
+
+
 def nome_no_cadastro(rotulo: str, entidades: dict) -> str | None:
     alvo = normalize_name(rotulo)
     if not alvo:
         return None
-    iguais = [n for n, d in entidades.items()
-              if alvo in (normalize_name(n), normalize_name((d or {}).get("nome_oficial") or ""))]
+    iguais = [n for n, d in entidades.items() if alvo in _nomes_da_entidade(n, d)]
     if len(iguais) == 1:
         return iguais[0]
     if iguais:
@@ -238,6 +254,134 @@ def nome_no_cadastro(rotulo: str, entidades: dict) -> str | None:
         return None
     pelo_numero = [n for n, d in entidades.items() if e_da_subconta(n, d or {}, numero)]
     return pelo_numero[0] if len(pelo_numero) == 1 else None
+
+
+@dataclass(frozen=True)
+class Casamento:
+    """Quem do cadastro da aba Aportes é um rótulo (conta do painel ou nome),
+    e por onde casou: "nome" (nome ou nome oficial), "conta" (a conta do ERP
+    do cadastro), "numero" (só o número da conta), "ambiguo" (mais de um no
+    primeiro critério que achou alguém; `nome` None) ou "" (ninguém)."""
+    nome: str | None
+    como: str
+    candidatos: tuple = ()
+
+
+def casar_no_cadastro(rotulo: str, entidades: dict) -> Casamento:
+    """A regra ÚNICA de casar uma conta do painel no cadastro, da lista "Para"
+    da distribuição (`decisoes.socios_do_cadastro`) e do envio dela (revisão
+    de dinheiro de 23/10/2026): nome ou nome oficial exatos, senão a conta do
+    ERP exata, senão o número da conta como ÚLTIMO recurso — sempre com um
+    candidato só no critério que achou alguém; mais de um é "ambiguo" e não
+    desce para o critério seguinte (`normalize_name`: sem acento, caixa ou
+    pontuação)."""
+    alvo = normalize_name(rotulo)
+    if not alvo:
+        return Casamento(None, "")
+    criterios = (
+        ("nome", lambda n, d: alvo in _nomes_da_entidade(n, d)),
+        ("conta", lambda n, d: normalize_name(d.get("conta") or "") == alvo),
+    )
+    for como, bate in criterios:
+        achados = tuple(n for n, d in entidades.items() if bate(n, d or {}))
+        if len(achados) == 1:
+            return Casamento(achados[0], como, achados)
+        if achados:
+            return Casamento(None, "ambiguo", achados)
+    numero = numero_da_conta(rotulo)
+    if numero:
+        achados = tuple(n for n, d in entidades.items() if e_da_subconta(n, d or {}, numero))
+        if len(achados) == 1:
+            return Casamento(achados[0], "numero", achados)
+        if achados:
+            return Casamento(None, "ambiguo", achados)
+    return Casamento(None, "")
+
+
+def _problema_do_casamento(rotulo: str, c: Casamento) -> str:
+    """O motivo da pendência de uma ponta da distribuição, ou ""."""
+    if c.como == "ambiguo":
+        return (f"mais de um no cadastro da aba Aportes para {rotulo!r} "
+                f"({', '.join(c.candidatos)}) — deixe um só com esse nome ou conta")
+    if c.nome is None:
+        return f"não achei {rotulo!r} (um só) no cadastro da aba Aportes"
+    if str(c.nome).startswith(INVESTIDOR_PREFIXO):
+        return (f"{rotulo!r} é subconta de investidor no cadastro ({c.nome}): "
+                "distribuição de lucros não vai para subconta de investidor")
+    if c.como == "numero":
+        return (f"confira o cadastro: só o número bate entre {rotulo!r} e {c.nome!r} "
+                "— ponha no cadastro o nome ou a conta do ERP dessa conta")
+    return ""
+
+
+def numero_de_subconta_de_investidor(rotulo: str, entidades: dict) -> str:
+    """O número da subconta de investidor ("INVESTIDOR SUBCONTA 00000-0" do
+    cadastro) que `rotulo` é, ou "": pelo número no próprio rótulo ou na
+    conta do ERP de quem ele casa no cadastro (`casar_no_cadastro`; ex.: a
+    empresa cuja conta do ERP é a subconta dos investidores). A MESMA regra
+    tira da lista "Para" e vira pendência no envio da distribuição."""
+    entidades = entidades or {}
+    investidores = {n: d for n, d in entidades.items() if str(n).startswith(INVESTIDOR_PREFIXO)}
+    if not investidores:
+        return ""
+    numeros = [numero_da_conta(rotulo)]
+    achado = rotulo if rotulo in entidades else casar_no_cadastro(rotulo, entidades).nome
+    if achado is not None:
+        numeros.append(numero_da_conta(achado))
+        numeros.append(numero_da_conta((entidades[achado] or {}).get("conta") or ""))
+    for numero in numeros:
+        if numero and any(e_da_subconta(n, d or {}, numero) for n, d in investidores.items()):
+            return numero
+    return ""
+
+
+def _no_cadastro(nome: str, entidades) -> str | None:
+    if not entidades:
+        return None
+    return nome if nome in entidades else casar_no_cadastro(nome, entidades).nome
+
+
+def mesmo_par(origem: str, socio: str, outra_origem: str, outro_socio: str,
+              entidades=None) -> bool:
+    """Mesmo par de distribuição: pelo texto (`util.norm_espaco`) ou, com o
+    cadastro, pelos nomes RESOLVIDOS dos dois lados (o rótulo do painel e o
+    nome do cadastro podem ser a mesma conta)."""
+    n = util.norm_espaco
+    if n(origem) == n(outra_origem) and n(socio) == n(outro_socio):
+        return True
+    resolvidos = [_no_cadastro(x, entidades) for x in (origem, socio, outra_origem, outro_socio)]
+    return (None not in resolvidos and resolvidos[0] == resolvidos[2]
+            and resolvidos[1] == resolvidos[3])
+
+
+def _e_distribuicao(regra) -> bool:
+    return util.sem_acento(regra.tipo or "").casefold().strip().startswith("distribui")
+
+
+def distribuicao_da_regras(origem: str, socio: str, definidos, regras,
+                           entidades=None) -> Decimal | None:
+    """O valor que a aba Regras já define para o MESMO par (aportador =
+    origem, destino = quem recebe, tipo Distribuição; `mesmo_par`), ou None.
+    À mão por cima seria o dobro no painel e no envio (revisão de dinheiro
+    de 23/10/2026)."""
+    de_distribuicao = {(r.destino, r.aportador) for r in regras or () if _e_distribuicao(r)}
+    for (destino, aportador), valor in (definidos or {}).items():
+        if ((destino, aportador) in de_distribuicao and valor is not None and valor > ZERO
+                and mesmo_par(aportador, destino, origem, socio, entidades)):
+            return valor
+    return None
+
+
+def _mandada_a_mao(origem: str, socio: str, enviados, entidades):
+    """O valor já mandado hoje À MÃO para o mesmo par de distribuição
+    (chave `chave_da_distribuicao`), ou False."""
+    for chave, valor in (enviados or {}).items():
+        if not chave.startswith(PREFIXO_DISTRIBUICAO):
+            continue
+        quem, sep, de = chave[len(PREFIXO_DISTRIBUICAO):].rpartition("|")
+        if sep and mesmo_par(de, quem, origem, socio, entidades):
+            return valor
+    return False
 
 
 def _tipo(tipo_regra: str) -> str:
@@ -285,14 +429,17 @@ def _ja_mandado(anterior, valor, fora_da_aba: bool = False) -> str:
 
 
 def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
-              sem_saldo=(), na_aba_aportes=None, distribuicoes=()) -> Envio:
+              sem_saldo=(), na_aba_aportes=None, distribuicoes=(),
+              contas_do_painel=()) -> Envio:
     """`enviados`: {chave_de_envio: valor mandado} do dia (um conjunto de
     chaves também serve, com o valor desconhecido). `sem_saldo`: rótulos das
     contas do dia cujo saldo o sistema não trouxe. `na_aba_aportes`: as
     operações que a aba Aportes tem AGORA na lista (None = não se sabe); o já
     mandado que não está mais lá ganha o recado `FORA_DA_ABA`.
-    `distribuicoes`: [(conta de origem, sócio do cadastro, valor)] feitas à
-    mão na tela."""
+    `distribuicoes`: [(conta de origem, quem recebe, valor)] feitas à mão
+    na tela; quem recebe é nome do cadastro ou OUTRA conta do painel
+    (`contas_do_painel`: os rótulos, para exigir a conta do ERP no cadastro
+    dela também — o dinheiro entra nela)."""
     if enviados is None:
         enviados = {}
     elif not isinstance(enviados, dict):
@@ -337,6 +484,14 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
         if util.sem_acento(regra.tipo or "").casefold().strip().startswith("transf"):
             envio.informativos.append(Pendente(destino, aportador, valor, TRANSFERENCIA))
             continue
+        if _e_distribuicao(regra):
+            mao = _mandada_a_mao(aportador, destino, enviados, entidades)
+            if mao is not False:
+                quanto = "" if mao is None else f" ({brl(como_dinheiro(mao))})"
+                pendente(destino, aportador, valor,
+                         f"já mandado à mão hoje{quanto} como distribuição de lucros — "
+                         "confira a aba Aportes; na aba Regras ela iria em dobro")
+                continue
         if (nomes_do_composto(aportador) and not regra.do_painel
                 and nome_no_cadastro(aportador, entidades) is None):
             compostos.append((destino, aportador, valor, regra))
@@ -475,17 +630,29 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
     for (origem, socio), valor in somadas.items():
         rotulo = f"{socio} (distribuição de lucros)"
         chave = chave_da_distribuicao(origem, socio)
-        pagador = nome_no_cadastro(origem, entidades)
-        recebedor = socio if socio in entidades else nome_no_cadastro(socio, entidades)
+        c_pag = casar_no_cadastro(origem, entidades)
+        c_rec = (Casamento(socio, "nome", (socio,)) if socio in entidades
+                 else casar_no_cadastro(socio, entidades))
+        pagador, recebedor = c_pag.nome, c_rec.nome
+        # "Já mandado" primeiro: o recado tem de dizer o que aconteceu.
         if chave in enviados:
             la = ainda_na_aba(pagador, recebedor, data, na_aba_aportes)
             pendente(rotulo, origem, valor,
                      _ja_mandado(enviados[chave], valor, fora_da_aba=la is False))
             continue
-        if pagador is None or recebedor is None:
-            falta = origem if pagador is None else socio
+        ja_na_regra = distribuicao_da_regras(origem, socio, definidos, regras, entidades)
+        if ja_na_regra is not None:
             pendente(rotulo, origem, valor,
-                     f"não achei {falta!r} (um só) no cadastro da aba Aportes")
+                     f"essa distribuição já vem da aba Regras ({brl(ja_na_regra)}); "
+                     "ajuste lá — à mão ela iria em dobro")
+            continue
+        sub = numero_de_subconta_de_investidor(socio, entidades)
+        problema = (_problema_do_casamento(origem, c_pag)
+                    or (f"{socio!r} é da subconta de investidor {sub}: distribuição de "
+                        "lucros não vai para subconta de investidor" if sub else "")
+                    or _problema_do_casamento(socio, c_rec))
+        if problema:
+            pendente(rotulo, origem, valor, problema)
             continue
         if (entidades[pagador] or {}).get("conta") is None:
             # A origem é conta do painel: o dinheiro SAI dela. Sem a conta no
@@ -494,6 +661,16 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
             pendente(rotulo, origem, valor,
                      f"{pagador!r} está no cadastro da aba Aportes sem a conta do ERP, "
                      "e a distribuição SAI dela — complete a conta no cadastro (aba "
+                     "Aportes) e mande de novo")
+            continue
+        destino_no_painel = any(socio.casefold() == r.casefold()
+                                for r in contas_do_painel or ())
+        if destino_no_painel and (entidades[recebedor] or {}).get("conta") is None:
+            # Conta do painel (a empresa sócia, dono 23/10/2026): o dinheiro
+            # ENTRA nela. "Só pagamento" lançaria só a saída da origem.
+            pendente(rotulo, origem, valor,
+                     f"{recebedor!r} está no cadastro da aba Aportes sem a conta do ERP, "
+                     "e a distribuição ENTRA nela — complete a conta no cadastro (aba "
                      "Aportes) e mande de novo")
             continue
         op = Operacao(data=data, pagador=pagador, recebedor=recebedor,
@@ -505,7 +682,7 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
             continue
         envio.itens.append((op, [chave]))
         envio.valores[chave] = como_dinheiro(valor)
-        if origem in sem_saldo:
+        if origem in sem_saldo or socio in sem_saldo:
             envio.sem_saldo.append(op)
             aviso(rotulo, origem, valor, MOTIVO_SEM_SALDO)
     return envio

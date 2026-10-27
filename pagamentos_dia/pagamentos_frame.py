@@ -35,6 +35,7 @@ from tkinter import filedialog, messagebox, ttk
 from . import agendamentos_sicoob
 from . import baixa_erp
 from . import confirmacao
+from . import conferir_agendamentos
 from . import html_pagamentos          # HTML provisório (ver o módulo)
 from . import ocr_boleto
 from . import painel_dia
@@ -799,27 +800,23 @@ class PagamentosDiaFrame(ttk.Frame):
     def _conferir_agendamentos(self):
         """Confronta um HTML dos pagamentos com o que está AGENDADO no Sicoob.
 
-        Pedido do dono em 15/10/2026: agendar pelo HTML e, antes de assinar,
-        conferir se cada agendamento bate — valor, quem recebe e se nada
-        ficou de fora. A regra é `agendamentos_sicoob`; a leitura do banco é
-        `extratos_sicoob.pendencias`, SÓ LEITURA (nada é assinado, cancelado
-        nem alterado no banco).
+        Pedido do dono em 15/10/2026. Tudo o que não é desta tela (separar as
+        contas, ler o banco, a janela do resumão) mora em
+        `conferir_agendamentos`, que a aba "Pagamentos do dia" também usa;
+        aqui fica só a escolha do HTML e a thread. SÓ LEITURA no banco.
 
         Abre o Chrome do Sicoob como a aba Extratos abre (`SicoobClient`: o
         mesmo perfil, a extensão e o idioma pt-BR que fazem o banco
         reconhecer o PC) — e por isso numa thread PRÓPRIA, nunca na do ERP:
         é outro site e outro login. O login é da pessoa, como nos extratos.
         """
+        titulo = conferir_agendamentos.TITULO
         if self._agendamentos is not None and self._agendamentos.is_alive():
-            messagebox.showinfo("Conferir agendamentos",
-                                "A conferência anterior ainda está rodando.")
+            messagebox.showinfo(titulo, "A conferência anterior ainda está rodando.")
             return
         quem = self.sicoob_ocupado()
         if quem:
-            messagebox.showinfo(
-                "Conferir agendamentos",
-                f"O Chrome do Sicoob está em uso ({quem}). Espere terminar: "
-                "os dois usariam o mesmo perfil do banco.")
+            messagebox.showinfo(titulo, conferir_agendamentos.recado_em_uso(quem))
             return
         sugerido = self._html_sugerido()
         escolhido = filedialog.askopenfilename(
@@ -835,339 +832,53 @@ class PagamentosDiaFrame(ttk.Frame):
             contas = agendamentos_sicoob.ler_html(
                 caminho.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
-            messagebox.showwarning("Conferir agendamentos",
-                                   widgets.recado_de_erro(
-                                       e, "Não consegui ler este HTML."))
+            messagebox.showwarning(titulo, widgets.recado_de_erro(
+                e, "Não consegui ler este HTML."))
             return
         try:
             mapa_mc, empresas = _carregar_mapas()
         except Exception as e:                               # noqa: BLE001
-            messagebox.showwarning("Conferir agendamentos",
-                                   widgets.recado_de_erro(
-                                       e, "Não consegui ler o cadastro de contas."))
+            messagebox.showwarning(titulo, widgets.recado_de_erro(
+                e, "Não consegui ler o cadastro de contas."))
             return
 
-        no_sicoob, fora = [], []
-        for c in contas:
-            numero, motivo = agendamentos_sicoob.conta_sicoob(
-                str(c.get("nome") or ""), mapa_mc, empresas)
-            (no_sicoob if numero else fora).append(
-                (c, numero, motivo))
-        sem_cadastro = [(c, m) for c, _n, m in fora
-                        if m != agendamentos_sicoob.MOTIVO_FORA_SICOOB]
-        if not no_sicoob:
-            # "Não há o que conferir" só quando TODAS são de outro banco. A
-            # conta do Sicoob que o cadastro não resolve (subconta nova fora
-            # do `contas_sicoob.json`) não pode ganhar o mesmo recado neutro:
-            # as pendências dela seriam assinadas sem conferência.
-            if sem_cadastro:
-                messagebox.showwarning(
-                    "Conferir agendamentos",
-                    "Nenhuma conta pôde ser conferida. Estas ficaram de fora "
-                    "por cadastro — confira-as à mão antes de assinar:\n\n"
-                    + "\n".join(f"• {c.get('nome')}: {m}"
-                                for c, m in sem_cadastro[:12]))
-            else:
-                messagebox.showinfo(
-                    "Conferir agendamentos",
-                    "Nenhuma conta deste HTML é do Sicoob — não há o que "
-                    "conferir no SicoobNet.")
+        sep = conferir_agendamentos.separar(contas, mapa_mc, empresas)
+        recusa = sep.recusa()
+        if recusa:
+            conferir_agendamentos.mostrar_recusa(recusa)
             return
         inicio, fim = agendamentos_sicoob.periodo_da_consulta(
             datetime.date.today())
-        if not messagebox.askokcancel(
-                "Conferir agendamentos",
-                f"Vou abrir o Chrome do Sicoob e ler as transações pendentes de "
-                f"assinatura de {len(no_sicoob)} conta(s), de "
-                f"{inicio:%d/%m} a {fim:%d/%m/%Y}.\n\n"
-                "É só leitura: nada é assinado, cancelado nem alterado no "
-                "banco.\n\nFaça o login quando a janela abrir."):
+        if not messagebox.askokcancel(titulo, conferir_agendamentos.pergunta_de_abrir(
+                len(sep.no_sicoob), inicio, fim)):
+            return
+        # De novo depois da pergunta: com ela aberta, outra aba (o saldo da
+        # tela do dia, os Extratos) pode ter aberto o MESMO perfil do Sicoob.
+        quem = self.sicoob_ocupado()
+        if quem:
+            messagebox.showinfo(titulo, conferir_agendamentos.recado_em_uso(quem))
             return
 
         self._log("")
         self._log(f"Conferir agendamentos: {caminho.name}")
-        for c, _n, motivo in fora:
+        for c, _n, motivo in sep.fora:
             self._log(f"  fora da conferência: {c.get('nome')} — {motivo}")
         self.b_agend.configure(state="disabled")
         self._agendamentos = Thread(
             target=self._t_agendamentos, name="sicoob-agendamentos",
-            args=(caminho, no_sicoob, fora, inicio, fim), daemon=True)
+            args=(caminho, sep.no_sicoob, sep.fora, inicio, fim), daemon=True)
         self._agendamentos.start()
 
     def _t_agendamentos(self, caminho, no_sicoob, fora, inicio, fim):
-        """Thread do Sicoob. Só fala com a tela pela fila.
-
-        Toda conta do Sicoob nasce "não lida" ANTES de abrir o navegador, e
-        só troca de estado quando é lida de verdade: uma exceção no meio
-        (sessão que cai, login que não acontece) não pode fazer as contas que
-        faltavam SUMIREM da tabela — a que some é assinada sem conferência
-        (revisão de dinheiro, 15/10/2026). Duas contas do ERP com o mesmo
-        número do Sicoob são conferidas JUNTAS (`agrupar_por_numero`): lidas
-        uma vez cada, o mesmo agendamento casaria nas duas e pintaria de verde
-        dois pagamentos com um só agendado."""
-        A = agendamentos_sicoob
-        confrontos = [A.Confronto(conta_erp=str(c.get("nome") or ""),
-                                  motivo=motivo)
-                      for c, _n, motivo in fora]
-        grupos = A.agrupar_por_numero(no_sicoob)
-        pendentes = [A.Confronto(conta_erp=nome, numero=numero,
-                                 motivo=A.MOTIVO_NAO_LIDA)
-                     for nome, numero, _e in grupos]
-        confrontos.extend(pendentes)
-        try:
-            from extratos_sicoob import pendencias
-            from extratos_sicoob.sicoob_client import SicoobClient
-
-            registrar = lambda m: self._log(f"  {m}")       # noqa: E731
-            with SicoobClient(log=registrar) as cli:
-                cli.aguardar_login()
-                for conf, (nome, numero, entradas) in zip(pendentes, grupos):
-                    try:
-                        lidas = pendencias.ler_conta(cli, numero, inicio, fim)
-                    except Exception as e:                   # noqa: BLE001
-                        conf.motivo = f"o Sicoob não respondeu: {e}"
-                    else:
-                        conf.linhas = A.confrontar(entradas, lidas)
-                        conf.motivo = ""
-                    self._log(f"  {nome} ({numero}): {conf.resumo()}")
-        except Exception as e:                               # noqa: BLE001
-            self._log(f"[!] Conferir agendamentos: {e}")
-            # As que ficaram para trás levam o porquê para a tabela.
-            for conf in pendentes:
-                if conf.motivo == A.MOTIVO_NAO_LIDA:
-                    conf.motivo = A.motivo_da_parada(e)
+        """Thread do Sicoob. Só fala com a tela pela fila. Sem `perguntar`:
+        a conta de outro acesso fica "não conferida", como sempre foi aqui."""
+        confrontos = conferir_agendamentos.ler_no_banco(
+            no_sicoob, fora, inicio, fim, log=self._log)
         self.q.put(("agendamentos", (caminho, confrontos)))
 
     def _janela_agendamentos(self, caminho, confrontos):
-        """O resumão do confronto e a tabela por conta, com a marca de quem
-        conferiu (dono, 21/10/2026: "abra uma tela me mostrando um resumão e
-        um campo pra eu marcar como certo/conferido").
-
-        Só leitura no BANCO — nada aqui mexe no Sicoob. A marca é da pessoa e
-        mora ao lado do HTML (`agendamentos_sicoob.caminho_das_marcas`), presa
-        ao que foi visto: outra leitura que mude a linha a deixa sem marca."""
-        A = agendamentos_sicoob
-        arq_marcas = A.caminho_das_marcas(caminho)
-        marcas = A.ler_marcas(arq_marcas)
-        try:
-            from nuvem import sessao
-            quem = sessao.quem(_pasta_base()).email or os.environ.get(
-                "USERNAME", "")
-        except Exception:                                    # noqa: BLE001
-            quem = os.environ.get("USERNAME", "")
-
-        def brl(valor):
-            return "" if valor is None else relatorio.brl(float(valor))
-
-        top = tk.Toplevel(self)
-        top.title(f"Agendamentos no Sicoob × {caminho.name}")
-        top.geometry(f"{px(1320)}x{px(720)}")
-        widgets.barra_de_titulo(top)
-        moldura = ttk.Frame(top, padding=14)
-        moldura.pack(fill="both", expand=True)
-        ttk.Label(moldura, style="Titulo.TLabel",
-                  text="Resumo dos agendamentos no Sicoob").pack(anchor="w")
-        ttk.Label(moldura, style="Apoio.TLabel",
-                  text=f"{caminho.name} — só leitura: nada foi assinado, "
-                       "cancelado nem alterado no banco.").pack(anchor="w")
-
-        # O resumão: os números que respondem "posso assinar?".
-        quadro = ttk.Frame(moldura)
-        quadro.pack(fill="x", pady=px((10, 6)))
-        numeros = {}
-        for col, (chave, rotulo) in enumerate((
-                ("contas", "Contas do Sicoob lidas"), ("batem", "Batem"),
-                ("diferenca", "Com diferença"),
-                ("nao_lidas", "Não conferidas"),
-                ("html", "Total no HTML"), ("banco", "Total agendado"),
-                ("marcadas", "Contas marcadas"))):
-            caixa = ttk.Frame(quadro)
-            caixa.grid(row=0, column=col, sticky="w", padx=px((0, 28)))
-            ttk.Label(caixa, style="Apoio.TLabel",
-                      text=rotulo).pack(anchor="w")
-            numeros[chave] = ttk.Label(caixa, style="KPI.TLabel", text="")
-            numeros[chave].pack(anchor="w")
-        a_olhar = ttk.Label(moldura, style="Apoio.TLabel",
-                            wraplength=px(1260), justify="left")
-        a_olhar.pack(anchor="w")
-        nao_lidas = [c for c in confrontos if c.falhou]
-        if nao_lidas:
-            # Em cima e em vermelho: é a conta cujas pendências seriam
-            # assinadas SEM conferência, e um número escondido no meio da
-            # tabela não segura ninguém.
-            ttk.Label(moldura, style="Erro.TLabel", wraplength=px(1260),
-                      justify="left",
-                      text=f"✖  {len(nao_lidas)} conta(s) do Sicoob NÃO "
-                           f"conferida(s): "
-                           + ", ".join(c.conta_erp for c in nao_lidas)
-                           + ". Não assine as pendências delas sem conferir."
-                      ).pack(anchor="w", pady=px((4, 0)))
-        ttk.Label(moldura, style="Apoio.TLabel", wraplength=px(1260),
-                  justify="left",
-                  text="Casado pelo valor; o nome só desempata. Âmbar é para "
-                       "olhar antes de assinar, vermelho é diferença de "
-                       "dinheiro. Clique no ☐ (ou selecione e aperte Espaço) "
-                       "para marcar como conferido — na linha da conta, a "
-                       "conta inteira.").pack(anchor="w", pady=px((4, 8)))
-
-        def atualizar_resumao():
-            r = A.resumao(confrontos, marcas)
-            numeros["contas"].configure(
-                text=f"{r.lidas} de {r.contas_sicoob}")
-            numeros["batem"].configure(text=str(r.batem))
-            numeros["diferenca"].configure(text=str(r.com_diferenca))
-            numeros["nao_lidas"].configure(text=str(r.nao_lidas))
-            numeros["html"].configure(text=brl(r.total_html))
-            numeros["banco"].configure(text=brl(r.total_banco))
-            numeros["marcadas"].configure(
-                text=f"{r.contas_marcadas} de {r.contas_sicoob}")
-            partes = [f"{n} {A.FRASES[s]}" for s, n in r.por_situacao.items()]
-            if partes:
-                a_olhar.configure(text=(
-                    "Para olhar: " + " · ".join(partes)
-                    + f" — {r.linhas_marcadas} de {r.linhas_a_olhar} "
-                      "linha(s) já marcadas como conferidas."))
-            else:
-                a_olhar.configure(text="Nenhuma linha pede conferência: "
-                                       "tudo o que foi lido bate.")
-
-        colunas = ("conferido", "situacao", "html", "banco", "no_html",
-                   "no_banco")
-        tabela = ttk.Treeview(moldura, columns=colunas, show="tree headings",
-                              height=16)
-        tabela.heading("#0", text="Conta")
-        tabela.column("#0", width=px(250), anchor="w")
-        for chave, titulo, larg, ancora in (
-                ("conferido", "Conferido", 90, "center"),
-                ("situacao", "Situação", 230, "w"),
-                ("html", "Valor no HTML", 110, "e"),
-                ("banco", "Valor no banco", 110, "e"),
-                ("no_html", "No HTML", 280, "w"),
-                ("no_banco", "No banco", 280, "w")):
-            tabela.heading(chave, text=titulo)
-            tabela.column(chave, width=larg, anchor=ancora)
-        widgets.estilo_tabela(tabela, ordenavel=False)
-        rolagem = ttk.Scrollbar(moldura, orient="vertical",
-                                command=tabela.yview)
-        tabela.configure(yscrollcommand=rolagem.set)
-
-        # iid -> (confronto, linha ou None). Conta de outro banco e linha que
-        # já bate não têm marca: não há o que conferir nelas.
-        alvo = {}
-
-        def marca_de(conf, li):
-            if li is None:
-                if not A.conta_marcavel(conf):
-                    return ""
-                return "☑" if A.conta_conferida(conf, marcas) else "☐"
-            if not A.precisa_olhar(li):
-                return "✓"
-            return "☑" if A.chave_da_linha(conf, li) in marcas else "☐"
-
-        i = 0
-        for conf in confrontos:
-            estado = ("erro" if conf.falhou
-                      else "info" if not conf.conferida
-                      else A.ESTADO[conf.pior])
-            pai = tabela.insert(
-                "", "end", text=conf.conta_erp, open=conf.pior != A.OK,
-                values=(marca_de(conf, None), conf.resumo(),
-                        brl(conf.total_html) if conf.conferida else "",
-                        brl(conf.total_banco) if conf.conferida else "",
-                        "", conf.numero),
-                tags=widgets.linha_zebrada(i, estado))
-            alvo[pai] = (conf, None)
-            i += 1
-            for li in conf.linhas:
-                h, b = li.html or {}, li.banco or {}
-                no_html = " · ".join(x for x in (
-                    str(h.get("favorecido") or ""),
-                    str(h.get("descricao") or "")) if x)
-                # A situação do banco só aparece quando NÃO é a de sempre:
-                # "Todas" pode trazer o que já não está pendente.
-                situacao_banco = str(b.get("situacao") or "")
-                no_banco = " · ".join(x for x in (
-                    str(b.get("detalhe") or ""),
-                    str(b.get("nomeTransacao") or ""),
-                    situacao_banco if situacao_banco not in (
-                        "", "PENDENTE_ASSINATURA") else "") if x)
-                filho = tabela.insert(pai, "end", text="", values=(
-                    marca_de(conf, li), li.frase, brl(li.valor_html),
-                    brl(li.valor_banco), no_html, no_banco),
-                    tags=widgets.linha_zebrada(i, A.ESTADO[li.situacao]))
-                alvo[filho] = (conf, li)
-                i += 1
-
-        def alternar(iid):
-            if iid not in alvo:
-                return
-            conf, li = alvo[iid]
-            if marca_de(conf, li) not in ("☐", "☑"):
-                return
-            chave = (A.chave_da_conta(conf) if li is None
-                     else A.chave_da_linha(conf, li))
-            if li is None and chave not in marcas:
-                faltam = [x for x in conf.linhas if A.precisa_olhar(x)
-                          and A.chave_da_linha(conf, x) not in marcas]
-                if A.tem_erro(conf) or faltam:
-                    # Marcar a conta inteira por cima do vermelho é decisão
-                    # de quem confere, mas não pode sair de um clique só.
-                    por = (f"tem {len(faltam)} linha(s) ainda sem marca"
-                           if faltam else "tem diferença de dinheiro")
-                    if not messagebox.askyesno(
-                            "Conferir agendamentos",
-                            f"A conta {conf.conta_erp} {por}.\n\nMarcar a "
-                            "conta inteira como conferida mesmo assim?",
-                            icon="warning", parent=top):
-                        return
-            antes = dict(marcas)
-            A.alternar(marcas, chave, quem,
-                       datetime.datetime.now().isoformat(timespec="seconds"))
-            try:
-                A.gravar_marcas(arq_marcas, marcas)
-            except OSError as e:
-                marcas.clear()
-                marcas.update(antes)
-                messagebox.showwarning(
-                    "Conferir agendamentos",
-                    widgets.recado_de_erro(
-                        e, "Não consegui guardar a marca ao lado do HTML."),
-                    parent=top)
-                return
-            tabela.set(iid, "conferido", marca_de(conf, li))
-            atualizar_resumao()
-
-        def ao_clicar(evento):
-            if tabela.identify_region(evento.x, evento.y) != "cell":
-                return None
-            if tabela.identify_column(evento.x) != "#1":
-                return None
-            iid = tabela.identify_row(evento.y)
-            if not iid:
-                return None
-            alternar(iid)
-            return "break"
-
-        def ao_espaco(_evento):
-            for iid in tabela.selection():
-                alternar(iid)
-            return "break"
-
-        tabela.bind("<Button-1>", ao_clicar, add="+")
-        tabela.bind("<space>", ao_espaco)
-
-        # O rodapé entra no pack ANTES da tabela: com pouca altura, quem
-        # cede é ela, e o botão de fechar nunca some.
-        rodape = ttk.Frame(moldura)
-        rodape.pack(side="bottom", fill="x", pady=px((10, 0)))
-        ttk.Label(rodape, style="Apoio.TLabel",
-                  text=f"As marcas ficam em {arq_marcas.name}, ao lado do "
-                       "HTML.").pack(side="left")
-        widgets.Botao(rodape, "Fechar", papel="neutro",
-                      command=top.destroy).pack(side="right")
-        rolagem.pack(side="right", fill="y")
-        tabela.pack(fill="both", expand=True)
-        atualizar_resumao()
+        """O resumão e a tabela por conta (`conferir_agendamentos.abrir_janela`)."""
+        conferir_agendamentos.abrir_janela(self, caminho, confrontos)
 
     def _abrir_remessa(self):
         """Abre a pasta do `.REM` com o arquivo já selecionado.

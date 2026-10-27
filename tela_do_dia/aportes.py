@@ -51,8 +51,9 @@ class AporteDaConta:
     #: M do Painel: o que entra na conta pela seção «À MÃO».
     entra_a_mao: Decimal = ZERO
     #: Distribuição de lucros feita à mão (item A, 22/10/2026): SAI desta
-    #: conta para um sócio ou investidor. No Excel é linha da seção «À MÃO»
-    #: com esta conta na origem — soma no E dela e no M de ninguém.
+    #: conta para um sócio, investidor ou empresa. No Excel é linha da seção
+    #: «À MÃO» com esta conta na origem — soma no E dela; no M só quando quem
+    #: recebe é outra conta do painel (aí entra nela, `entra_a_mao`).
     distribui: Decimal = ZERO
 
     @property
@@ -136,8 +137,10 @@ def montar_aportes(saldos, a_pagar, regras, definidos, a_mao=None,
     """`a_mao`: movimentos da seção «À MÃO», [(origem, destino, valor)].
     Origem None = entra de fora (ex.: sócio aporta na mãe). O destino soma
     no M dele (entra); a origem, se for conta do dia, soma no E (sai).
-    `distribuicoes`: [(conta de origem, sócio, valor)] — só SAI da origem
-    (`distribui`), que tem de ser conta do dia."""
+    `distribuicoes`: [(conta de origem, quem recebe, valor)] — SAI da origem
+    (`distribui`), que tem de ser conta do dia; quem recebe sendo conta do
+    dia (texto igual sem diferença de maiúsculas, como o SUMIF), ENTRA nela
+    (`entra_a_mao`)."""
     contas_do_dia = list(dict.fromkeys([*saldos, *a_pagar]))
     participantes: dict[str, list] = {}
     for r in regras:
@@ -189,6 +192,24 @@ def montar_aportes(saldos, a_pagar, regras, definidos, a_mao=None,
                                        "foi ignorado"))
         else:
             distribui[origem] += valor
+            # Para OUTRA conta do painel (a SPE para a empresa sócia, dono
+            # 23/10/2026) o valor também ENTRA no destino, como uma
+            # transferência: o SUMIF do M acha a linha (ignorando maiúsculas).
+            destino = next((c for c in contas_do_dia
+                            if c.casefold() == str(socio or "").strip().casefold()), None)
+            if destino is not None and destino != origem:
+                entra[destino] += valor
+    # O mesmo par à mão E na aba Regras (tipo Distribuição, com valor) soma
+    # duas vezes no painel e no Excel: avisa alto em vez de somar calado
+    # (re-revisão de dinheiro de 23/10/2026).
+    from .para_aportes import distribuicao_da_regras
+    em_dobro = set()
+    for origem, socio, valor in (distribuicoes or ()):
+        if (valor and valor > ZERO and (origem, socio) not in em_dobro
+                and distribuicao_da_regras(origem, socio, validos, regras) is not None):
+            em_dobro.add((origem, socio))
+            alertas.insert(0, ("erro", f"Distribuição em dobro: {origem} → {socio} está à mão "
+                                       "e na aba Regras — remova uma"))
     mae = conta_mae(regras)
     empatadas = _empatadas_na_mae(regras)
     if len(empatadas) > 1:
