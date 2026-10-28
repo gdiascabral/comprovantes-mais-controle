@@ -28,7 +28,9 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from pagamentos_dia import confirmacao, relatorio, remessa_dia
+from dataclasses import replace
+
+from pagamentos_dia import confirmacao, html_pagamentos, relatorio, remessa_dia
 
 from . import conferencia as cf
 from . import pagamentos as pg
@@ -223,6 +225,39 @@ def registro_a_mao(p, ordem: int) -> dict:
     if not p.lancamento_id:
         reg["descricao_editada"] = p.descricao
     return reg
+
+
+#: O motivo das linhas que saem porque a caixa dos reembolsos foi desligada.
+MOTIVO_SEM_REEMBOLSO = "reembolso desligado no cartão 2 (não sai hoje)"
+
+
+def sem_reembolsos(conferencia, grupos, pessoas):
+    """A `conferencia` com os reembolsos das `pessoas` DESMARCADOS.
+
+    Pedido do dono (28/10/2026): escolher no cartão 2 se hoje há reembolso
+    para os nomes do `confirmar_antes.json`. Desligado, a linha sai de tudo
+    pelo caminho de sempre do "Desmarcar" — tela, a pagar, planilha, HTML,
+    remessa —, mas o evento é só da memória da tela: nada vai à nuvem. Os
+    eventos novos vêm depois de todos os da nuvem (id maior), então ganham de
+    um "liberar" gravado; o nome editado na tela vale sobre o do documento."""
+    pessoas = [p for p in (pessoas or ()) if str(p).strip()]
+    if not pessoas:
+        return conferencia
+    decisoes = conferencia.decisoes
+    alvos = []
+    for g in grupos or ():
+        for ln in (*g.entram, *g.nao_aptos):
+            d = decisoes.get(ln.id)
+            nome = (d.edicoes.get("reembolso_nome") if d is not None else "") or (
+                ln.reembolso_nome if getattr(ln, "reembolso", False) else "")
+            if nome and html_pagamentos.e_reembolso_de(nome, pessoas) and ln.id not in alvos:
+                alvos.append(ln.id)
+    if not alvos:
+        return conferencia
+    base = max((e.id for e in conferencia.eventos), default=0)
+    extra = tuple(cf.Evento(id=base + 1 + i, alvo=a, conta="", acao=cf.DESMARCAR,
+                            motivo=MOTIVO_SEM_REEMBOLSO) for i, a in enumerate(alvos))
+    return replace(conferencia, eventos=tuple(conferencia.eventos) + extra)
 
 
 def resultado_da_tela(entradas, grupos, conferencia) -> relatorio.Resultado:

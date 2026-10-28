@@ -253,7 +253,10 @@ def token(pasta=None) -> str:
 
     try:
         corpo = rest.renovar(sessao["renovacao"])
-    except rest.SemRede:
+    except rest.SemRede as e:
+        # O motivo de verdade vai ao diagnóstico: em 28/10/2026 a frase
+        # "sem internet" apareceu com internet, e não havia rastro da causa.
+        log.warning("renovando a sessão da nuvem: %s", e)
         # Sem servidor para perguntar: vale enquanto o prazo do token durar.
         if _quando_vence(sessao.get("acesso", "")) > time.time():
             return sessao["acesso"]

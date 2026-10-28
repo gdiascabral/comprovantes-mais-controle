@@ -355,7 +355,7 @@ def descricao_para_colar(registro, conta, limite: int | None = None) -> str:
     # Fora do Inter (o Sicoob, e a remessa CNAB, que é do Sicoob e chega com
     # `conta=None`) a descrição não leva "-" nenhum (dono, 14/10/2026).
     hifen = (lambda ps: ps) if _e_inter(conta) else _sem_hifen
-    cc = hifen(_palavras(r.get("centro_custo"), tirar_reembolso=False))
+    cc = hifen(_palavras(cc_compacto(r.get("centro_custo")), tirar_reembolso=False))
     nf = [] if utilidade else _palavras_do_numero(r.get("nf"))
     oc = _palavras_do_numero(r.get("oc_da_descricao"))
     # Arrecadação não tem cedente nem Nota Fiscal atrás: rotular o número
@@ -397,6 +397,27 @@ def descricao_para_colar(registro, conta, limite: int | None = None) -> str:
     if len(" ".join(cc + texto + fixos)) > limite:
         cc = _que_cabem(cc, limite - len(" ".join(fixos)) - (1 if fixos else 0))
     return " ".join(cc + texto + fixos)
+
+
+def cc_compacto(centro_custo) -> str:
+    """Rateio entre imóveis vizinhos numa forma curta (dono, 28/10/2026:
+    "muito grande a descrição"): "X QD 1 LT 7A | X QD 1 LT 7B" vira
+    "X QD 1 LT 7A 7B". O primeiro fica inteiro — é ele que o Anexar acha na
+    descrição (`matcher._features`) — e cada um dos seguintes perde as
+    palavras do começo que repetem o primeiro. Sem começo em comum, entra
+    inteiro; um centro de custo só não muda."""
+    partes = [p.split() for p in str(centro_custo or "").split("|") if p.strip()]
+    if len(partes) < 2:
+        return str(centro_custo or "")
+    primeiro = partes[0]
+    saida = list(primeiro)
+    for p in partes[1:]:
+        n = 0
+        while (n < len(p) - 1 and n < len(primeiro)
+               and p[n].casefold() == primeiro[n].casefold()):
+            n += 1
+        saida.extend(p[n:])
+    return " ".join(saida)
 
 
 def quem_recebe(registro) -> str:
@@ -884,8 +905,26 @@ class Gerados(NamedTuple):
         return linhas
 
 
+def ordenar_contas(contas: list[dict], primeiras=()) -> list[dict]:
+    """A ordem das contas no HTML (dono, 28/10/2026): primeiro as que aportam
+    ou distribuem no dia (`primeiras`, nomes do ERP já na ordem — a principal
+    na frente), depois as demais por quantidade de pagamentos, da maior para
+    a menor; empate fica em ordem alfabética. Nome de `primeiras` que não está
+    em `contas` é ignorado."""
+    def chave(nome) -> str:
+        return " ".join(str(nome or "").upper().split())
+
+    posicao = {}
+    for nome in primeiras or ():
+        posicao.setdefault(chave(nome), len(posicao))
+    return sorted(contas, key=lambda c: (
+        posicao.get(chave(c["nome"]), len(posicao)),
+        -len(c["entries"]), chave(c["nome"])))
+
+
 def gravar(resultado, lancamentos, anexos, pasta, ini: date, fim: date,
-           hoje: date | None = None, pastas_extras=(), movimentos=()) -> Gerados:
+           hoje: date | None = None, pastas_extras=(), movimentos=(),
+           primeiras=()) -> Gerados:
     """Grava os dois HTMLs na `pasta` (a da planilha) e devolve o resumo.
 
     `resultado` é o `Resultado` do passo 2; `lancamentos` e `anexos` são os
@@ -897,7 +936,7 @@ def gravar(resultado, lancamentos, anexos, pasta, ini: date, fim: date,
     pasta.mkdir(parents=True, exist_ok=True)
     periodo = rotulo_periodo(ini, fim)
 
-    contas = contas_do_html_geral(resultado, dia=ini)
+    contas = ordenar_contas(contas_do_html_geral(resultado, dia=ini), primeiras)
     movs =movimentos_do_html(movimentos)
     itens = itens_pessoa_fisica(lancamentos, anexos, vencimento_padrao=fim)
     logo, rodape = ler_extras(pastas_extras or (pasta,))
