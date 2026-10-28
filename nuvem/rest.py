@@ -9,6 +9,7 @@ quem está na frente da tela, e um traceback não pede nada.
 from __future__ import annotations
 
 
+import threading
 import time
 
 import requests
@@ -83,6 +84,7 @@ _SESSAO = _montar_sessao()
 #: conexão guardada, que o servidor já tinha fechado.
 OCIOSA_SEG = 60
 _ultimo_pedido = 0.0
+_TRAVA_DO_RELOGIO = threading.Lock()
 
 
 def _acordar() -> None:
@@ -91,15 +93,17 @@ def _acordar() -> None:
     Fechar não perde nada (só o reaproveitamento), e é o que impede o POST de
     sair por um socket morto — o erro que não se pode repetir sozinho."""
     global _ultimo_pedido
-    agora = time.monotonic()
-    if _ultimo_pedido and agora - _ultimo_pedido > OCIOSA_SEG:
-        fechar = getattr(_SESSAO, "close", None)
-        if fechar is not None:
-            try:
-                fechar()
-            except Exception:                       # noqa: BLE001
-                log.warning("fechando conexões paradas da nuvem", exc_info=True)
-    _ultimo_pedido = agora
+    # Trava: duas threads acordando juntas fechariam o pool uma da outra.
+    with _TRAVA_DO_RELOGIO:
+        agora = time.monotonic()
+        if _ultimo_pedido and agora - _ultimo_pedido > OCIOSA_SEG:
+            fechar = getattr(_SESSAO, "close", None)
+            if fechar is not None:
+                try:
+                    fechar()
+                except Exception:                       # noqa: BLE001
+                    log.warning("fechando conexões paradas da nuvem", exc_info=True)
+        _ultimo_pedido = agora
 
 
 class ErroDaNuvem(RuntimeError):
@@ -384,10 +388,11 @@ def criar_conta(nome: str, email: str, senha: str) -> bool:
 
 def renovar(refresh_token: str) -> dict:
     """Troca o token de renovação por uma sessão nova."""
-    # Repetir a renovação é seguro (o mesmo token de renovação vale de novo
-    # por alguns segundos no servidor), e é ela que, perdida, tira a pessoa
-    # do app: uma segunda tentativa, por conexão nova, antes de dizer
-    # "sem internet".
+    # Uma segunda tentativa, por conexão nova, SÓ quando a primeira não
+    # chegou a sair (`ConnectionError`: socket morto, conexão recusada). O
+    # tempo esgotado esperando a resposta (`ReadTimeout`) não se repete: o
+    # servidor pode ter trocado o token, e a repetição, passados os 10 s de
+    # reuso do projeto, seria 400 e deslogaria na hora (revisão de 28/10/2026).
     for tentativa in (1, 2):
         _acordar()
         try:
@@ -397,7 +402,7 @@ def renovar(refresh_token: str) -> dict:
                              timeout=ESPERA)
             break
         except requests.RequestException as e:
-            if tentativa == 2:
+            if tentativa == 2 or not isinstance(e, requests.ConnectionError):
                 raise SemRede(f"não deu para falar com o servidor: {e}") from e
             log.warning("renovando a sessão da nuvem: %s — tento de novo", e)
             fechar = getattr(_SESSAO, "close", None)

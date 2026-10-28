@@ -236,6 +236,17 @@ desfechos, e a diferença importa: vencido com rede pede a senha; **sem rede e
 dentro do prazo, ABRE** (travar aqui transformaria uma queda do Supabase em
 app parado com o ERP de pé); sem rede e vencido, não abre e diz isso.
 
+**Conexão parada (28/10/2026).** O dono teve "sem internet e a sessão salva
+venceu" COM internet, hora e meia depois de abrir o app: a renovação do
+token é um POST, que o `Retry` de propósito não repete, e saía pela conexão
+guardada que o servidor já fechara. `rest._acordar` fecha a `Session` antes
+de qualquer pedido quando a última chamada foi há mais de `OCIOSA_SEG`
+(60 s, sob trava), e `renovar` tenta UMA segunda vez por conexão nova só
+quando a primeira não saiu (`ConnectionError`); `ReadTimeout` não se repete,
+porque o servidor pode ter trocado o token e a repetição depois dos 10 s de
+reuso (`supabase/config.toml`) deslogaria na hora. O motivo
+real da `SemRede` vai ao `diagnostico.log` (`sessao.token`).
+
 ### O NSA das remessas é da nuvem (`nuvem/registro.py`)
 
 **O `remessas.json` continua existindo e continua sendo escrito** — é backup

@@ -23,7 +23,8 @@ from tela_do_dia import geracao
 
 # ------------------------------------------------------------ reembolso
 def _linha(ident, nome="", reembolso=False):
-    return SimpleNamespace(id=ident, reembolso=reembolso, reembolso_nome=nome)
+    return SimpleNamespace(id=ident, reembolso=reembolso, reembolso_nome=nome,
+                           favorecido="LOJA", valor=10.0)
 
 
 def _grupos(*linhas, nao_aptos=()):
@@ -33,8 +34,10 @@ def _grupos(*linhas, nao_aptos=()):
 def test_sem_reembolsos_desmarca_so_os_das_pessoas():
     grupos = _grupos(_linha("1", "FULANO DE TAL", True), _linha("2", "CICLANO", True),
                      _linha("3"), nao_aptos=[_linha("4", "BELTRANO", True)])
-    c = geracao.sem_reembolsos(cf.Conferencia(), grupos, ["FULANO DE TAL", "BELTRANO SOUZA"])
+    c, tirados = geracao.sem_reembolsos(cf.Conferencia(), grupos,
+                                        ["FULANO DE TAL", "BELTRANO SOUZA"])
     d = c.decisoes
+    assert len(tirados) == 2 and "reembolso para FULANO DE TAL" in tirados[0]
     assert set(d) == {"1", "4"}
     assert all(x.desmarcado and x.motivo_desmarcar == geracao.MOTIVO_SEM_REEMBOLSO
                for x in d.values())
@@ -46,7 +49,7 @@ def test_sem_reembolsos_ganha_de_liberar_gravado_e_le_o_nome_editado():
                        campos={"reembolso_nome": "FULANO DE TAL"})
     base = cf.Conferencia(eventos=(liberar, editar))
     grupos = _grupos(_linha("1", "FULANO DE TAL", True), _linha("2"))
-    d = geracao.sem_reembolsos(base, grupos, ["FULANO"]).decisoes
+    d = geracao.sem_reembolsos(base, grupos, ["FULANO"])[0].decisoes
     assert d["1"].desmarcado and not d["1"].liberado
     assert d["2"].desmarcado
     # a conferência de origem (a da nuvem) não muda
@@ -56,8 +59,43 @@ def test_sem_reembolsos_ganha_de_liberar_gravado_e_le_o_nome_editado():
 def test_sem_pessoas_ou_sem_reembolso_a_conferencia_e_a_mesma():
     base = cf.Conferencia()
     grupos = _grupos(_linha("1", "FULANO", True))
-    assert geracao.sem_reembolsos(base, grupos, []) is base
-    assert geracao.sem_reembolsos(base, _grupos(_linha("1")), ["FULANO"]) is base
+    assert geracao.sem_reembolsos(base, grupos, [])[0] is base
+    assert geracao.sem_reembolsos(base, _grupos(_linha("1")), ["FULANO"])[0] is base
+
+
+def test_sem_reembolsos_acha_pelo_reembolso_para_do_registro(monkeypatch):
+    """A observação "REEMBOLSAR X" e o documento de quem não é sócio só
+    preenchem o `reembolso_para` do registro, não a `Linha` (revisão de
+    dinheiro, achado 1) — e o não apto liberado também conta."""
+    pedidos = {}
+
+    def remontar(entradas, nao, *, ids_liberados=()):
+        pedidos["liberados"] = set(ids_liberados)
+        from pagamentos_dia import relatorio
+        return relatorio.Resultado({"CONTA A": [
+            {"id": "1", "favorecido": "LOJA", "valor": 5.0, "reembolso_para": "FULANO"},
+            {"id": "9", "favorecido": "LOJA", "valor": 6.0, "reembolso_para": ""}]}, [])
+
+    monkeypatch.setattr(geracao.confirmacao, "remontar", remontar)
+    grupos = _grupos(_linha("1"), _linha("9"), nao_aptos=[_linha("4")])
+    c, tirados = geracao.sem_reembolsos(cf.Conferencia(), grupos, ["FULANO DE TAL"],
+                                        entradas=object())
+    assert set(c.decisoes) == {"1"} and pedidos["liberados"] == {"4"}
+    assert tirados == ["LOJA — R$ 5,00 — reembolso para FULANO"]
+
+
+def test_linha_tirada_pela_caixa_nao_aceita_acao():
+    """Desfazer nela gravaria DESFAZER na nuvem e apagaria a edição real."""
+    editar = cf.Evento(id=3, alvo="1", conta="A", acao=cf.EDITAR, motivo="x",
+                       campos={"reembolso_nome": "FULANO"})
+    nuvem = cf.Conferencia(eventos=(editar,))
+    vale, _ = geracao.sem_reembolsos(nuvem, _grupos(_linha("1")), ["FULANO"])
+    assert geracao.so_pela_caixa(nuvem, vale, "1")
+    assert not geracao.so_pela_caixa(nuvem, nuvem, "1")
+    desmarcado = cf.Evento(id=4, alvo="1", conta="A", acao=cf.DESMARCAR, motivo="dono")
+    nuvem2 = cf.Conferencia(eventos=(editar, desmarcado))
+    vale2, _ = geracao.sem_reembolsos(nuvem2, _grupos(_linha("1")), ["FULANO"])
+    assert not geracao.so_pela_caixa(nuvem2, vale2, "1")
 
 
 # ------------------------------------------------------------ ordem do HTML
@@ -151,6 +189,21 @@ def test_renovar_tenta_de_novo_por_conexao_nova(monkeypatch):
     monkeypatch.setattr(rest, "_SESSAO", sessao)
     assert rest.renovar("r")["access_token"] == "a"
     assert sessao.chamadas == 2 and sessao.fechou >= 1
+
+
+def test_renovar_nao_repete_tempo_esgotado(monkeypatch):
+    """A resposta perdida pode ter trocado o token: repetir deslogaria."""
+    sessao = _SessaoQueCai(falhas=0)
+
+    def post(*_a, **_k):
+        sessao.chamadas += 1
+        raise requests.ReadTimeout("sem resposta")
+
+    sessao.post = post
+    monkeypatch.setattr(rest, "_SESSAO", sessao)
+    with pytest.raises(rest.SemRede):
+        rest.renovar("r")
+    assert sessao.chamadas == 1
 
 
 def test_renovar_duas_quedas_e_sem_rede(monkeypatch):

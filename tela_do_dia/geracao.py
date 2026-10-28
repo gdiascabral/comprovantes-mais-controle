@@ -231,33 +231,67 @@ def registro_a_mao(p, ordem: int) -> dict:
 MOTIVO_SEM_REEMBOLSO = "reembolso desligado no cartão 2 (não sai hoje)"
 
 
-def sem_reembolsos(conferencia, grupos, pessoas):
-    """A `conferencia` com os reembolsos das `pessoas` DESMARCADOS.
+def sem_reembolsos(conferencia, grupos, pessoas, entradas=None):
+    """(conferencia, tirados): a `conferencia` com os reembolsos das
+    `pessoas` DESMARCADOS e a lista de quem saiu, uma frase por linha.
 
     Pedido do dono (28/10/2026): escolher no cartão 2 se hoje há reembolso
     para os nomes do `confirmar_antes.json`. Desligado, a linha sai de tudo
     pelo caminho de sempre do "Desmarcar" — tela, a pagar, planilha, HTML,
-    remessa —, mas o evento é só da memória da tela: nada vai à nuvem. Os
-    eventos novos vêm depois de todos os da nuvem (id maior), então ganham de
-    um "liberar" gravado; o nome editado na tela vale sobre o do documento."""
+    remessa, agendados —, mas o evento é só da memória da tela: nada vai à
+    nuvem. Os eventos novos vêm depois de todos os da nuvem (id maior), então
+    ganham de um "liberar" gravado.
+
+    Quem é reembolso de quem é a MESMA régua do `html_pagamentos.
+    tirar_reembolsos`: o `reembolso_para` do registro (aviso "PAGAR PARA",
+    "REEMBOLSO X" no documento, "REEMBOLSAR X" na observação — revisão de
+    dinheiro, 28/10/2026: a `Linha` só sabe do aviso resolvido e do sócio do
+    cadastro), com o nome editado na tela por cima. Os registros saem de
+    `entradas` com TODOS os não aptos liberados, para o bloqueado que a nuvem
+    liberou também ser achado. `tirados` vai ao Registro: o nome casa pelo
+    começo, e um homônimo tirado por engano tem de aparecer."""
     pessoas = [p for p in (pessoas or ()) if str(p).strip()]
     if not pessoas:
-        return conferencia
+        return conferencia, []
     decisoes = conferencia.decisoes
-    alvos = []
+    candidatos = []                   # (id, favorecido, valor, nome)
+    if entradas is not None:
+        todos = confirmacao.remontar(entradas, (), ids_liberados=ids_nao_aptos(grupos))
+        for regs in todos.contas.values():
+            for r in regs:
+                candidatos.append((str(r.get("id") or ""), r.get("favorecido"),
+                                   r.get("valor"), r.get("reembolso_para") or ""))
     for g in grupos or ():
         for ln in (*g.entram, *g.nao_aptos):
-            d = decisoes.get(ln.id)
-            nome = (d.edicoes.get("reembolso_nome") if d is not None else "") or (
-                ln.reembolso_nome if getattr(ln, "reembolso", False) else "")
-            if nome and html_pagamentos.e_reembolso_de(nome, pessoas) and ln.id not in alvos:
-                alvos.append(ln.id)
+            candidatos.append((ln.id, getattr(ln, "favorecido", ""), getattr(ln, "valor", None),
+                               ln.reembolso_nome if getattr(ln, "reembolso", False) else ""))
+    alvos, tirados = [], []
+    for ident, favorecido, valor, nome in candidatos:
+        d = decisoes.get(ident)
+        nome = (d.edicoes.get("reembolso_nome") if d is not None else "") or nome
+        if not ident or ident in alvos or not nome or not html_pagamentos.e_reembolso_de(nome, pessoas):
+            continue
+        alvos.append(ident)
+        tirados.append(f"{favorecido or '?'} — {html_pagamentos.reais(valor or 0)} — "
+                       f"reembolso para {nome}")
     if not alvos:
-        return conferencia
+        return conferencia, []
     base = max((e.id for e in conferencia.eventos), default=0)
     extra = tuple(cf.Evento(id=base + 1 + i, alvo=a, conta="", acao=cf.DESMARCAR,
                             motivo=MOTIVO_SEM_REEMBOLSO) for i, a in enumerate(alvos))
-    return replace(conferencia, eventos=tuple(conferencia.eventos) + extra)
+    return replace(conferencia, eventos=tuple(conferencia.eventos) + extra), tirados
+
+
+def so_pela_caixa(conferencia_da_nuvem, conferencia_que_vale, alvo) -> bool:
+    """O alvo está desmarcado SÓ pela caixa dos reembolsos? Aí a tela recusa
+    mexer nele (revisão de dinheiro, 28/10/2026): o "Desfazer" gravaria na
+    nuvem um DESFAZER que apaga as decisões reais do alvo (a edição do
+    reembolso inclusive) e a linha voltaria a sair pela forma do ERP."""
+    d = conferencia_que_vale.decisoes.get(alvo)
+    if d is None or not d.desmarcado or d.motivo_desmarcar != MOTIVO_SEM_REEMBOLSO:
+        return False
+    real = conferencia_da_nuvem.decisoes.get(alvo)
+    return real is None or not real.desmarcado
 
 
 def resultado_da_tela(entradas, grupos, conferencia) -> relatorio.Resultado:

@@ -571,6 +571,32 @@ Regras que viraram lei:
   "<id>|<dígitos da linha>"), estável entre recálculos — nunca a posição; a
   chave igual (id vazio) ganha "#2", "#3"… para o Treeview não recusar.
 
+## Reembolso dos sócios no cartão 2 (28/10/2026)
+
+Pedido do dono: "dar opção aqui de escolher se vai ter reembolso para jv e
+jc ou não". A caixa "Reembolso para <nomes do `confirmar_antes.json`>"
+fica na linha dos botões do cartão 2, ligada ao abrir. Desligada,
+`geracao.sem_reembolsos` acrescenta à conferência eventos DESMARCAR locais
+(id acima de todos os da nuvem, motivo `MOTIVO_SEM_REEMBOLSO`) para cada
+linha cujo reembolso (o do documento ou o nome editado na tela) é de uma
+dessas pessoas (`html_pagamentos.e_reembolso_de`). O frame usa essa
+conferência (`_conferencia_que_vale`) no `por_conta`, no
+`resultado_da_tela` e no "Marcar agendados": a linha some do a pagar, da
+planilha, do HTML e da remessa pelo caminho do "Desmarcar". Nada vai à
+nuvem. A pergunta "Incluir reembolso…?" do HTML saiu desta aba; com a
+caixa desligada, o HTML de pessoa física ainda passa por
+`tirar_reembolsos` (essa lista não passa pela tela).
+
+Revisão de dinheiro do mesmo dia: (1) quem é reembolso é a régua do
+`tirar_reembolsos` — o `reembolso_para` dos registros de
+`confirmacao.remontar(entradas, ids_liberados=<todos os não aptos>)`, com o
+nome editado por cima —, não só a `Linha` (que não sabe da observação
+"REEMBOLSAR X" nem do documento de quem não é sócio); (2) trocar a caixa
+remonta a lista do "Marcar agendados" já montada; (3) linha desmarcada SÓ
+pela caixa recusa toda ação (`geracao.so_pela_caixa`): o "Desfazer" gravaria
+DESFAZER na nuvem e apagaria a edição real; (4) quem a caixa tirou vai ao
+Registro ao trocar e ao gerar o HTML (homônimo pelo prenome aparece).
+
 ## Lançamento dividido em N boletos (entrega 5, tarefa 3b)
 
 `boletos_somados` faz N linhas com o MESMO id; cada `confirmacao.Linha` e cada
