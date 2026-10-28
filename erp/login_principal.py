@@ -77,6 +77,12 @@ _TRAVAS: dict[str, threading.Lock] = {}
 _TRAVA_DAS_TRAVAS = threading.Lock()
 #: Quando a sessão foi vista de pé (ou o login terminou), por acesso.
 _ULTIMO_OK: dict[str, float] = {}
+#: Quantas verificações de pé já houve, por acesso. É por ela, e não pelo
+#: relógio, que se sabe se alguém conferiu DEPOIS de um pedido: no Windows o
+#: `time.monotonic` anda de ~15 ms em ~15 ms, e dois instantes seguidos saem
+#: iguais — o pedido de "caiu, entre de novo" passava por já atendido e o
+#: relogin era pulado (CI de 28/10/2026, 4 testes vermelhos).
+_GERACAO: dict[str, int] = {}
 #: A última falha, por acesso: (instante, mensagem).
 _FALHA: dict[str, tuple[float, str]] = {}
 
@@ -90,6 +96,7 @@ def esquecer() -> None:
     """Zera as verificações e as falhas guardadas (testes)."""
     with _TRAVA_DAS_TRAVAS:
         _ULTIMO_OK.clear()
+        _GERACAO.clear()
         _FALHA.clear()
 
 
@@ -106,7 +113,8 @@ def garantir_logado(acesso, *, caiu: bool = False, log=None, abrir_pagina=None,
     para os dublês dos testes."""
     log = log or (lambda _m: None)
     nome = acesso.nome
-    pedido = relogio()
+    with _TRAVA_DAS_TRAVAS:
+        pedido = _GERACAO.get(nome, 0)
     trava = _trava_do_processo(nome)
     if not trava.acquire(timeout=PRAZO_TRAVA_PROCESSO):
         raise ErpErro(f"outro pedido de login no Chrome central '{nome}' está "
@@ -116,7 +124,9 @@ def garantir_logado(acesso, *, caiu: bool = False, log=None, abrir_pagina=None,
         if falha is not None and relogio() - falha[0] < CARENCIA_FALHA:
             raise ErpErro(falha[1])
         ultimo = _ULTIMO_OK.get(nome)
-        if ultimo is not None and (ultimo >= pedido or
+        with _TRAVA_DAS_TRAVAS:
+            depois_do_pedido = _GERACAO.get(nome, 0) > pedido
+        if ultimo is not None and (depois_do_pedido or
                                    (not caiu and relogio() - ultimo < VALIDADE)):
             return False
         abrir_pagina = abrir_pagina or (lambda: _AbaPrincipal(acesso))
@@ -138,6 +148,8 @@ def garantir_logado(acesso, *, caiu: bool = False, log=None, abrir_pagina=None,
             raise erro from e
         _FALHA.pop(nome, None)
         _ULTIMO_OK[nome] = relogio()
+        with _TRAVA_DAS_TRAVAS:
+            _GERACAO[nome] = _GERACAO.get(nome, 0) + 1
         return entrou
     finally:
         trava.release()
