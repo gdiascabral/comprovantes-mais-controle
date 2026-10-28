@@ -123,18 +123,40 @@ paths:
   nunca entrava: nascia em `#/login` em CORRIDA com o login da aba do Anexar e
   esperava 90 s. Agora há UM caminho de login, sempre primeiro:
   `login_principal.garantir_logado(acesso, caiu=False, log=) -> bool` (True =
-  entrou agora). Logado (porteiro de pé no servidor, ou outra aba já entrou):
-  ninguém loga. Fora: UMA aba própria, marcada por `window.name =
-  "mc-login-principal"` e reaproveitada (não acumula), entra pela tela com o
-  login guardado e termina PARADA em `#/app/dashboard` — só desconecta, não
-  fecha. Os outros pedidos esperam: no processo, uma `threading.Lock` por
-  acesso; entre processos, a trava de arquivo `.<nome>.login.trava` (espera
-  `ESPERA_TRAVA` 180 s, `velha` = `login_tela.VELHA_TRAVA` 600 s, a mesma de
-  sempre), relendo a tela depois de pegá-la (o outro pode ter acabado de
-  entrar). Verificação recente (`VALIDADE`, 30 s) vale para quem não viu a
-  queda; `caiu=True` só a aceita se for POSTERIOR ao pedido — três pedidos
-  "caiu" juntos fazem UM relogin. Roda numa thread própria, com Playwright
-  próprio (quem pede já tem o seu, e sync só serve na thread que o criou).
+  entrou agora). **A decisão "fora" é tomada na MESMA rota do MCClient e da
+  leitura** (`#/payable-installments`, recarregada) e **só com sinal FORTE**
+  (`login_tela.SINAIS_FORTES`: campo de senha, "Entre na sua conta");
+  "não tem permissão" sozinho NUNCA dispara login — o ERP o mostra também
+  com sessão boa (revisão de 28/10/2026; a leitura usa o mesmo critério).
+  Logado (porteiro de pé no servidor, ou outra aba já entrou): ninguém loga.
+  Fora: UMA aba própria entra pela tela com o login guardado e termina PARADA
+  em `#/app/dashboard` — só desconecta, não fecha. A aba nasce por `PUT
+  /json/new` (não vem para a frente, ao contrário do `new_page()`), o
+  targetId dela fica em `<perfil>/../.<nome>.login.aba` e ela é achada de
+  novo pelo targetId via CDP (`Target.getTargetInfo`), nunca rodando JS nas
+  abas dos outros. Os outros pedidos esperam: no processo, uma
+  `threading.Lock` por acesso (com prazo, `PRAZO_TRAVA_PROCESSO` → `ErpErro`
+  "outro pedido de login…"); entre processos, a trava de arquivo
+  `.<nome>.login.trava` (espera `ESPERA_TRAVA` 180 s, `velha` =
+  `login_tela.VELHA_TRAVA` 600 s), relendo a tela depois de pegá-la (o
+  outro pode ter acabado de entrar). **`central.trava` recupera na hora a
+  trava de pid MORTO** (`central.pid_vivo`: no Windows por `OpenProcess` +
+  `GetExitCodeProcess`, NUNCA `os.kill`, que lá mata o processo); arquivo
+  sem pid legível só pela `velha` — por isso a espera de 180 s abaixo da
+  `velha` de 600 s é coerente: trava viva é alguém entrando de verdade.
+  Mudou o `central.py`: copiar no `coletor/mc_central.py` do água e energia.
+  Verificação recente (`VALIDADE`, 30 s) vale para quem não viu a queda;
+  `caiu=True` só a aceita se for POSTERIOR ao pedido — três pedidos "caiu"
+  juntos fazem UM relogin. **Login que falha fica em carência**
+  (`CARENCIA_FALHA`, 60 s): todo pedido nesse intervalo recebe o mesmo
+  `ErpErro` sem tentar de novo. Roda numa thread própria, com Playwright
+  próprio (quem pede já tem o seu, e sync só serve na thread que o criou),
+  e quem pede espera no máximo `PRAZO_TOTAL` (trava + login + folga).
+  **`_sessao_do_central` pede o principal FORA de `_TRAVA_CENTRAIS`** e
+  passa a resposta a `do_acesso(ja_pedido=)`: o login de minutos não prende
+  quem só quer a sessão já aberta. `_esperar_pronto` tem teto fixo
+  (`_TETO_PRONTO`, 120 s) e, estourado, fecha a aba SEM esperar a dona;
+  `fechar` espera no máximo `_PRAZO_SAIDA` (o `atexit` nunca pendura).
   `login_tela.py` é o caminho do MCClient num lugar só: `SINAIS_DE_LOGIN`,
   `JS_LOGIN_ANGULAR` + `entrar_pelo_controller` (scope do AngularJS),
   `credencial_do_acesso` (a do `acessos.json`, senão o `login.dat` do app;
@@ -149,7 +171,8 @@ paths:
   Tela que não mostra nem área logada nem login dá erro dizendo isso (o recado
   do porteiro saiu). `reentrou()` avisa uma vez que o principal entrou por ela:
   a tela do dia põe no Registro "a sessão do ERP tinha caído; entrei de novo e
-  li os saldos" (o erro cru vai ao diagnóstico). O `MCClient` central pede o
+  li os saldos" SÓ com relogin de fato; a 2ª tentativa que passa sem relogin
+  diz "li os saldos na 2ª tentativa" (o erro cru vai ao diagnóstico). O `MCClient` central pede o
   principal, confere a própria aba (`_conferir_sessao`, com reload), e vendo
   a queda pede `caiu=True` antes de cair no login próprio de sempre (sob a
   trava; fica como último recurso, que deixa a pessoa entrar na janela). A
@@ -158,7 +181,9 @@ paths:
   motivo real. **O porteiro não muda**: abre o `MCClient` com
   `login_principal = False`, porque ele É quem entra. Testes:
   `tests/test_erp_sessao_pagina_login.py` (dublês; o conftest proíbe a aba
-  real do principal, `_login_principal_nunca_abre_chrome` — um teste com o
+  real do principal, `_login_principal_nunca_abre_chrome`, por `pytest.fail`
+  — que o `except Exception` do MCClient não engole — e cobra de novo no fim
+  do teste; um teste com o
   `garantir_chrome` trocado por 127.0.0.1:9230 encontrou o Chrome central do
   dono vivo nessa porta).
   **`MC_CENTRAL=off`** desliga tudo e o app volta a ser o de antes; renomear o

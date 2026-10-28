@@ -313,10 +313,11 @@ esquece a sessão que FALHOU (`SessaoApi._sessao`, ou `erro.sessao` do porteiro
 sem token), por identidade: a que a Conciliação acabou de recriar fica.
 Erro do ERP vira `ErpError`, nunca saldo zero; `acessos.json` estragado falha
 FECHADO. **Registro (28/10/2026)**: quando o relogin resolve (o login
-principal dentro da `SessaoPelaPagina`, `reentrou()`, ou a 2ª tentativa), a
-linha é `erp_do_dia.RELOGIN` ("a sessão do ERP tinha caído; entrei de novo e
-li os saldos"); o erro cru da 1ª vai ao diagnóstico (`diag=`), nunca ao
-Registro. Conta sem saldo mostra "—" no mínimo e no saldo final, com situação
+principal dentro da `SessaoPelaPagina`, `reentrou()`), a linha é
+`erp_do_dia.RELOGIN` ("a sessão do ERP tinha caído; entrei de novo e li os
+saldos"); a 2ª tentativa que passa SEM relogin de fato diz
+`SEGUNDA_TENTATIVA` ("li os saldos na 2ª tentativa"). O erro cru da 1ª vai
+ao diagnóstico (`diag=`), nunca ao Registro. Conta sem saldo mostra "—" no mínimo e no saldo final, com situação
 "erro"; o Excel recusa quando `validacao.exigir_todos_os_saldos` está ligado
 (saldo do banco digitado supre o do sistema) e pergunta quando não está.
 
