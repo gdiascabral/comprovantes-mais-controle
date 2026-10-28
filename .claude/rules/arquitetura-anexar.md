@@ -207,8 +207,14 @@ ver `docs/PORTEIRO.md`). O que muda:
 
 - **Aba própria**: abre UMA aba e trabalha só nela; na saída fecha só as suas.
 - **Nunca `ctx.close()`/`browser.close()`**: fecharia o Chrome de todos.
-- **`garantir_login` pega a trava** `.<acesso>.login.trava` (espera e `velha`
-  de 600 s); se a espera estoura, devolve `False` sem entrar.
+- **`garantir_login` pede primeiro o LOGIN PRINCIPAL** (28/10/2026,
+  `erp/login_principal.py`, ver `arquitetura-erp.md`): pede, confere a própria
+  aba (`_conferir_sessao`), e vendo a sessão caída pede de novo com
+  `caiu=True`. Só se isso não resolver cai no caminho de sempre, que **pega a
+  trava** `.<acesso>.login.trava` (espera e `velha` de 600 s; se a espera
+  estoura, devolve `False` sem entrar). O porteiro desliga o principal
+  (`login_principal = False`). `_login_pelo_controller` e `_credencial`
+  delegam para `erp/login_tela.py`.
 - **`_abas_da_pessoa()` vem vazia**: aba que não é nossa pode ser de outro robô.
 - **`abrir_aba_da_pessoa` é sempre aba nova**, para não trazer à frente a de
   outro robô.

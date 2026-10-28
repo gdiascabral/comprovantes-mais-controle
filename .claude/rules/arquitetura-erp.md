@@ -106,7 +106,7 @@ paths:
   SÓ se ela `is` a sessão que falhou — a recriada por outra aba não cai —,
   para o próximo `logar` montar outra — a tela do dia usa depois de um erro do ERP
   (a guardada pode estar `viva` com a autenticação de antes de um login).
-  `porteiro.py` é o único que entra pela tela: sobe o Chrome, confere o login
+  `porteiro.py` (no servidor) entra pela tela: sobe o Chrome, confere o login
   a cada ciclo e fecha a própria aba ao sair (Ctrl+C, SIGTERM/SIGBREAK,
   `atexit`).
   **Regra: robô nunca fecha o Chrome central** — nem `browser.close()` nem
@@ -115,6 +115,52 @@ paths:
   **A trava de login é comum ao app e ao água e energia**:
   `<perfil>/../.<nome>.login.trava`, pela mesma `central.trava`; quem precisa
   logar no central espera quem já está logando.
+  **O LOGIN PRINCIPAL** (28/10/2026, decisão do dono; `login_principal.py` +
+  `login_tela.py`). diagnostico.log de 22 a 28/10: "o Chrome central
+  'principal' não está logado no ERP — o porteiro precisa entrar" em TODA
+  abertura (a conferência de contas novas desistia calada) e no "Buscar
+  pagamentos e saldos". No notebook não há porteiro, e a `SessaoPelaPagina`
+  nunca entrava: nascia em `#/login` em CORRIDA com o login da aba do Anexar e
+  esperava 90 s. Agora há UM caminho de login, sempre primeiro:
+  `login_principal.garantir_logado(acesso, caiu=False, log=) -> bool` (True =
+  entrou agora). Logado (porteiro de pé no servidor, ou outra aba já entrou):
+  ninguém loga. Fora: UMA aba própria, marcada por `window.name =
+  "mc-login-principal"` e reaproveitada (não acumula), entra pela tela com o
+  login guardado e termina PARADA em `#/app/dashboard` — só desconecta, não
+  fecha. Os outros pedidos esperam: no processo, uma `threading.Lock` por
+  acesso; entre processos, a trava de arquivo `.<nome>.login.trava` (espera
+  `ESPERA_TRAVA` 180 s, `velha` = `login_tela.VELHA_TRAVA` 600 s, a mesma de
+  sempre), relendo a tela depois de pegá-la (o outro pode ter acabado de
+  entrar). Verificação recente (`VALIDADE`, 30 s) vale para quem não viu a
+  queda; `caiu=True` só a aceita se for POSTERIOR ao pedido — três pedidos
+  "caiu" juntos fazem UM relogin. Roda numa thread própria, com Playwright
+  próprio (quem pede já tem o seu, e sync só serve na thread que o criou).
+  `login_tela.py` é o caminho do MCClient num lugar só: `SINAIS_DE_LOGIN`,
+  `JS_LOGIN_ANGULAR` + `entrar_pelo_controller` (scope do AngularJS),
+  `credencial_do_acesso` (a do `acessos.json`, senão o `login.dat` do app;
+  nunca impressa) e `caminho_da_trava`; `MCClient._login_pelo_controller` e
+  `_credencial` delegam para ele. Sem login guardado o erro diz "entre no ERP
+  pelo app uma vez (Minha aba no ERP) para guardar o login". **Os três
+  consumidores**: `SessaoPelaPagina.do_acesso` pede o principal ANTES de abrir
+  a aba (a leitura nunca navega antes dele); caindo mesmo assim em `#/login`
+  (queda no meio, 401, `relogar`), recarrega a rota de captura a cada
+  `_RECARGA_NO_LOGIN` (5 s) — pega o login de outra aba — e só depois de
+  `_SO_RECARGA` (15 s) pede o principal com `caiu=True`; NUNCA entra sozinha.
+  Tela que não mostra nem área logada nem login dá erro dizendo isso (o recado
+  do porteiro saiu). `reentrou()` avisa uma vez que o principal entrou por ela:
+  a tela do dia põe no Registro "a sessão do ERP tinha caído; entrei de novo e
+  li os saldos" (o erro cru vai ao diagnóstico). O `MCClient` central pede o
+  principal, confere a própria aba (`_conferir_sessao`, com reload), e vendo
+  a queda pede `caiu=True` antes de cair no login próprio de sempre (sob a
+  trava; fica como último recurso, que deixa a pessoa entrar na janela). A
+  abertura (contas novas) passa por `SessaoApi.logar` → `Sessao.logar` →
+  `SessaoPelaPagina` e ganha o mesmo caminho; o recado da desistência é o
+  motivo real. **O porteiro não muda**: abre o `MCClient` com
+  `login_principal = False`, porque ele É quem entra. Testes:
+  `tests/test_erp_sessao_pagina_login.py` (dublês; o conftest proíbe a aba
+  real do principal, `_login_principal_nunca_abre_chrome` — um teste com o
+  `garantir_chrome` trocado por 127.0.0.1:9230 encontrou o Chrome central do
+  dono vivo nessa porta).
   **`MC_CENTRAL=off`** desliga tudo e o app volta a ser o de antes; renomear o
   `acessos.json` para `acessos.json.off` faz o mesmo na máquina inteira.
   Arquivo de acessos com problema falha FECHADO (`ErpErro`/`RuntimeError`),
