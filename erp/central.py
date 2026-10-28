@@ -155,15 +155,64 @@ def argumentos_chrome(exe: str, a: Acesso) -> list[str]:
             "about:blank"]
 
 
+def pid_vivo(pid: int) -> bool:
+    """O processo `pid` existe? Na dúvida, "sim" (nunca rouba trava de vivo).
+
+    No Windows NUNCA `os.kill(pid, 0)`: lá o sinal que não é Ctrl+C/Break
+    vira `TerminateProcess` — mataria o dono da trava. Pergunta-se ao Windows
+    pelo `OpenProcess` + `GetExitCodeProcess`."""
+    if pid <= 0:
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return True
+        return True
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        h = k32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
+        if not h:
+            # 87 = parâmetro inválido: não existe processo com esse pid.
+            return ctypes.get_last_error() != 87
+        try:
+            codigo = ctypes.c_ulong()
+            if not k32.GetExitCodeProcess(ctypes.c_void_p(h), ctypes.byref(codigo)):
+                return True
+            return codigo.value == 259                   # STILL_ACTIVE
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(h))
+    except Exception:
+        return True
+
+
+def _dono_morto(caminho: Path, pid_vivo_fn) -> bool:
+    """A trava guarda "<pid> <token>"; True só com pid legível e morto."""
+    try:
+        pid = int(caminho.read_bytes().split()[0])
+    except (OSError, ValueError, IndexError):
+        return False
+    return not pid_vivo_fn(pid)
+
+
 @contextlib.contextmanager
-def trava(caminho: Path, *, espera: float = 60.0, velha: float = 120.0):
+def trava(caminho: Path, *, espera: float = 60.0, velha: float = 120.0,
+          pid_vivo=None):
     """Trava entre processos por arquivo exclusivo. Arquivo mais velho que
-    `velha` segundos é de processo que morreu no meio e é recuperado.
+    `velha` segundos é de processo que morreu no meio e é recuperado — e,
+    desde 28/10/2026, também o de pid que não existe mais, na hora (quem
+    espera menos que `velha` não fica barrado por um processo morto).
+    Arquivo sem pid legível nunca é roubado antes de `velha`.
 
     O arquivo guarda o pid e um token único de quem o criou. Quem segurou a
     trava além de `velha` pode tê-la perdido para outro processo; ao sair, só
     apaga o arquivo se o conteúdo ainda for o seu, e assim não solta a trava
     do outro."""
+    pid_vivo_fn = pid_vivo or globals()["pid_vivo"]
     caminho.parent.mkdir(parents=True, exist_ok=True)
     limite = time.monotonic() + espera
     meu = f"{os.getpid()} {os.urandom(8).hex()}".encode()
@@ -178,7 +227,8 @@ def trava(caminho: Path, *, espera: float = 60.0, velha: float = 120.0):
             # de apagar) faz o O_EXCL levantar PermissionError, não
             # FileExistsError: é a mesma corrida, e se espera do mesmo jeito.
             try:
-                if time.time() - caminho.stat().st_mtime > velha:
+                if (time.time() - caminho.stat().st_mtime > velha
+                        or _dono_morto(caminho, pid_vivo_fn)):
                     caminho.unlink()
                     continue
             except FileNotFoundError:

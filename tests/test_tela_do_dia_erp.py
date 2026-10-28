@@ -144,10 +144,29 @@ def test_sessao_central_velha_e_esquecida_e_le_de_novo_uma_vez():
         esquecer=lambda nome, sessao: esquecidas.append((nome, sessao)), log=registro.append,
         diag=diagnostico.append)
     assert contas == ["conta"] and esquecidas == [("principal", velha._sessao)]
-    # 28/10: o Registro diz o que houve em português; o erro cru vai ao diagnóstico.
+    # 28/10: o Registro diz o que houve em português; o erro cru vai ao
+    # diagnóstico. Sem relogin de fato, a frase é neutra (revisão).
+    assert registro == ["  Saldos do ERP: li os saldos na 2ª tentativa."]
+    assert any("401 do prod-erp-api" in d for d in diagnostico)
+
+
+def test_segunda_tentativa_com_relogin_de_fato_diz_que_entrou_de_novo():
+    from erp.sessao import ErpErro
+
+    class _Reentrou:
+        def reentrou(self):
+            return True
+    velha = _SessaoQue(ErpErro("não está logado"))
+    nova = _SessaoQue()
+    nova._sessao = _Reentrou()
+    sessoes = iter([velha, nova])
+    registro = []
+    erp_do_dia.ler_saldos(Cfg(), ApiDaAba({}), central_ligado=lambda: True,
+                          logar=lambda cfg, log=print: next(sessoes),
+                          esquecer=lambda n, s: None, log=registro.append,
+                          diag=lambda m: None)
     assert registro == ["  Saldos do ERP: a sessão do ERP tinha caído; entrei de "
                         "novo e li os saldos."]
-    assert any("401 do prod-erp-api" in d for d in diagnostico)
 
 
 def test_relogin_dentro_da_sessao_central_e_avisado_no_registro():

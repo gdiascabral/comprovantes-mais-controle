@@ -64,6 +64,9 @@ _RECARGA_NO_LOGIN = 5.0
 _SO_RECARGA = 15.0
 #: Depois do login principal, quanto esperar a tela chamar os dois hosts.
 _PRAZO_LOGIN = 90.0
+#: Teto de `_esperar_pronto` (revisão de 28/10/2026: era a soma de todos os
+#: prazos, mais de 13 min com a trava).
+_TETO_PRONTO = 120.0
 #: Folga do Playwright entre um pedido e outro (é nela que os eventos chegam).
 _RESPIRO_MS = 200
 #: Para a thread dona sair, e `fechar()` não esperar para sempre por ela.
@@ -125,13 +128,17 @@ class SessaoPelaPagina:
     def do_acesso(cls, nome: str = "principal", *, fabrica_aba=None,
                   espera_captura: float = 90.0,
                   prazo_pedido: float = _PRAZO_PEDIDO, login_principal=None,
-                  diag=None) -> "SessaoPelaPagina":
+                  diag=None, ja_pedido: bool | None = None) -> "SessaoPelaPagina":
         """A sessão do acesso, já com a autenticação capturada.
 
         Pede o login principal ANTES de abrir a aba: a leitura nunca nasce na
         tela de login. Sem `fabrica_aba` (o caso real) o acesso vem do
         `acessos.json`, e o login principal é o de `erp.login_principal`. Com
-        `fabrica_aba` (os dublês dos testes) nada é lido do disco."""
+        `fabrica_aba` (os dublês dos testes) nada é lido do disco.
+
+        `ja_pedido` (True/False): o login principal já foi pedido por quem
+        chamou (`erp.sessao._sessao_do_central` o pede FORA da trava dos
+        centrais) e esta é a resposta dele; não pede de novo."""
         if fabrica_aba is None:
             a = central.acesso(nome)
             if a is None:
@@ -140,12 +147,13 @@ class SessaoPelaPagina:
             if diag is None:
                 diag = _diag_do_app
             if login_principal is None:
-                from . import login_principal as _lp
-
                 def login_principal(caiu=False):
-                    return _lp.garantir_logado(a, caiu=caiu, log=diag)
+                    return pedir_login_principal(nome, caiu=caiu, diag=diag)
         login_principal = login_principal or (lambda caiu=False: False)
-        entrou = login_principal(False)        # ErpErro com o motivo real
+        if ja_pedido is None:
+            entrou = login_principal(False)    # ErpErro com o motivo real
+        else:
+            entrou = ja_pedido
         s = cls(nome, fabrica_aba, espera_captura, prazo_pedido,
                 login_principal=login_principal, diag=diag, reentrou=bool(entrou))
         s._esperar_pronto()
@@ -162,11 +170,12 @@ class SessaoPelaPagina:
         """Espera a thread dona capturar os dois hosts, ou desiste limpo."""
         # Sai cedo quando a thread dona morre: exceção na captura inicial
         # (Chrome que não abre, aba que não conecta, login que não deu) chega
-        # aqui como ErpErro, e não como minutos de nada. O teto cobre a pior
-        # sequência da dona: captura, recargas, trava, login e releitura.
-        teto = (self._espera_captura + _PRAZO_RECAPTURA + _SO_RECARGA
-                + login_tela.VELHA_TRAVA + _PRAZO_LOGIN + 30)
-        limite = time.monotonic() + teto
+        # aqui como ErpErro, e não como minutos de nada. Teto fixo
+        # (`_TETO_PRONTO`): o login principal de antes de abrir já foi feito
+        # por quem chamou; se a dona precisar dele de novo e ele demorar,
+        # quem espera desiste limpo em vez de pendurar.
+        limite = time.monotonic() + min(_TETO_PRONTO, self._espera_captura
+                                        + _SO_RECARGA + _PRAZO_RECAPTURA)
         while time.monotonic() < limite:
             if self._pronto.is_set() or self._saiu.is_set():
                 break
@@ -174,7 +183,9 @@ class SessaoPelaPagina:
         if self._pronto.is_set() and not self._saiu.is_set():
             return
         erro = self._erro_inicio
-        self.fechar()
+        # Sem esperar a dona: ela pode estar presa no login principal, e
+        # quem chamou não pode pendurar junto (ela sai quando se soltar).
+        self.fechar(esperar=False)
         if erro is not None:
             if isinstance(erro, ErpErro):
                 raise erro
@@ -235,7 +246,7 @@ class SessaoPelaPagina:
         for i in range(passos):
             if self._pronto.is_set():
                 return "pronto"
-            if i >= carencia and login_tela.tem_sinal_de_login(self._page):
+            if i >= carencia and login_tela.tem_sinal_forte(self._page):
                 if no_login is None:
                     no_login = i
                 if i - no_login >= so_recarga:
@@ -489,17 +500,31 @@ class SessaoPelaPagina:
         """
         return not (self._fechada or self._quebrada) and self._thread.is_alive()
 
-    def fechar(self) -> None:
-        """Fecha a aba (só a própria) e encerra a thread dona. Idempotente."""
+    def fechar(self, esperar: bool = True) -> None:
+        """Fecha a aba (só a própria) e encerra a thread dona. Idempotente.
+        Espera a dona sair por no máximo `_PRAZO_SAIDA` (nunca pendura o
+        `atexit`); `esperar=False` nem isso."""
         with self._trava:
             ja = self._fechada
             self._fechada = True
             if not ja:
                 self._fila.put(_FIM)
-        if threading.current_thread() is not self._thread and not self._quebrada:
+        if (esperar and threading.current_thread() is not self._thread
+                and not self._quebrada):
             # Quebrada, a dona está presa num `evaluate`: esperar seria só
             # atraso. A sentinela fica na fila e ela sai quando se soltar.
             self._saiu.wait(_PRAZO_SAIDA)
+
+
+def pedir_login_principal(nome: str = "principal", *, caiu: bool = False,
+                          diag=None) -> bool:
+    """O login principal (`erp.login_principal`) do acesso `nome`, do
+    `acessos.json`. True = entrou agora; `ErpErro` com o motivo."""
+    a = central.acesso(nome)
+    if a is None:
+        raise ErpErro(f"o acesso '{nome}' não está no acessos.json")
+    from . import login_principal
+    return login_principal.garantir_logado(a, caiu=caiu, log=diag or _diag_do_app)
 
 
 def _diag_do_app(msg: str) -> None:

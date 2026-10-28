@@ -74,6 +74,7 @@ def _logar_pela_pagina(config, log=print):
 
 
 RELOGIN = "  Saldos do ERP: a sessão do ERP tinha caído; entrei de novo e li os saldos."
+SEGUNDA_TENTATIVA = "  Saldos do ERP: li os saldos na 2ª tentativa."
 
 
 def _reentrou(sessao) -> bool:
@@ -135,8 +136,8 @@ def ler_saldos(config, api, *, central_ligado=None, logar=None, esquecer=None,
             esquecer("principal", falhou)
             nova = logar(config, log=log)
             contas = nova.contas(ativas=True)
-            _reentrou(nova)                  # consome: o aviso sai uma vez só
-            log(RELOGIN)
+            # Só diz que entrou de novo quando houve relogin DE FATO.
+            log(RELOGIN if _reentrou(nova) else SEGUNDA_TENTATIVA)
     else:
         if not getattr(api, "_req_anexos", None) and not api.garantir_credenciais_anexos(log):
             raise ErpError("não consegui o acesso do Chrome do app ao cadastro de "

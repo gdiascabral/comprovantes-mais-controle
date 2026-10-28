@@ -524,3 +524,238 @@ def test_porteiro_abre_o_mcclient_sem_login_principal(monkeypatch):
     m = porteiro._mantenedor_real(lambda *_: None)
     m._abrir(ACESSO)
     assert criados[-1] == ("entrou", False)
+
+
+# ================================================ revisão de 28/10/2026
+
+
+class _SoPermissao(_Pagina):
+    """Fora da sessão, mas mostrando SÓ "não tem permissão" — o que o ERP
+    mostra também com sessão boa, enquanto o Firebase devolve o token."""
+
+    def locator(self, seletor):
+        return _Visivel(not self.erp.logado and seletor == "text=não tem permissão")
+
+
+def test_nao_tem_permissao_sozinho_nunca_dispara_o_login_principal():
+    erp = _Erp(logado=False)
+
+    @contextlib.contextmanager
+    def abrir():
+        yield _SoPermissao(erp, nome="principal")
+    entrou = login_principal.garantir_logado(
+        ACESSO, abrir_pagina=abrir, credencial=lambda: ("dono@exemplo", "x"),
+        trava_arquivo=_Trava(), dormir=lambda s: None)
+    assert entrou is False and erp.logins == []
+
+
+def test_nao_tem_permissao_sozinho_nao_faz_a_leitura_pedir_login():
+    erp = _Erp(logado=False)
+    pedidos = []
+    with pytest.raises(ErpErro):
+        _leitura(_SoPermissao(erp), lambda caiu=False: pedidos.append(caiu) or False,
+                 espera=0.5)
+    assert pedidos == [False]                       # nunca o caiu=True
+
+
+def test_principal_decide_na_rota_de_pagamentos_e_para_no_painel():
+    from erp.sessao_pagina import URL_CAPTURA
+    erp = _Erp(logado=False)
+    paginas = []
+
+    @contextlib.contextmanager
+    def abrir():
+        p = _Pagina(erp, nome="principal")
+        paginas.append(p)
+        yield p
+    login_principal.garantir_logado(
+        ACESSO, abrir_pagina=abrir, credencial=lambda: ("dono@exemplo", "x"),
+        trava_arquivo=_Trava(), dormir=lambda s: None)
+    assert paginas[0].gotos[0] == URL_CAPTURA
+    assert paginas[0].gotos[-1] == login_principal.URL_DASHBOARD
+
+
+def test_falha_do_principal_fica_em_carencia_e_nao_vira_login_a_cada_pedido():
+    erp = _Erp(logado=False)
+    abertas, agora = [], [1000.0]
+
+    @contextlib.contextmanager
+    def abrir():
+        abertas.append(1)
+        yield _Pagina(erp, nome="principal")
+
+    def pedir(caiu=False):
+        return login_principal.garantir_logado(
+            ACESSO, caiu=caiu, abrir_pagina=abrir, credencial=lambda: None,
+            trava_arquivo=_Trava(), dormir=lambda s: None,
+            relogio=lambda: agora[0])
+    with pytest.raises(ErpErro, match="Minha aba no ERP"):
+        pedir()
+    with pytest.raises(ErpErro, match="Minha aba no ERP"):
+        pedir(caiu=True)                            # dentro da carência
+    assert len(abertas) == 1
+    agora[0] += login_principal.CARENCIA_FALHA + 1
+    with pytest.raises(ErpErro):
+        pedir()
+    assert len(abertas) == 2
+
+
+def test_trava_do_processo_com_prazo_vira_erperro(monkeypatch):
+    monkeypatch.setattr(login_principal, "PRAZO_TRAVA_PROCESSO", 0.3)
+    trava = login_principal._trava_do_processo(ACESSO.nome)
+    trava.acquire()
+    try:
+        with pytest.raises(ErpErro, match="outro pedido"):
+            login_principal.garantir_logado(
+                ACESSO, abrir_pagina=lambda: pytest.fail("não devia abrir"),
+                dormir=lambda s: None)
+    finally:
+        trava.release()
+
+
+def test_login_principal_que_nao_termina_vira_erperro(monkeypatch):
+    monkeypatch.setattr(login_principal, "PRAZO_TOTAL", 0.3)
+    solta = threading.Event()
+
+    @contextlib.contextmanager
+    def abrir():
+        solta.wait(5)
+        yield _Pagina(_Erp(logado=True), nome="principal")
+    t0 = time.monotonic()
+    try:
+        with pytest.raises(ErpErro, match="não terminou"):
+            login_principal.garantir_logado(ACESSO, abrir_pagina=abrir,
+                                            dormir=lambda s: None)
+        assert time.monotonic() - t0 < 2
+    finally:
+        solta.set()
+
+
+def test_esperar_pronto_tem_teto_mesmo_com_o_principal_preso(monkeypatch):
+    import erp.sessao_pagina as sp
+    monkeypatch.setattr(sp, "_TETO_PRONTO", 0.5)
+    solta = threading.Event()
+
+    def principal(caiu=False):
+        if caiu:
+            solta.wait(5)
+        return False
+    t0 = time.monotonic()
+    try:
+        with pytest.raises(ErpErro):
+            _leitura(_Pagina(_Erp(logado=False)), principal, espera=5.0)
+        assert time.monotonic() - t0 < 2
+    finally:
+        solta.set()
+
+
+def test_sessao_do_central_pede_o_principal_fora_da_trava_dos_centrais(monkeypatch):
+    import erp.sessao_pagina as sp
+    vistos = []
+
+    def pedir(nome, caiu=False, diag=None):
+        vistos.append(("principal", erp_sessao._TRAVA_CENTRAIS.locked()))
+        return True
+
+    class _Sessao:
+        viva = True
+
+    def do_acesso(nome="principal", **k):
+        vistos.append(("abre", erp_sessao._TRAVA_CENTRAIS.locked(), k.get("ja_pedido")))
+        return _Sessao()
+    monkeypatch.setattr(sp, "pedir_login_principal", pedir)
+    monkeypatch.setattr(sp.SessaoPelaPagina, "do_acesso", staticmethod(do_acesso))
+    erp_sessao._sessao_do_central("principal")
+    assert vistos == [("principal", False), ("abre", True, True)]
+
+
+def test_do_acesso_com_ja_pedido_nao_pede_de_novo():
+    erp = _Erp(logado=True)
+    pedidos = []
+    s = SessaoPelaPagina.do_acesso(
+        "principal", fabrica_aba=lambda: _Aba(_Pagina(erp)), espera_captura=1.0,
+        login_principal=lambda caiu=False: pedidos.append(caiu) or False,
+        ja_pedido=True)
+    try:
+        assert pedidos == [] and s.reentrou() is True
+    finally:
+        s.fechar()
+
+
+# ----------------------------- a aba do principal: sem evaluate, sem frente
+
+
+class _Resposta:
+    def __init__(self, corpo, status=200):
+        self.corpo, self.status = corpo, status
+
+    def read(self):
+        return self.corpo
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *e):
+        return False
+
+
+def test_aba_principal_nasce_por_put_json_new_e_guarda_o_id(tmp_path):
+    import json
+    from urllib.parse import unquote
+
+    from erp.sessao_pagina import URL_CAPTURA
+    a = Acesso("principal", tmp_path / "perfis" / "principal", 9230)
+    pedidos = []
+
+    def abrir(pedido, timeout=None):
+        pedidos.append((pedido.get_method(), pedido.full_url, timeout))
+        if "/json/list" in pedido.full_url:
+            return _Resposta(b"[]")
+        return _Resposta(json.dumps({"id": "ALVO1", "type": "page"}).encode())
+    alvo = login_principal._alvo_da_aba(a, "http://127.0.0.1:1", abrir=abrir)
+    assert alvo == "ALVO1"
+    metodo, url, prazo = pedidos[-1]
+    assert metodo == "PUT" and "/json/new?" in url and prazo
+    assert unquote(url.split("/json/new?", 1)[1]) == URL_CAPTURA
+    assert login_principal._arquivo_da_aba(a).read_text().strip() == "ALVO1"
+
+
+def test_aba_principal_guardada_e_viva_e_reaproveitada(tmp_path):
+    import json
+    a = Acesso("principal", tmp_path / "perfis" / "principal", 9230)
+    login_principal._arquivo_da_aba(a).parent.mkdir(parents=True)
+    login_principal._arquivo_da_aba(a).write_text("ALVO1")
+
+    def abrir(pedido, timeout=None):
+        assert pedido.get_method() == "GET", "não cria aba nova"
+        return _Resposta(json.dumps([{"id": "ALVO1", "type": "page"}]).encode())
+    assert login_principal._alvo_da_aba(a, "http://127.0.0.1:1", abrir=abrir) == "ALVO1"
+
+
+def test_pagina_do_alvo_acha_pelo_target_id_sem_evaluate():
+    class P:
+        def __init__(self, alvo):
+            self.alvo = alvo
+
+        def evaluate(self, *a, **k):
+            pytest.fail("evaluate em aba que pode ser da pessoa")
+
+    class Sessao:
+        def __init__(self, p):
+            self.p = p
+
+        def send(self, metodo, params=None):
+            assert metodo == "Target.getTargetInfo"
+            return {"targetInfo": {"targetId": self.p.alvo}}
+
+        def detach(self):
+            pass
+    paginas = [P("DA-PESSOA"), P("ALVO1")]
+
+    class Ctx:
+        pages = paginas
+
+        def new_cdp_session(self, p):
+            return Sessao(p)
+    assert login_principal._pagina_do_alvo(Ctx(), "ALVO1") is paginas[1]
+    assert login_principal._pagina_do_alvo(Ctx(), "SUMIU") is None

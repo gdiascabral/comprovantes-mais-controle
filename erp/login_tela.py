@@ -34,6 +34,15 @@ SINAIS_DE_LOGIN = (
     "text=não tem permissão",            # aparece enquanto o token não volta
 )
 
+#: Os sinais que, SOZINHOS, bastam para dizer "está fora" e pedir login
+#: (revisão de 28/10/2026). "não tem permissão" fica de fora: o ERP o mostra
+#: também com sessão boa, enquanto o Firebase devolve o token — sozinho ele
+#: nunca dispara login.
+SINAIS_FORTES = (
+    'input[type="password"]',
+    "text=Entre na sua conta",
+)
+
 #: Espera e `velha` da trava de login. `velha` acima do pior caso de um login
 #: (cada `goto` tem 60 s, mais a espera de 90 s e as tentativas de rede): com
 #: menos, a trava seria dada como abandonada no meio do uso.
@@ -75,15 +84,20 @@ def _calado(_msg: str) -> None:
     pass
 
 
-def tem_sinal_de_login(page) -> bool:
+def tem_sinal_de_login(page, sinais=SINAIS_DE_LOGIN) -> bool:
     """A tela de login está à vista nesta aba? Erro ao olhar = "não"."""
-    for seletor in SINAIS_DE_LOGIN:
+    for seletor in sinais:
         try:
             if page.locator(seletor).first.is_visible(timeout=1200):
                 return True
         except Exception:
             continue
     return False
+
+
+def tem_sinal_forte(page) -> bool:
+    """Campo de senha ou "Entre na sua conta" à vista: é o login, de certeza."""
+    return tem_sinal_de_login(page, SINAIS_FORTES)
 
 
 def entrar_pelo_controller(page, email: str, senha: str, diag=None) -> bool:
