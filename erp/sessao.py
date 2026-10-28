@@ -434,7 +434,16 @@ _TRAVA_CENTRAIS = threading.Lock()
 
 
 def _sessao_do_central(nome: str = "principal"):
-    from .sessao_pagina import SessaoPelaPagina
+    from . import sessao_pagina
+    with _TRAVA_CENTRAIS:
+        atual = _CENTRAIS.get(nome)
+        if atual is not None and atual.viva:
+            return atual
+    # O login principal FORA da trava (revisão de 28/10/2026): ele pode
+    # esperar minutos pela trava de login de outro processo, e prender aqui
+    # pararia toda thread que só quer a sessão já aberta. Quem pediu junto
+    # espera no próprio login principal (um login só).
+    entrou = sessao_pagina.pedir_login_principal(nome)
     with _TRAVA_CENTRAIS:
         atual = _CENTRAIS.get(nome)
         if atual is None or not atual.viva:
@@ -443,7 +452,7 @@ def _sessao_do_central(nome: str = "principal"):
                 # sobrevive ao processo; sem isso ficaria órfã no Chrome central.
                 _CENTRAIS.pop(nome, None)
                 _fechar_quieto(atual)
-            atual = SessaoPelaPagina.do_acesso(nome)
+            atual = sessao_pagina.SessaoPelaPagina.do_acesso(nome, ja_pedido=entrou)
             _CENTRAIS[nome] = atual
         return atual
 

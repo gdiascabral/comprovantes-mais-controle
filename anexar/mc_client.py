@@ -13,7 +13,6 @@ quando JÁ há anexo. Por isso ancoramos na seção "Histórico de Pagamentos" e
 menu ⋮ (MoreVertIcon), que existem tanto nos pendentes quanto nos já anexados.
 """
 import contextlib
-import json
 import subprocess
 import time
 import urllib.parse
@@ -25,7 +24,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from . import config, credenciais
 
 import util
-from erp import central
+from erp import central, login_tela
 
 
 class SemRede(RuntimeError):
@@ -77,11 +76,7 @@ TXT_HISTORICO = "Histórico de Pagamentos"   # seção que ancora as linhas
 # não havia sessão. A tela de login, essa, é estável.
 #
 # Regra herdada do projeto da Conciliação Diária, onde roda há meses.
-SINAIS_DE_LOGIN = (
-    'input[type="password"]',
-    "text=Entre na sua conta",
-    "text=não tem permissão",            # aparece enquanto o token não volta
-)
+SINAIS_DE_LOGIN = login_tela.SINAIS_DE_LOGIN    # um lugar só desde 28/10/2026
 MENU_EDITAR = "Editar pagamento"            # item do menu ⋮
 TXT_DIALOGO_EDITAR = "Editar Pagamento"     # título do diálogo de edição
 TXT_ARQUIVOS = "Arquivos"                   # seção de anexos no diálogo
@@ -258,36 +253,7 @@ _JS_FILL_LOGIN = r"""
 # alternativa — o clique chama login() com credencial vazia e falha em
 # SILÊNCIO: sem requisição de rede e sem mensagem na tela. Escrever direto no
 # scope e chamar login() fecha esse buraco.
-_JS_LOGIN_ANGULAR = r"""
-(dados) => {
-  if (typeof angular === 'undefined') return {ok: false, motivo: 'AngularJS ausente'};
-  const campo = document.querySelector('#username')
-             || document.querySelector('#userpassword')
-             || document.querySelector('input[type=password]');
-  if (!campo) return {ok: false, motivo: 'campos de login não encontrados'};
-  let escopo = null;
-  try { escopo = angular.element(campo).scope(); } catch (e) {
-    return {ok: false, motivo: 'scope inacessível: ' + e.message};
-  }
-  while (escopo && !escopo.$ctrl) escopo = escopo.$parent;
-  if (!escopo || !escopo.$ctrl || typeof escopo.$ctrl.login !== 'function') {
-    return {ok: false, motivo: 'controller de login não encontrado'};
-  }
-  const ctrl = escopo.$ctrl;
-  escopo.$apply(() => {
-    ctrl.credentials = ctrl.credentials || {};
-    ctrl.credentials.username = dados.email;
-    ctrl.credentials.password = dados.senha;
-  });
-  if (!ctrl.credentials.username || !ctrl.credentials.password) {
-    return {ok: false, motivo: 'não consegui gravar as credenciais no scope'};
-  }
-  try { ctrl.login(); } catch (e) {
-    return {ok: false, motivo: 'login() lançou: ' + e.message};
-  }
-  return {ok: true};
-}
-"""
+_JS_LOGIN_ANGULAR = login_tela.JS_LOGIN_ANGULAR  # um lugar só desde 28/10/2026
 
 # clica no botão ENTRAR (fallback, quando os seletores do Playwright não pegam)
 _JS_CLICK_ENTRAR = r"""
@@ -307,6 +273,10 @@ class MCClient:
     central = False
     _acesso = None
     _browser = None
+    #: No modo central, pedir o LOGIN PRINCIPAL (`erp.login_principal`) antes
+    #: de olhar a própria aba. O porteiro desliga: ele É quem entra, e o
+    #: comportamento dele não muda.
+    login_principal = True
 
     def __init__(self, headless: bool = False, log=print, acesso=None):
         self.headless = headless
@@ -766,7 +736,21 @@ class MCClient:
         aberta)")."""
         if not self.central:
             return self._garantir_login_sem_trava()
-        caminho = self._acesso.perfil.parent / f".{self._acesso.nome}.login.trava"
+        if self.login_principal:
+            # Decisão do dono (28/10/2026): um login só, sempre primeiro, e
+            # quem vê a sessão caída pede de novo o MESMO login (os outros
+            # esperam). Fora da trava de arquivo: o login principal a pega
+            # sozinho, e ela não é reentrante. Se ele não resolver, segue o
+            # caminho de sempre (que deixa a pessoa entrar na janela).
+            self._pedir_login_principal(caiu=False)
+            if self._conferir_sessao():
+                self.log("Login OK (sessão ainda aberta).")
+                return True
+            self._pedir_login_principal(caiu=True)
+            if self._conferir_sessao():
+                self.log("Login OK.")
+                return True
+        caminho = login_tela.caminho_da_trava(self._acesso)
         # `velha` acima do pior caso do login (cada `goto` tem 60 s, com a
         # espera de 90 s e as tentativas de rede): trava com menos que isso
         # seria dada como abandonada no meio do uso, e o outro robô entraria
@@ -776,7 +760,8 @@ class MCClient:
         with contextlib.ExitStack() as pilha:
             try:
                 pilha.enter_context(
-                    central.trava(caminho, espera=600, velha=600))
+                    central.trava(caminho, espera=600,
+                                  velha=login_tela.VELHA_TRAVA))
             except TimeoutError as e:
                 config.diag(f"trava de login do acesso "
                             f"'{self._acesso.nome}': {e}")
@@ -785,35 +770,47 @@ class MCClient:
                 return False
             return self._garantir_login_sem_trava()
 
+    def _pedir_login_principal(self, caiu: bool) -> None:
+        """`erp.login_principal.garantir_logado`, sem derrubar o fluxo: o erro
+        vai ao diagnóstico e ao log da janela, e quem chamou segue."""
+        try:
+            from erp import login_principal
+            login_principal.garantir_logado(self._acesso, caiu=caiu,
+                                            log=config.diag)
+        except Exception as e:
+            config.diag(f"login principal do acesso '{self._acesso.nome}': "
+                        f"{type(e).__name__}: {e}")
+            self.log(f"[aviso] login principal: {str(e)[:160]}")
+
+    def _conferir_sessao(self) -> bool:
+        """A aba do robô na tela de Pagamentos, RECARREGADA, está logada?
+
+        Recarrega de propósito: o ERP é single-spa, e com o token vencido
+        navegar só troca a rota no cliente e repinta a casca da tela sem
+        mostrar o login. O reload força o bootstrap: o Firebase tenta
+        restaurar o token do IndexedDB e, falhando, o ERP cai na tela de
+        login — que é o sinal que sabemos ler (11/08/2026)."""
+        self._garantir_aba_do_robo()
+        self._ir_para(config.MC_URL_PAGAMENTOS)
+        try:
+            self.page.reload(wait_until="domcontentloaded")
+        except Exception:
+            pass                          # rede oscilando: segue com o que há
+        self.page.wait_for_timeout(2500)
+        return self._esta_logado()
+
     def _garantir_login_sem_trava(self):
         """Garante a área logada. Se cair na tela de login: usa a credencial
         salva (opcional, botão 🔑) OU deixa o Chrome autopreencher a senha
         guardada por ele, e clica em ENTRAR sozinho — aguardando a tela mudar.
         Se nada disso resolver (1ª vez), o usuário loga na própria janela do
         Chrome (que então oferece salvar a senha)."""
-        self._garantir_aba_do_robo()
-        self._ir_para(config.MC_URL_PAGAMENTOS)
-        # RECARREGA de propósito, e isto não é desperdício.
-        #
-        # O ERP é single-spa: navegar para "#/payable-installments" só troca a
-        # rota no cliente, sem levantar a aplicação de novo. Com o token já
-        # vencido, ela repinta a casca da tela — menu, cabeçalho, rodapé com
-        # totais — e NÃO mostra a tela de login. O app então conclui "logado",
-        # e só descobre o problema lá na frente, com a grade voltando vazia
-        # porque as requisições são negadas.
-        #
-        # O reload força o bootstrap: o Firebase tenta restaurar o token do
-        # IndexedDB e, falhando, o ERP cai na tela de login — que é o sinal
-        # que sabemos ler. Foi assim que o problema apareceu em 11/08/2026,
-        # quando o usuário recarregou a página na mão e viu "credenciais
-        # vencidas". O `extrato_mc.py` já recarregava, e é por isso que a aba
-        # Relatório Mensal não sofria disso.
-        try:
-            self.page.reload(wait_until="domcontentloaded")
-        except Exception:
-            pass                          # rede oscilando: segue com o que há
-        self.page.wait_for_timeout(2500)
-        if self._esta_logado():
+        # RECARREGA de propósito, e isto não é desperdício: navegar só troca
+        # a rota no cliente e, com o token vencido, o ERP repinta a casca sem
+        # mostrar o login (ver `_conferir_sessao`, 11/08/2026). O
+        # `extrato_mc.py` já recarregava, e é por isso que a aba Relatório
+        # Mensal não sofria disso.
+        if self._conferir_sessao():
             self.log("Login OK (sessão ainda aberta).")
             return True
 
@@ -923,19 +920,9 @@ class MCClient:
         No modo central, o acesso pode ter credencial própria (o mesmo JSON
         cifrado com DPAPI do `credenciais.py`, noutro arquivo): é com ela que
         se entra. Sem ela, vale o login salvo do app."""
-        arq = self._acesso.credencial if self.central else None
-        if arq is None or not arq.exists():
+        if not self.central:
             return credenciais.carregar()
-        try:
-            d = json.loads(util.revelar_bytes(arq.read_bytes()).decode("utf-8"))
-            return (d["email"], d["senha"])
-        except Exception as e:
-            # Só o tipo do erro: a mensagem de um JSON quebrado pode carregar
-            # um pedaço do texto decifrado — e ali dentro está a senha.
-            config.diag(f"credencial do acesso '{self._acesso.nome}' não pôde "
-                        f"ser lida ({type(e).__name__}) — vai pedir login "
-                        f"manual. Arquivo: {arq.name}")
-            return None
+        return login_tela.credencial_do_acesso(self._acesso, config.diag)
 
     def _tem_campo_senha(self, aba=None) -> bool:
         alvo = aba if aba is not None else self.page
@@ -947,23 +934,10 @@ class MCClient:
 
     def _login_pelo_controller(self, email: str, senha: str) -> bool:
         """Grava as credenciais no scope do AngularJS e chama login().
-        True se conseguiu disparar o login; False para tentar pela UI."""
-        try:
-            self.page.fill("#username", email, timeout=3000)
-            self.page.fill("#userpassword", senha, timeout=3000)
-        except Exception:
-            pass            # a tela é secundária: o que vale é o scope abaixo
-        try:
-            r = self.page.evaluate(_JS_LOGIN_ANGULAR,
-                                   {"email": email, "senha": senha})
-        except Exception as e:
-            config.diag(f"login pelo controller falhou: {e!r}")
-            return False
-        if isinstance(r, dict) and r.get("ok"):
-            return True
-        motivo = r.get("motivo") if isinstance(r, dict) else r
-        config.diag(f"login pelo controller não rodou: {motivo}")
-        return False
+        True se conseguiu disparar o login; False para tentar pela UI.
+        O mesmo de `erp.login_tela` (a aba de leitura e o login principal)."""
+        return login_tela.entrar_pelo_controller(self.page, email, senha,
+                                                 diag=config.diag)
 
     def _preencher(self, email: str, senha: str):
         try:

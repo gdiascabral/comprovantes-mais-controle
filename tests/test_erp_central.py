@@ -425,3 +425,41 @@ def test_garantir_chrome_sem_perfil_ainda_sobe(tmp_path):
     central.garantir_chrome(a, popen=popen, vivo=lambda _a: estado["vivo"],
                             exe="C:/chrome.exe", dormir=lambda s: None)
     assert estado["vivo"]
+
+
+# ------------------------------------- revisão 28/10: trava de pid morto
+
+
+def test_trava_de_pid_que_morreu_e_recuperada_na_hora(tmp_path):
+    """O login principal espera a trava 180 s e a `velha` é 600 s: sem isto,
+    a trava de um processo que morreu no meio barrava todo mundo 10 min."""
+    caminho = tmp_path / ".principal.login.trava"
+    caminho.write_text("424242 token-do-morto")
+    inicio = time.monotonic()
+    with central.trava(caminho, espera=5, velha=600,
+                       pid_vivo=lambda pid: pid != 424242):
+        assert caminho.read_text().split()[0] == str(os.getpid())
+    assert time.monotonic() - inicio < 2
+
+
+def test_trava_de_pid_vivo_continua_esperando(tmp_path):
+    caminho = tmp_path / ".principal.login.trava"
+    caminho.write_text("424242 token-do-vivo")
+    with pytest.raises(TimeoutError):
+        with central.trava(caminho, espera=0.3, velha=600,
+                           pid_vivo=lambda pid: True):
+            pass
+    assert caminho.read_text() == "424242 token-do-vivo"
+
+
+def test_trava_sem_pid_legivel_nunca_e_roubada(tmp_path):
+    caminho = tmp_path / ".principal.login.trava"
+    caminho.write_text("lixo")
+    with pytest.raises(TimeoutError):
+        with central.trava(caminho, espera=0.3, velha=600,
+                           pid_vivo=lambda pid: False):
+            pass
+
+
+def test_pid_vivo_reconhece_o_proprio_processo():
+    assert central.pid_vivo(os.getpid()) is True

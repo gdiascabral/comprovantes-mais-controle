@@ -17,6 +17,23 @@ Playwright respirar (`wait_for_timeout`) para os eventos de request chegarem.
 Ninguém fica pendurado: quando ela sai — por `fechar()` ou porque a aba
 morreu —, todo `Future` que ainda estiver na fila recebe `ErpErro`, e quem
 chamar `pedir` depois disso recebe o mesmo erro na hora.
+
+A TELA DE LOGIN NÃO É DESISTÊNCIA (28/10/2026)
+-----------------------------------------------
+Até aqui esta aba nunca entrava: caindo no login, desistia com "o porteiro
+precisa entrar". No notebook não há porteiro, e ela nascia em CORRIDA com o
+login da aba do Anexar (diagnostico.log do dono, 22 a 28/10). Agora:
+
+1. ANTES de navegar, pede o LOGIN PRINCIPAL (`erp.login_principal`): logado,
+   volta na hora; fora, espera a única aba que entra (sob as travas);
+2. caindo mesmo assim na tela de login (a sessão caiu no meio, ou o 401),
+   RECARREGA a rota de captura a cada `_RECARGA_NO_LOGIN` s — pega o login
+   que outra aba do MESMO Chrome fez;
+3. só depois de `_SO_RECARGA` s sem ninguém entrar, pede o login principal
+   de novo (`caiu=True`) e relê a autenticação do tráfego.
+
+Esta aba nunca entra sozinha, e nunca por `POST /users/login` (derrubaria a
+sessão do Chrome).
 """
 from __future__ import annotations
 
@@ -27,7 +44,7 @@ from concurrent.futures import Future
 from concurrent.futures import TimeoutError as _PrazoFuture
 from urllib.parse import urlsplit
 
-from . import central, hosts
+from . import central, hosts, login_tela
 from .pagina import TransportePagina
 from .sessao import ErpErro, SessaoRecusada
 
@@ -36,6 +53,20 @@ _CHAVES = {"authorization", "company-id", "user-id", "organization-unit-id"}
 _PRAZO_PEDIDO = 300.0
 #: Quanto a recaptura do 401 espera a tela voltar a chamar os dois hosts.
 _PRAZO_RECAPTURA = 30.0
+#: Quanto a tela de login precisa ficar à vista para valer: nos primeiros
+#: segundos o ERP a mostra mesmo com sessão boa (o Firebase restaura o token
+#: do IndexedDB de forma assíncrona) — o MCClient espera 2,5 s pelo mesmo motivo.
+_CARENCIA_LOGIN = 3.0
+#: Na tela de login, de quanto em quanto recarregar a rota de captura (pega o
+#: login que outra aba do mesmo Chrome acabou de fazer).
+_RECARGA_NO_LOGIN = 5.0
+#: Quanto tempo só recarregando antes de pedir o login principal.
+_SO_RECARGA = 15.0
+#: Depois do login principal, quanto esperar a tela chamar os dois hosts.
+_PRAZO_LOGIN = 90.0
+#: Teto de `_esperar_pronto` (revisão de 28/10/2026: era a soma de todos os
+#: prazos, mais de 13 min com a trava).
+_TETO_PRONTO = 120.0
 #: Folga do Playwright entre um pedido e outro (é nela que os eventos chegam).
 _RESPIRO_MS = 200
 #: Para a thread dona sair, e `fechar()` não esperar para sempre por ela.
@@ -53,7 +84,8 @@ class SessaoPelaPagina:
     """O mesmo contrato público de `erp.Sessao`, falando pela aba central."""
 
     def __init__(self, nome: str, fabrica_aba, espera_captura: float,
-                 prazo_pedido: float = _PRAZO_PEDIDO):
+                 prazo_pedido: float = _PRAZO_PEDIDO, *, login_principal=None,
+                 diag=None, reentrou: bool = False):
         self.nome = nome
         self.jwt_token: str | None = None
         self.access_token: str | None = None
@@ -70,6 +102,11 @@ class SessaoPelaPagina:
         self._fabrica_aba = fabrica_aba
         self._espera_captura = espera_captura
         self._prazo_pedido = prazo_pedido
+        #: `(caiu: bool) -> bool`: o login principal (True = entrou agora).
+        self._login_principal = login_principal or (lambda caiu=False: False)
+        self._diag = diag or (lambda _m: None)
+        #: Entrou no ERP (pelo login principal) desde a última pergunta.
+        self._reentrou = bool(reentrou)
         #: A aba parou de responder (um `fetch` pendurado prende a dona):
         #: daí em diante todo `pedir` falha na hora, em vez de 300 s cada.
         self._quebrada = False
@@ -90,28 +127,55 @@ class SessaoPelaPagina:
     @classmethod
     def do_acesso(cls, nome: str = "principal", *, fabrica_aba=None,
                   espera_captura: float = 90.0,
-                  prazo_pedido: float = _PRAZO_PEDIDO) -> "SessaoPelaPagina":
+                  prazo_pedido: float = _PRAZO_PEDIDO, login_principal=None,
+                  diag=None, ja_pedido: bool | None = None) -> "SessaoPelaPagina":
+        """A sessão do acesso, já com a autenticação capturada.
+
+        Pede o login principal ANTES de abrir a aba: a leitura nunca nasce na
+        tela de login. Sem `fabrica_aba` (o caso real) o acesso vem do
+        `acessos.json`, e o login principal é o de `erp.login_principal`. Com
+        `fabrica_aba` (os dublês dos testes) nada é lido do disco.
+
+        `ja_pedido` (True/False): o login principal já foi pedido por quem
+        chamou (`erp.sessao._sessao_do_central` o pede FORA da trava dos
+        centrais) e esta é a resposta dele; não pede de novo."""
         if fabrica_aba is None:
             a = central.acesso(nome)
             if a is None:
                 raise ErpErro(f"o acesso '{nome}' não está no acessos.json")
             fabrica_aba = lambda: central.AbaCentral(a)   # noqa: E731
-        s = cls(nome, fabrica_aba, espera_captura, prazo_pedido)
-        s._esperar_pronto()          # ErpErro "...porteiro precisa entrar..."
+            if diag is None:
+                diag = _diag_do_app
+            if login_principal is None:
+                def login_principal(caiu=False):
+                    return pedir_login_principal(nome, caiu=caiu, diag=diag)
+        login_principal = login_principal or (lambda caiu=False: False)
+        if ja_pedido is None:
+            entrou = login_principal(False)    # ErpErro com o motivo real
+        else:
+            entrou = ja_pedido
+        s = cls(nome, fabrica_aba, espera_captura, prazo_pedido,
+                login_principal=login_principal, diag=diag, reentrou=bool(entrou))
+        s._esperar_pronto()
         return s
 
     # ------------------------------------------------------------ captura
 
-    def _recado_porteiro(self) -> ErpErro:
-        return ErpErro(f"o Chrome central '{self.nome}' não está logado no ERP — "
-                       "o porteiro precisa entrar (python -m erp.porteiro estado)")
+    def _recado_sem_tela(self) -> ErpErro:
+        return ErpErro(f"a aba do ERP no Chrome central '{self.nome}' não mostrou "
+                       "nem a área logada nem a tela de login — o ERP pode estar "
+                       "fora do ar ou lento; tente de novo")
 
     def _esperar_pronto(self) -> None:
         """Espera a thread dona capturar os dois hosts, ou desiste limpo."""
         # Sai cedo quando a thread dona morre: exceção na captura inicial
-        # (Chrome que não abre, aba que não conecta) chega aqui como ErpErro,
-        # e não como `espera_captura` segundos de nada.
-        limite = time.monotonic() + self._espera_captura
+        # (Chrome que não abre, aba que não conecta, login que não deu) chega
+        # aqui como ErpErro, e não como minutos de nada. Teto fixo
+        # (`_TETO_PRONTO`): o login principal de antes de abrir já foi feito
+        # por quem chamou; se a dona precisar dele de novo e ele demorar,
+        # quem espera desiste limpo em vez de pendurar.
+        limite = time.monotonic() + min(_TETO_PRONTO, self._espera_captura
+                                        + _SO_RECARGA + _PRAZO_RECAPTURA)
         while time.monotonic() < limite:
             if self._pronto.is_set() or self._saiu.is_set():
                 break
@@ -119,13 +183,15 @@ class SessaoPelaPagina:
         if self._pronto.is_set() and not self._saiu.is_set():
             return
         erro = self._erro_inicio
-        self.fechar()
+        # Sem esperar a dona: ela pode estar presa no login principal, e
+        # quem chamou não pode pendurar junto (ela sai quando se soltar).
+        self.fechar(esperar=False)
         if erro is not None:
             if isinstance(erro, ErpErro):
                 raise erro
             raise ErpErro(f"não consegui abrir a aba no Chrome central "
                           f"'{self.nome}': {erro}") from erro
-        raise self._recado_porteiro() from self._erro_navegar
+        raise self._recado_sem_tela() from self._erro_navegar
 
     def _ouvir(self, req) -> None:
         """Ouvinte de `page.on("request")`: guarda a autenticação por host.
@@ -168,14 +234,77 @@ class SessaoPelaPagina:
             self._page.wait_for_timeout(_RESPIRO_MS)
         return self._pronto.is_set()
 
-    def _recapturar(self) -> None:
-        """Na thread dona: joga fora a autenticação e a pega de novo da tela."""
+    def _aguardar_tela(self, prazo: float) -> str:
+        """Na thread dona: "pronto" (capturou os dois hosts), "login" (a tela
+        de login ficou à vista além de `_SO_RECARGA`, recarregando a rota de
+        captura a cada `_RECARGA_NO_LOGIN`) ou "prazo"."""
+        passos = max(1, int(prazo * 1000 / _RESPIRO_MS))
+        carencia = int(_CARENCIA_LOGIN * 1000 / _RESPIRO_MS)
+        cada = max(1, int(_RECARGA_NO_LOGIN * 1000 / _RESPIRO_MS))
+        so_recarga = int(_SO_RECARGA * 1000 / _RESPIRO_MS)
+        no_login = None                     # o passo em que o login apareceu
+        for i in range(passos):
+            if self._pronto.is_set():
+                return "pronto"
+            if i >= carencia and login_tela.tem_sinal_forte(self._page):
+                if no_login is None:
+                    no_login = i
+                if i - no_login >= so_recarga:
+                    return "pronto" if self._pronto.is_set() else "login"
+                if (i - no_login) % cada == cada - 1:
+                    # Outra aba do mesmo Chrome pode ter acabado de entrar.
+                    self._navegar(self._page.goto, URL_CAPTURA)
+                    self._navegar(self._page.reload)
+            self._page.wait_for_timeout(_RESPIRO_MS)
+        if self._pronto.is_set():
+            return "pronto"
+        return "login" if no_login is not None else "prazo"
+
+    def _limpar_captura(self) -> None:
         with self._trava:
             self._cab.clear()
             self._pronto.clear()
+
+    def _preparar(self) -> None:
+        """Na thread dona, ao abrir: a tela e a autenticação dela."""
+        self._navegar(self._page.goto, URL_CAPTURA)
+        self._capturar(self._espera_captura)
+
+    def _recapturar(self) -> None:
+        """Na thread dona: joga fora a autenticação e a pega de novo da tela
+        (recarregando; caída no login, ver `_capturar`)."""
+        self._limpar_captura()
         self._navegar(self._page.reload)
-        if not self._aguardar_captura(_PRAZO_RECAPTURA):
-            raise self._recado_porteiro() from self._erro_navegar
+        self._capturar(_PRAZO_RECAPTURA)
+
+    def _capturar(self, prazo: float) -> None:
+        tela = self._aguardar_tela(prazo)
+        if tela == "pronto":
+            return
+        if tela == "prazo":
+            raise self._recado_sem_tela() from self._erro_navegar
+        # Ninguém entrou: pede o login principal (UM só, mesmo com outras
+        # abas pedindo junto) e relê a autenticação da tela.
+        entrou = self._login_principal(True)
+        self._limpar_captura()
+        self._navegar(self._page.goto, URL_CAPTURA)
+        self._navegar(self._page.reload)
+        if not self._aguardar_captura(_PRAZO_LOGIN):
+            raise ErpErro(
+                f"o ERP continua na tela de login no Chrome central '{self.nome}' "
+                "mesmo depois do login automático — entre no ERP pelo app "
+                "(Minha aba no ERP) e tente de novo") from self._erro_navegar
+        if entrou:
+            with self._trava:
+                self._reentrou = True
+
+    def reentrou(self) -> bool:
+        """True uma vez depois de o login principal ter entrado no ERP para
+        esta aba (a sessão tinha caído). Quem lê o aviso o consome: a tela do
+        dia o põe no Registro."""
+        with self._trava:
+            r, self._reentrou = self._reentrou, False
+        return r
 
     def _navegar(self, acao, *args) -> None:
         """`goto`/`reload` que não derruba ninguém.
@@ -199,7 +328,7 @@ class SessaoPelaPagina:
             with self._fabrica_aba() as aba:
                 self._page = aba.page
                 self._page.on("request", self._ouvir)
-                self._navegar(self._page.goto, URL_CAPTURA)
+                self._preparar()
                 while True:
                     try:
                         item = self._fila.get(timeout=0.05)
@@ -344,8 +473,8 @@ class SessaoPelaPagina:
                                extras, idempotente)
 
     def relogar(self) -> None:
-        """Recaptura a autenticação da tela. NÃO faz login: quem loga é o
-        porteiro (`erp/porteiro.py`)."""
+        """Recaptura a autenticação da tela: recarrega e, se a página cair no
+        login, pede o login principal (`erp.login_principal`, nunca HTTP)."""
         self._pela_fila(self._recapturar)
 
     def token_para(self, url: str) -> str:
@@ -371,14 +500,37 @@ class SessaoPelaPagina:
         """
         return not (self._fechada or self._quebrada) and self._thread.is_alive()
 
-    def fechar(self) -> None:
-        """Fecha a aba (só a própria) e encerra a thread dona. Idempotente."""
+    def fechar(self, esperar: bool = True) -> None:
+        """Fecha a aba (só a própria) e encerra a thread dona. Idempotente.
+        Espera a dona sair por no máximo `_PRAZO_SAIDA` (nunca pendura o
+        `atexit`); `esperar=False` nem isso."""
         with self._trava:
             ja = self._fechada
             self._fechada = True
             if not ja:
                 self._fila.put(_FIM)
-        if threading.current_thread() is not self._thread and not self._quebrada:
+        if (esperar and threading.current_thread() is not self._thread
+                and not self._quebrada):
             # Quebrada, a dona está presa num `evaluate`: esperar seria só
             # atraso. A sentinela fica na fila e ela sai quando se soltar.
             self._saiu.wait(_PRAZO_SAIDA)
+
+
+def pedir_login_principal(nome: str = "principal", *, caiu: bool = False,
+                          diag=None) -> bool:
+    """O login principal (`erp.login_principal`) do acesso `nome`, do
+    `acessos.json`. True = entrou agora; `ErpErro` com o motivo."""
+    a = central.acesso(nome)
+    if a is None:
+        raise ErpErro(f"o acesso '{nome}' não está no acessos.json")
+    from . import login_principal
+    return login_principal.garantir_logado(a, caiu=caiu, log=diag or _diag_do_app)
+
+
+def _diag_do_app(msg: str) -> None:
+    """O diagnostico.log do app, quando há app. Nunca derruba a sessão."""
+    try:
+        import util
+        util.log("erp.sessao_pagina").info(msg)
+    except Exception:
+        pass

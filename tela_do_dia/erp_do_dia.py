@@ -73,8 +73,30 @@ def _logar_pela_pagina(config, log=print):
                      empresa=interna.empresa, config=config, _sessao=interna)
 
 
+RELOGIN = "  Saldos do ERP: a sessão do ERP tinha caído; entrei de novo e li os saldos."
+SEGUNDA_TENTATIVA = "  Saldos do ERP: li os saldos na 2ª tentativa."
+
+
+def _reentrou(sessao) -> bool:
+    """A `SessaoPelaPagina` por baixo entrou no ERP (login principal)?"""
+    interna = getattr(sessao, "_sessao", None)
+    perguntar = getattr(interna, "reentrou", None)
+    try:
+        return bool(perguntar()) if callable(perguntar) else False
+    except Exception:
+        return False
+
+
+def _diag_padrao(msg: str) -> None:
+    try:
+        import util
+        util.log("tela_do_dia.erp_do_dia").info(msg)
+    except Exception:
+        pass
+
+
 def ler_saldos(config, api, *, central_ligado=None, logar=None, esquecer=None,
-               log=print):
+               log=print, diag=None):
     """Contas ativas com saldo, só pelo Chrome do app.
 
     Erro do ERP vira `ErpError`, nunca saldo zero. Conta sem saldo no lote
@@ -88,24 +110,34 @@ def ler_saldos(config, api, *, central_ligado=None, logar=None, esquecer=None,
     mesma rodada, a sessão guardada fica com a autenticação velha e a
     leitura caía; com a sessão já aberta, passava. Se a 2ª também falhar, sobe
     o erro dela, com o motivo real.
+
+    Registro (28/10/2026): quando a sessão tinha caído e o relogin resolveu
+    (o login principal dentro da `SessaoPelaPagina`, ou a 2ª tentativa), a
+    linha é `RELOGIN`, em português; o erro cru da 1ª vai ao diagnóstico.
     """
     central_ligado = central_ligado or erp_sessao.central_ligado
     logar = logar or _logar_pela_pagina
     esquecer = esquecer or erp_sessao.esquecer_central
+    diag = diag or _diag_padrao
     if central_ligado():
         sessao = None
         try:
             sessao = logar(config, log=log)
             contas = sessao.contas(ativas=True)
+            if _reentrou(sessao):
+                log(RELOGIN)
         except (ErpError, ErpErro) as e:
-            log(f"  Saldos do ERP: a sessão do Chrome central falhou ({type(e).__name__}: "
-                f"{e}) — abrindo uma nova e lendo de novo.")
+            diag(f"Saldos do ERP: 1ª leitura pelo Chrome central falhou "
+                 f"({type(e).__name__}: {e}); abrindo uma nova e lendo de novo")
             # Só a que FALHOU: a guardada pode já ser outra, recriada por
             # outra aba, e essa não cai.
             falhou = (getattr(sessao, "_sessao", None) if sessao is not None
                       else getattr(e, "sessao", None))
             esquecer("principal", falhou)
-            contas = logar(config, log=log).contas(ativas=True)
+            nova = logar(config, log=log)
+            contas = nova.contas(ativas=True)
+            # Só diz que entrou de novo quando houve relogin DE FATO.
+            log(RELOGIN if _reentrou(nova) else SEGUNDA_TENTATIVA)
     else:
         if not getattr(api, "_req_anexos", None) and not api.garantir_credenciais_anexos(log):
             raise ErpError("não consegui o acesso do Chrome do app ao cadastro de "

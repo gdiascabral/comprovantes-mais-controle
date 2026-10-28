@@ -142,9 +142,12 @@ def test_post_e_put_usam_o_transporte_certo():
         s.fechar()
 
 
-def test_sem_login_desiste_com_recado_do_porteiro():
+def test_sem_login_nem_tela_desiste_dizendo_o_que_viu():
+    # 28/10/2026: o recado não culpa mais o porteiro (no notebook não há);
+    # diz o que a aba viu. A tela de login de verdade leva ao login principal
+    # (tests/test_erp_sessao_pagina_login.py).
     pag = _PaginaFalsa(logada=False)
-    with pytest.raises(ErpErro, match="porteiro"):
+    with pytest.raises(ErpErro, match="nem a área logada nem a tela de login"):
         _sessao(pag, espera=0.5)
 
 

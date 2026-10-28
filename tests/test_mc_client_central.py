@@ -143,6 +143,7 @@ def test_garantir_login_central_roda_dentro_da_trava(central_falso, monkeypatch)
 
     monkeypatch.setattr(central, "trava", trava)
     mc = mc_client.MCClient(log=lambda *_: None, acesso=a)
+    mc.login_principal = False        # aqui se prova a trava, não o principal
     monkeypatch.setattr(mc, "_garantir_login_sem_trava",
                         lambda: passos.append("login") or True)
     assert mc.garantir_login() is True
@@ -159,6 +160,7 @@ def test_trava_de_login_ocupada_vira_false_com_recado(central_falso, monkeypatch
     monkeypatch.setattr(central, "trava", trava)
     ditos = []
     mc = mc_client.MCClient(log=ditos.append, acesso=a)
+    mc.login_principal = False
     monkeypatch.setattr(mc, "_garantir_login_sem_trava",
                         lambda: pytest.fail("não devia tentar entrar sem a trava"))
     assert mc.garantir_login() is False
@@ -239,6 +241,7 @@ def test_cdp_que_falha_para_o_playwright(central_falso, monkeypatch):
 def test_timeout_de_dentro_do_login_nao_vira_trava_ocupada(central_falso, monkeypatch):
     a, _ = central_falso
     mc = mc_client.MCClient(log=lambda *_: None, acesso=a)
+    mc.login_principal = False
 
     def cai():
         raise TimeoutError("rede")

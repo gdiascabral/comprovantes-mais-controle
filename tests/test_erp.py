@@ -501,6 +501,16 @@ def test_a_telemetria_fica_de_fora_da_captura():
 
 # --------------------------------------------------- Chrome central (porteiro)
 
+
+@pytest.fixture(autouse=True)
+def _login_principal_de_mentira(monkeypatch):
+    """Desde 28/10/2026 `_sessao_do_central` pede o login principal antes de
+    abrir a sessão; aqui se prova o cache, não o login."""
+    from erp import sessao_pagina
+    monkeypatch.setattr(sessao_pagina, "pedir_login_principal",
+                        lambda nome="principal", **k: False)
+
+
 def test_logar_com_central_ligado_nao_toca_a_rede(monkeypatch):
     from erp import central, sessao_pagina
     monkeypatch.setattr(central, "ligado", lambda nome="principal", pasta=None: True)
