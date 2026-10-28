@@ -759,3 +759,23 @@ def test_pagina_do_alvo_acha_pelo_target_id_sem_evaluate():
             return Sessao(p)
     assert login_principal._pagina_do_alvo(Ctx(), "ALVO1") is paginas[1]
     assert login_principal._pagina_do_alvo(Ctx(), "SUMIU") is None
+
+
+def test_relogio_parado_nao_faz_queda_passar_por_atendida():
+    """No Windows o monotonic anda de ~15 ms em ~15 ms: com o relógio parado,
+    o pedido de "caiu" tem de relogar mesmo assim (CI de 28/10/2026)."""
+    erp = _Erp(logado=True)
+    abertas = []
+
+    @contextlib.contextmanager
+    def abrir():
+        abertas.append(1)
+        yield _Pagina(erp, nome="principal")
+
+    def pedir(caiu=False):
+        return login_principal.garantir_logado(
+            ACESSO, caiu=caiu, abrir_pagina=abrir, credencial=lambda: None,
+            trava_arquivo=_Trava(), dormir=lambda s: None, relogio=lambda: 100.0)
+    pedir()
+    pedir(caiu=True)
+    assert len(abertas) == 2
