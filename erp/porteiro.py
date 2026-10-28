@@ -98,6 +98,9 @@ def _mantenedor_real(log) -> Mantenedor:
 
     def abrir(a):
         mc = MCClient(acesso=a, log=log)
+        # O porteiro É quem entra: não pede o login principal (28/10/2026),
+        # e o comportamento dele fica o de sempre.
+        mc.login_principal = False
         mc.__enter__()
         return mc
     return Mantenedor(abrir, lambda mc: mc.__exit__(None, None, None))

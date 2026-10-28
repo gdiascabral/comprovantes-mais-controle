@@ -137,13 +137,48 @@ def test_sessao_central_velha_e_esquecida_e_le_de_novo_uma_vez():
     from erp.sessao import ErpErro
     velha = _SessaoQue(ErpErro("401 do prod-erp-api"))
     sessoes = iter([velha, _SessaoQue()])
-    esquecidas, registro = [], []
+    esquecidas, registro, diagnostico = [], [], []
     contas = erp_do_dia.ler_saldos(
         Cfg(), ApiDaAba({}), central_ligado=lambda: True,
         logar=lambda cfg, log=print: next(sessoes),
-        esquecer=lambda nome, sessao: esquecidas.append((nome, sessao)), log=registro.append)
+        esquecer=lambda nome, sessao: esquecidas.append((nome, sessao)), log=registro.append,
+        diag=diagnostico.append)
     assert contas == ["conta"] and esquecidas == [("principal", velha._sessao)]
-    assert any("de novo" in r and "401 do prod-erp-api" in r for r in registro)
+    # 28/10: o Registro diz o que houve em português; o erro cru vai ao diagnóstico.
+    assert registro == ["  Saldos do ERP: a sessão do ERP tinha caído; entrei de "
+                        "novo e li os saldos."]
+    assert any("401 do prod-erp-api" in d for d in diagnostico)
+
+
+def test_relogin_dentro_da_sessao_central_e_avisado_no_registro():
+    """A `SessaoPelaPagina` entrou sozinha (a página estava no login): a
+    leitura passa de primeira e o Registro conta que a sessão tinha caído."""
+    class _Pagina:
+        def __init__(self):
+            self.vezes = [True]
+
+        def reentrou(self):
+            return self.vezes.pop(0) if self.vezes else False
+
+    sessao = _SessaoQue()
+    sessao._sessao = _Pagina()
+    registro = []
+    contas = erp_do_dia.ler_saldos(
+        Cfg(), ApiDaAba({}), central_ligado=lambda: True,
+        logar=lambda cfg, log=print: sessao,
+        esquecer=lambda n, s: None, log=registro.append, diag=lambda m: None)
+    assert contas == ["conta"]
+    assert registro == ["  Saldos do ERP: a sessão do ERP tinha caído; entrei de "
+                        "novo e li os saldos."]
+
+
+def test_sem_relogin_o_registro_fica_quieto():
+    registro = []
+    erp_do_dia.ler_saldos(Cfg(), ApiDaAba({}), central_ligado=lambda: True,
+                          logar=lambda cfg, log=print: _SessaoQue(),
+                          esquecer=lambda n, s: None, log=registro.append,
+                          diag=lambda m: None)
+    assert registro == []
 
 
 def test_sessao_central_que_falha_duas_vezes_sobe_o_motivo_real():
@@ -152,7 +187,8 @@ def test_sessao_central_que_falha_duas_vezes_sobe_o_motivo_real():
     with pytest.raises(ErpError, match="token recusado"):
         erp_do_dia.ler_saldos(Cfg(), ApiDaAba({}), central_ligado=lambda: True,
                               logar=lambda cfg, log=print: next(sessoes),
-                              esquecer=lambda n, s: esquecidas.append(n), log=lambda m: None)
+                              esquecer=lambda n, s: esquecidas.append(n), log=lambda m: None,
+                              diag=lambda m: None)
     assert esquecidas == ["principal"]           # só UMA nova tentativa
 
 
@@ -162,7 +198,8 @@ def test_erro_que_nao_e_do_erp_nao_tenta_de_novo():
     with pytest.raises(ValueError):
         erp_do_dia.ler_saldos(Cfg(), ApiDaAba({}), central_ligado=lambda: True,
                               logar=lambda cfg, log=print: next(sessoes),
-                              esquecer=lambda n, s: esquecidas.append(n), log=lambda m: None)
+                              esquecer=lambda n, s: esquecidas.append(n), log=lambda m: None,
+                              diag=lambda m: None)
     assert esquecidas == []
 
 

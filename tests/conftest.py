@@ -464,6 +464,25 @@ def _sem_chrome_central(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _login_principal_nunca_abre_chrome(monkeypatch):
+    """O login principal (`erp.login_principal`) conecta por CDP no Chrome
+    central de verdade. Em 28/10/2026, testes do MCClient central (com o
+    `garantir_chrome` trocado por um endereço fixo, 127.0.0.1:9230) chegaram
+    nele e encontraram o Chrome central do dono VIVO nessa porta. Teste usa
+    `abrir_pagina=` (dublê); a aba de verdade levanta aqui."""
+    from erp import login_principal
+
+    class _Proibida:
+        def __init__(self, *a, **k):
+            raise AssertionError("teste tentou abrir a aba do login principal "
+                                 "no Chrome central de verdade")
+    monkeypatch.setattr(login_principal, "_AbaPrincipal", _Proibida)
+    login_principal.esquecer()
+    yield
+    login_principal.esquecer()
+
+
+@pytest.fixture(autouse=True)
 def _sem_sessao_do_central_guardada():
     """A sessão pela página é guardada por processo; um teste não herda a do outro."""
     from erp import sessao
