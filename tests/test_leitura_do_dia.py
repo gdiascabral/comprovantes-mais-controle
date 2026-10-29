@@ -233,7 +233,30 @@ def test_obs_de_adiantado():
     class R:
         contas = {"C": [{"vencimento": "2026-10-23", "obs": "x"},
                         {"vencimento": "2026-10-21", "obs": ""}]}
+        omitidos = []
     confirmacao.marcar_adiantados(R, DIA)
     confirmacao.marcar_adiantados(R, DIA)                      # não repete
     assert R.contas["C"][0]["obs"] == "adiantado — vence 23/10 · x"
     assert R.contas["C"][1]["obs"] == ""
+
+
+# --------------------------- revisão de dinheiro do PR #161 (29/10/2026)
+def test_adiantado_que_a_apuracao_mandou_por_pix_vai_para_nao_entraram():
+    from pagamentos_dia import relatorio
+    r = relatorio.Resultado({"C": [
+        {"id": "1", "tipo": "Pix", "vencimento": "2026-10-23", "obs": ""},
+        {"id": "2", "tipo": "Boleto", "vencimento": "2026-10-23", "obs": ""},
+        {"id": "3", "tipo": "Pix", "vencimento": "2026-10-21", "obs": ""},
+        {"id": "4", "tipo": "Pix", "vencimento": "2026-10-23", "obs": "",
+         "linha_da_guia": "8" * 48}]}, [])
+    novo = confirmacao.so_codigo_de_barras(r, DIA)
+    assert [x["id"] for x in novo.contas["C"]] == ["2", "3", "4"]
+    assert novo.omitidos[0]["id"] == "1"
+    assert novo.omitidos[0]["motivo"] == confirmacao.MOTIVO_ADIANTADO_NAO_BOLETO
+
+
+def test_omitido_adiantado_tambem_leva_a_marca():
+    from pagamentos_dia import relatorio
+    r = relatorio.Resultado({}, [{"id": "9", "obs": ""}])
+    confirmacao.marcar_adiantados(r, DIA, {"9": date(2026, 10, 25)})
+    assert r.omitidos[0]["obs"] == "adiantado — vence 25/10"

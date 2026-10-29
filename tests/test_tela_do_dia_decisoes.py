@@ -363,3 +363,41 @@ def test_excel_e_aportes_perguntam_o_saldo_de_agora_com_padrao_nao():
         assert "dc.pergunta_saldo_de_agora(" in trecho, nome
         depois = trecho.split("dc.pergunta_saldo_de_agora(", 1)[1]
         assert 'default="no"' in depois.split("return", 1)[0], nome
+
+
+# --------------------------- revisão de dinheiro do PR #161 (29/10/2026)
+def test_campos_com_ate_futuro_de_ontem_nao_valem_hoje():
+    escritos = ("20/10/2026", "24/10/2026")
+    assert dc.campos_de_outro_dia(escritos, escritos, date(2026, 10, 20), HOJE)
+    assert not dc.campos_de_outro_dia(escritos, escritos, HOJE, HOJE)
+    assert not dc.campos_de_outro_dia(("21/10/2026", "24/10/2026"), escritos,
+                                      date(2026, 10, 20), HOJE)          # o dono mexeu
+    assert not dc.campos_de_outro_dia(escritos, None, None, HOJE)
+
+
+def test_rotulo_do_periodo_diz_que_ha_adiantados():
+    from conciliacao.models import Periodo
+    t = dc.periodo_na_tela(Periodo(HOJE, HOJE), HOJE, date(2026, 10, 24))
+    assert "adiantados até 24/10" in t
+    assert "adiantados" not in dc.periodo_na_tela(Periodo(HOJE, HOJE), HOJE)
+
+
+def test_lancamento_ja_agendado_em_outro_dia_sai_ate_a_resposta():
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from tela_do_dia import conferencia as cf
+    from tela_do_dia import geracao
+    ontem = SimpleNamespace(dia=date(2026, 10, 20), lancamento_id="L1",
+                            favorecido="LOJA", valor=Decimal("10"))
+    hoje = SimpleNamespace(dia=HOJE, lancamento_id="L2", favorecido="LOJA",
+                           valor=Decimal("5"))
+    sem_lanc = SimpleNamespace(dia=date(2026, 10, 20), lancamento_id="",
+                               favorecido="X", valor=Decimal("1"))
+    nuvem = cf.Conferencia()
+    vale, tirados = geracao.sem_ja_agendados(
+        nuvem, [(ontem, None, None), (hoje, None, None), (sem_lanc, None, None)], HOJE)
+    assert set(vale.decisoes) == {"L1"} and vale.decisoes["L1"].desmarcado
+    assert tirados == ["LOJA — R$ 10,00 — já agendado em 20/10"]
+    assert geracao.so_pela_tela(nuvem, vale, "L1") == "agendado"
+    assert geracao.so_pela_tela(nuvem, vale, "L2") == ""
+    assert geracao.sem_ja_agendados(nuvem, [], HOJE)[0] is nuvem

@@ -136,6 +136,7 @@ class TelaDoDiaFrame(ttk.Frame):
         # O dia em que os saldos foram lidos (o Buscar): com o ATÉ antes dele,
         # o saldo é o de agora (`decisoes.pergunta_saldo_de_agora`).
         self._lido_no_dia = None
+        self._campos_adiantados = (None, None)    # ((DE, ATÉ), dia) escritos ao adiantar
         self._build()
         self.after(150, self._drain)
 
@@ -641,6 +642,10 @@ class TelaDoDiaFrame(ttk.Frame):
         if self.anx.avisar_se_ocupado("os Pagamentos do dia", aba=self):
             return
         hoje = datetime.date.today()
+        if dc.campos_de_outro_dia((self.v_ini.get().strip(), self.v_fim.get().strip()),
+                                  *self._campos_adiantados, hoje):
+            self._log("O período com boletos adiantados era de outro dia: voltei para o de hoje.")
+            self._datas_de_hoje()
         try:
             # ATÉ depois de hoje adianta os boletos dos dias seguintes (dono,
             # 29/10/2026); o período do dia continua terminando hoje.
@@ -665,12 +670,16 @@ class TelaDoDiaFrame(ttk.Frame):
         desvirado; a sugestão de ontem, a de hoje; com adiantados, o ATÉ
         escolhido continua lá)."""
         ini, fim = f"{periodo.inicio:%d/%m/%Y}", f"{(adiantar_ate or periodo.fim):%d/%m/%Y}"
+        # Com adiantados, os campos ficam com o ATÉ no futuro: anotados com o
+        # dia, para o Buscar de amanhã não os usar (`dc.campos_de_outro_dia`).
+        self._campos_adiantados = ((ini, fim), hoje) if adiantar_ate else (None, None)
         self.v_ini.set(ini)
         self.v_fim.set(fim)
         if (ini, fim) == dc.textos_sugeridos(hoje):
             self._sugerido = (ini, fim)
 
     def _datas_de_hoje(self):
+        self._campos_adiantados = (None, None)
         self._sugerido = dc.textos_sugeridos(datetime.date.today())
         self.v_ini.set(self._sugerido[0])
         self.v_fim.set(self._sugerido[1])
@@ -771,6 +780,8 @@ class TelaDoDiaFrame(ttk.Frame):
         self._mostrar_nuvem(lido.erro)
         for aviso in lido.avisos:
             self._log(f"[!] {aviso}")
+        for linha in self._sem_ja_agendados(self.conferencia)[1]:
+            self._log(f"[!] fora hoje (responda em Agendados a confirmar): {linha}")
         caminho = ddt.caminho_do_dia(RAIZ_SAIDA, self.periodo.fim)
         try:
             self.dia, self._dia_bloqueado = ddt.ler(caminho, self.periodo.fim), ""
@@ -781,7 +792,8 @@ class TelaDoDiaFrame(ttk.Frame):
                       "sobrescrito).")
         for aviso in self.leitura.avisos:
             self._log(f"[!] {aviso}")
-        self.mostrar_periodo(dc.periodo_na_tela(self.periodo, datetime.date.today()))
+        self.mostrar_periodo(dc.periodo_na_tela(self.periodo, datetime.date.today(),
+                                                getattr(self.leitura, "adiantar_ate", None)))
         self._montar_lista()
         self._recalcular()
         # Sem apuração (nenhum lançamento a pagar), planilha, HTML e Remessa
@@ -1349,10 +1361,17 @@ class TelaDoDiaFrame(ttk.Frame):
         if self.leitura is None or self.periodo is None:
             return None
         ld = self._selecionada()
-        if ld is not None and geracao.so_pela_caixa(self.conferencia, self._conferencia_que_vale(),
-                                                    ld.pagamento.id):
+        por = (geracao.so_pela_tela(self.conferencia, self._conferencia_que_vale(),
+                                    ld.pagamento.id) if ld is not None else "")
+        if por == "caixa":
             messagebox.showinfo(titulo, "Esta linha saiu pela caixa «Reembolso para …» do "
                                         "cartão 2. Marque a caixa para mexer nela.")
+            return None
+        if por == "agendado":
+            messagebox.showinfo(titulo, "Este lançamento já foi agendado em outro dia e "
+                                        "espera resposta. Responda no cartão «Agendados a "
+                                        "confirmar» (Não saiu… para pagar de novo) e busque "
+                                        "de novo.")
             return None
         tem_decisao = ld is not None and ld.pagamento.id in self.conferencia.decisoes
         recusa = passo2.recusa_da_selecao(ld, acao, tem_decisao, recado)
@@ -1987,8 +2006,14 @@ class TelaDoDiaFrame(ttk.Frame):
         return row.label if row is not None else ""
 
     def _conferencia_que_vale(self):
-        """A da nuvem, com os reembolsos tirados quando a caixa está desligada."""
-        return self._sem_reembolsos()[0]
+        """A da nuvem, com os reembolsos tirados quando a caixa está desligada
+        e os lançamentos já agendados em outro dia (`geracao.sem_ja_agendados`)."""
+        return self._sem_ja_agendados(self._sem_reembolsos()[0])[0]
+
+    def _sem_ja_agendados(self, conferencia):
+        if self.lido is None or self.periodo is None:
+            return conferencia, []
+        return geracao.sem_ja_agendados(conferencia, self.lido.pendentes, self.periodo.fim)
 
     def _sem_reembolsos(self):
         """(conferência que vale, quem a caixa tirou)."""

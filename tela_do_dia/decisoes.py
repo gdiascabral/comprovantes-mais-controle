@@ -460,6 +460,15 @@ def busca_do_dia(txt_ini: str, txt_fim: str, sugerido, hoje):
     return Periodo(ini, fim), None
 
 
+def campos_de_outro_dia(atuais, escritos, dia_escrito, hoje) -> bool:
+    """Revisão de dinheiro (29/10/2026): o ATÉ no futuro que o app deixou
+    nos campos ao adiantar, com o app aberto de um dia para o outro, NÃO
+    vale no dia seguinte (releria ontem inteiro calado). True = os campos
+    ainda são os que o app escreveu, e num dia que não é hoje."""
+    return (escritos is not None and dia_escrito is not None and dia_escrito != hoje
+            and tuple(atuais) == tuple(escritos))
+
+
 def frase_dos_adiantados(periodo, adiantar_ate) -> str:
     """O que o Buscar avisa ao adiantar (vazio sem adiantados)."""
     if adiantar_ate is None:
@@ -485,7 +494,7 @@ def pergunta_saldo_de_agora(periodo, lido_em, acao: str = "Gerar") -> str:
     return f"O saldo é o de agora, não o de {periodo.fim:%d/%m}. {acao} mesmo assim?"
 
 
-def periodo_na_tela(periodo, hoje=None) -> str:
+def periodo_na_tela(periodo, hoje=None, adiantar_ate=None) -> str:
     """O texto do período lido. Sem aviso de feriado: sem calendário não há
     como saber quando avisar ("o dia útil anterior ficou fora" vale em todo
     dia útil, e aviso que aparece sempre é ruído) — com o campo de datas
@@ -498,6 +507,9 @@ def periodo_na_tela(periodo, hoje=None) -> str:
         texto += (f" · dia de trabalho {periodo.fim:%d/%m}: os saldos (sistema e Sicoob) "
                   f"são os de agora, não os de {periodo.fim:%d/%m}; o Sicoob não é lido — "
                   "confira antes do Excel e dos aportes")
+    if adiantar_ate is not None and adiantar_ate > periodo.fim:
+        texto += (f" + boletos adiantados até {adiantar_ate:%d/%m} (já somam no a pagar "
+                  "e no aporte)")
     return texto
 
 

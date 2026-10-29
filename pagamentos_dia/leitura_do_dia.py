@@ -48,6 +48,7 @@ class LeituraDosPagamentos:
     #: Ids dos lançamentos de DEPOIS do período que entraram adiantados
     #: (`separar_adiantados`); vazio sem `adiantar_ate`.
     adiantados: set = field(default_factory=set)
+    adiantar_ate: object = None                 # date, quando adiantou
 
 
 def separar_adiantados(lancamentos, anexos, fim) -> tuple[list, set, int]:
@@ -262,6 +263,7 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
     leitura.anexos = api.anexos_de_titulos(titulos, log=log, progresso=progresso,
                                            cancelar=cancelar)
     if ate > fim:
+        leitura.adiantar_ate = ate
         leitura.lancamentos, leitura.adiantados, fora = separar_adiantados(
             leitura.lancamentos, leitura.anexos, fim)
         log(f"  Adiantados: {len(leitura.adiantados)} de código de barras com vencimento "
