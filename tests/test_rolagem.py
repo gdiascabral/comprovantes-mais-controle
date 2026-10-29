@@ -96,6 +96,11 @@ def test_o_que_nao_cabe_rola_e_a_doca_fica_inteira(tela):
     corpo = a["corpo"]
     assert corpo.rola(), "o conteúdo passa da tela e a área não rola"
     assert corpo.barra.winfo_ismapped(), "há o que rolar e a barra não apareceu"
+    # O traço fino (29/10/2026) é DESENHADO no Canvas: mapeado sem traço foi o
+    # defeito do primeiro rascunho (o `lift` do Canvas estourava em silêncio).
+    assert corpo.barra.find_all(), "a barra apareceu, mas sem o traço"
+    lo, hi = corpo.barra.get()
+    assert 0.0 <= lo < hi < 1.0
     for nome in ("acao", "reg"):
         w = getattr(a[nome], "moldura", a[nome])
         assert w.winfo_height() >= w.winfo_reqheight(), f"{nome} saiu cortado"

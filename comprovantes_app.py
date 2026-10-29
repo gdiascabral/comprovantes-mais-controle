@@ -157,7 +157,9 @@ def main():
 
     root = tk.Tk()
     _v_tela = _versao_na_tela(_v)
-    root.title("Comprovantes — Mais Controle"
+    # O nome mudou em 29/10/2026 (pedido do dono): o app deixou de ser só de
+    # comprovantes. O exe e o repositório seguem com o nome antigo.
+    root.title("Automações — Mais Controle"
                + (f"  {_v_tela}" if _v_tela else ""))
     try:                                 # ícone da janela (se disponível)
         for _c in (Path(__file__).resolve().parent / "icone.ico",
@@ -634,12 +636,8 @@ def main():
     widgets.Dica(b_atualizar_contas,
                  "Relê o cadastro e as contas do ERP, pergunta pelas contas "
                  "novas e avisa as abas")
-    if _v_tela:
-        # A versão também aqui, embaixo de tudo: é onde ela morava antes do
-        # redesenho, e é o primeiro lugar onde se procura por ela.
-        _rodape_versao = ttk.Label(lateral.rodape, text=_v_tela,
-                                   style="MenuSecao.TLabel")
-        _rodape_versao.pack(anchor="w", pady=px((8, 0)))
+    # A versão aparece UMA vez, na barra de cima (pedido do dono, 29/10/2026);
+    # a do pé do menu saiu.
 
     def aplicar_tema(escolha: str):
         efetivo = tema_efetivo(escolha)
