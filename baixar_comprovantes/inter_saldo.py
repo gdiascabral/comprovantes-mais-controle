@@ -23,6 +23,20 @@ Inter pede o QR a cada abertura (conferido em 31/08/2026): quem chama avisa a
 tela ANTES (`avisar_qr`), para ela dizer de QUAL conta é o QR.
 
 Só leitura: nada é clicado além do "gerar um novo QR" do `esperar_login`.
+
+**O extrato completo como segunda fonte** (medido em 29/10/2026 na MORAIS
+ENG, que mostra o saldo SÓ no extrato): quando a tela inicial não dá o
+saldo, ou não mostra o número da conta para conferir, a leitura vai à tela
+do extrato (`URL_EXTRATO_COMPLETO`) e ouve a resposta que ELA pede
+(`ROTA_EXTRATO_COMPLETO`): o saldo vem em `balance.data.balances[
+DIGITAL_ACCOUNT].available` (`saldo_do_extrato`) e a conta é conferida pelo
+texto daquela tela. O mesmo corpo serve ao "Autenticar no banco" (`extra`).
+
+**`extra(page, autorizacao, extrato)`**: quem chama pode usar a MESMA sessão
+(um QR por conta) depois de a conta ser conferida — o "Autenticar no banco"
+lista ali o Pix, a 2ª via e o extrato completo. `extrato()` devolve o corpo
+do extrato completo (lido uma vez só). Falha do `extra` não perde o saldo:
+vem no `LidoInter.extra_erro`.
 """
 from __future__ import annotations
 
@@ -41,6 +55,10 @@ URL_SALDO = ib.API_INTER + ROTA_SALDO
 CAMPO = "disponivel"
 CENTAVO = Decimal("0.01")
 TEMPO_SALDO = 30
+URL_EXTRATO_COMPLETO = "https://contadigital.inter.co/extrato"
+ROTA_EXTRATO_COMPLETO = "/ib-pfj/cc/extrato/bff/"
+TEMPO_EXTRATO = 25
+SALDO_DA_CONTA = "DIGITAL_ACCOUNT"
 #: Seletor da área do saldo na tela inicial (medir ao vivo, Tarefa 8);
 #: "" = fotografa a parte visível da tela.
 SELETOR_AREA_SALDO = ""
@@ -76,6 +94,11 @@ class LidoInter:
     motivo: str = ""
     imagem: Path | None = None
     sem_imagem: str = ""
+    #: De onde veio o saldo: "inicio" (a tela inicial) ou "extrato".
+    via: str = ""
+    #: O que o `extra` de quem chamou devolveu (ou o porquê de ter falhado).
+    extra: object = None
+    extra_erro: str = ""
 
 
 def _digitos(texto) -> str:
@@ -138,6 +161,55 @@ def conferir_conta(texto: str, numero_esperado: str, nomes, razoes=()) -> str:
     return ""
 
 
+def saldo_do_extrato(corpo) -> Decimal | None:
+    """O saldo da conta digital no corpo do extrato completo, ou None."""
+    balance = (corpo or {}).get("balance") if isinstance(corpo, dict) else None
+    for b in ((balance or {}).get("data") or {}).get("balances") or ():
+        if str((b or {}).get("id") or "").upper() == SALDO_DA_CONTA:
+            texto = str(b.get("available") or "").replace("R$", "").replace("\xa0", " ")
+            texto = texto.strip()
+            negativo = texto.startswith("-")
+            texto = texto.lstrip("-").strip()
+            if "," in texto:
+                texto = texto.replace(".", "").replace(",", ".")
+            try:
+                d = Decimal(texto).quantize(CENTAVO, rounding=ROUND_HALF_UP)
+            except (InvalidOperation, ValueError):
+                return None
+            return -d if negativo else d
+    return None
+
+
+def escutar_extrato(page) -> list:
+    """As respostas do extrato completo que a tela do extrato recebe."""
+    ouvidas: list = []
+
+    def ouvir(resposta):
+        if ROTA_EXTRATO_COMPLETO in resposta.url:
+            ouvidas.append(resposta)
+
+    page.on("response", ouvir)
+    return ouvidas
+
+
+def ler_extrato_completo(page, ouvidas: list, tempo: float | None = None):
+    """Abre a tela do extrato e devolve o corpo da resposta que ela pede
+    (JSON), ou None se não veio em `tempo`."""
+    ouvidas.clear()
+    page.goto(URL_EXTRATO_COMPLETO)
+    limite = time.time() + (TEMPO_EXTRATO if tempo is None else tempo)
+    while time.time() < limite and not ouvidas:
+        page.wait_for_timeout(500)
+    for resposta in reversed(ouvidas):
+        try:
+            corpo = resposta.json()
+        except Exception:                                    # noqa: BLE001
+            continue
+        if isinstance(corpo, dict):
+            return corpo
+    return None
+
+
 def escutar_saldo(page) -> list:
     """As respostas do saldo que a própria tela recebe (o objeto, e não o
     corpo: o corpo é lido depois, fora do evento)."""
@@ -183,14 +255,15 @@ def _fotografar(page, arquivo: Path) -> tuple:
 def ler_conta(apelido: str, numero_esperado: str, nomes, arquivo: Path, *,
               razoes=(), log=print, avisar_qr=lambda apelido: None, agora=datetime.now,
               tempo_login: int = ib.TEMPO_LOGIN, parar=lambda: False,
-              ao_entrar=lambda apelido: None) -> LidoInter:
+              ao_entrar=lambda apelido: None, extra=None) -> LidoInter:
     """Abre o Chrome no perfil da conta, espera o QR, confere a conta, lê o
     `disponivel` e fotografa. Nunca levanta: o desfecho vem no `LidoInter`."""
     try:
         return _ler_no_chrome(apelido, numero_esperado, nomes, arquivo, razoes=razoes,
                               log=log,
                               avisar_qr=avisar_qr, agora=agora,
-                              tempo_login=tempo_login, parar=parar, ao_entrar=ao_entrar)
+                              tempo_login=tempo_login, parar=parar, ao_entrar=ao_entrar,
+                              extra=extra)
     except Exception as e:                                   # noqa: BLE001
         # O Chrome nem abriu (perfil preso, Chrome ausente): o desfecho ainda
         # vem no `LidoInter`, e não numa exceção que derrubaria a rodada.
@@ -199,23 +272,60 @@ def ler_conta(apelido: str, numero_esperado: str, nomes, arquivo: Path, *,
 
 
 def _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes, razoes,
-                   arquivo, *, agora) -> LidoInter:
+                   arquivo, *, agora, extratos=None, extra=None) -> LidoInter:
     """Com a sessão aberta na tela inicial: resposta do saldo, CONFERE a
     conta e só então fotografa. Conta errada não tem print (revisão de
-    27/10/2026: o print da outra empresa ia para a página desta conta)."""
-    status, dado = _resposta_do_saldo(page, ouvidas, autorizacao)
+    27/10/2026: o print da outra empresa ia para a página desta conta).
+    Sem saldo ou sem número na tela inicial, a tela do extrato completo é a
+    segunda fonte (ver o docstring do módulo)."""
+    extratos = extratos if extratos is not None else []
+    guardado: dict = {}
+
+    def extrato():
+        if "corpo" not in guardado:
+            guardado["corpo"] = ler_extrato_completo(page, extratos)
+        return guardado["corpo"]
+
+    try:
+        status, dado = _resposta_do_saldo(page, ouvidas, autorizacao)
+    except SaldoInterFalhou as e:
+        status, dado, erro_inicio = None, None, e
+    else:
+        erro_inicio = None
     motivo = conferir_conta(ib._texto_da_tela(page), numero_esperado, nomes, razoes)
+    no_extrato = False
+    if motivo == SEM_NUMERO:
+        extrato()
+        no_extrato = True
+        motivo = conferir_conta(ib._texto_da_tela(page), numero_esperado, nomes, razoes)
     if motivo:
         sem = (SEM_PRINT_OUTRA_CONTA if "outra conta aberta" in motivo
                else SEM_PRINT_SEM_CONFERIR)
         return LidoInter(motivo=motivo, sem_imagem=sem)
-    saldo = saldo_da_resposta(status, dado)
+    via = "inicio"
+    try:
+        if erro_inicio is not None:
+            raise erro_inicio
+        saldo = saldo_da_resposta(status, dado)
+    except SaldoInterFalhou as e:
+        saldo = saldo_do_extrato(extrato())
+        if saldo is None:
+            raise e
+        via = "extrato"
+        if not no_extrato:
+            extrato()
     imagem, sem_imagem = _fotografar(page, Path(arquivo))
-    return LidoInter(saldo, agora(), "", imagem, sem_imagem)
+    resultado, erro = None, ""
+    if extra is not None:
+        try:
+            resultado = extra(page, autorizacao, extrato)
+        except Exception as e:                               # noqa: BLE001
+            erro = _primeira_linha(e)
+    return LidoInter(saldo, agora(), "", imagem, sem_imagem, via, resultado, erro)
 
 
 def _ler_no_chrome(apelido, numero_esperado, nomes, arquivo, *, razoes, log, avisar_qr,
-                   agora, tempo_login, parar, ao_entrar) -> LidoInter:
+                   agora, tempo_login, parar, ao_entrar, extra=None) -> LidoInter:
     from playwright.sync_api import sync_playwright
 
     perfil = ib.pasta_do_perfil(apelido)
@@ -226,6 +336,7 @@ def _ler_no_chrome(apelido, numero_esperado, nomes, arquivo, *, razoes, log, avi
             args=["--start-maximized"], no_viewport=True)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         ouvidas = escutar_saldo(page)
+        extratos = escutar_extrato(page)
         autorizacao = ib.escutar_autorizacao(page)
         try:
             page.goto(ib.URL_LOGIN)
@@ -235,7 +346,8 @@ def _ler_no_chrome(apelido, numero_esperado, nomes, arquivo, *, razoes, log, avi
             ouvidas.clear()
             page.goto(ib.URL_LOGIN)
             return _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes,
-                                  razoes, arquivo, agora=agora)
+                                  razoes, arquivo, agora=agora, extratos=extratos,
+                                  extra=extra)
         except (ib.InterFalhou, SaldoInterFalhou) as e:
             return LidoInter(motivo=str(e), sem_imagem="a leitura parou antes do print")
         except Exception as e:                               # noqa: BLE001

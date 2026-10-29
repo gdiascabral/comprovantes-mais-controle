@@ -143,9 +143,20 @@ def test_escutar_saldo_so_guarda_a_rota_do_saldo():
 class _PagDaTela(_Pag):
     """Tela inicial do Inter já logada: o texto, a resposta e o print."""
 
-    def __init__(self, texto=TELA):
+    def __init__(self, texto=TELA, extrato_texto=None, extrato_corpo=None, extratos=None):
         super().__init__()
         self.texto, self.fotos = texto, []
+        self.extrato_texto, self.extrato_corpo = extrato_texto, extrato_corpo
+        self.extratos, self.idas = extratos, []
+
+    def goto(self, url):
+        """A tela do extrato completo: troca o texto e "recebe" o corpo."""
+        self.idas.append(url)
+        if url == m.URL_EXTRATO_COMPLETO:
+            if self.extrato_texto is not None:
+                self.texto = self.extrato_texto
+            if self.extrato_corpo is not None and self.extratos is not None:
+                self.extratos.append(_Resp(200, self.extrato_corpo))
 
     def evaluate(self, js, args=None):
         return self.texto if args is None else super().evaluate(js, args)
@@ -176,7 +187,7 @@ def test_conta_errada_nao_e_fotografada(tmp_path):
     assert pag.fotos == []
 
 
-def test_conta_que_nao_da_para_conferir_tambem_fica_sem_print(tmp_path):
+def test_conta_que_nao_da_para_conferir_tambem_fica_sem_print(tmp_path, sem_espera):
     pag = _PagDaTela(texto="Saldo\nR$ 1,00")
     lido = m._ler_na_pagina(pag, [_Resp(200, {"disponivel": 1})], {"valor": ""},
                             "123456789", (), (), tmp_path / "b.png", agora=lambda: None)
@@ -205,3 +216,70 @@ def test_gancho_do_olho_do_inter_clica_antes_do_print(monkeypatch, tmp_path):
     monkeypatch.setattr(m.util, "fotografar", lambda alvo, arquivo: ordem.append("foto") or "")
     m._fotografar(_PagDaTela(), tmp_path / "b.png")
     assert ordem == [("olho", "#olho"), "foto"]
+
+
+# --------------------- extrato completo como segunda fonte (MORAIS ENG, 29/10/2026)
+EXTRATO = {"balance": {"data": {"balances": [{"id": "DIGITAL_ACCOUNT",
+                                               "available": "R$ 2.500,10"}]}}}
+
+
+@pytest.fixture
+def sem_espera(monkeypatch):
+    monkeypatch.setattr(m, "TEMPO_EXTRATO", 0)
+
+
+def test_saldo_do_extrato():
+    assert m.saldo_do_extrato(EXTRATO) == D("2500.10")
+    neg = {"balance": {"data": {"balances": [{"id": "DIGITAL_ACCOUNT", "available": "-R$ 5,00"}]}}}
+    assert m.saldo_do_extrato(neg) == D("-5.00")
+    assert m.saldo_do_extrato({}) is None and m.saldo_do_extrato(None) is None
+
+
+def test_sem_saldo_na_tela_inicial_le_do_extrato_completo(tmp_path, sem_espera):
+    extratos = []
+    pag = _PagDaTela(extrato_corpo=EXTRATO, extratos=extratos)
+    lido = m._ler_na_pagina(pag, [_Resp(500, None)], {"valor": ""}, "123456789",
+                            ("EMPRESA FICTICIA",), (), tmp_path / "b.png", agora=lambda: "agora",
+                            extratos=extratos)
+    assert (lido.saldo, lido.via, lido.motivo) == (D("2500.10"), "extrato", "")
+    assert pag.idas == [m.URL_EXTRATO_COMPLETO] and pag.fotos
+
+
+def test_sem_numero_na_tela_inicial_confere_a_conta_no_extrato(tmp_path, sem_espera):
+    extratos = []
+    pag = _PagDaTela(texto="Olá", extrato_texto=TELA, extrato_corpo=EXTRATO, extratos=extratos)
+    lido = m._ler_na_pagina(pag, [_Resp(200, {"disponivel": 9.9})], {"valor": ""},
+                            "123456789", ("EMPRESA FICTICIA",), (), tmp_path / "b.png",
+                            agora=lambda: None, extratos=extratos)
+    assert (lido.saldo, lido.via, lido.motivo) == (D("9.90"), "inicio", "")
+
+
+def test_extrato_de_outra_conta_nao_le(tmp_path, sem_espera):
+    extratos = []
+    outra = TELA.replace("123456789", "999999999")
+    pag = _PagDaTela(texto="Olá", extrato_texto=outra, extrato_corpo=EXTRATO, extratos=extratos)
+    lido = m._ler_na_pagina(pag, [_Resp(200, {"disponivel": 9.9})], {"valor": ""},
+                            "123456789", ("EMPRESA FICTICIA",), (), tmp_path / "b.png",
+                            agora=lambda: None, extratos=extratos)
+    assert lido.saldo is None and "outra conta aberta" in lido.motivo and pag.fotos == []
+
+
+def test_extra_usa_a_mesma_sessao_e_falha_dele_nao_perde_o_saldo(tmp_path, sem_espera):
+    extratos = []
+    pag = _PagDaTela(extrato_corpo=EXTRATO, extratos=extratos)
+    vistos = []
+
+    def extra(page, autorizacao, extrato):
+        vistos.append((page, extrato()))
+        return "listas"
+    lido = m._ler_na_pagina(pag, [_Resp(200, {"disponivel": 1})], {"valor": "x"}, "123456789",
+                            ("EMPRESA FICTICIA",), (), tmp_path / "b.png", agora=lambda: None,
+                            extratos=extratos, extra=extra)
+    assert lido.extra == "listas" and vistos == [(pag, EXTRATO)]
+
+    def quebra(*a):
+        raise RuntimeError("API mudou")
+    lido = m._ler_na_pagina(_PagDaTela(), [_Resp(200, {"disponivel": 1})], {"valor": "x"},
+                            "123456789", ("EMPRESA FICTICIA",), (), tmp_path / "c.png",
+                            agora=lambda: None, extra=quebra)
+    assert lido.saldo == D("1.00") and lido.extra_erro == "API mudou"
