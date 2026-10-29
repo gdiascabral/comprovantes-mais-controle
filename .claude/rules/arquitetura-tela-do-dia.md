@@ -782,8 +782,19 @@ Ordem do dia do dono: 1º conferir no banco o que foi pago antes, 2º saldos,
   dono desmarcou e não mudou fica desmarcado); (6) descrição do banco mais
   curta que a colada só vale com `CORTE_DO_BANCO` caracteres ou mais (A
   MEDIR) — "… LT 10" não prova "… LT 10 E 11".
-- **Falta (pendente na spec)**: o Inter (QR por conta no Autenticar, saldo
-  reaproveitado pela Prova de saldos) e os aportes do dia anterior.
+- **Inter (29/10/2026, `autenticar_inter`)**: depois do Sicoob, uma conta
+  por vez, cada uma com o seu QR, pela sessão do `inter_saldo.ler_conta` da
+  Prova (conta conferida, saldo, print) com o gancho `extra`: extrato Pix (só
+  enviados), 2ª via PAGAMENTO/DARF (só EFETIVADO) e o extrato completo, de
+  onde só entra a saída que NÃO é Pix e não tem par de mesmo valor e dia na
+  2ª via (`do_extrato_sem_repetir`: é o convênio). Contas pela régua da Prova
+  (`contas_a_ler`: `contas_mc` + um login por empresa; duas contas do ERP no
+  mesmo login não são lidas). Lista que falha deixa a conta "não lida" (nunca
+  "nada no banco"). **O saldo lido vai para `DD MM - saldos do inter.json`**
+  (`gravar_saldos`) e a **Prova de saldos o usa no mesmo dia sem pedir o QR
+  de novo** (`prova_na_tela._saldo_do_autenticar`, com a hora e o print do
+  Autenticar). `ComprovantesFrame.inter_ocupado` passa a contar o Autenticar.
+- **Falta (pendente na spec)**: os aportes do dia anterior.
 
 ## Lista do diretor (entrega 2)
 

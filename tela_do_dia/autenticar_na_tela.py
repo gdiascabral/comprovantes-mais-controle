@@ -16,9 +16,11 @@ banco, uma sessão**: recusa com qualquer outro uso do Chrome do Sicoob
 (`outros_no_sicoob`, ligado no `comprovantes_app.py`), e todos recusam
 enquanto ele roda (`ocupado`, `autenticar_sicoob.OCUPADO`).
 
-Inter: ainda não lido aqui (próxima etapa da spec: o QR por conta no
-Autenticar, com o saldo reaproveitado pela Prova de saldos). Agendado do
-Inter fica como estava, sem nota.
+Inter (dono, 29/10/2026: "QR por conta toda manhã, a mesma leitura servindo
+para saldo e para autenticar"): depois do Sicoob, uma conta do Inter por vez,
+cada uma com o seu QR (`autenticar_inter`, pela sessão do `inter_saldo` da
+Prova de saldos). O saldo lido vai para o arquivo do dia, e a Prova de saldos
+o usa sem pedir o QR de novo.
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ import widgets
 from pagamentos_dia import agendamentos_sicoob as A
 
 from . import autenticar as au
+from . import autenticar_inter as ai
 from . import autenticar_sicoob as asi
 
 TITULO = "Autenticar no banco"
@@ -41,15 +44,29 @@ def _hoje() -> datetime.date:
 
 
 def _carregar_mapas():
+    """(mapa_mc, empresas, contas_inter) — função à parte para o teste."""
+    from baixar_comprovantes import contas_inter
     from pagamentos_dia import pagamentos_frame
-    return pagamentos_frame._carregar_mapas()
+    mapa_mc, empresas = pagamentos_frame._carregar_mapas()
+    return mapa_mc, empresas, contas_inter.carregar()
 
 
-def pergunta_de_abrir(n_contas: int, inicio, fim) -> str:
-    return (f"Vou abrir o Chrome do Sicoob e ler {n_contas} conta(s), de "
-            f"{inicio:%d/%m} a {fim:%d/%m}: só as listas de pagamentos, Pix e "
-            "pendências de assinatura. Nada é assinado nem baixado.\n\n"
-            "Entre no SicoobNet quando o Chrome abrir. Continuar?")
+def _raiz_saida():
+    from conciliacao.frame import RAIZ_SAIDA
+    return RAIZ_SAIDA
+
+
+def pergunta_de_abrir(n_contas: int, inicio, fim, inter=()) -> str:
+    partes = []
+    if n_contas:
+        partes.append(f"o Chrome do Sicoob e ler {n_contas} conta(s) (entre no "
+                      "SicoobNet quando ele abrir)")
+    if inter:
+        partes.append(f"depois o Inter, uma conta por vez, cada uma com o seu QR "
+                      f"({', '.join(inter)}) — o saldo lido serve à Prova de saldos")
+    return (f"Vou abrir {' e '.join(partes)}, de {inicio:%d/%m} a {fim:%d/%m}: só as "
+            "listas de pagamentos, Pix e pendências. Nada é assinado nem baixado.\n\n"
+            "Continuar?")
 
 
 def recusa(lido, leitura, lido_no_dia, hoje) -> str:
@@ -113,44 +130,71 @@ class AutenticarNaTela:
                                         "Espere terminar.")
             return
         try:
-            mapa_mc, empresas = _carregar_mapas()
+            mapa_mc, empresas, contas_inter = _carregar_mapas()
         except Exception as e:                               # noqa: BLE001
             messagebox.showwarning(TITULO, widgets.recado_de_erro(
                 e, "Não consegui ler o cadastro de contas."))
             return
         contas, falhas = asi.contas_a_ler(
             pendentes, lambda c: A.conta_sicoob(c, mapa_mc, empresas))
+        inter, falhas_inter = ai.contas_a_ler(pendentes, mapa_mc, empresas, contas_inter,
+                                              getattr(tela, "contas_erp", ()))
+        falhas = {**falhas, **falhas_inter}
         periodo = asi.periodo(pendentes, _hoje())
-        if not contas:
+        if not contas and not inter:
             self._aplicar(au.autenticar(pendentes, [], falhas=falhas, hoje=_hoje()))
-            messagebox.showinfo(TITULO, "Nenhum agendado pendente é de conta do Sicoob "
-                                        "que dê para ler (veja o Registro).")
+            messagebox.showinfo(TITULO, "Nenhum agendado pendente é de conta do Sicoob ou "
+                                        "do Inter que dê para ler (veja o Registro).")
             return
         inicio, fim = periodo
-        if not messagebox.askokcancel(TITULO, pergunta_de_abrir(len(contas), inicio, fim)):
+        if not messagebox.askokcancel(TITULO, pergunta_de_abrir(
+                len(contas), inicio, fim, [c.apelido for c in inter.values()])):
             return
         quem = self.outros_no_sicoob()
         if quem:
             messagebox.showinfo(TITULO, f"O Chrome do Sicoob está em uso: {quem}.")
             return
         tela._log("")
-        tela._log(f"Autenticar no banco: {len(contas)} conta(s) do Sicoob, "
-                  f"{inicio:%d/%m} a {fim:%d/%m}")
+        tela._log(f"Autenticar no banco: {len(contas)} conta(s) do Sicoob e "
+                  f"{len(inter)} do Inter, {inicio:%d/%m} a {fim:%d/%m}")
         for conta, motivo in falhas.items():
             tela._log(f"  {conta}: {motivo}")
         self._parar.clear()
         self.b.configure(state="disabled")
         self._thread = threading.Thread(
             target=self._t_ler, name="sicoob-autenticar", daemon=True,
-            args=(pendentes, contas, falhas, inicio, fim))
+            args=(pendentes, contas, falhas, inicio, fim, inter, self._pasta_prints()))
         self._thread.start()
 
-    def _t_ler(self, pendentes, contas, falhas, inicio, fim):
-        """Thread do Sicoob: só fala com a tela pela fila; sempre termina com "fim"."""
+    def _pasta_prints(self):
         try:
-            r = asi.ler(contas, inicio, fim, asi.valores_por_conta(pendentes),
-                        log=self.tela._log, perguntar=self._perguntar_outro_acesso,
-                        parar=self._parar.is_set)
+            base = self.tela._pasta_pagamentos()
+        except Exception:                                    # noqa: BLE001
+            base = None
+        from pathlib import Path
+        return (Path(base) if base else Path(".")) / "Autenticar no banco" / "prints" \
+            / f"{_hoje():%Y-%m-%d}"
+
+    def _t_ler(self, pendentes, contas, falhas, inicio, fim, inter=None, pasta=None):
+        """Thread dos bancos: só fala com a tela pela fila; sempre termina com "fim"."""
+        try:
+            r = asi.Leitura()
+            if contas:
+                r = asi.ler(contas, inicio, fim, asi.valores_por_conta(pendentes),
+                            log=self.tela._log, perguntar=self._perguntar_outro_acesso,
+                            parar=self._parar.is_set)
+            if inter:
+                ri, lidos = ai.ler(inter, inicio, fim, pasta, log=self.tela._log,
+                                   avisar_qr=lambda apelido: self.q.put(("qr", apelido)),
+                                   parar=self._parar.is_set)
+                r.movimentos.extend(ri.movimentos)
+                r.lidas |= ri.lidas
+                r.falhas.update(ri.falhas)
+                try:
+                    hoje = _hoje()
+                    ai.gravar_saldos(lidos, ai.caminho_dos_saldos(_raiz_saida(), hoje), hoje)
+                except Exception as e:                       # noqa: BLE001
+                    self.q.put(("falhou", f"[!] não gravei o saldo do Inter do dia: {e!r}"))
             r.falhas.update({c: m for c, m in falhas.items() if c not in r.lidas})
             aut = au.autenticar(pendentes, r.movimentos, r.pendencias, r.lidas, r.falhas,
                                 hoje=_hoje())
@@ -191,8 +235,11 @@ class AutenticarNaTela:
                     self.tela._log(resumo({k: v for k, v in valor.items()}))
                 elif tipo == "falhou":
                     self.tela._log(valor)
+                elif tipo == "qr":
+                    self.tela._log(f"  Inter {valor}: escaneie o QR Code no Chrome que abriu.")
+                    self.b.configure(text=f"QR do Inter: {valor}…")
                 elif tipo == "fim":
-                    self.b.configure(state="normal")
+                    self.b.configure(state="normal", text="🔎  Autenticar no banco")
         except queue.Empty:
             pass
         except Exception as e:                               # noqa: BLE001

@@ -432,11 +432,10 @@ SALDO_DA_CONTA = "DIGITAL_ACCOUNT"
 
 
 def saldo_do_extrato_inter(corpo: dict) -> Decimal | None:
-    """O saldo da conta digital no extrato completo, ou None."""
-    for b in ((corpo or {}).get("balance") or {}).get("data", {}).get("balances") or ():
-        if str(b.get("id") or "").upper() == SALDO_DA_CONTA:
-            return dinheiro(b.get("available"))
-    return None
+    """O saldo da conta digital no extrato completo, ou None — a régua é a
+    do leitor de saldo (`inter_saldo.saldo_do_extrato`), uma só."""
+    from baixar_comprovantes.inter_saldo import saldo_do_extrato
+    return saldo_do_extrato(corpo)
 
 
 def transacoes_do_extrato_inter(corpo: dict) -> list:
