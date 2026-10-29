@@ -137,8 +137,10 @@ PALETA = {
         "erro":        "#BF3129",   "erro_fundo":    "#FBE7E5",   # 4,8:1
         "info":        "#1746C7",   "info_fundo":    "#E8EEFC",   # 6,6:1
         # ---- registro (terminal embutido: escuro NOS DOIS TEMAS)
-        "log_fundo":   "#101623",
-        "log_texto":   "#C7D2E4",   # 11,9:1
+        # O registro segue o tema desde 28/10/2026 (repaginada): fundo do
+        # próprio cartão, sem caixa dentro de caixa.
+        "log_fundo":   "#FFFFFF",
+        "log_texto":   "#1C2537",
     },
     "escuro": {
         # Azul-marinho desde 22/10/2026 (protótipo da repaginada aprovado pelo
@@ -171,19 +173,33 @@ PALETA = {
         "atencao":     "#F2B65C",   "atencao_fundo": "#382A0B",   # 7,7:1
         "erro":        "#FF8F84",   "erro_fundo":    "#3B1421",   # 7,3:1
         "info":        "#8FB2FF",   "info_fundo":    "#192A5E",   # 6,5:1
-        "log_fundo":   "#101623",
+        "log_fundo":   "#0F1C36",
         "log_texto":   "#C7D2E4",
     },
 }
 
-#: Cores do registro que NÃO mudam com o tema: ele é um terminal embutido, e
-#: um terminal claro no meio de um painel claro deixa de parecer registro.
+#: Cores das linhas do registro no tema ESCURO. Até 28/10/2026 o registro era
+#: um terminal escuro nos dois temas; na repaginada ele passou a seguir o
+#: tema (um bloco preto no meio da tela clara era o maior choque de cor do
+#: app), e o claro tem as suas em `LOG_CORES_CLARO`.
 LOG_CORES = {
     "ts":     "#7C8AA3",   # 5,2:1 sobre o fundo do registro
     "ok":     "#5FD08E",   # 9,4:1
     "aviso":  "#F0B354",   # 9,7:1
     "erro":   "#FF8A80",   # 7,9:1
 }
+
+#: As mesmas quatro no tema claro, sobre o branco do cartão.
+LOG_CORES_CLARO = {
+    "ts":     "#656E84",   # 5,1:1
+    "ok":     "#0C7A43",   # 5,4:1
+    "aviso":  "#8A4D06",   # 7,0:1
+    "erro":   "#BF3129",   # 5,6:1
+}
+
+
+def cores_do_log() -> dict:
+    return LOG_CORES if _estado["escuro"] else LOG_CORES_CLARO
 
 #: Margem lateral das abas. Era `PADX = 14` redigitado em cada `_build`.
 #: Subiu para 20 com o redesenho: agora ela é a folga entre o cartão branco e
@@ -4374,31 +4390,28 @@ def estilo_log(texto: tk.Text, escuro: bool | None = None) -> None:
     Existia em quatro cópias byte a byte. Também configura a tag "ph", usada
     pelo texto de tela vazia — que antes era `#8a8a8a` fixo e sumia no claro.
 
-    ESCURO NOS DOIS TEMAS, e isso é escolha e não descuido: o registro é um
-    terminal embutido, e um terminal branco no meio de um painel branco
-    deixa de se distinguir do formulário que está logo acima. É também a
-    única superfície do app onde a cor carrega significado por linha (✔ ⚠ ✖),
-    e o fundo fundo é o que dá contraste para os três de uma vez.
+    SEGUE O TEMA desde 28/10/2026 (repaginada). Até ali era escuro nos dois
+    temas, como terminal embutido; no claro isso virava um bloco preto no
+    meio da tela, o maior choque de cor do app. Agora o fundo é o do próprio
+    cartão, e ok/aviso/erro têm cor medida para cada tema (`cores_do_log`).
     """
     if escuro is not None:
         _estado["escuro"] = bool(escuro)
     c = cores()
     texto.configure(background=c["log_fundo"], foreground=c["log_texto"],
                     insertbackground=c["log_texto"], font=FONTE_MONO,
-                    selectbackground="#2A3A57", selectforeground="#FFFFFF",
-                    # A moldura existe por causa do tema ESCURO: ali o fundo do
-                    # registro (#101623) e o do cartão (#171D28) ficam a seis
-                    # níveis de distância, e sem o filete o terminal embutido
-                    # virava só uma área um pouco mais escura do cartão. No
-                    # claro ela não faz falta nem atrapalha.
-                    highlightthickness=1, highlightbackground=c["borda"],
-                    highlightcolor=c["borda"],
-                    padx=px(12), pady=px(8))
+                    selectbackground=c["marca_fundo"],
+                    selectforeground=c["texto"],
+                    # Sem moldura: o registro tem o fundo do cartão desde
+                    # 28/10/2026, e o filete do cabeçalho do cartão é a
+                    # separação (a caixa dentro da caixa era a "diferença de
+                    # cor" que o dono apontou).
+                    highlightthickness=0, padx=px(2), pady=px(4))
     texto.tag_configure("ph", justify="center", foreground=c["tenue"],
                         spacing1=6, font=FONTE_APOIO)
-    for tag, cor in LOG_CORES.items():
+    for tag, cor in cores_do_log().items():
         texto.tag_configure(tag, foreground=cor)
-    texto.tag_configure("forte", foreground="#FFFFFF")
+    texto.tag_configure("forte", foreground=c["texto"])
 
 
 #: O que é aviso e o que é erro no texto que as abas já escrevem.
