@@ -301,14 +301,31 @@ def test_buscar_da_tela_usa_os_campos_e_nao_so_a_sugestao():
     buscar = next(n for n in ast.walk(ast.parse(fonte))
                   if isinstance(n, ast.FunctionDef) and n.name == "buscar")
     trecho = ast.get_source_segment(fonte, buscar)
-    assert "dc.periodo_da_busca(" in trecho and "sugerir_periodo(" not in trecho
+    assert "dc.busca_do_dia(" in trecho and "sugerir_periodo(" not in trecho
     assert "CampoData(" in fonte
 
 
 # ------------------------------- revisão do pacote: saldo de agora ≠ do dia
-def test_nao_busca_o_futuro():
-    with pytest.raises(ValueError, match="futuro"):
-        dc.periodo_da_busca("21/10/2026", "22/10/2026", ("a", "b"), HOJE)
+def test_ate_no_futuro_adianta_e_o_dia_continua_sendo_hoje():
+    """Dono, 29/10/2026: o diretor pede para adiantar os boletos dos próximos
+    dias. O período do dia termina hoje; o resto é só para os boletos."""
+    from conciliacao.models import Periodo
+    p, ate = dc.busca_do_dia("20/10/2026", "24/10/2026", ("a", "b"), HOJE)
+    assert p == Periodo(date(2026, 10, 20), HOJE) and ate == date(2026, 10, 24)
+    assert dc.periodo_da_busca("20/10/2026", "24/10/2026", ("a", "b"), HOJE) == p
+    # DE também no futuro: o dia é só hoje.
+    p, ate = dc.busca_do_dia("23/10/2026", "25/10/2026", ("a", "b"), HOJE)
+    assert p == Periodo(HOJE, HOJE) and ate == date(2026, 10, 25)
+    # ATÉ até hoje: nada adiantado.
+    assert dc.busca_do_dia("20/10/2026", "21/10/2026", ("a", "b"), HOJE)[1] is None
+    frase = dc.frase_dos_adiantados(Periodo(HOJE, HOJE), date(2026, 10, 25))
+    assert "22/10 a 25/10" in frase and "código de barras" in frase
+    assert dc.frase_dos_adiantados(Periodo(HOJE, HOJE), None) == ""
+
+
+def test_adiantar_tambem_respeita_31_dias():
+    with pytest.raises(ValueError, match="31 dias"):
+        dc.busca_do_dia("01/10/2026", "05/11/2026", ("a", "b"), HOJE)
 
 
 def test_periodo_de_no_maximo_31_dias():

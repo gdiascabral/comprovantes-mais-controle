@@ -642,24 +642,29 @@ class TelaDoDiaFrame(ttk.Frame):
             return
         hoje = datetime.date.today()
         try:
-            periodo = dc.periodo_da_busca(self.v_ini.get(), self.v_fim.get(),
-                                          self._sugerido, hoje)
+            # ATÉ depois de hoje adianta os boletos dos dias seguintes (dono,
+            # 29/10/2026); o período do dia continua terminando hoje.
+            periodo, adiantar_ate = dc.busca_do_dia(self.v_ini.get(), self.v_fim.get(),
+                                                    self._sugerido, hoje)
         except ValueError as e:
             messagebox.showinfo("Pagamentos do dia", str(e))
             return
-        self._mostrar_datas(periodo, hoje)
+        self._mostrar_datas(periodo, hoje, adiantar_ate)
         self._limpar()
         self._parar.clear()
+        if adiantar_ate:
+            self._log(dc.frase_dos_adiantados(periodo, adiantar_ate))
         self.q.put(("botoes", "disabled"))
         self.q.put(("ocupado", True))
         self.q.put(("status", f"Lendo {periodo.descrever()}..."))
         self.worker = self.anx.submeter("Pagamentos do dia — ler", self._t_ler,
-                                        periodo, dona=self)
+                                        periodo, adiantar_ate, dona=self)
 
-    def _mostrar_datas(self, periodo, hoje):
+    def _mostrar_datas(self, periodo, hoje, adiantar_ate=None):
         """Os campos mostram o período que vai ser lido (o invertido sai
-        desvirado; a sugestão de ontem, a de hoje)."""
-        ini, fim = f"{periodo.inicio:%d/%m/%Y}", f"{periodo.fim:%d/%m/%Y}"
+        desvirado; a sugestão de ontem, a de hoje; com adiantados, o ATÉ
+        escolhido continua lá)."""
+        ini, fim = f"{periodo.inicio:%d/%m/%Y}", f"{(adiantar_ate or periodo.fim):%d/%m/%Y}"
         self.v_ini.set(ini)
         self.v_fim.set(fim)
         if (ini, fim) == dc.textos_sugeridos(hoje):
@@ -699,7 +704,7 @@ class TelaDoDiaFrame(ttk.Frame):
         self.sicoob.ligar(False)
         self.prova.ligar(False)
 
-    def _t_ler(self, periodo):
+    def _t_ler(self, periodo, adiantar_ate=None):
         comeco = time.time()
         try:
             base = util.pasta_base()
@@ -717,7 +722,8 @@ class TelaDoDiaFrame(ttk.Frame):
                     destacar=regras_pag.carregar_confirmar(),
                     log=self._log,
                     progresso=lambda f, t: self.q.put(("status", f"Lendo... {f}/{t}")),
-                    cancelar=self._parar.is_set)
+                    cancelar=self._parar.is_set,
+                    adiantar_ate=adiantar_ate)
             except Exception as e:                          # noqa: BLE001
                 # Credenciais que a tela de Pagamentos não deu, lista que não
                 # carregou: o recado de sempre, e nada na tela.

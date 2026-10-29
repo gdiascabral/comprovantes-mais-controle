@@ -84,6 +84,10 @@ class Entradas:
     #: candidatos a dividir, lidos pela `leitura_do_dia`. Título fora daqui
     #: não divide ("não sei se o título tem outras parcelas").
     titulos_erp: dict = field(default_factory=dict)
+    #: Só a tela nova, ao adiantar boletos (`leitura_do_dia.separar_adiantados`):
+    #: o dia de trabalho. Registro com vencimento DEPOIS dele leva na Obs
+    #: "adiantado — vence DD/MM" (planilha, HTML, tela). None = nada muda.
+    adiantar_de: object = None
 
 
 def _periodo_legivel(periodo) -> str:
@@ -158,10 +162,32 @@ def remontar(entradas: Entradas, ids_nao_confirmados=(), *,
         titulos_nao_lidos=entradas.titulos_nao_lidos,
         qr_pix=entradas.qr_pix,
         ids_liberados=ids_liberados)
+    if entradas.adiantar_de is not None:
+        marcar_adiantados(resultado, entradas.adiantar_de)
     if entradas.dividir_boletos:
         resultado = boletos_somados.dividir(resultado, entradas,
                                             titulos_erp=entradas.titulos_erp)
     return resultado
+
+
+def obs_de_adiantado(vencimento: str, dia) -> str:
+    """"adiantado — vence DD/MM" quando o vencimento ISO é depois de `dia`."""
+    import datetime as _dt
+    try:
+        venc = _dt.date.fromisoformat(vencimento or "")
+    except ValueError:
+        return ""
+    return f"adiantado — vence {venc:%d/%m}" if venc > dia else ""
+
+
+def marcar_adiantados(resultado, dia) -> None:
+    """Põe a marca de adiantado na Obs dos registros que vencem depois de
+    `dia` (no lugar: o `Resultado` acabou de ser montado)."""
+    for regs in resultado.contas.values():
+        for r in regs:
+            marca = obs_de_adiantado(r.get("vencimento", ""), dia)
+            if marca and marca not in (r.get("obs") or ""):
+                r["obs"] = f"{marca} · {r['obs']}" if r.get("obs") else marca
 
 
 # --------------------------------------------------------------------------

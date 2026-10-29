@@ -184,3 +184,56 @@ def test_leitura_inteira_guarda_as_entradas_da_remessa():
     assert leitura.entradas.periodo == (DIA, DIA)
     assert leitura.entradas.titulos_nao_lidos == {"T-L9"}
     assert leitura.analise is not None and leitura.periodo == (DIA, DIA)
+
+
+# ---------------------- adiantar boletos dos dias seguintes (dono, 29/10/2026)
+def test_dos_dias_seguintes_so_entra_o_que_se_paga_por_codigo_de_barras():
+    hoje_pix = _lanc("L1")
+    futuro_boleto = _lanc("L2", plannedDate="2026-10-23", tradePayablePaymentMethod="Boleto")
+    futuro_anexo = _lanc("L3", plannedDate="2026-10-24")         # Pix, mas com boleto anexado
+    futuro_pix = _lanc("L4", plannedDate="2026-10-24")
+    anexos = {"T-L3": [_anexo("boleto 1234", tag="Boleto")]}
+    ficam, adiantados, fora = ld.separar_adiantados(
+        [hoje_pix, futuro_boleto, futuro_anexo, futuro_pix], anexos, DIA)
+    assert [i["id"] for i in ficam] == ["L1", "L2", "L3"]
+    assert adiantados == {"L2", "L3"} and fora == 1
+
+
+def test_leitura_com_adiantados_le_ate_o_fim_e_marca_a_obs():
+    api = ApiFalsa([_lanc("L1"),
+                    _lanc("L2", plannedDate="2026-10-23", tradePayablePaymentMethod="Boleto"),
+                    _lanc("L4", plannedDate="2026-10-24")])
+    leitura = _ler(api, adiantar_ate=date(2026, 10, 24))
+    assert api.periodo == ("2026-10-21", "2026-10-24")
+    assert leitura.periodo == (DIA, DIA)                      # o dia de trabalho não muda
+    assert leitura.adiantados == {"L2"}
+    ids = {i["id"] for i in leitura.lancamentos}
+    assert ids == {"L1", "L2"}
+    regs = [r for rs in leitura.resultado.contas.values() for r in rs]
+    regs += leitura.resultado.omitidos
+    l2 = [r for r in regs if r.get("id") == "L2"]
+    assert l2, "o boleto adiantado tem de aparecer (apto ou não apto)"
+    for r in regs:
+        if r.get("id") == "L1":
+            assert "adiantado" not in (r.get("obs") or "")
+
+
+def test_sem_adiantar_nada_muda():
+    api = ApiFalsa([_lanc("L1"), _lanc("L2", plannedDate="2026-10-23")])
+    leitura = _ler(api)
+    assert api.periodo == ("2026-10-21", "2026-10-21")
+    assert leitura.adiantados == set() and leitura.entradas.adiantar_de is None
+
+
+def test_obs_de_adiantado():
+    assert confirmacao.obs_de_adiantado("2026-10-23", DIA) == "adiantado — vence 23/10"
+    assert confirmacao.obs_de_adiantado("2026-10-21", DIA) == ""
+    assert confirmacao.obs_de_adiantado("", DIA) == ""
+
+    class R:
+        contas = {"C": [{"vencimento": "2026-10-23", "obs": "x"},
+                        {"vencimento": "2026-10-21", "obs": ""}]}
+    confirmacao.marcar_adiantados(R, DIA)
+    confirmacao.marcar_adiantados(R, DIA)                      # não repete
+    assert R.contas["C"][0]["obs"] == "adiantado — vence 23/10 · x"
+    assert R.contas["C"][1]["obs"] == ""
