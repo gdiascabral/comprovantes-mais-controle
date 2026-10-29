@@ -139,6 +139,7 @@ class TelaDoDiaFrame(ttk.Frame):
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         # O meio rola quando não cabe (ver `widgets.AreaRolavel`).
         corpo = widgets.AreaRolavel(self)
+        self._corpo = corpo
         self.b1 = widgets.Botao(cab.acoes, "Buscar pagamentos e saldos", papel="acao",
                                 command=self.buscar)
         self.b1.pack(side="left")
@@ -879,7 +880,14 @@ class TelaDoDiaFrame(ttk.Frame):
 
     def _encher_aportes(self):
         t = self.t_apt
-        t.delete(*t.get_children())
+        # O que o dono fechou continua fechado, e a linha que ele editou
+        # continua selecionada (dono, 28/10/2026: "sempre que adiciono um
+        # valor … abre de novo todas as seleções"). Na primeira vez, todas
+        # abertas, como sempre.
+        antes = t.get_children()
+        abertas = {t.item(i, "text"): bool(t.item(i, "open")) for i in antes}
+        par_selecionado = self._iid_aporte.get(t.focus())
+        t.delete(*antes)
         self._iid_aporte = {}
         alertas = self.aportes.alertas
         self._mostrar_alertas(
@@ -895,8 +903,9 @@ class TelaDoDiaFrame(ttk.Frame):
             else:
                 estado = ""
             minimo, definido, falta, final = dc.celulas_do_aporte(c)
-            pai = t.insert("", "end", open=True, tags=widgets.linha_zebrada(i, estado),
-                           text=("★ CONTA-MÃE · " if c.e_mae else "") + c.rotulo,
+            texto = ("★ CONTA-MÃE · " if c.e_mae else "") + c.rotulo
+            pai = t.insert("", "end", open=abertas.get(texto, True),
+                           tags=widgets.linha_zebrada(i, estado), text=texto,
                            values=(minimo, "", definido, falta, final))
             sugestao = c.sugestao
             for p in c.participantes:
@@ -904,6 +913,9 @@ class TelaDoDiaFrame(ttk.Frame):
                 iid = t.insert(pai, "end", text=f"   {p.aportador}{peso}", values=(
                     "", brl(sugestao.get(p.aportador)), brl(c.definidos.get(p.aportador)), "", ""))
                 self._iid_aporte[iid] = (c.rotulo, p.aportador)
+                if (c.rotulo, p.aportador) == par_selecionado:
+                    t.focus(iid)
+                    t.selection_set(iid)
             if c.entra_a_mao:
                 t.insert(pai, "end", text="   entra à mão",
                          values=("", "", brl(c.entra_a_mao), "", ""))
@@ -1025,7 +1037,7 @@ class TelaDoDiaFrame(ttk.Frame):
         if not ajustes:
             self.dia.ajustes.pop(iid, None)
         self._gravar_dia()
-        self._recalcular()
+        self._recalcular_no_lugar()
 
     def _duplo_aporte(self, evento):
         self._editar_aporte(self.t_apt.identify_row(evento.y))
@@ -1059,7 +1071,22 @@ class TelaDoDiaFrame(ttk.Frame):
         else:
             self.dia.aportes[(destino, aportador)] = resposta[0]
         self._gravar_dia()
+        self._recalcular_no_lugar()
+
+    def _recalcular_no_lugar(self):
+        """Recalcula sem a página pular: a rolagem volta para onde estava
+        depois que as tabelas se refazem (dono, 28/10/2026: "volta a tela
+        pro meio")."""
+        canvas = getattr(getattr(self, "_corpo", None), "canvas", None)
+        topo = canvas.yview()[0] if canvas is not None else None
         self._recalcular()
+        if topo is not None:
+            def voltar():
+                try:
+                    canvas.yview_moveto(topo)
+                except tk.TclError:
+                    pass                 # aba fechada antes do idle
+            self.after_idle(voltar)
 
     def _usar_sugestoes(self):
         if self.aportes is None:
@@ -1068,7 +1095,7 @@ class TelaDoDiaFrame(ttk.Frame):
             for aportador, valor in c.sugestao.items():
                 self.dia.aportes.setdefault((c.rotulo, aportador), valor)
         self._gravar_dia()
-        self._recalcular()
+        self._recalcular_no_lugar()
 
     def _novo_movimento(self, *, de_fora: bool):
         if self.dia is None:
@@ -1112,7 +1139,7 @@ class TelaDoDiaFrame(ttk.Frame):
         self.dia.a_mao.append(resposta["v"])
         self._log(f"Movimento à mão incluído: {dc.descrever_movimento(resposta['v'])}")
         self._gravar_dia()
-        self._recalcular()
+        self._recalcular_no_lugar()
 
     def _nova_distribuicao(self):
         if self.dia is None:
@@ -1183,7 +1210,7 @@ class TelaDoDiaFrame(ttk.Frame):
         self.dia.distribuicoes.append(resposta["v"])
         self._log(f"Incluída: {dc.descrever_distribuicao(resposta['v'])}")
         self._gravar_dia()
-        self._recalcular()
+        self._recalcular_no_lugar()
 
     def _remover_movimento(self):
         if self.dia is None:
@@ -1202,7 +1229,7 @@ class TelaDoDiaFrame(ttk.Frame):
         del lista[i]
         self._log(f"Movimento à mão removido: {texto}")
         self._gravar_dia()
-        self._recalcular()
+        self._recalcular_no_lugar()
 
     # ------------------------------------------------ passo 2 editável (nuvem)
     # Regra nenhuma mora aqui: quem decide é `passo2` / `conferencia` (puros,
@@ -1315,7 +1342,7 @@ class TelaDoDiaFrame(ttk.Frame):
         self.lido, self.conferencia = lido, lido.conferencia
         self.marcas_agd = passo67.marcas_iniciais(lido.pendentes, self.marcas_agd, anteriores)
         self._montar_lista()
-        self._recalcular()               # passo 2, aportes e (mostrar_numeros) agendados/lista
+        self._recalcular_no_lugar()               # passo 2, aportes e (mostrar_numeros) agendados/lista
         self._remontar_para_marcar()
         self._encher_para_marcar()
         self._ligar_botoes()
@@ -1827,7 +1854,7 @@ class TelaDoDiaFrame(ttk.Frame):
         for linha in self._sem_reembolsos()[1]:
             self._log(f"  - fora hoje: {linha}")
         if self.dia is not None and self.leitura is not None and self.mapping is not None:
-            self._recalcular()
+            self._recalcular_no_lugar()
             # A lista do "Marcar agendados" já montada também muda (revisão
             # de dinheiro, 28/10/2026): senão gravaria agendado para o
             # reembolso que não saiu, ou deixaria sem o que voltou a sair.
