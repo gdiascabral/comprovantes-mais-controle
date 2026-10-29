@@ -403,20 +403,20 @@ def cc_compacto(centro_custo) -> str:
     """Rateio entre imóveis vizinhos numa forma curta (dono, 28/10/2026:
     "muito grande a descrição"): "X QD 1 LT 7A | X QD 1 LT 7B" vira
     "X QD 1 LT 7A 7B". O primeiro fica inteiro — é ele que o Anexar acha na
-    descrição (`matcher._features`) — e cada um dos seguintes perde as
-    palavras do começo que repetem o primeiro. Sem começo em comum, entra
-    inteiro; um centro de custo só não muda."""
+    descrição (`matcher._features`) — e cada um dos seguintes vira só a
+    última palavra, MAS só quando ele é igual ao primeiro em todo o resto
+    (mesma quadra, outro lote). Qualquer outra diferença ("QD 01 LT 01 |
+    QD 02 LT 02") entra inteiro: "QD 01 LT 01 02 LT 02" leria errado. Um
+    centro de custo só não muda."""
     partes = [p.split() for p in str(centro_custo or "").split("|") if p.strip()]
     if len(partes) < 2:
         return str(centro_custo or "")
     primeiro = partes[0]
     saida = list(primeiro)
     for p in partes[1:]:
-        n = 0
-        while (n < len(p) - 1 and n < len(primeiro)
-               and p[n].casefold() == primeiro[n].casefold()):
-            n += 1
-        saida.extend(p[n:])
+        mesmo_lugar = (len(p) == len(primeiro) > 1 and
+                       [w.casefold() for w in p[:-1]] == [w.casefold() for w in primeiro[:-1]])
+        saida.extend(p[-1:] if mesmo_lugar else p)
     return " ".join(saida)
 
 
