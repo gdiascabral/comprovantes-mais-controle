@@ -143,6 +143,9 @@ def test_cc_compacto_junta_lotes_vizinhos():
     assert h.cc_compacto(cc) == "RUA X QD 9 LT 7A 7B 7C"
     assert h.cc_compacto("RUA X QD 9 LT 7A") == "RUA X QD 9 LT 7A"
     assert h.cc_compacto("RUA X QD 9 LT 7A | OUTRA Y") == "RUA X QD 9 LT 7A OUTRA Y"
+    # Só a última palavra muda é que encurta: outra quadra entra inteira.
+    assert h.cc_compacto("QD 01 LT 01 | QD 02 LT 02") == "QD 01 LT 01 QD 02 LT 02"
+    assert h.cc_compacto("RUA X QD 9 LT 7A | RUA X QD 9 LT 7A 2") == "RUA X QD 9 LT 7A RUA X QD 9 LT 7A 2"
     assert h.cc_compacto("") == ""
 
 

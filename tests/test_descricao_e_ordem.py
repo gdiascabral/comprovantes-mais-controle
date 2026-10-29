@@ -339,7 +339,7 @@ def test_hifen_acento_e_pontuacao_saem():
     r = _partes(descricao="Instalação elétrica - CASA 2 / fase 1 (etapa nº3).",
                 cc="QD 99 LT 01 | QD 99 LT 02")
     assert hp.descricao_para_colar(r, INTER) == (
-        "QD 99 LT 01 QD 99 LT 02 Instalacao eletrica CASA 2 fase 1 etapa no3")
+        "QD 99 LT 01 02 Instalacao eletrica CASA 2 fase 1 etapa no3")
 
 
 def test_hifen_entre_digitos_fica_e_o_que_separa_palavras_sai():
