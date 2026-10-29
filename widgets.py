@@ -99,7 +99,11 @@ SEMANA_COMECA_EM = 6
 PALETA = {
     "claro": {
         # ---- estrutura
-        "fundo":       "#EEF1F7",   # a área de conteúdo, atrás dos cartões
+        # Desde 28/10/2026 (repaginada, etapa 2) a janela tem DOIS fundos: a
+        # `janela`, atrás de tudo, e o `fundo`, o painel flutuante onde moram
+        # o menu e a página. Os cartões ficam por cima do painel.
+        "janela":      "#E6EAF2",
+        "fundo":       "#F7F8FC",   # o painel da página e do menu
         "cartao":      "#FFFFFF",
         "borda":       "#DBE1EC",
         "linha":       "#8A94A8",   # filete, ícone — nunca texto
@@ -118,7 +122,7 @@ PALETA = {
         "marca_solida": "#1746C7",  # branco por cima 7,7:1 · 7,7:1 no cartão
         # A barra de cima: desde 22/10/2026 na cor da PÁGINA, sem faixa azul
         # (protótipo da repaginada). O texto dela é o `barra_texto`.
-        "marca_barra": "#EEF1F7",
+        "marca_barra": "#E6EAF2",   # a barra de cima mora na `janela`
         "marca_fundo": "#E8EEFC",   # item ativo do menu, pílula de informação
         "marca_sub":   "#5B6880",   # texto secundário da barra e dica da busca
         "barra_texto": "#1C2537",   # o texto da barra de cima
@@ -139,6 +143,7 @@ PALETA = {
     "escuro": {
         # Azul-marinho desde 22/10/2026 (protótipo da repaginada aprovado pelo
         # dono); antes era um cinza quase preto. Contrastes medidos de novo.
+        "janela":      "#050B17",
         "fundo":       "#0B1529",
         "cartao":      "#0F1C36",
         "borda":       "#1F3053",
@@ -154,7 +159,7 @@ PALETA = {
         # ao mesmo tempo — clarear mais afunda o branco, escurecer mais some a
         # forma do botão dentro do cartão.
         "marca_solida": "#3D5AFE",  # branco por cima 5,13:1 · 3,30:1 no cartão
-        "marca_barra": "#0B1529",   # a cor da página (ver o tema claro)
+        "marca_barra": "#050B17",   # a barra de cima mora na `janela`
         "marca_fundo": "#192A5E",
         "marca_sub":   "#A9B6CF",
         "barra_texto": "#E8EDF7",
@@ -204,6 +209,11 @@ FONTE_ICONES = "AppIcones"      # os ícones do menu lateral
 #: lado da Segoe UI. Consolas vem com o Windows desde o Vista, e era a escolha
 #: que as seis abas já faziam à mão.
 FAMILIA_MONO = "Consolas"
+
+#: As fontes nomeadas que, com a Manrope carregada, saem no peso 800 (a
+#: "Manrope ExtraBold") em vez do negrito comum — os títulos do protótipo.
+_FONTES_EXTRAFORTES = {FONTE_TITULO, FONTE_SECAO, FONTE_KPI, FONTE_MARCA,
+                       FONTE_MINI_FORTE}
 
 
 # ---------------------------------------------------------------- ícones
@@ -500,10 +510,24 @@ def _garantir_fontes():
     except (ValueError, tk.TclError):
         tam = 9
 
+    _carregar_tipografia()
     try:
         familias = tcl.splitlist(tcl.call("font", "families"))
     except tk.TclError:
         familias = ()
+    # A Manrope do protótipo (28/10/2026), quando carregou: vale também para
+    # as fontes PADRÃO do Tk, senão o botão clássico e o campo ficavam na
+    # Segoe UI no meio de um app em Manrope.
+    manrope = FAMILIA_UI in familias and FAMILIA_UI_FORTE in familias
+    if manrope:
+        familia = FAMILIA_UI
+        for padrao in ("TkDefaultFont", "TkTextFont", "TkHeadingFont",
+                       "TkMenuFont", "TkCaptionFont", "TkSmallCaptionFont",
+                       "TkTooltipFont", "TkIconFont"):
+            try:
+                tcl.call("font", "configure", padrao, "-family", FAMILIA_UI)
+            except tk.TclError:
+                pass
     _estado["familia_icones"] = _familia_de_icones(familias, familia)
 
     existentes = set(tcl.splitlist(tcl.call("font", "names")))
@@ -528,6 +552,8 @@ def _garantir_fontes():
             # Sai do `TkDefaultFont` como todas as outras — a 150% de escala o
             # ícone tem de crescer junto com o nome da aba ao lado dele.
             (FONTE_ICONES, 1.15, "normal", _estado["familia_icones"])):
+        if manrope and peso == "bold" and nome in _FONTES_EXTRAFORTES:
+            fam, peso = FAMILIA_UI_FORTE, "normal"
         acao = "configure" if nome in existentes else "create"
         tcl.call("font", acao, nome,
                  "-family", fam, "-size", _escalar(tam, fator), "-weight", peso)
@@ -552,6 +578,340 @@ def _repintar_todos():
             w.aplicar_cores(_estado["escuro"])
         except (tk.TclError, AttributeError):
             pass                         # widget já destruído: sai sozinho
+
+
+# ----------------------------------------------------------- cantos redondos
+# Até 28/10/2026 o app inteiro era de canto reto, e o docstring do `Cartao`
+# explicava por quê: o Tk não arredonda widget. Continua não arredondando — mas
+# ele DESENHA imagem, e é com imagem que o sv-ttk faz os botões redondos dele.
+# A repaginada visual (protótipo `mockups/2026-10-22-repaginada`) usa a mesma
+# saída, com a cor da NOSSA paleta e sem biblioteca nova:
+#
+# 1. `_ladrilho` gera um PNG pequeno (2r+1 de lado) com os quatro cantos
+#    suavizados — a cobertura de cada pixel sai de 4×4 amostras, o que dá a
+#    borda sem serrilhado. PNG porque é o formato que o Tk 8.6 lê com canal
+#    alfa; zlib, struct e base64 são da stdlib e já viajam no exe.
+# 2. `imagem_redonda` monta uma imagem do tamanho que for com NOVE cópias do
+#    ladrilho (`photo copy -from … -to …` repete a fonte até encher o
+#    destino). Montar é rápido; só o ladrilho custa, e ele fica em cache.
+# 3. Quem usa: os elementos de imagem do ttk (campo, botão, tabela — o
+#    `border` do elemento estica o miolo e preserva os cantos), o `Botao`
+#    (imagem com o texto por cima, `compound="center"`) e o `FundoRedondo`, um
+#    rótulo com a imagem posto ATRÁS do conteúdo de um `tk.Frame` (cartão,
+#    painel do menu, painel da página, item aberto do menu).
+#
+# O canto transparente mostra o fundo do próprio widget, por isso cada um pinta
+# o seu fundo com a cor de QUEM ESTÁ ATRÁS (`_cor_atras`), e não com a dele.
+
+_LADRILHOS: dict = {}
+_AMOSTRAS = 4
+
+
+def _rgb(cor: str) -> tuple:
+    cor = cor.lstrip("#")
+    if len(cor) == 3:
+        cor = "".join(ch * 2 for ch in cor)
+    return tuple(int(cor[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _png(larg: int, alt: int, linhas: list) -> str:
+    """PNG RGBA (8 bits por canal) em base64, a partir das linhas cruas."""
+    import base64
+    import struct
+    import zlib
+
+    def bloco(tipo: bytes, dados: bytes) -> bytes:
+        return (struct.pack(">I", len(dados)) + tipo + dados
+                + struct.pack(">I", zlib.crc32(tipo + dados) & 0xFFFFFFFF))
+
+    cru = b"".join(b"\x00" + bytes(linha) for linha in linhas)
+    png = (b"\x89PNG\r\n\x1a\n"
+           + bloco(b"IHDR", struct.pack(">IIBBBBB", larg, alt, 8, 6, 0, 0, 0))
+           + bloco(b"IDAT", zlib.compress(cru, 9))
+           + bloco(b"IEND", b""))
+    return base64.b64encode(png).decode("ascii")
+
+
+def _png_ladrilho(raio: int, cor: str, borda: str | None = None,
+                  espessura: int = 1, fora: str | None = None) -> str:
+    """Os quatro cantos de um retângulo de raio `raio`, num quadrado 2r+1.
+
+    A coluna e a linha do meio são retas: é delas que `imagem_redonda` tira
+    as bordas e o miolo."""
+    lado = 2 * raio + 1
+    f = _rgb(cor)
+    b = _rgb(borda) if borda else None
+    o = _rgb(fora) if fora else None
+    passo = 1.0 / _AMOSTRAS
+    n = _AMOSTRAS * _AMOSTRAS
+
+    def dentro(x, y, r, m):
+        x0, y0, x1, y1 = m, m, lado - m, lado - m
+        if x < x0 or x > x1 or y < y0 or y > y1:
+            return False
+        if r <= 0:
+            return True
+        cx = min(max(x, x0 + r), x1 - r)
+        cy = min(max(y, y0 + r), y1 - r)
+        return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+
+    linhas = []
+    for py in range(lado):
+        linha = bytearray()
+        for px_ in range(lado):
+            no_aro = no_miolo = 0
+            for sy in range(_AMOSTRAS):
+                y = py + (sy + 0.5) * passo
+                for sx in range(_AMOSTRAS):
+                    x = px_ + (sx + 0.5) * passo
+                    if not dentro(x, y, raio, 0):
+                        continue
+                    if b is not None and not dentro(
+                            x, y, max(raio - espessura, 0), espessura):
+                        no_aro += 1
+                    else:
+                        no_miolo += 1
+            total = no_aro + no_miolo
+            if o is not None:
+                # OPACO: o canto já sai misturado com a cor de fora. Imagem
+                # com transparência é misturada pixel a pixel, por software,
+                # a cada redesenho no Windows — com 160 botões a montagem da
+                # tela ficava 12 vezes mais lenta (medido em 28/10/2026).
+                rgb = tuple(round((f[i] * no_miolo
+                                   + (b[i] if b else f[i]) * no_aro
+                                   + o[i] * (n - total)) / n)
+                            for i in range(3))
+                linha += bytes((*rgb, 255))
+                continue
+            if not total:
+                linha += b"\x00\x00\x00\x00"
+                continue
+            if b is None or not no_aro:
+                rgb = f
+            else:
+                rgb = tuple(round((f[i] * no_miolo + b[i] * no_aro) / total)
+                            for i in range(3))
+            linha += bytes((*rgb, round(255 * total / n)))
+        linhas.append(linha)
+    return _png(lado, lado, linhas)
+
+
+def _viva(img) -> bool:
+    """A imagem ainda existe no Tk? Quem guarda imagem em cache de módulo
+    sobrevive à janela que a criou (a galeria e os testes abrem mais de uma
+    raiz por processo), e imagem de raiz morta é "invalid command name"."""
+    if img is None:
+        return False
+    try:
+        img.tk.call("image", "width", img.name)
+        return True
+    except (tk.TclError, RuntimeError):
+        return False
+
+
+def _ladrilho(raio: int, cor: str, borda: str | None = None,
+              espessura: int = 1, fora: str | None = None) -> "tk.PhotoImage":
+    chave = (raio, cor.upper(), (borda or "").upper(), espessura,
+             (fora or "").upper())
+    img = _LADRILHOS.get(chave)
+    if not _viva(img):
+        img = tk.PhotoImage(data=_png_ladrilho(raio, cor, borda, espessura,
+                                               fora))
+        _LADRILHOS[chave] = img
+    return img
+
+
+#: Imagens prontas, pela medida e pelas cores: botões iguais dividem a
+#: mesma imagem. Teto para não crescer sem fim com janela redimensionada.
+_PRONTAS: dict = {}
+_TETO_PRONTAS = 600
+
+
+def imagem_redonda(larg: int, alt: int, raio: int, cor: str,
+                   borda: str | None = None, espessura: int = 1,
+                   img: "tk.PhotoImage | None" = None,
+                   fora: str | None = None) -> "tk.PhotoImage":
+    """Retângulo `larg`×`alt` de cantos redondos, preenchido com `cor`.
+
+    `img` reaproveita uma imagem que já existe (o elemento do ttk aponta para
+    ela pelo NOME, então trocar o conteúdo troca o desenho sem recriar o
+    elemento — é assim que o tema escuro chega aos campos)."""
+    larg, alt = max(int(larg), 3), max(int(alt), 3)
+    r = max(1, min(int(raio), (larg - 1) // 2, (alt - 1) // 2))
+    chave = None
+    if img is None:
+        chave = (larg, alt, r, cor.upper(), (borda or "").upper(), espessura,
+                 (fora or "").upper())
+        pronta = _PRONTAS.get(chave)
+        if _viva(pronta):
+            return pronta
+    fonte = _ladrilho(r, cor, borda, espessura, fora)
+    if not _viva(img):
+        img = tk.PhotoImage(width=larg, height=alt)
+    else:
+        img.blank()
+        img.configure(width=larg, height=alt)
+    lado = 2 * r + 1
+
+    def copiar(fx1, fy1, fx2, fy2, tx1, ty1, tx2, ty2):
+        if tx2 > tx1 and ty2 > ty1:
+            img.tk.call(img, "copy", fonte, "-from", fx1, fy1, fx2, fy2,
+                        "-to", tx1, ty1, tx2, ty2, "-compositingrule", "set")
+
+    copiar(0, 0, r, r, 0, 0, r, r)
+    copiar(r + 1, 0, lado, r, larg - r, 0, larg, r)
+    copiar(0, r + 1, r, lado, 0, alt - r, r, alt)
+    copiar(r + 1, r + 1, lado, lado, larg - r, alt - r, larg, alt)
+    copiar(r, 0, r + 1, r, r, 0, larg - r, r)
+    copiar(r, r + 1, r + 1, lado, r, alt - r, larg - r, alt)
+    copiar(0, r, r, r + 1, 0, r, r, alt - r)
+    copiar(r + 1, r, lado, r + 1, larg - r, r, larg, alt - r)
+    copiar(r, r, r + 1, r + 1, r, r, larg - r, alt - r)
+    if chave is not None:
+        if len(_PRONTAS) >= _TETO_PRONTAS:
+            _PRONTAS.clear()           # quem já usa segura a sua referência
+        _PRONTAS[chave] = img
+    return img
+
+
+def _cor_de(papel_ou_cor: str | None) -> str | None:
+    """Papel da paleta ("cartao") ou cor crua ("#0F1C36")."""
+    if not papel_ou_cor:
+        return None
+    if papel_ou_cor.startswith("#"):
+        return papel_ou_cor
+    return cores()[papel_ou_cor]
+
+
+def _cor_atras(widget) -> str:
+    """A cor de fundo de `widget`, seja ele clássico do Tk ou do ttk."""
+    try:
+        cor = str(widget.cget("background"))
+    except (tk.TclError, AttributeError):
+        cor = ""
+    if not cor:
+        try:
+            estilo = str(widget.cget("style")) or widget.winfo_class()
+            cor = str(ttk.Style().lookup(estilo, "background"))
+        except (tk.TclError, AttributeError):
+            cor = ""
+    cor = cor or cores()["fundo"]
+    if not cor.startswith("#"):
+        # Nome de cor do sistema ("SystemButtonFace"): a mistura dos cantos
+        # precisa do valor, e o Tk sabe convertê-lo.
+        try:
+            r, g, b = widget.winfo_rgb(cor)
+            cor = f"#{r >> 8:02X}{g >> 8:02X}{b >> 8:02X}"
+        except (tk.TclError, AttributeError):
+            cor = cores()["fundo"]
+    return cor
+
+
+class FundoRedondo:
+    """Fundo de cantos redondos atrás do conteúdo de um `tk.Frame`.
+
+    Um `tk.Label` com a imagem, posto por `place` no tamanho do frame e
+    rebaixado para trás dos filhos. O frame e o rótulo ficam na cor de QUEM
+    ESTÁ ATRÁS (`fora`; sem ela, o fundo do pai), e é essa cor que aparece nos
+    cantos. Os filhos precisam de folga da borda — ~30% do raio basta — senão
+    cobrem o canto com o retângulo deles.
+
+    Redesenha quando o frame muda de tamanho e quando o tema troca (entra em
+    `_repintaveis`). `definir` troca as cores depois (item do menu aberto)."""
+
+    def __init__(self, alvo, raio: int, cor: str, borda: str | None = None,
+                 fora: str | None = None, espessura: int = 1):
+        self.alvo = alvo
+        self.raio = raio
+        self.cor, self.borda, self.fora = cor, borda, fora
+        self.espessura = espessura
+        self._tam = None
+        self._img = None
+        self.lbl = tk.Label(alvo, borderwidth=0, highlightthickness=0,
+                            padx=0, pady=0)
+        self.lbl.place(x=0, y=0, relwidth=1, relheight=1)
+        self.lbl.lower()
+        alvo.bind("<Configure>", self._mudou, add="+")
+        alvo._fundo_redondo = self          # o WeakSet não segura sozinho
+        _repintaveis.add(self)
+
+    def definir(self, cor=None, borda=..., fora=...):
+        if cor is not None:
+            self.cor = cor
+        if borda is not ...:
+            self.borda = borda
+        if fora is not ...:
+            self.fora = fora
+        self.pintar(forcar=True)
+
+    def _mudou(self, _ev=None):
+        self.pintar()
+
+    def aplicar_cores(self, escuro: bool | None = None):
+        self.pintar(forcar=True)
+
+    def pintar(self, forcar: bool = False):
+        try:
+            larg, alt = self.alvo.winfo_width(), self.alvo.winfo_height()
+        except tk.TclError:
+            return
+        if larg < 4 or alt < 4:
+            return
+        fora = _cor_de(self.fora) or _cor_atras(self.alvo.master)
+        # O `place` mede a partir da área INTERNA do frame (descontado o
+        # padx/pady dele): sem compensar, a imagem ficava menor que o frame e
+        # sobrava uma faixa da cor de fora em volta — o cartão perdia os
+        # cantos e virava um retângulo branco dentro de um cinza.
+        try:
+            fx, fy = int(str(self.alvo.cget("padx"))), int(str(self.alvo.cget("pady")))
+        except (tk.TclError, ValueError):
+            fx = fy = 0
+        if (fx, fy) != getattr(self, "_folga", (0, 0)):
+            self._folga = (fx, fy)
+            self.lbl.place_configure(x=-fx, y=-fy, width=2 * fx,
+                                     height=2 * fy)
+        chave = (larg, alt, self.cor, self.borda, fora, _estado["escuro"])
+        if chave == self._tam and not forcar:
+            return
+        self._tam = chave
+        try:
+            self._img = imagem_redonda(larg, alt, self.raio,
+                                       _cor_de(self.cor),
+                                       _cor_de(self.borda), self.espessura,
+                                       fora=fora)
+            self.lbl.configure(image=self._img, background=fora)
+            self.alvo.configure(background=fora)
+        except tk.TclError:
+            pass
+
+
+# ------------------------------------------------------------- tipografia
+#: A família do protótipo. Sai de `tipografia/` (ver o LEIA-ME de lá) e é
+#: carregada só para este processo; se não carregar, fica a do sistema.
+FAMILIA_UI = "Manrope"
+FAMILIA_UI_FORTE = "Manrope ExtraBold"
+FAMILIA_UI_MEIA = "Manrope SemiBold"
+
+
+def _carregar_tipografia() -> bool:
+    """Põe a Manrope à disposição do Tk, sem instalar nada no Windows.
+
+    `AddFontResourceExW` com `FR_PRIVATE` (0x10): a fonte vale só para este
+    processo e some quando ele fecha. Uma vez por processo."""
+    if _estado.get("tipografia") is not None:
+        return _estado["tipografia"]
+    ok = False
+    try:
+        import ctypes
+        from pathlib import Path
+        pasta = Path(__file__).resolve().parent / "tipografia"
+        for arq in sorted(pasta.glob("Manrope-*.ttf")):
+            if ctypes.windll.gdi32.AddFontResourceExW(str(arq), 0x10, 0):
+                ok = True
+    except Exception:
+        ok = False
+    _estado["tipografia"] = ok
+    return ok
 
 
 def aplicar_estilos(escuro: bool) -> None:
@@ -599,15 +959,18 @@ def aplicar_estilos(escuro: bool) -> None:
                  foreground=c["marca_sub"], font=FONTE_MINI)
     st.configure("Marca.TLabel", background=c["marca_barra"],
                  foreground=c["barra_texto"], font=FONTE_MARCA)
-    st.configure("Menu.TFrame", background=c["cartao"])
-    st.configure("Menu.TLabel", background=c["cartao"], foreground=c["texto"])
-    st.configure("MenuSecao.TLabel", background=c["cartao"],
+    # O menu mora no painel flutuante desde 28/10/2026: cor do `fundo`, e
+    # não mais a do cartão.
+    st.configure("Janela.TFrame", background=c["janela"])
+    st.configure("Menu.TFrame", background=c["fundo"])
+    st.configure("Menu.TLabel", background=c["fundo"], foreground=c["texto"])
+    st.configure("MenuSecao.TLabel", background=c["fundo"],
                  foreground=c["tenue"], font=FONTE_MINI_FORTE)
     # Os três estados de um item do menu. Estilos e não cores soltas porque o
     # `ItemMenu` troca de estilo a cada passada do cursor, e reconfigurar
     # cor por cor a cada `<Enter>` custaria dez widgets por movimento.
-    st.configure("Item.TLabel", background=c["cartao"], foreground=c["texto"])
-    st.configure("ItemSobre.TLabel", background=c["fundo"],
+    st.configure("Item.TLabel", background=c["fundo"], foreground=c["texto"])
+    st.configure("ItemSobre.TLabel", background=c["cabecalho"],
                  foreground=c["texto"])
     # O item aberto é azul CHEIO com texto branco desde 22/10/2026
     # (protótipo da repaginada); antes era azul-claro com texto azul.
@@ -730,24 +1093,97 @@ def aplicar_estilos(escuro: bool) -> None:
     _repintar_todos()
 
 def _pecas_que_aceitam_cor(st, c: dict) -> None:
-    """Troca as peças do sv-ttk que são IMAGEM por peças do tema `clam`.
+    """Troca as peças do sv-ttk que são IMAGEM pelas nossas, na nossa cor.
 
-    O sv-ttk desenha o fundo da tabela, o cabeçalho dela e o `Toolbutton` por
-    imagem, com a cor dele assada dentro: o `fieldbackground` e o `background`
-    que `aplicar_estilos` passava eram ignorados. No cinza de antes isso mal
-    se via; no azul-marinho de 22/10/2026 (repaginada) a tabela vazia e os
-    botões DIÁRIO/MENSAL viravam blocos cinza no meio do azul. As peças do
-    `clam` vêm com o próprio Tk e aceitam cor de fundo e de borda.
+    O sv-ttk desenha campo, botão, fundo de tabela e `Toolbutton` por imagem,
+    com a cor dele assada dentro: o `fieldbackground` e o `background` que
+    `aplicar_estilos` passava eram ignorados. Até 22/10/2026 a troca era por
+    peças do tema `clam` (cor sim, canto reto); desde a etapa 2 da repaginada
+    (28/10/2026) campo, botão e tabela são IMAGENS NOSSAS de cantos redondos
+    (`imagem_redonda`), e só o cabeçalho da tabela e o grupo do menu seguem no
+    `clam`.
 
     Elemento e layout são do TEMA ativo, e o `sv_ttk.set_theme` recria o tema:
-    por isso isto roda dentro de `aplicar_estilos`, a cada troca, e o
-    `element_create` repetido no mesmo tema é ignorado."""
-    for elemento in ("Mc.Treeview.field", "Mc.Treeheading.cell",
-                     "Mc.Toolbutton.button"):
+    por isso isto roda dentro de `aplicar_estilos`, a cada troca. As imagens
+    têm NOME fixo (`mc_*`) e são redesenhadas no lugar, e o `element_create`
+    repetido no mesmo tema é ignorado."""
+    r_campo, r_tabela, r_botao = px(9), px(12), px(9)
+
+    def img(nome, r, cor, borda=None, esp=1, fora=None):
+        # Opacas, com o canto misturado na cor do CARTÃO (onde moram campo,
+        # botão e tabela). Com transparência, o ttk misturava cada pixel a
+        # cada redesenho: 40 campos levavam 5 s para aparecer (28/10/2026).
+        atual = _IMAGENS_NOMEADAS.get(nome)
+        # Miolo largo (48 px), e não de 1 px: o ttk estica a imagem REPETINDO
+        # o miolo, e com 1 px um campo de 200 px eram 200 desenhos por linha.
+        _IMAGENS_NOMEADAS[nome] = imagem_redonda(
+            2 * r + 48, 2 * r + 48, r, cor, borda, esp, img=atual,
+            fora=fora or c["cartao"])
+        return _IMAGENS_NOMEADAS[nome]
+
+    campo = img("mc_campo", r_campo, c["cartao"], c["borda"])
+    campo_foco = img("mc_campo_foco", r_campo, c["cartao"],
+                     c["marca_solida"], 2)
+    campo_off = img("mc_campo_off", r_campo, c["fundo"], c["borda"])
+    tabela = img("mc_tabela", r_tabela, c["cartao"], c["borda"])
+    botao = img("mc_botao", r_botao, c["cartao"], c["borda"])
+    botao_sob = img("mc_botao_sob", r_botao, c["cabecalho"], c["borda"])
+    botao_aperto = img("mc_botao_aperto", r_botao, c["marca_fundo"],
+                       c["borda"])
+    botao_off = img("mc_botao_off", r_botao, c["fundo"], c["borda"])
+    acento = img("mc_acento", r_botao, c["marca_solida"])
+    acento_sob = img("mc_acento_sob", r_botao, cor_do_passo_sob_o_cursor(c))
+    acento_off = img("mc_acento_off", r_botao, c["fundo"], c["borda"])
+
+    def elemento(nome, normal, *estados, borda, folga):
+        # `border` diz quanto da imagem é canto (não estica); `padding` é a
+        # folga interna. Sem o `padding`, o ttk usa o `border` como folga — e
+        # o raio do canto virava altura de campo: texto pequeno num campo de
+        # quase 50 px (pedido do dono, 28/10/2026: "sem proporção").
         try:
-            st.element_create(elemento, "from", "clam")
+            st.element_create(nome, "image", normal, *estados,
+                              border=borda, padding=folga, sticky="nsew")
         except tk.TclError:
             pass                       # já existe neste tema
+
+    folga_campo = (px(10), px(4))
+    elemento("Mc.Campo.field", campo, ("disabled", campo_off),
+             ("focus", campo_foco), borda=r_campo, folga=folga_campo)
+    elemento("Mc.Treeview.field", tabela, borda=r_tabela, folga=px(3))
+    elemento("Mc.Botao.button", botao, ("disabled", botao_off),
+             ("pressed", botao_aperto), ("active", botao_sob), borda=r_botao,
+             folga=(px(12), px(4)))
+    elemento("Mc.Acento.button", acento, ("disabled", acento_off),
+             ("active", acento_sob), borda=r_botao, folga=(px(12), px(4)))
+    for antigo in ("Mc.Treeheading.cell", "Mc.Toolbutton.button"):
+        try:
+            st.element_create(antigo, "from", "clam")
+        except tk.TclError:
+            pass
+
+    # Campo, lista e número: troca só o elemento de fora (o `.field`) e deixa
+    # a seta e o miolo que o sv-ttk desenha.
+    for estilo in ("TEntry", "TCombobox", "TSpinbox"):
+        try:
+            st.layout(estilo, _trocar_primeiro(st.layout(estilo), ".field",
+                                               "Mc.Campo.field"))
+        except tk.TclError:
+            pass
+        st.configure(estilo, padding=(px(2), px(3)), foreground=c["texto"],
+                     insertcolor=c["texto"], fieldbackground=c["cartao"],
+                     background=c["cartao"])
+    for estilo, el in (("TButton", "Mc.Botao.button"),
+                       ("Accent.TButton", "Mc.Acento.button")):
+        try:
+            st.layout(estilo, _trocar_primeiro(st.layout(estilo), ".button",
+                                               el))
+        except tk.TclError:
+            pass
+        st.configure(estilo, padding=(px(2), px(2)), background=c["cartao"])
+    st.configure("TButton", foreground=c["texto"])
+    st.configure("Accent.TButton", foreground="#FFFFFF")
+    st.map("Accent.TButton", foreground=[("disabled", c["tenue"])])
+
     area = [("Treeview.padding", {"sticky": "nswe", "children": [
         ("Treeview.treearea", {"sticky": "nswe"})]})]
     cabeca = [("Treeheading.padding", {"sticky": "nswe", "children": [
@@ -756,21 +1192,46 @@ def _pecas_que_aceitam_cor(st, c: dict) -> None:
     for estilo in ("Tabela.Treeview", "Dupla.Treeview"):
         st.layout(estilo, [("Mc.Treeview.field", {
             "sticky": "nswe", "border": "1", "children": area})])
+        # O `padding` afasta o cabeçalho (canto reto) dos cantos redondos.
         st.configure(estilo, bordercolor=c["borda"], lightcolor=c["cartao"],
-                     darkcolor=c["cartao"])
+                     darkcolor=c["cartao"], padding=px(4))
         st.layout(estilo + ".Heading",
                   [("Mc.Treeheading.cell", {"sticky": "nswe"})] + cabeca)
-        st.configure(estilo + ".Heading", bordercolor=c["borda"],
+        st.configure(estilo + ".Heading", bordercolor=c["cabecalho"],
                      lightcolor=c["cabecalho"], darkcolor=c["cabecalho"])
     st.layout("Grupo.Toolbutton", [("Mc.Toolbutton.button", {
         "sticky": "nswe", "children": [("Toolbutton.padding", {
             "sticky": "nswe", "children": [("Toolbutton.label", {
                 "expand": "1", "sticky": "nswe"})]})]})])
-    st.configure("Grupo.Toolbutton", bordercolor=c["cartao"],
-                 lightcolor=c["cartao"], darkcolor=c["cartao"])
-    sob = [("active", c["fundo"]), ("pressed", c["fundo"])]
+    st.configure("Grupo.Toolbutton", bordercolor=c["fundo"],
+                 lightcolor=c["fundo"], darkcolor=c["fundo"],
+                 background=c["fundo"])
+    sob = [("active", c["cabecalho"]), ("pressed", c["cabecalho"])]
     st.map("Grupo.Toolbutton", background=sob, bordercolor=sob,
            lightcolor=sob, darkcolor=sob)
+
+
+#: As imagens dos elementos do ttk, pelo nome. Guardadas aqui para o coletor
+#: de lixo não apagá-las (imagem apagada = elemento desenhado em branco).
+_IMAGENS_NOMEADAS: dict = {}
+
+
+def _trocar_primeiro(layout, sufixo: str, novo: str):
+    """O mesmo layout, com o primeiro elemento terminado em `sufixo` trocado."""
+    feito = [False]
+
+    def andar(itens):
+        saida = []
+        for nome, opcoes in itens:
+            opcoes = dict(opcoes)
+            if not feito[0] and str(nome).endswith(sufixo):
+                nome, feito[0] = novo, True
+            if "children" in opcoes:
+                opcoes["children"] = andar(opcoes["children"])
+            saida.append((nome, opcoes))
+        return saida
+
+    return andar(layout)
 
 
 def barra_de_titulo(janela, escuro: bool | None = None) -> None:
@@ -836,7 +1297,9 @@ def cor_do_passo_sob_o_cursor(c: dict) -> str:
 def cor_da_bolinha(c: dict, estado: str) -> str:
     """A bolinha do navegador: âmbar se ocupado, verde se livre — da paleta
     do tema, porque desde 22/10/2026 a barra de cima é a cor da página."""
-    return c["atencao"] if estado == "ocupado" else c["acao_viva"]
+    # `ok` e não `acao_viva`: desde 28/10/2026 a barra mora na `janela`, e o
+    # verde vivo dava 2,88:1 contra ela no tema claro (o piso é 3:1).
+    return c["atencao"] if estado == "ocupado" else c["ok"]
 
 
 class Botao(tk.Button):
@@ -864,36 +1327,80 @@ class Botao(tk.Button):
       perigo  vermelho — parar, apagar.
     """
 
+    #: Raio dos cantos do botão (28/10/2026, repaginada).
+    RAIO = 9
+
     def __init__(self, pai, texto="", papel="neutro", numero=None, **kw):
-        # O número entra NO RÓTULO, e não num círculo à parte: dentro de um
-        # botão o círculo desenhado teria de ser um Canvas irmão, e aí o
-        # clique no número não seria clique no botão.
         if numero is not None:
             texto = f"{numero}.  {texto}"
+        self._papel = papel
+        self._img = None
+        self._img_sob = None
+        self._sob = False
+        self._medida = None
+        # A folga vira tamanho da IMAGEM (o texto vai por cima dela, centrado);
+        # só o papel "link", que não tem fundo, segue usando padx/pady.
+        self._folga_x = kw.pop("padx", px(14))
+        self._folga_y = kw.pop("pady", px(7))
         kw.setdefault("relief", "flat")
         kw.setdefault("borderwidth", 0)
         kw.setdefault("highlightthickness", 0)
         kw.setdefault("cursor", "hand2")
-        kw.setdefault("padx", px(14))
-        kw.setdefault("pady", px(7))
         kw.setdefault("font", FONTE_APOIO if papel == "link" else "TkDefaultFont")
-        super().__init__(pai, text=texto, **kw)
-        self._papel = papel
+        super().__init__(pai, text=texto, padx=0, pady=0, compound="center",
+                         **kw)
+        self.bind("<Enter>", self._entrou, add="+")
+        self.bind("<Leave>", self._saiu, add="+")
+        self.bind("<Configure>", self._redimensionou, add="+")
         _repintaveis.add(self)
         self.aplicar_cores(_estado["escuro"])
 
     def configure(self, cnf=None, **kw):                      # noqa: D102
-        # `state` muda a COR, e não só o que o Tk desenha por cima. O botão
-        # clássico não tem cor por estado: desabilitado ele continua verde,
-        # com o rótulo cinza por cima — que é pior que não ter cor, porque
-        # parece um botão disponível cujo texto sumiu. Interceptar aqui pega
-        # todas as trocas, inclusive as vindas do `_drain` das abas.
-        mudou = "state" in kw or (isinstance(cnf, dict) and "state" in cnf)
+        chaves = set(kw) | (set(cnf) if isinstance(cnf, dict) else set())
         r = super().configure(cnf, **kw)
-        if mudou:
+        if chaves & {"state", "text", "font"}:
             self.aplicar_cores()
         return r
+
     config = configure
+
+    def _entrou(self, _ev=None):
+        self._sob = True
+        self._mostrar()
+
+    def _saiu(self, _ev=None):
+        self._sob = False
+        self._mostrar()
+
+    def _mostrar(self):
+        if self._img is None:
+            return
+        try:
+            ligado = str(super().cget("state")) != "disabled"
+            super().configure(image=self._img_sob if (self._sob and ligado)
+                              else self._img)
+        except tk.TclError:
+            pass
+
+    def _natural(self) -> tuple[int, int]:
+        """Largura e altura do botão pelo texto e pela folga."""
+        try:
+            fonte = super().cget("font")
+            texto = str(super().cget("text"))
+            larg = int(self.tk.call("font", "measure", fonte, texto))
+            alt = int(self.tk.call("font", "metrics", fonte, "-linespace"))
+        except (tk.TclError, ValueError):
+            larg, alt = 60, 16
+        return larg + 2 * self._folga_x, alt + 2 * self._folga_y
+
+    def _redimensionou(self, _ev=None):
+        """Botão esticado pelo `pack(fill=...)`: a imagem acompanha."""
+        try:
+            tam = (self.winfo_width(), self.winfo_height())
+        except tk.TclError:
+            return
+        if self._img is not None and tam != self._medida and min(tam) > 4:
+            self.aplicar_cores()
 
     def aplicar_cores(self, escuro: bool | None = None):
         c = cores()
@@ -901,68 +1408,63 @@ class Botao(tk.Button):
             desligado = str(super().cget("state")) == "disabled"
         except tk.TclError:
             return
-        if desligado:
-            # Cinza chapado nos dois temas: o botão desligado não é "verde
-            # apagado" nem "azul apagado" — ele é o mesmo lugar vazio,
-            # qualquer que fosse a cor dele ligado.
-            # A moldura é a `linha`, e não a `borda`: preenchido com o
-            # `fundo`, no cabeçalho da página (que É o fundo) só a moldura o
-            # separa da tela, e a `borda` dava 1,16:1 no claro e 1,51:1 no
-            # escuro — o "Buscar pagamentos e saldos" desligado virava texto
-            # solto. Ver `BORDA_DESLIGADO`.
+        fora = _cor_atras(self.master)
+        if self._papel == "link":
             try:
-                self.configure(background=c["fundo"], foreground=c["tenue"],
-                               activebackground=c["fundo"],
-                               activeforeground=c["tenue"],
-                               disabledforeground=c["tenue"],
-                               highlightthickness=1,
-                               highlightbackground=c[BORDA_DESLIGADO],
-                               highlightcolor=c[BORDA_DESLIGADO])
+                super().configure(background=fora, foreground=c["marca"],
+                                  activebackground=fora,
+                                  activeforeground=c["marca"],
+                                  disabledforeground=c["tenue"], image="",
+                                  padx=self._folga_x, pady=self._folga_y)
             except tk.TclError:
                 pass
             return
-        frente, tras, aceso = {
-            "acao":   ("#FFFFFF", c["acao"], c["acao_ativo"]),
-            # `marca_solida` e não `marca`: aqui o azul é FUNDO e o branco é a
-            # letra. No escuro a `marca` deixava o rótulo em 2,69:1.
-            # Sob o cursor, um tom mais escuro do mesmo azul (era a cor da
-            # barra de cima, que desde 22/10/2026 é a cor da página).
-            "passo":  ("#FFFFFF", c["marca_solida"],
-                       cor_do_passo_sob_o_cursor(c)),
-            # O neutro é CINZA e não branco: no cartão branco, um botão
-            # branco com borda de 1 px não se lia como botão — o "Hoje" ao
-            # lado do campo de data passava por rótulo.
-            "neutro": (c["texto"], c["fundo"], c["marca_fundo"]),
-            "link":   (c["marca"], c["cartao"], c["cartao"]),
-            # Na barra de cima, ao lado do chip do navegador: branco sobre
-            # um azul um pouco mais claro que o da barra (é o que o faz se
-            # ler como botão, e não como mais um rótulo), e mais claro ainda
-            # ao passar o cursor. Misturado, e não da paleta, porque no tema
-            # claro marca e barra são a mesma cor e o botão não reagiria.
-            # Desde 22/10/2026 a barra é a cor da página: o botão dela é
-            # cinza como o "neutro", com o realce azul-claro sob o cursor.
-            "barra":  (c["barra_texto"], c["cartao"], c["marca_fundo"]),
-            "perigo": (c["erro"], c["fundo"], c["erro_fundo"]),
-        }.get(self._papel, (c["texto"], c["cartao"], c["fundo"]))
-        try:
-            self.configure(background=tras, foreground=frente,
-                           activebackground=aceso, activeforeground=frente,
-                           disabledforeground=c["tenue"])
-            # Só o neutro e o perigo têm moldura: o verde e o azul já se
-            # separam do fundo pela cor, e uma borda em cima deles vira
-            # contorno escuro no meio do preenchimento.
+        borda = None
+        if desligado:
+            # O desligado é o mesmo lugar vazio qualquer que fosse a cor dele
+            # ligado: o fundo do painel com a moldura em `BORDA_DESLIGADO`.
+            frente, tras, aceso = c["tenue"], c["fundo"], c["fundo"]
+            borda = c[BORDA_DESLIGADO]
+        else:
+            frente, tras, aceso = {
+                "acao":   ("#FFFFFF", c["acao"], c["acao_ativo"]),
+                # O passo era azul cheio; na repaginada (28/10/2026) virou
+                # azul-claro com texto azul — um passo não pode pesar mais que
+                # o "executar" verde da mesma tela.
+                "passo":  (c["marca"], c["marca_fundo"], c["info_fundo"]),
+                "neutro": (c["texto"], c["cartao"], c["cabecalho"]),
+                "barra":  (c["barra_texto"], c["fundo"], c["cabecalho"]),
+                "perigo": (c["erro"], c["cartao"], c["erro_fundo"]),
+            }.get(self._papel, (c["texto"], c["cartao"], c["cabecalho"]))
             if self._papel in ("neutro", "perigo"):
-                self.configure(highlightthickness=1,
-                               highlightbackground=c["borda"],
-                               highlightcolor=c["borda"])
+                borda = c["borda"]
             elif self._papel == "barra":
-                self.configure(highlightthickness=1,
-                               highlightbackground=c[BORDA_DA_BARRA],
-                               highlightcolor=c[BORDA_DA_BARRA])
-            else:
-                self.configure(highlightthickness=0)
+                borda = c[BORDA_DA_BARRA]
+        #: O que o botão pinta, para os testes medirem a cor que a TELA usa
+        #: (com a imagem, o `background` do widget é a cor de fora).
+        self.pintado = {"frente": frente, "tras": tras, "aceso": aceso,
+                        "borda": borda}
+        larg, alt = self._natural()
+        try:
+            real = (max(self.winfo_width(), larg), max(self.winfo_height(), alt))
         except tk.TclError:
-            pass
+            return
+        if real[0] < 8 or not self.winfo_ismapped():
+            real = (larg, alt)
+        self._medida = real
+        raio = px(self.RAIO)
+        self._img = imagem_redonda(real[0], real[1], raio, tras, borda,
+                                   fora=fora)
+        self._img_sob = imagem_redonda(real[0], real[1], raio, aceso, borda,
+                                       fora=fora)
+        try:
+            super().configure(width=larg, height=alt, background=fora,
+                              activebackground=fora, foreground=frente,
+                              activeforeground=frente,
+                              disabledforeground=frente, highlightthickness=0)
+        except tk.TclError:
+            return
+        self._mostrar()
 
     def papel(self, novo: str):
         """Troca o papel depois de criado (o botão que vira o principal)."""
@@ -1299,11 +1801,14 @@ class Cartao(tk.Frame):
                  padding=None, **kw):
         c = cores()
         larg, alt = px(self._folga(padding))
-        moldura = tk.Frame(pai, background=c["cartao"], highlightthickness=1,
-                           highlightbackground=c["borda"],
-                           highlightcolor=c["borda"], borderwidth=0,
-                           padx=larg, pady=alt)
+        # Cantos redondos desde 28/10/2026: a moldura fica na cor de quem
+        # está atrás e o `FundoRedondo` desenha o cartão (cor + borda) atrás
+        # do conteúdo. A folga mínima afasta o conteúdo dos cantos.
+        moldura = tk.Frame(pai, background=_cor_atras(pai),
+                           highlightthickness=0, borderwidth=0,
+                           padx=max(larg, px(8)), pady=max(alt, px(8)))
         self.moldura = moldura
+        self._fundo = FundoRedondo(moldura, px(14), "cartao", "borda")
         self._morrendo = False
         self._titulo = titulo
         self.cabecalho = None
@@ -1441,9 +1946,6 @@ class Cartao(tk.Frame):
         c = cores()
         try:
             self.configure(background=c["cartao"])
-            self.moldura.configure(background=c["cartao"],
-                                   highlightbackground=c["borda"],
-                                   highlightcolor=c["borda"])
             if self.cabecalho is not None:
                 self.cabecalho.configure(background=c["cartao"])
                 self.filete.configure(background=c["borda"])
@@ -2156,6 +2658,11 @@ class BarraTopo(tk.Frame):
         c = cores()
         kw.setdefault("background", c["marca_barra"])
         kw.setdefault("highlightthickness", 0)
+        # Largura PEDIDA (o `pack_propagate(False)` zera o que os filhos
+        # pediriam): sem ela, numa janela que nasce do tamanho do conteúdo, a
+        # barra pedia 1 px e a pílula da busca ficava sem espaço — o campo
+        # desmapeava e não recebia mais o foco.
+        kw.setdefault("width", px(960))
         super().__init__(pai, height=px(self.ALTURA), **kw)
         self.pack_propagate(False)
         self._dica = dica or self.DICA
@@ -2188,9 +2695,17 @@ class BarraTopo(tk.Frame):
         # fora da janela em telas estreitas.
         self.centro = tk.Frame(self, background=c["marca_barra"])
         self.centro.pack(side="left", fill="both", expand=True, padx=px(24))
-        self.busca = tk.Entry(self.centro, relief="flat", borderwidth=0,
-                              highlightthickness=1, font="TkDefaultFont")
-        self.busca.pack(fill="x", pady=px(13), ipady=px(4), ipadx=px(8))
+        # A busca é uma PÍLULA (protótipo de 28/10/2026): o `FundoRedondo`
+        # desenha a cápsula na cor do painel, com borda, e o campo de texto
+        # mora dentro dela, recuado das pontas.
+        self.caixa_busca = tk.Frame(self.centro, background=c["marca_barra"],
+                                    highlightthickness=0)
+        self.caixa_busca.pack(fill="x", pady=px(10))
+        FundoRedondo(self.caixa_busca, px(40), "fundo", "borda",
+                     fora="marca_barra")
+        self.busca = tk.Entry(self.caixa_busca, relief="flat", borderwidth=0,
+                              highlightthickness=0, font="TkDefaultFont")
+        self.busca.pack(fill="x", padx=px(18), pady=px(8))
         self._vazia = True
         self.busca.bind("<FocusIn>", self._entrou)
         self.busca.bind("<FocusOut>", self._saiu)
@@ -2450,11 +2965,9 @@ class BarraTopo(tk.Frame):
             # O campo de busca tem a cor de cartão, com borda fina: desde
             # 22/10/2026 a barra é a cor da página (antes era azul, e o campo
             # era um azul mais claro por dentro).
-            fundo = c["cartao"]
+            fundo = c["fundo"]
             self.busca.configure(background=fundo,
                                  insertbackground=c["barra_texto"],
-                                 highlightbackground=c["borda"],
-                                 highlightcolor=c["marca"],
                                  foreground=c["marca_sub"] if self._vazia
                                  else c["barra_texto"],
                                  disabledbackground=fundo)
@@ -2636,7 +3149,7 @@ class ItemMenu(tk.Frame):
     def __init__(self, pai, texto: str, icone: str = "", comando=None,
                  recuo: int = 0, **kw):
         c = cores()
-        kw.setdefault("background", c["cartao"])
+        kw.setdefault("background", c["fundo"])
         # 1 px SEMPRE reservado — ver o docstring: o anel muda de cor, nunca de
         # espessura.
         kw.setdefault("highlightthickness", 1)
@@ -2650,20 +3163,29 @@ class ItemMenu(tk.Frame):
         self._foco = False
         self._comando = comando
 
+        # A pílula (28/10/2026): o `FundoRedondo` desenha o item aberto e o
+        # de passagem, e o corpo fica recuado o bastante para não cobrir as
+        # pontas redondas. O filete da borda esquerda saiu da tela (fica o
+        # objeto, que os testes de foco ainda leem).
+        self._fundo = FundoRedondo(self, px(40), "fundo", fora="fundo")
         self.filete = tk.Frame(self, width=px(self.FILETE),
                                highlightthickness=0)
-        self.filete.pack(side="left", fill="y")
         self.corpo = tk.Frame(self, highlightthickness=0)
-        self.corpo.pack(side="left", fill="both", expand=True)
+        self.corpo.pack(side="left", fill="both", expand=True,
+                        padx=px(10), pady=px(4))
         self.lbl_icone = ttk.Label(self.corpo, text=icone, style="Menu.TLabel",
-                                   width=2, anchor="center")
-        self.lbl_icone.pack(side="left", padx=px((9 + recuo, 0)), pady=px(6))
+                                   anchor="center")
+        # Sem `width` em caracteres: a largura em "caracteres" é medida na
+        # fonte do texto, e o ícone vem de outra fonte, maior — o glifo
+        # passava da caixa e era cortado (o dono via isso "desde sempre").
+        self.lbl_icone.pack(side="left", padx=px((recuo + 2, 2)), pady=px(3))
         self.lbl = ttk.Label(self.corpo, text=texto, style="Menu.TLabel",
                              anchor="w")
-        self.lbl.pack(side="left", padx=px((7, 8)), pady=px(6), fill="x",
+        self.lbl.pack(side="left", padx=px((7, 4)), pady=px(3), fill="x",
                       expand=True)
 
-        for w in (self, self.corpo, self.lbl, self.lbl_icone):
+        for w in (self, self.corpo, self.lbl, self.lbl_icone,
+                  self._fundo.lbl):
             w.bind("<Button-1>", self._clique)
             w.bind("<Enter>", self._entrou)
             w.bind("<Leave>", self._saiu)
@@ -2761,9 +3283,9 @@ class ItemMenu(tk.Frame):
         if self._ativo:
             fundo, frente, filete = c["marca_solida"], "#FFFFFF", c["marca_solida"]
         elif hover:
-            fundo, frente, filete = c["fundo"], c["texto"], c["fundo"]
+            fundo, frente, filete = c["cabecalho"], c["texto"], c["cabecalho"]
         else:
-            fundo, frente, filete = c["cartao"], c["texto"], c["cartao"]
+            fundo, frente, filete = c["fundo"], c["texto"], c["fundo"]
         # O foco empresta o filete do item ABERTO — é o mesmo "você está aqui",
         # dito para o teclado — e deixa o texto na cor de sempre, que é o que
         # separa "o foco está neste item" de "esta aba está aberta". Quem
@@ -2777,9 +3299,10 @@ class ItemMenu(tk.Frame):
                 estilo = "ItemSobre.TLabel"
             # No item aberto o anel de foco é BRANCO: a `marca` sobre o azul
             # cheio sumiria, e o `texto` do claro dava 2,0:1 contra ele.
-            self.configure(background=fundo, highlightbackground=fundo,
-                           highlightcolor="#FFFFFF" if self._ativo
-                           else c["marca"])
+            self._fundo.definir(cor=fundo)
+            self.configure(background=c["fundo"],
+                           highlightbackground=c["fundo"],
+                           highlightcolor=c["marca"])
             self.corpo.configure(background=fundo)
             self.filete.configure(background=filete)
             self.lbl.configure(style=estilo)
@@ -2820,25 +3343,26 @@ class PainelMenu(tk.Frame):
 
     def __init__(self, pai, largura: int = 232, **kw):
         c = cores()
-        kw.setdefault("background", c["cartao"])
+        kw.setdefault("background", c["janela"])
         kw.setdefault("highlightthickness", 0)
-        # A coluna inteira escala: 232 px guardam "Baixar Comprovantes" a
-        # 100% e cortam o mesmo rótulo a 150%. Escalar AQUI, e não em quem
-        # chama, faz valer tanto para o padrão quanto para o 232 que o
-        # `comprovantes_app` passa por extenso.
+        # A coluna inteira escala (ver o histórico deste trecho no git).
         super().__init__(pai, width=px(largura), **kw)
         self.pack_propagate(False)
+        # Painel flutuante de cantos redondos desde 28/10/2026 (protótipo da
+        # repaginada); a borda da direita, que separava a coluna da página,
+        # saiu da tela — o vão entre os dois painéis é a separação.
+        self._fundo = FundoRedondo(self, px(22), "fundo", fora="janela")
         self.borda = tk.Frame(self, width=px(1), highlightthickness=0)
-        self.borda.pack(side="right", fill="y")
         self.rodape = tk.Frame(self, highlightthickness=0)
-        self.rodape.pack(side="bottom", fill="x", padx=px(14),
-                         pady=px((8, 12)))
+        self.rodape.pack(side="bottom", fill="x", padx=px(16),
+                         pady=px((8, 16)))
         # O corpo ROLA. Com os dois grupos abertos são treze telas e quatro
         # rótulos de seção, e numa tela baixa (1366x768) ou a 150% isso pode
         # passar da altura da coluna — o rodapé, empacotado antes, continua
         # no lugar, e são os itens de baixo que ficariam fora de alcance.
-        self.corpo = AreaRolavel(self, fundo="cartao")
-        self.corpo.pack(side="top", fill="both", expand=True, pady=px((10, 0)))
+        self.corpo = AreaRolavel(self, fundo="fundo")
+        self.corpo.pack(side="top", fill="both", expand=True,
+                        padx=px((8, 6)), pady=px((14, 0)))
         _repintaveis.add(self)
         self.aplicar_cores(_estado["escuro"])
 
@@ -2853,12 +3377,45 @@ class PainelMenu(tk.Frame):
     def aplicar_cores(self, escuro: bool | None = None):
         c = cores()
         try:
-            self.configure(background=c["cartao"])
-            self.corpo.configure(background=c["cartao"])
-            self.rodape.configure(background=c["cartao"])
+            self.configure(background=c["janela"])
+            self.corpo.configure(background=c["fundo"])
+            self.rodape.configure(background=c["fundo"])
             self.borda.configure(background=c["borda"])
         except tk.TclError:
             pass
+
+
+class PainelPagina(tk.Frame):
+    """O painel flutuante da página, à direita do menu (28/10/2026).
+
+    `self` é a moldura de cantos redondos na cor do `fundo`, sobre a
+    `janela`; as abas moram em `self.area`, recuada o bastante para não
+    cobrir os cantos."""
+
+    def __init__(self, pai, **kw):
+        c = cores()
+        kw.setdefault("background", c["janela"])
+        kw.setdefault("highlightthickness", 0)
+        super().__init__(pai, **kw)
+        self._fundo = FundoRedondo(self, px(22), "fundo", fora="janela")
+        self.area = ttk.Frame(self, style="Fundo.TFrame")
+        self.area.pack(fill="both", expand=True, padx=px(10), pady=px(10))
+
+
+def moldura_da_janela(root):
+    """Monta o corpo da janela: o menu e a página como dois painéis
+    flutuantes sobre a `janela`. Devolve (corpo, lateral, conteudo), onde
+    `conteudo` é onde as abas são criadas — o mesmo papel do antigo
+    `ttk.Frame` "Fundo.TFrame" que o `comprovantes_app` e a galeria montavam
+    cada um à mão."""
+    corpo = ttk.Frame(root, style="Janela.TFrame")
+    corpo.pack(side="top", fill="both", expand=True)
+    lateral = painel_menu(corpo, largura=232)
+    lateral.pack(side="left", fill="y", padx=px((14, 6)), pady=px((2, 14)))
+    pagina = PainelPagina(corpo)
+    pagina.pack(side="left", fill="both", expand=True,
+                padx=px((6, 14)), pady=px((2, 14)))
+    return corpo, lateral, pagina.area
 
 
 def painel_menu(pai, largura: int = 232) -> "PainelMenu":

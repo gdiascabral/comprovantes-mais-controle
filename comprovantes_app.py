@@ -299,13 +299,7 @@ def main():
     # ficava no ponto mais baixo da tela, longe dos itens do menu.
     barra = widgets.BarraTopo(root)
     barra.pack(side="top", fill="x")
-    corpo = ttk.Frame(root)
-    corpo.pack(side="top", fill="both", expand=True)
-
-    lateral = widgets.painel_menu(corpo, largura=232)
-    lateral.pack(side="left", fill="y")
-    conteudo = ttk.Frame(corpo, style="Fundo.TFrame")
-    conteudo.pack(side="left", fill="both", expand=True)
+    corpo, lateral, conteudo = widgets.moldura_da_janela(root)
 
     aba_ini = InicioFrame(conteudo)
     aba_sep = SepararFrame(conteudo)

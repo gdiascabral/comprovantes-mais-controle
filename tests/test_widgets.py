@@ -525,6 +525,14 @@ TELAS_DO_MENU = ("Início", "Baixar Comprovantes", "Separar e Renomear",
                  "Contratos", "Acessorias")
 
 
+def _janela_larga(raiz):
+    """A busca é uma pílula com recuo nas pontas (28/10/2026): numa raiz que
+    outro teste deixou estreita (120 px), o campo ficava sem espaço nenhum,
+    desmapeado, e não recebia o foco. O app nunca abre tão estreito."""
+    raiz.geometry("1100x200")
+    raiz.update()
+
+
 @pytest.fixture
 def barra(raiz, longe_do_ponteiro):
     """A barra de cima com as doze telas, do jeito que o app a alimenta:
@@ -534,6 +542,7 @@ def barra(raiz, longe_do_ponteiro):
     visível e responde ao mouse de verdade — parado em cima dela, o `<Enter>`
     da linha muda o `_realce` (ver `longe_do_ponteiro` no conftest)."""
     longe_do_ponteiro(raiz)
+    _janela_larga(raiz)
     b = widgets.BarraTopo(raiz)
     b.pack(fill="x")
     abertas = []
@@ -546,6 +555,7 @@ def barra(raiz, longe_do_ponteiro):
         b.destroy()
     except tk.TclError:
         pass
+    raiz.geometry("")
     raiz.update()
 
 
@@ -680,6 +690,7 @@ def test_a_busca_abre_a_tela_pelo_mesmo_caminho_do_clique(raiz, teclar):
                             comando=lambda: contagem.__setitem__(
                                 "n", contagem["n"] + 1))
     item.pack(fill="x")
+    _janela_larga(raiz)
     b = widgets.BarraTopo(raiz)
     b.pack(fill="x")
     b.definir_telas([(item.texto(), item.acionar)])
@@ -702,6 +713,7 @@ def test_sem_telas_definidas_a_busca_nao_abre_lista(raiz, teclar):
     """A barra nasce antes de o menu existir — ela é a primeira coisa que o
     `main()` empacota. Até `definir_telas` ser chamada não há para onde ir, e
     abrir uma lista vazia diria que o app não tem telas."""
+    _janela_larga(raiz)
     b = widgets.BarraTopo(raiz)
     b.pack(fill="x")
     raiz.update()

@@ -346,12 +346,7 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
     chip.pack(side="left", padx=(0, 18), pady=14)
     chip.definir("Navegador livre", False)   # estático: aqui não há pulso
 
-    corpo = ttk.Frame(root)
-    corpo.pack(side="top", fill="both", expand=True)
-    lateral = widgets.painel_menu(corpo, largura=232)
-    lateral.pack(side="left", fill="y")
-    conteudo = ttk.Frame(corpo, style="Fundo.TFrame")
-    conteudo.pack(side="left", fill="both", expand=True)
+    corpo, lateral, conteudo = widgets.moldura_da_janela(root)
 
     # -------------------------------------------------------------- abas
     def _montar(nome: str, fabrica):

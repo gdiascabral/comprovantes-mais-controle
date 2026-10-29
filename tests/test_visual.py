@@ -154,7 +154,8 @@ def test_a_barra_de_cima_tem_a_cor_da_pagina(tema):
     """22/10/2026: a barra de cima deixa de ser uma faixa azul e fica na cor
     da página, como o cabeçalho das abas (protótipo da repaginada)."""
     p = widgets.PALETA[tema]
-    assert p["marca_barra"] == p["fundo"]
+    # 28/10/2026 (etapa 2): a barra mora na `janela`, atrás dos painéis.
+    assert p["marca_barra"] == p["janela"]
 
 
 def test_o_escuro_e_azul_marinho():
@@ -597,13 +598,17 @@ def test_o_botao_de_passo_e_o_circulo_pintam_a_cor_medida(raiz):
     for escuro in (False, True):
         widgets.aplicar_estilos(escuro)
         esperado = widgets.PALETA["escuro" if escuro else "claro"][COR_DO_PASSO]
+        paleta = widgets.PALETA["escuro" if escuro else "claro"]
         botao = widgets.Botao(raiz, "Buscar os lançamentos", papel="passo")
         cartao = widgets.Cartao(raiz, "Período", 1)
         try:
-            assert str(botao.cget("background")) == esperado, (
+            # Desde 28/10/2026 o botão de passo é azul-CLARO com texto azul
+            # (o par `marca` sobre `marca_fundo`, medido em PARES_DE_TEXTO);
+            # o círculo numerado continua no azul cheio com branco.
+            assert botao.pintado["tras"] == paleta["marca_fundo"], (
                 "o botão de passo deixou de usar a cor que o teste de "
                 "contraste mede")
-            assert str(botao.cget("foreground")) == BRANCO
+            assert botao.pintado["frente"] == paleta["marca"]
             assert str(cartao._bolha.itemcget("bolha", "fill")) == esperado, (
                 "o círculo numerado deixou de usar a cor que o teste de "
                 "contraste mede")
@@ -770,9 +775,9 @@ def test_o_botao_desligado_pinta_a_moldura_medida(raiz):
     try:
         b.configure(state="disabled")
         c = widgets.cores()
-        moldura = str(b.cget("highlightbackground")).upper()
+        # Desde 28/10/2026 a moldura é desenhada na imagem do botão.
+        moldura = str(b.pintado["borda"]).upper()
         assert moldura == c[widgets.BORDA_DESLIGADO].upper()
-        assert int(b.cget("highlightthickness")) == 1
     finally:
         b.destroy()
 
@@ -1141,7 +1146,8 @@ def test_o_item_aberto_do_menu_e_azul_cheio(raiz):
     item.pack()
     try:
         item.ativar(True)
-        assert str(item.cget("background")).lower() == c["marca_solida"].lower()
+        # A pílula é o `FundoRedondo` do item (28/10/2026).
+        assert widgets._cor_de(item._fundo.cor).lower() == c["marca_solida"].lower()
         frente = str(ttk.Style().lookup("ItemAtivo.TLabel", "foreground"))
         assert frente.lower() == "#ffffff"
         item.trabalhando(True)
@@ -1199,6 +1205,7 @@ def test_tabela_e_grupo_do_menu_seguem_a_paleta_nos_dois_temas(raiz):
                 assert _primeiro_elemento(st, estilo) == "Mc.Treeheading.cell"
                 assert str(st.lookup(estilo, "lightcolor")).lower() == c["cabecalho"].lower()
             assert _primeiro_elemento(st, "Grupo.Toolbutton") == "Mc.Toolbutton.button"
-            assert str(st.lookup("Grupo.Toolbutton", "lightcolor")).lower() == c["cartao"].lower()
+            # O menu mora no painel (`fundo`) desde 28/10/2026.
+            assert str(st.lookup("Grupo.Toolbutton", "lightcolor")).lower() == c["fundo"].lower()
     finally:
         widgets.aplicar_estilos(False)
