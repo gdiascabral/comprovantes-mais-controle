@@ -234,6 +234,17 @@ class TelaDoDiaFrame(ttk.Frame):
                                      state="disabled", command=self._novo_a_mao)
         for i, b in enumerate(self._botoes_do_passo2):
             b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
+        # Reembolso dos nomes do `confirmar_antes.json` (dono, 28/10/2026):
+        # desligado, as linhas deles saem de tudo, como um "Desmarcar" que
+        # não vai à nuvem (`geracao.sem_reembolsos`). Substitui a pergunta
+        # que o HTML fazia.
+        self._pessoas_reembolso = regras_pag.carregar_confirmar()
+        self.var_reembolso = tk.BooleanVar(value=True)
+        if self._pessoas_reembolso:
+            ttk.Checkbutton(linha_pag, variable=self.var_reembolso,
+                            command=self._trocar_reembolso,
+                            text="Reembolso para " + " e ".join(
+                                self._pessoas_reembolso)).pack(side="right")
 
         c3 = widgets.Cartao(corpo, "Aportes", 3)
         c3.pack(fill="x", padx=PADX, pady=px((0, 12)))
@@ -788,7 +799,7 @@ class TelaDoDiaFrame(ttk.Frame):
         base = self.sicoob.aplicar(base, self.contas_erp, self.mapping)
         self.saldos = sd.ordenar(sd.aplicar_ajustes(base, self.dia.ajustes))
         self.pagamentos, self.fora = pg.por_conta(
-            self.leitura.grupos, self.mapping, self.conferencia,
+            self.leitura.grupos, self.mapping, self._conferencia_que_vale(),
             participantes=getattr(self.leitura.entradas, "participantes", None))
         em_ordem = sorted(self.saldos, key=lambda ln: ln.linha)
         self.aportes = ap.montar_aportes(
@@ -1228,6 +1239,11 @@ class TelaDoDiaFrame(ttk.Frame):
         if self.leitura is None or self.periodo is None:
             return None
         ld = self._selecionada()
+        if ld is not None and geracao.so_pela_caixa(self.conferencia, self._conferencia_que_vale(),
+                                                    ld.pagamento.id):
+            messagebox.showinfo(titulo, "Esta linha saiu pela caixa «Reembolso para …» do "
+                                        "cartão 2. Marque a caixa para mexer nela.")
+            return None
         tem_decisao = ld is not None and ld.pagamento.id in self.conferencia.decisoes
         recusa = passo2.recusa_da_selecao(ld, acao, tem_decisao, recado)
         if recusa:
@@ -1587,7 +1603,7 @@ class TelaDoDiaFrame(ttk.Frame):
     # passo 6
     def _novos_para_marcar(self):
         return agd.para_marcar(self.pagamentos, self.fora, self.leitura.lancamentos,
-                               self.conferencia, {a.alvo for a in self.lido.agendados_hoje})
+                               self._conferencia_que_vale(), {a.alvo for a in self.lido.agendados_hoje})
 
     def _montar_para_marcar(self):
         if not self._pode_gravar("Marcar agendados"):
@@ -1785,7 +1801,38 @@ class TelaDoDiaFrame(ttk.Frame):
         """Planilha, HTML e (sem os à mão) remessa: o da Remessa com as
         decisões do dono. Conferência vazia (nuvem fora) = entrega 1."""
         return geracao.resultado_da_tela(self.leitura.entradas, self.leitura.grupos,
-                                         self.conferencia)
+                                         self._conferencia_que_vale())
+
+    def _rotulo_do_painel(self, conta_erp) -> str:
+        row = self.mapping.resolve_label(conta_erp) if self.mapping else None
+        return row.label if row is not None else ""
+
+    def _conferencia_que_vale(self):
+        """A da nuvem, com os reembolsos tirados quando a caixa está desligada."""
+        return self._sem_reembolsos()[0]
+
+    def _sem_reembolsos(self):
+        """(conferência que vale, quem a caixa tirou)."""
+        if self.var_reembolso.get() or self.leitura is None:
+            return self.conferencia, []
+        return geracao.sem_reembolsos(self.conferencia, self.leitura.grupos,
+                                      self._pessoas_reembolso,
+                                      getattr(self.leitura, "entradas", None))
+
+    def _trocar_reembolso(self):
+        nomes = " e ".join(self._pessoas_reembolso)
+        self._log(f"Reembolso para {nomes}: "
+                  + ("entra hoje." if self.var_reembolso.get()
+                     else "desligado — as linhas saem da tela, do HTML, da planilha e da remessa."))
+        for linha in self._sem_reembolsos()[1]:
+            self._log(f"  - fora hoje: {linha}")
+        if self.dia is not None and self.leitura is not None and self.mapping is not None:
+            self._recalcular()
+            # A lista do "Marcar agendados" já montada também muda (revisão
+            # de dinheiro, 28/10/2026): senão gravaria agendado para o
+            # reembolso que não saiu, ou deixaria sem o que voltou a sair.
+            self._remontar_para_marcar()
+            self._encher_para_marcar()
 
     def _pasta_pagamentos(self):
         pasta = util.pasta_base() / "Pagamentos do dia"
@@ -1872,17 +1919,16 @@ class TelaDoDiaFrame(ttk.Frame):
         if not self._pode_gerar("HTML dos pagamentos"):
             return
         resultado, lancamentos = self._resultado_que_sai(), self.leitura.lancamentos
-        pessoas = regras_pag.carregar_confirmar()
-        if pessoas:
-            nomes = " e ".join(pessoas) if len(pessoas) <= 2 else ", ".join(pessoas)
-            if not messagebox.askyesno("HTML dos pagamentos",
-                                       f"Incluir reembolso para {nomes}?\n\n"
-                                       "Sim = os reembolsos deles entram no HTML.\n"
-                                       "Não = ficam fora dos dois HTMLs."):
-                resultado, lancamentos, tirados = html_pagamentos.tirar_reembolsos(
-                    resultado, lancamentos, pessoas, self.leitura.overviews)
-                for linha in tirados:
-                    self._log(f"  - fora do HTML: {linha}")
+        # A escolha é a caixa do cartão 2: o `resultado` já vem sem os
+        # reembolsos; aqui sai só a parte da pessoa física, que não passa
+        # pela tela.
+        if self._pessoas_reembolso and not self.var_reembolso.get():
+            resultado, lancamentos, tirados = html_pagamentos.tirar_reembolsos(
+                resultado, lancamentos, self._pessoas_reembolso, self.leitura.overviews)
+            for linha in self._sem_reembolsos()[1]:
+                self._log(f"  - fora do HTML: {linha}")
+            for linha in tirados:
+                self._log(f"  - fora do HTML (pessoa física): {linha}")
         ini, fim = self.leitura.periodo
         pasta = self._pasta_pagamentos()
         # Os movimentos do dia vão como linhas só informativas (item A): os
@@ -1895,9 +1941,11 @@ class TelaDoDiaFrame(ttk.Frame):
             definidos=self.aportes.definidos_validos if self.aportes else None,
             regras=self.regras, rotulos=rotulos)
         try:
+            primeiras = dc.contas_que_aportam(movimentos, list(resultado.contas),
+                                              self._rotulo_do_painel)
             gerados = html_pagamentos.gravar(resultado, lancamentos, self.leitura.anexos,
                                              pasta, ini, fim, pastas_extras=(pasta, util.pasta_base()),
-                                             movimentos=movimentos)
+                                             movimentos=movimentos, primeiras=primeiras)
         except Exception as e:                              # noqa: BLE001
             self._log(f"[!] HTML dos pagamentos: {e}")
             messagebox.showwarning("HTML dos pagamentos",

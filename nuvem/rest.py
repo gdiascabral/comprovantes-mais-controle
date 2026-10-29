@@ -9,6 +9,9 @@ quem está na frente da tela, e um traceback não pede nada.
 from __future__ import annotations
 
 
+import threading
+import time
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -73,6 +76,34 @@ def _montar_sessao() -> requests.Session:
 #: Módulo inteiro fala com o mesmo projeto (URL fixa acima), então uma sessão
 #: só basta — é o ponto único que os testes trocam para simular o transporte.
 _SESSAO = _montar_sessao()
+
+#: Conexão parada há mais que isto é fechada antes do próximo pedido. Medido
+#: no app do dono (28/10/2026): aberto às 15h21, o "Gravar agendados" das
+#: 16h48 caiu em "sem internet e a sessão salva venceu" COM internet — a
+#: renovação do token (um POST, que de propósito não se repete) saiu pela
+#: conexão guardada, que o servidor já tinha fechado.
+OCIOSA_SEG = 60
+_ultimo_pedido = 0.0
+_TRAVA_DO_RELOGIO = threading.Lock()
+
+
+def _acordar() -> None:
+    """Fecha as conexões guardadas se o app ficou parado; a próxima abre nova.
+
+    Fechar não perde nada (só o reaproveitamento), e é o que impede o POST de
+    sair por um socket morto — o erro que não se pode repetir sozinho."""
+    global _ultimo_pedido
+    # Trava: duas threads acordando juntas fechariam o pool uma da outra.
+    with _TRAVA_DO_RELOGIO:
+        agora = time.monotonic()
+        if _ultimo_pedido and agora - _ultimo_pedido > OCIOSA_SEG:
+            fechar = getattr(_SESSAO, "close", None)
+            if fechar is not None:
+                try:
+                    fechar()
+                except Exception:                       # noqa: BLE001
+                    log.warning("fechando conexões paradas da nuvem", exc_info=True)
+        _ultimo_pedido = agora
 
 
 class ErroDaNuvem(RuntimeError):
@@ -174,6 +205,7 @@ def _chamar(metodo: str, caminho: str, token, dados=None, prefer="") -> object:
     if prefer:
         cab["Prefer"] = prefer
     try:
+        _acordar()
         r = _SESSAO.request(metodo, f"{URL}{caminho}", headers=cab,
                             json=dados, timeout=ESPERA)
     except requests.RequestException as e:
@@ -257,6 +289,7 @@ def chamar(funcao: str, token: str, **argumentos):
 def entrar(email: str, senha: str) -> dict:
     """Troca e-mail e senha por uma sessão. Devolve o corpo do GoTrue."""
     try:
+        _acordar()
         r = _SESSAO.post(f"{URL}/auth/v1/token?grant_type=password",
                          headers=_cabecalhos(None),
                          json={"email": email, "password": senha},
@@ -320,6 +353,7 @@ def criar_conta(nome: str, email: str, senha: str) -> bool:
     ele o admin veria uma fila de e-mails sem gente.
     """
     try:
+        _acordar()
         r = _SESSAO.post(f"{URL}/auth/v1/signup",
                          headers=_cabecalhos(None),
                          json={"email": email.strip(), "password": senha,
@@ -354,13 +388,26 @@ def criar_conta(nome: str, email: str, senha: str) -> bool:
 
 def renovar(refresh_token: str) -> dict:
     """Troca o token de renovação por uma sessão nova."""
-    try:
-        r = _SESSAO.post(f"{URL}/auth/v1/token?grant_type=refresh_token",
-                         headers=_cabecalhos(None),
-                         json={"refresh_token": refresh_token},
-                         timeout=ESPERA)
-    except requests.RequestException as e:
-        raise SemRede(f"não deu para falar com o servidor: {e}") from e
+    # Uma segunda tentativa, por conexão nova, SÓ quando a primeira não
+    # chegou a sair (`ConnectionError`: socket morto, conexão recusada). O
+    # tempo esgotado esperando a resposta (`ReadTimeout`) não se repete: o
+    # servidor pode ter trocado o token, e a repetição, passados os 10 s de
+    # reuso do projeto, seria 400 e deslogaria na hora (revisão de 28/10/2026).
+    for tentativa in (1, 2):
+        _acordar()
+        try:
+            r = _SESSAO.post(f"{URL}/auth/v1/token?grant_type=refresh_token",
+                             headers=_cabecalhos(None),
+                             json={"refresh_token": refresh_token},
+                             timeout=ESPERA)
+            break
+        except requests.RequestException as e:
+            if tentativa == 2 or not isinstance(e, requests.ConnectionError):
+                raise SemRede(f"não deu para falar com o servidor: {e}") from e
+            log.warning("renovando a sessão da nuvem: %s — tento de novo", e)
+            fechar = getattr(_SESSAO, "close", None)
+            if fechar is not None:
+                fechar()
     if r.status_code in (400, 401):
         raise PrecisaEntrar("a sessão salva não vale mais")
     return _resposta(r)
@@ -370,6 +417,7 @@ def sair(token: str) -> None:
     """Encerra a sessão no servidor. Falhar aqui não é problema: o token
     local é apagado de qualquer forma, e ele vence sozinho."""
     try:
+        _acordar()
         _SESSAO.post(f"{URL}/auth/v1/logout", headers=_cabecalhos(token),
                      timeout=ESPERA)
     except requests.RequestException:

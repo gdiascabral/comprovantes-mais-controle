@@ -168,7 +168,9 @@ paths:
   **`registro["reembolso_para"]`** guarda para quem vai o reembolso, pelo
   nome escrito (aviso "PAGAR PARA", "REEMBOLSO X" no documento ou
   "REEMBOLSAR/PAGAR PARA X" na observação). É o que o botão do HTML usa:
-  ele PERGUNTA "Incluir reembolso para <nomes do confirmar_antes.json>?" e,
+  ele PERGUNTA "Incluir reembolso para <nomes do confirmar_antes.json>?"
+  (só na Remessa/Retorno; na "Pagamentos do dia" a pergunta virou a caixa
+  do cartão 2 desde 28/10/2026, ver `arquitetura-tela-do-dia.md`) e,
   no "Não", `html_pagamentos.tirar_reembolsos` tira as linhas dessas pessoas
   dos DOIS HTMLs (no de PF, pelo "REEMBOLSO X" do nº do documento). O
   `self.resultado` não é tocado: planilha e remessa seguem com o que o passo
@@ -710,6 +712,16 @@ paths:
   descrição + doc") ia crua e o `fmt_alfa` cortava à direita: o documento, no
   fim, era o primeiro a sumir. Registro sem as peças (teste antigo) cai na
   descrição da planilha. O "seu número" e os valores não mudam.
+  **Rateio entre lotes vizinhos encurta** (`cc_compacto`, dono, 28/10/2026:
+  "muito grande a descrição"): "X QD 1 LT 7A | X QD 1 LT 7B | X QD 1 LT 7C"
+  sai "X QD 1 LT 7A 7B 7C" — no HTML e na remessa. O primeiro centro de
+  custo fica inteiro (é a obra que o `matcher._features` acha na
+  descrição); os seguintes perdem só o começo repetido.
+  **Ordem das contas** (`ordenar_contas`, dono, 28/10/2026): `gravar(
+  primeiras=)` põe na frente as contas que aportam/distribuem no dia (a
+  tela as calcula por `decisoes.contas_que_aportam`, a que manda mais
+  primeiro) e o resto por quantidade de pagamentos, da maior para a menor.
+  Sem `primeiras` (Remessa/Retorno), só a quantidade.
   **Bloqueio do Copiar** (`_motivo_do_bloqueio`): a linha JÁ PAGO também fica
   sem o Copiar do boleto/Pix, com o motivo "já pago — não pagar de novo"
   (copiar o dado de quem já pagou é pagar em dobro); o travessão (U+2014) do

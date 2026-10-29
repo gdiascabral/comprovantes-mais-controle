@@ -218,6 +218,31 @@ def _tipo_da_regra(tipo: str) -> str:
     return TIPO_APORTE_REGRAS
 
 
+def contas_que_aportam(movimentos, contas_erp, rotulo_de) -> list[str]:
+    """As contas do ERP que mandam dinheiro no dia (aporte, transferência ou
+    distribuição), da que manda mais para a que manda menos — a ordem do
+    topo do HTML (dono, 28/10/2026: "1º a principal aportante/distribuidora
+    do dia; 2º se tiver mais alguém aportando/distribuindo").
+
+    `movimentos`: as linhas de `movimentos_do_dia` ({de, valor}); `de` é o
+    rótulo do painel (ou um nome de fora, que não casa com conta nenhuma).
+    `rotulo_de(conta_erp)` dá o rótulo do painel da conta, ou "" sem linha.
+    Empate fica em ordem alfabética do nome do ERP."""
+    soma: dict[str, Decimal] = {}
+    for m in movimentos or ():
+        valor = m.get("valor")
+        if valor is None or valor <= ZERO:
+            continue
+        de = util.norm_espaco(m.get("de") or "")
+        soma[de] = soma.get(de, ZERO) + valor
+    achadas = []
+    for conta in contas_erp or ():
+        total = soma.get(util.norm_espaco(rotulo_de(conta) or ""))
+        if total:
+            achadas.append((-total, util.norm_espaco(conta), conta))
+    return [c for *_x, c in sorted(achadas)]
+
+
 def movimentos_do_dia(a_mao, distribuicoes, definidos=None, regras=(),
                       rotulos=()) -> list[dict]:
     """TODOS os movimentos definidos do dia que não são pagamento de conta,
