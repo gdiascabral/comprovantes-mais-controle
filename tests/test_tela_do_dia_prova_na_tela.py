@@ -359,6 +359,7 @@ def test_frame_conta_a_prova_como_dona_do_chrome_do_sicoob():
     t.sicoob = NS(ocupado=lambda: None)
     t.agendamentos = NS(ocupado=lambda: None)
     t.prova = NS(ocupado=lambda: None)
+    t.autenticar = NS(ocupado=lambda: None)
     assert t.sicoob_ocupado() is None
     t.prova = NS(ocupado=lambda: m.OCUPADO)
     assert t.sicoob_ocupado() == m.OCUPADO
