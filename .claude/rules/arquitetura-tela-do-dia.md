@@ -819,6 +819,18 @@ usar «Nome curto…»); copia primeiro e só então grava a lista (falha ao gra
 só avisa: perde-se a sugestão de amanhã). Dinheiro em `Decimal`; valor zero ou
 negativo não entra.
 
+**Uma mensagem por conta** (dono, 28/10/2026: "ando mandando banco por banco
+pra facilitar a conferência dele"). Numa segunda linha de botões do cartão 7:
+«Copiar a linha» (a selecionada; também o duplo clique) e «Copiar a próxima»
+(a primeira ainda não copiada, que fica selecionada). O texto é o do
+`texto_whatsapp` linha a linha (`lista_diretor.mensagens_whatsapp`; a
+primeira sem ordinal leva "Demais:" em cima), a linha copiada ganha "✓" na
+ORDEM e as copiadas valem para o dia de trabalho (`_copiadas`, outro Buscar
+no mesmo dia não apaga). Cada linha exige nome curto, como o Copiar inteiro;
+a primeira cópia do dia grava a lista na nuvem (sugestão de amanhã). O
+diretor confere reagindo à mensagem de cada conta no WhatsApp e responde em
+cima da que deu erro — o nome da conta já está nela.
+
 **Nome curto sugerido** (pedido do dono 22/10/2026: "fazer por IA isso e
 deixar meio que pronto, não consegui copiar"). Conta sem nome gravado nasce
 com a sugestão de `lista_diretor.sugerir_nomes` (regra fixa, sem IA nem

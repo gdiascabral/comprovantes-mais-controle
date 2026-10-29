@@ -280,6 +280,7 @@ def botoes_da_lista(linhas, i, *, ligado: bool) -> dict:
     return {"subir": ligado and pode_mover(linhas, i, -1),
             "descer": ligado and pode_mover(linhas, i, 1),
             "ordinal": tem, "nome": tem, "copiar": ligado and bool(linhas),
+            "linha": tem, "proxima": ligado and bool(linhas),
             "sugestoes": ligado and any(l.sugerido for l in linhas)}
 
 
