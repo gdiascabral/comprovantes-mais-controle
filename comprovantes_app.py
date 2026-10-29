@@ -345,18 +345,25 @@ def main():
     aba_dia.sicoob.outros_no_sicoob = lambda: aba_ext.ocupado() or (
         _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
         aba_dia.agendamentos.ocupado()) or aba_dia.prova.ocupado() or (
-        _remessa_conferindo())
+        aba_dia.autenticar.ocupado()) or _remessa_conferindo()
     # O "Conferir agendamentos" da própria tela do dia (dono, 23/10/2026) abre o
     # MESMO perfil: pergunta a todos, inclusive ao saldo da própria aba.
     aba_dia.agendamentos.outros_no_sicoob = lambda: aba_ext.ocupado() or (
         _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
-        aba_dia.sicoob.ocupado()) or aba_dia.prova.ocupado() or _remessa_conferindo()
+        aba_dia.sicoob.ocupado()) or aba_dia.prova.ocupado() or (
+        aba_dia.autenticar.ocupado()) or _remessa_conferindo()
     # A Prova de saldos (27/10/2026) abre o Chrome do Sicoob E os perfis do
     # Inter: pergunta a todos, inclusive ao Baixar comprovantes (Inter também).
     aba_dia.prova.outros_no_sicoob = lambda: aba_ext.ocupado() or (
         _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
         aba_dia.sicoob.ocupado()) or aba_dia.agendamentos.ocupado() or (
-        _remessa_conferindo())
+        aba_dia.autenticar.ocupado()) or _remessa_conferindo()
+    # O "Autenticar no banco" (29/10/2026) abre o MESMO perfil do Sicoob:
+    # pergunta a todos, como os outros desta aba.
+    aba_dia.autenticar.outros_no_sicoob = lambda: aba_ext.ocupado() or (
+        _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
+        aba_dia.sicoob.ocupado()) or aba_dia.agendamentos.ocupado() or (
+        aba_dia.prova.ocupado()) or _remessa_conferindo()
     aba_pag.sicoob_ocupado = lambda: aba_ext.ocupado() or aba_dia.sicoob_ocupado() or (
         _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc))
     # Controle de aportes divide navegador e thread do Anexar: lê o MESMO ERP

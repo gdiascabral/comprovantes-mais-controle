@@ -347,3 +347,13 @@ def autenticar(pendentes, movimentos, pendencias=(), lidas=(), falhas=None,
         else:
             saida[ag_id] = Autenticacao("", "nada no banco ainda")
     return saida
+
+
+def marcas_com_provas(marcas: dict, pendentes) -> dict:
+    """As marcas ☑ depois do "Autenticar no banco": o que passou a ser
+    provado nasce marcado; o resto fica como o dono deixou."""
+    novas = dict(marcas or {})
+    for a, sit, _r in pendentes:
+        if sit.pre_marca:
+            novas[a.id] = True
+    return novas

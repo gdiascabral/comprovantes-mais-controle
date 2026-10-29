@@ -135,3 +135,33 @@ def test_a_prova_do_banco_vira_pre_marca_mas_nao_vence_valor_mudou():
     assert agd.situacao(ag, titulo, prova_extra=prova).pre_marca
     mudou = {"remainingValue": 350.0}
     assert not agd.situacao(ag, mudou, prova_extra=prova).pre_marca
+
+
+# ------------------------------------------- a situação refeita com a prova
+def test_com_provas_do_banco_pre_marca_e_nao_vence_valor_mudou():
+    from tela_do_dia import nuvem_do_dia as nd
+    from tela_do_dia.conferencia import Conferencia
+    a1, a2, a3 = _ag(1), _ag(2), _ag(3)
+    sit = agd.Situacao("", "aguardando — responda")
+    lido = nd.LidoDaNuvem(Conferencia(), pendentes=[(a1, sit, None), (a2, sit, None),
+                                                    (a3, sit, None)],
+                          titulos={"L1": {"remainingValue": 200.0},
+                                   "L2": {"remainingValue": 999.0},
+                                   "L3": {"remainingValue": 200.0}},
+                          relido=True)
+    aut = {1: au.Autenticacao("banco — Sicoob comprovante 28/10: mesmo valor e descrição"),
+           2: au.Autenticacao("banco — x"),
+           3: au.Autenticacao("", "pagamentos parecidos no banco, sem como separar — responda")}
+    novo = nd.com_provas_do_banco(lido, aut)
+    s1, s2, s3 = (s for _a, s, _r in novo.pendentes)
+    assert s1.pre_marca and s1.prova.startswith("banco")
+    assert not s2.pre_marca and "mudou" in s2.frase
+    assert not s3.pre_marca and "banco: pagamentos parecidos" in s3.frase
+    assert lido.pendentes[0][1] is sit                      # a leitura de antes não muda
+
+
+def test_marcas_com_provas_marca_o_provado_e_guarda_o_resto():
+    a1, a2 = _ag(1), _ag(2)
+    sim, nao = agd.Situacao("ok", "p", True, "p"), agd.Situacao("", "x")
+    assert au.marcas_com_provas({1: False, 2: True}, [(a1, sim, None), (a2, nao, None)]) == {
+        1: True, 2: True}
