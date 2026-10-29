@@ -219,10 +219,11 @@ def test_botoes_da_lista():
     linhas = [_l("A", 1), _l("B")]
     b = p67.botoes_da_lista(linhas, 0, ligado=True)
     assert b == {"subir": False, "descer": False, "ordinal": True, "nome": True, "copiar": True,
-                 "sugestoes": False}
+                 "linha": True, "proxima": True, "sugestoes": False}
     assert not any(p67.botoes_da_lista(linhas, 0, ligado=False).values())
     b = p67.botoes_da_lista(linhas, None, ligado=True)
     assert b["copiar"] and not b["nome"] and not b["ordinal"]
+    assert b["proxima"] and not b["linha"]
     assert not p67.botoes_da_lista([], None, ligado=True)["copiar"]
 
 

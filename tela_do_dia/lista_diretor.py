@@ -260,6 +260,31 @@ def alternar_ordinal(linhas, i) -> list[LinhaDaLista]:
     return renumerar(linhas)
 
 
+def mensagens_whatsapp(linhas) -> list[str]:
+    """Uma mensagem por conta, na ordem das `linhas` (dono, 28/10/2026: "ando
+    mandando banco por banco pra facilitar a conferência dele"). O texto é o
+    MESMO do `texto_whatsapp`, linha a linha; a primeira conta sem ordinal leva
+    o "Demais:" em cima quando há numeradas, como ele já manda. Mandadas uma a
+    uma, o diretor reage à mensagem da conta que já passou e responde em cima
+    da que deu erro — o nome da conta já está nela."""
+    tem_ordinal = any(l.ordinal for l in linhas)
+    saida, demais = [], False
+    for l in linhas:
+        if l.ordinal:
+            saida.append(f"{l.ordinal}º {l.nome} — {brl(l.valor)}")
+            continue
+        texto = f"{l.nome} — {brl(l.valor)}"
+        if tem_ordinal and not demais:
+            texto, demais = f"Demais:\n{texto}", True
+        saida.append(texto)
+    return saida
+
+
+def proxima_a_copiar(linhas, copiadas) -> int | None:
+    """O índice da primeira linha que ainda não foi copiada, ou None."""
+    return next((i for i, l in enumerate(linhas) if l.rotulo not in copiadas), None)
+
+
 def texto_whatsapp(linhas) -> str:
     com = [l for l in linhas if l.ordinal]
     sem = [l for l in linhas if not l.ordinal]
