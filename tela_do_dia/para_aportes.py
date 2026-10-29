@@ -430,7 +430,7 @@ def _ja_mandado(anterior, valor, fora_da_aba: bool = False) -> str:
 
 def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
               sem_saldo=(), na_aba_aportes=None, distribuicoes=(),
-              contas_do_painel=()) -> Envio:
+              contas_do_painel=(), pares_em_dobro=()) -> Envio:
     """`enviados`: {chave_de_envio: valor mandado} do dia (um conjunto de
     chaves também serve, com o valor desconhecido). `sem_saldo`: rótulos das
     contas do dia cujo saldo o sistema não trouxe. `na_aba_aportes`: as
@@ -439,7 +439,10 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
     `distribuicoes`: [(conta de origem, quem recebe, valor)] feitas à mão
     na tela; quem recebe é nome do cadastro ou OUTRA conta do painel
     (`contas_do_painel`: os rótulos, para exigir a conta do ERP no cadastro
-    dela também — o dinheiro entra nela)."""
+    dela também — o dinheiro entra nela). `pares_em_dobro`: (destino,
+    aportador) da aba Regras cujo sócio também aporta à mão de fora na mesma
+    conta hoje (`aporte_dos_socios.operacoes`): pendência dos dois lados."""
+    pares_em_dobro = set(pares_em_dobro or ())
     if enviados is None:
         enviados = {}
     elif not isinstance(enviados, dict):
@@ -477,6 +480,11 @@ def operacoes(definidos, regras, entidades, subcontas, data, enviados=None,
         regra = regra_do_par.get((destino, aportador))
         if regra is None:
             pendente(destino, aportador, valor, "não está na aba Regras do modelo")
+            continue
+        if (destino, aportador) in pares_em_dobro:
+            pendente(destino, aportador, valor,
+                     "esse sócio também aporta nesta conta à mão (de fora) hoje — "
+                     "tire um dos dois")
             continue
         numero = numero_da_conta(destino)
         # Transferência primeiro: com destino em subconta ela cairia na
