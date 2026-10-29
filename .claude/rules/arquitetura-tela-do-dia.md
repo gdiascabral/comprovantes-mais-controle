@@ -455,6 +455,16 @@ linha da Regras sai (o "de fora" repete a regra cujo aportador não é conta
 do painel). A seção fica logo depois do quadro-resumo, com uma linha
 no resumo que leva até ela (dono, 23/10/2026).
 
+**A tela não pula ao editar** (dono, 28/10/2026: "sempre que adiciono um
+valor ele volta a tela pro meio, abre de novo todas as seleções"). As
+edições do dono (saldo, aporte, sugestões, movimento à mão, distribuição,
+remover, gravação na nuvem, caixa de reembolso) chamam
+`_recalcular_no_lugar`, que guarda a rolagem da `AreaRolavel`
+(`self._corpo.canvas`) e a devolve num `after_idle`; `_encher_aportes`
+mantém fechada a conta que o dono fechou (pelo texto da linha; na
+primeira vez, todas abertas) e a linha do aportador editada selecionada,
+como `_encher_pagamentos` e `_encher_saldos` já faziam.
+
 ## Excel do dia: zero, e não vazio
 
 Escreve C (saldo do dia), D (a pagar), J/K, E4, H do Painel (aporte definido)
