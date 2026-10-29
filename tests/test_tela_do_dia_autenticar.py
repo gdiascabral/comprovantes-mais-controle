@@ -255,3 +255,10 @@ def test_extrato_completo_do_inter_so_saida_e_prova():
     assert movs[1] is None
     assert movs[0].descricao == DESC and movs[0].favorecido == "FORNECEDOR FICTICIO"
     assert _aut([_ag()], [movs[0]])[1].prova
+
+
+def test_mesmo_valor_sem_prova_avisa_o_dia_e_nao_pre_marca():
+    r = _aut([_ag()], [_mov(desc="OUTRA DESCRICAO QUALQUER DO BANCO MESMO VALOR")])
+    assert r[1].prova == "" and "mesmo valor no banco (28/10)" in r[1].nota
+    assert _aut([_ag()], [])[1].nota == "nada no banco ainda"
+    assert _aut([_ag()], [_mov(valor="99.00")])[1].nota == "nada no banco ainda"

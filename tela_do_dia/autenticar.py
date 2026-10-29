@@ -403,8 +403,24 @@ def autenticar(pendentes, movimentos, pendencias=(), lidas=(), falhas=None,
             saida[ag_id] = Autenticacao("", f"banco: {achadas} de {len(alvos)} partes "
                                             "achadas — responda")
         else:
-            saida[ag_id] = Autenticacao("", "nada no banco ainda")
+            saida[ag_id] = Autenticacao("", _so_o_valor(alvos, movimentos, hoje))
     return saida
+
+
+def _so_o_valor(alvos, movimentos, hoje: date) -> str:
+    """A nota de quem não casou: "nada no banco ainda", ou — quando há no
+    banco, na mesma conta e na janela, um pagamento de MESMO valor que não
+    prova (sem código nem descrição que batam; o agendado antigo não tem a
+    linha nem a descrição colada na foto) — os dias dele, para o dono
+    conferir (rodada real de 29/10/2026). Nunca pré-marca."""
+    dias = sorted({m.data for a in alvos for m in movimentos
+                   if m.conta == a.conta and m.valor == a.valor
+                   and a.dia - timedelta(days=1) <= m.data <= min(hoje, a.ate)})
+    if not dias:
+        return "nada no banco ainda"
+    quando = ", ".join(f"{d:%d/%m}" for d in dias[:3])
+    return (f"há pagamento de mesmo valor no banco ({quando}), mas sem código nem "
+            "descrição que provem que é este — confira e responda")
 
 
 def marcas_com_provas(marcas: dict, antes, depois) -> dict:
