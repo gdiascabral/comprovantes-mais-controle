@@ -68,6 +68,10 @@ class ControleAportesFrame(ttk.Frame):
         self._leu_bem = False         # a tela tem uma leitura INTEIRA à vista
         self._reler = False           # gravou durante uma leitura: reler no fim
         self.contas, self.apontamentos, self.contas_erp, self.apuracoes = [], {}, [], []
+        #: Quem quer saber de cada leitura terminada (a aba Pagamentos do dia,
+        #: para o aviso de igualar): chamados na thread do Tk com
+        #: (apurações, erro) — erro "" quando leu.
+        self.ouvintes = []
         self._linha_conta, self._linha_sem_dono, self._linha_apontado = {}, {}, {}
         self._build()
         self.after(150, self._drain)
@@ -223,6 +227,8 @@ class ControleAportesFrame(ttk.Frame):
                     self._receber(valor)
                 elif tipo == "falha":
                     self._limpar(SEM_LEITURA)
+                    self._avisar_ouvintes([], "não consegui ler (veja o Registro do "
+                                             "Controle de aportes)")
                 elif tipo == "nuvem":
                     self._depois_da_nuvem(*valor)
         except queue.Empty:
@@ -267,6 +273,24 @@ class ControleAportesFrame(ttk.Frame):
             self._log("\n" + widgets.recado_de_erro(e, "Não consegui começar a leitura."))
             return False
         return True
+
+    def atualizar_se_livre(self) -> str:
+        """A leitura do botão, pedida por OUTRA aba (Pagamentos do dia, no fim
+        do Buscar): nunca abre o diálogo de "navegador ocupado". Devolve ""
+        quando começou, "ocupado" quando a vaga desta aba está em uso (quem
+        pediu tenta de novo) e o motivo quando não deu."""
+        if self._lendo or (self.worker and not self.worker.done()):
+            return "ocupado"
+        if self.anx.ocupado(aba=self):
+            return "ocupado"
+        return "" if self.atualizar() else "a leitura não começou (veja o Registro)"
+
+    def _avisar_ouvintes(self, apuracoes, erro: str):
+        for ouvinte in list(self.ouvintes):
+            try:
+                ouvinte(list(apuracoes), erro)
+            except Exception:                               # noqa: BLE001
+                util.log("controle_frame").exception("ouvinte do Controle de aportes")
 
     def _fim_da_leitura(self):
         """Na thread do Tk, depois da última mensagem da leitura."""
@@ -345,6 +369,10 @@ class ControleAportesFrame(ttk.Frame):
             self._log("\n" + widgets.recado_de_erro(
                 e, "Não consegui mostrar o controle de aportes."))
             self.lbl.configure(text="Não consegui mostrar — veja o Registro.")
+            self._avisar_ouvintes([], "não consegui mostrar (veja o Registro do "
+                                      "Controle de aportes)")
+        else:
+            self._avisar_ouvintes(self.apuracoes, "")
         self._acender_botoes()
 
     def _mostrar(self, pacote):
