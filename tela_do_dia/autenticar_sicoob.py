@@ -118,9 +118,12 @@ def completar_pelo_html(m: au.Movimento, html) -> au.Movimento:
             barras = next(iter(achados))
     descricao = m.descricao
     if not descricao:
-        achou = re.search(r"observa[cç][aã]o\s*:?\s*([^\n]+)", texto, flags=re.I)
-        if achou:
-            descricao = achou[1].strip()
+        achou = re.search(r"observa[cç][aã]o[ \t]*:?[ \t]*\n*[ \t]*([^\n]+)", texto,
+                          flags=re.I)
+        valor_obs = achou[1].strip() if achou else ""
+        # Observação vazia: a linha seguinte é o RÓTULO do próximo campo.
+        if valor_obs and not valor_obs.endswith(":"):
+            descricao = valor_obs
     return au.Movimento(m.conta, m.data, m.valor, barras, descricao, m.favorecido,
                         m.origem, m.ident)
 

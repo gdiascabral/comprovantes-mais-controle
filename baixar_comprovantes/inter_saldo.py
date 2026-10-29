@@ -24,8 +24,8 @@ tela ANTES (`avisar_qr`), para ela dizer de QUAL conta é o QR.
 
 Só leitura: nada é clicado além do "gerar um novo QR" do `esperar_login`.
 
-**O extrato completo como segunda fonte** (medido em 29/10/2026 na MORAIS
-ENG, que mostra o saldo SÓ no extrato): quando a tela inicial não dá o
+**O extrato completo como segunda fonte** (medido em 29/10/2026 numa conta
+PJ que mostra o saldo SÓ no extrato): quando a tela inicial não dá o
 saldo, ou não mostra o número da conta para conferir, a leitura vai à tela
 do extrato (`URL_EXTRATO_COMPLETO`) e ouve a resposta que ELA pede
 (`ROTA_EXTRATO_COMPLETO`): o saldo vem em `balance.data.balances[
@@ -40,6 +40,7 @@ vem no `LidoInter.extra_erro`.
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -56,7 +57,7 @@ CAMPO = "disponivel"
 CENTAVO = Decimal("0.01")
 TEMPO_SALDO = 30
 URL_EXTRATO_COMPLETO = "https://contadigital.inter.co/extrato"
-ROTA_EXTRATO_COMPLETO = "/ib-pfj/cc/extrato/bff/"
+ROTA_EXTRATO_COMPLETO = "/ib-pfj/cc/extrato/bff/v2/home"
 TEMPO_EXTRATO = 25
 SALDO_DA_CONTA = "DIGITAL_ACCOUNT"
 #: Seletor da área do saldo na tela inicial (medir ao vivo, Tarefa 8);
@@ -161,22 +162,28 @@ def conferir_conta(texto: str, numero_esperado: str, nomes, razoes=()) -> str:
     return ""
 
 
+#: "R$ 1.234,56", "-R$ 1.234,56", "R$ -1.234,56": milhar com ponto e SEMPRE
+#: dois centavos. Outra forma ("R$ 1.234", sem centavos) não vira número:
+#: 1.234 lido como 1,23 seria um saldo falso (revisão de dinheiro, 29/10/2026).
+_SALDO_TEXTO = re.compile(r"^(-?)\s*(?:R\$)?\s*(-?)\s*(\d{1,3}(?:\.\d{3})*|\d+),(\d{2})$")
+
+
 def saldo_do_extrato(corpo) -> Decimal | None:
     """O saldo da conta digital no corpo do extrato completo, ou None."""
     balance = (corpo or {}).get("balance") if isinstance(corpo, dict) else None
     for b in ((balance or {}).get("data") or {}).get("balances") or ():
         if str((b or {}).get("id") or "").upper() == SALDO_DA_CONTA:
-            texto = str(b.get("available") or "").replace("R$", "").replace("\xa0", " ")
-            texto = texto.strip()
-            negativo = texto.startswith("-")
-            texto = texto.lstrip("-").strip()
-            if "," in texto:
-                texto = texto.replace(".", "").replace(",", ".")
-            try:
-                d = Decimal(texto).quantize(CENTAVO, rounding=ROUND_HALF_UP)
-            except (InvalidOperation, ValueError):
+            bruto = b.get("available")
+            if isinstance(bruto, bool):
                 return None
-            return -d if negativo else d
+            if isinstance(bruto, (int, float)):
+                return Decimal(str(bruto)).quantize(CENTAVO, rounding=ROUND_HALF_UP)
+            texto = str(bruto or "").replace("\xa0", " ").replace("\u2212", "-").strip()
+            achou = _SALDO_TEXTO.match(texto)
+            if not achou:
+                return None
+            sinal = "-" if (achou[1] or achou[2]) else ""
+            return Decimal(f"{sinal}{achou[3].replace('.', '')}.{achou[4]}")
     return None
 
 
@@ -185,7 +192,10 @@ def escutar_extrato(page) -> list:
     ouvidas: list = []
 
     def ouvir(resposta):
-        if ROTA_EXTRATO_COMPLETO in resposta.url:
+        # Só a rota do extrato (`v2/home`), e só o 200: outra rota do mesmo
+        # BFF, ou um JSON de erro, viraria "extrato sem transações" — e a
+        # conta passaria por lida com "nada no banco" (revisão de dinheiro).
+        if ROTA_EXTRATO_COMPLETO in resposta.url.split("?")[0] and resposta.status == 200:
             ouvidas.append(resposta)
 
     page.on("response", ouvir)
@@ -314,6 +324,7 @@ def _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes, razoes,
         via = "extrato"
         if not no_extrato:
             extrato()
+    lido_em = agora()          # a hora do SALDO, antes das listas do `extra`
     imagem, sem_imagem = _fotografar(page, Path(arquivo))
     resultado, erro = None, ""
     if extra is not None:
@@ -321,7 +332,7 @@ def _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes, razoes,
             resultado = extra(page, autorizacao, extrato)
         except Exception as e:                               # noqa: BLE001
             erro = _primeira_linha(e)
-    return LidoInter(saldo, agora(), "", imagem, sem_imagem, via, resultado, erro)
+    return LidoInter(saldo, lido_em, "", imagem, sem_imagem, via, resultado, erro)
 
 
 def _ler_no_chrome(apelido, numero_esperado, nomes, arquivo, *, razoes, log, avisar_qr,

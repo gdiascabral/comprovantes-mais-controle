@@ -110,8 +110,8 @@ def test_a_thread_le_o_inter_depois_do_sicoob_e_grava_o_saldo(monkeypatch, tmp_p
     monkeypatch.setattr(ant, "_hoje", lambda: date(2026, 10, 29))
     p = _peca(SimpleNamespace(_log=lambda *a: None))
     p._t_ler([a], {}, {}, date(2026, 10, 27), date(2026, 10, 29),
-             {"ALFA": ai.ContaInter("ALFA", "I")}, tmp_path)
+             {"ALFA": ai.ContaInter("ALFA", "I", "123")}, tmp_path)
     tipo, aut = p.q.get_nowait()
     assert tipo == "pronto" and aut[1].prova
     assert ai.saldo_do_dia(ai.caminho_dos_saldos(tmp_path, date(2026, 10, 29)),
-                           date(2026, 10, 29), "ALFA").saldo == D("3.00")
+                           date(2026, 10, 29), "ALFA", "123").saldo == D("3.00")

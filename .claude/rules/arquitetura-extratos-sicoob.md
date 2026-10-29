@@ -105,7 +105,7 @@ paths:
   tela (`conferir_conta`) antes de usar o valor, e fotografa. O número da
   conta na tela sai de `inter_baixar.numero_no_texto`, a MESMA regra de
   `conta_da_pagina`. **Extrato completo como segunda fonte (29/10/2026)**:
-  a MORAIS ENG só mostra o saldo no extrato; sem saldo ou sem número na tela
+  uma conta PJ só mostra o saldo no extrato; sem saldo ou sem número na tela
   inicial, a leitura abre `URL_EXTRATO_COMPLETO`, ouve a resposta do BFF
   (`ROTA_EXTRATO_COMPLETO`), lê `balance.data.balances[DIGITAL_ACCOUNT].
   available` (`saldo_do_extrato`, `LidoInter.via` = "extrato") e confere a

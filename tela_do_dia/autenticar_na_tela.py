@@ -192,7 +192,8 @@ class AutenticarNaTela:
                 r.falhas.update(ri.falhas)
                 try:
                     hoje = _hoje()
-                    ai.gravar_saldos(lidos, ai.caminho_dos_saldos(_raiz_saida(), hoje), hoje)
+                    ai.gravar_saldos(lidos, ai.caminho_dos_saldos(_raiz_saida(), hoje), hoje,
+                                     {k: c.numero for k, c in inter.items()})
                 except Exception as e:                       # noqa: BLE001
                     self.q.put(("falhou", f"[!] não gravei o saldo do Inter do dia: {e!r}"))
             r.falhas.update({c: m for c, m in falhas.items() if c not in r.lidas})

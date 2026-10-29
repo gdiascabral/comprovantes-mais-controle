@@ -62,12 +62,20 @@ def _corpo(*detalhes):
 
 
 def test_extrato_completo_nao_repete_pix_nem_a_2via():
-    from tela_do_dia import autenticar as au
-    da_2via = [au.Movimento("C", date(2026, 10, 28), D("10.00"), "", DESC)]
-    corpo = _corpo(_detalhe("PIX"), _detalhe("PAGAMENTO"), _detalhe("CONVENIO", valor="7.00"),
+    ja = {(date(2026, 10, 28), D("10.00"))}
+    corpo = _corpo(_detalhe("PIX"), _detalhe("PIX_ENVIADO", valor="3.00"),
+                   _detalhe("PAGAMENTO"), _detalhe("CONVENIO", valor="7.00"),
                    _detalhe("CONVENIO", op="C", valor="8.00"))
-    movs = ai.do_extrato_sem_repetir(corpo, "C", da_2via)
+    movs = ai.do_extrato_sem_repetir(corpo, "C", ja)
     assert [m.valor for m in movs] == [D("7.00")]
+
+
+def test_extrato_completo_saida_estornada_nao_prova():
+    corpo = _corpo(_detalhe("CONVENIO", valor="7.00", dia="2026-10-27"),
+                   _detalhe("ESTORNO", op="C", valor="7.00", dia="2026-10-28"),
+                   _detalhe("CONVENIO", valor="9.00", dia="2026-10-28"),
+                   _detalhe("OUTRO", op="C", valor="9.00", dia="2026-10-27"))
+    assert [m.valor for m in ai.do_extrato_sem_repetir(corpo, "C", set())] == [D("9.00")]
 
 
 class _Pagina:
@@ -78,6 +86,15 @@ class _Pagina:
         if "pix/v1/extrato" in js:
             return {"erro": self.erro} if self.erro else {"movimentacoes": self.pix}
         return {"operacoes": self.via.get(args[-1], [])}
+
+
+def test_pix_recebido_e_2via_nao_efetivada_nao_voltam_pelo_extrato_completo():
+    pix = [{"tipo": "C", "valor": 4, "data": "2026-10-28", "detalhePix": {}}]
+    via = {"PAGAMENTO": [{"valor": "6,00", "dataEfetivacao": "2026-10-28", "descricao": DESC,
+                          "pagamento": {"status": "ESTORNADO"}}]}
+    corpo = _corpo(_detalhe("TRANSFERENCIA", valor="4.00"), _detalhe("BOLETO", valor="6.00"))
+    assert ai.listar_na_sessao(_Pagina(pix, via), {"valor": "x"}, lambda: corpo, "C",
+                               date(2026, 10, 27), HOJE) == []
 
 
 def test_listar_na_sessao_junta_as_tres_fontes():
@@ -95,8 +112,9 @@ def test_listar_na_sessao_levanta_quando_uma_lista_falha():
     with pytest.raises(RuntimeError, match="extrato Pix"):
         ai.listar_na_sessao(_Pagina(erro="HTTP 500"), {"valor": "x"}, lambda: {}, "C",
                             HOJE, HOJE)
-    with pytest.raises(RuntimeError, match="extrato completo"):
-        ai.listar_na_sessao(_Pagina(), {"valor": "x"}, lambda: None, "C", HOJE, HOJE)
+    for corpo in (None, {}, {"transactions": {"erro": "x"}}, {"message": "Unauthorized"}):
+        with pytest.raises(RuntimeError, match="extrato completo"):
+            ai.listar_na_sessao(_Pagina(), {"valor": "x"}, lambda c=corpo: c, "C", HOJE, HOJE)
     with pytest.raises(RuntimeError, match="autorização"):
         ai.listar_na_sessao(_Pagina(), {"valor": ""}, lambda: {}, "C", HOJE, HOJE)
 
@@ -122,13 +140,27 @@ def test_saldo_do_dia_ida_e_volta_e_de_outro_dia_nao_vale(tmp_path):
     arq = tmp_path / "s.json"
     img = tmp_path / "p.png"
     img.write_bytes(b"x")
-    ai.gravar_saldos({"ALFA": _lido(imagem=img), "BETA": _lido(saldo=None)}, arq, HOJE)
-    lido = ai.saldo_do_dia(arq, HOJE, "ALFA")
+    ai.gravar_saldos({"ALFA": _lido(imagem=img), "BETA": _lido(saldo=None)}, arq, HOJE,
+                     {"ALFA": "012.345-6"})
+    lido = ai.saldo_do_dia(arq, HOJE, "ALFA", "123456")
     assert lido.saldo == D("5.00") and lido.imagem == img and lido.lido_em.hour == 8
-    assert ai.saldo_do_dia(arq, HOJE, "BETA") is None
-    assert ai.saldo_do_dia(arq, date(2026, 10, 30), "ALFA") is None
+    assert ai.saldo_do_dia(arq, HOJE, "BETA", "1") is None
+    assert ai.saldo_do_dia(arq, date(2026, 10, 30), "ALFA", "123456") is None
     arq.write_text("{estragado", encoding="utf-8")
-    assert ai.saldo_do_dia(arq, HOJE, "ALFA") is None
+    assert ai.saldo_do_dia(arq, HOJE, "ALFA", "123456") is None
+
+
+def test_saldo_do_dia_so_com_o_mesmo_numero_conferido_e_recente(tmp_path):
+    arq = tmp_path / "s.json"
+    ai.gravar_saldos({"ALFA": _lido()}, arq, HOJE, {"ALFA": "123456"})
+    assert ai.saldo_do_dia(arq, HOJE, "ALFA", "999999") is None
+    assert ai.saldo_do_dia(arq, HOJE, "ALFA", "") is None
+    cedo = datetime(2026, 10, 29, 9, 0)
+    tarde = datetime(2026, 10, 29, 17, 0)
+    assert ai.saldo_do_dia(arq, HOJE, "ALFA", "123456", agora=cedo) is not None
+    assert ai.saldo_do_dia(arq, HOJE, "ALFA", "123456", agora=tarde) is None
+    ai.gravar_saldos({"BETA": _lido()}, arq, HOJE, {})
+    assert ai.saldo_do_dia(arq, HOJE, "BETA", "123456") is None
 
 
 def test_gravar_saldos_junta_com_o_que_ja_havia_hoje(tmp_path):
@@ -145,8 +177,29 @@ def test_prova_de_saldos_usa_o_saldo_do_autenticar_de_hoje(monkeypatch, tmp_path
     from tela_do_dia import prova_na_tela as pnt
     monkeypatch.setattr(cf, "RAIZ_SAIDA", tmp_path)
     monkeypatch.setattr(pnt, "_agora", lambda: datetime(2026, 10, 29, 9, 0))
-    assert pnt._saldo_do_autenticar("ALFA") is None
-    ai.gravar_saldos({"ALFA": _lido()}, ai.caminho_dos_saldos(tmp_path, HOJE), HOJE)
-    assert pnt._saldo_do_autenticar("ALFA").saldo == D("5.00")
+    assert pnt._saldo_do_autenticar("ALFA", "123") is None
+    ai.gravar_saldos({"ALFA": _lido()}, ai.caminho_dos_saldos(tmp_path, HOJE), HOJE,
+                     {"ALFA": "123"})
+    assert pnt._saldo_do_autenticar("ALFA", "123").saldo == D("5.00")
+    assert pnt._saldo_do_autenticar("ALFA", "999") is None
     monkeypatch.setattr(pnt, "_agora", lambda: datetime(2026, 10, 30, 9, 0))
-    assert pnt._saldo_do_autenticar("ALFA") is None
+    assert pnt._saldo_do_autenticar("ALFA", "123") is None
+
+
+def test_2via_sem_status_nao_prova():
+    from tela_do_dia import autenticar as au
+    item = {"valor": "6,00", "dataEfetivacao": "2026-10-28", "descricao": DESC}
+    assert au.do_2via_inter(item, "C") is None
+    assert au.do_2via_inter({**item, "pagamento": {}}, "C") is None
+
+
+def test_escuta_do_extrato_so_a_rota_certa_e_o_200():
+    from baixar_comprovantes import inter_saldo as m
+    ouvintes = {}
+    pag = NS(on=lambda ev, fn: ouvintes.setdefault(ev, fn))
+    ouvidas = m.escutar_extrato(pag)
+    base = "https://cd.web.bancointer.com.br/ib-pfj/cc/extrato/bff/"
+    for url, st in ((base + "v2/home", 401), (base + "v2/filtros", 200),
+                    (base + "v2/home?x=1", 200)):
+        ouvintes["response"](NS(url=url, status=st))
+    assert [r.url for r in ouvidas] == [base + "v2/home?x=1"]

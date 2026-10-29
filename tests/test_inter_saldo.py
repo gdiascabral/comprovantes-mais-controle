@@ -218,7 +218,7 @@ def test_gancho_do_olho_do_inter_clica_antes_do_print(monkeypatch, tmp_path):
     assert ordem == [("olho", "#olho"), "foto"]
 
 
-# --------------------- extrato completo como segunda fonte (MORAIS ENG, 29/10/2026)
+# --------------------- extrato completo como segunda fonte (conta PJ, 29/10/2026)
 EXTRATO = {"balance": {"data": {"balances": [{"id": "DIGITAL_ACCOUNT",
                                                "available": "R$ 2.500,10"}]}}}
 

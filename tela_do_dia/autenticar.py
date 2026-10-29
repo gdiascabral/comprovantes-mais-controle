@@ -100,7 +100,13 @@ def dinheiro(valor) -> Decimal | None:
     if valor is None or valor == "":
         return None
     if isinstance(valor, str):
-        t = valor.replace("R$", "").replace("\xa0", " ").strip()
+        t = valor.replace("\xa0", " ").replace("\u2212", "-").strip()
+        negativo = t.startswith("-")
+        t = t.lstrip("-").strip().replace("R$", "").strip()
+        if t.startswith("-"):
+            negativo, t = True, t[1:].strip()
+        if negativo:
+            t = "-" + t
         if "," in t:
             t = t.replace(".", "").replace(",", ".")
         valor = t
@@ -200,7 +206,7 @@ def do_2via_inter(item: dict, conta: str) -> Movimento | None:
     descrição em `descricao`, e `pagamento.status` EFETIVADO (em 24 de 26; a
     2ª via só lista o que tem `dataEfetivacao`). Outro status não prova."""
     pagamento = item.get("pagamento") or {}
-    if str(pagamento.get("status") or "EFETIVADO").upper() != "EFETIVADO":
+    if str(pagamento.get("status") or "").upper() != "EFETIVADO":
         return None
     valor = dinheiro(item.get("valor"))
     dia = data_do_banco(item.get("dataEfetivacao"))
@@ -415,9 +421,9 @@ def marcas_com_provas(marcas: dict, antes, depois) -> dict:
 
 
 # --------------------------------------- Inter: o extrato completo (BFF)
-# Medido em 29/10/2026 na MORAIS ENG (3 sondas, só nomes de campo): a tela
+# Medido em 29/10/2026 numa conta PJ (3 sondas, só nomes de campo): a tela
 # `contadigital.inter.co/extrato` pede `GET cd.web.bancointer.com.br/ib-pfj/
-# cc/extrato/bff/v2/home`, e NESSA conta o saldo só aparece ali (a tela
+# cc/extrato/bff/v2/home`, e naquela conta o saldo só aparece ali (a tela
 # inicial não pede o `/cc/saldo/v3/` da Prova de saldos). A resposta traz:
 #   balance.data.balances[] — {id: "DIGITAL_ACCOUNT", available: "R$ …"}
 #   transactions.data[].bankStatements[].transactions[].detail — {rawValue,

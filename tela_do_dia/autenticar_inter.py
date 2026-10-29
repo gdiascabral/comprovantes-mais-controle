@@ -92,17 +92,32 @@ def _tipo_do_extrato(detalhe: dict) -> str:
     return str(((detalhe or {}).get("metadata") or {}).get("transactionType") or "").upper()
 
 
-def do_extrato_sem_repetir(corpo, conta_erp: str, da_2via) -> list:
-    """As saídas do extrato completo que NÃO estão nas outras listas: sem
-    Pix (veio do extrato Pix) e sem o que a 2ª via já tem (mesmo valor, mesmo
-    dia). O que sobra é o convênio e o resto que só o extrato mostra."""
-    ja = {(m.data, m.valor) for m in da_2via}
+def do_extrato_sem_repetir(corpo, conta_erp: str, ja_listados) -> list:
+    """As saídas do extrato completo que NÃO estão nas outras listas. Sai:
+    o que é Pix (qualquer tipo com "PIX" — o valor exato não foi medido) e
+    tudo que tem par de MESMO valor e MESMO dia em `ja_listados` (o extrato
+    Pix e a 2ª via de QUALQUER status: [(data, valor)]); e a saída que tem,
+    no mesmo extrato, uma ENTRADA de mesmo valor no mesmo dia ou depois
+    (estorno: o dinheiro voltou). O que sobra é o convênio."""
+    ja = set(ja_listados or ())
+    transacoes = au.transacoes_do_extrato_inter(corpo)
+    entradas = []
+    for detalhe in transacoes:
+        meta = (detalhe or {}).get("metadata") or {}
+        if str(meta.get("operationType") or "").upper() == "C":
+            dados = (detalhe or {}).get("data") or {}
+            valor = au.dinheiro(detalhe.get("rawValue")) or au.dinheiro(dados.get("value"))
+            dia = au.data_do_banco(dados.get("transactionDate"))
+            if valor is not None and dia is not None:
+                entradas.append((dia, abs(valor)))
     saida = []
-    for detalhe in au.transacoes_do_extrato_inter(corpo):
-        if _tipo_do_extrato(detalhe) == "PIX":
+    for detalhe in transacoes:
+        if "PIX" in _tipo_do_extrato(detalhe):
             continue
         m = au.do_extrato_inter(detalhe, conta_erp)
         if m is None or (m.data, m.valor) in ja:
+            continue
+        if any(v == m.valor and d >= m.data for d, v in entradas):
             continue
         saida.append(m)
     return saida
@@ -122,18 +137,34 @@ def listar_na_sessao(page, autorizacao, extrato, conta_erp: str,
         raise RuntimeError(f"extrato Pix do Inter: {r['erro']}")
     pix = [m for m in (au.do_pix_inter(x, conta_erp) for x in r.get("movimentacoes") or ())
            if m is not None]
+    ja = {(m.data, m.valor) for m in pix}
+    for x in r.get("movimentacoes") or ():
+        # Também o Pix que não prova (devolução, recebido): o extrato completo
+        # não pode trazê-lo de volta como "outra saída".
+        v, d = au.dinheiro(x.get("valor")), au.data_do_banco(x.get("data"))
+        if v is not None and d is not None:
+            ja.add((d, abs(v)))
     da_2via = []
     for tipo in ib.TIPOS_DA_API:
         r = page.evaluate(ib._JS_LISTAR, [ib.API_INTER, cab, f"{inicio:%Y-%m-%d}",
                                           f"{fim:%Y-%m-%d}", tipo]) or {}
         if r.get("erro"):
             raise RuntimeError(f"2ª via do Inter ({tipo}): {r['erro']}")
-        da_2via.extend(m for m in (au.do_2via_inter(x, conta_erp)
-                                   for x in r.get("operacoes") or ()) if m is not None)
+        for x in r.get("operacoes") or ():
+            v, d = au.dinheiro(x.get("valor")), au.data_do_banco(x.get("dataEfetivacao"))
+            if v is not None and d is not None:
+                ja.add((d, abs(v)))           # de QUALQUER status
+            m = au.do_2via_inter(x, conta_erp)
+            if m is not None:
+                da_2via.append(m)
     corpo = extrato()
-    if corpo is None:
-        raise RuntimeError("a tela do extrato completo do Inter não respondeu")
-    return [*pix, *da_2via, *do_extrato_sem_repetir(corpo, conta_erp, da_2via)]
+    tem_lista = isinstance(corpo, dict) and isinstance(
+        (corpo.get("transactions") or {}).get("data") if isinstance(
+            corpo.get("transactions"), dict) else None, list)
+    if not tem_lista:
+        raise RuntimeError("o extrato completo do Inter não veio (ou veio sem as "
+                           "transações) — não digo que não há pagamento")
+    return [*pix, *da_2via, *do_extrato_sem_repetir(corpo, conta_erp, ja)]
 
 
 def ler(contas: dict, inicio, fim, pasta_prints, *, log, ler_conta=None, avisar_qr=None,
@@ -181,11 +212,13 @@ def caminho_dos_saldos(raiz_saida, data: _dt.date) -> Path:
     return ddt.pasta_do_dia(raiz_saida, data) / f"{data:%d %m} - saldos do inter.json"
 
 
-def gravar_saldos(lidos: dict, arquivo, data: _dt.date) -> Path | None:
+def gravar_saldos(lidos: dict, arquivo, data: _dt.date, numeros=None) -> Path | None:
     """Junta ao arquivo do dia os saldos LIDOS (com a hora e o print). Sem
     saldo nenhum, não grava. Escreve num .tmp e troca (não deixa meio arquivo)."""
+    numeros = numeros or {}
     novos = {chave: {"saldo": str(l.saldo), "lido_em": l.lido_em.isoformat(),
-                     "imagem": str(l.imagem or ""), "via": l.via}
+                     "imagem": str(l.imagem or ""), "via": l.via,
+                     "numero": ps.digitos(numeros.get(chave, "")).lstrip("0")}
              for chave, l in lidos.items()
              if getattr(l, "saldo", None) is not None and getattr(l, "lido_em", None)}
     if not novos:
@@ -206,10 +239,20 @@ def gravar_saldos(lidos: dict, arquivo, data: _dt.date) -> Path | None:
     return p
 
 
-def saldo_do_dia(arquivo, data: _dt.date, apelido: str) -> ps.Leitura | None:
+#: Até quantos minutos depois de lido o saldo do Autenticar serve à Prova
+#: de saldos. Mais velho, a Prova lê de novo (com QR): um débito do meio do
+#: dia, ainda sem baixa no ERP, faria o banco das 07:00 "bater" com o ERP
+#: das 17:00 (revisão de dinheiro, 29/10/2026).
+IDADE_MAXIMA_MIN = 120
+
+
+def saldo_do_dia(arquivo, data: _dt.date, apelido: str, numero: str = "",
+                 agora: _dt.datetime | None = None) -> ps.Leitura | None:
     """O saldo que o "Autenticar no banco" leu HOJE desta conta do Inter,
     como `prova_saldos.Leitura`, ou None (arquivo ausente, de outro dia,
-    estragado, conta sem saldo). Estragado nunca vira saldo."""
+    estragado, conta sem saldo, lido há mais de `IDADE_MAXIMA_MIN`, ou
+    número da conta conferida diferente do `numero` de quem pede — ou vazio
+    de um dos lados). Estragado nunca vira saldo."""
     try:
         dados = json.loads(Path(arquivo).read_text(encoding="utf-8"))
         if dados.get("data") != data.isoformat():
@@ -222,6 +265,11 @@ def saldo_do_dia(arquivo, data: _dt.date, apelido: str) -> ps.Leitura | None:
     except (OSError, ValueError, KeyError, TypeError, AttributeError, InvalidOperation):
         return None
     if lido_em.date() != data or not saldo.is_finite():
+        return None
+    pedido = ps.digitos(numero).lstrip("0")
+    if not pedido or str(c.get("numero") or "") != pedido:
+        return None
+    if agora is not None and (agora - lido_em).total_seconds() > IDADE_MAXIMA_MIN * 60:
         return None
     imagem = Path(c["imagem"]) if c.get("imagem") else None
     if imagem is not None and not imagem.is_file():

@@ -750,7 +750,7 @@ Ordem do dia do dono: 1º conferir no banco o que foi pago antes, 2º saldos,
   arquivo) só quando a lista não traz código/descrição e há agendado de mesmo
   valor (dono, 29/10/2026). Duas contas do ERP no mesmo número não são lidas.
   **Medido em 29/10/2026 com o login do dono** (sondas só de nomes de
-  campo, 3 contas do Sicoob, BURITIS e MORAIS ENG do Inter): a lista de
+  campo, 3 contas do Sicoob e 2 do Inter): a lista de
   comprovantes do Sicoob traz `codigoBarras` (44) nos títulos e NENHUMA
   descrição — a Observação (a descrição colada) e a linha digitável estão no
   HTML do comprovante; convênio vem sem código na lista. O Pix do Sicoob traz
@@ -760,7 +760,7 @@ Ordem do dia do dono: 1º conferir no banco o que foi pago antes, 2º saldos,
   EFETIVADO; o extrato Pix mistura enviados (`tipo` D) e recebidos (C), com a
   descrição em `detalhePix.campoLivre`; o **extrato completo** (BFF
   `cd.web.bancointer.com.br/ib-pfj/cc/extrato/bff/v2/home`) traz o saldo
-  (`balance.data.balances[DIGITAL_ACCOUNT].available`) — **na MORAIS ENG o
+  (`balance.data.balances[DIGITAL_ACCOUNT].available`) — **numa das contas PJ o
   saldo só aparece ali**, a tela inicial não pede o `/cc/saldo/v3/` da Prova
   de saldos — e as transações com direção, valor, descrição e quem recebeu
   (`do_extrato_inter`, `saldo_do_extrato_inter`).
@@ -794,6 +794,17 @@ Ordem do dia do dono: 1º conferir no banco o que foi pago antes, 2º saldos,
   (`gravar_saldos`) e a **Prova de saldos o usa no mesmo dia sem pedir o QR
   de novo** (`prova_na_tela._saldo_do_autenticar`, com a hora e o print do
   Autenticar). `ComprovantesFrame.inter_ocupado` passa a contar o Autenticar.
+  **Revisão de dinheiro do Inter (29/10/2026)**: só vale a resposta do BFF
+  `v2/home` com HTTP 200, e o corpo tem de trazer `transactions.data` (lista)
+  — senão a conta fica "não lida", nunca "nada no banco"; do extrato completo
+  sai todo tipo com "PIX" e toda saída com par de mesmo valor e dia no
+  extrato Pix (qualquer direção) ou na 2ª via (qualquer status); saída com
+  ENTRADA de mesmo valor no mesmo dia ou depois (estorno) não prova; 2ª via
+  sem `pagamento.status` EFETIVADO não prova; o arquivo do saldo guarda o
+  NÚMERO da conta conferida e a Prova só o usa com o mesmo número (vazio de
+  um lado = lê de novo) e lido há até `IDADE_MAXIMA_MIN` (120) minutos; o
+  `lido_em` é a hora do saldo, antes das listas; o saldo em texto só vale
+  com dois centavos ("R$ 1.234" sem centavos é recusado).
 - **Falta (pendente na spec)**: os aportes do dia anterior.
 
 ## Lista do diretor (entrega 2)

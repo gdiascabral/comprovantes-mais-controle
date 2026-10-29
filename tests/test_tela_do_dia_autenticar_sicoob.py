@@ -171,3 +171,12 @@ def test_observacao_do_html_e_so_o_campo_e_nao_o_resto_do_texto():
             "<tr><td>Autenticação</td><td>ABC</td></tr></table>")
     m = au.Movimento("A", HOJE, D("10.00"))
     assert asi.completar_pelo_html(m, html).descricao == "OBRA MODELO NF 1 OC 2"
+
+
+def test_observacao_vazia_nao_pega_o_rotulo_seguinte():
+    from decimal import Decimal as D
+    from tela_do_dia import autenticar as au
+    html = ("<table><tr><td>Observação:</td><td></td></tr>"
+            "<tr><td>Valor:</td><td>10,00</td></tr></table>")
+    m = au.Movimento("A", HOJE, D("10.00"))
+    assert asi.completar_pelo_html(m, html).descricao == ""
