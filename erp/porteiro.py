@@ -19,7 +19,8 @@ COMANDOS (a partir da raiz do repositório)
 
 THREAD: o `MCClient` é Playwright sync e só serve na thread que o abriu. Em
 `vigiar` há UM cliente por acesso, aberto entre os ciclos e usado sempre da
-thread principal; se `vivo()` der False ele é fechado e recriado.
+thread principal; se `vivo()` der False ele é fechado e recriado. Entre os
+ciclos ele é PULSADO (`_dormir`): parado, prenderia as abas novas dos robôs.
 """
 from __future__ import annotations
 
@@ -91,6 +92,34 @@ class Mantenedor:
     def fechar_tudo(self):
         for nome in list(self._clientes):
             self._soltar(nome)
+
+    def respirar(self):
+        """Uma ida curta ao navegador por cliente (`MCClient.pulsar`), para os
+        eventos pendentes chegarem — ver `_dormir`."""
+        for c in list(self._clientes.values()):
+            c.pulsar()
+
+
+#: Maior sono seguido entre os ciclos. É o máximo que a aba nova de OUTRO
+#: programa espera pelo porteiro para começar a carregar.
+PASSO_RESPIRO = 0.5
+
+
+def _dormir(segundos, respirar, *, relogio=time.monotonic, dormir=time.sleep):
+    """O sono entre os ciclos, em passos de `PASSO_RESPIRO`, pulsando o
+    navegador a cada um.
+
+    Com `time.sleep(intervalo)` inteiro, a aba nova que um robô abria no Chrome
+    central ficava PARADA, sem nem pedir a página, até o ciclo seguinte do
+    porteiro (medido em 29/10/2026: o pedido saía no mesmo instante do ciclo,
+    até 2 min depois) — o Playwright sync do porteiro só trata o que chega do
+    navegador durante uma chamada. Pulso que falha não para o sono: navegador
+    fechado é assunto do próximo ciclo."""
+    fim = relogio() + segundos
+    while (falta := fim - relogio()) > 0:
+        with contextlib.suppress(Exception):
+            respirar()
+        dormir(min(PASSO_RESPIRO, falta))
 
 
 def _mantenedor_real(log) -> Mantenedor:
@@ -201,7 +230,7 @@ def vigiar(acessos, pasta, intervalo=120, *, ciclos=None):
                      checar_login=m.checar, log=lg.info)
             n += 1
             if ciclos is None or n < ciclos:
-                time.sleep(intervalo)
+                _dormir(intervalo, m.respirar)
     except KeyboardInterrupt:
         lg.info("porteiro parado")
     finally:

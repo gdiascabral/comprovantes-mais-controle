@@ -108,7 +108,13 @@ paths:
   (a guardada pode estar `viva` com a autenticação de antes de um login).
   `porteiro.py` (no servidor) entra pela tela: sobe o Chrome, confere o login
   a cada ciclo e fecha a própria aba ao sair (Ctrl+C, SIGTERM/SIGBREAK,
-  `atexit`).
+  `atexit`). **Entre os ciclos ele dorme PULSANDO** (`porteiro._dormir`, passos
+  de `PASSO_RESPIRO` = 0,5 s chamando `MCClient.pulsar`), e não com
+  `time.sleep(intervalo)`: medido no servidor em 29/10/2026, com o sono inteiro
+  a aba nova que um robô abria no Chrome central só pedia a página no instante
+  do ciclo seguinte do porteiro (até 2 min depois) — o robô de bases do
+  PORTAL-MORAIS desistia nos 20 s dele. O Playwright sync do porteiro só trata
+  o que chega do navegador durante uma chamada.
   **Regra: robô nunca fecha o Chrome central** — nem `browser.close()` nem
   `ctx.close()`; com `connect_over_cdp` isso derruba os outros e a sessão.
   Cada um fecha só as abas que abriu (`AbaCentral`).
