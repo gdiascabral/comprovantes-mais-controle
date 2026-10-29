@@ -209,10 +209,38 @@ def foto_do_lancamento(item: dict, valor: Decimal) -> dict:
             "titulo": str(item.get("tradePayableId") or "")}
 
 
-def para_marcar(painel, fora, lancamentos, conferencia, ja_marcados) -> list[ParaMarcar]:
+def dados_do_html(resultado) -> dict:
+    """{id do lançamento (ou "<id>#mao:<n>" do à mão): {"linha", "dado",
+    "descricao_colada"}} do `Resultado` que vai ao HTML: o que o dono COLA
+    no banco. É o que o "Autenticar no banco" procura nos comprovantes
+    (`autenticar`): o código de barras e a descrição colada. Lançamento
+    dividido fica com a 1ª parte aqui; as linhas de cada parte já vão em
+    `foto["partes"]`."""
+    from pagamentos_dia.html_pagamentos import dado_para_colar, descricao_para_colar
+    saida: dict[str, dict] = {}
+    for nome, regs in (getattr(resultado, "contas", None) or {}).items():
+        for r in regs or ():
+            id_ = str(r.get("id") or "")
+            a_mao = str(r.get("a_mao") or "")
+            chave = (f"{id_}#{a_mao}" if id_ else a_mao) if a_mao else id_
+            if not chave or chave in saida:
+                continue
+            tipo = str(r.get("tipo") or "")
+            dado = dado_para_colar(tipo, r.get("dados"))
+            saida[chave] = {"linha": dado if tipo == "Boleto" else "",
+                            "dado": dado,
+                            "descricao_colada": descricao_para_colar(r, nome)}
+    return saida
+
+
+def para_marcar(painel, fora, lancamentos, conferencia, ja_marcados,
+                do_html=None) -> list[ParaMarcar]:
     """O que sai hoje (os `saem` de cada conta), na ordem do painel e depois
     os de fora. Nasce marcado; o já marcado hoje (`ja_marcados`, os alvos de
-    `agendados_do_dia`) nasce desmarcado e não vai de novo."""
+    `agendados_do_dia`) nasce desmarcado e não vai de novo. `do_html`
+    (`dados_do_html`): a linha digitável e a descrição colada de cada um,
+    guardadas na foto para o "Autenticar no banco"."""
+    do_html = do_html or {}
     por_id = {str(i.get("id")): i for i in lancamentos or () if i.get("id")}
     a_mao = {p.alvo: p for p in conferencia.a_mao} if conferencia is not None else {}
     saida = []
@@ -242,6 +270,11 @@ def para_marcar(painel, fora, lancamentos, conferencia, ja_marcados) -> list[Par
                                   str(lanc.get("description") or "")[:200],
                                   str(lanc.get("tradePayablePaymentMethod") or ""),
                                   foto_do_lancamento(lanc, p.valor))
+            # A mesma chave do HTML: à mão é "<lançamento>#<alvo>" (ou só o alvo).
+            chave = (f"{m.lancamento_id}#{p.id}" if m.lancamento_id else p.id) if m else p.id
+            extra = do_html.get(chave)
+            if extra:
+                item.foto = {**item.foto, **{k: v for k, v in extra.items() if v}}
             item.ja_marcado = p.id in ja_marcados
             item.marcado = not item.ja_marcado
             if getattr(p, "parte", "") and m is None:

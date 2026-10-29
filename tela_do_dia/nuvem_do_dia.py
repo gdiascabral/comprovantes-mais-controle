@@ -13,7 +13,7 @@ lançamento, ou envio sem data comparável, não prova nada.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from . import agendados as ag
 from .conferencia import Conferencia
@@ -33,6 +33,12 @@ class LidoDaNuvem:
     #: agendado_id → hora da leitura de onde veio a situação, quando ela foi
     #: REAPROVEITADA numa releitura sem ERP ("" = hora desconhecida).
     provas_de: dict = field(default_factory=dict)
+    #: O que a situação usou, guardado para o "Autenticar no banco" refazê-la
+    #: com a prova do banco (`com_provas_do_banco`): lancamento_id → título
+    #: relido, agendado_id → envio da remessa, e se o ERP foi relido.
+    titulos: dict = field(default_factory=dict)
+    envios: dict = field(default_factory=dict)
+    relido: bool = False
 
 
 def _envio_deste_agendamento(envio, agendado):
@@ -80,9 +86,10 @@ def ler(nuvem, dia, hoje, *, api=None, registro=None, log=print) -> LidoDaNuvem:
         except Exception as e:                               # noqa: BLE001
             envios = {}
             avisos.append(f"não perguntei os retornos do banco ({e})")
-    linhas = []
+    linhas, envios_de = [], {}
     for a in pend:
         envio = _envio_deste_agendamento((envios.get(a.lancamento_id) or (None,))[0], a)
+        envios_de[a.id] = envio
         try:
             sit = ag.situacao(a, titulos.get(a.lancamento_id), envio,
                               relido=relido or not a.lancamento_id)
@@ -90,4 +97,29 @@ def ler(nuvem, dia, hoje, *, api=None, registro=None, log=print) -> LidoDaNuvem:
             sit = ag.Situacao("atencao", "não consegui ler o título no ERP — responda")
             avisos.append(f"título {a.lancamento_id or a.alvo} ilegível no ERP ({e}): sem pré-marca")
         linhas.append((a, sit, ultimas.get(a.id)))
-    return LidoDaNuvem(conf, de_hoje, linhas, nomes, anterior, "", avisos)
+    return LidoDaNuvem(conf, de_hoje, linhas, nomes, anterior, "", avisos,
+                       titulos=titulos, envios=envios_de, relido=relido)
+
+
+def com_provas_do_banco(lido: LidoDaNuvem, autenticacoes: dict) -> LidoDaNuvem:
+    """Os pendentes de novo, com a prova do "Autenticar no banco" como
+    `prova_extra` (`autenticar.autenticar` → {agendado_id: Autenticacao}).
+    A situação é refeita pela MESMA `agendados.situacao`, com o título e o
+    envio desta leitura: a prova do banco nunca vence "sumiu" nem "mudou".
+    Quando ela não prova, o que o banco disse vai junto da frase."""
+    linhas = []
+    for a, sit, r in lido.pendentes:
+        aut = autenticacoes.get(a.id)
+        if aut is None:
+            linhas.append((a, sit, r))
+            continue
+        try:
+            nova = ag.situacao(a, lido.titulos.get(a.lancamento_id), lido.envios.get(a.id),
+                               relido=lido.relido or not a.lancamento_id,
+                               prova_extra=aut.prova)
+        except Exception:                                    # noqa: BLE001
+            nova = sit
+        if not nova.pre_marca and aut.nota:
+            nova = ag.Situacao(nova.tag, f"{nova.frase} · banco: {aut.nota}", False, nova.prova)
+        linhas.append((a, nova, r))
+    return replace(lido, pendentes=linhas)

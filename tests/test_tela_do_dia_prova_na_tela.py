@@ -359,6 +359,7 @@ def test_frame_conta_a_prova_como_dona_do_chrome_do_sicoob():
     t.sicoob = NS(ocupado=lambda: None)
     t.agendamentos = NS(ocupado=lambda: None)
     t.prova = NS(ocupado=lambda: None)
+    t.autenticar = NS(ocupado=lambda: None)
     assert t.sicoob_ocupado() is None
     t.prova = NS(ocupado=lambda: m.OCUPADO)
     assert t.sicoob_ocupado() == m.OCUPADO
@@ -383,4 +384,5 @@ def test_app_liga_a_prova_em_todas_as_pontas():
         assert quem in propria, quem
     assert "aba_dia.prova.ocupado()" in trecho("aba_dia.sicoob.outros_no_sicoob =")
     assert "aba_dia.prova.ocupado()" in trecho("aba_dia.agendamentos.outros_no_sicoob =")
-    assert "aba_bxc.inter_ocupado = aba_dia.prova.ocupado\n" in app
+    inter = app.split("aba_bxc.inter_ocupado =", 1)[1].splitlines()[0]
+    assert "aba_dia.prova.ocupado()" in inter and "aba_dia.autenticar.ocupado()" in inter

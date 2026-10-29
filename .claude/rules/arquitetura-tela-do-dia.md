@@ -45,6 +45,9 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 | `aportes.py` | passo 3: mínimo, sugestão da aba Regras, conta-mãe primeiro com alerta forte, movimentos «À MÃO» no M (entra) e no E (sai) |
 | `para_aportes.py` | os aportes definidos viram `Operacao` da aba Aportes, com pendências (não foram) e avisos (foram, confira) |
 | `aporte_dos_socios.py` | o aporte de fora na conta-mãe dividido entre os sócios (quem são, a divisão inicial, a validação, as operações com chave `defora:`) e o aviso de igualar do Controle de aportes |
+| `autenticar.py` | "Autenticar no banco": casa cada agendado pendente com o que o banco lista (mesma conta, código de barras, depois valor + descrição colada, favorecido só desempata, grupo ambíguo não prova, pendência de assinatura derruba, dividido só com todas as partes); os conversores dos itens do Sicoob e do Inter |
+| `autenticar_sicoob.py` | a leitura do Sicoob do Autenticar: contas com pendente, conta aberta conferida, comprovantes EFETIVADOS mês a mês, Pix enviados, pendências; HTML do comprovante só dos de mesmo valor; outro acesso |
+| `autenticar_na_tela.py` | o botão do cartão "Agendados a confirmar": recusas, thread `sicoob-autenticar`, pergunta do outro acesso |
 | `excel_do_dia.py` | passo 4: o MODELO.xlsx com os números da tela |
 | `erp_do_dia.py` | os saldos do ERP, sempre pelo Chrome do app |
 | `dia_de_trabalho.py` | o JSON do dia |
@@ -713,6 +716,96 @@ resposta final. **Nada se resolve sozinho.**
 - **A releitura depois de gravar relê a nuvem (`reler_tudo`), NÃO o ERP**:
   pendente antigo guarda a situação da última Buscar, e um pago no ERP durante
   o dia só aparece pré-marcado no próximo Buscar. É o lado seguro.
+
+## Autenticar no banco (29/10/2026, pacote 2 da spec)
+
+Spec: `docs/superpowers/specs/2026-10-29-aporte-dos-socios-e-autenticar-design.md`.
+Ordem do dia do dono: 1º conferir no banco o que foi pago antes, 2º saldos,
+3º aportes.
+
+- **O cartão "Agendados a confirmar" fica sempre no topo** (vazio, diz o que
+  fazer), com o botão «🔎 Autenticar no banco» (`AutenticarNaTela`).
+- **Precisa do Buscar antes**: é ele que relê os títulos no ERP; sem
+  releitura, `agendados.situacao` não pré-marca nada, nem com prova do banco.
+- **A prova é `prova_extra`**: `nuvem_do_dia.com_provas_do_banco` refaz a
+  situação com o título e o envio guardados na leitura (`LidoDaNuvem.titulos`,
+  `envios`, `relido`) — a prova do banco nunca vence "sumiu" nem "mudou";
+  quando não prova, o que o banco disse vai na frase ("· banco: …"). O que
+  passou a ser provado nasce ☑ (`autenticar.marcas_com_provas`); o "Pago"
+  continua perguntando e nada vai à nuvem sem ele.
+- **Casamento** (`autenticar.autenticar`): mesma conta do ERP; data entre o
+  dia anterior ao agendado e hoje; código de barras (código dos dois lados e
+  diferente tira o par), senão valor + descrição colada pela régua de
+  `agendamentos_sicoob.mesma_descricao`; favorecido só desempata. Grupos de
+  quem disputa quem: só prova o grupo completo com o mesmo número dos dois
+  lados (2 agendados iguais × 2 pagamentos iguais pré-marcam; 2 × 1 não).
+  Dividido em N boletos: cada parte pelo seu código, só com todas.
+- **A foto do agendado guarda a linha e a descrição colada**
+  (`agendados.dados_do_html` do `Resultado` que vai ao HTML; chave do à mão =
+  a do HTML, `<lançamento>#<alvo>`). Agendado antigo, sem elas, casa só por
+  valor + descrição do ERP.
+- **Sicoob** (`autenticar_sicoob`): só listas; a conta aberta é conferida
+  antes; comprovante só EFETIVADO e sem Pix (o espelho TRANSF.PIX sai: o Pix
+  vem só da lista de Pix); o comprovante é aberto em HTML (sem PDF, sem
+  arquivo) só quando a lista não traz código/descrição e há agendado de mesmo
+  valor (dono, 29/10/2026). Duas contas do ERP no mesmo número não são lidas.
+  **Medido em 29/10/2026 com o login do dono** (sondas só de nomes de
+  campo, 3 contas do Sicoob e 2 do Inter): a lista de
+  comprovantes do Sicoob traz `codigoBarras` (44) nos títulos e NENHUMA
+  descrição — a Observação (a descrição colada) e a linha digitável estão no
+  HTML do comprovante; convênio vem sem código na lista. O Pix do Sicoob traz
+  `descricao`, `destino.nome`, `estado` FINALIZADO_SUCESSO e `tipo` DEBITO
+  (`PIX_EFETIVADO`, `PIX_SAIU`). No Inter: a 2ª via traz
+  `pagamento.codigoBarra`/`linhaDigitavel`, `descricao` e `pagamento.status`
+  EFETIVADO; o extrato Pix mistura enviados (`tipo` D) e recebidos (C), com a
+  descrição em `detalhePix.campoLivre`; o **extrato completo** (BFF
+  `cd.web.bancointer.com.br/ib-pfj/cc/extrato/bff/v2/home`) traz o saldo
+  (`balance.data.balances[DIGITAL_ACCOUNT].available`) — **numa das contas PJ o
+  saldo só aparece ali**, a tela inicial não pede o `/cc/saldo/v3/` da Prova
+  de saldos — e as transações com direção, valor, descrição e quem recebeu
+  (`do_extrato_inter`, `saldo_do_extrato_inter`).
+- **Travas**: thread `sicoob-autenticar`; entra no `sicoob_ocupado` da aba
+  e pergunta `outros_no_sicoob` (Extratos, Baixar, Reler Sicoob, Conferir
+  agendamentos das duas abas, Prova de saldos); todos esses perguntam a ele.
+- **Revisão de dinheiro (29/10/2026)**: (1) recusa sem Buscar DE HOJE e sem
+  o ERP relido na leitura (`autenticar_na_tela.recusa`; o `reler_tudo` depois
+  de gravar na nuvem só relê a nuvem) — senão "valor mudou" ficava escondido
+  pelo título de ontem; (2) o pagamento só vale até `FOLGA_DEPOIS` dias depois
+  do dia do agendado ou do vencimento da foto, o que vier depois — sem teto,
+  um pendente velho olhava semanas e um pagamento recorrente (ou o de um
+  remarcado já respondido) o provava; (3) Pix só prova com `estado`
+  FINALIZADO_SUCESSO e `tipo` DEBITO (medido) — sem eles, falha fechada;
+  (4) foto com `partes` (mesmo UMA) casa só pela linha de cada parte, nunca
+  pela `foto["linha"]` (a da 1ª parte do HTML), e parte nunca casa por
+  descrição; o valor bate ao centavo também no código de barras; (5) a ☑ só
+  muda para quem mudou de pré-marca (perdeu a prova perde a marca; quem o
+  dono desmarcou e não mudou fica desmarcado); (6) descrição do banco mais
+  curta que a colada só vale com `CORTE_DO_BANCO` caracteres ou mais (A
+  MEDIR) — "… LT 10" não prova "… LT 10 E 11".
+- **Inter (29/10/2026, `autenticar_inter`)**: depois do Sicoob, uma conta
+  por vez, cada uma com o seu QR, pela sessão do `inter_saldo.ler_conta` da
+  Prova (conta conferida, saldo, print) com o gancho `extra`: extrato Pix (só
+  enviados), 2ª via PAGAMENTO/DARF (só EFETIVADO) e o extrato completo, de
+  onde só entra a saída que NÃO é Pix e não tem par de mesmo valor e dia na
+  2ª via (`do_extrato_sem_repetir`: é o convênio). Contas pela régua da Prova
+  (`contas_a_ler`: `contas_mc` + um login por empresa; duas contas do ERP no
+  mesmo login não são lidas). Lista que falha deixa a conta "não lida" (nunca
+  "nada no banco"). **O saldo lido vai para `DD MM - saldos do inter.json`**
+  (`gravar_saldos`) e a **Prova de saldos o usa no mesmo dia sem pedir o QR
+  de novo** (`prova_na_tela._saldo_do_autenticar`, com a hora e o print do
+  Autenticar). `ComprovantesFrame.inter_ocupado` passa a contar o Autenticar.
+  **Revisão de dinheiro do Inter (29/10/2026)**: só vale a resposta do BFF
+  `v2/home` com HTTP 200, e o corpo tem de trazer `transactions.data` (lista)
+  — senão a conta fica "não lida", nunca "nada no banco"; do extrato completo
+  sai todo tipo com "PIX" e toda saída com par de mesmo valor e dia no
+  extrato Pix (qualquer direção) ou na 2ª via (qualquer status); saída com
+  ENTRADA de mesmo valor no mesmo dia ou depois (estorno) não prova; 2ª via
+  sem `pagamento.status` EFETIVADO não prova; o arquivo do saldo guarda o
+  NÚMERO da conta conferida e a Prova só o usa com o mesmo número (vazio de
+  um lado = lê de novo) e lido há até `IDADE_MAXIMA_MIN` (120) minutos; o
+  `lido_em` é a hora do saldo, antes das listas; o saldo em texto só vale
+  com dois centavos ("R$ 1.234" sem centavos é recusado).
+- **Falta (pendente na spec)**: os aportes do dia anterior.
 
 ## Lista do diretor (entrega 2)
 
