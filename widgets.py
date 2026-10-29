@@ -2276,6 +2276,80 @@ def _instalar_roda(widget) -> None:
         pass
 
 
+class TrilhoFino(tk.Canvas):
+    """A barra de rolagem fina, no estilo do app do Claude (29/10/2026).
+
+    O `ttk.Scrollbar` do sv-ttk é grosso e ficava POR CIMA da beira da coluna,
+    comendo o fim do item aberto do menu ("o item de rolar invade o menu").
+    Este é um traço de 4 px com as pontas redondas, na cor da `linha`, num
+    vão que a área reserva à direita — o conteúdo nunca passa por baixo dele.
+
+    Fala a mesma língua do `ttk.Scrollbar` para quem o usa: `set(lo, hi)`
+    recebe a fração visível e `command("moveto", fração)` pede a rolagem."""
+
+    def __init__(self, pai, command=None, fundo: str = "fundo", **kw):
+        c = cores()
+        self._fundo = fundo
+        self._comando = command
+        self._lo, self._hi = 0.0, 1.0
+        self._pega = None
+        kw.setdefault("width", px(8))
+        kw.setdefault("highlightthickness", 0)
+        kw.setdefault("borderwidth", 0)
+        kw.setdefault("cursor", "arrow")
+        super().__init__(pai, background=c[fundo], **kw)
+        self.bind("<Configure>", lambda _e: self._desenhar(), add="+")
+        self.bind("<Button-1>", self._apertou)
+        self.bind("<B1-Motion>", self._arrastou)
+        self.bind("<ButtonRelease-1>", lambda _e: setattr(self, "_pega", None))
+        _repintaveis.add(self)
+
+    def set(self, lo, hi):                                    # noqa: A003
+        self._lo, self._hi = float(lo), float(hi)
+        self._desenhar()
+
+    def get(self):
+        return self._lo, self._hi
+
+    def _desenhar(self):
+        try:
+            larg, alt = self.winfo_width(), self.winfo_height()
+        except tk.TclError:
+            return
+        self.delete("all")
+        if alt < 4 or self._hi - self._lo >= 1.0:
+            return
+        esp = px(4)
+        x = larg / 2
+        y0 = self._lo * alt + esp / 2 + 1
+        y1 = max(self._hi * alt - esp / 2 - 1, y0 + esp)
+        self.create_line(x, y0, x, y1, width=esp, capstyle="round",
+                         fill=cores()["linha"])
+
+    def _apertou(self, ev):
+        alt = max(self.winfo_height(), 1)
+        y = ev.y / alt
+        if self._lo <= y <= self._hi:
+            self._pega = y - self._lo            # pegou o traço: arrasta
+        else:                                    # clicou no trilho: pula
+            self._pega = (self._hi - self._lo) / 2
+            self._arrastou(ev)
+
+    def _arrastou(self, ev):
+        if self._pega is None or self._comando is None:
+            return
+        alt = max(self.winfo_height(), 1)
+        alvo = min(max(ev.y / alt - self._pega, 0.0), 1.0)
+        self._comando("moveto", alvo)
+
+    def aplicar_cores(self, escuro: bool | None = None):
+        try:
+            self.configure(background=cores()[self._fundo])
+        except tk.TclError:
+            return
+        self._desenhar()
+
+
 class AreaRolavel(tk.Frame):
     """Um pedaço da tela que ROLA quando o que tem dentro não cabe.
 
@@ -2318,6 +2392,9 @@ class AreaRolavel(tk.Frame):
     QUADROS = 6
     QUADRO_MS = 16
 
+    #: O vão da direita onde mora o `TrilhoFino` (px antes da escala).
+    _RESERVA = 10
+
     def __init__(self, pai, fundo: str = "fundo", **kw):
         c = cores()
         self._fundo = fundo
@@ -2335,8 +2412,10 @@ class AreaRolavel(tk.Frame):
                                 width=1, height=1,
                                 yscrollincrement=1)
         self.canvas.pack(fill="both", expand=True)
-        self.barra = ttk.Scrollbar(self.moldura, orient="vertical",
-                                   command=self._barra_pediu)
+        # O traço fino (29/10/2026) mora num vão próprio à direita: o
+        # conteúdo é dimensionado `_RESERVA` mais estreito que a área.
+        self.barra = TrilhoFino(self.moldura, command=self._barra_pediu,
+                                fundo=fundo)
         self.canvas.configure(yscrollcommand=self._barra_mudou)
         kw.setdefault("background", c[fundo])
         kw.setdefault("highlightthickness", 0)
@@ -2441,8 +2520,9 @@ class AreaRolavel(tk.Frame):
             # de tamanho e nenhum `<Configure>` dispara — foi o Anexar com as
             # contas recém-carregadas, cortado até a próxima conferência.
             try:
-                self.canvas.itemconfigure(self._janela, width=max(larg, 1),
-                                          height=alt if alt > req_a else 0)
+                self.canvas.itemconfigure(
+                    self._janela, width=max(larg - px(self._RESERVA), 1),
+                    height=alt if alt > req_a else 0)
                 # `width`/`height` do Canvas são o que a área PEDE à aba: o
                 # tamanho natural do conteúdo. Com isso a aba continua pedindo
                 # à janela o mesmo que pedia antes de existir rolagem.
@@ -2498,8 +2578,10 @@ class AreaRolavel(tk.Frame):
         try:
             if precisa and not self._barra_visivel:
                 self.barra.place(relx=1.0, rely=0.0, relheight=1.0,
-                                 anchor="ne")
-                self.barra.lift()
+                                 anchor="ne", width=px(self._RESERVA))
+                # `tkraise` e não `lift`: no Canvas, `lift` é o `tag_raise`
+                # dos itens desenhados, e sem argumento estoura em silêncio.
+                tk.Misc.tkraise(self.barra)
             elif not precisa and self._barra_visivel:
                 self.barra.place_forget()
             self._barra_visivel = precisa
@@ -2715,7 +2797,7 @@ class BarraTopo(tk.Frame):
     #: que a promessa e a entrega são a mesma coisa.
     DICA = "Ir para uma tela…  (Ctrl+K)"
 
-    def __init__(self, pai, marca: str = "mais controle · comprovantes",
+    def __init__(self, pai, marca: str = "mais controle · automações",
                  dica: str = "", **kw):
         c = cores()
         kw.setdefault("background", c["marca_barra"])

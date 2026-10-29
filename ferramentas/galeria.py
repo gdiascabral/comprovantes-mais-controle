@@ -288,7 +288,7 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
     herda o de um `Tk()` destruído). Devolve `(quadros, mostrar,
     aplicar_tema)`. Quem falhar ao construir fica de fora de `quadros` com
     um aviso no console — as outras abas continuam sendo fotografadas."""
-    root.title("Galeria de telas — Comprovantes Mais Controle")
+    root.title("Galeria de telas — Automações Mais Controle")
     root.geometry(f"{largura}x{altura}+40+40")
     # Tamanho fixo: as capturas só são comparáveis entre rodadas (e entre
     # "antes" e "depois") se a janela for sempre do mesmo jeito.
