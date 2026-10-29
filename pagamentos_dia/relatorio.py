@@ -1457,26 +1457,39 @@ def conferir_cnpj_da_nota(favorecido: str, pago_para: str, participantes,
 
 #: Como os documentos escrevem quadra e lote, levados à sigla do ERP antes de
 #: procurar (dono, 28/10/2026: "dificuldade para achar o LT … para não
-#: pagarmos nada errado"). "L." só vale logo depois de uma quadra, para não
-#: pegar outra abreviação qualquer.
+#: pagarmos nada errado"). Espaços contados (`[ \t]{0,3}`), nunca `\s*`: não
+#: atravessa linha e não fica quadrático em texto de OCR cheio de brancos.
+#: "Q." e "L." só valem num par ("Q. 9 L. 7"): soltos são quantidade.
+_E = r"[ \t]{0,3}"
 _SINONIMOS_ENDERECO = (
-    (re.compile(r"\b(?:QUADRAS?|QDA|QDS|Q\.)(?=\s*[.:\-]?\s*\d)"), "QD "),
-    (re.compile(r"\b(?:LOTES?|LTS|LT\.)(?=\s*[.:\-]?\s*\d)"), "LT "),
-    (re.compile(r"(\bQD\s*[.:\-]?\s*\d{1,4}[A-Z]?\s*[,;\-]?\s*)L\.(?=\s*\d)"), r"\1LT "),
+    (re.compile(r"\bQ\." + _E + r"(\d{1,4}[A-Z]?)" + _E + r"[,;\-]?" + _E + r"L\." + _E + r"(?=\d)"),
+     r"QD \1 LT "),
+    (re.compile(r"\b(?:QUADRAS?|QDA|QDS)(?=" + _E + r"[.:\-]?" + _E + r"\d)"), "QD "),
+    (re.compile(r"\b(?:LOTES?|LTS|LT\.)(?=" + _E + r"[.:\-]?" + _E + r"\d)"), "LT "),
+    (re.compile(r"(\bQD" + _E + r"[.:\-]?" + _E + r"\d{1,4}[A-Z]?" + _E + r"[,;\-]?" + _E
+                + r")L\.(?=" + _E + r"\d)"), r"\1LT "),
     # Colado pelo OCR ou pelo ERP: "QD129LT71" → "QD 129 LT 71".
-    (re.compile(r"(?<=\d)(?=(?:QD|LT)\s*\d)"), " "),
+    (re.compile(r"(?<=\d)(?=(?:QD|LT)[ \t]?\d)"), " "),
     (re.compile(r"\b(QD|LT)(?=\d)"), r"\1 "),
 )
+
+#: Depois do número, o que mostra que NÃO é lote: decimal ou data ("LT 18,0000",
+#: "7 - 12/10"), e unidade de quantidade ("5 UN", "20 SACOS").
+_NAO_E_LOTE = (r"(?![.,]\d)(?!/\d{1,2}/\d)(?!/\d{4})(?!" + _E + r"(?:UN|UND|UNID|SC|SACOS?|KG|M2|M3|M|PC|PCS|CX|L|"
+               r"LITROS?|GL|ML)\b)")
 
 #: QD/LT/CASA/CS + número, com ou sem pontuação entre os dois ("LT 11",
 #: "LT.11", "LT-11", "LT: 11"); o número pode ter UMA letra colada ou com
 #: hífen ("LT 71A", "LT 71-A", "QD 26A"), e o lote pode vir em lista ("LT 10,
-#: 11 e 12", "LT 10/11", "LT 10-11", "LOTES 71A, 71B"). A lista é só de LT:
-#: "QD 5, 6" é raro e "QD 5 E LT 7" não pode virar uma lista de quadras.
+#: 11 e 12", "LT 10/11", "LT 10-11" sem espaço, "LOTES 71A, 71B"). A lista é só
+#: de LT: "QD 5 E LT 7" não pode virar uma lista de quadras.
 _TOKEN_ENDERECO = re.compile(
-    r"\b(QD|LT|CASA|CS)\s*[.:\-]?\s*(\d{1,4})(?:-?([A-Z]))?\b"
-    r"((?:\s*(?:,|/|-|\bE\b)\s*\d{1,3}(?:-?[A-Z])?\b)*)")
+    r"\b(QD|LT|CASA|CS)" + _E + r"[.:\-]?" + _E + r"(\d{1,4})(?:-?([A-Z]))?\b" + _NAO_E_LOTE
+    + r"((?:(?:" + _E + r"(?:,|/|\bE\b)" + _E + r"|-)\d{1,3}(?:-?[A-Z])?\b" + _NAO_E_LOTE + r")*)")
 _ITEM_DA_LISTA = re.compile(r"(\d{1,3})(?:-?([A-Z]))?")
+
+#: Distância máxima (caracteres) entre o fim da quadra e o lote do mesmo par.
+PERTO_DA_QUADRA = 15
 
 
 def _normalizar_endereco(texto: str) -> str:
@@ -1491,14 +1504,16 @@ def _numero(n: str, letra: str = "") -> str:
     return (n.lstrip("0") or "0") + (letra or "")
 
 
-def _sequencia_de_endereco(texto: str) -> list[tuple[str, str]]:
-    """[(sigla, número)] na ordem do texto, com as listas de lote abertas."""
+def _sequencia_de_endereco(alvo: str) -> list[tuple[str, str, int, int]]:
+    """[(sigla, número, início, fim)] de um texto JÁ normalizado, na ordem,
+    com as listas de lote abertas (os itens herdam a posição do token)."""
     saida = []
-    for m in _TOKEN_ENDERECO.finditer(_normalizar_endereco(texto)):
+    for m in _TOKEN_ENDERECO.finditer(alvo):
         sigla, numero, letra, resto = m.groups()
-        saida.append((sigla, _numero(numero, letra)))
+        saida.append((sigla, _numero(numero, letra), m.start(), m.end()))
         if sigla == "LT" and resto:
-            saida.extend(("LT", _numero(n, l)) for n, l in _ITEM_DA_LISTA.findall(resto))
+            saida.extend(("LT", _numero(n, l), m.start(), m.end())
+                         for n, l in _ITEM_DA_LISTA.findall(resto))
     return saida
 
 
@@ -1511,24 +1526,40 @@ def _tokens_de_endereco(texto: str) -> list[str]:
     falhava contra "LT.11" (com ponto), e a linha dizia "LT 11 não aparece"
     quando ele estava ali, só com outra pontuação (dono, 22/09/2026).
     """
-    return list(dict.fromkeys(f"{sigla} {numero}" for sigla, numero in
-                              _sequencia_de_endereco(texto)))
+    return list(dict.fromkeys(f"{sigla} {numero}" for sigla, numero, _i, _f in
+                              _sequencia_de_endereco(_normalizar_endereco(texto))))
 
 
 def _pares_quadra_lote(texto: str) -> set[tuple[str, str]]:
-    """{(quadra, lote)}: cada LT casado com a ÚLTIMA quadra citada antes dele
-    no mesmo texto. Um lote sem quadra antes não forma par."""
-    pares, quadra = set(), None
-    for sigla, numero in _sequencia_de_endereco(texto):
-        if sigla == "QD":
-            quadra = numero
-        elif sigla == "LT" and quadra is not None:
-            pares.add((quadra, numero))
+    """{(quadra, lote)}: o LT casa com a quadra logo antes dele, na MESMA
+    linha e a até `PERTO_DA_QUADRA` caracteres — senão a quadra do cabeçalho
+    de um pedido casaria com o "LT 5" (litro) de um item lá embaixo."""
+    pares = set()
+    for linha in _normalizar_endereco(texto).splitlines():
+        quadra, fim_da_quadra = None, -1
+        for sigla, numero, inicio, fim in _sequencia_de_endereco(linha):
+            if sigla == "QD":
+                quadra, fim_da_quadra = numero, fim
+            elif sigla == "LT" and quadra is not None:
+                if inicio - fim_da_quadra <= PERTO_DA_QUADRA:
+                    pares.add((quadra, numero))
     return pares
 
 
 def _so_digitos(lote: str) -> str:
     return re.sub(r"\D", "", lote)
+
+
+def _lote_parecido(a: str, b: str) -> bool:
+    """Mesmo lote lido torto pelo OCR: a letra comida ("7" × "7A") ou lida
+    como dígito ("74" × "7A", "78" × "7B"). "7A" × "7B" NÃO é parecido."""
+    if a == b:
+        return True
+    if a.isdigit() != b.isdigit():
+        so_num, com_letra = (a, b) if a.isdigit() else (b, a)
+        base = _so_digitos(com_letra)
+        return so_num == base or (len(so_num) == len(base) + 1 and so_num.startswith(base))
+    return False
 
 
 def _enderecos(item: dict) -> tuple[list[str], list[str]]:
@@ -1550,48 +1581,50 @@ def _conferir_endereco(item: dict, textos) -> tuple[str, bool]:
     daí a pergunta "o boleto é mesmo desta casa?". Ela vale para todo
     fornecedor que anexe pedido ou orçamento, então a checagem é geral.
 
-    Três desfechos (dono, 28/10/2026, "para não pagarmos nada errado"):
-    - ✓ quando a quadra do lançamento E um dos lotes dele estão no anexo;
-    - DIVERGE só quando o anexo AFIRMA outro lote na mesma quadra (o par
-      quadra+lote do anexo é de outro imóvel) e nenhum lote do lançamento
-      aparece — antes isso saía "✓" só pela quadra;
-    - "?" para tudo que é falta de prova: lote não achado, quadra não achada,
-      lote parecido ("71" contra "71A", o OCR come a letra).
-    "Não achei" nunca alarma: alarme falso ensina o usuário a ignorar alarme.
+    Desfechos (dono, 28/10/2026, "para não pagarmos nada errado"):
+    - ✓ quando a quadra do lançamento E um lote dele estão no anexo — e,
+      havendo no anexo um par quadra+lote nessa quadra, o par tem de ser o
+      do lançamento (pedido de várias obras não confere por token solto);
+    - "⚠ LOTE DIFERENTE" quando o anexo afirma outro par quadra+lote na
+      quadra do lançamento e nenhum lote dele aparece — antes isso saía "✓"
+      só pela quadra. É AVISO, não divergência: o endereço da sede ou da loja
+      no boleto (Goiânia escreve tudo em Qd./Lt.) daria o mesmo par, e a
+      divergência bloqueia o pagamento sem jeito de liberar na tela;
+    - "?" para falta de prova: lote não achado, quadra não achada, lote
+      parecido (a letra comida ou lida como dígito pelo OCR).
+    O segundo elemento fica False: quem decide bloquear é o dono.
     """
     cc = centro_de_custo(item)
     fonte = f"{cc} {item.get('description') or ''}"
     esperados = _tokens_de_endereco(fonte)
     if not esperados:
         return "", False
-    do_anexo = " \n ".join(textos)
+    do_anexo = "\n".join(textos)
     achados = _tokens_de_endereco(do_anexo)
     qds = [t[3:] for t in esperados if t.startswith("QD ")]
     lts = [t[3:] for t in esperados if t.startswith("LT ")]
     outros = [t for t in esperados if not t.startswith(("QD ", "LT "))]
     qds_ok = [q for q in qds if f"QD {q}" in achados]
-    lts_ok = [lt for lt in lts if f"LT {lt}" in achados]
     outros_falta = [t for t in outros if t not in achados]
 
-    if lts and qds and not lts_ok:
-        pares_cc = set()
-        for pedaco in [*cc.split("|"), item.get("description") or ""]:
-            pares_cc |= _pares_quadra_lote(pedaco)
-        quadras_cc = {q for q, _lt in pares_cc} or set(qds)
-        lotes_cc = {lt for _q, lt in pares_cc} or set(lts)
-        alheios = sorted(lt for q, lt in _pares_quadra_lote(do_anexo)
-                         if q in quadras_cc and lt not in lotes_cc)
-        # Parecido = mesmo número e um dos dois SEM letra (o OCR come a
-        # letra); "7A" contra "7B" são dois lotes, e isso diverge.
-        parecidos = [lt for lt in alheios if any(
-            _so_digitos(lt) == _so_digitos(x) and (lt.isdigit() or x.isdigit())
-            for x in lotes_cc)]
-        if alheios and not parecidos:
-            return (f"endereço DIVERGE (lote: anexo LT {', '.join(alheios)} × "
-                    f"lançamento LT {', '.join(lts)})"), True
-        if parecidos:
-            return (f"endereço ? (anexo LT {', '.join(parecidos)} × lançamento "
+    pares_cc = set()
+    for pedaco in [*cc.split("|"), item.get("description") or ""]:
+        pares_cc |= _pares_quadra_lote(pedaco)
+    quadras_cc = {q for q, _lt in pares_cc} or set(qds)
+    pares_anexo = {(q, lt) for q, lt in _pares_quadra_lote(do_anexo) if q in quadras_cc}
+    if pares_anexo:
+        lts_ok = [lt for lt in lts if any((q, lt) in pares_anexo for q in quadras_cc)]
+    else:
+        lts_ok = [lt for lt in lts if f"LT {lt}" in achados]
+
+    if lts and qds and not lts_ok and pares_anexo:
+        alheios = sorted({lt for _q, lt in pares_anexo})
+        if any(_lote_parecido(a, x) for a in alheios for x in lts):
+            return (f"endereço ? (anexo LT {', '.join(alheios)} × lançamento "
                     f"LT {', '.join(lts)} — confira a letra do lote)"), False
+        return (f"endereço ⚠ LOTE DIFERENTE (anexo QD {', '.join(sorted(quadras_cc))} "
+                f"LT {', '.join(alheios)} × lançamento LT {', '.join(lts)} — confira o "
+                f"anexo)"), False
 
     if qds_ok == qds and (lts_ok or not lts) and not outros_falta:
         ok = ([f"QD {', '.join(qds)}"] if qds else []) + \
