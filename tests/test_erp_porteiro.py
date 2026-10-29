@@ -75,6 +75,9 @@ class _Cli:
     def sair(self):
         self.saiu = True
 
+    def pulsar(self):
+        self.pulsos = getattr(self, "pulsos", 0) + 1
+
 
 def test_cliente_e_reaproveitado_e_recriado_se_morrer(tmp_path):
     a = _acessos(tmp_path)["principal"]
@@ -209,3 +212,65 @@ def test_subir_chrome_delega_a_limpeza_ao_garantir_chrome(tmp_path, monkeypatch)
                         lambda p: pytest.fail("limpeza fora da trava"))
     porteiro._subir_chrome(a)
     assert chamadas == [a]
+
+
+# ------------------------------- entre os ciclos: o porteiro não prende as abas
+# Medido no servidor em 29/10/2026: com o porteiro em `time.sleep(120)`, a aba
+# nova que OUTRO programa abria no Chrome central só pedia a página quando o
+# porteiro acordava (pedido às 11:53:39.157, ciclo às 11:53:39,188) — o robô
+# de bases desistia nos 20 s dele. O Playwright sync só trata eventos durante
+# uma chamada; por isso o sono entre os ciclos é em passos, pulsando.
+
+class _Relogio:
+    def __init__(self):
+        self.agora, self.sonos = 0.0, []
+
+    def __call__(self):
+        return self.agora
+
+    def dormir(self, s):
+        self.sonos.append(s)
+        self.agora += s
+
+
+def test_dormir_pulsa_ao_longo_do_intervalo_sem_sono_longo():
+    r, pulsos = _Relogio(), []
+    porteiro._dormir(120, lambda: pulsos.append(r.agora), relogio=r, dormir=r.dormir)
+    assert 119.9 <= r.agora <= 120.0 + porteiro.PASSO_RESPIRO
+    assert max(r.sonos) <= porteiro.PASSO_RESPIRO
+    assert len(pulsos) >= 120 / porteiro.PASSO_RESPIRO - 1
+
+
+def test_dormir_sobrevive_a_pulso_que_falha():
+    r = _Relogio()
+
+    def pulso():
+        raise RuntimeError("navegador fechado")
+    porteiro._dormir(5, pulso, relogio=r, dormir=r.dormir)
+    assert r.agora >= 5
+
+
+def test_respirar_pulsa_cada_cliente_aberto(tmp_path):
+    clientes = []
+
+    def abrir(a):
+        c = _Cli()
+        clientes.append(c)
+        return c
+    m = porteiro.Mantenedor(abrir, lambda c: c.sair())
+    m.respirar()                                   # sem cliente: nada a fazer
+    for a in _acessos(tmp_path).values():
+        m.checar(a)
+    m.respirar()
+    assert [c.pulsos for c in clientes] == [1, 1]
+
+
+def test_vigiar_dorme_respirando_entre_os_ciclos(tmp_path, monkeypatch):
+    m, _, _ = _vigia_com_dubles(tmp_path, monkeypatch)
+    sonos = []
+    monkeypatch.setattr(porteiro, "_dormir",
+                        lambda s, respirar: sonos.append((s, respirar)))
+    monkeypatch.setattr(porteiro.time, "sleep",
+                        lambda s: pytest.fail("sono que prende as abas novas"))
+    porteiro.vigiar(_acessos(tmp_path), tmp_path / "log", intervalo=120, ciclos=3)
+    assert sonos == [(120, m.respirar)] * 2
