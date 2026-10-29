@@ -531,7 +531,7 @@ def test_endereco_com_ponto_entre_letra_e_numero_e_reconhecido():
                       costCentreDetails=[{"workName": "RPB 24 QD 26A LT 11"}])
     resumo, _ = relatorio.conferir_documento(
         item, [], ["OBRA: RPB 24 QD.26A LT.11 BENEFICIO ANEXO IX"])
-    assert "endereço ✓ (LT 11)" in resumo
+    assert "endereço ✓ (QD 26A LT 11)" in resumo
     assert "LT 11 não aparece" not in resumo
 
 

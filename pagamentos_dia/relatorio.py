@@ -1455,10 +1455,51 @@ def conferir_cnpj_da_nota(favorecido: str, pago_para: str, participantes,
                        f" × cadastro {', '.join(_cnpj_fmt(c) for c in conhecidos)}")
 
 
-#: QD/LT/CASA/CS + número, com ou sem ponto entre os dois ("LT 11", "LT.11",
-#: "LT . 11"): o ERP escreve com espaço, e a NF do fornecedor às vezes separa
-#: com ponto — mesmo lote, pontuação diferente.
-_TOKEN_ENDERECO = re.compile(r"\b(QD|LT|CASA|CS)\s*\.?\s*(\d{1,4})\b", re.I)
+#: Como os documentos escrevem quadra e lote, levados à sigla do ERP antes de
+#: procurar (dono, 28/10/2026: "dificuldade para achar o LT … para não
+#: pagarmos nada errado"). "L." só vale logo depois de uma quadra, para não
+#: pegar outra abreviação qualquer.
+_SINONIMOS_ENDERECO = (
+    (re.compile(r"\b(?:QUADRAS?|QDA|QDS|Q\.)(?=\s*[.:\-]?\s*\d)"), "QD "),
+    (re.compile(r"\b(?:LOTES?|LTS|LT\.)(?=\s*[.:\-]?\s*\d)"), "LT "),
+    (re.compile(r"(\bQD\s*[.:\-]?\s*\d{1,4}[A-Z]?\s*[,;\-]?\s*)L\.(?=\s*\d)"), r"\1LT "),
+    # Colado pelo OCR ou pelo ERP: "QD129LT71" → "QD 129 LT 71".
+    (re.compile(r"(?<=\d)(?=(?:QD|LT)\s*\d)"), " "),
+    (re.compile(r"\b(QD|LT)(?=\d)"), r"\1 "),
+)
+
+#: QD/LT/CASA/CS + número, com ou sem pontuação entre os dois ("LT 11",
+#: "LT.11", "LT-11", "LT: 11"); o número pode ter UMA letra colada ou com
+#: hífen ("LT 71A", "LT 71-A", "QD 26A"), e o lote pode vir em lista ("LT 10,
+#: 11 e 12", "LT 10/11", "LT 10-11", "LOTES 71A, 71B"). A lista é só de LT:
+#: "QD 5, 6" é raro e "QD 5 E LT 7" não pode virar uma lista de quadras.
+_TOKEN_ENDERECO = re.compile(
+    r"\b(QD|LT|CASA|CS)\s*[.:\-]?\s*(\d{1,4})(?:-?([A-Z]))?\b"
+    r"((?:\s*(?:,|/|-|\bE\b)\s*\d{1,3}(?:-?[A-Z])?\b)*)")
+_ITEM_DA_LISTA = re.compile(r"(\d{1,3})(?:-?([A-Z]))?")
+
+
+def _normalizar_endereco(texto: str) -> str:
+    alvo = sem_acento(texto or "").upper()
+    for regra, troca in _SINONIMOS_ENDERECO:
+        alvo = regra.sub(troca, alvo)
+    return alvo
+
+
+def _numero(n: str, letra: str = "") -> str:
+    """"007" e "7" são o mesmo lote; a letra fica ("71A")."""
+    return (n.lstrip("0") or "0") + (letra or "")
+
+
+def _sequencia_de_endereco(texto: str) -> list[tuple[str, str]]:
+    """[(sigla, número)] na ordem do texto, com as listas de lote abertas."""
+    saida = []
+    for m in _TOKEN_ENDERECO.finditer(_normalizar_endereco(texto)):
+        sigla, numero, letra, resto = m.groups()
+        saida.append((sigla, _numero(numero, letra)))
+        if sigla == "LT" and resto:
+            saida.extend(("LT", _numero(n, l)) for n, l in _ITEM_DA_LISTA.findall(resto))
+    return saida
 
 
 def _tokens_de_endereco(texto: str) -> list[str]:
@@ -1470,9 +1511,24 @@ def _tokens_de_endereco(texto: str) -> list[str]:
     falhava contra "LT.11" (com ponto), e a linha dizia "LT 11 não aparece"
     quando ele estava ali, só com outra pontuação (dono, 22/09/2026).
     """
-    return list(dict.fromkeys(
-        f"{letra.upper()} {numero}"
-        for letra, numero in _TOKEN_ENDERECO.findall(sem_acento(texto or ""))))
+    return list(dict.fromkeys(f"{sigla} {numero}" for sigla, numero in
+                              _sequencia_de_endereco(texto)))
+
+
+def _pares_quadra_lote(texto: str) -> set[tuple[str, str]]:
+    """{(quadra, lote)}: cada LT casado com a ÚLTIMA quadra citada antes dele
+    no mesmo texto. Um lote sem quadra antes não forma par."""
+    pares, quadra = set(), None
+    for sigla, numero in _sequencia_de_endereco(texto):
+        if sigla == "QD":
+            quadra = numero
+        elif sigla == "LT" and quadra is not None:
+            pares.add((quadra, numero))
+    return pares
+
+
+def _so_digitos(lote: str) -> str:
+    return re.sub(r"\D", "", lote)
 
 
 def _enderecos(item: dict) -> tuple[list[str], list[str]]:
@@ -1487,25 +1543,69 @@ def _enderecos(item: dict) -> tuple[list[str], list[str]]:
     return estruturados, ruas
 
 
-def _conferir_endereco(item: dict, textos) -> str:
-    """"endereço ✓" / "endereço ?" para QUALQUER linha com QD/LT.
+def _conferir_endereco(item: dict, textos) -> tuple[str, bool]:
+    """(texto, divergiu) para QUALQUER linha com QD/LT.
 
     Há fornecedor que anexa o pedido, e no pedido está o endereço da obra —
     daí a pergunta "o boleto é mesmo desta casa?". Ela vale para todo
     fornecedor que anexe pedido ou orçamento, então a checagem é geral.
 
-    NUNCA vira DIVERGE: o anexo escreve "QUADRA 40" onde o ERP escreveu
-    "QD 40", e alarme falso ensina o usuário a ignorar alarme. Aqui só se
-    informa o que foi possível confirmar.
+    Três desfechos (dono, 28/10/2026, "para não pagarmos nada errado"):
+    - ✓ quando a quadra do lançamento E um dos lotes dele estão no anexo;
+    - DIVERGE só quando o anexo AFIRMA outro lote na mesma quadra (o par
+      quadra+lote do anexo é de outro imóvel) e nenhum lote do lançamento
+      aparece — antes isso saía "✓" só pela quadra;
+    - "?" para tudo que é falta de prova: lote não achado, quadra não achada,
+      lote parecido ("71" contra "71A", o OCR come a letra).
+    "Não achei" nunca alarma: alarme falso ensina o usuário a ignorar alarme.
     """
-    estruturados = _enderecos(item)[0]
-    if not estruturados:
-        return ""
-    achados = _tokens_de_endereco(" ".join(textos))
-    faltando = [p for p in estruturados if p not in achados]
-    if not faltando:
-        return f"endereço ✓ ({', '.join(estruturados)[:40]})"
-    return f"endereço ? ({', '.join(faltando)[:40]} não aparece)"
+    cc = centro_de_custo(item)
+    fonte = f"{cc} {item.get('description') or ''}"
+    esperados = _tokens_de_endereco(fonte)
+    if not esperados:
+        return "", False
+    do_anexo = " \n ".join(textos)
+    achados = _tokens_de_endereco(do_anexo)
+    qds = [t[3:] for t in esperados if t.startswith("QD ")]
+    lts = [t[3:] for t in esperados if t.startswith("LT ")]
+    outros = [t for t in esperados if not t.startswith(("QD ", "LT "))]
+    qds_ok = [q for q in qds if f"QD {q}" in achados]
+    lts_ok = [lt for lt in lts if f"LT {lt}" in achados]
+    outros_falta = [t for t in outros if t not in achados]
+
+    if lts and qds and not lts_ok:
+        pares_cc = set()
+        for pedaco in [*cc.split("|"), item.get("description") or ""]:
+            pares_cc |= _pares_quadra_lote(pedaco)
+        quadras_cc = {q for q, _lt in pares_cc} or set(qds)
+        lotes_cc = {lt for _q, lt in pares_cc} or set(lts)
+        alheios = sorted(lt for q, lt in _pares_quadra_lote(do_anexo)
+                         if q in quadras_cc and lt not in lotes_cc)
+        # Parecido = mesmo número e um dos dois SEM letra (o OCR come a
+        # letra); "7A" contra "7B" são dois lotes, e isso diverge.
+        parecidos = [lt for lt in alheios if any(
+            _so_digitos(lt) == _so_digitos(x) and (lt.isdigit() or x.isdigit())
+            for x in lotes_cc)]
+        if alheios and not parecidos:
+            return (f"endereço DIVERGE (lote: anexo LT {', '.join(alheios)} × "
+                    f"lançamento LT {', '.join(lts)})"), True
+        if parecidos:
+            return (f"endereço ? (anexo LT {', '.join(parecidos)} × lançamento "
+                    f"LT {', '.join(lts)} — confira a letra do lote)"), False
+
+    if qds_ok == qds and (lts_ok or not lts) and not outros_falta:
+        ok = ([f"QD {', '.join(qds)}"] if qds else []) + \
+             ([f"LT {', '.join(lts_ok)}"] if lts_ok else []) + outros
+        falta = [lt for lt in lts if lt not in lts_ok]
+        if falta:
+            ok.append(f"; falta LT {', '.join(falta)}")
+        return f"endereço ✓ ({' '.join(ok)})".replace(" ;", ";"), False
+    faltando = ([f"QD {q}" for q in qds if q not in qds_ok]
+                + ([f"LT {', '.join(lts)}"] if lts and not lts_ok else [])
+                + outros_falta)
+    if qds and qds_ok == qds:
+        return f"endereço ? (QD {', '.join(qds)} ok, {', '.join(faltando)} não aparece)", False
+    return f"endereço ? ({', '.join(faltando)} não aparece)", False
 
 
 def _conferir_utilidade(item, files, textos) -> tuple[list[str], bool]:
@@ -1616,10 +1716,12 @@ def conferir_documento(item: dict, files, textos, overview=None,
     else:
         partes.append(f"fornecedor ? ({(item.get('paidTo') or '')[:20]} não aparece)")
 
-    endereco = _conferir_endereco(item, textos)
+    # Só os ANEXOS provam o endereço: a observação é o que o próprio
+    # lançamento diz (revisão de 28/10/2026), como no valor.
+    endereco, endereco_diverge = _conferir_endereco(item, provas)
     if endereco:
         partes.append(endereco)
-    return " · ".join(partes), divergiu
+    return " · ".join(partes), divergiu or endereco_diverge
 
 
 # --------------------------------------------------------------------------

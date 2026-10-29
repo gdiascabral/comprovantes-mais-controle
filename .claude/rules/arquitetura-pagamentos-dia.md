@@ -217,6 +217,18 @@ paths:
   certeza; senão fica sem dado de pagamento, "ATENÇÃO — sem dados de pgto",
   Obs "anexo não lido — pode ser boleto: …". Antes, autorização ou "NF 1234"
   + scan davam Pix APTO e marcado na remessa, com o boleto em aberto.
+  **Quadra e lote do anexo** (`_conferir_endereco`, dono, 28/10/2026: "para
+  não pagarmos nada errado"). O texto é normalizado antes (QUADRA/Q./QDA →
+  QD; LOTE(S)/LT./L. depois de quadra → LT; "QD129LT71" descolado), o número
+  aceita letra ("71A", "71-A") e zero à esquerda some ("007" = "7"), e a lista
+  de lotes abre ("LT 10, 11 e 12", "10/11", "10-11", "LOTES 71A, 71B").
+  Antes "LT 71A" não era lido e o anexo de OUTRO lote da mesma quadra saía
+  "endereço ✓ (QD 129)". Hoje: ✓ com a quadra e um lote do lançamento
+  ("; falta LT …" no rateio); **DIVERGE** (ATENÇÃO) só quando o anexo afirma
+  outro par quadra+lote na quadra do lançamento e nenhum lote dele aparece;
+  "?" para lote não achado, quadra não achada ou lote parecido ("7" × "7A",
+  o OCR come a letra). Só os ANEXOS provam: a observação do lançamento não
+  conta (`provas`). Testes: `tests/test_endereco_lote.py`.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e
