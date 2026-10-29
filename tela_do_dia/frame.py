@@ -1651,8 +1651,9 @@ class TelaDoDiaFrame(ttk.Frame):
         provado nasce marcado. Nada vai à nuvem: o "Pago" continua do dono."""
         if self.lido is None or not autenticacoes:
             return
+        antes = self.lido.pendentes
         self.lido = _nd.com_provas_do_banco(self.lido, autenticacoes)
-        self.marcas_agd = au.marcas_com_provas(self.marcas_agd, self.lido.pendentes)
+        self.marcas_agd = au.marcas_com_provas(self.marcas_agd, antes, self.lido.pendentes)
         self._encher_agendados()
         self._ajustar_altura(self.t_agd)
 

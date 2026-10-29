@@ -8,7 +8,7 @@ from tela_do_dia import autenticar as au
 HOJE = date(2026, 10, 29)
 CONTA = "CONTA FICTICIA - SICOOB"
 OUTRA = "OUTRA FICTICIA - SICOOB"
-DESC = "OBRA MODELO NF 1234 OC 55 CIMENTO FICTICIO"
+DESC = "OBRA MODELO CASA 7 NF 1234 OC 55 CIMENTO FICTICIO E AREIA FINA"
 # Linha digitável fictícia que fecha nos DVs (a mesma família do teste do OCR).
 LINHA = "34191570070002492437524177010006915340000115000"
 
@@ -36,9 +36,13 @@ def test_valor_e_descricao_colada_provam():
 
 
 def test_descricao_cortada_pelo_banco_ainda_prova_mas_lote_vizinho_nao():
-    assert _aut([_ag()], [_mov(desc=DESC[:30])])[1].prova
+    assert _aut([_ag()], [_mov(desc=DESC[:45])])[1].prova
+    # Corte curto não é corte do banco: pode ser OUTRO pagamento mais curto.
+    assert not _aut([_ag()], [_mov(desc=DESC[:30])])[1].prova
     ag = _ag(**{"descricao_colada": "OBRA MODELO CASAS VIZINHAS LT 10"})
     assert not _aut([ag], [_mov(desc="OBRA MODELO CASAS VIZINHAS LT 10 E 11")])[1].prova
+    ag2 = _ag(**{"descricao_colada": "OBRA MODELO CASAS VIZINHAS LT 10 E 11"})
+    assert not _aut([ag2], [_mov(desc="OBRA MODELO CASAS VIZINHAS LT 10")])[1].prova
 
 
 def test_so_valor_nao_prova():
@@ -97,7 +101,7 @@ def test_pix_conta_uma_vez_so_o_espelho_da_lista_comum_sai():
     espelho = {"situacao": "EFETIVADO", "valorLancamento": 200.0, "dataLancamento": "2026-10-28",
                "tipoAgendamento": "Pix via chave", "tipoOperacaoPix": "CHAVE"}
     assert au.do_comprovante_sicoob(espelho, CONTA) is None
-    pix = au.do_pix_sicoob({"valor": "200,00", "descricao": DESC,
+    pix = au.do_pix_sicoob({"valor": "200,00", "descricao": DESC, "situacao": "EFETIVADO",
                             "dataHoraEnvioLancamento": "2026-10-28 10:00:00.000",
                             "destino": {"nome": "FORNECEDOR FICTICIO"}}, CONTA)
     assert pix is not None and pix.data == date(2026, 10, 28)
@@ -116,7 +120,7 @@ def test_dividido_em_n_boletos_so_prova_com_todas_as_partes():
     partes = [{"parte_linha": LINHA, "valor": "120.00"}, {"parte_linha": "2" * 44, "valor": "80.00"}]
     ag = _ag(partes=partes)
     tudo = _aut([ag], [_mov("120.00", cod=cod1), _mov("80.00", cod=cod2)])
-    assert "2 partes" in tudo[1].prova
+    assert "2 parte(s)" in tudo[1].prova
     falta = _aut([ag], [_mov("120.00", cod=cod1)])
     assert falta[1].prova == "" and "1 de 2" in falta[1].nota
 
@@ -163,5 +167,39 @@ def test_com_provas_do_banco_pre_marca_e_nao_vence_valor_mudou():
 def test_marcas_com_provas_marca_o_provado_e_guarda_o_resto():
     a1, a2 = _ag(1), _ag(2)
     sim, nao = agd.Situacao("ok", "p", True, "p"), agd.Situacao("", "x")
-    assert au.marcas_com_provas({1: False, 2: True}, [(a1, sim, None), (a2, nao, None)]) == {
-        1: True, 2: True}
+    antes = [(a1, nao, None), (a2, nao, None)]
+    assert au.marcas_com_provas({1: False, 2: True}, antes,
+                                [(a1, sim, None), (a2, nao, None)]) == {1: True, 2: True}
+    # Quem perdeu a prova perde o ☑; quem o dono desmarcou e não mudou, fica.
+    assert au.marcas_com_provas({1: True, 2: False}, [(a1, sim, None), (a2, sim, None)],
+                                [(a1, nao, None), (a2, sim, None)]) == {1: False, 2: False}
+
+
+def test_pix_sem_situacao_de_efetivado_nao_prova():
+    item = {"valor": "200,00", "descricao": DESC, "dataHoraEnvioLancamento": "2026-10-28 10:00"}
+    assert au.do_pix_sicoob(item, CONTA) is None
+    assert au.do_pix_sicoob({**item, "situacao": "DEVOLVIDO"}, CONTA) is None
+
+
+def test_pagamento_muito_depois_do_dia_e_do_vencimento_nao_prova():
+    ag = _ag(dia=date(2026, 10, 20), vencimento="2026-10-21")
+    assert _aut([ag], [_mov(dia=date(2026, 10, 24))])[1].prova
+    assert _aut([ag], [_mov(dia=date(2026, 10, 25))])[1].prova == ""
+
+
+def test_codigo_igual_com_valor_diferente_nao_prova():
+    cod = au.barras(LINHA)
+    assert _aut([_ag(linha=LINHA)], [_mov(valor="150.00", cod=cod)])[1].prova == ""
+
+
+def test_dividido_com_uma_parte_so_usa_a_linha_dela_e_nunca_a_da_foto():
+    cod_da_1a = au.barras(LINHA)
+    ag = _ag(valor="80.00", linha=LINHA, partes=[{"parte_linha": "2" * 44, "valor": "80.00"}])
+    # O comprovante da OUTRA parte (código da foto) não prova esta.
+    assert _aut([ag], [_mov("80.00", cod=cod_da_1a)])[1].prova == ""
+    assert _aut([ag], [_mov("80.00", cod="2" * 44)])[1].prova
+
+
+def test_parte_de_dividido_nao_casa_por_descricao():
+    ag = _ag(partes=[{"parte_linha": "", "valor": "120.00"}, {"parte_linha": "", "valor": "80.00"}])
+    assert _aut([ag], [_mov("120.00"), _mov("80.00")])[1].prova == ""

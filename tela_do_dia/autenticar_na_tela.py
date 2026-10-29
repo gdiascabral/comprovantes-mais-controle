@@ -52,6 +52,24 @@ def pergunta_de_abrir(n_contas: int, inicio, fim) -> str:
             "Entre no SicoobNet quando o Chrome abrir. Continuar?")
 
 
+def recusa(lido, leitura, lido_no_dia, hoje) -> str:
+    """"" quando dá para autenticar; senão o recado. A prova do banco é
+    refeita com o título que o ÚLTIMO Buscar releu no ERP: Buscar de outro
+    dia, ou leitura sem o ERP relido (a releitura depois de gravar na nuvem
+    só relê a nuvem), deixaria "valor mudou" escondido ou apagaria provas
+    (revisão de dinheiro, 29/10/2026)."""
+    if lido is None or leitura is None:
+        return ("Clique em Buscar primeiro: é ele que relê os títulos no ERP, e "
+                "sem isso o banco não prova nada.")
+    if lido_no_dia != hoje:
+        return ("O último Buscar não é de hoje: clique em Buscar de novo, para os "
+                "títulos serem relidos no ERP antes de conferir o banco.")
+    if not getattr(lido, "relido", False):
+        return ("Os títulos não foram relidos no ERP nesta leitura (ela só releu a "
+                "nuvem): clique em Buscar de novo e depois em Autenticar.")
+    return ""
+
+
 def resumo(autenticacoes: dict) -> str:
     provados = sum(1 for a in autenticacoes.values() if a.prova)
     return (f"Autenticar no banco: {provados} de {len(autenticacoes)} agendado(s) do "
@@ -80,9 +98,10 @@ class AutenticarNaTela:
             messagebox.showinfo(TITULO, "A leitura anterior ainda está rodando.")
             return
         lido = getattr(tela, "lido", None)
-        if lido is None or getattr(tela, "leitura", None) is None:
-            messagebox.showinfo(TITULO, "Clique em Buscar primeiro: é ele que relê os "
-                                        "títulos no ERP, e sem isso o banco não prova nada.")
+        motivo = recusa(lido, getattr(tela, "leitura", None),
+                        getattr(tela, "_lido_no_dia", None), _hoje())
+        if motivo:
+            messagebox.showinfo(TITULO, motivo)
             return
         pendentes = [a for a, _s, _r in lido.pendentes]
         if not pendentes:

@@ -40,9 +40,19 @@ def test_com_outro_no_sicoob_recusa(monkeypatch):
     ditos = _avisos(monkeypatch)
     a = agd.Agendado(id=1, dia=date(2026, 10, 28), conta="C", alvo="1", lancamento_id="L",
                      favorecido="F", valor=D("1.00"))
-    tela = SimpleNamespace(lido=SimpleNamespace(pendentes=[(a, None, None)]), leitura=object())
+    tela = SimpleNamespace(lido=SimpleNamespace(pendentes=[(a, None, None)], relido=True),
+                           leitura=object(), _lido_no_dia=ant._hoje())
     _peca(tela, outros=lambda: "Extratos Sicoob").autenticar()
     assert "Extratos Sicoob" in ditos[0]
+
+
+def test_recusa_buscar_de_outro_dia_e_leitura_sem_erp_relido():
+    hoje = date(2026, 10, 29)
+    lido = SimpleNamespace(relido=True)
+    assert ant.recusa(lido, object(), hoje, hoje) == ""
+    assert "não é de hoje" in ant.recusa(lido, object(), date(2026, 10, 28), hoje)
+    assert "relidos" in ant.recusa(SimpleNamespace(relido=False), object(), hoje, hoje)
+    assert "Buscar" in ant.recusa(None, None, None, hoje)
 
 
 def test_a_thread_casa_e_manda_pronto_e_sempre_fim(monkeypatch):

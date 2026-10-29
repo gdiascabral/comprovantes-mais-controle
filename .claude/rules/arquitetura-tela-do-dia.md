@@ -754,6 +754,21 @@ Ordem do dia do dono: 1º conferir no banco o que foi pago antes, 2º saldos,
 - **Travas**: thread `sicoob-autenticar`; entra no `sicoob_ocupado` da aba
   e pergunta `outros_no_sicoob` (Extratos, Baixar, Reler Sicoob, Conferir
   agendamentos das duas abas, Prova de saldos); todos esses perguntam a ele.
+- **Revisão de dinheiro (29/10/2026)**: (1) recusa sem Buscar DE HOJE e sem
+  o ERP relido na leitura (`autenticar_na_tela.recusa`; o `reler_tudo` depois
+  de gravar na nuvem só relê a nuvem) — senão "valor mudou" ficava escondido
+  pelo título de ontem; (2) o pagamento só vale até `FOLGA_DEPOIS` dias depois
+  do dia do agendado ou do vencimento da foto, o que vier depois — sem teto,
+  um pendente velho olhava semanas e um pagamento recorrente (ou o de um
+  remarcado já respondido) o provava; (3) Pix só prova com situação de
+  efetivado conhecida (`PIX_EFETIVADO`, A MEDIR) — sem ela, falha fechada;
+  (4) foto com `partes` (mesmo UMA) casa só pela linha de cada parte, nunca
+  pela `foto["linha"]` (a da 1ª parte do HTML), e parte nunca casa por
+  descrição; o valor bate ao centavo também no código de barras; (5) a ☑ só
+  muda para quem mudou de pré-marca (perdeu a prova perde a marca; quem o
+  dono desmarcou e não mudou fica desmarcado); (6) descrição do banco mais
+  curta que a colada só vale com `CORTE_DO_BANCO` caracteres ou mais (A
+  MEDIR) — "… LT 10" não prova "… LT 10 E 11".
 - **Falta (pendente na spec)**: o Inter (QR por conta no Autenticar, saldo
   reaproveitado pela Prova de saldos) e os aportes do dia anterior.
 

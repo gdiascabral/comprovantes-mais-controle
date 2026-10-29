@@ -42,6 +42,23 @@ from pagamentos_dia.agendamentos_sicoob import mesma_descricao
 
 ZERO = Decimal("0.00")
 CENTAVO = Decimal("0.01")
+#: Até quantos dias depois do dia do agendado (ou do vencimento da foto, o
+#: que vier depois) um pagamento do banco ainda pode ser ELE. Sem teto, um
+#: pendente velho olharia semanas de extrato e um pagamento recorrente de
+#: mesmo valor e descrição (ou o de um remarcado já respondido) o provaria
+#: (revisão de dinheiro, 29/10/2026).
+FOLGA_DEPOIS = 3
+#: A descrição do banco que é só o COMEÇO da colada só vale quando é longa o
+#: bastante para ser o corte do banco, e não outro pagamento mais curto
+#: ("... LT 10" provando "... LT 10 E 11"). A MEDIR: o limite real da
+#: observação do Sicoob; até lá, só texto deste tamanho para cima.
+CORTE_DO_BANCO = 40
+#: As situações de Pix que são dinheiro que SAIU. A MEDIR (tarefa 0): o nome
+#: do campo e os valores; Pix sem situação conhecida NÃO prova (falha
+#: fechada, como o comprovante só EFETIVADO).
+PIX_EFETIVADO = {"EFETIVADO", "EFETIVADA", "CONCLUIDO", "CONCLUIDA", "LIQUIDADO",
+                 "LIQUIDADA", "REALIZADO", "REALIZADA"}
+CAMPOS_SITUACAO_PIX = ("situacao", "status", "statusTransacao", "estado", "situacaoPix")
 
 #: Os nomes de campo do código de barras / linha digitável que a lista do
 #: banco pode trazer. A MEDIR com a conta do dono (tarefa 0 da spec): até lá
@@ -146,6 +163,9 @@ def do_comprovante_sicoob(item: dict, conta: str) -> Movimento | None:
 def do_pix_sicoob(item: dict, conta: str) -> Movimento | None:
     """Um Pix ENVIADO da lista de Pix do Sicoob (`/api/pix/lancamentos`)."""
     from baixar_comprovantes.nome_final import momento_do_pix_sicoob
+    situacao = util.sem_acento(_primeiro(item, CAMPOS_SITUACAO_PIX)).upper()
+    if situacao not in PIX_EFETIVADO:
+        return None
     valor = dinheiro(item.get("valor"))
     dia = data_do_banco(momento_do_pix_sicoob(item))
     if valor is None or dia is None or valor <= ZERO:
@@ -209,36 +229,57 @@ class _Alvo:
     barras: str
     descricao: str
     favorecido: str
+    ate: date = date.max  # o último dia em que o pagamento ainda pode ser ele
+    dividido: bool = False
 
 
 def _alvos(ag) -> list[_Alvo]:
     foto = ag.foto or {}
     desc = str(foto.get("descricao_colada") or ag.descricao or "")
     fav = str(foto.get("favorecido") or ag.favorecido or "")
+    venc = data_do_banco(foto.get("vencimento")) or ag.dia
+    ate = max(ag.dia, venc) + timedelta(days=FOLGA_DEPOIS)
     partes = foto.get("partes") or ()
-    if len(partes) > 1:
+    if partes:
+        # Lançamento dividido (mesmo com UMA parte saindo): cada parte só pela
+        # SUA linha, nunca a `foto["linha"]`, que é a da 1ª parte do HTML.
         saida = []
         for k, p in enumerate(partes):
             valor = dinheiro(p.get("valor"))
             saida.append(_Alvo(ag.id, k, ag.conta, ag.dia, valor if valor is not None else ZERO,
-                                barras(p.get("parte_linha")), desc, fav))
+                                barras(p.get("parte_linha")), desc, fav, ate, True))
         return saida
-    return [_Alvo(ag.id, -1, ag.conta, ag.dia, ag.valor, barras(foto.get("linha")), desc, fav)]
+    return [_Alvo(ag.id, -1, ag.conta, ag.dia, ag.valor, barras(foto.get("linha")), desc, fav,
+                  ate)]
 
 
 def _nome(texto) -> str:
     return util.norm_espaco(util.sem_acento(str(texto or ""))).casefold()
 
 
+def _mesma_descricao(colada: str, do_banco: str) -> bool:
+    """Igual (normalizada), ou o banco cortou um texto LONGO (`CORTE_DO_BANCO`)
+    pela régua de prefixo de `agendamentos_sicoob.mesma_descricao`."""
+    a, b = _nome(colada), _nome(do_banco)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return len(b) >= CORTE_DO_BANCO and mesma_descricao({"descricao": colada},
+                                                        {"observacao": do_banco})
+
+
 def _casa(alvo: _Alvo, m: Movimento) -> int:
-    """2 = pelo código de barras; 1 = valor + descrição; 0 = não casa."""
-    if alvo.barras and m.barras:
-        return 2 if alvo.barras == m.barras else 0
+    """2 = pelo código de barras; 1 = valor + descrição; 0 = não casa. O
+    valor tem de bater ao centavo nos dois níveis; parte de lançamento
+    dividido só casa pelo código."""
     if m.valor != alvo.valor:
         return 0
-    if mesma_descricao({"descricao": alvo.descricao}, {"observacao": m.descricao}):
-        return 1
-    return 0
+    if alvo.barras and m.barras:
+        return 2 if alvo.barras == m.barras else 0
+    if alvo.dividido:
+        return 0
+    return 1 if _mesma_descricao(alvo.descricao, m.descricao) else 0
 
 
 def _candidatos(alvo: _Alvo, movimentos, hoje: date) -> list[int]:
@@ -246,7 +287,7 @@ def _candidatos(alvo: _Alvo, movimentos, hoje: date) -> list[int]:
     inicio = alvo.dia - timedelta(days=1)
     niveis: dict[int, list[int]] = {}
     for i, m in enumerate(movimentos):
-        if m.conta != alvo.conta or not (inicio <= m.data <= hoje):
+        if m.conta != alvo.conta or not (inicio <= m.data <= min(hoje, alvo.ate)):
             continue
         n = _casa(alvo, m)
         if n:
@@ -334,13 +375,14 @@ def autenticar(pendentes, movimentos, pendencias=(), lidas=(), falhas=None,
             m = movimentos[provado[alvos[0]]]
             nivel = 2 if all(a.barras for a in alvos) else 1
             texto = _descreve(m, nivel)
-            if len(alvos) > 1:
-                texto = f"{m.origem}: as {len(alvos)} partes, cada uma pelo código de barras"
+            if alvos[0].dividido:
+                texto = (f"{m.origem}: as {len(alvos)} parte(s), cada uma pelo seu "
+                         "código de barras")
             saida[ag_id] = Autenticacao(f"banco — {texto}", "")
         elif any(a in ambiguo for a in alvos):
             saida[ag_id] = Autenticacao("", "pagamentos parecidos no banco, sem como "
                                             "separar — responda")
-        elif len(alvos) > 1 and any(a in provado for a in alvos):
+        elif alvos[0].dividido and any(a in provado for a in alvos):
             achadas = sum(a in provado for a in alvos)
             saida[ag_id] = Autenticacao("", f"banco: {achadas} de {len(alvos)} partes "
                                             "achadas — responda")
@@ -349,11 +391,14 @@ def autenticar(pendentes, movimentos, pendencias=(), lidas=(), falhas=None,
     return saida
 
 
-def marcas_com_provas(marcas: dict, pendentes) -> dict:
-    """As marcas ☑ depois do "Autenticar no banco": o que passou a ser
-    provado nasce marcado; o resto fica como o dono deixou."""
+def marcas_com_provas(marcas: dict, antes, depois) -> dict:
+    """As marcas ☑ depois do "Autenticar no banco" (`antes`/`depois`: os
+    pendentes antes e depois da prova). Só muda a marca de quem MUDOU de
+    pré-marca: passou a ser provado nasce ☑, perdeu a prova perde o ☑; quem
+    não mudou fica como o dono deixou (ele pode ter desmarcado de propósito)."""
     novas = dict(marcas or {})
-    for a, sit, _r in pendentes:
-        if sit.pre_marca:
-            novas[a.id] = True
+    ja = {a.id: bool(s.pre_marca) for a, s, _r in antes or ()}
+    for a, sit, _r in depois:
+        if ja.get(a.id) != bool(sit.pre_marca):
+            novas[a.id] = bool(sit.pre_marca)
     return novas

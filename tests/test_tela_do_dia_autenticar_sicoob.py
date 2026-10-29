@@ -133,7 +133,7 @@ def test_ler_conta_tira_agendamento_e_espelho_pix_e_abre_html_so_do_mesmo_valor(
         abertos.extend(i["idAgendamento"] for i in itens)
         return [(itens[0], "<p>Observação: OBRA MODELO NF 1</p>")]
     pix = [{"valor": "10,00", "dataHoraEnvioLancamento": "2026-10-28 09:00:00.000",
-            "descricao": "OBRA PIX", "destino": {"nome": "F"}}]
+            "descricao": "OBRA PIX", "destino": {"nome": "F"}, "situacao": "EFETIVADO"}]
     pend = [{"situacao": "PENDENTE_ASSINATURA", "valor": 5.0, "observacao": "X"}]
     movs, pends = asi.ler_conta(
         _Cli({"111"}), "111", "A", date(2026, 10, 27), HOJE, {D("10.00")},
