@@ -452,6 +452,10 @@ jobs:
           # cnab240 é o único pacote com DADOS: a parametrização do layout vive
           # em spec/*.json e é lida em runtime. Copiar só os .py faz o pacote
           # importar e estourar na primeira remessa — ver test_cnab240_pacote.py.
+          # `tipografia/` é dado (a fonte Manrope e a licença), lida em runtime
+          # por `widgets._carregar_tipografia()` (repaginada visual, 28/10/2026).
+          New-Item -ItemType Directory codigo_embutido/tipografia | Out-Null
+          Copy-Item tipografia/*.ttf, tipografia/OFL.txt codigo_embutido/tipografia/
           New-Item -ItemType Directory codigo_embutido/cnab240 | Out-Null
           Copy-Item cnab240/*.py codigo_embutido/cnab240/
           New-Item -ItemType Directory codigo_embutido/cnab240/spec | Out-Null
