@@ -2055,7 +2055,8 @@ class TelaDoDiaFrame(ttk.Frame):
         Registro diz por quê."""
         mae = self.aportes.mae
         nas, outras = ads.movimentos_de_fora(self.dia.a_mao,
-                                             ads.contas_da_mae(self.regras, mae))
+                                             ads.contas_da_mae(self.regras, mae),
+                                             self._rotulos_do_painel)
         for destino, valor in outras:
             self._log(f"  - aporte de fora em {destino} ({brl(valor)}): não é da "
                       "conta-mãe — lance na aba Aportes à mão")
@@ -2063,8 +2064,9 @@ class TelaDoDiaFrame(ttk.Frame):
         a_dividir = {d: v for d, v in nas.items() if not ads.ja_mandado(enviados, d)}
         for destino, valor in nas.items():
             if destino not in a_dividir:
+                quem = ", ".join(ads.socios_ja_mandados(enviados, destino))
                 self._log(f"  [!] aporte de fora em {destino} ({brl(valor)}): já mandado "
-                          "hoje — confira a aba Aportes; não vai de novo")
+                          f"hoje ({quem}) — confira a aba Aportes; não vai de novo")
         if not a_dividir:
             return None, set()
         entidades = self.aba_aportes.entidades
@@ -2072,18 +2074,25 @@ class TelaDoDiaFrame(ttk.Frame):
         if recado:
             self._log(f"\n[!] o aporte de fora NÃO foi para a aba Aportes: {recado}")
             return None, set()
+        data = dc.data_das_operacoes(self.periodo)
+        na_aba = list(self.aba_aportes.operacoes)
+        avisos = ads.avisos_dos_socios(self._apuracoes, mae, entidades)
+        for destino in a_dividir:
+            for resumo in ads.ja_na_aba(na_aba, para_aportes.nome_no_cadastro(
+                    destino, entidades), data):
+                avisos.append(f"já está na aba Aportes hoje: {resumo} — se é este mesmo "
+                              "aporte, cancele")
         divisoes = janelas.pedir_divisao(
-            self, list(a_dividir.items()), socios,
-            ads.avisos_dos_socios(self._apuracoes, mae, entidades),
+            self, list(a_dividir.items()), socios, avisos,
             dividir=lambda v: ads.divisao_inicial(v, socios), ler=ads.ler_parte,
             validar=ads.validar_divisao)
         if divisoes is None:
             return False, set()
         return ads.operacoes(divisoes, a_dividir, entidades, self.aba_aportes.subcontas,
-                             dc.data_das_operacoes(self.periodo), enviados=enviados,
+                             data, enviados=enviados,
                              definidos=self.aportes.definidos_validos,
                              sem_saldo=dc.contas_sem_saldo(self.saldos),
-                             na_aba_aportes=list(self.aba_aportes.operacoes))
+                             na_aba_aportes=na_aba)
 
     def _mandar_aportes(self):
         titulo = "Aportes"

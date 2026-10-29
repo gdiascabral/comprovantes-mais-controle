@@ -69,11 +69,12 @@ def contas_da_mae(regras, mae) -> list[str]:
     return saida
 
 
-def movimentos_de_fora(a_mao, contas) -> tuple[dict, list]:
+def movimentos_de_fora(a_mao, contas, rotulos=None) -> tuple[dict, list]:
     """({destino: valor somado} dos de fora nas `contas`, [(destino, valor)]
     dos de fora em OUTRAS contas). Dois de fora no mesmo destino são um
-    aporte só na janela (a soma)."""
-    contas = list(contas or ())
+    aporte só na janela (a soma). `rotulos`: as contas do painel — destino
+    fora dele a tela não soma (`decisoes.movimentos_validos`), e então não vai."""
+    contas = [c for c in contas or () if rotulos is None or c in set(rotulos)]
     nas_contas: dict[str, Decimal] = {}
     outras = []
     for origem, destino, valor in a_mao or ():
@@ -161,13 +162,40 @@ def validar_divisao(valor, partes) -> str:
     return ""
 
 
-def _par_na_regras(destino, socio, definidos, entidades):
-    """(aportador da aba Regras, valor) do mesmo sócio na mesma conta, ou None."""
+def _par_na_regras(destino, socio, definidos, entidades, enviados=None):
+    """(aportador da aba Regras, valor, já mandado?) do mesmo sócio na mesma
+    conta hoje, ou None. Olha o que está na tela (`definidos`) E o que a aba
+    Regras já MANDOU hoje (`enviados`, chave `destino|aportador`): zerar a
+    linha da Regras depois de mandá-la não pode abrir a porta para o mesmo
+    dinheiro ir de novo como aporte de fora (revisão de dinheiro, 29/10/2026)."""
+    def e_o_socio(aportador):
+        return aportador == socio or pa.nome_no_cadastro(aportador, entidades) == socio
     for (d, aportador), v in (definidos or {}).items():
-        if d == destino and v and v > ZERO and (
-                aportador == socio or pa.nome_no_cadastro(aportador, entidades) == socio):
-            return aportador, v
+        if d == destino and v and v > ZERO and e_o_socio(aportador):
+            return aportador, v, False
+    for k, v in (enviados or {}).items():
+        if k.startswith((PREFIXO, pa.PREFIXO_DISTRIBUICAO, pa.PREFIXO_SUBCONTA)):
+            continue
+        d, sep, aportador = k.partition("|")
+        if sep and d == destino and e_o_socio(aportador):
+            return aportador, v, True
     return None
+
+
+def socios_ja_mandados(enviados, destino: str) -> list[str]:
+    """Os sócios cuja parte do aporte de fora em `destino` já foi mandada hoje."""
+    return [k[len(PREFIXO):].rpartition("|")[0] for k in (enviados or {})
+            if k.startswith(PREFIXO) and k.rpartition("|")[2] == destino]
+
+
+def ja_na_aba(na_aba_aportes, recebedor, data) -> list[str]:
+    """As operações que a aba Aportes já tem hoje para `recebedor`, para a
+    janela avisar (quem digitava o aporte de fora à mão antes desta versão
+    não pode lançá-lo duas vezes)."""
+    if not recebedor:
+        return []
+    return [op.resumo() for op in na_aba_aportes or ()
+            if op.recebedor == recebedor and op.data == data]
 
 
 def operacoes(divisoes, valores, entidades, subcontas, data, enviados=None,
@@ -175,73 +203,84 @@ def operacoes(divisoes, valores, entidades, subcontas, data, enviados=None,
     """(Envio, {(destino, aportador da Regras)}) das partes digitadas.
 
     `divisoes`: {destino: {sócio do cadastro: parte}}; `valores`: {destino:
-    valor do aporte de fora} — a soma das partes tem de bater com ele, senão
-    nada daquele destino vai. Parte zero não vira operação. O segundo valor são os pares da aba Regras do MESMO sócio na
-    MESMA conta: os dois lados viram pendência (somar calado lançaria o
-    dobro se fossem o mesmo dinheiro) — quem passa isso a
-    `para_aportes.operacoes(pares_em_dobro=)` é a tela."""
+    valor do aporte de fora} — a soma das partes tem de bater com ele.
+    Parte zero não vira operação. **Cada destino é tudo ou nada**: uma parte
+    que não pode ir segura as outras (só uma ir faria o destino contar como
+    "já mandado" e a outra nunca mais sairia pelo app). O segundo valor são
+    os pares da aba Regras do MESMO sócio na MESMA conta ainda na tela: os
+    dois lados viram pendência (somar calado lançaria o dobro se fossem o
+    mesmo dinheiro) — quem passa isso a `para_aportes.operacoes(pares_em_dobro=)`
+    é a tela."""
     enviados = dict(enviados or {})
     sem_saldo = set(sem_saldo or ())
     envio = pa.Envio()
     em_dobro = set()
     for destino, partes in (divisoes or {}).items():
-        rotulo_socio = lambda s: f"{s} (aporte de fora)"  # noqa: E731
+        def quem(s):
+            return f"{s} (aporte de fora)"
         total = (valores or {}).get(destino)
         problema = ("o aporte de fora não está mais na tela" if total is None
                     else validar_divisao(total, list(partes.values())))
+        if not problema and socios_ja_mandados(enviados, destino):
+            problema = ("parte já mandada hoje (" + ", ".join(socios_ja_mandados(enviados, destino))
+                        + ") — confira a aba Aportes")
         if problema:
             for s, v in partes.items():
-                envio.pendentes.append(pa.Pendente(destino, rotulo_socio(s), v, problema))
+                envio.pendentes.append(pa.Pendente(destino, quem(s), v, problema))
             continue
         recebedor = pa.nome_no_cadastro(destino, entidades)
         sub = pa.numero_de_subconta_de_investidor(destino, entidades)
+        prontas, segura = [], []
         for socio, valor in partes.items():
             valor = como_dinheiro(valor)
             if valor <= ZERO:
                 continue
-            quem = rotulo_socio(socio)
-            k = chave(socio, destino)
-            if k in enviados:
-                la = pa.ainda_na_aba(socio, recebedor, data, na_aba_aportes)
-                envio.pendentes.append(pa.Pendente(
-                    destino, quem, valor, pa._ja_mandado(enviados[k], valor,
-                                                         fora_da_aba=la is False)))
-                continue
+            motivo = ""
             if recebedor is None:
+                motivo = f"não achei {destino!r} (um só) no cadastro da aba Aportes"
+            elif sub:
+                motivo = (f"{destino!r} é subconta de investidor ({sub}): aporte de "
+                          "capital de sócio não vai para lá")
+            elif socio not in (entidades or {}):
+                motivo = f"não achei {socio!r} no cadastro da aba Aportes"
+            else:
+                na_regras = _par_na_regras(destino, socio, definidos, entidades, enviados)
+                if na_regras is not None:
+                    aportador, v_regra, mandado = na_regras
+                    if mandado:
+                        motivo = (f"{socio} já aportou nesta conta pela aba Regras hoje "
+                                  f"({brl(como_dinheiro(v_regra))}, já mandado) — se é o "
+                                  "mesmo dinheiro, tire o aporte de fora; se é outro, "
+                                  "lance à mão na aba Aportes")
+                    else:
+                        em_dobro.add((destino, aportador))
+                        motivo = (f"{socio} também aporta nesta conta pela aba Regras "
+                                  f"hoje ({brl(como_dinheiro(v_regra))}) — tire um dos dois")
+            if not motivo:
+                op = Operacao(data=data, pagador=socio, recebedor=recebedor, valor=valor,
+                              tipo=TIPO, modo=pa._modo(socio, recebedor, entidades))
+                motivo = "; ".join(op.validar(entidades, subcontas))
+            if motivo:
+                segura.append((socio, valor, motivo))
+            else:
+                prontas.append((socio, valor, op))
+        if segura:
+            for socio, valor, motivo in segura:
+                envio.pendentes.append(pa.Pendente(destino, quem(socio), valor, motivo))
+            for socio, valor, _op in prontas:
                 envio.pendentes.append(pa.Pendente(
-                    destino, quem, valor,
-                    f"não achei {destino!r} (um só) no cadastro da aba Aportes"))
-                continue
-            if sub:
-                envio.pendentes.append(pa.Pendente(
-                    destino, quem, valor,
-                    f"{destino!r} é subconta de investidor ({sub}): aporte de capital "
-                    "de sócio não vai para lá"))
-                continue
-            if socio not in (entidades or {}):
-                envio.pendentes.append(pa.Pendente(
-                    destino, quem, valor, f"não achei {socio!r} no cadastro da aba Aportes"))
-                continue
-            na_regras = _par_na_regras(destino, socio, definidos, entidades)
-            if na_regras is not None:
-                aportador, v_regra = na_regras
-                em_dobro.add((destino, aportador))
-                envio.pendentes.append(pa.Pendente(
-                    destino, quem, valor,
-                    f"{socio} também aporta nesta conta pela aba Regras hoje "
-                    f"({brl(como_dinheiro(v_regra))}) — tire um dos dois"))
-                continue
-            op = Operacao(data=data, pagador=socio, recebedor=recebedor, valor=valor,
-                          tipo=TIPO, modo=pa._modo(socio, recebedor, entidades))
-            erros = op.validar(entidades, subcontas)
-            if erros:
-                envio.pendentes.append(pa.Pendente(destino, quem, valor, "; ".join(erros)))
-                continue
+                    destino, quem(socio), valor,
+                    "a outra parte deste aporte não pode ir (veja acima) — nada deste "
+                    "aporte vai, para não ficar pela metade"))
+            continue
+        for socio, valor, op in prontas:
+            k = chave(socio, destino)
             envio.itens.append((op, [k]))
             envio.valores[k] = valor
             if destino in sem_saldo:
                 envio.sem_saldo.append(op)
-                envio.avisos.append(pa.Pendente(destino, quem, valor, pa.MOTIVO_SEM_SALDO))
+                envio.avisos.append(pa.Pendente(destino, quem(socio), valor,
+                                                pa.MOTIVO_SEM_SALDO))
     return envio, em_dobro
 
 

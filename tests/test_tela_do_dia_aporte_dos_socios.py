@@ -144,9 +144,40 @@ def test_movimento_que_sumiu_da_tela_nao_vai():
 def test_ja_mandado_hoje_nao_vai_de_novo_nem_com_valor_corrigido(antes):
     envio, _ = _ops({MAE: {UM: D("60.00"), DOIS: D("40.00")}},
                     enviados={ads.chave(UM, MAE): antes})
-    assert [op.pagador for op, _ in envio.itens] == [DOIS]
-    (p,) = envio.pendentes
-    assert "já mandado" in p.motivo and UM in p.aportador
+    assert envio.itens == []
+    assert all("já mandada" in p.motivo and UM in p.motivo for p in envio.pendentes)
+    assert ads.socios_ja_mandados({ads.chave(UM, MAE): antes}, MAE) == [UM]
+
+
+def test_uma_parte_que_nao_pode_ir_segura_a_outra():
+    envio, _ = _ops({MAE: {UM: D("60.00"), DOIS: D("40.00")}},
+                    definidos={(MAE, UM): D("30.00")})
+    assert envio.itens == []
+    motivos = {p.aportador: p.motivo for p in envio.pendentes}
+    assert "aba Regras" in motivos[f"{UM} (aporte de fora)"]
+    assert "pela metade" in motivos[f"{DOIS} (aporte de fora)"]
+
+
+def test_regras_ja_mandada_hoje_segura_o_aporte_de_fora_mesmo_zerada_na_tela():
+    enviados = {pa.chave_de_envio(MAE, "Socio Ficticio Um Completo"): D("10000.00")}
+    envio, dobro = _ops({MAE: {UM: D("5000.00"), DOIS: D("5000.00")}}, enviados=enviados,
+                        definidos={})
+    assert envio.itens == [] and dobro == set()
+    assert any("já mandado" in p.motivo for p in envio.pendentes)
+
+
+def test_destino_fora_do_painel_nao_vai():
+    nas, outras = ads.movimentos_de_fora([(None, MAE_B, D("10.00"))], [MAE, MAE_B],
+                                         rotulos=[MAE])
+    assert nas == {} and outras == [(MAE_B, D("10.00"))]
+
+
+def test_ja_na_aba_lista_o_que_ja_esta_la_para_a_conta():
+    from aportes.regras import Operacao
+    op = Operacao(HOJE, UM, "MAE - BANCO A", D("5.00"), "Aporte de Capital", "Só recebimento")
+    outra = Operacao(HOJE, UM, "FILHA UM - BANCO", D("5.00"), "Aporte de Capital",
+                     "Só recebimento")
+    assert ads.ja_na_aba([op, outra], "MAE - BANCO A", HOJE) == [op.resumo()]
 
 
 def test_ja_mandado_reconhece_o_destino():
@@ -164,7 +195,7 @@ def test_mesmo_socio_na_mesma_conta_pela_aba_regras_vira_pendencia_dos_dois_lado
     definidos = {(MAE, UM): D("30.00")}
     envio, dobro = _ops({MAE: {UM: D("60.00"), DOIS: D("40.00")}}, definidos=definidos)
     assert dobro == {(MAE, UM)}
-    assert [op.pagador for op, _ in envio.itens] == [DOIS]
+    assert envio.itens == []
     assert "aba Regras" in envio.pendentes[0].motivo
     regras = [Regra(MAE, UM, None, "Aporte", False, linha=9)]
     lado_regras = pa.operacoes(definidos, regras, ENTIDADES, {}, HOJE, pares_em_dobro=dobro)

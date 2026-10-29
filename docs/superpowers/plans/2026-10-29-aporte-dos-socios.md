@@ -8,7 +8,7 @@ transfere) vira Aporte de Capital de cada sócio na aba Aportes, dividido
 meio a meio numa janela; o cartão Aportes mostra quem precisa igualar,
 pela apuração do Controle de aportes, que roda sozinho depois do Buscar.
 
-**Spec:** `docs/superpowers/specs/2026-10-29-aporte-jv-jc-e-autenticar-design.md` (PR 1).
+**Spec:** `docs/superpowers/specs/2026-10-29-aporte-dos-socios-e-autenticar-design.md` (PR 1).
 
 ## Restrições globais
 

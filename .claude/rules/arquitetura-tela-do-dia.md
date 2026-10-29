@@ -362,7 +362,7 @@ no arquivo de outro dia.
 
 ## Aporte de fora dividido entre os sócios e aviso de igualar (29/10/2026)
 
-Spec: `docs/superpowers/specs/2026-10-29-aporte-jv-jc-e-autenticar-design.md`
+Spec: `docs/superpowers/specs/2026-10-29-aporte-dos-socios-e-autenticar-design.md`
 (PR 1). Regra do dono: os sócios da conta-mãe aportam só nela (ou no outro
 banco da mesma empresa), na mesma proporção; um dia um aporta mais ou
 sozinho e o outro iguala depois.
@@ -388,6 +388,18 @@ sozinho e o outro iguala depois.
   mandada vira a pendência "já mandado" de sempre. Destino com alguma parte já
   mandada hoje não reabre a janela (um segundo aporte de fora no mesmo dia
   vai à mão pela aba Aportes).
+- **Revisão de dinheiro (29/10/2026)**: (1) **cada destino é tudo ou nada**
+  — uma parte que não pode ir segura as outras ("nada deste aporte vai, para
+  não ficar pela metade"), porque com uma parte mandada o destino conta como
+  "já mandado" e a outra nunca mais sairia; o recado de já mandado diz de
+  QUEM (`socios_ja_mandados`); (2) **a aba Regras já MANDADA hoje** (chave
+  `destino|aportador` em `enviados_aportes`) do mesmo sócio na mesma conta
+  também segura o de fora — zerar a linha da Regras depois de mandá-la não
+  pode reabrir a porta (`_par_na_regras`); (3) a janela avisa o que a aba
+  Aportes já tem hoje para aquela conta (`ja_na_aba`): quem digitava o
+  aporte de fora à mão antes desta versão não o lança duas vezes; (4)
+  destino fora do painel não vai (`movimentos_de_fora(rotulos=)`), como a
+  tela não o soma.
 - **Mesmo sócio na mesma conta pela aba Regras** (não acontece hoje, mas
   somar calado lançaria o dobro se fossem o mesmo dinheiro): pendência dos
   DOIS lados (`operacoes` devolve os pares, que vão a
