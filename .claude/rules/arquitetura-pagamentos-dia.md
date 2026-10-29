@@ -225,7 +225,9 @@ paths:
   Antes "LT 71A" não era lido e o anexo de OUTRO lote da mesma quadra saía
   "endereço ✓ (QD 129)". Hoje: ✓ com a quadra e um lote do lançamento
   ("; falta LT …" no rateio); **DIVERGE** (ATENÇÃO) só quando o anexo afirma
-  outro par quadra+lote na quadra do lançamento e nenhum lote dele aparece;
+  outro par quadra+lote (mesma linha, perto) na quadra do lançamento e nenhum
+  lote dele aparece — como AVISO "⚠ LOTE DIFERENTE", sem bloquear (o endereço
+  da sede no boleto daria o mesmo par);
   "?" para lote não achado, quadra não achada ou lote parecido ("7" × "7A",
   o OCR come a letra). Só os ANEXOS provam: a observação do lançamento não
   conta (`provas`). Testes: `tests/test_endereco_lote.py`.
