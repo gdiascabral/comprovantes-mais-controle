@@ -573,11 +573,19 @@ _repintaveis = weakref.WeakSet()
 
 
 def _repintar_todos():
-    for w in list(_repintaveis):
-        try:
-            w.aplicar_cores(_estado["escuro"])
-        except (tk.TclError, AttributeError):
-            pass                         # widget já destruído: sai sozinho
+    # Duas passadas: primeiro quem tem cor própria, depois quem desenha os
+    # cantos na cor de QUEM ESTÁ ATRÁS (`depende_do_pai`). Numa passada só, a
+    # ordem do WeakSet é qualquer uma, e o cartão podia repintar antes do
+    # painel atrás dele trocar de tema — os cantos saíam na cor antiga.
+    todos = list(_repintaveis)
+    for segunda in (False, True):
+        for w in todos:
+            if bool(getattr(w, "depende_do_pai", False)) != segunda:
+                continue
+            try:
+                w.aplicar_cores(_estado["escuro"])
+            except (tk.TclError, AttributeError):
+                pass                     # widget já destruído: sai sozinho
 
 
 # ----------------------------------------------------------- cantos redondos
@@ -818,6 +826,8 @@ class FundoRedondo:
 
     Redesenha quando o frame muda de tamanho e quando o tema troca (entra em
     `_repintaveis`). `definir` troca as cores depois (item do menu aberto)."""
+
+    depende_do_pai = True
 
     def __init__(self, alvo, raio: int, cor: str, borda: str | None = None,
                  fora: str | None = None, espessura: int = 1):
@@ -1141,8 +1151,12 @@ def _pecas_que_aceitam_cor(st, c: dict) -> None:
         # o raio do canto virava altura de campo: texto pequeno num campo de
         # quase 50 px (pedido do dono, 28/10/2026: "sem proporção").
         try:
+            # `width`/`height` pequenos: sem eles o ttk pede, no mínimo, o
+            # tamanho da IMAGEM (66 px com o miolo largo) e o campo de data
+            # ficava com 70 px de altura.
             st.element_create(nome, "image", normal, *estados,
-                              border=borda, padding=folga, sticky="nsew")
+                              border=borda, padding=folga, sticky="nsew",
+                              width=2 * borda + 2, height=2 * borda + 2)
         except tk.TclError:
             pass                       # já existe neste tema
 
@@ -1329,6 +1343,7 @@ class Botao(tk.Button):
 
     #: Raio dos cantos do botão (28/10/2026, repaginada).
     RAIO = 9
+    depende_do_pai = True
 
     def __init__(self, pai, texto="", papel="neutro", numero=None, **kw):
         if numero is not None:
@@ -1342,13 +1357,19 @@ class Botao(tk.Button):
         # só o papel "link", que não tem fundo, segue usando padx/pady.
         self._folga_x = kw.pop("padx", px(14))
         self._folga_y = kw.pop("pady", px(7))
+        # DESLIGADO por nossa conta: o Tk do Windows desenha o botão
+        # desligado com imagem num xadrez de pontos. O widget fica sempre
+        # `normal` para o Tk; o `state` que o resto do app lê e escreve é
+        # este, e o clique de um botão desligado não chama nada.
+        self._desligado = str(kw.pop("state", "normal")) == "disabled"
+        self._comando = kw.pop("command", None)
         kw.setdefault("relief", "flat")
         kw.setdefault("borderwidth", 0)
         kw.setdefault("highlightthickness", 0)
         kw.setdefault("cursor", "hand2")
         kw.setdefault("font", FONTE_APOIO if papel == "link" else "TkDefaultFont")
         super().__init__(pai, text=texto, padx=0, pady=0, compound="center",
-                         **kw)
+                         command=self._clicou, **kw)
         self.bind("<Enter>", self._entrou, add="+")
         self.bind("<Leave>", self._saiu, add="+")
         self.bind("<Configure>", self._redimensionou, add="+")
@@ -1356,13 +1377,41 @@ class Botao(tk.Button):
         self.aplicar_cores(_estado["escuro"])
 
     def configure(self, cnf=None, **kw):                      # noqa: D102
-        chaves = set(kw) | (set(cnf) if isinstance(cnf, dict) else set())
-        r = super().configure(cnf, **kw)
-        if chaves & {"state", "text", "font"}:
-            self.aplicar_cores()
+        if isinstance(cnf, dict):
+            kw = {**cnf, **kw}
+            cnf = None
+        if cnf is not None:              # configure("text"): pergunta
+            if cnf == "state":
+                return ("state", "state", "State", "normal",
+                        "disabled" if self._desligado else "normal")
+            return super().configure(cnf)
+        if "state" in kw:
+            self._desligado = str(kw.pop("state")) == "disabled"
+            kw["cursor"] = "arrow" if self._desligado else "hand2"
+        if "command" in kw:
+            self._comando = kw.pop("command")
+        r = super().configure(**kw) if kw else None
+        self.aplicar_cores()
         return r
 
     config = configure
+
+    def cget(self, chave):                                    # noqa: D102
+        if chave == "state":
+            return "disabled" if self._desligado else "normal"
+        if chave == "command":
+            return self._comando
+        return super().cget(chave)
+
+    __getitem__ = cget
+
+    def _clicou(self):
+        if not self._desligado and self._comando is not None:
+            return self._comando()
+        return None
+
+    def invoke(self):                                         # noqa: D102
+        return self._clicou()
 
     def _entrou(self, _ev=None):
         self._sob = True
@@ -1376,8 +1425,8 @@ class Botao(tk.Button):
         if self._img is None:
             return
         try:
-            ligado = str(super().cget("state")) != "disabled"
-            super().configure(image=self._img_sob if (self._sob and ligado)
+            super().configure(image=self._img_sob
+                              if (self._sob and not self._desligado)
                               else self._img)
         except tk.TclError:
             pass
@@ -1404,17 +1453,14 @@ class Botao(tk.Button):
 
     def aplicar_cores(self, escuro: bool | None = None):
         c = cores()
-        try:
-            desligado = str(super().cget("state")) == "disabled"
-        except tk.TclError:
-            return
+        desligado = self._desligado
         fora = _cor_atras(self.master)
         if self._papel == "link":
             try:
-                super().configure(background=fora, foreground=c["marca"],
+                cor = c["tenue"] if desligado else c["marca"]
+                super().configure(background=fora, foreground=cor,
                                   activebackground=fora,
-                                  activeforeground=c["marca"],
-                                  disabledforeground=c["tenue"], image="",
+                                  activeforeground=cor, image="",
                                   padx=self._folga_x, pady=self._folga_y)
             except tk.TclError:
                 pass
