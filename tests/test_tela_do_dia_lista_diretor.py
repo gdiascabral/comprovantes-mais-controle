@@ -246,3 +246,25 @@ def test_nunca_o_banco_duas_vezes():
         assert _vezes_do_banco(nome) <= 1, nome
     for nome in ld.sugerir_nomes(MESMO_BANCO + ["SICOOB 40001-1", "SICOOB - 40001-1"]).values():
         assert _vezes_do_banco(nome) <= 1, nome
+
+
+# ---- uma mensagem por conta (dono, 28/10/2026)
+def test_mensagens_uma_por_conta_com_demais_na_primeira_sem_ordinal():
+    from decimal import Decimal
+    from tela_do_dia import lista_diretor as ldr
+    linhas = [ldr.LinhaDaLista(rotulo="A", nome="Conta A", valor=Decimal("855.41"), ordinal=1),
+              ldr.LinhaDaLista(rotulo="B", nome="Conta B", valor=Decimal("10"), ordinal=None),
+              ldr.LinhaDaLista(rotulo="C", nome="Conta C", valor=Decimal("20.5"), ordinal=None)]
+    msgs = ldr.mensagens_whatsapp(linhas)
+    assert msgs == ["1º Conta A — R$ 855,41", "Demais:\nConta B — R$ 10,00",
+                    "Conta C — R$ 20,50"]
+    assert "\n".join(msgs) == ldr.texto_whatsapp(linhas)
+    assert ldr.proxima_a_copiar(linhas, {"A"}) == 1
+    assert ldr.proxima_a_copiar(linhas, {"A", "B", "C"}) is None
+
+
+def test_sem_numeradas_nao_ha_demais():
+    from decimal import Decimal
+    from tela_do_dia import lista_diretor as ldr
+    linhas = [ldr.LinhaDaLista(rotulo="B", nome="Conta B", valor=Decimal("10"), ordinal=None)]
+    assert ldr.mensagens_whatsapp(linhas) == ["Conta B — R$ 10,00"]

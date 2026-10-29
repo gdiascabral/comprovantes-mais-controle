@@ -115,6 +115,8 @@ class TelaDoDiaFrame(ttk.Frame):
         self.marcas_agd = {}             # agendado_id → marcado (pré-marca só da prova)
         self.para_marcar_itens = None    # None = "Montar a lista" ainda não foi clicado
         self.lista = []                  # [lista_diretor.LinhaDaLista]
+        # As contas já copiadas uma a uma hoje (rótulos), e de que dia.
+        self._copiadas_do_dia, self._copiadas_dia = set(), None
         self._lista_ligada = False
         # Campo de datas (pedido do dono, 22/10/2026): nasce com a sugestão de
         # hoje; `_sugerido` é o que o APP pôs, para o Buscar do dia seguinte
@@ -373,8 +375,20 @@ class TelaDoDiaFrame(ttk.Frame):
                                          state="disabled", command=self._gravar_sugestoes)
         self.b_copiar = widgets.Botao(linha7, "Copiar para o WhatsApp", papel="passo",
                                       state="disabled", command=self._copiar_lista)
+        # Uma mensagem por conta (dono, 28/10/2026): copia, cola, Enter, e a
+        # próxima. A linha copiada ganha ✓ na ORDEM. Numa linha própria, para
+        # a fileira de cima não cortar a 1280 px.
+        linha7b = ttk.Frame(c7)
+        linha7b.pack(fill="x", pady=px((8, 0)))
+        self.b_copiar_linha = widgets.Botao(linha7b, "Copiar a linha", papel="neutro",
+                                            state="disabled",
+                                            command=lambda: self._copiar_uma(proxima=False))
+        self.b_copiar_proxima = widgets.Botao(linha7b, "Copiar a próxima", papel="passo",
+                                              state="disabled",
+                                              command=lambda: self._copiar_uma(proxima=True))
+        self.t_lista.bind("<Double-1>", lambda _e: self._copiar_uma(proxima=False), add="+")
         for i, b in enumerate(self._botoes_da_lista):
-            b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
+            b.pack(side="left", padx=px((0 if i == 0 or b is self.b_copiar_linha else 8, 0)))
 
         acao = ttk.Frame(self, style="Fundo.TFrame")
         acao.pack(fill="x", padx=PADX, pady=px((0, 10)))
@@ -424,7 +438,7 @@ class TelaDoDiaFrame(ttk.Frame):
     @property
     def _botoes_da_lista(self):
         return (self.b_subir, self.b_descer, self.b_ordinal, self.b_nome, self.b_sugestoes,
-                self.b_copiar)
+                self.b_copiar, self.b_copiar_linha, self.b_copiar_proxima)
 
     def _ligar_botoes(self):
         """O que fica ligado vem de `passo2.botoes`: gravando na nuvem, nada
@@ -457,8 +471,8 @@ class TelaDoDiaFrame(ttk.Frame):
         """↑/↓ só dentro do mesmo lado (numerados × demais), pela seleção."""
         estados = passo67.botoes_da_lista(self.lista, self._indice_lista(),
                                           ligado=self._lista_ligada)
-        for chave, w in zip(("subir", "descer", "ordinal", "nome", "sugestoes", "copiar"),
-                            self._botoes_da_lista):
+        for chave, w in zip(("subir", "descer", "ordinal", "nome", "sugestoes", "copiar",
+                             "linha", "proxima"), self._botoes_da_lista):
             w.configure(state="normal" if estados[chave] else "disabled")
 
     @staticmethod
@@ -1716,7 +1730,8 @@ class TelaDoDiaFrame(ttk.Frame):
         for i, ln in enumerate(self.lista):
             t.insert("", "end", iid=str(i), tags=widgets.linha_zebrada(
                          i, "atencao" if ln.sem_nome_curto else ""),
-                     values=(f"{ln.ordinal}º" if ln.ordinal else "",
+                     values=((f"{ln.ordinal}º" if ln.ordinal else "")
+                             + (" ✓" if ln.rotulo in self._copiadas else ""),
                              f"~ {ln.nome}" if ln.sugerido else ln.nome, brl(ln.valor)))
         if selecionar is not None:
             i = next((n for n, ln in enumerate(self.lista) if ln.rotulo == selecionar), None)
@@ -1798,6 +1813,49 @@ class TelaDoDiaFrame(ttk.Frame):
         self._na_nuvem(titulo, lambda c: c.gravar_lista(dia, ordem, texto), "lista",
                        depois="A lista JÁ foi copiada; o que se perdeu é só a sugestão de "
                               "ordem de amanhã.")
+
+    @property
+    def _copiadas(self) -> set:
+        """As copiadas valem só para o dia de trabalho em que foram copiadas
+        (outro Buscar no mesmo dia não as apaga)."""
+        dia = self.periodo.fim if self.periodo is not None else None
+        if dia != self._copiadas_dia:
+            self._copiadas_do_dia, self._copiadas_dia = set(), dia
+        return self._copiadas_do_dia
+
+    def _copiar_uma(self, *, proxima: bool):
+        """Copia a mensagem de UMA conta (a selecionada, ou a próxima ainda não
+        copiada) e marca ✓. A primeira cópia do dia grava a lista na nuvem,
+        como o «Copiar para o WhatsApp» (a sugestão de ordem de amanhã)."""
+        titulo = "Lista do diretor"
+        if not self._pode_gravar(titulo):
+            return
+        i = (ldr.proxima_a_copiar(self.lista, self._copiadas) if proxima
+             else self._indice_lista())
+        if i is None:
+            messagebox.showinfo(titulo, "Todas as contas já foram copiadas." if proxima
+                                else "Selecione uma linha da lista do diretor.")
+            return
+        recusa = passo67.recusa_de_copiar([self.lista[i]])
+        if recusa:
+            messagebox.showinfo(titulo, recusa)
+            return
+        texto = ldr.mensagens_whatsapp(self.lista)[i]
+        self.clipboard_clear()
+        self.clipboard_append(texto)
+        rotulo = self.lista[i].rotulo
+        primeira = not self._copiadas
+        self._copiadas.add(rotulo)
+        falta = sum(1 for ln in self.lista if ln.rotulo not in self._copiadas)
+        self._log(f"Copiada: {texto.splitlines()[-1]} — cole no WhatsApp"
+                  + (f" ({falta} falta(m))." if falta else " (era a última)."))
+        self._encher_lista(selecionar=rotulo)
+        if primeira and not passo67.recusa_de_copiar(self.lista):
+            ordem, dia = ldr.para_nuvem(self.lista), self.periodo.fim
+            completo = ldr.texto_whatsapp(self.lista)
+            self._na_nuvem(titulo, lambda c: c.gravar_lista(dia, ordem, completo), "lista",
+                           depois="A linha JÁ foi copiada; o que se perdeu é só a sugestão "
+                                  "de ordem de amanhã.")
 
     # ----------------------------------------------------------------- gerar
     def _ocupado(self, titulo) -> bool:
