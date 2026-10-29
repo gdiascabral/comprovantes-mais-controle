@@ -301,14 +301,31 @@ def test_buscar_da_tela_usa_os_campos_e_nao_so_a_sugestao():
     buscar = next(n for n in ast.walk(ast.parse(fonte))
                   if isinstance(n, ast.FunctionDef) and n.name == "buscar")
     trecho = ast.get_source_segment(fonte, buscar)
-    assert "dc.periodo_da_busca(" in trecho and "sugerir_periodo(" not in trecho
+    assert "dc.busca_do_dia(" in trecho and "sugerir_periodo(" not in trecho
     assert "CampoData(" in fonte
 
 
 # ------------------------------- revisão do pacote: saldo de agora ≠ do dia
-def test_nao_busca_o_futuro():
-    with pytest.raises(ValueError, match="futuro"):
-        dc.periodo_da_busca("21/10/2026", "22/10/2026", ("a", "b"), HOJE)
+def test_ate_no_futuro_adianta_e_o_dia_continua_sendo_hoje():
+    """Dono, 29/10/2026: o diretor pede para adiantar os boletos dos próximos
+    dias. O período do dia termina hoje; o resto é só para os boletos."""
+    from conciliacao.models import Periodo
+    p, ate = dc.busca_do_dia("20/10/2026", "24/10/2026", ("a", "b"), HOJE)
+    assert p == Periodo(date(2026, 10, 20), HOJE) and ate == date(2026, 10, 24)
+    assert dc.periodo_da_busca("20/10/2026", "24/10/2026", ("a", "b"), HOJE) == p
+    # DE também no futuro: o dia é só hoje.
+    p, ate = dc.busca_do_dia("23/10/2026", "25/10/2026", ("a", "b"), HOJE)
+    assert p == Periodo(HOJE, HOJE) and ate == date(2026, 10, 25)
+    # ATÉ até hoje: nada adiantado.
+    assert dc.busca_do_dia("20/10/2026", "21/10/2026", ("a", "b"), HOJE)[1] is None
+    frase = dc.frase_dos_adiantados(Periodo(HOJE, HOJE), date(2026, 10, 25))
+    assert "22/10 a 25/10" in frase and "código de barras" in frase
+    assert dc.frase_dos_adiantados(Periodo(HOJE, HOJE), None) == ""
+
+
+def test_adiantar_tambem_respeita_31_dias():
+    with pytest.raises(ValueError, match="31 dias"):
+        dc.busca_do_dia("01/10/2026", "05/11/2026", ("a", "b"), HOJE)
 
 
 def test_periodo_de_no_maximo_31_dias():
@@ -346,3 +363,41 @@ def test_excel_e_aportes_perguntam_o_saldo_de_agora_com_padrao_nao():
         assert "dc.pergunta_saldo_de_agora(" in trecho, nome
         depois = trecho.split("dc.pergunta_saldo_de_agora(", 1)[1]
         assert 'default="no"' in depois.split("return", 1)[0], nome
+
+
+# --------------------------- revisão de dinheiro do PR #161 (29/10/2026)
+def test_campos_com_ate_futuro_de_ontem_nao_valem_hoje():
+    escritos = ("20/10/2026", "24/10/2026")
+    assert dc.campos_de_outro_dia(escritos, escritos, date(2026, 10, 20), HOJE)
+    assert not dc.campos_de_outro_dia(escritos, escritos, HOJE, HOJE)
+    assert not dc.campos_de_outro_dia(("21/10/2026", "24/10/2026"), escritos,
+                                      date(2026, 10, 20), HOJE)          # o dono mexeu
+    assert not dc.campos_de_outro_dia(escritos, None, None, HOJE)
+
+
+def test_rotulo_do_periodo_diz_que_ha_adiantados():
+    from conciliacao.models import Periodo
+    t = dc.periodo_na_tela(Periodo(HOJE, HOJE), HOJE, date(2026, 10, 24))
+    assert "adiantados até 24/10" in t
+    assert "adiantados" not in dc.periodo_na_tela(Periodo(HOJE, HOJE), HOJE)
+
+
+def test_lancamento_ja_agendado_em_outro_dia_sai_ate_a_resposta():
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from tela_do_dia import conferencia as cf
+    from tela_do_dia import geracao
+    ontem = SimpleNamespace(dia=date(2026, 10, 20), lancamento_id="L1",
+                            favorecido="LOJA", valor=Decimal("10"))
+    hoje = SimpleNamespace(dia=HOJE, lancamento_id="L2", favorecido="LOJA",
+                           valor=Decimal("5"))
+    sem_lanc = SimpleNamespace(dia=date(2026, 10, 20), lancamento_id="",
+                               favorecido="X", valor=Decimal("1"))
+    nuvem = cf.Conferencia()
+    vale, tirados = geracao.sem_ja_agendados(
+        nuvem, [(ontem, None, None), (hoje, None, None), (sem_lanc, None, None)], HOJE)
+    assert set(vale.decisoes) == {"L1"} and vale.decisoes["L1"].desmarcado
+    assert tirados == ["LOJA — R$ 10,00 — já agendado em 20/10"]
+    assert geracao.so_pela_tela(nuvem, vale, "L1") == "agendado"
+    assert geracao.so_pela_tela(nuvem, vale, "L2") == ""
+    assert geracao.sem_ja_agendados(nuvem, [], HOJE)[0] is nuvem
