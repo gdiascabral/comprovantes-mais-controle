@@ -220,3 +220,32 @@ def test_valor_sem_numero_ou_negativo_nao_vira_item_nem_linha(valor):
     itens = ag.para_marcar(painel, [], [], None, set())
     assert [i.alvo for i in itens] == ["L1"]
     assert [l["alvo"] for l in ag.linhas_para_nuvem(itens)] == ["L1"]
+
+
+# ------------------------------------------- foto para o "Autenticar no banco"
+def test_dados_do_html_guardam_linha_do_boleto_e_descricao_colada():
+    from pagamentos_dia.html_pagamentos import descricao_para_colar
+    boleto = {"id": "L1", "tipo": "Boleto", "dados": "3419 1570 0700 0249", "descricao": "compra"}
+    pix = {"id": "L2", "tipo": "Pix", "dados": "email@exemplo.com", "descricao": "outra"}
+    mao = {"id": "L3", "tipo": "Pix", "dados": "x@y.com", "descricao": "m", "a_mao": "mao:4"}
+    sem_lanc = {"id": "", "tipo": "Pix", "dados": "x@y.com", "descricao": "m", "a_mao": "mao:5"}
+    res = SimpleNamespace(contas={"Conta Alfa": [boleto, pix, mao, sem_lanc]})
+    d = ag.dados_do_html(res)
+    assert d["L1"]["linha"] == "3419157007000249"
+    assert d["L1"]["descricao_colada"] == descricao_para_colar(boleto, "Conta Alfa")
+    assert d["L2"]["linha"] == "" and d["L2"]["dado"] == "email@exemplo.com"
+    assert set(d) == {"L1", "L2", "L3#mao:4", "mao:5"}
+
+
+def test_para_marcar_poe_linha_e_descricao_na_foto():
+    do_html = {"L1": {"linha": "123", "dado": "123", "descricao_colada": "OBRA NF 1"},
+               "mao:4": {"linha": "", "dado": "x@y.com", "descricao_colada": "MAO"}}
+    itens = ag.para_marcar(_painel(), [], [], None, set(), do_html=do_html)
+    assert itens[0].foto["linha"] == "123" and itens[0].foto["descricao_colada"] == "OBRA NF 1"
+    assert "linha" not in itens[1].foto
+    p = SimpleNamespace(id="mao:4", conta_erp="C", favorecido="F", valor=D("50.00"))
+    painel = {8: SimpleNamespace(rotulo="Conta Alfa - Banco", linha=8, saem=[p])}
+    m = SimpleNamespace(alvo="mao:4", id=4, conta="C", lancamento_id="", descricao="d",
+                        tipo="Pix", valor_em_aberto=None)
+    (item,) = ag.para_marcar(painel, [], [], SimpleNamespace(a_mao=[m]), set(), do_html=do_html)
+    assert item.foto["descricao_colada"] == "MAO" and item.foto["a_mao"] is True

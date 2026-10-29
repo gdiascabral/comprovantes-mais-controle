@@ -1681,8 +1681,16 @@ class TelaDoDiaFrame(ttk.Frame):
 
     # passo 6
     def _novos_para_marcar(self):
+        # A linha digitável e a descrição colada vão na foto: é o que o
+        # "Autenticar no banco" procura nos comprovantes (`autenticar`).
+        try:
+            do_html = agd.dados_do_html(self._resultado_que_sai())
+        except Exception:                                   # noqa: BLE001
+            util.log("tela_do_dia").exception("dados do HTML para a foto do agendado")
+            do_html = {}
         return agd.para_marcar(self.pagamentos, self.fora, self.leitura.lancamentos,
-                               self._conferencia_que_vale(), {a.alvo for a in self.lido.agendados_hoje})
+                               self._conferencia_que_vale(), {a.alvo for a in self.lido.agendados_hoje},
+                               do_html=do_html)
 
     def _montar_para_marcar(self):
         if not self._pode_gravar("Marcar agendados"):
