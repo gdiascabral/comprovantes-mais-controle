@@ -133,7 +133,7 @@ def test_ler_conta_tira_agendamento_e_espelho_pix_e_abre_html_so_do_mesmo_valor(
         abertos.extend(i["idAgendamento"] for i in itens)
         return [(itens[0], "<p>Observação: OBRA MODELO NF 1</p>")]
     pix = [{"valor": "10,00", "dataHoraEnvioLancamento": "2026-10-28 09:00:00.000",
-            "descricao": "OBRA PIX", "destino": {"nome": "F"}, "situacao": "EFETIVADO"}]
+            "descricao": "OBRA PIX", "destino": {"nome": "F"}, "estado": "FINALIZADO_SUCESSO", "tipo": "DEBITO"}]
     pend = [{"situacao": "PENDENTE_ASSINATURA", "valor": 5.0, "observacao": "X"}]
     movs, pends = asi.ler_conta(
         _Cli({"111"}), "111", "A", date(2026, 10, 27), HOJE, {D("10.00")},
@@ -162,3 +162,12 @@ def test_valores_por_conta_inclui_as_partes():
                      valor=D("30.00"), foto={"partes": [{"valor": "10.00"}, {"valor": "20.00"}]})
     assert asi.valores_por_conta([a]) == {"A": {D("30.00"), D("10.00"), D("20.00")}}
 
+
+
+def test_observacao_do_html_e_so_o_campo_e_nao_o_resto_do_texto():
+    from decimal import Decimal as D
+    from tela_do_dia import autenticar as au
+    html = ("<table><tr><td>Observação:</td><td>OBRA MODELO NF 1 OC 2</td></tr>"
+            "<tr><td>Autenticação</td><td>ABC</td></tr></table>")
+    m = au.Movimento("A", HOJE, D("10.00"))
+    assert asi.completar_pelo_html(m, html).descricao == "OBRA MODELO NF 1 OC 2"

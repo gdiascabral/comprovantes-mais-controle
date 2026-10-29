@@ -53,18 +53,19 @@ FOLGA_DEPOIS = 3
 #: ("... LT 10" provando "... LT 10 E 11"). A MEDIR: o limite real da
 #: observação do Sicoob; até lá, só texto deste tamanho para cima.
 CORTE_DO_BANCO = 40
-#: As situações de Pix que são dinheiro que SAIU. A MEDIR (tarefa 0): o nome
-#: do campo e os valores; Pix sem situação conhecida NÃO prova (falha
-#: fechada, como o comprovante só EFETIVADO).
-PIX_EFETIVADO = {"EFETIVADO", "EFETIVADA", "CONCLUIDO", "CONCLUIDA", "LIQUIDADO",
-                 "LIQUIDADA", "REALIZADO", "REALIZADA"}
-CAMPOS_SITUACAO_PIX = ("situacao", "status", "statusTransacao", "estado", "situacaoPix")
+#: A situação de Pix que é dinheiro que SAIU. Medido em 29/10/2026 na lista
+#: `/api/pix/lancamentos` de 3 contas (97 Pix): `estado` = FINALIZADO_SUCESSO
+#: e `tipo` = DEBITO em todos. Outro estado (ou sem estado), ou outro tipo,
+#: NÃO prova — falha fechada, como o comprovante só EFETIVADO.
+PIX_EFETIVADO = {"FINALIZADO_SUCESSO"}
+CAMPOS_SITUACAO_PIX = ("estado",)
+PIX_SAIU = "DEBITO"
 
 #: Os nomes de campo do código de barras / linha digitável que a lista do
 #: banco pode trazer. A MEDIR com a conta do dono (tarefa 0 da spec): até lá
 #: são hipótese, e campo que não vem só deixa o casamento no passo 2.
-CAMPOS_BARRAS = ("codigoBarras", "codigoDeBarras", "linhaDigitavel", "codBarras",
-                 "linhaDigitavelCodigoBarras")
+CAMPOS_BARRAS = ("codigoBarras", "codigoBarra", "codigoDeBarras", "linhaDigitavel",
+                 "codBarras", "linhaDigitavelCodigoBarras")
 #: Idem para a descrição (observação) que o dono colou.
 CAMPOS_DESCRICAO = ("descricao", "observacao", "descricaoPagamento", "complementoHistorico",
                     "campoLivre", "historico")
@@ -164,7 +165,7 @@ def do_pix_sicoob(item: dict, conta: str) -> Movimento | None:
     """Um Pix ENVIADO da lista de Pix do Sicoob (`/api/pix/lancamentos`)."""
     from baixar_comprovantes.nome_final import momento_do_pix_sicoob
     situacao = util.sem_acento(_primeiro(item, CAMPOS_SITUACAO_PIX)).upper()
-    if situacao not in PIX_EFETIVADO:
+    if situacao not in PIX_EFETIVADO or str(item.get("tipo") or "").upper() != PIX_SAIU:
         return None
     valor = dinheiro(item.get("valor"))
     dia = data_do_banco(momento_do_pix_sicoob(item))
@@ -177,8 +178,12 @@ def do_pix_sicoob(item: dict, conta: str) -> Movimento | None:
 
 
 def do_pix_inter(mov: dict, conta: str) -> Movimento | None:
-    """Um Pix ENVIADO do extrato Pix do Inter (os campos de `nome_final.do_pix`)."""
+    """Um Pix ENVIADO do extrato Pix do Inter (os campos de `nome_final.do_pix`).
+    O extrato traz os enviados (`tipo` "D") e os RECEBIDOS ("C") juntos
+    (medido em 29/10/2026): Pix que entrou nunca prova pagamento."""
     detalhe = mov.get("detalhePix") or {}
+    if str(mov.get("tipo") or "").upper() != "D" or detalhe.get("isDevolucao"):
+        return None
     valor = dinheiro(mov.get("valor"))
     dia = data_do_banco(mov.get("data"))
     if valor is None or dia is None or valor <= ZERO:
@@ -190,8 +195,13 @@ def do_pix_inter(mov: dict, conta: str) -> Movimento | None:
 
 
 def do_2via_inter(item: dict, conta: str) -> Movimento | None:
-    """Um PAGAMENTO/DARF da 2ª via do Inter (os campos de `nome_final.do_2via`)."""
+    """Um PAGAMENTO/DARF da 2ª via do Inter (os campos de `nome_final.do_2via`).
+    Medido em 29/10/2026: `pagamento.codigoBarra`/`linhaDigitavel`, a
+    descrição em `descricao`, e `pagamento.status` EFETIVADO (em 24 de 26; a
+    2ª via só lista o que tem `dataEfetivacao`). Outro status não prova."""
     pagamento = item.get("pagamento") or {}
+    if str(pagamento.get("status") or "EFETIVADO").upper() != "EFETIVADO":
+        return None
     valor = dinheiro(item.get("valor"))
     dia = data_do_banco(item.get("dataEfetivacao"))
     if valor is None or dia is None or valor <= ZERO:
@@ -402,3 +412,60 @@ def marcas_com_provas(marcas: dict, antes, depois) -> dict:
         if ja.get(a.id) != bool(sit.pre_marca):
             novas[a.id] = bool(sit.pre_marca)
     return novas
+
+
+# --------------------------------------- Inter: o extrato completo (BFF)
+# Medido em 29/10/2026 na MORAIS ENG (3 sondas, só nomes de campo): a tela
+# `contadigital.inter.co/extrato` pede `GET cd.web.bancointer.com.br/ib-pfj/
+# cc/extrato/bff/v2/home`, e NESSA conta o saldo só aparece ali (a tela
+# inicial não pede o `/cc/saldo/v3/` da Prova de saldos). A resposta traz:
+#   balance.data.balances[] — {id: "DIGITAL_ACCOUNT", available: "R$ …"}
+#   transactions.data[].bankStatements[].transactions[].detail — {rawValue,
+#     value, description, metadata: {transactionType, operationType D/C, id},
+#     data: {transactionDate, aboutTransaction: {description, transactionId},
+#     whoReceived: {name}}}
+#   schedules — os agendamentos do Inter (vazio na medição).
+# É o extrato que traz o pagamento de convênio (a 2ª via e o extrato Pix
+# não trazem — cofre, 20/10/2026). A forma do convênio aqui ainda não foi
+# vista: só Pix nas amostras.
+SALDO_DA_CONTA = "DIGITAL_ACCOUNT"
+
+
+def saldo_do_extrato_inter(corpo: dict) -> Decimal | None:
+    """O saldo da conta digital no extrato completo, ou None."""
+    for b in ((corpo or {}).get("balance") or {}).get("data", {}).get("balances") or ():
+        if str(b.get("id") or "").upper() == SALDO_DA_CONTA:
+            return dinheiro(b.get("available"))
+    return None
+
+
+def transacoes_do_extrato_inter(corpo: dict) -> list:
+    """As transações do extrato completo, achatadas (cada `detail`)."""
+    saida = []
+    for mes in ((corpo or {}).get("transactions") or {}).get("data") or ():
+        for dia in mes.get("bankStatements") or ():
+            for t in dia.get("transactions") or ():
+                if isinstance(t.get("detail"), dict):
+                    saida.append(t["detail"])
+    return saida
+
+
+def do_extrato_inter(detalhe: dict, conta: str) -> Movimento | None:
+    """Uma SAÍDA do extrato completo do Inter. Entrada (C) nunca prova."""
+    meta = detalhe.get("metadata") or {}
+    if str(meta.get("operationType") or "").upper() != "D":
+        return None
+    dados = detalhe.get("data") or {}
+    sobre = dados.get("aboutTransaction") or {}
+    valor = dinheiro(detalhe.get("rawValue")) or dinheiro(dados.get("value")) \
+        or dinheiro(detalhe.get("value"))
+    if valor is not None:
+        valor = abs(valor)
+    dia = data_do_banco(dados.get("transactionDate") or sobre.get("transactionDate"))
+    if valor is None or dia is None or valor <= ZERO:
+        return None
+    desc = str(sobre.get("description") or detalhe.get("description") or "").strip()
+    quem = str((dados.get("whoReceived") or {}).get("name") or "").strip()
+    return Movimento(conta, dia, valor, barras(_primeiro(dados, CAMPOS_BARRAS)), desc, quem,
+                     f"Inter extrato ({str(meta.get('transactionType') or '').lower() or '?'})",
+                     str(sobre.get("transactionId") or meta.get("id") or ""))

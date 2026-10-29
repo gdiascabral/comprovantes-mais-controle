@@ -101,7 +101,7 @@ def test_pix_conta_uma_vez_so_o_espelho_da_lista_comum_sai():
     espelho = {"situacao": "EFETIVADO", "valorLancamento": 200.0, "dataLancamento": "2026-10-28",
                "tipoAgendamento": "Pix via chave", "tipoOperacaoPix": "CHAVE"}
     assert au.do_comprovante_sicoob(espelho, CONTA) is None
-    pix = au.do_pix_sicoob({"valor": "200,00", "descricao": DESC, "situacao": "EFETIVADO",
+    pix = au.do_pix_sicoob({"valor": "200,00", "descricao": DESC, "estado": "FINALIZADO_SUCESSO", "tipo": "DEBITO",
                             "dataHoraEnvioLancamento": "2026-10-28 10:00:00.000",
                             "destino": {"nome": "FORNECEDOR FICTICIO"}}, CONTA)
     assert pix is not None and pix.data == date(2026, 10, 28)
@@ -203,3 +203,55 @@ def test_dividido_com_uma_parte_so_usa_a_linha_dela_e_nunca_a_da_foto():
 def test_parte_de_dividido_nao_casa_por_descricao():
     ag = _ag(partes=[{"parte_linha": "", "valor": "120.00"}, {"parte_linha": "", "valor": "80.00"}])
     assert _aut([ag], [_mov("120.00"), _mov("80.00")])[1].prova == ""
+
+
+def test_pix_credito_ou_estado_diferente_nao_prova():
+    base = {"valor": "200,00", "descricao": DESC, "estado": "FINALIZADO_SUCESSO", "tipo": "DEBITO",
+            "dataHoraEnvioLancamento": "2026-10-28 10:00:00.000"}
+    assert au.do_pix_sicoob(base, CONTA) is not None
+    assert au.do_pix_sicoob({**base, "tipo": "CREDITO"}, CONTA) is None
+    assert au.do_pix_sicoob({**base, "estado": "EM_PROCESSAMENTO"}, CONTA) is None
+
+
+def test_inter_pix_recebido_e_devolucao_nao_provam():
+    mov = {"tipo": "D", "valor": 200, "data": "2026-10-28", "nome": "F",
+           "detalhePix": {"campoLivre": DESC, "isDevolucao": False}}
+    m = au.do_pix_inter(mov, CONTA)
+    assert m is not None and m.descricao == DESC and _aut([_ag()], [m])[1].prova
+    assert au.do_pix_inter({**mov, "tipo": "C"}, CONTA) is None
+    assert au.do_pix_inter({**mov, "detalhePix": {"isDevolucao": True}}, CONTA) is None
+
+
+def test_inter_2via_pelo_codigo_de_barra_e_so_efetivado():
+    item = {"valor": "200,00", "dataEfetivacao": "2026-10-28", "descricao": DESC,
+            "pagamento": {"codigoBarra": au.barras(LINHA), "status": "EFETIVADO"}}
+    m = au.do_2via_inter(item, CONTA)
+    assert m.barras == au.barras(LINHA) and "código de barras" in _aut([_ag(linha=LINHA)], [m])[1].prova
+    assert au.do_2via_inter({**item, "pagamento": {"status": "AGENDADO"}}, CONTA) is None
+
+
+def _bff(*detalhes, saldo="R$ 1.234,56"):
+    return {"balance": {"data": {"balances": [{"id": "DIGITAL_ACCOUNT", "available": saldo}]}},
+            "transactions": {"data": [{"month": "2026-10", "bankStatements": [
+                {"day": "28", "transactions": [{"detail": d} for d in detalhes]}]}]}}
+
+
+def _detalhe(op="D", valor="200.00", desc=DESC, tipo="PIX"):
+    return {"rawValue": valor, "description": "Pix enviado",
+            "metadata": {"operationType": op, "transactionType": tipo, "id": "x"},
+            "data": {"transactionDate": "2026-10-28",
+                     "aboutTransaction": {"description": desc, "transactionId": "t1"},
+                     "whoReceived": {"name": "FORNECEDOR FICTICIO"}}}
+
+
+def test_saldo_do_extrato_completo_do_inter():
+    assert au.saldo_do_extrato_inter(_bff()) == D("1234.56")
+    assert au.saldo_do_extrato_inter({}) is None
+
+
+def test_extrato_completo_do_inter_so_saida_e_prova():
+    movs = [au.do_extrato_inter(d, CONTA)
+            for d in au.transacoes_do_extrato_inter(_bff(_detalhe(), _detalhe(op="C")))]
+    assert movs[1] is None
+    assert movs[0].descricao == DESC and movs[0].favorecido == "FORNECEDOR FICTICIO"
+    assert _aut([_ag()], [movs[0]])[1].prova

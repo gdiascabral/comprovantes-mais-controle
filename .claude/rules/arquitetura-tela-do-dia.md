@@ -749,8 +749,21 @@ Ordem do dia do dono: 1º conferir no banco o que foi pago antes, 2º saldos,
   vem só da lista de Pix); o comprovante é aberto em HTML (sem PDF, sem
   arquivo) só quando a lista não traz código/descrição e há agendado de mesmo
   valor (dono, 29/10/2026). Duas contas do ERP no mesmo número não são lidas.
-  **Os nomes dos campos de código e descrição da lista são HIPÓTESE**
-  (`autenticar.CAMPOS_*`) até a medição com o login do dono.
+  **Medido em 29/10/2026 com o login do dono** (sondas só de nomes de
+  campo, 3 contas do Sicoob, BURITIS e MORAIS ENG do Inter): a lista de
+  comprovantes do Sicoob traz `codigoBarras` (44) nos títulos e NENHUMA
+  descrição — a Observação (a descrição colada) e a linha digitável estão no
+  HTML do comprovante; convênio vem sem código na lista. O Pix do Sicoob traz
+  `descricao`, `destino.nome`, `estado` FINALIZADO_SUCESSO e `tipo` DEBITO
+  (`PIX_EFETIVADO`, `PIX_SAIU`). No Inter: a 2ª via traz
+  `pagamento.codigoBarra`/`linhaDigitavel`, `descricao` e `pagamento.status`
+  EFETIVADO; o extrato Pix mistura enviados (`tipo` D) e recebidos (C), com a
+  descrição em `detalhePix.campoLivre`; o **extrato completo** (BFF
+  `cd.web.bancointer.com.br/ib-pfj/cc/extrato/bff/v2/home`) traz o saldo
+  (`balance.data.balances[DIGITAL_ACCOUNT].available`) — **na MORAIS ENG o
+  saldo só aparece ali**, a tela inicial não pede o `/cc/saldo/v3/` da Prova
+  de saldos — e as transações com direção, valor, descrição e quem recebeu
+  (`do_extrato_inter`, `saldo_do_extrato_inter`).
 - **Travas**: thread `sicoob-autenticar`; entra no `sicoob_ocupado` da aba
   e pergunta `outros_no_sicoob` (Extratos, Baixar, Reler Sicoob, Conferir
   agendamentos das duas abas, Prova de saldos); todos esses perguntam a ele.
@@ -760,8 +773,8 @@ Ordem do dia do dono: 1º conferir no banco o que foi pago antes, 2º saldos,
   pelo título de ontem; (2) o pagamento só vale até `FOLGA_DEPOIS` dias depois
   do dia do agendado ou do vencimento da foto, o que vier depois — sem teto,
   um pendente velho olhava semanas e um pagamento recorrente (ou o de um
-  remarcado já respondido) o provava; (3) Pix só prova com situação de
-  efetivado conhecida (`PIX_EFETIVADO`, A MEDIR) — sem ela, falha fechada;
+  remarcado já respondido) o provava; (3) Pix só prova com `estado`
+  FINALIZADO_SUCESSO e `tipo` DEBITO (medido) — sem eles, falha fechada;
   (4) foto com `partes` (mesmo UMA) casa só pela linha de cada parte, nunca
   pela `foto["linha"]` (a da 1ª parte do HTML), e parte nunca casa por
   descrição; o valor bate ao centavo também no código de barras; (5) a ☑ só

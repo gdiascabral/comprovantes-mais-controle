@@ -100,7 +100,9 @@ def valores_por_conta(pendentes) -> dict:
 
 
 def _texto_do_html(html) -> str:
-    t = re.sub(r"<[^>]+>", " ", str(html or ""))
+    # Cada etiqueta vira QUEBRA de linha: a Observação é um campo da tabela
+    # do comprovante, e com espaço no lugar ela levava o resto do texto junto.
+    t = re.sub(r"<[^>]+>", "\n", str(html or ""))
     return re.sub(r"[ \t\r\f\v]+", " ", t)
 
 
