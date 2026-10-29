@@ -364,6 +364,9 @@ def main():
     # nega o resto; aqui só se apagam os botões.
     aba_cap = ControleAportesFrame(conteudo, aba_anx)
     aba_cap.liberar_edicao(_eu.admin)
+    # Pagamentos do dia lê o Controle depois do Buscar (aviso de igualar e
+    # quem são os sócios da conta-mãe no aporte de fora, dono 29/10/2026).
+    aba_dia.ligar_controle(aba_cap)
     # Contratos usa o mesmo ERP: divide navegador e thread, como as outras.
     aba_ctr = ContratosFrame(conteudo, aba_anx)
     # Acessórias NÃO divide o navegador do escritório contábil (terceiro

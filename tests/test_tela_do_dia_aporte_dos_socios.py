@@ -216,3 +216,81 @@ def test_avisos_dos_socios_so_da_mae():
     outra = _apuracao(conta="FILHA UM - BANCO", linhas=[_linha("C", 0), _linha("D", 9)])
     assert ads.avisos_dos_socios([mae, outra], MAE, ENTIDADES) == [
         "B precisa aportar R$ 5,00 para igualar A em MAE - BANCO A"]
+
+
+# ------------------------------------------------- ligação na tela (sem janela)
+import ast  # noqa: E402
+from pathlib import Path  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+RAIZ = Path(__file__).resolve().parents[1]
+
+
+def _funcao(arquivo, nome):
+    arvore = ast.parse((RAIZ / arquivo).read_text(encoding="utf-8"))
+    return next(n for n in ast.walk(arvore)
+                if isinstance(n, ast.FunctionDef) and n.name == nome)
+
+
+def _chamadas(no):
+    return {c.func.attr for c in ast.walk(no)
+            if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)}
+
+
+def test_o_buscar_roda_o_controle_no_fim():
+    assert "_rodar_controle" in _chamadas(_funcao("tela_do_dia/frame.py", "_receber_leitura"))
+
+
+def test_o_mandar_divide_o_aporte_de_fora_e_passa_os_pares_em_dobro():
+    mandar = _funcao("tela_do_dia/frame.py", "_mandar_aportes")
+    assert {"_dividir_de_fora", "juntar"} <= _chamadas(mandar)
+    kws = {k.arg for c in ast.walk(mandar) if isinstance(c, ast.Call)
+           and isinstance(c.func, ast.Attribute) and c.func.attr == "operacoes"
+           for k in c.keywords}
+    assert "pares_em_dobro" in kws
+
+
+def test_o_app_liga_o_controle_na_tela_do_dia():
+    assert "ligar_controle" in (RAIZ / "comprovantes_app.py").read_text(encoding="utf-8")
+
+
+def _controle(**kw):
+    from tela_do_dia.controle_frame import ControleAportesFrame
+    base = dict(_lendo=False, worker=None, ouvintes=[],
+                anx=SimpleNamespace(ocupado=lambda aba=None: None))
+    base.update(kw)
+    c = SimpleNamespace(**base)
+    c.atualizar = lambda: True
+    c.atualizar_se_livre = lambda: ControleAportesFrame.atualizar_se_livre(c)
+    c._avisar_ouvintes = lambda a, e: ControleAportesFrame._avisar_ouvintes(c, a, e)
+    return c
+
+
+def test_controle_ocupado_nao_abre_dialogo_e_responde_ocupado():
+    assert _controle(_lendo=True).atualizar_se_livre() == "ocupado"
+    assert _controle(anx=SimpleNamespace(ocupado=lambda aba=None: "outra")
+                     ).atualizar_se_livre() == "ocupado"
+    assert _controle().atualizar_se_livre() == ""
+
+
+def test_ouvinte_que_estoura_nao_impede_os_outros():
+    vistos = []
+
+    def ruim(_a, _e):
+        raise RuntimeError("x")
+    c = _controle(ouvintes=[ruim, lambda a, e: vistos.append((a, e))])
+    c._avisar_ouvintes([1], "")
+    assert vistos == [([1], "")]
+
+
+def test_rodar_controle_espera_a_vaga_e_desiste_com_recado():
+    from tela_do_dia.frame import TelaDoDiaFrame
+    agendados, recebidos = [], []
+    tela = SimpleNamespace(controle=SimpleNamespace(atualizar_se_livre=lambda: "ocupado"),
+                           ESPERA_CONTROLE=2, _rodar_controle=None,
+                           after=lambda ms, f, *a: agendados.append(a),
+                           _receber_controle=lambda a, e: recebidos.append(e))
+    TelaDoDiaFrame._rodar_controle(tela, 0)
+    assert agendados == [(1,)] and recebidos == []
+    TelaDoDiaFrame._rodar_controle(tela, 2)
+    assert recebidos and "ocupado" in recebidos[0]

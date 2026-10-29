@@ -17,8 +17,9 @@ ordem: **PR 1 (aporte)** e depois **PR 2 (autenticar)**.
 
 ### Regras do negócio (dono)
 
-- Os dois sócios (os nomes do `confirmar_antes.json`, os mesmos da caixa de
-  reembolso do cartão 2) aportam **só** na Morais Engenharia (conta-mãe,
+- Os dois sócios (na implementação, os aportadores da conta-mãe no Controle
+  de aportes, com nome completo e parte: o `confirmar_antes.json` só tem o
+  começo do nome, e casar nome incompleto é proibido no projeto) aportam **só** na Morais Engenharia (conta-mãe,
   Inter ou Sicoob), sempre meio a meio; num dia um pode aportar mais ou
   sozinho, e o outro iguala depois.
 - Na aba Regras do MODELO eles **não** são aportadores da conta-mãe (só das

@@ -10,12 +10,14 @@ filha da janela do app (o Enter global não busca de novo).
 from __future__ import annotations
 
 import tkinter as tk
+from decimal import Decimal
 from tkinter import messagebox, ttk
 
 import widgets
 
 from . import conferencia as cf
 from . import passo2
+from .valores import brl
 
 px = widgets.px
 
@@ -209,4 +211,75 @@ def pedir_nome_curto(tela, rotulo, atual) -> str | None:
 
     tela._rodape(jan, corpo, (("Cancelar", "neutro", jan.destroy),
                               ("Gravar", "acao", aplicar)), aplicar)
+    return resposta.get("v")
+
+
+def pedir_divisao(tela, linhas, socios, avisos, *, dividir, ler, validar) -> dict | None:
+    """A janela "Dividir aporte entre os sócios": uma linha por aporte de
+    fora na conta-mãe, um campo por sócio, já com a divisão do Controle de
+    aportes. Devolve {destino: {sócio: parte}} ou None (cancelou: nada vai).
+
+    `linhas`: [(destino, valor)]; `socios`: [(nome, peso)]; `dividir(valor)
+    -> {sócio: parte}`, `ler(texto) -> Decimal` e `validar(valor, partes) ->
+    str` são as regras de `aporte_dos_socios` — aqui não se decide nada."""
+    titulo = "Dividir aporte entre os sócios"
+    jan, corpo = tela._janela(titulo)
+    _texto(corpo, "O aporte de fora na conta-mãe vai para a aba Aportes como Aporte de "
+                  "Capital de cada sócio. A divisão já vem na proporção do Controle de "
+                  "aportes; mude só se hoje foi diferente. Parte zero não vai. A soma de "
+                  "cada linha tem de bater com o valor.")
+    for aviso in avisos or ():
+        ttk.Label(corpo, text=f"{widgets.MARCAS_ESTADO['atencao']} {aviso}",
+                  style="Atencao.TLabel", wraplength=px(460), justify="left"
+                  ).pack(anchor="w", pady=px((6, 0)))
+    nomes = [n for n, _p in socios]
+    campos = []
+    for destino, valor in linhas:
+        bloco = ttk.Frame(corpo)
+        bloco.pack(fill="x", pady=px((12, 0)))
+        ttk.Label(bloco, text=f"{destino} — {brl(valor)}",
+                  style="Secao.TLabel").pack(anchor="w")
+        inicial = dividir(valor)
+        vs = {}
+        for nome in nomes:
+            v = tk.StringVar(value=brl(inicial.get(nome, Decimal("0.00"))))
+            vs[nome] = v
+            _entrada(bloco, nome, v, 20)
+        situacao = ttk.Label(bloco, text="", style="Apoio.TLabel")
+        situacao.pack(anchor="w", pady=px((4, 0)))
+        campos.append((destino, valor, vs, situacao))
+    resposta = {}
+
+    def conferir() -> dict | None:
+        saida, ok = {}, True
+        for destino, valor, vs, situacao in campos:
+            try:
+                partes = {n: ler(v.get()) for n, v in vs.items()}
+                erro = validar(valor, list(partes.values()))
+            except ValueError as e:
+                partes, erro = {}, f"valor inválido: {e}"
+            situacao.configure(text=f"{widgets.MARCAS_ESTADO['erro']} {erro}" if erro
+                               else f"{widgets.MARCAS_ESTADO['ok']} bate",
+                               style="Erro.TLabel" if erro else "Apoio.TLabel")
+            ok = ok and not erro
+            saida[destino] = partes
+        return saida if ok else None
+
+    for _d, _v, vs, _s in campos:
+        for v in vs.values():
+            v.trace_add("write", lambda *_a: conferir())
+    conferir()
+
+    def aplicar(_e=None):
+        saida = conferir()
+        if saida is None:
+            messagebox.showwarning(titulo, "Há linha cuja soma não bate com o valor — "
+                                          "corrija antes de mandar.", parent=jan)
+            return "break"
+        resposta["v"] = saida
+        jan.destroy()
+        return "break"
+
+    tela._rodape(jan, corpo, (("Cancelar", "neutro", jan.destroy),
+                              ("Mandar", "acao", aplicar)), aplicar)
     return resposta.get("v")

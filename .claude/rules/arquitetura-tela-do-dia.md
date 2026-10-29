@@ -44,6 +44,7 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 | `pagamentos.py` | passo 2: por linha do painel, o que VAI SAIR, o JÁ ENVIADO (soma no a pagar) e o que está BLOQUEADO; conta sem linha no painel vai para `fora`, com o motivo, em vez de sumir |
 | `aportes.py` | passo 3: mínimo, sugestão da aba Regras, conta-mãe primeiro com alerta forte, movimentos «À MÃO» no M (entra) e no E (sai) |
 | `para_aportes.py` | os aportes definidos viram `Operacao` da aba Aportes, com pendências (não foram) e avisos (foram, confira) |
+| `aporte_dos_socios.py` | o aporte de fora na conta-mãe dividido entre os sócios (quem são, a divisão inicial, a validação, as operações com chave `defora:`) e o aviso de igualar do Controle de aportes |
 | `excel_do_dia.py` | passo 4: o MODELO.xlsx com os números da tela |
 | `erp_do_dia.py` | os saldos do ERP, sempre pelo Chrome do app |
 | `dia_de_trabalho.py` | o JSON do dia |
@@ -358,6 +359,50 @@ Aportes — já lançou? confira no ERP antes de digitar de novo"
 A data das operações é a do dia de trabalho (`periodo.fim`), nunca a do
 relógio: tela aberta depois da meia-noite mandaria com outra data e anotaria
 no arquivo de outro dia.
+
+## Aporte de fora dividido entre os sócios e aviso de igualar (29/10/2026)
+
+Spec: `docs/superpowers/specs/2026-10-29-aporte-jv-jc-e-autenticar-design.md`
+(PR 1). Regra do dono: os sócios da conta-mãe aportam só nela (ou no outro
+banco da mesma empresa), na mesma proporção; um dia um aporta mais ou
+sozinho e o outro iguala depois.
+
+- **Quais contas**: `contas_da_mae` = a mãe e os destinos para onde ela só
+  TRANSFERE na aba Regras. Aporte de fora noutra conta continua como antes
+  (não vai) e o Registro diz "lance na aba Aportes à mão".
+- **Quem são os sócios**: os aportadores da conta-mãe no **Controle de
+  aportes** (`socios_da_mae`, conta casada pela conta do ERP do cadastro da
+  mãe), com o nome COMPLETO resolvido EXATO no cadastro da aba Aportes. Não
+  é o `confirmar_antes.json`: ele só tem o começo do nome, e casar nome
+  incompleto é proibido. Sem a apuração da mãe, o aporte de fora não vai e o
+  Registro diz por quê.
+- **A janela** (`janelas.pedir_divisao`) abre no "Mandar para a aba Aportes"
+  quando há aporte de fora nessas contas ainda não mandado (`ja_mandado`, por
+  destino): uma linha por destino (os de fora no mesmo destino somam), um
+  campo por sócio, já na proporção do Controle (`divisao_inicial`, pela
+  `dividir_por_peso` — a soma fecha no centavo). Soma que não bate deixa o
+  "Mandar" recusar; parte zero não vira operação; **Cancelar = nada vai**, nem
+  o resto do clique.
+- **Cada parte > 0** vira "Aporte de Capital" sócio → conta (`_modo` do
+  cadastro), com chave `defora:<sócio>|<destino>` no `enviados_aportes`; já
+  mandada vira a pendência "já mandado" de sempre. Destino com alguma parte já
+  mandada hoje não reabre a janela (um segundo aporte de fora no mesmo dia
+  vai à mão pela aba Aportes).
+- **Mesmo sócio na mesma conta pela aba Regras** (não acontece hoje, mas
+  somar calado lançaria o dobro se fossem o mesmo dinheiro): pendência dos
+  DOIS lados (`operacoes` devolve os pares, que vão a
+  `para_aportes.operacoes(pares_em_dobro=)`).
+- **Aviso de igualar** (`avisos_de_igualar`): uma frase por aportador com
+  `LinhaAportador.diferenca > 0` ("X precisa aportar R$ D para igualar Y em
+  <conta>"), conta com erro e recebimento sem dono avisam. Fica na faixa
+  `lbl_igualar` do cartão 3 e no Registro; a janela mostra só os da mãe.
+- **O Controle roda depois do Buscar** (dono: "toda vez que rodar os pgtos
+  do dia"): `_receber_leitura` → `_rodar_controle` →
+  `ControleAportesFrame.atualizar_se_livre` (nunca o diálogo de navegador
+  ocupado; vaga do Controle em uso = tenta de novo a cada 2 s, até
+  `ESPERA_CONTROLE`). O resultado chega por `ControleAportesFrame.ouvintes`
+  (`ligar_controle`, no `comprovantes_app.py`), também quando a leitura
+  falha.
 
 ## Movimentos à mão, distribuição e investidores numa linha só (item A, 22/10/2026)
 

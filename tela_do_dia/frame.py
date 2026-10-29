@@ -34,6 +34,7 @@ from pagamentos_dia import reembolso, relatorio
 from pagamentos_dia import regras_pagamento as regras_pag
 from pagamentos_dia.pagamentos_frame import _carregar_mapas, _historico
 
+from . import aporte_dos_socios as ads
 from . import aportes as ap
 from . import conferencia as cf
 from . import decisoes as dc
@@ -89,6 +90,11 @@ class TelaDoDiaFrame(ttk.Frame):
         self._erro_drain = None
         self.aba_aportes = None
         self.aba_remessa = None
+        # A aba Controle de aportes (ligada pelo app, `ligar_controle`): a
+        # leitura dela roda depois do Buscar e dá o aviso de igualar e os
+        # sócios da conta-mãe (`aporte_dos_socios`).
+        self.controle = None
+        self._apuracoes, self._erro_controle = [], "ainda não lido"
         # Ligados pelo app; devolvem True se a aba foi mostrada (o papel de
         # quem entrou pode não a ter).
         self.abrir_aportes = lambda: False
@@ -258,6 +264,10 @@ class TelaDoDiaFrame(ttk.Frame):
         self.lbl_alerta = self._ajuda(alertas, "", estilo="Erro.TLabel")
         self.lbl_avisos = self._ajuda(alertas, "", estilo="Atencao.TLabel")
         self._mostrar_alertas("", "")
+        # Quem precisa aportar para igualar (dono, 29/10/2026), pela apuração
+        # do Controle de aportes; vazio sai do layout.
+        self.lbl_igualar = self._ajuda(c3, "", estilo="Atencao.TLabel")
+        self.lbl_igualar.pack_forget()
         self._ajuda(c3, "Para cada conta que precisa: o mínimo, quem põe e quanto, e o que "
                         "ainda falta ratear. A conta-mãe vem primeiro, com o que entra e o "
                         "que sai para as filhas. A regra sugere; dois cliques (ou Enter) no "
@@ -750,6 +760,48 @@ class TelaDoDiaFrame(ttk.Frame):
         if motivo:
             self._log(motivo)
         self.sicoob.ler_se_faltar()
+        # Ordem do dia (dono, 29/10/2026): depois dos saldos, o Controle de
+        # aportes, sozinho — é dele o aviso de igualar e quem são os sócios.
+        self._rodar_controle(0)
+
+    # ------------------------------------------------- Controle de aportes
+    #: Quantas vezes (de 2 s) se espera a vaga do Controle de aportes livrar.
+    ESPERA_CONTROLE = 90
+
+    def ligar_controle(self, controle) -> None:
+        self.controle = controle
+        controle.ouvintes.append(self._receber_controle)
+
+    def _rodar_controle(self, tentativas: int) -> None:
+        """Pede a leitura do Controle de aportes sem diálogo de "navegador
+        ocupado": com a vaga dele em uso, tenta de novo a cada 2 s."""
+        if self.controle is None:
+            return
+        try:
+            motivo = self.controle.atualizar_se_livre()
+        except Exception as e:                              # noqa: BLE001
+            motivo = str(e) or type(e).__name__
+        if motivo == "ocupado":
+            if tentativas < self.ESPERA_CONTROLE:
+                self.after(2000, self._rodar_controle, tentativas + 1)
+            else:
+                self._receber_controle([], "o navegador ficou ocupado — leia na aba "
+                                           "Controle de aportes")
+        elif motivo:
+            self._receber_controle([], motivo)
+
+    def _receber_controle(self, apuracoes, erro: str) -> None:
+        """Na thread do Tk (ouvinte do Controle de aportes)."""
+        self._apuracoes, self._erro_controle = list(apuracoes or ()), erro
+        avisos = ads.avisos_de_igualar(self._apuracoes, erro)
+        texto = "\n".join(f"{widgets.MARCAS_ESTADO['atencao']} {a}" for a in avisos)
+        self.lbl_igualar.configure(text=texto)
+        if texto:
+            self.lbl_igualar.pack(fill="x", anchor="w", after=self.lbl_avisos.master)
+        else:
+            self.lbl_igualar.pack_forget()
+        for a in avisos:
+            self._log(f"[igualar] {a}")
 
     def _mostrar_alertas(self, erro: str, atencao: str):
         """Erro em cima, atenção embaixo; o vazio não ocupa linha."""
@@ -1996,6 +2048,43 @@ class TelaDoDiaFrame(ttk.Frame):
                                           resultado=geracao.para_a_remessa(resultado))
 
     # --------------------------------------------------- aba Aportes
+    def _dividir_de_fora(self):
+        """(Envio dos sócios ou None, pares da aba Regras em dobro); (False,
+        set()) = o dono cancelou a janela. Sem sócios conhecidos (Controle de
+        aportes não lido), o aporte de fora fica como antes — não vai — e o
+        Registro diz por quê."""
+        mae = self.aportes.mae
+        nas, outras = ads.movimentos_de_fora(self.dia.a_mao,
+                                             ads.contas_da_mae(self.regras, mae))
+        for destino, valor in outras:
+            self._log(f"  - aporte de fora em {destino} ({brl(valor)}): não é da "
+                      "conta-mãe — lance na aba Aportes à mão")
+        enviados = dict(self.dia.enviados_aportes)
+        a_dividir = {d: v for d, v in nas.items() if not ads.ja_mandado(enviados, d)}
+        for destino, valor in nas.items():
+            if destino not in a_dividir:
+                self._log(f"  [!] aporte de fora em {destino} ({brl(valor)}): já mandado "
+                          "hoje — confira a aba Aportes; não vai de novo")
+        if not a_dividir:
+            return None, set()
+        entidades = self.aba_aportes.entidades
+        socios, recado = ads.socios_da_mae(self._apuracoes, mae, entidades)
+        if recado:
+            self._log(f"\n[!] o aporte de fora NÃO foi para a aba Aportes: {recado}")
+            return None, set()
+        divisoes = janelas.pedir_divisao(
+            self, list(a_dividir.items()), socios,
+            ads.avisos_dos_socios(self._apuracoes, mae, entidades),
+            dividir=lambda v: ads.divisao_inicial(v, socios), ler=ads.ler_parte,
+            validar=ads.validar_divisao)
+        if divisoes is None:
+            return False, set()
+        return ads.operacoes(divisoes, a_dividir, entidades, self.aba_aportes.subcontas,
+                             dc.data_das_operacoes(self.periodo), enviados=enviados,
+                             definidos=self.aportes.definidos_validos,
+                             sem_saldo=dc.contas_sem_saldo(self.saldos),
+                             na_aba_aportes=list(self.aba_aportes.operacoes))
+
     def _mandar_aportes(self):
         titulo = "Aportes"
         if self.aba_aportes is None or self.aportes is None or self._ocupado(titulo):
@@ -2013,6 +2102,13 @@ class TelaDoDiaFrame(ttk.Frame):
                                            acao="Mandar")
         if agora and not messagebox.askyesno(titulo, agora, default="no"):
             return
+        # O aporte de fora na conta-mãe vai dividido entre os sócios (dono,
+        # 29/10/2026). Cancelar a janela: NADA vai, nem o resto do clique.
+        dos_socios, em_dobro = self._dividir_de_fora()
+        if dos_socios is False:
+            self._log("\nNada foi para a aba Aportes: a divisão do aporte de fora foi "
+                      "cancelada.")
+            return
         envio = para_aportes.operacoes(
             self.aportes.definidos_validos, self.regras, self.aba_aportes.entidades,
             self.aba_aportes.subcontas, dc.data_das_operacoes(self.periodo),
@@ -2021,7 +2117,9 @@ class TelaDoDiaFrame(ttk.Frame):
             na_aba_aportes=list(self.aba_aportes.operacoes),
             distribuicoes=dc.distribuicoes_validas(self.dia.distribuicoes,
                                                    self._rotulos_do_painel),
-            contas_do_painel=self._rotulos_do_painel)
+            contas_do_painel=self._rotulos_do_painel, pares_em_dobro=em_dobro)
+        if dos_socios is not None:
+            ads.juntar(envio, dos_socios)
         # Pendência NÃO foi (bloqueia); aviso foi, mas pede conferência. "Já
         # mandado" se resolve na aba Aportes: mandar de novo daqui seria um
         # segundo aporte por cima do primeiro.
