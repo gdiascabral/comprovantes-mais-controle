@@ -40,6 +40,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+import weakref
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as _PrazoFuture
 from urllib.parse import urlsplit
@@ -72,6 +73,35 @@ _RESPIRO_MS = 200
 #: Para a thread dona sair, e `fechar()` não esperar para sempre por ela.
 _PRAZO_SAIDA = 15.0
 _FIM = object()
+
+
+def _fechar_no_fim(sessao: "SessaoPelaPagina") -> None:
+    """Fecha a aba quando o programa terminar, venha de onde vier a sessão.
+
+    Medido em 03/11/2026: script que pedia a sessão direto a esta classe (sem
+    o cache de `erp.sessao`) deixava a aba aberta ao sair — 9 abas sobrando no
+    Chrome central, RAM subindo. E `atexit` comum não resolveu (aba ficou):
+    chega tarde. `threading._register_atexit` roda no começo da saída do
+    Python, antes de esperar as threads, com a dona da aba e o Playwright
+    ainda vivos — aí a aba fecha (4 abas antes, 4 depois).
+
+    Referência fraca: sessão que já sumiu (os testes criam dezenas) não é
+    segurada viva nem chamada no fim."""
+    ref = weakref.ref(sessao)
+
+    def _fechar():
+        s = ref()
+        if s is not None:
+            try:
+                s.fechar()
+            except Exception:       # noqa: BLE001 — fechar no fim é cortesia
+                pass
+
+    try:
+        threading._register_atexit(_fechar)
+    except (AttributeError, RuntimeError):
+        # Python sem o gancho, ou já saindo: fica o `atexit` de `erp.sessao`.
+        pass
 
 
 def _sem_bearer(valor: str | None) -> str | None:
@@ -123,6 +153,7 @@ class SessaoPelaPagina:
         self._thread = threading.Thread(target=self._laco, daemon=True,
                                         name=f"erp-central-{nome}")
         self._thread.start()
+        _fechar_no_fim(self)
 
     @classmethod
     def do_acesso(cls, nome: str = "principal", *, fabrica_aba=None,

@@ -406,3 +406,71 @@ def test_pedido_parado_na_fila_estoura_como_ocupado_sem_quebrar():
         assert s.pedir(f"{LEG}/x") == {"n": 3}          # não ficou quebrada
     finally:
         s.fechar()
+
+
+# ---------------------------------------------------- a aba fecha no fim
+# 03/11/2026: script que pedia a sessão direto a esta classe e terminava sem
+# `fechar()` deixava a aba aberta no Chrome central — 9 abas sobrando, RAM
+# subindo. A sessão agora se fecha sozinha quando o programa termina.
+
+def test_registra_o_fechamento_para_o_fim_do_programa(monkeypatch):
+    ganchos = []
+    monkeypatch.setattr(threading, "_register_atexit", ganchos.append)
+    s, aba = _sessao(_PaginaFalsa())
+    assert len(ganchos) == 1 and not aba.fechou
+    ganchos[0]()                         # o que o Python roda ao sair
+    s._saiu.wait(2)
+    assert aba.fechou and not s.viva
+
+
+def test_gancho_do_fim_nao_segura_sessao_que_ja_sumiu(monkeypatch):
+    import gc
+    ganchos = []
+    monkeypatch.setattr(threading, "_register_atexit", ganchos.append)
+    s, aba = _sessao(_PaginaFalsa())
+    s.fechar()
+    del s
+    gc.collect()
+    ganchos[0]()                         # sessão coletada: não faz nada, não levanta
+    assert aba.fechou
+
+
+def test_sem_o_gancho_do_python_a_sessao_nasce_igual(monkeypatch):
+    def recusa(_fn):
+        raise RuntimeError("can't register atexit after shutdown")
+    monkeypatch.setattr(threading, "_register_atexit", recusa)
+    s, _ = _sessao(_PaginaFalsa())
+    try:
+        assert s.access_token == "acc1"
+    finally:
+        s.fechar()
+
+
+def test_script_que_termina_sem_fechar_fecha_a_aba(tmp_path):
+    """O fim de verdade, num Python à parte: o script abre a sessão, faz um
+    pedido e termina sem `fechar()`. A aba (dublê) tem de sair do `with`."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    raiz = Path(__file__).resolve().parents[1]
+    marca = tmp_path / "fechou.txt"
+    script = tmp_path / "script.py"
+    script.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(raiz)!r})\n"
+        f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
+        "from test_erp_sessao_pagina import _PaginaFalsa\n"
+        "from erp.sessao_pagina import SessaoPelaPagina\n"
+        "class Aba:\n"
+        "    def __init__(self): self.page = _PaginaFalsa()\n"
+        "    def __enter__(self): return self\n"
+        "    def __exit__(self, *e):\n"
+        f"        open({str(marca)!r}, 'w').write('ok')\n"
+        "        return False\n"
+        "s = SessaoPelaPagina.do_acesso('principal', fabrica_aba=Aba, espera_captura=2.0)\n"
+        "s.pedir('https://" + hosts.HOST_LEGACY + "/maiscontrole/services/a')\n",
+        encoding="utf-8")
+    r = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert marca.exists(), "a aba ficou aberta depois de o script terminar"
