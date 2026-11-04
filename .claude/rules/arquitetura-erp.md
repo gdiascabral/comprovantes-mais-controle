@@ -192,6 +192,24 @@ paths:
   do teste; um teste com o
   `garantir_chrome` trocado por 127.0.0.1:9230 encontrou o Chrome central do
   dono vivo nessa porta).
+  **A tela do CÓDIGO do e-mail (`#/mfa`) é FORA** (04/11/2026). O Chrome
+  central reiniciou às 06:31 e o ERP pediu, depois da senha, o código que
+  manda por e-mail; a tela não tem campo de senha nem "Entre na sua conta" e
+  passava por logada — o porteiro escreveu "ok" por 3 h com a aba parada
+  nela. `login_tela.na_tela_de_codigo` (pela URL) entra em
+  `tem_sinal_de_login`/`tem_sinal_forte` e no `MCClient._tem_sinal_de_login`.
+  Quem entra pela tela (o porteiro, pelo `_garantir_login_sem_trava`; o login
+  principal, pelo `_entrar`) passa pela tela UMA vez por login com
+  `login_tela.passar_codigo_se_puder` → `erp/codigo_email.py`: lê o código no
+  Gmail por IMAP (só leitura: `readonly` + `BODY.PEEK`; e-mail mais velho que
+  o pedido de login, com `FOLGA`, não vale; até 3 códigos; "reenviar" se não
+  chegar) com a SENHA DE APP do Google que a pessoa cola em
+  `<servidor>/_chaves/gmail-<acesso>.txt` (ou `MC_CODIGO_EMAIL_ARQUIVO`):
+  uma linha com o Gmail, outra com a senha; sem a do Gmail vale o e-mail do
+  login. Nunca imprime a senha nem o código. **Fora do exe**: usa `imaplib`,
+  que o motor não embute — está no `_FORA` do `test_imports_do_motor.py` e é
+  importado TARDE; `ImportError` = a pessoa digita na janela, como antes.
+  Conferir no servidor: `python -m erp.codigo_email testar --acesso principal`.
   **`MC_CENTRAL=off`** desliga tudo e o app volta a ser o de antes; renomear o
   `acessos.json` para `acessos.json.off` faz o mesmo na máquina inteira.
   Arquivo de acessos com problema falha FECHADO (`ErpErro`/`RuntimeError`),
