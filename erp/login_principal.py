@@ -102,15 +102,16 @@ def esquecer() -> None:
 
 def garantir_logado(acesso, *, caiu: bool = False, log=None, abrir_pagina=None,
                     credencial=None, trava_arquivo=None, dormir=time.sleep,
-                    relogio=time.monotonic) -> bool:
+                    relogio=time.monotonic, codigo=None) -> bool:
     """Garante a sessão do Chrome central do `acesso`. True = entrou agora.
 
     `caiu=True`: quem chama viu a tela de login; a verificação recente não
     vale, a não ser que tenha sido feita DEPOIS deste pedido (outro já
     relogou enquanto este esperava). Levanta `ErpErro` com o motivo.
 
-    `abrir_pagina`, `credencial`, `trava_arquivo`, `dormir` e `relogio` são
-    para os dublês dos testes."""
+    `abrir_pagina`, `credencial`, `trava_arquivo`, `dormir`, `relogio` e
+    `codigo` (quem passa pela tela do código do e-mail, 04/11/2026) são para
+    os dublês dos testes."""
     log = log or (lambda _m: None)
     nome = acesso.nome
     with _TRAVA_DAS_TRAVAS:
@@ -131,13 +132,16 @@ def garantir_logado(acesso, *, caiu: bool = False, log=None, abrir_pagina=None,
             return False
         abrir_pagina = abrir_pagina or (lambda: _AbaPrincipal(acesso))
         credencial = credencial or (lambda: login_tela.credencial_do_acesso(acesso, log))
+        codigo = codigo or (lambda page, desde, email: login_tela.passar_codigo_se_puder(
+            page, acesso, desde, email_do_login=email, log=log))
         trava_arquivo = trava_arquivo or (lambda: central.trava(
             login_tela.caminho_da_trava(acesso), espera=ESPERA_TRAVA,
             velha=login_tela.VELHA_TRAVA))
         try:
             entrou = _na_thread_propria(
                 lambda: _verificar_e_entrar(nome, abrir_pagina, credencial,
-                                            trava_arquivo, log, dormir, relogio))
+                                            trava_arquivo, log, dormir, relogio,
+                                            codigo))
         except ErpErro as e:
             _FALHA[nome] = (relogio(), str(e))
             raise
@@ -195,7 +199,7 @@ def _recarregar(page, url: str) -> None:
 
 
 def _verificar_e_entrar(nome, abrir_pagina, credencial, trava_arquivo, log,
-                        dormir, relogio) -> bool:
+                        dormir, relogio, codigo=None) -> bool:
     with abrir_pagina() as page:
         # A MESMA rota do MCClient e da leitura, recarregada: é nela que a
         # queda aparece como tela de login (o single-spa repinta a casca sem
@@ -209,7 +213,7 @@ def _verificar_e_entrar(nome, abrir_pagina, credencial, trava_arquivo, log,
                 _recarregar(page, URL_CAPTURA)
                 if not _fora(page, dormir):
                     return False
-                _entrar(nome, page, credencial, log, dormir, relogio)
+                _entrar(nome, page, credencial, log, dormir, relogio, codigo)
         except TimeoutError as e:
             log(f"trava de login do acesso '{nome}': {e}")
             raise ErpErro("outro robô está entrando no ERP há muito tempo pelo "
@@ -217,7 +221,8 @@ def _verificar_e_entrar(nome, abrir_pagina, credencial, trava_arquivo, log,
         return True
 
 
-def _entrar(nome, page, credencial, log, dormir, relogio) -> None:
+def _entrar(nome, page, credencial, log, dormir, relogio, codigo=None) -> None:
+    desde = time.time()           # e-mail de código mais velho que isto não vale
     try:
         page.goto(URL_LOGIN, wait_until="commit")
     except Exception:
@@ -228,6 +233,7 @@ def _entrar(nome, page, credencial, log, dormir, relogio) -> None:
             f"o Chrome central '{nome}' está fora do ERP e não há login "
             "guardado: entre no ERP pelo app uma vez (Minha aba no ERP) para "
             "guardar o login")
+    email = creds[0]
     disparou = login_tela.entrar_pelo_controller(page, creds[0], creds[1], diag=log)
     del creds                                     # a senha não fica guardada
     if not disparou:
@@ -236,7 +242,23 @@ def _entrar(nome, page, credencial, log, dormir, relogio) -> None:
             "de login do ERP pode ter mudado) — entre no ERP pelo app (Minha "
             "aba no ERP) e tente de novo")
     limite = relogio() + PRAZO_LOGIN
+    tentou_codigo = False
     while login_tela.tem_sinal_forte(page):
+        # 04/11/2026: depois da senha o ERP pode pedir o código do e-mail
+        # (#/mfa). Uma vez por login; quem lê e digita é `codigo`.
+        if not tentou_codigo and login_tela.na_tela_de_codigo(page):
+            tentou_codigo = True
+            try:
+                passou = codigo(page, desde, email) if codigo else False
+            except Exception as e:
+                raise ErpErro(f"entrei com o login guardado no Chrome central "
+                              f"'{nome}', mas {str(e)[:200]}") from None
+            if not passou:
+                raise ErpErro(
+                    f"o ERP pediu o código de autenticação do e-mail no Chrome "
+                    f"central '{nome}' — digite o código na janela do Chrome")
+            limite = relogio() + PRAZO_LOGIN
+            continue
         if relogio() >= limite:
             raise ErpErro(
                 f"entrei com o login guardado no Chrome central '{nome}', mas o "

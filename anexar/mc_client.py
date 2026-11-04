@@ -676,7 +676,11 @@ class MCClient:
 
     @staticmethod
     def _tem_sinal_de_login(aba) -> bool:
-        """A tela de login está à vista nesta aba?"""
+        """A tela de login (ou a do código do e-mail, `#/mfa`) está à vista
+        nesta aba? A do código passava por logada até 04/11/2026 — ver
+        `login_tela.na_tela_de_codigo`."""
+        if login_tela.na_tela_de_codigo(aba):
+            return True
         for seletor in SINAIS_DE_LOGIN:
             try:
                 if aba.locator(seletor).first.is_visible(timeout=1200):
@@ -828,6 +832,7 @@ class MCClient:
         # senha guardada. Só acontece quando já sabemos que a sessão caiu,
         # então não há risco de derrubar sessão boa.
         self.log("Sessão não está de pé — indo para a tela de login.")
+        desde = time.time()        # e-mail de código mais velho que isto não vale
         try:
             self._ir_para(config.MC_URL_LOGIN)
             self.page.wait_for_timeout(1500)
@@ -845,14 +850,45 @@ class MCClient:
         # quatro ou cinco abas abertas, uma volta passava de 11 s, e as "90
         # voltas" viravam 15 minutos de espera em vez de 90 segundos.
         limite = time.monotonic() + 90
+        tentou_codigo = False
         while time.monotonic() < limite:
             if self._esta_logado():
                 self.log("Login OK.")
                 return True
+            # 04/11/2026: depois da senha o ERP pode pedir o código que manda
+            # por e-mail (#/mfa). Uma vez por login: lê no Gmail e digita.
+            if not tentou_codigo and login_tela.na_tela_de_codigo(self.page):
+                tentou_codigo = True
+                if self._passar_codigo(desde):
+                    limite = time.monotonic() + 90
+                    continue
+                # não passou: segue esperando — a pessoa pode digitar na janela
             time.sleep(1)
         self.log("[!] Não detectei a área logada. Entre na janela do Chrome "
                  "— depois o app segue sozinho.")
         self.log(f"    {self._diagnostico_sessao()}")
+        return False
+
+    def _passar_codigo(self, desde: float) -> bool:
+        """A tela do código do e-mail (`erp.codigo_email`). True = digitado e
+        aceito; False com o motivo no log (aí é a pessoa, na janela). Só no
+        Chrome central: é lá que há acesso e arquivo da senha de app."""
+        if not self.central:
+            return False
+        creds = self._credencial()
+        email = creds[0] if creds else ""
+        del creds
+        try:
+            if login_tela.passar_codigo_se_puder(self.page, self._acesso, desde,
+                                                 email_do_login=email,
+                                                 log=self.log):
+                return True
+        except Exception as e:
+            self.log(f"[!] O ERP pediu o código de autenticação: {str(e)[:200]}")
+            config.diag(f"código do e-mail: {type(e).__name__}: {str(e)[:200]}")
+            return False
+        self.log("[!] O ERP pediu o código de autenticação do e-mail — digite "
+                 "na janela do Chrome.")
         return False
 
     def _tentar_entrar(self):

@@ -84,8 +84,25 @@ def _calado(_msg: str) -> None:
     pass
 
 
+def na_tela_de_codigo(page) -> bool:
+    """A aba está na tela do CÓDIGO de autenticação (`#/mfa`)?
+
+    04/11/2026: depois da senha o ERP pode pedir o código que manda por
+    e-mail. Essa tela não tem campo de senha nem "Entre na sua conta", e por
+    isso passava por área logada — o porteiro escrevia "ok" com a aba parada
+    nela e os robôs falhavam até alguém digitar o código. Ela é FORA, e
+    forte: sem o código não há sessão."""
+    try:
+        return "/mfa" in (page.url or "")
+    except Exception:
+        return False
+
+
 def tem_sinal_de_login(page, sinais=SINAIS_DE_LOGIN) -> bool:
-    """A tela de login está à vista nesta aba? Erro ao olhar = "não"."""
+    """A tela de login (ou a do código) está à vista nesta aba? Erro ao olhar
+    = "não"."""
+    if na_tela_de_codigo(page):
+        return True
     for seletor in sinais:
         try:
             if page.locator(seletor).first.is_visible(timeout=1200):
@@ -122,6 +139,27 @@ def entrar_pelo_controller(page, email: str, senha: str, diag=None) -> bool:
     motivo = r.get("motivo") if isinstance(r, dict) else r
     diag(f"login pelo controller não rodou: {motivo}")
     return False
+
+
+def passar_codigo_se_puder(page, acesso, desde: float, *, email_do_login: str = "",
+                           log=None) -> bool:
+    """Na tela do código: lê no Gmail e digita (`erp.codigo_email`).
+
+    True = passou. False = esta aba não está no código, ou este Python não
+    sabe ler e-mail (no exe o `imaplib` não vem: lá a tela continua sendo da
+    pessoa). Levanta `codigo_email.CodigoErro` com o motivo quando tentou e
+    não deu."""
+    if not na_tela_de_codigo(page):
+        return False
+    try:
+        from erp import codigo_email      # tarde: imaplib não está no exe
+    except ImportError:
+        (log or _calado)("o ERP pediu o código de autenticação; este Python "
+                         "não lê e-mail — digite o código na janela do Chrome")
+        return False
+    codigo_email.passar_codigo(page, acesso, desde, email_do_login=email_do_login,
+                               log=log or _calado)
+    return True
 
 
 def credencial_do_acesso(acesso, diag=None) -> tuple[str, str] | None:

@@ -46,8 +46,11 @@ _PASTAS = ("", "inicio", "baixar_comprovantes", "separar_renomear", "anexar", "a
 #: acusá-los assim que a linha de import existir.
 #: `erp/porteiro.py` é o mesmo caso: entrada de `python -m erp.porteiro`, rodada
 #: pelo Agendador com o Python da máquina; o exe nunca o importa.
+#: `erp/codigo_email.py` (04/11/2026) usa `imaplib`, que o motor não embute:
+#: quem o chama (`login_tela.passar_codigo_se_puder`) importa TARDE e trata o
+#: `ImportError` como "a pessoa digita o código" — no exe nada muda.
 _FORA = {"motor.py", "atualizador.py", "migrar.py", "cli.py", "__main__.py",
-         "porteiro.py"}
+         "porteiro.py", "codigo_email.py"}
 
 
 def _arquivos_do_app():
