@@ -49,7 +49,8 @@ MINIMO_DE_TEXTO = 40
 #: Palavras que são a mesma coisa nos dois lados. O contrato escreve por
 #: extenso, o cadastro abrevia.
 SINONIMOS = ((r"\bQUADRA\b", "QD"), (r"\bLOTE\b", "LT"),
-             (r"\bCASA\b", "CS"), (r"\bRUA\b", ""), (r"\bAVENIDA\b", "AV"))
+             (r"\bCASA\b", "CS"), (r"\bUNIDADE\b", "UN"),
+             (r"\bRUA\b", ""), (r"\bAVENIDA\b", "AV"))
 
 #: Palavras de razão social que não identificam ninguém.
 PARTICULAS_DE_EMPRESA = {"LTDA", "SPE", "EIRELI", "EPP", "ME", "SA", "S/A",
@@ -160,9 +161,13 @@ def conferir_quadra_lote(texto: str, complemento: str) -> str:
 RE_LOTE_CASA = re.compile(r"\bLT\s*\d+[A-Z]?\s*-?\s*CS\s*(?:NO?\s*)?0*(\d{1,3})\b")
 
 
-def conferir_casa(texto: str, unidade: int | None) -> str:
+def conferir_casa(texto: str, unidade: int | None, tipo: str = "CS") -> str:
     if not unidade:
         return ILEGIVEL
+    if tipo == "UN":
+        # Condomínio: não há lote+casa; vale a UNIDADE do objeto.
+        padrao = re.compile(rf"\bUN\s*(?:NO?\s*)?0*{unidade}\b")
+        return CONFERE if padrao.search(texto) else DIVERGE
     objeto = {int(n) for n in RE_LOTE_CASA.findall(texto)}
     if objeto:
         return CONFERE if unidade in objeto else DIVERGE
@@ -264,7 +269,8 @@ def conferir(texto: str, esperado: dict) -> dict:
         "rua": conferir_rua(preparado, esperado.get("rua", "")),
         "quadra_lote": conferir_quadra_lote(preparado,
                                             esperado.get("complemento", "")),
-        "casa": conferir_casa(preparado, esperado.get("unidade")),
+        "casa": conferir_casa(preparado, esperado.get("unidade"),
+                              esperado.get("tipo") or "CS"),
         "comprador": conferir_nome(preparado, esperado.get("comprador", "")),
         "vendedora": conferir_vendedora(preparado, esperado.get("cnpj", ""),
                                         esperado.get("vendedora") or []),

@@ -241,7 +241,8 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
                                         cancelar)
         if linhas is None:
             linhas = [a]
-            anexo, motivo = contrato_de(a.anexos_da_obra, a.imovel.unidade)
+            anexo, motivo = contrato_de(a.anexos_da_obra, a.imovel.unidade,
+                                        a.imovel.tipo)
             if anexo is None and "disputam" in motivo:
                 anexo, motivo = _desempatar_por_conteudo(api, a, motivo, log)
             if anexo is None:
@@ -555,7 +556,8 @@ def preparar_destino(achado: Achado, raiz: Path, ano: int, mes: int,
     alvo = pasta / nome_arquivo(achado.imovel.obra, achado.imovel.unidade,
                                 comprador,
                                 achado.anexo.get("extension") or ".pdf",
-                                distratado=achado.distrato)
+                                distratado=achado.distrato,
+                                tipo=achado.imovel.tipo)
     passou = caminho_longo(alvo)
     if passou:
         return (f"o caminho ficaria com {passou} caracteres, acima do limite "
@@ -579,6 +581,7 @@ def esperado_da_conferencia(achado: Achado) -> dict:
         "rua": end.get("address") or "",
         "complemento": end.get("complement") or "",
         "unidade": achado.imovel.unidade,
+        "tipo": achado.imovel.tipo,
         "comprador": comprador,
         "cnpj": achado.cnpj,
         "vendedora": [n for n in (achado.razao_social, achado.cliente_erp) if n],

@@ -152,13 +152,15 @@ def candidatos_distintos(anexos: list[dict], unidade: int | None) -> list[dict]:
     return list(vistos.values())
 
 
-def motivo_da_disputa(distintos: list[dict], unidade: int | None) -> str:
+def motivo_da_disputa(distintos: list[dict], unidade: int | None,
+                      tipo: str = "CS") -> str:
     nomes = ", ".join(sorted(f'"{_nome(a)}"' for a in distintos))
     return (f"{len(distintos)} anexos disputam a "
-            f"{rotulo_da_unidade(unidade)}: {nomes}")
+            f"{rotulo_da_unidade(unidade, tipo)}: {nomes}")
 
 
-def contrato_de(anexos: list[dict], unidade: int | None) -> tuple[dict | None, str]:
+def contrato_de(anexos: list[dict], unidade: int | None,
+                tipo: str = "CS") -> tuple[dict | None, str]:
     """(anexo, motivo). Anexo None significa revisão, e o motivo explica.
 
     Cópias de nome idêntico contam como uma: a obra examinada tem anexos
@@ -175,7 +177,7 @@ def contrato_de(anexos: list[dict], unidade: int | None) -> tuple[dict | None, s
     achados = candidatos(anexos or [], unidade)
     if not achados:
         return None, (f"nenhum anexo de COMPRA E VENDA para a "
-                      f"{rotulo_da_unidade(unidade)}")
+                      f"{rotulo_da_unidade(unidade, tipo)}")
 
     distintos = candidatos_distintos(anexos, unidade)
     if len(distintos) == 1:
@@ -186,7 +188,7 @@ def contrato_de(anexos: list[dict], unidade: int | None) -> tuple[dict | None, s
         return completos[0], ("a versão mais completa entre "
                               f"{len(distintos)} candidatos")
 
-    return None, motivo_da_disputa(distintos, unidade)
+    return None, motivo_da_disputa(distintos, unidade, tipo)
 
 
 def ordenar_para_escolha(anexos: list[dict],
