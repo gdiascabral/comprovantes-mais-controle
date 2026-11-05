@@ -119,3 +119,43 @@ def test_janela_de_releitura_cobre_vencimento_distante():
     a = ag.Agendado.de_linha({**ABERTO, "foto": {"em_aberto": "100.00", "vencimento": "2027-03-01"}})
     ini, fim = ag.intervalo_de_releitura([a], HOJE)
     assert fim >= date(2027, 3, 1)
+
+
+class _ApiComOverview(_Api):
+    """Dublê com o `/overview`: guarda as janelas pedidas e responde existe."""
+
+    def __init__(self, itens=None, existe=None, falhar_overview=False):
+        super().__init__(itens)
+        self.janelas, self._existe, self.falhar_overview = [], existe or {}, falhar_overview
+
+    def listar_a_pagar(self, ini, fim, log=print):
+        self.janelas.append((ini, fim))
+        return self.itens
+
+    def existem(self, ids, log=print):
+        if self.falhar_overview:
+            raise RuntimeError("rede")
+        return {i: self._existe.get(i) for i in ids}
+
+
+def test_releitura_em_janelas_curtas_e_nao_numa_de_70_dias():
+    api = _ApiComOverview([{"id": "L1", "paid": True}])
+    nd.ler(_Nuvem(), DIA, HOJE, api=api)
+    assert api.janelas == [("2026-10-19", "2026-10-25")]
+
+
+def test_ausente_so_vira_sumiu_com_o_404_do_overview():
+    """05/11/2026: a tela disse "sumiu" para 79 títulos pagos no ERP."""
+    sumiu = nd.ler(_Nuvem(), DIA, HOJE, api=_ApiComOverview([], {"L1": False}))
+    assert "sumiu" in sumiu.pendentes[0][1].frase and sumiu.existe == {"L1": False}
+    outra_data = nd.ler(_Nuvem(), DIA, HOJE, api=_ApiComOverview([], {"L1": True}))
+    assert "vencimento mudou" in outra_data.pendentes[0][1].frase
+    sem_saber = nd.ler(_Nuvem(), DIA, HOJE, api=_ApiComOverview([], {"L1": None}))
+    assert "sumiu" not in sem_saber.pendentes[0][1].frase
+    caiu = nd.ler(_Nuvem(), DIA, HOJE, api=_ApiComOverview([], falhar_overview=True))
+    assert "sumiu" not in caiu.pendentes[0][1].frase and caiu.avisos
+
+
+def test_api_sem_overview_nunca_diz_sumiu():
+    lido = nd.ler(_Nuvem(), DIA, HOJE, api=_Api([]))
+    assert "sumiu" not in lido.pendentes[0][1].frase and lido.relido

@@ -48,8 +48,38 @@ def test_pago_no_erp_pre_marca_com_prova():
 
 
 def test_titulo_sumiu_nunca_se_resolve_mesmo_com_retorno_ok():
-    s = ag.situacao(_ag(), None, SimpleNamespace(retorno_estado="ok"))
-    assert not s.pre_marca and s.tag == "erro" and "título sumiu do ERP — era R$ 100,00" in s.frase
+    s = ag.situacao(_ag(), None, SimpleNamespace(retorno_estado="ok"), existe=False)
+    assert not s.pre_marca and s.tag == "erro" and "título sumiu do ERP (excluído) — era R$ 100,00" in s.frase
+
+
+def test_ausente_da_releitura_so_e_sumiu_com_o_404():
+    """05/11/2026: 79 títulos PAGOS apareceram como "sumiu". Ausência na
+    releitura, sozinha, nunca é "sumiu": existir noutra data é vencimento
+    mudado, e não saber é "confira"."""
+    noutra_data = ag.situacao(_ag(), None, existe=True)
+    sem_saber = ag.situacao(_ag(), None)
+    for s in (noutra_data, sem_saber):
+        assert s.tag == "atencao" and not s.pre_marca and "sumiu" not in s.frase
+    assert "vencimento mudou" in noutra_data.frase
+
+
+_LINHA_BASE = {"id": 1, "dia": "2026-10-22", "conta": "C", "alvo": "L1", "lancamento_id": "L1",
+               "favorecido": "Fornecedor Modelo Ltda", "valor": "100.00",
+               "foto": {"em_aberto": "100.00", "vencimento": "2026-10-22"}}
+
+
+def test_janelas_curtas_em_volta_de_cada_data_e_juntam_as_que_se_tocam():
+    a = _ag()
+    b = ag.Agendado.de_linha({**_LINHA_BASE, "id": 2, "dia": "2026-11-04", "lancamento_id": "L2",
+                              "foto": {"em_aberto": "100.00", "vencimento": "2026-11-02"}})
+    c = ag.Agendado.de_linha({**_LINHA_BASE, "id": 3, "dia": "2026-12-20", "lancamento_id": "L3",
+                              "foto": {"em_aberto": "100.00", "vencimento": "2026-12-20"}})
+    janelas = ag.janelas_de_releitura([b, c])
+    assert janelas == [(date(2026, 10, 30), date(2026, 11, 7)), (date(2026, 12, 17), date(2026, 12, 23))]
+    assert all((f - i).days <= 10 for i, f in janelas)
+    sem_link = ag.Agendado.de_linha({**_LINHA_BASE, "id": 4, "lancamento_id": ""})
+    assert ag.janelas_de_releitura([sem_link]) == []
+    assert ag.janelas_de_releitura([a])
 
 
 def test_valor_mudou_espera_o_dono():

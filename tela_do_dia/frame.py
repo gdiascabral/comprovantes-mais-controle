@@ -163,6 +163,7 @@ class TelaDoDiaFrame(ttk.Frame):
                              "O app marca (☑) só o que ele prova pago — baixa no ERP ou "
                              "retorno do banco; título que sumiu ou mudou de valor espera "
                              "você. Clique na 1ª coluna (ou Espaço) para marcar ou desmarcar.")
+        self.lbl_agd_resumo = self._ajuda(self.c0, "")
         self.t_agd = self._tabela(self.c0, passo67.COLS_AGD, arvore=False, altura=8)
         self.t_agd.configure(selectmode="browse")
         self.t_agd.bind("<ButtonRelease-1>", self._clique_agd)
@@ -176,7 +177,10 @@ class TelaDoDiaFrame(ttk.Frame):
         self.b_agd_reag = widgets.Botao(linha_agd, "Reagendado…", papel="neutro",
                                         state="disabled",
                                         command=lambda: self._responder("reagendado"))
-        for i, b in enumerate((self.b_agd_pago, self.b_agd_nao, self.b_agd_reag)):
+        self.b_agd_provados = widgets.Botao(linha_agd, "Marcar os provados", papel="neutro",
+                                            state="disabled", command=self._marcar_provados)
+        for i, b in enumerate((self.b_agd_pago, self.b_agd_nao, self.b_agd_reag,
+                               self.b_agd_provados)):
             b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
         self.autenticar = AutenticarNaTela(linha_agd, tela=self)
         self.autenticar.b.pack(side="right")
@@ -452,8 +456,8 @@ class TelaDoDiaFrame(ttk.Frame):
     def _botoes_67(self):
         """"Agendados a confirmar" e passo 6: a mesma regra do passo 2 (nuvem
         lida, sem gravação em andamento)."""
-        return (self.b_agd_pago, self.b_agd_nao, self.b_agd_reag, self.b_montar,
-                self.b_gravar_agd)
+        return (self.b_agd_pago, self.b_agd_nao, self.b_agd_reag, self.b_agd_provados,
+                self.b_montar, self.b_gravar_agd)
 
     @property
     def _botoes_da_lista(self):
@@ -1649,6 +1653,7 @@ class TelaDoDiaFrame(ttk.Frame):
         for i, ln in enumerate(passo67.linhas_agendados(pendentes, self.marcas_agd)):
             t.insert("", "end", iid=ln.iid, values=ln.valores,
                      tags=widgets.linha_zebrada(i, ln.tags[0] if ln.tags else ""))
+        self.lbl_agd_resumo.configure(text=passo67.resumo_agendados(pendentes, self.marcas_agd))
         # O cartão fica sempre; vazio, diz o que fazer.
         if pendentes:
             self.lbl_agd_vazio.pack_forget()
@@ -1675,6 +1680,12 @@ class TelaDoDiaFrame(ttk.Frame):
         t = self.t_agd
         if t.identify_region(evento.x, evento.y) == "cell" and t.identify_column(evento.x) == "#1":
             self._alternar_agd(t.identify_row(evento.y))
+
+    def _marcar_provados(self):
+        if self.lido is None:
+            return
+        self.marcas_agd = passo67.marcar_provados(self.lido.pendentes, self.marcas_agd)
+        self._encher_agendados()
 
     def _alternar_agd(self, iid):
         if not iid or self.lido is None:

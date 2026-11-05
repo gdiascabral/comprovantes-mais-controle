@@ -123,11 +123,19 @@ def pendentes(agendados, respostas) -> list[Agendado]:
             if a.id not in ult or ult[a.id].resposta not in FINAIS]
 
 
-def situacao(ag, titulo, envio=None, *, relido=True, prova_extra="") -> Situacao:
+def situacao(ag, titulo, envio=None, *, relido=True, prova_extra="",
+             existe=None) -> Situacao:
     """O que a tela mostra para um pendente. `titulo` = o item do ERP relido
     (None = não está na releitura); `envio` = o `Envio` da remessa (pode ser
     None); `relido=False` = a releitura do ERP não aconteceu, e aí ausência
-    não é "sumiu"."""
+    não é "sumiu".
+
+    `existe` = o que o `/overview` do ERP disse do título ausente da
+    releitura: False (404, foi excluído), True (existe, só não está perto da
+    data agendada — o vencimento mudou) ou None (não perguntado ou sem
+    resposta). "Sumiu" só com False: em 05/11/2026 a tela disse "sumiu" para
+    79 títulos que estavam PAGOS no ERP, e a lista de 85 agendados ficou sem
+    resposta desde o dia anterior."""
     pago_no_banco = getattr(envio, "retorno_estado", "") == "ok"
     # Lançamento dividido em N boletos (entrega 5): o "ok" do retorno é de UM
     # envio e não diz que todas as partes saíram — só a baixa no ERP prova.
@@ -141,8 +149,14 @@ def situacao(ag, titulo, envio=None, *, relido=True, prova_extra="") -> Situacao
         return Situacao("atencao", "não reli o título no ERP — responda")
     if titulo is None:
         extra = " · o retorno do banco diz pago" if pago_no_banco else ""
-        return Situacao("erro", f"título sumiu do ERP — era {brl(ag.valor)}, "
-                                f"favorecido {ag.favorecido or '?'}{extra}")
+        if existe is False:
+            return Situacao("erro", f"título sumiu do ERP (excluído) — era {brl(ag.valor)}, "
+                                    f"favorecido {ag.favorecido or '?'}{extra}")
+        if existe is True:
+            return Situacao("atencao", "o título continua no ERP, mas noutra data — o "
+                                       f"vencimento mudou; confira e responda{extra}")
+        return Situacao("atencao", "não achei o título na releitura do ERP — confira "
+                                   f"e responda{extra}")
     if titulo.get("paid") or titulo.get("markedAsPaid"):
         return Situacao("ok", "pago no ERP (baixa)", True, PROVA_BAIXA)
     if titulo.get("remainingValue") is None:
@@ -177,6 +191,39 @@ def intervalo_de_releitura(pend, hoje) -> tuple[date, date] | None:
         return None
     folga = timedelta(days=FOLGA_DIAS)
     return min(datas) - folga, max(hoje, max(datas)) + folga
+
+
+#: Folga, em dias, de cada janela curta da releitura (ver `janelas_de_releitura`).
+FOLGA_CURTA = 3
+
+
+def janelas_de_releitura(pend) -> list[tuple[date, date]]:
+    """As janelas a reler no ERP: uma em volta de cada data (vencimento da
+    foto e dia do agendado, ± `FOLGA_CURTA`), juntando as que se tocam.
+
+    Medido em 05/11/2026: a janela única de `intervalo_de_releitura` (do mais
+    antigo − 31 até hoje + 31, ~70 dias) pedia 6 a 7 páginas de 500 e cada
+    uma levava de 1 a mais de 3 minutos no ERP; janelas de poucos dias
+    voltam em segundos, quase sempre numa página só. O título que mudou de
+    vencimento para longe fica fora — e é o `/overview` que diz que ele
+    existe (`situacao(existe=True)`), nunca a ausência que diz "sumiu"."""
+    datas = set()
+    for a in pend:
+        if not a.lancamento_id:
+            continue
+        datas.add(a.dia)
+        venc = _data(a.foto.get("vencimento"))
+        if venc:
+            datas.add(venc)
+    folga = timedelta(days=FOLGA_CURTA)
+    janelas: list[list[date]] = []
+    for d in sorted(datas):
+        ini, fim = d - folga, d + folga
+        if janelas and ini <= janelas[-1][1] + timedelta(days=1):
+            janelas[-1][1] = max(janelas[-1][1], fim)
+        else:
+            janelas.append([ini, fim])
+    return [(i, f) for i, f in janelas]
 
 
 @dataclass

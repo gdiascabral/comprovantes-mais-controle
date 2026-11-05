@@ -633,6 +633,33 @@ class MCApi:
                 progresso(min(i + LOTE, len(installment_ids)), len(installment_ids))
         return resultado
 
+    def existem(self, installment_ids: list[str], log=print) -> dict[str, bool | None]:
+        """{installmentId: True (existe) | False (404: excluído) | None (não
+        soube)}, pelo mesmo `/overview` do `listar_overviews` — medido em
+        05/11/2026: menos de 1 s por título, 404 com `EntityNotFound` para o
+        excluído. Só o 404 vira False: 401/429/500 ou falha de rede é None,
+        e None nunca vira "sumiu" (`agendados.situacao`)."""
+        if not self._req_pagos:
+            raise RuntimeError("Credenciais ainda não capturadas.")
+        url_orig, headers = self._req_pagos
+        partes = urlsplit(url_orig)
+        raiz = f"{partes.scheme}://{partes.netloc}{partes.path}".rsplit("/", 1)[0]
+        resultado: dict[str, bool | None] = {}
+        LOTE = 12
+        for i in range(0, len(installment_ids), LOTE):
+            fatia = installment_ids[i:i + LOTE]
+            parcial = self.page.evaluate(_JS_FETCH_LOTE, {
+                "urls": [{"chave": str(x), "url": f"{raiz}/{x}/overview"} for x in fatia],
+                "headers": headers,
+            }) or {}
+            for x in fatia:
+                v = parcial.get(str(x))
+                if isinstance(v, dict) and "__erro" in v:
+                    resultado[str(x)] = False if v["__erro"] == 404 else None
+                else:
+                    resultado[str(x)] = True if isinstance(v, dict) else None
+        return resultado
+
     def anexos_de_titulos(self, trade_payable_ids: list[str], log=print,
                           progresso=None, cancelar=None) -> dict[str, list]:
         """{tradePayableId: [anexos]} — nível do TÍTULO, não do sub-pagamento.
