@@ -75,7 +75,8 @@ def limpar(texto: str) -> str:
 
 
 def nome_arquivo(obra: str, unidade: int, comprador: str,
-                 extensao: str = ".pdf", distratado: bool = False) -> str:
+                 extensao: str = ".pdf", distratado: bool = False,
+                 tipo: str = "CS") -> str:
     """`CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 02 - FULANO DE TAL.pdf`.
 
     A extensão vem do anexo e chega COM ponto (`extension` da API), então não
@@ -84,7 +85,7 @@ def nome_arquivo(obra: str, unidade: int, comprador: str,
     ext = (extensao or ".pdf").strip()
     if ext and not ext.startswith("."):
         ext = "." + ext
-    base = f"{PREFIXO} {limpar(obra)} CS {unidade:02d}"
+    base = f"{PREFIXO} {limpar(obra)} {tipo or 'CS'} {unidade:02d}"
     comprador = limpar(comprador)
     if comprador:
         base += f" - {comprador}"

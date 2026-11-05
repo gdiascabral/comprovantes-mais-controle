@@ -162,7 +162,7 @@ class ContratosFrame(ttk.Frame):
         for col, titulo, larg, ancora in (
                 ("marca", "✔", 34, "center"),
                 ("distrato", "DISTRATO", 70, "center"), ("obra", "OBRA", 170, "w"),
-                ("casa", "CASA", 55, "w"),
+                ("casa", "CASA/UN", 62, "w"),
                 ("comprador", "COMPRADOR", 190, "w"),
                 ("recebido", "RECEBIDO NO MÊS", 110, "e"),
                 ("condicoes", "CONDIÇÕES", 130, "w"),
