@@ -39,6 +39,10 @@ class LidoDaNuvem:
     titulos: dict = field(default_factory=dict)
     envios: dict = field(default_factory=dict)
     relido: bool = False
+    #: lancamento_id → o que o `/overview` disse do título ausente da
+    #: releitura (True existe noutra data, False excluído; sem chave = não
+    #: perguntado). Ver `agendados.situacao(existe=)`.
+    existe: dict = field(default_factory=dict)
 
 
 def _envio_deste_agendamento(envio, agendado):
@@ -66,18 +70,31 @@ def ler(nuvem, dia, hoje, *, api=None, registro=None, log=print) -> LidoDaNuvem:
         return LidoDaNuvem(Conferencia(), erro=f"não li a nuvem ({e})")
     ultimas = ag.ultima_resposta(respostas)
     pend = ag.pendentes(abertos, respostas)
-    avisos, titulos, relido = [], {}, False
-    janela = ag.intervalo_de_releitura(pend, hoje)
-    if janela and api is not None:
+    avisos, titulos, relido, existe = [], {}, False, {}
+    janelas = ag.janelas_de_releitura(pend)
+    if janelas and api is not None:
         try:
-            ini, fim = janela
-            itens = api.listar_a_pagar(f"{ini:%Y-%m-%d}", f"{fim:%Y-%m-%d}", log=log) or ()
-            titulos = {str(i.get("id")): i for i in itens if i.get("id")}
+            # Janelas curtas, uma em volta de cada data (medido em
+            # 05/11/2026: a janela única de ~70 dias levava minutos por
+            # página). Uma que falha derruba a releitura inteira: título
+            # ausente só significa algo quando TODAS foram lidas.
+            for ini, fim in janelas:
+                itens = api.listar_a_pagar(f"{ini:%Y-%m-%d}", f"{fim:%Y-%m-%d}", log=log) or ()
+                titulos.update({str(i.get("id")): i for i in itens if i.get("id")})
             relido = True
         except Exception as e:                               # noqa: BLE001
+            titulos = {}
             avisos.append(f"não reli os títulos agendados no ERP ({e}): nada foi pré-marcado")
-    elif janela:
+    elif janelas:
         avisos.append("sem a sessão do ERP: os títulos agendados não foram relidos")
+    faltam = sorted({a.lancamento_id for a in pend if a.lancamento_id
+                     and a.lancamento_id not in titulos}) if relido else []
+    if faltam and hasattr(api, "existem"):
+        # "Sumiu" só com o 404 do ERP; existir noutra data é "vencimento mudou".
+        try:
+            existe = api.existem(faltam, log=log) or {}
+        except Exception as e:                               # noqa: BLE001
+            avisos.append(f"não confirmei no ERP os títulos ausentes da releitura ({e})")
     envios = {}
     refs = [a.lancamento_id for a in pend if a.lancamento_id]
     if refs and registro is not None:
@@ -92,13 +109,14 @@ def ler(nuvem, dia, hoje, *, api=None, registro=None, log=print) -> LidoDaNuvem:
         envios_de[a.id] = envio
         try:
             sit = ag.situacao(a, titulos.get(a.lancamento_id), envio,
-                              relido=relido or not a.lancamento_id)
+                              relido=relido or not a.lancamento_id,
+                              existe=existe.get(a.lancamento_id))
         except Exception as e:                               # noqa: BLE001
             sit = ag.Situacao("atencao", "não consegui ler o título no ERP — responda")
             avisos.append(f"título {a.lancamento_id or a.alvo} ilegível no ERP ({e}): sem pré-marca")
         linhas.append((a, sit, ultimas.get(a.id)))
     return LidoDaNuvem(conf, de_hoje, linhas, nomes, anterior, "", avisos,
-                       titulos=titulos, envios=envios_de, relido=relido)
+                       titulos=titulos, envios=envios_de, relido=relido, existe=existe)
 
 
 def com_provas_do_banco(lido: LidoDaNuvem, autenticacoes: dict) -> LidoDaNuvem:
@@ -116,7 +134,8 @@ def com_provas_do_banco(lido: LidoDaNuvem, autenticacoes: dict) -> LidoDaNuvem:
         try:
             nova = ag.situacao(a, lido.titulos.get(a.lancamento_id), lido.envios.get(a.id),
                                relido=lido.relido or not a.lancamento_id,
-                               prova_extra=aut.prova)
+                               prova_extra=aut.prova,
+                               existe=lido.existe.get(a.lancamento_id))
         except Exception:                                    # noqa: BLE001
             nova = sit
         if not nova.pre_marca and aut.nota:

@@ -713,6 +713,19 @@ resposta final. **Nada se resolve sozinho.**
   "da última busca"); o item sem prova aparece como "SEM prova — confira".
 - Já marcado hoje não se marca de novo (índice único dia + alvo): remarcar é
   responder "reagendado" com a data de hoje. As repetidas viram recado.
+- **"Sumiu" só com o 404 do ERP (05/11/2026).** A tela disse "título sumiu
+  do ERP" para 79 títulos PAGOS, e a lista chegou a 85 sem resposta. A
+  releitura agora é em janelas curtas (`agendados.janelas_de_releitura`:
+  cada data ± `FOLGA_CURTA`, juntando as que se tocam) — a janela única de
+  ~70 dias levava de 1 a mais de 3 minutos por página de 500, medido. Título
+  ausente das janelas é perguntado ao `/overview` (`MCApi.existem`):
+  404 → "sumiu (excluído)" (erro); existe → "vencimento mudou; confira"
+  (atenção); sem resposta → "não achei na releitura; confira" (atenção).
+  `LidoDaNuvem.existe` guarda isso para o "Autenticar no banco".
+- **O cartão diz quantos são** (`passo67.resumo_agendados`: esperando, de
+  quantos dias, com prova, marcados), tem «Marcar os provados»
+  (`marcar_provados`, só os `pre_marca`; o "Pago" continua perguntando) e
+  marca "agendado Nx" no mesmo lançamento pendente em mais de um dia.
 - **A releitura depois de gravar relê a nuvem (`reler_tudo`), NÃO o ERP**:
   pendente antigo guarda a situação da última Buscar, e um pago no ERP durante
   o dia só aparece pré-marcado no próximo Buscar. É o lado seguro.
