@@ -1347,6 +1347,58 @@ def _valor_nos_textos(valor: float, textos) -> bool:
     return False
 
 
+#: Valor em dinheiro escrito no texto: "1.234,56", "726,48" (com fronteira de
+#: dígito, como no `_valor_nos_textos`).
+_DINHEIRO_NO_TEXTO = re.compile(r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+,\d{2}|\d{1,3},\d{2})(?!\d|[.,]\d)")
+
+
+def _e_documento_de_boleto(files, provas) -> bool:
+    """Anexo que é boleto (rótulo, nome ou linha digitável com DV fechando):
+    ali quem prova o valor é o código de barras, que tem trava própria
+    ("valor do boleto diverge"), e o resto do texto é histórico e juros."""
+    for f in files or ():
+        if "boleto" in chave(f"{f.get('tagName') or ''} {f.get('filename') or ''}"):
+            return True
+    for t in provas:
+        for linha in (t or "").splitlines():
+            d = ocr_boleto.digitos(linha)
+            for tamanho in (47, 48):
+                if any(ocr_boleto.valida(d[i:i + tamanho])
+                       for i in range(0, max(len(d) - tamanho, -1) + 1)):
+                    return True
+    return False
+
+
+def _valor_unico_diferente(item: dict, provas, files=()) -> float | None:
+    """O ÚNICO valor em dinheiro dos anexos, quando ele não é o do lançamento.
+
+    Caso de 05/11/2026 (dono, 06/11): o recibo da semana nova num lançamento
+    lido com o valor da semana anterior saiu "valor ?" e APTO. Só conta o anexo com UM valor: NF de itens e
+    demonstrativo têm vários números e nenhum deles é "o" valor — medido em
+    398 títulos reais de 09/10 a 06/11/2026 com texto no anexo, nenhum
+    barrado; ler o "valor total" rotulado barraria dois DARFs pagos certos.
+    Título pago em parte aceita também o total (o que falta + o já pago).
+    Só título de UMA parcela confirmada (`numberOfFinancingInstallments` 1):
+    a NF de R$ 1.500 de uma compra em três vezes de R$ 500 é o normal. E
+    nunca boleto (`_e_documento_de_boleto`). None = nada a acusar."""
+    try:
+        if int(item.get("numberOfFinancingInstallments") or 0) != 1:
+            return None
+    except (TypeError, ValueError):
+        return None
+    if _e_documento_de_boleto(files, provas):
+        return None
+    achados = {round(float(v.replace(".", "").replace(",", ".")), 2)
+               for t in provas for v in _DINHEIRO_NO_TEXTO.findall(t or "")}
+    achados.discard(0.0)
+    if len(achados) != 1:
+        return None
+    valor = valor_do_item(item)
+    aceitos = {round(valor, 2), round(valor + ja_pago_do_item(item), 2)}
+    unico = next(iter(achados))
+    return None if unico in aceitos or not valor else unico
+
+
 # --------------------------------------------------------------------------
 # CNPJ escrito no TEXTO da nota
 # --------------------------------------------------------------------------
@@ -1737,7 +1789,16 @@ def conferir_documento(item: dict, files, textos, overview=None,
         partes.append("valor/fornecedor ? (anexo sem texto)")
         return " · ".join(partes), divergiu
 
-    partes.append("valor ✓" if _valor_nos_textos(valor_do_item(item), provas) else "valor ?")
+    if _valor_nos_textos(valor_do_item(item), provas):
+        partes.append("valor ✓")
+    else:
+        outro = _valor_unico_diferente(item, provas, files)
+        if outro is None:
+            partes.append("valor ?")
+        else:
+            partes.append(f"VALOR DIVERGE: anexo {brl(outro)} × lançamento "
+                          f"{brl(valor_do_item(item))}")
+            divergiu = True
 
     alvo = chave(" ".join(textos))
     esperados = [p for p in re.findall(r"[a-z0-9]+", chave(item.get("paidTo") or ""))
@@ -1777,6 +1838,10 @@ class Resultado(NamedTuple):
 #: confirmação e na remessa CNAB (`remessa_dia.Candidato.apto` só aceita
 #: "APTO…"), e quem quiser pagar marca à mão. Liberar não é aprovar.
 STATUS_LIBERADO = "ATENÇÃO — liberado na tela do dia"
+#: O lançamento mudou no ERP entre a lista e o fim da leitura dos anexos
+#: (`leitura_do_dia.alterados_durante_a_leitura`, dono, 06/11/2026): a linha
+#: juntaria o valor/vencimento de um momento com o arquivo de outro.
+STATUS_ALTERADO_NA_LEITURA = "ATENÇÃO — alterado durante a leitura"
 
 
 def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
@@ -1785,7 +1850,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      ids_nao_confirmados=(), participantes=None,
                      cadastro_reembolso=None, anexos_nao_lidos=(),
                      qr_pix=None, titulos_nao_lidos=(),
-                     ids_liberados=()) -> Resultado:
+                     ids_liberados=(), alterados_na_leitura=()) -> Resultado:
     """Transforma lançamentos do ERP em linhas de planilha.
 
     `anexos`             {tradePayableId: [anexo]}
@@ -1814,6 +1879,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                          Desmarcado (`ids_nao_confirmados`) continua ganhando.
                          Liberado que seria APTO sai `STATUS_LIBERADO`, para
                          nunca nascer marcado na confirmação nem na remessa
+    `alterados_na_leitura` ids de lançamentos que mudaram no ERP enquanto os
+                         anexos eram lidos: saem `STATUS_ALTERADO_NA_LEITURA`
+                         (vazio = como sempre; só a `leitura_do_dia` passa)
     """
     pix_reembolso = pix_reembolso or {}
     regras_forn = regras_fornecedor or {}
@@ -1821,6 +1889,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
     ids_liberados = {str(i) for i in (ids_liberados or ())}
     anexos_nao_lidos = set(anexos_nao_lidos or ())
     titulos_nao_lidos = {str(t) for t in (titulos_nao_lidos or ())}
+    alterados_na_leitura = {str(i) for i in (alterados_na_leitura or ())}
     registros, omitidos = defaultdict(list), []
 
     for ordem, item in enumerate(lancamentos):
@@ -2452,6 +2521,11 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 status = novos[0]
         if divergiu:
             status = "ATENÇÃO — documento não bate"
+        if str(item.get("id")) in alterados_na_leitura and not item.get("paid"):
+            status = STATUS_ALTERADO_NA_LEITURA
+            obs = " · ".join(filter(None, [
+                "lançamento alterado no ERP durante a leitura (valor, vencimento ou "
+                "dados de pagamento): busque de novo antes de pagar", obs]))
         if chave_divergente:
             status = "ATENÇÃO — chave do reembolso divergente"
         # Por último entre os alarmes: pagar o valor errado é o pior deles.
