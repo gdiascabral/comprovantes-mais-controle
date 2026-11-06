@@ -1347,7 +1347,7 @@ def _valor_nos_textos(valor: float, textos) -> bool:
     return False
 
 
-#: Valor em dinheiro escrito no texto: "8.805,24", "726,48" (com fronteira de
+#: Valor em dinheiro escrito no texto: "1.234,56", "726,48" (com fronteira de
 #: dígito, como no `_valor_nos_textos`).
 _DINHEIRO_NO_TEXTO = re.compile(r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+,\d{2}|\d{1,3},\d{2})(?!\d|[.,]\d)")
 
@@ -1372,9 +1372,8 @@ def _e_documento_de_boleto(files, provas) -> bool:
 def _valor_unico_diferente(item: dict, provas, files=()) -> float | None:
     """O ÚNICO valor em dinheiro dos anexos, quando ele não é o do lançamento.
 
-    Caso de 05/11/2026 (dono, 06/11): o recibo da semana nova (R$ 8.805,24)
-    num lançamento lido com o valor da semana anterior (R$ 10.274,04) saiu
-    "valor ?" e APTO. Só conta o anexo com UM valor: NF de itens e
+    Caso de 05/11/2026 (dono, 06/11): o recibo da semana nova num lançamento
+    lido com o valor da semana anterior saiu "valor ?" e APTO. Só conta o anexo com UM valor: NF de itens e
     demonstrativo têm vários números e nenhum deles é "o" valor — medido em
     398 títulos reais de 09/10 a 06/11/2026 com texto no anexo, nenhum
     barrado; ler o "valor total" rotulado barraria dois DARFs pagos certos.

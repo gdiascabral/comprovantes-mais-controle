@@ -233,8 +233,8 @@ paths:
   conta (`provas`). Testes: `tests/test_endereco_lote.py`.
   (l) **Valor de outro momento** (dono, 06/11/2026, caso de 05/11:
   títulos da semana anterior recriados às 15:29 e corrigidos às 15:34; a
-  leitura pegou o valor antigo na lista e o recibo novo, R$ 8.805,24, nos
-  anexos, e a linha de R$ 10.274,04 saiu "valor ?" e APTO). Duas travas.
+  leitura pegou o valor antigo na lista e o recibo novo nos anexos, e a
+  linha saiu "valor ?" e APTO). Duas travas.
   **`_valor_unico_diferente`**: quando o valor do lançamento não aparece e
   os anexos juntos trazem UM único valor em dinheiro, diferente dele, sai
   "VALOR DIVERGE: anexo R$ x × lançamento R$ y" e a linha vira "ATENÇÃO —
@@ -249,9 +249,14 @@ paths:
   da leitura dos anexos; o lançamento que mudou (valor, vencimento, conta,
   dados de pagamento, descrição) vem na versão de agora e sai
   `STATUS_ALTERADO_NA_LEITURA`, e o que saiu do período fica de fora com
-  aviso. Erro na releitura propaga, como o da primeira lista. Só a aba
-  "Pagamentos do dia" relê (a Remessa/Retorno monta as Entradas dela sem
-  `alterados_na_leitura`). Testes: `tests/test_valor_e_releitura.py`.
+  aviso; o criado no meio não entra (não teve anexo lido) e vira aviso
+  "busque de novo". A comparação é sobre a lista INTEIRA e é ela que passa a
+  valer em `leitura.lancamentos` (o HTML de pessoa física e a Remessa usam
+  essa lista). Erro na releitura propaga, como o da primeira lista. Só a aba
+  "Pagamentos do dia" relê; a Remessa/Retorno herda a marca pelo
+  `receber_apuracao` (`self.alterados_na_leitura`, zerada pela busca dela) e
+  a passa nas Entradas que ela mesma monta. Testes:
+  `tests/test_valor_e_releitura.py`.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e

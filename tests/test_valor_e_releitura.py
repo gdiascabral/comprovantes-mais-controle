@@ -1,8 +1,8 @@
 """Duas travas nascidas do caso de 05/11/2026 (dono, 06/11/2026).
 
 1. O anexo traz UM valor em dinheiro, diferente do lançamento: a linha não
-   pode sair APTA com "valor ?" (era o recibo da semana nova, R$ 8.805,24,
-   num lançamento lido com R$ 10.274,04).
+   pode sair APTA com "valor ?" (era o recibo de um valor num lançamento
+   lido com outro).
 2. A leitura do dia lista os lançamentos e só DEPOIS lê os anexos. O que foi
    alterado no ERP nesse intervalo não pode sair APTO misturando o valor de
    antes com o arquivo de depois.
@@ -18,9 +18,9 @@ from test_leitura_do_dia import LEITORES, ApiFalsa, _anexo, _lanc
 
 DIA = date(2026, 10, 21)
 
-RECIBO_8805 = ("RECIBO DE PRESTACAO DE SERVICOS\nRecebi de EMPRESA MODELO LTDA a quantia de "
-               "R$ 8.805,24 referente a servico de limpeza no periodo de 29/10/2026 a "
-               "04/11/2026.\nFORNECEDOR MODELO")
+RECIBO_7315 = ("RECIBO DE PRESTACAO DE SERVICOS\nRecebi de EMPRESA MODELO LTDA a quantia de "
+               "R$ 7.315,90 referente a servico prestado no periodo de 05/01/2026 a "
+               "11/01/2026.\nFORNECEDOR MODELO")
 NF_VARIOS = ("NOTA FISCAL\nITEM A 2 x 150,00 = 300,00\nITEM B 1 x 315,00\nTOTAL 615,00\n"
              "FORNECEDOR MODELO")
 
@@ -34,13 +34,13 @@ def _item(valor, **extra):
 # ---------------------------------------------------------------- trava 1
 
 def test_anexo_com_um_valor_so_e_diferente_diverge():
-    resumo, divergiu = relatorio.conferir_documento(_item(10274.04), [], [RECIBO_8805])
+    resumo, divergiu = relatorio.conferir_documento(_item(9120.40), [], [RECIBO_7315])
     assert divergiu is True
-    assert "VALOR DIVERGE" in resumo and "8.805,24" in resumo and "10.274,04" in resumo
+    assert "VALOR DIVERGE" in resumo and "7.315,90" in resumo and "9.120,40" in resumo
 
 
 def test_anexo_com_o_mesmo_valor_continua_valor_ok():
-    resumo, divergiu = relatorio.conferir_documento(_item(8805.24), [], [RECIBO_8805])
+    resumo, divergiu = relatorio.conferir_documento(_item(7315.90), [], [RECIBO_7315])
     assert "valor ✓" in resumo and divergiu is False
 
 
@@ -75,9 +75,9 @@ def test_titulo_parcelado_com_o_total_da_compra_no_anexo_nao_diverge():
 
 
 def test_sem_o_numero_de_parcelas_nao_se_acusa():
-    item = _item(10274.04)
+    item = _item(9120.40)
     del item["numberOfFinancingInstallments"]
-    resumo, divergiu = relatorio.conferir_documento(item, [], [RECIBO_8805])
+    resumo, divergiu = relatorio.conferir_documento(item, [], [RECIBO_7315])
     assert divergiu is False and "valor ?" in resumo
 
 
@@ -94,7 +94,7 @@ def test_valor_da_observacao_nao_conta_como_valor_do_anexo():
     # A observação é o que o próprio lançamento diz: um valor diferente nela
     # não prova nada contra ele (mesma regra do "valor ✓", 01/10/2026).
     resumo, divergiu = relatorio.conferir_documento(
-        _item(100.0), [], ["obs: combinado R$ 8.805,24", "FORNECEDOR MODELO"],
+        _item(100.0), [], ["obs: combinado R$ 7.315,90", "FORNECEDOR MODELO"],
         textos_valor=["FORNECEDOR MODELO sem valor nenhum"])
     assert divergiu is False and "DIVERGE" not in resumo
 
@@ -163,3 +163,54 @@ def test_nada_mudou_nada_alarma():
     assert all(r["status"] != relatorio.STATUS_ALTERADO_NA_LEITURA
                for r in _registros(leitura).values())
     assert not any("alterado" in a for a in leitura.avisos)
+
+
+def test_a_lista_relida_vale_para_a_leitura_inteira_inclusive_pessoa_fisica():
+    # Revisão de dinheiro (06/11/2026): `leitura.lancamentos` seguia com a
+    # lista velha, e a Remessa/Retorno e o HTML de pessoa física a usam.
+    pf = "PESSOA FISICA - APENAS LANCAMENTO"
+    antes = [_lanc("L1"), _lanc("P1", conta=pf)]
+    depois = [_lanc("L1"), _lanc("P1", conta=pf, remainingValue=55.0)]
+    leitura = _ler(ApiQueMudaNoMeio(antes, depois, anexos={"T-L1": [_anexo("nota 1234")]}))
+    por_id = {i["id"]: i for i in leitura.lancamentos}
+    assert por_id["P1"]["remainingValue"] == 55.0
+    assert leitura.alterados == {"P1"}
+    assert any("alterado" in a for a in leitura.avisos)
+
+
+def test_lancamento_criado_durante_a_leitura_vira_aviso():
+    antes = [_lanc("L1")]
+    depois = [_lanc("L1"), _lanc("L9")]
+    leitura = _ler(ApiQueMudaNoMeio(antes, depois, anexos={"T-L1": [_anexo("nota 1234")]}))
+    assert "L9" not in _registros(leitura)
+    assert any("novo" in a and "busque de novo" in a for a in leitura.avisos)
+
+
+def test_a_remessa_remonta_com_a_marca_de_alterado():
+    # A aba Remessa/Retorno recebe a leitura e, no "Gerar a planilha", remonta
+    # as Entradas por conta própria: a marca tem de ir junto.
+    import queue
+    from types import SimpleNamespace
+
+    from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
+    antes = [_lanc("L1"), _lanc("L2")]
+    depois = [_lanc("L1", remainingValue=80.0), _lanc("L2")]
+    anexos = {"T-L1": [_anexo("nota 1234")], "T-L2": [_anexo("nota 1234")]}
+    leitura = _ler(ApiQueMudaNoMeio(antes, depois, anexos=anexos))
+    aba = SimpleNamespace(worker=None, q=queue.Queue(), v_ini=_Var(), v_fim=_Var(),
+                          _log=lambda m="": None, gerar_remessa=lambda: None,
+                          _baixar_textos=lambda sel: ({}, set(), set(), {}))
+    PagamentosDiaFrame.receber_apuracao(aba, leitura, set(), hoje=DIA)
+    assert aba.alterados_na_leitura == {"L1"}
+    entradas = PagamentosDiaFrame._juntar_entradas(
+        aba, {"CONTA EXEMPLO - SICOOB"}, {"incluir_pagos": False, "cruzar": False,
+                                          "periodo": (DIA, DIA)})
+    assert entradas.alterados_na_leitura == {"L1"}
+
+
+class _Var:
+    def __init__(self):
+        self.valor = ""
+
+    def set(self, v):
+        self.valor = v

@@ -414,6 +414,10 @@ class PagamentosDiaFrame(ttk.Frame):
         #: Títulos cuja lista de anexos não foi lida (falha de rede): não são
         #: "sem anexo" (`mc_api.titulos_sem_leitura`).
         self.titulos_sem_leitura: set = set()
+        #: Lançamentos que a leitura da aba "Pagamentos do dia" viu mudar no
+        #: meio (`leitura_do_dia.alterados_durante_a_leitura`); a busca desta
+        #: aba zera. Saem em ATENÇÃO também quando esta aba remonta.
+        self.alterados_na_leitura: set = set()
         self.overviews: dict = {}
         #: {nome normalizado: CPF/CNPJ} do cadastro de Contatos do ERP.
         #: É o que libera o Pix por telefone, e-mail e chave aleatória.
@@ -1211,6 +1215,7 @@ class PagamentosDiaFrame(ttk.Frame):
                 cancelar=self._parar.is_set)
             com = sum(1 for v in self.anexos.values() if v)
             self.titulos_sem_leitura = set(getattr(api, "titulos_sem_leitura", ()) or ())
+            self.alterados_na_leitura = set()
             self._log(f"{com} título(s) com anexo, {len(titulos) - com} sem.")
             if self.titulos_sem_leitura:
                 self._log(f"[!] {len(self.titulos_sem_leitura)} título(s) com a "
@@ -1724,7 +1729,8 @@ class PagamentosDiaFrame(ttk.Frame):
             periodo=opcoes["periodo"],
             anexos_nao_lidos=nao_lidos,
             qr_pix=qrs,
-            titulos_nao_lidos=set(getattr(self, "titulos_sem_leitura", ()) or ()))
+            titulos_nao_lidos=set(getattr(self, "titulos_sem_leitura", ()) or ()),
+            alterados_na_leitura=set(getattr(self, "alterados_na_leitura", ()) or ()))
 
     def _t_apurar(self, escolhidas, opcoes, depois):
         """Fase 1: a leitura completa e a análise da remessa, na thread do
@@ -3552,6 +3558,7 @@ class PagamentosDiaFrame(ttk.Frame):
         # Os títulos cuja lista de anexos não foi lida: sem isto, saíam da
         # planilha como "sem anexo" em vez de "anexos não lidos".
         self.titulos_sem_leitura = set(leitura.entradas.titulos_nao_lidos or ())
+        self.alterados_na_leitura = set(getattr(leitura, "alterados", ()) or ())
         self.lancamentos = list(leitura.lancamentos)
         self.anexos = leitura.anexos
         self.overviews = leitura.overviews
