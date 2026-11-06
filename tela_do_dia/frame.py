@@ -45,7 +45,10 @@ from . import lista_diretor as ldr
 from . import nuvem_do_dia, para_aportes, passo2, passo67, recados
 from . import pagamentos as pg
 from . import saldos as sd
+from . import autenticar as au
+from . import nuvem_do_dia as _nd
 from .agendamentos_na_tela import ConferenciaNaTela
+from .autenticar_na_tela import AutenticarNaTela
 from .prova_na_tela import ProvaNaTela
 from .sicoob_na_tela import LeitorSicoob
 from .valores import brl, de_float, ler_valor_editado
@@ -153,13 +156,14 @@ class TelaDoDiaFrame(ttk.Frame):
         self.b1.pack(side="left")
 
         self._padx = PADX
-        # No topo, e só quando há pendentes (`_encher_agendados`): empacotado
-        # antes do cartão 1.
+        # SEMPRE no topo (dono, 29/10/2026: o dia começa conferindo no banco o
+        # que foi pago antes), com o "Autenticar no banco".
         self.c0 = widgets.Cartao(corpo, "Agendados a confirmar")
         self._ajuda(self.c0, "Agendados esperando a sua resposta, de hoje e de dias anteriores. "
                              "O app marca (☑) só o que ele prova pago — baixa no ERP ou "
                              "retorno do banco; título que sumiu ou mudou de valor espera "
                              "você. Clique na 1ª coluna (ou Espaço) para marcar ou desmarcar.")
+        self.lbl_agd_resumo = self._ajuda(self.c0, "")
         self.t_agd = self._tabela(self.c0, passo67.COLS_AGD, arvore=False, altura=8)
         self.t_agd.configure(selectmode="browse")
         self.t_agd.bind("<ButtonRelease-1>", self._clique_agd)
@@ -173,8 +177,18 @@ class TelaDoDiaFrame(ttk.Frame):
         self.b_agd_reag = widgets.Botao(linha_agd, "Reagendado…", papel="neutro",
                                         state="disabled",
                                         command=lambda: self._responder("reagendado"))
-        for i, b in enumerate((self.b_agd_pago, self.b_agd_nao, self.b_agd_reag)):
+        self.b_agd_provados = widgets.Botao(linha_agd, "Marcar os provados", papel="neutro",
+                                            state="disabled", command=self._marcar_provados)
+        for i, b in enumerate((self.b_agd_pago, self.b_agd_nao, self.b_agd_reag,
+                               self.b_agd_provados)):
             b.pack(side="left", padx=px((0 if i == 0 else 8, 0)))
+        self.autenticar = AutenticarNaTela(linha_agd, tela=self)
+        self.autenticar.b.pack(side="right")
+        self.lbl_agd_vazio = self._ajuda(self.c0, "Clique em Buscar: os agendados que "
+                                                  "esperam resposta aparecem aqui, e o "
+                                                  "«Autenticar no banco» confere no Sicoob "
+                                                  "o que já foi pago.")
+        self.c0.pack(fill="x", padx=PADX, pady=px((0, 12)))
 
         c1 = self.c1 = widgets.Cartao(corpo, "Saldos", 1)
         c1.pack(fill="x", padx=PADX, pady=px((0, 12)))
@@ -442,8 +456,8 @@ class TelaDoDiaFrame(ttk.Frame):
     def _botoes_67(self):
         """"Agendados a confirmar" e passo 6: a mesma regra do passo 2 (nuvem
         lida, sem gravação em andamento)."""
-        return (self.b_agd_pago, self.b_agd_nao, self.b_agd_reag, self.b_montar,
-                self.b_gravar_agd)
+        return (self.b_agd_pago, self.b_agd_nao, self.b_agd_reag, self.b_agd_provados,
+                self.b_montar, self.b_gravar_agd)
 
     @property
     def _botoes_da_lista(self):
@@ -598,13 +612,14 @@ class TelaDoDiaFrame(ttk.Frame):
         self.sicoob.fechar()
         self.agendamentos.fechar()
         self.prova.fechar()
+        self.autenticar.fechar()
 
     def sicoob_ocupado(self) -> str | None:
         """Esta aba está com o Chrome do Sicoob? (o saldo OU a conferência dos
         agendamentos). É o que as outras abas que abrem o mesmo perfil
         perguntam, ligado no `comprovantes_app.py`."""
         return (self.sicoob.ocupado() or self.agendamentos.ocupado()
-                or self.prova.ocupado())
+                or self.prova.ocupado() or self.autenticar.ocupado())
 
     def _parar_click(self):
         self._parar.set()
@@ -677,7 +692,7 @@ class TelaDoDiaFrame(ttk.Frame):
         self.marcas_agd, self.para_marcar_itens, self.lista = {}, None, []
         for t in self._tabelas:
             t.delete(*t.get_children())
-        self.c0.pack_forget()
+        self._encher_agendados()
         self._mostrar_alertas("", "")
         self.mostrar_periodo("")
         self._mostrar_detalhe_saldo()
@@ -1638,15 +1653,39 @@ class TelaDoDiaFrame(ttk.Frame):
         for i, ln in enumerate(passo67.linhas_agendados(pendentes, self.marcas_agd)):
             t.insert("", "end", iid=ln.iid, values=ln.valores,
                      tags=widgets.linha_zebrada(i, ln.tags[0] if ln.tags else ""))
+        self.lbl_agd_resumo.configure(text=passo67.resumo_agendados(pendentes, self.marcas_agd))
+        # O cartão fica sempre; vazio, diz o que fazer.
         if pendentes:
-            self.c0.pack(fill="x", padx=self._padx, pady=px((0, 12)), before=self.c1)
+            self.lbl_agd_vazio.pack_forget()
         else:
-            self.c0.pack_forget()
+            self.lbl_agd_vazio.configure(
+                text="Nenhum agendado esperando resposta." if self.lido is not None
+                else "Clique em Buscar: os agendados que esperam resposta aparecem "
+                     "aqui, e o «Autenticar no banco» confere no Sicoob o que já foi pago.")
+            self.lbl_agd_vazio.pack(fill="x", anchor="w")
+
+    def _receber_autenticacao(self, autenticacoes) -> None:
+        """O resultado do "Autenticar no banco" (na thread do Tk): a situação
+        de cada pendente refeita com a prova do banco, e o que passou a ser
+        provado nasce marcado. Nada vai à nuvem: o "Pago" continua do dono."""
+        if self.lido is None or not autenticacoes:
+            return
+        antes = self.lido.pendentes
+        self.lido = _nd.com_provas_do_banco(self.lido, autenticacoes)
+        self.marcas_agd = au.marcas_com_provas(self.marcas_agd, antes, self.lido.pendentes)
+        self._encher_agendados()
+        self._ajustar_altura(self.t_agd)
 
     def _clique_agd(self, evento):
         t = self.t_agd
         if t.identify_region(evento.x, evento.y) == "cell" and t.identify_column(evento.x) == "#1":
             self._alternar_agd(t.identify_row(evento.y))
+
+    def _marcar_provados(self):
+        if self.lido is None:
+            return
+        self.marcas_agd = passo67.marcar_provados(self.lido.pendentes, self.marcas_agd)
+        self._encher_agendados()
 
     def _alternar_agd(self, iid):
         if not iid or self.lido is None:
@@ -1695,8 +1734,16 @@ class TelaDoDiaFrame(ttk.Frame):
 
     # passo 6
     def _novos_para_marcar(self):
+        # A linha digitável e a descrição colada vão na foto: é o que o
+        # "Autenticar no banco" procura nos comprovantes (`autenticar`).
+        try:
+            do_html = agd.dados_do_html(self._resultado_que_sai())
+        except Exception:                                   # noqa: BLE001
+            util.log("tela_do_dia").exception("dados do HTML para a foto do agendado")
+            do_html = {}
         return agd.para_marcar(self.pagamentos, self.fora, self.leitura.lancamentos,
-                               self._conferencia_que_vale(), {a.alvo for a in self.lido.agendados_hoje})
+                               self._conferencia_que_vale(), {a.alvo for a in self.lido.agendados_hoje},
+                               do_html=do_html)
 
     def _montar_para_marcar(self):
         if not self._pode_gravar("Marcar agendados"):

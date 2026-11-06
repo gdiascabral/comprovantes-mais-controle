@@ -102,6 +102,11 @@ paths:
   o central ligado: uma aba própria numa thread própria, que copia a
   autenticação do tráfego da tela e faz `fetch` de dentro da página; uma por
   (processo, acesso), guardada em `sessao._CENTRAIS` e fechada no `atexit`.
+  **E toda sessão se fecha sozinha no fim do programa** (03/11/2026,
+  `_fechar_no_fim`, por `threading._register_atexit`): script que a pedia
+  direto à classe e terminava sem `fechar()` deixava a aba no Chrome central
+  (9 sobrando, RAM subindo), e `atexit` comum chega tarde — a aba ficava.
+  Referência fraca, para não segurar sessão que já sumiu.
   `esquecer_central(nome, sessao)` descarta a guardada (fecha a aba, quieto)
   SÓ se ela `is` a sessão que falhou — a recriada por outra aba não cai —,
   para o próximo `logar` montar outra — a tela do dia usa depois de um erro do ERP

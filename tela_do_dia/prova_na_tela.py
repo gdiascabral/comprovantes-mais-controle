@@ -49,6 +49,21 @@ ESPERA_ERP = 600               # segundos esperando o ERP depois dos bancos
 ESPERA_ABA_ERP = 180           # segundos esperando a aba do ERP abrir antes dos bancos
 
 
+def _saldo_do_autenticar(apelido, numero=""):
+    """O saldo do Inter que o "Autenticar no banco" leu HOJE desta conta (com
+    o print dele), ou None. Dono, 29/10/2026: um QR por conta de manhã serve
+    ao saldo e à prova de pagamento — a Prova não pede o QR de novo."""
+    try:
+        from conciliacao.frame import RAIZ_SAIDA
+
+        from . import autenticar_inter as ai
+        hoje = _agora().date()
+        return ai.saldo_do_dia(ai.caminho_dos_saldos(RAIZ_SAIDA, hoje), hoje, apelido,
+                               numero, agora=_agora())
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
 def _agora() -> datetime.datetime:
     """Separado para o teste fixar a hora (vai no nome do PDF)."""
     return datetime.datetime.now()
@@ -247,6 +262,12 @@ class ProvaNaTela:
                 continue
             if self._parar.is_set():
                 inter[ps.chave_inter(c.apelido)] = ps.Leitura(None, motivo=ps.INTERROMPIDA)
+                continue
+            do_dia = _saldo_do_autenticar(c.apelido, c.numero)
+            if do_dia is not None:
+                inter[ps.chave_inter(c.apelido)] = do_dia
+                self.q.put(("log", f"  Inter {c.apelido}: saldo lido pelo Autenticar no "
+                                   f"banco às {do_dia.lido_em:%H:%M} (sem novo QR)"))
                 continue
             from baixar_comprovantes import inter_saldo
             self.q.put(("estado", f"Inter: abrindo a conta {c.apelido}…"))

@@ -97,6 +97,22 @@ def anexar_um(mc, api, launch_id: str, valor: str, arquivo, *, paid_id=None,
     return r
 
 
+def colunas_que_cabem(larguras: list[int], disponivel: int, espaco: int = 0,
+                      teto: int = 4) -> int:
+    """Maior número de colunas (até `teto`) em que a grade cabe na largura.
+
+    Os itens entram linha a linha (o i-ésimo vai à coluna i % n), e cada
+    coluna tem a largura do seu item mais largo — é assim que o `grid` do Tk
+    desenha. Se nem uma coluna cabe, devolve 1: cortar o fim de um nome é
+    melhor que esconder uma conta inteira.
+    """
+    for n in range(min(teto, len(larguras)), 1, -1):
+        total = sum(max(larguras[j::n]) + espaco for j in range(n))
+        if total <= disponivel:
+            return n
+    return 1
+
+
 def _texto_do_erro(e: Exception) -> str:
     """UMA frase para o Registro; o traceback vai para o `diagnostico.log`.
 
@@ -1370,12 +1386,21 @@ class AnexarFrame(ttk.Frame):
         for p in self.pagos:
             if p["conta"] in cont:
                 cont[p["conta"]] += 1
-        colunas = 3
-        for i, c in enumerate(contas):
+        # As colunas acompanham a largura do cartão (dono, 04/11/2026): com 3
+        # fixas, nome longo de conta empurrava a 3ª coluna para fora da janela
+        # e ela sumia cortada, sem barra para rolar.
+        self._caixas_contas = []
+        for c in contas:
             v = tk.BooleanVar(value=True)
             self.vars_contas[c] = v
-            ttk.Checkbutton(self.contas_box, text=f"{c}  ({cont[c]})", variable=v
-                            ).grid(row=i // colunas, column=i % colunas, sticky="w", padx=4)
+            self._caixas_contas.append(ttk.Checkbutton(
+                self.contas_box, text=f"{c}  ({cont[c]})", variable=v))
+        self._colunas_contas = 0
+        self._arrumar_contas()
+        if not getattr(self, "_contas_box_ligado", False):
+            self.contas_box.bind("<Configure>",
+                                 lambda _e: self._arrumar_contas(), add="+")
+            self._contas_box_ligado = True
         # "Marcar/Desmarcar todas" e a contagem sobem para o cabeçalho do
         # cartão: dentro da grade de contas eles disputavam a última linha com
         # as próprias contas, e mudavam de lugar conforme quantas havia.
@@ -1387,6 +1412,26 @@ class AnexarFrame(ttk.Frame):
         for v in self.vars_contas.values():
             v.trace_add("write", lambda *_a: self._contar_contas())
         self._contar_contas()
+
+    def _arrumar_contas(self):
+        """Distribui as contas no maior número de colunas que cabe na largura."""
+        caixas = [w for w in getattr(self, "_caixas_contas", [])
+                  if w.winfo_exists()]
+        if not caixas:
+            return
+        largura = self.contas_box.winfo_width()
+        if largura < 50:      # ainda sem geometria: o <Configure> chama de novo
+            largura = self.contas_box.winfo_toplevel().winfo_width() or 1200
+        espaco = 8            # padx=4 dos dois lados
+        n = colunas_que_cabem([w.winfo_reqwidth() for w in caixas],
+                              largura, espaco)
+        if n == self._colunas_contas:
+            return
+        self._colunas_contas = n
+        for col in range(len(caixas)):
+            self.contas_box.columnconfigure(col, weight=0, minsize=0)
+        for i, w in enumerate(caixas):
+            w.grid(row=i // n, column=i % n, sticky="w", padx=4)
 
     def _todas_contas(self, marcar: bool):
         for v in self.vars_contas.values():

@@ -104,7 +104,15 @@ paths:
   repete o pedido de dentro da página, confere número E nome da empresa na
   tela (`conferir_conta`) antes de usar o valor, e fotografa. O número da
   conta na tela sai de `inter_baixar.numero_no_texto`, a MESMA regra de
-  `conta_da_pagina`. Correções da revisão final (27/10): SEM o número no
+  `conta_da_pagina`. **Extrato completo como segunda fonte (29/10/2026)**:
+  uma conta PJ só mostra o saldo no extrato; sem saldo ou sem número na tela
+  inicial, a leitura abre `URL_EXTRATO_COMPLETO`, ouve a resposta do BFF
+  (`ROTA_EXTRATO_COMPLETO`), lê `balance.data.balances[DIGITAL_ACCOUNT].
+  available` (`saldo_do_extrato`, `LidoInter.via` = "extrato") e confere a
+  conta pelo texto daquela tela. O gancho `extra(page, autorizacao, extrato)`
+  roda na MESMA sessão depois da conta conferida (o "Autenticar no banco"
+  lista ali Pix, 2ª via e extrato); falha dele vai a `extra_erro` e não perde
+  o saldo. Correções da revisão final (27/10): SEM o número no
   ERP, só a razão social INTEIRA (linha da tela igual, normalizada) confere
   — nome curto não; a conta é conferida ANTES do print (`_ler_na_pagina`;
   conta errada = sem print); `esperar_login(..., parar=)` corta a espera do

@@ -48,8 +48,38 @@ def test_pago_no_erp_pre_marca_com_prova():
 
 
 def test_titulo_sumiu_nunca_se_resolve_mesmo_com_retorno_ok():
-    s = ag.situacao(_ag(), None, SimpleNamespace(retorno_estado="ok"))
-    assert not s.pre_marca and s.tag == "erro" and "título sumiu do ERP — era R$ 100,00" in s.frase
+    s = ag.situacao(_ag(), None, SimpleNamespace(retorno_estado="ok"), existe=False)
+    assert not s.pre_marca and s.tag == "erro" and "título sumiu do ERP (excluído) — era R$ 100,00" in s.frase
+
+
+def test_ausente_da_releitura_so_e_sumiu_com_o_404():
+    """05/11/2026: 79 títulos PAGOS apareceram como "sumiu". Ausência na
+    releitura, sozinha, nunca é "sumiu": existir noutra data é vencimento
+    mudado, e não saber é "confira"."""
+    noutra_data = ag.situacao(_ag(), None, existe=True)
+    sem_saber = ag.situacao(_ag(), None)
+    for s in (noutra_data, sem_saber):
+        assert s.tag == "atencao" and not s.pre_marca and "sumiu" not in s.frase
+    assert "vencimento mudou" in noutra_data.frase
+
+
+_LINHA_BASE = {"id": 1, "dia": "2026-10-22", "conta": "C", "alvo": "L1", "lancamento_id": "L1",
+               "favorecido": "Fornecedor Modelo Ltda", "valor": "100.00",
+               "foto": {"em_aberto": "100.00", "vencimento": "2026-10-22"}}
+
+
+def test_janelas_curtas_em_volta_de_cada_data_e_juntam_as_que_se_tocam():
+    a = _ag()
+    b = ag.Agendado.de_linha({**_LINHA_BASE, "id": 2, "dia": "2026-11-04", "lancamento_id": "L2",
+                              "foto": {"em_aberto": "100.00", "vencimento": "2026-11-02"}})
+    c = ag.Agendado.de_linha({**_LINHA_BASE, "id": 3, "dia": "2026-12-20", "lancamento_id": "L3",
+                              "foto": {"em_aberto": "100.00", "vencimento": "2026-12-20"}})
+    janelas = ag.janelas_de_releitura([b, c])
+    assert janelas == [(date(2026, 10, 30), date(2026, 11, 7)), (date(2026, 12, 17), date(2026, 12, 23))]
+    assert all((f - i).days <= 10 for i, f in janelas)
+    sem_link = ag.Agendado.de_linha({**_LINHA_BASE, "id": 4, "lancamento_id": ""})
+    assert ag.janelas_de_releitura([sem_link]) == []
+    assert ag.janelas_de_releitura([a])
 
 
 def test_valor_mudou_espera_o_dono():
@@ -220,3 +250,32 @@ def test_valor_sem_numero_ou_negativo_nao_vira_item_nem_linha(valor):
     itens = ag.para_marcar(painel, [], [], None, set())
     assert [i.alvo for i in itens] == ["L1"]
     assert [l["alvo"] for l in ag.linhas_para_nuvem(itens)] == ["L1"]
+
+
+# ------------------------------------------- foto para o "Autenticar no banco"
+def test_dados_do_html_guardam_linha_do_boleto_e_descricao_colada():
+    from pagamentos_dia.html_pagamentos import descricao_para_colar
+    boleto = {"id": "L1", "tipo": "Boleto", "dados": "3419 1570 0700 0249", "descricao": "compra"}
+    pix = {"id": "L2", "tipo": "Pix", "dados": "email@exemplo.com", "descricao": "outra"}
+    mao = {"id": "L3", "tipo": "Pix", "dados": "x@y.com", "descricao": "m", "a_mao": "mao:4"}
+    sem_lanc = {"id": "", "tipo": "Pix", "dados": "x@y.com", "descricao": "m", "a_mao": "mao:5"}
+    res = SimpleNamespace(contas={"Conta Alfa": [boleto, pix, mao, sem_lanc]})
+    d = ag.dados_do_html(res)
+    assert d["L1"]["linha"] == "3419157007000249"
+    assert d["L1"]["descricao_colada"] == descricao_para_colar(boleto, "Conta Alfa")
+    assert d["L2"]["linha"] == "" and d["L2"]["dado"] == "email@exemplo.com"
+    assert set(d) == {"L1", "L2", "L3#mao:4", "mao:5"}
+
+
+def test_para_marcar_poe_linha_e_descricao_na_foto():
+    do_html = {"L1": {"linha": "123", "dado": "123", "descricao_colada": "OBRA NF 1"},
+               "mao:4": {"linha": "", "dado": "x@y.com", "descricao_colada": "MAO"}}
+    itens = ag.para_marcar(_painel(), [], [], None, set(), do_html=do_html)
+    assert itens[0].foto["linha"] == "123" and itens[0].foto["descricao_colada"] == "OBRA NF 1"
+    assert "linha" not in itens[1].foto
+    p = SimpleNamespace(id="mao:4", conta_erp="C", favorecido="F", valor=D("50.00"))
+    painel = {8: SimpleNamespace(rotulo="Conta Alfa - Banco", linha=8, saem=[p])}
+    m = SimpleNamespace(alvo="mao:4", id=4, conta="C", lancamento_id="", descricao="d",
+                        tipo="Pix", valor_em_aberto=None)
+    (item,) = ag.para_marcar(painel, [], [], SimpleNamespace(a_mao=[m]), set(), do_html=do_html)
+    assert item.foto["descricao_colada"] == "MAO" and item.foto["a_mao"] is True

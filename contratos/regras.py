@@ -42,6 +42,17 @@ MARCA_JUROS = "JUROS"
 #: tem um `C 259` que não é casa nenhuma, e o `CS 01` do fim é que manda.
 RE_UNIDADE = re.compile(r"\b(?:CASA|CS)\s*0*(\d{1,3})\b", re.I)
 RE_UNIDADE_CURTA = re.compile(r"\bC\s*0*(\d{1,3})\b", re.I)
+#: O condomínio (CONDOMÍNIO RESERVA DOS IPÊS) não tem casa: tem UNIDADE, e a
+#: descrição do robô de venda é "VENDA UNIDADE 15 - NOME" (regra do dono,
+#: 07/10/2026). Antes de 05/11/2026 isso caía em "CS ??" e a linha ia para
+#: revisão sem motivo de verdade.
+RE_UNIDADE_CONDOMINIO = re.compile(
+    r"\b(?:UNIDADE|UNID|UND|UN)\.?\s*0*(\d{1,3})\b", re.I)
+
+#: Como o rótulo começa: casa de rua ("CS 01") ou unidade do condomínio
+#: ("UN 15").
+TIPO_CASA = "CS"
+TIPO_CONDOMINIO = "UN"
 
 
 def numero_da_unidade(texto: str) -> int | None:
@@ -50,15 +61,27 @@ def numero_da_unidade(texto: str) -> int | None:
     Aceita as quatro grafias que aparecem no cadastro real, com ou sem espaço
     e com ou sem zero à esquerda."""
     t = util.sem_acento(texto or "")
-    m = RE_UNIDADE.search(t) or RE_UNIDADE_CURTA.search(t)
+    m = (RE_UNIDADE.search(t) or RE_UNIDADE_CONDOMINIO.search(t)
+         or RE_UNIDADE_CURTA.search(t))
     return int(m.group(1)) if m else None
 
 
-def rotulo_da_unidade(numero: int | None) -> str:
-    """1 -> "CS 01". Dois dígitos, como no nome dos arquivos do ERP."""
+def tipo_da_unidade(texto: str) -> str:
+    """"UN" quando o texto fala de UNIDADE (condomínio) e não de casa;
+    "CS" em todo o resto, que é o que sempre foi."""
+    t = util.sem_acento(texto or "")
+    if not RE_UNIDADE.search(t) and RE_UNIDADE_CONDOMINIO.search(t):
+        return TIPO_CONDOMINIO
+    return TIPO_CASA
+
+
+def rotulo_da_unidade(numero: int | None, tipo: str = TIPO_CASA) -> str:
+    """1 -> "CS 01"; (15, "UN") -> "UN 15". Dois dígitos, como no nome dos
+    arquivos do ERP."""
+    tipo = tipo or TIPO_CASA
     if not numero:
-        return "CS ??"
-    return f"CS {numero:02d}"
+        return f"{tipo} ??"
+    return f"{tipo} {numero:02d}"
 
 
 def partes_da_descricao(descricao: str) -> tuple[int | None, str]:
@@ -74,6 +97,12 @@ def partes_da_descricao(descricao: str) -> tuple[int | None, str]:
     else:
         cabeca, cauda = texto, ""
     return numero_da_unidade(cabeca), cauda.strip()
+
+
+def tipo_da_descricao(descricao: str) -> str:
+    """O tipo ("CS" ou "UN") lido só na parte antes do primeiro " - ", pelo
+    mesmo motivo de `partes_da_descricao`."""
+    return tipo_da_unidade((descricao or "").split(" - ", 1)[0])
 
 
 def _dinheiro(valor) -> Decimal:
@@ -126,6 +155,7 @@ class Imovel:
     valor_venda: Decimal | None = None      # saleValue, quando o ERP manda
     recebimentos: list[Recebimento] = field(default_factory=list)
     revisao: str = ""               # motivo, quando não dá para seguir
+    tipo: str = TIPO_CASA           # "CS" casa de rua, "UN" condomínio
 
     @property
     def chave(self) -> tuple[str, object]:
@@ -141,7 +171,7 @@ class Imovel:
 
     @property
     def rotulo(self) -> str:
-        return rotulo_da_unidade(self.unidade)
+        return rotulo_da_unidade(self.unidade, self.tipo)
 
     @property
     def condicoes(self) -> list[str]:
@@ -167,7 +197,8 @@ def _sem_obra(descricao: str) -> str:
 
 def _sem_casa(descricao: str) -> str:
     return (f'a descrição "{descricao}" não diz a casa; corrija no ERP para '
-            '"VENDA CASA 01 - NOME" e busque de novo')
+            '"VENDA CASA 01 - NOME" (no condomínio, "VENDA UNIDADE 01 - '
+            'NOME") e busque de novo')
 
 
 def imoveis_do_mes(registros: list[dict], log=print) -> list[Imovel]:
@@ -187,7 +218,7 @@ def imoveis_do_mes(registros: list[dict], log=print) -> list[Imovel]:
 
         if not obra:
             revisao = _sem_obra(descricao)
-        elif unidade is None:
+        elif not unidade:               # 0 = venda de teste ("UNIDADE 00")
             revisao = _sem_casa(descricao)
         else:
             revisao = ""
@@ -195,7 +226,8 @@ def imoveis_do_mes(registros: list[dict], log=print) -> list[Imovel]:
         cliente = (r.get("customerName") or "").strip()
         candidato = Imovel(obra=obra, unidade=unidade, comprador=comprador,
                            descricao=descricao, cliente=cliente,
-                           comprador_descricao=comprador, revisao=revisao)
+                           comprador_descricao=comprador, revisao=revisao,
+                           tipo=tipo_da_descricao(descricao))
         imovel = por_chave.setdefault(candidato.chave, candidato)
         # O comprador vem da linha da venda; uma condição pode vir sem ele,
         # e vazio não pode apagar o que já se sabe.

@@ -89,13 +89,58 @@ def texto_da_situacao(sit, resposta) -> str:
     return sit.frase
 
 
+def _vezes_por_lancamento(pendentes) -> dict:
+    vezes: dict = {}
+    for a, _s, _r in pendentes:
+        if a.lancamento_id:
+            vezes[a.lancamento_id] = vezes.get(a.lancamento_id, 0) + 1
+    return vezes
+
+
 def linhas_agendados(pendentes, marcas: dict) -> list[LinhaDaTabela]:
-    return [LinhaDaTabela(
-        str(a.id),
-        (MARCADO if marcas.get(a.id) else DESMARCADO, f"{a.dia:%d/%m}", a.conta,
-         a.favorecido, brl(a.valor), texto_da_situacao(sit, r)),
-        (sit.tag,) if sit.tag else ())
-        for a, sit, r in pendentes]
+    """Uma linha por pendente. O mesmo lançamento pendente em dois dias
+    (agendado de novo sem responder o de antes) diz "agendado Nx" na frente
+    da situação: responder um só deixava o outro esperando (05/11/2026)."""
+    vezes = _vezes_por_lancamento(pendentes)
+    linhas = []
+    for a, sit, r in pendentes:
+        texto = texto_da_situacao(sit, r)
+        n = vezes.get(a.lancamento_id, 0)
+        if n > 1:
+            texto = f"agendado {n}x · {texto}"
+        linhas.append(LinhaDaTabela(
+            str(a.id),
+            (MARCADO if marcas.get(a.id) else DESMARCADO, f"{a.dia:%d/%m}", a.conta,
+             a.favorecido, brl(a.valor), texto),
+            (sit.tag,) if sit.tag else ()))
+    return linhas
+
+
+def resumo_agendados(pendentes, marcas: dict) -> str:
+    """A frase de cima da tabela: quantos esperam, de quantos dias, quantos
+    o app provou pagos e quantos estão marcados. "" sem pendentes. A lista
+    de 05/11/2026 tinha 85 e a tabela mostrava 8 sem dizer que havia mais."""
+    pendentes = list(pendentes or ())
+    if not pendentes:
+        return ""
+    dias = {a.dia for a, _s, _r in pendentes}
+    provados = sum(1 for _a, s, _r in pendentes if s.pre_marca)
+    marcados = sum(1 for a, _s, _r in pendentes if marcas.get(a.id))
+    n = len(pendentes)
+    partes = [f"{n} esperando resposta" if n > 1 else "1 esperando resposta",
+              f"de {len(dias)} dia{'s' if len(dias) > 1 else ''}",
+              f"{provados} com prova de pago", f"{marcados} marcado{'s' if marcados != 1 else ''}"]
+    return " · ".join(partes)
+
+
+def marcar_provados(pendentes, marcas: dict) -> dict:
+    """Marca todos os que o app provou pagos (`pre_marca`); os outros ficam
+    como estão. O "Pago" continua perguntando antes de gravar."""
+    novas = dict(marcas)
+    for a, sit, _r in pendentes:
+        if sit.pre_marca:
+            novas[a.id] = True
+    return novas
 
 
 def pagos_marcados(pendentes, marcas: dict) -> list[tuple]:

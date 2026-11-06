@@ -361,3 +361,21 @@ def test_gravar_sugestoes_so_com_linha_sugerida():
 def test_copiar_aceita_lista_so_com_sugestoes():
     sug = ldr.LinhaDaLista("Obra Beta - Sicoob", "Obra Beta", D("1"), sugerido=True)
     assert p67.recusa_de_copiar([sug]) == ""
+
+
+def test_resumo_conta_os_pendentes_os_provados_e_os_marcados():
+    linha = {"conta": "C", "favorecido": "Fornecedor Modelo Ltda", "valor": "10.00", "foto": {}}
+    a1 = ag.Agendado.de_linha({**linha, "id": 1, "dia": "2026-11-03", "alvo": "L1", "lancamento_id": "L1"})
+    a2 = ag.Agendado.de_linha({**linha, "id": 2, "dia": "2026-11-04", "alvo": "L1", "lancamento_id": "L1"})
+    a3 = ag.Agendado.de_linha({**linha, "id": 3, "dia": "2026-11-04", "alvo": "L3", "lancamento_id": "L3"})
+    prova = ag.Situacao("ok", "pago no ERP (baixa)", True, ag.PROVA_BAIXA)
+    espera = ag.Situacao("", "aguardando — responda")
+    pend = [(a1, espera, None), (a2, espera, None), (a3, prova, None)]
+    assert p67.resumo_agendados(pend, {}) == (
+        "3 esperando resposta · de 2 dias · 1 com prova de pago · 0 marcados")
+    assert p67.resumo_agendados([], {}) == ""
+    marcas = p67.marcar_provados(pend, {1: True})
+    assert marcas == {1: True, 3: True}
+    textos = [ln.valores[-1] for ln in p67.linhas_agendados(pend, marcas)]
+    assert textos[0].startswith("agendado 2x") and textos[1].startswith("agendado 2x")
+    assert not textos[2].startswith("agendado")

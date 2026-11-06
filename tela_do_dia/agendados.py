@@ -123,11 +123,19 @@ def pendentes(agendados, respostas) -> list[Agendado]:
             if a.id not in ult or ult[a.id].resposta not in FINAIS]
 
 
-def situacao(ag, titulo, envio=None, *, relido=True, prova_extra="") -> Situacao:
+def situacao(ag, titulo, envio=None, *, relido=True, prova_extra="",
+             existe=None) -> Situacao:
     """O que a tela mostra para um pendente. `titulo` = o item do ERP relido
     (None = não está na releitura); `envio` = o `Envio` da remessa (pode ser
     None); `relido=False` = a releitura do ERP não aconteceu, e aí ausência
-    não é "sumiu"."""
+    não é "sumiu".
+
+    `existe` = o que o `/overview` do ERP disse do título ausente da
+    releitura: False (404, foi excluído), True (existe, só não está perto da
+    data agendada — o vencimento mudou) ou None (não perguntado ou sem
+    resposta). "Sumiu" só com False: em 05/11/2026 a tela disse "sumiu" para
+    79 títulos que estavam PAGOS no ERP, e a lista de 85 agendados ficou sem
+    resposta desde o dia anterior."""
     pago_no_banco = getattr(envio, "retorno_estado", "") == "ok"
     # Lançamento dividido em N boletos (entrega 5): o "ok" do retorno é de UM
     # envio e não diz que todas as partes saíram — só a baixa no ERP prova.
@@ -141,8 +149,14 @@ def situacao(ag, titulo, envio=None, *, relido=True, prova_extra="") -> Situacao
         return Situacao("atencao", "não reli o título no ERP — responda")
     if titulo is None:
         extra = " · o retorno do banco diz pago" if pago_no_banco else ""
-        return Situacao("erro", f"título sumiu do ERP — era {brl(ag.valor)}, "
-                                f"favorecido {ag.favorecido or '?'}{extra}")
+        if existe is False:
+            return Situacao("erro", f"título sumiu do ERP (excluído) — era {brl(ag.valor)}, "
+                                    f"favorecido {ag.favorecido or '?'}{extra}")
+        if existe is True:
+            return Situacao("atencao", "o título continua no ERP, mas noutra data — o "
+                                       f"vencimento mudou; confira e responda{extra}")
+        return Situacao("atencao", "não achei o título na releitura do ERP — confira "
+                                   f"e responda{extra}")
     if titulo.get("paid") or titulo.get("markedAsPaid"):
         return Situacao("ok", "pago no ERP (baixa)", True, PROVA_BAIXA)
     if titulo.get("remainingValue") is None:
@@ -179,6 +193,39 @@ def intervalo_de_releitura(pend, hoje) -> tuple[date, date] | None:
     return min(datas) - folga, max(hoje, max(datas)) + folga
 
 
+#: Folga, em dias, de cada janela curta da releitura (ver `janelas_de_releitura`).
+FOLGA_CURTA = 3
+
+
+def janelas_de_releitura(pend) -> list[tuple[date, date]]:
+    """As janelas a reler no ERP: uma em volta de cada data (vencimento da
+    foto e dia do agendado, ± `FOLGA_CURTA`), juntando as que se tocam.
+
+    Medido em 05/11/2026: a janela única de `intervalo_de_releitura` (do mais
+    antigo − 31 até hoje + 31, ~70 dias) pedia 6 a 7 páginas de 500 e cada
+    uma levava de 1 a mais de 3 minutos no ERP; janelas de poucos dias
+    voltam em segundos, quase sempre numa página só. O título que mudou de
+    vencimento para longe fica fora — e é o `/overview` que diz que ele
+    existe (`situacao(existe=True)`), nunca a ausência que diz "sumiu"."""
+    datas = set()
+    for a in pend:
+        if not a.lancamento_id:
+            continue
+        datas.add(a.dia)
+        venc = _data(a.foto.get("vencimento"))
+        if venc:
+            datas.add(venc)
+    folga = timedelta(days=FOLGA_CURTA)
+    janelas: list[list[date]] = []
+    for d in sorted(datas):
+        ini, fim = d - folga, d + folga
+        if janelas and ini <= janelas[-1][1] + timedelta(days=1):
+            janelas[-1][1] = max(janelas[-1][1], fim)
+        else:
+            janelas.append([ini, fim])
+    return [(i, f) for i, f in janelas]
+
+
 @dataclass
 class ParaMarcar:
     alvo: str
@@ -209,10 +256,38 @@ def foto_do_lancamento(item: dict, valor: Decimal) -> dict:
             "titulo": str(item.get("tradePayableId") or "")}
 
 
-def para_marcar(painel, fora, lancamentos, conferencia, ja_marcados) -> list[ParaMarcar]:
+def dados_do_html(resultado) -> dict:
+    """{id do lançamento (ou "<id>#mao:<n>" do à mão): {"linha", "dado",
+    "descricao_colada"}} do `Resultado` que vai ao HTML: o que o dono COLA
+    no banco. É o que o "Autenticar no banco" procura nos comprovantes
+    (`autenticar`): o código de barras e a descrição colada. Lançamento
+    dividido fica com a 1ª parte aqui; as linhas de cada parte já vão em
+    `foto["partes"]`."""
+    from pagamentos_dia.html_pagamentos import dado_para_colar, descricao_para_colar
+    saida: dict[str, dict] = {}
+    for nome, regs in (getattr(resultado, "contas", None) or {}).items():
+        for r in regs or ():
+            id_ = str(r.get("id") or "")
+            a_mao = str(r.get("a_mao") or "")
+            chave = (f"{id_}#{a_mao}" if id_ else a_mao) if a_mao else id_
+            if not chave or chave in saida:
+                continue
+            tipo = str(r.get("tipo") or "")
+            dado = dado_para_colar(tipo, r.get("dados"))
+            saida[chave] = {"linha": dado if tipo == "Boleto" else "",
+                            "dado": dado,
+                            "descricao_colada": descricao_para_colar(r, nome)}
+    return saida
+
+
+def para_marcar(painel, fora, lancamentos, conferencia, ja_marcados,
+                do_html=None) -> list[ParaMarcar]:
     """O que sai hoje (os `saem` de cada conta), na ordem do painel e depois
     os de fora. Nasce marcado; o já marcado hoje (`ja_marcados`, os alvos de
-    `agendados_do_dia`) nasce desmarcado e não vai de novo."""
+    `agendados_do_dia`) nasce desmarcado e não vai de novo. `do_html`
+    (`dados_do_html`): a linha digitável e a descrição colada de cada um,
+    guardadas na foto para o "Autenticar no banco"."""
+    do_html = do_html or {}
     por_id = {str(i.get("id")): i for i in lancamentos or () if i.get("id")}
     a_mao = {p.alvo: p for p in conferencia.a_mao} if conferencia is not None else {}
     saida = []
@@ -242,6 +317,11 @@ def para_marcar(painel, fora, lancamentos, conferencia, ja_marcados) -> list[Par
                                   str(lanc.get("description") or "")[:200],
                                   str(lanc.get("tradePayablePaymentMethod") or ""),
                                   foto_do_lancamento(lanc, p.valor))
+            # A mesma chave do HTML: à mão é "<lançamento>#<alvo>" (ou só o alvo).
+            chave = (f"{m.lancamento_id}#{p.id}" if m.lancamento_id else p.id) if m else p.id
+            extra = do_html.get(chave)
+            if extra:
+                item.foto = {**item.foto, **{k: v for k, v in extra.items() if v}}
             item.ja_marcado = p.id in ja_marcados
             item.marcado = not item.ja_marcado
             if getattr(p, "parte", "") and m is None:

@@ -41,18 +41,25 @@ def montar_estado(acessos, vivo) -> dict:
         for a in acessos.values()]}
 
 
-def um_ciclo(acessos, *, vivo, subir_chrome, checar_login, log) -> list[str]:
+def um_ciclo(acessos, *, vivo, subir_chrome, checar_login, log,
+             faxinar=None) -> list[str]:
     """Um passo de vigia: por acesso, sobe o Chrome se estiver fechado e
     confere o login. Devolve o que fez, uma linha por acesso. Erro num acesso
-    vira linha "ERRO" e não impede os outros."""
+    vira linha "ERRO" e não impede os outros.
+
+    `faxinar(a, logado)` (opcional) fecha as abas esquecidas e devolve uma
+    linha por aba fechada (`erp/faxina.py`). Roda depois do login, e o erro
+    dela vira linha de log: nunca muda o "ok"/"SEM LOGIN" do acesso."""
     saida = []
     for a in acessos.values():
+        logado = False
         try:
             partes = []
             if not vivo(a):
                 subir_chrome(a)
                 partes.append("chrome subiu")
             if checar_login(a):
+                logado = True
                 partes.append("ok")
                 linha = f"{a.nome}: " + "; ".join(partes)
             else:
@@ -61,6 +68,12 @@ def um_ciclo(acessos, *, vivo, subir_chrome, checar_login, log) -> list[str]:
             linha = f"{a.nome}: ERRO {e!r}"
         log(linha)
         saida.append(linha)
+        if faxinar is not None:
+            try:
+                for f in faxinar(a, logado):
+                    log(f"{a.nome}: faxina — {f}")
+            except Exception as e:
+                log(f"{a.nome}: faxina não rodou ({e!r})")
     return saida
 
 
@@ -92,6 +105,21 @@ class Mantenedor:
     def fechar_tudo(self):
         for nome in list(self._clientes):
             self._soltar(nome)
+
+    def ids_das_abas(self, nome) -> set:
+        """Os targetIds das abas do porteiro neste acesso (a faxina nunca as
+        fecha). Pergunta ao CDP de cada aba (`Target.getTargetInfo`); não roda
+        JS em aba nenhuma."""
+        ids = set()
+        c = self._clientes.get(nome)
+        for aba in list(getattr(c, "_minhas", ()) or ()):
+            with contextlib.suppress(Exception):
+                s = aba.context.new_cdp_session(aba)
+                try:
+                    ids.add(s.send("Target.getTargetInfo")["targetInfo"]["targetId"])
+                finally:
+                    s.detach()
+        return ids
 
     def respirar(self):
         """Uma ida curta ao navegador por cliente (`MCClient.pulsar`), para os
@@ -218,8 +246,14 @@ def vigiar(acessos, pasta, intervalo=120, *, ciclos=None):
     Fica de fora o que nenhum código vê: TerminateProcess ("Finalizar
     tarefa" do Agendador, Gerenciador de Tarefas). Aí a aba fica no Chrome
     central até alguém fechá-la."""
+    from erp.faxina import Faxina
     lg = _logger(pasta)
     m = _mantenedor_real(lg.info)
+    fx = Faxina(pasta_reg=None if pasta is None else pasta / "abas-robos")
+
+    def faxinar(a, logado):
+        return fx.passar(a, minhas=m.ids_das_abas(a.nome), logado=logado)
+
     atexit.register(m.fechar_tudo)          # idempotente: o finally já esvazia
     anteriores = _instalar_sinais()
     lg.info(f"porteiro de pé: {', '.join(acessos)}; intervalo {intervalo} s")
@@ -227,7 +261,7 @@ def vigiar(acessos, pasta, intervalo=120, *, ciclos=None):
     try:
         while ciclos is None or n < ciclos:
             um_ciclo(acessos, vivo=central.chrome_vivo, subir_chrome=_subir_chrome,
-                     checar_login=m.checar, log=lg.info)
+                     checar_login=m.checar, log=lg.info, faxinar=faxinar)
             n += 1
             if ciclos is None or n < ciclos:
                 _dormir(intervalo, m.respirar)
