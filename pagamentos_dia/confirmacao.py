@@ -84,6 +84,9 @@ class Entradas:
     #: candidatos a dividir, lidos pela `leitura_do_dia`. Título fora daqui
     #: não divide ("não sei se o título tem outras parcelas").
     titulos_erp: dict = field(default_factory=dict)
+    #: Lançamentos que mudaram no ERP entre a lista e o fim da leitura dos
+    #: anexos (só a `leitura_do_dia` preenche): saem em ATENÇÃO.
+    alterados_na_leitura: set = field(default_factory=set)
 
 
 def _periodo_legivel(periodo) -> str:
@@ -157,7 +160,8 @@ def remontar(entradas: Entradas, ids_nao_confirmados=(), *,
         anexos_nao_lidos=entradas.anexos_nao_lidos,
         titulos_nao_lidos=entradas.titulos_nao_lidos,
         qr_pix=entradas.qr_pix,
-        ids_liberados=ids_liberados)
+        ids_liberados=ids_liberados,
+        alterados_na_leitura=entradas.alterados_na_leitura)
     if entradas.dividir_boletos:
         resultado = boletos_somados.dividir(resultado, entradas,
                                             titulos_erp=entradas.titulos_erp)
