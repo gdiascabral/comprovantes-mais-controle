@@ -84,6 +84,10 @@ class Entradas:
     #: candidatos a dividir, lidos pela `leitura_do_dia`. Título fora daqui
     #: não divide ("não sei se o título tem outras parcelas").
     titulos_erp: dict = field(default_factory=dict)
+    #: Só a tela nova, ao adiantar boletos (`leitura_do_dia.separar_adiantados`):
+    #: o dia de trabalho. Registro com vencimento DEPOIS dele leva na Obs
+    #: "adiantado — vence DD/MM" (planilha, HTML, tela). None = nada muda.
+    adiantar_de: object = None
 
 
 def _periodo_legivel(periodo) -> str:
@@ -158,10 +162,74 @@ def remontar(entradas: Entradas, ids_nao_confirmados=(), *,
         titulos_nao_lidos=entradas.titulos_nao_lidos,
         qr_pix=entradas.qr_pix,
         ids_liberados=ids_liberados)
+    if entradas.adiantar_de is not None:
+        resultado = so_codigo_de_barras(resultado, entradas.adiantar_de)
+        marcar_adiantados(resultado, entradas.adiantar_de,
+                          _vencimentos(entradas.selecionados))
     if entradas.dividir_boletos:
         resultado = boletos_somados.dividir(resultado, entradas,
                                             titulos_erp=entradas.titulos_erp)
     return resultado
+
+
+def obs_de_adiantado(vencimento: str, dia) -> str:
+    """"adiantado — vence DD/MM" quando o vencimento ISO é depois de `dia`."""
+    import datetime as _dt
+    try:
+        venc = _dt.date.fromisoformat(vencimento or "")
+    except ValueError:
+        return ""
+    return f"adiantado — vence {venc:%d/%m}" if venc > dia else ""
+
+
+#: O adiantado que a apuração resolveu pagar por Pix (reembolso "PAGAR PARA",
+#: NF/OC com a chave do cadastro, pagamento autorizado, chave da
+#: observação…): o dono pediu SÓ os boletos dos dias seguintes.
+MOTIVO_ADIANTADO_NAO_BOLETO = ("vence depois de hoje e não se paga por código de barras — "
+                               "só boletos são adiantados")
+
+
+def _vencimentos(lancamentos) -> dict:
+    return {str(i.get("id") or ""): (relatorio.data_do_item(i) or "")
+            for i in lancamentos or ()}
+
+
+def so_codigo_de_barras(resultado, dia):
+    """Revisão de dinheiro (29/10/2026): o filtro de antes de montar
+    (`leitura_do_dia.separar_adiantados`) olha a forma do LANÇAMENTO, mas o
+    `montar_registros` troca boleto por Pix em vários ramos. Depois de
+    montar, o registro que vence depois de `dia` e não saiu "Boleto" vai
+    para os omitidos com `MOTIVO_ADIANTADO_NAO_BOLETO`. A guia que sai pelo
+    Pix do QR (`linha_da_guia`) continua: é a guia, com o código de barras
+    provando o valor."""
+    contas, omitidos = {}, list(resultado.omitidos)
+    for conta, regs in resultado.contas.items():
+        ficam = []
+        for r in regs:
+            if (obs_de_adiantado(r.get("vencimento", ""), dia)
+                    and r.get("tipo") != "Boleto" and not r.get("linha_da_guia")):
+                omitidos.append({**r, "conta": conta, "motivo": MOTIVO_ADIANTADO_NAO_BOLETO})
+            else:
+                ficam.append(r)
+        if ficam:
+            contas[conta] = ficam
+    return relatorio.Resultado(contas, omitidos)
+
+
+def marcar_adiantados(resultado, dia, vencimentos=None) -> None:
+    """Põe a marca de adiantado na Obs dos registros que vencem depois de
+    `dia` (no lugar: o `Resultado` acabou de ser montado). O omitido não
+    traz o vencimento: vem de `vencimentos` ({id: date}), quando dado."""
+    def _marcar(r, venc):
+        marca = obs_de_adiantado(venc, dia)
+        if marca and marca not in (r.get("obs") or ""):
+            r["obs"] = f"{marca} · {r['obs']}" if r.get("obs") else marca
+    for regs in resultado.contas.values():
+        for r in regs:
+            _marcar(r, r.get("vencimento", ""))
+    for o in resultado.omitidos:
+        venc = o.get("vencimento") or (vencimentos or {}).get(str(o.get("id") or ""))
+        _marcar(o, venc.isoformat() if hasattr(venc, "isoformat") else (venc or ""))
 
 
 # --------------------------------------------------------------------------

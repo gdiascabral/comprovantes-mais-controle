@@ -419,8 +419,21 @@ def _data(texto: str, campo: str):
 
 
 def periodo_da_busca(txt_ini: str, txt_fim: str, sugerido, hoje):
-    """O período que o Buscar lê (pedido do dono, 22/10/2026: "já senti falta
+    """O período do DIA que o Buscar lê (`busca_do_dia` sem os adiantados)."""
+    return busca_do_dia(txt_ini, txt_fim, sugerido, hoje)[0]
+
+
+def busca_do_dia(txt_ini: str, txt_fim: str, sugerido, hoje):
+    """`(periodo, adiantar_ate)`: o que o Buscar lê (pedido do dono, 22/10/2026: "já senti falta
     de selecionar as datas aqui").
+
+    **ATÉ depois de hoje adianta boletos** (dono, 29/10/2026: "às vezes o
+    diretor pede para já adiantar os boletos que vão vencer nos próximos
+    dias"). O período do dia vai até HOJE (o dia de trabalho continua
+    sendo hoje: saldo, nuvem, aportes, Excel); de amanhã até o ATÉ
+    (`adiantar_ate`) só entra o que se paga por código de barras
+    (`leitura_do_dia.separar_adiantados`). ATÉ até hoje: `adiantar_ate` é
+    None e nada muda. DE depois de hoje vira hoje.
 
     - O que está nos campos vale; invertido, troca (como a Remessa/Retorno);
       data que não é dd/mm/aaaa levanta `ValueError` com o recado.
@@ -435,17 +448,40 @@ def periodo_da_busca(txt_ini: str, txt_fim: str, sugerido, hoje):
     from conciliacao.models import Periodo, sugerir_periodo
     atual = ((txt_ini or "").strip(), (txt_fim or "").strip())
     if sugerido is not None and atual == tuple(sugerido) and atual != textos_sugeridos(hoje):
-        return sugerir_periodo(hoje)
+        return sugerir_periodo(hoje), None
     ini, fim = _data(atual[0], "DE"), _data(atual[1], "ATÉ")
     ini, fim = min(ini, fim), max(ini, fim)
-    if fim > hoje:
-        raise ValueError(f"Não dá para buscar o futuro: o ATÉ ({fim:%d/%m/%Y}) é depois "
-                         f"de hoje ({hoje:%d/%m/%Y}).")
     dias = (fim - ini).days + 1
     if dias > MAXIMO_DE_DIAS:
         raise ValueError(f"O período tem {dias} dias; o máximo é {MAXIMO_DE_DIAS} dias. "
                          "Para mais, busque em partes.")
-    return Periodo(ini, fim)
+    if fim > hoje:
+        return Periodo(min(ini, hoje), hoje), fim
+    return Periodo(ini, fim), None
+
+
+def campos_de_outro_dia(atuais, escritos, dia_escrito, hoje) -> bool:
+    """Revisão de dinheiro (29/10/2026): o ATÉ no futuro que o app deixou
+    nos campos ao adiantar, com o app aberto de um dia para o outro, NÃO
+    vale no dia seguinte (releria ontem inteiro calado). True = os campos
+    ainda são os que o app escreveu, e num dia que não é hoje."""
+    return (escritos is not None and dia_escrito is not None and dia_escrito != hoje
+            and tuple(atuais) == tuple(escritos))
+
+
+def frase_dos_adiantados(periodo, adiantar_ate) -> str:
+    """O que o Buscar avisa ao adiantar (vazio sem adiantados)."""
+    if adiantar_ate is None:
+        return ""
+    amanha = periodo.fim + _um_dia()
+    return (f"Adiantando boletos: de {periodo.inicio:%d/%m} a {periodo.fim:%d/%m} tudo, e de "
+            f"{amanha:%d/%m} a {adiantar_ate:%d/%m} só o que se paga por código de barras "
+            "(boleto, guia, conta de consumo). Eles entram no dia de hoje.")
+
+
+def _um_dia():
+    import datetime as _dt
+    return _dt.timedelta(days=1)
 
 
 def pergunta_saldo_de_agora(periodo, lido_em, acao: str = "Gerar") -> str:
@@ -458,7 +494,7 @@ def pergunta_saldo_de_agora(periodo, lido_em, acao: str = "Gerar") -> str:
     return f"O saldo é o de agora, não o de {periodo.fim:%d/%m}. {acao} mesmo assim?"
 
 
-def periodo_na_tela(periodo, hoje=None) -> str:
+def periodo_na_tela(periodo, hoje=None, adiantar_ate=None) -> str:
     """O texto do período lido. Sem aviso de feriado: sem calendário não há
     como saber quando avisar ("o dia útil anterior ficou fora" vale em todo
     dia útil, e aviso que aparece sempre é ruído) — com o campo de datas
@@ -471,6 +507,9 @@ def periodo_na_tela(periodo, hoje=None) -> str:
         texto += (f" · dia de trabalho {periodo.fim:%d/%m}: os saldos (sistema e Sicoob) "
                   f"são os de agora, não os de {periodo.fim:%d/%m}; o Sicoob não é lido — "
                   "confira antes do Excel e dos aportes")
+    if adiantar_ate is not None and adiantar_ate > periodo.fim:
+        texto += (f" + boletos adiantados até {adiantar_ate:%d/%m} (já somam no a pagar "
+                  "e no aporte)")
     return texto
 
 

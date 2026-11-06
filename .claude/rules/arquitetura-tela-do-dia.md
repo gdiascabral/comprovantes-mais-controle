@@ -281,8 +281,38 @@ valendo, e o rótulo do período diz "dia de trabalho DD/MM (não é hoje: o
 saldo do Sicoob não é lido — digite o do banco)" (`periodo_na_tela(p,
 hoje)`). É a mesma regra que já cobria a virada da meia-noite.
 **Revisão do pacote (22/10/2026): o saldo do ERP também é o de agora.** O
-Buscar recusa ATÉ depois de hoje ("não dá para buscar o futuro") e período
-de mais de 31 dias. Com o ATÉ antes do dia em que os saldos foram lidos
+Buscar recusa período de mais de 31 dias.
+**ATÉ depois de hoje adianta boletos** (dono, 29/10/2026: "às vezes o
+diretor pede para já adiantar os boletos que irão vencer nos próximos
+dias"; substitui a recusa "não dá para buscar o futuro"). `decisoes.
+busca_do_dia` devolve `(periodo, adiantar_ate)`: o período do DIA termina
+hoje (DE no futuro vira hoje) e o dia de trabalho continua sendo hoje
+(saldo, Sicoob, nuvem, aportes, Excel). A leitura lista de DE até
+`adiantar_ate` e, logo depois da lista de anexos (antes de detalhe e
+download), `leitura_do_dia.separar_adiantados` tira o que vence depois de
+hoje e NÃO se paga por código de barras (`relatorio.tipo_de_pagamento` ≠
+"Boleto": Pix, transferência, débito automático). Boleto, guia e conta de
+consumo entram no dia como qualquer outro (a pagar, aporte mínimo, HTML,
+remessa, agendados, lista do diretor) e levam na Obs "adiantado — vence
+DD/MM" (`Entradas.adiantar_de` → `confirmacao.marcar_adiantados`, em toda
+`remontar`). Os campos continuam mostrando o ATÉ escolhido; o Registro diz
+o que foi adiantado e quantos ficaram de fora. **Revisão de dinheiro do
+mesmo dia (PR #161)**: (1) o `montar_registros` troca boleto por Pix em
+vários ramos (PAGAR PARA, NF/OC + chave, autorizado, chave da observação),
+então DEPOIS de montar `confirmacao.so_codigo_de_barras` manda para NÃO
+ENTRARAM o adiantado que não saiu "Boleto" (`MOTIVO_ADIANTADO_NAO_BOLETO`;
+a guia paga pelo Pix do QR, com `linha_da_guia`, fica); o omitido adiantado
+também leva a marca. (2) **Lançamento com agendado de OUTRO dia ainda
+pendente** (sem resposta ou "reagendado") sai do dia
+(`geracao.sem_ja_agendados`, DESMARCAR local como a caixa dos reembolsos,
+motivo "já agendado em DD/MM…"; `so_pela_tela` recusa ação nele): o boleto
+adiantado voltava no Buscar do dia em que vence e o HTML novo não sabia do
+"já paguei". Para pagar de novo: "Não saiu…" no cartão 1. Fica de fora o
+agendado já respondido "pago" com o título ainda aberto no ERP (risco
+anterior a este PR). (3) Os campos com ATÉ futuro escritos num dia não
+valem no seguinte (`decisoes.campos_de_outro_dia`, `_campos_adiantados`):
+o Buscar volta à sugestão de hoje. O rótulo do período diz "+ boletos
+adiantados até DD/MM". Com o ATÉ antes do dia em que os saldos foram lidos
 (`_lido_no_dia`), o Excel do dia e o "Mandar para a aba Aportes" perguntam
 primeiro, padrão NÃO: "O saldo é o de agora, não o de DD/MM. Gerar (Mandar)
 mesmo assim?" (`decisoes.pergunta_saldo_de_agora`), e o rótulo do período

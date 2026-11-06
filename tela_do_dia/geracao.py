@@ -282,6 +282,56 @@ def sem_reembolsos(conferencia, grupos, pessoas, entradas=None):
     return replace(conferencia, eventos=tuple(conferencia.eventos) + extra), tirados
 
 
+#: Lançamento com agendado de OUTRO dia ainda esperando resposta (revisão de
+#: dinheiro, 29/10/2026): o boleto adiantado volta no Buscar do dia em que
+#: vence, e o HTML novo não sabe do "já paguei" do outro dia.
+PREFIXO_JA_AGENDADO = "já agendado em "
+
+
+def sem_ja_agendados(conferencia, pendentes, dia):
+    """`(conferência, tirados)`: cada lançamento com agendado de um dia
+    ANTES de `dia` ainda pendente (sem resposta, ou "reagendado") ganha um
+    DESMARCAR local, como a caixa dos reembolsos — some do a pagar, da
+    planilha, do HTML, da remessa e do "Marcar agendados", nada vai à
+    nuvem. Para pagar de novo, responde-se "Não saiu…" no cartão
+    "Agendados a confirmar" e busca-se de novo."""
+    decisoes = conferencia.decisoes
+    alvos = {}
+    for item in pendentes or ():
+        a = item[0] if isinstance(item, tuple) else item
+        ident = str(getattr(a, "lancamento_id", "") or "")
+        if not ident or a.dia >= dia or ident in alvos:
+            continue
+        d = decisoes.get(ident)
+        if d is not None and d.desmarcado:
+            continue
+        alvos[ident] = a
+    if not alvos:
+        return conferencia, []
+    base = max((e.id for e in conferencia.eventos), default=0)
+    extra = tuple(cf.Evento(id=base + 1 + i, alvo=ident, conta="", acao=cf.DESMARCAR,
+                            motivo=f"{PREFIXO_JA_AGENDADO}{a.dia:%d/%m} — responda em "
+                                   "«Agendados a confirmar» (Não saiu… para pagar de novo)")
+                  for i, (ident, a) in enumerate(alvos.items()))
+    tirados = [f"{a.favorecido or '?'} — {html_pagamentos.reais(a.valor)} — "
+               f"já agendado em {a.dia:%d/%m}" for a in alvos.values()]
+    return replace(conferencia, eventos=tuple(conferencia.eventos) + extra), tirados
+
+
+def so_pela_tela(conferencia_da_nuvem, conferencia_que_vale, alvo) -> str:
+    """"caixa" (reembolso desligado), "agendado" (já agendado noutro dia) ou
+    "": o alvo está desmarcado só pela memória da tela, e aí ela recusa
+    mexer nele — o "Desfazer" gravaria na nuvem um DESFAZER de verdade."""
+    if so_pela_caixa(conferencia_da_nuvem, conferencia_que_vale, alvo):
+        return "caixa"
+    d = conferencia_que_vale.decisoes.get(alvo)
+    if d is None or not d.desmarcado or not (d.motivo_desmarcar or "").startswith(
+            PREFIXO_JA_AGENDADO):
+        return ""
+    real = conferencia_da_nuvem.decisoes.get(alvo)
+    return "agendado" if real is None or not real.desmarcado else ""
+
+
 def so_pela_caixa(conferencia_da_nuvem, conferencia_que_vale, alvo) -> bool:
     """O alvo está desmarcado SÓ pela caixa dos reembolsos? Aí a tela recusa
     mexer nele (revisão de dinheiro, 28/10/2026): o "Desfazer" gravaria na

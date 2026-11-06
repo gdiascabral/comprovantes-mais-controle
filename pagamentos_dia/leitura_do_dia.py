@@ -45,6 +45,33 @@ class LeituraDosPagamentos:
     grupos: list = field(default_factory=list)
     avisos: list = field(default_factory=list)
     interrompida: bool = False
+    #: Ids dos lançamentos de DEPOIS do período que entraram adiantados
+    #: (`separar_adiantados`); vazio sem `adiantar_ate`.
+    adiantados: set = field(default_factory=set)
+    adiantar_ate: object = None                 # date, quando adiantou
+
+
+def separar_adiantados(lancamentos, anexos, fim) -> tuple[list, set, int]:
+    """`(ficam, ids_adiantados, fora)`: os lançamentos com vencimento depois
+    de `fim` só ficam quando se pagam por código de barras (dono, 29/10/2026:
+    "pegar só os boletos" dos dias seguintes — guia e conta de consumo
+    também). Quem decide é `relatorio.tipo_de_pagamento`, a MESMA régua da
+    planilha: boleto anexado ganha; sem anexo, a forma do lançamento. Pix,
+    transferência e débito automático ficam de fora (`fora` conta quantos).
+    Sem data de vencimento fica, como no `filtrar_periodo`."""
+    ficam, adiantados, fora = [], set(), 0
+    for item in lancamentos:
+        venc = relatorio.data_do_item(item)
+        if venc is None or venc <= fim:
+            ficam.append(item)
+            continue
+        files = anexos.get(str(item.get("tradePayableId")), ()) or ()
+        if relatorio.tipo_de_pagamento(item, files) == "Boleto":
+            ficam.append(item)
+            adiantados.add(str(item.get("id") or ""))
+        else:
+            fora += 1
+    return ficam, adiantados, fora
 
 
 class _Parada:
@@ -201,8 +228,13 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
                    cadastro_reembolso=None, regras_fornecedor=None, destacar=(),
                    conta_entra=relatorio.conta_entra, log=print,
                    progresso=lambda f, t: None, cancelar=lambda: False,
-                   **leitores) -> LeituraDosPagamentos:
+                   adiantar_ate=None, **leitores) -> LeituraDosPagamentos:
     """Busca, lê os anexos e apura como a Remessa, de `ini` a `fim` (date).
+
+    `adiantar_ate` (date depois de `fim`) lê também os vencimentos até ele,
+    mas deles só o que se paga por código de barras (`separar_adiantados`),
+    antes de ler detalhe e anexo de quem sai. `leitura.periodo` continua
+    `(ini, fim)`: o dia de trabalho não muda.
 
     `api` é a `mc_api` da sessão do Chrome do app (`anx.garantir_sessao()`);
     `abrir_historico`/`carregar_mapas` são os do `analisar_remessa`;
@@ -217,8 +249,9 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
     cancelar = _Parada(cancelar)
     if not api.capturar_credenciais(log):
         raise RuntimeError("A tela de Pagamentos não carregou a lista no Chrome.")
-    brutos = api.listar_a_pagar(f"{ini:%Y-%m-%d}", f"{fim:%Y-%m-%d}", log=log)
-    leitura.lancamentos = relatorio.filtrar_periodo(brutos, ini, fim, log=log)
+    ate = adiantar_ate if adiantar_ate and adiantar_ate > fim else fim
+    brutos = api.listar_a_pagar(f"{ini:%Y-%m-%d}", f"{ate:%Y-%m-%d}", log=log)
+    leitura.lancamentos = relatorio.filtrar_periodo(brutos, ini, ate, log=log)
     if not leitura.lancamentos:
         leitura.resultado = relatorio.Resultado(contas={}, omitidos=[])
         return leitura
@@ -229,6 +262,15 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         api.capturar_credenciais_anexos(leitura.lancamentos[0].get("id"))
     leitura.anexos = api.anexos_de_titulos(titulos, log=log, progresso=progresso,
                                            cancelar=cancelar)
+    if ate > fim:
+        leitura.adiantar_ate = ate
+        leitura.lancamentos, leitura.adiantados, fora = separar_adiantados(
+            leitura.lancamentos, leitura.anexos, fim)
+        log(f"  Adiantados: {len(leitura.adiantados)} de código de barras com vencimento "
+            f"até {ate:%d/%m}; {fora} de Pix/transferência dos dias seguintes ficaram de fora.")
+        if not leitura.lancamentos:
+            leitura.resultado = relatorio.Resultado(contas={}, omitidos=[])
+            return leitura
     ids = [str(i.get("id")) for i in leitura.lancamentos if i.get("id")]
     leitura.overviews = api.listar_overviews(ids, log=log, progresso=progresso,
                                              cancelar=cancelar)
@@ -260,7 +302,8 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         titulos_nao_lidos=set(getattr(api, "titulos_sem_leitura", ()) or ()),
         # A tela nova divide o lançamento cujos boletos somam exato
         # (`boletos_somados`); a Remessa/Retorno, lendo sozinha, não.
-        dividir_boletos=True)
+        dividir_boletos=True,
+        adiantar_de=fim if leitura.adiantados else None)
     # Sem título lido nada divide, e as linhas candidatas continuam com o
     # status "vários boletos": é por ele que se sabe QUAIS títulos ler.
     entradas.titulos_erp = ler_titulos_no_erp(
