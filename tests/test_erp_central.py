@@ -234,7 +234,7 @@ class _PW:
         outer = self
 
         class _Chromium:
-            def connect_over_cdp(self, endereco):
+            def connect_over_cdp(self, endereco, **kw):
                 outer.registro.append(f"cdp {endereco}")
                 return _Browser(outer.registro)
         self.chromium = _Chromium()

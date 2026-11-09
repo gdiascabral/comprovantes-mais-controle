@@ -141,6 +141,13 @@ def garantir_logado(acesso, *, caiu: bool = False, log=None, abrir_pagina=None,
         except ErpErro as e:
             _FALHA[nome] = (relogio(), str(e))
             raise
+        except central.ChromeSemResposta as e:
+            # O recado já vem pronto e é longo: o corte de 160 caracteres do
+            # ramo de baixo comeria justamente o "o que fazer".
+            log(e.relatorio())
+            erro = ErpErro(str(e))
+            _FALHA[nome] = (relogio(), str(erro))
+            raise erro from e
         except Exception as e:
             erro = ErpErro(f"o login principal no Chrome central '{nome}' "
                            f"falhou: {type(e).__name__}: {str(e)[:160]}")
@@ -321,7 +328,7 @@ class _AbaPrincipal:
         from playwright.sync_api import sync_playwright   # tarde: módulo leve
         self._pw = sync_playwright().start()
         try:
-            browser = self._pw.chromium.connect_over_cdp(endereco)
+            browser = central.conectar(self._pw, endereco)
             pagina = _pagina_do_alvo(browser.contexts[0], alvo)
             if pagina is None:
                 raise ErpErro("a aba do login principal não apareceu no Chrome "

@@ -378,7 +378,13 @@ class MCClient:
         endereco = central.garantir_chrome(self._acesso)
         self._pw = sync_playwright().start()
         try:
-            self._browser = self._pw.chromium.connect_over_cdp(endereco)
+            try:
+                self._browser = central.conectar(self._pw, endereco)
+            except central.ChromeSemResposta as e:
+                # O recado vai à janela por quem chamou; o detalhe, aba por
+                # aba, fica no diagnóstico.
+                config.diag(e.relatorio())
+                raise
             self.ctx = self._browser.contexts[0]
             self.page = self.ctx.new_page()
             self._minhas.add(self.page)

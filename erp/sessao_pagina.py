@@ -220,6 +220,9 @@ class SessaoPelaPagina:
         if erro is not None:
             if isinstance(erro, ErpErro):
                 raise erro
+            if isinstance(erro, central.ChromeSemResposta):
+                self._diag(erro.relatorio())
+                raise ErpErro(str(erro)) from erro
             raise ErpErro(f"não consegui abrir a aba no Chrome central "
                           f"'{self.nome}': {erro}") from erro
         raise self._recado_sem_tela() from self._erro_navegar
