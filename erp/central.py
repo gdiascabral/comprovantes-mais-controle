@@ -140,13 +140,99 @@ def endereco(a: Acesso) -> str:
     return f"http://127.0.0.1:{a.porta}"
 
 
-def chrome_vivo(a: Acesso, *, abrir=urllib.request.urlopen) -> bool:
+def chrome_vivo(a: Acesso, *, abrir=urllib.request.urlopen, prazo: float = 2.0) -> bool:
     """O Chrome deste acesso responde na porta de depuração?"""
     try:
-        with abrir(f"{endereco(a)}/json/version", timeout=2) as r:
+        with abrir(f"{endereco(a)}/json/version", timeout=prazo) as r:
             return getattr(r, "status", 200) == 200 and b"Browser" in r.read()
     except Exception:
         return False
+
+
+# ------------------------------------------- fechado x travado (09/11/2026)
+#
+# Em 09/11/2026 o Chrome central parou de responder às 14:04 com a porta 9230
+# ABERTA: aceitava a conexão e não respondia nada (janela "não respondendo"
+# no Windows). `chrome_vivo` dizia False, e quem chamava `garantir_chrome`
+# (robô ou porteiro) abria OUTRO chrome.exe no mesmo perfil. Esse Chrome novo
+# não consegue entregar a vez ao travado e fica parado para sempre no aviso
+# "o Google Chrome não está respondendo" — um a mais por ciclo. E com 2 s de
+# prazo, um Chrome só LENTO (servidor sem memória) também passava por
+# fechado: das 40 vezes que o log disse "chrome subiu" em 11 dias, a maioria
+# era um Chrome vivo ganhando uma janela em branco a mais.
+#
+# Agora são três estados. "fechado": a porta não aceita conexão, e só aí se
+# sobe Chrome. "mudo": a porta aceita e não responde nem com prazo longo —
+# ninguém sobe outro Chrome; quem resolve é o porteiro (`matar_chrome`).
+
+#: Prazo da segunda pergunta, quando a porta está aberta e a primeira (2 s)
+#: não teve resposta: separa "lento" de "travado".
+PRAZO_LENTO = 10.0
+
+
+class ChromeTravado(RuntimeError):
+    """A porta do Chrome central aceita conexão e não responde. `RuntimeError`
+    e não `TimeoutError`, como `ChromeSemResposta`: no app, `TimeoutError`
+    quer dizer trava de arquivo ocupada. A mensagem contém "não responde na
+    porta" de propósito: é a falha passageira que o `rodar_e_relatar.py`
+    repete depois de o porteiro se recuperar."""
+
+    def __init__(self, a: "Acesso"):
+        super().__init__(
+            f"o Chrome central '{a.nome}' está travado: não responde na porta "
+            f"{a.porta} (aceita a conexão e fica calado). O porteiro reinicia "
+            f"o Chrome sozinho em alguns minutos.")
+        self.acesso = a
+
+
+def porta_ouvindo(a: Acesso, *, prazo: float = 1.0) -> bool:
+    """Alguém aceita conexão na porta de depuração deste acesso? Só abre e
+    fecha o socket: não fala CDP nem HTTP."""
+    try:
+        with socket.create_connection(("127.0.0.1", a.porta), timeout=prazo):
+            return True
+    except OSError:
+        return False
+
+
+def estado_chrome(a: Acesso, *, vivo=None, ouvindo=None, vivo_lento=None) -> str:
+    """"vivo", "fechado" ou "mudo". Lê `chrome_vivo` e `porta_ouvindo` do
+    módulo na hora (monkeypatch dos testes)."""
+    vivo = vivo or chrome_vivo
+    if vivo(a):
+        return "vivo"
+    if not (ouvindo or porta_ouvindo)(a):
+        return "fechado"
+    lento = vivo_lento or (lambda ac: chrome_vivo(ac, prazo=PRAZO_LENTO))
+    return "vivo" if lento(a) else "mudo"
+
+
+def pids_do_chrome(a: Acesso, *, rodar=subprocess.run) -> list[int]:
+    """Os processos PRINCIPAIS (sem `--type=`) do Chrome deste perfil.
+    Conta todos: o travado e os que ficaram presos no aviso "não está
+    respondendo" tentando entregar a vez a ele."""
+    perfil = str(a.perfil).replace("'", "''")
+    script = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+              f"? {{ $_.CommandLine -and $_.CommandLine.Contains('--user-data-dir={perfil}') "
+              "-and $_.CommandLine -notmatch '--type=' }} | % { $_.ProcessId }")
+    r = rodar(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+              capture_output=True, text=True, timeout=60,
+              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return [int(x) for x in (r.stdout or "").split() if x.strip().isdigit()]
+
+
+def matar_chrome(a: Acesso, *, pids=None, rodar=subprocess.run) -> list[int]:
+    """Mata o Chrome DESTE perfil, com os filhos. SÓ o porteiro chama, e só
+    com o Chrome mudo há vários ciclos: é a única exceção à regra "ninguém
+    fecha o Chrome central" — travado, ele já não serve a ninguém, e sem isto
+    tudo fica parado até alguém fechá-lo à mão (03/11, 05/11, 06/11 e
+    09/11/2026). Devolve os pids que recebeu ordem de morrer."""
+    lista = (pids or pids_do_chrome)(a)
+    for pid in lista:
+        with contextlib.suppress(Exception):
+            rodar(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                  timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return lista
 
 
 def localizar_chrome() -> str:
@@ -273,17 +359,32 @@ def trava(caminho: Path, *, espera: float = 60.0, velha: float = 120.0,
 
 
 def garantir_chrome(a: Acesso, *, popen=subprocess.Popen, vivo=None, exe=None,
-                    esperar: float = 20.0, dormir=time.sleep) -> str:
-    """O endereço CDP do Chrome deste acesso, subindo-o se estiver fechado.
+                    esperar: float = 20.0, dormir=time.sleep, ouvindo=None,
+                    vivo_lento=None) -> str:
+    """O endereço CDP do Chrome deste acesso, subindo-o se estiver FECHADO.
 
-    `chrome_vivo` e `endereco` são lidos do módulo na hora da chamada (não
-    capturados em default de argumento) para o monkeypatch dos testes valer."""
+    Porta aberta e calada não é "fechado": levanta `ChromeTravado` e não abre
+    outro chrome.exe (ver `estado_chrome`).
+
+    `chrome_vivo`, `porta_ouvindo` e `endereco` são lidos do módulo na hora da
+    chamada (não capturados em default de argumento) para o monkeypatch dos
+    testes valer."""
     vivo = vivo or chrome_vivo
-    if vivo(a):
+
+    def estado():
+        return estado_chrome(a, vivo=vivo, ouvindo=ouvindo, vivo_lento=vivo_lento)
+
+    agora = estado()
+    if agora == "vivo":
         return endereco(a)
+    if agora == "mudo":
+        raise ChromeTravado(a)
     with trava(a.perfil.parent / f".{a.nome}.chrome.trava", espera=esperar + 30):
-        if vivo(a):                       # outro robô subiu enquanto esperávamos
+        agora = estado()
+        if agora == "vivo":               # outro robô subiu enquanto esperávamos
             return endereco(a)
+        if agora == "mudo":
+            raise ChromeTravado(a)
         a.perfil.mkdir(parents=True, exist_ok=True)
         # Chrome FECHADO e trava na mão: a única hora segura de apagar o
         # histórico. O Chrome 152 morre no 1º download de um perfil que já
