@@ -156,6 +156,9 @@ class Imovel:
     recebimentos: list[Recebimento] = field(default_factory=list)
     revisao: str = ""               # motivo, quando não dá para seguir
     tipo: str = TIPO_CASA           # "CS" casa de rua, "UN" condomínio
+    #: Vendas (`saleId`) dos recebimentos do mês. No condomínio, o contrato
+    #: mora no lançamento da venda.
+    vendas: list[str] = field(default_factory=list)
 
     @property
     def chave(self) -> tuple[str, object]:
@@ -236,6 +239,10 @@ def imoveis_do_mes(registros: list[dict], log=print) -> list[Imovel]:
             imovel.comprador_descricao = comprador
         if cliente and not imovel.cliente:
             imovel.cliente = cliente
+
+        venda_id = str(r.get("saleId") or "")
+        if venda_id and venda_id not in imovel.vendas:
+            imovel.vendas.append(venda_id)
 
         valor = _dinheiro(r.get("sumOfReceivedValues"))
         imovel.recebido += valor

@@ -63,6 +63,9 @@ PARTICULAS_DE_EMPRESA = {"LTDA", "SPE", "EIRELI", "EPP", "ME", "SA", "S/A",
 #: de ser encontrado. O olhar para frente/para trás separa os dois casos.
 RE_PONTUACAO_SOLTA = re.compile(r"(?<!\d)[.,;:]|[.,;:](?!\d)")
 
+#: `XYZ-24` no contrato é a `XYZ 24` do cadastro: letra, hífen, número.
+RE_HIFEN_NO_CODIGO = re.compile(r"(?<=[A-Z])-(?=\d)")
+
 #: `QD26A` / `LT14` / `CS02` colados, como saem do OCR e de quem digita rápido.
 RE_CODIGO_COLADO = re.compile(r"\b(QD|LT|CS)(\d)")
 
@@ -84,7 +87,7 @@ def _preparar(texto: str) -> str:
     ("QUADRA 26 - A LOTE 14" só vira "QD 26A LT 14" depois de LOTE virar LT),
     e a letra do lote é juntada por último, porque o espaçador é quem separa
     `QD26A` em `QD 26 A` nos códigos longos."""
-    t = util.norm(texto)
+    t = RE_HIFEN_NO_CODIGO.sub(" ", util.norm(texto))
     t = RE_PONTUACAO_SOLTA.sub(" ", t)
     t = _com_espacos(" ".join(t.split()))
     for padrao, troca in SINONIMOS:
@@ -165,8 +168,10 @@ def conferir_casa(texto: str, unidade: int | None, tipo: str = "CS") -> str:
     if not unidade:
         return ILEGIVEL
     if tipo == "UN":
-        # Condomínio: não há lote+casa; vale a UNIDADE do objeto.
-        padrao = re.compile(rf"\bUN\s*(?:NO?\s*)?0*{unidade}\b")
+        # Condomínio: não há lote+casa; vale a UNIDADE do objeto. O contrato
+        # real diz "Unidade: Casa nº 15". Casa solta não conta: pode ser o
+        # endereço de quem vende.
+        padrao = re.compile(rf"\bUN\s*(?:CS\s*)?(?:N\S?\s*)?0*{unidade}\b")
         return CONFERE if padrao.search(texto) else DIVERGE
     objeto = {int(n) for n in RE_LOTE_CASA.findall(texto)}
     if objeto:

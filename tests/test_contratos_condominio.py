@@ -7,9 +7,10 @@ Contratos só entendia CASA/CS e mostrava essas linhas como "CS ??".
 
 Nenhum dado real: nomes e valores inventados (o repositório é público).
 """
-from contratos.conferencia import conferir_casa, CONFERE, DIVERGE
+from contratos.conferencia import (CONFERE, DIVERGE, _preparar, conferir_casa,
+                                   conferir_rua)
 from contratos.destino import nome_arquivo
-from contratos.escolha import contrato_de
+from contratos.escolha import contrato_de, contrato_do_lancamento
 from contratos.regras import (imoveis_do_mes, numero_da_unidade,
                               partes_da_descricao, rotulo_da_unidade,
                               tipo_da_descricao, tipo_da_unidade)
@@ -93,3 +94,80 @@ def test_conferencia_da_unidade():
     assert conferir_casa("OBJETO UN 16 DO CONDOMINIO", 15, "UN") == DIVERGE
     # casa de rua não é afetada
     assert conferir_casa("LT 18 CS 02", 2) == CONFERE
+
+
+# ---------------------------------------------------------------------------
+# 09/11/2026: o contrato do condomínio mora no LANÇAMENTO da venda, e o texto
+# real do contrato diz "Unidade: Casa nº 15". Nada abaixo é dado real.
+# ---------------------------------------------------------------------------
+def test_imovel_guarda_as_vendas_do_mes():
+    a = dict(receb("VENDA UNIDADE 15 - FULANO", "a"), saleId="venda-1")
+    b = dict(receb("VENDA UNIDADE 15 - FULANO", "b"), saleId="venda-1")
+    c = dict(receb("VENDA UNIDADE 15 - FULANO", "c"), saleId="venda-2")
+    [i] = imoveis_do_mes([a, b, c], log=lambda _m: None)
+    assert i.vendas == ["venda-1", "venda-2"]
+
+
+def test_casa_escrita_por_extenso_na_unidade_confere():
+    texto = _preparar("IMÓVEL OBJETO DO CONTRATO (UNIDADE) a) Unidade: Casa nº 15, Tipo 02")
+    assert conferir_casa(texto, 15, "UN") == CONFERE
+    assert conferir_casa(texto, 16, "UN") == DIVERGE
+
+
+def test_casa_do_endereco_da_vendedora_nao_conta_como_a_unidade():
+    """A sede de quem vende pode ter "Casa 15"; só o objeto diz a unidade."""
+    texto = _preparar("Sede na Rua Exemplo, Quadra 04, Lote 08, Casa 15. "
+                      "Unidade: Casa nº 22, Tipo 01")
+    assert conferir_casa(texto, 15, "UN") == DIVERGE
+    assert conferir_casa(texto, 22, "UN") == CONFERE
+
+
+def test_rua_com_hifen_no_contrato_confere():
+    assert conferir_rua(_preparar("Endereço: Rua XYZ-24, Quadra 9"), "Rua XYZ 24") == CONFERE
+    assert conferir_rua(_preparar("Endereço: Rua XYZ-25, Quadra 9"), "Rua XYZ 24") == DIVERGE
+
+
+def _anexo(nome, ident="a"):
+    return {"id": ident, "filename": nome, "extension": ".pdf",
+            "downloadUrl": f"https://exemplo.invalid/{ident}"}
+
+
+def test_contrato_do_lancamento_aceita_o_nome_que_o_robo_grava():
+    certo = _anexo("CONTRATO CONDOMÍNIO EXEMPLO CASA 15 - FULANO EXEMPLO")
+    anexo, _ = contrato_do_lancamento([certo], 15)
+    assert anexo is certo
+
+
+def test_contrato_do_lancamento_aceita_mais_no_lugar_de_espaco():
+    certo = _anexo("CONTRATO+DE+COMPRA+E+VENDA+CONDOMINIO+UNIDADE+15")
+    anexo, _ = contrato_do_lancamento([certo], 15)
+    assert anexo is certo
+
+
+def test_contrato_do_lancamento_nao_pega_outra_unidade():
+    anexo, motivo = contrato_do_lancamento(
+        [_anexo("CONTRATO CONDOMÍNIO EXEMPLO CASA 16 - FULANO")], 15)
+    assert anexo is None
+    assert "UN 15" in motivo
+
+
+def test_numero_no_nome_do_comprador_nao_vira_a_unidade():
+    anexo, _ = contrato_do_lancamento(
+        [_anexo("CONTRATO CONDOMÍNIO EXEMPLO CASA 16 - FULANO CASA 15")], 15)
+    assert anexo is None
+
+
+def test_contrato_do_lancamento_nao_pega_caixa_nem_distrato_nem_boleto():
+    anexos = [_anexo("CONTRATO CAIXA CASA 15", "a"),
+              _anexo("DISTRATO CONTRATO CASA 15", "b"),
+              _anexo("BOLETO CASA 15", "c")]
+    anexo, _ = contrato_do_lancamento(anexos, 15)
+    assert anexo is None
+
+
+def test_dois_contratos_no_lancamento_viram_revisao():
+    anexos = [_anexo("CONTRATO CONDOMÍNIO EXEMPLO CASA 15 - FULANO", "a"),
+              _anexo("CONTRATO CONDOMÍNIO EXEMPLO CASA 15 - BELTRANO", "b")]
+    anexo, motivo = contrato_do_lancamento(anexos, 15)
+    assert anexo is None
+    assert "disputam" in motivo

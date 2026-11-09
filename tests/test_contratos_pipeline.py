@@ -872,3 +872,179 @@ def test_parar_no_meio_da_casa_com_distrato_para_limpo():
     assert len(achados) == 1
     assert "interrompida" in achados[0].revisao
     assert not achados[0].marcado and not achados[0].anexo
+
+
+# ---------------------------------------------------------------------------
+# 09/11/2026: condomínio lê o contrato no lançamento da venda; anexos de mesmo
+# nome só são cópia se o conteúdo provar. Tudo inventado.
+# ---------------------------------------------------------------------------
+OBRA_COND = {"id": "obra-c", "name": "CONDOMINIO EXEMPLO",
+             "customer": {"name": "EMPRESA BURITIS LTDA"}}
+CONTRATO_COND = {"id": "c1", "filename": "CONTRATO CONDOMINIO EXEMPLO CASA 15 - PESSOA EXEMPLO",
+                 "extension": ".pdf", "downloadUrl": "https://exemplo.invalid/c1"}
+TEXTO_COND = """CONTRATO DE PROMESSA DE COMPRA E VENDA
+VENDEDORA: EMPRESA BURITIS EMPREENDIMENTOS LTDA, CNPJ 12.345.678/0001-90.
+COMPRADOR: PESSOA EXEMPLO, brasileira.
+Endereço: Rua XYZ-24, Quadra 9, Lote 03.
+IMOVEL OBJETO DO CONTRATO (UNIDADE) a) Unidade: Casa nº 15, Tipo 02.
+As partes assinam em duas vias de igual teor e forma.
+"""
+
+
+class ApiCondominio(ApiDuble):
+    def __init__(self, anexos_venda=None, anexos_obra=None, falha=None):
+        super().__init__([], anexos={"obra-c": anexos_obra or []})
+        self.registros = [dict(
+            receb("CONDOMINIO EXEMPLO", 15, "PESSOA EXEMPLO",
+                  descricao="VENDA UNIDADE 15 - PESSOA EXEMPLO",
+                  cliente="PESSOA EXEMPLO"), saleId="venda-15")]
+        self.anexos_venda = [CONTRATO_COND] if anexos_venda is None else anexos_venda
+        self.falha = falha
+        self.vendas_lidas = []
+
+    def listar_obras(self, log=print):
+        return [OBRA_COND]
+
+    def anexos_da_venda(self, venda_id):
+        self.vendas_lidas.append(venda_id)
+        if self.falha:
+            raise RuntimeError(self.falha)
+        return self.anexos_venda
+
+    def detalhe_da_obra(self, work_id):
+        return {"address": {"address": "Rua XYZ 24", "complement": "QD 9 LT 03"}}
+
+
+def _uma_linha(api, **kw):
+    [a] = levantar(api, 2026, 10, EMPRESAS, log=_sem_log, **kw)
+    return a
+
+
+def test_condominio_acha_o_contrato_no_lancamento_da_venda():
+    api = ApiCondominio()
+    a = _uma_linha(api)
+    assert api.vendas_lidas == ["venda-15"]
+    assert a.anexo is CONTRATO_COND
+    assert a.revisao == "" and a.marcado
+
+
+def test_condominio_nao_escolhe_sozinho_anexo_da_obra():
+    """O contrato do condomínio é o do lançamento: a obra guarda 200 arquivos
+    e não pode responder por ele."""
+    da_obra = {"id": "o1", "filename": "CONTRATO DE COMPRA E VENDA UNIDADE 15",
+               "extension": ".pdf", "downloadUrl": "https://exemplo.invalid/o1"}
+    a = _uma_linha(ApiCondominio(anexos_venda=[], anexos_obra=[da_obra]))
+    assert not a.anexo and not a.marcado
+    assert "UN 15" in a.revisao
+    # mas a janela de resolver mostra o da obra, para a pessoa poder decidir
+    assert da_obra in a.anexos_da_obra
+
+
+def test_falha_ao_ler_o_lancamento_nega_e_nao_parece_falta_de_contrato():
+    a = _uma_linha(ApiCondominio(falha="A API respondeu 500"))
+    assert not a.anexo and not a.marcado
+    assert "não consegui ler" in a.revisao
+
+
+def test_recebimento_de_condominio_sem_venda_vai_para_revisao():
+    api = ApiCondominio()
+    del api.registros[0]["saleId"]
+    a = _uma_linha(api)
+    assert not a.anexo and not a.marcado
+    assert api.vendas_lidas == []
+
+
+def test_casa_de_rua_nao_le_o_lancamento():
+    api = ApiDuble(REGISTROS)
+    api.anexos_da_venda = lambda _v: pytest.fail("casa de rua não usa o lançamento")
+    linhas = levantar(api, 2026, 8, EMPRESAS, log=_sem_log)
+    assert any(x.anexo for x in linhas)
+
+
+def test_condominio_arquiva_o_contrato_do_lancamento(tmp_path):
+    api = ApiCondominio()
+    achados = levantar(api, 2026, 10, EMPRESAS, log=_sem_log)
+    _arquivar(api, achados, tmp_path, leitor=lambda _b: Leitor(TEXTO_COND))
+    assert achados[0].revisao == ""
+    assert achados[0].arquivado
+    assert achados[0].destino.name == (
+        "CONTRATO DE COMPRA E VENDA CONDOMINIO EXEMPLO UN 15 - PESSOA EXEMPLO.pdf")
+
+
+NOME_IGUAL = "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 .pdf"
+IGUAIS = [{"id": "i1", "filename": NOME_IGUAL, "extension": ".pdf",
+           "downloadUrl": "https://exemplo.invalid/i1"},
+          {"id": "i2", "filename": NOME_IGUAL, "extension": ".pdf",
+           "downloadUrl": "https://exemplo.invalid/i2"}]
+UMA_CASA = [receb("TB 21 QD 46 LT 18", 1, "PRIMEIRO COMPRADOR EXEMPLO")]
+
+
+def _api_iguais(primeiro=b"%PDF-um", segundo=b"%PDF-dois"):
+    api = ApiDuble(UMA_CASA, anexos={"obra-1": IGUAIS})
+    api.conteudos = {IGUAIS[0]["downloadUrl"]: primeiro,
+                     IGUAIS[1]["downloadUrl"]: segundo}
+    return api
+
+
+def test_mesmo_nome_e_mesmos_bytes_e_copia():
+    a = _uma_linha(_api_iguais(b"%PDF-um", b"%PDF-um"))
+    assert a.anexo["id"] == "i1" and a.revisao == ""
+
+
+def test_mesmo_nome_e_bytes_diferentes_fica_em_revisao():
+    a = _uma_linha(_api_iguais())
+    assert not a.anexo and "DIFERENTES" in a.revisao
+
+
+class _LeitorOCR(Leitor):
+    usou_ocr = True
+
+
+def test_bytes_diferentes_e_texto_inteiro_igual_e_o_mesmo_contrato():
+    a = _uma_linha(_api_iguais(), abrir_pdf=lambda _b: Leitor(TEXTO))
+    assert a.anexo["id"] == "i1" and a.revisao == ""
+
+
+def test_texto_igual_so_nas_primeiras_paginas_nao_e_o_mesmo_contrato():
+    """Assinaturas ficam no fim: o começo igual não prova o mesmo documento."""
+    fins = {b"%PDF-um": "assinado por todos", b"%PDF-dois": "falta assinar"}
+    a = _uma_linha(_api_iguais(),
+                   abrir_pdf=lambda b: Leitor(TEXTO, resto=fins[b], total=9))
+    assert not a.anexo and "DIFERENTES" in a.revisao
+
+
+def test_texto_vindo_de_ocr_nao_prova_que_e_o_mesmo_contrato():
+    a = _uma_linha(_api_iguais(), abrir_pdf=lambda _b: _LeitorOCR(TEXTO))
+    assert not a.anexo and "DIFERENTES" in a.revisao
+
+
+def test_pdf_sem_texto_nao_prova_que_e_o_mesmo_contrato():
+    a = _uma_linha(_api_iguais(), abrir_pdf=lambda _b: Leitor(""))
+    assert not a.anexo and "DIFERENTES" in a.revisao
+
+
+def test_casa_com_distrato_junta_versoes_de_texto_inteiro_igual():
+    """Mesmo comprador, dois PDFs do mesmo envelope: uma linha, sem revisão."""
+    nomes = ["CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 .pdf",
+             "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT18 CS 01 .pdf",
+             "DISTRATO TB 21 QD 46 LT 18 CS 01 .pdf"]
+    anexos = [{"id": f"v{i}", "filename": n, "extension": ".pdf",
+               "downloadUrl": f"https://exemplo.invalid/v{i}"}
+              for i, n in enumerate(nomes)]
+    api = ApiDuble(UMA_CASA, anexos={"obra-1": anexos})
+    api.conteudos = {anexos[0]["downloadUrl"]: b"%PDF-um",
+                     anexos[1]["downloadUrl"]: b"%PDF-dois",
+                     anexos[2]["downloadUrl"]: b"%PDF-distrato"}
+    contrato = "COMPRADOR: PRIMEIRO COMPRADOR EXEMPLO, brasileiro.\n" + TEXTO
+    textos = {b"%PDF-um": contrato, b"%PDF-dois": contrato,
+              b"%PDF-distrato": "Distrato de outra pessoa qualquer"}
+    a = _uma_linha(api, abrir_pdf=lambda b: Leitor(textos[b]))
+    assert a.anexo["id"] == "v0" and a.revisao == ""
+
+
+def test_escolha_a_mao_com_nome_repetido_nao_volta_sozinha():
+    """Dois anexos com o nome escolhido: voltar pelo nome poderia pegar o
+    outro documento. A casa volta a perguntar."""
+    a = _uma_linha(_api_iguais())
+    assert reaplicar([a], {chave_da_casa(a): NOME_IGUAL}, log=_sem_log) == 0
+    assert not a.anexo

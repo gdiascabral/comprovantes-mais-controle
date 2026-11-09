@@ -71,3 +71,24 @@ paths:
   conta a casa e os recebimentos uma vez, não por linha. A Acessórias mantém
   a marca na linha de mensagem. Casa sem distrato segue a regra de um contrato por casa, sem ler
   PDF no levantamento.
+
+  **Condomínio: o contrato mora no lançamento da venda (regra do dono,
+  09/11/2026).** O robô de venda anexa o PDF no recebimento, com o nome
+  `CONTRATO CONDOMÍNIO … CASA 15 - NOME`. Por isso a linha UN lê
+  `MCApi.anexos_da_venda` (`GET /sales/<saleId>` dá o `tradeReceivable.id`;
+  depois `attachments/v2` com `entityOrigin=TRADE_RECEIVABLE_READJUSTED`) e
+  escolhe com `escolha.contrato_do_lancamento`. Os anexos da obra (centenas, no
+  condomínio) nunca respondem sozinhos: só entram na lista da janela de
+  resolver. Falha ao ler o lançamento vira revisão dizendo isso, nunca "sem
+  contrato". O caminho de distrato não vale para UN, porque cada venda tem o
+  seu lançamento. Na conferência, a casa é o par `Unidade: Casa nº 15`; `Casa 15`
+  solta não conta, porque pode ser o endereço de quem vende.
+
+  **Mesmo nome não é o mesmo arquivo (09/11/2026).** `candidatos_distintos` só
+  junta registros de mesmo id. Numa casa revendida, dois anexos de nome idêntico
+  eram contratos de compradores diferentes, e o segundo sumia da lista. Sobrando
+  mais de um, o pipeline baixa e compara: bytes iguais, ou **texto inteiro** igual
+  lido da camada de texto (dois PDFs do mesmo envelope Clicksign diferem nos
+  bytes), são o mesmo documento. Texto de OCR ou só das primeiras páginas não
+  prova nada: a página de assinaturas fica no fim. Escolha à mão cujo nome ficou
+  repetido não volta sozinha na busca seguinte (`reaplicar`).

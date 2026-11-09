@@ -82,6 +82,11 @@ def _norm(nome: str) -> str:
     return util.norm_espaco(re.sub(r"[-_.]", " ", nome or ""))
 
 
+def _chave_do_anexo(anexo: dict) -> tuple:
+    """Identidade do anexo: o nome e o id do ERP (sem id, só o nome)."""
+    return (_norm(_nome(anexo)), str(anexo.get("id") or ""))
+
+
 def eh_compra_e_venda(nome: str) -> bool:
     return bool(RE_COMPRA_E_VENDA.search(_norm(nome)))
 
@@ -144,11 +149,15 @@ def candidatos(anexos: list[dict], unidade: int | None) -> list[dict]:
 
 
 def candidatos_distintos(anexos: list[dict], unidade: int | None) -> list[dict]:
-    """Os candidatos com nomes diferentes entre si (cópias de nome idêntico
-    contam como uma), na ordem em que o ERP os devolveu."""
-    vistos: dict[str, dict] = {}
+    """Os candidatos sem o mesmo registro repetido, na ordem do ERP.
+
+    Mesmo nome com id diferente NÃO é cópia até o conteúdo provar: numa casa
+    revendida (09/11/2026) os dois anexos de mesmo nome eram contratos de
+    compradores diferentes, e o segundo sumia da lista em silêncio. Quem pode
+    comparar é o pipeline, que baixa os dois."""
+    vistos: dict[tuple, dict] = {}
     for a in candidatos(anexos or [], unidade):
-        vistos.setdefault(_norm(_nome(a)), a)
+        vistos.setdefault(_chave_do_anexo(a), a)
     return list(vistos.values())
 
 
@@ -163,9 +172,8 @@ def contrato_de(anexos: list[dict], unidade: int | None,
                 tipo: str = "CS") -> tuple[dict | None, str]:
     """(anexo, motivo). Anexo None significa revisão, e o motivo explica.
 
-    Cópias de nome idêntico contam como uma: a obra examinada tem anexos
-    repetidos de fato (o mesmo `HIDROSSANITARIO … CS 01` aparece duas vezes).
-    Nomes DIFERENTES sobrando é ambiguidade de verdade, e vira revisão — a
+    O mesmo registro listado duas vezes conta como um. Anexos DIFERENTES
+    sobrando, mesmo de nome igual, é ambiguidade de verdade, e vira revisão — a
     não ser que exatamente um se diga a versão mais completa (ASSINADO,
     VENDEDOR, ASSINATURA CORRETORA...): regra do dono, vale sempre a mais
     completa. Dois que se dizem completos continuam em revisão, porque o nome
@@ -181,7 +189,7 @@ def contrato_de(anexos: list[dict], unidade: int | None,
 
     distintos = candidatos_distintos(anexos, unidade)
     if len(distintos) == 1:
-        return achados[0], "único contrato de compra e venda da casa"
+        return distintos[0], "único contrato de compra e venda da casa"
 
     completos = [a for a in distintos if eh_mais_completo(_nome(a))]
     if len(completos) == 1:
@@ -189,6 +197,46 @@ def contrato_de(anexos: list[dict], unidade: int | None,
                               f"{len(distintos)} candidatos")
 
     return None, motivo_da_disputa(distintos, unidade, tipo)
+
+
+def candidatos_do_lancamento(anexos: list[dict],
+                             unidade: int | None) -> list[dict]:
+    """Os contratos da unidade entre os anexos do lançamento da venda.
+
+    O robô de venda grava `CONTRATO CONDOMÍNIO … CASA 15 - NOME`, sem "compra e
+    venda" no nome, e a equipe sobe com `+` no lugar do espaço. A unidade é
+    lida só antes do primeiro " - ": o resto é o nome do comprador, texto
+    livre. Registros de mesmo id contam como um."""
+    if not unidade:
+        return []
+    vistos: dict[tuple, dict] = {}
+    for a in anexos or []:
+        nome = _nome(a).replace("+", " ")
+        n = _norm(nome)
+        if not ("CONTRATO" in n or eh_compra_e_venda(nome)) or excluido_por(nome):
+            continue
+        if numero_da_unidade(nome.split(" - ", 1)[0]) != unidade:
+            continue
+        vistos.setdefault(_chave_do_anexo(a), a)
+    return list(vistos.values())
+
+
+def contrato_do_lancamento(anexos: list[dict], unidade: int | None,
+                           tipo: str = "UN") -> tuple[dict | None, str]:
+    """(anexo, motivo) no condomínio, cujo contrato mora no lançamento da
+    venda, e não na obra. Mesma régua do `contrato_de`: sobrando mais de um,
+    vale o único que se diz completo; senão é disputa."""
+    achados = candidatos_do_lancamento(anexos, unidade)
+    if not achados:
+        return None, ("nenhum contrato anexado no lançamento da venda da "
+                      f"{rotulo_da_unidade(unidade, tipo)}")
+    if len(achados) == 1:
+        return achados[0], "único contrato no lançamento da venda"
+    completos = [a for a in achados if eh_mais_completo(_nome(a))]
+    if len(completos) == 1:
+        return completos[0], ("a versão mais completa entre "
+                              f"{len(achados)} candidatos")
+    return None, motivo_da_disputa(achados, unidade, tipo)
 
 
 def ordenar_para_escolha(anexos: list[dict],
