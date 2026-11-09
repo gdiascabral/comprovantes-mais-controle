@@ -111,3 +111,30 @@ def test_movimentos_continuam_fora_do_total_geral(tmp_path):
     sem = _gravar(tmp_path / "sem")
     com = _gravar(tmp_path / "com", movimentos=movs)
     assert com.total == sem.total and com.total_movimentos == Decimal("400.00")
+
+
+# ------------------------------------------------ vencidos no topo (09/11/2026)
+# Dono: "sempre que tiver algum título vencido, traz ele primeiro na lista do
+# banco e com a data mais chamativa, pra eu verificar se realmente não foi pago".
+def test_vencidos_sobem_para_o_topo_da_conta_o_mais_antigo_primeiro():
+    res = _res(_linha("FORNECEDOR UM", 1, "1", vencimento="2026-09-01"),
+               _linha("FORNECEDOR DOIS", 2, "2", vencimento="2026-08-30"),
+               _linha("FORNECEDOR TRES", 3, "3", vencimento="2026-09-03"),
+               _linha("FORNECEDOR QUATRO", 4, "4", vencimento="2026-08-25"))
+    conta = hp.contas_do_html_geral(res, dia=INI)[0]
+    assert [e["id"] for e in conta["entries"]] == ["4", "2", "1", "3"]
+    assert [e["dias_vencido"] for e in conta["entries"]] == [7, 2, 0, 0]
+    assert conta["vencidos"] == 2
+
+
+def test_sem_vencido_a_ordem_de_sempre_fica():
+    res = _res(_linha("FORNECEDOR UM", 1, "1", vencimento="2026-09-03"),
+               _linha("FORNECEDOR DOIS", 2, "2", vencimento="2026-09-01"))
+    conta = hp.contas_do_html_geral(res, dia=INI)[0]
+    assert [e["id"] for e in conta["entries"]] == ["1", "2"] and conta["vencidos"] == 0
+
+
+def test_o_modelo_destaca_o_vencido_e_conta_no_cabecalho():
+    m = modelos_html.MODELO_GERAL
+    assert "row-vencida" in m and "e.dias_vencido" in m and "c.vencidos" in m
+    assert "já não foi pago?" in m

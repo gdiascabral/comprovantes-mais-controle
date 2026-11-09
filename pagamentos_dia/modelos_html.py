@@ -122,8 +122,11 @@ MODELO_GERAL = r'''<!doctype html>
   .movs-resumo a:hover{text-decoration:underline;}
   .movs{scroll-margin-top:12px;}
   .venc{font-size:11.5px;white-space:nowrap;}
-  .venc.vencido{color:var(--danger);font-weight:700;}
-  .venc-tag{display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;}
+  .venc.vencido{display:inline-block;background:var(--danger);color:#fff;font-weight:800;font-size:12.5px;padding:4px 7px;border-radius:6px;line-height:1.25;}
+  .venc-tag{display:block;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;}
+  tr.row-vencida > td{background:var(--bloq-bg);}
+  tr.row-vencida > td:first-child{box-shadow:inset 4px 0 0 var(--danger);}
+  .acc-vencidos{display:inline-block;margin-left:10px;background:var(--danger);color:#fff;font-size:11.5px;font-weight:800;padding:2px 9px;border-radius:999px;vertical-align:middle;}
   .venc.sem{color:var(--muted);}
   @media (max-width:640px){
     .wrap{padding:16px 10px 50px;}
@@ -285,7 +288,7 @@ function renderAccounts(){
     section.className = 'account'; section.id = id;
     const head = document.createElement('div');
     head.className = 'account-head';
-    head.innerHTML = `<div class="head-l"><h2>${esc(c.nome)}</h2><a class="backlink" href="#resumo">&uarr; resumo</a></div><div class="account-total">Total <b id="acc-${ci}-total">R$ ${esc(c.total)}</b></div>`;
+    head.innerHTML = `<div class="head-l"><h2>${esc(c.nome)}${c.vencidos ? `<span class="acc-vencidos">${c.vencidos} vencido${c.vencidos > 1 ? 's' : ''} no topo</span>` : ''}</h2><a class="backlink" href="#resumo">&uarr; resumo</a></div><div class="account-total">Total <b id="acc-${ci}-total">R$ ${esc(c.total)}</b></div>`;
     head.querySelector('.backlink').addEventListener('click', ev => { ev.preventDefault(); document.getElementById('resumo').scrollIntoView({behavior:'smooth', block:'start'}); });
     section.appendChild(head);
 
@@ -315,8 +318,9 @@ function renderAccounts(){
       const bloq = e.bloqueio || '';
       // Vencimento do lancamento: antes do dia do HTML sai em vermelho.
       const vencCell = e.vencimento
-        ? `<span class="venc${e.vencido ? ' vencido' : ''}">${esc(e.vencimento)}${e.vencido ? '<span class="venc-tag">vencido</span>' : ''}</span>`
+        ? `<span class="venc${e.vencido ? ' vencido' : ''}">${esc(e.vencimento)}${e.vencido ? `<span class="venc-tag">vencido${e.dias_vencido ? ` há ${e.dias_vencido} dia${e.dias_vencido > 1 ? 's' : ''}` : ''}</span><span class="venc-tag">já não foi pago?</span>` : ''}</span>`
         : '<span class="venc sem">—</span>';
+      if(e.vencido) tr.classList.add('row-vencida');
       if(bloq) tr.classList.add('row-bloqueada');
       const dadosCell = (e.dados_limpo && bloq)
         ? `<div class="bloq">CONFERIR: ${esc(bloq)}</div><div class="code sem-copiar">${esc(e.dados_limpo)}</div>`

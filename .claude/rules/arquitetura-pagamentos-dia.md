@@ -231,6 +231,23 @@ paths:
   "?" para lote não achado, quadra não achada ou lote parecido ("7" × "7A",
   o OCR come a letra). Só os ANEXOS provam: a observação do lançamento não
   conta (`provas`). Testes: `tests/test_endereco_lote.py`.
+  Desde 09/11/2026 a letra também vem separada por UM espaço ("QD 26 A LT
+  11"), só quando fecha o número (depois dela: fim de linha, pontuação ou
+  QD/LT/CASA/CS) e nunca "E" — "LT 11 A 15" e "QD 5 E LT 7" não mudam.
+  **Autenticação do boleto** (`conferir_beneficiario_do_boleto`, dono,
+  09/11/2026): o CNPJ de quem recebe no boleto que deu a linha digitável
+  (beneficiário/cedente, ou sacador/avalista quando há intermediário;
+  `cnpjs_do_beneficiario`, sem o do banco nem o do pagador) tem de ser o do
+  emitente da NF anexada (chave de acesso ou texto) ou o do cadastro
+  (Contatos ou chave Pix CNPJ). "beneficiário ✓ (= NF e cadastro)", "✓
+  (filial)" pela raiz, e "BENEFICIÁRIO DIVERGE" vira "ATENÇÃO — boleto de
+  outra empresa". Sem CNPJ legível no boleto ou sem referência, nada é dito;
+  `cnpj_livre` pula; `beneficiarios_aceitos` (CNPJ ou raiz, no
+  regras_fornecedor.json) aceita a empresa do grupo ou a securitizadora sem
+  desligar a conferência. Medido em 09/11/2026 em 1.218 boletos de 3 meses:
+  885 ✓, 4 filial, 48 divergem (44 de dois fornecedores conhecidos), 281 sem
+  CNPJ no bloco (200 da concessionária de energia). Limite: boleto no MESMO PDF da nota tem os dois CNPJs no
+  texto e passa. Testes: `tests/test_beneficiario_do_boleto.py`.
   (l) **Valor de outro momento** (dono, 06/11/2026, caso de 05/11:
   títulos da semana anterior recriados às 15:29 e corrigidos às 15:34; a
   leitura pegou o valor antigo na lista e o recibo novo nos anexos, e a
@@ -791,7 +808,10 @@ paths:
   o registro) leva o mesmo vencimento. `contas_do_html_geral(resultado,
   dia=)` a põe em `entries[].vencimento` ("dd/mm/aaaa" ou "") e
   `entries[].vencido` (antes do `dia`; o `gravar` passa o PRIMEIRO dia do
-  período). Vencido sai em vermelho com "VENCIDO" embaixo; sem data (linha à
+  período). Vencido sai numa etiqueta vermelha com "VENCIDO HÁ N DIAS · já não foi pago?", a linha
+  fica rosada, SOBE para o topo da conta (o mais antigo primeiro, ordem
+  estável no resto) e o cabeçalho da conta diz "N vencidos no topo" (dono,
+  09/11/2026); sem data (linha à
   mão, `tela_do_dia.geracao.registro_a_mao`) mostra "—". A planilha Excel
   NÃO ganhou a coluna: mexer nas colunas do `gerar_excel` desloca o TOTAL e
   as larguras, e isso não é trivial. Testes: `tests/test_html_vencimento.py`.

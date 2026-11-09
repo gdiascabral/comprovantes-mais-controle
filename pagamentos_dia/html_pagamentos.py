@@ -591,6 +591,7 @@ def contas_do_html_geral(resultado, dia: date | None = None) -> list[dict]:
             # Não colide com "#mao:<n>" (dígitos x "mao:") nem entre partes.
             parte = str(r.get("parte_linha") or r.get("parte") or "")
             vencimento, vencido = _vencimento(r, dia)
+            venc_data = relatorio.para_data(r.get("vencimento"))
             entradas.append({
                 "id": (f"{id_}#{a_mao}" if id_ else a_mao) if a_mao
                 else (f"{id_}#{parte}" if id_ and parte else id_),
@@ -604,6 +605,9 @@ def contas_do_html_geral(resultado, dia: date | None = None) -> list[dict]:
                 # Coluna VENC.: "dd/mm/aaaa" ou "" (o HTML mostra "—").
                 "vencimento": vencimento,
                 "vencido": vencido,
+                # Há quantos dias venceu (0 quando não venceu): o HTML diz
+                # "VENCIDO HÁ N DIAS" para quem confere se já não foi pago.
+                "dias_vencido": (dia - venc_data).days if vencido else 0,
                 "dados_original": str(r.get("dados") or ""),
                 "dados_limpo": dado_para_colar(tipo, r.get("dados")),
                 # O Pix do QR Code do boleto, num segundo "Copiar" (dono,
@@ -625,8 +629,14 @@ def contas_do_html_geral(resultado, dia: date | None = None) -> list[dict]:
                 "obs": str(r.get("obs") or ""),
                 "bloqueio": _motivo_do_bloqueio(r),
             })
+        # Vencido PRIMEIRO na lista da conta, o mais antigo no topo (dono,
+        # 09/11/2026: "traz ele primeiro na lista do banco … pra eu verificar
+        # se realmente não foi pago"). Ordenação estável: entre os vencidos
+        # do mesmo dia e entre os não vencidos, a ordem de sempre fica.
+        entradas.sort(key=lambda e: (0, -e["dias_vencido"]) if e["vencido"] else (1, 0))
         contas.append({"nome": str(nome),
                        "total": reais(total_da_conta(regs)).replace("R$ ", "", 1),
+                       "vencidos": sum(1 for e in entradas if e["vencido"]),
                        "entries": entradas})
     # C2: a mesma linha digitável / Pix copia-e-cola em mais de um lançamento.
     por_chave: dict[str, list[dict]] = {}
