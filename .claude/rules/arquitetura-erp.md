@@ -123,6 +123,31 @@ paths:
   **Regra: robô nunca fecha o Chrome central** — nem `browser.close()` nem
   `ctx.close()`; com `connect_over_cdp` isso derruba os outros e a sessão.
   Cada um fecha só as abas que abriu (`AbaCentral`).
+  **Todo `connect_over_cdp` no central passa por `central.conectar`**
+  (09/11/2026). Em 04/11 e 09/11 ele estourou 180 s e a pessoa lia
+  `Timeout 180000ms exceeded`; em 09/11 uma sonda alvo por alvo achou UMA aba
+  do ERP calada no `Runtime.enable` (as outras, inclusive omnibox e jam.dev,
+  respondiam) e, minutos depois, tudo voltou e conectou em 0,9 s. Agora o
+  prazo é `PRAZO_CONEXAO` (45 s), e no estouro `sondar_alvos` abre uma sessão
+  por alvo pelo websocket do NAVEGADOR (`Target.attachToTarget` com
+  `flatten`, `Runtime.enable` com `PRAZO_ALVO` de 3 s, `detachFromTarget`;
+  teto `PRAZO_SONDA` de 20 s) e `ChromeSemResposta` traz o recado: qual aba
+  não responde (título e só o HOST, nunca o caminho), "se for sua, feche; se
+  for de robô, espere e tente de novo", e "não feche o Chrome inteiro". A
+  sonda **só pergunta**: nunca fecha, recarrega nem navega aba (pode ser de
+  outro robô ou da pessoa; quem fecha é gente). O websocket é `_CanalCdp`, só
+  biblioteca padrão e só 127.0.0.1 — o `websockets` não está no exe.
+  `ChromeSemResposta` é `RuntimeError` e NÃO `TimeoutError`: `except
+  TimeoutError` no app quer dizer trava de arquivo ("outro robô está
+  entrando"). Os três que conectam — `AbaCentral`, `MCClient._entrar_no_central`
+  e `login_principal._AbaPrincipal` — mandam `relatorio()` (aba por aba, com
+  ms) ao diagnóstico; o login principal e a `SessaoPelaPagina` entregam o
+  recado inteiro como `ErpErro` (o ramo genérico do login cortava em 160
+  caracteres). Testes: `tests/test_erp_central_sonda.py`, com um Chrome falso
+  num socket local de porta sorteada; o conftest
+  (`_sonda_nunca_no_chrome_de_verdade`) falha o teste que tentar sondar porta
+  9200-9299. Mudou o `central.py`: copiar no `coletor/mc_central.py` do água e
+  energia (lá a cópia já estava atrás desde o `pid_vivo`).
   **A trava de login é comum ao app e ao água e energia**:
   `<perfil>/../.<nome>.login.trava`, pela mesma `central.trava`; quem precisa
   logar no central espera quem já está logando.
