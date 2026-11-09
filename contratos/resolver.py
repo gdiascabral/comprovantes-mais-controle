@@ -16,12 +16,13 @@ arquivo, não ler o nome dele e torcer.
 from __future__ import annotations
 
 import tkinter as tk
+from collections import Counter
 from tkinter import messagebox, ttk
 
 import util
 import widgets
 
-from .escolha import ordenar_para_escolha
+from .escolha import mesmo_anexo, ordenar_para_escolha
 
 
 def _nome(anexo: dict) -> str:
@@ -90,7 +91,7 @@ class JanelaResolver(tk.Toplevel):
         self.lista = ttk.Treeview(tabela, columns=("marca", "nome"),
                                   show="headings", height=11, selectmode="browse")
         self.lista.heading("marca", text="")
-        self.lista.heading("nome", text="Arquivo anexado à obra")
+        self.lista.heading("nome", text="Arquivo anexado")
         self.lista.column("marca", width=90, anchor="center", stretch=False)
         self.lista.column("nome", width=740, anchor="w")
         self.lista.pack(side="left", fill="both", expand=True)
@@ -125,20 +126,25 @@ class JanelaResolver(tk.Toplevel):
     # ----------------------------------------------------------------- lista
     def _encher(self):
         procura = util.norm_espaco(self.v_busca.get())
-        escolhido = _nome(self.achado.anexo or {})
+        escolhido = self.achado.anexo or {}
         self.lista.delete(*self.lista.get_children())
         self.por_iid = {}
-        for n, (anexo, candidato) in enumerate(
-                ordenar_para_escolha(self.achado.anexos_da_obra,
-                                     self.achado.imovel.unidade)):
+        ordem = ordenar_para_escolha(self.achado.anexos_da_obra,
+                                     self.achado.imovel.unidade,
+                                     lancamento=self.achado.anexos_lancamento)
+        vezes = Counter(util.norm_espaco(_nome(a)) for a, _c in ordem)
+        for n, (anexo, candidato) in enumerate(ordem):
             nome = _nome(anexo)
             if procura and procura not in util.norm_espaco(nome):
                 continue
             iid = str(n)
             self.por_iid[iid] = anexo
+            # Nome repetido pode ser outro documento: a linha tem de se distinguir.
+            rotulo = (f"{nome}  [{str(anexo.get('id') or '')[:8]}]"
+                      if vezes[util.norm_espaco(nome)] > 1 else nome)
             self.lista.insert("", "end", iid=iid,
-                              values=("candidato" if candidato else "", nome))
-            if nome and nome == escolhido:
+                              values=("candidato" if candidato else "", rotulo))
+            if mesmo_anexo(anexo, escolhido):
                 self.lista.selection_set(iid)
                 self.lista.see(iid)
 

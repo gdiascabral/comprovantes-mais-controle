@@ -25,9 +25,11 @@ from . import conferencia as conf
 from . import distrato as dist
 from .destino import (caminho_longo, empresa_de, mesmo_contrato_na_pasta,
                       nome_arquivo, pasta_do_contrato)
-from .escolha import candidatos_distintos, contrato_de, distratos_da_casa
+from .escolha import (candidatos_distintos, candidatos_do_lancamento,
+                      contrato_de, contrato_do_lancamento, distratos_da_casa,
+                      eh_mais_completo, mesmo_anexo)
 from .leitura import PAGINAS_INICIAIS
-from .regras import Imovel, imoveis_do_mes
+from .regras import TIPO_CONDOMINIO, Imovel, imoveis_do_mes
 
 #: Até quantos candidatos em disputa o pipeline baixa para comparar. Acima
 #: disso a obra está bagunçada demais para decidir sem gente.
@@ -58,6 +60,9 @@ class Achado:
     #: resolver mostra quando o app não soube escolher sozinho — antes esta
     #: lista era lida e jogada fora, e a pessoa ficava sem saída pela tela.
     anexos_da_obra: list = field(default_factory=list)
+    #: No condomínio, os anexos do lançamento da venda (também estão em
+    #: `anexos_da_obra`). São os únicos candidatos da janela de resolver.
+    anexos_lancamento: list | None = None
     destino: Path | None = None
     revisao: str = ""
     #: Entra nesta rodada de arquivamento. Quem decide é a aba (a marcação da
@@ -235,16 +240,21 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
             continue
         a.anexos_da_obra = anexos_por_obra.get(a.obra_id) or []
         linhas = None
-        distratos = distratos_da_casa(a.anexos_da_obra, a.imovel.unidade)
-        if distratos and abrir_pdf is not None:
-            linhas = _casa_com_distrato(api, a, distratos, abrir_pdf, log,
-                                        cancelar)
+        if a.imovel.tipo == TIPO_CONDOMINIO:
+            linhas = [a]
+            _contrato_do_condominio(api, a, log, cancelar, abrir_pdf)
+        else:
+            distratos = distratos_da_casa(a.anexos_da_obra, a.imovel.unidade)
+            if distratos and abrir_pdf is not None:
+                linhas = _casa_com_distrato(api, a, distratos, abrir_pdf, log,
+                                            cancelar)
         if linhas is None:
             linhas = [a]
             anexo, motivo = contrato_de(a.anexos_da_obra, a.imovel.unidade,
                                         a.imovel.tipo)
             if anexo is None and "disputam" in motivo:
-                anexo, motivo = _desempatar_por_conteudo(api, a, motivo, log)
+                anexo, motivo = _desempatar_por_conteudo(
+                    api, a, motivo, log, abrir_pdf=abrir_pdf)
             if anexo is None:
                 a.revisao = motivo
             else:
@@ -270,8 +280,128 @@ def levantar(api, ano: int, mes: int, empresas, log=print,
     return achados
 
 
-def _desempatar_por_conteudo(api, achado: Achado, motivo: str,
-                             log=print) -> tuple[dict | None, str]:
+def _contrato_do_condominio(api, achado: Achado, log=print, cancelar=None,
+                            abrir_pdf=None) -> None:
+    """No condomínio, o contrato mora no lançamento da venda, onde o robô de
+    venda o anexa. Regra do dono (09/11/2026).
+
+    A obra guarda centenas de arquivos e não responde sozinha por contrato
+    nenhum: os anexos dela só entram na lista da janela de resolver. Falha ao
+    ler o lançamento vira revisão com o motivo: não pode parecer falta de
+    contrato."""
+    i = achado.imovel
+    if not i.vendas:
+        achado.revisao = (f"o recebimento da {i.rotulo} não traz a venda no "
+                          "ERP; escolha o contrato à mão")
+        return
+    anexos: list[dict] = []
+    for venda_id in i.vendas:
+        if cancelar and cancelar():
+            achado.revisao = ("busca interrompida antes de ler o lançamento "
+                              "desta casa — busque de novo")
+            return
+        try:
+            anexos.extend(api.anexos_da_venda(venda_id) or [])
+        except Exception as e:
+            achado.revisao = ("não consegui ler os anexos do lançamento da "
+                              f"venda: {e}")
+            return
+    achado.anexos_lancamento = anexos
+    achado.anexos_da_obra = anexos + achado.anexos_da_obra
+    # Duas vendas da mesma unidade no mês: um contrato não cobre as duas, e o
+    # app não sabe qual é a de cada recebimento.
+    if len(i.vendas) > 1:
+        achado.revisao = (f"{len(i.vendas)} vendas da {i.rotulo} receberam no "
+                          "mês; escolha o contrato à mão")
+        return
+    if not (i.comprador or "").strip():
+        achado.revisao = (f"a {i.rotulo} está sem o nome do comprador no ERP; "
+                          "corrija a descrição e busque de novo")
+        return
+    anexo, motivo = contrato_do_lancamento(anexos, i.unidade, i.tipo)
+    if anexo is None and "disputam" in motivo:
+        anexo, motivo = _desempatar_por_conteudo(
+            api, achado, motivo, log, abrir_pdf=abrir_pdf,
+            distintos=candidatos_do_lancamento(anexos, i.unidade))
+    if anexo is None:
+        achado.revisao = motivo
+    else:
+        achado.anexo = anexo
+
+
+def anexo_atual(api, achado, anexo: dict) -> dict:
+    """O anexo com o `downloadUrl` de agora, que o de antes já pode ter vencido.
+
+    Casa pelo id, porque dois anexos podem ter o mesmo nome. No condomínio o
+    arquivo pode estar no lançamento da venda, e não na obra. Sem achar, fica
+    com o que tinha, e o download diz se ainda vale."""
+    frescos = list(api.anexos_de_obras([achado.obra_id], log=lambda _m: None
+                                       ).get(achado.obra_id) or [])
+    imovel = getattr(achado, "imovel", None)
+    if imovel is not None and imovel.tipo == TIPO_CONDOMINIO:
+        for venda_id in imovel.vendas:
+            try:
+                frescos.extend(api.anexos_da_venda(venda_id) or [])
+            except Exception:
+                pass
+    return next((x for x in frescos if mesmo_anexo(x, anexo)), anexo)
+
+
+def _conteudo_comparavel(abrir_pdf, dados: bytes) -> tuple | None:
+    """(texto inteiro, páginas e imagens por página), ou None sem prova.
+
+    Dois PDFs do mesmo envelope assinado podem diferir nos bytes e não no
+    conteúdo. Mas a página de assinaturas fica no fim, e assinatura em imagem não
+    muda o texto: comparar só o começo, ou só o texto, não prova nada. OCR não é
+    exato, e PDF ou página sem texto não têm o que comparar. O OCR das primeiras
+    páginas é o teto de custo de um PDF escaneado aqui."""
+    try:
+        leitor = abrir_pdf(dados)
+        leitor.texto(PAGINAS_INICIAIS)
+        if getattr(leitor, "usou_ocr", False):
+            return None
+        texto = leitor.texto(None)
+        marca = leitor.impressao()
+    except Exception:
+        return None
+    if marca is None or getattr(leitor, "usou_ocr", False):
+        return None
+    if conf._texto_util(texto) is None:
+        return None
+    return (texto, marca)
+
+
+def _mesmo_texto(abrir_pdf, conteudos: list[bytes]) -> bool:
+    """Os PDFs têm comprovadamente o mesmo conteúdo?"""
+    vistos = [_conteudo_comparavel(abrir_pdf, c) for c in conteudos]
+    return vistos[0] is not None and all(v == vistos[0] for v in vistos[1:])
+
+
+def _sem_copias_de_texto(grupo: list, abrir_pdf, cancelar=None) -> list:
+    """O grupo sem as cópias de conteúdo igual, com cada PDF lido uma vez.
+
+    A versão que se diz completa é a que fica, regra do dono. Com o Parar
+    acionado o grupo volta como veio, e a pessoa decide."""
+    if len(grupo) < 2:
+        return grupo
+    unicas: list = []
+    vistos: list = []
+    for v in sorted(grupo, key=lambda x: not eh_mais_completo(
+            (x.anexo.get("filename") or ""))):
+        if cancelar and cancelar():
+            return grupo
+        conteudo = _conteudo_comparavel(abrir_pdf, v.dados)
+        if conteudo is not None and conteudo in vistos:
+            continue
+        vistos.append(conteudo)
+        unicas.append(v)
+    return unicas
+
+
+def _desempatar_por_conteudo(api, achado: Achado, motivo: str, log=print,
+                             abrir_pdf=None,
+                             distintos: list[dict] | None = None
+                             ) -> tuple[dict | None, str]:
     """Dois nomes, um arquivo? Baixa os candidatos e compara os bytes.
 
     Em agosto/2026, das cinco casas em disputa, várias eram o MESMO contrato
@@ -282,8 +412,13 @@ def _desempatar_por_conteudo(api, achado: Achado, motivo: str,
     tamanho de cada um, que já ajuda a escolher.
 
     Baixa AQUI, na busca, porque a URL do S3 expira: guardar para depois é
-    guardar um link morto."""
-    distintos = candidatos_distintos(achado.anexos_da_obra, achado.imovel.unidade)
+    guardar um link morto.
+
+    Bytes diferentes com o texto inteiro igual também são o mesmo documento
+    (`_mesmo_texto`), quando há leitor de PDF."""
+    if distintos is None:
+        distintos = candidatos_distintos(achado.anexos_da_obra,
+                                         achado.imovel.unidade)
     if len(distintos) > MAXIMO_PARA_DESEMPATAR:
         return None, motivo
     conteudos = []
@@ -295,7 +430,8 @@ def _desempatar_por_conteudo(api, achado: Achado, motivo: str,
         if not dados:
             return None, motivo            # sem o arquivo não há o que comparar
         conteudos.append(dados)
-    if all(c == conteudos[0] for c in conteudos[1:]):
+    if (all(c == conteudos[0] for c in conteudos[1:])
+            or (abrir_pdf is not None and _mesmo_texto(abrir_pdf, conteudos))):
         nomes = ", ".join(f'"{(a.get("filename") or "").strip()}"' for a in distintos)
         log(f"  {achado.imovel.obra} {achado.imovel.rotulo}: {len(distintos)} "
             f"nomes, um só arquivo — {nomes}")
@@ -397,7 +533,8 @@ def _casa_com_distrato(api, achado: Achado, distratos: list[dict], abrir_pdf,
         linha = achado if not linhas else replace(
             achado, outro_contrato=True, endereco=dict(achado.endereco),
             resultado_conferencia={}, revisao="")
-        versao, motivo = dist.escolher(grupo)
+        versao, motivo = dist.escolher(
+            _sem_copias_de_texto(grupo, abrir_pdf, cancelar))
         comprador = (versao or grupo[0]).comprador
         linha.comprador_contrato = comprador
         linha.distrato_sugerido = dist.foi_distratado(comprador,
@@ -510,12 +647,17 @@ def reaplicar(achados: list[Achado], escolhas: dict, log=print) -> int:
         nome = escolhas.get(chave_da_casa(a))
         if not nome:
             continue
-        alvo = next((x for x in a.anexos_da_obra
-                     if util.norm_espaco(x.get("filename") or "")
-                     == util.norm_espaco(nome)), None)
-        if alvo is None:
+        achados = {str(x.get("id") or id(x)): x for x in a.anexos_da_obra
+                   if util.norm_espaco(x.get("filename") or "")
+                   == util.norm_espaco(nome)}
+        if not achados:
             log(f"  a escolha anterior não está mais na obra: {nome}")
             continue
+        if len(achados) > 1:
+            # O nome não diz qual dos dois a pessoa escolheu: volta a perguntar.
+            log(f"  há {len(achados)} anexos com o nome escolhido: {nome}")
+            continue
+        alvo = next(iter(achados.values()))
         aplicar_resolucao(a, anexo=alvo)
         voltaram += 1
     return voltaram
@@ -705,6 +847,16 @@ def arquivar(api, achados: list[Achado], raiz: Path, ano: int, mes: int,
         resultado = _conferir_progressivo(leitor, esperado_da_conferencia(achado))
         achado.resultado_conferencia = resultado
         achado.leitura = getattr(leitor, "origem", "")
+
+        # No condomínio o contrato vem de um filtro por nome, então o tipo tem
+        # de se confirmar no texto. Escolhido à mão, alguém já olhou.
+        if (achado.imovel.tipo == TIPO_CONDOMINIO and not achado.contrato_manual
+                and resultado.get("tipo") != conf.CONFERE):
+            achado.revisao = ("não confirmei no texto que é contrato de venda "
+                              "entre comprador e vendedor; confira e escolha à "
+                              "mão")
+            log(f"  [{i}/{total}] RETIDO {achado.resumo} — tipo não confirmado")
+            continue
 
         if not conf.pode_gravar(resultado):
             pontos = ", ".join(conf.divergencias(resultado))

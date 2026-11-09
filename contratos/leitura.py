@@ -57,6 +57,27 @@ class LeitorPDF:
             self._ler(faltam)
         return "\n".join(self._paginas.get(i, "") for i in range(fim))
 
+    def impressao(self) -> tuple | None:
+        """(páginas, imagens por página), a parte do conteúdo que o texto não
+        mostra: assinatura em imagem não muda o texto da página.
+
+        None quando não dá para afirmar nada: PDF que não abre, OCR, ou página
+        sem texto, que pode ser justamente a assinada."""
+        n = self.total
+        if n <= 0:
+            return None
+        self.texto(None)
+        if self.erro or self.usou_ocr or self.ocr_indisponivel:
+            return None
+        if any(len(self._paginas.get(i, "").strip()) < MINIMO_POR_PAGINA
+               for i in range(n)):
+            return None
+        try:
+            with self._abrir() as pl:
+                return (n, tuple(len(p.images) for p in pl.pages))
+        except Exception:
+            return None
+
     @property
     def origem(self) -> str:
         """Como o texto foi obtido, para o registro e o resumo."""

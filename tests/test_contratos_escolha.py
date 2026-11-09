@@ -6,7 +6,7 @@ formato que importa, e o repositório é público. Eles trazem de graça três
 armadilhas que ninguém inventaria: a obra escrita errada dentro do arquivo
 (QD 26 numa obra QD 46), a versão sem espaço (QD46 LT18) e anexos repetidos.
 """
-from contratos.escolha import (candidatos, contrato_de, distratos_da_casa,
+from contratos.escolha import (candidatos_distintos, candidatos, contrato_de, distratos_da_casa,
                                eh_compra_e_venda, eh_distrato, excluido_por,
                                ordenar_para_escolha)
 
@@ -187,11 +187,22 @@ def test_dois_que_se_dizem_completos_continuam_em_revisao():
     assert achado is None and "disputam" in motivo
 
 
-def test_copias_de_nome_identico_contam_como_uma():
+def test_mesmo_registro_listado_duas_vezes_conta_como_um():
+    anexos = [_a("CONTRATO DE COMPRA E VENDA X CS 01 .pdf", "a"),
+              _a("CONTRATO DE COMPRA E VENDA X CS 01 .pdf", "a")]
+    achado, _ = contrato_de(anexos, 1)
+    assert achado is not None and achado["id"] == "a"
+
+
+def test_mesmo_nome_com_ids_diferentes_nao_e_copia_ate_comparar_o_conteudo():
+    """Numa casa revendida, os dois anexos de mesmo nome eram contratos de
+    compradores diferentes (09/11/2026). Só o conteúdo prova que é cópia, e
+    quem pode baixar para comparar é o pipeline."""
     anexos = [_a("CONTRATO DE COMPRA E VENDA X CS 01 .pdf", "a"),
               _a("CONTRATO DE COMPRA E VENDA X CS 01 .pdf", "b")]
     achado, motivo = contrato_de(anexos, 1)
-    assert achado is not None and achado["id"] == "a"
+    assert achado is None and "disputam" in motivo
+    assert [x["id"] for x in candidatos_distintos(anexos, 1)] == ["a", "b"]
 
 
 def test_tipo_novo_concorre_e_vira_revisao():

@@ -885,6 +885,31 @@ class MCApi:
                 progresso(min(i + LOTE, len(work_ids)), len(work_ids))
         return resultado
 
+    def anexos_da_venda(self, venda_id: str) -> list:
+        """Os anexos do lançamento de uma venda reajustada (a aba Arquivos do
+        recebimento), onde o robô de venda guarda o contrato do condomínio.
+
+        O anexo pertence ao `tradeReceivable`, cujo id só vem no detalhe da
+        venda. Falha de leitura levanta erro: lista vazia quer dizer que a venda
+        não tem anexo. Como em `anexos_de_obras`, o `downloadUrl` expira."""
+        base, headers = self._base_legacy(f"sales/{venda_id}")
+        venda = self._fetch_json(base, headers)
+        if not isinstance(venda, dict) or venda.get("__erro"):
+            raise RuntimeError(f"A API respondeu {venda!r:.60} ao abrir a venda.")
+        recebimento = (venda.get("tradeReceivable") or {}).get("id")
+        if not recebimento:
+            raise RuntimeError("a venda veio sem o recebimento (tradeReceivable).")
+        if not self._req_anexos:
+            raise RuntimeError("Credenciais de anexos ainda não capturadas.")
+        base, headers = self._req_anexos
+        consulta = urlencode([("entityIds", recebimento),
+                              ("entityOrigin", "TRADE_RECEIVABLE_READJUSTED")])
+        anexos = self._fetch_json(f"{base}?{consulta}", headers)
+        if not isinstance(anexos, list):
+            raise RuntimeError(f"A API respondeu {anexos!r:.60} ao listar os "
+                               "anexos do lançamento.")
+        return anexos
+
     # ------------------------------------------------- anexos (conteúdo)
     def _anexos_brutos(self, paid_id: str):
         """O JSON cru da listagem de anexos de um sub-pagamento — a lista, ou
