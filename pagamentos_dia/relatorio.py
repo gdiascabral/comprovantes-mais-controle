@@ -1507,24 +1507,39 @@ def conferir_cnpj_da_nota(favorecido: str, pago_para: str, participantes,
                        f" × cadastro {', '.join(_cnpj_fmt(c) for c in conhecidos)}")
 
 
-#: "Sacador/Avalista": no boleto emitido por intermediário (securitizadora,
-#: plataforma de cobrança), quem VENDEU aparece aqui e o beneficiário é o
-#: intermediário. O CNPJ logo depois do rótulo conta como da empresa.
-_SACADOR = re.compile(r"sacador\s*/?\s*avalista|sacador|avalista", re.I)
-_ALCANCE_DO_SACADOR = 160
+#: Os rótulos de QUEM RECEBE no boleto. "Sacador/Avalista": no boleto emitido
+#: por intermediário (securitizadora, plataforma de cobrança), quem VENDEU
+#: aparece ali e o beneficiário é o intermediário — os dois contam.
+_ROTULO_DE_QUEM_RECEBE = re.compile(
+    r"benefici[aá]rio(?:\s+final)?|cedente|sacador\s*/?\s*avalista|sacador|avalista", re.I)
+#: Onde o bloco de quem recebe acaba: o rótulo seguinte de outro papel, ou
+#: o campo de texto livre (instruções citam NF e CNPJ de terceiros).
+_FIM_DO_BLOCO = re.compile(
+    r"pagador|\bsacado\b|instru[cç]|benefici[aá]rio|cedente|sacador|avalista|"
+    r"local\s+de\s+pagamento|nosso\s+n|uso\s+do\s+banco|data\s+do\s+documento", re.I)
+#: O CNPJ do bloco vem logo depois do rótulo (mesma linha ou a de baixo).
+_ALCANCE_DO_BLOCO = 160
 
 
 def cnpjs_do_beneficiario(texto: str) -> list[str]:
-    """CNPJs que o BOLETO atribui a quem recebe: o do beneficiário/cedente
-    (`cnpjs_do_emitente`, que já tira o do pagador e o do banco) e o do
-    sacador/avalista, quando há. DV conferido."""
-    achados = list(cnpjs_do_emitente(texto))
-    for m in _SACADOR.finditer(texto or ""):
-        trecho = texto[m.end():m.end() + _ALCANCE_DO_SACADOR]
+    """CNPJs que o BOLETO atribui a quem recebe: o PRIMEIRO CNPJ válido do
+    bloco de cada rótulo Beneficiário/Cedente/Sacador/Avalista, até o rótulo
+    seguinte ou o fim do alcance. CNPJ solto em instrução, cabeçalho ou nota
+    junta no mesmo PDF não conta (revisão de dinheiro, 09/11/2026: qualquer
+    CNPJ do fornecedor no texto dava "beneficiário ✓" a boleto alheio)."""
+    texto = texto or ""
+    achados = []
+    for m in _ROTULO_DE_QUEM_RECEBE.finditer(texto):
+        trecho = texto[m.end():m.end() + _ALCANCE_DO_BLOCO]
+        fim = _FIM_DO_BLOCO.search(trecho)
+        if fim:
+            trecho = trecho[:fim.start()]
         for c in _CNPJ_NO_TEXTO.finditer(trecho):
             cnpj = regras.documento_valido(c.group(0))
-            if len(cnpj) == 14 and cnpj not in achados:
-                achados.append(cnpj)
+            if len(cnpj) == 14:
+                if cnpj not in achados:
+                    achados.append(cnpj)
+                break
     return achados
 
 
@@ -1538,20 +1553,28 @@ def conferir_beneficiario_do_boleto(texto_boleto: str, favorecido: str, pago_par
     Devolve `(resultado, texto)`: "" quando não há o que comparar (boleto sem
     CNPJ legível, ou nem nota nem cadastro com CNPJ), "ok", "filial" (mesma
     raiz) ou "diverge". O boleto que vem no MESMO PDF da nota traz os dois
-    CNPJs no texto; ali o da nota também está entre os "do beneficiário", e a
-    conferência só pega boleto de outra empresa em PDF separado."""
+    CNPJs no texto; a
+    conferência lê só o bloco de quem recebe (`cnpjs_do_beneficiario`) e,
+    como emitente da nota, só a parte de antes do boleto."""
     do_boleto = cnpjs_do_beneficiario(texto_boleto)
     if not do_boleto:
         return "", ""
     da_nota = []
     for f in files or ():
-        nome = f.get("filename") or ""
-        for m in _CHAVE_NFE.finditer(nome):
-            c = dados_da_chave_nfe(m.group(1))["cnpj"]
-            if c not in da_nota:
+        if not tem_nf_anexada([f], textos):
+            continue
+        for m in _CHAVE_NFE.finditer(f.get("filename") or ""):
+            c = regras.documento_valido(dados_da_chave_nfe(m.group(1))["cnpj"])
+            if len(c) == 14 and c not in da_nota:
                 da_nota.append(c)
         texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
-        if texto and texto != texto_boleto and tem_nf_anexada([f], textos):
+        if texto == texto_boleto:
+            # NF e boleto no mesmo PDF: o emitente é o da parte da NOTA, antes
+            # de o boleto começar; o beneficiário do boleto não pode
+            # confirmar a si mesmo.
+            inicio = _E_BOLETO_TEXTO.search(texto)
+            texto = texto[:inicio.start()] if inicio else ""
+        if texto:
             da_nota += [c for c in cnpjs_do_emitente(texto) if c not in da_nota]
     do_cadastro = []
     contato = regras.documento_valido(
@@ -1608,7 +1631,7 @@ _NAO_E_LOTE = (r"(?![.,]\d)(?!/\d{1,2}/\d)(?!/\d{4})(?!" + _E + r"(?:UN|UND|UNID
 #: — depois dela vem o fim da linha, pontuação ou a próxima sigla. Sem essa
 #: condição "LT 11 A 15" (faixa) e "LT 11 A PARTIR" virariam o lote 11A. E o
 #: "E" nunca é letra solta: é o "e" de "QD 5 E LT 7" e da lista de lotes.
-_LETRA_SOLTA = r"[ \t](?=[A-DF-Z][ \t]{0,3}(?:[\r\n,;/)\-]|$|(?:QD|LT|CASA|CS)\b))"
+_LETRA_SOLTA = r"[ \t](?=[A-DF-Z](?![ \t]{0,3}/)[ \t]{0,3}(?:[\r\n,;)\-]|$|(?:QD|LT|CASA|CS)\b))"
 _LETRA = r"(?:-?|" + _LETRA_SOLTA + r")"
 _TOKEN_ENDERECO = re.compile(
     r"\b(QD|LT|CASA|CS)" + _E + r"[.:\-]?" + _E + r"(\d{1,4})(?:" + _LETRA + r"([A-Z]))?\b"
@@ -2581,7 +2604,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if cnpj_res == "diverge" and not item.get("paid"):
             obs = " · ".join(filter(None, [cnpj_txt, obs]))
         benef_res = ""
-        if anexo_do_boleto and dados and not livre:
+        # Só boleto de COBRANÇA: guia de arrecadação (DARF, DAS, IPTU, a da
+        # prefeitura que sai pelo QR) não tem beneficiário com CNPJ, e o
+        # "Razão Social" dela é o NOSSO (revisão de dinheiro, 09/11/2026).
+        if (anexo_do_boleto and dados and not livre and not qr_usado
+                and len(ocr_boleto.digitos(dados)) == 47
+                and not ocr_boleto.eh_arrecadacao(dados)):
             texto_boleto = textos.get(anexo_do_boleto.get("downloadUrl") or "") or ""
             benef_res, benef_txt = conferir_beneficiario_do_boleto(
                 texto_boleto, favorecido, pago_para, participantes, files, textos)

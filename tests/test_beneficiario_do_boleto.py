@@ -70,3 +70,48 @@ def test_sem_com_o_que_comparar_nao_diz_nada():
 
 def test_cnpj_do_banco_e_do_pagador_nao_contam_como_beneficiario():
     assert relatorio.cnpjs_do_beneficiario(_boleto(LOJA)) == [LOJA]
+
+
+# ------------------------------------------- revisão de dinheiro, 09/11/2026
+def test_cnpj_da_loja_nas_instrucoes_nao_autentica_boleto_alheio():
+    texto = (f"Ficha de Compensação\nBeneficiário COBRANCA X CNPJ {fmt(OUTRA)}\n"
+             f"Instruções: referente NF 64000 de LOJA MODELO CNPJ {fmt(LOJA)}\n"
+             f"Pagador EMPRESA CNPJ {fmt(PAGADOR)}\n{gera_linha()}\n")
+    assert relatorio.cnpjs_do_beneficiario(texto) == [OUTRA]
+    assert _linha(texto, _nota(LOJA), cadastro=LOJA)["status"] == \
+        "ATENÇÃO — boleto de outra empresa"
+
+
+def test_nota_e_boleto_alheio_no_mesmo_pdf_nao_sai_verde():
+    it = item(tradePayablePaymentMethod="Boleto", paidToBankAccount="PIX CNPJ: " + fmt(LOJA))
+    junto = _nota(LOJA) + _boleto(OUTRA)
+    anexos = {"x1": [anexo("NF 64000.pdf", "Nota Fiscal", url="un")]}
+    linha = linhas(relatorio.montar_registros([it], anexos, {}, {"un": junto}))[0]
+    assert "beneficiário ✓" not in linha["conferencia"]
+    assert linha["status"] == "ATENÇÃO — boleto de outra empresa"
+
+
+def test_nota_e_boleto_da_loja_no_mesmo_pdf_autentica():
+    it = item(tradePayablePaymentMethod="Boleto")
+    anexos = {"x1": [anexo("NF 64000.pdf", "Nota Fiscal", url="un")]}
+    linha = linhas(relatorio.montar_registros(
+        [it], anexos, {}, {"un": _nota(LOJA) + _boleto(LOJA)}))[0]
+    assert linha["status"] == "APTO" and "beneficiário ✓ (= NF)" in linha["conferencia"]
+
+
+def test_44_digitos_no_nome_do_boleto_nao_viram_nota():
+    it = item(tradePayablePaymentMethod="Boleto")
+    anexos = {"x1": [anexo("boleto " + "2" * 44 + ".pdf", "Boleto", url="ub")]}
+    linha = linhas(relatorio.montar_registros([it], anexos, {}, {"ub": _boleto(LOJA)}))[0]
+    # (o nome com 44 dígitos ainda é lido como chave pela conferência da NF,
+    # que já existia; aqui só importa que ele não vire "a NF" do beneficiário)
+    assert "BENEFICIÁRIO DIVERGE" not in linha["conferencia"]
+    assert linha["status"] != "ATENÇÃO — boleto de outra empresa"
+
+
+def test_guia_de_arrecadacao_nao_e_conferida():
+    from pagamentos_dia import ocr_boleto
+    guia = "85800000010-0 00000000000-0 00000000000-0 00000000000-0"
+    assert not ocr_boleto.eh_arrecadacao(gera_linha())
+    # a regra do montar_registros só roda para linha de 47 dígitos de cobrança
+    assert len(ocr_boleto.digitos(guia)) == 48 and ocr_boleto.eh_arrecadacao(guia)

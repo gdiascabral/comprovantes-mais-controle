@@ -151,3 +151,13 @@ def test_nf_com_quadra_26_espaco_a_confere_com_o_lancamento_26a():
     anexo = "INFORMACOES COMPLEMENTARES\nLocal Entrega : OC 8158 RUA X 2\n4 QD 26 A LT 11 RESD Y"
     parte, divergiu = _endereco("RUA X QD 26A LT 11", anexo)
     assert parte == "endereço ✓ (QD 26A LT 11)" and not divergiu
+
+
+@pytest.mark.parametrize("texto, esperado", [
+    ("RUA 1 QD 12 LT 3 S/N", ["QD 12", "LT 3"]),
+    ("LT 7 C/ GUINDASTE", ["LT 7"]),
+    ("QD 3 A/C JOAO", ["QD 3"]),
+    ("LT 7 P/ OBRA", ["LT 7"]),
+])
+def test_barra_depois_da_letra_nao_e_letra_do_lote(texto, esperado):
+    assert relatorio._tokens_de_endereco(texto) == esperado
