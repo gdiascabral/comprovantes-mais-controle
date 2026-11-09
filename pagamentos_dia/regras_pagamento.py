@@ -202,6 +202,28 @@ def cnpj_livre(favorecido: str, regras: dict) -> bool:
     return bool(regra_do_fornecedor(favorecido, regras).get("cnpj_livre"))
 
 
+def beneficiarios_aceitos(favorecido: str, regras: dict) -> list[str]:
+    """CNPJs (inteiros, ou só a raiz de 8 dígitos) que podem aparecer como
+    BENEFICIÁRIO do boleto deste fornecedor além do dele mesmo — a empresa do
+    mesmo grupo que emite a cobrança, a securitizadora para a qual ele cede
+    os boletos.
+
+    Dono, 09/11/2026, depois da medição de 3 meses: 44 das 48 divergências
+    eram dois fornecedores conhecidos, todo mês. Fica no
+    `regras_fornecedor.json`, fora do repositório (CNPJ não entra aqui):
+    `"FORNECEDOR": {"beneficiarios_aceitos": ["12345678", "..."]}`.
+    Diferente do `cnpj_livre`, NÃO desliga a conferência: só aceita esses."""
+    valor = regra_do_fornecedor(favorecido, regras).get("beneficiarios_aceitos") or []
+    if isinstance(valor, str):
+        valor = [valor]
+    saida = []
+    for v in valor:
+        d = re.sub(r"\D", "", str(v))
+        if len(d) in (8, 14) and d not in saida:
+            saida.append(d)
+    return saida
+
+
 def pix_dos_dados_bancarios(favorecido: str, regras: dict) -> bool:
     """O favorecido está SEMPRE autorizado a receber pelo Pix dos Dados
     Bancários do lançamento (`paidToBankAccount`), mesmo sem o anexo

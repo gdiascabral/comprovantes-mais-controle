@@ -1544,7 +1544,8 @@ def cnpjs_do_beneficiario(texto: str) -> list[str]:
 
 
 def conferir_beneficiario_do_boleto(texto_boleto: str, favorecido: str, pago_para: str,
-                                    participantes, files, textos: dict) -> tuple[str, str]:
+                                    participantes, files, textos: dict,
+                                    aceitos=()) -> tuple[str, str]:
     """Autentica o BOLETO: o CNPJ de quem recebe (beneficiário ou
     sacador/avalista) tem de ser o do EMITENTE DA NOTA anexada ou o do
     CADASTRO do favorecido (dono, 09/11/2026: "autenticar o boleto, pra ver se
@@ -1586,6 +1587,11 @@ def conferir_beneficiario_do_boleto(texto_boleto: str, favorecido: str, pago_par
             do_cadastro.append(d)
     if not (da_nota or do_cadastro):
         return "", ""
+    # `aceitos`: CNPJ (ou raiz) que o dono cadastrou para este fornecedor no
+    # regras_fornecedor.json — a empresa do grupo que emite a cobrança, a
+    # securitizadora (`regras.beneficiarios_aceitos`).
+    if any(c == a or c[:8] == a for c in do_boleto for a in aceitos or ()):
+        return "ok", "beneficiário ✓ (aceito no cadastro de regras)"
     iguais = [n for n, refs in (("NF", da_nota), ("cadastro", do_cadastro))
               if any(c in refs for c in do_boleto)]
     if iguais:
@@ -2612,7 +2618,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 and not ocr_boleto.eh_arrecadacao(dados)):
             texto_boleto = textos.get(anexo_do_boleto.get("downloadUrl") or "") or ""
             benef_res, benef_txt = conferir_beneficiario_do_boleto(
-                texto_boleto, favorecido, pago_para, participantes, files, textos)
+                texto_boleto, favorecido, pago_para, participantes, files, textos,
+                aceitos=regras.beneficiarios_aceitos(favorecido, regras_forn))
             if benef_txt:
                 conferencia = " · ".join(filter(None, [conferencia, benef_txt]))
             if benef_res == "diverge" and not item.get("paid"):

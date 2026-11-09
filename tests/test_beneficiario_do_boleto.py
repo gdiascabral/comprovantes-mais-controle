@@ -115,3 +115,21 @@ def test_guia_de_arrecadacao_nao_e_conferida():
     assert not ocr_boleto.eh_arrecadacao(gera_linha())
     # a regra do montar_registros só roda para linha de 47 dígitos de cobrança
     assert len(ocr_boleto.digitos(guia)) == 48 and ocr_boleto.eh_arrecadacao(guia)
+
+
+# ------------------------------------- beneficiário aceito (dono, 09/11/2026)
+def test_beneficiario_aceito_no_regras_fornecedor_passa():
+    from pagamentos_dia import regras_pagamento as regras
+    r = {"LOJA MODELO": {"beneficiarios_aceitos": [OUTRA[:8]]}}
+    aceitos = regras.beneficiarios_aceitos("Loja Modelo Ltda", r)
+    assert aceitos == [OUTRA[:8]]
+    res, txt = relatorio.conferir_beneficiario_do_boleto(
+        _boleto(OUTRA), "Loja Modelo Ltda", "PIX CNPJ: " + fmt(LOJA), {}, [], {},
+        aceitos=aceitos)
+    assert res == "ok" and "aceito" in txt
+
+
+def test_sem_regra_o_mesmo_boleto_diverge():
+    res, _ = relatorio.conferir_beneficiario_do_boleto(
+        _boleto(OUTRA), "Loja Modelo Ltda", "PIX CNPJ: " + fmt(LOJA), {}, [], {})
+    assert res == "diverge"

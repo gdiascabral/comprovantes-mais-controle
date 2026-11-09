@@ -242,7 +242,11 @@ paths:
   (Contatos ou chave Pix CNPJ). "beneficiário ✓ (= NF e cadastro)", "✓
   (filial)" pela raiz, e "BENEFICIÁRIO DIVERGE" vira "ATENÇÃO — boleto de
   outra empresa". Sem CNPJ legível no boleto ou sem referência, nada é dito;
-  `cnpj_livre` pula. Limite: boleto no MESMO PDF da nota tem os dois CNPJs no
+  `cnpj_livre` pula; `beneficiarios_aceitos` (CNPJ ou raiz, no
+  regras_fornecedor.json) aceita a empresa do grupo ou a securitizadora sem
+  desligar a conferência. Medido em 09/11/2026 em 1.218 boletos de 3 meses:
+  885 ✓, 4 filial, 48 divergem (44 de dois fornecedores conhecidos), 281 sem
+  CNPJ no bloco (200 da concessionária de energia). Limite: boleto no MESMO PDF da nota tem os dois CNPJs no
   texto e passa. Testes: `tests/test_beneficiario_do_boleto.py`.
   (l) **Valor de outro momento** (dono, 06/11/2026, caso de 05/11:
   títulos da semana anterior recriados às 15:29 e corrigidos às 15:34; a
