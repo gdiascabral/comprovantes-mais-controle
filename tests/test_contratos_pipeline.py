@@ -1178,3 +1178,69 @@ def test_abrir_relê_o_anexo_do_lancamento_no_condominio():
 def test_abrir_sem_lista_nova_fica_com_o_que_tinha():
     achado = _uma_linha(ApiCondominio())
     assert anexo_atual(_api_de_abrir([], []), achado, CONTRATO_COND) == CONTRATO_COND
+
+
+# --- 09/11/2026: o link do arquivo vale 30 min e vence entre a busca e o arquivar
+def _vencer_links(api):
+    """Depois da busca: os links velhos param de baixar e o ERP dá links novos."""
+    velhos = {a["downloadUrl"] for lista in api.anexos.values() for a in lista}
+    api.anexos = {o: [dict(a, downloadUrl=a["downloadUrl"] + "?novo") for a in lista]
+                  for o, lista in api.anexos.items()}
+    original = api.baixar_anexo
+
+    def baixar(url):
+        if url in velhos:
+            api.baixados.append(url)
+            return None
+        return original(url)
+
+    api.baixar_anexo = baixar
+
+
+def test_arquivar_pega_link_novo_quando_o_da_busca_venceu(tmp_path):
+    api = ApiDuble(REGISTROS)
+    achados = _levantar(api=api)
+    _vencer_links(api)
+    _arquivar(api, achados, tmp_path)
+    feitos = [a for a in achados if a.arquivado]
+    assert feitos, [a.revisao for a in achados if a.marcado]
+    assert all("expira" not in a.revisao for a in achados)
+
+
+def test_arquivar_le_a_lista_da_obra_uma_vez_por_obra(tmp_path):
+    api = ApiDuble(REGISTROS)
+    achados = _levantar(api=api)
+    pedidos = []
+    original = api.anexos_de_obras
+
+    def contar(ids, log=print, cancelar=None):
+        pedidos.append(tuple(ids))
+        return original(ids, log=log, cancelar=cancelar)
+
+    api.anexos_de_obras = contar
+    _arquivar(api, achados, tmp_path)
+    assert len(pedidos) == len(set(pedidos))
+
+
+def test_condominio_arquiva_com_link_novo_do_lancamento(tmp_path):
+    api = ApiCondominio()
+    achados = levantar(api, 2026, 10, EMPRESAS, log=_sem_log)
+    novo = dict(CONTRATO_COND, downloadUrl="https://exemplo.invalid/c1-novo")
+    api.anexos_venda = [novo]
+    api.conteudos[novo["downloadUrl"]] = b"%PDF-novo"
+    api.baixar_anexo = (lambda url, _o=api.baixar_anexo:
+                        None if url == CONTRATO_COND["downloadUrl"] else _o(url))
+    _arquivar(api, achados, tmp_path, leitor=lambda _b: Leitor(TEXTO_COND))
+    assert achados[0].arquivado, achados[0].revisao
+
+
+def test_falha_ao_renovar_o_link_ainda_tenta_o_da_busca(tmp_path):
+    api = ApiDuble(REGISTROS)
+    achados = _levantar(api=api)
+
+    def quebra(*_a, **_k):
+        raise RuntimeError("API fora")
+
+    api.anexos_de_obras = quebra
+    _arquivar(api, achados, tmp_path)
+    assert any(a.arquivado for a in achados)
