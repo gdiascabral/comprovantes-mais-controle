@@ -101,3 +101,9 @@ paths:
   resolver e o "Abrir para olhar" identificam o anexo pelo id
   (`escolha.mesmo_anexo`, `pipeline.anexo_atual`). Escolha à mão cujo nome ficou
   repetido não volta sozinha na busca seguinte (`reaplicar`).
+
+  **O arquivar renova o link (09/11/2026).** O `downloadUrl` vale 30 min
+  (`X-Amz-Expires=1800`), e quem confere a tabela antes de arquivar passava do
+  prazo: outubro perdeu 15 de 16 downloads assim. `arquivar` relê a lista da obra
+  (e do lançamento, no condomínio) uma vez por obra e baixa pelo link novo
+  (`_baixar_do_jeito_certo`); falhando a releitura, tenta o link da busca.

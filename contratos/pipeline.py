@@ -329,22 +329,45 @@ def _contrato_do_condominio(api, achado: Achado, log=print, cancelar=None,
         achado.anexo = anexo
 
 
-def anexo_atual(api, achado, anexo: dict) -> dict:
+def anexo_atual(api, achado, anexo: dict, cache: dict | None = None) -> dict:
     """O anexo com o `downloadUrl` de agora, que o de antes já pode ter vencido.
 
     Casa pelo id, porque dois anexos podem ter o mesmo nome. No condomínio o
     arquivo pode estar no lançamento da venda, e não na obra. Sem achar, fica
-    com o que tinha, e o download diz se ainda vale."""
-    frescos = list(api.anexos_de_obras([achado.obra_id], log=lambda _m: None
-                                       ).get(achado.obra_id) or [])
+    com o que tinha, e o download diz se ainda vale. `cache` guarda as listas
+    já lidas nesta rodada, para não reler a mesma obra a cada contrato."""
+    cache = {} if cache is None else cache
+    chave = ("obra", achado.obra_id)
+    if chave not in cache:
+        cache[chave] = list(api.anexos_de_obras(
+            [achado.obra_id], log=lambda _m: None).get(achado.obra_id) or [])
+    frescos = list(cache[chave])
     imovel = getattr(achado, "imovel", None)
     if imovel is not None and imovel.tipo == TIPO_CONDOMINIO:
         for venda_id in imovel.vendas:
-            try:
-                frescos.extend(api.anexos_da_venda(venda_id) or [])
-            except Exception:
-                pass
+            if ("venda", venda_id) not in cache:
+                try:
+                    cache[("venda", venda_id)] = list(api.anexos_da_venda(venda_id) or [])
+                except Exception:
+                    cache[("venda", venda_id)] = []
+            frescos.extend(cache[("venda", venda_id)])
     return next((x for x in frescos if mesmo_anexo(x, anexo)), anexo)
+
+
+def _baixar_do_jeito_certo(api, achado, cache: dict) -> bytes | None:
+    """Os bytes do contrato, pelo link de agora.
+
+    O link da busca vale 30 min (S3 assinado, `X-Amz-Expires=1800`), e a pessoa
+    confere a tabela antes de arquivar: em 09/11/2026 os 15 links de outubro
+    venceram assim. Renovar falhando, ainda tenta o link da busca."""
+    try:
+        atual = anexo_atual(api, achado, achado.anexo, cache)
+    except Exception:
+        atual = achado.anexo
+    dados = api.baixar_anexo(atual.get("downloadUrl"))
+    if not dados and atual is not achado.anexo:
+        dados = api.baixar_anexo(achado.anexo.get("downloadUrl"))
+    return dados
 
 
 def _conteudo_comparavel(abrir_pdf, dados: bytes) -> tuple | None:
@@ -783,6 +806,7 @@ def arquivar(api, achados: list[Achado], raiz: Path, ano: int, mes: int,
     # passo 2 arquivaria de novo o que a pessoa tirou da rodada de propósito.
     prontos = [a for a in achados if a.marcado and not a.revisao and a.anexo]
     total = len(prontos)
+    links: dict = {}            # listas de anexos relidas nesta rodada
 
     # Primeiro passo: o destino de todos (não toca disco). Assim cada linha
     # sabe o nome dos arquivos das irmãs da mesma casa nesta rodada.
@@ -825,10 +849,10 @@ def arquivar(api, achados: list[Achado], raiz: Path, ano: int, mes: int,
             log(f"  [{i}/{total}] JÁ EXISTE {achado.resumo} — {outro.name}")
             continue
 
-        dados = achado.dados or api.baixar_anexo(achado.anexo.get("downloadUrl"))
+        dados = achado.dados or _baixar_do_jeito_certo(api, achado, links)
         if not dados:
-            achado.revisao = ("o download do contrato falhou ou veio vazio "
-                              "(a URL do S3 expira: rode a busca de novo)")
+            achado.revisao = ("o download do contrato falhou ou veio vazio, "
+                              "mesmo com o link renovado")
             continue
 
         if achado.destino.exists():
