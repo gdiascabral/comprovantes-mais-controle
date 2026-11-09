@@ -1507,6 +1507,74 @@ def conferir_cnpj_da_nota(favorecido: str, pago_para: str, participantes,
                        f" × cadastro {', '.join(_cnpj_fmt(c) for c in conhecidos)}")
 
 
+#: "Sacador/Avalista": no boleto emitido por intermediário (securitizadora,
+#: plataforma de cobrança), quem VENDEU aparece aqui e o beneficiário é o
+#: intermediário. O CNPJ logo depois do rótulo conta como da empresa.
+_SACADOR = re.compile(r"sacador\s*/?\s*avalista|sacador|avalista", re.I)
+_ALCANCE_DO_SACADOR = 160
+
+
+def cnpjs_do_beneficiario(texto: str) -> list[str]:
+    """CNPJs que o BOLETO atribui a quem recebe: o do beneficiário/cedente
+    (`cnpjs_do_emitente`, que já tira o do pagador e o do banco) e o do
+    sacador/avalista, quando há. DV conferido."""
+    achados = list(cnpjs_do_emitente(texto))
+    for m in _SACADOR.finditer(texto or ""):
+        trecho = texto[m.end():m.end() + _ALCANCE_DO_SACADOR]
+        for c in _CNPJ_NO_TEXTO.finditer(trecho):
+            cnpj = regras.documento_valido(c.group(0))
+            if len(cnpj) == 14 and cnpj not in achados:
+                achados.append(cnpj)
+    return achados
+
+
+def conferir_beneficiario_do_boleto(texto_boleto: str, favorecido: str, pago_para: str,
+                                    participantes, files, textos: dict) -> tuple[str, str]:
+    """Autentica o BOLETO: o CNPJ de quem recebe (beneficiário ou
+    sacador/avalista) tem de ser o do EMITENTE DA NOTA anexada ou o do
+    CADASTRO do favorecido (dono, 09/11/2026: "autenticar o boleto, pra ver se
+    é da mesma empresa que emitiu a NF e a mesma que está no cadastro").
+
+    Devolve `(resultado, texto)`: "" quando não há o que comparar (boleto sem
+    CNPJ legível, ou nem nota nem cadastro com CNPJ), "ok", "filial" (mesma
+    raiz) ou "diverge". O boleto que vem no MESMO PDF da nota traz os dois
+    CNPJs no texto; ali o da nota também está entre os "do beneficiário", e a
+    conferência só pega boleto de outra empresa em PDF separado."""
+    do_boleto = cnpjs_do_beneficiario(texto_boleto)
+    if not do_boleto:
+        return "", ""
+    da_nota = []
+    for f in files or ():
+        nome = f.get("filename") or ""
+        for m in _CHAVE_NFE.finditer(nome):
+            c = dados_da_chave_nfe(m.group(1))["cnpj"]
+            if c not in da_nota:
+                da_nota.append(c)
+        texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
+        if texto and texto != texto_boleto and tem_nf_anexada([f], textos):
+            da_nota += [c for c in cnpjs_do_emitente(texto) if c not in da_nota]
+    do_cadastro = []
+    contato = regras.documento_valido(
+        (participantes or {}).get(util.norm_espaco(favorecido)) or "")
+    achado = _CNPJ_NO_TEXTO.search(pago_para or "")
+    pix = regras.documento_valido(achado.group(0)) if achado else ""
+    for d in (contato, pix):
+        if len(d) == 14 and d not in do_cadastro:
+            do_cadastro.append(d)
+    if not (da_nota or do_cadastro):
+        return "", ""
+    iguais = [n for n, refs in (("NF", da_nota), ("cadastro", do_cadastro))
+              if any(c in refs for c in do_boleto)]
+    if iguais:
+        return "ok", f"beneficiário ✓ (= {' e '.join(iguais)})"
+    if any(c[:8] == r[:8] for c in do_boleto for r in da_nota + do_cadastro):
+        return "filial", "beneficiário ✓ (filial: mesma raiz)"
+    lados = ([f"NF {', '.join(_cnpj_fmt(c) for c in da_nota)}"] if da_nota else []) + \
+            ([f"cadastro {', '.join(_cnpj_fmt(c) for c in do_cadastro)}"] if do_cadastro else [])
+    return "diverge", (f"BENEFICIÁRIO DIVERGE: boleto "
+                       f"{', '.join(_cnpj_fmt(c) for c in do_boleto)} × {' × '.join(lados)}")
+
+
 #: Como os documentos escrevem quadra e lote, levados à sigla do ERP antes de
 #: procurar (dono, 28/10/2026: "dificuldade para achar o LT … para não
 #: pagarmos nada errado"). Espaços contados (`[ \t]{0,3}`), nunca `\s*`: não
@@ -1535,10 +1603,19 @@ _NAO_E_LOTE = (r"(?![.,]\d)(?!/\d{1,2}/\d)(?!/\d{4})(?!" + _E + r"(?:UN|UND|UNID
 #: hífen ("LT 71A", "LT 71-A", "QD 26A"), e o lote pode vir em lista ("LT 10,
 #: 11 e 12", "LT 10/11", "LT 10-11" sem espaço, "LOTES 71A, 71B"). A lista é só
 #: de LT: "QD 5 E LT 7" não pode virar uma lista de quadras.
+#: A letra do número também vem SEPARADA por um espaço ("QD 26 A LT 11": a NF
+#: de 09/11/2026 saiu "QD 26A não aparece"), mas só quando ela fecha o número
+#: — depois dela vem o fim da linha, pontuação ou a próxima sigla. Sem essa
+#: condição "LT 11 A 15" (faixa) e "LT 11 A PARTIR" virariam o lote 11A. E o
+#: "E" nunca é letra solta: é o "e" de "QD 5 E LT 7" e da lista de lotes.
+_LETRA_SOLTA = r"[ \t](?=[A-DF-Z][ \t]{0,3}(?:[\r\n,;/)\-]|$|(?:QD|LT|CASA|CS)\b))"
+_LETRA = r"(?:-?|" + _LETRA_SOLTA + r")"
 _TOKEN_ENDERECO = re.compile(
-    r"\b(QD|LT|CASA|CS)" + _E + r"[.:\-]?" + _E + r"(\d{1,4})(?:-?([A-Z]))?\b" + _NAO_E_LOTE
-    + r"((?:(?:" + _E + r"(?:,|/|\bE\b)" + _E + r"|-)\d{1,3}(?:-?[A-Z])?\b" + _NAO_E_LOTE + r")*)")
-_ITEM_DA_LISTA = re.compile(r"(\d{1,3})(?:-?([A-Z]))?")
+    r"\b(QD|LT|CASA|CS)" + _E + r"[.:\-]?" + _E + r"(\d{1,4})(?:" + _LETRA + r"([A-Z]))?\b"
+    + _NAO_E_LOTE
+    + r"((?:(?:" + _E + r"(?:,|/|\bE\b)" + _E + r"|-)\d{1,3}(?:" + _LETRA + r"[A-Z])?\b"
+    + _NAO_E_LOTE + r")*)")
+_ITEM_DA_LISTA = re.compile(r"(\d{1,3})(?:" + _LETRA + r"([A-Z]))?")
 
 #: Distância máxima (caracteres) entre o fim da quadra e o lote do mesmo par.
 PERTO_DA_QUADRA = 15
@@ -1975,6 +2052,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         #: boleto pode vir: QR de OUTRO anexo (fatura, orçamento) não paga o
         #: boleto registrado (revisão de dinheiro, 08/10/2026).
         anexo_da_linha, origem_qr = None, None
+        #: O anexo de onde saiu a linha digitável (para autenticar o
+        #: beneficiário); None quando a linha não saiu de anexo nenhum.
+        anexo_do_boleto = None
         onde = None          # o anexo com boleto indeciso (ramo do boleto)
         obs_linha, n_boletos = "", 0
         #: Quem recebe, quando o anexo é um aviso "PAGAR PARA". Fica None nas
@@ -2237,6 +2317,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # (um orçamento com QR estático pagaria antes do boleto chegar).
             if dados:
                 origem_qr = anexo_da_linha or pdf
+                anexo_do_boleto = origem_qr
             elif (pdf and _E_BOLETO.search(_rotulo(pdf))
                   and not obs_linha.startswith("O anexo é comprovante")):
                 origem_qr = pdf
@@ -2499,6 +2580,17 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # (`remessa_dia.preparar` só marca status "APTO…").
         if cnpj_res == "diverge" and not item.get("paid"):
             obs = " · ".join(filter(None, [cnpj_txt, obs]))
+        benef_res = ""
+        if anexo_do_boleto and dados and not livre:
+            texto_boleto = textos.get(anexo_do_boleto.get("downloadUrl") or "") or ""
+            benef_res, benef_txt = conferir_beneficiario_do_boleto(
+                texto_boleto, favorecido, pago_para, participantes, files, textos)
+            if benef_txt:
+                conferencia = " · ".join(filter(None, [conferencia, benef_txt]))
+            if benef_res == "diverge" and not item.get("paid"):
+                obs = " · ".join(filter(None, [
+                    benef_txt + " — o boleto pode ser de outra empresa; confirmar "
+                    "com o fornecedor antes de pagar", obs]))
         novos = []
         if olhar:
             novos.append("ATENÇÃO — pagar à mão")
@@ -2508,6 +2600,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             novos.append("ATENÇÃO — vários boletos no título")
         if cnpj_res == "diverge":
             novos.append("ATENÇÃO — CNPJ da nota diferente do cadastro")
+        if benef_res == "diverge":
+            novos.append("ATENÇÃO — boleto de outra empresa")
         # O QR que virou o dado de pagamento num título que JÁ tem pagamento:
         # o QR estático continua anexado depois de pago, e aceita de novo.
         if qr_usado and ja_pago and not qr_alerta:

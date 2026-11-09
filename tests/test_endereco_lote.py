@@ -126,3 +126,28 @@ def test_texto_com_muitos_brancos_continua_rapido():
     relatorio._tokens_de_endereco("QD 9" + " " * 20000 + "LT 7")
     relatorio._pares_quadra_lote("QUADRA" + " " * 20000)
     assert time.perf_counter() - inicio < 0.2
+
+
+# ------------------------------------------------ letra separada por espaço
+# Dono, 09/11/2026: a NF escreveu "QD 26 A LT 11" e o lançamento "QD 26A LT
+# 11"; a conferência saiu "endereço ? (QD 26A não aparece)".
+@pytest.mark.parametrize("texto, esperado", [
+    ("RUA X 4 QD 26 A LT 11 RESD Y", ["QD 26A", "LT 11"]),
+    ("QUADRA 26 A LOTE 11", ["QD 26A", "LT 11"]),
+    ("QD 26 A, LT 11", ["QD 26A", "LT 11"]),
+    ("QD 26 A", ["QD 26A"]),
+    ("LOTES 71 A, 71 B", ["LT 71A", "LT 71B"]),
+    # a letra solta só vale quando fecha o número:
+    ("LT 11 A 15", ["LT 11"]),            # faixa de lotes
+    ("LT 11 A PARTIR DE HOJE", ["LT 11"]),
+    ("QD 5 E LT 7", ["QD 5", "LT 7"]),    # "E" é conjunção
+    ("LT 10 E 11", ["LT 10", "LT 11"]),
+])
+def test_letra_do_numero_separada_por_espaco(texto, esperado):
+    assert relatorio._tokens_de_endereco(texto) == esperado
+
+
+def test_nf_com_quadra_26_espaco_a_confere_com_o_lancamento_26a():
+    anexo = "INFORMACOES COMPLEMENTARES\nLocal Entrega : OC 8158 RUA X 2\n4 QD 26 A LT 11 RESD Y"
+    parte, divergiu = _endereco("RUA X QD 26A LT 11", anexo)
+    assert parte == "endereço ✓ (QD 26A LT 11)" and not divergiu
