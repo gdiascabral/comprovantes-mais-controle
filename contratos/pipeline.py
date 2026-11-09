@@ -26,7 +26,8 @@ from . import distrato as dist
 from .destino import (caminho_longo, empresa_de, mesmo_contrato_na_pasta,
                       nome_arquivo, pasta_do_contrato)
 from .escolha import (candidatos_distintos, candidatos_do_lancamento,
-                      contrato_de, contrato_do_lancamento, distratos_da_casa)
+                      contrato_de, contrato_do_lancamento, distratos_da_casa,
+                      eh_mais_completo, mesmo_anexo)
 from .leitura import PAGINAS_INICIAIS
 from .regras import TIPO_CONDOMINIO, Imovel, imoveis_do_mes
 
@@ -59,6 +60,9 @@ class Achado:
     #: resolver mostra quando o app não soube escolher sozinho — antes esta
     #: lista era lida e jogada fora, e a pessoa ficava sem saída pela tela.
     anexos_da_obra: list = field(default_factory=list)
+    #: No condomínio, os anexos do lançamento da venda (também estão em
+    #: `anexos_da_obra`). São os únicos candidatos da janela de resolver.
+    anexos_lancamento: list | None = None
     destino: Path | None = None
     revisao: str = ""
     #: Entra nesta rodada de arquivamento. Quem decide é a aba (a marcação da
@@ -302,7 +306,18 @@ def _contrato_do_condominio(api, achado: Achado, log=print, cancelar=None,
             achado.revisao = ("não consegui ler os anexos do lançamento da "
                               f"venda: {e}")
             return
+    achado.anexos_lancamento = anexos
     achado.anexos_da_obra = anexos + achado.anexos_da_obra
+    # Duas vendas da mesma unidade no mês: um contrato não cobre as duas, e o
+    # app não sabe qual é a de cada recebimento.
+    if len(i.vendas) > 1:
+        achado.revisao = (f"{len(i.vendas)} vendas da {i.rotulo} receberam no "
+                          "mês; escolha o contrato à mão")
+        return
+    if not (i.comprador or "").strip():
+        achado.revisao = (f"a {i.rotulo} está sem o nome do comprador no ERP; "
+                          "corrija a descrição e busque de novo")
+        return
     anexo, motivo = contrato_do_lancamento(anexos, i.unidade, i.tipo)
     if anexo is None and "disputam" in motivo:
         anexo, motivo = _desempatar_por_conteudo(
@@ -314,39 +329,72 @@ def _contrato_do_condominio(api, achado: Achado, log=print, cancelar=None,
         achado.anexo = anexo
 
 
-def _mesmo_texto(abrir_pdf, conteudos: list[bytes]) -> bool:
-    """Os PDFs têm o texto INTEIRO igual, lido da camada de texto?
+def anexo_atual(api, achado, anexo: dict) -> dict:
+    """O anexo com o `downloadUrl` de agora, que o de antes já pode ter vencido.
+
+    Casa pelo id, porque dois anexos podem ter o mesmo nome. No condomínio o
+    arquivo pode estar no lançamento da venda, e não na obra. Sem achar, fica
+    com o que tinha, e o download diz se ainda vale."""
+    frescos = list(api.anexos_de_obras([achado.obra_id], log=lambda _m: None
+                                       ).get(achado.obra_id) or [])
+    imovel = getattr(achado, "imovel", None)
+    if imovel is not None and imovel.tipo == TIPO_CONDOMINIO:
+        for venda_id in imovel.vendas:
+            try:
+                frescos.extend(api.anexos_da_venda(venda_id) or [])
+            except Exception:
+                pass
+    return next((x for x in frescos if mesmo_anexo(x, anexo)), anexo)
+
+
+def _conteudo_comparavel(abrir_pdf, dados: bytes) -> tuple | None:
+    """(texto inteiro, páginas e imagens por página), ou None sem prova.
 
     Dois PDFs do mesmo envelope assinado podem diferir nos bytes e não no
-    conteúdo. A página de assinaturas fica no fim, então comparar só o começo
-    não prova nada. OCR não é exato e PDF sem texto não tem o que comparar: nos
-    dois casos a resposta é não. O OCR das primeiras páginas é o teto de custo
-    de um PDF escaneado aqui."""
-    textos = []
-    for dados in conteudos:
-        try:
-            leitor = abrir_pdf(dados)
-            leitor.texto(PAGINAS_INICIAIS)
-            if getattr(leitor, "usou_ocr", False):
-                return False
-            texto = leitor.texto(None)
-            if getattr(leitor, "usou_ocr", False):
-                return False
-        except Exception:
-            return False
-        util_ = conf._texto_util(texto)
-        if util_ is None:
-            return False
-        textos.append(util_)
-    return all(t == textos[0] for t in textos[1:])
+    conteúdo. Mas a página de assinaturas fica no fim, e assinatura em imagem não
+    muda o texto: comparar só o começo, ou só o texto, não prova nada. OCR não é
+    exato, e PDF ou página sem texto não têm o que comparar. O OCR das primeiras
+    páginas é o teto de custo de um PDF escaneado aqui."""
+    try:
+        leitor = abrir_pdf(dados)
+        leitor.texto(PAGINAS_INICIAIS)
+        if getattr(leitor, "usou_ocr", False):
+            return None
+        texto = leitor.texto(None)
+        marca = leitor.impressao()
+    except Exception:
+        return None
+    if marca is None or getattr(leitor, "usou_ocr", False):
+        return None
+    if conf._texto_util(texto) is None:
+        return None
+    return (texto, marca)
 
 
-def _sem_copias_de_texto(grupo: list, abrir_pdf) -> list:
-    """O grupo sem as versões de texto inteiro igual a uma anterior."""
+def _mesmo_texto(abrir_pdf, conteudos: list[bytes]) -> bool:
+    """Os PDFs têm comprovadamente o mesmo conteúdo?"""
+    vistos = [_conteudo_comparavel(abrir_pdf, c) for c in conteudos]
+    return vistos[0] is not None and all(v == vistos[0] for v in vistos[1:])
+
+
+def _sem_copias_de_texto(grupo: list, abrir_pdf, cancelar=None) -> list:
+    """O grupo sem as cópias de conteúdo igual, com cada PDF lido uma vez.
+
+    A versão que se diz completa é a que fica, regra do dono. Com o Parar
+    acionado o grupo volta como veio, e a pessoa decide."""
+    if len(grupo) < 2:
+        return grupo
     unicas: list = []
-    for v in grupo:
-        if not any(_mesmo_texto(abrir_pdf, [u.dados, v.dados]) for u in unicas):
-            unicas.append(v)
+    vistos: list = []
+    for v in sorted(grupo, key=lambda x: not eh_mais_completo(
+            (x.anexo.get("filename") or ""))):
+        if cancelar and cancelar():
+            return grupo
+        conteudo = _conteudo_comparavel(abrir_pdf, v.dados)
+        if conteudo is not None and conteudo in vistos:
+            continue
+        vistos.append(conteudo)
+        unicas.append(v)
     return unicas
 
 
@@ -485,7 +533,8 @@ def _casa_com_distrato(api, achado: Achado, distratos: list[dict], abrir_pdf,
         linha = achado if not linhas else replace(
             achado, outro_contrato=True, endereco=dict(achado.endereco),
             resultado_conferencia={}, revisao="")
-        versao, motivo = dist.escolher(_sem_copias_de_texto(grupo, abrir_pdf))
+        versao, motivo = dist.escolher(
+            _sem_copias_de_texto(grupo, abrir_pdf, cancelar))
         comprador = (versao or grupo[0]).comprador
         linha.comprador_contrato = comprador
         linha.distrato_sugerido = dist.foi_distratado(comprador,
@@ -798,6 +847,16 @@ def arquivar(api, achados: list[Achado], raiz: Path, ano: int, mes: int,
         resultado = _conferir_progressivo(leitor, esperado_da_conferencia(achado))
         achado.resultado_conferencia = resultado
         achado.leitura = getattr(leitor, "origem", "")
+
+        # No condomínio o contrato vem de um filtro por nome, então o tipo tem
+        # de se confirmar no texto. Escolhido à mão, alguém já olhou.
+        if (achado.imovel.tipo == TIPO_CONDOMINIO and not achado.contrato_manual
+                and resultado.get("tipo") != conf.CONFERE):
+            achado.revisao = ("não confirmei no texto que é contrato de venda "
+                              "entre comprador e vendedor; confira e escolha à "
+                              "mão")
+            log(f"  [{i}/{total}] RETIDO {achado.resumo} — tipo não confirmado")
+            continue
 
         if not conf.pode_gravar(resultado):
             pontos = ", ".join(conf.divergencias(resultado))

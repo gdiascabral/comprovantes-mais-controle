@@ -232,6 +232,10 @@ def imoveis_do_mes(registros: list[dict], log=print) -> list[Imovel]:
                            comprador_descricao=comprador, revisao=revisao,
                            tipo=tipo_da_descricao(descricao))
         imovel = por_chave.setdefault(candidato.chave, candidato)
+        # Uma linha que diz UNIDADE basta: o tipo não pode depender de qual
+        # recebimento o ERP devolveu primeiro.
+        if candidato.tipo == TIPO_CONDOMINIO:
+            imovel.tipo = TIPO_CONDOMINIO
         # O comprador vem da linha da venda; uma condição pode vir sem ele,
         # e vazio não pode apagar o que já se sabe.
         if comprador and not imovel.comprador:

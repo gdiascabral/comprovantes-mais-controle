@@ -164,15 +164,20 @@ def conferir_quadra_lote(texto: str, complemento: str) -> str:
 RE_LOTE_CASA = re.compile(r"\bLT\s*\d+[A-Z]?\s*-?\s*CS\s*(?:NO?\s*)?0*(\d{1,3})\b")
 
 
+#: `UN 15`, `UN CS NO 15`: como "Unidade: Casa nº 15" sai do `_preparar`.
+RE_UNIDADE_DO_OBJETO = re.compile(r"\bUN\s*(?:CS\s*)?(?:N[O°]?\s*)?0*(\d{1,3})\b")
+
+
 def conferir_casa(texto: str, unidade: int | None, tipo: str = "CS") -> str:
     if not unidade:
         return ILEGIVEL
     if tipo == "UN":
-        # Condomínio: não há lote+casa; vale a UNIDADE do objeto. O contrato
-        # real diz "Unidade: Casa nº 15". Casa solta não conta: pode ser o
-        # endereço de quem vende.
-        padrao = re.compile(rf"\bUN\s*(?:CS\s*)?(?:N\S?\s*)?0*{unidade}\b")
-        return CONFERE if padrao.search(texto) else DIVERGE
+        # Condomínio: não há lote+casa. O contrato real diz "Unidade: Casa nº
+        # 15", e a PRIMEIRA unidade citada é a do objeto: uma vizinha citada
+        # depois não conta. Casa solta também não: pode ser o endereço de quem
+        # vende.
+        achou = RE_UNIDADE_DO_OBJETO.search(texto)
+        return CONFERE if achou and int(achou.group(1)) == unidade else DIVERGE
     objeto = {int(n) for n in RE_LOTE_CASA.findall(texto)}
     if objeto:
         return CONFERE if unidade in objeto else DIVERGE

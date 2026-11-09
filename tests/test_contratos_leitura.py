@@ -115,3 +115,58 @@ def test_bytes_que_nao_sao_pdf_nao_quebram():
 def test_vazio_nao_quebra():
     assert LeitorPDF(b"").total == 0
     assert LeitorPDF(None).texto() == ""
+
+
+# --- impressao: o que prova que dois PDFs têm o mesmo conteúdo (09/11/2026) ---
+class _Pagina:
+    def __init__(self, texto, imagens=0):
+        self.texto, self.images = texto, [{}] * imagens
+
+    def extract_text(self):
+        return self.texto
+
+
+class _Pdf:
+    def __init__(self, paginas):
+        self.pages = paginas
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+
+LONGO = "texto suficiente para contar como pagina de verdade"
+
+
+def _leitor_de(paginas):
+    leitor = LeitorPDF(b"%PDF-falso")
+    leitor._abrir = lambda: _Pdf(paginas)
+    leitor._ocr = lambda _pl, _i: {}
+    return leitor
+
+
+def test_impressao_traz_as_imagens_de_cada_pagina():
+    leitor = _leitor_de([_Pagina(LONGO), _Pagina(LONGO, 3)])
+    assert leitor.impressao() == (2, (0, 3))
+
+
+def test_impressao_nega_pagina_sem_texto():
+    assert _leitor_de([_Pagina(LONGO), _Pagina("")]).impressao() is None
+
+
+def test_impressao_nega_pdf_que_nao_abre():
+    leitor = LeitorPDF(b"%PDF-falso")
+
+    def falha():
+        raise ValueError("quebrado")
+
+    leitor._abrir = falha
+    assert leitor.impressao() is None
+
+
+def test_impressao_nega_o_que_veio_de_ocr():
+    leitor = _leitor_de([_Pagina(LONGO)])
+    leitor.usou_ocr = True
+    assert leitor.impressao() is None

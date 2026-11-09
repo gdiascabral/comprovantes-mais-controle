@@ -10,7 +10,9 @@ Nenhum dado real: nomes e valores inventados (o repositório é público).
 from contratos.conferencia import (CONFERE, DIVERGE, _preparar, conferir_casa,
                                    conferir_rua)
 from contratos.destino import nome_arquivo
-from contratos.escolha import contrato_de, contrato_do_lancamento
+from contratos.escolha import (contrato_de, contrato_do_lancamento,
+                               distratos_da_casa, mesmo_anexo,
+                               ordenar_para_escolha)
 from contratos.regras import (imoveis_do_mes, numero_da_unidade,
                               partes_da_descricao, rotulo_da_unidade,
                               tipo_da_descricao, tipo_da_unidade)
@@ -171,3 +173,74 @@ def test_dois_contratos_no_lancamento_viram_revisao():
     anexo, motivo = contrato_do_lancamento(anexos, 15)
     assert anexo is None
     assert "disputam" in motivo
+
+
+# --- achados da revisão de 09/11/2026 ---------------------------------------
+def test_numero_colado_no_n_nao_vira_outra_unidade():
+    texto = _preparar("Unidade: Casa N15, Tipo 02")
+    assert conferir_casa(texto, 5, "UN") == DIVERGE
+    assert conferir_casa(texto, 15, "UN") == CONFERE
+
+
+def test_unidade_seguida_de_palavra_nao_conta():
+    assert conferir_casa(_preparar("na unidade na Rua 15"), 15, "UN") == DIVERGE
+
+
+def test_unidade_vizinha_citada_depois_nao_conta():
+    """A primeira citada é a do objeto, como nos contratos reais."""
+    texto = _preparar("Unidade: Casa nº 22, Tipo 01. Confronta com a unidade casa 15.")
+    assert conferir_casa(texto, 15, "UN") == DIVERGE
+    assert conferir_casa(texto, 22, "UN") == CONFERE
+
+
+def test_linha_com_alguma_descricao_de_unidade_e_do_condominio():
+    a = dict(receb("VENDA CASA 15 - FULANO", "a"))
+    b = dict(receb("VENDA UNIDADE 15 - FULANO", "b"))
+    [i] = imoveis_do_mes([a, b], log=lambda _m: None)
+    assert i.tipo == "UN"
+
+
+def test_contrato_de_corretagem_no_lancamento_nao_serve():
+    anexo, _ = contrato_do_lancamento([_anexo("CONTRATO DE CORRETAGEM CASA 15")], 15)
+    assert anexo is None
+
+
+def test_contrato_do_corretor_nao_vence_como_mais_completo():
+    certo = _anexo("CONTRATO CONDOMINIO EXEMPLO CASA 15 - FULANO", "a")
+    corretor = _anexo("CONTRATO CORRETOR CASA 15 - FULANO", "b")
+    anexo, _ = contrato_do_lancamento([certo, corretor], 15)
+    assert anexo is certo
+
+
+def test_marca_de_completo_no_nome_do_comprador_nao_decide():
+    anexos = [_anexo("CONTRATO CONDOMINIO EXEMPLO CASA 15 - FULANO FINAL", "a"),
+              _anexo("CONTRATO CONDOMINIO EXEMPLO CASA 15 - BELTRANO", "b")]
+    anexo, motivo = contrato_do_lancamento(anexos, 15)
+    assert anexo is None and "disputam" in motivo
+
+
+def test_marca_de_completo_antes_do_nome_decide():
+    anexos = [_anexo("CONTRATO CONDOMINIO EXEMPLO CASA 15 - FULANO", "a"),
+              _anexo("CONTRATO CONDOMINIO EXEMPLO CASA 15 ASSINADO - FULANO", "b")]
+    anexo, _ = contrato_do_lancamento(anexos, 15)
+    assert anexo["id"] == "b"
+
+
+def test_janela_marca_como_candidato_o_do_lancamento_e_nao_o_da_obra():
+    lancamento = [_anexo("CONTRATO CONDOMINIO EXEMPLO CASA 15 - FULANO", "l1")]
+    obra = [_anexo("CONTRATO DE COMPRA E VENDA UNIDADE 15", "o1")]
+    ordem = ordenar_para_escolha(lancamento + obra, 15, lancamento=lancamento)
+    assert [(a["id"], marcado) for a, marcado in ordem] == [("l1", True), ("o1", False)]
+
+
+def test_mesmo_anexo_olha_o_id_antes_do_nome():
+    a, b = _anexo("CONTRATO X", "a"), _anexo("CONTRATO X", "b")
+    assert mesmo_anexo(a, dict(a))
+    assert not mesmo_anexo(a, b)
+    assert mesmo_anexo({"filename": "CONTRATO X"}, {"filename": "CONTRATO X"})
+    assert not mesmo_anexo({}, {})
+
+
+def test_distratos_de_mesmo_nome_e_ids_diferentes_contam_os_dois():
+    anexos = [_anexo("DISTRATO CASA 15", "a"), _anexo("DISTRATO CASA 15", "b")]
+    assert [x["id"] for x in distratos_da_casa(anexos, 15)] == ["a", "b"]

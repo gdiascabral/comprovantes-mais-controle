@@ -7,10 +7,12 @@ fechamento, e um recebimento sem casa na descrição. O resultado certo é 2
 arquiváveis e 3 em revisão.
 """
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from contratos.pipeline import (Achado, aplicar_resolucao, arquivar,
+from contratos.pipeline import (Achado, _sem_copias_de_texto, anexo_atual,
+                                aplicar_resolucao, arquivar,
                                 chave_da_casa, esperado_da_conferencia,
                                 levantar, pode_resolver, preparar_destino,
                                 reaplicar, reaplicar_distratos)
@@ -90,6 +92,9 @@ class Leitor:
 
     def tem_mais(self, ate):
         return self.total > ate
+
+    def impressao(self):
+        return (self.total, ())
 
 
 class ApiDuble:
@@ -1048,3 +1053,128 @@ def test_escolha_a_mao_com_nome_repetido_nao_volta_sozinha():
     a = _uma_linha(_api_iguais())
     assert reaplicar([a], {chave_da_casa(a): NOME_IGUAL}, log=_sem_log) == 0
     assert not a.anexo
+
+
+# --- achados da revisão de 09/11/2026 ---------------------------------------
+def test_duas_vendas_da_unidade_no_mes_vao_para_revisao():
+    api = ApiCondominio()
+    outra = dict(api.registros[0], saleId="venda-16", id="r2")
+    api.registros.append(outra)
+    a = _uma_linha(api)
+    assert not a.anexo and not a.marcado
+    assert "2 vendas" in a.revisao
+    assert CONTRATO_COND in a.anexos_da_obra     # a janela mostra para escolher
+
+
+def test_condominio_sem_comprador_vai_para_revisao():
+    api = ApiCondominio()
+    api.registros[0].update(description="VENDA UNIDADE 15",
+                            customerName="EMPRESA BURITIS LTDA")
+    a = _uma_linha(api)
+    assert not a.anexo and "comprador" in a.revisao
+
+
+def test_condominio_retem_o_que_nao_se_confirma_como_contrato_de_venda(tmp_path):
+    api = ApiCondominio()
+    achados = levantar(api, 2026, 10, EMPRESAS, log=_sem_log)
+    sem_partes = TEXTO_COND.replace("VENDEDORA:", "").replace("COMPRADOR:", "")
+    _arquivar(api, achados, tmp_path, leitor=lambda _b: Leitor(sem_partes))
+    assert not achados[0].arquivado
+    assert "contrato de venda" in achados[0].revisao
+
+
+def test_guarda_escolhido_a_mao_no_condominio_ainda_grava(tmp_path):
+    api = ApiCondominio()
+    achados = levantar(api, 2026, 10, EMPRESAS, log=_sem_log)
+    aplicar_resolucao(achados[0], anexo=CONTRATO_COND)
+    sem_partes = TEXTO_COND.replace("VENDEDORA:", "").replace("COMPRADOR:", "")
+    _arquivar(api, achados, tmp_path, leitor=lambda _b: Leitor(sem_partes))
+    assert achados[0].arquivado
+
+
+def test_copias_de_texto_mantem_a_versao_que_se_diz_completa():
+    nomes = ["CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 .pdf",
+             "CONTRATO DE COMPRA E VENDA TB 21 QD 46 LT 18 CS 01 ASSINADO .pdf",
+             "DISTRATO TB 21 QD 46 LT 18 CS 01 .pdf"]
+    anexos = [{"id": f"v{i}", "filename": n, "extension": ".pdf",
+               "downloadUrl": f"https://exemplo.invalid/v{i}"}
+              for i, n in enumerate(nomes)]
+    api = ApiDuble(UMA_CASA, anexos={"obra-1": anexos})
+    api.conteudos = {anexos[0]["downloadUrl"]: b"%PDF-um",
+                     anexos[1]["downloadUrl"]: b"%PDF-dois",
+                     anexos[2]["downloadUrl"]: b"%PDF-distrato"}
+    contrato = "COMPRADOR: PRIMEIRO COMPRADOR EXEMPLO, brasileiro.\n" + TEXTO
+    textos = {b"%PDF-um": contrato, b"%PDF-dois": contrato,
+              b"%PDF-distrato": "Distrato de outra pessoa qualquer"}
+    a = _uma_linha(api, abrir_pdf=lambda b: Leitor(textos[b]))
+    assert a.anexo["id"] == "v1"
+
+
+class _LeitorSemProva(Leitor):
+    def impressao(self):
+        return None
+
+
+def test_pagina_sem_texto_ou_erro_nao_prova_o_mesmo_contrato():
+    a = _uma_linha(_api_iguais(), abrir_pdf=lambda _b: _LeitorSemProva(TEXTO))
+    assert not a.anexo and "DIFERENTES" in a.revisao
+
+
+def test_imagens_diferentes_nao_sao_o_mesmo_contrato():
+    """Assinatura em imagem sobre a página não muda o texto."""
+    class ComImagem(Leitor):
+        def __init__(self, texto, imagens):
+            super().__init__(texto)
+            self.imagens = imagens
+
+        def impressao(self):
+            return (3, self.imagens)
+
+    fotos = {b"%PDF-um": (0, 0, 1), b"%PDF-dois": (0, 0, 2)}
+    a = _uma_linha(_api_iguais(), abrir_pdf=lambda b: ComImagem(TEXTO, fotos[b]))
+    assert not a.anexo and "DIFERENTES" in a.revisao
+
+
+def test_comparar_copias_abre_cada_pdf_uma_vez():
+    abertos = []
+
+    def abrir(b):
+        abertos.append(b)
+        return Leitor(TEXTO)
+
+    grupo = [SimpleNamespace(anexo={"filename": "A"}, dados=d)
+             for d in (b"um", b"dois", b"tres")]
+    assert len(_sem_copias_de_texto(grupo, abrir)) == 1
+    assert sorted(abertos) == [b"dois", b"tres", b"um"]
+
+
+def test_parar_interrompe_a_comparacao_de_copias():
+    def abrir(_b):
+        pytest.fail("com o Parar acionado não se lê PDF")
+
+    grupo = [SimpleNamespace(anexo={"filename": "A"}, dados=d) for d in (b"um", b"dois")]
+    assert _sem_copias_de_texto(grupo, abrir, cancelar=lambda: True) == grupo
+
+
+def _api_de_abrir(obra, venda=()):
+    return SimpleNamespace(
+        anexos_de_obras=lambda ids, log=None: {ids[0]: list(obra)},
+        anexos_da_venda=lambda _v: list(venda))
+
+
+def test_abrir_acha_pelo_id_e_nao_pelo_nome():
+    a1 = dict(IGUAIS[0], downloadUrl="fresca-1")
+    a2 = dict(IGUAIS[1], downloadUrl="fresca-2")
+    achado = _uma_linha(_api_iguais())
+    assert anexo_atual(_api_de_abrir([a1, a2]), achado, IGUAIS[1]) == a2
+
+
+def test_abrir_relê_o_anexo_do_lancamento_no_condominio():
+    fresco = dict(CONTRATO_COND, downloadUrl="fresca")
+    achado = _uma_linha(ApiCondominio())
+    assert anexo_atual(_api_de_abrir([], [fresco]), achado, CONTRATO_COND) == fresco
+
+
+def test_abrir_sem_lista_nova_fica_com_o_que_tinha():
+    achado = _uma_linha(ApiCondominio())
+    assert anexo_atual(_api_de_abrir([], []), achado, CONTRATO_COND) == CONTRATO_COND

@@ -82,6 +82,11 @@ def _norm(nome: str) -> str:
     return util.norm_espaco(re.sub(r"[-_.]", " ", nome or ""))
 
 
+def _cabeca(anexo: dict) -> str:
+    """O nome até o primeiro " - ", com `+` no lugar de espaço desfeito."""
+    return _nome(anexo).replace("+", " ").split(" - ", 1)[0]
+
+
 def _chave_do_anexo(anexo: dict) -> tuple:
     """Identidade do anexo: o nome e o id do ERP (sem id, só o nome)."""
     return (_norm(_nome(anexo)), str(anexo.get("id") or ""))
@@ -113,20 +118,20 @@ def eh_distrato(nome: str) -> bool:
 
 
 def distratos_da_casa(anexos: list[dict], unidade: int | None) -> list[dict]:
-    """Anexos que são distratos, são da casa pedida, sem repetir nome normalizado.
+    """Anexos que são distratos, são da casa pedida, sem repetir o registro.
 
     Retorna na ordem do ERP. Sem unidade → [].
     """
     if not unidade:
         return []
-    vistos: dict[str, dict] = {}
+    vistos: dict[tuple, dict] = {}
     for a in anexos or []:
         nome = _nome(a)
         if not eh_distrato(nome):
             continue
         if numero_da_unidade(nome) != unidade:
             continue
-        vistos.setdefault(_norm(nome), a)
+        vistos.setdefault(_chave_do_anexo(a), a)
     return list(vistos.values())
 
 
@@ -204,18 +209,19 @@ def candidatos_do_lancamento(anexos: list[dict],
     """Os contratos da unidade entre os anexos do lançamento da venda.
 
     O robô de venda grava `CONTRATO CONDOMÍNIO … CASA 15 - NOME`, sem "compra e
-    venda" no nome, e a equipe sobe com `+` no lugar do espaço. A unidade é
-    lida só antes do primeiro " - ": o resto é o nome do comprador, texto
-    livre. Registros de mesmo id contam como um."""
+    venda" no nome, e a equipe sobe com `+` no lugar do espaço. "Contrato" sozinho
+    não serve: o lançamento pode ter contrato de corretagem. Tudo é lido só
+    antes do primeiro " - ": o resto é o nome do comprador, texto livre.
+    Registros de mesmo id contam como um."""
     if not unidade:
         return []
     vistos: dict[tuple, dict] = {}
     for a in anexos or []:
-        nome = _nome(a).replace("+", " ")
-        n = _norm(nome)
-        if not ("CONTRATO" in n or eh_compra_e_venda(nome)) or excluido_por(nome):
+        cabeca = _cabeca(a)
+        n = _norm(cabeca)
+        if not (eh_compra_e_venda(cabeca) or ("CONTRATO" in n and "CONDOMINIO" in n)):
             continue
-        if numero_da_unidade(nome.split(" - ", 1)[0]) != unidade:
+        if excluido_por(cabeca) or numero_da_unidade(cabeca) != unidade:
             continue
         vistos.setdefault(_chave_do_anexo(a), a)
     return list(vistos.values())
@@ -232,15 +238,25 @@ def contrato_do_lancamento(anexos: list[dict], unidade: int | None,
                       f"{rotulo_da_unidade(unidade, tipo)}")
     if len(achados) == 1:
         return achados[0], "único contrato no lançamento da venda"
-    completos = [a for a in achados if eh_mais_completo(_nome(a))]
+    completos = [a for a in achados if eh_mais_completo(_cabeca(a))]
     if len(completos) == 1:
         return completos[0], ("a versão mais completa entre "
                               f"{len(achados)} candidatos")
     return None, motivo_da_disputa(achados, unidade, tipo)
 
 
-def ordenar_para_escolha(anexos: list[dict],
-                         unidade: int | None) -> list[tuple[dict, bool]]:
+def mesmo_anexo(a: dict, b: dict) -> bool:
+    """É o mesmo anexo do ERP? Pelo id; sem id em algum dos dois, pelo nome."""
+    ida, idb = (a or {}).get("id"), (b or {}).get("id")
+    if ida and idb:
+        return str(ida) == str(idb)
+    nome = _norm(_nome(a or {}))
+    return bool(nome) and nome == _norm(_nome(b or {}))
+
+
+def ordenar_para_escolha(anexos: list[dict], unidade: int | None,
+                         lancamento: list[dict] | None = None
+                         ) -> list[tuple[dict, bool]]:
     """[(anexo, é candidato)] para a janela de escolha à mão.
 
     Candidatos primeiro, o resto depois, os dois em ordem de nome. A obra
@@ -250,7 +266,14 @@ def ordenar_para_escolha(anexos: list[dict],
 
     A lista INTEIRA aparece de propósito. Quando nenhum anexo diz COMPRA E
     VENDA, os candidatos são zero — e é exatamente aí que a pessoa precisa
-    ver o resto para achar o arquivo que foi salvo com outro nome."""
-    marcados = {_norm(_nome(a)) for a in candidatos(anexos or [], unidade)}
-    return sorted(((a, _norm(_nome(a)) in marcados) for a in (anexos or [])),
+    ver o resto para achar o arquivo que foi salvo com outro nome.
+
+    No condomínio (`lancamento` dado), candidato é só o contrato do lançamento
+    da venda: a obra não responde por ele, mesmo com nome parecido."""
+    if lancamento is not None:
+        fontes = candidatos_do_lancamento(lancamento, unidade)
+    else:
+        fontes = candidatos(anexos or [], unidade)
+    marcados = {_chave_do_anexo(a) for a in fontes}
+    return sorted(((a, _chave_do_anexo(a) in marcados) for a in (anexos or [])),
                   key=lambda par: (not par[1], _norm(_nome(par[0]))))
