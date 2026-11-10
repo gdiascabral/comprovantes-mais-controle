@@ -143,10 +143,28 @@ def conferir_tipo(texto: str) -> str:
 
 
 # --------------------------------------------------------------- endereço
-def conferir_rua(texto: str, rua: str) -> str:
+def conferir_rua(texto: str, rua: str, complemento: str = "") -> str:
+    """A rua do cadastro da obra aparece no contrato.
+
+    O contrato pode encurtar o nome da rua: o cadastro diz "Rua Nome Sobrenome"
+    e o contrato do portal escreve "RUA NOME QD. 01 LT 35 CASA 01" (10/11/2026,
+    três casas retidas em outubro/2026). Aceita-se o nome sem as últimas palavras
+    SÓ quando o que sobra vem colado à quadra e ao lote da obra — "NOME QD 01
+    LT 35" — porque a primeira palavra sozinha casaria qualquer rua que comece
+    igual."""
     if not (rua or "").strip():
         return ILEGIVEL
-    return _tem(rua, texto)
+    inteira = _tem(rua, texto)
+    if inteira != DIVERGE:
+        return inteira
+    palavras = _preparar(rua).split()
+    quadra_lote = _preparar(complemento or "")
+    if quadra_lote:
+        for n in range(len(palavras) - 1, 0, -1):
+            curto = " ".join(palavras[:n])
+            if re.search(r"\b" + re.escape(curto + " " + quadra_lote) + r"\b", texto):
+                return CONFERE
+    return DIVERGE
 
 
 def conferir_quadra_lote(texto: str, complemento: str) -> str:
@@ -276,7 +294,8 @@ def conferir(texto: str, esperado: dict) -> dict:
 
     return {
         "tipo": conferir_tipo(preparado),
-        "rua": conferir_rua(preparado, esperado.get("rua", "")),
+        "rua": conferir_rua(preparado, esperado.get("rua", ""),
+                            esperado.get("complemento", "")),
         "quadra_lote": conferir_quadra_lote(preparado,
                                             esperado.get("complemento", "")),
         "casa": conferir_casa(preparado, esperado.get("unidade"),

@@ -107,3 +107,11 @@ paths:
   prazo: outubro perdeu 15 de 16 downloads assim. `arquivar` relê a lista da obra
   (e do lançamento, no condomínio) uma vez por obra e baixa pelo link novo
   (`_baixar_do_jeito_certo`); falhando a releitura, tenta o link da busca.
+
+  **Rua encurtada no contrato (10/11/2026).** O ponto RUA procura o endereço
+  da obra no texto. O portal escreve só o começo do nome da rua ("RUA NOME QD.
+  01 LT 35 CASA 01" para a "Rua Nome Sobrenome" do cadastro), e outubro/2026
+  reteve três casas assim. `conferir_rua` aceita o nome sem as últimas
+  palavras **só colado à quadra e ao lote da obra** ("NOME QD 01 LT 35"): a
+  primeira palavra sozinha casaria qualquer rua que comece igual, e lote
+  diferente continua DIVERGE.
