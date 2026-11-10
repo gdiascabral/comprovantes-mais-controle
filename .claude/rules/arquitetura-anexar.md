@@ -33,6 +33,11 @@ paths:
   nenhum servir, o diagnostico.log grava quais campos vieram — só os NOMES,
   sem valores — para acertar a lista sem chutar de novo.
   Também baixa anexos (fetch → base64) para a Conferência.
+  **`_fetch_json` repete UMA vez o GET cortado pela navegação** (10/11/2026:
+  "TypeError: Failed to fetch" no Buscar dos Pagamentos do dia, com o login
+  principal recarregando a página): só para `CORRIDA_DE_NAVEGACAO` ("Failed to
+  fetch", "Execution context was destroyed"), depois de `ESPERA_CORRIDA_MS`;
+  navegador fechado e a 2ª falha sobem. POST/PUT não passam por ele.
   **São DOIS back-ends e dois cabeçalhos**: `capturar_credenciais` ouve a tela
   de Pagamentos (títulos, recebimentos) e `capturar_credenciais_anexos` ouve a
   tela de UM lançamento (anexos, obras — `_base_erp`). Quem tem um lançamento

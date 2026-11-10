@@ -55,6 +55,11 @@ _JS_FETCH_JSON = """async ({ url, headers }) => {
   return await r.json();
 }"""
 
+#: A página do ERP navegou entre o pedido e a resposta (ver `_fetch_json`).
+#: "browser has been closed" não entra: é navegador morto, não corrida.
+CORRIDA_DE_NAVEGACAO = ("Failed to fetch", "Execution context was destroyed")
+ESPERA_CORRIDA_MS = 2000
+
 _JS_FETCH_B64 = """async ({ url, headers }) => {
   const r = await fetch(url, { headers });
   if (!r.ok) return { __erro: r.status };
@@ -409,8 +414,21 @@ class MCApi:
 
     # ------------------------------------------------------------ fetch
     def _fetch_json(self, url: str, headers: dict):
-        """Faz a chamada de dentro da página logada (mesma origem/cookies/UA)."""
-        return self.page.evaluate(_JS_FETCH_JSON, {"url": url, "headers": headers})
+        """Faz a chamada de dentro da página logada (mesma origem/cookies/UA).
+
+        A página que navega no meio do pedido (o login principal entrando de
+        novo, 10/11/2026: "TypeError: Failed to fetch" no Buscar dos
+        Pagamentos do dia logo depois de o app atualizar) corta o `fetch` ou
+        mata o contexto do `evaluate`. É GET: repete UMA vez, depois de uma
+        espera curta, como `guias/painel.py` já faz com a mesma corrida."""
+        args = {"url": url, "headers": headers}
+        try:
+            return self.page.evaluate(_JS_FETCH_JSON, args)
+        except Exception as e:                              # noqa: BLE001
+            if not any(t in str(e) for t in CORRIDA_DE_NAVEGACAO):
+                raise
+            self.page.wait_for_timeout(ESPERA_CORRIDA_MS)
+            return self.page.evaluate(_JS_FETCH_JSON, args)
 
     # ------------------------------------------------------------ pagos
     def _consulta_pagos(self, filtros: list[tuple[str, str]]) -> tuple[str, dict]:
