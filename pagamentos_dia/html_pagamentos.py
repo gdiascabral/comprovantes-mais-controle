@@ -701,7 +701,7 @@ def e_reembolso_de(nome, pessoas) -> bool:
     return False
 
 
-def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None):
+def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None, incluidos=()):
     """(resultado, lancamentos, tirados) sem os reembolsos das `pessoas`.
 
     `tirados` é a lista do que saiu, uma frase por linha ("FAVORECIDO — R$ x
@@ -716,7 +716,8 @@ def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None):
     documento); no de pessoa física, pelo nome depois de "REEMBOLSO" no nº do
     documento. Nada é apagado de `self.resultado`: a planilha e a remessa
     continuam com o que o passo 2 confirmou — só o HTML deixa as linhas de
-    fora."""
+    fora. `incluidos`: os ids que o dono pôs de volta um a um (10/11/2026)."""
+    incluidos = {str(i) for i in (incluidos or ())}
     pessoas = [p for p in (pessoas or ()) if str(p).strip()]
     if not pessoas:
         return resultado, list(lancamentos or ()), []
@@ -725,7 +726,8 @@ def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None):
     for nome, regs in (getattr(resultado, "contas", None) or {}).items():
         ficam = []
         for r in regs:
-            if e_reembolso_de(r.get("reembolso_para"), pessoas):
+            if (str(r.get("id") or "") not in incluidos
+                    and e_reembolso_de(r.get("reembolso_para"), pessoas)):
                 tirados.append(f"{r.get('favorecido') or '?'} — "
                                f"{reais(r.get('valor') or 0)} — reembolso para "
                                f"{r.get('reembolso_para')}")
@@ -741,6 +743,7 @@ def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None):
         quem = (relatorio.quem_o_documento_diz_reembolsar(item, overview)
                 if relatorio.documento_declara_reembolso(item, overview) else "")
         if (e_conta_pf(relatorio.nome_da_conta(item)) and not item.get("paid")
+                and str(item.get("id") or "") not in incluidos
                 and e_reembolso_de(quem, pessoas)):
             tirados.append(f"{_texto(item.get('paidTo')) or '?'} — "
                            f"{reais(relatorio.valor_do_item(item))} — "

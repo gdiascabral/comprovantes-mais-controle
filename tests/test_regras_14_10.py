@@ -288,3 +288,15 @@ def test_lista_de_anexos_que_falhou_nao_vira_sem_anexo():
     res = relatorio.montar_registros([_lanc()], {}, {}, {},
                                      titulos_nao_lidos={"T-L1"})
     assert res.omitidos[0]["motivo"] == regras.MOTIVO_ANEXOS_NAO_LIDOS
+
+
+def test_reembolso_incluido_um_a_um_fica_no_html():
+    resultado = relatorio.Resultado({"CONTA A": [{"id": "a1", "reembolso_para": "FULANO"},
+                                                 {"id": "a2", "reembolso_para": "FULANO"}]}, [])
+    pf = [_lanc("p1", documentNumber="REEMBOLSO FULANO SILVA",
+                tradePayableAccount={"name": "PESSOA FISICA - APENAS LANÇAMENTO"})]
+    novo, lanc, tirados = html_pagamentos.tirar_reembolsos(
+        resultado, pf, ["FULANO"], incluidos={"a1", "p1"})
+    assert [r["id"] for r in novo.contas["CONTA A"]] == ["a1"]
+    assert [i["id"] for i in lanc] == ["p1"]
+    assert len(tirados) == 1

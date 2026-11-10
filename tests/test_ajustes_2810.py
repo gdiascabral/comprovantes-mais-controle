@@ -226,3 +226,17 @@ def test_conexao_parada_e_fechada_antes_do_proximo_pedido(monkeypatch):
     assert sessao.fechou == 0
     rest._acordar()           # 190 s parado: fecha
     assert sessao.fechou == 1
+
+
+def test_reembolso_incluido_um_a_um_fica_e_os_outros_saem():
+    """Dono, 10/11/2026: com a caixa desligada, alguns reembolsos o sócio
+    pede para pagar hoje e outros não."""
+    grupos = _grupos(_linha("1", "FULANO DE TAL", True), _linha("2", "FULANO DE TAL", True))
+    c, tirados = geracao.sem_reembolsos(cf.Conferencia(), grupos, ["FULANO"],
+                                        incluidos={"1"})
+    assert set(c.decisoes) == {"2"} and len(tirados) == 1
+    assert not geracao.so_pela_caixa(cf.Conferencia(), c, "1")
+    assert geracao.so_pela_caixa(cf.Conferencia(), c, "2")
+    # todos incluídos = a mesma conferência
+    base = cf.Conferencia()
+    assert geracao.sem_reembolsos(base, grupos, ["FULANO"], incluidos={"1", "2"})[0] is base

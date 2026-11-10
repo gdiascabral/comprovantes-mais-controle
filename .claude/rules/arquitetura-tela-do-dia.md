@@ -667,6 +667,29 @@ pela caixa recusa toda ação (`geracao.so_pela_caixa`): o "Desfazer" gravaria
 DESFAZER na nuvem e apagaria a edição real; (4) quem a caixa tirou vai ao
 Registro ao trocar e ao gerar o HTML (homônimo pelo prenome aparece).
 
+**Um a um com a caixa desligada (dono, 10/11/2026)**: "alguns reembolsos o
+JV ou o JC pedem para incluir, outros não". «Incluir mesmo assim» numa
+linha tirada SÓ pela caixa (`so_pela_caixa`) pergunta (padrão não) e põe o
+id em `_reembolsos_incluidos` — memória da tela, como a caixa, nada na
+nuvem; zera quando o dia de trabalho (`periodo.fim`) muda.
+`sem_reembolsos(incluidos=)` e `tirar_reembolsos(incluidos=)` pulam esses
+ids, então tela, a pagar, planilha, HTML, remessa e agendados concordam.
+Bloqueada também, a linha volta como bloqueada e o «Incluir mesmo assim»
+seguinte é o de sempre (motivo, nuvem). «Desmarcar» numa incluída a tira
+de novo, também só na tela. A PF do HTML (que não passa pela tela) não tem
+como ser escolhida um a um.
+
+## Reler só os lançamentos (10/11/2026)
+
+Botão ao lado do Buscar (dono: "faço alterações / acrescento coisas no ERP
+e quero reler"). `reler_lancamentos` → `_t_ler(periodo, contas)` com o
+MESMO período e os saldos já lidos: relê pagamentos, anexos e a nuvem do
+dia (as decisões são sobre os lançamentos), e não relê saldos do ERP, o
+Sicoob nem o Controle de aportes; `_lido_no_dia` fica o do Buscar. A tela
+velha fica à vista com os botões do dia apagados até a nova chegar; falhou,
+ela continua valendo e os botões voltam (`_drain`, "botoes"). O "Marcar
+agendados" já montado é remontado.
+
 ## Lançamento dividido em N boletos (entrega 5, tarefa 3b)
 
 `boletos_somados` faz N linhas com o MESMO id; cada `confirmacao.Linha` e cada
