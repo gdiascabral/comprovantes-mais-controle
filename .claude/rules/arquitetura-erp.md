@@ -123,6 +123,23 @@ paths:
   **Regra: robô nunca fecha o Chrome central** — nem `browser.close()` nem
   `ctx.close()`; com `connect_over_cdp` isso derruba os outros e a sessão.
   Cada um fecha só as abas que abriu (`AbaCentral`).
+  **Chrome central TRAVADO (09/11/2026)**: às 14:04 ele parou com a porta 9230
+  ABERTA e calada (janela "não respondendo"). `chrome_vivo` dava False, e cada
+  `garantir_chrome` abria OUTRO chrome.exe no perfil, preso para sempre no aviso
+  "o Chrome não está respondendo". O porteiro ficou preso numa chamada do
+  Playwright (`new_cdp_session` do `ids_das_abas`, sem prazo) até 14:33.
+  Agora: `central.estado_chrome` → "vivo"/"fechado"/"mudo" (porta aceita, nem
+  `PRAZO_LENTO` de 10 s responde); **só "fechado" sobe Chrome**, "mudo" levanta
+  `ChromeTravado` (RuntimeError, texto com "não responde na porta" — passageira
+  no `rodar_e_relatar.py`). O porteiro conta ciclos mudos (`Socorro`) e no
+  `LIMITE_MUDO`º (3, ~6 min) chama `central.matar_chrome` — **a única exceção à
+  regra acima, e só o porteiro a usa**. A `Guarda` (linha à parte, só HTTP e
+  processos) solta o porteiro preso: ciclo parado >5 min com Chrome mudo → mata
+  o Chrome; >15 min com Chrome vivo → mata o driver do Playwright; >20 min → sai
+  (código 3). A cada ciclo o porteiro grava `porteiro-vivo.json`, e
+  `python -m erp.vigia` (tarefa "MoraisEng - Vigia do porteiro", 5 em 5 min)
+  levanta o porteiro parado/preso e manda UM e-mail "PORTEIRO FORA" após 10 min
+  fora e UM "PORTEIRO VOLTOU". `ids_das_abas` pergunta o targetId uma vez por aba.
   **Todo `connect_over_cdp` no central passa por `central.conectar`**
   (09/11/2026). Em 04/11 e 09/11 ele estourou 180 s e a pessoa lia
   `Timeout 180000ms exceeded`; em 09/11 uma sonda alvo por alvo achou UMA aba

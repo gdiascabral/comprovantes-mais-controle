@@ -45,9 +45,11 @@ _PASTAS = ("", "inicio", "baixar_comprovantes", "separar_renomear", "anexar", "a
 #: Se um dia a interface passar a importar um deles, este teste volta a
 #: acusá-los assim que a linha de import existir.
 #: `erp/porteiro.py` é o mesmo caso: entrada de `python -m erp.porteiro`, rodada
-#: pelo Agendador com o Python da máquina; o exe nunca o importa.
+#: pelo Agendador com o Python da máquina; o exe nunca o importa. O
+#: `erp/vigia.py` (09/11/2026) também: `python -m erp.vigia`, só no servidor,
+#: e usa `smtplib` para o e-mail de "porteiro fora".
 _FORA = {"motor.py", "atualizador.py", "migrar.py", "cli.py", "__main__.py",
-         "porteiro.py"}
+         "porteiro.py", "vigia.py"}
 
 
 def _arquivos_do_app():

@@ -67,6 +67,19 @@ central ligado (ou rode com `MC_CENTRAL=off` e o porteiro parado):
 - `aportes/teste_lancamento.py`;
 - `dispositivo_erp.py`, do água e energia.
 
+## Chrome travado e o vigia (09/11/2026)
+
+- Chrome central travado (porta aberta, sem resposta): o porteiro NÃO abre
+  outro Chrome. Depois de 3 ciclos (~6 min) ele mata o Chrome do perfil e sobe
+  um novo. O log diz `CHROME TRAVADO` e depois `Chrome travado há 3 ciclos:
+  reiniciado`.
+- Porteiro preso: a guarda interna o solta (mata o Chrome travado ou o driver
+  do Playwright) e, em último caso, ele sai.
+- `python -m erp.vigia` (tarefa "MoraisEng - Vigia do porteiro", de 5 em 5 min):
+  porteiro parado → inicia a tarefa; preso >25 min → mata e inicia; fora do ok
+  >10 min → um e-mail "PORTEIRO FORA"; quando volta → "PORTEIRO VOLTOU".
+  Log: `_central\vigia-porteiro.log`. Sinal de vida: `_central\porteiro-vivo.json`.
+
 ## Comandos
 
 | Comando | O que faz |
