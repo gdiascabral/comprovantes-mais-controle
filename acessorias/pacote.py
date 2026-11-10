@@ -138,6 +138,16 @@ def linha_do_contrato(nome_do_arquivo: str) -> str:
     return linha
 
 
+def zip_vazio(caminho: Path) -> bool:
+    """Zip legível sem nenhum arquivo dentro. Ilegível NÃO é vazio: esse
+    continua indo para a tela, onde aparece como 'sem contratos no zip'."""
+    try:
+        with zipfile.ZipFile(caminho) as z:
+            return not [n for n in z.namelist() if not n.endswith("/")]
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
 def contratos_do_zip(caminho: Path) -> list[str]:
     """As linhas de contrato de dentro do zip, ordenadas pelo nome do arquivo.
 
@@ -203,6 +213,11 @@ def montar(mapa, ano: int, mes: int, nome_do_mes, nome_pasta_empresa,
         # `stem` tira só o ".zip" final; razão social com ponto ("EMPREEND.
         # BURITIS") continua inteira. É a armadilha que o `with_suffix()` já
         # causou no sicoob_zipar, do outro lado deste mesmo nome.
+        if zip_vazio(caminho):
+            # Empresa fora do fechamento deixa zip vazio (a pasta do mês nasce
+            # para todas): não há o que mandar, e virar solicitação travaria o
+            # lote por falta de 'vip_id' (PESSOAS FÍSICAS, outubro/2026).
+            continue
         empresa = por_nome.get(util.norm_espaco(caminho.stem))
         contratos = contratos_do_zip(caminho)
         try:
