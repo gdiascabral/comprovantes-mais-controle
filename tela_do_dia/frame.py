@@ -136,6 +136,12 @@ class TelaDoDiaFrame(ttk.Frame):
         # O dia em que os saldos foram lidos (o Buscar): com o ATÉ antes dele,
         # o saldo é o de agora (`decisoes.pergunta_saldo_de_agora`).
         self._lido_no_dia = None
+        # Reembolsos que o dono pôs de volta um a um com a caixa desligada
+        # (dono, 10/11/2026), e de que dia de trabalho: só da memória da tela,
+        # como a própria caixa; outro dia de trabalho começa vazio.
+        self._reembolsos_incluidos, self._incluidos_dia = set(), None
+        self._autenticacoes = None       # o último "Autenticar no banco", para a releitura
+        self._lendo_marca = False
         self._build()
         self.after(150, self._drain)
 
@@ -154,6 +160,11 @@ class TelaDoDiaFrame(ttk.Frame):
         self.b1 = widgets.Botao(cab.acoes, "Buscar pagamentos e saldos", papel="acao",
                                 command=self.buscar)
         self.b1.pack(side="left")
+        # Dono, 10/11/2026: mexeu no ERP (alterou, acrescentou) e quer reler
+        # só os lançamentos — os saldos e o Controle de aportes ficam.
+        self.b_reler = widgets.Botao(cab.acoes, "Reler só os lançamentos", papel="neutro",
+                                     state="disabled", command=self.reler_lancamentos)
+        self.b_reler.pack(side="left", padx=px((8, 0)))
 
         self._padx = PADX
         # SEMPRE no topo (dono, 29/10/2026: o dia começa conferindo no banco o
@@ -480,13 +491,15 @@ class TelaDoDiaFrame(ttk.Frame):
             w.configure(state=estado(b.dia))
         for w in (self.b_planilha, self.b_html, self.b_remessa):
             w.configure(state=estado(b.geradores))
+        lendo = self._lendo
         for w in (*self._botoes_do_passo2, *self._botoes_67):
-            w.configure(state=estado(b.passo2))
-        self._lista_ligada = b.passo2
+            w.configure(state=estado(b.passo2 and not lendo))
+        self._lista_ligada = b.passo2 and not lendo
         self._ligar_lista()
         # Durante a leitura quem manda no Buscar é a mensagem "botoes" do `_t_ler`.
         if not (self.worker and not self.worker.done()):
             self.b1.configure(state=estado(b.buscar))
+            self.b_reler.configure(state=estado(b.buscar and self.leitura is not None))
         # O "Reler Sicoob" segue a regra do Excel (leitura na tela, sem gravação).
         self.sicoob.ligar(b.dia)
         self.prova.ligar(b.dia)
@@ -573,6 +586,15 @@ class TelaDoDiaFrame(ttk.Frame):
                 elif tipo == "botoes":
                     self.b1.configure(state=valor)
                     self.b_stop.configure(state="disabled" if valor == "normal" else "normal")
+                    self._lendo_marca = valor != "normal"
+                    if valor == "normal":
+                        # A releitura que falhou deixa a leitura de antes na
+                        # tela: os botões dela voltam como estavam.
+                        self._ligar_botoes()
+                        self.b_reler.configure(state="normal" if (
+                            self.leitura is not None and not self._gravando) else "disabled")
+                    else:
+                        self.b_reler.configure(state="disabled")
                 elif tipo == "leitura":
                     self._receber_leitura(valor)
                 elif tipo == "gravou":
@@ -654,11 +676,45 @@ class TelaDoDiaFrame(ttk.Frame):
         self._mostrar_datas(periodo, hoje)
         self._limpar()
         self._parar.clear()
+        self._lendo_marca = True
         self.q.put(("botoes", "disabled"))
         self.q.put(("ocupado", True))
         self.q.put(("status", f"Lendo {periodo.descrever()}..."))
         self.worker = self.anx.submeter("Pagamentos do dia — ler", self._t_ler,
                                         periodo, dona=self)
+
+    def reler_lancamentos(self):
+        """Lê de novo SÓ os lançamentos (e a nuvem do dia, que decide sobre
+        eles) do mesmo período da tela; os saldos lidos, o Sicoob e o
+        Controle de aportes ficam (dono, 10/11/2026: "faço algumas
+        alterações / acrescento coisas no ERP e quero reler"). A tela de
+        antes fica à vista até a nova chegar, com os botões apagados; se a
+        releitura falhar, ela continua valendo."""
+        if self.worker and not self.worker.done():
+            return
+        if self.leitura is None or self.periodo is None:
+            return
+        if self._gravando:
+            messagebox.showinfo("Pagamentos do dia", "Espere a gravação na nuvem terminar.")
+            return
+        if self.anx.avisar_se_ocupado("os Pagamentos do dia", aba=self):
+            return
+        periodo = self.periodo
+        self._parar.clear()
+        self._lista_ligada = False
+        self._ligar_lista()
+        for b in self._botoes_do_dia:
+            b.configure(state="disabled")
+        self.sicoob.ligar(False)
+        self.prova.ligar(False)
+        self._lendo_marca = True
+        self.q.put(("botoes", "disabled"))
+        self.q.put(("ocupado", True))
+        self.q.put(("status", f"Relendo os lançamentos de {periodo.descrever()}..."))
+        self._log(f"\nRelendo os lançamentos e o saldo do sistema ({periodo.descrever()}); "
+                  "o Sicoob e o Controle de aportes continuam os da última busca.")
+        self.worker = self.anx.submeter("Pagamentos do dia — reler lançamentos", self._t_ler,
+                                        periodo, True, dona=self)
 
     def _mostrar_datas(self, periodo, hoje):
         """Os campos mostram o período que vai ser lido (o invertido sai
@@ -703,7 +759,12 @@ class TelaDoDiaFrame(ttk.Frame):
         self.sicoob.ligar(False)
         self.prova.ligar(False)
 
-    def _t_ler(self, periodo):
+    def _t_ler(self, periodo, so_lancamentos=False):
+        """`so_lancamentos` = "Reler só os lançamentos": o saldo do sistema é
+        relido junto (revisão de dinheiro, 10/11/2026: baixa feita no ERP
+        entre as duas leituras tira o título do a pagar E muda o saldo; saldo
+        velho com a pagar novo daria aporte mínimo baixo), mas o Sicoob e o
+        Controle de aportes não rodam de novo."""
         comeco = time.time()
         try:
             base = util.pasta_base()
@@ -743,7 +804,7 @@ class TelaDoDiaFrame(ttk.Frame):
             # Como a Conciliação (`conciliacao/frame.py`): relativo à pasta base.
             modelo = base / cfg.caminhos.get("modelo", "MODELO.xlsx")
             self.q.put(("leitura", (cfg, mapping, leitura, contas, ler_regras(modelo),
-                                    periodo, modelo, lido)))
+                                    periodo, modelo, lido, so_lancamentos)))
             self.q.put(("status", f"Leitura pronta em {util.fmt_dur(time.time() - comeco)}."))
         except Exception as e:                              # noqa: BLE001
             self._log("\n" + widgets.recado_de_erro(e, "Não consegui ler o dia."))
@@ -758,11 +819,21 @@ class TelaDoDiaFrame(ttk.Frame):
 
     def _receber_leitura(self, pacote):
         (self.cfg, self.mapping, self.leitura, self.contas_erp, self.regras,
-         self.periodo, self.modelo, lido) = pacote
+         self.periodo, self.modelo, lido, so_lancamentos) = pacote
         self._lido_no_dia = datetime.date.today()
+        if so_lancamentos:
+            # O que estava na tela some agora (como o `_limpar` do Buscar faz
+            # antes de ler): gravação velha não pinta a tela nova.
+            self._geracao += 1
+            self._iid_pag = {}
+        if self._incluidos_dia != self.periodo.fim:
+            self._reembolsos_incluidos, self._incluidos_dia = set(), self.periodo.fim
         self.lido, self.conferencia, self._nuvem_travada = lido, lido.conferencia, lido.erro
         lido.lido_em = datetime.datetime.now().strftime("%H:%M")
         self.marcas_agd = passo67.marcas_iniciais(lido.pendentes)
+        if so_lancamentos and self._autenticacoes:
+            # As provas do "Autenticar no banco" valem sobre a nuvem relida.
+            self._receber_autenticacao(self._autenticacoes)
         if lido.erro:
             self._log(f"[!] {lido.erro} — liberar, editar, à mão e agendados ficam "
                       "travados até buscar de novo")
@@ -788,6 +859,13 @@ class TelaDoDiaFrame(ttk.Frame):
         motivo = dc.motivo_sem_geradores(self.leitura)
         if motivo:
             self._log(motivo)
+        if so_lancamentos:
+            self._log("Lançamentos e saldo do sistema relidos; Sicoob e Controle de aportes "
+                      "continuam os de antes.")
+            # A lista do "Marcar agendados" já montada muda com os lançamentos.
+            self._remontar_para_marcar()
+            self._encher_para_marcar()
+            return
         self.sicoob.ler_se_faltar()
         # Ordem do dia (dono, 29/10/2026): depois dos saldos, o Controle de
         # aportes, sozinho — é dele o aviso de igualar e quem são os sócios.
@@ -1347,10 +1425,10 @@ class TelaDoDiaFrame(ttk.Frame):
         if self.leitura is None or self.periodo is None:
             return None
         ld = self._selecionada()
-        if ld is not None and geracao.so_pela_caixa(self.conferencia, self._conferencia_que_vale(),
-                                                    ld.pagamento.id):
-            messagebox.showinfo(titulo, "Esta linha saiu pela caixa «Reembolso para …» do "
-                                        "cartão 2. Marque a caixa para mexer nela.")
+        if ld is not None and self._so_pela_caixa(ld):
+            messagebox.showinfo(titulo, "Este reembolso saiu pela caixa «Reembolso para …» do "
+                                        "cartão 2. Para pagá-lo hoje, selecione e use «Incluir "
+                                        "mesmo assim»; para mexer em todos, marque a caixa.")
             return None
         tem_decisao = ld is not None and ld.pagamento.id in self.conferencia.decisoes
         recusa = passo2.recusa_da_selecao(ld, acao, tem_decisao, recado)
@@ -1366,6 +1444,11 @@ class TelaDoDiaFrame(ttk.Frame):
         A releitura traz TUDO da nuvem (`passo67.reler_tudo`: decisões, à
         mão, agendados, pendentes, nomes curtos, lista de ontem); o ERP não é
         relido aqui (fora da thread do navegador)."""
+        if self._lendo:
+            # Revisão de dinheiro (10/11/2026): gravada durante a releitura, a
+            # decisão chegava antes da tela nova e sumia dela.
+            messagebox.showinfo(titulo, "Espere a leitura terminar.")
+            return
         recusa = passo2.recusa_de_gravar(self._nuvem_travada, self._gravando)
         if recusa:
             messagebox.showwarning(titulo, recusa)
@@ -1444,8 +1527,35 @@ class TelaDoDiaFrame(ttk.Frame):
             for linha in passo67.registro_das_respostas(pend_antes, g.gravado):
                 self._log(f"  {linha}")
 
+    def _so_pela_caixa(self, ld) -> bool:
+        return geracao.so_pela_caixa(self.conferencia, self._conferencia_que_vale(),
+                                     ld.pagamento.id)
+
+    def _incluir_reembolso(self, ld) -> None:
+        """Põe de volta UM reembolso que a caixa desligada tirou (dono,
+        10/11/2026: "alguns reembolsos o JV ou o JC pedem para incluir,
+        outros não"). Só da memória da tela, como a caixa: nada vai à nuvem.
+        Se a linha também estiver bloqueada, ela volta como bloqueada, e o
+        «Incluir mesmo assim» seguinte é o de sempre (com motivo)."""
+        p = ld.pagamento
+        n = cf.partes_de(p)
+        partes = (f" Lançamento dividido em {n} boletos: entram as {n} partes."
+                  if n else "")
+        if not messagebox.askyesno("Incluir mesmo assim",
+                                   f"{passo2.descricao_de(p)}\n\nIncluir este reembolso "
+                                   f"hoje? Os outros continuam fora.{partes}", default="no"):
+            return
+        self._reembolsos_incluidos.add(str(p.id))
+        self._log(f"Reembolso incluído hoje: {passo2.descricao_de(p)}")
+        self._recalcular_reembolsos()
+
     def _liberar(self):
         titulo = "Incluir mesmo assim"
+        ld = self._selecionada()
+        if (ld is not None and self.leitura is not None and not self._gravando
+                and self._so_pela_caixa(ld)):
+            self._incluir_reembolso(ld)
+            return
         ld = self._selecao_para(passo2.A_LIBERAR, titulo,
                                 "Selecione um bloqueado ou um já enviado.")
         if ld is None:
@@ -1478,6 +1588,13 @@ class TelaDoDiaFrame(ttk.Frame):
         ld = self._selecionada()
         if ld is not None and ld.tipo == passo2.MAO:
             messagebox.showinfo(titulo, "Pagamento à mão não se desmarca: use «Remover à mão».")
+            return
+        if (ld is not None and str(ld.pagamento.id) in self._reembolsos_incluidos
+                and not self.var_reembolso.get()):
+            # O incluído um a um volta para fora do mesmo jeito: só na tela.
+            self._reembolsos_incluidos.discard(str(ld.pagamento.id))
+            self._log(f"Reembolso tirado de novo: {passo2.descricao_de(ld.pagamento)}")
+            self._recalcular_reembolsos()
             return
         ld = self._selecao_para(passo2.A_DESMARCAR, titulo,
                                 "Selecione um pagamento que vai sair.")
@@ -1639,7 +1756,17 @@ class TelaDoDiaFrame(ttk.Frame):
     # ------------------------------- agendados a confirmar, passos 6 e 7 (nuvem)
     # Regra nenhuma mora aqui: quem decide é `passo67` / `agendados` /
     # `lista_diretor` (puros, com teste). Gravar passa por `_na_nuvem`.
+    @property
+    def _lendo(self) -> bool:
+        """Do clique em Buscar/Reler até a mensagem "botoes" normal do fim do
+        `_t_ler` (que vem DEPOIS da "leitura" na fila). O `worker.done()` não
+        serve: ele ainda roda o `finally` quando a tela já recebeu tudo."""
+        return self._lendo_marca
+
     def _pode_gravar(self, titulo) -> bool:
+        if self._lendo:
+            messagebox.showinfo(titulo, "Espere a leitura terminar.")
+            return False
         recusa = passo2.recusa_de_gravar(self._nuvem_travada, self._gravando)
         if recusa:
             messagebox.showwarning(titulo, recusa)
@@ -1670,6 +1797,7 @@ class TelaDoDiaFrame(ttk.Frame):
         provado nasce marcado. Nada vai à nuvem: o "Pago" continua do dono."""
         if self.lido is None or not autenticacoes:
             return
+        self._autenticacoes = autenticacoes
         antes = self.lido.pendentes
         self.lido = _nd.com_provas_do_banco(self.lido, autenticacoes)
         self.marcas_agd = au.marcas_com_provas(self.marcas_agd, antes, self.lido.pendentes)
@@ -2001,7 +2129,8 @@ class TelaDoDiaFrame(ttk.Frame):
             return self.conferencia, []
         return geracao.sem_reembolsos(self.conferencia, self.leitura.grupos,
                                       self._pessoas_reembolso,
-                                      getattr(self.leitura, "entradas", None))
+                                      getattr(self.leitura, "entradas", None),
+                                      incluidos=self._reembolsos_incluidos)
 
     def _trocar_reembolso(self):
         nomes = " e ".join(self._pessoas_reembolso)
@@ -2010,6 +2139,11 @@ class TelaDoDiaFrame(ttk.Frame):
                      else "desligado — as linhas saem da tela, do HTML, da planilha e da remessa."))
         for linha in self._sem_reembolsos()[1]:
             self._log(f"  - fora hoje: {linha}")
+        if self._reembolsos_incluidos and not self.var_reembolso.get():
+            self._log(f"  ({len(self._reembolsos_incluidos)} incluído(s) um a um continuam hoje)")
+        self._recalcular_reembolsos()
+
+    def _recalcular_reembolsos(self):
         if self.dia is not None and self.leitura is not None and self.mapping is not None:
             self._recalcular_no_lugar()
             # A lista do "Marcar agendados" já montada também muda (revisão
@@ -2108,7 +2242,8 @@ class TelaDoDiaFrame(ttk.Frame):
         # pela tela.
         if self._pessoas_reembolso and not self.var_reembolso.get():
             resultado, lancamentos, tirados = html_pagamentos.tirar_reembolsos(
-                resultado, lancamentos, self._pessoas_reembolso, self.leitura.overviews)
+                resultado, lancamentos, self._pessoas_reembolso, self.leitura.overviews,
+                incluidos=self._reembolsos_incluidos)
             for linha in self._sem_reembolsos()[1]:
                 self._log(f"  - fora do HTML: {linha}")
             for linha in tirados:

@@ -231,7 +231,7 @@ def registro_a_mao(p, ordem: int) -> dict:
 MOTIVO_SEM_REEMBOLSO = "reembolso desligado no cartão 2 (não sai hoje)"
 
 
-def sem_reembolsos(conferencia, grupos, pessoas, entradas=None):
+def sem_reembolsos(conferencia, grupos, pessoas, entradas=None, incluidos=()):
     """(conferencia, tirados): a `conferencia` com os reembolsos das
     `pessoas` DESMARCADOS e a lista de quem saiu, uma frase por linha.
 
@@ -249,7 +249,11 @@ def sem_reembolsos(conferencia, grupos, pessoas, entradas=None):
     cadastro), com o nome editado na tela por cima. Os registros saem de
     `entradas` com TODOS os não aptos liberados, para o bloqueado que a nuvem
     liberou também ser achado. `tirados` vai ao Registro: o nome casa pelo
-    começo, e um homônimo tirado por engano tem de aparecer."""
+    começo, e um homônimo tirado por engano tem de aparecer.
+
+    `incluidos` (dono, 10/11/2026): os ids que o dono pôs de volta um a um
+    com o "Incluir mesmo assim" — alguns reembolsos o sócio pede para pagar
+    hoje, outros não. Ficam como se a caixa estivesse ligada só para eles."""
     pessoas = [p for p in (pessoas or ()) if str(p).strip()]
     if not pessoas:
         return conferencia, []
@@ -265,8 +269,11 @@ def sem_reembolsos(conferencia, grupos, pessoas, entradas=None):
         for ln in (*g.entram, *g.nao_aptos):
             candidatos.append((ln.id, getattr(ln, "favorecido", ""), getattr(ln, "valor", None),
                                ln.reembolso_nome if getattr(ln, "reembolso", False) else ""))
+    incluidos = {str(i) for i in (incluidos or ())}
     alvos, tirados = [], []
     for ident, favorecido, valor, nome in candidatos:
+        if ident in incluidos:
+            continue
         d = decisoes.get(ident)
         nome = (d.edicoes.get("reembolso_nome") if d is not None else "") or nome
         if not ident or ident in alvos or not nome or not html_pagamentos.e_reembolso_de(nome, pessoas):
