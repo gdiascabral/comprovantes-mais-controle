@@ -135,7 +135,7 @@ def test_zip_sem_pasta_de_contratos_nao_inventa_lista(mes):
 
 
 def test_zip_vazio_nao_quebra(mes):
-    alvo = _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "ALFA"), {})
+    alvo = _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "ALFA"), {"SICOOB/x.ofx": b"x"})
     assert pacote.contratos_do_zip(alvo) == []
 
 
@@ -179,10 +179,29 @@ def test_montar_casa_o_zip_com_a_empresa_e_escreve_a_mensagem(mes, tmp_path):
 
 
 def test_vip_nome_e_quem_entra_no_assunto(mes, tmp_path):
-    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "ALFA"), {})
+    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "ALFA"), {"SICOOB/x.ofx": b"x"})
     mapa = _mapa(tmp_path, [_empresa("ALFA", vip_id="340",
                                      vip_nome="Alfa Empreendimentos")])
     assert _montar(mapa)[0].assunto.endswith("- Alfa Empreendimentos")
+
+
+def test_zip_vazio_nao_vira_envio_nem_trava_o_lote(mes, tmp_path):
+    """Empresa fora do fechamento (pasta do mês sem arquivo) deixava um zip
+    vazio, que virava solicitação e travava o lote por falta de 'vip_id'."""
+    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "ALFA"), {"SICOOB/x.ofx": b"x"})
+    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "FORA"), {})
+    mapa = _mapa(tmp_path, [_empresa("ALFA", vip_id="340"), _empresa("FORA")])
+
+    envios = _montar(mapa)
+    assert [e.empresa for e in envios] == ["ALFA"]
+    assert pacote.impedimentos(envios) == []
+
+
+def test_zip_ilegivel_continua_aparecendo(mes, tmp_path):
+    alvo = mes / f"{scfg.nome_pasta_empresa(ANO, MES, 'ALFA')}.zip"
+    alvo.write_bytes(b"isto nao e um zip")
+    mapa = _mapa(tmp_path, [_empresa("ALFA", vip_id="340")])
+    assert [e.empresa for e in _montar(mapa)] == ["ALFA"]
 
 
 def test_razao_social_com_ponto_continua_inteira(mes, tmp_path):
@@ -190,7 +209,7 @@ def test_razao_social_com_ponto_continua_inteira(mes, tmp_path):
     lado de quem LÊ o nome: 'ALFA EMPREEND. BETA' não pode virar
     'ALFA EMPREEND'."""
     nome = "ALFA EMPREEND. BETA"
-    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, nome), {})
+    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, nome), {"SICOOB/x.ofx": b"x"})
     mapa = _mapa(tmp_path, [_empresa(nome, vip_id="340")])
 
     envios = _montar(mapa)
@@ -199,7 +218,7 @@ def test_razao_social_com_ponto_continua_inteira(mes, tmp_path):
 
 
 def test_zip_sem_empresa_no_cadastro_trava_o_lote(mes, tmp_path):
-    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "DESCONHECIDA"), {})
+    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "DESCONHECIDA"), {"SICOOB/x.ofx": b"x"})
     mapa = _mapa(tmp_path, [_empresa("ALFA", vip_id="340")])
 
     envios = _montar(mapa)
@@ -209,7 +228,7 @@ def test_zip_sem_empresa_no_cadastro_trava_o_lote(mes, tmp_path):
 
 
 def test_empresa_sem_vip_id_trava_o_lote(mes, tmp_path):
-    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "ALFA"), {})
+    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "ALFA"), {"SICOOB/x.ofx": b"x"})
     mapa = _mapa(tmp_path, [_empresa("ALFA")])
 
     envios = _montar(mapa)
@@ -239,7 +258,7 @@ def test_pasta_do_mes_inexistente_nao_e_erro(tmp_path):
 
 
 def test_so_arquivos_zip_entram(mes, tmp_path):
-    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "ALFA"), {})
+    _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, "ALFA"), {"SICOOB/x.ofx": b"x"})
     (mes / "anotacoes.txt").write_text("nada a ver", encoding="utf-8")
     mapa = _mapa(tmp_path, [_empresa("ALFA", vip_id="340")])
     assert [e.empresa for e in _montar(mapa)] == ["ALFA"]
@@ -248,7 +267,7 @@ def test_so_arquivos_zip_entram(mes, tmp_path):
 def test_uma_solicitacao_por_zip_encontrado(mes, tmp_path):
     """A pasta manda: quem não foi zipado simplesmente não vai."""
     for nome in ("ALFA", "BETA"):
-        _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, nome), {})
+        _zipar(mes, scfg.nome_pasta_empresa(ANO, MES, nome), {"SICOOB/x.ofx": b"x"})
     mapa = _mapa(tmp_path, [_empresa("ALFA", vip_id="1"),
                             _empresa("BETA", vip_id="2"),
                             _empresa("GAMA", vip_id="3")])

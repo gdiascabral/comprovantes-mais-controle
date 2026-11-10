@@ -183,6 +183,27 @@ def test_quadra_errada_diverge():
     assert r["quadra_lote"] == DIVERGE
 
 
+def test_rua_com_nome_encurtado_confere_colada_a_quadra_e_lote():
+    """O cadastro tem o nome inteiro da rua e o contrato só o começo."""
+    esperado = dict(ESPERADO, rua="Rua RPB 24 Exemplo Longo")
+    assert conferir(TEXTO_BOM, esperado)["rua"] == CONFERE
+
+
+def test_rua_encurtada_longe_da_quadra_diverge():
+    texto = TEXTO_BOM.replace("RUA RPB 24 QD 26 - A LT 14", "RUA RPB 24, ESQUINA, QD 26 - A LT 14")
+    esperado = dict(ESPERADO, rua="Rua RPB 24 Exemplo Longo")
+    assert conferir(texto, esperado)["rua"] == DIVERGE
+
+
+def test_rua_que_so_comeca_igual_e_de_outro_lote_diverge():
+    esperado = dict(ESPERADO, rua="Rua RPB 24 Exemplo Longo", complemento="QD 26A LT 15")
+    assert conferir(TEXTO_BOM, esperado)["rua"] == DIVERGE
+
+
+def test_rua_de_outro_nome_continua_divergindo():
+    assert conferir(TEXTO_BOM, dict(ESPERADO, rua="Rua Outra Coisa"))["rua"] == DIVERGE
+
+
 def test_acento_e_caixa_nao_atrapalham():
     assert conferir(TEXTO_BOM, dict(ESPERADO, rua="rua rpb 24"))["rua"] == CONFERE
 

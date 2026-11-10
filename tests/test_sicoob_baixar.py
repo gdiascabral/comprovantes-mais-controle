@@ -153,6 +153,23 @@ def test_zip_avisa_pasta_de_banco_vazia(mapa):
     assert alfa.pastas_vazias == ["CAIXA"]     # o mês ainda não fechou
 
 
+def test_empresa_sem_nenhum_arquivo_nao_gera_zip(mapa):
+    """Pasta do mês vazia = empresa fora do fechamento: sem zip, e o zip vazio
+    de uma rodada anterior sai; zip com conteúdo nunca é apagado."""
+    from extratos_sicoob import sicoob_pastas as sp
+    sp.criar(sp.planejar(mapa, 2026, 7))
+    base = sp.caminho_do_mes(mapa, 2026, 7)
+    (base / "JULHO 2026 - ALFA" / "SICOOB" / "202607 SICOOB.ofx").write_text("x")
+    velho = base / "JULHO 2026 - BETA.zip"
+    with zipfile.ZipFile(velho, "w"):
+        pass
+    resultados = sz.zipar_mes(mapa, 2026, 7, log=lambda *_: None)
+    beta = next(r for r in resultados if r.empresa == "BETA")
+    assert beta.caminho is None and beta.arquivos == 0
+    assert not velho.exists()
+    assert (base / "JULHO 2026 - ALFA.zip").exists()
+
+
 def test_zipar_mes_inexistente_avisa(mapa):
     with pytest.raises(FileNotFoundError):
         sz.zipar_mes(mapa, 2026, 7, log=lambda *_: None)

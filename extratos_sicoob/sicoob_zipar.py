@@ -34,6 +34,14 @@ def pastas_vazias_da_empresa(pasta: Path) -> list[str]:
                   if sub.is_dir() and not any(sub.rglob("*")))
 
 
+def _zip_vazio(caminho: Path) -> bool:
+    try:
+        with zipfile.ZipFile(caminho) as z:
+            return not [n for n in z.namelist() if not n.endswith("/")]
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
 def zipar_mes(mapa: Mapa, ano: int, mes: int, log=print) -> list[ResultadoZip]:
     """Gera um zip por empresa. Avisa quais pastas estão vazias antes de
     empacotar, mas não impede: às vezes a empresa não tem mesmo o banco."""
@@ -56,6 +64,17 @@ def zipar_mes(mapa: Mapa, ano: int, mes: int, log=print) -> list[ResultadoZip]:
         # e o mes inteiro de uma empresa iria para o arquivo errado.
         alvo = pasta.parent / (pasta.name + ".zip")
         arquivos = [p for p in sorted(pasta.rglob("*")) if p.is_file()]
+        if not arquivos:
+            # Pasta do mês sem um arquivo sequer: é empresa que não entra no
+            # fechamento (PESSOAS FÍSICAS, MOURA DANTAS em outubro/2026), e o
+            # zip vazio virava uma solicitação na aba Acessórias — que trava o
+            # lote inteiro por falta de 'vip_id'. Zip vazio de rodada anterior
+            # sai junto; zip com conteúdo nunca é apagado aqui.
+            if alvo.exists() and _zip_vazio(alvo):
+                alvo.unlink()
+            log(f"{empresa.nome}: pasta sem nenhum arquivo — sem zip")
+            resultados.append(ResultadoZip(empresa.nome, None, 0, vazias))
+            continue
         # Grava ao lado e só então troca. Abrir o alvo em "w" TRUNCA o zip
         # anterior no próprio open: quem ziparia de novo para incluir o
         # extrato que faltava ficava, a uma queda de distância, sem o zip
