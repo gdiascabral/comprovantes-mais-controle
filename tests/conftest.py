@@ -491,6 +491,46 @@ def _login_principal_nunca_abre_chrome(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _sonda_nunca_no_chrome_de_verdade(monkeypatch):
+    """A sonda do Chrome central (`central.sondar_alvos`) se anexa a todas as
+    abas do Chrome que ela alcança. Testes que conectam com um Playwright
+    dublê usam 127.0.0.1:9230 de endereço, que é a porta do Chrome central
+    do dono, e se o dublê "estoura" a sonda de verdade iria até lá. Porta da
+    faixa 9200-9299 falha o teste; o Chrome falso dos testes da sonda usa uma
+    porta sorteada pelo sistema, fora dela."""
+    from urllib.parse import urlsplit
+
+    from erp import central
+    original = central.sondar_alvos
+
+    def guarda(endereco, *a, **k):
+        porta = urlsplit(endereco).port or 0
+        if 9200 <= porta < 9300:
+            pytest.fail(f"teste tentou sondar o Chrome de verdade ({endereco})")
+        return original(endereco, *a, **k)
+    monkeypatch.setattr(central, "sondar_alvos", guarda)
+
+
+@pytest.fixture(autouse=True)
+def _porta_do_chrome_de_verdade_parece_fechada(monkeypatch):
+    """`central.porta_ouvindo` abre um socket em 127.0.0.1. Os testes usam
+    9230/9231 de porta, e no servidor a 9230 é a do Chrome central do dono:
+    lá ela está ABERTA, e todo teste de `garantir_chrome` viraria "Chrome
+    travado". Porta da faixa 9200-9299 conta como fechada; quem quer outra
+    resposta troca a função no próprio teste."""
+    from erp import central
+    original = central.porta_ouvindo
+
+    def guarda(a, *args, **k):
+        if 9200 <= a.porta < 9300:
+            return False
+        return original(a, *args, **k)
+    monkeypatch.setattr(central, "porta_ouvindo", guarda)
+    monkeypatch.setattr(central, "pids_do_chrome",
+                        lambda a, **k: pytest.fail("teste tentou listar o Chrome de verdade"))
+
+
+@pytest.fixture(autouse=True)
 def _sem_sessao_do_central_guardada():
     """A sessão pela página é guardada por processo; um teste não herda a do outro."""
     from erp import sessao

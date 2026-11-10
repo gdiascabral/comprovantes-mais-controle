@@ -71,3 +71,47 @@ paths:
   conta a casa e os recebimentos uma vez, não por linha. A Acessórias mantém
   a marca na linha de mensagem. Casa sem distrato segue a regra de um contrato por casa, sem ler
   PDF no levantamento.
+
+  **Condomínio: o contrato mora no lançamento da venda (regra do dono,
+  09/11/2026).** O robô de venda anexa o PDF no recebimento, com o nome
+  `CONTRATO CONDOMÍNIO … CASA 15 - NOME`. Por isso a linha UN lê
+  `MCApi.anexos_da_venda` (`GET /sales/<saleId>` dá o `tradeReceivable.id`;
+  depois `attachments/v2` com `entityOrigin=TRADE_RECEIVABLE_READJUSTED`) e
+  escolhe com `escolha.contrato_do_lancamento`, que só aceita nome com COMPRA E
+  VENDA ou CONTRATO + CONDOMINIO antes do primeiro " - " (o lançamento pode ter
+  contrato de corretagem). Os anexos da obra (centenas, no condomínio) nunca
+  respondem sozinhos: entram na janela de resolver, sem marca de candidato.
+  Falha ao ler o lançamento vira revisão dizendo isso, nunca "sem contrato".
+  **Duas vendas da mesma unidade no mês e unidade sem comprador vão para
+  revisão.** O caminho de distrato não vale para UN: venda distratada de
+  condomínio ainda depende da marca à mão na coluna (decisão a tomar quando o
+  primeiro caso existir). Na conferência, a casa é a PRIMEIRA `Unidade: Casa nº
+  15` do texto, que é a do objeto; `Casa 15` solta não conta, porque pode ser o
+  endereço de quem vende. Contrato achado sozinho precisa do ponto TIPO em
+  CONFERE no condomínio; escolhido à mão, não.
+
+  **Mesmo nome não é o mesmo arquivo (09/11/2026).** `candidatos_distintos` só
+  junta registros de mesmo id. Numa casa revendida, dois anexos de nome idêntico
+  eram contratos de compradores diferentes, e o segundo sumia da lista. Sobrando
+  mais de um, o pipeline baixa e compara: bytes iguais, ou **texto inteiro e
+  imagens por página** iguais na camada de texto (dois PDFs do mesmo envelope
+  Clicksign diferem nos bytes), são o mesmo documento (`LeitorPDF.impressao`).
+  OCR, página sem texto ou só as primeiras páginas não provam nada: a página de
+  assinaturas fica no fim. Entre cópias, fica a que se diz completa. A janela de
+  resolver e o "Abrir para olhar" identificam o anexo pelo id
+  (`escolha.mesmo_anexo`, `pipeline.anexo_atual`). Escolha à mão cujo nome ficou
+  repetido não volta sozinha na busca seguinte (`reaplicar`).
+
+  **O arquivar renova o link (09/11/2026).** O `downloadUrl` vale 30 min
+  (`X-Amz-Expires=1800`), e quem confere a tabela antes de arquivar passava do
+  prazo: outubro perdeu 15 de 16 downloads assim. `arquivar` relê a lista da obra
+  (e do lançamento, no condomínio) uma vez por obra e baixa pelo link novo
+  (`_baixar_do_jeito_certo`); falhando a releitura, tenta o link da busca.
+
+  **Rua encurtada no contrato (10/11/2026).** O ponto RUA procura o endereço
+  da obra no texto. O portal escreve só o começo do nome da rua ("RUA NOME QD.
+  01 LT 35 CASA 01" para a "Rua Nome Sobrenome" do cadastro), e outubro/2026
+  reteve três casas assim. `conferir_rua` aceita o nome sem as últimas
+  palavras **só colado à quadra e ao lote da obra** ("NOME QD 01 LT 35"): a
+  primeira palavra sozinha casaria qualquer rua que comece igual, e lote
+  diferente continua DIVERGE.

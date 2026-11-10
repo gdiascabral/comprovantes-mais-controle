@@ -48,9 +48,11 @@ _PASTAS = ("", "inicio", "baixar_comprovantes", "separar_renomear", "anexar", "a
 #: pelo Agendador com o Python da máquina; o exe nunca o importa.
 #: `erp/codigo_email.py` (04/11/2026) usa `imaplib`, que o motor não embute:
 #: quem o chama (`login_tela.passar_codigo_se_puder`) importa TARDE e trata o
-#: `ImportError` como "a pessoa digita o código" — no exe nada muda.
+#: `ImportError` como "a pessoa digita o código" — no exe nada muda. O
+#: `erp/vigia.py` (09/11/2026) é como o porteiro: `python -m erp.vigia`, só no
+#: servidor, e usa `smtplib` para o e-mail de "porteiro fora".
 _FORA = {"motor.py", "atualizador.py", "migrar.py", "cli.py", "__main__.py",
-         "porteiro.py", "codigo_email.py"}
+         "porteiro.py", "codigo_email.py", "vigia.py"}
 
 
 def _arquivos_do_app():

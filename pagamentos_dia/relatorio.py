@@ -1347,6 +1347,58 @@ def _valor_nos_textos(valor: float, textos) -> bool:
     return False
 
 
+#: Valor em dinheiro escrito no texto: "1.234,56", "726,48" (com fronteira de
+#: dígito, como no `_valor_nos_textos`).
+_DINHEIRO_NO_TEXTO = re.compile(r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+,\d{2}|\d{1,3},\d{2})(?!\d|[.,]\d)")
+
+
+def _e_documento_de_boleto(files, provas) -> bool:
+    """Anexo que é boleto (rótulo, nome ou linha digitável com DV fechando):
+    ali quem prova o valor é o código de barras, que tem trava própria
+    ("valor do boleto diverge"), e o resto do texto é histórico e juros."""
+    for f in files or ():
+        if "boleto" in chave(f"{f.get('tagName') or ''} {f.get('filename') or ''}"):
+            return True
+    for t in provas:
+        for linha in (t or "").splitlines():
+            d = ocr_boleto.digitos(linha)
+            for tamanho in (47, 48):
+                if any(ocr_boleto.valida(d[i:i + tamanho])
+                       for i in range(0, max(len(d) - tamanho, -1) + 1)):
+                    return True
+    return False
+
+
+def _valor_unico_diferente(item: dict, provas, files=()) -> float | None:
+    """O ÚNICO valor em dinheiro dos anexos, quando ele não é o do lançamento.
+
+    Caso de 05/11/2026 (dono, 06/11): o recibo da semana nova num lançamento
+    lido com o valor da semana anterior saiu "valor ?" e APTO. Só conta o anexo com UM valor: NF de itens e
+    demonstrativo têm vários números e nenhum deles é "o" valor — medido em
+    398 títulos reais de 09/10 a 06/11/2026 com texto no anexo, nenhum
+    barrado; ler o "valor total" rotulado barraria dois DARFs pagos certos.
+    Título pago em parte aceita também o total (o que falta + o já pago).
+    Só título de UMA parcela confirmada (`numberOfFinancingInstallments` 1):
+    a NF de R$ 1.500 de uma compra em três vezes de R$ 500 é o normal. E
+    nunca boleto (`_e_documento_de_boleto`). None = nada a acusar."""
+    try:
+        if int(item.get("numberOfFinancingInstallments") or 0) != 1:
+            return None
+    except (TypeError, ValueError):
+        return None
+    if _e_documento_de_boleto(files, provas):
+        return None
+    achados = {round(float(v.replace(".", "").replace(",", ".")), 2)
+               for t in provas for v in _DINHEIRO_NO_TEXTO.findall(t or "")}
+    achados.discard(0.0)
+    if len(achados) != 1:
+        return None
+    valor = valor_do_item(item)
+    aceitos = {round(valor, 2), round(valor + ja_pago_do_item(item), 2)}
+    unico = next(iter(achados))
+    return None if unico in aceitos or not valor else unico
+
+
 # --------------------------------------------------------------------------
 # CNPJ escrito no TEXTO da nota
 # --------------------------------------------------------------------------
@@ -1455,6 +1507,103 @@ def conferir_cnpj_da_nota(favorecido: str, pago_para: str, participantes,
                        f" × cadastro {', '.join(_cnpj_fmt(c) for c in conhecidos)}")
 
 
+#: Os rótulos de QUEM RECEBE no boleto. "Sacador/Avalista": no boleto emitido
+#: por intermediário (securitizadora, plataforma de cobrança), quem VENDEU
+#: aparece ali e o beneficiário é o intermediário — os dois contam.
+_ROTULO_DE_QUEM_RECEBE = re.compile(
+    r"benefici[aá]rio(?:\s+final)?|cedente|sacador\s*/?\s*avalista|sacador|avalista", re.I)
+#: Onde o bloco de quem recebe acaba: o rótulo seguinte de outro papel, ou
+#: o campo de texto livre (instruções citam NF e CNPJ de terceiros).
+_FIM_DO_BLOCO = re.compile(
+    r"pagador|\bsacado\b|instru[cç]|benefici[aá]rio|cedente|sacador|avalista|"
+    r"local\s+de\s+pagamento|nosso\s+n|uso\s+do\s+banco|data\s+do\s+documento", re.I)
+#: O CNPJ do bloco vem logo depois do rótulo (mesma linha ou a de baixo).
+_ALCANCE_DO_BLOCO = 160
+
+
+def cnpjs_do_beneficiario(texto: str) -> list[str]:
+    """CNPJs que o BOLETO atribui a quem recebe: o PRIMEIRO CNPJ válido do
+    bloco de cada rótulo Beneficiário/Cedente/Sacador/Avalista, até o rótulo
+    seguinte ou o fim do alcance. CNPJ solto em instrução, cabeçalho ou nota
+    junta no mesmo PDF não conta (revisão de dinheiro, 09/11/2026: qualquer
+    CNPJ do fornecedor no texto dava "beneficiário ✓" a boleto alheio)."""
+    texto = texto or ""
+    achados = []
+    for m in _ROTULO_DE_QUEM_RECEBE.finditer(texto):
+        trecho = texto[m.end():m.end() + _ALCANCE_DO_BLOCO]
+        fim = _FIM_DO_BLOCO.search(trecho)
+        if fim:
+            trecho = trecho[:fim.start()]
+        for c in _CNPJ_NO_TEXTO.finditer(trecho):
+            cnpj = regras.documento_valido(c.group(0))
+            if len(cnpj) == 14:
+                if cnpj not in achados:
+                    achados.append(cnpj)
+                break
+    return achados
+
+
+def conferir_beneficiario_do_boleto(texto_boleto: str, favorecido: str, pago_para: str,
+                                    participantes, files, textos: dict,
+                                    aceitos=()) -> tuple[str, str]:
+    """Autentica o BOLETO: o CNPJ de quem recebe (beneficiário ou
+    sacador/avalista) tem de ser o do EMITENTE DA NOTA anexada ou o do
+    CADASTRO do favorecido (dono, 09/11/2026: "autenticar o boleto, pra ver se
+    é da mesma empresa que emitiu a NF e a mesma que está no cadastro").
+
+    Devolve `(resultado, texto)`: "" quando não há o que comparar (boleto sem
+    CNPJ legível, ou nem nota nem cadastro com CNPJ), "ok", "filial" (mesma
+    raiz) ou "diverge". O boleto que vem no MESMO PDF da nota traz os dois
+    CNPJs no texto; a
+    conferência lê só o bloco de quem recebe (`cnpjs_do_beneficiario`) e,
+    como emitente da nota, só a parte de antes do boleto."""
+    do_boleto = cnpjs_do_beneficiario(texto_boleto)
+    if not do_boleto:
+        return "", ""
+    da_nota = []
+    for f in files or ():
+        if not tem_nf_anexada([f], textos):
+            continue
+        for m in _CHAVE_NFE.finditer(f.get("filename") or ""):
+            c = regras.documento_valido(dados_da_chave_nfe(m.group(1))["cnpj"])
+            if len(c) == 14 and c not in da_nota:
+                da_nota.append(c)
+        texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
+        if texto == texto_boleto:
+            # NF e boleto no mesmo PDF: o emitente é o da parte da NOTA, antes
+            # de o boleto começar; o beneficiário do boleto não pode
+            # confirmar a si mesmo.
+            inicio = _E_BOLETO_TEXTO.search(texto)
+            texto = texto[:inicio.start()] if inicio else ""
+        if texto:
+            da_nota += [c for c in cnpjs_do_emitente(texto) if c not in da_nota]
+    do_cadastro = []
+    contato = regras.documento_valido(
+        (participantes or {}).get(util.norm_espaco(favorecido)) or "")
+    achado = _CNPJ_NO_TEXTO.search(pago_para or "")
+    pix = regras.documento_valido(achado.group(0)) if achado else ""
+    for d in (contato, pix):
+        if len(d) == 14 and d not in do_cadastro:
+            do_cadastro.append(d)
+    if not (da_nota or do_cadastro):
+        return "", ""
+    # `aceitos`: CNPJ (ou raiz) que o dono cadastrou para este fornecedor no
+    # regras_fornecedor.json — a empresa do grupo que emite a cobrança, a
+    # securitizadora (`regras.beneficiarios_aceitos`).
+    if any(c == a or c[:8] == a for c in do_boleto for a in aceitos or ()):
+        return "ok", "beneficiário ✓ (aceito no cadastro de regras)"
+    iguais = [n for n, refs in (("NF", da_nota), ("cadastro", do_cadastro))
+              if any(c in refs for c in do_boleto)]
+    if iguais:
+        return "ok", f"beneficiário ✓ (= {' e '.join(iguais)})"
+    if any(c[:8] == r[:8] for c in do_boleto for r in da_nota + do_cadastro):
+        return "filial", "beneficiário ✓ (filial: mesma raiz)"
+    lados = ([f"NF {', '.join(_cnpj_fmt(c) for c in da_nota)}"] if da_nota else []) + \
+            ([f"cadastro {', '.join(_cnpj_fmt(c) for c in do_cadastro)}"] if do_cadastro else [])
+    return "diverge", (f"BENEFICIÁRIO DIVERGE: boleto "
+                       f"{', '.join(_cnpj_fmt(c) for c in do_boleto)} × {' × '.join(lados)}")
+
+
 #: Como os documentos escrevem quadra e lote, levados à sigla do ERP antes de
 #: procurar (dono, 28/10/2026: "dificuldade para achar o LT … para não
 #: pagarmos nada errado"). Espaços contados (`[ \t]{0,3}`), nunca `\s*`: não
@@ -1483,10 +1632,19 @@ _NAO_E_LOTE = (r"(?![.,]\d)(?!/\d{1,2}/\d)(?!/\d{4})(?!" + _E + r"(?:UN|UND|UNID
 #: hífen ("LT 71A", "LT 71-A", "QD 26A"), e o lote pode vir em lista ("LT 10,
 #: 11 e 12", "LT 10/11", "LT 10-11" sem espaço, "LOTES 71A, 71B"). A lista é só
 #: de LT: "QD 5 E LT 7" não pode virar uma lista de quadras.
+#: A letra do número também vem SEPARADA por um espaço ("QD 26 A LT 11": a NF
+#: de 09/11/2026 saiu "QD 26A não aparece"), mas só quando ela fecha o número
+#: — depois dela vem o fim da linha, pontuação ou a próxima sigla. Sem essa
+#: condição "LT 11 A 15" (faixa) e "LT 11 A PARTIR" virariam o lote 11A. E o
+#: "E" nunca é letra solta: é o "e" de "QD 5 E LT 7" e da lista de lotes.
+_LETRA_SOLTA = r"[ \t](?=[A-DF-Z](?![ \t]{0,3}/)[ \t]{0,3}(?:[\r\n,;)\-]|$|(?:QD|LT|CASA|CS)\b))"
+_LETRA = r"(?:-?|" + _LETRA_SOLTA + r")"
 _TOKEN_ENDERECO = re.compile(
-    r"\b(QD|LT|CASA|CS)" + _E + r"[.:\-]?" + _E + r"(\d{1,4})(?:-?([A-Z]))?\b" + _NAO_E_LOTE
-    + r"((?:(?:" + _E + r"(?:,|/|\bE\b)" + _E + r"|-)\d{1,3}(?:-?[A-Z])?\b" + _NAO_E_LOTE + r")*)")
-_ITEM_DA_LISTA = re.compile(r"(\d{1,3})(?:-?([A-Z]))?")
+    r"\b(QD|LT|CASA|CS)" + _E + r"[.:\-]?" + _E + r"(\d{1,4})(?:" + _LETRA + r"([A-Z]))?\b"
+    + _NAO_E_LOTE
+    + r"((?:(?:" + _E + r"(?:,|/|\bE\b)" + _E + r"|-)\d{1,3}(?:" + _LETRA + r"[A-Z])?\b"
+    + _NAO_E_LOTE + r")*)")
+_ITEM_DA_LISTA = re.compile(r"(\d{1,3})(?:" + _LETRA + r"([A-Z]))?")
 
 #: Distância máxima (caracteres) entre o fim da quadra e o lote do mesmo par.
 PERTO_DA_QUADRA = 15
@@ -1737,7 +1895,16 @@ def conferir_documento(item: dict, files, textos, overview=None,
         partes.append("valor/fornecedor ? (anexo sem texto)")
         return " · ".join(partes), divergiu
 
-    partes.append("valor ✓" if _valor_nos_textos(valor_do_item(item), provas) else "valor ?")
+    if _valor_nos_textos(valor_do_item(item), provas):
+        partes.append("valor ✓")
+    else:
+        outro = _valor_unico_diferente(item, provas, files)
+        if outro is None:
+            partes.append("valor ?")
+        else:
+            partes.append(f"VALOR DIVERGE: anexo {brl(outro)} × lançamento "
+                          f"{brl(valor_do_item(item))}")
+            divergiu = True
 
     alvo = chave(" ".join(textos))
     esperados = [p for p in re.findall(r"[a-z0-9]+", chave(item.get("paidTo") or ""))
@@ -1777,6 +1944,10 @@ class Resultado(NamedTuple):
 #: confirmação e na remessa CNAB (`remessa_dia.Candidato.apto` só aceita
 #: "APTO…"), e quem quiser pagar marca à mão. Liberar não é aprovar.
 STATUS_LIBERADO = "ATENÇÃO — liberado na tela do dia"
+#: O lançamento mudou no ERP entre a lista e o fim da leitura dos anexos
+#: (`leitura_do_dia.alterados_durante_a_leitura`, dono, 06/11/2026): a linha
+#: juntaria o valor/vencimento de um momento com o arquivo de outro.
+STATUS_ALTERADO_NA_LEITURA = "ATENÇÃO — alterado durante a leitura"
 
 
 def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
@@ -1785,7 +1956,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      ids_nao_confirmados=(), participantes=None,
                      cadastro_reembolso=None, anexos_nao_lidos=(),
                      qr_pix=None, titulos_nao_lidos=(),
-                     ids_liberados=()) -> Resultado:
+                     ids_liberados=(), alterados_na_leitura=()) -> Resultado:
     """Transforma lançamentos do ERP em linhas de planilha.
 
     `anexos`             {tradePayableId: [anexo]}
@@ -1814,6 +1985,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                          Desmarcado (`ids_nao_confirmados`) continua ganhando.
                          Liberado que seria APTO sai `STATUS_LIBERADO`, para
                          nunca nascer marcado na confirmação nem na remessa
+    `alterados_na_leitura` ids de lançamentos que mudaram no ERP enquanto os
+                         anexos eram lidos: saem `STATUS_ALTERADO_NA_LEITURA`
+                         (vazio = como sempre; só a `leitura_do_dia` passa)
     """
     pix_reembolso = pix_reembolso or {}
     regras_forn = regras_fornecedor or {}
@@ -1821,6 +1995,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
     ids_liberados = {str(i) for i in (ids_liberados or ())}
     anexos_nao_lidos = set(anexos_nao_lidos or ())
     titulos_nao_lidos = {str(t) for t in (titulos_nao_lidos or ())}
+    alterados_na_leitura = {str(i) for i in (alterados_na_leitura or ())}
     registros, omitidos = defaultdict(list), []
 
     for ordem, item in enumerate(lancamentos):
@@ -1906,6 +2081,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         #: boleto pode vir: QR de OUTRO anexo (fatura, orçamento) não paga o
         #: boleto registrado (revisão de dinheiro, 08/10/2026).
         anexo_da_linha, origem_qr = None, None
+        #: O anexo de onde saiu a linha digitável (para autenticar o
+        #: beneficiário); None quando a linha não saiu de anexo nenhum.
+        anexo_do_boleto = None
         onde = None          # o anexo com boleto indeciso (ramo do boleto)
         obs_linha, n_boletos = "", 0
         #: Quem recebe, quando o anexo é um aviso "PAGAR PARA". Fica None nas
@@ -2168,6 +2346,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # (um orçamento com QR estático pagaria antes do boleto chegar).
             if dados:
                 origem_qr = anexo_da_linha or pdf
+                anexo_do_boleto = origem_qr
             elif (pdf and _E_BOLETO.search(_rotulo(pdf))
                   and not obs_linha.startswith("O anexo é comprovante")):
                 origem_qr = pdf
@@ -2430,6 +2609,23 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # (`remessa_dia.preparar` só marca status "APTO…").
         if cnpj_res == "diverge" and not item.get("paid"):
             obs = " · ".join(filter(None, [cnpj_txt, obs]))
+        benef_res = ""
+        # Só boleto de COBRANÇA: guia de arrecadação (DARF, DAS, IPTU, a da
+        # prefeitura que sai pelo QR) não tem beneficiário com CNPJ, e o
+        # "Razão Social" dela é o NOSSO (revisão de dinheiro, 09/11/2026).
+        if (anexo_do_boleto and dados and not livre and not qr_usado
+                and len(ocr_boleto.digitos(dados)) == 47
+                and not ocr_boleto.eh_arrecadacao(dados)):
+            texto_boleto = textos.get(anexo_do_boleto.get("downloadUrl") or "") or ""
+            benef_res, benef_txt = conferir_beneficiario_do_boleto(
+                texto_boleto, favorecido, pago_para, participantes, files, textos,
+                aceitos=regras.beneficiarios_aceitos(favorecido, regras_forn))
+            if benef_txt:
+                conferencia = " · ".join(filter(None, [conferencia, benef_txt]))
+            if benef_res == "diverge" and not item.get("paid"):
+                obs = " · ".join(filter(None, [
+                    benef_txt + " — o boleto pode ser de outra empresa; confirmar "
+                    "com o fornecedor antes de pagar", obs]))
         novos = []
         if olhar:
             novos.append("ATENÇÃO — pagar à mão")
@@ -2439,6 +2635,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             novos.append("ATENÇÃO — vários boletos no título")
         if cnpj_res == "diverge":
             novos.append("ATENÇÃO — CNPJ da nota diferente do cadastro")
+        if benef_res == "diverge":
+            novos.append("ATENÇÃO — boleto de outra empresa")
         # O QR que virou o dado de pagamento num título que JÁ tem pagamento:
         # o QR estático continua anexado depois de pago, e aceita de novo.
         if qr_usado and ja_pago and not qr_alerta:
@@ -2452,6 +2650,11 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 status = novos[0]
         if divergiu:
             status = "ATENÇÃO — documento não bate"
+        if str(item.get("id")) in alterados_na_leitura and not item.get("paid"):
+            status = STATUS_ALTERADO_NA_LEITURA
+            obs = " · ".join(filter(None, [
+                "lançamento alterado no ERP durante a leitura (valor, vencimento ou "
+                "dados de pagamento): busque de novo antes de pagar", obs]))
         if chave_divergente:
             status = "ATENÇÃO — chave do reembolso divergente"
         # Por último entre os alarmes: pagar o valor errado é o pior deles.

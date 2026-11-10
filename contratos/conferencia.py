@@ -63,6 +63,9 @@ PARTICULAS_DE_EMPRESA = {"LTDA", "SPE", "EIRELI", "EPP", "ME", "SA", "S/A",
 #: de ser encontrado. O olhar para frente/para trás separa os dois casos.
 RE_PONTUACAO_SOLTA = re.compile(r"(?<!\d)[.,;:]|[.,;:](?!\d)")
 
+#: `XYZ-24` no contrato é a `XYZ 24` do cadastro: letra, hífen, número.
+RE_HIFEN_NO_CODIGO = re.compile(r"(?<=[A-Z])-(?=\d)")
+
 #: `QD26A` / `LT14` / `CS02` colados, como saem do OCR e de quem digita rápido.
 RE_CODIGO_COLADO = re.compile(r"\b(QD|LT|CS)(\d)")
 
@@ -84,7 +87,7 @@ def _preparar(texto: str) -> str:
     ("QUADRA 26 - A LOTE 14" só vira "QD 26A LT 14" depois de LOTE virar LT),
     e a letra do lote é juntada por último, porque o espaçador é quem separa
     `QD26A` em `QD 26 A` nos códigos longos."""
-    t = util.norm(texto)
+    t = RE_HIFEN_NO_CODIGO.sub(" ", util.norm(texto))
     t = RE_PONTUACAO_SOLTA.sub(" ", t)
     t = _com_espacos(" ".join(t.split()))
     for padrao, troca in SINONIMOS:
@@ -140,10 +143,28 @@ def conferir_tipo(texto: str) -> str:
 
 
 # --------------------------------------------------------------- endereço
-def conferir_rua(texto: str, rua: str) -> str:
+def conferir_rua(texto: str, rua: str, complemento: str = "") -> str:
+    """A rua do cadastro da obra aparece no contrato.
+
+    O contrato pode encurtar o nome da rua: o cadastro diz "Rua Nome Sobrenome"
+    e o contrato do portal escreve "RUA NOME QD. 01 LT 35 CASA 01" (10/11/2026,
+    três casas retidas em outubro/2026). Aceita-se o nome sem as últimas palavras
+    SÓ quando o que sobra vem colado à quadra e ao lote da obra — "NOME QD 01
+    LT 35" — porque a primeira palavra sozinha casaria qualquer rua que comece
+    igual."""
     if not (rua or "").strip():
         return ILEGIVEL
-    return _tem(rua, texto)
+    inteira = _tem(rua, texto)
+    if inteira != DIVERGE:
+        return inteira
+    palavras = _preparar(rua).split()
+    quadra_lote = _preparar(complemento or "")
+    if quadra_lote:
+        for n in range(len(palavras) - 1, 0, -1):
+            curto = " ".join(palavras[:n])
+            if re.search(r"\b" + re.escape(curto + " " + quadra_lote) + r"\b", texto):
+                return CONFERE
+    return DIVERGE
 
 
 def conferir_quadra_lote(texto: str, complemento: str) -> str:
@@ -161,13 +182,20 @@ def conferir_quadra_lote(texto: str, complemento: str) -> str:
 RE_LOTE_CASA = re.compile(r"\bLT\s*\d+[A-Z]?\s*-?\s*CS\s*(?:NO?\s*)?0*(\d{1,3})\b")
 
 
+#: `UN 15`, `UN CS NO 15`: como "Unidade: Casa nº 15" sai do `_preparar`.
+RE_UNIDADE_DO_OBJETO = re.compile(r"\bUN\s*(?:CS\s*)?(?:N[O°]?\s*)?0*(\d{1,3})\b")
+
+
 def conferir_casa(texto: str, unidade: int | None, tipo: str = "CS") -> str:
     if not unidade:
         return ILEGIVEL
     if tipo == "UN":
-        # Condomínio: não há lote+casa; vale a UNIDADE do objeto.
-        padrao = re.compile(rf"\bUN\s*(?:NO?\s*)?0*{unidade}\b")
-        return CONFERE if padrao.search(texto) else DIVERGE
+        # Condomínio: não há lote+casa. O contrato real diz "Unidade: Casa nº
+        # 15", e a PRIMEIRA unidade citada é a do objeto: uma vizinha citada
+        # depois não conta. Casa solta também não: pode ser o endereço de quem
+        # vende.
+        achou = RE_UNIDADE_DO_OBJETO.search(texto)
+        return CONFERE if achou and int(achou.group(1)) == unidade else DIVERGE
     objeto = {int(n) for n in RE_LOTE_CASA.findall(texto)}
     if objeto:
         return CONFERE if unidade in objeto else DIVERGE
@@ -266,7 +294,8 @@ def conferir(texto: str, esperado: dict) -> dict:
 
     return {
         "tipo": conferir_tipo(preparado),
-        "rua": conferir_rua(preparado, esperado.get("rua", "")),
+        "rua": conferir_rua(preparado, esperado.get("rua", ""),
+                            esperado.get("complemento", "")),
         "quadra_lote": conferir_quadra_lote(preparado,
                                             esperado.get("complemento", "")),
         "casa": conferir_casa(preparado, esperado.get("unidade"),

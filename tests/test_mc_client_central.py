@@ -49,7 +49,7 @@ class _PW:
         self.reg = reg
         r = reg
         class _Ch:
-            def connect_over_cdp(self, end):
+            def connect_over_cdp(self, end, **kw):
                 r.append(f"cdp {end}")
                 return _B(r)
             def launch_persistent_context(self, **k):
@@ -226,7 +226,7 @@ def test_cdp_que_falha_para_o_playwright(central_falso, monkeypatch):
     class _PWQueCai(_PW):
         def __init__(self, reg):
             super().__init__(reg)
-            def cai(end):
+            def cai(end, **kw):
                 raise RuntimeError("cdp recusou")
             self.chromium.connect_over_cdp = cai
 
@@ -250,3 +250,35 @@ def test_timeout_de_dentro_do_login_nao_vira_trava_ocupada(central_falso, monkey
     with pytest.raises(TimeoutError, match="rede"):
         mc.garantir_login()
     assert not (a.perfil.parent / ".principal.login.trava").exists()
+
+
+def test_estouro_do_cdp_vira_recado_e_para_o_driver(central_falso, monkeypatch):
+    """04/11 e 09/11/2026: o `connect_over_cdp` estourava 180 s e a pessoa via
+    `Timeout 180000ms exceeded`. Agora o prazo é o `central.PRAZO_CONEXAO`, a
+    sonda diz qual aba não responde, o detalhe vai ao diagnóstico e o driver
+    do Playwright para."""
+    from playwright.sync_api import TimeoutError as PWTimeout
+    a, reg = central_falso
+
+    class _PWTravado(_PW):
+        def __init__(self, reg):
+            super().__init__(reg)
+
+            def trava(end, **kw):
+                reg.append(f"timeout={kw.get('timeout')}")
+                raise PWTimeout("BrowserType.connect_over_cdp: Timeout exceeded")
+            self.chromium.connect_over_cdp = trava
+
+    monkeypatch.setattr(mc_client, "sync_playwright",
+                        lambda: type("S", (), {"start": lambda self: _PWTravado(reg)})())
+    monkeypatch.setattr(central, "sondar_alvos", lambda end, **k: [
+        central.AlvoSondado("1", "page", "Aba travada", "https://h.invalid/x",
+                            False, 6000.0)])
+    diags = []
+    monkeypatch.setattr(mc_client.config, "diag", diags.append)
+    with pytest.raises(central.ChromeSemResposta, match="Aba travada"):
+        with mc_client.MCClient(log=lambda *_: None, acesso=a):
+            pass
+    assert f"timeout={central.PRAZO_CONEXAO * 1000}" in reg
+    assert reg[-1] == "pw.stop"
+    assert any("não responde" in d for d in diags)

@@ -624,17 +624,15 @@ class ContratosFrame(ttk.Frame):
         nome = (anexo.get("filename") or "anexo").strip()
         try:
             api = self._api_com_anexos()
-            frescos = api.anexos_de_obras([achado.obra_id], log=lambda m: None)
-            atual = next(
-                (x for x in (frescos.get(achado.obra_id) or [])
-                 if util.norm_espaco(x.get("filename") or "")
-                 == util.norm_espaco(nome)), anexo)
+            atual = pipeline.anexo_atual(api, achado, anexo)
             dados = api.baixar_anexo(atual.get("downloadUrl"))
             if not dados:
                 self.q.put(("resolver", f"não consegui baixar \"{nome}\"."))
                 return
+            # O id no nome: dois anexos de nome igual não disputam o arquivo.
+            marca = str(anexo.get("id") or "")[:8]
             alvo = (Path(tempfile.gettempdir()) / "contratos-mais-controle"
-                    / (_limpar_nome(nome) or "anexo.pdf"))
+                    / (_limpar_nome(f"{marca} {nome}".strip()) or "anexo.pdf"))
             alvo.parent.mkdir(parents=True, exist_ok=True)
             alvo.write_bytes(dados)
             os.startfile(str(alvo))

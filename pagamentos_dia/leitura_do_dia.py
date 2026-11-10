@@ -45,6 +45,10 @@ class LeituraDosPagamentos:
     grupos: list = field(default_factory=list)
     avisos: list = field(default_factory=list)
     interrompida: bool = False
+    #: Ids dos lançamentos que mudaram no ERP entre a lista e o fim da
+    #: leitura dos anexos (`alterados_durante_a_leitura`). Vai com a leitura
+    #: para a Remessa/Retorno (`receber_apuracao`), que remonta por conta própria.
+    alterados: set = field(default_factory=set)
 
 
 class _Parada:
@@ -197,6 +201,48 @@ def ler_titulos_no_erp(api, tpids, log=print, cancelar=lambda: False) -> dict:
     return lidos
 
 
+#: O que, mudando no ERP no meio da leitura, muda o que a linha paga.
+_CAMPOS_QUE_PAGAM = ("remainingValue", "sumOfPaidValues", "plannedDate", "paid",
+                     "paidTo", "paidToBankAccount", "documentNumber", "description",
+                     "tradePayablePaymentMethod")
+
+
+def _assinatura(item: dict) -> tuple:
+    conta = item.get("tradePayableAccount")
+    conta = conta.get("name") if isinstance(conta, dict) else conta
+    return tuple(item.get(c) for c in _CAMPOS_QUE_PAGAM) + (conta,)
+
+
+def alterados_durante_a_leitura(antes, depois) -> tuple[list, set, list, list]:
+    """(lançamentos de agora, ids alterados, os que saíram, os que entraram).
+
+    Caso de 05/11/2026 (dono, 06/11): a lista foi lida às 15:29:30, no meio
+    de alguém criar e corrigir títulos, e os anexos foram lidos depois — a
+    linha saiu com o valor e o vencimento da lista e o recibo novo. A lista é
+    relida no FIM da leitura dos anexos; o lançamento que mudou vem na versão
+    de agora (a mesma dos anexos lidos) e com o id em `alterados`, para sair
+    em ATENÇÃO; o que sumiu do período (data mudou, excluído) sai da apuração
+    e volta em `sairam`, para o aviso; o que só existe na lista de agora
+    (criado no meio) não tem anexo lido e volta em `entraram`, só para o
+    aviso. Nada mudou = os mesmos itens de antes."""
+    agora = {str(i.get("id")): i for i in depois or () if i.get("id")}
+    atuais, alterados, sairam = [], set(), []
+    for item in antes:
+        ident = str(item.get("id"))
+        novo = agora.get(ident)
+        if novo is None:
+            sairam.append(item)
+            continue
+        if _assinatura(novo) != _assinatura(item):
+            alterados.add(ident)
+            atuais.append(novo)
+        else:
+            atuais.append(item)
+    vistos = {str(i.get("id")) for i in antes}
+    entraram = [i for ident, i in agora.items() if ident not in vistos]
+    return atuais, alterados, sairam, entraram
+
+
 def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
                    cadastro_reembolso=None, regras_fornecedor=None, destacar=(),
                    conta_entra=relatorio.conta_entra, log=print,
@@ -252,6 +298,34 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         leitura.interrompida = True
         return leitura
 
+    # A lista de novo, DEPOIS dos anexos: o que mudou no meio não sai APTO.
+    # Erro aqui propaga, como o da primeira lista: sem a releitura não há
+    # prova de que nada mudou.
+    # A comparação é sobre a lista INTEIRA (o HTML de pessoa física e a
+    # Remessa/Retorno usam `leitura.lancamentos`), e é ela que passa a valer.
+    de_novo = relatorio.filtrar_periodo(
+        api.listar_a_pagar(f"{ini:%Y-%m-%d}", f"{fim:%Y-%m-%d}", log=log), ini, fim, log=log)
+    leitura.lancamentos, alterados, sairam, entraram = alterados_durante_a_leitura(
+        leitura.lancamentos, de_novo)
+    leitura.alterados = alterados
+    selecionados = [i for i in leitura.lancamentos
+                    if conta_entra(relatorio.nome_da_conta(i))]
+    a_pagar, _pagos = relatorio.separar_pagos(selecionados)
+    if alterados:
+        leitura.avisos.append(
+            f"{len(alterados)} lançamento(s) alterado(s) no ERP durante a leitura — "
+            "saem em ATENÇÃO; busque de novo antes de pagar")
+    if sairam:
+        nomes = ", ".join(f"{i.get('paidTo') or '?'} {relatorio.brl(relatorio.valor_do_item(i))}"
+                          for i in sairam[:5])
+        leitura.avisos.append(
+            f"{len(sairam)} lançamento(s) saiu(saíram) do período durante a leitura "
+            f"(vencimento mudou ou foi excluído) e ficaram de fora: {nomes}")
+    if entraram:
+        leitura.avisos.append(
+            f"{len(entraram)} lançamento(s) novo(s) criado(s) no ERP durante a leitura "
+            "não entraram nesta apuração — busque de novo")
+
     entradas = confirmacao.Entradas(
         selecionados=a_pagar, anexos=leitura.anexos, overviews=leitura.overviews,
         textos=textos, urls_ocr=urls_ocr, cadastro_reembolso=cadastro_reembolso,
@@ -260,7 +334,8 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         titulos_nao_lidos=set(getattr(api, "titulos_sem_leitura", ()) or ()),
         # A tela nova divide o lançamento cujos boletos somam exato
         # (`boletos_somados`); a Remessa/Retorno, lendo sozinha, não.
-        dividir_boletos=True)
+        dividir_boletos=True,
+        alterados_na_leitura=alterados)
     # Sem título lido nada divide, e as linhas candidatas continuam com o
     # status "vários boletos": é por ele que se sabe QUAIS títulos ler.
     entradas.titulos_erp = ler_titulos_no_erp(
