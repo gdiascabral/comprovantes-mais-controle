@@ -84,6 +84,17 @@ def _txt_peso(v) -> str:
     return format(Decimal(v).normalize(), "f")
 
 
+def _somadas(valor) -> tuple:
+    """`contas_somadas` (text[]) da nuvem. Ausente ou nulo = nenhuma; o que
+    não é lista de textos não se lê — melhor não mostrar a conta que somar
+    errado."""
+    if valor is None:
+        return ()
+    if not isinstance(valor, list) or not all(isinstance(n, str) for n in valor):
+        raise ValueError(f"contas somadas ilegíveis na nuvem: {valor!r}")
+    return tuple(n.strip() for n in valor)
+
+
 def contas_das_linhas(contas: list, aportadores: list) -> list:
     saida = []
     for c in sorted(contas, key=lambda x: util.norm_espaco(x.get("conta_erp") or "")):
@@ -93,6 +104,7 @@ def contas_das_linhas(contas: list, aportadores: list) -> list:
             conta_erp=str(c["conta_erp"]),
             abertura=datetime.date.fromisoformat(str(c["abertura"])[:10]),
             id=int(c["id"]), ativa=bool(c.get("ativa", True)),
+            somadas=_somadas(c.get("contas_somadas")),
             aportadores=tuple(Aportador(nome_erp=str(a["nome_erp"]),
                                         peso=_dec(a["peso"], "parte"),
                                         abertura=como_dinheiro(_dec(a["abertura"], "já aportado")),
@@ -115,7 +127,7 @@ def ler(token: str) -> tuple:
     """([ContaControlada], {conta_id: [Apontamento]}) — como o BANCO tem agora."""
     from nuvem import rest
     from nuvem.registro import LINHAS_MAXIMAS_POR_CONSULTA
-    contas = rest.ler(CONTAS, token, colunas="id,conta_erp,abertura,ativa")
+    contas = rest.ler(CONTAS, token, colunas="id,conta_erp,abertura,ativa,contas_somadas")
     aps = rest.ler(APORTADORES, token, colunas="id,conta_id,nome_erp,peso,abertura")
     atrs = rest.ler(APONTAMENTOS, token,
                     colunas="id,conta_id,recebimento_erp,aportador_id,valor,motivo")

@@ -407,3 +407,24 @@ def test_apontar_contra_o_cliente_do_erp_recusa_sem_gravar(banco, escolhido):
     assert banco.ordem == [] and banco.t[cn.APONTAMENTOS] == []
     cn.apontar("tok", _salva(), rec, 3, "pix", anotar=lambda *a: None)   # para ele: vale
     assert banco.t[cn.APONTAMENTOS][0]["aportador_id"] == 3
+
+
+def test_contas_somadas_vem_da_nuvem_e_editar_nao_as_apaga(banco):
+    from dataclasses import replace
+    salva = _gravada(banco)
+    banco.t[cn.CONTAS][0]["contas_somadas"] = ["CONTA MAE - OUTRO BANCO"]   # pelo painel
+    lida = cn.ler("tok")[0][0]
+    assert lida.somadas == ("CONTA MAE - OUTRO BANCO",)
+    nova = replace(lida, abertura=ABRE - datetime.timedelta(days=1))
+    cn.gravar_conta("tok", nova, HOJE, [lida], anotar=lambda *a: None,
+                    vistos=_ids(lida), aberta=lida)
+    assert banco.t[cn.CONTAS][0]["contas_somadas"] == ["CONTA MAE - OUTRO BANCO"]
+    assert salva.somadas == ()
+
+
+@pytest.mark.parametrize("valor", ["CONTA X", [1], [None]])
+def test_contas_somadas_ilegiveis_nao_se_leem(banco, valor):
+    _gravada(banco)
+    banco.t[cn.CONTAS][0]["contas_somadas"] = valor
+    with pytest.raises(ValueError, match="somadas"):
+        cn.ler("tok")

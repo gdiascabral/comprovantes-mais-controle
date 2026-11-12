@@ -15,6 +15,7 @@ vira "em dia".
 from __future__ import annotations
 
 import datetime
+from dataclasses import replace
 import queue
 import threading
 import tkinter as tk
@@ -382,7 +383,7 @@ class ControleAportesFrame(ttk.Frame):
         subcontas = cadastro_aportes.carregar_subcontas()      # cache local, sem rede
         resumo = []
         for ap in self.apuracoes:
-            pai = self.t_contas.insert("", "end", text=ap.conta.conta_erp, open=True,
+            pai = self.t_contas.insert("", "end", text=ca.rotulo_da_conta(ap.conta), open=True,
                                        values=ca.valores_da_conta(ap))
             self._linha_conta[pai] = ap.conta
             for l in ap.linhas:
@@ -579,6 +580,10 @@ class ControleAportesFrame(ttk.Frame):
             except ValueError as e:
                 messagebox.showwarning(TITULO, str(e), parent=jan)
                 return "break"
+            if conta is not None:
+                # As somadas não estão no formulário (só o painel as grava):
+                # vão junto para a confirmação mostrar e a validação ver.
+                nova = replace(nova, somadas=conta.somadas)
             outras = list(self.contas)
             erros = ca.problemas_da_conta(nova, hoje, outras)
             if erros:

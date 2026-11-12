@@ -60,6 +60,22 @@ class ContaControlada:
     aportadores: tuple = ()
     id: int | None = None
     ativa: bool = True
+    #: Outras contas do ERP (nome letra por letra) cujos aportes somam NESTA,
+    #: como um caixa só: os sócios da conta-mãe aportam "na Inter ou no
+    #: Sicoob" da mesma empresa (dono, 29/10 e 12/11/2026). Cada uma é lida e
+    #: conferida à parte no ERP e só então somada. Gravado só pelo painel do
+    #: Supabase (`controle_aporte_conta.contas_somadas`), como o `ativa`.
+    somadas: tuple = ()
+
+
+def contas_do_erp(conta: ContaControlada) -> tuple:
+    """A conta do controle e as somadas a ela, nesta ordem."""
+    return (conta.conta_erp,) + tuple(conta.somadas)
+
+
+def rotulo_da_conta(conta: ContaControlada) -> str:
+    """O nome na tabela: a conta e, quando há, " + " as somadas."""
+    return " + ".join(contas_do_erp(conta))
 
 
 @dataclass(frozen=True)
@@ -191,6 +207,10 @@ def problemas_da_conta(conta: ContaControlada, hoje: datetime.date, outras=()) -
     elif any(util.norm_espaco(o.conta_erp) == util.norm_espaco(nome) and o.id != conta.id
              for o in outras):
         erros.append(f'A conta "{nome}" já está no controle.')
+    somadas = [util.norm_espaco(n or "") for n in conta.somadas]
+    if (not all(somadas) or len(set(somadas)) != len(somadas)
+            or util.norm_espaco(nome) in somadas):
+        erros.append("Contas somadas: nome vazio, repetido ou igual ao da própria conta.")
     if not isinstance(conta.abertura, datetime.date):
         erros.append("Falta a data de abertura.")
     elif conta.abertura > hoje:
@@ -586,7 +606,7 @@ def status_da_leitura(apuracoes) -> str:
 def resumo(ap: Apuracao, pode_apontar: bool = True) -> list:
     """`pode_apontar`: quem está vendo pode apontar (admin). Sem isso, o
     texto não manda ninguém "apontar"."""
-    nome = ap.conta.conta_erp
+    nome = rotulo_da_conta(ap.conta)
     if ap.erro:
         return [f"{nome}: {ap.erro}"]
     devem = [l for l in ap.linhas if l.diferenca > 0]
@@ -610,21 +630,38 @@ class Par:
 
 
 def pares_para_ler(contas, contas_erp) -> tuple:
-    """([Par], {rótulo: motivo}) — a conta do controle casa com UMA conta
-    ativa do ERP pelo nome inteiro (`util.norm_espaco`)."""
+    """([Par], {rótulo: motivo}) — cada conta do ERP da conta do controle
+    (ela e as somadas, `contas_do_erp`) casa com UMA conta ativa do ERP pelo
+    nome inteiro (`util.norm_espaco`). Os pares de uma conta levam o MESMO
+    rótulo. Uma que não casa derruba a conta inteira: somar só parte do
+    caixa mostraria um "deve" errado com cara de certo. A mesma conta do ERP
+    em duas contas do controle também derruba as duas (seria somada duas
+    vezes)."""
     pares, erros = [], {}
     for c in contas:
-        alvo = util.norm_espaco(c.conta_erp)
-        achadas = [e for e in contas_erp if util.norm_espaco(e.name) == alvo]
-        if len(achadas) == 1:
-            pares.append(Par(c.conta_erp, achadas[0].id, achadas[0].name, c.abertura))
-        elif not achadas:
-            erros[c.conta_erp] = ("não está entre as contas ativas do Mais Controle (o nome "
-                                  "tem de ser o de lá, letra por letra)")
+        deles = []
+        for nome in contas_do_erp(c):
+            alvo = util.norm_espaco(nome)
+            achadas = [e for e in contas_erp if util.norm_espaco(e.name) == alvo]
+            if len(achadas) == 1:
+                deles.append(Par(c.conta_erp, achadas[0].id, achadas[0].name, c.abertura))
+                continue
+            quem = "" if nome == c.conta_erp else f'a conta somada "{nome}" '
+            erros[c.conta_erp] = quem + (
+                "não está entre as contas ativas do Mais Controle (o nome tem de ser o de "
+                "lá, letra por letra)" if not achadas else
+                "há duas contas ativas no Mais Controle com esse nome — não dá para saber qual")
+            break
         else:
-            erros[c.conta_erp] = ("há duas contas ativas no Mais Controle com esse nome — "
-                                  "não dá para saber qual")
-    return pares, erros
+            pares.extend(deles)
+    por_conta: dict = {}
+    for p in pares:
+        por_conta.setdefault(p.conta_id, set()).add(p.rotulo)
+    repetidos = {r for rotulos in por_conta.values() if len(rotulos) > 1 for r in rotulos}
+    for r in repetidos:
+        erros[r] = ("uma conta do Mais Controle está em duas contas do controle (somada "
+                    "numa e na outra) — seria contada duas vezes")
+    return [p for p in pares if p.rotulo not in repetidos], erros
 
 
 def conta_de_contraprova(contas_erp, pares):
@@ -791,6 +828,8 @@ def descrever_conta(conta: ContaControlada) -> str:
     nomes = [a.nome_erp for a in conta.aportadores]
     pcts = percentuais_dos_pesos(nomes, {a.nome_erp: a.peso for a in conta.aportadores})
     linhas = [f"Conta: {conta.conta_erp}", f"Abertura: {conta.abertura:%d/%m/%Y}"]
+    if conta.somadas:
+        linhas.append("Soma também os aportes de: " + "; ".join(conta.somadas))
     linhas += [f"• {a.nome_erp} — parte {str(p).replace('.', ',')}% — já aportado antes "
                f"da abertura: {brl(a.abertura)}" for a, p in zip(conta.aportadores, pcts)]
     return "\n".join(linhas)

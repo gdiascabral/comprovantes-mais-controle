@@ -943,3 +943,18 @@ parcial (`plannedValue` ≠ recebido) só alerta. A nuvem que volta com 1000 lin
 mudou nome, parte ou já aportado depois que o formulário abriu.
 **Conta desativada (`ativa = false`) some da aba e só se reativa pelo painel do
 Supabase — de propósito**: a aba não tem botão de desativar nem de reativar.
+
+**Contas somadas (12/11/2026).** Os sócios da conta-mãe aportam na Inter OU no
+Sicoob da mesma empresa; o controle lia só a conta cadastrada e um aporte de
+R$ 28 mil no outro banco ficou de fora ("deve 291 mil", certo 263 mil).
+`ContaControlada.somadas` (coluna `controle_aporte_conta.contas_somadas`,
+migration `20261112100000`, escrita SÓ pelo painel, como o `ativa`) lista as
+outras contas do ERP cujos aportes contam nesta, como um caixa só.
+`pares_para_ler` gera um `Par` por conta do ERP com o MESMO rótulo; uma
+somada que não casa derruba a conta inteira (número parcial com cara de
+certo é pior que erro), e a mesma conta do ERP em duas contas do controle
+derruba as duas. `ler_recebimentos` lê e confere o filtro POR CONTA DO ERP
+(`conta_id`) e só depois soma no rótulo — a mesma parcela nas duas contas
+continua parando a leitura. A tabela mostra "CONTA + SOMADA"
+(`rotulo_da_conta`); `conta_erp` continua sendo a chave de tudo (aviso de
+igualar, sócios da mãe). Editar a conta pelo formulário não toca na coluna.

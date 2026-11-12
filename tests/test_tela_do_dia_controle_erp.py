@@ -310,3 +310,68 @@ def test_resposta_sem_content_em_lista_nao_vira_nenhum_aporte(corpo):
             return super()._fetch_json(url, headers)
     with pytest.raises(ErpError, match="formato"):
         ce.ler_recebimentos(SemContent({}), [PAR_A], HOJE)
+
+
+# ---- contas somadas: a conta-mãe soma o outro banco da mesma empresa (12/11/2026)
+SOMA = "CONTA A - OUTRO BANCO"
+
+
+def _conta_somada(somadas=(SOMA,)):
+    return replace(_conta(), somadas=tuple(somadas))
+
+
+def test_pares_da_conta_somada_levam_o_mesmo_rotulo():
+    erp = [ErpAccount(id="id-a", name="CONTA A - BANCO"), ErpAccount(id="id-s", name=SOMA),
+           ErpAccount(id="id-z", name="CONTA Z")]
+    pares, erros = ca.pares_para_ler([_conta_somada()], erp)
+    assert erros == {}
+    assert pares == [ca.Par("CONTA A - BANCO", "id-a", "CONTA A - BANCO", ABRE),
+                     ca.Par("CONTA A - BANCO", "id-s", SOMA, ABRE)]
+    # a contraprova nunca é a somada
+    assert ca.conta_de_contraprova(erp, pares).conta_id == "id-z"
+
+
+def test_somada_que_nao_casa_derruba_a_conta_inteira():
+    erp = [ErpAccount(id="id-a", name="CONTA A - BANCO")]
+    pares, erros = ca.pares_para_ler([_conta_somada()], erp)
+    assert pares == [] and SOMA in erros["CONTA A - BANCO"]
+
+
+def test_mesma_conta_do_erp_em_duas_contas_do_controle_derruba_as_duas():
+    outra = ca.ContaControlada(SOMA, ABRE, (ca.Aportador("FULANO ALFA DA SILVA", Decimal(1)),), id=2)
+    erp = [ErpAccount(id="id-a", name="CONTA A - BANCO"), ErpAccount(id="id-s", name=SOMA)]
+    pares, erros = ca.pares_para_ler([_conta_somada(), outra], erp)
+    assert pares == [] and set(erros) == {"CONTA A - BANCO", SOMA}
+
+
+def test_ler_recebimentos_soma_as_contas_do_mesmo_rotulo():
+    par_s = ca.Par("CONTA A - BANCO", "id-s", SOMA, ABRE)
+    api = Api({("id-a", "n-cap"): [_item("r1")], ("id-s", "n-cap"): [_item("r2")]})
+    crus = ce.ler_recebimentos(api, [PAR_A, par_s], HOJE)
+    assert [i["id"] for i in crus["CONTA A - BANCO"]["Aporte de Capital"]] == ["r1", "r2"]
+    # a mesma parcela nas duas continua sendo filtro ignorado, mesmo rótulo
+    api = Api({("id-a", "n-cap"): [_item("r1")], ("id-s", "n-cap"): [_item("r1")]})
+    with pytest.raises(ErpError, match="duas contas"):
+        ce.ler_recebimentos(api, [PAR_A, par_s], HOJE)
+
+
+def test_conta_somada_entra_na_apuracao():
+    conta = replace(_conta_somada(), aportadores=(
+        ca.Aportador("FULANO ALFA DA SILVA", Decimal(1), id=11),
+        ca.Aportador("BELTRANO BETA DA SILVA", Decimal(1), id=12)))
+    erp = [ErpAccount(id="id-a", name="CONTA A - BANCO"), ErpAccount(id="id-s", name=SOMA)]
+    pares, erros = ca.pares_para_ler([conta], erp)
+    api = Api({("id-a", "n-cap"): [_item("r1", 300.0)],
+               ("id-s", "n-cap"): [_item("r2", 100.0, cliente="BELTRANO BETA DA SILVA")]})
+    crus = ce.ler_recebimentos(api, pares, HOJE)
+    (ap,) = ca.apurar_tudo([conta], erros, crus, {}, HOJE)
+    deve = {l.nome: l.diferenca for l in ap.linhas}
+    assert deve == {"FULANO ALFA DA SILVA": Decimal("0.00"),
+                    "BELTRANO BETA DA SILVA": Decimal("200.00")}
+    assert ca.rotulo_da_conta(conta) == f"CONTA A - BANCO + {SOMA}"
+
+
+def test_somada_vazia_repetida_ou_igual_a_conta_nao_passa():
+    for somadas in ((" ",), (SOMA, SOMA.lower()), ("conta a - banco",)):
+        assert any("somadas" in p for p in ca.problemas_da_conta(_conta_somada(somadas), HOJE))
+    assert ca.problemas_da_conta(_conta_somada(), HOJE) == []
