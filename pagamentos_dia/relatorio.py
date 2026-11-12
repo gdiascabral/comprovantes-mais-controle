@@ -2534,7 +2534,11 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 motivo = regras.motivo_omissao(valor, favorecido, dados,
                                                tem_documento, regras_forn,
                                                valor_documento=valor_documento,
-                                               pix_sem_documento=pix_sem_documento)
+                                               pix_sem_documento=pix_sem_documento,
+                                               tem_reembolso=(
+                    cls == "PAGAR_PARA" or socio is not None
+                    or documento_declara_reembolso(item, overview)
+                    or bool(quem_a_observacao_manda_pagar(coment))))
         if (motivo and motivo != regras.MOTIVO_NAO_CONFIRMADO
                 and str(item.get("id")) in ids_liberados):
             # Liberado na tela do dia: o motivo não some, vai junto

@@ -408,6 +408,41 @@ def test_fornecedor_de_reembolso_com_aviso_entra():
     assert linhas(res)[0]["dados"] == "111.222.333-44"
 
 
+def test_fornecedor_de_reembolso_com_boleto_mas_sem_aviso_nao_entra():
+    """Dono, 12/11/2026: a vidraçaria entrou no dia porque o título tinha
+    anexo (NF/boleto em imagem). Anexo qualquer não é reembolso: sem a
+    informação de reembolso a linha fica fora, mesmo havendo o que digitar."""
+    item = lancamento(paidTo="VIDRACARIA MODELO", remainingValue=5150.0,
+                      tradePayablePaymentMethod="Boleto")
+    anexos = {"x1": [anexo("BOLETO VIDRACARIA", "Boleto", ext=".jpg", url="ub")]}
+    res = relatorio.montar_registros([item], anexos, {}, {"ub": ""},
+                                     regras_fornecedor=REGRAS_FORN)
+    assert res.contas == {}
+    assert res.omitidos[0]["motivo"] == regras.MOTIVO_REEMBOLSO
+
+
+def test_fornecedor_de_reembolso_com_reembolso_no_documento_entra():
+    """"REEMBOLSO <sócio>" no nº do documento é a informação de reembolso:
+    a linha entra (e a caixa de reembolso do dia decide se sai)."""
+    item = lancamento(paidTo="VIDRACARIA MODELO", remainingValue=5150.0,
+                      tradePayablePaymentMethod="Boleto",
+                      documentNumber="REEMBOLSO FULANO")
+    anexos = {"x1": [anexo("BOLETO VIDRACARIA", "Boleto", ext=".jpg", url="ub")]}
+    res = relatorio.montar_registros([item], anexos, {}, {"ub": ""},
+                                     regras_fornecedor=REGRAS_FORN)
+    assert res.omitidos == []
+    assert linhas(res)[0]["reembolso_para"] == "FULANO"
+
+
+def test_motivo_omissao_sem_tem_reembolso_mantem_o_comportamento_antigo():
+    r = {"VIDRACARIA MODELO": {"so_com_reembolso": True}}
+    assert regras.motivo_omissao(10.0, "VIDRACARIA MODELO", "linha", True, r) == ""
+    assert regras.motivo_omissao(10.0, "VIDRACARIA MODELO", "linha", True, r,
+                                 tem_reembolso=False) == regras.MOTIVO_REEMBOLSO
+    assert regras.motivo_omissao(10.0, "VIDRACARIA MODELO", "linha", True, r,
+                                 tem_reembolso=True) == ""
+
+
 def test_regra_do_fornecedor_casa_por_pedaco_e_ignora_acento():
     """O nome vem do cadastro do ERP e é digitado por gente."""
     assert regras.regra_do_fornecedor("MADEIREIRA MODELO LTDA ME", REGRAS_FORN)

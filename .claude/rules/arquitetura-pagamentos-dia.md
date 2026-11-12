@@ -283,6 +283,13 @@ paths:
   obrigatório: `aportes/regras.py` já existe, nome de módulo é global no
   sys.path e `pagamentos_dia` entra ANTES de `aportes` — um `regras.py` aqui
   sequestraria o import da aba Aportes (a mesma armadilha do `extratos_sicoob`).
+  **`so_com_reembolso` pede a INFORMAÇÃO de reembolso, não um anexo qualquer**
+  (dono, 12/11/2026: a vidraçaria entrou no dia com boleto em imagem e sem
+  aviso). `motivo_omissao(tem_reembolso=)` recebe do `montar_registros` se há
+  aviso "PAGAR PARA", sócio do cadastro, "REEMBOLSO X" no documento ou
+  "REEMBOLSAR/PAGAR PARA X" na observação; sem o argumento vale o anexo, como
+  antes. Entrando, o `reembolso_para` vem preenchido, e a caixa de reembolso do
+  dia (`tela_do_dia.geracao.sem_reembolsos`) a tira quando desligada.
   **O boleto manda no valor.** "R$ 1,00 é marcador de recorrência" vale só
   enquanto nada prova o contrário: havendo código de barras anexado (que é
   conferido por DV e carrega o valor em centavos), quem erra é o LANÇAMENTO, e
