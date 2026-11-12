@@ -302,3 +302,34 @@ navegador próprio**: sem executor, sem pulso, sem Chrome; `submeter`, `mc`,
   das parcelas de outros títulos não é lido; quem segura a soma errada são as
   outras réguas (valor de outro pago, mesma descrição, favorecido, OC/NF ou
   centro de custo com conta confirmada, gêmeo e dúvida).
+
+## Comprovantes de conta PF como chegam (12/11/2026)
+
+`anexar/preparar_pf.py` roda no começo do "Casar e anexar", antes de `carregar_pdfs`. Os
+comprovantes das contas de pessoa física (PagBank, Neon, Next) chegam por e-mail como foto
+(`my_account_receipt_to_share.jpg`, `IMG_Comprovante_Neon_….png`) ou PDF com nome do banco
+(`nextpdf….pdf`), e o `parse_pdf` só lê PDF no padrão `VALOR - DESCRIÇÃO - DD-MM`. O módulo lê
+cada um (RapidOCR quando instalado, senão o Tesseract do app; camada de texto no PDF que tem),
+grava AO LADO um PDF no padrão e anota em `.comprovantes-pf.json` da pasta: de que conta saiu
+(banco + quem pagou), quem recebeu e o código de barras. O original nunca é apagado nem
+renomeado. Repetido (mesmos bytes, mesmo identificador de Pix `E…`, ou o mesmo código de barras
+no mesmo dia) vira um PDF só; dois boletos iguais SEM código não se juntam.
+
+- **"Pagador" sozinho não é quem pagou.** No boleto ele é o titular (o cliente da conta de luz).
+  Medido no lote de 06–11/11: ler "Pagador" apontou outra conta em 29 comprovantes. Valem, nesta
+  ordem: "Pagador Final", "De", "Pago por", "Quem pagou", "Origem", "Dados do pagador → Nome",
+  "Conta de débito → Nome" (Next). No Next, "Nome pagador" também é o titular.
+- **Conta PF no ERP** (`origem.origem_pf_da_conta`): "FULANO - PAGBANK" → `("PAGBANK", "FULANO")`.
+  Antes toda conta PagBank virava `("PAGBANK", "PESSOAS FISICAS")`. `matcher.mesma_conta`
+  compara conta PF palavra por palavra (o nome curto do ERP dentro do nome inteiro do comprovante).
+- **Regra nova no `casar`**: `conta e data` — conta PF confirmada + mesma data, com a
+  unicidade de sempre (`quer`), DEPOIS do código de barras e antes do favorecido. Resolve o
+  mesmo valor em outra conta PF ou em outro dia, e o Pix que sobra ao lado de um boleto que o
+  código já casou. Dois boletos iguais na mesma conta e dia sem código continuam dúvida.
+- **Código de barras**: o que o `preparar_pf` leu chega pronto (`barras_prontas`), sem ler o
+  arquivo de novo; no boleto do título, se o primeiro leitor não achar, `texto_rapidocr` tenta
+  (vazio quando o RapidOCR não está no exe — e hoje não está). O resultado vai ao `diagnostico.log`.
+- **Prova** (dado real, fora do repo, `gmail-2026-11-12/_scripts/aceite_anexar.py`): os
+  comprovantes de 06–11/11 das contas PF como chegaram do e-mail (111 arquivos). Antes: 18
+  dúvidas e 84 renomeados à mão. Depois, com RapidOCR: 85 certezas, 0 dúvidas, 0 erros
+  (gabarito = a conferência manual; grupos iguais provados pelo código de barras).

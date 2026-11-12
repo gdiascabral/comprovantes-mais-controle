@@ -101,7 +101,9 @@ def test_conta_do_erp_vira_banco_e_conta():
     um_login = [ContaInter(apelido="Exemplo Eng", empresa="EXEMPLO")]
     assert origem.origem_da_conta_erp("EXEMPLO - SICOOB", m, e) == ("SICOOB", "123456")
     assert origem.origem_da_conta_erp("exemplo - inter", m, e, um_login) == ("INTER", "EXEMPLO ENG")
-    assert origem.origem_da_conta_erp("FULANO - PAGBANK", m, e) == ("PAGBANK", "PESSOAS FISICAS")
+    # Conta PF (12/11/2026): a conta é a PESSOA do nome da conta, e não a
+    # "empresa" do cadastro (que é a mesma para todas as contas PF).
+    assert origem.origem_da_conta_erp("FULANO - PAGBANK", m, e) == ("PAGBANK", "FULANO")
     assert origem.origem_da_conta_erp("SEM BANCO", m, e) is None
     assert origem.origem_da_conta_erp("CONTA QUE NAO EXISTE", m, e) is None
 

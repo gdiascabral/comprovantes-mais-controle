@@ -36,7 +36,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from . import (codigo_barras, config, matcher, mc_api, planilha, credenciais,
-               mc_client, origem)
+               mc_client, origem, preparar_pf)
 from .mc_client import MCClient, SemRede
 
 import util
@@ -1523,7 +1523,9 @@ class AnexarFrame(ttk.Frame):
                 pendentes, pdfs, ler_pdf=ler_pdf,
                 anexos_de=lambda ids: self.api.anexos_de_titulos(
                     ids, log=lambda _m: None, cancelar=self._checar_pausa),
-                baixar=baixar, cancelar=self._checar_pausa)
+                baixar=baixar, cancelar=self._checar_pausa,
+                segundo_leitor=codigo_barras.texto_rapidocr)
+            config.diag(f"codigo_barras: {n}")
             self._log(f"Código de barras: {n['pdfs_com_codigo']} de "
                       f"{n['pdfs_lidos']} PDF(s) · {n['lancamentos_com_codigo']} de "
                       f"{n['titulos_lidos']} título(s) com boleto lido.")
@@ -1592,6 +1594,21 @@ class AnexarFrame(ttk.Frame):
             self._log(f"⏱ Verificação de anexos: {_fmt_dur(time.time() - inicio)}")
             ini_anexar = time.time()
 
+            # Fotos e PDFs de banco digital (contas PF) viram PDF no padrão
+            # antes de carregar (12/11/2026). Opcional: falhando, a pasta é
+            # lida como sempre foi.
+            try:
+                p = preparar_pf.preparar(Path(pasta_pdfs), self._log,
+                                         codigos=codigo_barras.codigos_no_texto)
+                if p["lidos"]:
+                    self._log(f"Comprovantes de conta PF: {p['gerados']} PDF(s) no padrão "
+                              f"gerado(s) de {p['lidos']} arquivo(s) · {p['repetidos']} "
+                              f"repetido(s) · {p['ilegiveis']} sem valor ou data · "
+                              f"leitor {p['leitores']}.")
+            except Exception:                                # noqa: BLE001
+                config.diag("preparar_pf falhou:\n" + traceback.format_exc())
+                self._log("[aviso] não preparei as fotos de comprovante — a pasta "
+                          "segue só com os PDFs no padrão.")
             pdfs = matcher.carregar_pdfs(Path(pasta_pdfs), self._log)
             self._log(f"{len(pdfs)} PDF(s) válidos na pasta.")
             # De onde saiu cada PDF e de que conta é cada lançamento: PDF de

@@ -143,6 +143,27 @@ def texto_do_arquivo(nome: str, dados: bytes,
     return (lido, True) if lido else (texto, False)
 
 
+def texto_rapidocr(nome: str, dados: bytes) -> str:
+    """Segundo leitor: RapidOCR na foto ou na 1ª página do PDF. Vazio quando o
+    RapidOCR não está instalado (o exe de hoje não o embute) ou falha."""
+    from anexar import preparar_pf
+    if preparar_pf._rapidocr() is None or not dados:
+        return ""
+    try:
+        from PIL import Image
+        n = (nome or "").lower()
+        if n.endswith(_EXT_IMAGEM):
+            img = Image.open(io.BytesIO(dados))
+        else:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(dados)) as pl:
+                img = pl.pages[0].to_image(resolution=200).original
+        linhas, leitor = preparar_pf.ocr_linhas(img)
+        return "\n".join(linhas) if leitor == "rapidocr" else ""
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
 def _nome_do_anexo(f: dict) -> str:
     nome = str(f.get("filename") or f.get("name") or "")
     ext = str(f.get("extension") or "").strip().lower()
@@ -157,7 +178,7 @@ def _vals(pe: dict) -> set:
 
 def preencher(pendentes: list[dict], pdfs: list[dict], *, ler_pdf,
               anexos_de, baixar, ler_anexo=texto_do_arquivo,
-              cancelar=lambda: False) -> dict:
+              cancelar=lambda: False, segundo_leitor=None) -> dict:
     """Põe `barras` (conjunto de códigos de 44) nos PDFs e nos pendentes.
 
     Só lê o que pode mudar um casamento:
@@ -177,13 +198,18 @@ def preencher(pendentes: list[dict], pdfs: list[dict], *, ler_pdf,
     contagem = {"pdfs_lidos": 0, "pdfs_com_codigo": 0, "titulos_lidos": 0,
                 "lancamentos_com_codigo": 0, "sem_titulo": 0}
     valores_pendentes = set().union(*(_vals(pe) for pe in pendentes)) if pendentes else set()
+    contagem["segundo_leitor"] = 0
     for pd in pdfs:
         pd.setdefault("barras", set())
         if pd["valor"] not in valores_pendentes or cancelar():
             continue
         contagem["pdfs_lidos"] += 1
-        texto, ocr = ler_pdf(pd)
-        pd["barras"] = codigos_no_texto(texto, {pd["valor"]}, ocr)
+        if pd.get("barras_prontas"):
+            # Comprovante PF já lido pelo preparar_pf (mesmo OCR do valor).
+            pd["barras"] = {c for c in pd["barras_prontas"] if _valor_das_barras(c) == pd["valor"]}
+        else:
+            texto, ocr = ler_pdf(pd)
+            pd["barras"] = codigos_no_texto(texto, {pd["valor"]}, ocr)
         contagem["pdfs_com_codigo"] += bool(pd["barras"])
 
     por_valor: dict[int, list] = {}
@@ -214,6 +240,14 @@ def preencher(pendentes: list[dict], pdfs: list[dict], *, ler_pdf,
             if url not in lidos:
                 dados = baixar(url)
                 lidos[url] = ler_anexo(_nome_do_anexo(f), dados) if dados else ("", False)
+                achou = codigos_no_texto(lidos[url][0], _vals(pe), lidos[url][1])
+                if dados and not achou and segundo_leitor:
+                    # O primeiro leitor não achou: o segundo (RapidOCR, quando
+                    # existe) lê a página de novo. Sem ele, nada muda.
+                    texto2 = segundo_leitor(_nome_do_anexo(f), dados)
+                    if texto2 and codigos_no_texto(texto2, _vals(pe), True):
+                        lidos[url] = (texto2, True)
+                        contagem["segundo_leitor"] += 1
             texto, ocr = lidos[url]
             codigos |= codigos_no_texto(texto, _vals(pe), ocr)
         aceitos = {int(v) for v in _vals(pe) if v}
