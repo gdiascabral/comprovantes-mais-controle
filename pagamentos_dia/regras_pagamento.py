@@ -239,7 +239,8 @@ def pix_dos_dados_bancarios(favorecido: str, regras: dict) -> bool:
 def motivo_omissao(valor: float, favorecido: str, dados: str,
                    tem_documento: bool, regras: dict,
                    valor_documento: float | None = None,
-                   pix_sem_documento: bool = False) -> str:
+                   pix_sem_documento: bool = False,
+                   tem_reembolso: bool | None = None) -> str:
     """Por que esta linha NÃO entra — "" quando ela entra.
 
     `dados` é o que já se conseguiu apurar como forma de pagar (linha
@@ -273,7 +274,13 @@ def motivo_omissao(valor: float, favorecido: str, dados: str,
         return MOTIVO_SIMBOLICO
 
     regra = regra_do_fornecedor(favorecido, regras)
-    if regra.get("so_com_reembolso") and not tem_documento:
+    # `tem_reembolso` (dono, 12/11/2026): a vidracaria entrou no dia porque o
+    # titulo tinha anexo (boleto em imagem, NF) -- anexo qualquer contava como
+    # o aviso. Quem passa `tem_reembolso` diz se HA a informacao de reembolso
+    # (aviso "PAGAR PARA", "REEMBOLSO X" no documento ou na observacao, socio
+    # do cadastro); sem ele (chamada antiga) vale o anexo, como antes.
+    prova = tem_documento if tem_reembolso is None else tem_reembolso
+    if regra.get("so_com_reembolso") and not prova:
         return MOTIVO_REEMBOLSO
 
     # "Não tem chave para pagar E não tem aviso para pagar" — as duas coisas.
