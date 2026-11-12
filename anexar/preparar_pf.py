@@ -98,17 +98,44 @@ def _valor(linhas: list[str]) -> int | None:
     return None
 
 
-def _data(linhas: list[str]) -> tuple[str, str]:
-    """(DD-MM, HHhMM) do pagamento; vazio quando não achou."""
-    junto = "\n".join(linhas)
-    m = re.search(r"(\d\d)/(\d\d)/(\d{4})(?:\s*(?:.s|,)?\s*(\d\d)[:h](\d\d))?", junto)
+#: Rótulos da data em que o dinheiro saiu. A ordem é prioridade.
+_ROTULOS_PAGAMENTO = ("Solicitado em", "Pago em", "Data do pagamento", "Data da transação",
+                      "Data da operação", "Realizado em", "Efetuado em", "Ocorreu em",
+                      "Comprovante de pagamento Pix")
+_ROTULO_VENCIMENTO = re.compile(r"venc", re.I)
+_RE_NUM = r"(\d\d)/(\d\d)/(\d{4})(?:\s*(?:.s|,)?\s*(\d\d)[:h](\d\d))?"
+_RE_EXT = r"(\d{1,2}) de ([A-Za-zçÇ]+) de (\d{4})(?:\s*.s\s*(\d\d):(\d\d))?"
+
+
+def _uma_data(texto: str) -> tuple[str, str]:
+    m = re.search(_RE_NUM, texto)
     if m:
         return f"{m.group(1)}-{m.group(2)}", (f"{m.group(4)}h{m.group(5)}" if m.group(4) else "")
-    m = re.search(r"(\d{1,2}) de ([A-Za-zçÇ]+) de (\d{4})(?:\s*.s\s*(\d\d):(\d\d))?", junto)
+    m = re.search(_RE_EXT, texto)
     if m and _n(m.group(2)) in _MESES:
         dd, mm = int(m.group(1)), _MESES[_n(m.group(2))]
         return f"{dd:02d}-{mm:02d}", (f"{m.group(4)}h{m.group(5)}" if m.group(4) else "")
     return "", ""
+
+
+def _data(linhas: list[str]) -> tuple[str, str]:
+    """(DD-MM, HHhMM) do PAGAMENTO; vazio quando não achou.
+
+    Primeiro a data com rótulo de pagamento (na mesma linha ou nas duas
+    seguintes); nunca a de "Vencimento" -- no boleto ela pode vir ANTES da do
+    pagamento, e com a regra "conta e data" do matcher a data errada fecharia
+    com OUTRO pagamento de mesmo valor (revisão do PR #176). Sem rótulo
+    nenhum, a primeira data do texto que não seja de vencimento."""
+    for r in _ROTULOS_PAGAMENTO:
+        for i, linha in enumerate(linhas):
+            if _n(r) in _n(linha):
+                trecho = "\n".join(linhas[i:i + 3])
+                trecho = trecho[_n(trecho).find(_n(r)):] if _n(r) in _n(trecho) else trecho
+                d = _uma_data(trecho)
+                if d[0]:
+                    return d
+    livres = [l for l in linhas if not _ROTULO_VENCIMENTO.search(l)]
+    return _uma_data("\n".join(livres))
 
 
 def _banco(linhas: list[str]) -> str:

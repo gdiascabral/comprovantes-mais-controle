@@ -295,3 +295,30 @@ def test_dois_boletos_iguais_sem_codigo_nao_se_juntam(tmp_path):
     n = preparar_pf.preparar(tmp_path, log=lambda *_: None,
                              ocr=_ocr_de({(5, 5, 5): BOLETO_PAGBANK, (6, 6, 6): BOLETO_PAGBANK}))
     assert n["gerados"] == 2
+
+
+def test_vencimento_antes_do_pagamento_sai_a_data_do_pagamento():
+    # Revisão do PR #176: com a regra "conta e data", a data do vencimento
+    # fecharia com OUTRO pagamento de mesmo valor em outro dia.
+    linhas = """PagBank
+Comprovante de pagamento
+Data de vencimento
+05/11/2026
+Valor do pagamento
+R$ 58,38
+Solicitado em: 09/11/2026 às 18:47
+Pagador Final
+FULANO DE TAL EXEMPLO""".splitlines()
+    c = preparar_pf.ler(linhas)
+    assert (c["data"], c["hora"]) == ("09-11", "18h47")
+
+
+def test_vencimento_na_mesma_linha_nunca_vira_a_data():
+    c = preparar_pf.ler(["Neon", "Vencimento: 05/11/2026", "Valor R$ 10,00",
+                         "Pago em", "10/11/2026 às 15:16"])
+    assert c["data"] == "10-11"
+
+
+def test_sem_rotulo_vale_a_primeira_data():
+    c = preparar_pf.ler(["PagBank", "R$ 10,00", "07/11/2026 12:00", "08/11/2026"])
+    assert c["data"] == "07-11"
