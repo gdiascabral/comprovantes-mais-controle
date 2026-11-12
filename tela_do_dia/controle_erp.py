@@ -237,15 +237,23 @@ def ler_recebimentos(api, pares, hoje, *, contraprova=None, log=print) -> dict:
     """{rótulo da conta no controle: {natureza: [itens crus]}}, conferido."""
     garantir_acesso(api, log)
     naturezas = ids_das_naturezas(api)
-    crus: dict = {}
+    # Lidos e conferidos POR CONTA DO ERP (a conta do controle pode somar
+    # outras, todas com o mesmo rótulo); só depois somados no rótulo.
+    por_conta: dict = {}
     for par in pares:
         log(f"Lendo os aportes de {par.nome_no_erp} desde {par.inicio:%d/%m/%Y}...")
-        crus[par.rotulo] = {nome: recebimentos(api, par.conta_id, ident, par.inicio, hoje, log)
-                            for nome, ident in naturezas.items()}
+        por_conta[par.conta_id] = {nome: recebimentos(api, par.conta_id, ident, par.inicio,
+                                                      hoje, log)
+                                   for nome, ident in naturezas.items()}
     prova: list = []
     if contraprova is not None and pares:
         for ident in naturezas.values():
             prova.extend(recebimentos(api, contraprova.conta_id, ident,
                                       contraprova.inicio, hoje, log))
-    conferir_filtros(crus, {p.rotulo: p.nome_no_erp for p in pares}, prova)
+    conferir_filtros(por_conta, {p.conta_id: p.nome_no_erp for p in pares}, prova)
+    crus: dict = {}
+    for par in pares:
+        destino = crus.setdefault(par.rotulo, {nome: [] for nome in naturezas})
+        for nome, itens in por_conta[par.conta_id].items():
+            destino[nome].extend(itens)
     return _anotar_clientes_vazios(api, crus, log)

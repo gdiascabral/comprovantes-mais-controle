@@ -33,6 +33,7 @@ from aportes.regras import (Operacao, como_dinheiro, dividir_por_peso,
                             problema_dos_pesos)
 from conciliacao.parsing import normalize_name
 
+from . import controle_aportes as ca
 from . import para_aportes as pa
 from .valores import brl, ler_valor_editado
 
@@ -104,7 +105,9 @@ def socios_da_mae(apuracoes, mae: str, entidades: dict) -> tuple[list, str]:
         return [], (f"não achei {mae!r} (um só, com a conta do ERP) no cadastro da "
                     "aba Aportes")
     alvo = normalize_name(conta)
-    achadas = [ap for ap in apuracoes or () if normalize_name(ap.conta.conta_erp) == alvo]
+    # A conta-mãe do cadastro pode ser a principal OU uma somada do controle.
+    achadas = [ap for ap in apuracoes or ()
+               if alvo in {normalize_name(n) for n in ca.contas_do_erp(ap.conta)}]
     if not achadas:
         return [], (f"o Controle de aportes não foi lido ou não tem a conta {conta!r} — "
                     "busque de novo (ou abra a aba Controle de aportes)")
@@ -302,7 +305,7 @@ def avisos_de_igualar(apuracoes, erro: str = "") -> list[str]:
         return [f"Controle de aportes não lido: {erro}"]
     saida = []
     for ap in apuracoes or ():
-        conta = ap.conta.conta_erp
+        conta = ca.rotulo_da_conta(ap.conta)
         if ap.erro:
             saida.append(f"Controle de aportes: {conta} não fechou ({ap.erro}) — veja a aba")
             continue
@@ -326,4 +329,5 @@ def avisos_dos_socios(apuracoes, mae: str, entidades: dict) -> list[str]:
     if not alvo:
         return []
     return avisos_de_igualar([ap for ap in apuracoes or ()
-                              if normalize_name(ap.conta.conta_erp) == alvo])
+                              if alvo in {normalize_name(n)
+                                          for n in ca.contas_do_erp(ap.conta)}])
