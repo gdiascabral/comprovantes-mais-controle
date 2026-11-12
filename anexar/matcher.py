@@ -185,11 +185,15 @@ def parse_pdf(fn: str) -> dict | None:
 
 def carregar_pdfs(pasta: Path, log=print) -> list[dict]:
     pdfs = []
+    # O original que o preparar_pf já converteu não é "fora do padrão": o PDF
+    # no padrão dele está na mesma pasta.
+    from anexar import preparar_pf
+    convertidos = {v.get("fonte") for v in preparar_pf.carregar_registro(pasta).values()}
     for fn in sorted(os.listdir(pasta)):
         p = parse_pdf(fn)
         if p:
             pdfs.append(p)
-        elif fn.lower().endswith(".pdf"):
+        elif fn.lower().endswith(".pdf") and fn not in convertidos:
             log(f"[aviso] nome fora do padrão, ignorado: {fn}")
     return pdfs
 
@@ -251,8 +255,19 @@ def mesma_conta(a, b) -> bool | None:
     if _norm(a[0]) != _norm(b[0]):
         return False
     if a[1] and b[1]:
+        if _norm(a[0]) in BANCOS_PF:
+            # Conta de pessoa física: o ERP chama a conta pelo nome curto
+            # ("FULANO - PAGBANK") e o comprovante traz o nome inteiro de quem
+            # pagou ("FULANO DE TAL SOBRENOME"). Vale o curto inteiro dentro
+            # do longo, palavra por palavra.
+            pa, pb = set(_norm(a[1]).split()), set(_norm(b[1]).split())
+            return bool(pa and pb) and (pa <= pb or pb <= pa)
         return _norm(a[1]) == _norm(b[1])
     return None
+
+
+#: Bancos digitais das contas de pessoa física (ver `preparar_pf`).
+BANCOS_PF = ("PAGBANK", "NEON", "NEXT")
 
 
 #: Palavras que não distinguem ninguém num nome de empresa ou de pessoa.
@@ -380,6 +395,8 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
                                     "barras_conflito": bool(b_pe and b_pd
                                                             and not b_pe & b_pd),
                                     "conta": conta is True, "fav": fav,
+                                    "pf": conta is True and _norm(
+                                        (pd.get("origem") or ("",))[0]) in BANCOS_PF,
                                     "score": (100 if ocnf else 0) + (10 if cc else 0)
                                              + (5 if docnum else 0) + (1 if date else 0)})
 
@@ -457,6 +474,15 @@ def casar(pendentes: list[dict], pdfs: list[dict]) -> tuple[list, list, list]:
     # conta: o mesmo fornecedor recebe de várias empresas.
     atribuir(lambda c: c["docrec"] and c["date"] and c["conta"]
              and c["docrec_seguro"])
+    # Conta de pessoa física (12/11/2026): o comprovante diz o banco e quem
+    # pagou, e isso aponta UMA conta do ERP. Valor + data + essa conta, com um
+    # pagamento só e um PDF só nessa combinação, fecha. É a mesma unicidade de
+    # sempre (`quer`), só que agora contada dentro da conta: antes, o mesmo
+    # valor numa OUTRA conta PF (dois ONR de 139,93 em contas diferentes) ou
+    # noutro dia (três Pix de 300 ao mesmo eletricista) virava dúvida.
+    # Fica DEPOIS do código de barras, que já separou os boletos iguais, e é
+    # por isso que o Pix que sobra ao lado de um boleto casado fecha aqui.
+    atribuir(lambda c: c["pf"] and c["date"], "conta e data")
     # Favorecido = recebedor é fraco sozinho; `fav` só existe com a conta
     # batendo, e aqui ainda exige a data.
     atribuir(lambda c: c["fav"] and c["date"])

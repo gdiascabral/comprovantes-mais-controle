@@ -103,16 +103,46 @@ def origens_dos_pdfs(pasta) -> dict[str, dict]:
         achado[nome] = novo
     for nome in duvidosos:
         achado.pop(nome, None)
+    # Comprovantes de conta PF preparados pelo próprio Anexar (preparar_pf):
+    # a conta é o banco + quem pagou, lidos no comprovante.
+    from anexar import preparar_pf
+    for nome, linha in preparar_pf.carregar_registro(pasta).items():
+        if not isinstance(linha, dict) or nome in achado:
+            continue
+        banco = linha.get("banco") or ""
+        org = ((banco, util.norm_espaco(linha.get("pagador") or ""))
+               if banco in preparar_pf.BANCOS_PF else None)
+        achado[nome] = {"origem": org, "recebedor": linha.get("recebedor") or None,
+                        "doc_recebedor": None, "barras": set(linha.get("barras") or ())}
     return achado
 
 
 # ------------------------------------------------------ o lado do lançamento
+def origem_pf_da_conta(nome_erp: str) -> tuple | None:
+    """("PAGBANK", "FULANO") para a conta de pessoa física "FULANO - PAGBANK".
+
+    As contas PF do ERP têm o nome da pessoa e o banco digital no nome
+    ("FULANO - PAGBANK", "BELTRANO - NEON", "CICLANO NEXT"); o comprovante diz
+    o banco e quem pagou. Conta de empresa (Sicoob, Inter) não entra aqui."""
+    from anexar import preparar_pf
+    t = util.norm_espaco(nome_erp or "")
+    for banco in preparar_pf.BANCOS_PF:
+        if re.search(rf"\b{banco}\b", t):
+            pessoa = re.sub(rf"\b{banco}\b", " ", t)
+            pessoa = util.norm_espaco(re.sub(r"[^A-Z ]", " ", pessoa))
+            return (banco, pessoa) if pessoa else None
+    return None
+
+
 def origem_da_conta_erp(nome_erp: str, mapa_mc, empresas,
                         contas_inter=None) -> tuple | None:
     """(banco, conta) da conta do ERP, ou None quando o cadastro não diz.
 
     Sicoob: o número da conta. Inter: o apelido do login -- só quando a
     empresa tem UM login; com dois, não se sabe qual, e fica só o banco."""
+    pf = origem_pf_da_conta(nome_erp)
+    if pf:
+        return pf
     # Import tardio: o Anexar só paga por isto quando casa.
     from pagamentos_dia.remessa_dia import _escolher_conta
 
@@ -191,6 +221,10 @@ def preencher(pendentes, pdfs, pasta, *, mapa_mc=None, empresas=None,
         pd["origem"] = info.get("origem")
         pd["recebedor"] = info.get("recebedor")
         pd["doc_recebedor"] = info.get("doc_recebedor")
+        if info.get("barras"):
+            # Lido pelo preparar_pf no mesmo OCR que achou o valor: o
+            # codigo_barras não precisa ler o arquivo de novo.
+            pd["barras_prontas"] = set(info["barras"])
     # O cadastro de Contatos (quem chamou leu do ERP) manda; as empresas do
     # grupo completam o que ele não tem.
     docs = dict(documentos_do_grupo(empresas))
