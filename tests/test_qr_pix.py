@@ -357,7 +357,10 @@ def test_o_modelo_poe_o_pix_do_qr_na_celula_do_pagamento():
     from pagamentos_dia import modelos_html
     fonte = "".join(str(v) for v in vars(modelos_html).values() if isinstance(v, str))
     assert "${dadosCell}${pixQrCell}" in fonte
-    assert "copyText(e.pix_qr" in fonte
+    # O "Copiar Pix" copia o QR do boleto ou, no Pix das PJ, o montado pela
+    # chave (PR #181): `pixCopia = e.pix_qr || e.pix_montado`.
+    assert "const pixCopia = e.pix_qr || e.pix_montado" in fonte
+    assert "copyText(pixCopia, bPix)" in fonte
 
 
 def test_a_janela_de_confirmacao_mostra_o_qr_curto():
