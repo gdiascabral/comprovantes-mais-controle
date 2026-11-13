@@ -61,6 +61,16 @@ def gravar_cache(base, contas, escolhidas) -> None:
         pass
 
 
+def marcadas_depois(nomes_da_aba, conhecidas, marcadas) -> list[str]:
+    """Quais contas ficam marcadas depois de uma leitura nova da lista.
+
+    As que o dono já via seguem como ele deixou (`marcadas`, dentre as
+    `conhecidas`); conta que NÃO estava na lista é nova e nasce marcada; a que
+    sumiu do ERP sai. Sem lista conhecida (primeira vez), todas marcadas."""
+    conhecidas, marcadas = set(conhecidas or ()), set(marcadas or ())
+    return [n for n in nomes_da_aba if n in marcadas or n not in conhecidas]
+
+
 def contas_do_erp(contas_erp) -> list[dict]:
     """[{id, nome, saldo}] de TODAS as contas ativas (o "já paguei" escolhe
     entre elas), na forma do cache."""
@@ -88,12 +98,19 @@ class AbaPF:
         c1 = widgets.Cartao(area, "Contas PF e Moura Dantas", 1)
         c1.pack(fill="x", padx=PADX, pady=px((0, 12)))
         tela._ajuda(c1, "Marque as contas que entram. A lista vem do ERP (todas as contas "
-                        "PESSOA FISICA e MOURA DANTAS); conta nova aparece no próximo "
-                        "«Ler e gerar». O app lembra a sua última escolha.")
+                        "PESSOA FISICA e MOURA DANTAS) pelo «Buscar contas», e também "
+                        "pelo Buscar da aba PJ; conta nova chega marcada. O app lembra "
+                        "a sua última escolha.")
         self.caixa_contas = ttk.Frame(c1)
         self.caixa_contas.pack(fill="x", pady=px((6, 0)))
         linha = ttk.Frame(c1)
         linha.pack(fill="x", pady=px((8, 0)))
+        # Dono, 13/11/2026: "sem sentido ter que clicar em ler e gerar pra ele
+        # ler as contas". Lê só a lista (segundos); o Buscar das PJ também a
+        # traz (`receber_contas`, chamado pelo frame).
+        self.b_contas = widgets.Botao(linha, "Buscar contas", papel="passo",
+                                      command=self.buscar_contas)
+        self.b_contas.pack(side="left", padx=px((0, 8)))
         widgets.Botao(linha, "Marcar todas", papel="neutro",
                       command=lambda: self._marcar_todas(True)).pack(side="left")
         widgets.Botao(linha, "Desmarcar todas", papel="neutro",
@@ -149,8 +166,8 @@ class AbaPF:
         escolhidas = self._cache["escolhidas"]
         if not nomes:
             ttk.Label(self.caixa_contas, style="Secao.TLabel",
-                      text="Nenhuma conta ainda — clique em «Ler e gerar o HTML»: a "
-                           "primeira leitura traz as contas, todas marcadas.").pack(anchor="w")
+                      text="Nenhuma conta ainda — clique em «Buscar contas» (ou no "
+                           "Buscar da aba PJ): elas vêm todas marcadas.").pack(anchor="w")
             return
         for i, nome in enumerate(nomes):
             marcada = antes.get(nome, True if escolhidas is None else nome in escolhidas)
@@ -162,6 +179,56 @@ class AbaPF:
     def _marcar_todas(self, valor: bool):
         for v in self.vars.values():
             v.set(valor)
+
+    def receber_contas(self, contas_erp):
+        """Na thread da interface: a lista nova de contas do ERP (do «Buscar
+        contas», do Buscar das PJ ou da geração), mantendo as marcas."""
+        contas = contas_do_erp(contas_erp)
+        if not contas:
+            return
+        nomes = html_pf.contas_da_aba(c["nome"] for c in contas)
+        if self.vars:
+            conhecidas, marcadas = list(self.vars), self._escolhidas()
+        else:
+            conhecidas = html_pf.contas_da_aba(c["nome"] for c in self._cache["contas"])
+            esc = self._cache["escolhidas"]
+            marcadas = conhecidas if esc is None else esc
+        escolhidas = marcadas_depois(nomes, conhecidas, marcadas)
+        gravar_cache(util.pasta_base(), contas, escolhidas)
+        self._cache = {"contas": contas, "escolhidas": escolhidas}
+        self.vars = {}
+        self._mostrar_contas()
+
+    def buscar_contas(self):
+        tela = self.tela
+        if tela.worker and not tela.worker.done():
+            return
+        if tela.anx.avisar_se_ocupado("a lista de contas das PF", aba=tela):
+            return
+        self.b_contas.configure(state="disabled")
+        tela.q.put(("ocupado", True))
+        tela.q.put(("status", "PF: lendo as contas do ERP..."))
+        tela.worker = tela.anx.submeter("Pagamentos do dia — contas das PF", self._t_contas,
+                                        dona=tela)
+
+    def _t_contas(self):
+        tela, log = self.tela, self.tela._log
+        try:
+            base = util.pasta_base()
+            cfg = load_config(base / "config.yaml")
+            api = tela.anx.garantir_sessao(log)
+            contas = erp_do_dia.ler_saldos(cfg, api, log=log)
+            self.q.put(("contas_lidas", contas))
+            n = len(html_pf.contas_da_aba(c.name for c in contas))
+            log(f"PF: {n} conta(s) PF e Moura Dantas no ERP.")
+            tela.q.put(("status", "PF: contas lidas."))
+        except Exception as e:                                # noqa: BLE001
+            log("\n" + widgets.recado_de_erro(e, "Não consegui ler as contas do ERP."))
+            log(dc.detalhe_do_erro(e))
+            tela.q.put(("status", "PF: não consegui ler as contas — veja o Registro."))
+        finally:
+            tela.q.put(("ocupado", False))
+            self.q.put(("fim_contas", None))
 
     # ------------------------------------------------------------- gerar
     def gerar(self):
@@ -263,6 +330,10 @@ class AbaPF:
                     self._abrir(valor)
                 elif tipo == "fim":
                     self.b_gerar.configure(state="normal")
+                elif tipo == "contas_lidas":
+                    self.receber_contas(valor)
+                elif tipo == "fim_contas":
+                    self.b_contas.configure(state="normal")
         except queue.Empty:
             pass
         except Exception as e:                                # noqa: BLE001
