@@ -629,12 +629,11 @@ def contas_do_html_geral(resultado, dia: date | None = None) -> list[dict]:
                 "obs": str(r.get("obs") or ""),
                 "bloqueio": _motivo_do_bloqueio(r),
             })
+            entradas[-1].update(qr_do_pix(entradas[-1], r))
         # Vencido PRIMEIRO na lista da conta, o mais antigo no topo (dono,
         # 09/11/2026: "traz ele primeiro na lista do banco … pra eu verificar
         # se realmente não foi pago"). Ordenação estável: entre os vencidos
         # do mesmo dia e entre os não vencidos, a ordem de sempre fica.
-        for e in entradas:
-            e.update(qr_do_pix(e))
         entradas.sort(key=lambda e: (0, -e["dias_vencido"]) if e["vencido"] else (1, 0))
         contas.append({"nome": str(nome),
                        "total": reais(total_da_conta(regs)).replace("R$ ", "", 1),
@@ -661,12 +660,14 @@ def contas_do_html_geral(resultado, dia: date | None = None) -> list[dict]:
     return contas
 
 
-def qr_do_pix(e: dict) -> dict:
+def qr_do_pix(e: dict, r: dict) -> dict:
     """O QR do Pix de uma linha das PJ, igual ao HTML das PF (dono, 13/11/2026):
-    copia-e-cola que veio pronto, ou o montado pela chave com a descrição de
-    colar dentro. Devolve {"pix_montado", "qr_svg"} ou {} (boleto, sem chave,
-    chave de tipo incerto). Quem decide se MOSTRA é o HTML: linha com
-    bloqueio não mostra código nenhum, como o Copiar."""
+    copia-e-cola que veio pronto, ou o montado pela chave. A descrição dentro
+    é a das PF (`html_pf.descricao_do_pix`: cabe no limite sem cortar NF/OC
+    nem palavra, e "LT 10-11" vira "10 E 11", que o Anexar lê) e o nome, no
+    reembolso, é o da pessoa (`reembolso_nome`). Devolve {"pix_montado",
+    "qr_svg"} ou {} (boleto, sem chave, chave de tipo incerto). Quem decide
+    se MOSTRA é o HTML: linha com bloqueio não mostra código, como o Copiar."""
     if not str(e.get("tipo") or "").startswith("Pix"):
         return {}
     from . import html_pf  # html_pf importa este módulo: import tardio
@@ -677,9 +678,9 @@ def qr_do_pix(e: dict) -> dict:
         chave, _motivo = html_pf.chave_normalizada(dados, e.get("dados_original") or "")
         if not chave:
             return {}
-        lim = html_pf.limite_da_descricao(chave)
-        desc = re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9 ]", "", html_pf._n(e.get("descricao") or ""))).strip()[:lim]
-        br = html_pf.pix_estatico(chave, (e.get("centavos") or 0) / 100, e.get("favorecido") or "", desc)
+        nome = (r.get("reembolso_nome") if r.get("reembolso") else "") or r.get("favorecido") or e.get("favorecido") or ""
+        br = html_pf.pix_estatico(chave, (e.get("centavos") or 0) / 100, nome,
+                                  html_pf.descricao_do_pix(r, chave))
     try:
         svg = html_pf._svg(br, "qr")
     except Exception:  # sem zxing-cpp: fica o copia-e-cola, sem o desenho
