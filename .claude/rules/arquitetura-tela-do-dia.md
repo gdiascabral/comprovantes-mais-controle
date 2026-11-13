@@ -93,6 +93,18 @@ barra de andamento (a doca) são os mesmos, e o Parar também (`_parar`).
   anterior vem preenchida, a troca vale dali em diante, e o primeiro do dia é
   escolhido (guardado por dia no navegador). «Baixar lista das baixas» gera o
   JSON (lançamento, título, valor, conta, data) da etapa 3, que ainda não existe.
+- **Revisão de dinheiro (13/11/2026)**: (1) a marca é por LINHA
+  (`html_pf.chave_da_marca`, "<id>#<linha>" no dividido), e o JSON leva
+  `lancamento_id` e `parte` à parte; (2) parcial, valor que diverge, alterado
+  na leitura, pagar à mão e já pago não têm código (`bloqueio_duro`); as
+  outras ATENÇÕES (`_motivo_do_bloqueio` das PJ) escondem o código atrás de
+  "Conferi o alerta — mostrar o código"; (3) o tipo da chave sai de
+  `regras.tipo_de_chave_pix` sobre o `paidToBankAccount` (o declarado), CPF e
+  CNPJ só com DV fechando, ambíguo sem QR; (4) as marcas ficam numa chave só
+  do navegador (`pagamentos_pf`), então o pago num HTML aparece pago no do dia
+  seguinte; (5) "MESMO CÓDIGO" olha linhas comuns e reembolsos recolhidos
+  juntos; (6) o "Conferir agendamentos" da Remessa não sugere
+  `pagamentos_pf_*.html`.
 - Nada escreve no ERP.
 
 ## "Vai sair" = entra e nasce marcada
