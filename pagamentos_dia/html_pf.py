@@ -59,6 +59,18 @@ def e_conta_da_aba(nome) -> bool:
     return " PESSOA FISICA " in u or " MOURA DANTAS " in u
 
 
+#: Bancos das contas de pessoas que pagam as PF pelo celular: vão no alto do
+#: seletor do "já paguei". Só ORDENA — qualquer conta pode ser escolhida.
+BANCOS_DE_PESSOA = ("PAGBANK", "NEON", "NEXT", "NUBANK", "PICPAY", "MERCADO PAGO",
+                    "CONTA PESSOAL")
+
+
+def e_conta_de_pessoa(nome) -> bool:
+    u = f" {_chave(nome)} "
+    return (not e_conta_da_aba(nome)
+            and any(f" {_chave(b)} " in u for b in BANCOS_DE_PESSOA))
+
+
 def contas_da_aba(nomes) -> list[str]:
     """As contas da aba, sem repetir, em ordem alfabética."""
     vistos = {}
@@ -156,28 +168,41 @@ def _cpf_valido(d: str) -> bool:
     return True
 
 
-def chave_normalizada(chave) -> tuple[str, str]:
-    """(chave como o DICT a guarda, tipo) ou ("", motivo). Onze dígitos que
-    não fecham o CPF só viram celular com o 9 depois do DDD."""
+def chave_normalizada(chave, original: str = "") -> tuple[str, str]:
+    """(chave como o DICT a guarda, tipo) ou ("", motivo).
+
+    O TIPO não se chuta (revisão de dinheiro, 13/11/2026): vem de
+    `regras.tipo_de_chave_pix` — o tipo declarado no texto ORIGINAL do
+    lançamento ("PIX CPF: …"), senão o formato inequívoco; onze dígitos só
+    viram CPF com o DV fechando e sem cara de celular, e celular só com DDD
+    da lista e sem fechar o CPF. Ambíguo, CPF/CNPJ que não fecha no DV ou
+    tipo desconhecido = sem QR, com o motivo."""
     c = str(chave or "").strip()
-    c = re.sub(r"^(CHAVE\s*)?PIX\s*(CPF|CNPJ|CELULAR|TELEFONE|E-?MAIL|ALEAT[OÓ]RIA)?\s*:?\s*",
-               "", c, flags=re.I).strip()
-    if "@" in c and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", c):
-        return c.lower(), "e-mail"
-    if re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", c):
-        return c.lower(), "aleatória"
+    if not c:
+        return "", "sem chave Pix"
     d = re.sub(r"\D", "", c)
-    if c.startswith("+55") and len(d) == 13:
-        return "+" + d, "celular"
-    if len(d) == 14:
-        return d, "CNPJ"
-    if len(d) == 11 and _cpf_valido(d):
+    tipo = ""
+    if original and d and d in re.sub(r"\D", "", original):
+        tipo = regras.tipo_de_chave_pix(original)
+    tipo = tipo or regras.tipo_de_chave_pix(c)
+    if tipo == regras.CHAVE_EMAIL and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", c):
+        return c.lower(), "e-mail"
+    if tipo == regras.CHAVE_ALEATORIA:
+        m = re.search(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", c)
+        if m:
+            return m.group(0).lower(), "aleatória"
+    if tipo == regras.CHAVE_CPF and len(d) == 11 and _cpf_valido(d):
         return d, "CPF"
-    if len(d) == 11 and d[2] == "9":
-        return "+55" + d, "celular"
-    if len(d) == 13 and d.startswith("55"):
-        return "+" + d, "celular"
-    return "", f"chave não reconhecida ({c or 'vazia'})"
+    if tipo == regras.CHAVE_CNPJ and len(d) == 14 and regras.documento_valido(d):
+        return d, "CNPJ"
+    if tipo == regras.CHAVE_TELEFONE:
+        if len(d) == 13 and d.startswith("55"):
+            d = d[2:]
+        if len(d) in (10, 11):
+            return "+55" + d, "celular"
+    if tipo in (regras.CHAVE_CPF, regras.CHAVE_CNPJ):
+        return "", f"chave {tipo} que não fecha no dígito verificador ({c})"
+    return "", f"chave Pix de tipo incerto ({c}): confira de quem é e pague à mão"
 
 
 def limite_da_descricao(chave: str) -> int:
@@ -216,22 +241,52 @@ class Item:
     notas: list
     titulo_id: str = ""
     reembolso_de: str = ""           # pessoa, quando veio da caixa de reembolso
+    escondido: bool = False          # ATENÇÃO: código atrás de "conferi — mostrar"
 
 
 def _copia_e_cola(dados) -> bool:
     return bool(dados) and str(dados).startswith("000201") and qr_pix.valido(str(dados))
 
 
-def item_do_registro(conta: str, r: dict, titulo_id: str = "") -> Item:
+def bloqueio_duro(r: dict) -> str:
+    """O que nunca se paga pelo código da linha: o código é de outro valor ou
+    de outro momento, ou o dinheiro vai para outra pessoa."""
+    status = _chave(r.get("status"))
+    motivos = []
+    if status.startswith("JA PAGO"):
+        motivos.append("já pago — não pagar de novo")
+    if r.get("parcial") or "PARCIAL" in status:
+        motivos.append("pagamento parcial: o código é do valor cheio")
+    if r.get("valor_diverge") or "DIVERGE" in status:
+        motivos.append("o valor do documento diverge do lançamento")
+    if "ALTERADO" in status:
+        motivos.append("o lançamento mudou durante a leitura — gere de novo")
+    if "PAGAR A MAO" in _chave(r.get("obs")):
+        motivos.append("a observação manda pagar outra pessoa — pague à mão")
+    return "; ".join(motivos)
+
+
+def item_do_registro(conta: str, r: dict, titulo_id: str = "", original: str = "") -> Item:
     """Os códigos de UMA linha: boleto → código de barras (+ o QR do mesmo
     boleto); Pix → o copia-e-cola que veio pronto, ou o QR montado pela chave
     com a descrição dentro. Sem nada para escanear, alerta — nunca chute."""
     tipo, dados = str(r.get("tipo") or ""), str(r.get("dados") or "")
     valor = float(r.get("valor") or 0)
     codigos, alertas, notas = [], [], []
-    status = str(r.get("status") or "")
-    if status.upper().startswith("ATEN"):
-        alertas.append(status)
+    # Revisão de dinheiro (13/11/2026). Dois níveis:
+    # - o que NÃO se paga pelo código (parcial, valor que diverge, alterado na
+    #   leitura, pagar à mão, já pago): nenhum código, só o motivo;
+    # - o resto das ATENÇÕES (a mesma régua do Copiar das PJ): o código fica
+    #   ESCONDIDO atrás de "conferi — mostrar o código".
+    duro = bloqueio_duro(r)
+    if duro:
+        return Item(conta=conta, registro=r,
+                    grupo="BOLETO" if tipo.upper().startswith("BOLETO") else "PIX",
+                    codigos=[], alertas=[f"NÃO PAGAR POR AQUI: {duro}"],
+                    notas=[], titulo_id=titulo_id)
+    conferir = html_pagamentos._motivo_do_bloqueio(r)
+    if conferir:
+        alertas.append(f"CONFIRA ANTES DE PAGAR: {conferir}")
     if tipo.upper().startswith("BOLETO"):
         grupo = "BOLETO"
         barras = ocr_boleto.codigo_de_barras(dados) if dados else ""
@@ -244,7 +299,7 @@ def item_do_registro(conta: str, r: dict, titulo_id: str = "") -> Item:
         if _copia_e_cola(dados):
             codigos.append(("QR Pix (veio pronto)", dados, "qr", dados))
         elif dados:
-            chave, tipo_ch = chave_normalizada(dados)
+            chave, tipo_ch = chave_normalizada(dados, original)
             if chave:
                 nome = (r.get("reembolso_nome") if r.get("reembolso") else "") or r.get("favorecido")
                 desc = descricao_do_pix(r, chave)
@@ -260,18 +315,29 @@ def item_do_registro(conta: str, r: dict, titulo_id: str = "") -> Item:
     if not codigos:
         alertas.append("nada para escanear — abrir o anexo")
     return Item(conta=conta, registro=r, grupo=grupo, codigos=codigos,
-                alertas=list(dict.fromkeys(alertas)), notas=notas, titulo_id=titulo_id)
+                alertas=list(dict.fromkeys(alertas)), notas=notas, titulo_id=titulo_id,
+                escondido=bool(conferir))
 
 
-def itens(entram, titulos=None) -> list[Item]:
+def itens(entram, titulos=None, originais=None) -> list[Item]:
     """Boletos primeiro, do maior para o menor; depois Pix. O mesmo código em
     dois lançamentos (fora a chave, que se repete com o fornecedor) vira
-    alerta nos dois: é pagar em dobro."""
-    titulos = titulos or {}
-    saida = [item_do_registro(c, r, titulos.get(str(r.get("id")), "")) for c, r in entram]
-    saida.sort(key=lambda i: (0 if i.grupo == "BOLETO" else 1,
-                              -float(i.registro.get("valor") or 0),
-                              i.registro.get("vencimento") or ""))
+    alerta nos dois: é pagar em dobro. `originais` = {id: paidToBankAccount},
+    de onde sai o tipo DECLARADO da chave."""
+    titulos, originais = titulos or {}, originais or {}
+    saida = [item_do_registro(c, r, titulos.get(str(r.get("id")), ""),
+                              originais.get(str(r.get("id")), "")) for c, r in entram]
+    _acusar_repetidos(saida)
+    return saida
+
+
+def _ordem(i: "Item"):
+    return (0 if i.grupo == "BOLETO" else 1, -float(i.registro.get("valor") or 0),
+            i.registro.get("vencimento") or "")
+
+
+def _acusar_repetidos(saida) -> None:
+    saida.sort(key=_ordem)
     por_codigo = {}
     for it in saida:
         for rot, conteudo, cl, _t in it.codigos:
@@ -288,7 +354,6 @@ def itens(entram, titulos=None) -> list[Item]:
                 it.alertas.append(f"MESMO CÓDIGO em {len(por_codigo[k])} lançamentos — "
                                   "risco de pagar em dobro")
                 break
-    return saida
 
 
 # ---------------------------------------------------------------- desenho
@@ -320,6 +385,17 @@ def _data(iso) -> str:
         return "—"
 
 
+def chave_da_marca(r: dict) -> str:
+    """A marca do "já paguei" é por LINHA: o lançamento dividido em N boletos
+    tem N linhas com o mesmo id (`boletos_somados`), e marcar uma não pode
+    marcar as outras (revisão de dinheiro, 13/11/2026). A forma do HTML das
+    PJ: "<id>#<dígitos da linha>"."""
+    ident = str(r.get("id") or "")
+    if r.get("parte") and r.get("parte_linha"):
+        return f"{ident}#{r.get('parte_linha')}"
+    return ident
+
+
 def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False) -> str:
     r = it.registro
     venc = str(r.get("vencimento") or "")[:10]
@@ -329,13 +405,16 @@ def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False) -> str:
         f'<div class="txt"><code>{_e(t)}</code><button type="button" data-copiar="{_e(t)}">'
         f'Copiar</button></div></figure>'
         for rot, conteudo, cl, t in it.codigos)
+    if blocos and it.escondido:
+        blocos = (f'<details class="conferir"><summary>Conferi o alerta — mostrar o código'
+                  f'</summary>{blocos}</details>')
     lista = lambda xs, cl: (f'<ul class="{cl}">' + "".join(f"<li>{_e(x)}</li>" for x in xs)  # noqa: E731
                             + "</ul>") if xs else ""
     desc = html_pagamentos.descricao_para_colar(r, it.conta)
     quem = (f"{r.get('reembolso_nome')} (reembolso de {r.get('favorecido')})"
             if r.get("reembolso") and r.get("reembolso_nome") else r.get("favorecido"))
     return f'''
-<article class="card{' atencao' if it.alertas else ''}{' reemb' if recolhido else ''}" data-id="{_e(r.get('id'))}" data-tpid="{_e(it.titulo_id)}" data-forn="{_e(r.get('favorecido'))}" data-venc="{_e(venc)}" data-centavos="{round(float(r.get('valor') or 0) * 100)}">
+<article class="card{' atencao' if it.alertas else ''}{' reemb' if recolhido else ''}" data-id="{_e(chave_da_marca(r))}" data-lanc="{_e(r.get('id'))}" data-parte="{_e(r.get('parte') or '')}" data-tpid="{_e(it.titulo_id)}" data-forn="{_e(r.get('favorecido'))}" data-venc="{_e(venc)}" data-centavos="{round(float(r.get('valor') or 0) * 100)}">
   <header>
     <span class="num">{k}</span>
     <span class="grupo g-{it.grupo.lower()}">{it.grupo}</span>
@@ -386,8 +465,11 @@ def pagina(itens_, fora, reembolsos, contas_pagadoras, ini: date, fim: date,
         f"<li>{_e(r.get('favorecido') or '?')} — R$ {_brl(r.get('valor'))} — "
         f"venc. {_data(r.get('vencimento'))} — {_e(conta)} — {_e(m)}</li>"
         for conta, r, m in sorted(fora, key=lambda x: (str(x[2]), -float(x[1].get('valor') or 0))))
-    pf = [c for c in contas_pagadoras if not e_conta_da_aba(c.get("nome"))]
-    chave = f"pagamentos_pf_{ini.isoformat()}_{fim.isoformat()}"
+    pf = [c for c in contas_pagadoras if e_conta_de_pessoa(c.get("nome"))]
+    # Uma chave só para todos os HTMLs das PF (revisão de dinheiro,
+    # 13/11/2026): o pago num HTML aparece pago no do dia seguinte, enquanto a
+    # baixa no ERP não acontece — períodos que se cruzam não perdem a marca.
+    chave = "pagamentos_pf"
     return (MODELO
             .replace("__PERIODO__", f"{ini:%d/%m} a {fim:%d/%m/%Y}")
             .replace("__CONTAS_LIDAS__", _e(", ".join(contas_lidas) or "—"))
@@ -426,8 +508,17 @@ def gravar(resultado, lancamentos, pasta: Path, ini: date, fim: date, *, regras_
     """Separa, desenha e grava `pagamentos_pf_<ini>_a_<fim>.html` em `pasta`."""
     sep = separar(resultado, regras_pf, pessoas, reembolso_ligado)
     titulos = {str(i.get("id")): str(i.get("tradePayableId") or "") for i in lancamentos or ()}
-    lista = itens(sep.entram, titulos)
-    recolhidos = itens([(c, r) for c, r, _p in sep.reembolsos], titulos)
+    originais = {str(i.get("id")): str(i.get("paidToBankAccount") or "")
+                 for i in lancamentos or ()}
+    lista = itens(sep.entram, titulos, originais)
+    recolhidos = itens([(c, r) for c, r, _p in sep.reembolsos], titulos, originais)
+    # O mesmo código numa linha comum e num reembolso recolhido também é dobro.
+    todos = lista + recolhidos
+    for it in todos:
+        it.alertas = [a for a in it.alertas if not a.startswith("MESMO CÓDIGO")]
+    _acusar_repetidos(todos)
+    lista.sort(key=_ordem)
+    recolhidos.sort(key=_ordem)
     pessoa_de = {id(r): str(p or "") for _c, r, p in sep.reembolsos}
     for it in recolhidos:
         it.reembolso_de = pessoa_de.get(id(it.registro), "")
@@ -506,6 +597,8 @@ ul { margin:6px 0; padding-left:18px; font-size:13px }
 details { background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:10px 14px; margin-top:20px }
 details > summary { cursor:pointer; font-weight:600 }
 .semcod { color:var(--bad); font-weight:600 }
+details.conferir { margin:0; border:1px dashed var(--at); background:var(--atbg) }
+details.conferir > summary { color:var(--at) }
 </style></head><body><div class="wrap">
 <h1>Pagamentos PF e Moura Dantas</h1>
 <p class="sub">Vencimentos de __PERIODO__ em aberto no Mais Controle. Contas lidas: __CONTAS_LIDAS__. Boletos do maior para o menor, depois Pix. Escaneie pelo celular; no Pix montado pela chave, confira o nome que o banco mostra antes de confirmar.</p>
@@ -602,7 +695,7 @@ function listaBaixas() {
   const linhas = [];
   document.querySelectorAll(".card").forEach(card => {
     const m = marcas[card.dataset.id]; if (!m) return;
-    linhas.push({ lancamento_id: card.dataset.id, titulo_id: card.dataset.tpid, fornecedor: card.dataset.forn,
+    linhas.push({ lancamento_id: card.dataset.lanc, parte: card.dataset.parte, titulo_id: card.dataset.tpid, fornecedor: card.dataset.forn,
       valor: (+card.dataset.centavos / 100).toFixed(2), vencimento: card.dataset.venc,
       conta: m.conta, conta_id: m.conta_id, data_pagamento: m.data });
   });

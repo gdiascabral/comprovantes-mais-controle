@@ -83,7 +83,38 @@ def test_copia_e_cola_pronto_nao_e_refeito():
 def test_chave_que_nao_fecha_vira_alerta_e_nao_qr():
     it = html_pf.item_do_registro("PF", reg(dados="PIX: 12345678900"))
     assert not it.codigos
-    assert any("chave não reconhecida" in a for a in it.alertas)
+    assert any("tipo incerto" in a or "não fecha" in a for a in it.alertas)
+
+
+def test_onze_digitos_que_nao_fecham_o_cpf_nao_viram_celular_de_ninguem():
+    """CPF digitado errado com 9 na 3ª casa não pode virar o celular +55…"""
+    chave, motivo = html_pf.chave_normalizada("11912345678")
+    assert motivo and (chave == "" or chave.startswith("+55"))
+    declarado, _ = html_pf.chave_normalizada("11912345678", original="PIX CPF: 119.123.456-78")
+    assert declarado == ""
+
+
+def test_cnpj_que_nao_fecha_nao_vira_chave():
+    assert html_pf.chave_normalizada("12345678000100")[0] == ""
+
+
+def test_tipo_declarado_no_lancamento_decide():
+    chave, tipo = html_pf.chave_normalizada(CPF_OK, original=f"PIX CPF: {CPF_OK}")
+    assert (chave, tipo) == (CPF_OK, "CPF")
+
+
+def test_parcial_ou_alterado_nao_tem_codigo():
+    for extra in ({"parcial": True}, {"status": "ATENÇÃO — alterado durante a leitura"},
+                  {"valor_diverge": True}, {"obs": "PAGAR À MÃO"}):
+        it = html_pf.item_do_registro("PF", reg(dados=f"PIX CPF: {CPF_OK}", **extra))
+        assert not it.codigos and it.alertas[0].startswith("NÃO PAGAR")
+
+
+def test_dividido_marca_por_linha():
+    r1 = reg(id="L9", parte="1/2", parte_linha="111")
+    r2 = reg(id="L9", parte="2/2", parte_linha="222")
+    assert html_pf.chave_da_marca(r1) != html_pf.chave_da_marca(r2)
+    assert html_pf.chave_da_marca(reg(id="L9")) == "L9"
 
 
 def test_boleto_vira_codigo_de_barras():
@@ -108,10 +139,11 @@ def test_mesmo_qr_em_dois_lancamentos_alerta_nos_dois():
     assert all(any("MESMO CÓDIGO" in a for a in i.alertas) for i in lista)
 
 
-def test_status_atencao_vira_alerta():
+def test_atencao_leve_esconde_o_codigo_atras_da_conferencia():
     it = html_pf.item_do_registro("PF", reg(dados=f"PIX CPF: {CPF_OK}",
-                                            status="ATENÇÃO — documento não bate"))
-    assert "ATENÇÃO — documento não bate" in it.alertas
+                                            status="ATENÇÃO — conferir quem recebe"))
+    assert it.codigos and it.escondido
+    assert any(a.startswith("CONFIRA ANTES") for a in it.alertas)
 
 
 def test_gravar_escreve_a_pagina_com_o_titulo_para_a_baixa(tmp_path):
