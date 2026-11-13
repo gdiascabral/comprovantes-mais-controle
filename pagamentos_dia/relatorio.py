@@ -1956,7 +1956,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      ids_nao_confirmados=(), participantes=None,
                      cadastro_reembolso=None, anexos_nao_lidos=(),
                      qr_pix=None, titulos_nao_lidos=(),
-                     ids_liberados=(), alterados_na_leitura=()) -> Resultado:
+                     ids_liberados=(), alterados_na_leitura=(),
+                     contas_escolhidas=None) -> Resultado:
     """Transforma lançamentos do ERP em linhas de planilha.
 
     `anexos`             {tradePayableId: [anexo]}
@@ -2018,7 +2019,11 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # — o que só acontece depois do vencimento.
         # O preço de sair daqui e não lá em cima é calcular seis campos para
         # uma linha que não entra; todos são leitura de dicionário, sem rede.
-        if not conta_entra(conta, incluir, excluir):
+        # `contas_escolhidas` (aba PF, 12/11/2026): as contas que o dono
+        # MARCOU entram, inclusive a "APENAS LANÇAMENTO", que o
+        # `CONTAS_IGNORAR` tiraria — é nela que os títulos de PF moram.
+        if (chave(conta) not in contas_escolhidas if contas_escolhidas is not None
+                else not conta_entra(conta, incluir, excluir)):
             omitidos.append({
                 "conta": conta, "tipo": tipo, "valor": valor,
                 "descricao": monta_descricao(item, files, coment, overview,

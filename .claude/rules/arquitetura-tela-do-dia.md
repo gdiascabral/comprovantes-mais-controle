@@ -61,6 +61,51 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 | `passo2.py` | regras puras do passo 2: que botão vale em cada linha, edição, a pergunta ao gerar com a nuvem em erro, gravar-e-reler |
 | `passo67.py` | regras puras de "Agendados a confirmar", "Marcar agendados" e "Lista do diretor": marcas, confirmação do "Pago", `reler_tudo` |
 | `janelas.py` | os diálogos finos (motivo, edição, à mão, resposta, nome curto); a regra que valida mora nos módulos acima |
+| `pf_na_tela.py` | a aba PF: contas PF e Moura Dantas marcáveis (cache `contas_pf.json`), período, caixa dos reembolsos, «Ler e gerar o HTML» na vaga desta aba; a regra é `pagamentos_dia/html_pf.py` |
+
+## Abas PJ e PF (12/11/2026)
+
+Pedido do dono: a tela abre com duas abas no alto, **PJ** (a tela de sempre) e
+**PF e Moura Dantas** (`pf_na_tela.AbaPF`). Trocar mostra outro meio
+(`AreaRolavel` própria) e esconde o Buscar/Reler do cabeçalho; o Registro e a
+barra de andamento (a doca) são os mesmos, e o Parar também (`_parar`).
+
+- **Contas**: TODAS as contas cujo nome tem PESSOA FISICA ou MOURA DANTAS
+  (`html_pf.contas_da_aba`, por palavra inteira, sem acento), lidas do ERP a
+  cada geração (`erp_do_dia.ler_saldos`, o caminho do Buscar) e guardadas em
+  `contas_pf.json` ao lado do exe com as marcadas. A primeira geração (sem
+  cache) lê todas.
+- **Leitura**: a MESMA do Buscar (`leitura_do_dia.ler_pagamentos`) com
+  `contas_escolhidas` — que entram mesmo sendo "APENAS LANÇAMENTO" (o
+  `CONTAS_IGNORAR` das PJ não vale aqui; `montar_registros(contas_escolhidas=)`).
+  Sem anexo, R$ 1,00, `so_com_reembolso`, boleto em imagem: tudo igual às PJ.
+- **Saem direto** (`regras_pf.json` ao lado do exe — nomes de gente e de obra,
+  fora do repositório): pedaço do centro de custo (`cc_fora`) ou de quem recebe
+  (`favorecidos_fora`); e todo cartão ou link. Vão para "Não entraram" com o
+  motivo, junto com os omitidos da apuração.
+- **Reembolso dos sócios**: a caixa "Reembolso para <confirmar_antes>", como
+  nas PJ. Desligada, as linhas deles vão para uma seção RECOLHIDA do HTML, com
+  o mesmo «já paguei» (pagar um mesmo assim é abrir e marcar).
+- **HTML** `pagamentos_pf_<de>_a_<até>.html`: código de barras (ITF) e o QR do
+  boleto; Pix pelo copia-e-cola que veio pronto ou QR montado pela chave com a
+  descrição das PJ dentro (`html_pf.descricao_do_pix`); mesmo código em dois
+  lançamentos alerta nos dois. «Já paguei» pede a conta: a do pagamento
+  anterior vem preenchida, a troca vale dali em diante, e o primeiro do dia é
+  escolhido (guardado por dia no navegador). «Baixar lista das baixas» gera o
+  JSON (lançamento, título, valor, conta, data) da etapa 3, que ainda não existe.
+- **Revisão de dinheiro (13/11/2026)**: (1) a marca é por LINHA
+  (`html_pf.chave_da_marca`, "<id>#<linha>" no dividido), e o JSON leva
+  `lancamento_id` e `parte` à parte; (2) parcial, valor que diverge, alterado
+  na leitura, pagar à mão e já pago não têm código (`bloqueio_duro`); as
+  outras ATENÇÕES (`_motivo_do_bloqueio` das PJ) escondem o código atrás de
+  "Conferi o alerta — mostrar o código"; (3) o tipo da chave sai de
+  `regras.tipo_de_chave_pix` sobre o `paidToBankAccount` (o declarado), CPF e
+  CNPJ só com DV fechando, ambíguo sem QR; (4) as marcas ficam numa chave só
+  do navegador (`pagamentos_pf`), então o pago num HTML aparece pago no do dia
+  seguinte; (5) "MESMO CÓDIGO" olha linhas comuns e reembolsos recolhidos
+  juntos; (6) o "Conferir agendamentos" da Remessa não sugere
+  `pagamentos_pf_*.html`.
+- Nada escreve no ERP.
 
 ## "Vai sair" = entra e nasce marcada
 

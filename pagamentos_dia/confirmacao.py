@@ -87,6 +87,9 @@ class Entradas:
     #: Lançamentos que mudaram no ERP entre a lista e o fim da leitura dos
     #: anexos (só a `leitura_do_dia` preenche): saem em ATENÇÃO.
     alterados_na_leitura: set = field(default_factory=set)
+    #: Aba PF (12/11/2026): as chaves (`relatorio.chave`) das contas marcadas,
+    #: que entram mesmo sendo "APENAS LANÇAMENTO". None = a régua de sempre.
+    contas_escolhidas: frozenset | None = None
 
 
 def _periodo_legivel(periodo) -> str:
@@ -161,7 +164,8 @@ def remontar(entradas: Entradas, ids_nao_confirmados=(), *,
         titulos_nao_lidos=entradas.titulos_nao_lidos,
         qr_pix=entradas.qr_pix,
         ids_liberados=ids_liberados,
-        alterados_na_leitura=entradas.alterados_na_leitura)
+        alterados_na_leitura=entradas.alterados_na_leitura,
+        contas_escolhidas=entradas.contas_escolhidas)
     if entradas.dividir_boletos:
         resultado = boletos_somados.dividir(resultado, entradas,
                                             titulos_erp=entradas.titulos_erp)

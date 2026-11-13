@@ -796,7 +796,8 @@ class PagamentosDiaFrame(ttk.Frame):
                  else Path(self.v_pasta.get().strip() or "."))
         try:
             candidatos = [p for p in pasta.glob("pagamentos_*.html")
-                          if "pessoa_fisica" not in p.name]
+                          if "pessoa_fisica" not in p.name
+                          and not p.name.startswith("pagamentos_pf_")]
         except OSError:
             return None
         return max(candidatos, key=lambda p: p.stat().st_mtime, default=None)
