@@ -629,6 +629,7 @@ def contas_do_html_geral(resultado, dia: date | None = None) -> list[dict]:
                 "obs": str(r.get("obs") or ""),
                 "bloqueio": _motivo_do_bloqueio(r),
             })
+            entradas[-1].update(qr_do_pix(entradas[-1], r))
         # Vencido PRIMEIRO na lista da conta, o mais antigo no topo (dono,
         # 09/11/2026: "traz ele primeiro na lista do banco … pra eu verificar
         # se realmente não foi pago"). Ordenação estável: entre os vencidos
@@ -657,6 +658,34 @@ def contas_do_html_geral(resultado, dia: date | None = None) -> list[dict]:
         for e in c["entries"]:
             e.pop("_lancamento", None)
     return contas
+
+
+def qr_do_pix(e: dict, r: dict) -> dict:
+    """O QR do Pix de uma linha das PJ, igual ao HTML das PF (dono, 13/11/2026):
+    copia-e-cola que veio pronto, ou o montado pela chave. A descrição dentro
+    é a das PF (`html_pf.descricao_do_pix`: cabe no limite sem cortar NF/OC
+    nem palavra, e "LT 10-11" vira "10 E 11", que o Anexar lê) e o nome, no
+    reembolso, é o da pessoa (`reembolso_nome`). Devolve {"pix_montado",
+    "qr_svg"} ou {} (boleto, sem chave, chave de tipo incerto). Quem decide
+    se MOSTRA é o HTML: linha com bloqueio não mostra código, como o Copiar."""
+    if not str(e.get("tipo") or "").startswith("Pix"):
+        return {}
+    from . import html_pf  # html_pf importa este módulo: import tardio
+    dados = str(e.get("dados_limpo") or "").strip()
+    if dados.startswith("000201") and html_pf.qr_pix.valido(dados):
+        br = dados
+    else:
+        chave, _motivo = html_pf.chave_normalizada(dados, e.get("dados_original") or "")
+        if not chave:
+            return {}
+        nome = (r.get("reembolso_nome") if r.get("reembolso") else "") or r.get("favorecido") or e.get("favorecido") or ""
+        br = html_pf.pix_estatico(chave, (e.get("centavos") or 0) / 100, nome,
+                                  html_pf.descricao_do_pix(r, chave))
+    try:
+        svg = html_pf._svg(br, "qr")
+    except Exception:  # sem zxing-cpp: fica o copia-e-cola, sem o desenho
+        svg = ""
+    return {"pix_montado": br, "qr_svg": svg}
 
 
 def movimentos_do_html(movimentos) -> list[dict]:
@@ -918,6 +947,10 @@ class Gerados(NamedTuple):
         return linhas
 
 
+def e_conta_moura_dantas(nome) -> bool:
+    return "MOURA DANTAS" in " ".join(str(nome or "").upper().split())
+
+
 def ordenar_contas(contas: list[dict], primeiras=()) -> list[dict]:
     """A ordem das contas no HTML (dono, 28/10/2026): primeiro as que aportam
     ou distribuem no dia (`primeiras`, nomes do ERP já na ordem — a principal
@@ -930,7 +963,10 @@ def ordenar_contas(contas: list[dict], primeiras=()) -> list[dict]:
     posicao = {}
     for nome in primeiras or ():
         posicao.setdefault(chave(nome), len(posicao))
+    # MOURA DANTAS sempre por último, mesmo aportando no dia (dono,
+    # 13/11/2026: "sempre sempre, pq são acessos separados" no banco).
     return sorted(contas, key=lambda c: (
+        e_conta_moura_dantas(c["nome"]),
         posicao.get(chave(c["nome"]), len(posicao)),
         -len(c["entries"]), chave(c["nome"])))
 

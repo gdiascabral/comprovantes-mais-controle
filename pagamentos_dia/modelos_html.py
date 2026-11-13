@@ -86,6 +86,11 @@ MODELO_GERAL = r'''<!doctype html>
   .bloq{font-weight:700;color:var(--bloq-text);font-size:12px;margin-bottom:4px;overflow-wrap:anywhere;}
   .code.sem-copiar{user-select:text;}
   .pix-qr{margin-top:6px;padding-top:6px;border-top:1px dashed currentColor;}
+  .qrbox{margin-top:8px;width:170px;cursor:zoom-in;background:#fff;padding:6px;border-radius:8px;border:1px solid rgba(0,0,0,.12);}
+  .qrbox svg{width:100%;height:auto;display:block;}
+  #qrzoom{position:fixed;inset:0;background:rgba(17,24,39,.8);display:none;align-items:center;justify-content:center;z-index:200;flex-direction:column;gap:12px;cursor:zoom-out;}
+  #qrzoom.on{display:flex;} #qrzoom .q{background:#fff;padding:18px;border-radius:12px;width:min(80vh,90vw);}
+  #qrzoom .q svg{width:100%;height:auto;display:block;} #qrzoom p{color:#fff;font-size:16px;margin:0;}
   .pix-qr-rot{font-size:10.5px;font-weight:600;opacity:.75;white-space:nowrap;padding-top:3px;}
   .aconferir{color:var(--bloq-text);font-weight:600;}
   .acoes{display:flex;flex-direction:column;gap:6px;align-items:stretch;}
@@ -201,6 +206,16 @@ function showToast(msg){
   t.classList.add('show');
   clearTimeout(showToast._h);
   showToast._h = setTimeout(()=>t.classList.remove('show'), 1100);
+}
+function abrirQr(svg, legenda){
+  let z = document.getElementById('qrzoom');
+  if(!z){
+    z = document.createElement('div'); z.id = 'qrzoom'; z.innerHTML = '<div class="q"></div><p></p>';
+    z.addEventListener('click', () => z.classList.remove('on'));
+    document.addEventListener('keydown', ev => { if(ev.key === 'Escape') z.classList.remove('on'); });
+    document.body.appendChild(z);
+  }
+  z.querySelector('.q').innerHTML = svg; z.querySelector('p').textContent = legenda; z.classList.add('on');
 }
 function copyText(text, btn){
   function done(ok){
@@ -328,8 +343,11 @@ function renderAccounts(){
         ? `<div class="copy-cell"><span class="code">${esc(e.dados_limpo)}</span><button class="copybtn" type="button">Copiar</button></div>`
         : `${bloq ? `<div class="bloq">CONFERIR: ${esc(bloq)}</div>` : ''}<div class="no-data-note">${esc(e.dados_original || 'Sem boleto/chave - ver observacao')}</div>`;
       // O Pix do QR Code do boleto: segundo "Copiar", nunca em linha bloqueada.
-      const pixQrCell = (e.pix_qr && !bloq)
-        ? `<div class="copy-cell pix-qr"><span class="pix-qr-rot">Pix (QR)</span><span class="code">${esc(e.pix_qr)}</span><button class="copybtn copy-pix" type="button">Copiar Pix</button></div>`
+      // Pix das PJ: o QR montado pela chave com a descricao dentro, igual ao
+      // HTML das PF (dono, 13/11/2026). Linha bloqueada nao mostra codigo.
+      const pixCopia = e.pix_qr || e.pix_montado || '';
+      const pixQrCell = (pixCopia && !bloq)
+        ? `<div class="copy-cell pix-qr"><span class="pix-qr-rot">Pix (QR)</span><span class="code">${esc(pixCopia)}</span><button class="copybtn copy-pix" type="button">Copiar Pix</button></div>${(!e.pix_qr && e.qr_svg) ? `<div class="qrbox" title="Clique para tela cheia">${e.qr_svg}</div>` : ''}`
         : '';
       tr.innerHTML = `
         <td class="chk-cell"><input type="checkbox" class="row-chk" ${isChecked ? 'checked' : ''}></td>
@@ -342,7 +360,9 @@ function renderAccounts(){
         <td class="acoes-cell"><div class="acoes">${e.link ? `<a class="linkbtn" href="${esc(e.link)}" target="_blank" rel="noopener" title="Acessar link" aria-label="Acessar link"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2h5v5M14 2L7.5 8.5M12 9.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3.5"/></svg>Acessar link</a>` : ''}<button class="delbtn" type="button" title="Excluir da lista" aria-label="Excluir da lista">&#10005; Excluir</button></div></td>`;
       const btns = tr.querySelectorAll('.copybtn:not(.copy-pix)');
       const bPix = tr.querySelector('.copy-pix');
-      if(bPix){ bPix.addEventListener('click', () => copyText(e.pix_qr, bPix)); }
+      if(bPix){ bPix.addEventListener('click', () => copyText(pixCopia, bPix)); }
+      const qb = tr.querySelector('.qrbox');
+      if(qb){ qb.addEventListener('click', () => abrirQr(e.qr_svg, e.favorecido + ' · R$ ' + e.valor)); }
       let bi = 0;
       if(e.dados_limpo && !bloq){ const b = btns[bi]; b.addEventListener('click', () => copyText(e.dados_limpo, b)); bi++; }
       { const b = btns[bi]; b.addEventListener('click', () => copyText(e.valor, b)); bi++; }
