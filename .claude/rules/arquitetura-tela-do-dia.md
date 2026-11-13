@@ -75,6 +75,10 @@ barra de andamento (a doca) são os mesmos, e o Parar também (`_parar`).
   cada geração (`erp_do_dia.ler_saldos`, o caminho do Buscar) e guardadas em
   `contas_pf.json` ao lado do exe com as marcadas. A primeira geração (sem
   cache) lê todas.
+  **«Buscar contas»** (dono, 13/11/2026) lê só a lista, e o Buscar das PJ a
+  repassa (`AbaPF.receber_contas` no `_receber_leitura`); conta nova chega
+  marcada, a que sumiu sai, as outras ficam como o dono deixou
+  (`pf_na_tela.marcadas_depois`).
 - **Leitura**: a MESMA do Buscar (`leitura_do_dia.ler_pagamentos`) com
   `contas_escolhidas` — que entram mesmo sendo "APENAS LANÇAMENTO" (o
   `CONTAS_IGNORAR` das PJ não vale aqui; `montar_registros(contas_escolhidas=)`).

@@ -852,6 +852,12 @@ class TelaDoDiaFrame(ttk.Frame):
     def _receber_leitura(self, pacote):
         (self.cfg, self.mapping, self.leitura, self.contas_erp, self.regras,
          self.periodo, self.modelo, lido, so_lancamentos) = pacote
+        # A aba PF aproveita a lista de contas que o Buscar acabou de ler
+        # (dono, 13/11/2026).
+        try:
+            self.pf.receber_contas(self.contas_erp)
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"[!] PF: não atualizei a lista de contas ({e!r})")
         self._lido_no_dia = datetime.date.today()
         if so_lancamentos:
             # O que estava na tela some agora (como o `_limpar` do Buscar faz

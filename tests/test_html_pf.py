@@ -183,3 +183,11 @@ def test_conta_apenas_lancamento_entra_quando_escolhida():
     outra = relatorio.montar_registros([item], anexos, {}, {"u1": ""},
                                        contas_escolhidas=frozenset({relatorio.chave("OUTRA")}))
     assert outra.contas == {} and outra.omitidos
+
+
+def test_marcadas_depois_mantem_a_escolha_e_marca_conta_nova():
+    from tela_do_dia.pf_na_tela import marcadas_depois
+    nomes = ["PF A", "PF B", "PF NOVA"]
+    assert marcadas_depois(nomes, ["PF A", "PF B", "PF SUMIU"], ["PF A", "PF SUMIU"]) == \
+        ["PF A", "PF NOVA"]
+    assert marcadas_depois(nomes, [], []) == nomes
