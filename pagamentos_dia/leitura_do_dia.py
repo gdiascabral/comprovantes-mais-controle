@@ -247,7 +247,7 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
                    cadastro_reembolso=None, regras_fornecedor=None, destacar=(),
                    conta_entra=relatorio.conta_entra, log=print,
                    progresso=lambda f, t: None, cancelar=lambda: False,
-                   **leitores) -> LeituraDosPagamentos:
+                   contas_escolhidas=None, **leitores) -> LeituraDosPagamentos:
     """Busca, lê os anexos e apura como a Remessa, de `ini` a `fim` (date).
 
     `api` é a `mc_api` da sessão do Chrome do app (`anx.garantir_sessao()`);
@@ -261,6 +261,12 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
     """
     leitura = LeituraDosPagamentos(periodo=(ini, fim))
     cancelar = _Parada(cancelar)
+    # Aba PF (12/11/2026): só as contas marcadas, e todas elas — inclusive a
+    # "APENAS LANÇAMENTO", que a régua das PJ ignora.
+    escolhidas = (frozenset(relatorio.chave(c) for c in contas_escolhidas)
+                  if contas_escolhidas is not None else None)
+    if escolhidas is not None:
+        conta_entra = lambda nome: relatorio.chave(nome) in escolhidas  # noqa: E731
     if not api.capturar_credenciais(log):
         raise RuntimeError("A tela de Pagamentos não carregou a lista no Chrome.")
     brutos = api.listar_a_pagar(f"{ini:%Y-%m-%d}", f"{fim:%Y-%m-%d}", log=log)
@@ -335,7 +341,7 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         # A tela nova divide o lançamento cujos boletos somam exato
         # (`boletos_somados`); a Remessa/Retorno, lendo sozinha, não.
         dividir_boletos=True,
-        alterados_na_leitura=alterados)
+        alterados_na_leitura=alterados, contas_escolhidas=escolhidas)
     # Sem título lido nada divide, e as linhas candidatas continuam com o
     # status "vários boletos": é por ele que se sabe QUAIS títulos ler.
     entradas.titulos_erp = ler_titulos_no_erp(

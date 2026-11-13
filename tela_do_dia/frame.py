@@ -49,6 +49,7 @@ from . import autenticar as au
 from . import nuvem_do_dia as _nd
 from .agendamentos_na_tela import ConferenciaNaTela
 from .autenticar_na_tela import AutenticarNaTela
+from .pf_na_tela import AbaPF
 from .prova_na_tela import ProvaNaTela
 from .sicoob_na_tela import LeitorSicoob
 from .valores import brl, de_float, ler_valor_editado
@@ -154,6 +155,18 @@ class TelaDoDiaFrame(ttk.Frame):
             "Nada aqui escreve no Mais Controle.",
             trilha="Diário  ›  Pagamentos do dia")
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
+        # Duas abas no alto (dono, 12/11/2026): PJ é a tela de sempre; PF
+        # gera o HTML das contas PF e Moura Dantas (`pf_na_tela.AbaPF`).
+        # O Registro e a barra de andamento (a doca) são das duas.
+        abas = ttk.Frame(self, style="Fundo.TFrame")
+        abas.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        self.b_aba_pj = widgets.Botao(abas, "PJ", papel="passo",
+                                      command=lambda: self.mostrar_aba("pj"))
+        self.b_aba_pj.pack(side="left")
+        self.b_aba_pf = widgets.Botao(abas, "PF e Moura Dantas", papel="neutro",
+                                      command=lambda: self.mostrar_aba("pf"))
+        self.b_aba_pf.pack(side="left", padx=px((8, 0)))
+        self._aba = "pj"
         # O meio rola quando não cabe (ver `widgets.AreaRolavel`).
         corpo = widgets.AreaRolavel(self)
         self._corpo = corpo
@@ -448,6 +461,25 @@ class TelaDoDiaFrame(ttk.Frame):
         widgets.estilo_log(self.log)
         widgets.registro_elastico(self.reg, self.log)
         corpo.encaixar(acao, self.reg)
+        # A aba PF: área própria, montada já, mostrada só pelo botão.
+        self._corpo_pf = widgets.AreaRolavel(self)
+        self.pf = AbaPF(self._corpo_pf, self)
+
+    def mostrar_aba(self, qual: str):
+        """Troca o meio da tela entre PJ e PF; cabeçalho e doca ficam."""
+        if qual == self._aba:
+            return
+        self._aba = qual
+        pj = qual == "pj"
+        self.b_aba_pj.papel("passo" if pj else "neutro")
+        self.b_aba_pf.papel("neutro" if pj else "passo")
+        (self._corpo_pf if pj else self._corpo).pack_forget()
+        (self._corpo if pj else self._corpo_pf).pack(side="top", fill="both", expand=True)
+        for b in (self.b1, self.b_reler):
+            b.pack_forget()
+        if pj:
+            self.b1.pack(side="left")
+            self.b_reler.pack(side="left", padx=px((8, 0)))
 
     @property
     def _botoes_do_dia(self):
