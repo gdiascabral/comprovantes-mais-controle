@@ -58,7 +58,7 @@ paths:
 
 ## Extratos do Inter do mês (29/10/2026)
 
-«Baixar extratos do Inter», antes de «Gerar os .zip»: um QR por login do
+«Extratos do Inter» (baixa o OFX do mês), antes de «Gerar os .zip»: um QR por login do
 `contas_inter.json`, o OFX do mês inteiro (até hoje, no mês corrente) pela
 mesma sessão da aba Conciliação (`inter_ofx.baixar_conta`), conferido antes
 de ir para `<mês>/<MÊS ANO - EMPRESA>/<pasta do login>/<dígitos>.ofx`

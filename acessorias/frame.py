@@ -118,7 +118,7 @@ class AcessoriasFrame(ttk.Frame):
         # Preparar só mexem na pasta do mês e não tocam no portal.
         # Antes de zipar: os OFX do mês das contas do Inter (29/10/2026), que
         # entram na pasta de cada empresa e vão no .zip ao escritório.
-        self.b_inter = widgets.Botao(self.cab.acoes, "Baixar extratos do Inter",
+        self.b_inter = widgets.Botao(self.cab.acoes, "Extratos do Inter",
                                      papel="passo", command=self.baixar_inter)
         self.b_inter.pack(side="left", padx=px((0, 8)))
         self.b0 = widgets.Botao(self.cab.acoes, "Gerar os .zip",
