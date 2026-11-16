@@ -22,7 +22,7 @@ do OFX e a Prova precisam saber quais contas do ERP são Sicoob e Inter):
 - **Provar saldos** — a `tela_do_dia.prova_na_tela.ProvaNaTela`, que mudou de
   hospedeiro (saiu de Pagamentos do dia, que ficou só com o link «Prova de
   saldos → aba Conciliação», `TelaDoDiaFrame.ir_para_conciliacao`, ligado no
-  app por `_abrir_se_pode("cdi")`). Liga depois da leitura do ERP.
+  app por `_abrir_se_pode("cdi")`). Liga depois da leitura do ERP. O saldo lido fica para o Pagamentos do dia (`tela_do_dia.saldos_para_o_dia`, 16/11/2026): o Buscar de lá não pede o login do Sicoob de novo e o Inter vem preenchido.
 
 | Módulo | Decide |
 |---|---|

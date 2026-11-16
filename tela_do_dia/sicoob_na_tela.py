@@ -43,6 +43,14 @@ def _hoje() -> datetime.date:
     return datetime.date.today()
 
 
+def _marca_do_arquivo(arquivo):
+    """(caminho, mtime) — o arquivo do dia mudou no disco? None = não existe."""
+    try:
+        return (str(arquivo), arquivo.stat().st_mtime_ns)
+    except OSError:
+        return (str(arquivo), None)
+
+
 def baixar_comprovantes_no_sicoob(aba) -> str | None:
     """A aba Baixar comprovantes está rodando? Ela não tem `ocupado()`: a
     pergunta é a mesma que ela própria faz antes de começar (`_comecar`), o
@@ -65,6 +73,7 @@ class LeitorSicoob:
         self.contas = []
         self._lendo = None
         self._carregada_de = None
+        self._marca = None               # (caminho, mtime) do arquivo lido
         self._chave_contas = None
         #: A tela deixa o botão ligado? (`ligar`, a partir de `passo2.botoes`)
         self._pode = False
@@ -111,12 +120,22 @@ class LeitorSicoob:
     def aplicar(self, linhas, contas_erp, mapping):
         from conciliacao.frame import RAIZ_SAIDA
         data = self._data()
-        if self._carregada_de != data:
+        arquivo = ss.caminho(RAIZ_SAIDA, data)
+        marca = _marca_do_arquivo(arquivo)
+        # Relê quando o dia muda e quando o arquivo mudou no disco depois da
+        # última vez (a Prova de saldos grava nele — dono, 16/11/2026); nunca
+        # no meio de uma leitura desta aba, que vai gravar por cima.
+        if self._carregada_de != data or (marca != self._marca and self._lendo is None
+                                          and not self.ocupado()):
+            ja_lido = self._carregada_de == data
             self._carregada_de = data
-            if self.leitura is None or self.leitura.data != data:
-                self.leitura, aviso = ss.ler(ss.caminho(RAIZ_SAIDA, data), data)
+            self._marca = marca
+            if ja_lido or self.leitura is None or self.leitura.data != data:
+                nova, aviso = ss.ler(arquivo, data)
                 if aviso:
                     self.tela._log(f"[!] {aviso}")
+                if nova is not None or not ja_lido:
+                    self.leitura = nova
         # Os objetos da última leitura do ERP (e não o `id`, que o Python
         # reaproveita): o cadastro só é relido quando o Buscar trouxe outros.
         chave = self._chave_contas
@@ -263,7 +282,8 @@ class LeitorSicoob:
         from conciliacao.frame import RAIZ_SAIDA
         self.leitura, self._carregada_de = leitura, leitura.data
         try:
-            ss.gravar(leitura, ss.caminho(RAIZ_SAIDA, leitura.data))
+            arquivo = ss.gravar(leitura, ss.caminho(RAIZ_SAIDA, leitura.data))
+            self._marca = _marca_do_arquivo(arquivo)
         except Exception as e:                               # noqa: BLE001
             self.tela._log(f"[!] não consegui guardar a leitura do Sicoob ({e}); "
                            "ela vale até fechar o app.")

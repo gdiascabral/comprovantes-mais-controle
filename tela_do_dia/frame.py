@@ -51,6 +51,7 @@ from .agendamentos_na_tela import ConferenciaNaTela
 from .autenticar_na_tela import AutenticarNaTela
 from .pf_na_tela import AbaPF
 from .sicoob_na_tela import LeitorSicoob
+from .saldos_para_o_dia import InterNoDia
 from .valores import brl, de_float, ler_valor_editado
 
 px = widgets.px
@@ -231,11 +232,15 @@ class TelaDoDiaFrame(ttk.Frame):
                         "do banco para editar (Enter edita o do banco): o valor digitado leva "
                         "✎, o original e o motivo (opcional) aparecem embaixo da tabela, "
                         "na linha selecionada, e o ajuste vale só para o dia. Nas "
-                        "contas do Sicoob o banco vem lido (Reler Sicoob refaz); o "
+                        "contas do Sicoob o banco vem lido (Reler Sicoob refaz); nas do "
+                        "Inter, o que a Prova de saldos leu nas últimas 2 horas; o "
                         "digitado vale por cima do lido.")
         # Entrega 4: a hora da leitura do Sicoob e o "Reler Sicoob" no alto do
         # passo 1 (spec). Tudo do Sicoob mora em `sicoob_na_tela`.
         self.sicoob = LeitorSicoob(c1, tela=self)
+        # O Inter do arquivo do dia (Prova de saldos ou Autenticar no banco)
+        # entra na coluna do banco (dono, 16/11/2026).
+        self.inter_do_dia = InterNoDia(log=self._log)
         self.sicoob.barra.pack(fill="x", pady=px((6, 0)))
         # Prova de saldos: desde 29/10/2026 mora na aba Conciliação (spec da
         # aba); aqui fica só o caminho até ela, ligado pelo app.
@@ -994,6 +999,8 @@ class TelaDoDiaFrame(ttk.Frame):
         """Só com leitura inteira: `_t_ler` nunca entrega a interrompida."""
         base = sd.montar_saldos(self.contas_erp, self.mapping)
         base = self.sicoob.aplicar(base, self.contas_erp, self.mapping)
+        base = self.inter_do_dia.aplicar(base, self.contas_erp, self.mapping,
+                                         self.sicoob._data())
         self.saldos = sd.ordenar(sd.aplicar_ajustes(base, self.dia.ajustes))
         self.pagamentos, self.fora = pg.por_conta(
             self.leitura.grupos, self.mapping, self._conferencia_que_vale(),
