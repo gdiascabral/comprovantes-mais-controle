@@ -31,7 +31,9 @@ from . import ofx_regras as r
 
 PARADO = "parado pelo botão Parar antes de importar"
 NAO_BAIXADO = "o OFX não foi baixado"
-NADA_NOVO = "nada novo: todos os lançamentos deste período já foram importados"
+#: Vão depois de "nada novo: " na tabela (`ofx_regras.linha_do_resultado`).
+NADA_NOVO = "todos os lançamentos deste período já foram importados"
+SEM_LANCAMENTOS = "sem lançamentos no período"
 MESMO_OFX = "o mesmo OFX (conta {}) já vai por outra linha da lista"
 MUDOU = "o arquivo mudou depois de conferido — não importei"
 #: Desfechos do motor do ERP.
@@ -155,7 +157,8 @@ def rodar(contas, ini, fim, pasta, *, sicoob, inter, erp, perguntar_outro_acesso
             else:
                 saida.append(r.Resultado(c, r.NAO_IMPORTADO, len(chaves), porque))
         elif c.erp_id in sem_novos:
-            saida.append(r.Resultado(c, r.NADA_NOVO, 0, NADA_NOVO))
+            saida.append(r.Resultado(c, r.NADA_NOVO, 0,
+                                     NADA_NOVO if sem_novos[c.erp_id] else SEM_LANCAMENTOS))
         else:
             saida.append(r.Resultado(c, r.NAO_IMPORTADO,
                                      motivo=motivo.get(c.erp_id) or PARADO))

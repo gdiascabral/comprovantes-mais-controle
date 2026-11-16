@@ -137,6 +137,16 @@ def test_ja_importado_sai_do_arquivo_e_so_o_novo_vai(tmp_path):
     assert mot.registro == [(U1, ["fitid:A1"], False)]
 
 
+def test_ofx_sem_lancamento_nao_vai_e_diz_que_nao_havia_nada(tmp_path):
+    """Fim de semana (medido em 16/11/2026: 21 de 23 contas sem lançamento):
+    não é "já importado", é "sem lançamentos"."""
+    mot = _Motores(tmp_path, sicoob_textos={"123456": _ofx("12345-6", n=0),
+                                            "234567": _ofx("23456-7")})
+    res = _rodar(mot, contas=_contas()[:2])
+    assert (res[0].situacao, res[0].motivo) == (r.NADA_NOVO, m.SEM_LANCAMENTOS)
+    assert [p[0] for p in mot.pedidos_erp] == [U2]
+
+
 def test_rodada_parada_e_clicada_de_novo_nao_reenvia(tmp_path):
     mot = _Motores(tmp_path)
     _rodar(mot, contas=_contas()[:2])
