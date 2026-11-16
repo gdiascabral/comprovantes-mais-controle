@@ -56,6 +56,20 @@ paths:
   `contas_sicoob.json`, FORA do repo — o URL carrega o nome de um fornecedor
   real, e um mapa a mais seria uma divergência a mais.
 
+## Extratos do Inter do mês (29/10/2026)
+
+«Baixar extratos do Inter», antes de «Gerar os .zip»: um QR por login do
+`contas_inter.json`, o OFX do mês inteiro (até hoje, no mês corrente) pela
+mesma sessão da aba Conciliação (`inter_ofx.baixar_conta`), conferido antes
+de ir para `<mês>/<MÊS ANO - EMPRESA>/<pasta do login>/<dígitos>.ofx`
+(`conciliacao_dia/extratos_inter_mes.py`): ACCTID = o número que a TELA
+mostrou e o período = o mês. O que não confere fica fora da pasta do mês (é
+ela que vai no .zip ao escritório) e vira ⚠ no Registro. Nada vai ao ERP.
+Roda no executor DESTA aba; pergunta antes ao `inter_ocupado` (Conciliação,
+Autenticar no banco) e responde a eles por `inter_em_uso`. Conta sem número
+no ERP não é conferida pelo número: sem a razão social inteira no cadastro,
+a conta aberta não confere e o arquivo não é gravado.
+
 ## O segundo bloco: guias do mês → Mais Controle (22/09/2026)
 
 A aba passou a ter DOIS assuntos, e eles andam em sentidos opostos: o de cima

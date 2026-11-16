@@ -48,19 +48,58 @@ def test_print_que_falha_mantem_o_saldo(monkeypatch, tmp_path):
     assert lida.sem_imagem == "o print não saiu (x)"
 
 
-def test_seletor_da_area_do_saldo_fotografa_so_ela(monkeypatch, tmp_path):
-    class _Area:
-        first = property(lambda self: self)
-        def count(self): return 1
+class _Loc:
+    def __init__(self, pagina, sel):
+        self.p, self.sel = pagina, sel
 
-    area = _Area()
-    pagina = type("P", (), {"locator": lambda self, sel: area})()
+    first = property(lambda self: self)
+
+    def filter(self, has_text):
+        self.p.ordem.append(("filtro", self.sel, has_text))
+        return self
+
+    def wait_for(self, state, timeout):
+        self.p.ordem.append(("espera", self.sel, state))
+
+
+class _Home:
+    def __init__(self):
+        self.ordem = []
+
+    def locator(self, sel):
+        return _Loc(self, sel)
+
+    def evaluate(self, js):
+        self.ordem.append(("js", js))
+
+
+def test_print_espera_o_carregando_e_empilha_cabecalho_e_card(monkeypatch, tmp_path):
+    """Ao vivo em 27/10 o print saiu com o "carregando" escuro por cima e sem
+    o saldo; medido em 29/10: cabeçalho + card "Saldo da conta"."""
+    from PIL import Image
+    pagina = _Home()
     _motor(monkeypatch, pagina)
-    monkeypatch.setattr(m, "SELETOR_AREA_SALDO", "#saldo")
+    cores = {m.SEL_CABECALHO: ((400, 60), "red"), m.SEL_CARD_SALDO: ((300, 200), "blue")}
+    monkeypatch.setattr(m.util, "recorte_da_tela",
+                        lambda page, loc: (Image.new("RGB", *cores[loc.sel]), 0))
+    monkeypatch.setattr(m.util, "fotografar", lambda alvo, arquivo: "não devia cair aqui")
+    lida = _ler(tmp_path)["123456"]
+    assert lida.imagem == tmp_path / "sicoob 123456.png" and lida.sem_imagem == ""
+    assert pagina.ordem[0] == ("espera", m.SEL_CARREGANDO, "hidden")
+    assert ("filtro", m.SEL_CARD_SALDO, m.TEXTO_DO_CARD) in pagina.ordem
+    img = Image.open(lida.imagem)
+    assert img.size == (400, 60 + 12 + 200)
+    assert img.getpixel((5, 5)) == (255, 0, 0) and img.getpixel((5, 100)) == (0, 0, 255)
+
+
+def test_sem_o_card_cai_no_print_da_tela(monkeypatch, tmp_path):
+    pagina = _Home()
+    _motor(monkeypatch, pagina)
+    monkeypatch.setattr(m.util, "recorte_da_tela", lambda page, loc: None)
     fotos = []
     monkeypatch.setattr(m.util, "fotografar", lambda alvo, arquivo: fotos.append(alvo) or "")
-    _ler(tmp_path)
-    assert fotos == [area]
+    assert _ler(tmp_path)["123456"].imagem == tmp_path / "sicoob 123456.png"
+    assert fotos == [pagina]
 
 
 def test_gancho_do_olho_clica_antes_do_print(monkeypatch, tmp_path):

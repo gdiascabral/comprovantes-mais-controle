@@ -89,6 +89,9 @@ class AcessoriasFrame(ttk.Frame):
         self.envios: list[pacote.Envio] = []
         self._selecionado: str | None = None      # iid da linha em edição
         self.ultima_pasta: Path | None = None
+        #: Ligado pelo app: quem mais está com os perfis do Inter (Conciliação,
+        #: Autenticar no banco, Baixar comprovantes), ou None.
+        self.inter_ocupado = lambda: None
 
         hoje = datetime.date.today()
         anterior = hoje.replace(day=1) - datetime.timedelta(days=1)
@@ -113,6 +116,11 @@ class AcessoriasFrame(ttk.Frame):
         corpo = widgets.AreaRolavel(self)
         # O verde é ENVIAR — é o irreversível desta tela. Gerar os .zip e
         # Preparar só mexem na pasta do mês e não tocam no portal.
+        # Antes de zipar: os OFX do mês das contas do Inter (29/10/2026), que
+        # entram na pasta de cada empresa e vão no .zip ao escritório.
+        self.b_inter = widgets.Botao(self.cab.acoes, "Baixar extratos do Inter",
+                                     papel="passo", command=self.baixar_inter)
+        self.b_inter.pack(side="left", padx=px((0, 8)))
         self.b0 = widgets.Botao(self.cab.acoes, "Gerar os .zip",
                                 papel="passo", command=self.zipar)
         self.b0.pack(side="left", padx=px((0, 8)))
@@ -265,6 +273,7 @@ class AcessoriasFrame(ttk.Frame):
                     feitos, total = valor
                     self.barra_exec.progresso(feitos, total)
                 elif tipo == "botoes":
+                    self.b_inter.configure(state=valor)
                     self.b0.configure(state=valor)
                     self.b1.configure(state=valor)
                     # O Enviar volta pelo que a tabela diz, não pelo que o
@@ -437,6 +446,81 @@ class AcessoriasFrame(ttk.Frame):
             self.q.put(("status", "Falta preencher o arquivo de contas."))
             return False
         return True
+
+    # ------------------------------------------------------ extratos do Inter
+    TAREFA_INTER = "Acessórias — extratos do Inter"
+
+    def inter_em_uso(self) -> str | None:
+        """Esta aba com os perfis do Inter abertos (as outras perguntam)."""
+        fut = self.worker
+        if (fut is not None and not fut.done()
+                and self._tarefa_atual == self.TAREFA_INTER):
+            return self.TAREFA_INTER
+        return None
+
+    def baixar_inter(self):
+        if self.worker and not self.worker.done():
+            return
+        quem = self.inter_ocupado()
+        if quem:
+            messagebox.showinfo("Acessorias", f"O Chrome do Inter está em uso ({quem}). "
+                                "Espere terminar: os dois usariam os mesmos perfis.")
+            return
+        from baixar_comprovantes import contas_inter
+        logins = [c for c in contas_inter.carregar() if c.valida]
+        if not logins:
+            messagebox.showinfo("Acessorias", "Nenhuma conta do Inter no cadastro "
+                                "(contas_inter.json).")
+            return
+        ano, mes = self._periodo()
+        if not messagebox.askokcancel(
+                "Acessorias",
+                f"Vou baixar o OFX de {MESES[mes - 1]}/{ano} de {len(logins)} conta(s) do "
+                "Inter, um QR por conta, nesta ordem: "
+                + ", ".join(c.apelido for c in logins)
+                + ".\n\nConfira a empresa escolhida no app do celular antes de ler. "
+                "Só grava na pasta do mês o OFX que for da conta aberta e do mês inteiro."):
+            return
+        self._parar.clear()
+        self.q.put(("botoes", "disabled"))
+        self._tarefa_atual = self.TAREFA_INTER
+        self.worker = self.exec.submit(self._t_inter, logins, ano, mes)
+
+    def _t_inter(self, logins, ano: int, mes: int):
+        try:
+            if not self._garantir_mapa():
+                return
+            from conciliacao_dia import extratos_inter_mes as eim
+            from extratos_sicoob import sicoob_pastas
+            from tela_do_dia.prova_na_tela import _carregar_cadastros
+            _, empresas, _ = _carregar_cadastros()
+            pasta = sicoob_pastas.caminho_do_mes(self.mapa, ano, mes)
+            espera = pasta / "_extratos_inter_em_conferencia"
+            self._log(f"\nExtratos do Inter de {MESES[mes - 1]}/{ano}...")
+            res = eim.baixar_mes(
+                logins, ano, mes, pasta, espera, empresas=empresas,
+                log=lambda s: self._log(f"  {s}"),
+                avisar_qr=lambda a: self.q.put(("status", f"Leia o QR da {a} no Chrome "
+                                                          "do Inter — confira a empresa")),
+                parar=self._parar.is_set)
+            for x in res:
+                if x.arquivo:
+                    self._log(f"  ✓ {x.apelido}: {x.lancamentos} lançamento(s) → "
+                              f"{str(x.arquivo).replace(chr(92), '/')}")
+                else:
+                    self._log(f"  ⚠ {x.apelido}: {x.motivo}")
+            ok = sum(1 for x in res if x.arquivo)
+            self.q.put(("status", f"{ok} de {len(res)} extrato(s) do Inter gravados."))
+            self.ultima_pasta = pasta
+            try:
+                espera.rmdir()                  # só sai vazia
+            except OSError:
+                pass
+        except Exception as e:                              # noqa: BLE001
+            self._log(f"[!] {e}")
+            self.q.put(("status", "Os extratos do Inter pararam — veja o Registro."))
+        finally:
+            self.q.put(("botoes", "normal"))
 
     # ---------------------------------------------------------------- zipar
     def zipar(self):

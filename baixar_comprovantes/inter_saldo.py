@@ -9,9 +9,10 @@ traz no alto "Saldo / R$ … / <número da conta> / <NOME DA EMPRESA>".
 
 **O valor é OUVIDO da resposta que a própria tela pede** (`escutar_saldo`);
 se ela não pedir em `TEMPO_SALDO`, o pedido é repetido DE DENTRO da página
-com o cabeçalho de sessão que a página usou (`inter_baixar.
-escutar_autorizacao`). Nunca por fora do navegador. O cabeçalho nunca é
-gravado nem escrito no Registro.
+com os cabeçalhos de sessão que a página usou (`escutar_sessao`: o
+`authorization` e os dois `x-inter-*` — só com o primeiro o Inter respondeu
+HTTP 412 ao vivo em 29/10/2026). Nunca por fora do navegador. Os cabeçalhos
+nunca são gravados nem escritos no Registro.
 
 **Confere a conta antes de usar o número**: o número e o nome da empresa na
 tela têm de ser os da linha do painel (`conferir_conta`). Outra conta aberta
@@ -56,13 +57,22 @@ URL_SALDO = ib.API_INTER + ROTA_SALDO
 CAMPO = "disponivel"
 CENTAVO = Decimal("0.01")
 TEMPO_SALDO = 30
+#: A tela inicial do Inter não termina o "load" em 30 s em algumas contas (a
+#: VXZ estourou em 27/10/2026): abre-se no `domcontentloaded`, com folga, e a
+#: espera de verdade é a do saldo e a de a tela parar de mudar.
+TEMPO_ABRIR_MS = 90000
+TEMPO_TELA_PRONTA = 20
+#: O que a tela inicial mostra enquanto ainda carrega (os blocos cinza) —
+#: medir ao vivo. Enquanto houver um visível, o print espera.
+SELETOR_CARREGANDO = '[class*="skeleton" i], [class*="shimmer" i], [class*="loading" i]'
+#: A faixa do alto da tela inicial: logo, saldo, número da conta e nome da
+#: empresa (medida ao vivo em 29/10/2026; as classes de dentro são geradas e
+#: mudam, estas são do Bootstrap). "" = fotografa a parte visível da tela.
+SELETOR_AREA_SALDO = "div.col-12 > div.d-flex.justify-content-between"
 URL_EXTRATO_COMPLETO = "https://contadigital.inter.co/extrato"
 ROTA_EXTRATO_COMPLETO = "/ib-pfj/cc/extrato/bff/v2/home"
 TEMPO_EXTRATO = 25
 SALDO_DA_CONTA = "DIGITAL_ACCOUNT"
-#: Seletor da área do saldo na tela inicial (medir ao vivo, Tarefa 8);
-#: "" = fotografa a parte visível da tela.
-SELETOR_AREA_SALDO = ""
 #: Botão "mostrar saldo" (o olho) da tela inicial, se o saldo vier
 #: mascarado — medir ao vivo (Tarefa 8). "" = não clica.
 SELETOR_MOSTRAR_SALDO = ""
@@ -75,8 +85,8 @@ SEM_COMO_CONFERIR = ("o ERP não tem o número desta conta Inter — confira o "
                      "confere a conta aberta)")
 
 _JS_SALDO = """
-async ([url, cabecalho]) => {
-    const r = await fetch(url, {headers: {Authorization: cabecalho}});
+async ([url, cabecalhos]) => {
+    const r = await fetch(url, {headers: cabecalhos});
     let dado = null;
     try { dado = await r.json(); } catch (e) { dado = null; }
     return {status: r.status, dado};
@@ -133,6 +143,17 @@ def saldo_da_resposta(status: int, dado) -> Decimal:
     return d.quantize(CENTAVO, rounding=ROUND_HALF_UP)
 
 
+#: O tipo da empresa no FIM da razão social: a tela do Inter o omite (medido
+#: ao vivo em 29/10/2026: "… SPE" na tela, "… SPE LTDA" no cadastro).
+_SUFIXO_LEGAL = re.compile(r"(?:\s+(?:LTDA?|S/?A|EIRELI|ME|EPP)\.?)+$")
+
+
+def sem_sufixo_legal(nome: str) -> str:
+    """O nome normalizado sem o tipo da empresa no fim. Só o FIM: "EMPRESA X"
+    continua diferente de "EMPRESA X 2 LTDA" (revisão de 27/10/2026)."""
+    return _SUFIXO_LEGAL.sub("", util.norm_espaco(nome or "")).strip()
+
+
 def conferir_conta(texto: str, numero_esperado: str, nomes, razoes=()) -> str:
     """"" quando a tela é da conta pedida; senão, o porquê (vira ⚠).
 
@@ -140,14 +161,17 @@ def conferir_conta(texto: str, numero_esperado: str, nomes, razoes=()) -> str:
     tem de aparecer na tela. SEM o número do ERP (revisão de dinheiro de
     27/10/2026): o nome curto não basta — "EMPRESA X" também está dentro de
     "EMPRESA X 2 LTDA"; só vale uma linha da tela IGUAL (normalizada) a uma
-    das `razoes` sociais inteiras do cadastro."""
+    das `razoes` sociais inteiras do cadastro — sem o tipo da empresa no fim
+    dos dois lados (`sem_sufixo_legal`), que a tela do Inter não escreve."""
     na_tela = ib.numero_no_texto(texto)
     if not na_tela:
         return SEM_NUMERO
     esperado = _digitos(numero_esperado).lstrip("0")
     if not esperado:
-        linhas = {util.norm_espaco(ln) for ln in (texto or "").splitlines()}
-        inteiras = {util.norm_espaco(r) for r in razoes or () if (r or "").strip()}
+        linhas = {sem_sufixo_legal(ln) for ln in (texto or "").splitlines()}
+        inteiras = {sem_sufixo_legal(r) for r in razoes or () if (r or "").strip()}
+        linhas.discard("")
+        inteiras.discard("")
         return "" if linhas & inteiras else SEM_COMO_CONFERIR
     if _digitos(na_tela).lstrip("0") != esperado:
         return (f"a tela do Inter está na conta {na_tela}, e a desta linha do "
@@ -160,6 +184,41 @@ def conferir_conta(texto: str, numero_esperado: str, nomes, razoes=()) -> str:
                     + ", ".join(n for n in nomes if (n or "").strip())
                     + ") — outra conta aberta, não leio")
     return ""
+
+
+#: Os cabeçalhos que a tela do Inter manda à API (medidos em 29/10/2026 no
+#: pedido da exportação do extrato) e os endereços da API que ela chama.
+CABECALHOS_DA_SESSAO = ("authorization", "x-inter-conta-corrente", "x-inter-organization")
+HOSTS_DA_API = ("cdpj-api.bancointer.com.br", "cd.web.bancointer.com.br")
+
+
+def cabecalhos_da_sessao(cabecalhos: dict) -> dict:
+    """Só os cabeçalhos de sessão de um pedido da página; {} sem o
+    `authorization` (pedido que não é da sessão logada)."""
+    if not (cabecalhos or {}).get("authorization"):
+        return {}
+    return {k: cabecalhos[k] for k in CABECALHOS_DA_SESSAO if cabecalhos.get(k)}
+
+
+def da_api(url: str) -> bool:
+    return any(h in (url or "") for h in HOSTS_DA_API)
+
+
+def escutar_sessao(page) -> dict:
+    """Os cabeçalhos de sessão do pedido mais completo que a página fizer à
+    API (o dicionário se preenche sozinho). Esvaziar no fim."""
+    guardado: dict = {}
+
+    def ouvir(pedido):
+        if not da_api(pedido.url):
+            return
+        achados = cabecalhos_da_sessao(pedido.headers)
+        if len(achados) >= len(guardado):
+            guardado.clear()
+            guardado.update(achados)
+
+    page.on("request", ouvir)
+    return guardado
 
 
 #: "R$ 1.234,56", "-R$ 1.234,56", "R$ -1.234,56": milhar com ponto e SEMPRE
@@ -206,7 +265,7 @@ def ler_extrato_completo(page, ouvidas: list, tempo: float | None = None):
     """Abre a tela do extrato e devolve o corpo da resposta que ela pede
     (JSON), ou None se não veio em `tempo`."""
     ouvidas.clear()
-    page.goto(URL_EXTRATO_COMPLETO)
+    _abrir(page, URL_EXTRATO_COMPLETO)
     limite = time.time() + (TEMPO_EXTRATO if tempo is None else tempo)
     while time.time() < limite and not ouvidas:
         page.wait_for_timeout(500)
@@ -226,14 +285,24 @@ def escutar_saldo(page) -> list:
     ouvidas: list = []
 
     def ouvir(resposta):
-        if ROTA_SALDO in resposta.url and "cdpj-api" in resposta.url:
+        if ROTA_SALDO in resposta.url and da_api(resposta.url):
             ouvidas.append(resposta)
 
     page.on("response", ouvir)
     return ouvidas
 
 
-def _resposta_do_saldo(page, ouvidas: list, autorizacao: dict,
+def _cabecalhos_para_pedir(autorizacao, sessao) -> dict:
+    """Os cabeçalhos do pedido de dentro da página: os três da sessão
+    (`escutar_sessao`) quando a página já os mandou — só o `authorization`
+    deu HTTP 412 ao vivo em 29/10/2026 —, senão o `authorization`."""
+    if sessao and sessao.get("authorization"):
+        return dict(sessao)
+    valor = (autorizacao or {}).get("valor") or ""
+    return {"authorization": valor} if valor else {}
+
+
+def _resposta_do_saldo(page, ouvidas: list, sessao: dict,
                        tempo: float = TEMPO_SALDO) -> tuple:
     limite = time.time() + tempo
     while time.time() < limite and not ouvidas:
@@ -244,21 +313,60 @@ def _resposta_do_saldo(page, ouvidas: list, autorizacao: dict,
             return resposta.status, resposta.json()
         except Exception:                                    # noqa: BLE001
             return resposta.status, None
-    if autorizacao.get("valor"):
-        r = page.evaluate(_JS_SALDO, [URL_SALDO, autorizacao["valor"]]) or {}
+    if sessao.get("authorization"):
+        r = page.evaluate(_JS_SALDO, [URL_SALDO, dict(sessao)]) or {}
         return int(r.get("status") or 0), r.get("dado")
     raise SaldoInterFalhou(f"a tela inicial do Inter não pediu o saldo em {int(tempo)} s "
                            "e não há sessão para pedir de dentro da página")
 
 
+def tela_parou(anterior: str, atual: str, carregando: bool) -> bool:
+    """A tela inicial terminou de montar: nada carregando, o mesmo texto em
+    duas leituras seguidas, e o saldo já escrito nela."""
+    return (not carregando and bool(atual) and atual == anterior
+            and "Saldo" in atual)
+
+
+def _carregando(page) -> bool:
+    try:
+        return any(el.is_visible() for el in page.locator(SELETOR_CARREGANDO).all())
+    except Exception:                                        # noqa: BLE001
+        return False
+
+
+def esperar_tela_pronta(page, tempo: float = TEMPO_TELA_PRONTA) -> bool:
+    """Espera a tela inicial parar de carregar antes do print (em 27/10/2026
+    o print saiu com metade da tela em blocos cinza). True = parou; False =
+    o tempo acabou e o print sai como estiver."""
+    limite = time.time() + tempo
+    anterior = ""
+    while time.time() < limite:
+        atual = ib._texto_da_tela(page)
+        if tela_parou(anterior, atual, _carregando(page)):
+            return True
+        anterior = atual
+        page.wait_for_timeout(1000)
+    return False
+
+
+def _abrir(page, url: str) -> None:
+    page.goto(url, wait_until="domcontentloaded", timeout=TEMPO_ABRIR_MS)
+
+
 def _fotografar(page, arquivo: Path) -> tuple:
+    esperar_tela_pronta(page)
     util.revelar(page, SELETOR_MOSTRAR_SALDO)
-    alvo = page
     if SELETOR_AREA_SALDO:
-        area = page.locator(SELETOR_AREA_SALDO).first
-        if area.count():
-            alvo = area
-    motivo = util.fotografar(alvo, arquivo)
+        try:
+            area = page.locator(SELETOR_AREA_SALDO).first
+            pedaco = util.recorte_da_tela(page, area) if area.count() else None
+            if pedaco is not None:
+                arquivo.parent.mkdir(parents=True, exist_ok=True)
+                pedaco[0].save(arquivo)
+                return arquivo, ""
+        except Exception:                                    # noqa: BLE001
+            pass                             # cai no print da tela, abaixo
+    motivo = util.fotografar(page, arquivo)
     return (None, motivo) if motivo else (arquivo, "")
 
 
@@ -281,8 +389,32 @@ def ler_conta(apelido: str, numero_esperado: str, nomes, arquivo: Path, *,
                          sem_imagem="a leitura parou antes do print")
 
 
+TEXTO_SALDO_DO_DIA = "Saldo do dia"
+
+
+def _fotografar_extrato(page, arquivo: Path) -> tuple:
+    """Print da tela do Extrato: a faixa do alto (número e empresa) em cima
+    da linha "Saldo do dia" mais recente."""
+    try:
+        linha = page.get_by_text(re.compile(TEXTO_SALDO_DO_DIA)).first
+        linha.wait_for(timeout=TEMPO_TELA_PRONTA * 1000)
+        page.evaluate("window.scrollTo(0, 0)")
+        topo = util.recorte_da_tela(page, page.locator(SELETOR_AREA_SALDO).first)
+        linha.scroll_into_view_if_needed()
+        dia = util.recorte_da_tela(page, linha)
+        if topo and dia:
+            arquivo.parent.mkdir(parents=True, exist_ok=True)
+            util.empilhar([topo[0], dia[0]]).save(arquivo)
+            return arquivo, ""
+    except Exception:                                        # noqa: BLE001
+        pass                                 # cai no print da tela, abaixo
+    motivo = util.fotografar(page, arquivo)
+    return (None, motivo) if motivo else (arquivo, "")
+
+
 def _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes, razoes,
-                   arquivo, *, agora, extratos=None, extra=None) -> LidoInter:
+                   arquivo, *, agora, extratos=None, extra=None,
+                   sessao=None) -> LidoInter:
     """Com a sessão aberta na tela inicial: resposta do saldo, CONFERE a
     conta e só então fotografa. Conta errada não tem print (revisão de
     27/10/2026: o print da outra empresa ia para a página desta conta).
@@ -297,7 +429,8 @@ def _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes, razoes,
         return guardado["corpo"]
 
     try:
-        status, dado = _resposta_do_saldo(page, ouvidas, autorizacao)
+        status, dado = _resposta_do_saldo(
+            page, ouvidas, _cabecalhos_para_pedir(autorizacao, sessao))
     except SaldoInterFalhou as e:
         status, dado, erro_inicio = None, None, e
     else:
@@ -325,7 +458,10 @@ def _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes, razoes,
         if not no_extrato:
             extrato()
     lido_em = agora()          # a hora do SALDO, antes das listas do `extra`
-    imagem, sem_imagem = _fotografar(page, Path(arquivo))
+    if via == "extrato":
+        imagem, sem_imagem = _fotografar_extrato(page, Path(arquivo))
+    else:
+        imagem, sem_imagem = _fotografar(page, Path(arquivo))
     resultado, erro = None, ""
     if extra is not None:
         try:
@@ -349,23 +485,24 @@ def _ler_no_chrome(apelido, numero_esperado, nomes, arquivo, *, razoes, log, avi
         ouvidas = escutar_saldo(page)
         extratos = escutar_extrato(page)
         autorizacao = ib.escutar_autorizacao(page)
+        sessao = escutar_sessao(page)
         try:
-            page.goto(ib.URL_LOGIN)
+            _abrir(page, ib.URL_LOGIN)
             avisar_qr(apelido)
             ib.esperar_login(page, tempo=tempo_login, log=log, parar=parar)
             ao_entrar(apelido)
             ouvidas.clear()
-            page.goto(ib.URL_LOGIN)
+            _abrir(page, ib.URL_LOGIN)
             return _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes,
                                   razoes, arquivo, agora=agora, extratos=extratos,
-                                  extra=extra)
+                                  extra=extra, sessao=sessao)
         except (ib.InterFalhou, SaldoInterFalhou) as e:
             return LidoInter(motivo=str(e), sem_imagem="a leitura parou antes do print")
         except Exception as e:                               # noqa: BLE001
             return LidoInter(motivo=f"erro inesperado no Inter: {_primeira_linha(e)}",
                              sem_imagem="a leitura parou antes do print")
         finally:
-            autorizacao["valor"] = ""
+            sessao.clear()
             try:
                 ctx.close()
             except Exception:                                # noqa: BLE001

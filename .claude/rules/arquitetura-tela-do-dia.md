@@ -239,8 +239,17 @@ dela, sem mudança de comportamento.
 
 ## Prova de saldos (27/10/2026)
 
-Botão "📸 Prova de saldos" no cartão Saldos (`prova_na_tela.ProvaNaTela`,
-criada logo abaixo da barra do "Reler Sicoob"). Spec:
+**Desde 29/10/2026 ela mora na aba Conciliação** (`conciliacao_dia/frame.py`,
+ambiente "Provar saldos" — ver `arquitetura-conciliacao-dia.md`); aqui ficou
+só o link «Prova de saldos → aba Conciliação» no cartão Saldos
+(`ir_para_conciliacao`, ligado pelo app), e o `sicoob_ocupado` desta aba não
+pergunta mais por ela. Os módulos `prova_*` continuam nesta pasta: o
+hospedeiro precisa ter `anx`, `cfg`, `mapping`, `contas_erp`, `_log`,
+`_abrir` e `_pasta_pagamentos`, e a Conciliação lê os três primeiros no seu
+«Ler as contas do ERP». O texto abaixo descreve o botão; onde diz "esta aba"
+ou "cartão Saldos", leia a aba Conciliação.
+
+Botão "📸 Prova de saldos" (`prova_na_tela.ProvaNaTela`). Spec:
 `docs/superpowers/specs/2026-10-27-prova-de-saldos-design.md`; plano:
 `docs/superpowers/plans/2026-10-27-prova-de-saldos.md`.
 

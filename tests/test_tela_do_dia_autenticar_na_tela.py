@@ -86,8 +86,11 @@ def test_o_app_cruza_as_travas_do_sicoob_com_o_autenticar():
                 and no.targets[0].attr == "outros_no_sicoob":
             dono = ast.unparse(no.targets[0].value)
             alvos[dono] = ast.unparse(no.value)
-    for dono in ("aba_dia.sicoob", "aba_dia.agendamentos", "aba_dia.prova"):
+    for dono in ("aba_dia.sicoob", "aba_dia.agendamentos"):
         assert "aba_dia.autenticar.ocupado()" in alvos[dono], dono
+    # A Prova de saldos e o Baixar OFX moram na Conciliação desde 29/10/2026.
+    assert "aba_dia.autenticar.ocupado()" in fonte.split(
+        "def _outros_que_a_conciliacao():", 1)[1].split("\n\n", 1)[0]
 
 
 def test_a_aba_conta_o_autenticar_no_sicoob_ocupado_e_fecha_ele():

@@ -140,8 +140,8 @@ class ProvaNaTela:
             return
         tela = self.tela
         if tela.mapping is None or not tela.contas_erp:
-            messagebox.showinfo(TITULO, "Busque os pagamentos e saldos primeiro: é a "
-                                        "leitura do ERP que diz quais contas do painel "
+            messagebox.showinfo(TITULO, "Clique em «Ler as contas do ERP» primeiro: é "
+                                        "a leitura do ERP que diz quais contas do painel "
                                         "são do Sicoob e do Inter.")
             return
         try:

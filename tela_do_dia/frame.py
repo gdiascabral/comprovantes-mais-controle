@@ -50,7 +50,6 @@ from . import nuvem_do_dia as _nd
 from .agendamentos_na_tela import ConferenciaNaTela
 from .autenticar_na_tela import AutenticarNaTela
 from .pf_na_tela import AbaPF
-from .prova_na_tela import ProvaNaTela
 from .sicoob_na_tela import LeitorSicoob
 from .valores import brl, de_float, ler_valor_editado
 
@@ -94,6 +93,8 @@ class TelaDoDiaFrame(ttk.Frame):
         self._erro_drain = None
         self.aba_aportes = None
         self.aba_remessa = None
+        #: Ligado pelo app: mostra a aba Conciliação (onde mora a Prova de saldos).
+        self.ir_para_conciliacao = lambda: None
         # A aba Controle de aportes (ligada pelo app, `ligar_controle`): a
         # leitura dela roda depois do Buscar e dá o aviso de igualar e os
         # sócios da conta-mãe (`aporte_dos_socios`).
@@ -236,9 +237,11 @@ class TelaDoDiaFrame(ttk.Frame):
         # passo 1 (spec). Tudo do Sicoob mora em `sicoob_na_tela`.
         self.sicoob = LeitorSicoob(c1, tela=self)
         self.sicoob.barra.pack(fill="x", pady=px((6, 0)))
-        # Prova de saldos (27/10/2026): ERP × banco com print, em PDF.
-        self.prova = ProvaNaTela(c1, tela=self)
-        self.prova.barra.pack(fill="x", pady=px((6, 0)))
+        # Prova de saldos: desde 29/10/2026 mora na aba Conciliação (spec da
+        # aba); aqui fica só o caminho até ela, ligado pelo app.
+        self.b_prova = widgets.Botao(c1, "Prova de saldos → aba Conciliação", papel="link",
+                                     command=lambda: self.ir_para_conciliacao())
+        self.b_prova.pack(anchor="w", pady=px((6, 0)))
         self.t_saldos = self._tabela(c1, self.COLS_SALDOS, arvore=False, altura=8)
         self.t_saldos.bind("<ButtonRelease-1>", self._clique_saldo)
         self.t_saldos.bind("<Return>", self._enter_saldo)
@@ -534,7 +537,6 @@ class TelaDoDiaFrame(ttk.Frame):
             self.b_reler.configure(state=estado(b.buscar and self.leitura is not None))
         # O "Reler Sicoob" segue a regra do Excel (leitura na tela, sem gravação).
         self.sicoob.ligar(b.dia)
-        self.prova.ligar(b.dia)
 
     def _ligar_lista(self):
         """↑/↓ só dentro do mesmo lado (numerados × demais), pela seleção."""
@@ -665,7 +667,6 @@ class TelaDoDiaFrame(ttk.Frame):
         para entre uma conta e outra (a thread é daemon)."""
         self.sicoob.fechar()
         self.agendamentos.fechar()
-        self.prova.fechar()
         self.autenticar.fechar()
 
     def sicoob_ocupado(self) -> str | None:
@@ -673,7 +674,7 @@ class TelaDoDiaFrame(ttk.Frame):
         agendamentos). É o que as outras abas que abrem o mesmo perfil
         perguntam, ligado no `comprovantes_app.py`."""
         return (self.sicoob.ocupado() or self.agendamentos.ocupado()
-                or self.prova.ocupado() or self.autenticar.ocupado())
+                or self.autenticar.ocupado())
 
     def _parar_click(self):
         self._parar.set()
@@ -738,7 +739,6 @@ class TelaDoDiaFrame(ttk.Frame):
         for b in self._botoes_do_dia:
             b.configure(state="disabled")
         self.sicoob.ligar(False)
-        self.prova.ligar(False)
         self._lendo_marca = True
         self.q.put(("botoes", "disabled"))
         self.q.put(("ocupado", True))
@@ -789,7 +789,6 @@ class TelaDoDiaFrame(ttk.Frame):
         for b in self._botoes_do_dia:
             b.configure(state="disabled")
         self.sicoob.ligar(False)
-        self.prova.ligar(False)
 
     def _t_ler(self, periodo, so_lancamentos=False):
         """`so_lancamentos` = "Reler só os lançamentos": o saldo do sistema é

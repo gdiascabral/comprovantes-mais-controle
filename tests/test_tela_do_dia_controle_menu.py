@@ -17,7 +17,7 @@ def _grupos() -> dict:
 
 
 def test_controle_de_aportes_fica_no_fim_do_diario():
-    assert [c for c, _i, _t in _grupos()["diario"]] == ["dia", "pag", "con", "cap"]
+    assert [c for c, _i, _t in _grupos()["diario"]] == ["dia", "pag", "con", "cdi", "cap"]
     assert ("cap", "🤝", "Controle de aportes") in _grupos()["diario"]
 
 
@@ -39,7 +39,7 @@ def test_nenhum_atalho_ctrl_1_a_9_existente_muda():
     ordem = ["ini", "bxc", "sep", "anx", "conf", "apt"] + [
         c for c, _i, _t in _grupos()["diario"]]
     assert ordem[:9] == antes
-    assert ordem[9] == "cap"
+    assert ordem[9:] == ["cdi", "cap"]          # a Conciliação (29/10/2026) também depois
 
 
 def test_icone_novo_esta_nas_duas_tabelas_com_codepoint_unico():

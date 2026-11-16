@@ -291,9 +291,11 @@ def test_app_liga_a_conferencia_da_tela_em_todas_as_pontas():
     # ...e todos perguntam a ela.
     assert "aba_dia.agendamentos.ocupado()" in trecho("aba_dia.sicoob.outros_no_sicoob =")
     assert "aba_pag._agendamentos.is_alive()" in trecho("def _remessa_conferindo")
-    assert "aba_dia.sicoob_ocupado()" in trecho("aba_pag.sicoob_ocupado =")
-    assert "aba_ext.sicoob_ocupado = aba_dia.sicoob_ocupado\n" in app
-    assert "aba_bxc.sicoob_ocupado = aba_dia.sicoob_ocupado\n" in app
+    # A Conciliação (29/10/2026) também abre o perfil: as três perguntam às duas.
+    assert "aba_dia.sicoob_ocupado()" in trecho("def _sicoob_do_dia_ou_da_conciliacao():")
+    assert "_sicoob_do_dia_ou_da_conciliacao()" in trecho("aba_pag.sicoob_ocupado =")
+    assert "aba_ext.sicoob_ocupado = _sicoob_do_dia_ou_da_conciliacao\n" in app
+    assert "aba_bxc.sicoob_ocupado = _sicoob_do_dia_ou_da_conciliacao\n" in app
     assert '("dia", aba_dia.sicoob_ocupado())' in app
 
 
