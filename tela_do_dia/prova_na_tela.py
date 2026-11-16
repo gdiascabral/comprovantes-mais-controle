@@ -140,8 +140,8 @@ class ProvaNaTela:
             return
         tela = self.tela
         if tela.mapping is None or not tela.contas_erp:
-            messagebox.showinfo(TITULO, "Busque os pagamentos e saldos primeiro: é a "
-                                        "leitura do ERP que diz quais contas do painel "
+            messagebox.showinfo(TITULO, "Clique em «Ler as contas do ERP» primeiro: é "
+                                        "a leitura do ERP que diz quais contas do painel "
                                         "são do Sicoob e do Inter.")
             return
         try:
@@ -172,6 +172,7 @@ class ProvaNaTela:
         pasta_pdf = tela._pasta_pagamentos() / PASTA
         pasta_prints = pasta_pdf / "prints" / f"{agora:%Y-%m-%d %Hh%M}"
         self._contas = contas            # para a pergunta do outro acesso
+        self._inicio = agora             # o dia do arquivo do Pagamentos do dia
         self._parar.clear()
         self._aba_erp = threading.Event()
         self.b_prova.configure(state="disabled")
@@ -287,7 +288,24 @@ class ProvaNaTela:
                 # tela diz na hora, e não só no PDF do fim.
                 self.q.put(("estado", f"Inter {c.apelido}: não lido"))
                 self.q.put(("log", f"  ⚠ Inter {c.apelido}: {lido.motivo}"))
+        self._guardar_para_o_dia(contas, sicoob, inter)
         return ps.banco_por_linha(contas, sicoob, inter)
+
+    def _guardar_para_o_dia(self, contas, sicoob, inter):
+        """Dono, 16/11/2026: o saldo da Prova já fica para o Pagamentos do
+        dia (o Buscar não pede o login do Sicoob de novo; o Inter entra na
+        coluna do banco). Ver `saldos_para_o_dia`."""
+        try:
+            from conciliacao.frame import RAIZ_SAIDA
+
+            from . import saldos_para_o_dia as spd
+            # O dia de quando a Prova COMEÇOU (virada da meia-noite: lido às
+            # 23:52 não vale para o dia seguinte; `guardar` descarta o de outro dia).
+            inicio = getattr(self, "_inicio", None) or _agora()
+            spd.guardar(RAIZ_SAIDA, inicio.date(), contas, sicoob, inter,
+                        log=lambda m: self.q.put(("log", m)))
+        except Exception as e:                               # noqa: BLE001
+            self.q.put(("log", f"[!] o saldo da Prova não ficou para o Pagamentos do dia ({e})"))
 
     def _esperar_erp(self, contas) -> dict:
         fut = self._erp

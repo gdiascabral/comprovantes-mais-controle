@@ -25,7 +25,8 @@ sem force-push e sem apagar a branch). O merge dispara o GitHub Actions
 2. monta `codigo.zip` (comprovantes_app.py + util.py + widgets.py +
    inicio/*.py + separar_renomear/*.py + anexar/*.py +
    baixar_comprovantes/*.py + aportes/*.py + relatorios/*.py +
-   pagamentos_dia/*.py + tela_do_dia/*.py + extratos_sicoob/*.py +
+   pagamentos_dia/*.py + tela_do_dia/*.py + conciliacao_dia/*.py +
+   extratos_sicoob/*.py +
    conciliacao/*.py +
    conciliacao/erp/*.py + contratos/*.py + acessorias/*.py + **erp/*.py** +
    cnab240/*.py + **cnab240/spec/*.json** + **nuvem/*.py exceto migrar.py** +
@@ -240,6 +241,7 @@ carregar), **leia o arquivo da pasta antes de mexer nela**.
 | relatorios/ | `.claude/rules/arquitetura-relatorios.md` |
 | pagamentos_dia/ | `.claude/rules/arquitetura-pagamentos-dia.md` |
 | tela_do_dia/ | `.claude/rules/arquitetura-tela-do-dia.md` |
+| conciliacao_dia/ (aba Conciliação) | `.claude/rules/arquitetura-conciliacao-dia.md` |
 | cnab240/ | `.claude/rules/arquitetura-cnab240.md` |
 | extratos_sicoob/ | `.claude/rules/arquitetura-extratos-sicoob.md` |
 | contratos/ | `.claude/rules/arquitetura-contratos.md` |

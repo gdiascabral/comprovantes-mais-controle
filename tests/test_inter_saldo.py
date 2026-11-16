@@ -80,10 +80,25 @@ def test_sem_numero_esperado_so_a_razao_social_inteira_confere():
 
 
 def test_sem_numero_esperado_razao_social_pela_metade_nao_confere():
-    # A linha da tela é "EMPRESA FICTICIA LTDA": a razão tem de ser ELA inteira.
-    assert m.conferir_conta(TELA, "", (), razoes=("EMPRESA FICTICIA",)) ==         m.SEM_COMO_CONFERIR
-    tela_maior = TELA.replace("EMPRESA FICTICIA LTDA", "EMPRESA FICTICIA LTDA ME")
-    assert m.conferir_conta(tela_maior, "", (), razoes=("EMPRESA FICTICIA LTDA",)) ==         m.SEM_COMO_CONFERIR
+    """A revisão de 27/10: "EMPRESA FICTICIA" está dentro de "EMPRESA
+    FICTICIA 2 LTDA" e NÃO é ela. Só o tipo da empresa no fim é ignorado."""
+    tela_outra = TELA.replace("EMPRESA FICTICIA LTDA", "EMPRESA FICTICIA 2 LTDA")
+    assert m.conferir_conta(tela_outra, "", (), razoes=("EMPRESA FICTICIA LTDA",)) ==         m.SEM_COMO_CONFERIR
+    assert m.conferir_conta(tela_outra, "", (), razoes=("EMPRESA FICTICIA",)) ==         m.SEM_COMO_CONFERIR
+    tela_meio = TELA.replace("EMPRESA FICTICIA LTDA", "EMPRESA FICTICIA SPE")
+    assert m.conferir_conta(tela_meio, "", (), razoes=("EMPRESA FICTICIA",)) ==         m.SEM_COMO_CONFERIR
+
+
+def test_tela_do_inter_sem_o_tipo_da_empresa_confere():
+    """Medido ao vivo em 29/10/2026: a tela escreve "… SPE" e o cadastro
+    "… SPE LTDA" — é a mesma empresa (era o "não reconhecida" da Buritis)."""
+    tela = TELA.replace("EMPRESA FICTICIA LTDA", "EMPRESA FICTICIA SPE")
+    assert m.conferir_conta(tela, "", (), razoes=("Empresa Fictícia SPE Ltda",)) == ""
+    assert m.conferir_conta(TELA, "", (), razoes=("EMPRESA FICTICIA S/A",)) == ""
+    assert m.sem_sufixo_legal("Empresa X Ltda. ME") == "EMPRESA X"
+    # Nome comprido: a tela corta o "LTDA" em "LTD" (medido em 29/10/2026).
+    assert m.sem_sufixo_legal("EMPRESA X CONSTRUTORA LTD") == "EMPRESA X CONSTRUTORA"
+    assert m.sem_sufixo_legal("LTDA") == "LTDA"          # nome que é só o tipo fica
 
 
 def test_sem_numero_nem_nome_recusa():
@@ -120,16 +135,39 @@ def test_resposta_ouvida_vale():
     assert pag.pedidos == []
 
 
-def test_sem_ouvir_pede_de_dentro_da_pagina():
+def test_sem_ouvir_pede_de_dentro_da_pagina_com_os_tres_cabecalhos():
+    """29/10/2026: só com o `authorization` o Inter respondeu HTTP 412."""
     pag = _Pag()
-    assert m._resposta_do_saldo(pag, [], {"valor": "Bearer x"}, tempo=0) == (
-        200, {"disponivel": 1.5})
-    assert pag.pedidos[0][1] == [m.URL_SALDO, "Bearer x"]
+    sessao = {"authorization": "Bearer x", "x-inter-conta-corrente": "1",
+              "x-inter-organization": "2"}
+    assert m._resposta_do_saldo(pag, [], sessao, tempo=0) == (200, {"disponivel": 1.5})
+    assert pag.pedidos[0][1] == [m.URL_SALDO, sessao]
 
 
 def test_sem_ouvir_e_sem_sessao_falha():
     with pytest.raises(m.SaldoInterFalhou, match="não pediu o saldo"):
-        m._resposta_do_saldo(_Pag(), [], {"valor": ""}, tempo=0)
+        m._resposta_do_saldo(_Pag(), [], {}, tempo=0)
+
+
+def test_cabecalhos_da_sessao_so_com_o_authorization():
+    pedido = {"authorization": "Bearer x", "x-inter-conta-corrente": "1",
+              "x-inter-organization": "2", "user-agent": "Chrome", "cookie": "c"}
+    assert m.cabecalhos_da_sessao(pedido) == {
+        "authorization": "Bearer x", "x-inter-conta-corrente": "1", "x-inter-organization": "2"}
+    assert m.cabecalhos_da_sessao({"x-inter-conta-corrente": "1"}) == {}
+
+
+def test_escutar_sessao_guarda_o_pedido_mais_completo_da_api():
+    pag = _Pag()
+    sessao = m.escutar_sessao(pag)
+    pedido = lambda url, h: type("Q", (), {"url": url, "headers": h})()
+    pag.ouvintes["request"](pedido("https://outro.site/x", {"authorization": "Bearer fora"}))
+    assert sessao == {}
+    pag.ouvintes["request"](pedido(ib.API_INTER + "/cc/x", {"authorization": "Bearer a"}))
+    pag.ouvintes["request"](pedido("https://cd.web.bancointer.com.br/ib-pfj/y",
+                                   {"authorization": "Bearer b", "x-inter-conta-corrente": "1"}))
+    pag.ouvintes["request"](pedido(ib.API_INTER + "/cc/z", {"authorization": "Bearer c"}))
+    assert sessao == {"authorization": "Bearer b", "x-inter-conta-corrente": "1"}
 
 
 def test_escutar_saldo_so_guarda_a_rota_do_saldo():
@@ -149,7 +187,7 @@ class _PagDaTela(_Pag):
         self.extrato_texto, self.extrato_corpo = extrato_texto, extrato_corpo
         self.extratos, self.idas = extratos, []
 
-    def goto(self, url):
+    def goto(self, url, **kw):
         """A tela do extrato completo: troca o texto e "recebe" o corpo."""
         self.idas.append(url)
         if url == m.URL_EXTRATO_COMPLETO:
@@ -218,6 +256,15 @@ def test_gancho_do_olho_do_inter_clica_antes_do_print(monkeypatch, tmp_path):
     assert ordem == [("olho", "#olho"), "foto"]
 
 
+def test_tela_so_para_com_o_saldo_escrito_e_o_mesmo_texto_duas_vezes():
+    """27/10/2026: o print saiu com metade da tela ainda carregando."""
+    assert m.tela_parou("Saldo\nR$ 1,00", "Saldo\nR$ 1,00", False)
+    assert not m.tela_parou("Saldo\nR$ 1,00", "Saldo\nR$ 1,00", True)
+    assert not m.tela_parou("Saldo", "Saldo\nR$ 1,00", False)
+    assert not m.tela_parou("Carregando", "Carregando", False)
+    assert not m.tela_parou("", "", False)
+
+
 # --------------------- extrato completo como segunda fonte (conta PJ, 29/10/2026)
 EXTRATO = {"balance": {"data": {"balances": [{"id": "DIGITAL_ACCOUNT",
                                                "available": "R$ 2.500,10"}]}}}
@@ -283,3 +330,30 @@ def test_extra_usa_a_mesma_sessao_e_falha_dele_nao_perde_o_saldo(tmp_path, sem_e
                             "123456789", ("EMPRESA FICTICIA",), (), tmp_path / "c.png",
                             agora=lambda: None, extra=quebra)
     assert lido.saldo == D("1.00") and lido.extra_erro == "API mudou"
+
+
+def test_saldo_pelo_extrato_fotografa_o_extrato_e_usa_os_tres_cabecalhos(monkeypatch, tmp_path, sem_espera):
+    """Medido em 29/10/2026: só com o `authorization` a tela inicial deu HTTP
+    412 — o pedido de dentro da página leva os três cabeçalhos da sessão; e,
+    com o saldo vindo do extrato, o print é o da tela do Extrato."""
+    extratos = []
+    pag = _PagDaTela(extrato_corpo=EXTRATO, extratos=extratos)
+    fotos = []
+    monkeypatch.setattr(m, "_fotografar_extrato", lambda page, arq: fotos.append(arq) or (arq, ""))
+    pedidos = []
+    monkeypatch.setattr(m, "_resposta_do_saldo",
+                        lambda page, ouvidas, cab, tempo=0: pedidos.append(cab) or (412, None))
+    sessao = {"authorization": "Bearer x", "x-inter-conta-corrente": "1",
+              "x-inter-organization": "2"}
+    lido = m._ler_na_pagina(pag, [], {"valor": "Bearer x"}, "123456789", ("EMPRESA FICTICIA",),
+                            (), tmp_path / "b.png", agora=lambda: 1, extratos=extratos,
+                            sessao=sessao)
+    assert (lido.saldo, lido.via, lido.imagem) == (D("2500.10"), "extrato", tmp_path / "b.png")
+    assert pedidos == [sessao] and fotos == [tmp_path / "b.png"] and pag.fotos == []
+
+
+def test_sem_sessao_completa_pede_so_com_o_authorization():
+    assert m._cabecalhos_para_pedir({"valor": "B"}, {}) == {"authorization": "B"}
+    assert m._cabecalhos_para_pedir({"valor": ""}, None) == {}
+    s = {"authorization": "B", "x-inter-organization": "2"}
+    assert m._cabecalhos_para_pedir({"valor": "A"}, s) == s

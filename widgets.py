@@ -308,6 +308,7 @@ ICONES_FLUENT = {
     "👥": "\uE77B",      # Contact        — Usuários (o item de admin, no rodapé)
     "🧾": "\uE8FD",      # BulletedList   — Pagamentos do dia
     "🤝": "\uE716",      # People         — Controle de aportes
+    "🔁": "\uE8EE",      # RepeatAll      — Conciliação
 }
 
 #: A MESMA tabela para o Windows 10. Os valores coincidem hoje — ver acima —, e
@@ -330,6 +331,7 @@ ICONES_MDL2 = {
     "👥": "\uE77B",      # Contact
     "🧾": "\uE8FD",      # BulletedList
     "🤝": "\uE716",      # People — Controle de aportes
+    "🔁": "\uE8EE",      # RepeatAll — Conciliação
 }
 
 ICONES_POR_FAMILIA = {

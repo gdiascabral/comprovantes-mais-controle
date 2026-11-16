@@ -257,8 +257,8 @@ def test_dados_do_html_guardam_linha_do_boleto_e_descricao_colada():
     from pagamentos_dia.html_pagamentos import descricao_para_colar
     boleto = {"id": "L1", "tipo": "Boleto", "dados": "3419 1570 0700 0249", "descricao": "compra"}
     pix = {"id": "L2", "tipo": "Pix", "dados": "email@exemplo.com", "descricao": "outra"}
-    mao = {"id": "L3", "tipo": "Pix", "dados": "x@y.com", "descricao": "m", "a_mao": "mao:4"}
-    sem_lanc = {"id": "", "tipo": "Pix", "dados": "x@y.com", "descricao": "m", "a_mao": "mao:5"}
+    mao = {"id": "L3", "tipo": "Pix", "dados": "x@y.com", "descricao": "m", "a_mao": "mao:4"}  # porteira: ficticio
+    sem_lanc = {"id": "", "tipo": "Pix", "dados": "x@y.com", "descricao": "m", "a_mao": "mao:5"}  # porteira: ficticio
     res = SimpleNamespace(contas={"Conta Alfa": [boleto, pix, mao, sem_lanc]})
     d = ag.dados_do_html(res)
     assert d["L1"]["linha"] == "3419157007000249"
@@ -269,7 +269,7 @@ def test_dados_do_html_guardam_linha_do_boleto_e_descricao_colada():
 
 def test_para_marcar_poe_linha_e_descricao_na_foto():
     do_html = {"L1": {"linha": "123", "dado": "123", "descricao_colada": "OBRA NF 1"},
-               "mao:4": {"linha": "", "dado": "x@y.com", "descricao_colada": "MAO"}}
+               "mao:4": {"linha": "", "dado": "x@y.com", "descricao_colada": "MAO"}}  # porteira: ficticio
     itens = ag.para_marcar(_painel(), [], [], None, set(), do_html=do_html)
     assert itens[0].foto["linha"] == "123" and itens[0].foto["descricao_colada"] == "OBRA NF 1"
     assert "linha" not in itens[1].foto

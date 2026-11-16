@@ -123,6 +123,42 @@ def fotografar(alvo, arquivo, clip=None) -> str:
     return ""
 
 
+def recorte_da_tela(page, elemento):
+    """(imagem do Pillow, x da caixa) do pedaço da tela onde está o
+    `elemento`, cortado de um print da PÁGINA inteira; None se ele não está
+    na tela. Medido ao vivo em 29/10/2026 (Prova de saldos): o print do
+    próprio elemento, e o `clip`, saíam deslocados no Chrome do app e pegavam
+    as linhas vizinhas; o da página inteira bate com o `bounding_box`."""
+    import io
+    from PIL import Image
+    caixa = elemento.bounding_box()
+    if not caixa or caixa["y"] < 0 or caixa["width"] <= 0 or caixa["height"] <= 0:
+        return None
+    razao = float(page.evaluate("window.devicePixelRatio") or 1)
+    tela = Image.open(io.BytesIO(page.screenshot()))
+    corte = tuple(round(v * razao) for v in (caixa["x"], caixa["y"],
+                                             caixa["x"] + caixa["width"],
+                                             caixa["y"] + caixa["height"]))
+    return tela.crop(corte), caixa["x"]
+
+
+def empilhar(imagens, vao: int = 12):
+    """As imagens uma embaixo da outra, alinhadas à esquerda, fundo branco
+    (o print de prova feito de pedaços da tela). None sem imagem."""
+    from PIL import Image
+    imagens = [i for i in imagens if i is not None]
+    if not imagens:
+        return None
+    largura = max(i.width for i in imagens)
+    altura = sum(i.height for i in imagens) + vao * (len(imagens) - 1)
+    saida = Image.new("RGB", (largura, altura), "white")
+    y = 0
+    for img in imagens:
+        saida.paste(img.convert("RGB"), (0, y))
+        y += img.height + vao
+    return saida
+
+
 def revelar(page, seletor: str) -> bool:
     """Clica no "olho" que mostra um valor mascarado antes do print (Prova de
     saldos). `seletor` vazio = não toca na página. NUNCA levanta: sem o

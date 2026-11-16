@@ -105,6 +105,7 @@ from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from tela_do_dia.frame import TelaDoDiaFrame
 from tela_do_dia.controle_frame import ControleAportesFrame
+from conciliacao_dia.frame import ConciliacaoDiaFrame
 from contratos.frame import ContratosFrame
 from acessorias.frame import AcessoriasFrame
 from baixar_comprovantes.comprovantes_frame import ComprovantesFrame
@@ -197,6 +198,7 @@ _ORDEM = (
     ("dia", "🧾", "Pagamentos do dia", "pagamentos-do-dia"),
     ("pag", "🗓", "Remessa/Retorno", "remessa-retorno"),
     ("con", "⚖", "Saldo de pagamentos", "saldo-de-pagamentos"),
+    ("cdi", "🔁", "Conciliação", "conciliacao"),
     ("cap", "🤝", "Controle de aportes", "controle-de-aportes"),
     ("rel", "📊", "Relatório Mensal", "relatorio-mensal"),
     ("ext", "🏦", "Extratos Sicoob", "extratos-sicoob"),
@@ -373,6 +375,7 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
         _montar("con", lambda: ConciliacaoFrame(conteudo, aba_anx))
         _montar("dia", lambda: TelaDoDiaFrame(conteudo, aba_anx))
         _montar("cap", lambda: ControleAportesFrame(conteudo, aba_anx))
+        _montar("cdi", lambda: ConciliacaoDiaFrame(conteudo, aba_anx))
         if "dia" in quadros:
             try:
                 _preencher_dia(quadros["dia"])
@@ -451,7 +454,7 @@ def _montar_janela(root: tk.Tk, largura: int, altura: int):
         for chave, icone, texto, _slug in itens_do_grupo:
             _item(corpo_g, chave, icone, texto, recuo=10)
 
-    _grupo("DIÁRIO", tuple(i for i in _ORDEM if i[0] in ("dia", "pag", "con", "cap")))
+    _grupo("DIÁRIO", tuple(i for i in _ORDEM if i[0] in ("dia", "pag", "con", "cdi", "cap")))
     _grupo("MENSAL", tuple(i for i in _ORDEM if i[0] in ("rel", "ext", "ctr", "acs", "anx2")))
 
     return quadros, mostrar, aplicar_tema

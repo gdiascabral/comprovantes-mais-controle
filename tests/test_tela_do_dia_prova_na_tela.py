@@ -108,7 +108,7 @@ def test_sem_buscar_recusa_e_nada_apaga(cenario, janelas_do_messagebox):
     p.comecar()
     assert anx.avisos == [] and anx.submetidos == [] and p._thread is None
     assert p.b_prova.estado == {}
-    assert "Busque" in janelas_do_messagebox[0][1][1]
+    assert "Ler as contas do ERP" in janelas_do_messagebox[0][1][1]
 
 
 def test_chrome_do_banco_em_uso_recusa_antes_de_tudo(cenario, janelas_do_messagebox):
@@ -353,23 +353,32 @@ def test_ocupado_e_ligar():
     assert p.b_prova.estado["state"] == "disabled"
 
 
-def test_frame_conta_a_prova_como_dona_do_chrome_do_sicoob():
-    from tela_do_dia import frame as f
-    t = f.TelaDoDiaFrame.__new__(f.TelaDoDiaFrame)
-    t.sicoob = NS(ocupado=lambda: None)
-    t.agendamentos = NS(ocupado=lambda: None)
+def test_conciliacao_conta_a_prova_e_o_ofx_como_donos_do_chrome_do_banco():
+    """A prova mudou para a aba Conciliação (29/10/2026): é ela que responde
+    "quem está no Chrome do Sicoob/Inter" pela prova e pelo Baixar OFX."""
+    from conciliacao_dia import frame as f
+    t = f.ConciliacaoDiaFrame.__new__(f.ConciliacaoDiaFrame)
+    t._thread = None
     t.prova = NS(ocupado=lambda: None)
     t.autenticar = NS(ocupado=lambda: None)
     assert t.sicoob_ocupado() is None
     t.prova = NS(ocupado=lambda: m.OCUPADO)
     assert t.sicoob_ocupado() == m.OCUPADO
+    t.prova = NS(ocupado=lambda: None)
+    t._thread = NS(is_alive=lambda: True)
+    assert t.sicoob_ocupado() == f.OCUPADO
 
 
-def test_frame_cria_liga_e_fecha_a_prova():
+def test_pagamentos_do_dia_so_tem_o_link_para_a_prova():
     frame = (RAIZ / "tela_do_dia" / "frame.py").read_text(encoding="utf-8")
-    assert "self.prova = ProvaNaTela(c1, tela=self)" in frame
-    assert "self.prova.ligar(b.dia)" in frame and "self.prova.ligar(False)" in frame
-    assert "self.prova.fechar()" in frame
+    assert "ProvaNaTela" not in frame and "self.prova" not in frame
+    assert "self.ir_para_conciliacao()" in frame
+
+
+def test_conciliacao_cria_liga_e_fecha_a_prova():
+    frame = (RAIZ / "conciliacao_dia" / "frame.py").read_text(encoding="utf-8")
+    assert "self.prova = ProvaNaTela(c2, tela=self)" in frame
+    assert "self.prova.ligar(lido)" in frame and "self.prova.fechar()" in frame
 
 
 def test_app_liga_a_prova_em_todas_as_pontas():
@@ -377,12 +386,18 @@ def test_app_liga_a_prova_em_todas_as_pontas():
 
     def trecho(chave):
         return app.split(chave, 1)[1].split("\n    #", 1)[0]
-    propria = trecho("aba_dia.prova.outros_no_sicoob =")
+    outros = trecho("def _outros_que_a_conciliacao():")
     for quem in ("aba_ext.ocupado()", "baixar_comprovantes_no_sicoob(aba_bxc)",
                  "aba_dia.sicoob.ocupado()", "aba_dia.agendamentos.ocupado()",
                  "_remessa_conferindo()"):
-        assert quem in propria, quem
-    assert "aba_dia.prova.ocupado()" in trecho("aba_dia.sicoob.outros_no_sicoob =")
-    assert "aba_dia.prova.ocupado()" in trecho("aba_dia.agendamentos.outros_no_sicoob =")
+        assert quem in outros, quem
+    assert ("aba_cdi.prova.outros_no_sicoob = lambda: _outros_que_a_conciliacao() or "
+            "aba_cdi.ocupado()") in app
+    assert "aba_cdi.outros_no_sicoob = _outros_que_a_conciliacao" in app
+    assert "aba_cdi.sicoob_ocupado()" in trecho("aba_dia.sicoob.outros_no_sicoob =")
+    assert "aba_cdi.sicoob_ocupado()" in trecho("aba_dia.agendamentos.outros_no_sicoob =")
+    assert 'aba_dia.ir_para_conciliacao = lambda: _abrir_se_pode("cdi")' in app
+    assert "aba_dia.autenticar.ocupado()" in outros
     inter = app.split("aba_bxc.inter_ocupado =", 1)[1].splitlines()[0]
-    assert "aba_dia.prova.ocupado()" in inter and "aba_dia.autenticar.ocupado()" in inter
+    assert "aba_cdi.sicoob_ocupado()" in inter and "aba_dia.autenticar.ocupado()" in inter
+    assert "aba_cdi.sicoob_ocupado()" in trecho("aba_dia.autenticar.outros_no_sicoob =")

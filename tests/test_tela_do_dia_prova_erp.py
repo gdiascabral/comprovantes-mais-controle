@@ -3,6 +3,7 @@
 linha da conta na grade #/accounts, numa aba do robô fechada no fim. Página
 e Chrome são dublês; UUIDs e valores fictícios."""
 import datetime as dt
+import io
 import re
 from decimal import Decimal as D
 from pathlib import Path
@@ -40,7 +41,7 @@ class _Loc:
         return self.p.atual + 1 < len(self.p.paginas)
 
     def scroll_into_view_if_needed(self):
-        pass
+        self.p.rolou = "linha"
 
     def bounding_box(self):
         if self.sel == pe.SEL_CABECALHO_GRADE:
@@ -51,19 +52,34 @@ class _Loc:
         Path(path).write_bytes(b"png")
         self.p.fotos.append(self.sel)
 
+    def evaluate(self, js):
+        return self.p.colunas
+
 
 class _Pagina:
     def __init__(self, paginas, quebra=None):
         self.paginas, self.atual, self.quebra = paginas, 0, quebra
         self.cliques, self.fotos, self.fechada, self.url = [], [], False, ""
         self.caixa_cabecalho = self.caixa_linha = None
-        self.recortes, self.recorte_quebra = [], False
+        self.recortes, self.recorte_quebra, self.colunas = [], False, []
+        self.rolou = ""
 
-    def screenshot(self, path, clip=None):
+    def screenshot(self, path=None):
+        """O print da ABA inteira (2000 x 1000), como bytes."""
         if self.recorte_quebra:
-            raise RuntimeError("Clipped area is either empty or outside the resulting image")
-        Path(path).write_bytes(b"png")
-        self.recortes.append(clip)
+            raise RuntimeError("Target page, context or browser has been closed")
+        self.recortes.append(self.rolou)
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (2000, 1000), "gray").save(buf, "PNG")
+        return buf.getvalue()
+
+    def evaluate(self, js):
+        if "devicePixelRatio" in js:
+            return 1
+        if "scrollTo" in js:
+            self.rolou = "topo"
+        return None
 
     def goto(self, url, **k):
         if self.quebra:
@@ -146,39 +162,71 @@ def test_parar_deixa_as_que_faltam_sem_print(tmp_path):
     assert prints == {8: (None, ps.INTERROMPIDA)}
 
 
-def test_print_do_erp_leva_o_cabecalho_da_grade_junto(tmp_path):
-    """Revisão de 27/10: só a linha (sem o nome das colunas) não prova nada
-    para quem lê no celular. O recorte junta o cabeçalho e a linha."""
+def _colunas():
+    # Banco (com texto), um vão vazio, o nome (com texto) e o saldo.
+    return [
+        {"campo": "banco", "texto": "Banco X", "celula": {"x": 10, "width": 300},
+         "cabecalho": {"x": 10, "width": 300}},
+        {"campo": "vazio", "texto": "", "celula": {"x": 310, "width": 900},
+         "cabecalho": {"x": 310, "width": 900}},
+        {"campo": "nome", "texto": "CONTA A", "celula": {"x": 1210, "width": 200},
+         "cabecalho": {"x": 1200, "width": 260}},
+        {"campo": "isFinancialBlock", "texto": "Bloquear", "celula": {"x": 1460, "width": 150},
+         "cabecalho": None},
+    ]
+
+
+def test_ficha_do_erp_e_cabecalho_em_cima_da_linha_so_com_colunas_com_texto(tmp_path):
+    """Revisão ao vivo de 27/10: o recorte que unia cabeçalho e linha pegava
+    todas as linhas do meio, e a grade inteira ficava miúda no PDF."""
+    from PIL import Image
     pagina = _Pagina([[UA]])
-    pagina.caixa_cabecalho = {"x": 10, "y": 100, "width": 1200, "height": 40}
-    pagina.caixa_linha = {"x": 10, "y": 300, "width": 1200, "height": 52}
+    pagina.caixa_cabecalho = {"x": 10, "y": 100, "width": 1600, "height": 40}
+    pagina.caixa_linha = {"x": 10, "y": 300, "width": 1600, "height": 50}
+    pagina.colunas = _colunas()
     prints = pe.fotografar_contas(_Mc(pagina), [(8, UA)], tmp_path)
     assert prints == {8: (tmp_path / "08 erp.png", "")}
-    assert pagina.recortes == [{"x": 10, "y": 100, "width": 1200, "height": 252}]
-    assert pagina.fotos == []                     # não caiu na foto só da linha
+    # Dois prints da aba: um com a grade no topo (cabeçalho), um com a linha.
+    assert pagina.recortes == ["topo", "linha"]
+    assert pagina.fotos == []
+    ficha = Image.open(tmp_path / "08 erp.png")
+    # Banco (300 + folga só à direita: a da esquerda cai fora da imagem) +
+    # nome (o título, 260, com folga) + um vão; "Bloquear" e vazio fora.
+    largura = (300 + pe.FOLGA) + (260 + 2 * pe.FOLGA) + pe.VAO_FICHA
+    assert ficha.size == (2 * largura, 2 * (40 + 1 + 50))
 
 
-def test_sem_cabecalho_ou_recorte_que_falha_fica_a_linha(tmp_path):
+def test_sem_cabecalho_sem_colunas_ou_recorte_que_falha_fica_a_linha(tmp_path):
     pagina = _Pagina([[UA]])
     pagina.caixa_linha = {"x": 10, "y": 300, "width": 1200, "height": 52}
+    pagina.colunas = _colunas()
     pe.fotografar_contas(_Mc(pagina), [(8, UA)], tmp_path)
-    assert pagina.recortes == [] and len(pagina.fotos) == 1
-    pagina = _Pagina([[UA]])
-    pagina.caixa_cabecalho = {"x": 10, "y": 100, "width": 1200, "height": 40}
-    pagina.caixa_linha = {"x": 10, "y": 300, "width": 1200, "height": 52}
-    pagina.recorte_quebra = True
-    prints = pe.fotografar_contas(_Mc(pagina), [(8, UA)], tmp_path)
-    assert prints == {8: (tmp_path / "08 erp.png", "")} and len(pagina.fotos) == 1
+    assert len(pagina.fotos) == 1
+    for colunas, quebra, y in ((_colunas(), True, 100), ([], False, 100),
+                               (_colunas(), False, -30)):
+        pagina = _Pagina([[UA]])
+        pagina.caixa_cabecalho = {"x": 10, "y": y, "width": 1200, "height": 40}
+        pagina.caixa_linha = {"x": 10, "y": 300, "width": 1200, "height": 52}
+        pagina.colunas, pagina.recorte_quebra = colunas, quebra
+        prints = pe.fotografar_contas(_Mc(pagina), [(8, UA)], tmp_path)
+        assert prints == {8: (tmp_path / "08 erp.png", "")} and len(pagina.fotos) == 1
 
 
-def test_recorte_une_as_duas_caixas():
-    assert pe.recorte({"x": 0, "y": 50, "width": 800, "height": 40},
-                      {"x": 5, "y": 120, "width": 900, "height": 50}) == {
-        "x": 0, "y": 50, "width": 905, "height": 120}
-    assert pe.recorte(None, {"x": 0, "y": 0, "width": 1, "height": 1}) is None
-    # Cabeçalho fora da tela (rolado para cima): sem recorte, fica a linha.
-    assert pe.recorte({"x": 0, "y": -30, "width": 800, "height": 40},
-                      {"x": 0, "y": 200, "width": 800, "height": 50}) is None
+def test_faixas_da_ficha_juntam_celula_e_titulo_e_pulam_coluna_vazia():
+    f = pe.FOLGA
+    assert pe.faixas_da_ficha(_colunas()) == [(10 - f, 310 + f), (1200 - f, 1460 + f)]
+    assert pe.faixas_da_ficha([]) == []
+
+
+def test_ficha_respeita_a_escala_do_windows():
+    """Com 125% no Windows o print tem 1,25 pixel por px de tela."""
+    from PIL import Image
+    cab, lin = Image.new("RGB", (1250, 50), "red"), Image.new("RGB", (1250, 60), "blue")
+    ficha = pe.montar_ficha(cab, lin, [(50, 150)], largura_alvo=100, razao=1.25,
+                            x_cabecalho=50, x_linha=50)
+    assert ficha.size == (125, 111)
+    assert ficha.getpixel((5, 5)) == (255, 0, 0) and ficha.getpixel((5, 100)) == (0, 0, 255)
+    assert pe.montar_ficha(cab, lin, [], largura_alvo=100) is None
 
 
 class _Mapa:

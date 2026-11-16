@@ -22,11 +22,11 @@ def _conta(nome, n):
 
 
 def test_moura_dantas_sempre_por_ultimo():
-    contas = [_conta("MOURA DANTAS EMPREENDIMENTOS SICOOB - 16.335-0", 20),
-              _conta("ALFA", 2), _conta("MOURA  dantas SICOOB 10774-3", 1), _conta("BETA", 5)]
-    saida = h.ordenar_contas(contas, primeiras=["MOURA DANTAS EMPREENDIMENTOS SICOOB - 16.335-0", "ALFA"])
+    contas = [_conta("MOURA DANTAS EMPREENDIMENTOS SICOOB - 99.991-0", 20),
+              _conta("ALFA", 2), _conta("MOURA  dantas SICOOB 99992-1", 1), _conta("BETA", 5)]
+    saida = h.ordenar_contas(contas, primeiras=["MOURA DANTAS EMPREENDIMENTOS SICOOB - 99.991-0", "ALFA"])
     assert [c["nome"] for c in saida] == [
-        "ALFA", "BETA", "MOURA DANTAS EMPREENDIMENTOS SICOOB - 16.335-0", "MOURA  dantas SICOOB 10774-3"]
+        "ALFA", "BETA", "MOURA DANTAS EMPREENDIMENTOS SICOOB - 99.991-0", "MOURA  dantas SICOOB 99992-1"]
 
 
 def _par(dados=CNPJ, original=CNPJ_PONTUADO, valor=104000, **reg):

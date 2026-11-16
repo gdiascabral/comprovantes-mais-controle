@@ -45,6 +45,7 @@ from pagamentos_dia.pagamentos_frame import PagamentosDiaFrame
 from extratos_sicoob.extratos_frame import ExtratosSicoobFrame
 from conciliacao.frame import ConciliacaoFrame
 from tela_do_dia.frame import TelaDoDiaFrame
+from conciliacao_dia.frame import ConciliacaoDiaFrame
 from tela_do_dia import sicoob_na_tela as _sicoob_na_tela
 from tela_do_dia.controle_frame import ControleAportesFrame
 from contratos.frame import ContratosFrame
@@ -331,6 +332,10 @@ def main():
     aba_dia = TelaDoDiaFrame(conteudo, aba_anx)
     aba_dia.aba_aportes = aba_apt
     aba_dia.aba_remessa = aba_pag
+    # Conciliação (29/10/2026): Baixar OFX e Provar saldos. Divide o navegador
+    # do ERP (importar o OFX, ler as contas) e abre o Chrome do Sicoob e os
+    # perfis do Inter — entra em todas as perguntas de "quem está no banco".
+    aba_cdi = ConciliacaoDiaFrame(conteudo, aba_anx)
     # Pagamentos do dia lê o saldo do Sicoob no MESMO perfil do banco (uma
     # sessão só): ela pergunta aos Extratos e ao "Conferir agendamentos", e
     # este passa a perguntar às duas — só uma recusa a mais na Remessa, com o
@@ -344,27 +349,38 @@ def main():
 
     aba_dia.sicoob.outros_no_sicoob = lambda: aba_ext.ocupado() or (
         _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
-        aba_dia.agendamentos.ocupado()) or aba_dia.prova.ocupado() or (
+        aba_dia.agendamentos.ocupado()) or aba_cdi.sicoob_ocupado() or (
         aba_dia.autenticar.ocupado()) or _remessa_conferindo()
     # O "Conferir agendamentos" da própria tela do dia (dono, 23/10/2026) abre o
     # MESMO perfil: pergunta a todos, inclusive ao saldo da própria aba.
     aba_dia.agendamentos.outros_no_sicoob = lambda: aba_ext.ocupado() or (
         _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
-        aba_dia.sicoob.ocupado()) or aba_dia.prova.ocupado() or (
+        aba_dia.sicoob.ocupado()) or aba_cdi.sicoob_ocupado() or (
         aba_dia.autenticar.ocupado()) or _remessa_conferindo()
     # A Prova de saldos (27/10/2026) abre o Chrome do Sicoob E os perfis do
     # Inter: pergunta a todos, inclusive ao Baixar comprovantes (Inter também).
-    aba_dia.prova.outros_no_sicoob = lambda: aba_ext.ocupado() or (
-        _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
-        aba_dia.sicoob.ocupado()) or aba_dia.agendamentos.ocupado() or (
-        aba_dia.autenticar.ocupado()) or _remessa_conferindo()
-    # O "Autenticar no banco" (29/10/2026) abre o MESMO perfil do Sicoob:
-    # pergunta a todos, como os outros desta aba.
+    def _outros_que_a_conciliacao():
+        return aba_ext.ocupado() or (
+            _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
+            aba_dia.sicoob.ocupado()) or aba_dia.agendamentos.ocupado() or (
+            aba_dia.autenticar.ocupado()) or aba_acs.inter_em_uso() or (
+            _remessa_conferindo())
+
+    # Prova de saldos e Baixar OFX, as duas da aba Conciliação, perguntam a
+    # todos e uma à outra (o mesmo Chrome do Sicoob e os mesmos perfis do Inter).
+    aba_cdi.prova.outros_no_sicoob = lambda: _outros_que_a_conciliacao() or aba_cdi.ocupado()
+    aba_cdi.outros_no_sicoob = _outros_que_a_conciliacao
+    # O "Autenticar no banco" (29/10/2026) abre o MESMO perfil do Sicoob e os
+    # perfis do Inter: pergunta a todos, como os outros da aba do dia.
     aba_dia.autenticar.outros_no_sicoob = lambda: aba_ext.ocupado() or (
         _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc)) or (
         aba_dia.sicoob.ocupado()) or aba_dia.agendamentos.ocupado() or (
-        aba_dia.prova.ocupado()) or _remessa_conferindo()
-    aba_pag.sicoob_ocupado = lambda: aba_ext.ocupado() or aba_dia.sicoob_ocupado() or (
+        aba_cdi.sicoob_ocupado()) or aba_acs.inter_em_uso() or _remessa_conferindo()
+
+    def _sicoob_do_dia_ou_da_conciliacao():
+        return aba_dia.sicoob_ocupado() or aba_cdi.sicoob_ocupado()
+
+    aba_pag.sicoob_ocupado = lambda: aba_ext.ocupado() or _sicoob_do_dia_ou_da_conciliacao() or (
         _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc))
     # Controle de aportes divide navegador e thread do Anexar: lê o MESMO ERP
     # (só GET). Só o admin edita abertura, proporção e apontamentos — a RLS
@@ -392,10 +408,15 @@ def main():
     aba_bxc = ComprovantesFrame(conteudo, _mapa_das_contas)
     # O contrário da pergunta da tela do dia: Extratos e Baixar comprovantes
     # recusam começar enquanto ela lê o saldo no MESMO perfil do Sicoob.
-    aba_ext.sicoob_ocupado = aba_dia.sicoob_ocupado
-    aba_bxc.sicoob_ocupado = aba_dia.sicoob_ocupado
-    # O "Autenticar no banco" (29/10/2026) também abre os perfis do Inter.
-    aba_bxc.inter_ocupado = lambda: aba_dia.prova.ocupado() or aba_dia.autenticar.ocupado()
+    aba_ext.sicoob_ocupado = _sicoob_do_dia_ou_da_conciliacao
+    aba_bxc.sicoob_ocupado = _sicoob_do_dia_ou_da_conciliacao
+    # A Prova e o Baixar OFX (Conciliação) e o "Autenticar no banco" (29/10/2026)
+    # abrem os perfis do Inter.
+    aba_bxc.inter_ocupado = lambda: aba_cdi.sicoob_ocupado() or aba_dia.autenticar.ocupado() or (
+        aba_acs.inter_em_uso())
+    # Os extratos do Inter do mês (Acessórias, 29/10/2026) abrem os mesmos perfis.
+    aba_acs.inter_ocupado = lambda: aba_cdi.sicoob_ocupado() or aba_dia.autenticar.ocupado() or (
+        _sicoob_na_tela.baixar_comprovantes_no_sicoob(aba_bxc))
     # "anx2" ANTES de "anx": o `_sair` fecha na ordem deste dicionário, e a
     # cópia precisa soltar a thread que espera na janela de dúvidas dela antes
     # de o dono fechar o Chrome.
@@ -403,7 +424,7 @@ def main():
                "conf": aba_conf, "apt": aba_apt, "rel": aba_rel,
                "pag": aba_pag, "ext": aba_ext, "con": aba_con,
                "ctr": aba_ctr, "acs": aba_acs, "bxc": aba_bxc,
-               "dia": aba_dia, "cap": aba_cap}
+               "dia": aba_dia, "cdi": aba_cdi, "cap": aba_cap}
     atual = {"nome": None}
     itens = {}
 
@@ -461,6 +482,9 @@ def main():
             return False
         mostrar(chave)
         return True
+
+    # O link "Prova de saldos → aba Conciliação" de Pagamentos do dia.
+    aba_dia.ir_para_conciliacao = lambda: _abrir_se_pode("cdi")
 
     aba_dia.abrir_aportes = lambda: _abrir_se_pode("apt")
     aba_dia.abrir_remessa = lambda: _abrir_se_pode("pag")
@@ -563,6 +587,8 @@ def main():
     _grupo("diario", "DIÁRIO", (("dia", "🧾", "Pagamentos do dia"),
                                 ("pag", "🗓", "Remessa/Retorno"),
                                 ("con", "⚖", "Saldo de pagamentos"),
+                                # Depois do 9º item: os Ctrl+1..9 de antes não mudam.
+                                ("cdi", "🔁", "Conciliação"),
                                 ("cap", "🤝", "Controle de aportes")))
     _grupo("mensal", "MENSAL", (("rel", "📊", "Relatório Mensal"),
                                 ("ext", "🏦", "Extratos Sicoob"),
@@ -696,6 +722,7 @@ def main():
                 # ...o do Sicoob, que é processo e login à parte...
                 lambda: ("ext", aba_ext.ocupado()),
                 lambda: ("dia", aba_dia.sicoob_ocupado()),
+                lambda: ("cdi", aba_cdi.sicoob_ocupado()),
                 # ...e o do portal do escritório, pelo mesmo motivo
                 lambda: ("acs", aba_acs.ocupado()),
                 # A Separar não tem navegador nenhum — o trabalho dela é OCR e

@@ -7,12 +7,14 @@ Buscar (`erp_do_dia.ler_saldos`: porteiro com o central ligado; aba do robô
 desligado — nunca login HTTP), casado com as linhas do painel pela régua do
 painel (`saldos.montar_saldos`).
 
-**O print** é do cabeçalho da grade `#/accounts` JUNTO com a linha da conta
-(React/MUI; cada linha tem `data-id` = UUID da conta; seletores de
-`conciliacao/erp/browser.py`, levantados em 10/08/2026): só a linha, sem o
-nome das colunas, não provava nada no celular (revisão de 27/10/2026). O
-recorte (`recorte`) une as duas caixas; sem cabeçalho visível ou com o
-recorte recusado, fica a foto só da linha. Numa aba PRÓPRIA do robô
+**O print** é uma FICHA: o cabeçalho da grade `#/accounts` em cima e a
+linha da conta embaixo (React/MUI; cada linha tem `data-id` = UUID da conta;
+seletores de `conciliacao/erp/browser.py`, levantados em 10/08/2026), só com
+as colunas que têm texto na linha, ampliada até a largura útil do PDF
+(`montar_ficha`). Na rodada ao vivo de 27/10/2026 o recorte que UNIA as
+duas caixas pegava todas as linhas entre o cabeçalho e a conta, e a grade
+inteira (2.266 px, quase toda vazia) ficava miúda no PDF. Sem cabeçalho
+visível ou sem colunas, fica a foto só da linha. Numa aba PRÓPRIA do robô
 (`MCClient._nova_aba_do_robo`), fechada e esquecida no fim — nunca a aba da
 pessoa, nunca `ctx.close()`. Os únicos cliques: "Exibir valores" (só mostra
 o que está mascarado) e "próxima página". Linha que não aparece vira "sem
@@ -51,28 +53,117 @@ def _primeira_linha(erro) -> str:
     return texto[:160] or type(erro).__name__
 
 
-def recorte(cabecalho, linha) -> dict | None:
-    """O retângulo que une a caixa do cabeçalho e a da linha (coordenadas da
-    tela, `bounding_box` do Playwright); None sem uma das duas ou com o
-    cabeçalho fora da tela (rolado para cima)."""
-    if not cabecalho or not linha or cabecalho["y"] < 0:
+#: As células da linha e, de cada uma, o cabeçalho da mesma coluna
+#: (`data-field`), com a caixa do CONTEÚDO (o texto, não a célula de 682 px
+#: quase vazia, medida ao vivo em 29/10/2026). Só lê a página.
+_JS_COLUNAS = """(linha) => {
+    const grade = linha.closest('.MuiDataGrid-root') || document;
+    const caixa = (el) => { const g = document.createRange(); g.selectNodeContents(el);
+                            const r = g.getBoundingClientRect();
+                            return r.width ? {x: r.x, width: r.width} : null; };
+    return [...linha.querySelectorAll('[data-field]')].map((c) => {
+        const h = grade.querySelector('.MuiDataGrid-columnHeader[data-field="'
+                                      + CSS.escape(c.dataset.field) + '"] '
+                                      + '.MuiDataGrid-columnHeaderTitle');
+        return {campo: c.dataset.field, texto: (c.innerText || '').trim(),
+                celula: caixa(c), cabecalho: h ? caixa(h) : null};
+    });
+}"""
+#: Colunas que não provam nada (medidas em 29/10/2026): o botão "Bloquear" e
+#: o menu de ações.
+CAMPOS_FORA = frozenset({"isFinancialBlock", "actions"})
+#: Folga de cada lado do texto de uma coluna, em px de tela.
+FOLGA = 10
+#: Espaço entre duas colunas da ficha e a ampliação máxima (pixel de tela
+#: virando pixel de PDF: mais que isso só borra).
+VAO_FICHA = 24
+AMPLIACAO_MAX = 2.0
+
+
+def faixas_da_ficha(colunas) -> list[tuple[float, float]]:
+    """As faixas horizontais (x da tela, em px) das colunas que têm texto NA
+    LINHA e provam alguma coisa, na ordem da tela. Cada faixa cobre o texto
+    da célula e o título da coluna juntos, com `FOLGA` dos dois lados."""
+    faixas = []
+    for col in colunas or []:
+        if col.get("campo") in CAMPOS_FORA or not str(col.get("texto") or "").strip():
+            continue
+        caixas = [c for c in (col.get("celula"), col.get("cabecalho")) if c]
+        if not caixas:
+            continue
+        x0 = min(c["x"] for c in caixas) - FOLGA
+        x1 = max(c["x"] + c["width"] for c in caixas) + FOLGA
+        faixas.append((x0, x1))
+    return sorted(faixas)
+
+
+def _corte(img, x_da_imagem: float, x0: float, x1: float, razao: float):
+    a = max(0, round((x0 - x_da_imagem) * razao))
+    b = min(img.width, round((x1 - x_da_imagem) * razao))
+    return img.crop((a, 0, b, img.height)) if b > a else None
+
+
+def montar_ficha(cabecalho, linha, faixas, *, largura_alvo: int, razao: float = 1.0,
+                 x_cabecalho: float = 0.0, x_linha: float = 0.0):
+    """A ficha (imagem do Pillow): cada faixa do cabeçalho em cima da mesma
+    faixa da linha, lado a lado, ampliada até `largura_alvo` (no máximo
+    `AMPLIACAO_MAX`). `x_cabecalho`/`x_linha` = onde cada foto começa na tela
+    (as faixas vêm em x da tela); `razao` = pixels da imagem por px de tela
+    (a escala do Windows). None sem faixa."""
+    from PIL import Image, ImageDraw
+
+    if not faixas:
         return None
-    x0 = min(cabecalho["x"], linha["x"])
-    y0 = min(cabecalho["y"], linha["y"])
-    x1 = max(cabecalho["x"] + cabecalho["width"], linha["x"] + linha["width"])
-    y1 = max(cabecalho["y"] + cabecalho["height"], linha["y"] + linha["height"])
-    return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
+    pedacos = []
+    for x0, x1 in faixas:
+        cab = _corte(cabecalho, x_cabecalho, x0, x1, razao)
+        lin = _corte(linha, x_linha, x0, x1, razao)
+        if cab is not None and lin is not None:
+            largura = min(cab.width, lin.width)
+            pedacos.append((cab.crop((0, 0, largura, cab.height)),
+                            lin.crop((0, 0, largura, lin.height))))
+    if not pedacos:
+        return None
+    vao = round(VAO_FICHA * razao)
+    largura = sum(c.width for c, _ in pedacos) + vao * (len(pedacos) - 1)
+    altura = cabecalho.height + 1 + linha.height
+    ficha = Image.new("RGB", (largura, altura), "white")
+    x = 0
+    for cab, lin in pedacos:
+        ficha.paste(cab.convert("RGB"), (x, 0))
+        ficha.paste(lin.convert("RGB"), (x, cabecalho.height + 1))
+        x += cab.width + vao
+    ImageDraw.Draw(ficha).line((0, cabecalho.height, largura, cabecalho.height),
+                               fill=(160, 160, 160))
+    escala = min(AMPLIACAO_MAX, largura_alvo / largura)
+    if escala > 1:
+        ficha = ficha.resize((round(largura * escala), round(altura * escala)),
+                             Image.Resampling.LANCZOS)
+    return ficha
 
 
 def _fotografar_linha(aba, alvo, arquivo) -> str:
-    """Cabeçalho + linha num recorte da aba; senão, só a linha."""
+    """A ficha (cabeçalho + linha, só colunas com texto); senão, só a linha.
+    Dois prints da aba: um com a grade no alto (o cabeçalho à vista) e um com
+    a linha rolada para a tela."""
+    from . import prova_pdf
     try:
-        clip = recorte(aba.locator(SEL_CABECALHO_GRADE).first.bounding_box(),
-                       alvo.bounding_box())
+        razao = float(aba.evaluate("window.devicePixelRatio") or 1)
+        faixas = faixas_da_ficha(alvo.evaluate(_JS_COLUNAS))
+        aba.evaluate("window.scrollTo(0, 0)")
+        cab = util.recorte_da_tela(aba, aba.locator(SEL_CABECALHO_GRADE).first)
+        alvo.scroll_into_view_if_needed()
+        lin = util.recorte_da_tela(aba, alvo)
+        if cab and lin:
+            ficha = montar_ficha(cab[0], lin[0], faixas,
+                                 largura_alvo=prova_pdf.LARGURA_UTIL, razao=razao,
+                                 x_cabecalho=cab[1], x_linha=lin[1])
+            if ficha is not None:
+                Path(arquivo).parent.mkdir(parents=True, exist_ok=True)
+                ficha.save(arquivo)
+                return ""
     except Exception:                                        # noqa: BLE001
-        clip = None
-    if clip is not None and not util.fotografar(aba, arquivo, clip=clip):
-        return ""
+        pass                                 # cai na foto só da linha, abaixo
     return util.fotografar(alvo, arquivo)
 
 

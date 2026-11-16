@@ -40,6 +40,7 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 | `prova_pdf.py` | o PDF da prova com o Pillow do exe: resumo paginado (18 linhas) + página(s) por conta com os dois prints empilhados a 1:1 |
 | `prova_erp.py` | saldo atual do ERP (o caminho do Buscar) + print do cabeçalho com a linha da conta na grade `#/accounts`, numa aba do robô fechada no fim |
 | `prova_sicoob.py` | saldo do Sicoob com print pelo gancho `ao_ler` de `extratos_sicoob.saldo` |
+| `saldos_para_o_dia.py` | o saldo da Prova de saldos vale para esta aba (dono, 16/11/2026): o Sicoob entra no `saldos do sicoob.json` do dia (lido troca, falha não apaga lido bom, Prova sem nenhuma conta lida não grava) e o Inter no `saldos do inter.json`; `InterNoDia` põe o Inter na coluna BANCO só lido há até 120 min e com o mesmo número de conta, senão a linha fica "banco não lido" com a hora |
 | `prova_na_tela.py` | o botão "📸 Prova de saldos": recusas, ERP na vaga do Anexar, bancos na thread `prova-saldos`, Parar, PDF e pasta |
 | `pagamentos.py` | passo 2: por linha do painel, o que VAI SAIR, o JÁ ENVIADO (soma no a pagar) e o que está BLOQUEADO; conta sem linha no painel vai para `fora`, com o motivo, em vez de sumir |
 | `aportes.py` | passo 3: mínimo, sugestão da aba Regras, conta-mãe primeiro com alerta forte, movimentos «À MÃO» no M (entra) e no E (sai) |
@@ -239,8 +240,17 @@ dela, sem mudança de comportamento.
 
 ## Prova de saldos (27/10/2026)
 
-Botão "📸 Prova de saldos" no cartão Saldos (`prova_na_tela.ProvaNaTela`,
-criada logo abaixo da barra do "Reler Sicoob"). Spec:
+**Desde 29/10/2026 ela mora na aba Conciliação** (`conciliacao_dia/frame.py`,
+ambiente "Provar saldos" — ver `arquitetura-conciliacao-dia.md`); aqui ficou
+só o link «Prova de saldos → aba Conciliação» no cartão Saldos
+(`ir_para_conciliacao`, ligado pelo app), e o `sicoob_ocupado` desta aba não
+pergunta mais por ela. Os módulos `prova_*` continuam nesta pasta: o
+hospedeiro precisa ter `anx`, `cfg`, `mapping`, `contas_erp`, `_log`,
+`_abrir` e `_pasta_pagamentos`, e a Conciliação lê os três primeiros no seu
+«Ler as contas do ERP». O texto abaixo descreve o botão; onde diz "esta aba"
+ou "cartão Saldos", leia a aba Conciliação.
+
+Botão "📸 Prova de saldos" (`prova_na_tela.ProvaNaTela`). Spec:
 `docs/superpowers/specs/2026-10-27-prova-de-saldos-design.md`; plano:
 `docs/superpowers/plans/2026-10-27-prova-de-saldos.md`.
 
