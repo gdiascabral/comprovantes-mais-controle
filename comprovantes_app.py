@@ -115,6 +115,33 @@ def _token_ou_vazio(pasta) -> str:
         return ""
 
 
+def _sincronizar_painel(token: str, admin: bool) -> list[str]:
+    """`nuvem.painel.sincronizar` com o resultado no diagnóstico. Devolve os
+    avisos, que a tela mostra (revisão de dinheiro: conflito do painel só no
+    log passaria semanas sem ninguém ver). Nunca levanta."""
+    anotar = util.log("painel_nuvem").info
+    try:
+        from nuvem import painel
+        r = painel.sincronizar(token, admin, util.pasta_base())
+        for linha in r.linhas():
+            anotar(linha)
+        return list(r.avisos)
+    except Exception as e:                                   # noqa: BLE001
+        anotar(f"arquivos do painel: falha ao sincronizar ({e})")
+        return [f"falha ao sincronizar ({e})"]
+
+
+def _mostrar_avisos_do_painel(root, avisos: list[str]) -> None:
+    if not avisos:
+        return
+    messagebox.showwarning(
+        "Arquivos do painel",
+        "Os arquivos do painel do Saldo (config, mapping e MODELO) não ficaram "
+        "iguais aos da nuvem:\n\n" + "\n".join(f"• {a}" for a in avisos[:8])
+        + "\n\nO app continua com os do disco. Se não souber resolver, avise o "
+          "administrador.", parent=root)
+
+
 def _carregar_prefs() -> dict:
     try:
         return json.loads((_pasta_dados() / "preferencias.json")
@@ -287,6 +314,12 @@ def main():
                                      _pasta_dados())
     except Exception as _e:
         _sinc = cadastro.Resultado(False, f"falha ao sincronizar: {_e}")
+
+    # Os arquivos do painel do Saldo (config.yaml, mapping.yaml, MODELO.xlsx,
+    # conciliacao_ofx.json) vêm da nuvem desde 17/11/2026 — sem eles o Saldo
+    # de pagamentos, o Pagamentos do dia e a Conciliação não leem as contas.
+    # Mesma regra da linha de cima: falhar aqui nunca impede o app de abrir.
+    _avisos_painel = _sincronizar_painel(_token_ou_vazio(_pasta_dados()), _eu.admin)
 
     # ---------------- a moldura: barra em cima, menu à esquerda, painel
     #
@@ -972,8 +1005,23 @@ def main():
                     util.pasta_base()))
             if not respostas:
                 return
+            # O painel mora na nuvem desde 17/11/2026 e só o administrador o
+            # sobe: incluído aqui por outra pessoa, a sincronia seguinte o
+            # trocaria pelo da nuvem e a conta sumiria do Saldo (revisão de
+            # dinheiro). O cadastro continua valendo para todos.
+            so_admin = ""
+            if respostas.painel and not _eu.admin:
+                respostas.painel = []
+                so_admin = ("O painel do Saldo NÃO mudou: só o administrador "
+                            "inclui conta no painel (ele vale para todas as "
+                            "máquinas). Peça a ele.")
+                if not respostas:
+                    messagebox.showinfo("Contas", so_admin)
+                    return
             recado = contas_central.aplicar(token, respostas, crus,
                                             pasta_painel=util.pasta_base())
+            if so_admin:
+                recado = "\n".join(p for p in (recado, so_admin) if p)
         except Exception as e:                            # noqa: BLE001
             _anotar(f"conferencia de contas (gravacao): {e}")
             messagebox.showerror(
@@ -989,7 +1037,10 @@ def main():
                 sinc = cadastro.sincronizar(token, pasta)
             except Exception as e:                        # noqa: BLE001
                 sinc = cadastro.Resultado(False, f"falha ao sincronizar: {e}")
+            # O painel pode ter ganho a conta nova: sobe (admin) já agora.
+            avisos = _sincronizar_painel(token, _eu.admin)
             root.after(0, lambda: _sinc_na_tela(sinc))
+            root.after(0, lambda: _mostrar_avisos_do_painel(root, avisos))
         threading.Thread(target=_depois, daemon=True).start()
         messagebox.showinfo("Contas", recado)
 
@@ -1147,6 +1198,7 @@ def main():
 
     _atualizar_contas("abertura")
 
+    root.after(1500, lambda: _mostrar_avisos_do_painel(root, _avisos_painel))
     root.mainloop()
 
 
