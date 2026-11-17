@@ -29,10 +29,24 @@ o que não estiver nesses arquivos não existe.
   obras e investidores, as regras de fornecedor e as de boleto. O ERP continua
   sendo o banco dos PAGAMENTOS; isto aqui é só cadastro.
 - **O que NÃO subiu, de propósito**: `preferencias.json` (tema é de máquina),
-  `config.yaml`/`mapping.yaml`/`MODELO.xlsx` (são a estrutura da planilha da
-  Conciliação, versionados junto do modelo que descrevem) e o `login.dat` —
+  e o `login.dat` —
   cada pessoa tem o SEU usuário no ERP, e nenhuma credencial de ERP vai para
   a nuvem.
+
+**Os arquivos do painel subiram em 17/11/2026** (`nuvem/painel.py`, migration
+`20261117100000_arquivos_do_painel_na_nuvem.sql`, tabela `arquivo_do_painel`).
+`config.yaml`, `mapping.yaml`, `MODELO.xlsx` e `conciliacao_ofx.json` tinham
+ficado fora em 13/08 porque só o Saldo de pagamentos os lia; o Pagamentos do
+dia e a Conciliação passaram a ler, e a aba quebrou na máquina de outra pessoa da equipe
+("No such file: config.yaml"). Conteúdo em base64 com o sha256 conferido pelo
+banco; ler = `e_ativo()`, escrever = `e_admin()`; toda troca guarda a versão
+anterior em `arquivo_do_painel_versao`. Na abertura (e depois do «Atualizar
+contas») o app compara disco × nuvem × última sincronia (`painel_nuvem.json`):
+baixa o que só a nuvem mudou, quem não é admin espelha a nuvem (cópia do
+disco em `copias do painel/<data hora> nuvem/`), o admin sobe o que só o disco
+mudou por PATCH filtrado pelo sha antigo, e os dois lados mudados ficam como
+estão com aviso no `diagnostico.log`. O arquivo que falta mostra "Este
+computador ainda não tem o arquivo do painel …" (`widgets.explicar_erro`).
 
 **A decisão central está na tabela `conta`.** A MESMA conta era descrita em
 `contas_mc.json` e `contas_sicoob.json`, cada um com a sua pasta de destino;

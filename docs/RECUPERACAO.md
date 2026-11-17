@@ -134,6 +134,9 @@ aparecer "cadastro offline" aqui, PARE e resolva a rede antes de seguir.
 
 ### Os três que a nuvem não traz
 
+**Desde 17/11/2026 eles vêm da nuvem** (`nuvem/painel.py`): o app os baixa
+na abertura, depois do login. O texto abaixo é de antes e fica como história.
+
 `config.yaml`, `mapping.yaml` e `MODELO.xlsx` ficaram FORA da nuvem de
 propósito: são a estrutura da planilha da Conciliação, versionados junto do
 modelo que descrevem (`CLAUDE.md`, "O que NÃO subiu, de propósito"), e também

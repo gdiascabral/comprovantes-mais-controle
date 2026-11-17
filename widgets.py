@@ -21,6 +21,7 @@ import re
 import time
 import weakref
 from datetime import date
+from pathlib import Path
 
 import tkinter as tk
 from tkinter import ttk
@@ -3947,6 +3948,10 @@ def _familia_do_erro(exc) -> tuple[set, set]:
             {str(getattr(c, "__module__", "")) for c in mro})
 
 
+#: Os arquivos do painel do Saldo que vêm da nuvem (`nuvem/painel.py`).
+ARQUIVOS_DO_PAINEL = ("config.yaml", "mapping.yaml", "MODELO.xlsx")
+
+
 def explicar_erro(exc) -> tuple[str, str, str]:
     """(o que houve, de quem é, o próximo passo) para a exceção dada.
 
@@ -4025,6 +4030,16 @@ def explicar_erro(exc) -> tuple[str, str, str]:
     # O texto do sistema entra junto porque ele nomeia O ARQUIVO, que é a
     # informação que resolve o caso — sem ele, "feche o arquivo no Excel" não
     # diz qual arquivo.
+    # ---- os arquivos do painel do Saldo (17/11/2026): vêm da nuvem na
+    # abertura; faltar é máquina que ainda não os recebeu, não o OneDrive.
+    if (isinstance(exc, FileNotFoundError)
+            and Path(str(getattr(exc, "filename", "") or "")).name in ARQUIVOS_DO_PAINEL):
+        return (f"Este computador ainda não tem o arquivo do painel "
+                f"{Path(str(exc.filename)).name}.",
+                "Ele vem da nuvem quando o app abre, junto com o cadastro.",
+                "Feche e abra o app com internet. Se continuar, peça ao "
+                "administrador para abrir o app dele uma vez (é ele quem envia "
+                "o painel para a nuvem).")
     if isinstance(exc, PermissionError):
         return ("O Windows não deixou abrir o arquivo."
                 + (f"\n{recado}" if recado else ""),
