@@ -257,7 +257,8 @@ class SessaoCdp:
         metodo = metodo.upper()
         r = self._uma(url, metodo, corpo, extras)
         if r["status"] == 401 and (metodo == "GET" or idempotente):
-            self._capturar(self.aba)
+            with central.fila(self.aba.acesso):      # navegar é o instante pesado
+                self._capturar(self.aba)
             r = self._uma(url, metodo, corpo, extras)
         if r["status"] >= 400:
             raise ErpErro(f"o ERP respondeu {r['status']}: {str(r['dados'])[:300]}",
