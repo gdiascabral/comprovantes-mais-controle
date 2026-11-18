@@ -18,18 +18,22 @@ as marcadas da última vez): a lista aparece ao abrir, sem ir ao ERP.
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 import json
 import os
 import queue
 import subprocess
 import time
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import util
 import widgets
 from widgets import px
 from conciliacao.config import load_config
+from conciliacao.errors import ErpError
+from erp import sessao as erp_sessao
+from pagamentos_dia import baixa_pelo_arquivo as bpa
 from pagamentos_dia import html_pf, leitura_do_dia, reembolso
 from pagamentos_dia import regras_pagamento as regras_pag
 from pagamentos_dia.pagamentos_frame import _carregar_mapas, _historico
@@ -150,6 +154,19 @@ class AbaPF:
                         "com as mesmas regras das PJ (sem anexo, só com reembolso, "
                         "boleto em imagem). O HTML tem código de barras, QR Pix com a "
                         "descrição e o «já paguei», que gera a lista para a baixa.")
+
+        # Etapa 3 da spec de 12/11/2026: o JSON do «Baixar lista das baixas»
+        # volta ao app, que confere cada título no ERP e só então baixa.
+        c4 = widgets.Cartao(area, "Dar baixa pelo arquivo", 4)
+        c4.pack(fill="x", padx=PADX, pady=px((0, 12)))
+        self.b_baixa = widgets.Botao(c4, "Escolher o arquivo de baixas…", papel="acao",
+                                     command=self.escolher_baixas)
+        self.b_baixa.pack(anchor="w")
+        tela._ajuda(c4, "Escolha o baixas_pf_<data>.json que o HTML salvou. O app relê "
+                        "cada título no ERP e mostra a conferência: em aberto, valor "
+                        "igual, conta existe e não baixado antes. Vermelho não é "
+                        "baixado. O app guarda o que já baixou: o mesmo arquivo "
+                        "carregado de novo não baixa duas vezes.")
         self._mostrar_contas()
         area.after(200, self._drain)
 
@@ -314,6 +331,175 @@ class AbaPF:
             tela.q.put(("ocupado", False))
             self.q.put(("fim", None))
 
+    # ------------------------------------------------------------- baixa
+    def escolher_baixas(self):
+        tela = self.tela
+        if tela.worker and not tela.worker.done():
+            return
+        caminho = filedialog.askopenfilename(
+            title="Arquivo de baixas do HTML das PF",
+            filetypes=[("Arquivo de baixas", "baixas_pf_*.json"), ("JSON", "*.json")])
+        if not caminho:
+            return
+        try:
+            with open(caminho, encoding="utf-8") as f:
+                itens = bpa.ler_arquivo(f.read())
+            registro = bpa.Registro(util.pasta_base() / bpa.ARQ_REGISTRO)
+        except (OSError, ValueError) as e:
+            messagebox.showerror("Dar baixa pelo arquivo", str(e))
+            return
+        if not erp_sessao.central_ligado():
+            messagebox.showinfo("Dar baixa pelo arquivo",
+                                "A baixa pelo arquivo fala com o ERP pelo Chrome central "
+                                "(porteiro), que não está ligado nesta máquina.")
+            return
+        if tela.anx.avisar_se_ocupado("a baixa pelo arquivo", aba=tela):
+            return
+        self.b_baixa.configure(state="disabled")
+        tela.q.put(("ocupado", True))
+        tela.q.put(("status", f"PF: conferindo {len(itens)} baixa(s) no ERP..."))
+        nome = os.path.basename(caminho)
+        tela._log(f"\nPF: conferindo {nome} ({len(itens)} item(ns)) no ERP...")
+        tela.worker = tela.anx.submeter("Pagamentos do dia — conferir baixas", self._t_conferir,
+                                        itens, registro, nome, dona=tela)
+
+    @staticmethod
+    def _sessao_central():
+        """(pedir, contas cruas) pelo Chrome central — nunca login HTTP."""
+        cfg = load_config(util.pasta_base() / "config.yaml")
+        # O mesmo caminho dos saldos: `Sessao.logar("", "")` = porteiro; com o
+        # central desligado ele LEVANTA em vez de cair no login HTTP.
+        api = erp_do_dia._logar_pela_pagina(cfg)
+        interna = api._sessao
+        from erp.sessao_pagina import SessaoPelaPagina
+        if not isinstance(interna, SessaoPelaPagina):
+            raise ErpError("o porteiro não devolveu a sessão pela página.")
+        contas = api.listar_contas(ativas=True)
+        if not contas:
+            raise ErpError("o ERP não devolveu nenhuma conta bancária.")
+
+        def pedir(url, metodo="GET", corpo=None):
+            return interna.pedir(url, metodo=metodo, corpo=corpo)
+        return pedir, contas
+
+    def _t_conferir(self, itens, registro, nome):
+        tela, log = self.tela, self.tela._log
+        try:
+            pedir, contas = self._sessao_central()
+            conferidos = bpa.conferir(pedir, itens, contas, registro,
+                                      hoje=datetime.date.today(), log=log)
+            aptos = [c for c in conferidos if c.apto]
+            log(f"PF: {len(aptos)} de {len(conferidos)} passam na conferência.")
+            for c in conferidos:
+                if not c.apto:
+                    log(f"  ✖ {c.item.fornecedor[:30]} — {c.motivo}")
+            self.q.put(("conferido", (conferidos, contas, registro, nome)))
+            tela.q.put(("status", "PF: conferência pronta — confira e confirme."))
+        except Exception as e:                                # noqa: BLE001
+            log("\n" + widgets.recado_de_erro(e, "Não consegui conferir as baixas no ERP."))
+            log(dc.detalhe_do_erro(e))
+            util.log("tela_do_dia").exception("conferir baixas PF")
+            tela.q.put(("status", "PF: não consegui conferir — veja o Registro."))
+            self.q.put(("fim_baixa", None))
+        finally:
+            tela.q.put(("ocupado", False))
+
+    def _janela_conferencia(self, conferidos, contas, registro, nome):
+        tela = self.tela
+        aptos = [c for c in conferidos if c.apto]
+        total = sum((c.item.valor for c in aptos), start=Decimal("0"))
+        jan = tk.Toplevel(self.caixa_contas.winfo_toplevel())
+        jan.title(f"Dar baixa pelo arquivo — {nome}")
+        jan.transient(self.caixa_contas.winfo_toplevel())
+        ttk.Label(jan, text=(f"{len(aptos)} de {len(conferidos)} prontos para baixar · "
+                             f"{bpa._dinheiro(total)}. Vermelho não é baixado."),
+                  style="Secao.TLabel").pack(anchor="w", padx=px(12), pady=px((12, 6)))
+        cols = ("fornecedor", "valor", "conta", "data", "situacao")
+        caixa = ttk.Frame(jan)
+        caixa.pack(fill="both", expand=True, padx=px(12))
+        t = ttk.Treeview(caixa, columns=cols, show="headings",
+                         height=min(max(len(conferidos), 4), 18))
+        for col, titulo, larg, anc in (("fornecedor", "FAVORECIDO", 220, "w"),
+                                       ("valor", "VALOR", 90, "e"),
+                                       ("conta", "CONTA", 170, "w"),
+                                       ("data", "PAGO EM", 80, "center"),
+                                       ("situacao", "SITUAÇÃO", 300, "w")):
+            t.heading(col, text=titulo)
+            t.column(col, width=larg, minwidth=larg, anchor=anc, stretch=(col == "situacao"))
+        barra = ttk.Scrollbar(caixa, orient="vertical", command=t.yview)
+        t.configure(yscrollcommand=barra.set)
+        barra.pack(side="right", fill="y")
+        t.pack(side="left", fill="both", expand=True)
+        widgets.estilo_tabela(t, zebra=False, ordenavel=False)
+        for i, c in enumerate(conferidos):
+            it = c.item
+            situacao = (f"{widgets.MARCAS_ESTADO['ok']} pronto para baixar" if c.apto
+                        else f"{widgets.MARCAS_ESTADO['erro']} {c.motivo}")
+            t.insert("", "end", iid=str(i), tags=("ok" if c.apto else "erro",), values=(
+                it.fornecedor, bpa._dinheiro(it.valor) if it.valor is not None else it.valor_cru,
+                it.conta, it.data.strftime("%d/%m/%Y") if it.data else it.data_cru, situacao))
+        rodape = ttk.Frame(jan)
+        rodape.pack(fill="x", padx=px(12), pady=px(12))
+
+        def fechar():
+            jan.destroy()
+            self.b_baixa.configure(state="normal")
+
+        def baixar():
+            if not messagebox.askyesno(
+                    "Dar baixa pelo arquivo",
+                    f"Dar baixa de {len(aptos)} pagamento(s), {bpa._dinheiro(total)}, no "
+                    "Mais Controle?\n\nCada título é relido logo antes da baixa, e a "
+                    "baixa não é repetida.", default="no", parent=jan):
+                return
+            if tela.anx.avisar_se_ocupado("a baixa pelo arquivo", aba=tela):
+                return
+            jan.destroy()
+            tela._parar.clear()
+            tela.q.put(("ocupado", True))
+            tela.q.put(("status", f"PF: baixando {len(aptos)} pagamento(s)..."))
+            tela._log(f"\nPF: baixando {len(aptos)} pagamento(s) de {nome}...")
+            tela.worker = tela.anx.submeter("Pagamentos do dia — dar baixa", self._t_baixar,
+                                            conferidos, registro, dona=tela)
+
+        b = widgets.Botao(rodape, f"Baixar os {len(aptos)} pronto(s)", papel="acao",
+                          command=baixar)
+        b.pack(side="left")
+        if not aptos:
+            b.configure(state="disabled")
+        widgets.Botao(rodape, "Cancelar", papel="neutro", command=fechar).pack(
+            side="left", padx=px((8, 0)))
+        jan.protocol("WM_DELETE_WINDOW", fechar)
+
+    def _t_baixar(self, conferidos, registro):
+        tela, log = self.tela, self.tela._log
+        try:
+            # Sessão e contas de novo: a conferência pode ter sido há minutos.
+            pedir, contas = self._sessao_central()
+            rodada = bpa.baixar(pedir, conferidos, contas, registro, log=log,
+                                agora=lambda: datetime.datetime.now().isoformat(timespec="seconds"),
+                                cancelar=tela._parar.is_set)
+            total = sum((r.item.valor for r in rodada.resultados if r.ok),
+                        start=Decimal("0"))
+            falhas = [r for r in rodada.resultados if not r.ok]
+            log(f"PF: {rodada.ok} baixa(s) feita(s), {bpa._dinheiro(total)}"
+                + (f" · {len(falhas)} não baixada(s)" if falhas else ""))
+            for r in falhas:
+                log(f"  ✖ {r.item.fornecedor[:30]} — {r.recado}")
+            if rodada.parou:
+                log("[!] PF: parei numa baixa sem resposta — confira esse título no ERP "
+                    "antes de carregar o arquivo de novo.")
+            self.q.put(("baixado", (rodada.ok, total, len(falhas), rodada.parou)))
+            tela.q.put(("status", f"PF: {rodada.ok} baixa(s) feita(s)."))
+        except Exception as e:                                # noqa: BLE001
+            log("\n" + widgets.recado_de_erro(e, "Não consegui dar as baixas."))
+            log(dc.detalhe_do_erro(e))
+            util.log("tela_do_dia").exception("baixas PF")
+            tela.q.put(("status", "PF: as baixas pararam — veja o Registro."))
+        finally:
+            tela.q.put(("ocupado", False))
+            self.q.put(("fim_baixa", None))
+
     # ------------------------------------------------------------- tela
     def _drain(self):
         try:
@@ -334,6 +520,20 @@ class AbaPF:
                     self.receber_contas(valor)
                 elif tipo == "fim_contas":
                     self.b_contas.configure(state="normal")
+                elif tipo == "conferido":
+                    self._janela_conferencia(*valor)
+                elif tipo == "baixado":
+                    ok, total, falhas, parou = valor
+                    texto = f"{ok} baixa(s) feita(s), {bpa._dinheiro(total)}."
+                    if falhas:
+                        texto += f"\n{falhas} não baixada(s) — o motivo está no Registro."
+                    if parou:
+                        texto += ("\n\nParei numa baixa sem resposta: confira esse título "
+                                  "no ERP antes de carregar o arquivo de novo.")
+                    (messagebox.showwarning if (falhas or parou) else messagebox.showinfo)(
+                        "Dar baixa pelo arquivo", texto)
+                elif tipo == "fim_baixa":
+                    self.b_baixa.configure(state="normal")
         except queue.Empty:
             pass
         except Exception as e:                                # noqa: BLE001
