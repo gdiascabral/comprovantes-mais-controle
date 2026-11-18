@@ -254,8 +254,8 @@ paths:
   cada aba e espera todas; rede lenta e robô conectado parado NÃO fazem isso.
   Três defesas, nenhuma fecha aba viva de ninguém:
   (1) **a fila** `central.fila(acesso)` = trava `.<acesso>.conectar.trava` ao
-  lado do perfil (`ESPERA_FILA` 180 s, `VELHA_FILA` 240 s, pid morto sai na
-  hora), segurada só durante o connect e durante a abertura e o carregamento
+  lado do perfil (`ESPERA_FILA` 210 s, acima do pior caso de um `conectar`, ~190 s;
+  `VELHA_FILA` 300 s; pid morto sai na hora), segurada só durante o connect e durante a abertura e o carregamento
   de uma aba por CDP cru. `conectar(..., acesso=)` entra nela, e os três que
   conectam (`AbaCentral`, `MCClient._entrar_no_central`,
   `login_principal._AbaPrincipal`) passam o acesso; sem acesso, não há fila.
@@ -274,7 +274,10 @@ paths:
   `cabecalhos_para` e `fechar`): `SessaoCdp()` abre a aba em `about:blank`
   dentro da fila, registra na faxina, navega a PRÓPRIA aba para capturar os
   cabeçalhos (nunca `Page.reload` na aba de ninguém), faz `fetch` de dentro
-  dela (401 em GET recaptura uma vez; POST nunca repete) e fecha só a dela
+  dela (401 em GET recaptura uma vez; POST nunca repete, e escrita sem
+  resposta sobe `ResultadoIncerto`: pode ter gravado, conferir antes de
+  repetir). A aba do login principal também nasce e carrega na fila
+  (`central.esperar_carregar`) e fecha só a dela
   no `with`, no `fechar()` ou no fim do programa. Só biblioteca padrão
   (`_CanalCdp`, que ganhou `enviar`/`proxima` para ler eventos). O conftest
   põe a fila numa pasta temporária, troca `limpar_mortos` por nada e encolhe

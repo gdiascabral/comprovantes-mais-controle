@@ -343,3 +343,92 @@ def test_cdp_cru_sem_login_fecha_a_aba_e_explica(tmp_path, monkeypatch):
 def test_cdp_cru_sem_acesso_ligado_explica(tmp_path):
     with pytest.raises(ErpErro, match="não está ligado"):
         cdp_cru.AbaCdp("principal", pasta=tmp_path)
+
+
+# ------------------------------------------------- a revisão de 18/11/2026
+
+
+class _CanalMudo(_Canal):
+    """Responde à captura e fica calado no fetch."""
+
+    def pedir(self, metodo, params=None, *, sessao=None, prazo=3.0):
+        if metodo == "Runtime.evaluate" and params["expression"] != "document.readyState":
+            self.enviados.append("fetch")
+            raise central._SemResposta()
+        return super().pedir(metodo, params, sessao=sessao, prazo=prazo)
+
+
+def test_post_sem_resposta_e_resultado_incerto_e_nao_repete(tmp_path, monkeypatch):
+    canal = _CanalMudo(CAB)
+    aba, _http, _a = _aba(tmp_path, canal, monkeypatch)
+    with cdp_cru.SessaoCdp(aba=aba) as s:
+        with pytest.raises(cdp_cru.ResultadoIncerto, match="confira no ERP"):
+            s.pedir("https://legacy-api.maiscontroleerp.com.br/paids", metodo="POST", corpo={})
+    assert canal.enviados.count("fetch") == 1                  # o POST saiu UMA vez
+    assert issubclass(cdp_cru.ResultadoIncerto, ErpErro)
+
+
+def test_get_sem_resposta_nao_e_resultado_incerto(tmp_path, monkeypatch):
+    canal = _CanalMudo(CAB)
+    aba, _http, _a = _aba(tmp_path, canal, monkeypatch)
+    with cdp_cru.SessaoCdp(aba=aba) as s:
+        with pytest.raises(ErpErro) as e:
+            s.pedir("https://legacy-api.maiscontroleerp.com.br/x")
+    assert not isinstance(e.value, cdp_cru.ResultadoIncerto)
+
+
+def test_espera_da_fila_cobre_o_pior_caso_de_um_conectar():
+    pior = (2 * central.PRAZO_CONEXAO + 2 * central.PRAZO_SONDA + central.ESPERA_VOLTA)
+    # o conftest encolhe a ESPERA_VOLTA; o pior caso é com a de verdade
+    pior = pior - central.ESPERA_VOLTA + 60.0
+    assert central.ESPERA_FILA > pior
+    assert central.VELHA_FILA > central.ESPERA_FILA
+
+
+class _CanalCarrega:
+    def __init__(self, estados):
+        self.estados, self.fechou = list(estados), False
+
+    def __call__(self, ws, prazo):
+        return self
+
+    def pedir(self, metodo, params=None, *, sessao=None, prazo=3.0):
+        v = self.estados.pop(0)
+        if v is None:
+            raise central._SemResposta()
+        return {"result": {"result": {"value": v}}}
+
+    def fechar(self):
+        self.fechou = True
+
+
+def test_esperar_carregar_espera_o_complete_e_nunca_levanta():
+    c = _CanalCarrega(["loading", None, "complete"])
+    assert central.esperar_carregar("ws://127.0.0.1:1/x", prazo=5, canal=c) is True
+    assert c.fechou
+
+    def quebra(*a, **k):
+        raise ConnectionRefusedError("fechado")
+    assert central.esperar_carregar("ws://127.0.0.1:1/x", prazo=1, canal=quebra) is False
+
+
+def test_aba_do_login_principal_nasce_e_carrega_na_fila(tmp_path, monkeypatch):
+    from erp import login_principal
+    a = central.Acesso("principal", tmp_path / "p", 9230)
+    visto = {}
+
+    def abrir(pedido, timeout=None):
+        url = getattr(pedido, "full_url", pedido)
+        if "/json/new" in url:
+            visto["fila_no_new"] = central.caminho_fila(a).exists()
+            return _Resp(json.dumps({"id": "NOVA", "webSocketDebuggerUrl":
+                                     "ws://127.0.0.1:1/devtools/page/NOVA"}).encode())
+        return _Resp(b"[]")
+
+    def carregar(ws, **k):
+        visto["fila_no_carregar"] = central.caminho_fila(a).exists()
+        return True
+    monkeypatch.setattr(central, "esperar_carregar", carregar)
+    assert login_principal._alvo_da_aba(a, "http://127.0.0.1:1", abrir=abrir) == "NOVA"
+    assert visto == {"fila_no_new": True, "fila_no_carregar": True}
+    assert not central.caminho_fila(a).exists()

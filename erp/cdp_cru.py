@@ -71,6 +71,11 @@ _JS_FETCH = """async (a) => {
 }"""
 
 
+class ResultadoIncerto(ErpErro):
+    """Um pedido de escrita (POST/PUT/PATCH/DELETE) saiu e a resposta não
+    voltou: o ERP pode ter gravado. Não é recusa — confira antes de repetir."""
+
+
 class AbaCdp:
     """Uma aba própria no Chrome central, falada por CDP cru."""
 
@@ -240,12 +245,22 @@ class SessaoCdp:
         arg = {"url": url, "metodo": metodo, "headers": self.cabecalhos_para(url, extras),
                "corpo": corpo}
         js = f"({_JS_FETCH})({json.dumps(arg, ensure_ascii=False, default=str)})"
-        for tentativa in range(TENTATIVAS_GET if metodo == "GET" else 1):
+        if metodo != "GET":
+            # Escrita: o pedido pode ter chegado ao ERP e só a resposta se
+            # perdeu. Isso nunca pode parecer um "não deu" comum — quem trata
+            # assim relança e cria em dobro (revisão de 18/11/2026).
+            try:
+                return self.aba.avaliar(js)
+            except (ErpErro, RuntimeError) as e:
+                raise ResultadoIncerto(
+                    f"o {metodo} em {urllib.parse.urlsplit(url).path} ficou sem "
+                    f"resposta ({e}). Pode ter gravado: confira no ERP antes de "
+                    "repetir.") from e
+        for tentativa in range(TENTATIVAS_GET):
             try:
                 return self.aba.avaliar(js)
             except RuntimeError as e:
-                if (metodo != "GET" or "Failed to fetch" not in str(e)
-                        or tentativa == TENTATIVAS_GET - 1):
+                if "Failed to fetch" not in str(e) or tentativa == TENTATIVAS_GET - 1:
                     raise
                 time.sleep(ESPERA_TENTATIVA)
 
@@ -253,7 +268,11 @@ class SessaoCdp:
               extras: dict | None = None, idempotente: bool = False):
         """Os dados da resposta. 401 num GET (ou num pedido marcado
         `idempotente`) recaptura e repete UMA vez; nos outros, sobe — um POST
-        que criou algo e perdeu a resposta duplicaria (ver `erp.sessao`)."""
+        que criou algo e perdeu a resposta duplicaria (ver `erp.sessao`).
+
+        Escrita sem resposta (prazo, "Failed to fetch") sobe
+        `ResultadoIncerto`: NUNCA repita o pedido por causa dela sem antes
+        conferir no ERP se ele gravou."""
         metodo = metodo.upper()
         r = self._uma(url, metodo, corpo, extras)
         if r["status"] == 401 and (metodo == "GET" or idempotente):

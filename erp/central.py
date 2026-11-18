@@ -774,14 +774,49 @@ def _estourou(e: BaseException) -> bool:
 ESPERA_VOLTA = 60.0
 #: De quanto em quanto a sonda pergunta se ela voltou.
 PASSO_VOLTA = 5.0
-#: Quanto quem chega espera a fila (dois connects inteiros com a espera).
-ESPERA_FILA = 180.0
+#: Quanto quem chega espera a fila. O pior caso de quem a segura é um
+#: `conectar` inteiro: 2 × `PRAZO_CONEXAO` + 2 × `PRAZO_SONDA` +
+#: `ESPERA_VOLTA` ≈ 190 s (revisão de 18/11/2026); espera-se um pouco mais.
+ESPERA_FILA = 210.0
 #: Trava mais velha que isto é de quem morreu no meio (pid morto sai na hora).
-VELHA_FILA = 240.0
+#: Tem de ficar acima do pior caso, senão rouba a trava de quem está vivo.
+VELHA_FILA = 300.0
+#: Teto para a aba nova terminar de carregar dentro da fila.
+PRAZO_CARREGAR = 30.0
 
 
 def caminho_fila(a: Acesso) -> Path:
     return a.perfil.parent / f".{a.nome}.conectar.trava"
+
+
+def esperar_carregar(url_ws: str, *, prazo: float = PRAZO_CARREGAR,
+                     canal=None) -> bool:
+    """Espera a aba de `url_ws` chegar a `document.readyState == "complete"`
+    (só pergunta isso, na aba que quem chama acabou de abrir). True se
+    carregou; False se o prazo acabou ou a aba não deixou perguntar — nunca
+    levanta: carregar é cortesia com quem conecta, não condição."""
+    limite = time.monotonic() + prazo
+    try:
+        c = (canal or _CanalCdp)(url_ws, min(5.0, prazo))
+    except Exception:
+        return False
+    try:
+        while time.monotonic() < limite:
+            try:
+                r = c.pedir("Runtime.evaluate", {"expression": "document.readyState",
+                                                 "returnByValue": True},
+                            prazo=min(5.0, max(0.1, limite - time.monotonic())))
+                if ((r.get("result") or {}).get("result") or {}).get("value") == "complete":
+                    return True
+            except _SemResposta:
+                pass
+            time.sleep(0.3)
+        return False
+    except Exception:
+        return False
+    finally:
+        with contextlib.suppress(Exception):
+            c.fechar()
 
 
 @contextlib.contextmanager
