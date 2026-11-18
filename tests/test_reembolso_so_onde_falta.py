@@ -162,3 +162,20 @@ def test_desmarcar_incluido_confere_se_saiu():
     from tela_do_dia import frame
     fonte = inspect.getsource(frame.TelaDoDiaFrame._desmarcar)
     assert "d.desmarcado" in fonte
+
+
+def test_ids_tirados_pela_caixa():
+    grupos = [_grupo("ERP A", _linha("1", "FULANO", True)),
+              _grupo("ERP B", _linha("2", "FULANO", True))]
+    c, _ = geracao.sem_reembolsos(cf.Conferencia(), grupos, ["FULANO"])
+    assert geracao.ids_tirados_pela_caixa(c) == {"1", "2"}
+    assert geracao.ids_tirados_pela_caixa(cf.Conferencia()) == frozenset()
+
+
+def test_conta_ignorada_pelo_painel_nao_tem_rotulo_que_cobre():
+    import inspect
+
+    from tela_do_dia import frame
+    assert "is_ignored" in inspect.getsource(frame.TelaDoDiaFrame._rotulo_que_cobre)
+    assert "rotulo_da_conta=self._rotulo_que_cobre" in inspect.getsource(
+        frame.TelaDoDiaFrame._sem_reembolsos)

@@ -1022,7 +1022,10 @@ class TelaDoDiaFrame(ttk.Frame):
         refeita e o Registro diz quem voltou e quem saiu (revisão de dinheiro,
         18/11/2026: senão gravaria agendado do que não saiu)."""
         caixa = bool(self.var_reembolso.get())
-        agora = set(self._sem_reembolsos()[1]) if not caixa else set()
+        conf, frases = self._sem_reembolsos() if not caixa else (None, [])
+        # Compara pelos IDS (revisão de dinheiro: dois reembolsos iguais em
+        # contas diferentes têm a mesma frase); a frase é só para o Registro.
+        agora = geracao.ids_tirados_pela_caixa(conf) if conf is not None else frozenset()
         antes = getattr(self, "_reembolsos_vistos", None)
         # O «Incluir mesmo assim» também muda a lista, e ele tem recado próprio.
         chave = (id(self.leitura), caixa, frozenset(self._reembolsos_incluidos))
@@ -1031,10 +1034,11 @@ class TelaDoDiaFrame(ttk.Frame):
             return
         if agora == antes[1]:
             return
-        for linha in sorted(antes[1] - agora):
-            self._log(f"  - reembolso volta (a conta passou a cobrir): {linha}")
-        for linha in sorted(agora - antes[1]):
-            self._log(f"  - reembolso sai (a conta passou a precisar de aporte): {linha}")
+        self._log(f"Reembolso com a caixa desligada: {len(agora - antes[1])} passou(aram) "
+                  f"a sair e {len(antes[1] - agora)} voltou(aram) com a mudança — "
+                  "a lista do «Marcar agendados» foi refeita.")
+        for linha in frases:
+            self._log(f"  - fora hoje: {linha}")
         self._remontar_para_marcar()
 
     def mostrar_numeros(self):
@@ -2210,8 +2214,15 @@ class TelaDoDiaFrame(ttk.Frame):
                                       getattr(self.leitura, "entradas", None),
                                       incluidos=self._reembolsos_incluidos,
                                       ficam_nas_contas=cobrem,
-                                      rotulo_da_conta=self._rotulo_do_painel,
+                                      rotulo_da_conta=self._rotulo_que_cobre,
                                       ficam=ficam)
+
+    def _rotulo_que_cobre(self, conta_erp) -> str:
+        """O rótulo do painel da conta, ou "" para a conta que o painel
+        ignora: aí o reembolso sai, como antes (revisão de dinheiro)."""
+        if self.mapping is not None and self.mapping.is_ignored(conta_erp):
+            return ""
+        return self._rotulo_do_painel(conta_erp)
 
     def _contas_que_cobrem_com_reembolso(self):
         """As contas do painel que pagam o dia com TODOS os reembolsos dentro

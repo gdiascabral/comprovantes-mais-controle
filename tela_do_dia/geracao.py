@@ -348,6 +348,12 @@ def sem_reembolsos(conferencia, grupos, pessoas, entradas=None, incluidos=(),
     return replace(conferencia, eventos=tuple(conferencia.eventos) + extra), tirados
 
 
+def ids_tirados_pela_caixa(conferencia) -> frozenset:
+    """Os alvos que a caixa dos reembolsos desmarcou nesta conferência."""
+    return frozenset(e.alvo for e in conferencia.eventos
+                     if e.acao == cf.DESMARCAR and e.motivo == MOTIVO_SEM_REEMBOLSO)
+
+
 def so_pela_caixa(conferencia_da_nuvem, conferencia_que_vale, alvo) -> bool:
     """O alvo está desmarcado SÓ pela caixa dos reembolsos? Aí a tela recusa
     mexer nele (revisão de dinheiro, 28/10/2026): o "Desfazer" gravaria na
