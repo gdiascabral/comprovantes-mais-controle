@@ -730,7 +730,8 @@ def e_reembolso_de(nome, pessoas) -> bool:
     return False
 
 
-def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None, incluidos=()):
+def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None, incluidos=(),
+                     so_pessoa_fisica=False):
     """(resultado, lancamentos, tirados) sem os reembolsos das `pessoas`.
 
     `tirados` é a lista do que saiu, uma frase por linha ("FAVORECIDO — R$ x
@@ -745,14 +746,21 @@ def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None, incluidos=
     documento); no de pessoa física, pelo nome depois de "REEMBOLSO" no nº do
     documento. Nada é apagado de `self.resultado`: a planilha e a remessa
     continuam com o que o passo 2 confirmou — só o HTML deixa as linhas de
-    fora. `incluidos`: os ids que o dono pôs de volta um a um (10/11/2026)."""
+    fora. `incluidos`: os ids que o dono pôs de volta um a um (10/11/2026).
+
+    `so_pessoa_fisica` (revisão de dinheiro, 18/11/2026): a tela do dia já
+    tira os reembolsos das contas PJ pela caixa — só das que precisam de
+    aporte —, e aqui tirar de novo apagaria do HTML o reembolso que a conta
+    com saldo paga, que continuaria na planilha e na remessa. Com ele, o
+    `resultado` volta intacto e só a lista de pessoa física é filtrada."""
     incluidos = {str(i) for i in (incluidos or ())}
     pessoas = [p for p in (pessoas or ()) if str(p).strip()]
     if not pessoas:
         return resultado, list(lancamentos or ()), []
     tirados = []
     contas = {}
-    for nome, regs in (getattr(resultado, "contas", None) or {}).items():
+    for nome, regs in ({} if so_pessoa_fisica else
+                       (getattr(resultado, "contas", None) or {})).items():
         ficam = []
         for r in regs:
             if (str(r.get("id") or "") not in incluidos
@@ -764,8 +772,8 @@ def tirar_reembolsos(resultado, lancamentos, pessoas, overviews=None, incluidos=
                 ficam.append(r)
         if ficam:
             contas[nome] = ficam
-    novo = (resultado._replace(contas=contas)
-            if hasattr(resultado, "_replace") else resultado)
+    novo = (resultado if so_pessoa_fisica else
+            resultado._replace(contas=contas) if hasattr(resultado, "_replace") else resultado)
     ficam_pf = []
     for item in lancamentos or ():
         overview = (overviews or {}).get(str(item.get("id"))) or {}
