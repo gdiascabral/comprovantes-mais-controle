@@ -232,22 +232,30 @@ def registro_a_mao(p, ordem: int) -> dict:
 MOTIVO_SEM_REEMBOLSO = "reembolso desligado no cartão 2 (não sai hoje)"
 
 
-def contas_que_precisam_de_aporte(painel) -> set[str]:
-    """Os rótulos do painel em que o saldo do dia não cobre o que sai hoje —
-    o "mínimo" do cartão 3 (`aportes.AporteDaConta.minimo`: a pagar + o que
-    a conta aporta ou distribui − saldo do dia − o que entra à mão) maior que
-    zero. Conta SEM saldo também entra: sem saber se cobre, o reembolso sai,
+def contas_que_cobrem(painel, saldos) -> set[str]:
+    """Os rótulos do painel em que o saldo do dia COBRE o que sai hoje — o
+    "mínimo" do cartão 3 (`aportes.AporteDaConta.minimo`: a pagar + o que a
+    conta aporta ou distribui − saldo do dia − o que entra à mão) igual a
+    zero. É uma lista POSITIVA (revisão de dinheiro, 18/11/2026): só fica o
+    reembolso da conta que está aqui; conta sem saldo, linha morta ou
+    ignorada pelo painel, e conta fora dele nunca estão, e o reembolso sai,
     como antes (o lado seguro). O saldo do dia é o do BANCO quando há
-    (digitado, senão o lido do Sicoob/Inter), e só sem ele o do sistema."""
-    return {c.rotulo for c in painel.contas if c.sem_saldo or c.minimo > ZERO_DEC}
+    (digitado, senão o lido do Sicoob/Inter), e só sem ele o do sistema.
+
+    O `painel` só LISTA as contas que têm algo a mostrar no cartão 3 (mínimo,
+    aporte, movimento, sem saldo): a que cobre sozinha nem aparece nele. Por
+    isso a lista sai dos `saldos` (as linhas VIVAS do painel, `montar_saldos`)
+    com saldo do dia, menos as que o painel diz que precisam."""
+    precisam = {c.rotulo for c in painel.contas if c.sem_saldo or c.minimo > ZERO_DEC}
+    return {ln.rotulo for ln in saldos if ln.saldo_do_dia is not None} - precisam
 
 
 ZERO_DEC = Decimal("0")
 
 
-def contas_que_precisam_com_reembolso(grupos, mapping, conferencia, saldos, regras, dia,
+def contas_que_cobrem_com_reembolso(grupos, mapping, conferencia, saldos, regras, dia,
                                       participantes=None) -> set[str]:
-    """`contas_que_precisam_de_aporte` do painel montado como o cartão 3 o
+    """`contas_que_cobrem` do painel montado como o cartão 3 o
     monta (`frame._recalcular`), mas com a conferência da NUVEM — sem os
     eventos da caixa —, isto é, com TODOS os reembolsos dentro do a pagar."""
     from . import aportes as ap                  # tarde: aportes não importa geracao
@@ -258,11 +266,11 @@ def contas_que_precisam_com_reembolso(grupos, mapping, conferencia, saldos, regr
         {ln.rotulo: ln.saldo_do_dia for ln in em_ordem},
         {c.rotulo: c.a_pagar for c in pagamentos.values()},
         regras, dia.aportes, a_mao=dia.a_mao, distribuicoes=dia.distribuicoes)
-    return contas_que_precisam_de_aporte(painel)
+    return contas_que_cobrem(painel, saldos)
 
 
 def sem_reembolsos(conferencia, grupos, pessoas, entradas=None, incluidos=(),
-                   so_nas_contas=None, rotulo_da_conta=None, ficam=None):
+                   ficam_nas_contas=None, rotulo_da_conta=None, ficam=None):
     """(conferencia, tirados): a `conferencia` com os reembolsos das
     `pessoas` DESMARCADOS e a lista de quem saiu, uma frase por linha.
 
@@ -286,13 +294,13 @@ def sem_reembolsos(conferencia, grupos, pessoas, entradas=None, incluidos=(),
     com o "Incluir mesmo assim" — alguns reembolsos o sócio pede para pagar
     hoje, outros não. Ficam como se a caixa estivesse ligada só para eles.
 
-    `so_nas_contas` (dono, 18/11/2026: "tirar somente das contas em que
+    `ficam_nas_contas` (dono, 18/11/2026: "tirar somente das contas em que
     precisam de aporte; as que tiverem dinheiro suficiente para pagar as
     contas do dia e os reembolsos não precisam tirar"): os rótulos do painel
-    de onde o reembolso sai (`contas_que_precisam_de_aporte`, calculado COM
-    os reembolsos dentro). `rotulo_da_conta(conta do ERP)` diz o rótulo da
-    conta da linha; conta sem rótulo (fora do painel) sai, como antes.
-    `None` = sai de todas, o comportamento de antes. Quem fica por ter saldo
+    que COBREM o dia com os reembolsos dentro (`contas_que_cobrem`). O
+    reembolso fica só quando `rotulo_da_conta(conta do ERP)` está ali; em
+    qualquer outro caso sai, como antes. `None` = sai de todas, o
+    comportamento de antes. Quem fica por ter saldo
     vai para a lista `ficam`, quando passada, uma frase por linha, para o
     Registro."""
     pessoas = [p for p in (pessoas or ()) if str(p).strip()]
@@ -322,9 +330,9 @@ def sem_reembolsos(conferencia, grupos, pessoas, entradas=None, incluidos=(),
         if not ident or ident in vistos or not nome or not html_pagamentos.e_reembolso_de(nome, pessoas):
             continue
         vistos.add(ident)
-        if so_nas_contas is not None:
+        if ficam_nas_contas is not None:
             rotulo = rotulo_da_conta(conta) if (rotulo_da_conta and conta) else ""
-            if rotulo and rotulo not in so_nas_contas:
+            if rotulo and rotulo in ficam_nas_contas:
                 if ficam is not None:
                     ficam.append(f"{favorecido or '?'} — {html_pagamentos.reais(valor or 0)} — "
                                  f"reembolso para {nome} — {rotulo} tem saldo")

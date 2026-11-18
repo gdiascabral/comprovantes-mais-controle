@@ -1011,7 +1011,31 @@ class TelaDoDiaFrame(ttk.Frame):
             {c.rotulo: c.a_pagar for c in self.pagamentos.values()},
             self.regras, self.dia.aportes, a_mao=self.dia.a_mao,
             distribuicoes=self.dia.distribuicoes)
+        self._acompanhar_reembolsos()
         self.mostrar_numeros()
+
+    def _acompanhar_reembolsos(self):
+        """Com a caixa desligada, quais reembolsos saem depende do saldo e
+        dos movimentos do dia (dono, 18/11/2026). Mudou por um saldo digitado,
+        o Sicoob lido, um aporte ou um movimento à mão — e não pela caixa nem
+        por um Buscar novo —, a lista do «Marcar agendados» já montada é
+        refeita e o Registro diz quem voltou e quem saiu (revisão de dinheiro,
+        18/11/2026: senão gravaria agendado do que não saiu)."""
+        caixa = bool(self.var_reembolso.get())
+        agora = set(self._sem_reembolsos()[1]) if not caixa else set()
+        antes = getattr(self, "_reembolsos_vistos", None)
+        # O «Incluir mesmo assim» também muda a lista, e ele tem recado próprio.
+        chave = (id(self.leitura), caixa, frozenset(self._reembolsos_incluidos))
+        self._reembolsos_vistos = (chave, agora)
+        if antes is None or antes[0] != chave or caixa:
+            return
+        if agora == antes[1]:
+            return
+        for linha in sorted(antes[1] - agora):
+            self._log(f"  - reembolso volta (a conta passou a cobrir): {linha}")
+        for linha in sorted(agora - antes[1]):
+            self._log(f"  - reembolso sai (a conta passou a precisar de aporte): {linha}")
+        self._remontar_para_marcar()
 
     def mostrar_numeros(self):
         """Põe na tela o que já está em `saldos`, `pagamentos`, `fora`,
@@ -1637,9 +1661,16 @@ class TelaDoDiaFrame(ttk.Frame):
                 and not self.var_reembolso.get()):
             # O incluído um a um volta para fora do mesmo jeito: só na tela.
             self._reembolsos_incluidos.discard(str(ld.pagamento.id))
-            self._log(f"Reembolso tirado de novo: {passo2.descricao_de(ld.pagamento)}")
             self._recalcular_reembolsos()
-            return
+            d = self._conferencia_que_vale().decisoes.get(str(ld.pagamento.id))
+            if d is not None and d.desmarcado:
+                self._log(f"Reembolso tirado de novo: {passo2.descricao_de(ld.pagamento)}")
+                return
+            # A conta passou a cobrir o dia: com a caixa desligada o reembolso
+            # dela FICA (revisão de dinheiro, 18/11/2026). Tirar este é o
+            # Desmarcar de sempre, que segue abaixo e vai à nuvem.
+            self._log(f"Esta conta paga o dia com os reembolsos, e a caixa não o tira: "
+                      f"{passo2.descricao_de(ld.pagamento)}")
         ld = self._selecao_para(passo2.A_DESMARCAR, titulo,
                                 "Selecione um pagamento que vai sair.")
         if ld is None:
@@ -2173,23 +2204,23 @@ class TelaDoDiaFrame(ttk.Frame):
         (dono, 18/11/2026); `ficam` recebe os que ficaram por ter saldo."""
         if self.var_reembolso.get() or self.leitura is None:
             return self.conferencia, []
-        precisam = self._contas_que_precisam_com_reembolso()
+        cobrem = self._contas_que_cobrem_com_reembolso()
         return geracao.sem_reembolsos(self.conferencia, self.leitura.grupos,
                                       self._pessoas_reembolso,
                                       getattr(self.leitura, "entradas", None),
                                       incluidos=self._reembolsos_incluidos,
-                                      so_nas_contas=precisam,
+                                      ficam_nas_contas=cobrem,
                                       rotulo_da_conta=self._rotulo_do_painel,
                                       ficam=ficam)
 
-    def _contas_que_precisam_com_reembolso(self):
-        """As contas do painel que precisam de aporte com TODOS os reembolsos
-        dentro — a mesma conta do cartão 3, com a conferência da nuvem (sem a
+    def _contas_que_cobrem_com_reembolso(self):
+        """As contas do painel que pagam o dia com TODOS os reembolsos dentro
+        — a mesma conta do cartão 3, com a conferência da nuvem (sem a
         caixa). Sem saldos ou sem painel ainda, None: sai de todas, como
         antes da regra."""
         if not self.saldos or self.mapping is None or self.dia is None:
             return None
-        return geracao.contas_que_precisam_com_reembolso(
+        return geracao.contas_que_cobrem_com_reembolso(
             self.leitura.grupos, self.mapping, self.conferencia, self.saldos,
             self.regras, self.dia,
             participantes=getattr(self.leitura.entradas, "participantes", None))
@@ -2309,7 +2340,7 @@ class TelaDoDiaFrame(ttk.Frame):
         if self._pessoas_reembolso and not self.var_reembolso.get():
             resultado, lancamentos, tirados = html_pagamentos.tirar_reembolsos(
                 resultado, lancamentos, self._pessoas_reembolso, self.leitura.overviews,
-                incluidos=self._reembolsos_incluidos)
+                incluidos=self._reembolsos_incluidos, so_pessoa_fisica=True)
             for linha in self._sem_reembolsos()[1]:
                 self._log(f"  - fora do HTML: {linha}")
             for linha in tirados:

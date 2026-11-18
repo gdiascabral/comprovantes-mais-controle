@@ -1022,16 +1022,23 @@ igualar, sócios da mãe). Editar a conta pelo formulário não toca na coluna.
 eu desmarcar a caixa, tirar somente das contas em que precisam de aporte;
 as que tiverem dinheiro suficiente para pagar as contas do dia e os
 reembolsos não precisam tirar" — os reembolsos se acumulavam. A caixa
-desligada passa `so_nas_contas` a `sem_reembolsos`:
-`geracao.contas_que_precisam_com_reembolso` monta o painel do cartão 3 com
-a conferência da NUVEM (os reembolsos DENTRO do a pagar) e
-`contas_que_precisam_de_aporte` devolve as de `minimo > 0` (a pagar + o que
-aporta ou distribui − saldo do dia − o que entra à mão) e as SEM saldo (sem
-saber, sai — o lado seguro). Linha de conta fora do painel sai, como antes.
-O saldo do dia é o do BANCO quando há (digitado, senão o lido do
-Sicoob/Inter) e só sem ele o do sistema (`saldos.saldo_do_dia`). A conta é
-feita conta a conta e uma vez: tirar os reembolsos não devolve nenhum à
-conta que passou a cobrir. O aporte já digitado não conta (o mínimo não o
-desconta). O Registro diz quem ficou ("fica (a conta paga sem aporte)").
-O HTML de pessoa física (`tirar_reembolsos`) continua tirando todos.
-Testes: `tests/test_reembolso_so_onde_falta.py`.
+desligada passa `ficam_nas_contas` a `sem_reembolsos`, uma lista POSITIVA:
+`geracao.contas_que_cobrem_com_reembolso` monta o painel do cartão 3 com a
+conferência da NUVEM (os reembolsos DENTRO do a pagar) e
+`contas_que_cobrem(painel, saldos)` devolve as linhas VIVAS com saldo do dia
+menos as de `minimo > 0` ou sem saldo — o painel só LISTA quem tem algo a
+mostrar, então a lista sai dos `saldos`. O reembolso fica só se o rótulo da
+conta da linha está ali; linha morta, ignorada, fora do painel ou sem saldo:
+sai, como antes. O saldo do dia é o do BANCO quando há (digitado, senão o
+lido do Sicoob/Inter) e só sem ele o do sistema. Conta a conta, uma vez:
+tirar não devolve nenhum à conta que passou a cobrir; o aporte já digitado
+não conta. **Revisão de dinheiro do mesmo dia**: (1) o HTML da tela chama
+`tirar_reembolsos(so_pessoa_fisica=True)` — antes ele tirava de novo das
+contas PJ e o reembolso que a conta paga sumia só do HTML; (2) a decisão
+depende de saldo e movimentos, então `_recalcular` chama
+`_acompanhar_reembolsos`: mudou quem sai sem ser pela caixa, pelo «Incluir»
+ou por um Buscar novo, refaz o «Marcar agendados» e diz no Registro quem
+voltou e quem saiu; (3) «Desmarcar» num incluído confere se ele saiu mesmo
+e, se a conta cobre, segue para o Desmarcar de sempre (nuvem). O Registro
+diz quem ficou ("fica (a conta paga sem aporte)"). O HTML de pessoa física
+continua tirando todos. Testes: `tests/test_reembolso_so_onde_falta.py`.
