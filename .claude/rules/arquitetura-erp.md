@@ -243,3 +243,41 @@ paths:
   `acessos.json` para `acessos.json.off` faz o mesmo na máquina inteira.
   Arquivo de acessos com problema falha FECHADO (`ErpErro`/`RuntimeError`),
   nunca cai no login HTTP — que derrubaria a sessão central.
+
+- **A fila e a segunda tentativa do `conectar`, e o `erp/cdp_cru.py`**
+  (18/11/2026). O app falhou a tarde toda no notebook ("não respondeu em 45 s
+  para o robô conectar", "Target closed", HTML das PF sem sair) com scripts de
+  outros chats abrindo abas no mesmo Chrome (31 cópias de um `cdp.py` em
+  `ferramentas/`, nenhuma na faxina). **Medido num Chrome de teste**: UMA aba
+  com a página presa (JavaScript em laço, ou um `alert`) faz todo
+  `connect_over_cdp` estourar, porque o Playwright manda `Runtime.enable` a
+  cada aba e espera todas; rede lenta e robô conectado parado NÃO fazem isso.
+  Três defesas, nenhuma fecha aba viva de ninguém:
+  (1) **a fila** `central.fila(acesso)` = trava `.<acesso>.conectar.trava` ao
+  lado do perfil (`ESPERA_FILA` 180 s, `VELHA_FILA` 240 s, pid morto sai na
+  hora), segurada só durante o connect e durante a abertura e o carregamento
+  de uma aba por CDP cru. `conectar(..., acesso=)` entra nela, e os três que
+  conectam (`AbaCentral`, `MCClient._entrar_no_central`,
+  `login_principal._AbaPrincipal`) passam o acesso; sem acesso, não há fila.
+  Fila que não anda é `TimeoutError`, que no app já quer dizer "outro robô
+  está entrando". (2) **a segunda tentativa**: no estouro, se a sonda vê todas
+  respondendo, tenta de novo na hora; se vê aba calada, pergunta de
+  `PASSO_VOLTA` (5 s) em `PASSO_VOLTA` até `ESPERA_VOLTA` (60 s) e, voltando,
+  tenta de novo UMA vez. Sonda que falha, ou aba que não volta, dá o recado de
+  sempre, com a sonda mais nova. Prova ao vivo (Chrome de teste, aba presa
+  20 s, prazo 8 s): o primeiro connect estourou e o segundo entrou, 15,4 s no
+  total. (3) **a faxina dos mortos fora do porteiro**: `faxina.limpar_mortos`
+  é uma passada só com a regra 1 (aba REGISTRADA de pid morto); o
+  `MCClient` a roda antes de conectar e o `cdp_cru` antes de abrir — no
+  notebook não há porteiro para isso. **`erp/cdp_cru.py`** é o CDP cru
+  oficial dos scripts de `ferramentas/` (a mesma cara de `pedir`,
+  `cabecalhos_para` e `fechar`): `SessaoCdp()` abre a aba em `about:blank`
+  dentro da fila, registra na faxina, navega a PRÓPRIA aba para capturar os
+  cabeçalhos (nunca `Page.reload` na aba de ninguém), faz `fetch` de dentro
+  dela (401 em GET recaptura uma vez; POST nunca repete) e fecha só a dela
+  no `with`, no `fechar()` ou no fim do programa. Só biblioteca padrão
+  (`_CanalCdp`, que ganhou `enviar`/`proxima` para ler eventos). O conftest
+  põe a fila numa pasta temporária, troca `limpar_mortos` por nada e encolhe
+  a espera. Testes: `tests/test_erp_fila_e_segunda_tentativa.py`.
+  **Mudou o `central.py`: copiar no `coletor/mc_central.py` do água e
+  energia** (pendente desde esta mudança).

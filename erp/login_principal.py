@@ -328,7 +328,7 @@ class _AbaPrincipal:
         from playwright.sync_api import sync_playwright   # tarde: módulo leve
         self._pw = sync_playwright().start()
         try:
-            browser = central.conectar(self._pw, endereco)
+            browser = central.conectar(self._pw, endereco, acesso=self.acesso)
             pagina = _pagina_do_alvo(browser.contexts[0], alvo)
             if pagina is None:
                 raise ErpErro("a aba do login principal não apareceu no Chrome "

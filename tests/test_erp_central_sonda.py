@@ -383,7 +383,10 @@ def test_estouro_sonda_e_vira_recado_em_portugues():
 
     with pytest.raises(central.ChromeSemResposta) as e:
         central.conectar(pw, "http://127.0.0.1:1", prazo=45, sondar=sondar)
-    assert pedidos == ["http://127.0.0.1:1"]
+    # A sonda pergunta de novo enquanto espera a aba voltar (18/11/2026);
+    # ela não volta, e o Playwright só é chamado uma vez.
+    assert pedidos and set(pedidos) == {"http://127.0.0.1:1"}
+    assert len(pw.chromium.pedidos) == 1
     assert "“Mais Controle ERP”" in str(e.value)
     assert e.value.__cause__ is erro
     assert e.value.alvos[0].responde is False
