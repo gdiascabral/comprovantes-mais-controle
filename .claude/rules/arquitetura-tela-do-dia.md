@@ -1017,3 +1017,21 @@ derruba as duas. `ler_recebimentos` lê e confere o filtro POR CONTA DO ERP
 continua parando a leitura. A tabela mostra "CONTA + SOMADA"
 (`rotulo_da_conta`); `conta_erp` continua sendo a chave de tudo (aviso de
 igualar, sócios da mãe). Editar a conta pelo formulário não toca na coluna.
+
+**Só nas contas que precisam de aporte (dono, 18/11/2026)**: "na hora que
+eu desmarcar a caixa, tirar somente das contas em que precisam de aporte;
+as que tiverem dinheiro suficiente para pagar as contas do dia e os
+reembolsos não precisam tirar" — os reembolsos se acumulavam. A caixa
+desligada passa `so_nas_contas` a `sem_reembolsos`:
+`geracao.contas_que_precisam_com_reembolso` monta o painel do cartão 3 com
+a conferência da NUVEM (os reembolsos DENTRO do a pagar) e
+`contas_que_precisam_de_aporte` devolve as de `minimo > 0` (a pagar + o que
+aporta ou distribui − saldo do dia − o que entra à mão) e as SEM saldo (sem
+saber, sai — o lado seguro). Linha de conta fora do painel sai, como antes.
+O saldo do dia é o do BANCO quando há (digitado, senão o lido do
+Sicoob/Inter) e só sem ele o do sistema (`saldos.saldo_do_dia`). A conta é
+feita conta a conta e uma vez: tirar os reembolsos não devolve nenhum à
+conta que passou a cobrir. O aporte já digitado não conta (o mínimo não o
+desconta). O Registro diz quem ficou ("fica (a conta paga sem aporte)").
+O HTML de pessoa física (`tirar_reembolsos`) continua tirando todos.
+Testes: `tests/test_reembolso_so_onde_falta.py`.

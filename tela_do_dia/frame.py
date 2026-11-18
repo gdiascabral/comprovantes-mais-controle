@@ -2167,22 +2167,44 @@ class TelaDoDiaFrame(ttk.Frame):
         """A da nuvem, com os reembolsos tirados quando a caixa está desligada."""
         return self._sem_reembolsos()[0]
 
-    def _sem_reembolsos(self):
-        """(conferência que vale, quem a caixa tirou)."""
+    def _sem_reembolsos(self, ficam=None):
+        """(conferência que vale, quem a caixa tirou). Com a caixa desligada,
+        o reembolso sai SÓ das contas que precisam de aporte com ele dentro
+        (dono, 18/11/2026); `ficam` recebe os que ficaram por ter saldo."""
         if self.var_reembolso.get() or self.leitura is None:
             return self.conferencia, []
+        precisam = self._contas_que_precisam_com_reembolso()
         return geracao.sem_reembolsos(self.conferencia, self.leitura.grupos,
                                       self._pessoas_reembolso,
                                       getattr(self.leitura, "entradas", None),
-                                      incluidos=self._reembolsos_incluidos)
+                                      incluidos=self._reembolsos_incluidos,
+                                      so_nas_contas=precisam,
+                                      rotulo_da_conta=self._rotulo_do_painel,
+                                      ficam=ficam)
+
+    def _contas_que_precisam_com_reembolso(self):
+        """As contas do painel que precisam de aporte com TODOS os reembolsos
+        dentro — a mesma conta do cartão 3, com a conferência da nuvem (sem a
+        caixa). Sem saldos ou sem painel ainda, None: sai de todas, como
+        antes da regra."""
+        if not self.saldos or self.mapping is None or self.dia is None:
+            return None
+        return geracao.contas_que_precisam_com_reembolso(
+            self.leitura.grupos, self.mapping, self.conferencia, self.saldos,
+            self.regras, self.dia,
+            participantes=getattr(self.leitura.entradas, "participantes", None))
 
     def _trocar_reembolso(self):
         nomes = " e ".join(self._pessoas_reembolso)
         self._log(f"Reembolso para {nomes}: "
                   + ("entra hoje." if self.var_reembolso.get()
-                     else "desligado — as linhas saem da tela, do HTML, da planilha e da remessa."))
-        for linha in self._sem_reembolsos()[1]:
+                     else "desligado nas contas que precisam de aporte — lá as linhas "
+                          "saem da tela, do HTML, da planilha e da remessa."))
+        ficam = []
+        for linha in self._sem_reembolsos(ficam)[1]:
             self._log(f"  - fora hoje: {linha}")
+        for linha in ficam:
+            self._log(f"  - fica (a conta paga sem aporte): {linha}")
         if self._reembolsos_incluidos and not self.var_reembolso.get():
             self._log(f"  ({len(self._reembolsos_incluidos)} incluído(s) um a um continuam hoje)")
         self._recalcular_reembolsos()

@@ -29,6 +29,7 @@ import re
 import unicodedata
 
 from dataclasses import replace
+from decimal import Decimal
 
 from pagamentos_dia import confirmacao, html_pagamentos, relatorio, remessa_dia
 
@@ -231,7 +232,37 @@ def registro_a_mao(p, ordem: int) -> dict:
 MOTIVO_SEM_REEMBOLSO = "reembolso desligado no cartão 2 (não sai hoje)"
 
 
-def sem_reembolsos(conferencia, grupos, pessoas, entradas=None, incluidos=()):
+def contas_que_precisam_de_aporte(painel) -> set[str]:
+    """Os rótulos do painel em que o saldo do dia não cobre o que sai hoje —
+    o "mínimo" do cartão 3 (`aportes.AporteDaConta.minimo`: a pagar + o que
+    a conta aporta ou distribui − saldo do dia − o que entra à mão) maior que
+    zero. Conta SEM saldo também entra: sem saber se cobre, o reembolso sai,
+    como antes (o lado seguro). O saldo do dia é o do BANCO quando há
+    (digitado, senão o lido do Sicoob/Inter), e só sem ele o do sistema."""
+    return {c.rotulo for c in painel.contas if c.sem_saldo or c.minimo > ZERO_DEC}
+
+
+ZERO_DEC = Decimal("0")
+
+
+def contas_que_precisam_com_reembolso(grupos, mapping, conferencia, saldos, regras, dia,
+                                      participantes=None) -> set[str]:
+    """`contas_que_precisam_de_aporte` do painel montado como o cartão 3 o
+    monta (`frame._recalcular`), mas com a conferência da NUVEM — sem os
+    eventos da caixa —, isto é, com TODOS os reembolsos dentro do a pagar."""
+    from . import aportes as ap                  # tarde: aportes não importa geracao
+    pagamentos, _fora = pg.por_conta(grupos, mapping, conferencia,
+                                     participantes=participantes)
+    em_ordem = sorted(saldos, key=lambda ln: ln.linha)
+    painel = ap.montar_aportes(
+        {ln.rotulo: ln.saldo_do_dia for ln in em_ordem},
+        {c.rotulo: c.a_pagar for c in pagamentos.values()},
+        regras, dia.aportes, a_mao=dia.a_mao, distribuicoes=dia.distribuicoes)
+    return contas_que_precisam_de_aporte(painel)
+
+
+def sem_reembolsos(conferencia, grupos, pessoas, entradas=None, incluidos=(),
+                   so_nas_contas=None, rotulo_da_conta=None, ficam=None):
     """(conferencia, tirados): a `conferencia` com os reembolsos das
     `pessoas` DESMARCADOS e a lista de quem saiu, uma frase por linha.
 
@@ -253,31 +284,51 @@ def sem_reembolsos(conferencia, grupos, pessoas, entradas=None, incluidos=()):
 
     `incluidos` (dono, 10/11/2026): os ids que o dono pôs de volta um a um
     com o "Incluir mesmo assim" — alguns reembolsos o sócio pede para pagar
-    hoje, outros não. Ficam como se a caixa estivesse ligada só para eles."""
+    hoje, outros não. Ficam como se a caixa estivesse ligada só para eles.
+
+    `so_nas_contas` (dono, 18/11/2026: "tirar somente das contas em que
+    precisam de aporte; as que tiverem dinheiro suficiente para pagar as
+    contas do dia e os reembolsos não precisam tirar"): os rótulos do painel
+    de onde o reembolso sai (`contas_que_precisam_de_aporte`, calculado COM
+    os reembolsos dentro). `rotulo_da_conta(conta do ERP)` diz o rótulo da
+    conta da linha; conta sem rótulo (fora do painel) sai, como antes.
+    `None` = sai de todas, o comportamento de antes. Quem fica por ter saldo
+    vai para a lista `ficam`, quando passada, uma frase por linha, para o
+    Registro."""
     pessoas = [p for p in (pessoas or ()) if str(p).strip()]
     if not pessoas:
         return conferencia, []
     decisoes = conferencia.decisoes
-    candidatos = []                   # (id, favorecido, valor, nome)
+    candidatos = []                   # (id, favorecido, valor, nome, conta do ERP)
     if entradas is not None:
         todos = confirmacao.remontar(entradas, (), ids_liberados=ids_nao_aptos(grupos))
-        for regs in todos.contas.values():
+        for conta, regs in todos.contas.items():
             for r in regs:
                 candidatos.append((str(r.get("id") or ""), r.get("favorecido"),
-                                   r.get("valor"), r.get("reembolso_para") or ""))
+                                   r.get("valor"), r.get("reembolso_para") or "",
+                                   r.get("conta") or conta))
     for g in grupos or ():
         for ln in (*g.entram, *g.nao_aptos):
             candidatos.append((ln.id, getattr(ln, "favorecido", ""), getattr(ln, "valor", None),
-                               ln.reembolso_nome if getattr(ln, "reembolso", False) else ""))
+                               ln.reembolso_nome if getattr(ln, "reembolso", False) else "",
+                               g.conta))
     incluidos = {str(i) for i in (incluidos or ())}
-    alvos, tirados = [], []
-    for ident, favorecido, valor, nome in candidatos:
+    alvos, tirados, vistos = [], [], set()
+    for ident, favorecido, valor, nome, conta in candidatos:
         if ident in incluidos:
             continue
         d = decisoes.get(ident)
         nome = (d.edicoes.get("reembolso_nome") if d is not None else "") or nome
-        if not ident or ident in alvos or not nome or not html_pagamentos.e_reembolso_de(nome, pessoas):
+        if not ident or ident in vistos or not nome or not html_pagamentos.e_reembolso_de(nome, pessoas):
             continue
+        vistos.add(ident)
+        if so_nas_contas is not None:
+            rotulo = rotulo_da_conta(conta) if (rotulo_da_conta and conta) else ""
+            if rotulo and rotulo not in so_nas_contas:
+                if ficam is not None:
+                    ficam.append(f"{favorecido or '?'} — {html_pagamentos.reais(valor or 0)} — "
+                                 f"reembolso para {nome} — {rotulo} tem saldo")
+                continue
         alvos.append(ident)
         tirados.append(f"{favorecido or '?'} — {html_pagamentos.reais(valor or 0)} — "
                        f"reembolso para {nome}")
