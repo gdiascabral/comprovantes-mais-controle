@@ -62,7 +62,7 @@ para um módulo puro, nunca para o frame** — a tela só tem a guarda por AST d
 | `passo2.py` | regras puras do passo 2: que botão vale em cada linha, edição, a pergunta ao gerar com a nuvem em erro, gravar-e-reler |
 | `passo67.py` | regras puras de "Agendados a confirmar", "Marcar agendados" e "Lista do diretor": marcas, confirmação do "Pago", `reler_tudo` |
 | `janelas.py` | os diálogos finos (motivo, edição, à mão, resposta, nome curto); a regra que valida mora nos módulos acima |
-| `pf_na_tela.py` | a aba PF: contas PF e Moura Dantas marcáveis (cache `contas_pf.json`), período, caixa dos reembolsos, «Ler e gerar o HTML» na vaga desta aba; a regra é `pagamentos_dia/html_pf.py` |
+| `pf_na_tela.py` | a aba PF: contas PF e Moura Dantas marcáveis (cache `contas_pf.json`), período, caixa dos reembolsos, «Ler e gerar o HTML» na vaga desta aba; a regra é `pagamentos_dia/html_pf.py`; cartão 4 «Dar baixa pelo arquivo», regra em `pagamentos_dia/baixa_pelo_arquivo.py` |
 
 ## Abas PJ e PF (12/11/2026)
 
@@ -97,7 +97,7 @@ barra de andamento (a doca) são os mesmos, e o Parar também (`_parar`).
   lançamentos alerta nos dois. «Já paguei» pede a conta: a do pagamento
   anterior vem preenchida, a troca vale dali em diante, e o primeiro do dia é
   escolhido (guardado por dia no navegador). «Baixar lista das baixas» gera o
-  JSON (lançamento, título, valor, conta, data) da etapa 3, que ainda não existe.
+  JSON (lançamento, título, valor, conta, data) da etapa 3 (abaixo).
 - **Revisão de dinheiro (13/11/2026)**: (1) a marca é por LINHA
   (`html_pf.chave_da_marca`, "<id>#<linha>" no dividido), e o JSON leva
   `lancamento_id` e `parte` à parte; (2) parcial, valor que diverge, alterado
@@ -110,7 +110,40 @@ barra de andamento (a doca) são os mesmos, e o Parar também (`_parar`).
   seguinte; (5) "MESMO CÓDIGO" olha linhas comuns e reembolsos recolhidos
   juntos; (6) o "Conferir agendamentos" da Remessa não sugere
   `pagamentos_pf_*.html`.
-- Nada escreve no ERP.
+- Nada escreve no ERP, **exceto o cartão 4** (abaixo).
+
+## Dar baixa pelo arquivo (etapa 3, 18/11/2026)
+
+O JSON do «Baixar lista das baixas» volta ao app pelo cartão 4 da aba PF
+(«Escolher o arquivo de baixas…»). A regra é `pagamentos_dia/baixa_pelo_arquivo.py`
+(pura, `tests/test_baixa_pelo_arquivo.py`); a tela só escolhe o arquivo, chama
+na vaga desta aba e mostra a conferência.
+
+- **Só pelo Chrome central** (porteiro, `erp_do_dia._logar_pela_pagina`): com o
+  central desligado o botão recusa antes de abrir qualquer coisa. Nunca login HTTP.
+- **Conferência antes de tudo**, uma linha por item, vermelho não baixa: título
+  em aberto e sem pagamento; valor em aberto (`remainingValue`, senão
+  `pendingValue`) igual ao do arquivo ao centavo; conta com o mesmo id e o
+  mesmo nome entre as ativas; não baixado antes pelo app; não repetido no
+  arquivo; sem `parte` (dividido nunca é automático); data válida, não futura,
+  até `DIAS_PARA_TRAS` (45) dias e não antes da abertura da conta. "Sem
+  pagamento" inclui `sumOfPaidValues > 0` (pago em parte vale a conta
+  cadastrada, não a do HTML).
+- **O 200 não prova a baixa**: depois do POST o título é relido e só é ok com
+  pagamento e nada em aberto; aceito e não fechado = "confira no ERP (não
+  baixo de novo)", com o registro "ok" para nunca repetir. Registro que não
+  grava depois do POST só avisa (fica "em_andamento") e a rodada segue.
+- O registro é desta máquina: entre máquinas, quem segura é a releitura do
+  título antes do POST.
+- **A baixa não se repete**: relê o título logo antes do POST; o registro
+  `baixas_pelo_arquivo.json` (ao lado do exe) anota "em_andamento" ANTES do
+  POST e "ok" depois; um POST só. Erro no POST → relê: pagou = ok; não pagou =
+  falhou, sem nova tentativa, registro limpo; não releu = INCERTO e a rodada
+  para. "em_andamento" sem baixa no ERP fica vermelho na próxima carga
+  ("confira no ERP"). Registro estragado levanta (nada é conferido).
+- O corpo é o `default-paid` com `account` {id, name, openingBalanceDate} da
+  conta do arquivo, `payingDate` e `value`/`paidValue` — o mesmo do
+  `baixar.py` avulso que baixou as PF de 13 a 18/11/2026.
 
 ## "Vai sair" = entra e nasce marcada
 
