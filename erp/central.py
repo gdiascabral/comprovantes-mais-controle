@@ -546,15 +546,32 @@ class _CanalCdp:
                 msg, self._partes = b"".join(self._partes), []
                 return msg
 
-    def pedir(self, metodo: str, params: dict | None = None, *,
-              sessao: str | None = None, prazo: float = PRAZO_ALVO) -> dict:
-        """A resposta (com `result` ou `error`) ao pedido, ou `_SemResposta`.
-        Eventos e respostas atrasadas de pedidos anteriores são descartados."""
+    def enviar(self, metodo: str, params: dict | None = None, *,
+               sessao: str | None = None) -> int:
+        """Manda um pedido sem esperar a resposta; devolve o id dele."""
         mid = next(self._ids)
         msg = {"id": mid, "method": metodo, "params": params or {}}
         if sessao:
             msg["sessionId"] = sessao
         self._enviar_quadro(0x1, json.dumps(msg).encode("utf-8"))
+        return mid
+
+    def proxima(self, limite: float) -> dict:
+        """A próxima mensagem do Chrome (resposta ou evento), até `limite`
+        (relógio `time.monotonic`); `_SemResposta` se nada chegou."""
+        while True:
+            try:
+                obj = json.loads(self._mensagem(limite))
+            except ValueError:
+                continue
+            if isinstance(obj, dict):
+                return obj
+
+    def pedir(self, metodo: str, params: dict | None = None, *,
+              sessao: str | None = None, prazo: float = PRAZO_ALVO) -> dict:
+        """A resposta (com `result` ou `error`) ao pedido, ou `_SemResposta`.
+        Eventos e respostas atrasadas de pedidos anteriores são descartados."""
+        mid = self.enviar(metodo, params, sessao=sessao)
         limite = time.monotonic() + prazo
         while True:
             try:
@@ -734,22 +751,151 @@ def _estourou(e: BaseException) -> bool:
     return any(c.__name__ == "TimeoutError" for c in type(e).__mro__)
 
 
-def conectar(pw, endereco_cdp: str, *, prazo: float = PRAZO_CONEXAO, sondar=None):
-    """`pw.chromium.connect_over_cdp` com prazo curto. No estouro, sonda as
-    abas e levanta `ChromeSemResposta` com o recado; qualquer outro erro
-    passa como veio. `sondar_alvos` é lido do módulo na hora (monkeypatch)."""
+# ------------------------------- a fila e a segunda tentativa (18/11/2026)
+#
+# Em 18/11/2026 o app falhou a tarde toda no notebook ("não respondeu em 45 s
+# para o robô conectar", e o HTML das PF não saiu), com scripts de outros
+# chats abrindo abas no mesmo Chrome. Medido num Chrome de teste no mesmo dia:
+# UMA aba com a página presa (JavaScript em laço, ou um `alert`) faz TODO
+# `connect_over_cdp` estourar, porque o Playwright manda `Runtime.enable` a
+# cada aba e espera todas; rede lenta e robô parado conectado NÃO fazem isso.
+# Aba do ERP nascendo é página pesada carregando — o instante em que ela fica
+# calada uns segundos. Duas defesas, nenhuma fecha aba de ninguém:
+#
+# 1. A FILA: quem conecta (e quem abre aba por CDP cru, `erp.cdp_cru`) pega a
+#    trava `.<acesso>.conectar.trava` só durante esse instante. Uma aba nova
+#    não nasce no meio de um connect, e dois connects não se atropelam.
+# 2. A SEGUNDA TENTATIVA: no estouro, a sonda diz quem está calada; o
+#    `conectar` espera até `ESPERA_VOLTA` a aba voltar (perguntando a cada
+#    `PASSO_VOLTA`) e tenta de novo UMA vez. Só então a pessoa lê o recado —
+#    em 09/11 e em 18/11 a aba calada voltou sozinha minutos depois.
+
+#: Quanto se espera a aba calada voltar antes da segunda tentativa.
+ESPERA_VOLTA = 60.0
+#: De quanto em quanto a sonda pergunta se ela voltou.
+PASSO_VOLTA = 5.0
+#: Quanto quem chega espera a fila. O pior caso de quem a segura é um
+#: `conectar` inteiro: 2 × `PRAZO_CONEXAO` + 2 × `PRAZO_SONDA` +
+#: `ESPERA_VOLTA` ≈ 190 s (revisão de 18/11/2026); espera-se um pouco mais.
+ESPERA_FILA = 210.0
+#: Trava mais velha que isto é de quem morreu no meio (pid morto sai na hora).
+#: Tem de ficar acima do pior caso, senão rouba a trava de quem está vivo.
+VELHA_FILA = 300.0
+#: Teto para a aba nova terminar de carregar dentro da fila.
+PRAZO_CARREGAR = 30.0
+
+
+def caminho_fila(a: Acesso) -> Path:
+    return a.perfil.parent / f".{a.nome}.conectar.trava"
+
+
+def esperar_carregar(url_ws: str, *, prazo: float = PRAZO_CARREGAR,
+                     canal=None) -> bool:
+    """Espera a aba de `url_ws` chegar a `document.readyState == "complete"`
+    (só pergunta isso, na aba que quem chama acabou de abrir). True se
+    carregou; False se o prazo acabou ou a aba não deixou perguntar — nunca
+    levanta: carregar é cortesia com quem conecta, não condição."""
+    limite = time.monotonic() + prazo
     try:
+        c = (canal or _CanalCdp)(url_ws, min(5.0, prazo))
+    except Exception:
+        return False
+    try:
+        while time.monotonic() < limite:
+            try:
+                r = c.pedir("Runtime.evaluate", {"expression": "document.readyState",
+                                                 "returnByValue": True},
+                            prazo=min(5.0, max(0.1, limite - time.monotonic())))
+                if ((r.get("result") or {}).get("result") or {}).get("value") == "complete":
+                    return True
+            except _SemResposta:
+                pass
+            time.sleep(0.3)
+        return False
+    except Exception:
+        return False
+    finally:
+        with contextlib.suppress(Exception):
+            c.fechar()
+
+
+@contextlib.contextmanager
+def fila(a: Acesso | None, *, espera: float = ESPERA_FILA):
+    """A vez de conectar ou de abrir aba no Chrome de `a`. Sem acesso, não há
+    fila (quem conecta sem saber o acesso continua como antes). Levanta
+    `TimeoutError` se a vez não chega em `espera` — no app isso já quer dizer
+    "outro robô está entrando", que é o que está acontecendo."""
+    if a is None:
+        yield
+        return
+    with trava(caminho_fila(a), espera=espera, velha=VELHA_FILA):
+        yield
+
+
+def _sondar_seguro(sondar, endereco_cdp):
+    try:
+        return sondar(endereco_cdp), None
+    except Exception as s:                        # noqa: BLE001 — vira recado
+        return None, s
+
+
+def _esperar_voltarem(sondar, endereco_cdp, espera: float, passo: float,
+                      dormir, relogio) -> tuple[bool, list | None, object]:
+    """Pergunta de `passo` em `passo` até nenhuma aba estar calada. Devolve
+    (voltaram, última sonda, erro da última sonda)."""
+    limite = relogio() + espera
+    alvos, erro = None, None
+    while relogio() < limite:
+        dormir(min(passo, max(0.0, limite - relogio())))
+        alvos, erro = _sondar_seguro(sondar, endereco_cdp)
+        if alvos is not None and not any(x.responde is False for x in alvos):
+            return True, alvos, None
+    return False, alvos, erro
+
+
+def conectar(pw, endereco_cdp: str, *, prazo: float = PRAZO_CONEXAO, sondar=None,
+             acesso: Acesso | None = None, espera_volta: float | None = None,
+             passo_volta: float | None = None, dormir=time.sleep,
+             relogio=time.monotonic):
+    """`pw.chromium.connect_over_cdp` com prazo curto, na FILA do `acesso`.
+
+    No estouro, sonda as abas. Se a sonda vê todas respondendo, ou se a calada
+    volta em até `espera_volta`, tenta de novo UMA vez. Não deu: levanta
+    `ChromeSemResposta` com o recado (a sonda mais recente). Qualquer outro
+    erro passa como veio. `sondar_alvos` é lido do módulo na hora
+    (monkeypatch)."""
+    sondar = sondar or globals()["sondar_alvos"]
+    espera_volta = ESPERA_VOLTA if espera_volta is None else espera_volta
+    passo_volta = PASSO_VOLTA if passo_volta is None else passo_volta
+
+    def tentar():
         return pw.chromium.connect_over_cdp(endereco_cdp, timeout=prazo * 1000)
-    except Exception as e:
-        if not _estourou(e):
-            raise
-        sondar = sondar or sondar_alvos
-        alvos, erro_sonda = None, None
+
+    with fila(acesso):
         try:
-            alvos = sondar(endereco_cdp)
-        except Exception as s:                    # noqa: BLE001 — vira recado
-            erro_sonda = s
-        raise ChromeSemResposta(endereco_cdp, prazo, alvos, erro_sonda) from e
+            return tentar()
+        except Exception as e:
+            if not _estourou(e):
+                raise
+            primeiro = e
+        alvos, erro_sonda = _sondar_seguro(sondar, endereco_cdp)
+        if alvos is None:
+            raise ChromeSemResposta(endereco_cdp, prazo, alvos, erro_sonda) from primeiro
+        if any(x.responde is False for x in alvos):
+            if espera_volta <= 0:
+                raise ChromeSemResposta(endereco_cdp, prazo, alvos, None) from primeiro
+            voltaram, ultima, erro = _esperar_voltarem(
+                sondar, endereco_cdp, espera_volta, passo_volta, dormir, relogio)
+            if not voltaram:
+                raise ChromeSemResposta(endereco_cdp, prazo, ultima or alvos,
+                                        erro if ultima is None else None) from primeiro
+        try:
+            return tentar()
+        except Exception as e:
+            if not _estourou(e):
+                raise
+            alvos, erro_sonda = _sondar_seguro(sondar, endereco_cdp)
+            raise ChromeSemResposta(endereco_cdp, prazo, alvos, erro_sonda) from e
 
 
 class AbaCentral:
@@ -776,7 +922,8 @@ class AbaCentral:
             from playwright.sync_api import sync_playwright   # tarde: módulo leve
             self._pw = sync_playwright().start()
         try:
-            self.browser = conectar(self._pw, self._garantir(self.acesso))
+            self.browser = conectar(self._pw, self._garantir(self.acesso),
+                                  acesso=self.acesso)
             self.ctx = self.browser.contexts[0]
             self.page = self.nova_aba()
         except Exception:

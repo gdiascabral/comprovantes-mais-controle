@@ -537,3 +537,22 @@ def _sem_sessao_do_central_guardada():
     sessao._CENTRAIS.clear()
     yield
     sessao._CENTRAIS.clear()
+
+
+@pytest.fixture(autouse=True)
+def _fila_e_faxina_fora_do_central_de_verdade(monkeypatch, tmp_path_factory):
+    """A fila de conexão (`central.caminho_fila`) é um arquivo ao lado do
+    perfil do acesso, e há testes com o perfil em `central.PASTA_PADRAO` ou
+    relativo à pasta corrente: a trava nasceria no `_central` de verdade (ou
+    dentro do repositório). Aqui ela vai para uma pasta temporária. E a faxina
+    antes de conectar (`faxina.limpar_mortos`) lista as abas do Chrome por
+    HTTP: num teste com 127.0.0.1:9230 ela falaria com o Chrome central do
+    dono — vira nada; quem testa a faxina chama `Faxina` com dublês."""
+    from erp import central, faxina
+    pasta = tmp_path_factory.mktemp("fila")
+    monkeypatch.setattr(central, "caminho_fila",
+                        lambda a: pasta / f".{a.nome}.conectar.trava")
+    monkeypatch.setattr(faxina, "limpar_mortos", lambda *a, **k: [])
+    # A espera pela aba calada é de minutos na máquina; num teste, um piscar.
+    monkeypatch.setattr(central, "ESPERA_VOLTA", 0.2)
+    monkeypatch.setattr(central, "PASSO_VOLTA", 0.05)

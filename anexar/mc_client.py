@@ -376,10 +376,19 @@ class MCClient:
         # nasce. Depois do `start()`, qualquer falha para o driver antes de
         # relançar, porque o `__exit__` não roda quando o `__enter__` cai.
         endereco = central.garantir_chrome(self._acesso)
+        # As abas que robôs mortos deixaram (só as registradas): no notebook
+        # não há porteiro para fazer essa faxina (18/11/2026).
+        try:
+            from erp import faxina
+            for f in faxina.limpar_mortos(self._acesso):
+                config.diag(f"faxina antes de conectar: {f}")
+        except Exception as e:                    # noqa: BLE001 — nunca impede
+            config.diag(f"faxina antes de conectar não rodou ({e!r})")
         self._pw = sync_playwright().start()
         try:
             try:
-                self._browser = central.conectar(self._pw, endereco)
+                self._browser = central.conectar(self._pw, endereco,
+                                                 acesso=self._acesso)
             except central.ChromeSemResposta as e:
                 # O recado vai à janela por quem chamou; o detalhe, aba por
                 # aba, fica no diagnóstico.

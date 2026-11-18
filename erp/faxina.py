@@ -183,6 +183,16 @@ def registrar(aba: str, porta: int, pasta: Path | None = None, pid: int | None =
     return None
 
 
+def limpar_mortos(a, pasta: Path | None = None, **kw) -> list[str]:
+    """Uma passada só com a regra 1: fecha as abas REGISTRADAS por robôs que
+    morreram. Para quem não é o porteiro (o app e o `erp.cdp_cru` antes de
+    conectar): no notebook não há porteiro, e sem isto a aba de um script
+    cortado no meio ficava no Chrome até alguém fechá-la à mão (18/11/2026).
+    A regra 2 nunca dispara aqui: ela precisa ter visto a aba parada antes,
+    e esta faxina nasce e morre na mesma chamada."""
+    return Faxina(pasta_reg=pasta_registro(pasta), **kw).passar(a, logado=False)
+
+
 def desregistrar(arq: Path | None) -> None:
     if arq is not None:
         with contextlib.suppress(OSError):

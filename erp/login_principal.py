@@ -285,8 +285,15 @@ def _alvo_da_aba(acesso, endereco: str, *, abrir=urllib.request.urlopen) -> str:
     if guardado and guardado in _ids_abertos(endereco, abrir):
         return guardado
     url = f"{endereco}/json/new?{urllib.parse.quote(URL_CAPTURA, safe='')}"
-    with abrir(urllib.request.Request(url, method="PUT"), timeout=_PRAZO_HTTP) as r:
-        alvo = json.loads(r.read())["id"]
+    # A aba nasce carregando o ERP — o instante em que ela fica calada e
+    # derruba o connect de quem estiver conectando (18/11/2026). Nasce e
+    # carrega na fila; o `conectar` que vem depois pega a fila de novo.
+    with central.fila(acesso):
+        with abrir(urllib.request.Request(url, method="PUT"), timeout=_PRAZO_HTTP) as r:
+            nova = json.loads(r.read())
+        alvo = nova["id"]
+        if nova.get("webSocketDebuggerUrl"):
+            central.esperar_carregar(nova["webSocketDebuggerUrl"])
     with contextlib.suppress(OSError):
         arq.parent.mkdir(parents=True, exist_ok=True)
         arq.write_text(alvo, encoding="utf-8")
@@ -328,7 +335,7 @@ class _AbaPrincipal:
         from playwright.sync_api import sync_playwright   # tarde: módulo leve
         self._pw = sync_playwright().start()
         try:
-            browser = central.conectar(self._pw, endereco)
+            browser = central.conectar(self._pw, endereco, acesso=self.acesso)
             pagina = _pagina_do_alvo(browser.contexts[0], alvo)
             if pagina is None:
                 raise ErpErro("a aba do login principal não apareceu no Chrome "
