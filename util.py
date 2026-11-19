@@ -254,6 +254,21 @@ MESES_PASTA = ("JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
                "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO")
 
 
+def pergunta_ao_fechar(tarefa: str) -> str:
+    """O que o app pergunta quando a pessoa fecha a janela com uma rotina
+    rodando (19/11/2026). Fechar no meio de "Lançar aportes" ou de uma baixa
+    deixava o lote pela metade, sem janela para dizer o que entrou — e lançar
+    de novo ao reabrir é dinheiro em dobro. Vazio = nada rodando, não pergunta.
+    """
+    tarefa = (tarefa or "").strip()
+    if not tarefa:
+        return ""
+    return (f"O app está trabalhando: {tarefa}.\n\n"
+            "Fechar agora interrompe no meio. Se for um lançamento ou uma baixa "
+            "no Mais Controle, parte pode já ter entrado: confira no ERP antes "
+            "de refazer.\n\nFechar mesmo assim?")
+
+
 def fmt_dur(seg: float) -> str:
     """Formata uma duração em segundos: '45 s', '3 min 07 s', '1 h 02 min'."""
     seg = int(round(seg))

@@ -24,6 +24,7 @@ import util
 import widgets
 from conciliacao.aportadores import ler_regras
 from conciliacao.config import load_config
+from conciliacao.errors import ErpError
 from conciliacao.frame import RAIZ_SAIDA
 from conciliacao.mapping import AccountMapping
 from conciliacao.workbook import WorkbookError, output_name
@@ -56,6 +57,10 @@ from .valores import brl, de_float, ler_valor_editado
 
 px = widgets.px
 REMOVER = "remover"
+#: Quantas vezes os saldos do ERP são pedidos antes de a leitura desistir.
+#: Duas, e não mais: cada pedido já espera a aba calada voltar e tenta de novo
+#: por dentro (`erp.central`, 18/11/2026), e pode levar minutos.
+TENTATIVAS_DO_SALDO = 2
 
 
 class TelaDoDiaFrame(ttk.Frame):
@@ -228,6 +233,11 @@ class TelaDoDiaFrame(ttk.Frame):
                       ).pack(side="left", padx=px((0, 16)))
         widgets.Botao(datas, "Hoje", papel="neutro", command=self._datas_de_hoje
                       ).pack(side="left", pady=px((15, 0)))
+        # Dono, 19/11/2026: ele deixa pagamentos para trás de propósito e
+        # recuava o DE à mão todo dia. O recuo é o da última busca dele.
+        widgets.Botao(datas, "Em aberto até hoje", papel="neutro",
+                      command=self._datas_em_aberto
+                      ).pack(side="left", padx=px((8, 0)), pady=px((15, 0)))
         self._ajuda(c1, "As que não batem sobem para o topo. Clique no valor do sistema ou "
                         "do banco para editar (Enter edita o do banco): o valor digitado leva "
                         "✎, o original e o motivo (opcional) aparecem embaixo da tabela, "
@@ -712,6 +722,9 @@ class TelaDoDiaFrame(ttk.Frame):
             messagebox.showinfo("Pagamentos do dia", str(e))
             return
         self._mostrar_datas(periodo, hoje)
+        dias = dc.dias_a_lembrar(periodo, hoje)
+        if dias:
+            dc.gravar_dias_em_aberto(util.pasta_base(), dias)
         self._limpar()
         self._parar.clear()
         self._lendo_marca = True
@@ -766,6 +779,24 @@ class TelaDoDiaFrame(ttk.Frame):
         self._sugerido = dc.textos_sugeridos(datetime.date.today())
         self.v_ini.set(self._sugerido[0])
         self.v_fim.set(self._sugerido[1])
+
+    def _datas_em_aberto(self):
+        """De N dias atrás até hoje; N é o recuo da última busca (ou 7)."""
+        ini, fim = dc.textos_em_aberto(datetime.date.today(),
+                                       dc.ler_dias_em_aberto(util.pasta_base()))
+        self.v_ini.set(ini)
+        self.v_fim.set(fim)
+
+    def _saldo_falhou(self, tentativa, erro):
+        """Na thread do navegador: a leitura dos pagamentos FICA, e só os
+        saldos são pedidos de novo (`dc.tentar_de_novo`)."""
+        motivo = (str(erro).splitlines() or [type(erro).__name__])[0]
+        if tentativa < TENTATIVAS_DO_SALDO:
+            self._log(f"[!] Não li os saldos do ERP (tentativa {tentativa} de "
+                      f"{TENTATIVAS_DO_SALDO}): {motivo}")
+            self._log("    A leitura dos pagamentos está guardada; tento os saldos de "
+                      "novo em 1 minuto (Parar desiste).")
+            self.q.put(("status", "Saldos do ERP não lidos — nova tentativa em 1 minuto..."))
 
     def _limpar(self):
         """A leitura de antes sai da tela ANTES da nova começar: busca que cai
@@ -830,8 +861,24 @@ class TelaDoDiaFrame(ttk.Frame):
                           "Busque de novo.")
                 self.q.put(("status", "Leitura interrompida — busque de novo."))
                 return
+            tempos = leitura_do_dia.resumo_dos_tempos(leitura.tempos)
+            if tempos:
+                self._log(f"  Tempo da leitura: {tempos}")
             self.q.put(("status", "Lendo os saldos..."))
-            contas = erp_do_dia.ler_saldos(cfg, api, log=self._log)
+            # Saldo que falha não joga fora a leitura já feita (19/11/2026).
+            falhas, antes_do_saldo = [], time.time()
+
+            def _falhou(tentativa, erro):
+                falhas.append(tentativa)
+                self._saldo_falhou(tentativa, erro)
+            contas = dc.tentar_de_novo(
+                lambda: erp_do_dia.ler_saldos(cfg, api, log=self._log),
+                erros=(ErpError,), tentativas=TENTATIVAS_DO_SALDO,
+                cancelar=self._parar.is_set, ao_falhar=_falhou)
+            if falhas:
+                # Vai com os avisos da leitura: o `_receber_leitura` os escreve.
+                leitura.avisos.insert(
+                    0, dc.aviso_de_saldo_atrasado(time.time() - antes_do_saldo))
             self.q.put(("status", "Lendo a nuvem (liberações, à mão, agendados)..."))
             # Nuvem que falha não derruba a leitura: volta `erro`, a tela fica
             # como na entrega 1 e o passo 2 trava (falha fechada).
@@ -841,13 +888,23 @@ class TelaDoDiaFrame(ttk.Frame):
             modelo = base / cfg.caminhos.get("modelo", "MODELO.xlsx")
             self.q.put(("leitura", (cfg, mapping, leitura, contas, ler_regras(modelo),
                                     periodo, modelo, lido, so_lancamentos)))
-            self.q.put(("status", f"Leitura pronta em {util.fmt_dur(time.time() - comeco)}."))
+            total = time.time() - comeco
+            self.q.put(("status", f"Leitura pronta em {util.fmt_dur(total)}."))
+            self._log(f"  Leitura pronta em {util.fmt_dur(total)}.")
+            util.log("tela_do_dia").info("Leitura do dia em %d s (%s): %s", total,
+                                         periodo.descrever(), tempos)
+            widgets.registrar_atividade(
+                "dia", "Leitura do dia", "ok", periodo.descrever(),
+                {"segundos": int(total), "lancamentos": len(leitura.lancamentos),
+                 "etapas": {k: int(v) for k, v in leitura.tempos.items()}})
         except Exception as e:                              # noqa: BLE001
             self._log("\n" + widgets.recado_de_erro(e, "Não consegui ler o dia."))
             # O recado amigável não dizia o motivo (21 e 22/10/2026): o tipo e
             # a mensagem no Registro, o traceback no diagnostico.log.
             self._log(dc.detalhe_do_erro(e))
             util.log("tela_do_dia").exception("Não consegui ler o dia")
+            widgets.registrar_atividade("dia", "Leitura do dia", "erro", type(e).__name__,
+                                        {"segundos": int(time.time() - comeco)})
             self.q.put(("status", "Não consegui ler o dia — veja o Registro."))
         finally:
             self.q.put(("ocupado", False))

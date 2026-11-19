@@ -42,6 +42,8 @@ from . import decisoes as dc
 from . import erp_do_dia
 
 ARQ_CONTAS = "contas_pf.json"
+#: O recuo do "Em aberto até hoje" desta aba (a PJ lembra o dela).
+CHAVE_DIAS = "dias_em_aberto_pf"
 
 
 def ler_cache(base) -> dict:
@@ -128,6 +130,8 @@ class AbaPF:
                       ).pack(side="left", padx=px((0, 16)))
         widgets.Campo(datas, "Até", lambda p: widgets.CampoData(p, self.v_fim)
                       ).pack(side="left", padx=px((0, 16)))
+        widgets.Botao(datas, "Em aberto até hoje", papel="neutro",
+                      command=self._datas_em_aberto).pack(side="left", pady=px((15, 0)))
         self.pessoas = regras_pag.carregar_confirmar()
         self.var_reembolso = tk.BooleanVar(value=True)
         if self.pessoas:
@@ -247,6 +251,13 @@ class AbaPF:
             tela.q.put(("ocupado", False))
             self.q.put(("fim_contas", None))
 
+    def _datas_em_aberto(self):
+        """De N dias atrás até hoje; N é o recuo da última geração (ou 7)."""
+        ini, fim = dc.textos_em_aberto(
+            datetime.date.today(), dc.ler_dias_em_aberto(util.pasta_base(), CHAVE_DIAS))
+        self.v_ini.set(ini)
+        self.v_fim.set(fim)
+
     # ------------------------------------------------------------- gerar
     def gerar(self):
         tela = self.tela
@@ -265,6 +276,9 @@ class AbaPF:
         if not primeira and not escolhidas:
             messagebox.showinfo("HTML das PF", "Marque ao menos uma conta.")
             return
+        dias = dc.dias_a_lembrar(periodo, datetime.date.today())
+        if dias:
+            dc.gravar_dias_em_aberto(util.pasta_base(), dias, CHAVE_DIAS)
         tela._parar.clear()
         self.b_gerar.configure(state="disabled")
         tela.q.put(("ocupado", True))
@@ -282,13 +296,21 @@ class AbaPF:
             cfg = load_config(base / "config.yaml")
             api = tela.anx.garantir_sessao(log)
             tela.q.put(("status", "PF: lendo as contas do ERP..."))
-            contas = contas_do_erp(erp_do_dia.ler_saldos(cfg, api, log=log))
+            # A lista de contas que falha não impede o HTML quando já há uma
+            # guardada (19/11/2026); na primeira vez (todas), a falha sobe.
+            contas, guardadas = dc.contas_ou_as_guardadas(
+                lambda: contas_do_erp(erp_do_dia.ler_saldos(cfg, api, log=log)),
+                ler_cache(base)["contas"] if escolhidas is not None else [],
+                erros=(ErpError,), log=log)
             da_aba = html_pf.contas_da_aba(c["nome"] for c in contas)
             if escolhidas is None:
                 escolhidas = da_aba
             sumiram = [n for n in escolhidas if n not in da_aba]
             escolhidas = [n for n in escolhidas if n in da_aba]
-            gravar_cache(base, contas, escolhidas)
+            # Com a lista guardada, só a ESCOLHA de hoje é gravada: as contas
+            # (e o saldo delas) continuam as da última leitura boa.
+            gravar_cache(base, ler_cache(base)["contas"] if guardadas else contas,
+                         escolhidas)
             self.q.put(("contas", (contas, escolhidas)))
             for n in sumiram:
                 log(f"[!] PF: a conta «{n}» não está mais ativa no ERP — ficou de fora.")
@@ -310,6 +332,9 @@ class AbaPF:
                 return
             for aviso in leitura.avisos:
                 log(f"  ! {aviso}")
+            tempos = leitura_do_dia.resumo_dos_tempos(leitura.tempos)
+            if tempos:
+                log(f"  Tempo da leitura: {tempos}")
             pasta = base / "Pagamentos do dia"
             gerado = html_pf.gravar(
                 leitura.resultado, leitura.lancamentos, pasta, periodo.inicio, periodo.fim,
@@ -321,11 +346,21 @@ class AbaPF:
                 + f" · {gerado.fora} fora · {gerado.reembolsos} reembolso(s) recolhido(s)")
             log(f"  HTML: {str(gerado.caminho).replace(os.sep, '/')}")
             self.q.put(("gerado", gerado.caminho))
-            tela.q.put(("status", f"PF: HTML pronto em {util.fmt_dur(time.time() - comeco)}."))
+            total = time.time() - comeco
+            tela.q.put(("status", f"PF: HTML pronto em {util.fmt_dur(total)}."))
+            log(f"  PF: HTML pronto em {util.fmt_dur(total)}.")
+            util.log("tela_do_dia").info("HTML das PF em %d s (%s): %s", total,
+                                         periodo.descrever(), tempos)
+            widgets.registrar_atividade(
+                "dia", "HTML das PF", "ok", periodo.descrever(),
+                {"segundos": int(total), "pagamentos": gerado.entram,
+                 "etapas": {k: int(v) for k, v in leitura.tempos.items()}})
         except Exception as e:                                # noqa: BLE001
             log("\n" + widgets.recado_de_erro(e, "Não consegui gerar o HTML das PF."))
             log(dc.detalhe_do_erro(e))
             util.log("tela_do_dia").exception("HTML das PF")
+            widgets.registrar_atividade("dia", "HTML das PF", "erro", type(e).__name__,
+                                        {"segundos": int(time.time() - comeco)})
             tela.q.put(("status", "PF: não consegui gerar — veja o Registro."))
         finally:
             tela.q.put(("ocupado", False))

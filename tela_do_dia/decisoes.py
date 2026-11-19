@@ -491,3 +491,125 @@ def data_das_operacoes(periodo):
     do relógio — tela aberta depois da meia-noite mandaria com a data de
     amanhã e anotaria no arquivo de ontem."""
     return periodo.fim
+
+
+# ------------------------------------------------------ primeira leva (19/11/2026)
+def tentar_de_novo(acao, *, erros, tentativas: int = 3, espera: float = 60,
+                   dormir=None, cancelar=lambda: False, ao_falhar=lambda n, e: None):
+    """Roda `acao()`; em erro de `erros`, espera e tenta de novo, até `tentativas`.
+
+    Nasceu para os saldos do ERP no fim do Buscar: o Chrome do app que não
+    responde derrubava a leitura inteira dos pagamentos, que já estava feita
+    (9 vezes em 18/11/2026). A leitura fica, e só os saldos são pedidos de novo.
+    A espera é em fatias de 1 s, olhando `cancelar()`: o Parar sobe o último
+    erro sem nova tentativa. Erro de outro tipo sobe na hora.
+    """
+    if dormir is None:
+        import time
+        dormir = time.sleep
+    n = 0
+    while True:
+        n += 1
+        try:
+            return acao()
+        except erros as e:
+            ao_falhar(n, e)
+            if n >= tentativas:
+                raise
+            for _ in range(int(espera)):
+                if cancelar():
+                    raise
+                dormir(1)
+            if cancelar():
+                raise
+
+
+def aviso_de_saldo_atrasado(segundos: float) -> str:
+    """O aviso de quando os saldos só vieram numa nova tentativa (revisão de
+    dinheiro, 19/11/2026): baixa desfeita ou título criado entre a lista e o
+    saldo deixaria o a pagar de antes com o saldo de depois — aporte mínimo
+    baixo. A lista não é relida sozinha; o dono é mandado reler."""
+    minutos = max(1, int(round(segundos / 60)))
+    return (f"os saldos do ERP foram lidos cerca de {minutos} min depois da lista dos "
+            "pagamentos (a primeira tentativa falhou) — clique em «Reler só os "
+            "lançamentos» antes de mandar aportes ou gerar o Excel do dia")
+
+
+def contas_ou_as_guardadas(ler, guardadas, *, erros, log=lambda msg: None):
+    """(contas, vieram_das_guardadas) para o HTML das PF.
+
+    A lista de contas do ERP era lida ANTES de tudo, só para saber quais são
+    as contas — e a falha dela impedia o HTML (16 vezes em 16 e 18/11/2026).
+    Havendo lista guardada (`contas_pf.json`), a falha do ERP usa a guardada,
+    com o saldo em branco (saldo velho não se mostra) e o aviso no Registro.
+    Sem lista guardada, ou erro que não é de `erros`, sobe como antes.
+    """
+    try:
+        return ler(), False
+    except erros as e:
+        if not guardadas:
+            raise
+        log("[!] PF: não li a lista de contas do ERP agora "
+            f"({type(e).__name__}); uso a lista guardada, sem saldo. Conta nova "
+            "ou desativada hoje só aparece depois de «Buscar contas».")
+        return [dict(c, saldo=None) for c in guardadas], True
+
+
+#: Quantos dias para trás o "Em aberto até hoje" recua na primeira vez.
+DIAS_EM_ABERTO = 7
+ARQ_PREFERENCIAS_DO_DIA = "pagamentos_do_dia_preferencias.json"
+
+
+def _dias_validos(dias) -> int:
+    try:
+        dias = int(dias)
+    except (TypeError, ValueError):
+        dias = DIAS_EM_ABERTO
+    return max(1, min(dias, MAXIMO_DE_DIAS - 1))
+
+
+def textos_em_aberto(hoje, dias) -> tuple[str, str]:
+    """O DE/ATÉ do botão "Em aberto até hoje": de `dias` atrás até hoje.
+
+    O dono deixa pagamentos para trás de propósito e recuava o DE à mão todo
+    dia (19/11/2026). O período nunca passa do máximo do Buscar."""
+    import datetime as _dt
+    ini = hoje - _dt.timedelta(days=_dias_validos(dias))
+    return f"{ini:{FORMATO_DATA}}", f"{hoje:{FORMATO_DATA}}"
+
+
+def dias_a_lembrar(periodo, hoje) -> int | None:
+    """Os dias a guardar para o próximo "Em aberto até hoje", ou None.
+
+    Só de quem buscou até HOJE e recuou além da sugestão do app: a busca de
+    um período antigo, ou a própria sugestão, não muda o que foi lembrado."""
+    from conciliacao.models import sugerir_periodo
+    if periodo.fim != hoje or periodo.inicio >= sugerir_periodo(hoje).inicio:
+        return None
+    return _dias_validos((hoje - periodo.inicio).days)
+
+
+def _preferencias_do_dia(base) -> dict:
+    import json
+    try:
+        dados = json.loads((base / ARQ_PREFERENCIAS_DO_DIA).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return dados if isinstance(dados, dict) else {}
+
+
+def ler_dias_em_aberto(base, chave: str = "dias_em_aberto") -> int:
+    """`chave`: a aba PJ e a aba PF lembram cada uma o seu recuo."""
+    dias = _preferencias_do_dia(base).get(chave)
+    return _dias_validos(dias) if dias is not None else DIAS_EM_ABERTO
+
+
+def gravar_dias_em_aberto(base, dias, chave: str = "dias_em_aberto") -> None:
+    """Nunca levanta: é preferência de tela. A outra chave do arquivo fica."""
+    import json
+    dados = _preferencias_do_dia(base)
+    dados[chave] = _dias_validos(dias)
+    try:
+        (base / ARQ_PREFERENCIAS_DO_DIA).write_text(json.dumps(dados), encoding="utf-8")
+    except OSError:
+        pass

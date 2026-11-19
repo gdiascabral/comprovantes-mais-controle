@@ -454,3 +454,10 @@ paths:
   memória a segunda passada escalaria o que já estava escalado; e cada frame
   ganhou `px = widgets.px` logo abaixo do import. A promessa "a 100% nada muda"
   é provada por teste determinístico, que não depende de tela nenhuma.
+
+**Fechar com rotina rodando pergunta antes** (19/11/2026). O `_sair` do
+`comprovantes_app.py` pergunta ao `_quem_trabalha` (o mesmo da barra lateral)
+e, havendo tarefa, mostra `util.pergunta_ao_fechar` com padrão NÃO, antes de
+chamar o `fechar` de qualquer aba. Erro ao montar a pergunta nunca impede de
+sair. Não é a trava inteira: a thread do Lançar aportes e a da baixa pelo
+retorno continuam sem "parar" próprio. Guarda: `tests/test_fechar_com_rotina_rodando.py`.
