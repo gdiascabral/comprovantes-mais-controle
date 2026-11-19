@@ -27,6 +27,7 @@ sempre com `entradas`, `resultado`, `analise` = None e `grupos` vazio.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from . import boletos_somados, confirmacao, ocr_boleto, qr_pix, relatorio
@@ -49,6 +50,29 @@ class LeituraDosPagamentos:
     #: leitura dos anexos (`alterados_durante_a_leitura`). Vai com a leitura
     #: para a Remessa/Retorno (`receber_apuracao`), que remonta por conta própria.
     alterados: set = field(default_factory=set)
+    #: Segundos de cada etapa, na ordem em que rodaram (`_Cronometro`). A
+    #: leitura que deu certo nao deixava rastro de quanto demorou (19/11/2026).
+    tempos: dict = field(default_factory=dict)
+
+
+class _Cronometro:
+    """Fecha uma etapa por vez: `etapa(nome)` guarda o tempo desde a anterior."""
+
+    def __init__(self, tempos: dict, relogio):
+        self._tempos, self._relogio, self._desde = tempos, relogio, relogio()
+
+    def etapa(self, nome: str) -> None:
+        agora = self._relogio()
+        self._tempos[nome] = self._tempos.get(nome, 0) + (agora - self._desde)
+        self._desde = agora
+
+
+def resumo_dos_tempos(tempos: dict) -> str:
+    """"lista 3 s · anexos e detalhes 41 s · ..." para o Registro e o diagnostico."""
+    def dur(seg):
+        seg = int(round(seg))
+        return f"{seg // 60} min {seg % 60:02d} s" if seg >= 60 else f"{seg} s"
+    return " · ".join(f"{nome} {dur(seg)}" for nome, seg in (tempos or {}).items())
 
 
 class _Parada:
@@ -247,7 +271,8 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
                    cadastro_reembolso=None, regras_fornecedor=None, destacar=(),
                    conta_entra=relatorio.conta_entra, log=print,
                    progresso=lambda f, t: None, cancelar=lambda: False,
-                   contas_escolhidas=None, **leitores) -> LeituraDosPagamentos:
+                   contas_escolhidas=None, relogio=time.monotonic,
+                   **leitores) -> LeituraDosPagamentos:
     """Busca, lê os anexos e apura como a Remessa, de `ini` a `fim` (date).
 
     `api` é a `mc_api` da sessão do Chrome do app (`anx.garantir_sessao()`);
@@ -258,8 +283,15 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
 
     Devolve `interrompida=True` — e nada apurado — se `cancelar()` disse True
     em QUALQUER momento.
+
+    Com `contas_escolhidas` (aba PF), a lista de anexos e o detalhe so sao
+    pedidos para o que VAI SER PAGO nessas contas (19/11/2026): antes vinham
+    os da empresa inteira, pagos inclusive, e so depois se filtrava. Sem
+    `contas_escolhidas` nada muda: a Remessa/Retorno e o HTML de pessoa fisica
+    recebem `leitura.anexos`/`overviews` e leem os das outras contas.
     """
     leitura = LeituraDosPagamentos(periodo=(ini, fim))
+    crono = _Cronometro(leitura.tempos, relogio)
     cancelar = _Parada(cancelar)
     # Aba PF (12/11/2026): só as contas marcadas, e todas elas — inclusive a
     # "APENAS LANÇAMENTO", que a régua das PJ ignora.
@@ -271,25 +303,36 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         raise RuntimeError("A tela de Pagamentos não carregou a lista no Chrome.")
     brutos = api.listar_a_pagar(f"{ini:%Y-%m-%d}", f"{fim:%Y-%m-%d}", log=log)
     leitura.lancamentos = relatorio.filtrar_periodo(brutos, ini, fim, log=log)
+    crono.etapa("lista")
     if not leitura.lancamentos:
         leitura.resultado = relatorio.Resultado(contas={}, omitidos=[])
         return leitura
 
-    titulos = sorted({str(i.get("tradePayableId")) for i in leitura.lancamentos
+    pedir = leitura.lancamentos
+    if escolhidas is not None:
+        pedir, _ = relatorio.separar_pagos(
+            [i for i in pedir if conta_entra(relatorio.nome_da_conta(i))])
+        fora = len(leitura.lancamentos) - len(pedir)
+        if fora:
+            log(f"  {fora} lançamento(s) já pago(s) ou de outra conta: "
+                "sem anexo nem detalhe pedidos.")
+    titulos = sorted({str(i.get("tradePayableId")) for i in pedir
                       if i.get("tradePayableId")})
     if not api._req_anexos:
         api.capturar_credenciais_anexos(leitura.lancamentos[0].get("id"))
     leitura.anexos = api.anexos_de_titulos(titulos, log=log, progresso=progresso,
                                            cancelar=cancelar)
-    ids = [str(i.get("id")) for i in leitura.lancamentos if i.get("id")]
+    ids = [str(i.get("id")) for i in pedir if i.get("id")]
     leitura.overviews = api.listar_overviews(ids, log=log, progresso=progresso,
                                              cancelar=cancelar)
+    crono.etapa("anexos e detalhes")
     try:
         leitura.participantes = api.listar_participantes(log=log)
     except Exception as e:                                   # noqa: BLE001
         leitura.participantes = {}
         leitura.avisos.append(f"não li o cadastro de Contatos ({e}): o Pix por "
                               "telefone, e-mail ou chave aleatória fica de fora da remessa")
+    crono.etapa("contatos")
     if cancelar():
         leitura.interrompida = True
         return leitura
@@ -300,6 +343,7 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
     textos, urls_ocr, nao_lidos, qrs = baixar_textos(
         api.baixar_anexo, anexos_a_ler(a_pagar, leitura.anexos), log=log,
         progresso=progresso, cancelar=cancelar, **leitores)
+    crono.etapa("baixar e ler anexos")
     if cancelar():
         leitura.interrompida = True
         return leitura
@@ -317,6 +361,12 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
     selecionados = [i for i in leitura.lancamentos
                     if conta_entra(relatorio.nome_da_conta(i))]
     a_pagar, _pagos = relatorio.separar_pagos(selecionados)
+    crono.etapa("conferir a lista")
+    # O que virou "a pagar" no meio (baixa desfeita, conta trocada) nao teve a
+    # lista de anexos pedida: e titulo NAO LIDO, nunca "sem anexo".
+    pedidos = set(titulos)
+    sem_pedir = {str(i.get("tradePayableId")) for i in a_pagar
+                 if i.get("tradePayableId") and str(i.get("tradePayableId")) not in pedidos}
     if alterados:
         leitura.avisos.append(
             f"{len(alterados)} lançamento(s) alterado(s) no ERP durante a leitura — "
@@ -337,7 +387,7 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         textos=textos, urls_ocr=urls_ocr, cadastro_reembolso=cadastro_reembolso,
         regras_fornecedor=regras_fornecedor or {}, participantes=leitura.participantes,
         periodo=(ini, fim), anexos_nao_lidos=nao_lidos, qr_pix=qrs,
-        titulos_nao_lidos=set(getattr(api, "titulos_sem_leitura", ()) or ()),
+        titulos_nao_lidos=set(getattr(api, "titulos_sem_leitura", ()) or ()) | sem_pedir,
         # A tela nova divide o lançamento cujos boletos somam exato
         # (`boletos_somados`); a Remessa/Retorno, lendo sozinha, não.
         dividir_boletos=True,
@@ -364,4 +414,5 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
     leitura.grupos = confirmacao.grupos_da_confirmacao(
         leitura.resultado, leitura.analise, a_pagar, destacar=destacar,
         fornecedores=entradas.regras_fornecedor)
+    crono.etapa("apurar")
     return leitura

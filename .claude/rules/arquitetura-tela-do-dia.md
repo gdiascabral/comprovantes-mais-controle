@@ -1075,3 +1075,39 @@ voltou e quem saiu; (3) «Desmarcar» num incluído confere se ele saiu mesmo
 e, se a conta cobre, segue para o Desmarcar de sempre (nuvem). O Registro
 diz quem ficou ("fica (a conta paga sem aporte)"). O HTML de pessoa física
 continua tirando todos. Testes: `tests/test_reembolso_so_onde_falta.py`.
+
+## Primeira leva de velocidade (19/11/2026)
+
+Pedido do dono: "todo dia vou gerar o html de pagamentos do dia e ele demora,
+e geralmente pego umas datas anteriores". Medido nos registros de 22/09 a
+18/11: gravar o HTML é local e rápido; a demora é a leitura, e desde 09/11 o
+que mais custava era a leitura CAIR nos saldos (Chrome do app sem responder,
+48 s por queda, 9 quedas em 18/11). Regras em `decisoes.py`, com
+`tests/test_tela_do_dia_primeira_leva.py` e `tests/test_leitura_so_o_que_entra.py`.
+
+- **Saldo que falha não joga fora a leitura** (`decisoes.tentar_de_novo`): no
+  fim do Buscar os saldos são pedidos até `TENTATIVAS_DO_SALDO` (3) vezes, com
+  1 minuto entre uma e outra, só para `ErpError`; o Parar desiste na espera. A
+  ordem não mudou (saldo DEPOIS da lista, pela revisão de 10/11/2026). Falhando
+  as três, o recado é o de sempre e nada vai para a tela.
+- **Aba PF: a lista de contas que falha usa a guardada**
+  (`decisoes.contas_ou_as_guardadas`): só `ErpError`, só quando já há
+  `contas_pf.json` e contas marcadas; o saldo vai em branco (saldo velho não
+  se mostra) e o cache não é regravado. Na primeira geração (todas as contas)
+  a falha sobe como antes. `acessos.json` estragado (`ErpErro`) continua
+  parando tudo.
+- **Aba PF pede só o que vai ser pago** (`ler_pagamentos(contas_escolhidas=)`):
+  lista de anexos e detalhe só dos lançamentos a pagar das contas marcadas;
+  o que vira "a pagar" no meio da leitura entra em `titulos_nao_lidos` (sai
+  "anexos não lidos", nunca "sem anexo"). **Na PJ nada mudou**: a
+  Remessa/Retorno (`receber_apuracao`, "incluir pagos") e o HTML de pessoa
+  física leem `leitura.anexos`/`overviews` das outras contas.
+- **Tempo de cada etapa** (`LeituraDosPagamentos.tempos`,
+  `leitura_do_dia.resumo_dos_tempos`): vai ao Registro, ao `diagnostico.log`
+  e ao `atividade.jsonl` ("Leitura do dia" e "HTML das PF", com `segundos` e
+  `etapas`; a falha grava `resultado="erro"`). Antes só a falha deixava rastro.
+- **"Em aberto até hoje"** (`textos_em_aberto`, `dias_a_lembrar`): botão ao
+  lado do "Hoje" na PJ e na PF; vai de N dias atrás até hoje, e N é o recuo
+  da última busca até hoje que passou da sugestão (7 na primeira vez; nunca
+  além do máximo do Buscar). PJ e PF lembram cada uma o seu, em
+  `pagamentos_do_dia_preferencias.json` ao lado do exe.
