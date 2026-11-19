@@ -866,10 +866,19 @@ class TelaDoDiaFrame(ttk.Frame):
                 self._log(f"  Tempo da leitura: {tempos}")
             self.q.put(("status", "Lendo os saldos..."))
             # Saldo que falha não joga fora a leitura já feita (19/11/2026).
+            falhas, antes_do_saldo = [], time.time()
+
+            def _falhou(tentativa, erro):
+                falhas.append(tentativa)
+                self._saldo_falhou(tentativa, erro)
             contas = dc.tentar_de_novo(
                 lambda: erp_do_dia.ler_saldos(cfg, api, log=self._log),
                 erros=(ErpError,), tentativas=TENTATIVAS_DO_SALDO,
-                cancelar=self._parar.is_set, ao_falhar=self._saldo_falhou)
+                cancelar=self._parar.is_set, ao_falhar=_falhou)
+            if falhas:
+                # Vai com os avisos da leitura: o `_receber_leitura` os escreve.
+                leitura.avisos.insert(
+                    0, dc.aviso_de_saldo_atrasado(time.time() - antes_do_saldo))
             self.q.put(("status", "Lendo a nuvem (liberações, à mão, agendados)..."))
             # Nuvem que falha não derruba a leitura: volta `erro`, a tela fica
             # como na entrega 1 e o passo 2 trava (falha fechada).

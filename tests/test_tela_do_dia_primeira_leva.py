@@ -63,6 +63,12 @@ def test_parar_durante_a_espera_sobe_o_erro_sem_tentar_de_novo():
     assert len(n) == 1
 
 
+def test_saldo_lido_em_nova_tentativa_manda_reler_os_lancamentos():
+    aviso = dc.aviso_de_saldo_atrasado(190)
+    assert "3 min" in aviso and "Reler só os lançamentos" in aviso
+    assert "1 min" in dc.aviso_de_saldo_atrasado(5)
+
+
 # ------------------------------------------------- contas guardadas (PF)
 GUARDADAS = [{"id": "c1", "nome": "PESSOA FISICA - CONTA MODELO", "saldo": 10.0}]
 

@@ -307,8 +307,10 @@ class AbaPF:
                 escolhidas = da_aba
             sumiram = [n for n in escolhidas if n not in da_aba]
             escolhidas = [n for n in escolhidas if n in da_aba]
-            if not guardadas:
-                gravar_cache(base, contas, escolhidas)
+            # Com a lista guardada, só a ESCOLHA de hoje é gravada: as contas
+            # (e o saldo delas) continuam as da última leitura boa.
+            gravar_cache(base, ler_cache(base)["contas"] if guardadas else contas,
+                         escolhidas)
             self.q.put(("contas", (contas, escolhidas)))
             for n in sumiram:
                 log(f"[!] PF: a conta «{n}» não está mais ativa no ERP — ficou de fora.")

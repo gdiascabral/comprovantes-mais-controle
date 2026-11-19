@@ -1113,3 +1113,13 @@ que mais custava era a leitura CAIR nos saldos (Chrome do app sem responder,
   da última busca até hoje que passou da sugestão (7 na primeira vez; nunca
   além do máximo do Buscar). PJ e PF lembram cada uma o seu, em
   `pagamentos_do_dia_preferencias.json` ao lado do exe.
+- **Revisão de dinheiro (19/11/2026)**: (1) saldo que só veio na nova
+  tentativa põe `decisoes.aviso_de_saldo_atrasado` no topo dos avisos da
+  leitura (baixa desfeita ou título criado nesse meio daria aporte mínimo
+  baixo): manda «Reler só os lançamentos» antes de mandar aportes ou gerar o
+  Excel; a lista não é relida sozinha; (2) com a lista guardada da PF, só a
+  ESCOLHA de hoje é gravada no `contas_pf.json`, com as contas da última
+  leitura boa; (3) `titulos_nao_lidos` olha o título E o id: parcela que entra
+  no meio num título já pedido fica sem o detalhe (onde mora "PAGAR PARA").
+  Em aberto: o Parar durante a espera do saldo fecha com "Não consegui ler o
+  dia", e não com "interrompida".

@@ -73,6 +73,16 @@ def test_o_que_virou_a_pagar_no_meio_da_leitura_nao_sai_como_sem_anexo():
     assert regras.MOTIVO_SEM_ANEXO not in motivos
 
 
+def test_parcela_que_entrou_no_meio_em_titulo_ja_pedido_tambem_e_nao_lida():
+    antes = [_lanc("L1", conta=PF),
+             _lanc("L2", conta=PF, tradePayableId="T-L1", paid=True, sumOfPaidValues=100.0)]
+    depois = [_lanc("L1", conta=PF), _lanc("L2", conta=PF, tradePayableId="T-L1")]
+    api = ApiQueAnota(antes, depois=depois, anexos={"T-L1": [_anexo("nota 1234")]})
+    leitura = _ler(api, contas_escolhidas=[PF])
+    assert api.pediu_detalhes == ["L1"]                      # o detalhe da L2 nao veio
+    assert "T-L1" in leitura.entradas.titulos_nao_lidos
+
+
 def test_o_tempo_de_cada_etapa_fica_na_leitura():
     tiques = iter(range(0, 1000, 5))
     api = ApiQueAnota(_dia(), anexos={"T-L1": [_anexo("nota 1234")]})

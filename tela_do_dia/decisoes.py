@@ -524,6 +524,17 @@ def tentar_de_novo(acao, *, erros, tentativas: int = 3, espera: float = 60,
                 raise
 
 
+def aviso_de_saldo_atrasado(segundos: float) -> str:
+    """O aviso de quando os saldos só vieram numa nova tentativa (revisão de
+    dinheiro, 19/11/2026): baixa desfeita ou título criado entre a lista e o
+    saldo deixaria o a pagar de antes com o saldo de depois — aporte mínimo
+    baixo. A lista não é relida sozinha; o dono é mandado reler."""
+    minutos = max(1, int(round(segundos / 60)))
+    return (f"os saldos do ERP foram lidos cerca de {minutos} min depois da lista dos "
+            "pagamentos (a primeira tentativa falhou) — clique em «Reler só os "
+            "lançamentos» antes de mandar aportes ou gerar o Excel do dia")
+
+
 def contas_ou_as_guardadas(ler, guardadas, *, erros, log=lambda msg: None):
     """(contas, vieram_das_guardadas) para o HTML das PF.
 

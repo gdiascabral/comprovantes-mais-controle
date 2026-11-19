@@ -364,9 +364,14 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
     crono.etapa("conferir a lista")
     # O que virou "a pagar" no meio (baixa desfeita, conta trocada) nao teve a
     # lista de anexos pedida: e titulo NAO LIDO, nunca "sem anexo".
-    pedidos = set(titulos)
+    # Pelo título E pelo id (revisão de dinheiro, 19/11/2026): a parcela que
+    # entrou no meio num título já pedido fica sem o detalhe dela, e é nele
+    # que mora a observação "PAGAR PARA".
+    pedidos, com_detalhe = set(titulos), set(ids)
     sem_pedir = {str(i.get("tradePayableId")) for i in a_pagar
-                 if i.get("tradePayableId") and str(i.get("tradePayableId")) not in pedidos}
+                 if i.get("tradePayableId")
+                 and (str(i.get("tradePayableId")) not in pedidos
+                      or str(i.get("id")) not in com_detalhe)}
     if alterados:
         leitura.avisos.append(
             f"{len(alterados)} lançamento(s) alterado(s) no ERP durante a leitura — "
