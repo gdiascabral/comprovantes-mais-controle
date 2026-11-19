@@ -58,7 +58,9 @@ from .valores import brl, de_float, ler_valor_editado
 px = widgets.px
 REMOVER = "remover"
 #: Quantas vezes os saldos do ERP são pedidos antes de a leitura desistir.
-TENTATIVAS_DO_SALDO = 3
+#: Duas, e não mais: cada pedido já espera a aba calada voltar e tenta de novo
+#: por dentro (`erp.central`, 18/11/2026), e pode levar minutos.
+TENTATIVAS_DO_SALDO = 2
 
 
 class TelaDoDiaFrame(ttk.Frame):

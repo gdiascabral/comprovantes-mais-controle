@@ -1086,10 +1086,12 @@ que mais custava era a leitura CAIR nos saldos (Chrome do app sem responder,
 `tests/test_tela_do_dia_primeira_leva.py` e `tests/test_leitura_so_o_que_entra.py`.
 
 - **Saldo que falha não joga fora a leitura** (`decisoes.tentar_de_novo`): no
-  fim do Buscar os saldos são pedidos até `TENTATIVAS_DO_SALDO` (3) vezes, com
-  1 minuto entre uma e outra, só para `ErpError`; o Parar desiste na espera. A
+  fim do Buscar os saldos são pedidos até `TENTATIVAS_DO_SALDO` (2) vezes, com
+  1 minuto entre uma e outra, só para `ErpError`; o Parar desiste na espera
+  (cada pedido já tem a fila e a segunda tentativa do `erp.central`, de
+  18/11/2026, por dentro — por isso só duas). A
   ordem não mudou (saldo DEPOIS da lista, pela revisão de 10/11/2026). Falhando
-  as três, o recado é o de sempre e nada vai para a tela.
+  as duas, o recado é o de sempre e nada vai para a tela.
 - **Aba PF: a lista de contas que falha usa a guardada**
   (`decisoes.contas_ou_as_guardadas`): só `ErpError`, só quando já há
   `contas_pf.json` e contas marcadas; o saldo vai em branco (saldo velho não

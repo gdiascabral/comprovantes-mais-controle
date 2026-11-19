@@ -930,6 +930,16 @@ def main():
         # Tarefas. A barra lateral já pergunta às três se estão ocupadas
         # (`_quem_trabalha`) — quem sabe quem existe é o `quadros`, e não uma
         # tupla que a próxima aba com navegador próprio vai esquecer de novo.
+        #
+        # Com uma rotina rodando, pergunta ANTES de fechar qualquer coisa
+        # (19/11/2026), padrão NÃO: o X no meio de um lote não avisava nada.
+        try:
+            _pergunta = util.pergunta_ao_fechar(_quem_trabalha()[1])
+        except Exception:
+            _pergunta = ""               # a pergunta nunca impede de sair
+        if _pergunta and not messagebox.askyesno("Fechar o app", _pergunta,
+                                                 default="no", parent=root):
+            return
         for _quadro in quadros.values():
             _fechar = getattr(_quadro, "fechar", None)
             if _fechar is None:
