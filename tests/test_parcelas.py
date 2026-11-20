@@ -110,3 +110,24 @@ def test_leitura_le_o_titulo_so_dos_parcelados_e_anota_a_linha():
     regs = {r["id"]: r for rs in leitura.resultado.contas.values() for r in rs}
     assert regs["L1"]["parcela"] == {"numero": 2, "total": 3}
     assert "parcela" not in regs["L2"]
+
+
+
+def test_fornecedor_nos_textos_olha_so_o_que_recebe():
+    from pagamentos_dia import relatorio
+    item = {"paidTo": "MADEIRAS MODELO LTDA"}
+    assert relatorio.fornecedor_nos_textos(item, ["nota de MADEIRAS MODELO"]) is True
+    assert relatorio.fornecedor_nos_textos(item, ["outra empresa", ""]) is False
+    assert relatorio.fornecedor_nos_textos({"paidTo": "LTDA"}, ["LTDA"]) is None
+
+
+def test_montar_registros_marca_o_fornecedor_so_pelo_anexo():
+    from pagamentos_dia import relatorio
+    from test_descricao_e_ordem import CUPOM, _boleto_sem_anexo
+    item = _boleto_sem_anexo()
+    res = relatorio.montar_registros([item], CUPOM, {}, {})
+    regs = [r for rs in res.contas.values() for r in rs]
+    for r in regs:
+        assert r["fornecedor_no_anexo"] is False      # sem texto de anexo
+        assert r["reembolso_socio"] is False
+        assert r["total_parcelas"] == int(item.get("numberOfFinancingInstallments") or 0)

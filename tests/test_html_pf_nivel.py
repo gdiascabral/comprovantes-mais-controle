@@ -9,6 +9,7 @@ HOJE = date(2026, 11, 19)
 def _item(**r):
     base = {"tipo": "Pix", "dados": "fulano@exemplo.com", "valor": 50.0, "status": "APTO",
             "conferencia": "valor ✓ · fornecedor ✓", "id": "1", "favorecido": "PESSOA FICTICIA",
+            "fornecedor_no_anexo": True,
             "vencimento": "2026-11-19"}
     base.update(r)
     return html_pf.item_do_registro("PESSOA FISICA - CONTA MODELO", base)

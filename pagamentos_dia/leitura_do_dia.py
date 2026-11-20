@@ -202,7 +202,8 @@ def titulo_no_erp(api, tpid: str) -> dict | None:
     return j
 
 
-def ler_titulos_no_erp(api, tpids, log=print, cancelar=lambda: False) -> dict:
+def ler_titulos_no_erp(api, tpids, log=print, cancelar=lambda: False,
+                       consequencia="os boletos dele não são divididos") -> dict:
     """`{tpid: título}` dos que leram. Falha fechada: o título que não leu
     (erro, vazio, exceção) fica de fora, e por isso NÃO divide — com aviso
     no log. `cancelar()` é consultado antes de cada título: o "Parar" para
@@ -218,8 +219,7 @@ def ler_titulos_no_erp(api, tpids, log=print, cancelar=lambda: False) -> dict:
         else:
             motivo = "resposta vazia ou com erro"
         if titulo is None:
-            log(f"não li o título {tpid} no ERP ({motivo}): os boletos dele "
-                "não são divididos")
+            log(f"não li o título {tpid} no ERP ({motivo}): {consequencia}")
             continue
         lidos[tpid] = titulo
     return lidos
@@ -411,7 +411,8 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
     parcelados = parcelas.titulos_parcelados(a_pagar)
     ja_lidos = {t: v for t, v in entradas.titulos_erp.items() if t in set(parcelados)}
     entradas.parcelas_erp = {**ja_lidos, **ler_titulos_no_erp(
-        api, [t for t in parcelados if t not in ja_lidos], log=log, cancelar=cancelar)}
+        api, [t for t in parcelados if t not in ja_lidos], log=log, cancelar=cancelar,
+        consequencia="o número da parcela não aparece no HTML")}
     crono.etapa("parcelas")
     if cancelar():
         leitura.interrompida = True

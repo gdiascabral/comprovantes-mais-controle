@@ -94,11 +94,17 @@ def _valor_pelo_codigo(r: dict) -> bool:
 def conferido(r: dict) -> dict:
     estado = {"valor": NAO_CONFERIDO, "quem recebe": NAO_CONFERIDO}
     for p in _pecas(r.get("conferencia")):
-        if p.startswith("valor ✓"):
+        if p.startswith("valor ✓") and _total(r) <= 1:
+            # Em título parcelado o anexo pode ser o comprovante de OUTRA
+            # parcela, do mesmo valor: lá só o código prova (abaixo).
             _marcar(estado, "valor", BATE)
         elif p.startswith("VALOR DIVERGE"):
             _marcar(estado, "valor", DIVERGE)
-        if p.startswith(("fornecedor ✓", "beneficiário ✓", "CNPJ ✓")) or re.match(r"UC \S+ ✓", p):
+        # "fornecedor ✓" só vale quando o nome está num ANEXO: a peça também
+        # sai quando o nome está só na observação do lançamento (revisão de
+        # dinheiro, 20/11/2026). Registro sem a marca não conta.
+        if (p.startswith(("beneficiário ✓", "CNPJ ✓")) or re.match(r"UC \S+ ✓", p)
+                or (p.startswith("fornecedor ✓") and r.get("fornecedor_no_anexo"))):
             _marcar(estado, "quem recebe", BATE)
         elif p.startswith(("BENEFICIÁRIO DIVERGE", "CNPJ DIVERGE", "UC DIVERGE")):
             _marcar(estado, "quem recebe", DIVERGE)
@@ -120,11 +126,21 @@ def conferido(r: dict) -> dict:
             _marcar(estado, "endereço", NAO_CONFERIDO)
     if _valor_pelo_codigo(r):
         _marcar(estado, "valor", BATE)
-    if REEMBOLSO_DE_SOCIO_PODE_PAGAR and str(r.get("status") or "").startswith("APTO* (reembolso)"):
-        # A chave é a do cadastro de sócios, com o CPF fechando o DV
-        # (`reembolso.socio_do_documento`): quem recebe está provado.
+    if REEMBOLSO_DE_SOCIO_PODE_PAGAR and r.get("reembolso_socio"):
+        # Só o sócio do cadastro: a chave é a dele, com o CPF fechando o DV
+        # (`reembolso.socio_do_documento`). O aviso "PAGAR PARA" também sai
+        # "APTO* (reembolso)", mas quem o escreveu é quem vai receber.
         _marcar(estado, "quem recebe", BATE)
     return estado
+
+
+def _total(r: dict) -> int:
+    """Total de parcelas do título: o da parcela lida ou o da lista do ERP."""
+    try:
+        return max(int((r.get("parcela") or {}).get("total") or 0),
+                   int(r.get("total_parcelas") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _sem_prefixo(status: str) -> str:
@@ -138,7 +154,7 @@ def nivel_da_linha(r: dict, *, bloqueio: str = "", vencido: bool = False) -> Niv
     if any(x in status for x in _STATUS_NAO_LI):
         nao_li.append(_sem_prefixo(status))
     parcela = r.get("parcela") or {}
-    total = int(parcela.get("total") or 0)
+    total = _total(r)
     if total > 1 and not parcela.get("numero"):
         nao_li.append(f"parcelado em {total} — número da parcela não lido")
     if estado["valor"] == NAO_CONFERIDO:
@@ -147,8 +163,11 @@ def nivel_da_linha(r: dict, *, bloqueio: str = "", vencido: bool = False) -> Niv
         nao_li.append("quem recebe não conferido")
     if not status.startswith("APTO"):
         olhe.append(_sem_prefixo(status) or "sem situação")
-    elif status.startswith("APTO* (reembolso)") and not REEMBOLSO_DE_SOCIO_PODE_PAGAR:
-        olhe.append("reembolso de sócio")
+    elif status.startswith("APTO* (reembolso)"):
+        if not r.get("reembolso_socio"):
+            olhe.append('reembolso por aviso "PAGAR PARA": confira para quem vai')
+        elif not REEMBOLSO_DE_SOCIO_PODE_PAGAR:
+            olhe.append("reembolso de sócio")
     if bloqueio:
         olhe.append(bloqueio)
     if vencido:
@@ -164,7 +183,7 @@ def nivel_da_linha(r: dict, *, bloqueio: str = "", vencido: bool = False) -> Niv
 
 def para_o_html(n: Nivel, r: dict) -> dict:
     parcela = r.get("parcela") or {}
-    total = int(parcela.get("total") or 0)
+    total = _total(r)
     return {"nivel": n.nome, "nivel_rotulo": ROTULO[n.nome], "motivos": list(n.motivos),
             "conferido": [[item, estado] for item, estado in n.conferido],
             "parcela": (f"{parcela.get('numero') or '?'} de {total}" if total > 1 else ""),

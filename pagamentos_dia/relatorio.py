@@ -1330,6 +1330,13 @@ def _cnpj_fmt(c: str) -> str:
     return f"{c[0:2]}.{c[2:5]}.{c[5:8]}/{c[8:12]}-{c[12:14]}" if len(c) == 14 else c
 
 
+def _total_de_parcelas(item: dict) -> int:
+    try:
+        return int(item.get("numberOfFinancingInstallments") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _valor_nos_textos(valor: float, textos) -> bool:
     """O valor aparece, INTEIRO, em algum dos textos?
 
@@ -1831,6 +1838,21 @@ def _conferir_utilidade(item, files, textos) -> tuple[list[str], bool]:
     return partes, divergiu
 
 
+def fornecedor_nos_textos(item: dict, textos) -> bool | None:
+    """Alguma palavra própria do favorecido (4+ letras, fora do ruído de
+    razão social) aparece nos textos? None quando o favorecido não tem
+    palavra própria. É a régua do "fornecedor ✓" do `conferir_documento`;
+    o `montar_registros` a roda também só nos ANEXOS (`fornecedor_no_anexo`),
+    porque a observação do lançamento não prova quem recebe (revisão de
+    dinheiro, 20/11/2026)."""
+    alvo = chave(" ".join(t for t in textos if t))
+    esperados = [p for p in re.findall(r"[a-z0-9]+", chave(item.get("paidTo") or ""))
+                 if len(p) >= 4 and p not in _RUIDO_RAZAO]
+    if not esperados:
+        return None
+    return any(t in alvo for t in esperados)
+
+
 def conferir_documento(item: dict, files, textos, overview=None,
                        textos_valor=None, cruzar_cnpj: bool = True) -> tuple[str, bool]:
     """Cruza o anexo com o lançamento. Devolve (resumo, tem_divergência).
@@ -1906,12 +1928,10 @@ def conferir_documento(item: dict, files, textos, overview=None,
                           f"{brl(valor_do_item(item))}")
             divergiu = True
 
-    alvo = chave(" ".join(textos))
-    esperados = [p for p in re.findall(r"[a-z0-9]+", chave(item.get("paidTo") or ""))
-                 if len(p) >= 4 and p not in _RUIDO_RAZAO]
-    if not esperados:
+    achou = fornecedor_nos_textos(item, textos)
+    if achou is None:
         partes.append("fornecedor ?")
-    elif any(t in alvo for t in esperados):
+    elif achou:
         partes.append("fornecedor ✓")
     else:
         partes.append(f"fornecedor ? ({(item.get('paidTo') or '')[:20]} não aparece)")
@@ -2692,6 +2712,16 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # lançamento e como boleto no outro sairia duas vezes.
             "linha_da_guia": linha_da_guia,
             "status": status, "conferencia": conferencia, "obs": obs,
+            # Para o nível da linha no HTML (`nivel.py`, 20/11/2026): o que só
+            # se sabe aqui dentro. `fornecedor_no_anexo` olha só os anexos (a
+            # observação do lançamento não prova quem recebe);
+            # `reembolso_socio` separa o sócio do cadastro (chave com CPF
+            # conferido) do aviso "PAGAR PARA" escrito por quem pede; e
+            # `total_parcelas` deixa o título parcelado em "Não li" mesmo
+            # quando ninguém leu o número da parcela (Remessa/Retorno).
+            "fornecedor_no_anexo": bool(fornecedor_nos_textos(item, do_anexo)),
+            "reembolso_socio": socio is not None,
+            "total_parcelas": _total_de_parcelas(item),
             # OC e centro de custo SEPARADOS, além de dentro da `descricao`.
             # A planilha continua lendo a descrição montada; quem precisa deles
             # em coluna é a conferência da remessa, e extraí-los de volta de

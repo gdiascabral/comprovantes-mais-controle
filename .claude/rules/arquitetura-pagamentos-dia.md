@@ -985,6 +985,22 @@ paths:
   muda isso, a leitura por IA (parte 3 da spec) é que muda. Testes:
   `tests/test_nivel_da_linha.py`, `tests/test_html_nivel.py`,
   `tests/test_html_pf_nivel.py`.
+  **Revisão de dinheiro (20/11/2026)**, três travas, cada uma com teste: (1)
+  "APTO* (reembolso)" só prova quem recebe quando é sócio do cadastro
+  (`registro["reembolso_socio"]`); o aviso "PAGAR PARA" vai para "Olhe",
+  porque quem o escreve é quem vai receber; (2) "fornecedor ✓" só prova quem
+  recebe com `registro["fornecedor_no_anexo"]` (a régua
+  `relatorio.fornecedor_nos_textos` rodada só nos ANEXOS: a observação do
+  lançamento também gerava a peça), e registro sem a marca não conta; (3) em
+  título parcelado (`parcela.total` ou `registro["total_parcelas"]`, da lista
+  do ERP) o "valor ✓" do anexo não prova — pode ser o comprovante de outra
+  parcela do mesmo valor —, só o código; e parcelado sem número lido é "Não
+  li" também na Remessa/Retorno, que não lê o título. Com a trava (2), nos
+  HTML antigos (que não guardam de onde veio o nome) "Pode pagar" fica entre
+  23% e 50%; o número real sai do primeiro uso. Fica em aberto, fora deste
+  módulo: `ocr_boleto.valor_embutido` trata o 3º dígito da ficha de
+  arrecadação 8/9 como referência, e a tabela da Febraban diz 6/8 efetivo e
+  7/9 referência — conferir contra uma guia real antes de mexer.
 - `pagamentos_dia/parcelas.py` — **qual parcela do título a linha paga**. A
   lista de a pagar traz o total (`numberOfFinancingInstallments`) e não o
   número; ele sai do título inteiro (`trade-payables/<id>`), que a

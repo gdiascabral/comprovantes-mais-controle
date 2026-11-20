@@ -10,7 +10,8 @@ LINHA_VALIDA = "34191.57007 00024.924375 24177.010006 9 15340000115000"
 
 def _r(**k):
     base = {"tipo": "Pix", "dados": "fulano@exemplo.com", "valor": 100.0,
-            "status": "APTO", "conferencia": "valor ✓ · fornecedor ✓", "id": "1"}
+            "status": "APTO", "conferencia": "valor ✓ · fornecedor ✓", "id": "1",
+            "fornecedor_no_anexo": True}
     base.update(k)
     return base
 
@@ -70,7 +71,8 @@ def test_ja_pago_liberado_e_a_mao_sao_olhe():
 
 
 def test_reembolso_de_socio_pode_pagar_pela_decisao_1():
-    n = nivel.nivel_da_linha(_r(status="APTO* (reembolso)", conferencia="valor ✓"))
+    n = nivel.nivel_da_linha(_r(status="APTO* (reembolso)", conferencia="valor ✓",
+                                reembolso_socio=True))
     assert nivel.REEMBOLSO_DE_SOCIO_PODE_PAGAR is True
     assert n.nome == nivel.PODE_PAGAR
 
@@ -115,13 +117,17 @@ def test_parcela_sem_numero_e_nao_li():
 
 
 def test_parcela_com_observacao_e_olhe_e_unica_nao():
-    assert nivel.nivel_da_linha(_r(parcela={"numero": 3, "total": 10},
-                                   obs_parcela="pagar depois da medição")).nome == nivel.OLHE
+    valor = float(ocr_boleto.valor_embutido(LINHA_VALIDA))
+    n = nivel.nivel_da_linha(_r(tipo="Boleto", dados=LINHA_VALIDA, valor=valor,
+                                parcela={"numero": 3, "total": 10},
+                                obs_parcela="pagar depois da medição"))
+    assert n.nome == nivel.OLHE and "a parcela tem observação: leia antes de pagar" in n.motivos
     assert nivel.nivel_da_linha(_r(obs_parcela="qualquer coisa")).nome == nivel.PODE_PAGAR
 
 
 def test_para_o_html_e_rebaixar():
-    r = _r(parcela={"numero": 3, "total": 10})
+    valor = float(ocr_boleto.valor_embutido(LINHA_VALIDA))
+    r = _r(tipo="Boleto", dados=LINHA_VALIDA, valor=valor, parcela={"numero": 3, "total": 10})
     e = nivel.para_o_html(nivel.nivel_da_linha(r), r)
     assert e["nivel"] == nivel.PODE_PAGAR and e["nivel_rotulo"] == "PODE PAGAR"
     assert e["parcela"] == "3 de 10" and ["valor", nivel.BATE] in e["conferido"]
@@ -130,3 +136,35 @@ def test_para_o_html_e_rebaixar():
     e2 = nivel.para_o_html(nivel.nivel_da_linha(_r(conferencia="valor ?")), _r())
     nivel.rebaixar_no_html(e2, "x")
     assert e2["nivel"] == nivel.NAO_LI          # rebaixar nunca sobe "Não li"
+
+
+# ------------------------------------------- revisão de dinheiro, 20/11/2026
+def test_aviso_pagar_para_nao_prova_quem_recebe():
+    n = nivel.nivel_da_linha(_r(status="APTO* (reembolso)", conferencia="valor ✓",
+                                reembolso_socio=False))
+    assert n.nome != nivel.PODE_PAGAR
+    assert any("PAGAR PARA" in m for m in n.motivos)
+
+
+def test_fornecedor_so_na_observacao_nao_prova_quem_recebe():
+    n = nivel.nivel_da_linha(_r(fornecedor_no_anexo=False))
+    assert n.nome == nivel.NAO_LI and "quem recebe não conferido" in n.motivos
+
+
+def test_registro_sem_a_marca_do_anexo_nao_vira_verde():
+    r = _r()
+    del r["fornecedor_no_anexo"]
+    assert nivel.nivel_da_linha(r).nome == nivel.NAO_LI
+
+
+def test_em_titulo_parcelado_o_valor_do_anexo_nao_prova():
+    # O anexo pode ser o comprovante de outra parcela do mesmo valor.
+    n = nivel.nivel_da_linha(_r(parcela={"numero": 2, "total": 3}))
+    assert dict(n.conferido)["valor"] == nivel.NAO_CONFERIDO and n.nome == nivel.NAO_LI
+
+
+def test_parcelado_sem_numero_lido_e_nao_li_mesmo_sem_a_leitura_da_parcela():
+    # A Remessa/Retorno não lê o título: só o total vem da lista do ERP.
+    n = nivel.nivel_da_linha(_r(total_parcelas=4))
+    assert n.nome == nivel.NAO_LI
+    assert "parcelado em 4 — número da parcela não lido" in n.motivos
