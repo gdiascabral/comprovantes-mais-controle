@@ -42,6 +42,7 @@ MODELO_GERAL = r'''<!doctype html>
     --border:#e3e5e8; --accent:#0f6b4c; --accent-bg:#e8f5ef;
     --pix-bg:#eef4ff; --pix-text:#1d4ed8; --boleto-bg:#fff4e5; --boleto-text:#9a5b00;
     --ok:#0f9d58; --danger:#c0392b; --bloq-bg:#fdecea; --bloq-text:#b3261e;
+    --nv-ok-bg:#dff3e8; --nv-ok:#0b5a3f; --nv-olhe-bg:#fff2c2; --nv-olhe:#6b4700; --nv-parc-bg:#e6e8ec;
   }
   *{box-sizing:border-box;}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
@@ -133,6 +134,25 @@ MODELO_GERAL = r'''<!doctype html>
   tr.row-vencida > td:first-child{box-shadow:inset 4px 0 0 var(--danger);}
   .acc-vencidos{display:inline-block;margin-left:10px;background:var(--danger);color:#fff;font-size:11.5px;font-weight:800;padding:2px 9px;border-radius:999px;vertical-align:middle;}
   .venc.sem{color:var(--muted);}
+  .nivel-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:800;letter-spacing:.02em;margin-top:3px;}
+  .nivel-PODE_PAGAR{background:var(--nv-ok-bg);color:var(--nv-ok);}
+  .nivel-OLHE{background:var(--nv-olhe-bg);color:var(--nv-olhe);}
+  .nivel-NAO_LI{background:var(--danger);color:#fff;}
+  .motivos{margin:4px 0 0;padding-left:15px;font-size:11.5px;}
+  .confere{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;}
+  .c-item{font-size:10.5px;border:1px solid var(--border);border-radius:4px;padding:1px 5px;white-space:nowrap;}
+  .c-bate{color:var(--nv-ok);} .c-diverge{color:var(--bloq-text);font-weight:700;} .c-nao{color:var(--muted);border-style:dashed;}
+  .parcela{display:inline-block;margin-top:4px;font-size:11px;font-weight:700;background:var(--nv-parc-bg);color:var(--text);border-radius:4px;padding:1px 6px;}
+  .obs-parcela{font-size:11px;margin-top:2px;}
+  tr[data-nivel="OLHE"] td:first-child{box-shadow:inset 4px 0 0 #d9a400;}
+  #niveis{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px;}
+  #niveis button{border:1px solid var(--border);background:var(--card);border-radius:10px;padding:8px 12px;font-size:13px;cursor:pointer;text-align:left;color:var(--text);}
+  #niveis button[aria-pressed="true"]{outline:2px solid var(--text);}
+  #niveis b{display:block;font-size:20px;line-height:1.1;}
+  /* O filtro só ESCONDE as outras: no celular a linha vira cartão (display:block). */
+  body[data-filtro="PODE_PAGAR"] .tabela-conta tbody tr[data-nivel]:not([data-nivel="PODE_PAGAR"]),
+  body[data-filtro="OLHE"] .tabela-conta tbody tr[data-nivel]:not([data-nivel="OLHE"]),
+  body[data-filtro="NAO_LI"] .tabela-conta tbody tr[data-nivel]:not([data-nivel="NAO_LI"]){display:none;}
   @media (max-width:640px){
     .wrap{padding:16px 10px 50px;}
     .tabela-conta thead{display:none;}
@@ -151,6 +171,7 @@ MODELO_GERAL = r'''<!doctype html>
       --bg:#15161a; --card:#1f2024; --text:#f0f1f3; --muted:#9aa0a6; --border:#2c2d32;
       --accent-bg:#123726; --pix-bg:#16233f; --pix-text:#8fb4ff; --boleto-bg:#3a2a10; --boleto-text:#f0b25a;
       --bloq-bg:#3a1a17; --bloq-text:#ffb4a8;
+      --nv-ok-bg:#163f2c; --nv-ok:#8fe0b5; --nv-olhe-bg:#4a3a0e; --nv-olhe:#ffd77a; --nv-parc-bg:#33353b;
     }
     :root:not([data-theme="light"]) .tipo-link{background:#33224a;color:#c9a6f0;}
     :root:not([data-theme="light"]) .linkbtn:hover,:root:not([data-theme="light"]) .delbtn:hover{background:#2c2d32;}
@@ -160,6 +181,7 @@ MODELO_GERAL = r'''<!doctype html>
     --bg:#15161a; --card:#1f2024; --text:#f0f1f3; --muted:#9aa0a6; --border:#2c2d32;
     --accent-bg:#123726; --pix-bg:#16233f; --pix-text:#8fb4ff; --boleto-bg:#3a2a10; --boleto-text:#f0b25a;
     --bloq-bg:#3a1a17; --bloq-text:#ffb4a8;
+    --nv-ok-bg:#163f2c; --nv-ok:#8fe0b5; --nv-olhe-bg:#4a3a0e; --nv-olhe:#ffd77a; --nv-parc-bg:#33353b;
   }
   :root[data-theme="dark"] .tipo-link{background:#33224a;color:#c9a6f0;}
   :root[data-theme="dark"] .obs{color:#ffb4a8;}
@@ -172,6 +194,7 @@ MODELO_GERAL = r'''<!doctype html>
 
   <button class="restorebtn" id="restoreBtn" type="button" hidden>Restaurar excluídos (<span id="restoreN">0</span>)</button>
 
+  <div id="niveis" aria-label="Linhas por nível"></div>
   <div class="summary" id="resumo">
     <table>
       <thead><tr><th>Conta</th><th style="width:120px">Total</th><th style="width:110px">A conferir</th><th style="width:140px">Marcado (pago)</th></tr></thead>
@@ -284,6 +307,23 @@ function updateSummary(){
   document.getElementById('grandTotal').innerHTML = '<b>R$ ' + reais(grandTotal) + '</b>';
   document.getElementById('grandMarked').innerHTML = grandMarkedCount ? `<b>${grandMarkedCount}/${grandCount}</b> &middot; R$ ${reais(grandMarked)}` : `0/${grandCount}`;
 }
+function renderNiveis(){
+  const caixa = document.getElementById('niveis');
+  if(!caixa) return;
+  const soma = {PODE_PAGAR:[0,0], OLHE:[0,0], NAO_LI:[0,0]};
+  DATA.contas.forEach(c => (c.entries || []).forEach(e => {
+    const k = soma[e.nivel] ? e.nivel : 'NAO_LI';
+    soma[k][0] += 1; soma[k][1] += (e.centavos || 0);
+  }));
+  const rot = {PODE_PAGAR:'PODE PAGAR', OLHE:'OLHE', NAO_LI:'NÃO LI'};
+  caixa.innerHTML = Object.keys(soma).map(k =>
+    `<button type="button" data-n="${k}" aria-pressed="false"><span class="nivel-badge nivel-${k}">${rot[k]}</span><b>${soma[k][0]}</b>linhas · R$ ${reais(soma[k][1])}</button>`).join('');
+  caixa.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    const ligado = document.body.dataset.filtro === b.dataset.n;
+    if(ligado) delete document.body.dataset.filtro; else document.body.dataset.filtro = b.dataset.n;
+    caixa.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(!ligado && x === b)));
+  }));
+}
 function renderSummary(){
   const body = document.getElementById('summaryBody');
   DATA.contas.forEach((c, ci) => {
@@ -337,6 +377,14 @@ function renderAccounts(){
         : '<span class="venc sem">—</span>';
       if(e.vencido) tr.classList.add('row-vencida');
       if(bloq) tr.classList.add('row-bloqueada');
+      tr.dataset.nivel = e.nivel || 'NAO_LI';
+      const confCell = (e.conferido || []).map(([item, est]) =>
+        `<span class="c-item c-${est === 'bate' ? 'bate' : est === 'diverge' ? 'diverge' : 'nao'}">${esc(item)}${est === 'bate' ? ' ✓' : est === 'diverge' ? ' ✗' : ': não conferido'}</span>`).join('');
+      const nivelCell = `<span class="nivel-badge nivel-${esc(e.nivel || 'NAO_LI')}">${esc(e.nivel_rotulo || 'NÃO LI')}</span>`
+        + ((e.motivos || []).length ? `<ul class="motivos">${e.motivos.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : '')
+        + (e.parcela ? `<div><span class="parcela">Parcela ${esc(e.parcela)}</span></div>` : '')
+        + (e.obs_parcela ? `<div class="obs-parcela">Observação: ${esc(e.obs_parcela)}</div>` : '')
+        + (confCell ? `<div class="confere">${confCell}</div>` : '');
       const dadosCell = (e.dados_limpo && bloq)
         ? `<div class="bloq">CONFERIR: ${esc(bloq)}</div><div class="code sem-copiar">${esc(e.dados_limpo)}</div>`
         : e.dados_limpo
@@ -355,7 +403,7 @@ function renderAccounts(){
         <td data-label="Venc.">${vencCell}</td>
         <td data-label="Dados do pagamento">${dadosCell}${pixQrCell}</td>
         <td data-label="Valor"><div class="copy-cell"><span class="code valor">${esc(e.valor)}</span><button class="copybtn" type="button">Copiar</button></div></td>
-        <td data-label="Fornecedor"><div class="fav">${esc(e.favorecido)}<span class="pago-badge">PAGO</span></div><div class="status-badge">${esc(e.status)}</div>${e.conferencia ? `<div class="conf">${esc(e.conferencia)}</div>` : ''}${e.obs ? `<div class="obs">${esc(e.obs)}</div>` : ''}</td>
+        <td data-label="Fornecedor"><div class="fav">${esc(e.favorecido)}<span class="pago-badge">PAGO</span></div>${nivelCell}<div class="status-badge">${esc(e.status)}</div>${e.conferencia ? `<div class="conf">${esc(e.conferencia)}</div>` : ''}${e.obs ? `<div class="obs">${esc(e.obs)}</div>` : ''}</td>
         <td data-label="Descricao"><div class="copy-cell"><span class="desc">${esc(e.descricao)}</span><button class="copybtn" type="button">Copiar</button></div></td>
         <td class="acoes-cell"><div class="acoes">${e.link ? `<a class="linkbtn" href="${esc(e.link)}" target="_blank" rel="noopener" title="Acessar link" aria-label="Acessar link"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2h5v5M14 2L7.5 8.5M12 9.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3.5"/></svg>Acessar link</a>` : ''}<button class="delbtn" type="button" title="Excluir da lista" aria-label="Excluir da lista">&#10005; Excluir</button></div></td>`;
       const btns = tr.querySelectorAll('.copybtn:not(.copy-pix)');
@@ -405,7 +453,7 @@ document.getElementById('restoreBtn').addEventListener('click', () => {
   document.querySelectorAll('tr.row-excluida').forEach(t => t.classList.remove('row-excluida'));
   updateSummary();
 });
-renderSummary(); renderAccounts(); renderMovimentos(); updateSummary();
+renderNiveis(); renderSummary(); renderAccounts(); renderMovimentos(); updateSummary();
 </script>
 </body>
 </html>

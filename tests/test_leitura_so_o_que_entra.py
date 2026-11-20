@@ -88,7 +88,8 @@ def test_o_tempo_de_cada_etapa_fica_na_leitura():
     api = ApiQueAnota(_dia(), anexos={"T-L1": [_anexo("nota 1234")]})
     leitura = _ler(api, relogio=lambda: next(tiques))
     assert list(leitura.tempos) == ["lista", "anexos e detalhes", "contatos",
-                                    "baixar e ler anexos", "conferir a lista", "apurar"]
+                                    "baixar e ler anexos", "conferir a lista",
+                                    "parcelas", "apurar"]
     assert all(v == 5 for v in leitura.tempos.values())
     assert "lista 5 s" in ld.resumo_dos_tempos(leitura.tempos)
 

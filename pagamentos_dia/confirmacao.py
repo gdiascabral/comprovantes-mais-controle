@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 
 from . import boletos_somados
 from . import ocr_boleto
+from . import parcelas
 from . import qr_pix
 from . import reembolso
 from . import regras_pagamento as regras
@@ -84,6 +85,10 @@ class Entradas:
     #: candidatos a dividir, lidos pela `leitura_do_dia`. Título fora daqui
     #: não divide ("não sei se o título tem outras parcelas").
     titulos_erp: dict = field(default_factory=dict)
+    #: `{tradePayableId: título inteiro}` dos lançamentos PARCELADOS, lidos
+    #: pela `leitura_do_dia` (spec de 19/11/2026). None — o padrão e o caso da
+    #: Remessa — não anota parcela nenhuma.
+    parcelas_erp: dict | None = None
     #: Lançamentos que mudaram no ERP entre a lista e o fim da leitura dos
     #: anexos (só a `leitura_do_dia` preenche): saem em ATENÇÃO.
     alterados_na_leitura: set = field(default_factory=set)
@@ -169,6 +174,9 @@ def remontar(entradas: Entradas, ids_nao_confirmados=(), *,
     if entradas.dividir_boletos:
         resultado = boletos_somados.dividir(resultado, entradas,
                                             titulos_erp=entradas.titulos_erp)
+    if entradas.parcelas_erp is not None:
+        resultado = parcelas.anotar(resultado, entradas.selecionados,
+                                    entradas.parcelas_erp, entradas.overviews)
     return resultado
 
 

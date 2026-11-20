@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import modelos_html
+from . import nivel
 from . import ocr_boleto
 from . import regras_pagamento as regras
 from . import relatorio
@@ -630,6 +631,10 @@ def contas_do_html_geral(resultado, dia: date | None = None) -> list[dict]:
                 "bloqueio": _motivo_do_bloqueio(r),
             })
             entradas[-1].update(qr_do_pix(entradas[-1], r))
+            # O nível da linha (spec de 19/11/2026): só mostra; o bloqueio do
+            # Copiar acima continua o mesmo.
+            entradas[-1].update(nivel.para_o_html(
+                nivel.nivel_da_linha(r, bloqueio=entradas[-1]["bloqueio"], vencido=vencido), r))
         # Vencido PRIMEIRO na lista da conta, o mais antigo no topo (dono,
         # 09/11/2026: "traz ele primeiro na lista do banco … pra eu verificar
         # se realmente não foi pago"). Ordenação estável: entre os vencidos
@@ -654,6 +659,7 @@ def contas_do_html_geral(resultado, dia: date | None = None) -> list[dict]:
                  "— risco de pagar em dobro")
             for e in grupo:
                 e["bloqueio"] = (e["bloqueio"] + "; " + m) if e["bloqueio"] else m
+                nivel.rebaixar_no_html(e, m)
     for c in contas:
         for e in c["entries"]:
             e.pop("_lancamento", None)
