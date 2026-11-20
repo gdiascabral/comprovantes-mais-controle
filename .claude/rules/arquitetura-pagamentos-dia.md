@@ -958,3 +958,43 @@ paths:
     próprio retorno (`divididos_do_retorno`: a mesma referência mais de uma vez
     no mesmo retorno), então a Remessa/Retorno que não dividiu também não
     baixa. Nunca uma baixa parcial N vezes na mesma parcela.
+
+- `pagamentos_dia/nivel.py` — **o nível de cada linha dos dois HTML** (spec
+  de 19/11/2026, `docs/superpowers/specs/2026-11-19-html-tres-niveis-parcela-e-letra-de-mao-design.md`):
+  "Pode pagar", "Olhe" ou "Não li", com os motivos e a lista do que foi
+  conferido. Só CLASSIFICA o que `montar_registros` já decidiu (`status`,
+  `conferencia`) e o que a leitura acrescentou (`parcela`, `obs_parcela`);
+  **não confere nada novo e não mexe no bloqueio do Copiar**
+  (`_motivo_do_bloqueio`, `html_pf.bloqueio_duro` continuam mandando).
+  Essenciais são dois, valor e quem recebe: medido em 3.946 linhas de
+  set–nov/2026, exigir "nenhum ?" deixaria 4 em 5 linhas fora do verde; com
+  os essenciais, 50% "Pode pagar", 46% "Não li", 2% "Olhe" (o "Não li" ganha
+  quando os dois valem; os motivos de "Olhe" seguem na linha). O valor conta
+  como conferido também pelo código: linha digitável com DV fechando e valor
+  embutido igual, ou Pix copia-e-cola com o campo 54 igual. Peça de
+  conferência desconhecida é ignorada e os essenciais nascem "não
+  conferido": o desconhecido nunca vira verde; situação nova que não comece
+  por APTO cai em "Olhe". Duas decisões do dono em constantes:
+  `REEMBOLSO_DE_SOCIO_PODE_PAGAR` (True) e `OBS_DE_PARCELA_UNICA_LEVA_A_OLHE`
+  (False). O HTML das PJ chama `para_o_html` em cada entrada e
+  `rebaixar_no_html` quando acusa a mesma linha digitável em dois
+  lançamentos; o das PF calcula no `_cartao`. Diagnóstico de 20/11/2026 nas
+  conferências salvas (só PF e Moura Dantas): a régua `_valor_nos_textos`
+  acha o valor em 120 de 213 Pix com texto; nos 93 restantes o valor não
+  está escrito no anexo (recibo à mão, foto, cupom) — consertar a régua não
+  muda isso, a leitura por IA (parte 3 da spec) é que muda. Testes:
+  `tests/test_nivel_da_linha.py`, `tests/test_html_nivel.py`,
+  `tests/test_html_pf_nivel.py`.
+- `pagamentos_dia/parcelas.py` — **qual parcela do título a linha paga**. A
+  lista de a pagar traz o total (`numberOfFinancingInstallments`) e não o
+  número; ele sai do título inteiro (`trade-payables/<id>`), que a
+  `leitura_do_dia` lê só para os lançamentos parcelados (cerca de 2%) e
+  guarda em `Entradas.parcelas_erp` — None (Remessa/Retorno) não anota nada.
+  Medido em 20/11/2026 em respostas guardadas do mesmo endereço: o `id` de
+  `installments[k]` é o `id` do lançamento (5 de 5), a ordem vem em `order`
+  (começa em 0) e cada parcela traz `comment`. A ordem entre parcelas de um
+  título de várias ainda não foi vista ao vivo (o Chrome do app tinha uma aba
+  do ERP travada); a data fica de reserva. `confirmacao.remontar` chama
+  `anotar` depois da divisão em boletos; linha dividida (`parte`) não vira
+  parcela. Título que não leu: `{"numero": None, "total": N}` e a linha vai
+  para "Não li". Testes: `tests/test_parcelas.py`.

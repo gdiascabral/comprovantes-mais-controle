@@ -1,7 +1,7 @@
 """O nível no HTML das PF (spec de 19/11/2026). Fictício."""
 from datetime import date
 
-from pagamentos_dia import html_pf, nivel
+from pagamentos_dia import html_pf
 
 HOJE = date(2026, 11, 19)
 
