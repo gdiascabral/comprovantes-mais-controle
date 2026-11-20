@@ -30,7 +30,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from . import boletos_somados, confirmacao, ocr_boleto, qr_pix, relatorio
+from . import boletos_somados, confirmacao, ocr_boleto, parcelas, qr_pix, relatorio
 
 
 @dataclass
@@ -404,6 +404,16 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         cancelar=cancelar)
     if cancelar():
         # Parou no meio dos títulos: nada apurado, nada dividido pela metade.
+        leitura.interrompida = True
+        return leitura
+    # Parte 2 da spec de 19/11/2026: o número da parcela sai do título
+    # inteiro. O que já foi lido para dividir boletos não é lido de novo.
+    parcelados = parcelas.titulos_parcelados(a_pagar)
+    ja_lidos = {t: v for t, v in entradas.titulos_erp.items() if t in set(parcelados)}
+    entradas.parcelas_erp = {**ja_lidos, **ler_titulos_no_erp(
+        api, [t for t in parcelados if t not in ja_lidos], log=log, cancelar=cancelar)}
+    crono.etapa("parcelas")
+    if cancelar():
         leitura.interrompida = True
         return leitura
     leitura.entradas = entradas
