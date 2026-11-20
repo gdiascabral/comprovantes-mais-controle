@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from . import html_pagamentos, ocr_boleto, qr_pix
+from . import html_pagamentos, nivel, ocr_boleto, qr_pix
 from . import regras_pagamento as regras
 
 ARQ_REGRAS_PF = "regras_pf.json"
@@ -400,6 +400,12 @@ def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False) -> str:
     r = it.registro
     venc = str(r.get("vencimento") or "")[:10]
     vencido = bool(venc) and venc < hoje.isoformat()
+    # O nível da linha (spec de 19/11/2026): só mostra; o que esconde ou tira
+    # o código continua sendo `bloqueio_duro` e `escondido`.
+    nv = nivel.nivel_da_linha(r, bloqueio="; ".join(it.alertas), vencido=vencido)
+    parcela = r.get("parcela") or {}
+    texto_parcela = (f"Parcela {parcela.get('numero') or '?'} de {parcela.get('total')}"
+                     if int(parcela.get("total") or 0) > 1 else "")
     blocos = "".join(
         f'<figure class="cod {cl}"><figcaption>{_e(rot)}</figcaption>{_svg(conteudo, cl)}'
         f'<div class="txt"><code>{_e(t)}</code><button type="button" data-copiar="{_e(t)}">'
@@ -420,7 +426,7 @@ def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False) -> str:
     <span class="grupo g-{it.grupo.lower()}">{it.grupo}</span>
     <span class="valor">R$ {_brl(r.get('valor'))}</span>
     <span class="venc{' vencido' if vencido else ''}">venc. {_data(venc)}</span>
-    <span class="status s-{'at' if it.alertas else 'ok'}">{'ATENÇÃO' if it.alertas else 'APTO'}</span>
+    <span class="status s-{nv.nome} s-{'at' if it.alertas else 'ok'}">{nivel.ROTULO[nv.nome]}</span>
     {f'<span class="tagre">reembolso para {_e(it.reembolso_de)}</span>' if recolhido else ''}
     <label class="pago"><input type="checkbox" class="chk"> já paguei</label>
     <span class="pela"></span>
@@ -429,6 +435,9 @@ def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False) -> str:
     <div class="codigos">{blocos or '<p class="semcod">sem código para escanear</p>'}</div>
     <div class="info">
       <h3>{_e(quem)}</h3>
+      {f'<p class="parcela">{_e(texto_parcela)}</p>' if texto_parcela else ''}
+      {f'<p class="obs-parcela">Observação: {_e(r.get("obs_parcela"))}</p>' if r.get("obs_parcela") else ''}
+      {lista([m for m in nv.motivos if m != '; '.join(it.alertas)], 'motivos')}
       <dl>
         <dt>Conta</dt><dd>{_e(it.conta)}</dd>
         <dt>Obra / CC</dt><dd>{_e(r.get('centro_custo') or '—')}</dd>
@@ -557,6 +566,10 @@ header { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:10p
 .venc { font-size:13px; padding:2px 8px; border-radius:99px; background:#f3f4f6 } .venc.vencido { background:var(--badbg); color:var(--bad) }
 .status, .tagre { font-size:12px; font-weight:700; padding:2px 8px; border-radius:99px }
 .s-ok { background:var(--okbg); color:var(--ok) } .s-at { background:var(--atbg); color:var(--at) }
+.status.s-PODE_PAGAR { background:var(--okbg); color:var(--ok) } .status.s-OLHE { background:var(--atbg); color:var(--at) }
+.status.s-NAO_LI { background:var(--bad); color:#fff }
+.parcela { font-weight:700; margin:2px 0 } .obs-parcela { margin:2px 0 }
+.motivos { font-size:.92em; padding-left:18px; margin:4px 0 }
 .tagre { background:#f5f3ff; color:#6d28d9 }
 .pago { margin-left:auto; font-size:14px; cursor:pointer }
 .pela { font-size:12px; color:var(--ok); font-weight:600 }
