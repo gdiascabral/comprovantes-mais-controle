@@ -49,23 +49,27 @@ from .sicoob_client import JS_TEXTOS_DA_CONTA, SessaoPerdida, conta_do_cabecalho
 BASE = "https://ib.sicoob.com.br/sicoobnet"
 
 # ======================= O ENDEREÇO E O EXTRATOR =========================
-# Medidos em 22/10/2026 na Home do SicoobNet, com o dono logado.
+# Medidos em 22/10/2026 na Home do SicoobNet, com o dono logado; endereço e
+# raiz da resposta MEDIDOS DE NOVO em 23/11/2026: o Sicoob trocou
+# `obter-informacoes-widget-movimentacoes-inicio` (passou a dar HTTP 500 em
+# toda conta) por `widget-movimentacoes-conta`, e a resposta perdeu o
+# `contaCorrente` por fora — o resto do formato ficou igual.
 # "{conta}" em ROTA_SALDO ou em valor de texto do CORPO_SALDO vira os
 # DÍGITOS da conta pedida (hoje não se usa: a conta é a selecionada na tela).
 # Nenhum número de conta real aqui: o repo é público.
-ROTA_SALDO = "/api/home/obter-informacoes-widget-movimentacoes-inicio"
+ROTA_SALDO = "/api/home/widget-movimentacoes-conta"
 METODO_SALDO = "GET"
 CORPO_SALDO = None              # dict do POST, ou None
 #: Número JSON, sem sinal confiável: o sinal vem de CAMPO_SINAL.
-CAMPO_SALDO = "contaCorrente.extratoContaCorrente.resumo.saldoEmContaCorrente"
+CAMPO_SALDO = "extratoContaCorrente.resumo.saldoEmContaCorrente"
 #: "C" (credor) ou "D" (devedor → saldo negativo). "" = o número já tem sinal.
-CAMPO_SINAL = "contaCorrente.extratoContaCorrente.resumo.naturezaSaldoRes"
+CAMPO_SINAL = "extratoContaCorrente.resumo.naturezaSaldoRes"
 SINAIS_DEVEDORES = ("D", "-", "DEVEDOR", "NEGATIVO")
 SINAIS_CREDORES = ("C", "+", "CREDOR", "POSITIVO")
 #: Número JSON da conta da resposta; "" = a resposta não diz.
-CAMPO_CONTA = "contaCorrente.extratoContaCorrente.cabecalho.numContaCorrente"
+CAMPO_CONTA = "extratoContaCorrente.cabecalho.numContaCorrente"
 #: Booleano: true = o banco não conseguiu montar o movimento desta conta.
-CAMPO_ERRO = "contaCorrente.erroServicoMovimentoContaCorrente"
+CAMPO_ERRO = "erroServicoMovimentoContaCorrente"
 # =========================================================================
 
 NAO_MEDIDO = ("a leitura do saldo do Sicoob ainda não está ligada (o "
@@ -84,6 +88,10 @@ CENTAVO = Decimal("0.01")
 FORMATO_MUDOU = ("duas contas seguidas vieram num formato que o app não "
                  "conhece — o formato do Sicoob provavelmente mudou; digite o "
                  "saldo à mão e peça para medir de novo")
+SERVIDOR_FALHOU = ("o Sicoob deu erro no endereço do saldo em duas contas "
+                   "seguidas (HTTP 5xx) — se a tela do banco mostra o saldo "
+                   "normal, o endereço mudou de novo: digite o saldo à mão e "
+                   "peça para medir de novo; senão, tente mais tarde")
 _ENDERECO_SUMIU = (404, 405, 410)
 _VERDADE = ("true", "s", "sim", "1")
 
@@ -100,6 +108,12 @@ class FormatoDaConta(SaldoFalhou):
     """A resposta DESTA conta veio sem um campo, com saldo que não é número
     ou natureza que não é C nem D. Só esta conta fica sem ler; duas seguidas
     param a fila (`FORMATO_MUDOU`)."""
+
+
+class ServidorFalhou(SaldoFalhou):
+    """HTTP 5xx nesta conta. Uma só fica sem ler; duas seguidas param a fila
+    (`SERVIDOR_FALHOU`): em 23/11/2026 o endereço antigo dava 500 em TODAS e
+    o app trocava de conta 20 vezes à toa."""
 
 
 class ContaNaoEncontrada(SaldoFalhou):
@@ -244,6 +258,8 @@ def interpretar(resposta: dict, numero: str, url_da_pagina: str = "") -> Decimal
             f"o Sicoob não reconhece mais o endereço do saldo ({ROTA_SALDO}, "
             f"HTTP {status}) — a tela do banco mudou; digite o saldo à mão e "
             "peça para medir de novo")
+    if status >= 500:
+        raise ServidorFalhou(f"o Sicoob respondeu HTTP {status}: {corpo.strip()[:200]}")
     if status != 200:
         raise SaldoFalhou(f"o Sicoob respondeu HTTP {status}: {corpo.strip()[:200]}")
     try:
@@ -354,7 +370,7 @@ def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
             vistos.add(so_digitos(n))
             fila.append(n)
     lidos: list[Lido] = []
-    formato_ruim_seguido = 0
+    formato_ruim_seguido = servidor_seguido = 0
     for i, numero in enumerate(fila):
         if parar():
             lidos += [Lido(n, motivo=INTERROMPIDA) for n in fila[i:]]
@@ -371,7 +387,17 @@ def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
             log(str(e))
             lidos += [Lido(n, motivo=str(e)) for n in fila[i:]]
             break
+        except ServidorFalhou as e:
+            formato_ruim_seguido = 0
+            servidor_seguido += 1
+            if servidor_seguido >= 2:
+                log(SERVIDOR_FALHOU)
+                lidos += [Lido(n, motivo=SERVIDOR_FALHOU) for n in fila[i:]]
+                break
+            lidos.append(Lido(numero, motivo=_primeira_linha(e)))
+            log(f"{numero}: não lido — {_primeira_linha(e)}")
         except FormatoDaConta as e:
+            servidor_seguido = 0
             formato_ruim_seguido += 1
             if formato_ruim_seguido >= 2:
                 parou = str(EnderecoMudou(FORMATO_MUDOU))
@@ -381,11 +407,11 @@ def ler_contas(cli, numeros, *, agora=_dt.datetime.now, parar=lambda: False,
             lidos.append(Lido(numero, motivo=_primeira_linha(e)))
             log(f"{numero}: não lido — {_primeira_linha(e)}")
         except Exception as e:                               # noqa: BLE001
-            formato_ruim_seguido = 0
+            formato_ruim_seguido = servidor_seguido = 0
             lidos.append(Lido(numero, motivo=_primeira_linha(e)))
             log(f"{numero}: não lido — {_primeira_linha(e)}")
         else:
-            formato_ruim_seguido = 0
+            formato_ruim_seguido = servidor_seguido = 0
             lidos.append(Lido(numero, valor, agora()))
             log(f"{numero}: lido")
             if ao_ler is not None:

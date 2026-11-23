@@ -220,13 +220,15 @@ def test_endereco_no_repositorio_nao_carrega_numero_de_conta():
 # ------------------------------------------- o formato medido em 22/10/2026
 
 def medida(saldo=1234.56, natureza="C", conta=123456, erro=False, cooperativa=1):
-    """A ESTRUTURA da resposta medida em 22/10/2026; todo valor é inventado."""
-    return {"status": 200, "corpo": json.dumps({"contaCorrente": {
+    """A ESTRUTURA da resposta medida em 23/11/2026 (endereço novo, sem o
+    `contaCorrente` por fora que havia em 22/10); todo valor é inventado."""
+    return {"status": 200, "corpo": json.dumps({
+        "urlFuncionalidade": "",
         "erroServicoMovimentoContaCorrente": erro,
         "extratoContaCorrente": {
             "cabecalho": {"numContaCorrente": conta, "numeroCooperativa": cooperativa},
             "resumo": {"saldoEmContaCorrente": saldo, "naturezaSaldoRes": natureza},
-        }}})}
+        }})}
 
 
 def test_leitura_ligada():
@@ -234,14 +236,16 @@ def test_leitura_ligada():
 
 
 def test_endereco_medido_e_get_sem_conta_e_sem_block_ui():
+    """Medido em 23/11/2026: o Sicoob trocou o endereço da Home; o antigo
+    (`obter-informacoes-widget-movimentacoes-inicio`) passou a dar HTTP 500."""
     url, metodo, corpo = S.montar_pedido("12.345-6")
     assert url == ("https://ib.sicoob.com.br/sicoobnet"
-                   "/api/home/obter-informacoes-widget-movimentacoes-inicio")
+                   "/api/home/widget-movimentacoes-conta")
     assert metodo == "GET" and corpo is None
 
 
-def test_formato_medido_em_22_10():
-    """Estrutura do Sicoob medida em 22/10/2026; valores fictícios."""
+def test_formato_medido_em_23_11():
+    """Estrutura do Sicoob medida em 23/11/2026; valores fictícios."""
     assert S.interpretar(medida(), "12.345-6") == D("1234.56")
 
 
@@ -511,3 +515,40 @@ def test_ao_ler_vale_tambem_no_outro_acesso(medido):
                           perguntar=lambda faltam: True, agora=lambda: AGORA,
                           ao_ler=lambda page, numero: vistos.append(numero))
     assert vistos == ["12.345-6", "23.456-7"]
+
+
+# ------------------------------- erro do servidor do Sicoob (HTTP 5xx)
+
+def erro_500():
+    return {"status": 500, "corpo": json.dumps(
+        {"titulo": "Internet Banking", "mensagem": "Ocorreu um erro ao executar a operação."})}
+
+
+def test_um_erro_500_falha_so_a_conta_e_a_fila_segue(medido):
+    pagina = Pagina({"123456": erro_500(), "234567": ok("2")})
+    lidos = S.ler_contas(Cliente(pagina, ["12.345-6", "23.456-7"]), ["12.345-6", "23.456-7"],
+                         agora=lambda: AGORA, log=lambda _m: None)
+    assert "HTTP 500" in lidos[0].motivo and lidos[1].saldo == D("2.00")
+
+
+def test_duas_contas_seguidas_com_erro_500_param_a_fila(medido):
+    """23/11/2026: o Sicoob trocou o endereço e o antigo passou a dar 500 em
+    TODAS as contas; o app trocava de conta 20 vezes à toa. Agora para na 2ª
+    e diz o que fazer."""
+    contas = ["12.345-6", "23.456-7", "34.567-8", "45.678-9"]
+    pagina = Pagina({"123456": erro_500(), "234567": erro_500(),
+                     "345678": ok("3"), "456789": ok("4")})
+    log = []
+    lidos = S.ler_contas(Cliente(pagina, contas), contas, agora=lambda: AGORA, log=log.append)
+    assert len(lidos) == 4 and not any(l.ok for l in lidos)
+    assert len(pagina.pedidos) == 2                       # nem tentou a 3ª e a 4ª
+    assert all(l.motivo == S.SERVIDOR_FALHOU for l in lidos[1:])
+    assert S.SERVIDOR_FALHOU in log
+
+
+def test_erro_500_alternado_nao_para_a_fila(medido):
+    contas = ["12.345-6", "23.456-7", "34.567-8"]
+    pagina = Pagina({"123456": erro_500(), "234567": ok("2"), "345678": erro_500()})
+    lidos = S.ler_contas(Cliente(pagina, contas), contas, agora=lambda: AGORA, log=lambda _m: None)
+    assert [l.ok for l in lidos] == [False, True, False]
+    assert len(pagina.pedidos) == 3
