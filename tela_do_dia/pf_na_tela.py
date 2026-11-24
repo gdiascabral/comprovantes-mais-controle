@@ -137,8 +137,9 @@ class AbaPF:
         if self.pessoas:
             ttk.Checkbutton(c2, variable=self.var_reembolso,
                             text="Reembolso para " + " e ".join(self.pessoas)).pack(anchor="w")
-            tela._ajuda(c2, "Desmarcada, os reembolsos deles vão para uma parte recolhida "
-                            "no fim do HTML, de onde dá para pagar algum mesmo assim.")
+            tela._ajuda(c2, "Os reembolsos deles vão sempre no HTML: esta caixa só diz "
+                            "como ele abre. Lá no topo há um botão que os põe na lista "
+                            "ou na parte recolhida, sem gerar de novo.")
         self.regras = html_pf.carregar_regras()
         fora = self.regras.cc_fora + self.regras.favorecidos_fora
         tela._ajuda(c2, ("Saem direto (regras_pf.json): " + ", ".join(fora)) if fora else
@@ -343,7 +344,9 @@ class AbaPF:
                 contas_lidas=escolhidas)
             log(f"\nPF: {gerado.entram} pagamento(s), R$ {gerado.total:,.2f}".replace(",", "X")
                 .replace(".", ",").replace("X", ".")
-                + f" · {gerado.fora} fora · {gerado.reembolsos} reembolso(s) recolhido(s)")
+                + f" · {gerado.fora} fora · {gerado.reembolsos} reembolso(s) dos sócios "
+                + ("na lista" if reembolso_ligado else "recolhido(s)")
+                + " (botão no topo do HTML troca)")
             log(f"  HTML: {str(gerado.caminho).replace(os.sep, '/')}")
             self.q.put(("gerado", gerado.caminho))
             total = time.time() - comeco

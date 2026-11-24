@@ -30,7 +30,7 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from . import html_pagamentos, nivel, ocr_boleto, qr_pix
@@ -118,7 +118,7 @@ def _e_cartao_ou_link(r: dict) -> bool:
 class Separacao:
     entram: list            # [(conta, registro)]
     fora: list              # [(conta, registro, motivo)]
-    reembolsos: list        # [(conta, registro, pessoa)] — fora pela caixa desligada
+    reembolsos: list        # [(conta, registro, pessoa)] — dos sócios, com a caixa desligada
 
 
 def separar(resultado, regras_pf: RegrasPF, pessoas=(), reembolso_ligado=True) -> Separacao:
@@ -396,7 +396,7 @@ def chave_da_marca(r: dict) -> str:
     return ident
 
 
-def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False) -> str:
+def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False, ordem: int = 0) -> str:
     r = it.registro
     venc = str(r.get("vencimento") or "")[:10]
     vencido = bool(venc) and venc < hoje.isoformat()
@@ -420,7 +420,7 @@ def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False) -> str:
     quem = (f"{r.get('reembolso_nome')} (reembolso de {r.get('favorecido')})"
             if r.get("reembolso") and r.get("reembolso_nome") else r.get("favorecido"))
     return f'''
-<article class="card{' atencao' if it.alertas else ''}{' reemb' if recolhido else ''}" data-id="{_e(chave_da_marca(r))}" data-lanc="{_e(r.get('id'))}" data-parte="{_e(r.get('parte') or '')}" data-tpid="{_e(it.titulo_id)}" data-forn="{_e(r.get('favorecido'))}" data-venc="{_e(venc)}" data-centavos="{round(float(r.get('valor') or 0) * 100)}">
+<article class="card{' atencao' if it.alertas else ''}{' reemb' if recolhido else ''}" data-id="{_e(chave_da_marca(r))}" data-lanc="{_e(r.get('id'))}" data-parte="{_e(r.get('parte') or '')}" data-tpid="{_e(it.titulo_id)}" data-forn="{_e(r.get('favorecido'))}" data-venc="{_e(venc)}" data-centavos="{round(float(r.get('valor') or 0) * 100)}" data-ordem="{ordem or k}" data-grupo="{_e(it.grupo)}" data-conta="{_e(it.conta)}" data-atencao="{1 if it.alertas else 0}">
   <header>
     <span class="num">{k}</span>
     <span class="grupo g-{it.grupo.lower()}">{it.grupo}</span>
@@ -454,15 +454,33 @@ def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False) -> str:
 
 
 def pagina(itens_, fora, reembolsos, contas_pagadoras, ini: date, fim: date,
-           nome_arquivo: str, contas_lidas=(), hoje: date | None = None) -> str:
-    """O HTML inteiro. `reembolsos` = [Item] tirados pela caixa: vão numa seção
-    recolhida, cada um com o mesmo "já paguei" (o dono pode pagar um só).
+           nome_arquivo: str, contas_lidas=(), hoje: date | None = None, *,
+           reembolsos_na_lista: bool = False, pessoas=()) -> str:
+    """O HTML inteiro. `reembolsos` = [Item] dos sócios: vão SEMPRE no HTML, e
+    o botão do topo os põe na lista ou na seção recolhida sem gerar de novo
+    (dono, 24/11/2026: "pra não precisar gerar 2 HTML"). `reembolsos_na_lista`
+    é só como a página abre. Recolhido, cada um tem o mesmo "já paguei".
     `contas_pagadoras` = [{"id", "nome", "saldo"}] para o "já paguei"."""
     hoje = hoje or date.today()
-    cards = "".join(_cartao(k, it, hoje) for k, it in enumerate(itens_, 1))
-    cards_re = "".join(_cartao(k, it, hoje, recolhido=True)
-                       for k, it in enumerate(reembolsos, len(itens_) + 1))
+    # Uma ordem só para as duas listas: o reembolso posto de volta entra no
+    # lugar em que estaria se tivesse vindo junto (boleto antes de Pix, valor).
+    posicao = {id(it): n for n, it in enumerate(sorted(list(itens_) + list(reembolsos),
+                                                       key=_ordem), 1)}
+    na_lista = sorted(list(itens_) + (list(reembolsos) if reembolsos_na_lista else []),
+                      key=_ordem)
+    recolhidos = [] if reembolsos_na_lista else list(reembolsos)
+    sao_re = {id(it) for it in reembolsos}
+    cards = "".join(_cartao(k, it, hoje, recolhido=id(it) in sao_re, ordem=posicao[id(it)])
+                    for k, it in enumerate(na_lista, 1))
+    cards_re = "".join(_cartao(k, it, hoje, recolhido=True, ordem=posicao[id(it)])
+                       for k, it in enumerate(recolhidos, len(na_lista) + 1))
+    itens_ = na_lista
+    nomes = " e ".join(str(p) for p in pessoas if str(p).strip()) or "dos sócios"
     tot = lambda xs: sum(float(i.registro.get("valor") or 0) for i in xs)  # noqa: E731
+    botao_re = (f'<label class="togre"><input type="checkbox" id="togRe"'
+                f'{" checked" if reembolsos_na_lista else ""}> Reembolsos para {_e(nomes)} '
+                f'na lista ({len(reembolsos)} · R$ {_brl(tot(reembolsos))})</label>'
+                if reembolsos else "")
     bol = [i for i in itens_ if i.grupo == "BOLETO"]
     pix = [i for i in itens_ if i.grupo == "PIX"]
     por_conta = {}
@@ -488,6 +506,8 @@ def pagina(itens_, fora, reembolsos, contas_pagadoras, ini: date, fim: date,
             .replace("__NA__", str(sum(1 for i in itens_ if i.alertas)))
             .replace("__POR_CONTA__", resumo_contas)
             .replace("__CARDS__", cards)
+            .replace("__BOTAO_RE__", botao_re)
+            .replace("__ESCONDE_RE__", " hidden" if not recolhidos else "")
             .replace("__NR__", str(len(reembolsos))).replace("__TR__", _brl(tot(reembolsos)))
             .replace("__CARDS_RE__", cards_re)
             .replace("__NF__", str(len(fora))).replace("__FORA__", fora_html)
@@ -495,6 +515,7 @@ def pagina(itens_, fora, reembolsos, contas_pagadoras, ini: date, fim: date,
             .replace("__CONTAS__", json.dumps(
                 [{"id": c.get("id"), "nome": c.get("nome"), "saldo": c.get("saldo"),
                   "pf": c in pf} for c in contas_pagadoras], ensure_ascii=False))
+            .replace("__GERADO__", json.dumps(datetime.now().isoformat(timespec="microseconds")))
             .replace("__ARQUIVO__", json.dumps(nome_arquivo)))
 
 
@@ -514,8 +535,11 @@ class Gerado:
 def gravar(resultado, lancamentos, pasta: Path, ini: date, fim: date, *, regras_pf: RegrasPF,
            pessoas=(), reembolso_ligado=True, contas_pagadoras=(), contas_lidas=(),
            hoje: date | None = None) -> Gerado:
-    """Separa, desenha e grava `pagamentos_pf_<ini>_a_<fim>.html` em `pasta`."""
-    sep = separar(resultado, regras_pf, pessoas, reembolso_ligado)
+    """Separa, desenha e grava `pagamentos_pf_<ini>_a_<fim>.html` em `pasta`.
+
+    Os reembolsos dos `pessoas` vão SEMPRE no HTML, marcados; `reembolso_ligado`
+    só diz se a página abre com eles na lista (o botão do topo troca)."""
+    sep = separar(resultado, regras_pf, pessoas, reembolso_ligado=False)
     titulos = {str(i.get("id")): str(i.get("tradePayableId") or "") for i in lancamentos or ()}
     originais = {str(i.get("id")): str(i.get("paidToBankAccount") or "")
                  for i in lancamentos or ()}
@@ -535,8 +559,11 @@ def gravar(resultado, lancamentos, pasta: Path, ini: date, fim: date, *, regras_
     pasta.mkdir(parents=True, exist_ok=True)
     caminho = pasta / nome
     caminho.write_text(pagina(lista, sep.fora, recolhidos, list(contas_pagadoras), ini, fim,
-                              nome, contas_lidas, hoje), encoding="utf-8")
-    return Gerado(caminho, len(lista), sum(float(i.registro.get("valor") or 0) for i in lista),
+                              nome, contas_lidas, hoje, reembolsos_na_lista=reembolso_ligado,
+                              pessoas=pessoas), encoding="utf-8")
+    abertos = lista + (recolhidos if reembolso_ligado else [])
+    return Gerado(caminho, len(abertos),
+                  sum(float(i.registro.get("valor") or 0) for i in abertos),
                   len(sep.fora), len(recolhidos))
 
 
@@ -571,6 +598,8 @@ header { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:10p
 .parcela { font-weight:700; margin:2px 0 } .obs-parcela { margin:2px 0 }
 .motivos { font-size:.92em; padding-left:18px; margin:4px 0 }
 .tagre { background:#f5f3ff; color:#6d28d9 }
+.togre { display:inline-flex; gap:8px; align-items:center; background:#f5f3ff; color:#6d28d9; border:1px solid #ddd6fe; border-radius:10px; padding:8px 12px; margin:0 0 12px; font-weight:600; cursor:pointer }
+.togre input { width:18px; height:18px }
 .pago { margin-left:auto; font-size:14px; cursor:pointer }
 .pela { font-size:12px; color:var(--ok); font-weight:600 }
 #modal { position:fixed; inset:0; background:rgba(17,24,39,.45); display:none; align-items:center; justify-content:center; z-index:60; padding:16px }
@@ -616,16 +645,17 @@ details.conferir > summary { color:var(--at) }
 <h1>Pagamentos PF e Moura Dantas</h1>
 <p class="sub">Vencimentos de __PERIODO__ em aberto no Mais Controle. Contas lidas: __CONTAS_LIDAS__. Boletos do maior para o menor, depois Pix. Escaneie pelo celular; no Pix montado pela chave, confira o nome que o banco mostra antes de confirmar.</p>
 <div class="resumo">
-  <div>Boletos<b>__NB__ · R$ __TB__</b></div>
-  <div>Pix<b>__NP__ · R$ __TP__</b></div>
-  <div>Total<b>__NT__ · R$ __TT__</b></div>
-  <div>Com atenção<b>__NA__</b></div>
+  <div>Boletos<b id="rBol">__NB__ · R$ __TB__</b></div>
+  <div>Pix<b id="rPix">__NP__ · R$ __TP__</b></div>
+  <div>Total<b id="rTot">__NT__ · R$ __TT__</b></div>
+  <div>Com atenção<b id="rAt">__NA__</b></div>
   <div>Marcados como pagos<b id="pagos">0 · R$ 0,00</b></div>
   <div class="baixas">Para a baixa no ERP:<button type="button" id="exportar">Baixar lista das baixas</button><button type="button" id="copiarBaixas">Copiar lista</button></div>
 </div>
-<ul class="porconta">__POR_CONTA__</ul>
-__CARDS__
-<details id="reembolsos"><summary>Reembolsos dos sócios fora deste dia (__NR__ · R$ __TR__) — abra para pagar algum mesmo assim</summary>
+__BOTAO_RE__
+<ul class="porconta" id="porconta">__POR_CONTA__</ul>
+<div id="lista">__CARDS__</div>
+<details id="reembolsos"__ESCONDE_RE__><summary>Reembolsos dos sócios fora da lista (__NR__ · R$ __TR__) — abra para pagar algum mesmo assim, ou ligue o botão no topo</summary>
 __CARDS_RE__
 </details>
 <details><summary>Não entraram (__NF__)</summary><ul>__FORA__</ul></details>
@@ -743,5 +773,50 @@ document.addEventListener("click", ev => {
   if (ev.target.closest("#zoom")) Z.className = "";
 });
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") { Z.className = ""; if (M.className) fecharModal(); } });
+// Reembolsos dos sócios: o botão do topo os põe na lista ou na parte
+// recolhida, sem gerar outro HTML (dono, 24/11/2026). A marca de "já paguei"
+// é pela chave do lançamento, então mover o cartão não mexe nela.
+function resumo() {
+  const lista = document.getElementById("lista");
+  let nb = 0, cb = 0, np = 0, cp = 0, na = 0; const porConta = {};
+  lista.querySelectorAll(".card").forEach(card => {
+    const c = +card.dataset.centavos;
+    if (card.dataset.grupo === "BOLETO") { nb++; cb += c; } else { np++; cp += c; }
+    if (card.dataset.atencao === "1") na++;
+    const pc = porConta[card.dataset.conta] || (porConta[card.dataset.conta] = [0, 0]);
+    pc[0]++; pc[1] += c;
+  });
+  document.getElementById("rBol").textContent = nb + " · R$ " + brl(cb);
+  document.getElementById("rPix").textContent = np + " · R$ " + brl(cp);
+  document.getElementById("rTot").textContent = (nb + np) + " · R$ " + brl(cb + cp);
+  document.getElementById("rAt").textContent = na;
+  const ul = document.getElementById("porconta"); ul.textContent = "";
+  Object.keys(porConta).sort().forEach(k => { const li = document.createElement("li");
+    li.textContent = k + ": " + porConta[k][0] + " · R$ " + brl(porConta[k][1]); ul.appendChild(li); });
+}
+function aplicarReembolsos(naLista) {
+  const lista = document.getElementById("lista"), det = document.getElementById("reembolsos");
+  document.querySelectorAll(".card.reemb").forEach(c => (naLista ? lista : det).appendChild(c));
+  const porOrdem = (a, b) => +a.dataset.ordem - +b.dataset.ordem;
+  [...lista.querySelectorAll(".card")].sort(porOrdem).forEach(c => lista.appendChild(c));
+  [...det.querySelectorAll(".card")].sort(porOrdem).forEach(c => det.appendChild(c));
+  let n = 0;
+  document.querySelectorAll("#lista .card, #reembolsos .card").forEach(c => c.querySelector(".num").textContent = ++n);
+  det.hidden = !det.querySelector(".card");
+  resumo();
+}
+const TOG = document.getElementById("togRe");
+if (TOG) {
+  // A escolha vale só para ESTA geração do arquivo: recarregar a página a
+  // mantém, gerar de novo abre como a caixa do app mandou (revisão de
+  // dinheiro, 24/11/2026 — senão o total mostraria o que a tela diz que saiu).
+  const KR = K + ":reemb:" + __ARQUIVO__ + ":" + __GERADO__;
+  try { const v = localStorage.getItem(KR); if (v !== null) TOG.checked = v === "1"; } catch (e) {}
+  TOG.addEventListener("change", () => {
+    try { localStorage.setItem(KR, TOG.checked ? "1" : "0"); } catch (e) {}
+    aplicarReembolsos(TOG.checked);
+  });
+  aplicarReembolsos(TOG.checked);
+}
 contar();
 </script></body></html>'''
