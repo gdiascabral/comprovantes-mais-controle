@@ -191,3 +191,55 @@ def test_marcadas_depois_mantem_a_escolha_e_marca_conta_nova():
     assert marcadas_depois(nomes, ["PF A", "PF B", "PF SUMIU"], ["PF A", "PF SUMIU"]) == \
         ["PF A", "PF NOVA"]
     assert marcadas_depois(nomes, [], []) == nomes
+
+
+# ---- Reembolsos dos sócios num HTML só (dono, 24/11/2026) -----------------
+def _com_reembolso(tmp_path, ligado):
+    res = Resultado(contas={"PF": [
+        reg(id="L1", valor=100.0, dados=f"PIX CPF: {CPF_OK}"),
+        reg(id="R1", valor=500.0, dados=f"PIX CPF: {CPF_OK}", reembolso=True,
+            reembolso_para="FULANO", reembolso_nome="FULANO DE TAL")]}, omitidos=[])
+    return html_pf.gravar(res, [], tmp_path / ("com" if ligado else "sem"),
+                          date(2026, 11, 1), date(2026, 11, 12), regras_pf=html_pf.RegrasPF(),
+                          pessoas=["FULANO DE TAL"], reembolso_ligado=ligado,
+                          hoje=date(2026, 11, 12))
+
+
+def _partes(texto):
+    lista = texto.split('<div id="lista">', 1)[1].split('<details id="reembolsos"', 1)[0]
+    recolhida = texto.split('<details id="reembolsos"', 1)[1].split("</details>", 1)[0]
+    return lista, recolhida
+
+
+def test_reembolso_vai_sempre_no_html_e_a_caixa_so_diz_como_abre(tmp_path):
+    sem, com = _com_reembolso(tmp_path, False), _com_reembolso(tmp_path, True)
+    t_sem, t_com = (g.caminho.read_text(encoding="utf-8") for g in (sem, com))
+    for t in (t_sem, t_com):
+        assert 'id="togRe"' in t and "Reembolsos para FULANO DE TAL na lista" in t
+        assert t.count('data-lanc="R1"') == 1 and "__" not in t.replace("__proto__", "")
+    lista, recolhida = _partes(t_sem)
+    assert 'data-lanc="R1"' in recolhida and 'data-lanc="R1"' not in lista
+    assert 'id="togRe">' in t_sem and "togRe\" checked" not in t_sem
+    lista, recolhida = _partes(t_com)
+    assert 'data-lanc="R1"' in lista and 'data-lanc="R1"' not in recolhida
+    assert 'id="togRe" checked' in t_com and '<details id="reembolsos" hidden>' in t_com
+    assert (sem.entram, sem.reembolsos, round(sem.total, 2)) == (1, 1, 100.0)
+    assert (com.entram, com.reembolsos, round(com.total, 2)) == (2, 1, 600.0)
+
+
+def test_reembolso_tem_o_lugar_dele_na_ordem_da_lista(tmp_path):
+    """O botão devolve o cartão ao lugar em que estaria (maior valor primeiro)."""
+    t = _com_reembolso(tmp_path, False).caminho.read_text(encoding="utf-8")
+    import re
+    ordem = dict(re.findall(r'data-lanc="(\w+)"[^>]*data-ordem="(\d+)"', t))
+    assert ordem == {"R1": "1", "L1": "2"}
+    assert "data-grupo=" in t and 'data-conta="PF"' in t
+
+
+def test_sem_reembolso_nao_ha_botao(tmp_path):
+    res = Resultado(contas={"PF": [reg(id="L1", dados=f"PIX CPF: {CPF_OK}")]}, omitidos=[])
+    g = html_pf.gravar(res, [], tmp_path, date(2026, 11, 1), date(2026, 11, 12),
+                       regras_pf=html_pf.RegrasPF(), pessoas=["FULANO DE TAL"],
+                       reembolso_ligado=False, hoje=date(2026, 11, 12))
+    t = g.caminho.read_text(encoding="utf-8")
+    assert 'id="togRe"' not in t and '<details id="reembolsos" hidden>' in t

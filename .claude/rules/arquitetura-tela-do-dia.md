@@ -88,9 +88,16 @@ barra de andamento (a doca) são os mesmos, e o Parar também (`_parar`).
   fora do repositório): pedaço do centro de custo (`cc_fora`) ou de quem recebe
   (`favorecidos_fora`); e todo cartão ou link. Vão para "Não entraram" com o
   motivo, junto com os omitidos da apuração.
-- **Reembolso dos sócios**: a caixa "Reembolso para <confirmar_antes>", como
-  nas PJ. Desligada, as linhas deles vão para uma seção RECOLHIDA do HTML, com
-  o mesmo «já paguei» (pagar um mesmo assim é abrir e marcar).
+- **Reembolso dos sócios**: as linhas deles vão SEMPRE no HTML (dono,
+  24/11/2026: "pra não precisar gerar 2 HTML"). No topo da página, o botão
+  «Reembolsos para <confirmar_antes> na lista» os põe na lista (na ordem em
+  que estariam, `data-ordem`) ou na seção RECOLHIDA, e refaz no navegador os
+  totais, a lista por conta e a numeração. A caixa do cartão 2 só diz como o
+  HTML ABRE; a escolha feita no botão fica no navegador por arquivo
+  (`pagamentos_pf:reemb:<arquivo>`). O «já paguei» é pela chave da linha,
+  então mover o cartão não mexe na marca, e a lista das baixas leva todo
+  cartão marcado, esteja onde estiver. Testes:
+  `tests/test_html_pf.py::test_reembolso_vai_sempre_no_html_e_a_caixa_so_diz_como_abre`.
 - **HTML** `pagamentos_pf_<de>_a_<até>.html`: código de barras (ITF) e o QR do
   boleto; Pix pelo copia-e-cola que veio pronto ou QR montado pela chave com a
   descrição das PJ dentro (`html_pf.descricao_do_pix`); mesmo código em dois

@@ -828,8 +828,9 @@ paths:
   parágrafo.
 - `pagamentos_dia/html_pf.py` — **o HTML das contas PF e Moura Dantas** (aba PF
   da tela do dia, 12/11/2026; ver `arquitetura-tela-do-dia.md`). Puro: separa
-  o `Resultado` (saem direto pelo `regras_pf.json`, cartão/link, reembolso dos
-  sócios com a caixa desligada), monta os códigos (ITF do boleto, QR que veio
+  o `Resultado` (saem direto pelo `regras_pf.json`, cartão/link; os reembolsos
+  dos sócios vão sempre no HTML, e um botão no topo os põe na lista ou na parte
+  recolhida — 24/11/2026), monta os códigos (ITF do boleto, QR que veio
   pronto, ou QR Pix estático pela chave com a descrição no sub-campo 02 do
   campo 26, no máximo 99 no campo — `limite_da_descricao`) e desenha a página.
   `montar_registros(contas_escolhidas=)` / `Entradas.contas_escolhidas` /
