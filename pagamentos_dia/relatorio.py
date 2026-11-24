@@ -1015,7 +1015,14 @@ _REEMBOLSO = re.compile(r"REEMBOLSO", re.I)
 _UTILIDADES = re.compile(
     r"sanesc|saneago|equatorial|enel|celg|cemig|copasa|caesb|energisa|"
     r"neoenergia|light|sabesp|corsan|compesa|cagece|embasa", re.I)
-_UC = re.compile(r"\bUC\s*[:\-]?\s*(\d{6,15})\b", re.I)
+#: 5 dígitos é a Sanesc ("UC 12345", o "Cadastro 000012345" do boletim); até
+#: 24/11/2026 a regra pedia 6+ e toda linha da Sanesc saía "UC ?" (NÃO LI).
+_UC = re.compile(r"\bUC\s*[:\-]?\s*(\d{5,15})\b", re.I)
+#: Abaixo disto a UC é curta demais para ser procurada na sopa de dígitos do
+#: anexo (5 dígitos aparecem por acaso em CEP, lote, protocolo): tem de vir
+#: depois de um rótulo de cadastro e SOZINHA, com no máximo zeros à esquerda.
+_UC_LONGA = 10
+_ROTULO_UC = r"(?:cadastro|matr[ií]cula|inscri\S*|\bUC)\W{0,20}"
 
 
 def eh_utilidade(item: dict) -> bool:
@@ -1029,6 +1036,22 @@ def unidade_consumidora(item: dict) -> str:
 
 def comentario_do(overview) -> str:
     return ((overview or {}).get("comment") or "").strip()
+
+
+_SO_A_LINHA = re.compile(r"^\s*linha\s+digit[aá]vel\s*:?\s*([\d\s.\-]+)$", re.I)
+
+
+def observacao_relevante(coment: str, linha: str) -> str:
+    """A observação, ou "" quando ela só repete a linha digitável que o
+    próprio documento já traz (o robô da água e energia escreve
+    "Linha digitavel: ..." em todo lançamento): mostrá-la em vermelho em
+    toda linha ensinava a não ler a coluna. Linha diferente ou qualquer
+    texto a mais continua aparecendo."""
+    coment = (coment or "").strip()
+    m = _SO_A_LINHA.match(coment)
+    if m and linha and re.sub(r"\D", "", m.group(1)) == re.sub(r"\D", "", linha):
+        return ""
+    return coment
 
 
 def achar_oc(item: dict, files, comentario: str = "", overview=None) -> str:
@@ -1806,16 +1829,24 @@ def _conferir_endereco(item: dict, textos) -> tuple[str, bool]:
     return f"endereço ? ({', '.join(faltando)} não aparece)", False
 
 
-def _conferir_utilidade(item, files, textos) -> tuple[list[str], bool]:
+def _conferir_utilidade(item, files, textos, provas=None) -> tuple[list[str], bool]:
     """Conta de água/luz: o que identifica é a UC e o endereço, não a 'NF'.
-    A UC aparece no NOME do anexo (`000451784501210` para `UC 451784501210`)."""
+    A UC aparece no NOME do anexo (`000451784501210` para `UC 451784501210`)
+    ou no texto dele (Sanesc: "Cadastro 000012345"). `provas`: só os anexos."""
+    provas = textos if provas is None else provas
     partes, divergiu = [], False
     uc = unidade_consumidora(item)
     if not uc:
         partes.append("UC ? (não informada na descrição)")
     else:
-        onde = " ".join([f.get("filename") or "" for f in files] + list(textos))
-        if uc in re.sub(r"\D", "", onde) or uc in onde:
+        # Só o nome e o texto dos ANEXOS: a observação do lançamento é o que
+        # o lançamento diz de si mesmo e não prova a UC.
+        onde = " ".join([f.get("filename") or "" for f in files] + list(provas))
+        if len(uc) >= _UC_LONGA:
+            achou = uc in re.sub(r"\D", "", onde) or uc in onde
+        else:
+            achou = re.search(rf"{_ROTULO_UC}(?<!\d)0*{uc}(?!\d)", onde, re.I)
+        if achou:
             partes.append(f"UC {uc} ✓")
         else:
             partes.append(f"UC DIVERGE: {uc} não aparece no anexo")
@@ -1865,7 +1896,7 @@ def conferir_documento(item: dict, files, textos, overview=None,
     provas = textos if textos_valor is None else [t for t in textos_valor if t]
 
     if eh_utilidade(item):
-        partes, divergiu = _conferir_utilidade(item, files, textos)
+        partes, divergiu = _conferir_utilidade(item, files, textos, provas)
         if textos:
             partes.append("valor ✓" if _valor_nos_textos(valor_do_item(item), provas)
                           else "valor ?")
@@ -2524,7 +2555,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if olhar:
             avisos.append(f"PAGAR À MÃO — {olhar}.")
 
-        if coment:
+        if observacao_relevante(coment, linha_doc):
             avisos.append(f"Observação do lançamento: {coment[:220]}")
         obs = " · ".join(filter(None, [obs] + avisos))
 

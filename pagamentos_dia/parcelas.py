@@ -68,7 +68,9 @@ def anotar(resultado, selecionados, parcelas_erp, overviews):
             item = por_id.get(str(r.get("id") or "").split("#")[0])
             if item is None:
                 continue
-            obs = relatorio.comentario_do((overviews or {}).get(str(item.get("id"))))
+            obs = relatorio.observacao_relevante(
+                relatorio.comentario_do((overviews or {}).get(str(item.get("id")))),
+                r.get("linha_da_guia") or r.get("dados") or "")
             if obs:
                 r["obs_parcela"] = obs
             total = total_do_item(item)
