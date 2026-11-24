@@ -30,7 +30,7 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from . import html_pagamentos, nivel, ocr_boleto, qr_pix
@@ -515,6 +515,7 @@ def pagina(itens_, fora, reembolsos, contas_pagadoras, ini: date, fim: date,
             .replace("__CONTAS__", json.dumps(
                 [{"id": c.get("id"), "nome": c.get("nome"), "saldo": c.get("saldo"),
                   "pf": c in pf} for c in contas_pagadoras], ensure_ascii=False))
+            .replace("__GERADO__", json.dumps(datetime.now().isoformat(timespec="microseconds")))
             .replace("__ARQUIVO__", json.dumps(nome_arquivo)))
 
 
@@ -806,7 +807,10 @@ function aplicarReembolsos(naLista) {
 }
 const TOG = document.getElementById("togRe");
 if (TOG) {
-  const KR = K + ":reemb:" + __ARQUIVO__;
+  // A escolha vale só para ESTA geração do arquivo: recarregar a página a
+  // mantém, gerar de novo abre como a caixa do app mandou (revisão de
+  // dinheiro, 24/11/2026 — senão o total mostraria o que a tela diz que saiu).
+  const KR = K + ":reemb:" + __ARQUIVO__ + ":" + __GERADO__;
   try { const v = localStorage.getItem(KR); if (v !== null) TOG.checked = v === "1"; } catch (e) {}
   TOG.addEventListener("change", () => {
     try { localStorage.setItem(KR, TOG.checked ? "1" : "0"); } catch (e) {}

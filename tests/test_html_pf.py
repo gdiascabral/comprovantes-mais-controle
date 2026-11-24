@@ -243,3 +243,13 @@ def test_sem_reembolso_nao_ha_botao(tmp_path):
                        reembolso_ligado=False, hoje=date(2026, 11, 12))
     t = g.caminho.read_text(encoding="utf-8")
     assert 'id="togRe"' not in t and '<details id="reembolsos" hidden>' in t
+
+
+def test_escolha_do_botao_vale_so_para_esta_geracao(tmp_path):
+    """Gerar de novo não herda o botão do HTML anterior: abre como a caixa manda."""
+    a = _com_reembolso(tmp_path, False).caminho.read_text(encoding="utf-8")
+    b = _com_reembolso(tmp_path, False).caminho.read_text(encoding="utf-8")
+    import re
+    chave = re.compile(r'":reemb:" \+ "[^"]+" \+ ":" \+ "([^"]+)"')
+    assert chave.search(a) and chave.search(b)
+    assert chave.search(a).group(1) != chave.search(b).group(1)

@@ -93,8 +93,9 @@ barra de andamento (a doca) são os mesmos, e o Parar também (`_parar`).
   «Reembolsos para <confirmar_antes> na lista» os põe na lista (na ordem em
   que estariam, `data-ordem`) ou na seção RECOLHIDA, e refaz no navegador os
   totais, a lista por conta e a numeração. A caixa do cartão 2 só diz como o
-  HTML ABRE; a escolha feita no botão fica no navegador por arquivo
-  (`pagamentos_pf:reemb:<arquivo>`). O «já paguei» é pela chave da linha,
+  HTML ABRE; a escolha feita no botão fica no navegador só para AQUELA
+  geração (`pagamentos_pf:reemb:<arquivo>:<hora da geração>`): recarregar
+  mantém, gerar de novo abre como a caixa manda (revisão de dinheiro). O «já paguei» é pela chave da linha,
   então mover o cartão não mexe na marca, e a lista das baixas leva todo
   cartão marcado, esteja onde estiver. Testes:
   `tests/test_html_pf.py::test_reembolso_vai_sempre_no_html_e_a_caixa_so_diz_como_abre`.
