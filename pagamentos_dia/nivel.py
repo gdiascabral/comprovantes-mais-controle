@@ -29,6 +29,16 @@ REEMBOLSO_DE_SOCIO_PODE_PAGAR = True
 #: Decisão 6 da spec: observação em título de parcela única só aparece.
 OBS_DE_PARCELA_UNICA_LEVA_A_OLHE = False
 
+#: Quem recebe uma conta de arrecadação está DENTRO do código de barras:
+#: posição 2 = segmento (2 = saneamento) e 16–19 = código da empresa
+#: (Febraban). O dígito verificador fecha, então não é leitura de OCR.
+#: Sanesc = segmento 2, empresa 3742: conferido em 3 boletins reais com o CNPJ
+#: dela impresso (24/11/2026). Só entra aqui código conferido em documento.
+#: Prova a EMPRESA, não a casa: o código não traz a UC (traz vencimento e
+#: código de baixa). Sem a UC conferida a linha vai para "Olhe".
+CONVENIO_DE = {("2", "3742"): "sanesc"}
+MOTIVO_UC_NAO_CONFERIDA = "UC não conferida no boleto: confira se a conta é da casa certa"
+
 _STATUS_NAO_LI = ("anexo não lido", "sem dados de pgto", "QR Code sem valor")
 _PREFIXO = re.compile(r"^ATENÇÃO\s+—\s+")
 _CENTAVO = Decimal("0.01")
@@ -91,6 +101,20 @@ def _valor_pelo_codigo(r: dict) -> bool:
     return False
 
 
+def _convenio_prova_quem_recebe(r: dict) -> bool:
+    """O código de barras de arrecadação é da empresa que o lançamento diz
+    pagar (`CONVENIO_DE`), com a linha fechando o dígito verificador."""
+    tipo, dados = str(r.get("tipo") or ""), str(r.get("dados") or "")
+    if not tipo.upper().startswith("BOLETO") or not ocr_boleto.eh_arrecadacao(dados):
+        return False
+    barra = ocr_boleto.codigo_de_barras(dados)
+    if len(barra) != 44:
+        return False
+    nome = CONVENIO_DE.get((barra[1], barra[15:19]))
+    favorecido = re.sub(r"[^a-z]", "", str(r.get("favorecido") or "").lower())
+    return bool(nome) and nome in favorecido
+
+
 def conferido(r: dict) -> dict:
     estado = {"valor": NAO_CONFERIDO, "quem recebe": NAO_CONFERIDO}
     for p in _pecas(r.get("conferencia")):
@@ -126,6 +150,10 @@ def conferido(r: dict) -> dict:
             _marcar(estado, "endereço", NAO_CONFERIDO)
     if _valor_pelo_codigo(r):
         _marcar(estado, "valor", BATE)
+    if _convenio_prova_quem_recebe(r):
+        _marcar(estado, "quem recebe", BATE)
+        if not any(re.match(r"UC \S+ ✓", p) for p in _pecas(r.get("conferencia"))):
+            _marcar(estado, "conta da casa", NAO_CONFERIDO)
     if REEMBOLSO_DE_SOCIO_PODE_PAGAR and r.get("reembolso_socio"):
         # Só o sócio do cadastro: a chave é a dele, com o CPF fechando o DV
         # (`reembolso.socio_do_documento`). O aviso "PAGAR PARA" também sai
@@ -175,6 +203,8 @@ def nivel_da_linha(r: dict, *, bloqueio: str = "", vencido: bool = False) -> Niv
     for item, e in estado.items():
         if e == DIVERGE:
             olhe.append(f"{item} diverge")
+    if estado.get("conta da casa") == NAO_CONFERIDO:
+        olhe.append(MOTIVO_UC_NAO_CONFERIDA)
     if r.get("obs_parcela") and (total > 1 or OBS_DE_PARCELA_UNICA_LEVA_A_OLHE):
         olhe.append("a parcela tem observação: leia antes de pagar")
     nome = NAO_LI if nao_li else OLHE if olhe else PODE_PAGAR
