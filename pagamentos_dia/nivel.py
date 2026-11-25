@@ -45,7 +45,9 @@ MOTIVO_UC_NAO_CONFERIDA = "UC não conferida no boleto: confira se a conta é da
 _IA_UTILIZAVEL = (li.BATE, li.TOTAL_BATE_SOMA_NAO_FECHA, li.SEM_SEGUNDA_PROVA, li.DIVERGE)
 _IA_TIPO = {"recibo": "recibo", "pedido_de_balcao": "pedido de balcão",
             "comprovante_de_cartao": "comprovante de cartão", "nota_fiscal": "nota fiscal",
+            "comprovante_de_pagamento": "comprovante de pagamento",
             "boleto": "boleto", "outro": "outro papel"}
+MOTIVO_COMPROVANTE = "parece comprovante de pagamento: já foi pago?"
 
 _STATUS_NAO_LI = ("anexo não lido", "sem dados de pgto", "QR Code sem valor")
 _PREFIXO = re.compile(r"^ATENÇÃO\s+—\s+")
@@ -123,7 +125,7 @@ def _convenio_prova_quem_recebe(r: dict) -> bool:
     return bool(nome) and nome in favorecido
 
 
-def conferido(r: dict) -> dict:
+def conferido(r: dict, com_ia: bool = True) -> dict:
     estado = {"valor": NAO_CONFERIDO, "quem recebe": NAO_CONFERIDO}
     for p in _pecas(r.get("conferencia")):
         if p.startswith("valor ✓") and _total(r) <= 1:
@@ -162,8 +164,10 @@ def conferido(r: dict) -> dict:
         _marcar(estado, "quem recebe", BATE)
         if not any(re.match(r"UC \S+ ✓", p) for p in _pecas(r.get("conferencia"))):
             _marcar(estado, "conta da casa", NAO_CONFERIDO)
-    ia = r.get("leitura_ia") or {}
-    if ia.get("estado") == li.DIVERGE:
+    ia = (r.get("leitura_ia") or {}) if com_ia else {}
+    if ia.get("tipo_papel") == "comprovante_de_pagamento":
+        pass                       # comprovante de quem já pagou não prova o valor a pagar
+    elif ia.get("estado") == li.DIVERGE:
         _marcar(estado, "valor", DIVERGE)
     elif ia.get("estado") in _IA_UTILIZAVEL and _total(r) <= 1:
         # Só preenche o que está "não conferido", e não em título parcelado
@@ -209,6 +213,8 @@ def etiqueta_da_ia(r: dict) -> dict | None:
         return None
     if ia.get("falhou"):
         return {"titulo": "lido por IA: não respondeu", "linhas": list(ia.get("motivos") or [])}
+    if ia.get("pulado"):
+        return {"titulo": "lido por IA: não lido", "linhas": list(ia.get("motivos") or [])}
     partes = [_IA_TIPO.get(ia.get("tipo_papel"), "papel"),
               f"total R$ {_brl(ia['total_lido'])}" if ia.get("total_lido") else "total não lido",
               ia.get("estado") or ""]
@@ -219,6 +225,8 @@ def etiqueta_da_ia(r: dict) -> dict | None:
     linhas += [x for x in (ia.get("oc"), ia.get("endereco")) if x]
     if ia.get("duvidas"):
         linhas.append("a IA duvidou de: " + ", ".join(ia["duvidas"]))
+    if ia.get("nao_lidos") and int(ia.get("anexos") or 0) > 1:
+        linhas.append(f"{ia['nao_lidos']} anexo(s) não lido(s) pela IA")
     return {"titulo": "lido por IA: " + " · ".join(p for p in partes if p), "linhas": linhas}
 
 
@@ -241,12 +249,25 @@ def nivel_da_linha(r: dict, *, bloqueio: str = "", vencido: bool = False) -> Niv
     if estado["quem recebe"] == NAO_CONFERIDO:
         nao_li.append("quem recebe não conferido")
     ia = r.get("leitura_ia") or {}
-    if ia.get("falhou"):
-        nao_li.append("IA não respondeu")
-    elif ia and ia.get("estado") not in _IA_UTILIZAVEL:
-        nao_li.append("lido por IA: não conseguiu ler o documento")
-    elif ia:
-        olhe.append(motivo_da_ia(r))
+    if ia:
+        # A IA só pesa onde ela é a prova: linha cujo valor já está provado por
+        # outro anexo ou pelo código nunca piora por causa dela (revisão de
+        # dinheiro, 25/11/2026) — a não ser que diverja.
+        aberto = conferido(r, com_ia=False)["valor"] == NAO_CONFERIDO
+        diverge = ia.get("estado") == li.DIVERGE
+        if ia.get("tipo_papel") == "comprovante_de_pagamento":
+            olhe.append(MOTIVO_COMPROVANTE)
+        elif ia.get("falhou"):
+            if aberto:
+                nao_li.append("IA não respondeu")
+        elif ia.get("estado") not in _IA_UTILIZAVEL:
+            if aberto:
+                nao_li.append(f"IA não leu: {ia['motivos'][0]}" if ia.get("pulado") and ia.get("motivos")
+                              else "lido por IA: não conseguiu ler o documento")
+        elif aberto or diverge:
+            olhe.append(motivo_da_ia(r))
+        if (aberto or diverge) and ia.get("nao_lidos") and int(ia.get("anexos") or 0) > 1:
+            olhe.append(f"{ia['nao_lidos']} anexo(s) não lido(s) pela IA")
     if not status.startswith("APTO"):
         olhe.append(_sem_prefixo(status) or "sem situação")
     elif status.startswith("APTO* (reembolso)"):

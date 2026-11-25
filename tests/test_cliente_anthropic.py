@@ -93,3 +93,25 @@ def test_funciona_com_pedir_leitura():
     lida, uso = li.pedir_leitura(ClienteAnthropic(CHAVE, sessao=SessaoFalsa(corpo=corpo)),
                                  b"\xff\xd8x", "image/jpeg")
     assert lida["total"] == "10,00" and uso.saida == 2
+
+
+def test_prazo_padrao_e_45_segundos():
+    s = SessaoFalsa(corpo=_ok())
+    ClienteAnthropic(CHAVE, sessao=s).beta.messages.create(model="m")
+    assert s.chamadas[0]["timeout"] == 45
+
+
+@pytest.mark.parametrize("sessao", [
+    SessaoFalsa(erro=requests.Timeout("lento")), SessaoFalsa(erro=requests.ConnectionError("x")),
+    SessaoFalsa(status=429, corpo={"error": {"message": "limite"}}),
+    SessaoFalsa(status=500, texto="quebrou")])
+def test_falha_de_rede_prazo_ou_http_e_do_tipo_que_aciona_o_disjuntor(sessao):
+    with pytest.raises(li.FalhaDeRede):
+        ClienteAnthropic(CHAVE, sessao=sessao).beta.messages.create(model="m")
+
+
+def test_corpo_que_nao_e_json_nao_aciona_o_disjuntor():
+    with pytest.raises(li.LeituraFalhou) as e:
+        ClienteAnthropic(CHAVE, sessao=SessaoFalsa(status=200, texto="não é json")
+                         ).beta.messages.create(model="m")
+    assert not isinstance(e.value, li.FalhaDeRede)

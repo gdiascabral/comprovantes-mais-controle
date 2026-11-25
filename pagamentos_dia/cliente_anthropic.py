@@ -19,11 +19,11 @@ from types import SimpleNamespace
 
 import requests
 
-from .leitura_ia import LeituraFalhou
+from .leitura_ia import FalhaDeRede, LeituraFalhou
 
 URL = "https://api.anthropic.com/v1/messages"
 VERSAO_DA_API = "2023-06-01"
-PRAZO = 90          # segundos: leitura de imagem com raciocínio demora
+PRAZO = 45          # segundos (revisão de dinheiro de 25/11/2026: 90 era demais)
 
 
 def _objeto(no):
@@ -63,11 +63,11 @@ class ClienteAnthropic:
             r = self._sessao.post(self._url, headers=cab, timeout=self._timeout,
                                   data=json.dumps(corpo).encode("utf-8"))
         except requests.Timeout as e:
-            raise LeituraFalhou("a IA demorou demais para responder") from e
+            raise FalhaDeRede("a IA demorou demais para responder") from e
         except requests.RequestException as e:
-            raise LeituraFalhou(f"sem conexão com a IA ({type(e).__name__})") from e
+            raise FalhaDeRede(f"sem conexão com a IA ({type(e).__name__})") from e
         if not 200 <= int(r.status_code) < 300:
-            raise LeituraFalhou(f"a IA respondeu HTTP {r.status_code}: {self._motivo(r)}")
+            raise FalhaDeRede(f"a IA respondeu HTTP {r.status_code}: {self._motivo(r)}")
         try:
             return _objeto(json.loads(r.text))
         except ValueError as e:

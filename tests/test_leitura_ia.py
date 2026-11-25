@@ -218,3 +218,47 @@ def test_cache_estragado_recomeca_e_guarda_o_arquivo_ruim(tmp_path):
     p.write_text("{quebrado", encoding="utf-8")
     assert li.CacheLeituras(p).obter("x") is None
     assert (tmp_path / "leituras_ia.estragado").exists()
+
+
+# ------------------------------------------------------------- revisão de dinheiro (25/11)
+def test_comprovante_de_pagamento_e_um_tipo_de_papel_e_esta_na_instrucao():
+    assert "comprovante_de_pagamento" in li.TIPOS_DE_PAPEL
+    assert "comprovante_de_pagamento" in li.ESQUEMA["properties"]["tipo_papel"]["enum"]
+    assert "comprovante de pagamento" in li.INSTRUCAO.lower()
+    li.validar(_leitura(tipo_papel="comprovante_de_pagamento"))
+
+
+def test_uso_traz_o_modelo_que_respondeu():
+    c2 = ClienteFalso(json.dumps(_leitura()))
+    r = NS(stop_reason="end_turn", model="modelo-que-respondeu",
+           usage=NS(input_tokens=1, output_tokens=2),
+           content=[NS(type="text", text=json.dumps(_leitura()))])
+    c2.beta = NS(messages=NS(create=lambda **k: r))
+    _l, uso = li.pedir_leitura(c2, b"x", "image/png")
+    assert uso.modelo == "modelo-que-respondeu"
+    assert li.pedir_leitura(ClienteFalso(json.dumps(_leitura())), b"x", "image/png")[1].modelo == ""
+
+
+def test_cache_com_leitura_fora_do_esquema_e_ausente(tmp_path):
+    p = tmp_path / "leituras_ia.json"
+    p.write_text(json.dumps({"k": {"leitura": {"total": "10,00"}, "modelo": "m", "quando": "q"},
+                             "ok": {"leitura": _leitura(), "modelo": "m", "quando": "q"}}),
+                 encoding="utf-8")
+    c = li.CacheLeituras(p)
+    assert c.obter("k") is None and c.obter("ok")["total"] == "5.864,50"
+
+
+def test_cache_mescla_o_que_outro_processo_gravou_e_nao_deixa_tmp(tmp_path):
+    p = tmp_path / "leituras_ia.json"
+    a, b = li.CacheLeituras(p), li.CacheLeituras(p)       # PJ e PF abrem ao mesmo tempo
+    a.guardar("pj", _leitura(), modelo="m", quando="q")
+    b.guardar("pf", _leitura(), modelo="m", quando="q")
+    novo = li.CacheLeituras(p)
+    assert novo.obter("pj") is not None and novo.obter("pf") is not None
+    assert [x.name for x in tmp_path.iterdir()] == ["leituras_ia.json"]
+
+
+def test_cache_guarda_o_modelo_dado(tmp_path):
+    c = li.CacheLeituras(tmp_path / "l.json")
+    c.guardar("k", _leitura(), modelo="modelo-x", quando="q")
+    assert json.loads((tmp_path / "l.json").read_text(encoding="utf-8"))["k"]["modelo"] == "modelo-x"

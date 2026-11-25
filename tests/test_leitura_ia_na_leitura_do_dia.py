@@ -49,7 +49,7 @@ def _linha(leitura):
 
 def _api(**k):
     return ApiFalsa([_lanc("L1")], anexos={"T-L1": [FOTO]},
-                    arquivos={FOTO["downloadUrl"]: b"\xff\xd8 foto ficticia"}, **k)
+                    arquivos={FOTO["downloadUrl"]: b"JPEG foto ficticia"}, **k)
 
 
 def test_baixar_textos_guarda_foto_e_pdf_sem_texto_so_quando_pedido():
@@ -109,12 +109,23 @@ def test_segunda_geracao_vem_do_cache_sem_chamar_a_api(tmp_path):
     assert c.chamadas == 1 and "1 do cache" in leitura.ia_resumo
 
 
-def test_teto_deixa_a_linha_como_antes(tmp_path):
+def test_teto_deixa_a_linha_em_nao_li_com_o_motivo(tmp_path):
     leitura = _ler(_api(), _sessao(tmp_path, Cliente(), teto=0))
     ln = _linha(leitura)
-    assert ln.get("leitura_ia") is None
-    assert nivel.nivel_da_linha(ln).nome == nivel.NAO_LI
+    n = nivel.nivel_da_linha(ln)
+    assert n.nome == nivel.NAO_LI and any("acima do teto" in m for m in n.motivos)
     assert "acima do teto" in leitura.ia_resumo
+
+
+def test_outro_anexo_que_prova_o_valor_dispensa_a_foto(tmp_path):
+    pdf = _anexo("nota", ext=".pdf")
+    api = ApiFalsa([_lanc("L1")], anexos={"T-L1": [FOTO, pdf]},
+                   arquivos={FOTO["downloadUrl"]: b"JPEG foto", pdf["downloadUrl"]: b"%PDF x"})
+    c = Cliente()
+    leitores = {**LEITORES, "texto_pdf": lambda d: "TOTAL 100,00"}
+    ld.ler_pagamentos(api, DIA, DIA, abrir_historico=_sem_nuvem, carregar_mapas=_sem_cadastro,
+                      ia=_sessao(tmp_path, c), **leitores)
+    assert c.chamadas == 0
 
 
 def test_ocr_que_acha_o_valor_dispensa_a_ia(tmp_path):

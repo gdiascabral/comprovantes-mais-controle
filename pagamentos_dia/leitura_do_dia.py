@@ -368,7 +368,8 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         leituras_ia = ia_do_dia.ler_candidatos(
             ia, ia_do_dia.selecionar(a_pagar, leitura.anexos, textos, brutos_ia,
                                      ocr_imagem=leitores.get(
-                                         "ocr_imagem", ocr_boleto.texto_ocr_imagem)),
+                                         "ocr_imagem", ocr_boleto.texto_ocr_imagem),
+                                     qr_pix=qrs),
             log=log, cancelar=cancelar)
         leitura.ia_resumo = ia.resumo()
         crono.etapa("leitura por IA")

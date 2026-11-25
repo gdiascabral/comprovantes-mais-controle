@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
+import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -33,7 +35,7 @@ MODELO = "claude-opus-5-5"
 MAX_TOKENS = 4000
 
 TIPOS_DE_PAPEL = ("recibo", "pedido_de_balcao", "comprovante_de_cartao",
-                  "nota_fiscal", "boleto", "outro")
+                  "comprovante_de_pagamento", "nota_fiscal", "boleto", "outro")
 
 _TEXTO = {"type": "string"}
 ESQUEMA = {
@@ -66,7 +68,7 @@ ESQUEMA = {
 
 INSTRUCAO = """Este arquivo é um documento de compra de uma construtora: recibo de talão, \
 pedido de balcão preenchido à mão, nota fiscal ou a foto de um desses com o \
-comprovante de cartão por cima. Transcreva o que está ESCRITO, sem completar nem \
+comprovante de cartão por cima. Se for, em vez disso, um comprovante de pagamento (Pix, transferência, TED ou boleto pago: tela ou papel do banco com data e hora da operação), diga "comprovante_de_pagamento" em tipo_papel. Transcreva o que está ESCRITO, sem completar nem \
 deduzir.
 
 - Valores em reais no formato 1.234,56. Se o papel diz "4.700" ou "#4.700#", \
@@ -89,10 +91,16 @@ class LeituraFalhou(RuntimeError):
     """A IA não devolveu uma leitura válida (recusa, corte, esquema)."""
 
 
+class FalhaDeRede(LeituraFalhou):
+    """Rede, prazo ou HTTP fora de 2xx: a API não respondeu. Três seguidas na
+    mesma geração desligam a IA até o fim dela (`ia_do_dia`)."""
+
+
 @dataclass
 class Uso:
     entrada: int = 0
     saida: int = 0
+    modelo: str = ""              # o `model` da resposta, quando vier
 
 
 def _bloco_do_arquivo(dados: bytes, media_type: str) -> dict:
@@ -149,7 +157,8 @@ def pedir_leitura(cliente, dados: bytes, media_type: str, *, modelo: str = MODEL
         messages=[{"role": "user", "content": [_bloco_do_arquivo(dados, media_type),
                                                 {"type": "text", "text": INSTRUCAO}]}])
     uso = Uso(entrada=int(getattr(resposta.usage, "input_tokens", 0) or 0),
-              saida=int(getattr(resposta.usage, "output_tokens", 0) or 0))
+              saida=int(getattr(resposta.usage, "output_tokens", 0) or 0),
+              modelo=str(getattr(resposta, "model", "") or ""))
     parada = getattr(resposta, "stop_reason", None)
     if parada == "refusal":
         raise LeituraFalhou("a IA recusou ler este arquivo")
@@ -325,7 +334,11 @@ class CacheLeituras:
     """`{chave: {"leitura": ..., "modelo": ..., "quando": ...}}` num JSON.
 
     Arquivo estragado não para nada (o cache só economiza): é renomeado para
-    `.estragado` e o cache recomeça vazio."""
+    `.estragado` e o cache recomeça vazio. Leitura guardada que não passa pela
+    `validar` é tratada como ausente (o arquivo é do disco: pode ter sido
+    editado ou escrito por outra versão). A gravação relê o arquivo e mescla
+    antes de trocar, com um `.tmp` de nome único: o HTML das PJ e o das PF
+    podem rodar ao mesmo tempo."""
 
     def __init__(self, caminho: Path):
         self.caminho = Path(caminho)
@@ -335,10 +348,13 @@ class CacheLeituras:
     def chave(anexo_id, tamanho, alterado_em) -> str:
         return f"{anexo_id}|{tamanho}|{alterado_em}"
 
+    def _ler_disco(self) -> dict:
+        dados = json.loads(self.caminho.read_text(encoding="utf-8"))
+        return dados if isinstance(dados, dict) else {}
+
     def _ler(self) -> dict:
         try:
-            dados = json.loads(self.caminho.read_text(encoding="utf-8"))
-            return dados if isinstance(dados, dict) else {}
+            return self._ler_disco()
         except FileNotFoundError:
             return {}
         except (OSError, ValueError):
@@ -350,10 +366,25 @@ class CacheLeituras:
 
     def obter(self, chave: str) -> dict | None:
         item = self._dados.get(chave)
-        return item.get("leitura") if isinstance(item, dict) else None
+        leitura = item.get("leitura") if isinstance(item, dict) else None
+        try:
+            return validar(leitura)
+        except LeituraFalhou:
+            return None
 
     def guardar(self, chave: str, leitura: dict, *, modelo: str, quando: str) -> None:
-        self._dados[chave] = {"leitura": leitura, "modelo": modelo, "quando": quando}
-        tmp = self.caminho.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self._dados, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self.caminho)
+        try:
+            do_disco = self._ler_disco()          # o que outro processo gravou desde que abri
+        except (OSError, ValueError):
+            do_disco = {}
+        self._dados = {**self._dados, **do_disco,
+                       chave: {"leitura": leitura, "modelo": modelo, "quando": quando}}
+        tmp = self.caminho.with_name(f"{self.caminho.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        try:
+            tmp.write_text(json.dumps(self._dados, ensure_ascii=False, indent=1), encoding="utf-8")
+            tmp.replace(self.caminho)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass

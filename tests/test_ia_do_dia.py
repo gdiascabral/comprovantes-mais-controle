@@ -72,7 +72,8 @@ def test_teto_para_de_pedir_mas_o_cache_continua_valendo(tmp_path):
     c = Cliente()
     s = _ia(tmp_path, c, teto=1)
     s.ler("a", b"x", "image/jpeg")
-    assert s.ler("b", b"x", "image/jpeg") is None and s.acima_do_teto == 1
+    r = s.ler("b", b"x", "image/jpeg")
+    assert r["ok"] is False and "teto" in r["pulado"] and s.acima_do_teto == 1
     assert s.ler("a", b"x", "image/jpeg")["origem"] == "cache"
     assert c.chamadas == 1
 
@@ -201,3 +202,123 @@ def test_dois_anexos_divergencia_manda_e_falha_so_vale_sem_leitura_usavel():
     assert r["estado"] == li.BATE                   # uma leitura boa e outra que falhou
     r = ia.leitura_do_item(_item(), [f2], {f2["downloadUrl"]: falha})
     assert r["estado"] == ia.FALHOU
+
+
+# ---------------------------------------------------------------- revisão de dinheiro (25/11)
+def test_valor_ja_provado_por_outro_anexo_nao_manda_a_foto():
+    foto, nf = _anexo(), _anexo("nota.pdf", tag="Nota Fiscal")
+    brutos = _brutos(foto["downloadUrl"])
+    textos = {nf["downloadUrl"]: "TOTAL DA NOTA 410,00"}
+    c = ia.selecionar([_item()], {"T1": [foto, nf]}, textos, brutos, ocr_imagem=lambda d: "")
+    assert c == {}
+    # sem o valor no texto da nota, a foto vai
+    c = ia.selecionar([_item()], {"T1": [foto, nf]}, {nf["downloadUrl"]: "nota sem valor"},
+                      brutos, ocr_imagem=lambda d: "")
+    assert foto["downloadUrl"] in c
+
+
+def test_linha_digitavel_valida_ou_qr_com_o_valor_em_outro_anexo_tambem_dispensa():
+    foto, outro = _anexo(), _anexo("boleto.pdf", tag="Boleto")
+    brutos = _brutos(foto["downloadUrl"])
+    pix = "00020126" + "0014br.gov.bcb.pix" + "5406410.00" + "6304ABCD"
+    campo = lambda tag, v: f"{tag}{len(v):02d}{v}"  # noqa: E731
+    copia = "000201" + campo("54", "410.00")
+    c = ia.selecionar([_item()], {"T1": [foto, outro]}, {}, brutos, ocr_imagem=lambda d: "",
+                      qr_pix={outro["downloadUrl"]: [copia]})
+    assert c == {} and pix
+    c = ia.selecionar([_item()], {"T1": [foto, outro]}, {}, brutos, ocr_imagem=lambda d: "",
+                      qr_pix={outro["downloadUrl"]: ["000201" + campo("54", "99.00")]})
+    assert foto["downloadUrl"] in c
+
+
+def test_arquivo_grande_demais_e_pulado_sem_gastar_teto(tmp_path):
+    c = Cliente()
+    s = _ia(tmp_path, c, teto=1)
+    r = s.ler("g", b"x" * (5 * 1024 * 1024 + 1), "image/jpeg")
+    assert r["ok"] is False and r["pulado"] == "arquivo grande demais para a IA"
+    r = s.ler("p", b"x" * (30 * 1024 * 1024 + 1), "application/pdf")
+    assert r["pulado"] == "arquivo grande demais para a IA"
+    assert c.chamadas == 0 and s.feitas == 0 and s.grandes == 2
+    assert s.ler("ok", b"x" * (5 * 1024 * 1024), "image/jpeg")["ok"] and s.feitas == 1
+
+
+def test_tres_falhas_de_rede_seguidas_desligam_a_ia_na_geracao(tmp_path):
+    c = Cliente(erro=li.FalhaDeRede("sem rede"))
+    s = _ia(tmp_path, c)
+    for k in "abc":
+        assert s.ler(k, b"x", "image/png")["erro"] == "sem rede"
+    r = s.ler("d", b"x", "image/png")
+    assert r["ok"] is False and "desligada" in r["pulado"] and c.chamadas == 3
+    assert s.desligada and "IA desligada nesta geração após 3 falhas" in s.resumo()
+
+
+def test_sucesso_ou_falha_de_conteudo_zera_a_contagem_do_disjuntor(tmp_path):
+    erros = [li.FalhaDeRede("a"), li.FalhaDeRede("b"), None, li.FalhaDeRede("c"),
+             li.FalhaDeRede("d"), li.LeituraFalhou("recusou"), li.FalhaDeRede("e")]
+
+    class Variado(Cliente):
+        def _create(self, **kw):
+            self._erro = erros.pop(0)
+            return super()._create(**kw)
+    s = _ia(tmp_path, Variado())
+    for k in "abcdefg":
+        s.ler(k, b"x", "image/png")
+    assert not s.desligada and s.feitas == 7
+
+
+def test_cache_continua_valendo_com_a_ia_desligada(tmp_path):
+    c = Cliente()
+    s = _ia(tmp_path, c)
+    s.ler("k", b"x", "image/png")
+    s.desligada = True
+    assert s.ler("k", b"x", "image/png")["origem"] == "cache"
+
+
+def test_cache_guarda_o_modelo_que_respondeu(tmp_path):
+    class ComModelo(Cliente):
+        def _create(self, **kw):
+            r = super()._create(**kw)
+            r.model = "modelo-que-respondeu"
+            return r
+    s = _ia(tmp_path, ComModelo())
+    s.ler("k", b"x", "image/png")
+    assert json.loads((tmp_path / "c.json").read_text(encoding="utf-8"))["k"]["modelo"] ==         "modelo-que-respondeu"
+
+
+def test_com_varios_anexos_conta_os_nao_lidos():
+    f1, f2 = _anexo("a.jpg"), _anexo("b.jpg")
+    pulado = {"ok": False, "pulado": "acima do teto", "ids": {"L1"}}
+    r = ia.leitura_do_item(_item(), [f1, f2], {f1["downloadUrl"]: _entrada(),
+                                               f2["downloadUrl"]: pulado})
+    assert r["estado"] == li.BATE and r["anexos"] == 2 and r["nao_lidos"] == 1
+    r = ia.leitura_do_item(_item(), [f1], {f1["downloadUrl"]: _entrada()})
+    assert r["anexos"] == 1 and r["nao_lidos"] == 0
+
+
+def test_so_pulados_vira_nao_lido_com_o_motivo():
+    f = _anexo()
+    r = ia.leitura_do_item(_item(), [f], {f["downloadUrl"]: {
+        "ok": False, "pulado": "arquivo grande demais para a IA", "ids": {"L1"}}})
+    assert r["estado"] == ia.NAO_LIDO and r["pulado"] and not r["falhou"]
+    assert r["motivos"] == ["arquivo grande demais para a IA"]
+
+
+def test_ilegivel_entre_outros_conta_como_nao_lido():
+    f1, f2 = _anexo("a.jpg"), _anexo("b.jpg")
+    ilegivel = _entrada(_leitura(legivel=False))
+    r = ia.leitura_do_item(_item(), [f1, f2], {f1["downloadUrl"]: _entrada(),
+                                               f2["downloadUrl"]: ilegivel})
+    assert r["nao_lidos"] == 1
+
+
+def test_anotar_na_atividade_so_leva_contagens(tmp_path):
+    notas = []
+    s = ia.IaDoDia(Cliente(), li.CacheLeituras(tmp_path / "c.json"),
+                   anotar=lambda resumo, numeros: notas.append((resumo, numeros)))
+    f = _anexo(id="a1")
+    cands = ia.selecionar([_item()], {"T1": [f]}, {}, _brutos(f["downloadUrl"]),
+                          ocr_imagem=lambda d: "")
+    ia.ler_candidatos(s, cands, log=lambda *_: None)
+    (resumo, numeros), = notas
+    assert "Leitura por IA" in resumo
+    assert numeros == {"feitas": 1, "cache": 0, "falhas": 0}

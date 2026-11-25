@@ -98,3 +98,49 @@ def test_etiqueta_da_falha():
     e = nivel.etiqueta_da_ia({"leitura_ia": {"falhou": True, "motivos": ["IA não respondeu: x"]}})
     assert "não respondeu" in e["titulo"] and e["linhas"] == ["IA não respondeu: x"]
     assert nivel.etiqueta_da_ia({}) is None
+
+
+# ------------------------------------------------------------- revisão de dinheiro (25/11)
+PROVADA = {"conferencia": "valor ✓ · fornecedor ✓", "fornecedor_no_anexo": True}
+
+
+def test_linha_ja_provada_nao_piora_com_falha_ilegivel_ou_pulado():
+    falha = {"estado": "IA não respondeu", "falhou": True, "motivos": ["x"], "anexos": 1,
+             "nao_lidos": 1}
+    ilegivel = _ia(li.ILEGIVEL, total="", provas=[])
+    pulado = {"estado": "não lido pela IA", "falhou": False, "pulado": True,
+              "motivos": ["arquivo grande demais para a IA"], "anexos": 1, "nao_lidos": 1}
+    for ia in (falha, ilegivel, pulado, _ia(li.BATE)):
+        n = nivel.nivel_da_linha(_r(ia, **PROVADA))
+        assert n.nome == nivel.PODE_PAGAR and n.motivos == [], ia["estado"]
+
+
+def test_linha_ja_provada_ainda_avisa_quando_a_ia_diverge():
+    n = nivel.nivel_da_linha(_r(_ia(li.DIVERGE, total="435.00", provas=[]), **PROVADA))
+    assert n.nome == nivel.OLHE and "valor diverge" in n.motivos
+
+
+def test_comprovante_de_pagamento_nao_prova_valor_e_pede_olho():
+    ia = _ia(li.BATE, tipo_papel="comprovante_de_pagamento")
+    n = nivel.nivel_da_linha(_r(ia))
+    assert "parece comprovante de pagamento: já foi pago?" in n.motivos
+    assert dict(n.conferido)["valor"] == nivel.NAO_CONFERIDO
+    n = nivel.nivel_da_linha(_r(ia, **PROVADA))
+    assert n.nome == nivel.OLHE and n.motivos == ["parece comprovante de pagamento: já foi pago?"]
+
+
+def test_pulado_por_tamanho_e_nao_li_com_o_motivo():
+    ia = {"estado": "não lido pela IA", "falhou": False, "pulado": True,
+          "motivos": ["arquivo grande demais para a IA"], "anexos": 1, "nao_lidos": 1}
+    n = nivel.nivel_da_linha(_r(ia))
+    assert n.nome == nivel.NAO_LI and "IA não leu: arquivo grande demais para a IA" in n.motivos
+    assert nivel.etiqueta_da_ia(_r(ia))["titulo"] == "lido por IA: não lido"
+
+
+def test_varios_anexos_com_algum_nao_lido_diz_quantos():
+    r = _r(_ia(anexos=3, nao_lidos=2))
+    n = nivel.nivel_da_linha(r)
+    assert "2 anexo(s) não lido(s) pela IA" in n.motivos
+    assert "2 anexo(s) não lido(s) pela IA" in nivel.etiqueta_da_ia(r)["linhas"]
+    um = nivel.nivel_da_linha(_r(_ia(anexos=1, nao_lidos=0)))
+    assert not any("não lido(s)" in m for m in um.motivos)
