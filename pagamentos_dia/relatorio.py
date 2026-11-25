@@ -1408,7 +1408,11 @@ def _e_documento_de_boleto(files, provas) -> bool:
 #: lugar deixou passar um reembolso lançado pelo líquido (03/09/2026).
 _PREMIO_TOTAL_MESMA_LINHA = re.compile(
     r"pr[eê]mio\s+total\s*:?\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})(?!\d)", re.I)
-_PREMIO_TOTAL_CABECALHO = re.compile(r"pr[eê]mio\s+total[^\n]*\n([^\n]*)", re.I)
+#: Só o cabeçalho do DEMONSTRATIVO ("PRÊMIO LÍQUIDO … PRÊMIO TOTAL"): a frase
+#: das condições ("o prêmio total poderá ser fracionado") seguida de uma linha
+#: de limites e franquias faria a franquia virar o total (revisão de dinheiro).
+_PREMIO_TOTAL_CABECALHO = re.compile(
+    r"pr[eê]mio\s+l[ií]quido[^\n]*pr[eê]mio\s+total[^\n]*\n([^\n]*)", re.I)
 _REAIS = re.compile(r"R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})(?!\d)")
 #: "PARC. VALOR VENC." e as linhas "1 R$ 1.309,51 04/01/2027" logo abaixo.
 _PARCELAS_DO_PREMIO = re.compile(
@@ -1451,6 +1455,22 @@ def premio_da_apolice(texto: str) -> tuple[float, list[float]] | None:
     return total, parcelas
 
 
+def _boleto_com_o_valor(provas, valor: float) -> bool:
+    """Alguma linha digitável com DV fechando traz embutido este valor?"""
+    alvo = round(valor, 2)
+    for t in provas:
+        for linha in (t or "").splitlines():
+            d = ocr_boleto.digitos(linha)
+            for tamanho in (47, 48):
+                for i in range(0, max(len(d) - tamanho, -1) + 1):
+                    trecho = d[i:i + tamanho]
+                    if ocr_boleto.valida(trecho):
+                        v = ocr_boleto.valor_embutido(trecho)
+                        if v is not None and round(float(v), 2) == alvo:
+                            return True
+    return False
+
+
 def _conferir_premio(item: dict, provas) -> tuple[str, bool] | None:
     """Anexo que é apólice com prêmio total legível: o valor do lançamento
     tem de ser o prêmio total (ou, em título parcelado, uma parcela do
@@ -1476,6 +1496,13 @@ def _conferir_premio(item: dict, provas) -> tuple[str, bool] | None:
     except (TypeError, ValueError):
         uma_parcela = False
     if not uma_parcela and not any(len(parcelas) > 1 for _, parcelas in lidas):
+        return None
+    # O valor provado FORA da apólice (o boleto avulso de uma parcela, que
+    # pode vir com juros) não se contradiz pela apólice: a régua de sempre
+    # decide. A própria apólice costuma trazer a ficha do prêmio inteiro, e
+    # essa não salva o lançamento (revisão de dinheiro, 25/11/2026).
+    if _boleto_com_o_valor(provas, valor) or _valor_nos_textos(
+            valor, [t for t in provas if not premio_da_apolice(t)]):
         return None
     total = lidas[0][0]
     return (f"VALOR DIVERGE: prêmio total da apólice {brl(total)} × lançamento "

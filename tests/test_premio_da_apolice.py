@@ -104,6 +104,38 @@ def test_sem_o_numero_de_parcelas_e_sem_tabela_nao_acusa():
     assert "DIVERGE" not in resumo and divergiu is False
 
 
+def test_boleto_avulso_com_o_valor_do_lancamento_nao_e_contradito_pela_apolice():
+    # Revisão de dinheiro: seguro em 4 vezes, cada boleto lançado à parte
+    # (1 parcela), apólice só com o total. O boleto prova o valor.
+    from test_boletos_somados import gera_linha
+    texto = "APÓLICE Nº 1\nPrêmio Total: R$ 4.000,00\n"
+    boleto = f"SEGURADORA MODELO S/A\n{gera_linha(100000)}\n"
+    resumo, divergiu = relatorio.conferir_documento(_item(1000.0), [], [texto, boleto])
+    assert "DIVERGE" not in resumo and divergiu is False
+
+
+def test_valor_escrito_em_outro_anexo_nao_e_contradito_pela_apolice():
+    texto = "APÓLICE Nº 1\nPrêmio Total: R$ 4.000,00\n"
+    resumo, divergiu = relatorio.conferir_documento(
+        _item(1000.0), [], [texto, "RECIBO DA PARCELA R$ 1.000,00"])
+    assert "DIVERGE" not in resumo and divergiu is False
+
+
+def test_ficha_do_premio_inteiro_dentro_da_apolice_nao_salva_o_lancamento():
+    from test_boletos_somados import gera_linha
+    texto = _apolice() + f"FICHA DE COMPENSAÇÃO\n{gera_linha(130951)}\n"
+    resumo, divergiu = relatorio.conferir_documento(_item(2151.26), [], [texto])
+    assert divergiu is True and "VALOR DIVERGE" in resumo
+
+
+def test_frase_das_condicoes_nao_vira_o_premio_total():
+    # "prêmio total" numa frase, e a linha de baixo com franquia: não é o
+    # demonstrativo, e a franquia não pode virar o total.
+    texto = ("APÓLICE Nº 1\nO pagamento do prêmio total poderá ser fracionado\n"
+             "Limite R$ 370.000,00 Franquia R$ 1.000,00\n")
+    assert relatorio.premio_da_apolice(texto) is None
+
+
 def test_observacao_nao_prova_o_premio():
     # Só os anexos provam o valor: a apólice copiada na observação não conta.
     resumo, divergiu = relatorio.conferir_documento(
