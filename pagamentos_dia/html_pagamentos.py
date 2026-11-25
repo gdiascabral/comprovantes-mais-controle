@@ -714,6 +714,94 @@ def movimentos_do_html(movimentos) -> list[dict]:
     return linhas
 
 
+AVISO_SEM_CONTA = "conta de origem não está no HTML"
+AVISO_AMBIGUO = "conta de origem ambígua"
+AVISO_DE_FORA = "aporte de fora — não sai de conta do HTML"
+#: Começo (já normalizado) de `tela_do_dia.decisoes.DE_FORA`: o aporte de
+#: sócio ou investidor de fora não sai de conta nenhuma do HTML.
+AVISO_DE_FORA_PREFIXO = "DE FORA"
+
+
+def _chave_conta(nome) -> str:
+    """A comparação de nome de conta de sempre (`util.norm_espaco`)."""
+    import util
+    return util.norm_espaco(str(nome or ""))
+
+
+def e_aporte(tipo) -> bool:
+    """O tipo do movimento é um aporte ("Aporte que entra na mãe",
+    "Aporte (aba Regras)")? Transferência, distribuição e tipo desconhecido
+    da aba Regras não são: só tipo DECLARADO aporte soma."""
+    return relatorio.sem_acento(str(tipo or "")).casefold().strip().startswith("aporte")
+
+
+def _total_em_texto(texto) -> Decimal:
+    """Lê de volta o total da conta ("1.234,56") que `contas_do_html_geral` escreveu."""
+    try:
+        return Decimal(str(texto).replace(".", "").replace(",", "."))
+    except InvalidOperation:
+        return Decimal("0.00")
+
+
+def aportes_nas_contas(contas: list[dict], movimentos: list[dict],
+                       rotulo_de=None) -> tuple[list[dict], Decimal, int]:
+    """Põe cada APORTE dentro da lista da conta de onde o dinheiro SAI (`de`).
+
+    Pedido do dono (25/11/2026): "inclua os aportes dentro da lista e valor de
+    pgtos da conta". `de` é o rótulo do painel; casa com o nome da conta do HTML
+    (ou com o rótulo dela, `rotulo_de(conta)`) pela comparação de sempre,
+    sem acento nem caixa. A linha soma no total da conta; não tem chave nem
+    Copiar nem nível, e NUNCA entra em `Resultado.contas` (remessa e planilha).
+
+    Devolve (movimentos que ficam só informativos, total somado, quantos). O
+    aporte cuja origem não está no HTML fica na seção informativa, com aviso;
+    transferência e distribuição não mudam."""
+    por_nome: dict[str, list[dict]] = {}
+    por_rotulo: dict[str, list[dict]] = {}
+    for c in contas:
+        por_nome.setdefault(_chave_conta(c["nome"]), []).append(c)
+        rot = _chave_conta(rotulo_de(c["nome"])) if rotulo_de else ""
+        if rot:
+            por_rotulo.setdefault(rot, []).append(c)
+    restam, somado, quantos, vistos = [], Decimal("0.00"), 0, {}
+    for m in movimentos:
+        if not e_aporte(m["tipo"]):
+            restam.append(m)
+            continue
+        de = _chave_conta(m["de"])
+        if de.startswith(AVISO_DE_FORA_PREFIXO):
+            restam.append(dict(m, aviso=AVISO_DE_FORA))
+            continue
+        # Duas passadas: o nome exato da conta do ERP; só depois o rótulo do
+        # painel. Mais de uma conta na mesma passada = ambíguo, nunca chuta.
+        achadas = por_nome.get(de) or por_rotulo.get(de) or []
+        if not achadas:
+            restam.append(dict(m, aviso=AVISO_SEM_CONTA))
+            continue
+        if len(achadas) > 1:
+            restam.append(dict(m, aviso=AVISO_AMBIGUO))
+            continue
+        conta = achadas[0]
+        base = (m["de"], m["para"], m["centavos"])
+        vistos[base] = vistos.get(base, 0) + 1
+        # Chave PRÓPRIA (`aportes`), nunca `entries`: o "Conferir agendamentos"
+        # lê `entries` e um aporte absorveria pendência de mesmo valor no banco.
+        conta.setdefault("aportes", []).append({
+            "id": f"aporte:{m['de']}:{m['para']}:{m['centavos']}:{vistos[base]}",
+            "aporte": True, "link": "", "tipo": "Aporte", "vencimento": "",
+            "vencido": False, "dias_vencido": 0, "dados_original": "",
+            "dados_limpo": "", "pix_qr": "", "valor": m["valor"],
+            "centavos": m["centavos"],
+            "descricao": f"Aporte de {m['de']} para {m['para']}",
+            "favorecido": m["para"], "de": m["de"], "status": "",
+            "conferencia": "", "obs": "", "bloqueio": ""})
+        valor = Decimal(m["centavos"]) / 100
+        conta["total"] = reais(_total_em_texto(conta["total"]) + valor).replace("R$ ", "", 1)
+        somado += valor
+        quantos += 1
+    return restam, somado, quantos
+
+
 def _palavras_do_nome(nome) -> list[str]:
     return re.findall(r"[A-Z0-9]+", relatorio.sem_acento(str(nome or "")).upper())
 
@@ -930,9 +1018,12 @@ class Gerados(NamedTuple):
     pf_sem: dict
     tem_logo: bool
     tem_rodape: bool
-    #: Os movimentos à mão do dia, só informativos (fora de `total`).
+    #: Os movimentos do dia que ficaram só informativos (fora de `total`).
     movimentos: int = 0
     total_movimentos: Decimal = Decimal("0.00")
+    #: Aportes postos na lista da conta de origem; JÁ somam em `total`.
+    aportes_na_conta: int = 0
+    total_aportes_na_conta: Decimal = Decimal("0.00")
 
     def registro(self) -> list[str]:
         def caminho(p):
@@ -946,9 +1037,15 @@ class Gerados(NamedTuple):
             f"  pessoa física: {self.linhas_pf} lançamento(s), "
             f"{reais(self.total_pf)}  ->  {caminho(self.pessoa_fisica)}",
         ]
+        if self.aportes_na_conta:
+            linhas.append(f"  {self.aportes_na_conta} aporte(s) na conta de origem "
+                          f"(somam no total da conta e no total geral; fora da "
+                          f"remessa): {reais(self.total_aportes_na_conta)}")
         if self.movimentos:
-            linhas.append(f"  movimentos do dia (só informação, fora do total e da "
-                          f"remessa): {self.movimentos}, {reais(self.total_movimentos)}")
+            linhas.append(f"  movimentos do dia só informativos (transferência, "
+                          f"distribuição e aporte sem conta no HTML; fora do total "
+                          f"e da remessa): {self.movimentos}, "
+                          f"{reais(self.total_movimentos)}")
         faltas = [f"{n} sem {campo}" for campo, n in self.pf_sem.items() if n]
         if faltas:
             linhas.append("  (pessoa física: " + " · ".join(faltas) + ")")
@@ -987,20 +1084,23 @@ def ordenar_contas(contas: list[dict], primeiras=()) -> list[dict]:
 
 def gravar(resultado, lancamentos, anexos, pasta, ini: date, fim: date,
            hoje: date | None = None, pastas_extras=(), movimentos=(),
-           primeiras=()) -> Gerados:
+           primeiras=(), rotulo_de=None) -> Gerados:
     """Grava os dois HTMLs na `pasta` (a da planilha) e devolve o resumo.
 
     `resultado` é o `Resultado` do passo 2; `lancamentos` e `anexos` são os
     do passo 1. `pastas_extras` diz onde procurar o logotipo e o rodapé
     (sem ela, só na própria `pasta`). `movimentos`: os movimentos à mão do
-    dia ({de, para, tipo, valor}), só informativos (`movimentos_do_html`)."""
+    dia ({de, para, tipo, valor}): os aportes entram na lista e no total da
+    conta de origem (`aportes_nas_contas`; `rotulo_de` dá o rótulo do painel
+    da conta do ERP), o resto fica só informativo (`movimentos_do_html`)."""
     hoje = hoje or date.today()
     pasta = Path(pasta)
     pasta.mkdir(parents=True, exist_ok=True)
     periodo = rotulo_periodo(ini, fim)
 
     contas = ordenar_contas(contas_do_html_geral(resultado, dia=ini), primeiras)
-    movs =movimentos_do_html(movimentos)
+    movs = movimentos_do_html(movimentos)
+    movs, total_aportes, n_aportes = aportes_nas_contas(contas, movs, rotulo_de)
     itens = itens_pessoa_fisica(lancamentos, anexos, vencimento_padrao=fim)
     logo, rodape = ler_extras(pastas_extras or (pasta,))
 
@@ -1014,8 +1114,9 @@ def gravar(resultado, lancamentos, anexos, pasta, ini: date, fim: date,
             if not e_conta_pf(nome) for r in rs]
     return Gerados(
         geral=geral, pessoa_fisica=pf,
-        contas=len(contas), linhas=sum(len(c["entries"]) for c in contas),
-        total=total_da_conta(regs),
+        contas=len(contas),
+        linhas=sum(1 for c in contas for e in c["entries"] if not e.get("aporte")),
+        total=total_da_conta(regs) + total_aportes,
         linhas_pf=len(itens),
         total_pf=sum((Decimal(i["centavos"]) / 100 for i in itens),
                      Decimal("0.00")),
@@ -1024,6 +1125,7 @@ def gravar(resultado, lancamentos, anexos, pasta, ini: date, fim: date,
                 "nº doc": sum(1 for i in itens if not i["doc"]),
                 "centro de custo": sum(1 for i in itens if not i["obras"])},
         tem_logo=bool(logo), tem_rodape=bool(rodape),
-        movimentos=len(movs),
+        movimentos=len(movs), aportes_na_conta=n_aportes,
+        total_aportes_na_conta=total_aportes,
         total_movimentos=sum((Decimal(m["centavos"]) / 100 for m in movs),
                              Decimal("0.00")))

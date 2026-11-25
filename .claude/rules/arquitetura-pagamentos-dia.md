@@ -802,6 +802,22 @@ paths:
   Total próprio (`Gerados.total_movimentos`), fora do `total` das contas e
   do total geral da página; não são `Resultado.contas`, então não chegam à
   remessa. Sem movimentos, a seção fica escondida.
+  **Desde 25/11/2026 o APORTE sai desta seção** (dono: "inclua os aportes
+  dentro da lista e valor de pgtos da conta"): `aportes_nas_contas` põe cada
+  movimento de tipo "Aporte…" como linha (`aporte: true`, id `aporte:<de>:<para>:
+  <centavos>:<n>`, sem chave, sem Copiar, sem nível) na chave PRÓPRIA
+  `conta["aportes"]` — nunca em `entries`, que o "Conferir agendamentos" lê (e
+  `agendamentos_sicoob` ainda ignora entrada com `aporte`); o modelo JS junta as
+  duas (`c.lista`). Casa com `de` em duas passadas por `util.norm_espaco`: nome
+  exato da conta do ERP, depois rótulo do painel (`gravar(rotulo_de=)`, na tela
+  `_rotulo_que_cobre`); rótulo de mais de uma conta = "conta de origem
+  ambígua". Soma no total da conta e no geral (`Gerados.total`,
+  `aportes_na_conta`). Fica fora dos três níveis, da remessa e da planilha. Só
+  tipo DECLARADO aporte soma (`decisoes._tipo_da_regra`: tipo desconhecido vira
+  `TIPO_OUTRO_REGRAS`, informativo). `de` que não casa continua aqui com o aviso
+  "conta de origem não está no HTML"; o aporte de fora (`DE_FORA`) com "aporte
+  de fora — não sai de conta do HTML". Transferência e distribuição não
+  mudaram. O HTML de pessoa física não recebe movimentos.
   **A seção vem logo DEPOIS do quadro-resumo, antes das contas** (dono,
   23/10/2026: no fim da página ele não a achou e pensou que os aportes não
   tinham vindo), e o resumo ganha a linha "Movimentos do dia: N · R$ total ↓"

@@ -274,7 +274,10 @@ def agrupar_por_numero(no_sicoob) -> list[tuple[str, str, list]]:
         chave = re.sub(r"\D", "", numero or "")
         _numero, nomes, linhas = grupos.setdefault(chave, (numero, [], []))
         nomes.append(str(conta.get("nome") or ""))
-        linhas.extend(conta.get("entries") or [])
+        # Aporte (25/11/2026) não é pagamento a agendar: mora em `aportes`,
+        # e, por defesa, qualquer entrada marcada `aporte` fica de fora —
+        # senão ela absorveria uma pendência de mesmo valor no banco.
+        linhas.extend(e for e in (conta.get("entries") or []) if not e.get("aporte"))
     # dict guarda a ordem de inserção: é a do HTML.
     return [(" + ".join(nomes), numero, linhas)
             for numero, nomes, linhas in grupos.values()]
