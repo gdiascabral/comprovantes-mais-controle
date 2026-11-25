@@ -715,6 +715,11 @@ def movimentos_do_html(movimentos) -> list[dict]:
 
 
 AVISO_SEM_CONTA = "conta de origem não está no HTML"
+AVISO_AMBIGUO = "conta de origem ambígua"
+AVISO_DE_FORA = "aporte de fora — não sai de conta do HTML"
+#: Começo (já normalizado) de `tela_do_dia.decisoes.DE_FORA`: o aporte de
+#: sócio ou investidor de fora não sai de conta nenhuma do HTML.
+AVISO_DE_FORA_PREFIXO = "DE FORA"
 
 
 def _chave_conta(nome) -> str:
@@ -725,7 +730,8 @@ def _chave_conta(nome) -> str:
 
 def e_aporte(tipo) -> bool:
     """O tipo do movimento é um aporte ("Aporte que entra na mãe",
-    "Aporte (aba Regras)")? Transferência e distribuição não são."""
+    "Aporte (aba Regras)")? Transferência, distribuição e tipo desconhecido
+    da aba Regras não são: só tipo DECLARADO aporte soma."""
     return relatorio.sem_acento(str(tipo or "")).casefold().strip().startswith("aporte")
 
 
@@ -750,24 +756,37 @@ def aportes_nas_contas(contas: list[dict], movimentos: list[dict],
     Devolve (movimentos que ficam só informativos, total somado, quantos). O
     aporte cuja origem não está no HTML fica na seção informativa, com aviso;
     transferência e distribuição não mudam."""
-    por_chave = {}
+    por_nome: dict[str, list[dict]] = {}
+    por_rotulo: dict[str, list[dict]] = {}
     for c in contas:
-        por_chave.setdefault(_chave_conta(c["nome"]), c)
+        por_nome.setdefault(_chave_conta(c["nome"]), []).append(c)
         rot = _chave_conta(rotulo_de(c["nome"])) if rotulo_de else ""
         if rot:
-            por_chave.setdefault(rot, c)
+            por_rotulo.setdefault(rot, []).append(c)
     restam, somado, quantos, vistos = [], Decimal("0.00"), 0, {}
     for m in movimentos:
         if not e_aporte(m["tipo"]):
             restam.append(m)
             continue
-        conta = por_chave.get(_chave_conta(m["de"]))
-        if conta is None:
+        de = _chave_conta(m["de"])
+        if de.startswith(AVISO_DE_FORA_PREFIXO):
+            restam.append(dict(m, aviso=AVISO_DE_FORA))
+            continue
+        # Duas passadas: o nome exato da conta do ERP; só depois o rótulo do
+        # painel. Mais de uma conta na mesma passada = ambíguo, nunca chuta.
+        achadas = por_nome.get(de) or por_rotulo.get(de) or []
+        if not achadas:
             restam.append(dict(m, aviso=AVISO_SEM_CONTA))
             continue
+        if len(achadas) > 1:
+            restam.append(dict(m, aviso=AVISO_AMBIGUO))
+            continue
+        conta = achadas[0]
         base = (m["de"], m["para"], m["centavos"])
         vistos[base] = vistos.get(base, 0) + 1
-        conta["entries"].append({
+        # Chave PRÓPRIA (`aportes`), nunca `entries`: o "Conferir agendamentos"
+        # lê `entries` e um aporte absorveria pendência de mesmo valor no banco.
+        conta.setdefault("aportes", []).append({
             "id": f"aporte:{m['de']}:{m['para']}:{m['centavos']}:{vistos[base]}",
             "aporte": True, "link": "", "tipo": "Aporte", "vencimento": "",
             "vencido": False, "dias_vencido": 0, "dados_original": "",

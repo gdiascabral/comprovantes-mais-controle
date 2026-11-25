@@ -2432,7 +2432,7 @@ class TelaDoDiaFrame(ttk.Frame):
             gerados = html_pagamentos.gravar(resultado, lancamentos, self.leitura.anexos,
                                              pasta, ini, fim, pastas_extras=(pasta, util.pasta_base()),
                                              movimentos=movimentos, primeiras=primeiras,
-                                             rotulo_de=self._rotulo_do_painel)
+                                             rotulo_de=self._rotulo_que_cobre)
         except Exception as e:                              # noqa: BLE001
             self._log(f"[!] HTML dos pagamentos: {e}")
             messagebox.showwarning("HTML dos pagamentos",

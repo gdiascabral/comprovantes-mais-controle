@@ -226,6 +226,10 @@ MODELO_GERAL = r'''<!doctype html>
 <script>
 const DATA = __JSON__;
 const STORAGE_KEY = __STORAGE__;
+// `c.entries` sao os lancamentos; `c.aportes` (25/11/2026) os aportes que SAEM
+// desta conta, em chave propria para a conferencia de agendamentos nao os ler.
+// A tela junta os dois: aporte vai no fim da lista e soma no total da conta.
+DATA.contas.forEach(c => { c.lista = (c.entries || []).concat((c.aportes || []).map(a => Object.assign({aporte: true}, a))); });
 
 function showToast(msg){
   const t = document.getElementById('toast');
@@ -289,7 +293,7 @@ function updateSummary(){
   DATA.contas.forEach((c, ci) => {
     let total = 0, marked = 0, markedCount = 0;
     let count = 0, bloq = 0;
-    c.entries.forEach((e, idx) => {
+    c.lista.forEach((e, idx) => {
       const k = rowKey(c, e, idx);
       if(excluidosState[k]) return;
       count++; total += e.centavos; if(e.bloqueio) bloq++;
@@ -390,7 +394,7 @@ function renderAccounts(){
       </tr></thead><tbody></tbody>`;
     const tbody = table.querySelector('tbody');
 
-    c.entries.forEach((e, idx) => {
+    c.lista.forEach((e, idx) => {
       if(e.aporte){ tbody.appendChild(linhaDoAporte(c, e, idx)); return; }
       const tr = document.createElement('tr');
       const rowId = rowKey(c, e, idx);

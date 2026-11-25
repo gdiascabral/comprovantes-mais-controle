@@ -207,15 +207,20 @@ TIPO_TRANSFERENCIA = "Transferência entre contas"
 TIPO_DISTRIBUICAO = "Distribuição de lucros"
 #: O aporte definido na aba Regras do MODELO (o painel e o Excel do dia).
 TIPO_APORTE_REGRAS = "Aporte (aba Regras)"
+#: Tipo da aba Regras que não é aporte, transferência nem distribuição (ou
+#: está em branco): só informativo no HTML, nunca soma na conta (25/11/2026).
+TIPO_OUTRO_REGRAS = "Movimento (aba Regras)"
 
 
 def _tipo_da_regra(tipo: str) -> str:
-    t = util.sem_acento(tipo or "Aporte").casefold().strip()
+    t = util.sem_acento(tipo or "").casefold().strip()
     if t.startswith("transf"):
         return TIPO_TRANSFERENCIA
     if t.startswith("distribui"):
         return TIPO_DISTRIBUICAO
-    return TIPO_APORTE_REGRAS
+    if t.startswith("aporte"):
+        return TIPO_APORTE_REGRAS
+    return TIPO_OUTRO_REGRAS
 
 
 def contas_que_aportam(movimentos, contas_erp, rotulo_de) -> list[str]:
