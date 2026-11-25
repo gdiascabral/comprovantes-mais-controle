@@ -1016,6 +1016,7 @@ Ctrl+N), invisível ao aprovador. **Não escreve no Mais Controle.**
 | `controle_erp.py` | `GET receipt-installments` por conta × natureza (Aporte de Capital, Aporte de Investidor), pela aba do robô |
 | `controle_nuvem.py` | `controle_aporte_conta`, `_aportador`, `_atribuicao` (ler: e_ativo; escrever: e_admin) |
 | `controle_frame.py` | tela fina; nuvem numa thread própria |
+| `relatorio_aportes.py` / `relatorio_aportes_pdf.py` | o relatório de aportes e distribuições para o sócio (25/11/2026, ver o fim desta seção) |
 
 **Aportador = Cliente do recebimento pelo nome COMPLETO** (`util.norm_espaco`),
 contra os aportadores daquela conta; o resto vai para "Sem dono", fora da conta
@@ -1083,6 +1084,52 @@ voltou e quem saiu; (3) «Desmarcar» num incluído confere se ele saiu mesmo
 e, se a conta cobre, segue para o Desmarcar de sempre (nuvem). O Registro
 diz quem ficou ("fica (a conta paga sem aporte)"). O HTML de pessoa física
 continua tirando todos. Testes: `tests/test_reembolso_so_onde_falta.py`.
+
+**Relatório de aportes e distribuições (25/11/2026, pedido do dono).** Botão
+"Gerar relatório…" no cabeçalho da aba, aceso só com uma leitura INTEIRA à
+vista e nada lendo (qualquer papel que vê a aba: é só leitura). Formulário:
+a conta do controle (só as que leram sem erro), o sócio (um aportador ou
+"Todos os sócios") e o período (01/01 do ano até hoje; até depois de hoje
+vira hoje). A leitura roda na vaga da aba (`dona=self`) e é SÓ GET.
+`relatorio_aportes.py` (puro) e `relatorio_aportes_pdf.py` (Pillow, A4 em
+pé, a escolha da Prova de saldos — sem lib de PDF nova e sem aba nova no
+Chrome, que viria para a frente da pessoa). Regras:
+- **Aportes** = os mesmos recebimentos do Controle, lidos de NOVO no período
+  pedido (`ler_recebimentos` com os pares começando no "de"; antes da abertura
+  do controle também vale). De quem é cada um sai de
+  `controle_aportes.dono_do_recebimento`, extraída do `apurar` para os dois
+  nunca discordarem (apontamento, conflito com o Cliente, "não é aporte").
+  Leitura duvidosa (repetido, fora do período, zero/negativo) PARA, sem PDF.
+  A conta de cada aporte vem do `onde=` de `ler_recebimentos` (o LISTAR não a
+  traz e as somadas se juntam no mesmo rótulo).
+- **Distribuições** = `pagos_de_distribuicao`: `paginated-result` mês a mês
+  (janela grande dá "Failed to fetch") com `accountIds` de cada conta,
+  `categoryIds` da DISTRIBUIÇÃO DE LUCROS (`categories/all`, falta ou repete
+  PARA) e os `FILTROS_NEUTROS` — sem eles a tela com centro de custo escolhido
+  devolve lista curta com cara de completa (e sem a herança da tela o ERP dá
+  400, medido). O filtro do ERP só encurta: `distribuicoes_dos_pagos` confere
+  categoria, conta e favorecido (`paidTo`, nome completo, sem acento/caixa).
+  Distribuição para empresa não é do sócio e fica fora — mas AVISADA, como
+  o aporte sem dono (`distribuicoes_fora`: favorecido que não é sócio da
+  conta, ou outra categoria; para outro sócio da conta num relatório de um
+  só, não). Repetido sai pelo SUB-pagamento (`paidId`), depois do
+  `montar_pagos` — não se sabe se o `paids[]` vem inteiro ou recortado pelo
+  filtro de conta —, e o mesmo com valor/data/conta diferentes PARA. A data
+  é o `payingDate` cru lido por `data_do_erp` (Brasília), como os aportes.
+  Revisão de dinheiro do mesmo dia; ficou de fora, anotado: parâmetro
+  herdado da tela de Pagamentos que não está nos `FILTROS_NEUTROS`
+  (fornecedor, busca) ainda encurtaria a lista sem erro.
+- **O PDF vai ao sócio**: resumo por sócio (com mais de um) e mês a mês,
+  depois o detalhe dos aportes (DATA, CONTA = só o banco, QUEM APORTOU, VALOR)
+  e das distribuições (SAIU DE, PARA). Sem saldo, sem "para igualar", sem nota
+  interna. Grava em `<pasta do app>/Relatórios de aportes/` e abre.
+- **Sem dono no período fica FORA e a tela pergunta antes de gravar**
+  (`texto_do_fora`, somado por Cliente, maior primeiro; um a um no Registro).
+  Medido na Buritis em 25/11/2026 contra o relatório conferido à mão: as 17
+  distribuições batem (R$ 560.000); dos 59 aportes, 39 casam pelo Cliente e
+  20 (R$ 287.000) têm a própria empresa ou ninguém de Cliente no ERP — o app
+  não chuta pela descrição (regra da aba); corrige-se o Cliente no ERP.
+  Testes: `tests/test_relatorio_aportes.py`, `tests/test_relatorio_aportes_tela.py`.
 
 ## Primeira leva de velocidade (19/11/2026)
 
