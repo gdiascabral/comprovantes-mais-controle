@@ -2001,12 +2001,13 @@ STATUS_LIBERADO = "ATENÇÃO — liberado na tela do dia"
 STATUS_ALTERADO_NA_LEITURA = "ATENÇÃO — alterado durante a leitura"
 
 
-def _leitura_ia_do_item(item, files, leituras_ia, oc):
+def _leitura_ia_do_item(item, files, leituras_ia, oc, doc_favorecido=""):
     """`ia_do_dia` importa este módulo: o import mora aqui dentro."""
     if not leituras_ia:
         return None
     from . import ia_do_dia
-    return ia_do_dia.leitura_do_item(item, files, leituras_ia, oc=oc)
+    return ia_do_dia.leitura_do_item(item, files, leituras_ia, oc=oc,
+                                     doc_favorecido=doc_favorecido)
 
 
 def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
@@ -2766,7 +2767,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             "reembolso_socio": socio is not None,
             # Leitura por IA do anexo escrito à mão (`ia_do_dia`): None quando
             # nenhum anexo desta linha foi para ela. Só o `nivel.py` e os HTML a leem.
-            "leitura_ia": _leitura_ia_do_item(item, files, leituras_ia, oc),
+            "leitura_ia": _leitura_ia_do_item(
+                item, files, leituras_ia, oc,
+                (participantes or {}).get(util.norm_espaco(favorecido)) or ""),
             "total_parcelas": _total_de_parcelas(item),
             # OC e centro de custo SEPARADOS, além de dentro da `descricao`.
             # A planilha continua lendo a descrição montada; quem precisa deles

@@ -47,6 +47,8 @@ _IA_TIPO = {"recibo": "recibo", "pedido_de_balcao": "pedido de balcão",
             "comprovante_de_cartao": "comprovante de cartão", "nota_fiscal": "nota fiscal",
             "comprovante_de_pagamento": "comprovante de pagamento",
             "boleto": "boleto", "outro": "outro papel"}
+_IA_PROVA_QUEM_RECEBE = (li.BATE, li.TOTAL_BATE_SOMA_NAO_FECHA)
+DIVERGE_IA = "diverge"                 # o mesmo texto de `quem_recebe.DIVERGE`
 MOTIVO_COMPROVANTE = "parece comprovante de pagamento: já foi pago?"
 
 _STATUS_NAO_LI = ("anexo não lido", "sem dados de pgto", "QR Code sem valor")
@@ -173,6 +175,17 @@ def conferido(r: dict, com_ia: bool = True) -> dict:
         # Só preenche o que está "não conferido", e não em título parcelado
         # (a leitura pode ser de outra parcela do mesmo valor).
         _marcar(estado, "valor", BATE)
+    # Quem recebe pela IA (25/11/2026): o emitente lido no papel bate com o
+    # favorecido. Só vale quando a própria IA também prova o valor (total bate,
+    # ou bate e só a soma dos itens não fecha) e fora de título parcelado — a
+    # leitura pode ser de outra parcela. Diverge vale sempre. Nunca sobe além
+    # de "Olhe": o `nivel_da_linha` mantém o motivo da IA na linha.
+    if ia.get("tipo_papel") not in ("comprovante_de_pagamento", "comprovante_de_cartao"):
+        if ia.get("quem_recebe") == DIVERGE_IA:
+            _marcar(estado, "quem recebe", DIVERGE)
+        elif (ia.get("quem_recebe") == BATE and ia.get("estado") in _IA_PROVA_QUEM_RECEBE
+                and _total(r) <= 1):
+            _marcar(estado, "quem recebe", BATE)
     if REEMBOLSO_DE_SOCIO_PODE_PAGAR and r.get("reembolso_socio"):
         # Só o sócio do cadastro: a chave é a dele, com o CPF fechando o DV
         # (`reembolso.socio_do_documento`). O aviso "PAGAR PARA" também sai
@@ -205,6 +218,22 @@ def motivo_da_ia(r: dict) -> str:
     return f"lido por IA: {lido} × lançamento R$ {_brl(r.get('valor'))} — {ia.get('estado')}{provas}"
 
 
+def _linhas_do_emitente(ia: dict) -> list:
+    """O emitente lido no papel e o que a conferência com o favorecido disse."""
+    nome, doc, tel = (str(ia.get(c) or "").strip() for c in
+                      ("emitente", "emitente_cnpj_cpf", "emitente_telefone"))
+    if not (nome or doc):
+        return []
+    lido = " · ".join(x for x in (nome, f"CNPJ/CPF {doc}" if doc else "",
+                                  f"tel. {tel}" if tel else "") if x)
+    estado = ia.get("quem_recebe") or "não conferido"
+    por = f" ({ia['quem_recebe_por']})" if ia.get("quem_recebe_por") else ""
+    linhas = [f"emitente lido: {lido} — quem recebe {estado}{por}"]
+    if ia.get("quem_recebe") == DIVERGE_IA and ia.get("quem_recebe_motivo"):
+        linhas.append(ia["quem_recebe_motivo"])
+    return linhas
+
+
 def etiqueta_da_ia(r: dict) -> dict | None:
     """O que os dois HTML mostram de `registro["leitura_ia"]`:
     `{"titulo": "lido por IA: recibo · total R$ 410,00 · bate", "linhas": [...]}`."""
@@ -222,6 +251,7 @@ def etiqueta_da_ia(r: dict) -> dict | None:
     if ia.get("provas"):
         linhas.append("provas: " + ", ".join(ia["provas"]))
     linhas += [m for m in ia.get("motivos") or [] if m]
+    linhas += _linhas_do_emitente(ia)
     linhas += [x for x in (ia.get("oc"), ia.get("endereco")) if x]
     if ia.get("duvidas"):
         linhas.append("a IA duvidou de: " + ", ".join(ia["duvidas"]))
@@ -268,6 +298,14 @@ def nivel_da_linha(r: dict, *, bloqueio: str = "", vencido: bool = False) -> Niv
             olhe.append(motivo_da_ia(r))
         if (aberto or diverge) and ia.get("nao_lidos") and int(ia.get("anexos") or 0) > 1:
             olhe.append(f"{ia['nao_lidos']} anexo(s) não lido(s) pela IA")
+        if ia.get("quem_recebe") == DIVERGE_IA and ia.get("quem_recebe_motivo"):
+            olhe.append(ia["quem_recebe_motivo"])
+        elif (estado["quem recebe"] == BATE
+                and conferido(r, com_ia=False)["quem recebe"] != BATE):
+            # Quem recebe só está provado POR IA: nunca "Pode pagar", mesmo
+            # com o valor provado por outro caminho (revisão de dinheiro,
+            # 25/11/2026). Vale sem olhar `aberto`.
+            olhe.append("quem recebe lido por IA: " + (ia.get("emitente") or "?"))
     if not status.startswith("APTO"):
         olhe.append(_sem_prefixo(status) or "sem situação")
     elif status.startswith("APTO* (reembolso)"):
