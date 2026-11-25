@@ -42,3 +42,15 @@ def test_o_alerta_do_cartao_nao_se_repete_nos_motivos():
     html = html_pf._cartao(1, it, HOJE)
     for alerta in it.alertas:
         assert html.count(html_pf._e(alerta)) == 1
+
+
+def test_cartao_mostra_a_etiqueta_lido_por_ia_e_o_bloqueio_nao_muda():
+    ia = {"estado": "diverge", "falhou": False, "provas": [], "total_lido": "75.00",
+          "motivos": ["total lido R$ 75.00 × lançamento R$ 50.00"], "tipo_papel": "pedido_de_balcao",
+          "origem": "api", "endereco": "", "oc": "", "duvidas": []}
+    sem, com = _item(), _item(leitura_ia=ia)
+    html = html_pf._cartao(1, com, HOJE)
+    assert "lido por IA: pedido de balcão · total R$ 75,00 · diverge" in html
+    assert "lido por IA: R$ 75,00 × lançamento R$ 50,00 — diverge" in html
+    assert 'class="ia-tag"' in html and "ia-tag" not in html_pf._cartao(1, sem, HOJE).split("</style>")[-1]
+    assert html_pf.bloqueio_duro(com.registro) == html_pf.bloqueio_duro(sem.registro)

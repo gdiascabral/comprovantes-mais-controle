@@ -95,6 +95,9 @@ class Entradas:
     #: Aba PF (12/11/2026): as chaves (`relatorio.chave`) das contas marcadas,
     #: que entram mesmo sendo "APENAS LANÇAMENTO". None = a régua de sempre.
     contas_escolhidas: frozenset | None = None
+    #: `{downloadUrl: leitura por IA}` dos anexos escritos à mão que o OCR não
+    #: leu (`ia_do_dia`, spec de 19/11/2026). Vazio = IA desligada, como antes.
+    leituras_ia: dict = field(default_factory=dict)
 
 
 def _periodo_legivel(periodo) -> str:
@@ -170,7 +173,8 @@ def remontar(entradas: Entradas, ids_nao_confirmados=(), *,
         qr_pix=entradas.qr_pix,
         ids_liberados=ids_liberados,
         alterados_na_leitura=entradas.alterados_na_leitura,
-        contas_escolhidas=entradas.contas_escolhidas)
+        contas_escolhidas=entradas.contas_escolhidas,
+        leituras_ia=entradas.leituras_ia)
     if entradas.dividir_boletos:
         resultado = boletos_somados.dividir(resultado, entradas,
                                             titulos_erp=entradas.titulos_erp)

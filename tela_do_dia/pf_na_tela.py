@@ -34,7 +34,7 @@ from conciliacao.config import load_config
 from conciliacao.errors import ErpError
 from erp import sessao as erp_sessao
 from pagamentos_dia import baixa_pelo_arquivo as bpa
-from pagamentos_dia import html_pf, leitura_do_dia, reembolso
+from pagamentos_dia import html_pf, ia_do_dia, leitura_do_dia, reembolso
 from pagamentos_dia import regras_pagamento as regras_pag
 from pagamentos_dia.pagamentos_frame import _carregar_mapas, _historico
 
@@ -326,7 +326,8 @@ class AbaPF:
                 regras_fornecedor=regras_pag.carregar_fornecedores(),
                 destacar=regras_pag.carregar_confirmar(), log=log,
                 progresso=lambda f, t: tela.q.put(("status", f"PF: lendo... {f}/{t}")),
-                cancelar=tela._parar.is_set, contas_escolhidas=escolhidas)
+                cancelar=tela._parar.is_set, contas_escolhidas=escolhidas,
+                ia=ia_do_dia.da_maquina(log=log))
             if leitura.interrompida:
                 log("\nPF: leitura interrompida — nenhum HTML gerado.")
                 tela.q.put(("status", "PF: leitura interrompida."))

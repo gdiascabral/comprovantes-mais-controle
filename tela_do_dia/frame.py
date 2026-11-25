@@ -30,7 +30,7 @@ from conciliacao.mapping import AccountMapping
 from conciliacao.workbook import WorkbookError, output_name
 from nuvem import registro, sessao
 from nuvem.pagamentos_do_dia import DiaNaNuvem
-from pagamentos_dia import html_pagamentos, leitura_do_dia
+from pagamentos_dia import html_pagamentos, ia_do_dia, leitura_do_dia
 from pagamentos_dia import reembolso, relatorio
 from pagamentos_dia import regras_pagamento as regras_pag
 from pagamentos_dia.pagamentos_frame import _carregar_mapas, _historico
@@ -849,7 +849,9 @@ class TelaDoDiaFrame(ttk.Frame):
                     destacar=regras_pag.carregar_confirmar(),
                     log=self._log,
                     progresso=lambda f, t: self.q.put(("status", f"Lendo... {f}/{t}")),
-                    cancelar=self._parar.is_set)
+                    cancelar=self._parar.is_set,
+                    # Sem chave da API, None: tudo como antes (spec de 19/11/2026, parte 3).
+                    ia=ia_do_dia.da_maquina(log=self._log))
             except Exception as e:                          # noqa: BLE001
                 # Credenciais que a tela de Pagamentos não deu, lista que não
                 # carregou: o recado de sempre, e nada na tela.

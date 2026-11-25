@@ -2001,6 +2001,14 @@ STATUS_LIBERADO = "ATENÇÃO — liberado na tela do dia"
 STATUS_ALTERADO_NA_LEITURA = "ATENÇÃO — alterado durante a leitura"
 
 
+def _leitura_ia_do_item(item, files, leituras_ia, oc):
+    """`ia_do_dia` importa este módulo: o import mora aqui dentro."""
+    if not leituras_ia:
+        return None
+    from . import ia_do_dia
+    return ia_do_dia.leitura_do_item(item, files, leituras_ia, oc=oc)
+
+
 def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      incluir=(), excluir=(), pix_reembolso=None,
                      urls_ocr=(), regras_fornecedor=None,
@@ -2008,7 +2016,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                      cadastro_reembolso=None, anexos_nao_lidos=(),
                      qr_pix=None, titulos_nao_lidos=(),
                      ids_liberados=(), alterados_na_leitura=(),
-                     contas_escolhidas=None) -> Resultado:
+                     contas_escolhidas=None, leituras_ia=None) -> Resultado:
     """Transforma lançamentos do ERP em linhas de planilha.
 
     `anexos`             {tradePayableId: [anexo]}
@@ -2040,6 +2048,10 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
     `alterados_na_leitura` ids de lançamentos que mudaram no ERP enquanto os
                          anexos eram lidos: saem `STATUS_ALTERADO_NA_LEITURA`
                          (vazio = como sempre; só a `leitura_do_dia` passa)
+    `leituras_ia`        `{downloadUrl: leitura}` de `ia_do_dia` (anexo escrito
+                         à mão que o OCR não leu). A linha ganha
+                         `registro["leitura_ia"]`; quem classifica é o
+                         `nivel.py`. Vazio = como sempre
     """
     pix_reembolso = pix_reembolso or {}
     regras_forn = regras_fornecedor or {}
@@ -2752,6 +2764,9 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # quando ninguém leu o número da parcela (Remessa/Retorno).
             "fornecedor_no_anexo": bool(fornecedor_nos_textos(item, do_anexo)),
             "reembolso_socio": socio is not None,
+            # Leitura por IA do anexo escrito à mão (`ia_do_dia`): None quando
+            # nenhum anexo desta linha foi para ela. Só o `nivel.py` e os HTML a leem.
+            "leitura_ia": _leitura_ia_do_item(item, files, leituras_ia, oc),
             "total_parcelas": _total_de_parcelas(item),
             # OC e centro de custo SEPARADOS, além de dentro da `descricao`.
             # A planilha continua lendo a descrição montada; quem precisa deles

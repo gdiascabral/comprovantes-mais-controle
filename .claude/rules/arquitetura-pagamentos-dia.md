@@ -1015,3 +1015,28 @@ paths:
   `anotar` depois da divisão em boletos; linha dividida (`parte`) não vira
   parcela. Título que não leu: `{"numero": None, "total": N}` e a linha vai
   para "Não li". Testes: `tests/test_parcelas.py`.
+
+- `pagamentos_dia/leitura_ia.py` + `ia_do_dia.py` + `cliente_anthropic.py` +
+  `chave_ia.py` — **leitura por IA de anexo escrito à mão** (spec de
+  19/11/2026, parte 3, fase 1; liga em 25/11/2026). `leitura_ia` é a regra
+  pura (pedido, `conferir`, cache); `ia_do_dia` a liga à leitura do dia:
+  `baixar_textos(brutos_ia=)` guarda os bytes do que não tem camada de texto,
+  `selecionar` aplica as condições da spec (OCR local sem linha digitável
+  válida nem o valor, não é comprovante nem "PAGAR PARA", tipo aceito pela
+  API), `ler_candidatos` lê cada anexo UMA vez (`leituras_ia.json` ao lado do
+  exe, chave id + tamanho + data/hash, nunca a URL) com teto de 60 pela API por
+  geração, e `montar_registros(leituras_ia=)` grava `registro["leitura_ia"]`.
+  **Cliente sem o pacote `anthropic`** (exe novo seria preciso): POST por
+  `requests` em `cliente_anthropic`, erro/prazo/HTTP ruim = `LeituraFalhou`.
+  **A chave** mora cifrada pela DPAPI em `anthropic.dat` (`chave_ia`) ou, na
+  máquina de quem gera, em `_chaves/anthropic-api.txt` (só leitura); sem chave
+  `ia_do_dia.da_maquina()` devolve None e `ler_pagamentos(ia=None)` é como
+  antes. **Regras de nível**: valor cuja prova veio da IA fica no máximo em
+  "Olhe", com "lido por IA: R$ x × lançamento R$ y — estado"; "diverge" marca
+  o valor como divergente; falha ou ilegível é "Não li"; título parcelado não
+  aceita a IA como prova de valor (só como divergência). **Soma do papel que
+  não fecha** (itens × total escrito) com total e outra prova concordando é
+  `TOTAL_BATE_SOMA_NAO_FECHA` (Olhe), não "diverge". O bloqueio do Copiar não
+  muda. A etiqueta "lido por IA" sai nos dois HTML (`nivel.etiqueta_da_ia`).
+  Testes: `test_leitura_ia.py`, `test_cliente_anthropic.py`, `test_chave_ia.py`,
+  `test_ia_do_dia.py`, `test_nivel_ia.py`, `test_leitura_ia_na_leitura_do_dia.py`.
