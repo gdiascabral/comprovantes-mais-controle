@@ -1337,7 +1337,7 @@ def test_o_pix_e_nomeado_sem_abrir_o_pdf():
     from baixar_comprovantes import nome_final as nf
 
     campos = nf.do_pix({"data": "24/08/2026", "valor": 2980.0,
-                        "nome": "Ar Pre Moldados",
+                        "nome": "Vm Pre Fabricados",
                         "descricao": "RPB 24 QD 26A LT 08 OC 6974",
                         "detalhePix": {}})
     assert campos["valor"] == "2.980,00"

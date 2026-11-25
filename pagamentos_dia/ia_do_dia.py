@@ -29,7 +29,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from . import leitura_ia as li
-from . import nivel, ocr_boleto, relatorio
+from . import nivel, ocr_boleto, quem_recebe, relatorio
 
 #: Decisão 3: teto de leituras PELA API por geração (cache não conta).
 TETO_PADRAO = 60
@@ -254,7 +254,15 @@ def _escolher(resultados: list[dict]) -> dict:
         if achou and (alvo == li.DIVERGE or not usaveis):
             return achou[0]
     if usaveis:
-        return max(usaveis, key=lambda r: _GRAVIDADE[r["estado"]])
+        forte = dict(max(usaveis, key=lambda r: _GRAVIDADE[r["estado"]]))
+        # Papel emitido por outro: a divergência de quem recebe de qualquer
+        # leitura utilizável vai junto, mesmo que a mais forte seja de outro anexo.
+        ruim = next((r for r in usaveis if r.get("quem_recebe") == quem_recebe.DIVERGE), None)
+        if ruim is not None:
+            for c in ("emitente", "emitente_cnpj_cpf", "emitente_telefone", "quem_recebe",
+                      "quem_recebe_por", "quem_recebe_motivo"):
+                forte[c] = ruim[c]
+        return forte
     return resultados[0]
 
 
@@ -279,7 +287,19 @@ def _oc(leitura: dict, oc_do_lancamento: str) -> str:
     return f"OC {lida} ✓" if lida == esperada else f"OC DIVERGE: papel {lida} × lançamento {esperada}"
 
 
-def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "") -> dict | None:
+#: Papéis cujo emitente NÃO é quem recebe o dinheiro (comprovante de banco ou
+#: de maquininha): ali "quem emitiu" não diz nada sobre o favorecido.
+_SEM_EMITENTE = ("comprovante_de_pagamento", "comprovante_de_cartao")
+
+
+def _quem_recebe(leitura: dict, item: dict, doc_favorecido: str) -> quem_recebe.QuemRecebe:
+    if str(leitura.get("tipo_papel") or "") in _SEM_EMITENTE:
+        return quem_recebe.QuemRecebe()
+    return quem_recebe.conferir(leitura, item.get("paidTo"), doc_favorecido)
+
+
+def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "",
+                    doc_favorecido: str = "") -> dict | None:
     """O `registro["leitura_ia"]` do lançamento, ou None quando nenhum anexo dele
     foi para a IA. Só contém texto e números simples (vai para o HTML).
 
@@ -297,7 +317,9 @@ def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "") -> di
     resultados = []
     for e in achados:
         base = {"falhou": False, "pulado": False, "provas": [], "total_lido": "", "motivos": [],
-                "tipo_papel": "", "origem": "", "endereco": "", "oc": "", "duvidas": []}
+                "tipo_papel": "", "origem": "", "endereco": "", "oc": "", "duvidas": [],
+                "emitente": "", "emitente_cnpj_cpf": "", "emitente_telefone": "",
+                "quem_recebe": quem_recebe.NAO, "quem_recebe_por": "", "quem_recebe_motivo": ""}
         if e.get("pulado"):
             resultados.append({**base, "estado": NAO_LIDO, "pulado": True,
                                "motivos": [str(e["pulado"])]})
@@ -307,12 +329,18 @@ def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "") -> di
         else:
             leitura = e["leitura"]
             c = li.conferir(leitura, valor)
+            qr = _quem_recebe(leitura, item, doc_favorecido)
             resultados.append({
                 **base, "estado": c.estado, "provas": list(c.provas),
                 "total_lido": "" if c.total_lido is None else str(c.total_lido),
                 "motivos": list(c.motivos), "tipo_papel": str(leitura.get("tipo_papel") or ""),
                 "origem": e.get("origem") or "", "endereco": _endereco(item, leitura),
-                "oc": _oc(leitura, oc), "duvidas": [str(d) for d in leitura.get("duvidas") or []]})
+                "oc": _oc(leitura, oc), "duvidas": [str(d) for d in leitura.get("duvidas") or []],
+                "emitente": str(leitura.get("emitente_nome") or "").strip(),
+                "emitente_cnpj_cpf": str(leitura.get("emitente_cnpj_cpf") or "").strip(),
+                "emitente_telefone": str(leitura.get("emitente_telefone") or "").strip(),
+                "quem_recebe": qr.estado, "quem_recebe_por": qr.por,
+                "quem_recebe_motivo": qr.motivo})
     escolhido = dict(_escolher(resultados))
     escolhido["anexos"] = len(resultados)
     escolhido["nao_lidos"] = sum(1 for r in resultados if r["estado"] not in USAVEIS)

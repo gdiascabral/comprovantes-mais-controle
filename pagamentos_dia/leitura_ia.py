@@ -58,13 +58,21 @@ ESQUEMA = {
             "additionalProperties": False}},
         "cartao_valor": _TEXTO,
         "cartao_nome": _TEXTO,
+        "emitente_nome": _TEXTO,
+        "emitente_cnpj_cpf": _TEXTO,
+        "emitente_telefone": _TEXTO,
         "duvidas": {"type": "array", "items": _TEXTO},
     },
     "required": ["tipo_papel", "legivel", "total", "total_por_extenso", "ordem_de_compra",
                  "numero_documento", "data", "quadra", "lote", "itens", "cartao_valor",
-                 "cartao_nome", "duvidas"],
+                 "cartao_nome", "emitente_nome", "emitente_cnpj_cpf", "emitente_telefone",
+                 "duvidas"],
     "additionalProperties": False,
 }
+#: Campos que leituras guardadas antes de 25/11/2026 (cache) não têm: a API
+#: os devolve sempre, mas a validação não os exige, senão o cache velho seria
+#: descartado e relido (US$ 0,02 cada). Ausentes, quem recebe fica "não conferido".
+OPCIONAIS = ("emitente_nome", "emitente_cnpj_cpf", "emitente_telefone")
 
 INSTRUCAO = """Este arquivo é um documento de compra de uma construtora: recibo de talão, \
 pedido de balcão preenchido à mão, nota fiscal ou a foto de um desses com o \
@@ -84,6 +92,7 @@ imagem (o valor impresso e o nome escrito à mão nele).
 - Campo que não aparece ou que você não consegue ler: texto vazio.
 - Em "duvidas", liste o nome de cada campo em que a leitura é incerta (letra \
 ambígua, borrão, número que pode ser outro).
+- "emitente_nome": quem EMITIU o papel (a loja, o fornecedor, o prestador que assina o recibo; no cabeçalho ou no carimbo), não quem paga nem o comprador. "emitente_cnpj_cpf": o CNPJ ou CPF do emitente SOMENTE se estiver impresso no papel, como escrito; nunca deduza nem complete. "emitente_telefone": o telefone do emitente, se houver. Vazio se não aparece.
 - "legivel" é false se não dá para ler o documento."""
 
 
@@ -130,13 +139,15 @@ def validar(dados) -> dict:
     é a falha fechada caso algo passe)."""
     if not isinstance(dados, dict):
         raise LeituraFalhou("a resposta não é um objeto")
-    faltam = [c for c in ESQUEMA["required"] if c not in dados]
+    faltam = [c for c in ESQUEMA["required"] if c not in dados and c not in OPCIONAIS]
     if faltam:
         raise LeituraFalhou(f"faltam campos na resposta: {', '.join(faltam)}")
     if dados["tipo_papel"] not in TIPOS_DE_PAPEL or not isinstance(dados["legivel"], bool):
         raise LeituraFalhou("tipo de papel ou 'legivel' fora do esperado")
     if not isinstance(dados["itens"], list) or not isinstance(dados["duvidas"], list):
         raise LeituraFalhou("'itens' ou 'duvidas' não é lista")
+    if any(c in dados and not isinstance(dados[c], str) for c in OPCIONAIS):
+        raise LeituraFalhou("campo do emitente não é texto")
     return dados
 
 
