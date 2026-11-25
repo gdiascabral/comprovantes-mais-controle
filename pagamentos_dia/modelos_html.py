@@ -123,6 +123,8 @@ MODELO_GERAL = r'''<!doctype html>
   .movs .movs-nota{font-size:11.5px;color:var(--muted);padding:8px 18px 0;}
   .movs td,.movs th{overflow-wrap:anywhere;word-break:break-word;}
   .tipo-mov{background:var(--accent-bg);color:var(--accent);}
+  .tipo-aporte{background:var(--accent-bg);color:var(--accent);border:1px dashed var(--accent);}
+  .row-aporte{background:var(--accent-bg);}
   .movs-resumo{padding:9px 12px;font-size:12.5px;border-top:1px solid var(--border);}
   .movs-resumo a{color:var(--accent);font-weight:600;text-decoration:none;}
   .movs-resumo a:hover{text-decoration:underline;}
@@ -208,7 +210,7 @@ MODELO_GERAL = r'''<!doctype html>
 
   <div class="movs" id="movimentos" hidden>
     <div class="account-head"><h2>Movimentos do dia — já cadastrados no banco</h2><div class="account-total">Total <b id="movTotal"></b></div></div>
-    <div class="movs-nota">Só para nada ficar para trás: não entram no total das contas nem na remessa, e não há o que copiar.</div>
+    <div class="movs-nota">Só para nada ficar para trás: não entram no total das contas nem na remessa, e não há o que copiar. Aporte cuja conta de origem está neste HTML aparece na lista dela e soma no total dela.</div>
     <table>
       <thead><tr><th>De</th><th>Para</th><th style="width:22%">Tipo</th><th style="width:16%">Valor</th></tr></thead>
       <tbody id="movBody"></tbody>
@@ -314,6 +316,7 @@ function renderNiveis(){
   if(!caixa) return;
   const soma = {PODE_PAGAR:[0,0], OLHE:[0,0], NAO_LI:[0,0]};
   DATA.contas.forEach(c => (c.entries || []).forEach(e => {
+    if(e.aporte) return;   // aporte nao e pagamento a conferir: fora dos tres niveis
     const k = soma[e.nivel] ? e.nivel : 'NAO_LI';
     soma[k][0] += 1; soma[k][1] += (e.centavos || 0);
   }));
@@ -335,6 +338,28 @@ function renderSummary(){
     tr.querySelector('.sumlink').addEventListener('click', ev => { ev.preventDefault(); document.getElementById('acc-' + ci).scrollIntoView({behavior:'smooth', block:'start'}); });
     body.appendChild(tr);
   });
+}
+// Aporte que SAI desta conta (dono, 25/11/2026): linha da lista e do total da
+// conta, sem chave Pix, sem Copiar e sem nivel; so a marca "pago" e o Excluir.
+function linhaDoAporte(c, e, idx){
+  const tr = document.createElement('tr');
+  const rowId = rowKey(c, e, idx);
+  tr.className = 'row-aporte';
+  if(checkedState[rowId]) tr.classList.add('row-checked');
+  if(excluidosState[rowId]) tr.classList.add('row-excluida');
+  tr.innerHTML = `
+    <td class="chk-cell"><input type="checkbox" class="row-chk" ${checkedState[rowId] ? 'checked' : ''}></td>
+    <td data-label="Tipo"><span class="tipo-badge tipo-aporte">Aporte</span></td>
+    <td data-label="Venc."><span class="venc sem">—</span></td>
+    <td data-label="Dados do pagamento"><div class="no-data-note">Aporte já cadastrado no banco — sem chave Pix, nada para copiar</div></td>
+    <td data-label="Valor"><span class="code valor">${esc(e.valor)}</span></td>
+    <td data-label="Fornecedor"><div class="fav">${esc(e.favorecido)}<span class="pago-badge">PAGO</span></div><div class="status-badge">APORTE</div></td>
+    <td data-label="Descricao"><span class="desc">${esc(e.descricao)}</span></td>
+    <td class="acoes-cell"><div class="acoes"><button class="delbtn" type="button" title="Excluir da lista" aria-label="Excluir da lista">&#10005; Excluir</button></div></td>`;
+  const chk = tr.querySelector('.row-chk');
+  tr.querySelector('.delbtn').addEventListener('click', () => { excluidosState[rowId] = true; tr.classList.add('row-excluida'); saveExcluidos(); updateSummary(); });
+  chk.addEventListener('change', () => { checkedState[rowId] = chk.checked; tr.classList.toggle('row-checked', chk.checked); saveChecked(); updateSummary(); });
+  return tr;
 }
 function renderAccounts(){
   const accEl = document.getElementById('accounts');
@@ -366,6 +391,7 @@ function renderAccounts(){
     const tbody = table.querySelector('tbody');
 
     c.entries.forEach((e, idx) => {
+      if(e.aporte){ tbody.appendChild(linhaDoAporte(c, e, idx)); return; }
       const tr = document.createElement('tr');
       const rowId = rowKey(c, e, idx);
       const isChecked = !!checkedState[rowId];
@@ -439,7 +465,7 @@ function renderMovimentos(){
   movs.forEach(m => {
     movTotal += m.centavos;
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${esc(m.de)}</td><td>${esc(m.para)}</td><td><span class="tipo-badge tipo-mov">${esc(m.tipo)}</span></td><td class="valor">R$ ${reais(m.centavos)}</td>`;
+    tr.innerHTML = `<td>${esc(m.de)}</td><td>${esc(m.para)}</td><td><span class="tipo-badge tipo-mov">${esc(m.tipo)}</span>${m.aviso ? `<div class="bloq">${esc(m.aviso)}</div>` : ''}</td><td class="valor">R$ ${reais(m.centavos)}</td>`;
     body.appendChild(tr);
   });
   document.getElementById('movTotal').textContent = 'R$ ' + reais(movTotal);

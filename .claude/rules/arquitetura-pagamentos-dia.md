@@ -802,6 +802,16 @@ paths:
   Total próprio (`Gerados.total_movimentos`), fora do `total` das contas e
   do total geral da página; não são `Resultado.contas`, então não chegam à
   remessa. Sem movimentos, a seção fica escondida.
+  **Desde 25/11/2026 o APORTE sai desta seção** (dono: "inclua os aportes
+  dentro da lista e valor de pgtos da conta"): `aportes_nas_contas` põe cada
+  movimento de tipo "Aporte…" como linha (`aporte: true`, id `aporte:<de>:<para>:
+  <centavos>:<n>`, sem chave, sem Copiar, sem nível) na lista da conta cujo nome
+  — ou rótulo do painel (`gravar(rotulo_de=)`) — casa com `de` por
+  `util.norm_espaco`, e soma no total da conta e no total geral
+  (`Gerados.total`, `aportes_na_conta`). Fica fora dos três níveis, da remessa
+  e da planilha. `de` que não casa (inclusive "de fora") continua aqui, com o
+  aviso "conta de origem não está no HTML". Transferência e distribuição não
+  mudaram. O HTML de pessoa física não recebe movimentos.
   **A seção vem logo DEPOIS do quadro-resumo, antes das contas** (dono,
   23/10/2026: no fim da página ele não a achou e pensou que os aportes não
   tinham vindo), e o resumo ganha a linha "Movimentos do dia: N · R$ total ↓"
