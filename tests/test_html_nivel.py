@@ -56,3 +56,32 @@ def test_a_pagina_tem_os_contadores_e_a_etiqueta(tmp_path):
     assert 'id="niveis"' in html and "nivel-badge" in html
     dados = _json(html, "DATA")
     assert all("nivel" in e for c in dados["contas"] for e in c["entries"])
+
+
+def test_leitura_por_ia_vai_para_a_entrada_e_nunca_pode_pagar():
+    ia = {"estado": "bate", "falhou": False, "provas": ["valor por extenso"],
+          "total_lido": "10.00", "motivos": [], "tipo_papel": "recibo", "origem": "api",
+          "endereco": "", "oc": "OC 6803 ✓", "duvidas": []}
+    res = Resultado({"CONTA EXEMPLO": [
+        _linha("FORNECEDOR UM", 10.0, "1", conferencia="valor/fornecedor ? (anexo sem texto) · CNPJ ✓",
+               leitura_ia=ia)]}, [])
+    (e,) = _entradas(res)
+    assert e["nivel"] == nivel.OLHE
+    assert any(m.startswith("lido por IA: R$ 10,00 × lançamento R$ 10,00 — bate") for m in e["motivos"])
+    assert e["leitura_ia"]["titulo"] == "lido por IA: recibo · total R$ 10,00 · bate"
+    assert "OC 6803 ✓" in e["leitura_ia"]["linhas"]
+
+
+def test_o_bloqueio_do_copiar_e_o_mesmo_com_ou_sem_ia():
+    sem = Resultado({"CONTA EXEMPLO": [_linha("FORNECEDOR UM", 10.0, "1")]}, [])
+    com = Resultado({"CONTA EXEMPLO": [_linha("FORNECEDOR UM", 10.0, "1", leitura_ia={
+        "estado": "diverge", "falhou": False, "provas": [], "total_lido": "12.00",
+        "motivos": [], "tipo_papel": "recibo", "origem": "api", "endereco": "", "oc": "",
+        "duvidas": []})]}, [])
+    assert _entradas(sem)[0]["bloqueio"] == _entradas(com)[0]["bloqueio"]
+
+
+def test_o_modelo_do_html_desenha_a_etiqueta_da_ia():
+    from pagamentos_dia import modelos_html
+    fonte = "".join(str(getattr(modelos_html, n)) for n in dir(modelos_html) if n.isupper())
+    assert "e.leitura_ia" in fonte and "ia-tag" in fonte

@@ -144,6 +144,8 @@ MODELO_GERAL = r'''<!doctype html>
   .c-bate{color:var(--nv-ok);} .c-diverge{color:var(--bloq-text);font-weight:700;} .c-nao{color:var(--muted);border-style:dashed;}
   .parcela{display:inline-block;margin-top:4px;font-size:11px;font-weight:700;background:var(--nv-parc-bg);color:var(--text);border-radius:4px;padding:1px 6px;}
   .obs-parcela{font-size:11px;margin-top:2px;}
+  .ia-tag{margin-top:4px;border:1px dashed var(--nv-olhe);border-radius:6px;padding:2px 6px;font-size:11px;}
+  .ia-tag b{color:var(--nv-olhe);} .ia-tag ul{margin:2px 0 0;padding-left:14px;}
   tr[data-nivel="OLHE"] td:first-child{box-shadow:inset 4px 0 0 #d9a400;}
   #niveis{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px;}
   #niveis button{border:1px solid var(--border);background:var(--card);border-radius:10px;padding:8px 12px;font-size:13px;cursor:pointer;text-align:left;color:var(--text);}
@@ -384,6 +386,7 @@ function renderAccounts(){
         + ((e.motivos || []).length ? `<ul class="motivos">${e.motivos.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : '')
         + (e.parcela ? `<div><span class="parcela">Parcela ${esc(e.parcela)}</span></div>` : '')
         + (e.obs_parcela ? `<div class="obs-parcela">Observação: ${esc(e.obs_parcela)}</div>` : '')
+        + (e.leitura_ia ? `<div class="ia-tag"><b>${esc(e.leitura_ia.titulo)}</b>${(e.leitura_ia.linhas || []).length ? `<ul>${e.leitura_ia.linhas.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}</div>` : '')
         + (confCell ? `<div class="confere">${confCell}</div>` : '');
       const dadosCell = (e.dados_limpo && bloq)
         ? `<div class="bloq">CONFERIR: ${esc(bloq)}</div><div class="code sem-copiar">${esc(e.dados_limpo)}</div>`

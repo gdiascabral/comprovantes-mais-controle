@@ -30,7 +30,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from . import boletos_somados, confirmacao, ocr_boleto, parcelas, qr_pix, relatorio
+from . import boletos_somados, confirmacao, ia_do_dia, ocr_boleto, parcelas, qr_pix, relatorio
 
 
 @dataclass
@@ -53,6 +53,9 @@ class LeituraDosPagamentos:
     #: Segundos de cada etapa, na ordem em que rodaram (`_Cronometro`). A
     #: leitura que deu certo nao deixava rastro de quanto demorou (19/11/2026).
     tempos: dict = field(default_factory=dict)
+    #: Uma frase com as leituras por IA da geração (feitas, do cache, falhas,
+    #: custo estimado); vazia quando a IA está desligada ou nada foi para ela.
+    ia_resumo: str = ""
 
 
 class _Cronometro:
@@ -116,7 +119,7 @@ def baixar_textos(baixar, alvos, *, log=print, progresso=lambda f, t: None,
                   cancelar=lambda: False, ler_qr=qr_pix.ler,
                   texto_pdf=relatorio.texto_de_pdf,
                   ocr_pdf=ocr_boleto.texto_ocr_pdf,
-                  ocr_imagem=ocr_boleto.texto_ocr_imagem):
+                  ocr_imagem=ocr_boleto.texto_ocr_imagem, brutos_ia=None):
     """({url: texto}, {urls por OCR}, {urls não lidas}, {url: [Pix]}) — `_baixar_textos`.
 
     Download que levanta ou devolve nada vira anexo NÃO LIDO (a linha sai
@@ -125,6 +128,11 @@ def baixar_textos(baixar, alvos, *, log=print, progresso=lambda f, t: None,
 
     `cancelar()` True para no próximo anexo e devolve o que leu até ali: quem
     chama tem de perguntar de novo (ou usar `ler_pagamentos`, que lembra).
+
+    `brutos_ia` (um dict, só quando a leitura por IA está ligada): recebe
+    `{url: (bytes, é_pdf)}` do que não tem camada de texto — PDF sem texto e
+    foto que não é aviso. Só guarda; quem decide o que vai à IA é
+    `ia_do_dia.selecionar`.
     """
     textos, urls_ocr, nao_lidos, qrs = {}, set(), set(), {}
     sem_texto, total = 0, len(alvos)
@@ -147,10 +155,14 @@ def baixar_textos(baixar, alvos, *, log=print, progresso=lambda f, t: None,
         if codigos:
             qrs[url] = codigos
         if not ler_texto:
+            if brutos_ia is not None and not eh_pdf:
+                brutos_ia[url] = (dados, False)
             progresso(i, total)
             continue
         texto = texto_pdf(dados) if eh_pdf else ""
         if not texto.strip():
+            if brutos_ia is not None and eh_pdf:
+                brutos_ia[url] = (dados, True)
             texto = ocr_pdf(dados, log) if eh_pdf else ocr_imagem(dados)
             if texto.strip():
                 urls_ocr.add(url)
@@ -271,14 +283,16 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
                    cadastro_reembolso=None, regras_fornecedor=None, destacar=(),
                    conta_entra=relatorio.conta_entra, log=print,
                    progresso=lambda f, t: None, cancelar=lambda: False,
-                   contas_escolhidas=None, relogio=time.monotonic,
+                   contas_escolhidas=None, relogio=time.monotonic, ia=None,
                    **leitores) -> LeituraDosPagamentos:
     """Busca, lê os anexos e apura como a Remessa, de `ini` a `fim` (date).
 
     `api` é a `mc_api` da sessão do Chrome do app (`anx.garantir_sessao()`);
     `abrir_historico`/`carregar_mapas` são os do `analisar_remessa`;
     `leitores` (`ler_qr`, `texto_pdf`, `ocr_pdf`, `ocr_imagem`) vão para
-    `baixar_textos`. Erro da API antes dos anexos (credenciais, lista)
+    `baixar_textos`. `ia` (`ia_do_dia.IaDoDia`, ou None = desligada, o padrão)
+    lê por IA os anexos escritos à mão que o OCR não leu (spec de 19/11/2026,
+    parte 3): as linhas saem no máximo "Olhe"; falha da IA é "Não li". Erro da API antes dos anexos (credenciais, lista)
     propaga; Contatos que falham viram aviso, como no frame.
 
     Devolve `interrompida=True` — e nada apurado — se `cancelar()` disse True
@@ -340,14 +354,27 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
     selecionados = [i for i in leitura.lancamentos
                     if conta_entra(relatorio.nome_da_conta(i))]
     a_pagar, _pagos = relatorio.separar_pagos(selecionados)
+    brutos_ia = {} if ia is not None else None
     textos, urls_ocr, nao_lidos, qrs = baixar_textos(
         api.baixar_anexo, anexos_a_ler(a_pagar, leitura.anexos), log=log,
-        progresso=progresso, cancelar=cancelar, **leitores)
+        progresso=progresso, cancelar=cancelar, brutos_ia=brutos_ia, **leitores)
     crono.etapa("baixar e ler anexos")
     if cancelar():
         leitura.interrompida = True
         return leitura
 
+    leituras_ia = {}
+    if ia is not None and brutos_ia:
+        leituras_ia = ia_do_dia.ler_candidatos(
+            ia, ia_do_dia.selecionar(a_pagar, leitura.anexos, textos, brutos_ia,
+                                     ocr_imagem=leitores.get(
+                                         "ocr_imagem", ocr_boleto.texto_ocr_imagem)),
+            log=log, cancelar=cancelar)
+        leitura.ia_resumo = ia.resumo()
+        crono.etapa("leitura por IA")
+        if cancelar():
+            leitura.interrompida = True
+            return leitura
     # A lista de novo, DEPOIS dos anexos: o que mudou no meio não sai APTO.
     # Erro aqui propaga, como o da primeira lista: sem a releitura não há
     # prova de que nada mudou.
@@ -396,7 +423,8 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
         # A tela nova divide o lançamento cujos boletos somam exato
         # (`boletos_somados`); a Remessa/Retorno, lendo sozinha, não.
         dividir_boletos=True,
-        alterados_na_leitura=alterados, contas_escolhidas=escolhidas)
+        alterados_na_leitura=alterados, contas_escolhidas=escolhidas,
+        leituras_ia=leituras_ia)
     # Sem título lido nada divide, e as linhas candidatas continuam com o
     # status "vários boletos": é por ele que se sabe QUAIS títulos ler.
     entradas.titulos_erp = ler_titulos_no_erp(

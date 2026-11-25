@@ -396,6 +396,17 @@ def chave_da_marca(r: dict) -> str:
     return ident
 
 
+def _etiqueta_ia(r: dict) -> str:
+    """A etiqueta "lido por IA" (tipo de papel, total lido e provas) do cartão;
+    vazia quando nenhum anexo da linha foi para a IA."""
+    e = nivel.etiqueta_da_ia(r)
+    if not e:
+        return ""
+    itens = "".join(f"<li>{_e(x)}</li>" for x in e["linhas"])
+    return (f'<div class="ia-tag"><b>{_e(e["titulo"])}</b>'
+            f'{f"<ul>{itens}</ul>" if itens else ""}</div>')
+
+
 def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False, ordem: int = 0) -> str:
     r = it.registro
     venc = str(r.get("vencimento") or "")[:10]
@@ -437,6 +448,7 @@ def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False, ordem: int = 
       <h3>{_e(quem)}</h3>
       {f'<p class="parcela">{_e(texto_parcela)}</p>' if texto_parcela else ''}
       {f'<p class="obs-parcela">Observação: {_e(r.get("obs_parcela"))}</p>' if r.get("obs_parcela") else ''}
+      {_etiqueta_ia(r)}
       {lista([m for m in nv.motivos if m != '; '.join(it.alertas)], 'motivos')}
       <dl>
         <dt>Conta</dt><dd>{_e(it.conta)}</dd>
@@ -597,6 +609,8 @@ header { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:10p
 .status.s-NAO_LI { background:var(--bad); color:#fff }
 .parcela { font-weight:700; margin:2px 0 } .obs-parcela { margin:2px 0 }
 .motivos { font-size:.92em; padding-left:18px; margin:4px 0 }
+.ia-tag { margin:4px 0; border:1px dashed #b45309; border-radius:6px; padding:3px 8px; font-size:.9em }
+.ia-tag b { color:#b45309 } .ia-tag ul { margin:2px 0 0; padding-left:18px }
 .tagre { background:#f5f3ff; color:#6d28d9 }
 .togre { display:inline-flex; gap:8px; align-items:center; background:#f5f3ff; color:#6d28d9; border:1px solid #ddd6fe; border-radius:10px; padding:8px 12px; margin:0 0 12px; font-weight:600; cursor:pointer }
 .togre input { width:18px; height:18px }
