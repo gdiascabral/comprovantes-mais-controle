@@ -274,6 +274,23 @@ paths:
   `receber_apuracao` (`self.alterados_na_leitura`, zerada pela busca dela) e
   a passa nas Entradas que ela mesma monta. Testes:
   `tests/test_valor_e_releitura.py`.
+  (m) **Apólice de seguro: o valor é o PRÊMIO TOTAL** (dono, 25/11/2026,
+  `premio_da_apolice` + `_conferir_premio`, antes da régua `_valor_nos_textos`).
+  A apólice tem dezenas de valores, e "o número aparece em algum lugar" deu
+  "valor ✓" a um reembolso RCPM lançado pelo prêmio LÍQUIDO. Anexo que diz
+  "apólice" e tem prêmio total legível ("Prêmio Total: R$ x", ou a última
+  quantia em R$ da linha abaixo do cabeçalho do demonstrativo) prova o valor
+  SÓ por ele: igual ao lançamento (ou total pago + o que falta) = "valor ✓
+  (prêmio total da apólice)"; igual a uma linha da tabela "PARC. VALOR VENC."
+  de prêmio parcelado = "valor ✓ (parcela do prêmio da apólice)"; outro =
+  "VALOR DIVERGE: prêmio total da apólice …". Tabela de parcelas que não soma o
+  total = leiaute desconhecido, nada se afirma. Acusa só com título de UMA
+  parcela confirmada ou com a tabela de parcelas: o seguro de obra em 4 vezes
+  traz só o total e o lançamento é a parcela (aí vale a regra de sempre).
+  Medido em 25/11/2026: 29 RCPM de set–nov, 25 ✓ e 4 divergências reais (uma
+  pelo líquido, duas por centavos, uma de R$ 2.151,26 × R$ 1.309,51); 9
+  lançamentos de outros seguros, nenhum alarme. Testes:
+  `tests/test_premio_da_apolice.py`.
 - `pagamentos_dia/regras_pagamento.py` — quem NÃO entra na planilha, e por quê.
   Os CRITÉRIOS moram aqui; os NOMES (fornecedor que só recebe por reembolso,
   pessoa cujo pagamento é confirmado antes) ficam em `regras_fornecedor.json` e
