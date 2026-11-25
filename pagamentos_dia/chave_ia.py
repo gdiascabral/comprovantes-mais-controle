@@ -7,8 +7,9 @@ HTML também vale o arquivo `_chaves/anthropic-api.txt` (uma linha, só a
 chave), que este módulo só LÊ: nunca grava chave em texto, nunca a escreve em
 log. Sem chave nenhuma a função fica desligada e as linhas seguem "Não li".
 
-Para guardar a chave cifrada: `python -m pagamentos_dia.chave_ia` (pede a
-chave sem mostrá-la).
+Para guardar a chave cifrada (uma vez, no Python do projeto, nesta máquina):
+`from pagamentos_dia import chave_ia; chave_ia.salvar("<a chave>")`. Sem
+rotina interativa de propósito: `getpass` não existe no exe do usuário.
 """
 from __future__ import annotations
 
@@ -65,8 +66,3 @@ def carregar(pasta=None, *, decifrar=None) -> str | None:
             pass                       # DPAPI recusou: tenta o arquivo de texto
     return _do_texto(base)
 
-
-if __name__ == "__main__":             # pragma: no cover - uso manual
-    import getpass
-    print("guardada" if salvar(getpass.getpass("Chave da API (não aparece): "))
-          else "nada guardado (chave vazia ou com espaços)")
