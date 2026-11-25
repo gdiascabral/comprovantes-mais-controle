@@ -178,3 +178,9 @@ sentinela.ALERTA.txt
 # Aba PF da tela do dia (12/11/2026): cadastro local, nomes de gente e de obra
 /regras_pf.json
 /contas_pf.json
+
+# Leitura por IA (chave cifrada e cache), nunca no repositorio
+anthropic.dat
+leituras_ia.json
+leituras_ia.estragado
+_chaves/

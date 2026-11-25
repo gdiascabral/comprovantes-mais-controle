@@ -246,6 +246,13 @@ def extenso_para_valor(texto) -> Decimal | None:
 # ------------------------------------------------------------- conferência
 BATE, SEM_SEGUNDA_PROVA, DIVERGE, ILEGIVEL = ("bate", "sem segunda prova",
                                               "diverge", "ilegível")
+#: O total escrito é o do lançamento e outra prova do papel (extenso ou cartão)
+#: concorda, mas a SOMA dos itens escrita no papel não fecha com o total
+#: (25/11/2026: itens 5.132,00 × total 5.120,00; itens 5.864,00 × total
+#: 5.864,50). É erro de conta de quem escreveu o papel, não do valor a pagar:
+#: pede olho, não é divergência.
+TOTAL_BATE_SOMA_NAO_FECHA = "total bate, soma do papel não fecha"
+_SOMA = "soma dos itens"
 
 
 @dataclass
@@ -269,8 +276,12 @@ def conferir(leitura: dict, valor) -> Conferencia:
 
     - BATE: o total lido é o do lançamento E pelo menos uma segunda prova do
       mesmo papel concorda (extenso, soma dos itens ou comprovante do cartão).
-    - SEM_SEGUNDA_PROVA: o total bate, nada mais confirma.
-    - DIVERGE: o total lido ou alguma prova diz outro valor.
+    - TOTAL_BATE_SOMA_NAO_FECHA: o total e outra prova (extenso ou cartão)
+      concordam com o lançamento, só a soma dos itens escrita no papel não fecha.
+    - SEM_SEGUNDA_PROVA: o total bate, nada mais confirma (inclui o caso de a
+      soma não fechar e nenhuma outra prova existir).
+    - DIVERGE: o TOTAL lido, o extenso ou o cartão dizem outro valor. A soma
+      dos itens sozinha, contra um total que bate, não é divergência.
     - ILEGIVEL: a IA disse que não leu, ou não leu total nem prova nenhuma.
     """
     alvo = Decimal(str(valor)).quantize(_CENTAVO)
@@ -278,24 +289,34 @@ def conferir(leitura: dict, valor) -> Conferencia:
         return Conferencia(ILEGIVEL, motivos=["a IA não conseguiu ler o documento"])
     total = dinheiro(leitura.get("total"))
     candidatas = {"valor por extenso": extenso_para_valor(leitura.get("total_por_extenso")),
-                  "soma dos itens": _soma_dos_itens(leitura.get("itens")),
+                  _SOMA: _soma_dos_itens(leitura.get("itens")),
                   "comprovante do cartão": dinheiro(leitura.get("cartao_valor"))}
     lidas = {k: v for k, v in candidatas.items() if v is not None}
     batem = [k for k, v in lidas.items() if v == alvo]
     contra = [k for k, v in lidas.items() if v != alvo]
-    motivos = [f"{k} lido: R$ {v}" for k, v in lidas.items() if v != alvo]
     if total is None and not lidas:
         return Conferencia(ILEGIVEL, motivos=["nenhum valor legível no documento"])
-    if (total is not None and total != alvo) or contra:
+    total_ok = total is not None and total == alvo
+    # A soma só diverge quando não há total que a contradiga e nada concorda.
+    soma_so = contra == [_SOMA] and (total_ok or (total is None and batem))
+    fortes_contra = [k for k in contra if k != _SOMA or not soma_so]
+    if (total is not None and total != alvo) or fortes_contra:
+        motivos = [f"{k} lido: R$ {lidas[k]}" for k in fortes_contra]
         if total is not None and total != alvo:
             motivos.insert(0, f"total lido R$ {total} × lançamento R$ {alvo}")
         return Conferencia(DIVERGE, batem, total, motivos)
+    motivo_soma = ([f"{_SOMA} R$ {lidas[_SOMA]} não fecha com o total escrito no papel"]
+                   if soma_so else [])
+    outras = [k for k in batem if k != _SOMA]
     if total is None:
         return Conferencia(SEM_SEGUNDA_PROVA, batem, None,
-                           ["o total não foi lido; só " + ", ".join(batem) + " bate"])
+                           ["o total não foi lido; só " + ", ".join(batem) + " bate"]
+                           + motivo_soma)
+    if soma_so and outras:
+        return Conferencia(TOTAL_BATE_SOMA_NAO_FECHA, outras, total, motivo_soma)
     if not batem:
         return Conferencia(SEM_SEGUNDA_PROVA, [], total,
-                           ["valor lido por IA, sem segunda prova no papel"])
+                           ["valor lido por IA, sem segunda prova no papel"] + motivo_soma)
     return Conferencia(BATE, batem, total, [])
 
 

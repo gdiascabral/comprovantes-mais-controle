@@ -99,6 +99,49 @@ def test_prova_que_diz_outro_valor_e_divergencia():
     assert c.estado == li.DIVERGE
 
 
+def _item(total):
+    return {"descricao": "x", "quantidade": "1", "unitario": total, "total": total}
+
+
+def test_total_bate_mas_soma_do_papel_nao_fecha_com_outra_prova():
+    # Caso real (medição 25/11): itens somam 5.132,00 e o total escrito é 5.120,00.
+    itens = [_item("3.000,00"), _item("2.132,00")]
+    c = li.conferir(_leitura(total="5.120,00", itens=itens,
+                             total_por_extenso="cinco mil cento e vinte reais"), 5120)
+    assert c.estado == li.TOTAL_BATE_SOMA_NAO_FECHA
+    assert c.provas == ["valor por extenso"]
+    assert any("soma dos itens R$ 5132.00" in m for m in c.motivos)
+
+
+def test_total_bate_soma_nao_fecha_cartao_concorda():
+    # Caso real: itens 5.864,00 e total escrito 5.864,50 (o do lançamento).
+    c = li.conferir(_leitura(total="5.864,50", itens=[_item("5.864,00")],
+                             cartao_valor="5.864,50"), 5864.50)
+    assert c.estado == li.TOTAL_BATE_SOMA_NAO_FECHA and c.provas == ["comprovante do cartão"]
+
+
+def test_total_bate_soma_nao_fecha_sem_outra_prova_e_sem_segunda_prova():
+    c = li.conferir(_leitura(total="5.120,00", itens=[_item("5.132,00")]), 5120)
+    assert c.estado == li.SEM_SEGUNDA_PROVA
+    assert any("soma dos itens" in m and "não fecha" in m for m in c.motivos)
+
+
+def test_total_diferente_continua_diverge_mesmo_com_soma_batendo():
+    c = li.conferir(_leitura(total="5.130,00", itens=[_item("5.120,00")]), 5120)
+    assert c.estado == li.DIVERGE
+
+
+def test_extenso_contra_o_lancamento_e_diverge_mesmo_com_total_batendo():
+    c = li.conferir(_leitura(total="5.120,00", itens=[_item("5.132,00")],
+                             total_por_extenso="cinco mil e duzentos reais"), 5120)
+    assert c.estado == li.DIVERGE
+
+
+def test_sem_total_e_so_a_soma_dizendo_outro_valor_e_diverge():
+    c = li.conferir(_leitura(total="", itens=[_item("5.132,00")]), 5120)
+    assert c.estado == li.DIVERGE
+
+
 def test_ilegivel():
     assert li.conferir(_leitura(legivel=False), 10).estado == li.ILEGIVEL
     assert li.conferir(_leitura(total=""), 10).estado == li.ILEGIVEL
