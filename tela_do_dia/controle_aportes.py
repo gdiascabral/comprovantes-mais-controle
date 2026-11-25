@@ -502,6 +502,39 @@ def _leitura_que_nao_se_soma(conta: ContaControlada, r: Recebimento, hoje) -> st
     return ""
 
 
+#: O que `dono_do_recebimento` decide de um recebimento.
+APORTE, FORA, SEM_DONO = "aporte", "fora", "sem_dono"
+
+
+def dono_do_recebimento(conta: ContaControlada, r: Recebimento, p, por_id: dict) -> tuple:
+    """(APORTE, nome do aportador), (FORA, "") — apontado como "não é aporte
+    desta conta" — ou (SEM_DONO, motivo). `p` é o apontamento do recebimento
+    (ou None) e `por_id` os aportadores DESTA conta pelo id. É a decisão de
+    `apurar`, recebimento a recebimento, e a mesma do relatório de aportes
+    (`relatorio_aportes`): os dois nunca podem discordar de quem pôs o quê."""
+    if p is not None:
+        if como_dinheiro(p.valor) != r.valor:
+            return SEM_DONO, (f"apontado com {brl(p.valor)}; agora é {brl(r.valor)} no "
+                              "Mais Controle — aponte de novo")
+        # O Cliente do ERP manda sobre o apontamento quando identifica
+        # OUTRO aportador (ou um aportador, num "não é aporte"): o banco
+        # não guarda o Cliente da hora do apontamento — compara-se com a
+        # identificação pelo nome feita agora (`conflito_do_apontamento`).
+        conflito = conflito_do_apontamento(conta, r, p.aportador_id)
+        if conflito:
+            return SEM_DONO, conflito
+        if p.aportador_id is None:
+            return FORA, ""
+        dono = por_id.get(p.aportador_id)
+        if dono is None:
+            return SEM_DONO, "apontado para quem não é mais aportador desta conta — aponte de novo"
+        return APORTE, dono.nome_erp
+    dono, motivo = identificar_aportador(conta, r)
+    if dono is None:
+        return SEM_DONO, motivo
+    return APORTE, dono.nome_erp
+
+
 def apurar(conta: ContaControlada, recebimentos, apontamentos, hoje: datetime.date) -> Apuracao:
     """A conta de UMA conta. Conta com cadastro ruim ou leitura duvidosa sai
     com `erro` e SEM linhas — nunca números pela metade. Leitura duvidosa:
@@ -535,35 +568,16 @@ def apurar(conta: ContaControlada, recebimentos, apontamentos, hoje: datetime.da
                               f"{brl(r.valor_original)} em {r.data:%d/%m/%Y}"
                               f"{_quem_no_texto(conta, r)} (a conta soma o recebido)")
         p = apontado.get(r.id)
+        destino, quem = dono_do_recebimento(conta, r, p, por_id)
+        if destino == SEM_DONO:
+            ap.sem_dono.append(SemDono(r, quem))
+            continue
+        if destino == FORA:
+            ap.apontados.append((r, p, ""))
+            continue
+        do_erp[quem] += r.valor
         if p is not None:
-            if como_dinheiro(p.valor) != r.valor:
-                ap.sem_dono.append(SemDono(r, f"apontado com {brl(p.valor)}; agora é "
-                                              f"{brl(r.valor)} no Mais Controle — aponte de novo"))
-                continue
-            # O Cliente do ERP manda sobre o apontamento quando identifica
-            # OUTRO aportador (ou um aportador, num "não é aporte"): o banco
-            # não guarda o Cliente da hora do apontamento — compara-se com a
-            # identificação pelo nome feita agora (`conflito_do_apontamento`).
-            conflito = conflito_do_apontamento(conta, r, p.aportador_id)
-            if conflito:
-                ap.sem_dono.append(SemDono(r, conflito))
-                continue
-            if p.aportador_id is None:
-                ap.apontados.append((r, p, ""))
-                continue
-            dono = por_id.get(p.aportador_id)
-            if dono is None:
-                ap.sem_dono.append(SemDono(r, "apontado para quem não é mais aportador "
-                                              "desta conta — aponte de novo"))
-                continue
-            do_erp[dono.nome_erp] += r.valor
-            ap.apontados.append((r, p, dono.nome_erp))
-            continue
-        dono, motivo = identificar_aportador(conta, r)
-        if dono is None:
-            ap.sem_dono.append(SemDono(r, motivo))
-            continue
-        do_erp[dono.nome_erp] += r.valor
+            ap.apontados.append((r, p, quem))
     for p in apontamentos:
         if p.recebimento_id not in vistos:
             ap.alertas.append(f"apontamento de um recebimento de {brl(p.valor)} que não veio "

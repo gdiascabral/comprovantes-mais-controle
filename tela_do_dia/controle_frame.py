@@ -15,6 +15,7 @@ vira "em dia".
 from __future__ import annotations
 
 import datetime
+import os
 from dataclasses import replace
 import queue
 import threading
@@ -28,6 +29,7 @@ from conciliacao.config import load_config
 from nuvem import sessao
 
 from . import controle_aportes as ca
+from . import relatorio_aportes as ra
 from . import controle_erp, controle_nuvem, erp_do_dia
 from .frame import TelaDoDiaFrame
 from .valores import brl
@@ -36,6 +38,8 @@ px = widgets.px
 _ajuda = TelaDoDiaFrame._ajuda
 _rodape = TelaDoDiaFrame._rodape
 TITULO = "Controle de aportes"
+#: Ao lado do exe, como as outras pastas do app.
+PASTA_RELATORIOS = "Relatórios de aportes"
 SEM_LEITURA = ("Não li o controle de aportes — nenhum número é mostrado. Veja o Registro e "
                "atualize de novo.")
 
@@ -91,6 +95,9 @@ class ControleAportesFrame(ttk.Frame):
         cab.pack(fill="x", padx=PADX, pady=px((16, 12)))
         self.b1 = widgets.Botao(cab.acoes, "Atualizar", papel="acao", command=self.atualizar)
         self.b1.pack(side="left")
+        self.b_relatorio = widgets.Botao(cab.acoes, "Gerar relatório…", papel="neutro",
+                                         state="disabled", command=self._pedir_relatorio)
+        self.b_relatorio.pack(side="left", padx=px((8, 0)))
         corpo = widgets.AreaRolavel(self)
 
         c1 = widgets.Cartao(corpo, "Por conta", 1)
@@ -154,6 +161,10 @@ class ControleAportesFrame(ttk.Frame):
         estado = ca.estado_dos_botoes_do_dono(self.pode_editar, self._lendo, self._leu_bem)
         for b in self._botoes_do_dono:
             b.configure(state=estado)
+        # O relatório é só leitura: qualquer um que vê a aba gera, depois de
+        # uma leitura inteira (é dela que saem as contas e os aportadores).
+        self.b_relatorio.configure(state="normal" if self._leu_bem and not self._lendo
+                                   else "disabled")
 
     def _tabela(self, pai, colunas, *, arvore: bool, altura: int):
         grade = ttk.Frame(pai)
@@ -232,6 +243,11 @@ class ControleAportesFrame(ttk.Frame):
                                              "Controle de aportes)")
                 elif tipo == "nuvem":
                     self._depois_da_nuvem(*valor)
+                elif tipo == "relatorio":
+                    self._salvar_relatorio(valor)
+                elif tipo == "relatorio_fim":
+                    self._lendo = False
+                    self._acender_botoes()
         except queue.Empty:
             pass
         except Exception as e:                              # noqa: BLE001
@@ -635,6 +651,152 @@ class ControleAportesFrame(ttk.Frame):
 
         _rodape(jan, corpo, (("Cancelar", "neutro", jan.destroy),
                              ("Apontar", "acao", aplicar)), aplicar)
+
+    # ------------------------------------------------------------- relatório
+    def _pedir_relatorio(self):
+        """O formulário do relatório de aportes e distribuições (só leitura)."""
+        contas = [ap.conta for ap in self.apuracoes if not ap.erro]
+        if not self._leu_bem or not contas:
+            messagebox.showinfo(TITULO, "Atualize primeiro: o relatório sai das contas que a "
+                                        "aba leu sem erro.", parent=self)
+            return
+        hoje = datetime.date.today()
+        rotulos = {ca.rotulo_da_conta(c): c for c in contas}
+        jan, corpo = self._janela("Relatório de aportes e distribuições")
+        ttk.Label(corpo, wraplength=px(540), justify="left", text=(
+            "Os aportes que o Controle lê e as distribuições de lucros pagas ao sócio, "
+            "das contas da empresa, no período. Para mandar ao sócio: sem saldo e sem "
+            "\"para igualar\". Lê o Mais Controle; não escreve nada nele.")).pack(anchor="w")
+        v_conta = tk.StringVar(value=next(iter(rotulos)))
+        v_socio = tk.StringVar(value=ra.TODOS)
+        v_de = tk.StringVar(value=f"{hoje.replace(month=1, day=1):%d/%m/%Y}")
+        v_ate = tk.StringVar(value=f"{hoje:%d/%m/%Y}")
+        widgets.Campo(corpo, "Empresa (conta do controle)", lambda p: ttk.Combobox(
+            p, textvariable=v_conta, state="readonly", width=60, values=list(rotulos))
+        ).pack(anchor="w", pady=px((10, 0)))
+        caixa_socio = []
+
+        def caixa(p):
+            c = ttk.Combobox(p, textvariable=v_socio, state="readonly", width=60)
+            caixa_socio.append(c)
+            return c
+
+        widgets.Campo(corpo, "Sócio", caixa).pack(anchor="w", pady=px((10, 0)))
+
+        def socios(*_):
+            nomes = [ra.TODOS] + ra.socios_da_conta(rotulos[v_conta.get()])
+            caixa_socio[0].configure(values=nomes)
+            if v_socio.get() not in nomes:
+                v_socio.set(ra.TODOS)
+
+        v_conta.trace_add("write", socios)
+        socios()
+        datas = ttk.Frame(corpo)
+        datas.pack(anchor="w", pady=px((10, 0)))
+        widgets.Campo(datas, "De (DD/MM/AAAA)", lambda p: ttk.Entry(
+            p, textvariable=v_de, width=14)).pack(side="left")
+        widgets.Campo(datas, "Até", lambda p: ttk.Entry(
+            p, textvariable=v_ate, width=14)).pack(side="left", padx=px((12, 0)))
+
+        def aplicar(_e=None):
+            try:
+                de, ate = ra.periodo_do_formulario(v_de.get(), v_ate.get(),
+                                                   datetime.date.today())
+            except ValueError as e:
+                messagebox.showwarning(TITULO, str(e), parent=jan)
+                return "break"
+            conta = rotulos[v_conta.get()]
+            socio = v_socio.get()
+            jan.destroy()
+            self._gerar_relatorio(conta, socio, de, ate)
+            return "break"
+
+        _rodape(jan, corpo, (("Cancelar", "neutro", jan.destroy),
+                             ("Gerar", "acao", aplicar)), aplicar)
+
+    def _gerar_relatorio(self, conta, socio, de, ate):
+        # Tudo o que vem da tela, lido AGORA, na thread do Tk.
+        apontamentos = list(self.apontamentos.get(conta.id) or [])
+        contas_erp = list(self.contas_erp)
+        if self.worker and not self.worker.done():
+            return
+        # Recusar ANTES de apagar os botões (ver "Um navegador, seis abas").
+        if self.anx.avisar_se_ocupado("o relatório de aportes", aba=self):
+            return
+        self._lendo = True
+        self._acender_botoes()
+        self.q.put(("botoes", "disabled"))
+        self.q.put(("ocupado", True))
+        self.q.put(("status", "Lendo os aportes e as distribuições no Mais Controle..."))
+        try:
+            self.worker = self.anx.submeter("Controle de aportes — relatório", self._t_relatorio,
+                                            conta, socio, de, ate, apontamentos, contas_erp,
+                                            dona=self)
+        except Exception as e:                              # noqa: BLE001
+            self._log("\n" + widgets.recado_de_erro(e, "Não consegui começar o relatório."))
+            self.q.put(("ocupado", False))
+            self.q.put(("botoes", "normal"))
+            self.q.put(("status", "Relatório não gerado — veja o Registro."))
+            self.q.put(("relatorio_fim", None))
+
+    def _t_relatorio(self, conta, socio, de, ate, apontamentos, contas_erp):
+        """Na thread do navegador: só GET, nada de widget, só a fila."""
+        try:
+            pares, erros = ca.pares_para_ler([conta], contas_erp)
+            if erros:
+                raise ValueError(erros[conta.conta_erp])
+            pares = [replace(p, inicio=de) for p in pares]
+            api = self.anx.garantir_sessao(self._log)
+            onde: dict = {}
+            crus = controle_erp.ler_recebimentos(
+                api, pares, ate, contraprova=ca.conta_de_contraprova(contas_erp, pares),
+                log=self._log, onde=onde)
+            recebimentos = ca.recebimentos_de(crus.get(conta.conta_erp) or {})
+            self._log(f"Lendo as distribuições de lucros de {ca.rotulo_da_conta(conta)}...")
+            pagos = controle_erp.pagos_de_distribuicao(
+                api, [p.conta_id for p in pares], ra.CATEGORIA_DISTRIBUICAO, de, ate,
+                log=self._log)
+            rel = ra.montar(conta, socio, de, ate, recebimentos, onde, apontamentos, pagos)
+            self.q.put(("relatorio", rel))
+            self.q.put(("status", "Relatório lido."))
+        except Exception as e:                              # noqa: BLE001
+            # Genérica de propósito, como a leitura: qualquer falha é "não
+            # gerei", nunca um PDF pela metade.
+            self._log("\n" + widgets.recado_de_erro(e, "Não consegui gerar o relatório."))
+            self.q.put(("status", "Relatório não gerado — veja o Registro."))
+        finally:
+            self.q.put(("ocupado", False))
+            self.q.put(("botoes", "normal"))
+            self.q.put(("relatorio_fim", None))
+
+    def _salvar_relatorio(self, rel):
+        """Na thread do Tk: avisa o que ficou fora, grava o PDF e o abre."""
+        aviso = ra.texto_do_fora(rel)
+        if aviso:
+            for r, motivo in rel.fora:
+                self._log(f"[!] Fora do relatório: {r.data:%d/%m/%Y} {brl(r.valor)} — {motivo}")
+            for m, motivo in rel.distribuicoes_fora:
+                self._log(f"[!] Distribuição fora do relatório: {m.data:%d/%m/%Y} "
+                          f"{brl(m.valor)} para {m.socio or '—'} ({m.conta}) — {motivo}")
+            if not messagebox.askyesno(TITULO, aviso + "\n\nGerar assim mesmo?", parent=self):
+                self.lbl.configure(text="Relatório não gerado.")
+                return
+        from . import relatorio_aportes_pdf
+        destino = util.pasta_base() / PASTA_RELATORIOS / ra.nome_do_arquivo(rel)
+        try:
+            pdf = relatorio_aportes_pdf.gerar(rel, destino)
+        except Exception as e:                              # noqa: BLE001
+            self._log("\n" + widgets.recado_de_erro(e, "Não consegui gravar o PDF."))
+            self.lbl.configure(text="Relatório não gerado — veja o Registro.")
+            return
+        self._log(f"Relatório: {len(rel.aportes)} aporte(s), {brl(rel.total_aportes)}; "
+                  f"{len(rel.distribuicoes)} distribuição(ões), {brl(rel.total_distribuicoes)}.")
+        self._log(f"Gravado em {pdf.as_posix()}")
+        self.lbl.configure(text="Relatório gerado.")
+        try:
+            os.startfile(pdf)                               # noqa: S606 (Windows)
+        except OSError as e:
+            self._log(f"[!] Não consegui abrir o PDF ({e}); ele está na pasta acima.")
 
     def _desfazer(self):
         if not self.pode_editar:

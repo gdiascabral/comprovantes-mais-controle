@@ -27,6 +27,7 @@ escuro.
 """
 from __future__ import annotations
 
+import datetime
 from urllib.parse import urlencode
 
 import util
@@ -233,8 +234,11 @@ def _anotar_clientes_vazios(api, crus: dict, log=print) -> dict:
     return saida
 
 
-def ler_recebimentos(api, pares, hoje, *, contraprova=None, log=print) -> dict:
-    """{rótulo da conta no controle: {natureza: [itens crus]}}, conferido."""
+def ler_recebimentos(api, pares, hoje, *, contraprova=None, log=print, onde=None) -> dict:
+    """{rótulo da conta no controle: {natureza: [itens crus]}}, conferido.
+    `onde` (um dict, quando dado) recebe {id do item: nome da conta no ERP}:
+    o relatório de aportes mostra a conta de cada aporte, e o item do LISTAR
+    não a traz (as somadas se juntam no MESMO rótulo)."""
     garantir_acesso(api, log)
     naturezas = ids_das_naturezas(api)
     # Lidos e conferidos POR CONTA DO ERP (a conta do controle pode somar
@@ -256,4 +260,96 @@ def ler_recebimentos(api, pares, hoje, *, contraprova=None, log=print) -> dict:
         destino = crus.setdefault(par.rotulo, {nome: [] for nome in naturezas})
         for nome, itens in por_conta[par.conta_id].items():
             destino[nome].extend(itens)
+            if onde is not None:
+                for item in itens:
+                    ident = str((item if isinstance(item, dict) else {}).get("id") or "")
+                    if ident:
+                        onde[ident] = par.nome_no_erp
     return _anotar_clientes_vazios(api, crus, log)
+
+
+# ---- distribuições de lucros (relatório de aportes, 25/11/2026) -------------
+
+def id_da_categoria(api, nome: str) -> str:
+    """O id da categoria de pagamento `nome` (`categories/all` do legado, o
+    mesmo endereço da aba Aportes). Que falta ou repete PARA."""
+    base, headers = api._base_legacy("categories/all")
+    corpo = api._fetch_json(base, headers)
+    _parar_se_erro(corpo, "listar as categorias")
+    ids = sorted({str(c["id"]) for c in _lista(corpo)
+                  if isinstance(c, dict) and c.get("id")
+                  and util.norm_espaco(c.get("name") or c.get("description") or "")
+                  == util.norm_espaco(nome)})
+    if len(ids) != 1:
+        onde = "não existe" if not ids else "aparece duas vezes"
+        raise ErpError(f'a categoria "{nome}" {onde} no Mais Controle — sem ela o relatório '
+                       "não acha as distribuições.")
+    return ids[0]
+
+
+def _meses(inicio, fim):
+    """[(primeiro, último)] mês a mês: janela grande na lista de pagamentos dá
+    "Failed to fetch" (medido em 23/11/2026)."""
+    a = inicio
+    while a <= fim:
+        proximo = (a.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
+        yield a, min(fim, proximo - datetime.timedelta(days=1))
+        a = proximo
+
+
+def pagos_de_distribuicao(api, contas_ids, categoria: str, inicio, fim, log=print) -> list:
+    """Os pagos (`mc_api.montar_pagos`, um por sub-pagamento) das contas
+    `contas_ids` com a categoria `categoria` (nome), de `inicio` a `fim` pela
+    data de PAGAMENTO. Os filtros do ERP só encurtam a lista; quem confere
+    conta, categoria e favorecido é `relatorio_aportes.distribuicoes_dos_pagos`.
+    Formato que não se lê ou mais de `MAX_PAGINAS` páginas PARA."""
+    # Os `FILTROS_NEUTROS` (os do `listar_a_pagar`): se a tela de Pagamentos
+    # ficou com um centro de custo escolhido, sem eles a lista volta curta com
+    # cara de completa — e este relatório vai para o sócio.
+    from anexar.mc_api import FILTROS_NEUTROS, montar_pagos   # anexar já vem com a aba
+    garantir_acesso(api, log)
+    cat = id_da_categoria(api, categoria)
+    todos: list = []
+    for conta_id in contas_ids:
+        for de, ate in _meses(inicio, fim):
+            pagina = 0
+            while True:
+                url, headers = api._consulta_pagos([
+                    ("type", "PAID"), ("dateField", "DATE_OF_PAYMENT"),
+                    ("startDate", de.isoformat()), ("endDate", ate.isoformat()),
+                    ("accountIds", conta_id), ("categoryIds", cat),
+                    ("page", str(pagina)), ("size", str(POR_PAGINA)), *FILTROS_NEUTROS])
+                corpo = api._fetch_json(url, headers)
+                _parar_se_erro(corpo, "listar as distribuições de lucros")
+                lote = corpo.get("content") if isinstance(corpo, dict) else None
+                if not isinstance(lote, list):
+                    raise ErpError("o Mais Controle devolveu os pagamentos num formato que não "
+                                   f"conheço. {_RECADO}")
+                todos.extend(lote)
+                if not corpo.get("hasNextPage") or not lote:
+                    break
+                pagina += 1
+                if pagina >= MAX_PAGINAS:
+                    raise ErpError(f"mais de {MAX_PAGINAS} páginas de pagamentos num mês: "
+                                   "parei para não devolver uma lista pela metade.")
+    # A mesma parcela pode voltar em duas consultas (paga em parte por duas
+    # contas, ou em dois meses) — e não se sabe se o `paids[]` de cada uma vem
+    # inteiro ou recortado pelo filtro. Por isso: achata tudo e tira repetido
+    # pelo SUB-pagamento (`paidId`); o mesmo com conteúdo diferente PARA.
+    # A data vai crua (`payingDate`, com fuso quando o ERP manda): quem a lê
+    # é `controle_aportes.data_do_erp`, no horário de Brasília, como os aportes.
+    crua = {str(p.get("id")): p.get("payingDate")
+            for item in todos if isinstance(item, dict)
+            for p in (item.get("paids") or []) if isinstance(p, dict) and p.get("id")}
+    por_id: dict = {}
+    for p in montar_pagos([i for i in todos if isinstance(i, dict)]):
+        ident = str(p.get("paidId") or "")
+        p = dict(p, dataFull=str(crua.get(ident) or p.get("dataFull") or ""))
+        chave = ident or f"sem-id-{len(por_id)}"
+        visto = por_id.get(chave)
+        if visto is not None and (visto["valor"], visto["dataFull"], visto["conta"]) != (
+                p["valor"], p["dataFull"], p["conta"]):
+            raise ErpError("o mesmo pagamento veio do Mais Controle com valores diferentes em "
+                           f"duas consultas. {_NADA} {_RECADO}")
+        por_id.setdefault(chave, p)
+    return list(por_id.values())
