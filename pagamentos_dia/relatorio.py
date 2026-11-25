@@ -1399,6 +1399,116 @@ def _e_documento_de_boleto(files, provas) -> bool:
     return False
 
 
+# --------------------------------------------------------------------------
+# Apólice de seguro: o valor é o PRÊMIO TOTAL
+# --------------------------------------------------------------------------
+#: Cabeçalho do demonstrativo de prêmio. A apólice tem dezenas de valores
+#: (prêmio líquido, IOF, coberturas, franquias), e o do lançamento pode
+#: aparecer como prêmio LÍQUIDO: "valor ✓" por achar o número em qualquer
+#: lugar deixou passar um reembolso lançado pelo líquido (03/09/2026).
+_PREMIO_TOTAL_MESMA_LINHA = re.compile(
+    r"pr[eê]mio\s+total\s*:?\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})(?!\d)", re.I)
+#: Só o cabeçalho do DEMONSTRATIVO ("PRÊMIO LÍQUIDO … PRÊMIO TOTAL"): a frase
+#: das condições ("o prêmio total poderá ser fracionado") seguida de uma linha
+#: de limites e franquias faria a franquia virar o total (revisão de dinheiro).
+_PREMIO_TOTAL_CABECALHO = re.compile(
+    r"pr[eê]mio\s+l[ií]quido[^\n]*pr[eê]mio\s+total[^\n]*\n([^\n]*)", re.I)
+_REAIS = re.compile(r"R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})(?!\d)")
+#: "PARC. VALOR VENC." e as linhas "1 R$ 1.309,51 04/01/2027" logo abaixo.
+_PARCELAS_DO_PREMIO = re.compile(
+    r"parc\.?\s+valor\s+venc\.?[^\n]*\n((?:[ \t]*\d{1,2}[ \t]+R\$\s*[\d.]+,\d{2}[ \t]+\d{2}/\d{2}/\d{4}[^\n]*\n?)+)",
+    re.I)
+
+
+def _reais(s: str) -> float:
+    return round(float(s.replace(".", "").replace(",", ".")), 2)
+
+
+def premio_da_apolice(texto: str) -> tuple[float, list[float]] | None:
+    """(prêmio total, valores das parcelas do prêmio) de uma apólice; None se
+    o texto não é apólice ou se as duas leituras não fecham entre si.
+
+    Medido em 29 apólices RCPM reais (09 a 11/2026): o total é a última
+    quantia em R$ da linha abaixo do cabeçalho "PRÊMIO LÍQUIDO ... PRÊMIO
+    TOTAL MOEDA", e a tabela "PARC. VALOR VENC." soma o mesmo valor. Quando
+    há tabela de parcelas e ela NÃO soma o total, a leitura é suspeita
+    (outro leiaute) e nada se afirma."""
+    if not texto or not re.search(r"ap[oó]lice", texto, re.I):
+        return None
+    total = None
+    m = _PREMIO_TOTAL_MESMA_LINHA.search(texto)
+    if m:
+        total = _reais(m.group(1))
+    else:
+        m = _PREMIO_TOTAL_CABECALHO.search(texto)
+        valores = _REAIS.findall(m.group(1)) if m else []
+        if valores:
+            total = _reais(valores[-1])
+    if not total:
+        return None
+    parcelas = []
+    p = _PARCELAS_DO_PREMIO.search(texto)
+    if p:
+        parcelas = [_reais(v) for v in _REAIS.findall(p.group(1))]
+        if parcelas and abs(sum(parcelas) - total) > 0.01:
+            return None
+    return total, parcelas
+
+
+def _boleto_com_o_valor(provas, valor: float) -> bool:
+    """Alguma linha digitável com DV fechando traz embutido este valor?"""
+    alvo = round(valor, 2)
+    for t in provas:
+        for linha in (t or "").splitlines():
+            d = ocr_boleto.digitos(linha)
+            for tamanho in (47, 48):
+                for i in range(0, max(len(d) - tamanho, -1) + 1):
+                    trecho = d[i:i + tamanho]
+                    if ocr_boleto.valida(trecho):
+                        v = ocr_boleto.valor_embutido(trecho)
+                        if v is not None and round(float(v), 2) == alvo:
+                            return True
+    return False
+
+
+def _conferir_premio(item: dict, provas) -> tuple[str, bool] | None:
+    """Anexo que é apólice com prêmio total legível: o valor do lançamento
+    tem de ser o prêmio total (ou, em título parcelado, uma parcela do
+    prêmio; em título pago em parte, o total pago + o que falta). Qualquer
+    outro é VALOR DIVERGE — mesmo que o número apareça em outro ponto da
+    apólice. None = nenhuma apólice legível; segue a regra geral."""
+    lidas = [x for x in (premio_da_apolice(t) for t in provas) if x]
+    if not lidas:
+        return None
+    valor = round(valor_do_item(item), 2)
+    aceitos = {valor, round(valor + ja_pago_do_item(item), 2)}
+    for total, parcelas in lidas:
+        if total in aceitos:
+            return "valor ✓ (prêmio total da apólice)", False
+        if len(parcelas) > 1 and valor in parcelas:
+            return "valor ✓ (parcela do prêmio da apólice)", False
+    # Acusar só com certeza do que se compara: título de UMA parcela
+    # confirmada, ou apólice que lista as parcelas do prêmio. O seguro de
+    # obra em 4 vezes traz só "Prêmio Total" e o lançamento é a parcela
+    # (medido 25/11/2026): ali quem prova é o boleto, e a regra de sempre vale.
+    try:
+        uma_parcela = int(item.get("numberOfFinancingInstallments") or 0) == 1
+    except (TypeError, ValueError):
+        uma_parcela = False
+    if not uma_parcela and not any(len(parcelas) > 1 for _, parcelas in lidas):
+        return None
+    # O valor provado FORA da apólice (o boleto avulso de uma parcela, que
+    # pode vir com juros) não se contradiz pela apólice: a régua de sempre
+    # decide. A própria apólice costuma trazer a ficha do prêmio inteiro, e
+    # essa não salva o lançamento (revisão de dinheiro, 25/11/2026).
+    if _boleto_com_o_valor(provas, valor) or _valor_nos_textos(
+            valor, [t for t in provas if not premio_da_apolice(t)]):
+        return None
+    total = lidas[0][0]
+    return (f"VALOR DIVERGE: prêmio total da apólice {brl(total)} × lançamento "
+            f"{brl(valor_do_item(item))}"), True
+
+
 def _valor_unico_diferente(item: dict, provas, files=()) -> float | None:
     """O ÚNICO valor em dinheiro dos anexos, quando ele não é o do lançamento.
 
@@ -1948,7 +2058,11 @@ def conferir_documento(item: dict, files, textos, overview=None,
         partes.append("valor/fornecedor ? (anexo sem texto)")
         return " · ".join(partes), divergiu
 
-    if _valor_nos_textos(valor_do_item(item), provas):
+    premio = _conferir_premio(item, provas)
+    if premio is not None:
+        partes.append(premio[0])
+        divergiu = divergiu or premio[1]
+    elif _valor_nos_textos(valor_do_item(item), provas):
         partes.append("valor ✓")
     else:
         outro = _valor_unico_diferente(item, provas, files)
