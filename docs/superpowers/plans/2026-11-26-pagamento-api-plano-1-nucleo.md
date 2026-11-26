@@ -2648,7 +2648,7 @@ def pulso(token: str) -> None:
 - [ ] **Step 4: rodar e ver passar**
 
 Run: `python -m pytest tests/test_pagamento_api_nuvem.py -q`
-Expected: 6 passed.
+Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
