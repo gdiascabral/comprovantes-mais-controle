@@ -277,3 +277,114 @@ def test_convenio_com_valor_diferente_nao_paga(tmp_path):
     livro = _rodar([_item(1, lt.CONVENIO)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
     assert livro.lista == [ex.Evento(1, ex.NAO_PAGO, "convênio diferente: banco cobra 117.50")]
     assert "convenio_pagar" not in s.chamadas
+
+
+# ---------------------------------------------------------------------------
+# Revisão da Task 5 (26/11/2026): depois de INICIADO, só o banco dizendo
+# "não realizado" vira NAO_PAGO; o resto fica EM_PROCESSAMENTO (conta no total).
+
+def test_consulta_da_retomada_que_falha_nao_vira_nao_pago(tmp_path):
+    s = Sicoob(pix_iniciar=PIX_OK["pix_iniciar"], pix_confirmar=ErroSicoob(None, "timeout"),
+               pix_consultar=ErroSicoob(503, "fora"))
+    livro = _rodar([_item(1, lt.PIX_CHAVE)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert _estados(livro, 1) == [ex.INICIADO, ex.EM_PROCESSAMENTO]
+    assert ex.CONFERIR in livro.lista[-1].detalhe
+
+
+@pytest.mark.parametrize("resposta", [ErroSicoob(None, "timeout"), ErroSicoob(200, "Pix por QR sem estado")])
+def test_pix_qr_que_cai_fica_em_processamento_e_conta_no_total(tmp_path, resposta):
+    erp = Erp({"T1": _aberto(), "T2": _aberto()})
+    s = Sicoob(pix_qrcode=resposta, **PIX_OK)
+    livro = _rodar([_item(1, lt.PIX_QR), _item(2, lt.PIX_CHAVE)], "100.00", s, erp, tmp_path)
+    assert _estados(livro, 1)[-1] == ex.EM_PROCESSAMENTO
+    assert livro.lista[-1] == ex.Evento(2, ex.NAO_PAGO, "passaria do total aprovado")
+    assert "pix_iniciar" not in s.chamadas
+
+
+def test_pix_qr_em_processamento_e_consultado_na_rodada_seguinte(tmp_path):
+    erp = Erp({"T1": _aberto()})
+    s = Sicoob(pix_qrcode={"estado": "EM_PROCESSAMENTO", "endToEndId": "Q1"},
+               pix_consultar={"estado": "REALIZADO"})
+    livro = _rodar([_item(1, lt.PIX_QR)], "100.00", s, erp, tmp_path)
+    assert _estados(livro, 1)[-1] == ex.EM_PROCESSAMENTO
+    _rodar([_item(1, lt.PIX_QR)], "100.00", s, erp, tmp_path, livro)
+    assert _estados(livro, 1)[-1] == ex.CONCLUIDO
+    assert s.chamadas.count("pix_qrcode") == 1
+
+
+def test_pix_qr_que_o_banco_recusa_com_codigo_e_nao_pago(tmp_path):
+    s = Sicoob(pix_qrcode={"estado": "NAO_REALIZADO", "endToEndId": "Q1", "detalheRejeicao": "x"})
+    livro = _rodar([_item(1, lt.PIX_QR)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert _estados(livro, 1)[-1] == ex.NAO_PAGO
+
+
+def test_convenio_que_cai_fica_em_processamento(tmp_path):
+    s = Sicoob(convenio_consultar={"valorTotal": 100.0}, convenio_pagar=ErroSicoob(None, "timeout"))
+    livro = _rodar([_item(1, lt.CONVENIO)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert _estados(livro, 1) == [ex.INICIADO, ex.EM_PROCESSAMENTO]
+
+
+def test_convenio_pago_com_disco_falhando_nao_vira_nao_pago(tmp_path, monkeypatch):
+    def quebra(*a, **k):
+        raise OSError("disco cheio")
+    monkeypatch.setattr(ex.cp, "salvar_bruto", quebra)
+    s = Sicoob(convenio_consultar={"valorTotal": 100.0},
+               convenio_pagar={"comprovante": "QUJD", "arrecadacao": {"nsu": 9}})
+    livro = _rodar([_item(1, lt.CONVENIO)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert ex.NAO_PAGO not in _estados(livro, 1)
+    assert livro.lista[1].estado == ex.REALIZADO and "não gravado" in livro.lista[1].detalhe
+    assert _estados(livro, 1)[-1] == ex.FALTA_ANEXAR
+
+
+@pytest.mark.parametrize("situacao", ["REJEITADO", "PENDENTE", "AGENDADO", None])
+def test_boleto_sem_comprovante_efetivado_nao_anexa_nem_baixa(tmp_path, situacao):
+    s = Sicoob(boleto_consultar={"valorPagamento": 100.0, "numeroCpfCnpjBeneficiario": DOC},
+               boleto_comprovante={"situacaoPagamento": situacao} if situacao else {})
+    erp = Erp({"T1": _aberto()})
+    livro = _rodar([_item(1, lt.BOLETO)], "100.00", s, erp, tmp_path)
+    assert _estados(livro, 1) == [ex.INICIADO, ex.EM_PROCESSAMENTO]
+    assert erp.anexos == [] and erp.baixas == []
+
+
+def test_falta_anexar_com_baixa_ja_feita_no_erp_conclui_sem_baixar_de_novo(tmp_path):
+    erp = Erp({"T1": _aberto()})
+    livro = Livro()
+    livro.gravar(ex.Evento(1, ex.INICIADO, "", "E1"))
+    livro.gravar(ex.Evento(1, ex.FALTA_ANEXAR, "ERP recusou a baixa", "E1"))
+    erp.t["T1"] = ex.Titulo(False, Decimal("100.00"), True)
+    _rodar([_item(1, lt.PIX_CHAVE)], "100.00", Sicoob(**PIX_OK), erp, tmp_path, livro)
+    assert _estados(livro, 1)[-1] == ex.CONCLUIDO and erp.baixas == [] and erp.anexos == []
+
+
+def test_comprovante_ja_anexado_so_baixa(tmp_path):
+    erp = Erp({"T1": ex.Titulo(True, Decimal("100.00"), True)})
+    livro = Livro()
+    livro.gravar(ex.Evento(1, ex.INICIADO, "", "E1"))
+    livro.gravar(ex.Evento(1, ex.FALTA_ANEXAR, "ERP recusou a baixa", "E1"))
+    _rodar([_item(1, lt.PIX_CHAVE)], "100.00", Sicoob(**PIX_OK), erp, tmp_path, livro)
+    assert erp.anexos == [] and erp.baixas == [("T1", Decimal("100.00"))]
+    assert _estados(livro, 1)[-1] == ex.CONCLUIDO
+
+
+def test_em_processamento_sem_novidade_nao_enche_o_livro(tmp_path):
+    erp = Erp({"T1": _aberto()})
+    s = Sicoob(pix_qrcode=ErroSicoob(None, "timeout"))
+    livro = _rodar([_item(1, lt.PIX_QR)], "100.00", s, erp, tmp_path)
+    n = len(livro.lista)
+    for _ in range(3):
+        _rodar([_item(1, lt.PIX_QR)], "100.00", s, erp, tmp_path, livro)
+    assert len(livro.lista) == n
+
+
+def test_erp_que_levanta_antes_de_pagar_nao_derruba_o_lote(tmp_path):
+    erp = Erp({"T2": _aberto()})
+    erp.titulo = lambda tid: (_ for _ in ()).throw(RuntimeError("caiu")) if tid == "T1" else erp.t.get(tid)
+    livro = _rodar([_item(1, lt.PIX_CHAVE), _item(2, lt.PIX_CHAVE)], "200.00",
+                   Sicoob(**PIX_OK), erp, tmp_path)
+    assert _estados(livro, 1) == [ex.NAO_PAGO] and _estados(livro, 2)[-1] == ex.CONCLUIDO
+
+
+def test_banco_sem_documento_do_dono_da_chave_nao_confirma(tmp_path):
+    s = Sicoob(pix_iniciar={"endToEndId": "E1", "proprietario": {}})
+    livro = _rodar([_item(1, lt.PIX_CHAVE, doc="")], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert livro.lista[-1].detalhe == "chave de outra pessoa" and "pix_confirmar" not in s.chamadas
