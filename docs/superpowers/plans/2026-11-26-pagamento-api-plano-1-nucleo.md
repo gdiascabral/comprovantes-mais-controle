@@ -1381,6 +1381,64 @@ def test_banco_sem_documento_do_dono_da_chave_nao_confirma(tmp_path):
     s = Sicoob(pix_iniciar={"endToEndId": "E1", "proprietario": {}})
     livro = _rodar([_item(1, lt.PIX_CHAVE, doc="")], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
     assert livro.lista[-1].detalhe == "chave de outra pessoa" and "pix_confirmar" not in s.chamadas
+
+
+# Re-revisão da Task 5 (rodada 2): anexo/baixa só com o ERP respondendo.
+
+def test_erp_que_nao_responde_no_anexo_nao_anexa_nem_baixa(tmp_path):
+    erp = Erp({"T1": ex.Titulo(False, Decimal("100.00"), None)})
+    livro = Livro()
+    livro.gravar(ex.Evento(1, ex.INICIADO, "", "E1"))
+    livro.gravar(ex.Evento(1, ex.FALTA_ANEXAR, "ERP não confirmou anexo e baixa", "E1"))
+    for _ in range(3):
+        _rodar([_item(1, lt.PIX_CHAVE)], "100.00", Sicoob(**PIX_OK), erp, tmp_path, livro)
+    assert erp.anexos == [] and erp.baixas == []
+    assert livro.lista[-1] == ex.Evento(1, ex.FALTA_ANEXAR, "ERP não respondeu", "E1")
+
+
+def test_titulo_baixado_a_mao_so_recebe_o_anexo(tmp_path):
+    erp = Erp({"T1": ex.Titulo(False, Decimal("100.00"), False)})
+    livro = Livro()
+    livro.gravar(ex.Evento(1, ex.INICIADO, "", "E1"))
+    livro.gravar(ex.Evento(1, ex.REALIZADO, "", "E1"))
+    erp.anexar = lambda tid, c: (erp.anexos.append((tid, c)),
+                                 erp.t.__setitem__(tid, ex.Titulo(False, Decimal("100.00"), True)))[0] is None
+    _rodar([_item(1, lt.PIX_CHAVE)], "100.00", Sicoob(**PIX_OK), erp, tmp_path, livro)
+    assert len(erp.anexos) == 1 and erp.baixas == []
+    assert _estados(livro, 1)[-1] == ex.CONCLUIDO
+
+
+def test_convenio_sem_nsu_nao_vira_pago_sozinho(tmp_path):
+    s = Sicoob(convenio_consultar={"valorTotal": 100.0}, convenio_pagar={"comprovante": "QUJD"})
+    erp = Erp({"T1": _aberto()})
+    livro = _rodar([_item(1, lt.CONVENIO)], "100.00", s, erp, tmp_path)
+    for _ in range(2):
+        _rodar([_item(1, lt.CONVENIO)], "100.00", s, erp, tmp_path, livro)
+    assert _estados(livro, 1)[-1] == ex.EM_PROCESSAMENTO and erp.baixas == []
+
+
+def test_erp_fora_no_anexo_nao_derruba_o_lote(tmp_path):
+    erp = Erp({"T2": _aberto()})
+    original = erp.titulo
+    erp.titulo = lambda tid: (_ for _ in ()).throw(ConnectionError("ERP fora")) if tid == "T1" else original(tid)
+    livro = Livro()
+    livro.gravar(ex.Evento(1, ex.INICIADO, "", "E1"))
+    livro.gravar(ex.Evento(1, ex.REALIZADO, "", "E1"))
+    _rodar([_item(1, lt.PIX_CHAVE), _item(2, lt.PIX_CHAVE)], "200.00", Sicoob(**PIX_OK), erp, tmp_path, livro)
+    ult1 = [e for e in livro.lista if e.ordem == 1][-1]
+    assert ult1.estado == ex.FALTA_ANEXAR and "ERP fora" in ult1.detalhe
+    assert _estados(livro, 2)[-1] == ex.CONCLUIDO
+
+
+def test_motivo_do_erro_ao_pagar_fica_gravado(tmp_path):
+    s = Sicoob(pix_qrcode=ErroSicoob(400, "QR expirado"))
+    livro = _rodar([_item(1, lt.PIX_QR)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert "QR expirado" in livro.lista[-1].detalhe and ex.CONFERIR in livro.lista[-1].detalhe
+
+
+def test_comprovante_de_boleto_em_lista_e_lido(tmp_path):
+    assert ex.estado_boleto([{"situacaoPagamento": "EFETIVADO"}]) == ex.REALIZADO
+    assert ex.estado_boleto(["x"]) == ex.EM_PROCESSAMENTO
 ```
 
 `tests/test_pagamento_api_sorteio.py`:
@@ -1623,11 +1681,17 @@ def ja_comprometido(itens: list[lt.ItemLote], eventos: list[Evento]) -> Decimal:
 CONFERIR = "conferir no banco antes de qualquer pagamento à mão"
 
 
-def estado_boleto(resposta: dict) -> str:
+def _junto(*partes) -> str:
+    return " — ".join(p for p in partes if p)
+
+
+def estado_boleto(resposta) -> str:
     """Só um comprovante EFETIVADO/PAGO/REALIZADO vale como pago. Nenhuma
     situação do comprovante vira "não pago" sozinha: o nome das recusas não está
     documentado, e um engano aqui mandaria pagar de novo à mão."""
-    s = _sem_acento((resposta or {}).get("situacaoPagamento"))
+    if isinstance(resposta, list):            # o endpoint tem nome no plural
+        resposta = next((r for r in resposta if isinstance(r, dict)), {})
+    s = _sem_acento((resposta or {}).get("situacaoPagamento") if isinstance(resposta, dict) else "")
     return REALIZADO if s in ("EFETIVADO", "PAGO", "REALIZADO") else EM_PROCESSAMENTO
 
 
@@ -1659,7 +1723,11 @@ class Executor:
             elif ult is None:
                 ult = self._pagar(item, eventos)
             if ult.estado in (REALIZADO, FALTA_ANEXAR):
-                self._anexar(item, chave_do_item(self.p.livro.eventos(), item.ordem))
+                chave = chave_do_item(self.p.livro.eventos(), item.ordem)
+                try:
+                    self._anexar(item, chave)
+                except Exception as e:  # anexar não move dinheiro: segue o lote
+                    self._gravar(item, FALTA_ANEXAR, f"anexo falhou: {e!r}", chave)
 
     # ------------------------------------------------------------- pagar
     def _pagar(self, item: lt.ItemLote, eventos: list[Evento]) -> Evento:
@@ -1674,7 +1742,11 @@ class Executor:
             return self._gravar(item, NAO_PAGO, f"ERP não respondeu: {e!r}")
         if t is None or t.tem_comprovante is None:
             return self._gravar(item, NAO_PAGO, "ERP não confirmou o título")
-        if not t.aberto or t.tem_comprovante or Decimal(t.valor) != item.valor:
+        try:
+            mesmo_valor = Decimal(str(t.valor)) == item.valor
+        except ArithmeticError:
+            return self._gravar(item, NAO_PAGO, f"ERP devolveu valor ilegível: {t.valor!r}")
+        if not t.aberto or t.tem_comprovante or not mesmo_valor:
             return self._gravar(item, NAO_PAGO, "ERP mudou")
         try:
             if item.tipo == lt.PIX_CHAVE:
@@ -1691,7 +1763,7 @@ class Executor:
             # resposta, deixa EM_PROCESSAMENTO. Erro antes disso = não pago.
             ult = ultimos(self.p.livro.eventos()).get(item.ordem)
             if ult and ult.estado == INICIADO:
-                return self._retomar(item, ult.chave)
+                return self._retomar(item, ult.chave, f"erro ao pagar: {e}")
             return self._gravar(item, NAO_PAGO, f"banco: {e}")
         return self._gravar(item, NAO_PAGO, f"tipo {item.tipo} desconhecido")
 
@@ -1757,7 +1829,7 @@ class Executor:
         return self._gravar(item, REALIZADO, caminho, nsu)
 
     # ----------------------------------------------------------- retomar
-    def _retomar(self, item, chave) -> Evento:
+    def _retomar(self, item, chave, motivo: str = "") -> Evento:
         """Caiu no meio (ou ainda não se sabe): pergunta ao banco pelo código
         gravado. Nunca paga de novo, e nunca conclui "não pago" sem o banco dizer."""
         try:
@@ -1769,30 +1841,46 @@ class Executor:
             if item.tipo == lt.BOLETO and chave:
                 est = estado_boleto(self.p.sicoob.boleto_comprovante(chave))
                 return self._gravar(item, est, "" if est == REALIZADO else CONFERIR, chave)
-            if item.tipo == lt.CONVENIO and cp.ler_bruto(self.p.pasta, item, "convenio"):
-                return self._gravar(item, REALIZADO, "", chave)
+            if item.tipo == lt.CONVENIO:
+                b = cp.ler_bruto(self.p.pasta, item, "convenio") or {}
+                nsu = str((b.get("arrecadacao") or {}).get("nsu") or "")
+                if nsu:
+                    return self._gravar(item, REALIZADO, "", nsu)
         except ErroSicoob as e:
-            return self._gravar(item, EM_PROCESSAMENTO, f"{CONFERIR} (consulta falhou: {e.status})", chave)
-        return self._gravar(item, EM_PROCESSAMENTO, CONFERIR, chave)
+            onde = f"HTTP {e.status}" if e.status else "sem resposta"
+            return self._gravar(item, EM_PROCESSAMENTO, _junto(CONFERIR, f"consulta falhou: {onde}", motivo), chave)
+        except Exception as e:          # resposta num formato inesperado: perguntar de novo
+            return self._gravar(item, EM_PROCESSAMENTO, _junto(CONFERIR, f"consulta ilegível: {e!r}", motivo), chave)
+        ult = ultimos(self.p.livro.eventos()).get(item.ordem)
+        if not motivo and ult is not None and ult.estado == EM_PROCESSAMENTO:
+            return ult                  # nada novo: fica o registro que já diz o motivo
+        return self._gravar(item, EM_PROCESSAMENTO, _junto(CONFERIR, motivo), chave)
 
     # ----------------------------------------------------------- anexar
     def _anexar(self, item, chave) -> Evento:
         # Relê o ERP ANTES: anexo/baixa de uma rodada que caiu podem já ter entrado.
         t = self.p.erp.titulo(item.titulo)
-        if t is not None and not t.aberto and t.tem_comprovante is True:
+        if t is None or t.tem_comprovante is None:
+            # "não sei" do ERP nunca vale como "não tem": não anexa nem baixa às cegas
+            return self._gravar(item, FALTA_ANEXAR, "ERP não respondeu", chave)
+        if not t.aberto and t.tem_comprovante:
             return self._gravar(item, CONCLUIDO, "já estava anexado e baixado no ERP", chave)
         try:
             dados = self._comprovante(item, chave)
         except ErroSicoob as e:
             return self._gravar(item, FALTA_ANEXAR, f"comprovante: {e}", chave)
         if dados is None:
+            if item.tipo == lt.CONVENIO:
+                return self._gravar(item, FALTA_ANEXAR,
+                                    f"comprovante do convênio não está no disco; pedir 2ª via (NSU {chave})", chave)
             return self._gravar(item, FALTA_ANEXAR, "comprovante ainda não disponível", chave)
         caminho = cp.gerar_pdf(self.p.pasta, item, dados, self.p.hoje)
-        if not (t is not None and t.tem_comprovante is True):
+        if not t.tem_comprovante:
             if not self.p.erp.anexar(item.titulo, caminho):
                 return self._gravar(item, FALTA_ANEXAR, "ERP recusou o anexo", chave)
-        if not self.p.erp.baixar(item.titulo, item.valor, self.p.hoje, item.conta):
-            return self._gravar(item, FALTA_ANEXAR, "ERP recusou a baixa", chave)
+        if t.aberto:                    # título já fechado (baixa à mão): nunca baixar de novo
+            if not self.p.erp.baixar(item.titulo, item.valor, self.p.hoje, item.conta):
+                return self._gravar(item, FALTA_ANEXAR, "ERP recusou a baixa", chave)
         t = self.p.erp.titulo(item.titulo)
         if t is None or t.aberto or t.tem_comprovante is not True:
             return self._gravar(item, FALTA_ANEXAR, "ERP não confirmou anexo e baixa", chave)
@@ -1815,7 +1903,7 @@ class Executor:
 - [ ] **Step 4: rodar e ver passar**
 
 Run: `python -m pytest tests/test_pagamento_api_executor.py tests/test_pagamento_api_sorteio.py -q`
-Expected: 43 passed.
+Expected: 49 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1912,6 +2000,12 @@ def test_funcao_security_definer_tem_search_path_vazio():
 def test_um_iniciado_por_item_no_banco():
     assert ("create unique index if not exists lote_evento_um_iniciado on public.lote_evento "
             "(lote, ordem) where estado = 'iniciado'") in _texto()
+
+
+def test_item_que_iniciou_nunca_libera_o_titulo_e_lote_velho_recusa_item():
+    t = _texto()
+    assert "e.lote = i.lote and e.ordem = i.ordem and e.estado = 'iniciado'" in t
+    assert t.count("raise exception 'lote não é de hoje'") == 2
 ```
 
 - [ ] **Step 2: rodar e ver falhar**
@@ -2102,6 +2196,9 @@ begin
   if l.preparado_por is distinct from (select auth.uid()) then
     raise exception 'só quem preparou o lote acrescenta itens';
   end if;
+  if l.dia <> privado.hoje() then
+    raise exception 'lote não é de hoje';
+  end if;
   if exists (select 1 from public.lote_aprovacao a where a.lote = new.lote)
      or exists (select 1 from public.lote_cancelado c where c.lote = new.lote) then
     raise exception 'lote já aprovado ou cancelado';
@@ -2109,8 +2206,10 @@ begin
   -- Dois lotes ao mesmo tempo com o mesmo título: um de cada vez.
   perform pg_advisory_xact_lock(hashtextextended('lote_item:' || new.titulo, 0));
   -- O título bloqueia enquanto estiver num lote não cancelado, sem ter sido
-  -- retirado na aprovação e sem ter terminado em nao_pago: de hoje, ou de
-  -- qualquer dia quando aquele lote foi aprovado (pode ter sido pago).
+  -- retirado na aprovação e sem ter terminado em nao_pago ANTES de iniciar: de
+  -- hoje, ou de qualquer dia quando aquele lote foi aprovado (pode ter sido
+  -- pago). Item que chegou a INICIAR nunca libera o título pela API, mesmo que
+  -- termine nao_pago: o banco não confia que o robô acertou (vai pelo HTML).
   if exists (
     select 1 from public.lote_item i
     join public.lote_pagamento p on p.id = i.lote
@@ -2118,9 +2217,11 @@ begin
     where i.titulo = new.titulo and i.lote <> new.lote
       and not exists (select 1 from public.lote_cancelado c where c.lote = i.lote)
       and (a.lote is null or i.ordem = any (a.itens))
-      and coalesce((select e.estado from public.lote_evento e
-                    where e.lote = i.lote and e.ordem = i.ordem
-                    order by e.id desc limit 1), '') <> 'nao_pago'
+      and (coalesce((select e.estado from public.lote_evento e
+                     where e.lote = i.lote and e.ordem = i.ordem
+                     order by e.id desc limit 1), '') <> 'nao_pago'
+           or exists (select 1 from public.lote_evento e
+                      where e.lote = i.lote and e.ordem = i.ordem and e.estado = 'iniciado'))
       and (p.dia = l.dia or a.lote is not null)
   ) then
     raise exception 'título % já está em outro lote de hoje', new.titulo;
@@ -2547,7 +2648,7 @@ def pulso(token: str) -> None:
 - [ ] **Step 4: rodar e ver passar**
 
 Run: `python -m pytest tests/test_pagamento_api_nuvem.py -q`
-Expected: 4 passed.
+Expected: 6 passed.
 
 - [ ] **Step 5: Commit**
 
