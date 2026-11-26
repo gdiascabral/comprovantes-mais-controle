@@ -196,6 +196,24 @@ def test_pix_por_chave_sem_documento_no_cadastro_fica_fora():
     assert itens == [] and fora[0].motivo == "Pix sem CPF/CNPJ do favorecido no cadastro"
 
 
+def test_mesmo_codigo_em_dois_titulos_fica_fora_e_a_ordem_se_refaz():
+    contas = [{"nome": "OBRA X - SICOOB", "entries": [
+        _e("1", "Boleto", BANCARIO, 100),
+        _e("2", "Boleto", BANCARIO, 100),
+        _e("3", "Pix", "a@b.com", 100),
+        _e("4", "Pix", "a@b.com", 200)]}]
+    itens, fora = lote.itens_do_html(contas, _doc)
+    assert [(i.titulo, i.ordem) for i in itens] == [("3", 1), ("4", 2)]
+    assert {f.alvo: f.motivo for f in fora} == {"1": "mesmo código em mais de um título",
+                                                 "2": "mesmo código em mais de um título"}
+
+
+def test_documento_que_nao_e_cpf_nem_cnpj_vira_vazio():
+    contas = [{"nome": "OBRA X - SICOOB", "entries": [_e("1", "Boleto", BANCARIO, 100)]}]
+    itens, _ = lote.itens_do_html(contas, lambda f: "12345")
+    assert itens[0].documento_esperado == ""
+
+
 def test_descricao_cortada_em_100():
     contas = [{"nome": "OBRA X - SICOOB", "entries": [
         _e("1", "Boleto", BANCARIO, 100, descricao="X" * 150)]}]
@@ -328,6 +346,8 @@ def itens_do_html(contas: list[dict], documento_de) -> tuple[list[ItemLote], lis
                 if not tipo:
                     motivo = dado
             doc = re.sub(r"\D", "", str(documento_de(fav) or "")) if not motivo else ""
+            if len(doc) not in (11, 14):
+                doc = ""                 # nada de "documento" com 5 dígitos indo para o banco
             if not motivo and tipo == PIX_CHAVE and len(doc) not in (11, 14):
                 motivo = "Pix sem CPF/CNPJ do favorecido no cadastro"
             if motivo:
@@ -335,7 +355,28 @@ def itens_do_html(contas: list[dict], documento_de) -> tuple[list[ItemLote], lis
                 continue
             itens.append(ItemLote(len(itens) + 1, titulo, alvo, conta, tipo, dado, valor,
                                   fav, doc, str(e.get("descricao") or "")[:LIMITE_DESCRICAO]))
-    return itens, fora
+    return _sem_codigo_repetido(itens, fora)
+
+
+def _sem_codigo_repetido(itens, fora):
+    """O mesmo código de barras ou copia-e-cola em dois títulos: os dois ficam fora
+    (segunda trava além do bloqueio do HTML; chave Pix comum repetida é legítima)."""
+    vistos: dict[str, int] = {}
+    for i in itens:
+        if i.tipo != PIX_CHAVE:
+            vistos[i.dados] = vistos.get(i.dados, 0) + 1
+    repetidos = {d for d, n in vistos.items() if n > 1}
+    if not repetidos:
+        return itens, fora
+    ficam = []
+    for i in itens:
+        if i.tipo != PIX_CHAVE and i.dados in repetidos:
+            fora.append(Fora(i.alvo, i.conta, i.valor, i.favorecido,
+                             "mesmo código em mais de um título"))
+        else:
+            ficam.append(i)
+    from dataclasses import replace
+    return [replace(i, ordem=n) for n, i in enumerate(ficam, start=1)], fora
 
 
 def total(itens) -> Decimal:
@@ -345,7 +386,7 @@ def total(itens) -> Decimal:
 - [ ] **Step 4: rodar e ver passar**
 
 Run: `python -m pytest tests/test_pagamento_api_lote.py -q`
-Expected: 4 passed.
+Expected: 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -468,6 +509,41 @@ def test_200_com_html_do_firewall_e_erro_e_nao_sucesso():
     assert e.value.status == 200 and "não é JSON" in str(e.value)
 
 
+@pytest.mark.parametrize("chamar", [
+    lambda c: c.pix_confirmar("E1", Decimal("1"), "D"),
+    lambda c: c.pix_qrcode("000201", Decimal("1"), ""),
+    lambda c: c.boleto_pagar("3" * 44, CONTA, {}, Decimal("1"), "D", "k", "2026-11-27"),
+    lambda c: c.convenio_pagar("8" * 44, CONTA, Decimal("1"), "2026-11-27", 1),
+])
+def test_pagamento_com_2xx_vazio_e_erro_e_nao_sucesso(chamar):
+    with pytest.raises(sc.ErroSicoob) as e:
+        chamar(_cliente(Sessao(corpo={})))
+    assert e.value.status == 200
+
+
+def test_json_que_nao_e_objeto_e_erro():
+    class S(Sessao):
+        def request(self, metodo, url, **k):
+            return RespostaCrua(200, "[1, 2]")
+    with pytest.raises(sc.ErroSicoob):
+        _cliente(S()).pix_consultar("E1")
+
+
+def test_valores_do_banco_chegam_em_decimal():
+    r = _cliente(Sessao(corpo={"resultado": {"valorPagamento": 152.3}})).boleto_consultar("3" * 44, CONTA)
+    assert r["valorPagamento"] == Decimal("152.3") and isinstance(r["valorPagamento"], Decimal)
+
+
+def test_qrcode_e_convenio_montam_o_pedido_da_documentacao():
+    s = Sessao(corpo={"estado": "REALIZADO"})
+    _cliente(s).pix_qrcode("000201X", Decimal("10"), "11222333000181")
+    corpo = json.loads(s.pedidos[0][2]["data"])
+    assert corpo["valor"] == "10.00" and corpo["destino"] == {"cpfCnpj": "11222333000181"}
+    s = Sessao(corpo={"resultado": {"valorTotal": 1.0}})
+    _cliente(s).convenio_consultar("8" * 44, "2026-11-27")
+    assert s.pedidos[0][2]["params"] == {"dataPagamento": "2026-11-27"}
+
+
 def test_identificacao_fixa_do_cliente():
     s = Sessao(corpo={})
     _cliente(s).pix_consultar("E1")
@@ -528,7 +604,10 @@ USER_AGENT = "comprovantes-mais-controle/pagamento-api 1.0"
 
 
 class ErroSicoob(RuntimeError):
-    """O banco respondeu fora de 2xx. `status` None = não houve resposta."""
+    """O banco respondeu fora de 2xx, ou com um 2xx que não serve. `status` None =
+    não houve resposta. Num POST que PAGA, qualquer ErroSicoob (sem resposta,
+    5xx, ou 2xx sem o campo esperado) é ambíguo — o dinheiro pode ter saído — e
+    quem decide é a retomada do executor, que pergunta ao banco."""
 
     def __init__(self, status, corpo: str):
         super().__init__(f"Sicoob {status}: {corpo[:300]}")
@@ -576,7 +655,8 @@ class Sicoob:
         if not texto.strip():
             return {}
         try:
-            corpo = json.loads(texto)
+            # Valores do banco já chegam em Decimal: dinheiro não passa por float.
+            corpo = json.loads(texto, parse_float=Decimal)
         except ValueError:
             # 200 com HTML = recusa do firewall, não sucesso. Nunca vale como "pago".
             raise ErroSicoob(r.status_code, "resposta não é JSON: " + texto[:200]) from None
@@ -591,12 +671,14 @@ class Sicoob:
     def pix_confirmar(self, e2e: str, valor: Decimal, descricao: str) -> dict:
         corpo = {"endToEndId": e2e, "valor": f"{Decimal(valor):.2f}".replace(".", ","),
                  "descricao": descricao, "repeticao": False, "meioIniciacao": "MANUAL"}
-        return self._chamar("POST", self._a.pix + "/pagamentos/confirmacao", corpo=corpo)
+        return _com(self._chamar("POST", self._a.pix + "/pagamentos/confirmacao", corpo=corpo),
+                    "estado", "confirmação do Pix sem estado")
 
     def pix_qrcode(self, copia_e_cola: str, valor: Decimal, documento: str) -> dict:
         corpo = {"qrcode": copia_e_cola, "valor": f"{Decimal(valor):.2f}",
                  "pagarComJurosMulta": False, "destino": {"cpfCnpj": documento}}
-        return self._chamar("POST", self._a.pix + "/pagamentos/qrcode", corpo=corpo)
+        return _com(self._chamar("POST", self._a.pix + "/pagamentos/qrcode", corpo=corpo),
+                    "estado", "Pix por QR sem estado")
 
     def pix_consultar(self, e2e: str) -> dict:
         return self._chamar("GET", self._a.pix + f"/pagamentos/{e2e}")
@@ -618,7 +700,10 @@ class Sicoob:
                                    "accountType": 0, "personType": conta.tipo_pessoa}}
         r = self._chamar("POST", self._a.boleto + f"/boletos/pagamentos/{codigo}",
                          corpo=corpo, extra={"x-idempotency-key": chave})
-        return r.get("resultado", r)
+        r = r.get("resultado", r)
+        if not r:
+            raise ErroSicoob(200, "pagamento de boleto sem resposta")
+        return r
 
     def boleto_comprovante(self, chave: str) -> dict:
         r = self._chamar("GET", self._a.boleto
@@ -639,7 +724,17 @@ class Sicoob:
                  "transacao": transacao}
         r = self._chamar("POST", self._a.convenio
                          + f"/arrecadacao/codigo-barras/{codigo}/pagamentos", corpo=corpo)
-        return r.get("resultado", r)
+        r = r.get("resultado", r)
+        if not (r.get("arrecadacao") or r.get("comprovante")):
+            raise ErroSicoob(200, "pagamento de convênio sem comprovante")
+        return r
+
+
+def _com(resposta: dict, campo: str, motivo: str) -> dict:
+    """2xx sem o campo que diz o que aconteceu não é sucesso: vira ErroSicoob."""
+    if campo not in resposta:
+        raise ErroSicoob(200, motivo)
+    return resposta
 
 
 def chave_de_idempotencia(conta: ContaApi, uuid_: str) -> str:
@@ -650,7 +745,7 @@ def chave_de_idempotencia(conta: ContaApi, uuid_: str) -> str:
 - [ ] **Step 4: rodar e ver passar**
 
 Run: `python -m pytest tests/test_pagamento_api_sicoob.py -q`
-Expected: 8 passed.
+Expected: 13 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -690,9 +785,24 @@ def test_pdf_do_comprovante_abre_e_tem_a_descricao(tmp_path):
                        Decimal("152.30"), "FORNECEDOR (A)", "", "OBRA X NF 12 OC 7")
     p = cp.gerar_pdf(tmp_path, item, {"situacaoPagamento": "EFETIVADO", "valorPagamento": 152.3},
                      date(2026, 11, 27))
-    assert p.name == "2026-11-27 OBRA X NF 12 OC 7 R$ 152,30 item 3.pdf"
+    assert p.name == "2026-11-27 OBRA X NF 12 OC 7 R$ 152,30 titulo T3 item 3.pdf"
     texto = PdfReader(str(p)).pages[0].extract_text()
     assert "OBRA X NF 12 OC 7" in texto and "FORNECEDOR (A)" in texto and "EFETIVADO" in texto
+
+
+def test_descricao_longa_nao_faz_um_pdf_apagar_o_outro(tmp_path):
+    a = lt.ItemLote(1, "T1", "T1", "C - SICOOB", lt.BOLETO, "3" * 44, Decimal("10.00"), "F", "", "X" * 100)
+    b = lt.ItemLote(2, "T2", "T2", "C - SICOOB", lt.BOLETO, "3" * 44, Decimal("10.00"), "F", "", "X" * 100)
+    na, nb = cp.nome_do_arquivo(a, date(2026, 11, 27)), cp.nome_do_arquivo(b, date(2026, 11, 27))
+    assert na != nb and na.endswith("titulo T1 item 1.pdf") and nb.endswith("titulo T2 item 2.pdf")
+
+
+def test_bruto_truncado_volta_none(tmp_path):
+    item = lt.ItemLote(1, "T1", "T1", "C - SICOOB", lt.CONVENIO, "8" * 44, Decimal("1.00"), "F", "", "D")
+    p = cp.salvar_bruto(tmp_path, item, "convenio", {"comprovante": "QUJD"})
+    p.write_text('{"comprov', encoding="utf-8")
+    assert cp.ler_bruto(tmp_path, item, "convenio") is None
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_bruto_do_convenio_volta_igual(tmp_path):
@@ -724,6 +834,7 @@ resposta do pagamento) fica gravado ao lado, para a retomada achar.
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from datetime import date
@@ -742,14 +853,18 @@ def _ascii(t) -> str:
 
 
 def _limpo_para_nome(t: str) -> str:
-    t = unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode()
+    t = unicodedata.normalize("NFKD", str(t)).encode("ascii", "ignore").decode()
     t = re.sub(r'[\\/:*?"<>|]+', " ", t)
-    return " ".join(t.split())[:120]
+    return " ".join(t.split())
 
 
 def nome_do_arquivo(item, hoje: date) -> str:
+    """Só a DESCRIÇÃO é cortada: o sufixo com valor, título e item é o que deixa
+    o nome único (duas parcelas de descrição igual não se sobrescrevem)."""
     valor = f"{item.valor:.2f}".replace(".", ",")
-    return _limpo_para_nome(f"{hoje:%Y-%m-%d} {item.descricao} R$ {valor} item {item.ordem}") + ".pdf"
+    desc = _limpo_para_nome(item.descricao)[:70].rstrip()
+    sufixo = _limpo_para_nome(f"R$ {valor} titulo {item.titulo} item {item.ordem}")
+    return f"{hoje:%Y-%m-%d} {desc} {sufixo}".replace("  ", " ") + ".pdf"
 
 
 def _achatar(d, prefixo="") -> list[tuple[str, str]]:
@@ -818,25 +933,35 @@ def gerar_pdf(pasta: Path, item, dados: dict, hoje: date) -> Path:
 
 
 def _bruto(pasta: Path, item, tipo: str) -> Path:
-    return Path(pasta) / f"bruto-{tipo}-{item.titulo}-{item.ordem}.json"
+    # A pasta é a do LOTE (o robô passa uma por lote): título + ordem não se
+    # repetem dentro de um lote aprovado, que é imutável no banco.
+    return Path(pasta) / _limpo_para_nome(f"bruto-{tipo}-{item.titulo}-{item.ordem}.json")
 
 
 def salvar_bruto(pasta: Path, item, tipo: str, dados: dict) -> Path:
+    """É a ÚNICA cópia do comprovante do convênio: grava inteiro ou não grava."""
     Path(pasta).mkdir(parents=True, exist_ok=True)
     p = _bruto(pasta, item, tipo)
-    p.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(dados, ensure_ascii=False, default=str), encoding="utf-8")
+    os.replace(tmp, p)
     return p
 
 
 def ler_bruto(pasta: Path, item, tipo: str) -> dict | None:
     p = _bruto(pasta, item, tipo)
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except ValueError:
+        return None
 ```
 
 - [ ] **Step 4: rodar e ver passar**
 
 Run: `python -m pytest tests/test_pagamento_api_comprovante.py -q`
-Expected: 2 passed.
+Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1051,6 +1176,11 @@ def test_pix_com_estado_acentuado_do_sandbox_e_nao_pago(tmp_path):
     s = Sicoob(pix_iniciar=PIX_OK["pix_iniciar"], pix_confirmar={"estado": "NÃO_REALIZADO"})
     livro = _rodar([_item(1, lt.PIX_CHAVE)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
     assert _estados(livro, 1)[-1] == ex.NAO_PAGO
+
+
+@pytest.mark.parametrize("resposta", [{}, {"estado": "AGENDADO"}, {"estado": None}])
+def test_estado_desconhecido_do_pix_nao_vira_nao_pago(resposta):
+    assert ex.estado_pix(resposta) == ex.EM_PROCESSAMENTO
 
 
 def test_boleto_grava_a_chave_antes_de_pagar_e_busca_o_comprovante_por_ela(tmp_path):
@@ -1281,12 +1411,15 @@ def _sem_acento(t) -> str:
 
 
 def estado_pix(resposta: dict) -> str:
+    """Só NAO_REALIZADO é "não pago". Estado desconhecido ou ausente fica em
+    processamento: o robô volta a perguntar, e nada é dado como não pago (o que
+    mandaria alguém pagar pelo HTML um Pix que pode ter saído)."""
     e = _sem_acento(resposta.get("estado"))
     if e == "REALIZADO":
         return REALIZADO
-    if e == "EM_PROCESSAMENTO":
-        return EM_PROCESSAMENTO
-    return NAO_PAGO
+    if e == "NAO_REALIZADO":
+        return NAO_PAGO
+    return EM_PROCESSAMENTO
 
 
 def ultimos(eventos: list[Evento]) -> dict[int, Evento]:
@@ -1471,7 +1604,7 @@ class Executor:
 - [ ] **Step 4: rodar e ver passar**
 
 Run: `python -m pytest tests/test_pagamento_api_executor.py tests/test_pagamento_api_sorteio.py -q`
-Expected: 24 passed.
+Expected: 27 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2203,7 +2336,7 @@ def pulso(token: str) -> None:
 - [ ] **Step 4: rodar e ver passar**
 
 Run: `python -m pytest tests/test_pagamento_api_nuvem.py -q`
-Expected: 4 passed.
+Expected: 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2418,8 +2551,10 @@ def _rodada(cfg: dict) -> None:
     for lote in nl.lotes_aprovados(token, hoje):
         print(f"lote {lote.id}: {len(lote.itens)} itens, total {lote.total}")
         livro = nl.LivroNaNuvem(token, lote.id)
+        # Uma pasta por lote: o JSON cru do convênio é achado pela retomada
+        # sem risco de pegar o de outro lote com o mesmo título.
         portas = ex.Portas(cliente(cfg), ErpDeEnsaio(lote.itens), livro, contas(cfg),
-                           Path(cfg["pasta_comprovantes"]), hoje,
+                           Path(cfg["pasta_comprovantes"]) / f"lote-{lote.id}", hoje,
                            parar=lambda: nl.parado(token))
         ex.Executor(lote.itens, lote.total, portas).rodar()
 
