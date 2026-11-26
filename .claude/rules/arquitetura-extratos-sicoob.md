@@ -119,3 +119,15 @@ paths:
   QR (padrão: nunca, o Baixar comprovantes não muda); `SELETOR_MOSTRAR_SALDO`
   (Sicoob em `prova_sicoob`, Inter em `inter_saldo`) é o gancho do "olho"
   do saldo mascarado — vazio = não clica, medir ao vivo.
+  **Menos idas de página (26/11/2026)**: o login é confirmado na própria
+  tela inicial (`esperar_entrar`: sem marca de login e com o número da conta
+  ou os três cabeçalhos da sessão; sem nada disso `FOLGA_SEM_SESSAO` s depois
+  de sair do login, cai no `esperar_login` de antes); a tela inicial não é
+  recarregada (o `escutar_saldo` deixa de fora o 401/403 de antes do QR); a
+  conta cujo saldo veio do extrato na última leitura vai direto a ele
+  (`ler_via`/`gravar_via`, `<perfil>.via.txt` ao lado do perfil) e, sem
+  saldo ou sem conferir ali, volta à tela inicial — outra conta aberta para
+  como sempre; `TEMPO_SALDO` 30 → 12 s antes do pedido de dentro da página;
+  tela parada até `TEMPO_TELA_PARADA` (10 s) olhando a cada 0,5 s. O tempo
+  de cada passo vai ao Registro ("tempos: Chrome … · QR … · saldo … · print
+  … · total …", `Cronometro`). Nada disso foi medido ao vivo ainda.

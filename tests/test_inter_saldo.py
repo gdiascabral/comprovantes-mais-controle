@@ -357,3 +357,129 @@ def test_sem_sessao_completa_pede_so_com_o_authorization():
     assert m._cabecalhos_para_pedir({"valor": ""}, None) == {}
     s = {"authorization": "B", "x-inter-organization": "2"}
     assert m._cabecalhos_para_pedir({"valor": "A"}, s) == s
+
+
+# ---------------------------------------------- menos idas de página (26/11/2026)
+
+def test_cronometro_resume_cada_passo_e_o_total():
+    horas = iter([0.0, 3.0, 15.5, 17.0])
+    c = m.Cronometro(relogio=lambda: next(horas))
+    c.marcar("Chrome")
+    c.marcar("QR")
+    c.marcar("saldo")
+    assert c.resumo() == "Chrome 3,0 s · QR 12,5 s · saldo 1,5 s · total 17,0 s"
+
+
+def test_entrou_so_sem_marca_de_login_e_com_numero_ou_sessao():
+    completa = {k: "x" for k in m.CABECALHOS_DA_SESSAO}
+    assert m.entrou(TELA, {})
+    assert m.entrou("Olá\nSaldo", completa)
+    assert not m.entrou("Olá\nSaldo", {"authorization": "x"})
+    assert not m.entrou("Leia o QR Code\n123456789", completa)
+    assert not m.entrou("", completa)
+
+
+class _PagDoLogin(_Pag):
+    """A tela inicial durante o QR: cada leitura do texto avança o relógio."""
+
+    def __init__(self, textos, relogio):
+        super().__init__()
+        self.textos, self.relogio = list(textos), relogio
+
+    def evaluate(self, js, args=None):
+        self.relogio[0] += 1
+        return self.textos.pop(0) if len(self.textos) > 1 else self.textos[0]
+
+
+def test_esperar_entrar_confirma_na_propria_tela_inicial(monkeypatch):
+    relogio = [0.0]
+    pag = _PagDoLogin(["Leia o QR Code", "Leia o QR Code", TELA], relogio)
+    monkeypatch.setattr(ib, "esperar_login", lambda *a, **k: pytest.fail("caminho antigo"))
+    assert m.esperar_entrar(pag, {}, tempo=60, log=lambda s: None,
+                            relogio=lambda: relogio[0]) is True
+
+
+def test_esperar_entrar_cai_no_caminho_antigo_sem_numero_nem_sessao(monkeypatch):
+    relogio = [0.0]
+    pag = _PagDoLogin(["Leia o QR Code", "Carregando…"], relogio)
+    antigo = []
+    monkeypatch.setattr(ib, "esperar_login", lambda page, **k: antigo.append(k))
+    assert m.esperar_entrar(pag, {}, tempo=300, log=lambda s: None,
+                            relogio=lambda: relogio[0]) is False
+    assert len(antigo) == 1 and 1 <= antigo[0]["tempo"] <= 300
+
+
+def test_esperar_entrar_respeita_o_parar_e_o_tempo():
+    relogio = [0.0]
+    pag = _PagDoLogin(["Leia o QR Code"], relogio)
+    with pytest.raises(ib.InterFalhou, match="Parar"):
+        m.esperar_entrar(pag, {}, tempo=60, log=lambda s: None, parar=lambda: True,
+                         relogio=lambda: relogio[0])
+    with pytest.raises(ib.InterFalhou, match="não abriu"):
+        m.esperar_entrar(pag, {}, tempo=5, log=lambda s: None,
+                         relogio=lambda: relogio[0])
+
+
+def test_escutar_saldo_deixa_de_fora_o_401_de_antes_do_qr():
+    pag = _Pag()
+    ouvidas = m.escutar_saldo(pag)
+    pag.ouvintes["response"](_Resp(401, None))
+    pag.ouvintes["response"](_Resp(412, None))
+    assert [r.status for r in ouvidas] == [412]
+
+
+def test_a_via_da_ultima_leitura_fica_ao_lado_do_perfil(monkeypatch, tmp_path):
+    monkeypatch.setattr(ib, "pasta_do_perfil", lambda a: tmp_path / f".perfil_{a}")
+    assert m.ler_via("ALFA") == ""
+    m.gravar_via("ALFA", m.VIA_EXTRATO)
+    assert m.ler_via("ALFA") == m.VIA_EXTRATO and m.ler_via("BETA") == ""
+    assert not (tmp_path / ".perfil_ALFA").exists()      # o perfil do Chrome fica intacto
+
+
+def test_direto_no_extrato_nem_passa_pela_tela_inicial(tmp_path, sem_espera):
+    extratos, passos = [], []
+    pag = _PagDaTela(extrato_corpo=EXTRATO, extratos=extratos)
+    lido = m._ler_na_pagina(pag, [], {"valor": ""}, "123456789", ("EMPRESA FICTICIA",), (),
+                            tmp_path / "b.png", agora=lambda: "agora", extratos=extratos,
+                            comecar_no_extrato=True, marcar=passos.append)
+    assert (lido.saldo, lido.via, lido.motivo) == (D("2500.10"), "extrato", "")
+    assert pag.idas == [m.URL_EXTRATO_COMPLETO] and pag.fotos
+    assert passos == ["saldo", "print"]
+
+
+def test_direto_no_extrato_de_outra_conta_para_sem_print(tmp_path, sem_espera):
+    extratos = []
+    outra = TELA.replace("123456789", "987654321")
+    pag = _PagDaTela(extrato_texto=outra, extrato_corpo=EXTRATO, extratos=extratos)
+    lido = m._ler_na_pagina(pag, [], {"valor": ""}, "123456789", ("EMPRESA FICTICIA",), (),
+                            tmp_path / "b.png", agora=lambda: "agora", extratos=extratos,
+                            comecar_no_extrato=True)
+    assert lido.saldo is None and "outra conta aberta" in lido.motivo
+    assert pag.idas == [m.URL_EXTRATO_COMPLETO] and pag.fotos == []
+
+
+def test_extrato_sem_saldo_volta_a_tela_inicial(tmp_path, sem_espera):
+    extratos, ouvidas = [], []
+
+    class _Pagina(_PagDaTela):
+        def goto(self, url, **kw):
+            super().goto(url, **kw)
+            if url == ib.URL_LOGIN:          # a tela inicial pede o saldo de novo
+                ouvidas.append(_Resp(200, {"disponivel": 9.9}))
+    pag = _Pagina(extrato_corpo={"balance": {}}, extratos=extratos)
+    lido = m._ler_na_pagina(pag, ouvidas, {"valor": ""},
+                            "123456789", ("EMPRESA FICTICIA",), (), tmp_path / "b.png",
+                            agora=lambda: "agora", extratos=extratos,
+                            comecar_no_extrato=True)
+    assert pag.idas == [m.URL_EXTRATO_COMPLETO, ib.URL_LOGIN]
+    assert (lido.saldo, lido.motivo, lido.via) == (D("9.90"), "", "inicio")
+
+
+def test_extra_marca_o_tempo_das_listas(tmp_path):
+    passos = []
+    pag = _PagDaTela()
+    lido = m._ler_na_pagina(pag, [_Resp(200, {"disponivel": 1})], {"valor": ""},
+                            "123456789", ("EMPRESA FICTICIA",), (), tmp_path / "b.png",
+                            agora=lambda: None, extra=lambda p, a, e: "listas",
+                            marcar=passos.append)
+    assert lido.extra == "listas" and passos == ["saldo", "print", "listas"]
