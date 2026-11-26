@@ -42,7 +42,10 @@ USER_AGENT = "comprovantes-mais-controle/pagamento-api 1.0"
 
 
 class ErroSicoob(RuntimeError):
-    """O banco respondeu fora de 2xx. `status` None = não houve resposta."""
+    """O banco respondeu fora de 2xx, ou com um 2xx que não serve. `status` None =
+    não houve resposta. Num POST que PAGA, qualquer ErroSicoob (sem resposta,
+    5xx, ou 2xx sem o campo esperado) é ambíguo — o dinheiro pode ter saído — e
+    quem decide é a retomada do executor, que pergunta ao banco."""
 
     def __init__(self, status, corpo: str):
         super().__init__(f"Sicoob {status}: {corpo[:300]}")
@@ -90,7 +93,8 @@ class Sicoob:
         if not texto.strip():
             return {}
         try:
-            corpo = json.loads(texto)
+            # Valores do banco já chegam em Decimal: dinheiro não passa por float.
+            corpo = json.loads(texto, parse_float=Decimal)
         except ValueError:
             # 200 com HTML = recusa do firewall, não sucesso. Nunca vale como "pago".
             raise ErroSicoob(r.status_code, "resposta não é JSON: " + texto[:200]) from None
@@ -105,12 +109,14 @@ class Sicoob:
     def pix_confirmar(self, e2e: str, valor: Decimal, descricao: str) -> dict:
         corpo = {"endToEndId": e2e, "valor": f"{Decimal(valor):.2f}".replace(".", ","),
                  "descricao": descricao, "repeticao": False, "meioIniciacao": "MANUAL"}
-        return self._chamar("POST", self._a.pix + "/pagamentos/confirmacao", corpo=corpo)
+        return _com(self._chamar("POST", self._a.pix + "/pagamentos/confirmacao", corpo=corpo),
+                    "estado", "confirmação do Pix sem estado")
 
     def pix_qrcode(self, copia_e_cola: str, valor: Decimal, documento: str) -> dict:
         corpo = {"qrcode": copia_e_cola, "valor": f"{Decimal(valor):.2f}",
                  "pagarComJurosMulta": False, "destino": {"cpfCnpj": documento}}
-        return self._chamar("POST", self._a.pix + "/pagamentos/qrcode", corpo=corpo)
+        return _com(self._chamar("POST", self._a.pix + "/pagamentos/qrcode", corpo=corpo),
+                    "estado", "Pix por QR sem estado")
 
     def pix_consultar(self, e2e: str) -> dict:
         return self._chamar("GET", self._a.pix + f"/pagamentos/{e2e}")
@@ -132,7 +138,10 @@ class Sicoob:
                                    "accountType": 0, "personType": conta.tipo_pessoa}}
         r = self._chamar("POST", self._a.boleto + f"/boletos/pagamentos/{codigo}",
                          corpo=corpo, extra={"x-idempotency-key": chave})
-        return r.get("resultado", r)
+        r = r.get("resultado", r)
+        if not r:
+            raise ErroSicoob(200, "pagamento de boleto sem resposta")
+        return r
 
     def boleto_comprovante(self, chave: str) -> dict:
         r = self._chamar("GET", self._a.boleto
@@ -153,7 +162,17 @@ class Sicoob:
                  "transacao": transacao}
         r = self._chamar("POST", self._a.convenio
                          + f"/arrecadacao/codigo-barras/{codigo}/pagamentos", corpo=corpo)
-        return r.get("resultado", r)
+        r = r.get("resultado", r)
+        if not (r.get("arrecadacao") or r.get("comprovante")):
+            raise ErroSicoob(200, "pagamento de convênio sem comprovante")
+        return r
+
+
+def _com(resposta: dict, campo: str, motivo: str) -> dict:
+    """2xx sem o campo que diz o que aconteceu não é sucesso: vira ErroSicoob."""
+    if campo not in resposta:
+        raise ErroSicoob(200, motivo)
+    return resposta
 
 
 def chave_de_idempotencia(conta: ContaApi, uuid_: str) -> str:

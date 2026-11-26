@@ -98,6 +98,41 @@ def test_200_com_html_do_firewall_e_erro_e_nao_sucesso():
     assert e.value.status == 200 and "não é JSON" in str(e.value)
 
 
+@pytest.mark.parametrize("chamar", [
+    lambda c: c.pix_confirmar("E1", Decimal("1"), "D"),
+    lambda c: c.pix_qrcode("000201", Decimal("1"), ""),
+    lambda c: c.boleto_pagar("3" * 44, CONTA, {}, Decimal("1"), "D", "k", "2026-11-27"),
+    lambda c: c.convenio_pagar("8" * 44, CONTA, Decimal("1"), "2026-11-27", 1),
+])
+def test_pagamento_com_2xx_vazio_e_erro_e_nao_sucesso(chamar):
+    with pytest.raises(sc.ErroSicoob) as e:
+        chamar(_cliente(Sessao(corpo={})))
+    assert e.value.status == 200
+
+
+def test_json_que_nao_e_objeto_e_erro():
+    class S(Sessao):
+        def request(self, metodo, url, **k):
+            return RespostaCrua(200, "[1, 2]")
+    with pytest.raises(sc.ErroSicoob):
+        _cliente(S()).pix_consultar("E1")
+
+
+def test_valores_do_banco_chegam_em_decimal():
+    r = _cliente(Sessao(corpo={"resultado": {"valorPagamento": 152.3}})).boleto_consultar("3" * 44, CONTA)
+    assert r["valorPagamento"] == Decimal("152.3") and isinstance(r["valorPagamento"], Decimal)
+
+
+def test_qrcode_e_convenio_montam_o_pedido_da_documentacao():
+    s = Sessao(corpo={"estado": "REALIZADO"})
+    _cliente(s).pix_qrcode("000201X", Decimal("10"), "11222333000181")
+    corpo = json.loads(s.pedidos[0][2]["data"])
+    assert corpo["valor"] == "10.00" and corpo["destino"] == {"cpfCnpj": "11222333000181"}
+    s = Sessao(corpo={"resultado": {"valorTotal": 1.0}})
+    _cliente(s).convenio_consultar("8" * 44, "2026-11-27")
+    assert s.pedidos[0][2]["params"] == {"dataPagamento": "2026-11-27"}
+
+
 def test_identificacao_fixa_do_cliente():
     s = Sessao(corpo={})
     _cliente(s).pix_consultar("E1")

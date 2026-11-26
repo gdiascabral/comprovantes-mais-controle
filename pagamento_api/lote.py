@@ -113,6 +113,8 @@ def itens_do_html(contas: list[dict], documento_de) -> tuple[list[ItemLote], lis
                 if not tipo:
                     motivo = dado
             doc = re.sub(r"\D", "", str(documento_de(fav) or "")) if not motivo else ""
+            if len(doc) not in (11, 14):
+                doc = ""                 # nada de "documento" com 5 dígitos indo para o banco
             if not motivo and tipo == PIX_CHAVE and len(doc) not in (11, 14):
                 motivo = "Pix sem CPF/CNPJ do favorecido no cadastro"
             if motivo:
@@ -120,7 +122,28 @@ def itens_do_html(contas: list[dict], documento_de) -> tuple[list[ItemLote], lis
                 continue
             itens.append(ItemLote(len(itens) + 1, titulo, alvo, conta, tipo, dado, valor,
                                   fav, doc, str(e.get("descricao") or "")[:LIMITE_DESCRICAO]))
-    return itens, fora
+    return _sem_codigo_repetido(itens, fora)
+
+
+def _sem_codigo_repetido(itens, fora):
+    """O mesmo código de barras ou copia-e-cola em dois títulos: os dois ficam fora
+    (segunda trava além do bloqueio do HTML; chave Pix comum repetida é legítima)."""
+    vistos: dict[str, int] = {}
+    for i in itens:
+        if i.tipo != PIX_CHAVE:
+            vistos[i.dados] = vistos.get(i.dados, 0) + 1
+    repetidos = {d for d, n in vistos.items() if n > 1}
+    if not repetidos:
+        return itens, fora
+    ficam = []
+    for i in itens:
+        if i.tipo != PIX_CHAVE and i.dados in repetidos:
+            fora.append(Fora(i.alvo, i.conta, i.valor, i.favorecido,
+                             "mesmo código em mais de um título"))
+        else:
+            ficam.append(i)
+    from dataclasses import replace
+    return [replace(i, ordem=n) for n, i in enumerate(ficam, start=1)], fora
 
 
 def total(itens) -> Decimal:

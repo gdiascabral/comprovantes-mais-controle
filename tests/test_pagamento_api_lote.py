@@ -70,6 +70,24 @@ def test_pix_por_chave_sem_documento_no_cadastro_fica_fora():
     assert itens == [] and fora[0].motivo == "Pix sem CPF/CNPJ do favorecido no cadastro"
 
 
+def test_mesmo_codigo_em_dois_titulos_fica_fora_e_a_ordem_se_refaz():
+    contas = [{"nome": "OBRA X - SICOOB", "entries": [
+        _e("1", "Boleto", BANCARIO, 100),
+        _e("2", "Boleto", BANCARIO, 100),
+        _e("3", "Pix", "a@b.com", 100),
+        _e("4", "Pix", "a@b.com", 200)]}]
+    itens, fora = lote.itens_do_html(contas, _doc)
+    assert [(i.titulo, i.ordem) for i in itens] == [("3", 1), ("4", 2)]
+    assert {f.alvo: f.motivo for f in fora} == {"1": "mesmo código em mais de um título",
+                                                 "2": "mesmo código em mais de um título"}
+
+
+def test_documento_que_nao_e_cpf_nem_cnpj_vira_vazio():
+    contas = [{"nome": "OBRA X - SICOOB", "entries": [_e("1", "Boleto", BANCARIO, 100)]}]
+    itens, _ = lote.itens_do_html(contas, lambda f: "12345")
+    assert itens[0].documento_esperado == ""
+
+
 def test_descricao_cortada_em_100():
     contas = [{"nome": "OBRA X - SICOOB", "entries": [
         _e("1", "Boleto", BANCARIO, 100, descricao="X" * 150)]}]

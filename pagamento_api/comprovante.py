@@ -9,6 +9,7 @@ resposta do pagamento) fica gravado ao lado, para a retomada achar.
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from datetime import date
@@ -27,14 +28,18 @@ def _ascii(t) -> str:
 
 
 def _limpo_para_nome(t: str) -> str:
-    t = unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode()
+    t = unicodedata.normalize("NFKD", str(t)).encode("ascii", "ignore").decode()
     t = re.sub(r'[\\/:*?"<>|]+', " ", t)
-    return " ".join(t.split())[:120]
+    return " ".join(t.split())
 
 
 def nome_do_arquivo(item, hoje: date) -> str:
+    """Só a DESCRIÇÃO é cortada: o sufixo com valor, título e item é o que deixa
+    o nome único (duas parcelas de descrição igual não se sobrescrevem)."""
     valor = f"{item.valor:.2f}".replace(".", ",")
-    return _limpo_para_nome(f"{hoje:%Y-%m-%d} {item.descricao} R$ {valor} item {item.ordem}") + ".pdf"
+    desc = _limpo_para_nome(item.descricao)[:70].rstrip()
+    sufixo = _limpo_para_nome(f"R$ {valor} titulo {item.titulo} item {item.ordem}")
+    return f"{hoje:%Y-%m-%d} {desc} {sufixo}".replace("  ", " ") + ".pdf"
 
 
 def _achatar(d, prefixo="") -> list[tuple[str, str]]:
@@ -103,16 +108,26 @@ def gerar_pdf(pasta: Path, item, dados: dict, hoje: date) -> Path:
 
 
 def _bruto(pasta: Path, item, tipo: str) -> Path:
-    return Path(pasta) / f"bruto-{tipo}-{item.titulo}-{item.ordem}.json"
+    # A pasta é a do LOTE (o robô passa uma por lote): título + ordem não se
+    # repetem dentro de um lote aprovado, que é imutável no banco.
+    return Path(pasta) / _limpo_para_nome(f"bruto-{tipo}-{item.titulo}-{item.ordem}.json")
 
 
 def salvar_bruto(pasta: Path, item, tipo: str, dados: dict) -> Path:
+    """É a ÚNICA cópia do comprovante do convênio: grava inteiro ou não grava."""
     Path(pasta).mkdir(parents=True, exist_ok=True)
     p = _bruto(pasta, item, tipo)
-    p.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(dados, ensure_ascii=False, default=str), encoding="utf-8")
+    os.replace(tmp, p)
     return p
 
 
 def ler_bruto(pasta: Path, item, tipo: str) -> dict | None:
     p = _bruto(pasta, item, tipo)
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except ValueError:
+        return None
