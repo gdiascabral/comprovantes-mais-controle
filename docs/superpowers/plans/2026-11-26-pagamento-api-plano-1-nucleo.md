@@ -31,7 +31,7 @@ A spec fala em "impressão digital (hash)" do lote. O plano troca por **imutabil
 
 ## Review Focus
 
-Medido antes do handoff: o código deste plano foi extraído e rodado (51 testes; sorteio de 500 lotes com quedas e recusas: 0 pagamento em dobro, 0 lote acima do total). O ensaio contra o Sandbox pegou dois defeitos que os dublês não pegariam — o firewall do Sicoob responde **HTTP 200 com HTML** ao `python-requests` padrão, e a consulta do convênio exige `dataPagamento` —, ambos já corrigidos no código abaixo. Os cinco que ainda podem morder:
+Medido antes do handoff: o código deste plano foi extraído e rodado (82 testes; sorteio de 800 lotes de Pix por chave, Pix por QR e boleto, com quedas antes e depois de pagar e consultas que também falham, contado pelo que o BANCO pagou: 0 pagamento em dobro, 0 acima do total, 0 item pago marcado "não pago"). Regra da revisão da Task 5 (26/11): depois de INICIADO, só o banco dizendo "não realizado" vira NAO_PAGO; o resto fica EM_PROCESSAMENTO, conta no total e é consultado de novo a cada rodada. O ensaio contra o Sandbox pegou dois defeitos que os dublês não pegariam — o firewall do Sicoob responde **HTTP 200 com HTML** ao `python-requests` padrão, e a consulta do convênio exige `dataPagamento` —, ambos já corrigidos no código abaixo. Os cinco que ainda podem morder:
 
 1. **Corpo do Pix em produção**: o Sandbox não valida; `pix_confirmar` manda o `valor` com vírgula ("1,99") como o exemplo da documentação e sem `origem`. Esperado: antes do primeiro Pix real (plano 3, fase 2), conferir com o Sicoob; o teste `test_confirmar_pix_leva_valor_com_virgula_e_descricao` prende o formato atual para a mudança ser consciente.
 2. **Boleto vencido com juros/multa**: o banco cobra mais que o título → `nao_pago` ("boleto diferente: banco cobra X") e volta para o HTML. Esperado e testado (`test_boleto_diferente_nao_paga`).
@@ -811,6 +811,12 @@ def test_bruto_do_convenio_volta_igual(tmp_path):
     assert cp.ler_bruto(tmp_path, item, "convenio") == {"comprovante": "QUJD", "arrecadacao": {"nsu": 1}}
     outro = lt.ItemLote(2, "T2", "T2", "C - SICOOB", lt.CONVENIO, "8" * 44, Decimal("1.00"), "F", "", "D")
     assert cp.ler_bruto(tmp_path, outro, "convenio") is None
+
+
+def test_lista_com_decimal_na_resposta_nao_derruba_o_pdf(tmp_path):
+    item = lt.ItemLote(1, "T1", "T1", "C - SICOOB", lt.BOLETO, "3" * 44, Decimal("1.00"), "F", "", "D")
+    p = cp.gerar_pdf(tmp_path, item, {"parcelas": [Decimal("1.50"), {"v": Decimal("2")}]}, date(2026, 11, 27))
+    assert "1.50" in PdfReader(str(p)).pages[0].extract_text()
 ```
 
 - [ ] **Step 2: rodar e ver falhar**
@@ -874,7 +880,7 @@ def _achatar(d, prefixo="") -> list[tuple[str, str]]:
         if isinstance(v, dict):
             linhas += _achatar(v, chave + ".")
         elif isinstance(v, list):
-            linhas.append((chave, json.dumps(v, ensure_ascii=False)[:200]))
+            linhas.append((chave, json.dumps(v, ensure_ascii=False, default=str)[:200]))
         elif k != "comprovante":          # o base64 do convênio não vai para o texto
             linhas.append((chave, str(v)))
     return linhas
@@ -1264,14 +1270,129 @@ def test_convenio_com_valor_diferente_nao_paga(tmp_path):
     livro = _rodar([_item(1, lt.CONVENIO)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
     assert livro.lista == [ex.Evento(1, ex.NAO_PAGO, "convênio diferente: banco cobra 117.50")]
     assert "convenio_pagar" not in s.chamadas
+
+
+# ---------------------------------------------------------------------------
+# Revisão da Task 5 (26/11/2026): depois de INICIADO, só o banco dizendo
+# "não realizado" vira NAO_PAGO; o resto fica EM_PROCESSAMENTO (conta no total).
+
+def test_consulta_da_retomada_que_falha_nao_vira_nao_pago(tmp_path):
+    s = Sicoob(pix_iniciar=PIX_OK["pix_iniciar"], pix_confirmar=ErroSicoob(None, "timeout"),
+               pix_consultar=ErroSicoob(503, "fora"))
+    livro = _rodar([_item(1, lt.PIX_CHAVE)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert _estados(livro, 1) == [ex.INICIADO, ex.EM_PROCESSAMENTO]
+    assert ex.CONFERIR in livro.lista[-1].detalhe
+
+
+@pytest.mark.parametrize("resposta", [ErroSicoob(None, "timeout"), ErroSicoob(200, "Pix por QR sem estado")])
+def test_pix_qr_que_cai_fica_em_processamento_e_conta_no_total(tmp_path, resposta):
+    erp = Erp({"T1": _aberto(), "T2": _aberto()})
+    s = Sicoob(pix_qrcode=resposta, **PIX_OK)
+    livro = _rodar([_item(1, lt.PIX_QR), _item(2, lt.PIX_CHAVE)], "100.00", s, erp, tmp_path)
+    assert _estados(livro, 1)[-1] == ex.EM_PROCESSAMENTO
+    assert livro.lista[-1] == ex.Evento(2, ex.NAO_PAGO, "passaria do total aprovado")
+    assert "pix_iniciar" not in s.chamadas
+
+
+def test_pix_qr_em_processamento_e_consultado_na_rodada_seguinte(tmp_path):
+    erp = Erp({"T1": _aberto()})
+    s = Sicoob(pix_qrcode={"estado": "EM_PROCESSAMENTO", "endToEndId": "Q1"},
+               pix_consultar={"estado": "REALIZADO"})
+    livro = _rodar([_item(1, lt.PIX_QR)], "100.00", s, erp, tmp_path)
+    assert _estados(livro, 1)[-1] == ex.EM_PROCESSAMENTO
+    _rodar([_item(1, lt.PIX_QR)], "100.00", s, erp, tmp_path, livro)
+    assert _estados(livro, 1)[-1] == ex.CONCLUIDO
+    assert s.chamadas.count("pix_qrcode") == 1
+
+
+def test_pix_qr_que_o_banco_recusa_com_codigo_e_nao_pago(tmp_path):
+    s = Sicoob(pix_qrcode={"estado": "NAO_REALIZADO", "endToEndId": "Q1", "detalheRejeicao": "x"})
+    livro = _rodar([_item(1, lt.PIX_QR)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert _estados(livro, 1)[-1] == ex.NAO_PAGO
+
+
+def test_convenio_que_cai_fica_em_processamento(tmp_path):
+    s = Sicoob(convenio_consultar={"valorTotal": 100.0}, convenio_pagar=ErroSicoob(None, "timeout"))
+    livro = _rodar([_item(1, lt.CONVENIO)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert _estados(livro, 1) == [ex.INICIADO, ex.EM_PROCESSAMENTO]
+
+
+def test_convenio_pago_com_disco_falhando_nao_vira_nao_pago(tmp_path, monkeypatch):
+    def quebra(*a, **k):
+        raise OSError("disco cheio")
+    monkeypatch.setattr(ex.cp, "salvar_bruto", quebra)
+    s = Sicoob(convenio_consultar={"valorTotal": 100.0},
+               convenio_pagar={"comprovante": "QUJD", "arrecadacao": {"nsu": 9}})
+    livro = _rodar([_item(1, lt.CONVENIO)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert ex.NAO_PAGO not in _estados(livro, 1)
+    assert livro.lista[1].estado == ex.REALIZADO and "não gravado" in livro.lista[1].detalhe
+    assert _estados(livro, 1)[-1] == ex.FALTA_ANEXAR
+
+
+@pytest.mark.parametrize("situacao", ["REJEITADO", "PENDENTE", "AGENDADO", None])
+def test_boleto_sem_comprovante_efetivado_nao_anexa_nem_baixa(tmp_path, situacao):
+    s = Sicoob(boleto_consultar={"valorPagamento": 100.0, "numeroCpfCnpjBeneficiario": DOC},
+               boleto_comprovante={"situacaoPagamento": situacao} if situacao else {})
+    erp = Erp({"T1": _aberto()})
+    livro = _rodar([_item(1, lt.BOLETO)], "100.00", s, erp, tmp_path)
+    assert _estados(livro, 1) == [ex.INICIADO, ex.EM_PROCESSAMENTO]
+    assert erp.anexos == [] and erp.baixas == []
+
+
+def test_falta_anexar_com_baixa_ja_feita_no_erp_conclui_sem_baixar_de_novo(tmp_path):
+    erp = Erp({"T1": _aberto()})
+    livro = Livro()
+    livro.gravar(ex.Evento(1, ex.INICIADO, "", "E1"))
+    livro.gravar(ex.Evento(1, ex.FALTA_ANEXAR, "ERP recusou a baixa", "E1"))
+    erp.t["T1"] = ex.Titulo(False, Decimal("100.00"), True)
+    _rodar([_item(1, lt.PIX_CHAVE)], "100.00", Sicoob(**PIX_OK), erp, tmp_path, livro)
+    assert _estados(livro, 1)[-1] == ex.CONCLUIDO and erp.baixas == [] and erp.anexos == []
+
+
+def test_comprovante_ja_anexado_so_baixa(tmp_path):
+    erp = Erp({"T1": ex.Titulo(True, Decimal("100.00"), True)})
+    livro = Livro()
+    livro.gravar(ex.Evento(1, ex.INICIADO, "", "E1"))
+    livro.gravar(ex.Evento(1, ex.FALTA_ANEXAR, "ERP recusou a baixa", "E1"))
+    _rodar([_item(1, lt.PIX_CHAVE)], "100.00", Sicoob(**PIX_OK), erp, tmp_path, livro)
+    assert erp.anexos == [] and erp.baixas == [("T1", Decimal("100.00"))]
+    assert _estados(livro, 1)[-1] == ex.CONCLUIDO
+
+
+def test_em_processamento_sem_novidade_nao_enche_o_livro(tmp_path):
+    erp = Erp({"T1": _aberto()})
+    s = Sicoob(pix_qrcode=ErroSicoob(None, "timeout"))
+    livro = _rodar([_item(1, lt.PIX_QR)], "100.00", s, erp, tmp_path)
+    n = len(livro.lista)
+    for _ in range(3):
+        _rodar([_item(1, lt.PIX_QR)], "100.00", s, erp, tmp_path, livro)
+    assert len(livro.lista) == n
+
+
+def test_erp_que_levanta_antes_de_pagar_nao_derruba_o_lote(tmp_path):
+    erp = Erp({"T2": _aberto()})
+    erp.titulo = lambda tid: (_ for _ in ()).throw(RuntimeError("caiu")) if tid == "T1" else erp.t.get(tid)
+    livro = _rodar([_item(1, lt.PIX_CHAVE), _item(2, lt.PIX_CHAVE)], "200.00",
+                   Sicoob(**PIX_OK), erp, tmp_path)
+    assert _estados(livro, 1) == [ex.NAO_PAGO] and _estados(livro, 2)[-1] == ex.CONCLUIDO
+
+
+def test_banco_sem_documento_do_dono_da_chave_nao_confirma(tmp_path):
+    s = Sicoob(pix_iniciar={"endToEndId": "E1", "proprietario": {}})
+    livro = _rodar([_item(1, lt.PIX_CHAVE, doc="")], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert livro.lista[-1].detalhe == "chave de outra pessoa" and "pix_confirmar" not in s.chamadas
 ```
 
 `tests/test_pagamento_api_sorteio.py`:
 
 ```python
 # -*- coding: utf-8 -*-
-"""500 lotes sorteados, com quedas e recusas aleatórias e várias rodadas do robô:
-nada passa do total aprovado e nenhum item é pago duas vezes."""
+"""800 lotes sorteados (Pix por chave, Pix por QR e boleto), com quedas e
+recusas aleatórias antes e DEPOIS de o dinheiro sair, consultas que também
+falham, e várias rodadas do robô. Conta-se pelo que o BANCO pagou:
+- nenhum item é pago duas vezes;
+- o que o banco pagou nunca passa do total aprovado;
+- nada que o banco pagou fica marcado como "não pago"."""
 import random
 from decimal import Decimal
 
@@ -1282,48 +1403,101 @@ from pagamento_api.sicoob import ErroSicoob
 from test_pagamento_api_executor import DOC, Erp, Livro, _aberto, _item, _rodar
 
 
-class SicoobSorteado:
-    """Pix por chave: o confirmar às vezes cai (sem resposta ou 500) DEPOIS de
-    ter pago, às vezes antes. O banco lembra o que de fato pagou."""
-
+class BancoSorteado:
     def __init__(self, rnd):
         self.rnd = rnd
-        self.pagos: dict[str, int] = {}
+        self.pagos: dict[int, int] = {}          # ordem do item -> vezes que o dinheiro saiu
+        self.por_codigo: dict[str, int] = {}     # e2e/chave -> ordem
+        self.ordem_da_chave: dict[str, int] = {}
         self.chamadas = []
 
+    def _sai(self, ordem):
+        self.pagos[ordem] = self.pagos.get(ordem, 0) + 1
+
+    def _talvez_caia(self, pagou: bool):
+        sorte = self.rnd.random()
+        if sorte < 0.25:
+            raise ErroSicoob(None if sorte < 0.12 else 500, "caiu" + (" depois de pagar" if pagou else ""))
+
+    # Pix por chave
     def pix_iniciar(self, chave):
-        return {"endToEndId": f"E{self.rnd.random()}", "proprietario": {"identificador": DOC}}
+        e2e = f"E{self.rnd.random()}"
+        self.ordem_da_chave[e2e] = int(chave.split(":")[1])
+        return {"endToEndId": e2e, "proprietario": {"identificador": DOC}}
 
     def pix_confirmar(self, e2e, valor, descricao):
-        sorte = self.rnd.random()
-        if sorte < 0.2:
+        if self.rnd.random() < 0.15:
             raise ErroSicoob(400, "recusado antes de pagar")
-        self.pagos[e2e] = self.pagos.get(e2e, 0) + 1
-        if sorte < 0.4:
-            raise ErroSicoob(None if sorte < 0.3 else 500, "caiu depois de pagar")
+        self._sai(self.ordem_da_chave[e2e])
+        self.por_codigo[e2e] = self.ordem_da_chave[e2e]
+        self._talvez_caia(True)
         return {"estado": "REALIZADO"}
 
     def pix_consultar(self, e2e):
-        return {"estado": "REALIZADO" if e2e in self.pagos else "NAO_REALIZADO"}
+        if self.rnd.random() < 0.2:
+            raise ErroSicoob(503, "consulta fora")
+        return {"estado": "REALIZADO" if e2e in self.por_codigo else "NAO_REALIZADO"}
+
+    # Pix por QR (sem código nosso)
+    def pix_qrcode(self, qr, valor, doc):
+        ordem = int(qr.split(":")[1])
+        if self.rnd.random() < 0.15:
+            raise ErroSicoob(400, "recusado antes de pagar")
+        self._sai(ordem)
+        e2e = f"Q{self.rnd.random()}"
+        self.por_codigo[e2e] = ordem
+        self._talvez_caia(True)
+        return {"estado": "REALIZADO", "endToEndId": e2e}
+
+    # Boleto
+    def boleto_consultar(self, codigo, conta):
+        return {"valorPagamento": self.valor_de[codigo], "numeroCpfCnpjBeneficiario": DOC}
+
+    def boleto_pagar(self, codigo, conta, consulta, valor, descricao, chave, dia):
+        if self.rnd.random() < 0.15:
+            raise ErroSicoob(400, "recusado antes de pagar")
+        if chave not in self.por_codigo:          # idempotência do banco
+            self._sai(self.ordem_de[codigo])
+        self.por_codigo[chave] = self.ordem_de[codigo]
+        self._talvez_caia(True)
+        return {"idPagamento": 1}
+
+    def boleto_comprovante(self, chave):
+        if self.rnd.random() < 0.2:
+            raise ErroSicoob(503, "consulta fora")
+        return {"situacaoPagamento": "EFETIVADO"} if chave in self.por_codigo else {}
 
 
-def test_sorteio_total_e_dobra(tmp_path):
+def _lote(rnd, n):
+    itens, valor_de, ordem_de = [], {}, {}
+    for o in range(1, n + 1):
+        tipo = rnd.choice([lt.PIX_CHAVE, lt.PIX_QR, lt.BOLETO])
+        valor = f"{rnd.randint(1, 50000) / 100:.2f}"
+        dados = {lt.PIX_CHAVE: f"chave:{o}", lt.PIX_QR: f"qr:{o}", lt.BOLETO: f"{o:044d}"}[tipo]
+        itens.append(_item(o, tipo, valor=valor, dados=dados))
+        valor_de[dados], ordem_de[dados] = Decimal(valor), o
+    return itens, valor_de, ordem_de
+
+
+def test_sorteio_pelo_que_o_banco_pagou(tmp_path):
     rnd = random.Random(20261126)
-    for rodada in range(500):
-        n = rnd.randint(1, 6)
-        itens = [_item(i, lt.PIX_CHAVE, valor=f"{rnd.randint(1, 50000) / 100:.2f}") for i in range(1, n + 1)]
+    for rodada in range(800):
+        itens, valor_de, ordem_de = _lote(rnd, rnd.randint(1, 6))
         soma = sum(i.valor for i in itens)
         total = (soma * Decimal(rnd.choice(["0.3", "0.7", "1"]))).quantize(Decimal("0.01"))
-        s = SicoobSorteado(rnd)
+        banco = BancoSorteado(rnd)
+        banco.valor_de, banco.ordem_de = valor_de, ordem_de
         livro = Livro()
         erp = Erp({i.titulo: _aberto(str(i.valor)) for i in itens})
-        for _ in range(3):              # o robô roda de novo depois de cada queda
-            _rodar(itens, total, s, erp, tmp_path / str(rodada), livro)
-        assert all(v == 1 for v in s.pagos.values()), f"rodada {rodada}: pago em dobro"
+        for _ in range(4):
+            _rodar(itens, total, banco, erp, tmp_path / str(rodada), livro)
+        assert all(v == 1 for v in banco.pagos.values()), f"rodada {rodada}: pago em dobro"
+        pago = sum((i.valor for i in itens if i.ordem in banco.pagos), Decimal("0"))
+        assert pago <= total, f"rodada {rodada}: o banco pagou {pago} > aprovado {total}"
         u = ex.ultimos(livro.lista)
-        pagos = [i for i in itens if u[i.ordem].estado in (ex.REALIZADO, ex.FALTA_ANEXAR, ex.CONCLUIDO)]
-        assert sum((i.valor for i in pagos), Decimal("0")) <= total, f"rodada {rodada}: passou do total"
-        assert len(s.pagos) == len(pagos), f"rodada {rodada}: banco e livro discordam"
+        for i in itens:
+            if i.ordem in banco.pagos:
+                assert u[i.ordem].estado != ex.NAO_PAGO, f"rodada {rodada}: item {i.ordem} pago e marcado não pago"
 ```
 
 - [ ] **Step 2: rodar e ver falhar**
@@ -1443,6 +1617,20 @@ def ja_comprometido(itens: list[lt.ItemLote], eventos: list[Evento]) -> Decimal:
                Decimal("0.00"))
 
 
+#: Única frase do banco que, DEPOIS de iniciado, vale como "não saiu": o Pix
+#: NAO_REALIZADO. Tudo o mais que não se resolve fica EM_PROCESSAMENTO (conta no
+#: total, não anexa, pergunta de novo) — revisão da Task 5, 26/11/2026.
+CONFERIR = "conferir no banco antes de qualquer pagamento à mão"
+
+
+def estado_boleto(resposta: dict) -> str:
+    """Só um comprovante EFETIVADO/PAGO/REALIZADO vale como pago. Nenhuma
+    situação do comprovante vira "não pago" sozinha: o nome das recusas não está
+    documentado, e um engano aqui mandaria pagar de novo à mão."""
+    s = _sem_acento((resposta or {}).get("situacaoPagamento"))
+    return REALIZADO if s in ("EFETIVADO", "PAGO", "REALIZADO") else EM_PROCESSAMENTO
+
+
 class Executor:
     def __init__(self, itens: list[lt.ItemLote], total_aprovado: Decimal, portas: Portas):
         self.itens = sorted(itens, key=lambda i: i.ordem)
@@ -1451,6 +1639,9 @@ class Executor:
 
     def _gravar(self, item, estado, detalhe="", chave=""):
         ev = Evento(item.ordem, estado, detalhe[:500], chave)
+        ult = ultimos(self.p.livro.eventos()).get(item.ordem)
+        if ult == ev:
+            return ult                  # nada mudou: não enche o livro a cada rodada
         self.p.livro.gravar(ev)
         return ev
 
@@ -1477,7 +1668,10 @@ class Executor:
         conta = self.p.contas.get(item.conta)
         if conta is None:
             return self._gravar(item, NAO_PAGO, "conta sem cadastro da API no servidor")
-        t = self.p.erp.titulo(item.titulo)
+        try:
+            t = self.p.erp.titulo(item.titulo)
+        except Exception as e:          # antes de iniciar: não saiu dinheiro nenhum
+            return self._gravar(item, NAO_PAGO, f"ERP não respondeu: {e!r}")
         if t is None or t.tem_comprovante is None:
             return self._gravar(item, NAO_PAGO, "ERP não confirmou o título")
         if not t.aberto or t.tem_comprovante or Decimal(t.valor) != item.valor:
@@ -1491,10 +1685,10 @@ class Executor:
                 return self._boleto(item, conta)
             if item.tipo == lt.CONVENIO:
                 return self._convenio(item, conta)
-        except ErroSicoob as e:
-            # Erro DEPOIS de gravar INICIADO (no passo que paga) é ambíguo:
-            # o dinheiro pode ter saído, com ou sem resposta. Quem decide é a
-            # retomada, que pergunta ao banco. Erro antes disso = não pago.
+        except (ErroSicoob, ArithmeticError, ValueError, TypeError, OSError) as e:
+            # Erro DEPOIS de gravar INICIADO é ambíguo: o dinheiro pode ter
+            # saído. Quem decide é a retomada, que pergunta ao banco e, sem
+            # resposta, deixa EM_PROCESSAMENTO. Erro antes disso = não pago.
             ult = ultimos(self.p.livro.eventos()).get(item.ordem)
             if ult and ult.estado == INICIADO:
                 return self._retomar(item, ult.chave)
@@ -1508,17 +1702,22 @@ class Executor:
                       if ch.isdigit())
         if not e2e:
             return self._gravar(item, NAO_PAGO, "banco não devolveu o endToEndId")
-        if doc != item.documento_esperado:
+        if not doc or doc != item.documento_esperado:
             return self._gravar(item, NAO_PAGO, "chave de outra pessoa", e2e)
         self._gravar(item, INICIADO, "", e2e)
         r = self.p.sicoob.pix_confirmar(e2e, item.valor, item.descricao)
         return self._gravar(item, estado_pix(r), str(r.get("detalheRejeicao") or ""), e2e)
 
     def _pix_qr(self, item):
+        # O QR não aceita código nosso: sem o endToEndId da resposta, uma queda
+        # aqui só se resolve olhando o banco (EM_PROCESSAMENTO, nunca NAO_PAGO).
         self._gravar(item, INICIADO, "qrcode")
         r = self.p.sicoob.pix_qrcode(item.dados, item.valor, item.documento_esperado)
-        return self._gravar(item, estado_pix(r), str(r.get("detalheRejeicao") or ""),
-                            str(r.get("endToEndId") or ""))
+        e2e = str(r.get("endToEndId") or "")
+        est = estado_pix(r)
+        if est == NAO_PAGO and not e2e:
+            est = EM_PROCESSAMENTO      # "não realizado" sem código para conferir: olhar o banco
+        return self._gravar(item, est, str(r.get("detalheRejeicao") or "") if e2e else CONFERIR, e2e)
 
     def _boleto(self, item, conta):
         c = self.p.sicoob.boleto_consultar(item.dados, conta)
@@ -1536,7 +1735,8 @@ class Executor:
         self._gravar(item, INICIADO, "", chave)
         self.p.sicoob.boleto_pagar(item.dados, conta, c, item.valor, item.descricao,
                                    chave, self.p.hoje.isoformat())
-        return self._gravar(item, REALIZADO, "", chave)
+        # Pago só com o comprovante EFETIVADO; sem ele, a próxima rodada pergunta.
+        return self._retomar(item, chave)
 
     def _convenio(self, item, conta):
         c = self.p.sicoob.convenio_consultar(item.dados, self.p.hoje.isoformat())
@@ -1547,31 +1747,40 @@ class Executor:
         self._gravar(item, INICIADO, "convenio")
         r = self.p.sicoob.convenio_pagar(item.dados, conta, item.valor,
                                          self.p.hoje.isoformat(), item.ordem)
-        arr = r.get("arrecadacao") or {}
-        nsu = str(arr.get("nsu") or "")
-        caminho = cp.salvar_bruto(self.p.pasta, item, "convenio", r)
-        return self._gravar(item, REALIZADO, str(caminho), nsu)
+        nsu = str((r.get("arrecadacao") or {}).get("nsu") or "")
+        try:
+            caminho = str(cp.salvar_bruto(self.p.pasta, item, "convenio", r))
+        except OSError as e:            # pagou: não perder isso por causa do disco
+            caminho = f"comprovante não gravado no disco: {e!r}"
+        if not nsu:
+            return self._gravar(item, EM_PROCESSAMENTO, CONFERIR + " (convênio sem NSU)")
+        return self._gravar(item, REALIZADO, caminho, nsu)
 
     # ----------------------------------------------------------- retomar
     def _retomar(self, item, chave) -> Evento:
-        """Caiu no meio: pergunta ao banco pelo código gravado. Nunca paga de novo."""
+        """Caiu no meio (ou ainda não se sabe): pergunta ao banco pelo código
+        gravado. Nunca paga de novo, e nunca conclui "não pago" sem o banco dizer."""
         try:
-            if item.tipo == lt.PIX_CHAVE and chave:
-                r = self.p.sicoob.pix_consultar(chave)
-                est = estado_pix(r)
+            if item.tipo in (lt.PIX_CHAVE, lt.PIX_QR) and chave:
+                est = estado_pix(self.p.sicoob.pix_consultar(chave))
                 if est == NAO_PAGO:
-                    return self._gravar(item, NAO_PAGO, "interrompido; o banco diz não realizado", chave)
-                return self._gravar(item, est, "", chave)
+                    return self._gravar(item, NAO_PAGO, "o banco diz não realizado", chave)
+                return self._gravar(item, est, "" if est == REALIZADO else CONFERIR, chave)
             if item.tipo == lt.BOLETO and chave:
-                r = self.p.sicoob.boleto_comprovante(chave)
-                if r:
-                    return self._gravar(item, REALIZADO, "", chave)
-        except ErroSicoob:
-            pass
-        return self._gravar(item, NAO_PAGO, "interrompido — conferir no banco antes de pagar de novo", chave)
+                est = estado_boleto(self.p.sicoob.boleto_comprovante(chave))
+                return self._gravar(item, est, "" if est == REALIZADO else CONFERIR, chave)
+            if item.tipo == lt.CONVENIO and cp.ler_bruto(self.p.pasta, item, "convenio"):
+                return self._gravar(item, REALIZADO, "", chave)
+        except ErroSicoob as e:
+            return self._gravar(item, EM_PROCESSAMENTO, f"{CONFERIR} (consulta falhou: {e.status})", chave)
+        return self._gravar(item, EM_PROCESSAMENTO, CONFERIR, chave)
 
     # ----------------------------------------------------------- anexar
     def _anexar(self, item, chave) -> Evento:
+        # Relê o ERP ANTES: anexo/baixa de uma rodada que caiu podem já ter entrado.
+        t = self.p.erp.titulo(item.titulo)
+        if t is not None and not t.aberto and t.tem_comprovante is True:
+            return self._gravar(item, CONCLUIDO, "já estava anexado e baixado no ERP", chave)
         try:
             dados = self._comprovante(item, chave)
         except ErroSicoob as e:
@@ -1579,8 +1788,9 @@ class Executor:
         if dados is None:
             return self._gravar(item, FALTA_ANEXAR, "comprovante ainda não disponível", chave)
         caminho = cp.gerar_pdf(self.p.pasta, item, dados, self.p.hoje)
-        if not self.p.erp.anexar(item.titulo, caminho):
-            return self._gravar(item, FALTA_ANEXAR, "ERP recusou o anexo", chave)
+        if not (t is not None and t.tem_comprovante is True):
+            if not self.p.erp.anexar(item.titulo, caminho):
+                return self._gravar(item, FALTA_ANEXAR, "ERP recusou o anexo", chave)
         if not self.p.erp.baixar(item.titulo, item.valor, self.p.hoje, item.conta):
             return self._gravar(item, FALTA_ANEXAR, "ERP recusou a baixa", chave)
         t = self.p.erp.titulo(item.titulo)
@@ -1590,7 +1800,8 @@ class Executor:
 
     def _comprovante(self, item, chave) -> dict | None:
         if item.tipo == lt.BOLETO:
-            return self.p.sicoob.boleto_comprovante(chave) or None
+            r = self.p.sicoob.boleto_comprovante(chave)
+            return r if estado_boleto(r) == REALIZADO else None
         if item.tipo in (lt.PIX_CHAVE, lt.PIX_QR):
             if not chave:
                 return None
@@ -1604,7 +1815,7 @@ class Executor:
 - [ ] **Step 4: rodar e ver passar**
 
 Run: `python -m pytest tests/test_pagamento_api_executor.py tests/test_pagamento_api_sorteio.py -q`
-Expected: 27 passed.
+Expected: 43 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2590,12 +2801,11 @@ Expected: 3 passed.
 - [ ] **Step 5: ensaio contra o Sandbox (manual, fora do CI).** Criar FORA do repo um `ensaio.json` com o Client ID e o Access token que o portal mostra em developers.sicoob.com.br/portal/sandbox (são públicos, iguais para todo desenvolvedor) e `"pasta_comprovantes"` numa pasta temporária. Rodar `python -m pagamento_api.robo --ensaio-sandbox --config <caminho>/ensaio.json`.
 Expected (medido em 26/11/2026; os mocks respondem sempre igual):
 ```
-  item 1: iniciado
-  item 1: nao_pago string
+  item 1: nao_pago chave de outra pessoa
   item 2: nao_pago banco bloqueia: Pagamento bloqueado
   item 3: iniciado convenio
   item 3: realizado <pasta>/bruto-convenio-E3-3.json
-  item 3: concluido <pasta>/<data> ENSAIO CONVENIO R$ 1171,23 item 3.pdf
+  item 3: concluido <pasta>/<data> ENSAIO CONVENIO R$ 1171,23 titulo E3 item 3.pdf
 ```
 Qualquer `Request Rejected` ou `não é JSON` aqui é o firewall: parar e avisar, sem mexer na identificação.
 
