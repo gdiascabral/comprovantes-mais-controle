@@ -211,6 +211,8 @@ def selecionar(a_pagar, anexos: dict, textos: dict, brutos: dict, *,
                 continue
             if eh_pdf:
                 texto = textos.get(url) or ""
+            elif (textos.get(url) or "").strip():
+                texto = textos[url]               # a leitura já fez o OCR da foto
             else:
                 if url not in ocr_das_fotos:
                     ocr_das_fotos[url] = ocr_imagem(dados) or ""
@@ -232,12 +234,49 @@ def ler_candidatos(ia: IaDoDia, candidatos: dict, *, log=print, cancelar=lambda:
     for url, c in candidatos.items():
         if cancelar():
             break
-        r = ia.ler(chave_do_anexo(c["arquivo"], c["dados"]), c["dados"], c["media_type"])
-        saida[url] = {**r, "ids": set(c["ids"])}
+        chave = chave_do_anexo(c["arquivo"], c["dados"])
+        r = ia.ler(chave, c["dados"], c["media_type"])
+        saida[url] = {**r, "ids": set(c["ids"]), "chave": chave}
     if candidatos:
         log("  " + ia.resumo())
         ia.anotar_na_atividade()
     return saida
+
+
+def _centavos(valor) -> Decimal | None:
+    try:
+        return Decimal(str(valor)).quantize(Decimal("0.01"))
+    except Exception:                         # noqa: BLE001
+        return None
+
+
+def anotar_papeis(leituras_ia: dict, a_pagar) -> None:
+    """O MESMO papel (mesma `chave` do anexo, em uma ou várias URLs) lido para
+    dois ou mais lançamentos a pagar: anota em cada entrada `papel_ids` (os ids)
+    e `papel_valores` ({id: valor}) — é o "lançamento com o valor dividido para
+    duas pessoas" (dono, 26/11/2026: OC de R$ X paga em duas partes, cada uma a
+    um favorecido). Quem decide se a soma fecha é `leitura_do_item`.
+
+    Falha fechada: id sem valor na lista a pagar desfaz o grupo (soma sem ele
+    seria soma pela metade)."""
+    valores = {str(i.get("id")): _centavos(relatorio.valor_do_item(i)) for i in a_pagar or ()}
+    grupos: dict[str, set] = {}
+    for e in (leituras_ia or {}).values():
+        if e.get("chave"):
+            grupos.setdefault(e["chave"], set()).update(e.get("ids") or ())
+    for e in (leituras_ia or {}).values():
+        ids = grupos.get(e.get("chave") or "", set())
+        if len(ids) < 2 or any(valores.get(i) is None for i in ids):
+            continue
+        e["papel_ids"] = sorted(ids)
+        e["papel_valores"] = {i: str(valores[i]) for i in ids}
+
+
+def _soma_do_papel(e: dict) -> tuple[Decimal, list] | None:
+    vals = [_centavos(v) for v in (e.get("papel_valores") or {}).values()]
+    if len(vals) < 2 or any(v is None for v in vals):
+        return None
+    return sum(vals, Decimal("0")), vals
 
 
 # ------------------------------------------------------------- por lançamento
@@ -316,7 +355,7 @@ def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "",
     valor = relatorio.valor_do_item(item)
     resultados = []
     for e in achados:
-        base = {"falhou": False, "pulado": False, "provas": [], "total_lido": "", "motivos": [],
+        base = {"falhou": False, "pulado": False, "provas": [], "total_lido": "", "motivos": [], "dividido": "",
                 "tipo_papel": "", "origem": "", "endereco": "", "oc": "", "duvidas": [],
                 "emitente": "", "emitente_cnpj_cpf": "", "emitente_telefone": "",
                 "quem_recebe": quem_recebe.NAO, "quem_recebe_por": "", "quem_recebe_motivo": ""}
@@ -329,11 +368,24 @@ def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "",
         else:
             leitura = e["leitura"]
             c = li.conferir(leitura, valor)
+            dividido = ""
+            soma = _soma_do_papel(e) if c.estado == li.DIVERGE else None
+            if soma is not None:
+                # Papel dividido (dono, 26/11/2026): o total do papel contra a
+                # SOMA dos lançamentos que o usam. Fechando, vale a conferência
+                # da soma — nunca melhor que ela, e o nível segue em "Olhe".
+                pela_soma = li.conferir(leitura, soma[0])
+                if pela_soma.estado in USAVEIS and pela_soma.estado != li.DIVERGE:
+                    partes = " + ".join(f"R$ {nivel._brl(v)}" for v in sorted(soma[1], reverse=True))
+                    dividido = (f"papel dividido em {len(soma[1])} lançamentos: "
+                                f"{partes} = R$ {nivel._brl(soma[0])}")
+                    c = pela_soma
             qr = _quem_recebe(leitura, item, doc_favorecido)
             resultados.append({
                 **base, "estado": c.estado, "provas": list(c.provas),
                 "total_lido": "" if c.total_lido is None else str(c.total_lido),
-                "motivos": list(c.motivos), "tipo_papel": str(leitura.get("tipo_papel") or ""),
+                "motivos": ([dividido] if dividido else []) + list(c.motivos),
+                "dividido": dividido, "tipo_papel": str(leitura.get("tipo_papel") or ""),
                 "origem": e.get("origem") or "", "endereco": _endereco(item, leitura),
                 "oc": _oc(leitura, oc), "duvidas": [str(d) for d in leitura.get("duvidas") or []],
                 "emitente": str(leitura.get("emitente_nome") or "").strip(),

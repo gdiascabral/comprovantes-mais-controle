@@ -215,6 +215,9 @@ def motivo_da_ia(r: dict) -> str:
     lido = f"R$ {_brl(ia['total_lido'])}" if ia.get("total_lido") else "total não lido"
     provas = (f" ({', '.join(ia['provas'])})"
               if ia.get("provas") and ia.get("estado") != li.DIVERGE else "")
+    if ia.get("dividido"):
+        # O total do papel é a SOMA de vários lançamentos (26/11/2026).
+        return f"lido por IA: {lido} — {ia['dividido']} — {ia.get('estado')}{provas}"
     return f"lido por IA: {lido} × lançamento R$ {_brl(r.get('valor'))} — {ia.get('estado')}{provas}"
 
 

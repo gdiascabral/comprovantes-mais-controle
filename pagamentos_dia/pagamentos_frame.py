@@ -37,6 +37,7 @@ from . import baixa_erp
 from . import confirmacao
 from . import conferir_agendamentos
 from . import html_pagamentos          # HTML provisório (ver o módulo)
+from . import leitura_do_dia
 from . import ocr_boleto
 from . import painel_dia
 from . import qr_pix
@@ -3497,7 +3498,14 @@ class PagamentosDiaFrame(ttk.Frame):
             if codigos:
                 qrs[url] = codigos
             if not ler_texto:
-                # Foto que não é aviso: só o QR interessava.
+                # Foto que não é aviso: o QR e, desde 26/11/2026, o texto
+                # (`leitura_do_dia.OCR_DAS_FOTOS`, a mesma regra da aba do dia).
+                if not eh_pdf and leitura_do_dia.OCR_DAS_FOTOS:
+                    self.q.put(("status", f"Lendo por OCR... {i}/{len(alvos)}"))
+                    texto = ocr_boleto.texto_ocr_imagem(dados) or ""
+                    if texto.strip():
+                        textos[url] = texto
+                        urls_ocr.add(url)
                 self.q.put(("progresso", (i, len(alvos))))
                 continue
             texto = relatorio.texto_de_pdf(dados) if (dados and eh_pdf) else ""

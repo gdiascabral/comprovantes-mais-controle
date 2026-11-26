@@ -2676,7 +2676,14 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # paga é gente, basta a observação aparecer na coluna Obs. Este aviso
         # existe para a remessa, onde ninguém lê: linha marcada aqui não pode
         # ser paga automaticamente.
-        olhar = regras.precisa_de_olhar_humano(coment, favorecido, regras_forn)
+        # A observação que só repete a chave que esta linha vai pagar (UMA
+        # chave, a mesma) não manda pagar outra pessoa (dono, 26/11/2026).
+        chave_obs = chave_unica_da_observacao(coment)
+        chave_e_a_paga = bool(tipo == "Pix" and dados and chave_obs
+                              and not chave_da_observacao and not qr_usado
+                              and mesma_chave(chave_obs, dados))
+        olhar = regras.precisa_de_olhar_humano(coment, favorecido, regras_forn,
+                                               chave_e_a_paga=chave_e_a_paga)
         if chave_da_observacao and not olhar:
             olhar = "a chave Pix veio da observação do lançamento"
         if olhar:
