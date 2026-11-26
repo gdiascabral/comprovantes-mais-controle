@@ -92,6 +92,14 @@ class _Parada:
         return self.pedida
 
 
+#: Foto que não é aviso "PAGAR PARA" também tem o texto lido por OCR (dono,
+#: 26/11/2026): o print do pedido traz centro de custo, fornecedor e valor, e
+#: sem o texto a linha saía "valor/fornecedor ? (anexo sem texto)". Texto de
+#: OCR só CONFIRMA (valor inteiro, nome, quadra/lote): a linha digitável de
+#: foto continua de fora (`_linhas_dos_anexos` só varre PDF).
+OCR_DAS_FOTOS = True
+
+
 # Cópia de `PagamentosDiaFrame._anexos_a_ler` / `_baixar_textos`
 # (pagamentos_frame.py), sem a fila da tela: duplicação temporária e
 # declarada. Quando o branch que mexe no frame entrar, o frame passa a chamar
@@ -157,6 +165,16 @@ def baixar_textos(baixar, alvos, *, log=print, progresso=lambda f, t: None,
         if not ler_texto:
             if brutos_ia is not None and not eh_pdf:
                 brutos_ia[url] = (dados, False)
+            if not eh_pdf and OCR_DAS_FOTOS:
+                # Dono, 26/11/2026: o print do pedido no WhatsApp ("CC,
+                # fornecedor, valor") tem de entrar na conferência. O OCR da
+                # foto já era feito na escolha da IA e jogado fora; aqui ele
+                # vira texto do anexo. Foto sem texto fica como antes (fora
+                # de `textos`), para não virar "anexo sem texto" à toa.
+                texto = ocr_imagem(dados) or ""
+                if texto.strip():
+                    textos[url] = texto
+                    urls_ocr.add(url)
             progresso(i, total)
             continue
         texto = texto_pdf(dados) if eh_pdf else ""
@@ -371,6 +389,7 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
                                          "ocr_imagem", ocr_boleto.texto_ocr_imagem),
                                      qr_pix=qrs),
             log=log, cancelar=cancelar)
+        ia_do_dia.anotar_papeis(leituras_ia, a_pagar)
         leitura.ia_resumo = ia.resumo()
         crono.etapa("leitura por IA")
         if cancelar():

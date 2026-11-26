@@ -51,7 +51,9 @@ _IA_PROVA_QUEM_RECEBE = (li.BATE, li.TOTAL_BATE_SOMA_NAO_FECHA)
 DIVERGE_IA = "diverge"                 # o mesmo texto de `quem_recebe.DIVERGE`
 MOTIVO_COMPROVANTE = "parece comprovante de pagamento: já foi pago?"
 
-_STATUS_NAO_LI = ("anexo não lido", "sem dados de pgto", "QR Code sem valor")
+MOTIVO_SO_PELA_FOTO = "conferido só pelo texto da foto (OCR): abra o anexo"
+
+_STATUS_NAO_LI =("anexo não lido", "sem dados de pgto", "QR Code sem valor")
 _PREFIXO = re.compile(r"^ATENÇÃO\s+—\s+")
 _CENTAVO = Decimal("0.01")
 
@@ -215,6 +217,9 @@ def motivo_da_ia(r: dict) -> str:
     lido = f"R$ {_brl(ia['total_lido'])}" if ia.get("total_lido") else "total não lido"
     provas = (f" ({', '.join(ia['provas'])})"
               if ia.get("provas") and ia.get("estado") != li.DIVERGE else "")
+    if ia.get("dividido"):
+        # O total do papel é a SOMA de vários lançamentos (26/11/2026).
+        return f"lido por IA: {lido} — {ia['dividido']} — {ia.get('estado')}{provas}"
     return f"lido por IA: {lido} × lançamento R$ {_brl(r.get('valor'))} — {ia.get('estado')}{provas}"
 
 
@@ -306,6 +311,10 @@ def nivel_da_linha(r: dict, *, bloqueio: str = "", vencido: bool = False) -> Niv
             # com o valor provado por outro caminho (revisão de dinheiro,
             # 25/11/2026). Vale sem olhar `aberto`.
             olhe.append("quem recebe lido por IA: " + (ia.get("emitente") or "?"))
+    if r.get("prova_pela_foto"):
+        # Valor ou fornecedor provado SÓ pelo OCR de uma foto (26/11/2026): o
+        # print do pedido é escrito por quem pede, não por quem recebe.
+        olhe.append(MOTIVO_SO_PELA_FOTO)
     if not status.startswith("APTO"):
         olhe.append(_sem_prefixo(status) or "sem situação")
     elif status.startswith("APTO* (reembolso)"):

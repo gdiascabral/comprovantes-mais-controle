@@ -461,7 +461,8 @@ _VERBO_DE_PAGAR = re.compile(
 _VALOR_EM_REAIS = re.compile(r"(?:R\$\s*)?\b\d{1,3}(?:\.\d{3})*,\d{2}\b")
 
 
-def observacao_redireciona_pagamento(comentario: str) -> bool:
+def observacao_redireciona_pagamento(comentario: str, *,
+                                     chave_e_a_paga: bool = False) -> bool:
     """A observação manda pagar OUTRA pessoa (ou parte para outra).
 
     O caso real, em 28/07/2026: um título de R$ 14.492 de um fornecedor cuja
@@ -481,17 +482,24 @@ def observacao_redireciona_pagamento(comentario: str) -> bool:
 
     Nenhum dos dois aparece nas observações comuns ("carta de correção
     solicitada", "solicitar fatura para <fulana>", "a nota será encaminhada").
+
+    `chave_e_a_paga` (dono, 26/11/2026: "a observação não bate com a
+    realidade, vai pagar para a mesma pessoa"): a observação tem UMA chave e
+    ela é a MESMA que a linha vai pagar (quem decide é o `relatorio`, que sabe
+    a chave da linha). Aí a chave não manda pagar outra pessoa — é a do
+    próprio favorecido, escrita de novo (comissão de corretor: "PIX CPF …
+    Corretor <nome>"). O verbo de pagar com valor continua valendo sozinho.
     """
     t = str(comentario or "")
     if not t.strip():
         return False
-    if tipo_de_chave_pix(t):
+    if _VERBO_DE_PAGAR.search(t) and _VALOR_EM_REAIS.search(t):
         return True
-    return bool(_VERBO_DE_PAGAR.search(t) and _VALOR_EM_REAIS.search(t))
+    return bool(tipo_de_chave_pix(t)) and not chave_e_a_paga
 
 
 def precisa_de_olhar_humano(comentario: str, favorecido: str,
-                            regras: dict) -> str:
+                            regras: dict, *, chave_e_a_paga: bool = False) -> str:
     """Por que esta linha não pode ser paga sozinha — "" quando pode.
 
     Duas portas, porque falham de jeitos diferentes: o TEXTO pega o caso em
@@ -500,7 +508,7 @@ def precisa_de_olhar_humano(comentario: str, favorecido: str,
     fornecedor conhecido mesmo no dia em que ninguém escreveu a observação —
     que é justamente o dia em que o texto não salva ninguém.
     """
-    if observacao_redireciona_pagamento(comentario):
+    if observacao_redireciona_pagamento(comentario, chave_e_a_paga=chave_e_a_paga):
         return "a observação manda pagar outra pessoa"
     if regra_do_fornecedor(favorecido, regras).get("confirmar_sempre"):
         return "fornecedor marcado para confirmar sempre"
