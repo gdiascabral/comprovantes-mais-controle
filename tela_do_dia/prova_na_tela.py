@@ -94,8 +94,8 @@ def pergunta_de_abrir(contas) -> str:
     if inter:
         partes.append("Inter: um QR por conta, nesta ordem: " + ", ".join(inter) + ".")
     if caixa:
-        partes.append(f"Caixa: {caixa} conta(s), um login só — no fim, entre no "
-                      "Gerenciador CAIXA (Empresas) quando o Chrome da Caixa abrir.")
+        partes.append(f"Caixa: {caixa} conta(s), um login só — no fim, o Chrome da "
+                      "Caixa abre já na tela de login: é só entrar.")
     partes.append("É só leitura: nada é pago, agendado nem alterado no banco ou no "
                   f"ERP. No fim sai um PDF na pasta Pagamentos do dia, em '{PASTA}'.")
     return "\n\n".join(partes)
@@ -323,8 +323,7 @@ class ProvaNaTela:
         if self._parar.is_set():
             return {d: ps.Leitura(None, motivo=ps.INTERROMPIDA) for d in documentos}
         from . import saldo_caixa
-        self.q.put(("estado", "Caixa: entre no Gerenciador CAIXA (Empresas) no Chrome "
-                              "que abriu"))
+        self.q.put(("estado", "Caixa: entre com o login da Caixa no Chrome que abriu"))
         lidas = saldo_caixa.ler(documentos, pasta, parar=self._parar.is_set,
                                 log=lambda msg: self.tela._log(f"  Caixa: {msg}"))
         boas = sum(1 for lida in lidas.values() if lida.saldo is not None)

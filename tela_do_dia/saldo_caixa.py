@@ -25,8 +25,8 @@ tudo certo. O valor do resumo vai como NOTA no PDF, ao lado do print dele.
 que o menu de contas faz — `POST /sinbc/nb/selecionaConta` (só a sessão) e o
 `consultaTodosSaldos` com o `Authorization` que a própria página manda (o
 token do login, OUVIDO dos pedidos dela, nunca gravado). No fim, a conta que
-estava selecionada volta a ser a selecionada. Nada é clicado e o endereço
-nunca é digitado depois do login (25/11/2026: no Gerenciador CAIXA, navegar
+estava selecionada volta a ser a selecionada. Só o "Acessar o gerenciador"
+da entrada é clicado (antes do login); o endereço nunca é digitado depois do login (25/11/2026: no Gerenciador CAIXA, navegar
 por URL derruba a sessão). A Caixa aceita UMA sessão por usuário: entrar
 noutro navegador derruba esta.
 
@@ -51,7 +51,21 @@ import util
 from .prova_saldos import Leitura, digitos
 from .valores import brl
 
-URL_ENTRADA = "https://gerenciador.caixa.gov.br/"
+#: A página de entrada das EMPRESAS (pula a escolha "Empresas / Governo" da
+#: raiz). O botão "Acessar o gerenciador" dela leva ao login (Keycloak) com
+#: `state` e `nonce` novos — medido em 26/11/2026: o endereço do login
+#: copiado do navegador traz esses dois, que valem UMA vez, e por isso não
+#: pode ficar fixo aqui.
+URL_ENTRADA = "https://gerenciador.caixa.gov.br/empresa/"
+SELETOR_ENTRAR = "#landing-header-topo-login"
+HOST_LOGIN = "loginx.caixa.gov.br"
+#: Plano B se o botão não aparecer: o login sem `state`/`nonce` (o app da
+#: Caixa refaz a volta sozinho depois de entrar).
+URL_LOGIN = ("https://loginx.caixa.gov.br/auth/realms/r_inter_siper/protocol/"
+             "openid-connect/auth?client_id=cli-web-gce&redirect_uri="
+             "https%3A%2F%2Fgerenciador.caixa.gov.br%2Fempresa&response_mode=query"
+             "&response_type=code&scope=openid")
+TEMPO_BOTAO_MS = 20000
 HOST = "gerenciador.caixa.gov.br"
 PAINEL = "/empresa/dashboard"
 ROTA_CONTAS = "/sinbc-gerenciador-pj/nb/listarContas"
@@ -280,6 +294,26 @@ def escutar(page) -> dict:
     return ouvidas
 
 
+def abrir_login(page, log=print) -> None:
+    """Da entrada das empresas direto à tela de login: clica no "Acessar o
+    gerenciador" (antes do login; nada de banco). Já logado (o painel abriu
+    sozinho) ou já no login, não faz nada. Sem o botão, vai ao `URL_LOGIN`."""
+    page.goto(URL_ENTRADA, wait_until="domcontentloaded", timeout=TEMPO_ABRIR_MS)
+    if _no_painel(page) or HOST_LOGIN in (page.url or ""):
+        return
+    try:
+        botao = page.locator(SELETOR_ENTRAR).first
+        botao.wait_for(state="attached", timeout=TEMPO_BOTAO_MS)
+        if _no_painel(page):
+            return
+        botao.evaluate("b => b.click()")     # o botão fica fora da área visível
+    except Exception:                                        # noqa: BLE001
+        if _no_painel(page):
+            return
+        log("o botão de entrar da Caixa não apareceu — abrindo o login direto")
+        page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=TEMPO_ABRIR_MS)
+
+
 def _no_painel(page) -> bool:
     try:
         return PAINEL in (page.url or "")
@@ -300,7 +334,7 @@ def esperar_painel(page, ouvidas, *, tempo_login, tempo_resumo, parar, log):
         if time.time() > limite:
             raise CaixaFalhou(LOGIN_ESGOTADO.format(max(1, tempo_login // 60)))
         if not avisou:
-            log("entre no Gerenciador CAIXA (Empresas) no Chrome que abriu")
+            log("entre com o login da Caixa no Chrome que abriu")
             avisou = True
         page.wait_for_timeout(500)
     limite = time.time() + tempo_resumo
@@ -414,7 +448,7 @@ def _ler_no_chrome(documentos, pasta, *, parar, log, agora, tempo_login, tempo_r
         try:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             ouvidas = escutar(page)
-            page.goto(URL_ENTRADA, wait_until="domcontentloaded", timeout=TEMPO_ABRIR_MS)
+            abrir_login(page, log)
             esperar_painel(page, ouvidas, tempo_login=tempo_login,
                            tempo_resumo=tempo_resumo, parar=parar, log=log)
             contas = contas_do_login(_corpo(ouvidas["contas"][-1], "a lista de contas"))

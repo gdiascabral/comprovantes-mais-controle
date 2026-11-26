@@ -165,3 +165,53 @@ def test_falha_no_chrome_vira_a_mesma_ressalva_em_todas(monkeypatch):
     assert set(lidas) == {EMP_A, EMP_B}
     assert all(lida.saldo is None and lida.motivo == sc.FECHADO for lida in lidas.values())
     assert sc.ler({}, Path(".")) == {}
+
+
+class _Entrada:
+    """Dublê da página de entrada: o botão leva ao login; `com_botao=False`
+    simula o botão que não aparece."""
+    def __init__(self, com_botao=True, ja_logado=False):
+        self.url, self.com_botao, self.ja_logado = "", com_botao, ja_logado
+        self.idas, self.cliques = [], 0
+
+    def goto(self, url, **_):
+        self.idas.append(url)
+        self.url = ("https://gerenciador.caixa.gov.br/empresa/dashboard"
+                    if self.ja_logado else url)
+
+    def locator(self, seletor):
+        assert seletor == sc.SELETOR_ENTRAR
+        return self
+
+    @property
+    def first(self):
+        return self
+
+    def wait_for(self, **_):
+        if not self.com_botao:
+            raise TimeoutError("sem botão")
+
+    def evaluate(self, _js):
+        self.cliques += 1
+        self.url = "https://loginx.caixa.gov.br/auth/realms/x?state=novo"
+
+
+def test_abre_a_entrada_das_empresas_e_clica_em_entrar():
+    pagina = _Entrada()
+    sc.abrir_login(pagina, log=lambda m: None)
+    assert pagina.idas == [sc.URL_ENTRADA] and pagina.cliques == 1
+    assert sc.HOST_LOGIN in pagina.url
+
+
+def test_sem_o_botao_vai_ao_login_sem_state_nem_nonce():
+    pagina, avisos = _Entrada(com_botao=False), []
+    sc.abrir_login(pagina, log=avisos.append)
+    assert pagina.idas == [sc.URL_ENTRADA, sc.URL_LOGIN] and pagina.cliques == 0
+    assert "state=" not in sc.URL_LOGIN and "nonce=" not in sc.URL_LOGIN
+    assert avisos
+
+
+def test_ja_logado_nao_clica_em_nada():
+    pagina = _Entrada(ja_logado=True)
+    sc.abrir_login(pagina, log=lambda m: None)
+    assert pagina.idas == [sc.URL_ENTRADA] and pagina.cliques == 0
