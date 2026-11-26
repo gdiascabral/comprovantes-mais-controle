@@ -535,8 +535,9 @@ paths:
   marcável no "Gerar remessa". A sintaxe foi conferida contra o PostgREST
   real (passa do parse e esbarra na permissão de anon, como a consulta
   antiga).
-  Anexo que é foto só é baixado quando é aviso "PAGAR PARA" — baixar toda
-  imagem de todo título seria pagar OCR por nada.
+  Anexo que é foto era lido por OCR só quando era aviso "PAGAR PARA"; desde
+  26/11/2026 toda foto tem o texto lido (`OCR_DAS_FOTOS`, ver o fim deste
+  arquivo).
   **As duas listas de conferência são UMA tabela cada (11/09/2026).** A
   confirmação "Lançamentos do dia" (`_janela_confirmar`) e a conferência da
   remessa (`_janela_remessa`) eram um bloco de widgets por lançamento dentro
@@ -1073,3 +1074,20 @@ paths:
   muda. A etiqueta "lido por IA" sai nos dois HTML (`nivel.etiqueta_da_ia`).
   Testes: `test_leitura_ia.py`, `test_cliente_anthropic.py`, `test_chave_ia.py`,
   `test_ia_do_dia.py`, `test_nivel_ia.py`, `test_leitura_ia_na_leitura_do_dia.py`.
+- **Pedidos do dono de 26/11/2026** (`tests/test_pedidos_2026_11_26.py`).
+  (1) **Foto lida por OCR** (`leitura_do_dia.OCR_DAS_FOTOS`, nas duas cópias da
+  leitura): foto que não é aviso "PAGAR PARA" tem o texto lido e entra em
+  `textos`/`urls_ocr` — o print do pedido no WhatsApp traz centro de custo,
+  fornecedor e valor, e a linha saía "anexo sem texto" (o OCR já era feito na
+  escolha da IA e jogado fora; `selecionar` agora reaproveita o da leitura).
+  Foto sem texto continua fora de `textos`. Texto de OCR só confirma: a linha
+  digitável continua só de PDF. (2) **Papel dividido** (`ia_do_dia.anotar_papeis`):
+  o mesmo papel (mesma `chave` do anexo) lido para dois ou mais lançamentos a
+  pagar — a OC paga em duas partes, cada uma a um favorecido. Total que diverge
+  do lançamento mas fecha com a SOMA deles vale a conferência da soma, com
+  "papel dividido em N lançamentos: R$ a + R$ b = R$ total" na linha; nunca
+  passa de "Olhe". Irmão fora da lista a pagar desfaz o grupo. (3) **Chave
+  repetida na observação** (`observacao_redireciona_pagamento(chave_e_a_paga=)`):
+  UMA chave na observação, igual (`mesma_chave`) à que a linha Pix vai pagar,
+  não é "manda pagar outra pessoa" (comissão de corretor: "PIX CPF … Corretor
+  <nome>"); verbo de pagar com valor continua mandando à mão.
