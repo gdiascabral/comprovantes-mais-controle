@@ -111,11 +111,17 @@ def ja_comprometido(itens: list[lt.ItemLote], eventos: list[Evento]) -> Decimal:
 CONFERIR = "conferir no banco antes de qualquer pagamento à mão"
 
 
-def estado_boleto(resposta: dict) -> str:
+def _junto(*partes) -> str:
+    return " — ".join(p for p in partes if p)
+
+
+def estado_boleto(resposta) -> str:
     """Só um comprovante EFETIVADO/PAGO/REALIZADO vale como pago. Nenhuma
     situação do comprovante vira "não pago" sozinha: o nome das recusas não está
     documentado, e um engano aqui mandaria pagar de novo à mão."""
-    s = _sem_acento((resposta or {}).get("situacaoPagamento"))
+    if isinstance(resposta, list):            # o endpoint tem nome no plural
+        resposta = next((r for r in resposta if isinstance(r, dict)), {})
+    s = _sem_acento((resposta or {}).get("situacaoPagamento") if isinstance(resposta, dict) else "")
     return REALIZADO if s in ("EFETIVADO", "PAGO", "REALIZADO") else EM_PROCESSAMENTO
 
 
@@ -147,7 +153,11 @@ class Executor:
             elif ult is None:
                 ult = self._pagar(item, eventos)
             if ult.estado in (REALIZADO, FALTA_ANEXAR):
-                self._anexar(item, chave_do_item(self.p.livro.eventos(), item.ordem))
+                chave = chave_do_item(self.p.livro.eventos(), item.ordem)
+                try:
+                    self._anexar(item, chave)
+                except Exception as e:  # anexar não move dinheiro: segue o lote
+                    self._gravar(item, FALTA_ANEXAR, f"anexo falhou: {e!r}", chave)
 
     # ------------------------------------------------------------- pagar
     def _pagar(self, item: lt.ItemLote, eventos: list[Evento]) -> Evento:
@@ -162,7 +172,11 @@ class Executor:
             return self._gravar(item, NAO_PAGO, f"ERP não respondeu: {e!r}")
         if t is None or t.tem_comprovante is None:
             return self._gravar(item, NAO_PAGO, "ERP não confirmou o título")
-        if not t.aberto or t.tem_comprovante or Decimal(t.valor) != item.valor:
+        try:
+            mesmo_valor = Decimal(str(t.valor)) == item.valor
+        except ArithmeticError:
+            return self._gravar(item, NAO_PAGO, f"ERP devolveu valor ilegível: {t.valor!r}")
+        if not t.aberto or t.tem_comprovante or not mesmo_valor:
             return self._gravar(item, NAO_PAGO, "ERP mudou")
         try:
             if item.tipo == lt.PIX_CHAVE:
@@ -179,7 +193,7 @@ class Executor:
             # resposta, deixa EM_PROCESSAMENTO. Erro antes disso = não pago.
             ult = ultimos(self.p.livro.eventos()).get(item.ordem)
             if ult and ult.estado == INICIADO:
-                return self._retomar(item, ult.chave)
+                return self._retomar(item, ult.chave, f"erro ao pagar: {e}")
             return self._gravar(item, NAO_PAGO, f"banco: {e}")
         return self._gravar(item, NAO_PAGO, f"tipo {item.tipo} desconhecido")
 
@@ -245,7 +259,7 @@ class Executor:
         return self._gravar(item, REALIZADO, caminho, nsu)
 
     # ----------------------------------------------------------- retomar
-    def _retomar(self, item, chave) -> Evento:
+    def _retomar(self, item, chave, motivo: str = "") -> Evento:
         """Caiu no meio (ou ainda não se sabe): pergunta ao banco pelo código
         gravado. Nunca paga de novo, e nunca conclui "não pago" sem o banco dizer."""
         try:
@@ -257,30 +271,46 @@ class Executor:
             if item.tipo == lt.BOLETO and chave:
                 est = estado_boleto(self.p.sicoob.boleto_comprovante(chave))
                 return self._gravar(item, est, "" if est == REALIZADO else CONFERIR, chave)
-            if item.tipo == lt.CONVENIO and cp.ler_bruto(self.p.pasta, item, "convenio"):
-                return self._gravar(item, REALIZADO, "", chave)
+            if item.tipo == lt.CONVENIO:
+                b = cp.ler_bruto(self.p.pasta, item, "convenio") or {}
+                nsu = str((b.get("arrecadacao") or {}).get("nsu") or "")
+                if nsu:
+                    return self._gravar(item, REALIZADO, "", nsu)
         except ErroSicoob as e:
-            return self._gravar(item, EM_PROCESSAMENTO, f"{CONFERIR} (consulta falhou: {e.status})", chave)
-        return self._gravar(item, EM_PROCESSAMENTO, CONFERIR, chave)
+            onde = f"HTTP {e.status}" if e.status else "sem resposta"
+            return self._gravar(item, EM_PROCESSAMENTO, _junto(CONFERIR, f"consulta falhou: {onde}", motivo), chave)
+        except Exception as e:          # resposta num formato inesperado: perguntar de novo
+            return self._gravar(item, EM_PROCESSAMENTO, _junto(CONFERIR, f"consulta ilegível: {e!r}", motivo), chave)
+        ult = ultimos(self.p.livro.eventos()).get(item.ordem)
+        if not motivo and ult is not None and ult.estado == EM_PROCESSAMENTO:
+            return ult                  # nada novo: fica o registro que já diz o motivo
+        return self._gravar(item, EM_PROCESSAMENTO, _junto(CONFERIR, motivo), chave)
 
     # ----------------------------------------------------------- anexar
     def _anexar(self, item, chave) -> Evento:
         # Relê o ERP ANTES: anexo/baixa de uma rodada que caiu podem já ter entrado.
         t = self.p.erp.titulo(item.titulo)
-        if t is not None and not t.aberto and t.tem_comprovante is True:
+        if t is None or t.tem_comprovante is None:
+            # "não sei" do ERP nunca vale como "não tem": não anexa nem baixa às cegas
+            return self._gravar(item, FALTA_ANEXAR, "ERP não respondeu", chave)
+        if not t.aberto and t.tem_comprovante:
             return self._gravar(item, CONCLUIDO, "já estava anexado e baixado no ERP", chave)
         try:
             dados = self._comprovante(item, chave)
         except ErroSicoob as e:
             return self._gravar(item, FALTA_ANEXAR, f"comprovante: {e}", chave)
         if dados is None:
+            if item.tipo == lt.CONVENIO:
+                return self._gravar(item, FALTA_ANEXAR,
+                                    f"comprovante do convênio não está no disco; pedir 2ª via (NSU {chave})", chave)
             return self._gravar(item, FALTA_ANEXAR, "comprovante ainda não disponível", chave)
         caminho = cp.gerar_pdf(self.p.pasta, item, dados, self.p.hoje)
-        if not (t is not None and t.tem_comprovante is True):
+        if not t.tem_comprovante:
             if not self.p.erp.anexar(item.titulo, caminho):
                 return self._gravar(item, FALTA_ANEXAR, "ERP recusou o anexo", chave)
-        if not self.p.erp.baixar(item.titulo, item.valor, self.p.hoje, item.conta):
-            return self._gravar(item, FALTA_ANEXAR, "ERP recusou a baixa", chave)
+        if t.aberto:                    # título já fechado (baixa à mão): nunca baixar de novo
+            if not self.p.erp.baixar(item.titulo, item.valor, self.p.hoje, item.conta):
+                return self._gravar(item, FALTA_ANEXAR, "ERP recusou a baixa", chave)
         t = self.p.erp.titulo(item.titulo)
         if t is None or t.aberto or t.tem_comprovante is not True:
             return self._gravar(item, FALTA_ANEXAR, "ERP não confirmou anexo e baixa", chave)

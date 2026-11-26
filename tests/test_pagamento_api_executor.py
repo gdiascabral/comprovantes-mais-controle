@@ -388,3 +388,61 @@ def test_banco_sem_documento_do_dono_da_chave_nao_confirma(tmp_path):
     s = Sicoob(pix_iniciar={"endToEndId": "E1", "proprietario": {}})
     livro = _rodar([_item(1, lt.PIX_CHAVE, doc="")], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
     assert livro.lista[-1].detalhe == "chave de outra pessoa" and "pix_confirmar" not in s.chamadas
+
+
+# Re-revisão da Task 5 (rodada 2): anexo/baixa só com o ERP respondendo.
+
+def test_erp_que_nao_responde_no_anexo_nao_anexa_nem_baixa(tmp_path):
+    erp = Erp({"T1": ex.Titulo(False, Decimal("100.00"), None)})
+    livro = Livro()
+    livro.gravar(ex.Evento(1, ex.INICIADO, "", "E1"))
+    livro.gravar(ex.Evento(1, ex.FALTA_ANEXAR, "ERP não confirmou anexo e baixa", "E1"))
+    for _ in range(3):
+        _rodar([_item(1, lt.PIX_CHAVE)], "100.00", Sicoob(**PIX_OK), erp, tmp_path, livro)
+    assert erp.anexos == [] and erp.baixas == []
+    assert livro.lista[-1] == ex.Evento(1, ex.FALTA_ANEXAR, "ERP não respondeu", "E1")
+
+
+def test_titulo_baixado_a_mao_so_recebe_o_anexo(tmp_path):
+    erp = Erp({"T1": ex.Titulo(False, Decimal("100.00"), False)})
+    livro = Livro()
+    livro.gravar(ex.Evento(1, ex.INICIADO, "", "E1"))
+    livro.gravar(ex.Evento(1, ex.REALIZADO, "", "E1"))
+    erp.anexar = lambda tid, c: (erp.anexos.append((tid, c)),
+                                 erp.t.__setitem__(tid, ex.Titulo(False, Decimal("100.00"), True)))[0] is None
+    _rodar([_item(1, lt.PIX_CHAVE)], "100.00", Sicoob(**PIX_OK), erp, tmp_path, livro)
+    assert len(erp.anexos) == 1 and erp.baixas == []
+    assert _estados(livro, 1)[-1] == ex.CONCLUIDO
+
+
+def test_convenio_sem_nsu_nao_vira_pago_sozinho(tmp_path):
+    s = Sicoob(convenio_consultar={"valorTotal": 100.0}, convenio_pagar={"comprovante": "QUJD"})
+    erp = Erp({"T1": _aberto()})
+    livro = _rodar([_item(1, lt.CONVENIO)], "100.00", s, erp, tmp_path)
+    for _ in range(2):
+        _rodar([_item(1, lt.CONVENIO)], "100.00", s, erp, tmp_path, livro)
+    assert _estados(livro, 1)[-1] == ex.EM_PROCESSAMENTO and erp.baixas == []
+
+
+def test_erp_fora_no_anexo_nao_derruba_o_lote(tmp_path):
+    erp = Erp({"T2": _aberto()})
+    original = erp.titulo
+    erp.titulo = lambda tid: (_ for _ in ()).throw(ConnectionError("ERP fora")) if tid == "T1" else original(tid)
+    livro = Livro()
+    livro.gravar(ex.Evento(1, ex.INICIADO, "", "E1"))
+    livro.gravar(ex.Evento(1, ex.REALIZADO, "", "E1"))
+    _rodar([_item(1, lt.PIX_CHAVE), _item(2, lt.PIX_CHAVE)], "200.00", Sicoob(**PIX_OK), erp, tmp_path, livro)
+    ult1 = [e for e in livro.lista if e.ordem == 1][-1]
+    assert ult1.estado == ex.FALTA_ANEXAR and "ERP fora" in ult1.detalhe
+    assert _estados(livro, 2)[-1] == ex.CONCLUIDO
+
+
+def test_motivo_do_erro_ao_pagar_fica_gravado(tmp_path):
+    s = Sicoob(pix_qrcode=ErroSicoob(400, "QR expirado"))
+    livro = _rodar([_item(1, lt.PIX_QR)], "100.00", s, Erp({"T1": _aberto()}), tmp_path)
+    assert "QR expirado" in livro.lista[-1].detalhe and ex.CONFERIR in livro.lista[-1].detalhe
+
+
+def test_comprovante_de_boleto_em_lista_e_lido(tmp_path):
+    assert ex.estado_boleto([{"situacaoPagamento": "EFETIVADO"}]) == ex.REALIZADO
+    assert ex.estado_boleto(["x"]) == ex.EM_PROCESSAMENTO
