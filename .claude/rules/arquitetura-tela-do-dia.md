@@ -304,6 +304,17 @@ Botão "📸 Prova de saldos" (`prova_na_tela.ProvaNaTela`). Spec:
   `Pagamentos do dia/Prova de saldos/Prova de saldos AAAA-MM-DD HHhMM.pdf`,
   com os prints em `Pagamentos do dia/Prova de saldos/prints/AAAA-MM-DD HHhMM/`.
   No fim o Explorer abre com o PDF selecionado (`explorer /select,`).
+- **Inter junto com o Sicoob (26/11/2026)**: medido pelas horas dos prints
+  das Provas de 18 a 25/11, o Inter esperava o Sicoob inteiro (~1,5 a 2,5
+  min) e levava ~2 min nas 3 contas. Hoje o Inter roda na `Thread`
+  `prova-inter`, que começa no 1º `progresso` do Sicoob (depois do login
+  dele: antes, a janela do QR roubaria o foco de quem digita a senha); sem
+  Sicoob, ou com ele falhando antes, começa na hora. `_ler_bancos` espera
+  as duas. O rótulo junta as duas falas (`_mostrar`: "Sicoob … · Inter …";
+  fase que não é de banco apaga a do Inter) e o Registro do Inter vai pela
+  fila. Erro inesperado do Inter deixa as contas que faltavam "não lidas"
+  com o porquê. Dentro de cada conta, menos idas de página e o tempo de
+  cada passo no Registro (`inter_saldo`, ver `arquitetura-extratos-sicoob.md`).
 - **Foco (exceção consciente à regra "nunca `new_page()` no meio de uma
   tarefa")**: a aba do robô no ERP vem para a frente; por isso ela abre
   PRIMEIRO — `prova_erp` avisa (`ao_abrir_aba`) e a thread dos bancos espera

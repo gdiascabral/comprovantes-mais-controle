@@ -284,7 +284,8 @@ def test_rotulo_acompanha_cada_fase_e_qr_vencido_vai_ao_registro(tmp_path, monke
     itens = _fila(p)
     estados = [v for t, v in itens if t == "estado"]
     assert "Sicoob: lendo a conta 1 de 1…" in estados
-    assert estados[-1] == "Inter BETA: não lido"
+    do_inter = [v for t, v in itens if t == "estado_inter"]
+    assert do_inter[-1] == "Inter BETA: não lido"
     registro = [v for t, v in itens if t == "log"]
     assert any("Inter BETA" in r and "passaram 300s" in r for r in registro)
 
@@ -401,3 +402,139 @@ def test_app_liga_a_prova_em_todas_as_pontas():
     inter = app.split("aba_bxc.inter_ocupado =", 1)[1].splitlines()[0]
     assert "aba_cdi.sicoob_ocupado()" in inter and "aba_dia.autenticar.ocupado()" in inter
     assert "aba_cdi.sicoob_ocupado()" in trecho("aba_dia.autenticar.outros_no_sicoob =")
+
+
+# ------------------------------------- Inter junto com o Sicoob (26/11/2026)
+
+def test_inter_comeca_depois_do_login_do_sicoob_e_roda_junto(tmp_path, monkeypatch):
+    """O Inter não abre durante o login do Sicoob (roubaria o foco de quem
+    digita a senha), mas também não espera o Sicoob terminar."""
+    from baixar_comprovantes import inter_saldo
+    from tela_do_dia import prova_sicoob
+    inter_abriu = threading.Event()
+    visto = {}
+
+    def ler_com_prints(abrir, numeros, pasta, *, progresso, **k):
+        visto["antes_do_login"] = inter_abriu.wait(0.3)
+        progresso(0, 1)                      # passou do login do Sicoob
+        visto["durante_o_sicoob"] = inter_abriu.wait(5)
+        progresso(1, 1)
+        return {}
+
+    def ler_conta(apelido, numero, nomes, arquivo, *, log, **k):
+        inter_abriu.set()
+        log("tempos: QR 1,0 s · total 1,0 s")
+        return inter_saldo.LidoInter(saldo=D("1.00"), lido_em=AGORA)
+    monkeypatch.setattr(prova_sicoob, "ler_com_prints", ler_com_prints)
+    monkeypatch.setattr(inter_saldo, "ler_conta", ler_conta)
+    monkeypatch.setattr(m, "_saldo_do_autenticar", lambda *a: None)
+    monkeypatch.setattr(m.ProvaNaTela, "_guardar_para_o_dia", lambda self, *a: None)
+    tela = _tela(tmp_path, _Anx())
+    p = _prova(tela)
+    p._ler_bancos([ALFA, BETA], tmp_path)
+    assert visto == {"antes_do_login": False, "durante_o_sicoob": True}
+    itens = _fila(p)
+    registro = [v for t, v in itens if t == "log"]
+    # O Registro do Inter vai pela fila (Tkinter só na thread da interface).
+    assert any("Inter BETA: tempos:" in r for r in registro) and tela.registro == []
+    assert ("estado_inter", "Inter BETA: lido") in itens
+
+
+def test_sem_sicoob_o_inter_comeca_na_hora(tmp_path, monkeypatch):
+    from baixar_comprovantes import inter_saldo
+    lidas = []
+    monkeypatch.setattr(inter_saldo, "ler_conta", lambda apelido, *a, **k: (
+        lidas.append(apelido) or inter_saldo.LidoInter(motivo="conta errada")))
+    monkeypatch.setattr(m, "_saldo_do_autenticar", lambda *a: None)
+    monkeypatch.setattr(m.ProvaNaTela, "_guardar_para_o_dia", lambda self, *a: None)
+    p = _prova(_tela(tmp_path, _Anx()))
+    p._ler_bancos([BETA], tmp_path)
+    assert lidas == ["BETA"]
+
+
+def test_sicoob_que_quebra_nao_deixa_o_inter_sem_ler(tmp_path, monkeypatch):
+    from baixar_comprovantes import inter_saldo
+    from tela_do_dia import prova_sicoob
+    lidas = []
+
+    def quebra(*a, **k):
+        raise RuntimeError("Chrome do Sicoob fechou")
+    monkeypatch.setattr(prova_sicoob, "ler_com_prints", quebra)
+    monkeypatch.setattr(inter_saldo, "ler_conta", lambda apelido, *a, **k: (
+        lidas.append(apelido) or inter_saldo.LidoInter(saldo=D("1.00"), lido_em=AGORA)))
+    monkeypatch.setattr(m, "_saldo_do_autenticar", lambda *a: None)
+    monkeypatch.setattr(m.ProvaNaTela, "_guardar_para_o_dia", lambda self, *a: None)
+    p = _prova(_tela(tmp_path, _Anx()))
+    p._ler_bancos([ALFA, BETA], tmp_path)
+    assert lidas == ["BETA"]
+
+
+def test_erro_inesperado_no_inter_vira_nao_lida_e_a_prova_segue(tmp_path, monkeypatch):
+    from baixar_comprovantes import inter_saldo
+
+    def quebra(*a, **k):
+        raise ValueError("bug")
+    monkeypatch.setattr(inter_saldo, "ler_conta", quebra)
+    monkeypatch.setattr(m, "_saldo_do_autenticar", lambda *a: None)
+    guardado = {}
+    monkeypatch.setattr(m.ProvaNaTela, "_guardar_para_o_dia",
+                        lambda self, contas, sicoob, inter: guardado.update(inter))
+    p = _prova(_tela(tmp_path, _Anx()))
+    p._ler_bancos([BETA], tmp_path)
+    (leitura,) = guardado.values()
+    assert leitura.saldo is None and "erro inesperado no Inter" in leitura.motivo
+
+
+def test_rotulo_junta_sicoob_e_inter_e_a_fase_seguinte_limpa(tmp_path):
+    p = _prova(_tela(tmp_path, _Anx()))
+    p.q.put(("estado", "Sicoob: lendo a conta 3 de 24…"))
+    p.q.put(("qr", "BETA"))
+    p._drain()
+    assert p.lbl.estado["text"] == ("Sicoob: lendo a conta 3 de 24…  ·  "
+                                    "Leia o QR da BETA no Chrome do Inter")
+    p.q.put(("estado", "Esperando o ERP…"))
+    p._drain()
+    assert p.lbl.estado["text"] == "Esperando o ERP…"
+
+
+def test_inter_espera_o_segundo_login_do_sicoob(tmp_path, monkeypatch):
+    """Revisão de dinheiro de 26/11/2026: no outro acesso do Sicoob a
+    pessoa digita a senha de novo; o Chrome do Inter não abre por cima."""
+    from baixar_comprovantes import inter_saldo
+    from tela_do_dia import prova_sicoob
+    abertas, visto = [], {}
+    gama = ps.ContaDaProva(10, "CONTA GAMA", ps.INTER, numero="223456789",
+                           apelido="GAMA", nomes=("EMPRESA FICTICIA",))
+    primeira = threading.Event()
+
+    def ler_com_prints(abrir, numeros, pasta, *, progresso, perguntar, **k):
+        progresso(0, 1)
+        assert primeira.wait(5)
+        assert perguntar(["12.345-6"]) is True          # vai ao 2º login
+        visto["no_login"] = list(abertas)
+        progresso(0, 1)                                  # 2º login feito
+        return {}
+
+    def ler_conta(apelido, *a, **k):
+        abertas.append(apelido)
+        if apelido == "BETA":
+            primeira.set()
+        return inter_saldo.LidoInter(saldo=D("1.00"), lido_em=AGORA)
+    monkeypatch.setattr(prova_sicoob, "ler_com_prints", ler_com_prints)
+    monkeypatch.setattr(inter_saldo, "ler_conta", ler_conta)
+    monkeypatch.setattr(m, "_saldo_do_autenticar", lambda *a: None)
+    monkeypatch.setattr(m.ProvaNaTela, "_guardar_para_o_dia", lambda self, *a: None)
+    p = _prova(_tela(tmp_path, _Anx()))
+    monkeypatch.setattr(p, "_perguntar_outro_acesso", lambda faltam: True)
+    original = p._esperar_o_login_do_sicoob
+
+    def esperar(apelido):
+        if apelido == "GAMA":
+            # O GAMA só chega aqui depois de o BETA ler; dá tempo de o Sicoob
+            # pedir o 2º login antes de o GAMA tentar abrir.
+            while not p._sicoob_no_login.is_set() and "no_login" not in visto:
+                p._parar.wait(0.01)
+        original(apelido)
+    monkeypatch.setattr(p, "_esperar_o_login_do_sicoob", esperar)
+    p._ler_bancos([ALFA, BETA, gama], tmp_path)
+    assert visto["no_login"] == ["BETA"] and abertas == ["BETA", "GAMA"]

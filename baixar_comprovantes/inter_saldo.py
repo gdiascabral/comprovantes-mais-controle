@@ -38,6 +38,21 @@ texto daquela tela. O mesmo corpo serve ao "Autenticar no banco" (`extra`).
 lista ali o Pix, a 2ª via e o extrato completo. `extrato()` devolve o corpo
 do extrato completo (lido uma vez só). Falha do `extra` não perde o saldo:
 vem no `LidoInter.extra_erro`.
+
+**Menos idas de página (26/11/2026, medido pelas horas dos prints da Prova
+de 18 a 25/11: ~2 min nas 3 contas).** Antes, depois do QR o login era
+confirmado na tela do Pix (`inter_baixar.esperar_login`), a tela inicial era
+aberta DE NOVO e, na conta que só tem saldo no extrato, ia-se ao extrato:
+3 a 4 páginas por conta. Agora: (1) o login é confirmado na PRÓPRIA tela
+inicial (`esperar_entrar`: sem marca de login e com o número da conta na
+tela ou os três cabeçalhos da sessão), e o caminho antigo fica de reserva
+quando a tela sai do login e não mostra nada disso em `FOLGA_SEM_SESSAO`;
+(2) a conta que da última vez só deu saldo pelo extrato vai DIRETO a ele
+(`ler_via`/`gravar_via`, um arquivo ao lado do perfil) e, sem saldo ali,
+volta à tela inicial; (3) a resposta do saldo é esperada `TEMPO_SALDO` (12 s,
+era 30) antes de pedir de dentro da página; (4) a tela "parada" é olhada a
+cada `PASSO_TELA_MS`, até `TEMPO_TELA_PARADA`. O tempo de cada passo vai ao
+Registro (`Cronometro`). A conferência da conta e as travas não mudaram.
 """
 from __future__ import annotations
 
@@ -56,12 +71,22 @@ ROTA_SALDO = "/cc/saldo/v3/"
 URL_SALDO = ib.API_INTER + ROTA_SALDO
 CAMPO = "disponivel"
 CENTAVO = Decimal("0.01")
-TEMPO_SALDO = 30
+#: Quanto se espera a tela inicial pedir o saldo antes de pedir de dentro
+#: da página (com os cabeçalhos da sessão a resposta é a mesma). Era 30.
+TEMPO_SALDO = 12
 #: A tela inicial do Inter não termina o "load" em 30 s em algumas contas (a
 #: VXZ estourou em 27/10/2026): abre-se no `domcontentloaded`, com folga, e a
 #: espera de verdade é a do saldo e a de a tela parar de mudar.
 TEMPO_ABRIR_MS = 90000
 TEMPO_TELA_PRONTA = 20
+#: A tela inicial "parada" (duas leituras iguais, nada carregando) antes do
+#: print: no máximo isto, olhando a cada `PASSO_TELA_MS`. Era 20 s, de 1 em 1 s.
+TEMPO_TELA_PARADA = 10
+PASSO_TELA_MS = 500
+#: Saiu do login e não apareceu nem o número da conta nem a sessão em tantos
+#: segundos: confirma pelo caminho antigo (a tela do Pix).
+FOLGA_SEM_SESSAO = 10
+PASSO_LOGIN_MS = 700
 #: O que a tela inicial mostra enquanto ainda carrega (os blocos cinza) —
 #: medir ao vivo. Enquanto houver um visível, o print espera.
 SELETOR_CARREGANDO = '[class*="skeleton" i], [class*="shimmer" i], [class*="loading" i]'
@@ -285,7 +310,11 @@ def escutar_saldo(page) -> list:
     ouvidas: list = []
 
     def ouvir(resposta):
-        if ROTA_SALDO in resposta.url and da_api(resposta.url):
+        # 401/403 é o pedido de ANTES do QR (a tela não é recarregada depois
+        # do login): fica fora, e sem resposta nova o pedido de dentro da
+        # página diz se a sessão vale.
+        if (ROTA_SALDO in resposta.url and da_api(resposta.url)
+                and resposta.status not in (401, 403)):
             ouvidas.append(resposta)
 
     page.on("response", ouvir)
@@ -334,7 +363,7 @@ def _carregando(page) -> bool:
         return False
 
 
-def esperar_tela_pronta(page, tempo: float = TEMPO_TELA_PRONTA) -> bool:
+def esperar_tela_pronta(page, tempo: float = TEMPO_TELA_PARADA) -> bool:
     """Espera a tela inicial parar de carregar antes do print (em 27/10/2026
     o print saiu com metade da tela em blocos cinza). True = parou; False =
     o tempo acabou e o print sai como estiver."""
@@ -345,7 +374,7 @@ def esperar_tela_pronta(page, tempo: float = TEMPO_TELA_PRONTA) -> bool:
         if tela_parou(anterior, atual, _carregando(page)):
             return True
         anterior = atual
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(PASSO_TELA_MS)
     return False
 
 
@@ -368,6 +397,96 @@ def _fotografar(page, arquivo: Path) -> tuple:
             pass                             # cai no print da tela, abaixo
     motivo = util.fotografar(page, arquivo)
     return (None, motivo) if motivo else (arquivo, "")
+
+
+class Cronometro:
+    """O tempo de cada passo da leitura de uma conta, para o Registro."""
+
+    def __init__(self, relogio=time.monotonic):
+        self._relogio = relogio
+        self._inicio = self._ultimo = relogio()
+        self.passos: list = []
+
+    def marcar(self, nome: str) -> None:
+        agora = self._relogio()
+        self.passos.append((nome, agora - self._ultimo))
+        self._ultimo = agora
+
+    def resumo(self) -> str:
+        def seg(s):
+            return f"{s:.1f}".replace(".", ",") + " s"
+        partes = [f"{nome} {seg(s)}" for nome, s in self.passos]
+        partes.append(f"total {seg(self._ultimo - self._inicio)}")
+        return " · ".join(partes)
+
+
+def entrou(texto: str, sessao: dict) -> bool:
+    """A tela inicial já é da sessão aberta: nenhuma marca de login e, na
+    tela, o número da conta — ou a página já mandou os três cabeçalhos."""
+    if not texto or ib.tela_diz(texto, ib.MARCAS_DE_LOGIN):
+        return False
+    return bool(ib.numero_no_texto(texto)) or all(
+        (sessao or {}).get(k) for k in CABECALHOS_DA_SESSAO)
+
+
+def esperar_entrar(page, sessao: dict, *, tempo: int = ib.TEMPO_LOGIN, log=print,
+                   parar=lambda: False, relogio=time.monotonic) -> bool:
+    """Espera o QR na tela inicial. True = a sessão abriu ali mesmo; False =
+    confirmou pelo caminho antigo (`inter_baixar.esperar_login`, que deixa a
+    página na tela do Pix — quem chama abre a tela inicial de novo).
+    Levanta `InterFalhou` no Parar e no estouro do tempo."""
+    log("Escaneie o QR code com o app do Inter. Eu sigo sozinho depois.")
+    limite = relogio() + tempo
+    fora_desde = None
+    while relogio() < limite:
+        if parar():
+            raise ib.InterFalhou(ib.PARADO_NO_LOGIN)
+        texto = ib._texto_da_tela(page)
+        if entrou(texto, sessao):
+            log("Sessão aberta.")
+            return True
+        if ib.TEXTO_QR_VENCIDO in texto:
+            try:
+                page.get_by_text(ib.TEXTO_QR_VENCIDO, exact=False).first.click()
+                log("O QR tinha vencido; gerei outro.")
+            except Exception:                                # noqa: BLE001
+                pass                     # se não der, o laço segue esperando
+        if texto and not ib.tela_diz(texto, ib.MARCAS_DE_LOGIN):
+            fora_desde = relogio() if fora_desde is None else fora_desde
+            if relogio() - fora_desde >= FOLGA_SEM_SESSAO:
+                resto = max(1, int(limite - relogio()))
+                ib.esperar_login(page, tempo=resto, log=lambda m: None, parar=parar)
+                log("Sessão aberta.")
+                return False
+        else:
+            fora_desde = None
+        page.wait_for_timeout(PASSO_LOGIN_MS)
+    raise ib.InterFalhou(f"passaram {tempo}s e a sessão do Inter não abriu (o QR "
+                         "não foi lido?)")
+
+
+VIA_EXTRATO = "extrato"
+
+
+def _arquivo_da_via(apelido: str) -> Path:
+    perfil = ib.pasta_do_perfil(apelido)
+    return perfil.with_name(perfil.name + ".via.txt")
+
+
+def ler_via(apelido: str) -> str:
+    """Por onde o saldo desta conta veio da última vez ("inicio",
+    "extrato" ou "")."""
+    try:
+        return _arquivo_da_via(apelido).read_text(encoding="utf-8").strip()
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
+def gravar_via(apelido: str, via: str) -> None:
+    try:
+        _arquivo_da_via(apelido).write_text(via or "", encoding="utf-8")
+    except Exception:                                        # noqa: BLE001
+        pass                             # só encurta a próxima; nunca para a leitura
 
 
 def ler_conta(apelido: str, numero_esperado: str, nomes, arquivo: Path, *,
@@ -414,12 +533,18 @@ def _fotografar_extrato(page, arquivo: Path) -> tuple:
 
 def _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes, razoes,
                    arquivo, *, agora, extratos=None, extra=None,
-                   sessao=None) -> LidoInter:
+                   sessao=None, comecar_no_extrato=False,
+                   marcar=lambda nome: None) -> LidoInter:
     """Com a sessão aberta na tela inicial: resposta do saldo, CONFERE a
     conta e só então fotografa. Conta errada não tem print (revisão de
     27/10/2026: o print da outra empresa ia para a página desta conta).
     Sem saldo ou sem número na tela inicial, a tela do extrato completo é a
-    segunda fonte (ver o docstring do módulo)."""
+    segunda fonte (ver o docstring do módulo).
+
+    `comecar_no_extrato` (a conta que da última vez só deu saldo ali): o
+    extrato é a PRIMEIRA tela; conta conferida e saldo lido, nem passa pela
+    inicial. Outra conta aberta para ali; sem saldo ou sem como conferir no
+    extrato, volta à tela inicial e segue o caminho de sempre."""
     extratos = extratos if extratos is not None else []
     guardado: dict = {}
 
@@ -427,6 +552,26 @@ def _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes, razoes,
         if "corpo" not in guardado:
             guardado["corpo"] = ler_extrato_completo(page, extratos)
         return guardado["corpo"]
+
+    if comecar_no_extrato:
+        corpo = extrato()
+        motivo = conferir_conta(ib._texto_da_tela(page), numero_esperado, nomes, razoes)
+        if motivo and "outra conta aberta" in motivo:
+            return LidoInter(motivo=motivo, sem_imagem=SEM_PRINT_OUTRA_CONTA)
+        saldo = None if motivo else saldo_do_extrato(corpo)
+        if saldo is not None:
+            lido_em = agora()
+            marcar("saldo")
+            imagem, sem_imagem = _fotografar_extrato(page, Path(arquivo))
+            marcar("print")
+            return _com_extra(page, autorizacao, extrato, extra, marcar,
+                              LidoInter(saldo, lido_em, "", imagem, sem_imagem, VIA_EXTRATO))
+        # Volta pelo caminho de sempre INTEIRO: sem o corpo guardado, o
+        # extrato é aberto de novo quando precisar (e o print do extrato é
+        # tirado NA tela do extrato — revisão de dinheiro de 26/11/2026).
+        guardado.clear()
+        ouvidas.clear()
+        _abrir(page, ib.URL_LOGIN)
 
     try:
         status, dado = _resposta_do_saldo(
@@ -458,17 +603,28 @@ def _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes, razoes,
         if not no_extrato:
             extrato()
     lido_em = agora()          # a hora do SALDO, antes das listas do `extra`
+    marcar("saldo")
     if via == "extrato":
         imagem, sem_imagem = _fotografar_extrato(page, Path(arquivo))
     else:
         imagem, sem_imagem = _fotografar(page, Path(arquivo))
+    marcar("print")
+    return _com_extra(page, autorizacao, extrato, extra, marcar,
+                      LidoInter(saldo, lido_em, "", imagem, sem_imagem, via))
+
+
+def _com_extra(page, autorizacao, extrato, extra, marcar, lido: LidoInter) -> LidoInter:
+    """O gancho de quem chamou, na mesma sessão; falha dele não perde o saldo."""
+    if extra is None:
+        return lido
     resultado, erro = None, ""
-    if extra is not None:
-        try:
-            resultado = extra(page, autorizacao, extrato)
-        except Exception as e:                               # noqa: BLE001
-            erro = _primeira_linha(e)
-    return LidoInter(saldo, lido_em, "", imagem, sem_imagem, via, resultado, erro)
+    try:
+        resultado = extra(page, autorizacao, extrato)
+    except Exception as e:                                   # noqa: BLE001
+        erro = _primeira_linha(e)
+    marcar("listas")
+    return LidoInter(lido.saldo, lido.lido_em, "", lido.imagem, lido.sem_imagem, lido.via,
+                     resultado, erro)
 
 
 def _ler_no_chrome(apelido, numero_esperado, nomes, arquivo, *, razoes, log, avisar_qr,
@@ -477,6 +633,7 @@ def _ler_no_chrome(apelido, numero_esperado, nomes, arquivo, *, razoes, log, avi
 
     perfil = ib.pasta_do_perfil(apelido)
     perfil.mkdir(parents=True, exist_ok=True)
+    crono = Cronometro()
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(
             str(perfil), channel="chrome", headless=False,
@@ -488,14 +645,25 @@ def _ler_no_chrome(apelido, numero_esperado, nomes, arquivo, *, razoes, log, avi
         sessao = escutar_sessao(page)
         try:
             _abrir(page, ib.URL_LOGIN)
+            crono.marcar("Chrome")
             avisar_qr(apelido)
-            ib.esperar_login(page, tempo=tempo_login, log=log, parar=parar)
+            na_inicial = esperar_entrar(page, sessao, tempo=tempo_login, log=log,
+                                        parar=parar)
+            crono.marcar("QR")
             ao_entrar(apelido)
-            ouvidas.clear()
-            _abrir(page, ib.URL_LOGIN)
-            return _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes,
+            direto = ler_via(apelido) == VIA_EXTRATO
+            if not na_inicial and not direto:
+                ouvidas.clear()
+                _abrir(page, ib.URL_LOGIN)
+            lido = _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes,
                                   razoes, arquivo, agora=agora, extratos=extratos,
-                                  extra=extra, sessao=sessao)
+                                  extra=extra, sessao=sessao, comecar_no_extrato=direto,
+                                  marcar=crono.marcar)
+            if lido.saldo is not None and lido.via:
+                gravar_via(apelido, lido.via)
+            log(f"tempos: {crono.resumo()}"
+                + (" (direto no extrato)" if lido.via == VIA_EXTRATO and direto else ""))
+            return lido
         except (ib.InterFalhou, SaldoInterFalhou) as e:
             return LidoInter(motivo=str(e), sem_imagem="a leitura parou antes do print")
         except Exception as e:                               # noqa: BLE001
