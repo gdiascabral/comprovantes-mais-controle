@@ -257,7 +257,7 @@ def _so_digitos(oc) -> str:
     return re.sub(r"\D", "", str(oc or "")).lstrip("0")
 
 
-def anotar_papeis(leituras_ia: dict, a_pagar, ocs_pagas=()) -> None:
+def anotar_papeis(leituras_ia: dict, a_pagar, ids_por_oc=None, oc_incerta=True) -> None:
     """O MESMO papel (mesmo conteúdo do arquivo, `papel`, em uma ou várias URLs) lido para
     dois ou mais lançamentos a pagar: anota em cada entrada `papel_ids` (os ids)
     e `papel_valores` ({id: valor}) — é o "lançamento com o valor dividido para
@@ -277,10 +277,14 @@ def anotar_papeis(leituras_ia: dict, a_pagar, ocs_pagas=()) -> None:
             continue
         e["papel_ids"] = sorted(ids)
         e["papel_valores"] = {i: str(valores[i]) for i in ids}
-        # Um lançamento JÁ PAGO com a mesma OC do papel: a soma dos que estão a
-        # pagar não é o papel inteiro (revisão de dinheiro, 26/11/2026).
+        # Confirmável só se os lançamentos lidos com a OC do papel (pagos e a
+        # pagar, qualquer conta) são EXATAMENTE o grupo: um pago, uma duplicata
+        # ou um irmão que não foi à IA desfazem (revisão de dinheiro,
+        # 26/11/2026). Isso também exige a mesma OC em todos do grupo.
         oc_papel = _so_digitos((e.get("leitura") or {}).get("ordem_de_compra"))
-        e["papel_oc_ja_paga"] = bool(oc_papel) and oc_papel in {_so_digitos(o) for o in ocs_pagas}
+        e["papel_confirmavel"] = bool(
+            oc_papel and not oc_incerta and ids_por_oc is not None
+            and ids_por_oc.get(oc_papel, set()) == set(ids))
 
 
 def _soma_do_papel(e: dict) -> tuple[Decimal, list] | None:
@@ -392,11 +396,11 @@ def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "",
                     # Dono, 26/11/2026: "tem que fazer o app conferir, e se
                     # bater, colocar como pode pagar". Confirmado = o papel
                     # fecha com a soma COM segunda prova (BATE), a OC escrita
-                    # no papel é a deste lançamento e nenhum lançamento já
-                    # pago do período tem a mesma OC.
+                    # no papel é a deste lançamento e os lançamentos lidos com
+                    # essa OC são exatamente o grupo (`anotar_papeis`).
                     confirmado = (pela_soma.estado == li.BATE
                                   and oc_lida.startswith("OC ") and oc_lida.endswith("✓")
-                                  and not e.get("papel_oc_ja_paga"))
+                                  and bool(e.get("papel_confirmavel")))
                     # O papel prova a SOMA, não o valor de cada um, e só vê os
                     # lançamentos a pagar que foram à IA: um já pago ou uma
                     # duplicata somariam igual (revisão de dinheiro). Por isso

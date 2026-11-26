@@ -29,7 +29,8 @@ def _nota(texto, urls_ocr):
 
 def test_nota_a_mao_lida_por_ocr_nao_diverge_pelo_valor_unico():
     linha = _nota("MADEIREIRA MODELO caibrao 966,00", {"u-nota"})
-    assert "VALOR DIVERGE" not in linha["conferencia"] and "valor ?" in linha["conferencia"]
+    assert "VALOR DIVERGE" not in linha["conferencia"]
+    assert linha["status"] != "ATENÇÃO — documento não bate"
 
 
 def test_pdf_com_texto_continua_divergindo_pelo_valor_unico():
@@ -47,10 +48,11 @@ A = {"id": "A", "value": 6223.56, "remainingValue": 6223.56}
 B = {"id": "B", "value": 2749.99, "remainingValue": 2749.99}
 
 
-def _ia(oc_do_papel="9543", ocs_pagas=(), oc_lanc="9543"):
+def _ia(oc_do_papel="9543", ids_da_oc=("A", "B"), oc_lanc="9543", incerta=False):
     leituras = {"u1": {"ok": True, "leitura": _leitura(oc_do_papel), "origem": "cache",
                        "ids": {"A", "B"}, "chave": "u1", "papel": "p1"}}
-    ia_do_dia.anotar_papeis(leituras, [A, B], ocs_pagas=ocs_pagas)
+    ia_do_dia.anotar_papeis(leituras, [A, B], ids_por_oc={"9543": set(ids_da_oc)},
+                            oc_incerta=incerta)
     return ia_do_dia.leitura_do_item(A, [{"downloadUrl": "u1"}], leituras, oc=oc_lanc)
 
 
@@ -67,8 +69,8 @@ def test_papel_dividido_confirmado_pode_pagar():
     assert n.nome == nivel.PODE_PAGAR, n.motivos
 
 
-def test_oc_ja_paga_no_periodo_nao_confirma():
-    ia = _ia(ocs_pagas={"9543"})
+def test_oc_com_lancamento_pago_ou_duplicata_fora_do_grupo_nao_confirma():
+    ia = _ia(ids_da_oc=("A", "B", "PAGO"))
     assert not ia["dividido_confirmado"]
     assert nivel.nivel_da_linha(_reg(ia)).nome == nivel.OLHE
 
@@ -89,3 +91,25 @@ def test_confirmado_nao_apaga_os_outros_motivos():
     reg = {**_reg(_ia()), "status": "ATENÇÃO — chave do reembolso divergente"}
     n = nivel.nivel_da_linha(reg)
     assert n.nome != nivel.PODE_PAGAR
+
+
+def test_detalhe_que_faltou_nao_confirma():
+    """Aba PF: o detalhe dos pagos não é lido, e a OC deles fica incerta."""
+    assert not _ia(incerta=True)["dividido_confirmado"]
+
+
+def test_sem_mapa_de_ocs_nao_confirma():
+    leituras = {"u1": {"ok": True, "leitura": _leitura(), "origem": "cache",
+                       "ids": {"A", "B"}, "chave": "u1", "papel": "p1"}}
+    ia_do_dia.anotar_papeis(leituras, [A, B])
+    assert not ia_do_dia.leitura_do_item(A, [{"downloadUrl": "u1"}], leituras,
+                                         oc="9543")["dividido_confirmado"]
+
+
+def test_recibo_escaneado_com_outro_valor_fica_em_atencao_e_nao_apto():
+    """Revisão de dinheiro: o alarme do OCR não some — a linha sai ATENÇÃO
+    (desmarcada na remessa), não APTO."""
+    linha = _nota("MADEIREIRA MODELO recibo 1.200,00", {"u-nota"})
+    assert linha["status"] == relatorio.STATUS_OCR_DIFERENTE
+    assert "OCR leu só R$ 1.200,00" in linha["conferencia"]
+    assert nivel.nivel_da_linha(linha).nome != nivel.PODE_PAGAR

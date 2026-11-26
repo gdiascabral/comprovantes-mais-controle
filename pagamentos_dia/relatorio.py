@@ -2080,7 +2080,14 @@ def conferir_documento(item: dict, files, textos, overview=None,
     else:
         sem_ocr = provas if textos_sem_ocr is None else [t for t in textos_sem_ocr if t]
         outro = _valor_unico_diferente(item, sem_ocr, files) if sem_ocr else None
-        if outro is None:
+        pelo_ocr = (_valor_unico_diferente(item, provas, files)
+                    if outro is None and textos_sem_ocr is not None else None)
+        if pelo_ocr is not None:
+            # Revisão de dinheiro (26/11/2026): o alarme do OCR não some, fica
+            # brando. A linha sai `STATUS_OCR_DIFERENTE` (não APTO: desmarcada
+            # na remessa, "Olhe" no HTML), e não "documento não bate".
+            partes.append(f"{PECA_OCR_DIFERENTE} {brl(pelo_ocr)} — confira o total no anexo)")
+        elif outro is None:
             partes.append("valor ?")
         else:
             partes.append(f"VALOR DIVERGE: anexo {brl(outro)} × lançamento "
@@ -2127,6 +2134,12 @@ STATUS_LIBERADO = "ATENÇÃO — liberado na tela do dia"
 #: (`leitura_do_dia.alterados_durante_a_leitura`, dono, 06/11/2026): a linha
 #: juntaria o valor/vencimento de um momento com o arquivo de outro.
 STATUS_ALTERADO_NA_LEITURA = "ATENÇÃO — alterado durante a leitura"
+#: O anexo lido por OCR traz UM valor, diferente do lançamento (26/11/2026). Em
+#: nota escrita à mão é um pedaço (uma linha do meio, um rabisco) e não prova
+#: divergência; num recibo escaneado pode ser o valor de verdade. Nem
+#: "documento não bate" nem APTO: desmarcada na remessa e "Olhe" no HTML.
+STATUS_OCR_DIFERENTE = "ATENÇÃO — valor lido por OCR diferente"
+PECA_OCR_DIFERENTE = "valor ? (OCR leu só"
 
 
 def _leitura_ia_do_item(item, files, leituras_ia, oc, doc_favorecido=""):
@@ -2893,6 +2906,8 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 status = novos[0]
         if divergiu:
             status = "ATENÇÃO — documento não bate"
+        elif PECA_OCR_DIFERENTE in conferencia and status.startswith("APTO"):
+            status = STATUS_OCR_DIFERENTE
         if str(item.get("id")) in alterados_na_leitura and not item.get("paid"):
             status = STATUS_ALTERADO_NA_LEITURA
             obs = " · ".join(filter(None, [

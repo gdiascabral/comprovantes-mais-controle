@@ -389,13 +389,22 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
                                          "ocr_imagem", ocr_boleto.texto_ocr_imagem),
                                      qr_pix=qrs),
             log=log, cancelar=cancelar)
-        # OCs dos lançamentos JÁ PAGOS do período (qualquer conta): papel cuja
-        # OC já teve um pagamento não fecha pela soma dos que estão a pagar.
-        _todos_a_pagar, pagos = relatorio.separar_pagos(leitura.lancamentos)
-        ocs_pagas = {relatorio.achar_oc(
-            i, leitura.anexos.get(str(i.get("tradePayableId"))) or [], "",
-            (leitura.overviews or {}).get(str(i.get("id")))) for i in pagos} - {""}
-        ia_do_dia.anotar_papeis(leituras_ia, a_pagar, ocs_pagas=ocs_pagas)
+        # TODOS os lançamentos lidos do período (pagos e a pagar, de qualquer
+        # conta) por OC: o papel dividido só se confirma quando os da OC são
+        # exatamente o grupo do papel (revisão de dinheiro, 26/11/2026). Sem o
+        # detalhe de algum lançamento (aba PF), a OC dele é incerta e nada se
+        # confirma.
+        ids_por_oc: dict[str, set] = {}
+        for i in leitura.lancamentos:
+            ov = (leitura.overviews or {}).get(str(i.get("id")))
+            oc_i = relatorio.achar_oc(
+                i, leitura.anexos.get(str(i.get("tradePayableId"))) or [], "", ov)
+            if oc_i:
+                ids_por_oc.setdefault(ia_do_dia._so_digitos(oc_i), set()).add(str(i.get("id")))
+        sem_detalhe = any(str(i.get("id")) not in (leitura.overviews or {})
+                          for i in leitura.lancamentos)
+        ia_do_dia.anotar_papeis(leituras_ia, a_pagar, ids_por_oc=ids_por_oc,
+                                oc_incerta=sem_detalhe)
         leitura.ia_resumo = ia.resumo()
         crono.etapa("leitura por IA")
         if cancelar():
