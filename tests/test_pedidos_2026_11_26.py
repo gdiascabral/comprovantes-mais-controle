@@ -50,7 +50,7 @@ def _leitura(total="8973.55"):
 
 def _entradas(ids_por_url, chave="papel-1"):
     return {url: {"ok": True, "leitura": _leitura(), "origem": "cache", "ids": set(ids),
-                  "chave": chave} for url, ids in ids_por_url.items()}
+                  "chave": url, "papel": chave} for url, ids in ids_por_url.items()}
 
 
 def test_papel_de_dois_lancamentos_bate_pela_soma():
@@ -135,3 +135,77 @@ def test_montar_registros_chave_da_observacao_igual_a_do_cadastro_nao_e_a_mao():
 def test_montar_registros_chave_da_observacao_diferente_continua_a_mao():
     linha, = _corretor("PIX CPF 222.555.888-46")
     assert "manda pagar outra pessoa" in (linha.get("obs") or "")
+
+
+# ------------------------------------- revisão de dinheiro do mesmo dia
+def test_cadastro_vazio_chave_so_da_observacao_continua_a_mao():
+    """Achado 1: com o cadastro vazio a linha paga a chave da observação, e
+    ela não pode "conferir consigo mesma"."""
+    linha, = _corretor("")
+    assert "PAGAR À MÃO" in (linha.get("obs") or "")
+
+
+def test_foto_nunca_autoriza_pelo_texto_do_ocr():
+    """Achado 2: boleto físico fotografado com carimbo "PAGAMENTO AUTORIZADO"."""
+    from pagamentos_dia import relatorio
+    foto = {"filename": "IMG_0001", "tagName": None, "extension": ".jpg",
+            "downloadUrl": "u-foto"}
+    pdf = {"filename": "documento", "tagName": None, "extension": ".pdf",
+           "downloadUrl": "u-pdf"}
+    textos = {"u-foto": "PAGAMENTO AUTORIZADO", "u-pdf": "PAGAMENTO AUTORIZADO"}
+    assert not relatorio.eh_autorizacao(foto, textos)
+    assert relatorio.eh_autorizacao(pdf, textos)          # PDF segue como antes
+
+
+def _com_foto(texto_da_foto):
+    from pagamentos_dia import relatorio
+    item = {"id": "L1", "tradePayableId": "T-L1", "paidTo": "Vidracaria Modelo",
+            "remainingValue": 1500.0, "plannedDate": "2026-11-26",
+            "tradePayableAccount": {"name": "CONTA EXEMPLO - SICOOB"},
+            "tradePayablePaymentMethod": "Pix",
+            "paidToBankAccount": "PIX EMAIL vidros@exemplo.com",
+            "documentNumber": "", "costCentreDetails": [{"workName": "OBRA MODELO"}],
+            "paid": False}
+    foto = {"filename": "IMG_0002", "tagName": None, "extension": ".jpg",
+            "downloadUrl": "u-foto"}
+    res = relatorio.montar_registros([item], {"T-L1": [foto]}, {}, {"u-foto": texto_da_foto},
+                                     urls_ocr={"u-foto"})
+    linha, = [x for regs in res.contas.values() for x in regs]
+    return linha
+
+
+def test_o_que_so_a_foto_prova_fica_no_maximo_em_olhe():
+    """Achado 3: o print do pedido prova pelo OCR, mas não leva a "Pode pagar"."""
+    linha = _com_foto("OBRA MODELO vidracaria modelo 1.500,00")
+    assert linha["prova_pela_foto"] is True
+    n = nivel.nivel_da_linha(linha)
+    assert n.nome != nivel.PODE_PAGAR and nivel.MOTIVO_SO_PELA_FOTO in n.motivos
+
+
+def test_foto_de_comprovante_nao_prova_valor():
+    linha = _com_foto("Comprovante de transferência Pix enviado vidracaria modelo R$ 1.500,00")
+    assert "valor ✓" not in linha["conferencia"]
+    assert nivel.nivel_da_linha(linha).nome != nivel.PODE_PAGAR
+
+
+def test_mesmo_conteudo_em_dois_titulos_e_o_mesmo_papel(tmp_path):
+    """Achado 4 (fora de dinheiro): uploads separados têm ids diferentes."""
+    class Ia:
+        def ler(self, chave, dados, media):
+            return {"ok": True, "leitura": _leitura(), "origem": "cache"}
+
+        def resumo(self):
+            return ""
+
+        def anotar_na_atividade(self):
+            pass
+    cand = {"u1": {"arquivo": {"id": "f1"}, "dados": b"mesmo pdf", "media_type": "application/pdf", "ids": {"A"}},
+            "u2": {"arquivo": {"id": "f2"}, "dados": b"mesmo pdf", "media_type": "application/pdf", "ids": {"B"}}}
+    leituras = ia_do_dia.ler_candidatos(Ia(), cand, log=lambda *_: None)
+    assert leituras["u1"]["chave"] != leituras["u2"]["chave"]
+    ia_do_dia.anotar_papeis(leituras, [{"id": "A", "value": 6223.56, "remainingValue": 6223.56},
+                                       {"id": "B", "value": 2749.99, "remainingValue": 2749.99}])
+    assert leituras["u1"]["papel_ids"] == ["A", "B"]
+    r = ia_do_dia.leitura_do_item({"id": "A", "value": 6223.56, "remainingValue": 6223.56},
+                                  [{"downloadUrl": "u1"}], leituras)
+    assert "confira se nenhum outro lançamento usa este papel" in r["dividido"]

@@ -866,6 +866,12 @@ def eh_autorizacao(f: dict, textos: dict | None = None) -> bool:
         return False
     if _diz_pagamento_autorizado(rotulo):
         return True
+    if _e_imagem(f):
+        # Foto só autoriza pelo NOME. Desde 26/11/2026 a foto tem texto de
+        # OCR, e o boleto físico carimbado "PAGAMENTO AUTORIZADO" viraria
+        # autorização, sairia dos "outros" e pagaria Pix com o boleto em
+        # aberto (revisão de dinheiro).
+        return False
     texto = (textos or {}).get(f.get("downloadUrl") or "") or ""
     return bool(_diz_pagamento_autorizado(texto)
                 and not _PROVA_DE_PAGAMENTO.search(texto))
@@ -2219,8 +2225,30 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                 "fora_do_recorte": True})
             continue
 
-        do_anexo = [textos.get(f.get("downloadUrl") or "") for f in files]
-        do_anexo = [t for t in do_anexo if t]
+        # Texto de FOTO lido por OCR (26/11/2026) prova pouco: o print do
+        # pedido é escrito por quem pede, e o print de um Pix já enviado tem
+        # o valor e o nome. Foto com texto de comprovante não entra; o que só
+        # a foto prova fica marcado (`prova_pela_foto`) e o nível não passa
+        # de "Olhe" (revisão de dinheiro).
+        fotos_ocr = {f.get("downloadUrl") for f in files
+                     if _e_imagem(f) and f.get("downloadUrl") in (urls_ocr or ())}
+        do_anexo, sem_foto = [], []
+        for f in files:
+            url = f.get("downloadUrl") or ""
+            t = textos.get(url)
+            if not t:
+                continue
+            if url in fotos_ocr:
+                if _PROVA_DE_PAGAMENTO.search(t) or _COMPROVANTE_FORTE.search(t):
+                    continue
+            else:
+                sem_foto.append(t)
+            do_anexo.append(t)
+        prova_pela_foto = bool(len(do_anexo) > len(sem_foto) and (
+            (_valor_nos_textos(valor_do_item(item), do_anexo)
+             and not _valor_nos_textos(valor_do_item(item), sem_foto))
+            or (fornecedor_nos_textos(item, do_anexo)
+                and not fornecedor_nos_textos(item, sem_foto))))
         do_item = do_anexo + ([coment] if coment else [])
         # Fornecedor que emite por mais de um CNPJ e tem um só no cadastro
         # (`cnpj_livre` no regras_fornecedor.json, dono 14/10/2026): o CNPJ da
@@ -2678,9 +2706,15 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # ser paga automaticamente.
         # A observação que só repete a chave que esta linha vai pagar (UMA
         # chave, a mesma) não manda pagar outra pessoa (dono, 26/11/2026).
+        # A chave paga tem de ter vindo do CADASTRO: quando o cadastro está
+        # vazio a linha paga a chave da própria observação, e ela "conferiria
+        # consigo mesma" (revisão de dinheiro, 26/11/2026).
         chave_obs = chave_unica_da_observacao(coment)
+        do_cadastro_pix = extrair_chave_pix(pago_para) if pago_para else ""
         chave_e_a_paga = bool(tipo == "Pix" and dados and chave_obs
                               and not chave_da_observacao and not qr_usado
+                              and parece_chave_pix(do_cadastro_pix)
+                              and mesma_chave(chave_obs, do_cadastro_pix)
                               and mesma_chave(chave_obs, dados))
         olhar = regras.precisa_de_olhar_humano(coment, favorecido, regras_forn,
                                                chave_e_a_paga=chave_e_a_paga)
@@ -2885,6 +2919,7 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             # `total_parcelas` deixa o título parcelado em "Não li" mesmo
             # quando ninguém leu o número da parcela (Remessa/Retorno).
             "fornecedor_no_anexo": bool(fornecedor_nos_textos(item, do_anexo)),
+            "prova_pela_foto": prova_pela_foto,
             "reembolso_socio": socio is not None,
             # Leitura por IA do anexo escrito à mão (`ia_do_dia`): None quando
             # nenhum anexo desta linha foi para ela. Só o `nivel.py` e os HTML a leem.

@@ -236,7 +236,10 @@ def ler_candidatos(ia: IaDoDia, candidatos: dict, *, log=print, cancelar=lambda:
             break
         chave = chave_do_anexo(c["arquivo"], c["dados"])
         r = ia.ler(chave, c["dados"], c["media_type"])
-        saida[url] = {**r, "ids": set(c["ids"]), "chave": chave}
+        # `papel`: o CONTEÚDO do arquivo. O mesmo PDF subido em dois títulos
+        # tem ids (e `chave`) diferentes, e é o mesmo papel (26/11/2026).
+        saida[url] = {**r, "ids": set(c["ids"]), "chave": chave,
+                      "papel": hashlib.sha256(c["dados"]).hexdigest()}
     if candidatos:
         log("  " + ia.resumo())
         ia.anotar_na_atividade()
@@ -251,7 +254,7 @@ def _centavos(valor) -> Decimal | None:
 
 
 def anotar_papeis(leituras_ia: dict, a_pagar) -> None:
-    """O MESMO papel (mesma `chave` do anexo, em uma ou várias URLs) lido para
+    """O MESMO papel (mesmo conteúdo do arquivo, `papel`, em uma ou várias URLs) lido para
     dois ou mais lançamentos a pagar: anota em cada entrada `papel_ids` (os ids)
     e `papel_valores` ({id: valor}) — é o "lançamento com o valor dividido para
     duas pessoas" (dono, 26/11/2026: OC de R$ X paga em duas partes, cada uma a
@@ -262,10 +265,10 @@ def anotar_papeis(leituras_ia: dict, a_pagar) -> None:
     valores = {str(i.get("id")): _centavos(relatorio.valor_do_item(i)) for i in a_pagar or ()}
     grupos: dict[str, set] = {}
     for e in (leituras_ia or {}).values():
-        if e.get("chave"):
-            grupos.setdefault(e["chave"], set()).update(e.get("ids") or ())
+        if e.get("papel"):
+            grupos.setdefault(e["papel"], set()).update(e.get("ids") or ())
     for e in (leituras_ia or {}).values():
-        ids = grupos.get(e.get("chave") or "", set())
+        ids = grupos.get(e.get("papel") or "", set())
         if len(ids) < 2 or any(valores.get(i) is None for i in ids):
             continue
         e["papel_ids"] = sorted(ids)
@@ -377,8 +380,13 @@ def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "",
                 pela_soma = li.conferir(leitura, soma[0])
                 if pela_soma.estado in USAVEIS and pela_soma.estado != li.DIVERGE:
                     partes = " + ".join(f"R$ {nivel._brl(v)}" for v in sorted(soma[1], reverse=True))
+                    # O papel prova a SOMA, não o valor de cada um, e só vê os
+                    # lançamentos a pagar que foram à IA: um já pago ou uma
+                    # duplicata somariam igual (revisão de dinheiro). Por isso
+                    # a frase manda conferir, e o nível segue em "Olhe".
                     dividido = (f"papel dividido em {len(soma[1])} lançamentos: "
-                                f"{partes} = R$ {nivel._brl(soma[0])}")
+                                f"{partes} = R$ {nivel._brl(soma[0])} — confira se "
+                                "nenhum outro lançamento usa este papel")
                     c = pela_soma
             qr = _quem_recebe(leitura, item, doc_favorecido)
             resultados.append({

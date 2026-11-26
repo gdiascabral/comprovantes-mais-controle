@@ -1091,3 +1091,14 @@ paths:
   UMA chave na observação, igual (`mesma_chave`) à que a linha Pix vai pagar,
   não é "manda pagar outra pessoa" (comissão de corretor: "PIX CPF … Corretor
   <nome>"); verbo de pagar com valor continua mandando à mão.
+  **Revisão de dinheiro do mesmo dia**: (a) a chave só "confere" quando a
+  da linha veio do CADASTRO — com o cadastro vazio a linha paga a chave da
+  própria observação e continua à mão; (b) foto nunca é "pagamento autorizado"
+  pelo texto do OCR (`eh_autorizacao`: só pelo nome), senão o boleto físico
+  carimbado pagaria Pix com o boleto em aberto; (c) foto com texto de
+  comprovante não entra nos textos que provam, e o que SÓ a foto prova
+  (valor ou fornecedor) marca `registro["prova_pela_foto"]` e a linha não passa
+  de "Olhe" (`nivel.MOTIVO_SO_PELA_FOTO`); (d) o papel é agrupado pelo
+  CONTEÚDO do arquivo (`papel`, sha256), não pelo id do ERP, e a frase manda
+  conferir se nenhum outro lançamento usa o papel (um já pago ou uma
+  duplicata somariam igual).
