@@ -80,6 +80,7 @@ def _carregar_cadastros():
 def pergunta_de_abrir(contas) -> str:
     sicoob = sum(1 for c in contas if c.banco == ps.SICOOB and not c.motivo)
     inter = [c.apelido for c in contas if c.banco == ps.INTER and not c.motivo]
+    caixa = sum(1 for c in contas if c.banco == ps.CAIXA and not c.motivo)
     partes = [f"Vou tirar a prova de {len(contas)} conta(s): o saldo atual no ERP e "
               "no banco, com um print de cada tela."]
     if sicoob:
@@ -87,6 +88,9 @@ def pergunta_de_abrir(contas) -> str:
                       "Sicoob abrir.")
     if inter:
         partes.append("Inter: um QR por conta, nesta ordem: " + ", ".join(inter) + ".")
+    if caixa:
+        partes.append(f"Caixa: {caixa} conta(s), um login só — no fim, entre no "
+                      "Gerenciador CAIXA (Empresas) quando o Chrome da Caixa abrir.")
     partes.append("É só leitura: nada é pago, agendado nem alterado no banco ou no "
                   f"ERP. No fim sai um PDF na pasta Pagamentos do dia, em '{PASTA}'.")
     return "\n\n".join(partes)
@@ -142,7 +146,7 @@ class ProvaNaTela:
         if tela.mapping is None or not tela.contas_erp:
             messagebox.showinfo(TITULO, "Clique em «Ler as contas do ERP» primeiro: é "
                                         "a leitura do ERP que diz quais contas do painel "
-                                        "são do Sicoob e do Inter.")
+                                        "são do Sicoob, do Inter e da Caixa.")
             return
         try:
             mapa_mc, empresas, inter = _carregar_cadastros()
@@ -154,8 +158,8 @@ class ProvaNaTela:
         contas = ps.contas_da_prova(linhas, tela.contas_erp, tela.mapping,
                                     mapa_mc, empresas, inter)
         if not contas:
-            messagebox.showinfo(TITULO, "Nenhuma conta do painel é do Sicoob ou do "
-                                        "Inter — não há o que provar.")
+            messagebox.showinfo(TITULO, "Nenhuma conta do painel é do Sicoob, do "
+                                        "Inter ou da Caixa — não há o que provar.")
             return
         if self._banco_em_uso():
             return
@@ -288,8 +292,31 @@ class ProvaNaTela:
                 # tela diz na hora, e não só no PDF do fim.
                 self.q.put(("estado", f"Inter {c.apelido}: não lido"))
                 self.q.put(("log", f"  ⚠ Inter {c.apelido}: {lido.motivo}"))
+        caixa = self._ler_caixa(contas, pasta)
         self._guardar_para_o_dia(contas, sicoob, inter)
-        return ps.banco_por_linha(contas, sicoob, inter)
+        return ps.banco_por_linha(contas, sicoob, inter, caixa)
+
+    def _ler_caixa(self, contas, pasta) -> dict:
+        """Todas as contas da Caixa num login só (`saldo_caixa`). Parado
+        antes, ficam "interrompida"."""
+        documentos = {c.documento: c.numero for c in contas
+                      if c.banco == ps.CAIXA and c.documento and not c.motivo}
+        if not documentos:
+            return {}
+        if self._parar.is_set():
+            return {d: ps.Leitura(None, motivo=ps.INTERROMPIDA) for d in documentos}
+        from . import saldo_caixa
+        self.q.put(("estado", "Caixa: entre no Gerenciador CAIXA (Empresas) no Chrome "
+                              "que abriu"))
+        lidas = saldo_caixa.ler(documentos, pasta, parar=self._parar.is_set,
+                                log=lambda msg: self.tela._log(f"  Caixa: {msg}"))
+        boas = sum(1 for lida in lidas.values() if lida.saldo is not None)
+        self.q.put(("estado", f"Caixa: {boas} de {len(lidas)} conta(s) lidas"))
+        # A falha do login vale para todas: cada motivo vai ao Registro uma vez.
+        for motivo in dict.fromkeys(lida.motivo for lida in lidas.values()
+                                    if lida.saldo is None):
+            self.q.put(("log", f"  ⚠ Caixa: {motivo}"))
+        return lidas
 
     def _guardar_para_o_dia(self, contas, sicoob, inter):
         """Dono, 16/11/2026: o saldo da Prova já fica para o Pagamentos do
