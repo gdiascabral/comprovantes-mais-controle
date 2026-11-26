@@ -71,6 +71,7 @@ Despacho de executor: tudo aqui é síncrono e de uma thread só (o robô roda f
 - Create: `pagamento_api/__init__.py`
 - Modify: `.github/workflows/build.yml` (antes da linha do `Compress-Archive`, hoje a 483)
 - Modify: `motor_minimo.txt` (`v2.0.234` → `v2.0.235`)
+- Modify: `tests/test_imports_do_motor.py` (acrescentar `"pagamento_api"` ao fim da tupla `_PASTAS`; errata da execução, 26/11/2026)
 - Test: `tests/test_empacotamento.py` (já existe; cobra a pasta nova)
 
 **Interfaces:**
