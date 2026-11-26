@@ -2261,8 +2261,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
                                  if textos else ("(não cruzado)", False))
         # CNPJ escrito no TEXTO da nota x documento do cadastro (dono,
         # 01/10/2026). Sem CNPJ no texto ou sem documento, não diz nada.
+        # Foto lida por OCR não dá "CNPJ ✓" (revisão de dinheiro, 26/11/2026):
+        # o CNPJ ✓ prova quem recebe e passaria por fora do `prova_pela_foto`.
+        textos_sem_foto = ({u: t for u, t in textos.items() if u not in fotos_ocr}
+                           if fotos_ocr else textos)
         cnpj_res, cnpj_txt = (conferir_cnpj_da_nota(
-            favorecido, pago_para, participantes, files, textos)
+            favorecido, pago_para, participantes, files, textos_sem_foto)
             if textos and not livre else ("", ""))
         if cnpj_txt and "CNPJ" not in conferencia:
             conferencia = " · ".join(filter(None, [conferencia, cnpj_txt]))
