@@ -480,6 +480,8 @@ jobs:
           # `conciliacao_dia/` é a aba "Conciliação" (Baixar OFX e Provar saldos).
           New-Item -ItemType Directory codigo_embutido/conciliacao_dia | Out-Null
           Copy-Item conciliacao_dia/*.py codigo_embutido/conciliacao_dia/
+          New-Item -ItemType Directory codigo_embutido/pagamento_api | Out-Null
+          Copy-Item pagamento_api/*.py codigo_embutido/pagamento_api/
           Compress-Archive -Path codigo_embutido/* -DestinationPath codigo.zip
           "codigo.zip: {0:N0} KB" -f ((Get-Item codigo.zip).Length/1KB)
 
