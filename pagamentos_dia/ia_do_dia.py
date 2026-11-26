@@ -253,7 +253,11 @@ def _centavos(valor) -> Decimal | None:
         return None
 
 
-def anotar_papeis(leituras_ia: dict, a_pagar) -> None:
+def _so_digitos(oc) -> str:
+    return re.sub(r"\D", "", str(oc or "")).lstrip("0")
+
+
+def anotar_papeis(leituras_ia: dict, a_pagar, ocs_pagas=()) -> None:
     """O MESMO papel (mesmo conteúdo do arquivo, `papel`, em uma ou várias URLs) lido para
     dois ou mais lançamentos a pagar: anota em cada entrada `papel_ids` (os ids)
     e `papel_valores` ({id: valor}) — é o "lançamento com o valor dividido para
@@ -273,6 +277,10 @@ def anotar_papeis(leituras_ia: dict, a_pagar) -> None:
             continue
         e["papel_ids"] = sorted(ids)
         e["papel_valores"] = {i: str(valores[i]) for i in ids}
+        # Um lançamento JÁ PAGO com a mesma OC do papel: a soma dos que estão a
+        # pagar não é o papel inteiro (revisão de dinheiro, 26/11/2026).
+        oc_papel = _so_digitos((e.get("leitura") or {}).get("ordem_de_compra"))
+        e["papel_oc_ja_paga"] = bool(oc_papel) and oc_papel in {_so_digitos(o) for o in ocs_pagas}
 
 
 def _soma_do_papel(e: dict) -> tuple[Decimal, list] | None:
@@ -358,7 +366,7 @@ def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "",
     valor = relatorio.valor_do_item(item)
     resultados = []
     for e in achados:
-        base = {"falhou": False, "pulado": False, "provas": [], "total_lido": "", "motivos": [], "dividido": "",
+        base = {"falhou": False, "pulado": False, "provas": [], "total_lido": "", "motivos": [], "dividido": "", "dividido_confirmado": False,
                 "tipo_papel": "", "origem": "", "endereco": "", "oc": "", "duvidas": [],
                 "emitente": "", "emitente_cnpj_cpf": "", "emitente_telefone": "",
                 "quem_recebe": quem_recebe.NAO, "quem_recebe_por": "", "quem_recebe_motivo": ""}
@@ -371,7 +379,7 @@ def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "",
         else:
             leitura = e["leitura"]
             c = li.conferir(leitura, valor)
-            dividido = ""
+            dividido, confirmado = "", False
             soma = _soma_do_papel(e) if c.estado == li.DIVERGE else None
             if soma is not None:
                 # Papel dividido (dono, 26/11/2026): o total do papel contra a
@@ -380,20 +388,30 @@ def leitura_do_item(item: dict, files, leituras_ia: dict, *, oc: str = "",
                 pela_soma = li.conferir(leitura, soma[0])
                 if pela_soma.estado in USAVEIS and pela_soma.estado != li.DIVERGE:
                     partes = " + ".join(f"R$ {nivel._brl(v)}" for v in sorted(soma[1], reverse=True))
+                    oc_lida = _oc(leitura, oc)
+                    # Dono, 26/11/2026: "tem que fazer o app conferir, e se
+                    # bater, colocar como pode pagar". Confirmado = o papel
+                    # fecha com a soma COM segunda prova (BATE), a OC escrita
+                    # no papel é a deste lançamento e nenhum lançamento já
+                    # pago do período tem a mesma OC.
+                    confirmado = (pela_soma.estado == li.BATE
+                                  and oc_lida.startswith("OC ") and oc_lida.endswith("✓")
+                                  and not e.get("papel_oc_ja_paga"))
                     # O papel prova a SOMA, não o valor de cada um, e só vê os
                     # lançamentos a pagar que foram à IA: um já pago ou uma
                     # duplicata somariam igual (revisão de dinheiro). Por isso
                     # a frase manda conferir, e o nível segue em "Olhe".
                     dividido = (f"papel dividido em {len(soma[1])} lançamentos: "
-                                f"{partes} = R$ {nivel._brl(soma[0])} — confira se "
-                                "nenhum outro lançamento usa este papel")
+                                f"{partes} = R$ {nivel._brl(soma[0])}"
+                                + (f" ({oc_lida})" if confirmado else
+                                   " — confira se nenhum outro lançamento usa este papel"))
                     c = pela_soma
             qr = _quem_recebe(leitura, item, doc_favorecido)
             resultados.append({
                 **base, "estado": c.estado, "provas": list(c.provas),
                 "total_lido": "" if c.total_lido is None else str(c.total_lido),
                 "motivos": ([dividido] if dividido else []) + list(c.motivos),
-                "dividido": dividido, "tipo_papel": str(leitura.get("tipo_papel") or ""),
+                "dividido": dividido, "dividido_confirmado": confirmado, "tipo_papel": str(leitura.get("tipo_papel") or ""),
                 "origem": e.get("origem") or "", "endereco": _endereco(item, leitura),
                 "oc": _oc(leitura, oc), "duvidas": [str(d) for d in leitura.get("duvidas") or []],
                 "emitente": str(leitura.get("emitente_nome") or "").strip(),

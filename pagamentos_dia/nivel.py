@@ -299,6 +299,13 @@ def nivel_da_linha(r: dict, *, bloqueio: str = "", vencido: bool = False) -> Niv
             if aberto:
                 nao_li.append(f"IA não leu: {ia['motivos'][0]}" if ia.get("pulado") and ia.get("motivos")
                               else "lido por IA: não conseguiu ler o documento")
+        elif ia.get("dividido_confirmado") and ia.get("estado") == li.BATE and not diverge:
+            # Papel dividido CONFIRMADO (dono, 26/11/2026: "se bater, colocar
+            # como pode pagar"): a soma dos lançamentos fecha com o total e a
+            # segunda prova do papel, a OC do papel é a do lançamento e nenhum
+            # pago do período usa a OC (`ia_do_dia.leitura_do_item`). A IA não
+            # segura a linha; os outros motivos continuam valendo.
+            pass
         elif aberto or diverge:
             olhe.append(motivo_da_ia(r))
         if (aberto or diverge) and ia.get("nao_lidos") and int(ia.get("anexos") or 0) > 1:

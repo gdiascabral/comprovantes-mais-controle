@@ -2001,12 +2001,19 @@ def fornecedor_nos_textos(item: dict, textos) -> bool | None:
 
 
 def conferir_documento(item: dict, files, textos, overview=None,
-                       textos_valor=None, cruzar_cnpj: bool = True) -> tuple[str, bool]:
+                       textos_valor=None, cruzar_cnpj: bool = True,
+                       textos_sem_ocr=None) -> tuple[str, bool]:
     """Cruza o anexo com o lançamento. Devolve (resumo, tem_divergência).
 
     `textos_valor`: onde o valor pode ser provado — só os ANEXOS. A observação
     do lançamento (`textos` a inclui) é o que o próprio lançamento diz, e não
-    prova nada contra ele (dono, 01/10/2026). Sem ele, vale `textos`."""
+    prova nada contra ele (dono, 01/10/2026). Sem ele, vale `textos`.
+
+    `textos_sem_ocr`: os anexos com camada de texto, os únicos que podem dizer
+    "VALOR DIVERGE" pelo valor único (`_valor_unico_diferente`). Nota escrita à
+    mão lida por OCR traz um pedaço só — uma linha do meio, um rabisco virando
+    "4,42" — e o alarme saía falso (dono, 26/11/2026: "tem que olhar o valor
+    total"). Sem ele (chamada antiga), vale `provas`."""
     partes, divergiu = [], False
     textos = [t for t in textos if t]
     provas = textos if textos_valor is None else [t for t in textos_valor if t]
@@ -2071,7 +2078,8 @@ def conferir_documento(item: dict, files, textos, overview=None,
     elif _valor_nos_textos(valor_do_item(item), provas):
         partes.append("valor ✓")
     else:
-        outro = _valor_unico_diferente(item, provas, files)
+        sem_ocr = provas if textos_sem_ocr is None else [t for t in textos_sem_ocr if t]
+        outro = _valor_unico_diferente(item, sem_ocr, files) if sem_ocr else None
         if outro is None:
             partes.append("valor ?")
         else:
@@ -2255,9 +2263,12 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         # nota não é cruzado com o do cadastro — nem pela chave de acesso nem
         # pelo texto. O resto da conferência continua.
         livre = regras.cnpj_livre(favorecido, regras_forn)
+        sem_ocr = [textos.get(f.get("downloadUrl") or "") for f in files
+                   if (f.get("downloadUrl") or "") not in (urls_ocr or ())]
         conferencia, divergiu = (conferir_documento(item, files, do_item, overview,
                                                     textos_valor=do_anexo,
-                                                    cruzar_cnpj=not livre)
+                                                    cruzar_cnpj=not livre,
+                                                    textos_sem_ocr=sem_ocr)
                                  if textos else ("(não cruzado)", False))
         # CNPJ escrito no TEXTO da nota x documento do cadastro (dono,
         # 01/10/2026). Sem CNPJ no texto ou sem documento, não diz nada.

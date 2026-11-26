@@ -389,7 +389,13 @@ def ler_pagamentos(api, ini, fim, *, abrir_historico, carregar_mapas,
                                          "ocr_imagem", ocr_boleto.texto_ocr_imagem),
                                      qr_pix=qrs),
             log=log, cancelar=cancelar)
-        ia_do_dia.anotar_papeis(leituras_ia, a_pagar)
+        # OCs dos lançamentos JÁ PAGOS do período (qualquer conta): papel cuja
+        # OC já teve um pagamento não fecha pela soma dos que estão a pagar.
+        _todos_a_pagar, pagos = relatorio.separar_pagos(leitura.lancamentos)
+        ocs_pagas = {relatorio.achar_oc(
+            i, leitura.anexos.get(str(i.get("tradePayableId"))) or [], "",
+            (leitura.overviews or {}).get(str(i.get("id")))) for i in pagos} - {""}
+        ia_do_dia.anotar_papeis(leituras_ia, a_pagar, ocs_pagas=ocs_pagas)
         leitura.ia_resumo = ia.resumo()
         crono.etapa("leitura por IA")
         if cancelar():
