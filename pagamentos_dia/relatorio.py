@@ -2907,7 +2907,15 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
         if divergiu:
             status = "ATENÇÃO — documento não bate"
         elif PECA_OCR_DIFERENTE in conferencia and status.startswith("APTO"):
-            status = STATUS_OCR_DIFERENTE
+            # A IA leu o TOTAL do mesmo papel e ele bate, com segunda prova
+            # (dono, 26/11/2026: "tem que olhar o valor total"): o número que o
+            # OCR pegou é um pedaço, e o status fica. O nível continua decidindo
+            # (valor só pela IA fica em "Olhe", salvo o papel dividido confirmado).
+            ia_lida = _leitura_ia_do_item(
+                item, files, leituras_ia, oc,
+                (participantes or {}).get(util.norm_espaco(favorecido)) or "")
+            if not (ia_lida and ia_lida.get("estado") == "bate"):
+                status = STATUS_OCR_DIFERENTE
         if str(item.get("id")) in alterados_na_leitura and not item.get("paid"):
             status = STATUS_ALTERADO_NA_LEITURA
             obs = " · ".join(filter(None, [

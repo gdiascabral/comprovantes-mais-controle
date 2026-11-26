@@ -1115,3 +1115,15 @@ paths:
   (`anotar_papeis(ocs_pagas=)`, das `leitura.lancamentos` pagas) →
   `ia["dividido_confirmado"]` e o `nivel` não põe o motivo da IA; os outros
   motivos da linha continuam valendo. Sem qualquer das três, segue em "Olhe".
+  **Revisão de dinheiro do mesmo dia**: (a) o alarme do OCR não some — valor
+  único diferente lido SÓ por OCR vira a peça "valor ? (OCR leu só R$ x — confira
+  o total no anexo)" e o status `STATUS_OCR_DIFERENTE` (não APTO: desmarcada na
+  remessa, "Olhe"/"Não li" no HTML), salvo quando a IA leu o total do mesmo
+  papel e deu `li.BATE`; (b) o papel só se confirma quando os lançamentos LIDOS
+  com a OC do papel (pagos e a pagar, qualquer conta — `ids_por_oc` em
+  `leitura_do_dia`) são EXATAMENTE o grupo (`papel_confirmavel`), e nunca com
+  algum lançamento do período sem detalhe lido (`oc_incerta`: na aba PF nada
+  se confirma). **Em aberto, decisão do dono**: um lançamento da mesma OC pago
+  FORA do período lido não é visto (o `purchaseOrder` do detalhe traz só id e
+  número, sem o total da OC); e uma duplicata lançada SEM OC não entra no
+  conjunto.

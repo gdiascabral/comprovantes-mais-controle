@@ -113,3 +113,25 @@ def test_recibo_escaneado_com_outro_valor_fica_em_atencao_e_nao_apto():
     assert linha["status"] == relatorio.STATUS_OCR_DIFERENTE
     assert "OCR leu só R$ 1.200,00" in linha["conferencia"]
     assert nivel.nivel_da_linha(linha).nome != nivel.PODE_PAGAR
+
+
+def test_ocr_de_pedaco_com_ia_batendo_o_total_nao_vira_atencao():
+    """A IA leu o total do mesmo papel e ele bate: o pedaço do OCR não segura."""
+    item = {"id": "L1", "tradePayableId": "T-L1", "paidTo": "Madeireira Modelo",
+            "remainingValue": 2806.50, "plannedDate": "2026-11-26",
+            "numberOfFinancingInstallments": 1,
+            "tradePayableAccount": {"name": "CONTA EXEMPLO - SICOOB"},
+            "tradePayablePaymentMethod": "Pix", "paidToBankAccount": "PIX EMAIL m@exemplo.com",
+            "documentNumber": "", "costCentreDetails": [{"workName": "OBRA MODELO"}],
+            "paid": False}
+    pdf = {"filename": "9185", "tagName": None, "extension": ".pdf", "downloadUrl": "u-nota"}
+    leitura = {"legivel": True, "tipo_papel": "pedido", "total": "2806.50",
+               "itens": [{"descricao": "a", "total": "1840.50"}, {"descricao": "b", "total": "966.00"}]}
+    ia = {"u-nota": {"ok": True, "leitura": leitura, "origem": "cache", "ids": {"L1"},
+                     "chave": "k", "papel": "p"}}
+    res = relatorio.montar_registros([item], {"T-L1": [pdf]}, {}, {"u-nota": "caibrao 966,00"},
+                                     urls_ocr={"u-nota"}, leituras_ia=ia)
+    linha, = [x for regs in res.contas.values() for x in regs]
+    assert linha["status"].startswith("APTO")
+    assert linha["leitura_ia"]["estado"] == li.BATE
+    assert nivel.nivel_da_linha(linha).nome != nivel.PODE_PAGAR   # valor só pela IA
