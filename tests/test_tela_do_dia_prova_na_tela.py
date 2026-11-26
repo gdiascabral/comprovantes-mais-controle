@@ -495,3 +495,46 @@ def test_rotulo_junta_sicoob_e_inter_e_a_fase_seguinte_limpa(tmp_path):
     p.q.put(("estado", "Esperando o ERP…"))
     p._drain()
     assert p.lbl.estado["text"] == "Esperando o ERP…"
+
+
+def test_inter_espera_o_segundo_login_do_sicoob(tmp_path, monkeypatch):
+    """Revisão de dinheiro de 26/11/2026: no outro acesso do Sicoob a
+    pessoa digita a senha de novo; o Chrome do Inter não abre por cima."""
+    from baixar_comprovantes import inter_saldo
+    from tela_do_dia import prova_sicoob
+    abertas, visto = [], {}
+    gama = ps.ContaDaProva(10, "CONTA GAMA", ps.INTER, numero="223456789",
+                           apelido="GAMA", nomes=("EMPRESA FICTICIA",))
+    primeira = threading.Event()
+
+    def ler_com_prints(abrir, numeros, pasta, *, progresso, perguntar, **k):
+        progresso(0, 1)
+        assert primeira.wait(5)
+        assert perguntar(["12.345-6"]) is True          # vai ao 2º login
+        visto["no_login"] = list(abertas)
+        progresso(0, 1)                                  # 2º login feito
+        return {}
+
+    def ler_conta(apelido, *a, **k):
+        abertas.append(apelido)
+        if apelido == "BETA":
+            primeira.set()
+        return inter_saldo.LidoInter(saldo=D("1.00"), lido_em=AGORA)
+    monkeypatch.setattr(prova_sicoob, "ler_com_prints", ler_com_prints)
+    monkeypatch.setattr(inter_saldo, "ler_conta", ler_conta)
+    monkeypatch.setattr(m, "_saldo_do_autenticar", lambda *a: None)
+    monkeypatch.setattr(m.ProvaNaTela, "_guardar_para_o_dia", lambda self, *a: None)
+    p = _prova(_tela(tmp_path, _Anx()))
+    monkeypatch.setattr(p, "_perguntar_outro_acesso", lambda faltam: True)
+    original = p._esperar_o_login_do_sicoob
+
+    def esperar(apelido):
+        if apelido == "GAMA":
+            # O GAMA só chega aqui depois de o BETA ler; dá tempo de o Sicoob
+            # pedir o 2º login antes de o GAMA tentar abrir.
+            while not p._sicoob_no_login.is_set() and "no_login" not in visto:
+                p._parar.wait(0.01)
+        original(apelido)
+    monkeypatch.setattr(p, "_esperar_o_login_do_sicoob", esperar)
+    p._ler_bancos([ALFA, BETA, gama], tmp_path)
+    assert visto["no_login"] == ["BETA"] and abertas == ["BETA", "GAMA"]

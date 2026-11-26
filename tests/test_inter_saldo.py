@@ -483,3 +483,28 @@ def test_extra_marca_o_tempo_das_listas(tmp_path):
                             agora=lambda: None, extra=lambda p, a, e: "listas",
                             marcar=passos.append)
     assert lido.extra == "listas" and passos == ["saldo", "print", "listas"]
+
+
+def test_volta_do_extrato_sem_numero_tira_o_print_na_tela_do_extrato(tmp_path, sem_espera):
+    """Revisão de dinheiro de 26/11/2026: na volta, o corpo guardado fazia o
+    print do extrato sair da tela INICIAL (saldo sem prova no PDF)."""
+    extratos, ouvidas = [], []
+
+    class _Pagina(_PagDaTela):
+        def goto(self, url, **kw):
+            self.idas.append(url)
+            if url == m.URL_EXTRATO_COMPLETO:
+                # 1ª vez ainda sem o número; na 2ª a tela já o mostra.
+                self.texto = "Extrato" if self.idas.count(url) == 1 else TELA
+                extratos.append(_Resp(200, EXTRATO))
+            else:
+                self.texto = TELA                 # inicial: confere, sem saldo
+                ouvidas.append(_Resp(500, None))
+    pag = _Pagina(extratos=extratos)
+    lido = m._ler_na_pagina(pag, ouvidas, {"valor": ""}, "123456789",
+                            ("EMPRESA FICTICIA",), (), tmp_path / "b.png",
+                            agora=lambda: "agora", extratos=extratos,
+                            comecar_no_extrato=True)
+    assert (lido.saldo, lido.via) == (D("2500.10"), "extrato")
+    assert pag.idas == [m.URL_EXTRATO_COMPLETO, ib.URL_LOGIN, m.URL_EXTRATO_COMPLETO]
+    assert pag.texto == TELA and pag.fotos       # o print é o da tela do extrato

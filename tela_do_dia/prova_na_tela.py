@@ -256,6 +256,15 @@ class ProvaNaTela:
         do_inter = [c for c in contas
                     if c.banco == ps.INTER and not c.motivo and c.apelido]
         fio = {"t": None}
+        #: Ligado enquanto o Sicoob espera o 2º login (outro acesso): o Inter
+        #: não abre a janela do QR seguinte por cima de quem digita a senha.
+        self._sicoob_no_login = threading.Event()
+
+        def perguntar(faltam):
+            sim = self._perguntar_outro_acesso(faltam)
+            if sim:
+                self._sicoob_no_login.set()
+            return sim
 
         def comecar_inter():
             if fio["t"] is None and do_inter:
@@ -265,6 +274,7 @@ class ProvaNaTela:
                 fio["t"].start()
 
         def progresso(feitas, total):
+            self._sicoob_no_login.clear()
             comecar_inter()
             self._progresso_sicoob(feitas, total)
 
@@ -279,7 +289,7 @@ class ProvaNaTela:
                 try:
                     sicoob = prova_sicoob.ler_com_prints(
                         lambda: SicoobClient(log=self._registrar_sicoob), numeros, pasta,
-                        perguntar=self._perguntar_outro_acesso, parar=self._parar.is_set,
+                        perguntar=perguntar, parar=self._parar.is_set,
                         log=self._registrar_sicoob,
                         progresso=progresso)
                 except Exception as e:                       # noqa: BLE001
@@ -287,6 +297,7 @@ class ProvaNaTela:
                     sicoob = {ps.digitos(n): ps.Leitura(None, motivo=motivo)
                               for n in numeros}
         finally:
+            self._sicoob_no_login.clear()
             comecar_inter()
             if fio["t"] is not None:
                 if fio["t"].is_alive():
@@ -294,6 +305,15 @@ class ProvaNaTela:
                 fio["t"].join()
         self._guardar_para_o_dia(contas, sicoob, inter)
         return ps.banco_por_linha(contas, sicoob, inter)
+
+    def _esperar_o_login_do_sicoob(self, apelido) -> None:
+        """Sicoob no 2º login: o Chrome do Inter espera (Parar corta)."""
+        ev = getattr(self, "_sicoob_no_login", None)
+        if ev is None or not ev.is_set():
+            return
+        self.q.put(("estado_inter", f"Inter {apelido}: espero o login do Sicoob…"))
+        while ev.is_set() and not self._parar.is_set():
+            self._parar.wait(0.2)
 
     def _ler_inter(self, contas, pasta, inter: dict) -> None:
         """Thread `prova-inter`: uma conta por vez, cada uma com o seu QR.
@@ -312,6 +332,10 @@ class ProvaNaTela:
                     inter[chave] = do_dia
                     self.q.put(("log", f"  Inter {c.apelido}: saldo lido pelo Autenticar no "
                                        f"banco às {do_dia.lido_em:%H:%M} (sem novo QR)"))
+                    continue
+                self._esperar_o_login_do_sicoob(c.apelido)
+                if self._parar.is_set():
+                    inter[chave] = ps.Leitura(None, motivo=ps.INTERROMPIDA)
                     continue
                 from baixar_comprovantes import inter_saldo
                 self.q.put(("estado_inter", f"Inter: abrindo a conta {c.apelido}…"))

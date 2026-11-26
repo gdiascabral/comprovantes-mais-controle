@@ -566,6 +566,10 @@ def _ler_na_pagina(page, ouvidas, autorizacao, numero_esperado, nomes, razoes,
             marcar("print")
             return _com_extra(page, autorizacao, extrato, extra, marcar,
                               LidoInter(saldo, lido_em, "", imagem, sem_imagem, VIA_EXTRATO))
+        # Volta pelo caminho de sempre INTEIRO: sem o corpo guardado, o
+        # extrato é aberto de novo quando precisar (e o print do extrato é
+        # tirado NA tela do extrato — revisão de dinheiro de 26/11/2026).
+        guardado.clear()
         ouvidas.clear()
         _abrir(page, ib.URL_LOGIN)
 
