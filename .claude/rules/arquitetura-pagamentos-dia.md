@@ -1102,3 +1102,28 @@ paths:
   CONTEÚDO do arquivo (`papel`, sha256), não pelo id do ERP, e a frase manda
   conferir se nenhum outro lançamento usa o papel (um já pago ou uma
   duplicata somariam igual).
+- **Segunda leva de 26/11/2026** (`tests/test_nota_a_mao_e_papel_confirmado.py`).
+  (1) **Nota à mão lida por OCR não diz "VALOR DIVERGE"**: o `_valor_unico_diferente`
+  só olha anexos com camada de texto (`conferir_documento(textos_sem_ocr=)`). O
+  OCR de nota escrita à mão pega um pedaço — o 966,00 de uma linha do meio, um
+  rabisco virando "4,42" — e o alarme saía falso (dono: "tem que olhar o valor
+  total"); a nota segue "valor ?" e vai à IA. (2) **Papel dividido CONFIRMADO
+  vira "Pode pagar"** (dono: "tem que fazer o app conferir, e se bater, colocar
+  como pode pagar"): a soma dos lançamentos fecha com o total do papel COM
+  segunda prova (`li.BATE`), a OC escrita no papel é a do lançamento ("OC x ✓")
+  e nenhum lançamento JÁ PAGO do período tem a mesma OC
+  (`anotar_papeis(ocs_pagas=)`, das `leitura.lancamentos` pagas) →
+  `ia["dividido_confirmado"]` e o `nivel` não põe o motivo da IA; os outros
+  motivos da linha continuam valendo. Sem qualquer das três, segue em "Olhe".
+  **Revisão de dinheiro do mesmo dia**: (a) o alarme do OCR não some — valor
+  único diferente lido SÓ por OCR vira a peça "valor ? (OCR leu só R$ x — confira
+  o total no anexo)" e o status `STATUS_OCR_DIFERENTE` (não APTO: desmarcada na
+  remessa, "Olhe"/"Não li" no HTML), salvo quando a IA leu o total do mesmo
+  papel e deu `li.BATE`; (b) o papel só se confirma quando os lançamentos LIDOS
+  com a OC do papel (pagos e a pagar, qualquer conta — `ids_por_oc` em
+  `leitura_do_dia`) são EXATAMENTE o grupo (`papel_confirmavel`), e nunca com
+  algum lançamento do período sem detalhe lido (`oc_incerta`: na aba PF nada
+  se confirma). **Em aberto, decisão do dono**: um lançamento da mesma OC pago
+  FORA do período lido não é visto (o `purchaseOrder` do detalhe traz só id e
+  número, sem o total da OC); e uma duplicata lançada SEM OC não entra no
+  conjunto.
