@@ -144,7 +144,7 @@ def _sicoob_do_painel(monkeypatch, *contas):
     monkeypatch.setattr(ps.ss, "contas_do_painel", do_painel)
 
 
-def test_contas_da_prova_so_sicoob_e_inter_com_o_que_cada_uma_precisa(monkeypatch):
+def test_contas_da_prova_sicoob_inter_e_caixa_com_o_que_cada_uma_precisa(monkeypatch):
     linhas, contas_erp, mapa, mapa_mc, empresas = _cenario()
     _sicoob_do_painel(monkeypatch, ss.ContaDoPainel("ALFA SICOOB", numero="12.345-6"),
                       ss.ContaDoPainel("BETA INTER"), ss.ContaDoPainel("GAMA CAIXA"),
@@ -156,6 +156,8 @@ def test_contas_da_prova_so_sicoob_e_inter_com_o_que_cada_uma_precisa(monkeypatc
         ps.ContaDaProva(9, "BETA INTER", ps.INTER, numero="1234567", apelido="BETA",
                         nomes=("EMPRESA BETA", "EMPRESA BETA FICTICIA LTDA"),
                         razoes=("EMPRESA BETA FICTICIA LTDA",), erp_id="u-9"),
+        ps.ContaDaProva(10, "GAMA CAIXA", ps.CAIXA, erp_id="u-10",
+                        motivo=ps.CAIXA_SEM_CNPJ),
         ps.ContaDaProva(11, "DELTA INTER", ps.INTER, nomes=("EMPRESA DELTA",),
                         erp_id="u-11", motivo=ps.INTER_FORA_DA_LISTA)]
 
@@ -184,7 +186,8 @@ def test_duas_linhas_no_mesmo_login_do_inter_nao_sao_lidas(monkeypatch):
     _sicoob_do_painel(monkeypatch)
     contas = ps.contas_da_prova(linhas, contas_erp, mapa, mapa_mc, empresas,
                                 [ContaInter("BETA", "EMPRESA BETA")])
-    assert [c.motivo for c in contas] == [ps.INTER_REPETIDA.format(apelido="BETA")] * 2
+    assert [c.motivo for c in contas if c.banco == ps.INTER] == [
+        ps.INTER_REPETIDA.format(apelido="BETA")] * 2
 
 
 def test_sicoob_casa_pela_linha_e_nao_pelo_rotulo(monkeypatch):
@@ -205,3 +208,61 @@ def test_sicoob_casa_pela_linha_e_nao_pelo_rotulo(monkeypatch):
 def test_e_inter():
     assert ps.e_inter("077") and ps.e_inter("77") and ps.e_inter("Banco Inter")
     assert not ps.e_inter("SICOOB") and not ps.e_inter("756") and not ps.e_inter("")
+
+
+def test_caixa_entra_pelo_cnpj_da_empresa(monkeypatch):
+    linhas, contas_erp, mapa, mapa_mc, empresas = _cenario()
+    empresas = [*empresas, NS(nome="GAMA", cnpj="11.222.333/0001-81")]
+    _sicoob_do_painel(monkeypatch)
+    [gama] = [c for c in ps.contas_da_prova(linhas, contas_erp, mapa, mapa_mc, empresas, [])
+              if c.banco == ps.CAIXA]
+    assert gama == ps.ContaDaProva(10, "GAMA CAIXA", ps.CAIXA, erp_id="u-10",
+                                   documento="11222333000181")
+
+
+def test_caixa_duas_linhas_no_mesmo_cnpj_nao_sao_lidas(monkeypatch):
+    linhas, contas_erp, mapa, mapa_mc, empresas = _cenario()
+    empresas = [*empresas, NS(nome="GAMA", cnpj="11222333000181")]
+    mapa_mc.destinos["DELTA INTER"] = NS(banco="104", empresa="GAMA")
+    _sicoob_do_painel(monkeypatch)
+    caixa = [c for c in ps.contas_da_prova(linhas, contas_erp, mapa, mapa_mc, empresas, [])
+             if c.banco == ps.CAIXA]
+    assert [c.motivo for c in caixa] == [ps.CAIXA_REPETIDA] * 2
+
+
+def test_caixa_conta_de_aplicacao_nao_e_lida(monkeypatch):
+    nome = "APLICAÇÃO FUNDO - GAMA CAIXA"
+    mapa = _Mapa([ModelRow(10, "APLICACAO GAMA", erp_name=nome)])
+    erp = [ErpAccount("u-10", nome, balance=D("3"))]
+    mapa_mc = _MapaMc({nome: NS(banco="CAIXA", empresa="GAMA")})
+    empresas = [NS(nome="GAMA", cnpj="11222333000181")]
+    _sicoob_do_painel(monkeypatch)
+    [aplic] = ps.contas_da_prova(sd.montar_saldos(erp, mapa), erp, mapa, mapa_mc, empresas, [])
+    assert aplic.motivo == ps.CAIXA_APLICACAO and aplic.documento == ""
+
+
+def test_banco_por_linha_casa_caixa_pelo_cnpj():
+    gama = ps.ContaDaProva(10, "GAMA", ps.CAIXA, documento="11222333000181")
+    lidas = ps.banco_por_linha([ALFA, gama], {}, {}, {"11222333000181": _l("7.00")})
+    assert lidas == {10: _l("7.00")}
+
+
+def test_e_caixa():
+    assert ps.e_caixa("CAIXA") and ps.e_caixa("104") and ps.e_caixa("0104")
+    assert ps.e_caixa("Caixa Econômica Federal") and ps.e_caixa("CEF")
+    assert not ps.e_caixa("AJUSTE DE CAIXA") and not ps.e_caixa("SICOOB")
+    assert not ps.e_caixa("")
+
+
+def test_caixa_de_aplicacao_pela_pasta_do_cadastro_e_numero_do_erp(monkeypatch):
+    mapa = _Mapa([ModelRow(10, "FUNDO GAMA", erp_name="FUNDO GAMA")])
+    erp = [ErpAccount("u-10", "FUNDO GAMA", balance=D("3"))]
+    mapa_mc = _MapaMc({"FUNDO GAMA": NS(banco="CAIXA", empresa="GAMA", pasta="CAIXA/APLICAÇÃO")})
+    empresas = [NS(nome="GAMA", cnpj="11222333000181")]
+    _sicoob_do_painel(monkeypatch)
+    [fundo] = ps.contas_da_prova(sd.montar_saldos(erp, mapa), erp, mapa, mapa_mc, empresas, [])
+    assert fundo.motivo == ps.CAIXA_APLICACAO
+    erp = [ErpAccount("u-10", "FUNDO GAMA", account_number="12345-6", balance=D("3"))]
+    mapa_mc.destinos["FUNDO GAMA"] = NS(banco="CAIXA", empresa="GAMA", pasta="CAIXA")
+    [cc] = ps.contas_da_prova(sd.montar_saldos(erp, mapa), erp, mapa, mapa_mc, empresas, [])
+    assert (cc.motivo, cc.numero, cc.documento) == ("", "123456", "11222333000181")

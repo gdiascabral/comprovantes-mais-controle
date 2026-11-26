@@ -186,3 +186,14 @@ def test_exe_sem_freetype_cai_na_fonte_padrao(tmp_path, monkeypatch):
     destino = tmp_path / "sem-freetype.pdf"
     pdf.gerar(_linhas(tmp_path), AGORA, destino)
     assert destino.read_bytes()[:4] == b"%PDF"
+
+
+def test_caixa_leva_a_nota_do_quadro_na_pagina_da_conta():
+    conta = ps.ContaDaProva(3, "CONTA GAMA", ps.CAIXA, documento="11222333000181")
+    banco = ps.Leitura(D("0.00"), AGORA, nota="o quadro do banco mostra R$ 5,00")
+    linha = ps.comparar(conta, ps.Leitura(D("0.00"), AGORA), banco)
+    assert pdf.textos_da_conta(linha) == [
+        "CONTA GAMA — BATE",
+        "ERP (Mais Controle): R$ 0,00 · lido às 14:05",
+        "Banco (Caixa): R$ 0,00 · lido às 14:05",
+        "o quadro do banco mostra R$ 5,00"]

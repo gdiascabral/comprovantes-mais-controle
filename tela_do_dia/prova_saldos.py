@@ -15,6 +15,13 @@ caminho do "Reler Sicoob" e da Remessa). Qual login do Inter é cada linha sai
 do cadastro (`contas_mc` diz o banco e a empresa da conta do ERP) cruzado com
 `contas_inter.json`: a empresa com UM login é lida; sem login ou com dois, a
 linha entra como ⚠ e o banco não é aberto.
+
+Caixa (26/11/2026): a empresa da conta (`contas_mc`) dá o CNPJ do cadastro
+(`contas_sicoob.json`), e é por ele que `saldo_caixa` acha a conta no login do
+Gerenciador CAIXA (um login vê as contas das três empresas); o número que o
+ERP tiver da conta também tem de bater. Sem CNPJ, conta de APLICAÇÃO (pelo
+nome ou pela pasta do `contas_mc`) ou duas linhas no mesmo CNPJ: ⚠ sem abrir
+o banco.
 """
 from __future__ import annotations
 
@@ -32,6 +39,8 @@ from .valores import brl
 
 SICOOB = "SICOOB"
 INTER = "INTER"
+CAIXA = "CAIXA"
+NOME_DO_BANCO = {SICOOB: "Sicoob", INTER: "Inter", CAIXA: "Caixa"}
 BATE, NAO_BATE, NAO_LIDA = "bate", "nao_bate", "nao_lida"
 MARCA = {BATE: "✅", NAO_BATE: "❌", NAO_LIDA: "⚠"}
 PALAVRA = {BATE: "bate", NAO_BATE: "não bate", NAO_LIDA: "não lida"}
@@ -47,10 +56,24 @@ INTER_DOIS_LOGINS = ("a empresa tem mais de uma conta do Inter na lista do "
                      "app — não sei qual login abrir")
 INTER_REPETIDA = ("duas linhas do painel caem no mesmo login do Inter "
                   "({apelido}) — confira o cadastro de contas")
+CAIXA_SEM_CNPJ = ("a empresa desta conta da Caixa não tem CNPJ no cadastro "
+                  "(contas_sicoob.json) — não sei qual conta do banco é")
+CAIXA_APLICACAO = ("conta de aplicação: a prova da Caixa lê só a conta "
+                   "corrente — confira o fundo no extrato")
+CAIXA_REPETIDA = ("duas linhas do painel caem na mesma empresa da Caixa "
+                  "— confira o cadastro de contas")
 
 
 def digitos(texto) -> str:
     return re.sub(r"\D", "", str(texto or ""))
+
+
+def e_caixa(banco) -> bool:
+    """"CAIXA", "Caixa Econômica Federal", "104", "CEF". Nunca "AJUSTE DE
+    CAIXA": a palavra tem de ser o banco, não um pedaço do nome da conta."""
+    t = util.norm_espaco(banco or "")
+    return (t in ("CAIXA", "CEF") or t.startswith("CAIXA ECONOMICA")
+            or (bool(t) and t.lstrip("0") == "104"))
 
 
 def chave_inter(apelido) -> str:
@@ -67,7 +90,7 @@ def e_inter(banco) -> bool:
 class ContaDaProva:
     linha: int
     rotulo: str
-    banco: str                       # SICOOB | INTER
+    banco: str                       # SICOOB | INTER | CAIXA
     #: Sicoob: como o cadastro escreve ("12.345-6"). Inter: os dígitos que o
     #: ERP tem da conta ("" = o ERP não diz; aí só o nome confere).
     numero: str = ""
@@ -78,6 +101,7 @@ class ContaDaProva:
     razoes: tuple[str, ...] = ()
     erp_id: str = ""                 # UUID da conta no ERP (linha da grade)
     motivo: str = ""                 # não dá para provar: ⚠ sem abrir o banco
+    documento: str = ""              # Caixa: o CNPJ (só dígitos) da empresa
 
 
 @dataclass(frozen=True)
@@ -87,6 +111,9 @@ class Leitura:
     motivo: str = ""
     imagem: Path | None = None
     sem_imagem: str = ""             # por que não há print
+    #: O que mais o banco mostra e ajuda a ler o print (Caixa: o quadro traz a
+    #: conta + a aplicação automática; o saldo comparado é só o da conta).
+    nota: str = ""
 
 
 @dataclass(frozen=True)
@@ -137,6 +164,11 @@ def contas_da_prova(linhas, contas_erp, mapping, mapa_mc, empresas,
         nome = (getattr(erp, "name", "") or (row.erp_name if row else "")
                 or ln.rotulo)
         destino = mapa_mc.de(nome) if mapa_mc is not None else None
+        if destino is not None and e_caixa(destino.banco):
+            numero_erp = digitos(getattr(erp, "account_number", "")
+                                 or (row.account_number if row else ""))
+            saida.append(_conta_caixa(ln, nome, destino, empresas, erp_id, numero_erp))
+            continue
         if destino is None or not e_inter(destino.banco):
             continue
         numero = digitos(getattr(erp, "account_number", "")
@@ -161,21 +193,49 @@ def contas_da_prova(linhas, contas_erp, mapping, mapa_mc, empresas,
                                   erp_id=erp_id, motivo=motivo))
     vezes = Counter(chave_inter(c.apelido) for c in saida
                     if c.banco == INTER and c.apelido and not c.motivo)
-    return [replace(c, motivo=INTER_REPETIDA.format(apelido=c.apelido))
-            if c.banco == INTER and c.apelido and not c.motivo
-            and vezes[chave_inter(c.apelido)] > 1 else c
+    na_caixa = Counter(c.documento for c in saida
+                       if c.banco == CAIXA and c.documento and not c.motivo)
+    saida = [replace(c, motivo=INTER_REPETIDA.format(apelido=c.apelido))
+             if c.banco == INTER and c.apelido and not c.motivo
+             and vezes[chave_inter(c.apelido)] > 1 else c
+             for c in saida]
+    return [replace(c, motivo=CAIXA_REPETIDA)
+            if c.banco == CAIXA and c.documento and not c.motivo
+            and na_caixa[c.documento] > 1 else c
             for c in saida]
 
 
-def banco_por_linha(contas, sicoob: dict, inter: dict) -> dict:
+def _conta_caixa(ln, nome, destino, empresas, erp_id, numero="") -> ContaDaProva:
+    empresa = util.norm_espaco(destino.empresa)
+    cnpjs = {digitos(getattr(e, "cnpj", "")) for e in empresas or []
+             if util.norm_espaco(getattr(e, "nome", "")) == empresa}
+    cnpjs.discard("")
+    documento = next(iter(cnpjs)) if len(cnpjs) == 1 else ""
+    if ("APLICA" in util.norm_espaco(nome)
+            or "APLICA" in util.norm_espaco(getattr(destino, "pasta", ""))):
+        motivo = CAIXA_APLICACAO
+    elif not documento:
+        motivo = CAIXA_SEM_CNPJ
+    else:
+        motivo = ""
+    return ContaDaProva(ln.linha, ln.rotulo, CAIXA, numero=numero, erp_id=erp_id,
+                        motivo=motivo, documento=documento if not motivo else "")
+
+
+def banco_por_linha(contas, sicoob: dict, inter: dict, caixa: dict | None = None) -> dict:
     """{linha: Leitura do banco}. Sicoob por `digitos(numero)`, Inter por
-    `chave_inter(apelido)`. Conta com motivo não tem leitura."""
+    `chave_inter(apelido)`, Caixa pelo CNPJ (`documento`). Conta com motivo
+    não tem leitura."""
     saida = {}
     for c in contas:
         if c.motivo:
             continue
-        lida = (sicoob.get(digitos(c.numero)) if c.banco == SICOOB
-                else inter.get(chave_inter(c.apelido)))
+        if c.banco == SICOOB:
+            lida = sicoob.get(digitos(c.numero))
+        elif c.banco == CAIXA:
+            lida = (caixa or {}).get(c.documento)
+        else:
+            lida = inter.get(chave_inter(c.apelido))
         if lida is not None:
             saida[c.linha] = lida
     return saida

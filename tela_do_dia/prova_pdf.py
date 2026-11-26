@@ -136,10 +136,12 @@ def legenda(lado: str, leitura) -> str:
 
 
 def textos_da_conta(linha) -> list:
-    banco = "Sicoob" if linha.conta.banco == ps.SICOOB else "Inter"
+    banco = ps.NOME_DO_BANCO.get(linha.conta.banco, linha.conta.banco.title())
     textos = [f"{linha.conta.rotulo} — {ps.PALAVRA[linha.situacao].upper()}",
               legenda("ERP (Mais Controle)", linha.erp),
               legenda(f"Banco ({banco})", linha.banco)]
+    if getattr(linha.banco, "nota", ""):
+        textos.append(linha.banco.nota)
     if linha.motivo:
         textos.append(linha.motivo)
     return textos
