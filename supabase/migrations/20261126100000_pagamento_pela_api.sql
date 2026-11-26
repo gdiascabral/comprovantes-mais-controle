@@ -176,6 +176,9 @@ begin
   if l.preparado_por is distinct from (select auth.uid()) then
     raise exception 'só quem preparou o lote acrescenta itens';
   end if;
+  if l.dia <> privado.hoje() then
+    raise exception 'lote não é de hoje';
+  end if;
   if exists (select 1 from public.lote_aprovacao a where a.lote = new.lote)
      or exists (select 1 from public.lote_cancelado c where c.lote = new.lote) then
     raise exception 'lote já aprovado ou cancelado';
@@ -183,8 +186,10 @@ begin
   -- Dois lotes ao mesmo tempo com o mesmo título: um de cada vez.
   perform pg_advisory_xact_lock(hashtextextended('lote_item:' || new.titulo, 0));
   -- O título bloqueia enquanto estiver num lote não cancelado, sem ter sido
-  -- retirado na aprovação e sem ter terminado em nao_pago: de hoje, ou de
-  -- qualquer dia quando aquele lote foi aprovado (pode ter sido pago).
+  -- retirado na aprovação e sem ter terminado em nao_pago ANTES de iniciar: de
+  -- hoje, ou de qualquer dia quando aquele lote foi aprovado (pode ter sido
+  -- pago). Item que chegou a INICIAR nunca libera o título pela API, mesmo que
+  -- termine nao_pago: o banco não confia que o robô acertou (vai pelo HTML).
   if exists (
     select 1 from public.lote_item i
     join public.lote_pagamento p on p.id = i.lote
@@ -192,9 +197,11 @@ begin
     where i.titulo = new.titulo and i.lote <> new.lote
       and not exists (select 1 from public.lote_cancelado c where c.lote = i.lote)
       and (a.lote is null or i.ordem = any (a.itens))
-      and coalesce((select e.estado from public.lote_evento e
-                    where e.lote = i.lote and e.ordem = i.ordem
-                    order by e.id desc limit 1), '') <> 'nao_pago'
+      and (coalesce((select e.estado from public.lote_evento e
+                     where e.lote = i.lote and e.ordem = i.ordem
+                     order by e.id desc limit 1), '') <> 'nao_pago'
+           or exists (select 1 from public.lote_evento e
+                      where e.lote = i.lote and e.ordem = i.ordem and e.estado = 'iniciado'))
       and (p.dia = l.dia or a.lote is not null)
   ) then
     raise exception 'título % já está em outro lote de hoje', new.titulo;

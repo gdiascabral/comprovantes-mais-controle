@@ -70,3 +70,9 @@ def test_funcao_security_definer_tem_search_path_vazio():
 def test_um_iniciado_por_item_no_banco():
     assert ("create unique index if not exists lote_evento_um_iniciado on public.lote_evento "
             "(lote, ordem) where estado = 'iniciado'") in _texto()
+
+
+def test_item_que_iniciou_nunca_libera_o_titulo_e_lote_velho_recusa_item():
+    t = _texto()
+    assert "e.lote = i.lote and e.ordem = i.ordem and e.estado = 'iniciado'" in t
+    assert t.count("raise exception 'lote não é de hoje'") == 2
