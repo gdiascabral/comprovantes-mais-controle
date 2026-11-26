@@ -49,7 +49,7 @@ def _achatar(d, prefixo="") -> list[tuple[str, str]]:
         if isinstance(v, dict):
             linhas += _achatar(v, chave + ".")
         elif isinstance(v, list):
-            linhas.append((chave, json.dumps(v, ensure_ascii=False)[:200]))
+            linhas.append((chave, json.dumps(v, ensure_ascii=False, default=str)[:200]))
         elif k != "comprovante":          # o base64 do convênio não vai para o texto
             linhas.append((chave, str(v)))
     return linhas

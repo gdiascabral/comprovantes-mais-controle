@@ -40,3 +40,9 @@ def test_bruto_do_convenio_volta_igual(tmp_path):
     assert cp.ler_bruto(tmp_path, item, "convenio") == {"comprovante": "QUJD", "arrecadacao": {"nsu": 1}}
     outro = lt.ItemLote(2, "T2", "T2", "C - SICOOB", lt.CONVENIO, "8" * 44, Decimal("1.00"), "F", "", "D")
     assert cp.ler_bruto(tmp_path, outro, "convenio") is None
+
+
+def test_lista_com_decimal_na_resposta_nao_derruba_o_pdf(tmp_path):
+    item = lt.ItemLote(1, "T1", "T1", "C - SICOOB", lt.BOLETO, "3" * 44, Decimal("1.00"), "F", "", "D")
+    p = cp.gerar_pdf(tmp_path, item, {"parcelas": [Decimal("1.50"), {"v": Decimal("2")}]}, date(2026, 11, 27))
+    assert "1.50" in PdfReader(str(p)).pages[0].extract_text()
