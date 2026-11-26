@@ -14,9 +14,14 @@ NÃO mexe no WhatsApp.
   robô no ERP abre PRIMEIRO (`_esperar_aba_do_erp`): o Chrome a traz para a
   frente, e no meio do login do Sicoob ela roubaria o foco;
 - bancos: `Thread` daemon `prova-saldos` — Sicoob (`prova_sicoob`, o
-  `SicoobClient` nasce e morre lá) e depois cada Inter (`inter_saldo`, um
-  Chrome e um QR por conta). No fim ela espera o ERP, monta as linhas e o
-  PDF, e põe "pronto" na fila.
+  `SicoobClient` nasce e morre lá) e, AO MESMO TEMPO, cada Inter
+  (`inter_saldo`, um Chrome e um QR por conta) na `Thread` `prova-inter`.
+  O Inter começa quando o Sicoob passa do login (o 1º `progresso`): antes,
+  a janela do QR roubaria o foco de quem digita a senha do Sicoob. Sem conta
+  do Sicoob, ou com o Sicoob falhando antes, começa na hora. Medido em
+  26/11/2026 pelas horas dos prints: o Inter esperava o Sicoob inteiro
+  (~1,5 a 2,5 min) para começar. No fim ela espera o Inter e o ERP, monta as
+  linhas e o PDF, e põe "pronto" na fila.
 
 A tela só recebe pela fila (`_drain` + `after`). "Parar" vale entre contas;
 parado, não sai PDF. **Trava**: recusa com o Chrome do Sicoob ou o Baixar
@@ -106,6 +111,8 @@ class ProvaNaTela:
         self._parar = threading.Event()
         self._aba_erp = threading.Event()
         self._pode = False
+        #: O rótulo junta o que o Sicoob e o Inter estão fazendo ao mesmo tempo.
+        self._rotulo = {"geral": "", "inter": ""}
         #: Ligado pelo app: quem mais está com o Chrome do Sicoob ou o Baixar
         #: comprovantes (que abre os perfis do Inter).
         self.outros_no_sicoob = lambda: None
@@ -181,6 +188,7 @@ class ProvaNaTela:
         self._aba_erp = threading.Event()
         self.b_prova.configure(state="disabled")
         self.b_parar.configure(state="normal")
+        self._rotulo = {"geral": "", "inter": ""}
         self.lbl.configure(text="Prova de saldos: lendo o ERP…")
         tela._log("")
         tela._log(f"{TITULO}: {len(contas)} conta(s)")
@@ -245,53 +253,62 @@ class ProvaNaTela:
         self.q.put(("estado", texto))
 
     def _ler_bancos(self, contas, pasta) -> dict:
+        """Sicoob nesta thread e Inter numa thread própria, ao mesmo tempo
+        (ver o docstring do módulo): o Inter começa no 1º `progresso` do
+        Sicoob, que só vem depois do login dele."""
         sicoob, inter = {}, {}
+        do_inter = [c for c in contas
+                    if c.banco == ps.INTER and not c.motivo and c.apelido]
+        fio = {"t": None}
+        #: Ligado enquanto o Sicoob espera o 2º login (outro acesso): o Inter
+        #: não abre a janela do QR seguinte por cima de quem digita a senha.
+        self._sicoob_no_login = threading.Event()
+
+        def perguntar(faltam):
+            sim = self._perguntar_outro_acesso(faltam)
+            if sim:
+                self._sicoob_no_login.set()
+            return sim
+
+        def comecar_inter():
+            if fio["t"] is None and do_inter:
+                fio["t"] = threading.Thread(
+                    target=self._ler_inter, args=(do_inter, pasta, inter),
+                    name="prova-inter", daemon=True)
+                fio["t"].start()
+
+        def progresso(feitas, total):
+            self._sicoob_no_login.clear()
+            comecar_inter()
+            self._progresso_sicoob(feitas, total)
+
         numeros = [c.numero for c in contas
                    if c.banco == ps.SICOOB and c.numero and not c.motivo]
-        if numeros and not self._parar.is_set():
-            self.q.put(("estado", f"Sicoob: lendo {len(numeros)} conta(s)…"))
-            from extratos_sicoob.sicoob_client import SicoobClient
+        try:
+            if numeros and not self._parar.is_set():
+                self.q.put(("estado", f"Sicoob: lendo {len(numeros)} conta(s)…"))
+                from extratos_sicoob.sicoob_client import SicoobClient
 
-            from . import prova_sicoob
-            try:
-                sicoob = prova_sicoob.ler_com_prints(
-                    lambda: SicoobClient(log=self._registrar_sicoob), numeros, pasta,
-                    perguntar=self._perguntar_outro_acesso, parar=self._parar.is_set,
-                    log=self._registrar_sicoob,
-                    progresso=self._progresso_sicoob)
-            except Exception as e:                           # noqa: BLE001
-                motivo = ss.recado_da_falha(e, "tente de novo a Prova de saldos.")
-                sicoob = {ps.digitos(n): ps.Leitura(None, motivo=motivo) for n in numeros}
-        for c in contas:
-            if c.banco != ps.INTER or c.motivo or not c.apelido:
-                continue
-            if self._parar.is_set():
-                inter[ps.chave_inter(c.apelido)] = ps.Leitura(None, motivo=ps.INTERROMPIDA)
-                continue
-            do_dia = _saldo_do_autenticar(c.apelido, c.numero)
-            if do_dia is not None:
-                inter[ps.chave_inter(c.apelido)] = do_dia
-                self.q.put(("log", f"  Inter {c.apelido}: saldo lido pelo Autenticar no "
-                                   f"banco às {do_dia.lido_em:%H:%M} (sem novo QR)"))
-                continue
-            from baixar_comprovantes import inter_saldo
-            self.q.put(("estado", f"Inter: abrindo a conta {c.apelido}…"))
-            lido = inter_saldo.ler_conta(
-                c.apelido, c.numero, c.nomes, pasta / ps.nome_do_print(c.linha, "banco"),
-                razoes=c.razoes, parar=self._parar.is_set,
-                ao_entrar=lambda apelido: self.q.put(
-                    ("estado", f"Inter {apelido}: lendo o saldo…")),
-                log=lambda msg, a=c.apelido: self.tela._log(f"  Inter {a}: {msg}"),
-                avisar_qr=lambda apelido: self.q.put(("qr", apelido)))
-            inter[ps.chave_inter(c.apelido)] = ps.Leitura(
-                lido.saldo, lido.lido_em, lido.motivo, lido.imagem, lido.sem_imagem)
-            if lido.saldo is not None:
-                self.q.put(("estado", f"Inter {c.apelido}: lido"))
-            else:
-                # QR que estourou o tempo, conta errada, sessão vencida: a
-                # tela diz na hora, e não só no PDF do fim.
-                self.q.put(("estado", f"Inter {c.apelido}: não lido"))
-                self.q.put(("log", f"  ⚠ Inter {c.apelido}: {lido.motivo}"))
+                from . import prova_sicoob
+                try:
+                    sicoob = prova_sicoob.ler_com_prints(
+                        lambda: SicoobClient(log=self._registrar_sicoob), numeros, pasta,
+                        perguntar=perguntar, parar=self._parar.is_set,
+                        log=self._registrar_sicoob,
+                        progresso=progresso)
+                except Exception as e:                       # noqa: BLE001
+                    motivo = ss.recado_da_falha(e, "tente de novo a Prova de saldos.")
+                    sicoob = {ps.digitos(n): ps.Leitura(None, motivo=motivo)
+                              for n in numeros}
+        finally:
+            self._sicoob_no_login.clear()
+            comecar_inter()
+            if fio["t"] is not None:
+                if fio["t"].is_alive():
+                    self.q.put(("estado", "Sicoob pronto; esperando o Inter…"))
+                fio["t"].join()
+        # A Caixa depois dos dois: o login dela não disputa a tela com o QR do
+        # Inter nem com o 2º login do Sicoob.
         caixa = self._ler_caixa(contas, pasta)
         self._guardar_para_o_dia(contas, sicoob, inter)
         return ps.banco_por_linha(contas, sicoob, inter, caixa)
@@ -317,6 +334,65 @@ class ProvaNaTela:
                                     if lida.saldo is None):
             self.q.put(("log", f"  ⚠ Caixa: {motivo}"))
         return lidas
+
+    def _esperar_o_login_do_sicoob(self, apelido) -> None:
+        """Sicoob no 2º login: o Chrome do Inter espera (Parar corta)."""
+        ev = getattr(self, "_sicoob_no_login", None)
+        if ev is None or not ev.is_set():
+            return
+        self.q.put(("estado_inter", f"Inter {apelido}: espero o login do Sicoob…"))
+        while ev.is_set() and not self._parar.is_set():
+            self._parar.wait(0.2)
+
+    def _ler_inter(self, contas, pasta, inter: dict) -> None:
+        """Thread `prova-inter`: uma conta por vez, cada uma com o seu QR.
+        Só fala com a tela pela fila; erro inesperado deixa as que faltavam
+        "não lidas" com o porquê, e nunca derruba a Prova."""
+        t0 = time.monotonic()
+        lidas = 0
+        try:
+            for c in contas:
+                chave = ps.chave_inter(c.apelido)
+                if self._parar.is_set():
+                    inter[chave] = ps.Leitura(None, motivo=ps.INTERROMPIDA)
+                    continue
+                do_dia = _saldo_do_autenticar(c.apelido, c.numero)
+                if do_dia is not None:
+                    inter[chave] = do_dia
+                    self.q.put(("log", f"  Inter {c.apelido}: saldo lido pelo Autenticar no "
+                                       f"banco às {do_dia.lido_em:%H:%M} (sem novo QR)"))
+                    continue
+                self._esperar_o_login_do_sicoob(c.apelido)
+                if self._parar.is_set():
+                    inter[chave] = ps.Leitura(None, motivo=ps.INTERROMPIDA)
+                    continue
+                from baixar_comprovantes import inter_saldo
+                self.q.put(("estado_inter", f"Inter: abrindo a conta {c.apelido}…"))
+                lido = inter_saldo.ler_conta(
+                    c.apelido, c.numero, c.nomes, pasta / ps.nome_do_print(c.linha, "banco"),
+                    razoes=c.razoes, parar=self._parar.is_set,
+                    ao_entrar=lambda apelido: self.q.put(
+                        ("estado_inter", f"Inter {apelido}: lendo o saldo…")),
+                    log=lambda msg, a=c.apelido: self.q.put(("log", f"  Inter {a}: {msg}")),
+                    avisar_qr=lambda apelido: self.q.put(("qr", apelido)))
+                inter[chave] = ps.Leitura(
+                    lido.saldo, lido.lido_em, lido.motivo, lido.imagem, lido.sem_imagem)
+                lidas += 1
+                if lido.saldo is not None:
+                    self.q.put(("estado_inter", f"Inter {c.apelido}: lido"))
+                else:
+                    # QR que estourou o tempo, conta errada, sessão vencida: a
+                    # tela diz na hora, e não só no PDF do fim.
+                    self.q.put(("estado_inter", f"Inter {c.apelido}: não lido"))
+                    self.q.put(("log", f"  ⚠ Inter {c.apelido}: {lido.motivo}"))
+        except Exception as e:                               # noqa: BLE001
+            motivo = f"erro inesperado no Inter: {type(e).__name__}: {e}"[:200]
+            for c in contas:
+                inter.setdefault(ps.chave_inter(c.apelido), ps.Leitura(None, motivo=motivo))
+            self.q.put(("log", f"  ⚠ {motivo}"))
+        if lidas:
+            seg = f"{time.monotonic() - t0:.0f}"
+            self.q.put(("log", f"  Inter: {lidas} conta(s) em {seg} s"))
 
     def _guardar_para_o_dia(self, contas, sicoob, inter):
         """Dono, 16/11/2026: o saldo da Prova já fica para o Pagamentos do
@@ -383,9 +459,11 @@ class ProvaNaTela:
                     finally:
                         caixa["ev"].set()
                 elif tipo == "estado":
-                    self.lbl.configure(text=valor)
+                    self._mostrar(geral=valor)
+                elif tipo == "estado_inter":
+                    self._mostrar(inter=valor)
                 elif tipo == "qr":
-                    self.lbl.configure(text=f"Leia o QR da {valor} no Chrome do Inter")
+                    self._mostrar(inter=f"Leia o QR da {valor} no Chrome do Inter")
                     self.tela._log(f"  Inter: leia o QR da {valor}")
                 elif tipo == "log":
                     self.tela._log(valor)
@@ -406,6 +484,15 @@ class ProvaNaTela:
             self.tela._log(f"[!] falha ao mostrar a prova de saldos: {e!r}")
         finally:
             self.barra.after(200, self._drain)
+
+    def _mostrar(self, **partes):
+        """O rótulo com o Sicoob e o Inter juntos enquanto os dois rodam.
+        Fase que não é de banco (ERP, PDF) apaga o pedaço do Inter."""
+        rot = self.__dict__.setdefault("_rotulo", {"geral": "", "inter": ""})
+        rot.update(partes)
+        if "geral" in partes and not str(partes["geral"]).startswith("Sicoob"):
+            rot["inter"] = ""
+        self.lbl.configure(text="  ·  ".join(t for t in (rot["geral"], rot["inter"]) if t))
 
     def _abrir_com_o_pdf(self, pdf):
         """Abre a pasta com o PDF já selecionado, pronto para arrastar ao
