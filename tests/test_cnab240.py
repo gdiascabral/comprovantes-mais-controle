@@ -1167,3 +1167,44 @@ def test_chave_cpf_cnpj_em_texto_livre_nao_vira_numero_torto():
     )
     b = [l for l in arquivo.gerar() if l[13] == "B"][0]
     assert b[127:226].strip() == "12345678909"
+
+
+def test_pix_por_telefone_leva_mais_55_e_so_digitos():
+    """27/11/2026: a chave telefone ia como o cadastro escreve ("62 9XXXX-XXXX").
+    O Pix guarda a chave telefone como "+55" + DDD + número (G102)."""
+    for escrita in ("62 99999-0000", "62999990000", "+55 (62) 99999-0000", "5562999990000"):
+        arquivo = ArquivoRemessa(empresa(), nsa=5, data_geracao=HOJE)
+        arquivo.novo_lote("PIX_TRANSFERENCIA").adicionar(
+            PixTransferencia(
+                valor="10.00", data_pagamento=HOJE, favorecido=favorecido(),
+                forma_iniciacao=FormaIniciacaoPix.CHAVE_TELEFONE, chave=escrita,
+            )
+        )
+        linhas = arquivo.gerar()
+        b = [l for l in linhas if l[13] == "B"][0]
+        assert b[14:17] == "01 "
+        assert b[127:226].strip() == "+5562999990000", escrita
+        assert validar(linhas) == []
+
+
+def test_ddd_55_do_rs_so_passa_com_o_mais_55_escrito():
+    """Revisão de dinheiro: "+55 9XXXX-XXXX" sem DDD chega à remessa como
+    "55 9XXXX-XXXX" (a extração perde o "+") — seria um celular do RS."""
+    from cnab240.dominios import chave_telefone_pix
+    assert chave_telefone_pix("+55 55 99999-0000") == "+5555999990000"
+    with pytest.raises(ValueError):
+        chave_telefone_pix("55 99999-0000")
+
+
+def test_pix_por_telefone_ilegivel_nao_vai_para_o_banco():
+    """Fixo, celular sem o 9, DDD que não existe, DDD escrito depois do
+    número: nenhum vira chave (um número bem formado de outra pessoa é o pior
+    erro aqui)."""
+    for ruim in ("999", "062999990000", "12345678901234", "(62) 3333-0000",
+                 "62 9999-0000", "(20) 99999-0000", "999990000 62", "6299 999 0000",
+                 "+55 999990000 62", "55 999990000 62"):
+        with pytest.raises(ValueError, match="telefone ilegível"):
+            PixTransferencia(
+                valor="10", data_pagamento=HOJE, favorecido=favorecido(),
+                forma_iniciacao=FormaIniciacaoPix.CHAVE_TELEFONE, chave=ruim,
+            )

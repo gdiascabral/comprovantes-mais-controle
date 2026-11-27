@@ -18,6 +18,7 @@ from .dominios import (
     TipoContaDestino,
     TipoIdentificacaoContribuinte,
     TipoInscricao,
+    chave_telefone_pix,
     so_inscricao,
 )
 
@@ -294,6 +295,9 @@ class PixTransferencia(_PagamentoBase):
             raise ValueError(
                 f"forma de iniciação {self.forma_iniciacao.name} exige a chave Pix"
             )
+        if self.forma_iniciacao is FormaIniciacaoPix.CHAVE_TELEFONE:
+            # "+55" + DDD + número (formato da chave no Pix; G102), 27/11/2026.
+            self.chave = chave_telefone_pix(self.chave)
         if self.forma_iniciacao is FormaIniciacaoPix.DADOS_BANCARIOS and not self.favorecido.conta:
             raise ValueError("forma de iniciação DADOS_BANCARIOS exige conta do favorecido")
 

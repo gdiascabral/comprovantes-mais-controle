@@ -36,6 +36,17 @@ paths:
   Um achado dessa validação: o guia OMITE a forma de iniciação `03` (CPF/CNPJ)
   na descrição da Informação 12 do segmento B, e o banco recusa o campo em
   branco. Manual incompleto; a correção está comentada em `remessa.py`.
+  **Chave Pix telefone sai "+55" + DDD + número** (27/11/2026,
+  `dominios.chave_telefone_pix`, aplicada no `PixTransferencia`): até ali ia
+  como o cadastro escreve ("62 9XXXX-XXXX"), e nenhuma das 39 linhas de
+  telefone enviadas de 17/08 a 02/10 tinha retorno do banco que provasse o
+  formato. O G102 exige "+55" no J-52 e o Pix guarda a chave assim. Só sai celular:
+  11 dígitos, DDD do Brasil (`DDDS`, que mora aqui) e o 9; "55" do país só com
+  13 dígitos; o primeiro grupo de dígitos do texto tem de ser o DDD, o país ou
+  o número inteiro; DDD 55 sem o "+55" escrito é recusado (podia ser o "+55"
+  sem DDD). A que não passa é impedida no `remessa_dia`
+  (`MOTIVO_TELEFONE_ILEGIVEL`), não no meio da geração. **Ainda não validado
+  contra o banco**: a primeira remessa com chave telefone confere.
   **Existe UMA cópia deste pacote, e é esta.** Até 02/09/2026 havia uma
   segunda, no repositório das automações avulsas (`fontes/cnab240`), com CLI e
   testes próprios. Ela parou em 14/08 e nunca soube que `dv_cpf`, `dv_cnpj` e

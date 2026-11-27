@@ -1823,3 +1823,21 @@ def test_linha_sem_valor_embutido_devolve_none():
     assert ocr_boleto.valor_embutido(LINHA_ZERADA) is None
     assert ocr_boleto.valor_embutido(ARRECADACAO_REFERENCIA) is None
     assert ocr_boleto.valor_embutido("123") is None
+
+
+def test_celular_ilegivel_fica_de_fora_com_motivo_em_vez_de_derrubar_o_arquivo():
+    """27/11/2026: a chave telefone sai "+55" + DDD + número; a que não se lê
+    assim é impedida na conferência, não no meio da geração."""
+    preparado = remessa_dia.preparar(
+        {CONTA: [registro(tipo="Pix", dados="PIX CELULAR 629999912340000")]},
+        participantes=CADASTRO, quando=HOJE)
+    c, = preparado[CONTA]
+    assert c.impedimento == remessa_dia.MOTIVO_TELEFONE_ILEGIVEL
+
+
+def test_celular_com_espaco_e_hifen_continua_apto():
+    preparado = remessa_dia.preparar(
+        {CONTA: [registro(tipo="Pix", dados="PIX CELULAR 62 99999-1234")]},
+        participantes=CADASTRO, quando=HOJE)
+    c, = preparado[CONTA]
+    assert c.pode and c.forma_iniciacao == "01"
