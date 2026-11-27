@@ -50,7 +50,7 @@ def test_pre_marca_nao_e_resposta():
 
 def test_linha_ilegivel_tem_motivo_e_fonte_conhecida():
     t = _texto()
-    assert "check (ilegiveis = 0 or length(trim(motivo)) > 0)" in t
+    assert "check (coalesce(ilegiveis,0) = 0 or length(trim(motivo)) > 0)" in t
     assert "check (fonte in ('sicoob', 'inter', 'erp'))" in t
 
 
@@ -58,3 +58,29 @@ def test_transacao_e_recarga_do_esquema():
     t = _texto()
     assert t.startswith("begin;") and t.rstrip().endswith("commit;")
     assert "notify pgrst, 'reload schema'" in t
+
+
+def test_extrato_nao_lido_nunca_vira_zero_no_banco():
+    t = _texto()
+    ex = t.split("create table if not exists public.extrato_lido")[1].split(");")[0]
+    assert "lido boolean not null," in ex
+    for coluna in ("saidas", "entradas", "ilegiveis", "fora_do_dia"):
+        assert f"{coluna} integer," in ex           # anulável, sem default 0
+    assert "default 0" not in ex
+    assert ("constraint extrato_lido_nao_lido check ((lido and saidas is not null "
+            "and entradas is not null and ilegiveis is not null and fora_do_dia is not null) "
+            "or (not lido and saidas is null and entradas is null and ilegiveis is null "
+            "and fora_do_dia is null and length(trim(motivo)) > 0))") in t
+    assert "check (coalesce(ilegiveis,0) = 0 or length(trim(motivo)) > 0)" in t
+
+
+def test_uma_linha_por_rodada_e_indices():
+    t = _texto()
+    for ddl in (
+        "create unique index if not exists saldo_lido_uma_por_rodada on public.saldo_lido (rodada, conta, fonte);",
+        "create unique index if not exists extrato_lido_um_por_rodada on public.extrato_lido (rodada, conta, fonte, dia_extrato);",
+        "create unique index if not exists pre_marca_banco_uma_por_rodada on public.pre_marca_banco (rodada, agendado_id);",
+        "create index if not exists extrato_lido_conta_idx on public.extrato_lido (conta, fonte, dia_extrato desc);",
+    ):
+        assert ddl in t
+    assert "ignore-duplicates" not in t

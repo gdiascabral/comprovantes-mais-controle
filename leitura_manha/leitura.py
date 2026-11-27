@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Callable
 
 from pagamento_api.robo import FUSO_SP
@@ -24,6 +24,7 @@ from . import extrato as ext
 from .transporte import ErroLeitura
 
 ERP = "erp"
+SEM_NOME = "(sem nome no ERP)"   # `conta` do saldo_lido tem de ter 1 a 200 caracteres
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,11 @@ class ExtratoLido:
     ilegiveis: int = 0
     fora_do_dia: int = 0
     motivo: str = ""            # "" = lido inteiro e usado no casamento
+    lido: bool = True           # False = extrato não lido: contagens NÃO valem (NULL, nunca 0)
+
+    def __post_init__(self):
+        if not self.lido and not self.motivo:
+            raise ValueError("extrato não lido tem de ter motivo")
 
 
 @dataclass
@@ -125,7 +131,7 @@ def _uma_conta(le: LeituraDosBancos, cache: _Cache, fabrica, empresa, conta, ont
     except Exception as e:  # noqa: BLE001
         m = motivo_de(e, banco)
         le.saldos.append(SaldoLido(conta.conta_erp, conta.banco, empresa.nome, None, m, agora()))
-        le.extratos.append(ExtratoLido(conta.conta_erp, conta.banco, empresa.nome, ontem, motivo=m))
+        le.extratos.append(ExtratoLido(conta.conta_erp, conta.banco, empresa.nome, ontem, motivo=m, lido=False))
         le.falhas[conta.conta_erp] = m
         return
     try:
@@ -137,7 +143,7 @@ def _uma_conta(le: LeituraDosBancos, cache: _Cache, fabrica, empresa, conta, ont
         x = do_extrato(ler_extrato(), conta.conta_erp, ontem)
     except Exception as e:  # noqa: BLE001
         m = motivo_de(e, banco)
-        le.extratos.append(ExtratoLido(conta.conta_erp, conta.banco, empresa.nome, ontem, motivo=m))
+        le.extratos.append(ExtratoLido(conta.conta_erp, conta.banco, empresa.nome, ontem, motivo=m, lido=False))
         le.falhas[conta.conta_erp] = m
         return
     motivo = ""
@@ -173,12 +179,13 @@ def ler_erp(ler: Callable[[], list], contas_do_arquivo, agora: Callable[[], date
         return [SaldoLido(c, ERP, "", None, m, hora) for c in contas_do_arquivo]
     saida, vistas = [], set()
     for c in contas:
-        vistas.add(c.name)
+        nome = c.name if c.name and c.name.strip() else SEM_NOME
+        vistas.add(nome)
         if isinstance(c.balance, Decimal):
-            saida.append(SaldoLido(c.name, ERP, "", c.balance.quantize(ext.CENTAVO), "", hora))
+            saida.append(SaldoLido(nome, ERP, "", c.balance.quantize(ext.CENTAVO, ROUND_HALF_UP), "", hora))
         else:
             bruto = f" (tela: {c.raw_balance[:30]!r})" if c.raw_balance else ""
-            saida.append(SaldoLido(c.name, ERP, "", None, "o ERP não mostrou o saldo" + bruto, hora))
+            saida.append(SaldoLido(nome, ERP, "", None, "o ERP não mostrou o saldo" + bruto, hora))
     for nome in contas_do_arquivo:
         if nome not in vistas:
             saida.append(SaldoLido(nome, ERP, "", None, "conta não encontrada entre as ativas do ERP",

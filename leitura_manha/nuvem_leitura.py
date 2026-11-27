@@ -26,6 +26,15 @@ class LeituraCortada(rest.ErroDaNuvem):
     """A leitura bateu no teto do PostgREST: pode ter ficado agendado de fora."""
 
 
+class GravacaoParcial(rest.ErroDaNuvem):
+    """Uma gravação falhou DEPOIS de outra já ter entrado: a mensagem diz o que ficou."""
+
+    def __init__(self, gravado: dict, tabela: str, causa: Exception):
+        self.gravado = dict(gravado)
+        ja = ", ".join(f"{t} {n}" for t, n in self.gravado.items())
+        super().__init__(f"gravou {ja}; falhou {tabela}: {type(causa).__name__}: {str(causa)[:150]}")
+
+
 def em_aberto(token: str) -> list[dict]:
     linhas = rest.ler(EM_ABERTO, token, filtro="order=dia.asc,id.asc")
     if len(linhas) >= TETO_DE_LINHAS:
@@ -57,10 +66,13 @@ def linhas_de_saldo(rodada: str, saldos) -> list[dict]:
 
 
 def linhas_de_extrato(rodada: str, extratos) -> list[dict]:
+    def contagem(x, valor):   # extrato não lido nunca vira zero: vai NULL
+        return valor if x.lido else None
     return [{"rodada": rodada, "conta": x.conta[:200], "fonte": x.fonte,
-             "empresa": x.empresa[:200], "dia_extrato": x.dia.isoformat(),
-             "saidas": x.saidas, "entradas": x.entradas, "ilegiveis": x.ilegiveis,
-             "fora_do_dia": x.fora_do_dia, "motivo": x.motivo[:200]} for x in extratos]
+             "empresa": x.empresa[:200], "dia_extrato": x.dia.isoformat(), "lido": x.lido,
+             "saidas": contagem(x, x.saidas), "entradas": contagem(x, x.entradas),
+             "ilegiveis": contagem(x, x.ilegiveis), "fora_do_dia": contagem(x, x.fora_do_dia),
+             "motivo": x.motivo[:200]} for x in extratos]
 
 
 def linhas_de_pre_marca(rodada: str, ontem, marcas) -> list[dict]:
@@ -70,7 +82,17 @@ def linhas_de_pre_marca(rodada: str, ontem, marcas) -> list[dict]:
 
 
 def gravar(token: str, rodada: str, ontem, saldos, extratos, marcas) -> dict:
-    """Grava as três; devolve {tabela: linhas}. Linha a menos levanta NaoGravou."""
-    return {SALDO: _gravar(SALDO, token, linhas_de_saldo(rodada, saldos)),
-            EXTRATO: _gravar(EXTRATO, token, linhas_de_extrato(rodada, extratos)),
-            PRE_MARCA: _gravar(PRE_MARCA, token, linhas_de_pre_marca(rodada, ontem, marcas))}
+    """Grava as três, nesta ordem; devolve {tabela: linhas}. Linha a menos levanta
+    NaoGravou; falha depois de algo gravado levanta GravacaoParcial (diz o que entrou)."""
+    passos = ((SALDO, linhas_de_saldo(rodada, saldos)),
+              (EXTRATO, linhas_de_extrato(rodada, extratos)),
+              (PRE_MARCA, linhas_de_pre_marca(rodada, ontem, marcas)))
+    feito: dict = {}
+    for tabela, linhas in passos:
+        try:
+            feito[tabela] = _gravar(tabela, token, linhas)
+        except Exception as e:  # noqa: BLE001 — qualquer tipo: o que entrou tem de aparecer
+            if not feito:
+                raise
+            raise GravacaoParcial(feito, tabela, e) from e
+    return feito

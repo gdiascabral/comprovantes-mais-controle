@@ -7,6 +7,8 @@
 --   saldo_lido      -> um saldo por conta e fonte (sicoob|inter|erp) por rodada;
 --                      valor NULL = não lido, e então o motivo é obrigatório.
 --   extrato_lido    -> o resumo do extrato de ontem de cada conta (contagens).
+--   (quem lê pega a `rodada` mais recente do `dia`, por `quando`: uma 2ª rodada no
+--    mesmo dia ACRESCENTA linhas de propósito.)
 --   pre_marca_banco -> o que o banco provou de cada agendado em aberto. NÃO é
 --                      resposta: "Pago" continua em agendado_resposta, pela pessoa.
 --
@@ -37,6 +39,7 @@ create table if not exists public.saldo_lido (
 );
 create index if not exists saldo_lido_conta_idx on public.saldo_lido (conta, fonte, lido_em desc);
 create index if not exists saldo_lido_dia_idx on public.saldo_lido (dia);
+create unique index if not exists saldo_lido_uma_por_rodada on public.saldo_lido (rodada, conta, fonte);
 
 create table if not exists public.extrato_lido (
   id           bigint generated always as identity primary key,
@@ -46,10 +49,11 @@ create table if not exists public.extrato_lido (
   fonte        text not null,
   empresa      text not null default '',
   dia_extrato  date not null,
-  saidas       integer not null default 0,
-  entradas     integer not null default 0,
-  ilegiveis    integer not null default 0,
-  fora_do_dia  integer not null default 0,
+  lido         boolean not null,
+  saidas       integer,
+  entradas     integer,
+  ilegiveis    integer,
+  fora_do_dia  integer,
   motivo       text not null default '',
   quem         uuid not null default auth.uid() references auth.users (id),
   quando       timestamptz not null default now(),
@@ -57,11 +61,18 @@ create table if not exists public.extrato_lido (
   constraint extrato_lido_contagens check (saidas >= 0 and entradas >= 0
     and ilegiveis >= 0 and fora_do_dia >= 0),
   -- linha ilegível tira a conta do casamento, e o motivo diz isso
-  constraint extrato_lido_ilegivel_tem_motivo check (ilegiveis = 0 or length(trim(motivo)) > 0),
+  constraint extrato_lido_ilegivel_tem_motivo check (coalesce(ilegiveis,0) = 0 or length(trim(motivo)) > 0),
+  -- extrato não lido nunca vira zero: lido tem as quatro contagens; não lido não tem nenhuma e diz por quê
+  constraint extrato_lido_nao_lido check ((lido and saidas is not null and entradas is not null
+    and ilegiveis is not null and fora_do_dia is not null)
+    or (not lido and saidas is null and entradas is null and ilegiveis is null
+    and fora_do_dia is null and length(trim(motivo)) > 0)),
   constraint extrato_lido_tamanho check (length(conta) between 1 and 200
     and length(empresa) <= 200 and length(motivo) <= 200)
 );
 create index if not exists extrato_lido_dia_idx on public.extrato_lido (dia);
+create unique index if not exists extrato_lido_um_por_rodada on public.extrato_lido (rodada, conta, fonte, dia_extrato);
+create index if not exists extrato_lido_conta_idx on public.extrato_lido (conta, fonte, dia_extrato desc);
 
 create table if not exists public.pre_marca_banco (
   id           bigint generated always as identity primary key,
@@ -79,6 +90,7 @@ create table if not exists public.pre_marca_banco (
     and length(prova) <= 300 and length(nota) <= 300)
 );
 create index if not exists pre_marca_banco_agendado_idx on public.pre_marca_banco (agendado_id, id desc);
+create unique index if not exists pre_marca_banco_uma_por_rodada on public.pre_marca_banco (rodada, agendado_id);
 
 -- ------------------------------------------------------- permissões e RLS
 revoke all on table public.saldo_lido, public.extrato_lido, public.pre_marca_banco

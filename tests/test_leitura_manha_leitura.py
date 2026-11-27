@@ -245,3 +245,31 @@ def test_conta_fora_do_arquivo_nao_aparece_e_linha_ruim_e_contada():
     marcas = lt.pre_marcas([_linha(5, "OUTRA CONTA - CAIXA", "150.00", "OBRA X LT 10"), ruim],
                            le, HOJE, log=avisos.append)
     assert marcas == [] and avisos == ["  1 agendado(s) em aberto ilegível(is) na nuvem: ficaram fora"]
+
+
+def test_erp_conta_sem_nome_ganha_rotulo_e_mantem_valor_e_motivo():
+    contas = [ErpAccount("1", "   ", balance=Decimal("5.00")),
+              ErpAccount("2", "", raw_balance="R$ ***", balance=None)]
+    saida = lt.ler_erp(lambda: contas, [], agora)
+    assert [s.conta for s in saida] == ["(sem nome no ERP)"] * 2
+    assert saida[0].valor == Decimal("5.00") and saida[0].motivo == ""
+    assert saida[1].valor is None and "não mostrou" in saida[1].motivo
+
+
+def test_erp_arredonda_meio_para_cima():
+    (s,) = lt.ler_erp(lambda: [ErpAccount("1", "A", balance=Decimal("10.125"))], [], agora)
+    assert s.valor == Decimal("10.13")
+
+
+def test_extrato_que_falha_sai_nao_lido_e_motivo_obrigatorio():
+    with pytest.raises(ValueError):
+        lt.ExtratoLido("A", "sicoob", "E", date(2026, 11, 26), lido=False)
+    f = _tudo_bom()
+    f._sicoob["EMP A"].extratos[11] = ErroLeitura(503, "fora")
+    le = lt.ler_bancos(_cfg(), f, ONTEM, agora)
+    (x,) = [x for x in le.extratos if x.conta == "A1 - SICOOB"]
+    assert not x.lido and x.motivo == "Sicoob respondeu HTTP 503"
+    f2 = _tudo_bom()
+    f2._sicoob["EMP A"] = RuntimeError("fábrica")
+    le2 = lt.ler_bancos(_cfg(), f2, ONTEM, agora)
+    assert all(not x.lido for x in le2.extratos if x.empresa == "EMP A")

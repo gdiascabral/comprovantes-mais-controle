@@ -78,3 +78,33 @@ def test_em_aberto_no_teto_falha_fechado(rest):
     rest.linhas = [{"id": 1}]
     assert nl.em_aberto("TOK") == [{"id": 1}]
     assert rest.lido[-1] == ("agendado_em_aberto", "order=dia.asc,id.asc")
+
+
+def test_extrato_nao_lido_vai_com_lido_falso_e_contagens_null(rest):
+    nao = lt.ExtratoLido("A", "inter", "E", ONTEM, lido=False, motivo="Inter respondeu HTTP 500")
+    nl.gravar("TOK", "r-1", ONTEM, [], [nao] + EXTRATOS, [])
+    a, b = rest.gravado["extrato_lido"]
+    assert a["lido"] is False and a["motivo"] == "Inter respondeu HTTP 500"
+    assert (a["saidas"], a["entradas"], a["ilegiveis"], a["fora_do_dia"]) == (None,) * 4
+    assert b["lido"] is True and (b["saidas"], b["entradas"]) == (1, 2)
+
+
+def test_extrato_nao_lido_sem_motivo_e_recusado():
+    with pytest.raises(ValueError):
+        lt.ExtratoLido("A", "inter", "E", ONTEM, lido=False)
+
+
+def test_gravacao_parcial_diz_o_que_ja_entrou(rest):
+    rest.faltar = "extrato_lido"
+    with pytest.raises(nl.GravacaoParcial) as e:
+        nl.gravar("TOK", "r-1", ONTEM, SALDOS, EXTRATOS, MARCAS)
+    msg = str(e.value)
+    assert "gravou saldo_lido 2" in msg and "falhou extrato_lido" in msg and "NaoGravou" in msg
+    assert "TOK" not in msg and e.value.gravado == {"saldo_lido": 2}
+    assert isinstance(e.value, nl.rest.ErroDaNuvem)
+
+
+def test_falha_na_primeira_tabela_nao_e_parcial(rest):
+    rest.faltar = "saldo_lido"
+    with pytest.raises(nl.NaoGravou):
+        nl.gravar("TOK", "r-1", ONTEM, SALDOS, EXTRATOS, MARCAS)

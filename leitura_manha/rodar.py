@@ -124,7 +124,7 @@ def resumo(le: lt.LeituraDosBancos, erp: list, marcas: list, log) -> None:
 
 def rodada(cfg: cf.Config, *, fabrica=None, entrar=None, nuvem=nl, ler_erp=None,
            agora=agora_utc, log=print) -> int:
-    """0 = gravou; 1 = não gravou na nuvem. Banco ou ERP fora não é 1: vira 'não lido'."""
+    """0 = gravou tudo; 1 = não gravou, ou gravou sem as pré-marcas (em_aberto não lido). Banco ou ERP fora não é 1: vira 'não lido'."""
     if cfg.ambiente != "producao":
         raise SystemExit("rodada de verdade só com ambiente 'producao'; Sandbox é --ensaio-sandbox")
     from nuvem import rest
@@ -135,9 +135,14 @@ def rodada(cfg: cf.Config, *, fabrica=None, entrar=None, nuvem=nl, ler_erp=None,
     log(f"leitura das 07:30 de {hoje:%d/%m/%Y} (extrato de {ontem:%d/%m}), rodada {rodada_id}")
     le = lt.ler_bancos(cfg, fabrica or Fabrica(cfg), ontem, agora)
     erp = lt.ler_erp(ler_erp, [c.conta_erp for c in cfg.contas()], agora)
+    falhou = False
     try:
         token = entrar(cfg.nuvem_email, cfg.nuvem_senha)["access_token"]
-        marcas = lt.pre_marcas(nuvem.em_aberto(token), le, hoje, log=log)
+        try:
+            marcas = lt.pre_marcas(nuvem.em_aberto(token), le, hoje, log=log)
+        except Exception as e:  # noqa: BLE001 — sem em_aberto não há pré-marca, mas os saldos entram
+            marcas, falhou = [], True
+            log(f"pré-marcas puladas: não li os agendados em aberto ({type(e).__name__})")
         resumo(le, erp, marcas, log)
         gravadas = nuvem.gravar(token, rodada_id, ontem, le.saldos + erp, le.extratos, marcas)
     except Exception as e:  # noqa: BLE001 — o Agendador vê o código 1; o log diz o tipo
@@ -145,7 +150,7 @@ def rodada(cfg: cf.Config, *, fabrica=None, entrar=None, nuvem=nl, ler_erp=None,
         log(f"NÃO GRAVOU na nuvem: {type(e).__name__}: {str(e)[:200]}")
         return 1
     log("gravado: " + ", ".join(f"{t} {n}" for t, n in gravadas.items()))
-    return 0
+    return 1 if falhou else 0
 
 
 def credencial_inter_da_pasta(pasta) -> dict:

@@ -146,3 +146,29 @@ def test_main_com_arquivo_ruim_sai_2_sem_rodar(tmp_path):
     p = tmp_path / "c.json"
     p.write_text('{"ambiente": "producao"}', encoding="utf-8")
     assert rodar.main(["--config", str(p)]) == 2
+
+
+class NuvemSemEmAberto(NuvemFalsa):
+    def em_aberto(self, token):
+        raise RuntimeError("PostgREST fora")
+
+
+def test_falha_ao_ler_em_aberto_nao_perde_saldos_e_sai_1():
+    nuvem, log = NuvemSemEmAberto(), []
+    r = rodar.rodada(_cfg(), fabrica=_tudo_bom(), entrar=_entrar, nuvem=nuvem,
+                     ler_erp=lambda: [], agora=lambda: HORA, log=log.append)
+    assert r == 1
+    _rodada, _ontem, saldos, extratos, marcas = nuvem.gravou
+    assert saldos and extratos and marcas == []
+    assert any("pré-marcas puladas" in linha and "RuntimeError" in linha for linha in log)
+    assert not any("PostgREST fora" in linha for linha in log if "puladas" in linha)
+
+
+def test_gravacao_parcial_aparece_no_log():
+    from leitura_manha import nuvem_leitura as nl
+    log = []
+    cai = nl.GravacaoParcial({"saldo_lido": 12}, "extrato_lido", RuntimeError("x"))
+    r = rodar.rodada(_cfg(), fabrica=_tudo_bom(), entrar=_entrar,
+                     nuvem=NuvemFalsa(cair=cai), ler_erp=lambda: [],
+                     agora=lambda: HORA, log=log.append)
+    assert r == 1 and any("gravou saldo_lido 12" in linha for linha in log)
