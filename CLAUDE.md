@@ -25,7 +25,7 @@ sem force-push e sem apagar a branch). O merge dispara o GitHub Actions
 2. monta `codigo.zip` (comprovantes_app.py + util.py + widgets.py +
    inicio/*.py + separar_renomear/*.py + anexar/*.py +
    baixar_comprovantes/*.py + aportes/*.py + relatorios/*.py +
-   pagamentos_dia/*.py + tela_do_dia/*.py + conciliacao_dia/*.py +
+   pagamentos_dia/*.py + tela_do_dia/*.py + conciliacao_dia/*.py + pagamento_api/*.py +
    extratos_sicoob/*.py +
    conciliacao/*.py +
    conciliacao/erp/*.py + contratos/*.py + acessorias/*.py + **erp/*.py** +
@@ -232,6 +232,7 @@ carregar), **leia o arquivo da pasta antes de mexer nela**.
 |---|---|
 | motor e atualizador | `.claude/rules/arquitetura-motor-e-atualizador.md` |
 | util.py | `.claude/rules/arquitetura-util.md` |
+| pagamento_api/ (pagar pela API do Sicoob) | `.claude/rules/arquitetura-pagamento-api.md` |
 | erp/ (falar com o Mais Controle) | `.claude/rules/arquitetura-erp.md` |
 | conciliacao/ | `.claude/rules/arquitetura-conciliacao.md` |
 | janela e widgets | `.claude/rules/arquitetura-interface.md` |
