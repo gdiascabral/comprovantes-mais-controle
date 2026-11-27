@@ -70,6 +70,33 @@ def test_parado_vale_o_ultimo_botao(rest):
     assert nl.parado("tok") is False
 
 
+def test_livro_no_teto_de_linhas_falha_fechado(rest):
+    rest({"lote_evento": [{"ordem": 1, "estado": "iniciado"}] * nl.TETO_DE_LINHAS})
+    with pytest.raises(nl.LeituraCortada):
+        nl.LivroNaNuvem("tok", 7).eventos()
+
+
+def test_um_lote_ilegivel_nao_derruba_os_outros(rest):
+    rest({"lote_pagamento": [{"id": 7}, {"id": 8}],
+          "lote_aprovacao": [{"lote": 7, "itens": [1], "total": "x"},
+                             {"lote": 8, "itens": [], "total": "1.00"}],
+          "lote_item": [_linha(1, "100.00")]})
+    assert nl.lotes_aprovados("tok", date(2026, 11, 27)) == []
+
+
+def test_recusa_do_banco_no_iniciado_sobe_sem_pagar(rest, monkeypatch, tmp_path):
+    def recusa(tabela, token, linhas, devolver=True):
+        raise nl.rest.RecusadoPeloBanco("duplicate key", status=409, codigo="23505")
+    rest({})
+    monkeypatch.setattr(nl.rest, "inserir", recusa)
+    s = Sicoob(pix_iniciar={"endToEndId": "E1", "proprietario": {"identificador": DOC}},
+               pix_confirmar={"estado": "REALIZADO"})
+    with pytest.raises(nl.rest.RecusadoPeloBanco):
+        _rodar([_item(1, lt.PIX_CHAVE)], "100.00", s, Erp({"T1": _aberto()}), tmp_path,
+               nl.LivroNaNuvem("tok", 7))
+    assert "pix_confirmar" not in s.chamadas
+
+
 def test_evento_que_nao_volta_do_banco_impede_o_pagamento(rest, tmp_path):
     rest({"_recusa": True})
     livro = nl.LivroNaNuvem("tok", 7)

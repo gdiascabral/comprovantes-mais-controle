@@ -43,3 +43,11 @@ O Sicoob responde HTTP 200 com HTML ("Request Rejected") ao User-Agent padrão d
 1. Núcleo (este): regras puras, cliente, executor, comprovante, migration, robô com ERP de ensaio e Sandbox.
 2. Portal: preparar o lote e a aprovação pelo aprovador, botão Parar.
 3. Produção: token OAuth e certificado, ERP de verdade, app importando o pacote, botão "resolver à mão" para itens presos em EM_PROCESSAMENTO.
+
+## Limites conhecidos (revisão das Tasks 7 e 8, 27/11/2026)
+
+- **Pasta por lote.** Os comprovantes e o JSON cru do convênio ficam em `<pasta_comprovantes>/lote-<id>`: a retomada acha o bruto sem risco de pegar o de outro lote com o mesmo título.
+- **Uma rodada por vez.** `trava_da_rodada` usa trava do sistema sobre `robo.trava` (`msvcrt.locking` no Windows): ela some sozinha quando o processo morre, então não existe trava velha nem rodada apagando a trava da outra. Entre máquinas, quem segura é o índice `lote_evento_um_iniciado`.
+- **Neste plano o ERP é o de ensaio.** `--config` contra a nuvem de verdade só roda com `"nuvem_de_ensaio": true`; sem isso, sai com erro. Rodar com o ERP de ensaio num lote real gravaria "concluído" sem nada no ERP, e o banco nunca mais libera o título pela API. O Agendador do servidor não é ligado antes do plano 3.
+- **Só o dia de hoje (São Paulo).** O robô lê os lotes de `hoje_sp()`, o mesmo dia de `privado.hoje()`. Item que ficou EM_PROCESSAMENTO num lote de ontem não é mais consultado: fica para o botão "resolver à mão" do plano 3.
+- **Leitura no teto do PostgREST** (1000 linhas) falha fechado (`LeituraCortada`): o robô não decide com livro incompleto.

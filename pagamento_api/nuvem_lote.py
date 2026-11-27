@@ -23,6 +23,22 @@ class NaoGravou(rest.ErroDaNuvem):
     """O banco respondeu sem devolver a linha do evento."""
 
 
+class LeituraCortada(rest.ErroDaNuvem):
+    """A leitura bateu no teto de linhas do PostgREST: o fim (o mais novo) pode
+    ter ficado de fora. Falha fechada: o robô não decide com livro incompleto."""
+
+
+#: Teto padrão de linhas por leitura do PostgREST (max_rows do Supabase).
+TETO_DE_LINHAS = 1000
+
+
+def _ler(tabela, token, **k) -> list:
+    linhas = rest.ler(tabela, token, **k)
+    if len(linhas) >= TETO_DE_LINHAS:
+        raise LeituraCortada(f"{tabela}: {len(linhas)} linhas, pode ter cortado")
+    return linhas
+
+
 @dataclass(frozen=True)
 class LoteAprovado:
     id: int
@@ -38,22 +54,28 @@ def item_da_linha(r: dict) -> lt.ItemLote:
 
 
 def lotes_aprovados(token: str, hoje: date) -> list[LoteAprovado]:
-    lotes = rest.ler("lote_pagamento", token, colunas="id", filtro=f"dia=eq.{hoje.isoformat()}")
+    lotes = _ler("lote_pagamento", token, colunas="id", filtro=f"dia=eq.{hoje.isoformat()}")
     ids = [int(l["id"]) for l in lotes]
     if not ids:
         return []
     lista = ",".join(map(str, ids))
-    aprov = rest.ler("lote_aprovacao", token, colunas="lote,itens,total",
+    aprov = _ler("lote_aprovacao", token, colunas="lote,itens,total",
                      filtro=f"lote=in.({lista})&order=lote.asc")
     saida = []
     for a in aprov:
-        ordens = sorted(int(o) for o in a["itens"])
-        linhas = rest.ler("lote_item", token, filtro=(
-            f"lote=eq.{int(a['lote'])}&ordem=in.({','.join(map(str, ordens))})&order=ordem.asc"))
-        itens = [item_da_linha(r) for r in linhas]
+        try:
+            ordens = sorted(int(o) for o in a["itens"])
+            if not ordens:
+                continue
+            linhas = _ler("lote_item", token, filtro=(
+                f"lote=eq.{int(a['lote'])}&ordem=in.({','.join(map(str, ordens))})&order=ordem.asc"))
+            itens = [item_da_linha(r) for r in linhas]
+            total = Decimal(str(a["total"]))
+        except (KeyError, ValueError, TypeError, ArithmeticError) as e:
+            print(f"lote {a.get('lote')}: linha ilegível, pulado ({e!r})")
+            continue                     # um lote ruim não trava os outros
         if [i.ordem for i in itens] != ordens:
             continue                     # leitura incompleta: não paga nada deste lote
-        total = Decimal(str(a["total"]))
         if lt.total(itens) != total:
             continue
         saida.append(LoteAprovado(int(a["lote"]), total, itens))
@@ -65,7 +87,7 @@ class LivroNaNuvem:
         self.token, self.lote = token, int(lote_id)
 
     def eventos(self) -> list[ex.Evento]:
-        linhas = rest.ler("lote_evento", self.token, colunas="ordem,estado,detalhe,chave",
+        linhas = _ler("lote_evento", self.token, colunas="ordem,estado,detalhe,chave",
                           filtro=f"lote=eq.{self.lote}&order=id.asc")
         return [ex.Evento(int(r["ordem"]), str(r["estado"]), str(r.get("detalhe") or ""),
                           str(r.get("chave") or "")) for r in linhas]
@@ -74,13 +96,14 @@ class LivroNaNuvem:
         voltou = rest.inserir("lote_evento", self.token, [{
             "lote": self.lote, "ordem": e.ordem, "estado": e.estado,
             "detalhe": e.detalhe, "chave": e.chave}])
-        if not voltou:
+        if (not voltou or str(voltou[0].get("estado")) != e.estado
+                or int(voltou[0].get("ordem", -1)) != e.ordem):
             raise NaoGravou(f"evento {e.estado} do item {e.ordem} não voltou do banco")
 
 
 def parado(token: str) -> bool:
     """O último botão apertado vale. Sem nenhum: não está parado."""
-    u = rest.ler("robo_parar", token, colunas="acao", filtro="order=id.desc&limit=1")
+    u = _ler("robo_parar", token, colunas="acao", filtro="order=id.desc&limit=1")
     return bool(u) and u[0].get("acao") == "parar"
 
 

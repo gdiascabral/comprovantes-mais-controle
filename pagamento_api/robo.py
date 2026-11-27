@@ -19,9 +19,8 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -96,8 +95,27 @@ def ensaio_sandbox(cfg: dict, pasta: Path) -> list[ex.Evento]:
     return livro.lista
 
 
-#: Trava velha (o processo morreu sem soltar): depois disso, a rodada seguinte assume.
-TRAVA_VELHA_SEGUNDOS = 15 * 60
+#: O dia do banco é o de São Paulo (`privado.hoje()`), não o do relógio do servidor.
+FUSO_SP = timezone(timedelta(hours=-3))      # sem horário de verão desde 2019
+
+
+def hoje_sp() -> date:
+    return datetime.now(FUSO_SP).date()
+
+
+def _travar(fd) -> bool:
+    """Trava do SISTEMA sobre o arquivo aberto: some sozinha quando o processo
+    morre, então não existe "trava velha" nem rodada apagando a trava da outra
+    (revisão da Task 8, 27/11/2026)."""
+    try:
+        import msvcrt                         # o robô, o app e a esteira rodam no Windows
+    except ImportError:
+        raise SystemExit("o robô só roda no Windows (trava msvcrt)") from None
+    try:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        return True
+    except OSError:
+        return False
 
 
 @contextmanager
@@ -106,26 +124,20 @@ def trava_da_rodada(pasta: Path):
     (Entre máquinas, quem segura é o índice `lote_evento_um_iniciado` do banco.)"""
     pasta = Path(pasta)
     pasta.mkdir(parents=True, exist_ok=True)
-    arq = pasta / "robo.trava"
+    fd = os.open(str(pasta / "robo.trava"), os.O_CREAT | os.O_RDWR)
     try:
-        if arq.exists() and time.time() - arq.stat().st_mtime > TRAVA_VELHA_SEGUNDOS:
-            arq.unlink()
-        fd = os.open(str(arq), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        yield False
-        return
-    try:
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
-        yield True
+        yield _travar(fd)
     finally:
-        try:
-            arq.unlink()
-        except FileNotFoundError:
-            pass
+        os.close(fd)                          # fechar solta a trava; o arquivo fica
 
 
 def rodada(cfg: dict) -> None:
+    # Neste plano o ERP é o de ENSAIO: rodar contra a nuvem de verdade gravaria
+    # "concluído" num lote real sem nada ter acontecido no ERP (e o banco nunca
+    # mais libera o título pela API). Só com a chave explícita de ensaio.
+    if cfg.get("nuvem_de_ensaio") is not True:
+        raise SystemExit("neste plano o robô só roda com \"nuvem_de_ensaio\": true "
+                         "(ERP de ensaio); o ERP real entra no plano 3")
     with trava_da_rodada(Path(cfg["pasta_comprovantes"])) as minha:
         if not minha:
             print("outra rodada está rodando; esta sai sem fazer nada")
@@ -134,15 +146,15 @@ def rodada(cfg: dict) -> None:
 
 
 def _rodada(cfg: dict) -> None:
-    from nuvem import rest
     from . import nuvem_lote as nl
+    rest = nl.rest
     s = rest.entrar(cfg["nuvem_email"], cfg["nuvem_senha"])
     token = s["access_token"]
     nl.pulso(token)
     if nl.parado(token):
         print("parado pelo botão; nada a fazer")
         return
-    hoje = date.today()
+    hoje = hoje_sp()
     for lote in nl.lotes_aprovados(token, hoje):
         print(f"lote {lote.id}: {len(lote.itens)} itens, total {lote.total}")
         livro = nl.LivroNaNuvem(token, lote.id)
