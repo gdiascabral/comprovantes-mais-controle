@@ -19,7 +19,7 @@ O Mais Controle continua sendo a base dos lançamentos. Num dia normal, ninguém
 | D1 | Arquitetura A. O **servidor** lê e paga, reaproveitando as regras do HTML de hoje (`pagamentos_dia/`) com o porteiro do ERP. A **nuvem** (Supabase) é a ponte. O **portal** é só a tela. |
 | D2 | Escopo: pagamentos **e saldos**. O saldo do banco vem pela API (Sicoob e Inter) e o do ERP pelo porteiro do servidor. |
 | D3 | Às **07:30** o servidor lê sozinho, pela API do Sicoob e do Inter, o saldo de cada conta e o que entrou e saiu ontem. Confirma os pagamentos de ontem: os da API e os feitos à mão, que ficam pré-marcados (regra de 29/10, a pessoa confirma). Lê também o saldo do ERP. |
-| D4 | A leitura do dia (ERP e anexos) roda no botão **Buscar**, quando a equipe quiser. Pode haver vários envios ao diretor no mesmo dia. |
+| D4 | A leitura do dia (ERP e anexos) roda no botão **Buscar**, quando a equipe quiser. Pode haver vários envios ao diretor no mesmo dia. O filtro é por **período, "de … até …"** (padrão: de hoje até hoje). Quando o período passa de hoje, vale a regra do dono de 13/11 ("Adiantar boletos dos dias seguintes pelo Buscar"): dos dias seguintes só entra o que se paga por código de barras (boleto e convênio), e o que for adiantado entra no dia de hoje. Datas passadas entram inteiras, com os vencidos primeiro, como no HTML. |
 | D5 | Na aba Pagamentos, a equipe entra com o **login da nuvem do app**. Cada ação fica carimbada com o nome de quem fez. |
 | D6 | Ações de revisão iguais às de hoje: **liberar** (com motivo), **tirar do dia** e **paguei à mão**. Dado errado se corrige no Mais Controle e depois se clica "Buscar" de novo. O portal não edita o ERP. |
 | D7 | O que não vai pela API (Inter, outros bancos, TED, item em revisão sem liberar) aparece em **"Pagar à mão"**, com o Copiar e o QR e o código de barras grandes do HTML de hoje (tela cheia ao clicar), mais o botão **Paguei**. |
@@ -44,7 +44,7 @@ O DIA TODO: "Pagar à mão", acompanhamento, alertas, "Parar pagamentos"
 ## 4. Telas (detalhe no HTML)
 
 1. **Preparar (equipe).**
-   - Topo: data, **Buscar**, hora da última leitura e progresso ("lendo… 34 de 120").
+   - Topo: período **de … até …**, **Buscar**, hora da última leitura e progresso ("lendo… 34 de 120").
    - Um bloco por conta: saldo do banco e saldo do ERP (com hora), total apto e **falta R$ X**. O botão **+ Aporte** aparece quando falta saldo.
    - Em cada conta, três grupos:
      - **Pode pagar**;
