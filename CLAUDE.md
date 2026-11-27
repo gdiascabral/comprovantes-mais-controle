@@ -232,6 +232,7 @@ carregar), **leia o arquivo da pasta antes de mexer nela**.
 |---|---|
 | motor e atualizador | `.claude/rules/arquitetura-motor-e-atualizador.md` |
 | util.py | `.claude/rules/arquitetura-util.md` |
+| pagamento_api/ (pagar pela API do Sicoob) | `.claude/rules/arquitetura-pagamento-api.md` |
 | erp/ (falar com o Mais Controle) | `.claude/rules/arquitetura-erp.md` |
 | conciliacao/ | `.claude/rules/arquitetura-conciliacao.md` |
 | janela e widgets | `.claude/rules/arquitetura-interface.md` |
