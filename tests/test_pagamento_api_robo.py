@@ -65,3 +65,12 @@ def test_argumentos_sem_argparse():
     assert robo._argumentos(["--config", "a.json", "--ensaio-sandbox"]) == ("a.json", True)
     assert robo._argumentos(["--config=b.json"]) == ("b.json", False)
     assert robo.main([]) == 2
+
+
+def test_padrao_da_trava_continua_robo_trava_e_nome_proprio_e_outra(tmp_path):
+    import inspect
+    assert inspect.signature(robo.trava_da_rodada).parameters["nome"].default == "robo.trava"
+    with robo.trava_da_rodada(tmp_path) as minha:
+        assert minha is True and (tmp_path / "robo.trava").exists()
+        with robo.trava_da_rodada(tmp_path, nome="outra.trava") as outra:
+            assert outra is True and (tmp_path / "outra.trava").exists()

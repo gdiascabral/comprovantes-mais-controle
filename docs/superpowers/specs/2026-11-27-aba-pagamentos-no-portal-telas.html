@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aba Pagamentos no portal — desenho das telas</title>
+<style>
+  :root{--fundo:#f4f6f9;--cartao:#fff;--texto:#1d2330;--fraco:#667085;--borda:#e3e7ee;
+        --verde:#127a3e;--verde-f:#e7f6ed;--ambar:#9a6700;--ambar-f:#fff4d6;--verm:#b42318;--verm-f:#fdecea;
+        --azul:#1f5fbf;--azul-f:#e8f0fc}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.45 system-ui,"Segoe UI",sans-serif;background:var(--fundo);color:var(--texto)}
+  header{background:#152238;color:#fff;padding:14px 20px}
+  header h1{margin:0;font-size:26px;line-height:1.2}
+  header p{margin:2px 0 0;color:#c8d2e3;font-size:13px}
+  nav{display:flex;gap:6px;padding:10px 20px;background:#fff;border-bottom:1px solid var(--borda);position:sticky;top:0;z-index:2;flex-wrap:wrap}
+  nav a{padding:7px 12px;border-radius:8px;text-decoration:none;color:var(--texto);background:var(--fundo);font-weight:600;font-size:14px}
+  main{max-width:1060px;margin:0 auto;padding:18px}
+  section.tela{margin-bottom:42px}
+  section.tela>h2{font-size:24px;margin:0 0 4px}
+  section.tela>p.sub{margin:0 0 14px;color:var(--fraco)}
+  .barra{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--cartao);border:1px solid var(--borda);border-radius:12px;padding:12px 14px;margin-bottom:14px}
+  .barra input{font:inherit;padding:7px 9px;border:1px solid var(--borda);border-radius:8px}
+  .btn{font:inherit;font-weight:600;border:0;border-radius:9px;padding:9px 14px;cursor:pointer;background:var(--azul);color:#fff}
+  .btn.sec{background:#fff;color:var(--azul);border:1px solid var(--azul)}
+  .btn.ok{background:var(--verde)}
+  .btn.perigo{background:#fff;color:var(--verm);border:1px solid var(--verm)}
+  .btn.peq{padding:5px 10px;font-size:13px}
+  .lendo{color:var(--fraco);font-size:13px}
+  .lendo b{color:var(--texto)}
+  .prog{height:6px;width:160px;background:var(--borda);border-radius:4px;overflow:hidden;display:inline-block;vertical-align:middle}
+  .prog i{display:block;height:100%;width:28%;background:var(--azul)}
+  .conta{background:var(--cartao);border:1px solid var(--borda);border-radius:14px;margin-bottom:16px;overflow:hidden}
+  .conta>.topo{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--borda)}
+  .conta h3{margin:0;font-size:19px}
+  .saldos{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--fraco)}
+  .saldos b{color:var(--texto);font-size:15px}
+  .falta{color:var(--verm);font-weight:700}
+  .grupo{padding:10px 14px;border-bottom:1px solid var(--borda)}
+  .grupo:last-child{border-bottom:0}
+  .grupo h4{margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--fraco)}
+  .item{display:grid;grid-template-columns:1fr auto;gap:6px 12px;padding:9px 10px;border:1px solid var(--borda);border-radius:10px;margin-bottom:8px}
+  .item .q{font-weight:600}
+  .item .v{font-weight:700;text-align:right;white-space:nowrap}
+  .item .d{grid-column:1/-1;color:var(--fraco);font-size:13px}
+  .item .acoes{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}
+  .selo{display:inline-block;font-size:11px;font-weight:700;padding:2px 7px;border-radius:999px;margin-right:6px;vertical-align:1px}
+  .s-pode{background:var(--verde-f);color:var(--verde)}
+  .s-olhe{background:var(--ambar-f);color:var(--ambar)}
+  .s-naoli{background:var(--verm-f);color:var(--verm)}
+  .s-api{background:var(--azul-f);color:var(--azul)}
+  .s-mao{background:#eef0f3;color:#444}
+  .confs{font-size:12px;color:var(--fraco)}
+  .confs span{margin-right:8px}
+  .qr{width:120px;height:120px;background:repeating-linear-gradient(45deg,#222 0 6px,#fff 6px 12px);border-radius:6px}
+  .barras{height:56px;width:100%;background:repeating-linear-gradient(90deg,#111 0 2px,#fff 2px 4px,#111 4px 5px,#fff 5px 8px);border-radius:4px}
+  .pe{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;background:var(--cartao);border:1px solid var(--borda);border-radius:12px;padding:12px 14px}
+  .telefone{max-width:390px;margin:0 auto;border:10px solid #1b1f2a;border-radius:34px;background:var(--fundo);padding:14px 12px;box-shadow:0 10px 30px rgba(0,0,0,.15)}
+  .telefone .conta{margin-bottom:12px}
+  .aviso{border-radius:12px;padding:10px 12px;margin-bottom:10px;font-size:14px}
+  .aviso.r{background:var(--verm-f);color:var(--verm);border:1px solid #f4c7c3}
+  .aviso.a{background:var(--ambar-f);color:var(--ambar);border:1px solid #f1dfa6}
+  .aviso.ok{background:var(--verde-f);color:var(--verde);border:1px solid #bfe5cc}
+  table{width:100%;border-collapse:collapse;font-size:14px;background:#fff}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--borda);vertical-align:top}
+  th{background:#f8f9fb;font-size:12px;text-transform:uppercase;color:var(--fraco)}
+  .est{font-weight:700}
+  .e-ok{color:var(--verde)}.e-and{color:var(--azul)}.e-at{color:var(--ambar)}.e-r{color:var(--verm)}
+  .nota{font-size:12px;color:var(--fraco);margin-top:6px}
+  .modal{border:1px solid var(--borda);border-radius:14px;background:#fff;padding:14px;max-width:460px}
+  .modal label{display:block;font-size:13px;color:var(--fraco);margin:10px 0 4px}
+  .modal input,.modal select{width:100%;font:inherit;padding:8px 9px;border:1px solid var(--borda);border-radius:8px}
+  .duas{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:760px){.duas{grid-template-columns:1fr}}
+  .pc{display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start}
+  .pc .lista a{display:block;text-decoration:none;color:var(--texto);background:#fff;border:1px solid var(--borda);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+  .pc .lista a.ativa{border-color:var(--azul);box-shadow:0 0 0 2px var(--azul-f)}
+  .pc .lista small{display:block;color:var(--fraco)}
+  .resumo{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+  .resumo div{background:#fff;border:1px solid var(--borda);border-radius:12px;padding:10px 12px}
+  .resumo small{display:block;color:var(--fraco);font-size:12px}
+  .resumo b{font-size:18px}
+  @media (max-width:900px){.pc{grid-template-columns:1fr}.resumo{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Portal · aba "Pagamentos" — desenho das telas</h1>
+  <p>Spec de 27/11/2026 · dados FICTÍCIOS · o visual final segue o estilo do portal</p>
+</header>
+<nav>
+  <a href="#preparar">1 · Preparar (equipe)</a>
+  <a href="#aporte">Aportes e transferências</a>
+  <a href="#diretor">2 · Diretor (celular)</a>
+  <a href="#diretor-pc">2b · Diretor (PC)</a>
+  <a href="#acompanhar">3 · Acompanhamento</a>
+</nav>
+<main>
+
+<section class="tela" id="preparar">
+  <h2>1 · Preparar (equipe)</h2>
+  <p class="sub">Login da nuvem. Saldos vêm da leitura das 7h30; "Buscar" pede ao servidor a leitura do dia com as regras do HTML de hoje.</p>
+
+  <div class="barra">
+    <label>De <input type="date" value="2026-11-30"></label>
+    <label>até <input type="date" value="2026-12-02"></label>
+    <button class="btn">Buscar</button>
+    <span class="lendo">Lendo no servidor… <b>34 de 120</b> lançamentos <span class="prog"><i></i></span></span>
+    <span class="lendo" style="margin-left:auto">Saldos: Sicoob e Inter às 07:31 · ERP às 07:34</span>
+  </div>
+
+  <div class="aviso a" style="background:var(--azul-f);color:var(--azul);border-color:#c9dbf6">Período até 02/12: dos dias 01 e 02/12 entram só boletos e convênios (6 itens, R$ 14.230,00), adiantados para hoje.</div>
+  <div class="aviso a">"O que ontem confirmou": 23 pagamentos de 27/11 achados no banco — 21 pela API (baixados) e 2 à mão <b>pré-marcados</b>. <button class="btn peq sec">Conferir e confirmar</button></div>
+
+  <div class="conta">
+    <div class="topo">
+      <h3>OBRA ALFA - SICOOB</h3>
+      <div class="saldos">
+        <span>Banco <b>R$ 18.420,10</b></span>
+        <span>ERP <b>R$ 18.420,10</b></span>
+        <span>Apto <b>R$ 26.900,00</b></span>
+        <span class="falta">Falta R$ 8.479,90</span>
+        <button class="btn peq">+ Aporte</button>
+      </div>
+    </div>
+    <div class="grupo">
+      <h4>Pode pagar · 3 · R$ 26.900,00</h4>
+      <div class="item">
+        <div class="q"><span class="selo s-pode">PODE PAGAR</span><span class="selo s-api">API · boleto</span>FORNECEDOR CIMENTO EXEMPLO</div>
+        <div class="v">R$ 12.400,00</div>
+        <div class="d">OBRA ALFA NF 1234 OC 567 · vence 30/11 · <a href="#">ver anexo</a></div>
+        <div class="confs"><span>anexo ✓</span><span>NF ✓</span><span>beneficiário ✓</span><span>valor ✓</span></div>
+        <div class="acoes"><button class="btn peq sec">Tirar do dia</button></div>
+      </div>
+      <div class="item">
+        <div class="q"><span class="selo s-pode">PODE PAGAR</span><span class="selo s-api">API · Pix</span>PINTOR EXEMPLO</div>
+        <div class="v">R$ 3.500,00</div>
+        <div class="d">OBRA ALFA C 12 M 3 · chave do cadastro · <a href="#">ver anexo</a></div>
+        <div class="confs"><span>anexo ✓</span><span>CPF da chave ✓ (no banco, na hora de pagar)</span></div>
+        <div class="acoes"><button class="btn peq sec">Tirar do dia</button></div>
+      </div>
+    </div>
+    <div class="grupo">
+      <h4>Precisa de revisão · 2</h4>
+      <div class="item">
+        <div class="q"><span class="selo s-olhe">OLHE</span>LOJA DE MATERIAIS EXEMPLO</div>
+        <div class="v">R$ 980,00</div>
+        <div class="d">Motivo: CNPJ da NF ≠ cadastro · <a href="#">ver anexo</a></div>
+        <div class="acoes"><button class="btn peq">Liberar (com motivo)</button><button class="btn peq sec">Tirar do dia</button><button class="btn peq sec">Paguei à mão</button></div>
+      </div>
+      <div class="item">
+        <div class="q"><span class="selo s-naoli">NÃO LI</span>RECIBO MANUSCRITO EXEMPLO</div>
+        <div class="v">R$ 450,00</div>
+        <div class="d">Motivo: anexo escrito à mão (leitura por IA: R$ 450,00 · conferir) · <a href="#">ver anexo</a></div>
+        <div class="acoes"><button class="btn peq">Liberar (com motivo)</button><button class="btn peq sec">Tirar do dia</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="conta">
+    <div class="topo">
+      <h3>OBRA BETA - INTER</h3>
+      <div class="saldos"><span>Banco <b>R$ 5.210,00</b></span><span>ERP <b>R$ 5.230,00</b> ⚠ difere</span><span>A pagar <b>R$ 1.820,00</b></span></div>
+    </div>
+    <div class="grupo">
+      <h4>Pagar à mão · Inter não paga pela API nesta versão</h4>
+      <div class="item">
+        <div class="q"><span class="selo s-mao">À MÃO</span>CONCESSIONÁRIA EXEMPLO</div>
+        <div class="v">R$ 1.820,00</div>
+        <div class="d">OBRA BETA ENERGIA REF 11/2026 · clique no código para tela cheia (lê pelo celular)</div>
+        <div style="grid-column:1/-1;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div class="barras" style="flex:1;min-width:220px"></div><div class="qr"></div></div>
+        <div class="acoes"><button class="btn peq sec">Copiar código</button><button class="btn peq sec">Copiar descrição</button><button class="btn peq ok">Paguei</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pe">
+    <span><b>Enviar ao diretor:</b> OBRA ALFA (3 itens + aporte, R$ 26.900,00) · OBRA GAMA (5 itens, R$ 9.115,40)</span>
+    <button class="btn ok">Enviar ao diretor</button>
+  </div>
+  <p class="nota">Ao enviar, cada conta vira um lote congelado (o banco não deixa mudar depois). Corrigir dado é no Mais Controle e "Buscar" de novo.</p>
+</section>
+
+<section class="tela" id="aporte">
+  <h2>Aportes e transferências</h2>
+  <p class="sub">Todas as contas numa tabela. Aporte e transferência viram itens da conta que MANDA o dinheiro, saem antes dos pagamentos dela, e o servidor lança no ERP depois.</p>
+  <table>
+    <thead><tr><th>Conta</th><th>Saldo no banco</th><th>A pagar no dia</th><th>Saldo depois</th><th></th></tr></thead>
+    <tbody>
+      <tr><td>CONTA MÃE - SICOOB</td><td>R$ 140.300,00</td><td>R$ 1.200,00</td><td>R$ 139.100,00</td><td><button class="btn peq sec">Transferência</button></td></tr>
+      <tr><td><b>OBRA ALFA - SICOOB</b></td><td>R$ 18.420,10</td><td>R$ 26.900,00</td><td class="falta">− R$ 8.479,90</td><td><button class="btn peq">+ Aporte</button> <button class="btn peq sec">Transferência</button></td></tr>
+      <tr><td>EMPRESA A - SICOOB</td><td>R$ 2.100,00</td><td>R$ 4.000,00</td><td class="falta">− R$ 1.900,00</td><td><button class="btn peq">+ Aporte</button> <button class="btn peq sec">Transferência</button></td></tr>
+      <tr><td>EMPRESA A - INTER</td><td>R$ 9.800,00</td><td>R$ 0,00</td><td>R$ 9.800,00</td><td><button class="btn peq sec">Transferência</button></td></tr>
+    </tbody>
+  </table>
+  <div class="duas" style="margin-top:16px">
+    <div class="modal">
+      <b>+ Aporte em OBRA ALFA - SICOOB</b> <span class="nota">(falta R$ 8.479,90)</span>
+      <label>Aportadores (cadastro da aba Aportes)</label>
+      <div class="item" style="grid-template-columns:1fr 140px"><div class="q">SÓCIO JV</div><input value="4.239,95"></div>
+      <div class="item" style="grid-template-columns:1fr 140px"><div class="q">SÓCIO JC</div><input value="4.239,95"></div>
+      <div class="item" style="grid-template-columns:1fr 140px"><div class="q">INVESTIDOR EXEMPLO</div><input value="0,00"></div>
+      <p class="nota">A regra de 29/10 já propõe a divisão JV/JC; o total precisa bater com o valor do aporte.</p>
+      <label>Sai de</label><select><option>CONTA MÃE - SICOOB (saldo depois R$ 139.100,00)</option></select>
+      <label>Como chega</label><select><option>Transferência Sicoob → Sicoob</option><option>Pix pela chave (outro banco)</option></select>
+      <div style="margin-top:12px;display:flex;gap:8px"><button class="btn">Incluir aporte</button><button class="btn sec">Cancelar</button></div>
+    </div>
+    <div class="modal">
+      <b>Transferência entre contas do mesmo grupo</b>
+      <label>De</label><select><option>EMPRESA A - INTER (saldo R$ 9.800,00)</option></select>
+      <label>Para (só contas da mesma empresa)</label><select><option>EMPRESA A - SICOOB (falta R$ 1.900,00)</option></select>
+      <label>Valor</label><input value="R$ 1.900,00">
+      <p class="nota">Origem Inter ou Caixa: sem API de pagamento nesta versão → vai para "Pagar à mão" com os dados para copiar. Origem Sicoob: sai pela API.</p>
+      <div style="margin-top:12px;display:flex;gap:8px"><button class="btn">Incluir transferência</button><button class="btn sec">Cancelar</button></div>
+    </div>
+  </div>
+</section>
+
+<section class="tela" id="diretor">
+  <h2>2 · Diretor — "Pagamentos do dia" (celular)</h2>
+  <p class="sub">Um cartão por conta enviada. Aprova conta por conta; cada uma começa a pagar na hora.</p>
+  <div class="telefone">
+    <div class="aviso a" style="font-size:13px">2 contas esperando · enviado por Gustavo às 10:12</div>
+    <div class="conta">
+      <div class="topo"><h3>CONTA MÃE - SICOOB</h3><div class="saldos"><span>Banco <b>R$ 140.300,00</b></span></div></div>
+      <div class="grupo">
+        <div class="item"><div class="q"><span class="selo s-api">APORTE</span>→ OBRA ALFA (JV/JC)</div><div class="v">R$ 8.479,90</div></div>
+        <div class="item"><div class="q">CONTADOR EXEMPLO</div><div class="v">R$ 1.200,00</div><div class="d">CC: ESCRITÓRIO · HONORARIO 11/2026 · boleto · <a href="#">ver anexo</a></div><div class="acoes"><button class="btn peq perigo">Tirar</button></div></div>
+      </div>
+      <div class="grupo" style="display:flex;justify-content:space-between;align-items:center"><b>Total R$ 9.679,90</b><button class="btn ok">Aprovar esta conta</button></div>
+    </div>
+    <div class="conta">
+      <div class="topo"><h3>OBRA ALFA - SICOOB</h3><div class="saldos"><span>Banco <b>R$ 18.420,10</b></span><span>+ aporte <b>R$ 8.479,90</b></span></div></div>
+      <div class="grupo">
+        <div class="item"><div class="q">FORNECEDOR CIMENTO EXEMPLO</div><div class="v">R$ 12.400,00</div><div class="d">CC: OBRA ALFA · boleto · beneficiário FORNECEDOR CIMENTO EXEMPLO ✓ · NF 1234 · <a href="#">ver anexo</a></div><div class="acoes"><button class="btn peq perigo">Tirar</button></div></div>
+        <div class="item"><div class="q">PINTOR EXEMPLO</div><div class="v">R$ 3.500,00</div><div class="d">CC: OBRA ALFA · Pix chave <b>pintor@exemplo.com</b><br>dono da chave: <b>PINTOR EXEMPLO · CPF ***.456.789-**</b> ✓ confere com o cadastro · <a href="#">ver anexo</a></div><div class="acoes"><button class="btn peq perigo">Tirar</button></div></div>
+        <div class="item"><div class="q">+ 1 item</div><div class="v">R$ 11.000,00</div></div>
+      </div>
+      <div class="grupo" style="display:flex;justify-content:space-between;align-items:center"><b>Total R$ 26.900,00</b><button class="btn ok">Aprovar esta conta</button></div>
+    </div>
+    <p class="nota">"Aprovar" pede confirmação mostrando o total. "Tirar" pede motivo. "Ver anexo" abre o arquivo numa janela (o Mais Controle só no link "abrir no Mais Controle").</p>
+  </div>
+</section>
+
+
+<section class="tela" id="diretor-pc">
+  <h2>2b · Diretor — "Pagamentos do dia" (PC)</h2>
+  <p class="sub">Mesma página do celular; na tela larga ela vira lista de contas à esquerda e tabela da conta escolhida à direita.</p>
+  <div class="resumo">
+    <div><small>Contas esperando</small><b>2</b></div>
+    <div><small>Total a aprovar</small><b>R$ 36.579,90</b></div>
+    <div><small>Já aprovado hoje</small><b>R$ 48.210,00</b></div>
+    <div><small>Pagos agora</small><b class="e-ok">31 de 34</b></div>
+  </div>
+  <div class="pc">
+    <div class="lista">
+      <a class="ativa" href="#diretor-pc"><b>OBRA ALFA - SICOOB</b><small>4 itens · R$ 26.900,00 · recebe aporte R$ 8.479,90</small><small class="e-at">esperando aprovação</small></a>
+      <a href="#diretor-pc"><b>CONTA MÃE - SICOOB</b><small>2 itens · R$ 9.679,90 (inclui o aporte)</small><small class="e-at">esperando aprovação</small></a>
+      <a href="#diretor-pc"><b>OBRA GAMA - SICOOB</b><small>5 itens · R$ 9.115,40</small><small class="e-ok">aprovada 09:40 · pagos 5/5</small></a>
+    </div>
+    <div class="conta" style="margin:0">
+      <div class="topo">
+        <h3>OBRA ALFA - SICOOB</h3>
+        <div class="saldos"><span>Banco <b>R$ 18.420,10</b></span><span>+ aporte <b>R$ 8.479,90</b></span><span>A pagar <b>R$ 26.900,00</b></span><span>Depois <b>R$ 0,00</b></span></div>
+      </div>
+      <table>
+        <thead><tr><th>Favorecido</th><th>Centro de custo</th><th>Como paga</th><th>Valor</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><b>FORNECEDOR CIMENTO EXEMPLO</b><div class="nota">NF 1234 OC 567 · vence 30/11 · <a href="#">ver anexo</a></div></td><td>OBRA ALFA</td><td>Boleto<div class="nota">beneficiário FORNECEDOR CIMENTO EXEMPLO ✓</div></td><td><b>R$ 12.400,00</b></td><td><button class="btn peq perigo">Tirar</button></td></tr>
+          <tr><td><b>PINTOR EXEMPLO</b><div class="nota">C 12 M 3 · <a href="#">ver anexo</a></div></td><td>OBRA ALFA</td><td>Pix · <b>pintor@exemplo.com</b><div class="nota">dono: PINTOR EXEMPLO · CPF ***.456.789-** ✓</div></td><td><b>R$ 3.500,00</b></td><td><button class="btn peq perigo">Tirar</button></td></tr>
+          <tr><td><b>TOPÓGRAFO EXEMPLO</b><div class="nota">NF 88 · <a href="#">ver anexo</a></div></td><td>OBRA ALFA</td><td>Pix · CNPJ <b>11.222.333/0001-81</b><div class="nota">dono: TOPÓGRAFO EXEMPLO LTDA ✓</div></td><td><b>R$ 6.000,00</b></td><td><button class="btn peq perigo">Tirar</button></td></tr>
+          <tr><td><b>LOCADORA EXEMPLO</b><div class="nota">NF 77 · <a href="#">ver anexo</a></div></td><td>OBRA ALFA</td><td>Boleto<div class="nota">beneficiário LOCADORA EXEMPLO ✓</div></td><td><b>R$ 5.000,00</b></td><td><button class="btn peq perigo">Tirar</button></td></tr>
+        </tbody>
+      </table>
+      <div class="grupo" style="display:flex;justify-content:space-between;align-items:center"><span><b>Total R$ 26.900,00</b> · enviado por Gustavo às 10:12</span><button class="btn ok">Aprovar esta conta</button></div>
+    </div>
+  </div>
+  <p class="nota">O dono de cada chave é consultado no envio: chave de outra pessoa (⚠) nem chega ao diretor — volta para "Precisa de revisão" com o motivo. No pagamento, o robô confere de novo e recusa sozinho se o documento não bater.</p>
+</section>
+
+<section class="tela" id="acompanhar">
+  <h2>3 · Acompanhamento (equipe e diretor)</h2>
+  <p class="sub">Atualiza sozinho. O que pede atenção sobe para o topo.</p>
+  <div class="aviso r"><b>ALERTA:</b> título já tratado no ERP — conferir se não foi pago duas vezes · FORNECEDOR X · R$ 2.300,00 <button class="btn peq sec">Resolvi (nota)</button></div>
+  <div class="aviso a"><b>Conferir no banco</b> antes de qualquer pagamento à mão · Pix QR · R$ 640,00 · "erro ao pagar: Sicoob 400: QR expirado" <button class="btn peq sec">Resolvi (nota)</button></div>
+  <div class="barra"><span>Servidor: <b class="e-ok">ativo</b> (pulso há 40 s)</span><button class="btn peq perigo" style="margin-left:auto">Parar pagamentos</button><span class="nota">Retomar: só o diretor</span></div>
+  <table>
+    <thead><tr><th>Conta</th><th>Item</th><th>Valor</th><th>Estado</th></tr></thead>
+    <tbody>
+      <tr><td>CONTA MÃE</td><td>Aporte → OBRA ALFA</td><td>R$ 8.479,90</td><td class="est e-ok">pago ✓ · lançado no ERP ✓</td></tr>
+      <tr><td>OBRA ALFA</td><td>FORNECEDOR CIMENTO EXEMPLO</td><td>R$ 12.400,00</td><td class="est e-ok">pago ✓ · anexado e baixado ✓</td></tr>
+      <tr><td>OBRA ALFA</td><td>PINTOR EXEMPLO</td><td>R$ 3.500,00</td><td class="est e-and">pagando…</td></tr>
+      <tr><td>OBRA ALFA</td><td>+1 item</td><td>R$ 11.000,00</td><td class="est e-at">aguardando saldo</td></tr>
+      <tr><td>OBRA GAMA</td><td>5 itens</td><td>R$ 9.115,40</td><td class="est">aguardando aprovação</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</main>
+</body>
+</html>

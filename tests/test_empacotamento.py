@@ -72,6 +72,11 @@ _PASTAS_SO_DO_REPO = {
         "quando o contrato mudou. As três rodam fora do exe — a galeria à "
         "mão, as outras duas pelo Agendador de Tarefas — e o app nunca as "
         "importa"),
+    "leitura_manha": (
+        "a leitura das 07:30 (saldo e extrato pela API do Sicoob e do Inter, "
+        "saldo do ERP pelo porteiro, pré-marcas na nuvem) roda só do clone do "
+        "repositório no servidor, pelo Agendador; o app nunca a importa e ela "
+        "não tem por que viajar no zip para a máquina de quem usa"),
 }
 
 #: Sempre entram, e não são código: a versão desta build, a trava do motor e o
