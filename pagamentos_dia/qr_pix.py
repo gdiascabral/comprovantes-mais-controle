@@ -85,6 +85,24 @@ def valido(codigo) -> bool:
     return bool(regras.PIX_COPIA_COLA.fullmatch(re.sub(r"\s+", "", c)))
 
 
+_FIM_DO_CODIGO = re.compile(r"6304[0-9A-Fa-f]{4}")
+
+
+def codigos_no_texto(texto) -> list[str]:
+    """Os Pix copia-e-cola válidos dentro de um texto livre (a observação do
+    lançamento), sem repetir. O nome do recebedor (campo 59) tem espaço, então
+    o fim de cada código é o primeiro campo 63 cujo CRC fecha."""
+    t, achados, i = str(texto or ""), [], 0
+    while (i := t.find("000201", i)) >= 0:
+        for m in _FIM_DO_CODIGO.finditer(t, i):
+            if valido(t[i:m.end()]):
+                if t[i:m.end()] not in achados:
+                    achados.append(t[i:m.end()])
+                break
+        i += 6
+    return achados
+
+
 def valor(codigo: str) -> float | None:
     """O valor embutido (campo 54), ou None quando o código não traz valor
     (QR estático sem valor, ou dinâmico que só o informa na consulta)."""

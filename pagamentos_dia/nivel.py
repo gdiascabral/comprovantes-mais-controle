@@ -63,6 +63,40 @@ class Nivel:
     nome: str
     motivos: list = field(default_factory=list)
     conferido: list = field(default_factory=list)        # [(item, estado)]
+    autorizado_por: str = ""          # "FULANA e Beltrano" — `autorizacao_libera`
+
+
+def autorizacao_libera(r: dict) -> str:
+    """Quem autorizou, quando a autorização sozinha prova a linha — "" quando não.
+
+    Pedido do dono de 27/11/2026: o anexo "PAGAMENTO AUTORIZADO — autorizado
+    por FULANA" vira "Pode pagar (autorizado por FULANA)". Só vale quando ela é
+    o ÚNICO anexo (`registro["so_autorizacao"]`): outro papel ao lado — o
+    recibo, um aviso mandando parte a outra pessoa — é conferido como sempre.
+    O status tem de ser APTO (nada de alarme do `relatorio`) e o papel tem de
+    dizer quem autorizou.
+
+    Revisão de dinheiro (27/11/2026): só quando a linha paga PELO caminho da
+    autorização (`registro["pago_pela_autorizacao"]`: a chave dos Dados
+    Bancários passou pelas travas de 22/10 — uma chave só, tipo conhecido, DV
+    fechando) e nunca em título parcelado (a autorização anexada ao título
+    valeria para as parcelas que ninguém autorizou ainda)."""
+    nomes = [str(x).strip() for x in (r.get("autorizado_por") or []) if str(x).strip()]
+    if not nomes or not r.get("so_autorizacao") or not r.get("pago_pela_autorizacao"):
+        return ""
+    if _total(r) > 1:
+        return ""
+    if not str(r.get("status") or "").startswith("APTO"):
+        return ""
+    return " e ".join(nomes)
+
+
+def rotulo(n: "Nivel") -> str:
+    """O texto da etiqueta do nível: "PODE PAGAR (autorizado por X)" quando
+    quem liberou foi a autorização."""
+    if n.nome == PODE_PAGAR and n.autorizado_por:
+        return f"{ROTULO[PODE_PAGAR]} (autorizado por {n.autorizado_por})"
+    return ROTULO[n.nome]
 
 
 def _pecas(conferencia) -> list[str]:
@@ -188,6 +222,11 @@ def conferido(r: dict, com_ia: bool = True) -> dict:
         elif (ia.get("quem_recebe") == BATE and ia.get("estado") in _IA_PROVA_QUEM_RECEBE
                 and _total(r) <= 1):
             _marcar(estado, "quem recebe", BATE)
+    if autorizacao_libera(r):
+        # A autorização é a prova dos dois essenciais (dono, 27/11/2026). O
+        # `_marcar` não apaga divergência que outra peça tenha acusado.
+        _marcar(estado, "valor", BATE)
+        _marcar(estado, "quem recebe", BATE)
     if REEMBOLSO_DE_SOCIO_PODE_PAGAR and r.get("reembolso_socio"):
         # Só o sócio do cadastro: a chave é a dele, com o CPF fechando o DV
         # (`reembolso.socio_do_documento`). O aviso "PAGAR PARA" também sai
@@ -340,14 +379,29 @@ def nivel_da_linha(r: dict, *, bloqueio: str = "", vencido: bool = False) -> Niv
         olhe.append(MOTIVO_UC_NAO_CONFERIDA)
     if r.get("obs_parcela") and (total > 1 or OBS_DE_PARCELA_UNICA_LEVA_A_OLHE):
         olhe.append("a parcela tem observação: leia antes de pagar")
+    autorizou = autorizacao_libera(r)
+    nomes = [str(x).strip() for x in (r.get("autorizado_por") or []) if str(x).strip()]
+    if nomes and not autorizou and (nao_li or olhe):
+        quem = " e ".join(nomes)
+        if not r.get("so_autorizacao"):
+            # Autorização com outro anexo ao lado: quem decide é o outro papel.
+            olhe.append(f"autorizado por {quem} — confira o outro anexo")
+        elif _total(r) > 1:
+            olhe.append(f"autorizado por {quem} — título parcelado: confira a parcela")
+        else:
+            olhe.append(f"autorizado por {quem} — mas a chave Pix dos dados bancários "
+                        "do lançamento não é inequívoca: confira a chave")
+    elif autorizou and (nao_li or olhe):
+        olhe.append(f"autorizado por {autorizou}")
     nome = NAO_LI if nao_li else OLHE if olhe else PODE_PAGAR
-    return Nivel(nome, list(dict.fromkeys(nao_li + olhe)), list(estado.items()))
+    return Nivel(nome, list(dict.fromkeys(nao_li + olhe)), list(estado.items()),
+                 autorizado_por=autorizou)
 
 
 def para_o_html(n: Nivel, r: dict) -> dict:
     parcela = r.get("parcela") or {}
     total = _total(r)
-    return {"nivel": n.nome, "nivel_rotulo": ROTULO[n.nome], "motivos": list(n.motivos),
+    return {"nivel": n.nome, "nivel_rotulo": rotulo(n), "motivos": list(n.motivos),
             "conferido": [[item, estado] for item, estado in n.conferido],
             "parcela": (f"{parcela.get('numero') or '?'} de {total}" if total > 1 else ""),
             "obs_parcela": str(r.get("obs_parcela") or ""),
