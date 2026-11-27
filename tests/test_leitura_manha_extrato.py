@@ -126,3 +126,15 @@ def test_saldo_inter_em_float_no_json_chega_decimal_exato():
 
 def test_linha_que_nao_e_objeto_e_ilegivel():
     assert ex.movimentos_inter({"transacoes": ["x", 3]}, "A", ONTEM).ilegiveis == 2
+
+
+def test_numero_absurdo_nao_estoura_e_e_none():
+    assert ex.centavos(Decimal("1e40")) is None
+    assert ex.valor_texto("1" * 30 + ",00") is None
+    assert ex.valor_texto("1" * 30) is None
+
+
+def test_linha_com_valor_absurdo_e_contada_como_ilegivel():
+    x = ex.movimentos_sicoob({"transacoes": [
+        {"tipo": "DEBITO", "valor": "1" * 30 + ",00", "data": "2026-11-26"}]}, "A", ONTEM)
+    assert x.movimentos == () and x.ilegiveis == 1

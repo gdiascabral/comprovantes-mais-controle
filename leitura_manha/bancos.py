@@ -37,7 +37,7 @@ def token_sicoob(sessao, client_id: str, cert) -> TokenOAuth:
     return TokenOAuth(sessao, SICOOB_TOKEN,
                       {"grant_type": "client_credentials", "client_id": client_id,
                        "scope": SICOOB_ESCOPO},
-                      user_agent=USER_AGENT, cert=cert)
+                      user_agent=USER_AGENT, cert=cert, espera_429=ESPERA_429_SICOOB)
 
 
 def token_inter(sessao, base: str, client_id: str, client_secret: str, cert,
@@ -45,7 +45,8 @@ def token_inter(sessao, base: str, client_id: str, client_secret: str, cert,
     return TokenOAuth(sessao, base + "/oauth/v2/token",
                       {"client_id": client_id, "client_secret": client_secret,
                        "grant_type": "client_credentials", "scope": INTER_ESCOPO},
-                      user_agent=USER_AGENT, cert=cert, ritmo=ritmo)
+                      user_agent=USER_AGENT, cert=cert, ritmo=ritmo,
+                      espera_429=ESPERA_429_INTER)
 
 
 class ContaCorrenteSicoob:

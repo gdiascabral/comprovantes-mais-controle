@@ -36,15 +36,27 @@ class ExtratoIlegivel(ValueError):
     """O extrato inteiro não tem a forma esperada (sem a lista de transações)."""
 
 
+def _quantizar(d: Decimal) -> Decimal | None:
+    """Duas casas, ou None quando o número não cabe no contexto do Decimal
+    (1e40 levanta InvalidOperation): para o extrato, é o mesmo ilegível."""
+    try:
+        return d.quantize(CENTAVO)
+    except ArithmeticError:
+        return None
+
+
 def centavos(v) -> Decimal | None:
     """Número JSON (já em Decimal ou int) com até 2 casas, ou None.
     bool, float, texto e número com mais de 2 casas não são dinheiro."""
     if isinstance(v, bool) or not isinstance(v, (int, Decimal)):
         return None
     d = Decimal(v)
-    if not d.is_finite() or d != d.quantize(CENTAVO):
+    if not d.is_finite():
         return None
-    return d.quantize(CENTAVO)
+    q = _quantizar(d)
+    if q is None or d != q:
+        return None
+    return q
 
 
 def valor_texto(t) -> Decimal | None:
@@ -55,9 +67,9 @@ def valor_texto(t) -> Decimal | None:
         return None
     s = t.strip()
     if _PONTO.match(s):
-        return Decimal(s).quantize(CENTAVO)
+        return _quantizar(Decimal(s))
     if _VIRGULA.match(s):
-        return Decimal(s.replace(".", "").replace(",", ".")).quantize(CENTAVO)
+        return _quantizar(Decimal(s.replace(".", "").replace(",", ".")))
     return None
 
 

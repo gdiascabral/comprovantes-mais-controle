@@ -53,7 +53,7 @@ def pedir_json(sessao, metodo: str, url: str, *, ritmo: Ritmo, headers: dict,
             r = sessao.request(metodo, url, headers=headers, params=params, data=data,
                                cert=cert, timeout=timeout)
         except Exception as e:  # rede caiu: o motivo é só o tipo (a URL leva a conta)
-            raise ErroLeitura(None, f"sem resposta ({type(e).__name__})") from e
+            raise ErroLeitura(None, f"sem resposta ({type(e).__name__})") from None
         if r.status_code == 429 and tentativa == 1:
             ritmo.esperar(espera_429)
             continue
@@ -79,11 +79,13 @@ class TokenOAuth:
     O `form` leva o segredo: nunca vai para mensagem de erro nem para log."""
 
     def __init__(self, sessao, url: str, form: dict, *, user_agent: str, cert=None,
-                 ritmo: Ritmo | None = None, relogio: Callable[[], float] = time.monotonic):
+                 ritmo: Ritmo | None = None, relogio: Callable[[], float] = time.monotonic,
+                 espera_429: float = 0.0):
         self._s, self._url, self._form = sessao, url, dict(form)
         self._ua, self._cert = user_agent, cert
         self._ritmo = ritmo or Ritmo(0)
         self._relogio = relogio
+        self._429 = espera_429
         self._token, self._vence, self._erro = "", 0.0, None
 
     def __repr__(self) -> str:
@@ -98,7 +100,7 @@ class TokenOAuth:
             corpo = pedir_json(self._s, "POST", self._url, ritmo=self._ritmo,
                                headers={"User-Agent": self._ua, "Accept": "application/json",
                                         "Content-Type": "application/x-www-form-urlencoded"},
-                               data=self._form, cert=self._cert)
+                               data=self._form, cert=self._cert, espera_429=self._429)
             tok = corpo.get("access_token")
             if not isinstance(tok, str) or not tok:
                 raise ErroLeitura(200, "token sem access_token")

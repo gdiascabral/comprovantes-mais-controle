@@ -35,8 +35,8 @@ class ContaBanco:
     empresa: str
     banco: str
     conta_erp: str
-    numero: int = 0              # Sicoob: numeroContaCorrente
-    conta_corrente: str = ""     # Inter: x-conta-corrente (só com mais de uma conta)
+    numero: int = field(default=0, repr=False)              # Sicoob: numeroContaCorrente
+    conta_corrente: str = field(default="", repr=False)     # Inter: x-conta-corrente (só com mais de uma conta)
 
 
 @dataclass(frozen=True)
@@ -103,12 +103,15 @@ def de_dict(d: dict) -> Config:
     ambiente = d.get("ambiente")
     if ambiente not in AMBIENTES:
         raise ConfigInvalida(f"'ambiente' tem de ser um de {AMBIENTES}")
-    empresas, vistas = [], set()
+    empresas, vistas, nomes, numeros = [], set(), set(), set()
     for k, e in enumerate(d.get("empresas") or ()):
         onde = f"empresa {k + 1}"
         if not isinstance(e, dict):
             raise ConfigInvalida(f"{onde}: não é objeto")
         nome = _texto(e, "nome", onde)
+        if nome in nomes:
+            raise ConfigInvalida(f"{onde}: nome de empresa repetido no arquivo")
+        nomes.add(nome)
         contas = []
         for j, c in enumerate(e.get("contas") or ()):
             ondec = f"{nome}, conta {j + 1}"
@@ -122,10 +125,13 @@ def de_dict(d: dict) -> Config:
                 n = c.get("numero")
                 if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
                     raise ConfigInvalida(f"{ondec}: 'numero' do Sicoob tem de ser inteiro > 0")
+                if n in numeros:
+                    raise ConfigInvalida(f"{ondec}: 'numero' do Sicoob repetido no arquivo")
+                numeros.add(n)
                 contas.append(ContaBanco(nome, "sicoob", erp, numero=n))
             else:
                 cc = c.get("conta_corrente") or ""
-                if not isinstance(cc, str) or (cc and not cc.isdigit()):
+                if not isinstance(cc, str) or (cc and not (cc.isascii() and cc.isdigit())):
                     raise ConfigInvalida(f"{ondec}: 'conta_corrente' do Inter só com dígitos")
                 contas.append(ContaBanco(nome, "inter", erp, conta_corrente=cc))
         if not contas:

@@ -49,6 +49,12 @@ def test_rede_caida_vira_erro_sem_a_url():
     assert e.value.status is None and "99" not in str(e.value)
 
 
+def test_erro_de_rede_nao_carrega_a_excecao_original():
+    with pytest.raises(ErroLeitura) as e:
+        _pedir(SessaoFalsa(ConnectionError("https://banco/x?numeroContaCorrente=99")))
+    assert e.value.__cause__ is None and e.value.__suppress_context__
+
+
 def test_429_espera_e_tenta_uma_vez_so():
     rel = Relogio()
     ritmo = Ritmo(0, relogio=rel, esperar=rel.esperar)

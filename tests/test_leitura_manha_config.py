@@ -51,6 +51,33 @@ def test_arquivo_ruim_diz_o_campo_sem_o_valor(mudar, trecho):
     assert "SEGREDO" not in str(e.value) and "SENHA-ROBO" not in str(e.value)
 
 
+def test_numero_e_conta_corrente_fora_do_repr():
+    c = cf.de_dict(_com(lambda d: d["empresas"][0]["contas"][1].update(conta_corrente="98765")))
+    assert "123456" not in repr(c) and "98765" not in repr(c)
+
+
+def test_conta_corrente_so_ascii():
+    with pytest.raises(cf.ConfigInvalida, match="dígitos"):
+        cf.de_dict(_com(lambda d: d["empresas"][0]["contas"][1].update(conta_corrente="12²")))
+
+
+def test_numero_sicoob_repetido_e_recusado_sem_mostrar_o_valor():
+    def mudar(d):
+        d["empresas"][0]["contas"].append({"banco": "sicoob", "numero": 123456, "conta_erp": "A - SICOOB 2"})
+    with pytest.raises(cf.ConfigInvalida, match="repetido") as e:
+        cf.de_dict(_com(mudar))
+    assert "123456" not in str(e.value)
+
+
+def test_nome_de_empresa_repetido_e_recusado_sem_mostrar_o_nome():
+    def mudar(d):
+        d["empresas"].append({"nome": "EMPRESA A", "sicoob": {"client_id": "C2", "cert": ["c.pem", "k.pem"]},
+                              "contas": [{"banco": "sicoob", "numero": 555, "conta_erp": "B - SICOOB"}]})
+    with pytest.raises(cf.ConfigInvalida, match="repetido") as e:
+        cf.de_dict(_com(mudar))
+    assert "EMPRESA A" not in str(e.value)
+
+
 def test_sandbox_pede_token_fixo_e_dispensa_nuvem():
     c = cf.de_dict({"ambiente": "sandbox", "pasta": "p", "empresas": [
         {"nome": "E", "sicoob": {"client_id": "C", "token_fixo": "T"},

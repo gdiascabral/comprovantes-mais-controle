@@ -71,3 +71,12 @@ def test_tokens_pedem_so_leitura():
     assert k1["cert"] == ("c.pem", "k.pem")
     assert u2 == bc.INTER_PRODUCAO + "/oauth/v2/token" and k2["data"]["scope"] == "extrato.read"
     assert k2["data"]["grant_type"] == "client_credentials"
+
+
+def test_429_no_token_inter_dorme_61s_antes_da_segunda_tentativa():
+    rel = Relogio()
+    ritmo = Ritmo(0, relogio=rel, esperar=rel.esperar)
+    s = SessaoFalsa(Resp(429, "devagar"), Resp(200, {"access_token": "T"}))
+    tok = bc.token_inter(s, bc.INTER_PRODUCAO, "CI", "CS", ("c.pem", "k.pem"), ritmo)
+    assert tok() == "T"
+    assert rel.esperas == [61.0] and len(s.pedidos) == 2
