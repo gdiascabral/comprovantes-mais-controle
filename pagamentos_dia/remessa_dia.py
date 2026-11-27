@@ -85,6 +85,8 @@ MOTIVO_COPIA_COLA = ("Pix copia-e-cola (BR Code): é outro produto na remessa "
 MOTIVO_CHAVE_AMBIGUA = ("chave Pix de onze dígitos sem tipo declarado — CPF e "
                         "celular têm os dois onze, e não bate com o cadastro")
 MOTIVO_JA_PAGO = "já pago"
+MOTIVO_TELEFONE_ILEGIVEL = ("chave Pix de telefone que não vira +55 + DDD + número "
+                            "— corrija os Dados Bancários no ERP")
 #: O aviso "PAGAR PARA <pessoa>" manda o dinheiro para quem NÃO é o favorecido
 #: do lançamento. O segmento B carrega UM par nome/documento, e os dois lados
 #: vinham de origens diferentes: o nome e o documento do FORNECEDOR (do cadastro
@@ -812,6 +814,15 @@ def _impedimento(registro: dict, documento: str, forma: str) -> str:
             return MOTIVO_SEM_DOCUMENTO
         if not forma:
             return MOTIVO_CHAVE_AMBIGUA
+        if forma == "01":
+            # A chave telefone sai "+55" + DDD + número (27/11/2026); a que
+            # não se lê assim fica de fora AQUI, com o motivo, em vez de
+            # derrubar a geração do arquivo inteiro no `PixTransferencia`.
+            from cnab240.dominios import chave_telefone_pix
+            try:
+                chave_telefone_pix(dados)
+            except ValueError:
+                return MOTIVO_TELEFONE_ILEGIVEL
         return ""
 
     return f"forma de pagamento sem remessa: {registro.get('tipo') or '?'}"

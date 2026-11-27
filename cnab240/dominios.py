@@ -196,6 +196,60 @@ class FormaIniciacaoPix(StrEnum):
     DADOS_BANCARIOS = "05"
 
 
+DDDS = frozenset((
+    11, 12, 13, 14, 15, 16, 17, 18, 19,
+    21, 22, 24, 27, 28,
+    31, 32, 33, 34, 35, 37, 38,
+    41, 42, 43, 44, 45, 46, 47, 48, 49,
+    51, 53, 54, 55,
+    61, 62, 63, 64, 65, 66, 67, 68, 69,
+    71, 73, 74, 75, 77, 79,
+    81, 82, 83, 84, 85, 86, 87, 88, 89,
+    91, 92, 93, 94, 95, 96, 97, 98, 99,
+))
+
+
+def chave_telefone_pix(chave: str) -> str:
+    """A chave Pix de celular como o Pix a guarda: "+55" + DDD + 9 + 8 dígitos.
+
+    O cadastro do ERP escreve a chave do jeito de cada um ("62 9XXXX-XXXX",
+    onze dígitos crus, "+55 (62) …"), e até 27/11/2026 ela ia assim para a
+    Informação 12 do segmento B (G100 = 01; o G101 não diz o formato). O
+    formato da chave telefone no Pix é "+55…", e o próprio Guia o exige no
+    J-52 (G102); nenhuma das 39 remessas com chave telefone tinha retorno do
+    banco. Conferido antes de sair, porque um número bem formado de OUTRA
+    pessoa é o pior erro aqui (revisão de dinheiro, 27/11/2026):
+    - DDD do Brasil e o 9 do celular (11 dígitos); fixo e celular sem o 9 não
+      são chave Pix e não vão;
+    - o primeiro grupo de dígitos tem de ser o DDD, o "55" ou o número
+      inteiro (o DDD escrito depois do número não se adivinha);
+    - "55" só sai da frente com 13 dígitos ("+55" + DDD + número). Onze
+      dígitos que começam por 55 podem ser "+55 9XXXX-XXXX" sem o DDD (a
+      extração perde o "+"): o DDD 55 escrito sozinho é recusado, e o do RS
+      só passa com o "+55" na frente ("+55 55 9XXXX-XXXX").
+    Fora disso, ValueError: chave de telefone que não se lê não vai ao banco."""
+    grupos = re.findall(r"\d+", str(chave or ""))
+    d = "".join(grupos)
+    com_pais = len(d) == 13 and d.startswith("55")
+    # O primeiro grupo de dígitos é o começo da chave: o DDD ("62 9…",
+    # "(62) 9…"), o "55" do país, ou o número inteiro colado. "999991234 62"
+    # (o DDD escrito DEPOIS) daria outro número bem formado.
+    if not grupos or len(grupos[0]) not in (2, 4, 11, 13) or (
+            len(grupos[0]) == 4 and not com_pais):
+        raise ValueError(f"chave Pix de telefone ilegível: {chave!r}")
+    if com_pais and grupos[0] == "55" and (len(grupos) < 2 or len(grupos[1]) not in (2, 11)):
+        # "+55 999991234 62": o país separado tem de vir seguido do DDD ou do
+        # número inteiro, senão é o DDD escrito depois (revisão de dinheiro).
+        raise ValueError(f"chave Pix de telefone ilegível: {chave!r}")
+    if com_pais:
+        d = d[2:]
+    if len(d) != 11 or d[2] != "9" or int(d[:2]) not in DDDS:
+        raise ValueError(f"chave Pix de telefone ilegível: {chave!r}")
+    if d.startswith("55") and not com_pais:
+        raise ValueError(f"chave Pix de telefone ilegível (DDD 55 ou +55 sem DDD?): {chave!r}")
+    return "+55" + d
+
+
 class TipoContaDestino(StrEnum):
     """G031 — 2 últimos dígitos da Informação 2 em pagamentos Pix."""
 
