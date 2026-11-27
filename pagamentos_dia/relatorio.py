@@ -877,6 +877,48 @@ def eh_autorizacao(f: dict, textos: dict | None = None) -> bool:
                 and not _PROVA_DE_PAGAMENTO.search(texto))
 
 
+#: Quem assinou a autorização: "autorizado por FULANA" no texto do papel
+#: "PAGAMENTO AUTORIZADO" e o nome depois do traço no arquivo
+#: ("PAGAMENTO AUTORIZADO - FULANA"). Pedido do dono de 27/11/2026: a linha
+#: com essa autorização vira "Pode pagar (autorizado por …)".
+_AUTORIZADO_POR = re.compile(r"autorizad[oa]\s+p(?:or|ela|elo)\s+([^\n\r]+)", re.I)
+_AUTORIZADO_NO_NOME = re.compile(r"pagamento[\s_]*autorizado\s*[-–—_:]+\s*(.+)$", re.I)
+
+
+def _nome_de_quem_autorizou(t: str) -> str:
+    t = re.sub(r"\.(pdf|jpe?g|png)$", "", str(t or "").strip(), flags=re.I)
+    t = re.sub(r"[\s_]+", " ", t).strip(" -–—:.,")
+    return t[:60]
+
+
+def quem_autorizou(files, textos: dict | None = None) -> list[str]:
+    """Os nomes de quem autorizou, dos anexos que são autorização
+    (`eh_autorizacao`), sem repetir. Vazio quando não há autorização ou ela
+    não diz quem."""
+    nomes, vistos = [], set()
+    for f in files or ():
+        if not eh_autorizacao(f, textos):
+            continue
+        achados = _AUTORIZADO_POR.findall((textos or {}).get(f.get("downloadUrl") or "") or "")
+        m = _AUTORIZADO_NO_NOME.search(_rotulo(f))
+        if m:
+            achados.append(m.group(1))
+        for a in achados:
+            n = _nome_de_quem_autorizou(a)
+            if n and chave(n) not in vistos:
+                vistos.add(chave(n))
+                nomes.append(n)
+    return nomes
+
+
+def so_autorizacao(files, textos: dict | None = None) -> bool:
+    """Todos os anexos da linha são autorização de pagamento. Com outro anexo
+    ao lado (o recibo, um papel mandando parte a outra pessoa), quem decide é
+    a conferência dele, não a autorização (dono, 27/11/2026)."""
+    files = list(files or ())
+    return bool(files) and all(eh_autorizacao(f, textos) for f in files)
+
+
 def chave_dos_dados_bancarios(pago_para: str) -> str:
     """A chave Pix dos Dados Bancários do lançamento (`paidToBankAccount`),
     só quando ela é inequívoca — senão "".
@@ -892,7 +934,9 @@ def chave_dos_dados_bancarios(pago_para: str) -> str:
     if _DADOS_DE_TED.search(pago_para) and not _DECLARA_PIX.search(pago_para):
         return ""
     achado = chave_unica_da_observacao(pago_para)
-    if not achado or not _chave_confiavel(achado):
+    if not achado:
+        return ""
+    if not _chave_confiavel(achado) and not _celular_declarado(pago_para, achado):
         return ""
     digitos = re.sub(r"\D", "", achado)
     tipos = {regras.tipo_de_chave_pix(pago_para), regras.tipo_de_chave_pix(achado)}
@@ -900,6 +944,21 @@ def chave_dos_dados_bancarios(pago_para: str) -> str:
             and not regras.documento_valido(digitos)):
         return ""
     return achado
+
+
+def _celular_declarado(texto: str, achado: str) -> bool:
+    """Onze dígitos crus que o PRÓPRIO texto do cadastro declara celular
+    ("PIX CELULAR: 6290000000X") e que têm forma de celular (DDD + 9).
+
+    O `_chave_confiavel` foi escrito para a chave lida de FOTO por OCR, onde
+    onze dígitos crus são a ambiguidade CPF × celular. Nos Dados Bancários do
+    lançamento o texto foi digitado e o tipo vem escrito, que é exatamente de
+    onde o `tipo_de_chave_pix` o tira; o QR do HTML já paga essa chave como
+    celular (dono, 27/11/2026: autorizações ficavam "Não li" só por isso)."""
+    d = re.sub(r"\D", "", achado or "")
+    return (len(d) == 11 and regras.parece_celular(d)
+            and regras.tipo_de_chave_pix(texto) == regras.CHAVE_TELEFONE
+            and re.search(r"\b(?:celular|cel|telefone|fone|tel)\b", texto or "", re.I) is not None)
 
 
 _DADOS_DE_TED = re.compile(
@@ -2750,6 +2809,21 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             olhar = "a chave Pix veio da observação do lançamento"
         if olhar:
             avisos.append(f"PAGAR À MÃO — {olhar}.")
+        # Pix copia-e-cola escrito na observação (dono, 27/11/2026: "transformar
+        # esse código em QR code" — a guia do cartório). O HTML das PF o mostra
+        # como QR só com isto preenchido: UM código na observação, a linha não
+        # paga pelo QR de anexo, o fornecedor não é "confirmar sempre" e, tirado
+        # o código, a observação não manda pagar mais ninguém (revisão de
+        # dinheiro, 27/11/2026). Valor e nome do código o HTML confere.
+        pix_da_observacao = ""
+        if tipo == "Pix" and olhar and not qr_usado:
+            codigos_obs = qr_pix_mod.codigos_no_texto(coment)
+            if (len(codigos_obs) == 1
+                    and not regras.regra_do_fornecedor(favorecido, regras_forn).get(
+                        "confirmar_sempre")
+                    and not regras.observacao_redireciona_pagamento(
+                        coment.replace(codigos_obs[0], " "))):
+                pix_da_observacao = codigos_obs[0]
 
         if observacao_relevante(coment, linha_doc):
             avisos.append(f"Observação do lançamento: {coment[:220]}")
@@ -2959,6 +3033,16 @@ def montar_registros(lancamentos, anexos: dict, overviews: dict, textos: dict,
             "fornecedor_no_anexo": bool(fornecedor_nos_textos(item, do_anexo)),
             "prova_pela_foto": prova_pela_foto,
             "reembolso_socio": socio is not None,
+            # Autorização de pagamento (dono, 27/11/2026): quem a assinou e se
+            # ela é o ÚNICO anexo. Só a autorização sozinha leva a linha a
+            # "Pode pagar"; com outro papel ao lado, ele é conferido.
+            "autorizado_por": (quem_autorizou(files, textos)
+                               if cls == "AUTORIZADO" else []),
+            "so_autorizacao": cls == "AUTORIZADO" and so_autorizacao(files, textos),
+            # A linha paga pelo caminho da autorização: a chave dos Dados
+            # Bancários passou pelas travas de 22/10 (`chave_dos_dados_bancarios`).
+            "pago_pela_autorizacao": autorizado_por == "anexo",
+            "pix_da_observacao": pix_da_observacao,
             # Leitura por IA do anexo escrito à mão (`ia_do_dia`): None quando
             # nenhum anexo desta linha foi para ela. Só o `nivel.py` e os HTML a leem.
             "leitura_ia": _leitura_ia_do_item(

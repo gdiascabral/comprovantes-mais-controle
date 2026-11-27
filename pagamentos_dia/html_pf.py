@@ -248,6 +248,32 @@ def _copia_e_cola(dados) -> bool:
     return bool(dados) and str(dados).startswith("000201") and qr_pix.valido(str(dados))
 
 
+MOTIVO_A_MAO = "a observação manda pagar outra pessoa — pague à mão"
+
+
+def copia_e_cola_da_observacao(r: dict) -> tuple[str, str]:
+    """(código, "") quando a observação do lançamento traz o Pix copia-e-cola
+    DESTE lançamento; ("", por quê) quando traz e não serve; ("", "") sem código.
+
+    Pedido do dono de 27/11/2026 ("transformar esse código em QR code"): a
+    guia do cartório vem com o copia-e-cola escrito na observação, e a linha
+    saía "pague à mão" sem nada para escanear. O código vem SÓ de
+    `registro["pix_da_observacao"]`, que o `relatorio` preenche quando a
+    observação não manda pagar mais ninguém — nunca do QR de um anexo. Aqui se
+    confere o valor embutido (igual ao do lançamento, ou sem valor) e o nome do
+    campo 59 (`relatorio.recebedor_confere`)."""
+    from . import relatorio
+    br = str(r.get("pix_da_observacao") or "").strip()
+    if not _copia_e_cola(br):
+        return "", ""
+    nome, v = qr_pix.recebedor(br), qr_pix.valor(br)
+    if v is not None and abs(v - float(r.get("valor") or 0)) >= 0.005:
+        return "", f"o código da observação é de R$ {_brl(v)}, não do valor do lançamento"
+    if not relatorio.recebedor_confere(nome, r.get("favorecido")):
+        return "", f"o código da observação paga {nome or '?'}, não {r.get('favorecido')}"
+    return br, ""
+
+
 def bloqueio_duro(r: dict) -> str:
     """O que nunca se paga pelo código da linha: o código é de outro valor ou
     de outro momento, ou o dinheiro vai para outra pessoa."""
@@ -262,7 +288,7 @@ def bloqueio_duro(r: dict) -> str:
     if "ALTERADO" in status:
         motivos.append("o lançamento mudou durante a leitura — gere de novo")
     if "PAGAR A MAO" in _chave(r.get("obs")):
-        motivos.append("a observação manda pagar outra pessoa — pague à mão")
+        motivos.append(MOTIVO_A_MAO)
     return "; ".join(motivos)
 
 
@@ -279,6 +305,20 @@ def item_do_registro(conta: str, r: dict, titulo_id: str = "", original: str = "
     # - o resto das ATENÇÕES (a mesma régua do Copiar das PJ): o código fica
     #   ESCONDIDO atrás de "conferi — mostrar o código".
     duro = bloqueio_duro(r)
+    if duro == MOTIVO_A_MAO and str(tipo).upper() == "PIX":
+        # O único bloqueio é o "pague à mão" e a observação é o copia-e-cola
+        # deste lançamento: vira QR, escondido atrás do "conferi".
+        br, porque = copia_e_cola_da_observacao(r)
+        if br:
+            avisos = ["CONFIRA ANTES DE PAGAR: o código Pix veio da observação do "
+                      "lançamento — confira o nome e o valor que o banco mostra"]
+            if qr_pix.valor(br) is None:
+                avisos.append(f"o código não traz o valor: pague R$ {_brl(valor)}")
+            return Item(conta=conta, registro=r, grupo="PIX",
+                        codigos=[("QR Pix da observação do lançamento", br, "qr", br)],
+                        alertas=avisos, notas=[], titulo_id=titulo_id, escondido=True)
+        if porque:
+            duro = f"{duro} ({porque})"
     if duro:
         return Item(conta=conta, registro=r,
                     grupo="BOLETO" if tipo.upper().startswith("BOLETO") else "PIX",
@@ -437,10 +477,11 @@ def _cartao(k: int, it: Item, hoje: date, recolhido: bool = False, ordem: int = 
     <span class="grupo g-{it.grupo.lower()}">{it.grupo}</span>
     <span class="valor">R$ {_brl(r.get('valor'))}</span>
     <span class="venc{' vencido' if vencido else ''}">venc. {_data(venc)}</span>
-    <span class="status s-{nv.nome} s-{'at' if it.alertas else 'ok'}">{nivel.ROTULO[nv.nome]}</span>
+    <span class="status s-{nv.nome} s-{'at' if it.alertas else 'ok'}">{_e(nivel.rotulo(nv))}</span>
     {f'<span class="tagre">reembolso para {_e(it.reembolso_de)}</span>' if recolhido else ''}
     <label class="pago"><input type="checkbox" class="chk"> já paguei</label>
     <span class="pela"></span>
+    <button type="button" class="excl" title="Tira esta linha da lista e dos totais. Não exclui no Mais Controle.">Excluir da lista</button>
   </header>
   <div class="corpo">
     <div class="codigos">{blocos or '<p class="semcod">sem código para escanear</p>'}</div>
@@ -593,6 +634,16 @@ h1 { font-size:22px; margin:0 0 4px } .sub { color:var(--mu); margin:0 0 16px }
 .resumo { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; position:sticky; top:0; background:var(--bg); padding:8px 0; z-index:2 }
 .resumo div { background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:8px 12px }
 .resumo b { display:block; font-size:17px }
+.resumo div.filtro { cursor:pointer; user-select:none }
+.resumo div.filtro:hover { border-color:var(--ac) }
+.resumo div.filtro.ativo { border-color:var(--ac); box-shadow:0 0 0 2px var(--ac) inset; background:#eef2ff }
+.resumo div.filtro::after { content:'clique para filtrar'; display:block; font-size:11px; color:var(--mu) }
+.resumo div.filtro.ativo::after { content:'filtrando — clique para ver tudo'; color:var(--ac) }
+.card.oculto { display:none }
+#avisoFiltro { margin:0 0 12px; padding:8px 12px; border-radius:10px; background:#eef2ff; color:var(--ac); font-weight:600 }
+button.excl { color:var(--bad); border-color:#fecaca }
+#excluidos .card { opacity:.6 }
+#excluidos button.excl { color:var(--ok); border-color:#a7f3d0 }
 .porconta { margin:0 0 16px; color:var(--mu); font-size:14px }
 .card { background:var(--card); border:1px solid var(--bd); border-left:5px solid var(--ok); border-radius:12px; margin:0 0 16px; overflow:hidden }
 .card.atencao { border-left-color:var(--at) }
@@ -659,18 +710,22 @@ details.conferir > summary { color:var(--at) }
 <h1>Pagamentos PF e Moura Dantas</h1>
 <p class="sub">Vencimentos de __PERIODO__ em aberto no Mais Controle. Contas lidas: __CONTAS_LIDAS__. Boletos do maior para o menor, depois Pix. Escaneie pelo celular; no Pix montado pela chave, confira o nome que o banco mostra antes de confirmar.</p>
 <div class="resumo">
-  <div>Boletos<b id="rBol">__NB__ · R$ __TB__</b></div>
-  <div>Pix<b id="rPix">__NP__ · R$ __TP__</b></div>
-  <div>Total<b id="rTot">__NT__ · R$ __TT__</b></div>
-  <div>Com atenção<b id="rAt">__NA__</b></div>
-  <div>Marcados como pagos<b id="pagos">0 · R$ 0,00</b></div>
+  <div class="filtro" data-filtro="boleto" role="button" tabindex="0">Boletos<b id="rBol">__NB__ · R$ __TB__</b></div>
+  <div class="filtro" data-filtro="pix" role="button" tabindex="0">Pix<b id="rPix">__NP__ · R$ __TP__</b></div>
+  <div class="filtro" data-filtro="" role="button" tabindex="0">Total<b id="rTot">__NT__ · R$ __TT__</b></div>
+  <div class="filtro" data-filtro="atencao" role="button" tabindex="0">Com atenção<b id="rAt">__NA__</b></div>
+  <div class="filtro" data-filtro="pagos" role="button" tabindex="0">Marcados como pagos<b id="pagos">0 · R$ 0,00</b></div>
   <div class="baixas">Para a baixa no ERP:<button type="button" id="exportar">Baixar lista das baixas</button><button type="button" id="copiarBaixas">Copiar lista</button></div>
 </div>
 __BOTAO_RE__
 <ul class="porconta" id="porconta">__POR_CONTA__</ul>
+<p id="avisoFiltro" hidden></p>
 <div id="lista">__CARDS__</div>
 <details id="reembolsos"__ESCONDE_RE__><summary>Reembolsos dos sócios fora da lista (__NR__ · R$ __TR__) — abra para pagar algum mesmo assim, ou ligue o botão no topo</summary>
 __CARDS_RE__
+</details>
+<details id="excluidos" hidden><summary id="excluidosTit">Excluídos da lista</summary>
+<p class="sub">Só saíram desta página e dos totais — nada foi excluído no Mais Controle. Clique em "Voltar à lista" para trazer de volta.</p>
 </details>
 <details><summary>Não entraram (__NF__)</summary><ul>__FORA__</ul></details>
 </div>
@@ -699,6 +754,7 @@ function contar() {
     if (m) { n++; c += +card.dataset.centavos; }
   });
   document.getElementById("pagos").textContent = n + " · R$ " + brl(c);
+  if (filtro === "pagos") filtrar();
 }
 const sel = document.getElementById("mConta");
 (function montar() {
@@ -808,17 +864,70 @@ function resumo() {
   Object.keys(porConta).sort().forEach(k => { const li = document.createElement("li");
     li.textContent = k + ": " + porConta[k][0] + " · R$ " + brl(porConta[k][1]); ul.appendChild(li); });
 }
-function aplicarReembolsos(naLista) {
-  const lista = document.getElementById("lista"), det = document.getElementById("reembolsos");
-  document.querySelectorAll(".card.reemb").forEach(c => (naLista ? lista : det).appendChild(c));
+// "Excluir da lista" (dono, 27/11/2026): tira a linha da página e dos
+// totais. NÃO exclui no ERP. Vale só para ESTA geração do arquivo (como o
+// botão dos reembolsos): o HTML de amanhã não pode esconder um título que
+// continua em aberto (revisão de dinheiro, 27/11/2026).
+const KE = K + ":excluidos:" + __ARQUIVO__ + ":" + __GERADO__;
+let excluidos = {};
+try { excluidos = JSON.parse(localStorage.getItem(KE) || "{}"); } catch (e) {}
+let reembNaLista = true;
+function arrumar() {
+  const lista = document.getElementById("lista"), det = document.getElementById("reembolsos"),
+        exc = document.getElementById("excluidos");
+  let ne = 0, ce = 0;
+  document.querySelectorAll(".card").forEach(c => {
+    const fora = !!excluidos[c.dataset.id];
+    c.querySelector("button.excl").textContent = fora ? "Voltar à lista" : "Excluir da lista";
+    if (fora) { exc.appendChild(c); ne++; ce += +c.dataset.centavos; }
+    else (c.classList.contains("reemb") && !reembNaLista ? det : lista).appendChild(c);
+  });
   const porOrdem = (a, b) => +a.dataset.ordem - +b.dataset.ordem;
-  [...lista.querySelectorAll(".card")].sort(porOrdem).forEach(c => lista.appendChild(c));
-  [...det.querySelectorAll(".card")].sort(porOrdem).forEach(c => det.appendChild(c));
+  [lista, det, exc].forEach(el => [...el.querySelectorAll(".card")].sort(porOrdem).forEach(c => el.appendChild(c)));
   let n = 0;
   document.querySelectorAll("#lista .card, #reembolsos .card").forEach(c => c.querySelector(".num").textContent = ++n);
   det.hidden = !det.querySelector(".card");
-  resumo();
+  exc.hidden = !ne;
+  document.getElementById("excluidosTit").textContent = "Excluídos da lista (" + ne + " · R$ " + brl(ce) + ")";
+  resumo(); filtrar();
 }
+function aplicarReembolsos(naLista) { reembNaLista = naLista; arrumar(); }
+document.addEventListener("click", ev => {
+  const b = ev.target.closest("button.excl"); if (!b) return;
+  const card = b.closest(".card"), id = card.dataset.id;
+  if (excluidos[id]) { delete excluidos[id]; }
+  else {
+    if (marcas[id]) { alert("Esta linha está marcada como paga e vai para a lista de baixas. Desmarque o \"já paguei\" antes de excluir."); return; }
+    if (!confirm("Tirar " + card.dataset.forn + " · R$ " + brl(+card.dataset.centavos) +
+                 " desta lista?\n\nSó sai desta página e dos totais. NÃO exclui no Mais Controle.")) return;
+    excluidos[id] = new Date().toISOString();
+  }
+  try { localStorage.setItem(KE, JSON.stringify(excluidos)); } catch (e) {}
+  arrumar();
+});
+// Os cartões do topo filtram a lista (dono, 27/11/2026); clicar de novo, ou
+// em Total, mostra tudo.
+let filtro = "";
+const NOMES_FILTRO = { boleto: "boletos", pix: "Pix", atencao: "com atenção", pagos: "marcados como pagos" };
+function filtrar() {
+  let n = 0;
+  document.querySelectorAll("#lista .card, #reembolsos .card").forEach(c => {
+    const ok = !filtro || (filtro === "boleto" && c.dataset.grupo === "BOLETO") ||
+      (filtro === "pix" && c.dataset.grupo !== "BOLETO") || (filtro === "atencao" && c.dataset.atencao === "1") ||
+      (filtro === "pagos" && !!marcas[c.dataset.id]);
+    c.classList.toggle("oculto", !ok); if (ok) n++;
+  });
+  document.querySelectorAll(".resumo div.filtro").forEach(d => d.classList.toggle("ativo", !!filtro && d.dataset.filtro === filtro));
+  const av = document.getElementById("avisoFiltro");
+  av.hidden = !filtro;
+  av.textContent = filtro ? "Mostrando só " + NOMES_FILTRO[filtro] + " (" + n + "). Clique no mesmo cartão do topo, ou em Total, para ver tudo." : "";
+}
+document.querySelectorAll(".resumo div.filtro").forEach(d => {
+  const usar = () => { filtro = (filtro === d.dataset.filtro) ? "" : d.dataset.filtro; filtrar();
+    document.getElementById("lista").scrollIntoView({ behavior: "smooth", block: "start" }); };
+  d.addEventListener("click", usar);
+  d.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); usar(); } });
+});
 const TOG = document.getElementById("togRe");
 if (TOG) {
   // A escolha vale só para ESTA geração do arquivo: recarregar a página a
@@ -830,7 +939,8 @@ if (TOG) {
     try { localStorage.setItem(KR, TOG.checked ? "1" : "0"); } catch (e) {}
     aplicarReembolsos(TOG.checked);
   });
-  aplicarReembolsos(TOG.checked);
+  reembNaLista = TOG.checked;
 }
+arrumar();
 contar();
 </script></body></html>'''
