@@ -81,7 +81,7 @@
 </header>
 <nav>
   <a href="#preparar">1 · Preparar (equipe)</a>
-  <a href="#aporte">+ Aporte</a>
+  <a href="#aporte">Aportes e transferências</a>
   <a href="#diretor">2 · Diretor (celular)</a>
   <a href="#acompanhar">3 · Acompanhamento</a>
 </nav>
@@ -172,21 +172,36 @@
 </section>
 
 <section class="tela" id="aporte">
-  <h2>+ Aporte</h2>
-  <p class="sub">Vira item da conta que MANDA o dinheiro; sai antes dos pagamentos dela; depois o servidor lança no ERP.</p>
-  <div class="duas">
+  <h2>Aportes e transferências</h2>
+  <p class="sub">Todas as contas numa tabela. Aporte e transferência viram itens da conta que MANDA o dinheiro, saem antes dos pagamentos dela, e o servidor lança no ERP depois.</p>
+  <table>
+    <thead><tr><th>Conta</th><th>Saldo no banco</th><th>A pagar no dia</th><th>Saldo depois</th><th></th></tr></thead>
+    <tbody>
+      <tr><td>CONTA MÃE - SICOOB</td><td>R$ 140.300,00</td><td>R$ 1.200,00</td><td>R$ 139.100,00</td><td><button class="btn peq sec">Transferência</button></td></tr>
+      <tr><td><b>OBRA ALFA - SICOOB</b></td><td>R$ 18.420,10</td><td>R$ 26.900,00</td><td class="falta">− R$ 8.479,90</td><td><button class="btn peq">+ Aporte</button> <button class="btn peq sec">Transferência</button></td></tr>
+      <tr><td>EMPRESA A - SICOOB</td><td>R$ 2.100,00</td><td>R$ 4.000,00</td><td class="falta">− R$ 1.900,00</td><td><button class="btn peq">+ Aporte</button> <button class="btn peq sec">Transferência</button></td></tr>
+      <tr><td>EMPRESA A - INTER</td><td>R$ 9.800,00</td><td>R$ 0,00</td><td>R$ 9.800,00</td><td><button class="btn peq sec">Transferência</button></td></tr>
+    </tbody>
+  </table>
+  <div class="duas" style="margin-top:16px">
     <div class="modal">
-      <b>Aporte para OBRA ALFA - SICOOB</b>
-      <label>Valor</label><input value="R$ 8.479,90">
-      <label>Sai de</label><select><option>CONTA MÃE - SICOOB (saldo R$ 140.300,00)</option></select>
-      <label>Quem aporta</label><select><option>Dividido JV / JC (regra de 29/10)</option><option>JV</option><option>JC</option></select>
-      <label>Como chega</label><select><option>Transferência Sicoob → Sicoob (sem chave)</option><option>Pix pela chave</option></select>
-      <p class="nota">Para outro banco: Pix pela chave (do cadastro ou digitada). Sem chave → vai para "Pagar à mão".</p>
+      <b>+ Aporte em OBRA ALFA - SICOOB</b> <span class="nota">(falta R$ 8.479,90)</span>
+      <label>Aportadores (cadastro da aba Aportes)</label>
+      <div class="item" style="grid-template-columns:1fr 140px"><div class="q">SÓCIO JV</div><input value="4.239,95"></div>
+      <div class="item" style="grid-template-columns:1fr 140px"><div class="q">SÓCIO JC</div><input value="4.239,95"></div>
+      <div class="item" style="grid-template-columns:1fr 140px"><div class="q">INVESTIDOR EXEMPLO</div><input value="0,00"></div>
+      <p class="nota">A regra de 29/10 já propõe a divisão JV/JC; o total precisa bater com o valor do aporte.</p>
+      <label>Sai de</label><select><option>CONTA MÃE - SICOOB (saldo depois R$ 139.100,00)</option></select>
+      <label>Como chega</label><select><option>Transferência Sicoob → Sicoob</option><option>Pix pela chave (outro banco)</option></select>
       <div style="margin-top:12px;display:flex;gap:8px"><button class="btn">Incluir aporte</button><button class="btn sec">Cancelar</button></div>
     </div>
-    <div>
-      <div class="aviso ok">Com o aporte, OBRA ALFA fica com sobra de R$ 0,00 → cabe tudo.</div>
-      <div class="aviso a">Ordem do pagamento na CONTA MÃE: 1º o aporte, depois boletos/convênios (maior→menor), depois Pix. A OBRA ALFA só começa quando o saldo do banco cobrir.</div>
+    <div class="modal">
+      <b>Transferência entre contas do mesmo grupo</b>
+      <label>De</label><select><option>EMPRESA A - INTER (saldo R$ 9.800,00)</option></select>
+      <label>Para (só contas da mesma empresa)</label><select><option>EMPRESA A - SICOOB (falta R$ 1.900,00)</option></select>
+      <label>Valor</label><input value="R$ 1.900,00">
+      <p class="nota">Origem Inter ou Caixa: sem API de pagamento nesta versão → vai para "Pagar à mão" com os dados para copiar. Origem Sicoob: sai pela API.</p>
+      <div style="margin-top:12px;display:flex;gap:8px"><button class="btn">Incluir transferência</button><button class="btn sec">Cancelar</button></div>
     </div>
   </div>
 </section>
@@ -200,20 +215,20 @@
       <div class="topo"><h3>CONTA MÃE - SICOOB</h3><div class="saldos"><span>Banco <b>R$ 140.300,00</b></span></div></div>
       <div class="grupo">
         <div class="item"><div class="q"><span class="selo s-api">APORTE</span>→ OBRA ALFA (JV/JC)</div><div class="v">R$ 8.479,90</div></div>
-        <div class="item"><div class="q">CONTADOR EXEMPLO</div><div class="v">R$ 1.200,00</div><div class="d">ESCRITORIO HONORARIO 11/2026 · <a href="#">anexo</a></div><div class="acoes"><button class="btn peq perigo">Tirar</button></div></div>
+        <div class="item"><div class="q">CONTADOR EXEMPLO</div><div class="v">R$ 1.200,00</div><div class="d">CC: ESCRITÓRIO · HONORARIO 11/2026 · boleto · <a href="#">ver anexo</a></div><div class="acoes"><button class="btn peq perigo">Tirar</button></div></div>
       </div>
       <div class="grupo" style="display:flex;justify-content:space-between;align-items:center"><b>Total R$ 9.679,90</b><button class="btn ok">Aprovar esta conta</button></div>
     </div>
     <div class="conta">
       <div class="topo"><h3>OBRA ALFA - SICOOB</h3><div class="saldos"><span>Banco <b>R$ 18.420,10</b></span><span>+ aporte <b>R$ 8.479,90</b></span></div></div>
       <div class="grupo">
-        <div class="item"><div class="q">FORNECEDOR CIMENTO EXEMPLO</div><div class="v">R$ 12.400,00</div><div class="d">boleto · NF 1234 · <a href="#">anexo</a></div><div class="acoes"><button class="btn peq perigo">Tirar</button></div></div>
-        <div class="item"><div class="q">PINTOR EXEMPLO</div><div class="v">R$ 3.500,00</div><div class="d">Pix · <a href="#">anexo</a></div><div class="acoes"><button class="btn peq perigo">Tirar</button></div></div>
+        <div class="item"><div class="q">FORNECEDOR CIMENTO EXEMPLO</div><div class="v">R$ 12.400,00</div><div class="d">CC: OBRA ALFA · boleto · beneficiário FORNECEDOR CIMENTO EXEMPLO ✓ · NF 1234 · <a href="#">ver anexo</a></div><div class="acoes"><button class="btn peq perigo">Tirar</button></div></div>
+        <div class="item"><div class="q">PINTOR EXEMPLO</div><div class="v">R$ 3.500,00</div><div class="d">CC: OBRA ALFA · Pix chave <b>pintor@exemplo.com</b><br>dono da chave: <b>PINTOR EXEMPLO · CPF ***.456.789-**</b> ✓ confere com o cadastro · <a href="#">ver anexo</a></div><div class="acoes"><button class="btn peq perigo">Tirar</button></div></div>
         <div class="item"><div class="q">+ 1 item</div><div class="v">R$ 11.000,00</div></div>
       </div>
       <div class="grupo" style="display:flex;justify-content:space-between;align-items:center"><b>Total R$ 26.900,00</b><button class="btn ok">Aprovar esta conta</button></div>
     </div>
-    <p class="nota">"Aprovar" pede confirmação mostrando o total. "Tirar" pede motivo.</p>
+    <p class="nota">"Aprovar" pede confirmação mostrando o total. "Tirar" pede motivo. "Ver anexo" abre o arquivo numa janela (o Mais Controle só no link "abrir no Mais Controle").</p>
   </div>
 </section>
 

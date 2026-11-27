@@ -26,6 +26,9 @@ O Mais Controle continua sendo a base dos lançamentos. Num dia normal, ninguém
 | D8 | O diretor aprova **conta por conta**. Cada conta aprovada começa a pagar na hora. |
 | D9 | **Aporte** é uma demanda criada na tela, com valor, conta de onde sai, quem aporta e como chega. Vira item da conta que **manda** o dinheiro e é aprovado junto com ela. Depois de confirmado, o servidor **lança o aporte no ERP sozinho**, já baixado e com o comprovante. |
 | D10 | O Inter, nesta versão, é **só leitura** (saldo e extrato). Pagar pelo Inter continua à mão. |
+| D11 | **"Ver anexo"** abre o próprio arquivo (PDF ou imagem) numa janela do portal. O servidor guarda uma cópia, feita durante o "Buscar", numa área **privada** da nuvem (Storage), que só abre com login e por um link de poucos minutos. Ao lado fica o link "abrir no Mais Controle". |
+| D12 | **Aportes e transferências** têm um painel próprio, com todas as contas: saldo no banco, a pagar no dia e saldo depois dos pagamentos. Duas ações:<br>• **+ Aporte**: janela com os aportadores possíveis (o cadastro da aba Aportes) e o valor de cada um;<br>• **Transferência entre contas**: só entre contas do **mesmo grupo**, ou seja, da mesma empresa (ex.: Terra Bela Inter ↔ Terra Bela Sicoob, Ipanema Sicoob ↔ Ipanema Inter, Morais Eng Caixa → Morais Eng Inter). O grupo vem da "empresa dona da conta" do cadastro. |
+| D13 | O diretor vê, em cada Pix, **a chave**, **o nome e o documento do dono da chave** e **o centro de custo** de cada item. O dono da chave é consultado no Sicoob pelo servidor no "Enviar ao diretor" (`pix_iniciar`, que só consulta o DICT e não paga) e conferido com o cadastro (✓ ou ⚠). |
 
 Continuam valendo as decisões da spec de 26/11: um aprovador basta; quem preparou não aprova; o teto é o total aprovado; o robô fica no servidor; anexo e baixa automáticos só com o pagamento realizado; boleto não é agendado para outro dia. Também valem as regras de dinheiro do plano 1 (seção 11 daquela spec).
 
@@ -45,14 +48,16 @@ O DIA TODO: "Pagar à mão", acompanhamento, alertas, "Parar pagamentos"
 
 1. **Preparar (equipe).**
    - Topo: período **de … até …**, **Buscar**, hora da última leitura e progresso ("lendo… 34 de 120").
-   - Um bloco por conta: saldo do banco e saldo do ERP (com hora), total apto e **falta R$ X**. O botão **+ Aporte** aparece quando falta saldo.
+   - Um bloco por conta: saldo do banco e saldo do ERP (com hora), total apto e **falta R$ X**.
+   - Painel **Aportes e transferências** (D12): todas as contas, com saldo no banco, a pagar no dia e saldo depois. Os botões são **+ Aporte** (janela com os aportadores e o valor de cada um) e **Transferência** (só para conta do mesmo grupo).
    - Em cada conta, três grupos:
      - **Pode pagar**;
-     - **Precisa de revisão (OLHE / NÃO LI)**, com motivo, conferências e anexo;
+     - **Precisa de revisão (OLHE / NÃO LI)**, com motivo, conferências e anexo ("ver anexo" abre o arquivo: D11);
      - **Pagar à mão**.
    - No pé: **Enviar ao diretor**, com o resumo por conta.
 2. **Pagamentos do dia (diretor, celular).**
    - Um cartão por conta enviada: saldo, a pagar, aporte e itens com anexo.
+   - Cada item mostra favorecido, valor, **centro de custo** e descrição. Nos Pix aparece também a **chave** e **de quem ela é** (nome e documento consultados no banco, com ✓ ou ⚠ contra o cadastro). Nos boletos, o beneficiário.
    - **Tirar item** (com motivo) e **Aprovar esta conta** (a confirmação mostra o total).
    - Depois de aprovar, o cartão mostra o andamento.
 3. **Acompanhamento (todos).**
@@ -66,6 +71,7 @@ Todas as telas são testadas a 375 px antes do merge.
 
 ## 5. Aporte, saldo e ordem
 
+- **Transferência entre contas do mesmo grupo** (D12): sai pela API quando a conta de origem é Sicoob, por transferência entre contas Sicoob ou por Pix pela chave para outro banco. Quando a origem é Inter ou Caixa, não há API de pagamento nesta versão, então ela aparece em **Pagar à mão**, com os dados prontos para copiar. O servidor também lança no ERP a transferência paga, como saída numa conta e entrada na outra, com o comprovante.
 - **Como o aporte chega:**
   - de Sicoob para Sicoob: **transferência** pela API da Conta Corrente, sem chave;
   - para outro banco: **Pix por chave**, preenchida do cadastro ou digitada;
@@ -83,7 +89,8 @@ Todas as telas são testadas a 375 px antes do merge.
 
 - **Servidor** (Python, no repositório do app, rodado pelo Agendador; o modo nuvem do `pagamento_api.robo` abre aqui):
   - a **leitura das 07:30** (saldo e extrato pela API, saldo do ERP pelo porteiro);
-  - o **atendente de pedidos**, que pega um "Buscar" na nuvem e roda a leitura do dia com `pagamentos_dia/`, sem tela;
+  - o **atendente de pedidos**, que pega um "Buscar" na nuvem e roda a leitura do dia com `pagamentos_dia/`, sem tela, guardando uma cópia dos anexos no Storage privado (D11);
+  - no "Enviar ao diretor", a consulta do dono de cada chave Pix no DICT (D13);
   - o **pagador** do plano 1, com o ERP de verdade, o saldo antes de cada item, a ordem e o aporte.
 - **Nuvem** (migrations novas, só ler e acrescentar):
   - saldos e extrato do dia;
