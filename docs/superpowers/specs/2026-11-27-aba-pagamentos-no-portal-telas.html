@@ -72,6 +72,15 @@
   .modal input,.modal select{width:100%;font:inherit;padding:8px 9px;border:1px solid var(--borda);border-radius:8px}
   .duas{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   @media (max-width:760px){.duas{grid-template-columns:1fr}}
+  .pc{display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start}
+  .pc .lista a{display:block;text-decoration:none;color:var(--texto);background:#fff;border:1px solid var(--borda);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+  .pc .lista a.ativa{border-color:var(--azul);box-shadow:0 0 0 2px var(--azul-f)}
+  .pc .lista small{display:block;color:var(--fraco)}
+  .resumo{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+  .resumo div{background:#fff;border:1px solid var(--borda);border-radius:12px;padding:10px 12px}
+  .resumo small{display:block;color:var(--fraco);font-size:12px}
+  .resumo b{font-size:18px}
+  @media (max-width:900px){.pc{grid-template-columns:1fr}.resumo{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
@@ -83,6 +92,7 @@
   <a href="#preparar">1 · Preparar (equipe)</a>
   <a href="#aporte">Aportes e transferências</a>
   <a href="#diretor">2 · Diretor (celular)</a>
+  <a href="#diretor-pc">2b · Diretor (PC)</a>
   <a href="#acompanhar">3 · Acompanhamento</a>
 </nav>
 <main>
@@ -230,6 +240,42 @@
     </div>
     <p class="nota">"Aprovar" pede confirmação mostrando o total. "Tirar" pede motivo. "Ver anexo" abre o arquivo numa janela (o Mais Controle só no link "abrir no Mais Controle").</p>
   </div>
+</section>
+
+
+<section class="tela" id="diretor-pc">
+  <h2>2b · Diretor — "Pagamentos do dia" (PC)</h2>
+  <p class="sub">Mesma página do celular; na tela larga ela vira lista de contas à esquerda e tabela da conta escolhida à direita.</p>
+  <div class="resumo">
+    <div><small>Contas esperando</small><b>2</b></div>
+    <div><small>Total a aprovar</small><b>R$ 36.579,90</b></div>
+    <div><small>Já aprovado hoje</small><b>R$ 48.210,00</b></div>
+    <div><small>Pagos agora</small><b class="e-ok">31 de 34</b></div>
+  </div>
+  <div class="pc">
+    <div class="lista">
+      <a class="ativa" href="#diretor-pc"><b>OBRA ALFA - SICOOB</b><small>4 itens · R$ 26.900,00 · recebe aporte R$ 8.479,90</small><small class="e-at">esperando aprovação</small></a>
+      <a href="#diretor-pc"><b>CONTA MÃE - SICOOB</b><small>2 itens · R$ 9.679,90 (inclui o aporte)</small><small class="e-at">esperando aprovação</small></a>
+      <a href="#diretor-pc"><b>OBRA GAMA - SICOOB</b><small>5 itens · R$ 9.115,40</small><small class="e-ok">aprovada 09:40 · pagos 5/5</small></a>
+    </div>
+    <div class="conta" style="margin:0">
+      <div class="topo">
+        <h3>OBRA ALFA - SICOOB</h3>
+        <div class="saldos"><span>Banco <b>R$ 18.420,10</b></span><span>+ aporte <b>R$ 8.479,90</b></span><span>A pagar <b>R$ 26.900,00</b></span><span>Depois <b>R$ 0,00</b></span></div>
+      </div>
+      <table>
+        <thead><tr><th>Favorecido</th><th>Centro de custo</th><th>Como paga</th><th>Valor</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><b>FORNECEDOR CIMENTO EXEMPLO</b><div class="nota">NF 1234 OC 567 · vence 30/11 · <a href="#">ver anexo</a></div></td><td>OBRA ALFA</td><td>Boleto<div class="nota">beneficiário FORNECEDOR CIMENTO EXEMPLO ✓</div></td><td><b>R$ 12.400,00</b></td><td><button class="btn peq perigo">Tirar</button></td></tr>
+          <tr><td><b>PINTOR EXEMPLO</b><div class="nota">C 12 M 3 · <a href="#">ver anexo</a></div></td><td>OBRA ALFA</td><td>Pix · <b>pintor@exemplo.com</b><div class="nota">dono: PINTOR EXEMPLO · CPF ***.456.789-** ✓</div></td><td><b>R$ 3.500,00</b></td><td><button class="btn peq perigo">Tirar</button></td></tr>
+          <tr><td><b>TOPÓGRAFO EXEMPLO</b><div class="nota">NF 88 · <a href="#">ver anexo</a></div></td><td>OBRA ALFA</td><td>Pix · CNPJ <b>11.222.333/0001-81</b><div class="nota">dono: TOPÓGRAFO EXEMPLO LTDA ✓</div></td><td><b>R$ 6.000,00</b></td><td><button class="btn peq perigo">Tirar</button></td></tr>
+          <tr><td><b>LOCADORA EXEMPLO</b><div class="nota">NF 77 · <a href="#">ver anexo</a></div></td><td>OBRA ALFA</td><td>Boleto<div class="nota">beneficiário LOCADORA EXEMPLO ✓</div></td><td><b>R$ 5.000,00</b></td><td><button class="btn peq perigo">Tirar</button></td></tr>
+        </tbody>
+      </table>
+      <div class="grupo" style="display:flex;justify-content:space-between;align-items:center"><span><b>Total R$ 26.900,00</b> · enviado por Gustavo às 10:12</span><button class="btn ok">Aprovar esta conta</button></div>
+    </div>
+  </div>
+  <p class="nota">O dono de cada chave é consultado no envio: chave de outra pessoa (⚠) nem chega ao diretor — volta para "Precisa de revisão" com o motivo. No pagamento, o robô confere de novo e recusa sozinho se o documento não bater.</p>
 </section>
 
 <section class="tela" id="acompanhar">
