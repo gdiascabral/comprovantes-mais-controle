@@ -76,3 +76,10 @@ def test_item_que_iniciou_nunca_libera_o_titulo_e_lote_velho_recusa_item():
     t = _texto()
     assert "e.lote = i.lote and e.ordem = i.ordem and e.estado = 'iniciado'" in t
     assert t.count("raise exception 'lote não é de hoje'") == 2
+
+
+def test_mesmo_codigo_em_lotes_diferentes_e_barrado():
+    t = _texto()
+    assert "raise exception 'o mesmo código de pagamento já está em outro lote'" in t
+    assert ("create unique index if not exists lote_item_dados_no_lote on public.lote_item "
+            "(lote, dados) where tipo <> 'pix_chave'") in t

@@ -11,6 +11,7 @@ teste passa dublês. Regras da spec de 26/11/2026:
 """
 from __future__ import annotations
 
+import hashlib
 import unicodedata
 import uuid as _uuid
 from dataclasses import dataclass, field
@@ -66,6 +67,9 @@ class Portas:
     hoje: date
     parar: Callable[[], bool] = lambda: False
     novo_uuid: Callable[[], str] = field(default=lambda: str(_uuid.uuid4()))
+    #: A conta que a credencial do Sicoob debita no Pix e no convênio (esses
+    #: pedidos não levam a conta de débito). Item de outra conta: não paga.
+    conta_da_credencial: str = ""
 
 
 def _sem_acento(t) -> str:
@@ -109,19 +113,27 @@ def ja_comprometido(itens: list[lt.ItemLote], eventos: list[Evento]) -> Decimal:
 #: NAO_REALIZADO. Tudo o mais que não se resolve fica EM_PROCESSAMENTO (conta no
 #: total, não anexa, pergunta de novo) — revisão da Task 5, 26/11/2026.
 CONFERIR = "conferir no banco antes de qualquer pagamento à mão"
+#: O título que o robô pagou já estava baixado ou com comprovante no ERP.
+ALERTA_DOBRO = "ALERTA: título já tratado no ERP — conferir se não foi pago duas vezes"
 
 
 def _junto(*partes) -> str:
     return " — ".join(p for p in partes if p)
 
 
+def um_comprovante(resposta) -> dict:
+    """O dict do comprovante, venha ele solto ou numa lista (o endpoint tem nome
+    no plural). Qualquer outra coisa vira {}."""
+    if isinstance(resposta, list):
+        resposta = next((r for r in resposta if isinstance(r, dict)), {})
+    return resposta if isinstance(resposta, dict) else {}
+
+
 def estado_boleto(resposta) -> str:
     """Só um comprovante EFETIVADO/PAGO/REALIZADO vale como pago. Nenhuma
     situação do comprovante vira "não pago" sozinha: o nome das recusas não está
     documentado, e um engano aqui mandaria pagar de novo à mão."""
-    if isinstance(resposta, list):            # o endpoint tem nome no plural
-        resposta = next((r for r in resposta if isinstance(r, dict)), {})
-    s = _sem_acento((resposta or {}).get("situacaoPagamento") if isinstance(resposta, dict) else "")
+    s = _sem_acento(um_comprovante(resposta).get("situacaoPagamento"))
     return REALIZADO if s in ("EFETIVADO", "PAGO", "REALIZADO") else EM_PROCESSAMENTO
 
 
@@ -166,6 +178,9 @@ class Executor:
         conta = self.p.contas.get(item.conta)
         if conta is None:
             return self._gravar(item, NAO_PAGO, "conta sem cadastro da API no servidor")
+        if item.tipo != lt.BOLETO and item.conta != self.p.conta_da_credencial:
+            return self._gravar(item, NAO_PAGO,
+                                "Pix/convênio só sai da conta da credencial do Sicoob")
         try:
             t = self.p.erp.titulo(item.titulo)
         except Exception as e:          # antes de iniciar: não saiu dinheiro nenhum
@@ -246,16 +261,26 @@ class Executor:
                             else "0")).quantize(Decimal("0.01"))
         if cobra != item.valor:
             return self._gravar(item, NAO_PAGO, f"convênio diferente: banco cobra {cobra}")
-        self._gravar(item, INICIADO, "convenio")
+        # Número único da transação (antes era a ordem do item, que se repete em todo lote).
+        transacao = int(hashlib.sha256(self.p.novo_uuid().encode()).hexdigest()[:12], 16) or 1
+        self._gravar(item, INICIADO, f"convenio transacao {transacao}")
         r = self.p.sicoob.convenio_pagar(item.dados, conta, item.valor,
-                                         self.p.hoje.isoformat(), item.ordem)
-        nsu = str((r.get("arrecadacao") or {}).get("nsu") or "")
-        try:
+                                         self.p.hoje.isoformat(), transacao)
+        try:                            # pagou: grava a resposta ANTES de lê-la
             caminho = str(cp.salvar_bruto(self.p.pasta, item, "convenio", r))
-        except OSError as e:            # pagou: não perder isso por causa do disco
+        except (OSError, TypeError, ValueError) as e:
             caminho = f"comprovante não gravado no disco: {e!r}"
+        arr = r.get("arrecadacao") if isinstance(r.get("arrecadacao"), dict) else {}
+        nsu = str(arr.get("nsu") or "")
         if not nsu:
             return self._gravar(item, EM_PROCESSAMENTO, CONFERIR + " (convênio sem NSU)")
+        try:
+            pago = Decimal(str(arr.get("valorPago"))).quantize(Decimal("0.01"))
+        except ArithmeticError:
+            pago = None
+        if pago != item.valor:
+            return self._gravar(item, EM_PROCESSAMENTO,
+                                f"{CONFERIR} (convênio: banco diz pago {arr.get('valorPago')!r})", nsu)
         return self._gravar(item, REALIZADO, caminho, nsu)
 
     # ----------------------------------------------------------- retomar
@@ -293,8 +318,12 @@ class Executor:
         if t is None or t.tem_comprovante is None:
             # "não sei" do ERP nunca vale como "não tem": não anexa nem baixa às cegas
             return self._gravar(item, FALTA_ANEXAR, "ERP não respondeu", chave)
-        if not t.aberto and t.tem_comprovante:
-            return self._gravar(item, CONCLUIDO, "já estava anexado e baixado no ERP", chave)
+        if not t.aberto or t.tem_comprovante:
+            # O robô pagou, e o título já está baixado ou com comprovante: pode
+            # ser outro pagamento (à mão, pelo HTML). Não anexa, não baixa, não
+            # conclui — avisa (plano 3: reconhecer o anexo do próprio robô).
+            return self._gravar(item, FALTA_ANEXAR,
+                                ALERTA_DOBRO + (" (baixado)" if not t.aberto else " (com comprovante)"), chave)
         try:
             dados = self._comprovante(item, chave)
         except ErroSicoob as e:
@@ -305,12 +334,10 @@ class Executor:
                                     f"comprovante do convênio não está no disco; pedir 2ª via (NSU {chave})", chave)
             return self._gravar(item, FALTA_ANEXAR, "comprovante ainda não disponível", chave)
         caminho = cp.gerar_pdf(self.p.pasta, item, dados, self.p.hoje)
-        if not t.tem_comprovante:
-            if not self.p.erp.anexar(item.titulo, caminho):
-                return self._gravar(item, FALTA_ANEXAR, "ERP recusou o anexo", chave)
-        if t.aberto:                    # título já fechado (baixa à mão): nunca baixar de novo
-            if not self.p.erp.baixar(item.titulo, item.valor, self.p.hoje, item.conta):
-                return self._gravar(item, FALTA_ANEXAR, "ERP recusou a baixa", chave)
+        if not self.p.erp.anexar(item.titulo, caminho):
+            return self._gravar(item, FALTA_ANEXAR, "ERP recusou o anexo", chave)
+        if not self.p.erp.baixar(item.titulo, item.valor, self.p.hoje, item.conta):
+            return self._gravar(item, FALTA_ANEXAR, "ERP recusou a baixa", chave)
         t = self.p.erp.titulo(item.titulo)
         if t is None or t.aberto or t.tem_comprovante is not True:
             return self._gravar(item, FALTA_ANEXAR, "ERP não confirmou anexo e baixa", chave)
@@ -318,7 +345,7 @@ class Executor:
 
     def _comprovante(self, item, chave) -> dict | None:
         if item.tipo == lt.BOLETO:
-            r = self.p.sicoob.boleto_comprovante(chave)
+            r = um_comprovante(self.p.sicoob.boleto_comprovante(chave))
             return r if estado_boleto(r) == REALIZADO else None
         if item.tipo in (lt.PIX_CHAVE, lt.PIX_QR):
             if not chave:

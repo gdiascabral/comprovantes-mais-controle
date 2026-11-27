@@ -76,6 +76,10 @@ def contas(cfg: dict) -> dict[str, sc.ContaApi]:
             for nome, c in (cfg.get("contas") or {}).items()}
 
 
+#: Código de barras de 44 tirado da linha digitável que tests/test_remessa_dia.py usa.
+BOLETO_DE_FIXTURE = "34191153400001150501570000249243752417701000"
+
+
 def ensaio_sandbox(cfg: dict, pasta: Path) -> list[ex.Evento]:
     """Três itens fictícios contra o Sandbox. Os mocks do Sandbox respondem
     sempre igual, então o que se prova é o encanamento, não a regra."""
@@ -83,14 +87,15 @@ def ensaio_sandbox(cfg: dict, pasta: Path) -> list[ex.Evento]:
     itens = [
         lt.ItemLote(1, "E1", "E1", conta, lt.PIX_CHAVE, "ensaio@exemplo.com", Decimal("1.99"),
                     "ENSAIO", "", "ENSAIO PIX"),
-        lt.ItemLote(2, "E2", "E2", conta, lt.BOLETO, "75691234500000152301234567890123456789012345"[:44],
+        lt.ItemLote(2, "E2", "E2", conta, lt.BOLETO, BOLETO_DE_FIXTURE,
                     Decimal("152.30"), "ENSAIO", "", "ENSAIO BOLETO"),
         lt.ItemLote(3, "E3", "E3", conta, lt.CONVENIO, "8" + "3" * 43, Decimal("1171.23"),
                     "ENSAIO", "", "ENSAIO CONVENIO"),
     ]
     livro = LivroNaMemoria()
     portas = ex.Portas(cliente(cfg), ErpDeEnsaio(itens), livro,
-                       {conta: sc.ContaApi(4342, 1234569, 1)}, pasta, date.today())
+                       {conta: sc.ContaApi(4342, 1234569, 1)}, pasta, hoje_sp(),
+                       conta_da_credencial=conta)
     ex.Executor(itens, lt.total(itens), portas).rodar()
     return livro.lista
 
@@ -135,9 +140,11 @@ def rodada(cfg: dict) -> None:
     # Neste plano o ERP é o de ENSAIO: rodar contra a nuvem de verdade gravaria
     # "concluído" num lote real sem nada ter acontecido no ERP (e o banco nunca
     # mais libera o título pela API). Só com a chave explícita de ensaio.
-    if cfg.get("nuvem_de_ensaio") is not True:
-        raise SystemExit("neste plano o robô só roda com \"nuvem_de_ensaio\": true "
-                         "(ERP de ensaio); o ERP real entra no plano 3")
+    # Neste plano não há ERP de verdade nem nuvem de ensaio (`nuvem.rest.URL`
+    # é a de produção): rodar contra a nuvem gravaria "concluído" em lote real.
+    # O modo nuvem só abre no plano 3; os testes chamam `_rodada` direto.
+    raise SystemExit("o robô contra a nuvem entra no plano 3 (ERP real e credencial "
+                     "por conta); neste plano use --ensaio-sandbox")
     with trava_da_rodada(Path(cfg["pasta_comprovantes"])) as minha:
         if not minha:
             print("outra rodada está rodando; esta sai sem fazer nada")

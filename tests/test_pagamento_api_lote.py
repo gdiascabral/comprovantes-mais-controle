@@ -67,7 +67,7 @@ def test_fica_fora_com_motivo():
 def test_pix_por_chave_sem_documento_no_cadastro_fica_fora():
     contas = [{"nome": "OBRA X - SICOOB", "entries": [_e("1", "Pix", "a@b.com", 100)]}]
     itens, fora = lote.itens_do_html(contas, lambda f: "")
-    assert itens == [] and fora[0].motivo == "Pix sem CPF/CNPJ do favorecido no cadastro"
+    assert itens == [] and fora[0].motivo == "sem CPF/CNPJ do favorecido no cadastro"
 
 
 def test_mesmo_codigo_em_dois_titulos_fica_fora_e_a_ordem_se_refaz():
@@ -84,8 +84,8 @@ def test_mesmo_codigo_em_dois_titulos_fica_fora_e_a_ordem_se_refaz():
 
 def test_documento_que_nao_e_cpf_nem_cnpj_vira_vazio():
     contas = [{"nome": "OBRA X - SICOOB", "entries": [_e("1", "Boleto", BANCARIO, 100)]}]
-    itens, _ = lote.itens_do_html(contas, lambda f: "12345")
-    assert itens[0].documento_esperado == ""
+    itens, fora = lote.itens_do_html(contas, lambda f: "12345")
+    assert itens == [] and fora[0].motivo == "sem CPF/CNPJ do favorecido no cadastro"
 
 
 def test_descricao_cortada_em_100():
@@ -93,3 +93,11 @@ def test_descricao_cortada_em_100():
         _e("1", "Boleto", BANCARIO, 100, descricao="X" * 150)]}]
     itens, _ = lote.itens_do_html(contas, _doc)
     assert len(itens[0].descricao) == 100
+
+
+
+def test_boleto_e_qr_sem_documento_ficam_fora():
+    contas = [{"nome": "OBRA X - SICOOB", "entries": [_e("1", "Boleto", BANCARIO, 100),
+                                                     _e("2", "Pix", PIX_QR, 100)]}]
+    itens, fora = lote.itens_do_html(contas, lambda f: "")
+    assert itens == [] and {f.motivo for f in fora} == {"sem CPF/CNPJ do favorecido no cadastro"}

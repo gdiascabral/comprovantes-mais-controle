@@ -115,3 +115,16 @@ Só no servidor, em pasta de chaves fora do repo: client_id e certificado (parte
 
 ## 10. Fora da 1ª entrega
 TED, Inter, WhatsApp automático, notificação no celular, aprovação item a item, teto por item/dia.
+
+## 11. Desvios aprovados na execução do plano 1 (26–27/11/2026)
+
+Decididos pelo coordenador durante a execução, com revisão independente; o dono revisa no PR.
+
+- **Hash → imutabilidade no banco.** Em vez do SHA-256 do lote, `lote_item` não aceita update/delete, item novo é recusado depois da aprovação, e a aprovação grava os itens e o total, conferidos por gatilho. Retirada de item vai em `lote_aprovacao.retirados` (jsonb), não numa tabela `lote_retirada`.
+- **Papel `robo` em vez de service role.** O robô entra com usuário próprio; a RLS só o deixa ler e acrescentar evento e pulso.
+- **Erros depois de iniciar (substitui a tabela da seção 4 nesses casos).** Depois de INICIADO, só o banco dizendo "não realizado" (Pix) vira `nao_pago`. Recusa do banco, queda, API fora do ar ou resposta estranha viram `em_processamento` "conferir no banco", contam no total e são consultados de novo — o item fica preso até alguém conferir ("resolver à mão" no plano 3). Antes de iniciar, continua `nao_pago`.
+- **Título que chegou a iniciar nunca volta para a API**, mesmo que termine `nao_pago`: vai pelo HTML. O mesmo código de pagamento (boleto, convênio, QR) também não entra em dois lotes vivos.
+- **Boleto só é dado como pago com o comprovante EFETIVADO/PAGO/REALIZADO.** Convênio só com NSU e valor pago igual ao do item.
+- **Título já baixado ou com comprovante no ERP** quando o robô pagou vira alerta de possível pagamento em dobro, não "concluído".
+- **Boleto e QR sem CPF/CNPJ no cadastro ficam fora do lote** (como o Pix por chave já ficava).
+- **Pix e convênio só da conta da credencial** até o plano 3 resolver a conta de débito.

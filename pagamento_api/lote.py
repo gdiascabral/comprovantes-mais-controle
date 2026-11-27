@@ -115,13 +115,17 @@ def itens_do_html(contas: list[dict], documento_de) -> tuple[list[ItemLote], lis
             doc = re.sub(r"\D", "", str(documento_de(fav) or "")) if not motivo else ""
             if len(doc) not in (11, 14):
                 doc = ""                 # nada de "documento" com 5 dígitos indo para o banco
-            if not motivo and tipo == PIX_CHAVE and len(doc) not in (11, 14):
-                motivo = "Pix sem CPF/CNPJ do favorecido no cadastro"
+            if not motivo and not doc:
+                # Sem o documento esperado não há como conferir quem recebe (o
+                # dono da chave, o beneficiário do boleto, o CNPJ do QR).
+                motivo = "sem CPF/CNPJ do favorecido no cadastro"
+            if not motivo and (len(alvo) > 200 or len(conta) > 200 or len(dado) > 600):
+                motivo = "dado grande demais para o lote"
             if motivo:
                 fora.append(Fora(alvo, conta, valor, fav, motivo))
                 continue
             itens.append(ItemLote(len(itens) + 1, titulo, alvo, conta, tipo, dado, valor,
-                                  fav, doc, str(e.get("descricao") or "")[:LIMITE_DESCRICAO]))
+                                  fav[:200], doc, str(e.get("descricao") or "")[:LIMITE_DESCRICAO]))
     return _sem_codigo_repetido(itens, fora)
 
 

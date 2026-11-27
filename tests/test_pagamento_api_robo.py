@@ -45,10 +45,11 @@ def test_outro_processo_com_a_trava_barra_esta_rodada(tmp_path):
         p.wait()
 
 
-def test_rodada_contra_a_nuvem_exige_a_chave_de_ensaio(tmp_path):
+@pytest.mark.parametrize("cfg", [{}, {"nuvem_de_ensaio": True}])
+def test_rodada_contra_a_nuvem_fica_fechada_neste_plano(tmp_path, cfg):
     with pytest.raises(SystemExit) as e:
-        robo.rodada({"pasta_comprovantes": str(tmp_path)})
-    assert "nuvem_de_ensaio" in str(e.value)
+        robo.rodada({"pasta_comprovantes": str(tmp_path), **cfg})
+    assert "plano 3" in str(e.value)
 
 
 def test_hoje_e_o_de_sao_paulo():

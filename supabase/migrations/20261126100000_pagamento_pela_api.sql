@@ -75,6 +75,7 @@ create table if not exists public.lote_item (
   descricao          text not null default '',
   constraint lote_item_ordem unique (lote, ordem),
   constraint lote_item_titulo_no_lote unique (lote, titulo),
+  -- o mesmo código não entra duas vezes no lote (exceto chave Pix comum)
   constraint lote_item_ordem_positiva check (ordem > 0),
   constraint lote_item_tipo check (tipo in ('boleto', 'pix_chave', 'pix_qr', 'convenio')),
   constraint lote_item_valor check (valor > 0),
@@ -84,6 +85,9 @@ create table if not exists public.lote_item (
     and length(favorecido) <= 200 and length(descricao) <= 100)
 );
 create index if not exists lote_item_titulo_idx on public.lote_item (titulo);
+create unique index if not exists lote_item_dados_no_lote
+  on public.lote_item (lote, dados) where tipo <> 'pix_chave';
+create index if not exists lote_item_dados_idx on public.lote_item (dados);
 
 create table if not exists public.lote_cancelado (
   lote       bigint primary key references public.lote_pagamento (id),
@@ -205,6 +209,27 @@ begin
       and (p.dia = l.dia or a.lote is not null)
   ) then
     raise exception 'título % já está em outro lote de hoje', new.titulo;
+  end if;
+  -- O MESMO código (boleto, convênio, QR) em outro título de lote vivo: é a
+  -- cobrança duplicada do ERP (casos SANESC/Ipanema). Mesma régua do título.
+  if new.tipo <> 'pix_chave' then
+    perform pg_advisory_xact_lock(hashtextextended('lote_dados:' || new.dados, 0));
+    if exists (
+      select 1 from public.lote_item i
+      join public.lote_pagamento p on p.id = i.lote
+      left join public.lote_aprovacao a on a.lote = i.lote
+      where i.dados = new.dados and i.tipo <> 'pix_chave' and i.lote <> new.lote
+        and not exists (select 1 from public.lote_cancelado c where c.lote = i.lote)
+        and (a.lote is null or i.ordem = any (a.itens))
+        and (coalesce((select e.estado from public.lote_evento e
+                       where e.lote = i.lote and e.ordem = i.ordem
+                       order by e.id desc limit 1), '') <> 'nao_pago'
+             or exists (select 1 from public.lote_evento e
+                        where e.lote = i.lote and e.ordem = i.ordem and e.estado = 'iniciado'))
+        and (p.dia = l.dia or a.lote is not null)
+    ) then
+      raise exception 'o mesmo código de pagamento já está em outro lote';
+    end if;
   end if;
   return new;
 end;

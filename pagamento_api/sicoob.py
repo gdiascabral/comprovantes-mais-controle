@@ -10,6 +10,7 @@ developers.sicoob.com.br em 26/11/2026; no Sandbox o boleto mora em
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Callable
@@ -68,13 +69,25 @@ def _reais(valor: Decimal) -> float:
 
 class Sicoob:
     def __init__(self, sessao, ambiente: Ambiente, client_id: str,
-                 token: Callable[[], str], cert=None, timeout: float = 30.0):
+                 token: Callable[[], str], cert=None, timeout: float = 30.0,
+                 relogio: Callable[[], float] = time.monotonic,
+                 esperar: Callable[[float], None] = time.sleep):
         self._s = sessao
         self._a = ambiente
         self._cid = client_id
         self._token = token
         self._cert = cert
         self._timeout = timeout
+        self._relogio, self._esperar = relogio, esperar
+        self._ultimo_pix = None
+
+    def _vez_do_pix(self) -> None:
+        """A API de Pix aceita 1 requisição por segundo (documentação do Sicoob)."""
+        if self._ultimo_pix is not None:
+            falta = 1.0 - (self._relogio() - self._ultimo_pix)
+            if falta > 0:
+                self._esperar(falta)
+        self._ultimo_pix = self._relogio()
 
     def _chamar(self, metodo: str, url: str, *, corpo=None, params=None, extra=None) -> dict:
         h = {"User-Agent": USER_AGENT,
@@ -104,21 +117,25 @@ class Sicoob:
 
     # ------------------------------------------------------------------ Pix
     def pix_iniciar(self, chave: str) -> dict:
+        self._vez_do_pix()
         return self._chamar("POST", self._a.pix + "/pagamentos", corpo={"chave": chave})
 
     def pix_confirmar(self, e2e: str, valor: Decimal, descricao: str) -> dict:
         corpo = {"endToEndId": e2e, "valor": f"{Decimal(valor):.2f}".replace(".", ","),
                  "descricao": descricao, "repeticao": False, "meioIniciacao": "MANUAL"}
+        self._vez_do_pix()
         return _com(self._chamar("POST", self._a.pix + "/pagamentos/confirmacao", corpo=corpo),
                     "estado", "confirmação do Pix sem estado")
 
     def pix_qrcode(self, copia_e_cola: str, valor: Decimal, documento: str) -> dict:
         corpo = {"qrcode": copia_e_cola, "valor": f"{Decimal(valor):.2f}",
                  "pagarComJurosMulta": False, "destino": {"cpfCnpj": documento}}
+        self._vez_do_pix()
         return _com(self._chamar("POST", self._a.pix + "/pagamentos/qrcode", corpo=corpo),
                     "estado", "Pix por QR sem estado")
 
     def pix_consultar(self, e2e: str) -> dict:
+        self._vez_do_pix()
         return self._chamar("GET", self._a.pix + f"/pagamentos/{e2e}")
 
     # --------------------------------------------------------------- boleto

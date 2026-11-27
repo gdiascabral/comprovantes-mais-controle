@@ -137,3 +137,15 @@ def test_identificacao_fixa_do_cliente():
     s = Sessao(corpo={})
     _cliente(s).pix_consultar("E1")
     assert s.pedidos[0][2]["headers"]["User-Agent"] == sc.USER_AGENT
+
+
+
+def test_pix_respeita_uma_chamada_por_segundo():
+    agora = [100.0]
+    esperas = []
+    c = sc.Sicoob(Sessao(corpo={"estado": "REALIZADO", "endToEndId": "E1"}), sc.SANDBOX, "cid",
+                  lambda: "tok", relogio=lambda: agora[0], esperar=lambda s: esperas.append(s))
+    c.pix_iniciar("a@b.com")
+    agora[0] += 0.3
+    c.pix_consultar("E1")
+    assert len(esperas) == 1 and abs(esperas[0] - 0.7) < 1e-9

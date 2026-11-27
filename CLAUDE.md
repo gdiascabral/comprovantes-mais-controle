@@ -25,7 +25,7 @@ sem force-push e sem apagar a branch). O merge dispara o GitHub Actions
 2. monta `codigo.zip` (comprovantes_app.py + util.py + widgets.py +
    inicio/*.py + separar_renomear/*.py + anexar/*.py +
    baixar_comprovantes/*.py + aportes/*.py + relatorios/*.py +
-   pagamentos_dia/*.py + tela_do_dia/*.py + conciliacao_dia/*.py +
+   pagamentos_dia/*.py + tela_do_dia/*.py + conciliacao_dia/*.py + pagamento_api/*.py +
    extratos_sicoob/*.py +
    conciliacao/*.py +
    conciliacao/erp/*.py + contratos/*.py + acessorias/*.py + **erp/*.py** +

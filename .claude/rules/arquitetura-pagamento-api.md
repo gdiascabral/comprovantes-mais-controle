@@ -51,3 +51,16 @@ O Sicoob responde HTTP 200 com HTML ("Request Rejected") ao User-Agent padrão d
 - **Neste plano o ERP é o de ensaio.** `--config` contra a nuvem de verdade só roda com `"nuvem_de_ensaio": true`; sem isso, sai com erro. Rodar com o ERP de ensaio num lote real gravaria "concluído" sem nada no ERP, e o banco nunca mais libera o título pela API. O Agendador do servidor não é ligado antes do plano 3.
 - **Só o dia de hoje (São Paulo).** O robô lê os lotes de `hoje_sp()`, o mesmo dia de `privado.hoje()`. Item que ficou EM_PROCESSAMENTO num lote de ontem não é mais consultado: fica para o botão "resolver à mão" do plano 3.
 - **Leitura no teto do PostgREST** (1000 linhas) falha fechado (`LeituraCortada`): o robô não decide com livro incompleto.
+
+## Travas obrigatórias antes do primeiro pagamento real (plano 3)
+
+Achadas na revisão final do branch (27/11/2026); neste plano o robô só roda contra o Sandbox (`robo.rodada` sai com erro), então nenhuma delas tira dinheiro hoje.
+
+- **O HTML e a remessa não enxergam o robô.** Item que chegou a INICIADO e não terminou em CONCLUIDO (ou em NAO_PAGO dito pelo banco) tem de sair do HTML/remessa do dia seguinte — senão alguém paga à mão o que o banco ainda vai liquidar. E o robô tem de continuar consultando os EM_PROCESSAMENTO de lotes passados (hoje só lê os de hoje).
+- **Conta de débito do Pix e do convênio.** Esses pedidos não levam a conta: sai da conta da credencial. Neste plano o executor recusa Pix/convênio de conta diferente de `Portas.conta_da_credencial`; no plano 3, um cliente (token + certificado) por conta, ou `origem` no pedido, conforme o Sicoob responder.
+- **Reconhecer o anexo do próprio robô.** Título que o robô pagou e já está baixado ou com comprovante vira `ALERTA_DOBRO` em FALTA_ANEXAR (não conclui). Inclui o caso de uma rodada que anexou e caiu antes de gravar: o adaptador do ERP do plano 3 deve dizer se o anexo é o PDF do robô (o nome é único) para concluir sozinho.
+- **Confirmar com o Sicoob na fase 2:** valor do Pix com vírgula ("1,99") × ponto no QR; se `origem` é obrigatória no confirmar; se o DICT devolve o CPF da pessoa física inteiro (mascarado, todo Pix de PF cai em "chave de outra pessoa"); o significado de `transacao` no convênio (hoje um número único por pagamento) e o vocabulário da situação do comprovante (EFETIVADO/PAGO/REALIZADO).
+- **Pix a 1 requisição por segundo:** o cliente espera entre chamadas de Pix (`Sicoob._vez_do_pix`). Um 429 no confirmar ainda fica EM_PROCESSAMENTO, que é o lado seguro.
+- **Um erro de nuvem num lote derruba a rodada inteira** (`LeituraCortada`, recusa do INICIADO, robô parado): falha fechada, os outros lotes esperam a próxima rodada.
+- **O mesmo código em lotes diferentes** (boleto, convênio, QR) é recusado no banco (`conferir_item`), como o título: é a cobrança duplicada do ERP.
+- **Sem documento, fora do lote:** boleto e QR também exigem o CPF/CNPJ do cadastro, para conferir quem recebe.
