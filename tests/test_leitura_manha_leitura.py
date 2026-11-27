@@ -38,8 +38,10 @@ def _deb(valor, desc, data="2026-11-26"):
 
 
 class Sicoob:
+    """`extratos[numero]`: a resposta de cada pedido, ou uma função (inicio, fim)."""
+
     def __init__(self, saldos, extratos):
-        self.saldos, self.extratos = saldos, extratos
+        self.saldos, self.extratos, self.pedidos = saldos, extratos, []
 
     def saldo(self, numero):
         v = self.saldos[numero]
@@ -47,9 +49,12 @@ class Sicoob:
             raise v
         return v
 
-    def extrato(self, numero, dia):
-        assert dia == ONTEM
+    def extrato(self, numero, inicio, fim):
+        assert inicio.month == fim.month and inicio <= fim
+        self.pedidos.append((numero, inicio, fim))
         v = self.extratos[numero]
+        if callable(v):
+            v = v(inicio, fim)
         if isinstance(v, Exception):
             raise v
         return v
@@ -64,7 +69,8 @@ class Inter:
             raise self._s
         return self._s
 
-    def extrato(self, dia):
+    def extrato(self, inicio, fim):
+        self.pedido = (inicio, fim)
         return self._e
 
 
@@ -244,14 +250,15 @@ def test_conta_fora_do_arquivo_nao_aparece_e_linha_ruim_e_contada():
     ruim = {"id": 9, "dia": "", "valor": None}
     marcas = lt.pre_marcas([_linha(5, "OUTRA CONTA - CAIXA", "150.00", "OBRA X LT 10"), ruim],
                            le, HOJE, log=avisos.append)
-    assert marcas == [] and avisos == ["  1 agendado(s) em aberto ilegível(is) na nuvem: ficaram fora"]
+    assert marcas == [] and avisos == ["  1 agendado(s) em aberto ilegível(is) na nuvem: ficaram fora",
+                                       "  1 agendado(s) de conta fora do arquivo do servidor"]
 
 
 def test_erp_conta_sem_nome_ganha_rotulo_e_mantem_valor_e_motivo():
     contas = [ErpAccount("1", "   ", balance=Decimal("5.00")),
-              ErpAccount("2", "", raw_balance="R$ ***", balance=None)]
+              ErpAccount("2", "B1 - SICOOB", raw_balance="R$ ***", balance=None)]
     saida = lt.ler_erp(lambda: contas, [], agora)
-    assert [s.conta for s in saida] == ["(sem nome no ERP)"] * 2
+    assert [s.conta for s in saida] == ["(sem nome no ERP)", "B1 - SICOOB"]
     assert saida[0].valor == Decimal("5.00") and saida[0].motivo == ""
     assert saida[1].valor is None and "não mostrou" in saida[1].motivo
 
@@ -273,3 +280,171 @@ def test_extrato_que_falha_sai_nao_lido_e_motivo_obrigatorio():
     f2._sicoob["EMP A"] = RuntimeError("fábrica")
     le2 = lt.ler_bancos(_cfg(), f2, ONTEM, agora)
     assert all(not x.lido for x in le2.extratos if x.empresa == "EMP A")
+
+
+# ------------------------------------------- F3: nome repetido no ERP
+REPETIDO = "nome repetido no ERP: confira o cadastro"
+
+
+def test_erp_nome_repetido_nenhum_vale_e_ganha_sufixo():
+    contas = [ErpAccount("1", "A1 - SICOOB", balance=Decimal("10.00")),
+              ErpAccount("2", "B1 - SICOOB", balance=Decimal("5.00")),
+              ErpAccount("3", "A1 - SICOOB", balance=Decimal("20.00")),
+              ErpAccount("4", "A1 - SICOOB", raw_balance="R$ ***", balance=None)]
+    saida = lt.ler_erp(lambda: contas, ["A1 - SICOOB"], agora)
+    assert [(s.conta, s.valor, s.motivo) for s in saida] == [
+        ("A1 - SICOOB", None, REPETIDO), ("B1 - SICOOB", Decimal("5.00"), ""),
+        ("A1 - SICOOB #2", None, REPETIDO), ("A1 - SICOOB #3", None, REPETIDO)]
+
+
+def test_erp_sem_nome_repetido_e_nome_longo_cortado_em_200():
+    longo = "X" * 250
+    contas = [ErpAccount("1", "", balance=Decimal("1.00")), ErpAccount("2", " ", balance=Decimal("2.00")),
+              ErpAccount("3", longo, balance=Decimal("3.00")),
+              ErpAccount("4", longo[:200] + "Y", balance=Decimal("4.00"))]
+    saida = lt.ler_erp(lambda: contas, [], agora)
+    nomes = [s.conta for s in saida]
+    assert nomes[:2] == ["(sem nome no ERP)", "(sem nome no ERP) #2"]
+    assert nomes[2] == "X" * 200 and nomes[3] == "X" * 197 + " #2"
+    assert all(s.valor is None and s.motivo == REPETIDO for s in saida)
+    assert len(set(nomes)) == 4 and all(len(n) <= 200 for n in nomes)
+
+
+def test_erp_sufixo_nao_colide_com_nome_que_ja_existe():
+    contas = [ErpAccount("1", "A", balance=Decimal("1.00")), ErpAccount("2", "A #2", balance=Decimal("2.00")),
+              ErpAccount("3", "A", balance=Decimal("3.00"))]
+    saida = lt.ler_erp(lambda: contas, [], agora)
+    assert [s.conta for s in saida] == ["A", "A #2", "A #3"]
+    assert saida[1].valor == Decimal("2.00")
+
+
+# --------------------------------- F1: janela de 7 dias no casamento
+def test_janela_le_7_dias_e_pede_uma_vez_no_mesmo_mes():
+    f = _tudo_bom()
+    lt.ler_bancos(_cfg(), f, ONTEM, agora)
+    assert f._sicoob["EMP A"].pedidos == [(11, date(2026, 11, 20), ONTEM), (12, date(2026, 11, 20), ONTEM)]
+    assert f._inter.pedido == (date(2026, 11, 20), ONTEM)
+
+
+def test_pagamento_em_dobro_em_dias_seguidos_nao_pre_marca():
+    f = _tudo_bom()
+    f._sicoob["EMP A"].extratos[11] = _ext(_deb("150,00", "OBRA X LT 10", "2026-11-25"),
+                                           _deb("150,00", "OBRA X LT 10", "2026-11-26"))
+    le = lt.ler_bancos(_cfg(), f, ONTEM, agora)
+    (m,) = lt.pre_marcas([_linha(1, "A1 - SICOOB", "150.00", "OBRA X LT 10", dia="2026-11-25")],
+                         le, HOJE)
+    assert m.prova == "" and m.nota.startswith("pagamentos parecidos no banco")
+
+
+def test_janela_que_cruza_o_mes_pede_duas_vezes_com_os_dias_certos():
+    f = _tudo_bom()
+    ontem = date(2026, 12, 2)
+
+    def por_mes(inicio, fim):
+        return _ext(_deb("150,00", "OBRA X LT 10", f"{inicio:%Y-%m-%d}"))
+    f._sicoob["EMP A"].extratos[11] = por_mes
+    le = lt.ler_bancos(_cfg(), f, ontem, agora)
+    assert [p for p in f._sicoob["EMP A"].pedidos if p[0] == 11] == [
+        (11, date(2026, 11, 26), date(2026, 11, 30)), (11, date(2026, 12, 1), date(2026, 12, 2))]
+    assert sorted(m.data for m in le.movimentos if m.conta == "A1 - SICOOB") == [
+        date(2026, 11, 26), date(2026, 12, 1)]
+    assert "A1 - SICOOB" in le.lidas
+
+
+def test_um_pedaco_da_janela_falhando_tira_a_conta_do_casamento():
+    f = _tudo_bom()
+
+    def cai_em_dezembro(inicio, fim):
+        if inicio.month == 12:
+            return ErroLeitura(503, "fora")
+        return _ext(_deb("150,00", "OBRA X LT 10", "2026-11-27"))
+    f._sicoob["EMP A"].extratos[11] = cai_em_dezembro
+    le = lt.ler_bancos(_cfg(), f, date(2026, 12, 2), agora)
+    assert "A1 - SICOOB" not in le.lidas and le.falhas["A1 - SICOOB"] == "Sicoob respondeu HTTP 503"
+    assert not [m for m in le.movimentos if m.conta == "A1 - SICOOB"]
+    (x,) = [x for x in le.extratos if x.conta == "A1 - SICOOB"]
+    assert not x.lido
+
+
+def test_pedaco_da_janela_com_linha_ilegivel_tira_a_conta():
+    f = _tudo_bom()
+
+    def ilegivel_em_dezembro(inicio, fim):
+        if inicio.month == 12:
+            return _ext({"tipo": "lorem", "valor": "x", "data": "y"})
+        return _ext()
+    f._sicoob["EMP A"].extratos[11] = ilegivel_em_dezembro
+    le = lt.ler_bancos(_cfg(), f, date(2026, 12, 2), agora)
+    assert "A1 - SICOOB" not in le.lidas and "ilegível" in le.falhas["A1 - SICOOB"]
+
+
+def test_agendado_antigo_recebe_nota_e_nunca_prova():
+    f = _tudo_bom()
+    f._sicoob["EMP A"].extratos[11] = _ext(_deb("150,00", "OBRA X LT 10", "2026-11-20"))
+    le = lt.ler_bancos(_cfg(), f, ONTEM, agora)
+    linhas = [_linha(1, "A1 - SICOOB", "150.00", "OBRA X LT 10", dia="2026-11-18",
+                     vencimento="2026-11-19"),
+              _linha(2, "A1 - SICOOB", "150.00", "OBRA X LT 10", dia="2026-11-21")]
+    marcas = {m.agendado_id: m for m in lt.pre_marcas(linhas, le, HOJE)}
+    assert marcas[1].prova == "" and marcas[1].nota == "agendado antigo: fora dos 7 dias lidos do extrato"
+    # o antigo continua disputando o pagamento: o de 21 não fica com ele sozinho
+    assert marcas[2].prova == ""
+
+
+def test_extrato_lido_conta_so_ontem_e_fora_e_o_que_ficou_fora_da_janela():
+    f = _tudo_bom()
+    f._sicoob["EMP A"].extratos[11] = _ext(
+        _deb("10,00", "A", "2026-11-24"), _deb("20,00", "B", "2026-11-26"),
+        {"tipo": "CREDITO", "valor": "5,00", "data": "2026-11-25"},
+        {"tipo": "CREDITO", "valor": "6,00", "data": "2026-11-26"},
+        _deb("30,00", "C", "2026-11-10"))
+    le = lt.ler_bancos(_cfg(), f, ONTEM, agora)
+    (x,) = [x for x in le.extratos if x.conta == "A1 - SICOOB"]
+    assert (x.dia, x.saidas, x.entradas, x.fora_do_dia, x.lido) == (ONTEM, 1, 1, 1, True)
+    assert sorted(m.valor for m in le.movimentos if m.conta == "A1 - SICOOB") == [
+        Decimal("10.00"), Decimal("20.00")]
+
+
+# --------------------------------------- F4: débito devolvido no dia
+def test_debito_devolvido_no_mesmo_dia_tira_a_conta_do_casamento():
+    f = _tudo_bom()
+    f._sicoob["EMP A"].extratos[11] = _ext(_deb("150,00", "OBRA X LT 10", "2026-11-25"),
+                                           {"tipo": "CREDITO", "valor": "150,00", "data": "2026-11-25"})
+    le = lt.ler_bancos(_cfg(), f, ONTEM, agora)
+    assert "A1 - SICOOB" not in le.lidas
+    assert le.falhas["A1 - SICOOB"] == "débito devolvido no extrato de 25/11: confira à mão"
+    assert not [m for m in le.movimentos if m.conta == "A1 - SICOOB"]
+    (x,) = [x for x in le.extratos if x.conta == "A1 - SICOOB"]
+    assert x.lido and x.motivo == le.falhas["A1 - SICOOB"]
+    (m,) = lt.pre_marcas([_linha(1, "A1 - SICOOB", "150.00", "OBRA X LT 10", dia="2026-11-25")], le, HOJE)
+    assert m.prova == "" and "débito devolvido" in m.nota
+
+
+def test_entrada_de_mesmo_valor_em_outro_dia_nao_e_devolucao():
+    f = _tudo_bom()
+    f._sicoob["EMP A"].extratos[11] = _ext(_deb("150,00", "OBRA X LT 10", "2026-11-25"),
+                                           {"tipo": "CREDITO", "valor": "150,00", "data": "2026-11-26"})
+    le = lt.ler_bancos(_cfg(), f, ONTEM, agora)
+    assert "A1 - SICOOB" in le.lidas
+
+
+# ------------------------------ F5: pendência de assinatura do Sicoob
+AVISO_PENDENCIA = " · pendências de assinatura não conferidas"
+
+
+def test_prova_do_sicoob_avisa_que_pendencia_nao_foi_conferida():
+    f = _tudo_bom()
+    f._inter._e = {"transacoes": [{"tipoOperacao": "D", "valor": "40.00", "dataEntrada": "2026-11-26",
+                                   "descricao": "OBRA Y LT 2"}]}
+    le = lt.ler_bancos(_cfg(), f, ONTEM, agora)
+    linhas = [_linha(1, "A1 - SICOOB", "150.00", "OBRA X LT 10"),
+              _linha(2, "B2 - INTER", "40.00", "OBRA Y LT 2")]
+    marcas = {m.agendado_id: m for m in lt.pre_marcas(linhas, le, HOJE)}
+    assert marcas[1].prova.endswith(AVISO_PENDENCIA)
+    assert marcas[2].prova and AVISO_PENDENCIA not in marcas[2].prova
+
+
+def test_aviso_de_pendencia_respeita_o_corte_de_300():
+    p = lt.com_aviso_de_pendencia("x" * 400)
+    assert len(p) == 300 and p.endswith(AVISO_PENDENCIA)
+    assert lt.com_aviso_de_pendencia("") == ""

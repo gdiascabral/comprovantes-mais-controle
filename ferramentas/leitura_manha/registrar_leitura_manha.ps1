@@ -27,7 +27,7 @@ $raiz = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation
 if (-not (Test-Path (Join-Path $raiz "leitura_manha\rodar.py"))) { throw "nao achei leitura_manha\rodar.py em $raiz" }
 if (-not (Test-Path $Config)) { throw "nao achei o arquivo de configuracao $Config" }
 $Config = (Resolve-Path $Config).Path
-if ($Config.StartsWith($raiz, [System.StringComparison]::OrdinalIgnoreCase)) {
+if ($Config.StartsWith($raiz + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "o arquivo de configuracao tem credenciais: guarde-o FORA do repositorio ($raiz)"
 }
 

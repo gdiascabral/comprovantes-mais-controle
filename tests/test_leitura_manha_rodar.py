@@ -43,10 +43,11 @@ class NuvemFalsa:
         assert token == "TOK"
         return self._em_aberto
 
-    def gravar(self, token, rodada, ontem, saldos, extratos, marcas):
+    def gravar(self, token, rodada, hoje, ontem, saldos, extratos, marcas, *, marcas_puladas=False):
         if self.cair:
             raise self.cair
         self.gravou = (rodada, ontem, saldos, extratos, marcas)
+        self.hoje, self.marcas_puladas = hoje, marcas_puladas
         return {"saldo_lido": len(saldos)}
 
 
@@ -65,6 +66,7 @@ def test_rodada_grava_bancos_erp_e_pre_marcas():
     assert r == 0
     _rodada, ontem, saldos, _extratos, marcas = nuvem.gravou
     assert ontem == date(2026, 11, 26)
+    assert nuvem.hoje == date(2026, 11, 27) and nuvem.marcas_puladas is False
     assert {(s.fonte, s.conta) for s in saldos} >= {("erp", "A1 - SICOOB"), ("sicoob", "A1 - SICOOB")}
     assert [m.agendado_id for m in marcas if m.prova] == [1]
     assert any(linha.startswith("gravado:") for linha in log)
@@ -160,6 +162,7 @@ def test_falha_ao_ler_em_aberto_nao_perde_saldos_e_sai_1():
     assert r == 1
     _rodada, _ontem, saldos, extratos, marcas = nuvem.gravou
     assert saldos and extratos and marcas == []
+    assert nuvem.marcas_puladas is True
     assert any("pré-marcas puladas" in linha and "RuntimeError" in linha for linha in log)
     assert not any("PostgREST fora" in linha for linha in log if "puladas" in linha)
 
@@ -172,3 +175,38 @@ def test_gravacao_parcial_aparece_no_log():
                      nuvem=NuvemFalsa(cair=cai), ler_erp=lambda: [],
                      agora=lambda: HORA, log=log.append)
     assert r == 1 and any("gravou saldo_lido 12" in linha for linha in log)
+
+
+# ------------------------------------------------------- F8: trava própria
+def _config_de_producao(tmp_path):
+    import json
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"ambiente": "producao", "nuvem_email": "r@e.com", "nuvem_senha": "s",
+                             "pasta": str(tmp_path / "pasta"), "empresas": [
+        {"nome": "EMP A", "sicoob": {"client_id": "A", "cert": ["c", "k"]},
+         "contas": [{"banco": "sicoob", "numero": 11, "conta_erp": "A1 - SICOOB"}]}]}),
+        encoding="utf-8")
+    return p
+
+
+def test_leitura_tem_trava_propria_e_ocupada_sai_1(tmp_path, monkeypatch):
+    from pagamento_api import robo
+    rodou = []
+    monkeypatch.setattr(rodar, "rodada", lambda cfg, **k: rodou.append(1) or 0)
+    cfg = _config_de_producao(tmp_path)
+    with robo.trava_da_rodada(tmp_path / "pasta", nome="leitura_manha.trava") as minha:
+        assert minha is True
+        assert rodar.main(["--config", str(cfg)]) == 1
+    assert rodou == []
+    log = (tmp_path / "pasta" / "leitura_manha.log").read_text(encoding="utf-8")
+    assert "outra leitura está rodando" in log
+
+
+def test_trava_do_robo_de_pagamento_nao_segura_a_leitura(tmp_path, monkeypatch):
+    from pagamento_api import robo
+    monkeypatch.setattr(rodar, "rodada", lambda cfg, **k: 0)
+    cfg = _config_de_producao(tmp_path)
+    with robo.trava_da_rodada(tmp_path / "pasta") as minha:
+        assert minha is True
+        assert rodar.main(["--config", str(cfg)]) == 0
+    assert (tmp_path / "pasta" / "leitura_manha.trava").exists()

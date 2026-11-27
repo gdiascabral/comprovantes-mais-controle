@@ -138,3 +138,15 @@ def test_linha_com_valor_absurdo_e_contada_como_ilegivel():
     x = ex.movimentos_sicoob({"transacoes": [
         {"tipo": "DEBITO", "valor": "1" * 30 + ",00", "data": "2026-11-26"}]}, "A", ONTEM)
     assert x.movimentos == () and x.ilegiveis == 1
+
+
+def test_extrato_de_uma_janela_guarda_saidas_e_entradas_da_janela():
+    corpo = {"transacoes": [
+        {"tipo": "DEBITO", "valor": "10,00", "data": "2026-11-20"},
+        {"tipo": "CREDITO", "valor": "5,00", "data": "2026-11-24"},
+        {"tipo": "DEBITO", "valor": "20,00", "data": "2026-11-26"},
+        {"tipo": "DEBITO", "valor": "30,00", "data": "2026-11-19"}]}
+    x = ex.movimentos_sicoob(corpo, "CONTA A", date(2026, 11, 20), ONTEM)
+    assert [m.valor for m in x.movimentos] == [Decimal("10.00"), Decimal("20.00")]
+    assert [(m.data, m.valor) for m in x.creditos] == [(date(2026, 11, 24), Decimal("5.00"))]
+    assert x.entradas == 1 and x.fora_do_dia == 1

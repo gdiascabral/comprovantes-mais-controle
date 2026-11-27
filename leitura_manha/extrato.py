@@ -93,11 +93,12 @@ def saldo_inter(corpo: dict) -> tuple[Decimal | None, str]:
 
 @dataclass(frozen=True)
 class Extrato:
-    movimentos: tuple          # só as SAÍDAS do dia, como `autenticar.Movimento`
-    entradas: int
+    movimentos: tuple          # só as SAÍDAS da faixa pedida, como `autenticar.Movimento`
+    entradas: int              # quantas ENTRADAS na faixa
     ilegiveis: int
-    fora_do_dia: int
+    fora_do_dia: int           # linhas fora da faixa pedida
     motivos: tuple = ()        # até MOTIVOS_GUARDADOS, para a nuvem
+    creditos: tuple = ()       # as ENTRADAS da faixa (para achar débito devolvido)
 
 
 def _transacoes(corpo) -> list:
@@ -107,9 +108,10 @@ def _transacoes(corpo) -> list:
     return lista
 
 
-def _ler(lista, dia: date, linha_para) -> Extrato:
-    """`linha_para(t)` -> (SAIDA|ENTRADA, Movimento), ou levanta ValueError(motivo)."""
-    movs, entradas, ilegiveis, fora, motivos = [], 0, 0, 0, []
+def _ler(lista, inicio: date, fim: date, linha_para) -> Extrato:
+    """`linha_para(t)` -> (SAIDA|ENTRADA, Movimento), ou levanta ValueError(motivo).
+    A faixa é [inicio, fim]; o que vier fora dela é só contado."""
+    movs, creditos, ilegiveis, fora, motivos = [], [], 0, 0, []
     for t in lista:
         try:
             tipo, mov = linha_para(t)
@@ -118,13 +120,13 @@ def _ler(lista, dia: date, linha_para) -> Extrato:
             if len(motivos) < MOTIVOS_GUARDADOS:
                 motivos.append(str(e)[:80])
             continue
-        if mov.data != dia:
+        if not inicio <= mov.data <= fim:
             fora += 1
         elif tipo == ENTRADA:
-            entradas += 1
+            creditos.append(mov)
         else:
             movs.append(mov)
-    return Extrato(tuple(movs), entradas, ilegiveis, fora, tuple(motivos))
+    return Extrato(tuple(movs), len(creditos), ilegiveis, fora, tuple(motivos), tuple(creditos))
 
 
 def _comum(t, campo_tipo: str, campo_data: str):
@@ -143,20 +145,21 @@ def _comum(t, campo_tipo: str, campo_data: str):
     return tipo, valor, dia
 
 
-def movimentos_sicoob(corpo: dict, conta_erp: str, dia: date) -> Extrato:
-    """GET /extrato do Sicoob: tudo string (`tipo`, `valor`, `data`, ...)."""
+def movimentos_sicoob(corpo: dict, conta_erp: str, inicio: date, fim: date | None = None) -> Extrato:
+    """GET /extrato do Sicoob: tudo string (`tipo`, `valor`, `data`, ...).
+    Sem `fim`, a faixa é o dia `inicio` só."""
     def linha(t):
         tipo, valor, d = _comum(t, "tipo", "data")
         desc = str(t.get("descInfComplementar") or "").strip() or str(t.get("descricao") or "").strip()
         return tipo, Movimento(conta_erp, d, valor, "", desc, "", "Sicoob extrato (API)",
                                str(t.get("transactionId") or ""))
-    return _ler(_transacoes(corpo), dia, linha)
+    return _ler(_transacoes(corpo), inicio, fim or inicio, linha)
 
 
-def movimentos_inter(corpo: dict, conta_erp: str, dia: date) -> Extrato:
+def movimentos_inter(corpo: dict, conta_erp: str, inicio: date, fim: date | None = None) -> Extrato:
     """GET /banking/v2/extrato do Inter: `tipoOperacao` C/D, `valor` string."""
     def linha(t):
         tipo, valor, d = _comum(t, "tipoOperacao", "dataEntrada")
         desc = str(t.get("descricao") or "").strip() or str(t.get("titulo") or "").strip()
         return tipo, Movimento(conta_erp, d, valor, "", desc, "", "Inter extrato (API)", "")
-    return _ler(_transacoes(corpo), dia, linha)
+    return _ler(_transacoes(corpo), inicio, fim or inicio, linha)

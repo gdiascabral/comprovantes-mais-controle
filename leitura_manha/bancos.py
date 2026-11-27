@@ -68,10 +68,13 @@ class ContaCorrenteSicoob:
     def saldo(self, numero: int) -> dict:
         return self._get("/saldo", {"numeroContaCorrente": int(numero)})
 
-    def extrato(self, numero: int, dia: date) -> dict:
-        return self._get(f"/extrato/{dia.month}/{dia.year}",
-                         {"numeroContaCorrente": int(numero), "diaInicial": dia.day,
-                          "diaFinal": dia.day})
+    def extrato(self, numero: int, inicio: date, fim: date) -> dict:
+        """Uma faixa DENTRO de um mês (a API é por mês): quem cruza o mês pede duas."""
+        if (inicio.year, inicio.month) != (fim.year, fim.month) or inicio > fim:
+            raise ValueError("faixa do extrato do Sicoob tem de ficar dentro de um mês")
+        return self._get(f"/extrato/{inicio.month}/{inicio.year}",
+                         {"numeroContaCorrente": int(numero), "diaInicial": inicio.day,
+                          "diaFinal": fim.day})
 
 
 class BankingInter:
@@ -96,6 +99,6 @@ class BankingInter:
     def saldo(self) -> dict:
         return self._get("/banking/v2/saldo", None)
 
-    def extrato(self, dia: date) -> dict:
+    def extrato(self, inicio: date, fim: date) -> dict:
         return self._get("/banking/v2/extrato",
-                         {"dataInicio": dia.isoformat(), "dataFim": dia.isoformat()})
+                         {"dataInicio": inicio.isoformat(), "dataFim": fim.isoformat()})

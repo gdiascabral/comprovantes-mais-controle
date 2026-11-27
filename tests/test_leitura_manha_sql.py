@@ -7,7 +7,7 @@ from pathlib import Path
 
 _SQL = (Path(__file__).resolve().parent.parent / "supabase" / "migrations"
         / "20261127100000_leitura_da_manha.sql")
-TABELAS = ("saldo_lido", "extrato_lido", "pre_marca_banco")
+TABELAS = ("saldo_lido", "extrato_lido", "pre_marca_banco", "leitura_rodada")
 
 
 def _texto() -> str:
@@ -30,7 +30,9 @@ def test_cria_as_tabelas_com_rls_e_so_o_robo_grava():
 def test_ninguem_altera_nem_apaga():
     t = _texto()
     assert ("grant select, insert on table public.saldo_lido, public.extrato_lido, "
-            "public.pre_marca_banco to authenticated") in t
+            "public.pre_marca_banco, public.leitura_rodada to authenticated") in t
+    assert ("revoke all on table public.saldo_lido, public.extrato_lido, public.pre_marca_banco, "
+            "public.leitura_rodada from anon, authenticated") in t
     assert not re.search(r"grant[^;]*\b(update|delete|truncate)\b", t)
     assert "for update" not in t and "for delete" not in t
 
@@ -84,3 +86,20 @@ def test_uma_linha_por_rodada_e_indices():
     ):
         assert ddl in t
     assert "ignore-duplicates" not in t
+
+
+def test_leitura_rodada_marca_a_rodada_completa():
+    t = _texto()
+    rd = t.split("create table if not exists public.leitura_rodada (")[1].split(");")[0]
+    for coluna in ("rodada uuid primary key", "dia date not null", "dia_extrato date not null",
+                   "completa boolean not null", "marcas_puladas boolean not null",
+                   "contas integer not null",
+                   "quem uuid not null default auth.uid() references auth.users (id)",
+                   "quando timestamptz not null default now()"):
+        assert coluna in rd
+    assert "default privado.hoje()" not in rd      # o app manda o dia (F7)
+
+
+def test_comentario_manda_ler_a_ultima_rodada_completa():
+    bruto = _SQL.read_text(encoding="utf-8").lower()
+    assert "última rodada completa" in bruto and "leitura_rodada.completa" in bruto

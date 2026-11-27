@@ -124,7 +124,9 @@ def resumo(le: lt.LeituraDosBancos, erp: list, marcas: list, log) -> None:
 
 def rodada(cfg: cf.Config, *, fabrica=None, entrar=None, nuvem=nl, ler_erp=None,
            agora=agora_utc, log=print) -> int:
-    """0 = gravou tudo; 1 = não gravou, ou gravou sem as pré-marcas (em_aberto não lido). Banco ou ERP fora não é 1: vira 'não lido'."""
+    """0 = gravou tudo; 1 = não gravou, ou gravou sem as pré-marcas (em_aberto não lido,
+    e o marcador `leitura_rodada` diz `marcas_puladas`). Banco ou ERP fora não é 1:
+    vira 'não lido'."""
     if cfg.ambiente != "producao":
         raise SystemExit("rodada de verdade só com ambiente 'producao'; Sandbox é --ensaio-sandbox")
     from nuvem import rest
@@ -132,7 +134,8 @@ def rodada(cfg: cf.Config, *, fabrica=None, entrar=None, nuvem=nl, ler_erp=None,
     ler_erp = ler_erp or (lambda: ler_erp_pelo_porteiro(log=log))
     hoje, ontem = lt.dias_sp(agora())
     rodada_id = str(uuid.uuid4())
-    log(f"leitura das 07:30 de {hoje:%d/%m/%Y} (extrato de {ontem:%d/%m}), rodada {rodada_id}")
+    log(f"leitura das 07:30 de {hoje:%d/%m/%Y} (extrato de {lt.inicio_da_janela(ontem):%d/%m} "
+        f"a {ontem:%d/%m}), rodada {rodada_id}")
     le = lt.ler_bancos(cfg, fabrica or Fabrica(cfg), ontem, agora)
     erp = lt.ler_erp(ler_erp, [c.conta_erp for c in cfg.contas()], agora)
     falhou = False
@@ -144,7 +147,8 @@ def rodada(cfg: cf.Config, *, fabrica=None, entrar=None, nuvem=nl, ler_erp=None,
             marcas, falhou = [], True
             log(f"pré-marcas puladas: não li os agendados em aberto ({type(e).__name__})")
         resumo(le, erp, marcas, log)
-        gravadas = nuvem.gravar(token, rodada_id, ontem, le.saldos + erp, le.extratos, marcas)
+        gravadas = nuvem.gravar(token, rodada_id, hoje, ontem, le.saldos + erp, le.extratos, marcas,
+                                marcas_puladas=falhou)
     except Exception as e:  # noqa: BLE001 — o Agendador vê o código 1; o log diz o tipo
         resumo(le, erp, [], log)
         log(f"NÃO GRAVOU na nuvem: {type(e).__name__}: {str(e)[:200]}")
@@ -187,6 +191,8 @@ def ensaio_sandbox(dados: dict, *, sessao=None, agora=agora_utc, log=print) -> l
     return le
 
 
+#: Trava própria: a do robô de pagamento ("robo.trava") não segura a leitura.
+TRAVA = "leitura_manha.trava"
 USO = "uso: python -m leitura_manha.rodar --config <arquivo.json> [--ensaio-sandbox]"
 
 
@@ -235,10 +241,10 @@ def main(argv=None) -> int:
         return 2
     pasta = Path(cfg.pasta)
     log = _registro(pasta)
-    with trava_da_rodada(pasta) as minha:
-        if not minha:
+    with trava_da_rodada(pasta, nome=TRAVA) as minha:
+        if not minha:   # 1, não 0: o Agendador tem de ver que esta rodada não leu nada
             log("outra leitura está rodando; esta sai sem fazer nada")
-            return 0
+            return 1
         return rodada(cfg, log=log)
 
 

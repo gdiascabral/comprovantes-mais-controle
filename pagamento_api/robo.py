@@ -124,12 +124,14 @@ def _travar(fd) -> bool:
 
 
 @contextmanager
-def trava_da_rodada(pasta: Path):
+def trava_da_rodada(pasta: Path, nome: str = "robo.trava"):
     """Uma rodada por vez nesta máquina. Devolve False quando outra está rodando.
-    (Entre máquinas, quem segura é o índice `lote_evento_um_iniciado` do banco.)"""
+    (Entre máquinas, quem segura é o índice `lote_evento_um_iniciado` do banco.)
+    `nome`: o arquivo da trava; outro job (a leitura das 07:30) usa o seu, para
+    não disputar a trava do robô de pagamento."""
     pasta = Path(pasta)
     pasta.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(pasta / "robo.trava"), os.O_CREAT | os.O_RDWR)
+    fd = os.open(str(pasta / nome), os.O_CREAT | os.O_RDWR)
     try:
         yield _travar(fd)
     finally:

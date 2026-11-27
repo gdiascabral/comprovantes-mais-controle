@@ -90,3 +90,27 @@ def test_arquivo_ilegivel(tmp_path):
     p.write_text("{nao e json", encoding="utf-8")
     with pytest.raises(cf.ConfigInvalida, match="não consegui ler"):
         cf.carregar(p)
+
+
+# ---------------------------------------- F2: conta Inter repetida
+def _duas_inter(cc1, cc2):
+    def mudar(d):
+        d["empresas"][0]["contas"] = [{"banco": "inter", "conta_corrente": cc1, "conta_erp": "A - INTER 1"},
+                                      {"banco": "inter", "conta_corrente": cc2, "conta_erp": "A - INTER 2"}]
+    return _com(mudar)
+
+
+def test_conta_corrente_do_inter_repetida_na_empresa_e_recusada_sem_o_valor():
+    with pytest.raises(cf.ConfigInvalida) as e:
+        cf.de_dict(_duas_inter("123456", "123456"))
+    assert "conta_corrente" in str(e.value) and "repetid" in str(e.value)
+    assert "123456" not in str(e.value)
+
+
+def test_empresa_com_mais_de_uma_conta_inter_exige_conta_corrente_em_todas():
+    for cc1, cc2 in (("123456", ""), ("", "")):
+        with pytest.raises(cf.ConfigInvalida) as e:
+            cf.de_dict(_duas_inter(cc1, cc2))
+        assert "conta_corrente" in str(e.value) and "123456" not in str(e.value)
+    c = cf.de_dict(_duas_inter("123456", "654321"))
+    assert [x.conta_corrente for x in c.contas()] == ["123456", "654321"]

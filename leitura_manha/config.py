@@ -136,6 +136,12 @@ def de_dict(d: dict) -> Config:
                 contas.append(ContaBanco(nome, "inter", erp, conta_corrente=cc))
         if not contas:
             raise ConfigInvalida(f"{onde}: sem contas")
+        inter_cc = [c.conta_corrente for c in contas if c.banco == "inter"]
+        if len(inter_cc) > 1 and not all(inter_cc):
+            # sem o x-conta-corrente, as duas leriam a MESMA conta (a padrão da integração)
+            raise ConfigInvalida(f"{nome}: com mais de uma conta do Inter, todas exigem 'conta_corrente'")
+        if len(set(inter_cc)) != len(inter_cc):
+            raise ConfigInvalida(f"{nome}: 'conta_corrente' do Inter repetida na empresa")
         bancos = {c.banco for c in contas}
         sicoob = _credencial_sicoob(e.get("sicoob"), ambiente, nome) if "sicoob" in bancos else None
         inter = _credencial_inter(e.get("inter"), nome) if "inter" in bancos else None

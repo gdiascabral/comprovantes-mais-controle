@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from datetime import date
 
+import pytest
+
 from falsos_leitura_manha import Relogio, Resp, SessaoFalsa
 
 from leitura_manha import bancos as bc
@@ -23,12 +25,21 @@ def test_saldo_sicoob_pede_a_conta_com_o_user_agent_proprio():
     assert k["headers"]["client_id"] == "CID" and k["headers"]["Authorization"] == "Bearer TOK"
 
 
-def test_extrato_sicoob_de_um_dia_so():
+def test_extrato_sicoob_de_uma_faixa_do_mes():
     s, c = _sicoob(Resp(200, {"transacoes": []}))
-    c.extrato(1234, date(2026, 1, 5))
+    c.extrato(1234, date(2026, 1, 5), date(2026, 1, 11))
     _m, url, k = s.pedidos[0]
     assert url == bc.SICOOB_SANDBOX + "/extrato/1/2026"
-    assert k["params"] == {"numeroContaCorrente": 1234, "diaInicial": 5, "diaFinal": 5}
+    assert k["params"] == {"numeroContaCorrente": 1234, "diaInicial": 5, "diaFinal": 11}
+
+
+def test_extrato_sicoob_recusa_faixa_que_cruza_o_mes_sem_pedir():
+    s, c = _sicoob()
+    with pytest.raises(ValueError):
+        c.extrato(1234, date(2026, 11, 28), date(2026, 12, 2))
+    with pytest.raises(ValueError):
+        c.extrato(1234, date(2026, 11, 28), date(2026, 11, 27))
+    assert s.pedidos == []
 
 
 def test_sicoob_respeita_2_por_segundo_entre_empresas():
@@ -48,11 +59,11 @@ def test_inter_extrato_e_saldo_com_conta_corrente_so_quando_configurada():
     s = SessaoFalsa(Resp(200, {"disponivel": 1}), Resp(200, {"transacoes": []}))
     i = bc.BankingInter(s, bc.INTER_PRODUCAO, lambda: "T", ritmo=Ritmo(0), conta_corrente="123")
     i.saldo()
-    i.extrato(date(2026, 11, 26))
+    i.extrato(date(2026, 11, 20), date(2026, 11, 26))
     (_m1, u1, k1), (_m2, u2, k2) = s.pedidos
     assert u1 == bc.INTER_PRODUCAO + "/banking/v2/saldo" and k1["headers"]["x-conta-corrente"] == "123"
     assert u2 == bc.INTER_PRODUCAO + "/banking/v2/extrato"
-    assert k2["params"] == {"dataInicio": "2026-11-26", "dataFim": "2026-11-26"}
+    assert k2["params"] == {"dataInicio": "2026-11-20", "dataFim": "2026-11-26"}
     s2 = SessaoFalsa(Resp(200, {}))
     bc.BankingInter(s2, bc.INTER_PRODUCAO, lambda: "T", ritmo=Ritmo(0)).saldo()
     assert "x-conta-corrente" not in s2.pedidos[0][2]["headers"]
